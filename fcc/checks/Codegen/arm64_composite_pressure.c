@@ -26,12 +26,14 @@ long call_pressured(long a, long b, long c, long d, long e, long f, long g,
 // CHECK: %{{[0-9]+}} = func.func @call_pressured(
 // CHECK-SAME: !tuple<!i64, !i64>) -> !i64 {
 
-// The callee reads the composite out of the caller's outgoing area, which its
-// own stack pointer points at: it allocates no frame of its own, so the two
-// halves sit at the bottom of it.
+// The callee reads the composite halves straight out of the caller's outgoing
+// area and returns the second. The parameter's local copy is written and never
+// read, so the mid-end removes it along with the frame that held it.
 // ASM-LABEL: pressured:
-// ASM: ldr {{x[0-9]+}}, [sp, 0]
-// ASM: ldr {{x[0-9]+}}, [sp, 8]
+// ASM-NOT: sub sp
+// ASM: ldr x0, [sp, 0]
+// ASM-NEXT: ldr x0, [sp, 8]
+// ASM-NEXT: ret x30
 // ASM-LABEL: call_pressured:
 // ASM: str {{x[0-9]+}}, [sp, 0]
 // ASM: str {{x[0-9]+}}, [sp, 8]

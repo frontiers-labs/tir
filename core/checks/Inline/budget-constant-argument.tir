@@ -1,4 +1,4 @@
-// RUN: tir opt --pass inline<3,5> --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(restructure-nodes),inline<3,5> --verify %s | filecheck %s
 
 // A constant argument is the fact the callee body was missing, so it buys
 // budget: the same four-op callee the bare budget refuses is taken where the

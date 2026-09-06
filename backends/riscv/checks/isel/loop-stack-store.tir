@@ -27,10 +27,11 @@ module {
 // The slot is stored before the loop and reloaded by the test. The body's own
 // reload is on the state the test's reload published — nothing writes the slot
 // between them — so the two are one term and the body steps the register the
-// test already loaded. What is left is the store, the test's reload, the exit's
-// own reload, and the store the body writes back.
+// test already loaded. What is left is the store, the test's reload, the store
+// the body writes back, and the exit's own reload.
 // CHECK: riscv.sw
 // CHECK: riscv.lw
-// CHECK: riscv.lw
+// CHECK-NOT: riscv.lw
 // CHECK: riscv.sw
+// CHECK: riscv.lw
 // CHECK-NOT: riscv.lw

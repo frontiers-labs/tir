@@ -15,10 +15,10 @@ module {data_layout = #data_layout} {
 }
 
 // CHECK: asm.symbol {name = "f"
-// CHECK-NEXT: .add
-// CHECK-NEXT: .cmp
+// CHECK: .add
+// CHECK: .add
+// CHECK: .cmp
 // CHECK-NEXT: .setae{{.*}} {dst = %[[BEFORE:[0-9]+]]
-// CHECK-NEXT: .add
 // CHECK-NEXT: .cmp
 // CHECK-NEXT: .setae{{.*}} {dst = %[[AFTER:[0-9]+]]
 // CHECK-NEXT: .or {dst = %{{[0-9]+}}:GPR, dst_tied = %[[BEFORE]]{{.*}}src = %[[AFTER]]

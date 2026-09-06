@@ -2,37 +2,33 @@
 
 pub mod affine;
 pub mod dce;
+pub mod destructure;
 pub mod inline;
 pub mod instcombine;
 pub mod lower_memory_intrinsics;
 pub mod lower_ptr_disjoint;
 pub mod materialize_symbol_addresses;
-pub mod promote;
 pub mod promote_nodes;
 pub mod restructure;
-pub mod shuffle_state;
 pub mod symbol_uniqueness;
-pub mod thread_state;
+pub mod verify_deps;
 
 pub use affine::{AffineSchedulePass, strip_mine};
 pub use dce::DeadCodeEliminationPass;
+pub use destructure::{
+    CfgEdges, DestructurePass, Destructured, Edges, GateBlocks, LoopBlocks, Test, destructure,
+};
 pub use inline::{InlineBudget, InlinePass};
 pub use instcombine::InstCombineNodesPass;
-pub use instcombine::InstCombinePass;
 pub use lower_memory_intrinsics::LowerMemoryIntrinsicsPass;
 pub use lower_ptr_disjoint::LowerPtrDisjointPass;
 pub use materialize_symbol_addresses::MaterializeSymbolAddressesPass;
-pub use promote::PromotePass;
 pub use promote_nodes::PromoteNodesPass;
-pub use restructure::{RestructureNodesPass, RestructurePass};
-pub use shuffle_state::ShuffleStatePass;
+pub use restructure::RestructureNodesPass;
 pub use symbol_uniqueness::CheckUniqueSymbolsPass;
-pub use thread_state::{ThreadStatePass, UnthreadPass, VerifyDepsPass, unthread, verify_deps};
+pub use verify_deps::{VerifyDepsPass, verify_deps};
 
-use crate::{
-    ConstantLike, Context, OpHandle, OpId, OperationRef, PassError, Pure, RegionId, Rewriter,
-    TypeId, ValueId,
-};
+use crate::{ConstantLike, Context, OpHandle, OpId, Pure, RegionId};
 
 /// Every region under `root`, each one ahead of the regions nested inside it.
 pub(crate) fn regions_under(context: &Context, root: OpId) -> Vec<RegionId> {
@@ -60,19 +56,4 @@ pub(crate) fn is_pure_value(instance: &OpHandle) -> bool {
             .as_dyn_op()
             .semantic_expr(&mut crate::sem::SemGraph::new())
             .is_some()
-}
-
-/// Build the literal `value` of type `ty` where `target` sits, and hand back
-/// what it defines. Which literal to build and where is a pass's own policy;
-/// building one is this.
-pub(crate) fn literal_before(
-    context: &Context,
-    rewriter: &mut Rewriter,
-    value: i64,
-    ty: TypeId,
-    target: &OperationRef,
-) -> Result<ValueId, PassError> {
-    let op = crate::builtin::ops::constant(context, value, ty).build();
-    rewriter.insert_op_before(target, &op)?;
-    Ok(op.result())
 }

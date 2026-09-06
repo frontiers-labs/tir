@@ -6,7 +6,7 @@ use tir::{
     builtin::{self, ops, ModuleOp},
     interp,
     parse::ir::parse_ir,
-    scf::{LoopOp, Switch2Op},
+    scf::{LoopOp, SwitchOp},
     Context, ExitTarget, NonLocalExit, OpId, Operation, RegionId, Terminator, ValueId, Wrap,
 };
 
@@ -117,7 +117,7 @@ fn growing_a_loop_dependency_port_keeps_the_dependency_shape() {
 
 const SWITCH: &str = r#"module {
   %fn_main = func.func @main(%0: !i32, %1: !i32) -> !i32 {
-    scf.switch2 %0 {
+    scf.switch %0 {
       ->
     }
     {
@@ -134,7 +134,7 @@ fn growing_a_gamma_port_forwards_to_and_joins_every_arm() {
     let module = parse_ir::<ModuleOp>(&context, SWITCH).expect("parse");
     let function = function(&context, &module);
     let body = body_of(&context, function);
-    let switch = find::<Switch2Op>(&context, body);
+    let switch = find::<SwitchOp>(&context, body);
     let input = context.get_region(body).ports()[1].id();
     let i32_ty = builtin::IntegerType::new(&context, 32);
 
@@ -324,7 +324,7 @@ fn wrapping_ops_in_a_gamma_joins_what_escapes() {
     let switch = context.wrap(body, &[doubled], Wrap::Gamma).expect("wraps");
 
     let switch = context.get_op(switch);
-    assert!(switch.is::<Switch2Op>());
+    assert!(switch.is::<SwitchOp>());
     assert_eq!(switch.value_results().len(), 1);
     let product = context.get_op(find::<builtin::MulIOp>(&context, body));
     assert_eq!(product.operands()[0], switch.value_results()[0]);
@@ -374,7 +374,7 @@ fn wrapping_a_dead_op_in_a_loop_verifies() {
 const CONSTANT_SWITCH: &str = r#"module {
   %fn_main = func.func @main(%0: !i32) -> !i32 {
     %1 = constant {value = 1} : !i32
-    %2 = scf.switch2 %1 args(%0) (%3) {
+    %2 = scf.switch %1 args(%0) (%3) {
       -> %3
     }
     (%4) {
@@ -392,12 +392,12 @@ fn unwrapping_a_constant_gamma_splices_the_chosen_arm() {
     let module = parse_ir::<ModuleOp>(&context, CONSTANT_SWITCH).expect("parse");
     let function = function(&context, &module);
     let body = body_of(&context, function);
-    let switch = find::<Switch2Op>(&context, body);
+    let switch = find::<SwitchOp>(&context, body);
 
     context.unwrap(switch).expect("the predicate is constant");
 
     let held = context.get_region(body).op_ids();
-    assert!(held.iter().all(|&op| !context.get_op(op).is::<Switch2Op>()));
+    assert!(held.iter().all(|&op| !context.get_op(op).is::<SwitchOp>()));
     let doubled = context.get_op(find::<builtin::AddIOp>(&context, body));
     let argument = context.get_region(body).ports()[0].id();
     assert_eq!(doubled.operands().as_slice(), [argument, argument]);
@@ -467,7 +467,7 @@ fn unwrapping_a_loop_that_may_iterate_is_refused() {
 
 const COUNTED: &str = r#"module {
   %fn_main = func.func @main(%0: !i32, %1: !i32, %2: !i32) -> !i32 {
-    %3 = scf.for2 %4 = %0 to %1 step %2 {
+    %3 = scf.for %4 = %0 to %1 step %2 {
       ->
     }
     -> %3
@@ -481,7 +481,7 @@ fn growing_a_counted_loop_port_lands_before_its_bounds() {
     let module = parse_ir::<ModuleOp>(&context, COUNTED).expect("parse");
     let function = function(&context, &module);
     let body = body_of(&context, function);
-    let for_op = find::<tir::scf::For2Op>(&context, body);
+    let for_op = find::<tir::scf::ForOp>(&context, body);
     let ports = context.get_region(body).ports();
     let (lb, ub, step) = (ports[0].id(), ports[1].id(), ports[2].id());
     let i32_ty = builtin::IntegerType::new(&context, 32);
@@ -499,7 +499,7 @@ fn growing_a_counted_loop_port_lands_before_its_bounds() {
 const BLOCK_HELD: &str = r#"module {
   %fn_main = func.func @main(%0: !i32) -> !i32 {
     %1 = constant {value = 0} : !i32
-    %2 = scf.switch2 %1 args(%0) (%3) {
+    %2 = scf.switch %1 args(%0) (%3) {
       %4 = muli %3, %3 : !i32
       -> %4
     }

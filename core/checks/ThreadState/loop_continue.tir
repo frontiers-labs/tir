@@ -1,38 +1,51 @@
-// RUN: tir opt --pass thread-state --verify %s | filecheck %s
+// RUN: tir opt --pass restructure-nodes --verify %s | filecheck %s
 
-// An `scf.continue` feeds the same carried port a `scf.yield` does, so the state
-// reaching it starts the next iteration.
+// A continue feeds the same carried port the fall-through does: the gate around
+// the skipped tail joins both, and the state reaching it starts the next iteration.
 
 module {
-  %fn_f = func.func @f(%0: !index, %1: !index, %2: !index, %3: !i1, %4: !i32) -> !i32 {
-    %5 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
-    ptr.store %4, %5
-    scf.for %0, %1, %2 scope(%6) {
-      ptr.store %4, %5
-      scf.if %3 {
-        scf.continue %6
-      } else {
-        scf.yield
-      }
-      %7 = ptr.load %5 : !i32
-      scf.yield
-    }
-    %8 = ptr.load %5 : !i32
-    func.return %8
+  %fn_f = func.func @f(%0: !i32, %1: !i1, %2: !i32) -> !i32 {
+    %3 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    %4 = constant {value = 0} : !i32
+    %5 = constant {value = 1} : !i32
+    ptr.store %2, %3
+    cfg.br ^head(%4 : !i32)
+  ^head(%i: !i32):
+    %more = cmpi %i, %0 {predicate = "slt"} : !i1
+    cfg.cond_br %more, ^body, ^exit
+  ^body:
+    ptr.store %2, %3
+    cfg.cond_br %1, ^latch, ^rest
+  ^rest:
+    %6 = ptr.load %3 : !i32
+    cfg.br ^latch
+  ^latch:
+    %i1 = addi %i, %5 : !i32
+    cfg.br ^head(%i1 : !i32)
+  ^exit:
+    %7 = ptr.load %3 : !i32
+    func.return %7
   }
   module_end
 }
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @f
-// CHECK: | %[[FINAL:[0-9]+]] = scf.for %0, %1, %2 scope(%[[SCOPE:[0-9]+]]) iter_args(| %[[BODY:[0-9]+]] = %{{[0-9]+}}) {
-// CHECK-NEXT: | %[[S:[0-9]+]] = ptr.store %4, %{{[0-9]+}} | %[[BODY]]
-// CHECK-NEXT: | %[[GATE:[0-9]+]] = scf.if %3 args(| %[[S]]) (| %[[T:[0-9]+]]) {
-// CHECK-NEXT: scf.continue %[[SCOPE]] | %[[T]]
+// CHECK: %{{[0-9]+}} | %[[FINAL:[0-9]+]] = scf.loop (%{{[0-9]+}} = %{{[0-9]+}} | %[[CARRIED:[0-9]+]] = %{{[0-9]+}}) {
+// CHECK-NEXT: %{{[0-9]+}} = cmpi
+// CHECK-NEXT: %{{[0-9]+}}, %{{[0-9]+}} | %[[EXIT:[0-9]+]] = scf.switch %{{[0-9]+}} args(| %[[CARRIED]]) (| %[[E:[0-9]+]]) {
+// CHECK: (| %[[B:[0-9]+]]) {
+// CHECK-NEXT: | %[[S:[0-9]+]] = ptr.store %{{[0-9]+}}, %{{[0-9]+}} | %[[B]]
+// CHECK-NEXT: %{{[0-9]+}} = addi
+// CHECK-NEXT: | %[[GATE:[0-9]+]] = scf.switch %{{[0-9]+}} args(| %[[S]]) (| %[[R:[0-9]+]]) {
+// CHECK-NEXT: %{{[0-9]+}} | %[[L:[0-9]+]] = ptr.load %{{[0-9]+}} | %[[R]] : !i32
+// CHECK-NEXT: -> | %[[L]]
 // CHECK-NEXT: }
-// CHECK-NEXT: else (| %[[E:[0-9]+]]) {
-// CHECK-NEXT: scf.yield | %[[E]]
+// CHECK-NEXT: (| %[[K:[0-9]+]]) {
+// CHECK-NEXT: -> | %[[K]]
 // CHECK-NEXT: }
-// CHECK-NEXT: %{{[0-9]+}} | %[[L:[0-9]+]] = ptr.load %{{[0-9]+}} | %[[GATE]] : !i32
-// CHECK-NEXT: scf.yield | %[[L]]
+// CHECK-NEXT: %{{[0-9]+}} = constant {value = 1} : !i1
+// CHECK-NEXT: -> %{{[0-9]+}}, %{{[0-9]+}} | %[[GATE]]
+// CHECK-NEXT: }
+// CHECK-NEXT: -> %{{[0-9]+}}, %{{[0-9]+}}, %{{[0-9]+}} | %[[EXIT]], %[[EXIT]]
 // CHECK-NEXT: }
 // CHECK-NEXT: %{{[0-9]+}} | %{{[0-9]+}} = ptr.load %{{[0-9]+}} | %[[FINAL]] : !i32

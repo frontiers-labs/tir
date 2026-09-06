@@ -4,18 +4,21 @@
 // operation of the block, so a literal decision is a tile whose only consumer is
 // a branch. It has to be placed ahead of that branch like any other operand: a
 // tile that lands after the block it is read in is a register read before it is
-// written.
+// written. The comparison of two constants below folds to that literal.
 
 module {
   %fn_g = func.func @g(%0: !i64) -> !i64 {
     %1 = constant {value = 0} : !i32
-    %2 = scf.switch %1 -> !i64 case 0 {
-      %3 = addi %0, %0 : !i64
-      scf.yield %3
-    } default {
-      scf.yield %0
-    }
-    func.return %2
+    %z = constant {value = 0} : !i32
+    %c = cmpi %1, %z {predicate = "eq"} : !i1
+    cfg.cond_br %c, ^bb1, ^bb2
+  ^bb1:
+    %3 = addi %0, %0 : !i64
+    cfg.br ^bb3(%3 : !i64)
+  ^bb2:
+    cfg.br ^bb3(%0 : !i64)
+  ^bb3(%r: !i64):
+    func.return %r
   }
   module_end
 }
@@ -23,3 +26,4 @@ module {
 // CHECK-LABEL: asm.symbol {name = "g"
 // CHECK: x86_64.mov_imm8 {dst = %[[D:[0-9]+]]{{.*}}, imm = 0}
 // CHECK: x86_64.cmp_imm8 {dst = %[[D]]{{.*}}, imm = 1}
+// CHECK: x86_64.jne

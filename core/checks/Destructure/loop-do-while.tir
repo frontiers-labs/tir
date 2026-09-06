@@ -1,0 +1,33 @@
+// RUN: tir opt --pass destructure --verify %s | filecheck %s
+// RUN: tir opt --pass destructure %s | tir interp | filecheck --check-prefix=VALUE %s
+
+// A do-while: the predicate reads what the iteration computed, so the whole
+// body sits in the header, and with nothing left for either cone the header's
+// own branch carries the value back or out.
+
+module {
+  %fn_main = func.func @main() -> !i32 {
+    %0 = constant {value = 2} : !i32
+    %1 = constant {value = 100} : !i32
+    %2 = scf.loop (%3 = %0) {
+      %4 = muli %3, %3 : !i32
+      %5 = cmpi %4, %1 {predicate = "slt"} : !i1
+      -> %5, %4, %4
+    }
+    func.return %2
+  }
+  module_end
+}
+
+// CHECK: %{{[0-9]+}} = func.func @main() -> !i32 {
+// CHECK-NEXT: %[[INIT:[0-9]+]] = constant {value = 2} : !i32
+// CHECK-NEXT: %[[LIMIT:[0-9]+]] = constant {value = 100} : !i32
+// CHECK-NEXT: cfg.br ^bb1(%[[INIT]] : !i32)
+// CHECK-NEXT: ^bb1(%[[PORT:[0-9]+]]: !i32):
+// CHECK-NEXT: %[[SQ:[0-9]+]] = muli %[[PORT]], %[[PORT]] : !i32
+// CHECK-NEXT: %[[AGAIN:[0-9]+]] = cmpi %[[SQ]], %[[LIMIT]] {predicate = "slt"} : !i1
+// CHECK-NEXT: cfg.cond_br %[[AGAIN]], ^bb1(%[[SQ]] : !i32), ^bb2(%[[SQ]] : !i32)
+// CHECK-NEXT: ^bb2(%[[RESULT:[0-9]+]]: !i32):
+// CHECK-NEXT: func.return %[[RESULT]]
+
+// VALUE: i32 256

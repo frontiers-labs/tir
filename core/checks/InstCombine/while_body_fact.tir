@@ -1,5 +1,4 @@
-// RUN: tir opt --pass instcombine %s | filecheck %s
-// RUN: tir opt --pass func.func(instcombine) %s | filecheck %s
+// RUN: tir opt --pass func.func(instcombine-nodes) --verify %s | filecheck %s
 
 // A tested loop's body runs under the condition its test yields. The condition
 // is spelled over the ports' per-iteration heads, so it holds on every
@@ -7,19 +6,26 @@
 
 module {
   %fn_equal_body = func.func @equal_body(%n: !i64, %acc: !i64) -> !i64 {
-    %r = scf.while iter_args(%a = %acc, %i = %n) -> !i64, !i64 {
+    %r, %s = scf.loop (%a = %acc, %i = %n) {
       %c = cmpi %i, %a {predicate = "eq"} : !i1
-      scf.condition %c, %a, %i
-    } do scope(%tok)(%ca, %ci) {
-      %d = subi %ci, %ca : !i64
-      scf.yield %d, %ci
+      %na, %ni = scf.switch %c {
+        -> %a, %i
+      }
+      {
+        %d = subi %i, %a : !i64
+        -> %d, %i
+      }
+      -> %c, %na, %ni, %a, %i
     }
-    func.return %r
+    -> %r
   }
   module_end
 }
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @equal_body
-// CHECK: do scope
-// CHECK-NEXT: constant {value = 0} : !i64
+// CHECK: scf.switch
+// CHECK: }
+// CHECK-NEXT: {
+// CHECK-NEXT: %[[ZERO:[0-9]+]] = constant {value = 0} : !i64
+// CHECK-NEXT: -> %[[ZERO]], %{{[0-9]+}}
 // CHECK-NOT: subi

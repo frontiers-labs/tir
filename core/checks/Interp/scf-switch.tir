@@ -6,7 +6,7 @@ module {
     %1 = constant {value = 0} : !i32
     %2 = constant {value = 30} : !i32
     %3 = constant {value = 40} : !i32
-    %4 = scf.switch %0 args(%1) -> !i32 case 1 (%1) {
+    %4 = scf.switch_legacy %0 args(%1) -> !i32 case 1 (%1) {
       scf.yield %2
     }
     case 2 (%1) {

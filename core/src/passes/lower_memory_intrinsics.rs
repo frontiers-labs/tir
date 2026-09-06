@@ -22,20 +22,18 @@ impl LowerMemoryIntrinsicsPass {
             sets: &mut Vec<OperationRef>,
         ) {
             for region in operation.regions() {
-                for block in context.get_region(region).iter(context.clone()) {
-                    for operation in block.op_ids() {
-                        let operation = context.get_op(operation);
-                        if operation.is::<ModuleOp>() {
-                            continue;
-                        }
-                        let operation = OperationRef::new(operation);
-                        if operation.is::<MemcpyOp>() {
-                            copies.push(operation.clone());
-                        } else if operation.is::<MemsetOp>() {
-                            sets.push(operation.clone());
-                        }
-                        visit(context, operation.op(), copies, sets);
+                for operation in context.get_region(region).op_ids() {
+                    let operation = context.get_op(operation);
+                    if operation.is::<ModuleOp>() {
+                        continue;
                     }
+                    let operation = OperationRef::new(operation);
+                    if operation.is::<MemcpyOp>() {
+                        copies.push(operation.clone());
+                    } else if operation.is::<MemsetOp>() {
+                        sets.push(operation.clone());
+                    }
+                    visit(context, operation.op(), copies, sets);
                 }
             }
         }
@@ -175,6 +173,11 @@ fn replace_threaded(
         context.get_op(call.id()).dep_results().first().copied(),
     ) {
         context.replace_value_uses(published, new);
+        // An unordered region names the state it leaves in its result list,
+        // which no use list reaches.
+        if let Some(region) = context.parent_nodes_region(operation.op().id) {
+            context.rename_region_results(region, published, new, &[]);
+        }
     }
     rewriter.replace_op(operation, call)
 }

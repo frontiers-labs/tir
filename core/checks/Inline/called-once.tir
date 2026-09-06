@@ -1,4 +1,4 @@
-// RUN: tir opt --pass inline<0,0> --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(restructure-nodes),inline<0,0> --verify %s | filecheck %s
 
 // A private λ with one call site costs nothing however large it is: the copy
 // replaces the original rather than joining it, and the λ nothing names is then
@@ -20,4 +20,5 @@ module {
 
 // CHECK-NOT: @once
 // CHECK-LABEL: func.func @main(%[[X:[0-9]+]]: !i32)
+// CHECK-NEXT: | %[[S:[0-9]+]] = state.entry_state
 // CHECK-NEXT: %[[A:[0-9]+]] = addi %[[X]], %[[X]] : !i32

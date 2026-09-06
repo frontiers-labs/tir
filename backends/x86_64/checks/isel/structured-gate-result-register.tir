@@ -6,13 +6,14 @@
 
 module {
   %fn_gate_result = func.func @gate_result(%c: !i1, %a: !i64, %b: !i64) -> !i64 {
-    %r = scf.if %c args(%a, %b) -> !i64 (%p, %q) {
-      %x = addi %p, %q : !i64
-      scf.yield %x
-    } else (%u, %v) {
-      %y = subi %u, %v : !i64
-      scf.yield %y
-    }
+    cfg.cond_br %c, ^bb1, ^bb2
+  ^bb1:
+    %x = addi %a, %b : !i64
+    cfg.br ^bb3(%x : !i64)
+  ^bb2:
+    %y = subi %a, %b : !i64
+    cfg.br ^bb3(%y : !i64)
+  ^bb3(%r: !i64):
     %z = muli %a, %b : !i64
     %w = addi %r, %z : !i64
     func.return %w

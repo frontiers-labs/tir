@@ -294,7 +294,9 @@ pub(crate) fn verify_state_forks(context: &Context, op_id: OpId) -> Result<(), E
 /// what a mid-end operation has instead. One rule, read off whichever the
 /// operation carries, so the discipline is the same on both sides of selection.
 pub(crate) fn observes_only(op: &OpHandle) -> bool {
-    if op.is::<crate::state::JoinOp>() {
+    // A terminator carries the memory along the edge it takes, or hands it
+    // back; it changes nothing.
+    if op.is::<crate::state::JoinOp>() || op.has_interface::<dyn crate::Terminator>() {
         return true;
     }
     if let Some(machine) = op

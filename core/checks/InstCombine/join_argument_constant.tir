@@ -1,4 +1,4 @@
-// RUN: tir opt --pass func.func(restructure,instcombine) --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(restructure-nodes,instcombine-nodes) --verify %s | filecheck %s
 
 // Every edge into the merge carries the same literal, so the value it merges is
 // that literal however the branch goes. Restructuring makes the merge a gate
@@ -20,4 +20,4 @@ module {
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @f
 // CHECK: %[[C:[0-9]+]] = constant {value = 5} : !i32
-// CHECK: func.return %[[C]]
+// CHECK: -> %[[C]]

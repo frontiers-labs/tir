@@ -1,0 +1,17 @@
+// RUN: not tir opt --verify %s
+
+// A branch carries the memory along its edge, so one forwarding a state a
+// store in the same block already changed describes two futures for it.
+
+module {
+  %fn_main = func.func @main() -> !i32 {
+    %p | %d0 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    %one = constant {value = 1} : !i32
+    | %d1 = ptr.store %one, %p | %d0
+    cfg.br ^a(| %d0)
+  ^a(| %d2):
+    %x | %d3 = ptr.load %p | %d2 : !i32
+    func.return %x | %d3
+  }
+  module_end
+}

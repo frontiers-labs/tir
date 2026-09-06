@@ -66,6 +66,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: rui314/setup-mold@v1
       - uses: taiki-e/install-action@nextest
+      # The SPIR-V export checks validate their output; without the validator
+      # they fail rather than pass by default.
+      - run: sudo apt-get update && sudo apt-get install -y spirv-tools
       - uses: mozilla-actions/sccache-action@v0.0.10
       - uses: Swatinem/rust-cache@v2
         with:

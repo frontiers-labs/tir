@@ -1,14 +1,14 @@
-// RUN: fcc compile --stage ir --nodes -o - %s | filecheck %s
+// RUN: fcc compile --stage ir -o - %s | filecheck %s
 // RUN: fcc compile --stage ir -o - %s | tir interp -f count --args=4 | filecheck --check-prefix=FOUR %s
-// RUN: fcc compile --stage ir --nodes -o - %s | tir interp -f count --args=4 | filecheck --check-prefix=FOUR %s
+// RUN: fcc compile --stage ir -o - %s | tir interp -f count --args=4 | filecheck --check-prefix=FOUR %s
 // RUN: fcc compile --stage ir -o - %s | tir interp -f count --args=0 | filecheck --check-prefix=ZERO %s
-// RUN: fcc compile --stage ir --nodes -o - %s | tir interp -f count --args=0 | filecheck --check-prefix=ZERO %s
-// RUN: fcc compile --stage ir -O2 --nodes -o - %s | filecheck --check-prefix=OPT %s
-// RUN: fcc compile --stage ir -O2 --nodes -o - %s | tir interp -f count --args=4 | filecheck --check-prefix=FOUR %s
-// RUN: fcc compile --stage ir -O2 --nodes -o - %s | tir interp -f count --args=0 | filecheck --check-prefix=ZERO %s
+// RUN: fcc compile --stage ir -o - %s | tir interp -f count --args=0 | filecheck --check-prefix=ZERO %s
+// RUN: fcc compile --stage ir -O2 -o - %s | filecheck --check-prefix=OPT %s
+// RUN: fcc compile --stage ir -O2 -o - %s | tir interp -f count --args=4 | filecheck --check-prefix=FOUR %s
+// RUN: fcc compile --stage ir -O2 -o - %s | tir interp -f count --args=0 | filecheck --check-prefix=ZERO %s
 
 // The unordered pipeline: `raise-loops` then `restructure-nodes`. A counted
-// `for` becomes `scf.for2` with the counter as port 0, the carried slot copy
+// `for` becomes `scf.for` with the counter as port 0, the carried slot copy
 // after it, and the memory chain threaded through the body off a dependency
 // port. Both forms compute the same sum, zero trips included.
 
@@ -24,7 +24,7 @@ int count(int n) {
 // CHECK: %{{[0-9]+}} = func.func @count
 // CHECK-NOT: scf.while
 // CHECK: %[[LB:[0-9]+]] | %{{[0-9]+}} = ptr.load %[[SLOT:[0-9]+]] | %{{[0-9]+}} : !i32
-// CHECK: %{{[0-9]+}}, %[[FIN:[0-9]+]] | %[[M:[0-9]+]] = scf.for2 %{{[0-9]+}} = %[[LB]] to %{{[0-9]+}} step %[[ST:[0-9]+]] (%[[IV:[0-9]+]] = %[[LB]] | %[[D:[0-9]+]] = %{{[0-9]+}}) {
+// CHECK: %{{[0-9]+}}, %[[FIN:[0-9]+]] | %[[M:[0-9]+]] = scf.for %{{[0-9]+}} = %[[LB]] to %{{[0-9]+}} step %[[ST:[0-9]+]] (%[[IV:[0-9]+]] = %[[LB]] | %[[D:[0-9]+]] = %{{[0-9]+}}) {
 // CHECK-NEXT: | %{{[0-9]+}} = ptr.store %[[IV]], %[[SLOT]] | %[[D]]
 // CHECK: %[[NEXT:[0-9]+]] = addi %[[IV]], %[[ST]] : !i32
 // CHECK: -> %[[NEXT]] | %{{[0-9]+}}
@@ -41,6 +41,6 @@ int count(int n) {
 // OPT: func.func @count
 // OPT-NOT: ptr.
 // OPT-NOT: state.join
-// OPT: scf.for2
+// OPT: scf.for
 // OPT-NOT: ptr.
 // OPT-NOT: state.join

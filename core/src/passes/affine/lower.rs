@@ -528,7 +528,7 @@ impl<'a> Lowering<'a> {
         let region = self.context.create_region();
         region.add_block(block.id());
 
-        let mut builder = scf::ForOpBuilder::new(self.context)
+        let mut builder = scf::ForLegacyOpBuilder::new(self.context)
             .lower_bound(lower)
             .upper_bound(upper)
             .step(step)
@@ -565,7 +565,7 @@ impl<'a> Lowering<'a> {
         Ok(results[1..].to_vec())
     }
 
-    /// One unordered counted loop: a `scf.for2` whose body is a fresh graph
+    /// One unordered counted loop: a `scf.for` whose body is a fresh graph
     /// holding the counter, the chains, and the levels below.
     #[allow(clippy::too_many_arguments)]
     fn emit_loop_nodes(
@@ -598,7 +598,7 @@ impl<'a> Lowering<'a> {
         let body = context
             .create_nodes_region(ports, states.len(), vec![], vec![], 0)
             .id();
-        let mut builder = scf::For2OpBuilder::new(context)
+        let mut builder = scf::ForOpBuilder::new(context)
             .lb(lower)
             .inits(vec![])
             .ub(upper)
@@ -768,6 +768,21 @@ pub(super) fn erase_unread(
     rewriter: &mut Rewriter,
     ops: &[OpId],
 ) -> Result<(), PassError> {
+    // A region's results sit in no use list, so a value one names is read
+    // without a user: an unordered region's results, and those of every
+    // region nested in it, count as reads.
+    let mut named: std::collections::HashSet<ValueId> = std::collections::HashSet::new();
+    let mut seen: std::collections::HashSet<crate::RegionId> = std::collections::HashSet::new();
+    for &op in ops {
+        let Some(region) = context.parent_nodes_region(op) else {
+            continue;
+        };
+        if seen.insert(region) {
+            for nested in context.nested_regions(region) {
+                named.extend(context.get_region(nested).results());
+            }
+        }
+    }
     for &op in ops.iter().rev() {
         let instance = context.get_op(op);
         if instance.regions().is_empty()
@@ -777,7 +792,7 @@ pub(super) fn erase_unread(
             && instance
                 .results()
                 .iter()
-                .all(|&result| !context.is_used(result))
+                .all(|&result| !context.is_used(result) && !named.contains(&result))
         {
             rewriter.erase_op(&OperationRef::new(instance))?;
         }

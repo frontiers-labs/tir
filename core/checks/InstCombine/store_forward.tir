@@ -1,4 +1,4 @@
-// RUN: tir opt --pass instcombine %s | filecheck %s
+// RUN: tir opt --pass restructure-nodes,instcombine-nodes %s | filecheck %s
 
 // The store wrote the extent the load reads, and both spell it at the same
 // type, so the load is the value the store wrote.
@@ -16,4 +16,4 @@ module {
 // CHECK-LABEL: %{{[0-9]+}} = func.func @f
 // CHECK: ptr.store %[[V:[0-9]+]],
 // CHECK-NOT: ptr.load
-// CHECK: func.return %[[V]]
+// CHECK: -> %[[V]]

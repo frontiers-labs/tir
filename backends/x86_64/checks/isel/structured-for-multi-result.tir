@@ -1,30 +1,45 @@
 // RUN: tir mc --march=x86_64 --stage=isel %s | filecheck %s
 
-// Every carried port of a counted loop is threaded on its own: the body reads one
-// argument per port plus the minted counter, the back edge carries each advanced
-// port, and the continuation reads them all as parameters.
+// Every carried port of a counted loop is threaded on its own: the header reads
+// the counter and one argument per port, the back edge carries each advanced
+// port with the advanced counter, and the continuation reads them all as
+// parameters.
 
 #data_layout = {types = {p = {abi = 64, size = 64}}}
 
 module {data_layout = #data_layout} {
-  %fn_two = func.func @two(%lb: !index, %ub: !index, %st: !index, %a: !i64, %b: !i64) -> !i64 {
-    %r0, %r1 = scf.for %lb, %ub, %st iter_args(%x = %a, %y = %b) -> !i64, !i64 {
-      %nx = addi %x, %y : !i64
-      %ny = subi %y, %x : !i64
-      scf.yield %nx, %ny
-    }
-    %s = addi %r0, %r1 : !i64
+  %fn_two = func.func @two(%lb: !i64, %ub: !i64, %st: !i64, %a: !i64, %b: !i64) -> !i64 {
+    cfg.br ^bb1(%lb, %a, %b : !i64, !i64, !i64)
+  ^bb1(%i: !i64, %x: !i64, %y: !i64):
+    %c = cmpi %i, %ub {predicate = "slt"} : !i1
+    cfg.cond_br %c, ^bb2, ^bb3
+  ^bb2:
+    %nx = addi %x, %y : !i64
+    %ny = subi %y, %x : !i64
+    %ni = addi %i, %st : !i64
+    cfg.br ^bb1(%ni, %nx, %ny : !i64, !i64, !i64)
+  ^bb3:
+    %s = addi %x, %y : !i64
     func.return %s
   }
   module_end
 }
 
 // CHECK-NOT: scf.
-// The body reads one argument per port, plus the minted counter.
-// CHECK: ^[[BODY:bb[0-9]+]](%{{[0-9]+}}: !x86_64.GPR, %{{[0-9]+}}: !x86_64.GPR, %{{[0-9]+}}: !x86_64.GPR):
-// Both ports leave on the exit edge, and the continuation reads them both.
-// CHECK: asm.vbr %{{[0-9]+}}, %{{[0-9]+}} ^[[JOIN:bb[0-9]+]]
-// CHECK: ^[[JOIN]](%{{[0-9]+}}: !x86_64.GPR, %{{[0-9]+}}: !x86_64.GPR):
-// The back edge carries both advanced ports and the advanced counter.
-// CHECK: asm.vbr %{{[0-9]+}}, %{{[0-9]+}}, %{{[0-9]+}} ^[[BODY]]
+// The header reads the counter and one argument per port.
+// CHECK: ^[[HEAD:bb[0-9]+]](%{{[0-9]+}}: !x86_64.GPR, %{{[0-9]+}}: !x86_64.GPR, %{{[0-9]+}}: !x86_64.GPR):
+// The body advances both ports and the counter, and carries all three with the
+// continue flag to the latch.
+// CHECK: x86_64.add
+// CHECK-NEXT: x86_64.sub
+// CHECK-NEXT: x86_64.add
+// CHECK-NEXT: x86_64.mov_imm8
+// CHECK-NEXT: asm.vbr %{{[0-9]+}}, %{{[0-9]+}}, %{{[0-9]+}}, %{{[0-9]+}} ^[[LATCH:bb[0-9]+]]
+// The latch sends all three around the back edge or out to the continuation,
+// which reads them and sums the two ports.
+// CHECK: ^[[LATCH]](%[[I:[0-9]+]]: !x86_64.GPR, %[[X:[0-9]+]]: !x86_64.GPR, %[[Y:[0-9]+]]: !x86_64.GPR, %{{[0-9]+}}: !x86_64.GPR):
+// CHECK: asm.vbr %[[I]], %[[X]], %[[Y]] ^[[JOIN:bb[0-9]+]]
+// CHECK: asm.vbr %[[I]], %[[X]], %[[Y]] ^[[HEAD]]
+// CHECK: ^[[JOIN]](%{{[0-9]+}}: !x86_64.GPR, %[[RX:[0-9]+]]: !x86_64.GPR, %[[RY:[0-9]+]]: !x86_64.GPR):
+// CHECK-NEXT: x86_64.add {dst = %{{[0-9]+}}:GPR, dst_tied = %[[RX]]:GPR, src = %[[RY]]:GPR}
 // CHECK-NOT: scf.

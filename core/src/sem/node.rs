@@ -194,12 +194,6 @@ impl SemNode {
         Self::projection(Kind::Sym(SymKind::Port), value, args)
     }
 
-    /// The value-level choice among a gamma's arms standing for `value`:
-    /// `Switch(pred, arm0, arm1, ...)`.
-    pub fn switch(value: ValueId, args: Vec<Id>) -> Self {
-        Self::projection(Kind::Sym(SymKind::Switch), value, args)
-    }
-
     /// A memory access standing for `value` — the value a read yields, or the
     /// state a write publishes — over the vocabulary's operands and the state
     /// it reads.

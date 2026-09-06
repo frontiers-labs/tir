@@ -1,4 +1,4 @@
-// RUN: tir opt --pass func.func(promote,thread-state,instcombine) --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(restructure-nodes,promote-nodes,instcombine-nodes) --verify %s | filecheck %s
 
 // Two reads of one state are one term, so the second is common-subexpression
 // eliminated. The join closing their fork stays: it is what orders the write
@@ -16,9 +16,9 @@ module {
   module_end
 }
 
-// CHECK-LABEL: %{{[0-9]+}} = func.func @f
+// CHECK-LABEL: %{{[0-9]+}} = func.func @f(%[[P:[0-9]+]]: !ptr.p<!i32>, %{{[0-9]+}}: !ptr.p<!i32>)
 // CHECK-NEXT: | %[[ENTRY:[0-9]+]] = state.entry_state
-// CHECK-NEXT: %[[V:[0-9]+]] | %[[R:[0-9]+]] = ptr.load %0 | %[[ENTRY]] : !i32
+// CHECK-NEXT: %[[V:[0-9]+]] | %[[R:[0-9]+]] = ptr.load %[[P]] | %[[ENTRY]] : !i32
 // CHECK-NEXT: %{{[0-9]+}} = addi %[[V]], %[[V]] : !i32
 // CHECK-NEXT: | %[[J:[0-9]+]] = state.join | %[[R]], %[[ENTRY]]
-// CHECK-NEXT: | %{{[0-9]+}} = ptr.store %{{[0-9]+}}, %0 | %[[J]]
+// CHECK-NEXT: | %{{[0-9]+}} = ptr.store %{{[0-9]+}}, %[[P]] | %[[J]]

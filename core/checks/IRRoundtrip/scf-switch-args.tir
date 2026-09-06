@@ -5,7 +5,7 @@
 
 module {
   %fn_select = func.func @select(%0: !i32, %1: !i32) -> !i32 {
-    %2 = scf.switch %0 args(%1) -> !i32 case 1 (%3) {
+    %2 = scf.switch_legacy %0 args(%1) -> !i32 case 1 (%3) {
       scf.yield %3
     }
     default (%4) {
@@ -16,7 +16,7 @@ module {
   module_end
 }
 
-// CHECK: %{{[0-9]+}} = scf.switch %0 args(%1) -> !i32 case 1 (%[[A:[0-9]+]]) {
+// CHECK: %{{[0-9]+}} = scf.switch_legacy %0 args(%1) -> !i32 case 1 (%[[A:[0-9]+]]) {
 // CHECK-NEXT: scf.yield %[[A]]
 // CHECK-NEXT: }
 // CHECK-NEXT: default (%[[B:[0-9]+]]) {

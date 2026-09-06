@@ -21,11 +21,11 @@ module {
 // CHECK-NEXT: andi x[[C:[0-9]+]], x10, 1
 // CHECK-NEXT: bne x[[C]], x0, .L[[T:[0-9]+]]
 // CHECK-NEXT: jal x0, .L[[F:[0-9]+]]
-// CHECK-NEXT: .L[[T]]:
-// CHECK-NEXT: addi x10, x0, 1
-// CHECK-NEXT: jal x0, .L[[E:[0-9]+]]
 // CHECK-NEXT: .L[[F]]:
 // CHECK-NEXT: addi x10, x0, 0
+// CHECK-NEXT: jal x0, .L[[E:[0-9]+]]
+// CHECK-NEXT: .L[[T]]:
+// CHECK-NEXT: addi x10, x0, 1
 // CHECK-NEXT: jal x0, .L[[E]]
 // CHECK-NEXT: .L[[E]]:
 // CHECK-NEXT: jalr x0, 0(x1)

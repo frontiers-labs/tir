@@ -12,7 +12,7 @@ module {
     %zero = constant {value = 0} : !i32
     %one = constant {value = 1} : !i32
     %seven = constant {value = 7} : !i32
-    %r, %k = scf.for %zero, %n, %one iter_args(%iv = %zero, %c = %seven) -> !i32, !i32 {
+    %r, %k = scf.for_legacy %zero, %n, %one iter_args(%iv = %zero, %c = %seven) -> !i32, !i32 {
       %w = addi %c, %zero : !i32
       %next = addi %iv, %one : !i32
       scf.yield %next, %w
@@ -25,7 +25,7 @@ module {
 
 // CHECK: func.func @f
 // CHECK: %[[SEVEN:[0-9]+]] = constant {value = 7} : !i32
-// CHECK: scf.for2 %{{[0-9]+}} = %{{[0-9]+}} to %{{[0-9]+}} step %{{[0-9]+}} (%{{[0-9]+}} = %{{[0-9]+}}, %{{[0-9]+}} = %[[SEVEN]] | {{.*}}) {
+// CHECK: scf.for %{{[0-9]+}} = %{{[0-9]+}} to %{{[0-9]+}} step %{{[0-9]+}} (%{{[0-9]+}} = %{{[0-9]+}}, %{{[0-9]+}} = %[[SEVEN]] | {{.*}}) {
 // CHECK: -> %{{[0-9]+}}, %[[SEVEN]] | %{{[0-9]+}}
 // CHECK: }
 // CHECK: addi %[[SEVEN]], %{{[0-9]+}}

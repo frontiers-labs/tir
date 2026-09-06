@@ -368,7 +368,13 @@ impl<'a> Builder<'a> {
             return;
         };
         let (args, latched, inits) = (carried.args, carried.latched, carried.inits);
-        let value_ports = args.len() - op.dep_results().len().min(args.len());
+        // A declared loop carries its dependencies apart from its value ports;
+        // a legacy one lists them among its arguments.
+        let value_ports = if op.has_interface::<dyn Theta>() {
+            args.len()
+        } else {
+            args.len() - op.dep_results().len().min(args.len())
+        };
         for port in 0..value_ports {
             self.ports.push(Port {
                 arg: args[port],
@@ -420,7 +426,9 @@ impl<'a> Builder<'a> {
             };
             pending.extend(op.operands().iter().copied());
             for region in crate::passes::regions_under(self.context, op.id) {
-                for inner in self.context.get_region(region).op_ids() {
+                let handle = self.context.get_region(region);
+                pending.extend(handle.results());
+                for inner in handle.op_ids() {
                     pending.extend(self.context.get_op(inner).operands().iter().copied());
                 }
             }
@@ -577,6 +585,30 @@ fn interior_values(context: &Context, root: OpId) -> HashSet<ValueId> {
 /// allocation that opened it. Two accesses are of one memory exactly when the
 /// walk back through the ports, forks and merges reaches the same state.
 pub(crate) fn chain_root(context: &Context, state: ValueId) -> Option<ValueId> {
+    chain_root_memo(context, state, &mut HashMap::new())
+}
+
+/// [`chain_root`] remembering every state's root: a chain forks and merges
+/// again at every gate, so the walk without memory is exponential in the
+/// gates it crosses.
+fn chain_root_memo(
+    context: &Context,
+    state: ValueId,
+    memo: &mut HashMap<ValueId, Option<ValueId>>,
+) -> Option<ValueId> {
+    if let Some(&root) = memo.get(&state) {
+        return root;
+    }
+    let root = chain_root_walk(context, state, memo);
+    memo.insert(state, root);
+    root
+}
+
+fn chain_root_walk(
+    context: &Context,
+    state: ValueId,
+    memo: &mut HashMap<ValueId, Option<ValueId>>,
+) -> Option<ValueId> {
     let mut current = state;
     let mut seen = HashSet::new();
     loop {
@@ -598,7 +630,7 @@ pub(crate) fn chain_root(context: &Context, state: ValueId) -> Option<ValueId> {
             let mut roots = op
                 .operands()
                 .iter()
-                .map(|&operand| chain_root(context, operand))
+                .map(|&operand| chain_root_memo(context, operand, memo))
                 .collect::<Option<BTreeSet<_>>>()?;
             return (roots.len() == 1).then(|| roots.pop_first().expect("one root"));
         }
@@ -637,7 +669,13 @@ pub(crate) fn chain_root(context: &Context, state: ValueId) -> Option<ValueId> {
             let mut roots = gamma
                 .arms()
                 .iter()
-                .map(|&arm| chain_root(context, *context.get_region(arm).dep_results().get(port)?))
+                .map(|&arm| {
+                    chain_root_memo(
+                        context,
+                        *context.get_region(arm).dep_results().get(port)?,
+                        memo,
+                    )
+                })
                 .collect::<Option<BTreeSet<_>>>()?;
             return (roots.len() == 1).then(|| roots.pop_first().expect("one root"));
         }
@@ -651,7 +689,9 @@ pub(crate) fn chain_root(context: &Context, state: ValueId) -> Option<ValueId> {
             let mut roots = op
                 .regions()
                 .iter()
-                .map(|&region| chain_root(context, *gate.region_yields(region).get(port)?))
+                .map(|&region| {
+                    chain_root_memo(context, *gate.region_yields(region).get(port)?, memo)
+                })
                 .collect::<Option<BTreeSet<_>>>()?;
             return (roots.len() == 1).then(|| roots.pop_first().expect("one root"));
         }

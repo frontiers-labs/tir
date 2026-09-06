@@ -6,7 +6,7 @@
 module {
   %f = func.func @f(%c: !i1, %p: !ptr.p<!i32>, %v: !i32) -> !i32 {
     | %s = state.entry_state
-    | %g = scf.switch2 %c args(| %s) (| %a) {
+    | %g = scf.switch %c args(| %s) (| %a) {
       -> | %a
     }
     (| %b) {

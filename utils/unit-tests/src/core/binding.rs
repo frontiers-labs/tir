@@ -183,14 +183,14 @@ fn every_gamma_arm_must_produce_the_op_results() {
     assert!(error.to_string().contains("arm 1"), "{error}");
 }
 
-/// `scf.for2 %i = %lb to %ub step %s (%a = %init)` built by hand, with the body
+/// `scf.r#for %i = %lb to %ub step %s (%a = %init)` built by hand, with the body
 /// results `shape` chooses from the counter, its comparison, its increment,
 /// the carried port and its doubled value.
 fn counted(
     context: &Context,
     predicate: tir::attributes::Predicate,
     shape: impl Fn(&[ValueId; 5]) -> Vec<ValueId>,
-) -> tir::scf::For2Op {
+) -> tir::scf::ForOp {
     use tir::builtin::{AddIOpBuilder, CmpIOpBuilder};
     let i32_ty = builtin::IntegerType::new(context, 32);
     let i1 = builtin::IntegerType::new(context, 1);
@@ -226,7 +226,7 @@ fn counted(
         results,
         0,
     );
-    tir::scf::For2OpBuilder::new(context)
+    tir::scf::ForOpBuilder::new(context)
         .lb(bounds[0])
         .inits(vec![bounds[3]])
         .ub(bounds[1])

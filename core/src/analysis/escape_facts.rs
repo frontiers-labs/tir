@@ -81,6 +81,15 @@ impl FactDomain for Uses<'_> {
                     facts.raise(operand, use_of(&instance, operand));
                 }
             }
+            // A region naming the address as its result carries it out of the
+            // region, where the analysis cannot follow it.
+            for region in instance.regions() {
+                for result in self.context.get_region(region).value_results() {
+                    if is_pointer(self.context, result) {
+                        facts.raise(result, Escape::Escapes);
+                    }
+                }
+            }
         }
     }
 

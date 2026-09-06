@@ -1,24 +1,25 @@
 // RUN: tir mc --march=x86_64 --stage=isel %s | filecheck %s
 
 // A loop's body is read in the function's own e-graph too, so a constant defined
-// before the loop folds into the body's instruction. The default path selects a
-// graph per region-carrying operation and declines this shape outright, which is
-// why it has no RUN line of its own here.
+// before the loop folds into the body's instruction instead of being
+// materialized into a register. The loop is the one the converter builds from
+// the back edge below.
 
 module {
   %fn_accumulate = func.func @accumulate(%0: !i1, %1: !i64) -> !i64 {
     %c = constant {value = 5} : !i64
-    %r = scf.while iter_args(%acc = %1) -> !i64 {
-      scf.condition %0, %acc
-    } do scope(%tok)(%cur) {
-      %n = addi %cur, %c : !i64
-      scf.yield %n
-    }
-    func.return %r
+    cfg.br ^bb1(%1 : !i64)
+  ^bb1(%acc: !i64):
+    cfg.cond_br %0, ^bb2, ^bb3
+  ^bb2:
+    %n = addi %acc, %c : !i64
+    cfg.br ^bb1(%n : !i64)
+  ^bb3:
+    func.return %acc
   }
   module_end
 }
 
 // CHECK: asm.symbol {name = "accumulate"
-// CHECK-NOT: x86_64.mov_imm
+// CHECK-NOT: x86_64.mov_imm {
 // CHECK: x86_64.lea_base_disp {dst = %{{[0-9]+}}:GPR, base = %{{[0-9]+}}:GPR, imm = 5}

@@ -3,8 +3,7 @@
 use std::collections::{HashMap, HashSet};
 
 use tir::{
-    BlockId, Conditional, Context, CountedLoop, EntryGuard, GuardedLoop, LoopLike, MemoryRead,
-    MemoryWrite, OpHandle, OpId, RegionId, TokenScope, TypeId, ValueId,
+    Context, Gamma, MemoryRead, MemoryWrite, OpHandle, OpId, RegionId, Theta, TypeId, ValueId,
     attributes::AttributeValue,
     builtin::{FloatType, IntegerType},
     graph::{Dag, MetaDag, NodeId},
@@ -17,8 +16,6 @@ use tir::{
 use tir_adt::APInt;
 use tir_relational::ClassId as Id;
 
-use crate::analysis::scopes::{carried_operands, port_edges, region_exit};
-
 use super::node::class_is_pure;
 
 /// What a walk records for the cover: the class each operation is rooted at, and
@@ -29,35 +26,34 @@ pub(crate) struct Seeds {
     pub(crate) constant_candidates: Vec<(OpId, Id)>,
 }
 
-/// Which value of a region-carrying operation's destruction a class stands for.
+/// Which test of a structured operation's destruction a class stands for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum AuxSlot {
-    /// The test selecting case `k` of a [`Conditional`], or a loop's
-    /// per-iteration condition (`k == 0`).
+    /// The test selecting arm `k` of a gate, or a loop's repeat predicate
+    /// (`k == 0`): taken when the class holds.
     Test(usize),
-    /// A counted loop's zero-trip guard, held by the block the loop sits in.
-    Entry,
-    /// A counted loop's counter after one step, held by its body.
-    Advance,
-    /// A counted loop's back-edge test, held by its body.
-    Latch,
+    /// The test selecting arm `k` of a gate, taken when the class does *not*
+    /// hold: a one-bit predicate selects arm 0 by being false, and the class
+    /// is the predicate itself, so the target's branch rules see the condition
+    /// they were written against.
+    Unless(usize),
 }
 
-/// The values a destruction branches on and advances, which no operation spells:
-/// a gate names its cases by attribute, and a counted loop's counter exists only
-/// once the loop is destructed. The seeder builds the terms so the cover selects
-/// them like any other, keyed by the block whose plan must materialize them.
+/// The tests a destruction branches on, which no operation spells: a gate
+/// selects an arm by its predicate's value, a loop repeats on a body result.
+/// The seeder builds the terms so the cover selects them like any other, keyed
+/// by the region whose plan must materialize them.
 #[derive(Default)]
 pub(crate) struct RegionControl {
-    pub(crate) aux: HashMap<BlockId, Vec<(OpId, AuxSlot, Id)>>,
+    pub(crate) aux: HashMap<RegionId, Vec<(OpId, AuxSlot, Id)>>,
     /// Each (consumer, condition) pair a destruction's branch recomputes, so the
     /// consumer's use of it does not also force the condition into a register.
     pub(crate) test_conditions: HashSet<(OpId, ValueId)>,
 }
 
 impl RegionControl {
-    fn record(&mut self, block: BlockId, op: OpId, slot: AuxSlot, class: Id) {
-        self.aux.entry(block).or_default().push((op, slot, class));
+    fn record(&mut self, region: RegionId, op: OpId, slot: AuxSlot, class: Id) {
+        self.aux.entry(region).or_default().push((op, slot, class));
     }
 }
 
@@ -68,6 +64,10 @@ impl RegionControl {
 pub(crate) struct SemDagBuilder<'a> {
     context: &'a Context,
     value_to_def: &'a HashMap<ValueId, OpId>,
+    /// Each region's operations in the order they are solved in: a value is
+    /// lowered by its defining operation before anything reading it, whatever
+    /// order the region was built in.
+    order: &'a HashMap<RegionId, Vec<OpId>>,
     egraph: &'a mut SemEGraph,
     pointer_width: Option<u32>,
     /// The e-class built for each already-lowered IR value (operand sharing / CSE).
@@ -80,12 +80,14 @@ impl<'a> SemDagBuilder<'a> {
     pub(crate) fn new(
         context: &'a Context,
         value_to_def: &'a HashMap<ValueId, OpId>,
+        order: &'a HashMap<RegionId, Vec<OpId>>,
         egraph: &'a mut SemEGraph,
         pointer_width: Option<u32>,
     ) -> Self {
         Self {
             context,
             value_to_def,
+            order,
             egraph,
             pointer_width,
             value_to_class: HashMap::new(),
@@ -93,39 +95,21 @@ impl<'a> SemDagBuilder<'a> {
         }
     }
 
-    /// Lower `blocks` into the graph, and every region their operations carry.
-    pub(crate) fn build_blocks(
+    /// Lower `region` into the graph, and every region its operations carry.
+    pub(crate) fn build_region(
         &mut self,
-        blocks: &[BlockId],
+        region: RegionId,
         float_widths: &HashSet<u32>,
-    ) -> Seeds {
-        let mut seeds = Seeds::default();
-        for &block in blocks {
-            self.build_block(block, float_widths, &mut seeds);
-        }
-        seeds
-    }
-
-    fn build_block(&mut self, block: BlockId, float_widths: &HashSet<u32>, seeds: &mut Seeds) {
-        for op_id in self.context.get_block(block).op_ids() {
+        seeds: &mut Seeds,
+    ) {
+        let ops = self.order[&region].clone();
+        for op_id in ops {
             let op = self.context.get_op(op_id);
             if !op.regions().is_empty() {
                 self.build_region_op(&op, float_widths, seeds);
             } else {
                 self.build_plain_op(op_id, &op, float_widths, seeds);
             }
-        }
-    }
-
-    fn build_region(&mut self, region: RegionId, float_widths: &HashSet<u32>, seeds: &mut Seeds) {
-        let blocks: Vec<BlockId> = self
-            .context
-            .get_region(region)
-            .iter(self.context.clone())
-            .map(|block| block.id())
-            .collect();
-        for block in blocks {
-            self.build_block(block, float_widths, seeds);
         }
     }
 
@@ -164,21 +148,34 @@ impl<'a> SemDagBuilder<'a> {
             .map(FloatType::bit_width)
     }
 
-    /// A region-carrying operation is read through its own interfaces: its regions
-    /// join this graph, and what it publishes is the γ over what its arms yield or
-    /// the θ over what its edges carry. What its regions did to memory is on the
-    /// state ports it carries, so nothing here has to guess at it.
+    /// A structured operation is read through its own binding: its regions join
+    /// this graph, and what it publishes is the γ over what its arms produce or
+    /// the θ over what its body carries. What its regions did to memory is on
+    /// the state ports it carries, so nothing here has to guess at it.
     fn build_region_op(&mut self, op: &OpHandle, float_widths: &HashSet<u32>, seeds: &mut Seeds) {
-        if let Some(conditional) = op.clone().as_interface::<dyn Conditional>() {
-            for region in op.regions().to_vec() {
-                self.bind_region_arguments(op, region);
-                self.build_region(region, float_widths, seeds);
+        if let Some(gamma) = op.clone().as_interface::<dyn Gamma>() {
+            let binding = gamma.forwarded();
+            let inputs = op.value_operands()[binding.operands.clone()].to_vec();
+            for arm in gamma.arms() {
+                let region = self.context.get_region(arm);
+                let ports = region.value_arguments();
+                for (port, &input) in ports[binding.ports.clone()].iter().zip(&inputs) {
+                    let class = self.build_from_value(input);
+                    self.value_to_class.insert(port.id(), class);
+                }
+                // A gate forwards its memory states into every arm unchanged,
+                // so an access in an arm reads the state the gate was handed.
+                for (port, &state) in region.dep_arguments().iter().zip(&op.dep_operands()) {
+                    let class = self.build_from_value(state);
+                    self.value_to_class.insert(port.id(), class);
+                }
+                self.build_region(arm, float_widths, seeds);
             }
-            self.seed_gamma(op, conditional.as_ref());
+            self.seed_gamma(op, gamma.as_ref());
             return;
         }
-        if let Some(loop_like) = op.clone().as_interface::<dyn LoopLike>() {
-            self.seed_theta(op, loop_like.as_ref(), float_widths, seeds);
+        if let Some(theta) = op.clone().as_interface::<dyn Theta>() {
+            self.seed_theta(op, theta.as_ref(), float_widths, seeds);
             return;
         }
         for region in op.regions().to_vec() {
@@ -186,29 +183,26 @@ impl<'a> SemDagBuilder<'a> {
         }
     }
 
-    /// γ: what a gate publishes is the choice between what its arms yield, one
-    /// child per case in the order the interface reports them — the order a
+    /// γ: what a gate publishes is the choice between what its arms produce, one
+    /// child per arm in the order the binding reports them — the order a
     /// destruction maps back onto the regions.
-    ///
-    /// An arm leaving the enclosing loop never reaches what follows the gate, so a
-    /// gate one arm leaves through publishes what the arm that stays yields, and
-    /// one every arm leaves through publishes nothing the graph can name.
-    fn seed_gamma(&mut self, op: &OpHandle, conditional: &dyn Conditional) {
-        let decision = self.build_from_value(conditional.decision());
-        let cases = conditional.case_values();
-        let arms: Vec<RegionId> = cases
+    fn seed_gamma(&mut self, op: &OpHandle, gamma: &dyn Gamma) {
+        let decision = self.build_from_value(gamma.predicate());
+        let arms = gamma.arms();
+        let binding = gamma.forwarded();
+        for (index, &result) in op.value_results()[binding.results.clone()]
             .iter()
-            .map(|&(region, _)| region)
-            .filter(|&region| region_exit(self.context, region).is_none())
-            .collect();
-        for (index, &result) in op.results().to_vec().iter().enumerate() {
-            let yields: Option<Vec<ValueId>> = arms
+            .enumerate()
+        {
+            let produced: Vec<ValueId> = arms
                 .iter()
-                .map(|&region| conditional.region_yields(region).get(index).copied())
+                .map(|&arm| {
+                    self.context.get_region(arm).value_results()[binding.exit.clone()][index]
+                })
                 .collect();
-            let class = match yields.as_deref() {
-                Some(&[value]) => self.build_from_value(value),
-                Some(values) if values.len() == cases.len() => {
+            let class = match produced.as_slice() {
+                &[value] => self.build_from_value(value),
+                values => {
                     let mut args = vec![decision];
                     for &value in values {
                         args.push(self.build_from_value(value));
@@ -221,338 +215,98 @@ impl<'a> SemDagBuilder<'a> {
                     let anchor = self.add_input_value(result, Some(ty));
                     self.egraph.union(gamma, anchor)
                 }
-                _ => continue,
             };
             self.value_to_class.insert(result, class);
         }
     }
 
-    /// An arm's entry arguments are the inputs the gate forwards into it: the
-    /// operation's trailing operands, one per argument.
-    fn bind_region_arguments(&mut self, op: &OpHandle, region: RegionId) {
-        let Some(block) = self
-            .context
-            .get_region(region)
-            .iter(self.context.clone())
-            .next()
-        else {
-            return;
-        };
-        let arguments: Vec<ValueId> = block.arguments().iter().map(|a| a.id()).collect();
-        let first = op.operands().len().saturating_sub(arguments.len());
-        for (&argument, &input) in arguments.iter().zip(&op.operands()[first..]) {
-            let class = self.build_from_value(input);
-            self.value_to_class.insert(argument, class);
-        }
-    }
-
     /// θ: what a loop carries in a port is the value it was entered with and the
-    /// one each edge back into the port carries — the body's latch, and every
-    /// `break`/`continue` leaving its scope, in the one order `port_edges` reports.
-    /// The port's argument anchors first, so the regions can be read on it, and the
-    /// θ joins that class after: an edge is a term over the argument itself.
-    ///
-    /// A loop whose quad does not line the ports up — `scf.for`, whose body carries
-    /// an induction variable no init names — anchors instead.
+    /// one the next iteration carries. The port anchors first, so the body can
+    /// be read on it, and the θ joins that class after: the continue value is a
+    /// term over the port itself.
     fn seed_theta(
         &mut self,
         op: &OpHandle,
-        loop_like: &dyn LoopLike,
+        theta: &dyn Theta,
         float_widths: &HashSet<u32>,
         seeds: &mut Seeds,
     ) {
-        let carried = loop_like.carried_args();
-        let inits = loop_like.inits();
-        let tested = self.tested_values(op, carried.len());
-        let heads = match &tested {
-            Some((_, arguments, _)) => arguments.clone(),
-            None => carried.clone(),
-        };
-        for &head in &heads {
-            self.build_from_value(head);
-        }
-        // The body reads what the test forwards into it, so the test's region is
-        // read first and its forwarded values name the body's arguments.
-        if let Some((region, _, forwarded)) = tested.clone() {
-            self.build_region(region, float_widths, seeds);
-            for (&argument, &value) in carried.iter().zip(&forwarded) {
-                let class = self.build_from_value(value);
-                self.value_to_class.insert(argument, class);
-            }
-        }
-        for region in op.regions().to_vec() {
-            if tested
-                .as_ref()
-                .is_some_and(|(tested, ..)| *tested == region)
-            {
-                continue;
-            }
-            self.build_region(region, float_widths, seeds);
-        }
-
-        let edges: Vec<OpHandle> = op
-            .clone()
-            .as_interface::<dyn TokenScope>()
-            .into_iter()
-            .flat_map(|scope| scope.token_scope_regions())
-            .flat_map(|body| port_edges(self.context, body))
-            .map(|edge| self.context.get_op(edge))
+        let binding = theta.carried();
+        let body = theta.body();
+        let region = self.context.get_region(body);
+        let ports: Vec<ValueId> = region.value_arguments()[binding.ports.clone()]
+            .iter()
+            .map(|port| port.id())
             .collect();
-        if edges.is_empty() || inits.len() != heads.len() {
-            return;
+        for &port in &ports {
+            self.build_from_value(port);
         }
-        for port in 0..heads.len() {
-            let Some(latched) = self.latched_values(&edges, port, carried.len()) else {
-                continue;
-            };
-            let init = self.build_from_value(inits[port]);
-            let mut args = vec![init];
-            for value in latched {
-                let class = self.build_from_value(value);
-                args.push(class);
-            }
-            let head = self.build_from_value(heads[port]);
-            let theta = self.egraph.add(SemNode::theta(heads[port], args));
+        self.build_region(body, float_widths, seeds);
+
+        let inits = op.value_operands()[binding.operands.clone()].to_vec();
+        let results = region.value_results();
+        let continued = &results[binding.continue_.clone()];
+        for ((&port, &init), &next) in ports.iter().zip(&inits).zip(continued) {
+            let init = self.build_from_value(init);
+            let next = self.build_from_value(next);
+            let head = self.build_from_value(port);
+            let theta = self.egraph.add(SemNode::theta(port, vec![init, next]));
             self.egraph.union(theta, head);
         }
         self.egraph.rebuild();
     }
 
-    /// The value each edge carries into the `port`-th of a loop's `ports` carried
-    /// ports. `None` where an edge carries too few to name it.
-    fn latched_values(
-        &self,
-        edges: &[OpHandle],
-        port: usize,
-        ports: usize,
-    ) -> Option<Vec<ValueId>> {
-        edges
-            .iter()
-            .map(|edge| {
-                let carried = carried_operands(edge);
-                (carried.len() == ports).then(|| carried[port])
-            })
-            .collect()
-    }
-
-    /// The region a loop evaluates before each iteration, the arguments it reads
-    /// the carried values as, and the values it forwards into the body — its
-    /// terminator's trailing operands, one per port. `None` for a loop that tests
-    /// nothing it carries.
-    ///
-    /// Read through the interfaces rather than through an `scf.while` accessor: the
-    /// mapping body argument ↔ condition operand ↔ result is what `GuardedLoop`
-    /// and the terminator already say between them, and an accessor would be a
-    /// second source of truth for it.
-    fn tested_values(
-        &self,
-        op: &OpHandle,
-        ports: usize,
-    ) -> Option<(RegionId, Vec<ValueId>, Vec<ValueId>)> {
-        let guard = op.clone().as_interface::<dyn GuardedLoop>()?;
-        let EntryGuard::Region {
-            region, arguments, ..
-        } = guard.entry_guard()
-        else {
-            return None;
-        };
-        if arguments.len() != ports {
-            return None;
-        }
-        let block = self
-            .context
-            .get_region(region)
-            .iter(self.context.clone())
-            .next()?;
-        let op = self.context.get_op(*block.op_ids().last()?);
-        let operands = op.operands();
-        let first = operands.len().checked_sub(ports)?;
-        Some((region, arguments, operands[first..].to_vec()))
-    }
-
-    /// Build what destructing `op` will branch on and advance, recording each class
-    /// against the block whose cover must materialize it. Everything here comes off
-    /// the operation's interfaces: a [`Conditional`]'s case tests, a [`GuardedLoop`]'s
-    /// per-iteration condition, and a [`CountedLoop`]'s counter recurrence.
+    /// Build what destructing `op` will branch on, recording each class against
+    /// the region whose cover must materialize it: a gate's arm tests where the
+    /// gate sits, a loop's repeat predicate in its body.
     pub(crate) fn build_region_control(
         &mut self,
         op: &OpHandle,
-        block: BlockId,
+        region: RegionId,
         control: &mut RegionControl,
     ) {
-        if let Some(conditional) = op.clone().as_interface::<dyn Conditional>() {
-            control
-                .test_conditions
-                .insert((op.id, conditional.decision()));
-            self.build_case_tests(op, block, conditional.as_ref(), control);
+        if let Some(gamma) = op.clone().as_interface::<dyn Gamma>() {
+            control.test_conditions.insert((op.id, gamma.predicate()));
+            self.build_arm_tests(op, region, gamma.as_ref(), control);
             return;
         }
-        if let Some(guard) = op.clone().as_interface::<dyn GuardedLoop>() {
-            match guard.entry_guard() {
-                EntryGuard::Region {
-                    region, condition, ..
-                } => {
-                    // The condition is spelled in the test region, so that is the
-                    // block whose branch reads it.
-                    let Some(test) = self
-                        .context
-                        .get_region(region)
-                        .iter(self.context.clone())
-                        .next()
-                    else {
-                        return;
-                    };
-                    let class = self.build_from_value(condition);
-                    if let Some(&terminator) = test.op_ids().last() {
-                        control.test_conditions.insert((terminator, condition));
-                    }
-                    control.record(test.id(), op.id, AuxSlot::Test(0), class);
-                }
-                EntryGuard::Less { lhs, rhs, .. } => {
-                    self.build_counter(op, block, lhs, rhs, control)
-                }
-                EntryGuard::AlwaysTaken => {}
-            }
+        if let Some(theta) = op.clone().as_interface::<dyn Theta>() {
+            let predicate = theta.predicate();
+            control.test_conditions.insert((op.id, predicate));
+            let class = self.build_from_value(predicate);
+            control.record(theta.body(), op.id, AuxSlot::Test(0), class);
         }
     }
 
-    /// A gate's arms are entered on `decision == case`. A one-bit decision selecting
-    /// case 1 *is* that test, so it stands for itself and the target's branch rules
-    /// see the condition they were written against.
-    fn build_case_tests(
+    /// A gate's arms are entered on `predicate == index`, tested in arm order
+    /// with the last arm taking whatever is left. A one-bit predicate selects
+    /// arm 1 by holding and arm 0 by not, so it stands for itself either way.
+    fn build_arm_tests(
         &mut self,
         op: &OpHandle,
-        block: BlockId,
-        conditional: &dyn Conditional,
+        region: RegionId,
+        gamma: &dyn Gamma,
         control: &mut RegionControl,
     ) {
-        let decision = conditional.decision();
-        let ty = self.context.get_value(decision).ty();
-        let width = type_width(self.context, ty);
-        let class = self.build_from_value(decision);
+        let predicate = gamma.predicate();
+        let ty = self.context.get_value(predicate).ty();
+        let Some(width) = type_width(self.context, ty) else {
+            return;
+        };
+        let class = self.build_from_value(predicate);
         let boolean = IntegerType::new(self.context, 1);
-        for (index, (_, case)) in conditional.case_values().into_iter().enumerate() {
-            let Some(case) = case else { continue };
-            let test = if width == Some(1) && case == 1 {
-                class
-            } else {
-                let Some(width) = width else { continue };
-                let expected = self.add_int(APInt::new(width, case as u64), Some(ty));
-                self.add_op(SymKind::Eq, vec![class, expected], Some(boolean))
+        for index in 0..gamma.arms().len().saturating_sub(1) {
+            let (slot, test) = match (width, index) {
+                (1, 0) => (AuxSlot::Unless(0), class),
+                (1, _) => (AuxSlot::Test(index), class),
+                _ => {
+                    let expected = self.add_int(APInt::new(width, index as u64), Some(ty));
+                    let test = self.add_op(SymKind::Eq, vec![class, expected], Some(boolean));
+                    (AuxSlot::Test(index), test)
+                }
             };
-            control.record(block, op.id, AuxSlot::Test(index), test);
+            control.record(region, op.id, slot, test);
         }
-    }
-
-    /// A counted loop's counter is not a value of the IR, so its recurrence is minted
-    /// here: a leaf standing for the counter, the step applied to it, and the two
-    /// comparisons a rotated destruction tests — `lb < ub` before the loop, and the
-    /// advanced counter against the same bound on the back edge.
-    fn build_counter(
-        &mut self,
-        op: &OpHandle,
-        block: BlockId,
-        lower: ValueId,
-        upper: ValueId,
-        control: &mut RegionControl,
-    ) {
-        let Some(counted) = op.clone().as_interface::<dyn CountedLoop>() else {
-            return;
-        };
-        let Some(body) = op.regions().first().and_then(|&region| {
-            self.context
-                .get_region(region)
-                .iter(self.context.clone())
-                .next()
-        }) else {
-            return;
-        };
-        // The counter leaves the abstract index type behind: what it counts through
-        // is ordinary integer arithmetic, at the width the bounds themselves name and
-        // — for `!index` bounds, which name none — at the width the layout gives an
-        // index. Widening a bounded width would change where the counter wraps.
-        let bounds = self.context.get_value(lower).ty();
-        let ty = match type_width(self.context, bounds) {
-            Some(_) => bounds,
-            None => {
-                let Some(ty) = crate::DataLayout::for_op(self.context, op.id)
-                    .and_then(|layout| layout.index_width())
-                    .map(|width| IntegerType::new(self.context, width))
-                else {
-                    return;
-                };
-                ty
-            }
-        };
-        let boolean = IntegerType::new(self.context, 1);
-        let lower_class = self.reinterpret(lower, ty);
-        let upper_class = self.reinterpret(upper, ty);
-        let entry = self.add_op(SymKind::Lt, vec![lower_class, upper_class], Some(boolean));
-        control.record(block, op.id, AuxSlot::Entry, entry);
-
-        // A port the loop already carries and already counts through — a frontend's
-        // induction variable, raised — is the counter: the back edge writes it, so a
-        // second recurrence would only be the same addition twice.
-        //
-        // Where no port counts, the counter is minted as the body's trailing
-        // argument rather than as a loose value: a machine instruction names its
-        // operands' registers by value, so the counter has to be the value the back
-        // edge writes before any instruction reading it is emitted.
-        let counter = self.counting_port(op, lower, ty).unwrap_or_else(|| {
-            let minted = self.context.append_block_argument(body.id(), ty).id();
-            let class = self.add_input_value(minted, Some(ty));
-            self.value_to_class.insert(minted, class);
-            minted
-        });
-        let counter_class = self.build_from_value(counter);
-        let step = self.reinterpret(counted.step(), ty);
-        let advance = self.add_op(SymKind::Add, vec![counter_class, step], Some(ty));
-        let latch = self.add_op(SymKind::Lt, vec![advance, upper_class], Some(boolean));
-        control.record(body.id(), op.id, AuxSlot::Advance, advance);
-        control.record(body.id(), op.id, AuxSlot::Latch, latch);
-    }
-
-    /// The carried port a counted loop already counts through: one entered with the
-    /// lower bound and latched with itself plus the step, at the counter's own type.
-    /// `None` when the loop carries no such port, which is every loop but a raised
-    /// one.
-    fn counting_port(&mut self, op: &OpHandle, lower: ValueId, ty: TypeId) -> Option<ValueId> {
-        let counted = op.clone().as_interface::<dyn CountedLoop>()?;
-        let loop_like = op.clone().as_interface::<dyn LoopLike>()?;
-        let inits = loop_like.inits();
-        let ports = loop_like.carried_args();
-        let latched = loop_like.latched();
-        if latched.len() != ports.len() {
-            return None;
-        }
-        for port in 0..ports.len() {
-            if inits.get(port) != Some(&lower) || self.context.get_value(ports[port]).ty() != ty {
-                continue;
-            }
-            let counter = self.build_from_value(ports[port]);
-            let step = self.build_from_value(counted.step());
-            let advance = self.add_op(SymKind::Add, vec![counter, step], Some(ty));
-            let next = self.build_from_value(latched[port]);
-            if self.egraph.find(advance) == self.egraph.find(next) {
-                return Some(ports[port]);
-            }
-        }
-        None
-    }
-
-    /// Read `value` at `ty`: the same register seen at a concrete width, joined to
-    /// the class the value's own type gives it. What the abstract index type a
-    /// counted loop's bounds carry means once the counting is ordinary arithmetic.
-    fn reinterpret(&mut self, value: ValueId, ty: TypeId) -> Id {
-        let own = self.build_from_value(value);
-        // A value already of `ty` is its own view. Joining an opaque leaf into its
-        // class anyway would cost a literal bound its immediate form, and would leave
-        // the loop's own arithmetic in a class the counter's advance never finds.
-        if self.context.get_value(value).ty() == ty {
-            return own;
-        }
-        let viewed = self.add_input_value(value, Some(ty));
-        self.egraph.union(own, viewed)
     }
 
     fn add_leaf(

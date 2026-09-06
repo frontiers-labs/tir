@@ -1,4 +1,4 @@
-// RUN: tir opt --pass thread-state --verify %s | filecheck %s
+// RUN: tir opt --pass restructure-nodes --verify %s | filecheck %s
 
 // `noalias` is not `alloca`. A slot keeps its chain past a pointer the facts
 // cannot read back because escape analysis proves no such pointer reaches it;
@@ -15,11 +15,10 @@ module {
   }
   module_end
 }
-
 // CHECK-LABEL: %{{[0-9]+}} = func.func @f
 // CHECK-NEXT: | %[[ENTRY:[0-9]+]] = state.entry_state
 // CHECK-NEXT: %{{[0-9]+}} | %[[A:[0-9]+]] = ptr.load %{{[0-9]+}} | %[[ENTRY]] : !ptr.p
 // CHECK-NEXT: %{{[0-9]+}} | %[[B:[0-9]+]] = ptr.load %{{[0-9]+}} | %[[ENTRY]] : !i32
 // CHECK-NEXT: | %{{[0-9]+}} = state.join | %[[A]], %[[B]]
 // CHECK-NEXT: | %[[S:[0-9]+]] = ptr.store %{{[0-9]+}}, %{{[0-9]+}} | %{{[0-9]+}}
-// CHECK-NEXT: func.return | %[[S]]
+// CHECK-NEXT: -> | %[[S]]

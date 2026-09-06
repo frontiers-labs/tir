@@ -17,8 +17,8 @@ module {
   }
   // CHECK: asm.symbol {name = "slt_branch"
   // CHECK: x86_64.cmp {dst = %[[V35:[0-9]+]]:GPR, src = %[[V36:[0-9]+]]:GPR}
-  // CHECK-NEXT: x86_64.jl {imm = ^bb1}
-  // CHECK-NEXT: asm.vbr ^bb2
+  // CHECK-NEXT: x86_64.jl {imm = ^bb2}
+  // CHECK-NEXT: asm.vbr ^bb1
 
   %fn_sle_branch = func.func @sle_branch(%0: !i64, %1: !i64) -> !i64 {
     %2 = cmpi %0, %1 {predicate = "sle"} : !i1
@@ -33,7 +33,7 @@ module {
   // a <= b canonicalizes to b >= a: cmp with swapped operands, then jge.
   // CHECK: asm.symbol {name = "sle_branch"
   // CHECK: x86_64.cmp {dst = %[[V39:[0-9]+]]:GPR, src = %[[V38:[0-9]+]]:GPR}
-  // CHECK-NEXT: x86_64.jge {imm = ^bb1}
+  // CHECK-NEXT: x86_64.jge {imm = ^bb2}
 
   %fn_ult_branch = func.func @ult_branch(%0: !i64, %1: !i64) -> !i64 {
     %2 = cmpi %0, %1 {predicate = "ult"} : !i1
@@ -48,7 +48,7 @@ module {
   // Unsigned below reads the carry flag: jb.
   // CHECK: asm.symbol {name = "ult_branch"
   // CHECK: x86_64.cmp
-  // CHECK-NEXT: x86_64.jb {imm = ^bb1}
+  // CHECK-NEXT: x86_64.jb {imm = ^bb2}
 
   %fn_eq_branch = func.func @eq_branch(%0: !i64, %1: !i64) -> !i64 {
     %2 = cmpi %0, %1 {predicate = "eq"} : !i1
@@ -62,7 +62,7 @@ module {
   }
   // CHECK: asm.symbol {name = "eq_branch"
   // CHECK: x86_64.cmp
-  // CHECK-NEXT: x86_64.je {imm = ^bb1}
+  // CHECK-NEXT: x86_64.je {imm = ^bb2}
 
   %fn_fallback = func.func @fallback(%0: !i1) -> !i64 {
     cfg.cond_br %0, ^bb1, ^bb2
@@ -78,8 +78,8 @@ module {
   // alone: `test c, 1` + `jne`, never a whole-register compare.
   // CHECK: asm.symbol {name = "fallback"
   // CHECK: x86_64.test_imm32 {dst = %{{[0-9]+}}:GPR, imm = 1}
-  // CHECK-NEXT: x86_64.jne {imm = ^bb1}
-  // CHECK-NEXT: asm.vbr ^bb2
+  // CHECK-NEXT: x86_64.jne {imm = ^bb2}
+  // CHECK-NEXT: asm.vbr ^bb1
 
   %fn_constant_operand_branch = func.func @constant_operand_branch(%0: !i64) -> !i64 {
     %1 = constant {value = 0} : !i32

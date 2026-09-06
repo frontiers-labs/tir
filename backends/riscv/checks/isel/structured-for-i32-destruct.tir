@@ -2,14 +2,14 @@
 
 // A counted loop counts through the type its bounds name, on a machine whose
 // index width already matches: the counter is the bounds' own `!i32`, and the
-// zero-trip guard and the latch are the same signed comparison against the bound.
+// header's test is a signed compare against the bound fused into the branch.
 
 #data_layout = {types = {p = {abi = 32, size = 32}}}
 
 module {data_layout = #data_layout} {
   %fn_count = func.func @count(%lb: !i32, %ub: !i32, %st: !i32, %init: !i32) -> !i32 {
     %c = constant {value = 5} : !i32
-    %r = scf.for %lb, %ub, %st iter_args(%acc = %init) -> !i32 {
+    %r = scf.for_legacy %lb, %ub, %st iter_args(%acc = %init) -> !i32 {
       %n = addi %acc, %c : !i32
       scf.yield %n
     }
@@ -19,14 +19,14 @@ module {data_layout = #data_layout} {
 }
 
 // CHECK-NOT: scf.
-// The zero-trip guard, fused into its branch.
-// CHECK: riscv.blt {rs1 = %[[V0:[0-9]+]]:GPR, rs2 = %[[V1:[0-9]+]]:GPR, imm = ^[[ENTER:bb[0-9]+]]}
-// The counter enters the body as its trailing argument, advances by the step and
-// is tested against the same bound on the back edge.
-// CHECK: ^{{bb[0-9]+}}(%{{[0-9]+}}: !riscv.GPR, %[[IV:[0-9]+]]: !riscv.GPR):
-// CHECK: riscv.add {rd = %[[NEXT:[0-9]+]]:GPR, rs1 = %[[IV]]:GPR, rs2 = %[[V2:[0-9]+]]:GPR}
-// The accumulator's tile falls between the two: no dependence orders the
-// counter's advance against it, so neither claims the other's place.
-// CHECK: riscv.blt {rs1 = %[[NEXT]]:GPR, rs2 = %[[V1]]:GPR, imm = ^{{bb[0-9]+}}}
-// CHECK: ^[[ENTER]]:
+// The counter enters the header as its leading argument and the test, fused
+// into its branch, enters the body while it is below the bound.
+// CHECK: ^[[HDR:bb[0-9]+]](%[[IV:[0-9]+]]: !riscv.GPR, %{{[0-9]+}}: !riscv.GPR | %{{[0-9]+}}):
+// CHECK-NEXT: riscv.blt {rs1 = %[[IV]]:GPR, rs2 = %{{[0-9]+}}:GPR, imm = ^[[BODY:bb[0-9]+]]}
+// CHECK-NEXT: asm.vbr %[[IV]], %{{[0-9]+}}, %{{[0-9]+}} ^{{bb[0-9]+}}
+// The body advances the counter by the step and carries it round the back edge.
+// CHECK: ^[[BODY]](| %{{[0-9]+}}):
+// CHECK-NEXT: riscv.addi {rd = %{{[0-9]+}}:GPR, rs1 = %{{[0-9]+}}:GPR, imm = 5}
+// CHECK-NEXT: riscv.add {rd = %[[NEXT:[0-9]+]]:GPR, rs1 = %[[IV]]:GPR, rs2 = %{{[0-9]+}}:GPR}
+// CHECK-NEXT: asm.vbr %[[NEXT]], %{{[0-9]+}}, %{{[0-9]+}} ^[[HDR]]
 // CHECK-NOT: scf.

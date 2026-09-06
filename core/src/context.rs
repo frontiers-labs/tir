@@ -1350,6 +1350,22 @@ impl Context {
         inner.edit_region(region);
     }
 
+    /// Choose another insertion order for the operations the unordered
+    /// `region` already holds; `ops` must be a permutation of them. Insertion
+    /// order decides nothing about the region, but it is the tie-break a
+    /// linearization reads, and selection leaves the order it meant in it.
+    pub fn set_region_ops(&self, region: RegionId, ops: Vec<OpId>) {
+        let mut inner = self.0.write();
+        match inner.region_mut(region).map(Region::body_mut) {
+            Some(crate::region::RegionBody::Nodes { ops: held, .. }) => {
+                debug_assert_eq!(held.len(), ops.len());
+                *held = ops;
+            }
+            _ => panic!("only an unordered region holds an insertion order"),
+        }
+        inner.edit_region(region);
+    }
+
     /// Name the values the unordered `region` produces, the trailing
     /// `dep_results` of them dependencies.
     pub fn set_region_results(&self, region: RegionId, results: Vec<ValueId>, dep_results: usize) {
@@ -1946,6 +1962,35 @@ impl Context {
         }
     }
 
+    /// Make the unordered `region` the ordered one `blocks` spell: what the
+    /// blocks hold was moved out of the region already, its ports were adopted
+    /// as block arguments, and whatever still sits in the region leaves the
+    /// tree with it. The first block is the entry.
+    pub fn replace_region_with_blocks(&self, region: RegionId, blocks: Vec<BlockId>) {
+        let handle = self.get_region(region);
+        let owner = handle.parent_op();
+        let leftover = handle.op_ids();
+        self.free(self.owned_entities(leftover));
+
+        let mut inner = self.0.write();
+        let body = std::mem::replace(
+            inner.region_mut(region).expect("live region").body_mut(),
+            crate::region::RegionBody::Blocks(blocks.clone()),
+        );
+        let crate::region::RegionBody::Nodes { ports, .. } = &body else {
+            panic!("only an ordered region replaces an unordered one's body");
+        };
+        for port in ports {
+            clear_slot(&mut inner.value_region, port.id().index());
+        }
+        for &block in &blocks {
+            slab_put(&mut inner.block_parent, block.index(), region);
+        }
+        if let Some(owner) = owner {
+            inner.edit_subtree(owner);
+        }
+    }
+
     /// Take the subtree under `blocks` out of the live IR and give its storage
     /// back. Bumps no version — the caller reports the edit.
     fn detach_subtree(&self, blocks: &[BlockId]) {
@@ -1993,7 +2038,13 @@ impl Context {
                     }
                     owned.regions.push(region);
                     if handle.is_nodes() {
-                        owned.values.extend(handle.ports().iter().map(Value::id));
+                        owned.values.extend(
+                            handle
+                                .ports()
+                                .iter()
+                                .map(Value::id)
+                                .filter(|port| !self.is_block_argument(*port)),
+                        );
                         ops.extend(
                             handle
                                 .op_ids()

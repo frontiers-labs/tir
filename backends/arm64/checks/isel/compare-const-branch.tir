@@ -20,7 +20,7 @@ module {
   }
   // CHECK: asm.symbol {name = "eq_zero_branch"
   // CHECK-NOT: arm64.cset
-  // CHECK: arm64.cbz {rt = %[[V24:[0-9]+]]:GPR, imm = ^bb1}
+  // CHECK: arm64.cbz {rt = %[[V24:[0-9]+]]:GPR, imm = ^bb2}
 
   %fn_ne_zero_branch = func.func @ne_zero_branch(%0: !i64) -> !i64 {
     %1 = constant {value = 0} : !i64
@@ -35,7 +35,7 @@ module {
   }
   // CHECK: asm.symbol {name = "ne_zero_branch"
   // CHECK-NOT: arm64.cset
-  // CHECK: arm64.cbnz {rt = %[[V26:[0-9]+]]:GPR, imm = ^bb1}
+  // CHECK: arm64.cbnz {rt = %[[V26:[0-9]+]]:GPR, imm = ^bb2}
 
   // A non-zero constant has no `cbz`/`cbnz` form, so it fuses through the
   // immediate flag definer instead: `cmp Xn, #imm` (imm12) + `b.<cc>`.
@@ -53,7 +53,7 @@ module {
   // CHECK: asm.symbol {name = "slt_imm_branch"
   // CHECK-NOT: arm64.cbz
   // CHECK: arm64.cmp_imm {rn = %{{[0-9]+}}:GPR, imm = 5}
-  // CHECK-NEXT: arm64.b.lt {imm = ^bb1}
+  // CHECK-NEXT: arm64.b.lt {imm = ^bb2}
 
   %fn_ult_imm_branch = func.func @ult_imm_branch(%0: !i64) -> !i64 {
     %1 = constant {value = 5} : !i64
@@ -68,7 +68,7 @@ module {
   }
   // CHECK: asm.symbol {name = "ult_imm_branch"
   // CHECK: arm64.cmp_imm {rn = %{{[0-9]+}}:GPR, imm = 5}
-  // CHECK-NEXT: arm64.b.lo {imm = ^bb1}
+  // CHECK-NEXT: arm64.b.lo {imm = ^bb2}
 
   module_end
 }

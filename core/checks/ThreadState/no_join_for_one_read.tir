@@ -1,4 +1,4 @@
-// RUN: tir opt --pass thread-state --verify %s | filecheck %s
+// RUN: tir opt --pass restructure-nodes --verify %s | filecheck %s
 
 // A join of one state is that state, so a single read between two writes is a
 // plain edge and no join is emitted.
@@ -13,10 +13,9 @@ module {
   }
   module_end
 }
-
-// CHECK-LABEL: %{{[0-9]+}} = func.func @f
+// CHECK-LABEL: %{{[0-9]+}} = func.func @f(%[[ARG:[0-9]+]]: !i32)
 // CHECK-NOT: state.join
-// CHECK: | %[[A1:[0-9]+]] = ptr.store %0, %{{[0-9]+}} | %{{[0-9]+}}
+// CHECK: | %[[A1:[0-9]+]] = ptr.store %[[ARG]], %{{[0-9]+}} | %{{[0-9]+}}
 // CHECK-NEXT: %{{[0-9]+}} | %[[R:[0-9]+]] = ptr.load %{{[0-9]+}} | %[[A1]] : !i32
 // CHECK-NEXT: | %{{[0-9]+}} = ptr.store %{{[0-9]+}}, %{{[0-9]+}} | %[[R]]
 // CHECK-NOT: state.join

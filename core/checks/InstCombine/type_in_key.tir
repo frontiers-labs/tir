@@ -1,5 +1,5 @@
-// RUN: tir opt --pass instcombine %s | filecheck %s
-// RUN: tir opt --pass func.func(instcombine) %s | filecheck %s
+// RUN: tir opt --pass restructure-nodes,instcombine-nodes %s | filecheck %s
+// RUN: tir opt --pass func.func(restructure-nodes,instcombine-nodes) %s | filecheck %s
 
 // Same operator and operand, different result type: the two truncs are NOT congruent
 // (result type is part of the hash-cons key), so neither is eliminated. Merging them

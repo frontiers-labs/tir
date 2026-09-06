@@ -1,9 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use tir::{
-    BlockId, Context, OpId, TypeId, ValueId, analysis::DominatorTree,
-    sem::egraph::class_int_binding,
-};
+use tir::{Context, OpId, RegionId, TypeId, ValueId, sem::egraph::class_int_binding};
 use tir_relational::ClassId as Id;
 
 use super::{
@@ -13,21 +10,23 @@ use super::{
 };
 
 #[derive(Clone, Debug, Default)]
-pub(crate) struct BlockPlan {
+pub(crate) struct RegionPlan {
+    /// The region's operations in the order they were solved in: the place
+    /// each tile's root held, which the tile inherits.
+    pub(crate) order: Vec<OpId>,
     pub(crate) schedule: Vec<ScheduledEmit>,
     pub(crate) erase_ops: Vec<OpId>,
     pub(crate) value_remaps: Vec<(ValueId, ValueId)>,
-    /// What this block leaves a destruction to read: the branch each test selected
-    /// into, and the register a counter's advance landed in.
+    /// What this region leaves a destruction to read: the branch each test
+    /// selected into.
     pub(crate) aux: Vec<(OpId, AuxSlot, AuxEmit)>,
 }
 
-/// What a destruction emits for one of a region-carrying operation's values.
+/// What a destruction emits for one of a structured operation's tests.
 #[derive(Clone, Debug)]
 pub(crate) enum AuxEmit {
     Branch(GuardBranch),
-    Value(ValueId),
-    /// A test the block's assumptions already decided: the edge it picks is
+    /// A test the region's assumptions already decided: the edge it picks is
     /// taken unconditionally, and nothing is computed or branched on.
     Decided(bool),
 }
@@ -101,10 +100,9 @@ pub(crate) fn order_tiles(
 
 pub(crate) fn resolve_match(
     fs: &FunctionSelection,
-    dom: &DominatorTree,
     context: &Context,
-    block: BlockId,
-    consumer: OpId,
+    region: RegionId,
+    consumer: Option<OpId>,
     matched: &PbqpIselMatch,
     destinations: &HashMap<Id, ValueId>,
 ) -> RuleMatch {
@@ -116,10 +114,10 @@ pub(crate) fn resolve_match(
             ints.push((*symbol, value));
         }
         // A low-extract capture reads its chased source's register, which may
-        // be defined by a tile scheduled in this block.
+        // be defined by a tile scheduled in this region.
         let chased = fs.chase_low_extract(class);
         if let Some(value) = destinations.get(&chased).copied().or_else(|| {
-            fs.resolve_binding(dom, context, class, block, consumer, false)
+            fs.resolve_binding(context, class, region, consumer, false)
                 .value
         }) {
             values.push((*symbol, value));

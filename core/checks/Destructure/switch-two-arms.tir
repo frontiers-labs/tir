@@ -1,0 +1,44 @@
+// RUN: tir opt --pass destructure --verify %s | filecheck %s
+// RUN: tir opt --pass destructure %s | tir interp --args=1,5 | filecheck --check-prefix=TAKEN %s
+// RUN: tir opt --pass destructure %s | tir interp --args=0,5 | filecheck --check-prefix=OTHER %s
+// RUN: tir interp %s --args=1,5 | filecheck --check-prefix=TAKEN %s
+// RUN: tir interp %s --args=0,5 | filecheck --check-prefix=OTHER %s
+
+// A two-arm gate on an `i1` branches on the predicate itself: true is arm 1.
+// Each arm is a block entered on its ports, both leaving for the merge block
+// that adopts the gate's results, dependencies included.
+
+module {
+  %fn_main = func.func @main(%0: !i1, %1: !i32) -> !i32 {
+    %2 | %3 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    %4 | %5 = scf.switch %0 args(%1 | %3) (%6 | %7) {
+      | %8 = ptr.store %6, %2 | %7
+      -> %6 | %8
+    }
+    (%9 | %10) {
+      %11 = addi %9, %9 : !i32
+      | %12 = ptr.store %11, %2 | %10
+      -> %11 | %12
+    }
+    %13 = ptr.load %2 | %5 : !i32
+    %14 = addi %4, %13 : !i32
+    func.return %14
+  }
+  module_end
+}
+
+// CHECK: %{{[0-9]+}} = func.func @main(%[[P:[0-9]+]]: !i1, %[[X:[0-9]+]]: !i32) -> !i32 {
+// CHECK-NEXT: %[[SLOT:[0-9]+]] | %[[D:[0-9]+]] = ptr.alloca
+// CHECK-NEXT: cfg.cond_br %[[P]], ^bb2(%[[X]] : !i32 | %[[D]]), ^bb1(%[[X]] : !i32 | %[[D]])
+// CHECK-NEXT: ^bb1(%[[A:[0-9]+]]: !i32 | %[[AD:[0-9]+]]):
+// CHECK-NEXT: | %[[AS:[0-9]+]] = ptr.store %[[A]], %[[SLOT]] | %[[AD]]
+// CHECK-NEXT: cfg.br ^bb3(%[[A]] : !i32 | %[[AS]])
+// CHECK-NEXT: ^bb2(%[[B:[0-9]+]]: !i32 | %[[BD:[0-9]+]]):
+// CHECK-NEXT: %[[T:[0-9]+]] = addi %[[B]], %[[B]] : !i32
+// CHECK-NEXT: | %[[BS:[0-9]+]] = ptr.store %[[T]], %[[SLOT]] | %[[BD]]
+// CHECK-NEXT: cfg.br ^bb3(%[[T]] : !i32 | %[[BS]])
+// CHECK-NEXT: ^bb3(%[[R:[0-9]+]]: !i32 | %[[RD:[0-9]+]]):
+// CHECK-NEXT: %{{[0-9]+}} = ptr.load %[[SLOT]] | %[[RD]] : !i32
+
+// TAKEN: i32 20
+// OTHER: i32 10

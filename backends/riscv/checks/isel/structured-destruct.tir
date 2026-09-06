@@ -6,13 +6,14 @@
 
 module {
   %fn_pick = func.func @pick(%c: !i1, %a: !i64, %b: !i64) -> !i64 {
-    %r = scf.if %c -> !i64 {
-      %x = addi %a, %b : !i64
-      scf.yield %x
-    } else {
-      %y = subi %a, %b : !i64
-      scf.yield %y
-    }
+    cfg.cond_br %c, ^bb1, ^bb2
+  ^bb1:
+    %x = addi %a, %b : !i64
+    cfg.br ^bb3(%x : !i64)
+  ^bb2:
+    %y = subi %a, %b : !i64
+    cfg.br ^bb3(%y : !i64)
+  ^bb3(%r: !i64):
     func.return %r
   }
   module_end
@@ -22,11 +23,11 @@ module {
 // CHECK: riscv.andi {rd = %{{[0-9]+}}:GPR, rs1 = %[[V0:[0-9]+]]:GPR, imm = 1}
 // CHECK-NEXT: riscv.bne {rs1 = %{{[0-9]+}}:GPR, rs2 = x0, imm = ^[[THEN:bb[0-9]+]]}
 // CHECK-NEXT: asm.vbr ^[[ELSE:bb[0-9]+]]
-// CHECK: ^[[THEN]]:
-// CHECK-NEXT: riscv.add
-// CHECK-NEXT: asm.vbr %{{[0-9]+}} ^[[JOIN:bb[0-9]+]]
 // CHECK: ^[[ELSE]]:
 // CHECK-NEXT: riscv.sub
+// CHECK-NEXT: asm.vbr %{{[0-9]+}} ^[[JOIN:bb[0-9]+]]
+// CHECK: ^[[THEN]]:
+// CHECK-NEXT: riscv.add
 // CHECK-NEXT: asm.vbr %{{[0-9]+}} ^[[JOIN]]
 // CHECK: ^[[JOIN]](%{{[0-9]+}}: !riscv.GPR):
 // CHECK-NEXT: asm.vret

@@ -1,0 +1,46 @@
+// RUN: tir interp %s --args=4 | filecheck %s
+// RUN: tir opt --pass restructure-nodes,destructure --verify %s | tir interp --args=4 | filecheck %s
+// RUN: tir opt --pass restructure-nodes,destructure %s | filecheck --check-prefix=CFG %s
+// RUN: tir opt --pass restructure-nodes --shuffle-seed 3 %s | tir opt --pass destructure | tir interp --args=4 | filecheck %s
+// RUN: tir opt --pass restructure-nodes --shuffle-seed 11 %s | tir opt --pass destructure | tir interp --args=4 | filecheck %s
+// RUN: tir interp %s --args=0 | filecheck --check-prefix=ZERO %s
+// RUN: tir opt --pass restructure-nodes,destructure %s | tir interp --args=0 | filecheck --check-prefix=ZERO %s
+
+// Two nested counted loops accumulating into a slot go through the unordered
+// form and back: the inner loop sits in the outer one's continue cone, and
+// the slot's chain crosses both. The sum of i*j over 0..n twice is 36 for n=4.
+
+module {
+  %fn_main = func.func @main(%0: !i32) -> !i32 {
+    %p = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    %zero = constant {value = 0} : !i32
+    %one = constant {value = 1} : !i32
+    ptr.store %zero, %p
+    cfg.br ^outer(%zero : !i32)
+  ^outer(%i: !i32):
+    %more = cmpi %i, %0 {predicate = "slt"} : !i1
+    cfg.cond_br %more, ^inner(%zero : !i32), ^exit
+  ^inner(%j: !i32):
+    %again = cmpi %j, %0 {predicate = "slt"} : !i1
+    cfg.cond_br %again, ^body, ^next
+  ^body:
+    %acc = ptr.load %p : !i32
+    %prod = muli %i, %j : !i32
+    %sum = addi %acc, %prod : !i32
+    ptr.store %sum, %p
+    %j1 = addi %j, %one : !i32
+    cfg.br ^inner(%j1 : !i32)
+  ^next:
+    %i1 = addi %i, %one : !i32
+    cfg.br ^outer(%i1 : !i32)
+  ^exit:
+    %r = ptr.load %p : !i32
+    func.return %r
+  }
+  module_end
+}
+
+// CHECK: i32 36
+// ZERO: i32 0
+// CFG-NOT: scf.
+// CFG: func.return

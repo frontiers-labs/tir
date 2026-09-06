@@ -1,45 +1,47 @@
 // RUN: tir mc --march=rv64i --stage=isel %s | filecheck %s
 
-// An arm is covered under the assumption its gate enters it: the then-arm knows
-// the gate's condition holds, the else-arm knows it does not — and each arm's
+// An arm is covered under the assumption its gate enters it: the true arm knows
+// the gate's condition holds, the false arm knows it does not — and each arm's
 // scope is popped before its sibling solves, so neither sees the other's.
 
 module {
-  // The else-arm is entered because `%a < %b` is false, which proves
+  // The false arm is entered because `%a < %b` is false, which proves
   // `%a >= %b`, so the recomputed opposite comparison is the constant 1 rather
   // than a materialized `slt`/`xori` pair.
   %fn_complement_arm = func.func @complement_arm(%a: !i64, %b: !i64) -> !i1 {
     %c = cmpi %a, %b {predicate = "slt"} : !i1
-    %r = scf.if %c -> !i1 {
-      %t = constant {value = 0} : !i1
-      scf.yield %t
-    } else {
-      %d = cmpi %a, %b {predicate = "sge"} : !i1
-      scf.yield %d
-    }
+    cfg.cond_br %c, ^bb1, ^bb2
+  ^bb1:
+    %t = constant {value = 0} : !i1
+    cfg.br ^bb3(%t : !i1)
+  ^bb2:
+    %d = cmpi %a, %b {predicate = "sge"} : !i1
+    cfg.br ^bb3(%d : !i1)
+  ^bb3(%r: !i1):
     func.return %r
   }
   // CHECK: asm.symbol {name = "complement_arm"
   // CHECK: riscv.blt {rs1 = %{{[0-9]+}}:GPR, rs2 = %{{[0-9]+}}:GPR, imm = ^[[THEN:bb[0-9]+]]}
   // CHECK-NEXT: asm.vbr ^[[ELSE:bb[0-9]+]]
-  // The then-arm's own scope proves the gate's condition, not its complement.
-  // CHECK: ^[[THEN]]:
-  // CHECK-NEXT: riscv.addi {rd = %{{[0-9]+}}:GPR, rs1 = x0, imm = 0}
   // CHECK: ^[[ELSE]]:
   // CHECK-NEXT: riscv.addi {rd = %{{[0-9]+}}:GPR, rs1 = x0, imm = 1}
+  // The true arm's own scope proves the gate's condition, not its complement.
+  // CHECK: ^[[THEN]]:
+  // CHECK-NEXT: riscv.addi {rd = %{{[0-9]+}}:GPR, rs1 = x0, imm = 0}
 
   // An `eq` gate makes its operands congruent in the guarded arm, so the arm's
   // use of `%x` binds the constant it is proven equal to — as an immediate.
   %fn_eq_arm_immediate = func.func @eq_arm_immediate(%x: !i64, %p: !i64) -> !i64 {
     %k = constant {value = 7} : !i64
     %c = cmpi %x, %k {predicate = "eq"} : !i1
-    %r = scf.if %c -> !i64 {
-      %s = addi %p, %x : !i64
-      scf.yield %s
-    } else {
-      %z = constant {value = 0} : !i64
-      scf.yield %z
-    }
+    cfg.cond_br %c, ^bb1, ^bb2
+  ^bb1:
+    %s = addi %p, %x : !i64
+    cfg.br ^bb3(%s : !i64)
+  ^bb2:
+    %z = constant {value = 0} : !i64
+    cfg.br ^bb3(%z : !i64)
+  ^bb3(%r: !i64):
     func.return %r
   }
   // CHECK: asm.symbol {name = "eq_arm_immediate", arg_regs = [%{{[0-9]+}}:GPR, %[[P:[0-9]+]]:GPR]

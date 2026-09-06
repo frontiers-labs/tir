@@ -254,7 +254,7 @@ fn a_commit_keeps_analyses_of_untouched_functions() {
 const LOOP: &str = r#"module {
   func.func @f(%0: !index, %1: !index, %2: !index) -> !i32 {
     %3 = constant {value = 7} : !i32
-    scf.for %0, %1, %2 {
+    scf.for_legacy %0, %1, %2 {
       scf.yield
     }
     func.return %3

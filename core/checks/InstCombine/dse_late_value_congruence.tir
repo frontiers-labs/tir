@@ -1,4 +1,4 @@
-// RUN: tir opt --pass instcombine --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(restructure-nodes,instcombine-nodes) --verify %s | filecheck %s
 
 // Both writes store 0, which is what they fold to and not what they are spelled
 // as. Dead-store elimination used to be an e-graph law asserting that the
@@ -26,8 +26,8 @@ module {
   module_end
 }
 
-// CHECK-LABEL: %{{[0-9]+}} = func.func @f
+// CHECK-LABEL: %{{[0-9]+}} = func.func @f(%[[P:[0-9]+]]: {{.*}})
 // CHECK: | %[[ENTRY:[0-9]+]] = state.entry_state
 // CHECK: %[[ZERO:[0-9]+]] = constant {value = 0}
-// CHECK-NEXT: | %[[S:[0-9]+]] = ptr.store %[[ZERO]], %0 | %[[ENTRY]]
-// CHECK-NEXT: func.return | %[[S]]
+// CHECK-NEXT: | %[[S:[0-9]+]] = ptr.store %[[ZERO]], %[[P]] | %[[ENTRY]]
+// CHECK-NEXT: -> | %[[S]]

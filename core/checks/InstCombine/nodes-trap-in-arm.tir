@@ -28,7 +28,7 @@ module {
 
 // CHECK: func.func @f(%[[C:[0-9]+]]: !i1, %[[X:[0-9]+]]: !i32, %[[D:[0-9]+]]: !i32)
 // CHECK: %[[SUM:[0-9]+]] = addi %[[X]], %[[X]] : !i32
-// CHECK: scf.switch2 %[[C]]
+// CHECK: scf.switch %[[C]]
 // CHECK: divsi %[[X]], %[[D]]
 // CHECK: }
 // CHECK-NOT: addi %[[X]], %[[X]]

@@ -16,8 +16,8 @@ use crate::attributes::AttributeValue;
 use crate::builtin::{FnToPtrOp, ops as b};
 use crate::func::{CallOp, FuncOp};
 use crate::{
-    Context, OpHandle, OpId, Operation, OperationRef, Pass, PassError, PassTarget, Rewriter,
-    Symbol, ValueId,
+    Context, OpHandle, OpId, Operation, OperationRef, Pass, PassError, PassTarget, RegionId,
+    Rewriter, Symbol, ValueId,
 };
 
 #[derive(Default)]
@@ -82,6 +82,11 @@ impl Pass for MaterializeSymbolAddressesPass {
                         .push(context.named_attribute("callee", AttributeValue::Str(name.into())));
                     context.set_op_attributes(op.op().id, attributes);
                 }
+                Use::Result(region, old, name) => {
+                    let address = b::symbol_address(context, &name);
+                    context.add(region, address.id());
+                    context.rename_region_results(region, old, address.result(), &[]);
+                }
             }
         }
         Ok(())
@@ -95,10 +100,23 @@ enum Use {
     Conversion(OperationRef, String),
     /// A call whose callee resolved to a λ, and the symbol it names.
     Callee(OperationRef, String),
+    /// A result of an unordered region naming a δ definition, and its symbol.
+    Result(RegionId, ValueId, String),
 }
 
 fn collect(context: &Context, root: &OpHandle, uses: &mut Vec<Use>) {
     for region in root.regions() {
+        let handle = context.get_region(region);
+        if handle.is_nodes() {
+            for result in handle.value_results() {
+                if let Some(name) = is_pointer(context, result)
+                    .then(|| symbol_of(context, result))
+                    .flatten()
+                {
+                    uses.push(Use::Result(region, result, name));
+                }
+            }
+        }
         {
             for op_id in context.get_region(region).op_ids() {
                 let instance = context.get_op(op_id);

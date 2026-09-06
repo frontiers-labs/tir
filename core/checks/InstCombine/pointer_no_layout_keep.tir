@@ -1,4 +1,4 @@
-// RUN: tir opt --pass instcombine --verify %s | filecheck %s
+// RUN: tir opt --pass restructure-nodes,instcombine-nodes --verify %s | filecheck %s
 
 // A pointer's width is a data layout fact and nothing else. Where no layout is
 // in scope, an access of one covers an extent no term can spell, so it stays
@@ -14,7 +14,7 @@ module {
   module_end
 }
 
-// CHECK-LABEL: %{{[0-9]+}} = func.func @f
-// CHECK: | %[[S1:[0-9]+]] = ptr.store %1, %0 | %[[S0:[0-9]+]]
-// CHECK-NEXT: %[[V:[0-9]+]] = ptr.load %0 | %[[S1]] : !ptr.p<!i32>
-// CHECK-NEXT: func.return %[[V]]
+// CHECK: func.func @f(%[[P:[0-9]+]]: !ptr.p<!ptr.p<!i32>>, %[[Q:[0-9]+]]: !ptr.p<!i32>)
+// CHECK: | %[[S1:[0-9]+]] = ptr.store %[[Q]], %[[P]] | %[[S0:[0-9]+]]
+// CHECK-NEXT: %[[V:[0-9]+]] = ptr.load %[[P]] | %[[S1]] : !ptr.p<!i32>
+// CHECK-NEXT: -> %[[V]]

@@ -1,5 +1,5 @@
-// RUN: tir opt --pass instcombine %s | filecheck %s
-// RUN: tir opt --pass func.func(instcombine) %s | filecheck %s
+// RUN: tir opt --pass restructure-nodes,instcombine-nodes %s | filecheck %s
+// RUN: tir opt --pass func.func(restructure-nodes,instcombine-nodes) %s | filecheck %s
 
 // A read leaves memory as it found it, so the state it publishes is the one it
 // read: both loads read one state at one address and are one term. Their
@@ -18,4 +18,4 @@ module {
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @f
 // CHECK-NOT: subi
-// CHECK: func.return
+// CHECK: ->

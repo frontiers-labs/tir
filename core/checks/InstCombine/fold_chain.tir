@@ -1,4 +1,4 @@
-// RUN: tir opt --pass instcombine --verify %s | filecheck %s
+// RUN: tir opt --pass restructure-nodes,instcombine-nodes --verify %s | filecheck %s
 
 // Every operand of `addi` is a literal, so its result is one too: the fold makes
 // the class a constant and the return reads the literal it materializes.
@@ -15,4 +15,4 @@ module {
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @f
 // CHECK: %[[C:[0-9]+]] = constant {value = 7} : !i32
-// CHECK: func.return %[[C]]
+// CHECK: -> %[[C]]

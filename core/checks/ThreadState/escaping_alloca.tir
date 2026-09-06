@@ -1,4 +1,4 @@
-// RUN: tir opt --pass thread-state --verify %s | filecheck %s
+// RUN: tir opt --pass restructure-nodes --verify %s | filecheck %s
 
 // The slot's address reaches a call, so its contents may be observed from
 // anywhere: it opens no chain of its own and its accesses join the conservative
@@ -15,11 +15,10 @@ module {
   }
   module_end
 }
-
 // CHECK-LABEL: %{{[0-9]+}} = func.func @f
-// CHECK-NEXT: | %[[ENTRY:[0-9]+]] = state.entry_state
 // CHECK-NEXT: %{{[0-9]+}} = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
-// CHECK-NEXT: | %[[S1:[0-9]+]] = ptr.store %1, %{{[0-9]+}} | %[[ENTRY]]
+// CHECK-NEXT: | %[[ENTRY:[0-9]+]] = state.entry_state
+// CHECK-NEXT: | %[[S1:[0-9]+]] = ptr.store %{{[0-9]+}}, %{{[0-9]+}} | %[[ENTRY]]
 // CHECK-NEXT: | %[[S2:[0-9]+]] = func.call %{{[0-9]+}}(%{{[0-9]+}} : !ptr.p<!i32>) | %[[S1]]
 // CHECK-NEXT: %{{[0-9]+}} | %[[S3:[0-9]+]] = ptr.load %{{[0-9]+}} | %[[S2]] : !i32
-// CHECK-NEXT: func.return %{{[0-9]+}} | %[[S3]]
+// CHECK-NEXT: -> %{{[0-9]+}} | %[[S3]]

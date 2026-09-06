@@ -3,17 +3,19 @@
 // Emission destructs the gate: the arms become blocks of the function, the test
 // the gate branches on was selected with the block holding it, and what each arm
 // yields rides the edge into the continuation, which reads it as a parameter.
-// Nothing structured survives.
+// The false arm is laid out first, then the true arm, then the join. Nothing
+// structured survives.
 
 module {
   %fn_pick = func.func @pick(%c: !i1, %a: !i64, %b: !i64) -> !i64 {
-    %r = scf.if %c -> !i64 {
-      %x = addi %a, %b : !i64
-      scf.yield %x
-    } else {
-      %y = subi %a, %b : !i64
-      scf.yield %y
-    }
+    cfg.cond_br %c, ^bb1, ^bb2
+  ^bb1:
+    %x = addi %a, %b : !i64
+    cfg.br ^bb3(%x : !i64)
+  ^bb2:
+    %y = subi %a, %b : !i64
+    cfg.br ^bb3(%y : !i64)
+  ^bb3(%r: !i64):
     func.return %r
   }
   module_end
@@ -23,11 +25,11 @@ module {
 // CHECK: x86_64.test_imm32 {dst = %[[V0:[0-9]+]]:GPR, imm = 1}
 // CHECK-NEXT: x86_64.jne {imm = ^[[THEN:bb[0-9]+]]}
 // CHECK-NEXT: asm.vbr ^[[ELSE:bb[0-9]+]]
-// CHECK: ^[[THEN]]:
-// CHECK-NEXT: x86_64.add
-// CHECK-NEXT: asm.vbr %{{[0-9]+}} ^[[JOIN:bb[0-9]+]]
 // CHECK: ^[[ELSE]]:
 // CHECK-NEXT: x86_64.sub
+// CHECK-NEXT: asm.vbr %{{[0-9]+}} ^[[JOIN:bb[0-9]+]]
+// CHECK: ^[[THEN]]:
+// CHECK-NEXT: x86_64.add
 // CHECK-NEXT: asm.vbr %{{[0-9]+}} ^[[JOIN]]
 // CHECK: ^[[JOIN]](%{{[0-9]+}}: !x86_64.GPR):
 // CHECK-NEXT: asm.vret

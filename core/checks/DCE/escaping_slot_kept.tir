@@ -1,4 +1,4 @@
-// RUN: tir opt --pass func.func(thread-state) --pass func.func(dce) --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(restructure-nodes) --pass func.func(dce) --verify %s | filecheck %s
 
 // A slot whose address the outside can reach is not the sweep's to take: the
 // call observes the memory the store left, so the store's published state has a

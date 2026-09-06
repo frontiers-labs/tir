@@ -2,21 +2,20 @@
 
 // Negative: an arm that touches memory is not speculated. Destruction places what
 // an arm computes on that arm, never above the branch, so the load and the store
-// run only where the gate reached them — the assignment rides the edge, the gate
-// stays control flow.
+// run only where the gate reached them — the memory state rides the edge, the
+// gate stays control flow.
 
 #data_layout = {types = {p = {abi = 64, size = 64}}}
 
 module {data_layout = #data_layout} {
   %fn_maybe_store = func.func @maybe_store(%c: !i1, %p: !ptr.p<!i64>, %v: !i64) {
-    scf.if %c {
-      %l = ptr.load %p : !i64
-      %s = addi %l, %v : !i64
-      ptr.store %s, %p
-      scf.yield
-    } else {
-      scf.yield
-    }
+    cfg.cond_br %c, ^bb1, ^bb2
+  ^bb1:
+    %l = ptr.load %p : !i64
+    %s = addi %l, %v : !i64
+    ptr.store %s, %p
+    cfg.br ^bb2
+  ^bb2:
     func.return
   }
   module_end

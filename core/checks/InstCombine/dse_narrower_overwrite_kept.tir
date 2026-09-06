@@ -1,4 +1,4 @@
-// RUN: tir opt --pass func.func(promote,thread-state,instcombine) --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(restructure-nodes,promote-nodes,instcombine-nodes) --verify %s | filecheck %s
 
 // The two writes start at the same address, but the second covers four bytes of
 // the eight the first wrote: the other four are still readable, so the wider
@@ -17,6 +17,7 @@ module {data_layout = #data_layout} {
   module_end
 }
 
-// CHECK-LABEL: %{{[0-9]+}} = func.func @f
-// CHECK: | %[[S:[0-9]+]] = ptr.store %0, %2 | %{{[0-9]+}}
-// CHECK-NEXT: | %{{[0-9]+}} = ptr.store %1, %2 | %[[S]]
+// CHECK-LABEL: %{{[0-9]+}} = func.func @f(%[[W:[0-9]+]]: !i64, %[[N:[0-9]+]]: !i32)
+// CHECK: %[[P:[0-9]+]] = ptr.alloca
+// CHECK: | %[[S:[0-9]+]] = ptr.store %[[W]], %[[P]] | %{{[0-9]+}}
+// CHECK-NEXT: | %{{[0-9]+}} = ptr.store %[[N]], %[[P]] | %[[S]]

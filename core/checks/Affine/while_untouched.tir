@@ -1,4 +1,4 @@
-// RUN: tir opt --pass func.func(thread-state,affine) --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(restructure-nodes,affine) --verify %s | filecheck %s
 
 // A loop that does not count is no nest, so the pass has nothing to place and
 // nothing to build.
@@ -9,18 +9,19 @@ module {data_layout = #data_layout} {
   %0 = func.func @spin(%1: !i1, %2: !i32) -> !i32 {
     %3 = ptr.alloca {size = 1024, align = 4} : !ptr.p
     %4 = constant {value = 1} : !i32
-    %5 = scf.while iter_args(%6 = %2) -> !i32 {
-      scf.condition %1, %6
-    } do(%7) {
-      ptr.store %7, %3
-      %8 = addi %7, %4 : !i32
-      scf.yield %8
-    }
+    cfg.br ^head(%2 : !i32)
+  ^head(%5: !i32):
+    cfg.cond_br %1, ^body, ^exit
+  ^body:
+    ptr.store %5, %3
+    %6 = addi %5, %4 : !i32
+    cfg.br ^head(%6 : !i32)
+  ^exit:
     func.return %5
   }
   module_end
 }
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @spin
-// CHECK: scf.while
+// CHECK: scf.loop
 // CHECK-NOT: scf.for

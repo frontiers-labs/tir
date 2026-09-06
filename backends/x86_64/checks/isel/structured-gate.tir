@@ -2,23 +2,25 @@
 
 // Reading a gate's regions puts their operations in the function's own e-graph,
 // so a constant defined before the gate is the same class inside an arm and folds
-// into the arm's instruction as an immediate.
+// into the arm's instruction as an immediate. The gate is the one the converter
+// builds from the diamond below; its false arm is laid out first.
 
 module {
   %fn_choose = func.func @choose(%0: !i1, %1: !i64) -> !i64 {
     %c = constant {value = 7} : !i64
-    %r = scf.if %0 -> !i64 {
-      %a = addi %1, %c : !i64
-      scf.yield %a
-    } else {
-      %b = subi %1, %c : !i64
-      scf.yield %b
-    }
+    cfg.cond_br %0, ^bb1, ^bb2
+  ^bb1:
+    %a = addi %1, %c : !i64
+    cfg.br ^bb3(%a : !i64)
+  ^bb2:
+    %b = subi %1, %c : !i64
+    cfg.br ^bb3(%b : !i64)
+  ^bb3(%r: !i64):
     func.return %r
   }
   module_end
 }
 
 // CHECK: asm.symbol {name = "choose"
-// CHECK: x86_64.lea_base_disp {dst = %{{[0-9]+}}:GPR, base = %[[V1:[0-9]+]]:GPR, imm = 7}
-// CHECK: x86_64.lea_base_disp {dst = %{{[0-9]+}}:GPR, base = %[[V1]]:GPR, imm = -7}
+// CHECK: x86_64.lea_base_disp {dst = %{{[0-9]+}}:GPR, base = %[[V1:[0-9]+]]:GPR, imm = -7}
+// CHECK: x86_64.lea_base_disp {dst = %{{[0-9]+}}:GPR, base = %[[V1]]:GPR, imm = 7}

@@ -1,7 +1,7 @@
 // RUN: fcc compile --stage ir -o - %s | filecheck %s
 
 // `break` and `continue` in a `for`, and `continue` in a `do`, are loop exits
-// whose C meaning does not match the `scf.while` body they land in: the step
+// whose C meaning does not match the `scf.loop` body they land in: the step
 // and the trailing condition must still run on a `continue`, structurally.
 
 int f(int n) {
@@ -45,5 +45,5 @@ int f(int n) {
 
 // CHECK-NOT: cfg.
 // CHECK: %{{[0-9]+}} = func.func @f(
-// CHECK: scf.while
+// CHECK: scf.loop
 // CHECK-NOT: cfg.

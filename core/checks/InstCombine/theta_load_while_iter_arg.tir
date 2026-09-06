@@ -1,4 +1,4 @@
-// RUN: tir opt --pass promote --pass thread-state --pass instcombine --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(promote-nodes,instcombine-nodes) --verify %s | filecheck %s
 
 // A `scf.while` reads what it carries in its condition region and forwards it to
 // the body, so the port the commit grows enters both: the condition passes its
@@ -7,28 +7,32 @@
 module {
   %fn_spin = func.func @spin(%0: !i1, %1: !i32) -> !i32 {
     %2 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
-    ptr.store %1, %2
-    scf.while {
-      scf.condition %0
-    } do {
-      %3 = ptr.load %2 : !i32
-      %4 = addi %3, %3 : !i32
-      ptr.store %4, %2
-      scf.yield
+    | %3 = state.entry_state
+    | %4 = ptr.store %1, %2 | %3
+    | %5 = scf.loop (| %6 = %4) {
+      %7 | %8 = scf.switch %0 args(| %6) (| %9) {
+        %10 = constant {value = 0} : !i1
+        -> %10 | %9
+      }
+      (| %11) {
+        %12 | %13 = ptr.load %2 | %11 : !i32
+        %14 = addi %12, %12 : !i32
+        | %15 = ptr.store %14, %2 | %13
+        %16 = constant {value = 1} : !i1
+        -> %16 | %15
+      }
+      -> %7 | %8, %8
     }
-    %5 = ptr.load %2 : !i32
-    func.return %5
+    %17 | %18 = ptr.load %2 | %5 : !i32
+    -> %17 | %18
   }
   module_end
 }
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @spin
 // CHECK-NOT: ptr.
-// CHECK: %[[RESULT:[0-9]+]] = scf.while iter_args(%[[COND:[0-9]+]] = %1) -> !i32 {
-// CHECK-NEXT: scf.condition %0, %[[COND]]
-// CHECK-NEXT: }
-// CHECK-NEXT: do(%[[BODY:[0-9]+]]) {
-// CHECK-NEXT: %[[NEXT:[0-9]+]] = addi %[[BODY]], %[[BODY]] : !i32
-// CHECK-NEXT: scf.yield %[[NEXT]]
-// CHECK-NEXT: }
-// CHECK-NEXT: func.return %[[RESULT]]
+// CHECK: %[[RESULT:[0-9]+]] | %{{[0-9]+}} = scf.loop (%[[PORT:[0-9]+]] = %1 | %{{[0-9]+}} = %{{[0-9]+}}) {
+// CHECK: -> %{{[0-9]+}}, %[[PORT]] | %{{[0-9]+}}
+// CHECK: %[[NEXT:[0-9]+]] = addi %[[PORT]], %[[PORT]] : !i32
+// CHECK: -> %{{[0-9]+}}, %[[NEXT]] | %{{[0-9]+}}
+// CHECK: -> %[[RESULT]] | %{{[0-9]+}}

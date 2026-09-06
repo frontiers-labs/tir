@@ -1,5 +1,5 @@
-// RUN: tir opt --pass restructure --pass instcombine %s | filecheck %s
-// RUN: tir opt --pass func.func(restructure,instcombine) %s | filecheck %s
+// RUN: tir opt --pass restructure-nodes,instcombine-nodes %s | filecheck %s
+// RUN: tir opt --pass func.func(restructure-nodes,instcombine-nodes) %s | filecheck %s
 
 // The `c == 1` fact holds throughout the arm the gate guards, however deeply the
 // restructured code nests inside it: the scope is pushed once and the nesting
@@ -21,7 +21,7 @@ module {
 }
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @nested
-// CHECK: cmpi
-// CHECK: scf.if
-// CHECK-NEXT: constant {value = 1}
+// CHECK: %[[C:[0-9]+]] = cmpi
 // CHECK-NOT: cmpi
+// CHECK-NOT: scf.switch
+// CHECK: -> %[[C]]

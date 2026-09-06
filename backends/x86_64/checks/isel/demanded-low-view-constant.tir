@@ -1,7 +1,7 @@
 // RUN: tir mc --march=x86_64 --stage=isel %s | filecheck %s
 
 // A low-bit truncation re-views its source's register, so it owns no register
-// of its own. Under the fact the arm restructuring builds `^bb2` into is entered
+// of its own. Under the fact the arm restructuring builds the false arm (`^bb1`) into is entered
 // with, the returned constant 0 is proven equal to that view's class, but the
 // view's source is neither in a register there nor extracted there — so the
 // constant must still be
@@ -27,6 +27,6 @@ module {
 }
 
 // CHECK-LABEL: asm.symbol {name = "demanded_low_view_constant"
-// CHECK: ^bb2:
+// CHECK: ^bb1:
 // CHECK-NEXT: x86_64.mov_imm32 {dst = %[[ZERO:[0-9]+]]:GPR32, imm = 0}
 // CHECK-NEXT: asm.vbr %[[ZERO]] ^bb{{[0-9]+}}

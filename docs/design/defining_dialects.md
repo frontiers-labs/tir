@@ -222,7 +222,7 @@ from the `ptr` dialect.
 ## Interfaces
 
 Interfaces let passes ask for behavior without depending on concrete operation
-types. For example, `thread-state` uses `PromotableAllocation`, `MemoryRead`, and
+types. For example, `verify-deps` uses `PromotableAllocation`, `MemoryRead`, and
 `MemoryWrite`; backend passes use `MachineInstruction`.
 
 To expose an interface:

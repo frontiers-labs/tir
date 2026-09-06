@@ -21,6 +21,9 @@ pub struct ImportArgs {
     /// Output TIR file, or `-` for stdout.
     #[arg(short = 'o', default_value = "-")]
     output: OsString,
+    /// Convert every imported function's blocks into an unordered region.
+    #[arg(long)]
+    restructure: bool,
     /// Input SPIR-V binary file, or `-`/omitted for stdin.
     input: Option<OsString>,
 }
@@ -43,6 +46,11 @@ pub fn import(args: ImportArgs) -> Result<(), Box<dyn Error>> {
     context.register_dialect::<tir_gpu::spirv::SpirvDialect>();
     let module = tir_gpu::spirv::read_binary(&context, &binary)
         .map_err(|error| format!("SPIR-V import failed: {error}"))?;
+    if args.restructure {
+        tir::parse_pipeline("restructure-nodes")?
+            .run(&context, context.get_op(module.id()))
+            .map_err(|error| format!("restructuring failed: {error}"))?;
+    }
     let mut rendered = String::new();
     module.print(&mut IRFormatter::new(&mut rendered))?;
     crate::common::write_output(args.output.as_os_str(), &rendered)?;

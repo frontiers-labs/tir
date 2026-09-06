@@ -1,16 +1,12 @@
-// RUN: tir opt --pass inline<1000,0>,func.func(thread-state,instcombine) --verify %s | filecheck %s
-// RUN: tir opt --pass func.func(thread-state,instcombine) --verify %s | filecheck %s --check-prefix=CALL
+// RUN: tir opt --pass func.func(restructure-nodes),inline<1000,0>,func.func(instcombine-nodes) --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(restructure-nodes,instcombine-nodes) --verify %s | filecheck %s --check-prefix=CALL
 
-// What inlining is for. The threader wraps a call in `state.join`/`state.split`
-// because a call touches every object the outside can reach, and that pair is a
-// wall: a split's results are fresh classes to the e-graph, and the join in
-// front of it is opaque for the same reason, so a store before the call never
-// reaches a load after it.
-//
-// Splicing the body and rewiring the pair would keep the wall. Instead the
-// caller is unthreaded and the round's `thread-state` draws the order again over
-// the flattened body, where both loads are ordinary forwardable reads. The CALL
-// prefix is the same fixture with the call left standing, for the contrast.
+// The call is a wall for the memory chain: a call touches every object the
+// outside can reach, so the load of @h after it observes the call's state.
+// Inlining splices the body into the caller and the round's simplifier reads
+// the flattened body, where both loads are ordinary reads on the chain that
+// the stores above them answer. The CALL prefix is the same fixture with the
+// call left standing, for the contrast.
 
 module {
   %g = global @g align 4 bytes [0, 0, 0, 0]
@@ -32,17 +28,20 @@ module {
   module_end
 }
 
-// Both loads forwarded, the overwritten store to @g gone, no call and no seam.
+// No call and no seam: the callee's accesses sit on the caller's chain, both
+// loads are answered by the stores above them, and the first store to @g is
+// overwritten before anything reads it.
 // CHECK-LABEL: func.func @main(%[[X:[0-9]+]]: !i32)
 // CHECK-NOT: func.call
-// CHECK-NOT: state.split
 // CHECK-NOT: ptr.load
+// CHECK: | %[[SH:[0-9]+]] = ptr.store %[[X]], %{{[0-9]+}} | %{{[0-9]+}}
 // CHECK: %[[S:[0-9]+]] = addi %[[X]], %[[X]] : !i32
-// CHECK: %{{[0-9]+}} = addi %[[S]], %[[X]] : !i32
+// CHECK: %[[T:[0-9]+]] = addi %[[S]], %[[X]] : !i32
+// CHECK: | %[[SG:[0-9]+]] = ptr.store %[[S]], %{{[0-9]+}} | %[[SH]]
+// CHECK-NOT: ptr.
+// CHECK: -> %[[T]] | %[[SG]]
 
-// With the call standing, the seam blocks both: the load of @h survives it.
+// With the call standing, the load of @h observes the state the call left.
 // CALL-LABEL: func.func @main
-// CALL: state.join
-// CALL: func.call
-// CALL: state.split
-// CALL: ptr.load
+// CALL: %{{[0-9]+}} | %[[C:[0-9]+]] = func.call
+// CALL-NEXT: ptr.load %{{[0-9]+}} | %[[C]]

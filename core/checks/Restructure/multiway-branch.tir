@@ -1,4 +1,4 @@
-// RUN: tir opt --pass restructure --verify %s | filecheck %s
+// RUN: tir opt --pass restructure-nodes --verify %s | filecheck %s
 
 // A switch lowered to a comparison chain: each test is a conditional, and the
 // arms rejoin in one place, so no continuation predicate is needed.
@@ -28,9 +28,10 @@ module {
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @sw
 // CHECK-NOT: br
-// CHECK-NOT: scf.switch
-// CHECK: %[[OUTER:[0-9]+]] = scf.if %{{[0-9]+}} -> !i32 {
-// CHECK: %[[INNER:[0-9]+]] = scf.if %{{[0-9]+}} -> !i32 {
+// CHECK-NOT: scf.loop
+// CHECK: %[[OUTER:[0-9]+]] = scf.switch %{{[0-9]+}} {
+// CHECK: %[[INNER:[0-9]+]] = scf.switch %{{[0-9]+}} {
+// CHECK-NEXT: subi
 // CHECK: addi
-// CHECK: subi
-// CHECK: func.return %[[OUTER]]
+// CHECK: -> %[[INNER]]
+// CHECK: -> %[[OUTER]]

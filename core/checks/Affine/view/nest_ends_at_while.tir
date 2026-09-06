@@ -1,4 +1,4 @@
-// RUN: tir opt --pass func.func(thread-state) --print-affine %s -o /dev/null | filecheck %s
+// RUN: tir opt --pass func.func(restructure-nodes) --print-affine %s -o /dev/null | filecheck %s
 
 // The view covers the counted prefix. A loop that does not count is not a level,
 // so the nest stops above it — and what runs inside it is memory traffic the
@@ -14,25 +14,30 @@ module {data_layout = #data_layout} {
     %4 = constant {value = 8} : !i32
     %5 = constant {value = 1} : !i32
     %6 = constant {value = 4} : !i64
-    %7 = scf.for %3, %4, %5 iter_args(%8 = %3) -> !i32 {
-      %9 = scf.for %3, %4, %5 iter_args(%10 = %3) -> !i32 {
-        %11 = extsi %10 : !i64
-        %12 = muli %11, %6 : !i64
-        %13 = ptr.ptradd %2, %12 : !ptr.p
-        ptr.store %3, %13
-        scf.while {
-          scf.condition %1
-        } do {
-          ptr.store %5, %13
-          scf.yield
+    | %7 = state.entry_state
+    | %8 = scf.for %9 = %3 to %4 step %5 (| %10 = %7) {
+      | %11 = scf.for %12 = %3 to %4 step %5 (| %13 = %10) {
+        %14 = extsi %12 : !i64
+        %15 = muli %14, %6 : !i64
+        %16 = ptr.ptradd %2, %15 : !ptr.p
+        | %17 = ptr.store %3, %16 | %13
+        | %18 = scf.loop (| %19 = %17) {
+          %20 | %21 = scf.switch %1 args(| %19) (| %22) {
+            %23 = constant {value = 0} : !i1
+            -> %23 | %22
+          }
+          (| %24) {
+            | %25 = ptr.store %5, %16 | %24
+            %26 = constant {value = 1} : !i1
+            -> %26 | %25
+          }
+          -> %20 | %21, %21
         }
-        %14 = addi %10, %5 : !i32
-        scf.yield %14
+        -> | %18
       }
-      %15 = addi %8, %5 : !i32
-      scf.yield %15
+      -> | %11
     }
-    func.return
+    -> | %8
   }
   module_end
 }

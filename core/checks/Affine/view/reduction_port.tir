@@ -1,4 +1,4 @@
-// RUN: tir opt --pass func.func(thread-state) --print-affine %s -o /dev/null | filecheck %s
+// RUN: tir opt --pass func.func(restructure-nodes) --print-affine %s -o /dev/null | filecheck %s
 
 // The counter is not the only recurrence a loop carries. A port whose latch
 // accumulates the iteration's value under one operator is a reduction, and
@@ -13,7 +13,7 @@ module {data_layout = #data_layout} {
     %4 = constant {value = 64} : !i32
     %5 = constant {value = 1} : !i32
     %6 = constant {value = 4} : !i64
-    %7, %8 = scf.for %3, %4, %5 iter_args(%9 = %3, %10 = %1) -> !i32, !i32 {
+    %7, %8 = scf.for_legacy %3, %4, %5 iter_args(%9 = %3, %10 = %1) -> !i32, !i32 {
       %11 = extsi %9 : !i64
       %12 = muli %11, %6 : !i64
       %13 = ptr.ptradd %2, %12 : !ptr.p
@@ -28,4 +28,5 @@ module {data_layout = #data_layout} {
 }
 
 // CHECK: port 0 %{{[0-9]+}} induction init %{{[0-9]+}} step 1
-// CHECK-NEXT: port 1 %{{[0-9]+}} reduction add
+// CHECK-NEXT: port 1 %{{[0-9]+}} induction init %{{[0-9]+}} step 1
+// CHECK-NEXT: port 2 %{{[0-9]+}} reduction add

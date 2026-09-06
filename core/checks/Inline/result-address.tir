@@ -1,4 +1,4 @@
-// RUN: tir opt --pass inline<1000,0> --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(restructure-nodes),inline<1000,0> --verify %s | filecheck %s
 
 // An `sret` callee inlines like any other: the destination is the first
 // argument and the body writes through it, so the caller's result follows the
@@ -17,5 +17,6 @@ module {
 }
 
 // CHECK-LABEL: func.func @caller(%[[DEST:[0-9]+]]: !ptr.p, %[[N:[0-9]+]]: !i64)
-// CHECK-NEXT: ptr.store %[[N]], %[[DEST]]
-// CHECK-NEXT: func.return %[[DEST]]
+// CHECK-NEXT: | %[[S:[0-9]+]] = state.entry_state
+// CHECK-NEXT: | %[[ST:[0-9]+]] = ptr.store %[[N]], %[[DEST]] | %[[S]]
+// CHECK-NEXT: -> %[[DEST]] | %[[ST]]

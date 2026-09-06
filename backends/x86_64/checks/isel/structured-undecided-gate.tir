@@ -1,27 +1,32 @@
 // RUN: tir mc --march=x86_64 --stage=isel %s | filecheck %s
 
-// Where every arm of a gate computes nothing, sealing sends both of its edges to
-// the gate's own join carrying the same values. Nothing is left to decide, so the
-// gate is not a branch: the body holds its back edge and no test at all.
+// Where every arm of a gate computes nothing, the gate decides nothing and the
+// converter drops it: the loop body it sat in holds only the continue flag and
+// its edge to the latch, and the condition is tested once, by the loop's own
+// header, never again for the erased gate.
 
 module {
   %fn_spin = func.func @spin(%c: !i1, %n: !i32) -> !i32 {
-    %r = scf.while iter_args(%i = %n) -> !i32 {
-      scf.condition %c, %i
-    } do scope(%tok)(%v) {
-      scf.if %c {
-        scf.yield
-      } else {
-        scf.yield
-      }
-      scf.yield %v
-    }
-    func.return %r
+    cfg.br ^bb1(%n : !i32)
+  ^bb1(%i: !i32):
+    cfg.cond_br %c, ^bb2, ^bb6
+  ^bb2:
+    cfg.cond_br %c, ^bb3, ^bb4
+  ^bb3:
+    cfg.br ^bb5
+  ^bb4:
+    cfg.br ^bb5
+  ^bb5:
+    cfg.br ^bb1(%i : !i32)
+  ^bb6:
+    func.return %i
   }
   module_end
 }
 
-// The loop's own test, and then the body: nothing but the edge leaving it.
-// CHECK: x86_64.jne
-// CHECK: ^{{bb[0-9]+}}(%{{[0-9]+}}: !x86_64.GPR):
-// CHECK-NEXT: asm.vbr ^{{bb[0-9]+}}
+// CHECK: x86_64.test_imm32 {dst = %[[C:[0-9]+]]:GPR, imm = 1}
+// CHECK-NEXT: x86_64.jne {imm = ^[[BODY:bb[0-9]+]]}
+// CHECK: ^[[BODY]]:
+// CHECK-NEXT: x86_64.mov_imm8 {dst = %[[GO:[0-9]+]]:GPR8, imm = 1}
+// CHECK-NEXT: asm.vbr %{{[0-9]+}}, %[[GO]] ^{{bb[0-9]+}}
+// CHECK-NOT: x86_64.test_imm32 {dst = %[[C]]:GPR

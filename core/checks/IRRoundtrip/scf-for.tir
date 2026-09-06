@@ -2,7 +2,7 @@
 
 module {
   %fn_loop = func.func @loop(%0: !index, %1: !index, %2: !index) {
-    scf.for %0, %1, %2 {
+    scf.for_legacy %0, %1, %2 {
       scf.yield
     }
     func.return
@@ -12,7 +12,7 @@ module {
 
 // CHECK: module {
 // CHECK-NEXT: %{{[0-9]+}} = func.func @loop(%{{[0-9]+}}: !index, %{{[0-9]+}}: !index, %{{[0-9]+}}: !index) {
-// CHECK-NEXT: scf.for %{{[0-9]+}}, %{{[0-9]+}}, %{{[0-9]+}} {
+// CHECK-NEXT: scf.for_legacy %{{[0-9]+}}, %{{[0-9]+}}, %{{[0-9]+}} {
 // CHECK-NEXT: scf.yield
 // CHECK-NEXT: }
 // CHECK-NEXT: func.return

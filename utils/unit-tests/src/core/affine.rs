@@ -136,7 +136,7 @@ fn building_a_view_allocates_nothing() {
     %3 = constant {value = 64} : !i32
     %4 = constant {value = 1} : !i32
     %5 = constant {value = 4} : !i64
-    %6 = scf.for %2, %3, %4 iter_args(%7 = %2) -> !i32 {
+    %6 = scf.for_legacy %2, %3, %4 iter_args(%7 = %2) -> !i32 {
       %8 = extsi %7 : !i64
       %9 = muli %8, %5 : !i64
       %10 = ptr.ptradd %1, %9 : !ptr.p
@@ -206,7 +206,7 @@ fn strip_mining_an_unordered_loop_keeps_its_sum() {
     %21 = constant {value = 0} : !i8
     | %22 = state.entry_state
     | %23 = ptr.memset %1, %21, %20 | %22
-    %6 | %24 = scf.for2 %7 = %2 to %n step %4 (| %25 = %23) {
+    %6 | %24 = scf.for %7 = %2 to %n step %4 (| %25 = %23) {
       %8 = extsi %7 : !i64
       %9 = muli %8, %5 : !i64
       %10 = ptr.ptradd %1, %9 : !ptr.p

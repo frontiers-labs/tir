@@ -1,4 +1,4 @@
-// RUN: tir opt --pass func.func(promote,thread-state,instcombine) --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(restructure-nodes,promote-nodes,instcombine-nodes) --verify %s | filecheck %s
 
 // Three writes to one address, alternating values. Law S2 rebuilds each write
 // over the state the one before it took, so the chain shortens a link at a time
@@ -20,7 +20,7 @@ module {data_layout = #data_layout} {
 }
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @thrice
-// CHECK: | %[[ENTRY:[0-9]+]] = state.entry_state
 // CHECK: %[[ZERO:[0-9]+]] = constant {value = 0}
+// CHECK: | %[[ENTRY:[0-9]+]] = state.entry_state
 // CHECK-NEXT: | %[[LAST:[0-9]+]] = ptr.store %[[ZERO]], %{{[0-9]+}} | %[[ENTRY]]
-// CHECK-NEXT: func.return | %[[LAST]]
+// CHECK-NEXT: -> | %[[LAST]]

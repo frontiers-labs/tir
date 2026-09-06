@@ -1,15 +1,12 @@
-// XFAIL: *
-// RUN: tir mc --march=rv64i --filetype=asm %s | filecheck %s
+// RUN: not tir mc --march=rv64i --filetype=asm %s 2>&1 | filecheck %s
 
-// PIPELINE GAP (not a backend bug): codegen only accepts unstructured (CFG)
-// control flow, so the backend rejecting scf is correct. The gap is a missing
-// scf->cf lowering pass upstream of isel: scf.for passes through --stage=isel
-// unchanged and asm/obj emission aborts with "cannot print 'for' as assembly".
-// This probe marks the missing lowering pass.
+// A counted loop whose bounds are `!index` has no machine width to count in:
+// the converter that structures functions for selection refuses it instead of
+// picking one, so the frontend must have resolved `!index` before codegen.
 
 module {
   %fn_a = func.func @a(%lo: !index, %hi: !index, %st: !index) {
-    scf.for %lo, %hi, %st {
+    scf.for_legacy %lo, %hi, %st {
       scf.yield
     }
     func.return
@@ -17,4 +14,5 @@ module {
   module_end
 }
 
-// CHECK: a:
+// CHECK: pass 'restructure-nodes' produced invalid IR
+// CHECK-SAME: for operand 'lb' expected constraint crate::builtin::IntegerType, got !index

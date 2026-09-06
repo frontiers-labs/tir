@@ -1,4 +1,4 @@
-// RUN: tir opt --pass func.func(thread-state,affine) --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(restructure-nodes,affine) --verify %s | filecheck %s
 
 // Two pointer parameters are one chain and two objects, so the pair between them
 // is decided by a range predicate, not by a distance. That predicate is
@@ -14,8 +14,8 @@ module {data_layout = #data_layout} {
     %5 = constant {value = 1} : !i32
     %6 = constant {value = 64} : !i64
     %7 = constant {value = 4} : !i64
-    %8 = scf.for %3, %4, %5 iter_args(%9 = %3) -> !i32 {
-      %10 = scf.for %3, %4, %5 iter_args(%11 = %3) -> !i32 {
+    %8 = scf.for_legacy %3, %4, %5 iter_args(%9 = %3) -> !i32 {
+      %10 = scf.for_legacy %3, %4, %5 iter_args(%11 = %3) -> !i32 {
         %12 = extsi %9 : !i64
         %13 = extsi %11 : !i64
         %14 = muli %13, %6 : !i64
@@ -39,7 +39,7 @@ module {data_layout = #data_layout} {
 }
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @touch
-// CHECK: scf.for %{{[0-9]+}}, %{{[0-9]+}}, %{{[0-9]+}} iter_args(%[[OUTER:[0-9]+]] = %{{[0-9]+}} | %{{[0-9]+}} = %{{[0-9]+}})
-// CHECK-NEXT: scf.for %{{[0-9]+}}, %{{[0-9]+}}, %{{[0-9]+}} iter_args(%[[INNER:[0-9]+]] = %{{[0-9]+}} | %{{[0-9]+}} = %{{[0-9]+}})
+// CHECK: scf.for %{{[0-9]+}} = %{{[0-9]+}} to %{{[0-9]+}} step %{{[0-9]+}} (%[[OUTER:[0-9]+]] = %{{[0-9]+}} | %{{[0-9]+}} = %{{[0-9]+}})
+// CHECK: scf.for %{{[0-9]+}} = %{{[0-9]+}} to %{{[0-9]+}} step %{{[0-9]+}} (%[[INNER:[0-9]+]] = %{{[0-9]+}} | %{{[0-9]+}} = %{{[0-9]+}})
 // CHECK-NEXT: %[[A:[0-9]+]] = extsi %[[OUTER]]
 // CHECK-NEXT: %[[B:[0-9]+]] = extsi %[[INNER]]

@@ -1,4 +1,4 @@
-// RUN: tir opt --pass func.func(thread-state) --print-affine %s -o /dev/null | filecheck %s
+// RUN: tir opt --pass func.func(restructure-nodes) --print-affine %s -o /dev/null | filecheck %s
 
 // The subscript is computed in the counter's own width, and `4·i` leaves what a
 // signed byte holds long before the loop ends. The form describes the access
@@ -14,7 +14,7 @@ module {data_layout = #data_layout} {
     %3 = constant {value = 100} : !i8
     %4 = constant {value = 1} : !i8
     %5 = constant {value = 4} : !i8
-    %6 = scf.for %2, %3, %4 iter_args(%7 = %2) -> !i8 {
+    %6 = scf.for_legacy %2, %3, %4 iter_args(%7 = %2) -> !i8 {
       %8 = muli %7, %5 : !i8
       %9 = extsi %8 : !i64
       %10 = ptr.ptradd %1, %9 : !ptr.p

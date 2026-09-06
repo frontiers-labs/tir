@@ -8,13 +8,14 @@
 module {
   %fn_equal_arm = func.func @equal_arm(%a: !i64, %b: !i64) -> !i64 {
     %c = cmpi %a, %b {predicate = "eq"} : !i1
-    %r = scf.if %c -> !i64 {
-      %s = subi %a, %b : !i64
-      scf.yield %s
-    } else {
-      %z = constant {value = 0} : !i64
-      scf.yield %z
-    }
+    cfg.cond_br %c, ^bb1, ^bb2
+  ^bb1:
+    %s = subi %a, %b : !i64
+    cfg.br ^bb3(%s : !i64)
+  ^bb2:
+    %z = constant {value = 0} : !i64
+    cfg.br ^bb3(%z : !i64)
+  ^bb3(%r: !i64):
     func.return %r
   }
   module_end

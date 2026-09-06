@@ -1,4 +1,4 @@
-// RUN: tir opt --pass promote --pass thread-state --pass instcombine --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(promote-nodes,instcombine-nodes) --verify %s | filecheck %s
 
 // The same reading holds of a loop left through a `break`: the slot's pointer is
 // handed to a call, so the term graph does not see every access of it. No port
@@ -8,21 +8,30 @@ module {
   %fn_sink = func.declare @sink(!ptr.p<!i32>) -> !i32
   %fn_escapes = func.func @escapes(%0: !i1, %1: !i32) -> !i32 {
     %2 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
-    ptr.store %1, %2
-    scf.while {
-      scf.condition %0
-    } do scope(%3) {
-      %4 = func.call %fn_sink(%2 : !ptr.p<!i32>) -> !i32
-      ptr.store %4, %2
-      scf.if %0 {
-        scf.break %3
-      } else {
-        scf.yield
+    | %3 = state.entry_state
+    | %4 = ptr.store %1, %2 | %3
+    | %5 = scf.loop (| %6 = %4) {
+      %7 | %8 = scf.switch %0 args(| %6) (| %9) {
+        %10 = constant {value = 0} : !i1
+        -> %10 | %9
       }
-      scf.yield
+      (| %11) {
+        %12 | %13 = func.call %fn_sink(%2 : !ptr.p<!i32>) -> !i32 | %11
+        | %14 = ptr.store %12, %2 | %13
+        %15 = scf.switch %0 {
+          %16 = constant {value = 1} : !i1
+          -> %16
+        }
+        {
+          %17 = constant {value = 0} : !i1
+          -> %17
+        }
+        -> %15 | %14
+      }
+      -> %7 | %8, %8
     }
-    %5 = ptr.load %2 : !i32
-    func.return %5
+    %18 | %19 = ptr.load %2 | %5 : !i32
+    -> %18 | %19
   }
   module_end
 }
@@ -30,7 +39,7 @@ module {
 // CHECK-LABEL: %{{[0-9]+}} = func.func @escapes
 // CHECK: ptr.alloca
 // CHECK: ptr.store
-// CHECK: scf.while 
+// CHECK: scf.loop
 // CHECK: ptr.store
-// CHECK: scf.break
+// CHECK: scf.switch
 // CHECK: ptr.load

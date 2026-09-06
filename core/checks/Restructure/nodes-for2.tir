@@ -5,10 +5,9 @@
 // RUN: tir opt --pass restructure-nodes %s | tir interp -f sum --args=0 | filecheck --check-prefix=ZERO %s
 // RUN: tir opt --pass restructure-nodes --shuffle-seed 1 %s | tir interp -f sum --args=4 | filecheck --check-prefix=FOUR %s
 // RUN: tir opt --pass restructure-nodes --shuffle-seed 7 %s | tir interp -f sum --args=4 | filecheck --check-prefix=FOUR %s
-// RUN: tir opt --pass restructure-nodes,shuffle-state %s | tir interp -f sum --args=4 | filecheck --check-prefix=FOUR %s
 
 // The counted loop `raise-loops` emits: the counter is carried and written back
-// to its slot at the top of every iteration. It becomes `scf.for2` with the
+// to its slot at the top of every iteration. It becomes `scf.for` with the
 // counter as port 0, the carried argument following, and the memory chain
 // threaded through the body off a dependency port. With n = 0 the body never
 // runs and the slot keeps its first store.
@@ -22,7 +21,7 @@ module {
     ptr.store %zero, %t
     ptr.store %zero, %i
     %lb = ptr.load %i : !i32
-    %fin = scf.for %lb, %0, %one iter_args(%iv = %lb) -> !i32 {
+    %fin = scf.for_legacy %lb, %0, %one iter_args(%iv = %lb) -> !i32 {
       ptr.store %iv, %i
       %a = ptr.load %t : !i32
       %c = ptr.load %i : !i32
@@ -42,7 +41,7 @@ module {
 
 // CHECK: %{{[0-9]+}} = func.func @sum(%[[N:[0-9]+]]: !i32) -> !i32 {
 // CHECK: %[[LB:[0-9]+]] | %{{[0-9]+}} = ptr.load %[[I:[0-9]+]] | %{{[0-9]+}} : !i32
-// CHECK-NEXT: %{{[0-9]+}}, %[[FIN:[0-9]+]] | %[[M:[0-9]+]] = scf.for2 %[[C:[0-9]+]] = %[[LB]] to %[[N]] step %[[ONE:[0-9]+]] (%[[IV:[0-9]+]] = %[[LB]] | %[[D:[0-9]+]] = %{{[0-9]+}}) {
+// CHECK-NEXT: %{{[0-9]+}}, %[[FIN:[0-9]+]] | %[[M:[0-9]+]] = scf.for %[[C:[0-9]+]] = %[[LB]] to %[[N]] step %[[ONE:[0-9]+]] (%[[IV:[0-9]+]] = %[[LB]] | %[[D:[0-9]+]] = %{{[0-9]+}}) {
 // CHECK-NEXT: | %[[S1:[0-9]+]] = ptr.store %[[IV]], %[[I]] | %[[D]]
 // CHECK-NEXT: %{{[0-9]+}} | %[[R1:[0-9]+]] = ptr.load %{{[0-9]+}} | %[[S1]] : !i32
 // CHECK-NEXT: %{{[0-9]+}} | %[[R2:[0-9]+]] = ptr.load %[[I]] | %[[S1]] : !i32

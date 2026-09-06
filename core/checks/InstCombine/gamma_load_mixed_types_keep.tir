@@ -1,4 +1,4 @@
-// RUN: tir opt --pass promote --pass thread-state --pass instcombine --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(promote-nodes,instcombine-nodes) --verify %s | filecheck %s
 
 // The arms store values of different types into one slot, so the slot has no
 // single type a reconstructed value could be spelled in: a port grown for it
@@ -9,21 +9,23 @@
 module {
   %fn_mixed = func.func @mixed(%0: !i1, %1: !i32, %2: !f32) -> !i32 {
     %3 = ptr.alloca {size = 4, align = 4} : !ptr.p
-    scf.if %0 {
-      ptr.store %1, %3
-      scf.yield
-    } else {
-      ptr.store %2, %3
-      scf.yield
+    | %s0 = state.entry_state
+    | %s1 = scf.switch %0 args(| %s0) (| %e) {
+      | %e1 = ptr.store %2, %3 | %e
+      -> | %e1
     }
-    %4 = ptr.load %3 : !i32
-    func.return %4
+    (| %t) {
+      | %t1 = ptr.store %1, %3 | %t
+      -> | %t1
+    }
+    %4 | %s2 = ptr.load %3 | %s1 : !i32
+    -> %4 | %s2
   }
   module_end
 }
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @mixed
 // CHECK: ptr.alloca
-// CHECK: scf.if %0 
+// CHECK: scf.switch %0 
 // CHECK: %[[RESULT:[0-9]+]] | %{{[0-9]+}} = ptr.load
-// CHECK: func.return %[[RESULT]]
+// CHECK: -> %[[RESULT]]

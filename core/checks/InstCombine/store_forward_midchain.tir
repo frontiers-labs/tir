@@ -1,4 +1,4 @@
-// RUN: tir opt --pass instcombine %s | filecheck %s
+// RUN: tir opt --pass func.func(restructure-nodes,instcombine-nodes) %s | filecheck %s
 
 // The load sits mid-chain: it publishes a state a later store reads. A read
 // leaves memory as it found it, so that state is the one it read, and once its
@@ -17,8 +17,8 @@ module {
   module_end
 }
 
-// CHECK-LABEL: %{{[0-9]+}} = func.func @f
+// CHECK-LABEL: %{{[0-9]+}} = func.func @f(%[[P:[0-9]+]]: {{.*}}, %[[A:[0-9]+]]: {{.*}}, %[[B:[0-9]+]]: {{.*}})
 // CHECK: | %[[ENTRY:[0-9]+]] = state.entry_state
-// CHECK-NEXT: | %[[S:[0-9]+]] = ptr.store %2, %0 | %[[ENTRY]]
-// CHECK-NEXT: func.return %1 | %[[S]]
+// CHECK-NEXT: | %[[S:[0-9]+]] = ptr.store %[[B]], %[[P]] | %[[ENTRY]]
+// CHECK-NEXT: -> %[[A]] | %[[S]]
 // CHECK-NOT: ptr.load

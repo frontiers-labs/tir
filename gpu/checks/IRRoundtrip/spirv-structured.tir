@@ -1,0 +1,71 @@
+// RUN: tir opt --verify %s | filecheck %s
+// RUN: tir spirv-export %s -o /tmp/tir-spirv-structured.spv
+// RUN: spirv-val /tmp/tir-spirv-structured.spv
+// RUN: tir spirv-import /tmp/tir-spirv-structured.spv | filecheck %s --check-prefix=IMPORT
+// RUN: tir spirv-import --restructure /tmp/tir-spirv-structured.spv | filecheck %s --check-prefix=NODES
+
+// A function whose body is an unordered region is exported from a
+// destructured copy: the loop becomes a header with OpLoopMerge naming its
+// merge and continue blocks, the gate a header with OpSelectionMerge, which is
+// what the validator requires of a shader (a linked module needs no entry
+// point, so the function stands on its own). Imported, the blocks come back as
+// they were written; restructured, the loop and the gate come back as the
+// unordered form they were exported from.
+
+module {
+  spirv.module {version = "1.3", addressing_model = "Logical", memory_model = "GLSL450"} {
+    spirv.Capability {name = "Shader"}
+    spirv.Capability {name = "Linkage"}
+    %fn_count = func.func @count(%n: !i32, %pick: !i1) -> !i32 {
+      %zero = spirv.Constant {value = 0} : !i32
+      %one = spirv.Constant {value = 1} : !i32
+      %two = spirv.Constant {value = 2} : !i32
+      %r = scf.switch %pick args() () {
+        -> %one
+      }
+      () {
+        -> %two
+      }
+      %i, %acc = scf.loop (%pi = %zero, %pa = %r) {
+        %again = spirv.SLessThan %pi, %n : !i1
+        %next = spirv.IAdd %pi, %one : !i32
+        %sum = spirv.IAdd %pa, %pi : !i32
+        -> %again, %next, %sum, %pi, %pa
+      }
+      -> %acc
+    }
+    spirv.module_end
+  }
+  module_end
+}
+
+// CHECK: %{{[0-9]+}} = func.func @count(%{{[0-9]+}}: !i32, %{{[0-9]+}}: !i1) -> !i32 {
+// CHECK: scf.switch
+// CHECK: scf.loop
+
+// IMPORT: %{{[0-9]+}} = func.func @count(%[[N:[0-9]+]]: !i32, %[[PICK:[0-9]+]]: !i1) -> !i32 {
+// IMPORT-NEXT: %[[ONE:[0-9]+]] = spirv.Constant {value = 1} : !i32
+// IMPORT-NEXT: %[[TWO:[0-9]+]] = spirv.Constant {value = 2} : !i32
+// IMPORT-NEXT: %[[ZERO:[0-9]+]] = spirv.Constant {value = 0} : !i32
+// IMPORT-NEXT: cfg.cond_br %[[PICK]], ^bb2(%[[TWO]] : !i32), ^bb1
+// IMPORT-NEXT: ^bb1:
+// IMPORT-NEXT: cfg.br ^bb2(%[[ONE]] : !i32)
+// IMPORT-NEXT: ^bb2(%[[R:[0-9]+]]: !i32):
+// IMPORT-NEXT: cfg.br ^bb3(%[[ZERO]], %[[R]] : !i32, !i32)
+// IMPORT-NEXT: ^bb3(%[[I:[0-9]+]]: !i32, %[[A:[0-9]+]]: !i32):
+// IMPORT-NEXT: %[[AGAIN:[0-9]+]] = spirv.SLessThan %[[I]], %[[N]] : !i1
+// IMPORT-NEXT: cfg.cond_br %[[AGAIN]], ^bb4, ^bb5(%[[I]], %[[A]] : !i32, !i32)
+// IMPORT-NEXT: ^bb4:
+// IMPORT-NEXT: %[[NEXT:[0-9]+]] = spirv.IAdd %[[I]], %[[ONE]] : !i32
+// IMPORT-NEXT: %[[SUM:[0-9]+]] = spirv.IAdd %[[A]], %[[I]] : !i32
+// IMPORT-NEXT: cfg.br ^bb3(%[[NEXT]], %[[SUM]] : !i32, !i32)
+// IMPORT-NEXT: ^bb5(%{{[0-9]+}}: !i32, %[[OUT:[0-9]+]]: !i32):
+// IMPORT-NEXT: spirv.Return %[[OUT]]
+
+// NODES: %{{[0-9]+}} = func.func @count(%[[N:[0-9]+]]: !i32, %[[PICK:[0-9]+]]: !i1) -> !i32 {
+// NODES: %[[R:[0-9]+]] = scf.switch %[[PICK]] {
+// NODES: scf.loop (%[[I:[0-9]+]] = %{{[0-9]+}}, %[[A:[0-9]+]] = %[[R]]
+// NODES-NEXT: %[[AGAIN:[0-9]+]] = spirv.SLessThan %[[I]], %[[N]] : !i1
+// NODES-NEXT: scf.switch %[[AGAIN]] {
+// NODES: %[[NEXT:[0-9]+]] = spirv.IAdd %[[I]], %{{[0-9]+}} : !i32
+// NODES-NEXT: %[[SUM:[0-9]+]] = spirv.IAdd %[[A]], %[[I]] : !i32

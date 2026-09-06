@@ -14,16 +14,16 @@ module {
 }
 
 // The i1 condition defines only bit 0, so it is masked first: andi t0, a0, 1;
-// then bne t0, x0, +8 (B-type fixup patched), jal x0, +12 (J-type fixup
-// patched), then each block: addi a0, x0, imm and a jump on to the single exit,
-// which does jalr x0, x1, 0.
+// then bne t0, x0, +16 (B-type fixup patched) to the true arm, jal x0, +4
+// (J-type fixup patched) to the false arm laid out first, then each arm:
+// addi a0, x0, imm and a jump on to the single exit, which does jalr x0, x1, 0.
 // CHECK: .section .text
 // CHECK-NEXT: select:
 // CHECK-NEXT: [0x93, 0x72, 0x15, 0x00]
-// CHECK-NEXT: [0x63, 0x94, 0x02, 0x00]
+// CHECK-NEXT: [0x63, 0x98, 0x02, 0x00]
+// CHECK-NEXT: [0x6F, 0x00, 0x40, 0x00]
+// CHECK-NEXT: [0x13, 0x05, 0x00, 0x00]
 // CHECK-NEXT: [0x6F, 0x00, 0xC0, 0x00]
 // CHECK-NEXT: [0x13, 0x05, 0x10, 0x00]
-// CHECK-NEXT: [0x6F, 0x00, 0xC0, 0x00]
-// CHECK-NEXT: [0x13, 0x05, 0x00, 0x00]
 // CHECK-NEXT: [0x6F, 0x00, 0x40, 0x00]
 // CHECK-NEXT: [0x67, 0x80, 0x00, 0x00]

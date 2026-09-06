@@ -71,7 +71,7 @@ pub struct CompileArgs {
     )]
     opt_level: u8,
     /// Mid-end pass pipeline in MLIR-style syntax, e.g.
-    /// `func.func(thread-state,instcombine)`. Replaces the default function
+    /// `func.func(verify-deps,instcombine-nodes)`. Replaces the default function
     /// pipeline; frontend lowering and the backend are unaffected.
     #[arg(long = "pipeline", value_name = "PIPELINE")]
     pipeline: Option<String>,
@@ -81,12 +81,6 @@ pub struct CompileArgs {
     /// behavior is a dependence the machine form does not carry.
     #[arg(long = "shuffle-machine-order")]
     shuffle_machine_order: bool,
-    /// Raise control flow into unordered regions (`restructure-nodes`) instead
-    /// of the structured blocks the backend takes; at -O1 and above the
-    /// unordered mid-end runs at the IR stage, where this pipeline ends. The
-    /// IR stage only.
-    #[arg(long)]
-    nodes: bool,
     /// C source files, or `-` for stdin.
     inputs: Vec<OsString>,
 }
@@ -168,7 +162,6 @@ pub(super) fn lower(args: CompileArgs) -> DriverOptions {
             _ => OptLevel::O3,
         },
         shuffle_machine_order: args.shuffle_machine_order,
-        nodes: args.nodes,
         dry_run: false,
     }
 }

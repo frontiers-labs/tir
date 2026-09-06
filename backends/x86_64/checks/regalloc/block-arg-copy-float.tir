@@ -19,8 +19,8 @@ module {
 
 // CHECK: asm.symbol
 // CHECK-NOT: x86_64.mov {
-// CHECK:      ^[[JOIN:bb[0-9]+]](%{{[0-9]+}}: !x86_64.XMM):
-// CHECK-NEXT: x86_64.movsd {dst = %{{[0-9]+}}:xmm0, src = %{{[0-9]+}}:[[P:xmm[0-9]+]]}
 // CHECK:      ^bb{{[0-9]+}}:
-// CHECK-NEXT: x86_64.movsd {dst = %{{[0-9]+}}:[[P]], src = %{{[0-9]+}}:xmm0}
-// CHECK-NEXT: asm.vbr ^[[JOIN]]
+// CHECK-NEXT: x86_64.movsd {dst = %{{[0-9]+}}:[[P:xmm[0-9]+]], src = %{{[0-9]+}}:xmm0}
+// CHECK-NEXT: asm.vbr ^[[JOIN:bb[0-9]+]]
+// CHECK:      ^[[JOIN]](%{{[0-9]+}}: !x86_64.XMM):
+// CHECK-NEXT: x86_64.movsd {dst = %{{[0-9]+}}:xmm0, src = %{{[0-9]+}}:[[P]]}

@@ -5,7 +5,7 @@ use tir::{
     cfg::ops as cfg_ops,
     func::ops as func_ops,
     ptr::{AllocaOpBuilder, LoadOpBuilder, PtrType, StoreOpBuilder},
-    scf::{ops as scf_ops, ForOpBuilder, IfOpBuilder, WhileOpBuilder},
+    scf::{ops as scf_ops, ForLegacyOpBuilder, IfOpBuilder, WhileOpBuilder},
     Context, EntryGuard, GuardOrdering, GuardedLoop, MemoryRead, MemoryWrite, Operation,
 };
 
@@ -66,7 +66,7 @@ fn for_guard_reads_a_bound_comparison_over_its_operands() {
     let lower = context.create_value(index, None);
     let upper = context.create_value(index, None);
     let step = context.create_value(index, None);
-    let for_op = ForOpBuilder::new(&context)
+    let for_op = ForLegacyOpBuilder::new(&context)
         .lower_bound(lower.id())
         .upper_bound(upper.id())
         .step(step.id())

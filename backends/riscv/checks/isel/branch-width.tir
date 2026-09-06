@@ -21,5 +21,5 @@ module {
 }
 
 // CHECK: asm.symbol {name = "pick"
-// CHECK: riscv.blt {rs1 = %[[V6:[0-9]+]]:GPR, rs2 = %[[V7:[0-9]+]]:GPR, imm = ^bb1}
-// CHECK-NEXT: asm.vbr ^bb2
+// CHECK: riscv.blt {rs1 = %[[V6:[0-9]+]]:GPR, rs2 = %[[V7:[0-9]+]]:GPR, imm = ^bb2}
+// CHECK-NEXT: asm.vbr ^bb1

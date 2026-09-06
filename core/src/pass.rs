@@ -489,8 +489,15 @@ impl Rewriter {
         target: &OperationRef,
         new_op: &dyn Operation,
     ) -> Result<(), PassError> {
-        let block = self.block_of(target)?;
-        if block.replace_op(target.op.id, new_op.id()) {
+        let replaced = match self.context.parent_nodes_region(target.op.id) {
+            Some(region) => {
+                self.context.remove_from_region(region, target.op.id);
+                self.context.add(region, new_op.id());
+                true
+            }
+            None => self.block_of(target)?.replace_op(target.op.id, new_op.id()),
+        };
+        if replaced {
             self.record_replacement(target, new_op.id());
             // Rewrite SSA uses of the old results to the new op's results when the
             // shapes line up, so consumers don't dangle on the erased op's values.
@@ -515,6 +522,12 @@ impl Rewriter {
     /// allocator erasing a copy it granted one register at both ends) leaves
     /// the ops naming them intact.
     pub fn erase_op_keeping_results(&mut self, target: &OperationRef) -> Result<(), PassError> {
+        let results = target.op.results().to_vec();
+        if let Some(region) = self.context.parent_nodes_region(target.op.id) {
+            self.context.remove_from_region(region, target.op.id);
+            self.context.remove_operation_except(target.op.id, &results);
+            return Ok(());
+        }
         let block = self.block_of(target)?;
         if block.remove_op(target.op.id) {
             let results = target.op.results().to_vec();
@@ -534,8 +547,15 @@ impl Rewriter {
         target: &OperationRef,
         new_op: &dyn Operation,
     ) -> Result<(), PassError> {
-        let block = self.block_of(target)?;
-        if block.replace_op(target.op.id, new_op.id()) {
+        let replaced = match self.context.parent_nodes_region(target.op.id) {
+            Some(region) => {
+                self.context.remove_from_region(region, target.op.id);
+                self.context.add(region, new_op.id());
+                true
+            }
+            None => self.block_of(target)?.replace_op(target.op.id, new_op.id()),
+        };
+        if replaced {
             self.record_replacement(target, new_op.id());
             let results = target.op.results().to_vec();
             self.context.remove_operation_except(target.op.id, &results);
@@ -570,6 +590,12 @@ impl Rewriter {
         target: &OperationRef,
         new_op: &dyn Operation,
     ) -> Result<(), PassError> {
+        // An unordered region has no before: the op joins it, and what it
+        // reads places it.
+        if let Some(region) = self.context.parent_nodes_region(target.op.id) {
+            self.context.add(region, new_op.id());
+            return Ok(());
+        }
         let block = self.block_of(target)?;
         let position = self
             .context

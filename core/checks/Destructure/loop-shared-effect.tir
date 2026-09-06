@@ -1,0 +1,30 @@
+// RUN: tir opt --pass destructure %s | tir interp | filecheck %s
+// RUN: tir opt --pass destructure --verify %s
+
+// One store per iteration feeds both the predicate and the exit value; the
+// operation runs once per iteration however many cones demand it, so the
+// cell counts iterations and the loop produces the count.
+
+module {
+  %fn_main = func.func @main() -> !i32 {
+    %0 = constant {value = 0} : !i32
+    %1 = constant {value = 1} : !i32
+    %2 = constant {value = 3} : !i32
+    %3 | %4 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    | %5 = ptr.store %0, %3 | %4
+    %6 | %7 = scf.loop (%8 = %0 | %9 = %5) {
+      %10 | %17 = ptr.load %3 | %9 : !i32
+      %11 = addi %10, %1 : !i32
+      | %12 = ptr.store %11, %3 | %17
+      %13 = ptr.load %3 | %12 : !i32
+      %14 = cmpi %13, %2 {predicate = "slt"} : !i1
+      -> %14, %8, %13 | %12, %12
+    }
+    %15 = ptr.load %3 | %7 : !i32
+    %16 = addi %6, %15 : !i32
+    func.return %16
+  }
+  module_end
+}
+
+// CHECK: i32 6

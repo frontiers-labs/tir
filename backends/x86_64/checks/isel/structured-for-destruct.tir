@@ -1,45 +1,59 @@
 // RUN: tir mc --march=x86_64 --stage=isel %s | filecheck %s
 
-// A counted loop destructs rotated, off the `CountedLoop` interface alone: its
-// zero-trip guard `lb < ub` branches into the body, and the body advances the
-// counter and tests it again on its own back edge. The counter is not a value of
-// the IR — it is minted as the body's trailing argument, which is why the entry
-// edge carries the lower bound and the back edge the advanced counter.
+// A counted loop written as a CFG destructs head-tested: the header reads the
+// counter and the carried value as parameters and its comparison fuses into the
+// branch that picks the body. Each arm of that decision sets a continue flag and
+// carries the ports to a latch, which tests the flag: taken, the back edge
+// re-enters the header; not taken, the ports leave to the continuation. Nothing
+// is rotated and no counter is minted: the counter is the block argument the
+// program already carries.
 
 #data_layout = {types = {p = {abi = 64, size = 64}}}
 
 module {data_layout = #data_layout} {
-  %fn_count = func.func @count(%lb: !index, %ub: !index, %st: !index, %init: !i64) -> !i64 {
+  %fn_count = func.func @count(%lb: !i64, %ub: !i64, %st: !i64, %init: !i64) -> !i64 {
     %c = constant {value = 5} : !i64
-    %r = scf.for %lb, %ub, %st iter_args(%acc = %init) -> !i64 {
-      %n = addi %acc, %c : !i64
-      scf.yield %n
-    }
-    func.return %r
+    cfg.br ^bb1(%lb, %init : !i64, !i64)
+  ^bb1(%i: !i64, %acc: !i64):
+    %cond = cmpi %i, %ub {predicate = "slt"} : !i1
+    cfg.cond_br %cond, ^bb2, ^bb3
+  ^bb2:
+    %n = addi %acc, %c : !i64
+    %ni = addi %i, %st : !i64
+    cfg.br ^bb1(%ni, %n : !i64, !i64)
+  ^bb3:
+    func.return %acc
   }
   module_end
 }
 
 // CHECK-NOT: scf.
-// The zero-trip guard, before the loop, fused into its branch.
-// CHECK: x86_64.cmp {dst = %[[V0:[0-9]+]]:GPR, src = %[[V1:[0-9]+]]:GPR}
-// CHECK-NEXT: x86_64.jl {imm = ^[[ENTER:bb[0-9]+]]}
-// CHECK-NEXT: asm.vbr %{{[0-9]+}} ^[[EXIT:bb[0-9]+]]
-// The body carries the accumulator and the counter.
-// CHECK: ^[[BODY:bb[0-9]+]](%{{[0-9]+}}: !x86_64.GPR, %[[IV:[0-9]+]]: !x86_64.GPR):
-// The counter advances by the step and is tested against the same bound; the
-// test fuses into the back edge's branch even though the advance names no value
-// of the IR. The advance leads the body: rooted at no operation of its own, it
-// takes the head of the order the cover spells.
-// CHECK-NEXT: x86_64.add {dst = %[[NEXT:[0-9]+]]:GPR, dst_tied = %[[IV]]:GPR, src = %[[V2:[0-9]+]]:GPR}
-// CHECK-NEXT: x86_64.lea_base_disp {dst = %{{[0-9]+}}:GPR, base = %{{[0-9]+}}:GPR, imm = 5}
-// CHECK-NEXT: x86_64.cmp {dst = %[[NEXT]]:GPR, src = %[[V1]]:GPR}
-// CHECK-NEXT: x86_64.jl {imm = ^[[LATCH:bb[0-9]+]]}
-// CHECK-NEXT: asm.vbr %{{[0-9]+}} ^[[EXIT]]
-// CHECK: ^[[EXIT]](%{{[0-9]+}}: !x86_64.GPR):
+// The entry edge carries the lower bound and the initial accumulator.
+// CHECK: asm.vbr %[[LB:[0-9]+]], %{{[0-9]+}} ^[[HEAD:bb[0-9]+]]
+// CHECK: ^[[HEAD]](%[[IV:[0-9]+]]: !x86_64.GPR, %[[ACC:[0-9]+]]: !x86_64.GPR):
+// The counter test fuses into the header's branch.
+// CHECK-NEXT: x86_64.cmp {dst = %[[IV]]:GPR, src = %[[UB:[0-9]+]]:GPR}
+// CHECK-NEXT: x86_64.jl {imm = ^[[BODY:bb[0-9]+]]}
+// CHECK-NEXT: asm.vbr ^[[DONE:bb[0-9]+]]
+// The exit arm clears the flag and forwards the ports unchanged.
+// CHECK: ^[[DONE]]:
+// CHECK-NEXT: x86_64.mov_imm8 {dst = %[[STOP:[0-9]+]]:GPR8, imm = 0}
+// CHECK-NEXT: asm.vbr %[[IV]], %[[ACC]], %[[STOP]] ^[[LATCH:bb[0-9]+]]
+// The body advances both ports and sets the flag; the constant folds into the
+// accumulator's instruction.
+// CHECK: ^[[BODY]]:
+// CHECK-NEXT: x86_64.lea_base_disp {dst = %[[NACC:[0-9]+]]:GPR, base = %[[ACC]]:GPR, imm = 5}
+// CHECK-NEXT: x86_64.add {dst = %[[NEXT:[0-9]+]]:GPR, dst_tied = %[[IV]]:GPR, src = %[[ST:[0-9]+]]:GPR}
+// CHECK-NEXT: x86_64.mov_imm8 {dst = %[[GO:[0-9]+]]:GPR8, imm = 1}
+// CHECK-NEXT: asm.vbr %[[NEXT]], %[[NACC]], %[[GO]] ^[[LATCH]]
+// The latch tests the flag: the back edge re-enters the header, the other edge
+// leaves with both ports.
+// CHECK: ^[[LATCH]](%[[I2:[0-9]+]]: !x86_64.GPR, %[[A2:[0-9]+]]: !x86_64.GPR, %[[FLAG:[0-9]+]]: !x86_64.GPR):
+// CHECK-NEXT: x86_64.test_imm32 {dst = %[[FLAG]]:GPR, imm = 1}
+// CHECK-NEXT: x86_64.jne {imm = ^[[BACK:bb[0-9]+]]}
+// CHECK-NEXT: asm.vbr %[[I2]], %[[A2]] ^[[EXIT:bb[0-9]+]]
+// CHECK: ^[[BACK]]:
+// CHECK-NEXT: asm.vbr %[[I2]], %[[A2]] ^[[HEAD]]
+// CHECK: ^[[EXIT]](%{{[0-9]+}}: !x86_64.GPR, %{{[0-9]+}}: !x86_64.GPR):
 // CHECK-NEXT: asm.vret
-// CHECK: ^[[ENTER]]:
-// CHECK-NEXT: asm.vbr %{{[0-9]+}}, %{{[0-9]+}} ^[[BODY]]
-// CHECK: ^[[LATCH]]:
-// CHECK-NEXT: asm.vbr %{{[0-9]+}}, %{{[0-9]+}} ^[[BODY]]
 // CHECK-NOT: scf.

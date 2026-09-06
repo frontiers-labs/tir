@@ -74,9 +74,9 @@ fn join(lines: &[&str]) -> String {
 }
 
 /// Drop passes from `pipeline` for as long as `still_diverges` holds of the
-/// result. The state-threading passes bracketing every pipeline are structural
-/// rather than optimizations, so they are never dropped; what is left is the
-/// shortest pass sequence that still miscompiles.
+/// result. The checks bracketing every pipeline are structural rather than
+/// optimizations, so they are never dropped; what is left is the shortest pass
+/// sequence that still miscompiles.
 pub fn bisect_pipeline(pipeline: &str, still_diverges: &mut dyn FnMut(&str) -> bool) -> String {
     let Some((prefix, rest)) = pipeline.split_once('(') else {
         return pipeline.to_string();
@@ -103,10 +103,9 @@ pub fn bisect_pipeline(pipeline: &str, still_diverges: &mut dyn FnMut(&str) -> b
     render(prefix, &passes)
 }
 
-/// The pass that sets up the state threading every pipeline runs under; the
-/// backend tears it down. Dropping it makes the pipeline invalid rather than
-/// smaller.
-pub const STRUCTURAL_PASSES: [&str; 1] = ["thread-state"];
+/// The check every pipeline runs under: it rewrites nothing, so dropping it
+/// makes the reproduction weaker rather than smaller.
+pub const STRUCTURAL_PASSES: [&str; 1] = ["verify-deps"];
 
 fn render(prefix: &str, passes: &[&str]) -> String {
     format!("{prefix}({})", passes.join(","))
@@ -160,10 +159,11 @@ mod tests {
 
     #[test]
     fn drops_every_pass_the_divergence_does_not_need() {
-        let pipeline = "func.func(thread-state,instcombine,promote,dce,instcombine)";
+        let pipeline =
+            "func.func(verify-deps,instcombine-nodes,promote-nodes,affine,instcombine-nodes)";
 
         let minimal = bisect_pipeline(pipeline, &mut |candidate| candidate.contains("promote"));
 
-        assert_eq!(minimal, "func.func(thread-state,promote)");
+        assert_eq!(minimal, "func.func(verify-deps,promote-nodes)");
     }
 }

@@ -5,7 +5,6 @@
 // RUN: tir opt --pass restructure-nodes %s | tir interp -f find --args=7 | filecheck --check-prefix=MISSED %s
 // RUN: tir opt --pass restructure-nodes --shuffle-seed 1 %s | tir interp -f find --args=2 | filecheck --check-prefix=FOUND %s
 // RUN: tir opt --pass restructure-nodes --shuffle-seed 7 %s | tir interp -f find --args=2 | filecheck --check-prefix=FOUND %s
-// RUN: tir opt --pass restructure-nodes,shuffle-state %s | tir interp -f find --args=2 | filecheck --check-prefix=FOUND %s
 
 // A return inside the loop and one after it. The exits merge into one before
 // conversion, so the callable's results are the value and memory whichever

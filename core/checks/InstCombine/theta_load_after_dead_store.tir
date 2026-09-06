@@ -1,4 +1,4 @@
-// RUN: tir opt --pass promote --pass thread-state --pass instcombine --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(restructure-nodes,promote-nodes,instcombine-nodes) --verify %s | filecheck %s
 
 // A store the next one overwrites leaves the state it was handed — but the state
 // it was handed here is the loop's carried port, which is also what a read after
@@ -7,10 +7,10 @@
 // leave what its last store wrote.
 
 module {
-  %fn_last = func.func @last(%0: !index, %1: !index, %2: !index, %3: !i32) -> !i32 {
+  %fn_last = func.func @last(%0: !i64, %1: !i64, %2: !i64, %3: !i32) -> !i32 {
     %4 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
     ptr.store %3, %4
-    scf.for %0, %1, %2 {
+    scf.for_legacy %0, %1, %2 {
       %5 = constant {value = 3} : !i32
       ptr.store %5, %4
       %6 = constant {value = 36} : !i32
@@ -26,7 +26,7 @@ module {
 }
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @last
-// CHECK: %[[RESULT:[0-9]+]] = scf.for
 // CHECK: %[[SEVEN:[0-9]+]] = constant {value = 7} : !i32
-// CHECK-NEXT: %[[SUM:[0-9]+]] = addi %[[RESULT]], %[[SEVEN]] : !i32
-// CHECK-NEXT: func.return %[[SUM]]
+// CHECK: %{{[0-9]+}}, %[[RESULT:[0-9]+]] | %{{[0-9]+}} = scf.for
+// CHECK: %[[SUM:[0-9]+]] = addi %[[RESULT]], %[[SEVEN]] : !i32
+// CHECK-NEXT: -> %[[SUM]]

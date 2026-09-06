@@ -1,4 +1,4 @@
-// RUN: tir opt --pass promote --pass thread-state --pass instcombine --verify %s | filecheck %s
+// RUN: tir opt --pass restructure-nodes,promote-nodes,instcombine-nodes --verify %s | filecheck %s
 
 // A slot written twice: the second store covers the extent the first one wrote
 // and nothing reads the state between them, so the first store is not there to
@@ -15,6 +15,6 @@ module {
   module_end
 }
 
-// CHECK-LABEL: %{{[0-9]+}} = func.func @twostores
+// CHECK: func.func @twostores(%{{[0-9]+}}: !i32, %[[B:[0-9]+]]: !i32)
 // CHECK-NOT: ptr.
-// CHECK: func.return %1
+// CHECK: -> %[[B]]

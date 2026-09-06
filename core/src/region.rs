@@ -282,14 +282,22 @@ impl RegionHandle {
                 )));
             }
         }
-        for &value in ops
-            .iter()
-            .flat_map(|op| context.get_op(*op).operands())
-            .collect::<Vec<_>>()
-            .iter()
-            .chain(self.results().iter())
-        {
-            self.verify_in_scope(context, value)?;
+        for op in &ops {
+            let instance = context.get_op(*op);
+            for value in instance.operands() {
+                self.verify_in_scope(context, value).map_err(|error| {
+                    crate::Error::VerificationError(format!(
+                        "{}.{} reads {error}",
+                        instance.dialect(),
+                        instance.name()
+                    ))
+                })?;
+            }
+        }
+        for value in self.results() {
+            self.verify_in_scope(context, value).map_err(|error| {
+                crate::Error::VerificationError(format!("a region result names {error}"))
+            })?;
         }
         topological_order(context, self.id).map(|_| ())
     }
@@ -362,6 +370,26 @@ pub(crate) fn shuffled_topological_order(
             return None;
         }
         let pick = *ready.iter().nth(rng.below(ready.len()))?;
+        ready.take(&pick)
+    })
+}
+
+/// [`topological_order`] with the tie among ready operations broken by
+/// insertion order: the order the region was built in, which a converter
+/// leaves as source order.
+pub(crate) fn insertion_topological_order(
+    context: &Context,
+    region: RegionId,
+) -> Result<Vec<OpId>, crate::Error> {
+    let inserted: std::collections::HashMap<OpId, usize> = context
+        .get_region(region)
+        .op_ids()
+        .into_iter()
+        .enumerate()
+        .map(|(index, op)| (op, index))
+        .collect();
+    topological_order_picking(context, region, |ready| {
+        let pick = ready.iter().copied().min_by_key(|op| inserted[op])?;
         ready.take(&pick)
     })
 }

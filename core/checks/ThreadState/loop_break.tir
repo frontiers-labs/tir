@@ -1,42 +1,45 @@
-// RUN: tir opt --pass thread-state --verify %s | filecheck %s
+// RUN: tir opt --pass restructure-nodes --verify %s | filecheck %s
 
-// A loop leaving through `scf.break` carries the chain out along that edge: the
-// gate around the exit carries the chain across its arms, and the arm that breaks
-// hands the state it reached to the loop's port instead of yielding it.
+// A loop leaving through a break carries the chain out along that edge: the
+// gate around the exit is a selector that carries no chain, so the state the
+// body reached before it is what the body hands the loop's port whichever way
+// the iteration leaves.
 
 module {
-  %fn_f = func.func @f(%0: !i1, %1: !i32) -> !i32 {
-    %2 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
-    ptr.store %1, %2
-    scf.while {
-      scf.condition %0
-    } do scope(%3) {
-      ptr.store %1, %2
-      scf.if %0 {
-        scf.break %3
-      } else {
-        scf.yield
-      }
-      scf.yield
-    }
-    %4 = ptr.load %2 : !i32
+  %fn_f = func.func @f(%0: !i1, %1: !i1, %2: !i32) -> !i32 {
+    %3 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    ptr.store %2, %3
+    cfg.br ^head
+  ^head:
+    cfg.cond_br %0, ^body, ^exit
+  ^body:
+    ptr.store %2, %3
+    cfg.cond_br %1, ^exit, ^head
+  ^exit:
+    %4 = ptr.load %3 : !i32
     func.return %4
   }
   module_end
 }
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @f
-// CHECK: | %[[FINAL:[0-9]+]] = scf.while iter_args(| %[[COND:[0-9]+]] = %{{[0-9]+}}) {
-// CHECK-NEXT: scf.condition %0 | %[[COND]]
+// CHECK: | %[[FINAL:[0-9]+]] = scf.loop (| %[[CARRIED:[0-9]+]] = %{{[0-9]+}}) {
+// CHECK-NEXT: %[[REPEAT:[0-9]+]] | %[[STATE:[0-9]+]] = scf.switch %{{[0-9]+}} args(| %[[CARRIED]]) (| %[[E:[0-9]+]]) {
+// CHECK-NEXT: %{{[0-9]+}} = constant {value = 0} : !i1
+// CHECK-NEXT: -> %{{[0-9]+}} | %[[E]]
 // CHECK-NEXT: }
-// CHECK-NEXT: do scope(%[[SCOPE:[0-9]+]])(| %[[BODY:[0-9]+]]) {
-// CHECK-NEXT: | %[[S:[0-9]+]] = ptr.store %1, %{{[0-9]+}} | %[[BODY]]
-// CHECK-NEXT: | %[[GATE:[0-9]+]] = scf.if %0 args(| %[[S]]) (| %[[T:[0-9]+]]) {
-// CHECK-NEXT: scf.break %[[SCOPE]] | %[[T]]
+// CHECK-NEXT: (| %[[B:[0-9]+]]) {
+// CHECK-NEXT: | %[[S:[0-9]+]] = ptr.store %{{[0-9]+}}, %{{[0-9]+}} | %[[B]]
+// CHECK-NEXT: %[[SEL:[0-9]+]] = scf.switch %{{[0-9]+}} {
+// CHECK-NEXT: %{{[0-9]+}} = constant {value = 1} : !i1
+// CHECK-NEXT: -> %{{[0-9]+}}
 // CHECK-NEXT: }
-// CHECK-NEXT: else (| %[[E:[0-9]+]]) {
-// CHECK-NEXT: scf.yield | %[[E]]
+// CHECK-NEXT: {
+// CHECK-NEXT: %{{[0-9]+}} = constant {value = 0} : !i1
+// CHECK-NEXT: -> %{{[0-9]+}}
 // CHECK-NEXT: }
-// CHECK-NEXT: scf.yield | %[[GATE]]
+// CHECK-NEXT: -> %[[SEL]] | %[[S]]
+// CHECK-NEXT: }
+// CHECK-NEXT: -> %[[REPEAT]] | %[[STATE]], %[[STATE]]
 // CHECK-NEXT: }
 // CHECK-NEXT: %{{[0-9]+}} | %{{[0-9]+}} = ptr.load %{{[0-9]+}} | %[[FINAL]] : !i32

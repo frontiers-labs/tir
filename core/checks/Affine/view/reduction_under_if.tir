@@ -1,4 +1,4 @@
-// RUN: tir opt --pass func.func(thread-state) --print-affine %s -o /dev/null | filecheck %s
+// RUN: tir opt --print-affine --verify %s -o /dev/null | filecheck %s
 
 // `acc + (c ? acc : x)` is no reduction: the value added is computed from the
 // port inside the gate, which threads nothing through its operands. What a
@@ -11,17 +11,18 @@ module {data_layout = #data_layout} {
     %3 = constant {value = 0} : !i32
     %4 = constant {value = 64} : !i32
     %5 = constant {value = 1} : !i32
-    %6, %7 = scf.for %3, %4, %5 iter_args(%8 = %3, %9 = %1) -> !i32, !i32 {
-      %10 = scf.if %2 -> !i32 {
-        scf.yield %9
-      } else {
-        scf.yield %5
+    | %6 = state.entry_state
+    %7 | %8 = scf.for %9 = %3 to %4 step %5 (%10 = %1 | %11 = %6) {
+      %12 = scf.switch %2 {
+        -> %5
       }
-      %11 = addi %9, %10 : !i32
-      %12 = addi %8, %5 : !i32
-      scf.yield %12, %11
+      {
+        -> %10
+      }
+      %13 = addi %10, %12 : !i32
+      -> %13 | %11
     }
-    func.return %7
+    -> %7 | %8
   }
   module_end
 }

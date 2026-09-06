@@ -1,4 +1,4 @@
-// RUN: tir opt --pass instcombine --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(restructure-nodes,instcombine-nodes) --verify %s | filecheck %s
 
 // The same shape with a latch that advances the port. Under the hypothesis the
 // latch folds to 8, which is not the 7 the loop was entered on, so the edge
@@ -6,10 +6,10 @@
 // is the loop's result.
 
 module {
-  %fn_f = func.func @f(%0: !index, %1: !index, %2: !index) -> !i32 {
+  %fn_f = func.func @f(%0: !i64, %1: !i64, %2: !i64) -> !i32 {
     %3 = constant {value = 7} : !i32
     %4 = constant {value = 1} : !i32
-    %5 = scf.for %0, %1, %2 iter_args(%6 = %3) -> !i32 {
+    %5 = scf.for_legacy %0, %1, %2 iter_args(%6 = %3) -> !i32 {
       %7 = addi %6, %4 : !i32
       scf.yield %7
     }
@@ -18,9 +18,11 @@ module {
   module_end
 }
 
-// CHECK-LABEL: %{{[0-9]+}} = func.func @f
-// CHECK: %[[RESULT:[0-9]+]] = scf.for %0, %1, %2 iter_args(%[[K:[0-9]+]] = %3) -> !i32 {
-// CHECK-NEXT: %[[NEXT:[0-9]+]] = addi %[[K]], %4 : !i32
-// CHECK-NEXT: scf.yield %[[NEXT]]
+// CHECK-LABEL: %{{[0-9]+}} = func.func @f(%[[LB:[0-9]+]]: !i64, %[[UB:[0-9]+]]: !i64, %[[STEP:[0-9]+]]: !i64)
+// CHECK: %[[SEVEN:[0-9]+]] = constant {value = 7} : !i32
+// CHECK-NEXT: %[[ONE:[0-9]+]] = constant {value = 1} : !i32
+// CHECK: %{{[0-9]+}}, %[[RESULT:[0-9]+]] | %[[OUT:[0-9]+]] = scf.for %{{[0-9]+}} = %[[LB]] to %[[UB]] step %[[STEP]] (%[[K:[0-9]+]] = %[[SEVEN]] | %{{[0-9]+}} = %{{[0-9]+}}) {
+// CHECK-NEXT: %[[NEXT:[0-9]+]] = addi %[[K]], %[[ONE]] : !i32
+// CHECK-NEXT: -> %[[NEXT]] | %{{[0-9]+}}
 // CHECK-NEXT: }
-// CHECK-NEXT: func.return %[[RESULT]]
+// CHECK-NEXT: -> %[[RESULT]] | %[[OUT]]

@@ -4,7 +4,7 @@
 
 use crate::builtin::{ConstantOpBuilder, IntegerType};
 use crate::region::{defining_region, topological_order};
-use crate::scf::{LoopOpBuilder, Switch2OpBuilder};
+use crate::scf::{LoopOpBuilder, SwitchOpBuilder};
 use crate::{
     ConstantLike, Context, Error, ExitTarget, Gamma, NonLocalExit, OpId, Operation, RegionId,
     Theta, TypeId, ValueId,
@@ -126,6 +126,35 @@ impl Context {
                         *result = new;
                     }
                 }
+                self.set_region_results(nested, results, deps);
+            }
+        }
+    }
+
+    /// [`Context::rename_region_results`] for a set of renames, in one walk:
+    /// finding the nested regions costs the whole subtree, so a rename per
+    /// value is quadratic in the operations under `region`. A result named by
+    /// `renames` follows the chain to the value nothing renames.
+    pub(crate) fn rename_region_results_batch(
+        &self,
+        region: RegionId,
+        renames: &std::collections::HashMap<ValueId, ValueId>,
+    ) {
+        if renames.is_empty() {
+            return;
+        }
+        for nested in self.nested_regions(region) {
+            let handle = self.get_region(nested);
+            let mut results = handle.results();
+            let mut renamed = false;
+            for result in &mut results {
+                while let Some(&next) = renames.get(result) {
+                    *result = next;
+                    renamed = true;
+                }
+            }
+            if renamed {
+                let deps = handle.dep_results().len();
                 self.set_region_results(nested, results, deps);
             }
         }
@@ -264,7 +293,7 @@ impl Context {
                     .result_type(IntegerType::new(self, 32))
                     .build();
                 self.add(region, predicate.id());
-                let mut builder = Switch2OpBuilder::new(self)
+                let mut builder = SwitchOpBuilder::new(self)
                     .predicate(predicate.result())
                     .inputs(vec![])
                     .arms(vec![arm.id()])

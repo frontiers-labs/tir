@@ -7,7 +7,7 @@
 
 module {
   %fn_carry = func.func @carry(%0: !index, %1: !index, %2: !index, %3: !unit, %4: !i1) -> !unit {
-    %5 = scf.for %0, %1, %2 iter_args(%6 = %3) -> !unit {
+    %5 = scf.for_legacy %0, %1, %2 iter_args(%6 = %3) -> !unit {
       scf.yield %6
     }
     %7 = scf.while iter_args(%8 = %5) -> !unit {
@@ -20,7 +20,7 @@ module {
   module_end
 }
 
-// CHECK: %{{[0-9]+}} = scf.for %{{[0-9]+}}, %{{[0-9]+}}, %{{[0-9]+}} iter_args(%{{[0-9]+}} = %{{[0-9]+}}) -> !unit {
+// CHECK: %{{[0-9]+}} = scf.for_legacy %{{[0-9]+}}, %{{[0-9]+}}, %{{[0-9]+}} iter_args(%{{[0-9]+}} = %{{[0-9]+}}) -> !unit {
 // CHECK-NEXT: scf.yield %{{[0-9]+}}
 // CHECK-NEXT: }
 // CHECK-NEXT: %{{[0-9]+}} = scf.while iter_args(%{{[0-9]+}} = %{{[0-9]+}}) -> !unit {

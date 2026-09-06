@@ -1,4 +1,4 @@
-// RUN: tir opt --pass instcombine %s | filecheck %s
+// RUN: tir opt --pass restructure-nodes,instcombine-nodes %s | filecheck %s
 
 // A memset of an unknown size may write nothing at all, so a load of its first
 // byte cannot take the byte it was handed.

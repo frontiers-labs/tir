@@ -1,4 +1,4 @@
-// RUN: tir opt --pass func.func(restructure,instcombine) --verify %s | filecheck %s --implicit-check-not "constant {value = 3}"
+// RUN: tir opt --pass func.func(restructure-nodes,instcombine-nodes) --verify %s | filecheck %s --implicit-check-not "constant {value = 3}"
 
 // The two arms carry different literals and both run, so the value they merge is
 // no literal at all and nothing is folded onto it.
@@ -17,6 +17,6 @@ module {
 }
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @f
-// CHECK: %[[M:[0-9]+]] = scf.if
+// CHECK: %[[M:[0-9]+]] = scf.switch
 // CHECK: %[[SUM:[0-9]+]] = addi %[[M]], %{{[0-9]+}} : !i32
-// CHECK-NEXT: func.return %[[SUM]]
+// CHECK-NEXT: -> %[[SUM]]

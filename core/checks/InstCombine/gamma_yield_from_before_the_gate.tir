@@ -1,4 +1,4 @@
-// RUN: tir opt --pass promote --pass thread-state --pass instcombine --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(promote-nodes,instcombine-nodes) --verify %s | filecheck %s
 
 // The arm that leaves the slot alone yields what the slot held on entry, which
 // is a definition from before the gate: a port carries a value out of a region,
@@ -9,16 +9,18 @@ module {
   %fn_spell = func.func @spell(%0: !i1, %1: !i32) -> !i32 {
     %2 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
     %3 = constant {value = 0} : !i32
-    ptr.store %3, %2
-    scf.if %0 {
-      ptr.store %1, %2
-      scf.yield
-    } else {
-      scf.yield
+    | %s0 = state.entry_state
+    | %s1 = ptr.store %3, %2 | %s0
+    | %s2 = scf.switch %0 args(| %s1) (| %e) {
+      -> | %e
     }
-    %4 = ptr.load %2 : !i32
+    (| %t) {
+      | %t1 = ptr.store %1, %2 | %t
+      -> | %t1
+    }
+    %4 | %s3 = ptr.load %2 | %s2 : !i32
     %5 = addi %4, %3 : !i32
-    func.return %5
+    -> %5 | %s3
   }
   module_end
 }
@@ -26,10 +28,10 @@ module {
 // CHECK-LABEL: %{{[0-9]+}} = func.func @spell
 // CHECK-NOT: ptr.
 // CHECK: %[[ZERO:[0-9]+]] = constant {value = 0} : !i32
-// CHECK: %[[RESULT:[0-9]+]] = scf.if %0 -> !i32 {
-// CHECK-NEXT: scf.yield %1
+// CHECK: %[[RESULT:[0-9]+]] | %{{[0-9]+}} = scf.switch %0 args(| %{{[0-9]+}}) (| %[[EA:[0-9]+]]) {
+// CHECK-NEXT: -> %[[ZERO]] | %[[EA]]
 // CHECK-NEXT: }
-// CHECK: else {
-// CHECK-NEXT: scf.yield %[[ZERO]]
+// CHECK-NEXT: (| %[[TA:[0-9]+]]) {
+// CHECK-NEXT: -> %1 | %[[TA]]
 // CHECK-NEXT: }
-// CHECK-NEXT: func.return %[[RESULT]]
+// CHECK-NEXT: -> %[[RESULT]]

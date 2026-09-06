@@ -1,4 +1,4 @@
-// RUN: tir opt --pass restructure --verify %s | filecheck %s
+// RUN: tir opt --pass restructure-nodes --verify %s | filecheck %s
 
 // One arm jumping straight to the join: the empty arm yields the value that
 // already reached the branch.
@@ -17,11 +17,11 @@ module {
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @maybe_double
 // CHECK-NOT: br
-// CHECK: %[[R:[0-9]+]] = scf.if %[[C:[0-9]+]] -> !i32 {
+// CHECK: %[[R:[0-9]+]] = scf.switch %[[C:[0-9]+]] {
+// CHECK-NEXT: -> %{{[0-9]+}}
+// CHECK-NEXT: }
+// CHECK-NEXT: {
 // CHECK-NEXT: %[[T:[0-9]+]] = addi
-// CHECK-NEXT: scf.yield %[[T]]
+// CHECK-NEXT: -> %[[T]]
 // CHECK-NEXT: }
-// CHECK-NEXT: else {
-// CHECK-NEXT: scf.yield %{{[0-9]+}}
-// CHECK-NEXT: }
-// CHECK-NEXT: func.return %[[R]]
+// CHECK-NEXT: -> %[[R]]

@@ -1,4 +1,4 @@
-// RUN: tir opt --pass instcombine %s | filecheck %s
+// RUN: tir opt --pass restructure-nodes,instcombine-nodes %s | filecheck %s
 
 // The call observes the state the first store published, so the second store
 // does not overwrite it unobserved.
@@ -15,6 +15,6 @@ module {
   module_end
 }
 
-// CHECK-LABEL: %{{[0-9]+}} = func.func @f
-// CHECK: ptr.store %2,
-// CHECK: ptr.store %3,
+// CHECK-LABEL: %{{[0-9]+}} = func.func @f(%{{[0-9]+}}: !ptr.p<!i32>, %[[A:[0-9]+]]: !i32, %[[B:[0-9]+]]: !i32)
+// CHECK: ptr.store %[[A]],
+// CHECK: ptr.store %[[B]],

@@ -1,0 +1,47 @@
+// RUN: tir opt --pass destructure %s | tir interp -f count | filecheck --check-prefix=COUNT %s
+// RUN: tir opt --pass destructure %s | tir interp -f marker | filecheck --check-prefix=MARKER %s
+// RUN: tir opt --pass destructure --verify %s
+
+// The continue cone stores once per iteration and the exit cone stores once
+// on the way out: three iterations count to 3, and the marker written on exit
+// is written exactly when the loop stops.
+
+module {
+  %fn_count = func.func @count() -> !i32 {
+    %0 = constant {value = 0} : !i32
+    %1 = constant {value = 1} : !i32
+    %2 = constant {value = 3} : !i32
+    %3 | %4 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    | %5 = ptr.store %0, %3 | %4
+    %6 | %7 = scf.loop (%8 = %0 | %9 = %5) {
+      %10 = cmpi %8, %2 {predicate = "slt"} : !i1
+      %11 = addi %8, %1 : !i32
+      %12 | %15 = ptr.load %3 | %9 : !i32
+      %13 = addi %12, %1 : !i32
+      | %14 = ptr.store %13, %3 | %15
+      -> %10, %11, %8 | %14, %9
+    }
+    %16 = ptr.load %3 | %7 : !i32
+    func.return %16
+  }
+  %fn_marker = func.func @marker() -> !i32 {
+    %0 = constant {value = 0} : !i32
+    %1 = constant {value = 1} : !i32
+    %2 = constant {value = 3} : !i32
+    %3 = constant {value = 42} : !i32
+    %4 | %5 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    | %6 = ptr.store %0, %4 | %5
+    %7 | %8 = scf.loop (%9 = %0 | %10 = %6) {
+      %11 = cmpi %9, %2 {predicate = "slt"} : !i1
+      %12 = addi %9, %1 : !i32
+      | %13 = ptr.store %3, %4 | %10
+      -> %11, %12, %9 | %10, %13
+    }
+    %14 = ptr.load %4 | %8 : !i32
+    func.return %14
+  }
+  module_end
+}
+
+// COUNT: i32 3
+// MARKER: i32 42

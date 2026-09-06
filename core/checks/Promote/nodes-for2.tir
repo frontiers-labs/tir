@@ -19,7 +19,7 @@ module {
     ptr.store %zero, %t
     ptr.store %zero, %i
     %lb = ptr.load %i : !i32
-    %fin = scf.for %lb, %0, %one iter_args(%iv = %lb) -> !i32 {
+    %fin = scf.for_legacy %lb, %0, %one iter_args(%iv = %lb) -> !i32 {
       ptr.store %iv, %i
       %a = ptr.load %t : !i32
       %c = ptr.load %i : !i32
@@ -39,7 +39,7 @@ module {
 
 // CHECK: func.func @sum
 // CHECK-NOT: ptr.
-// CHECK: scf.for2
+// CHECK: scf.for
 // CHECK-NOT: ptr.
 
 // FOUR: i32 10

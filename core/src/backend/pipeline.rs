@@ -17,7 +17,7 @@ use crate::backend::lower::OpLoweringPass;
 use crate::backend::{ShuffleMachineOrderPass, TargetMachine};
 use crate::passes::{
     CheckUniqueSymbolsPass, DeadCodeEliminationPass, LowerMemoryIntrinsicsPass,
-    LowerPtrDisjointPass, MaterializeSymbolAddressesPass, RestructurePass, ThreadStatePass,
+    LowerPtrDisjointPass, MaterializeSymbolAddressesPass, RestructureNodesPass, VerifyDepsPass,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -129,17 +129,15 @@ fn module_prologue() -> PassManager {
         // A no-alias fact is mid-end vocabulary: no machine has an instruction
         // for it, so it becomes the range check it stands for.
         functions.add_pass(LowerPtrDisjointPass::new());
-        // Selection takes structured regions: a function that still holds a raw
-        // CFG (a `.tir` input, or JIT text) is raised here. One that is already
-        // a single structured block is left alone.
-        functions.add_pass(RestructurePass::new());
-        // Memory order reaches selection as the chains the mid-end drew. A
-        // function that arrives without them — a `.tir` input, JIT text — is
-        // threaded here, once it is structured, so selection sees one chain
-        // model always. Both run while the module is whole: they read a
-        // function's calls, and by the time it is lowered one at a time the λ
-        // those name may already be a machine symbol.
-        functions.add_pass(ThreadStatePass::new());
+        // Selection takes an unordered body: a function that still holds a raw
+        // CFG (a `.tir` input, or JIT text) is converted here, memory order
+        // constructed on the way. One already unordered is left alone, and
+        // its chains are checked rather than rebuilt. Both run while the
+        // module is whole: they read a function's calls, and by the time it is
+        // lowered one at a time the λ those name may already be a machine
+        // symbol.
+        functions.add_pass(RestructureNodesPass::new());
+        functions.add_pass(VerifyDepsPass::new());
     }
     // Object symbols are unique by name, so overloads must already be mangled.
     pm.add_pass(CheckUniqueSymbolsPass::new());

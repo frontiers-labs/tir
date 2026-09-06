@@ -1,43 +1,50 @@
-// RUN: tir opt --pass instcombine %s | filecheck %s
-// RUN: tir opt --pass func.func(instcombine) %s | filecheck %s
+// RUN: tir opt --pass func.func(instcombine-nodes) %s | filecheck %s
 
 // A comparison and its complement over the same operands are one fact: knowing
 // `a < b` is knowing `a >= b` is false, in either arm and in either direction.
+// Each arm masks the complement with its own operand, so the arms share no term
+// that could be spelled once outside the gate.
 
 module {
-  %fn_ordering = func.func @ordering(%a: !i32, %b: !i32) -> !i1 {
+  %fn_ordering = func.func @ordering(%a: !i32, %b: !i32, %k: !i1, %m: !i1) -> !i1 {
     %c = cmpi %a, %b {predicate = "slt"} : !i1
-    %r = scf.if %c -> !i1 {
-      %t = cmpi %a, %b {predicate = "sge"} : !i1
-      scf.yield %t
-    } else {
+    %r = scf.switch %c {
       %e = cmpi %a, %b {predicate = "sge"} : !i1
-      scf.yield %e
+      %x = xori %e, %m : !i1
+      -> %x
     }
-    func.return %r
+    {
+      %t = cmpi %a, %b {predicate = "sge"} : !i1
+      %y = xori %t, %k : !i1
+      -> %y
+    }
+    -> %r
   }
-  %fn_equality = func.func @equality(%a: !i32, %b: !i32) -> !i1 {
+  %fn_equality = func.func @equality(%a: !i32, %b: !i32, %k: !i1, %m: !i1) -> !i1 {
     %c = cmpi %a, %b {predicate = "eq"} : !i1
-    %r = scf.if %c -> !i1 {
-      %t = cmpi %a, %b {predicate = "ne"} : !i1
-      scf.yield %t
-    } else {
+    %r = scf.switch %c {
       %e = cmpi %a, %b {predicate = "ne"} : !i1
-      scf.yield %e
+      %x = xori %e, %m : !i1
+      -> %x
     }
-    func.return %r
+    {
+      %t = cmpi %a, %b {predicate = "ne"} : !i1
+      %y = xori %t, %k : !i1
+      -> %y
+    }
+    -> %r
   }
   module_end
 }
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @ordering
-// CHECK: scf.if
-// CHECK-NEXT: constant {value = 0} : !i1
-// CHECK: else
+// CHECK: scf.switch
 // CHECK-NEXT: constant {value = 1} : !i1
+// CHECK: {
+// CHECK-NEXT: constant {value = 0} : !i1
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @equality
-// CHECK: scf.if
-// CHECK-NEXT: constant {value = 0} : !i1
-// CHECK: else
+// CHECK: scf.switch
 // CHECK-NEXT: constant {value = 1} : !i1
+// CHECK: {
+// CHECK-NEXT: constant {value = 0} : !i1

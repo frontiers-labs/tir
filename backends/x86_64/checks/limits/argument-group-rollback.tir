@@ -17,4 +17,4 @@ module {
 }
 
 // CHECK-COUNT-3: x86_64.mov_load_disp
-// CHECK:         x86_64.add {dst = %{{[0-9]+}}:{{.*}}, dst_tied = %{{[0-9]+}}:{{.*}}, src = %13:rdx}
+// CHECK:         x86_64.add {dst = %{{[0-9]+}}:{{.*}}, dst_tied = %{{[0-9]+}}:{{.*}}, src = %{{[0-9]+}}:rdx}

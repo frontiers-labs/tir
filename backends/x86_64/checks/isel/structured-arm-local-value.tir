@@ -7,23 +7,26 @@
 
 module {
   %fn_no_escape = func.func @no_escape(%c: !i1, %a: !i64, %b: !i64) -> !i64 {
-    %r = scf.if %c args(%a, %b) -> !i64 (%p, %q) {
-      %x = muli %p, %q : !i64
-      %y = addi %x, %p : !i64
-      scf.yield %y
-    } else (%u, %v) {
-      scf.yield %u
-    }
+    cfg.cond_br %c, ^bb1, ^bb2
+  ^bb1:
+    %x = muli %a, %b : !i64
+    %y = addi %x, %a : !i64
+    cfg.br ^bb3(%y : !i64)
+  ^bb2:
+    cfg.br ^bb3(%a : !i64)
+  ^bb3(%r: !i64):
     %z = muli %a, %b : !i64
-    func.return %z
+    %w = subi %r, %z : !i64
+    func.return %w
   }
   module_end
 }
 
-// CHECK: ^[[THEN:bb[0-9]+]](%{{[0-9]+}}: !x86_64.GPR, %{{[0-9]+}}: !x86_64.GPR):
+// CHECK: ^[[THEN:bb[0-9]+]]:
 // CHECK-NEXT: x86_64.imul {dst = %[[ARM:[0-9]+]]:GPR
 // CHECK-NEXT: x86_64.add
 // CHECK: ^{{bb[0-9]+}}(%{{[0-9]+}}: !x86_64.GPR):
 // CHECK-NEXT: x86_64.imul {dst = %{{[0-9]+}}:GPR, dst_tied = %{{[0-9]+}}:GPR, src = %{{[0-9]+}}:GPR}
+// CHECK-NEXT: x86_64.sub
 // CHECK-NEXT: asm.vret
 // CHECK-NOT: %[[ARM]]:GPR

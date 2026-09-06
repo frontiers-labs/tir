@@ -1,8 +1,9 @@
 // RUN: fcc compile --stage ir -o - %s | filecheck %s
 
 // Three shapes the counted-loop recognition refuses, each falling back to the
-// blocks and branches the frontend used to emit and so to `restructure`'s
-// `scf.while`. A refusal is a missed optimisation, never a miscompilation.
+// blocks and branches the frontend used to emit and so to `restructure-nodes`'s
+// `scf.loop`, whose body re-reads the counter and tests it itself. A refusal is
+// a missed optimisation, never a miscompilation.
 
 void sink(int *p);
 
@@ -54,13 +55,13 @@ int variable_step(int s) {
 
 // CHECK: func.func @mutated_counter
 // CHECK-NOT: scf.for
-// CHECK: scf.while
+// CHECK: scf.loop
 // CHECK: func.func @escaping_counter
 // CHECK-NOT: scf.for
-// CHECK: scf.while
+// CHECK: scf.loop
 // CHECK: func.func @mutated_bound
 // CHECK-NOT: scf.for
-// CHECK: scf.while
+// CHECK: scf.loop
 // CHECK: func.func @variable_step
 // CHECK-NOT: scf.for
-// CHECK: scf.while
+// CHECK: scf.loop

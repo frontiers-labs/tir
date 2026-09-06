@@ -1,4 +1,4 @@
-// RUN: tir opt --pass inline<3,0> --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(restructure-nodes),inline<3,0> --verify %s | filecheck %s
 
 // Cost is the op count of the body and its nested regions, less the constants a
 // caller would have folded anyway and the terminators. `small` is three and is
