@@ -103,7 +103,13 @@ impl Context {
     /// Region results sit in no use list; rename `old` to `new` in the result
     /// list of `region` and every region nested in it, except regions under
     /// `except`, which keep naming the value they define.
-    fn rename_region_results(&self, region: RegionId, old: ValueId, new: ValueId, except: &[OpId]) {
+    pub(crate) fn rename_region_results(
+        &self,
+        region: RegionId,
+        old: ValueId,
+        new: ValueId,
+        except: &[OpId],
+    ) {
         for nested in self.nested_regions(region) {
             let handle = self.get_region(nested);
             if handle

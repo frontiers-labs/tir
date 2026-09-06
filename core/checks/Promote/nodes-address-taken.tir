@@ -1,0 +1,22 @@
+// RUN: tir opt --pass restructure-nodes,promote-nodes --verify %s | filecheck %s
+
+// A slot handed to a call is memory something outside the function can read,
+// so it stays: the allocation and both accesses are untouched.
+
+module {
+  %fn_sink = func.declare @sink(!ptr.p<!i32>) -> !unit
+  %fn_f = func.func @f(%0: !i32) -> !i32 {
+    %1 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    ptr.store %0, %1
+    func.call %fn_sink(%1 : !ptr.p<!i32>)
+    %2 = ptr.load %1 : !i32
+    func.return %2
+  }
+  module_end
+}
+
+// CHECK: func.func @f
+// CHECK: ptr.alloca
+// CHECK: ptr.store
+// CHECK: func.call
+// CHECK: ptr.load

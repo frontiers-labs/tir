@@ -4,6 +4,8 @@
 // RUN: tir interp %s -f sum --args=0 | filecheck --check-prefix=ZERO %s
 // RUN: tir opt --pass restructure-nodes %s | tir interp -f sum --args=0 | filecheck --check-prefix=ZERO %s
 // RUN: tir opt --pass restructure-nodes --shuffle-seed 1 %s | tir interp -f sum --args=4 | filecheck --check-prefix=FOUR %s
+// RUN: tir opt --pass restructure-nodes --shuffle-seed 7 %s | tir interp -f sum --args=4 | filecheck --check-prefix=FOUR %s
+// RUN: tir opt --pass restructure-nodes,shuffle-state %s | tir interp -f sum --args=4 | filecheck --check-prefix=FOUR %s
 
 // The counted loop `raise-loops` emits: the counter is carried and written back
 // to its slot at the top of every iteration. It becomes `scf.for2` with the

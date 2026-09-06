@@ -1,0 +1,41 @@
+// RUN: tir opt --pass restructure-nodes,promote-nodes,verify-deps --verify %s | filecheck %s
+// RUN: tir interp %s -f sum --args=4 | filecheck --check-prefix=FOUR %s
+// RUN: tir opt --pass restructure-nodes,promote-nodes %s | tir interp -f sum --args=4 | filecheck --check-prefix=FOUR %s
+// RUN: tir opt --pass restructure-nodes,promote-nodes %s | tir interp -f sum --args=0 | filecheck --check-prefix=ZERO %s
+// RUN: tir opt --pass restructure-nodes --shuffle-seed 5 %s | tir opt --pass promote-nodes | tir interp -f sum --args=4 | filecheck --check-prefix=FOUR %s
+
+// A do-while accumulating into a slot. The body reads the slot before writing
+// it and the read after the loop sees the last write, so the slot becomes a
+// carried port: entered on the store before the loop, the body's write is the
+// value the next iteration carries and the value the loop leaves with.
+
+module {
+  %fn_sum = func.func @sum(%n: !i32) -> !i32 {
+    %acc = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    %zero = constant {value = 0} : !i32
+    %one = constant {value = 1} : !i32
+    ptr.store %zero, %acc
+    cfg.br ^body(%zero : !i32)
+  ^body(%i: !i32):
+    %a = ptr.load %acc : !i32
+    %s = addi %a, %i : !i32
+    ptr.store %s, %acc
+    %next = addi %i, %one : !i32
+    %more = cmpi %next, %n {predicate = "slt"} : !i1
+    cfg.cond_br %more, ^body(%next : !i32), ^exit
+  ^exit:
+    %r = ptr.load %acc : !i32
+    func.return %r
+  }
+  module_end
+}
+
+// CHECK: func.func @sum
+// CHECK-NOT: ptr.
+// CHECK: scf.loop (%{{[0-9]+}} = %{{[0-9]+}}, %[[P:[0-9]+]] = %[[INIT:[0-9]+]] | %{{[0-9]+}} = %{{[0-9]+}}) {
+// CHECK: %[[S:[0-9]+]] = addi %[[P]], %{{[0-9]+}} : !i32
+// CHECK: -> %{{[0-9]+}}, %{{[0-9]+}}, %[[S]], %{{[0-9]+}}, %[[S]] | %{{[0-9]+}}, %{{[0-9]+}}
+// CHECK-NEXT: }
+
+// FOUR: i32 6
+// ZERO: i32 0

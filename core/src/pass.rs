@@ -238,9 +238,10 @@ impl std::fmt::Display for PassError {
                 write!(f, "operation '{name}' does not have a parent block")
             }
             PassError::RegionKind { pass, op, expected } => {
-                let (wanted, held) = match expected {
-                    RegionKind::Nodes => ("an unordered", "an ordered"),
-                    _ => ("an ordered", "an unordered"),
+                let (wanted, held) = if *expected == RegionKind::Nodes {
+                    ("an unordered", "an ordered")
+                } else {
+                    ("an ordered", "an unordered")
                 };
                 write!(
                     f,
@@ -290,9 +291,15 @@ impl PassTarget {
         })
     }
 
-    /// Targets operations of type `T` whose regions are all of `kind`; the
-    /// pass manager refuses to run the pass on one holding the other kind.
+    /// Targets operations of type `T` whose regions are all of `kind`, `Blocks`
+    /// or `Nodes`; the pass manager refuses to run the pass on one holding the
+    /// other kind.
     pub fn operation_on<T: Operation>(kind: RegionKind) -> Self {
+        assert_ne!(
+            kind,
+            RegionKind::Any,
+            "a pass walking either kind declares none"
+        );
         Self::Operation(OperationTarget {
             dialect: T::dialect(),
             name: T::name(),
@@ -316,11 +323,7 @@ impl PassTarget {
         else {
             return None;
         };
-        let wants_nodes = match kind {
-            RegionKind::Blocks => false,
-            RegionKind::Nodes => true,
-            RegionKind::Any => return None,
-        };
+        let wants_nodes = *kind == RegionKind::Nodes;
         op.regions()
             .iter()
             .any(|&region| context.get_region(region).is_nodes() != wants_nodes)
@@ -543,6 +546,11 @@ impl Rewriter {
     }
 
     pub fn erase_op(&mut self, target: &OperationRef) -> Result<(), PassError> {
+        if let Some(region) = self.context.parent_nodes_region(target.op.id) {
+            self.context.remove_from_region(region, target.op.id);
+            self.context.remove_operation(target.op.id);
+            return Ok(());
+        }
         let block = self.block_of(target)?;
         if block.remove_op(target.op.id) {
             self.context.remove_operation(target.op.id);

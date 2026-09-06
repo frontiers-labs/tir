@@ -293,7 +293,7 @@ pub(crate) fn verify_state_forks(context: &Context, op_id: OpId) -> Result<(), E
 /// [`InstrInfo`](crate::backend::InstrInfo) effects; the memory interfaces are
 /// what a mid-end operation has instead. One rule, read off whichever the
 /// operation carries, so the discipline is the same on both sides of selection.
-fn observes_only(op: &OpHandle) -> bool {
+pub(crate) fn observes_only(op: &OpHandle) -> bool {
     if op.is::<crate::state::JoinOp>() {
         return true;
     }

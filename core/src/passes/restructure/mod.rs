@@ -30,7 +30,7 @@ mod ports;
 
 use crate::analysis::AnalysisManager;
 use crate::func::FuncOp;
-use crate::{Context, OperationRef, Pass, PassError, PassTarget, Rewriter};
+use crate::{Context, OperationRef, Pass, PassError, PassTarget, RegionKind, Rewriter};
 
 pub struct RestructurePass;
 
@@ -54,7 +54,7 @@ impl Pass for RestructurePass {
     }
 
     fn target(&self) -> PassTarget {
-        PassTarget::operation::<FuncOp>()
+        PassTarget::operation_on::<FuncOp>(RegionKind::Blocks)
     }
 
     fn run(

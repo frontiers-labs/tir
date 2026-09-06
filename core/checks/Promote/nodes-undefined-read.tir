@@ -1,0 +1,24 @@
+// RUN: tir opt --pass restructure-nodes,promote-nodes,verify-deps --verify %s | filecheck %s
+// RUN: tir opt --pass restructure-nodes,promote-nodes %s | tir opt --verify | filecheck %s
+
+// A slot read before anything writes it. The value nothing wrote has no
+// spelling, so that read stays on the allocation, while the write after it and
+// the read of that write go.
+
+module {
+  %fn_f = func.func @f(%v: !i32) -> !i32 {
+    %p = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    %a = ptr.load %p : !i32
+    ptr.store %v, %p
+    %b = ptr.load %p : !i32
+    %r = addi %a, %b : !i32
+    func.return %r
+  }
+  module_end
+}
+
+// CHECK: func.func @f(%[[V:[0-9]+]]: !i32)
+// CHECK: %[[P:[0-9]+]] = ptr.alloca
+// CHECK: %[[A:[0-9]+]] | %[[D:[0-9]+]] = ptr.load %[[P]] | %{{[0-9]+}} : !i32
+// CHECK-NOT: ptr.
+// CHECK: addi %[[A]], %[[V]]

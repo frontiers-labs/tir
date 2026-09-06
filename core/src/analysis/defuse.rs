@@ -170,14 +170,12 @@ impl DefUse {
         let mut result = Self::default();
         let mut stack = context.get_op(root.into()).regions().to_vec();
         while let Some(region) = stack.pop() {
-            for block in context.get_region(region).iter(context.clone()) {
-                for op_id in block.op_ids() {
-                    let instance = context.get_op(op_id);
-                    stack.extend(instance.regions().iter().copied());
-                    result.ops.push(op_id);
-                    for def in instance.results() {
-                        result.defs.entry(def.number()).or_default().push(op_id);
-                    }
+            for op_id in context.get_region(region).op_ids() {
+                let instance = context.get_op(op_id);
+                stack.extend(instance.regions().iter().copied());
+                result.ops.push(op_id);
+                for def in instance.results() {
+                    result.defs.entry(def.number()).or_default().push(op_id);
                 }
             }
         }

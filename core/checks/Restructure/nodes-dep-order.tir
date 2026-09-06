@@ -2,6 +2,8 @@
 // RUN: tir interp %s | filecheck --check-prefix=VALUE %s
 // RUN: tir opt --pass restructure-nodes %s | tir interp | filecheck --check-prefix=VALUE %s
 // RUN: tir opt --pass restructure-nodes --shuffle-seed 1 %s | tir interp | filecheck --check-prefix=VALUE %s
+// RUN: tir opt --pass restructure-nodes --shuffle-seed 7 %s | tir interp | filecheck --check-prefix=VALUE %s
+// RUN: tir opt --pass restructure-nodes,shuffle-state %s | tir interp | filecheck --check-prefix=VALUE %s
 
 // `*p = 1; x = *p; *p = 2` on ordered blocks carries no dependencies. The
 // conversion constructs them before the block order is gone: the read observes

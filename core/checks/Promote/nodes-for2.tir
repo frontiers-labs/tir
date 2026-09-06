@@ -1,0 +1,46 @@
+// RUN: tir opt --pass restructure-nodes,promote-nodes,verify-deps --verify %s | filecheck %s
+// RUN: tir interp %s -f sum --args=4 | filecheck --check-prefix=FOUR %s
+// RUN: tir opt --pass restructure-nodes,promote-nodes %s | tir interp -f sum --args=4 | filecheck --check-prefix=FOUR %s
+// RUN: tir opt --pass restructure-nodes,promote-nodes %s | tir interp -f sum --args=0 | filecheck --check-prefix=ZERO %s
+// RUN: tir opt --pass restructure-nodes --shuffle-seed 2 %s | tir opt --pass promote-nodes | tir interp -f sum --args=4 | filecheck --check-prefix=FOUR %s
+
+// Two slots under a counted loop: the counter's slot is written at the top of
+// every iteration and read back, the total's is read then written. Both become
+// ports of the counted loop. A counted loop's exit values are its ports, so
+// the store inside the body reaches the read after the loop through the port
+// the next iteration would have taken.
+
+module {
+  %fn_sum = func.func @sum(%0: !i32) -> !i32 {
+    %i = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    %t = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    %zero = constant {value = 0} : !i32
+    %one = constant {value = 1} : !i32
+    ptr.store %zero, %t
+    ptr.store %zero, %i
+    %lb = ptr.load %i : !i32
+    %fin = scf.for %lb, %0, %one iter_args(%iv = %lb) -> !i32 {
+      ptr.store %iv, %i
+      %a = ptr.load %t : !i32
+      %c = ptr.load %i : !i32
+      %s = addi %a, %c : !i32
+      ptr.store %s, %t
+      %next = addi %iv, %one : !i32
+      scf.yield %next
+    }
+    ptr.store %fin, %i
+    %r = ptr.load %t : !i32
+    %k = ptr.load %i : !i32
+    %out = addi %r, %k : !i32
+    func.return %out
+  }
+  module_end
+}
+
+// CHECK: func.func @sum
+// CHECK-NOT: ptr.
+// CHECK: scf.for2
+// CHECK-NOT: ptr.
+
+// FOUR: i32 10
+// ZERO: i32 0

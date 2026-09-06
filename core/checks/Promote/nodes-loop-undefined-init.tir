@@ -1,0 +1,34 @@
+// RUN: tir opt --pass restructure-nodes,promote-nodes,verify-deps --verify %s | filecheck %s
+// RUN: tir opt --pass restructure-nodes,promote-nodes %s | tir opt --verify | filecheck %s
+
+// The slot is first written inside the loop, so the port's initial value is
+// what nothing wrote: a read of the untouched allocation, placed where the
+// loop reads the memory it is entered on. Every other access goes. The loop
+// takes that read as an operand, so the interpreter, which refuses a read of
+// uninitialized memory, cannot run the result; the ordered `promote` leaves the
+// same read behind.
+
+module {
+  %fn_f = func.func @f(%n: !i32) -> !i32 {
+    %p = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    %zero = constant {value = 0} : !i32
+    %one = constant {value = 1} : !i32
+    cfg.br ^body(%zero : !i32)
+  ^body(%i: !i32):
+    ptr.store %i, %p
+    %next = addi %i, %one : !i32
+    %more = cmpi %next, %n {predicate = "slt"} : !i1
+    cfg.cond_br %more, ^body(%next : !i32), ^exit
+  ^exit:
+    %r = ptr.load %p : !i32
+    func.return %r
+  }
+  module_end
+}
+
+// CHECK: func.func @f
+// CHECK: %[[P:[0-9]+]] = ptr.alloca
+// CHECK: %[[U:[0-9]+]] | %{{[0-9]+}} = ptr.load %[[P]] | %{{[0-9]+}} : !i32
+// CHECK: scf.loop (%{{[0-9]+}} = %{{[0-9]+}}, %{{[0-9]+}} = %[[U]] | {{.*}}) {
+// CHECK-NOT: ptr.
+
