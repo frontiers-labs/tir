@@ -101,6 +101,18 @@ impl Driver<'_> {
             if instance.has_interface::<dyn ConstantLike>() {
                 continue;
             }
+            // A join of one state is that state: the reads it merged are gone.
+            if instance.is::<crate::state::JoinOp>()
+                && let [first, rest @ ..] = instance.dep_operands().as_slice()
+                && rest.iter().all(|other| other == first)
+            {
+                for result in instance.dep_results() {
+                    self.context.replace_value_uses(result, *first);
+                    self.context
+                        .rename_region_results(region, result, *first, &[]);
+                }
+                continue;
+            }
             for result in instance.value_results() {
                 let replaced = self.rewire_nodes(result, region, extraction, memo)?;
                 if replaced {

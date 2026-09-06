@@ -397,11 +397,30 @@ An axiom whose RHS nests a `Theta` under a `Theta` unrolls the loop, so it
 would never saturate; the loader rejects it structurally, naming the axiom.
 Unrolling is a structural transform on the IR, not a rewrite rule.
 
+The unordered form seeds a loop as `#loop(init, next, exit, pred)` per carried
+port, the port read inside `next`, `exit` and `pred` as `#port(l)`, whose
+binder names the loop and position. A rule over a `#loop` carries the
+`LoopInvariant` obligation: the `#loop` must be the whole of the side it is
+on, and the induction discharges three equivalences with `#port(l)` a var
+shared by both sides: the initial binding (`init` on each side agree), the
+transition (`next` on each side agree, the ports assumed equal), and the exit
+projection where `pred` is false. Against a loop-free right-hand side `r` the
+port is assumed equal to `r` itself, so `#loop(x, #port(l), #port(l), p) => x`
+proves and `#loop(x, #port(l), e, p) => x` is refuted at the exit: an
+invariant continue value says nothing about the exit (initial 0, continue
+port, exit 1, predicate false produces 1). A proof is a value equality, not an
+erasure license: a loop's termination and effects are not the prover's to
+decide. `tir prove FILE.pdl` runs these proofs over a file.
+
 ### The rule language
 
 PDL is the one rule language, and it names two vocabularies that stay apart by
 syntax. `dialect.op(...)` matches an op identity; `#name(...)` matches a
 semantic operator, which is any `SymKind`. An axiom is written in the second.
+An op term spells dependency operands after `|`, as the printer does:
+`ptr.load(a | s)`. A `#switch(p; a, b, ...)` separates its predicate from its
+arms with `;`, and is the n-ary form of `#if`; a `#port(l)` sits under the
+`#loop` whose carried value it reads.
 
 ```
 rule name: lhs => rhs [where guard, ...] [proof smt|trusted|definitional]

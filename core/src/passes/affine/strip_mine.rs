@@ -214,13 +214,9 @@ fn strip_mine_nodes(
         .id();
     let end = b::addi(context, base.id(), stride.result(), ty).build();
     context.add(tile_body, end.id());
-    let inner = counted_loop(
-        crate::clone::clone_region(context, body),
-        base.id(),
-        end.result(),
-        step,
-        &dep_ports,
-    );
+    let inner_body = crate::clone::clone_region(context, body);
+    retarget_predicate(context, inner_body, end.result());
+    let inner = counted_loop(inner_body, base.id(), end.result(), step, &dep_ports);
     context.add(tile_body, inner.id());
     let boolean = crate::builtin::IntegerType::new(context, 1);
     let compare = b::cmpi(context, base.id(), last.result(), Predicate::Slt, boolean).build();
@@ -255,4 +251,13 @@ fn strip_mine_nodes(
     }
     rewriter.erase_op(&OperationRef::new(handle))?;
     Ok((main.id(), remainder.id()))
+}
+
+/// Point a copied counted body's predicate at the bound its new loop counts
+/// to: the copy compares the counter with the bound the original had.
+fn retarget_predicate(context: &Context, body: RegionId, upper: ValueId) {
+    let predicate = context.get_region(body).value_results()[0];
+    if let Some(compare) = context.get_value(predicate).defining_op() {
+        context.set_op_operand(compare, 1, upper);
+    }
 }

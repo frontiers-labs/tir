@@ -14,7 +14,7 @@ pub mod shuffle_state;
 pub mod symbol_uniqueness;
 pub mod thread_state;
 
-pub use affine::AffineSchedulePass;
+pub use affine::{AffineSchedulePass, strip_mine};
 pub use dce::DeadCodeEliminationPass;
 pub use inline::{InlineBudget, InlinePass};
 pub use instcombine::InstCombineNodesPass;

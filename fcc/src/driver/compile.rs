@@ -222,48 +222,7 @@ pub(super) fn emit_machine_code(
         false,
     );
 
-    let mut pm = tir::PassManager::new();
-    if let Some(spec) = &opts.pipeline {
-        pm = tir::parse_pipeline(spec).unwrap_or_else(|e| {
-            eprintln!("fcc: error: {e}");
-            std::process::exit(1);
-        });
-        // Keep the IR in the canonical form required by the backend even when
-        // callers select a reduced mid-end pipeline. Without this final
-        // cleanup, unfolded address arithmetic can reach instruction
-        // selection and change the program's observable behavior.
-        pm.nest::<tir::func::FuncOp>()
-            .add_pass(tir::passes::InstCombinePass::new());
-    } else if let Some(rounds) = opts.opt_level.rounds() {
-        let fixpoint = pm.fixpoint(rounds.cap);
-        fixpoint.add_pass(tir::passes::InlinePass::new(rounds.inline));
-        let round = fixpoint.nest::<tir::func::FuncOp>();
-        // Inlining is the only thing that makes a slot promotable that was
-        // not, so promote follows it inside the round.
-        round.add_pass(tir::passes::PromotePass::new());
-        round.add_pass(tir::passes::ThreadStatePass::new());
-        round.add_pass(tir::passes::InstCombinePass::new());
-        // Inlining is what makes a gate's decision a constant, and the arms it
-        // then cannot reach are what the rest of the round would walk.
-        round.add_pass(tir::passes::DeadCodeEliminationPass::new());
-        if rounds.affine {
-            // Loop scheduling reads the chains too, and what it leaves behind — a
-            // rebuilt nest, an unrolled body — is address arithmetic nobody has
-            // folded yet, so the simplifier runs once more over it.
-            round.add_pass(tir::passes::AffineSchedulePass::new());
-            round.add_pass(tir::passes::InstCombinePass::new());
-        }
-    } else {
-        // -O0 runs no round. What is left is the normalising simplifier every
-        // pipeline needs: instruction selection reads unfolded address
-        // arithmetic as a different program, which is a backend defect this
-        // level inherits.
-        pm.nest::<tir::func::FuncOp>()
-            .add_pass(tir::passes::InstCombinePass::new());
-    }
-    // Data lowering consumes the δ ops, so the functions that name them must
-    // hold symbol addresses of their own by then.
-    pm.add_pass(tir::passes::MaterializeSymbolAddressesPass::new());
+    let mut pm = mid_end(opts);
     pm.run(&context, context.get_op(module.id()))
         .unwrap_or_else(|e| {
             eprintln!("fcc: error: control-flow lowering failed: {e}");
@@ -446,4 +405,68 @@ pub(super) fn parse_source(
         }
         std::process::exit(1);
     })
+}
+
+/// The simplifier for the body kind the pipeline produces.
+fn add_instcombine(pm: &mut tir::PassManager, nodes: bool) {
+    if nodes {
+        pm.add_pass(tir::passes::InstCombineNodesPass::new());
+    } else {
+        pm.add_pass(tir::passes::InstCombinePass::new());
+    }
+}
+
+/// The mid-end pipeline the driver options ask for, ending in the data
+/// lowering every pipeline needs.
+pub(super) fn mid_end(opts: &DriverOptions) -> tir::PassManager {
+    let mut pm = tir::PassManager::new();
+    if let Some(spec) = &opts.pipeline {
+        pm = tir::parse_pipeline(spec).unwrap_or_else(|e| {
+            eprintln!("fcc: error: {e}");
+            std::process::exit(1);
+        });
+        // Keep the IR in the canonical form required by the backend even when
+        // callers select a reduced mid-end pipeline. Without this final
+        // cleanup, unfolded address arithmetic can reach instruction
+        // selection and change the program's observable behavior.
+        add_instcombine(pm.nest::<tir::func::FuncOp>(), opts.nodes);
+    } else if let Some(rounds) = opts.opt_level.rounds() {
+        let fixpoint = pm.fixpoint(rounds.cap);
+        fixpoint.add_pass(tir::passes::InlinePass::new(rounds.inline));
+        let round = fixpoint.nest::<tir::func::FuncOp>();
+        // Inlining is the only thing that makes a slot promotable that was
+        // not, so promote follows it inside the round.
+        if opts.nodes {
+            // The unordered pipeline: the chain the conversion built is kept
+            // and checked, never drawn again, and the simplifier's own sweep
+            // takes what nothing demands.
+            round.add_pass(tir::passes::PromoteNodesPass::new());
+            round.add_pass(tir::passes::VerifyDepsPass::new());
+            round.add_pass(tir::passes::InstCombineNodesPass::new());
+        } else {
+            round.add_pass(tir::passes::PromotePass::new());
+            round.add_pass(tir::passes::ThreadStatePass::new());
+            round.add_pass(tir::passes::InstCombinePass::new());
+            // Inlining is what makes a gate's decision a constant, and the arms it
+            // then cannot reach are what the rest of the round would walk.
+            round.add_pass(tir::passes::DeadCodeEliminationPass::new());
+        }
+        if rounds.affine {
+            // Loop scheduling reads the chains too, and what it leaves behind — a
+            // rebuilt nest, an unrolled body — is address arithmetic nobody has
+            // folded yet, so the simplifier runs once more over it.
+            round.add_pass(tir::passes::AffineSchedulePass::new());
+            add_instcombine(round, opts.nodes);
+        }
+    } else {
+        // -O0 runs no round. What is left is the normalising simplifier every
+        // pipeline needs: instruction selection reads unfolded address
+        // arithmetic as a different program, which is a backend defect this
+        // level inherits.
+        add_instcombine(pm.nest::<tir::func::FuncOp>(), opts.nodes);
+    }
+    // Data lowering consumes the δ ops, so the functions that name them must
+    // hold symbol addresses of their own by then.
+    pm.add_pass(tir::passes::MaterializeSymbolAddressesPass::new());
+    pm
 }
