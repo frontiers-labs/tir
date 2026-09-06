@@ -6,7 +6,7 @@
 
 module {
   %fn_bad = func.func @bad(%0: !i32, %1: !i64, %2: !i32) -> !i32 {
-    scf.for %0, %1, %2 {
+    scf.for_legacy %0, %1, %2 {
       scf.yield
     }
     %3 = constant {value = 0} : !i32

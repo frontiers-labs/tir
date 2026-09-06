@@ -21,8 +21,8 @@ module {data_layout = #data_layout} {
     %7 = constant {value = 4194320} : !i64
     %8 = constant {value = 4194320} : !i64
     %9 = constant {value = 4} : !i64
-    %10 = scf.for %3, %29, %6 iter_args(%11 = %3) -> !i32 {
-      %12 = scf.for %3, %5, %6 iter_args(%13 = %3) -> !i32 {
+    %10 = scf.for_legacy %3, %29, %6 iter_args(%11 = %3) -> !i32 {
+      %12 = scf.for_legacy %3, %5, %6 iter_args(%13 = %3) -> !i32 {
         %14 = extsi %11 : !i64
         %15 = extsi %13 : !i64
         %16 = muli %14, %7 : !i64
@@ -55,11 +55,11 @@ module {data_layout = #data_layout} {
 // CHECK-NEXT: %[[COVERED:[0-9]+]] = muli %[[TILES]], %[[T]]
 // CHECK-NEXT: %[[LAST:[0-9]+]] = addi %[[LB]], %[[COVERED]]
 // The whole tiles run first, and the symbolic dimension runs inside each.
-// CHECK-NEXT: %[[FINAL:[0-9]+]] | %[[S0:[0-9]+]], %[[S1:[0-9]+]] = scf.for %[[LB]], %[[LAST]], %[[T]] iter_args(%[[TO:[0-9]+]] = %[[LB]]
+// CHECK-NEXT: %[[FINAL:[0-9]+]] | %[[S0:[0-9]+]], %[[S1:[0-9]+]] = scf.for_legacy %[[LB]], %[[LAST]], %[[T]] iter_args(%[[TO:[0-9]+]] = %[[LB]]
 // CHECK-NEXT: %[[END:[0-9]+]] = addi %[[TO]], %[[T]]
-// CHECK-NEXT: scf.for %[[TO]], %[[END]], %{{[0-9]+}}
-// CHECK-NEXT: scf.for %{{[0-9]+}}, %[[N]], %{{[0-9]+}}
+// CHECK-NEXT: scf.for_legacy %[[TO]], %[[END]], %{{[0-9]+}}
+// CHECK-NEXT: scf.for_legacy %{{[0-9]+}}, %[[N]], %{{[0-9]+}}
 // Then one copy over what is left, entered where the tiles stopped and on the
 // chains they left behind.
-// CHECK: scf.for %[[FINAL]], %[[UB]], %{{[0-9]+}} iter_args(%{{[0-9]+}} = %[[FINAL]] | %{{[0-9]+}} = %[[S0]], %{{[0-9]+}} = %[[S1]])
-// CHECK-NEXT: scf.for %{{[0-9]+}}, %[[N]], %{{[0-9]+}}
+// CHECK: scf.for_legacy %[[FINAL]], %[[UB]], %{{[0-9]+}} iter_args(%{{[0-9]+}} = %[[FINAL]] | %{{[0-9]+}} = %[[S0]], %{{[0-9]+}} = %[[S1]])
+// CHECK-NEXT: scf.for_legacy %{{[0-9]+}}, %[[N]], %{{[0-9]+}}

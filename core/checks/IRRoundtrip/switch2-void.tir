@@ -4,7 +4,7 @@
 
 module {
   %fn_main = func.func @main(%0: !i32) {
-    scf.switch2 %0 {
+    scf.switch %0 {
       ->
     }
     {
@@ -15,7 +15,7 @@ module {
   module_end
 }
 
-// CHECK: scf.switch2 %{{[0-9]+}} {
+// CHECK: scf.switch %{{[0-9]+}} {
 // CHECK-NEXT: ->
 // CHECK-NEXT: }
 // CHECK-NEXT: {

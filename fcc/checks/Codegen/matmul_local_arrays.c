@@ -38,12 +38,12 @@ void matmul_local_arrays(int *out)
 }
 
 // CHECK-LABEL: func.func @matmul_local_arrays
-// CHECK: scf.for2
-// CHECK: scf.for2
-// CHECK: scf.for2 {{.*}} (%[[I:[0-9]+]] = {{.*}}) {
-// CHECK: scf.for2 {{.*}} (%[[J:[0-9]+]] = {{.*}}) {
+// CHECK: scf.for
+// CHECK: scf.for
+// CHECK: scf.for {{.*}} (%[[I:[0-9]+]] = {{.*}}) {
+// CHECK: scf.for {{.*}} (%[[J:[0-9]+]] = {{.*}}) {
 // CHECK: ptr.store %[[J]], %[[JSLOT:[0-9]+]] |
-// CHECK: scf.for2 {{.*}} (%[[K:[0-9]+]] = {{.*}}) {
+// CHECK: scf.for {{.*}} (%[[K:[0-9]+]] = {{.*}}) {
 // CHECK: extsi %[[I]]
 // CHECK-NEXT: %[[JL:[0-9]+]] | %{{[0-9]+}} = ptr.load %[[JSLOT]] |
 // CHECK-NEXT: extsi %[[JL]]

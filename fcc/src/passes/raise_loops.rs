@@ -516,7 +516,7 @@ fn raise(
 
     let region = context.create_region();
     rewriter.splice_region(shape.body, region.id());
-    let raised = scf::ForOpBuilder::new(context)
+    let raised = scf::ForLegacyOpBuilder::new(context)
         .lower_bound(lower.result())
         .upper_bound(upper)
         .step(step.result())

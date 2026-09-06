@@ -10,7 +10,7 @@ module {
     %5 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
     ptr.store %3, %4
     ptr.store %3, %5
-    scf.for %0, %1, %2 {
+    scf.for_legacy %0, %1, %2 {
       %6 = ptr.load %4 : !i32
       ptr.store %6, %5
       scf.yield
@@ -22,7 +22,7 @@ module {
 }
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @f
-// CHECK: | %[[X:[0-9]+]], %[[Y:[0-9]+]] = scf.for %0, %1, %2 iter_args(| %[[A:[0-9]+]] = %{{[0-9]+}}, %[[B:[0-9]+]] = %{{[0-9]+}}) {
+// CHECK: | %[[X:[0-9]+]], %[[Y:[0-9]+]] = scf.for_legacy %0, %1, %2 iter_args(| %[[A:[0-9]+]] = %{{[0-9]+}}, %[[B:[0-9]+]] = %{{[0-9]+}}) {
 // CHECK-NEXT: %{{[0-9]+}} | %[[A1:[0-9]+]] = ptr.load %{{[0-9]+}} | %[[A]] : !i32
 // CHECK-NEXT: | %[[B1:[0-9]+]] = ptr.store %{{[0-9]+}}, %{{[0-9]+}} | %[[B]]
 // CHECK-NEXT: scf.yield | %[[A1]], %[[B1]]

@@ -133,10 +133,10 @@ fn carries_ports(context: &Context, block: &BlockHandle, slot: ValueId) -> bool 
         if op.regions().is_empty() || !accesses_under(context, &op, slot) {
             return true;
         }
-        if !(op.is::<scf::ForOp>()
+        if !(op.is::<scf::ForLegacyOp>()
             || op.is::<scf::WhileOp>()
             || op.is::<scf::IfOp>()
-            || op.is::<scf::SwitchOp>())
+            || op.is::<scf::SwitchLegacyOp>())
         {
             return false;
         }

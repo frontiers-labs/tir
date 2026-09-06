@@ -14,4 +14,4 @@ int advance(int limit) {
 // CHECK: %[[ST:[0-9]+]] = constant {value = 2} : !i32
 // CHECK: %[[LB:[0-9]+]] | %{{[0-9]+}} = ptr.load %{{[0-9]+}} | %[[S:[0-9]+]] : !i32
 // CHECK-NEXT: %[[UB:[0-9]+]] | %{{[0-9]+}} = ptr.load %{{[0-9]+}} | %[[S]] : !i32
-// CHECK: scf.for2 %{{[0-9]+}} = %[[LB]] to %[[UB]] step %[[ST]] (
+// CHECK: scf.for %{{[0-9]+}} = %[[LB]] to %[[UB]] step %[[ST]] (

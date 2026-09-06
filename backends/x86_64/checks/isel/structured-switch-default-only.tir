@@ -6,7 +6,7 @@
 
 module {
   %fn_only_default = func.func @only_default(%p: !i32) -> !i32 {
-    %r = scf.switch2 %p () {
+    %r = scf.switch %p () {
       %d = addi %p, %p : !i32
       -> %d
     }

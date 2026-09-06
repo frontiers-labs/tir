@@ -528,7 +528,7 @@ impl<'a> Lowering<'a> {
         let region = self.context.create_region();
         region.add_block(block.id());
 
-        let mut builder = scf::ForOpBuilder::new(self.context)
+        let mut builder = scf::ForLegacyOpBuilder::new(self.context)
             .lower_bound(lower)
             .upper_bound(upper)
             .step(step)
@@ -565,7 +565,7 @@ impl<'a> Lowering<'a> {
         Ok(results[1..].to_vec())
     }
 
-    /// One unordered counted loop: a `scf.for2` whose body is a fresh graph
+    /// One unordered counted loop: a `scf.for` whose body is a fresh graph
     /// holding the counter, the chains, and the levels below.
     #[allow(clippy::too_many_arguments)]
     fn emit_loop_nodes(
@@ -598,7 +598,7 @@ impl<'a> Lowering<'a> {
         let body = context
             .create_nodes_region(ports, states.len(), vec![], vec![], 0)
             .id();
-        let mut builder = scf::For2OpBuilder::new(context)
+        let mut builder = scf::ForOpBuilder::new(context)
             .lb(lower)
             .inits(vec![])
             .ub(upper)

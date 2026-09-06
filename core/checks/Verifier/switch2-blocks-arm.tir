@@ -5,7 +5,7 @@
 
 module {
   %fn_main = func.func @main(%0: !i32) {
-    scf.switch2 %0 {
+    scf.switch %0 {
       scf.yield
     }
     func.return
@@ -13,4 +13,4 @@ module {
   module_end
 }
 
-// CHECK: switch2 declares a Nodes region, but holds blocks
+// CHECK: switch declares a Nodes region, but holds blocks

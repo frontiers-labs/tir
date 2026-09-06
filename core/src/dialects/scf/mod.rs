@@ -10,13 +10,13 @@ use crate::Value;
 use crate::parse::common::Cursor;
 
 pub mod nodes;
-pub use nodes::{For2Op, For2OpBuilder, LoopOp, LoopOpBuilder, Switch2Op, Switch2OpBuilder};
+pub use nodes::{ForOp, ForOpBuilder, LoopOp, LoopOpBuilder, SwitchOp, SwitchOpBuilder};
 
 pub mod ops {
-    pub use super::nodes::{for2, r#loop, switch2};
+    pub use super::nodes::{r#for, r#loop, switch};
     pub use super::{
-        BreakOp, ConditionOp, ContinueOp, ForOp, IfOp, SwitchOp, WhileOp, YieldOp, r#break,
-        condition, r#continue, r#for, r#if, switch, r#while, r#yield,
+        BreakOp, ConditionOp, ContinueOp, ForLegacyOp, IfOp, SwitchLegacyOp, WhileOp, YieldOp, r#break,
+        condition, r#continue, for_legacy, r#if, switch_legacy, r#while, r#yield,
     };
 }
 
@@ -24,25 +24,25 @@ dialect! {
     ScfDialect {
         name: "scf",
         operations: [
-            ForOp,
+            ForLegacyOp,
             WhileOp,
             IfOp,
-            SwitchOp,
+            SwitchLegacyOp,
             ConditionOp,
             BreakOp,
             ContinueOp,
             YieldOp,
             LoopOp,
-            Switch2Op,
-            For2Op,
+            SwitchOp,
+            ForOp,
         ],
         types: [],
     }
 }
 
 operation! {
-    ForOp {
-        name: "for",
+    ForLegacyOp {
+        name: "for_legacy",
         dialect: "scf",
         format: "custom",
         verifier: "true",
@@ -64,7 +64,7 @@ operation! {
     }
 }
 
-impl tir::CountedLoop for ForOp {
+impl tir::CountedLoop for ForLegacyOp {
     fn lower_bound(&self) -> ValueId {
         self.operands()[0]
     }
@@ -78,7 +78,7 @@ impl tir::CountedLoop for ForOp {
 
 /// `scf.for` counts `lb`, `lb + step`, … while the counter is signed-less-than `ub`, so
 /// its body runs at all exactly when `lb < ub` — whatever the sign of `step`.
-impl tir::GuardedLoop for ForOp {
+impl tir::GuardedLoop for ForLegacyOp {
     fn entry_guard(&self) -> tir::EntryGuard {
         tir::EntryGuard::Less {
             ordering: tir::GuardOrdering::Signed,
@@ -88,7 +88,7 @@ impl tir::GuardedLoop for ForOp {
     }
 }
 
-impl StructuredLoop for ForOp {
+impl StructuredLoop for ForLegacyOp {
     fn loop_results(&self) -> Vec<ValueId> {
         self.0.results().to_vec()
     }
@@ -106,7 +106,7 @@ impl StructuredLoop for ForOp {
     }
 }
 
-impl tir::LoopLike for ForOp {
+impl tir::LoopLike for ForLegacyOp {
     fn inits(&self) -> Vec<ValueId> {
         self.init_operands()
     }
@@ -121,25 +121,25 @@ impl tir::LoopLike for ForOp {
     }
 }
 
-impl TokenScope for ForOp {
+impl TokenScope for ForLegacyOp {
     fn token_scope_regions(&self) -> Vec<tir::RegionId> {
         vec![self.0.regions()[0]]
     }
 }
 
-impl tir::Verifiable for ForOp {
+impl tir::Verifiable for ForLegacyOp {
     fn verify_impl(&self, context: &Context) -> Result<(), Error> {
         verify_counter_type(context, self)?;
         verify_loop_carried(context, self)
     }
 }
 
-impl ForOp {
+impl ForLegacyOp {
     fn custom_print(&self, fmt: &mut tir::IRFormatter) -> Result<(), std::fmt::Error> {
         let context = self.0.context.upgrade();
         tir::dependency::print_result_prefix(fmt, &self.0)?;
         fmt.write(format!(
-            "scf.for %{}, %{}, %{}",
+            "scf.for_legacy %{}, %{}, %{}",
             self.operands()[0].number(),
             self.operands()[1].number(),
             self.operands()[2].number()
@@ -162,7 +162,7 @@ impl ForOp {
         let carried = parse_iter_args(parser, context)?;
         let body = parse_loop_body(parser, context, scope, &carried)?;
 
-        let mut builder = ForOpBuilder::new(context)
+        let mut builder = ForLegacyOpBuilder::new(context)
             .lower_bound(lower_bound)
             .upper_bound(upper_bound)
             .step(step)
@@ -476,8 +476,8 @@ impl IfOp {
 // as the last destination of its comparison chain. A C `switch` without a `default:`
 // label lowers to an empty default arm.
 operation! {
-    SwitchOp {
-        name: "switch",
+    SwitchLegacyOp {
+        name: "switch_legacy",
         dialect: "scf",
         format: "custom",
         verifier: "true",
@@ -501,7 +501,7 @@ operation! {
     }
 }
 
-impl SwitchOpBuilder {
+impl SwitchLegacyOpBuilder {
     pub fn cases(self, values: Vec<i64>) -> Self {
         self.attr(
             "cases",
@@ -516,7 +516,7 @@ impl SwitchOpBuilder {
     }
 }
 
-impl tir::Conditional for SwitchOp {
+impl tir::Conditional for SwitchLegacyOp {
     fn decision(&self) -> ValueId {
         self.predicate()
     }
@@ -542,7 +542,7 @@ impl tir::Conditional for SwitchOp {
     }
 }
 
-impl tir::Verifiable for SwitchOp {
+impl tir::Verifiable for SwitchLegacyOp {
     fn verify_impl(&self, context: &Context) -> Result<(), Error> {
         let cases = self.cases();
         let arms = self.arms();
@@ -584,7 +584,7 @@ impl tir::Verifiable for SwitchOp {
     }
 }
 
-impl SwitchOp {
+impl SwitchLegacyOp {
     fn predicate(&self) -> ValueId {
         self.operands()[0]
     }
@@ -613,7 +613,7 @@ impl SwitchOp {
     fn custom_print(&self, fmt: &mut tir::IRFormatter) -> Result<(), std::fmt::Error> {
         let context = self.0.context.upgrade();
         tir::dependency::print_result_prefix(fmt, &self.0)?;
-        fmt.write(format!("scf.switch %{}", self.predicate().number()))?;
+        fmt.write(format!("scf.switch_legacy %{}", self.predicate().number()))?;
         print_gamma_inputs(fmt, &self.inputs(), self.0.dep_operands().len())?;
         print_result_types(fmt, &context, &self.0.value_results())?;
         let arms = self.arms().to_vec();
@@ -647,7 +647,7 @@ impl SwitchOp {
         expect_token(parser, "default")?;
         arms.push(parse_arm(parser, context, &inputs, &dep_inputs)?);
 
-        let mut builder = SwitchOpBuilder::new(context)
+        let mut builder = SwitchLegacyOpBuilder::new(context)
             .predicate(predicate)
             .inputs(inputs)
             .cases(cases)
@@ -1269,7 +1269,7 @@ fn carried_arguments(context: &Context, body: &tir::BlockHandle) -> Vec<ValueId>
 /// Verify a counted loop counts through one type: whatever `!index` or integer width
 /// the lower bound names, the upper bound and step name too. Mixing widths would leave
 /// the counter's arithmetic — and so its trip count — undefined.
-fn verify_counter_type(context: &Context, op: &ForOp) -> Result<(), Error> {
+fn verify_counter_type(context: &Context, op: &ForLegacyOp) -> Result<(), Error> {
     let [lower, upper, step] = op.operands()[..3] else {
         unreachable!("scf.for takes three bounds");
     };

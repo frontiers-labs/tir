@@ -19,9 +19,9 @@ module {data_layout = #data_layout} {
     %6 = constant {value = 1} : !i32
     %7 = constant {value = 4096} : !i64
     %8 = constant {value = 4} : !i64
-    %9 = scf.for %4, %5, %6 iter_args(%10 = %4) -> !i32 {
-      %11 = scf.for %4, %5, %6 iter_args(%12 = %4) -> !i32 {
-        %13 = scf.for %4, %5, %6 iter_args(%14 = %4) -> !i32 {
+    %9 = scf.for_legacy %4, %5, %6 iter_args(%10 = %4) -> !i32 {
+      %11 = scf.for_legacy %4, %5, %6 iter_args(%12 = %4) -> !i32 {
+        %13 = scf.for_legacy %4, %5, %6 iter_args(%14 = %4) -> !i32 {
           %15 = extsi %10 : !i64
           %16 = extsi %12 : !i64
           %17 = extsi %14 : !i64
@@ -59,11 +59,11 @@ module {data_layout = #data_layout} {
 // CHECK: %[[T:[0-9]+]] = constant {value = 64} : !i32
 // The tiled dimension counts in steps of a tile, and the loop inside it runs
 // from where that one stands to one tile further.
-// CHECK: scf.for %{{[0-9]+}}, %{{[0-9]+}}, %[[T]] iter_args(%[[TO:[0-9]+]] = %{{[0-9]+}}
+// CHECK: scf.for_legacy %{{[0-9]+}}, %{{[0-9]+}}, %[[T]] iter_args(%[[TO:[0-9]+]] = %{{[0-9]+}}
 // CHECK-NEXT: %[[END:[0-9]+]] = addi %[[TO]], %[[T]]
-// CHECK-NEXT: scf.for %[[TO]], %[[END]], %{{[0-9]+}} iter_args(%[[I:[0-9]+]] = %[[TO]]
-// CHECK-NEXT: scf.for %{{[0-9]+}}, %{{[0-9]+}}, %{{[0-9]+}} iter_args(%[[K:[0-9]+]] = %{{[0-9]+}}
-// CHECK-NEXT: scf.for %{{[0-9]+}}, %{{[0-9]+}}, %{{[0-9]+}} iter_args(%[[J:[0-9]+]] = %{{[0-9]+}}
+// CHECK-NEXT: scf.for_legacy %[[TO]], %[[END]], %{{[0-9]+}} iter_args(%[[I:[0-9]+]] = %[[TO]]
+// CHECK-NEXT: scf.for_legacy %{{[0-9]+}}, %{{[0-9]+}}, %{{[0-9]+}} iter_args(%[[K:[0-9]+]] = %{{[0-9]+}}
+// CHECK-NEXT: scf.for_legacy %{{[0-9]+}}, %{{[0-9]+}}, %{{[0-9]+}} iter_args(%[[J:[0-9]+]] = %{{[0-9]+}}
 // CHECK-NEXT: extsi %[[I]]
 // CHECK-NEXT: extsi %[[J]]
 // CHECK-NEXT: extsi %[[K]]

@@ -10,7 +10,7 @@ module {data_layout = #data_layout} {
   %fn_advance = func.func @advance(%0: !index, %1: !index, %2: !index, %3: !ptr.p, %4: !i64) -> !ptr.p {
     %5 = ptr.alloca {size = 8, align = 8} : !ptr.p
     ptr.store %3, %5
-    scf.for %0, %1, %2 {
+    scf.for_legacy %0, %1, %2 {
       %6 = ptr.load %5 : !ptr.p
       %7 = ptr.ptradd %6, %4 : !ptr.p
       ptr.store %7, %5
@@ -26,7 +26,7 @@ module {data_layout = #data_layout} {
 // CHECK-NOT: ptr.alloca
 // CHECK-NOT: ptr.store
 // CHECK-NOT: ptr.load
-// CHECK: %[[RESULT:[0-9]+]] = scf.for %0, %1, %2 iter_args(%[[CARRIED:[0-9]+]] = %3) -> !ptr.p {
+// CHECK: %[[RESULT:[0-9]+]] = scf.for_legacy %0, %1, %2 iter_args(%[[CARRIED:[0-9]+]] = %3) -> !ptr.p {
 // CHECK-NEXT: %[[NEXT:[0-9]+]] = ptr.ptradd %[[CARRIED]], %4 : !ptr.p
 // CHECK-NEXT: scf.yield %[[NEXT]]
 // CHECK-NEXT: }

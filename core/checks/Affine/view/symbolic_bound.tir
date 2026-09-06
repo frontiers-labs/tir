@@ -13,7 +13,7 @@ module {data_layout = #data_layout} {
     %3 = constant {value = 0} : !i32
     %4 = constant {value = 1} : !i32
     %5 = constant {value = 4} : !i64
-    %6 = scf.for %3, %1, %4 iter_args(%7 = %3) -> !i32 {
+    %6 = scf.for_legacy %3, %1, %4 iter_args(%7 = %3) -> !i32 {
       %8 = extsi %7 : !i64
       %9 = muli %8, %5 : !i64
       %10 = ptr.ptradd %2, %9 : !ptr.p

@@ -9,7 +9,7 @@
 module {data_layout = #data_layout} {
   %fn_count = func.func @count(%lb: !i32, %ub: !i32, %st: !i32, %init: !i64) -> !i64 {
     %c = constant {value = 5} : !i64
-    %r = scf.for %lb, %ub, %st iter_args(%acc = %init) -> !i64 {
+    %r = scf.for_legacy %lb, %ub, %st iter_args(%acc = %init) -> !i64 {
       %n = addi %acc, %c : !i64
       scf.yield %n
     }

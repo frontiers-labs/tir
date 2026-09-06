@@ -6,7 +6,7 @@
 
 // CHECK: %{{[0-9]+}} = func.func @stop
 // CHECK-NOT: scf.loop
-// CHECK: scf.switch2 %{{[0-9]+}} {
+// CHECK: scf.switch %{{[0-9]+}} {
 // CHECK-NEXT: ->
 // CHECK-NEXT: }
 // CHECK-NEXT: {

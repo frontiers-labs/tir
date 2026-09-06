@@ -21,7 +21,7 @@ done:
 // CHECK: %{{[0-9]+}} = func.func @sum_to
 // CHECK-NOT: cfg.br
 // CHECK: scf.loop
-// CHECK: scf.switch2
+// CHECK: scf.switch
 // CHECK: -> %{{[0-9]+}} | %{{[0-9]+}}
 // CHECK-NEXT: }
 

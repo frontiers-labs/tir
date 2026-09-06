@@ -39,8 +39,8 @@ module {
 
 // CHECK: %{{[0-9]+}} = func.func @evens
 // CHECK: scf.loop
-// CHECK: scf.switch2
-// CHECK: scf.switch2
+// CHECK: scf.switch
+// CHECK: scf.switch
 // CHECK: ptr.load
 // CHECK: ptr.store
 

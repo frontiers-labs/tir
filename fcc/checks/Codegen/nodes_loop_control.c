@@ -22,7 +22,7 @@ int stop_early(int n) {
 // CHECK: %{{[0-9]+}} = func.func @stop_early
 // CHECK-NOT: scf.while
 // CHECK: scf.loop
-// CHECK: scf.switch2
+// CHECK: scf.switch
 // CHECK: -> %{{[0-9]+}} | %{{[0-9]+}}
 // CHECK-NEXT: }
 

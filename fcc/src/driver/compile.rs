@@ -77,7 +77,7 @@ pub(super) fn lower_to_ir(
     // Restructuring accepts CFG form only, so no `cir` operation may survive
     // into it: struct ops become pointer arithmetic, loop ops become `scf.for`
     // where the counted shape is provable and blocks with branches otherwise.
-    // The conversion turns a raised `scf.for` into `scf.for2` on the way.
+    // The conversion turns a raised `scf.for` into `scf.r#for` on the way.
     run_pass(
         context,
         &module,

@@ -30,9 +30,9 @@ module {
 }
 
 // CHECK: %{{[0-9]+}} = func.func @gis
-// CHECK: scf.switch2
-// CHECK: scf.switch2
-// CHECK: %{{[0-9]+}} = scf.switch2 %{{[0-9]+}} {
+// CHECK: scf.switch
+// CHECK: scf.switch
+// CHECK: %{{[0-9]+}} = scf.switch %{{[0-9]+}} {
 // CHECK: subi
 // CHECK: }
 

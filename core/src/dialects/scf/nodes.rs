@@ -1,7 +1,7 @@
 //! Structured control flow over unordered regions: a loop and a switch whose
 //! bindings are declared, and a counted loop that pins a loop's shape.
 //!
-//! `scf.for2` and `scf.switch2` are the successors of `scf.for` and
+//! `scf.for` and `scf.switch` are the successors of `scf.for` and
 //! `scf.switch`; they take those names once the pipeline produces them.
 
 use crate as tir;
@@ -47,8 +47,8 @@ impl ExitScope for LoopOp {
 // A γ: the predicate is the index of the arm that runs, and a predicate past
 // the last arm selects the last arm, so every predicate value picks one.
 operation! {
-    Switch2Op {
-        name: "switch2",
+    SwitchOp {
+        name: "switch",
         dialect: "scf",
         operands: O {
             predicate: "crate::builtin::IntegerType",
@@ -72,7 +72,7 @@ operation! {
     }
 }
 
-impl ExitScope for Switch2Op {
+impl ExitScope for SwitchOp {
     fn exit_scope(&self) -> ExitScopeKind {
         ExitScopeKind::Switch
     }
@@ -84,11 +84,11 @@ impl ExitScope for Switch2Op {
 // are.
 //
 // The text elides what the shape pins: the counter's comparison, its
-// increment, and the exit values. `%i, %r = scf.for2 %c = %lb to %ub step %s
+// increment, and the exit values. `%i, %r = scf.for %c = %lb to %ub step %s
 // (%a = %init) { .. -> %next }` names the counter's final value first.
 operation! {
-    For2Op {
-        name: "for2",
+    ForOp {
+        name: "for",
         dialect: "scf",
         format: "custom",
         operands: O {
@@ -114,13 +114,13 @@ operation! {
     }
 }
 
-impl ExitScope for For2Op {
+impl ExitScope for ForOp {
     fn exit_scope(&self) -> ExitScopeKind {
         ExitScopeKind::Loop
     }
 }
 
-impl For2Op {
+impl ForOp {
     fn custom_print(&self, fmt: &mut tir::IRFormatter) -> Result<(), std::fmt::Error> {
         use tir::CountedLoop;
         let context = self.0.context.upgrade();
@@ -140,7 +140,7 @@ impl For2Op {
 
         tir::dependency::print_result_prefix(fmt, &self.0)?;
         fmt.write(format!(
-            "scf.for2 %{} = %{} to %{} step %{}",
+            "scf.for %{} = %{} to %{} step %{}",
             ports[0].number(),
             inits[0].number(),
             self.upper_bound().number(),
@@ -203,7 +203,7 @@ impl For2Op {
 
         let mut result_types = vec![counter_type];
         result_types.extend(bound.ports.iter().map(tir::Value::ty));
-        let mut builder = For2OpBuilder::new(context)
+        let mut builder = ForOpBuilder::new(context)
             .lb(lb)
             .inits(bound.inits)
             .ub(ub)
@@ -217,15 +217,15 @@ impl For2Op {
     }
 }
 
-/// The op line and body of a for2 that lacks the shape its own syntax
+/// The op line and body of a r#for that lacks the shape its own syntax
 /// elides, printed as the generic theta so nothing is lost.
 fn generic_print(
     fmt: &mut tir::IRFormatter,
     context: &Context,
-    op: &For2Op,
+    op: &ForOp,
 ) -> Result<(), std::fmt::Error> {
     tir::dependency::print_result_prefix(fmt, &op.0)?;
-    fmt.write("scf.for2")?;
+    fmt.write("scf.for")?;
     tir::region_format::print_region(fmt, context, &context.get_region(Theta::body(op)))
 }
 
@@ -244,7 +244,7 @@ fn materialize_counted_shape(
     let (written, written_deps) = (region.value_results(), region.dep_results());
     if written.len() != bound.ports.len() || written_deps.len() != bound.dep_ports.len() {
         return Err(Error::VerificationError(format!(
-            "scf.for2 carries {} values and {} dependencies but its body names {} and {}",
+            "scf.for carries {} values and {} dependencies but its body names {} and {}",
             bound.ports.len(),
             bound.dep_ports.len(),
             written.len(),

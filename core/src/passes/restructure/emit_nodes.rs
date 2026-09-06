@@ -1,8 +1,8 @@
-//! Emission into unordered regions: the statement tree becomes `scf.switch2`,
-//! `scf.loop` and `scf.for2` nodes.
+//! Emission into unordered regions: the statement tree becomes `scf.switch`,
+//! `scf.loop` and `scf.for` nodes.
 //!
 //! Every original operation is *moved*, never copied. A variable read after
-//! the structure that assigns it is a joined result of a `scf.switch2` or a
+//! the structure that assigns it is a joined result of a `scf.switch` or a
 //! carried port of an `scf.loop`; a region reads everything else from the
 //! scope enclosing it, so a gamma forwards nothing. The exit becomes the
 //! region's results rather than an operation, since an unordered region holds
@@ -136,7 +136,7 @@ impl Emitter<'_> {
             self.bind_undefined_reads(op, region, env)?;
             self.retarget_operands(op, env);
             let results = self.context.get_op(op).results().to_vec();
-            let placed = if self.context.get_op(op).is::<scf::ForOp>() {
+            let placed = if self.context.get_op(op).is::<scf::ForLegacyOp>() {
                 self.counted_loop(op)?
             } else {
                 let block = self.context.parent_block(op).expect("an op of a block");
@@ -242,7 +242,7 @@ impl Emitter<'_> {
                 self.read(region, env, var)?
             }
         };
-        let mut gate = scf::Switch2OpBuilder::new(self.context)
+        let mut gate = scf::SwitchOpBuilder::new(self.context)
             .predicate(predicate)
             .inputs(vec![])
             .arms(regions)
@@ -341,13 +341,13 @@ impl Emitter<'_> {
         Ok(())
     }
 
-    /// An `scf.for` the frontend raised becomes `scf.for2`: the counter is
+    /// An `scf.for` the frontend raised becomes `scf.for`: the counter is
     /// port 0, the carried arguments follow, and the body's yield says what
     /// the next iteration carries. The old operation stays in its block, to
     /// go with it.
     fn counted_loop(&self, op: OpId) -> Result<OpId, PassError> {
         let context = self.context;
-        let for_op = scf::ForOp::from_op_instance(context.get_op(op));
+        let for_op = scf::ForLegacyOp::from_op_instance(context.get_op(op));
         let [block] = context.get_region(for_op.handle().regions()[0]).block_ids()[..] else {
             return Err(unsupported("a counted loop whose body is a graph"));
         };
@@ -374,7 +374,7 @@ impl Emitter<'_> {
         }
         for &inner in body_ops {
             block.remove_op(inner);
-            let placed = if context.get_op(inner).is::<scf::ForOp>() {
+            let placed = if context.get_op(inner).is::<scf::ForLegacyOp>() {
                 block.append(inner);
                 self.counted_loop(inner)?
             } else {
@@ -412,7 +412,7 @@ impl Emitter<'_> {
                 .iter()
                 .map(|&result| context.get_value(result).ty()),
         );
-        let mut builder = scf::For2OpBuilder::new(context)
+        let mut builder = scf::ForOpBuilder::new(context)
             .lb(for_op.lower_bound())
             .inits(old.value_operands()[3..].to_vec())
             .ub(for_op.upper_bound())

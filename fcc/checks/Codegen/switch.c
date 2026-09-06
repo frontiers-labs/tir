@@ -6,13 +6,13 @@
 
 // CHECK: %{{[0-9]+}} = func.func @classify
 // CHECK: %[[C0:[0-9]+]] = cmpi {{.*}} {predicate = "eq"}
-// CHECK: scf.switch2 %[[C0]]
+// CHECK: scf.switch %[[C0]]
 // CHECK: %[[C1:[0-9]+]] = cmpi {{.*}} {predicate = "eq"}
-// CHECK: %[[FALL:[0-9]+]] | %{{[0-9]+}} = scf.switch2 %[[C1]]
+// CHECK: %[[FALL:[0-9]+]] | %{{[0-9]+}} = scf.switch %[[C1]]
 // CHECK: %[[C2:[0-9]+]] = cmpi {{.*}} {predicate = "eq"}
-// CHECK: scf.switch2 %[[C2]]
+// CHECK: scf.switch %[[C2]]
 // CHECK: constant {value = 9}
-// CHECK: scf.switch2 %[[FALL]]
+// CHECK: scf.switch %[[FALL]]
 // CHECK: constant {value = 3}
 // CHECK: addi
 // CHECK: ptr.store

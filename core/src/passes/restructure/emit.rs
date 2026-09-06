@@ -201,7 +201,7 @@ impl Emitter<'_> {
             }
             Decision::Switch(var, cases) => {
                 let predicate = self.read(block, env, var)?;
-                let mut gate = scf::SwitchOpBuilder::new(self.context)
+                let mut gate = scf::SwitchLegacyOpBuilder::new(self.context)
                     .predicate(predicate)
                     .cases(cases)
                     .arms(regions)

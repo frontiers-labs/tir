@@ -97,7 +97,7 @@ pub fn strip_mine(
     let end = tile_block.append_op(b::addi(context, base, stride.result(), ty).build());
     let ports = |ports: &[ValueId], body: crate::RegionId, lower, upper, step| {
         let (values, deps) = ports.split_at(ports.len() - deps);
-        let mut builder = scf::ForOpBuilder::new(context)
+        let mut builder = scf::ForLegacyOpBuilder::new(context)
             .lower_bound(lower)
             .upper_bound(upper)
             .step(step)
@@ -192,7 +192,7 @@ fn strip_mine_nodes(
 
     let counted_loop =
         |body: RegionId, lower: ValueId, upper: ValueId, step: ValueId, states: &[ValueId]| {
-            let mut builder = scf::For2OpBuilder::new(context)
+            let mut builder = scf::ForOpBuilder::new(context)
                 .lb(lower)
                 .inits(vec![])
                 .ub(upper)

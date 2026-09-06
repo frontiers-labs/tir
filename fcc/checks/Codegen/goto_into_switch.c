@@ -7,10 +7,10 @@
 
 // CHECK: %{{[0-9]+}} = func.func @dispatch
 // CHECK: %[[ENTER:[0-9]+]] = cmpi {{.*}} {predicate = "ne"}
-// CHECK: %[[INSIDE:[0-9]+]] | %{{[0-9]+}} = scf.switch2 %[[ENTER]]
+// CHECK: %[[INSIDE:[0-9]+]] | %{{[0-9]+}} = scf.switch %[[ENTER]]
 // CHECK: constant {value = 1000}
 // CHECK: constant {value = 10}
-// CHECK: scf.switch2 %[[INSIDE]]
+// CHECK: scf.switch %[[INSIDE]]
 // CHECK: constant {value = 100}
 // CHECK-NOT: constant {value = 100}
 // CHECK: -> %{{[0-9]+}} | %{{[0-9]+}}

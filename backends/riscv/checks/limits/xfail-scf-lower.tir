@@ -6,7 +6,7 @@
 
 module {
   %fn_a = func.func @a(%lo: !index, %hi: !index, %st: !index) {
-    scf.for %lo, %hi, %st {
+    scf.for_legacy %lo, %hi, %st {
       scf.yield
     }
     func.return
@@ -15,4 +15,4 @@ module {
 }
 
 // CHECK: pass 'restructure-nodes' produced invalid IR
-// CHECK-SAME: for2 operand 'lb' expected constraint crate::builtin::IntegerType, got !index
+// CHECK-SAME: for operand 'lb' expected constraint crate::builtin::IntegerType, got !index

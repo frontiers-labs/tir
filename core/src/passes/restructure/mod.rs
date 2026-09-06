@@ -16,7 +16,7 @@
 //!
 //! Two emissions share the analysis. `restructure` produces the structured
 //! blocks the backend takes today; `restructure-nodes` produces unordered
-//! regions of `scf.switch2`, `scf.loop` and `scf.for2`, constructing memory
+//! regions of `scf.switch`, `scf.loop` and `scf.for`, constructing memory
 //! order first, since an unordered region keeps none of its own.
 
 mod branches;

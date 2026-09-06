@@ -20,7 +20,7 @@ module {
       %zero = spirv.Constant {value = 0} : !i32
       %one = spirv.Constant {value = 1} : !i32
       %two = spirv.Constant {value = 2} : !i32
-      %r = scf.switch2 %pick args() () {
+      %r = scf.switch %pick args() () {
         -> %one
       }
       () {
@@ -40,7 +40,7 @@ module {
 }
 
 // CHECK: %{{[0-9]+}} = func.func @count(%{{[0-9]+}}: !i32, %{{[0-9]+}}: !i1) -> !i32 {
-// CHECK: scf.switch2
+// CHECK: scf.switch
 // CHECK: scf.loop
 
 // IMPORT: %{{[0-9]+}} = func.func @count(%[[N:[0-9]+]]: !i32, %[[PICK:[0-9]+]]: !i1) -> !i32 {
@@ -63,9 +63,9 @@ module {
 // IMPORT-NEXT: spirv.Return %[[OUT]]
 
 // NODES: %{{[0-9]+}} = func.func @count(%[[N:[0-9]+]]: !i32, %[[PICK:[0-9]+]]: !i1) -> !i32 {
-// NODES: %[[R:[0-9]+]] = scf.switch2 %[[PICK]] {
+// NODES: %[[R:[0-9]+]] = scf.switch %[[PICK]] {
 // NODES: scf.loop (%[[I:[0-9]+]] = %{{[0-9]+}}, %[[A:[0-9]+]] = %[[R]]
 // NODES-NEXT: %[[AGAIN:[0-9]+]] = spirv.SLessThan %[[I]], %[[N]] : !i1
-// NODES-NEXT: scf.switch2 %[[AGAIN]] {
+// NODES-NEXT: scf.switch %[[AGAIN]] {
 // NODES: %[[NEXT:[0-9]+]] = spirv.IAdd %[[I]], %{{[0-9]+}} : !i32
 // NODES-NEXT: %[[SUM:[0-9]+]] = spirv.IAdd %[[A]], %[[I]] : !i32

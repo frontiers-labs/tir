@@ -4,7 +4,7 @@
 
 use crate::builtin::{ConstantOpBuilder, IntegerType};
 use crate::region::{defining_region, topological_order};
-use crate::scf::{LoopOpBuilder, Switch2OpBuilder};
+use crate::scf::{LoopOpBuilder, SwitchOpBuilder};
 use crate::{
     ConstantLike, Context, Error, ExitTarget, Gamma, NonLocalExit, OpId, Operation, RegionId,
     Theta, TypeId, ValueId,
@@ -264,7 +264,7 @@ impl Context {
                     .result_type(IntegerType::new(self, 32))
                     .build();
                 self.add(region, predicate.id());
-                let mut builder = Switch2OpBuilder::new(self)
+                let mut builder = SwitchOpBuilder::new(self)
                     .predicate(predicate.result())
                     .inputs(vec![])
                     .arms(vec![arm.id()])

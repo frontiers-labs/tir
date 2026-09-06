@@ -34,7 +34,7 @@ module {
 
 // CHECK: %{{[0-9]+}} = func.func @pick(%[[C:[0-9]+]]: !i1, %[[N:[0-9]+]]: !i32) -> !i32 {
 // CHECK: | %[[S0:[0-9]+]] = ptr.store %[[N]], %[[P:[0-9]+]] | %{{[0-9]+}}
-// CHECK-NEXT: %[[V:[0-9]+]] | %[[M:[0-9]+]] = scf.switch2 %[[C]] args(| %[[S0]]) (| %[[EA:[0-9]+]]) {
+// CHECK-NEXT: %[[V:[0-9]+]] | %[[M:[0-9]+]] = scf.switch %[[C]] args(| %[[S0]]) (| %[[EA:[0-9]+]]) {
 // CHECK-NEXT: %[[E:[0-9]+]] = subi %[[N]], %[[N]] : !i32
 // CHECK-NEXT: -> %[[E]] | %[[EA]]
 // CHECK-NEXT: }

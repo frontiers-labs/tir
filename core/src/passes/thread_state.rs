@@ -618,10 +618,10 @@ fn already_threaded(context: &Context, ops: &[OpId]) -> bool {
 
 /// Whether `op` can carry a chain across its regions as a port.
 fn carries_state(op: &OpHandle) -> bool {
-    op.is::<scf::ForOp>()
+    op.is::<scf::ForLegacyOp>()
         || op.is::<scf::WhileOp>()
         || op.is::<scf::IfOp>()
-        || op.is::<scf::SwitchOp>()
+        || op.is::<scf::SwitchLegacyOp>()
 }
 
 fn subtree_touches_memory(context: &Context, op: &OpHandle) -> bool {

@@ -7,7 +7,7 @@
 
 // CHECK: %{{[0-9]+}} = func.func @sum_to
 // CHECK: | %[[OUT:[0-9]+]] = scf.loop (| %{{[0-9]+}} = %{{[0-9]+}}) {
-// CHECK: %[[P:[0-9]+]] | %[[D:[0-9]+]] = scf.switch2
+// CHECK: %[[P:[0-9]+]] | %[[D:[0-9]+]] = scf.switch
 // CHECK: -> %[[P]] | %[[D]], %[[D]]
 // CHECK: }
 // CHECK: ptr.load %{{[0-9]+}} | %[[OUT]]

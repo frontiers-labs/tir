@@ -96,7 +96,7 @@ fn effect(context: &Context, op: &OpHandle) -> Result<Effect, PassError> {
     if op.has_interface::<dyn MemoryRead>() {
         return Ok(Effect::Read);
     }
-    if op.is::<scf::ForOp>() {
+    if op.is::<scf::ForLegacyOp>() {
         return Ok(Effect::CountedLoop);
     }
     let nested = op

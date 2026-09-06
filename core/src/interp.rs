@@ -19,7 +19,7 @@ use crate::{
     },
     func::{CallOp, FuncOp, ReturnOp},
     ptr::{AllocaOp, LoadOp, MemcpyOp, MemsetOp, PtrType, StoreOp},
-    scf::{BreakOp, ConditionOp, ContinueOp, ForOp, IfOp, SwitchOp, WhileOp, YieldOp},
+    scf::{BreakOp, ConditionOp, ContinueOp, ForLegacyOp, IfOp, SwitchLegacyOp, WhileOp, YieldOp},
     sem,
     state::{EntryStateOp, JoinOp, SplitOp},
 };
@@ -385,11 +385,11 @@ impl Interpreter<'_> {
             let flow = self.exec_if(op_id)?;
             return self.exec_value_flow(op_id, flow);
         }
-        if instance.is::<SwitchOp>() {
+        if instance.is::<SwitchLegacyOp>() {
             let flow = self.exec_switch(op_id)?;
             return self.exec_value_flow(op_id, flow);
         }
-        if instance.is::<ForOp>() {
+        if instance.is::<ForLegacyOp>() {
             let flow = self.exec_for(op_id)?;
             return self.exec_value_flow(op_id, flow);
         }
@@ -462,7 +462,7 @@ impl Interpreter<'_> {
     }
 
     fn exec_switch(&mut self, op_id: OpId) -> Result<Flow> {
-        let op = SwitchOp::from_op_instance(self.context.get_op(op_id));
+        let op = SwitchLegacyOp::from_op_instance(self.context.get_op(op_id));
         let predicate = self.value_of(op.decision())?;
         let value = predicate.to_i64().unwrap_or_default();
         let cases = op.case_values();
@@ -499,7 +499,7 @@ impl Interpreter<'_> {
     }
 
     fn exec_for(&mut self, op_id: OpId) -> Result<Flow> {
-        let op = ForOp::from_op_instance(self.context.get_op(op_id));
+        let op = ForLegacyOp::from_op_instance(self.context.get_op(op_id));
         let lower = self.counter_bound(op.lower_bound())?;
         let upper = self.counter_bound(op.upper_bound())?;
         let step = self.counter_bound(op.step())?;

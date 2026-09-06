@@ -4,7 +4,7 @@
 
 module {
   %fn_main = func.func @main(%0: !i32, %1: !i32, %2: !i32, %3: !i32) -> !i32 {
-    %4, %5 = scf.for2 %6 = %0 to %1 step %2 (%7 = %3) {
+    %4, %5 = scf.for %6 = %0 to %1 step %2 (%7 = %3) {
       -> %7, %7
     }
     func.return %5
@@ -12,4 +12,4 @@ module {
   module_end
 }
 
-// CHECK: scf.for2 carries 1 values and 0 dependencies but its body names 2 and 0
+// CHECK: scf.for carries 1 values and 0 dependencies but its body names 2 and 0

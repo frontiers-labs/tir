@@ -22,10 +22,10 @@ void matmul_restrict_parameters(int *restrict a, int *restrict b,
 }
 
 // IR-LABEL: func.func @matmul_restrict_parameters
-// IR: scf.for2 {{.*}} (%[[I:[0-9]+]] = {{.*}}) {
-// IR: scf.for2 {{.*}} (%[[J:[0-9]+]] = {{.*}}) {
+// IR: scf.for {{.*}} (%[[I:[0-9]+]] = {{.*}}) {
+// IR: scf.for {{.*}} (%[[J:[0-9]+]] = {{.*}}) {
 // IR: ptr.store %[[J]], %[[JSLOT:[0-9]+]] |
-// IR: scf.for2 {{.*}} (%[[K:[0-9]+]] = {{.*}}) {
+// IR: scf.for {{.*}} (%[[K:[0-9]+]] = {{.*}}) {
 // IR: %[[JL:[0-9]+]] | %{{[0-9]+}} = ptr.load %[[JSLOT]] |
 // IR: %[[ROW:[0-9]+]] = shli %[[I]]
 // IR-NEXT: addi %[[ROW]], %[[JL]]

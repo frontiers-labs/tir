@@ -4,7 +4,7 @@
 
 module {
   %fn_main = func.func @main(%0: !i32, %1: !i32, %2: !i64) -> !i32 {
-    %3 = scf.switch2 %0 args(%1) (%4) {
+    %3 = scf.switch %0 args(%1) (%4) {
       -> %4
     }
     (%5) {
@@ -15,4 +15,4 @@ module {
   module_end
 }
 
-// CHECK: scf.switch2 arm 1 value 0 must have the type of result 0
+// CHECK: scf.switch arm 1 value 0 must have the type of result 0

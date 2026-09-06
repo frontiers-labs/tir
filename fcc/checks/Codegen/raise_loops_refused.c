@@ -54,14 +54,14 @@ int variable_step(int s) {
 }
 
 // CHECK: func.func @mutated_counter
-// CHECK-NOT: scf.for2
+// CHECK-NOT: scf.for
 // CHECK: scf.loop
 // CHECK: func.func @escaping_counter
-// CHECK-NOT: scf.for2
+// CHECK-NOT: scf.for
 // CHECK: scf.loop
 // CHECK: func.func @mutated_bound
-// CHECK-NOT: scf.for2
+// CHECK-NOT: scf.for
 // CHECK: scf.loop
 // CHECK: func.func @variable_step
-// CHECK-NOT: scf.for2
+// CHECK-NOT: scf.for
 // CHECK: scf.loop

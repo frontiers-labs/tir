@@ -7,6 +7,6 @@ int f(void) { while (1) {} return 0; }
 
 // CHECK-NOT: cfg.
 // CHECK: scf.loop {
-// CHECK: %[[P:[0-9]+]] = scf.switch2
+// CHECK: %[[P:[0-9]+]] = scf.switch
 // CHECK: -> %[[P]]
 // CHECK-NOT: cfg.

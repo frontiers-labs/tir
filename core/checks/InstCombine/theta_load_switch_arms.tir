@@ -13,7 +13,7 @@ module {
       scf.condition %0
     } do {
       %4 = ptr.load %3 : !i32
-      scf.switch %1 case 1 {
+      scf.switch_legacy %1 case 1 {
         %5 = addi %4, %4 : !i32
         ptr.store %5, %3
         scf.yield
@@ -39,7 +39,7 @@ module {
 // CHECK-NEXT: scf.condition %0, %[[COND]]
 // CHECK-NEXT: }
 // CHECK-NEXT: do(%[[BODY:[0-9]+]]) {
-// CHECK-NEXT: %[[GATE:[0-9]+]] = scf.switch %1 -> !i32 case 1 {
+// CHECK-NEXT: %[[GATE:[0-9]+]] = scf.switch_legacy %1 -> !i32 case 1 {
 // CHECK-NEXT: %[[NEXT:[0-9]+]] = addi %[[BODY]], %[[BODY]] : !i32
 // CHECK-NEXT: scf.yield %[[NEXT]]
 // CHECK-NEXT: }

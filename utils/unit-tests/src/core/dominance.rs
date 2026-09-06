@@ -246,7 +246,7 @@ fn for_loop_as_root() {
         .unwrap()
         .id();
 
-    let for_op = tir::scf::ops::r#for(
+    let for_op = tir::scf::ops::for_legacy(
         &context,
         lb.id(),
         ub.id(),

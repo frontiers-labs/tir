@@ -8,7 +8,7 @@ module {
   %fn_h = func.func @h(%0: !i32, %1: !i32) -> !i32 {
     %2 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
     ptr.store %1, %2
-    scf.switch %0 case 1 {
+    scf.switch_legacy %0 case 1 {
       ptr.store %1, %2
       scf.yield
     }
@@ -22,7 +22,7 @@ module {
 }
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @h
-// CHECK: | %[[GATE:[0-9]+]] = scf.switch %0 args(| %{{[0-9]+}}) case 1 (| %[[C:[0-9]+]]) {
+// CHECK: | %[[GATE:[0-9]+]] = scf.switch_legacy %0 args(| %{{[0-9]+}}) case 1 (| %[[C:[0-9]+]]) {
 // CHECK-NEXT: | %[[C1:[0-9]+]] = ptr.store %1, %{{[0-9]+}} | %[[C]]
 // CHECK-NEXT: scf.yield | %[[C1]]
 // CHECK-NEXT: }

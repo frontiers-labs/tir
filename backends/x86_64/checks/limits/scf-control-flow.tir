@@ -8,7 +8,7 @@
 
 module {
   %fn_loop = func.func @loop(%0: !index, %1: !index, %2: !index) {
-    scf.for %0, %1, %2 {
+    scf.for_legacy %0, %1, %2 {
       scf.yield
     }
     func.return

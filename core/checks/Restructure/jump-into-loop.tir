@@ -21,7 +21,7 @@ module {
 // CHECK-LABEL: %{{[0-9]+}} = func.func @into
 // CHECK-NOT: br
 // CHECK: scf.while iter_args
-// CHECK: scf.switch %{{[0-9]+}}
+// CHECK: scf.switch_legacy %{{[0-9]+}}
 // CHECK: addi
 // CHECK: default {
 // CHECK: subi

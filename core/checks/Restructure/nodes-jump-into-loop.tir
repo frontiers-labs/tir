@@ -31,7 +31,7 @@ module {
 
 // CHECK: %{{[0-9]+}} = func.func @into
 // CHECK: scf.loop
-// CHECK: scf.switch2
+// CHECK: scf.switch
 
 // HEAD: i32 -1
 // SIDE: i32 0
