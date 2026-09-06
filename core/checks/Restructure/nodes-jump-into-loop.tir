@@ -1,0 +1,35 @@
+// RUN: tir opt --pass restructure-nodes --verify %s | filecheck %s
+// RUN: tir interp %s -f into --args=1,3 | filecheck --check-prefix=HEAD %s
+// RUN: tir opt --pass restructure-nodes %s | tir interp -f into --args=1,3 | filecheck --check-prefix=HEAD %s
+// RUN: tir interp %s -f into --args=0,3 | filecheck --check-prefix=SIDE %s
+// RUN: tir opt --pass restructure-nodes %s | tir interp -f into --args=0,3 | filecheck --check-prefix=SIDE %s
+// RUN: tir opt --pass restructure-nodes,shuffle-state %s | tir interp -f into --args=1,3 | filecheck --check-prefix=HEAD %s
+
+// An edge from outside the loop landing past its header: the loop keeps two
+// entries, and the dispatch picking the one an iteration wants is a gamma
+// inside the body on a carried selector.
+
+module {
+  %fn_into = func.func @into(%0: !i1, %1: !i32) -> !i32 {
+    %zero = constant {value = 0} : !i32
+    %one = constant {value = 1} : !i32
+    cfg.cond_br %0, ^bb1(%1 : !i32), ^bb2(%1 : !i32)
+  ^bb1(%2: !i32):
+    %3 = subi %2, %one : !i32
+    cfg.br ^bb2(%3 : !i32)
+  ^bb2(%4: !i32):
+    %5 = subi %4, %one : !i32
+    %again = cmpi %5, %zero {predicate = "sgt"} : !i1
+    cfg.cond_br %again, ^bb1(%5 : !i32), ^bb3
+  ^bb3:
+    func.return %5
+  }
+  module_end
+}
+
+// CHECK: %{{[0-9]+}} = func.func @into
+// CHECK: scf.loop
+// CHECK: scf.switch2
+
+// HEAD: i32 -1
+// SIDE: i32 0

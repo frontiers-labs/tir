@@ -596,11 +596,15 @@ impl Interpreter<'_> {
     fn exec_gamma(&mut self, instance: &crate::OpHandle, gamma: &dyn Gamma) -> Result<Flow> {
         let arms = gamma.arms();
         let binding = gamma.forwarded();
-        let chosen = self
-            .value_of(gamma.predicate())?
-            .to_i64()
-            .unwrap_or_default();
-        let arm = arms[usize::try_from(chosen).unwrap_or(0).min(arms.len() - 1)];
+        // An arm index has no sign: an `i1` predicate that is true is arm 1,
+        // whatever a signed reading of its one bit says.
+        let chosen = match self.value_of(gamma.predicate())? {
+            Value::Int(index) => index.to_u64(),
+            _ => 0,
+        };
+        let arm = arms[usize::try_from(chosen)
+            .unwrap_or(usize::MAX)
+            .min(arms.len() - 1)];
         let ports = self.context.get_region(arm).value_arguments();
         let inputs = instance.value_operands();
         for (port, &input) in ports[binding.ports.clone()]

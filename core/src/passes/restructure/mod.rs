@@ -13,12 +13,20 @@
 //! [`BranchGuard`] only, so it restructures any dialect's control flow. The
 //! operations it *creates* are `scf` ones plus the integer constants the
 //! predicates need.
+//!
+//! Two emissions share the analysis. `restructure` produces the structured
+//! blocks the backend takes today; `restructure-nodes` produces unordered
+//! regions of `scf.switch2`, `scf.loop` and `scf.for2`, constructing memory
+//! order first, since an unordered region keeps none of its own.
 
 mod branches;
 mod cfg;
+mod deps;
 mod emit;
+mod emit_nodes;
 mod liveness;
 mod loops;
+mod ports;
 
 use crate::analysis::AnalysisManager;
 use crate::func::FuncOp;
@@ -60,15 +68,78 @@ impl Pass for RestructurePass {
         if context.get_region(region).block_ids().len() < 2 {
             return Ok(());
         }
-        restructure_region(context, region)
+        restructure_region(context, region, Form::Blocks)
     }
 }
 
-/// Restructure one CFG region into a single block of structured operations.
-fn restructure_region(context: &Context, region: crate::RegionId) -> Result<(), PassError> {
-    let mut graph = cfg::Cfg::build(context, region)?;
+/// The unordered-region conversion. A function whose body is already
+/// unordered is left alone; any ordered one is converted, a single block
+/// included. Memory order is constructed where the function touches memory
+/// and carries no dependencies yet.
+pub struct RestructureNodesPass;
+
+impl RestructureNodesPass {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for RestructureNodesPass {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+crate::register_pass!(RestructureNodesPass, "restructure-nodes");
+
+impl Pass for RestructureNodesPass {
+    fn name(&self) -> &'static str {
+        "restructure-nodes"
+    }
+
+    fn target(&self) -> PassTarget {
+        PassTarget::operation::<FuncOp>()
+    }
+
+    fn run(
+        &mut self,
+        op: &OperationRef,
+        context: &Context,
+        _rewriter: &mut Rewriter,
+        _analyses: &AnalysisManager,
+    ) -> Result<(), PassError> {
+        let region = op.op().regions()[0];
+        if context.get_region(region).is_nodes() {
+            return Ok(());
+        }
+        restructure_region(
+            context,
+            region,
+            Form::Nodes {
+                thread: deps::wants_chain(context, region),
+            },
+        )
+    }
+}
+
+enum Form {
+    Blocks,
+    Nodes { thread: bool },
+}
+
+/// Restructure one CFG region into structured operations of the chosen form.
+fn restructure_region(
+    context: &Context,
+    region: crate::RegionId,
+    form: Form,
+) -> Result<(), PassError> {
+    let thread = matches!(form, Form::Nodes { thread: true });
+    let mut graph = cfg::Cfg::build(context, region, thread)?;
     loops::restructure(&mut graph);
     let tree = branches::restructure(&mut graph)?;
     let live = liveness::compute(&graph);
-    emit::emit(context, region, &graph, &tree, &live)
+    match form {
+        Form::Blocks => emit::emit(context, region, &graph, &tree, &live),
+        Form::Nodes { .. } => emit_nodes::emit(context, region, &graph, &tree, &live),
+    }
 }

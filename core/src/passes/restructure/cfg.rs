@@ -107,6 +107,10 @@ pub struct Cfg {
     /// The variable an original value became, for the values read outside the
     /// node defining them.
     pub value_var: BTreeMap<ValueId, VarId>,
+    /// The variable carrying memory order from node to node, when the graph
+    /// constructed it; it is bound at the region's entry to the memory the
+    /// region is entered with.
+    pub chain: Option<VarId>,
 }
 
 impl Cfg {
@@ -223,9 +227,7 @@ pub fn deep_operands(context: &Context, op: OpId) -> Vec<ValueId> {
         let instance = context.get_op(op);
         operands.extend(instance.operands().iter().copied());
         for region in instance.regions() {
-            for block in context.get_region(region).block_ids() {
-                pending.extend(context.get_block(block).op_ids());
-            }
+            pending.extend(context.get_region(region).op_ids());
         }
     }
     operands
@@ -239,7 +241,11 @@ struct Builder<'a> {
 }
 
 impl Cfg {
-    pub fn build(context: &Context, region: RegionId) -> Result<Cfg, PassError> {
+    /// Read `region`'s blocks into a graph. With `thread`, memory order is
+    /// constructed while the blocks are still there to say what it is: every
+    /// effect takes and leaves a dependency, and the chain crosses each edge as
+    /// a variable the emission turns back into ports.
+    pub fn build(context: &Context, region: RegionId, thread: bool) -> Result<Cfg, PassError> {
         let blocks = context.get_region(region).block_ids();
         let mut builder = Builder {
             context,
@@ -251,6 +257,7 @@ impl Cfg {
                 entry: 0,
                 sink: 0,
                 value_var: BTreeMap::new(),
+                chain: None,
             },
             node_of_block: BTreeMap::new(),
             arg_var: BTreeMap::new(),
@@ -260,6 +267,9 @@ impl Cfg {
         builder.build_terminators(&blocks)?;
         builder.add_preheader(blocks[0]);
         builder.unify_sinks()?;
+        if thread {
+            builder.thread_memory()?;
+        }
         builder.create_value_vars();
         Ok(builder.cfg)
     }
@@ -377,6 +387,35 @@ impl Builder<'_> {
         let preheader = self.cfg.add_synthetic(entry);
         self.cfg.nodes[preheader].assigns = assigns;
         self.cfg.entry = preheader;
+    }
+
+    /// One dependency chain through every block, as one variable: each block
+    /// is entered on a dependency argument standing for it, threads its
+    /// effects off that, and the memory the block leaves is the variable's
+    /// next value, the way any result read past its node is. The exit exports
+    /// the chain to the caller; where several exits were merged, the merged
+    /// one reads the variable as it stands there.
+    fn thread_memory(&mut self) -> Result<(), PassError> {
+        let chain = self.cfg.add_var(TypeId::DEPENDENCY);
+        for (block, node) in self.node_of_block.clone() {
+            let entry = self.context.append_dep_block_argument(block).id();
+            self.arg_var.insert(entry, chain);
+            let leaving = super::deps::thread_block(self.context, block, entry)?;
+            if let Term::Sink { op, .. } = &self.cfg.nodes[node].term {
+                self.context.append_dep_operand(*op, leaving);
+            }
+            if leaving != entry {
+                self.cfg.value_var.insert(leaving, chain);
+            }
+        }
+        if let Term::Sink {
+            args: Some(args), ..
+        } = &mut self.cfg.nodes[self.cfg.sink].term
+        {
+            args.push(chain);
+        }
+        self.cfg.chain = Some(chain);
+        Ok(())
     }
 
     /// Leave the region through one node: the extra exits keep their values by

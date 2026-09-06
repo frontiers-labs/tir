@@ -334,3 +334,64 @@ fn an_exit_with_no_loop_to_leave_is_an_error() {
         "{error}"
     );
 }
+
+/// `n` counts 1, 2, 3 through the outer loop; the inner loop leaves the outer
+/// one when `n` is 2, so `i` is bumped once. An exit resolved to the inner loop
+/// instead would bump it three times.
+const LABELED_BREAK_OUT: &str = r#"module {
+  %fn_main = func.func @main() -> !i32 {
+    %n = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    %i = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    %zero = constant {value = 0} : !i32
+    %one = constant {value = 1} : !i32
+    %two = constant {value = 2} : !i32
+    %three = constant {value = 3} : !i32
+    %ten = constant {value = 10} : !i32
+    ptr.store %zero, %n
+    ptr.store %zero, %i
+    cir.while {label = "outer"} cond {
+      %0 = ptr.load %n : !i32
+      %1 = cmpi %0, %three {predicate = "slt"} : !i1
+      cir.condition %1
+    } body {
+      %2 = ptr.load %n : !i32
+      %3 = addi %2, %one : !i32
+      ptr.store %3, %n
+      cir.while cond {
+        %t = constant {value = 1} : !i1
+        cir.condition %t
+      } body {
+        %4 = ptr.load %n : !i32
+        %5 = cmpi %4, %two {predicate = "eq"} : !i1
+        cfg.cond_br %5, ^out, ^in
+      ^out:
+        cir.break {label = "outer"}
+      ^in:
+        cir.break
+      }
+      %6 = ptr.load %i : !i32
+      %7 = addi %6, %ten : !i32
+      ptr.store %7, %i
+      cir.yield
+    }
+    %8 = ptr.load %i : !i32
+    func.return %8
+  }
+  module_end
+}"#;
+
+#[test]
+fn flattening_resolves_a_labeled_break_to_the_loop_it_names() {
+    let context = cir_context();
+    let module = parse_ir::<ModuleOp>(&context, LABELED_BREAK_OUT).expect("parse module");
+    let mut pm = tir::PassManager::new();
+    pm.nest::<tir::func::FuncOp>()
+        .add_pass(fcc::passes::RaiseLoopsPass::new());
+    pm.run(&context, context.get_op(module.id()))
+        .expect("loops flatten");
+    verify_op_tree(&context, module.id()).expect("flattened module verifies");
+
+    let main = find::<tir::func::FuncOp>(&context, &module);
+    let result = tir::interp::run_function(&context, main, vec![]).expect("runs");
+    assert_eq!(result[0].to_i64(), Some(10));
+}

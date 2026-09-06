@@ -1916,6 +1916,36 @@ impl Context {
         }
     }
 
+    /// Make the ordered `region` the unordered region `staged` was built as:
+    /// the old blocks leave the tree with whatever still sits in them, and
+    /// `staged`'s ports, operations and results become `region`'s own. `staged`
+    /// is gone afterwards.
+    pub fn replace_region_with_nodes(&self, region: RegionId, staged: RegionId) {
+        let handle = self.get_region(region);
+        let owner = handle.parent_op();
+        self.detach_subtree(&handle.block_ids());
+
+        let mut inner = self.0.write();
+        let body = std::mem::replace(
+            inner.region_mut(staged).expect("live region").body_mut(),
+            crate::region::RegionBody::Blocks(vec![]),
+        );
+        let crate::region::RegionBody::Nodes { ports, ops, .. } = &body else {
+            panic!("only an unordered region replaces an ordered one's body");
+        };
+        for port in ports {
+            slab_put(&mut inner.value_region, port.id().index(), region);
+        }
+        for &op in ops {
+            slab_put(&mut inner.op_parent, op.index(), Parent::Region(region));
+        }
+        *inner.region_mut(region).expect("live region").body_mut() = body;
+        inner.erase_region(staged);
+        if let Some(owner) = owner {
+            inner.edit_subtree(owner);
+        }
+    }
+
     /// Take the subtree under `blocks` out of the live IR and give its storage
     /// back. Bumps no version — the caller reports the edit.
     fn detach_subtree(&self, blocks: &[BlockId]) {

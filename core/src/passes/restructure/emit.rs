@@ -7,11 +7,12 @@
 //! the dispatch and continuation predicates need are materialized where they
 //! are assigned.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use super::branches::Stmt;
 use super::cfg::{Cfg, NodeId, Rhs, Src, Term, VarId, unsupported};
 use super::liveness::Liveness;
+use super::ports::Ports;
 use crate::builtin::ops as b;
 use crate::{BlockId, Context, OpId, Operation, PassError, RegionId, TypeId, Value, ValueId, scf};
 
@@ -35,7 +36,12 @@ pub fn emit(
         staged.replace_value(argument.id(), replacement);
     }
 
-    let emitter = Emitter { context, cfg, live };
+    let emitter = Emitter {
+        context,
+        cfg,
+        live,
+        ports: Ports { context, cfg, live },
+    };
     let mut env = Env::new();
     emitter.statements(tree, block, &mut env)?;
     context.replace_region_contents(region, staged);
@@ -46,6 +52,7 @@ struct Emitter<'a> {
     context: &'a Context,
     cfg: &'a Cfg,
     live: &'a Liveness,
+    ports: Ports<'a>,
 }
 
 impl Emitter<'_> {
@@ -129,10 +136,10 @@ impl Emitter<'_> {
     ) -> Result<(), PassError> {
         match args {
             Some(args) => {
-                let args = self.deps_last(args);
+                let args = self.ports.deps_last(args);
                 let operands = self.port_values(&args, block, env)?;
                 self.context
-                    .set_op_operands(op, operands, self.dep_count(&args));
+                    .set_op_operands(op, operands, self.ports.dep_count(&args));
             }
             None => {
                 self.bind_undefined_reads(op, block, env)?;
@@ -171,9 +178,9 @@ impl Emitter<'_> {
         block: BlockId,
         env: &mut Env,
     ) -> Result<(), PassError> {
-        let ports = self.ports(arms, self.live.at(continuation).clone());
-        let types = self.value_types(&ports);
-        let deps = self.dep_count(&ports);
+        let ports = self.ports.ports(arms, self.live.at(continuation).clone());
+        let types = self.ports.value_types(&ports);
+        let deps = self.ports.dep_count(&ports);
         let regions = arms
             .iter()
             .map(|arm| self.arm(arm, &ports, env))
@@ -220,7 +227,7 @@ impl Emitter<'_> {
         let mut inner = env.clone();
         self.statements(arm, block.id(), &mut inner)?;
         let yielded = self.port_values(ports, block.id(), &inner)?;
-        block.append(self.yield_ports(yielded, self.dep_count(ports)).id());
+        block.append(self.yield_ports(yielded, self.ports.dep_count(ports)).id());
         Ok(region.id())
     }
 
@@ -232,13 +239,11 @@ impl Emitter<'_> {
         env: &mut Env,
     ) -> Result<(), PassError> {
         let tail = self.cfg.loops[id].tail;
-        let Term::LoopTail { pred, exit, .. } = self.cfg.nodes[tail].term.clone() else {
+        let Term::LoopTail { pred, .. } = self.cfg.nodes[tail].term.clone() else {
             return Err(unsupported("a loop whose tail moved"));
         };
-        let mut needed = self.live.at(self.cfg.loops[id].body_entry).clone();
-        needed.extend(self.live.along(self.cfg, &exit));
-        let ports = self.ports(&[body], needed);
-        let deps = self.dep_count(&ports);
+        let ports = self.ports.loop_ports(id, body);
+        let deps = self.ports.dep_count(&ports);
 
         let condition_region = self.context.create_region();
         let condition_block = self.port_block(&ports);
@@ -274,7 +279,7 @@ impl Emitter<'_> {
             .condition_region(condition_region.id())
             .body(body_region.id())
             .inits(values.to_vec())
-            .result_types(self.value_types(&ports));
+            .result_types(self.ports.value_types(&ports));
         for &dep in dep_values {
             loop_op = loop_op.dep_operand(dep).dep_result();
         }
@@ -291,102 +296,18 @@ impl Emitter<'_> {
         }
     }
 
-    /// The variables a structured operation has to carry: those its regions
-    /// assign and something after it reads.
-    fn ports(&self, arms: &[&[Stmt]], needed: BTreeSet<VarId>) -> Vec<VarId> {
-        let mut assigned = BTreeSet::new();
-        for arm in arms {
-            assigned.extend(self.assigned(arm));
-        }
-        let ports: Vec<VarId> = assigned.intersection(&needed).copied().collect();
-        self.deps_last(&ports)
-    }
-
-    /// `ports` with the dependencies moved after the values: the order every
-    /// port list keeps its two partitions in.
-    fn deps_last(&self, ports: &[VarId]) -> Vec<VarId> {
-        let is_dep = |var: &VarId| self.cfg.var_types[*var] == TypeId::DEPENDENCY;
-        let mut ordered: Vec<VarId> = ports.iter().copied().filter(|var| !is_dep(var)).collect();
-        ordered.extend(ports.iter().copied().filter(is_dep));
-        ordered
-    }
-
-    /// How many trailing ports of a [`Self::deps_last`] list are dependencies.
-    fn dep_count(&self, ports: &[VarId]) -> usize {
-        ports
-            .iter()
-            .filter(|var| self.cfg.var_types[**var] == TypeId::DEPENDENCY)
-            .count()
-    }
-
-    /// The types of the value ports: the dependencies trailing `ports` name none.
-    fn value_types(&self, ports: &[VarId]) -> Vec<TypeId> {
-        ports[..ports.len() - self.dep_count(ports)]
-            .iter()
-            .map(|&var| self.cfg.var_types[var])
-            .collect()
-    }
-
     /// A block entered on `ports`: one argument per value, then one dependency
     /// per chain.
     fn port_block(&self, ports: &[VarId]) -> crate::BlockHandle {
-        let deps = self.dep_count(ports);
+        let deps = self.ports.dep_count(ports);
         let arguments = self
+            .ports
             .value_types(ports)
             .into_iter()
             .chain(std::iter::repeat_n(TypeId::DEPENDENCY, deps))
             .map(|ty| self.context.create_value(ty, None))
             .collect();
         self.context.create_block_with_dependencies(arguments, deps)
-    }
-
-    /// The variables a statement tree leaves with a new value.
-    fn assigned(&self, statements: &[Stmt]) -> BTreeSet<VarId> {
-        let mut assigned = BTreeSet::new();
-        for statement in statements {
-            match statement {
-                Stmt::Node(node) => {
-                    assigned.extend(self.cfg.nodes[*node].assigns.iter().map(|(var, _)| *var));
-                    for op in self.cfg.ops(*node) {
-                        for result in self.context.get_op(op).results() {
-                            assigned.extend(self.cfg.value_var.get(&result).copied());
-                        }
-                    }
-                }
-                Stmt::Assign(assigns) => assigned.extend(assigns.iter().map(|(var, _)| *var)),
-                Stmt::Exit { .. } => {}
-                Stmt::If {
-                    then_arm,
-                    else_arm,
-                    continuation,
-                    ..
-                } => assigned
-                    .extend(self.ports(&[then_arm, else_arm], self.live.at(*continuation).clone())),
-                Stmt::Switch {
-                    arms,
-                    default,
-                    continuation,
-                    ..
-                } => {
-                    let bodies = arms
-                        .iter()
-                        .map(|(_, arm)| arm.as_slice())
-                        .chain([default.as_slice()])
-                        .collect::<Vec<_>>();
-                    assigned.extend(self.ports(&bodies, self.live.at(*continuation).clone()));
-                }
-                Stmt::Loop { id, body } => {
-                    let tail = self.cfg.loops[*id].tail;
-                    let Term::LoopTail { exit, .. } = &self.cfg.nodes[tail].term else {
-                        continue;
-                    };
-                    let mut needed = self.live.at(self.cfg.loops[*id].body_entry).clone();
-                    needed.extend(self.live.along(self.cfg, exit));
-                    assigned.extend(self.ports(&[body], needed));
-                }
-            }
-        }
-        assigned
     }
 
     /// One value per port, read from `env` or invented where nothing reaching
@@ -499,7 +420,7 @@ impl Emitter<'_> {
 
 /// Whether `ty` is an integer, the only type this pass knows how to invent a
 /// value of.
-fn is_integer(context: &Context, ty: TypeId) -> bool {
+pub(super) fn is_integer(context: &Context, ty: TypeId) -> bool {
     let data = context.get_type_data(ty);
     (data.as_ref() as &dyn std::any::Any)
         .downcast_ref::<crate::builtin::IntegerType>()

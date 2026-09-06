@@ -1,0 +1,24 @@
+// RUN: tir opt --verify %s | filecheck %s
+// RUN: tir interp %s --args=1,6 | filecheck --check-prefix=EVAL %s
+
+// An arm may name a value of the enclosing region as its result outright.
+// That is a read like any other: the gamma depends on the sibling producing
+// it, so the sibling runs when the gamma is demanded.
+
+module {
+  %fn_main = func.func @main(%0: !i32, %1: !i32) -> !i32 {
+    %3 = muli %1, %1 : !i32
+    %2 = scf.switch2 %0 {
+      -> %1
+    }
+    {
+      -> %3
+    }
+    -> %2
+  }
+  module_end
+}
+
+// CHECK: %[[P:[0-9]+]] = muli
+// CHECK: %{{[0-9]+}} = scf.switch2
+// EVAL: i32 36

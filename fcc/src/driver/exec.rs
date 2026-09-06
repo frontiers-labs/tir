@@ -245,6 +245,7 @@ fn run_compile_action(
                 opts.lang_options,
                 opts.march.as_deref(),
                 opts.mabi.as_deref(),
+                opts.nodes,
             );
             let mut ir = String::new();
             let mut fmt = tir::IRFormatter::new(&mut ir);

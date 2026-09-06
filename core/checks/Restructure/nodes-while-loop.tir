@@ -1,0 +1,54 @@
+// RUN: tir opt --pass restructure-nodes --verify %s | filecheck %s
+// RUN: tir interp %s -f sum --args=4 | filecheck --check-prefix=FOUR %s
+// RUN: tir opt --pass restructure-nodes %s | tir interp -f sum --args=4 | filecheck --check-prefix=FOUR %s
+// RUN: tir interp %s -f sum --args=0 | filecheck --check-prefix=ZERO %s
+// RUN: tir opt --pass restructure-nodes %s | tir interp -f sum --args=0 | filecheck --check-prefix=ZERO %s
+// RUN: tir opt --pass restructure-nodes,shuffle-state %s | tir interp -f sum --args=4 | filecheck --check-prefix=FOUR %s
+
+// A head-controlled counted loop accumulating into a slot. The loop becomes an
+// `scf.loop` whose body tests first and stores only when it repeats; the
+// carried counter, the repeat predicate and the memory chain all cross the
+// iteration as ports, and with n = 0 the store never runs.
+
+module {
+  %fn_sum = func.func @sum(%0: !i32) -> !i32 {
+    %p = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    %zero = constant {value = 0} : !i32
+    %one = constant {value = 1} : !i32
+    ptr.store %zero, %p
+    cfg.br ^head(%zero : !i32)
+  ^head(%i: !i32):
+    %more = cmpi %i, %0 {predicate = "slt"} : !i1
+    cfg.cond_br %more, ^body, ^exit
+  ^body:
+    %acc = ptr.load %p : !i32
+    %next = addi %acc, %i : !i32
+    ptr.store %next, %p
+    %i1 = addi %i, %one : !i32
+    cfg.br ^head(%i1 : !i32)
+  ^exit:
+    %r = ptr.load %p : !i32
+    func.return %r
+  }
+  module_end
+}
+
+// CHECK: %{{[0-9]+}} = func.func @sum
+// CHECK: %[[I:[0-9]+]] | %[[M:[0-9]+]] = scf.loop (%[[IP:[0-9]+]] = %{{[0-9]+}} | %[[D:[0-9]+]] = %{{[0-9]+}}) {
+// CHECK-NEXT: %[[MORE:[0-9]+]] = cmpi %[[IP]], %{{[0-9]+}} {predicate = "slt"} : !i1
+// CHECK-NEXT: %[[NI:[0-9]+]], %[[NR:[0-9]+]] | %[[ND:[0-9]+]] = scf.switch2 %[[MORE]] args(| %[[D]]) (| %[[E:[0-9]+]]) {
+// CHECK-NEXT: %[[STOP:[0-9]+]] = constant {value = 0} : !i1
+// CHECK-NEXT: -> %[[IP]], %[[STOP]] | %[[E]]
+// CHECK-NEXT: }
+// CHECK-NEXT: (| %[[B:[0-9]+]]) {
+// CHECK-NEXT: %{{[0-9]+}} | %[[R:[0-9]+]] = ptr.load %{{[0-9]+}} | %[[B]] : !i32
+// CHECK: | %[[S:[0-9]+]] = ptr.store %{{[0-9]+}}, %{{[0-9]+}} | %[[R]]
+// CHECK: -> %{{[0-9]+}}, %{{[0-9]+}} | %[[S]]
+// CHECK-NEXT: }
+// CHECK-NEXT: -> %[[NR]], %[[NI]], %[[NI]] | %[[ND]], %[[ND]]
+// CHECK-NEXT: }
+// CHECK-NEXT: %[[V:[0-9]+]] | %[[VD:[0-9]+]] = ptr.load %{{[0-9]+}} | %[[M]] : !i32
+// CHECK-NEXT: -> %[[V]] | %[[VD]]
+
+// FOUR: i32 6
+// ZERO: i32 0

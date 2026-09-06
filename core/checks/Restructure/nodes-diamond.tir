@@ -1,0 +1,49 @@
+// RUN: tir opt --pass restructure-nodes --verify %s | filecheck %s
+// RUN: tir interp %s -f pick --args=1,5 | filecheck --check-prefix=THEN %s
+// RUN: tir opt --pass restructure-nodes %s | tir interp -f pick --args=1,5 | filecheck --check-prefix=THEN %s
+// RUN: tir interp %s -f pick --args=0,5 | filecheck --check-prefix=ELSE %s
+// RUN: tir opt --pass restructure-nodes %s | tir interp -f pick --args=0,5 | filecheck --check-prefix=ELSE %s
+// RUN: tir opt --pass restructure-nodes,shuffle-state %s | tir interp -f pick --args=0,5 | filecheck --check-prefix=ELSE %s
+
+// Each arm stores to the slot and computes a value. A gamma forwards nothing:
+// the arms read the enclosing scope, and only what the continuation needs
+// leaves as a joined result, with the memory each arm leaves trailing. The
+// arms sit false first, since the predicate indexes them.
+
+module {
+  %fn_pick = func.func @pick(%0: !i1, %1: !i32) -> !i32 {
+    %p = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    ptr.store %1, %p
+    cfg.cond_br %0, ^then, ^else
+  ^then:
+    %2 = addi %1, %1 : !i32
+    ptr.store %2, %p
+    cfg.br ^join(%1 : !i32)
+  ^else:
+    %3 = subi %1, %1 : !i32
+    cfg.br ^join(%3 : !i32)
+  ^join(%4: !i32):
+    %5 = ptr.load %p : !i32
+    %6 = addi %4, %5 : !i32
+    func.return %6
+  }
+  module_end
+}
+
+// CHECK: %{{[0-9]+}} = func.func @pick(%[[C:[0-9]+]]: !i1, %[[N:[0-9]+]]: !i32) -> !i32 {
+// CHECK: | %[[S0:[0-9]+]] = ptr.store %[[N]], %[[P:[0-9]+]] | %{{[0-9]+}}
+// CHECK-NEXT: %[[V:[0-9]+]] | %[[M:[0-9]+]] = scf.switch2 %[[C]] args(| %[[S0]]) (| %[[EA:[0-9]+]]) {
+// CHECK-NEXT: %[[E:[0-9]+]] = subi %[[N]], %[[N]] : !i32
+// CHECK-NEXT: -> %[[E]] | %[[EA]]
+// CHECK-NEXT: }
+// CHECK-NEXT: (| %[[TA:[0-9]+]]) {
+// CHECK-NEXT: %[[T:[0-9]+]] = addi %[[N]], %[[N]] : !i32
+// CHECK-NEXT: | %[[S1:[0-9]+]] = ptr.store %[[T]], %[[P]] | %[[TA]]
+// CHECK-NEXT: -> %[[N]] | %[[S1]]
+// CHECK-NEXT: }
+// CHECK-NEXT: %[[L:[0-9]+]] | %[[R:[0-9]+]] = ptr.load %[[P]] | %[[M]] : !i32
+// CHECK-NEXT: %[[SUM:[0-9]+]] = addi %[[V]], %[[L]] : !i32
+// CHECK-NEXT: -> %[[SUM]] | %[[R]]
+
+// THEN: i32 15
+// ELSE: i32 5

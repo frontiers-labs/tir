@@ -1,0 +1,20 @@
+// RUN: tir opt --pass restructure-nodes --verify %s | filecheck %s
+// RUN: tir opt --pass restructure-nodes %s | tir interp -f f --args=3,4 | filecheck --check-prefix=VALUE %s
+
+// One block converts like any graph, and a function touching no memory
+// carries no chain: the return's operand is the region's one result.
+
+module {
+  %fn_f = func.func @f(%0: !i32, %1: !i32) -> !i32 {
+    %2 = addi %0, %1 : !i32
+    func.return %2
+  }
+  module_end
+}
+
+// CHECK: %{{[0-9]+}} = func.func @f(%[[A:[0-9]+]]: !i32, %[[B:[0-9]+]]: !i32) -> !i32 {
+// CHECK-NEXT: %[[S:[0-9]+]] = addi %[[A]], %[[B]] : !i32
+// CHECK-NEXT: -> %[[S]]
+// CHECK-NEXT: }
+
+// VALUE: i32 7

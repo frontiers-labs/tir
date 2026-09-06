@@ -1,0 +1,39 @@
+// RUN: tir opt --pass restructure-nodes --verify %s | filecheck %s
+// RUN: tir interp %s | filecheck --check-prefix=VALUE %s
+// RUN: tir opt --pass restructure-nodes %s | tir interp | filecheck --check-prefix=VALUE %s
+// RUN: tir opt --pass restructure-nodes,shuffle-state %s | tir interp | filecheck --check-prefix=VALUE %s
+
+// `*p = 1; x = *p; *p = 2` on ordered blocks carries no dependencies. The
+// conversion constructs them before the block order is gone: the read observes
+// the first write, and the second write takes the read's state, so x is 1 and
+// the memory ends at 2 in whatever order the nodes are inserted.
+
+module {
+  %fn_main = func.func @main() -> !i32 {
+    %p = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    %one = constant {value = 1} : !i32
+    %two = constant {value = 2} : !i32
+    %ten = constant {value = 10} : !i32
+    ptr.store %one, %p
+    %x = ptr.load %p : !i32
+    ptr.store %two, %p
+    %final = ptr.load %p : !i32
+    %scaled = muli %x, %ten : !i32
+    %sum = addi %scaled, %final : !i32
+    func.return %sum
+  }
+  module_end
+}
+
+// CHECK: %{{[0-9]+}} = func.func @main() -> !i32 {
+// CHECK-NEXT: %[[P:[0-9]+]] = ptr.alloca
+// CHECK: | %[[E:[0-9]+]] = state.entry_state
+// CHECK-NEXT: | %[[S1:[0-9]+]] = ptr.store %{{[0-9]+}}, %[[P]] | %[[E]]
+// CHECK-NEXT: %[[X:[0-9]+]] | %[[R1:[0-9]+]] = ptr.load %[[P]] | %[[S1]] : !i32
+// CHECK-NEXT: | %[[S2:[0-9]+]] = ptr.store %{{[0-9]+}}, %[[P]] | %[[R1]]
+// CHECK-NEXT: %[[F:[0-9]+]] | %[[R2:[0-9]+]] = ptr.load %[[P]] | %[[S2]] : !i32
+// CHECK: %[[SUM:[0-9]+]] = addi
+// CHECK-NEXT: -> %[[SUM]] | %[[R2]]
+// CHECK-NEXT: }
+
+// VALUE: i32 12

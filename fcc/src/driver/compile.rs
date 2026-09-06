@@ -53,6 +53,7 @@ pub(super) fn lower_to_ir(
     options: LangOptions,
     march: Option<&str>,
     mabi: Option<&str>,
+    nodes: bool,
 ) -> tir::builtin::ModuleOp {
     let fail = |error: String| -> ! {
         eprintln!("fcc: error: {error}; pass --march explicitly");
@@ -77,6 +78,8 @@ pub(super) fn lower_to_ir(
     // Restructuring accepts CFG form only, so no `cir` operation may survive
     // into it: struct ops become pointer arithmetic, loop ops become `scf.for`
     // where the counted shape is provable and blocks with branches otherwise.
+    // The unordered form takes the same input and turns a raised `scf.for`
+    // into `scf.for2` on the way.
     run_pass(
         context,
         &module,
@@ -91,13 +94,23 @@ pub(super) fn lower_to_ir(
         true,
         crate::passes::RaiseLoopsPass::new(),
     );
-    run_pass(
-        context,
-        &module,
-        "restructuring",
-        true,
-        tir::passes::RestructurePass::new(),
-    );
+    if nodes {
+        run_pass(
+            context,
+            &module,
+            "restructuring",
+            true,
+            tir::passes::RestructureNodesPass::new(),
+        );
+    } else {
+        run_pass(
+            context,
+            &module,
+            "restructuring",
+            true,
+            tir::passes::RestructurePass::new(),
+        );
+    }
     describe_target(context, &module, machine.as_ref())
 }
 
@@ -174,6 +187,10 @@ pub(super) fn emit_machine_code(
         eprintln!("fcc: error: --march is required for the asm and obj stages");
         std::process::exit(1);
     };
+    if opts.nodes {
+        eprintln!("fcc: error: --nodes stops at the IR stage; the backend takes structured blocks");
+        std::process::exit(1);
+    }
     let target = tir::backend::select_target_with_abi(
         march,
         opts.mcpu.as_deref(),
@@ -202,6 +219,7 @@ pub(super) fn emit_machine_code(
         opts.lang_options,
         Some(march),
         opts.mabi.as_deref(),
+        false,
     );
 
     let mut pm = tir::PassManager::new();

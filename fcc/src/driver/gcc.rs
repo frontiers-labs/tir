@@ -142,6 +142,7 @@ where
         pipeline: None,
         opt_level,
         shuffle_machine_order: false,
+        nodes: false,
         dry_run,
     })
 }

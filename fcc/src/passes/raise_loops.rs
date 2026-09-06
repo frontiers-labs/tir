@@ -8,6 +8,7 @@
 //! as it always has. Refusal is the default outcome: a loop the analysis cannot
 //! prove counted is a missed optimisation, never a miscompilation.
 
+use tir::analysis::exits::resolve_exit_target;
 use tir::analysis::{AnalysisManager, Escape, EscapeFacts};
 use tir::attributes::AttributeValue;
 use tir::builtin::{AddIOp, CmpIOp, ConstantOp, ops as b};
@@ -154,10 +155,18 @@ fn flatten(context: &Context, rewriter: &mut Rewriter, op_id: OpId) -> Result<()
     let exit = rewriter.split_block(block, position + 1).id();
     context.get_region(region).add_block(exit);
 
-    spill(context, rewriter, shape.condition, region, body, exit)?;
-    spill(context, rewriter, shape.body, region, latch, exit)?;
+    spill(
+        context,
+        rewriter,
+        op_id,
+        shape.condition,
+        region,
+        body,
+        exit,
+    )?;
+    spill(context, rewriter, op_id, shape.body, region, latch, exit)?;
     if let Some(step) = shape.step {
-        spill(context, rewriter, step, region, condition, exit)?;
+        spill(context, rewriter, op_id, step, region, condition, exit)?;
     }
 
     let head = if shape.head_controlled {
@@ -172,12 +181,15 @@ fn flatten(context: &Context, rewriter: &mut Rewriter, op_id: OpId) -> Result<()
 }
 
 /// Replace the terminators that leave `source` with the branches they stand for —
-/// a `cir.condition` picks between `enter` and `exit`, a `cir.break` leaves, and a
-/// fallthrough or `cir.continue` goes on to `enter` — then move its blocks into
-/// `destination`. Blocks leaving through an ordinary branch are already right.
+/// a `cir.condition` picks between `enter` and `exit`, a `cir.break` leaving this
+/// loop goes to `exit`, and a fallthrough or a `cir.continue` of this loop goes
+/// on to `enter` — then move its blocks into `destination`. An exit naming an
+/// outer loop stays for that loop's turn; blocks leaving through an ordinary
+/// branch are already right.
 fn spill(
     context: &Context,
     rewriter: &mut Rewriter,
+    loop_op: OpId,
     source: RegionId,
     destination: RegionId,
     enter: BlockId,
@@ -191,14 +203,15 @@ fn spill(
             .expect("every block ends in a terminator");
         let op = context.get_op(last);
         let target = OperationRef::new(op.clone());
+        let leaves_this_loop = || resolve_exit_target(context, last).ok() == Some(loop_op);
         if op.is::<cir::ConditionOp>() {
             let branch =
                 cb::cond_br(context, op.operands()[0], vec![], vec![], enter, exit).build();
             rewriter.replace_op(&target, &branch)?;
-        } else if op.is::<cir::BreakOp>() {
+        } else if op.is::<cir::BreakOp>() && leaves_this_loop() {
             let branch = cb::br(context, vec![], exit).build();
             rewriter.replace_op(&target, &branch)?;
-        } else if op.is::<cir::YieldOp>() || op.is::<cir::ContinueOp>() {
+        } else if op.is::<cir::YieldOp>() || (op.is::<cir::ContinueOp>() && leaves_this_loop()) {
             let branch = cb::br(context, vec![], enter).build();
             rewriter.replace_op(&target, &branch)?;
         }

@@ -1,0 +1,58 @@
+// RUN: tir opt --pass restructure-nodes --verify %s | filecheck %s
+// RUN: tir interp %s -f brk --args=3 | filecheck --check-prefix=BREAK %s
+// RUN: tir opt --pass restructure-nodes %s | tir interp -f brk --args=3 | filecheck --check-prefix=BREAK %s
+// RUN: tir interp %s -f brk --args=9 | filecheck --check-prefix=DONE %s
+// RUN: tir opt --pass restructure-nodes %s | tir interp -f brk --args=9 | filecheck --check-prefix=DONE %s
+// RUN: tir opt --pass restructure-nodes,shuffle-state %s | tir interp -f brk --args=3 | filecheck --check-prefix=BREAK %s
+
+// A loop with two exits, each storing a different marker after it. Which
+// exit an iteration took leaves the loop as a carried selector, and the gamma
+// after the loop dispatches on it: the break path returns the marker it
+// stored, the fall-through path the counter. Nothing in the loop touches
+// memory, so the loop carries no chain; the gamma after it does.
+
+module {
+  %fn_brk = func.func @brk(%0: !i32) -> !i32 {
+    %p = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    %zero = constant {value = 0} : !i32
+    %one = constant {value = 1} : !i32
+    %five = constant {value = 5} : !i32
+    %hundred = constant {value = 100} : !i32
+    ptr.store %zero, %p
+    cfg.br ^head(%zero : !i32)
+  ^head(%i: !i32):
+    %more = cmpi %i, %five {predicate = "slt"} : !i1
+    cfg.cond_br %more, ^body, ^done
+  ^body:
+    %hit = cmpi %i, %0 {predicate = "eq"} : !i1
+    cfg.cond_br %hit, ^broke, ^step
+  ^step:
+    %i1 = addi %i, %one : !i32
+    cfg.br ^head(%i1 : !i32)
+  ^broke:
+    ptr.store %hundred, %p
+    %m = ptr.load %p : !i32
+    func.return %m
+  ^done:
+    ptr.store %i, %p
+    %r = ptr.load %p : !i32
+    func.return %r
+  }
+  module_end
+}
+
+// CHECK: %{{[0-9]+}} = func.func @brk
+// CHECK: %[[I:[0-9]+]], %[[SEL:[0-9]+]] = scf.loop (%{{[0-9]+}} = %{{[0-9]+}}, %{{[0-9]+}} = %{{[0-9]+}}) {
+// CHECK: scf.switch2
+// CHECK: -> %{{[0-9]+}}, %{{[0-9]+}}, %{{[0-9]+}}, %{{[0-9]+}}, %{{[0-9]+}}
+// CHECK-NEXT: }
+// CHECK-NEXT: %[[R:[0-9]+]] | %[[RD:[0-9]+]] = scf.switch2 %[[SEL]] args(| %{{[0-9]+}}) (| %[[A:[0-9]+]]) {
+// CHECK-NEXT: | %[[S1:[0-9]+]] = ptr.store %{{[0-9]+}}, %{{[0-9]+}} | %[[A]]
+// CHECK: }
+// CHECK-NEXT: (| %[[B:[0-9]+]]) {
+// CHECK-NEXT: | %[[S2:[0-9]+]] = ptr.store %[[I]], %{{[0-9]+}} | %[[B]]
+// CHECK: }
+// CHECK-NEXT: -> %[[R]] | %[[RD]]
+
+// BREAK: i32 100
+// DONE: i32 5

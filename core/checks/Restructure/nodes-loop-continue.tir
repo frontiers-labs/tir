@@ -1,0 +1,45 @@
+// RUN: tir opt --pass restructure-nodes --verify %s | filecheck %s
+// RUN: tir interp %s -f evens --args=6 | filecheck --check-prefix=VALUE %s
+// RUN: tir opt --pass restructure-nodes %s | tir interp -f evens --args=6 | filecheck --check-prefix=VALUE %s
+// RUN: tir opt --pass restructure-nodes,shuffle-state %s | tir interp -f evens --args=6 | filecheck --check-prefix=VALUE %s
+
+// Two edges close the loop: one skipping the store, one after it. Both reach
+// the same tail, so the body is one region whose gamma carries the memory the
+// path it took left behind.
+
+module {
+  %fn_evens = func.func @evens(%0: !i32) -> !i32 {
+    %p = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    %zero = constant {value = 0} : !i32
+    %one = constant {value = 1} : !i32
+    %two = constant {value = 2} : !i32
+    ptr.store %zero, %p
+    cfg.br ^head(%zero : !i32)
+  ^head(%i: !i32):
+    %more = cmpi %i, %0 {predicate = "slt"} : !i1
+    cfg.cond_br %more, ^body, ^exit
+  ^body:
+    %i1 = addi %i, %one : !i32
+    %rem = remsi %i, %two : !i32
+    %odd = cmpi %rem, %one {predicate = "eq"} : !i1
+    cfg.cond_br %odd, ^head(%i1 : !i32), ^add
+  ^add:
+    %acc = ptr.load %p : !i32
+    %next = addi %acc, %i : !i32
+    ptr.store %next, %p
+    cfg.br ^head(%i1 : !i32)
+  ^exit:
+    %r = ptr.load %p : !i32
+    func.return %r
+  }
+  module_end
+}
+
+// CHECK: %{{[0-9]+}} = func.func @evens
+// CHECK: scf.loop
+// CHECK: scf.switch2
+// CHECK: scf.switch2
+// CHECK: ptr.load
+// CHECK: ptr.store
+
+// VALUE: i32 6

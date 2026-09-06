@@ -395,12 +395,15 @@ pub(crate) fn topological_order(
 }
 
 /// Every value an operation reads, its nested regions included: what a region
-/// holds is one node of its dependence graph, whatever it holds inside.
+/// holds is one node of its dependence graph, whatever it holds inside. A
+/// value a nested region names as its result outright is read too.
 pub(crate) fn values_read(context: &Context, op: OpId) -> Vec<ValueId> {
     let instance = context.get_op(op);
     let mut values = instance.operands().to_vec();
     for region in instance.regions() {
-        for child in context.get_region(region).op_ids() {
+        let region = context.get_region(region);
+        values.extend(region.results());
+        for child in region.op_ids() {
             values.extend(values_read(context, child));
         }
     }

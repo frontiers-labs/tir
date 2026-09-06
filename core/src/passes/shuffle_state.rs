@@ -12,6 +12,9 @@
 //! by its operands; anything else — an effect no edge spells — pins its block,
 //! because moving it would change a program the representation does not claim
 //! to order.
+//!
+//! An unordered region has no order to pin: its insertion order is never read,
+//! so any permutation of it is the same region, and it gets one.
 
 use crate::func::FuncOp;
 use crate::utils::Rng;
@@ -66,13 +69,35 @@ impl Pass for ShuffleStatePass {
 
 impl ShuffleStatePass {
     fn shuffle_region(&mut self, context: &Context, region: RegionId) {
-        for block in context.get_region(region).iter(context.clone()) {
+        let handle = context.get_region(region);
+        if handle.is_nodes() {
+            let ops = handle.op_ids();
+            for &op_id in &ops {
+                for nested in context.get_op(op_id).regions() {
+                    self.shuffle_region(context, nested);
+                }
+            }
+            self.shuffle_nodes(context, region, ops);
+            return;
+        }
+        for block in handle.iter(context.clone()) {
             for op_id in block.op_ids() {
                 for nested in context.get_op(op_id).regions() {
                     self.shuffle_region(context, nested);
                 }
             }
             self.shuffle_block(context, &block);
+        }
+    }
+
+    /// Insert `ops` into `region` again, in another order.
+    fn shuffle_nodes(&mut self, context: &Context, region: RegionId, mut ops: Vec<OpId>) {
+        for &op_id in &ops {
+            context.remove_from_region(region, op_id);
+        }
+        while !ops.is_empty() {
+            let picked = ops.swap_remove(self.rng.below(ops.len()));
+            context.add(region, picked);
         }
     }
 

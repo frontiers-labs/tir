@@ -21,7 +21,7 @@ pub use lower_memory_intrinsics::LowerMemoryIntrinsicsPass;
 pub use lower_ptr_disjoint::LowerPtrDisjointPass;
 pub use materialize_symbol_addresses::MaterializeSymbolAddressesPass;
 pub use promote::PromotePass;
-pub use restructure::RestructurePass;
+pub use restructure::{RestructureNodesPass, RestructurePass};
 pub use shuffle_state::ShuffleStatePass;
 pub use symbol_uniqueness::CheckUniqueSymbolsPass;
 pub use thread_state::{ThreadStatePass, UnthreadPass, unthread};
