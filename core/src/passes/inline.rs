@@ -420,7 +420,8 @@ fn splice(
     rewriter.erase_block(block.id());
 
     let caller = context.get_op(graph.nodes[site.caller].func);
-    let tuples = fold_tuple_gets(context, rewriter, &ops_under(context, &caller))?;
+    let body = graph.nodes[site.caller].body;
+    let tuples = fold_tuple_gets(context, rewriter, body, &ops_under(context, &caller))?;
     erase_unused(context, rewriter, &tuples)?;
     Ok(copied)
 }
@@ -480,7 +481,9 @@ fn splice_nodes(
             context.add(body, op);
         }
         if instance.is::<crate::state::EntryStateOp>() {
-            let entered = entered.expect("a call into memory observes a dependency");
+            let Some(entered) = entered else {
+                return Err(PassError::RewriteFailed(call.id));
+            };
             rename(context, destination, instance.dep_results()[0], entered);
             rewriter.erase_op(&OperationRef::new(instance))?;
         }
@@ -490,13 +493,20 @@ fn splice_nodes(
     for (&old, &new) in call.value_results().iter().zip(&produced[..values]) {
         rename(context, destination, old, new);
     }
-    for (&old, &new) in call.dep_results().iter().zip(&produced[values..]) {
+    // A callee touching no memory leaves no dependency behind: the call passed
+    // the state it observed through unchanged.
+    for (index, &old) in call.dep_results().iter().enumerate() {
+        let new = produced
+            .get(values + index)
+            .copied()
+            .or(entered)
+            .ok_or(PassError::RewriteFailed(call.id))?;
         rename(context, destination, old, new);
     }
     rewriter.erase_op(&site.call)?;
 
     let caller = context.get_op(graph.nodes[site.caller].func);
-    let tuples = fold_tuple_gets(context, rewriter, &ops_under(context, &caller))?;
+    let tuples = fold_tuple_gets(context, rewriter, body, &ops_under(context, &caller))?;
     erase_unused(context, rewriter, &tuples)?;
     Ok(copied)
 }
@@ -518,6 +528,7 @@ fn rename(context: &Context, region: RegionId, old: ValueId, new: ValueId) {
 fn fold_tuple_gets(
     context: &Context,
     rewriter: &mut Rewriter,
+    body: RegionId,
     ops: &[OpId],
 ) -> Result<Vec<(OpId, ValueId)>, PassError> {
     let mut sources = Vec::new();
@@ -535,7 +546,7 @@ fn fold_tuple_gets(
         let Some(&element) = Operation::operands(&made).get(get.index()) else {
             continue;
         };
-        context.replace_value_uses(get.result(), element);
+        rename(context, body, get.result(), element);
         rewriter.erase_op(&OperationRef::new(instance))?;
         sources.push((source, made.result()));
     }
@@ -560,11 +571,14 @@ fn cost_of(context: &Context, function: OpId) -> u32 {
         for op in region_ops(context, root) {
             let instance = context.get_op(op);
             count(context, &instance, total);
+            // Dependency bookkeeping computes nothing, so it costs nothing.
             let free = instance
                 .clone()
                 .as_interface::<dyn ConstantLike>()
                 .is_some()
-                || instance.clone().as_interface::<dyn Terminator>().is_some();
+                || instance.clone().as_interface::<dyn Terminator>().is_some()
+                || instance.is::<crate::state::EntryStateOp>()
+                || instance.is::<crate::state::JoinOp>();
             if !free {
                 *total += 1;
             }

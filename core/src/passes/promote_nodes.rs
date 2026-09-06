@@ -21,7 +21,7 @@ use crate::analysis::slots::{SlotState, agreed_value_type, collect_slots};
 use crate::analysis::{AnalysisManager, EscapeFacts};
 use crate::func::FuncOp;
 use crate::{
-    Context, Gamma, MemoryRead, MemoryWrite, NewOp, OpHandle, OpId, OperationRef, Pass, PassError,
+    Context, Gamma, MemoryRead, MemoryWrite, OpHandle, OpId, OperationRef, Pass, PassError,
     PassTarget, RegionId, RegionKind, Rewriter, Theta, TypeId, ValueId,
 };
 
@@ -65,7 +65,6 @@ impl Pass for PromoteNodesPass {
                 context,
                 slot,
                 ty,
-                template: state.loads.first().copied(),
                 reach: HashMap::new(),
                 grown: HashSet::new(),
                 kept: false,
@@ -78,8 +77,12 @@ impl Pass for PromoteNodesPass {
 
 /// The type a slot's value takes once promoted, or `None` where it stays memory:
 /// allocated in the body itself, never escaping, named whole by every access,
-/// agreed on one type, read at least once, ordered by the chain at every access,
-/// and crossed only by ops whose ports can be grown.
+/// agreed on one type, ordered by the chain at every access, crossed only by
+/// ops whose ports can be grown, and written before any loop or gate that
+/// writes it is entered — a port carries a value, and the slot has none until
+/// something writes it. A read of what nothing wrote is the reader's own affair
+/// and stays a read; a port entered on it would be a read the program never
+/// made.
 fn promotable(
     context: &Context,
     slot: ValueId,
@@ -95,9 +98,83 @@ fn promotable(
         return None;
     }
     let ty = agreed_value_type(context, state)?;
-    accesses()
-        .all(|op| crosses_declared_bindings(context, op, body))
+    if !accesses().all(|op| crosses_declared_bindings(context, op, body)) {
+        return None;
+    }
+    let writers: Vec<OpId> = state
+        .stores
+        .iter()
+        .flat_map(|&store| enclosing_ops(context, store, body))
+        .collect();
+    writers
+        .iter()
+        .all(|&op| {
+            context
+                .get_op(op)
+                .dep_operands()
+                .iter()
+                .all(|&dep| written_before(context, slot, dep, &writers))
+        })
         .then_some(ty)
+}
+
+/// The loops and gates between `op` and `body`, innermost first.
+fn enclosing_ops(context: &Context, op: OpId, body: RegionId) -> Vec<OpId> {
+    let mut ops = Vec::new();
+    let mut region = context.parent_nodes_region(op);
+    while let Some(current) = region.filter(|&current| current != body) {
+        let Some(owner) = context.get_region(current).parent_op() else {
+            break;
+        };
+        ops.push(owner);
+        region = context.parent_nodes_region(owner);
+    }
+    ops
+}
+
+/// Whether every path the chain took to `dep` wrote `slot`: a write, a loop or
+/// gate that writes it, or the port of one, counts; the entry state does not.
+fn written_before(context: &Context, slot: ValueId, dep: ValueId, writers: &[OpId]) -> bool {
+    let Some(def) = context.get_value(dep).defining_op() else {
+        let Some(owner) = context
+            .region_of_port(dep)
+            .and_then(|region| context.get_region(region).parent_op())
+        else {
+            return false;
+        };
+        if writers.contains(&owner) && context.get_op(owner).has_interface::<dyn Theta>() {
+            return true;
+        }
+        let ports: Vec<ValueId> = context
+            .region_of_port(dep)
+            .map(|region| context.get_region(region).dep_arguments())
+            .unwrap_or_default()
+            .iter()
+            .map(crate::Value::id)
+            .collect();
+        let operands = context.get_op(owner).dep_operands();
+        return match operands.get(dep_index(&ports, dep)) {
+            Some(&entered) => written_before(context, slot, entered, writers),
+            None => false,
+        };
+    };
+    let instance = context.get_op(def);
+    if writers.contains(&def) {
+        return true;
+    }
+    if let Some(write) = instance.clone().as_interface::<dyn MemoryWrite>()
+        && write.write_location() == slot
+    {
+        return true;
+    }
+    if instance.is::<crate::state::EntryStateOp>() {
+        return false;
+    }
+    if instance.regions().is_empty() {
+        return written_before(context, slot, instance.dep_operands()[0], writers);
+    }
+    let index = dep_index(&instance.dep_results(), dep);
+    written_before(context, slot, instance.dep_operands()[index], writers)
 }
 
 /// Whether `op` accesses `slot` at the slot's own address and observes a
@@ -146,13 +223,11 @@ struct Promoter<'a> {
     context: &'a Context,
     slot: ValueId,
     ty: TypeId,
-    /// A load of the slot to copy for a read of what nothing wrote.
-    template: Option<OpId>,
     /// The slot's value at each dependency already walked.
     reach: HashMap<ValueId, Reach>,
     /// The ops whose port for the slot has been grown.
     grown: HashSet<OpId>,
-    /// Whether a read of the untouched allocation stands, keeping it alive.
+    /// Whether a read of what nothing wrote stands, keeping the allocation.
     kept: bool,
 }
 
@@ -275,14 +350,19 @@ impl Promoter<'_> {
     /// the exit dependency is what the loop produces. Both are recorded on the
     /// loop's dependency port and result at `index`.
     fn grow_theta(&mut self, op: &OpHandle, index: usize) {
-        if !self.grown.insert(op.id) {
+        if self.grown.contains(&op.id) {
             return;
         }
         let context = self.context;
         let theta = op.clone().as_interface::<dyn Theta>().expect("a loop");
         let body = theta.body();
         let entered = op.dep_operands()[index];
+        // Spelling the init may grow an enclosing loop, whose latch walks back
+        // into this one and grows it on the way: mark it grown only after.
         let init = self.held(entered);
+        if !self.grown.insert(op.id) {
+            return;
+        }
         let region = context.get_region(body);
         let dep_results = region.dep_results();
         let (continue_dep, exit_dep) = (
@@ -330,47 +410,13 @@ impl Promoter<'_> {
             .insert(op.dep_results()[index], Reach::Value(result));
     }
 
-    /// The value the slot holds at `dep`, spelled: what a write put there, or a
-    /// read of the untouched allocation observing `dep`, placed where that
-    /// dependency is. Nothing names an indeterminate value, and the allocation
-    /// is exactly the memory the reader would have read.
+    /// The value the slot holds at `dep`, which [`promotable`] proved a write
+    /// put there.
     fn held(&mut self, dep: ValueId) -> ValueId {
-        if let Reach::Value(value) = self.reach(dep) {
-            return value;
+        match self.reach(dep) {
+            Reach::Value(value) => value,
+            Reach::Undefined => unreachable!("a port is entered on a written slot"),
         }
-        let context = self.context;
-        let template = context.get_op(self.template.expect("a read to stand in for"));
-        let results: Vec<ValueId> = template
-            .value_results()
-            .iter()
-            .map(|&result| {
-                context
-                    .create_value(context.get_value(result).ty(), None)
-                    .id()
-            })
-            .collect();
-        let copy = context.add_operation(NewOp::new_dynamic(
-            (template.dialect().as_str(), template.name().as_str()),
-            context.as_context_ref(),
-            template.value_operands().to_vec(),
-            results.clone(),
-            vec![],
-            template.attributes().to_vec(),
-        ));
-        context.append_dep_operand(copy.id, dep);
-        let left = context.append_dep_result(copy.id);
-        let region = context.add_auto(copy.id);
-        // The read forks off `dep`; whatever changed the memory after `dep`, or
-        // exported it, now follows the read instead, as a chain has one changer
-        // per state.
-        for r#use in context.uses_of(dep) {
-            if r#use.op != copy.id && !crate::operation::observes_only(&context.get_op(r#use.op)) {
-                context.set_op_operand(r#use.op, r#use.index, left);
-            }
-        }
-        context.rename_region_results(region, dep, left, &[]);
-        self.kept = true;
-        results[0]
     }
 
     /// The value a write to the slot leaves it holding.

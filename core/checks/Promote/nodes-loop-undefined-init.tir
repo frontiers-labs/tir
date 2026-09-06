@@ -1,12 +1,12 @@
 // RUN: tir opt --pass restructure-nodes,promote-nodes,verify-deps --verify %s | filecheck %s
-// RUN: tir opt --pass restructure-nodes,promote-nodes %s | tir opt --verify | filecheck %s
+// RUN: tir interp %s -f f --args=3 | filecheck %s --check-prefix=VALUE
+// RUN: tir opt --pass restructure-nodes,promote-nodes %s | tir interp -f f --args=3 | filecheck %s --check-prefix=VALUE
+// RUN: tir opt --pass restructure-nodes,promote-nodes %s | tir interp -f f --args=0 | filecheck %s --check-prefix=ZERO
 
-// The slot is first written inside the loop, so the port's initial value is
-// what nothing wrote: a read of the untouched allocation, placed where the
-// loop reads the memory it is entered on. Every other access goes. The loop
-// takes that read as an operand, so the interpreter, which refuses a read of
-// uninitialized memory, cannot run the result; the ordered `promote` leaves the
-// same read behind.
+// The slot is first written inside the loop. A port carrying it would be
+// entered on what nothing wrote, and the only spelling of that is a read the
+// program never made: with no iteration the read after the loop is the
+// program's own uninitialized read, with one it is not. The slot stays memory.
 
 module {
   %fn_f = func.func @f(%n: !i32) -> !i32 {
@@ -28,7 +28,9 @@ module {
 
 // CHECK: func.func @f
 // CHECK: %[[P:[0-9]+]] = ptr.alloca
-// CHECK: %[[U:[0-9]+]] | %{{[0-9]+}} = ptr.load %[[P]] | %{{[0-9]+}} : !i32
-// CHECK: scf.loop (%{{[0-9]+}} = %{{[0-9]+}}, %{{[0-9]+}} = %[[U]] | {{.*}}) {
-// CHECK-NOT: ptr.
+// CHECK: scf.loop
+// CHECK: ptr.store %{{[0-9]+}}, %[[P]]
+// CHECK: ptr.load %[[P]]
 
+// VALUE: i32 2
+// ZERO: i32 0

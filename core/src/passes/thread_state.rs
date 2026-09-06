@@ -729,6 +729,31 @@ pub fn verify_deps(context: &Context, function: &OpHandle) -> Result<(), crate::
             op.name()
         )))
     };
+    // Demand runs from the body's results: an op is demanded through an operand
+    // of a demanded op or a result of a region of one, and an op in a region
+    // nobody demands is demanded by nothing, however its own region reads it.
+    let mut demanded: HashSet<OpId> = HashSet::new();
+    let defining = |values: Vec<ValueId>| {
+        values
+            .into_iter()
+            .filter_map(|value| context.get_value(value).defining_op())
+            .collect::<Vec<_>>()
+    };
+    let mut worklist: Vec<OpId> = function
+        .regions()
+        .iter()
+        .flat_map(|&region| defining(context.get_region(region).results()))
+        .collect();
+    while let Some(op) = worklist.pop() {
+        if !demanded.insert(op) {
+            continue;
+        }
+        let instance = context.get_op(op);
+        worklist.extend(defining(instance.operands().to_vec()));
+        for region in instance.regions() {
+            worklist.extend(defining(context.get_region(region).results()));
+        }
+    }
     for region in function
         .regions()
         .iter()
@@ -738,24 +763,7 @@ pub fn verify_deps(context: &Context, function: &OpHandle) -> Result<(), crate::
         if !handle.is_nodes() {
             continue;
         }
-        let ops: HashSet<OpId> = handle.op_ids().into_iter().collect();
-        let mut demanded: HashSet<OpId> = HashSet::new();
-        let mut worklist: Vec<OpId> = handle
-            .results()
-            .iter()
-            .filter_map(|&value| context.get_value(value).defining_op())
-            .collect();
-        while let Some(op) = worklist.pop() {
-            if !ops.contains(&op) || !demanded.insert(op) {
-                continue;
-            }
-            worklist.extend(
-                crate::region::values_read(context, op)
-                    .into_iter()
-                    .filter_map(|value| context.get_value(value).defining_op()),
-            );
-        }
-        for &op_id in &ops {
+        for op_id in handle.op_ids() {
             let op = context.get_op(op_id);
             let changes = match classify(&op) {
                 Some(Kind::Read(_)) => false,

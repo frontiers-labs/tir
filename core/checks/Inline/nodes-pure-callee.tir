@@ -1,0 +1,30 @@
+// RUN: tir opt --pass restructure-nodes,inline<1000,0>,verify-deps --verify %s | filecheck %s
+// RUN: tir opt --pass restructure-nodes,inline<1000,0> %s | tir interp -f main --args=3,4 | filecheck %s --check-prefix=VALUE
+
+// A callee touching no memory leaves no dependency behind, while the call
+// that named it observed one and left one: the state the call left is the
+// state it observed. The callee's result, returned by value through a tuple
+// the caller built, folds through to the element.
+
+module {
+  %fn_add = func.func private @add(%p: !tuple<!i32, !i32>) -> !i32 {
+    %a = tuple_get %p {index = 0} : !i32
+    %b = tuple_get %p {index = 1} : !i32
+    %s = addi %a, %b : !i32
+    func.return %s
+  }
+  %fn_main = func.func @main(%x: !i32, %y: !i32) -> !i32 {
+    %t = make_tuple %x, %y : !tuple<!i32, !i32>
+    %r = func.call %fn_add(%t : !tuple<!i32, !i32>) -> !i32
+    func.return %r
+  }
+  module_end
+}
+
+// CHECK: func.func @main(%[[X:[0-9]+]]: !i32, %[[Y:[0-9]+]]: !i32)
+// CHECK-NOT: func.call
+// CHECK-NOT: tuple
+// CHECK: %[[S:[0-9]+]] = addi %[[X]], %[[Y]] : !i32
+// CHECK-NEXT: -> %[[S]] | %{{[0-9]+}}
+
+// VALUE: i32 7
