@@ -1672,6 +1672,13 @@ impl InstructionSelectPass {
             implicit: &implicit,
             rules: &self.rules,
         };
+        if std::env::var("TIR_ISEL_DUMP").is_ok() {
+            for op in crate::analysis::scopes::region_ops(context, region) {
+                let instance = context.get_op(op);
+                let tests: Vec<Vec<u32>> = (0..instance.regions().len().saturating_sub(1)).map(|i| crate::passes::destructure::Edges::test_reads(&edges, &instance, crate::passes::destructure::Test::Arm(i)).iter().map(|v| v.number()).collect()).collect();
+                eprintln!("PRE {} id={:?} results={:?} operands={:?} region={:?} nested_results={:?} tests={:?}", instance.name(), op, instance.results().iter().map(|v| v.number()).collect::<Vec<_>>(), instance.operands().iter().map(|v| v.number()).collect::<Vec<_>>(), context.parent_nodes_region(op), instance.regions().iter().map(|r| context.get_region(*r).results().iter().map(|v| v.number()).collect::<Vec<_>>()).collect::<Vec<_>>(), tests);
+            }
+        }
         crate::passes::destructure(context, rewriter, region, &edges)?;
         for block in context.get_region(region).block_ids() {
             let block = context.get_block(block);
@@ -1924,6 +1931,9 @@ impl InstructionSelectPass {
         // one matches, and otherwise demand its register for the target's
         // branch-if-nonzero (which needs the condition materialized).
         let consumer = op_ids.last().copied();
+        // A gate's test is decided where the gate sits, so its operands must
+        // precede the gate; a loop's repeat test is decided at its body's end.
+        let anchor = |op: OpId| (fs.scopes.op_region.get(&op) == Some(&region)).then_some(op);
         let mut mm_overlay: HashSet<Id> = HashSet::new();
         let mut aux_branches: Vec<(OpId, AuxSlot, Option<AuxEmit>)> = Vec::new();
         for &(op, slot, class) in fs.region_aux.get(&region).into_iter().flatten() {
@@ -1940,7 +1950,7 @@ impl InstructionSelectPass {
                 .get(&class)
                 .map(Vec::as_slice)
                 .unwrap_or(&[]);
-            match self.best_guard_branch(context, fs, region, None, candidates) {
+            match self.best_guard_branch(context, fs, region, anchor(op), candidates) {
                 Some(guard) => {
                     for boundary in guard.boundaries {
                         mm_overlay.insert(fs.chase_low_extract(boundary));
@@ -2004,6 +2014,18 @@ impl InstructionSelectPass {
                 .map(|op| context.get_op(*op).name().to_string())
                 .collect::<Vec<_>>()
                 .join(", ");
+            if std::env::var("TIR_ISEL_DEBUG").is_ok() {
+                for &class in &covered {
+                    let hits = matches.iter().filter(|m| fs.egraph.find(m.root) == class).count();
+                    eprintln!(
+                        "COVER {region:?} class {class:?} demanded={} available={} matches={hits} values={:?} root_op={:?}",
+                        demanded.contains(&class),
+                        available(class),
+                        fs.class_values.get(&class).map(|v| v.iter().map(|v| v.number()).collect::<Vec<_>>()),
+                        region_op_by_root.get(&class).map(|op| context.get_op(*op).name().to_string()),
+                    );
+                }
+            }
             format!("no feasible instruction cover for {region:?}: {ops}")
         })?;
 
@@ -2187,10 +2209,9 @@ impl InstructionSelectPass {
             .flatten()
             .map(|&(op, slot, class)| ((op, slot), fs.chase_low_extract(fs.egraph.find(class))))
             .collect();
-        // A test is decided at the region's end, after everything it holds.
-        let resolve_class = |class: Id| {
+        let resolve_class = |class: Id, at: Option<OpId>| {
             destinations.get(&class).copied().or_else(|| {
-                fs.resolve_binding(context, class, region, None, true)
+                fs.resolve_binding(context, class, region, at, true)
                     .value
             })
         };
@@ -2200,7 +2221,7 @@ impl InstructionSelectPass {
                 let branch = match selected {
                     Some(emit) => emit,
                     None => {
-                        let condition = resolve_class(*aux_class.get(&(op, slot))?)?;
+                        let condition = resolve_class(*aux_class.get(&(op, slot))?, anchor(op))?;
                         AuxEmit::Branch(GuardBranch::Nonzero { condition })
                     }
                 };

@@ -768,6 +768,21 @@ pub(super) fn erase_unread(
     rewriter: &mut Rewriter,
     ops: &[OpId],
 ) -> Result<(), PassError> {
+    // A region's results sit in no use list, so a value one names is read
+    // without a user: an unordered region's results, and those of every
+    // region nested in it, count as reads.
+    let mut named: std::collections::HashSet<ValueId> = std::collections::HashSet::new();
+    let mut seen: std::collections::HashSet<crate::RegionId> = std::collections::HashSet::new();
+    for &op in ops {
+        let Some(region) = context.parent_nodes_region(op) else {
+            continue;
+        };
+        if seen.insert(region) {
+            for nested in context.nested_regions(region) {
+                named.extend(context.get_region(nested).results());
+            }
+        }
+    }
     for &op in ops.iter().rev() {
         let instance = context.get_op(op);
         if instance.regions().is_empty()
@@ -777,7 +792,7 @@ pub(super) fn erase_unread(
             && instance
                 .results()
                 .iter()
-                .all(|&result| !context.is_used(result))
+                .all(|&result| !context.is_used(result) && !named.contains(&result))
         {
             rewriter.erase_op(&OperationRef::new(instance))?;
         }

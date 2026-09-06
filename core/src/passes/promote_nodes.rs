@@ -226,7 +226,7 @@ struct Promoter<'a> {
     /// The slot's value at each dependency already walked.
     reach: HashMap<ValueId, Reach>,
     /// The ops whose port for the slot has been grown.
-    grown: HashSet<OpId>,
+    grown: HashSet<(OpId, usize)>,
     /// Whether a read of what nothing wrote stands, keeping the allocation.
     kept: bool,
 }
@@ -350,7 +350,7 @@ impl Promoter<'_> {
     /// the exit dependency is what the loop produces. Both are recorded on the
     /// loop's dependency port and result at `index`.
     fn grow_theta(&mut self, op: &OpHandle, index: usize) {
-        if self.grown.contains(&op.id) {
+        if self.grown.contains(&(op.id, index)) {
             return;
         }
         let context = self.context;
@@ -360,7 +360,7 @@ impl Promoter<'_> {
         // Spelling the init may grow an enclosing loop, whose latch walks back
         // into this one and grows it on the way: mark it grown only after.
         let init = self.held(entered);
-        if !self.grown.insert(op.id) {
+        if !self.grown.insert((op.id, index)) {
             return;
         }
         let region = context.get_region(body);
@@ -398,7 +398,14 @@ impl Promoter<'_> {
     /// slot holding along its dependency result, and the gate's result is the
     /// value after it.
     fn grow_gamma(&mut self, op: &OpHandle, index: usize) {
-        if !self.grown.insert(op.id) {
+        if self.grown.contains(&(op.id, index)) {
+            return;
+        }
+        // Spelling the state the gate is entered on may grow an enclosing
+        // loop, whose latch walks back into this gate and grows it on the
+        // way: mark it grown only after.
+        self.reach(op.dep_operands()[index]);
+        if !self.grown.insert((op.id, index)) {
             return;
         }
         let context = self.context;

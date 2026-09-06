@@ -173,6 +173,11 @@ fn replace_threaded(
         context.get_op(call.id()).dep_results().first().copied(),
     ) {
         context.replace_value_uses(published, new);
+        // An unordered region names the state it leaves in its result list,
+        // which no use list reaches.
+        if let Some(region) = context.parent_nodes_region(operation.op().id) {
+            context.rename_region_results(region, published, new, &[]);
+        }
     }
     rewriter.replace_op(operation, call)
 }

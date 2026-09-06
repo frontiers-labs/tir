@@ -342,21 +342,36 @@ impl Lowering<'_> {
     }
 
     /// Every operation `op` runs after: those defining what it reads, what
-    /// its tests read, and its implicit inputs.
+    /// its tests and the tests of everything nested in it read, and its
+    /// implicit inputs.
     fn inputs(&self, op: OpId) -> Vec<OpId> {
-        let instance = self.context.get_op(op);
         let mut read = values_read(self.context, op);
-        if let Some(gamma) = instance.clone().as_interface::<dyn Gamma>() {
-            for index in 0..gamma.arms().len().saturating_sub(1) {
-                read.extend(self.edges.test_reads(&instance, Test::Arm(index)));
-            }
-        }
+        self.test_reads_under(op, &mut read);
         let mut inputs: Vec<OpId> = read
             .into_iter()
             .filter_map(|value| self.context.get_value(value).defining_op())
             .collect();
         inputs.extend(self.edges.implicit_inputs(op));
         inputs
+    }
+
+    /// What the tests of `op` and of every structured operation nested in it
+    /// read: a nested gate's branch reads registers defined wherever its
+    /// region's enclosing regions define them.
+    fn test_reads_under(&self, op: OpId, read: &mut Vec<ValueId>) {
+        let instance = self.context.get_op(op);
+        if let Some(gamma) = instance.clone().as_interface::<dyn Gamma>() {
+            for index in 0..gamma.arms().len().saturating_sub(1) {
+                read.extend(self.edges.test_reads(&instance, Test::Arm(index)));
+            }
+        } else if instance.clone().as_interface::<dyn Theta>().is_some() {
+            read.extend(self.edges.test_reads(&instance, Test::Repeat));
+        }
+        for region in instance.regions() {
+            for child in self.context.get_region(region).op_ids() {
+                self.test_reads_under(child, read);
+            }
+        }
     }
 
     /// The region's operations in a topological order, ties broken by
@@ -392,9 +407,27 @@ impl Lowering<'_> {
             }
         }
         if order.len() != ops.len() {
-            return Err(PassError::InvalidRuleSet(
-                "an unordered region holds a dependency cycle".to_string(),
-            ));
+            let stuck: Vec<String> = ops
+                .iter()
+                .filter(|op| pending[op] > 0)
+                .map(|&op| {
+                    let instance = self.context.get_op(op);
+                    format!(
+                        "{}.{} -> {:?}",
+                        instance.dialect(),
+                        instance.name(),
+                        self.inputs(op)
+                            .iter()
+                            .filter(|input| pending.get(input).is_some_and(|left| *left > 0))
+                            .map(|input| self.context.get_op(*input).name().to_string())
+                            .collect::<Vec<_>>()
+                    )
+                })
+                .collect();
+            return Err(PassError::InvalidRuleSet(format!(
+                "an unordered region holds a dependency cycle among: {}",
+                stuck.join("; ")
+            )));
         }
         Ok(order)
     }
