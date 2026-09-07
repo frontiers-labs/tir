@@ -1,7 +1,7 @@
 //! Re-linearization of a machine block under its dependence edges.
 //!
-//! The backend half of the mid-end's `shuffle-state` oracle. Order inside a
-//! machine block is one topological order of the block's dependence DAG
+//! The machine-code half of the insertion-order shuffling the mid-end fuzzes
+//! with. Order inside a machine block is one topological order of the block's dependence DAG
 //! ([`Dependences`]); this pass picks another one, seeded, so a dependence the
 //! graph does not spell shows up as a behavior change rather than as a
 //! reviewer's doubt. It is an oracle, not an optimization: nothing in a

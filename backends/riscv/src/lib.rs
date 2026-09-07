@@ -1088,12 +1088,12 @@ impl tir::backend::TargetMachine for RiscvTarget {
         if self.config.xlen == 64 {
             vec![
                 Box::new(obj::lower_constant_rv64),
-                Box::new(obj::lower_sym_addr),
+                Box::new(obj::lower_symbol_address),
             ]
         } else {
             vec![
                 Box::new(obj::lower_constant_rv32),
-                Box::new(obj::lower_sym_addr),
+                Box::new(obj::lower_symbol_address),
             ]
         }
     }

@@ -4,7 +4,7 @@
 
 // The reduction of `loop_counter_promotion_hang.c` with a label in it, which
 // lowers every loop in the function flat and so restructures them into the
-// rotated `scf.while` the instcombine defect needed. The label is the whole
+// rotated loop the instcombine defect needed. The label is the whole
 // difference: keeping this reproducer is what stopped loop raising from hiding a
 // bug it did not fix. What fixed it is law S2's proviso being stated in both
 // directions — the state the overwritten store was handed may be read by that

@@ -109,7 +109,7 @@ impl CallLowering {
         for region_id in function.op().regions() {
             self.assemble_tuple_result(context, region_id)?;
             {
-                for op_id in crate::analysis::scopes::region_ops(context, region_id) {
+                for op_id in crate::analysis::regions::region_ops(context, region_id) {
                     let instance = context.get_op(op_id);
                     if let Some(ret) = instance.clone().as_op::<ReturnOp>()
                         && let Some(value) = ret.returned_value()

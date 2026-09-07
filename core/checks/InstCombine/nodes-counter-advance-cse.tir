@@ -1,0 +1,24 @@
+// RUN: tir opt --pass func.func(restructure-nodes,instcombine-nodes) --verify %s | filecheck %s
+
+// The counted shape says the counter advances by the step. A body that spells
+// the same increment itself — `j + 1` where the step is also 1 — gives the
+// simplifier two congruent adds, and merging them respells the loop's own
+// advance over the body's constant. The recurrence is the one the op declares
+// either way, so the shape still holds and the loop still verifies.
+
+module {
+  %fn_f = func.func @f(%n: !i32) -> !i32 {
+    %zero = constant {value = 0} : !i32
+    %one = constant {value = 1} : !i32
+    %fin, %sum = scf.for %i = %zero to %n step %one (%acc = %zero) {
+      %c1 = constant {value = 1} : !i32
+      %next = addi %i, %c1 : !i32
+      %grown = addi %acc, %next : !i32
+      scf.yield %grown
+    }
+    func.return %sum
+  }
+  module_end
+}
+
+// CHECK: scf.for %{{[0-9]+}} = %{{[0-9]+}} to %{{[0-9]+}} step %{{[0-9]+}}

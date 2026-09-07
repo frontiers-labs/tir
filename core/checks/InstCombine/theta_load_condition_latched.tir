@@ -1,10 +1,10 @@
 // RUN: tir opt --pass func.func(promote-nodes,instcombine-nodes) --verify %s | filecheck %s
 
-// The shape restructuring leaves a `goto`/`while` loop in: the whole body sits
-// in the condition region, so the update happens before `scf.condition` and the
-// body region only yields what it was handed. The port then carries the latch
-// through the test — what the loop is left with is what the test computed — and
-// the read inside the loop takes the head the test was entered on.
+// The shape restructuring leaves a `goto`/`while` loop in: the whole body runs
+// before the predicate, so the update happens ahead of the test and the loop
+// only carries on what it was handed. The port then carries the latch through
+// the test — what the loop is left with is what the test computed — and the
+// read inside the loop takes the head the test was entered on.
 
 module {
   %fn_sum = func.func @sum(%0: !i1, %1: !i32) -> !i32 {

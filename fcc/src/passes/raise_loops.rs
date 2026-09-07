@@ -264,6 +264,11 @@ fn recognise(
     let condition = only_block(context, shape.condition)?;
     let step = only_block(context, shape.step?)?;
     let body = only_block(context, shape.body)?;
+    // The counter enters the raised loop as port 0, so the body must carry
+    // nothing of its own ahead of it.
+    if !context.get_block(body).arguments().is_empty() {
+        return None;
+    }
 
     let (slot, upper, tested) = counted_test(context, &context.get_block(condition))?;
     let stepped = counted_step(context, &context.get_block(step), slot)?;
@@ -500,7 +505,9 @@ fn raise(
     rewriter.insert_op_before(&target, &step)?;
 
     // The body reads the counter where it always did — through the slot — so the
-    // carried port is written there before anything else runs.
+    // counter port is written there before anything else runs. It enters as
+    // port 0; the comparison and the increment its shape pins are left for the
+    // converter, which builds them when it builds the unordered body.
     let iteration = context
         .append_block_argument(counted.body, counted.counter)
         .id();
@@ -508,19 +515,17 @@ fn raise(
     let write_back = p::store(context, iteration, counted.slot).build();
     body.insert(0, write_back.id());
 
-    let advance = b::addi(context, iteration, step.result(), counted.counter).build();
-    let latch = scf::r#yield(context, vec![advance.result()]).build();
+    let latch = scf::ops::r#yield(context, vec![]).build();
     let terminator = *body.op_ids().last().expect("the body ends in cir.yield");
-    body.insert(body.op_ids().len() - 1, advance.id());
     rewriter.replace_op(&OperationRef::new(context.get_op(terminator)), &latch)?;
 
     let region = context.create_region();
     rewriter.splice_region(shape.body, region.id());
-    let raised = scf::ForLegacyOpBuilder::new(context)
-        .lower_bound(lower.result())
-        .upper_bound(upper)
+    let raised = scf::ForOpBuilder::new(context)
+        .lb(lower.result())
+        .inits(vec![])
+        .ub(upper)
         .step(step.result())
-        .inits(vec![lower.result()])
         .result_types(vec![counted.counter])
         .body(region.id())
         .build();

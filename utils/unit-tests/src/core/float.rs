@@ -104,19 +104,31 @@ fn fp_math_flags_block_overrides_owner() {
     assert_eq!(fp_math_flags(&context, fast_add.id()), FastMathFlags::FAST);
 
     // An op in a nested block marked strict does not.
-    let cond = context.create_value(tir::builtin::IntegerType::new(&context, 1), None);
-    let if_op = tir::scf::r#if(&context, cond.id(), vec![], vec![], None, None).build();
+    let i32_ty = tir::builtin::IntegerType::new(&context, 32);
+    let bound = context.create_value(i32_ty, None);
+    let body = context.create_region();
+    let counter = context.create_value(i32_ty, None);
+    let body_block = context.create_block(vec![counter]);
+    body.add_block(body_block.id());
+    body_block.append(tir::scf::ops::r#yield(&context, vec![]).build().id());
+    let loop_op = tir::scf::ForOpBuilder::new(&context)
+        .lb(bound.id())
+        .inits(vec![])
+        .ub(bound.id())
+        .step(bound.id())
+        .body(body.id())
+        .result_types(vec![i32_ty])
+        .build();
     let strict_add = ops::addf(&context, a.id(), b.id(), f32_ty).build();
-    let then_block = if_op.then_body();
-    then_block.insert(0, strict_add.id());
-    func.body().insert(1, if_op.id());
+    body_block.insert(0, strict_add.id());
+    func.body().insert(1, loop_op.id());
 
-    // Before the override the inner block inherits `fast` through scf.if.
+    // Before the override the inner block inherits `fast` through the loop.
     assert_eq!(
         fp_math_flags(&context, strict_add.id()),
         FastMathFlags::FAST
     );
-    then_block.set_attr(FPMATH_ATTR, AttributeValue::Str("none".into()));
+    body_block.set_attr(FPMATH_ATTR, AttributeValue::Str("none".into()));
     assert_eq!(
         fp_math_flags(&context, strict_add.id()),
         FastMathFlags::NONE

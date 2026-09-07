@@ -87,3 +87,14 @@ fn restructure_region(
     let live = liveness::compute(&graph);
     emit_nodes::emit(context, region, &graph, &tree, &live)
 }
+
+/// Whether `op` is an `scf.for` a frontend raised whose body is still a block
+/// list: the counted shape is pinned, and the converter has yet to build the
+/// unordered body it will run on.
+fn is_ordered_counted_loop(context: &Context, op: &crate::OpHandle) -> bool {
+    op.is::<crate::scf::ForOp>()
+        && op
+            .regions()
+            .first()
+            .is_some_and(|&body| !context.get_region(body).is_nodes())
+}

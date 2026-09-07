@@ -1,8 +1,8 @@
 // RUN: tir opt --pass func.func(promote-nodes,instcombine-nodes) --verify %s | filecheck %s
 
-// A `scf.while` reads what it carries in its condition region and forwards it to
-// the body, so the port the commit grows enters both: the condition passes its
-// argument on, and the body yields the update the θ's latch names.
+// A while-shaped loop reads what it carries in its test and forwards it to the
+// body, so the port the commit grows serves both: the test passes it on, and
+// the body names the update the θ's latch takes.
 
 module {
   %fn_spin = func.func @spin(%0: !i1, %1: !i32) -> !i32 {

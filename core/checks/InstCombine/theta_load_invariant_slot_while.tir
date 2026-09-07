@@ -1,7 +1,7 @@
 // RUN: tir opt --pass func.func(promote-nodes,instcombine-nodes) --verify %s | filecheck %s
 
-// The same reading through a `scf.while`, where the port is read in the
-// condition region before the body sees it: no edge changes the state of a slot
+// The same reading through a while-shaped loop, where the port is read by the
+// test before the body sees it: no edge changes the state of a slot
 // the body only reads, so what it holds inside the loop is what the store before
 // the loop left.
 

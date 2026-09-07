@@ -6,7 +6,7 @@
 // foreign constant into a nested rotated loop's counter yield, so the counter
 // never advances and the loop never exits. Counted loops no longer reach that
 // shape — they are raised to `scf.for` instead of restructured into a rotated
-// `scf.while` — so this program now terminates and must keep doing so. The
+// `scf.loop` — so this program now terminates and must keep doing so. The
 // instcombine defect itself is fixed too: `loop_counter_promotion_hang_flat.c`
 // is the same reduction forced down the flat path, and terminates.
 

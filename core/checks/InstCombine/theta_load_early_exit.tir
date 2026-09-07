@@ -1,6 +1,6 @@
 // RUN: tir opt --pass func.func(promote-nodes,instcombine-nodes) --verify %s | filecheck %s
 
-// A body leaving through `scf.break` never reaches its yield, so the break edge
+// A body leaving through an early exit never reaches its latch, so the exit edge
 // is where the slot's value leaves the loop. The carried port is fed on that
 // edge, the read after the loop becomes the loop's result, and the slot leaves
 // memory.

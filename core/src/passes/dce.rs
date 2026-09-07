@@ -198,7 +198,7 @@ fn is_erasable(context: &Context, instance: &OpHandle, named: &HashSet<ValueId>)
 /// read through, since everything it holds is in the same walk.
 fn pure_subtree(context: &Context, instance: &OpHandle) -> bool {
     instance.regions().iter().all(|&region| {
-        crate::analysis::scopes::region_ops(context, region)
+        crate::analysis::regions::region_ops(context, region)
             .into_iter()
             .all(|op| {
                 let inner = context.get_op(op);

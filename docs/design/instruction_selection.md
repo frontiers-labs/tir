@@ -105,19 +105,13 @@ the nested blocks from the function's visit. A region's operations then share th
 function's classes, so a constant defined before a gate folds into an arm's
 instruction as an immediate. The gates come off the ops' own interfaces:
 
-- a `Conditional`'s result is the flat n-ary `If(decision, arm…)` over what its
-  arms yield (`case_values` order, so a destruction maps the children back onto
-  the regions), unioned with the gate's own value so the cover may still read it
-  as the register its regions leave it in. An arm leaving the enclosing loop never
-  reaches what follows the gate, so a gate one arm leaves through publishes what
-  the arm that stays yields;
-- a `LoopLike`'s carried port is `Theta(init, edge…)` over what each edge back
-  into the port carries — the body's latch and every `break`/`continue` leaving
-  its scope, in `analysis::scopes::port_edges` order — unioned with the port
-  argument. A loop whose quad does not line the ports up anchors instead;
-- an `scf.while`'s forwarding (body argument ↔ condition operand ↔ result) is read
-  through `GuardedLoop::entry_guard` plus the test terminator's trailing operands,
-  not through a dialect accessor.
+- a `Gamma`'s result is the flat n-ary `If(predicate, arm…)` over what its arms
+  name (arm order, so a destruction maps the children back onto the regions),
+  unioned with the gate's own value so the cover may still read it as the
+  register its regions leave it in;
+- a `Theta`'s carried port is `Theta(init, latch)` over what the body names for
+  the next iteration, unioned with the port. The alignment comes off the op's
+  declared `binds:`, so a loop that does not declare one anchors instead.
 
 #### What a destruction needs, and where it comes from
 
@@ -126,11 +120,11 @@ the IR at all, so neither is spelled by an operation the cover could reach. The
 seeder builds those terms itself (`build_region_control`) and records each against
 the block whose plan must materialize it:
 
-- a `Conditional`'s case `k` is `decision == k`; a one-bit decision selecting case
-  1 *is* that test and stands for itself, so the target's branch rules see the
-  condition they were written against;
-- a `GuardedLoop` tested by a region contributes that region's condition, held by
-  the test block;
+- a `Gamma`'s arm `k` is entered on `predicate == k`, tested in arm order with the
+  last arm taking whatever is left; a one-bit predicate selecting arm 1 *is* that
+  test and stands for itself, so the target's branch rules see the condition they
+  were written against;
+- a `Theta` contributes the predicate its body names, held by the body;
 - a `CountedLoop` contributes its zero-trip guard `lb < ub`, held by the block the
   loop sits in, and — in its body — the counter's advance `counter + step` and the
   back-edge test `counter + step < ub`. The counter is minted as the body's
@@ -1053,12 +1047,10 @@ later.
 ## Region assumptions (scoped shared graph)
 
 A region-carrying operation states what its regions run under, and it states it on
-its own interfaces (`region_entry_facts`): a `Conditional`'s guarded arm runs on
-its decision holding (`guarded_regions`), and a loop tested by a region runs its
-body on the condition that region yields (`GuardedLoop::entry_guard`). The
-condition of a tested loop is spelled over the ports' per-iteration heads, so it
-holds on **every** iteration and not merely the first. A region a structured
-operation says nothing about (a switch case, a loop's own test) carries no fact.
+its own interfaces (`entry_facts`): a two-armed `Gamma` on a one-bit predicate
+runs arm 1 on that predicate holding and arm 0 on its not holding. A region a
+structured operation says nothing about — an arm of a wider switch, a loop body —
+carries no fact.
 
 The dominator tree is region-aware — a block flows into each region its operations
 carry — so a region's entry block is an ordinary node of the tree whose subtree is

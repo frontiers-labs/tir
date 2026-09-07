@@ -5,15 +5,37 @@ use tir::{
     Operation, RegionId, StagedRegion, Use, ValueId,
 };
 
-/// `module { func demo(%cond) { %c = 1; scf.if %cond { %old = 7; scf.yield }; return } }`
+// An operation holding one ordered region and nothing else, so a commit to it
+// is a commit to a region an op owns without also being a port contract the
+// staged body would have to satisfy.
+tir::helpers::operation! {
+    NestOp {
+        name: "nest",
+        dialect: "nest_test",
+        regions: R {
+            body: Region {
+                kind: Blocks,
+            }
+        },
+    }
+}
+
+tir::helpers::dialect! {
+    NestDialect {
+        name: "nest_test",
+        operations: [NestOp],
+    }
+}
+
+/// `module { func demo() { %c = 1; test.nest { %old = 7; scf.yield }; return } }`
 /// — a region owned by an op nested inside a function, so a commit to it has a
 /// spine to bump and live values around it to reference.
 struct Fixture {
     module: OpId,
     func: OpId,
-    if_op: OpId,
-    then_region: RegionId,
-    then_block: BlockId,
+    nest: OpId,
+    body_region: RegionId,
+    body_block: BlockId,
     /// `%old`, defined inside the region a commit replaces.
     old: ValueId,
     /// `%c`, defined outside it and still live after a commit.
@@ -22,38 +44,24 @@ struct Fixture {
 }
 
 fn fixture(context: &Context) -> Fixture {
-    let i1 = builtin::IntegerType::new(context, 1);
+    context.register_dialect::<NestDialect>();
     let i32_ty = builtin::IntegerType::new(context, 32);
     let unit = builtin::UnitType::new(context);
 
-    let then_region = context.create_region();
-    let then_block = context.create_block(vec![]);
-    then_region.add_block(then_block.id());
+    let body_region = context.create_region();
+    let body_block = context.create_block(vec![]);
+    body_region.add_block(body_block.id());
     let old = builtin::ops::constant(context, 7, i32_ty).build();
-    then_block.append(old.id());
-    then_block.append(scf::ops::r#yield(context, vec![]).build().id());
-
-    let else_region = context.create_region();
-    let else_block = context.create_block(vec![]);
-    else_region.add_block(else_block.id());
-    else_block.append(scf::ops::r#yield(context, vec![]).build().id());
+    body_block.append(old.id());
+    body_block.append(scf::ops::r#yield(context, vec![]).build().id());
 
     let body = context.create_region();
-    let cond = context.create_value(i1, None);
-    let entry = context.create_block(vec![cond.clone()]);
+    let entry = context.create_block(vec![]);
     body.add_block(entry.id());
     let constant = builtin::ops::constant(context, 1, i32_ty).build();
     entry.append(constant.id());
-    let if_op = scf::ops::r#if(
-        context,
-        cond.id(),
-        vec![],
-        vec![],
-        Some(then_region.id()),
-        Some(else_region.id()),
-    )
-    .build();
-    entry.append(if_op.id());
+    let nest = NestOpBuilder::new(context).body(body_region.id()).build();
+    entry.append(nest.id());
     entry.append(func::ops::r#return(context, Operand::none()).build().id());
 
     let func = func::ops::lambda(context, "demo", unit, &body).build();
@@ -63,9 +71,9 @@ fn fixture(context: &Context) -> Fixture {
     Fixture {
         module: module.id(),
         func: func.id(),
-        if_op: if_op.id(),
-        then_region: then_region.id(),
-        then_block: then_block.id(),
+        nest: nest.id(),
+        body_region: body_region.id(),
+        body_block: body_block.id(),
         old: old.result(),
         constant: constant.result(),
         module_body: context.get_block(module.body().id()),
@@ -80,7 +88,7 @@ fn printed(context: &Context, module: OpId) -> String {
     out
 }
 
-/// A staged `^block: scf.yield` body, ready to swap into an `scf.if` region.
+/// A staged `^block: scf.yield` body, ready to swap into the nested region.
 fn staged_yield(context: &Context) -> StagedRegion {
     let mut staged = context.stage_region();
     let block = staged.append_block(&[]);
@@ -95,7 +103,7 @@ fn a_discarded_staging_leaves_the_tree_untouched() {
     let i32_ty = builtin::IntegerType::new(&context, 32);
     let before = printed(&context, f.module);
     let module_version = context.op_version(f.module);
-    let if_version = context.op_version(f.if_op);
+    let nest_version = context.op_version(f.nest);
 
     let staged_op = {
         let mut staged = context.stage_region();
@@ -107,7 +115,7 @@ fn a_discarded_staging_leaves_the_tree_untouched() {
 
     assert_eq!(printed(&context, f.module), before, "the IR is unchanged");
     assert_eq!(context.op_version(f.module), module_version);
-    assert_eq!(context.op_version(f.if_op), if_version);
+    assert_eq!(context.op_version(f.nest), nest_version);
     assert!(!context.has_operation(staged_op), "staged ops are dropped");
     assert!(
         !context.is_used(f.constant),
@@ -121,11 +129,11 @@ fn a_commit_bumps_the_spine_once() {
     let f = fixture(&context);
     let module_version = context.op_version(f.module);
     let func_version = context.op_version(f.func);
-    let if_version = context.op_version(f.if_op);
+    let nest_version = context.op_version(f.nest);
 
-    context.replace_region_contents(f.then_region, staged_yield(&context));
+    context.replace_region_contents(f.body_region, staged_yield(&context));
 
-    assert_eq!(context.op_version(f.if_op), if_version + 1);
+    assert_eq!(context.op_version(f.nest), nest_version + 1);
     assert_eq!(context.op_version(f.func), func_version + 1);
     assert_eq!(context.op_version(f.module), module_version + 1);
 }
@@ -136,15 +144,15 @@ fn a_commit_detaches_the_old_subtree() {
     let f = fixture(&context);
     let old_op = context.get_value(f.old).defining_op().unwrap();
 
-    context.replace_region_contents(f.then_region, staged_yield(&context));
+    context.replace_region_contents(f.body_region, staged_yield(&context));
 
     assert!(!context.has_operation(old_op));
     assert_eq!(context.parent_block(old_op), None);
     assert_eq!(context.parent_op(old_op), None);
-    assert_eq!(context.parent_region(f.then_block), None);
+    assert_eq!(context.parent_region(f.body_block), None);
     assert!(!printed(&context, f.module).contains("7"));
     // Nothing dirtied walks into the detached subtree.
-    tir::verify_op_tree(&context, f.if_op).expect("the committed tree verifies");
+    tir::verify_op_tree(&context, f.nest).expect("the committed tree verifies");
 }
 
 #[test]
@@ -158,14 +166,14 @@ fn staged_ops_keep_their_live_operands() {
     let add = builtin::ops::addi(&context, f.constant, f.constant, i32_ty).build();
     staged.append_op(block, add.id());
     staged.append_op(block, scf::ops::r#yield(&context, vec![]).build().id());
-    context.replace_region_contents(f.then_region, staged);
+    context.replace_region_contents(f.body_region, staged);
 
     assert_eq!(
         context.get_op(add.id()).operands().as_slice(),
         vec![f.constant; 2]
     );
     assert_eq!(context.parent_block(add.id()), Some(block));
-    assert_eq!(context.parent_region(block), Some(f.then_region));
+    assert_eq!(context.parent_region(block), Some(f.body_region));
     assert_eq!(context.users_of(f.constant), [add.id(); 2]);
     tir::verify_op_tree(&context, f.func).expect("the committed tree verifies");
 }
@@ -182,7 +190,7 @@ fn staged_blocks_carry_their_arguments() {
     let add = builtin::ops::addi(&context, argument, f.constant, i32_ty).build();
     staged.append_op(block, add.id());
     staged.append_op(block, scf::ops::r#yield(&context, vec![]).build().id());
-    context.replace_region_contents(f.then_region, staged);
+    context.replace_region_contents(f.body_region, staged);
 
     let committed = context.get_block(block);
     assert_eq!(committed.arguments().len(), 1);
@@ -205,7 +213,7 @@ fn a_commit_remaps_uses_of_replaced_values() {
     staged.append_op(block, fresh.id());
     staged.append_op(block, scf::ops::r#yield(&context, vec![]).build().id());
     staged.replace_value(f.old, fresh.result());
-    context.replace_region_contents(f.then_region, staged);
+    context.replace_region_contents(f.body_region, staged);
 
     assert_eq!(
         context.get_op(user.id()).operands().as_slice(),
@@ -239,7 +247,7 @@ fn a_commit_keeps_analyses_of_untouched_functions() {
     analyses.get::<Probe>(&context, sibling.id());
     analyses.get::<Probe>(&context, f.func);
 
-    context.replace_region_contents(f.then_region, staged_yield(&context));
+    context.replace_region_contents(f.body_region, staged_yield(&context));
 
     assert!(
         analyses
@@ -248,142 +256,6 @@ fn a_commit_keeps_analyses_of_untouched_functions() {
         "a sibling function's analyses survive a commit elsewhere"
     );
     assert!(analyses.get_cached::<Probe>(&context, f.func).is_none());
-}
-
-/// A loop with no carried port yet, and a constant outside it to carry in.
-const LOOP: &str = r#"module {
-  func.func @f(%0: !index, %1: !index, %2: !index) -> !i32 {
-    %3 = constant {value = 7} : !i32
-    scf.for_legacy %0, %1, %2 {
-      scf.yield
-    }
-    func.return %3
-  }
-  module_end
-}"#;
-
-fn loop_fixture(context: &Context) -> (OpId, OpId, ValueId) {
-    let module: builtin::ModuleOp =
-        tir::parse::ir::parse_ir(context, LOOP).expect("the fixture parses");
-    let func = context
-        .get_region(context.get_op(module.id()).regions()[0])
-        .iter(context.clone())
-        .next()
-        .expect("module body")
-        .op_ids()[0];
-    let body = context
-        .get_region(context.get_op(func).regions()[0])
-        .iter(context.clone())
-        .next()
-        .expect("function body");
-    let constant = context.get_op(body.op_ids()[0]).results()[0];
-    (module.id(), body.op_ids()[1], constant)
-}
-
-fn loop_owner(context: &Context, module: OpId) -> OpId {
-    context
-        .get_region(context.get_op(module).regions()[0])
-        .iter(context.clone())
-        .next()
-        .expect("module body")
-        .op_ids()[0]
-}
-
-fn single_block(context: &Context, region: RegionId) -> BlockHandle {
-    context.get_block(context.get_region(region).block_ids()[0])
-}
-
-#[test]
-fn growing_a_loop_port_carries_one_more_value() {
-    let context = Context::with_default_dialects();
-    let (module, loop_op, constant) = loop_fixture(&context);
-    let i32_ty = builtin::IntegerType::new(&context, 32);
-
-    let result = context.grow_port(loop_op, i32_ty, Some(constant), |_, carried| carried);
-
-    let grown = context.get_op(loop_op);
-    assert_eq!(
-        grown.results().as_slice(),
-        vec![result],
-        "the port's value leaves the op"
-    );
-    assert_eq!(
-        grown.operands().last(),
-        Some(&constant),
-        "the port's initial value enters as one more operand"
-    );
-    let body = single_block(&context, grown.regions()[0]);
-    let carried = body.arguments()[0].id();
-    assert_eq!(body.arguments().len(), 1);
-    assert_eq!(
-        context
-            .get_op(*body.op_ids().last().unwrap())
-            .operands()
-            .as_slice(),
-        vec![carried],
-        "the region yields what the port carries"
-    );
-    tir::verify_op_tree(&context, module).expect("the grown loop verifies");
-}
-
-#[test]
-fn growing_a_conditional_port_yields_from_every_arm() {
-    let context = Context::with_default_dialects();
-    let (module, _, constant) = loop_fixture(&context);
-    let i1 = builtin::IntegerType::new(&context, 1);
-    let i32_ty = builtin::IntegerType::new(&context, 32);
-    let condition = builtin::ops::constant(&context, 1, i1).build();
-    let arms: Vec<RegionId> = (0..2)
-        .map(|_| {
-            let region = context.create_region();
-            let block = context.create_block(vec![]);
-            region.add_block(block.id());
-            block.append(scf::ops::r#yield(&context, vec![]).build().id());
-            region.id()
-        })
-        .collect();
-    let conditional = scf::ops::r#if(
-        &context,
-        condition.result(),
-        vec![],
-        vec![],
-        Some(arms[0]),
-        Some(arms[1]),
-    )
-    .build();
-    let function_body = context.get_block(
-        context
-            .get_region(context.get_op(loop_owner(&context, module)).regions()[0])
-            .block_ids()[0],
-    );
-    function_body.insert(0, condition.id());
-    function_body.insert(1, conditional.id());
-
-    let result = context.grow_port(conditional.id(), i32_ty, None, |_, carried| {
-        assert!(carried.is_none(), "a conditional carries nothing in");
-        Some(constant)
-    });
-
-    let grown = context.get_op(conditional.id());
-    assert_eq!(grown.results().as_slice(), vec![result]);
-    assert_eq!(
-        grown.operands().as_slice(),
-        vec![condition.result()],
-        "a conditional carries nothing in"
-    );
-    for arm in grown.regions() {
-        let block = single_block(&context, arm);
-        assert!(block.arguments().is_empty(), "an arm takes no argument");
-        assert_eq!(
-            context
-                .get_op(*block.op_ids().last().unwrap())
-                .operands()
-                .as_slice(),
-            vec![constant],
-            "every arm yields the port's value"
-        );
-    }
-    tir::verify_op_tree(&context, module).expect("the grown conditional verifies");
 }
 
 #[test]
@@ -638,32 +510,27 @@ fn replacing_value_uses_reaches_a_nested_region() {
     let context = Context::with_default_dialects();
     let (_, _, body) = module_with_function(&context);
     let i32 = builtin::IntegerType::new(&context, 32);
-    let i1 = builtin::IntegerType::new(&context, 1);
     let a = context.create_value(i32, None);
     let b = context.create_value(i32, None);
-    let cond = context.create_value(i1, None);
+    let bound = context.create_value(i32, None);
 
-    let then_region = context.create_region();
-    let then_block = context.create_block(vec![]);
-    then_region.add_block(then_block.id());
+    let body_region = context.create_region();
+    let counter = context.create_value(i32, None);
+    let body_block = context.create_block(vec![counter]);
+    body_region.add_block(body_block.id());
     let nested = builtin::ops::addi(&context, a.id(), a.id(), i32).build();
-    then_block.append(nested.id());
-    then_block.append(scf::ops::r#yield(&context, vec![]).build().id());
-    let else_region = context.create_region();
-    let else_block = context.create_block(vec![]);
-    else_region.add_block(else_block.id());
-    else_block.append(scf::ops::r#yield(&context, vec![]).build().id());
+    body_block.append(nested.id());
+    body_block.append(scf::ops::r#yield(&context, vec![]).build().id());
     body.append(
-        scf::ops::r#if(
-            &context,
-            cond.id(),
-            vec![],
-            vec![],
-            Some(then_region.id()),
-            Some(else_region.id()),
-        )
-        .build()
-        .id(),
+        scf::ForOpBuilder::new(&context)
+            .lb(bound.id())
+            .inits(vec![])
+            .ub(bound.id())
+            .step(bound.id())
+            .body(body_region.id())
+            .result_types(vec![i32])
+            .build()
+            .id(),
     );
 
     context.replace_value_uses(a.id(), b.id());
@@ -808,7 +675,7 @@ fn use_indices_follow_a_port_into_its_place() {
     let token = context.create_dependency();
 
     context.append_dep_operand(add, token);
-    context.append_port_operand(add, d);
+    context.append_operand(add, d);
 
     let operands = context.get_op(add).operands();
     for r#use in context.uses_of(d) {

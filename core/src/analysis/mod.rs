@@ -5,7 +5,7 @@ mod dominance;
 pub mod escape_facts;
 pub mod exits;
 mod manager;
-pub mod scopes;
+pub mod regions;
 pub mod slots;
 pub mod solver;
 

@@ -137,7 +137,7 @@ impl<'a> Builder<'a> {
                     guarded,
                 );
                 self.accesses.push(access);
-            } else if op.clone().as_op::<scf::IfOp>().is_some() || op.has_interface::<dyn Gamma>() {
+            } else if op.has_interface::<dyn Gamma>() {
                 for region in op.regions().to_vec() {
                     let region = self.context.get_region(region);
                     if region.is_nodes() {
@@ -450,13 +450,6 @@ impl<'a> Builder<'a> {
     }
 }
 
-/// The carried port a loop's body reads its counter through: the one that
-/// starts at the lower bound and gains the step every iteration, which is the
-/// recurrence `CountedLoop` states and raising establishes.
-pub(crate) fn counter_port(context: &Context, op: &OpHandle) -> Option<ValueId> {
-    counter_ports(context, op).first().copied()
-}
-
 /// Every carried port counting with the loop: the declared induction first,
 /// then each port entered on the lower bound and stepped by the step.
 pub(crate) fn counter_ports(context: &Context, op: &OpHandle) -> Vec<ValueId> {
@@ -679,22 +672,6 @@ fn chain_root_walk(
                 .collect::<Option<BTreeSet<_>>>()?;
             return (roots.len() == 1).then(|| roots.pop_first().expect("one root"));
         }
-        if let Some(carried) = op.clone().as_interface::<dyn LoopLike>() {
-            let port = carried.finals().iter().position(|&r| r == current)?;
-            current = carried.inits()[port];
-            continue;
-        }
-        if let Some(gate) = op.clone().as_interface::<dyn Conditional>() {
-            let port = op.results().iter().position(|&r| r == current)?;
-            let mut roots = op
-                .regions()
-                .iter()
-                .map(|&region| {
-                    chain_root_memo(context, *gate.region_yields(region).get(port)?, memo)
-                })
-                .collect::<Option<BTreeSet<_>>>()?;
-            return (roots.len() == 1).then(|| roots.pop_first().expect("one root"));
-        }
         return Some(current);
     }
 }
@@ -736,10 +713,6 @@ fn incoming(context: &Context, argument: ValueId) -> Option<ValueId> {
     let region = context.parent_region(block)?;
     let op_id = context.get_region(region).parent_op()?;
     let op = context.get_op(op_id);
-    if let Some(carried) = op.clone().as_interface::<dyn LoopLike>() {
-        let port = carried.carried_args().iter().position(|&a| a == argument)?;
-        return carried.inits().get(port).copied();
-    }
     // A gate threads what it was given into each arm, so the arms' arguments are
     // the tail of its operands.
     let arguments = context.get_block(block).arguments().len();

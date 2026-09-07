@@ -253,8 +253,8 @@ pub fn verify_op_tree(context: &Context, op_id: OpId) -> Result<(), Error> {
 /// memory.
 ///
 /// The check is structural, so it cannot see chains: that every access of a chain
-/// is in the cone of the state its next write takes is what the `shuffle-state`
-/// fuzzer variant is for, not this.
+/// is in the cone of the state its next write takes is what the insertion-order
+/// shuffling of the fuzzer and `--shuffle-seed` is for, not this.
 ///
 /// State crossing a region boundary does so as a carried argument, which is a
 /// fresh value, so a single walk of the whole tree suffices.
@@ -359,7 +359,6 @@ fn verify_op_tree_ops(context: &Context, op_id: OpId) -> Result<(), Error> {
     }
 
     let instance = context.get_op(op_id);
-    verify_token_region_arguments(context, &instance)?;
     verify_scoped_metadata(&instance)?;
     verify_dep_partitions(context, &instance)?;
     instance.clone().as_dyn_op().verify(context)?;
@@ -380,45 +379,6 @@ fn verify_scoped_metadata(instance: &OpHandle) -> Result<(), Error> {
     }
     if let Some(value) = instance.attr(crate::TARGET_ENV) {
         crate::target_env::verify_spec(&value)?;
-    }
-    Ok(())
-}
-
-fn verify_token_region_arguments(context: &Context, instance: &OpHandle) -> Result<(), Error> {
-    let token = crate::builtin::TokenType::new(context);
-    let scope_regions = instance
-        .clone()
-        .as_interface::<dyn crate::TokenScope>()
-        .map(|scope| scope.token_scope_regions())
-        .unwrap_or_default();
-    for region_id in instance.regions().iter() {
-        let region = context.get_region(*region_id);
-        let entry = scope_regions.contains(region_id);
-        let arguments = region.ports().into_iter().map(|port| (entry, port)).chain(
-            region
-                .block_ids()
-                .into_iter()
-                .skip(1)
-                .flat_map(|block| context.get_block(block).arguments())
-                .map(|argument| (false, argument)),
-        );
-        for (allowed, argument) in arguments {
-            if argument.ty() == token && !allowed {
-                return Err(Error::VerificationError(
-                    "token values are only allowed as loop body entry arguments".to_string(),
-                ));
-            }
-        }
-    }
-    if instance.is::<crate::func::FuncOp>()
-        && matches!(
-            instance.attr("ret_type"),
-            Some(crate::attributes::AttributeValue::Type(ty)) if ty == token
-        )
-    {
-        return Err(Error::VerificationError(
-            "token values are not allowed in function signatures".to_string(),
-        ));
     }
     Ok(())
 }

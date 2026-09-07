@@ -12,7 +12,7 @@ module {
     %zero = constant {value = 0} : !i32
     %one = constant {value = 1} : !i32
     %seven = constant {value = 7} : !i32
-    %r, %k = scf.for_legacy %zero, %n, %one iter_args(%iv = %zero, %c = %seven) -> !i32, !i32 {
+    %i1_end, %r, %k = scf.for %i1 = %zero to %n step %one (%iv = %zero, %c = %seven) {
       %w = addi %c, %zero : !i32
       %next = addi %iv, %one : !i32
       scf.yield %next, %w

@@ -19,8 +19,8 @@ use crate::analysis::affine::{AffineForm, AffineView, body_ops, carried};
 use crate::attributes::Predicate;
 use crate::builtin::{IntegerType, ops as b};
 use crate::{
-    BlockHandle, Context, CountedLoop, OpHandle, OpId, Operation, OperationRef, PassError,
-    RegionId, Rewriter, Theta, TypeId, Value, ValueId, scf,
+    Context, CountedLoop, OpHandle, OpId, Operation, OperationRef, PassError, RegionId, Rewriter,
+    Theta, TypeId, Value, ValueId, scf,
 };
 
 use super::schedule::{Candidate, Level, divides_evenly, levels};
@@ -40,8 +40,6 @@ pub(super) struct Nest {
     body_arguments: Vec<ValueId>,
     body_counters: Vec<usize>,
     body_states: Vec<usize>,
-    /// Whether the nest is unordered, so the rebuilt one is too.
-    nodes: bool,
     /// The loop-invariant operations the outer bodies spell, which the copied
     /// body may name and the rebuild would otherwise erase under it.
     hoist: Vec<OpId>,
@@ -158,7 +156,6 @@ impl Nest {
             body_arguments: inner_ports.arguments.clone(),
             body_counters: inner_ports.counters.clone(),
             body_states: inner_ports.states.clone(),
-            nodes: context.get_region(body).is_nodes(),
             entry_states: root_ports
                 .states
                 .iter()
@@ -297,7 +294,6 @@ struct Counted {
 /// Where the next operation goes.
 pub(super) enum Site {
     Before(OperationRef),
-    Append(BlockHandle),
     /// An unordered region, where position means nothing.
     Region(RegionId),
 }
@@ -492,83 +488,10 @@ impl<'a> Lowering<'a> {
 
     /// Build one loop and fill it with the levels below.
     #[allow(clippy::too_many_arguments)]
-    fn emit_loop(
-        &mut self,
-        rewriter: &mut Rewriter,
-        levels: &[Level],
-        index: usize,
-        bound: &mut HashMap<usize, ValueId>,
-        states: Vec<ValueId>,
-        site: &mut Site,
-        counted: Counted,
-    ) -> Result<Vec<ValueId>, PassError> {
-        let Counted {
-            dimension,
-            key,
-            lower,
-            upper,
-            step,
-        } = counted;
-        let ty = self.nest.bounds[dimension].counter_type;
-        if self.nest.nodes {
-            return self.emit_loop_nodes(rewriter, levels, index, bound, states, site, counted);
-        }
-        let counter = self.context.create_value(ty, None);
-        let arguments: Vec<Value> = std::iter::once(counter.clone())
-            .chain(
-                states
-                    .iter()
-                    .map(|_| self.context.create_value(TypeId::DEPENDENCY, None)),
-            )
-            .collect();
-        let inner_states: Vec<ValueId> = arguments[1..].iter().map(Value::id).collect();
-        let block = self
-            .context
-            .create_block_with_dependencies(arguments, states.len());
-        let region = self.context.create_region();
-        region.add_block(block.id());
-
-        let mut builder = scf::ForLegacyOpBuilder::new(self.context)
-            .lower_bound(lower)
-            .upper_bound(upper)
-            .step(step)
-            .inits(vec![lower])
-            .result_types(vec![ty])
-            .body(region.id());
-        for &state in &states {
-            builder = builder.dep_operand(state).dep_result();
-        }
-        let loop_op = builder.build();
-        self.place(site, loop_op.id());
-        if key == dimension {
-            self.built.insert(dimension, loop_op.id());
-        }
-
-        let restored = bound.insert(key, counter.id());
-        let mut inner = Site::Append(self.context.get_block(block.id()));
-        let left = self.emit(rewriter, levels, index + 1, bound, inner_states, &mut inner)?;
-        match restored {
-            Some(previous) => bound.insert(key, previous),
-            None => bound.remove(&key),
-        };
-
-        let latch = b::addi(self.context, counter.id(), step, ty).build();
-        self.context.get_block(block.id()).append(latch.id());
-        let mut terminator = scf::r#yield(self.context, vec![latch.result()]);
-        for state in left {
-            terminator = terminator.dep_operand(state);
-        }
-        let terminator = terminator.build();
-        self.context.get_block(block.id()).append(terminator.id());
-
-        let results = self.context.get_op(loop_op.id()).results().to_vec();
-        Ok(results[1..].to_vec())
-    }
-
-    /// One unordered counted loop: a `scf.for` whose body is a fresh graph
-    /// holding the counter, the chains, and the levels below.
+    /// One counted loop: a `scf.for` whose body is a fresh graph holding the
+    /// counter, the chains, and the levels below.
     #[allow(clippy::too_many_arguments)]
-    fn emit_loop_nodes(
+    fn emit_loop(
         &mut self,
         rewriter: &mut Rewriter,
         levels: &[Level],
@@ -685,56 +608,23 @@ impl<'a> Lowering<'a> {
         site: &mut Site,
     ) -> Result<Vec<ValueId>, PassError> {
         let bindings = self.body_bindings(bound, &states);
-        if let Site::Region(destination) = *site {
-            let (ops, results) = crate::clone::clone_nodes_ops_into(
-                self.context,
-                self.nest.body,
-                &bindings,
-                destination,
-            );
-            let values = self
-                .context
-                .get_region(self.nest.body)
-                .value_results()
-                .len();
-            let left = results[values..values + states.len()].to_vec();
-            // The copy's own comparison and latch count a loop that is gone.
-            erase_unread(self.context, rewriter, &ops)?;
-            return Ok(left);
-        }
-        let copy = crate::clone_region_with_mapping(self.context, self.nest.body, &bindings);
-        let block = self
-            .context
-            .get_block(self.context.get_region(copy).block_ids()[0]);
-
-        let terminator = *block.op_ids().last().expect("a body is terminated");
-        let operands = self.context.get_op(terminator).operands().to_vec();
-        let left: Vec<ValueId> = self
-            .nest
-            .body_states
-            .iter()
-            .map(|&port| operands[port])
-            .collect();
-        rewriter.erase_op(&OperationRef::new(self.context.get_op(terminator)))?;
-        // The body stepped the counter for the loop it used to sit in; the loop
-        // that now counts that dimension steps it, so the copy's latch is left
-        // over. Dropping it here rather than leaving it to `dce` keeps what the
-        // unroller measures the size of honest.
-        for latch in self
-            .nest
-            .body_counters
-            .iter()
-            .filter_map(|&port| self.context.get_value(operands[port]).defining_op())
-            .filter(|&latch| block.op_ids().contains(&latch))
-            .filter(|&latch| !names(self.context, &block, latch))
-        {
-            rewriter.erase_op(&OperationRef::new(self.context.get_op(latch)))?;
-        }
-        let Site::Append(destination) = site else {
+        let Site::Region(destination) = *site else {
             unreachable!("a body is built inside the loop that runs it");
         };
-        rewriter.splice_block(block.id(), destination.id());
-        rewriter.erase_block(block.id());
+        let (ops, results) = crate::clone::clone_nodes_ops_into(
+            self.context,
+            self.nest.body,
+            &bindings,
+            destination,
+        );
+        let values = self
+            .context
+            .get_region(self.nest.body)
+            .value_results()
+            .len();
+        let left = results[values..values + states.len()].to_vec();
+        // The copy's own comparison and latch count a loop that is gone.
+        erase_unread(self.context, rewriter, &ops)?;
         Ok(left)
     }
 
@@ -755,7 +645,6 @@ impl<'a> Lowering<'a> {
                     .expect("the nest sits in the block holding it");
                 block.insert(position, op);
             }
-            Site::Append(block) => block.append(op),
             Site::Region(region) => self.context.add(*region, op),
         }
     }
@@ -813,7 +702,6 @@ pub(super) fn literal_at(context: &Context, site: &mut Site, value: i128, ty: Ty
                 .expect("the target sits in its block");
             block.insert(position, op.id());
         }
-        Site::Append(block) => block.append(op.id()),
         Site::Region(region) => context.add(*region, op.id()),
     }
     op.result()
@@ -870,22 +758,6 @@ fn hoistable(context: &Context, view: &AffineView) -> Option<Vec<OpId>> {
         }
     }
     Some(hoist)
-}
-
-/// Whether anything left in `block` reads what `op` defines.
-fn names(context: &Context, block: &BlockHandle, op: OpId) -> bool {
-    let results = context.get_op(op).results().to_vec();
-    block
-        .op_ids()
-        .iter()
-        .filter(|&&other| other != op)
-        .any(|&other| {
-            context
-                .get_op(other)
-                .operands()
-                .iter()
-                .any(|operand| results.contains(operand))
-        })
 }
 
 /// The operations a loop's shape pins: the latch of every port counting with

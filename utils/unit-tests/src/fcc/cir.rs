@@ -240,15 +240,9 @@ const LABELED_LOOPS: &str = r#"module {
       } step {
         cir.yield
       } body {
-        %2 = constant {value = 1} : !i1
-        scf.if %2 {
-          cir.break
-        } else {
-          cir.continue {label = "outer"}
-        }
-        cir.yield
+        cir.break
       }
-      cir.yield
+      cir.continue {label = "outer"}
     }
     func.return
   }
@@ -311,13 +305,7 @@ fn an_exit_with_no_loop_to_leave_is_an_error() {
         &context,
         r#"module {
   %fn_main = func.func @main() {
-    %0 = constant {value = 1} : !i1
-    scf.if %0 {
-      cir.break {label = "missing"}
-    } else {
-      scf.yield
-    }
-    func.return
+    cir.break {label = "missing"}
   }
   module_end
 }"#,

@@ -95,6 +95,28 @@ fn slice(values: &[ValueId], range: &Range<usize>) -> Vec<ValueId> {
     values[range.start.min(values.len())..range.end.min(values.len())].to_vec()
 }
 
+/// Whether `found` and `declared` name the same value. A bound or a step is a
+/// value, not a spelling: the simplifier merges congruent constants, so a body
+/// that computes the counter's advance over its own `1` states the recurrence
+/// the op declares over an outer `1` just as well.
+fn names_same(context: &Context, found: ValueId, declared: ValueId) -> bool {
+    if found == declared {
+        return true;
+    }
+    let constant = |value: ValueId| {
+        context
+            .get_value(value)
+            .defining_op()
+            .filter(|&op| context.has_operation(op))
+            .and_then(|op| context.get_op(op).as_interface::<dyn crate::ConstantLike>())
+            .map(|op| op.constant_value())
+    };
+    match (constant(found), constant(declared)) {
+        (Some(left), Some(right)) => left == right,
+        _ => false,
+    }
+}
+
 /// Checks a theta's declared alignment: five ranges of one length, one type per
 /// offset, a boolean predicate, and dependencies carried in the same shape.
 pub fn verify_theta(
@@ -259,7 +281,8 @@ pub fn verify_counted(
         let op = context.get_op(op);
         op.is::<CmpIOp>()
             && op.attr("predicate") == Some(AttributeValue::Predicate(Predicate::Slt))
-            && op.operands().as_slice() == [counter, upper_bound]
+            && matches!(op.operands().as_slice(),
+                [lhs, rhs] if *lhs == counter && names_same(context, *rhs, upper_bound))
     });
     if !compares {
         return Err(fail(format!(
@@ -270,8 +293,9 @@ pub fn verify_counted(
     let advances = context.get_value(next).defining_op().is_some_and(|op| {
         let op = context.get_op(op);
         op.is::<AddIOp>()
-            && (op.operands().as_slice() == [counter, step]
-                || op.operands().as_slice() == [step, counter])
+            && matches!(op.operands().as_slice(),
+                [lhs, rhs] if (*lhs == counter && names_same(context, *rhs, step))
+                    || (*rhs == counter && names_same(context, *lhs, step)))
     });
     if !advances {
         return Err(fail(format!("{name} must advance the counter by the step")));

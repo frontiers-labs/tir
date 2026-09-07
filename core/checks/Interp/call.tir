@@ -9,15 +9,14 @@ module {
   %fn_fact = func.func @fact(%n: !i64) -> !i64 {
     %one = constant {value = 1} : !i64
     %base = cmpi %n, %one {predicate = "sle"} : !i1
-    %r = scf.if %base -> !i64 {
-      scf.yield %one
-    } else {
-      %nm1 = subi %n, %one : !i64
-      %sub = func.call %fn_fact(%nm1 : !i64) -> !i64
-      %prod = muli %n, %sub : !i64
-      scf.yield %prod
-    }
-    func.return %r
+    cfg.cond_br %base, ^base, ^step
+  ^base:
+    func.return %one
+  ^step:
+    %nm1 = subi %n, %one : !i64
+    %sub = func.call %fn_fact(%nm1 : !i64) -> !i64
+    %prod = muli %n, %sub : !i64
+    func.return %prod
   }
   module_end
 }

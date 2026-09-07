@@ -197,7 +197,11 @@ pub(super) fn emit_machine_code(
         opts.mabi.as_deref(),
     );
 
-    let mut pm = mid_end(opts, true);
+    let mut pm = mid_end(opts);
+    // Data lowering erases the δ ops, so the functions naming one must hold a
+    // symbol address of their own by then. The backend prologue materializes
+    // the rest; by this point there is nothing left for it to find.
+    pm.add_pass(tir::passes::MaterializeSymbolAddressesPass::new());
     pm.run(&context, context.get_op(module.id()))
         .unwrap_or_else(|e| {
             eprintln!("fcc: error: control-flow lowering failed: {e}");
@@ -393,9 +397,8 @@ fn add_instcombine(pm: &mut tir::PassManager) {
     pm.add_pass(tir::passes::InstCombineNodesPass::new());
 }
 
-/// The mid-end pipeline the driver options ask for, ending in the data
-/// lowering the backend needs when `materialize`.
-pub(super) fn mid_end(opts: &DriverOptions, materialize: bool) -> tir::PassManager {
+/// The mid-end pipeline the driver options ask for.
+pub(super) fn mid_end(opts: &DriverOptions) -> tir::PassManager {
     let mut pm = tir::PassManager::new();
     if let Some(spec) = &opts.pipeline {
         pm = tir::parse_pipeline(spec).unwrap_or_else(|e| {
@@ -431,11 +434,6 @@ pub(super) fn mid_end(opts: &DriverOptions, materialize: bool) -> tir::PassManag
         // arithmetic as a different program, which is a backend defect this
         // level inherits.
         add_instcombine(pm.nest::<tir::func::FuncOp>());
-    }
-    // Data lowering consumes the δ ops, so the functions that name them must
-    // hold symbol addresses of their own by then.
-    if materialize {
-        pm.add_pass(tir::passes::MaterializeSymbolAddressesPass::new());
     }
     pm
 }

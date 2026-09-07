@@ -60,23 +60,18 @@ fn unroll(context: &Context, rewriter: &mut Rewriter, level: &Loop) -> Result<()
     let handle = context.get_op(level.op);
     let target = OperationRef::new(handle.clone());
     let region = *handle.regions().last().expect("a loop has a body");
-    let (arguments, mut incoming) = match handle.clone().as_interface::<dyn Theta>() {
-        Some(theta) => {
-            let ports = carried(context, &handle).expect("a loop carries ports");
-            let body = context.get_region(theta.body());
-            let mut arguments = ports.args;
-            arguments.extend(body.dep_arguments().iter().map(crate::Value::id));
-            let mut inits = ports.inits;
-            inits.extend(handle.dep_operands());
-            (arguments, inits)
-        }
-        None => {
-            let carried = handle
-                .clone()
-                .as_interface::<dyn crate::LoopLike>()
-                .expect("a counted loop carries ports");
-            (carried.carried_args(), carried.inits())
-        }
+    let theta = handle
+        .clone()
+        .as_interface::<dyn Theta>()
+        .expect("a counted loop is a theta");
+    let (arguments, mut incoming) = {
+        let ports = carried(context, &handle).expect("a loop carries ports");
+        let body = context.get_region(theta.body());
+        let mut arguments = ports.args;
+        arguments.extend(body.dep_arguments().iter().map(crate::Value::id));
+        let mut inits = ports.inits;
+        inits.extend(handle.dep_operands());
+        (arguments, inits)
     };
     let parent = context.parent_nodes_region(level.op);
     let mut copies = Vec::new();

@@ -576,6 +576,7 @@ dialect! {
             SymbolEndOp,
             LiteralOp,
             DataRelocOp,
+            SymbolAddressOp,
             BlockEndOp,
             VirtualReturnOp,
             VirtualBranchOp,

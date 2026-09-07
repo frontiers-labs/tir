@@ -65,16 +65,16 @@ pub(crate) fn object_format() -> ObjectFormatInfo {
     }
 }
 
-/// Pre-RA: materialize a `sym_addr` symbol address as `adr rd, sym`. The
+/// Pre-RA: materialize an `asm.symbol_address` as `adr rd, sym`. The
 /// encoder leaves the immediate as a fixup emitted with R_AARCH64_ADR_PREL_LO21.
-pub(crate) fn lower_sym_addr(
+pub(crate) fn lower_symbol_address(
     context: &tir::Context,
     op: &tir::OperationRef,
     rewriter: &mut tir::Rewriter,
 ) -> Result<bool, tir::PassError> {
-    use tir::builtin::SymAddrOp;
+    use tir::backend::SymbolAddressOp;
 
-    let Some(addr_of) = op.as_op::<SymAddrOp>() else {
+    let Some(addr_of) = op.as_op::<SymbolAddressOp>() else {
         return Ok(false);
     };
     let dest = addr_of.result();

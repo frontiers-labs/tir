@@ -18,11 +18,12 @@ module {
     %6 = constant {value = 1} : !i64
     %7 = constant {value = 0} : !i64
     %8 = cmpi %6, %7 {predicate = "sgt"} : !i1
-    %9 = scf.if %8 -> !fn<(!i64) -> !i64> {
-      scf.yield %fn_double
-    } else {
-      scf.yield %fn_negate
-    }
+    cfg.cond_br %8, ^double, ^negate
+  ^double:
+    cfg.br ^apply(%fn_double : !fn<(!i64) -> !i64>)
+  ^negate:
+    cfg.br ^apply(%fn_negate : !fn<(!i64) -> !i64>)
+  ^apply(%9: !fn<(!i64) -> !i64>):
     %10 = func.call %9(%5 : !i64) -> !i64
     func.return %10
   }

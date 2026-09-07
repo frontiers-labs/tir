@@ -10,7 +10,7 @@ module {
   %fn_last = func.func @last(%0: !i64, %1: !i64, %2: !i64, %3: !i32) -> !i32 {
     %4 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
     ptr.store %3, %4
-    scf.for_legacy %0, %1, %2 {
+    %i1_end = scf.for %i1 = %0 to %1 step %2 {
       %5 = constant {value = 3} : !i32
       ptr.store %5, %4
       %6 = constant {value = 36} : !i32

@@ -30,33 +30,6 @@ pub trait Symbol {
     fn is_definition(&self) -> bool;
 }
 
-/// A structured conditional (γ): disjoint sub-regions, one of which runs depending on
-/// a deciding operand, and `k` results whose values come from the yield of whichever
-/// region ran. Lets a flow-sensitive rewriter read the selection — and assume the
-/// region's fact inside it — without knowing the concrete control-flow op.
-pub trait Conditional {
-    /// The operand deciding which region runs.
-    fn decision(&self) -> ValueId;
-
-    /// The `k` values `region` yields, aligned with the op's results.
-    fn region_yields(&self, region: RegionId) -> Vec<ValueId>;
-
-    /// For each guarded region, the value known to equal a boolean inside it
-    /// (`true` => 1, `false` => 0).
-    fn guarded_regions(&self) -> Vec<(RegionId, ValueId, bool)>;
-
-    /// The n-ary reading of the selection: for each region, in region order, the value
-    /// of [`Conditional::decision`] that selects it, or `None` for the region that runs
-    /// when no case matches. A two-armed conditional decided by a boolean reads through
-    /// its guards — the `true` arm is case 1, the `false` arm is the default.
-    fn case_values(&self) -> Vec<(RegionId, Option<i64>)> {
-        self.guarded_regions()
-            .into_iter()
-            .map(|(region, _, taken)| (region, taken.then_some(1)))
-            .collect()
-    }
-}
-
 /// Relative execution cost of an operation, consulted by cost-driven rewriters
 /// (e.g. InstCombine) to choose among equivalent forms. The default models one
 /// cheap instruction; expensive ops override it. Exposed as an interface so the
@@ -114,12 +87,6 @@ pub trait Terminator {
     }
 }
 
-/// An operation whose selected region entry arguments define non-forwarding
-/// control tokens.
-pub trait TokenScope {
-    fn token_scope_regions(&self) -> Vec<RegionId>;
-}
-
 /// A terminator that transfers control to successor blocks within the same region,
 /// forwarding values to their block arguments. Lets a CFG analysis read the edge
 /// targets and the values flowing along each edge without knowing the concrete
@@ -130,89 +97,16 @@ pub trait BranchTerminator {
     fn successor_operands(&self) -> Vec<(BlockId, Vec<ValueId>)>;
 }
 
-/// A structured loop (θ) with `n` carried ports. Port `j` starts at `inits()[j]`,
-/// enters each iteration as the body region argument `carried_args()[j]`, and updates
-/// to `latched()[j]`, the value the body yields on the back edge. `finals()[j]` — the
-/// op's result — is the carried value *after* the loop exits, a distinct quantity from
-/// the per-iteration `carried_args()[j]`, never congruent to it. All four accessors are
-/// aligned and of equal arity `n`. Lets a flow-sensitive analysis build μ and η gates
-/// without knowing the concrete loop op.
-pub trait LoopLike {
-    /// The pre-loop initial value of each carried port.
-    fn inits(&self) -> Vec<ValueId>;
-    /// The body region arguments through which the carried values enter each iteration.
-    fn carried_args(&self) -> Vec<ValueId>;
-    /// The values the body yields on the back edge: the next iteration's carried values.
-    fn latched(&self) -> Vec<ValueId>;
-    /// The op's results: the carried values at loop exit.
-    fn finals(&self) -> Vec<ValueId>;
-}
-
-/// How the two sides of an [`EntryGuard::Less`] comparison are ordered.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GuardOrdering {
-    Signed,
-    Unsigned,
-}
-
-/// The zero-trip test of a [`GuardedLoop`], read as *structure* rather than as a value:
-/// no variant names a `ValueId` that the loop does not already have as an operand or a
-/// region-internal value, so a consumer can build the guard term in its own vocabulary
-/// (an e-graph, a solver) without any operation being materialized in the IR.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum EntryGuard {
-    /// The loop is tail-controlled: its body runs at least once, so there is no
-    /// zero-trip check to build.
-    AlwaysTaken,
-    /// The body runs iff `lhs < rhs` under `ordering` — a counted loop's bound
-    /// comparison, over the loop's existing operands. A loop counting downwards states
-    /// the same test with the operands swapped; a test that is not a strict ordering
-    /// belongs in [`EntryGuard::Region`].
-    Less {
-        ordering: GuardOrdering,
-        lhs: ValueId,
-        rhs: ValueId,
-    },
-    /// The body runs iff evaluating `region` produces 1 in `condition`, with
-    /// `arguments` — the region's entry arguments, aligned with
-    /// [`LoopLike::inits`] — bound to the loop's init operands.
-    Region {
-        region: RegionId,
-        arguments: Vec<ValueId>,
-        condition: ValueId,
-    },
-}
-
-/// The conditional-execution reading of a [`LoopLike`]: whether its first iteration
-/// runs at all. Together the two interfaces state the γ∘θ decomposition a consumer
-/// needs — `If(entry_guard, Theta(init, latch), init)` per carried port — while the IR
-/// keeps its source shape.
-///
-/// This is a sibling of [`Conditional`], not an extension of it, because the two answer
-/// different questions. A `Conditional` selects among regions that exist and hands back
-/// a decision *value*; a loop's zero-trip guard is a fact about the loop's operands that
-/// no operation computes, so `decision() -> ValueId` has nothing to return, and neither
-/// does `region_yields`/`case_values` mean anything for a loop body that runs `n` times.
-/// Making loops `Conditional` would either force them to materialize a comparison — the
-/// one thing this design exists to avoid — or hollow out `Conditional`'s contract for
-/// its existing implementors.
-pub trait GuardedLoop {
-    /// The condition under which the loop's first iteration runs.
-    fn entry_guard(&self) -> EntryGuard;
-}
-
-/// A [`GuardedLoop`] whose iterations are counted: a counter starts at
+/// A [`Theta`] whose iterations are counted: a counter starts at
 /// [`CountedLoop::lower_bound`], gains [`CountedLoop::step`] once per iteration, and the
-/// loop runs while the counter is below [`CountedLoop::upper_bound`] under the ordering
-/// of the [`EntryGuard::Less`] the loop also publishes. Together the two interfaces state
-/// the whole recurrence, so a consumer can destruct or reason about the counter — build
-/// an affine view, unroll, rotate — without knowing the concrete loop op.
+/// loop runs while the counter is signed-less-than [`CountedLoop::upper_bound`]. That
+/// states the whole recurrence, so a consumer can destruct or reason about the counter
+/// — build an affine view, unroll, rotate — without knowing the concrete loop op.
 ///
-/// The counter itself is deliberately not an accessor: it is not a value of the IR. A
-/// counted loop's body carries only what it was given (`scf.for`'s `iter_args`), and the
-/// counter comes into existence when a consumer builds the recurrence these three
-/// operands describe. Naming a `ValueId` for it would oblige every implementor to
-/// materialize one, which is the thing [`EntryGuard`] exists to avoid.
+/// [`CountedLoop::induction`] names the port the counter rides on where the loop has
+/// one. A loop that carries only the recurrence answers `None`: the counter is then not
+/// a value of the IR, and naming a `ValueId` for it would oblige the implementor to
+/// materialize one.
 pub trait CountedLoop {
     /// The counter's value on the first iteration.
     fn lower_bound(&self) -> ValueId;
@@ -229,8 +123,8 @@ pub trait CountedLoop {
 
 /// A [`BranchTerminator`] whose successor edges run under a known boolean fact — e.g.
 /// `cond_br %c` enters its true successor when `%c` is 1 and its false successor when
-/// `%c` is 0. The CFG analog of [`Conditional`], letting a flow-sensitive analysis
-/// recover the predicate gating a merge without knowing the concrete branch op.
+/// `%c` is 0. The CFG analog of [`Gamma`], letting a flow-sensitive analysis recover
+/// the predicate gating a merge without knowing the concrete branch op.
 pub trait BranchGuard {
     /// For each guarded successor edge, the value known to equal a boolean when that
     /// edge is taken (`true` => 1, `false` => 0).

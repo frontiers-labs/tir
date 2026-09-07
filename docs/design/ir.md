@@ -1,8 +1,7 @@
 # The Core IR
 
-Status: approved design, revision 1. Implementation is staged; where this
-document and the code disagree, this document describes the target and the
-code describes the past.
+Status: implemented, revision 2. This document describes the IR the code
+holds; where the two disagree, the code is right and this document is a bug.
 
 Normative external reference for the middle-end semantics: the RVSDG paper
 (Reissmann, Reusch, Bahmann, Själander — arXiv 1912.05036). This document
@@ -19,7 +18,7 @@ the infrastructure but the *form* — which dialects appear and which
 structural conventions hold:
 
 ```
-source ─▶ AST ─▶ cir (frontend CF)  ─▶ scf-as-RVSDG (middle end)
+source ─▶ AST ─▶ cir (frontend CF) ─▶ unordered regions (middle end)
                                           │
                                           ▼
 object ◀─ emission ◀─ machine CFG ◀─ selection from the e-graph view
@@ -33,10 +32,11 @@ object ◀─ emission ◀─ machine CFG ◀─ selection from the e-graph view
   totally converts any CFG region — irreducible included — to one unordered
   region of structured ops. Structure is a guarantee the compiler provides,
   never a restriction on input.
-- **scf** is the middle-end form: structured regions whose conditional and
-  loop semantics are read through interfaces. This form is RVSDG in the
-  paper's sense — an acyclic, region-hierarchical, state-threaded program —
-  without any dedicated RVSDG ops (§5).
+- **scf over unordered regions** is the middle-end form: a region holds
+  operations that no order relates, taking its inputs on ports and naming its
+  results outright, and the structured ops declare how the two line up. This
+  form is RVSDG in the paper's sense — an acyclic, region-hierarchical,
+  state-threaded program — without any dedicated RVSDG ops (§5).
 - **machine CFG** exists only after destruction, which happens inside
   emission at the end of instruction selection. Within a machine block, the
   final instruction order is *derived* by the scheduler from dependence and
@@ -71,7 +71,7 @@ dominance, e-graphs — lives outside the green core as red views (§7).
 | Operation (`OpInstance`) | `OpId` (dense `u32`) | `(dialect, name)` identity, operands `Vec<ValueId>`, results `Vec<ValueId>`, regions `Vec<RegionId>`, attributes |
 | Value | `ValueId` | type (`TypeId`), defining op (`None` for block arguments) |
 | Block | `BlockId` | argument values, ordered op list |
-| Region | `RegionId` | ordered block list, parent op |
+| Region | `RegionId` | parent op, and either an ordered block list or an unordered body: ports, operations, results |
 | Type | `TypeId` | interned, hash-consed; identity is structural equality |
 
 Conventions:
@@ -86,7 +86,13 @@ Conventions:
   `OperationName`/`DialectName` newtypes exist so string comparison against
   op names does not compile.
 - A block argument is a `Value` with `defining_op == None`. There is no
-  separate block-argument type.
+  separate block-argument type. An unordered region's ports are the same
+  thing: `RegionHandle::ports` answers them for either kind, an ordered
+  region's being its entry block's arguments.
+- A region declares which kind it may be (`Blocks`, `Nodes`, or `Any`) in the
+  op that owns it. `Any` is for an operation that outlives the conversion —
+  a function body, or a counted loop a frontend raised — and holds blocks
+  until `restructure-nodes` builds the unordered form.
 
 ### 2.2 Storage and the mutability discipline
 
@@ -143,9 +149,10 @@ spines, and maintain nothing but the green truth:
 
 The **port-edit primitive** deserves emphasis: any transform that threads a
 new value through a structured op (a promoted scalar, a state chain, a
-hoisted loop-carried value) needs to extend the op's results, the region's
-arguments, and the terminator's operands coherently. That is one primitive
-here, not a per-pass idiom. Consumers: `restructure-nodes` drawing the chain
+hoisted loop-carried value) needs to extend the op's operands, the region's
+ports, the region's results, and the op's results coherently. The op says how
+those line up in its `binds:` declaration (§5.1), and `grow_port` reads it.
+That is one primitive here, not a per-pass idiom. Consumers: `restructure-nodes` drawing the chain
 (§6), `promote-nodes` (§5.3), e-graph commit (§7.2), and any future structural
 transform (unrolling, inlining, SROA).
 
@@ -190,9 +197,12 @@ Attributes carry *data*, never semantics — semantics is interfaces.
 
 Dialects are declared with the `dialect!`/`operation!` macros: operand and
 result specs (with `?` optional and `*` variadic markers), attribute specs,
-region specs, verifier hooks, printer/parser (generic or custom), the
-interface list, and optionally `sem:` — an executable semantic expression
-from which constant folding and e-graph expansion derive automatically.
+region specs (each naming the kind of body it may hold), verifier hooks,
+printer/parser (generic or custom), the interface list, `binds:`/`counted:`
+for a structured op's declared alignment (§5.1), `state:` for the memory-order
+ports an effectful op carries (§6.1), and optionally `sem:` — an executable
+semantic expression from which constant folding and e-graph expansion derive
+automatically. [Defining dialects](defining_dialects.md) is the reference.
 
 Registration is per-Context: `register_dialect::<D>()` installs op
 constructors, parsers, type parsers, and each op's interface converters.
@@ -200,8 +210,8 @@ constructors, parsers, type parsers, and each op's interface converters.
 ### 4.2 The interface mechanism
 
 An interface is a Rust trait implemented by concrete op types and registered
-so it can be queried dynamically: `op.as_interface::<dyn LoopLike>()`,
-`op.has_interface::<dyn Conditional>()`. Interfaces may carry
+so it can be queried dynamically: `op.as_interface::<dyn Theta>()`,
+`op.has_interface::<dyn Gamma>()`. Interfaces may carry
 `verify_interface` hooks that the generated verifier runs. This is the
 **only** extension mechanism. Adding behavior to the compiler means defining
 or implementing an interface; it never means teaching core code about an op.
@@ -210,47 +220,76 @@ or implementing an interface; it never means teaching core code about an op.
 
 | Interface | Contract |
 |---|---|
-| `Symbol` | named module-level entity; signature, visibility, is-definition |
-| `Conditional` | n-ary decision: deciding operand, k regions, per-region yields aligned with results. `scf.if` (2 regions), `scf.switch` (k regions) |
-| `GuardedLoop` | conditional-execution reading of a loop: `entry_guard() -> EntryGuard` states the zero-trip guard **structurally** — `Less` (ordering + two existing operands) for a counted loop, `Region` (condition region, its arguments aligned with `inits()`, the condition value) for a general one, `AlwaysTaken` for a tail-controlled one — because the guard is not a materialized `Value`. A sibling of `Conditional`, not an extension: a loop has no `decision()` value to hand back and no arm-aligned yields, so widening `Conditional` would either force a comparison into the IR or hollow out its contract for `scf.if`/`scf.switch` |
-| `LoopLike` | n-ary iteration: `inits() / carried_args() / latched() / finals()`, arity-verified. Counted loops additionally expose bounds/step untouched |
-| `TokenScope` | regions whose entry args are non-forwarding control tokens |
+| `Gamma` | a structured conditional over unordered arms: the predicate indexes the arms, `forwarded()` states how the op's operands reach every arm's ports and how the chosen arm's results become the op's. `scf.switch` |
+| `Theta` | a structured loop over an unordered body: `carried()` states the five aligned lists — inits, ports, the values the next iteration takes, the values the loop leaves with, results — and `predicate()` the body result deciding whether another iteration runs. `scf.loop`, `scf.for` |
+| `CountedLoop` | a `Theta` whose iterations count: `lower_bound`/`upper_bound`/`step`, and `induction` naming the port the counter rides on. What the affine view, unrolling and strip-mining read. `scf.for` |
+| `Callable` | a λ: body (absent for a declaration), the value a call takes as its callee, parameter and result types |
+| `Apply` | an application of a callable to a run of the op's value operands |
+| `Global` | a δ: a data object with an address, and an initializer image where it defines one |
+| `RegionExit` | an operation of an *ordered* region binding that region's results. An unordered region names them outright and has none |
+| `NonLocalExit` | a `break`/`continue` leaving an enclosing structured op from inside its subtree, naming the target by kind or label; `ExitScope` marks what it may leave |
+| `Speculatable` | the op cannot trap, so it may run on a path the source did not take |
+| `MemoryRead` / `MemoryWrite` | location, value, **and state accessors**: the state operand read, and the state result produced (§6) |
 | `Terminator`, `BranchTerminator` | CFG structure where a CFG exists (frontend dialects, boundary input, machine IR): successors and per-edge operands |
 | `BranchGuard` | guarded successors of a conditional terminator; consumed by `restructure-nodes` at the CFG boundary |
-| `MemoryRead` / `MemoryWrite` | location, value, **and state accessors**: the state operand read, and (for writes) the state result produced (§6) |
-| `PromotableAllocation` | the value naming an allocation eligible for chain-splitting |
-| `ConstantLike`, `ConstantFold`, `Commutative`, `IntegerArithmetic`, `SameOperandType`, `OpCost` | value semantics for folding, e-graph seeding, and extraction cost |
+| `Symbol` | named module-level entity; signature, visibility, is-definition |
 | `MachineInstruction` | machine-op marking; register slots are `InstrInfo::regs` |
+
+Alongside these, the value-semantics interfaces the folder, the e-graph seeder
+and extraction read — `ConstantLike`, `ConstantFold`, `Pure`, `Commutative`,
+`IntegerArithmetic`, `SameOperandAndResultType`, `OpCost` — and
+`PromotableAllocation`, the value naming an allocation eligible for promotion.
+
+`Gamma` and `Theta` are not implemented by hand: an op declares its `binds:`
+and the macro derives them, along with the verifier that checks the alignment
+holds (§5.1).
 
 Interfaces whose consumers disappear are deleted; an orphaned interface is a
 bug, not a reserve.
 
 ## 5. Control flow in the middle-end form
 
-### 5.1 scf as RVSDG, without canonical ops
+### 5.1 scf over unordered regions
 
 The middle end has three structured control ops and needs no more:
 
-- `scf.if` — boolean two-region `Conditional`.
-- `scf.switch` — integer-predicate k-region `Conditional`; symmetric
-  split/join, no fallthrough between arms.
-- `scf.for` / `scf.while` — loops, **kept in their source-shaped form**.
+- `scf.switch` — a γ. The predicate indexes the arms, a predicate past the
+  last arm selects the last one, so every value picks exactly one arm. The
+  op's operands reach every arm through that arm's own ports; the chosen
+  arm's results become the op's.
+- `scf.loop` — a θ. The body reads what the loop carries through its ports
+  and names a predicate, the values the next iteration takes, and the values
+  the loop produces once the predicate is false. Only the cone the predicate
+  selects runs, so the loop is tail-controlled by construction and a
+  head-controlled source loop arrives as a γ around one.
+- `scf.for` — a θ whose port 0 counts: it starts at `lb`, is tested against
+  `ub` with `cmpi slt` and advanced by `step` with `addi`, and its exit
+  values are its ports. That is the counted shape `CountedLoop` publishes and
+  the affine view is defined on.
 
-There is deliberately no canonical tail-controlled loop op and no
-loop-rotation pass. A head-controlled loop is semantically γ∘θ — "if the
-guard holds, a do-while" — and that decomposition lives in the e-graph
-view's *terms*, not in the IR: the seeder reads `LoopLike` for the iteration
-and `GuardedLoop` for the zero-trip condition, and seeds each loop port
-as `If(guard₀, Theta(init, latch), init)` (§7.2). Rewriting the IR to that
-shape would buy nothing the view doesn't already have, would duplicate the
-condition region textually, and would destroy the counted-loop structure
-(`lb`/`ub`/`step`) that iteration-space and affine analysis consume.
+**The alignment is declared, not discovered.** A structured op states in its
+`binds:` clause how one carried value lines up across the four lists it
+spans — the op's operands, the region's ports, the region's results, the op's
+results — and the macro derives `Gamma`/`Theta` from that one statement,
+along with the verifier that checks it holds and the generic syntax that
+prints it. `counted:` pins the recurrence of a `Theta` that counts and
+derives `CountedLoop`. Nothing walks blocks and terminators to rediscover a
+loop's quad, because the op said it.
+
+`scf.for` is the one op with two lifecycle states. A frontend recognises a
+counted loop while its body is still ordered — only the converter sees both
+that body and the memory order enclosing it, so the recognition cannot wait —
+and `restructure-nodes` gives it the unordered body it runs on. Until then
+the body is a block list ending in `scf.yield`, which names what the next
+iteration carries, and the declared binding is not yet what holds; the
+verifier checks the ordered shape instead.
 
 Corollaries developers should internalize:
 
-- Loop analyses read `LoopLike` + guard; they never pattern-match `scf.for`.
-- A frontend dialect may implement these interfaces on its own ops and get
-  the entire optimizer for free.
+- Loop analyses read `Theta` and `CountedLoop`; they never pattern-match
+  `scf.for`.
+- A frontend dialect may declare these bindings on its own ops and get the
+  entire optimizer for free.
 - Multi-block regions and branch terminators do not occur in the middle-end
   form. `mem2reg`-era dominance machinery does not exist here; nothing in
   the mid-end computes a dominator tree (§8).
@@ -274,8 +313,9 @@ the memory chain (§6) while the block order is still there to read:
    selected by predicate values rather than duplicated.
 
 Consumers: fcc emits its loops as `cir` loop ops, which the `raise-loops`
-pass turns into `scf.for` where the counted shape is provable and into the
-same blocks and branches otherwise. Flat CFG is what a whole function gets
+pass turns into an ordered-body `scf.for` where the counted shape is provable
+and into the same blocks and branches otherwise; `restructure-nodes` then
+builds that loop's unordered body along with everything around it. Flat CFG is what a whole function gets
 when it holds a `goto` or a label, or a `return` under a loop — both name
 edges a loop region cannot carry — and what every refused loop gets;
 `restructure-nodes` raises them all, and there are no refused shapes.
@@ -350,39 +390,40 @@ liveness and colouring never see one (`son-backend` B2).
 
 ### 6.2 Chains
 
-`restructure-nodes` draws the chains as it converts the CFG (§5.2), one chain
-over every access, and `verify-deps` checks after every later pass that the
-chain is still whole rather than drawing it again. Splitting the chain per
-object is what `AliasFacts` and the shared escape classifier (also the gate for
-promotion, §5.3) are for:
+`restructure-nodes` draws the chain as it converts the CFG (§5.2), and
+`verify-deps` checks after every later pass that it is still whole rather
+than drawing it again. What it draws is **one conservative chain** over every
+access in the function: every effect observes the memory the last change left
+and leaves a dependency of its own, reads forking off a change without
+ordering one another.
 
-- **One chain per object.** Every base object the facts tell apart from all the
-  others the function names — a global, a parameter, a stack slot — is a memory
-  of its own, threaded through every access to it and flowing through structured
-  ops as ordinary carried/yielded dependencies.
-- A pointer the facts cannot read back may name any object they cannot rule it
-  out of. Where a function holds such an access, only the slots no such pointer
-  can reach keep chains of their own; every other object shares the
-  **conservative chain**, and so does the unresolved access.
-- Two parameters may name one memory, so both sit on the conservative chain —
-  unless the λ declares one free of aliases: `func.func @f(…) noalias [0]`, what
-  C's `restrict` becomes. Nothing else the function names is that object, so it
-  keeps a chain of its own. `ptr.disjoint %a, %na, %b, %nb : !i1` is the same
-  fact where the proof is a runtime check rather than a qualifier: it is
-  `a+na <= b || b+nb <= a` over unsigned addresses, which says `[a, a+na)` and
-  `[b, b+nb)` share no byte as long as neither range wraps past the end of the
-  address space — the producer's obligation, not the op's. It reads addresses,
-  not memory, so it is pure and takes no state, and the backend prologue lowers
-  it to the compares it stands for.
-- An object that would be the whole of *exposed* memory as far as the order goes
-  keeps no chain of its own: it would be named twice, once as itself and once as
-  the conservative chain a call and a return still name, for no ordering gained.
-- A call, a `memcpy` and a `return` touch every object the outside can reach.
-  Those chains cross such an op through its single port: `state.join` merges them
-  into the state it observes, `state.split` names each of them again in the state
-  it leaves. A slot whose address never left the function is not among them.
-- Disjoint chains never appear in each other's terms; their independence is
-  structural (law S3), not something an alias analysis rediscovers downstream.
+One chain is the ordering statement; it is not an aliasing statement. Telling
+two objects apart is `AliasFacts` and the shared escape classifier — the same
+gate promotion reads (§5.3) — and the passes that need the distinction consult
+them directly rather than reading it off the chain:
+
+- A stack slot whose address never leaves the function is an object nothing
+  else can name. Promotion takes its value onto the ports; the simplifier
+  forwards a read across a write to a different object, and drops a write no
+  reader of that object observes.
+- Two parameters may name one memory unless the λ declares one free of
+  aliases: `func.func @f(…) noalias [0]`, what C's `restrict` becomes.
+  `ptr.disjoint %a, %na, %b, %nb : !i1` is the same fact where the proof is a
+  runtime check rather than a qualifier: it is `a+na <= b || b+nb <= a` over
+  unsigned addresses, which says `[a, a+na)` and `[b, b+nb)` share no byte as
+  long as neither range wraps past the end of the address space — the
+  producer's obligation, not the op's. It reads addresses, not memory, so it
+  is pure and takes no state, and the backend prologue lowers it to the
+  compares it stands for.
+- A call, a `memcpy` and a `return` touch every object the outside can reach,
+  which on one chain is simply the chain.
+
+`state.join` and `state.split` exist for the shape where several chains cross
+one operation, and the fork-and-join of reads is what uses `join` today.
+Splitting the chain per object is not implemented: it would be a second
+ordering statement over the same accesses, and every consumer that would read
+it can ask the facts instead. Where that changes, this section is what has to
+change with it.
 
 ### 6.3 Ordering semantics
 
@@ -498,17 +539,16 @@ outside identity.
 
 - Pure ops seed as op identity ∪ their `sem:` expansion (both terms, one
   class).
-- `Conditional` seeds each result port as an `If`(decision, per-arm yields)
-  term where the port is speculatable; otherwise the port anchors.
-- `LoopLike` seeds each carried *state* port as a `Theta(init, latch)`
-  projection. A value port every edge carries unchanged is unioned with what
-  the loop was entered on; one the body changes is recorded for the
-  hypothesis rounds below, which is what keeps the body argument and the
-  loop's result distinct terms.
-- Head-controlled loops compose: `If(guard₀, Theta(init, latch), init)` per
-  port, with the guard term built in the e-graph from `GuardedLoop` —
-  `lb < ub` for counted loops, the condition region seeded over the inits
-  for general ones. No IR is rewritten to make this seeding possible.
+- `Gamma` seeds each result as an `If`(predicate, per-arm result) term where
+  the result is speculatable; otherwise it anchors.
+- `Theta` seeds each carried *state* port as a `Theta(init, latch)`
+  projection, reading the alignment off the op's declared binding. A value
+  port the body carries unchanged is unioned with what the loop was entered
+  on; one the body changes is recorded for the hypothesis rounds below, which
+  is what keeps the port and the loop's result distinct terms.
+- A head-controlled source loop is already a γ around a θ in the IR, so it
+  seeds as the composition of the two terms above. No IR is rewritten to make
+  this seeding possible.
 - Memory ops seed as `LoadMemory(addr, bytes, meta, state)` /
   `StoreMemory(addr, bytes, value, space, state)` over the actual dependency
   edges, unioned with op identity. Identity *is* the state operand: loads
@@ -591,7 +631,11 @@ and their single survivors:
 | `IRBuilder` + ad-hoc Context mutators + per-pass port-growing helpers | five mutation surfaces | the tree-edit API |
 | PBQP in `core` with dead coherence machinery | generic math stranded behind the compiler | `tir-pbqp` utils crate (§9) |
 | `DominatingEdgeFacts` | dominator-scoped facts on a CFG the mid-end no longer has | gate-context scoping in selection |
-| loop-rotation / scf canonicalization | γ∘θ is the *view's* reading, not an IR shape | guard-aware seeding |
+| `scf.if`, `scf.switch_legacy`, `scf.for_legacy`, `scf.while`, `scf.condition`, `scf.break`, `scf.continue` | ops over ordered regions with terminator-bound yields, from before the region kind existed | `scf.switch`, `scf.loop`, `scf.for` over unordered regions (§5.1) |
+| `Conditional`, `LoopLike`, `GuardedLoop` / `EntryGuard`, `TokenScope` | interfaces a walker used to rediscover a structured op's alignment from blocks and terminators, plus a zero-trip guard stated structurally because no operation computed it | `Gamma`, `Theta`, `CountedLoop`, declared by the op and derived by the macro (§5.1) |
+| `!token` and the loop-scope arguments naming it | a control token existed so a `break` could say which loop it left; a `NonLocalExit` names its target by kind or label | `NonLocalExit` + `ExitScope` |
+| `builtin.sym_addr` | a target-independent placeholder in the mid-end's own dialect for something only the backend produces and only the backend reads | `asm.symbol_address`, made by the module prologue and lowered pre-RA by each target |
+| loop-rotation / scf canonicalization | a head-controlled loop arrives as a γ around a θ; nothing has to rewrite it into one | restructuring |
 | fcc's AST-level goto machinery (per-construct predicate insertion, one refused shape) | one restructurer for one frontend, with a hole | the total `restructure-nodes` pass (§5.2) |
 
 The pattern behind every row: compute a thing in one place, from the form
@@ -639,9 +683,11 @@ format, interfaces, and `sem:` if it has value semantics. With `sem:` it
 folds and participates in e-graph reasoning with no further work. Register
 nothing anywhere else.
 
-**Give a dialect structured control flow.** Implement `Conditional` /
-`LoopLike` + `GuardedLoop` (+ `TokenScope`) on your ops. The optimizer, promotion, selection, and destruction consume the
-interfaces; your dialect appears nowhere in core.
+**Give a dialect structured control flow.** Declare `binds: Gamma` or
+`binds: Theta` on your ops — and `counted:` if the loop counts — and the macro
+derives the interfaces, the alignment verifier and the syntax. The optimizer,
+promotion, selection and destruction consume the interfaces; your dialect
+appears nowhere in core.
 
 **Write an optimization.** If it is an equality over values or memory:
 a PDL rule (proved or definitional per §10), picked up by saturation —

@@ -19,7 +19,7 @@ module {
     ptr.store %zero, %t
     ptr.store %zero, %i
     %lb = ptr.load %i : !i32
-    %fin = scf.for_legacy %lb, %0, %one iter_args(%iv = %lb) -> !i32 {
+    %i1_end, %fin = scf.for %i1 = %lb to %0 step %one (%iv = %lb) {
       ptr.store %iv, %i
       %a = ptr.load %t : !i32
       %c = ptr.load %i : !i32

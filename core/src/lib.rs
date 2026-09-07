@@ -54,11 +54,10 @@ pub use diagnostics::{print_error_range, print_parse_error};
 pub use dialect::{Dialect, OperationParser};
 pub use error::Error;
 pub use interfaces::{
-    Apply, Binding, BranchGuard, BranchTerminator, Callable, Commutative, Conditional,
-    ConstantFold, ConstantLike, CountedLoop, EntryGuard, ExitScope, ExitScopeKind, ExitTarget,
-    Gamma, Global, GuardOrdering, GuardedLoop, IntegerArithmetic, LoopLike, MemoryRead,
-    MemoryWrite, NonLocalExit, OpCost, PromotableAllocation, Pure, RegionExit,
-    SameOperandAndResultType, Speculatable, Symbol, Terminator, Theta, TokenScope, Visibility,
+    Apply, Binding, BranchGuard, BranchTerminator, Callable, Commutative, ConstantFold,
+    ConstantLike, CountedLoop, ExitScope, ExitScopeKind, ExitTarget, Gamma, Global,
+    IntegerArithmetic, MemoryRead, MemoryWrite, NonLocalExit, OpCost, PromotableAllocation, Pure,
+    RegionExit, SameOperandAndResultType, Speculatable, Symbol, Terminator, Theta, Visibility,
 };
 pub use interp::{Interp, InterpError, Memory as InterpMemory, Value as InterpValue};
 pub use ir_formatter::IRFormatter;

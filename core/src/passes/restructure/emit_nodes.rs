@@ -18,7 +18,7 @@ use crate::attributes::Predicate;
 use crate::builtin::{AddIOpBuilder, CmpIOpBuilder, ConstantOpBuilder, IntegerType};
 use crate::state::EntryStateOpBuilder;
 use crate::{
-    Context, CountedLoop, OpId, Operation, PassError, RegionId, TypeId, Value, ValueId, scf,
+    Context, CountedLoop, OpId, Operation, PassError, RegionId, Theta, TypeId, Value, ValueId, scf,
 };
 
 type Env = BTreeMap<VarId, ValueId>;
@@ -136,7 +136,7 @@ impl Emitter<'_> {
             self.bind_undefined_reads(op, region, env)?;
             self.retarget_operands(op, env);
             let results = self.context.get_op(op).results().to_vec();
-            let placed = if self.context.get_op(op).is::<scf::ForLegacyOp>() {
+            let placed = if super::is_ordered_counted_loop(self.context, &self.context.get_op(op)) {
                 self.counted_loop(op)?
             } else {
                 let block = self.context.parent_block(op).expect("an op of a block");
@@ -341,13 +341,13 @@ impl Emitter<'_> {
         Ok(())
     }
 
-    /// An `scf.for` the frontend raised becomes `scf.for`: the counter is
-    /// port 0, the carried arguments follow, and the body's yield says what
-    /// the next iteration carries. The old operation stays in its block, to
-    /// go with it.
+    /// Give an `scf.for` the frontend raised the unordered body it runs on:
+    /// the ports are what the block carried, the comparison and increment the
+    /// shape pins are put back, and the yield says what the next iteration
+    /// takes. The old operation stays in its block, to go with it.
     fn counted_loop(&self, op: OpId) -> Result<OpId, PassError> {
         let context = self.context;
-        let for_op = scf::ForLegacyOp::from_op_instance(context.get_op(op));
+        let for_op = scf::ForOp::from_op_instance(context.get_op(op));
         let [block] = context.get_region(for_op.handle().regions()[0]).block_ids()[..] else {
             return Err(unsupported("a counted loop whose body is a graph"));
         };
@@ -360,21 +360,19 @@ impl Emitter<'_> {
             .ok_or_else(|| unsupported("a loop body with no terminator"))?;
 
         let counter_type = context.get_value(for_op.lower_bound()).ty();
-        let mut ports = vec![context.create_value(counter_type, None)];
-        ports.extend(
-            arguments
-                .iter()
-                .map(|argument| context.create_value(argument.ty(), None)),
-        );
+        let ports: Vec<Value> = arguments
+            .iter()
+            .map(|argument| context.create_value(argument.ty(), None))
+            .collect();
         let body = context
             .create_nodes_region(ports.clone(), deps, vec![], vec![], 0)
             .id();
-        for (argument, port) in arguments.iter().zip(&ports[1..]) {
+        for (argument, port) in arguments.iter().zip(&ports) {
             context.replace_value_uses(argument.id(), port.id());
         }
         for &inner in body_ops {
             block.remove_op(inner);
-            let placed = if context.get_op(inner).is::<scf::ForLegacyOp>() {
+            let placed = if super::is_ordered_counted_loop(context, &context.get_op(inner)) {
                 block.append(inner);
                 self.counted_loop(inner)?
             } else {
@@ -406,15 +404,15 @@ impl Emitter<'_> {
         context.set_region_results(body, results, 2 * deps);
 
         let old = for_op.handle();
-        let mut result_types = vec![counter_type];
-        result_types.extend(
-            old.value_results()
-                .iter()
-                .map(|&result| context.get_value(result).ty()),
-        );
+        let result_types: Vec<_> = old
+            .value_results()
+            .iter()
+            .map(|&result| context.get_value(result).ty())
+            .collect();
+        let binding = Theta::carried(&for_op);
         let mut builder = scf::ForOpBuilder::new(context)
             .lb(for_op.lower_bound())
-            .inits(old.value_operands()[3..].to_vec())
+            .inits(old.value_operands()[binding.operands.start + 1..binding.operands.end].to_vec())
             .ub(for_op.upper_bound())
             .step(for_op.step())
             .body(body)
@@ -424,7 +422,7 @@ impl Emitter<'_> {
         }
         let raised = builder.build();
         let handle = raised.handle();
-        for (&was, &now) in old.value_results().iter().zip(&handle.value_results()[1..]) {
+        for (&was, now) in old.value_results().iter().zip(handle.value_results()) {
             context.replace_value_uses(was, now);
         }
         for (&was, &now) in old.dep_results().iter().zip(handle.dep_results().iter()) {

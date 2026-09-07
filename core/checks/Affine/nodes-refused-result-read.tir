@@ -20,8 +20,8 @@ module {data_layout = #data_layout} {
     %30 = constant {value = 1024} : !i64
     %32 = constant {value = 0} : !i8
     ptr.memset %1, %32, %30
-    %7 = scf.for_legacy %2, %3, %4 iter_args(%8 = %2) -> !i32 {
-      %9 = scf.for_legacy %2, %3, %4 iter_args(%10 = %2) -> !i32 {
+    %i1_end, %7 = scf.for %i1 = %2 to %3 step %4 (%8 = %2) {
+      %i2_end, %9 = scf.for %i2 = %2 to %3 step %4 (%10 = %2) {
         %11 = extsi %8 : !i64
         %12 = extsi %10 : !i64
         %13 = muli %12, %5 : !i64

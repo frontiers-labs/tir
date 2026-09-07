@@ -67,11 +67,10 @@ dialect! {
             MakeTupleOp,
             TupleGetOp,
             GlobalOp,
-            SymAddrOp,
             FnToPtrOp,
             PtrToFnOp,
         ],
-        types: [IntegerType, FloatType, IndexType, UnitType, TokenType, TupleType, FnType],
+        types: [IntegerType, FloatType, IndexType, UnitType, TupleType, FnType],
     }
 }
 
@@ -327,54 +326,6 @@ impl Type for UnitType {
 
     fn eq(&self, other: &dyn Type) -> bool {
         (other as &dyn Any).downcast_ref::<UnitType>().is_some()
-    }
-
-    fn hash(&self, _state: &mut dyn std::hash::Hasher) {}
-}
-
-/// Opaque, parameterless type with no runtime representation.
-///
-/// A `!token` value carries no data; it exists purely to encode a static
-/// def-use relationship between operations. Given a use of a token, its
-/// definition is the semantic producer of that token, which lets passes thread
-/// ordering, dependency or async-completion edges through the IR without
-/// inventing dummy data values.
-#[derive(TirType)]
-#[tir_type(dialect = "builtin", name = "token")]
-pub struct TokenType;
-
-impl TokenType {
-    #[allow(clippy::new_ret_no_self)]
-    pub fn new(context: &Context) -> TypeId {
-        context.get_type_id(Arc::new(Self))
-    }
-}
-
-impl TypeConstraint for TokenType {}
-
-impl Type for TokenType {
-    fn dialect(&self) -> &'static str {
-        "builtin"
-    }
-
-    fn parse_key() -> &'static str {
-        "token"
-    }
-
-    fn parse<'src>(
-        _mnemonic: &str,
-        _parser: &mut tir::parse::text::Parser<'src>,
-        context: &Context,
-    ) -> Result<TypeId, (Span, Error)> {
-        Ok(Self::new(context))
-    }
-
-    fn print(&self, fmt: &mut IRFormatter<'_>) -> Result<(), std::fmt::Error> {
-        fmt.write("token")
-    }
-
-    fn eq(&self, other: &dyn Type) -> bool {
-        (other as &dyn Any).downcast_ref::<TokenType>().is_some()
     }
 
     fn hash(&self, _state: &mut dyn std::hash::Hasher) {}

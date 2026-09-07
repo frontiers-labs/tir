@@ -131,7 +131,7 @@ operation! {
         },
         regions: R {
             body: Region {
-                single_block: true,
+                kind: Blocks,
             }
         },
         interfaces: [Commutative, SameOperandType],
@@ -151,13 +151,116 @@ sections above.
   `result_type` field, or `result_types`/`result_values` for a variadic result
   group — which is what a machine instruction declares, one result per register
   slot it writes.
-- `regions`: declares nested regions. A `single_block` region is auto-created by
-  the builder when omitted.
+- `regions`: declares nested regions and what each may hold; see
+  [Region kinds](#region-kinds).
 - `interfaces`: registers dynamic operation interfaces with the `Context`.
+- `binds`: declares how the op's operands, region ports, region results and
+  results line up, and derives the `Theta` or `Gamma` implementation from it;
+  see [Declared bindings](#declared-bindings).
+- `counted`: pins the recurrence of a `binds: Theta` loop, deriving
+  `CountedLoop`.
+- `state`: declares the single memory-order dependency ports the op carries.
 - `sem`: attaches a semantic-expression lowering for instruction selection,
   rewriting, and simulation.
 - `format: "custom"`: opts out of the default text parser/printer and expects
   `custom_print` and `custom_parse` methods on the operation type.
+
+### Region Kinds
+
+A region declares what its body may be with `kind:`, defaulting to `Blocks`:
+
+- `Blocks`: a control-flow graph. The op's generated accessor hands back the
+  entry block, and the builder creates the region when it is omitted.
+- `Nodes`: an unordered region. Its operations carry no order beyond their
+  operands and dependencies, it takes its inputs through ports rather than
+  block arguments, and it names its results outright instead of ending in a
+  terminator. The accessor hands back the region itself.
+- `Any`: an op that accepts either, such as a function body.
+
+A `variadic: true` region declares a group of zero or more regions rather than
+one, for an op whose arity is decided per instance:
+
+```rust
+regions: R {
+    arms: Region {
+        kind: Nodes,
+        variadic: true,
+    }
+},
+```
+
+### Declared Bindings
+
+An op holding an unordered region declares how one carried value lines up
+across its four value lists — the op's operands, the region's ports, the
+region's results, and the op's results — instead of leaving a walker to
+rediscover it. The macro derives the `Theta` or `Gamma` implementation, the
+alignment verifier and the generic syntax from that one declaration.
+
+A `~`-separated chain names the lists a group flows through, in order. `n` is
+the length of the chain's first term, so a slice can be written relative to the
+group's own arity:
+
+```rust
+binds: Theta {
+    carried: inits ~ body.ports ~ body.results[1..n+1] ~ body.results[n+1..] ~ results,
+    predicate: body.results[0],
+},
+```
+
+A `Theta` names five lists: the initial operands, the body's ports, the values
+the next iteration takes, the values the loop leaves with, and the op's
+results. A `Gamma` names the operands forwarded to every arm's ports and the
+arm results joined into the op's results, and its `predicate` is an operand:
+
+```rust
+binds: Gamma {
+    predicate,
+    forwarded: inputs ~ arms.ports,
+    joined: arms.results ~ results,
+},
+```
+
+Consecutive operand groups are bound together by naming them in parentheses:
+`(lb, inits) ~ body.ports`. Dependencies are never declared — they are a
+trailing partition of every port list, and the derived binding accounts for
+them.
+
+`counted:` pins the shape of a `binds: Theta` loop that counts: which port
+carries the counter, and which operands start, bound and advance it.
+
+```rust
+counted: { induction: 0, lb, ub, step },
+```
+
+From it the macro derives `CountedLoop`, so a consumer can build the
+recurrence — an affine view, an unroll, a rotation — without knowing the
+concrete loop op. `counted:` needs the `binds: Theta` it pins.
+
+### Memory-Order Ports
+
+An operation with a memory effect threads the memory order through dependency
+ports. `state:` declares which of the two single-port accessors it carries:
+
+- `state: "in"` — the op observes memory: `state_operand()`.
+- `state: "out"` — the op produces memory: `state_result()`.
+- `state: "in_out"` — both, which is what a store or a call declares.
+
+```rust
+operation! {
+    AllocaOp {
+        name: "alloca",
+        dialect: "ptr",
+        results: R {
+            result: "crate::ptr::PtrType",
+        },
+        interfaces: [PromotableAllocation],
+        state: "out",
+    }
+}
+```
+
+Both accessors answer `None` until a threading pass has set the ports.
 
 ## Types
 

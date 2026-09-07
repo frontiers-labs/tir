@@ -18,6 +18,24 @@ fn block_succs(tree: &DominatorTree, block: BlockId) -> HashSet<BlockId> {
         .collect()
 }
 
+// An operation holding two ordered regions, so the tree can be asked what a
+// block holding nested regions dominates. `scf` has none: its ops hold
+// unordered bodies, which have no blocks to dominate.
+tir::helpers::operation! {
+    TwoArmOp {
+        name: "two_arm",
+        dialect: "test",
+        regions: R {
+            left: Region {
+                kind: Blocks,
+            },
+            right: Region {
+                kind: Blocks,
+            }
+        },
+    }
+}
+
 fn yield_region(context: &Context) -> RegionId {
     let region = context.create_region();
     let block = context.create_block(vec![]);
@@ -122,11 +140,10 @@ fn loop_back_edge_dominators() {
 }
 
 #[test]
-fn structured_if_dominators() {
+fn nested_region_dominators() {
     let context = Context::with_default_dialects();
     let i1 = IntegerType::new(&context, 1);
     let cond = context.create_value(i1, None);
-    let cond_id = cond.id();
 
     let region = context.create_region();
     let entry = context.create_block(vec![cond]);
@@ -147,22 +164,17 @@ fn structured_if_dominators() {
         .unwrap()
         .id();
 
-    let if_op = tir::scf::ops::r#if(
-        &context,
-        cond_id,
-        vec![],
-        vec![],
-        Some(then_region),
-        Some(else_region),
-    )
-    .build();
+    let gate = TwoArmOpBuilder::new(&context)
+        .left(then_region)
+        .right(else_region)
+        .build();
 
-    entry.append_op(if_op);
+    entry.append_op(gate);
     entry.append_op(func_ops::r#return(&context, Operand::none()).build());
 
     let dt = DominatorTree::new(&context, func_with_region(&context, region.id()));
 
-    // The block holding scf.if dominates the entries of both nested regions.
+    // The block holding the op dominates the entries of both nested regions.
     assert_eq!(dt.idom(then_entry), Some(entry.id()));
     assert_eq!(dt.idom(else_entry), Some(entry.id()));
     assert!(dt.dominates(entry.id(), then_entry));
@@ -246,16 +258,14 @@ fn for_loop_as_root() {
         .unwrap()
         .id();
 
-    let for_op = tir::scf::ops::for_legacy(
-        &context,
-        lb.id(),
-        ub.id(),
-        step.id(),
-        vec![],
-        vec![],
-        Some(body),
-    )
-    .build();
+    let for_op = tir::scf::ForOpBuilder::new(&context)
+        .lb(lb.id())
+        .inits(vec![])
+        .ub(ub.id())
+        .step(step.id())
+        .body(body)
+        .result_types(vec![index])
+        .build();
 
     // An scf.for can itself be the root: its single body region is the tree.
     let dt = DominatorTree::new(&context, for_op.id());

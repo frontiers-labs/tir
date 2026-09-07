@@ -4,12 +4,13 @@
 // is saved and restored across nested regions instead of being clobbered.
 
 module {
-  %fn_f = func.func @f(%0: !i1, %1: !i32) -> !i32 {
+  %fn_f = func.func @f(%1: !i32) -> !i32 {
   ^start:
-    %2 = scf.if %0 -> !i32 {
-      scf.yield %1
-    } else {
-      scf.yield %1
+    %lb = constant {value = 0} : !index
+    %ub = constant {value = 4} : !index
+    %st = constant {value = 1} : !index
+    %c, %2 = scf.for %i = %lb to %ub step %st (%a = %1) {
+      scf.yield %a
     }
     cfg.br ^tail(%2 : !i32)
   ^tail(%3: !i32):
@@ -18,7 +19,7 @@ module {
   module_end
 }
 
-// CHECK: scf.if
+// CHECK: scf.for
 // CHECK: cfg.br ^bb1(%{{[0-9]+}} : !i32)
 // CHECK: ^bb1(%{{[0-9]+}}: !i32):
 // CHECK-NEXT: func.return

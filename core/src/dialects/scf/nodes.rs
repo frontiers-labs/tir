@@ -1,8 +1,5 @@
-//! Structured control flow over unordered regions: a loop and a switch whose
-//! bindings are declared, and a counted loop that pins a loop's shape.
-//!
-//! `scf.for` and `scf.switch` are the successors of `scf.for` and
-//! `scf.switch`; they take those names once the pipeline produces them.
+//! Structured control flow: a loop and a switch whose bindings are declared,
+//! and a counted loop that pins a loop's shape.
 
 use crate as tir;
 use crate::Any as AnyConstraint;
@@ -80,29 +77,38 @@ impl ExitScope for SwitchOp {
 
 // A counted loop: a θ whose port 0 is the counter, starting at `lb`, tested
 // against `ub` with `cmpi slt` and advanced by `step` with `addi`, and whose
-// exit values are its ports. The bounds are integers because those two ops
-// are.
+// exit values are its ports. The bounds count, so they are integers or
+// indices.
 //
 // The text elides what the shape pins: the counter's comparison, its
 // increment, and the exit values. `%i, %r = scf.for %c = %lb to %ub step %s
 // (%a = %init) { .. -> %next }` names the counter's final value first.
+//
+// The body is a block list until the converter builds the unordered form: a
+// frontend recognises a counted loop while its body is still ordered, and only
+// the converter sees both that body and the memory order enclosing it. The two
+// states share one op, so the shape a frontend pins survives the conversion
+// instead of being restated. An ordered body ends in `scf.yield`, naming what
+// the next iteration carries; an unordered one names its results outright, and
+// only then does the declared binding hold.
 operation! {
     ForOp {
         name: "for",
         dialect: "scf",
         format: "custom",
+        verifier: "true",
         operands: O {
-            lb: "crate::builtin::IntegerType",
+            lb: "crate::builtin::Counter",
             inits: "*AnyConstraint",
-            ub: "crate::builtin::IntegerType",
-            step: "crate::builtin::IntegerType",
+            ub: "crate::builtin::Counter",
+            step: "crate::builtin::Counter",
         },
         results: R {
             results: "*AnyConstraint",
         },
         regions: R {
             body: Region {
-                kind: Nodes,
+                kind: Any,
             }
         },
         interfaces: [ExitScope],
@@ -120,6 +126,13 @@ impl ExitScope for ForOp {
     }
 }
 
+impl tir::Verifiable for ForOp {
+    fn verify_impl(&self, context: &Context) -> Result<(), Error> {
+        verify_counter_type(context, self)?;
+        verify_ordered_body(context, self)
+    }
+}
+
 impl ForOp {
     fn custom_print(&self, fmt: &mut tir::IRFormatter) -> Result<(), std::fmt::Error> {
         use tir::CountedLoop;
@@ -130,10 +143,9 @@ impl ForOp {
         let inits = self.value_operands()[binding.operands.clone()].to_vec();
         let results = body.value_results();
         // Unverified IR may lack the shape the text relies on; print it whole.
-        if !body.is_nodes()
-            || ports.is_empty()
+        if ports.is_empty()
             || inits.is_empty()
-            || results.len() < binding.continue_.end
+            || (body.is_nodes() && results.len() < binding.continue_.end)
         {
             return generic_print(fmt, &context, self);
         }
@@ -154,6 +166,9 @@ impl ForOp {
             &dep_ports,
             &self.dep_operands(),
         )?;
+        if !body.is_nodes() {
+            return tir::region_format::print_op_region(fmt, &context, self, 0);
+        }
 
         let shown = &results[binding.continue_.start + 1..binding.continue_.end];
         let hidden: Vec<tir::OpId> = [results[0], results[binding.continue_.start]]
@@ -295,5 +310,85 @@ fn materialize_counted_shape(
     results.extend(written_deps);
     results.extend(bound.dep_ports.iter().map(tir::Value::id));
     context.set_region_results(body, results, 2 * bound.dep_ports.len());
+    Ok(())
+}
+
+/// A counted loop counts through one type: whatever `!index` or integer width
+/// the lower bound names, the upper bound and step name too. Mixing widths
+/// would leave the counter's arithmetic — and so its trip count — undefined.
+fn verify_counter_type(context: &Context, op: &ForOp) -> Result<(), Error> {
+    use tir::CountedLoop;
+    let expected = context.get_value(op.lower_bound()).ty();
+    for (bound, name) in [(op.upper_bound(), "upper bound"), (op.step(), "step")] {
+        if context.get_value(bound).ty() != expected {
+            return Err(Error::VerificationError(format!(
+                "scf.for {name} counts through a different type than its lower bound"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// A loop whose body is still a block list carries what its ports say: the
+/// counter enters as port 0 and every other port takes an init, and the body's
+/// `scf.yield` names the next value of each of those, in the same types. The
+/// declared binding says all this once the body is unordered; until then it is
+/// the shape a frontend pinned, and nothing else checks it.
+fn verify_ordered_body(context: &Context, op: &ForOp) -> Result<(), Error> {
+    let body = context.get_region(Theta::body(op));
+    if body.is_nodes() {
+        return Ok(());
+    }
+    let ports = body.value_arguments();
+    let binding = op.carried();
+    let inits = &op.value_operands()[binding.operands.clone()];
+    let fail = |message: String| Err(Error::VerificationError(message));
+    if ports.len() != inits.len() {
+        return fail(format!(
+            "scf.for takes {} initial values but its body carries {} ports",
+            inits.len(),
+            ports.len()
+        ));
+    }
+    for (index, (port, &init)) in ports.iter().zip(inits).enumerate() {
+        if port.ty() != context.get_value(init).ty() {
+            return fail(format!("scf.for port {index} and its init differ in type"));
+        }
+    }
+    let results = op.value_results();
+    if results.len() != ports.len() {
+        return fail(format!(
+            "scf.for carries {} ports but has {} results",
+            ports.len(),
+            results.len()
+        ));
+    }
+    let Some(entry) = body.block_ids().first().map(|&id| context.get_block(id)) else {
+        return fail("scf.for has an empty body".into());
+    };
+    let Some(latch) = entry.op_ids().last().map(|&id| context.get_op(id)) else {
+        return fail("scf.for body has no terminator".into());
+    };
+    if !latch.is::<crate::scf::YieldOp>() {
+        return fail("an ordered scf.for body must end in scf.yield".into());
+    }
+    // The counter's next value is what the shape pins, so the yield names one
+    // value per port past it.
+    let yielded = latch.value_operands();
+    if yielded.len() + 1 != ports.len() {
+        return fail(format!(
+            "scf.for carries {} values past its counter but its body yields {}",
+            ports.len() - 1,
+            yielded.len()
+        ));
+    }
+    for (index, (port, &value)) in ports[1..].iter().zip(&yielded).enumerate() {
+        if port.ty() != context.get_value(value).ty() {
+            return fail(format!(
+                "scf.for port {} and the value its body yields differ in type",
+                index + 1
+            ));
+        }
+    }
     Ok(())
 }

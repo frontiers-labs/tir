@@ -524,6 +524,13 @@ fn emit_theta(binds: &Binds, counted: Option<&Counted>, shape: &OpShape) -> Bind
             }),
         )
     };
+    // An op whose body is still a block list has no region results to align:
+    // it holds the loop's shape until the converter builds the unordered form.
+    let verify = quote! {
+        if context.get_region(<Self as tir::Theta>::body(self)).is_nodes() {
+            #verify
+        }
+    };
     BindsCode {
         interfaces,
         impls,

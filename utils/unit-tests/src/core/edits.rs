@@ -202,22 +202,13 @@ fn loop_with_exit(context: &Context) -> (OpId, OpId) {
     let body = context.get_op(loop_op).regions()[0];
     let predicate = context.get_region(body).results()[0];
     let exit = ExitOpBuilder::new(context).values(vec![]).build();
-    let arm = |terminator: OpId| {
-        let region = context.create_region();
-        let block = context.create_block(vec![]);
-        region.add_block(block.id());
-        block.append(terminator);
-        region.id()
-    };
-    let conditional = tir::scf::ops::r#if(
-        context,
-        predicate,
-        vec![],
-        vec![],
-        Some(arm(exit.id())),
-        Some(arm(tir::scf::ops::r#yield(context, vec![]).build().id())),
-    )
-    .build();
+    let arm = |ops: Vec<OpId>| context.create_nodes_region(vec![], 0, ops, vec![], 0).id();
+    let conditional = tir::scf::SwitchOpBuilder::new(context)
+        .predicate(predicate)
+        .inputs(vec![])
+        .arms(vec![arm(vec![]), arm(vec![exit.id()])])
+        .result_types(vec![])
+        .build();
     context.add(body, conditional.id());
     (loop_op, exit.id())
 }
@@ -551,7 +542,7 @@ fn wrapping_refuses_to_capture_an_exit() {
     let context = Context::with_default_dialects();
     let (loop_op, _) = loop_with_exit(&context);
     let body = context.get_op(loop_op).regions()[0];
-    let conditional = find::<tir::scf::IfOp>(&context, body);
+    let conditional = find::<tir::scf::SwitchOp>(&context, body);
 
     let error = context
         .wrap(body, &[conditional], Wrap::Theta)

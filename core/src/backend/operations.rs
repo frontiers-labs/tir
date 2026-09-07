@@ -1,3 +1,4 @@
+use tir::attributes::AttributeValue;
 use tir::helpers::operation;
 use tir::{Any, Operation, Terminator};
 
@@ -78,6 +79,45 @@ operation! {
             kind: "Str",
         }
     }
+}
+
+// The address of a symbol, materialized inside a function. Module-level λ and δ
+// values are not reachable from machine code, so the module prologue rewrites
+// the uses of one into this op, and each target lowers it to the
+// relocation-bearing form its assembler spells.
+operation! {
+    SymbolAddressOp {
+        name: "symbol_address",
+        dialect: "asm",
+        attributes: A {
+            sym_name: "Str",
+        },
+        results: R {
+            result: "tir::ptr::PtrType",
+        },
+        interfaces: [tir::Pure, tir::Speculatable],
+    }
+}
+
+impl tir::Speculatable for SymbolAddressOp {}
+
+impl tir::Pure for SymbolAddressOp {}
+
+impl SymbolAddressOp {
+    pub fn sym_name(&self) -> String {
+        match self.attr("sym_name") {
+            Some(AttributeValue::Str(name)) => name.to_string(),
+            _ => panic!("asm.symbol_address must carry sym_name"),
+        }
+    }
+}
+
+/// The address of `name`, as an opaque pointer.
+pub fn symbol_address_of(context: &tir::Context, name: &str) -> SymbolAddressOp {
+    SymbolAddressOpBuilder::new(context)
+        .attr("sym_name", AttributeValue::Str(name.to_string().into()))
+        .result_type(tir::ptr::PtrType::opaque(context))
+        .build()
 }
 
 operation! {

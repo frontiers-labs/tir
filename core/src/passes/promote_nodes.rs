@@ -15,7 +15,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::analysis::scopes;
+use crate::analysis::regions;
 use crate::analysis::slots::{SlotState, agreed_value_type, collect_slots};
 use crate::analysis::{AnalysisManager, EscapeFacts};
 use crate::func::FuncOp;
@@ -54,7 +54,7 @@ impl Pass for PromoteNodesPass {
         let Some(&body) = op.op().regions().first() else {
             return Ok(());
         };
-        let ops = scopes::region_ops(context, body);
+        let ops = regions::region_ops(context, body);
         let escapes = analyses.get::<EscapeFacts>(context, op.op().id);
         for (slot, state) in collect_slots(context, &escapes, &ops) {
             let Some(ty) = promotable(context, slot, &state, body) else {
@@ -474,7 +474,7 @@ impl Promoter<'_> {
 
     /// Whether anything in `op`'s region tree writes the slot.
     fn writes_under(&self, op: &OpHandle) -> bool {
-        scopes::subtree_ops(self.context, op)
+        regions::subtree_ops(self.context, op)
             .into_iter()
             .any(|inner| self.writes(&self.context.get_op(inner)).is_some())
     }

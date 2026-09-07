@@ -1,5 +1,5 @@
-//! Rewrites a function's uses of module-level λ and δ values into `sym_addr`
-//! ops inside the function.
+//! Rewrites a function's uses of module-level λ and δ values into
+//! `asm.symbol_address` ops inside the function.
 //!
 //! The mid-end reasons about globals and functions as values, but machine code
 //! cannot reach a value defined outside the function it runs in: an address has
@@ -13,7 +13,8 @@
 
 use crate::analysis::AnalysisManager;
 use crate::attributes::AttributeValue;
-use crate::builtin::{FnToPtrOp, ops as b};
+use crate::backend::symbol_address_of;
+use crate::builtin::FnToPtrOp;
 use crate::func::{CallOp, FuncOp};
 use crate::{
     Context, OpHandle, OpId, Operation, OperationRef, Pass, PassError, PassTarget, RegionId,
@@ -55,7 +56,7 @@ impl Pass for MaterializeSymbolAddressesPass {
         for use_site in uses {
             match use_site {
                 Use::Address(op, index, name) => {
-                    let address = b::symbol_address(context, &name);
+                    let address = symbol_address_of(context, &name);
                     let value = address.result();
                     match context.parent_nodes_region(op.op().id) {
                         Some(region) => context.add(region, address.id()),
@@ -64,7 +65,7 @@ impl Pass for MaterializeSymbolAddressesPass {
                     context.set_op_operand(op.op().id, index, value);
                 }
                 Use::Conversion(op, name) => {
-                    let address = b::symbol_address(context, &name);
+                    let address = symbol_address_of(context, &name);
                     match context.parent_nodes_region(op.op().id) {
                         Some(region) => {
                             context.add(region, address.id());
@@ -83,7 +84,7 @@ impl Pass for MaterializeSymbolAddressesPass {
                     context.set_op_attributes(op.op().id, attributes);
                 }
                 Use::Result(region, old, name) => {
-                    let address = b::symbol_address(context, &name);
+                    let address = symbol_address_of(context, &name);
                     context.add(region, address.id());
                     context.rename_region_results(region, old, address.result(), &[]);
                 }

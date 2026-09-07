@@ -624,7 +624,7 @@ impl tir::backend::TargetMachine for Arm64Target {
     }
 
     fn pre_ra_lowerings(&self) -> Vec<tir::backend::isel::OpLowering> {
-        vec![Box::new(obj::lower_sym_addr)]
+        vec![Box::new(obj::lower_symbol_address)]
     }
 
     fn finalize_lowerings(&self) -> Vec<tir::backend::isel::OpLowering> {

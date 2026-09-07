@@ -2,10 +2,10 @@
 //!
 //! Built on demand over a maximal counted nest and thrown away again — nothing
 //! is interned, no operation or value is created, and no registry holds it. What
-//! it reads is what the IR already states: `CountedLoop` for the bounds,
-//! `LoopLike` for the carried ports the counters ride on, the dependency edges for
-//! which memory each access is of, and `ptradd` arithmetic for where in that
-//! memory it lands.
+//! it reads is what the IR already states: `CountedLoop` for the bounds, `Theta`
+//! for the carried ports the counters ride on, the dependency edges for which
+//! memory each access is of, and `ptradd` arithmetic for where in that memory it
+//! lands.
 //!
 //! Every reading is refusable on its own. An access whose subscript is not
 //! affine is `NonAffine` and the accesses beside it are not; a pair the single
@@ -21,8 +21,8 @@ use crate::builtin::{
 use crate::ptr::PtrAddOp;
 use crate::state::{JoinOp, SplitOp};
 use crate::{
-    BlockId, Conditional, ConstantLike, Context, CountedLoop, DataLayout, Gamma, LoopLike,
-    MemoryRead, MemoryWrite, OpHandle, OpId, Theta, TypeId, ValueId, scf,
+    BlockId, ConstantLike, Context, CountedLoop, DataLayout, Gamma, MemoryRead, MemoryWrite,
+    OpHandle, OpId, Theta, TypeId, ValueId,
 };
 
 pub(crate) mod build;
@@ -31,7 +31,6 @@ mod form;
 mod pairs;
 mod print;
 
-pub(crate) use build::counter_port;
 pub use dependence::{Component, Sign, distances};
 pub use form::AffineForm;
 
@@ -78,7 +77,7 @@ pub struct Access {
     pub offset: Offset,
     /// The bytes the access covers.
     pub extent: u64,
-    /// The access runs under a `scf.if`, so it may not run every iteration.
+    /// The access runs under a gate, so it may not run every iteration.
     pub guarded: bool,
     /// The subscript arithmetic can leave the region its source width holds, so
     /// the form describes the access only where it does not.
@@ -273,25 +272,22 @@ pub(crate) struct Carried {
 }
 
 pub(crate) fn carried(context: &Context, op: &OpHandle) -> Option<Carried> {
-    if let Some(theta) = op.clone().as_interface::<dyn Theta>() {
-        let binding = theta.carried();
-        let region = context.get_region(theta.body());
-        let results = region.value_results();
-        return Some(Carried {
-            args: region.value_arguments()[binding.ports]
-                .iter()
-                .map(crate::Value::id)
-                .collect(),
-            latched: results[binding.continue_].to_vec(),
-            inits: op.value_operands()[binding.operands].to_vec(),
-            finals: op.value_results()[binding.results].to_vec(),
-        });
+    let theta = op.clone().as_interface::<dyn Theta>()?;
+    let binding = theta.carried();
+    let region = context.get_region(theta.body());
+    // The view is defined on the unordered form: an ordered body names no
+    // results, so the recurrence its ports ride on is not there to read.
+    if !region.is_nodes() {
+        return None;
     }
-    let carried = op.clone().as_interface::<dyn LoopLike>()?;
+    let results = region.value_results();
     Some(Carried {
-        args: carried.carried_args(),
-        latched: carried.latched(),
-        inits: carried.inits(),
-        finals: carried.finals(),
+        args: region.value_arguments()[binding.ports]
+            .iter()
+            .map(crate::Value::id)
+            .collect(),
+        latched: results[binding.continue_].to_vec(),
+        inits: op.value_operands()[binding.operands].to_vec(),
+        finals: op.value_results()[binding.results].to_vec(),
     })
 }

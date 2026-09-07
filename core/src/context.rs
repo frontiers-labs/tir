@@ -1693,16 +1693,15 @@ impl Context {
     /// Grow `op` by one carried port of type `ty`.
     ///
     /// A port that carries a value in — a loop's — takes `init` as one more
-    /// operand and gives each of the op's regions one more entry argument, which
-    /// `latch` receives; a gate that carries nothing in (a conditional) passes
-    /// `None` and its regions keep the arguments they had. `latch` says what each
-    /// region yields for the port — `None` where the region leaves through an
-    /// exit edge that already carries the value. The op gains one result, which
-    /// is returned.
+    /// operand and gives the op's regions one more port, which `latch`
+    /// receives; a gate that carries nothing in passes `None` and its regions
+    /// keep the ports they had. `latch` says what each region names for the
+    /// port. The op gains one result, which is returned.
     ///
-    /// This is the one edit that keeps results, region arguments and yields
-    /// consistent; the ports it grows are what scalar promotion and a view
-    /// commit materialize.
+    /// This is the one edit that keeps results, region ports and region
+    /// results consistent; the ports it grows are what scalar promotion and a
+    /// view commit materialize. `op` states the alignment through its `binds:`
+    /// declaration, which is what this reads.
     pub fn grow_port(
         &self,
         op: OpId,
@@ -1710,17 +1709,7 @@ impl Context {
         init: Option<ValueId>,
         latch: impl FnMut(RegionId, Option<ValueId>) -> Option<ValueId>,
     ) -> ValueId {
-        if self.has_declared_binding(op) {
-            return self.grow_declared_port(op, ty, init, latch, false);
-        }
-        self.grow_port_with(
-            op,
-            init,
-            latch,
-            |entry| self.append_block_argument(entry, ty).id(),
-            |op, value| self.append_operand(op, value),
-        );
-        self.append_result(op, ty)
+        self.grow_declared_port(op, ty, init, latch, false)
     }
 
     /// [`Context::grow_port`] for a dependency: the port state threading grows
@@ -1731,59 +1720,7 @@ impl Context {
         init: Option<ValueId>,
         latch: impl FnMut(RegionId, Option<ValueId>) -> Option<ValueId>,
     ) -> ValueId {
-        if self.has_declared_binding(op) {
-            return self.grow_declared_port(op, TypeId::DEPENDENCY, init, latch, true);
-        }
-        self.grow_port_with(
-            op,
-            init,
-            latch,
-            |entry| self.append_dep_block_argument(entry).id(),
-            |op, value| self.append_dep_operand(op, value),
-        );
-        self.append_dep_result(op)
-    }
-
-    fn grow_port_with(
-        &self,
-        op: OpId,
-        init: Option<ValueId>,
-        mut latch: impl FnMut(RegionId, Option<ValueId>) -> Option<ValueId>,
-        argument: impl Fn(BlockId) -> ValueId,
-        operand: impl Fn(OpId, ValueId),
-    ) {
-        let instance = self.get_op(op);
-        for region in instance.regions() {
-            let entry = self.get_region(region).entry_block();
-            let incoming = init.map(|_| argument(entry));
-            if let Some(latched) = latch(region, incoming) {
-                let terminator = *self
-                    .get_block(entry)
-                    .op_ids()
-                    .last()
-                    .expect("a region is terminated");
-                operand(terminator, latched);
-            }
-        }
-        if let Some(init) = init {
-            operand(op, init);
-        }
-    }
-
-    /// Carry one more port on `op`, an edge [`Context::grow_port`] does not reach:
-    /// an `scf.break`/`scf.continue` feeds the port it leaves through, so it takes
-    /// the value where a port belongs among its operands. Answers the index the
-    /// value took, which is the port's own.
-    pub fn append_port_operand(&self, op: OpId, value: ValueId) -> usize {
-        self.append_operand(op, value);
-        self.get_op(op).value_operands().len() - 1
-    }
-
-    /// Whether `op` declares its ports through a `binds:` binding, which
-    /// [`Context::grow_port`] reads instead of walking blocks and terminators.
-    fn has_declared_binding(&self, op: OpId) -> bool {
-        let handle = self.get_op(op);
-        handle.has_interface::<dyn crate::Theta>() || handle.has_interface::<dyn crate::Gamma>()
+        self.grow_declared_port(op, TypeId::DEPENDENCY, init, latch, true)
     }
 
     /// Put `value` at position `index` of `op`'s value operands, or of its

@@ -2,15 +2,17 @@
 // RUN: tir interp %s --args=1,6 | filecheck --check-prefix=EVAL %s
 
 // What an operation's nested regions read is what the operation reads: the
-// conditional depends on the product its arm yields, so it prints and runs
-// after it.
+// gamma depends on the product its arm reads, so it prints and runs after
+// it.
 
 module {
   %fn_main = func.func @main(%0: !i1, %1: !i32) -> !i32 {
-    %2 = scf.if %0 -> !i32 {
-      scf.yield %3
-    } else {
-      scf.yield %1
+    %2 = scf.switch %0 {
+      -> %1
+    }
+    {
+      %4 = addi %3, %3 : !i32
+      -> %4
     }
     %3 = muli %1, %1 : !i32
     -> %2
@@ -19,5 +21,5 @@ module {
 }
 
 // CHECK: %[[P:[0-9]+]] = muli
-// CHECK: %{{[0-9]+}} = scf.if
-// EVAL: i32 36
+// CHECK: %{{[0-9]+}} = scf.switch
+// EVAL: i32 72

@@ -250,7 +250,7 @@ fn run_compile_action(
             // conversion itself, which is what the backend will be handed.
             if opts.opt_level.rounds().is_some() {
                 use tir::Operation;
-                super::compile::mid_end(opts, false)
+                super::compile::mid_end(opts)
                     .run(&context, context.get_op(module.id()))
                     .unwrap_or_else(|e| {
                         eprintln!("fcc: error: mid-end failed: {e}");

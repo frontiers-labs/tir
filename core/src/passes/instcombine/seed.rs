@@ -1,7 +1,7 @@
 //! Seeds the e-graph by reading a function's regions. Gates come off the ops'
-//! own interfaces, never from control-flow analysis: a [`Conditional`] result is
-//! the γ over the values its arms yield, and an arm's entry arguments are the
-//! inputs forwarded into it. A memory access is the `LoadMemory`/`StoreMemory`
+//! own interfaces, never from control-flow analysis: a [`crate::Gamma`] result
+//! is the γ over the values its arms name, and an arm's ports are the inputs
+//! forwarded into it. A memory access is the `LoadMemory`/`StoreMemory`
 //! term over the state it reads, so the chain is an ordinary edge. Everything
 //! else the vocabulary cannot spell — a loop's carried port and results, a
 //! multi-result or effectful op — anchors as an input leaf.

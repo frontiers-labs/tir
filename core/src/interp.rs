@@ -11,15 +11,12 @@ use std::collections::HashMap;
 use tir_adt::{APFloat, APInt};
 
 use crate::{
-    BlockId, Conditional, ConstantLike, Context, CountedLoop, DataLayout, Gamma, LoopLike, OpId,
-    Operation, RegionId, Symbol, Theta, ValueId,
-    builtin::{
-        ConstantFOp, ConstantOp, FloatType, IntegerType, MakeTupleOp, TokenType, TupleGetOp,
-        UnitType,
-    },
+    BlockId, ConstantLike, Context, CountedLoop, DataLayout, Gamma, OpId, Operation, RegionId,
+    Symbol, Theta, ValueId,
+    builtin::{ConstantFOp, ConstantOp, FloatType, IntegerType, MakeTupleOp, TupleGetOp, UnitType},
     func::{CallOp, FuncOp, ReturnOp},
     ptr::{AllocaOp, LoadOp, MemcpyOp, MemsetOp, PtrType, StoreOp},
-    scf::{BreakOp, ConditionOp, ContinueOp, ForLegacyOp, IfOp, SwitchLegacyOp, WhileOp, YieldOp},
+    scf::{ForOp, YieldOp},
     sem,
     state::{EntryStateOp, JoinOp, SplitOp},
 };
@@ -243,11 +240,6 @@ struct Interpreter<'c> {
 enum Flow {
     /// Values binding to the enclosing op's results, in order.
     Values(Vec<Value>),
-    /// An exit terminator leaving the innermost enclosing loop; a `break` or
-    /// `continue` can only name that loop's scope token, since `!token` values
-    /// cannot cross region boundaries any other way.
-    Break(Vec<Value>),
-    Continue(Vec<Value>),
     Return(Vec<Value>),
     Goto(BlockId, Vec<Value>),
 }
@@ -359,42 +351,17 @@ impl Interpreter<'_> {
                 op_id.number()
             );
         }
-        if instance.is::<YieldOp>() || instance.is::<ConditionOp>() {
-            // A structured join yields its operands; `scf.condition` forwards
-            // [decision, carried ports..] to the while driver the same way.
+        if instance.is::<YieldOp>() {
+            // A loop's back edge yields what the next iteration carries.
             return Ok(Some(Flow::Values(self.operand_values(&instance)?)));
         }
         if instance.is::<ReturnOp>() {
             return Ok(Some(Flow::Return(self.operand_values(&instance)?)));
         }
-        if instance.is::<BreakOp>() || instance.is::<ContinueOp>() {
-            let mut carried = self.operand_values(&instance)?;
-            // A loop exit consumes its scope token when the body declares one;
-            // everything past it is the carried values.
-            let token = TokenType::new(self.context);
-            if self.context.get_value(instance.operands()[0]).ty() == token {
-                carried.remove(0);
-            }
-            return Ok(Some(if instance.is::<BreakOp>() {
-                Flow::Break(carried)
-            } else {
-                Flow::Continue(carried)
-            }));
-        }
-        if instance.is::<IfOp>() {
-            let flow = self.exec_if(op_id)?;
-            return self.exec_value_flow(op_id, flow);
-        }
-        if instance.is::<SwitchLegacyOp>() {
-            let flow = self.exec_switch(op_id)?;
-            return self.exec_value_flow(op_id, flow);
-        }
-        if instance.is::<ForLegacyOp>() {
-            let flow = self.exec_for(op_id)?;
-            return self.exec_value_flow(op_id, flow);
-        }
-        if instance.is::<WhileOp>() {
-            let flow = self.exec_while(op_id)?;
+        // A counted loop whose body is still a block list: its declared
+        // binding does not hold yet, so it is driven off its own shape.
+        if instance.is::<ForOp>() && !self.context.get_region(instance.regions()[0]).is_nodes() {
+            let flow = self.exec_ordered_for(op_id)?;
             return self.exec_value_flow(op_id, flow);
         }
         if instance.is::<CallOp>() {
@@ -452,40 +419,6 @@ impl Interpreter<'_> {
         Ok(Flow::Goto(dest, args))
     }
 
-    fn exec_if(&mut self, op_id: OpId) -> Result<Flow> {
-        let op = IfOp::from_op_instance(self.context.get_op(op_id));
-        let decision = self.value_of(op.decision())?;
-        let taken = decision.to_i64().unwrap_or_default() != 0;
-        let regions = op.guarded_regions();
-        let region = regions[if taken { 0 } else { 1 }].0;
-        self.exec_gamma_arm(op_id, region)
-    }
-
-    fn exec_switch(&mut self, op_id: OpId) -> Result<Flow> {
-        let op = SwitchLegacyOp::from_op_instance(self.context.get_op(op_id));
-        let predicate = self.value_of(op.decision())?;
-        let value = predicate.to_i64().unwrap_or_default();
-        let cases = op.case_values();
-        let region = cases
-            .iter()
-            .find(|(_, case)| *case == Some(value))
-            .map(|(region, _)| *region)
-            .unwrap_or_else(|| cases.last().expect("switch always has a default").0);
-        self.exec_gamma_arm(op_id, region)
-    }
-
-    /// Run one γ arm: bind its entry arguments to the forwarded inputs, run it,
-    /// and turn its yield into the gate's result values.
-    fn exec_gamma_arm(&mut self, op_id: OpId, region: RegionId) -> Result<Flow> {
-        let inputs = self.context.get_op(op_id).operands()[1..].to_vec();
-        let arguments = region_arguments(self.context, region);
-        for (argument, &input) in arguments.into_iter().zip(inputs.iter()) {
-            let value = self.value_of(input)?;
-            self.env.insert(argument, value);
-        }
-        self.exec_region(region)
-    }
-
     /// A counted loop's bound, read at the width the bounds' own type gives it and
     /// read as signed: `scf.for` counts while the counter is signed-less-than the
     /// upper bound, and it wraps where that width wraps.
@@ -498,67 +431,47 @@ impl Interpreter<'_> {
         }
     }
 
-    fn exec_for(&mut self, op_id: OpId) -> Result<Flow> {
-        let op = ForLegacyOp::from_op_instance(self.context.get_op(op_id));
+    /// An `scf.for` whose body is still ordered: the counter enters as port 0,
+    /// the carried values follow, and the body's `scf.yield` says what the next
+    /// iteration takes. The loop leaves with the counter that failed the test,
+    /// which is the lower bound when the body never runs.
+    fn exec_ordered_for(&mut self, op_id: OpId) -> Result<Flow> {
+        let op = ForOp::from_op_instance(self.context.get_op(op_id));
         let lower = self.counter_bound(op.lower_bound())?;
         let upper = self.counter_bound(op.upper_bound())?;
         let step = self.counter_bound(op.step())?;
 
-        let body_region = op.handle().regions()[0];
-        let token = TokenType::new(self.context);
-        let carried_args = carried_arguments(self.context, body_region, token);
-        let mut carried: Vec<Value> = op
-            .inits()
+        let instance = op.handle();
+        let body_region = instance.regions()[0];
+        let ports: Vec<ValueId> = self
+            .context
+            .get_region(body_region)
+            .value_arguments()
+            .iter()
+            .map(crate::Value::id)
+            .collect();
+        let binding = Theta::carried(&op);
+        let mut carried: Vec<Value> = instance.value_operands()
+            [binding.operands.start + 1..binding.operands.end]
             .iter()
             .map(|&init| self.value_of(init))
             .collect::<Result<_>>()?;
 
         let mut counter = lower;
         while counter.slt(&upper) {
-            let flow = self.enter_loop_body(body_region, &carried_args, &carried)?;
-            match flow {
-                Flow::Values(values) | Flow::Continue(values) => carried = values,
-                Flow::Break(values) => return Ok(Flow::Values(values)),
+            self.env.insert(ports[0], Value::Int(counter.clone()));
+            for (&port, value) in ports[1..].iter().zip(&carried) {
+                self.env.insert(port, value.clone());
+            }
+            match self.exec_region(body_region)? {
+                Flow::Values(values) => carried = values,
                 flow => return Ok(flow),
             }
             counter = counter.add(&step).with_signed(true);
         }
-        Ok(Flow::Values(carried))
-    }
-
-    fn exec_while(&mut self, op_id: OpId) -> Result<Flow> {
-        let op = WhileOp::from_op_instance(self.context.get_op(op_id));
-        let condition_region = op.handle().regions()[0];
-        let body_region = op.handle().regions()[1];
-        let condition_args = region_arguments(self.context, condition_region);
-        let token = TokenType::new(self.context);
-        let body_args = carried_arguments(self.context, body_region, token);
-
-        let mut carried: Vec<Value> = op
-            .inits()
-            .iter()
-            .map(|&init| self.value_of(init))
-            .collect::<Result<_>>()?;
-
-        loop {
-            for (argument, value) in condition_args.iter().zip(&carried) {
-                self.env.insert(*argument, value.clone());
-            }
-            let forwarded = match self.exec_region(condition_region)? {
-                Flow::Values(values) => values,
-                flow => return Ok(flow),
-            };
-            let (decision, forwarded) = forwarded.split_first().expect("scf.condition decides");
-            if decision.to_i64().unwrap_or_default() == 0 {
-                return Ok(Flow::Values(forwarded.to_vec()));
-            }
-            let flow = self.enter_loop_body(body_region, &body_args, forwarded)?;
-            match flow {
-                Flow::Values(values) | Flow::Continue(values) => carried = values,
-                Flow::Break(values) => return Ok(Flow::Values(values)),
-                flow => return Ok(flow),
-            }
-        }
+        let mut results = vec![Value::Int(counter)];
+        results.extend(carried);
+        Ok(Flow::Values(results))
     }
 
     /// A θ by its definitional semantics: each iteration is a fresh invocation
@@ -641,28 +554,6 @@ impl Interpreter<'_> {
             self.env.insert(port.id(), value);
         }
         self.exec_nodes_region(arm)
-    }
-
-    fn enter_loop_body(
-        &mut self,
-        body_region: RegionId,
-        carried_args: &[ValueId],
-        carried: &[Value],
-    ) -> Result<Flow> {
-        let token = TokenType::new(self.context);
-        for argument in region_arguments(self.context, body_region) {
-            let value = if self.context.get_value(argument).ty() == token {
-                Value::Token
-            } else {
-                carried[carried_args
-                    .iter()
-                    .position(|&arg| arg == argument)
-                    .expect("loop body argument must be a scope token or a carried port")]
-                .clone()
-            };
-            self.env.insert(argument, value);
-        }
-        self.exec_region(body_region)
     }
 
     fn exec_call(&mut self, op_id: OpId) -> Result<Flow> {
@@ -800,13 +691,6 @@ fn pointer_width(context: &Context, instance: &crate::OpHandle) -> u32 {
 }
 
 /// The loop body's carried arguments: every entry argument but the token scope.
-fn carried_arguments(context: &Context, region: RegionId, token: crate::TypeId) -> Vec<ValueId> {
-    region_arguments(context, region)
-        .into_iter()
-        .filter(|&argument| context.get_value(argument).ty() != token)
-        .collect()
-}
-
 fn to_sem_value(value: &Value, pointer_width: u32) -> Result<sem::Value> {
     Ok(match value {
         Value::Int(int) => sem::Value::Int(int.clone()),

@@ -8,7 +8,7 @@ use super::seed::Seeded;
 use super::state;
 use crate::utils::APInt;
 use crate::{
-    Conditional, ConstantFold, Context, Operation, TypeId, ValueId,
+    ConstantFold, Context, Operation, TypeId, ValueId,
     attributes::{AttributeValue, Predicate},
     builtin::{IntegerType, ops},
     sem::{IrOp, Kind, Prov, SemNode as Node, SymKind, Value, node::field},
@@ -356,31 +356,22 @@ fn gate_cases(context: &Context, node: &Node) -> Option<Vec<Option<i64>>> {
         return None;
     }
     let instance = context.get_op(gate);
-    // A declared γ indexes its arms by the predicate, the last arm taking every
-    // value past it. The seeding spells a boolean one as `If(p, arm 1, arm 0)`,
-    // so its node lists the case-1 arm first.
-    if let Some(gamma) = instance.clone().as_interface::<dyn crate::Gamma>() {
-        let arms = gamma.arms().len();
-        let boolean =
-            crate::sem::egraph::type_width(context, context.get_value(gamma.predicate()).ty())
-                == Some(1);
-        return Some(if boolean && arms == 2 {
-            vec![Some(1), None]
-        } else {
-            (0..arms - 1)
-                .map(|case| Some(case as i64))
-                .chain([None])
-                .collect()
-        });
-    }
-    Some(
-        instance
-            .as_interface::<dyn Conditional>()?
-            .case_values()
-            .into_iter()
-            .map(|(_, case)| case)
-            .collect(),
-    )
+    // A γ indexes its arms by the predicate, the last arm taking every value
+    // past it. The seeding spells a boolean one as `If(p, arm 1, arm 0)`, so
+    // its node lists the case-1 arm first.
+    let gamma = instance.as_interface::<dyn crate::Gamma>()?;
+    let arms = gamma.arms().len();
+    let boolean =
+        crate::sem::egraph::type_width(context, context.get_value(gamma.predicate()).ty())
+            == Some(1);
+    Some(if boolean && arms == 2 {
+        vec![Some(1), None]
+    } else {
+        (0..arms - 1)
+            .map(|case| Some(case as i64))
+            .chain([None])
+            .collect()
+    })
 }
 
 /// Each comparison predicate paired with its negation at the same operand order:

@@ -9,7 +9,7 @@ use crate::func::CallOp;
 use crate::ptr::MemcpyOp;
 use crate::state::JoinOpBuilder;
 use crate::{
-    BlockId, Context, MemoryRead, MemoryWrite, OpHandle, OpId, Operation, PassError, ValueId, scf,
+    BlockId, Context, MemoryRead, MemoryWrite, OpHandle, OpId, Operation, PassError, ValueId,
 };
 
 use super::cfg::unsupported;
@@ -18,7 +18,7 @@ use super::cfg::unsupported;
 /// and nothing already names a dependency, which would make a second order
 /// over the one that is there.
 pub fn wants_chain(context: &Context, region: crate::RegionId) -> bool {
-    let ops: Vec<OpHandle> = crate::analysis::scopes::region_ops(context, region)
+    let ops: Vec<OpHandle> = crate::analysis::regions::region_ops(context, region)
         .into_iter()
         .map(|op| context.get_op(op))
         .collect();
@@ -96,13 +96,13 @@ fn effect(context: &Context, op: &OpHandle) -> Result<Effect, PassError> {
     if op.has_interface::<dyn MemoryRead>() {
         return Ok(Effect::Read);
     }
-    if op.is::<scf::ForLegacyOp>() {
+    if super::is_ordered_counted_loop(context, op) {
         return Ok(Effect::CountedLoop);
     }
     let nested = op
         .regions()
         .iter()
-        .flat_map(|&region| crate::analysis::scopes::region_ops(context, region))
+        .flat_map(|&region| crate::analysis::regions::region_ops(context, region))
         .any(|inner| !matches!(effect(context, &context.get_op(inner)), Ok(Effect::None)));
     if nested {
         return Err(unsupported(&format!(
