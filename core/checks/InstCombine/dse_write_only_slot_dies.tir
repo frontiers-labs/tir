@@ -1,9 +1,12 @@
-// RUN: tir opt --pass func.func(restructure-nodes,promote-nodes,instcombine-nodes) --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(restructure-nodes,instcombine-nodes) --verify %s | filecheck %s
 
 // The counter `raise-loops` leaves behind: a private slot whose loads folding
 // removed, still written once per iteration. Nothing can read those bytes back,
 // so the writes never happened — and the walk down the chain cannot say so,
-// because the chain leaves the loop through a carried port.
+// because the chain leaves the loop through a carried port. The pipeline here
+// hands the shape to instcombine directly: a slot with no reader at all is one
+// promote-nodes takes on its own, and this is the rule that answers for the
+// ones it cannot.
 
 #data_layout = {types = {i32 = {abi = 32, size = 32}, i64 = {abi = 64, size = 64}, p = {abi = 64, size = 64}}}
 
