@@ -1,6 +1,9 @@
 // RUN: fcc compile --stage obj --march x86_64 -o /tmp/fcc-lcp-hang.o %s
 // RUN: cc /tmp/fcc-lcp-hang.o -o /tmp/fcc-lcp-hang.bin
 // RUN: timeout 5 /tmp/fcc-lcp-hang.bin
+// RUN: fcc compile --stage obj --march x86_64 -O2 -o /tmp/fcc-lcp-hang-o2.o %s
+// RUN: cc /tmp/fcc-lcp-hang-o2.o -o /tmp/fcc-lcp-hang-o2.bin
+// RUN: timeout 5 /tmp/fcc-lcp-hang-o2.bin
 
 // Found by `cargo xtask fcc-fuzz` (reduced from seed 127): instcombine wires a
 // foreign constant into a nested rotated loop's counter yield, so the counter
