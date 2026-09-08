@@ -1837,6 +1837,7 @@ impl InstructionSelectPass {
         // destruction still reads the values it consumed — a region names them
         // as its results whether or not a tile re-produced them. The ops go; the
         // values they defined stay readable.
+        let mut answered: Vec<(ValueId, ValueId)> = Vec::new();
         for op in plan.erase_ops.into_iter().rev() {
             let instance = context.get_op(op);
             // A read the cover answered from another access leaves memory where
@@ -1853,9 +1854,22 @@ impl InstructionSelectPass {
                     .is_none()
             {
                 context.replace_value_uses(published, observed);
+                answered.push((published, observed));
             }
             let op = OperationRef::new(instance);
             rewriter.erase_op_keeping_results(&op)?;
+        }
+        // A use list is not the only place a state is named: a region hands one
+        // back as its result, and only `commit_region_solution` reaches those.
+        // The reads were walked backwards, so replaying the renames in program
+        // order resolves a read another answered read stood for.
+        for &(published, observed) in answered.iter().rev() {
+            let observed = self
+                .emitted_values
+                .get(&observed)
+                .copied()
+                .unwrap_or(observed);
+            self.emitted_values.insert(published, observed);
         }
 
         // Order is derived later, from the dependence graph of what the region
