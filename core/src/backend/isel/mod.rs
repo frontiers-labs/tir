@@ -2329,7 +2329,10 @@ impl InstructionSelectPass {
             let mut value_bindings = Vec::new();
             let mut resolvable = true;
             // A register operand may read a bare constant only when another use
-            // already forces that constant to be materialized.
+            // already forces that constant to be materialized, and only through
+            // the value naming the register it lands in: the emitter binds
+            // values, and a class the region materializes after the gate has
+            // none to bind where the branch reads.
             for (symbol, class) in &captures.entries {
                 // Prefer a surviving/available value; bind a same-region pending
                 // tile only when none exists — then the overlay demand forces
@@ -2342,8 +2345,9 @@ impl InstructionSelectPass {
                 match binding.int {
                     Some(v) => {
                         if register_symbols.contains(symbol)
-                            && !fs.available_at(context, *class, region)
-                            && !fs.placed_at(*class, region)
+                            && !(binding.value.is_some()
+                                && (fs.available_at(context, *class, region)
+                                    || fs.placed_at(*class, region)))
                         {
                             resolvable = false;
                             break;
