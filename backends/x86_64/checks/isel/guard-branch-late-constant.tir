@@ -1,0 +1,43 @@
+// RUN: tir mc --march=x86_64 --stage=isel %s | filecheck %s
+
+// The inner gate's test is `inner != 0`, and the `cmp r32, r32` form of it wants
+// the zero in a register. The region does materialize a zero — `%init`, the
+// argument of the first call — but that tile stands after the gate, so nothing
+// names its register where the branch reads. The gate's test is decided where
+// the gate sits: a fused branch may only bind a constant already in a register
+// there, not one the region reaches later.
+
+module {
+  %use = func.declare @use(!i32) -> !unit
+  %fn = func.func @f(%outer: !i32, %inner: !i32) {
+    %zero = constant {value = 0} : !i32
+    %inner_set = cmpi %inner, %zero {predicate = "ne"} : !i1
+    %outer_set = cmpi %outer, %zero {predicate = "ne"} : !i1
+    | %entry = state.entry_state
+    | %after = scf.switch %outer_set args(| %entry) (| %skipped) {
+      -> | %skipped
+    }
+    (| %taken) {
+      %picked | %tested = scf.switch %inner_set args(| %taken) (| %yes) {
+        -> %outer | %yes
+      }
+      (| %no) {
+        -> %inner | %no
+      }
+      %init = constant {value = 0} : !i32
+      | %called = func.call %use(%init : !i32) | %tested
+      | %left = func.call %use(%picked : !i32) | %called
+      -> | %left
+    }
+    -> | %after
+  }
+  module_end
+}
+
+// CHECK:      asm.symbol {name = "f", arg_regs = [%[[OUTER:[0-9]+]]:GPR, %[[INNER:[0-9]+]]:GPR]}
+// CHECK:      x86_64.test32 {dst = %[[OUTER]]:GPR, src = %[[OUTER]]:GPR}
+// CHECK-NEXT: x86_64.jne {imm = ^[[ARM:bb[0-9]+]]}
+// CHECK:      ^[[ARM]](| %{{[0-9]+}}):
+// CHECK-NEXT: x86_64.test32 {dst = %[[INNER]]:GPR, src = %[[INNER]]:GPR}
+// CHECK-NEXT: x86_64.jne
+// CHECK:      x86_64.mov_imm32 {dst = %{{[0-9]+}}:GPR32, imm = 0}
