@@ -3,11 +3,10 @@
 // The shape that used to make instruction selection quadratic: an `||` chain and
 // a dense switch, one guarded arm per test. Every arm still arrives at selection
 // folded to its literal, and the chain pins its first two comparisons to the
-// registers holding 0 and 1. What each arm does with its literal is the gap:
-// the return value lives in a stack slot whose first write sits inside an arm,
-// so promote-nodes leaves the slot in memory and every arm spells its constant
-// as a store to `[rsp]` that the exit reloads. The block-based promote kept the
-// slot in `eax`, one `mov eax, N` per arm.
+// registers holding 0 and 1. The return value lives in a stack slot whose first
+// write sits inside an arm; each arm leaves it holding a value of its own, so
+// the probe answers every port the growth reads and the slot becomes the gate's
+// own port — one `mov eax, N` per arm, and no stack frame at all.
 
 int classify(int value, int flag)
 {
@@ -28,28 +27,16 @@ int classify(int value, int flag)
     }
 }
 
-// CHECK: classify:
-// CHECK: test edi, edi
-// CHECK: cmp ecx, edi
-// CHECK: cmp edi, 2
-// CHECK: cmp edi, 3
-// CHECK: cmp edi, 5
-// CHECK: mov ecx, -1
-// CHECK-NEXT: mov rax, rsp
-// CHECK-NEXT: mov [rax], ecx
-// CHECK: mov ecx, 110
-// CHECK-NEXT: mov rax, rsp
-// CHECK-NEXT: mov [rax], ecx
-// CHECK: mov ecx, 106
-// CHECK-NEXT: mov rax, rsp
-// CHECK-NEXT: mov [rax], ecx
-// CHECK: mov ecx, 100
-// CHECK-NEXT: mov rax, rsp
-// CHECK-NEXT: mov [rax], ecx
-// CHECK: mov ecx, 0
-// CHECK-NEXT: mov rax, rsp
-// CHECK-NEXT: mov [rax], ecx
-// CHECK: mov rax, rsp
-// CHECK-NEXT: mov eax, [rax]
-// CHECK-NEXT: add rsp, 16
-// CHECK-NEXT: ret
+// CHECK:     classify:
+// CHECK:     test edi, edi
+// CHECK:     cmp ecx, edi
+// CHECK:     cmp edi, 2
+// CHECK:     cmp edi, 3
+// CHECK:     cmp edi, 5
+// CHECK-NOT: rsp
+// CHECK:     mov eax, -1
+// CHECK:     mov eax, 110
+// CHECK:     mov eax, 106
+// CHECK:     mov eax, 100
+// CHECK:     mov eax, 0
+// CHECK:     ret

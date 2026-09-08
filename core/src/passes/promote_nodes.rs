@@ -86,14 +86,11 @@ impl Pass for PromoteNodesPass {
     }
 }
 
-/// The type a slot's value takes once promoted, or `None` where it stays memory:
-/// allocated in the body itself, never escaping, named whole by every access,
-/// agreed on one type, ordered by the chain at every access, crossed only by
-/// ops whose ports can be grown, and written before any loop or gate that
-/// writes it is entered — a port carries a value, and the slot has none until
-/// something writes it. A read of what nothing wrote is the reader's own affair
-/// and stays a read; a port entered on it would be a read the program never
-/// made.
+/// The type a slot's value takes once promoted, or `None` where it stays
+/// memory: allocated in the body itself, never escaping, named whole by every
+/// access, agreed on one type, ordered by the chain at every access, and
+/// crossed only by ops whose ports can be grown. Whether the values those
+/// ports would carry exist is the probe's question, not this one.
 fn promotable(
     context: &Context,
     slot: ValueId,
@@ -112,171 +109,9 @@ fn promotable(
         return None;
     }
     let ty = agreed_value_type(context, state)?;
-    if !accesses().all(|op| crosses_declared_bindings(context, op, body)) {
-        return None;
-    }
-    let writers: Vec<OpId> = state
-        .stores
-        .iter()
-        .flat_map(|&store| enclosing_ops(context, store, body))
-        .collect();
-    let entered: Vec<ValueId> = state
-        .stores
-        .iter()
-        .flat_map(|&store| entered_states(context, store))
-        .collect();
-    let mut written = HashMap::new();
-    entered
-        .into_iter()
-        .all(|state| written_before(context, slot, state, &writers, &mut written))
+    accesses()
+        .all(|op| crosses_declared_bindings(context, op, body))
         .then_some(ty)
-}
-
-/// The memory each loop and gate `store` sits under was entered on, along the
-/// chain the store is on: where that chain crosses a region boundary, the port
-/// it enters on names one operand of the loop or gate carrying it, and the walk
-/// carries on from there in the enclosing region. Empty for a store the body
-/// holds directly, which no port has to be entered on.
-fn entered_states(context: &Context, store: OpId) -> Vec<ValueId> {
-    let mut states = Vec::new();
-    let Some(&first) = context.get_op(store).dep_operands().first() else {
-        return states;
-    };
-    let mut current = first;
-    loop {
-        let Some(def) = context.get_value(current).defining_op() else {
-            let Some(region) = context.region_of_port(current) else {
-                return states;
-            };
-            let handle = context.get_region(region);
-            let ports: Vec<ValueId> = handle
-                .dep_arguments()
-                .iter()
-                .map(crate::Value::id)
-                .collect();
-            let Some(owner) = handle.parent_op() else {
-                return states;
-            };
-            let Some(&entered) = context
-                .get_op(owner)
-                .dep_operands()
-                .get(dep_index(&ports, current))
-            else {
-                return states;
-            };
-            states.push(entered);
-            current = entered;
-            continue;
-        };
-        let instance = context.get_op(def);
-        let next = if instance.regions().is_empty() {
-            instance.dep_operands().first().copied()
-        } else {
-            instance
-                .dep_operands()
-                .get(dep_index(&instance.dep_results(), current))
-                .copied()
-        };
-        match next {
-            Some(next) => current = next,
-            None => return states,
-        }
-    }
-}
-
-/// Whether every path the chain took to `dep` wrote `slot`: a write, a loop or
-/// gate that writes it, or the port of one, counts; the entry state does not.
-fn written_before(
-    context: &Context,
-    slot: ValueId,
-    dep: ValueId,
-    writers: &[OpId],
-    memo: &mut HashMap<ValueId, bool>,
-) -> bool {
-    if let Some(&known) = memo.get(&dep) {
-        return known;
-    }
-    // A merge reaches every state above it, so the walk is over a DAG and has
-    // to remember its answers; a cycle answers that nothing wrote the slot,
-    // which keeps it memory.
-    memo.insert(dep, false);
-    let found = wrote_the_slot(context, slot, dep, writers, memo);
-    memo.insert(dep, found);
-    found
-}
-
-fn wrote_the_slot(
-    context: &Context,
-    slot: ValueId,
-    dep: ValueId,
-    writers: &[OpId],
-    memo: &mut HashMap<ValueId, bool>,
-) -> bool {
-    let Some(def) = context.get_value(dep).defining_op() else {
-        let Some(owner) = context
-            .region_of_port(dep)
-            .and_then(|region| context.get_region(region).parent_op())
-        else {
-            return false;
-        };
-        if writers.contains(&owner) && context.get_op(owner).has_interface::<dyn Theta>() {
-            return true;
-        }
-        let ports: Vec<ValueId> = context
-            .region_of_port(dep)
-            .map(|region| context.get_region(region).dep_arguments())
-            .unwrap_or_default()
-            .iter()
-            .map(crate::Value::id)
-            .collect();
-        let operands = context.get_op(owner).dep_operands();
-        return match operands.get(dep_index(&ports, dep)) {
-            Some(&entered) => written_before(context, slot, entered, writers, memo),
-            None => false,
-        };
-    };
-    let instance = context.get_op(def);
-    if writers.contains(&def) {
-        return true;
-    }
-    if let Some(write) = instance.clone().as_interface::<dyn MemoryWrite>()
-        && write.write_location() == slot
-    {
-        return true;
-    }
-    if instance.is::<crate::state::EntryStateOp>() {
-        return false;
-    }
-    // A merge of several memories holds what any of them wrote: the chains
-    // saying nothing about the slot leave it as the one that did.
-    if instance.is::<crate::state::JoinOp>() {
-        return instance
-            .dep_operands()
-            .iter()
-            .copied()
-            .collect::<Vec<_>>()
-            .into_iter()
-            .any(|state| written_before(context, slot, state, writers, memo));
-    }
-    if instance.regions().is_empty() {
-        return written_before(context, slot, instance.dep_operands()[0], writers, memo);
-    }
-    let index = dep_index(&instance.dep_results(), dep);
-    written_before(context, slot, instance.dep_operands()[index], writers, memo)
-}
-
-/// The loops and gates between `op` and `body`, innermost first.
-fn enclosing_ops(context: &Context, op: OpId, body: RegionId) -> Vec<OpId> {
-    let mut ops = Vec::new();
-    let mut region = context.parent_nodes_region(op);
-    while let Some(current) = region.filter(|&current| current != body) {
-        let Some(owner) = context.get_region(current).parent_op() else {
-            break;
-        };
-        ops.push(owner);
-        region = context.parent_nodes_region(owner);
-    }
-    ops
 }
 
 /// Whether every use of the slot's `address`, through pointer arithmetic, is
