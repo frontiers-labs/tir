@@ -24,6 +24,20 @@ pub fn construct_operation(item: TokenStream) -> TokenStream {
     } = parse_macro_input!(item as Operation);
 
     let builder_name = format_ident!("{}Builder", struct_name.to_string());
+    // `state:` appends an optional `!state` operand and/or result: memory order
+    // is an explicit def-use edge once a threading pass has run, and absent
+    // before. The ports are declared like any other, so the verifier types
+    // them and the text groups them.
+    let mut operands = operands;
+    let mut results = results;
+    if state.input {
+        operands.push(ValueSpec::state());
+    }
+    if state.output {
+        results.push(ValueSpec::state());
+    }
+    let mut interfaces = interfaces;
+    let memory_state_impl = make_memory_state_impl(&struct_name, &state, &mut interfaces);
     let binds_code = binds.as_ref().map(|binds| {
         assert!(
             operands.iter().all(|operand| !operand.ty.starts_with('?')),
@@ -58,23 +72,28 @@ pub fn construct_operation(item: TokenStream) -> TokenStream {
         counted.is_none() || binds.is_some(),
         "counted: needs the Theta binding it pins"
     );
-    // `state:` names which single dependency ports memory order threads through
-    // the op — absent in un-threaded IR — and only decides which accessors the
-    // op gets; every builder takes dependencies the same way.
-    let state_accessors = make_state_accessors(&state);
     let same_type = interfaces.iter().any(|path| {
         path.segments
             .last()
             .is_some_and(|segment| segment.ident == "SameOperandAndResultType")
     });
-    let has_results = !results.is_empty();
+    // A state result is minted by the builder, not typed by its caller, so
+    // the result pieces see only the results that carry a value.
+    let (state_results, value_results): (Vec<ValueSpec>, Vec<ValueSpec>) =
+        results.iter().cloned().partition(ValueSpec::is_state);
+    assert!(
+        state_results.len() <= 1,
+        "an op declares at most one state result group"
+    );
+    let has_results = !value_results.is_empty();
     // A `*`-prefixed result makes the op n-ary: it produces one value per type given
     // to the builder. Used by structured control flow, which carries n values.
-    let result_variadic = results.iter().any(|r| r.variadic);
+    let result_variadic = value_results.iter().any(|r| r.variadic);
     assert!(
-        !result_variadic || results.len() == 1,
+        !result_variadic || value_results.len() == 1,
         "a variadic result must be the only declared result"
     );
+    let state_result_pieces = make_state_result_pieces(state_results.first());
     let op_fn_name = op_fn_ident(&name);
 
     let BindsCode {
@@ -132,7 +151,6 @@ pub fn construct_operation(item: TokenStream) -> TokenStream {
     } else {
         quote! {}
     };
-    let mut interfaces = interfaces;
     if derive_constant_fold {
         interfaces.push(syn::parse_quote!(tir::ConstantFold));
     }
@@ -224,6 +242,7 @@ pub fn construct_operation(item: TokenStream) -> TokenStream {
         &region_pieces,
         &operand_pieces,
         &result_pieces,
+        &state_result_pieces,
         &attribute_pieces,
     );
     let result_accessor = &result_pieces.accessor;
@@ -244,6 +263,7 @@ pub fn construct_operation(item: TokenStream) -> TokenStream {
         #opdef_verifier
 
         #(#interface_impls)*
+        #memory_state_impl
         #verifiable_impl
         #binds_impls
         #sem_hooks_impl
@@ -255,7 +275,6 @@ pub fn construct_operation(item: TokenStream) -> TokenStream {
         impl #struct_name {
             #region_accessors
             #result_accessor
-            #state_accessors
             #attr_getters
         }
 
@@ -524,9 +543,16 @@ fn emit_builder(
     regions: &RegionPieces,
     operands: &OperandPieces,
     results: &ResultPieces,
+    state_results: &StateResultPieces,
     attributes: &AttributePieces,
 ) -> proc_macro2::TokenStream {
     let (attribute_verifier, attr_setters) = (&attributes.verifier, &attributes.setters);
+    let (state_result_field, state_result_default, state_result_method, state_result_build) = (
+        &state_results.field,
+        &state_results.default,
+        &state_results.method,
+        &state_results.build,
+    );
     let (region_fields, region_defaults, region_builders, region_fills) = (
         &regions.fields,
         &regions.defaults,
@@ -555,6 +581,7 @@ fn emit_builder(
             #(#region_fields,)*
             #(#operand_fields,)*
             #result_builder_field
+            #state_result_field
         }
 
         impl #builder_name {
@@ -565,6 +592,7 @@ fn emit_builder(
                     #(#region_defaults,)*
                     #(#operand_defaults,)*
                     #result_builder_default
+                    #state_result_default
                 }
             }
 
@@ -572,18 +600,7 @@ fn emit_builder(
             #(#operand_builders)*
             #(#attr_setters)*
             #result_builder_method
-
-            /// Observe one more dependency: the chain this op is ordered after.
-            pub fn dep_operand(mut self, v: tir::ValueId) -> Self {
-                self.parts.dep_operands.push(v);
-                self
-            }
-
-            /// Produce one more dependency: a chain this op leaves behind.
-            pub fn dep_result(mut self) -> Self {
-                self.parts.dep_results += 1;
-                self
-            }
+            #state_result_method
 
             pub fn attr(mut self, name: &str, value: tir::attributes::AttributeValue) -> Self {
                 let attribute = self.context.named_attribute(name, value);
@@ -609,6 +626,7 @@ fn emit_builder(
                 #(#operand_collect)*
 
                 #result_build
+                #state_result_build
 
                 #attributes_binding
                 #segment_sizes_attr
@@ -618,7 +636,7 @@ fn emit_builder(
                     operand_vec,
                     result_vec,
                     regions,
-                    tir::NewOpParts { attributes, ..parts },
+                    tir::NewOpParts { attributes },
                 );
 
                 let instance = self.context.add_operation(instance);
@@ -812,12 +830,6 @@ fn make_operand_pieces(operands: &[ValueSpec]) -> OperandPieces {
                     self
                 }
             });
-            operand_fn_params.push(quote! {
-                #field: Vec<tir::ValueId>
-            });
-            operand_fn_builders.push(quote! {
-                builder = builder.#field(#field);
-            });
         } else {
             operand_fields.push(quote! {
                 #field: Option<tir::ValueId>
@@ -831,6 +843,20 @@ fn make_operand_pieces(operands: &[ValueSpec]) -> OperandPieces {
                     self
                 }
             });
+        }
+        // A state port is set on the builder, never through the free
+        // function: memory order is threaded after an op is built.
+        if operand.is_state() {
+            continue;
+        }
+        if operand.variadic {
+            operand_fn_params.push(quote! {
+                #field: Vec<tir::ValueId>
+            });
+            operand_fn_builders.push(quote! {
+                builder = builder.#field(#field);
+            });
+        } else {
             operand_fn_params.push(quote! {
                 #field: impl Into<tir::Operand>
             });
@@ -884,9 +910,9 @@ fn make_operand_pieces(operands: &[ValueSpec]) -> OperandPieces {
     // `attributes` only needs to be mutable when a variadic op appends its segment
     // sizes, so bind it accordingly to avoid an `unused_mut` warning otherwise.
     let attributes_binding = if has_variadic {
-        quote! { let parts = self.parts; let mut attributes = parts.attributes; }
+        quote! { let mut attributes = self.parts.attributes; }
     } else {
-        quote! { let parts = self.parts; let attributes = parts.attributes; }
+        quote! { let attributes = self.parts.attributes; }
     };
 
     let segment_sizes_attr = if has_variadic {
@@ -1146,8 +1172,7 @@ fn make_result_pieces(has_results: bool, result_variadic: bool) -> ResultPieces 
     }
 }
 
-/// The memory-order ports an op declares with `state: "in" | "out" | "in_out"`:
-/// which of the single dependency operand and result accessors it carries.
+/// The memory-order ports an op declares with `state: "in" | "out" | "in_out"`.
 #[derive(Clone, Copy, Default)]
 struct StatePorts {
     input: bool,
@@ -1174,28 +1199,95 @@ impl StatePorts {
     }
 }
 
-fn make_state_accessors(state: &StatePorts) -> proc_macro2::TokenStream {
-    let operand = if state.input {
-        quote! {
-            /// The memory state this op observes, once a threading pass has set it.
-            pub fn state_operand(&self) -> Option<tir::ValueId> {
-                self.0.dep_operands().first().copied()
+/// The `MemoryState` an op declaring `state:` carries: its state ports, and
+/// whether it changes memory. An op writing memory changes it; one that only
+/// reads, or a terminator carrying the state along, observes it; anything
+/// else naming a state — a call, a copy — changes it. An op listing the
+/// interface itself answers by hand.
+fn make_memory_state_impl(
+    struct_name: &Ident,
+    state: &StatePorts,
+    interfaces: &mut Vec<Path>,
+) -> proc_macro2::TokenStream {
+    let lists = |name: &str| {
+        interfaces.iter().any(|path| {
+            path.segments
+                .last()
+                .is_some_and(|segment| segment.ident == name)
+        })
+    };
+    if (!state.input && !state.output) || lists("MemoryState") {
+        return quote! {};
+    }
+    let changes = lists("MemoryWrite") || !(lists("MemoryRead") || lists("Terminator"));
+    interfaces.push(syn::parse_quote!(tir::MemoryState));
+    quote! {
+        impl tir::MemoryState for #struct_name {
+            fn observed(&self) -> Vec<tir::ValueId> {
+                self.0.state_operands().to_vec()
+            }
+
+            fn produced(&self) -> Vec<tir::ValueId> {
+                self.0.state_results().to_vec()
+            }
+
+            fn changes_memory(&self) -> bool {
+                #changes
             }
         }
-    } else {
-        quote! {}
+    }
+}
+
+/// What a declared state result contributes to the builder: a count of the
+/// `!state` results to mint, since a caller never types them.
+struct StateResultPieces {
+    field: proc_macro2::TokenStream,
+    default: proc_macro2::TokenStream,
+    method: proc_macro2::TokenStream,
+    build: proc_macro2::TokenStream,
+}
+
+fn make_state_result_pieces(spec: Option<&ValueSpec>) -> StateResultPieces {
+    let Some(spec) = spec else {
+        return StateResultPieces {
+            field: quote! {},
+            default: quote! {},
+            method: quote! {},
+            build: quote! { let result_vec = result_vec; },
+        };
     };
-    let result = if state.output {
-        quote! {
-            /// The memory state this op leaves behind, once a threading pass has set it.
-            pub fn state_result(&self) -> Option<tir::ValueId> {
-                self.0.dep_results().first().copied()
-            }
+    let build = quote! {
+        let mut result_vec = result_vec;
+        result_vec.extend((0..self.state_results).map(|_| self.context.create_state()));
+    };
+    if spec.variadic {
+        let method = format_ident!("{}", spec.name);
+        StateResultPieces {
+            field: quote! { state_results: usize, },
+            default: quote! { state_results: 0, },
+            method: quote! {
+                /// Leave `count` memory states behind, one per chain.
+                pub fn #method(mut self, count: usize) -> Self {
+                    self.state_results = count;
+                    self
+                }
+            },
+            build,
         }
     } else {
-        quote! {}
-    };
-    quote! { #operand #result }
+        StateResultPieces {
+            field: quote! { state_results: usize, },
+            default: quote! { state_results: 0, },
+            method: quote! {
+                /// Leave a memory state behind: the chain this op is ordered before.
+                pub fn state_result(mut self) -> Self {
+                    self.state_results = 1;
+                    self
+                }
+            },
+            build,
+        }
+    }
 }
 
 struct Operation {
@@ -1299,6 +1391,23 @@ struct ValueSpec {
     /// segment). Operand grouping is then recovered from the stored
     /// `operand_segment_sizes` attribute.
     variadic: bool,
+}
+
+impl ValueSpec {
+    /// The optional trailing port `state:` declares.
+    fn state() -> Self {
+        Self {
+            name: "state".to_string(),
+            ty: "?tir::builtin::StateType".to_string(),
+            variadic: false,
+        }
+    }
+
+    /// Whether the port carries a memory state: the text groups those apart
+    /// from the values.
+    fn is_state(&self) -> bool {
+        self.ty.contains("StateType")
+    }
 }
 
 impl Parse for Operation {
@@ -1607,6 +1716,8 @@ fn make_parser(
     has_results: bool,
     result_variadic: bool,
 ) -> proc_macro2::TokenStream {
+    let (state_operands, operands): (Vec<ValueSpec>, Vec<ValueSpec>) =
+        operands.iter().cloned().partition(ValueSpec::is_state);
     assert!(
         operands
             .iter()
@@ -1615,6 +1726,22 @@ fn make_parser(
             .all(|operand| !operand.variadic),
         "the generic syntax reads a variadic operand group only as the last one"
     );
+    assert!(
+        state_operands.len() <= 1,
+        "the generic syntax reads one state operand group"
+    );
+    let state_parser = state_operands.first().map(|operand| {
+        let field = format_ident!("{}", operand.name);
+        if operand.variadic {
+            quote! { builder = builder.#field(parser.parse_state_operands(context)?); }
+        } else {
+            quote! {
+                if let Some(&state) = parser.parse_state_operands(context)?.first() {
+                    builder = builder.#field(state);
+                }
+            }
+        }
+    });
     let attr_spec_literals: Vec<_> = attributes
         .iter()
         .map(|attr| {
@@ -1702,7 +1829,7 @@ fn make_parser(
            let mut builder = #builder_name::new(context);
 
            #(#operand_parsers)*
-           builder.parts.dep_operands = tir::dependency::parse_dep_operands(parser, context)?;
+           #state_parser
 
            // Parse optional generic attribute dict: { key = value, ... }
            let mark = parser.pos();

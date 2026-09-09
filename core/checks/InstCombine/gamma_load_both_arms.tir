@@ -10,18 +10,18 @@
 module {
   %fn_both = func.func @both(%0: !i1, %1: !i32, %2: !i32, %3: !i32) -> !i32 {
     %p = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
-    | %s0 = state.entry_state
-    | %s1 = ptr.store %3, %p | %s0
-    | %s2 = scf.switch %0 args(| %s1) (| %e) {
-      | %e1 = ptr.store %2, %p | %e
-      -> | %e1
+    state(%s0) = state.entry_state
+    state(%s1) = ptr.store %3, %p state(%s0)
+    state(%s2) = scf.switch %0 args(state(%s1)) (state(%e)) {
+      state(%e1) = ptr.store %2, %p state(%e)
+      -> state(%e1)
     }
-    (| %t) {
-      | %t1 = ptr.store %1, %p | %t
-      -> | %t1
+    (state(%t)) {
+      state(%t1) = ptr.store %1, %p state(%t)
+      -> state(%t1)
     }
-    %4 | %s3 = ptr.load %p | %s2 : !i32
-    -> %4 | %s3
+    %4, state(%s3) = ptr.load %p state(%s2) : !i32
+    -> %4, state(%s3)
   }
   module_end
 }

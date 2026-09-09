@@ -1,4 +1,5 @@
 use crate::analysis::AnalysisManager;
+use crate::analysis::effects::{observed_state, produced_state};
 use crate::builtin::{FnType, IntegerType, ModuleOp, ops as b};
 use crate::func::ops as func_ops;
 use crate::ptr::{MemcpyOp, MemsetOp, PtrType};
@@ -113,9 +114,15 @@ impl Pass for LowerMemoryIntrinsicsPass {
                 memcpy.expect("a copy to lower implies a memcpy declaration"),
                 args,
                 pointer,
-                copy.state_operand(),
+                observed_state(operation.op()),
             );
-            replace_threaded(context, rewriter, &operation, &call, copy.state_result())?;
+            replace_threaded(
+                context,
+                rewriter,
+                &operation,
+                &call,
+                produced_state(operation.op()),
+            )?;
         }
         for operation in sets {
             let set = operation
@@ -129,9 +136,15 @@ impl Pass for LowerMemoryIntrinsicsPass {
                 memset.expect("a set to lower implies a memset declaration"),
                 args,
                 pointer,
-                set.state_operand(),
+                observed_state(operation.op()),
             );
-            replace_threaded(context, rewriter, &operation, &call, set.state_result())?;
+            replace_threaded(
+                context,
+                rewriter,
+                &operation,
+                &call,
+                produced_state(operation.op()),
+            )?;
         }
         Ok(())
     }
@@ -152,7 +165,7 @@ fn threaded_call(
         .args(args)
         .result_type(result_type);
     if let Some(state) = state {
-        builder = builder.dep_operand(state).dep_result();
+        builder = builder.state(state).state_result();
     }
     builder.build()
 }
@@ -170,7 +183,7 @@ fn replace_threaded(
 ) -> Result<(), PassError> {
     if let (Some(published), Some(new)) = (
         published,
-        context.get_op(call.id()).dep_results().first().copied(),
+        context.get_op(call.id()).state_results().first().copied(),
     ) {
         context.replace_value_uses(published, new);
         // An unordered region names the state it leaves in its result list,

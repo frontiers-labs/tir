@@ -8,7 +8,7 @@
 
 use std::collections::HashMap;
 
-use crate::analysis::affine::{AffineView, Loop, body_ops, carried, nests_under};
+use crate::analysis::affine::{AffineView, Loop, body_ops, nests_under};
 use crate::{Context, OpId, OperationRef, PassError, Rewriter, Theta, ValueId};
 
 use super::lower::erase_unread;
@@ -37,7 +37,8 @@ fn worth_unrolling<'a>(context: &Context, view: &'a AffineView) -> Option<&'a Lo
     let handle = context.get_op(level.op);
     // The copies name the loop's ports and join the region it stands in, both
     // of which only the unordered form has.
-    carried(context, &handle)?;
+    let body = *handle.regions().last()?;
+    context.get_region(body).is_nodes().then_some(())?;
     context.parent_nodes_region(level.op)?;
     ((1..=UNROLL_TRIP).contains(&trip)
         && level.lower.as_constant().is_some()
@@ -61,13 +62,13 @@ fn unroll(context: &Context, rewriter: &mut Rewriter, level: &Loop) -> Result<()
         .as_interface::<dyn Theta>()
         .expect("a counted loop is a theta");
     let (arguments, mut incoming) = {
-        let ports = carried(context, &handle).expect("a loop carries ports");
+        let binding = theta.carried();
         let body = context.get_region(theta.body());
-        let mut arguments = ports.args;
-        arguments.extend(body.dep_arguments().iter().map(crate::Value::id));
-        let mut inits = ports.inits;
-        inits.extend(handle.dep_operands());
-        (arguments, inits)
+        let arguments: Vec<ValueId> = body.ports()[binding.ports]
+            .iter()
+            .map(crate::Value::id)
+            .collect();
+        (arguments, handle.operands()[binding.operands].to_vec())
     };
     let parent = context
         .parent_nodes_region(level.op)
@@ -118,9 +119,5 @@ fn copy_body_nodes(
     let body = theta.body();
     let binding = theta.carried();
     let (ops, results) = crate::clone::clone_nodes_ops_into(context, body, bindings, destination);
-    let values = context.get_region(body).value_results().len();
-    let deps = (results.len() - values) / 2;
-    let mut leaving = results[binding.continue_.clone()].to_vec();
-    leaving.extend(results[values..values + deps].iter().copied());
-    (ops, leaving)
+    (ops, results[binding.continue_].to_vec())
 }

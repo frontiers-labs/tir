@@ -418,14 +418,6 @@ impl MemoryRead for LoadOp {
     fn read_value(&self) -> tir::ValueId {
         self.result()
     }
-
-    fn state_operand(&self) -> Option<tir::ValueId> {
-        LoadOp::state_operand(self)
-    }
-
-    fn state_result(&self) -> Option<tir::ValueId> {
-        LoadOp::state_result(self)
-    }
 }
 
 impl MemoryWrite for StoreOp {
@@ -436,14 +428,6 @@ impl MemoryWrite for StoreOp {
     fn written_value(&self) -> tir::ValueId {
         self.operands()[0]
     }
-
-    fn state_operand(&self) -> Option<tir::ValueId> {
-        StoreOp::state_operand(self)
-    }
-
-    fn state_result(&self) -> Option<tir::ValueId> {
-        StoreOp::state_result(self)
-    }
 }
 
 impl MemoryWrite for MemsetOp {
@@ -453,13 +437,5 @@ impl MemoryWrite for MemsetOp {
 
     fn written_value(&self) -> tir::ValueId {
         self.operands()[1]
-    }
-
-    fn state_operand(&self) -> Option<tir::ValueId> {
-        MemsetOp::state_operand(self)
-    }
-
-    fn state_result(&self) -> Option<tir::ValueId> {
-        MemsetOp::state_result(self)
     }
 }

@@ -8,16 +8,16 @@
 module {
   %fn_twice = func.func @twice(%0: !i1, %1: !i32) -> !i32 {
     %2 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
-    | %3 = state.entry_state
-    | %4 = ptr.store %1, %2 | %3
-    | %5 = scf.loop (| %6 = %4) {
-      %7 | %8 = ptr.load %2 | %6 : !i32
+    state(%3) = state.entry_state
+    state(%4) = ptr.store %1, %2 state(%3)
+    state(%5) = scf.loop (state(%6 = %4)) {
+      %7, state(%8) = ptr.load %2 state(%6) : !i32
       %9 = addi %7, %7 : !i32
-      | %10 = ptr.store %9, %2 | %8
-      -> %0 | %10, %10
+      state(%10) = ptr.store %9, %2 state(%8)
+      -> %0, state(%10, %10)
     }
-    %11 | %12 = ptr.load %2 | %5 : !i32
-    -> %11 | %12
+    %11, state(%12) = ptr.load %2 state(%5) : !i32
+    -> %11, state(%12)
   }
   module_end
 }
@@ -28,4 +28,4 @@ module {
 // CHECK-NEXT: %[[NEXT:[0-9]+]] = addi %[[HEAD]], %[[HEAD]] : !i32
 // CHECK-NEXT: -> %0, %[[NEXT]], %[[NEXT]]
 // CHECK-NEXT: }
-// CHECK-NEXT: -> %[[RESULT]] | %{{[0-9]+}}
+// CHECK-NEXT: -> %[[RESULT]], state(%{{[0-9]+}})

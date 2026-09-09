@@ -1,4 +1,4 @@
-use crate::{Context, Error, dialect, operation};
+use crate::{Context, Error, MemoryState, dialect, operation};
 
 use crate as tir;
 
@@ -15,26 +15,34 @@ dialect! {
 }
 
 // The memory a function is entered with, one op per chain. Spelled
-// `| %s = state.entry_state`: it carries dependencies and nothing else.
+// `state(%s) = state.entry_state`: it carries a state and nothing else.
 operation! {
     EntryStateOp {
         name: "entry_state",
         dialect: "state",
-        verifier: "true",
-        interfaces: [crate::interp::Interp],
+        interfaces: [MemoryState, crate::interp::Interp],
+        state: "out",
     }
 }
 
 impl EntryStateOp {
     /// The chain this op opens.
     pub fn result(&self) -> tir::ValueId {
-        self.0.dep_results()[0]
+        self.0.results()[0]
     }
 }
 
-impl tir::Verifiable for EntryStateOp {
-    fn verify_impl(&self, _context: &Context) -> Result<(), Error> {
-        expect_deps(&self.0, 0, 1)
+impl MemoryState for EntryStateOp {
+    fn observed(&self) -> Vec<tir::ValueId> {
+        Vec::new()
+    }
+
+    fn produced(&self) -> Vec<tir::ValueId> {
+        self.0.results().to_vec()
+    }
+
+    fn changes_memory(&self) -> bool {
+        false
     }
 }
 
@@ -47,25 +55,43 @@ operation! {
         name: "join",
         dialect: "state",
         verifier: "true",
-        interfaces: [crate::interp::Interp],
+        operands: O {
+            states: "*crate::builtin::StateType",
+        },
+        interfaces: [MemoryState, crate::interp::Interp],
+        state: "out",
     }
 }
 
 impl JoinOp {
     /// The merged memory.
     pub fn result(&self) -> tir::ValueId {
-        self.0.dep_results()[0]
+        self.0.results()[0]
+    }
+}
+
+impl MemoryState for JoinOp {
+    fn observed(&self) -> Vec<tir::ValueId> {
+        self.0.operands().to_vec()
+    }
+
+    fn produced(&self) -> Vec<tir::ValueId> {
+        self.0.results().to_vec()
+    }
+
+    fn changes_memory(&self) -> bool {
+        false
     }
 }
 
 impl tir::Verifiable for JoinOp {
     fn verify_impl(&self, _context: &Context) -> Result<(), Error> {
-        if self.0.dep_operands().is_empty() {
+        if self.0.operands().is_empty() {
             return Err(Error::VerificationError(
-                "state.join merges at least one dependency".to_string(),
+                "state.join merges at least one state".to_string(),
             ));
         }
-        expect_deps(&self.0, self.0.dep_operands().len(), 1)
+        expect_states(&self.0, 1)
     }
 }
 
@@ -78,44 +104,57 @@ operation! {
         name: "split",
         dialect: "state",
         verifier: "true",
-        interfaces: [crate::interp::Interp],
+        results: R {
+            states: "*crate::builtin::StateType",
+        },
+        interfaces: [MemoryState, crate::interp::Interp],
+        state: "in",
     }
 }
 
 impl SplitOp {
     /// The one memory the chains crossing this split carry on from.
     pub fn observed(&self) -> tir::ValueId {
-        self.0.dep_operands()[0]
+        self.0.operands()[0]
     }
 
     /// One state per chain crossing the split.
     pub fn states(&self) -> Vec<tir::ValueId> {
-        self.0.dep_results().to_vec()
+        self.0.results().to_vec()
+    }
+}
+
+impl MemoryState for SplitOp {
+    fn observed(&self) -> Vec<tir::ValueId> {
+        self.0.operands().to_vec()
+    }
+
+    fn produced(&self) -> Vec<tir::ValueId> {
+        self.0.results().to_vec()
+    }
+
+    fn changes_memory(&self) -> bool {
+        false
     }
 }
 
 impl tir::Verifiable for SplitOp {
     fn verify_impl(&self, _context: &Context) -> Result<(), Error> {
-        if self.0.dep_results().is_empty() {
+        if self.0.results().is_empty() {
             return Err(Error::VerificationError(
                 "state.split names at least one chain".to_string(),
             ));
         }
-        expect_deps(&self.0, 1, self.0.dep_results().len())
+        expect_states(&self.0, self.0.results().len())
     }
 }
 
-/// These ops carry nothing but dependencies, at the arity given.
-fn expect_deps(op: &tir::OpHandle, operands: usize, results: usize) -> Result<(), Error> {
+/// These ops leave `results` states behind and nothing else.
+fn expect_states(op: &tir::OpHandle, results: usize) -> Result<(), Error> {
     let (dialect, name) = (op.dialect(), op.name());
-    if !op.value_operands().is_empty() || !op.value_results().is_empty() {
+    if op.state_results().len() != results || !op.value_results().is_empty() {
         return Err(Error::VerificationError(format!(
-            "{dialect}.{name} carries only dependencies"
-        )));
-    }
-    if op.dep_operands().len() != operands || op.dep_results().len() != results {
-        return Err(Error::VerificationError(format!(
-            "{dialect}.{name} takes {operands} dependencies and produces {results}"
+            "{dialect}.{name} produces {results} states"
         )));
     }
     Ok(())

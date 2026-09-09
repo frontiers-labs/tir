@@ -48,7 +48,6 @@ mod block;
 mod clone;
 pub use clone::{clone_op, clone_region_with_mapping};
 mod context;
-pub mod dependency;
 mod diagnostics;
 mod dialect;
 mod dialects;
@@ -91,8 +90,9 @@ pub use error::Error;
 pub use interfaces::{
     Apply, Binding, BranchGuard, BranchTerminator, Callable, Commutative, ConstantFold,
     ConstantLike, CountedLoop, ExitScope, ExitScopeKind, ExitTarget, Gamma, Global,
-    IntegerArithmetic, MemoryRead, MemoryWrite, NonLocalExit, OpCost, PromotableAllocation, Pure,
-    SameOperandAndResultType, Speculatable, Symbol, Terminator, Theta, Visibility,
+    IntegerArithmetic, MemoryRead, MemoryState, MemoryWrite, NonLocalExit, OpCost,
+    PromotableAllocation, Pure, SameOperandAndResultType, Speculatable, Symbol, Terminator, Theta,
+    Visibility,
 };
 pub use interp::{Interp, InterpError, Memory as InterpMemory, Value as InterpValue};
 pub use ir_formatter::IRFormatter;

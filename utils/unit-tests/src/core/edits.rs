@@ -5,7 +5,7 @@ use tir::{
     builtin::{self, ops, ModuleOp},
     interp,
     scf::{LoopOp, SwitchOp},
-    Context, ExitTarget, NonLocalExit, OpId, Operation, RegionId, Terminator, ValueId,
+    Context, ExitTarget, NonLocalExit, OpId, Operation, RegionId, Terminator, TypeId, ValueId,
 };
 
 use super::fixtures::{self, module_ops};
@@ -85,21 +85,25 @@ fn growing_a_loop_port_extends_every_aligned_range() {
 }
 
 #[test]
-fn growing_a_loop_dependency_port_keeps_the_dependency_shape() {
+fn growing_a_loop_state_port_keeps_the_carried_shape() {
     let (context, module) = fixtures::parse(LOOP);
     let function = function(&context, &module);
     let body = body_of(&context, function);
     let loop_op = find::<LoopOp>(&context, body);
-    let chain = context.create_state();
+    let entry = tir::state::EntryStateOpBuilder::new(&context)
+        .state_result()
+        .build();
+    context.add(body, entry.id());
+    let chain = entry.result();
 
-    let result = context.grow_dep_port(loop_op, Some(chain), |_, port| port);
+    let result = context.grow_port(loop_op, TypeId::STATE, Some(chain), |_, port| port);
 
     let grown = context.get_op(loop_op);
     let loop_body = context.get_region(grown.regions()[0]);
-    assert_eq!(grown.dep_operands().as_slice(), [chain]);
-    assert_eq!(loop_body.dep_arguments().len(), 1);
-    assert_eq!(loop_body.dep_results().len(), 2);
-    assert_eq!(grown.dep_results().as_slice(), [result]);
+    assert_eq!(grown.state_operands().as_slice(), [chain]);
+    assert_eq!(loop_body.state_arguments().len(), 1);
+    assert_eq!(loop_body.state_results().len(), 2);
+    assert_eq!(grown.state_results().as_slice(), [result]);
     assert_eq!(
         loop_body.value_results().len(),
         3,
@@ -194,7 +198,7 @@ fn loop_with_exit() -> (Context, OpId, OpId) {
     let body = context.get_op(loop_op).regions()[0];
     let predicate = context.get_region(body).results()[0];
     let exit = ExitOpBuilder::new(&context).values(vec![]).build();
-    let arm = |ops: Vec<OpId>| context.create_nodes_region(vec![], 0, ops, vec![], 0).id();
+    let arm = |ops: Vec<OpId>| context.create_nodes_region(vec![], ops, vec![]).id();
     let conditional = tir::scf::SwitchOpBuilder::new(&context)
         .predicate(predicate)
         .inputs(vec![])
@@ -261,23 +265,26 @@ fn add_auto_places_an_op_where_its_operands_meet() {
 }
 
 #[test]
-fn add_auto_pins_an_op_to_its_dependency() {
+fn add_auto_pins_an_op_to_its_state() {
     let (context, module) = fixtures::parse(NESTED);
     let function = function(&context, &module);
     let outer = body_of(&context, function);
     let loop_op = find::<LoopOp>(&context, outer);
-    let chain = context.grow_dep_port(loop_op, Some(context.create_state()), |_, port| port);
+    let chain = context.grow_port(
+        loop_op,
+        TypeId::STATE,
+        Some(context.create_state()),
+        |_, port| port,
+    );
     let inner = context.get_op(loop_op).regions()[0];
-    let inner_chain = context.get_region(inner).dep_arguments()[0].id();
+    let inner_chain = context.get_region(inner).state_arguments()[0].id();
     let argument = context.get_region(outer).ports()[0].id();
     let i32_ty = builtin::IntegerType::new(&context, 32);
 
-    let pinned_out = ops::addi(&context, argument, argument, i32_ty)
-        .dep_operand(chain)
-        .build();
-    let pinned_in = ops::addi(&context, argument, argument, i32_ty)
-        .dep_operand(inner_chain)
-        .build();
+    let pinned_out = ops::addi(&context, argument, argument, i32_ty).build();
+    context.append_operand(pinned_out.id(), chain);
+    let pinned_in = ops::addi(&context, argument, argument, i32_ty).build();
+    context.append_operand(pinned_in.id(), inner_chain);
 
     assert_eq!(context.add_auto(pinned_out.id()), outer);
     assert_eq!(context.add_auto(pinned_in.id()), inner);

@@ -10,29 +10,29 @@ module {
     %1 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
     %2 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
     %3 = constant {value = 0} : !i32
-    | %4 = state.entry_state
-    | %5 = ptr.store %3, %1 | %4
-    | %6 = ptr.store %3, %2 | %5
-    | %7 = scf.loop (| %8 = %6) {
-      %9 | %10 = scf.switch %0 args(| %8) (| %11) {
+    state(%4) = state.entry_state
+    state(%5) = ptr.store %3, %1 state(%4)
+    state(%6) = ptr.store %3, %2 state(%5)
+    state(%7) = scf.loop (state(%8 = %6)) {
+      %9, state(%10) = scf.switch %0 args(state(%8)) (state(%11)) {
         %12 = constant {value = 0} : !i1
-        -> %12 | %11
+        -> %12, state(%11)
       }
-      (| %13) {
-        %14 | %15 = ptr.load %1 | %13 : !i32
-        %16 | %17 = ptr.load %2 | %15 : !i32
+      (state(%13)) {
+        %14, state(%15) = ptr.load %1 state(%13) : !i32
+        %16, state(%17) = ptr.load %2 state(%15) : !i32
         %18 = addi %14, %16 : !i32
-        | %19 = ptr.store %18, %1 | %17
+        state(%19) = ptr.store %18, %1 state(%17)
         %20 = constant {value = 1} : !i32
         %21 = addi %16, %20 : !i32
-        | %22 = ptr.store %21, %2 | %19
+        state(%22) = ptr.store %21, %2 state(%19)
         %23 = constant {value = 1} : !i1
-        -> %23 | %22
+        -> %23, state(%22)
       }
-      -> %9 | %10, %10
+      -> %9, state(%10, %10)
     }
-    %24 | %25 = ptr.load %1 | %7 : !i32
-    -> %24 | %25
+    %24, state(%25) = ptr.load %1 state(%7) : !i32
+    -> %24, state(%25)
   }
   module_end
 }
@@ -46,4 +46,4 @@ module {
 // CHECK: %[[STEP:[0-9]+]] = addi %[[HC]], %{{[0-9]+}} : !i32
 // CHECK: -> %{{[0-9]+}}, %[[NEXT]], %[[STEP]]
 // CHECK: -> %{{[0-9]+}}, %[[LS]], %[[LC]], %[[LS]], %[[LC]]
-// CHECK: -> %[[SUM]] | %{{[0-9]+}}
+// CHECK: -> %[[SUM]], state(%{{[0-9]+}})

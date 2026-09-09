@@ -85,8 +85,8 @@ fn erase_dead_with(
         // and the reads it hands over move to the state they now name — a write
         // whose state a forwarded reader took is still read.
         if let (Some(published), Some(observed)) = (
-            instance.dep_results().first(),
-            instance.dep_operands().first(),
+            instance.state_results().first(),
+            instance.state_operands().first(),
         ) {
             context.replace_value_uses(*published, *observed);
             if named.remove(published) {
@@ -150,7 +150,7 @@ fn is_erasable(context: &Context, instance: &OpHandle, named: &HashSet<ValueId>)
         Some(mi) => mi.info().effects.reads && !mi.info().effects.writes,
         None => instance.has_interface::<dyn crate::MemoryRead>() && !writes_memory,
     };
-    let forwards_state = reads_only && !instance.dep_operands().is_empty();
+    let forwards_state = reads_only && !instance.state_operands().is_empty();
     // An allocation is the object its state names. With neither its address nor
     // that state read, the object is one nothing in the function can tell exists
     // — the slot sweep the chains make an ordinary def-use question.
@@ -177,7 +177,7 @@ fn is_erasable(context: &Context, instance: &OpHandle, named: &HashSet<ValueId>)
     // A read hands its readers the dependency it took, so that result is not
     // one keeping it alive; every other dependency an op leaves is a definition
     // like its values.
-    let published = instance.dep_results();
+    let published = instance.state_results();
     let mut defines = false;
     for def in regs
         .defs

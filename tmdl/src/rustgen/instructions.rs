@@ -1443,7 +1443,7 @@ fn emit_instruction(
     let is_terminator = uncond_pc || cond_pc;
     let (interfaces_list, terminator_impl) = if is_terminator {
         (
-            quote! { [tir::backend::MachineInstruction, tir::Terminator] },
+            quote! { [tir::backend::MachineInstruction, tir::MemoryState, tir::Terminator] },
             quote! {
                 impl tir::Terminator for #name_ident {
                     fn successors(&self) -> Vec<tir::BlockId> {
@@ -1453,20 +1453,21 @@ fn emit_instruction(
             },
         )
     } else {
-        (quote! { [tir::backend::MachineInstruction] }, quote! {})
+        (
+            quote! { [tir::backend::MachineInstruction, tir::MemoryState] },
+            quote! {},
+        )
     };
 
     let implicit_items = implicit_register_items(inst, &tables.register_index_map, &tables.pc_classes);
 
     // One fact, two readers: the `InstrInfo::effects` derived from the
-    // execute body decides both what the backend is told about the opcode's
-    // memory behavior and whether the opcode has a chain to carry it in.
+    // execute body says what the backend is told about the opcode's memory
+    // behavior. Every instruction declares a chain to carry it in: one that
+    // touches memory is put on it by selection, and a call is handed the
+    // chain of the call it finalizes whatever its own opcode says.
     let (reads_memory, writes_memory) = behavior_memory_effects(&inst.behavior);
-    let state_schema = if reads_memory || writes_memory {
-        quote! { state: "in_out", }
-    } else {
-        quote! {}
-    };
+    let state_schema = quote! { state: "in_out", };
 
     out.instruction_defs.push(quote! {
         operation! {
@@ -1591,6 +1592,22 @@ fn emit_instruction(
 
             fn info(&self) -> &'static tir::backend::InstrInfo {
                 &#info_ident
+            }
+        }
+
+        // The memory an instruction changes is what its effects say it writes;
+        // a load or a branch carrying the chain along observes it.
+        impl tir::MemoryState for #name_ident {
+            fn observed(&self) -> Vec<tir::ValueId> {
+                self.0.state_operands().to_vec()
+            }
+
+            fn produced(&self) -> Vec<tir::ValueId> {
+                self.0.state_results().to_vec()
+            }
+
+            fn changes_memory(&self) -> bool {
+                #info_ident.effects.writes
             }
         }
     });

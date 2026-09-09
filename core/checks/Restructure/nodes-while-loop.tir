@@ -35,21 +35,21 @@ module {
 }
 
 // CHECK: %{{[0-9]+}} = func.func @sum
-// CHECK: %[[I:[0-9]+]] | %[[M:[0-9]+]] = scf.loop (%[[IP:[0-9]+]] = %{{[0-9]+}} | %[[D:[0-9]+]] = %{{[0-9]+}}) {
+// CHECK: %[[I:[0-9]+]], state(%[[M:[0-9]+]]) = scf.loop (%[[IP:[0-9]+]] = %{{[0-9]+}}, state(%[[D:[0-9]+]] = %{{[0-9]+}})) {
 // CHECK-NEXT: %[[MORE:[0-9]+]] = cmpi %[[IP]], %{{[0-9]+}} {predicate = "slt"} : !i1
-// CHECK-NEXT: %[[NI:[0-9]+]], %[[NR:[0-9]+]] | %[[ND:[0-9]+]] = scf.switch %[[MORE]] args(| %[[D]]) (| %[[E:[0-9]+]]) {
+// CHECK-NEXT: %[[NI:[0-9]+]], %[[NR:[0-9]+]], state(%[[ND:[0-9]+]]) = scf.switch %[[MORE]] args(state(%[[D]])) (state(%[[E:[0-9]+]])) {
 // CHECK-NEXT: %[[STOP:[0-9]+]] = constant {value = 0} : !i1
-// CHECK-NEXT: -> %[[IP]], %[[STOP]] | %[[E]]
+// CHECK-NEXT: -> %[[IP]], %[[STOP]], state(%[[E]])
 // CHECK-NEXT: }
-// CHECK-NEXT: (| %[[B:[0-9]+]]) {
-// CHECK-NEXT: %{{[0-9]+}} | %[[R:[0-9]+]] = ptr.load %{{[0-9]+}} | %[[B]] : !i32
-// CHECK: | %[[S:[0-9]+]] = ptr.store %{{[0-9]+}}, %{{[0-9]+}} | %[[R]]
-// CHECK: -> %{{[0-9]+}}, %{{[0-9]+}} | %[[S]]
+// CHECK-NEXT: (state(%[[B:[0-9]+]])) {
+// CHECK-NEXT: %{{[0-9]+}}, state(%[[R:[0-9]+]]) = ptr.load %{{[0-9]+}} state(%[[B]]) : !i32
+// CHECK: state(%[[S:[0-9]+]]) = ptr.store %{{[0-9]+}}, %{{[0-9]+}} state(%[[R]])
+// CHECK: -> %{{[0-9]+}}, %{{[0-9]+}}, state(%[[S]])
 // CHECK-NEXT: }
-// CHECK-NEXT: -> %[[NR]], %[[NI]], %[[NI]] | %[[ND]], %[[ND]]
+// CHECK-NEXT: -> %[[NR]], %[[NI]], %[[NI]], state(%[[ND]], %[[ND]])
 // CHECK-NEXT: }
-// CHECK-NEXT: %[[V:[0-9]+]] | %[[VD:[0-9]+]] = ptr.load %{{[0-9]+}} | %[[M]] : !i32
-// CHECK-NEXT: -> %[[V]] | %[[VD]]
+// CHECK-NEXT: %[[V:[0-9]+]], state(%[[VD:[0-9]+]]) = ptr.load %{{[0-9]+}} state(%[[M]]) : !i32
+// CHECK-NEXT: -> %[[V]], state(%[[VD]])
 
 // FOUR: i32 6
 // ZERO: i32 0

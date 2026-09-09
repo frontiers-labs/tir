@@ -471,26 +471,19 @@ impl Interpreter<'_> {
         let body = theta.body();
         let binding = theta.carried();
         let region = self.context.get_region(body);
-        let ports: Vec<ValueId> = region.value_arguments()[binding.ports.clone()]
+        let ports: Vec<ValueId> = region.ports()[binding.ports.clone()]
             .iter()
+            .filter(|port| !port.is_state())
             .map(|port| port.id())
             .collect();
-        let results = region.value_results();
-        let dep_results = region.dep_results();
-        let chains = dep_results.len() / 2;
+        let results = region.results();
         let predicate = theta.predicate();
-        let continue_cone: Vec<ValueId> = results[binding.continue_.clone()]
-            .iter()
-            .chain(&dep_results[..chains])
-            .copied()
-            .collect();
-        let exit_cone: Vec<ValueId> = results[binding.exit.clone()]
-            .iter()
-            .chain(&dep_results[chains..])
-            .copied()
-            .collect();
+        let continue_cone = results[binding.continue_.clone()].to_vec();
+        let exit_cone = results[binding.exit.clone()].to_vec();
 
-        let mut carried: Vec<Value> = instance.value_operands()[binding.operands.clone()]
+        let mut carried: Vec<Value> = self
+            .context
+            .values_among(&instance.operands()[binding.operands.clone()])
             .iter()
             .map(|&init| self.value_of(init))
             .collect::<Result<_>>()?;
@@ -505,7 +498,9 @@ impl Interpreter<'_> {
             for &value in cone {
                 self.demand(value, body, &mut evaluated)?;
             }
-            let values = cone[..cone.len() - chains]
+            let values = self
+                .context
+                .values_among(cone)
                 .iter()
                 .map(|&value| self.value_of(value))
                 .collect::<Result<Vec<_>>>()?;
@@ -531,12 +526,15 @@ impl Interpreter<'_> {
         let arm = arms[usize::try_from(chosen)
             .unwrap_or(usize::MAX)
             .min(arms.len() - 1)];
-        let ports = self.context.get_region(arm).value_arguments();
-        let inputs = instance.value_operands();
+        let ports = self.context.get_region(arm).ports();
+        let inputs = instance.operands();
         for (port, &input) in ports[binding.ports.clone()]
             .iter()
             .zip(&inputs[binding.operands.clone()])
         {
+            if port.is_state() {
+                continue;
+            }
             let value = self.value_of(input)?;
             self.env.insert(port.id(), value);
         }

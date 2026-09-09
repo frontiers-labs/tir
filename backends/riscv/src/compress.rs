@@ -95,11 +95,11 @@ fn compress(
         Some(new_op) => {
             // The memory order the instruction sits in is its own: the
             // compressed form reads and publishes the same states.
-            for state in op.op().dep_operands() {
-                context.append_dep_operand(new_op.id(), state);
+            for state in op.op().state_operands() {
+                context.append_operand(new_op.id(), state);
             }
-            for _ in op.op().dep_results() {
-                context.append_dep_result(new_op.id());
+            for _ in op.op().state_results() {
+                context.append_result(new_op.id(), tir::TypeId::STATE);
             }
             rewriter.replace_op(op, new_op.as_ref()).map(|()| true)
         }

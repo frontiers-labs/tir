@@ -21,19 +21,6 @@ pub(crate) struct RegionParseState {
     /// The arguments the region was opened with, until they become the entry
     /// block's arguments or the region's own ports.
     pub arguments: Vec<crate::Value>,
-    /// The dependencies the region was opened on, trailing `arguments`.
-    pub dep_arguments: Vec<crate::Value>,
-}
-
-impl RegionParseState {
-    /// Take the arguments out, dependencies trailing, with how many there are.
-    pub fn take_arguments(&mut self) -> (Vec<crate::Value>, usize) {
-        let mut arguments = std::mem::take(&mut self.arguments);
-        let deps = std::mem::take(&mut self.dep_arguments);
-        let count = deps.len();
-        arguments.extend(deps);
-        (arguments, count)
-    }
 }
 
 pub struct Parser<'src> {
@@ -410,6 +397,47 @@ impl<'src> Parser<'src> {
         self.position = i as u32;
         self.skip_trivia();
         Some(val)
+    }
+
+    /// Parse an optional `state(%c, %d)` group, answering the names. A group
+    /// with no name is an error: an empty group is spelled by leaving it out.
+    pub fn parse_state_names(&mut self) -> Result<Vec<String>, (Span, crate::Error)> {
+        let mark = self.pos();
+        if !self.parse_token("state") || !self.parse_token("(") {
+            self.set_pos(mark);
+            return Ok(Vec::new());
+        }
+        let mut names = vec![];
+        loop {
+            let name = self
+                .parse_value_ref()
+                .ok_or_else(|| (self.span(), crate::Error::ExpectedValueRef))?;
+            names.push(name.to_string());
+            if !self.parse_token(",") {
+                break;
+            }
+        }
+        if !self.parse_token(")") {
+            return Err((self.span(), crate::Error::ExpectedToken(")")));
+        }
+        Ok(names)
+    }
+
+    /// Parse an optional `state(%c, %d)` group of state operands, which an op
+    /// spells on its own line: a group opening the next line binds that
+    /// line's results, and an op observing nothing must not swallow it.
+    pub fn parse_state_operands(
+        &mut self,
+        context: &crate::Context,
+    ) -> Result<Vec<ValueId>, (Span, crate::Error)> {
+        if !self.on_same_line() {
+            return Ok(Vec::new());
+        }
+        Ok(self
+            .parse_state_names()?
+            .iter()
+            .map(|name| self.resolve_value(context, name))
+            .collect())
     }
 
     pub fn parse_value_ref(&mut self) -> Option<&'src str> {

@@ -5,13 +5,13 @@
 // body and yields true in arm 1 (continue), and the loop's predicate is the
 // arm's result.
 
-// CHECK: scf.loop (| %{{[0-9]+}} = %{{[0-9]+}}) {
+// CHECK: scf.loop (state(%{{[0-9]+}} = %{{[0-9]+}})) {
 // CHECK: %[[C:[0-9]+]] = cmpi {{.*}} {predicate = "slt"}
-// CHECK: %[[P:[0-9]+]] | %[[S:[0-9]+]] = scf.switch %[[C]] args(
+// CHECK: %[[P:[0-9]+]], state(%[[S:[0-9]+]]) = scf.switch %[[C]] args(
 // CHECK: %[[F:[0-9]+]] = constant {value = 0} : !i1
 // CHECK-NEXT: -> %[[F]]
 // CHECK: addi
 // CHECK: ptr.store
 // CHECK: %[[T:[0-9]+]] = constant {value = 1} : !i1
 // CHECK-NEXT: -> %[[T]]
-// CHECK: -> %[[P]] | %[[S]], %[[S]]
+// CHECK: -> %[[P]], state(%[[S]], %[[S]])

@@ -36,18 +36,18 @@ module {
 // merge before it and the split after it hand round.
 // CHECK-LABEL: func.func @main(%[[X:[0-9]+]]: !i32)
 // CHECK-NOT: func.call
-// CHECK: | %[[SG:[0-9]+]] = ptr.store %[[X]], %[[G:[0-9]+]] | %{{[0-9]+}}
-// CHECK: | %[[SH:[0-9]+]] = ptr.store %[[X]], %{{[0-9]+}} | %{{[0-9]+}}
-// CHECK: %[[V:[0-9]+]] | %[[RG:[0-9]+]] = ptr.load %[[G]] | %{{[0-9]+}} : !i32
+// CHECK: state(%[[SG:[0-9]+]]) = ptr.store %[[X]], %[[G:[0-9]+]] state(%{{[0-9]+}})
+// CHECK: state(%[[SH:[0-9]+]]) = ptr.store %[[X]], %{{[0-9]+}} state(%{{[0-9]+}})
+// CHECK: %[[V:[0-9]+]], state(%[[RG:[0-9]+]]) = ptr.load %[[G]] state(%{{[0-9]+}}) : !i32
 // CHECK: %[[S:[0-9]+]] = addi %[[V]], %[[X]] : !i32
-// CHECK: | %[[BUMP:[0-9]+]] = ptr.store %[[S]], %[[G]] | %[[RG]]
-// CHECK: %[[W:[0-9]+]] | %{{[0-9]+}} = ptr.load %{{[0-9]+}} | %{{[0-9]+}} : !i32
+// CHECK: state(%[[BUMP:[0-9]+]]) = ptr.store %[[S]], %[[G]] state(%[[RG]])
+// CHECK: %[[W:[0-9]+]], state(%{{[0-9]+}}) = ptr.load %{{[0-9]+}} state(%{{[0-9]+}}) : !i32
 // CHECK: %[[T:[0-9]+]] = addi %[[S]], %[[W]] : !i32
-// CHECK: -> %[[T]] | %{{[0-9]+}}
+// CHECK: -> %[[T]], state(%{{[0-9]+}})
 
 // With the call standing, the load of @h observes the state the call's split
 // hands its chain back on.
 // CALL-LABEL: func.func @main
-// CALL: %{{[0-9]+}} | %[[C:[0-9]+]] = func.call
-// CALL-NEXT: | %{{[0-9]+}}, %{{[0-9]+}}, %[[HC:[0-9]+]] = state.split | %[[C]]
-// CALL-NEXT: ptr.load %{{[0-9]+}} | %[[HC]]
+// CALL: %{{[0-9]+}}, state(%[[C:[0-9]+]]) = func.call
+// CALL-NEXT: state(%{{[0-9]+}}, %{{[0-9]+}}, %[[HC:[0-9]+]]) = state.split state(%[[C]])
+// CALL-NEXT: ptr.load %{{[0-9]+}} state(%[[HC]])

@@ -2,14 +2,14 @@
 
 module {
   %fn_f = func.func @f(%0: !ptr.p, %1: !ptr.p, %2: !i8, %3: !i64) {
-    | %4 = state.entry_state
-    | %5 = ptr.memset %0, %2, %3 | %4
-    | %6 = ptr.memcpy %1, %0, %3 | %5
+    state(%4) = state.entry_state
+    state(%5) = ptr.memset %0, %2, %3 state(%4)
+    state(%6) = ptr.memcpy %1, %0, %3 state(%5)
     func.return
   }
   module_end
 }
 
-// CHECK: | %[[S0:[0-9]+]] = state.entry_state
-// CHECK-NEXT: | %[[S1:[0-9]+]] = ptr.memset %{{[0-9]+}}, %{{[0-9]+}}, %{{[0-9]+}} | %[[S0]]
-// CHECK-NEXT: | %{{[0-9]+}} = ptr.memcpy %{{[0-9]+}}, %{{[0-9]+}}, %{{[0-9]+}} | %[[S1]]
+// CHECK: state(%[[S0:[0-9]+]]) = state.entry_state
+// CHECK-NEXT: state(%[[S1:[0-9]+]]) = ptr.memset %{{[0-9]+}}, %{{[0-9]+}}, %{{[0-9]+}} state(%[[S0]])
+// CHECK-NEXT: state(%{{[0-9]+}}) = ptr.memcpy %{{[0-9]+}}, %{{[0-9]+}}, %{{[0-9]+}} state(%[[S1]])

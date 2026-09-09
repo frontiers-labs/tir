@@ -19,12 +19,12 @@ module {
 }
 // CHECK-LABEL: %{{[0-9]+}} = func.func @f
 // CHECK-NEXT: %{{[0-9]+}} = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
-// CHECK-NEXT: | %[[ENTRY:[0-9]+]] = state.entry_state
-// CHECK-NEXT: | %[[A1:[0-9]+]] = ptr.store %{{[0-9]+}}, %{{[0-9]+}} | %[[ENTRY]]
-// CHECK-NEXT: %{{[0-9]+}} | %[[R1:[0-9]+]] = ptr.load %{{[0-9]+}} | %[[A1]] : !i32
-// CHECK-NEXT: %{{[0-9]+}} | %[[R2:[0-9]+]] = ptr.load %{{[0-9]+}} | %[[A1]] : !i32
+// CHECK-NEXT: state(%[[ENTRY:[0-9]+]]) = state.entry_state
+// CHECK-NEXT: state(%[[A1:[0-9]+]]) = ptr.store %{{[0-9]+}}, %{{[0-9]+}} state(%[[ENTRY]])
+// CHECK-NEXT: %{{[0-9]+}}, state(%[[R1:[0-9]+]]) = ptr.load %{{[0-9]+}} state(%[[A1]]) : !i32
+// CHECK-NEXT: %{{[0-9]+}}, state(%[[R2:[0-9]+]]) = ptr.load %{{[0-9]+}} state(%[[A1]]) : !i32
 // CHECK-NEXT: %{{[0-9]+}} = addi %{{[0-9]+}}, %{{[0-9]+}} : !i32
-// CHECK-NEXT: | %[[J:[0-9]+]] = state.join | %[[R1]], %[[R2]]
-// CHECK-NEXT: | %[[A2:[0-9]+]] = ptr.store %{{[0-9]+}}, %{{[0-9]+}} | %[[J]]
-// CHECK-NEXT: %{{[0-9]+}} | %[[R3:[0-9]+]] = ptr.load %{{[0-9]+}} | %[[A2]] : !i32
-// CHECK-NEXT: -> %{{[0-9]+}} | %[[R3]]
+// CHECK-NEXT: state(%[[J:[0-9]+]]) = state.join state(%[[R1]], %[[R2]])
+// CHECK-NEXT: state(%[[A2:[0-9]+]]) = ptr.store %{{[0-9]+}}, %{{[0-9]+}} state(%[[J]])
+// CHECK-NEXT: %{{[0-9]+}}, state(%[[R3:[0-9]+]]) = ptr.load %{{[0-9]+}} state(%[[A2]]) : !i32
+// CHECK-NEXT: -> %{{[0-9]+}}, state(%[[R3]])

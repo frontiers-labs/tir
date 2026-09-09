@@ -8,7 +8,7 @@
 // CHECK-NOT: scf.loop
 // CHECK: %[[UB:[0-9]+]] = constant {value = 3} : !i32
 // CHECK: %[[ST:[0-9]+]] = constant {value = 1} : !i32
-// CHECK: %[[LB:[0-9]+]] | %{{[0-9]+}} = ptr.load
+// CHECK: %[[LB:[0-9]+]], state(%{{[0-9]+}}) = ptr.load
 // CHECK: scf.for %{{[0-9]+}} = %[[LB]] to %[[UB]] step %[[ST]] (
 // CHECK-NOT: cmpi
 // CHECK-NOT: scf.loop

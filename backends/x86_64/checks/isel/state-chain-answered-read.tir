@@ -14,18 +14,18 @@ module {
     %2 = constant {value = 0} : !i32
     %3 = constant {value = 1} : !i32
     %4 = constant {value = 4} : !i32
-    | %5 = state.entry_state
-    %6, %7 | %8 = scf.for %9 = %2 to %4 step %3 (%10 = %0 | %11 = %5) {
-      | %12 = ptr.store %4, %1 | %11
-      %13 | %14 = ptr.load %1 | %12 : !i32
-      %15 | %16 = ptr.load %1 | %14 : !i32
-      -> %10 | %16
+    state(%5) = state.entry_state
+    %6, %7, state(%8) = scf.for %9 = %2 to %4 step %3 (%10 = %0, state(%11 = %5)) {
+      state(%12) = ptr.store %4, %1 state(%11)
+      %13, state(%14) = ptr.load %1 state(%12) : !i32
+      %15, state(%16) = ptr.load %1 state(%14) : !i32
+      -> %10, state(%16)
     }
-    -> %7 | %8
+    -> %7, state(%8)
   }
   module_end
 }
 
-// CHECK: ^bb{{[0-9]+}}(| %[[ENTERED:[0-9]+]]):
-// CHECK-NEXT: | %[[WRITTEN:[0-9]+]] = x86_64.mov_store32 {{.*}} | %[[ENTERED]]
+// CHECK: ^bb{{[0-9]+}}(state(%[[ENTERED:[0-9]+]])):
+// CHECK-NEXT: state(%[[WRITTEN:[0-9]+]]) = x86_64.mov_store32 {{.*}} state(%[[ENTERED]])
 // CHECK: asm.vbr {{.*}} %[[WRITTEN]] ^bb1

@@ -22,7 +22,7 @@ int pick(int flag, int n) {
 // CHECK: scf.switch
 // CHECK: }
 // CHECK: scf.for %{{[0-9]+}} = %{{[0-9]+}} to %{{[0-9]+}} step %{{[0-9]+}} (
-// CHECK: -> %{{[0-9]+}} | %{{[0-9]+}}
+// CHECK: -> %{{[0-9]+}}, state(%{{[0-9]+}})
 // CHECK: }
 // CHECK-NOT: cfg.
 // CHECK-NOT: scf.loop

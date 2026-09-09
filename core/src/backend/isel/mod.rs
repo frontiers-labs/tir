@@ -1605,8 +1605,7 @@ impl InstructionSelectPass {
             .map(|result| self.emitted_values.get(result).copied().unwrap_or(*result))
             .collect();
         if results != handle.results() {
-            let deps = handle.dep_results().len();
-            context.set_region_results(region, results, deps);
+            context.set_region_results(region, results);
         }
         Ok(())
     }
@@ -1720,8 +1719,8 @@ impl InstructionSelectPass {
             // read is ever answered this way — a write's term is a state
             // nothing before it names, so no other access can stand for it.
             if let (Some(&published), Some(&observed)) = (
-                instance.dep_results().first(),
-                instance.dep_operands().first(),
+                instance.state_results().first(),
+                instance.state_operands().first(),
             ) && !claimed.contains(&published)
                 && instance
                     .clone()
@@ -1938,14 +1937,14 @@ impl InstructionSelectPass {
                 continue;
             };
             let op = context.get_op(op_id);
-            let Some(&observed) = op.dep_operands().first() else {
+            let Some(&observed) = op.state_operands().first() else {
                 continue;
             };
             state_by_class
                 .entry(fs.egraph.find(root))
                 .or_insert(StatePorts {
                     observed,
-                    published: op.dep_results().first().copied(),
+                    published: op.state_results().first().copied(),
                 });
         }
 

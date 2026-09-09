@@ -15,16 +15,13 @@ id_newtype!(RegionId);
 pub enum RegionBody {
     Blocks(Vec<BlockId>),
     Nodes {
-        /// The region's own arguments, values first and dependencies trailing.
-        /// An ordered region has these too — they are its entry block's
-        /// arguments; see [`RegionHandle::ports`].
+        /// The region's own arguments. An ordered region has these too — they
+        /// are its entry block's arguments; see [`RegionHandle::ports`].
         ports: Vec<Value>,
-        dep_ports: u32,
         ops: Vec<OpId>,
         /// The values the region produces, in the order the enclosing operation
-        /// binds them, with the dependencies it hands on trailing.
+        /// binds them.
         results: Vec<ValueId>,
-        dep_results: u32,
     },
 }
 
@@ -55,20 +52,12 @@ impl Region {
         }
     }
 
-    pub(crate) fn new_nodes(
-        ports: Vec<Value>,
-        dep_ports: usize,
-        ops: Vec<OpId>,
-        results: Vec<ValueId>,
-        dep_results: usize,
-    ) -> Region {
+    pub(crate) fn new_nodes(ports: Vec<Value>, ops: Vec<OpId>, results: Vec<ValueId>) -> Region {
         Region {
             body: RegionBody::Nodes {
                 ports,
-                dep_ports: dep_ports as u32,
                 ops,
                 results,
-                dep_results: dep_results as u32,
             },
             parent_op: OpId::invalid(),
         }
@@ -209,9 +198,9 @@ impl RegionHandle {
             .collect()
     }
 
-    /// The region's arguments, values first and dependencies trailing: its own
-    /// for an unordered region, its entry block's for an ordered one — the same
-    /// values either way, so a reader need not know which kind it holds.
+    /// The region's arguments: its own for an unordered region, its entry
+    /// block's for an ordered one — the same values either way, so a reader
+    /// need not know which kind it holds.
     pub fn ports(&self) -> Vec<Value> {
         let context = self.context();
         let (ports, entry) = context.with_region(self.id, |region| match region.body() {
@@ -224,22 +213,21 @@ impl RegionHandle {
         }
     }
 
-    /// The arguments that carry a value.
+    /// The arguments that are not memory states.
     pub fn value_arguments(&self) -> Vec<Value> {
-        let mut ports = self.ports();
-        ports.truncate(ports.len() - self.context().region_dep_counts(self.id).0);
-        ports
+        self.ports()
+            .into_iter()
+            .filter(|port| !port.is_state())
+            .collect()
     }
 
-    /// The arguments that are dependencies.
-    pub fn dep_arguments(&self) -> Vec<Value> {
-        let ports = self.ports();
-        ports[ports.len() - self.context().region_dep_counts(self.id).0..].to_vec()
+    /// The arguments that are memory states.
+    pub fn state_arguments(&self) -> Vec<Value> {
+        self.ports().into_iter().filter(Value::is_state).collect()
     }
 
-    /// The values an unordered region produces, dependencies trailing; empty
-    /// for an ordered one, which binds its results through its terminator
-    /// instead.
+    /// The values an unordered region produces; empty for an ordered one,
+    /// which binds its results through its terminator instead.
     pub fn results(&self) -> Vec<ValueId> {
         self.context()
             .with_region(self.id, |region| match region.body() {
@@ -248,17 +236,14 @@ impl RegionHandle {
             })
     }
 
-    /// The results that carry a value.
+    /// The results that are not memory states.
     pub fn value_results(&self) -> Vec<ValueId> {
-        let mut results = self.results();
-        results.truncate(results.len() - self.context().region_dep_counts(self.id).1);
-        results
+        self.context().values_among(&self.results()).to_vec()
     }
 
-    /// The results that are dependencies.
-    pub fn dep_results(&self) -> Vec<ValueId> {
-        let results = self.results();
-        results[results.len() - self.context().region_dep_counts(self.id).1..].to_vec()
+    /// The results that are memory states.
+    pub fn state_results(&self) -> Vec<ValueId> {
+        self.context().states_among(&self.results()).to_vec()
     }
 
     pub fn iter(&self, context: Context) -> ContextIterator<BlockId> {

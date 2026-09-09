@@ -20,8 +20,8 @@ module {
 }
 
 // CHECK: %{{[0-9]+}} = func.func @f(%[[V:[0-9]+]]: !i32) -> !i32 {
-// CHECK: | %[[ENTRY:[0-9]+]] = state.entry_state
-// CHECK-NEXT: | %[[S:[0-9]+]] = ptr.store %[[V]], %[[A:[0-9]+]] | %[[ENTRY]]
-// CHECK-NEXT: | %[[C:[0-9]+]] = func.call %{{[0-9]+}}(%[[A]] : !ptr.p<!i32>) | %[[S]]
-// CHECK-NEXT: %[[X:[0-9]+]] | %[[R:[0-9]+]] = ptr.load %[[A]] | %[[C]] : !i32
-// CHECK-NEXT: -> %[[X]] | %[[R]]
+// CHECK: state(%[[ENTRY:[0-9]+]]) = state.entry_state
+// CHECK-NEXT: state(%[[S:[0-9]+]]) = ptr.store %[[V]], %[[A:[0-9]+]] state(%[[ENTRY]])
+// CHECK-NEXT: state(%[[C:[0-9]+]]) = func.call %{{[0-9]+}}(%[[A]] : !ptr.p<!i32>) state(%[[S]])
+// CHECK-NEXT: %[[X:[0-9]+]], state(%[[R:[0-9]+]]) = ptr.load %[[A]] state(%[[C]]) : !i32
+// CHECK-NEXT: -> %[[X]], state(%[[R]])

@@ -139,9 +139,9 @@ impl ForOp {
         let context = self.0.context.upgrade();
         let body = context.get_region(Theta::body(self));
         let binding = self.carried();
-        let ports: Vec<ValueId> = body.value_arguments().iter().map(tir::Value::id).collect();
-        let inits = self.value_operands()[binding.operands.clone()].to_vec();
-        let results = body.value_results();
+        let ports: Vec<ValueId> = body.ports().iter().map(tir::Value::id).collect();
+        let inits = self.operands()[binding.operands.clone()].to_vec();
+        let results = body.results();
         // Unverified IR may lack the shape the text relies on; print it whole.
         if ports.is_empty()
             || inits.is_empty()
@@ -150,7 +150,7 @@ impl ForOp {
             return generic_print(fmt, &context, self);
         }
 
-        tir::dependency::print_result_prefix(fmt, &self.0)?;
+        tir::region_format::print_result_prefix(fmt, &self.0)?;
         fmt.write(format!(
             "scf.for %{} = %{} to %{} step %{}",
             ports[0].number(),
@@ -158,14 +158,7 @@ impl ForOp {
             self.upper_bound().number(),
             self.step().number()
         ))?;
-        let dep_ports: Vec<ValueId> = body.dep_arguments().iter().map(tir::Value::id).collect();
-        binding::print_port_bindings(
-            fmt,
-            &ports[1..],
-            &inits[1..],
-            &dep_ports,
-            &self.dep_operands(),
-        )?;
+        binding::print_port_bindings(fmt, &context, &ports[1..], &inits[1..])?;
         if !body.is_nodes() {
             return tir::region_format::print_op_region(fmt, &context, self, 0);
         }
@@ -176,15 +169,7 @@ impl ForOp {
             .filter(|&&value| !context.is_used(value) && !shown.contains(&value))
             .filter_map(|&value| context.get_value(value).defining_op())
             .collect();
-        let dep_results = body.dep_results();
-        tir::region_format::print_nodes_region_with(
-            fmt,
-            &context,
-            &body,
-            &hidden,
-            shown,
-            &dep_results[..dep_results.len() / 2],
-        )
+        tir::region_format::print_nodes_region_with(fmt, &context, &body, &hidden, shown)
     }
 
     fn custom_parse(
@@ -208,9 +193,7 @@ impl ForOp {
         parser.define_value(&counter_name, counter.id());
         let mut ports = vec![counter.clone()];
         ports.extend(bound.ports.iter().cloned());
-        let body = parser
-            .parse_region_with_entry_args_and_deps(context, ports, bound.dep_ports.clone())?
-            .id();
+        let body = parser.parse_region_with_entry_args(context, ports)?.id();
         if context.get_region(body).is_nodes() {
             materialize_counted_shape(context, body, counter.id(), ub, step, &bound)
                 .map_err(|error| (parser.span(), error))?;
@@ -218,16 +201,13 @@ impl ForOp {
 
         let mut result_types = vec![counter_type];
         result_types.extend(bound.ports.iter().map(tir::Value::ty));
-        let mut builder = ForOpBuilder::new(context)
+        let builder = ForOpBuilder::new(context)
             .lb(lb)
             .inits(bound.inits)
             .ub(ub)
             .step(step)
             .body(body)
             .result_types(result_types);
-        for dep in bound.dep_inits {
-            builder = builder.dep_operand(dep).dep_result();
-        }
         Ok(Box::new(builder.build()))
     }
 }
@@ -239,7 +219,7 @@ fn generic_print(
     context: &Context,
     op: &ForOp,
 ) -> Result<(), std::fmt::Error> {
-    tir::dependency::print_result_prefix(fmt, &op.0)?;
+    tir::region_format::print_result_prefix(fmt, &op.0)?;
     fmt.write("scf.for")?;
     tir::region_format::print_region(fmt, context, &context.get_region(Theta::body(op)))
 }
@@ -256,14 +236,12 @@ fn materialize_counted_shape(
     bound: &PortBindings,
 ) -> Result<(), Error> {
     let region = context.get_region(body);
-    let (written, written_deps) = (region.value_results(), region.dep_results());
-    if written.len() != bound.ports.len() || written_deps.len() != bound.dep_ports.len() {
+    let written = region.results();
+    if written.len() != bound.ports.len() {
         return Err(Error::VerificationError(format!(
-            "scf.for carries {} values and {} dependencies but its body names {} and {}",
+            "scf.for carries {} values but its body names {}",
             bound.ports.len(),
-            bound.dep_ports.len(),
-            written.len(),
-            written_deps.len()
+            written.len()
         )));
     }
     let existing = |wanted: &dyn Fn(&tir::OpHandle) -> bool| {
@@ -307,9 +285,7 @@ fn materialize_counted_shape(
     results.extend(written);
     results.push(counter);
     results.extend(bound.ports.iter().map(tir::Value::id));
-    results.extend(written_deps);
-    results.extend(bound.dep_ports.iter().map(tir::Value::id));
-    context.set_region_results(body, results, 2 * bound.dep_ports.len());
+    context.set_region_results(body, results);
     Ok(())
 }
 
@@ -339,9 +315,9 @@ fn verify_ordered_body(context: &Context, op: &ForOp) -> Result<(), Error> {
     if body.is_nodes() {
         return Ok(());
     }
-    let ports = body.value_arguments();
+    let ports = body.ports();
     let binding = op.carried();
-    let inits = &op.value_operands()[binding.operands.clone()];
+    let inits = &op.operands()[binding.operands.clone()];
     let fail = |message: String| Err(Error::VerificationError(message));
     if ports.len() != inits.len() {
         return fail(format!(

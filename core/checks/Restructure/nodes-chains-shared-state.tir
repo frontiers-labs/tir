@@ -21,13 +21,13 @@ module {
 }
 
 // CHECK: %{{[0-9]+}} = func.func @f(%[[V:[0-9]+]]: !i32) -> !i32 {
-// CHECK: | %[[ENTRY:[0-9]+]] = state.entry_state
-// CHECK-NEXT: | %[[EG:[0-9]+]], %[[EH:[0-9]+]], %[[EW:[0-9]+]] = state.split | %[[ENTRY]]
-// CHECK-NEXT: | %[[J0:[0-9]+]] = state.join | %[[EG]], %[[EW]]
-// CHECK-NEXT: | %[[SG:[0-9]+]] = ptr.store %[[V]], %{{[0-9]+}} | %[[J0]]
-// CHECK-NEXT: | %[[PG:[0-9]+]], %[[PW:[0-9]+]] = state.split | %[[SG]]
-// CHECK-NEXT: | %[[J1:[0-9]+]] = state.join | %[[PW]], %[[PG]], %[[EH]]
-// CHECK-NEXT: | %[[C1:[0-9]+]] = func.call %{{[0-9]+}}() | %[[J1]]
-// CHECK-NEXT: | %[[C2:[0-9]+]] = func.call %{{[0-9]+}}() | %[[C1]]
-// CHECK-NEXT: | %{{[0-9]+}}, %{{[0-9]+}}, %[[QH:[0-9]+]] = state.split | %[[C2]]
-// CHECK-NEXT: %[[Y:[0-9]+]] | %{{[0-9]+}} = ptr.load %{{[0-9]+}} | %[[QH]] : !i32
+// CHECK: state(%[[ENTRY:[0-9]+]]) = state.entry_state
+// CHECK-NEXT: state(%[[EG:[0-9]+]], %[[EH:[0-9]+]], %[[EW:[0-9]+]]) = state.split state(%[[ENTRY]])
+// CHECK-NEXT: state(%[[J0:[0-9]+]]) = state.join state(%[[EG]], %[[EW]])
+// CHECK-NEXT: state(%[[SG:[0-9]+]]) = ptr.store %[[V]], %{{[0-9]+}} state(%[[J0]])
+// CHECK-NEXT: state(%[[PG:[0-9]+]], %[[PW:[0-9]+]]) = state.split state(%[[SG]])
+// CHECK-NEXT: state(%[[J1:[0-9]+]]) = state.join state(%[[PW]], %[[PG]], %[[EH]])
+// CHECK-NEXT: state(%[[C1:[0-9]+]]) = func.call %{{[0-9]+}}() state(%[[J1]])
+// CHECK-NEXT: state(%[[C2:[0-9]+]]) = func.call %{{[0-9]+}}() state(%[[C1]])
+// CHECK-NEXT: state(%{{[0-9]+}}, %{{[0-9]+}}, %[[QH:[0-9]+]]) = state.split state(%[[C2]])
+// CHECK-NEXT: %[[Y:[0-9]+]], state(%{{[0-9]+}}) = ptr.load %{{[0-9]+}} state(%[[QH]]) : !i32

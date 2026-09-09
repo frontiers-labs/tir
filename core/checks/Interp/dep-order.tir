@@ -5,17 +5,17 @@
 
 module {
   %fn_main = func.func @main() -> !i32 {
-    %p | %s0 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    %p, state(%s0) = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
     %one = constant {value = 1} : !i32
     %two = constant {value = 2} : !i32
     %ten = constant {value = 10} : !i32
-    | %s1 = ptr.store %one, %p | %s0
-    %x | %s2 = ptr.load %p | %s1 : !i32
-    | %s3 = ptr.store %two, %p | %s2
-    %final | %s4 = ptr.load %p | %s3 : !i32
+    state(%s1) = ptr.store %one, %p state(%s0)
+    %x, state(%s2) = ptr.load %p state(%s1) : !i32
+    state(%s3) = ptr.store %two, %p state(%s2)
+    %final, state(%s4) = ptr.load %p state(%s3) : !i32
     %scaled = muli %x, %ten : !i32
     %sum = addi %scaled, %final : !i32
-    func.return %sum | %s4
+    func.return %sum state(%s4)
   }
   module_end
 }

@@ -12,7 +12,7 @@ module {
   module_end
 }
 // CHECK-LABEL: %{{[0-9]+}} = func.func @c(%[[DST:[0-9]+]]: !ptr.p, %[[SRC:[0-9]+]]: !ptr.p, %[[BYTE:[0-9]+]]: !i8, %[[LEN:[0-9]+]]: !i64)
-// CHECK-NEXT: | %[[ENTRY:[0-9]+]] = state.entry_state
-// CHECK-NEXT: | %[[S1:[0-9]+]] = ptr.memset %[[DST]], %[[BYTE]], %[[LEN]] | %[[ENTRY]]
-// CHECK-NEXT: | %[[S2:[0-9]+]] = ptr.memcpy %[[SRC]], %[[DST]], %[[LEN]] | %[[S1]]
-// CHECK-NEXT: -> | %[[S2]]
+// CHECK-NEXT: state(%[[ENTRY:[0-9]+]]) = state.entry_state
+// CHECK-NEXT: state(%[[S1:[0-9]+]]) = ptr.memset %[[DST]], %[[BYTE]], %[[LEN]] state(%[[ENTRY]])
+// CHECK-NEXT: state(%[[S2:[0-9]+]]) = ptr.memcpy %[[SRC]], %[[DST]], %[[LEN]] state(%[[S1]])
+// CHECK-NEXT: -> state(%[[S2]])

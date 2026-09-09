@@ -6,20 +6,20 @@
 
 module {
   %fn_main = func.func @main(%0: !i32) -> !i32 {
-    %1 | %2 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
-    %3 | %4 = scf.loop (%5 = %0 | %6 = %2) {
-      | %7 = ptr.store %5, %1 | %6
+    %1, state(%2) = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    %3, state(%4) = scf.loop (%5 = %0, state(%6 = %2)) {
+      state(%7) = ptr.store %5, %1 state(%6)
       %8 = constant {value = 0} : !i1
-      -> %8, %5, %5 | %7, %6
+      -> %8, %5, %5, state(%7, %6)
     }
-    func.return %3 | %4
+    func.return %3 state(%4)
   }
   module_end
 }
 
-// CHECK: %[[R:[0-9]+]] | %[[RD:[0-9]+]] = scf.loop (%[[P:[0-9]+]] = %{{[0-9]+}} | %[[D:[0-9]+]] = %{{[0-9]+}}) {
-// CHECK-NEXT: | %[[S:[0-9]+]] = ptr.store %[[P]], %{{[0-9]+}} | %[[D]]
+// CHECK: %[[R:[0-9]+]], state(%[[RD:[0-9]+]]) = scf.loop (%[[P:[0-9]+]] = %{{[0-9]+}}, state(%[[D:[0-9]+]] = %{{[0-9]+}})) {
+// CHECK-NEXT: state(%[[S:[0-9]+]]) = ptr.store %[[P]], %{{[0-9]+}} state(%[[D]])
 // CHECK-NEXT: %[[C:[0-9]+]] = constant {value = 0} : !i1
-// CHECK-NEXT: -> %[[C]], %[[P]], %[[P]] | %[[S]], %[[D]]
+// CHECK-NEXT: -> %[[C]], %[[P]], %[[P]], state(%[[S]], %[[D]])
 // CHECK-NEXT: }
-// CHECK-NEXT: func.return %[[R]] | %[[RD]]
+// CHECK-NEXT: func.return %[[R]] state(%[[RD]])

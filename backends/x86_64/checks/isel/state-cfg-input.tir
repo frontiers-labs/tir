@@ -19,9 +19,9 @@ module {
   module_end
 }
 
-// CHECK: | %[[ENTRY:[0-9]+]] = state.entry_state
-// CHECK: ^{{bb[0-9]+}}(| %[[ARM:[0-9]+]]):
-// CHECK: | %[[STORED:[0-9]+]] = x86_64.mov_store32 {{.*}} | %[[ARM]]
+// CHECK: state(%[[ENTRY:[0-9]+]]) = state.entry_state
+// CHECK: ^{{bb[0-9]+}}(state(%[[ARM:[0-9]+]])):
+// CHECK: state(%[[STORED:[0-9]+]]) = x86_64.mov_store32 {{.*}} state(%[[ARM]])
 // CHECK-NEXT: asm.vbr %[[STORED]] ^[[JOIN:bb[0-9]+]]
-// CHECK: ^[[JOIN]](| %[[MERGED:[0-9]+]]):
-// CHECK-NEXT: | %{{[0-9]+}} = x86_64.mov_load32 {{.*}} | %[[MERGED]]
+// CHECK: ^[[JOIN]](state(%[[MERGED:[0-9]+]])):
+// CHECK-NEXT: state(%{{[0-9]+}}) = x86_64.mov_load32 {{.*}} state(%[[MERGED]])

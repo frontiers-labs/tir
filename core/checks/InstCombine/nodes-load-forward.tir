@@ -23,6 +23,6 @@ module {
 // CHECK-NOT: ptr.
 // CHECK: %[[R:[0-9]+]] = addi %[[X]], %[[X]] : !i32
 // CHECK-NOT: ptr.
-// CHECK: -> %[[R]] | %{{[0-9]+}}
+// CHECK: -> %[[R]], state(%{{[0-9]+}})
 
 // VALUE: i32 10

@@ -172,24 +172,24 @@ pub trait Operation: 'static + Send + Sync + Any + Verifiable + OpDefVerifiable 
         self.handle().operands()
     }
 
-    /// The operands that carry a value; see [`OpHandle::value_operands`].
+    /// The operands that are not memory states; see [`OpHandle::value_operands`].
     fn value_operands(&self) -> ValueIds {
         self.handle().value_operands()
     }
 
-    /// The trailing operands that are dependencies; see [`OpHandle::dep_operands`].
-    fn dep_operands(&self) -> ValueIds {
-        self.handle().dep_operands()
+    /// The operands that are memory states; see [`OpHandle::state_operands`].
+    fn state_operands(&self) -> ValueIds {
+        self.handle().state_operands()
     }
 
-    /// The results that carry a value; see [`OpHandle::value_results`].
+    /// The results that are not memory states; see [`OpHandle::value_results`].
     fn value_results(&self) -> ValueIds {
         self.handle().value_results()
     }
 
-    /// The trailing results that are dependencies; see [`OpHandle::dep_results`].
-    fn dep_results(&self) -> ValueIds {
-        self.handle().dep_results()
+    /// The results that are memory states; see [`OpHandle::state_results`].
+    fn state_results(&self) -> ValueIds {
+        self.handle().state_results()
     }
 
     fn attributes(&self) -> Vec<crate::attributes::NamedAttribute> {
@@ -243,7 +243,7 @@ pub fn verify_op_tree(context: &Context, op_id: OpId) -> Result<(), Error> {
 
 /// Checks the fork/join discipline memory state follows.
 ///
-/// A dependency names the memory at one point in the program, so at most one
+/// A state names the memory at one point in the program, so at most one
 /// operation may *change* it: a second would describe two futures for one memory.
 /// Everything else naming it observes it — a read, which leaves memory as it found
 /// it, or a [`crate::state::JoinOp`], which names the memory its inputs merge into
@@ -263,8 +263,8 @@ pub(crate) fn verify_state_forks(context: &Context, op_id: OpId) -> Result<(), E
     let mut worklist = vec![op_id];
     while let Some(op_id) = worklist.pop() {
         let instance = context.get_op(op_id);
-        let observes = observes_only(&instance);
-        for operand in instance.dep_operands() {
+        let observes = !changes_memory(&instance);
+        for operand in instance.state_operands() {
             let taken = consumers.entry(operand).or_default();
             if !taken.iter().any(|(taker, _)| *taker == op_id) {
                 taken.push((op_id, observes));
@@ -277,7 +277,7 @@ pub(crate) fn verify_state_forks(context: &Context, op_id: OpId) -> Result<(), E
     for (value, taken) in &consumers {
         if taken.len() > 1 && !taken.iter().all(|(_, observes)| *observes) {
             return Err(Error::VerificationError(format!(
-                "dependency %{} is both observed and changed",
+                "state %{} is both observed and changed",
                 value.number()
             )));
         }
@@ -285,67 +285,13 @@ pub(crate) fn verify_state_forks(context: &Context, op_id: OpId) -> Result<(), E
     Ok(())
 }
 
-/// Whether `op` leaves the memory it names as it found it. An operation declaring
-/// both memory interfaces writes the extent it reads, so it is no observer.
-///
-/// A machine instruction states what it does to memory in its
-/// [`InstrInfo`](crate::backend::InstrInfo) effects; the memory interfaces are
-/// what a mid-end operation has instead. One rule, read off whichever the
-/// operation carries, so the discipline is the same on both sides of selection.
-pub(crate) fn observes_only(op: &OpHandle) -> bool {
-    // A terminator carries the memory along the edge it takes, or hands it
-    // back; it changes nothing.
-    if op.is::<crate::state::JoinOp>() || op.has_interface::<dyn crate::Terminator>() {
-        return true;
-    }
-    if let Some(machine) = op
-        .clone()
-        .as_interface::<dyn crate::backend::MachineInstruction>()
-    {
-        // Anything that does not write cannot have changed the memory a state
-        // names: a load leaves it as it found it, and a branch only carries it
-        // along the edge it takes.
-        return !machine.info().effects.writes;
-    }
-    op.has_interface::<dyn crate::MemoryRead>() && !op.has_interface::<dyn crate::MemoryWrite>()
-}
-
-/// Checks that every port list keeps values and dependencies apart: a dependency
-/// sits only in a dependency partition, and a value only in a value one. The
-/// partitions are counts, so this is what keeps the counts honest against the
-/// values they name — across the op's own ports and its regions' arguments.
-fn verify_dep_partitions(context: &Context, instance: &OpHandle) -> Result<(), Error> {
-    let check = |values: &[crate::ValueId], dependencies: bool, kind: &str| {
-        for value in values {
-            if !context.has_value(*value) || context.get_value(*value).is_state() == dependencies {
-                continue;
-            }
-            return Err(Error::VerificationError(if dependencies {
-                format!("value %{} sits in a dependency {kind} slot", value.number())
-            } else {
-                format!("dependency %{} sits in a value {kind} slot", value.number())
-            }));
-        }
-        Ok(())
-    };
-    check(&instance.value_operands(), false, "operand")?;
-    check(&instance.dep_operands(), true, "operand")?;
-    check(&instance.value_results(), false, "result")?;
-    check(&instance.dep_results(), true, "result")?;
-    let ids = |values: Vec<crate::Value>| values.iter().map(crate::Value::id).collect::<Vec<_>>();
-    for region in instance.regions() {
-        let region = context.get_region(region);
-        check(&ids(region.value_arguments()), false, "argument")?;
-        check(&ids(region.dep_arguments()), true, "argument")?;
-        check(&region.value_results(), false, "result")?;
-        check(&region.dep_results(), true, "result")?;
-        for block in region.block_ids() {
-            let block = context.get_block(block);
-            check(&ids(block.value_arguments()), false, "argument")?;
-            check(&ids(block.dep_arguments()), true, "argument")?;
-        }
-    }
-    Ok(())
+/// Whether `op` changes the memory it names: what its [`crate::MemoryState`]
+/// says, and nothing for an op that only carries states along, such as a
+/// terminator or a loop.
+pub(crate) fn changes_memory(op: &OpHandle) -> bool {
+    op.clone()
+        .as_interface::<dyn crate::MemoryState>()
+        .is_some_and(|memory| memory.changes_memory())
 }
 
 fn verify_op_tree_ops(context: &Context, op_id: OpId) -> Result<(), Error> {
@@ -357,7 +303,6 @@ fn verify_op_tree_ops(context: &Context, op_id: OpId) -> Result<(), Error> {
 
     let instance = context.get_op(op_id);
     verify_scoped_metadata(&instance)?;
-    verify_dep_partitions(context, &instance)?;
     instance.clone().as_dyn_op().verify(context)?;
 
     for region_id in instance.regions().to_vec() {
@@ -483,8 +428,8 @@ pub fn verify_opdef_operands(
     spec: &OpDefSpec,
 ) -> Result<(), crate::Error> {
     verify_region_kinds(context, instance, op_name, spec)?;
-    let operands = &instance.value_operands();
-    let results = instance.value_results();
+    let operands = &instance.operands();
+    let results = instance.results();
     let operand_fields = spec.schema.operands;
     let result_fields = spec.schema.results;
 
@@ -524,7 +469,9 @@ pub fn verify_opdef_operands(
 
         let mut cursor = 0usize;
         for (idx, field) in operand_fields.iter().enumerate() {
-            if !field.variadic && segment_sizes[idx] != 1 {
+            let optional = field.ty.starts_with('?');
+            if !field.variadic && segment_sizes[idx] != 1 && !(optional && segment_sizes[idx] == 0)
+            {
                 return Err(crate::Error::VerificationError(format!(
                     "{op_name} operand '{}' takes one value, got {}",
                     field.name, segment_sizes[idx]
@@ -575,28 +522,28 @@ pub fn verify_opdef_operands(
         }
     }
 
-    let value_results_len = results.len();
+    let results_len = results.len();
 
     let variadic_result = result_fields.iter().any(|field| field.variadic);
     if variadic_result {
         // A variadic result declares one spec covering every result value.
     } else if result_fields.iter().any(|field| field.ty.starts_with('?')) {
-        if value_results_len > result_fields.len() {
+        if results_len > result_fields.len() {
             return Err(crate::Error::VerificationError(format!(
                 "{op_name} expects at most {} results, got {}",
                 result_fields.len(),
-                value_results_len
+                results_len
             )));
         }
-    } else if value_results_len != result_fields.len() {
+    } else if results_len != result_fields.len() {
         return Err(crate::Error::VerificationError(format!(
             "{op_name} expects {} results, got {}",
             result_fields.len(),
-            value_results_len
+            results_len
         )));
     }
 
-    for result_index in 0..value_results_len {
+    for result_index in 0..results_len {
         let idx = if variadic_result { 0 } else { result_index };
         let field = &result_fields[idx];
         verify_def_value(
@@ -738,32 +685,25 @@ impl OpNameId {
 }
 
 /// What a generated builder accumulates beside its declared ports: the
-/// attributes, and the dependencies the op observes and leaves. One field of
-/// one type, so every builder drops exactly one thing it did not declare.
+/// attributes. One field of one type, so every builder drops exactly one
+/// thing it did not declare.
 #[derive(Default)]
 pub struct NewOpParts {
     pub attributes: Vec<crate::attributes::NamedAttribute>,
-    pub dep_operands: Vec<ValueId>,
-    pub dep_results: usize,
 }
 
 /// An operation as it is described before the context stores it: the parts a
 /// builder assembles, handed to [`crate::Context::add_operation`] in one go.
 pub struct NewOp {
     pub(crate) name: OpNameId,
-    /// Operands, then results: the values first, then the trailing
-    /// dependencies the counts below say how many of each list are.
     pub(crate) operands: Vec<ValueId>,
     pub(crate) results: Vec<ValueId>,
-    pub(crate) dep_operands: u16,
-    pub(crate) dep_results: u16,
     pub(crate) regions: Vec<RegionId>,
     pub(crate) attributes: Vec<crate::attributes::NamedAttribute>,
 }
 
 impl NewOp {
-    /// The op a builder assembled: its value ports, and in `parts` the
-    /// attributes and the dependencies trailing those ports.
+    /// The op a builder assembled: its ports, and in `parts` the attributes.
     pub fn new<T: Operation>(
         context: ContextRef,
         operands: Vec<ValueId>,
@@ -785,22 +725,16 @@ impl NewOp {
     fn assemble(
         identity: (&'static str, &'static str),
         context: ContextRef,
-        mut operands: Vec<ValueId>,
-        mut results: Vec<ValueId>,
+        operands: Vec<ValueId>,
+        results: Vec<ValueId>,
         regions: Vec<RegionId>,
         parts: NewOpParts,
     ) -> Self {
-        let context = context.upgrade();
-        let name = context.intern_op_name(identity.0, identity.1);
-        let dep_operands = parts.dep_operands.len() as u16;
-        operands.extend(parts.dep_operands);
-        results.extend((0..parts.dep_results).map(|_| context.create_state()));
+        let name = context.upgrade().intern_op_name(identity.0, identity.1);
         NewOp {
             name,
             operands,
             results,
-            dep_operands,
-            dep_results: parts.dep_results as u16,
             regions,
             attributes: parts.attributes,
         }
@@ -821,20 +755,9 @@ impl NewOp {
             name,
             operands,
             results,
-            dep_operands: 0,
-            dep_results: 0,
             regions,
             attributes,
         }
-    }
-
-    /// Mark the trailing `operands` operands and `results` results already in
-    /// the lists as dependencies: what a copy of an op does with values it has
-    /// already minted.
-    pub(crate) fn with_dependency_counts(mut self, operands: usize, results: usize) -> Self {
-        self.dep_operands = operands as u16;
-        self.dep_results = results as u16;
-        self
     }
 }
 
@@ -852,13 +775,10 @@ pub struct OpInstance {
     pub id: OpId,
     pub(crate) name: OpNameId,
     pub(crate) run: RunId,
-    /// Every operand, the trailing `dep_operand_count` of which are
-    /// dependencies; likewise the results.
     pub(crate) operand_count: u16,
     pub(crate) result_count: u16,
-    pub(crate) dep_operand_count: u16,
-    pub(crate) dep_result_count: u16,
     pub(crate) region_count: u16,
+    pub(crate) _pad: u16,
     pub(crate) attrs: AttrRunId,
     pub(crate) attr_count: u16,
     /// Structural version, bumped along the spine by every tree edit; see
@@ -918,40 +838,32 @@ impl OpHandle {
         self.context.upgrade().op_generation(self.id) == self.generation
     }
 
-    /// Every operand: the values, then the trailing dependencies.
     pub fn operands(&self) -> ValueIds {
         self.context().op_operands(self.id)
     }
 
-    /// Every result: the values, then the trailing dependencies.
     pub fn results(&self) -> ValueIds {
         self.context().op_results(self.id)
     }
 
-    /// The operands that carry a value.
+    /// The operands that are not memory states.
     pub fn value_operands(&self) -> ValueIds {
-        let mut operands = self.operands();
-        operands.truncate(operands.len() - self.context().op_dep_counts(self.id).0);
-        operands
+        self.context().values_among(&self.operands())
     }
 
-    /// The trailing operands that are dependencies: the chains this op observes.
-    pub fn dep_operands(&self) -> ValueIds {
-        let operands = self.operands();
-        operands[operands.len() - self.context().op_dep_counts(self.id).0..].into()
+    /// The operands that are memory states: the chains this op observes.
+    pub fn state_operands(&self) -> ValueIds {
+        self.context().states_among(&self.operands())
     }
 
-    /// The results that carry a value.
+    /// The results that are not memory states.
     pub fn value_results(&self) -> ValueIds {
-        let mut results = self.results();
-        results.truncate(results.len() - self.context().op_dep_counts(self.id).1);
-        results
+        self.context().values_among(&self.results())
     }
 
-    /// The trailing results that are dependencies: the chains this op leaves.
-    pub fn dep_results(&self) -> ValueIds {
-        let results = self.results();
-        results[results.len() - self.context().op_dep_counts(self.id).1..].into()
+    /// The results that are memory states: the chains this op leaves behind.
+    pub fn state_results(&self) -> ValueIds {
+        self.context().states_among(&self.results())
     }
 
     pub fn regions(&self) -> RegionIds {

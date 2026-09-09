@@ -19,8 +19,8 @@ use crate::analysis::affine::{AffineForm, AffineView, body_ops, carried};
 use crate::attributes::Predicate;
 use crate::builtin::{IntegerType, ops as b};
 use crate::{
-    Context, CountedLoop, OpHandle, OpId, Operation, OperationRef, PassError, RegionId, Rewriter,
-    Theta, TypeId, Value, ValueId, scf,
+    Context, CountedLoop, OpId, Operation, OperationRef, PassError, RegionId, Rewriter, Theta,
+    TypeId, Value, ValueId, scf,
 };
 
 use super::schedule::{Candidate, Level, divides_evenly, levels};
@@ -127,7 +127,7 @@ impl Nest {
         let body = *context.get_op(innermost.op).regions().last()?;
         body_ops(context, innermost.op)?;
 
-        let shape = shape(context, &root)?;
+        let shape = carried(context, &root)?;
         let root_ports = ports(context, view.root, view.loops[0].counter)?;
         // The counter the nest leaves behind is not a counter of the rebuilt
         // nest, so nothing may be reading it.
@@ -173,44 +173,6 @@ impl Nest {
     }
 }
 
-/// Every port a loop carries, values then dependencies, however the loop
-/// declares them: what the body reads each on, what the loop is entered on,
-/// what the next iteration takes, and what the loop produces.
-struct Shape {
-    args: Vec<ValueId>,
-    inits: Vec<ValueId>,
-    latched: Vec<ValueId>,
-    finals: Vec<ValueId>,
-}
-
-fn shape(context: &Context, op: &OpHandle) -> Option<Shape> {
-    let values = carried(context, op)?;
-    if let Some(theta) = op.clone().as_interface::<dyn Theta>() {
-        let region = context.get_region(theta.body());
-        let dep_results = region.dep_results();
-        let mut args = values.args;
-        args.extend(region.dep_arguments().iter().map(Value::id));
-        let mut inits = values.inits;
-        inits.extend(op.dep_operands());
-        let mut latched = values.latched;
-        latched.extend(dep_results[..dep_results.len() / 2].iter().copied());
-        let mut finals = values.finals;
-        finals.extend(op.dep_results());
-        return Some(Shape {
-            args,
-            inits,
-            latched,
-            finals,
-        });
-    }
-    Some(Shape {
-        args: values.args,
-        inits: values.inits,
-        latched: values.latched,
-        finals: values.finals,
-    })
-}
-
 /// How a loop's carried ports divide: the ports counting with the loop, and
 /// the memory chains. A port that is neither is a recurrence the rebuild would
 /// have to carry through a new loop order, which v1 does not do.
@@ -222,15 +184,14 @@ struct Ports {
 
 fn ports(context: &Context, op: OpId, counter: Option<ValueId>) -> Option<Ports> {
     let handle = context.get_op(op);
-    let deps = handle.dep_results().len();
-    let arguments = shape(context, &handle)?.args;
+    let arguments = carried(context, &handle)?.args;
     let counting = crate::analysis::affine::build::counter_ports(context, &handle);
     let mut states = Vec::new();
     let mut counters = Vec::new();
     for (port, &argument) in arguments.iter().enumerate() {
         if Some(argument) == counter || counting.contains(&argument) {
             counters.push(port);
-        } else if port >= arguments.len() - deps {
+        } else if context.get_value(argument).is_state() {
             states.push(port);
         } else {
             return None;
@@ -251,12 +212,12 @@ fn chains_through(context: &Context, view: &AffineView, depth: usize, outer: &Po
     let inner = view.loops[depth + 1].op;
     let (Some(ops), Some(outer_shape)) = (
         body_ops(context, level.op),
-        shape(context, &context.get_op(level.op)),
+        carried(context, &context.get_op(level.op)),
     ) else {
         return false;
     };
     let yielded = outer_shape.latched;
-    let Some(inner_shape) = shape(context, &context.get_op(inner)) else {
+    let Some(inner_shape) = carried(context, &context.get_op(inner)) else {
         return false;
     };
     let Some(ports) = ports(context, inner, view.loops[depth + 1].counter) else {
@@ -502,20 +463,17 @@ impl<'a> Lowering<'a> {
                 .map(|_| context.create_value(TypeId::STATE, None)),
         );
         let dep_ports: Vec<ValueId> = ports[1..].iter().map(Value::id).collect();
-        let body = context
-            .create_nodes_region(ports, states.len(), vec![], vec![], 0)
-            .id();
-        let mut builder = scf::ForOpBuilder::new(context)
+        let body = context.create_nodes_region(ports, vec![], vec![]).id();
+        let mut result_types = vec![ty];
+        result_types.extend(states.iter().map(|_| TypeId::STATE));
+        let loop_op = scf::ForOpBuilder::new(context)
             .lb(lower)
-            .inits(vec![])
+            .inits(states)
             .ub(upper)
             .step(step)
             .body(body)
-            .result_types(vec![ty]);
-        for &state in &states {
-            builder = builder.dep_operand(state).dep_result();
-        }
-        let loop_op = builder.build();
+            .result_types(result_types)
+            .build();
         self.context.add(site, loop_op.id());
         if key == dimension {
             self.built.insert(dimension, loop_op.id());
@@ -533,11 +491,12 @@ impl<'a> Lowering<'a> {
         context.add(body, compare.id());
         let advance = b::addi(context, counter.id(), step, ty).build();
         context.add(body, advance.id());
-        let mut results = vec![compare.result(), advance.result(), counter.id()];
+        let mut results = vec![compare.result(), advance.result()];
         results.extend(left);
+        results.push(counter.id());
         results.extend(dep_ports);
-        context.set_region_results(body, results, 2 * states.len());
-        Ok(context.get_op(loop_op.id()).dep_results().to_vec())
+        context.set_region_results(body, results);
+        Ok(context.get_op(loop_op.id()).state_results().to_vec())
     }
 
     /// The bindings a copy of the innermost body reads its ports through: every
@@ -586,12 +545,17 @@ impl<'a> Lowering<'a> {
         let bindings = self.body_bindings(bound, &states);
         let (ops, results) =
             crate::clone::clone_nodes_ops_into(self.context, self.nest.body, &bindings, site);
-        let values = self
-            .context
-            .get_region(self.nest.body)
-            .value_results()
-            .len();
-        let left = results[values..values + states.len()].to_vec();
+        // The chains the copy carries on are the states its loop named among
+        // what the next iteration takes.
+        let body = self.context.get_region(self.nest.body);
+        let owner = self.context.get_op(body.parent_op().expect("a loop body"));
+        let binding = crate::binding::declared(&owner).expect("a loop");
+        let original = body.results();
+        let left: Vec<ValueId> = binding
+            .continue_
+            .filter(|&index| self.context.get_value(original[index]).is_state())
+            .map(|index| results[index])
+            .collect();
         // The copy's own comparison and latch count a loop that is gone.
         erase_unread(self.context, rewriter, &ops)?;
         Ok(left)
@@ -623,7 +587,7 @@ pub(super) fn erase_unread(
     for &op in ops.iter().rev() {
         let instance = context.get_op(op);
         if instance.regions().is_empty()
-            && instance.dep_results().is_empty()
+            && instance.state_results().is_empty()
             && !instance.results().is_empty()
             && crate::passes::is_pure_value(&instance)
             && instance
@@ -693,7 +657,7 @@ fn counted_shape(context: &Context, op: OpId) -> Vec<OpId> {
         ops.extend(context.get_value(theta.predicate()).defining_op());
     }
     let counting = crate::analysis::affine::build::counter_ports(context, &handle);
-    if let Some(shape) = shape(context, &handle) {
+    if let Some(shape) = carried(context, &handle) {
         for (port, argument) in shape.args.iter().enumerate() {
             if counting.contains(argument) {
                 ops.extend(context.get_value(shape.latched[port]).defining_op());

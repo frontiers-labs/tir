@@ -31,15 +31,15 @@ double call_external_pair(void) {
 // a tuple of two f64: each function's result is that value, not an address.
 
 // CHECK: %{{[0-9]+}} = func.func @make_scalar(%{{[0-9]+}}: !f64) -> !f64 {
-// CHECK: %[[SCALAR:[0-9]+]] | %[[SCALAR_DEP:[0-9]+]] = ptr.load %{{[0-9]+}} | %{{[0-9]+}} : !f64
-// CHECK-NEXT: | %[[SCALAR_OUT:[0-9]+]] = state.join | %{{[0-9]+}}, %{{[0-9]+}}, %[[SCALAR_DEP]], %{{[0-9]+}}
-// CHECK-NEXT: -> %[[SCALAR]] | %[[SCALAR_OUT]]
+// CHECK: %[[SCALAR:[0-9]+]], state(%[[SCALAR_DEP:[0-9]+]]) = ptr.load %{{[0-9]+}} state(%{{[0-9]+}}) : !f64
+// CHECK-NEXT: state(%[[SCALAR_OUT:[0-9]+]]) = state.join state(%{{[0-9]+}}, %{{[0-9]+}}, %[[SCALAR_DEP]], %{{[0-9]+}})
+// CHECK-NEXT: -> %[[SCALAR]], state(%[[SCALAR_OUT]])
 // CHECK: %{{[0-9]+}} = func.func @make_pair(%{{[0-9]+}}: !f64, %{{[0-9]+}}: !f64) -> !tuple<!f64, !f64> {
 // CHECK: %[[PAIR:[0-9]+]] = make_tuple %{{[0-9]+}}, %{{[0-9]+}} : !tuple<!f64, !f64>
-// CHECK: -> %[[PAIR]] |
+// CHECK: -> %[[PAIR]], state(
 // CHECK: %{{[0-9]+}} = func.declare @external_pair(!f64, !f64) -> !tuple<!f64, !f64>
 // CHECK: %{{[0-9]+}} = func.func @call_external_pair() -> !f64 {
-// CHECK: %[[CALL:[0-9]+]] | %{{[0-9]+}} = func.call %{{[0-9]+}}({{.*}}) -> !tuple<!f64, !f64>
+// CHECK: %[[CALL:[0-9]+]], state(%{{[0-9]+}}) = func.call %{{[0-9]+}}({{.*}}) -> !tuple<!f64, !f64>
 // CHECK: tuple_get %[[CALL]] {index = 0} : !f64
 // CHECK: tuple_get %[[CALL]] {index = 1} : !f64
 

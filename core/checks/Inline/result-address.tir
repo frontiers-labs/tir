@@ -17,6 +17,6 @@ module {
 }
 
 // CHECK-LABEL: func.func @caller(%[[DEST:[0-9]+]]: !ptr.p, %[[N:[0-9]+]]: !i64)
-// CHECK-NEXT: | %[[S:[0-9]+]] = state.entry_state
-// CHECK-NEXT: | %[[ST:[0-9]+]] = ptr.store %[[N]], %[[DEST]] | %[[S]]
-// CHECK-NEXT: -> %[[DEST]] | %[[ST]]
+// CHECK-NEXT: state(%[[S:[0-9]+]]) = state.entry_state
+// CHECK-NEXT: state(%[[ST:[0-9]+]]) = ptr.store %[[N]], %[[DEST]] state(%[[S]])
+// CHECK-NEXT: -> %[[DEST]], state(%[[ST]])

@@ -30,4 +30,4 @@ module {data_layout = #data_layout} {
 // CHECK-NEXT: %[[NEXT:[0-9]+]] = ptr.ptradd %[[CARRIED]], %[[D]] : !ptr.p
 // CHECK-NEXT: -> %[[NEXT]]
 // CHECK-NEXT: }
-// CHECK-NEXT: -> %[[RESULT]] | %{{[0-9]+}}
+// CHECK-NEXT: -> %[[RESULT]], state(%{{[0-9]+}})

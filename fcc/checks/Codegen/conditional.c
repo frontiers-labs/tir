@@ -4,11 +4,11 @@
 // operand and whose result is the value the expression takes.
 
 // CHECK: %{{[0-9]+}} = func.func @conditional
-// CHECK: %[[V:[0-9]+]] | %{{[0-9]+}}, %{{[0-9]+}} = scf.switch %{{[0-9]+}} args(
+// CHECK: %[[V:[0-9]+]], state(%{{[0-9]+}}, %{{[0-9]+}}) = scf.switch %{{[0-9]+}} args(
 // CHECK: addi
 // CHECK: ->
 // CHECK: }
-// CHECK-NEXT: (| %{{[0-9]+}}, %{{[0-9]+}}) {
+// CHECK-NEXT: (state(%{{[0-9]+}}, %{{[0-9]+}})) {
 // CHECK: addi
 // CHECK: ->
 // CHECK: ptr.store %[[V]]

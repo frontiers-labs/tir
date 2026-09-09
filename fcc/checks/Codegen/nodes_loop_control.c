@@ -23,7 +23,7 @@ int stop_early(int n) {
 // CHECK-NOT: scf.loop
 // CHECK: scf.loop
 // CHECK: scf.switch
-// CHECK: -> %{{[0-9]+}} | %{{[0-9]+}}
+// CHECK: -> %{{[0-9]+}}, state(%{{[0-9]+}})
 // CHECK-NEXT: }
 
 // SIX: i32 5

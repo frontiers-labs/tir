@@ -9,18 +9,18 @@ module {
   %fn_spell = func.func @spell(%0: !i1, %1: !i32) -> !i32 {
     %2 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
     %3 = constant {value = 0} : !i32
-    | %s0 = state.entry_state
-    | %s1 = ptr.store %3, %2 | %s0
-    | %s2 = scf.switch %0 args(| %s1) (| %e) {
-      -> | %e
+    state(%s0) = state.entry_state
+    state(%s1) = ptr.store %3, %2 state(%s0)
+    state(%s2) = scf.switch %0 args(state(%s1)) (state(%e)) {
+      -> state(%e)
     }
-    (| %t) {
-      | %t1 = ptr.store %1, %2 | %t
-      -> | %t1
+    (state(%t)) {
+      state(%t1) = ptr.store %1, %2 state(%t)
+      -> state(%t1)
     }
-    %4 | %s3 = ptr.load %2 | %s2 : !i32
+    %4, state(%s3) = ptr.load %2 state(%s2) : !i32
     %5 = addi %4, %3 : !i32
-    -> %5 | %s3
+    -> %5, state(%s3)
   }
   module_end
 }

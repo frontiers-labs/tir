@@ -12,57 +12,57 @@ module {
     %1 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
     %2 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
     %3 = constant {value = 0} : !i32
-    | %4 = state.entry_state
-    | %5 = ptr.store %3, %1 | %4
-    | %51 = ptr.store %3, %2 | %5
-    | %6 = scf.loop (| %7 = %51) {
-      %8 | %9 = scf.switch %0 args(| %7) (| %10) {
+    state(%4) = state.entry_state
+    state(%5) = ptr.store %3, %1 state(%4)
+    state(%51) = ptr.store %3, %2 state(%5)
+    state(%6) = scf.loop (state(%7 = %51)) {
+      %8, state(%9) = scf.switch %0 args(state(%7)) (state(%10)) {
         %11 = constant {value = 0} : !i1
-        -> %11 | %10
+        -> %11, state(%10)
       }
-      (| %12) {
+      (state(%12)) {
         %13 = constant {value = 3} : !i32
-        %14 | %15 = ptr.load %1 | %12 : !i32
+        %14, state(%15) = ptr.load %1 state(%12) : !i32
         %16 = cmpi %14, %13 {predicate = "slt"} : !i1
-        | %17 = scf.switch %16 args(| %15) (| %18) {
-          -> | %18
+        state(%17) = scf.switch %16 args(state(%15)) (state(%18)) {
+          -> state(%18)
         }
-        (| %19) {
+        (state(%19)) {
           %20 = constant {value = 0} : !i32
-          | %21 = ptr.store %20, %2 | %19
-          | %22 = scf.loop (| %23 = %21) {
+          state(%21) = ptr.store %20, %2 state(%19)
+          state(%22) = scf.loop (state(%23 = %21)) {
             %24 = constant {value = 2} : !i32
-            %25 | %26 = ptr.load %2 | %23 : !i32
+            %25, state(%26) = ptr.load %2 state(%23) : !i32
             %27 = cmpi %25, %24 {predicate = "slt"} : !i1
-            %28 | %29 = scf.switch %27 args(| %26) (| %30) {
+            %28, state(%29) = scf.switch %27 args(state(%26)) (state(%30)) {
               %31 = constant {value = 0} : !i1
-              -> %31 | %30
+              -> %31, state(%30)
             }
-            (| %32) {
-              %33 | %34 = ptr.load %1 | %32 : !i32
+            (state(%32)) {
+              %33, state(%34) = ptr.load %1 state(%32) : !i32
               %35 = constant {value = 1} : !i32
               %36 = addi %33, %35 : !i32
-              | %37 = ptr.store %36, %1 | %34
-              %38 | %39 = ptr.load %2 | %37 : !i32
+              state(%37) = ptr.store %36, %1 state(%34)
+              %38, state(%39) = ptr.load %2 state(%37) : !i32
               %40 = constant {value = 1} : !i32
               %41 = addi %38, %40 : !i32
-              | %42 = ptr.store %41, %2 | %39
+              state(%42) = ptr.store %41, %2 state(%39)
               %43 = constant {value = 1} : !i1
-              -> %43 | %42
+              -> %43, state(%42)
             }
-            -> %28 | %29, %29
+            -> %28, state(%29, %29)
           }
-          -> | %22
+          -> state(%22)
         }
-        %44 | %45 = ptr.load %1 | %17 : !i32
-        %46 | %47 = func.call %fn_sink(%44 : !i32) -> !i32 | %45
+        %44, state(%45) = ptr.load %1 state(%17) : !i32
+        %46, state(%47) = func.call %fn_sink(%44 : !i32) -> !i32 state(%45)
         %48 = constant {value = 1} : !i1
-        -> %48 | %47
+        -> %48, state(%47)
       }
-      -> %8 | %9, %9
+      -> %8, state(%9, %9)
     }
-    %49 | %50 = ptr.load %1 | %6 : !i32
-    -> %49 | %50
+    %49, state(%50) = ptr.load %1 state(%6) : !i32
+    -> %49, state(%50)
   }
   module_end
 }
@@ -70,11 +70,11 @@ module {
 // CHECK-LABEL: %{{[0-9]+}} = func.func @f
 // CHECK-NOT: ptr.alloca
 // CHECK: %[[ZERO:[0-9]+]] = constant {value = 0} : !i32
-// CHECK: scf.loop (%[[ACC:[0-9]+]] = %[[ZERO]] | %{{[0-9]+}} = %{{[0-9]+}}) {
-// CHECK-NEXT: %{{[0-9]+}}, %[[POST:[0-9]+]] | %{{[0-9]+}} = scf.switch %1 args(| %{{[0-9]+}}) (| %{{[0-9]+}}) {
-// CHECK: -> %{{[0-9]+}}, %[[ACC]] | %{{[0-9]+}}
+// CHECK: scf.loop (%[[ACC:[0-9]+]] = %[[ZERO]], state(%{{[0-9]+}} = %{{[0-9]+}})) {
+// CHECK-NEXT: %{{[0-9]+}}, %[[POST:[0-9]+]], state(%{{[0-9]+}}) = scf.switch %1 args(state(%{{[0-9]+}})) (state(%{{[0-9]+}})) {
+// CHECK: -> %{{[0-9]+}}, %[[ACC]], state(%{{[0-9]+}})
 // CHECK: %[[GUARDED:[0-9]+]] = scf.switch %{{[0-9]+}} {
 // CHECK-NEXT: -> %[[ACC]]
 // CHECK: scf.loop (%{{[0-9]+}} = %[[ACC]], %{{[0-9]+}} = %{{[0-9]+}}) {
-// CHECK: -> %{{[0-9]+}}, %[[GUARDED]] | %{{[0-9]+}}
-// CHECK: -> %{{[0-9]+}}, %[[POST]], %[[POST]] | %{{[0-9]+}}, %{{[0-9]+}}
+// CHECK: -> %{{[0-9]+}}, %[[GUARDED]], state(%{{[0-9]+}})
+// CHECK: -> %{{[0-9]+}}, %[[POST]], %[[POST]], state(%{{[0-9]+}}, %{{[0-9]+}})

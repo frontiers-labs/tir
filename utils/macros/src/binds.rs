@@ -277,7 +277,7 @@ impl OpShape<'_> {
         let index = self.operand_index(name);
         let groups = self.operands.len();
         quote! {
-            self.0.value_operands()[tir::binding::operand_segments(&self.0, #groups)[#index].start]
+            self.0.operands()[tir::binding::operand_segments(&self.0, #groups)[#index].start]
         }
     }
 }
@@ -325,7 +325,7 @@ fn range(shape: &OpShape, term: &Term) -> TokenStream {
         }
         Term::Results(at) => {
             let at = slice(at);
-            quote! { { let len = self.0.value_results().len(); #at } }
+            quote! { { let len = self.0.results().len(); #at } }
         }
         Term::Region {
             name,
@@ -431,7 +431,7 @@ fn emit_theta(binds: &Binds, counted: Option<&Counted>, shape: &OpShape) -> Bind
 
             fn predicate(&self) -> tir::ValueId {
                 let __context = self.0.context.upgrade();
-                __context.get_region(self.0.regions()[#body_index]).value_results()[#predicate]
+                __context.get_region(self.0.regions()[#body_index]).results()[#predicate]
             }
         }
     };
@@ -512,13 +512,10 @@ fn emit_theta(binds: &Binds, counted: Option<&Counted>, shape: &OpShape) -> Bind
                 fn parse<'src>(parser: &mut tir::parse::text::Parser<'src>, context: &tir::Context)
                 -> Result<Box<dyn tir::Operation>, (tir::parse::Span, tir::Error)> {
                     let parsed = tir::binding::parse_theta(parser, context)?;
-                    let mut builder = #builder::new(context)
+                    let builder = #builder::new(context)
                         .#inits(parsed.inits)
                         .#body(parsed.body)
                         .result_types(parsed.result_types);
-                    for dep in parsed.dep_inits {
-                        builder = builder.dep_operand(dep).dep_result();
-                    }
                     Ok(Box::new(builder.build()))
                 }
             }),
@@ -650,17 +647,11 @@ fn emit_gamma(binds: &Binds, shape: &OpShape) -> BindsCode {
                 fn parse<'src>(parser: &mut tir::parse::text::Parser<'src>, context: &tir::Context)
                 -> Result<Box<dyn tir::Operation>, (tir::parse::Span, tir::Error)> {
                     let parsed = tir::binding::parse_gamma(parser, context)?;
-                    let mut builder = #builder::new(context)
+                    let builder = #builder::new(context)
                         .#predicate(parsed.predicate)
                         .#inputs(parsed.inputs)
                         .#arms(parsed.arms)
                         .result_types(parsed.result_types);
-                    for dep in parsed.dep_inputs {
-                        builder = builder.dep_operand(dep);
-                    }
-                    for _ in 0..parsed.dep_results {
-                        builder = builder.dep_result();
-                    }
                     Ok(Box::new(builder.build()))
                 }
             }),

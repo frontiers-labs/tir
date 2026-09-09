@@ -22,7 +22,7 @@ done:
 // CHECK-NOT: cfg.br
 // CHECK: scf.loop
 // CHECK: scf.switch
-// CHECK: -> %{{[0-9]+}} | %{{[0-9]+}}
+// CHECK: -> %{{[0-9]+}}, state(%{{[0-9]+}})
 // CHECK-NEXT: }
 
 // FOUR: i32 6

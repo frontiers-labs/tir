@@ -20,11 +20,11 @@ module {
 }
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @h
-// CHECK: %[[VALUE:[0-9]+]] | %[[STATE:[0-9]+]] = scf.switch %{{[0-9]+}} args(| %{{[0-9]+}}) (| %[[E:[0-9]+]]) {
-// CHECK-NEXT: -> %{{[0-9]+}} | %[[E]]
+// CHECK: %[[VALUE:[0-9]+]], state(%[[STATE:[0-9]+]]) = scf.switch %{{[0-9]+}} args(state(%{{[0-9]+}})) (state(%[[E:[0-9]+]])) {
+// CHECK-NEXT: -> %{{[0-9]+}}, state(%[[E]])
 // CHECK-NEXT: }
-// CHECK-NEXT: (| %[[T:[0-9]+]]) {
-// CHECK-NEXT: %[[READ:[0-9]+]] | %[[T1:[0-9]+]] = ptr.load %{{[0-9]+}} | %[[T]] : !i32
-// CHECK-NEXT: -> %[[READ]] | %[[T1]]
+// CHECK-NEXT: (state(%[[T:[0-9]+]])) {
+// CHECK-NEXT: %[[READ:[0-9]+]], state(%[[T1:[0-9]+]]) = ptr.load %{{[0-9]+}} state(%[[T]]) : !i32
+// CHECK-NEXT: -> %[[READ]], state(%[[T1]])
 // CHECK-NEXT: }
-// CHECK-NEXT: -> %[[VALUE]] | %[[STATE]]
+// CHECK-NEXT: -> %[[VALUE]], state(%[[STATE]])

@@ -17,6 +17,7 @@ use tir_adt::APInt;
 use tir_relational::ClassId as Id;
 
 use super::node::class_is_pure;
+use crate::analysis::effects::{observed_state, produced_state};
 
 /// What a walk records for the cover: the class each operation is rooted at, and
 /// the float constants a target materializer could build.
@@ -155,18 +156,15 @@ impl<'a> SemDagBuilder<'a> {
     fn build_region_op(&mut self, op: &OpHandle, float_widths: &HashSet<u32>, seeds: &mut Seeds) {
         if let Some(gamma) = op.clone().as_interface::<dyn Gamma>() {
             let binding = gamma.forwarded();
-            let inputs = op.value_operands()[binding.operands.clone()].to_vec();
+            let inputs = op.operands()[binding.operands.clone()].to_vec();
             for arm in gamma.arms() {
                 let region = self.context.get_region(arm);
-                let ports = region.value_arguments();
+                let ports = region.ports();
+                // A gate forwards its memory states into every arm unchanged,
+                // like its values, so an access in an arm reads the state the
+                // gate was handed.
                 for (port, &input) in ports[binding.ports.clone()].iter().zip(&inputs) {
                     let class = self.build_from_value(input);
-                    self.value_to_class.insert(port.id(), class);
-                }
-                // A gate forwards its memory states into every arm unchanged,
-                // so an access in an arm reads the state the gate was handed.
-                for (port, &state) in region.dep_arguments().iter().zip(&op.dep_operands()) {
-                    let class = self.build_from_value(state);
                     self.value_to_class.insert(port.id(), class);
                 }
                 self.build_region(arm, float_widths, seeds);
@@ -190,15 +188,13 @@ impl<'a> SemDagBuilder<'a> {
         let decision = self.build_from_value(gamma.predicate());
         let arms = gamma.arms();
         let binding = gamma.forwarded();
-        for (index, &result) in op.value_results()[binding.results.clone()]
-            .iter()
-            .enumerate()
-        {
+        for (index, &result) in op.results()[binding.results.clone()].iter().enumerate() {
+            if self.context.get_value(result).is_state() {
+                continue;
+            }
             let produced: Vec<ValueId> = arms
                 .iter()
-                .map(|&arm| {
-                    self.context.get_region(arm).value_results()[binding.exit.clone()][index]
-                })
+                .map(|&arm| self.context.get_region(arm).results()[binding.exit.clone()][index])
                 .collect();
             let class = match produced.as_slice() {
                 &[value] => self.build_from_value(value),
@@ -234,8 +230,9 @@ impl<'a> SemDagBuilder<'a> {
         let binding = theta.carried();
         let body = theta.body();
         let region = self.context.get_region(body);
-        let ports: Vec<ValueId> = region.value_arguments()[binding.ports.clone()]
+        let ports: Vec<ValueId> = region.ports()[binding.ports.clone()]
             .iter()
+            .filter(|port| !port.is_state())
             .map(|port| port.id())
             .collect();
         for &port in &ports {
@@ -243,8 +240,8 @@ impl<'a> SemDagBuilder<'a> {
         }
         self.build_region(body, float_widths, seeds);
 
-        let inits = op.value_operands()[binding.operands.clone()].to_vec();
-        let results = region.value_results();
+        let inits = op.operands()[binding.operands.clone()].to_vec();
+        let results = region.results();
         let continued = &results[binding.continue_.clone()];
         for ((&port, &init), &next) in ports.iter().zip(&inits).zip(continued) {
             let init = self.build_from_value(init);
@@ -423,7 +420,7 @@ impl<'a> SemDagBuilder<'a> {
             let result = read.read_value();
             let result_ty = self.context.get_value(result).ty();
             let bytes = self.type_width(result_ty)? / 8;
-            let observed = read.state_operand()?;
+            let observed = observed_state(op)?;
             let address = self.build_from_value(read.read_location());
             let address = self.zero_offset_address(address);
             let bytes = self.add_u64_const(u64::from(bytes));
@@ -437,7 +434,7 @@ impl<'a> SemDagBuilder<'a> {
                 Some(result_ty),
             );
             self.value_to_class.insert(result, class);
-            if let Some(published) = read.state_result() {
+            if let Some(published) = produced_state(op) {
                 self.value_to_class.insert(published, state);
             }
             return Some(class);
@@ -447,8 +444,8 @@ impl<'a> SemDagBuilder<'a> {
             let written = write.written_value();
             let value_ty = self.context.get_value(written).ty();
             let bytes = self.type_width(value_ty)? / 8;
-            let observed = write.state_operand()?;
-            let published = write.state_result()?;
+            let observed = observed_state(op)?;
+            let published = produced_state(op)?;
             let address = self.build_from_value(write.write_location());
             let address = self.zero_offset_address(address);
             let bytes = self.add_u64_const(u64::from(bytes));

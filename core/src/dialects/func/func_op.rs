@@ -364,7 +364,7 @@ operation! {
 
 impl ReturnOp {
     /// The value the function returns, or `None` for a void return. The
-    /// dependency operand names the memory handed back to the caller, not a
+    /// state operand names the memory handed back to the caller, not a
     /// value.
     pub fn returned_value(&self) -> Option<crate::ValueId> {
         self.value_operands().first().copied()

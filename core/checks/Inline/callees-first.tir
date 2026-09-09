@@ -22,6 +22,6 @@ module {
 
 // CHECK-NOT: func.call
 // CHECK-LABEL: func.func @top(%[[C:[0-9]+]]: !i32)
-// CHECK-NEXT: | %[[S:[0-9]+]] = state.entry_state
+// CHECK-NEXT: state(%[[S:[0-9]+]]) = state.entry_state
 // CHECK-NEXT: %[[R:[0-9]+]] = addi %[[C]], %[[C]] : !i32
-// CHECK-NEXT: -> %[[R]] | %[[S]]
+// CHECK-NEXT: -> %[[R]], state(%[[S]])

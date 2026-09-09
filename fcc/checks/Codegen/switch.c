@@ -8,7 +8,7 @@
 // CHECK: %[[C0:[0-9]+]] = cmpi {{.*}} {predicate = "eq"}
 // CHECK: scf.switch %[[C0]]
 // CHECK: %[[C1:[0-9]+]] = cmpi {{.*}} {predicate = "eq"}
-// CHECK: %[[FALL:[0-9]+]] | %{{[0-9]+}} = scf.switch %[[C1]]
+// CHECK: %[[FALL:[0-9]+]], state(%{{[0-9]+}}) = scf.switch %[[C1]]
 // CHECK: %[[C2:[0-9]+]] = cmpi {{.*}} {predicate = "eq"}
 // CHECK: scf.switch %[[C2]]
 // CHECK: constant {value = 9}
@@ -16,4 +16,4 @@
 // CHECK: constant {value = 3}
 // CHECK: addi
 // CHECK: ptr.store
-// CHECK: -> %{{[0-9]+}} | %{{[0-9]+}}
+// CHECK: -> %{{[0-9]+}}, state(%{{[0-9]+}})

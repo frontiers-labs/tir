@@ -5,23 +5,23 @@
 
 module {
   %fn_main = func.func @main(%0: !i32, %1: !i32) -> !i32 {
-    %2 | %3 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
-    %4 | %5 = scf.switch %0 args(%1 | %3) (%6 | %7) {
-      | %8 = ptr.store %6, %2 | %7
-      -> %6 | %8
+    %2, state(%3) = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    %4, state(%5) = scf.switch %0 args(%1, state(%3)) (%6, state(%7)) {
+      state(%8) = ptr.store %6, %2 state(%7)
+      -> %6, state(%8)
     }
-    (%9 | %10) {
-      -> %9 | %10
+    (%9, state(%10)) {
+      -> %9, state(%10)
     }
-    func.return %4 | %5
+    func.return %4 state(%5)
   }
   module_end
 }
 
-// CHECK: %[[R:[0-9]+]] | %[[RD:[0-9]+]] = scf.switch %{{[0-9]+}} args(%{{[0-9]+}} | %{{[0-9]+}}) (%[[A:[0-9]+]] | %[[AD:[0-9]+]]) {
-// CHECK-NEXT: | %[[S:[0-9]+]] = ptr.store %[[A]], %{{[0-9]+}} | %[[AD]]
-// CHECK-NEXT: -> %[[A]] | %[[S]]
+// CHECK: %[[R:[0-9]+]], state(%[[RD:[0-9]+]]) = scf.switch %{{[0-9]+}} args(%{{[0-9]+}}, state(%{{[0-9]+}})) (%[[A:[0-9]+]], state(%[[AD:[0-9]+]])) {
+// CHECK-NEXT: state(%[[S:[0-9]+]]) = ptr.store %[[A]], %{{[0-9]+}} state(%[[AD]])
+// CHECK-NEXT: -> %[[A]], state(%[[S]])
 // CHECK-NEXT: }
-// CHECK-NEXT: (%[[B:[0-9]+]] | %[[BD:[0-9]+]]) {
-// CHECK-NEXT: -> %[[B]] | %[[BD]]
+// CHECK-NEXT: (%[[B:[0-9]+]], state(%[[BD:[0-9]+]])) {
+// CHECK-NEXT: -> %[[B]], state(%[[BD]])
 // CHECK-NEXT: }

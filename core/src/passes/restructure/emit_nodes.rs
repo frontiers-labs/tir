@@ -36,7 +36,7 @@ pub fn emit(
         .map(|parameter| context.create_value(parameter.ty(), None))
         .collect();
     let body = context
-        .create_nodes_region(ports.clone(), 0, vec![], vec![], 0)
+        .create_nodes_region(ports.clone(), vec![], vec![])
         .id();
 
     let mut env = Env::new();
@@ -47,16 +47,15 @@ pub fn emit(
     // threaded on are that state split once, and a function on one chain is
     // that state itself.
     if let Some((&first, rest)) = cfg.chains.split_first() {
-        let root = EntryStateOpBuilder::new(context).dep_result().build();
+        let root = EntryStateOpBuilder::new(context).state_result().build();
         context.add(body, root.id());
         if rest.is_empty() {
             env.insert(first, root.result());
         } else {
-            let mut split = SplitOpBuilder::new(context).dep_operand(root.result());
-            for _ in &cfg.chains {
-                split = split.dep_result();
-            }
-            let split = split.build();
+            let split = SplitOpBuilder::new(context)
+                .state(root.result())
+                .states(cfg.chains.len())
+                .build();
             context.add(body, split.id());
             for (&chain, state) in cfg.chains.iter().zip(split.states()) {
                 env.insert(chain, state);
@@ -168,7 +167,7 @@ impl Emitter<'_> {
     /// The exit leaves nothing behind but the values it carried: they are the
     /// region's results, with the memory it hands back trailing. Every chain
     /// the caller can reach is handed back as one state, so the callable
-    /// exports one dependency however many chains the body ran on.
+    /// exports one state however many chains the body ran on.
     fn exit(
         &self,
         op: OpId,
@@ -176,34 +175,30 @@ impl Emitter<'_> {
         region: RegionId,
         env: &mut Env,
     ) -> Result<(), PassError> {
-        let (mut results, mut deps) = match args {
-            Some(args) => {
-                let args = self.deps_last(args);
-                (self.port_values(&args, region, env)?, self.dep_count(&args))
-            }
+        let mut results = match args {
+            Some(args) => self.port_values(&self.deps_last(args), region, env)?,
             None => {
                 self.bind_undefined_reads(op, region, env)?;
-                let handle = self.context.get_op(op);
-                let results = handle
+                self.context
+                    .get_op(op)
                     .operands()
                     .iter()
                     .map(|&operand| self.resolve(env, operand))
-                    .collect();
-                (results, handle.dep_operands().len())
+                    .collect()
             }
         };
-        if deps > 1 {
-            let chains = results.split_off(results.len() - deps);
-            let mut join = JoinOpBuilder::new(self.context).dep_result();
-            for chain in chains {
-                join = join.dep_operand(chain);
-            }
-            let join = join.build();
+        let is_state = |value: &ValueId| self.context.get_value(*value).is_state();
+        let chains: Vec<ValueId> = results.iter().copied().filter(is_state).collect();
+        if chains.len() > 1 {
+            results.retain(|value| !is_state(value));
+            let join = JoinOpBuilder::new(self.context)
+                .states(chains)
+                .state_result()
+                .build();
             self.context.add(region, join.id());
             results.push(join.result());
-            deps = 1;
         }
-        self.context.set_region_results(region, results, deps);
+        self.context.set_region_results(region, results);
         Ok(())
     }
 
@@ -230,7 +225,7 @@ impl Emitter<'_> {
     /// A γ: the predicate indexes the arms, so a conditional's arms go false
     /// first and a dispatch's cases are its arm indices. The arms read values
     /// from the enclosing scope, but a chain they consume enters each arm as a
-    /// dependency port of its own: two arms changing one state would read as a
+    /// state port of its own: two arms changing one state would read as a
     /// fork the order forbids, when they are alternatives.
     fn conditional(
         &self,
@@ -241,12 +236,11 @@ impl Emitter<'_> {
         env: &mut Env,
     ) -> Result<(), PassError> {
         let ports = self.ports(arms, self.live.at(continuation).clone());
-        let deps = self.dep_count(&ports);
-        let chains = &ports[ports.len() - deps..];
-        let dep_inits = self.port_values(chains, region, env)?;
+        let chains = self.state_ports(&ports);
+        let state_inits = self.port_values(&chains, region, env)?;
         let regions = arms
             .iter()
-            .map(|arm| self.arm(arm, &ports, chains, env))
+            .map(|arm| self.arm(arm, &ports, &chains, env))
             .collect::<Result<Vec<_>, _>>()?;
         let predicate = match decision {
             Decision::If(pred) => self.read_src(region, env, pred)?,
@@ -263,15 +257,13 @@ impl Emitter<'_> {
                 self.read(region, env, var)?
             }
         };
-        let mut gate = scf::SwitchOpBuilder::new(self.context)
+        let op = scf::SwitchOpBuilder::new(self.context)
             .predicate(predicate)
-            .inputs(vec![])
+            .inputs(state_inits)
             .arms(regions)
-            .result_types(self.value_types(&ports));
-        for dep in dep_inits {
-            gate = gate.dep_operand(dep).dep_result();
-        }
-        let op = gate.build().id();
+            .result_types(self.port_types(&ports))
+            .build()
+            .id();
         self.context.add(region, op);
         self.bind_results(op, &ports, env);
         Ok(())
@@ -287,22 +279,21 @@ impl Emitter<'_> {
         chains: &[VarId],
         env: &Env,
     ) -> Result<RegionId, PassError> {
-        let dep_ports: Vec<Value> = chains
+        let state_ports: Vec<Value> = chains
             .iter()
             .map(|_| self.context.create_value(TypeId::STATE, None))
             .collect();
         let region = self
             .context
-            .create_nodes_region(dep_ports.clone(), chains.len(), vec![], vec![], 0)
+            .create_nodes_region(state_ports.clone(), vec![], vec![])
             .id();
         let mut inner = env.clone();
-        for (&chain, port) in chains.iter().zip(&dep_ports) {
+        for (&chain, port) in chains.iter().zip(&state_ports) {
             inner.insert(chain, port.id());
         }
         self.statements(arm, region, &mut inner)?;
         let produced = self.port_values(ports, region, &inner)?;
-        self.context
-            .set_region_results(region, produced, self.dep_count(ports));
+        self.context.set_region_results(region, produced);
         Ok(region)
     }
 
@@ -322,14 +313,13 @@ impl Emitter<'_> {
             return Err(unsupported("a loop whose tail moved"));
         };
         let ports = self.loop_ports(id, body);
-        let deps = self.dep_count(&ports);
         let port_values: Vec<Value> = ports
             .iter()
             .map(|&var| self.context.create_value(self.cfg.var_types[var], None))
             .collect();
         let body_region = self
             .context
-            .create_nodes_region(port_values.clone(), deps, vec![], vec![], 0)
+            .create_nodes_region(port_values.clone(), vec![], vec![])
             .id();
         let mut inner = env.clone();
         for (&var, port) in ports.iter().zip(&port_values) {
@@ -338,25 +328,17 @@ impl Emitter<'_> {
         self.statements(body, body_region, &mut inner)?;
         let repeat = self.read_src(body_region, &inner, pred)?;
         let carried = self.port_values(&ports, body_region, &inner)?;
-        let (values, carried_deps) = carried.split_at(carried.len() - deps);
         let mut results = vec![repeat];
-        results.extend_from_slice(values);
-        results.extend_from_slice(values);
-        results.extend_from_slice(carried_deps);
-        results.extend_from_slice(carried_deps);
-        self.context
-            .set_region_results(body_region, results, 2 * deps);
+        results.extend_from_slice(&carried);
+        results.extend_from_slice(&carried);
+        self.context.set_region_results(body_region, results);
 
-        let inits = self.port_values(&ports, region, env)?;
-        let (values, dep_inits) = inits.split_at(inits.len() - deps);
-        let mut loop_op = scf::LoopOpBuilder::new(self.context)
-            .inits(values.to_vec())
+        let op = scf::LoopOpBuilder::new(self.context)
+            .inits(self.port_values(&ports, region, env)?)
             .body(body_region)
-            .result_types(self.value_types(&ports));
-        for &dep in dep_inits {
-            loop_op = loop_op.dep_operand(dep).dep_result();
-        }
-        let op = loop_op.build().id();
+            .result_types(self.port_types(&ports))
+            .build()
+            .id();
         self.context.add(region, op);
         self.bind_results(op, &ports, env);
         Ok(())
@@ -374,7 +356,6 @@ impl Emitter<'_> {
         };
         let block = context.get_block(block);
         let arguments = block.arguments();
-        let deps = block.dep_arguments().len();
         let ops = block.op_ids();
         let (&latch, body_ops) = ops
             .split_last()
@@ -386,7 +367,7 @@ impl Emitter<'_> {
             .map(|argument| context.create_value(argument.ty(), None))
             .collect();
         let body = context
-            .create_nodes_region(ports.clone(), deps, vec![], vec![], 0)
+            .create_nodes_region(ports.clone(), vec![], vec![])
             .id();
         for (argument, port) in arguments.iter().zip(&ports) {
             context.replace_value_uses(argument.id(), port.id());
@@ -419,34 +400,26 @@ impl Emitter<'_> {
         let yielded = context.get_op(latch);
         let mut results = vec![compare.result(), advance.result()];
         results.extend(yielded.value_operands().iter().copied());
-        results.extend(ports[..ports.len() - deps].iter().map(Value::id));
-        results.extend(yielded.dep_operands().iter().copied());
-        results.extend(ports[ports.len() - deps..].iter().map(Value::id));
-        context.set_region_results(body, results, 2 * deps);
+        results.extend(yielded.state_operands().iter().copied());
+        results.extend(ports.iter().map(Value::id));
+        context.set_region_results(body, results);
 
         let old = for_op.handle();
         let result_types: Vec<_> = old
-            .value_results()
+            .results()
             .iter()
             .map(|&result| context.get_value(result).ty())
             .collect();
         let binding = Theta::carried(&for_op);
-        let mut builder = scf::ForOpBuilder::new(context)
+        let raised = scf::ForOpBuilder::new(context)
             .lb(for_op.lower_bound())
-            .inits(old.value_operands()[binding.operands.start + 1..binding.operands.end].to_vec())
+            .inits(old.operands()[binding.operands.start + 1..binding.operands.end].to_vec())
             .ub(for_op.upper_bound())
             .step(for_op.step())
             .body(body)
-            .result_types(result_types);
-        for dep in old.dep_operands() {
-            builder = builder.dep_operand(dep).dep_result();
-        }
-        let raised = builder.build();
-        let handle = raised.handle();
-        for (&was, now) in old.value_results().iter().zip(handle.value_results()) {
-            context.replace_value_uses(was, now);
-        }
-        for (&was, &now) in old.dep_results().iter().zip(handle.dep_results().iter()) {
+            .result_types(result_types)
+            .build();
+        for (&was, &now) in old.results().iter().zip(raised.handle().results().iter()) {
             context.replace_value_uses(was, now);
         }
         Ok(raised.id())

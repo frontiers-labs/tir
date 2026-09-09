@@ -912,9 +912,9 @@ fn memory_ops_select_via_interfaces() {
     let (context, module, region) = function(
         r#"module {
 func.func @demo(%a: !i32) -> !i32 {
-  %slot | %allocated = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
-  | %stored = ptr.store %a, %slot | %allocated
-  %loaded | %read = ptr.load %slot | %stored : !i32
+  %slot, state(%allocated) = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+  state(%stored) = ptr.store %a, %slot state(%allocated)
+  %loaded, state(%read) = ptr.load %slot state(%stored) : !i32
   func.return %loaded
 }
 module_end

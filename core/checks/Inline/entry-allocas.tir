@@ -22,8 +22,8 @@ module {
 
 // CHECK-LABEL: func.func @main(%[[X:[0-9]+]]: !i32)
 // CHECK: %[[D:[0-9]+]] = addi %[[X]], %{{[0-9]+}} : !i32
-// CHECK-NEXT: | %[[S:[0-9]+]] = state.entry_state
+// CHECK-NEXT: state(%[[S:[0-9]+]]) = state.entry_state
 // CHECK-NEXT: %[[SLOT:[0-9]+]] = ptr.alloca
-// CHECK-NEXT: | %[[ST:[0-9]+]] = ptr.store %[[D]], %[[SLOT]] | %[[S]]
-// CHECK-NEXT: %[[V:[0-9]+]] | %[[LD:[0-9]+]] = ptr.load %[[SLOT]] | %[[ST]] : !i32
-// CHECK-NEXT: -> %[[V]] | %[[LD]]
+// CHECK-NEXT: state(%[[ST:[0-9]+]]) = ptr.store %[[D]], %[[SLOT]] state(%[[S]])
+// CHECK-NEXT: %[[V:[0-9]+]], state(%[[LD:[0-9]+]]) = ptr.load %[[SLOT]] state(%[[ST]]) : !i32
+// CHECK-NEXT: -> %[[V]], state(%[[LD]])

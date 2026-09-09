@@ -40,8 +40,8 @@ module {
 // CHECK-NOT: @bump
 // CHECK: func.func @main
 // CHECK-NOT: func.call
-// CHECK: | %[[ENTRY:[0-9]+]] = state.entry_state
-// CHECK-NEXT: | %{{[0-9]+}} = ptr.store %{{[0-9]+}}, %{{[0-9]+}} | %[[ENTRY]]
+// CHECK: state(%[[ENTRY:[0-9]+]]) = state.entry_state
+// CHECK-NEXT: state(%{{[0-9]+}}) = ptr.store %{{[0-9]+}}, %{{[0-9]+}} state(%[[ENTRY]])
 // CHECK-NOT: state.entry_state
 
 // VALUE: i32 17

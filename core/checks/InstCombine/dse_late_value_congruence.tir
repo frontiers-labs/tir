@@ -13,21 +13,21 @@
 
 module {
   %fn_f = func.func @f(%0: !ptr.p<!i32>) {
-    | %1 = state.entry_state
+    state(%1) = state.entry_state
     %2 = constant {value = 12} : !i32
     %3 = constant {value = 1} : !i32
     %4 = shrsi %3, %2 : !i32
-    | %5 = ptr.store %4, %0 | %1
+    state(%5) = ptr.store %4, %0 state(%1)
     %6 = constant {value = 2} : !i32
     %7 = shrsi %6, %2 : !i32
-    | %8 = ptr.store %7, %0 | %5
-    func.return | %8
+    state(%8) = ptr.store %7, %0 state(%5)
+    func.return state(%8)
   }
   module_end
 }
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @f(%[[P:[0-9]+]]: {{.*}})
-// CHECK: | %[[ENTRY:[0-9]+]] = state.entry_state
+// CHECK: state(%[[ENTRY:[0-9]+]]) = state.entry_state
 // CHECK: %[[ZERO:[0-9]+]] = constant {value = 0}
-// CHECK-NEXT: | %[[S:[0-9]+]] = ptr.store %[[ZERO]], %[[P]] | %[[ENTRY]]
-// CHECK-NEXT: -> | %[[S]]
+// CHECK-NEXT: state(%[[S:[0-9]+]]) = ptr.store %[[ZERO]], %[[P]] state(%[[ENTRY]])
+// CHECK-NEXT: -> state(%[[S]])

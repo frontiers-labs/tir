@@ -1,0 +1,33 @@
+// RUN: tir opt --verify %s | filecheck %s
+
+// Every state is an ordinary `!state` value; the text groups the states of
+// each list so the chains read apart from the values.
+
+module {
+  %fn_f = func.func @f(%one: !i32) -> !i32 {
+    %p, state(%s0) = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    state(%s1) = ptr.store %one, %p state(%s0)
+    %x, state(%s2) = ptr.load %p state(%s1) : !i32
+    %6, state(%7) = scf.loop (%8 = %x, state(%9 = %s2)) {
+      state(%10) = ptr.store %8, %p state(%9)
+      %11 = constant {value = 0} : !i1
+      -> %11, %8, %8, state(%10, %9)
+    }
+    state(%e) = state.entry_state
+    state(%j) = state.join state(%7, %e)
+    func.return %6 state(%j)
+  }
+  module_end
+}
+
+// CHECK:      %[[P:[0-9]+]], state(%[[S0:[0-9]+]]) = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+// CHECK-NEXT: state(%[[S1:[0-9]+]]) = ptr.store %0, %[[P]] state(%[[S0]])
+// CHECK-NEXT: %[[X:[0-9]+]], state(%[[S2:[0-9]+]]) = ptr.load %[[P]] state(%[[S1]]) : !i32
+// CHECK-NEXT: %[[R:[0-9]+]], state(%[[RS:[0-9]+]]) = scf.loop (%[[C:[0-9]+]] = %[[X]], state(%[[CS:[0-9]+]] = %[[S2]])) {
+// CHECK-NEXT: state(%[[W:[0-9]+]]) = ptr.store %[[C]], %[[P]] state(%[[CS]])
+// CHECK-NEXT: %[[Z:[0-9]+]] = constant {value = 0} : !i1
+// CHECK-NEXT: -> %[[Z]], %[[C]], %[[C]], state(%[[W]], %[[CS]])
+// CHECK-NEXT: }
+// CHECK-NEXT: state(%[[E:[0-9]+]]) = state.entry_state
+// CHECK-NEXT: state(%[[J:[0-9]+]]) = state.join state(%[[RS]], %[[E]])
+// CHECK-NEXT: func.return %[[R]] state(%[[J]])

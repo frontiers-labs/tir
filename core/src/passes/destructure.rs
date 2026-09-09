@@ -35,7 +35,7 @@ use crate::func::{FuncOp, ReturnOpBuilder};
 use crate::region::values_read;
 use crate::{
     BlockId, Context, Gamma, OpHandle, OpId, Operation, OperationRef, Pass, PassError, PassTarget,
-    RegionId, Rewriter, Theta, ValueId,
+    RegionId, Rewriter, Theta, TypeId, ValueId,
 };
 
 /// The test a branch decides.
@@ -48,7 +48,7 @@ pub enum Test {
     Repeat,
 }
 
-/// An edge into `dest`, entering it on `args`, dependencies last.
+/// An edge into `dest`, entering it on `args`, states last.
 #[derive(Clone, Debug)]
 pub struct Edge {
     pub dest: BlockId,
@@ -122,38 +122,23 @@ pub struct CfgEdges<'a> {
 
 impl CfgEdges<'_> {
     fn cond_br(&self, block: BlockId, condition: ValueId, taken: &Edge, fallthrough: &Edge) {
-        let (taken_values, taken_deps) = self.split(&taken.args);
-        let (fallthrough_values, fallthrough_deps) = self.split(&fallthrough.args);
         let op = CondBranchOpBuilder::new(self.context)
             .condition(condition)
-            .true_args(taken_values)
-            .false_args(fallthrough_values)
+            .true_args(values_then_states(self.context, &taken.args))
+            .false_args(values_then_states(self.context, &fallthrough.args))
             .true_dest(taken.dest)
             .false_dest(fallthrough.dest)
             .build();
-        for dep in taken_deps.into_iter().chain(fallthrough_deps) {
-            self.context.append_dep_operand(op.id(), dep);
-        }
         self.context.get_block(block).append(op.id());
-    }
-
-    /// The values of `args` apart from the dependencies among them.
-    fn split(&self, args: &[ValueId]) -> (Vec<ValueId>, Vec<ValueId>) {
-        args.iter()
-            .partition(|&&arg| !self.context.get_value(arg).is_state())
     }
 }
 
 impl Edges for CfgEdges<'_> {
     fn jump(&self, block: BlockId, edge: &Edge) {
-        let (values, deps) = self.split(&edge.args);
         let op = BranchOpBuilder::new(self.context)
-            .dest_args(values)
+            .dest_args(values_then_states(self.context, &edge.args))
             .dest(edge.dest)
             .build();
-        for dep in deps {
-            self.context.append_dep_operand(op.id(), dep);
-        }
         self.context.get_block(block).append(op.id());
     }
 
@@ -214,7 +199,7 @@ impl Edges for CfgEdges<'_> {
             builder = builder.value(value);
         }
         for &dep in deps {
-            builder = builder.dep_operand(dep);
+            builder = builder.state(dep);
         }
         self.context.get_block(block).append(builder.build().id());
         Ok(())
@@ -298,7 +283,7 @@ pub fn destructure(
     }
     let entry = lowering.entered_on(&handle.ports());
     lowering.blocks.push(entry);
-    let (values, deps) = (handle.value_results(), handle.dep_results());
+    let (values, deps) = (handle.value_results(), handle.state_results());
     let last = lowering.region(rewriter, region, entry)?;
     edges.leave(last, &values, &deps)?;
     context.replace_region_with_blocks(region, lowering.blocks);
@@ -319,17 +304,14 @@ impl Lowering<'_> {
         block
     }
 
-    /// A block adopting `values` as its arguments, dependencies among them
-    /// placed as such. Not listed yet: a merge block is listed after the
-    /// blocks it joins, so that every block follows the ones dominating it.
+    /// A block adopting `values` as its arguments, the states last. Not
+    /// listed yet: a merge block is listed after the blocks it joins, so that
+    /// every block follows the ones dominating it.
     fn entered_on(&mut self, values: &[crate::Value]) -> BlockId {
         let block = self.context.create_block(vec![]).id();
-        for value in values {
-            if value.is_state() {
-                self.context.adopt_dep_block_argument(block, value.id());
-            } else {
-                self.context.adopt_block_argument(block, value.id());
-            }
+        let ids: Vec<ValueId> = values.iter().map(crate::Value::id).collect();
+        for value in values_then_states(self.context, &ids) {
+            self.context.adopt_block_argument(block, value);
         }
         block
     }
@@ -482,7 +464,7 @@ impl Lowering<'_> {
                 continue;
             }
             let op = self.context.get_op(op);
-            if op.dep_results().is_empty() {
+            if op.state_results().is_empty() {
                 continue;
             }
             return Err(PassError::InvalidRuleSet(format!(
@@ -533,11 +515,8 @@ impl Lowering<'_> {
             };
             let op = self.context.get_op(ops[position]);
             let merge = rewriter.split_block(block, position + 1).id();
-            for result in op.value_results() {
+            for result in values_then_states(self.context, &op.results()) {
                 self.context.adopt_block_argument(merge, result);
-            }
-            for result in op.dep_results() {
-                self.context.adopt_dep_block_argument(merge, result);
             }
             self.structured(rewriter, &op, block, merge)?;
             self.blocks.push(merge);
@@ -591,7 +570,10 @@ impl Lowering<'_> {
         read.sort();
         read.dedup();
         for value in read {
-            let argument = self.context.append_dep_block_argument(block).id();
+            let argument = self
+                .context
+                .append_block_argument(block, TypeId::STATE)
+                .id();
             entered.push(value);
             renames.push((value, argument));
         }
@@ -615,8 +597,7 @@ impl Lowering<'_> {
     ) -> Result<(), PassError> {
         let gamma = gamma(op)?;
         let binding = gamma.forwarded();
-        let mut inputs = op.value_operands()[binding.operands.clone()].to_vec();
-        inputs.extend(op.dep_operands());
+        let inputs = op.operands()[binding.operands.clone()].to_vec();
 
         // The arms the chain of tests can reach: a test already decided
         // takes its arm and ends the chain, or skips it; the last arm takes
@@ -706,19 +687,14 @@ impl Lowering<'_> {
         let binding = theta.carried();
         let body = theta.body();
         let handle = self.context.get_region(body);
-        let mut inits = op.value_operands()[binding.operands.clone()].to_vec();
-        inits.extend(op.dep_operands());
+        let inits = op.operands()[binding.operands.clone()].to_vec();
         let header = self.entered_on(&handle.ports());
         self.blocks.push(header);
         self.edges.jump(block, &Edge::with(header, &inits));
 
-        let values = handle.value_results();
-        let deps = handle.dep_results();
-        let chains = deps.len() / 2;
-        let mut continue_values = values[binding.continue_.clone()].to_vec();
-        continue_values.extend(&deps[..chains]);
-        let mut exit_values = values[binding.exit.clone()].to_vec();
-        exit_values.extend(&deps[chains..]);
+        let results = handle.results();
+        let mut continue_values = results[binding.continue_.clone()].to_vec();
+        let mut exit_values = results[binding.exit.clone()].to_vec();
 
         let mut tested = vec![theta.predicate()];
         tested.extend(self.edges.test_reads(op, Test::Repeat));
@@ -802,7 +778,7 @@ impl Lowering<'_> {
                 let instance = self.context.get_op(op);
                 let leaf = instance.operands().is_empty()
                     && instance.regions().is_empty()
-                    && instance.dep_results().is_empty()
+                    && instance.state_results().is_empty()
                     && !implicit.contains(&op);
                 if !leaf {
                     return (index, 1);
@@ -891,8 +867,7 @@ fn rename_within(context: &Context, op: OpId, renames: &[(ValueId, ValueId)]) {
             })
             .collect();
         if results != handle.results() {
-            let deps = handle.dep_results().len();
-            context.set_region_results(region, results, deps);
+            context.set_region_results(region, results);
         }
         for child in handle.op_ids() {
             rename_within(context, child, renames);
@@ -939,4 +914,12 @@ impl Pass for DestructurePass {
         destructure(context, rewriter, body, &CfgEdges { context })?;
         Ok(())
     }
+}
+
+/// `ids` with the states moved last: the order every block keeps its
+/// arguments in, whatever order the op that produced them grew them in.
+fn values_then_states(context: &Context, ids: &[ValueId]) -> Vec<ValueId> {
+    let mut ordered = context.values_among(ids).to_vec();
+    ordered.extend(context.states_among(ids));
+    ordered
 }

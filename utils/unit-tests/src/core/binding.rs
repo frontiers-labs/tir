@@ -68,9 +68,7 @@ fn nodes_region(context: &Context, port_types: &[TypeId], results: &[(i64, u32)]
         .collect();
     let values: Vec<ValueId> = constants.iter().map(|c| c.result()).collect();
     let op_ids = constants.iter().map(|c| c.id()).collect();
-    context
-        .create_nodes_region(ports, 0, op_ids, values, 0)
-        .id()
+    context.create_nodes_region(ports, op_ids, values).id()
 }
 
 fn build_theta(context: &Context, port_types: &[TypeId], results: &[(i64, u32)]) -> ThetaOp {
@@ -190,10 +188,8 @@ fn counted(
     ]);
     let body = context.create_nodes_region(
         vec![counter, carried],
-        0,
         vec![compare.id(), advance.id(), doubled.id()],
         results,
-        0,
     );
     tir::scf::ForOpBuilder::new(context)
         .lb(bounds[0])

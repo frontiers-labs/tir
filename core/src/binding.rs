@@ -2,10 +2,12 @@
 //! [`Binding`] names, the checks that hold them aligned, and the one syntax
 //! every declared theta and gamma shares.
 //!
-//! A theta prints as `%r = dialect.op (%port = %init, .. | %dport = %dinit) { .. }`
-//! and a gamma as `%r = dialect.op %pred args(%in, .. | %d) (%port | %dport) { .. } (..) { .. }`.
+//! A theta prints as `%r = dialect.op (%port = %init, .., state(%sport = %sinit)) { .. }`
+//! and a gamma as `%r = dialect.op %pred args(%in, .., state(%s)) (%port, state(%sport)) { .. } (..) { .. }`.
 //! Types are not spelled: a port has its init's type, a theta result its
-//! init's, and a gamma result the type of the first arm's result.
+//! init's, and a gamma result the type of the first arm's result. Memory
+//! states are carried like any other value; the text groups them so a
+//! reader can tell the chains from the values.
 
 use std::ops::Range;
 
@@ -15,8 +17,7 @@ use crate::parse::Span;
 use crate::parse::common::Cursor;
 use crate::parse::text::Parser;
 use crate::{
-    Binding, Context, Error, IRFormatter, OpHandle, RegionId, TypeId, ValueId, dependency,
-    region_format,
+    Binding, Context, Error, IRFormatter, OpHandle, RegionId, TypeId, ValueId, region_format,
 };
 
 /// The value-operand range of each declared operand group, read off the
@@ -44,18 +45,17 @@ pub fn operand_segments(op: &OpHandle, groups: usize) -> Vec<Range<usize>> {
         .collect()
 }
 
-/// How many value ports (or value results) the op's `index`-th region has;
-/// zero for a region the op does not hold, so a gamma with no arms still
-/// answers.
+/// How many ports (or results) the op's `index`-th region has; zero for a
+/// region the op does not hold, so a gamma with no arms still answers.
 pub fn region_list_len(context: &Context, op: &OpHandle, index: usize, ports: bool) -> usize {
     let Some(&region) = op.regions().get(index) else {
         return 0;
     };
     let region = context.get_region(region);
     if ports {
-        region.value_arguments().len()
+        region.ports().len()
     } else {
-        region.value_results().len()
+        region.results().len()
     }
 }
 
@@ -117,36 +117,91 @@ fn names_same(context: &Context, found: ValueId, declared: ValueId) -> bool {
     }
 }
 
-/// How many groups of dependency results `region` produces: two for a loop
-/// body — what the next iteration takes, then what the loop leaves — and one
-/// for a gate's arm. `None` where the lists do not line up with the ports at
-/// all, which is what the growth and the simplifier read them for.
-pub fn dep_groups(context: &Context, region: RegionId) -> Option<usize> {
-    let handle = context.get_region(region);
-    let ports = handle.dep_arguments().len();
-    let results = handle.dep_results().len();
-    let groups = results.checked_div(ports)?;
-    (matches!(groups, 1 | 2) && results == groups * ports).then_some(groups)
+/// The binding a loop or a gate declares: what it carries in, through and out.
+pub fn declared(op: &OpHandle) -> Option<Binding> {
+    if let Some(theta) = op.clone().as_interface::<dyn crate::Theta>() {
+        return Some(theta.carried());
+    }
+    op.clone()
+        .as_interface::<dyn crate::Gamma>()
+        .map(|gamma| gamma.forwarded())
 }
 
-/// Whether `region` hands the dependency port at `index` straight back in every
-/// group: the chain flows past the operation carrying the region rather than
+/// Where one state a loop or a gate carries sits, as absolute positions into
+/// the op's operands and results and its regions' ports and results. A
+/// loop carries a state through one aligned list; a gate forwards its
+/// states into every arm and joins them back by a second alignment, and its
+/// i-th forwarded and i-th joined state are one chain.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StateSlot {
+    pub operand: usize,
+    pub port: usize,
+    /// A loop's continue result; a gate has none.
+    pub continue_: Option<usize>,
+    pub exit: usize,
+    pub result: usize,
+}
+
+/// The states a loop or a gate carries, in chain order.
+pub fn state_slots(context: &Context, op: &OpHandle) -> Vec<StateSlot> {
+    let Some(binding) = declared(op) else {
+        return Vec::new();
+    };
+    let Some(&region) = op.regions().first() else {
+        return Vec::new();
+    };
+    let ports = context.get_region(region).ports();
+    let forwarded: Vec<usize> = (0..binding.ports.len())
+        .filter(|&index| ports[binding.ports.start + index].is_state())
+        .collect();
+    if op.has_interface::<dyn crate::Theta>() {
+        return forwarded
+            .into_iter()
+            .map(|index| StateSlot {
+                operand: binding.operands.start + index,
+                port: binding.ports.start + index,
+                continue_: Some(binding.continue_.start + index),
+                exit: binding.exit.start + index,
+                result: binding.results.start + index,
+            })
+            .collect();
+    }
+    let results = op.results();
+    let joined = (0..binding.results.len()).filter(|&index| {
+        context
+            .get_value(results[binding.results.start + index])
+            .is_state()
+    });
+    forwarded
+        .into_iter()
+        .zip(joined)
+        .map(|(forwarded, joined)| StateSlot {
+            operand: binding.operands.start + forwarded,
+            port: binding.ports.start + forwarded,
+            continue_: None,
+            exit: binding.exit.start + joined,
+            result: binding.results.start + joined,
+        })
+        .collect()
+}
+
+/// Whether every region of `op` hands the state at `slot` straight back, in
+/// every result group: the chain flows past the operation rather than
 /// through it, since nothing under it changed the memory.
-pub fn forwards_dep(context: &Context, region: RegionId, index: usize) -> bool {
-    let Some(groups) = dep_groups(context, region) else {
-        return false;
-    };
-    let handle = context.get_region(region);
-    let ports = handle.dep_arguments();
-    let results = handle.dep_results();
-    let Some(port) = ports.get(index).map(crate::Value::id) else {
-        return false;
-    };
-    (0..groups).all(|group| results[group * ports.len() + index] == port)
+pub fn forwards_state(context: &Context, op: &OpHandle, slot: StateSlot) -> bool {
+    op.regions().iter().all(|&region| {
+        let region = context.get_region(region);
+        let port = region.ports()[slot.port].id();
+        let results = region.results();
+        slot.continue_
+            .into_iter()
+            .chain([slot.exit])
+            .all(|index| results.get(index) == Some(&port))
+    })
 }
 
 /// Checks a theta's declared alignment: five ranges of one length, one type per
-/// offset, a boolean predicate, and dependencies carried in the same shape.
+/// offset, and a boolean predicate.
 pub fn verify_theta(
     context: &Context,
     op: &OpHandle,
@@ -156,9 +211,9 @@ pub fn verify_theta(
     predicate: usize,
 ) -> Result<(), Error> {
     let region = context.get_region(body);
-    let (ports, results) = (region.value_arguments(), region.value_results());
+    let (ports, results) = (region.ports(), region.results());
     let ports: Vec<ValueId> = ports.iter().map(crate::Value::id).collect();
-    let (operands, op_results) = (op.value_operands(), op.value_results());
+    let (operands, op_results) = (op.operands(), op.results());
     let n = binding.operands.len();
 
     let Some(&decides) = results.get(predicate) else {
@@ -206,28 +261,13 @@ pub fn verify_theta(
         &slice(&op_results, &binding.results),
         "result",
         "port",
-    )?;
-
-    let m = op.dep_operands().len();
-    let dep_counts = [
-        (region.dep_arguments().len(), m, "dependency ports"),
-        (region.dep_results().len(), 2 * m, "dependency body results"),
-        (op.dep_results().len(), m, "dependency results"),
-    ];
-    for (found, expected, what) in dep_counts {
-        if found != expected {
-            return Err(fail(format!(
-                "{name} carries {m} dependencies but has {found} {what}, not {expected}"
-            )));
-        }
-    }
-    Ok(())
+    )
 }
 
 /// Checks a gamma's declared alignment on every arm: ports typed like the
-/// forwarded operands, results typed like the op's, dependencies alike. An
-/// arm's port and result lists are aligned whole, so each arm is read in
-/// full rather than through the ranges arm 0 gave the binding.
+/// forwarded operands, results typed like the op's. An arm's port and result
+/// lists are aligned whole, so each arm is read in full rather than through
+/// the ranges arm 0 gave the binding.
 pub fn verify_gamma(
     context: &Context,
     op: &OpHandle,
@@ -238,17 +278,12 @@ pub fn verify_gamma(
     if arms.is_empty() {
         return Err(fail(format!("{name} needs at least one arm")));
     }
-    let inputs = slice(&op.value_operands(), &binding.operands);
-    let results = slice(&op.value_results(), &binding.results);
-    let (dep_inputs, dep_results) = (op.dep_operands().len(), op.dep_results().len());
+    let inputs = slice(&op.operands(), &binding.operands);
+    let results = slice(&op.results(), &binding.results);
     for (index, &arm) in arms.iter().enumerate() {
         let region = context.get_region(arm);
-        let ports: Vec<ValueId> = region
-            .value_arguments()
-            .iter()
-            .map(crate::Value::id)
-            .collect();
-        let produced = region.value_results();
+        let ports: Vec<ValueId> = region.ports().iter().map(crate::Value::id).collect();
+        let produced = region.results();
         if ports.len() != inputs.len() {
             return Err(fail(format!(
                 "{name} arm {index} takes {} values but the op forwards {}",
@@ -266,12 +301,15 @@ pub fn verify_gamma(
         let arm_name = format!("{name} arm {index}");
         check_types(context, &arm_name, &inputs, &ports, "port", "input")?;
         check_types(context, &arm_name, &results, &produced, "value", "result")?;
-        let (dep_ports, dep_produced) = (region.dep_arguments().len(), region.dep_results().len());
-        if dep_ports != dep_inputs || dep_produced != dep_results {
-            return Err(fail(format!(
-                "{arm_name} carries {dep_ports} dependencies in and {dep_produced} out, but the op forwards {dep_inputs} and produces {dep_results}"
-            )));
-        }
+    }
+    let (forwarded, joined) = (
+        context.states_among(&inputs).len(),
+        context.states_among(&results).len(),
+    );
+    if forwarded != joined {
+        return Err(fail(format!(
+            "{name} forwards {forwarded} states but joins {joined}: each chain enters and leaves once"
+        )));
     }
     Ok(())
 }
@@ -291,12 +329,8 @@ pub fn verify_counted(
     step: ValueId,
 ) -> Result<(), Error> {
     let region = context.get_region(body);
-    let ports: Vec<ValueId> = region
-        .value_arguments()
-        .iter()
-        .map(crate::Value::id)
-        .collect();
-    let results = region.value_results();
+    let ports: Vec<ValueId> = region.ports().iter().map(crate::Value::id).collect();
+    let results = region.results();
     if induction >= binding.ports.len() {
         return Err(fail(format!(
             "{name} carries no port {induction} for its counter"
@@ -339,19 +373,6 @@ pub fn verify_counted(
             )));
         }
     }
-    let dep_results = region.dep_results();
-    let dep_ports = region.dep_arguments();
-    for (index, (exit, port)) in dep_results[dep_results.len() / 2..]
-        .iter()
-        .zip(&dep_ports)
-        .enumerate()
-    {
-        if *exit != port.id() {
-            return Err(fail(format!(
-                "{name} exit dependency {index} must be dependency port {index}"
-            )));
-        }
-    }
     Ok(())
 }
 
@@ -369,41 +390,40 @@ fn print_pairs(
     Ok(())
 }
 
-/// Print `(%port = %init, .. | %dport = %dinit, ..)`, or nothing when the op
-/// carries nothing.
+/// Print `(%port = %init, .., state(%sport = %sinit, ..))`, or nothing when
+/// the op carries nothing.
 pub fn print_port_bindings(
     fmt: &mut IRFormatter,
+    context: &Context,
     ports: &[ValueId],
     inits: &[ValueId],
-    dep_ports: &[ValueId],
-    dep_inits: &[ValueId],
 ) -> Result<(), std::fmt::Error> {
-    if ports.is_empty() && dep_ports.is_empty() {
+    if ports.is_empty() {
         return Ok(());
     }
+    let (values, states) = (context.values_among(ports), context.states_among(ports));
+    let (value_inits, state_inits) = (context.values_among(inits), context.states_among(inits));
     fmt.write(" (")?;
-    print_pairs(fmt, ports, inits)?;
-    if !dep_ports.is_empty() {
-        fmt.write(if ports.is_empty() { "| " } else { " | " })?;
-        print_pairs(fmt, dep_ports, dep_inits)?;
+    print_pairs(fmt, &values, &value_inits)?;
+    if !states.is_empty() {
+        fmt.write(if values.is_empty() {
+            "state("
+        } else {
+            ", state("
+        })?;
+        print_pairs(fmt, &states, &state_inits)?;
+        fmt.write(")")?;
     }
     fmt.write(")")
 }
 
-fn port_ids(context: &Context, region: RegionId) -> (Vec<ValueId>, Vec<ValueId>) {
-    let region = context.get_region(region);
-    (
-        region
-            .value_arguments()
-            .iter()
-            .map(crate::Value::id)
-            .collect(),
-        region
-            .dep_arguments()
-            .iter()
-            .map(crate::Value::id)
-            .collect(),
-    )
+fn port_ids(context: &Context, region: RegionId) -> Vec<ValueId> {
+    context
+        .get_region(region)
+        .ports()
+        .iter()
+        .map(crate::Value::id)
+        .collect()
 }
 
 /// The generic theta printer: the ports bound to their inits, then the body.
@@ -415,15 +435,13 @@ pub fn print_theta(
     binding: &Binding,
 ) -> Result<(), std::fmt::Error> {
     let context = op.context.upgrade();
-    dependency::print_result_prefix(fmt, op)?;
+    region_format::print_result_prefix(fmt, op)?;
     fmt.write(name)?;
-    let (ports, dep_ports) = port_ids(&context, body);
     print_port_bindings(
         fmt,
-        &slice(&ports, &binding.ports),
-        &slice(&op.value_operands(), &binding.operands),
-        &dep_ports,
-        &op.dep_operands(),
+        &context,
+        &slice(&port_ids(&context, body), &binding.ports),
+        &slice(&op.operands(), &binding.operands),
     )?;
     region_format::print_region(fmt, &context, &context.get_region(body))
 }
@@ -439,23 +457,19 @@ pub fn print_gamma(
     binding: &Binding,
 ) -> Result<(), std::fmt::Error> {
     let context = op.context.upgrade();
-    dependency::print_result_prefix(fmt, op)?;
+    region_format::print_result_prefix(fmt, op)?;
     fmt.write(format!("{name} %{}", predicate.number()))?;
-    let inputs = slice(&op.value_operands(), &binding.operands);
-    let dep_inputs = op.dep_operands();
-    if !inputs.is_empty() || !dep_inputs.is_empty() {
+    let inputs = slice(&op.operands(), &binding.operands);
+    if !inputs.is_empty() {
         fmt.write(" args(")?;
-        dependency::print_value_list(fmt, &inputs)?;
-        dependency::print_dep_list(fmt, &dep_inputs, !inputs.is_empty())?;
+        region_format::print_value_group(fmt, &context, &inputs)?;
         fmt.write(")")?;
     }
     for &arm in arms {
-        let (ports, dep_ports) = port_ids(&context, arm);
-        let ports = slice(&ports, &binding.ports);
-        if !ports.is_empty() || !dep_ports.is_empty() {
+        let ports = slice(&port_ids(&context, arm), &binding.ports);
+        if !ports.is_empty() {
             fmt.write(if fmt.at_line_start() { "(" } else { " (" })?;
-            dependency::print_value_list(fmt, &ports)?;
-            dependency::print_dep_list(fmt, &dep_ports, !ports.is_empty())?;
+            region_format::print_value_group(fmt, &context, &ports)?;
             fmt.write(")")?;
         }
         region_format::print_region(fmt, &context, &context.get_region(arm))?;
@@ -467,7 +481,6 @@ pub fn print_gamma(
 /// were bound, and the body those ports belong to.
 pub struct ParsedTheta {
     pub inits: Vec<ValueId>,
-    pub dep_inits: Vec<ValueId>,
     pub body: RegionId,
     pub result_types: Vec<TypeId>,
 }
@@ -476,10 +489,8 @@ pub struct ParsedTheta {
 pub struct ParsedGamma {
     pub predicate: ValueId,
     pub inputs: Vec<ValueId>,
-    pub dep_inputs: Vec<ValueId>,
     pub arms: Vec<RegionId>,
     pub result_types: Vec<TypeId>,
-    pub dep_results: usize,
 }
 
 type ParseResult<T> = Result<T, (Span, Error)>;
@@ -499,56 +510,88 @@ pub(crate) fn value(parser: &mut Parser, context: &Context) -> ParseResult<Value
     Ok(parser.resolve_value(context, name))
 }
 
-/// Mint a port named `name` with the type `init` has (a dependency's for a
-/// dependency) and bind the name to it.
+/// Mint a port named `name` with the type `init` has and bind the name to it.
 fn bind_port(parser: &mut Parser, context: &Context, name: &str, ty: TypeId) -> crate::Value {
     let port = context.create_value(ty, None);
     parser.define_value(name, port.id());
     port
 }
 
-/// The ports a `(%port = %init, .. | %dport = %dinit, ..)` clause binds, each
-/// minted with its init's type, and the inits they are bound to.
+/// The ports a `(%port = %init, .., state(%sport = %sinit, ..))` clause
+/// binds, values then states, each minted with its init's type, and the
+/// inits they are bound to.
 #[derive(Default)]
 pub struct PortBindings {
     pub ports: Vec<crate::Value>,
-    pub dep_ports: Vec<crate::Value>,
     pub inits: Vec<ValueId>,
-    pub dep_inits: Vec<ValueId>,
 }
 
-/// Parse an optional `(%port = %init, .. | %dport = %dinit, ..)` clause.
+impl PortBindings {
+    fn bind(
+        &mut self,
+        parser: &mut Parser,
+        context: &Context,
+        ty: Option<TypeId>,
+    ) -> ParseResult<()> {
+        let name = parser
+            .parse_value_ref()
+            .ok_or_else(|| (parser.span(), Error::ExpectedValueRef))?
+            .to_string();
+        expect(parser, "=")?;
+        let init = value(parser, context)?;
+        let ty = ty.unwrap_or_else(|| context.get_value(init).ty());
+        self.ports.push(bind_port(parser, context, &name, ty));
+        self.inits.push(init);
+        Ok(())
+    }
+}
+
+/// Parse an optional `(%port = %init, .., state(%sport = %sinit, ..))` clause.
 pub fn parse_port_bindings(parser: &mut Parser, context: &Context) -> ParseResult<PortBindings> {
     let mut bound = PortBindings::default();
-    if parser.parse_token("(") {
-        let mut deps = false;
+    if !parser.parse_token("(") {
+        return Ok(bound);
+    }
+    while parser.peek_char() == Some('%') {
+        bound.bind(parser, context, None)?;
+        if !parser.parse_token(",") {
+            break;
+        }
+    }
+    if parser.parse_token("state") {
+        expect(parser, "(")?;
         loop {
-            if !deps && parser.parse_token("|") {
-                deps = true;
-            }
-            let name = parser
-                .parse_value_ref()
-                .ok_or_else(|| (parser.span(), Error::ExpectedValueRef))?
-                .to_string();
-            expect(parser, "=")?;
-            let init = value(parser, context)?;
-            if deps {
-                bound
-                    .dep_ports
-                    .push(bind_port(parser, context, &name, TypeId::STATE));
-                bound.dep_inits.push(init);
-            } else {
-                let ty = context.get_value(init).ty();
-                bound.ports.push(bind_port(parser, context, &name, ty));
-                bound.inits.push(init);
-            }
-            if !parser.parse_token(",") && !(!deps && parser.peek_char() == Some('|')) {
+            bound.bind(parser, context, Some(TypeId::STATE))?;
+            if !parser.parse_token(",") {
                 break;
             }
         }
         expect(parser, ")")?;
     }
+    expect(parser, ")")?;
     Ok(bound)
+}
+
+/// Put a theta body's results in binding order. The text lists the values
+/// the body names, then its states in one group; the binding wants the
+/// predicate, then what the next iteration carries, then what the loop leaves,
+/// each of those values then states as the ports are.
+pub fn order_theta_results(context: &Context, body: RegionId) {
+    let region = context.get_region(body);
+    let (values, states) = (region.value_results(), region.state_results());
+    let (value_ports, state_ports) = (
+        region.value_arguments().len(),
+        region.state_arguments().len(),
+    );
+    if values.len() != 1 + 2 * value_ports || states.len() != 2 * state_ports {
+        return;
+    }
+    let mut results = vec![values[0]];
+    results.extend(&values[1..1 + value_ports]);
+    results.extend(&states[..state_ports]);
+    results.extend(&values[1 + value_ports..]);
+    results.extend(&states[state_ports..]);
+    context.set_region_results(body, results);
 }
 
 /// Parse the generic theta syntax after its mnemonic.
@@ -556,11 +599,11 @@ pub fn parse_theta(parser: &mut Parser, context: &Context) -> ParseResult<Parsed
     let bound = parse_port_bindings(parser, context)?;
     let result_types = bound.ports.iter().map(crate::Value::ty).collect();
     let body = parser
-        .parse_region_with_entry_args_and_deps(context, bound.ports, bound.dep_ports)?
+        .parse_region_with_entry_args(context, bound.ports)?
         .id();
+    order_theta_results(context, body);
     Ok(ParsedTheta {
         inits: bound.inits,
-        dep_inits: bound.dep_inits,
         body,
         result_types,
     })
@@ -569,7 +612,7 @@ pub fn parse_theta(parser: &mut Parser, context: &Context) -> ParseResult<Parsed
 /// Parse the generic gamma syntax after its mnemonic.
 pub fn parse_gamma(parser: &mut Parser, context: &Context) -> ParseResult<ParsedGamma> {
     let predicate = value(parser, context)?;
-    let (mut inputs, mut dep_inputs) = (vec![], vec![]);
+    let mut inputs = vec![];
     if parser.parse_token("args") {
         expect(parser, "(")?;
         while parser.peek_char() == Some('%') {
@@ -578,15 +621,17 @@ pub fn parse_gamma(parser: &mut Parser, context: &Context) -> ParseResult<Parsed
                 break;
             }
         }
-        dep_inputs = dependency::parse_dep_operands(parser, context)?;
+        inputs.extend(parser.parse_state_operands(context)?);
         expect(parser, ")")?;
     }
     let mut arms = vec![];
     loop {
-        let (mut ports, mut dep_ports) = (vec![], vec![]);
+        let mut ports = vec![];
         if parser.parse_token("(") {
-            for &input in &inputs {
-                if !ports.is_empty() {
+            let values = context.values_among(&inputs);
+            let states = context.states_among(&inputs);
+            for (index, &input) in values.iter().enumerate() {
+                if index > 0 {
                     expect(parser, ",")?;
                 }
                 let name = parser
@@ -596,18 +641,19 @@ pub fn parse_gamma(parser: &mut Parser, context: &Context) -> ParseResult<Parsed
                 let ty = context.get_value(input).ty();
                 ports.push(bind_port(parser, context, &name, ty));
             }
-            for name in dependency::parse_dep_names(parser)? {
-                dep_ports.push(bind_port(parser, context, &name, TypeId::STATE));
+            if !states.is_empty() {
+                if !values.is_empty() {
+                    expect(parser, ",")?;
+                }
+                for name in parser.parse_state_names()? {
+                    ports.push(bind_port(parser, context, &name, TypeId::STATE));
+                }
             }
             expect(parser, ")")?;
         } else if parser.peek_char() != Some('{') {
             break;
         }
-        arms.push(
-            parser
-                .parse_region_with_entry_args_and_deps(context, ports, dep_ports)?
-                .id(),
-        );
+        arms.push(parser.parse_region_with_entry_args(context, ports)?.id());
     }
     let Some(&first) = arms.first() else {
         return Err((parser.span(), Error::ExpectedToken("{")));
@@ -616,13 +662,11 @@ pub fn parse_gamma(parser: &mut Parser, context: &Context) -> ParseResult<Parsed
     Ok(ParsedGamma {
         predicate,
         inputs,
-        dep_inputs,
         arms,
         result_types: first
-            .value_results()
+            .results()
             .iter()
             .map(|&result| context.get_value(result).ty())
             .collect(),
-        dep_results: first.dep_results().len(),
     })
 }

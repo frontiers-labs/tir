@@ -8,34 +8,34 @@
 module {
   %fn_dispatch = func.func @dispatch(%0: !i1, %1: !i32, %2: !i32) -> !i32 {
     %3 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
-    | %4 = state.entry_state
-    | %5 = ptr.store %2, %3 | %4
-    | %6 = scf.loop (| %7 = %5) {
-      %8 | %9 = scf.switch %0 args(| %7) (| %10) {
+    state(%4) = state.entry_state
+    state(%5) = ptr.store %2, %3 state(%4)
+    state(%6) = scf.loop (state(%7 = %5)) {
+      %8, state(%9) = scf.switch %0 args(state(%7)) (state(%10)) {
         %11 = constant {value = 0} : !i1
-        -> %11 | %10
+        -> %11, state(%10)
       }
-      (| %12) {
-        %13 | %14 = ptr.load %3 | %12 : !i32
-        | %15 = scf.switch %1 args(| %14) (| %16) {
-          -> | %16
+      (state(%12)) {
+        %13, state(%14) = ptr.load %3 state(%12) : !i32
+        state(%15) = scf.switch %1 args(state(%14)) (state(%16)) {
+          -> state(%16)
         }
-        (| %17) {
+        (state(%17)) {
           %18 = addi %13, %13 : !i32
-          | %19 = ptr.store %18, %3 | %17
-          -> | %19
+          state(%19) = ptr.store %18, %3 state(%17)
+          -> state(%19)
         }
-        (| %20) {
-          | %21 = ptr.store %2, %3 | %20
-          -> | %21
+        (state(%20)) {
+          state(%21) = ptr.store %2, %3 state(%20)
+          -> state(%21)
         }
         %22 = constant {value = 1} : !i1
-        -> %22 | %15
+        -> %22, state(%15)
       }
-      -> %8 | %9, %9
+      -> %8, state(%9, %9)
     }
-    %23 | %24 = ptr.load %3 | %6 : !i32
-    -> %23 | %24
+    %23, state(%24) = ptr.load %3 state(%6) : !i32
+    -> %23, state(%24)
   }
   module_end
 }
@@ -49,4 +49,4 @@ module {
 // CHECK-NEXT: -> %[[NEXT]]
 // CHECK: -> %2
 // CHECK: -> %{{[0-9]+}}, %[[GATE]]
-// CHECK: -> %[[RESULT]] | %{{[0-9]+}}
+// CHECK: -> %[[RESULT]], state(%{{[0-9]+}})

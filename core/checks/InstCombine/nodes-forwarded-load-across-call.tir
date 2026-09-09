@@ -14,28 +14,28 @@ module {data_layout = #data_layout} {
   %fn_g = func.declare @g() -> !unit
   %fn_scale = func.func @scale(%p: !ptr.p) {
     %slot = ptr.alloca {size = 1, align = 1} : !ptr.p
-    | %s_slot = state.entry_state
-    | %s_param = state.entry_state
-    | %s_world = state.entry_state
-    %ptr | %r_param = ptr.load %p | %s_param : !ptr.p
-    %byte | %r_world = ptr.load %ptr | %s_world : !i8
-    | %w_slot = ptr.store %byte, %slot | %s_slot
-    | %in_g = state.join | %r_world, %r_param
-    | %after_g = func.call %fn_g() | %in_g
-    | %g_world, %g_param = state.split | %after_g
-    %back | %r_slot = ptr.load %slot | %w_slot : !i8
-    | %in_f = state.join | %g_world, %g_param
-    | %after_f = func.call %fn_f(%back : !i8) | %in_f
-    | %f_world, %f_param = state.split | %after_f
-    | %out = state.join | %r_slot, %f_world, %f_param
-    -> | %out
+    state(%s_slot) = state.entry_state
+    state(%s_param) = state.entry_state
+    state(%s_world) = state.entry_state
+    %ptr, state(%r_param) = ptr.load %p state(%s_param) : !ptr.p
+    %byte, state(%r_world) = ptr.load %ptr state(%s_world) : !i8
+    state(%w_slot) = ptr.store %byte, %slot state(%s_slot)
+    state(%in_g) = state.join state(%r_world, %r_param)
+    state(%after_g) = func.call %fn_g() state(%in_g)
+    state(%g_world, %g_param) = state.split state(%after_g)
+    %back, state(%r_slot) = ptr.load %slot state(%w_slot) : !i8
+    state(%in_f) = state.join state(%g_world, %g_param)
+    state(%after_f) = func.call %fn_f(%back : !i8) state(%in_f)
+    state(%f_world, %f_param) = state.split state(%after_f)
+    state(%out) = state.join state(%r_slot, %f_world, %f_param)
+    -> state(%out)
   }
   module_end
 }
 
 // CHECK-LABEL: func.func @scale
-// CHECK: %[[V:[0-9]+]] | %{{[0-9]+}} = ptr.load %{{[0-9]+}} | %{{[0-9]+}} : !i8
+// CHECK: %[[V:[0-9]+]], state(%{{[0-9]+}}) = ptr.load %{{[0-9]+}} state(%{{[0-9]+}}) : !i8
 // CHECK-NOT: ptr.
-// CHECK: | %[[G:[0-9]+]] = func.call %{{[0-9]+}}() | %{{[0-9]+}}
+// CHECK: state(%[[G:[0-9]+]]) = func.call %{{[0-9]+}}() state(%{{[0-9]+}})
 // CHECK-NOT: ptr.
-// CHECK: | %[[F:[0-9]+]] = func.call %{{[0-9]+}}(%[[V]] : !i8) | %{{[0-9]+}}
+// CHECK: state(%[[F:[0-9]+]]) = func.call %{{[0-9]+}}(%[[V]] : !i8) state(%{{[0-9]+}})

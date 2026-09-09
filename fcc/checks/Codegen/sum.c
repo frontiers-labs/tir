@@ -8,11 +8,11 @@
 // CHECK: module {
 // CHECK: %{{[0-9]+}} = func.func @sum(%{{[0-9]+}}: !i32, %{{[0-9]+}}: !i32) -> !i32 {
 // CHECK-COUNT-2: ptr.alloca
-// CHECK: | %[[E:[0-9]+]] = state.entry_state
-// CHECK: | %[[C0:[0-9]+]], %[[C1:[0-9]+]], %{{[0-9]+}} = state.split | %[[E]]
-// CHECK: | %[[S0:[0-9]+]] = ptr.store %{{[0-9]+}}, %{{[0-9]+}} | %[[C0]]
-// CHECK: | %[[S1:[0-9]+]] = ptr.store %{{[0-9]+}}, %{{[0-9]+}} | %[[C1]]
-// CHECK: %[[A:[0-9]+]] | %{{[0-9]+}} = ptr.load %{{[0-9]+}} | %[[S0]] : !i32
-// CHECK: %[[B:[0-9]+]] | %{{[0-9]+}} = ptr.load %{{[0-9]+}} | %[[S1]] : !i32
+// CHECK: state(%[[E:[0-9]+]]) = state.entry_state
+// CHECK: state(%[[C0:[0-9]+]], %[[C1:[0-9]+]], %{{[0-9]+}}) = state.split state(%[[E]])
+// CHECK: state(%[[S0:[0-9]+]]) = ptr.store %{{[0-9]+}}, %{{[0-9]+}} state(%[[C0]])
+// CHECK: state(%[[S1:[0-9]+]]) = ptr.store %{{[0-9]+}}, %{{[0-9]+}} state(%[[C1]])
+// CHECK: %[[A:[0-9]+]], state(%{{[0-9]+}}) = ptr.load %{{[0-9]+}} state(%[[S0]]) : !i32
+// CHECK: %[[B:[0-9]+]], state(%{{[0-9]+}}) = ptr.load %{{[0-9]+}} state(%[[S1]]) : !i32
 // CHECK: addi %[[A]], %[[B]] : !i32
-// CHECK: -> %{{[0-9]+}} | %{{[0-9]+}}
+// CHECK: -> %{{[0-9]+}}, state(%{{[0-9]+}})

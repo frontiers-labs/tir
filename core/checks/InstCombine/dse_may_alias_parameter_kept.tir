@@ -17,5 +17,5 @@ module {data_layout = #data_layout} {
 }
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @f(%[[P:[0-9]+]]: !ptr.p<!i32>, %[[Q:[0-9]+]]: !ptr.p<!i32>, %[[V:[0-9]+]]: !i32)
-// CHECK: | %[[S:[0-9]+]] = ptr.store %[[V]], %[[P]] | %{{[0-9]+}}
-// CHECK-NEXT: | %{{[0-9]+}} = ptr.store %[[V]], %[[Q]] | %[[S]]
+// CHECK: state(%[[S:[0-9]+]]) = ptr.store %[[V]], %[[P]] state(%{{[0-9]+}})
+// CHECK-NEXT: state(%{{[0-9]+}}) = ptr.store %[[V]], %[[Q]] state(%[[S]])

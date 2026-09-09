@@ -26,9 +26,9 @@ module {data_layout = #data_layout} {
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @f(%[[LO:[0-9]+]]: !i32, %[[HI:[0-9]+]]: !i32)
 // CHECK-NEXT: %[[ONE:[0-9]+]] = constant {value = 1} : !i32
-// CHECK-NEXT: | %[[ENTRY:[0-9]+]] = state.entry_state
-// CHECK-NEXT: scf.for %{{[0-9]+}} = %[[LO]] to %[[HI]] step %[[ONE]] (%[[I:[0-9]+]] = %[[LO]] | %[[DEP:[0-9]+]] = %[[ENTRY]]) {
+// CHECK-NEXT: state(%[[ENTRY:[0-9]+]]) = state.entry_state
+// CHECK-NEXT: scf.for %{{[0-9]+}} = %[[LO]] to %[[HI]] step %[[ONE]] (%[[I:[0-9]+]] = %[[LO]], state(%[[DEP:[0-9]+]] = %[[ENTRY]])) {
 // CHECK-NEXT: %[[N:[0-9]+]] = addi %[[I]], %[[ONE]] : !i32
-// CHECK-NEXT: -> %[[N]] | %[[DEP]]
+// CHECK-NEXT: -> %[[N]], state(%[[DEP]])
 // CHECK-NEXT: }
 // CHECK-NOT: ptr.

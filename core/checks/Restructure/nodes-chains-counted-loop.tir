@@ -28,12 +28,12 @@ module {
 }
 
 // CHECK: %{{[0-9]+}} = func.func @f(%[[N:[0-9]+]]: !i32) -> !i32 {
-// CHECK: | %[[ENTRY:[0-9]+]] = state.entry_state
-// CHECK-NEXT: | %[[EA:[0-9]+]], %[[EB:[0-9]+]] = state.split | %[[ENTRY]]
-// CHECK-NEXT: | %[[SB:[0-9]+]] = ptr.store %{{[0-9]+}}, %[[B:[0-9]+]] | %[[EB]]
-// CHECK: scf.for %{{[0-9]+}} = %{{[0-9]+}} to %[[N]] step %{{[0-9]+}} (%{{[0-9]+}} = %{{[0-9]+}} | %[[PA:[0-9]+]] = %[[EA]], %[[PB:[0-9]+]] = %[[SB]]) {
-// CHECK-NEXT: | %[[SA:[0-9]+]] = ptr.store %{{[0-9]+}}, %[[A:[0-9]+]] | %[[PA]]
-// CHECK-NEXT: %{{[0-9]+}} | %[[RB:[0-9]+]] = ptr.load %[[B]] | %[[PB]] : !i32
-// CHECK: -> %{{[0-9]+}} | %[[SA]], %[[RB]]
+// CHECK: state(%[[ENTRY:[0-9]+]]) = state.entry_state
+// CHECK-NEXT: state(%[[EA:[0-9]+]], %[[EB:[0-9]+]]) = state.split state(%[[ENTRY]])
+// CHECK-NEXT: state(%[[SB:[0-9]+]]) = ptr.store %{{[0-9]+}}, %[[B:[0-9]+]] state(%[[EB]])
+// CHECK: scf.for %{{[0-9]+}} = %{{[0-9]+}} to %[[N]] step %{{[0-9]+}} (%{{[0-9]+}} = %{{[0-9]+}}, state(%[[PA:[0-9]+]] = %[[EA]], %[[PB:[0-9]+]] = %[[SB]])) {
+// CHECK-NEXT: state(%[[SA:[0-9]+]]) = ptr.store %{{[0-9]+}}, %[[A:[0-9]+]] state(%[[PA]])
+// CHECK-NEXT: %{{[0-9]+}}, state(%[[RB:[0-9]+]]) = ptr.load %[[B]] state(%[[PB]]) : !i32
+// CHECK: -> %{{[0-9]+}}, state(%[[SA]], %[[RB]])
 
 // VALUE: i32 3

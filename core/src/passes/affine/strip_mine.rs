@@ -46,8 +46,8 @@ pub fn strip_mine(
         return Err(PassError::RewriteFailed(op));
     };
     let body = theta.body();
-    let deps = handle.dep_results().len();
-    if handle.value_results().len() != 1 || theta.carried().ports.len() != 1 {
+    let states = crate::binding::state_slots(context, &handle);
+    if handle.value_results().len() != 1 || theta.carried().ports.len() != 1 + states.len() {
         return Err(PassError::RewriteFailed(op));
     }
     let (lower, upper, step) = (counted.lower_bound(), counted.upper_bound(), counted.step());
@@ -69,26 +69,27 @@ pub fn strip_mine(
 
     let counted_loop =
         |body: RegionId, lower: ValueId, upper: ValueId, step: ValueId, states: &[ValueId]| {
-            let mut builder = scf::ForOpBuilder::new(context)
+            let mut result_types = vec![ty];
+            result_types.extend(states.iter().map(|_| TypeId::STATE));
+            scf::ForOpBuilder::new(context)
                 .lb(lower)
-                .inits(vec![])
+                .inits(states.to_vec())
                 .ub(upper)
                 .step(step)
                 .body(body)
-                .result_types(vec![ty]);
-            for &state in states {
-                builder = builder.dep_operand(state).dep_result();
-            }
-            builder.build()
+                .result_types(result_types)
+                .build()
         };
 
     let base = context.create_value(ty, None);
     let mut ports = vec![base.clone()];
-    ports.extend((0..deps).map(|_| context.create_value(TypeId::STATE, None)));
+    ports.extend(
+        states
+            .iter()
+            .map(|_| context.create_value(TypeId::STATE, None)),
+    );
     let dep_ports: Vec<ValueId> = ports[1..].iter().map(Value::id).collect();
-    let tile_body = context
-        .create_nodes_region(ports, deps, vec![], vec![], 0)
-        .id();
+    let tile_body = context.create_nodes_region(ports, vec![], vec![]).id();
     let end = b::addi(context, base.id(), stride.result(), ty).build();
     context.add(tile_body, end.id());
     let inner_body = crate::clone::clone_region(context, body);
@@ -98,17 +99,18 @@ pub fn strip_mine(
     let boolean = crate::builtin::IntegerType::new(context, 1);
     let compare = b::cmpi(context, base.id(), last.result(), Predicate::Slt, boolean).build();
     context.add(tile_body, compare.id());
-    let mut results = vec![compare.result(), end.result(), base.id()];
-    results.extend(context.get_op(inner.id()).dep_results());
+    let mut results = vec![compare.result(), end.result()];
+    results.extend(context.get_op(inner.id()).state_results());
+    results.push(base.id());
     results.extend(dep_ports);
-    context.set_region_results(tile_body, results, 2 * deps);
+    context.set_region_results(tile_body, results);
 
     let main = counted_loop(
         tile_body,
         lower,
         last.result(),
         stride.result(),
-        &handle.dep_operands(),
+        &handle.state_operands(),
     );
     place(main.id());
     let main_handle = context.get_op(main.id());
@@ -117,7 +119,7 @@ pub fn strip_mine(
         main_handle.value_results()[0],
         upper,
         step,
-        &main_handle.dep_results(),
+        &main_handle.state_results(),
     );
     place(remainder.id());
 

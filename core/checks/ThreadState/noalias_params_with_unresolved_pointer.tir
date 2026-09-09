@@ -16,10 +16,10 @@ module {
   module_end
 }
 // CHECK-LABEL: %{{[0-9]+}} = func.func @f(%[[P0:[0-9]+]]: !ptr.p, %[[P1:[0-9]+]]: !ptr.p)
-// CHECK-NEXT: | %[[ENTRY:[0-9]+]] = state.entry_state
-// CHECK-NEXT: | %[[E0:[0-9]+]], %[[E1:[0-9]+]], %[[WORLD:[0-9]+]] = state.split | %[[ENTRY]]
-// CHECK-NEXT: %[[PTR:[0-9]+]] | %[[A:[0-9]+]] = ptr.load %[[P0]] | %[[E0]] : !ptr.p
-// CHECK-NEXT: %[[VAL:[0-9]+]] | %[[B:[0-9]+]] = ptr.load %[[PTR]] | %[[WORLD]] : !i32
-// CHECK-NEXT: | %[[S:[0-9]+]] = ptr.store %[[VAL]], %[[P1]] | %[[E1]]
-// CHECK-NEXT: | %[[EXIT:[0-9]+]] = state.join | %[[A]], %[[S]], %[[B]]
-// CHECK-NEXT: -> | %[[EXIT]]
+// CHECK-NEXT: state(%[[ENTRY:[0-9]+]]) = state.entry_state
+// CHECK-NEXT: state(%[[E0:[0-9]+]], %[[E1:[0-9]+]], %[[WORLD:[0-9]+]]) = state.split state(%[[ENTRY]])
+// CHECK-NEXT: %[[PTR:[0-9]+]], state(%[[A:[0-9]+]]) = ptr.load %[[P0]] state(%[[E0]]) : !ptr.p
+// CHECK-NEXT: %[[VAL:[0-9]+]], state(%[[B:[0-9]+]]) = ptr.load %[[PTR]] state(%[[WORLD]]) : !i32
+// CHECK-NEXT: state(%[[S:[0-9]+]]) = ptr.store %[[VAL]], %[[P1]] state(%[[E1]])
+// CHECK-NEXT: state(%[[EXIT:[0-9]+]]) = state.join state(%[[A]], %[[S]], %[[B]])
+// CHECK-NEXT: -> state(%[[EXIT]])

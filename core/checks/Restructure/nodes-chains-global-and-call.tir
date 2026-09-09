@@ -25,10 +25,10 @@ module {
 }
 
 // CHECK: %{{[0-9]+}} = func.func @f(%[[V:[0-9]+]]: !i32) -> !i32 {
-// CHECK: | %[[ENTRY:[0-9]+]] = state.entry_state
-// CHECK-NEXT: | %[[EA:[0-9]+]], %[[EG:[0-9]+]] = state.split | %[[ENTRY]]
-// CHECK-NEXT: | %[[SA:[0-9]+]] = ptr.store %[[V]], %[[A:[0-9]+]] | %[[EA]]
-// CHECK-NEXT: | %[[SG:[0-9]+]] = ptr.store %[[V]], %[[G:[0-9]+]] | %[[EG]]
-// CHECK-NEXT: | %[[C:[0-9]+]] = func.call %{{[0-9]+}}() | %[[SG]]
-// CHECK-NEXT: %{{[0-9]+}} | %[[RA:[0-9]+]] = ptr.load %[[A]] | %[[SA]] : !i32
-// CHECK-NEXT: %{{[0-9]+}} | %[[RG:[0-9]+]] = ptr.load %[[G]] | %[[C]] : !i32
+// CHECK: state(%[[ENTRY:[0-9]+]]) = state.entry_state
+// CHECK-NEXT: state(%[[EA:[0-9]+]], %[[EG:[0-9]+]]) = state.split state(%[[ENTRY]])
+// CHECK-NEXT: state(%[[SA:[0-9]+]]) = ptr.store %[[V]], %[[A:[0-9]+]] state(%[[EA]])
+// CHECK-NEXT: state(%[[SG:[0-9]+]]) = ptr.store %[[V]], %[[G:[0-9]+]] state(%[[EG]])
+// CHECK-NEXT: state(%[[C:[0-9]+]]) = func.call %{{[0-9]+}}() state(%[[SG]])
+// CHECK-NEXT: %{{[0-9]+}}, state(%[[RA:[0-9]+]]) = ptr.load %[[A]] state(%[[SA]]) : !i32
+// CHECK-NEXT: %{{[0-9]+}}, state(%[[RG:[0-9]+]]) = ptr.load %[[G]] state(%[[C]]) : !i32

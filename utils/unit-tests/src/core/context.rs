@@ -377,7 +377,7 @@ fn every_edit_bumps_the_spine() {
             let b = context.create_value(i32, None);
             let add = builtin::ops::addi(context, a.id(), a.id(), i32).build();
             body.append(add.id());
-            context.set_op_operands(add.id(), vec![b.id(), b.id()], 0);
+            context.set_op_operands(add.id(), vec![b.id(), b.id()]);
         }),
         ("replace value uses", |context, body| {
             let i32 = builtin::IntegerType::new(context, 32);
@@ -603,7 +603,7 @@ fn setting_every_operand_relinks_the_uses() {
     let context = Context::with_default_dialects();
     let (c, d, add) = add_fixture(&context);
 
-    context.set_op_operands(add, vec![d], 0);
+    context.set_op_operands(add, vec![d]);
 
     assert!(!context.is_used(c));
     assert_eq!(context.uses_of(d), [Use::new(add, 0)]);
@@ -615,14 +615,14 @@ fn use_indices_follow_a_port_into_its_place() {
     let (_, d, add) = add_fixture(&context);
     let token = context.create_state();
 
-    context.append_dep_operand(add, token);
+    context.append_operand(add, token);
     context.append_operand(add, d);
 
     let operands = context.get_op(add).operands();
     for r#use in context.uses_of(d) {
         assert_eq!(operands[r#use.index], d);
     }
-    assert_eq!(context.uses_of(token), [Use::new(add, 3)]);
+    assert_eq!(context.uses_of(token), [Use::new(add, 2)]);
 }
 
 #[test]

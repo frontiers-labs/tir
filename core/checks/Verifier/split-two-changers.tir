@@ -8,14 +8,14 @@
 
 module {
   %fn_f = func.func @f(%a: !ptr.p<!i32>, %b: !ptr.p<!i32>, %v: !i32) {
-    | %s0 = state.entry_state
-    | %s1, %s2 = state.split | %s0
-    | %s3 = ptr.store %v, %a | %s1
-    | %s4 = ptr.store %v, %b | %s1
-    | %s5 = state.join | %s3, %s4, %s2
-    func.return | %s5
+    state(%s0) = state.entry_state
+    state(%s1, %s2) = state.split state(%s0)
+    state(%s3) = ptr.store %v, %a state(%s1)
+    state(%s4) = ptr.store %v, %b state(%s1)
+    state(%s5) = state.join state(%s3, %s4, %s2)
+    func.return state(%s5)
   }
   module_end
 }
 
-// CHECK: dependency %{{[0-9]+}} is both observed and changed
+// CHECK: state %{{[0-9]+}} is both observed and changed

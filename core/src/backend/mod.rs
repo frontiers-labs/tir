@@ -414,8 +414,8 @@ pub fn print_machine_op<T: tir::Operation>(
     let context = handle.context.upgrade();
     // The registers an instruction defines are its slots; only the chain it
     // leaves behind is bound ahead of the mnemonic.
-    let published = handle.dep_results();
-    tir::dependency::print_dep_list(fmt, &published, false)?;
+    let published = handle.state_results();
+    tir::region_format::print_state_group(fmt, &published, false)?;
     if !published.is_empty() {
         fmt.write(" = ")?;
     }
@@ -464,7 +464,7 @@ pub fn print_machine_op<T: tir::Operation>(
     }
     // Memory order is an operand like any other: an instruction that touches
     // memory names the chain it observed after its registers.
-    tir::dependency::print_dep_operands(fmt, &handle)?;
+    tir::region_format::print_state_operands(fmt, &handle)?;
     fmt.write("\n")
 }
 
@@ -479,13 +479,27 @@ pub fn print_machine_op<T: tir::Operation>(
 /// know the chain.
 pub fn forward_state(context: &tir::Context, old: &tir::OpHandle, new: &dyn tir::Operation) {
     let (Some(observed), Some(published)) = (
-        old.dep_operands().first().copied(),
-        old.dep_results().first().copied(),
+        old.state_operands().first().copied(),
+        old.state_results().first().copied(),
     ) else {
         return;
     };
-    context.append_dep_operand(new.id(), observed);
-    context.adopt_dep_result(new.id(), published);
+    context.append_operand(new.id(), observed);
+    context.adopt_result(new.id(), published);
+}
+
+/// Put `op` on the chain `observed` names and hand back the state it leaves
+/// behind. Machine instructions built by a target's own opcode builders —
+/// spill code, the stores that place a call's stack arguments — know nothing
+/// of the memory they land in, so the ports are grown onto the instruction
+/// here.
+pub fn put_on_chain(
+    context: &tir::Context,
+    op: &dyn tir::Operation,
+    observed: tir::ValueId,
+) -> tir::ValueId {
+    context.append_operand(op.id(), observed);
+    context.append_result(op.id(), tir::TypeId::STATE)
 }
 
 /// Whether the operation exists only to name a memory state: the root of a

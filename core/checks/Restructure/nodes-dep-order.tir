@@ -28,13 +28,13 @@ module {
 
 // CHECK: %{{[0-9]+}} = func.func @main() -> !i32 {
 // CHECK-NEXT: %[[P:[0-9]+]] = ptr.alloca
-// CHECK: | %[[E:[0-9]+]] = state.entry_state
-// CHECK-NEXT: | %[[S1:[0-9]+]] = ptr.store %{{[0-9]+}}, %[[P]] | %[[E]]
-// CHECK-NEXT: %[[X:[0-9]+]] | %[[R1:[0-9]+]] = ptr.load %[[P]] | %[[S1]] : !i32
-// CHECK-NEXT: | %[[S2:[0-9]+]] = ptr.store %{{[0-9]+}}, %[[P]] | %[[R1]]
-// CHECK-NEXT: %[[F:[0-9]+]] | %[[R2:[0-9]+]] = ptr.load %[[P]] | %[[S2]] : !i32
+// CHECK: state(%[[E:[0-9]+]]) = state.entry_state
+// CHECK-NEXT: state(%[[S1:[0-9]+]]) = ptr.store %{{[0-9]+}}, %[[P]] state(%[[E]])
+// CHECK-NEXT: %[[X:[0-9]+]], state(%[[R1:[0-9]+]]) = ptr.load %[[P]] state(%[[S1]]) : !i32
+// CHECK-NEXT: state(%[[S2:[0-9]+]]) = ptr.store %{{[0-9]+}}, %[[P]] state(%[[R1]])
+// CHECK-NEXT: %[[F:[0-9]+]], state(%[[R2:[0-9]+]]) = ptr.load %[[P]] state(%[[S2]]) : !i32
 // CHECK: %[[SUM:[0-9]+]] = addi
-// CHECK-NEXT: -> %[[SUM]] | %[[R2]]
+// CHECK-NEXT: -> %[[SUM]], state(%[[R2]])
 // CHECK-NEXT: }
 
 // VALUE: i32 12

@@ -120,9 +120,7 @@ pub trait BranchGuard {
     fn guarded_successors(&self) -> Vec<(BlockId, ValueId, bool)>;
 }
 
-/// An operation whose value operands and results all carry one type. The
-/// dependency partitions are exempt: they describe ordering, not the value
-/// being computed.
+/// An operation whose operands and results all carry one type.
 /// Checked by [`verify_opdef_operands`](crate::verify_opdef_operands).
 pub trait SameOperandAndResultType {}
 
@@ -140,17 +138,6 @@ pub trait MemoryRead {
     fn read_location(&self) -> ValueId;
     /// The SSA value produced by the read.
     fn read_value(&self) -> ValueId;
-    /// The memory state the read observes, absent until state has been threaded.
-    fn state_operand(&self) -> Option<ValueId> {
-        None
-    }
-    /// The memory state the read leaves behind, absent until state has been
-    /// threaded. A read leaves memory as it found it, but still names the state
-    /// after it: a later write must be ordered after the read that observes the
-    /// value it overwrites.
-    fn state_result(&self) -> Option<ValueId> {
-        None
-    }
 }
 
 /// Identifies an operation that writes a value to a memory location.
@@ -159,28 +146,27 @@ pub trait MemoryWrite {
     fn write_location(&self) -> ValueId;
     /// The SSA value stored into the memory location.
     fn written_value(&self) -> ValueId;
-    /// The memory state the write observes, absent until state has been threaded.
-    fn state_operand(&self) -> Option<ValueId> {
-        None
-    }
-    /// The memory state the write produces, absent until state has been threaded.
-    fn state_result(&self) -> Option<ValueId> {
-        None
-    }
+}
+
+/// An op ordered on memory: the states it observes and the ones it leaves.
+/// Both lists are empty until a threading pass has put the op on a chain.
+pub trait MemoryState {
+    /// Every state this op is ordered after.
+    fn observed(&self) -> Vec<ValueId>;
+    /// Every state this op leaves behind.
+    fn produced(&self) -> Vec<ValueId>;
+    /// Whether this op changes memory, so at most one op may observe each
+    /// state it consumes. Reads and joins answer false.
+    fn changes_memory(&self) -> bool;
 }
 
 /// Where one carried value sits on each side of a structured op: index ranges
-/// into the value partitions of the op's operands, the region's ports, the
-/// region's results (the values the next iteration takes, then the values the
-/// op produces when it stops) and the op's results. The ranges have one
-/// length and the values at one offset share a type, which is what an op's
-/// `binds:` declaration states and its verifier checks. Dependencies are not
-/// declared: a loop carries `m` of them through `m` dep operands, `m` dep
-/// ports, `2m` dep region results and `m` dep results, and a gamma forwards
-/// its dep operands to every arm.
-///
-/// A gamma has no next iteration, so its `continue_` range is empty; its
-/// `ports` and `exit` ranges apply to every arm alike.
+/// into the op's operands, the region's ports, the region's results (the
+/// values the next iteration takes, then the values the op produces when it
+/// stops) and the op's results. The ranges have one length and the values at
+/// one offset share a type, which is what an op's `binds:` declaration states
+/// and its verifier checks. A memory state a loop or a gate carries is one
+/// more carried value; [`crate::binding::state_slots`] finds the chains.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Binding {
     pub operands: std::ops::Range<usize>,

@@ -3,7 +3,7 @@
 use crate::func::CallOp;
 use crate::ptr::MemcpyOp;
 use crate::state::{JoinOp, SplitOp};
-use crate::{MemoryRead, MemoryWrite, OpHandle, ValueId};
+use crate::{MemoryRead, MemoryState, MemoryWrite, OpHandle, ValueId};
 
 /// What one operation does to the memory it names.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -30,7 +30,7 @@ pub fn effect_of(op: &OpHandle) -> Option<Effect> {
     if op.is::<JoinOp>() || op.is::<SplitOp>() || !op.regions().is_empty() {
         return None;
     }
-    (!op.dep_operands().is_empty()).then_some(Effect::Change)
+    (!op.state_operands().is_empty()).then_some(Effect::Change)
 }
 
 /// One declared access: where it lands, the value it names there, the state it
@@ -48,7 +48,7 @@ pub fn access_of(op: &OpHandle) -> Option<Access> {
         return Some(Access {
             location: write.write_location(),
             value: write.written_value(),
-            state: write.state_operand(),
+            state: observed_state(op),
             write: true,
         });
     }
@@ -56,7 +56,25 @@ pub fn access_of(op: &OpHandle) -> Option<Access> {
     Some(Access {
         location: read.read_location(),
         value: read.read_value(),
-        state: read.state_operand(),
+        state: observed_state(op),
         write: false,
     })
+}
+
+/// The one state `op` observes, if it has been put on a chain.
+pub fn observed_state(op: &OpHandle) -> Option<ValueId> {
+    op.clone()
+        .as_interface::<dyn MemoryState>()?
+        .observed()
+        .first()
+        .copied()
+}
+
+/// The one state `op` leaves behind, if it has been put on a chain.
+pub fn produced_state(op: &OpHandle) -> Option<ValueId> {
+    op.clone()
+        .as_interface::<dyn MemoryState>()?
+        .produced()
+        .first()
+        .copied()
 }

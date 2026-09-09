@@ -285,14 +285,14 @@ pub(crate) fn carried(context: &Context, op: &OpHandle) -> Option<Carried> {
     if !region.is_nodes() {
         return None;
     }
-    let results = region.value_results();
+    let results = region.results();
     Some(Carried {
-        args: region.value_arguments()[binding.ports]
+        args: region.ports()[binding.ports]
             .iter()
             .map(crate::Value::id)
             .collect(),
         latched: results[binding.continue_].to_vec(),
-        inits: op.value_operands()[binding.operands].to_vec(),
-        finals: op.value_results()[binding.results].to_vec(),
+        inits: op.operands()[binding.operands].to_vec(),
+        finals: op.results()[binding.results].to_vec(),
     })
 }

@@ -25,6 +25,6 @@ module {
 // CHECK-NOT: func.call
 // CHECK-NOT: tuple
 // CHECK: %[[S:[0-9]+]] = addi %[[X]], %[[Y]] : !i32
-// CHECK-NEXT: -> %[[S]] | %{{[0-9]+}}
+// CHECK-NEXT: -> %[[S]], state(%{{[0-9]+}})
 
 // VALUE: i32 7

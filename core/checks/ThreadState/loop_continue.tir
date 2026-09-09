@@ -30,22 +30,22 @@ module {
 }
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @f
-// CHECK: %{{[0-9]+}} | %[[FINAL:[0-9]+]] = scf.loop (%{{[0-9]+}} = %{{[0-9]+}} | %[[CARRIED:[0-9]+]] = %{{[0-9]+}}) {
+// CHECK: %{{[0-9]+}}, state(%[[FINAL:[0-9]+]]) = scf.loop (%{{[0-9]+}} = %{{[0-9]+}}, state(%[[CARRIED:[0-9]+]] = %{{[0-9]+}})) {
 // CHECK-NEXT: %{{[0-9]+}} = cmpi
-// CHECK-NEXT: %{{[0-9]+}}, %{{[0-9]+}} | %[[EXIT:[0-9]+]] = scf.switch %{{[0-9]+}} args(| %[[CARRIED]]) (| %[[E:[0-9]+]]) {
-// CHECK: (| %[[B:[0-9]+]]) {
-// CHECK-NEXT: | %[[S:[0-9]+]] = ptr.store %{{[0-9]+}}, %{{[0-9]+}} | %[[B]]
+// CHECK-NEXT: %{{[0-9]+}}, %{{[0-9]+}}, state(%[[EXIT:[0-9]+]]) = scf.switch %{{[0-9]+}} args(state(%[[CARRIED]])) (state(%[[E:[0-9]+]])) {
+// CHECK: (state(%[[B:[0-9]+]])) {
+// CHECK-NEXT: state(%[[S:[0-9]+]]) = ptr.store %{{[0-9]+}}, %{{[0-9]+}} state(%[[B]])
 // CHECK-NEXT: %{{[0-9]+}} = addi
-// CHECK-NEXT: | %[[GATE:[0-9]+]] = scf.switch %{{[0-9]+}} args(| %[[S]]) (| %[[R:[0-9]+]]) {
-// CHECK-NEXT: %{{[0-9]+}} | %[[L:[0-9]+]] = ptr.load %{{[0-9]+}} | %[[R]] : !i32
-// CHECK-NEXT: -> | %[[L]]
+// CHECK-NEXT: state(%[[GATE:[0-9]+]]) = scf.switch %{{[0-9]+}} args(state(%[[S]])) (state(%[[R:[0-9]+]])) {
+// CHECK-NEXT: %{{[0-9]+}}, state(%[[L:[0-9]+]]) = ptr.load %{{[0-9]+}} state(%[[R]]) : !i32
+// CHECK-NEXT: -> state(%[[L]])
 // CHECK-NEXT: }
-// CHECK-NEXT: (| %[[K:[0-9]+]]) {
-// CHECK-NEXT: -> | %[[K]]
+// CHECK-NEXT: (state(%[[K:[0-9]+]])) {
+// CHECK-NEXT: -> state(%[[K]])
 // CHECK-NEXT: }
 // CHECK-NEXT: %{{[0-9]+}} = constant {value = 1} : !i1
-// CHECK-NEXT: -> %{{[0-9]+}}, %{{[0-9]+}} | %[[GATE]]
+// CHECK-NEXT: -> %{{[0-9]+}}, %{{[0-9]+}}, state(%[[GATE]])
 // CHECK-NEXT: }
-// CHECK-NEXT: -> %{{[0-9]+}}, %{{[0-9]+}}, %{{[0-9]+}} | %[[EXIT]], %[[EXIT]]
+// CHECK-NEXT: -> %{{[0-9]+}}, %{{[0-9]+}}, %{{[0-9]+}}, state(%[[EXIT]], %[[EXIT]])
 // CHECK-NEXT: }
-// CHECK-NEXT: %{{[0-9]+}} | %{{[0-9]+}} = ptr.load %{{[0-9]+}} | %[[FINAL]] : !i32
+// CHECK-NEXT: %{{[0-9]+}}, state(%{{[0-9]+}}) = ptr.load %{{[0-9]+}} state(%[[FINAL]]) : !i32

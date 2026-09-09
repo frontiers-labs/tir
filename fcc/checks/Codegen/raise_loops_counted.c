@@ -15,11 +15,11 @@ int count(int n) {
 }
 
 // CHECK-NOT: scf.loop
-// CHECK: %[[LB:[0-9]+]] | %{{[0-9]+}} = ptr.load %[[SLOT:[0-9]+]] | %{{[0-9]+}} : !i32
-// CHECK: %[[UB:[0-9]+]] | %{{[0-9]+}} = ptr.load %{{[0-9]+}} | %{{[0-9]+}} : !i32
-// CHECK: %[[FINAL:[0-9]+]] | %[[OUT:[0-9]+]], %{{[0-9]+}} = scf.for %[[IV:[0-9]+]] = %[[LB]] to %[[UB]] step %{{[0-9]+}} (| %[[DEP:[0-9]+]] = %{{[0-9]+}}, %{{[0-9]+}} = %{{[0-9]+}}) {
-// CHECK-NEXT: %{{[0-9]+}} | %{{[0-9]+}} = ptr.load %{{[0-9]+}} | %{{[0-9]+}} : !i32
-// CHECK-NEXT: | %{{[0-9]+}} = ptr.store %[[IV]], %[[SLOT]] | %[[DEP]]
-// CHECK: -> | %{{[0-9]+}}, %{{[0-9]+}}
-// CHECK: ptr.store %[[FINAL]], %[[SLOT]] | %[[OUT]]
+// CHECK: %[[LB:[0-9]+]], state(%{{[0-9]+}}) = ptr.load %[[SLOT:[0-9]+]] state(%{{[0-9]+}}) : !i32
+// CHECK: %[[UB:[0-9]+]], state(%{{[0-9]+}}) = ptr.load %{{[0-9]+}} state(%{{[0-9]+}}) : !i32
+// CHECK: %[[FINAL:[0-9]+]], state(%[[OUT:[0-9]+]], %{{[0-9]+}}) = scf.for %[[IV:[0-9]+]] = %[[LB]] to %[[UB]] step %{{[0-9]+}} (state(%[[DEP:[0-9]+]] = %{{[0-9]+}}, %{{[0-9]+}} = %{{[0-9]+}})) {
+// CHECK-NEXT: %{{[0-9]+}}, state(%{{[0-9]+}}) = ptr.load %{{[0-9]+}} state(%{{[0-9]+}}) : !i32
+// CHECK-NEXT: state(%{{[0-9]+}}) = ptr.store %[[IV]], %[[SLOT]] state(%[[DEP]])
+// CHECK: -> state(%{{[0-9]+}}, %{{[0-9]+}})
+// CHECK: ptr.store %[[FINAL]], %[[SLOT]] state(%[[OUT]])
 // CHECK-NOT: scf.loop

@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::analysis::objects::{Base, accessed_only, object_base};
 use crate::analysis::{Effect, access_of, effect_of};
 use crate::state::{JoinOpBuilder, SplitOpBuilder};
-use crate::{BlockId, Context, OpHandle, OpId, Operation, PassError, RegionId, ValueId};
+use crate::{BlockId, Context, OpHandle, OpId, Operation, PassError, RegionId, TypeId, ValueId};
 
 use super::cfg::unsupported;
 
@@ -195,7 +195,7 @@ pub fn wants_chain(context: &Context, region: RegionId) -> bool {
         .collect();
     let threaded = ops
         .iter()
-        .any(|op| !op.dep_operands().is_empty() || !op.dep_results().is_empty());
+        .any(|op| !op.state_operands().is_empty() || !op.state_results().is_empty());
     !threaded
         && ops
             .iter()
@@ -252,18 +252,29 @@ pub fn thread_block(
             };
             let ports: BTreeMap<usize, ValueId> = touched
                 .iter()
-                .map(|&chain| (chain, context.append_dep_block_argument(body_block).id()))
+                .map(|&chain| {
+                    (
+                        chain,
+                        context
+                            .append_block_argument(body_block, TypeId::STATE)
+                            .id(),
+                    )
+                })
                 .collect();
             let leaving = thread_block(context, body_block, &ports, plan)?;
             let latch = *context.get_block(body_block).op_ids().last().unwrap();
             for &chain in &touched {
-                context.append_dep_operand(latch, leaving[&chain]);
+                context.append_operand(latch, leaving[&chain]);
             }
+            // A chain the loop carries is one more init, in the group the
+            // binding ranges over, not a trailing operand after the bounds.
             for state in observed {
-                context.append_dep_operand(op, state);
+                let for_op = crate::scf::ForOp::from_op_instance(context.get_op(op));
+                let end = crate::Theta::carried(&for_op).operands.end;
+                context.insert_operand_at(op, end, state, end);
             }
             for &chain in &touched {
-                let published = context.append_dep_result(op);
+                let published = context.append_result(op, TypeId::STATE);
                 chains.state(chain)?.written = published;
             }
             continue;
@@ -273,15 +284,15 @@ pub fn thread_block(
             Some(Effect::Read) => {
                 let own = plan.touched[&op][0];
                 let state = chains.state(own)?;
-                context.append_dep_operand(op, state.written);
-                let left = context.append_dep_result(op);
+                context.append_operand(op, state.written);
+                let left = context.append_result(op, TypeId::STATE);
                 chains.state(own)?.reads.push(left);
             }
             Some(Effect::Change) => {
                 let touched = plan.touched[&op].clone();
                 let observed = chains.settle(&touched, op)?;
-                context.append_dep_operand(op, observed);
-                let published = context.append_dep_result(op);
+                context.append_operand(op, observed);
+                let published = context.append_result(op, TypeId::STATE);
                 chains.split(&touched, op, published)?;
             }
         }
@@ -352,11 +363,10 @@ impl Chains<'_> {
         let Some(shared) = self.shared.take() else {
             return Ok(());
         };
-        let mut split = SplitOpBuilder::new(self.context).dep_operand(shared.published);
-        for _ in &shared.chains {
-            split = split.dep_result();
-        }
-        let split = split.build();
+        let split = SplitOpBuilder::new(self.context)
+            .state(shared.published)
+            .states(shared.chains.len())
+            .build();
         self.insert(split.id(), shared.after, 1);
         for (&chain, &state) in shared.chains.iter().zip(&split.states()) {
             self.state(chain)?.written = state;
@@ -409,11 +419,10 @@ impl Chains<'_> {
 
     /// A `state.join` of `states`, placed where the operation taking it is.
     fn merge(&self, states: &[ValueId], before: OpId) -> ValueId {
-        let mut join = JoinOpBuilder::new(self.context).dep_result();
-        for &state in states {
-            join = join.dep_operand(state);
-        }
-        let join = join.build();
+        let join = JoinOpBuilder::new(self.context)
+            .states(states.to_vec())
+            .state_result()
+            .build();
         self.insert(join.id(), before, 0);
         join.result()
     }

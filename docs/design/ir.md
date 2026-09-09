@@ -176,16 +176,20 @@ structural equality. Dialects define types with `#[derive(TirType)]` and
 register them alongside their ops. Verification uses `TypeConstraint`
 predicates on operand/result declarations.
 
-One kind of value is not typed at all: a **dependency**, the memory-ordering
-edge of §6. A dependency carries no data, so it has no type to spell; what
-marks it is its position. Every operand, result, block-argument and region-port
-list is two partitions, the values first and the dependencies trailing, and
-the counts live on the operation, block or region (`value_operands()` /
-`dep_operands()` and their kin). The text puts the dependencies after a `|` on
-either side, without types: `%v | %s1 = ptr.load %p | %s0 : !i32`. Dependencies
-flow through region ports, loop carries and yields like any other value, with
-no special cases in scf or the verifier beyond the memory discipline (§6.4) and
-the partition check that keeps a dependency out of a value slot.
+One type is built in: `!state`, the memory-ordering edge of §6. A state is
+an ordinary SSA value of that type, interned first in every context so
+`TypeId::STATE` names it without a lookup. Nothing counts states: an
+operand, result, block-argument or region-port list is one list, and a reader
+that wants only the values or only the states filters by type
+(`value_operands()` / `state_operands()` and their kin). The text groups the
+states so a reader can tell the chains from the values:
+`%v, state(%s1) = ptr.load %p state(%s0) : !i32`. In a bracketed list — a
+loop's port bindings, a gate's arguments, a block label, a region's `->`
+line — the group is one more item, `(%a = %x, state(%s = %t))`; on the
+operand side of an op it is a trailing clause. States flow through region
+ports, loop carries and yields like any other value, with no special cases in
+scf or the verifier beyond the memory discipline (§6.4) and the type
+constraints that keep a state out of a value slot.
 
 Attributes are `(name, AttributeValue)` pairs on ops; `AttributeValue` is the
 closed data enum (ints, strings, arrays, dicts, registers, types, blocks).
@@ -340,38 +344,40 @@ goes with the last access.
 
 The walk needs no dominance and places no φ — the chain the converter drew
 says which write a read sees — and it grows a port only where the value is
-demanded: a loop the walk leaves through its dependency port carries the
-value, a gate it leaves through its dependency result joins what each arm
+demanded: a loop the walk leaves through its state port carries the
+value, a gate it leaves through its state result joins what each arm
 leaves. What stays a slot — an escaping address, arithmetic reaching part of
 it, accesses disagreeing on a type, an access off the chain — keeps every
 access and stays on the chain as the memory it is.
 
 ## 6. Memory: explicit state
 
-Memory identity and ordering are def-use edges over dependency values, in the
+Memory identity and ordering are def-use edges over `!state` values, in the
 IR itself. No pass recomputes chains; no seeder invents serial numbers. The
 edges are the *whole* memory dependence relation of the middle-end: order is
 derived from them, not the other way round (§6.3).
 
 ### 6.1 Ports
 
-| Op | Dependency ports |
+| Op | State ports |
 |---|---|
 | `ptr.alloca` | *produces* the initial state of its slot's chain (alongside the pointer) |
-| `ptr.load` | *takes* a dependency and produces one: the memory it observed, which the join closing its fork names |
+| `ptr.load` | *takes* a state and produces one: the memory it observed, which the join closing its fork names |
 | `ptr.store`, `ptr.memset` | take one, produce one |
 | `ptr.memcpy`, `func.call` | take the join of every chain they may touch and produce the state it is split back out of |
-| `func.return` | optional dependency operand: every chain the caller can reach, merged |
-| `state.entry_state` | produces one chain's initial state at region entry, one op per chain: `\| %s = state.entry_state` |
-| `state.join` | takes any number of dependencies, produces the memory they merge into |
-| `state.split` | takes one dependency, produces one name per chain carrying on from it |
+| `func.return` | optional state operand: every chain the caller can reach, merged |
+| `state.entry_state` | produces one chain's initial state at region entry, one op per chain: `state(%s) = state.entry_state` |
+| `state.join` | takes any number of states, produces the memory they merge into |
+| `state.split` | takes one state, produces one name per chain carrying on from it |
 
-These ports are the dependency partitions of §2: a pass grows them with
-`grow_dep_port`, `append_dep_operand` and `append_dep_result`, and the value
-accessors stop at the partition. No chain enters a function *signature*:
-a call's arguments must be exactly what the callee's `!fn` type takes, and ABI
-lowering maps region arguments to registers — a dependency parameter would
-break both. Hence the entry-state op and the return's dependency operand.
+An op declares its state ports with `state: "in" | "out" | "in_out"`, which
+appends an optional `!state` operand and result and implements `MemoryState`:
+the states the op observes, the ones it produces, and whether it changes
+memory. A loop or a gate carries a state as one more carried value, grown
+with `grow_port` and read through its binding. No chain enters a function
+*signature*: a call's arguments must be exactly what the callee's `!fn` type
+takes, and ABI lowering maps region arguments to registers — a state parameter
+would break both. Hence the entry-state op and the return's state operand.
 
 The chains survive the backend boundary. A machine opcode whose `InstrInfo`
 effects touch memory declares `state: "in_out"` and carries the chain of the

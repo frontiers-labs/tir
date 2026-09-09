@@ -26,4 +26,4 @@ module {
 // CHECK-NEXT: %[[NEXT:[0-9]+]] = addi %[[CARRIED]], %[[A]] : !i32
 // CHECK-NEXT: -> %[[NEXT]]
 // CHECK-NEXT: }
-// CHECK-NEXT: -> %[[RESULT]] | %{{[0-9]+}}
+// CHECK-NEXT: -> %[[RESULT]], state(%{{[0-9]+}})

@@ -9,17 +9,17 @@ module {
     %0 = constant {value = 0} : !i32
     %1 = constant {value = 1} : !i32
     %2 = constant {value = 3} : !i32
-    %3 | %4 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
-    | %5 = ptr.store %0, %3 | %4
-    %6 | %7 = scf.loop (%8 = %0 | %9 = %5) {
-      %10 | %17 = ptr.load %3 | %9 : !i32
+    %3, state(%4) = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    state(%5) = ptr.store %0, %3 state(%4)
+    %6, state(%7) = scf.loop (%8 = %0, state(%9 = %5)) {
+      %10, state(%17) = ptr.load %3 state(%9) : !i32
       %11 = addi %10, %1 : !i32
-      | %12 = ptr.store %11, %3 | %17
-      %13 = ptr.load %3 | %12 : !i32
+      state(%12) = ptr.store %11, %3 state(%17)
+      %13 = ptr.load %3 state(%12) : !i32
       %14 = cmpi %13, %2 {predicate = "slt"} : !i1
-      -> %14, %8, %13 | %12, %12
+      -> %14, %8, %13, state(%12, %12)
     }
-    %15 = ptr.load %3 | %7 : !i32
+    %15 = ptr.load %3 state(%7) : !i32
     %16 = addi %6, %15 : !i32
     func.return %16
   }

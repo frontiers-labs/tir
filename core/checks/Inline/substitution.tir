@@ -19,7 +19,7 @@ module {
 
 // CHECK-NOT: func.call
 // CHECK-LABEL: func.func @main(%[[X:[0-9]+]]: !i32, %[[Y:[0-9]+]]: !i32)
-// CHECK-NEXT: | %[[S:[0-9]+]] = state.entry_state
+// CHECK-NEXT: state(%[[S:[0-9]+]]) = state.entry_state
 // CHECK-NEXT: %[[SUM:[0-9]+]] = addi %[[X]], %[[Y]] : !i32
 // CHECK-NEXT: %[[T:[0-9]+]] = muli %[[SUM]], %[[X]] : !i32
-// CHECK-NEXT: -> %[[T]] | %[[S]]
+// CHECK-NEXT: -> %[[T]], state(%[[S]])

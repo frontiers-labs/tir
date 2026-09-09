@@ -19,6 +19,6 @@ long first(long a, long b, long c) {
 // CHECK: %[[TEMP:[0-9]+]] = ptr.alloca {size = 24, align = 8}
 // CHECK: %[[BASE:[0-9]+]] = ptr.ptradd %[[TEMP]]
 // CHECK: %[[FIELD:[0-9]+]] = ptr.ptradd %[[BASE]]
-// CHECK: | %[[CALL:[0-9]+]] = func.call %{{[0-9]+}}(%[[TEMP]]
+// CHECK: state(%[[CALL:[0-9]+]]) = func.call %{{[0-9]+}}(%[[TEMP]]
 // CHECK-SAME: ) result_address
-// CHECK-NEXT: %{{[0-9]+}} | %{{[0-9]+}} = ptr.load %[[FIELD]] | %[[CALL]]
+// CHECK-NEXT: %{{[0-9]+}}, state(%{{[0-9]+}}) = ptr.load %[[FIELD]] state(%[[CALL]])

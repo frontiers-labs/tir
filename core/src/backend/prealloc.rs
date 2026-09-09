@@ -274,7 +274,7 @@ impl Pass for BlockArgLoweringPass {
                         AttributeValue::Bool(true),
                     );
                 }
-                context.set_op_operands(op_id, Vec::new(), 0);
+                context.set_op_operands(op_id, Vec::new());
             }
         }
         Ok(())

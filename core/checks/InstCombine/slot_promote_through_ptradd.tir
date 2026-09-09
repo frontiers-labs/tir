@@ -21,9 +21,9 @@ module {data_layout = #data_layout} {
 }
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @f(%[[X:[0-9]+]]: !i32)
-// CHECK-NEXT: | %[[E:[0-9]+]] = state.entry_state
-// CHECK-NEXT: | %[[SLOT:[0-9]+]], %[[WORLD:[0-9]+]] = state.split | %[[E]]
-// CHECK-NEXT: | %[[CALL:[0-9]+]] = func.call %{{[0-9]+}}() | %[[WORLD]]
-// CHECK-NEXT: | %[[EXIT:[0-9]+]] = state.join | %[[SLOT]], %[[CALL]]
-// CHECK-NEXT: -> %[[X]] | %[[EXIT]]
+// CHECK-NEXT: state(%[[E:[0-9]+]]) = state.entry_state
+// CHECK-NEXT: state(%[[SLOT:[0-9]+]], %[[WORLD:[0-9]+]]) = state.split state(%[[E]])
+// CHECK-NEXT: state(%[[CALL:[0-9]+]]) = func.call %{{[0-9]+}}() state(%[[WORLD]])
+// CHECK-NEXT: state(%[[EXIT:[0-9]+]]) = state.join state(%[[SLOT]], %[[CALL]])
+// CHECK-NEXT: -> %[[X]], state(%[[EXIT]])
 // CHECK-NOT: ptr.

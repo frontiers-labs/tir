@@ -10,20 +10,20 @@ module {
   %fn_main = func.func @main() -> !i32 {
     %0 = constant {value = 7} : !i32
     %1 = constant {value = 0} : !i1
-    %2 | %3 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
-    %4 | %5 = scf.loop (%6 = %0 | %7 = %3) {
-      %8 = ptr.load %2 | %7 : !i32
-      -> %1, %8, %6 | %7, %7
+    %2, state(%3) = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    %4, state(%5) = scf.loop (%6 = %0, state(%7 = %3)) {
+      %8 = ptr.load %2 state(%7) : !i32
+      -> %1, %8, %6, state(%7, %7)
     }
     func.return %4
   }
   %fn_trapped = func.func @trapped() -> !i32 {
     %0 = constant {value = 7} : !i32
     %1 = constant {value = 1} : !i1
-    %2 | %3 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
-    %4 | %5 = scf.loop (%6 = %0 | %7 = %3) {
-      %8 = ptr.load %2 | %7 : !i32
-      -> %1, %8, %6 | %7, %7
+    %2, state(%3) = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    %4, state(%5) = scf.loop (%6 = %0, state(%7 = %3)) {
+      %8 = ptr.load %2 state(%7) : !i32
+      -> %1, %8, %6, state(%7, %7)
     }
     func.return %4
   }

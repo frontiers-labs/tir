@@ -1,7 +1,7 @@
 //! The generic views spec-05 gives functions, calls, globals and leaf ops:
 //! what a consumer reads without knowing the concrete op.
 
-use tir::{Apply, Callable, Global, Operation, Speculatable};
+use tir::{Apply, Callable, Global, MemoryState, Operation, Speculatable};
 
 use super::fixtures::{self, module_ops};
 
@@ -92,4 +92,40 @@ fn a_zero_filled_global_has_a_zero_image() {
         .as_interface::<dyn Global>()
         .expect("global is a data object");
     assert_eq!(global.initializer(), Some(vec![0, 0, 0]));
+}
+
+const THREADED_CALL: &str = r#"module {
+  %fn_puts = func.declare @puts(!i32) -> !i32
+  %fn_main = func.func @main(%0: !i32) -> !i32 {
+    state(%1) = state.entry_state
+    %2, state(%3) = func.call %fn_puts(%0 : !i32) -> !i32 state(%1)
+    func.return %2 state(%3)
+  }
+  module_end
+}"#;
+
+#[test]
+fn a_call_on_a_chain_reports_the_states_its_type_filter_finds() {
+    let (context, module) = fixtures::parse(THREADED_CALL);
+    let ops = module_ops(&context, module.id());
+    let body = context.get_op(ops[1]).regions()[0];
+    let call = context
+        .get_region(body)
+        .op_ids()
+        .into_iter()
+        .map(|op| context.get_op(op))
+        .find(|op| op.is::<tir::func::CallOp>())
+        .expect("the body holds the call");
+
+    let memory = call
+        .clone()
+        .as_interface::<dyn MemoryState>()
+        .expect("a call is ordered on memory");
+    assert_eq!(memory.observed(), call.state_operands().to_vec());
+    assert_eq!(memory.produced(), call.state_results().to_vec());
+    assert_eq!(memory.observed().len(), 1);
+    assert_eq!(memory.produced().len(), 1);
+    assert!(memory.changes_memory());
+    assert_eq!(call.value_operands().len(), 2);
+    assert_eq!(call.value_results().len(), 1);
 }

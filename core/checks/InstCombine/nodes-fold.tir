@@ -28,6 +28,6 @@ module {
 // CHECK: %[[SIX:[0-9]+]] = constant {value = 6} : !i32
 // CHECK: %[[C:[0-9]+]] = addi %[[X]], %[[SIX]] : !i32
 // CHECK-NOT: addi
-// CHECK: -> %[[C]] | %{{[0-9]+}}
+// CHECK: -> %[[C]], state(%{{[0-9]+}})
 
 // VALUE: i32 11

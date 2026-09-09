@@ -6,7 +6,7 @@ use crate::{Context, Gamma, NonLocalExit, OpId, RegionId, Theta, TypeId, ValueId
 
 impl Context {
     /// Put `op` into the deepest region every operand is visible from: a
-    /// dependency operand pins it to that operand's region, and otherwise the
+    /// state operand pins it to that operand's region, and otherwise the
     /// innermost of the operands' regions; every other operand region must
     /// enclose or be the one chosen. Answers the region chosen. An op with no
     /// operand names no region to join, and operands of sibling regions are
@@ -18,8 +18,8 @@ impl Context {
             .iter()
             .filter_map(|&value| defining_region(self, value))
             .collect();
-        let chosen = match handle.dep_operands().first() {
-            Some(&dep) => defining_region(self, dep).expect("a dependency is defined in a region"),
+        let chosen = match handle.state_operands().first() {
+            Some(&state) => defining_region(self, state).expect("a state is defined in a region"),
             None => regions
                 .iter()
                 .copied()
@@ -107,13 +107,12 @@ impl Context {
             }
             let mut results = handle.results();
             if results.contains(&old) {
-                let deps = handle.dep_results().len();
                 for result in &mut results {
                     if *result == old {
                         *result = new;
                     }
                 }
-                self.set_region_results(nested, results, deps);
+                self.set_region_results(nested, results);
             }
         }
     }
@@ -141,8 +140,7 @@ impl Context {
                 }
             }
             if renamed {
-                let deps = handle.dep_results().len();
-                self.set_region_results(nested, results, deps);
+                self.set_region_results(nested, results);
             }
         }
     }
@@ -159,69 +157,77 @@ impl Context {
     }
 
     /// [`Context::grow_port`] for an op with a declared binding: one more
-    /// carried value, or dependency when `dependency`, at the end of every
-    /// aligned range. A loop's exit value defaults to the port; a gamma's arms
-    /// must each name what they produce for it. Every non-local exit that
-    /// leaves `op` gains the port of the region it sits in.
+    /// carried value in every aligned range, after the values it carries and
+    /// ahead of its states, or last when the port is a state itself. A loop's
+    /// exit value defaults to the port; a gamma's arms must each name what
+    /// they produce for it. Every non-local exit that leaves `op` gains the
+    /// port of the region it sits in.
     pub(crate) fn grow_declared_port(
         &self,
         op: OpId,
         ty: TypeId,
         init: Option<ValueId>,
         mut latch: impl FnMut(RegionId, Option<ValueId>) -> Option<ValueId>,
-        dependency: bool,
     ) -> ValueId {
         let handle = self.get_op(op);
-        let deps_in = handle.dep_operands().len();
+        // Every list keeps its values ahead of its states, so a value joins
+        // its range after the last value there.
+        let at = |list: &[ValueId], range: std::ops::Range<usize>| {
+            if ty == TypeId::STATE {
+                range.end
+            } else {
+                range.start + self.values_among(&list[range]).len()
+            }
+        };
         let port_of = |region: RegionId, index: usize| {
             let port = self.create_value(ty, None);
-            self.insert_region_port(region, index, port.clone(), dependency);
+            self.insert_region_port(region, index, port.clone());
             port.id()
         };
         let feed = |region: RegionId, port: ValueId| {
             for exit in self.exits_leaving(&self.get_region(region).op_ids(), op) {
-                if dependency {
-                    self.append_dep_operand(exit, port);
-                } else {
-                    self.append_operand(exit, port);
-                }
+                self.append_operand(exit, port);
             }
         };
         if let Some(theta) = handle.clone().as_interface::<dyn Theta>() {
             let body = theta.body();
             let binding = theta.carried();
             let init = init.expect("a loop port carries a value in");
-            let (operands, ports, continue_, exit) = if dependency {
-                (deps_in, deps_in, deps_in, 2 * deps_in)
-            } else {
-                (
-                    binding.operands.end,
-                    binding.ports.end,
-                    binding.continue_.end,
-                    binding.exit.end,
-                )
-            };
-            self.insert_operand_at(op, operands, init, dependency);
-            let port = port_of(body, ports);
+            let region = self.get_region(body);
+            let ports: Vec<ValueId> = region.ports().iter().map(crate::Value::id).collect();
+            let results = region.results();
+            self.insert_operand_at(
+                op,
+                at(&handle.operands(), binding.operands.clone()),
+                init,
+                binding.operands.end,
+            );
+            let port = port_of(body, at(&ports, binding.ports));
             let carried = latch(body, Some(port)).unwrap_or(port);
-            self.insert_region_result(body, exit, port, dependency);
-            self.insert_region_result(body, continue_, carried, dependency);
+            self.insert_region_result(body, at(&results, binding.exit), port);
+            self.insert_region_result(body, at(&results, binding.continue_), carried);
             feed(body, port);
         } else if let Some(gamma) = handle.clone().as_interface::<dyn Gamma>() {
             let arms = gamma.arms();
             let binding = gamma.forwarded();
-            let (operands, ports, joined) = if dependency {
-                (deps_in, deps_in, handle.dep_results().len())
-            } else {
-                (binding.operands.end, binding.ports.end, binding.exit.end)
-            };
             if let Some(init) = init {
-                self.insert_operand_at(op, operands, init, dependency);
+                self.insert_operand_at(
+                    op,
+                    at(&handle.operands(), binding.operands.clone()),
+                    init,
+                    binding.operands.end,
+                );
             }
             for &arm in &arms {
-                let port = init.map(|_| port_of(arm, ports));
+                let region = self.get_region(arm);
+                let ports: Vec<ValueId> = region.ports().iter().map(crate::Value::id).collect();
+                let port = init.map(|_| port_of(arm, at(&ports, binding.ports.clone())));
                 let produced = latch(arm, port).expect("every arm produces the port's value");
-                self.insert_region_result(arm, joined, produced, dependency);
+                self.insert_region_result(
+                    arm,
+                    at(&region.results(), binding.exit.clone()),
+                    produced,
+                );
                 if let Some(port) = port {
                     feed(arm, port);
                 }
@@ -229,37 +235,35 @@ impl Context {
         } else {
             panic!("grow_declared_port needs a Theta or Gamma");
         }
-        if dependency {
-            self.append_dep_result(op)
-        } else {
-            self.append_result(op, ty)
-        }
+        let result = self.create_value(ty, Some(op)).id();
+        let results = handle.results();
+        let binding = crate::binding::declared(&self.get_op(op)).expect("a loop or a gate");
+        self.insert_result_at(op, at(&results, binding.results), result);
+        result
     }
 
-    /// Drop the dependency port a loop or a gate carries at `index`, the
-    /// inverse of [`Context::grow_dep_port`]. The chain it carried flows past
-    /// the operation instead of through it, which is what a chain the body
-    /// leaves alone was doing all along.
+    /// Drop the `ordinal`-th state a loop or a gate carries, the inverse of
+    /// [`Context::grow_port`] for a chain. The chain flows past the operation
+    /// instead of through it, which is what a chain the body leaves alone was
+    /// doing all along.
     ///
     /// The caller has already handed the port's readers what the operation was
     /// entered on and its result's readers that same state; what is left is the
     /// port list, and it goes.
-    pub fn drop_dep_port(&self, op: OpId, index: usize) {
-        let regions = self.get_op(op).regions().to_vec();
-        for &region in &regions {
-            let handle = self.get_region(region);
-            let ports = handle.dep_arguments().len();
-            let mut results = handle.results();
-            let deps = handle.dep_results().len();
-            let groups = deps.checked_div(ports).unwrap_or(0);
-            let values = results.len() - deps;
-            for group in (0..groups).rev() {
-                results.remove(values + group * ports + index);
+    pub fn drop_state(&self, op: OpId, ordinal: usize) {
+        let handle = self.get_op(op);
+        let slot = crate::binding::state_slots(self, &handle)[ordinal];
+        let mut removed: Vec<usize> = slot.continue_.into_iter().chain([slot.exit]).collect();
+        removed.sort_unstable_by(|a, b| b.cmp(a));
+        for region in handle.regions() {
+            let mut results = self.get_region(region).results();
+            for &at in &removed {
+                results.remove(at);
             }
-            self.set_region_results(region, results, deps - groups);
-            self.remove_region_dep_port(region, index);
+            self.set_region_results(region, results);
+            self.remove_region_port(region, slot.port);
         }
-        self.remove_dep_operand(op, index);
-        self.remove_dep_result(op, index);
+        self.remove_operand(op, slot.operand);
+        self.remove_result(op, slot.result);
     }
 }

@@ -156,7 +156,7 @@ impl<'a> Builder<'a> {
             .defining_op()
             .map(|op| self.context.get_op(op))
             .filter(|op| op.is::<JoinOp>())
-            .map(|op| op.dep_operands())
+            .map(|op| op.state_operands())
             .unwrap_or_else(|| vec![state].into());
         merged
             .into_iter()
@@ -366,14 +366,8 @@ impl<'a> Builder<'a> {
             return;
         };
         let (args, latched, inits) = (carried.args, carried.latched, carried.inits);
-        // A declared loop carries its dependencies apart from its value ports;
-        // a legacy one lists them among its arguments.
-        let value_ports = if op.has_interface::<dyn Theta>() {
-            args.len()
-        } else {
-            args.len() - op.dep_results().len().min(args.len())
-        };
-        for port in 0..value_ports {
+        // A chain the loop carries is memory order, not a recurrence.
+        for port in (0..args.len()).filter(|&port| !self.context.get_value(args[port]).is_state()) {
             self.ports.push(Port {
                 arg: args[port],
                 recurrence: self.recurrence(args[port], latched[port], inits[port]),
@@ -622,17 +616,18 @@ fn chain_root_walk(
                 }
                 current = *inputs.first()?;
             }
-            // A dependency a loop carries is entered on the operand at the same
-            // index, and so is a gate's arm; a gate's result is what its arms
-            // left, which is one chain only where they agree.
+            // A chain a loop carries is entered on its init, and so is a
+            // gate's arm; a gate's result is what its arms left, which is one
+            // chain only where they agree.
             chain::Step::Port {
                 op,
                 index,
                 entering,
             } => {
                 let op = context.get_op(op);
+                let slot = *crate::binding::state_slots(context, &op).get(index)?;
                 if entering || op.has_interface::<dyn Theta>() {
-                    current = *op.dep_operands().get(index)?;
+                    current = *op.operands().get(slot.operand)?;
                     continue;
                 }
                 let gamma = op.as_interface::<dyn Gamma>()?;
@@ -640,11 +635,8 @@ fn chain_root_walk(
                     .arms()
                     .iter()
                     .map(|&arm| {
-                        chain_root_memo(
-                            context,
-                            *context.get_region(arm).dep_results().get(index)?,
-                            memo,
-                        )
+                        let results = context.get_region(arm).results();
+                        chain_root_memo(context, *results.get(slot.exit)?, memo)
                     })
                     .collect::<Option<BTreeSet<_>>>()?;
                 return (roots.len() == 1).then(|| roots.pop_first().expect("one root"));

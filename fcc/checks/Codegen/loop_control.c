@@ -8,8 +8,8 @@
 // CHECK: %{{[0-9]+}} = func.func @stop_early
 // CHECK: scf.loop (
 // CHECK: scf.switch
-// CHECK: %{{[0-9]+}}, %{{[0-9]+}}, %[[TAG:[0-9]+]] | %[[DEP:[0-9]+]] = scf.switch
-// CHECK: %[[PRED:[0-9]+]] | %{{[0-9]+}} = scf.switch %[[TAG]] args(| %[[DEP]]) (| %[[IN:[0-9]+]]) {
+// CHECK: %{{[0-9]+}}, %{{[0-9]+}}, %[[TAG:[0-9]+]], state(%[[DEP:[0-9]+]]) = scf.switch
+// CHECK: %[[PRED:[0-9]+]], state(%{{[0-9]+}}) = scf.switch %[[TAG]] args(state(%[[DEP]])) (state(%[[IN:[0-9]+]])) {
 // CHECK: addi
 // CHECK: ptr.store
-// CHECK: -> %{{[0-9]+}}, %[[PRED]] | %{{[0-9]+}}
+// CHECK: -> %{{[0-9]+}}, %[[PRED]], state(%{{[0-9]+}})

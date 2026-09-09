@@ -99,12 +99,12 @@ impl CallOp {
         let is_unit = ret_type == UnitType::new(&context);
 
         // A unit result is not spelled, so the binding is written by hand:
-        // the value, the dependencies, and `=` only where something is bound.
-        let published = self.0.dep_results();
+        // the value, the states, and `=` only where something is bound.
+        let published = self.0.state_results();
         if !is_unit {
             fmt.write(format!("%{}", self.result().number()))?;
         }
-        tir::dependency::print_dep_list(fmt, &published, !is_unit)?;
+        tir::region_format::print_state_group(fmt, &published, !is_unit)?;
         if !is_unit || !published.is_empty() {
             fmt.write(" = ")?;
         }
@@ -140,7 +140,7 @@ impl CallOp {
             fmt.write(format!(" callee @{symbol}"))?;
         }
         super::print_keyed_list(fmt, "argument_alignments", &self.argument_alignments())?;
-        tir::dependency::print_dep_operands(fmt, &self.0)?;
+        tir::region_format::print_state_operands(fmt, &self.0)?;
         fmt.write("\n")
     }
 
@@ -173,8 +173,8 @@ impl CallOp {
             .callee(callee)
             .args(args)
             .result_type(ret_type);
-        for dep in tir::dependency::parse_dep_operands(parser, context)? {
-            builder = builder.dep_operand(dep);
+        if let Some(&state) = parser.parse_state_operands(context)?.first() {
+            builder = builder.state(state);
         }
         if result_address {
             builder = builder.result_address();

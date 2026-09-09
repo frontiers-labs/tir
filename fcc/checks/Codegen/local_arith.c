@@ -8,4 +8,4 @@
 // CHECK: %[[ONE:[0-9]+]] = constant {value = 1}
 // CHECK: muli
 // CHECK: addi %{{[0-9]+}}, %[[ONE]]
-// CHECK: -> %{{[0-9]+}} | %{{[0-9]+}}
+// CHECK: -> %{{[0-9]+}}, state(%{{[0-9]+}})

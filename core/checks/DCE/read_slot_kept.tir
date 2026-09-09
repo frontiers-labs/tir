@@ -16,6 +16,6 @@ module {
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @f
 // CHECK: %[[P:[0-9]+]] = ptr.alloca
-// CHECK: | %[[S:[0-9]+]] = ptr.store %{{[0-9]+}}, %[[P]] | %{{[0-9]+}}
-// CHECK: %[[V:[0-9]+]] | %[[R:[0-9]+]] = ptr.load %[[P]] | %[[S]] : !i32
-// CHECK: -> %[[V]] | %[[R]]
+// CHECK: state(%[[S:[0-9]+]]) = ptr.store %{{[0-9]+}}, %[[P]] state(%{{[0-9]+}})
+// CHECK: %[[V:[0-9]+]], state(%[[R:[0-9]+]]) = ptr.load %[[P]] state(%[[S]]) : !i32
+// CHECK: -> %[[V]], state(%[[R]])

@@ -37,12 +37,12 @@ module {
 }
 
 // CHECK: %{{[0-9]+}} = func.func @f(%[[C:[0-9]+]]: !i32) -> !i32 {
-// CHECK: scf.switch %{{[0-9]+}} args(| %{{[0-9]+}}, %{{[0-9]+}}) (| %[[EA:[0-9]+]], %[[EB:[0-9]+]]) {
-// CHECK: | %[[SB:[0-9]+]] = ptr.store %{{[0-9]+}}, %{{[0-9]+}} | %[[EB]]
-// CHECK-NEXT: -> | %[[EA]], %[[SB]]
-// CHECK: (| %[[TA:[0-9]+]], %[[TB:[0-9]+]]) {
-// CHECK: | %[[SA:[0-9]+]] = ptr.store %{{[0-9]+}}, %{{[0-9]+}} | %[[TA]]
-// CHECK-NEXT: -> | %[[SA]], %[[TB]]
+// CHECK: scf.switch %{{[0-9]+}} args(state(%{{[0-9]+}}, %{{[0-9]+}})) (state(%[[EA:[0-9]+]], %[[EB:[0-9]+]])) {
+// CHECK: state(%[[SB:[0-9]+]]) = ptr.store %{{[0-9]+}}, %{{[0-9]+}} state(%[[EB]])
+// CHECK-NEXT: -> state(%[[EA]], %[[SB]])
+// CHECK: (state(%[[TA:[0-9]+]], %[[TB:[0-9]+]])) {
+// CHECK: state(%[[SA:[0-9]+]]) = ptr.store %{{[0-9]+}}, %{{[0-9]+}} state(%[[TA]])
+// CHECK-NEXT: -> state(%[[SA]], %[[TB]])
 
 // ONE: i32 1
 // ZERO: i32 2

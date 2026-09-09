@@ -116,7 +116,12 @@ fn address_only_accessed(context: &Context, address: ValueId, state: &SlotState)
 fn names_whole_slot(context: &Context, op: OpId, slot: ValueId) -> bool {
     let instance = context.get_op(op);
     crate::analysis::access_of(&instance).is_some_and(|access| access.location == slot)
-        && !instance.dep_operands().is_empty()
+        && !instance.state_operands().is_empty()
+}
+
+/// Where the `index`-th chain a loop or a gate carries sits.
+fn chain_slot(context: &Context, op: &OpHandle, index: usize) -> crate::binding::StateSlot {
+    crate::binding::state_slots(context, op)[index]
 }
 
 /// Whether every op between `op` and `body` is a loop or a gate with a declared
@@ -207,7 +212,7 @@ impl<'a> Promoter<'a> {
     /// grown, so what it proves is what the growth then does.
     fn refuses(&mut self, state: &SlotState) -> bool {
         for &load in &state.loads {
-            let Some(&observed) = self.context.get_op(load).dep_operands().first() else {
+            let Some(&observed) = self.context.get_op(load).state_operands().first() else {
                 return true;
             };
             if self.reach(observed) == Reach::Unknown {
@@ -222,7 +227,7 @@ impl<'a> Promoter<'a> {
         let reached: Vec<Reach> = state
             .loads
             .iter()
-            .map(|&load| self.reach(context.get_op(load).dep_operands()[0]))
+            .map(|&load| self.reach(context.get_op(load).state_operands()[0]))
             .collect();
         // A read the chain cannot answer keeps the slot memory: a write it may
         // have observed would go with the promotion.
@@ -249,8 +254,8 @@ impl<'a> Promoter<'a> {
         }
         for &op in &dead {
             let instance = context.get_op(op);
-            let observed = self.retired(instance.dep_operands()[0]);
-            for left in instance.dep_results() {
+            let observed = self.retired(instance.state_operands()[0]);
+            for left in instance.state_results() {
                 self.replace(op, left, observed);
                 self.substituted.insert(left, observed);
             }
@@ -306,7 +311,7 @@ impl<'a> Promoter<'a> {
                     Reach::Undefined
                 } else if instance.is::<crate::state::JoinOp>() {
                     instance
-                        .dep_operands()
+                        .state_operands()
                         .iter()
                         .fold(Reach::Undefined, |found, &state| {
                             found.merge(self.reach(state))
@@ -315,7 +320,7 @@ impl<'a> Promoter<'a> {
                     // An effect the walk cannot read still names the memory
                     // before it: the seam an inlined body leaves sits on the
                     // chain, and stepping over it would hide the write it holds.
-                    self.reach(instance.dep_operands()[0])
+                    self.reach(instance.state_operands()[0])
                 } else {
                     self.crossing(dep)
                 }
@@ -341,7 +346,8 @@ impl<'a> Promoter<'a> {
         let op = self.context.get_op(op);
         let repeats = op.has_interface::<dyn Theta>();
         if !self.writes_under(&op) || (entering && !repeats) {
-            return self.reach(op.dep_operands()[index]);
+            let slot = chain_slot(self.context, &op, index);
+            return self.reach(op.operands()[slot.operand]);
         }
         if repeats {
             self.grow_theta(&op, index);
@@ -363,7 +369,8 @@ impl<'a> Promoter<'a> {
         let context = self.context;
         let theta = op.clone().as_interface::<dyn Theta>().expect("a loop");
         let body = theta.body();
-        let entered = op.dep_operands()[index];
+        let slot = chain_slot(context, op, index);
+        let entered = op.operands()[slot.operand];
         // Spelling the init may grow an enclosing loop, whose latch walks back
         // into this one and grows it on the way: mark it grown only after.
         let init = self.reach(entered);
@@ -371,44 +378,50 @@ impl<'a> Promoter<'a> {
             return;
         }
         let region = context.get_region(body);
-        let dep_results = region.dep_results();
+        let results = region.results();
         let (continue_dep, exit_dep) = (
-            dep_results[index],
-            dep_results[dep_results.len() / 2 + index],
+            results[slot.continue_.expect("a loop carries a state on")],
+            results[slot.exit],
         );
-        let port_dep = region.dep_arguments()[index].id();
+        let port_dep = region.ports()[slot.port].id();
+        let left = op.results()[slot.result];
         if self.probing {
             let grown = Reach::Written(op.id, index);
             self.reach.insert(port_dep, grown);
-            self.reach.insert(op.dep_results()[index], grown);
+            self.reach.insert(left, grown);
             for state in [entered, continue_dep, exit_dep] {
                 self.demand(state);
             }
             return;
         }
         let init = self.value_of(init);
-        let mut exit = None;
+        let mut grown = None;
         let result = context.grow_port(op.id, self.ty, Some(init), |_, port| {
             let port = port.expect("a loop port is entered on a value");
             self.reach.insert(port_dep, Reach::Value(port));
             let carried = self.held(continue_dep);
-            exit = Some(self.held(exit_dep));
+            grown = Some((port, self.held(exit_dep)));
             Some(carried)
         });
-        let exit = exit.expect("the latch ran");
+        let (port, exit) = grown.expect("the latch ran");
+        // The grown port leaves the loop as itself until the exit cone says
+        // what the slot holds there.
         let binding = op
             .clone()
             .as_interface::<dyn Theta>()
             .expect("a loop")
             .carried();
         let mut results = region.results();
-        let slot = binding.exit.end - 1;
-        if results[slot] != exit {
-            results[slot] = exit;
-            context.set_region_results(body, results, region.dep_results().len());
+        let at = binding
+            .exit
+            .clone()
+            .find(|&index| results[index] == port)
+            .expect("the grown port is its own exit value");
+        if results[at] != exit {
+            results[at] = exit;
+            context.set_region_results(body, results);
         }
-        self.reach
-            .insert(op.dep_results()[index], Reach::Value(result));
+        self.reach.insert(left, Reach::Value(result));
     }
 
     /// A gate's port for the slot: every arm produces the value it leaves the
@@ -421,25 +434,25 @@ impl<'a> Promoter<'a> {
         // Spelling the state the gate is entered on may grow an enclosing
         // loop, whose latch walks back into this gate and grows it on the
         // way: mark it grown only after.
-        self.reach(op.dep_operands()[index]);
+        let context = self.context;
+        let slot = chain_slot(context, op, index);
+        self.reach(op.operands()[slot.operand]);
         if !self.grown.insert((op.id, index)) {
             return;
         }
-        let context = self.context;
+        let left = op.results()[slot.result];
+        let arm_left = |arm| context.get_region(arm).results()[slot.exit];
         if self.probing {
-            self.reach
-                .insert(op.dep_results()[index], Reach::Written(op.id, index));
+            self.reach.insert(left, Reach::Written(op.id, index));
             for arm in op.regions() {
-                self.demand(context.get_region(arm).dep_results()[index]);
+                self.demand(arm_left(arm));
             }
             return;
         }
         let result = context.grow_port(op.id, self.ty, None, |arm, _| {
-            let left = context.get_region(arm).dep_results()[index];
-            Some(self.held(left))
+            Some(self.held(arm_left(arm)))
         });
-        self.reach
-            .insert(op.dep_results()[index], Reach::Value(result));
+        self.reach.insert(left, Reach::Value(result));
     }
 
     /// The value the slot holds at `dep`, which the probing walk proved a write

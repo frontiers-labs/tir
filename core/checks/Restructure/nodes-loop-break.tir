@@ -47,13 +47,13 @@ module {
 // CHECK: scf.switch
 // CHECK: -> %{{[0-9]+}}, %{{[0-9]+}}, %{{[0-9]+}}, %{{[0-9]+}}, %{{[0-9]+}}
 // CHECK-NEXT: }
-// CHECK-NEXT: %[[R:[0-9]+]] | %[[RD:[0-9]+]] = scf.switch %[[SEL]] args(| %{{[0-9]+}}) (| %[[A:[0-9]+]]) {
-// CHECK-NEXT: | %[[S1:[0-9]+]] = ptr.store %{{[0-9]+}}, %{{[0-9]+}} | %[[A]]
+// CHECK-NEXT: %[[R:[0-9]+]], state(%[[RD:[0-9]+]]) = scf.switch %[[SEL]] args(state(%{{[0-9]+}})) (state(%[[A:[0-9]+]])) {
+// CHECK-NEXT: state(%[[S1:[0-9]+]]) = ptr.store %{{[0-9]+}}, %{{[0-9]+}} state(%[[A]])
 // CHECK: }
-// CHECK-NEXT: (| %[[B:[0-9]+]]) {
-// CHECK-NEXT: | %[[S2:[0-9]+]] = ptr.store %[[I]], %{{[0-9]+}} | %[[B]]
+// CHECK-NEXT: (state(%[[B:[0-9]+]])) {
+// CHECK-NEXT: state(%[[S2:[0-9]+]]) = ptr.store %[[I]], %{{[0-9]+}} state(%[[B]])
 // CHECK: }
-// CHECK-NEXT: -> %[[R]] | %[[RD]]
+// CHECK-NEXT: -> %[[R]], state(%[[RD]])
 
 // BREAK: i32 100
 // DONE: i32 5

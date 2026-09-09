@@ -8,6 +8,6 @@
 // CHECK: ptr.store
 // CHECK: ->
 // CHECK: }
-// CHECK-NEXT: (| %{{[0-9]+}}) {
+// CHECK-NEXT: (state(%{{[0-9]+}})) {
 // CHECK: ptr.store
 // CHECK: ->

@@ -26,6 +26,8 @@ use tir_relational::{ClassId as Id, Extraction};
 
 use super::{Driver, Node, Prov, SymKind, cost, state};
 use crate::analysis::AnalysisManager;
+use crate::analysis::effects::{observed_state, produced_state};
+use crate::binding::{forwards_state, state_slots};
 use crate::func::FuncOp;
 use crate::sem::egraph::type_width;
 use crate::{
@@ -108,7 +110,7 @@ impl Driver<'_> {
             if instance.is::<crate::state::JoinOp>()
                 && let Some(merged) = self.merged_state(&instance)
             {
-                for result in instance.dep_results() {
+                for result in instance.state_results() {
                     self.context.replace_value_uses(result, merged);
                     self.context
                         .rename_region_results(region, result, merged, &[]);
@@ -172,7 +174,7 @@ impl Driver<'_> {
     /// input's one reader: another reader would be left sharing the state with
     /// whatever reads the join, which is a fork the discipline may forbid.
     fn merged_state(&self, join: &OpHandle) -> Option<ValueId> {
-        let operands = join.dep_operands();
+        let operands = join.state_operands();
         let (first, rest) = operands.split_first()?;
         if rest.iter().all(|other| other == first) {
             return Some(*first);
@@ -197,10 +199,11 @@ impl Driver<'_> {
     /// names a split and a join give it on the way are the same memory.
     fn forward_dead_write(&self, op: OpId, scope: &[RegionId]) {
         let instance = self.context.get_op(op);
-        let Some(write) = instance.clone().as_interface::<dyn MemoryWrite>() else {
+        if !instance.has_interface::<dyn MemoryWrite>() {
             return;
-        };
-        let (Some(taken), Some(leaves)) = (write.state_operand(), write.state_result()) else {
+        }
+        let (Some(taken), Some(leaves)) = (observed_state(&instance), produced_state(&instance))
+        else {
             return;
         };
         let Some(extent) = self.extent(leaves) else {
@@ -224,16 +227,17 @@ impl Driver<'_> {
             // The write's own chain is the one it named first, so it is the
             // first the split hands back; a merge names the memory the change
             // taking it observes.
-            if handle.is::<crate::state::SplitOp>() && state == handle.dep_operands()[0]
+            if handle.is::<crate::state::SplitOp>() && state == handle.state_operands()[0]
                 || handle.is::<crate::state::JoinOp>()
             {
-                state = handle.dep_results()[0];
+                state = handle.state_results()[0];
                 continue;
             }
-            let Some(next) = handle.as_interface::<dyn MemoryWrite>() else {
+            if !handle.has_interface::<dyn MemoryWrite>() {
                 return;
-            };
-            let (Some(observed), Some(left)) = (next.state_operand(), next.state_result()) else {
+            }
+            let (Some(observed), Some(left)) = (observed_state(&handle), produced_state(&handle))
+            else {
                 return;
             };
             if observed != state {
@@ -273,10 +277,12 @@ impl Driver<'_> {
     /// it published is the state it observed, so its readers take that, and the
     /// read is demanded by nothing.
     fn forward_read_state(&self, instance: &OpHandle, region: RegionId) {
-        let Some(read) = instance.clone().as_interface::<dyn MemoryRead>() else {
+        if !instance.has_interface::<dyn MemoryRead>() {
             return;
-        };
-        if let (Some(observed), Some(published)) = (read.state_operand(), read.state_result()) {
+        }
+        if let (Some(observed), Some(published)) =
+            (observed_state(instance), produced_state(instance))
+        {
             self.context.replace_value_uses(published, observed);
             self.context
                 .rename_region_results(region, published, observed, &[]);
@@ -400,7 +406,7 @@ impl Driver<'_> {
         let source = self.context.get_op(op);
         if !source.has_interface::<dyn Speculatable>()
             || !source.regions().is_empty()
-            || !source.dep_operands().is_empty()
+            || !source.state_operands().is_empty()
             || source.operands().is_empty()
             || source.results().len() != 1
         {
@@ -462,19 +468,19 @@ fn changed_chain(context: &Context, state: ValueId) -> bool {
     // The chains a function opens are one entry state split, so a split of a
     // memory nothing changed names one nothing changed either.
     if instance.is::<crate::state::SplitOp>() {
-        return changed_chain(context, instance.dep_operands()[0]);
+        return changed_chain(context, instance.state_operands()[0]);
     }
-    let Some(index) = instance.dep_results().iter().position(|&r| r == state) else {
+    let at = instance.results().iter().position(|&r| r == state);
+    let Some(slot) = state_slots(context, &instance)
+        .into_iter()
+        .find(|slot| Some(slot.result) == at)
+    else {
         return true;
     };
-    let carries = |&region| crate::binding::forwards_dep(context, region, index);
-    if instance.regions().is_empty() || !instance.regions().iter().all(carries) {
+    if !forwards_state(context, &instance, slot) {
         return true;
     }
-    match instance.dep_operands().get(index) {
-        Some(&entered) => changed_chain(context, entered),
-        None => true,
-    }
+    changed_chain(context, instance.operands()[slot.operand])
 }
 
 /// Whether `region` can read `value`: it is defined in `region` or in one
@@ -514,7 +520,7 @@ fn drop_untouched_chains(context: &Context, region: RegionId) {
         // state the split was handed.
         if instance.is::<crate::state::SplitOp>() {
             let read: Vec<ValueId> = instance
-                .dep_results()
+                .state_results()
                 .into_iter()
                 .filter(|&state| {
                     !context.users_of(state).is_empty()
@@ -522,45 +528,43 @@ fn drop_untouched_chains(context: &Context, region: RegionId) {
                 })
                 .collect();
             if let [kept] = read[..] {
-                let taken = instance.dep_operands()[0];
+                let taken = instance.state_operands()[0];
                 context.replace_value_uses(kept, taken);
                 context.rename_region_results(region, kept, taken, &[]);
             }
             continue;
         }
-        if !(instance.has_interface::<dyn Theta>() || instance.has_interface::<dyn Gamma>()) {
-            continue;
-        }
-        // Highest index first, so the ports that stay keep their positions.
-        for index in (0..instance.dep_operands().len()).rev() {
-            if !carries_nothing(context, op, index) {
+        // Highest chain first, so the ports that stay keep their positions.
+        for ordinal in (0..state_slots(context, &instance).len()).rev() {
+            if !carries_nothing(context, op, ordinal) {
                 continue;
             }
             let handle = context.get_op(op);
-            let entered = handle.dep_operands()[index];
-            let published = handle.dep_results()[index];
+            let slot = state_slots(context, &handle)[ordinal];
+            let entered = handle.operands()[slot.operand];
+            let published = handle.results()[slot.result];
             context.replace_value_uses(published, entered);
             context.rename_region_results(region, published, entered, &[]);
-            context.drop_dep_port(op, index);
+            context.drop_state(op, ordinal);
         }
     }
 }
 
-/// Whether the chain `op` carries at `index` is one nothing under it names:
+/// Whether the `ordinal`-th chain `op` carries is one nothing under it names:
 /// every region hands the port straight back, and nothing else reads it.
-fn carries_nothing(context: &Context, op: OpId, index: usize) -> bool {
+fn carries_nothing(context: &Context, op: OpId, ordinal: usize) -> bool {
     let handle = context.get_op(op);
-    if handle.dep_results().len() != handle.dep_operands().len() {
+    let slot = state_slots(context, &handle)[ordinal];
+    if !forwards_state(context, &handle, slot) {
         return false;
     }
+    let groups = if handle.has_interface::<dyn Theta>() {
+        2
+    } else {
+        1
+    };
     handle.regions().iter().all(|&region| {
-        let Some(groups) = crate::binding::dep_groups(context, region) else {
-            return false;
-        };
-        if !crate::binding::forwards_dep(context, region, index) {
-            return false;
-        }
-        let port = context.get_region(region).dep_arguments()[index].id();
+        let port = context.get_region(region).ports()[slot.port].id();
         let named = context
             .nested_regions(region)
             .iter()
@@ -588,10 +592,11 @@ fn forget_write_only_slots(context: &Context, body: RegionId) {
         }
         for write in writes {
             let instance = context.get_op(write);
-            let Some(write) = instance.clone().as_interface::<dyn MemoryWrite>() else {
+            if !instance.has_interface::<dyn MemoryWrite>() {
                 continue;
-            };
-            let (Some(taken), Some(published)) = (write.state_operand(), write.state_result())
+            }
+            let (Some(taken), Some(published)) =
+                (observed_state(&instance), produced_state(&instance))
             else {
                 continue;
             };

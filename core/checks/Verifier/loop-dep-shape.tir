@@ -4,14 +4,14 @@
 
 module {
   %fn_main = func.func @main(%0: !i32) -> !i32 {
-    %1 | %2 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
-    %3 | %4 = scf.loop (%5 = %0 | %6 = %2) {
+    %1, state(%2) = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+    %3, state(%4) = scf.loop (%5 = %0, state(%6 = %2)) {
       %7 = constant {value = 0} : !i1
-      -> %7, %5, %5 | %6
+      -> %7, %5, %5, state(%6)
     }
-    func.return %3 | %4
+    func.return %3 state(%4)
   }
   module_end
 }
 
-// CHECK: scf.loop carries 1 dependencies but has 1 dependency body results, not 2
+// CHECK: scf.loop carries 2 values but has 1 exit values

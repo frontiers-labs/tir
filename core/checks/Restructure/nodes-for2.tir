@@ -41,21 +41,21 @@ module {
 }
 
 // CHECK: %{{[0-9]+}} = func.func @sum(%[[N:[0-9]+]]: !i32) -> !i32 {
-// CHECK: | %[[ENTRY:[0-9]+]] = state.entry_state
-// CHECK-NEXT: | %[[EI:[0-9]+]], %[[ET:[0-9]+]] = state.split | %[[ENTRY]]
-// CHECK-NEXT: | %[[TS:[0-9]+]] = ptr.store %{{[0-9]+}}, %[[T:[0-9]+]] | %[[ET]]
-// CHECK-NEXT: | %[[IS:[0-9]+]] = ptr.store %{{[0-9]+}}, %[[I:[0-9]+]] | %[[EI]]
-// CHECK-NEXT: %[[LB:[0-9]+]] | %[[LBS:[0-9]+]] = ptr.load %[[I]] | %[[IS]] : !i32
-// CHECK-NEXT: %{{[0-9]+}}, %[[FIN:[0-9]+]] | %[[MI:[0-9]+]], %[[MT:[0-9]+]] = scf.for %[[C:[0-9]+]] = %[[LB]] to %[[N]] step %[[ONE:[0-9]+]] (%[[IV:[0-9]+]] = %[[LB]] | %[[DI:[0-9]+]] = %[[LBS]], %[[DT:[0-9]+]] = %[[TS]]) {
-// CHECK-NEXT: | %[[S1:[0-9]+]] = ptr.store %[[IV]], %[[I]] | %[[DI]]
-// CHECK-NEXT: %{{[0-9]+}} | %[[R1:[0-9]+]] = ptr.load %[[T]] | %[[DT]] : !i32
-// CHECK-NEXT: %{{[0-9]+}} | %[[R2:[0-9]+]] = ptr.load %[[I]] | %[[S1]] : !i32
-// CHECK: | %[[S2:[0-9]+]] = ptr.store %{{[0-9]+}}, %[[T]] | %[[R1]]
+// CHECK: state(%[[ENTRY:[0-9]+]]) = state.entry_state
+// CHECK-NEXT: state(%[[EI:[0-9]+]], %[[ET:[0-9]+]]) = state.split state(%[[ENTRY]])
+// CHECK-NEXT: state(%[[TS:[0-9]+]]) = ptr.store %{{[0-9]+}}, %[[T:[0-9]+]] state(%[[ET]])
+// CHECK-NEXT: state(%[[IS:[0-9]+]]) = ptr.store %{{[0-9]+}}, %[[I:[0-9]+]] state(%[[EI]])
+// CHECK-NEXT: %[[LB:[0-9]+]], state(%[[LBS:[0-9]+]]) = ptr.load %[[I]] state(%[[IS]]) : !i32
+// CHECK-NEXT: %{{[0-9]+}}, %[[FIN:[0-9]+]], state(%[[MI:[0-9]+]], %[[MT:[0-9]+]]) = scf.for %[[C:[0-9]+]] = %[[LB]] to %[[N]] step %[[ONE:[0-9]+]] (%[[IV:[0-9]+]] = %[[LB]], state(%[[DI:[0-9]+]] = %[[LBS]], %[[DT:[0-9]+]] = %[[TS]])) {
+// CHECK-NEXT: state(%[[S1:[0-9]+]]) = ptr.store %[[IV]], %[[I]] state(%[[DI]])
+// CHECK-NEXT: %{{[0-9]+}}, state(%[[R1:[0-9]+]]) = ptr.load %[[T]] state(%[[DT]]) : !i32
+// CHECK-NEXT: %{{[0-9]+}}, state(%[[R2:[0-9]+]]) = ptr.load %[[I]] state(%[[S1]]) : !i32
+// CHECK: state(%[[S2:[0-9]+]]) = ptr.store %{{[0-9]+}}, %[[T]] state(%[[R1]])
 // CHECK-NEXT: %[[NEXT:[0-9]+]] = addi %[[IV]], %[[ONE]] : !i32
-// CHECK-NEXT: -> %[[NEXT]] | %[[R2]], %[[S2]]
+// CHECK-NEXT: -> %[[NEXT]], state(%[[R2]], %[[S2]])
 // CHECK-NEXT: }
-// CHECK-NEXT: | %{{[0-9]+}} = ptr.store %[[FIN]], %[[I]] | %[[MI]]
-// CHECK-NEXT: %{{[0-9]+}} | %{{[0-9]+}} = ptr.load %[[T]] | %[[MT]] : !i32
+// CHECK-NEXT: state(%{{[0-9]+}}) = ptr.store %[[FIN]], %[[I]] state(%[[MI]])
+// CHECK-NEXT: %{{[0-9]+}}, state(%{{[0-9]+}}) = ptr.load %[[T]] state(%[[MT]]) : !i32
 
 // FOUR: i32 10
 // ZERO: i32 0

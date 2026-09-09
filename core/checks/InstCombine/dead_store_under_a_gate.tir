@@ -8,17 +8,17 @@
 
 module {
   %fn_f = func.func @f(%0: !i1, %1: !ptr.p<!i32>, %2: !i32, %3: !i32) {
-    | %4 = state.entry_state
-    | %5 = scf.switch %0 args(| %4) (| %9) {
-      | %10 = ptr.store %2, %1 | %9
-      -> | %10
+    state(%4) = state.entry_state
+    state(%5) = scf.switch %0 args(state(%4)) (state(%9)) {
+      state(%10) = ptr.store %2, %1 state(%9)
+      -> state(%10)
     }
-    (| %6) {
-      | %7 = ptr.store %2, %1 | %6
-      | %8 = ptr.store %3, %1 | %7
-      -> | %8
+    (state(%6)) {
+      state(%7) = ptr.store %2, %1 state(%6)
+      state(%8) = ptr.store %3, %1 state(%7)
+      -> state(%8)
     }
-    -> | %5
+    -> state(%5)
   }
   module_end
 }

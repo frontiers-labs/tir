@@ -8,25 +8,25 @@ module {
   %fn_sink = func.declare @sink(!ptr.p<!i32>) -> !i32
   %fn_escapes = func.func @escapes(%0: !i1, %1: !i32) -> !i32 {
     %2 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
-    | %3 = state.entry_state
-    | %4 = ptr.store %1, %2 | %3
-    | %5 = scf.loop (| %6 = %4) {
-      %7 | %8 = scf.switch %0 args(| %6) (| %9) {
+    state(%3) = state.entry_state
+    state(%4) = ptr.store %1, %2 state(%3)
+    state(%5) = scf.loop (state(%6 = %4)) {
+      %7, state(%8) = scf.switch %0 args(state(%6)) (state(%9)) {
         %10 = constant {value = 0} : !i1
-        -> %10 | %9
+        -> %10, state(%9)
       }
-      (| %11) {
-        %12 | %13 = ptr.load %2 | %11 : !i32
-        %14 | %15 = func.call %fn_sink(%2 : !ptr.p<!i32>) -> !i32 | %13
+      (state(%11)) {
+        %12, state(%13) = ptr.load %2 state(%11) : !i32
+        %14, state(%15) = func.call %fn_sink(%2 : !ptr.p<!i32>) -> !i32 state(%13)
         %16 = addi %12, %14 : !i32
-        | %17 = ptr.store %16, %2 | %15
+        state(%17) = ptr.store %16, %2 state(%15)
         %18 = constant {value = 1} : !i1
-        -> %18 | %17
+        -> %18, state(%17)
       }
-      -> %7 | %8, %8
+      -> %7, state(%8, %8)
     }
-    %19 | %20 = ptr.load %2 | %5 : !i32
-    -> %19 | %20
+    %19, state(%20) = ptr.load %2 state(%5) : !i32
+    -> %19, state(%20)
   }
   module_end
 }

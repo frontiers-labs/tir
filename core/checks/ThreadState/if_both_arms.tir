@@ -24,15 +24,15 @@ module {
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @h
 // CHECK-NEXT: %[[P:[0-9]+]] = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
-// CHECK-NEXT: | %[[ENTRY:[0-9]+]] = state.entry_state
-// CHECK-NEXT: | %[[A1:[0-9]+]] = ptr.store %{{[0-9]+}}, %[[P]] | %[[ENTRY]]
-// CHECK-NEXT: | %[[GATE:[0-9]+]] = scf.switch %{{[0-9]+}} args(| %[[A1]]) (| %[[E:[0-9]+]]) {
-// CHECK-NEXT: | %[[E1:[0-9]+]] = ptr.store %{{[0-9]+}}, %[[P]] | %[[E]]
-// CHECK-NEXT: -> | %[[E1]]
+// CHECK-NEXT: state(%[[ENTRY:[0-9]+]]) = state.entry_state
+// CHECK-NEXT: state(%[[A1:[0-9]+]]) = ptr.store %{{[0-9]+}}, %[[P]] state(%[[ENTRY]])
+// CHECK-NEXT: state(%[[GATE:[0-9]+]]) = scf.switch %{{[0-9]+}} args(state(%[[A1]])) (state(%[[E:[0-9]+]])) {
+// CHECK-NEXT: state(%[[E1:[0-9]+]]) = ptr.store %{{[0-9]+}}, %[[P]] state(%[[E]])
+// CHECK-NEXT: -> state(%[[E1]])
 // CHECK-NEXT: }
-// CHECK-NEXT: (| %[[T:[0-9]+]]) {
-// CHECK-NEXT: | %[[T1:[0-9]+]] = ptr.store %{{[0-9]+}}, %[[P]] | %[[T]]
-// CHECK-NEXT: -> | %[[T1]]
+// CHECK-NEXT: (state(%[[T:[0-9]+]])) {
+// CHECK-NEXT: state(%[[T1:[0-9]+]]) = ptr.store %{{[0-9]+}}, %[[P]] state(%[[T]])
+// CHECK-NEXT: -> state(%[[T1]])
 // CHECK-NEXT: }
-// CHECK-NEXT: %[[V:[0-9]+]] | %[[R:[0-9]+]] = ptr.load %[[P]] | %[[GATE]] : !i32
-// CHECK-NEXT: -> %[[V]] | %[[R]]
+// CHECK-NEXT: %[[V:[0-9]+]], state(%[[R:[0-9]+]]) = ptr.load %[[P]] state(%[[GATE]]) : !i32
+// CHECK-NEXT: -> %[[V]], state(%[[R]])

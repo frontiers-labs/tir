@@ -226,8 +226,7 @@ impl CallLowering {
         context.add(region, make_tuple.id());
         let mut results = handle.results();
         results[0] = make_tuple.result();
-        let deps = handle.dep_results().len();
-        context.set_region_results(region, results, deps);
+        context.set_region_results(region, results);
         Ok(())
     }
 
@@ -342,7 +341,7 @@ impl CallLowering {
         // stack is written into memory the callee reads, so those stores go on
         // this very chain: the call takes what the last of them left, and
         // nothing may put the call ahead of one.
-        let mut observed = call.state_operand();
+        let mut observed = crate::analysis::effects::observed_state(&context.get_op(call.id()));
         for (&fresh, location) in fresh_args.iter().zip(&argument_locations) {
             match *location {
                 ArgumentLocation::Register(register) => {
@@ -357,7 +356,7 @@ impl CallLowering {
                         .stack_arg_store(context, self.abi, fresh, class, offset)?;
                     rewriter.insert_op_before(op, store.as_ref())?;
                     observed = observed
-                        .map(|state| tir::dependency::put_on_chain(context, store.as_ref(), state));
+                        .map(|state| tir::backend::put_on_chain(context, store.as_ref(), state));
                 }
             }
         }
@@ -399,7 +398,7 @@ impl CallLowering {
         // The call runs a function, so the memory it observes and the one it
         // leaves behind are the chain the mid-end put it on: the virtual call
         // takes both ports over from `func.call`.
-        let published = call.state_result();
+        let published = crate::analysis::effects::produced_state(&context.get_op(call.id()));
         let call: Box<dyn Operation> = match callee {
             Callee::Direct(name) => {
                 let mut builder = super::VirtualCallOpBuilder::new(context)
@@ -408,7 +407,7 @@ impl CallLowering {
                     .attr("clobbers", clobbers)
                     .attr("uses", uses);
                 if let Some(observed) = observed {
-                    builder = builder.dep_operand(observed).dep_result();
+                    builder = builder.state(observed).state_result();
                 }
                 Box::new(builder.build())
             }
@@ -419,14 +418,14 @@ impl CallLowering {
                     .attr("clobbers", clobbers)
                     .attr("uses", uses);
                 if let Some(observed) = observed {
-                    builder = builder.dep_operand(observed).dep_result();
+                    builder = builder.state(observed).state_result();
                 }
                 Box::new(builder.build())
             }
         };
         if let (Some(published), Some(new)) = (
             published,
-            context.get_op(call.id()).dep_results().first().copied(),
+            context.get_op(call.id()).state_results().first().copied(),
         ) {
             context.replace_value_uses(published, new);
         }

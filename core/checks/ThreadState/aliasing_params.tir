@@ -13,7 +13,7 @@ module {
   module_end
 }
 // CHECK-LABEL: %{{[0-9]+}} = func.func @axpy(%[[DST:[0-9]+]]: !ptr.p, %[[SRC:[0-9]+]]: !ptr.p)
-// CHECK-NEXT: | %[[ENTRY:[0-9]+]] = state.entry_state
-// CHECK-NEXT: %[[VAL:[0-9]+]] | %[[READ:[0-9]+]] = ptr.load %[[SRC]] | %[[ENTRY]] : !i32
-// CHECK-NEXT: | %[[WRITE:[0-9]+]] = ptr.store %[[VAL]], %[[DST]] | %[[READ]]
-// CHECK-NEXT: -> | %[[WRITE]]
+// CHECK-NEXT: state(%[[ENTRY:[0-9]+]]) = state.entry_state
+// CHECK-NEXT: %[[VAL:[0-9]+]], state(%[[READ:[0-9]+]]) = ptr.load %[[SRC]] state(%[[ENTRY]]) : !i32
+// CHECK-NEXT: state(%[[WRITE:[0-9]+]]) = ptr.store %[[VAL]], %[[DST]] state(%[[READ]])
+// CHECK-NEXT: -> state(%[[WRITE]])

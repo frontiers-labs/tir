@@ -112,7 +112,7 @@ impl Edges for MachineEdges<'_> {
         // argument is not an assignment — nothing moves for it, and the
         // parameter names the chain the join is entered on — so an edge
         // carrying only those needs no block of its own.
-        let deps = self.context.get_block(taken.dest).dep_arguments().len();
+        let deps = self.context.get_block(taken.dest).state_arguments().len();
         let target = if taken_args.len() > deps {
             let trampoline = mint();
             self.emit_jump(trampoline, taken.dest, &taken_args);
@@ -182,7 +182,7 @@ impl Edges for MachineEdges<'_> {
             builder = builder.value(self.value(value));
         }
         for &dep in deps {
-            builder = builder.dep_operand(self.value(dep));
+            builder = builder.state(self.value(dep));
         }
         self.context
             .get_block(block)

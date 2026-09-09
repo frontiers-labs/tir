@@ -26,9 +26,9 @@ module {
 
 // The parameter is read into the call argument in the header; only the back
 // edge's own block writes its register again, right before re-entering.
-// CHECK:      ^[[HEAD:bb[0-9]+]](%[[P:[0-9]+]]: !x86_64.GPR32, %{{[0-9]+}}: !x86_64.GPR | %{{[0-9]+}}):
+// CHECK:      ^[[HEAD:bb[0-9]+]](%[[P:[0-9]+]]: !x86_64.GPR32, %{{[0-9]+}}: !x86_64.GPR, state(%{{[0-9]+}})):
 // CHECK-NEXT: x86_64.mov {dst = %{{[0-9]+}}:{{r[a-z0-9]+}}, src = %[[P]]:[[REG:[a-z0-9]+]]}
-// CHECK:      asm.vcall | %{{[0-9]+}} {callee = "foo"
+// CHECK:      asm.vcall state(%{{[0-9]+}}) {callee = "foo"
 // CHECK:      x86_64.add_imm32
 // CHECK-NEXT: asm.vbr
 // CHECK:      x86_64.mov {dst = %[[P]]:[[REG]], src = %{{[0-9]+}}:{{r[a-z0-9]+}}}

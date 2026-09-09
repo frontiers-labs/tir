@@ -32,19 +32,19 @@ module {
 }
 
 // CHECK: %{{[0-9]+}} = func.func @pick(%[[C:[0-9]+]]: !i1, %[[N:[0-9]+]]: !i32) -> !i32 {
-// CHECK: | %[[S0:[0-9]+]] = ptr.store %[[N]], %[[P:[0-9]+]] | %{{[0-9]+}}
-// CHECK-NEXT: %[[V:[0-9]+]] | %[[M:[0-9]+]] = scf.switch %[[C]] args(| %[[S0]]) (| %[[EA:[0-9]+]]) {
+// CHECK: state(%[[S0:[0-9]+]]) = ptr.store %[[N]], %[[P:[0-9]+]] state(%{{[0-9]+}})
+// CHECK-NEXT: %[[V:[0-9]+]], state(%[[M:[0-9]+]]) = scf.switch %[[C]] args(state(%[[S0]])) (state(%[[EA:[0-9]+]])) {
 // CHECK-NEXT: %[[E:[0-9]+]] = subi %[[N]], %[[N]] : !i32
-// CHECK-NEXT: -> %[[E]] | %[[EA]]
+// CHECK-NEXT: -> %[[E]], state(%[[EA]])
 // CHECK-NEXT: }
-// CHECK-NEXT: (| %[[TA:[0-9]+]]) {
+// CHECK-NEXT: (state(%[[TA:[0-9]+]])) {
 // CHECK-NEXT: %[[T:[0-9]+]] = addi %[[N]], %[[N]] : !i32
-// CHECK-NEXT: | %[[S1:[0-9]+]] = ptr.store %[[T]], %[[P]] | %[[TA]]
-// CHECK-NEXT: -> %[[N]] | %[[S1]]
+// CHECK-NEXT: state(%[[S1:[0-9]+]]) = ptr.store %[[T]], %[[P]] state(%[[TA]])
+// CHECK-NEXT: -> %[[N]], state(%[[S1]])
 // CHECK-NEXT: }
-// CHECK-NEXT: %[[L:[0-9]+]] | %[[R:[0-9]+]] = ptr.load %[[P]] | %[[M]] : !i32
+// CHECK-NEXT: %[[L:[0-9]+]], state(%[[R:[0-9]+]]) = ptr.load %[[P]] state(%[[M]]) : !i32
 // CHECK-NEXT: %[[SUM:[0-9]+]] = addi %[[V]], %[[L]] : !i32
-// CHECK-NEXT: -> %[[SUM]] | %[[R]]
+// CHECK-NEXT: -> %[[SUM]], state(%[[R]])
 
 // THEN: i32 15
 // ELSE: i32 5

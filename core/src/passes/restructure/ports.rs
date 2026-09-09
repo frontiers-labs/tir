@@ -1,5 +1,5 @@
 //! Which variables a structured operation carries: those its regions assign
-//! and something after it reads, dependencies trailing the values.
+//! and something after it reads, states trailing the values.
 
 use std::collections::BTreeSet;
 
@@ -30,29 +30,27 @@ impl Emitter<'_> {
         self.ports(&[body], needed)
     }
 
-    /// `ports` with the dependencies moved after the values: the order every
-    /// port list keeps its two partitions in.
+    /// `ports` with the states moved after the values: the order every port
+    /// list keeps its groups in.
     pub(super) fn deps_last(&self, ports: &[VarId]) -> Vec<VarId> {
-        let is_dep = |var: &VarId| self.cfg.var_types[*var] == TypeId::STATE;
-        let mut ordered: Vec<VarId> = ports.iter().copied().filter(|var| !is_dep(var)).collect();
-        ordered.extend(ports.iter().copied().filter(is_dep));
+        let is_state = |var: &VarId| self.cfg.var_types[*var] == TypeId::STATE;
+        let mut ordered: Vec<VarId> = ports.iter().copied().filter(|var| !is_state(var)).collect();
+        ordered.extend(ports.iter().copied().filter(is_state));
         ordered
     }
 
-    /// How many trailing ports of a [`Self::deps_last`] list are dependencies.
-    pub(super) fn dep_count(&self, ports: &[VarId]) -> usize {
+    /// The ports that are memory states.
+    pub(super) fn state_ports(&self, ports: &[VarId]) -> Vec<VarId> {
         ports
             .iter()
-            .filter(|var| self.cfg.var_types[**var] == TypeId::STATE)
-            .count()
+            .copied()
+            .filter(|&var| self.cfg.var_types[var] == TypeId::STATE)
+            .collect()
     }
 
-    /// The types of the value ports: the dependencies trailing `ports` name none.
-    pub(super) fn value_types(&self, ports: &[VarId]) -> Vec<TypeId> {
-        ports[..ports.len() - self.dep_count(ports)]
-            .iter()
-            .map(|&var| self.cfg.var_types[var])
-            .collect()
+    /// The type of every port, `!state` for the chains among them.
+    pub(super) fn port_types(&self, ports: &[VarId]) -> Vec<TypeId> {
+        ports.iter().map(|&var| self.cfg.var_types[var]).collect()
     }
 
     /// The variables a statement tree leaves with a new value.

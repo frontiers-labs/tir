@@ -28,7 +28,7 @@ module {
 // CHECK: func.func @f(%{{[0-9]+}}: !i32)
 // CHECK: scf.loop
 // CHECK: ptr.store
-// CHECK: %[[V:[0-9]+]] | %[[S:[0-9]+]] = ptr.load
-// CHECK: -> %[[V]] | %[[S]]
+// CHECK: %[[V:[0-9]+]], state(%[[S:[0-9]+]]) = ptr.load
+// CHECK: -> %[[V]], state(%[[S]])
 
 // VALUE: i32 2

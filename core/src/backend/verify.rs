@@ -66,7 +66,7 @@ pub fn verify_machine_ir(context: &Context, root: OpId) -> Result<(), Error> {
 /// block is entered on. A port naming a definition selection took away is an
 /// edge to nothing, and these edges are the memory order from here to encoding.
 fn verify_state_operands(context: &Context, op: &OpHandle) -> Result<(), Error> {
-    for value in op.dep_operands().iter().copied() {
+    for value in op.state_operands().iter().copied() {
         if !context.has_value(value) {
             continue;
         }

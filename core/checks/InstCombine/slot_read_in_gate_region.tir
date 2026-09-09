@@ -8,17 +8,17 @@
 module {
   %fn_forward = func.func @forward(%0: !i1, %1: !i32) -> !i32 {
     %2 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
-    | %s0 = state.entry_state
-    | %s1 = ptr.store %1, %2 | %s0
-    %5 | %s2 = scf.switch %0 args(| %s1) (| %e) {
-      -> %1 | %e
+    state(%s0) = state.entry_state
+    state(%s1) = ptr.store %1, %2 state(%s0)
+    %5, state(%s2) = scf.switch %0 args(state(%s1)) (state(%e)) {
+      -> %1, state(%e)
     }
-    (| %t) {
-      %3 | %t1 = ptr.load %2 | %t : !i32
+    (state(%t)) {
+      %3, state(%t1) = ptr.load %2 state(%t) : !i32
       %4 = addi %3, %3 : !i32
-      -> %4 | %t1
+      -> %4, state(%t1)
     }
-    -> %5 | %s2
+    -> %5, state(%s2)
   }
   module_end
 }

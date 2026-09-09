@@ -356,10 +356,10 @@ fn splice_nodes(
         .zip(args)
         .chain(
             source
-                .dep_arguments()
+                .state_arguments()
                 .iter()
                 .map(Value::id)
-                .zip(call.dep_operands()),
+                .zip(call.state_operands()),
         )
         .collect();
     let destination = context
@@ -381,7 +381,7 @@ fn splice_nodes(
         })
         .filter_map(|call| callee_node(context, &call, &graph.by_op))
         .collect();
-    let entered = call.dep_operands().first().copied();
+    let entered = call.state_operands().first().copied();
     let roots: Vec<OpId> = ops
         .iter()
         .copied()
@@ -392,11 +392,10 @@ fn splice_nodes(
     // entered on. Two chains rooted at one state would be two futures for it.
     let mut chains = match (roots.len() > 1, entered) {
         (true, Some(entered)) => {
-            let mut split = crate::state::SplitOpBuilder::new(context).dep_operand(entered);
-            for _ in &roots {
-                split = split.dep_result();
-            }
-            let split = split.build();
+            let split = crate::state::SplitOpBuilder::new(context)
+                .state(entered)
+                .states(roots.len())
+                .build();
             context.add(destination, split.id());
             split.states().into_iter()
         }
@@ -412,7 +411,7 @@ fn splice_nodes(
             let Some(entered) = chains.next().or(entered) else {
                 return Err(PassError::RewriteFailed(call.id));
             };
-            let root = instance.dep_results()[0];
+            let root = instance.state_results()[0];
             rename(context, destination, root, entered);
             // A callee touching no memory hands back the state it was entered
             // on, which the copy's result list names by the root just erased.
@@ -425,15 +424,19 @@ fn splice_nodes(
         }
     }
 
-    let values = source.value_results().len();
-    for (&old, &new) in call.value_results().iter().zip(&produced[..values]) {
+    let produced_states = context.states_among(&produced);
+    for (&old, &new) in call
+        .value_results()
+        .iter()
+        .zip(&context.values_among(&produced))
+    {
         rename(context, destination, old, new);
     }
     // A callee touching no memory leaves no dependency behind: the call passed
     // the state it observed through unchanged.
-    for (index, &old) in call.dep_results().iter().enumerate() {
-        let new = produced
-            .get(values + index)
+    for (index, &old) in call.state_results().iter().enumerate() {
+        let new = produced_states
+            .get(index)
             .copied()
             .or(entered)
             .ok_or(PassError::RewriteFailed(call.id))?;

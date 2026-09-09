@@ -25,20 +25,20 @@ module {
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @g
 // CHECK-NEXT: %[[P:[0-9]+]] = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
-// CHECK-NEXT: | %[[ENTRY:[0-9]+]] = state.entry_state
-// CHECK-NEXT: | %[[A1:[0-9]+]] = ptr.store %{{[0-9]+}}, %[[P]] | %[[ENTRY]]
-// CHECK-NEXT: | %[[FINAL:[0-9]+]] = scf.loop (| %[[CARRIED:[0-9]+]] = %[[A1]]) {
-// CHECK-NEXT: %[[REPEAT:[0-9]+]] | %[[STATE:[0-9]+]] = scf.switch %{{[0-9]+}} args(| %[[CARRIED]]) (| %[[E:[0-9]+]]) {
+// CHECK-NEXT: state(%[[ENTRY:[0-9]+]]) = state.entry_state
+// CHECK-NEXT: state(%[[A1:[0-9]+]]) = ptr.store %{{[0-9]+}}, %[[P]] state(%[[ENTRY]])
+// CHECK-NEXT: state(%[[FINAL:[0-9]+]]) = scf.loop (state(%[[CARRIED:[0-9]+]] = %[[A1]])) {
+// CHECK-NEXT: %[[REPEAT:[0-9]+]], state(%[[STATE:[0-9]+]]) = scf.switch %{{[0-9]+}} args(state(%[[CARRIED]])) (state(%[[E:[0-9]+]])) {
 // CHECK-NEXT: %{{[0-9]+}} = constant {value = 0} : !i1
-// CHECK-NEXT: -> %{{[0-9]+}} | %[[E]]
+// CHECK-NEXT: -> %{{[0-9]+}}, state(%[[E]])
 // CHECK-NEXT: }
-// CHECK-NEXT: (| %[[B:[0-9]+]]) {
-// CHECK-NEXT: %{{[0-9]+}} | %[[B1:[0-9]+]] = ptr.load %[[P]] | %[[B]] : !i32
-// CHECK-NEXT: | %[[C:[0-9]+]] = ptr.store %{{[0-9]+}}, %[[P]] | %[[B1]]
+// CHECK-NEXT: (state(%[[B:[0-9]+]])) {
+// CHECK-NEXT: %{{[0-9]+}}, state(%[[B1:[0-9]+]]) = ptr.load %[[P]] state(%[[B]]) : !i32
+// CHECK-NEXT: state(%[[C:[0-9]+]]) = ptr.store %{{[0-9]+}}, %[[P]] state(%[[B1]])
 // CHECK-NEXT: %{{[0-9]+}} = constant {value = 1} : !i1
-// CHECK-NEXT: -> %{{[0-9]+}} | %[[C]]
+// CHECK-NEXT: -> %{{[0-9]+}}, state(%[[C]])
 // CHECK-NEXT: }
-// CHECK-NEXT: -> %[[REPEAT]] | %[[STATE]], %[[STATE]]
+// CHECK-NEXT: -> %[[REPEAT]], state(%[[STATE]], %[[STATE]])
 // CHECK-NEXT: }
-// CHECK-NEXT: %[[V:[0-9]+]] | %[[R:[0-9]+]] = ptr.load %[[P]] | %[[FINAL]] : !i32
-// CHECK-NEXT: -> %[[V]] | %[[R]]
+// CHECK-NEXT: %[[V:[0-9]+]], state(%[[R:[0-9]+]]) = ptr.load %[[P]] state(%[[FINAL]]) : !i32
+// CHECK-NEXT: -> %[[V]], state(%[[R]])

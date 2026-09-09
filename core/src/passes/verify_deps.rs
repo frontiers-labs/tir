@@ -42,10 +42,10 @@ pub fn verify_deps(context: &Context, function: &OpHandle) -> Result<(), crate::
                 Some(Effect::Change) => true,
                 None => continue,
             };
-            if op.dep_operands().is_empty() {
+            if op.state_operands().is_empty() {
                 return fail(&op, "names no dependency");
             }
-            if changes && op.dep_results().is_empty() {
+            if changes && op.state_results().is_empty() {
                 return fail(&op, "leaves no dependency behind");
             }
             if !demanded.contains(&op_id) {

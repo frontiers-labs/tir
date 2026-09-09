@@ -5,16 +5,16 @@
 
 module {
   %f = func.func @f(%c: !i1, %p: !ptr.p<!i32>, %v: !i32) -> !i32 {
-    | %s = state.entry_state
-    | %g = scf.switch %c args(| %s) (| %a) {
-      -> | %a
+    state(%s) = state.entry_state
+    state(%g) = scf.switch %c args(state(%s)) (state(%a)) {
+      -> state(%a)
     }
-    (| %b) {
-      | %s1 = ptr.store %v, %p | %b
-      -> | %s1
+    (state(%b)) {
+      state(%s1) = ptr.store %v, %p state(%b)
+      -> state(%s1)
     }
-    %x | %r = ptr.load %p | %s : !i32
-    -> %x | %r
+    %x, state(%r) = ptr.load %p state(%s) : !i32
+    -> %x, state(%r)
   }
   module_end
 }

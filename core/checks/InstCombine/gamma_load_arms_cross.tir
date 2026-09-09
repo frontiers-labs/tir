@@ -9,27 +9,27 @@ module {
     %1 = ptr.alloca {size = 4, align = 4} : !ptr.p
     %2 = ptr.alloca {size = 4, align = 4} : !ptr.p
     %3 = constant {value = 0} : !i32
-    | %s0 = state.entry_state
-    | %s1 = ptr.store %3, %1 | %s0
-    | %s2 = ptr.store %3, %2 | %s1
-    | %s3 = scf.switch %0 args(| %s2) (| %e) {
-      %7 | %e1 = ptr.load %2 | %e : !i32
+    state(%s0) = state.entry_state
+    state(%s1) = ptr.store %3, %1 state(%s0)
+    state(%s2) = ptr.store %3, %2 state(%s1)
+    state(%s3) = scf.switch %0 args(state(%s2)) (state(%e)) {
+      %7, state(%e1) = ptr.load %2 state(%e) : !i32
       %8 = constant {value = 1} : !i32
       %9 = addi %7, %8 : !i32
-      | %e2 = ptr.store %9, %2 | %e1
-      -> | %e2
+      state(%e2) = ptr.store %9, %2 state(%e1)
+      -> state(%e2)
     }
-    (| %t) {
-      %4 | %t1 = ptr.load %1 | %t : !i32
+    (state(%t)) {
+      %4, state(%t1) = ptr.load %1 state(%t) : !i32
       %5 = constant {value = 1} : !i32
       %6 = addi %4, %5 : !i32
-      | %t2 = ptr.store %6, %1 | %t1
-      -> | %t2
+      state(%t2) = ptr.store %6, %1 state(%t1)
+      -> state(%t2)
     }
-    %10 | %s4 = ptr.load %1 | %s3 : !i32
-    %11 | %s5 = ptr.load %2 | %s4 : !i32
+    %10, state(%s4) = ptr.load %1 state(%s3) : !i32
+    %11, state(%s5) = ptr.load %2 state(%s4) : !i32
     %12 = addi %10, %11 : !i32
-    -> %12 | %s5
+    -> %12, state(%s5)
   }
   module_end
 }

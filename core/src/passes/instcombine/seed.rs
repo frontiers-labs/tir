@@ -10,6 +10,7 @@ use std::collections::{HashMap, HashSet};
 
 use tir_relational::{ClassId as Id, Engine};
 
+use crate::analysis::effects::{observed_state, produced_state};
 use crate::sem::egraph::{minimal_unsigned_apint, type_width};
 use crate::sem::{Prov, SemNode as Node, SymKind};
 use crate::state::{JoinOp, SplitOp};
@@ -161,8 +162,8 @@ impl Seeder<'_> {
             // A split renames one memory per chain crossing it; each name is
             // the memory the state it takes already stands for, so a read of
             // any of them has observed what that state's writes left.
-            let state = self.class_of(instance.dep_operands()[0]);
-            for result in instance.dep_results() {
+            let state = self.class_of(instance.state_operands()[0]);
+            for result in instance.state_results() {
                 self.bind_value(result, state);
             }
             return;
@@ -199,31 +200,28 @@ impl Seeder<'_> {
     fn seed_switch(&mut self, instance: &OpHandle, gamma: &dyn Gamma) {
         let predicate = self.class_of(gamma.predicate());
         let binding = gamma.forwarded();
-        let inputs = instance.value_operands()[binding.operands.clone()].to_vec();
-        let deps = instance.dep_operands();
+        let inputs = instance.operands()[binding.operands.clone()].to_vec();
         let arms = gamma.arms();
         for &arm in &arms {
             let region = self.context.get_region(arm);
-            let ports = region.value_arguments();
+            let ports = region.ports();
             for (port, &input) in ports[binding.ports.clone()].iter().zip(&inputs) {
                 let id = self.class_of(input);
                 self.bind_value(port.id(), id);
             }
-            for (port, &dep) in region.dep_arguments().iter().zip(&deps) {
-                let id = self.class_of(dep);
-                self.bind_value(port.id(), id);
-            }
             self.seed_region(arm);
         }
-        let results = instance.value_results()[binding.results.clone()].to_vec();
+        let results = instance.results()[binding.results.clone()].to_vec();
         let boolean =
             type_width(self.context, self.context.get_value(gamma.predicate()).ty()) == Some(1);
         for (index, &result) in results.iter().enumerate() {
+            if self.context.get_value(result).is_state() {
+                continue;
+            }
             let produced: Vec<Id> = arms
                 .iter()
                 .map(|&arm| {
-                    let value =
-                        self.context.get_region(arm).value_results()[binding.exit.start + index];
+                    let value = self.context.get_region(arm).results()[binding.exit.start + index];
                     self.class_of(value)
                 })
                 .collect();
@@ -242,7 +240,7 @@ impl Seeder<'_> {
             };
             self.bind_value(result, id);
         }
-        for dep in instance.dep_results() {
+        for dep in instance.state_results() {
             self.anchor(dep);
         }
     }
@@ -253,28 +251,19 @@ impl Seeder<'_> {
     /// on any iteration. So a read of it inside the body has observed what the
     /// state before the loop stands for, and so has one after the loop.
     fn bind_unchanged_chains(&mut self, instance: &OpHandle, region: &crate::RegionHandle) {
-        let ports: Vec<ValueId> = region
-            .dep_arguments()
-            .iter()
-            .map(crate::Value::id)
-            .collect();
-        let results = region.dep_results();
-        let entered = instance.dep_operands();
-        let carried = ports.len();
-        if crate::binding::dep_groups(self.context, region.id()) != Some(2)
-            || entered.len() != carried
-        {
-            return;
-        }
-        for (index, &port) in ports.iter().enumerate() {
-            if !names_same_memory(self.context, results[index], port)
-                || !names_same_memory(self.context, results[carried + index], port)
+        let ports = region.ports();
+        let results = region.results();
+        for slot in crate::binding::state_slots(self.context, instance) {
+            let port = ports[slot.port].id();
+            let continued = slot.continue_.expect("a loop carries a state on");
+            if !names_same_memory(self.context, results[continued], port)
+                || !names_same_memory(self.context, results[slot.exit], port)
             {
                 continue;
             }
-            let before = self.class_of(entered[index]);
+            let before = self.class_of(instance.operands()[slot.operand]);
             self.bind_value(port, before);
-            self.bind_value(instance.dep_results()[index], before);
+            self.bind_value(instance.results()[slot.result], before);
         }
     }
 
@@ -288,21 +277,26 @@ impl Seeder<'_> {
         let binding = theta.carried();
         let body = theta.body();
         let region = self.context.get_region(body);
-        let inits = instance.value_operands()[binding.operands.clone()].to_vec();
-        let heads: Vec<ValueId> = region.value_arguments()[binding.ports.clone()]
+        let inits = instance.operands()[binding.operands.clone()].to_vec();
+        let heads: Vec<ValueId> = region.ports()[binding.ports.clone()]
             .iter()
             .map(crate::Value::id)
             .collect();
         for &head in &heads {
-            self.anchor(head);
+            if !self.context.get_value(head).is_state() {
+                self.anchor(head);
+            }
         }
         self.bind_unchanged_chains(instance, &region);
         self.seed_region(body);
         let predicate = self.class_of(theta.predicate());
-        let body_results = region.value_results();
-        let finals = instance.value_results()[binding.results.clone()].to_vec();
+        let body_results = region.results();
+        let finals = instance.results()[binding.results.clone()].to_vec();
         let mut ports = Vec::new();
         for (index, &head_value) in heads.iter().enumerate() {
+            if self.context.get_value(head_value).is_state() {
+                continue;
+            }
             let head = self.class_of(head_value);
             let init = self.class_of(inits[index]);
             let next = self.class_of(body_results[binding.continue_.start + index]);
@@ -328,7 +322,7 @@ impl Seeder<'_> {
                 });
             }
         }
-        for dep in instance.dep_results() {
+        for dep in instance.state_results() {
             self.anchor(dep);
         }
         if !ports.is_empty() {
@@ -364,7 +358,7 @@ impl Seeder<'_> {
     /// Seed a memory access over the state it reads, if it is one that names a state.
     fn seed_memory(&mut self, instance: &OpHandle) -> bool {
         if let Some(read) = instance.clone().as_interface::<dyn MemoryRead>() {
-            return self.seed_read(read.as_ref());
+            return self.seed_read(instance, read.as_ref());
         }
         if let Some(write) = instance.clone().as_interface::<dyn MemoryWrite>() {
             return self.seed_write(instance, write.as_ref());
@@ -375,15 +369,15 @@ impl Seeder<'_> {
     /// A read leaves memory as it found it, so the state it publishes is the one
     /// it read: both name the same class, and two reads of one address in one
     /// state are one term.
-    fn seed_read(&mut self, read: &dyn MemoryRead) -> bool {
+    fn seed_read(&mut self, instance: &OpHandle, read: &dyn MemoryRead) -> bool {
         let value = read.read_value();
         let ty = self.context.get_value(value).ty();
-        let (Some(bits), Some(state)) = (self.access_width(ty), read.state_operand()) else {
+        let (Some(bits), Some(state)) = (self.access_width(ty), observed_state(instance)) else {
             return false;
         };
         let location = read.read_location();
         let state = self.class_of(state);
-        if let Some(published) = read.state_result() {
+        if let Some(published) = produced_state(instance) {
             self.bind_value(published, state);
         }
         let address = self.class_of(location);
@@ -413,8 +407,8 @@ impl Seeder<'_> {
         let ty = self.context.get_value(written).ty();
         let (Some(bits), Some(state), Some(published)) = (
             self.access_width(ty),
-            write.state_operand(),
-            write.state_result(),
+            observed_state(instance),
+            produced_state(instance),
         ) else {
             return false;
         };
@@ -480,17 +474,17 @@ fn names_same_memory_seen(
         return false;
     };
     let instance = context.get_op(op);
-    if let Some(read) = instance.clone().as_interface::<dyn MemoryRead>()
+    if instance.has_interface::<dyn MemoryRead>()
         && !instance.has_interface::<dyn MemoryWrite>()
-        && read.state_result() == Some(state)
-        && let Some(taken) = read.state_operand()
+        && produced_state(&instance) == Some(state)
+        && let Some(taken) = observed_state(&instance)
     {
         return names_same_memory_seen(context, taken, port, seen);
     }
     instance.is::<JoinOp>()
-        && instance.dep_results().as_slice() == [state]
+        && instance.state_results().as_slice() == [state]
         && instance
-            .dep_operands()
+            .state_operands()
             .iter()
             .all(|&input| names_same_memory_seen(context, input, port, seen))
 }
