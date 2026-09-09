@@ -11,7 +11,7 @@ use std::{
 use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use tir_adt::{Interner, Sym};
 
-use crate::overlay::{Committed, Delta, EditBatch, Frozen, commit_epoch};
+use crate::overlay::{Delta, EditBatch, Frozen, commit_epoch};
 use crate::run::AttrRunId;
 use crate::store::{ERASED, Store};
 
@@ -102,8 +102,6 @@ struct Registry {
     segment_sizes: Sym,
 }
 
-/// The locks are per overlay and guard nothing another overlay reads: the
-/// base behind them is immutable and shared without one.
 /// The base and the edits over it, behind one lock.
 struct Overlay {
     base: Frozen,
@@ -378,9 +376,8 @@ impl Context {
     }
 
     /// Apply every edit made since the last commit to the base. No reader of
-    /// the base ([`Context::frozen`]) may be alive. Ids do not move; the
-    /// ops a rewrite replaced are reported so a caller can follow its root.
-    pub fn commit(&self) -> Committed {
+    /// the base ([`Context::frozen`]) may be alive. Ids do not move.
+    pub fn commit(&self) {
         let mut view = self.view_mut();
         assert_eq!(
             Arc::strong_count(&view.base.0),
@@ -391,13 +388,12 @@ impl Context {
         let delta = std::mem::replace(&mut view.delta, Delta::new(frontier));
         let batch = EditBatch::new(self.epoch(), view.base.identity(), delta);
         let base = std::mem::replace(&mut view.base, Frozen::empty());
-        let (base, committed) = commit_epoch(base, vec![batch]);
+        let (base, revisions) = commit_epoch(base, vec![batch]);
         view.delta = Delta::new(base.0.frontier());
         view.base = base;
         drop(view);
-        self.fold_revisions(&committed.revisions);
+        self.fold_revisions(&revisions);
         self.0.epoch.store(self.epoch() + 1, Ordering::Relaxed);
-        committed
     }
 
     /// Drop every edit made since the last commit. Every version the overlay

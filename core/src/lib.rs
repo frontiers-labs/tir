@@ -106,7 +106,7 @@ pub use operation::{
     RegionIds, ValueIds, Verifiable, downcast_op_interface, erase_op_interface,
     op_interface_converter, verify_op_tree, verify_opdef_attributes, verify_opdef_operands,
 };
-pub use overlay::{Committed, Frozen, OverlayCensus};
+pub use overlay::{Frozen, OverlayCensus};
 pub use pass::{
     OperationRef, PASSES, Pass, PassError, PassInfo, PassManager, PassTarget, build_pass,
     parse_pipeline, registered_passes, report_pass_timing,

@@ -588,23 +588,15 @@ impl EditBatch {
     }
 }
 
-/// What a commit reports back: the ops replaced in place, so a caller can
-/// follow a root that a pass swapped out.
-#[derive(Default)]
-pub struct Committed {
-    pub replaced_ops: HashMap<OpId, OpId>,
-    pub(crate) revisions: Vec<Vec<u32>>,
-}
-
 /// Apply `batches` to `base`, which no reader may still hold, and hand back
-/// the next epoch's base. Ids never move: an entity an overlay created keeps
-/// the id it was given. Every batch must have been finished over `base` as
-/// it stands, so today exactly one can be.
-pub(crate) fn commit_epoch(base: Frozen, batches: Vec<EditBatch>) -> (Frozen, Committed) {
+/// the next epoch's base with each batch's revision. Ids never move: an entity
+/// an overlay created keeps the id it was given. Every batch must have been
+/// finished over `base` as it stands, so today exactly one can be.
+pub(crate) fn commit_epoch(base: Frozen, batches: Vec<EditBatch>) -> (Frozen, Vec<Vec<u32>>) {
     let identity = base.identity();
     let mut store = Arc::try_unwrap(base.0)
         .unwrap_or_else(|_| panic!("commit while a reader still holds the base"));
-    let mut committed = Committed::default();
+    let mut revisions = Vec::new();
     for batch in batches {
         assert_eq!(
             batch.base, identity,
@@ -615,14 +607,11 @@ pub(crate) fn commit_epoch(base: Frozen, batches: Vec<EditBatch>) -> (Frozen, Co
             store.frontier(),
             "a batch commits to the base as it stood when the overlay opened"
         );
-        committed
-            .replaced_ops
-            .extend(batch.delta.replaced_ops.iter());
         apply(&mut store, batch.delta, batch.epoch);
-        committed.revisions.push(batch.revision);
+        revisions.push(batch.revision);
     }
     store.recycle();
-    (Frozen(Arc::new(store)), committed)
+    (Frozen(Arc::new(store)), revisions)
 }
 
 fn apply(base: &mut Store, delta: Delta, epoch: u32) {

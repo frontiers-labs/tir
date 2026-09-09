@@ -58,6 +58,34 @@ impl Pass for BreakIRPass {
     }
 }
 
+/// Replaces the addi with a subi, then erases the subi. The root the
+/// pipeline holds is replaced by an op that no longer exists.
+struct ReplaceThenErasePass;
+
+impl Pass for ReplaceThenErasePass {
+    fn name(&self) -> &'static str {
+        "replace-then-erase"
+    }
+
+    fn target(&self) -> PassTarget {
+        PassTarget::operation::<AddIOp>()
+    }
+
+    fn run(
+        &mut self,
+        op: &OperationRef,
+        context: &Context,
+        _analyses: &AnalysisManager,
+    ) -> Result<(), PassError> {
+        let add = op.as_op::<AddIOp>().expect("target guarantees AddIOp");
+        let operands = add.operands();
+        let result_ty = context.get_value(add.result()).ty();
+        let new_op = ops::subi(context, operands[0], operands[1], result_ty).build();
+        context.replace_op(op, &new_op)?;
+        context.erase_op(&OperationRef::new(context.get_op(new_op.id())))
+    }
+}
+
 /// Reads the IR and leaves it exactly as it found it.
 struct ReadOnlyPass;
 
@@ -236,6 +264,22 @@ fn an_analysis_is_rebuilt_after_a_pass_mutates() {
         &before,
         &analyses.get::<Simple>(&context, func.id())
     ));
+}
+
+#[test]
+fn a_root_whose_replacement_was_erased_ends_the_pipeline_without_a_root() {
+    let (context, func) = parse_func(
+        r#"func.func @demo(%0: !i32) -> !i32 {
+  %1 = addi %0, %0 : !i32
+  func.return %0
+}"#,
+    );
+    let add_id = func.body().op_ids()[0];
+    let mut pm = PassManager::new();
+    pm.add_pass(ReplaceThenErasePass);
+    pm.run(&context, context.get_op(add_id))
+        .expect("erasing the replaced root is a valid rewrite");
+    assert_eq!(func.body().op_ids().len(), 1);
 }
 
 #[test]

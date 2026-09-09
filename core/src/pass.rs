@@ -568,11 +568,14 @@ fn matches_op_name(op: &OpHandle, spec: &str) -> bool {
 /// that is how selection's machine symbol takes over from the function it was
 /// made of.
 fn refreshed(context: &Context, root: &OperationRef) -> Option<OperationRef> {
-    let mut op = root.op.clone();
-    while !op.is_live() {
-        op = context.get_op(context.replaced_op(op.id)?);
+    if root.op.is_live() {
+        return Some(root.clone());
     }
-    Some(OperationRef::new(op))
+    let mut id = context.replaced_op(root.op.id)?;
+    while !context.has_operation(id) {
+        id = context.replaced_op(id)?;
+    }
+    Some(OperationRef::new(context.get_op(id)))
 }
 
 /// Whether `op`'s tree has entered the machine layer — it holds a target
