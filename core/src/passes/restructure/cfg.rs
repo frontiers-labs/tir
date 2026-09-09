@@ -381,7 +381,7 @@ impl Builder<'_> {
     fn thread_memory(&mut self, region: RegionId) -> Result<(), PassError> {
         let plan = super::deps::plan(self.context, region);
         let chains: Vec<VarId> = (0..plan.chains())
-            .map(|_| self.cfg.add_var(TypeId::DEPENDENCY))
+            .map(|_| self.cfg.add_var(TypeId::STATE))
             .collect();
         for (block, node) in self.node_of_block.clone() {
             // A block is entered on the chains its own effects name; the one

@@ -90,7 +90,7 @@ fn growing_a_loop_dependency_port_keeps_the_dependency_shape() {
     let function = function(&context, &module);
     let body = body_of(&context, function);
     let loop_op = find::<LoopOp>(&context, body);
-    let chain = context.create_dependency();
+    let chain = context.create_state();
 
     let result = context.grow_dep_port(loop_op, Some(chain), |_, port| port);
 
@@ -266,7 +266,7 @@ fn add_auto_pins_an_op_to_its_dependency() {
     let function = function(&context, &module);
     let outer = body_of(&context, function);
     let loop_op = find::<LoopOp>(&context, outer);
-    let chain = context.grow_dep_port(loop_op, Some(context.create_dependency()), |_, port| port);
+    let chain = context.grow_dep_port(loop_op, Some(context.create_state()), |_, port| port);
     let inner = context.get_op(loop_op).regions()[0];
     let inner_chain = context.get_region(inner).dep_arguments()[0].id();
     let argument = context.get_region(outer).ports()[0].id();

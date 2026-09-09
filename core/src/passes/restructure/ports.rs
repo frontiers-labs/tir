@@ -33,7 +33,7 @@ impl Emitter<'_> {
     /// `ports` with the dependencies moved after the values: the order every
     /// port list keeps its two partitions in.
     pub(super) fn deps_last(&self, ports: &[VarId]) -> Vec<VarId> {
-        let is_dep = |var: &VarId| self.cfg.var_types[*var] == TypeId::DEPENDENCY;
+        let is_dep = |var: &VarId| self.cfg.var_types[*var] == TypeId::STATE;
         let mut ordered: Vec<VarId> = ports.iter().copied().filter(|var| !is_dep(var)).collect();
         ordered.extend(ports.iter().copied().filter(is_dep));
         ordered
@@ -43,7 +43,7 @@ impl Emitter<'_> {
     pub(super) fn dep_count(&self, ports: &[VarId]) -> usize {
         ports
             .iter()
-            .filter(|var| self.cfg.var_types[**var] == TypeId::DEPENDENCY)
+            .filter(|var| self.cfg.var_types[**var] == TypeId::STATE)
             .count()
     }
 

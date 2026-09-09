@@ -765,7 +765,7 @@ fn type_hash(ty: &dyn Type) -> u64 {
 impl Context {
     /// Create a new empty context with no registered dialects.
     pub fn new() -> Self {
-        Context(Arc::new(RwLock::new(ContextInstance {
+        let context = Context(Arc::new(RwLock::new(ContextInstance {
             ops: Hive::new(),
             values: Hive::new(),
             regions: Hive::new(),
@@ -788,7 +788,9 @@ impl Context {
             names: schema_vocabulary(),
             op_names: Vec::new(),
             op_name_ids: HashMap::new(),
-        })))
+        })));
+        crate::builtin::StateType::new(&context);
+        context
     }
 
     /// Create a new context with default dialects.
@@ -1167,10 +1169,10 @@ impl Context {
         inner.values.get(handle).expect("just inserted").clone()
     }
 
-    /// Mint a dependency: a value carrying no bits, whose only meaning is the
+    /// Mint a memory state: a `!state` value whose only meaning is the
     /// ordering edges that name it.
-    pub fn create_dependency(&self) -> ValueId {
-        self.create_value(TypeId::DEPENDENCY, None).id()
+    pub fn create_state(&self) -> ValueId {
+        self.create_value(TypeId::STATE, None).id()
     }
 
     pub fn get_value(&self, id: ValueId) -> Value {
@@ -1473,7 +1475,7 @@ impl Context {
     /// Append a dependency argument to `block`: one more chain the block is
     /// entered on.
     pub fn append_dep_block_argument(&self, block: BlockId) -> Value {
-        let value = self.create_value(TypeId::DEPENDENCY, None);
+        let value = self.create_value(TypeId::STATE, None);
         self.place_block_argument(block, value.clone(), true);
         value
     }
@@ -1570,7 +1572,7 @@ impl Context {
 
     /// Give `op` one more dependency result: a chain it leaves behind.
     pub fn append_dep_result(&self, op: OpId) -> ValueId {
-        let value = self.create_dependency();
+        let value = self.create_state();
         self.adopt_dep_result(op, value);
         value
     }
@@ -1653,7 +1655,7 @@ impl Context {
         init: Option<ValueId>,
         latch: impl FnMut(RegionId, Option<ValueId>) -> Option<ValueId>,
     ) -> ValueId {
-        self.grow_declared_port(op, TypeId::DEPENDENCY, init, latch, true)
+        self.grow_declared_port(op, TypeId::STATE, init, latch, true)
     }
 
     /// Put `value` at position `index` of `op`'s value operands, or of its

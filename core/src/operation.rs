@@ -317,9 +317,7 @@ pub(crate) fn observes_only(op: &OpHandle) -> bool {
 fn verify_dep_partitions(context: &Context, instance: &OpHandle) -> Result<(), Error> {
     let check = |values: &[crate::ValueId], dependencies: bool, kind: &str| {
         for value in values {
-            if !context.has_value(*value)
-                || context.get_value(*value).is_dependency() == dependencies
-            {
+            if !context.has_value(*value) || context.get_value(*value).is_state() == dependencies {
                 continue;
             }
             return Err(Error::VerificationError(if dependencies {
@@ -796,7 +794,7 @@ impl NewOp {
         let name = context.intern_op_name(identity.0, identity.1);
         let dep_operands = parts.dep_operands.len() as u16;
         operands.extend(parts.dep_operands);
-        results.extend((0..parts.dep_results).map(|_| context.create_dependency()));
+        results.extend((0..parts.dep_results).map(|_| context.create_state()));
         NewOp {
             name,
             operands,

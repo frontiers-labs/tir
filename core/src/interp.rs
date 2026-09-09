@@ -400,7 +400,7 @@ impl Interpreter<'_> {
         // A dependency names no value: the edge carries it, nothing binds it.
         let args = arg_ids
             .iter()
-            .filter(|&&id| !self.context.get_value(id).is_dependency())
+            .filter(|&&id| !self.context.get_value(id).is_state())
             .map(|&id| self.value_of(id))
             .collect::<Result<Vec<_>>>()?;
         Ok(Flow::Goto(dest, args))

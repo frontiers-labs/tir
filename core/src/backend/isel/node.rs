@@ -96,7 +96,7 @@ pub(crate) fn class_register_type(
             .nodes(class)
             .any(|node| {
                 node.ty
-                    .filter(|ty| *ty != tir::TypeId::DEPENDENCY)
+                    .filter(|ty| *ty != tir::TypeId::STATE)
                     .is_some_and(|ty| {
                         let data = ctx.get_type_data(ty);
                         (data.as_ref() as &dyn std::any::Any)

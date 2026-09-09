@@ -613,7 +613,7 @@ fn setting_every_operand_relinks_the_uses() {
 fn use_indices_follow_a_port_into_its_place() {
     let context = Context::with_default_dialects();
     let (_, d, add) = add_fixture(&context);
-    let token = context.create_dependency();
+    let token = context.create_state();
 
     context.append_dep_operand(add, token);
     context.append_operand(add, d);

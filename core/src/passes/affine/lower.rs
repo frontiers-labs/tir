@@ -499,7 +499,7 @@ impl<'a> Lowering<'a> {
         ports.extend(
             states
                 .iter()
-                .map(|_| context.create_value(TypeId::DEPENDENCY, None)),
+                .map(|_| context.create_value(TypeId::STATE, None)),
         );
         let dep_ports: Vec<ValueId> = ports[1..].iter().map(Value::id).collect();
         let body = context

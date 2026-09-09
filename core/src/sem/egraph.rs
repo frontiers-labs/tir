@@ -68,7 +68,7 @@ pub(crate) fn is_comparison(kind: SymKind) -> bool {
 
 /// The bit-width of an IR integer or float type, or `None` for any other type.
 pub(crate) fn type_width(context: &Context, ty: TypeId) -> Option<u32> {
-    if ty == TypeId::DEPENDENCY {
+    if ty == TypeId::STATE {
         return None;
     }
     let data = context.get_type_data(ty);
@@ -81,7 +81,7 @@ pub(crate) fn type_width(context: &Context, ty: TypeId) -> Option<u32> {
 /// The context-independent semantic type represented by an IR type. Register
 /// classes are intentionally absent: this describes the value, not its storage.
 pub(crate) fn semantic_type(context: &Context, ty: TypeId) -> Option<SemType> {
-    if ty == TypeId::DEPENDENCY {
+    if ty == TypeId::STATE {
         return None;
     }
     let data = context.get_type_data(ty);

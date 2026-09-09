@@ -289,7 +289,7 @@ impl Emitter<'_> {
     ) -> Result<RegionId, PassError> {
         let dep_ports: Vec<Value> = chains
             .iter()
-            .map(|_| self.context.create_value(TypeId::DEPENDENCY, None))
+            .map(|_| self.context.create_value(TypeId::STATE, None))
             .collect();
         let region = self
             .context

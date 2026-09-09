@@ -155,7 +155,7 @@ pub fn value_class(context: &Context, value: ValueId) -> Option<RegClassId> {
 
 /// The register class `ty` denotes, or `None` if it is not a register class type.
 pub fn type_class(context: &Context, ty: TypeId) -> Option<RegClassId> {
-    if ty == TypeId::DEPENDENCY {
+    if ty == TypeId::STATE {
         return None;
     }
     let data = context.get_type_data(ty);

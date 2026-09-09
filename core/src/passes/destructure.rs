@@ -140,7 +140,7 @@ impl CfgEdges<'_> {
     /// The values of `args` apart from the dependencies among them.
     fn split(&self, args: &[ValueId]) -> (Vec<ValueId>, Vec<ValueId>) {
         args.iter()
-            .partition(|&&arg| !self.context.get_value(arg).is_dependency())
+            .partition(|&&arg| !self.context.get_value(arg).is_state())
     }
 }
 
@@ -325,7 +325,7 @@ impl Lowering<'_> {
     fn entered_on(&mut self, values: &[crate::Value]) -> BlockId {
         let block = self.context.create_block(vec![]).id();
         for value in values {
-            if value.is_dependency() {
+            if value.is_state() {
                 self.context.adopt_dep_block_argument(block, value.id());
             } else {
                 self.context.adopt_block_argument(block, value.id());
@@ -580,7 +580,7 @@ impl Lowering<'_> {
             .iter()
             .flat_map(|&op| values_read(self.context, op))
             .chain(leaving.iter().copied())
-            .filter(|&value| self.context.get_value(value).is_dependency())
+            .filter(|&value| self.context.get_value(value).is_state())
             .filter(|&value| {
                 self.context
                     .get_value(value)

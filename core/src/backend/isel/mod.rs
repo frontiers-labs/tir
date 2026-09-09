@@ -2626,7 +2626,7 @@ fn class_value_tables(
 ) {
     let mut class_values: HashMap<Id, Vec<ValueId>> = HashMap::new();
     for (&value, &class) in value_to_class {
-        if context.get_value(value).is_dependency() {
+        if context.get_value(value).is_state() {
             continue;
         }
         class_values

@@ -535,7 +535,7 @@ pub fn parse_port_bindings(parser: &mut Parser, context: &Context) -> ParseResul
             if deps {
                 bound
                     .dep_ports
-                    .push(bind_port(parser, context, &name, TypeId::DEPENDENCY));
+                    .push(bind_port(parser, context, &name, TypeId::STATE));
                 bound.dep_inits.push(init);
             } else {
                 let ty = context.get_value(init).ty();
@@ -597,7 +597,7 @@ pub fn parse_gamma(parser: &mut Parser, context: &Context) -> ParseResult<Parsed
                 ports.push(bind_port(parser, context, &name, ty));
             }
             for name in dependency::parse_dep_names(parser)? {
-                dep_ports.push(bind_port(parser, context, &name, TypeId::DEPENDENCY));
+                dep_ports.push(bind_port(parser, context, &name, TypeId::STATE));
             }
             expect(parser, ")")?;
         } else if parser.peek_char() != Some('{') {

@@ -445,9 +445,7 @@ impl<'src> TextParser<'src> {
         let block_args = block_arg_types
             .iter()
             .map(|ty| context.create_value(*ty, None))
-            .chain(
-                (0..dep_arguments).map(|_| context.create_value(crate::TypeId::DEPENDENCY, None)),
-            )
+            .chain((0..dep_arguments).map(|_| context.create_value(crate::TypeId::STATE, None)))
             .collect();
         let block = context.create_block_with_dependencies(block_args, dep_arguments);
         state.labels.insert(name.to_string(), block.id());
@@ -610,7 +608,7 @@ impl<'src> TextParser<'src> {
             .chain(
                 dep_names
                     .iter()
-                    .map(|_| context.create_value(crate::TypeId::DEPENDENCY, None)),
+                    .map(|_| context.create_value(crate::TypeId::STATE, None)),
             )
             .collect();
         for (name, arg) in named_args

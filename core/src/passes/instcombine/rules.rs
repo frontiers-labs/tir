@@ -529,7 +529,7 @@ fn produces_integer(context: &Context, op: crate::OpId) -> bool {
 /// The width of an integer type, by number; `None` for anything else.
 fn class_int_width_of(context: &Context, ty: u32) -> Option<u32> {
     let ty = TypeId::from_number(ty);
-    if ty == TypeId::DEPENDENCY {
+    if ty == TypeId::STATE {
         return None;
     }
     (context.get_type_data(ty).as_ref() as &dyn std::any::Any)

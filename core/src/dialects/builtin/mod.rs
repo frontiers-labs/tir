@@ -3,6 +3,7 @@ mod float;
 mod fn_type;
 mod global;
 mod module;
+mod state;
 mod tuple;
 
 use std::any::Any;
@@ -18,6 +19,7 @@ pub use float::*;
 pub use fn_type::*;
 pub use global::*;
 pub use module::*;
+pub use state::*;
 pub use tuple::*;
 
 pub mod ops {
@@ -70,7 +72,7 @@ dialect! {
             FnToPtrOp,
             PtrToFnOp,
         ],
-        types: [IntegerType, FloatType, IndexType, UnitType, TupleType, FnType],
+        types: [IntegerType, FloatType, IndexType, UnitType, TupleType, FnType, StateType],
     }
 }
 

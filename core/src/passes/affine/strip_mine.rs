@@ -84,7 +84,7 @@ pub fn strip_mine(
 
     let base = context.create_value(ty, None);
     let mut ports = vec![base.clone()];
-    ports.extend((0..deps).map(|_| context.create_value(TypeId::DEPENDENCY, None)));
+    ports.extend((0..deps).map(|_| context.create_value(TypeId::STATE, None)));
     let dep_ports: Vec<ValueId> = ports[1..].iter().map(Value::id).collect();
     let tile_body = context
         .create_nodes_region(ports, deps, vec![], vec![], 0)
