@@ -2,14 +2,14 @@
 
 // FINDING G5 (pipeline gap, NOT a backend bug): codegen only accepts
 // unstructured (CFG) control flow, so rejecting scf here is correct. The gap is
-// that no scf->cf lowering pass runs in the mc pipeline, so scf.for survives
+// that no scf->cf lowering pass runs in the mc pipeline, so scf.ordered_for survives
 // selection verbatim and object emission fails: "cannot encode 'for' into an
 // object file". Same for every other structured op. This probe marks the
 // missing pass.
 
 module {
   %fn_loop = func.func @loop(%0: !index, %1: !index, %2: !index) {
-    %i1_end = scf.for %i1 = %0 to %1 step %2 {
+    %i1_end = scf.ordered_for %i1 = %0 to %1 step %2 {
       scf.yield
     }
     func.return

@@ -9,7 +9,7 @@ module {
     %lb = constant {value = 0} : !index
     %ub = constant {value = 4} : !index
     %st = constant {value = 1} : !index
-    %c, %2 = scf.for %i = %lb to %ub step %st (%a = %1) {
+    %c, %2 = scf.ordered_for %i = %lb to %ub step %st (%a = %1) {
       scf.yield %a
     }
     cfg.br ^tail(%2 : !i32)
@@ -19,7 +19,7 @@ module {
   module_end
 }
 
-// CHECK: scf.for
+// CHECK: scf.ordered_for
 // CHECK: cfg.br ^bb1(%{{[0-9]+}} : !i32)
 // CHECK: ^bb1(%{{[0-9]+}}: !i32):
 // CHECK-NEXT: func.return

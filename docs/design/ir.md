@@ -278,13 +278,12 @@ prints it. `counted:` pins the recurrence of a `Theta` that counts and
 derives `CountedLoop`. Nothing walks blocks and terminators to rediscover a
 loop's quad, because the op said it.
 
-`scf.for` is the one op with two lifecycle states. A frontend recognises a
-counted loop while its body is still ordered — only the converter sees both
-that body and the memory order enclosing it, so the recognition cannot wait —
-and `restructure-nodes` gives it the unordered body it runs on. Until then
-the body is a block list ending in `scf.yield`, which names what the next
-iteration carries, and the declared binding is not yet what holds; the
-verifier checks the ordered shape instead.
+A frontend recognises a counted loop while its body is still ordered — only
+the converter sees both that body and the memory order enclosing it, so the
+recognition cannot wait. It raises `scf.ordered_for`: the same bounds and
+inits over a block list ending in `scf.yield`, which names what the next
+iteration carries. That op declares no binding and implements `CountedLoop`
+alone; `restructure-nodes` turns it into the `scf.for` it stands for.
 
 Corollaries developers should internalize:
 
@@ -315,7 +314,7 @@ the memory chain (§6) while the block order is still there to read:
    selected by predicate values rather than duplicated.
 
 Consumers: fcc emits its loops as `cir` loop ops, which the `raise-loops`
-pass turns into an ordered-body `scf.for` where the counted shape is provable
+pass turns into an `scf.ordered_for` where the counted shape is provable
 and into the same blocks and branches otherwise; `restructure-nodes` then
 builds that loop's unordered body along with everything around it. Flat CFG is what a whole function gets
 when it holds a `goto` or a label, or a `return` under a loop — both name

@@ -18,9 +18,9 @@ module {data_layout = #data_layout} {
     %6 = constant {value = 1} : !i32
     %7 = constant {value = 128} : !i64
     %8 = constant {value = 4} : !i64
-    %i1_end, %9 = scf.for %i1 = %4 to %5 step %6 (%10 = %4) {
-      %i2_end, %11 = scf.for %i2 = %4 to %5 step %6 (%12 = %4) {
-        %i3_end, %13 = scf.for %i3 = %4 to %5 step %6 (%14 = %4) {
+    %i1_end, %9 = scf.ordered_for %i1 = %4 to %5 step %6 (%10 = %4) {
+      %i2_end, %11 = scf.ordered_for %i2 = %4 to %5 step %6 (%12 = %4) {
+        %i3_end, %13 = scf.ordered_for %i3 = %4 to %5 step %6 (%14 = %4) {
           %15 = extsi %10 : !i64
           %16 = extsi %12 : !i64
           %17 = extsi %14 : !i64

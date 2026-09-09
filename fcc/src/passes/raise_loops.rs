@@ -2,7 +2,7 @@
 //!
 //! The `cir` loop ops carry the shape C wrote: which region tests, which steps,
 //! which is the body. This pass reads that shape and, where the loop provably
-//! counts, emits `scf.for` — the mid-end's counted loop, and the input the affine
+//! counts, emits `scf.ordered_for` — the mid-end's counted loop, and the input the affine
 //! view is defined on. Every loop it refuses becomes the header, body, step and
 //! exit blocks a frontend would have emitted directly, which `restructure` raises
 //! as it always has. Refusal is the default outcome: a loop the analysis cannot
@@ -57,7 +57,7 @@ impl Pass for RaiseLoopsPass {
             return Ok(());
         };
         // Innermost first, so a nest collapses from the bottom up: by the time a
-        // loop is looked at, every loop it holds is already an `scf.for` op or a
+        // loop is looked at, every loop it holds is already an `scf.ordered_for` op or a
         // graph of blocks.
         for loop_op in loops_in(context, body) {
             let shape = shape_of(context, loop_op).expect("only loop ops are collected");
@@ -226,7 +226,7 @@ fn entry_of(context: &Context, region: RegionId) -> BlockId {
 }
 
 /// A `cir.for` recognised as counting: what it counts through, where its counter
-/// lives, and the bounds and step `scf.for` needs.
+/// lives, and the bounds and step `scf.ordered_for` needs.
 struct Counted {
     /// The stack slot the counter lives in, an `ptr.alloca` private to the
     /// function.
@@ -251,7 +251,7 @@ enum Bound {
 
 /// Read a `cir.for` as a counted loop, or refuse it.
 ///
-/// What has to hold is what `scf.for` means: a counter private to the loop,
+/// What has to hold is what `scf.ordered_for` means: a counter private to the loop,
 /// stepping by a constant, tested against a bound the loop cannot change. Every
 /// condition below is one of those three, and anything the analysis cannot see
 /// through is refused — the loop still runs, as blocks and branches.
@@ -272,7 +272,7 @@ fn recognise(
 
     let (slot, upper, tested) = counted_test(context, &context.get_block(condition))?;
     let stepped = counted_step(context, &context.get_block(step), slot)?;
-    // `scf.for` counts through one type: what the step produces is what the latch
+    // `scf.ordered_for` counts through one type: what the step produces is what the latch
     // compares, so the test must already read the counter at that width.
     let counter = context.get_value(stepped.increment).ty();
     if tested != counter {
@@ -322,7 +322,7 @@ fn only_block(context: &Context, region: RegionId) -> Option<BlockId> {
 
 /// Read `%a = ptr.load S; %b = ...; %p = cmpi %a, %b {slt}; cir.condition %p`,
 /// the only test v1 counts through. The block must hold nothing else: what it
-/// holds runs once per iteration, and `scf.for`'s latch would not run it.
+/// holds runs once per iteration, and `scf.ordered_for`'s latch would not run it.
 fn counted_test(context: &Context, block: &BlockHandle) -> Option<(ValueId, Bound, TypeId)> {
     let ops = block.op_ids();
     let (&last, rest) = ops.split_last()?;
@@ -397,7 +397,7 @@ fn counted_step(context: &Context, block: &BlockHandle, slot: ValueId) -> Option
         }
         int_attr(&spelled, "value")
     })?;
-    // A step of zero never ends and a negative one counts the other way; `scf.for`
+    // A step of zero never ends and a negative one counts the other way; `scf.ordered_for`
     // tests `counter < bound`, which only a positive step reaches.
     (step > 0).then_some(Step {
         store: store.id,
@@ -470,7 +470,7 @@ fn int_attr(op: &OpHandle, name: &str) -> Option<i64> {
     }
 }
 
-/// Emit the `scf.for` a recognised loop stands for.
+/// Emit the `scf.ordered_for` a recognised loop stands for.
 ///
 /// The counter leaves its slot for a carried port, but the slot stays: the body
 /// still loads it, so the port is written back at the top of every iteration and
@@ -521,7 +521,7 @@ fn raise(
 
     let region = context.create_region();
     rewriter.splice_region(shape.body, region.id());
-    let raised = scf::ForOpBuilder::new(context)
+    let raised = scf::OrderedForOpBuilder::new(context)
         .lb(lower.result())
         .inits(vec![])
         .ub(upper)

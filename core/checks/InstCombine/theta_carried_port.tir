@@ -9,7 +9,7 @@ module {
     %0 = constant {value = 7} : !i32
     %1 = constant {value = 0} : !i32
     %2 = constant {value = 1} : !i32
-    %i1_end, %3, %4 = scf.for %i1 = %lb to %ub step %step (%5 = %0, %6 = %1) {
+    %i1_end, %3, %4 = scf.ordered_for %i1 = %lb to %ub step %step (%5 = %0, %6 = %1) {
       %7 = addi %6, %2 : !i32
       scf.yield %5, %7
     }

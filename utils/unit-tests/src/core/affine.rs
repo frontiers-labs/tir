@@ -136,7 +136,7 @@ fn building_a_view_allocates_nothing() {
     %3 = constant {value = 64} : !i32
     %4 = constant {value = 1} : !i32
     %5 = constant {value = 4} : !i64
-    %i1_end, %6 = scf.for %i1 = %2 to %3 step %4 (%7 = %2) {
+    %i1_end, %6 = scf.ordered_for %i1 = %2 to %3 step %4 (%7 = %2) {
       %8 = extsi %7 : !i64
       %9 = muli %8, %5 : !i64
       %10 = ptr.ptradd %1, %9 : !ptr.p

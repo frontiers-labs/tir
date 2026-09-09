@@ -84,7 +84,7 @@ pub fn plan(context: &Context, region: RegionId) -> Plan {
     let (keys, mut touched) = merge_indistinguishable(keys, touched);
     for &op in &ops {
         let handle = context.get_op(op);
-        if !super::is_ordered_counted_loop(context, &handle) {
+        if !super::is_ordered_counted_loop(&handle) {
             continue;
         }
         let carried: BTreeSet<usize> = crate::analysis::regions::subtree_ops(context, &handle)
@@ -237,7 +237,7 @@ pub fn thread_block(
         // A counted loop the frontend raised carries one dependency port per
         // chain its body touches, so it takes one dependency operand per chain
         // rather than the one state a change merges them into.
-        if super::is_ordered_counted_loop(context, &handle) {
+        if super::is_ordered_counted_loop(&handle) {
             let touched = plan.touched[&op].clone();
             if touched.is_empty() {
                 continue;
@@ -269,8 +269,8 @@ pub fn thread_block(
             // A chain the loop carries is one more init, in the group the
             // binding ranges over, not a trailing operand after the bounds.
             for state in observed {
-                let for_op = crate::scf::ForOp::from_op_instance(context.get_op(op));
-                let end = crate::Theta::carried(&for_op).operands.end;
+                let for_op = crate::scf::OrderedForOp::from_op_instance(context.get_op(op));
+                let end = 1 + for_op.inits().len();
                 context.insert_operand_at(op, end, state, end);
             }
             for &chain in &touched {

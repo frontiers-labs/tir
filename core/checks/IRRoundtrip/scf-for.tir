@@ -2,7 +2,7 @@
 
 module {
   %fn_loop = func.func @loop(%0: !index, %1: !index, %2: !index) {
-    %i1_end = scf.for %i1 = %0 to %1 step %2 {
+    %i1_end = scf.ordered_for %i1 = %0 to %1 step %2 {
       scf.yield
     }
     func.return
@@ -12,7 +12,7 @@ module {
 
 // CHECK: module {
 // CHECK-NEXT: %{{[0-9]+}} = func.func @loop(%{{[0-9]+}}: !index, %{{[0-9]+}}: !index, %{{[0-9]+}}: !index) {
-// CHECK-NEXT: %{{[0-9]+}} = scf.for %{{[0-9]+}} = %{{[0-9]+}} to %{{[0-9]+}} step %{{[0-9]+}} {
+// CHECK-NEXT: %{{[0-9]+}} = scf.ordered_for %{{[0-9]+}} = %{{[0-9]+}} to %{{[0-9]+}} step %{{[0-9]+}} {
 // CHECK-NEXT: scf.yield
 // CHECK-NEXT: }
 // CHECK-NEXT: func.return

@@ -34,11 +34,8 @@ fn worth_unrolling<'a>(context: &Context, view: &'a AffineView) -> Option<&'a Lo
     let level = view.loops.last()?;
     let trip = level.trip?;
     let ops = body_ops(context, level.op)?;
-    let handle = context.get_op(level.op);
-    // The copies name the loop's ports and join the region it stands in, both
-    // of which only the unordered form has.
-    let body = *handle.regions().last()?;
-    context.get_region(body).is_nodes().then_some(())?;
+    // The copies join the region the loop stands in, which an unordered region
+    // alone has.
     context.parent_nodes_region(level.op)?;
     ((1..=UNROLL_TRIP).contains(&trip)
         && level.lower.as_constant().is_some()

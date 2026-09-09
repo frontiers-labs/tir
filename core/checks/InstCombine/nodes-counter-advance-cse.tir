@@ -10,7 +10,7 @@ module {
   %fn_f = func.func @f(%n: !i32) -> !i32 {
     %zero = constant {value = 0} : !i32
     %one = constant {value = 1} : !i32
-    %fin, %sum = scf.for %i = %zero to %n step %one (%acc = %zero) {
+    %fin, %sum = scf.ordered_for %i = %zero to %n step %one (%acc = %zero) {
       %c1 = constant {value = 1} : !i32
       %next = addi %i, %c1 : !i32
       %grown = addi %acc, %next : !i32

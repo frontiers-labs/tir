@@ -7,7 +7,7 @@
 
 module {
   %fn_a = func.func @a(%lo: !index, %hi: !index, %st: !index) {
-    %0 = scf.for %1 = %lo to %hi step %st {
+    %0 = scf.ordered_for %1 = %lo to %hi step %st {
       scf.yield
     }
     func.return

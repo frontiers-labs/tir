@@ -16,7 +16,7 @@ use crate::{
     builtin::{ConstantFOp, ConstantOp, FloatType, IntegerType, MakeTupleOp, TupleGetOp, UnitType},
     func::{CallOp, FuncOp, ReturnOp},
     ptr::{AllocaOp, LoadOp, MemcpyOp, MemsetOp, PtrType, StoreOp},
-    scf::{ForOp, YieldOp},
+    scf::{OrderedForOp, YieldOp},
     sem,
     state::{EntryStateOp, JoinOp, SplitOp},
 };
@@ -345,9 +345,9 @@ impl Interpreter<'_> {
         if instance.is::<ReturnOp>() {
             return Ok(Some(Flow::Return(self.operand_values(&instance)?)));
         }
-        // A counted loop whose body is still a block list: its declared
-        // binding does not hold yet, so it is driven off its own shape.
-        if instance.is::<ForOp>() && !self.context.get_region(instance.regions()[0]).is_nodes() {
+        // A counted loop whose body is still a block list has no declared
+        // binding, so it is driven off its own shape.
+        if instance.is::<OrderedForOp>() {
             let flow = self.exec_ordered_for(op_id)?;
             return self.exec_value_flow(op_id, flow);
         }
@@ -418,12 +418,12 @@ impl Interpreter<'_> {
         }
     }
 
-    /// An `scf.for` whose body is still ordered: the counter enters as port 0,
+    /// An `scf.ordered_for`: the counter enters as port 0,
     /// the carried values follow, and the body's `scf.yield` says what the next
     /// iteration takes. The loop leaves with the counter that failed the test,
     /// which is the lower bound when the body never runs.
     fn exec_ordered_for(&mut self, op_id: OpId) -> Result<Flow> {
-        let op = ForOp::from_op_instance(self.context.get_op(op_id));
+        let op = OrderedForOp::from_op_instance(self.context.get_op(op_id));
         let lower = self.counter_bound(op.lower_bound())?;
         let upper = self.counter_bound(op.upper_bound())?;
         let step = self.counter_bound(op.step())?;
@@ -437,9 +437,9 @@ impl Interpreter<'_> {
             .iter()
             .map(crate::Value::id)
             .collect();
-        let binding = Theta::carried(&op);
-        let mut carried: Vec<Value> = instance.value_operands()
-            [binding.operands.start + 1..binding.operands.end]
+        let mut carried: Vec<Value> = self
+            .context
+            .values_among(&op.inits())
             .iter()
             .map(|&init| self.value_of(init))
             .collect::<Result<_>>()?;

@@ -17,7 +17,7 @@ use crate::attributes::Predicate;
 use crate::builtin::{AddIOpBuilder, CmpIOpBuilder, ConstantOpBuilder, IntegerType};
 use crate::state::{EntryStateOpBuilder, JoinOpBuilder, SplitOpBuilder};
 use crate::{
-    Context, CountedLoop, OpId, Operation, PassError, RegionId, Theta, TypeId, Value, ValueId, scf,
+    Context, CountedLoop, OpId, Operation, PassError, RegionId, TypeId, Value, ValueId, scf,
 };
 
 type Env = BTreeMap<VarId, ValueId>;
@@ -146,7 +146,7 @@ impl Emitter<'_> {
             self.bind_undefined_reads(op, region, env)?;
             self.retarget_operands(op, env);
             let results = self.context.get_op(op).results().to_vec();
-            let placed = if super::is_ordered_counted_loop(self.context, &self.context.get_op(op)) {
+            let placed = if super::is_ordered_counted_loop(&self.context.get_op(op)) {
                 self.counted_loop(op)?
             } else {
                 let block = self.context.parent_block(op).expect("an op of a block");
@@ -344,13 +344,13 @@ impl Emitter<'_> {
         Ok(())
     }
 
-    /// Give an `scf.for` the frontend raised the unordered body it runs on:
+    /// Give an `scf.ordered_for` the `scf.for` it stands for:
     /// the ports are what the block carried, the comparison and increment the
     /// shape pins are put back, and the yield says what the next iteration
     /// takes. The old operation stays in its block, to go with it.
     fn counted_loop(&self, op: OpId) -> Result<OpId, PassError> {
         let context = self.context;
-        let for_op = scf::ForOp::from_op_instance(context.get_op(op));
+        let for_op = scf::OrderedForOp::from_op_instance(context.get_op(op));
         let [block] = context.get_region(for_op.handle().regions()[0]).block_ids()[..] else {
             return Err(unsupported("a counted loop whose body is a graph"));
         };
@@ -374,7 +374,7 @@ impl Emitter<'_> {
         }
         for &inner in body_ops {
             block.remove_op(inner);
-            let placed = if super::is_ordered_counted_loop(context, &context.get_op(inner)) {
+            let placed = if super::is_ordered_counted_loop(&context.get_op(inner)) {
                 block.append(inner);
                 self.counted_loop(inner)?
             } else {
@@ -410,10 +410,9 @@ impl Emitter<'_> {
             .iter()
             .map(|&result| context.get_value(result).ty())
             .collect();
-        let binding = Theta::carried(&for_op);
         let raised = scf::ForOpBuilder::new(context)
             .lb(for_op.lower_bound())
-            .inits(old.operands()[binding.operands.start + 1..binding.operands.end].to_vec())
+            .inits(for_op.inits())
             .ub(for_op.upper_bound())
             .step(for_op.step())
             .body(body)

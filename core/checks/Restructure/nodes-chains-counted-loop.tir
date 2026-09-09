@@ -15,7 +15,7 @@ module {
     %zero = constant {value = 0} : !i32
     %one = constant {value = 1} : !i32
     ptr.store %zero, %b
-    %i_end, %fin = scf.for %i = %zero to %n step %one (%iv = %zero) {
+    %i_end, %fin = scf.ordered_for %i = %zero to %n step %one (%iv = %zero) {
       ptr.store %iv, %a
       %v = ptr.load %b : !i32
       %next = addi %iv, %one : !i32

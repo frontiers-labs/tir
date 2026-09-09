@@ -1,13 +1,13 @@
 // RUN: not tir opt --verify %s
 
-// A carrying scf.for must yield one value per result; a body yielding fewer
+// A carrying scf.ordered_for must yield one value per result; a body yielding fewer
 // values than the loop carries fails verification.
 
 module {
   %fn_bad = func.func @bad(%0: !index, %1: !index, %2: !index) -> !i32 {
     %3 = constant {value = 0} : !i32
     %4 = constant {value = 1} : !i64
-    %i1_end, %5, %6 = scf.for %i1 = %0 to %1 step %2 (%7 = %3, %8 = %4) {
+    %i1_end, %5, %6 = scf.ordered_for %i1 = %0 to %1 step %2 (%7 = %3, %8 = %4) {
       scf.yield %7
     }
     func.return %5
