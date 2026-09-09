@@ -7,7 +7,7 @@ use tir::builtin::{
     MakeTupleOp, MakeTupleOpBuilder, TupleGetOp, TupleGetOpBuilder, TupleType, UnitType,
 };
 use tir::func::{CallOp, ReturnOp};
-use tir::{Context, OpId, Operand, Operation, OperationRef, PassError, Rewriter, ValueId};
+use tir::{Context, OpId, Operand, Operation, OperationRef, PassError, ValueId};
 
 use crate::backend::abi::{
     AbiInfo, ArgumentGroup, ArgumentMember, ArgumentSlot, ValueKind, argument_sequences,
@@ -100,7 +100,6 @@ impl CallLowering {
         &mut self,
         context: &Context,
         function: &OperationRef,
-        rewriter: &mut Rewriter,
     ) -> Result<(), PassError> {
         if !self.prepared_functions.insert(function.op().id) {
             return Ok(());
@@ -127,23 +126,18 @@ impl CallLowering {
                                     });
                             if !assembled {
                                 let return_ref = OperationRef::new(instance.clone());
-                                let elements = insert_tuple_extractions(
-                                    context,
-                                    rewriter,
-                                    &return_ref,
-                                    value,
-                                    tuple,
-                                )?;
+                                let elements =
+                                    insert_tuple_extractions(context, &return_ref, value, tuple)?;
                                 let make_tuple = MakeTupleOpBuilder::new(context)
                                     .elements(elements)
                                     .result_type(ty)
                                     .build();
                                 let tuple_value = make_tuple.result();
-                                rewriter.insert_op_before(&return_ref, &make_tuple)?;
+                                context.insert_op_before(&return_ref, &make_tuple)?;
                                 let replacement =
                                     tir::func::ops::r#return(context, Operand::from(tuple_value))
                                         .build();
-                                rewriter.replace_op(&return_ref, &replacement)?;
+                                context.replace_op(&return_ref, &replacement)?;
                             }
                         }
                         continue;
@@ -170,9 +164,8 @@ impl CallLowering {
                         if assembled {
                             continue;
                         }
-                        let elements = insert_tuple_extractions(
-                            context, rewriter, &call_ref, argument, tuple,
-                        )?;
+                        let elements =
+                            insert_tuple_extractions(context, &call_ref, argument, tuple)?;
                         self.tuple_argument_elements
                             .insert((op_id, argument_index), elements);
                     }
@@ -230,12 +223,7 @@ impl CallLowering {
         Ok(())
     }
 
-    pub fn lower(
-        &mut self,
-        context: &Context,
-        op: &OperationRef,
-        rewriter: &mut Rewriter,
-    ) -> Result<bool, PassError> {
+    pub fn lower(&mut self, context: &Context, op: &OperationRef) -> Result<bool, PassError> {
         let Some(call) = op.as_op::<CallOp>() else {
             return Ok(false);
         };
@@ -285,30 +273,30 @@ impl CallLowering {
 
         // An argument value must not be pinned for its whole live range, so the
         // call reads a copy of it made right here.
-        let detach = |rewriter: &mut Rewriter, value: ValueId, class| {
+        let detach = |value: ValueId, class| {
             crate::backend::retype_untyped(context, value, class);
             let fresh = fresh_reg(context, class);
             let copy = self
                 .emitter
                 .copy(context, RegSlot::Value(fresh), RegSlot::Value(value));
-            rewriter.insert_op_before(op, copy.as_ref()).map(|()| fresh)
+            context.insert_op_before(op, copy.as_ref()).map(|()| fresh)
         };
 
         let fresh_callee = match callee {
             Callee::Direct(_) => None,
-            Callee::Indirect(value) => Some(detach(rewriter, value, indirect_class)?),
+            Callee::Indirect(value) => Some(detach(value, indirect_class)?),
         };
         let fresh_result_address = result_address
             .map(|value| {
                 let register = self.abi.indirect_result.ok_or_else(|| {
                     PassError::InvalidRuleSet("ABI has no result-address register".to_string())
                 })?;
-                detach(rewriter, value, register.0).map(|fresh| (fresh, register))
+                detach(value, register.0).map(|fresh| (fresh, register))
             })
             .transpose()?;
         let mut fresh_args = Vec::with_capacity(argument_values.len());
         for (&arg, location) in argument_values.iter().zip(&argument_locations) {
-            fresh_args.push(detach(rewriter, arg, location.class())?);
+            fresh_args.push(detach(arg, location.class())?);
         }
 
         let vector_register_args = argument_values
@@ -323,7 +311,7 @@ impl CallLowering {
             self.emitter
                 .call_prefix(context, self.abi, outgoing_size, vector_register_args)
         {
-            rewriter.insert_op_before(op, prefix.as_ref())?;
+            context.insert_op_before(op, prefix.as_ref())?;
         }
 
         let saved_ra = if let Some(ra) = self.abi.ra {
@@ -331,7 +319,7 @@ impl CallLowering {
             let copy = self
                 .emitter
                 .copy(context, RegSlot::Value(saved), RegSlot::Phys(ra));
-            rewriter.insert_op_before(op, copy.as_ref())?;
+            context.insert_op_before(op, copy.as_ref())?;
             Some((saved, ra))
         } else {
             None
@@ -348,13 +336,13 @@ impl CallLowering {
                     let copy =
                         self.emitter
                             .copy(context, RegSlot::Phys(register), RegSlot::Value(fresh));
-                    rewriter.insert_op_before(op, copy.as_ref())?;
+                    context.insert_op_before(op, copy.as_ref())?;
                 }
                 ArgumentLocation::Stack { class, offset } => {
                     let store = self
                         .emitter
                         .stack_arg_store(context, self.abi, fresh, class, offset)?;
-                    rewriter.insert_op_before(op, store.as_ref())?;
+                    context.insert_op_before(op, store.as_ref())?;
                     observed = observed
                         .map(|state| tir::backend::put_on_chain(context, store.as_ref(), state));
                 }
@@ -364,7 +352,7 @@ impl CallLowering {
             let copy = self
                 .emitter
                 .copy(context, RegSlot::Phys(register), RegSlot::Value(fresh));
-            rewriter.insert_op_before(op, copy.as_ref())?;
+            context.insert_op_before(op, copy.as_ref())?;
         }
 
         // What the call reads: the registers the convention placed the arguments
@@ -429,9 +417,9 @@ impl CallLowering {
         ) {
             context.replace_value_uses(published, new);
         }
-        rewriter.insert_op_before(op, call.as_ref())?;
+        context.insert_op_before(op, call.as_ref())?;
         for suffix in self.emitter.call_suffix(context, self.abi, outgoing_size) {
-            rewriter.insert_op_before(op, suffix.as_ref())?;
+            context.insert_op_before(op, suffix.as_ref())?;
         }
 
         let restore = saved_ra.map(|(saved, ra)| {
@@ -439,12 +427,12 @@ impl CallLowering {
                 .copy(context, RegSlot::Phys(ra), RegSlot::Value(saved))
         });
         if let Some(restore) = &restore {
-            rewriter.insert_op_before(op, restore.as_ref())?;
+            context.insert_op_before(op, restore.as_ref())?;
         }
 
         if context.get_value(result).ty() == UnitType::new(context) {
-            rewriter.erase_op(op)?;
-            erase_dead_tuple_arguments(context, rewriter, &tuple_arguments)?;
+            context.erase_op(op)?;
+            erase_dead_tuple_arguments(context, &tuple_arguments)?;
             return Ok(true);
         }
 
@@ -452,7 +440,7 @@ impl CallLowering {
         if let Some(tuple) =
             (result_type.as_ref() as &dyn std::any::Any).downcast_ref::<TupleType>()
         {
-            self.lower_tuple_result(context, op, rewriter, result, tuple, &tuple_arguments)?;
+            self.lower_tuple_result(context, op, result, tuple, &tuple_arguments)?;
             return Ok(true);
         }
 
@@ -462,14 +450,14 @@ impl CallLowering {
         // The call op is erased below and takes its result with it, so the copy
         // defines a register value of its own. The rewiring is explicit: the
         // call publishes a state as well as a value, so the shapes of the two
-        // ops do not line up for [`Rewriter::replace_op`] to do it.
+        // ops do not line up for [`Context::replace_op`] to do it.
         let returned = fresh_reg(context, return_reg.0);
         let copy = self
             .emitter
             .copy(context, RegSlot::Value(returned), RegSlot::Phys(return_reg));
         context.replace_value_uses(result, returned);
-        rewriter.replace_op(op, copy.as_ref())?;
-        erase_dead_tuple_arguments(context, rewriter, &tuple_arguments)?;
+        context.replace_op(op, copy.as_ref())?;
+        erase_dead_tuple_arguments(context, &tuple_arguments)?;
         Ok(true)
     }
 
@@ -582,7 +570,6 @@ impl CallLowering {
         &self,
         context: &Context,
         op: &OperationRef,
-        rewriter: &mut Rewriter,
         result: ValueId,
         tuple: &TupleType,
         tuple_arguments: &[(OpId, ValueId)],
@@ -632,13 +619,13 @@ impl CallLowering {
             let copy =
                 self.emitter
                     .copy(context, RegSlot::Value(extracted), RegSlot::Phys(register));
-            rewriter.insert_op_before(op, copy.as_ref())?;
+            context.insert_op_before(op, copy.as_ref())?;
         }
         for (_, _, _, extract) in extracts {
-            rewriter.erase_op_keeping_results(&extract)?;
+            context.erase_op_keeping_results(&extract)?;
         }
-        rewriter.erase_op(op)?;
-        erase_dead_tuple_arguments(context, rewriter, tuple_arguments)?;
+        context.erase_op(op)?;
+        erase_dead_tuple_arguments(context, tuple_arguments)?;
         Ok(())
     }
 }
@@ -649,7 +636,6 @@ type ArgumentGroups = Vec<(Vec<ValueId>, u64)>;
 
 fn insert_tuple_extractions(
     context: &Context,
-    rewriter: &mut Rewriter,
     before: &OperationRef,
     tuple_value: ValueId,
     tuple: &TupleType,
@@ -662,21 +648,20 @@ fn insert_tuple_extractions(
             .result_type(element_ty)
             .build();
         elements.push(extract.result());
-        rewriter.insert_op_before(before, &extract)?;
+        context.insert_op_before(before, &extract)?;
     }
     Ok(elements)
 }
 
 fn erase_dead_tuple_arguments(
     context: &Context,
-    rewriter: &mut Rewriter,
     tuple_arguments: &[(OpId, ValueId)],
 ) -> Result<(), PassError> {
     for &(tuple, value) in tuple_arguments {
         if !context.has_operation(tuple) || context.is_used(value) {
             continue;
         }
-        rewriter.erase_op(&OperationRef::new(context.get_op(tuple)))?;
+        context.erase_op(&OperationRef::new(context.get_op(tuple)))?;
     }
     Ok(())
 }

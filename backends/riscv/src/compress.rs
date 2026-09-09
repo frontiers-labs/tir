@@ -35,17 +35,15 @@ use tir::backend::VirtualReturnOp;
 pub(crate) fn compress_rv32(
     context: &tir::Context,
     op: &tir::OperationRef,
-    rewriter: &mut tir::Rewriter,
 ) -> Result<bool, tir::PassError> {
-    compress(context, op, rewriter, 32)
+    compress(context, op, 32)
 }
 
 pub(crate) fn compress_rv64(
     context: &tir::Context,
     op: &tir::OperationRef,
-    rewriter: &mut tir::Rewriter,
 ) -> Result<bool, tir::PassError> {
-    compress(context, op, rewriter, 64)
+    compress(context, op, 64)
 }
 
 /// A register slot of an instruction, carried through to the compressed form
@@ -88,7 +86,6 @@ fn reg(context: &tir::Context, inner: &dyn Operation, name: &str) -> Option<u16>
 fn compress(
     context: &tir::Context,
     op: &tir::OperationRef,
-    rewriter: &mut tir::Rewriter,
     xlen: u32,
 ) -> Result<bool, tir::PassError> {
     match compressed_form(context, op, xlen) {
@@ -101,7 +98,7 @@ fn compress(
             for _ in op.op().state_results() {
                 context.append_result(new_op.id(), tir::TypeId::STATE);
             }
-            rewriter.replace_op(op, new_op.as_ref()).map(|()| true)
+            context.replace_op(op, new_op.as_ref()).map(|()| true)
         }
         None => Ok(false),
     }

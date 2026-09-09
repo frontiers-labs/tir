@@ -18,7 +18,7 @@ use crate::builtin::FnToPtrOp;
 use crate::func::{CallOp, FuncOp};
 use crate::{
     Context, OpHandle, OpId, Operation, OperationRef, Pass, PassError, PassTarget, RegionId,
-    Rewriter, Symbol, ValueId,
+    Symbol, ValueId,
 };
 
 #[derive(Default)]
@@ -48,7 +48,6 @@ impl Pass for MaterializeSymbolAddressesPass {
         &mut self,
         operation: &OperationRef,
         context: &Context,
-        rewriter: &mut Rewriter,
         _analyses: &AnalysisManager,
     ) -> Result<(), PassError> {
         let mut uses = Vec::new();
@@ -60,7 +59,7 @@ impl Pass for MaterializeSymbolAddressesPass {
                     let value = address.result();
                     match context.parent_nodes_region(op.op().id) {
                         Some(region) => context.add(region, address.id()),
-                        None => rewriter.insert_op_before(&op, &address)?,
+                        None => context.insert_op_before(&op, &address)?,
                     }
                     context.set_op_operand(op.op().id, index, value);
                 }
@@ -72,9 +71,9 @@ impl Pass for MaterializeSymbolAddressesPass {
                             let old = op.op().results()[0];
                             context.replace_value_uses(old, address.result());
                             context.rename_region_results(region, old, address.result(), &[]);
-                            rewriter.erase_op(&op)?;
+                            context.erase_op(&op)?;
                         }
-                        None => rewriter.replace_op(&op, &address)?,
+                        None => context.replace_op(&op, &address)?,
                     }
                 }
                 Use::Callee(op, name) => {

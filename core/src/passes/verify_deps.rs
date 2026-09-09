@@ -9,7 +9,7 @@
 
 use crate::analysis::{AnalysisManager, Effect, effect_of};
 use crate::func::FuncOp;
-use crate::{Context, OpHandle, OperationRef, Pass, PassError, PassTarget, RegionKind, Rewriter};
+use crate::{Context, OpHandle, OperationRef, Pass, PassError, PassTarget, RegionKind};
 
 /// Check the memory-order invariant of `function`'s unordered body.
 pub fn verify_deps(context: &Context, function: &OpHandle) -> Result<(), crate::Error> {
@@ -82,7 +82,6 @@ impl Pass for VerifyDepsPass {
         &mut self,
         operation: &OperationRef,
         context: &Context,
-        _rewriter: &mut Rewriter,
         _analyses: &AnalysisManager,
     ) -> Result<(), PassError> {
         verify_deps(context, operation.op()).map_err(|error| PassError::InvalidIR {

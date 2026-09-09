@@ -216,14 +216,12 @@ impl<'a> Writer<'a> {
         if !func.body_region().is_nodes() {
             return self.write_blocks(func, &Destructured::default(), debug, out);
         }
-        let mut rewriter = tir::Rewriter::new(self.context.clone());
         let copy = tir::clone_op(self.context, func.id());
         self.module.body().append(copy);
         let copy = FuncOp::from_op_instance(self.context.get_op(copy));
         let name = func.sym_name();
         let structure = tir::passes::destructure(
             self.context,
-            &mut rewriter,
             copy.body_region().id(),
             &tir::passes::CfgEdges {
                 context: self.context,
@@ -231,7 +229,7 @@ impl<'a> Writer<'a> {
         )
         .map_err(|error| format!("cannot destructure {name}: {error}"))?;
         let written = self.write_blocks(&copy, &structure, debug, out);
-        rewriter
+        self.context
             .erase_op(&tir::OperationRef::new(self.context.get_op(copy.id())))
             .map_err(|error| error.to_string())?;
         written

@@ -19,8 +19,8 @@ use crate::analysis::affine::{AffineForm, AffineView, body_ops, carried};
 use crate::attributes::Predicate;
 use crate::builtin::{IntegerType, ops as b};
 use crate::{
-    Context, CountedLoop, OpId, Operation, OperationRef, PassError, RegionId, Rewriter, Theta,
-    TypeId, Value, ValueId, scf,
+    Context, CountedLoop, OpId, Operation, OperationRef, PassError, RegionId, Theta, TypeId, Value,
+    ValueId, scf,
 };
 
 use super::schedule::{Candidate, Level, divides_evenly, levels};
@@ -273,11 +273,7 @@ impl<'a> Lowering<'a> {
     }
 
     /// Replace the nest with the one the candidate names.
-    pub(super) fn run(
-        &mut self,
-        rewriter: &mut Rewriter,
-        view: &AffineView,
-    ) -> Result<(), PassError> {
+    pub(super) fn run(&mut self, view: &AffineView) -> Result<(), PassError> {
         let target = OperationRef::new(self.context.get_op(self.nest.root));
         let remainder = self
             .candidate
@@ -293,17 +289,16 @@ impl<'a> Lowering<'a> {
 
         let levels = levels(&shape);
         let states = self.nest.entry_states.clone();
-        let left = self.emit(rewriter, &levels, 0, &mut HashMap::new(), states, site)?;
+        let left = self.emit(&levels, 0, &mut HashMap::new(), states, site)?;
 
         for (&old, &new) in self.nest.exit_states.iter().zip(&left) {
             self.context.replace_value_uses(old, new);
             self.context.rename_region_results(site, old, new, &[]);
         }
-        rewriter.erase_op(&target)?;
+        self.context.erase_op(&target)?;
         if let Some(d) = remainder {
             strip_mine(
                 self.context,
-                rewriter,
                 self.built[&d],
                 self.candidate.tiles[d] as i128,
             )?;
@@ -359,7 +354,6 @@ impl<'a> Lowering<'a> {
     /// leaves behind.
     fn emit(
         &mut self,
-        rewriter: &mut Rewriter,
         levels: &[Level],
         index: usize,
         bound: &mut HashMap<usize, ValueId>,
@@ -367,20 +361,20 @@ impl<'a> Lowering<'a> {
         site: RegionId,
     ) -> Result<Vec<ValueId>, PassError> {
         let Some(level) = levels.get(index) else {
-            return self.emit_body(rewriter, bound, states, site);
+            return self.emit_body(bound, states, site);
         };
         match *level {
             Level::Plain(dimension) => {
                 let counted = self.plain(dimension);
-                self.emit_loop(rewriter, levels, index, bound, states, site, counted)
+                self.emit_loop(levels, index, bound, states, site, counted)
             }
             Level::TileOuter(dimension) => {
                 let tiles = self.whole_tiles(dimension);
-                self.emit_loop(rewriter, levels, index, bound, states, site, tiles)
+                self.emit_loop(levels, index, bound, states, site, tiles)
             }
             Level::TileInner(dimension) => {
                 let tile = self.one_tile(dimension, bound, site);
-                self.emit_loop(rewriter, levels, index, bound, states, site, tile)
+                self.emit_loop(levels, index, bound, states, site, tile)
             }
         }
     }
@@ -438,7 +432,6 @@ impl<'a> Lowering<'a> {
     #[allow(clippy::too_many_arguments)]
     fn emit_loop(
         &mut self,
-        rewriter: &mut Rewriter,
         levels: &[Level],
         index: usize,
         bound: &mut HashMap<usize, ValueId>,
@@ -480,7 +473,7 @@ impl<'a> Lowering<'a> {
         }
 
         let restored = bound.insert(key, counter.id());
-        let left = self.emit(rewriter, levels, index + 1, bound, dep_ports.clone(), body)?;
+        let left = self.emit(levels, index + 1, bound, dep_ports.clone(), body)?;
         match restored {
             Some(previous) => bound.insert(key, previous),
             None => bound.remove(&key),
@@ -537,7 +530,6 @@ impl<'a> Lowering<'a> {
     /// Copy the innermost body under the counters the rebuilt nest gives it.
     fn emit_body(
         &mut self,
-        rewriter: &mut Rewriter,
         bound: &HashMap<usize, ValueId>,
         states: Vec<ValueId>,
         site: RegionId,
@@ -557,18 +549,14 @@ impl<'a> Lowering<'a> {
             .map(|index| results[index])
             .collect();
         // The copy's own comparison and latch count a loop that is gone.
-        erase_unread(self.context, rewriter, &ops)?;
+        erase_unread(self.context, &ops)?;
         Ok(left)
     }
 }
 
 /// Erase the pure copies nothing reads: the comparison and the latch a copied
 /// body computed for the loop it used to sit in.
-pub(super) fn erase_unread(
-    context: &Context,
-    rewriter: &mut Rewriter,
-    ops: &[OpId],
-) -> Result<(), PassError> {
+pub(super) fn erase_unread(context: &Context, ops: &[OpId]) -> Result<(), PassError> {
     // A region's results sit in no use list, so a value one names is read
     // without a user: an unordered region's results, and those of every
     // region nested in it, count as reads.
@@ -595,7 +583,7 @@ pub(super) fn erase_unread(
                 .iter()
                 .all(|&result| !context.is_used(result) && !named.contains(&result))
         {
-            rewriter.erase_op(&OperationRef::new(instance))?;
+            context.erase_op(&OperationRef::new(instance))?;
         }
     }
     Ok(())

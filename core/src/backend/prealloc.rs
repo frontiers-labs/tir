@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 
 use tir::attributes::AttributeValue;
-use tir::{AnalysisManager, Context, OperationRef, Pass, PassError, PassTarget, Rewriter, ValueId};
+use tir::{AnalysisManager, Context, OperationRef, Pass, PassError, PassTarget, ValueId};
 
 use crate::backend::abi::{
     ArgumentGroup, ArgumentMember, ArgumentSlot, decode_argument_group, next_return_register,
@@ -91,7 +91,6 @@ impl Pass for TiedOperandLoweringPass {
         &mut self,
         op: &OperationRef,
         context: &Context,
-        rewriter: &mut Rewriter,
         _analyses: &AnalysisManager,
     ) -> Result<(), PassError> {
         for block_id in symbol_body_blocks(context, op.op()) {
@@ -134,7 +133,7 @@ impl Pass for TiedOperandLoweringPass {
                         RegSlot::Value(src),
                     );
                     let copy_id = copy.id();
-                    rewriter.insert_op_before(&op_ref, copy.as_ref())?;
+                    context.insert_op_before(&op_ref, copy.as_ref())?;
                     mark_op(
                         context,
                         copy_id,
@@ -190,7 +189,6 @@ impl Pass for BlockArgLoweringPass {
         &mut self,
         op: &OperationRef,
         context: &Context,
-        rewriter: &mut Rewriter,
         _analyses: &AnalysisManager,
     ) -> Result<(), PassError> {
         let blocks = symbol_body_blocks(context, op.op());
@@ -266,7 +264,7 @@ impl Pass for BlockArgLoweringPass {
                         RegSlot::Value(src),
                     );
                     let copy_id = copy.id();
-                    rewriter.insert_op_before(&op_ref, copy.as_ref())?;
+                    context.insert_op_before(&op_ref, copy.as_ref())?;
                     mark_op(
                         context,
                         copy_id,
@@ -334,7 +332,6 @@ impl Pass for AbiPrecolorPass {
         &mut self,
         op: &OperationRef,
         context: &Context,
-        rewriter: &mut Rewriter,
         _analyses: &AnalysisManager,
     ) -> Result<(), PassError> {
         let info = self.target.register_info();
@@ -377,7 +374,7 @@ impl Pass for AbiPrecolorPass {
                     RegSlot::Value(incoming),
                 );
                 let copy_id = copy.id();
-                rewriter.insert_op_before(&entry()?, copy.as_ref())?;
+                context.insert_op_before(&entry()?, copy.as_ref())?;
                 mark_op(
                     context,
                     copy_id,
@@ -403,7 +400,7 @@ impl Pass for AbiPrecolorPass {
                     .target
                     .emit_spill_reload(context, value, class, &self.abi.sp, 0);
                 let load_id = load.id();
-                rewriter.insert_op_before(&entry()?, load.as_ref())?;
+                context.insert_op_before(&entry()?, load.as_ref())?;
                 mark_op(
                     context,
                     load_id,
@@ -443,7 +440,7 @@ impl Pass for AbiPrecolorPass {
                     );
                     let copy_id = copy.id();
                     let op_ref = op_ref_in(context, op_id);
-                    rewriter.insert_op_before(&op_ref, copy.as_ref())?;
+                    context.insert_op_before(&op_ref, copy.as_ref())?;
                     context.set_op_operand(op_id, operand_index, outgoing);
                     pin_on(context, copy_id, outgoing, (rc, register.1))?;
                     mark_op(

@@ -7,7 +7,7 @@
 //! by the target's instruction patterns
 //! ([`pattern`]), e-matched by the shared [`tir_relational`] engine, via a
 //! PBQP instance over e-classes ([`cover`]). The solved cover becomes an emission
-//! plan ([`emit`]) the pass commits through the rewriter.
+//! plan ([`emit`]) the pass commits through the context.
 
 mod builder;
 mod cover;
@@ -23,7 +23,7 @@ use std::collections::{HashMap, HashSet};
 
 use tir::{
     AnalysisManager, BlockId, Context, Gamma, OpHandle, OpId, Operation, OperationRef, Pass,
-    PassError, PassTarget, RegionId, Rewriter, TypeId, ValueId,
+    PassError, PassTarget, RegionId, TypeId, ValueId,
     graph::{Dag, MutDag, NodeId, OperandConstraint, subgraphs_equal},
     sem::{
         EquivalenceOracle, SemGraph, SmtOracle, SymKind, SymPayload, canonicalize_for_selection,
@@ -777,8 +777,7 @@ struct ConditionExpr {
     compare: Option<(Id, SymKind, Id, Id)>,
 }
 
-pub type OpLowering =
-    Box<dyn Fn(&Context, &OperationRef, &mut Rewriter) -> Result<bool, PassError> + Send + Sync>;
+pub type OpLowering = Box<dyn Fn(&Context, &OperationRef) -> Result<bool, PassError> + Send + Sync>;
 
 pub struct InstructionSelectPass {
     rules: Vec<Rule>,
@@ -1107,10 +1106,7 @@ impl InstructionSelectPass {
 
     pub fn with_op_lowering(
         mut self,
-        lowering: impl Fn(&Context, &OperationRef, &mut Rewriter) -> Result<bool, PassError>
-        + Send
-        + Sync
-        + 'static,
+        lowering: impl Fn(&Context, &OperationRef) -> Result<bool, PassError> + Send + Sync + 'static,
     ) -> Self {
         self.op_lowerings.push(Box::new(lowering));
         self
@@ -1532,15 +1528,10 @@ impl InstructionSelectPass {
     /// blocks of the function and neither the walk nor a per-region commit can
     /// own that. Every block then takes a linearization of its dependence
     /// graph, in which the destructured order is the reference.
-    fn commit_function(
-        &mut self,
-        context: &Context,
-        op: &OperationRef,
-        rewriter: &mut Rewriter,
-    ) -> Result<(), PassError> {
+    fn commit_function(&mut self, context: &Context, op: &OperationRef) -> Result<(), PassError> {
         let regions: Vec<RegionId> = crate::passes::regions_under(context, op.op().id);
         for region in regions {
-            self.commit_region_solution(context, region, rewriter)?;
+            self.commit_region_solution(context, region)?;
         }
         let Some(emitters) = self.branch_emitters.as_ref() else {
             return Ok(());
@@ -1564,7 +1555,7 @@ impl InstructionSelectPass {
             implicit: &implicit,
             rules: &self.rules,
         };
-        crate::passes::destructure(context, rewriter, region, &edges)?;
+        crate::passes::destructure(context, region, &edges)?;
         for block in context.get_region(region).block_ids() {
             let block = context.get_block(block);
             let graph = crate::backend::Dependences::of_ops(
@@ -1587,10 +1578,9 @@ impl InstructionSelectPass {
         &mut self,
         context: &Context,
         region: RegionId,
-        rewriter: &mut Rewriter,
     ) -> Result<(), PassError> {
         match self.plans.remove(&region) {
-            Some(Ok(plan)) => self.commit_plan(context, region, plan, rewriter)?,
+            Some(Ok(plan)) => self.commit_plan(context, region, plan)?,
             Some(Err(message)) => return Err(PassError::InvalidRuleSet(message)),
             None => {}
         }
@@ -1615,7 +1605,6 @@ impl InstructionSelectPass {
         context: &Context,
         region: RegionId,
         mut plan: RegionPlan,
-        rewriter: &mut Rewriter,
     ) -> Result<(), PassError> {
         // The place each surviving operation holds, and — as each tile is
         // emitted — the place it inherits: its root operation's, clamped so the
@@ -1731,7 +1720,7 @@ impl InstructionSelectPass {
                 answered.push((published, observed));
             }
             let op = OperationRef::new(instance);
-            rewriter.erase_op_keeping_results(&op)?;
+            context.erase_op_keeping_results(&op)?;
         }
         // A use list is not the only place a state is named: a region hands one
         // back as its result, and only `commit_region_solution` reaches those.
@@ -2561,7 +2550,6 @@ impl Pass for InstructionSelectPass {
         &mut self,
         op: &OperationRef,
         context: &Context,
-        rewriter: &mut Rewriter,
         _analyses: &AnalysisManager,
     ) -> Result<(), PassError> {
         // The function op is visited before any of its regions' ops: build the
@@ -2571,21 +2559,21 @@ impl Pass for InstructionSelectPass {
         if !op.op().regions().is_empty() {
             self.begin_function(context, op);
             if let Some(lowering) = &mut self.call_lowering {
-                lowering.prepare_function(context, op, rewriter)?;
+                lowering.prepare_function(context, op)?;
             }
             if self.solve_function(context, op)? {
-                self.commit_function(context, op, rewriter)?;
+                self.commit_function(context, op)?;
             }
         }
 
         for lowering in &self.op_lowerings {
-            if lowering(context, op, rewriter)? {
+            if lowering(context, op)? {
                 return Ok(());
             }
         }
 
         if let Some(lowering) = &mut self.call_lowering
-            && lowering.lower(context, op, rewriter)?
+            && lowering.lower(context, op)?
         {
             return Ok(());
         }

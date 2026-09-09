@@ -32,8 +32,8 @@ use crate::func::FuncOp;
 use crate::sem::egraph::type_width;
 use crate::{
     ConstantLike, Context, Gamma, MemoryRead, MemoryWrite, NewOp, OpHandle, OpId, OperationRef,
-    Pass, PassError, PassTarget, PromotableAllocation, RegionId, RegionKind, Rewriter,
-    Speculatable, Theta, TypeId, ValueId,
+    Pass, PassError, PassTarget, PromotableAllocation, RegionId, RegionKind, Speculatable, Theta,
+    TypeId, ValueId,
 };
 
 #[derive(Default)]
@@ -60,7 +60,6 @@ impl Pass for InstCombineNodesPass {
         &mut self,
         op: &OperationRef,
         context: &Context,
-        rewriter: &mut Rewriter,
         _analyses: &AnalysisManager,
     ) -> Result<(), PassError> {
         let root = op.op().id;
@@ -81,7 +80,7 @@ impl Pass for InstCombineNodesPass {
         driver.commit_nodes(body, &extraction, &mut HashMap::new())?;
         forget_write_only_slots(context, body);
         drop_untouched_chains(context, body);
-        let result = sweep(context, body, rewriter);
+        let result = sweep(context, body);
         tir_relational::report_saturation("instcombine-nodes");
         result
     }
@@ -670,24 +669,23 @@ fn only_written(
 /// Demand runs from the callable's results through operands and nested
 /// regions' results, dependencies included: what an effect leaves behind is
 /// what demands it.
-fn sweep(context: &Context, body: RegionId, rewriter: &mut Rewriter) -> Result<(), PassError> {
+fn sweep(context: &Context, body: RegionId) -> Result<(), PassError> {
     let demanded = crate::passes::demanded_ops(context, &[body]);
-    sweep_region(context, body, &demanded, rewriter)
+    sweep_region(context, body, &demanded)
 }
 
 fn sweep_region(
     context: &Context,
     region: RegionId,
     demanded: &HashSet<OpId>,
-    rewriter: &mut Rewriter,
 ) -> Result<(), PassError> {
     for op in context.get_region(region).op_ids() {
         if !demanded.contains(&op) {
-            rewriter.erase_op(&OperationRef::new(context.get_op(op)))?;
+            context.erase_op(&OperationRef::new(context.get_op(op)))?;
             continue;
         }
         for sub in context.get_op(op).regions() {
-            sweep_region(context, sub, demanded, rewriter)?;
+            sweep_region(context, sub, demanded)?;
         }
     }
     Ok(())

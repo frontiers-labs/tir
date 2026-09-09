@@ -6,7 +6,7 @@ use crate::func::{CallOp, FuncOp};
 use crate::ptr::AllocaOp;
 use crate::{
     ConstantLike, Context, OpHandle, OpId, Operation, OperationRef, Pass, PassError, PassTarget,
-    RegionId, Rewriter, Symbol, Terminator, Value, ValueId, Visibility,
+    RegionId, Symbol, Terminator, Value, ValueId, Visibility,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -79,7 +79,6 @@ impl Pass for InlinePass {
         &mut self,
         module: &OperationRef,
         context: &Context,
-        rewriter: &mut Rewriter,
         _analyses: &AnalysisManager,
     ) -> Result<(), PassError> {
         let mut graph = CallGraph::read(context, module.op());
@@ -94,11 +93,11 @@ impl Pass for InlinePass {
                     continue;
                 }
                 caller_ops += cost_of(context, graph.nodes[site.callee].func);
-                let copied = splice_nodes(context, rewriter, &graph, &site)?;
+                let copied = splice_nodes(context, &graph, &site)?;
                 graph.inlined(&site, &copied);
             }
         }
-        graph.erase_dead_private(context, rewriter)
+        graph.erase_dead_private(context)
     }
 }
 
@@ -266,11 +265,7 @@ impl CallGraph {
         }
     }
 
-    fn erase_dead_private(
-        &mut self,
-        context: &Context,
-        rewriter: &mut Rewriter,
-    ) -> Result<(), PassError> {
+    fn erase_dead_private(&mut self, context: &Context) -> Result<(), PassError> {
         loop {
             let Some(dead) = (0..self.nodes.len()).find(|&node| {
                 self.nodes[node].private
@@ -285,7 +280,7 @@ impl CallGraph {
                 }
             }
             self.nodes[dead].users = usize::MAX as u32;
-            rewriter.erase_op(&OperationRef::new(context.get_op(self.nodes[dead].func)))?;
+            context.erase_op(&OperationRef::new(context.get_op(self.nodes[dead].func)))?;
         }
     }
 }
@@ -341,7 +336,6 @@ impl Tarjan {
 /// the body leaves behind is what the call left. Nothing is unthreaded.
 fn splice_nodes(
     context: &Context,
-    rewriter: &mut Rewriter,
     graph: &CallGraph,
     site: &Site,
 ) -> Result<Vec<usize>, PassError> {
@@ -420,7 +414,7 @@ fn splice_nodes(
                     *value = entered;
                 }
             }
-            rewriter.erase_op(&OperationRef::new(instance))?;
+            context.erase_op(&OperationRef::new(instance))?;
         }
     }
 
@@ -442,11 +436,11 @@ fn splice_nodes(
             .ok_or(PassError::RewriteFailed(call.id))?;
         rename(context, destination, old, new);
     }
-    rewriter.erase_op(&site.call)?;
+    context.erase_op(&site.call)?;
 
     let caller = context.get_op(graph.nodes[site.caller].func);
-    let tuples = fold_tuple_gets(context, rewriter, body, &subtree_ops(context, &caller))?;
-    erase_unused(context, rewriter, &tuples)?;
+    let tuples = fold_tuple_gets(context, body, &subtree_ops(context, &caller))?;
+    erase_unused(context, &tuples)?;
     Ok(copied)
 }
 
@@ -466,7 +460,6 @@ fn rename(context: &Context, region: RegionId, old: ValueId, new: ValueId) {
 /// position but a call argument or a returned value cannot be encoded.
 fn fold_tuple_gets(
     context: &Context,
-    rewriter: &mut Rewriter,
     body: RegionId,
     ops: &[OpId],
 ) -> Result<Vec<(OpId, ValueId)>, PassError> {
@@ -486,20 +479,16 @@ fn fold_tuple_gets(
             continue;
         };
         rename(context, body, get.result(), element);
-        rewriter.erase_op(&OperationRef::new(instance))?;
+        context.erase_op(&OperationRef::new(instance))?;
         sources.push((source, made.result()));
     }
     Ok(sources)
 }
 
-fn erase_unused(
-    context: &Context,
-    rewriter: &mut Rewriter,
-    candidates: &[(OpId, ValueId)],
-) -> Result<(), PassError> {
+fn erase_unused(context: &Context, candidates: &[(OpId, ValueId)]) -> Result<(), PassError> {
     for &(op, value) in candidates {
         if context.has_operation(op) && !context.is_used(value) {
-            rewriter.erase_op(&OperationRef::new(context.get_op(op)))?;
+            context.erase_op(&OperationRef::new(context.get_op(op)))?;
         }
     }
     Ok(())

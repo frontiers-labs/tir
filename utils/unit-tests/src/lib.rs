@@ -126,6 +126,7 @@ mod core {
     mod liveness;
     mod machine_ir;
     mod objects;
+    mod overlay;
     mod pass;
     mod regalloc;
     mod region;

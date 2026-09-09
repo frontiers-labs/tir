@@ -16,7 +16,7 @@ use std::collections::{HashMap, HashSet};
 use tir::attributes::AttributeValue;
 use tir::{
     AnalysisManager, BlockId, Context, OpId, Operation, OperationRef, Pass, PassError, PassTarget,
-    Rewriter, ValueId,
+    ValueId,
 };
 use tir_pbqp::{self as pbqp, INF_COST, PbqpMatrix, PbqpNodeId, PbqpProblem};
 
@@ -696,7 +696,6 @@ impl Pass for RegisterAllocationPass {
         &mut self,
         op: &OperationRef,
         context: &Context,
-        rewriter: &mut Rewriter,
         _analyses: &AnalysisManager,
     ) -> Result<(), PassError> {
         let info = self.target.register_info();
@@ -705,7 +704,7 @@ impl Pass for RegisterAllocationPass {
             return Ok(());
         }
 
-        let precolor = self.lower_fixed_registers(context, rewriter, op, &blocks)?;
+        let precolor = self.lower_fixed_registers(context, op, &blocks)?;
         let scan = BodyScan::of(context, &blocks)?;
         let affinities: Vec<_> = scan
             .coalescable_copies
@@ -716,19 +715,12 @@ impl Pass for RegisterAllocationPass {
         let mut frame = FramePlan::new(self.abi);
         frame.reserve_outgoing(scan.outgoing_size);
         let stack_allocas = scan.stack_allocas(&mut frame);
-        self.rematerialize_stack_allocas(
-            context,
-            rewriter,
-            &blocks,
-            &scan,
-            &stack_allocas,
-            &mut frame,
-        )?;
+        self.rematerialize_stack_allocas(context, &blocks, &scan, &stack_allocas, &mut frame)?;
         // Rematerializing left the allocations naming nothing, so they go now
         // rather than after allocation: a definition the function still holds is
         // a live range the allocator may pick to spill, and the spill code it
         // would write names a value this erasure is about to retire.
-        erase_stack_allocas(context, rewriter, &stack_allocas)?;
+        erase_stack_allocas(context, &stack_allocas)?;
         let assignment = loop {
             let liveness = liveness::analyze(context, &blocks, |b| {
                 scan.successors.get(&b).cloned().unwrap_or_default()
@@ -769,7 +761,7 @@ impl Pass for RegisterAllocationPass {
                         ));
                     }
                     frame.rounds += 1;
-                    self.spill_all(context, rewriter, &liveness, &blocks, &vregs, &mut frame)?;
+                    self.spill_all(context, &liveness, &blocks, &vregs, &mut frame)?;
                 }
             }
         };
@@ -791,7 +783,7 @@ impl Pass for RegisterAllocationPass {
                 // Both ends live in one register, so the copy is a self-move.
                 // Its destination value stays: the assignment placed it, and a
                 // two-address instruction may define it again.
-                rewriter.erase_op_keeping_results(&op_ref_in(context, copy.op))?;
+                context.erase_op_keeping_results(&op_ref_in(context, copy.op))?;
             } else {
                 strip_attr(context, copy.op, prealloc::COALESCABLE_COPY_ATTR);
             }
@@ -805,7 +797,6 @@ impl Pass for RegisterAllocationPass {
         let stack_args = collect_stack_arg_loads(context, &blocks)?;
         self.insert_incoming_stack_arg_loads(
             context,
-            rewriter,
             &blocks,
             &assignment,
             &stack_args,
@@ -828,7 +819,7 @@ impl Pass for RegisterAllocationPass {
         attrs.push(context.named_attribute(crate::backend::ASSIGNMENT_ATTR, map.to_attribute()));
         context.set_op_attributes(op.op().id, attrs);
         if frame_size > 0 || !saves.is_empty() {
-            self.insert_frame(context, rewriter, &blocks, frame_size, &saves)?;
+            self.insert_frame(context, &blocks, frame_size, &saves)?;
         }
 
         Ok(())
@@ -849,7 +840,6 @@ impl RegisterAllocationPass {
     fn rematerialize_stack_allocas(
         &self,
         context: &Context,
-        rewriter: &mut Rewriter,
         blocks: &[BlockId],
         scan: &BodyScan,
         allocas: &[StackAlloca],
@@ -893,7 +883,7 @@ impl RegisterAllocationPass {
                         &frame_register,
                         alloca.offset,
                     )? {
-                        rewriter.insert_op_before(&target, address.as_ref())?;
+                        context.insert_op_before(&target, address.as_ref())?;
                     }
                     for (index, operand) in operands.iter().enumerate() {
                         if *operand == alloca.value {
@@ -914,7 +904,6 @@ impl RegisterAllocationPass {
     fn lower_fixed_registers(
         &self,
         context: &Context,
-        rewriter: &mut Rewriter,
         op: &OperationRef,
         blocks: &[BlockId],
     ) -> Result<HashMap<u32, PhysReg>, PassError> {
@@ -944,7 +933,7 @@ impl RegisterAllocationPass {
                             crate::backend::RegSlot::Value(value),
                             crate::backend::RegSlot::Value(fixed),
                         );
-                        insert_after(context, rewriter, block_id, op_id, copy.as_ref())?;
+                        insert_after(context, block_id, op_id, copy.as_ref())?;
                         context.set_op_result(op_id, position, fixed);
                         copy
                     } else {
@@ -954,7 +943,7 @@ impl RegisterAllocationPass {
                             crate::backend::RegSlot::Value(fixed),
                             crate::backend::RegSlot::Value(value),
                         );
-                        rewriter.insert_op_before(&op_ref, copy.as_ref())?;
+                        context.insert_op_before(&op_ref, copy.as_ref())?;
                         context.set_op_operand(op_id, position, fixed);
                         copy
                     };
@@ -981,7 +970,6 @@ impl RegisterAllocationPass {
     fn spill_all(
         &self,
         context: &Context,
-        rewriter: &mut Rewriter,
         liveness: &Liveness,
         blocks: &[BlockId],
         vregs: &[u32],
@@ -1041,8 +1029,8 @@ impl RegisterAllocationPass {
                         let reload = self
                             .target
                             .emit_spill_reload(context, fresh, class, &frame_reg, offset);
-                        chain.observe(context, rewriter, &op_ref, reload.as_ref())?;
-                        rewriter.insert_op_before(&op_ref, reload.as_ref())?;
+                        chain.observe(context, &op_ref, reload.as_ref())?;
+                        context.insert_op_before(&op_ref, reload.as_ref())?;
                     }
                     for index in uses {
                         context.set_op_operand(op_id, index, fresh);
@@ -1054,8 +1042,8 @@ impl RegisterAllocationPass {
                         let store = self
                             .target
                             .emit_spill_store(context, fresh, class, &frame_reg, offset);
-                        chain.change(context, rewriter, &op_ref, store.as_ref())?;
-                        insert_after(context, rewriter, block_id, op_id, store.as_ref())?;
+                        chain.change(context, &op_ref, store.as_ref())?;
+                        insert_after(context, block_id, op_id, store.as_ref())?;
                     }
                 }
             }
@@ -1068,7 +1056,6 @@ impl RegisterAllocationPass {
     fn insert_frame(
         &self,
         context: &Context,
-        rewriter: &mut Rewriter,
         blocks: &[BlockId],
         size: u32,
         saves: &[(PhysReg, i64)],
@@ -1078,7 +1065,7 @@ impl RegisterAllocationPass {
             if let Some(&first) = op_ids.first() {
                 let target = op_ref_in(context, first);
                 for op in self.target.emit_prologue(context, self.abi, size, saves) {
-                    rewriter.insert_op_before(&target, op.as_ref())?;
+                    context.insert_op_before(&target, op.as_ref())?;
                 }
             }
         }
@@ -1089,7 +1076,7 @@ impl RegisterAllocationPass {
                 }
                 let target = op_ref_in(context, op_id);
                 for op in self.target.emit_epilogue(context, self.abi, size, saves) {
-                    rewriter.insert_op_before(&target, op.as_ref())?;
+                    context.insert_op_before(&target, op.as_ref())?;
                 }
             }
         }
@@ -1100,7 +1087,6 @@ impl RegisterAllocationPass {
     fn insert_incoming_stack_arg_loads(
         &self,
         context: &Context,
-        rewriter: &mut Rewriter,
         blocks: &[BlockId],
         assignment: &HashMap<u32, PhysReg>,
         args: &[IncomingStackArg],
@@ -1143,8 +1129,8 @@ impl RegisterAllocationPass {
                 self.target
                     .emit_spill_reload(context, value, dst.0, &frame_register, offset);
             let target = op_ref_in(context, load_id);
-            incoming.observe(context, rewriter, &target, load.as_ref())?;
-            rewriter.replace_op(&target, load.as_ref())?;
+            incoming.observe(context, &target, load.as_ref())?;
+            context.replace_op(&target, load.as_ref())?;
         }
         Ok(())
     }
@@ -1266,11 +1252,7 @@ struct StackAlloca {
 /// own — the allocation is what said so — so with the op gone the chain starts at
 /// a `state.entry_state` of its own instead, and the accesses on it stay ordered
 /// against each other and against nothing else.
-fn erase_stack_allocas(
-    context: &Context,
-    rewriter: &mut Rewriter,
-    allocas: &[StackAlloca],
-) -> Result<(), PassError> {
+fn erase_stack_allocas(context: &Context, allocas: &[StackAlloca]) -> Result<(), PassError> {
     for alloca in allocas {
         if !context.has_operation(alloca.op_id) {
             continue;
@@ -1281,10 +1263,10 @@ fn erase_stack_allocas(
                 .state_result()
                 .build();
             let root_state = root.result();
-            rewriter.insert_op_before(&op_ref, &root)?;
+            context.insert_op_before(&op_ref, &root)?;
             context.replace_value_uses(published, root_state);
         }
-        rewriter.erase_op(&op_ref)?;
+        context.erase_op(&op_ref)?;
     }
     Ok(())
 }
@@ -1320,11 +1302,10 @@ impl SlotChain {
     fn observe(
         &mut self,
         context: &Context,
-        rewriter: &mut Rewriter,
         before: &OperationRef,
         reload: &dyn Operation,
     ) -> Result<(), PassError> {
-        let observed = self.root(context, rewriter, before)?;
+        let observed = self.root(context, before)?;
         self.read
             .push(tir::backend::put_on_chain(context, reload, observed));
         Ok(())
@@ -1335,11 +1316,10 @@ impl SlotChain {
     fn change(
         &mut self,
         context: &Context,
-        rewriter: &mut Rewriter,
         before: &OperationRef,
         store: &dyn Operation,
     ) -> Result<(), PassError> {
-        let observed = self.root(context, rewriter, before)?;
+        let observed = self.root(context, before)?;
         // Merging one memory is that memory, as it is where the chains are
         // drawn: only a fork of several reloads needs a join to close it.
         let taken = match std::mem::take(&mut self.read).as_slice() {
@@ -1351,7 +1331,7 @@ impl SlotChain {
                     .state_result()
                     .build();
                 let merged = join.result();
-                rewriter.insert_op_before(before, &join)?;
+                context.insert_op_before(before, &join)?;
                 merged
             }
         };
@@ -1361,12 +1341,7 @@ impl SlotChain {
 
     /// The memory the slot holds, opening the block's chain at a
     /// `state.entry_state` where this is its first access.
-    fn root(
-        &mut self,
-        context: &Context,
-        rewriter: &mut Rewriter,
-        before: &OperationRef,
-    ) -> Result<ValueId, PassError> {
+    fn root(&mut self, context: &Context, before: &OperationRef) -> Result<ValueId, PassError> {
         if let Some(written) = self.written {
             return Ok(written);
         }
@@ -1374,7 +1349,7 @@ impl SlotChain {
             .state_result()
             .build();
         let state = root.result();
-        rewriter.insert_op_before(before, &root)?;
+        context.insert_op_before(before, &root)?;
         self.written = Some(state);
         Ok(state)
     }
@@ -1384,7 +1359,6 @@ impl SlotChain {
 /// or appended if `op_id` is last — which spill stores never are).
 fn insert_after(
     context: &Context,
-    rewriter: &mut Rewriter,
     block_id: BlockId,
     op_id: OpId,
     new_op: &dyn Operation,
@@ -1394,7 +1368,7 @@ fn insert_after(
     match pos.and_then(|p| op_ids.get(p + 1).copied()) {
         Some(next) => {
             let target = op_ref_in(context, next);
-            rewriter.insert_op_before(&target, new_op)
+            context.insert_op_before(&target, new_op)
         }
         None => Err(PassError::RewriteFailed(op_id)),
     }

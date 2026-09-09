@@ -1,5 +1,4 @@
 use crate::BlockHandle;
-use std::collections::HashMap;
 
 use linkme::distributed_slice;
 
@@ -377,53 +376,30 @@ pub trait Pass: Send {
         &mut self,
         op: &OperationRef,
         context: &Context,
-        rewriter: &mut Rewriter,
         analyses: &AnalysisManager,
     ) -> Result<(), PassError>;
 }
 
-pub struct Rewriter {
-    context: Context,
-    /// Erased op to the op that took its place, so a pipeline can follow its
-    /// root through [`Rewriter::replace_op`]. Keyed by id *and* generation: an
-    /// erased op's id is handed straight to the next op created, so the id on
-    /// its own would name a stranger.
-    replacements: HashMap<(OpId, u32), OpHandle>,
-}
-
-impl Rewriter {
-    pub fn new(context: Context) -> Self {
-        Self {
-            context,
-            replacements: HashMap::new(),
-        }
-    }
-
+impl Context {
     /// Record that `target` became `new`, so [`refreshed`] can follow a
     /// pipeline root across the replacement.
-    fn record_replacement(&mut self, target: &OperationRef, new: OpId) {
-        let key = (target.op.id, target.op.generation);
-        self.replacements.insert(key, self.context.get_op(new));
+    fn record_replacement(&self, target: &OperationRef, new: OpId) {
+        self.record_replaced_op(target.op.id, new);
     }
 
     /// The block holding `target`, read live from the context.
     fn block_of(&self, target: &OperationRef) -> Result<BlockHandle, PassError> {
-        self.context
-            .parent_block(target.op.id)
-            .map(|block| self.context.get_block(block))
+        self.parent_block(target.op.id)
+            .map(|block| self.get_block(block))
             .ok_or(PassError::MissingBlock(target.name().as_str()))
-    }
-
-    pub fn context(&self) -> &Context {
-        &self.context
     }
 
     /// Move everything `block` holds from `at` onward into a fresh block, which
     /// is returned detached: the caller decides where in a region it belongs.
-    pub fn split_block(&mut self, block: crate::BlockId, at: usize) -> BlockHandle {
-        let source = self.context.get_block(block);
+    pub fn split_block(&self, block: crate::BlockId, at: usize) -> BlockHandle {
+        let source = self.get_block(block);
         let tail = source.op_ids().split_off(at);
-        let split = self.context.create_block(vec![]);
+        let split = self.create_block(vec![]);
         for op in tail {
             source.remove_op(op);
             split.append(op);
@@ -433,11 +409,11 @@ impl Rewriter {
 
     /// Move every block of `source` to the end of `destination`, emptying
     /// `source`.
-    pub fn splice_region(&mut self, source: crate::RegionId, destination: crate::RegionId) {
-        let source = self.context.get_region(source);
-        let destination = self.context.get_region(destination);
+    pub fn splice_region(&self, source: crate::RegionId, destination: crate::RegionId) {
+        let source = self.get_region(source);
+        let destination = self.get_region(destination);
         for block in source
-            .iter(self.context.clone())
+            .iter(self.clone())
             .map(|block| block.id())
             .collect::<Vec<_>>()
         {
@@ -448,22 +424,22 @@ impl Rewriter {
 
     /// Detach `block` from the region holding it. The caller has already erased
     /// the operations it held; nothing may name it as a successor.
-    pub fn erase_block(&mut self, block: crate::BlockId) -> bool {
-        match self.context.parent_region(block) {
-            Some(region) => self.context.get_region(region).remove_block(block),
+    pub fn erase_block(&self, block: crate::BlockId) -> bool {
+        match self.parent_region(block) {
+            Some(region) => self.get_region(region).remove_block(block),
             None => false,
         }
     }
 
     pub fn replace_op(
-        &mut self,
+        &self,
         target: &OperationRef,
         new_op: &dyn Operation,
     ) -> Result<(), PassError> {
-        let replaced = match self.context.parent_nodes_region(target.op.id) {
+        let replaced = match self.parent_nodes_region(target.op.id) {
             Some(region) => {
-                self.context.remove_from_region(region, target.op.id);
-                self.context.add(region, new_op.id());
+                self.remove_from_region(region, target.op.id);
+                self.add(region, new_op.id());
                 true
             }
             None => self.block_of(target)?.replace_op(target.op.id, new_op.id()),
@@ -472,16 +448,15 @@ impl Rewriter {
             self.record_replacement(target, new_op.id());
             // Rewrite SSA uses of the old results to the new op's results when the
             // shapes line up, so consumers don't dangle on the erased op's values.
-            let new_results = self.context.get_op(new_op.id()).results().to_vec();
+            let new_results = self.get_op(new_op.id()).results().to_vec();
             if new_results.len() == target.op.results().len() {
                 for (old, new) in target.op.results().iter().zip(new_results.iter()) {
-                    self.context.replace_value_uses(*old, *new);
+                    self.replace_value_uses(*old, *new);
                 }
             }
             // Drop the old op and what it owns so nothing lingers as a phantom,
             // except the values the replacement adopted as its own results.
-            self.context
-                .remove_operation_except(target.op.id, &new_results);
+            self.remove_operation_except(target.op.id, &new_results);
             Ok(())
         } else {
             Err(PassError::RewriteFailed(target.op.id))
@@ -492,36 +467,35 @@ impl Rewriter {
     /// another definition (selection replacing a covered op, call lowering, an
     /// allocator erasing a copy it granted one register at both ends) leaves
     /// the ops naming them intact.
-    pub fn erase_op_keeping_results(&mut self, target: &OperationRef) -> Result<(), PassError> {
+    pub fn erase_op_keeping_results(&self, target: &OperationRef) -> Result<(), PassError> {
         let results = target.op.results().to_vec();
-        if let Some(region) = self.context.parent_nodes_region(target.op.id) {
-            self.context.remove_from_region(region, target.op.id);
-            self.context.remove_operation_except(target.op.id, &results);
+        if let Some(region) = self.parent_nodes_region(target.op.id) {
+            self.remove_from_region(region, target.op.id);
+            self.remove_operation_except(target.op.id, &results);
             return Ok(());
         }
         let block = self.block_of(target)?;
         if block.remove_op(target.op.id) {
-            let results = target.op.results().to_vec();
-            self.context.remove_operation_except(target.op.id, &results);
+            self.remove_operation_except(target.op.id, &results);
             Ok(())
         } else {
             Err(PassError::RewriteFailed(target.op.id))
         }
     }
 
-    /// [`Rewriter::replace_op`] keeping the values `target` defined. A function
+    /// [`Context::replace_op`] keeping the values `target` defined. A function
     /// becoming an `asm.symbol` loses the SSA result that named it, but the
-    /// calls in every other function of the module still name it — they resolve
+    /// calls in every other function of the module still name it: they resolve
     /// it by symbol name, and the value only has to stay readable until they do.
     pub fn replace_op_keeping_results(
-        &mut self,
+        &self,
         target: &OperationRef,
         new_op: &dyn Operation,
     ) -> Result<(), PassError> {
-        let replaced = match self.context.parent_nodes_region(target.op.id) {
+        let replaced = match self.parent_nodes_region(target.op.id) {
             Some(region) => {
-                self.context.remove_from_region(region, target.op.id);
-                self.context.add(region, new_op.id());
+                self.remove_from_region(region, target.op.id);
+                self.add(region, new_op.id());
                 true
             }
             None => self.block_of(target)?.replace_op(target.op.id, new_op.id()),
@@ -529,22 +503,22 @@ impl Rewriter {
         if replaced {
             self.record_replacement(target, new_op.id());
             let results = target.op.results().to_vec();
-            self.context.remove_operation_except(target.op.id, &results);
+            self.remove_operation_except(target.op.id, &results);
             Ok(())
         } else {
             Err(PassError::RewriteFailed(target.op.id))
         }
     }
 
-    pub fn erase_op(&mut self, target: &OperationRef) -> Result<(), PassError> {
-        if let Some(region) = self.context.parent_nodes_region(target.op.id) {
-            self.context.remove_from_region(region, target.op.id);
-            self.context.remove_operation(target.op.id);
+    pub fn erase_op(&self, target: &OperationRef) -> Result<(), PassError> {
+        if let Some(region) = self.parent_nodes_region(target.op.id) {
+            self.remove_from_region(region, target.op.id);
+            self.remove_operation(target.op.id);
             return Ok(());
         }
         let block = self.block_of(target)?;
         if block.remove_op(target.op.id) {
-            self.context.remove_operation(target.op.id);
+            self.remove_operation(target.op.id);
             Ok(())
         } else {
             Err(PassError::RewriteFailed(target.op.id))
@@ -557,19 +531,18 @@ impl Rewriter {
     /// ahead of the op that consumes them. Repeated calls before the same target
     /// preserve insertion order.
     pub fn insert_op_before(
-        &mut self,
+        &self,
         target: &OperationRef,
         new_op: &dyn Operation,
     ) -> Result<(), PassError> {
         // An unordered region has no before: the op joins it, and what it
         // reads places it.
-        if let Some(region) = self.context.parent_nodes_region(target.op.id) {
-            self.context.add(region, new_op.id());
+        if let Some(region) = self.parent_nodes_region(target.op.id) {
+            self.add(region, new_op.id());
             return Ok(());
         }
         let block = self.block_of(target)?;
         let position = self
-            .context
             .get_block(block.id())
             .op_ids()
             .iter()
@@ -591,13 +564,13 @@ fn matches_op_name(op: &OpHandle, spec: &str) -> bool {
 
 /// `root` as it stands now: a pipeline holds its root across passes that erase
 /// and replace it, and an [`OpHandle`] to an erased op reads as a panic. An
-/// erased root is followed through the replacements the rewriter recorded —
+/// erased root is followed through the replacements the overlay recorded;
 /// that is how selection's machine symbol takes over from the function it was
 /// made of.
-fn refreshed(rewriter: &Rewriter, root: &OperationRef) -> Option<OperationRef> {
+fn refreshed(context: &Context, root: &OperationRef) -> Option<OperationRef> {
     let mut op = root.op.clone();
     while !op.is_live() {
-        op = rewriter.replacements.get(&(op.id, op.generation))?.clone();
+        op = context.get_op(context.replaced_op(op.id)?);
     }
     Some(OperationRef::new(op))
 }
@@ -739,42 +712,63 @@ impl PassManager {
     }
 
     /// Run the pipeline over the subtree rooted at `root` and return the root as
-    /// it stands afterwards: a pass may replace the root in place — selection
-    /// turns a function into a machine symbol — and both the remaining passes
-    /// and the caller follow the replacement.
+    /// it stands afterwards: a pass may replace the root in place (selection
+    /// turns a function into a machine symbol) and both the remaining passes
+    /// and the caller follow the replacement. Each top-level entry's edits are
+    /// committed before the next entry runs.
     pub fn run_on_op_ref(
         &mut self,
         context: &Context,
         root: OperationRef,
         analyses: &AnalysisManager,
     ) -> Result<OperationRef, PassError> {
-        let mut rewriter = Rewriter::new(context.clone());
-        self.run_with(context, root, &mut rewriter, analyses)
+        self.run_with(context, root, analyses, true)
     }
 
-    /// [`PassManager::run_on_op_ref`] over a caller's rewriter: a nested
-    /// pipeline records its replacements where the enclosing one reads them.
+    /// [`PassManager::run_on_op_ref`] inside a caller's overlay when `commit`
+    /// is off: a nested pipeline's edits stay pending with the enclosing one's.
     fn run_with(
         &mut self,
         context: &Context,
         mut root: OperationRef,
-        rewriter: &mut Rewriter,
         analyses: &AnalysisManager,
+        commit: bool,
     ) -> Result<OperationRef, PassError> {
         for entry in &mut self.passes {
-            Self::run_entry(entry, context, &root, rewriter, analyses)?;
-            if let Some(current) = refreshed(rewriter, &root) {
+            Self::run_entry(entry, context, &root, analyses)?;
+            if let Some(current) = refreshed(context, &root) {
                 root = current;
+            }
+            if commit {
+                Self::commit(context)?;
             }
         }
         Ok(root)
+    }
+
+    /// Apply the overlay to the base. The overlay was verified as the passes
+    /// left it; with verification on, the base's use lists are checked once
+    /// more as the commit left them.
+    fn commit(context: &Context) -> Result<(), PassError> {
+        if !context.has_pending_edits() {
+            return Ok(());
+        }
+        context.commit();
+        if ir_verification_enabled() {
+            context
+                .verify_use_lists()
+                .map_err(|error| PassError::InvalidIR {
+                    pass: "commit",
+                    error,
+                })?;
+        }
+        Ok(())
     }
 
     fn run_entry(
         entry: &mut PassNode,
         context: &Context,
         root: &OperationRef,
-        rewriter: &mut Rewriter,
         analyses: &AnalysisManager,
     ) -> Result<(), PassError> {
         match entry {
@@ -794,7 +788,7 @@ impl PassManager {
                             expected,
                         });
                     }
-                    pass.run(&op_ref, context, rewriter, analyses)
+                    pass.run(&op_ref, context, analyses)
                 })?;
                 // Any edit under `root` bumps its version, so this is the "did
                 // the pass touch the IR" signal, taken from the IR itself rather
@@ -830,7 +824,7 @@ impl PassManager {
             PassNode::Nested { op_name, manager } => {
                 PassManager::walk_ops(context, root, &mut |op_ref| {
                     if matches_op_name(op_ref.op(), op_name) {
-                        manager.run_with(context, op_ref.clone(), rewriter, analyses)?;
+                        manager.run_with(context, op_ref.clone(), analyses, false)?;
                     }
                     Ok(())
                 })
@@ -839,7 +833,7 @@ impl PassManager {
                 let mut current = root.clone();
                 for _ in 0..*cap {
                     let version_before = context.op_version(current.op.id);
-                    current = manager.run_with(context, current, rewriter, analyses)?;
+                    current = manager.run_with(context, current, analyses, false)?;
                     if context.op_version(current.op.id) == version_before {
                         break;
                     }

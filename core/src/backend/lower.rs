@@ -4,7 +4,7 @@
 //! earlier stages (wide constants before register allocation; `vret`/`vbr`
 //! after).
 
-use tir::{AnalysisManager, Context, OperationRef, Pass, PassError, PassTarget, Rewriter, TypeId};
+use tir::{AnalysisManager, Context, OperationRef, Pass, PassError, PassTarget, TypeId};
 
 use crate::backend::abi::encode_argument_group;
 use crate::backend::isel::OpLowering;
@@ -21,7 +21,6 @@ fn retype(context: &Context, value: tir::ValueId, class: RegClassId) {
 pub fn lower_function_and_return(
     context: &Context,
     op: &OperationRef,
-    rewriter: &mut Rewriter,
     argument_class: impl Fn(TypeId) -> Result<RegClassId, PassError>,
 ) -> Result<bool, PassError> {
     use tir::attributes::AttributeValue;
@@ -171,9 +170,9 @@ pub fn lower_function_and_return(
             symbol = symbol.attr("binding", AttributeValue::Str("local".to_string().into()));
         }
         let symbol = symbol.build();
-        rewriter.replace_op_keeping_results(op, &symbol)?;
+        context.replace_op_keeping_results(op, &symbol)?;
         for extract in tuple_extracts {
-            rewriter.erase_op(&OperationRef::new(context.get_op(extract)))?;
+            context.erase_op(&OperationRef::new(context.get_op(extract)))?;
         }
         return Ok(true);
     }
@@ -209,7 +208,7 @@ pub fn lower_function_and_return(
                 }
             }
         };
-        rewriter.replace_op(
+        context.replace_op(
             op,
             &super::VirtualReturnOpBuilder::new(context)
                 .values(values)
@@ -219,7 +218,7 @@ pub fn lower_function_and_return(
             if !context.has_operation(defining_op) || context.is_used(value) {
                 return Ok(true);
             }
-            rewriter.erase_op(&OperationRef::new(context.get_op(defining_op)))?;
+            context.erase_op(&OperationRef::new(context.get_op(defining_op)))?;
         }
         return Ok(true);
     }
@@ -251,11 +250,10 @@ impl Pass for OpLoweringPass {
         &mut self,
         op: &OperationRef,
         context: &Context,
-        rewriter: &mut Rewriter,
         _analyses: &AnalysisManager,
     ) -> Result<(), PassError> {
         for lowering in &self.lowerings {
-            if lowering(context, op, rewriter)? {
+            if lowering(context, op)? {
                 return Ok(());
             }
         }

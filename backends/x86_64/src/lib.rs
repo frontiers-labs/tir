@@ -30,9 +30,8 @@ mod isa {
     fn lower_func_and_return_to_asm_symbol(
         context: &tir::Context,
         op: &tir::OperationRef,
-        rewriter: &mut tir::Rewriter,
     ) -> Result<bool, tir::PassError> {
-        tir::backend::lower::lower_function_and_return(context, op, rewriter, |ty| {
+        tir::backend::lower::lower_function_and_return(context, op, |ty| {
             let ty = context.get_type_data(ty);
             Ok(
                 if (ty.as_ref() as &dyn std::any::Any)
@@ -52,7 +51,6 @@ mod isa {
     fn lower_float_constant(
         context: &tir::Context,
         op: &tir::OperationRef,
-        rewriter: &mut tir::Rewriter,
     ) -> Result<bool, tir::PassError> {
         use tir::builtin::ConstantFOp;
 
@@ -74,8 +72,8 @@ mod isa {
             )])
             .src(temp)
             .build();
-        rewriter.insert_op_before(op, &materialize)?;
-        rewriter.replace_op(op, &move_bits)?;
+        context.insert_op_before(op, &materialize)?;
+        context.replace_op(op, &move_bits)?;
         Ok(true)
     }
 
@@ -108,7 +106,6 @@ mod isa {
     fn lower_constant(
         context: &tir::Context,
         op: &tir::OperationRef,
-        rewriter: &mut tir::Rewriter,
     ) -> Result<bool, tir::PassError> {
         use tir::builtin::ConstantOp;
 
@@ -124,7 +121,7 @@ mod isa {
                 .result_types(dst)
                 .attr("imm", AttributeValue::Int(value))
                 .build();
-            rewriter.replace_op(op, &movabs)?;
+            context.replace_op(op, &movabs)?;
             return Ok(true);
         }
 
@@ -132,7 +129,7 @@ mod isa {
             .result_types(dst)
             .attr("imm", AttributeValue::Int(value))
             .build();
-        rewriter.replace_op(op, &mov)?;
+        context.replace_op(op, &mov)?;
         Ok(true)
     }
 
@@ -141,7 +138,6 @@ mod isa {
     fn lower_symbol_address(
         context: &tir::Context,
         op: &tir::OperationRef,
-        rewriter: &mut tir::Rewriter,
     ) -> Result<bool, tir::PassError> {
         use tir::backend::SymbolAddressOp;
 
@@ -155,7 +151,7 @@ mod isa {
             )])
             .attr("imm", AttributeValue::Str(addr_of.sym_name().into()))
             .build();
-        rewriter.replace_op(op, &lea)?;
+        context.replace_op(op, &lea)?;
         Ok(true)
     }
 
@@ -246,11 +242,10 @@ mod isa {
     fn finalize_virtual_ops(
         context: &tir::Context,
         op: &tir::OperationRef,
-        rewriter: &mut tir::Rewriter,
     ) -> Result<bool, tir::PassError> {
         if op.as_op::<VirtualReturnOp>().is_some() {
             let ret = RetOpBuilder::new(context).build();
-            rewriter.replace_op(op, &ret)?;
+            context.replace_op(op, &ret)?;
             return Ok(true);
         }
 
@@ -263,7 +258,7 @@ mod isa {
             let jump = JmpOpBuilder::new(context)
                 .attr("imm", AttributeValue::Block(br.dest()))
                 .build();
-            rewriter.replace_op(op, &jump)?;
+            context.replace_op(op, &jump)?;
             return Ok(true);
         }
 
@@ -275,7 +270,7 @@ mod isa {
                 .attr("imm", AttributeValue::Str(call.callee().into()))
                 .build();
             tir::backend::forward_state(context, op.op(), &real);
-            rewriter.replace_op(op, &real)?;
+            context.replace_op(op, &real)?;
             return Ok(true);
         }
 
@@ -288,7 +283,7 @@ mod isa {
             let real: Box<dyn Operation> =
                 Box::new(CallIndirectOpBuilder::new(context).target(target).build());
             tir::backend::forward_state(context, op.op(), real.as_ref());
-            rewriter.replace_op(op, real.as_ref())?;
+            context.replace_op(op, real.as_ref())?;
             return Ok(true);
         }
 

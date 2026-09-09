@@ -3875,7 +3875,6 @@ pub fn lower_data(context: &Context, module: &ModuleOp) -> Result<(), tir::PassE
         SymbolOpBuilder,
     };
 
-    let mut rewriter = tir::Rewriter::new(context.clone());
     let mut globals = Vec::new();
     let mut read_only = Vec::new();
     let mut zero_globals = Vec::new();
@@ -3918,7 +3917,7 @@ pub fn lower_data(context: &Context, module: &ModuleOp) -> Result<(), tir::PassE
                 binding,
             )),
         }
-        rewriter.erase_op(&tir::OperationRef::new(op))?;
+        context.erase_op(&tir::OperationRef::new(op))?;
     }
 
     emit_data_section(context, &module_body, ".data", globals);

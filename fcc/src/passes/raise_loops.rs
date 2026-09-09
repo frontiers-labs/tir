@@ -18,7 +18,7 @@ use tir::ptr::{AllocaOp, LoadOp, StoreOp, ops as p};
 use tir::scf;
 use tir::{
     BlockHandle, BlockId, Context, MemoryRead, MemoryWrite, OpHandle, OpId, Operation,
-    OperationRef, Pass, PassError, PassTarget, RegionId, RegionKind, Rewriter, TypeId, ValueId,
+    OperationRef, Pass, PassError, PassTarget, RegionId, RegionKind, TypeId, ValueId,
 };
 
 use crate::cir;
@@ -47,7 +47,6 @@ impl Pass for RaiseLoopsPass {
         &mut self,
         op: &OperationRef,
         context: &Context,
-        rewriter: &mut Rewriter,
         analyses: &AnalysisManager,
     ) -> Result<(), PassError> {
         if op.as_op::<FuncOp>().is_none() {
@@ -65,8 +64,8 @@ impl Pass for RaiseLoopsPass {
             // the manager rebuilds.
             let escapes = analyses.get::<EscapeFacts>(context, op.op().id);
             match recognise(context, &escapes, loop_op, &shape) {
-                Some(counted) => raise(context, rewriter, loop_op, &shape, counted)?,
-                None => flatten(context, rewriter, loop_op)?,
+                Some(counted) => raise(context, loop_op, &shape, counted)?,
+                None => flatten(context, loop_op)?,
             }
         }
         Ok(())
@@ -130,7 +129,7 @@ fn shape_of(context: &Context, op_id: OpId) -> Option<Shape> {
 
 /// Spill a loop's regions into the region holding it, turning each terminator
 /// that used to leave a region into the branch it stood for.
-fn flatten(context: &Context, rewriter: &mut Rewriter, op_id: OpId) -> Result<(), PassError> {
+fn flatten(context: &Context, op_id: OpId) -> Result<(), PassError> {
     let shape = shape_of(context, op_id).expect("only loop ops are flattened");
     let block = context
         .parent_block(op_id)
@@ -152,21 +151,13 @@ fn flatten(context: &Context, rewriter: &mut Rewriter, op_id: OpId) -> Result<()
         .iter()
         .position(|&other| other == op_id)
         .expect("the loop op sits in the block holding it");
-    let exit = rewriter.split_block(block, position + 1).id();
+    let exit = context.split_block(block, position + 1).id();
     context.get_region(region).add_block(exit);
 
-    spill(
-        context,
-        rewriter,
-        op_id,
-        shape.condition,
-        region,
-        body,
-        exit,
-    )?;
-    spill(context, rewriter, op_id, shape.body, region, latch, exit)?;
+    spill(context, op_id, shape.condition, region, body, exit)?;
+    spill(context, op_id, shape.body, region, latch, exit)?;
     if let Some(step) = shape.step {
-        spill(context, rewriter, op_id, step, region, condition, exit)?;
+        spill(context, op_id, step, region, condition, exit)?;
     }
 
     let head = if shape.head_controlled {
@@ -175,7 +166,7 @@ fn flatten(context: &Context, rewriter: &mut Rewriter, op_id: OpId) -> Result<()
         body
     };
     let block = context.get_block(block);
-    rewriter.erase_op(&OperationRef::new(context.get_op(op_id)))?;
+    context.erase_op(&OperationRef::new(context.get_op(op_id)))?;
     block.append_op(cb::br(context, vec![], head).build());
     Ok(())
 }
@@ -188,7 +179,6 @@ fn flatten(context: &Context, rewriter: &mut Rewriter, op_id: OpId) -> Result<()
 /// branch are already right.
 fn spill(
     context: &Context,
-    rewriter: &mut Rewriter,
     loop_op: OpId,
     source: RegionId,
     destination: RegionId,
@@ -207,16 +197,16 @@ fn spill(
         if op.is::<cir::ConditionOp>() {
             let branch =
                 cb::cond_br(context, op.operands()[0], vec![], vec![], enter, exit).build();
-            rewriter.replace_op(&target, &branch)?;
+            context.replace_op(&target, &branch)?;
         } else if op.is::<cir::BreakOp>() && leaves_this_loop() {
             let branch = cb::br(context, vec![], exit).build();
-            rewriter.replace_op(&target, &branch)?;
+            context.replace_op(&target, &branch)?;
         } else if op.is::<cir::YieldOp>() || (op.is::<cir::ContinueOp>() && leaves_this_loop()) {
             let branch = cb::br(context, vec![], enter).build();
-            rewriter.replace_op(&target, &branch)?;
+            context.replace_op(&target, &branch)?;
         }
     }
-    rewriter.splice_region(source, destination);
+    context.splice_region(source, destination);
     Ok(())
 }
 
@@ -477,32 +467,26 @@ fn int_attr(op: &OpHandle, name: &str) -> Option<i64> {
 /// the value the loop ends on is written back after it. That traffic is what
 /// promotion, folding and state erasure exist to remove — the same division of
 /// labour `restructure` already relies on.
-fn raise(
-    context: &Context,
-    rewriter: &mut Rewriter,
-    op_id: OpId,
-    shape: &Shape,
-    counted: Counted,
-) -> Result<(), PassError> {
+fn raise(context: &Context, op_id: OpId, shape: &Shape, counted: Counted) -> Result<(), PassError> {
     let target = OperationRef::new(context.get_op(op_id));
 
     let lower = p::load(context, counted.slot, counted.counter).build();
-    rewriter.insert_op_before(&target, &lower)?;
+    context.insert_op_before(&target, &lower)?;
     let upper = match counted.upper {
         Bound::Available(value) => value,
         Bound::Constant(value) => {
             let constant = b::constant(context, value, counted.counter).build();
-            rewriter.insert_op_before(&target, &constant)?;
+            context.insert_op_before(&target, &constant)?;
             constant.result()
         }
         Bound::Load(slot) => {
             let load = p::load(context, slot, counted.counter).build();
-            rewriter.insert_op_before(&target, &load)?;
+            context.insert_op_before(&target, &load)?;
             load.result()
         }
     };
     let step = b::constant(context, counted.step, counted.counter).build();
-    rewriter.insert_op_before(&target, &step)?;
+    context.insert_op_before(&target, &step)?;
 
     // The body reads the counter where it always did — through the slot — so the
     // counter port is written there before anything else runs. It enters as
@@ -517,10 +501,10 @@ fn raise(
 
     let latch = scf::ops::r#yield(context, vec![]).build();
     let terminator = *body.op_ids().last().expect("the body ends in cir.yield");
-    rewriter.replace_op(&OperationRef::new(context.get_op(terminator)), &latch)?;
+    context.replace_op(&OperationRef::new(context.get_op(terminator)), &latch)?;
 
     let region = context.create_region();
-    rewriter.splice_region(shape.body, region.id());
+    context.splice_region(shape.body, region.id());
     let raised = scf::OrderedForOpBuilder::new(context)
         .lb(lower.result())
         .inits(vec![])
@@ -529,10 +513,10 @@ fn raise(
         .result_types(vec![counted.counter])
         .body(region.id())
         .build();
-    rewriter.insert_op_before(&target, &raised)?;
+    context.insert_op_before(&target, &raised)?;
 
     let counted_out = context.get_op(raised.id()).results()[0];
     let final_value = p::store(context, counted_out, counted.slot).build();
-    rewriter.insert_op_before(&target, &final_value)?;
-    rewriter.erase_op(&target)
+    context.insert_op_before(&target, &final_value)?;
+    context.erase_op(&target)
 }

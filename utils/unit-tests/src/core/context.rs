@@ -639,12 +639,12 @@ fn replacing_value_uses_reaches_a_detached_op() {
     assert_eq!(context.use_count(d), 4);
 }
 
-/// The whole point of the storage layout: an operation is thirty-two bytes
+/// The whole point of the storage layout: an operation is twenty-eight bytes
 /// and a value twelve, so a hive chunk holds thousands of either and neither
 /// costs an allocation of its own. A field added without a plan breaks this.
 #[test]
 fn stored_entities_keep_their_size_budget() {
-    assert_eq!(std::mem::size_of::<tir::OpInstance>(), 32);
+    assert_eq!(std::mem::size_of::<tir::OpInstance>(), 28);
     assert_eq!(std::mem::size_of::<tir::Value>(), 12);
     // An attribute is its interned name plus an `AttributeValue`, whose widest
     // variant is `RegisterAttr::Assigned`.
@@ -699,15 +699,15 @@ fn erasing_operations_returns_their_run_storage() {
             .collect::<Vec<OpId>>()
     };
     let ops = build();
+    context.commit();
     let peak = context.slab_census();
 
-    let mut rewriter = tir::Rewriter::new(context.clone());
     for op in ops {
-        rewriter
+        context
             .erase_op(&tir::OperationRef::new(context.get_op(op)))
             .expect("erase should succeed");
     }
-    context.recycle();
+    context.commit();
     let after = context.slab_census();
 
     assert!(
@@ -719,6 +719,7 @@ fn erasing_operations_returns_their_run_storage() {
     assert_eq!(after.ops_chunks, peak.ops_chunks, "op ids are not recycled");
 
     build();
+    context.commit();
     let reused = context.slab_census();
     assert_eq!(reused.runs_live, peak.runs_live, "the same runs are live");
     assert_eq!(

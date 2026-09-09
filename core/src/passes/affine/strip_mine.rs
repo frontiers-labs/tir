@@ -19,8 +19,8 @@
 use crate::attributes::Predicate;
 use crate::builtin::ops as b;
 use crate::{
-    Context, CountedLoop, OpId, Operation, OperationRef, PassError, RegionId, Rewriter, Theta,
-    TypeId, Value, ValueId, scf,
+    Context, CountedLoop, OpId, Operation, OperationRef, PassError, RegionId, Theta, TypeId, Value,
+    ValueId, scf,
 };
 
 /// Replace `op` with its tiled form: the loop over whole tiles of `tile`
@@ -29,12 +29,7 @@ use crate::{
 /// The loop carries its counter and its chains alone: the tile loop's body is
 /// a graph holding the inner loop, and the remainder loop is entered on the
 /// counter the tile loop ended at.
-pub fn strip_mine(
-    context: &Context,
-    rewriter: &mut Rewriter,
-    op: OpId,
-    tile: i128,
-) -> Result<(OpId, OpId), PassError> {
+pub fn strip_mine(context: &Context, op: OpId, tile: i128) -> Result<(OpId, OpId), PassError> {
     let Some(parent) = context.parent_nodes_region(op) else {
         return Err(PassError::RewriteFailed(op));
     };
@@ -128,7 +123,7 @@ pub fn strip_mine(
         context.replace_value_uses(old, new);
         context.rename_region_results(parent, old, new, &[]);
     }
-    rewriter.erase_op(&OperationRef::new(handle))?;
+    context.erase_op(&OperationRef::new(handle))?;
     Ok((main.id(), remainder.id()))
 }
 

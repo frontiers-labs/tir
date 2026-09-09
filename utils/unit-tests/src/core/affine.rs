@@ -247,9 +247,7 @@ fn strip_mining_an_unordered_loop_keeps_its_sum() {
         .into_iter()
         .find(|&op| context.get_op(op).has_interface::<dyn tir::CountedLoop>())
         .expect("a counted loop");
-    let mut rewriter = tir::Rewriter::new(context.clone());
-    let (main, remainder) =
-        tir::passes::strip_mine(&context, &mut rewriter, nest, 4).expect("strip-mines");
+    let (main, remainder) = tir::passes::strip_mine(&context, nest, 4).expect("strip-mines");
     tir::verify_op_tree(&context, module.id()).expect("valid IR");
     assert!(context.get_op(main).has_interface::<dyn tir::CountedLoop>());
     assert!(context

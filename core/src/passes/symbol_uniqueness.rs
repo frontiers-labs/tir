@@ -4,9 +4,7 @@
 
 use crate::analysis::AnalysisManager;
 use crate::symbol_table::format_symbol;
-use crate::{
-    Context, OperationRef, Pass, PassError, PassTarget, Rewriter, SymbolTable, builtin::ModuleOp,
-};
+use crate::{Context, OperationRef, Pass, PassError, PassTarget, SymbolTable, builtin::ModuleOp};
 
 #[derive(Default)]
 pub struct CheckUniqueSymbolsPass;
@@ -32,7 +30,6 @@ impl Pass for CheckUniqueSymbolsPass {
         &mut self,
         op: &OperationRef,
         context: &Context,
-        _rewriter: &mut Rewriter,
         analyses: &AnalysisManager,
     ) -> Result<(), PassError> {
         let table = analyses.get::<SymbolTable>(context, op.op().id);

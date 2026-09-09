@@ -71,6 +71,8 @@ pub struct SlabCensus {
     pub blocks_bytes: usize,
     pub regions_bytes: usize,
     pub slab_bytes: usize,
+    /// What the overlay holds beside the base.
+    pub overlay: crate::overlay::OverlayCensus,
 }
 
 /// Straddles one pass run; [`PassScope::finish`] emits the delta and census.
@@ -103,7 +105,9 @@ impl PassScope {
              blocks_slab={} blocks_live={} regions_slab={} regions_live={} ops_chunks={} \
              values_chunks={} blocks_chunks={} regions_chunks={} runs_live={} \
              runs_bytes={} attrs_live={} attrs_bytes={} ops_bytes={} \
-             values_bytes={} blocks_bytes={} regions_bytes={} slab_bytes={} bytes_per_live_op={}",
+             values_bytes={} blocks_bytes={} regions_bytes={} slab_bytes={} bytes_per_live_op={} \
+             overlay_local={} overlay_shadows={} overlay_use_deltas={} overlay_replaced={} \
+             overlay_bytes={}",
             self.name,
             census.ops_slab,
             census.ops_live,
@@ -127,6 +131,11 @@ impl PassScope {
             census.regions_bytes,
             census.slab_bytes,
             census.ops_bytes / census.ops_live.max(1),
+            census.overlay.local,
+            census.overlay.shadows,
+            census.overlay.use_deltas,
+            census.overlay.replaced,
+            census.overlay.bytes,
         );
         let mut totals = PASS_TOTALS.lock().unwrap();
         match totals.iter_mut().find(|(name, _)| *name == self.name) {

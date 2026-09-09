@@ -18,9 +18,7 @@ mod unroll;
 
 use crate::analysis::affine::{AffineView, nests_under};
 use crate::func::FuncOp;
-use crate::{
-    AnalysisManager, Context, DataLayout, OperationRef, Pass, PassError, PassTarget, Rewriter,
-};
+use crate::{AnalysisManager, Context, DataLayout, OperationRef, Pass, PassError, PassTarget};
 
 pub use strip_mine::strip_mine;
 
@@ -48,23 +46,17 @@ impl Pass for AffineSchedulePass {
         &mut self,
         op: &OperationRef,
         context: &Context,
-        rewriter: &mut Rewriter,
         _analyses: &AnalysisManager,
     ) -> Result<(), PassError> {
         let line = line_bytes(context, op);
         for view in nests_under(context, op.op().id) {
-            schedule_nest(context, rewriter, &view, line)?;
+            schedule_nest(context, &view, line)?;
         }
-        unroll::run(context, rewriter, op.op().id)
+        unroll::run(context, op.op().id)
     }
 }
 
-fn schedule_nest(
-    context: &Context,
-    rewriter: &mut Rewriter,
-    view: &AffineView,
-    line: i64,
-) -> Result<(), PassError> {
+fn schedule_nest(context: &Context, view: &AffineView, line: i64) -> Result<(), PassError> {
     let candidate = schedule::schedule(view, line);
     if candidate.is_identity() {
         return Ok(());
@@ -72,7 +64,7 @@ fn schedule_nest(
     let Some(nest) = lower::Nest::read(context, view).filter(|nest| nest.admits(&candidate)) else {
         return Ok(());
     };
-    lower::Lowering::new(context, nest, candidate).run(rewriter, view)
+    lower::Lowering::new(context, nest, candidate).run(view)
 }
 
 /// The cache line the cost model measures locality against.

@@ -35,7 +35,7 @@ use crate::func::{FuncOp, ReturnOpBuilder};
 use crate::region::values_read;
 use crate::{
     BlockId, Context, Gamma, OpHandle, OpId, Operation, OperationRef, Pass, PassError, PassTarget,
-    RegionId, Rewriter, Theta, TypeId, ValueId,
+    RegionId, Theta, TypeId, ValueId,
 };
 
 /// The test a branch decides.
@@ -261,7 +261,6 @@ pub struct Destructured {
 /// replaced by the blocks it stands for.
 pub fn destructure(
     context: &Context,
-    rewriter: &mut Rewriter,
     region: RegionId,
     edges: &dyn Edges,
 ) -> Result<Destructured, PassError> {
@@ -274,7 +273,7 @@ pub fn destructure(
     let handle = context.get_region(region);
     if !handle.is_nodes() {
         for block in handle.block_ids() {
-            lowering.ordered(rewriter, block)?;
+            lowering.ordered(block)?;
         }
         for block in lowering.blocks {
             context.get_region(region).add_block(block);
@@ -284,7 +283,7 @@ pub fn destructure(
     let entry = lowering.entered_on(&handle.ports());
     lowering.blocks.push(entry);
     let (values, deps) = (handle.value_results(), handle.state_results());
-    let last = lowering.region(rewriter, region, entry)?;
+    let last = lowering.region(region, entry)?;
     edges.leave(last, &values, &deps)?;
     context.replace_region_with_blocks(region, lowering.blocks);
     Ok(lowering.record)
@@ -318,17 +317,12 @@ impl Lowering<'_> {
 
     /// Place everything `region`'s results demand from `block` on; the block
     /// the results are available in.
-    fn region(
-        &mut self,
-        rewriter: &mut Rewriter,
-        region: RegionId,
-        block: BlockId,
-    ) -> Result<BlockId, PassError> {
+    fn region(&mut self, region: RegionId, block: BlockId) -> Result<BlockId, PassError> {
         let results = self.context.get_region(region).results();
         let demanded = self.cone(region, &results);
         let order = self.order(region)?;
         self.require_effects_demanded(&order, &demanded)?;
-        self.ops(rewriter, region, &order, &demanded, block)
+        self.ops(region, &order, &demanded, block)
     }
 
     /// Every operation `op` runs after: those defining what it reads, what
@@ -480,7 +474,6 @@ impl Lowering<'_> {
     /// `block` and whatever blocks a structured one among them opens.
     fn ops(
         &mut self,
-        rewriter: &mut Rewriter,
         region: RegionId,
         order: &[OpId],
         placed: &HashSet<OpId>,
@@ -490,7 +483,7 @@ impl Lowering<'_> {
             let op = self.context.get_op(op_id);
             if is_structured(&op) {
                 let merge = self.entered_on(&self.values(&op.results()));
-                self.structured(rewriter, &op, block, merge)?;
+                self.structured(&op, block, merge)?;
                 self.blocks.push(merge);
                 block = merge;
             } else {
@@ -503,7 +496,7 @@ impl Lowering<'_> {
 
     /// Replace each structured operation of the ordered `block` by its blocks,
     /// the rest of the block continuing after them on the operation's results.
-    fn ordered(&mut self, rewriter: &mut Rewriter, block: BlockId) -> Result<(), PassError> {
+    fn ordered(&mut self, block: BlockId) -> Result<(), PassError> {
         let mut block = block;
         loop {
             let ops = self.context.get_block(block).op_ids();
@@ -514,11 +507,11 @@ impl Lowering<'_> {
                 return Ok(());
             };
             let op = self.context.get_op(ops[position]);
-            let merge = rewriter.split_block(block, position + 1).id();
+            let merge = self.context.split_block(block, position + 1).id();
             for result in values_then_states(self.context, &op.results()) {
                 self.context.adopt_block_argument(merge, result);
             }
-            self.structured(rewriter, &op, block, merge)?;
+            self.structured(&op, block, merge)?;
             self.blocks.push(merge);
             block = merge;
         }
@@ -526,15 +519,14 @@ impl Lowering<'_> {
 
     fn structured(
         &mut self,
-        rewriter: &mut Rewriter,
         op: &OpHandle,
         block: BlockId,
         merge: BlockId,
     ) -> Result<(), PassError> {
         if op.clone().as_interface::<dyn Theta>().is_some() {
-            self.theta(rewriter, op, block, merge)
+            self.theta(op, block, merge)
         } else {
-            self.gamma(rewriter, op, block, merge)
+            self.gamma(op, block, merge)
         }
     }
 
@@ -588,13 +580,7 @@ impl Lowering<'_> {
         (block, entered)
     }
 
-    fn gamma(
-        &mut self,
-        rewriter: &mut Rewriter,
-        op: &OpHandle,
-        block: BlockId,
-        merge: BlockId,
-    ) -> Result<(), PassError> {
+    fn gamma(&mut self, op: &OpHandle, block: BlockId, merge: BlockId) -> Result<(), PassError> {
         let gamma = gamma(op)?;
         let binding = gamma.binding();
         let inputs = op.operands()[binding.operands.clone()].to_vec();
@@ -640,7 +626,7 @@ impl Lowering<'_> {
             }
             let entry = self.entered_on(&handle.ports());
             self.blocks.push(entry);
-            let end = self.region(rewriter, arm, entry)?;
+            let end = self.region(arm, entry)?;
             self.edges.jump(end, &Edge::with(merge, &results));
             arms.insert(index, Edge::with(entry, &inputs));
         }
@@ -673,16 +659,10 @@ impl Lowering<'_> {
             current = next.dest;
         }
         self.record.gates.push(GateBlocks { head: block, merge });
-        rewriter.erase_op(&OperationRef::new(op.clone()))
+        self.context.erase_op(&OperationRef::new(op.clone()))
     }
 
-    fn theta(
-        &mut self,
-        rewriter: &mut Rewriter,
-        op: &OpHandle,
-        block: BlockId,
-        merge: BlockId,
-    ) -> Result<(), PassError> {
+    fn theta(&mut self, op: &OpHandle, block: BlockId, merge: BlockId) -> Result<(), PassError> {
         let theta = theta(op)?;
         let binding = theta.binding();
         let body = theta.body();
@@ -717,14 +697,14 @@ impl Lowering<'_> {
             .collect();
         self.require_effects_demanded(&order, &placed)?;
 
-        let header_end = self.ops(rewriter, body, &order, &header_ops, header)?;
+        let header_end = self.ops(body, &order, &header_ops, header)?;
         // A cone that computes nothing is not a block either: the header's own
         // branch carries what it leaves with.
         let continue_ = if continue_only.is_empty() {
             Edge::with(header, &continue_values)
         } else {
             let (block, entered) = self.cone_block(&continue_only, &mut continue_values);
-            let end = self.ops(rewriter, body, &order, &continue_only, block)?;
+            let end = self.ops(body, &order, &continue_only, block)?;
             self.edges.jump(end, &Edge::with(header, &continue_values));
             Edge::with(block, &entered)
         };
@@ -732,7 +712,7 @@ impl Lowering<'_> {
             Edge::with(merge, &exit_values)
         } else {
             let (block, entered) = self.cone_block(&exit_only, &mut exit_values);
-            let end = self.ops(rewriter, body, &order, &exit_only, block)?;
+            let end = self.ops(body, &order, &exit_only, block)?;
             self.edges.jump(end, &Edge::with(merge, &exit_values));
             Edge::with(block, &entered)
         };
@@ -748,7 +728,7 @@ impl Lowering<'_> {
             continue_: continue_.dest,
             merge,
         });
-        rewriter.erase_op(&OperationRef::new(op.clone()))
+        context.erase_op(&OperationRef::new(op.clone()))
     }
 }
 
@@ -905,13 +885,12 @@ impl Pass for DestructurePass {
         &mut self,
         op: &OperationRef,
         context: &Context,
-        rewriter: &mut Rewriter,
         _analyses: &AnalysisManager,
     ) -> Result<(), PassError> {
         let Some(&body) = op.op().regions().first() else {
             return Ok(());
         };
-        destructure(context, rewriter, body, &CfgEdges { context })?;
+        destructure(context, body, &CfgEdges { context })?;
         Ok(())
     }
 }

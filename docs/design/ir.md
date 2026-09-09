@@ -96,45 +96,67 @@ Conventions:
 
 ### 2.2 Storage and the mutability discipline
 
-Operations, values, blocks and regions each live in a dense `Vec` inside
-`Context`, with a slot table mapping the entity's id to its position. `OpInstance`,
-`Block`, and `Region` are plain structs with **no interior mutability** — no
-per-field locks, no cells. Mutation happens in exactly one place: inside the
-Context's write lock, invoked only by the tree-edit API. Consequences developers
-rely on:
+Operations, values, blocks and regions each live in a chunked hive; an id is
+its hive handle. Handles are bump-allocated and never reused, so an id is an
+entity's name for the life of the context and id order is creation order.
+`OpInstance`, `Block` and `Region` are plain structs with **no interior
+mutability**.
+
+A `Context` is an **overlay**: a frozen base plus the edits made since it
+was frozen. Every read resolves the overlay first and falls back to the base;
+every edit lands in the overlay, so a pass reads its own edits before commit.
+The base is an `Arc` no writer touches: a base op edited in the overlay is
+copied there on its first edit (its record, its run and its attributes), an
+erased base op is absent from every lookup, and a value replaced wholesale
+(`replace_value_uses`) is resolved on every operand read of an unedited base
+op. Use lists are the base list minus the slots of copied or erased base ops,
+plus the overlay's own list. `commit` applies the overlay to the base once no
+reader of the base (`Context::frozen`) is left; `discard` drops it. Ids do
+not move at commit: an entity created in the overlay takes its final id at
+creation, and commit appends it.
+
+Consequences developers rely on:
 
 - An `OpHandle`, `BlockHandle` or `RegionHandle` reads its entity **as it
-  stands**: each accessor takes the context lock and copies out. It is not a
-  snapshot, and a handle to an erased entity panics rather than answering — read
-  what you need before erasing.
-- The green core stores **no derived data**. In particular it does not
-  maintain use lists (the `DefUse` view owns those, §7.3), and blocks do not
-  store successor/predecessor lists (CFG edges are read from the
-  `Terminator` interface where a CFG exists at all).
+  stands**: each accessor resolves the overlay and copies out. It is not a
+  snapshot. A handle records the epoch its entity was created in; one to an
+  erased entity, or to an entity of a discarded overlay, panics rather than
+  answering, and one to a committed entity keeps working.
+- The pass manager commits after every top-level pipeline entry. Passes of
+  a nested pipeline and the rounds of a fixpoint share one overlay.
+- The green core stores the def-use chain (intrusive use lists threaded
+  through the operand runs) and nothing else derived. Blocks do not store
+  successor or predecessor lists.
 
 The storage layout is an implementation detail behind the tree-edit and
-accessor API. A data-oriented SoA layout may replace what is left of the `Arc`
-slabs without changing anything in this document except this sentence.
+accessor API.
 
 ### 2.3 Versions
 
-Every operation carries a `u32` version stamp. Every tree edit bumps the
-version of each op along the spine from the edit site to the root — bumping
-the *root* is what lets function- and module-keyed caches detect changes made
-anywhere inside nested regions. The pair `(OpId, version)` is the universal
-cache key:
+Every operation has a `u32` version. Every tree edit bumps the version of
+each op along the spine from the edit site to the root; bumping the *root*
+is what lets function- and module-keyed caches detect changes made anywhere
+inside nested regions. A no-op edit bumps nothing. Versions live beside the
+overlay, not in the frozen base: the base holds the committed count, the
+overlay holds its revisions, and a read adds the two, so a version is
+continuous across a commit. A discard moves every version the overlay
+advanced one past what it reached. The pair `(OpId, version)` is the
+universal cache key:
 
 - Analysis results are cached under `(OpId, version)`. Invalidation is a
   staleness comparison, not an event: a cached result whose key no longer
-  matches the entity's current version is simply not a hit. There is no
-  "invalidate everything after every pass".
+  matches the entity's current version is simply not a hit. A result built
+  before a commit is reused after it when its root was not edited. There is
+  no "invalidate everything after every pass".
+- A fixpoint compares its root's version between rounds.
 - Post-pass IR verification (debug builds, `TIR_VERIFY_IR` override) walks
-  only dirtied spines.
+  only dirtied spines, on the overlay as the pass left it; the base's use
+  lists are checked again after the commit.
 
 ### 2.4 The tree-edit API
 
-One mutation surface. All of these run under the context write lock, bump
-spines, and maintain nothing but the green truth:
+One mutation surface. All of these edit the overlay, bump spines, and
+maintain nothing but the green truth:
 
 | Edit | Notes |
 |---|---|
@@ -142,7 +164,7 @@ spines, and maintain nothing but the green truth:
 | `erase_op`, `replace_op` | replace RAUWs results when arities match |
 | `insert_op_before` / `insert_op_after` | positional insertion in a block |
 | `set_op_operand(s)`, `set_op_attributes` | operand/attribute rewiring |
-| `replace_value_uses` (RAUW) | consults the `DefUse` view for use sites |
+| `replace_value_uses` (RAUW) | walks the use list; base slots resolve on read and are rewritten at commit |
 | `append_block_argument`, `split_block`, `splice_region`, `clone::clone_op` | block/region surgery; block ids are stable across argument edits |
 | **port edit** | grow/shrink an op's results, its regions' arguments, and the corresponding yields *in one edit* |
 | `replace_region_contents(op, staged)` | the atomic commit: §2.5 |
@@ -162,12 +184,14 @@ insertion-point conveniences are methods on the same API.
 ### 2.5 Staged regions and atomic commit
 
 A red view that wants to rewrite a region does not edit op by op. It builds a
-**staged region** — a detached builder producing new ops against the same
-Context types/interners — and lands it with `replace_region_contents`: one
+**staged region**, a detached builder producing new ops against the same
+Context types and interners, and lands it with `replace_region_contents`: one
 edit, one spine bump, old contents unreachable. Discarding an exploration is
-dropping the builder; the green core never observes it. This is the
-commit-or-discard contract every view is written against (§7.1), and it is
-what makes speculative optimization and parallel exploration safe.
+dropping the builder; the green core never observes it. The overlay makes the
+same promise one level up: a whole pass edits the overlay, and the base
+changes only at commit. Both are the commit-or-discard contract every view is
+written against (§7.1), and what makes speculative optimization and parallel
+exploration safe.
 
 ## 3. Types and attributes
 

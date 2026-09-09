@@ -8,7 +8,7 @@
 use tir::Operation as _;
 use tir::{
     AnalysisManager, Context, IntegerArithmetic, OperationRef, Pass, PassError, PassManager,
-    PassTarget, Rewriter,
+    PassTarget,
     builtin::{IntegerType, ModuleOp},
     func::FuncOp,
 };
@@ -93,7 +93,6 @@ impl Pass for TargetIntegerLegalizer {
         &mut self,
         op: &OperationRef,
         context: &Context,
-        _rewriter: &mut Rewriter,
         _analyses: &AnalysisManager,
     ) -> Result<(), PassError> {
         if op.as_interface::<dyn IntegerArithmetic>().is_none() {
@@ -222,7 +221,6 @@ pub fn lower_and_emit(
 
     let mut pipeline = PassManager::new();
     add_function_passes(&mut pipeline, target, context, StopAfter::Finalize, oracles);
-    let mut rewriter = Rewriter::new(context.clone());
     let mut index = 0;
     while let Some(&op_id) = context.get_block(body).op_ids().get(index) {
         let op = context.get_op(op_id);
@@ -240,10 +238,8 @@ pub fn lower_and_emit(
         emit(context, symbol.op())?;
         // The bytes exist, so the machine IR behind them goes back to the arenas
         // and the next function is lowered in the space it left.
-        rewriter.erase_op(&symbol).map_err(failed)?;
-        // Nothing outlives the function that was just emitted, so the storage
-        // its ops, values and runs held goes back to the pool for the next one.
-        context.recycle();
+        context.erase_op(&symbol).map_err(failed)?;
+        context.commit();
     }
     tir::memstats::summary();
     Ok(())

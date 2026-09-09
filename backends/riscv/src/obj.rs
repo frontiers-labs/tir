@@ -102,23 +102,20 @@ pub(crate) fn object_format(xlen: u32, features: &[crate::Feature]) -> ObjectFor
 pub(crate) fn lower_constant_rv32(
     context: &tir::Context,
     op: &tir::OperationRef,
-    rewriter: &mut tir::Rewriter,
 ) -> Result<bool, tir::PassError> {
-    lower_constant(context, op, rewriter, 32)
+    lower_constant(context, op, 32)
 }
 
 pub(crate) fn lower_constant_rv64(
     context: &tir::Context,
     op: &tir::OperationRef,
-    rewriter: &mut tir::Rewriter,
 ) -> Result<bool, tir::PassError> {
-    lower_constant(context, op, rewriter, 64)
+    lower_constant(context, op, 64)
 }
 
 fn lower_constant(
     _context: &tir::Context,
     op: &tir::OperationRef,
-    _rewriter: &mut tir::Rewriter,
     xlen: u32,
 ) -> Result<bool, tir::PassError> {
     use tir::builtin::ConstantOp;
@@ -149,7 +146,6 @@ fn lower_constant(
 pub(crate) fn lower_symbol_address(
     context: &tir::Context,
     op: &tir::OperationRef,
-    rewriter: &mut tir::Rewriter,
 ) -> Result<bool, tir::PassError> {
     use tir::backend::SymbolAddressOp;
 
@@ -165,13 +161,13 @@ pub(crate) fn lower_symbol_address(
         .result_values(vec![upper])
         .attr("imm", AttributeValue::Str(sym.clone().into()))
         .build();
-    rewriter.insert_op_before(op, &lui)?;
+    context.insert_op_before(op, &lui)?;
     let addi = crate::AddImmOpBuilder::new(context)
         .result_values(vec![dest])
         .rs1(upper)
         .attr("imm", AttributeValue::Str(sym.into()))
         .build();
-    rewriter.replace_op(op, &addi)?;
+    context.replace_op(op, &addi)?;
     Ok(true)
 }
 
@@ -179,7 +175,6 @@ pub(crate) fn lower_symbol_address(
 pub(crate) fn finalize_virtual_ops(
     context: &tir::Context,
     op: &tir::OperationRef,
-    rewriter: &mut tir::Rewriter,
 ) -> Result<bool, tir::PassError> {
     if op.as_op::<VirtualReturnOp>().is_some() {
         let ret = JumpAndLinkRegOpBuilder::new(context)
@@ -187,7 +182,7 @@ pub(crate) fn finalize_virtual_ops(
             .attr("rs1", phys_attr((crate::RegClass::GPR.id(), 1)))
             .attr("imm", AttributeValue::Int(0))
             .build();
-        rewriter.replace_op(op, &ret)?;
+        context.replace_op(op, &ret)?;
         return Ok(true);
     }
 
@@ -201,7 +196,7 @@ pub(crate) fn finalize_virtual_ops(
             .attr("rd", phys_attr((crate::RegClass::GPR.id(), 0)))
             .attr("imm", AttributeValue::Block(br.dest()))
             .build();
-        rewriter.replace_op(op, &jump)?;
+        context.replace_op(op, &jump)?;
         return Ok(true);
     }
 
@@ -217,7 +212,7 @@ pub(crate) fn finalize_virtual_ops(
             .attr("imm", AttributeValue::Str(call.callee().into()))
             .build();
         tir::backend::forward_state(context, op.op(), &jal);
-        rewriter.replace_op(op, &jal)?;
+        context.replace_op(op, &jal)?;
         return Ok(true);
     }
 
@@ -236,7 +231,7 @@ pub(crate) fn finalize_virtual_ops(
             .attr("imm", AttributeValue::Int(0))
             .build();
         tir::backend::forward_state(context, op.op(), &jalr);
-        rewriter.replace_op(op, &jalr)?;
+        context.replace_op(op, &jalr)?;
         return Ok(true);
     }
 

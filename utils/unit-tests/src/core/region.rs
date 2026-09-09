@@ -71,8 +71,7 @@ fn erasing_the_owner_reclaims_an_unordered_region() {
     let held = body.op_ids();
     let port = body.ports()[0].id();
 
-    let mut rewriter = tir::Rewriter::new(context.clone());
-    rewriter
+    context
         .erase_op(&tir::OperationRef::new(context.get_op(function)))
         .expect("the function leaves the module");
 

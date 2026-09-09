@@ -72,7 +72,6 @@ pub(crate) fn object_format() -> ObjectFormatInfo {
 pub(crate) fn lower_symbol_address(
     context: &tir::Context,
     op: &tir::OperationRef,
-    rewriter: &mut tir::Rewriter,
 ) -> Result<bool, tir::PassError> {
     use tir::backend::SymbolAddressOp;
 
@@ -85,7 +84,7 @@ pub(crate) fn lower_symbol_address(
         .result_values(vec![dest])
         .attr("imm", AttributeValue::Str(addr_of.sym_name().into()))
         .build();
-    rewriter.replace_op(op, &adr)?;
+    context.replace_op(op, &adr)?;
     Ok(true)
 }
 
@@ -93,13 +92,12 @@ pub(crate) fn lower_symbol_address(
 pub(crate) fn finalize_virtual_ops(
     context: &tir::Context,
     op: &tir::OperationRef,
-    rewriter: &mut tir::Rewriter,
 ) -> Result<bool, tir::PassError> {
     if op.as_op::<VirtualReturnOp>().is_some() {
         let ret = ReturnOpBuilder::new(context)
             .attr("rn", phys_attr((crate::RegClass::GPR.id(), 30)))
             .build();
-        rewriter.replace_op(op, &ret)?;
+        context.replace_op(op, &ret)?;
         return Ok(true);
     }
 
@@ -112,7 +110,7 @@ pub(crate) fn finalize_virtual_ops(
         let jump = BranchImmediateOpBuilder::new(context)
             .attr("imm", AttributeValue::Block(br.dest()))
             .build();
-        rewriter.replace_op(op, &jump)?;
+        context.replace_op(op, &jump)?;
         return Ok(true);
     }
 
@@ -124,7 +122,7 @@ pub(crate) fn finalize_virtual_ops(
             .attr("imm", AttributeValue::Str(call.callee().into()))
             .build();
         tir::backend::forward_state(context, op.op(), &bl);
-        rewriter.replace_op(op, &bl)?;
+        context.replace_op(op, &bl)?;
         return Ok(true);
     }
 
@@ -136,7 +134,7 @@ pub(crate) fn finalize_virtual_ops(
         })?;
         let blr = BranchLinkRegOpBuilder::new(context).rn(target).build();
         tir::backend::forward_state(context, op.op(), &blr);
-        rewriter.replace_op(op, &blr)?;
+        context.replace_op(op, &blr)?;
         return Ok(true);
     }
 

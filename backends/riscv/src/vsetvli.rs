@@ -13,10 +13,7 @@
 
 use tir::attributes::AttributeValue;
 use tir::backend::{RegSlot, SymbolOp, VirtualCallOp, VirtualIndirectCallOp, reg_slot};
-use tir::{
-    AnalysisManager, Context, OpHandle, OperationRef, Pass, PassError, PassTarget, Rewriter,
-    ValueId,
-};
+use tir::{AnalysisManager, Context, OpHandle, OperationRef, Pass, PassError, PassTarget, ValueId};
 
 use crate::{AddImmOpBuilder, VSetIVliOp, VSetIVliOpBuilder, VSetVliOp, VSetVliOpBuilder};
 
@@ -128,7 +125,6 @@ impl InsertVsetvliPass {
     fn insert_config(
         &self,
         context: &Context,
-        rewriter: &mut Rewriter,
         anchor: &OperationRef,
         avl: Demand,
         vtypei: i64,
@@ -142,7 +138,7 @@ impl InsertVsetvliPass {
                     .attr("avl", AttributeValue::Int(v))
                     .attr("vtypei", vtypei)
                     .build();
-                rewriter.insert_op_before(anchor, &op)
+                context.insert_op_before(anchor, &op)
             }
             Demand::Imm(v) if (0..=SIMM12_MAX).contains(&v) => {
                 let avl_reg = context.create_value(crate::gpr_ty(context), None).id();
@@ -151,13 +147,13 @@ impl InsertVsetvliPass {
                     .attr("rs1", x0.clone())
                     .attr("imm", AttributeValue::Int(v))
                     .build();
-                rewriter.insert_op_before(anchor, &li)?;
+                context.insert_op_before(anchor, &li)?;
                 let op = VSetVliOpBuilder::new(context)
                     .attr("rd", x0)
                     .avl(avl_reg)
                     .attr("vtypei", vtypei)
                     .build();
-                rewriter.insert_op_before(anchor, &op)
+                context.insert_op_before(anchor, &op)
             }
             Demand::Value(value) => {
                 let op = VSetVliOpBuilder::new(context)
@@ -165,7 +161,7 @@ impl InsertVsetvliPass {
                     .avl(value)
                     .attr("vtypei", vtypei)
                     .build();
-                rewriter.insert_op_before(anchor, &op)
+                context.insert_op_before(anchor, &op)
             }
             other => Err(PassError::InvalidRuleSet(format!(
                 "unsupported vector-length demand {other:?}"
@@ -187,7 +183,6 @@ impl Pass for InsertVsetvliPass {
         &mut self,
         op: &OperationRef,
         context: &Context,
-        rewriter: &mut Rewriter,
         _analyses: &AnalysisManager,
     ) -> Result<(), PassError> {
         let Some(&region_id) = op.op().regions().first() else {
@@ -271,7 +266,7 @@ impl Pass for InsertVsetvliPass {
                     continue;
                 }
                 let anchor = OperationRef::new(context.get_op(op_id));
-                self.insert_config(context, rewriter, &anchor, key, vtypei)?;
+                self.insert_config(context, &anchor, key, vtypei)?;
                 state = Some(ConfigState {
                     keys: vec![key],
                     vtypei,

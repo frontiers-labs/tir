@@ -9,7 +9,7 @@
 use std::collections::HashMap;
 
 use crate::analysis::affine::{AffineView, Loop, body_ops, nests_under};
-use crate::{Context, OpId, OperationRef, PassError, Rewriter, Theta, ValueId};
+use crate::{Context, OpId, OperationRef, PassError, Theta, ValueId};
 
 use super::lower::erase_unread;
 
@@ -20,10 +20,10 @@ pub const UNROLL_TRIP: i128 = 8;
 /// knob.
 pub const UNROLL_BUDGET: usize = 32;
 
-pub(super) fn run(context: &Context, rewriter: &mut Rewriter, root: OpId) -> Result<(), PassError> {
+pub(super) fn run(context: &Context, root: OpId) -> Result<(), PassError> {
     for view in nests_under(context, root) {
         if let Some(level) = worth_unrolling(context, &view) {
-            unroll(context, rewriter, level)?;
+            unroll(context, level)?;
         }
     }
     Ok(())
@@ -46,7 +46,7 @@ fn worth_unrolling<'a>(context: &Context, view: &'a AffineView) -> Option<&'a Lo
 
 /// Replace the loop with one copy of its body per iteration, threading the
 /// carried ports from each copy into the next.
-fn unroll(context: &Context, rewriter: &mut Rewriter, level: &Loop) -> Result<(), PassError> {
+fn unroll(context: &Context, level: &Loop) -> Result<(), PassError> {
     let (lower, step, trip) = (
         level.lower.as_constant().expect("a constant lower bound"),
         level.step.as_constant().expect("a constant step"),
@@ -84,10 +84,10 @@ fn unroll(context: &Context, rewriter: &mut Rewriter, level: &Loop) -> Result<()
         context.replace_value_uses(result, value);
         context.rename_region_results(parent, result, value, &[]);
     }
-    rewriter.erase_op(&target)?;
+    context.erase_op(&target)?;
     // Only now is it known which copies nothing reads: the last copy's latch
     // is what the loop's results became.
-    erase_unread(context, rewriter, &copies)
+    erase_unread(context, &copies)
 }
 
 /// One copy of the body, joining the region the loop stands in; the values its

@@ -96,6 +96,12 @@ impl BlockHandle {
         context
     }
 
+    /// Whether this handle still names the block it was minted for; see
+    /// [`crate::OpHandle::is_live`].
+    pub fn is_live(&self) -> bool {
+        self.context.upgrade().block_generation(self.id) == self.generation
+    }
+
     pub fn id(&self) -> BlockId {
         self.id
     }

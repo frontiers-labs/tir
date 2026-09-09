@@ -155,9 +155,8 @@ dialect! {
 fn lower_func_and_return_to_asm_symbol(
     context: &tir::Context,
     op: &tir::OperationRef,
-    rewriter: &mut tir::Rewriter,
 ) -> Result<bool, tir::PassError> {
-    tir::backend::lower::lower_function_and_return(context, op, rewriter, |ty| {
+    tir::backend::lower::lower_function_and_return(context, op, |ty| {
         let data = context.get_type_data(ty);
         let data = data.as_ref() as &dyn std::any::Any;
         if data

@@ -13,7 +13,7 @@ use std::collections::HashSet;
 
 use crate::{
     AnalysisManager, Context, MemoryWrite, OpHandle, OpId, OperationRef, Pass, PassError,
-    PassTarget, RegionId, Rewriter, Terminator, ValueId, func::FuncOp,
+    PassTarget, RegionId, Terminator, ValueId, func::FuncOp,
 };
 
 #[derive(Default)]
@@ -42,7 +42,6 @@ impl Pass for DeadCodeEliminationPass {
         &mut self,
         op: &OperationRef,
         context: &Context,
-        rewriter: &mut Rewriter,
         analyses: &AnalysisManager,
     ) -> Result<(), PassError> {
         if op.as_op::<FuncOp>().is_none() && op.as_op::<SymbolOp>().is_none() {
@@ -51,7 +50,7 @@ impl Pass for DeadCodeEliminationPass {
 
         let defuse = analyses.get::<DefUse>(context, op.op().id);
         let regions = super::regions_under(context, op.op().id);
-        erase_dead_with(context, rewriter, &defuse, &regions)
+        erase_dead_with(context, &defuse, &regions)
     }
 }
 
@@ -60,7 +59,6 @@ impl Pass for DeadCodeEliminationPass {
 /// name is read here and renamed here.
 fn erase_dead_with(
     context: &Context,
-    rewriter: &mut Rewriter,
     defuse: &DefUse,
     regions: &[RegionId],
 ) -> Result<(), PassError> {
@@ -98,7 +96,7 @@ fn erase_dead_with(
         }
         // Read before the erase: the op's storage goes away with it.
         let used_regs = op_regs(&instance).uses;
-        rewriter.erase_op(&OperationRef::new(instance.clone()))?;
+        context.erase_op(&OperationRef::new(instance.clone()))?;
 
         // The erase retired the op's own reads, so a value it held alone is
         // now unread and its producers are candidates in turn.

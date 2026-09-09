@@ -17,7 +17,7 @@ use crate::binding::StateChain;
 use crate::func::FuncOp;
 use crate::{
     Context, Gamma, MemoryRead, MemoryWrite, OpHandle, OpId, OperationRef, Pass, PassError,
-    PassTarget, RegionId, RegionKind, Rewriter, Theta, TypeId, ValueId,
+    PassTarget, RegionId, RegionKind, Theta, TypeId, ValueId,
 };
 
 #[derive(Default)]
@@ -44,7 +44,6 @@ impl Pass for PromoteNodesPass {
         &mut self,
         op: &OperationRef,
         context: &Context,
-        rewriter: &mut Rewriter,
         analyses: &AnalysisManager,
     ) -> Result<(), PassError> {
         let Some(&body) = op.op().regions().first() else {
@@ -62,7 +61,7 @@ impl Pass for PromoteNodesPass {
             if Promoter::new(context, slot, ty, true).refuses(&state) {
                 continue;
             }
-            Promoter::new(context, slot, ty, false).promote(&state, rewriter)?;
+            Promoter::new(context, slot, ty, false).promote(&state)?;
         }
         Ok(())
     }
@@ -219,7 +218,7 @@ impl<'a> Promoter<'a> {
         self.refused
     }
 
-    fn promote(&mut self, state: &SlotState, rewriter: &mut Rewriter) -> Result<(), PassError> {
+    fn promote(&mut self, state: &SlotState) -> Result<(), PassError> {
         let context = self.context;
         let reached: Vec<Reach> = state
             .loads
@@ -259,7 +258,7 @@ impl<'a> Promoter<'a> {
         }
         let alloca = state.alloca.filter(|_| !self.kept);
         for op in dead.into_iter().chain(alloca) {
-            rewriter.erase_op(&OperationRef::new(context.get_op(op)))?;
+            context.erase_op(&OperationRef::new(context.get_op(op)))?;
         }
         Ok(())
     }

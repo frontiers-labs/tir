@@ -11,9 +11,7 @@
 //! once after allocation, where the map turns values into registers and the
 //! graph carries the anti- and output edges that come with them.
 
-use tir::{
-    AnalysisManager, Context, OperationRef, Pass, PassError, PassTarget, Rewriter, utils::Rng,
-};
+use tir::{AnalysisManager, Context, OperationRef, Pass, PassError, PassTarget, utils::Rng};
 
 use crate::backend::{ASSIGNMENT_ATTR, Dependences, RegAssignment, SymbolOp, symbol_body_blocks};
 
@@ -50,7 +48,6 @@ impl Pass for ShuffleMachineOrderPass {
         &mut self,
         op: &OperationRef,
         context: &Context,
-        _rewriter: &mut Rewriter,
         _analyses: &AnalysisManager,
     ) -> Result<(), PassError> {
         let assignment = RegAssignment::of_op(op.op(), ASSIGNMENT_ATTR);

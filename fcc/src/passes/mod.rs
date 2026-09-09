@@ -8,7 +8,7 @@ use tir::analysis::AnalysisManager;
 use tir::attributes::AttributeValue;
 use tir::builtin::{IntegerType, ModuleOp, ops as b};
 use tir::ptr::{PtrType, ops as p};
-use tir::{Context, Operation, OperationRef, Pass, PassError, PassTarget, Rewriter, ValueId};
+use tir::{Context, Operation, OperationRef, Pass, PassError, PassTarget, ValueId};
 
 use crate::cir;
 
@@ -86,23 +86,21 @@ impl LowerCirStructsPass {
 
     fn offset_pointer(
         context: &Context,
-        rewriter: &mut Rewriter,
         target: &OperationRef,
         base: ValueId,
         offset: u64,
         result_type: tir::TypeId,
     ) -> Result<ValueId, PassError> {
         let offset = b::constant(context, offset as i64, IntegerType::new(context, 64)).build();
-        rewriter.insert_op_before(target, &offset)?;
+        context.insert_op_before(target, &offset)?;
         let pointer = p::ptradd(context, base, offset.result(), result_type).build();
         let result = pointer.result();
-        rewriter.insert_op_before(target, &pointer)?;
+        context.insert_op_before(target, &pointer)?;
         Ok(result)
     }
 
     fn insert_copy(
         context: &Context,
-        rewriter: &mut Rewriter,
         target: &OperationRef,
         layouts: &HashMap<String, StructLayout>,
         name: &str,
@@ -111,29 +109,15 @@ impl LowerCirStructsPass {
     ) -> Result<(), PassError> {
         for field in &layouts[name].fields {
             let pointer_type = PtrType::opaque(context);
-            let destination = Self::offset_pointer(
-                context,
-                rewriter,
-                target,
-                destination,
-                field.offset,
-                pointer_type,
-            )?;
-            let source = Self::offset_pointer(
-                context,
-                rewriter,
-                target,
-                source,
-                field.offset,
-                pointer_type,
-            )?;
+            let destination =
+                Self::offset_pointer(context, target, destination, field.offset, pointer_type)?;
+            let source = Self::offset_pointer(context, target, source, field.offset, pointer_type)?;
             let field_type = context.get_type_data(field.ty);
             if let Some(structure) =
                 (field_type.as_ref() as &dyn std::any::Any).downcast_ref::<cir::StructType>()
             {
                 Self::insert_copy(
                     context,
-                    rewriter,
                     target,
                     layouts,
                     structure.name(),
@@ -143,9 +127,9 @@ impl LowerCirStructsPass {
             } else {
                 let load = p::load(context, source, field.ty).build();
                 let value = load.result();
-                rewriter.insert_op_before(target, &load)?;
+                context.insert_op_before(target, &load)?;
                 let store = p::store(context, value, destination).build();
-                rewriter.insert_op_before(target, &store)?;
+                context.insert_op_before(target, &store)?;
             }
         }
         Ok(())
@@ -171,7 +155,6 @@ impl Pass for LowerCirStructsPass {
         &mut self,
         operation: &OperationRef,
         context: &Context,
-        rewriter: &mut Rewriter,
         _analyses: &AnalysisManager,
     ) -> Result<(), PassError> {
         if operation.as_op::<ModuleOp>().is_none() {
@@ -199,7 +182,7 @@ impl Pass for LowerCirStructsPass {
             let result_type = context.get_value(member.result()).ty();
             let offset_value =
                 b::constant(context, offset as i64, IntegerType::new(context, 64)).build();
-            rewriter.insert_op_before(&target, &offset_value)?;
+            context.insert_op_before(&target, &offset_value)?;
             let pointer = p::ptradd(
                 context,
                 member.operands()[0],
@@ -207,7 +190,7 @@ impl Pass for LowerCirStructsPass {
                 result_type,
             )
             .build();
-            rewriter.replace_op(&target, &pointer)?;
+            context.replace_op(&target, &pointer)?;
         }
 
         for target in &descendants {
@@ -221,14 +204,13 @@ impl Pass for LowerCirStructsPass {
             let copy = target.as_op::<cir::CopyStructOp>().unwrap();
             Self::insert_copy(
                 context,
-                rewriter,
                 &target,
                 &layouts,
                 &copy.struct_name(),
                 copy.operands()[0],
                 copy.operands()[1],
             )?;
-            rewriter.erase_op(&target)?;
+            context.erase_op(&target)?;
         }
 
         for target in &descendants {
@@ -240,7 +222,7 @@ impl Pass for LowerCirStructsPass {
             }
             let target = Self::refresh(context, target);
             if target.as_op::<cir::DefineStructOp>().is_some() {
-                rewriter.erase_op(&target)?;
+                context.erase_op(&target)?;
             }
         }
         Ok(())

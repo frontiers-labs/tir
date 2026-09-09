@@ -217,16 +217,6 @@ impl EntryId {
 pub(crate) struct Runs(Arena<Entry>);
 
 impl Runs {
-    /// Store `ids` as one run owned by `owner`. Entries past `ids` are the
-    /// run's spare capacity.
-    pub(crate) fn alloc(&mut self, owner: OpId, ids: &[u32]) -> RunId {
-        let run = self.reserve(owner, ids.len());
-        for (entry, id) in self.entries_mut(run).iter_mut().zip(ids) {
-            entry.id = *id;
-        }
-        run
-    }
-
     /// A run of `len` empty entries owned by `owner`.
     fn reserve(&mut self, owner: OpId, len: usize) -> RunId {
         RunId(self.0.alloc(len, Entry::new(0, owner)))

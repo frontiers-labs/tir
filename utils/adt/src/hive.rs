@@ -134,6 +134,15 @@ impl<T> Hive<T> {
         Some(unsafe { chunk.slots[offset as usize].assume_init_mut() })
     }
 
+    /// The handle the next insert will return. Handles are bump-allocated
+    /// and never reused, so this is also how many slots were ever handed out.
+    pub fn next_handle(&self) -> u32 {
+        match self.chunks.last() {
+            Some(chunk) => ((self.chunks.len() - 1) << Self::K) as u32 + chunk.bump,
+            None => 0,
+        }
+    }
+
     /// Live handles in ascending order.
     pub fn handles(&self) -> impl Iterator<Item = u32> + '_ {
         self.chunks.iter().enumerate().flat_map(|(index, chunk)| {

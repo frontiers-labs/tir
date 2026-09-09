@@ -379,10 +379,9 @@ impl RiscvDialect {
 fn lower_func_and_return_to_asm_symbol(
     context: &tir::Context,
     op: &tir::OperationRef,
-    rewriter: &mut tir::Rewriter,
     abi: &'static tir::backend::abi::AbiInfo,
 ) -> Result<bool, tir::PassError> {
-    tir::backend::lower::lower_function_and_return(context, op, rewriter, |ty| {
+    tir::backend::lower::lower_function_and_return(context, op, |ty| {
         argument_register_class(context, abi, ty)
     })
 }
@@ -438,7 +437,6 @@ fn argument_register_class(
 fn lower_vector_len(
     context: &tir::Context,
     op: &tir::OperationRef,
-    rewriter: &mut tir::Rewriter,
 ) -> Result<bool, tir::PassError> {
     use tir::attributes::AttributeValue;
 
@@ -464,7 +462,7 @@ fn lower_vector_len(
         .avl(avl)
         .attr("vtypei", AttributeValue::Int(vsetvli::vtypei_for(sew, 1)?))
         .build();
-    rewriter.replace_op(op, &lowered)?;
+    context.replace_op(op, &lowered)?;
     Ok(true)
 }
 
@@ -539,11 +537,9 @@ fn create_isel_pass_for(
             uncond: tir::backend::emit_uncond_branch,
             cond_nonzero: emit_branch_nonzero,
         })
-        .with_op_lowering(
-            move |context: &tir::Context, op: &tir::OperationRef, rewriter: &mut tir::Rewriter| {
-                lower_func_and_return_to_asm_symbol(context, op, rewriter, abi)
-            },
-        )
+        .with_op_lowering(move |context: &tir::Context, op: &tir::OperationRef| {
+            lower_func_and_return_to_asm_symbol(context, op, abi)
+        })
         .with_call_lowering(abi, Box::new(RiscvCallEmitter))
         .with_op_lowering(lower_vector_len)
 }

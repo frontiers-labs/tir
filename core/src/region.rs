@@ -11,7 +11,7 @@ id_newtype!(RegionId);
 /// and hand control on through terminators. An unordered region is a dependence
 /// graph: nothing but the def-use edges between its operations says what runs
 /// before what, so `ops` is insertion order and is never read as meaning.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum RegionBody {
     Blocks(Vec<BlockId>),
     Nodes {
@@ -28,7 +28,7 @@ pub enum RegionBody {
 /// A region's storage record, living densely in the context's region slab and
 /// edited in place through [`Context`] under its write lock. Reads go through
 /// [`RegionHandle`].
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Region {
     body: RegionBody,
     parent_op: OpId,

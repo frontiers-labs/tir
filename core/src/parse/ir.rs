@@ -25,9 +25,12 @@ pub fn parse_ir<T: Operation>(context: &Context, src: &str) -> Result<T, (Span, 
     let op = parse_single_op(&mut parser, context)?;
     bind_forward_references(&mut parser, context)?;
     let any: Box<dyn Any> = op.into_any();
-    any.downcast::<T>()
+    let op = any
+        .downcast::<T>()
         .map(|t| *t)
-        .map_err(|_| (Span(0), Error::ExpectedOperation(T::dialect(), T::name())))
+        .map_err(|_| (Span(0), Error::ExpectedOperation(T::dialect(), T::name())))?;
+    context.commit();
+    Ok(op)
 }
 
 /// Parse a single operation from `src`, returning it detached from any block.

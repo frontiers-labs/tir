@@ -11,7 +11,7 @@ use crate::analysis::AnalysisManager;
 use crate::builtin::{IntegerType, ops as b};
 use crate::func::FuncOp;
 use crate::ptr::{CmpOpBuilder, DisjointOp, ops as p};
-use crate::{Context, OperationRef, Pass, PassError, PassTarget, Rewriter, ValueId};
+use crate::{Context, OperationRef, Pass, PassError, PassTarget, ValueId};
 
 #[derive(Default)]
 pub struct LowerPtrDisjointPass;
@@ -37,7 +37,6 @@ impl Pass for LowerPtrDisjointPass {
         &mut self,
         op: &OperationRef,
         context: &Context,
-        rewriter: &mut Rewriter,
         _analyses: &AnalysisManager,
     ) -> Result<(), PassError> {
         for operation in facts(context, op) {
@@ -47,10 +46,10 @@ impl Pass for LowerPtrDisjointPass {
             let [lhs, lhs_size, rhs, rhs_size] = fact.operands()[..] else {
                 unreachable!("the verifier fixes ptr.disjoint's arity");
             };
-            let before = precedes(context, rewriter, &operation, lhs, lhs_size, rhs)?;
-            let after = precedes(context, rewriter, &operation, rhs, rhs_size, lhs)?;
+            let before = precedes(context, &operation, lhs, lhs_size, rhs)?;
+            let after = precedes(context, &operation, rhs, rhs_size, lhs)?;
             let disjoint = b::ori(context, before, after, IntegerType::new(context, 1)).build();
-            rewriter.replace_op(&operation, &disjoint)?;
+            context.replace_op(&operation, &disjoint)?;
         }
         Ok(())
     }
@@ -60,21 +59,20 @@ impl Pass for LowerPtrDisjointPass {
 /// unsigned.
 fn precedes(
     context: &Context,
-    rewriter: &mut Rewriter,
     before: &OperationRef,
     start: ValueId,
     size: ValueId,
     other: ValueId,
 ) -> Result<ValueId, PassError> {
     let end = p::ptradd(context, start, size, context.get_value(start).ty()).build();
-    rewriter.insert_op_before(before, &end)?;
+    context.insert_op_before(before, &end)?;
     let compare = CmpOpBuilder::new(context)
         .lhs(end.result())
         .rhs(other)
         .predicate(tir_adt::Predicate::Ule)
         .result_type(IntegerType::new(context, 1))
         .build();
-    rewriter.insert_op_before(before, &compare)?;
+    context.insert_op_before(before, &compare)?;
     Ok(compare.result())
 }
 

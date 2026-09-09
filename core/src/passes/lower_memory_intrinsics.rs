@@ -4,8 +4,8 @@ use crate::builtin::{FnType, IntegerType, ModuleOp, ops as b};
 use crate::func::ops as func_ops;
 use crate::ptr::{MemcpyOp, MemsetOp, PtrType};
 use crate::{
-    Context, OpHandle, Operation, OperationRef, Pass, PassError, PassTarget, Rewriter, Symbol,
-    TypeId, ValueId,
+    Context, OpHandle, Operation, OperationRef, Pass, PassError, PassTarget, Symbol, TypeId,
+    ValueId,
 };
 
 pub struct LowerMemoryIntrinsicsPass;
@@ -67,7 +67,6 @@ impl Pass for LowerMemoryIntrinsicsPass {
         &mut self,
         operation: &OperationRef,
         context: &Context,
-        rewriter: &mut Rewriter,
         _analyses: &AnalysisManager,
     ) -> Result<(), PassError> {
         let module = operation
@@ -116,20 +115,14 @@ impl Pass for LowerMemoryIntrinsicsPass {
                 pointer,
                 observed_state(operation.op()),
             );
-            replace_threaded(
-                context,
-                rewriter,
-                &operation,
-                &call,
-                produced_state(operation.op()),
-            )?;
+            replace_threaded(context, &operation, &call, produced_state(operation.op()))?;
         }
         for operation in sets {
             let set = operation
                 .as_op::<MemsetOp>()
                 .expect("operation was collected as ptr.memset");
             let extended = b::extui(context, set.operands()[1], value).build();
-            rewriter.insert_op_before(&operation, &extended)?;
+            context.insert_op_before(&operation, &extended)?;
             let args = vec![set.operands()[0], extended.result(), set.operands()[2]];
             let call = threaded_call(
                 context,
@@ -138,13 +131,7 @@ impl Pass for LowerMemoryIntrinsicsPass {
                 pointer,
                 observed_state(operation.op()),
             );
-            replace_threaded(
-                context,
-                rewriter,
-                &operation,
-                &call,
-                produced_state(operation.op()),
-            )?;
+            replace_threaded(context, &operation, &call, produced_state(operation.op()))?;
         }
         Ok(())
     }
@@ -172,11 +159,10 @@ fn threaded_call(
 
 /// Replace `operation` by `call`, handing the state the intrinsic published to
 /// the call's own. The shapes differ — a call yields a value the intrinsic did
-/// not — so the generic result rewiring in [`Rewriter::replace_op`] does not
+/// not — so the generic result rewiring in [`Context::replace_op`] does not
 /// apply.
 fn replace_threaded(
     context: &Context,
-    rewriter: &mut Rewriter,
     operation: &OperationRef,
     call: &dyn Operation,
     published: Option<ValueId>,
@@ -192,7 +178,7 @@ fn replace_threaded(
             context.rename_region_results(region, published, new, &[]);
         }
     }
-    rewriter.replace_op(operation, call)
+    context.replace_op(operation, call)
 }
 
 /// The λ value of `name`, declaring it at the top of the module when nothing in

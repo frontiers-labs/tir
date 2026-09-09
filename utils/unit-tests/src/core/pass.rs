@@ -1,4 +1,4 @@
-//! PassManager, Rewriter and pass-driven analysis invalidation.
+//! PassManager and pass-driven analysis invalidation.
 
 use std::collections::HashMap;
 
@@ -6,7 +6,6 @@ use tir::{
     builtin::{ops, AddIOp, IntegerType},
     func::FuncOp,
     AnalysisManager, Context, Operation, OperationRef, Pass, PassError, PassManager, PassTarget,
-    Rewriter,
 };
 
 use super::fixtures;
@@ -26,14 +25,13 @@ impl Pass for AddToSubPass {
         &mut self,
         op: &OperationRef,
         context: &Context,
-        rewriter: &mut Rewriter,
         _analyses: &AnalysisManager,
     ) -> Result<(), PassError> {
         let add = op.as_op::<AddIOp>().expect("target guarantees AddIOp");
         let operands = add.operands();
         let result_ty = context.get_value(add.result()).ty();
         let new_op = ops::subi(context, operands[0], operands[1], result_ty).build();
-        rewriter.replace_op(op, &new_op)
+        context.replace_op(op, &new_op)
     }
 }
 
@@ -53,11 +51,10 @@ impl Pass for BreakIRPass {
     fn run(
         &mut self,
         op: &OperationRef,
-        _context: &Context,
-        rewriter: &mut Rewriter,
+        context: &Context,
         _analyses: &AnalysisManager,
     ) -> Result<(), PassError> {
-        rewriter.erase_op(op)
+        context.erase_op(op)
     }
 }
 
@@ -73,7 +70,6 @@ impl Pass for ReadOnlyPass {
         &mut self,
         _op: &OperationRef,
         _context: &Context,
-        _rewriter: &mut Rewriter,
         _analyses: &AnalysisManager,
     ) -> Result<(), PassError> {
         Ok(())
@@ -96,7 +92,6 @@ impl Pass for TouchPass {
         &mut self,
         op: &OperationRef,
         _context: &Context,
-        _rewriter: &mut Rewriter,
         _analyses: &AnalysisManager,
     ) -> Result<(), PassError> {
         let func = op.as_op::<FuncOp>().expect("target guarantees FuncOp");
@@ -146,9 +141,8 @@ fn splitting_a_block_moves_its_tail_into_a_new_block() {
     let block = context.create_block(vec![]);
     let head = block.append_op(ops::addi(&context, value.id(), value.id(), i32).build());
     let tail = block.append_op(ops::subi(&context, value.id(), value.id(), i32).build());
-    let mut rewriter = Rewriter::new(context.clone());
 
-    let split = rewriter.split_block(block.id(), 1);
+    let split = context.split_block(block.id(), 1);
 
     assert_eq!(context.get_block(block.id()).op_ids(), vec![head.id()]);
     assert_eq!(split.op_ids(), vec![tail.id()]);
@@ -162,9 +156,8 @@ fn splicing_a_region_moves_its_blocks() {
     let destination = context.create_region();
     let moved = context.create_block(vec![]);
     source.add_block(moved.id());
-    let mut rewriter = Rewriter::new(context.clone());
 
-    rewriter.splice_region(source.id(), destination.id());
+    context.splice_region(source.id(), destination.id());
 
     assert_eq!(source.iter(context.clone()).count(), 0);
     let blocks: Vec<_> = destination
@@ -302,8 +295,7 @@ fn erasing_an_op_drops_its_operand_uses() {
     let argument = body.arguments()[0].id();
     assert!(context.is_used(argument));
 
-    let mut rewriter = Rewriter::new(context.clone());
-    rewriter.erase_op(&neg_ref).expect("erase should succeed");
+    context.erase_op(&neg_ref).expect("erase should succeed");
 
     assert!(
         !context.is_used(argument),
@@ -441,7 +433,6 @@ impl Pass for CountingPass {
         &mut self,
         op: &OperationRef,
         _context: &Context,
-        _rewriter: &mut Rewriter,
         _analyses: &AnalysisManager,
     ) -> Result<(), PassError> {
         let run = self.runs.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;

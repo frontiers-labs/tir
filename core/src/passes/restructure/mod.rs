@@ -28,7 +28,7 @@ mod ports;
 
 use crate::analysis::AnalysisManager;
 use crate::func::FuncOp;
-use crate::{Context, OperationRef, Pass, PassError, PassTarget, Rewriter};
+use crate::{Context, OperationRef, Pass, PassError, PassTarget};
 
 /// The unordered-region conversion. A function whose body is already
 /// unordered is left alone; any ordered one is converted, a single block
@@ -63,7 +63,6 @@ impl Pass for RestructureNodesPass {
         &mut self,
         op: &OperationRef,
         context: &Context,
-        _rewriter: &mut Rewriter,
         _analyses: &AnalysisManager,
     ) -> Result<(), PassError> {
         let region = op.op().regions()[0];

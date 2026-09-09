@@ -781,13 +781,25 @@ pub struct OpInstance {
     pub(crate) _pad: u16,
     pub(crate) attrs: AttrRunId,
     pub(crate) attr_count: u16,
-    /// Structural version, bumped along the spine by every tree edit; see
-    /// [`crate::Context::op_version`]. Never reset, so an id reused after an
-    /// erase cannot match a cached analysis of the op that held it.
-    pub(crate) version: u32,
 }
 
 impl OpInstance {
+    /// An instance that only spends an id: a commit stores one in place of an
+    /// op erased before it was committed, then removes it.
+    pub(crate) fn placeholder(handle: u32) -> Self {
+        OpInstance {
+            id: OpId::new(handle),
+            name: OpNameId::new(0),
+            run: RunId::NONE,
+            operand_count: 0,
+            result_count: 0,
+            region_count: 0,
+            _pad: 0,
+            attrs: AttrRunId::NONE,
+            attr_count: 0,
+        }
+    }
+
     pub(crate) fn name_id(&self) -> OpNameId {
         self.name
     }
