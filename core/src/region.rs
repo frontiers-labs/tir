@@ -139,7 +139,7 @@ impl RegionHandle {
     /// Whether this handle still names the region it was minted for; see
     /// [`crate::OpHandle::is_live`].
     pub fn is_live(&self) -> bool {
-        self.context.clone().region_generation(self.id) == self.generation
+        self.context.region_generation(self.id) == self.generation
     }
 
     pub fn id(&self) -> RegionId {

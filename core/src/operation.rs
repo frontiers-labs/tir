@@ -729,7 +729,7 @@ impl NewOp {
         regions: Vec<RegionId>,
         parts: NewOpParts,
     ) -> Self {
-        let name = context.clone().intern_op_name(identity.0, identity.1);
+        let name = context.intern_op_name(identity.0, identity.1);
         NewOp {
             name,
             operands,
@@ -749,7 +749,7 @@ impl NewOp {
         attributes: Vec<crate::attributes::NamedAttribute>,
     ) -> Self {
         let (dialect, name) = identity;
-        let name = context.clone().intern_op_name(dialect, name);
+        let name = context.intern_op_name(dialect, name);
         NewOp {
             name,
             operands,
@@ -783,22 +783,6 @@ pub struct OpInstance {
 }
 
 impl OpInstance {
-    /// An instance that only spends an id: a commit stores one in place of an
-    /// op erased before it was committed, then removes it.
-    pub(crate) fn placeholder(handle: u32) -> Self {
-        OpInstance {
-            id: OpId::new(handle),
-            name: OpNameId::new(0),
-            run: RunId::NONE,
-            operand_count: 0,
-            result_count: 0,
-            region_count: 0,
-            _pad: 0,
-            attrs: AttrRunId::NONE,
-            attr_count: 0,
-        }
-    }
-
     pub(crate) fn name_id(&self) -> OpNameId {
         self.name
     }
@@ -846,7 +830,7 @@ impl OpHandle {
     /// Whether this handle still names the operation it was minted for. False
     /// once the op is erased, including when another op has taken its id.
     pub fn is_live(&self) -> bool {
-        self.context.clone().op_generation(self.id) == self.generation
+        self.context.op_generation(self.id) == self.generation
     }
 
     pub fn operands(&self) -> ValueIds {

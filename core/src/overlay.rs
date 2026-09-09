@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::run::NO_ENTRY;
-use crate::store::{Frontier, Parent, Store};
+use crate::store::{Frontier, Parent, Store, slab_get};
 use crate::{Block, BlockId, OpId, OpInstance, Region, RegionId, Use, Value, ValueId};
 
 /// An immutable base every reader of an epoch shares. Cloning hands out one
@@ -155,88 +155,83 @@ impl Delta {
         self.store.shadows_op(base_op) || self.erased_op(base_op)
     }
 
-    // Reads: the delta's own copy first, then the base unless erased.
+    // Reads: the delta's own copy first, then the base unless erased. Each
+    // locates the record once and reads it by handle.
+
+    fn locate_op<'a>(&'a self, base: &'a Store, id: OpId) -> Option<(&'a Store, u32)> {
+        match self.store.op_handle(id) {
+            Some(handle) => Some((&self.store, handle)),
+            None if self.erased_op(id) => None,
+            None => base.op_handle(id).map(|handle| (base, handle)),
+        }
+    }
+
+    fn locate_value<'a>(&'a self, base: &'a Store, id: ValueId) -> Option<(&'a Store, u32)> {
+        match self.store.value_handle(id) {
+            Some(handle) => Some((&self.store, handle)),
+            None if self.erased_value(id) => None,
+            None => base.value_handle(id).map(|handle| (base, handle)),
+        }
+    }
+
+    fn locate_block<'a>(&'a self, base: &'a Store, id: BlockId) -> Option<(&'a Store, u32)> {
+        match self.store.block_handle(id) {
+            Some(handle) => Some((&self.store, handle)),
+            None if self.erased_block(id) => None,
+            None => base.block_handle(id).map(|handle| (base, handle)),
+        }
+    }
+
+    fn locate_region<'a>(&'a self, base: &'a Store, id: RegionId) -> Option<(&'a Store, u32)> {
+        match self.store.region_handle(id) {
+            Some(handle) => Some((&self.store, handle)),
+            None if self.erased_region(id) => None,
+            None => base.region_handle(id).map(|handle| (base, handle)),
+        }
+    }
 
     pub(crate) fn op<'a>(&'a self, base: &'a Store, id: OpId) -> Option<&'a OpInstance> {
-        if self.store.owns_op(id) || self.store.shadows_op(id) {
-            return self.store.op(id);
-        }
-        if self.erased_op(id) {
-            return None;
-        }
-        base.op(id)
+        let (store, handle) = self.locate_op(base, id)?;
+        store.ops.get(handle)
     }
 
     pub(crate) fn value<'a>(&'a self, base: &'a Store, id: ValueId) -> Option<&'a Value> {
-        if self.store.owns_value(id) || self.store.shadows_value(id) {
-            return self.store.value(id);
-        }
-        if self.erased_value(id) {
-            return None;
-        }
-        base.value(id)
+        let (store, handle) = self.locate_value(base, id)?;
+        store.values.get(handle)
     }
 
     pub(crate) fn block<'a>(&'a self, base: &'a Store, id: BlockId) -> Option<&'a Block> {
-        if self.store.owns_block(id) || self.store.shadows_block(id) {
-            return self.store.block(id);
-        }
-        if self.erased_block(id) {
-            return None;
-        }
-        base.block(id)
+        let (store, handle) = self.locate_block(base, id)?;
+        store.blocks.get(handle)
     }
 
     pub(crate) fn region<'a>(&'a self, base: &'a Store, id: RegionId) -> Option<&'a Region> {
-        if self.store.owns_region(id) || self.store.shadows_region(id) {
-            return self.store.region(id);
-        }
-        if self.erased_region(id) {
-            return None;
-        }
-        base.region(id)
-    }
-
-    /// The store holding the visible record of `id`, if any.
-    fn store_of_op<'a>(&'a self, base: &'a Store, id: OpId) -> Option<&'a Store> {
-        if self.store.owns_op(id) || self.store.shadows_op(id) {
-            return self.store.op(id).map(|_| &self.store);
-        }
-        (!self.erased_op(id) && base.op(id).is_some()).then_some(base)
+        let (store, handle) = self.locate_region(base, id)?;
+        store.regions.get(handle)
     }
 
     pub(crate) fn op_parent(&self, base: &Store, id: OpId) -> Option<Parent> {
-        self.store_of_op(base, id)?.op_parent(id)
+        let (store, handle) = self.locate_op(base, id)?;
+        store.ops.get(handle)?;
+        slab_get(&store.op_parent, handle as usize).copied()
     }
 
     pub(crate) fn block_parent(&self, base: &Store, id: BlockId) -> Option<RegionId> {
-        if self.store.owns_block(id) || self.store.shadows_block(id) {
-            return self.store.block_parent(id);
-        }
-        if self.erased_block(id) {
-            return None;
-        }
-        base.block_parent(id)
+        let (store, handle) = self.locate_block(base, id)?;
+        store.blocks.get(handle)?;
+        slab_get(&store.block_parent, handle as usize).copied()
     }
 
     pub(crate) fn value_block(&self, base: &Store, id: ValueId) -> Option<BlockId> {
-        if self.store.owns_value(id) || self.store.shadows_value(id) {
-            return self.store.value_block(id);
-        }
-        if self.erased_value(id) {
-            return None;
-        }
-        base.value_block(id)
+        let (store, handle) = self.locate_value(base, id)?;
+        store.values.get(handle)?;
+        slab_get(&store.value_block, handle as usize).copied()
     }
 
     pub(crate) fn value_region(&self, base: &Store, id: ValueId) -> Option<RegionId> {
-        if self.store.owns_value(id) || self.store.shadows_value(id) {
-            return self.store.value_region(id);
-        }
-        if self.erased_value(id) {
-            return None;
-        }
-        base.value_region(id)
+        let (store, handle) = self.locate_value(base, id)?;
+        store.values.get(handle)?;
+        slab_get(&store.value_region, handle as usize).copied()
     }
 
     /// What a read of `value` answers after the replacements so far.
@@ -251,26 +246,31 @@ impl Delta {
     }
 
     pub(crate) fn op_operands(&self, base: &Store, id: OpId) -> crate::operation::ValueIds {
-        match self.store_of_op(base, id) {
-            Some(store) if std::ptr::eq(store, &self.store) => store.op_operands(id),
-            Some(store) => store
-                .op_operands(id)
-                .into_iter()
-                .map(|value| self.resolve(value))
-                .collect(),
-            None => Default::default(),
+        let Some((store, handle)) = self.locate_op(base, id) else {
+            return Default::default();
+        };
+        let Some(instance) = store.ops.get(handle) else {
+            return Default::default();
+        };
+        let operands = store.operands_of(instance);
+        if std::ptr::eq(store, &self.store) || self.replaced_count == 0 {
+            return operands;
         }
+        operands
+            .into_iter()
+            .map(|value| self.resolve(value))
+            .collect()
     }
 
     pub(crate) fn op_results(&self, base: &Store, id: OpId) -> crate::operation::ValueIds {
-        self.store_of_op(base, id)
-            .map(|store| store.op_results(id))
+        self.locate_op(base, id)
+            .and_then(|(store, handle)| Some(store.results_of(store.ops.get(handle)?)))
             .unwrap_or_default()
     }
 
     pub(crate) fn op_regions(&self, base: &Store, id: OpId) -> crate::operation::RegionIds {
-        self.store_of_op(base, id)
-            .map(|store| store.op_regions(id))
+        self.locate_op(base, id)
+            .and_then(|(store, handle)| Some(store.regions_of(store.ops.get(handle)?)))
             .unwrap_or_default()
     }
 
@@ -279,8 +279,8 @@ impl Delta {
         base: &'a Store,
         id: OpId,
     ) -> &'a [crate::attributes::NamedAttribute] {
-        self.store_of_op(base, id)
-            .map(|store| store.op_attrs(id))
+        self.locate_op(base, id)
+            .and_then(|(store, handle)| Some(store.attrs_of(store.ops.get(handle)?)))
             .unwrap_or(&[])
     }
 
@@ -291,9 +291,12 @@ impl Delta {
     /// still name it.
     pub(crate) fn uses(&self, base: &Store, value: ValueId) -> Vec<Use> {
         let mut uses = Vec::new();
-        let own = (self.resolve(value) == value).then_some(&value);
+        let own = (self.resolve(value) == value).then_some(value);
         let sources = self.sources.get(&value);
-        for &source in own.into_iter().chain(sources.into_iter().flatten()) {
+        for source in own
+            .into_iter()
+            .chain(sources.into_iter().flatten().copied())
+        {
             let mut held: Vec<Use> = base
                 .use_entries(source)
                 .map(|entry| base.locate(entry))
@@ -308,10 +311,17 @@ impl Delta {
     }
 
     pub(crate) fn is_used(&self, base: &Store, value: ValueId) -> bool {
-        if self.store.first_use(value) != NO_ENTRY {
+        if self.store.use_head(value) != NO_ENTRY {
             return true;
         }
-        !self.uses(base, value).is_empty()
+        let own = (self.resolve(value) == value).then_some(value);
+        let sources = self.sources.get(&value);
+        own.into_iter()
+            .chain(sources.into_iter().flatten().copied())
+            .any(|source| {
+                base.use_entries(source)
+                    .any(|entry| !self.suppressed(base.locate(entry).0))
+            })
     }
 
     /// The op enclosing `op`, walking out through whatever holds it.
@@ -337,7 +347,7 @@ impl Delta {
         std::mem::take(&mut self.revision)
     }
 
-    fn bump(&mut self, op: OpId) {
+    pub(crate) fn bump(&mut self, op: OpId) {
         if op.index() >= self.revision.len() {
             self.revision.resize(op.index() + 1, 0);
         }
@@ -525,32 +535,37 @@ impl Delta {
         let new = self.resolve(new);
         assert_ne!(new, old, "a value cannot replace itself through a chain");
         let mut edited = self.store.move_uses(old, new);
-        if self.store.owns_value(old) || self.resolve(old) != old {
+        if self.resolve(old) != old {
             return edited;
         }
-        edited.extend(
-            base.use_entries(old)
-                .map(|entry| base.locate(entry).0)
-                .filter(|owner| !self.suppressed(*owner)),
-        );
-        if old.index() >= self.replaced.len() {
-            self.replaced.resize(old.index() + 1, NO_ENTRY);
-        }
-        self.replaced[old.index()] = new.number();
-        self.replaced_count += 1;
+        // Base slots attributed to `old` by earlier replacements follow it.
         let mut moved = self.sources.remove(&old).unwrap_or_default();
         for &source in &moved {
             self.replaced[source.index()] = new.number();
         }
-        moved.push(old);
-        self.sources.entry(new).or_default().append(&mut moved);
+        if !self.store.owns_value(old) {
+            edited.extend(
+                base.use_entries(old)
+                    .map(|entry| base.locate(entry).0)
+                    .filter(|owner| !self.suppressed(*owner)),
+            );
+            if old.index() >= self.replaced.len() {
+                self.replaced.resize(old.index() + 1, NO_ENTRY);
+            }
+            self.replaced[old.index()] = new.number();
+            self.replaced_count += 1;
+            moved.push(old);
+        }
+        if !moved.is_empty() {
+            self.sources.entry(new).or_default().append(&mut moved);
+        }
         edited
     }
 }
 
 /// An overlay's edits, owned outright: no reference to the base it was built
 /// over survives, only the identity a commit checks.
-pub struct EditBatch {
+pub(crate) struct EditBatch {
     epoch: u32,
     base: usize,
     delta: Delta,
@@ -583,8 +598,9 @@ pub struct Committed {
 
 /// Apply `batches` to `base`, which no reader may still hold, and hand back
 /// the next epoch's base. Ids never move: an entity an overlay created keeps
-/// the id it was given.
-pub fn commit_epoch(base: Frozen, batches: Vec<EditBatch>) -> (Frozen, Committed) {
+/// the id it was given. Every batch must have been finished over `base` as
+/// it stands, so today exactly one can be.
+pub(crate) fn commit_epoch(base: Frozen, batches: Vec<EditBatch>) -> (Frozen, Committed) {
     let identity = base.identity();
     let mut store = Arc::try_unwrap(base.0)
         .unwrap_or_else(|_| panic!("commit while a reader still holds the base"));

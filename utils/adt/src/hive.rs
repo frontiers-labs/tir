@@ -103,6 +103,20 @@ impl<T> Hive<T> {
         handle
     }
 
+    /// Spends the next handle without storing anything: the slot is dead from
+    /// the start, so the handles after it stay where they would have been.
+    pub fn skip(&mut self) {
+        if self
+            .chunks
+            .last()
+            .is_none_or(|chunk| chunk.bump as usize == Self::N)
+        {
+            self.chunks.push(Chunk::new(Self::N));
+        }
+        let chunk = self.chunks.last_mut().expect("a chunk was just ensured");
+        chunk.bump += 1;
+    }
+
     /// Takes the value back out. The slot stays spent, so `handle` names
     /// nothing from here on.
     ///

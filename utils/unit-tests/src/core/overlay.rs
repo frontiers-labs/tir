@@ -127,6 +127,43 @@ fn changing_an_operand_moves_the_use_before_commit() {
 }
 
 #[test]
+fn setting_a_duplicate_slot_moves_one_use() {
+    let context = Context::with_default_dialects();
+    let (c, d, add) = add_fixture(&context);
+
+    context.set_op_operand(add, 0, d);
+    context.set_op_operand(add, 0, c);
+    context.set_op_operand(add, 1, d);
+
+    assert_eq!(context.get_op(add).operands().as_slice(), [c, d]);
+    assert_eq!(context.uses_of(c), [Use::new(add, 0)]);
+    assert_eq!(context.uses_of(d), [Use::new(add, 1)]);
+    context.commit();
+    assert_eq!(context.uses_of(c), [Use::new(add, 0)]);
+    assert_eq!(context.uses_of(d), [Use::new(add, 1)]);
+    context.verify_use_lists().expect("base lists agree");
+}
+
+#[test]
+fn moving_an_op_between_blocks_updates_both_before_commit() {
+    let context = Context::with_default_dialects();
+    let (c, _, add) = add_fixture(&context);
+    let source = context.get_block(context.parent_block(add).unwrap());
+    let target = context.create_block(vec![]);
+
+    assert!(source.remove_op(add));
+    target.append(add);
+
+    assert!(!source.op_ids().contains(&add));
+    assert_eq!(target.op_ids(), [add]);
+    assert_eq!(context.parent_block(add), Some(target.id()));
+    assert_eq!(context.uses_of(c), [Use::new(add, 0), Use::new(add, 1)]);
+    context.commit();
+    assert_eq!(context.parent_block(add), Some(target.id()));
+    assert!(!source.op_ids().contains(&add));
+}
+
+#[test]
 fn a_duplicate_slot_stays_a_distinct_use_through_rauw() {
     let context = Context::with_default_dialects();
     let (c, d, add) = add_fixture(&context);
@@ -199,6 +236,34 @@ fn a_use_recorded_after_rauw_names_the_old_value() {
         context.get_op(late.id()).operands().as_slice(),
         [e.result(); 2]
     );
+    context.verify_use_lists().expect("base lists agree");
+}
+
+#[test]
+fn replacing_a_pending_replacement_redirects_the_base_slots() {
+    let context = Context::with_default_dialects();
+    let (c, d, add) = add_fixture(&context);
+    let i32_ty = IntegerType::new(&context, 32);
+    let e = builtin::ops::constant(&context, 3, i32_ty).build();
+    let (e_id, e_result) = (e.id(), e.result());
+    context
+        .get_block(context.parent_block(add).unwrap())
+        .append(e_id);
+
+    context.replace_value_uses(c, e_result);
+    context.replace_value_uses(e_result, d);
+
+    assert_eq!(context.get_op(add).operands().as_slice(), [d; 2]);
+    assert_eq!(context.uses_of(d), [Use::new(add, 0), Use::new(add, 1)]);
+    assert!(!context.is_used(e_result));
+    context
+        .erase_op(&tir::OperationRef::new(context.get_op(e_id)))
+        .unwrap();
+    assert!(context.has_value(d) && !context.has_value(e_result));
+    assert_eq!(context.get_op(add).operands().as_slice(), [d; 2]);
+
+    context.commit();
+    assert_eq!(context.get_op(add).operands().as_slice(), [d; 2]);
     context.verify_use_lists().expect("base lists agree");
 }
 

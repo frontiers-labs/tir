@@ -8,7 +8,7 @@ use std::{
     },
 };
 
-use parking_lot::{MappedRwLockReadGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use tir_adt::{Interner, Sym};
 
 use crate::overlay::{Committed, Delta, EditBatch, Frozen, commit_epoch};
@@ -104,10 +104,85 @@ struct Registry {
 
 /// The locks are per overlay and guard nothing another overlay reads: the
 /// base behind them is immutable and shared without one.
+/// The base and the edits over it, behind one lock.
+struct Overlay {
+    base: Frozen,
+    delta: Delta,
+}
+
+impl Overlay {
+    fn base(&self) -> &Store {
+        &self.base.0
+    }
+
+    fn parts(&mut self) -> (&Store, &mut Delta) {
+        (&self.base.0, &mut self.delta)
+    }
+
+    fn op(&self, id: OpId) -> Option<&OpInstance> {
+        self.delta.op(&self.base.0, id)
+    }
+
+    fn value(&self, id: ValueId) -> Option<&Value> {
+        self.delta.value(&self.base.0, id)
+    }
+
+    fn block(&self, id: BlockId) -> Option<&Block> {
+        self.delta.block(&self.base.0, id)
+    }
+
+    fn region(&self, id: RegionId) -> Option<&Region> {
+        self.delta.region(&self.base.0, id)
+    }
+
+    fn op_parent(&self, id: OpId) -> Option<Parent> {
+        self.delta.op_parent(&self.base.0, id)
+    }
+
+    fn block_parent(&self, id: BlockId) -> Option<RegionId> {
+        self.delta.block_parent(&self.base.0, id)
+    }
+
+    fn value_block(&self, id: ValueId) -> Option<BlockId> {
+        self.delta.value_block(&self.base.0, id)
+    }
+
+    fn value_region(&self, id: ValueId) -> Option<RegionId> {
+        self.delta.value_region(&self.base.0, id)
+    }
+
+    fn op_operands(&self, id: OpId) -> crate::operation::ValueIds {
+        self.delta.op_operands(&self.base.0, id)
+    }
+
+    fn op_results(&self, id: OpId) -> crate::operation::ValueIds {
+        self.delta.op_results(&self.base.0, id)
+    }
+
+    fn op_regions(&self, id: OpId) -> crate::operation::RegionIds {
+        self.delta.op_regions(&self.base.0, id)
+    }
+
+    fn op_attrs(&self, id: OpId) -> &[NamedAttribute] {
+        self.delta.op_attrs(&self.base.0, id)
+    }
+
+    fn uses(&self, value: ValueId) -> Vec<Use> {
+        self.delta.uses(&self.base.0, value)
+    }
+
+    fn is_used(&self, value: ValueId) -> bool {
+        self.delta.is_used(&self.base.0, value)
+    }
+
+    fn enclosing_op_of(&self, op: OpId) -> Option<OpId> {
+        self.delta.enclosing_op_of(&self.base.0, op)
+    }
+}
+
 struct Inner {
     registry: RwLock<Registry>,
-    base: RwLock<Frozen>,
-    delta: RwLock<Delta>,
+    overlay: RwLock<Overlay>,
     /// Structural version per op as of the last commit; the overlay's
     /// revisions add to it. See [`Context::op_version`].
     versions: RwLock<Vec<u32>>,
@@ -156,8 +231,7 @@ impl Context {
                 op_name_ids: HashMap::new(),
                 segment_sizes,
             }),
-            base: RwLock::new(base),
-            delta: RwLock::new(delta),
+            overlay: RwLock::new(Overlay { base, delta }),
             versions: RwLock::new(Vec::new()),
             epoch: AtomicU32::new(0),
         }));
@@ -188,16 +262,12 @@ impl Context {
         self.0.registry.write()
     }
 
-    fn base(&self) -> MappedRwLockReadGuard<'_, Store> {
-        RwLockReadGuard::map(self.0.base.read(), |frozen| &*frozen.0)
+    fn view(&self) -> RwLockReadGuard<'_, Overlay> {
+        self.0.overlay.read()
     }
 
-    fn delta(&self) -> RwLockReadGuard<'_, Delta> {
-        self.0.delta.read()
-    }
-
-    fn delta_mut(&self) -> RwLockWriteGuard<'_, Delta> {
-        self.0.delta.write()
+    fn view_mut(&self) -> RwLockWriteGuard<'_, Overlay> {
+        self.0.overlay.write()
     }
 
     /// Intern an attribute name.
@@ -233,7 +303,8 @@ impl Context {
 
     /// Storage counts of the base and the overlay, for the memory census.
     pub fn slab_census(&self) -> crate::memstats::SlabCensus {
-        let base = self.base();
+        let view = self.view();
+        let base = view.base();
         let (blocks_heap, regions_heap) = base.owned_heap_bytes();
         let runs = base.runs.census();
         let attrs = base.attr_runs.census();
@@ -259,13 +330,13 @@ impl Context {
             blocks_bytes: base.blocks.bytes() + blocks_heap,
             regions_bytes: base.regions.bytes() + regions_heap,
             slab_bytes: base.bytes(),
-            overlay: self.delta().census(),
+            overlay: view.delta.census(),
         }
     }
 
     /// The overlay's own counts: what it created, copied and replaced.
     pub fn overlay_census(&self) -> crate::overlay::OverlayCensus {
-        self.delta().census()
+        self.view().delta.census()
     }
 
     // Epochs.
@@ -278,46 +349,52 @@ impl Context {
     /// One more reader of the base as it stands. A commit waits for none: it
     /// panics while a reader is alive, so scope readers to what they read.
     pub fn frozen(&self) -> Frozen {
-        self.0.base.read().clone()
+        self.view().base.clone()
     }
 
     /// Whether `id` names an entity created in the current overlay, and not
     /// yet committed.
     pub fn is_pending_op(&self, id: OpId) -> bool {
-        self.delta().store.owns_op(id)
+        self.view().delta.store.owns_op(id)
     }
 
     pub fn is_pending_value(&self, id: ValueId) -> bool {
-        self.delta().store.owns_value(id)
+        self.view().delta.store.owns_value(id)
     }
 
     /// Whether the overlay holds any edit.
     pub fn has_pending_edits(&self) -> bool {
-        !self.delta().is_empty()
+        !self.view().delta.is_empty()
     }
 
     /// Take the overlay's edits as an owned batch, leaving an empty overlay
-    /// over the same base. The batch names no handle of this context.
-    pub fn finish(&self) -> EditBatch {
-        let frontier = self.base().frontier();
-        let delta = std::mem::replace(&mut *self.delta_mut(), Delta::new(frontier));
-        EditBatch::new(self.epoch(), self.frozen().identity(), delta)
+    /// over the same base. The batch names no handle of this context. Ids
+    /// created afterwards would repeat the batch's, so a commit follows.
+    fn finish(&self) -> EditBatch {
+        let mut view = self.view_mut();
+        let frontier = view.base().frontier();
+        let delta = std::mem::replace(&mut view.delta, Delta::new(frontier));
+        EditBatch::new(self.epoch(), view.base.identity(), delta)
     }
 
     /// Apply every edit made since the last commit to the base. No reader of
     /// the base ([`Context::frozen`]) may be alive. Ids do not move; the
     /// ops a rewrite replaced are reported so a caller can follow its root.
     pub fn commit(&self) -> Committed {
+        let mut view = self.view_mut();
         assert_eq!(
-            Arc::strong_count(&self.0.base.read().0),
+            Arc::strong_count(&view.base.0),
             1,
             "commit while a reader still holds the base"
         );
-        let batch = self.finish();
-        let base = std::mem::replace(&mut *self.0.base.write(), Frozen::empty());
+        let frontier = view.base().frontier();
+        let delta = std::mem::replace(&mut view.delta, Delta::new(frontier));
+        let batch = EditBatch::new(self.epoch(), view.base.identity(), delta);
+        let base = std::mem::replace(&mut view.base, Frozen::empty());
         let (base, committed) = commit_epoch(base, vec![batch]);
-        *self.delta_mut() = Delta::new(base.0.frontier());
-        *self.0.base.write() = base;
+        view.delta = Delta::new(base.0.frontier());
+        view.base = base;
+        drop(view);
         self.fold_revisions(&committed.revisions);
         self.0.epoch.store(self.epoch() + 1, Ordering::Relaxed);
         committed
@@ -354,13 +431,13 @@ impl Context {
     /// Record that `old` was replaced by `new` in place, so a pipeline can
     /// follow its root across the swap.
     pub(crate) fn record_replaced_op(&self, old: OpId, new: OpId) {
-        self.delta_mut().replaced_ops.insert(old, new);
+        self.view_mut().delta.replaced_ops.insert(old, new);
     }
 
     /// The op that took `id`'s place in the current overlay, if a rewrite
     /// replaced it.
     pub fn replaced_op(&self, id: OpId) -> Option<OpId> {
-        self.delta().replaced_ops.get(&id).copied()
+        self.view().delta.replaced_ops.get(&id).copied()
     }
 
     // Dialects, interfaces and types.
@@ -533,121 +610,112 @@ impl Context {
     /// The epoch `id` was created in, or [`ERASED`] for an id no live op has.
     /// A handle records this when it is minted and compares on every read.
     pub(crate) fn op_generation(&self, id: OpId) -> u32 {
-        let delta = self.delta();
-        if delta.store.owns_op(id) {
-            return if delta.store.op(id).is_some() {
+        let view = self.view();
+        if view.delta.store.owns_op(id) {
+            return if view.delta.store.op(id).is_some() {
                 self.epoch()
             } else {
                 ERASED
             };
         }
-        if delta.erased_op(id) {
+        if view.delta.erased_op(id) {
             return ERASED;
         }
-        self.base().op_epoch(id)
+        view.base().op_epoch(id)
     }
 
     pub(crate) fn block_generation(&self, id: BlockId) -> u32 {
-        let delta = self.delta();
-        if delta.store.owns_block(id) {
-            return if delta.store.block(id).is_some() {
+        let view = self.view();
+        if view.delta.store.owns_block(id) {
+            return if view.delta.store.block(id).is_some() {
                 self.epoch()
             } else {
                 ERASED
             };
         }
-        if delta.erased_block(id) {
+        if view.delta.erased_block(id) {
             return ERASED;
         }
-        self.base().block_epoch(id)
+        view.base().block_epoch(id)
     }
 
     pub(crate) fn region_generation(&self, id: RegionId) -> u32 {
-        let delta = self.delta();
-        if delta.store.owns_region(id) {
-            return if delta.store.region(id).is_some() {
+        let view = self.view();
+        if view.delta.store.owns_region(id) {
+            return if view.delta.store.region(id).is_some() {
                 self.epoch()
             } else {
                 ERASED
             };
         }
-        if delta.erased_region(id) {
+        if view.delta.erased_region(id) {
             return ERASED;
         }
-        self.base().region_epoch(id)
-    }
-
-    fn op_handle(&self, id: OpId) -> OpHandle {
-        OpHandle {
-            context: self.clone(),
-            id,
-            generation: self.op_generation(id),
-        }
-    }
-
-    fn block_handle(&self, id: BlockId) -> BlockHandle {
-        BlockHandle {
-            context: self.clone(),
-            generation: self.block_generation(id),
-            id,
-        }
-    }
-
-    fn region_handle(&self, id: RegionId) -> RegionHandle {
-        RegionHandle {
-            context: self.clone(),
-            generation: self.region_generation(id),
-            id,
-        }
+        view.base().region_epoch(id)
     }
 
     /// The handle naming `id`. Panics for an id no live operation has: a handle
     /// reads the operation as it stands, and an erased one does not stand.
     pub fn get_op(&self, id: OpId) -> OpHandle {
-        assert!(self.has_operation(id), "live operation {id:?}");
-        self.op_handle(id)
+        let generation = self.op_generation(id);
+        assert!(generation != ERASED, "live operation {id:?}");
+        OpHandle {
+            context: self.clone(),
+            id,
+            generation,
+        }
     }
 
     /// The handle naming `id`. Panics for an id no live block has.
     pub fn get_block(&self, id: BlockId) -> BlockHandle {
-        assert!(self.has_block(id), "live block {id:?}");
-        self.block_handle(id)
+        let generation = self.block_generation(id);
+        assert!(generation != ERASED, "live block {id:?}");
+        BlockHandle {
+            context: self.clone(),
+            generation,
+            id,
+        }
     }
 
     /// The handle naming `id`; see [`Context::get_block`].
     pub fn get_region(&self, id: RegionId) -> RegionHandle {
-        assert!(self.has_region(id), "live region {id:?}");
-        self.region_handle(id)
+        let generation = self.region_generation(id);
+        assert!(generation != ERASED, "live region {id:?}");
+        RegionHandle {
+            context: self.clone(),
+            generation,
+            id,
+        }
     }
 
     fn find_op(&self, id: OpId) -> Option<OpHandle> {
-        self.has_operation(id).then(|| self.op_handle(id))
+        (self.op_generation(id) != ERASED).then(|| self.get_op(id))
     }
 
     fn find_block(&self, id: BlockId) -> Option<BlockHandle> {
-        self.has_block(id).then(|| self.block_handle(id))
+        (self.block_generation(id) != ERASED).then(|| self.get_block(id))
     }
 
     fn find_region(&self, id: RegionId) -> Option<RegionHandle> {
-        self.has_region(id).then(|| self.region_handle(id))
+        (self.region_generation(id) != ERASED).then(|| self.get_region(id))
     }
 
     // Reads.
 
     pub fn has_operation(&self, id: OpId) -> bool {
-        self.delta().op(&self.base(), id).is_some()
+        self.view().op(id).is_some()
     }
 
     pub fn has_value(&self, id: ValueId) -> bool {
-        self.delta().value(&self.base(), id).is_some()
+        self.view().value(id).is_some()
     }
 
     pub fn has_region(&self, id: RegionId) -> bool {
-        self.delta().region(&self.base(), id).is_some()
+        self.view().region(id).is_some()
     }
 
     pub fn has_block(&self, id: BlockId) -> bool {
-        self.delta().block(&self.base(), id).is_some()
+        self.view().block(id).is_some()
     }
 
     /// The structural version of `op`: a counter bumped by every edit to `op` or
@@ -657,14 +725,14 @@ impl Context {
     pub fn op_version(&self, op: OpId) -> u32 {
         let committed = self.0.versions.read().get(op.index()).copied().unwrap_or(0);
         committed
-            .checked_add(self.delta().revision(op))
+            .checked_add(self.view().delta.revision(op))
             .expect("a version counter wrapped")
     }
 
     /// The subtrees edited since the last call, innermost-dirtied op per edit and
     /// deduplicated. The pass manager drains this to scope post-pass verification.
     pub(crate) fn take_dirty_ops(&self) -> Vec<OpId> {
-        let dirty = self.delta_mut().take_dirty();
+        let dirty = self.view_mut().delta.take_dirty();
         dirty
             .into_iter()
             .filter(|op| self.has_operation(*op))
@@ -672,10 +740,7 @@ impl Context {
     }
 
     pub fn get_value(&self, id: ValueId) -> Value {
-        self.delta()
-            .value(&self.base(), id)
-            .expect("live value")
-            .clone()
+        self.view().value(id).expect("live value").clone()
     }
 
     /// The values of `ids` that are not memory states, in order.
@@ -689,10 +754,11 @@ impl Context {
     }
 
     fn filter_states(&self, ids: &[ValueId], states: bool) -> crate::operation::ValueIds {
-        let (base, delta) = (self.base(), self.delta());
+        let view = self.view();
+        let (base, delta) = (view.base(), &view.delta);
         ids.iter()
             .copied()
-            .filter(|&id| delta.value(&base, id).is_some_and(Value::is_state) == states)
+            .filter(|&id| delta.value(base, id).is_some_and(Value::is_state) == states)
             .collect()
     }
 
@@ -702,7 +768,7 @@ impl Context {
     /// whether or not the reading op sits in the tree. Attributes naming a
     /// value are not uses: they record where the ABI places it, not a read.
     pub fn uses_of(&self, value: ValueId) -> Vec<Use> {
-        self.delta().uses(&self.base(), value)
+        self.view().uses(value)
     }
 
     /// The operations reading `value`, one entry per operand slot.
@@ -714,7 +780,7 @@ impl Context {
     }
 
     pub fn is_used(&self, value: ValueId) -> bool {
-        self.delta().is_used(&self.base(), value)
+        self.view().is_used(value)
     }
 
     pub fn use_count(&self, value: ValueId) -> usize {
@@ -726,7 +792,8 @@ impl Context {
     /// def-use query would then answer wrongly; the pass manager runs this
     /// after each mutating pass when IR verification is on.
     pub fn verify_use_lists(&self) -> Result<(), Error> {
-        let (base, delta) = (self.base(), self.delta());
+        let view = self.view();
+        let (base, delta) = (view.base(), &view.delta);
         let mut expected: HashMap<ValueId, Vec<Use>> = HashMap::new();
         let base_ops = base
             .ops
@@ -740,13 +807,13 @@ impl Context {
             .filter_map(|handle| delta.store.ops.get(handle))
             .map(|instance| instance.id);
         for op in base_ops.chain(delta_ops) {
-            for (slot, value) in delta.op_operands(&base, op).iter().enumerate() {
+            for (slot, value) in delta.op_operands(base, op).iter().enumerate() {
                 expected.entry(*value).or_default().push(Use::new(op, slot));
             }
         }
         let key = |r#use: &Use| (r#use.op.index(), r#use.index);
         for (value, mut expected) in expected {
-            let mut held = delta.uses(&base, value);
+            let mut held = delta.uses(base, value);
             expected.sort_unstable_by_key(key);
             held.sort_unstable_by_key(key);
             if expected != held {
@@ -772,18 +839,18 @@ impl Context {
     /// The region `id` is a port of, or `None` when it is a block argument or
     /// an operation defines it.
     pub fn region_of_port(&self, id: ValueId) -> Option<RegionId> {
-        self.delta().value_region(&self.base(), id)
+        self.view().value_region(id)
     }
 
     /// The block `id` is an argument of, or `None` when an operation defines it.
     pub fn block_of_argument(&self, id: ValueId) -> Option<BlockId> {
-        self.delta().value_block(&self.base(), id)
+        self.view().value_block(id)
     }
 
     /// The block currently holding `op`, or `None` for an op not in any block
     /// (the root op, or one detached by a rewrite).
     pub fn parent_block(&self, op: OpId) -> Option<BlockId> {
-        match self.delta().op_parent(&self.base(), op) {
+        match self.view().op_parent(op) {
             Some(Parent::Block(block)) => Some(block),
             _ => None,
         }
@@ -792,7 +859,7 @@ impl Context {
     /// The unordered region holding `op` directly, or `None` for an op that
     /// sits in a block or in no region at all.
     pub fn parent_nodes_region(&self, op: OpId) -> Option<RegionId> {
-        match self.delta().op_parent(&self.base(), op) {
+        match self.view().op_parent(op) {
             Some(Parent::Region(region)) => Some(region),
             _ => None,
         }
@@ -800,7 +867,7 @@ impl Context {
 
     /// The region holding `op`, through its block where it has one.
     pub fn region_of_op(&self, op: OpId) -> Option<RegionId> {
-        match self.delta().op_parent(&self.base(), op)? {
+        match self.view().op_parent(op)? {
             Parent::Region(region) => Some(region),
             Parent::Block(block) => self.parent_region(block),
         }
@@ -809,12 +876,12 @@ impl Context {
     /// The operation enclosing `op`: the owner of the region holding `op`'s
     /// block. `None` for a root op or one detached by a rewrite.
     pub fn parent_op(&self, op: OpId) -> Option<OpId> {
-        self.delta().enclosing_op_of(&self.base(), op)
+        self.view().enclosing_op_of(op)
     }
 
     /// The region currently holding `block`, or `None` for a detached block.
     pub fn parent_region(&self, block: BlockId) -> Option<RegionId> {
-        self.delta().block_parent(&self.base(), block)
+        self.view().block_parent(block)
     }
 
     /// Read an attribute of `op` in place. For an attribute large enough that
@@ -828,34 +895,35 @@ impl Context {
         read: impl FnOnce(&AttributeValue) -> R,
     ) -> Option<R> {
         let name = self.sym(name)?;
-        let (base, delta) = (self.base(), self.delta());
+        let view = self.view();
+        let (base, delta) = (view.base(), &view.delta);
         delta
-            .op_attrs(&base, id)
+            .op_attrs(base, id)
             .iter()
             .find(|attribute| attribute.name == name)
             .map(|attribute| read(&attribute.value))
     }
 
     pub(crate) fn op_operands(&self, id: OpId) -> crate::operation::ValueIds {
-        self.delta().op_operands(&self.base(), id)
+        self.view().op_operands(id)
     }
 
     pub(crate) fn op_results(&self, id: OpId) -> crate::operation::ValueIds {
-        self.delta().op_results(&self.base(), id)
+        self.view().op_results(id)
     }
 
     pub(crate) fn op_regions(&self, id: OpId) -> crate::operation::RegionIds {
-        self.delta().op_regions(&self.base(), id)
+        self.view().op_regions(id)
     }
 
     pub(crate) fn op_attributes(&self, id: OpId) -> Vec<NamedAttribute> {
-        self.delta().op_attrs(&self.base(), id).to_vec()
+        self.view().op_attrs(id).to_vec()
     }
 
     /// [`OpHandle::attr_sym`]: the lookup is a `u32` compare per attribute.
     pub(crate) fn op_attr_sym(&self, id: OpId, name: Sym) -> Option<AttributeValue> {
-        self.delta()
-            .op_attrs(&self.base(), id)
+        self.view()
+            .op_attrs(id)
             .iter()
             .find(|attribute| attribute.name == name)
             .map(|attribute| attribute.value.clone())
@@ -863,11 +931,7 @@ impl Context {
 
     /// The `(dialect, name)` pair `id` is spelled by.
     pub(crate) fn op_identity(&self, id: OpId) -> (&'static str, &'static str) {
-        let name = self
-            .delta()
-            .op(&self.base(), id)
-            .expect("live operation")
-            .name_id();
+        let name = self.view().op(id).expect("live operation").name_id();
         self.registry().op_names[name.index()]
     }
 
@@ -875,14 +939,16 @@ impl Context {
     ///
     /// `read` must not edit the context: the overlay is borrowed for the read.
     pub(crate) fn with_block<R>(&self, id: BlockId, read: impl FnOnce(&Block) -> R) -> R {
-        let (base, delta) = (self.base(), self.delta());
-        read(delta.block(&base, id).expect("live block"))
+        let view = self.view();
+        let (base, delta) = (view.base(), &view.delta);
+        read(delta.block(base, id).expect("live block"))
     }
 
     /// [`Context::with_block`] for a region.
     pub(crate) fn with_region<R>(&self, id: RegionId, read: impl FnOnce(&Region) -> R) -> R {
-        let (base, delta) = (self.base(), self.delta());
-        read(delta.region(&base, id).expect("live region"))
+        let view = self.view();
+        let (base, delta) = (view.base(), &view.delta);
+        read(delta.region(base, id).expect("live region"))
     }
 
     /// [`BlockHandle::attr`].
@@ -901,21 +967,9 @@ impl Context {
     // copies whatever base record it touches into the overlay first, and
     // reports the edit on the spine.
 
-    fn edit_op(&self, delta: &mut Delta, id: OpId) -> bool {
-        delta.shadow_op(&self.base(), id)
-    }
-
-    fn edit_value(&self, delta: &mut Delta, id: ValueId) -> bool {
-        delta.shadow_value(&self.base(), id)
-    }
-
-    fn edit_block(&self, delta: &mut Delta, id: BlockId) -> bool {
-        delta.shadow_block(&self.base(), id)
-    }
-
     pub fn add_operation(&self, op: crate::operation::NewOp) -> OpHandle {
-        let base = self.base();
-        let mut delta = self.delta_mut();
+        let mut view = self.view_mut();
+        let (base, delta) = view.parts();
         let op_id = delta.store.insert_op(|id| OpInstance {
             id,
             name: op.name,
@@ -935,7 +989,7 @@ impl Context {
         // Results are created before op id assignment in builders; patch their
         // def-site now.
         for result in op.results {
-            if delta.shadow_value(&base, result) {
+            if delta.shadow_value(base, result) {
                 delta
                     .store
                     .value_mut(result)
@@ -944,26 +998,26 @@ impl Context {
             }
         }
         for region in op.regions {
-            assert!(delta.shadow_region(&base, region), "live region");
+            assert!(delta.shadow_region(base, region), "live region");
             delta
                 .store
                 .region_mut(region)
                 .expect("live region")
                 .set_parent_op(op_id);
         }
-        delta.edit_subtree(&base, op_id);
-        drop(delta);
-        drop(base);
-        self.op_handle(op_id)
+        delta.bump(op_id);
+        drop(view);
+        self.get_op(op_id)
     }
 
     /// Replace an operation's attributes in place, keeping its id, position, and
     /// regions.
     pub fn set_op_attributes(&self, id: OpId, attributes: Vec<NamedAttribute>) {
-        let mut delta = self.delta_mut();
-        if self.edit_op(&mut delta, id) {
+        let mut view = self.view_mut();
+        let (base, delta) = view.parts();
+        if delta.shadow_op(base, id) {
             delta.store.set_op_attrs(id, attributes);
-            delta.edit_op(&self.base(), id);
+            delta.edit_op(base, id);
         }
     }
 
@@ -983,64 +1037,82 @@ impl Context {
 
     /// Replace a single operation's SSA operand at `index`.
     pub fn set_op_operand(&self, id: OpId, index: usize, new: ValueId) {
-        match self.op_operands(id).get(index).copied() {
-            Some(old) if old != new => {}
-            _ => return,
+        if self
+            .op_operands(id)
+            .get(index)
+            .is_none_or(|old| *old == new)
+        {
+            return;
         }
-        let mut delta = self.delta_mut();
-        if self.edit_op(&mut delta, id) {
+        let mut view = self.view_mut();
+        let (base, delta) = view.parts();
+        if delta.shadow_op(base, id) {
             delta.store.replace_operand_at(id, index, new);
-            delta.edit_op(&self.base(), id);
+            delta.edit_op(base, id);
         }
     }
 
     /// Replace all of an operation's SSA operands.
     pub fn set_op_operands(&self, id: OpId, operands: Vec<ValueId>) {
-        let mut delta = self.delta_mut();
-        if !self.edit_op(&mut delta, id) {
+        let mut view = self.view_mut();
+        let (base, delta) = view.parts();
+        if !delta.shadow_op(base, id) {
             return;
         }
         let (_, results, regions) = delta.store.ports(id);
         let operands: Vec<u32> = operands.iter().map(|value| value.number()).collect();
         delta.store.set_ports(id, &operands, &results, &regions);
-        delta.edit_op(&self.base(), id);
+        delta.edit_op(base, id);
     }
 
     /// Replace a single operation's SSA result at `index`, moving the
     /// definition of `new` onto this op.
     pub fn set_op_result(&self, id: OpId, index: usize, new: ValueId) {
-        match self.op_results(id).get(index).copied() {
-            Some(old) if old != new => {}
-            _ => return,
+        if self.op_results(id).get(index).is_none_or(|old| *old == new) {
+            return;
         }
-        let mut delta = self.delta_mut();
-        if !self.edit_op(&mut delta, id) {
+        let mut view = self.view_mut();
+        let (base, delta) = view.parts();
+        if !delta.shadow_op(base, id) {
             return;
         }
         delta.store.replace_result_at(id, index, new);
-        if self.edit_value(&mut delta, new) {
+        if delta.shadow_value(base, new) {
             delta
                 .store
                 .value_mut(new)
                 .expect("live value")
                 .set_defining_op(id);
         }
-        delta.edit_op(&self.base(), id);
+        delta.edit_op(base, id);
     }
 
     /// Give a value a new type, keeping its id and every use of it.
     pub fn retype_value(&self, value: ValueId, ty: TypeId) {
-        let mut delta = self.delta_mut();
-        if self.edit_value(&mut delta, value) {
-            delta.store.value_mut(value).expect("live value").set_ty(ty);
+        let mut view = self.view_mut();
+        let (base, delta) = view.parts();
+        if !delta.shadow_value(base, value) {
+            return;
+        }
+        let record = delta.store.value_mut(value).expect("live value");
+        record.set_ty(ty);
+        match (record.defining_op(), delta.value_block(base, value)) {
+            (Some(op), _) => delta.edit_op(base, op),
+            (None, Some(block)) => delta.edit_block(base, block),
+            (None, None) => {
+                if let Some(region) = delta.value_region(base, value) {
+                    delta.edit_region(base, region);
+                }
+            }
         }
     }
 
     /// [`Context::retype_value`] for a block argument, whose type the block
     /// stores alongside the value arena's copy.
     pub fn retype_block_argument(&self, block: BlockId, index: usize, ty: TypeId) {
-        let mut delta = self.delta_mut();
-        if !self.edit_block(&mut delta, block) {
+        let mut view = self.view_mut();
+        let (base, delta) = view.parts();
+        if !delta.shadow_block(base, block) {
             return;
         }
         let Some(argument) = delta
@@ -1052,17 +1124,19 @@ impl Context {
         };
         argument.set_ty(ty);
         let value_id = argument.id();
-        if self.edit_value(&mut delta, value_id) {
+        if delta.shadow_value(base, value_id) {
             delta
                 .store
                 .value_mut(value_id)
                 .expect("live value")
                 .set_ty(ty);
         }
+        delta.edit_block(base, block);
     }
 
     pub fn create_value(&self, ty: TypeId, defining_op: Option<OpId>) -> Value {
-        let mut delta = self.delta_mut();
+        let mut view = self.view_mut();
+        let delta = &mut view.delta;
         let id = delta
             .store
             .insert_value(|id| Value::new(id, ty, defining_op));
@@ -1085,19 +1159,19 @@ impl Context {
         if old == new {
             return;
         }
-        let base = self.base();
-        let mut delta = self.delta_mut();
-        let mut edited = delta.replace_value_uses(&base, old, new);
+        let mut view = self.view_mut();
+        let (base, delta) = view.parts();
+        let mut edited = delta.replace_value_uses(base, old, new);
         edited.sort_unstable();
         edited.dedup();
         for op in edited {
-            delta.edit_op(&base, op);
+            delta.edit_op(base, op);
         }
     }
 
     pub fn create_region(&self) -> RegionHandle {
-        let id = self.delta_mut().store.insert_region(Region::new());
-        self.region_handle(id)
+        let id = self.view_mut().delta.store.insert_region(Region::new());
+        self.get_region(id)
     }
 
     /// Create an unordered region holding `ops`, taking `ports` as its own
@@ -1116,28 +1190,28 @@ impl Context {
     /// Put `op` into the unordered `region`. Nothing about the position means
     /// anything: the region's dependencies say what runs before what.
     pub fn add(&self, region: RegionId, op: OpId) {
-        let base = self.base();
-        let mut delta = self.delta_mut();
-        assert!(delta.shadow_region(&base, region), "live region");
+        let mut view = self.view_mut();
+        let (base, delta) = view.parts();
+        assert!(delta.shadow_region(base, region), "live region");
         match delta.store.region_mut(region).map(Region::body_mut) {
             Some(crate::region::RegionBody::Nodes { ops, .. }) => ops.push(op),
             _ => panic!("only an unordered region takes an operation without a position"),
         }
         debug_assert!(
-            delta.op_parent(&base, op).is_none(),
+            delta.op_parent(base, op).is_none(),
             "an operation joins an unordered region from nowhere else",
         );
-        assert!(delta.shadow_op(&base, op), "live op");
+        assert!(delta.shadow_op(base, op), "live op");
         delta.store.set_op_parent(op, Some(Parent::Region(region)));
-        delta.edit_region(&base, region);
+        delta.edit_region(base, region);
     }
 
     /// Choose another insertion order for the operations the unordered
     /// `region` already holds; `ops` must be a permutation of them.
     pub fn set_region_ops(&self, region: RegionId, ops: Vec<OpId>) {
-        let base = self.base();
-        let mut delta = self.delta_mut();
-        assert!(delta.shadow_region(&base, region), "live region");
+        let mut view = self.view_mut();
+        let (base, delta) = view.parts();
+        assert!(delta.shadow_region(base, region), "live region");
         match delta.store.region_mut(region).map(Region::body_mut) {
             Some(crate::region::RegionBody::Nodes { ops: held, .. }) => {
                 debug_assert_eq!(held.len(), ops.len());
@@ -1145,19 +1219,19 @@ impl Context {
             }
             _ => panic!("only an unordered region holds an insertion order"),
         }
-        delta.edit_region(&base, region);
+        delta.edit_region(base, region);
     }
 
     /// Name the values the unordered `region` produces.
     pub fn set_region_results(&self, region: RegionId, results: Vec<ValueId>) {
-        let base = self.base();
-        let mut delta = self.delta_mut();
-        assert!(delta.shadow_region(&base, region), "live region");
+        let mut view = self.view_mut();
+        let (base, delta) = view.parts();
+        assert!(delta.shadow_region(base, region), "live region");
         match delta.store.region_mut(region).map(Region::body_mut) {
             Some(crate::region::RegionBody::Nodes { results: held, .. }) => *held = results,
             _ => panic!("only an unordered region names its results"),
         }
-        delta.edit_region(&base, region);
+        delta.edit_region(base, region);
     }
 
     /// Make an empty region unordered; see [`Context::create_nodes_region`].
@@ -1168,9 +1242,9 @@ impl Context {
         ops: Vec<OpId>,
         results: Vec<ValueId>,
     ) {
-        let base = self.base();
-        let mut delta = self.delta_mut();
-        assert!(delta.shadow_region(&base, region), "live region");
+        let mut view = self.view_mut();
+        let (base, delta) = view.parts();
+        assert!(delta.shadow_region(base, region), "live region");
         let port_ids: Vec<ValueId> = ports.iter().map(Value::id).collect();
         let held = ops.clone();
         assert!(
@@ -1187,31 +1261,30 @@ impl Context {
             entry.set_parent_op(parent);
         }
         for port in port_ids {
-            assert!(delta.shadow_value(&base, port), "live value");
+            assert!(delta.shadow_value(base, port), "live value");
             delta.store.set_value_region(port, Some(region));
         }
         for op in held {
             debug_assert!(
-                delta.op_parent(&base, op).is_none(),
+                delta.op_parent(base, op).is_none(),
                 "an operation joins an unordered region from nowhere else",
             );
-            assert!(delta.shadow_op(&base, op), "live op");
+            assert!(delta.shadow_op(base, op), "live op");
             delta.store.set_op_parent(op, Some(Parent::Region(region)));
         }
     }
 
     pub fn create_block(&self, arguments: Vec<Value>) -> BlockHandle {
-        let base = self.base();
-        let mut delta = self.delta_mut();
+        let mut view = self.view_mut();
+        let (base, delta) = view.parts();
         let argument_ids: Vec<ValueId> = arguments.iter().map(Value::id).collect();
         let block_id = delta.store.insert_block(Block::new(arguments));
         for argument in argument_ids {
-            assert!(delta.shadow_value(&base, argument), "live value");
+            assert!(delta.shadow_value(base, argument), "live value");
             delta.store.set_value_block(argument, Some(block_id));
         }
-        drop(delta);
-        drop(base);
-        self.block_handle(block_id)
+        drop(view);
+        self.get_block(block_id)
     }
 
     /// Append an argument of type `ty` to `block` and return it.
@@ -1225,13 +1298,14 @@ impl Context {
     /// had. Nothing is renamed: the value keeps its identity, so every reader
     /// goes on naming it.
     pub fn adopt_block_argument(&self, block: BlockId, value: ValueId) {
-        let Some(adopted) = self.delta().value(&self.base(), value).cloned() else {
+        let Some(adopted) = self.view().value(value).cloned() else {
             return;
         };
         let adopted = Value::new(value, adopted.ty(), None);
         if self.place_block_argument(block, adopted) {
-            let mut delta = self.delta_mut();
-            if self.edit_value(&mut delta, value) {
+            let mut view = self.view_mut();
+            let (base, delta) = view.parts();
+            if delta.shadow_value(base, value) {
                 delta
                     .store
                     .value_mut(value)
@@ -1242,9 +1316,9 @@ impl Context {
     }
 
     fn place_block_argument(&self, block: BlockId, argument: Value) -> bool {
-        let base = self.base();
-        let mut delta = self.delta_mut();
-        if !delta.shadow_block(&base, block) {
+        let mut view = self.view_mut();
+        let (base, delta) = view.parts();
+        if !delta.shadow_block(base, block) {
             return false;
         }
         delta
@@ -1253,9 +1327,9 @@ impl Context {
             .expect("live block")
             .arguments_mut()
             .push(argument.clone());
-        assert!(delta.shadow_value(&base, argument.id()), "live value");
+        assert!(delta.shadow_value(base, argument.id()), "live value");
         delta.store.set_value_block(argument.id(), Some(block));
-        delta.edit_block(&base, block);
+        delta.edit_block(base, block);
         true
     }
 
@@ -1263,70 +1337,74 @@ impl Context {
     /// describe the trailing variadic group in step.
     pub fn append_operand(&self, op: OpId, value: ValueId) {
         let segment_sizes = self.registry().segment_sizes;
-        let mut delta = self.delta_mut();
-        if !self.edit_op(&mut delta, op) {
+        let mut view = self.view_mut();
+        let (base, delta) = view.parts();
+        if !delta.shadow_op(base, op) {
             return;
         }
         let index = delta.store.op(op).expect("live op").operand_count as usize;
         delta.store.insert_operand(op, index, value);
         delta.store.adjust_last_segment(op, segment_sizes, 1);
-        delta.edit_op(&self.base(), op);
+        delta.edit_op(base, op);
     }
 
     /// Append `value` to `op`'s results, moving its definition onto `op`.
     pub fn adopt_result(&self, op: OpId, value: ValueId) {
-        let mut delta = self.delta_mut();
-        if !self.edit_op(&mut delta, op) {
+        let mut view = self.view_mut();
+        let (base, delta) = view.parts();
+        if !delta.shadow_op(base, op) {
             return;
         }
         delta.store.append_result_port(op, value);
-        if self.edit_value(&mut delta, value) {
+        if delta.shadow_value(base, value) {
             delta
                 .store
                 .value_mut(value)
                 .expect("live value")
                 .set_defining_op(op);
         }
-        delta.edit_op(&self.base(), op);
+        delta.edit_op(base, op);
     }
 
     /// Drop the operand at `index`, and with it the use it made.
     pub(crate) fn remove_operand(&self, op: OpId, index: usize) {
         let segment_sizes = self.registry().segment_sizes;
-        let mut delta = self.delta_mut();
-        if !self.edit_op(&mut delta, op) {
+        let mut view = self.view_mut();
+        let (base, delta) = view.parts();
+        if !delta.shadow_op(base, op) {
             return;
         }
         delta.store.shrink_segment_holding(op, segment_sizes, index);
         delta.store.remove_operand(op, index);
-        delta.edit_op(&self.base(), op);
+        delta.edit_op(base, op);
     }
 
     /// Drop the result at `index`. The value it named is left with no
     /// definition, so a caller drops one nothing reads.
     pub(crate) fn remove_result(&self, op: OpId, index: usize) {
-        let mut delta = self.delta_mut();
-        if !self.edit_op(&mut delta, op) {
+        let mut view = self.view_mut();
+        let (base, delta) = view.parts();
+        if !delta.shadow_op(base, op) {
             return;
         }
         let (operands, mut results, regions) = delta.store.ports(op);
         results.remove(index);
         delta.store.set_ports(op, &operands, &results, &regions);
-        delta.edit_op(&self.base(), op);
+        delta.edit_op(base, op);
     }
 
     /// Drop the port at `index` of an unordered region.
     pub(crate) fn remove_region_port(&self, region: RegionId, index: usize) {
-        let base = self.base();
-        let mut delta = self.delta_mut();
-        assert!(delta.shadow_region(&base, region), "live region");
+        let mut view = self.view_mut();
+        let (base, delta) = view.parts();
+        assert!(delta.shadow_region(base, region), "live region");
         match delta.store.region_mut(region).map(Region::body_mut) {
             Some(crate::region::RegionBody::Nodes { ports, .. }) => {
                 ports.remove(index);
             }
             _ => panic!("only an unordered region drops a port by position"),
         }
-        delta.edit_region(&base, region);
+        delta.edit_region(base, region);
     }
 
     /// Grow `op` by one carried port of type `ty`.
@@ -1356,87 +1434,90 @@ impl Context {
         group_end: usize,
     ) {
         let segment_sizes = self.registry().segment_sizes;
-        let mut delta = self.delta_mut();
-        if !self.edit_op(&mut delta, op) {
+        let mut view = self.view_mut();
+        let (base, delta) = view.parts();
+        if !delta.shadow_op(base, op) {
             return;
         }
         delta.store.insert_operand(op, index, value);
         delta
             .store
             .grow_segment_ending_at(op, segment_sizes, group_end);
-        delta.edit_op(&self.base(), op);
+        delta.edit_op(base, op);
     }
 
     /// Put `port` at position `index` of the unordered `region`'s ports.
     pub(crate) fn insert_region_port(&self, region: RegionId, index: usize, port: Value) {
-        let base = self.base();
-        let mut delta = self.delta_mut();
-        assert!(delta.shadow_region(&base, region), "live region");
+        let mut view = self.view_mut();
+        let (base, delta) = view.parts();
+        assert!(delta.shadow_region(base, region), "live region");
         let id = port.id();
         match delta.store.region_mut(region).map(Region::body_mut) {
             Some(crate::region::RegionBody::Nodes { ports, .. }) => ports.insert(index, port),
             _ => panic!("only an unordered region takes a port by position"),
         }
-        assert!(delta.shadow_value(&base, id), "live value");
+        assert!(delta.shadow_value(base, id), "live value");
         delta.store.set_value_region(id, Some(region));
-        delta.edit_region(&base, region);
+        delta.edit_region(base, region);
     }
 
     /// Name `value` at position `index` of the unordered `region`'s results.
     pub(crate) fn insert_region_result(&self, region: RegionId, index: usize, value: ValueId) {
-        let base = self.base();
-        let mut delta = self.delta_mut();
-        assert!(delta.shadow_region(&base, region), "live region");
+        let mut view = self.view_mut();
+        let (base, delta) = view.parts();
+        assert!(delta.shadow_region(base, region), "live region");
         match delta.store.region_mut(region).map(Region::body_mut) {
             Some(crate::region::RegionBody::Nodes { results, .. }) => results.insert(index, value),
             _ => panic!("only an unordered region names its results by position"),
         }
-        delta.edit_region(&base, region);
+        delta.edit_region(base, region);
     }
 
     /// Take `op` out of the unordered `region` without erasing it; the inverse
     /// of [`Context::add`].
     pub fn remove_from_region(&self, region: RegionId, op: OpId) {
-        let base = self.base();
-        let mut delta = self.delta_mut();
-        assert!(delta.shadow_region(&base, region), "live region");
+        let mut view = self.view_mut();
+        let (base, delta) = view.parts();
+        assert!(delta.shadow_region(base, region), "live region");
         match delta.store.region_mut(region).map(Region::body_mut) {
             Some(crate::region::RegionBody::Nodes { ops, .. }) => ops.retain(|held| *held != op),
             _ => panic!("only an unordered region holds an operation without a position"),
         }
-        if delta.shadow_op(&base, op) {
+        if delta.shadow_op(base, op) {
             delta.store.set_op_parent(op, None);
         }
-        delta.edit_region(&base, region);
+        delta.edit_region(base, region);
     }
 
     /// Put `value` at position `index` of `op`'s results, moving its
     /// definition onto `op`.
     pub(crate) fn insert_result_at(&self, op: OpId, index: usize, value: ValueId) {
-        let mut delta = self.delta_mut();
-        if !self.edit_op(&mut delta, op) {
+        let mut view = self.view_mut();
+        let (base, delta) = view.parts();
+        if !delta.shadow_op(base, op) {
             return;
         }
         let at = delta.store.op(op).expect("live op").operand_count as usize + index;
         delta.store.insert_port(op, at, value.number());
         delta.store.op_mut(op).expect("live op").result_count += 1;
-        if self.edit_value(&mut delta, value) {
+        if delta.shadow_value(base, value) {
             delta
                 .store
                 .value_mut(value)
                 .expect("live value")
                 .set_defining_op(op);
         }
-        delta.edit_op(&self.base(), op);
+        delta.edit_op(base, op);
     }
 
     /// Give `op` one more result of type `ty`.
     pub fn append_result(&self, op: OpId, ty: TypeId) -> ValueId {
         let result = self.create_value(ty, Some(op)).id();
-        let mut delta = self.delta_mut();
-        if self.edit_op(&mut delta, op) {
+        let mut view = self.view_mut();
+        let (base, delta) = view.parts();
+        if delta.shadow_op(base, op) {
             delta.store.append_result_port(op, result);
-            delta.edit_op(&self.base(), op);
+            delta.edit_op(base, op);
         }
         result
     }
@@ -1472,14 +1553,14 @@ impl Context {
         self.set_region_blocks(region, staged.blocks.clone());
 
         {
-            let base = self.base();
-            let mut delta = self.delta_mut();
+            let mut view = self.view_mut();
+            let (base, delta) = view.parts();
             for &block in &staged.blocks {
-                assert!(delta.shadow_block(&base, block), "live block");
+                assert!(delta.shadow_block(base, block), "live block");
                 delta.store.set_block_parent(block, Some(region));
             }
             if let Some(owner) = owner {
-                delta.edit_subtree(&base, owner);
+                delta.edit_subtree(base, owner);
             }
         }
 
@@ -1497,10 +1578,10 @@ impl Context {
         let owner = handle.parent_op();
         self.detach_subtree(&handle.block_ids());
 
-        let base = self.base();
-        let mut delta = self.delta_mut();
-        assert!(delta.shadow_region(&base, staged), "live region");
-        assert!(delta.shadow_region(&base, region), "live region");
+        let mut view = self.view_mut();
+        let (base, delta) = view.parts();
+        assert!(delta.shadow_region(base, staged), "live region");
+        assert!(delta.shadow_region(base, region), "live region");
         let body = std::mem::replace(
             delta
                 .store
@@ -1513,11 +1594,11 @@ impl Context {
             panic!("only an unordered region replaces an ordered one's body");
         };
         for port in ports {
-            assert!(delta.shadow_value(&base, port.id()), "live value");
+            assert!(delta.shadow_value(base, port.id()), "live value");
             delta.store.set_value_region(port.id(), Some(region));
         }
         for &op in ops {
-            assert!(delta.shadow_op(&base, op), "live op");
+            assert!(delta.shadow_op(base, op), "live op");
             delta.store.set_op_parent(op, Some(Parent::Region(region)));
         }
         *delta
@@ -1527,7 +1608,7 @@ impl Context {
             .body_mut() = body;
         delta.erase_region(staged);
         if let Some(owner) = owner {
-            delta.edit_subtree(&base, owner);
+            delta.edit_subtree(base, owner);
         }
     }
 
@@ -1541,9 +1622,9 @@ impl Context {
         let leftover = handle.op_ids();
         self.free(self.owned_entities(leftover));
 
-        let base = self.base();
-        let mut delta = self.delta_mut();
-        assert!(delta.shadow_region(&base, region), "live region");
+        let mut view = self.view_mut();
+        let (base, delta) = view.parts();
+        assert!(delta.shadow_region(base, region), "live region");
         let body = std::mem::replace(
             delta
                 .store
@@ -1556,16 +1637,16 @@ impl Context {
             panic!("only an ordered region replaces an unordered one's body");
         };
         for port in ports {
-            if delta.shadow_value(&base, port.id()) {
+            if delta.shadow_value(base, port.id()) {
                 delta.store.set_value_region(port.id(), None);
             }
         }
         for &block in &blocks {
-            assert!(delta.shadow_block(&base, block), "live block");
+            assert!(delta.shadow_block(base, block), "live block");
             delta.store.set_block_parent(block, Some(region));
         }
         if let Some(owner) = owner {
-            delta.edit_subtree(&base, owner);
+            delta.edit_subtree(base, owner);
         }
     }
 
@@ -1654,7 +1735,8 @@ impl Context {
 
     /// Take entities that have left the IR out of the visible graph.
     fn free(&self, owned: Owned) {
-        let mut delta = self.delta_mut();
+        let mut view = self.view_mut();
+        let delta = &mut view.delta;
         for op in owned.ops {
             delta.erase_op(op);
         }
@@ -1671,9 +1753,9 @@ impl Context {
 
     /// Insert `op` into `block` at `index`, recording the new parent.
     pub(crate) fn insert_op(&self, block: BlockId, index: usize, op: OpId) {
-        let base = self.base();
-        let mut delta = self.delta_mut();
-        if delta.shadow_block(&base, block) {
+        let mut view = self.view_mut();
+        let (base, delta) = view.parts();
+        if delta.shadow_block(base, block) {
             delta
                 .store
                 .block_mut(block)
@@ -1681,16 +1763,16 @@ impl Context {
                 .operations_mut()
                 .insert(index, op);
         }
-        assert!(delta.shadow_op(&base, op), "live op");
+        assert!(delta.shadow_op(base, op), "live op");
         delta.store.set_op_parent(op, Some(Parent::Block(block)));
-        delta.edit_block(&base, block);
+        delta.edit_block(base, block);
     }
 
     /// Insert `op` after everything `block` currently holds.
     pub(crate) fn append_op(&self, block: BlockId, op: OpId) {
-        let base = self.base();
-        let mut delta = self.delta_mut();
-        if delta.shadow_block(&base, block) {
+        let mut view = self.view_mut();
+        let (base, delta) = view.parts();
+        if delta.shadow_block(base, block) {
             delta
                 .store
                 .block_mut(block)
@@ -1698,15 +1780,15 @@ impl Context {
                 .operations_mut()
                 .push(op);
         }
-        assert!(delta.shadow_op(&base, op), "live op");
+        assert!(delta.shadow_op(base, op), "live op");
         delta.store.set_op_parent(op, Some(Parent::Block(block)));
-        delta.edit_block(&base, block);
+        delta.edit_block(base, block);
     }
 
     pub(crate) fn replace_op_in_block(&self, block: BlockId, old: OpId, new: OpId) -> bool {
-        let base = self.base();
-        let mut delta = self.delta_mut();
-        if !delta.shadow_block(&base, block) {
+        let mut view = self.view_mut();
+        let (base, delta) = view.parts();
+        if !delta.shadow_block(base, block) {
             return false;
         }
         let operations = delta
@@ -1718,19 +1800,19 @@ impl Context {
             return false;
         };
         operations[position] = new;
-        if delta.shadow_op(&base, old) {
+        if delta.shadow_op(base, old) {
             delta.store.set_op_parent(old, None);
         }
-        assert!(delta.shadow_op(&base, new), "live op");
+        assert!(delta.shadow_op(base, new), "live op");
         delta.store.set_op_parent(new, Some(Parent::Block(block)));
-        delta.edit_block(&base, block);
+        delta.edit_block(base, block);
         true
     }
 
     pub(crate) fn remove_op_from_block(&self, block: BlockId, op: OpId) -> bool {
-        let base = self.base();
-        let mut delta = self.delta_mut();
-        if !delta.shadow_block(&base, block) {
+        let mut view = self.view_mut();
+        let (base, delta) = view.parts();
+        if !delta.shadow_block(base, block) {
             return false;
         }
         let operations = delta
@@ -1742,18 +1824,18 @@ impl Context {
             return false;
         };
         operations.remove(position);
-        if delta.shadow_op(&base, op) {
+        if delta.shadow_op(base, op) {
             delta.store.set_op_parent(op, None);
         }
-        delta.edit_block(&base, block);
+        delta.edit_block(base, block);
         true
     }
 
     pub(crate) fn set_block_attr(&self, block: BlockId, name: &str, value: AttributeValue) {
         let name = self.intern(name);
-        let base = self.base();
-        let mut delta = self.delta_mut();
-        if !delta.shadow_block(&base, block) {
+        let mut view = self.view_mut();
+        let (base, delta) = view.parts();
+        if !delta.shadow_block(base, block) {
             return;
         }
         let attributes = delta
@@ -1765,25 +1847,25 @@ impl Context {
             Some(attribute) => attribute.value = value,
             None => attributes.push(NamedAttribute::new(name, value)),
         }
-        delta.edit_block(&base, block);
+        delta.edit_block(base, block);
     }
 
     /// Edit a block's storage record, dirtying the subtree it sits in.
     ///
     /// `edit` must not touch the context: the overlay is borrowed for writing.
     pub(crate) fn with_block_mut<R>(&self, id: BlockId, edit: impl FnOnce(&mut Block) -> R) -> R {
-        let base = self.base();
-        let mut delta = self.delta_mut();
-        assert!(delta.shadow_block(&base, id), "live block");
+        let mut view = self.view_mut();
+        let (base, delta) = view.parts();
+        assert!(delta.shadow_block(base, id), "live block");
         let edited = edit(delta.store.block_mut(id).expect("live block"));
-        delta.edit_block(&base, id);
+        delta.edit_block(base, id);
         edited
     }
 
     pub(crate) fn add_block_to_region(&self, region: RegionId, block: BlockId) {
-        let base = self.base();
-        let mut delta = self.delta_mut();
-        if delta.shadow_region(&base, region) {
+        let mut view = self.view_mut();
+        let (base, delta) = view.parts();
+        if delta.shadow_region(base, region) {
             delta
                 .store
                 .region_mut(region)
@@ -1791,15 +1873,15 @@ impl Context {
                 .blocks_mut()
                 .push(block);
         }
-        assert!(delta.shadow_block(&base, block), "live block");
+        assert!(delta.shadow_block(base, block), "live block");
         delta.store.set_block_parent(block, Some(region));
-        delta.edit_region(&base, region);
+        delta.edit_region(base, region);
     }
 
     pub(crate) fn remove_block_from_region(&self, region: RegionId, block: BlockId) -> bool {
-        let base = self.base();
-        let mut delta = self.delta_mut();
-        if !delta.shadow_region(&base, region) {
+        let mut view = self.view_mut();
+        let (base, delta) = view.parts();
+        if !delta.shadow_region(base, region) {
             return false;
         }
         let blocks = delta
@@ -1811,10 +1893,10 @@ impl Context {
             return false;
         };
         blocks.remove(position);
-        if delta.shadow_block(&base, block) {
+        if delta.shadow_block(base, block) {
             delta.store.set_block_parent(block, None);
         }
-        delta.edit_region(&base, region);
+        delta.edit_region(base, region);
         true
     }
 
@@ -1822,9 +1904,9 @@ impl Context {
     /// [`Context::replace_region_contents`] uses this: it owns the parent
     /// bookkeeping and the single version bump the swap is allowed to make.
     pub(crate) fn set_region_blocks(&self, region: RegionId, blocks: Vec<BlockId>) {
-        let base = self.base();
-        let mut delta = self.delta_mut();
-        if delta.shadow_region(&base, region) {
+        let mut view = self.view_mut();
+        let (base, delta) = view.parts();
+        if delta.shadow_region(base, region) {
             *delta
                 .store
                 .region_mut(region)

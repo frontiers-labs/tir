@@ -424,40 +424,22 @@ impl Store {
         id
     }
 
-    /// Spend one id of a kind without storing anything: an erased local
-    /// entity still occupies its number, so the ids after it line up.
+    /// Spend one id without storing anything: a local entity erased before
+    /// commit still occupies its number, so the ids after it line up.
     pub(crate) fn skip_op(&mut self) {
-        let handle = self.ops.insert_with(OpInstance::placeholder);
-        self.ops.remove(handle);
-        if let Some(tables) = &mut self.delta {
-            tables.ops.local.push(handle);
-        }
+        self.ops.skip();
     }
 
     pub(crate) fn skip_value(&mut self) {
-        let handle = self
-            .values
-            .insert_with(|h| Value::new(ValueId::from_number(h), crate::TypeId::STATE, None));
-        self.values.remove(handle);
-        if let Some(tables) = &mut self.delta {
-            tables.values.local.push(handle);
-        }
+        self.values.skip();
     }
 
     pub(crate) fn skip_block(&mut self) {
-        let handle = self.blocks.insert(Block::new(vec![]));
-        self.blocks.remove(handle);
-        if let Some(tables) = &mut self.delta {
-            tables.blocks.local.push(handle);
-        }
+        self.blocks.skip();
     }
 
     pub(crate) fn skip_region(&mut self) {
-        let handle = self.regions.insert(Region::new());
-        self.regions.remove(handle);
-        if let Some(tables) = &mut self.delta {
-            tables.regions.local.push(handle);
-        }
+        self.regions.skip();
     }
 
     /// The ids this delta created, in creation order, erased ones included.
@@ -741,20 +723,14 @@ impl Store {
         self.link_operands(op);
     }
 
-    pub(crate) fn op_operands(&self, op: OpId) -> crate::operation::ValueIds {
-        let Some(instance) = self.op(op) else {
-            return Default::default();
-        };
+    pub(crate) fn operands_of(&self, instance: &OpInstance) -> crate::operation::ValueIds {
         self.runs.entries(instance.run)[..instance.operand_count as usize]
             .iter()
             .map(|entry| ValueId::from_number(entry.id))
             .collect()
     }
 
-    pub(crate) fn op_results(&self, op: OpId) -> crate::operation::ValueIds {
-        let Some(instance) = self.op(op) else {
-            return Default::default();
-        };
+    pub(crate) fn results_of(&self, instance: &OpInstance) -> crate::operation::ValueIds {
         let start = instance.operand_count as usize;
         let end = start + instance.result_count as usize;
         self.runs.entries(instance.run)[start..end]
@@ -763,10 +739,7 @@ impl Store {
             .collect()
     }
 
-    pub(crate) fn op_regions(&self, op: OpId) -> crate::operation::RegionIds {
-        let Some(instance) = self.op(op) else {
-            return Default::default();
-        };
+    pub(crate) fn regions_of(&self, instance: &OpInstance) -> crate::operation::RegionIds {
         let start = (instance.operand_count + instance.result_count) as usize;
         let end = start + instance.region_count as usize;
         self.runs.entries(instance.run)[start..end]
@@ -775,13 +748,13 @@ impl Store {
             .collect()
     }
 
+    pub(crate) fn attrs_of(&self, instance: &OpInstance) -> &[NamedAttribute] {
+        self.attr_runs
+            .get(instance.attrs, instance.attr_count as usize)
+    }
+
     pub(crate) fn op_attrs(&self, op: OpId) -> &[NamedAttribute] {
-        match self.op(op) {
-            Some(instance) => self
-                .attr_runs
-                .get(instance.attrs, instance.attr_count as usize),
-            None => &[],
-        }
+        self.op(op).map(|i| self.attrs_of(i)).unwrap_or(&[])
     }
 
     pub(crate) fn op_attrs_mut(&mut self, op: OpId) -> &mut [NamedAttribute] {
@@ -1035,7 +1008,7 @@ impl Store {
     }
 
     /// The head of `value`'s use list, or [`NO_ENTRY`] if nothing names it.
-    pub(crate) fn first_use(&self, value: ValueId) -> u32 {
+    pub(crate) fn use_head(&self, value: ValueId) -> u32 {
         self.first_use
             .get(value.index())
             .copied()
@@ -1044,7 +1017,7 @@ impl Store {
 
     /// The entries naming `value`, newest first.
     pub(crate) fn use_entries(&self, value: ValueId) -> impl Iterator<Item = EntryId> + '_ {
-        let mut current = self.first_use(value);
+        let mut current = self.use_head(value);
         std::iter::from_fn(move || {
             let entry = (current != NO_ENTRY).then(|| EntryId::from_raw(current))?;
             current = self.runs.entry(entry).next;
