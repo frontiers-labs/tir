@@ -8,7 +8,7 @@ use std::{
     },
 };
 
-use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::cell::{Ref, RefCell, RefMut};
 use tir_adt::{Interner, Sym};
 
 use crate::overlay::{Delta, EditBatch, Frozen, commit_epoch};
@@ -50,13 +50,17 @@ use crate::{
 /// The context also owns what is not IR: the dialects, interned names and
 /// types, and interface registrations.
 ///
+/// A context belongs to one thread: it is neither `Send` nor `Sync`, and its
+/// reads and edits take no lock. The committed base crosses threads as a
+/// [`Frozen`], which is an immutable, shared read of the IR.
+///
 /// # Example
 ///
 /// ```rust
 /// let context = tir::Context::with_default_dialects();
 /// ```
 #[derive(Clone)]
-pub struct Context(Arc<Inner>);
+pub struct Context(std::rc::Rc<Inner>);
 
 pub struct ContextIterator<I: GetFromContext> {
     context: Context,
@@ -102,7 +106,8 @@ struct Registry {
     segment_sizes: Sym,
 }
 
-/// The base and the edits over it, behind one lock.
+/// The base and the edits over it. One thread owns a context, so the
+/// edits need no lock; the base is shared read-only and needs none.
 struct Overlay {
     base: Frozen,
     delta: Delta,
@@ -179,11 +184,11 @@ impl Overlay {
 }
 
 struct Inner {
-    registry: RwLock<Registry>,
-    overlay: RwLock<Overlay>,
+    registry: RefCell<Registry>,
+    overlay: RefCell<Overlay>,
     /// Structural version per op as of the last commit; the overlay's
     /// revisions add to it. See [`Context::op_version`].
-    versions: RwLock<Vec<u32>>,
+    versions: RefCell<Vec<u32>>,
     /// Which overlay this is: bumped by every commit and discard, so a handle
     /// to an entity of a dropped overlay reads as stale.
     epoch: AtomicU32,
@@ -217,8 +222,8 @@ impl Context {
         let segment_sizes = names.intern("operand_segment_sizes");
         let base = Frozen::empty();
         let delta = Delta::new(base.0.frontier());
-        let context = Context(Arc::new(Inner {
-            registry: RwLock::new(Registry {
+        let context = Context(std::rc::Rc::new(Inner {
+            registry: RefCell::new(Registry {
                 dialects: HashMap::new(),
                 reg_classes: HashMap::new(),
                 op_interface_converters: HashMap::new(),
@@ -229,8 +234,8 @@ impl Context {
                 op_name_ids: HashMap::new(),
                 segment_sizes,
             }),
-            overlay: RwLock::new(Overlay { base, delta }),
-            versions: RwLock::new(Vec::new()),
+            overlay: RefCell::new(Overlay { base, delta }),
+            versions: RefCell::new(Vec::new()),
             epoch: AtomicU32::new(0),
         }));
         crate::builtin::StateType::new(&context);
@@ -252,20 +257,20 @@ impl Context {
         context
     }
 
-    fn registry(&self) -> RwLockReadGuard<'_, Registry> {
-        self.0.registry.read()
+    fn registry(&self) -> Ref<'_, Registry> {
+        self.0.registry.borrow()
     }
 
-    fn registry_mut(&self) -> RwLockWriteGuard<'_, Registry> {
-        self.0.registry.write()
+    fn registry_mut(&self) -> RefMut<'_, Registry> {
+        self.0.registry.borrow_mut()
     }
 
-    fn view(&self) -> RwLockReadGuard<'_, Overlay> {
-        self.0.overlay.read()
+    fn view(&self) -> Ref<'_, Overlay> {
+        self.0.overlay.borrow()
     }
 
-    fn view_mut(&self) -> RwLockWriteGuard<'_, Overlay> {
-        self.0.overlay.write()
+    fn view_mut(&self) -> RefMut<'_, Overlay> {
+        self.0.overlay.borrow_mut()
     }
 
     /// Intern an attribute name.
@@ -411,7 +416,7 @@ impl Context {
     }
 
     fn fold_revisions(&self, revisions: &[Vec<u32>]) {
-        let mut versions = self.0.versions.write();
+        let mut versions = self.0.versions.borrow_mut();
         for revision in revisions {
             if revision.len() > versions.len() {
                 versions.resize(revision.len(), 0);
@@ -719,7 +724,13 @@ impl Context {
     /// a version are stale as soon as it moves; see
     /// [`crate::analysis::AnalysisManager`].
     pub fn op_version(&self, op: OpId) -> u32 {
-        let committed = self.0.versions.read().get(op.index()).copied().unwrap_or(0);
+        let committed = self
+            .0
+            .versions
+            .borrow()
+            .get(op.index())
+            .copied()
+            .unwrap_or(0);
         committed
             .checked_add(self.view().delta.revision(op))
             .expect("a version counter wrapped")

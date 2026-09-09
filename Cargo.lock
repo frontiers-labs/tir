@@ -2100,7 +2100,6 @@ dependencies = [
  "criterion",
  "linkme",
  "logos",
- "parking_lot",
  "smallvec",
  "thiserror 2.0.18",
  "tir-adt",

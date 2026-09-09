@@ -126,7 +126,7 @@ id_newtype!(OpId);
 ///
 /// Because all operations implement this trait, generic IR passes can inspect,
 /// transform, or analyze any construct in the IR using the same programming model.
-pub trait Operation: 'static + Send + Sync + Any + Verifiable + OpDefVerifiable {
+pub trait Operation: 'static + Any + Verifiable + OpDefVerifiable {
     fn name() -> &'static str
     where
         Self: Sized;
