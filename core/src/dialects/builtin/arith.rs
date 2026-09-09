@@ -24,7 +24,7 @@ impl crate::Speculatable for ConstantOp {}
 
 impl crate::ConstantLike for ConstantOp {
     fn constant_value(&self) -> tir::utils::APInt {
-        let context = self.0.context.upgrade();
+        let context = self.0.context.clone();
         let value = match self.0.attr("value") {
             Some(tir::attributes::AttributeValue::Int(v)) => v,
             _ => 0,

@@ -453,7 +453,7 @@ pub fn print_theta(
     body: RegionId,
     binding: &Binding,
 ) -> Result<(), std::fmt::Error> {
-    let context = op.context.upgrade();
+    let context = op.context.clone();
     region_format::print_result_prefix(fmt, op)?;
     fmt.write(name)?;
     print_port_bindings(
@@ -474,7 +474,7 @@ pub fn print_gamma(
     arms: &[RegionId],
     binding: &Binding,
 ) -> Result<(), std::fmt::Error> {
-    let context = op.context.upgrade();
+    let context = op.context.clone();
     region_format::print_result_prefix(fmt, op)?;
     fmt.write(format!("{name} %{}", predicate.number()))?;
     let inputs = slice(&op.operands(), &binding.operands);

@@ -567,7 +567,7 @@ fn parse_instruction(
 fn build_op(context: &Context, name: &'static str, attributes: Vec<NamedAttribute>) -> OpId {
     let inst = NewOp::new_dynamic(
         ("ptx", name),
-        context.as_context_ref(),
+        context.clone(),
         vec![],
         vec![],
         vec![],
@@ -637,7 +637,7 @@ fn attr_bool(op: &OpHandle, name: &str) -> bool {
 /// slot holds.
 fn render_operand(op: &OpHandle, name: &str) -> Result<String, String> {
     if let Some(slot) = tir::backend::reg_slot(op, name) {
-        let context = op.context.upgrade();
+        let context = op.context.clone();
         return Ok(match slot {
             tir::backend::RegSlot::Phys((class, index)) => {
                 format!("{}{}", class.name().to_lowercase(), index)

@@ -85,7 +85,7 @@ pub mod parse;
 
 pub use analysis::{Analysis, AnalysisManager};
 pub use block::{Block, BlockHandle, BlockId};
-pub use context::{Context, ContextIterator, ContextRef, GetFromContext, Parent, StagedRegion};
+pub use context::{Context, ContextIterator, GetFromContext, Parent, StagedRegion};
 pub use diagnostics::{print_error_range, print_parse_error};
 pub use dialect::{Dialect, OperationParser};
 pub use error::Error;

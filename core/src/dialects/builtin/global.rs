@@ -165,7 +165,7 @@ impl GlobalOp {
     }
 
     fn custom_print(&self, fmt: &mut IRFormatter) -> Result<(), std::fmt::Error> {
-        let context = self.0.context.upgrade();
+        let context = self.0.context.clone();
         fmt.write(format!("%{} = global", self.address().number()))?;
         if self.symbol_visibility() == Visibility::Private {
             fmt.write(" private")?;

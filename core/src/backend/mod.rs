@@ -411,7 +411,7 @@ pub fn print_machine_op<T: tir::Operation>(
     op: &T,
 ) -> Result<(), std::fmt::Error> {
     let handle = op.handle().clone();
-    let context = handle.context.upgrade();
+    let context = handle.context.clone();
     // The registers an instruction defines are its slots; only the chain it
     // leaves behind is bound ahead of the mnemonic.
     let published = handle.state_results();

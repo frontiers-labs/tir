@@ -1,7 +1,6 @@
 use crate::run::{AttrRunId, RunId};
 use crate::{
     BlockId, Context, ContextIterator, Error, GetFromContext,
-    context::ContextRef,
     ir_formatter::IRFormatter,
     parse::{Span, text::Parser as IRParser},
     region::RegionId,
@@ -165,7 +164,7 @@ pub trait Operation: 'static + Send + Sync + Any + Verifiable + OpDefVerifiable 
 
     fn regions(&self) -> ContextIterator<RegionId> {
         let handle = self.handle();
-        ContextIterator::new(handle.context.upgrade(), handle.regions().to_vec())
+        ContextIterator::new(handle.context.clone(), handle.regions().to_vec())
     }
 
     fn operands(&self) -> ValueIds {
@@ -705,7 +704,7 @@ pub struct NewOp {
 impl NewOp {
     /// The op a builder assembled: its ports, and in `parts` the attributes.
     pub fn new<T: Operation>(
-        context: ContextRef,
+        context: Context,
         operands: Vec<ValueId>,
         results: Vec<ValueId>,
         regions: Vec<RegionId>,
@@ -724,13 +723,13 @@ impl NewOp {
     /// [`NewOp::new`] off an identity, so the one body serves every op type.
     fn assemble(
         identity: (&'static str, &'static str),
-        context: ContextRef,
+        context: Context,
         operands: Vec<ValueId>,
         results: Vec<ValueId>,
         regions: Vec<RegionId>,
         parts: NewOpParts,
     ) -> Self {
-        let name = context.upgrade().intern_op_name(identity.0, identity.1);
+        let name = context.clone().intern_op_name(identity.0, identity.1);
         NewOp {
             name,
             operands,
@@ -743,14 +742,14 @@ impl NewOp {
     /// Describes an operation selected from textual input at a parser boundary.
     pub fn new_dynamic(
         identity: (&'static str, &'static str),
-        context: ContextRef,
+        context: Context,
         operands: Vec<ValueId>,
         results: Vec<ValueId>,
         regions: Vec<RegionId>,
         attributes: Vec<crate::attributes::NamedAttribute>,
     ) -> Self {
         let (dialect, name) = identity;
-        let name = context.upgrade().intern_op_name(dialect, name);
+        let name = context.clone().intern_op_name(dialect, name);
         NewOp {
             name,
             operands,
@@ -820,7 +819,7 @@ impl OpInstance {
 /// builds additionally panic on any read through a handle that does not.
 #[derive(Clone)]
 pub struct OpHandle {
-    pub context: ContextRef,
+    pub context: Context,
     pub id: OpId,
     pub(crate) generation: u32,
 }
@@ -834,7 +833,7 @@ impl std::fmt::Debug for OpHandle {
 impl OpHandle {
     /// The owning context, after checking this handle still names its own op.
     fn context(&self) -> crate::Context {
-        let context = self.context.upgrade();
+        let context = self.context.clone();
         debug_assert_eq!(
             context.op_generation(self.id),
             self.generation,
@@ -847,7 +846,7 @@ impl OpHandle {
     /// Whether this handle still names the operation it was minted for. False
     /// once the op is erased, including when another op has taken its id.
     pub fn is_live(&self) -> bool {
-        self.context.upgrade().op_generation(self.id) == self.generation
+        self.context.clone().op_generation(self.id) == self.generation
     }
 
     pub fn operands(&self) -> ValueIds {

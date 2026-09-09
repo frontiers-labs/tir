@@ -135,7 +135,7 @@ operation! {
 
 impl AccessChainOp {
     fn custom_print(&self, fmt: &mut tir::IRFormatter) -> Result<(), std::fmt::Error> {
-        let context = self.0.context.upgrade();
+        let context = self.0.context.clone();
         fmt.write(format!(
             "%{} = spirv.AccessChain %{}",
             self.result().number(),

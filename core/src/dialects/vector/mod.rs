@@ -196,7 +196,7 @@ fn vlen_node(
         g.set_leaf_data(n, tir::sem::SymPayload::SymbolId(2));
         return n;
     }
-    let context = op.context.upgrade();
+    let context = op.context.clone();
     let ty = context.get_value(op.results()[0]).ty();
     let length = (context.get_type_data(ty).as_ref() as &dyn Any)
         .downcast_ref::<VectorType>()
@@ -217,7 +217,7 @@ fn sew_node(
     op: &tir::OpHandle,
     g: &mut impl tir::graph::MutDag<Node = tir::sem::SymKind, Leaf = tir::sem::SymPayload<tir::ValueId>>,
 ) -> tir::graph::NodeId {
-    let context = op.context.upgrade();
+    let context = op.context.clone();
     let ty = context.get_value(op.results()[0]).ty();
     let width = (context.get_type_data(ty).as_ref() as &dyn Any)
         .downcast_ref::<VectorType>()

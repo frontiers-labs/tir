@@ -1,7 +1,4 @@
-use crate::{
-    BlockId, Context, ContextIterator, GetFromContext, OpId, Terminator, Value, ValueId,
-    context::ContextRef,
-};
+use crate::{BlockId, Context, ContextIterator, GetFromContext, OpId, Terminator, Value, ValueId};
 
 id_newtype!(RegionId);
 
@@ -115,7 +112,7 @@ impl Region {
 /// with the region as it stands now; see [`crate::OpHandle`].
 #[derive(Clone)]
 pub struct RegionHandle {
-    pub context: ContextRef,
+    pub context: Context,
     pub(crate) generation: u32,
     pub id: RegionId,
 }
@@ -129,7 +126,7 @@ impl std::fmt::Debug for RegionHandle {
 impl RegionHandle {
     /// The owning context, after checking this handle still names its own region.
     fn context(&self) -> Context {
-        let context = self.context.upgrade();
+        let context = self.context.clone();
         debug_assert_eq!(
             context.region_generation(self.id),
             self.generation,
@@ -142,7 +139,7 @@ impl RegionHandle {
     /// Whether this handle still names the region it was minted for; see
     /// [`crate::OpHandle::is_live`].
     pub fn is_live(&self) -> bool {
-        self.context.upgrade().region_generation(self.id) == self.generation
+        self.context.clone().region_generation(self.id) == self.generation
     }
 
     pub fn id(&self) -> RegionId {

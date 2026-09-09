@@ -89,7 +89,7 @@ pub fn op_regs_from(op: &OpHandle, slots: &[crate::backend::SlotRef]) -> OpRegs 
             None => {}
         }
     }
-    let context = op.context.upgrade();
+    let context = op.context.clone();
     let physical = |attr: &str, into: &mut Vec<PhysReg>| {
         context.with_attr(op.id, attr, |registers| {
             let AttributeValue::Array(registers) = registers else {

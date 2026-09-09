@@ -418,7 +418,7 @@ fn emit_theta(binds: &Binds, counted: Option<&Counted>, shape: &OpShape) -> Bind
             }
 
             fn binding(&self) -> tir::Binding {
-                let __context = self.0.context.upgrade();
+                let __context = self.0.context.clone();
                 let __segments = tir::binding::operand_segments(&self.0, #groups);
                 let operands = #operands;
                 let n = operands.len();
@@ -430,7 +430,7 @@ fn emit_theta(binds: &Binds, counted: Option<&Counted>, shape: &OpShape) -> Bind
             }
 
             fn predicate(&self) -> tir::ValueId {
-                let __context = self.0.context.upgrade();
+                let __context = self.0.context.clone();
                 __context.get_region(self.0.regions()[#body_index]).results()[#predicate]
             }
         }
@@ -587,7 +587,7 @@ fn emit_gamma(binds: &Binds, shape: &OpShape) -> BindsCode {
             }
 
             fn binding(&self) -> tir::Binding {
-                let __context = self.0.context.upgrade();
+                let __context = self.0.context.clone();
                 let __segments = tir::binding::operand_segments(&self.0, #groups);
                 let operands = #operands;
                 let ports = #ports;

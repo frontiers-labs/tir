@@ -52,7 +52,7 @@ impl BranchOp {
     }
 
     fn custom_print(&self, fmt: &mut tir::IRFormatter) -> Result<(), std::fmt::Error> {
-        let context = self.0.context.upgrade();
+        let context = self.0.context.clone();
         fmt.write("cfg.br ")?;
         print_successor(fmt, &context, self.dest(), &self.dest_args())?;
         fmt.write("\n")
@@ -137,7 +137,7 @@ impl CondBranchOp {
     }
 
     fn custom_print(&self, fmt: &mut tir::IRFormatter) -> Result<(), std::fmt::Error> {
-        let context = self.0.context.upgrade();
+        let context = self.0.context.clone();
         fmt.write(format!("cfg.cond_br %{}, ", self.condition().number()))?;
         print_successor(fmt, &context, self.true_dest(), &self.true_args())?;
         fmt.write(", ")?;

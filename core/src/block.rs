@@ -1,7 +1,6 @@
 use crate::{
     Context, ContextIterator, GetFromContext, OpId, Value,
     attributes::{AttributeValue, NamedAttribute},
-    context::ContextRef,
 };
 
 id_newtype!(BlockId);
@@ -72,7 +71,7 @@ impl Block {
 /// reused.
 #[derive(Clone)]
 pub struct BlockHandle {
-    pub context: ContextRef,
+    pub context: Context,
     pub(crate) generation: u32,
     pub id: BlockId,
 }
@@ -86,7 +85,7 @@ impl std::fmt::Debug for BlockHandle {
 impl BlockHandle {
     /// The owning context, after checking this handle still names its own block.
     fn context(&self) -> Context {
-        let context = self.context.upgrade();
+        let context = self.context.clone();
         debug_assert_eq!(
             context.block_generation(self.id),
             self.generation,
@@ -99,7 +98,7 @@ impl BlockHandle {
     /// Whether this handle still names the block it was minted for; see
     /// [`crate::OpHandle::is_live`].
     pub fn is_live(&self) -> bool {
-        self.context.upgrade().block_generation(self.id) == self.generation
+        self.context.clone().block_generation(self.id) == self.generation
     }
 
     pub fn id(&self) -> BlockId {

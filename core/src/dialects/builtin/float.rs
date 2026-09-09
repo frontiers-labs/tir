@@ -148,7 +148,7 @@ fn float_format_node(
     g: &mut impl tir::graph::MutDag<Node = tir::sem::SymKind, Leaf = tir::sem::SymPayload<tir::ValueId>>,
     format: impl FnOnce(&crate::builtin::FloatType) -> u32,
 ) -> tir::graph::NodeId {
-    let context = op.context.upgrade();
+    let context = op.context.clone();
     let ty = context.get_value(op.results()[0]).ty();
     let ty = context.get_type_data(ty);
     let float = (ty.as_ref() as &dyn std::any::Any)

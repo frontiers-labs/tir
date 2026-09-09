@@ -195,7 +195,7 @@ impl NullOp {
             Leaf = tir::sem::SymPayload<tir::ValueId>,
         >,
     ) -> Option<tir::graph::NodeId> {
-        let context = self.0.context.upgrade();
+        let context = self.0.context.clone();
         let width = crate::DataLayout::for_instance(&context, &self.0)?.pointer_size()?;
         let node = g.add_node(tir::sem::SymKind::Constant);
         g.set_leaf_data(
@@ -236,7 +236,7 @@ impl CmpOp {
             Leaf = tir::sem::SymPayload<tir::ValueId>,
         >,
     ) -> Option<tir::graph::NodeId> {
-        let context = self.0.context.upgrade();
+        let context = self.0.context.clone();
         crate::DataLayout::for_instance(&context, &self.0)?.pointer_size()?;
 
         crate::builtin::compare_expr(g, predicate(self)?, true)

@@ -196,7 +196,7 @@ pub fn print_generic(
     op: &crate::OpHandle,
     name: &str,
 ) -> Result<(), std::fmt::Error> {
-    let context = op.context.upgrade();
+    let context = op.context.clone();
     print_result_prefix(fmt, op)?;
     fmt.write(name)?;
     let operands = op.value_operands();

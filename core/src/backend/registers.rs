@@ -216,7 +216,7 @@ pub fn reg_slots(op: &OpHandle) -> Vec<SlotRef> {
     if ports.is_empty() {
         return Vec::new();
     }
-    let context = op.context.upgrade();
+    let context = op.context.clone();
     let operands = op.value_operands();
     let results = op.value_results();
     let mut next_operand = 0;

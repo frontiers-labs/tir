@@ -426,7 +426,7 @@ impl Driver<'_> {
         let result = self.context.create_value(ty, None).id();
         let copy = self.context.add_operation(NewOp::new_dynamic(
             (source.dialect().as_str(), source.name().as_str()),
-            self.context.as_context_ref(),
+            self.context.clone(),
             operands,
             vec![result],
             vec![],

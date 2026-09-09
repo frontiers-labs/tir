@@ -187,7 +187,7 @@ pub fn emit_with(
     }
     let instance = NewOp::new_dynamic(
         spec.op,
-        context.as_context_ref(),
+        context.clone(),
         operand_values,
         result_values,
         vec![],

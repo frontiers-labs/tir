@@ -170,7 +170,7 @@ impl FuncOp {
 
         fmt.write(format!(" @{}", sym_name))?;
 
-        let context = self.0.context.upgrade();
+        let context = self.0.context.clone();
         let args = self.parameters();
 
         fmt.write("(")?;

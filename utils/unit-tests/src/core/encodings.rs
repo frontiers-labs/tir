@@ -95,7 +95,7 @@ fn build(
         .collect();
     let instance = NewOp::new_dynamic(
         ("test", "inst"),
-        context.as_context_ref(),
+        context.clone(),
         vec![],
         results,
         vec![],

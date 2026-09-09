@@ -179,7 +179,7 @@ fn clone_op_into(context: &Context, op: OpId, mapping: &mut Mapping) -> OpId {
 
     let instance = NewOp::new_dynamic(
         (source.dialect().as_str(), source.name().as_str()),
-        context.as_context_ref(),
+        context.clone(),
         operands,
         results,
         regions,

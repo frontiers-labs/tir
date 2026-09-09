@@ -777,7 +777,7 @@ impl Interp for ConstantOp {
 
 impl Interp for ConstantFOp {
     fn evaluate(&self, _operands: &[Value], _memory: &mut Memory) -> Result<Vec<Value>> {
-        let context = self.handle().context.upgrade();
+        let context = self.handle().context.clone();
         let value = match self.attr("value") {
             Some(crate::attributes::AttributeValue::F64(value)) => value,
             _ => {
@@ -844,7 +844,7 @@ impl Interp for AllocaOp {
 
 impl Interp for LoadOp {
     fn evaluate(&self, operands: &[Value], memory: &mut Memory) -> Result<Vec<Value>> {
-        let context = self.handle().context.upgrade();
+        let context = self.handle().context.clone();
         let Value::Ptr(address) = &operands[0] else {
             return Err(InterpError::Message(
                 "ptr.load operand must be a pointer".into(),
@@ -858,7 +858,7 @@ impl Interp for LoadOp {
 
 impl Interp for StoreOp {
     fn evaluate(&self, operands: &[Value], memory: &mut Memory) -> Result<Vec<Value>> {
-        let context = self.handle().context.upgrade();
+        let context = self.handle().context.clone();
         let Value::Ptr(address) = &operands[1] else {
             return Err(InterpError::Message(
                 "ptr.store destination must be a pointer".into(),

@@ -597,7 +597,7 @@ fn print_loop_regions(
     mnemonic: &str,
     keywords: &[&str],
 ) -> Result<(), std::fmt::Error> {
-    let context = op.handle().context.upgrade();
+    let context = op.handle().context.clone();
     fmt.write(mnemonic)?;
     if let Some(label) = loop_label(op) {
         fmt.write(format!(" {{label = \"{label}\"}}"))?;

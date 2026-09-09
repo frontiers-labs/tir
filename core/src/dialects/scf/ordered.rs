@@ -66,7 +66,7 @@ impl OrderedForOp {
     }
 
     fn custom_print(&self, fmt: &mut tir::IRFormatter) -> Result<(), std::fmt::Error> {
-        let context = self.0.context.upgrade();
+        let context = self.0.context.clone();
         let body = context.get_region(self.0.regions()[0]);
         let ports: Vec<ValueId> = body.ports().iter().map(tir::Value::id).collect();
         let inits = self.inits();

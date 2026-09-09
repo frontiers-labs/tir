@@ -129,7 +129,7 @@ impl tir::Verifiable for ForOp {
 impl ForOp {
     fn custom_print(&self, fmt: &mut tir::IRFormatter) -> Result<(), std::fmt::Error> {
         use tir::CountedLoop;
-        let context = self.0.context.upgrade();
+        let context = self.0.context.clone();
         let body = context.get_region(Theta::body(self));
         let binding = self.binding();
         let ports: Vec<ValueId> = body.ports().iter().map(tir::Value::id).collect();

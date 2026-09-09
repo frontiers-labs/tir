@@ -3,7 +3,7 @@ use std::{
     collections::HashMap,
     hash::{DefaultHasher, Hasher},
     sync::{
-        Arc, Weak,
+        Arc,
         atomic::{AtomicU32, Ordering},
     },
 };
@@ -57,9 +57,6 @@ use crate::{
 /// ```
 #[derive(Clone)]
 pub struct Context(Arc<Inner>);
-
-#[derive(Debug, Clone)]
-pub struct ContextRef(Weak<Inner>);
 
 pub struct ContextIterator<I: GetFromContext> {
     context: Context,
@@ -269,10 +266,6 @@ impl Context {
     /// The overlay's own counts: what it created, copied and replaced.
     pub fn overlay_census(&self) -> crate::overlay::OverlayCensus {
         self.delta().census()
-    }
-
-    pub fn as_context_ref(&self) -> ContextRef {
-        ContextRef(Arc::downgrade(&self.0))
     }
 
     // Epochs.
@@ -586,7 +579,7 @@ impl Context {
 
     fn op_handle(&self, id: OpId) -> OpHandle {
         OpHandle {
-            context: self.as_context_ref(),
+            context: self.clone(),
             id,
             generation: self.op_generation(id),
         }
@@ -594,7 +587,7 @@ impl Context {
 
     fn block_handle(&self, id: BlockId) -> BlockHandle {
         BlockHandle {
-            context: self.as_context_ref(),
+            context: self.clone(),
             generation: self.block_generation(id),
             id,
         }
@@ -602,7 +595,7 @@ impl Context {
 
     fn region_handle(&self, id: RegionId) -> RegionHandle {
         RegionHandle {
-            context: self.as_context_ref(),
+            context: self.clone(),
             generation: self.region_generation(id),
             id,
         }
@@ -1898,12 +1891,6 @@ impl Drop for StagedRegion {
 impl Default for Context {
     fn default() -> Self {
         Context::with_default_dialects()
-    }
-}
-
-impl ContextRef {
-    pub fn upgrade(&self) -> Context {
-        Context(self.0.upgrade().unwrap())
     }
 }
 

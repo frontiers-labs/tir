@@ -632,7 +632,7 @@ fn emit_builder(
                 #segment_sizes_attr
 
                 let instance = tir::NewOp::new::<#struct_name>(
-                    self.context.as_context_ref(),
+                    self.context.clone(),
                     operand_vec,
                     result_vec,
                     regions,
@@ -981,7 +981,7 @@ fn make_sem_impls(
             .collect();
         let result_width_body = if has_results {
             quote! {
-                let __ctx = self.0.context.upgrade();
+                let __ctx = self.0.context.clone();
                 let __ty = __ctx.get_value(self.0.results()[0]).ty();
                 Some(
                     (__ctx.get_type_data(__ty).as_ref() as &dyn std::any::Any)
@@ -995,7 +995,7 @@ fn make_sem_impls(
         };
         let actual_type_setter = if has_results {
             quote! {
-                let __tir_ctx = self.0.context.upgrade();
+                let __tir_ctx = self.0.context.clone();
                 let __tir_ty = __tir_ctx.get_value(self.result()).ty();
                 g.set_actual_type(__tir_sem_root, __tir_ty);
             }
@@ -1669,7 +1669,7 @@ fn make_entry_block_region_accessor(region: &Region, index: usize) -> proc_macro
     quote! {
         pub fn #func_name(&self) -> tir::BlockHandle {
             use tir::Operation;
-            let context = self.0.context.upgrade();
+            let context = self.0.context.clone();
             let region = self.regions().nth(#index).unwrap();
             let block = region.iter(context).next().unwrap();
             block

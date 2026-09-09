@@ -525,13 +525,6 @@ pub fn decode_with(context: &Context, word: u32, spec: &DecodeSpec) -> Option<Op
             panic!("Missing required attribute: {declared}");
         }
     }
-    let instance = NewOp::new_dynamic(
-        spec.op,
-        context.as_context_ref(),
-        vec![],
-        vec![],
-        vec![],
-        attributes,
-    );
+    let instance = NewOp::new_dynamic(spec.op, context.clone(), vec![], vec![], vec![], attributes);
     Some(context.add_operation(instance).id)
 }

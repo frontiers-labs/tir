@@ -75,11 +75,11 @@ impl DeclareOp {
     }
 
     fn signature(&self) -> Option<(Vec<TypeId>, TypeId)> {
-        FnType::signature_of(&self.0.context.upgrade(), self.fn_value())
+        FnType::signature_of(&self.0.context.clone(), self.fn_value())
     }
 
     fn custom_print(&self, fmt: &mut IRFormatter) -> Result<(), std::fmt::Error> {
-        let context = self.0.context.upgrade();
+        let context = self.0.context.clone();
         let visibility = match self.symbol_visibility() {
             Visibility::Private => " private",
             Visibility::Public => "",
