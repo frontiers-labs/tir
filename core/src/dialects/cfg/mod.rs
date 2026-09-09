@@ -167,7 +167,7 @@ impl CondBranchOp {
 }
 
 /// Print a successor as `^bbN` followed by an optional MLIR-style argument list
-/// `(%a, %b : t1, t2, state(%s))` when the branch forwards block arguments.
+/// `(%a, %b : t1, t2)` when the branch forwards block arguments.
 fn print_successor(
     fmt: &mut tir::IRFormatter,
     context: &Context,
@@ -178,24 +178,19 @@ fn print_successor(
     if args.is_empty() {
         return Ok(());
     }
-    let values = context.values_among(args);
     fmt.write("(")?;
-    if !values.is_empty() {
-        tir::region_format::print_value_list(fmt, &values)?;
-        fmt.write(" : ")?;
-        for (i, arg) in values.iter().enumerate() {
-            if i > 0 {
-                fmt.write(", ")?;
-            }
-            context.print_type(context.get_value(*arg).ty(), fmt)?;
+    tir::region_format::print_value_list(fmt, args)?;
+    fmt.write(" : ")?;
+    for (i, arg) in args.iter().enumerate() {
+        if i > 0 {
+            fmt.write(", ")?;
         }
+        context.print_type(context.get_value(*arg).ty(), fmt)?;
     }
-    tir::region_format::print_state_group(fmt, &context.states_among(args), !values.is_empty())?;
     fmt.write(")")
 }
 
-/// A parsed successor: its label and the values it is entered on, the states
-/// among them last.
+/// A parsed successor: its label and the values it is entered on.
 type Successor = (BlockId, Vec<ValueId>);
 
 fn parse_successor(
@@ -222,19 +217,12 @@ fn parse_successor(
             expect_token(parser, ":")?;
             loop {
                 arg_types.push(parse_arg_type(parser, context)?);
-                // The types end where the state group begins.
-                let mark = parser.pos();
-                if parser.parse_token(",") && parser.peek_char() == Some('!') {
+                if parser.parse_token(",") {
                     continue;
                 }
-                parser.set_pos(mark);
                 break;
             }
         }
-        parser.parse_token(",");
-        let states = parser.parse_state_operands(context)?;
-        arg_types.extend(states.iter().map(|_| tir::TypeId::STATE));
-        args.extend(states);
         expect_token(parser, ")")?;
     }
 

@@ -5,10 +5,10 @@
 
 module {
   %f = func.func @f(%p: !ptr.p<!i32>, %v: !i32) -> !i32 {
-    state(%s) = state.entry_state
-    state(%s1) = ptr.store %v, %p state(%s)
-    %x, state(%r) = ptr.load %p state(%s) : !i32
-    -> %x, state(%r)
+    %s = state.entry_state
+    %s1 = ptr.store %v, %p state(%s)
+    %x, %r = ptr.load %p state(%s) : !i32
+    -> %x, %r
   }
   module_end
 }

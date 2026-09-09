@@ -2,12 +2,11 @@
 //! [`Binding`] names, the checks that hold them aligned, and the one syntax
 //! every declared theta and gamma shares.
 //!
-//! A theta prints as `%r = dialect.op (%port = %init, .., state(%sport = %sinit)) { .. }`
-//! and a gamma as `%r = dialect.op %pred args(%in, .., state(%s)) (%port, state(%sport)) { .. } (..) { .. }`.
+//! A theta prints as `%r = dialect.op (%port = %init, ..) { .. }` and a
+//! gamma as `%r = dialect.op %pred args(%in, ..) (%port, ..) { .. } (..) { .. }`.
 //! Types are not spelled: a port has its init's type, a theta result its
-//! init's, and a gamma result the type of the first arm's result. Memory
-//! states are carried like any other value; the text groups them so a
-//! reader can tell the chains from the values.
+//! init's, and a gamma result the type of the first arm's result. A memory
+//! state is carried like any other value.
 
 use std::ops::Range;
 
@@ -390,30 +389,17 @@ fn print_pairs(
     Ok(())
 }
 
-/// Print `(%port = %init, .., state(%sport = %sinit, ..))`, or nothing when
-/// the op carries nothing.
+/// Print `(%port = %init, ..)`, or nothing when the op carries nothing.
 pub fn print_port_bindings(
     fmt: &mut IRFormatter,
-    context: &Context,
     ports: &[ValueId],
     inits: &[ValueId],
 ) -> Result<(), std::fmt::Error> {
     if ports.is_empty() {
         return Ok(());
     }
-    let (values, states) = (context.values_among(ports), context.states_among(ports));
-    let (value_inits, state_inits) = (context.values_among(inits), context.states_among(inits));
     fmt.write(" (")?;
-    print_pairs(fmt, &values, &value_inits)?;
-    if !states.is_empty() {
-        fmt.write(if values.is_empty() {
-            "state("
-        } else {
-            ", state("
-        })?;
-        print_pairs(fmt, &states, &state_inits)?;
-        fmt.write(")")?;
-    }
+    print_pairs(fmt, ports, inits)?;
     fmt.write(")")
 }
 
@@ -439,7 +425,6 @@ pub fn print_theta(
     fmt.write(name)?;
     print_port_bindings(
         fmt,
-        &context,
         &slice(&port_ids(&context, body), &binding.ports),
         &slice(&op.operands(), &binding.operands),
     )?;
@@ -462,14 +447,14 @@ pub fn print_gamma(
     let inputs = slice(&op.operands(), &binding.operands);
     if !inputs.is_empty() {
         fmt.write(" args(")?;
-        region_format::print_value_group(fmt, &context, &inputs)?;
+        region_format::print_value_list(fmt, &inputs)?;
         fmt.write(")")?;
     }
     for &arm in arms {
         let ports = slice(&port_ids(&context, arm), &binding.ports);
         if !ports.is_empty() {
             fmt.write(if fmt.at_line_start() { "(" } else { " (" })?;
-            region_format::print_value_group(fmt, &context, &ports)?;
+            region_format::print_value_list(fmt, &ports)?;
             fmt.write(")")?;
         }
         region_format::print_region(fmt, &context, &context.get_region(arm))?;
@@ -517,65 +502,42 @@ fn bind_port(parser: &mut Parser, context: &Context, name: &str, ty: TypeId) -> 
     port
 }
 
-/// The ports a `(%port = %init, .., state(%sport = %sinit, ..))` clause
-/// binds, values then states, each minted with its init's type, and the
-/// inits they are bound to.
+/// The ports a `(%port = %init, ..)` clause binds, each minted with its
+/// init's type, and the inits they are bound to.
 #[derive(Default)]
 pub struct PortBindings {
     pub ports: Vec<crate::Value>,
     pub inits: Vec<ValueId>,
 }
 
-impl PortBindings {
-    fn bind(
-        &mut self,
-        parser: &mut Parser,
-        context: &Context,
-        ty: Option<TypeId>,
-    ) -> ParseResult<()> {
-        let name = parser
-            .parse_value_ref()
-            .ok_or_else(|| (parser.span(), Error::ExpectedValueRef))?
-            .to_string();
-        expect(parser, "=")?;
-        let init = value(parser, context)?;
-        let ty = ty.unwrap_or_else(|| context.get_value(init).ty());
-        self.ports.push(bind_port(parser, context, &name, ty));
-        self.inits.push(init);
-        Ok(())
-    }
-}
-
-/// Parse an optional `(%port = %init, .., state(%sport = %sinit, ..))` clause.
+/// Parse an optional `(%port = %init, ..)` clause.
 pub fn parse_port_bindings(parser: &mut Parser, context: &Context) -> ParseResult<PortBindings> {
     let mut bound = PortBindings::default();
     if !parser.parse_token("(") {
         return Ok(bound);
     }
     while parser.peek_char() == Some('%') {
-        bound.bind(parser, context, None)?;
+        let name = parser
+            .parse_value_ref()
+            .ok_or_else(|| (parser.span(), Error::ExpectedValueRef))?
+            .to_string();
+        expect(parser, "=")?;
+        let init = value(parser, context)?;
+        let ty = context.get_value(init).ty();
+        bound.ports.push(bind_port(parser, context, &name, ty));
+        bound.inits.push(init);
         if !parser.parse_token(",") {
             break;
         }
-    }
-    if parser.parse_token("state") {
-        expect(parser, "(")?;
-        loop {
-            bound.bind(parser, context, Some(TypeId::STATE))?;
-            if !parser.parse_token(",") {
-                break;
-            }
-        }
-        expect(parser, ")")?;
     }
     expect(parser, ")")?;
     Ok(bound)
 }
 
 /// Put a theta body's results in binding order. The text lists the values
-/// the body names, then its states in one group; the binding wants the
-/// predicate, then what the next iteration carries, then what the loop leaves,
-/// each of those values then states as the ports are.
+/// the body names, then its states; the binding wants the predicate, then
+/// what the next iteration carries, then what the loop leaves, each of those
+/// values then states as the ports are.
 pub fn order_theta_results(context: &Context, body: RegionId) {
     let region = context.get_region(body);
     let (values, states) = (region.value_results(), region.state_results());
@@ -621,16 +583,13 @@ pub fn parse_gamma(parser: &mut Parser, context: &Context) -> ParseResult<Parsed
                 break;
             }
         }
-        inputs.extend(parser.parse_state_operands(context)?);
         expect(parser, ")")?;
     }
     let mut arms = vec![];
     loop {
         let mut ports = vec![];
         if parser.parse_token("(") {
-            let values = context.values_among(&inputs);
-            let states = context.states_among(&inputs);
-            for (index, &input) in values.iter().enumerate() {
+            for (index, &input) in inputs.iter().enumerate() {
                 if index > 0 {
                     expect(parser, ",")?;
                 }
@@ -640,14 +599,6 @@ pub fn parse_gamma(parser: &mut Parser, context: &Context) -> ParseResult<Parsed
                     .to_string();
                 let ty = context.get_value(input).ty();
                 ports.push(bind_port(parser, context, &name, ty));
-            }
-            if !states.is_empty() {
-                if !values.is_empty() {
-                    expect(parser, ",")?;
-                }
-                for name in parser.parse_state_names()? {
-                    ports.push(bind_port(parser, context, &name, TypeId::STATE));
-                }
             }
             expect(parser, ")")?;
         } else if parser.peek_char() != Some('{') {

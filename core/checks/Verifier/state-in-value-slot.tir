@@ -5,7 +5,7 @@
 
 module {
   %fn_bad = func.func @bad() -> !i32 {
-    state(%0) = state.entry_state
+    %0 = state.entry_state
     %1 = addi %0, %0 : !i32
     func.return %1
   }

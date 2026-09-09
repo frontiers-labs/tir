@@ -158,7 +158,7 @@ impl ForOp {
             self.upper_bound().number(),
             self.step().number()
         ))?;
-        binding::print_port_bindings(fmt, &context, &ports[1..], &inits[1..])?;
+        binding::print_port_bindings(fmt, &ports[1..], &inits[1..])?;
         if !body.is_nodes() {
             return tir::region_format::print_op_region(fmt, &context, self, 0);
         }

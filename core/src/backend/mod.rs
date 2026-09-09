@@ -415,7 +415,7 @@ pub fn print_machine_op<T: tir::Operation>(
     // The registers an instruction defines are its slots; only the chain it
     // leaves behind is bound ahead of the mnemonic.
     let published = handle.state_results();
-    tir::region_format::print_state_group(fmt, &published, false)?;
+    tir::region_format::print_value_list(fmt, &published)?;
     if !published.is_empty() {
         fmt.write(" = ")?;
     }

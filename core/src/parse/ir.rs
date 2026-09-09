@@ -15,8 +15,7 @@ type ParseResult<T> = Result<T, (Span, Error)>;
 /// An unordered body: its operations and its results.
 type NodesBody = (Vec<OpId>, Vec<ValueId>);
 type BlockLabel = (String, BlockArguments, Vec<NamedAttribute>);
-/// The `(%a: !ty, state(%s))` argument list of a block label: every argument
-/// with its type, the states last.
+/// The `(%a: !ty, %s: !state)` argument list of a block label.
 type BlockArguments = Vec<(String, crate::TypeId)>;
 
 pub fn parse_ir<T: Operation>(context: &Context, src: &str) -> Result<T, (Span, Error)> {
@@ -89,11 +88,10 @@ pub(crate) fn parse_single_op<'src>(
 ) -> Result<Box<dyn Operation>, (Span, Error)> {
     parser.skip_trivia();
 
-    // Optional result binding prefix: `%2 =`, `%2, %3 =`, `%2, state(%4) =` or
-    // `state(%4) =`, the names in the group binding memory states. The builder
+    // Optional result binding prefix: `%2 =` or `%2, %3 =`. The builder
     // allocates the concrete ValueIds; the names are bound once the op exists
     // so later operands resolve by name rather than by a literal id.
-    let (result_names, state_names) = parse_result_prefix(parser)?;
+    let result_names = parse_result_prefix(parser)?;
 
     if let Some(name) = parser.parse_ident() {
         let (dialect, name) = if parser.parse_token(".") {
@@ -113,16 +111,29 @@ pub(crate) fn parse_single_op<'src>(
 
         let op = op_parser(parser, context)?;
         coerce_predicates(parser, context, dialect, name, op.id())?;
-        let handle = context.get_op(op.id());
-        for (name, result) in result_names.iter().zip(handle.value_results()) {
-            parser.define_value(name, result);
+        // A name past what the op's own parser produced binds a memory state
+        // the text says it leaves: the chains memory order threads through an
+        // op are its own to carry, at whatever count the text names. A unit
+        // result is never spelled, so no name is its.
+        let unit = crate::builtin::UnitType::new(context);
+        let results: Vec<ValueId> = context
+            .get_op(op.id())
+            .results()
+            .into_iter()
+            .filter(|&result| context.get_value(result).ty() != unit)
+            .collect();
+        if !result_names.is_empty() && result_names.len() < results.len() {
+            return Err((
+                parser.span(),
+                Error::VerificationError(format!(
+                    "{dialect}.{name} produces {} results but {} are named",
+                    results.len(),
+                    result_names.len()
+                )),
+            ));
         }
-        // A state the op's own parser did not produce is one the text says it
-        // does: the ports memory order threads through an op are its own to
-        // carry, at whatever count the binding names.
-        let states = handle.state_results();
-        for (index, name) in state_names.iter().enumerate() {
-            let result = states
+        for (index, name) in result_names.iter().enumerate() {
+            let result = results
                 .get(index)
                 .copied()
                 .unwrap_or_else(|| context.append_result(op.id(), crate::TypeId::STATE));
@@ -134,9 +145,9 @@ pub(crate) fn parse_single_op<'src>(
     }
 }
 
-/// The names a `%a, %b, state(%c) =` prefix binds, values then states; both
-/// empty where the line binds nothing, with the cursor left where it was.
-fn parse_result_prefix(parser: &mut TextParser<'_>) -> ParseResult<(Vec<String>, Vec<String>)> {
+/// The names a `%a, %b =` prefix binds; empty where the line binds nothing,
+/// with the cursor left where it was.
+fn parse_result_prefix(parser: &mut TextParser<'_>) -> ParseResult<Vec<String>> {
     let mark = parser.pos();
     let mut result_names = Vec::new();
     while let Some(name) = parser.parse_value_ref() {
@@ -145,12 +156,11 @@ fn parse_result_prefix(parser: &mut TextParser<'_>) -> ParseResult<(Vec<String>,
             break;
         }
     }
-    let state_names = parser.parse_state_names().unwrap_or_default();
-    if (result_names.is_empty() && state_names.is_empty()) || !parser.parse_token("=") {
+    if result_names.is_empty() || !parser.parse_token("=") {
         parser.set_pos(mark);
-        return Ok((Vec::new(), Vec::new()));
+        return Ok(Vec::new());
     }
-    Ok((result_names, state_names))
+    Ok(result_names)
 }
 
 /// Retype the `Str` attributes an op declares as `Predicate`: the attribute
@@ -358,9 +368,8 @@ impl<'src> TextParser<'src> {
         block.id()
     }
 
-    /// The `-> %a, %b, state(%c)` line closing an unordered region, if that
-    /// is what comes next: the values it produces, then the states it hands
-    /// on. An empty result list is written as a bare `->`.
+    /// The `-> %a, %b` line closing an unordered region, if that is what
+    /// comes next. An empty result list is written as a bare `->`.
     fn try_parse_region_results(&mut self, context: &Context) -> ParseResult<Option<Vec<ValueId>>> {
         if !self.parse_token("->") {
             return Ok(None);
@@ -372,7 +381,6 @@ impl<'src> TextParser<'src> {
                 break;
             }
         }
-        results.extend(self.parse_state_operands(context)?);
         Ok(Some(results))
     }
 
@@ -498,8 +506,7 @@ impl<'src> TextParser<'src> {
         }
     }
 
-    /// The `%a: !ty, %b: !ty, state(%c, %d))` list after a label's opening
-    /// paren: every named argument with its type, the states last.
+    /// The `%a: !ty, %b: !ty)` list after a label's opening paren.
     fn parse_block_argument_list(
         &mut self,
         context: &Context,
@@ -508,14 +515,6 @@ impl<'src> TextParser<'src> {
 
         loop {
             if self.parse_token(")") {
-                return Ok(args);
-            }
-            let states = self.parse_state_names()?;
-            if !states.is_empty() {
-                args.extend(states.into_iter().map(|name| (name, crate::TypeId::STATE)));
-                if !self.parse_token(")") {
-                    return Err((self.span(), Error::ExpectedToken(")")));
-                }
                 return Ok(args);
             }
 

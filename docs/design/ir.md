@@ -181,15 +181,14 @@ an ordinary SSA value of that type, interned first in every context so
 `TypeId::STATE` names it without a lookup. Nothing counts states: an
 operand, result, block-argument or region-port list is one list, and a reader
 that wants only the values or only the states filters by type
-(`value_operands()` / `state_operands()` and their kin). The text groups the
-states so a reader can tell the chains from the values:
-`%v, state(%s1) = ptr.load %p state(%s0) : !i32`. In a bracketed list — a
-loop's port bindings, a gate's arguments, a block label, a region's `->`
-line — the group is one more item, `(%a = %x, state(%s = %t))`; on the
-operand side of an op it is a trailing clause. States flow through region
-ports, loop carries and yields like any other value, with no special cases in
-scf or the verifier beyond the memory discipline (§6.4) and the type
-constraints that keep a state out of a value slot.
+(`value_operands()` / `state_operands()` and their kin). A state result, a
+carried port, a block argument or a region result is spelled like any other
+value; only an op's operand side groups the chains it observes apart from
+the values it reads, as a trailing `state(...)` clause:
+`%v, %s1 = ptr.load %p state(%s0) : !i32`. States flow through region ports,
+loop carries and yields like any other value, with no special cases in scf
+or the verifier beyond the memory discipline (§6.4) and the type constraints
+that keep a state out of a value slot.
 
 Attributes are `(name, AttributeValue)` pairs on ops; `AttributeValue` is the
 closed data enum (ints, strings, arrays, dicts, registers, types, blocks).
@@ -366,7 +365,7 @@ derived from them, not the other way round (§6.3).
 | `ptr.store`, `ptr.memset` | take one, produce one |
 | `ptr.memcpy`, `func.call` | take the join of every chain they may touch and produce the state it is split back out of |
 | `func.return` | optional state operand: every chain the caller can reach, merged |
-| `state.entry_state` | produces one chain's initial state at region entry, one op per chain: `state(%s) = state.entry_state` |
+| `state.entry_state` | produces one chain's initial state at region entry, one op per chain: `%s = state.entry_state` |
 | `state.join` | takes any number of states, produces the memory they merge into |
 | `state.split` | takes one state, produces one name per chain carrying on from it |
 

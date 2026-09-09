@@ -104,7 +104,10 @@ impl CallOp {
         if !is_unit {
             fmt.write(format!("%{}", self.result().number()))?;
         }
-        tir::region_format::print_state_group(fmt, &published, !is_unit)?;
+        if !is_unit && !published.is_empty() {
+            fmt.write(", ")?;
+        }
+        tir::region_format::print_value_list(fmt, &published)?;
         if !is_unit || !published.is_empty() {
             fmt.write(" = ")?;
         }

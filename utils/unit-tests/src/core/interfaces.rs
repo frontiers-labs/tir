@@ -97,8 +97,8 @@ fn a_zero_filled_global_has_a_zero_image() {
 const THREADED_CALL: &str = r#"module {
   %fn_puts = func.declare @puts(!i32) -> !i32
   %fn_main = func.func @main(%0: !i32) -> !i32 {
-    state(%1) = state.entry_state
-    %2, state(%3) = func.call %fn_puts(%0 : !i32) -> !i32 state(%1)
+    %1 = state.entry_state
+    %2, %3 = func.call %fn_puts(%0 : !i32) -> !i32 state(%1)
     func.return %2 state(%3)
   }
   module_end

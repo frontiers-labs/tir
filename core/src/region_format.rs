@@ -23,8 +23,8 @@ pub fn print_block_label(
 ) -> Result<(), std::fmt::Error> {
     fmt.write(format!("^bb{index}"))?;
 
-    let (args, states) = (block.value_arguments(), block.state_arguments());
-    if !args.is_empty() || !states.is_empty() {
+    let args = block.arguments();
+    if !args.is_empty() {
         fmt.write("(")?;
         for (i, arg) in args.iter().enumerate() {
             if i > 0 {
@@ -33,8 +33,6 @@ pub fn print_block_label(
             fmt.write(format!("%{}: ", arg.id().number()))?;
             context.print_type(arg.ty(), fmt)?;
         }
-        let states: Vec<_> = states.iter().map(crate::Value::id).collect();
-        print_state_group(fmt, &states, !args.is_empty())?;
         fmt.write(")")?;
     }
 
@@ -150,34 +148,21 @@ pub fn print_value_list(
     Ok(())
 }
 
-/// Print `state(%c, %d)` — led by `, ` when `spaced` — for a non-empty list.
-pub fn print_state_group(
-    fmt: &mut IRFormatter<'_>,
-    states: &[crate::ValueId],
-    spaced: bool,
-) -> Result<(), std::fmt::Error> {
-    if states.is_empty() {
-        return Ok(());
-    }
-    fmt.write(if spaced { ", state(" } else { "state(" })?;
-    print_value_list(fmt, states)?;
-    fmt.write(")")
-}
-
-/// Print `%a, %b, state(%c, %d)`: the values of `ids` that are not states,
-/// then the states in one group.
+/// Print `%a, %b, %c, %d`: the values of `ids` that are not states, then
+/// the states. A region's `->` line is spelled this way; the op reading it
+/// puts the states back where its binding wants them.
 pub fn print_value_group(
     fmt: &mut IRFormatter<'_>,
     context: &Context,
     ids: &[crate::ValueId],
 ) -> Result<(), std::fmt::Error> {
-    let values = context.values_among(ids);
-    print_value_list(fmt, &values)?;
-    print_state_group(fmt, &context.states_among(ids), !values.is_empty())
+    let mut ordered = context.values_among(ids);
+    ordered.extend(context.states_among(ids));
+    print_value_list(fmt, &ordered)
 }
 
-/// Print `%a, %b, state(%c) = ` for an op that produces anything, and nothing
-/// for one that does not.
+/// Print `%a, %b = ` for an op that produces anything, and nothing for one
+/// that does not.
 pub fn print_result_prefix(
     fmt: &mut IRFormatter<'_>,
     op: &crate::OpHandle,
@@ -186,7 +171,7 @@ pub fn print_result_prefix(
     if results.is_empty() {
         return Ok(());
     }
-    print_value_group(fmt, &op.context.upgrade(), &results)?;
+    print_value_list(fmt, &results)?;
     fmt.write(" = ")
 }
 
@@ -199,11 +184,12 @@ pub fn print_state_operands(
     if states.is_empty() {
         return Ok(());
     }
-    fmt.write(" ")?;
-    print_state_group(fmt, &states, false)
+    fmt.write(" state(")?;
+    print_value_list(fmt, &states)?;
+    fmt.write(")")
 }
 
-/// Print an op in the generic form — `%r, state(%s) = dialect.op %a, %b state(%c) {attrs} : ty`
+/// Print an op in the generic form — `%r, %s = dialect.op %a, %b state(%c) {attrs} : ty`
 /// followed by its region, if it holds one — which its handle decides in full.
 pub fn print_generic(
     fmt: &mut IRFormatter,
