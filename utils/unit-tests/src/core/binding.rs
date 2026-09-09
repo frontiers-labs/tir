@@ -88,7 +88,7 @@ fn a_theta_binding_aligns_inits_ports_continue_exit_and_results() {
     let op = build_theta(&context, &[i32_ty], &[(1, 1), (2, 32), (3, 32)]);
 
     assert_eq!(
-        op.carried(),
+        op.binding(),
         Binding {
             operands: 0..1,
             ports: 0..1,
@@ -136,7 +136,7 @@ fn a_gamma_binding_forwards_inputs_and_joins_arm_results() {
     let op = build_gamma(&context, &[&[(1, 32)], &[(2, 32)]]);
 
     assert_eq!(
-        op.forwarded(),
+        op.binding(),
         Binding {
             operands: 1..2,
             ports: 0..1,
@@ -199,6 +199,30 @@ fn counted(
         .body(body.id())
         .result_types(vec![i32_ty, i32_ty])
         .build()
+}
+
+#[test]
+fn a_loop_names_each_carried_value_on_every_side() {
+    let context = Context::with_default_dialects();
+    let op = counted(
+        &context,
+        tir::attributes::Predicate::Slt,
+        |[i, cmp, next, a, doubled]| vec![*cmp, *next, *doubled, *i, *a],
+    );
+    let handle = op.handle();
+    let body = context.get_region(Theta::body(&op));
+    let (ports, results) = (body.ports(), body.results());
+
+    let carried = tir::binding::carried(&context, handle);
+
+    let side = |index: usize| tir::binding::Carried {
+        init: handle.operands()[index],
+        port: ports[index].id(),
+        next: results[1 + index],
+        exit: results[3 + index],
+        result: handle.results()[index],
+    };
+    assert_eq!(carried, vec![side(0), side(1)]);
 }
 
 #[test]

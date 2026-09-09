@@ -155,7 +155,7 @@ impl<'a> SemDagBuilder<'a> {
     /// the state ports it carries, so nothing here has to guess at it.
     fn build_region_op(&mut self, op: &OpHandle, float_widths: &HashSet<u32>, seeds: &mut Seeds) {
         if let Some(gamma) = op.clone().as_interface::<dyn Gamma>() {
-            let binding = gamma.forwarded();
+            let binding = gamma.binding();
             let inputs = op.operands()[binding.operands.clone()].to_vec();
             for arm in gamma.arms() {
                 let region = self.context.get_region(arm);
@@ -187,7 +187,7 @@ impl<'a> SemDagBuilder<'a> {
     fn seed_gamma(&mut self, op: &OpHandle, gamma: &dyn Gamma) {
         let decision = self.build_from_value(gamma.predicate());
         let arms = gamma.arms();
-        let binding = gamma.forwarded();
+        let binding = gamma.binding();
         for (index, &result) in op.results()[binding.results.clone()].iter().enumerate() {
             if self.context.get_value(result).is_state() {
                 continue;
@@ -227,7 +227,7 @@ impl<'a> SemDagBuilder<'a> {
         float_widths: &HashSet<u32>,
         seeds: &mut Seeds,
     ) {
-        let binding = theta.carried();
+        let binding = theta.binding();
         let body = theta.body();
         let region = self.context.get_region(body);
         let ports: Vec<ValueId> = region.ports()[binding.ports.clone()]

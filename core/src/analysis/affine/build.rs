@@ -621,23 +621,17 @@ fn chain_root_walk(
             // chain only where they agree.
             chain::Step::Port {
                 op,
-                index,
+                chain,
                 entering,
             } => {
-                let op = context.get_op(op);
-                let slot = *crate::binding::state_slots(context, &op).get(index)?;
-                if entering || op.has_interface::<dyn Theta>() {
-                    current = *op.operands().get(slot.operand)?;
+                if entering || context.get_op(op).has_interface::<dyn Theta>() {
+                    current = chain.entered;
                     continue;
                 }
-                let gamma = op.as_interface::<dyn Gamma>()?;
-                let mut roots = gamma
-                    .arms()
+                let mut roots = chain
+                    .exits
                     .iter()
-                    .map(|&arm| {
-                        let results = context.get_region(arm).results();
-                        chain_root_memo(context, *results.get(slot.exit)?, memo)
-                    })
+                    .map(|&exit| chain_root_memo(context, exit, memo))
                     .collect::<Option<BTreeSet<_>>>()?;
                 return (roots.len() == 1).then(|| roots.pop_first().expect("one root"));
             }

@@ -199,7 +199,7 @@ impl Seeder<'_> {
     /// arms that agree need no choice at all.
     fn seed_switch(&mut self, instance: &OpHandle, gamma: &dyn Gamma) {
         let predicate = self.class_of(gamma.predicate());
-        let binding = gamma.forwarded();
+        let binding = gamma.binding();
         let inputs = instance.operands()[binding.operands.clone()].to_vec();
         let arms = gamma.arms();
         for &arm in &arms {
@@ -250,20 +250,18 @@ impl Seeder<'_> {
     /// was entered on: nothing under the loop changes an object on that chain,
     /// on any iteration. So a read of it inside the body has observed what the
     /// state before the loop stands for, and so has one after the loop.
-    fn bind_unchanged_chains(&mut self, instance: &OpHandle, region: &crate::RegionHandle) {
-        let ports = region.ports();
-        let results = region.results();
-        for slot in crate::binding::state_slots(self.context, instance) {
-            let port = ports[slot.port].id();
-            let continued = slot.continue_.expect("a loop carries a state on");
-            if !names_same_memory(self.context, results[continued], port)
-                || !names_same_memory(self.context, results[slot.exit], port)
+    fn bind_unchanged_chains(&mut self, instance: &OpHandle) {
+        for chain in crate::binding::state_chains(self.context, instance) {
+            let port = chain.ports[0];
+            let continued = chain.next.expect("a loop carries a state on");
+            if !names_same_memory(self.context, continued, port)
+                || !names_same_memory(self.context, chain.exits[0], port)
             {
                 continue;
             }
-            let before = self.class_of(instance.operands()[slot.operand]);
+            let before = self.class_of(chain.entered);
             self.bind_value(port, before);
-            self.bind_value(instance.results()[slot.result], before);
+            self.bind_value(chain.left, before);
         }
     }
 
@@ -274,7 +272,7 @@ impl Seeder<'_> {
     /// its exit value; any other value port is recorded for the hypothesis
     /// rounds. Dependencies anchor.
     fn seed_loop(&mut self, instance: &OpHandle, theta: &dyn Theta) {
-        let binding = theta.carried();
+        let binding = theta.binding();
         let body = theta.body();
         let region = self.context.get_region(body);
         let inits = instance.operands()[binding.operands.clone()].to_vec();
@@ -287,7 +285,7 @@ impl Seeder<'_> {
                 self.anchor(head);
             }
         }
-        self.bind_unchanged_chains(instance, &region);
+        self.bind_unchanged_chains(instance);
         self.seed_region(body);
         let predicate = self.class_of(theta.predicate());
         let body_results = region.results();

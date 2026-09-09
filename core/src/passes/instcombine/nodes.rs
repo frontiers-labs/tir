@@ -27,7 +27,7 @@ use tir_relational::{ClassId as Id, Extraction};
 use super::{Driver, Node, Prov, SymKind, cost, state};
 use crate::analysis::AnalysisManager;
 use crate::analysis::effects::{observed_state, produced_state};
-use crate::binding::{forwards_state, state_slots};
+use crate::binding::{StateChain, forwards_state, state_chains};
 use crate::func::FuncOp;
 use crate::sem::egraph::type_width;
 use crate::{
@@ -470,17 +470,16 @@ fn changed_chain(context: &Context, state: ValueId) -> bool {
     if instance.is::<crate::state::SplitOp>() {
         return changed_chain(context, instance.state_operands()[0]);
     }
-    let at = instance.results().iter().position(|&r| r == state);
-    let Some(slot) = state_slots(context, &instance)
+    let Some(chain) = state_chains(context, &instance)
         .into_iter()
-        .find(|slot| Some(slot.result) == at)
+        .find(|chain| chain.left == state)
     else {
         return true;
     };
-    if !forwards_state(context, &instance, slot) {
+    if !forwards_state(&chain) {
         return true;
     }
-    changed_chain(context, instance.operands()[slot.operand])
+    changed_chain(context, chain.entered)
 }
 
 /// Whether `region` can read `value`: it is defined in `region` or in one
@@ -535,44 +534,44 @@ fn drop_untouched_chains(context: &Context, region: RegionId) {
             continue;
         }
         // Highest chain first, so the ports that stay keep their positions.
-        for ordinal in (0..state_slots(context, &instance).len()).rev() {
-            if !carries_nothing(context, op, ordinal) {
+        for ordinal in (0..state_chains(context, &instance).len()).rev() {
+            let Some(chain) = carries_nothing(context, op, ordinal) else {
                 continue;
-            }
-            let handle = context.get_op(op);
-            let slot = state_slots(context, &handle)[ordinal];
-            let entered = handle.operands()[slot.operand];
-            let published = handle.results()[slot.result];
-            context.replace_value_uses(published, entered);
-            context.rename_region_results(region, published, entered, &[]);
+            };
+            context.replace_value_uses(chain.left, chain.entered);
+            context.rename_region_results(region, chain.left, chain.entered, &[]);
             context.drop_state(op, ordinal);
         }
     }
 }
 
-/// Whether the `ordinal`-th chain `op` carries is one nothing under it names:
+/// The `ordinal`-th chain `op` carries, if nothing under the op names it:
 /// every region hands the port straight back, and nothing else reads it.
-fn carries_nothing(context: &Context, op: OpId, ordinal: usize) -> bool {
+fn carries_nothing(context: &Context, op: OpId, ordinal: usize) -> Option<StateChain> {
     let handle = context.get_op(op);
-    let slot = state_slots(context, &handle)[ordinal];
-    if !forwards_state(context, &handle, slot) {
-        return false;
+    let chain = state_chains(context, &handle).swap_remove(ordinal);
+    if !forwards_state(&chain) {
+        return None;
     }
     let groups = if handle.has_interface::<dyn Theta>() {
         2
     } else {
         1
     };
-    handle.regions().iter().all(|&region| {
-        let port = context.get_region(region).ports()[slot.port].id();
-        let named = context
-            .nested_regions(region)
-            .iter()
-            .flat_map(|&nested| context.get_region(nested).results())
-            .filter(|&named| named == port)
-            .count();
-        named == groups && context.users_of(port).is_empty()
-    })
+    let unnamed = handle
+        .regions()
+        .iter()
+        .zip(&chain.ports)
+        .all(|(&region, &port)| {
+            let named = context
+                .nested_regions(region)
+                .iter()
+                .flat_map(|&nested| context.get_region(nested).results())
+                .filter(|&named| named == port)
+                .count();
+            named == groups && context.users_of(port).is_empty()
+        });
+    unnamed.then_some(chain)
 }
 
 /// A slot whose address reaches only writes is a memory nothing observes: each

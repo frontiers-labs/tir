@@ -4,7 +4,7 @@
 //! port is the walker's own fold, since a root, a value and a refusal are
 //! different answers to different questions.
 
-use crate::binding::{declared, state_slots};
+use crate::binding::{StateChain, declared, state_chains};
 use crate::state::{JoinOp, SplitOp};
 use crate::{Context, OpHandle, OpId, ValueId};
 
@@ -17,14 +17,13 @@ pub enum Step {
     From(ValueId),
     /// The states a merge brings together, the changer's own chain first.
     Merge(Vec<ValueId>),
-    /// The `index`-th state a loop or a gate `op` carries (see
-    /// [`crate::binding::state_slots`]): the port a region is entered on when
-    /// `entering`, the state the op left otherwise.
+    /// A state a loop or a gate `op` carries: the port a region is entered on
+    /// when `entering`, the state the op left otherwise.
     /// A loop's port is its init on the first iteration alone, so which one it
     /// is stays the walker's question.
     Port {
         op: OpId,
-        index: usize,
+        chain: StateChain,
         entering: bool,
     },
 }
@@ -35,14 +34,13 @@ pub fn back(context: &Context, state: ValueId) -> Step {
         let handle = context.get_region(region);
         if let Some(op) = handle.parent_op() {
             let owner = context.get_op(op);
-            let at = handle.ports().iter().position(|port| port.id() == state);
-            if let Some(index) = state_slots(context, &owner)
-                .iter()
-                .position(|slot| Some(slot.port) == at)
+            if let Some(chain) = state_chains(context, &owner)
+                .into_iter()
+                .find(|chain| chain.ports.contains(&state))
             {
                 return Step::Port {
                     op,
-                    index,
+                    chain,
                     entering: true,
                 };
             }
@@ -67,14 +65,13 @@ pub fn back(context: &Context, state: ValueId) -> Step {
     if let Some(observed) = super::access_of(&op).and_then(|access| access.state) {
         return Step::From(observed);
     }
-    let at = op.results().iter().position(|&result| result == state);
-    if let Some(index) = state_slots(context, &op)
-        .iter()
-        .position(|slot| Some(slot.result) == at)
+    if let Some(chain) = state_chains(context, &op)
+        .into_iter()
+        .find(|chain| chain.left == state)
     {
         return Step::Port {
             op: op.id,
-            index,
+            chain,
             entering: false,
         };
     }

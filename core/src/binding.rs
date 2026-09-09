@@ -119,84 +119,117 @@ fn names_same(context: &Context, found: ValueId, declared: ValueId) -> bool {
 /// The binding a loop or a gate declares: what it carries in, through and out.
 pub fn declared(op: &OpHandle) -> Option<Binding> {
     if let Some(theta) = op.clone().as_interface::<dyn crate::Theta>() {
-        return Some(theta.carried());
+        return Some(theta.binding());
     }
     op.clone()
         .as_interface::<dyn crate::Gamma>()
-        .map(|gamma| gamma.forwarded())
+        .map(|gamma| gamma.binding())
 }
 
-/// Where one state a loop or a gate carries sits, as absolute positions into
-/// the op's operands and results and its regions' ports and results. A
-/// loop carries a state through one aligned list; a gate forwards its
-/// states into every arm and joins them back by a second alignment, and its
-/// i-th forwarded and i-th joined state are one chain.
+/// One value a loop carries, named on every side of the op: the operand it
+/// enters on, the port the body reads it through, what the next iteration
+/// takes, what the loop leaves, and the op result.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct StateSlot {
-    pub operand: usize,
-    pub port: usize,
-    /// A loop's continue result; a gate has none.
-    pub continue_: Option<usize>,
-    pub exit: usize,
-    pub result: usize,
+pub struct Carried {
+    pub init: ValueId,
+    pub port: ValueId,
+    pub next: ValueId,
+    pub exit: ValueId,
+    pub result: ValueId,
 }
 
-/// The states a loop or a gate carries, in chain order.
-pub fn state_slots(context: &Context, op: &OpHandle) -> Vec<StateSlot> {
-    let Some(binding) = declared(op) else {
+/// The values a loop carries, in port order; empty for anything but a loop.
+pub fn carried(context: &Context, op: &OpHandle) -> Vec<Carried> {
+    let Some(theta) = op.clone().as_interface::<dyn crate::Theta>() else {
         return Vec::new();
     };
-    let Some(&region) = op.regions().first() else {
-        return Vec::new();
-    };
-    let ports = context.get_region(region).ports();
-    let forwarded: Vec<usize> = (0..binding.ports.len())
-        .filter(|&index| ports[binding.ports.start + index].is_state())
-        .collect();
-    if op.has_interface::<dyn crate::Theta>() {
-        return forwarded
-            .into_iter()
-            .map(|index| StateSlot {
-                operand: binding.operands.start + index,
-                port: binding.ports.start + index,
-                continue_: Some(binding.continue_.start + index),
-                exit: binding.exit.start + index,
-                result: binding.results.start + index,
-            })
-            .collect();
-    }
-    let results = op.results();
-    let joined = (0..binding.results.len()).filter(|&index| {
-        context
-            .get_value(results[binding.results.start + index])
-            .is_state()
-    });
-    forwarded
-        .into_iter()
-        .zip(joined)
-        .map(|(forwarded, joined)| StateSlot {
-            operand: binding.operands.start + forwarded,
-            port: binding.ports.start + forwarded,
-            continue_: None,
-            exit: binding.exit.start + joined,
-            result: binding.results.start + joined,
+    let binding = theta.binding();
+    let region = context.get_region(theta.body());
+    let (ports, results) = (region.ports(), region.results());
+    let (operands, op_results) = (op.operands(), op.results());
+    (0..binding.ports.len())
+        .map(|index| Carried {
+            init: operands[binding.operands.start + index],
+            port: ports[binding.ports.start + index].id(),
+            next: results[binding.continue_.start + index],
+            exit: results[binding.exit.start + index],
+            result: op_results[binding.results.start + index],
         })
         .collect()
 }
 
-/// Whether every region of `op` hands the state at `slot` straight back, in
-/// every result group: the chain flows past the operation rather than
-/// through it, since nothing under it changed the memory.
-pub fn forwards_state(context: &Context, op: &OpHandle, slot: StateSlot) -> bool {
-    op.regions().iter().all(|&region| {
-        let region = context.get_region(region);
-        let port = region.ports()[slot.port].id();
-        let results = region.results();
-        slot.continue_
+/// One state a loop or a gate carries: the state it enters on, the port each
+/// region reads it through, the state each region leaves (and, for a loop,
+/// the one the next iteration takes), and the state the op leaves. A gate's
+/// i-th forwarded and i-th joined state are one chain.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StateChain {
+    pub entered: ValueId,
+    pub ports: Vec<ValueId>,
+    pub next: Option<ValueId>,
+    pub exits: Vec<ValueId>,
+    pub left: ValueId,
+}
+
+/// The states a loop or a gate carries, in chain order.
+pub fn state_chains(context: &Context, op: &OpHandle) -> Vec<StateChain> {
+    if op.has_interface::<dyn crate::Theta>() {
+        return carried(context, op)
             .into_iter()
-            .chain([slot.exit])
-            .all(|index| results.get(index) == Some(&port))
-    })
+            .filter(|value| context.get_value(value.port).is_state())
+            .map(|value| StateChain {
+                entered: value.init,
+                ports: vec![value.port],
+                next: Some(value.next),
+                exits: vec![value.exit],
+                left: value.result,
+            })
+            .collect();
+    }
+    let Some(gamma) = op.clone().as_interface::<dyn crate::Gamma>() else {
+        return Vec::new();
+    };
+    let binding = gamma.binding();
+    let arms: Vec<_> = gamma
+        .arms()
+        .into_iter()
+        .map(|arm| context.get_region(arm))
+        .collect();
+    let (operands, results) = (op.operands(), op.results());
+    let forwarded = (0..binding.operands.len())
+        .map(|index| binding.operands.start + index)
+        .filter(|&at| context.get_value(operands[at]).is_state());
+    let joined = (0..binding.results.len())
+        .map(|index| binding.results.start + index)
+        .filter(|&at| context.get_value(results[at]).is_state());
+    forwarded
+        .zip(joined)
+        .map(|(entered, left)| StateChain {
+            entered: operands[entered],
+            ports: arms
+                .iter()
+                .map(|arm| arm.ports()[entered - binding.operands.start + binding.ports.start].id())
+                .collect(),
+            next: None,
+            exits: arms
+                .iter()
+                .map(|arm| arm.results()[left - binding.results.start + binding.exit.start])
+                .collect(),
+            left: results[left],
+        })
+        .collect()
+}
+
+/// Whether every region hands the chain's port straight back: the chain flows
+/// past the operation rather than through it, since nothing under it changed
+/// the memory.
+pub fn forwards_state(chain: &StateChain) -> bool {
+    chain.next.is_none_or(|next| next == chain.ports[0])
+        && chain
+            .ports
+            .iter()
+            .zip(&chain.exits)
+            .all(|(port, exit)| port == exit)
 }
 
 /// Checks a theta's declared alignment: five ranges of one length, one type per

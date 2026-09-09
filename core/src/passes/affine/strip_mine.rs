@@ -46,8 +46,8 @@ pub fn strip_mine(
         return Err(PassError::RewriteFailed(op));
     };
     let body = theta.body();
-    let states = crate::binding::state_slots(context, &handle);
-    if handle.value_results().len() != 1 || theta.carried().ports.len() != 1 + states.len() {
+    let states = crate::binding::state_chains(context, &handle);
+    if handle.value_results().len() != 1 || theta.binding().ports.len() != 1 + states.len() {
         return Err(PassError::RewriteFailed(op));
     }
     let (lower, upper, step) = (counted.lower_bound(), counted.upper_bound(), counted.step());

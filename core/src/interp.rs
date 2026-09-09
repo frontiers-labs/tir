@@ -469,21 +469,20 @@ impl Interpreter<'_> {
     /// cone never runs.
     fn exec_theta(&mut self, instance: &crate::OpHandle, theta: &dyn Theta) -> Result<Flow> {
         let body = theta.body();
-        let binding = theta.carried();
-        let region = self.context.get_region(body);
-        let ports: Vec<ValueId> = region.ports()[binding.ports.clone()]
+        let sides = crate::binding::carried(self.context, instance);
+        let ports: Vec<ValueId> = sides
             .iter()
-            .filter(|port| !port.is_state())
-            .map(|port| port.id())
+            .map(|side| side.port)
+            .filter(|&port| !self.context.get_value(port).is_state())
             .collect();
-        let results = region.results();
         let predicate = theta.predicate();
-        let continue_cone = results[binding.continue_.clone()].to_vec();
-        let exit_cone = results[binding.exit.clone()].to_vec();
+        let continue_cone: Vec<ValueId> = sides.iter().map(|side| side.next).collect();
+        let exit_cone: Vec<ValueId> = sides.iter().map(|side| side.exit).collect();
+        let inits: Vec<ValueId> = sides.iter().map(|side| side.init).collect();
 
         let mut carried: Vec<Value> = self
             .context
-            .values_among(&instance.operands()[binding.operands.clone()])
+            .values_among(&inits)
             .iter()
             .map(|&init| self.value_of(init))
             .collect::<Result<_>>()?;
@@ -516,7 +515,7 @@ impl Interpreter<'_> {
     /// results are the op's.
     fn exec_gamma(&mut self, instance: &crate::OpHandle, gamma: &dyn Gamma) -> Result<Flow> {
         let arms = gamma.arms();
-        let binding = gamma.forwarded();
+        let binding = gamma.binding();
         // An arm index has no sign: an `i1` predicate that is true is arm 1,
         // whatever a signed reading of its one bit says.
         let chosen = match self.value_of(gamma.predicate())? {

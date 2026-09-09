@@ -223,8 +223,8 @@ or implementing an interface; it never means teaching core code about an op.
 
 | Interface | Contract |
 |---|---|
-| `Gamma` | a structured conditional over unordered arms: the predicate indexes the arms, `forwarded()` states how the op's operands reach every arm's ports and how the chosen arm's results become the op's. `scf.switch` |
-| `Theta` | a structured loop over an unordered body: `carried()` states the five aligned lists — inits, ports, the values the next iteration takes, the values the loop leaves with, results — and `predicate()` the body result deciding whether another iteration runs. `scf.loop`, `scf.for` |
+| `Gamma` | a structured conditional over unordered arms: the predicate indexes the arms, `binding()` states how the op's operands reach every arm's ports and how the chosen arm's results become the op's. `scf.switch` |
+| `Theta` | a structured loop over an unordered body: `binding()` states the five aligned lists — inits, ports, the values the next iteration takes, the values the loop leaves with, results — and `predicate()` the body result deciding whether another iteration runs. Readers take the values instead, through `binding::carried` and `binding::state_chains`. `scf.loop`, `scf.for` |
 | `CountedLoop` | a `Theta` whose iterations count: `lower_bound`/`upper_bound`/`step`, and `induction` naming the port the counter rides on. What the affine view, unrolling and strip-mining read. `scf.for` |
 | `Callable` | a λ: body (absent for a declaration), the value a call takes as its callee, parameter and result types |
 | `Apply` | an application of a callable to a run of the op's value operands |

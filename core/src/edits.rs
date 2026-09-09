@@ -191,7 +191,7 @@ impl Context {
         };
         if let Some(theta) = handle.clone().as_interface::<dyn Theta>() {
             let body = theta.body();
-            let binding = theta.carried();
+            let binding = theta.binding();
             let init = init.expect("a loop port carries a value in");
             let region = self.get_region(body);
             let ports: Vec<ValueId> = region.ports().iter().map(crate::Value::id).collect();
@@ -209,7 +209,7 @@ impl Context {
             feed(body, port);
         } else if let Some(gamma) = handle.clone().as_interface::<dyn Gamma>() {
             let arms = gamma.arms();
-            let binding = gamma.forwarded();
+            let binding = gamma.binding();
             if let Some(init) = init {
                 self.insert_operand_at(
                     op,
@@ -252,8 +252,24 @@ impl Context {
     /// port list, and it goes.
     pub fn drop_state(&self, op: OpId, ordinal: usize) {
         let handle = self.get_op(op);
-        let slot = crate::binding::state_slots(self, &handle)[ordinal];
-        let mut removed: Vec<usize> = slot.continue_.into_iter().chain([slot.exit]).collect();
+        let chain = crate::binding::state_chains(self, &handle).swap_remove(ordinal);
+        let binding = crate::binding::declared(&handle).expect("a loop or a gate");
+        let position = |list: &[ValueId], range: &std::ops::Range<usize>, value: ValueId| {
+            list[range.clone()]
+                .iter()
+                .position(|&item| item == value)
+                .expect("the chain sits in the binding")
+                + range.start
+        };
+        let ports = self.get_region(handle.regions()[0]).ports();
+        let ports: Vec<ValueId> = ports.iter().map(crate::Value::id).collect();
+        let port = position(&ports, &binding.ports, chain.ports[0]);
+        let operand = position(&handle.operands(), &binding.operands, chain.entered);
+        let result = position(&handle.results(), &binding.results, chain.left);
+        let mut removed = vec![binding.exit.start + (result - binding.results.start)];
+        if chain.next.is_some() {
+            removed.push(binding.continue_.start + (port - binding.ports.start));
+        }
         removed.sort_unstable_by(|a, b| b.cmp(a));
         for region in handle.regions() {
             let mut results = self.get_region(region).results();
@@ -261,9 +277,9 @@ impl Context {
                 results.remove(at);
             }
             self.set_region_results(region, results);
-            self.remove_region_port(region, slot.port);
+            self.remove_region_port(region, port);
         }
-        self.remove_operand(op, slot.operand);
-        self.remove_result(op, slot.result);
+        self.remove_operand(op, operand);
+        self.remove_result(op, result);
     }
 }

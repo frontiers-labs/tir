@@ -131,7 +131,7 @@ impl ForOp {
         use tir::CountedLoop;
         let context = self.0.context.upgrade();
         let body = context.get_region(Theta::body(self));
-        let binding = self.carried();
+        let binding = self.binding();
         let ports: Vec<ValueId> = body.ports().iter().map(tir::Value::id).collect();
         let inits = self.operands()[binding.operands.clone()].to_vec();
         let results = body.results();

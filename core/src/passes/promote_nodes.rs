@@ -13,6 +13,7 @@ use std::collections::{HashMap, HashSet};
 use crate::analysis::slots::{SlotState, agreed_value_type, collect_slots};
 use crate::analysis::{AnalysisManager, EscapeFacts};
 use crate::analysis::{chain, regions};
+use crate::binding::StateChain;
 use crate::func::FuncOp;
 use crate::{
     Context, Gamma, MemoryRead, MemoryWrite, OpHandle, OpId, OperationRef, Pass, PassError,
@@ -119,11 +120,6 @@ fn names_whole_slot(context: &Context, op: OpId, slot: ValueId) -> bool {
         && !instance.state_operands().is_empty()
 }
 
-/// Where the `index`-th chain a loop or a gate carries sits.
-fn chain_slot(context: &Context, op: &OpHandle, index: usize) -> crate::binding::StateSlot {
-    crate::binding::state_slots(context, op)[index]
-}
-
 /// Whether every op between `op` and `body` is a loop or a gate with a declared
 /// binding, so a port can be grown where the slot's value crosses it.
 fn crosses_declared_bindings(context: &Context, op: OpId, body: RegionId) -> bool {
@@ -148,10 +144,10 @@ fn crosses_declared_bindings(context: &Context, op: OpId, body: RegionId) -> boo
 #[derive(Clone, Copy, PartialEq)]
 enum Reach {
     Value(ValueId),
-    /// The value growing the port a loop or a gate carries at this index will
+    /// The value growing the port a loop or a gate carries on this chain will
     /// put here. It is a value of its own, so it is the same answer as itself
     /// and a different one from every value already in the IR.
-    Written(OpId, usize),
+    Written(ValueId),
     /// Nothing wrote the slot on the way here.
     Undefined,
     /// Two memories merged here left the slot holding different values, so no
@@ -178,8 +174,9 @@ struct Promoter<'a> {
     ty: TypeId,
     /// The slot's value at each dependency already walked.
     reach: HashMap<ValueId, Reach>,
-    /// The ops whose port for the slot has been grown.
-    grown: HashSet<(OpId, usize)>,
+    /// The chains, by the state their op leaves, whose port for the slot has
+    /// been grown.
+    grown: HashSet<ValueId>,
     /// Whether a read of what nothing wrote stands, keeping the allocation.
     kept: bool,
     /// What this sweep has already handed each retired value on to.
@@ -337,7 +334,7 @@ impl<'a> Promoter<'a> {
     fn crossing(&mut self, dep: ValueId) -> Reach {
         let chain::Step::Port {
             op,
-            index,
+            chain,
             entering,
         } = chain::back(self.context, dep)
         else {
@@ -346,13 +343,12 @@ impl<'a> Promoter<'a> {
         let op = self.context.get_op(op);
         let repeats = op.has_interface::<dyn Theta>();
         if !self.writes_under(&op) || (entering && !repeats) {
-            let slot = chain_slot(self.context, &op, index);
-            return self.reach(op.operands()[slot.operand]);
+            return self.reach(chain.entered);
         }
         if repeats {
-            self.grow_theta(&op, index);
+            self.grow_theta(&op, &chain);
         } else {
-            self.grow_gamma(&op, index);
+            self.grow_gamma(&op, &chain);
         }
         self.reach[&dep]
     }
@@ -361,32 +357,30 @@ impl<'a> Promoter<'a> {
     /// body reads the port and the value it leaves the slot holding along the
     /// continue dependency is what the next iteration carries; the value along
     /// the exit dependency is what the loop produces. Both are recorded on the
-    /// loop's dependency port and result at `index`.
-    fn grow_theta(&mut self, op: &OpHandle, index: usize) {
-        if self.grown.contains(&(op.id, index)) {
+    /// loop's dependency port and result for the chain.
+    fn grow_theta(&mut self, op: &OpHandle, chain: &StateChain) {
+        if self.grown.contains(&chain.left) {
             return;
         }
         let context = self.context;
         let theta = op.clone().as_interface::<dyn Theta>().expect("a loop");
         let body = theta.body();
-        let slot = chain_slot(context, op, index);
-        let entered = op.operands()[slot.operand];
+        let entered = chain.entered;
         // Spelling the init may grow an enclosing loop, whose latch walks back
         // into this one and grows it on the way: mark it grown only after.
         let init = self.reach(entered);
-        if !self.grown.insert((op.id, index)) {
+        if !self.grown.insert(chain.left) {
             return;
         }
         let region = context.get_region(body);
-        let results = region.results();
         let (continue_dep, exit_dep) = (
-            results[slot.continue_.expect("a loop carries a state on")],
-            results[slot.exit],
+            chain.next.expect("a loop carries a state on"),
+            chain.exits[0],
         );
-        let port_dep = region.ports()[slot.port].id();
-        let left = op.results()[slot.result];
+        let port_dep = chain.ports[0];
+        let left = chain.left;
         if self.probing {
-            let grown = Reach::Written(op.id, index);
+            let grown = Reach::Written(left);
             self.reach.insert(port_dep, grown);
             self.reach.insert(left, grown);
             for state in [entered, continue_dep, exit_dep] {
@@ -410,7 +404,7 @@ impl<'a> Promoter<'a> {
             .clone()
             .as_interface::<dyn Theta>()
             .expect("a loop")
-            .carried();
+            .binding();
         let mut results = region.results();
         let at = binding
             .exit
@@ -427,23 +421,25 @@ impl<'a> Promoter<'a> {
     /// A gate's port for the slot: every arm produces the value it leaves the
     /// slot holding along its dependency result, and the gate's result is the
     /// value after it.
-    fn grow_gamma(&mut self, op: &OpHandle, index: usize) {
-        if self.grown.contains(&(op.id, index)) {
+    fn grow_gamma(&mut self, op: &OpHandle, chain: &StateChain) {
+        if self.grown.contains(&chain.left) {
             return;
         }
         // Spelling the state the gate is entered on may grow an enclosing
         // loop, whose latch walks back into this gate and grows it on the
         // way: mark it grown only after.
         let context = self.context;
-        let slot = chain_slot(context, op, index);
-        self.reach(op.operands()[slot.operand]);
-        if !self.grown.insert((op.id, index)) {
+        self.reach(chain.entered);
+        if !self.grown.insert(chain.left) {
             return;
         }
-        let left = op.results()[slot.result];
-        let arm_left = |arm| context.get_region(arm).results()[slot.exit];
+        let left = chain.left;
+        let arm_left = |arm| {
+            let at = op.regions().iter().position(|&region| region == arm);
+            chain.exits[at.expect("an arm of the gate")]
+        };
         if self.probing {
-            self.reach.insert(left, Reach::Written(op.id, index));
+            self.reach.insert(left, Reach::Written(left));
             for arm in op.regions() {
                 self.demand(arm_left(arm));
             }

@@ -596,7 +596,7 @@ impl Lowering<'_> {
         merge: BlockId,
     ) -> Result<(), PassError> {
         let gamma = gamma(op)?;
-        let binding = gamma.forwarded();
+        let binding = gamma.binding();
         let inputs = op.operands()[binding.operands.clone()].to_vec();
 
         // The arms the chain of tests can reach: a test already decided
@@ -684,7 +684,7 @@ impl Lowering<'_> {
         merge: BlockId,
     ) -> Result<(), PassError> {
         let theta = theta(op)?;
-        let binding = theta.carried();
+        let binding = theta.binding();
         let body = theta.body();
         let handle = self.context.get_region(body);
         let inits = op.operands()[binding.operands.clone()].to_vec();

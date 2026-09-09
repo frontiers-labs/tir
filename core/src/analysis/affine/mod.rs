@@ -277,22 +277,12 @@ pub(crate) struct Carried {
 }
 
 pub(crate) fn carried(context: &Context, op: &OpHandle) -> Option<Carried> {
-    let theta = op.clone().as_interface::<dyn Theta>()?;
-    let binding = theta.carried();
-    let region = context.get_region(theta.body());
-    // The view is defined on the unordered form: an ordered body names no
-    // results, so the recurrence its ports ride on is not there to read.
-    if !region.is_nodes() {
-        return None;
-    }
-    let results = region.results();
+    op.has_interface::<dyn Theta>().then_some(())?;
+    let sides = crate::binding::carried(context, op);
     Some(Carried {
-        args: region.ports()[binding.ports]
-            .iter()
-            .map(crate::Value::id)
-            .collect(),
-        latched: results[binding.continue_].to_vec(),
-        inits: op.operands()[binding.operands].to_vec(),
-        finals: op.results()[binding.results].to_vec(),
+        args: sides.iter().map(|side| side.port).collect(),
+        latched: sides.iter().map(|side| side.next).collect(),
+        inits: sides.iter().map(|side| side.init).collect(),
+        finals: sides.iter().map(|side| side.result).collect(),
     })
 }

@@ -417,7 +417,7 @@ fn emit_theta(binds: &Binds, counted: Option<&Counted>, shape: &OpShape) -> Bind
                 self.0.regions()[#body_index]
             }
 
-            fn carried(&self) -> tir::Binding {
+            fn binding(&self) -> tir::Binding {
                 let __context = self.0.context.upgrade();
                 let __segments = tir::binding::operand_segments(&self.0, #groups);
                 let operands = #operands;
@@ -441,7 +441,7 @@ fn emit_theta(binds: &Binds, counted: Option<&Counted>, shape: &OpShape) -> Bind
             &self.0,
             #spelled,
             <Self as tir::Theta>::body(self),
-            &<Self as tir::Theta>::carried(self),
+            &<Self as tir::Theta>::binding(self),
             #predicate,
         )?;
     };
@@ -474,7 +474,7 @@ fn emit_theta(binds: &Binds, counted: Option<&Counted>, shape: &OpShape) -> Bind
                 context,
                 #spelled,
                 <Self as tir::Theta>::body(self),
-                &<Self as tir::Theta>::carried(self),
+                &<Self as tir::Theta>::binding(self),
                 #predicate,
                 #induction,
                 <Self as tir::CountedLoop>::upper_bound(self),
@@ -504,7 +504,7 @@ fn emit_theta(binds: &Binds, counted: Option<&Counted>, shape: &OpShape) -> Bind
                         &self.0,
                         #spelled,
                         <Self as tir::Theta>::body(self),
-                        &<Self as tir::Theta>::carried(self),
+                        &<Self as tir::Theta>::binding(self),
                     )
                 }
             }),
@@ -586,7 +586,7 @@ fn emit_gamma(binds: &Binds, shape: &OpShape) -> BindsCode {
                 self.0.regions()[#arms_index..#arms_end].to_vec()
             }
 
-            fn forwarded(&self) -> tir::Binding {
+            fn binding(&self) -> tir::Binding {
                 let __context = self.0.context.upgrade();
                 let __segments = tir::binding::operand_segments(&self.0, #groups);
                 let operands = #operands;
@@ -603,7 +603,7 @@ fn emit_gamma(binds: &Binds, shape: &OpShape) -> BindsCode {
             &self.0,
             #spelled,
             &<Self as tir::Gamma>::arms(self),
-            &<Self as tir::Gamma>::forwarded(self),
+            &<Self as tir::Gamma>::binding(self),
         )?;
     };
     let (printer, parser) = if shape.custom_format {
@@ -632,7 +632,7 @@ fn emit_gamma(binds: &Binds, shape: &OpShape) -> BindsCode {
                         #spelled,
                         <Self as tir::Gamma>::predicate(self),
                         &<Self as tir::Gamma>::arms(self),
-                        &<Self as tir::Gamma>::forwarded(self),
+                        &<Self as tir::Gamma>::binding(self),
                     )
                 }
             }),

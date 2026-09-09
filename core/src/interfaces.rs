@@ -160,13 +160,14 @@ pub trait MemoryState {
     fn changes_memory(&self) -> bool;
 }
 
-/// Where one carried value sits on each side of a structured op: index ranges
+/// Where the carried values sit on each side of a structured op: index ranges
 /// into the op's operands, the region's ports, the region's results (the
 /// values the next iteration takes, then the values the op produces when it
 /// stops) and the op's results. The ranges have one length and the values at
 /// one offset share a type, which is what an op's `binds:` declaration states
-/// and its verifier checks. A memory state a loop or a gate carries is one
-/// more carried value; [`crate::binding::state_slots`] finds the chains.
+/// and its verifier checks. The ranges are the declaration; a reader wants
+/// the values, which [`crate::binding::carried`] and
+/// [`crate::binding::state_chains`] name.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Binding {
     pub operands: std::ops::Range<usize>,
@@ -183,7 +184,7 @@ pub trait Gamma {
     fn predicate(&self) -> ValueId;
     fn arms(&self) -> Vec<RegionId>;
     /// Operands to arm ports, and arm results to op results.
-    fn forwarded(&self) -> Binding;
+    fn binding(&self) -> Binding;
 }
 
 /// A structured loop over an unordered body (θ): the body reads the carried
@@ -192,7 +193,7 @@ pub trait Gamma {
 /// false.
 pub trait Theta {
     fn body(&self) -> RegionId;
-    fn carried(&self) -> Binding;
+    fn binding(&self) -> Binding;
     /// The body result deciding whether another iteration runs.
     fn predicate(&self) -> ValueId;
 }
