@@ -154,6 +154,8 @@ fn build_isa_reference(root: &std::path::Path) -> anyhow::Result<()> {
                 "backends/riscv/defs/base.tmdl",
                 "backends/riscv/defs/multiplication.tmdl",
                 "backends/riscv/defs/float.tmdl",
+                "backends/riscv/defs/float_extra.tmdl",
+                "backends/riscv/defs/float_round.tmdl",
                 "backends/riscv/defs/compressed.tmdl",
                 "backends/riscv/defs/atomics.tmdl",
                 "backends/riscv/defs/zifencei.tmdl",
