@@ -416,9 +416,11 @@ The rules a set of shapes must satisfy:
 
 - A condition is `bits<1>` and is decided from the instruction's own operands
   and parameters; nothing else is in hand when the encoder runs.
-- At least one shape is reachable, and every operand value the expansion tries
-  selects exactly one. An operand its `#[align]`/`#[nonzero]` constraints leave
-  no value for makes them all unreachable.
+- At least one nonempty shape is reachable. A branch that produces no bits
+  gives those operand values no encoding. This can exclude operand pairs that
+  the ISA cannot encode, such as x86 high-byte registers paired with registers
+  that require REX. An operand its `#[align]`/`#[nonzero]` constraints leave no
+  value for makes all shapes unreachable.
 - Shapes are decode-distinguishable: any two differ in width or in some bit
   both of them fix, so decoding stays a function of the instruction word.
 - A shape that spells fewer bits of an operand than the operand declares needs

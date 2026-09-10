@@ -1024,6 +1024,7 @@ fn emit_assembly_template(
             static #ident: InstrDesc = InstrDesc {
                 parse: &[#(#parse_steps),*],
                 print: &[#(#print_steps),*],
+                register_names: REGISTER_NAMES,
             };
         });
 

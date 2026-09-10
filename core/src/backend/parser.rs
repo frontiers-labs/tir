@@ -219,6 +219,7 @@ impl AsmParser {
                             }
                         }
                         if !parsed {
+                            eprintln!("invalid operands for instruction '{key}'");
                             return Err(());
                         }
                         block_has_content = true;

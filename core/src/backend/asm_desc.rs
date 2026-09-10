@@ -101,6 +101,8 @@ pub enum PrintPart {
 pub struct InstrDesc {
     pub parse: &'static [ParseStep],
     pub print: &'static [PrintPart],
+    /// Sorted target register names, excluded from immediate symbol references.
+    pub register_names: &'static [&'static str],
 }
 
 /// Parse an instruction body (the tokens after its mnemonic) per `desc`, build
@@ -113,25 +115,36 @@ pub fn parse_and_insert<'src, T: Operation, F: FnOnce(Vec<NamedAttribute>) -> T>
     builder: &mut super::AsmCursor,
     build: F,
 ) -> Result<(), ()> {
-    let attributes = parse_operands(context, desc.parse, parser)?;
+    let attributes = parse_operands(context, desc, parser)?;
     // A trailing comma means the input has more operands than this form — another
     // candidate with the same mnemonic (e.g. a masked ", v0.t" twin) must get its
     // turn.
     if matches!(parser.peek(), Some(Token::Comma)) {
         return Err(());
     }
-    builder.insert(build(attributes));
+    let op = build(attributes);
+    let handle = context.get_op(op.id());
+    if let Some(instruction) = handle
+        .clone()
+        .as_interface::<dyn super::MachineInstruction>()
+        && let Some(encoding) = instruction.info().encode
+        && super::binary::encode_with(&handle, encoding, &RegAssignment::default()).is_none()
+    {
+        context.remove_operation(op.id());
+        return Err(());
+    }
+    builder.insert(op);
     Ok(())
 }
 
 fn parse_operands<'src>(
     context: &Context,
-    steps: &[ParseStep],
+    desc: &InstrDesc,
     parser: &mut Parser<'src, Token<'src>>,
 ) -> Result<Vec<NamedAttribute>, ()> {
     let mut attributes = Vec::new();
     let mut sign = 1i64;
-    for step in steps {
+    for step in desc.parse {
         match step {
             ParseStep::Symbol(symbol) => {
                 if !matches_symbol(parser.bump(), *symbol) {
@@ -176,6 +189,11 @@ fn parse_operands<'src>(
                 ));
             }
             ParseStep::Immediate(name, signed, constraint) => {
+                if let Some(Token::Ident(symbol)) = parser.peek()
+                    && desc.register_names.binary_search(symbol).is_ok()
+                {
+                    return Err(());
+                }
                 let value = parse_immediate(parser, *signed, sign, *constraint)?;
                 attributes.push(NamedAttribute::new(context.intern(name), value));
             }

@@ -1,0 +1,30 @@
+// RUN: tmdlc --action=emit-rust --dialect=test --output=- %s | filecheck %s
+
+isa ByteIsa {
+    param XLEN: Integer = 64;
+    param ENCODING_UNIT: Integer = 8;
+}
+
+register_class GPR for [ByteIsa] {
+    param ENCODING_LEN: Integer = 4;
+    param WIDTH: Integer = self.XLEN;
+    registers { x0..x15 => { } }
+}
+
+instruction Conditional for [ByteIsa] {
+    param MNEMONIC: String = "conditional";
+    operands { dst: GPR }
+    asm { "{self.MNEMONIC} {dst}" }
+    behavior { dst = dst; }
+    encoding {
+        if dst[3] { () } else { (0x90, 0b00000, dst[2..0]) },
+    }
+}
+
+// CHECK: static ENCODE_CONDITIONAL: tir::backend::binary::EncodeSpec
+// CHECK: guard: tir::backend::binary::Guard::Not(
+// CHECK: tir::backend::binary::Guard::Bit {
+// CHECK-NEXT: op: "dst",
+// CHECK-NEXT: bit: 3,
+// CHECK: width_bytes: 2,
+// CHECK: width_bytes: (2, 2),

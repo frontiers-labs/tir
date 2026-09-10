@@ -523,6 +523,9 @@ pub fn expand(encoding: &ast::Expr, ctx: &Context) -> (Vec<Shape>, Vec<(Span, St
         };
         let mut fields = Vec::new();
         flatten(encoding, &assignment, ctx, 0, &mut fields, &mut errors);
+        if fields.is_empty() {
+            continue;
+        }
         // Two assignments that spell the same bits are one shape, whatever the
         // spans of the branches they came from.
         let key = field_key(&fields);

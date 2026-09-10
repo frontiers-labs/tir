@@ -711,17 +711,22 @@ shift_imm!("8", "8", RegShift8,
     })
 )
 
-alu_rr!(X86, "8H", "8h", RegReg8H, WriteIHighByte,
-    (Add, "add", 0x00, { add_flags!({ dst }, { src }, { 8 }, { 7 }) dst = dst + src; }),
-    (Sub, "sub", 0x28, { sub_flags!({ src }, { 7 }) dst = dst - src; }),
-    (And, "and", 0x20, { logic_flags!({ dst & src }, { 8 }, { 7 }) dst = dst & src; }),
-    (Or,  "or",  0x08, { logic_flags!({ dst | src }, { 8 }, { 7 }) dst = dst | src; }),
-    (Xor, "xor", 0x30, { logic_flags!({ dst ^ src }, { 8 }, { 7 }) dst = dst ^ src; })
-)
+macro alu_high8 {
+    ( $nsuf:literal, $osuf:literal, $tmpl:ident ) => {
+        alu_rr!(X86, $nsuf, $osuf, $tmpl, WriteIHighByte,
+            (Add, "add", 0x00, { add_flags!({ dst }, { src }, { 8 }, { 7 }) dst = dst + src; }),
+            (Sub, "sub", 0x28, { sub_flags!({ src }, { 7 }) dst = dst - src; }),
+            (And, "and", 0x20, { logic_flags!({ dst & src }, { 8 }, { 7 }) dst = dst & src; }),
+            (Or,  "or",  0x08, { logic_flags!({ dst | src }, { 8 }, { 7 }) dst = dst | src; }),
+            (Xor, "xor", 0x30, { logic_flags!({ dst ^ src }, { 8 }, { 7 }) dst = dst ^ src; }),
+            (Mov, "mov", 0x88, { dst = src; })
+        )
+    };
+}
 
-alu_rr!(X86, "8H", "8h", RegReg8H, WriteIHighByte,
-    (Mov, "mov", 0x88, { dst = src; })
-)
+alu_high8!("8H", "8h", RegReg8H)
+alu_high8!("8HL", "8hl", RegReg8HL)
+alu_high8!("8LH", "8lh", RegReg8LH)
 
 reg_ext!(RegShiftCl16, WriteIShift,
     {

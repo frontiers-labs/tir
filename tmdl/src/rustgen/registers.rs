@@ -1,8 +1,10 @@
 fn emit_register_parsers_and_printers(
     files: &[ast::File],
+    custom_assembly: bool,
 ) -> Result<proc_macro2::TokenStream, TMDLError> {
     let mut fns = Vec::new();
     let mut dispatch_arms = Vec::new();
+    let mut register_names = BTreeSet::new();
 
     for rc in files.iter().flat_map(|f| f.register_classes()) {
         let rc_name = &rc.name;
@@ -11,6 +13,7 @@ fn emit_register_parsers_and_printers(
         let name_lit = proc_macro2::Literal::string(rc_name);
         dispatch_arms.push(quote! { #name_lit => #print_fn_name(idx, prefer_abi), });
         let tables = rc.register_name_tables();
+        register_names.extend(tables.parse_names.iter().map(|(name, _)| name.clone()));
 
         let match_arms = tables
             .parse_names
@@ -122,7 +125,13 @@ fn emit_register_parsers_and_printers(
         }
     });
 
-    Ok(quote! { #(#fns)* })
+    let register_names = (!custom_assembly).then(|| quote! {
+        const REGISTER_NAMES: &[&str] = &[#(#register_names),*];
+    });
+    Ok(quote! {
+        #register_names
+        #(#fns)*
+    })
 }
 
 /// Emit a `register_info()` constructor returning the target-independent
