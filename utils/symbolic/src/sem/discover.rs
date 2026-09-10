@@ -97,6 +97,27 @@ impl SmtOracle {
         rhs: &SemGraph<A>,
         symbol_types: &[SemType],
     ) -> bool {
+        self.prove_typed(lhs, rhs, symbol_types, false)
+    }
+
+    /// Prove that `rhs` refines `lhs` on its defined domain, preserving the
+    /// semantic domains and widths of the shared symbols.
+    pub fn refines_typed<A>(
+        &self,
+        lhs: &SemGraph<A>,
+        rhs: &SemGraph<A>,
+        symbol_types: &[SemType],
+    ) -> bool {
+        self.prove_typed(lhs, rhs, symbol_types, true)
+    }
+
+    fn prove_typed<A>(
+        &self,
+        lhs: &SemGraph<A>,
+        rhs: &SemGraph<A>,
+        symbol_types: &[SemType],
+        defined_refinement: bool,
+    ) -> bool {
         let Some((g, l, r)) = disequality(lhs, rhs) else {
             return false;
         };
@@ -108,11 +129,16 @@ impl SmtOracle {
             return false;
         };
         let widths = infer_widths(&g, |id| symbol_type(id).and_then(semantic_width));
-        same_root_widths(&widths, l, r)
-            && matches!(
-                blast_with_types(&g, &widths, &types).map(|blasted| blasted.solve()),
-                Ok(SolveOutcome::Unsat)
-            )
+        if !same_root_widths(&widths, l, r) {
+            return false;
+        }
+        match blast_with_types(&g, &widths, &types) {
+            Ok(blasted) if defined_refinement => {
+                matches!(blasted.solve_defined_equivalence(l, r), SolveOutcome::Unsat)
+            }
+            Ok(blasted) => matches!(blasted.solve(), SolveOutcome::Unsat),
+            Err(_) => false,
+        }
     }
 
     fn prove<A>(
@@ -150,9 +176,13 @@ fn disequality<A>(lhs: &SemGraph<A>, rhs: &SemGraph<A>) -> Option<(OracleGraph, 
     let mut symbols = HashMap::new();
     let l = copy_reachable(lhs, lhs_root, &mut g, &mut symbols, &mut HashMap::new());
     let r = copy_reachable(rhs, rhs_root, &mut g, &mut symbols, &mut HashMap::new());
+    let lhs_bits = g.add_node(SymKind::Bitcast);
+    g.add_edge(lhs_bits, l);
+    let rhs_bits = g.add_node(SymKind::Bitcast);
+    g.add_edge(rhs_bits, r);
     let ne = g.add_node(SymKind::Ne);
-    g.add_edge(ne, l);
-    g.add_edge(ne, r);
+    g.add_edge(ne, lhs_bits);
+    g.add_edge(ne, rhs_bits);
     Some((g, l, r))
 }
 

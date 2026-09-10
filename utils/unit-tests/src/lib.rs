@@ -42,6 +42,7 @@ mod symbolic {
     mod exec;
     mod infer;
     mod ops;
+    mod rounded;
     mod sat;
     mod sexpr;
     mod smtlib;
@@ -118,6 +119,7 @@ mod core {
     mod encodings;
     mod fixtures;
     mod float;
+    mod float_refinement;
     mod instcombine;
     mod interfaces;
     mod isel;

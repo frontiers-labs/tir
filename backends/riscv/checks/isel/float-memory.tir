@@ -29,9 +29,9 @@ module {
 // CHECK: riscv.fsw {rs1 = %[[V3:[0-9]+]]:GPR, fs2 = %[[V0]]:FPR32, imm = 0}
 // CHECK: riscv.sw {rs1 = %[[V4:[0-9]+]]:GPR, rs2 = %[[V2]]:GPR, imm = 0}
 // CHECK: riscv.flw {fd = %[[V5:[0-9]+]]:FPR32, rs1 = %[[V3]]:GPR, imm = 0}
-// CHECK: riscv.fadd.s {fd = %[[V6:[0-9]+]]:FPR32, fs1 = %[[V0]]:FPR32, fs2 = %[[V5]]:FPR32}
+// CHECK: riscv.fadd.s.rne {fd = %[[V6:[0-9]+]]:FPR32, fs1 = %[[V0]]:FPR32, fs2 = %[[V5]]:FPR32}
 // CHECK: riscv.fsw {rs1 = %[[V3]]:GPR, fs2 = %[[V6]]:FPR32, imm = 0}
 // CHECK: riscv.fsd {rs1 = %[[V7:[0-9]+]]:GPR, fs2 = %[[V1]]:FPR64, imm = 0}
 // CHECK: riscv.fld {fd = %[[V8:[0-9]+]]:FPR64, rs1 = %[[V7]]:GPR, imm = 0}
-// CHECK: riscv.fadd.d {fd = %[[V9:[0-9]+]]:FPR64, fs1 = %[[V1]]:FPR64, fs2 = %[[V8]]:FPR64}
+// CHECK: riscv.fadd.d.rne {fd = %[[V9:[0-9]+]]:FPR64, fs1 = %[[V1]]:FPR64, fs2 = %[[V8]]:FPR64}
 // CHECK: asm.vret

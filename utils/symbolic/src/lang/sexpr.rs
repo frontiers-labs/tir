@@ -11,6 +11,18 @@ use crate::lang::{SymKind, SymPayload, scalar_op, scalar_op_named};
 /// itself (unary `sext`/`zext`/`trunc` taking the result width, `(concat
 /// iter)`, `map`/`reduce` lambdas).
 const OP_VOCABULARY: &[(&str, SymKind)] = &[
+    ("fadd_round", SymKind::FAddRound),
+    ("fsub_round", SymKind::FSubRound),
+    ("fmul_round", SymKind::FMulRound),
+    ("fdiv_round", SymKind::FDivRound),
+    ("fma_round", SymKind::FmaRound),
+    ("sqrt_round", SymKind::SqrtRound),
+    ("fcvt_round", SymKind::FCvtRound),
+    ("sitofp_round", SymKind::SIToFPRound),
+    ("uitofp_round", SymKind::UIToFPRound),
+    ("fptosi_round", SymKind::FPToSIRound),
+    ("fptoui_round", SymKind::FPToUIRound),
+    ("fp_flags", SymKind::FPFlags),
     ("fadd", SymKind::FAdd),
     ("fsub", SymKind::FSub),
     ("fmul", SymKind::FMul),

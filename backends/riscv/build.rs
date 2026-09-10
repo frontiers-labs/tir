@@ -9,6 +9,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         "./defs/base.tmdl",
         "./defs/multiplication.tmdl",
         "./defs/float.tmdl",
+        "./defs/float_extra.tmdl",
+        "./defs/float_round.tmdl",
         "./defs/compressed.tmdl",
         "./defs/atomics.tmdl",
         "./defs/zifencei.tmdl",

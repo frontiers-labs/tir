@@ -250,15 +250,15 @@ fn isel_rules_filter_by_feature_set() {
     assert!(!rv32i.contains(&"loaddoubleword"));
 
     // F gates the single-precision rules, D the double-precision ones.
-    assert!(!rv32i.contains(&"fadds"));
+    assert!(!rv32i.contains(&"faddsrne"));
     let rv32if = rule_names(&[Feature::RV32I, Feature::F]);
-    assert!(rv32if.contains(&"fadds"));
+    assert!(rv32if.contains(&"faddsrne"));
     assert!(rv32if.contains(&"floadword"));
     assert!(rv32if.contains(&"fmvwx"));
-    assert!(!rv32if.contains(&"faddd"));
+    assert!(!rv32if.contains(&"fadddrne"));
     let rv64ifd = rule_names(&[Feature::RV64I, Feature::F, Feature::D, Feature::D64]);
-    assert!(rv64ifd.contains(&"fadds"));
-    assert!(rv64ifd.contains(&"faddd"));
+    assert!(rv64ifd.contains(&"faddsrne"));
+    assert!(rv64ifd.contains(&"fadddrne"));
     assert!(rv64ifd.contains(&"fmvdx"));
     assert!(rv64ifd.contains(&"fstoredouble"));
 }
@@ -300,19 +300,36 @@ fn march_selects_extension_features() {
         vec![Feature::RV32I, Feature::Zmmul]
     );
     // F/D select the float extensions; D implies F.
-    assert_eq!(features("rv32if", None), vec![Feature::RV32I, Feature::F]);
+    assert_eq!(
+        features("rv32if", None),
+        vec![Feature::RV32I, Feature::F, Feature::Zicsr]
+    );
     // On rv64 the internal D64 conjunction follows D automatically.
     assert_eq!(
         features("rv64ifd", None),
-        vec![Feature::RV64I, Feature::F, Feature::D, Feature::D64]
+        vec![
+            Feature::RV64I,
+            Feature::F,
+            Feature::D,
+            Feature::Zicsr,
+            Feature::F64,
+            Feature::D64
+        ]
     );
     assert_eq!(
         features("rv64id", None),
-        vec![Feature::RV64I, Feature::F, Feature::D, Feature::D64]
+        vec![
+            Feature::RV64I,
+            Feature::F,
+            Feature::D,
+            Feature::Zicsr,
+            Feature::F64,
+            Feature::D64
+        ]
     );
     assert_eq!(
         features("rv32ifd", None),
-        vec![Feature::RV32I, Feature::F, Feature::D]
+        vec![Feature::RV32I, Feature::F, Feature::D, Feature::Zicsr]
     );
     // G abbreviates IMAFD_Zicsr_Zifencei; M, A, F, D and Zifencei are modeled.
     let g = features("rv64gc_zba_zbb", None);
@@ -333,6 +350,7 @@ fn march_selects_extension_features() {
             Feature::F,
             Feature::D,
             Feature::D64,
+            Feature::F64,
             Feature::C,
             Feature::C64,
             Feature::Zcd,
@@ -397,6 +415,8 @@ fn isa_params_resolve_from_the_selected_base() {
             ("GPR", 32),
             ("FPR32", 32),
             ("FPR64", 64),
+            ("FFLAGS", 5),
+            ("FRM", 3),
             ("GPRC", 32),
             ("FPR64C", 64),
             ("FPR32C", 32),
@@ -412,6 +432,8 @@ fn isa_params_resolve_from_the_selected_base() {
             ("GPR", 64),
             ("FPR32", 32),
             ("FPR64", 64),
+            ("FFLAGS", 5),
+            ("FRM", 3),
             ("GPRC", 64),
             ("FPR64C", 64),
             ("FPR32C", 32),

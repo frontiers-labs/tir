@@ -278,6 +278,26 @@ instruction Add for [RV32I, RV64I] : RType {
   `extract`, `width`, `clamp`, `log2Ceil`, `load`/`store` (memory), and `trap(cause)` —
   raise a synchronous exception with a constant cause code (e.g. RISC-V
   `ecall`/`ebreak`); the simulator routes it to its exception callback.
+- Floating-point builtins accept an optional final rounding-mode argument:
+  `fadd(a, b, rm)`, `fsub(a, b, rm)`, `fmul(a, b, rm)`, `fdiv(a, b, rm)`,
+  `fma(a, b, c, rm)`, `sqrt(a, rm)`, `fcvt(a, exponent, mantissa, rm)`,
+  `sitofp(a, exponent, mantissa, rm)`, `uitofp(a, exponent, mantissa, rm)`,
+  `fptosi(a, width, rm)`, and `fptoui(a, width, rm)`.
+  Explicit rounding supports binary32 (`8, 23`), binary64 (`11, 52`), and
+  32- or 64-bit integers. `fma` rounds the fused result once. Target semantics
+  define the architectural results of out-of-range and NaN integer
+  conversions. `fmin` and `fmax` take two
+  arguments and do not accept rounding modes.
+- `rm` has type `bits<3>`: `0` rounds to nearest with ties to even, `1` toward
+  zero, `2` toward negative infinity, `3` toward positive infinity, and `4`
+  to nearest with ties away from zero. Target semantics resolve architectural
+  dynamic modes and reject reserved values before calling these builtins.
+- `fp_flags(result)` returns `bits<5>` for an explicit-rounding operation,
+  including one named by a `let` binding. Bits 4 through 0 are invalid,
+  divide-by-zero, overflow, underflow, and inexact. This query does not update
+  architectural state; the instruction behavior accrues these flags in its
+  status register. Calls without `rm` retain their default rounding behavior
+  and do not support `fp_flags`.
 - Atomic memory and fence builtins (an optional trailing `Ordering::*` argument
   selects acquire/release semantics; see
   [Memory Model](memory_model.md) for the full reference):
@@ -468,7 +488,13 @@ asm { "{self.MNEMONIC} {rd}, {imm}({rs1})" }
 - Placeholders:
   - `{self.MNEMONIC}` — mnemonic from template/instruction parameters.
   - `{op}` — an operand placeholder by name (e.g., `rd`, `rs1`, `imm`).
-- Additional logic (e.g., Intel vs AT&T syntax selection) can be expressed with full expressions/blocks; today, simple literal templates are the norm.
+A nonempty tuple of string literals defines alternate operand spellings for the same mnemonic:
+
+```
+asm { ("{self.MNEMONIC} {rd}, {rs}", "{self.MNEMONIC} {rd}, {rs}, dyn") }
+```
+
+Every spelling parses to the same instruction. Printing uses the first string.
 
 ## Feature Scoping and Requirements
 

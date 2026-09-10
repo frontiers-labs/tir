@@ -1,0 +1,28 @@
+// RUN: tmdlc --action=emit-rust --dialect=test --output=- %s | filecheck %s
+// CHECK: name: "convert"
+// CHECK: guarded: Some(tir::backend::isel::PatternRef
+
+isa Test { param XLEN: Integer = 64; }
+register_class FP for [Test] {
+    param ENCODING_LEN: Integer = 5;
+    param WIDTH: Integer = 64;
+    registers { f0..f31 => { traits = [float] }, }
+}
+register_class GP for [Test] {
+    param ENCODING_LEN: Integer = 5;
+    param WIDTH: Integer = 64;
+    registers { x0..x31 => {}, }
+}
+instruction Convert for [Test] {
+    param MNEMONIC: String = "convert";
+    operands { rd: GP, a: FP, }
+    encoding { 0b1100001, 0b00000, a, 0b001, rd, 0b1010011 }
+    asm { "convert {rd}, {a}" }
+    behavior {
+        rd = sext(if a < asfloat(0xc1e0000000000000) {
+            zext(0x80000000, 32)
+        } else {
+            fptosi(a, 32, 0b001)
+        }, self.XLEN);
+    }
+}

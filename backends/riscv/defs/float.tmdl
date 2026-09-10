@@ -3,7 +3,7 @@
 // RISC-V F and D standard extensions: single/double-precision IEEE 754
 // binary floating point over the f0..f31 register file.
 
-isa F requires [RV32I | RV64I] {}
+isa F requires Zicsr {}
 isa D requires [F] {}
 
 // Internal conjunction: the D instructions that move a whole binary64 value
@@ -48,34 +48,6 @@ register_class FPR64 for [D] {
     }
 }
 
-// R-type FP arithmetic, single precision. Bits 12..14 hold the rounding mode;
-// only dynamic rounding (rm=0b111, the default `frm`) is modeled.
-template FPArith32 for [F] {
-    param MNEMONIC: String;
-    param FUNCT7: bits<7>;
-    param RM: bits<3> = 0b111;
-    param OPCODE: bits<7> = 0b1010011;
-
-    operands {
-        fd: FPR32,
-        fs1: FPR32,
-        fs2: FPR32,
-    }
-
-    encoding {
-        FUNCT7,
-        fs2,
-        fs1,
-        RM,
-        fd,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {fd}, {fs1}, {fs2}"
-    }
-}
-
 abi LP64("lp64") for [RV64I, RVV] {
     stack { align = 16; grows = down; red_zone = 0; slot_size = 8; }
     sp = GPR::x2;
@@ -102,105 +74,6 @@ abi LP64D("lp64d") for [D, RVV] : LP64 {
     rets float -> [FPR64::f10, FPR64::f11];
     callee_saved = [GPR::x2, GPR::x8..GPR::x9, GPR::x18..GPR::x27,
                     FPR64::f8..FPR64::f9, FPR64::f18..FPR64::f27];
-}
-
-// R-type FP arithmetic, double precision.
-template FPArith64 for [D] {
-    param MNEMONIC: String;
-    param FUNCT7: bits<7>;
-    param RM: bits<3> = 0b111;
-    param OPCODE: bits<7> = 0b1010011;
-
-    operands {
-        fd: FPR64,
-        fs1: FPR64,
-        fs2: FPR64,
-    }
-
-    encoding {
-        FUNCT7,
-        fs2,
-        fs1,
-        RM,
-        fd,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {fd}, {fs1}, {fs2}"
-    }
-}
-
-instruction FAddS for [F] : FPArith32 {
-    param MNEMONIC: String = "fadd.s";
-    param FUNCT7: bits<7> = 0b0000000;
-
-    behavior {
-        fd = fadd(fs1, fs2);
-    }
-}
-
-instruction FSubS for [F] : FPArith32 {
-    param MNEMONIC: String = "fsub.s";
-    param FUNCT7: bits<7> = 0b0000100;
-
-    behavior {
-        fd = fsub(fs1, fs2);
-    }
-}
-
-instruction FMulS for [F] : FPArith32 {
-    param MNEMONIC: String = "fmul.s";
-    param FUNCT7: bits<7> = 0b0001000;
-
-    behavior {
-        fd = fmul(fs1, fs2);
-    }
-}
-
-instruction FDivS for [F] : FPArith32 {
-    param MNEMONIC: String = "fdiv.s";
-    param FUNCT7: bits<7> = 0b0001100;
-
-    behavior {
-        fd = fdiv(fs1, fs2);
-    }
-}
-
-instruction FAddD for [D] : FPArith64 {
-    param MNEMONIC: String = "fadd.d";
-    param FUNCT7: bits<7> = 0b0000001;
-
-    behavior {
-        fd = fadd(fs1, fs2);
-    }
-}
-
-instruction FSubD for [D] : FPArith64 {
-    param MNEMONIC: String = "fsub.d";
-    param FUNCT7: bits<7> = 0b0000101;
-
-    behavior {
-        fd = fsub(fs1, fs2);
-    }
-}
-
-instruction FMulD for [D] : FPArith64 {
-    param MNEMONIC: String = "fmul.d";
-    param FUNCT7: bits<7> = 0b0001001;
-
-    behavior {
-        fd = fmul(fs1, fs2);
-    }
-}
-
-instruction FDivD for [D] : FPArith64 {
-    param MNEMONIC: String = "fdiv.d";
-    param FUNCT7: bits<7> = 0b0001101;
-
-    behavior {
-        fd = fdiv(fs1, fs2);
-    }
 }
 
 template FPCompare64 for [D] {
@@ -232,6 +105,7 @@ instruction FLtD for [D] : FPCompare64 {
     param FUNCT3: bits<3> = 0b001;
 
     behavior {
+        FFLAGS::fflags = FFLAGS::fflags | if ((extract(fs1, 63, 0) & 0x7FFFFFFFFFFFFFFF) ~> 0x7FF0000000000000) | ((extract(fs2, 63, 0) & 0x7FFFFFFFFFFFFFFF) ~> 0x7FF0000000000000) { 0b10000 } else { 0b00000 };
         rd = if fs1 < fs2 {
             zext(0b1, self.XLEN)
         } else {
@@ -245,6 +119,7 @@ instruction FLeD for [D] : FPCompare64 {
     param FUNCT3: bits<3> = 0b000;
 
     behavior {
+        FFLAGS::fflags = FFLAGS::fflags | if ((extract(fs1, 63, 0) & 0x7FFFFFFFFFFFFFFF) ~> 0x7FF0000000000000) | ((extract(fs2, 63, 0) & 0x7FFFFFFFFFFFFFFF) ~> 0x7FF0000000000000) { 0b10000 } else { 0b00000 };
         rd = if fs2 >= fs1 {
             zext(0b1, self.XLEN)
         } else {
@@ -258,125 +133,12 @@ instruction FEqD for [D] : FPCompare64 {
     param FUNCT3: bits<3> = 0b010;
 
     behavior {
+        FFLAGS::fflags = FFLAGS::fflags | if scalar_snan64(extract(fs1, 63, 0)) | scalar_snan64(extract(fs2, 63, 0)) { 0b10000 } else { 0b00000 };
         rd = if (fs1 >= fs2) & (fs2 >= fs1) {
             zext(0b1, self.XLEN)
         } else {
             zext(0b0, self.XLEN)
         };
-    }
-}
-
-// Convert the low signed 32-bit integer in an integer register to binary64.
-instruction FCvtDW for [D] {
-    param MNEMONIC: String = "fcvt.d.w";
-    param RM: bits<3> = 0b111;
-    param OPCODE: bits<7> = 0b1010011;
-
-    operands {
-        fd: FPR64,
-        rs1: GPR,
-    }
-
-    encoding {
-        0b1101001,
-        0b00000,
-        rs1,
-        RM,
-        fd,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {fd}, {rs1}"
-    }
-
-    behavior {
-        fd = sitofp(sext(extract(rs1, 31, 0), self.XLEN), 11, 52);
-    }
-}
-
-// Convert the low unsigned 32-bit integer in an integer register to binary64.
-instruction FCvtDWU for [D] {
-    param MNEMONIC: String = "fcvt.d.wu";
-    param RM: bits<3> = 0b111;
-    param OPCODE: bits<7> = 0b1010011;
-
-    operands {
-        fd: FPR64,
-        rs1: GPR,
-    }
-
-    encoding {
-        0b1101001,
-        0b00001,
-        rs1,
-        RM,
-        fd,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {fd}, {rs1}"
-    }
-
-    behavior {
-        fd = uitofp(extract(rs1, 31, 0), 11, 52);
-    }
-}
-
-// Convert binary64 to a signed 32-bit integer, truncating toward zero.
-instruction FCvtWD for [D] {
-    param MNEMONIC: String = "fcvt.w.d";
-    param OPCODE: bits<7> = 0b1010011;
-
-    operands {
-        rd: GPR,
-        fs1: FPR64,
-    }
-
-    encoding {
-        0b1100001,
-        0b00000,
-        fs1,
-        0b001,
-        rd,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {rd}, {fs1}"
-    }
-
-    behavior {
-        rd = sext(fptosi(fs1, 32), self.XLEN);
-    }
-}
-
-// Convert binary64 to an unsigned 32-bit integer, truncating toward zero.
-instruction FCvtWUD for [D] {
-    param MNEMONIC: String = "fcvt.wu.d";
-    param OPCODE: bits<7> = 0b1010011;
-
-    operands {
-        rd: GPR,
-        fs1: FPR64,
-    }
-
-    encoding {
-        0b1100001,
-        0b00001,
-        fs1,
-        0b001,
-        rd,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {rd}, {fs1}"
-    }
-
-    behavior {
-        rd = sext(fptoui(fs1, 32), self.XLEN);
     }
 }
 

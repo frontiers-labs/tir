@@ -1,0 +1,20 @@
+// RUN: tmdlc --action=emit-rust --dialect=test --text-only --output=- %s | filecheck %s
+// CHECK: SymKind::FPFlags
+
+isa Test { param XLEN: Integer = 32; }
+register_class GPR for [Test] {
+    param ENCODING_LEN: Integer = 5;
+    param WIDTH: Integer = self.XLEN;
+    registers { r0..r31 => {}, }
+}
+fn rounded_add(a, b) { fadd(a, b, 0b000) }
+instruction Flags for [Test] {
+    param MNEMONIC: String = "flags";
+    operands { rd: GPR, a: GPR, b: GPR, }
+    asm { "flags {rd}, {a}, {b}" }
+    behavior {
+        let result = rounded_add(a, b);
+        let alias = result;
+        rd = fp_flags(alias);
+    }
+}

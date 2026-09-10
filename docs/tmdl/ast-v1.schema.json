@@ -207,6 +207,7 @@
         "reduce",
         "zip",
         "iota",
+        "fp_flags",
         "fadd",
         "fsub",
         "fmul",

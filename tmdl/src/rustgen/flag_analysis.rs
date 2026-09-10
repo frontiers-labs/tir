@@ -11,10 +11,8 @@ struct InstructionSemantics {
     /// reads by path (e.g. `VCSR::vl`). These are implicit reads — registers not
     /// among the encoded operands — and become the rule's `implicit_uses`.
     register_symbols: HashMap<(String, u32), u32>,
-    /// The destination's full guarded semantics (`If(cond, then, else)`) when the
-    /// behavior assigns the result under a statement-level `if`/`else`, e.g. riscv
-    /// `div`. The selection pattern is the guard-relaxed else arm; this lets pass
-    /// construction prove the relaxation sound. `None` for unguarded behaviors.
+    /// The full destination expression before proposing a generalized selection
+    /// pattern. Rule validation proves the retained expression refines it.
     guarded_semantics: Option<(tir_symbolic::sem::SemGraph, tir_graph::NodeId)>,
 }
 

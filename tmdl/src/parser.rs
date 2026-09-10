@@ -1875,6 +1875,7 @@ where
                 "reduce" => Some(BuiltinFunction::Reduce),
                 "zip" => Some(BuiltinFunction::Zip),
                 "iota" => Some(BuiltinFunction::Iota),
+                "fp_flags" => Some(BuiltinFunction::FPFlags),
                 "fadd" => Some(BuiltinFunction::FAdd),
                 "fsub" => Some(BuiltinFunction::FSub),
                 "fmul" => Some(BuiltinFunction::FMul),

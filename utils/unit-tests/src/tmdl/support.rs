@@ -117,6 +117,9 @@ fn named_kind(name: &str) -> SymKind {
         return op.kind;
     }
     match name {
+        "FAdd" => SymKind::FAdd,
+        "FAddRound" => SymKind::FAddRound,
+        "FPFlags" => SymKind::FPFlags,
         "Symbol" => SymKind::Symbol,
         "Constant" => SymKind::Constant,
         "If" => SymKind::If,

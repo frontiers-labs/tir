@@ -326,15 +326,21 @@ fn emit_sym_inits(
         if let Some((_, ty)) = ops.iter().find(|(n, _)| n == name) {
             match ty {
                 Type::Struct(class_name) => {
-                    let (_is_float, width) =
+                    let (is_float, width) =
                         reg_kinds.get(class_name).copied().unwrap_or((false, 64));
-                    // A vector operand (wider than a word) is read as raw byte
-                    // lanes; the behavior splits it into lanes and interprets each
-                    // as int or float. Scalar operands — integer and float alike —
-                    // read as an `APInt` bit pattern: float operations reinterpret
-                    // those bits via the node's float type, so a float value is
-                    // never forced whole through the wrong representation, and a
-                    // bit move (`fmov Xd,Dn`) reads the pattern directly.
+                    if is_float && matches!(width, 16 | 32 | 64) {
+                        let (exponent, mantissa) = match width {
+                            16 => (5u32, 10u32),
+                            32 => (8, 23),
+                            _ => (11, 52),
+                        };
+                        entries.push(quote! {
+                            (#sym_lit, tir::backend::exec::SymSource::FloatRegisterAttr(
+                                #name_lit, #exponent, #mantissa
+                            ))
+                        });
+                        continue;
+                    }
                     let variant = if width > 64 {
                         format_ident!("WideRegisterAttr")
                     } else {

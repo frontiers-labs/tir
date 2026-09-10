@@ -513,6 +513,14 @@ fn eval_node<V, M: Memory>(
     }
 
     let result = match *graph.get_kind(node) {
+        kind if super::rounded::operation(kind).is_some() => super::rounded::evaluate(kind, &c).0,
+        SymKind::FPFlags => {
+            let operation = graph.children(node).next().unwrap();
+            let kind = *graph.get_kind(operation);
+            let (_, flags) =
+                super::rounded::evaluate(kind, &|index| child_val(graph, operation, index, cache));
+            Value::Int(APInt::new(5, u64::from(flags)))
+        }
         SymKind::Map | SymKind::Reduce => {
             unreachable!("map/reduce handled before child pre-evaluation")
         }
@@ -719,17 +727,48 @@ fn eval_float(kind: SymKind, c: &impl Fn(usize) -> Value) -> Value {
                 converted.to_bits() as u64,
             ))
         }
-        SymKind::SIToFP => {
-            let value = as_int!(c(0), "sitofp").to_i64();
-            let exponent = as_int!(c(1), "sitofp").to_u64() as u32;
-            let mantissa = as_int!(c(2), "sitofp").to_u64() as u32;
-            Value::Float(APFloat::from_f64(value as f64).convert(exponent, mantissa, false))
-        }
-        SymKind::UIToFP => {
-            let value = as_int!(c(0), "uitofp").to_u64();
-            let exponent = as_int!(c(1), "uitofp").to_u64() as u32;
-            let mantissa = as_int!(c(2), "uitofp").to_u64() as u32;
-            Value::Float(APFloat::from_f64(value as f64).convert(exponent, mantissa, false))
+        SymKind::SIToFP | SymKind::UIToFP => {
+            let signed = kind == SymKind::SIToFP;
+            let value = as_int!(c(0), "integer to float").with_signed(signed);
+            let exponent = as_int!(c(1), "integer to float").to_u64() as u32;
+            let mantissa = as_int!(c(2), "integer to float").to_u64() as u32;
+            let destination = match (exponent, mantissa) {
+                (8, 23) => Some(tir_adt::FloatWidth::W32),
+                (11, 52) => Some(tir_adt::FloatWidth::W64),
+                _ => None,
+            };
+            if let Some(destination) = destination {
+                let op = if signed {
+                    tir_adt::FloatOp::SignedToFloat
+                } else {
+                    tir_adt::FloatOp::UnsignedToFloat
+                };
+                let bits = if signed {
+                    value.to_i64() as u64
+                } else {
+                    value.to_u64()
+                };
+                let result = tir_adt::eval_float(
+                    op,
+                    tir_adt::FloatWidth::W64,
+                    destination,
+                    [bits, 0, 0],
+                    tir_adt::RoundingMode::TiesToEven,
+                );
+                Value::Float(APFloat::from_bits(
+                    exponent,
+                    mantissa,
+                    false,
+                    result.bits as u128,
+                ))
+            } else {
+                let value = if signed {
+                    value.to_i64() as f64
+                } else {
+                    value.to_u64() as f64
+                };
+                Value::Float(APFloat::from_f64(value).convert(exponent, mantissa, false))
+            }
         }
         SymKind::FPToSI => {
             let value = as_float!(c(0), "fptosi").to_f64() as i64;
@@ -842,7 +881,7 @@ fn eval_extract<V>(
     cache: &[Option<Value>],
     c: &impl Fn(usize) -> Value,
 ) -> Value {
-    let value = as_int!(c(0), "extract");
+    let value = as_raw_bits(c(0)).to_apint();
     let high = as_int!(c(1), "extract").to_u64() as u32;
     let low = as_int!(c(2), "extract").to_u64() as u32;
     // `extract(a*b, 2N-1, N)` is the TMDL idiom for a full-multiply high half
@@ -884,7 +923,7 @@ fn eval_memory<M: Memory>(
             if size > 8 {
                 memory.write_memory_bytes(address, size, as_raw_bits(c(2)))?;
             } else {
-                memory.write_memory(address, size, as_int!(c(2), "store").to_u64())?;
+                memory.write_memory(address, size, as_raw_bits(c(2)).to_apint().to_u64())?;
             }
             Value::Int(APInt::new(1, 0))
         }

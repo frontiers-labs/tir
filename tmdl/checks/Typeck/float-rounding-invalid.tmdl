@@ -1,0 +1,43 @@
+// RUN: not tmdlc --action=emit-rust --dialect=test --text-only --output=- %s | filecheck %s
+// CHECK-DAG: rounding mode must be between 0 and 4
+// CHECK-DAG: rounded floating-point format must be binary32 or binary64
+// CHECK-DAG: rounded integer width must be 32 or 64
+// CHECK-DAG: rounded operand width must be 32 or 64
+// CHECK-DAG: type mismatch
+
+isa Test { param XLEN: Integer = 32; }
+register_class GPR for [Test] {
+    param ENCODING_LEN: Integer = 5;
+    param WIDTH: Integer = self.XLEN;
+    registers { r0..r31 => {}, }
+}
+instruction Mode for [Test] {
+    param MNEMONIC: String = "mode";
+    operands { rd: GPR, a: GPR, b: GPR, }
+    asm { "mode {rd}, {a}, {b}" }
+    behavior { rd = fadd(a, b, 0b101); }
+}
+instruction Format for [Test] {
+    param MNEMONIC: String = "format";
+    operands { rd: GPR, a: GPR, }
+    asm { "format {rd}, {a}" }
+    behavior { rd = fcvt(a, 5, 10, 0b000); }
+}
+instruction Width for [Test] {
+    param MNEMONIC: String = "width";
+    operands { rd: GPR, a: GPR, }
+    asm { "width {rd}, {a}" }
+    behavior { rd = fptosi(asfloat(a), 16, 0b000); }
+}
+instruction Operand for [Test] {
+    param MNEMONIC: String = "operand";
+    operands { rd: GPR, a: GPR, }
+    asm { "operand {rd}, {a}" }
+    behavior { rd = sqrt(asfloat(a as bits<16>), 0b000); }
+}
+instruction InputType for [Test] {
+    param MNEMONIC: String = "input_type";
+    operands { rd: GPR, }
+    asm { "input_type {rd}" }
+    behavior { rd = sitofp("invalid", 8, 23, 0b000); }
+}

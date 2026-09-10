@@ -305,7 +305,8 @@ fn write_instructions(
 
             let parameters = resolve_params_for_instruction(instruction, item_cache);
             if let Some(template) = resolve_effective_asm_for_instruction(instruction, item_cache)
-                .and_then(resolve_string)
+                .and_then(crate::rustgen::resolve_asm_templates)
+                .and_then(|templates| templates.into_iter().next())
             {
                 writeln!(
                     output,
@@ -766,6 +767,7 @@ fn format_builtin(builtin: &BuiltinFunction) -> &'static str {
         BuiltinFunction::Reduce => "reduce",
         BuiltinFunction::Zip => "zip",
         BuiltinFunction::Iota => "iota",
+        BuiltinFunction::FPFlags => "fp_flags",
         BuiltinFunction::FAdd => "fadd",
         BuiltinFunction::FSub => "fsub",
         BuiltinFunction::FMul => "fmul",

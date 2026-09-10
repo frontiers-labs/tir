@@ -285,6 +285,134 @@ fn constrain(
     }
 }
 
+fn float_signature(builtin: &ast::BuiltinFunction) -> Option<(&'static str, usize, bool)> {
+    use ast::BuiltinFunction::*;
+    Some(match builtin {
+        FAdd => ("fadd", 2, true),
+        FSub => ("fsub", 2, true),
+        FMul => ("fmul", 2, true),
+        FDiv => ("fdiv", 2, true),
+        FMin => ("fmin", 2, false),
+        FMax => ("fmax", 2, false),
+        Fma => ("fma", 3, true),
+        Sqrt => ("sqrt", 1, true),
+        FCvt => ("fcvt", 3, true),
+        SIToFP => ("sitofp", 3, true),
+        UIToFP => ("uitofp", 3, true),
+        FPToSI => ("fptosi", 2, true),
+        FPToUI => ("fptoui", 2, true),
+        FPFlags => ("fp_flags", 1, false),
+        AsFloat => ("asfloat", 1, false),
+        _ => return None,
+    })
+}
+
+pub(crate) fn float_call_rounding(call: &ast::Call) -> Result<bool, String> {
+    let ast::Expr::BuiltinFunction(builtin) = &*call.callee else {
+        return Ok(false);
+    };
+    let Some((name, arity, rounding)) = float_signature(builtin) else {
+        return Ok(false);
+    };
+    if call.arguments.len() == arity {
+        return Ok(false);
+    }
+    if rounding && call.arguments.len() == arity + 1 {
+        return Ok(true);
+    }
+    let count = if rounding {
+        format!("{arity} or {} arguments", arity + 1)
+    } else if arity == 1 {
+        "1 argument".to_string()
+    } else {
+        format!("{arity} arguments")
+    };
+    Err(format!("{name} requires {count}"))
+}
+
+fn infer_rounded_call<'a>(
+    call: &'a ast::Call,
+    env: &TypeEnv,
+    tvg: &mut TypeVarGen,
+    subst: &mut Substitution,
+    cache: &mut TypeCache<'a>,
+    diags: &mut Vec<(String, Diag)>,
+    file_name: &str,
+) -> Type {
+    use ast::BuiltinFunction::*;
+    let ast::Expr::BuiltinFunction(builtin) = &*call.callee else {
+        unreachable!()
+    };
+    let args = &call.arguments;
+    let types: Vec<_> = args
+        .iter()
+        .map(|arg| infer(arg, env, tvg, subst, cache, diags, file_name))
+        .collect();
+    constrain(
+        types.last().unwrap(),
+        &Type::Bits(3),
+        subst,
+        call.span,
+        diags,
+        file_name,
+    );
+    let params = HashMap::new();
+    let constant = |arg| ast::const_eval_params(arg, &params, &params);
+    let mut error = |message: &str| {
+        diags.push((
+            file_name.to_string(),
+            Rich::custom(call.span, message.to_string()),
+        ));
+    };
+    if constant(args.last().unwrap()).is_some_and(|rm| !(0..=4).contains(&rm)) {
+        error("rounding mode must be between 0 and 4");
+    }
+    let operands = match builtin {
+        FAdd | FSub | FMul | FDiv => 2,
+        Fma => 3,
+        _ => 1,
+    };
+    for ty in &types[..operands] {
+        if bit_width(&ty.apply(subst)).is_some_and(|width| !matches!(width, 32 | 64)) {
+            error("rounded operand width must be 32 or 64");
+        }
+    }
+    let result = match builtin {
+        FCvt | SIToFP | UIToFP => match (constant(&args[1]), constant(&args[2])) {
+            (Some(8), Some(23)) => Type::Bits(32),
+            (Some(11), Some(52)) => Type::Bits(64),
+            (Some(_), Some(_)) => {
+                error("rounded floating-point format must be binary32 or binary64");
+                Type::Var(tvg.fresh())
+            }
+            _ => Type::Var(tvg.fresh()),
+        },
+        FPToSI | FPToUI => match constant(&args[1]) {
+            Some(width @ (32 | 64)) => Type::Bits(width as u16),
+            Some(_) => {
+                error("rounded integer width must be 32 or 64");
+                Type::Var(tvg.fresh())
+            }
+            None => Type::Var(tvg.fresh()),
+        },
+        _ => types[0].apply(subst),
+    };
+    for ty in &types[..operands] {
+        constrain(
+            ty,
+            &Type::Con("bits".into(), vec![Type::Var(tvg.fresh())]),
+            subst,
+            call.span,
+            diags,
+            file_name,
+        );
+    }
+    for ty in &types[1..operands] {
+        constrain(ty, &types[0], subst, call.span, diags, file_name);
+    }
+    result.apply(subst)
+}
+
 fn infer_call<'a>(
     call: &'a ast::Call,
     env: &TypeEnv,
@@ -294,6 +422,18 @@ fn infer_call<'a>(
     diags: &mut Vec<(String, Diag)>,
     file_name: &str,
 ) -> Option<Type> {
+    match float_call_rounding(call) {
+        Ok(true) => {
+            return Some(infer_rounded_call(
+                call, env, tvg, subst, cache, diags, file_name,
+            ));
+        }
+        Err(message) => {
+            diags.push((file_name.to_string(), Rich::custom(call.span, message)));
+            return None;
+        }
+        Ok(false) => {}
+    }
     let ty = match &*call.callee {
         ast::Expr::BuiltinFunction(ast::BuiltinFunction::Clamp) => {
             for arg in &call.arguments {
@@ -399,16 +539,24 @@ fn infer_call<'a>(
             | ast::BuiltinFunction::FMax,
         ) => {
             let lhs_ty = infer(&call.arguments[0], env, tvg, subst, cache, diags, file_name);
-            for arg in &call.arguments[1..] {
+            for arg in &call.arguments[1..2] {
                 let arg_ty = infer(arg, env, tvg, subst, cache, diags, file_name);
                 constrain(&arg_ty, &lhs_ty, subst, call.span, diags, file_name);
             }
             lhs_ty.apply(subst)
         }
+        ast::Expr::BuiltinFunction(ast::BuiltinFunction::FPFlags) => {
+            for arg in &call.arguments {
+                infer(arg, env, tvg, subst, cache, diags, file_name);
+            }
+            Type::Bits(5)
+        }
+        ast::Expr::BuiltinFunction(ast::BuiltinFunction::AsFloat) => {
+            infer(&call.arguments[0], env, tvg, subst, cache, diags, file_name)
+        }
         ast::Expr::BuiltinFunction(
             ast::BuiltinFunction::SIToFP
             | ast::BuiltinFunction::UIToFP
-            | ast::BuiltinFunction::AsFloat
             | ast::BuiltinFunction::FCvt
             | ast::BuiltinFunction::Fma
             | ast::BuiltinFunction::Sqrt,

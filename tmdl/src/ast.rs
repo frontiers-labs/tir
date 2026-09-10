@@ -794,6 +794,8 @@ pub enum BuiltinFunction {
     FPToSI,
     /// IEEE 754 binary floating point to unsigned integer, rounding toward zero.
     FPToUI,
+    /// `fp_flags(expr)`: the five IEEE exception flags of an explicitly rounded operation.
+    FPFlags,
     /// `todo()`: the instruction's semantics are not modeled. It suppresses
     /// instruction-selection rule generation (the op still exists, prints, and
     /// parses) and its `execute()` traps. For behaviors the TMDL expression
@@ -1993,6 +1995,7 @@ impl Call {
             | BuiltinFunction::SIToFP
             | BuiltinFunction::UIToFP
             | BuiltinFunction::FPToSI
+            | BuiltinFunction::FPFlags
             | BuiltinFunction::FPToUI => self.lower_float_builtin(builtin, ctx),
             // `todo()` marks unmodeled semantics; rustgen suppresses selection-rule
             // and `execute()` lowering for such behaviors, so this is never reached.
@@ -2118,7 +2121,64 @@ impl Call {
         builtin: &BuiltinFunction,
         ctx: &mut SemaExprLoweringCtx<'_, G>,
     ) -> tir_graph::NodeId {
+        use tir_symbolic::lang::SymKind;
+        let rounded = match builtin {
+            BuiltinFunction::FAdd => Some((2, SymKind::FAddRound)),
+            BuiltinFunction::FSub => Some((2, SymKind::FSubRound)),
+            BuiltinFunction::FMul => Some((2, SymKind::FMulRound)),
+            BuiltinFunction::FDiv => Some((2, SymKind::FDivRound)),
+            BuiltinFunction::Fma => Some((3, SymKind::FmaRound)),
+            BuiltinFunction::Sqrt => Some((1, SymKind::SqrtRound)),
+            BuiltinFunction::FCvt => Some((3, SymKind::FCvtRound)),
+            BuiltinFunction::SIToFP => Some((3, SymKind::SIToFPRound)),
+            BuiltinFunction::UIToFP => Some((3, SymKind::UIToFPRound)),
+            BuiltinFunction::FPToSI => Some((2, SymKind::FPToSIRound)),
+            BuiltinFunction::FPToUI => Some((2, SymKind::FPToUIRound)),
+            _ => None,
+        };
+        if let Some((arity, kind)) = rounded
+            && self.arguments.len() == arity + 1
+        {
+            let mut children: Vec<_> = self
+                .arguments
+                .iter()
+                .map(|arg| arg.lower_with_ctx(ctx))
+                .collect();
+            if let Some(tir_symbolic::lang::SymPayload::Int(mode)) =
+                ctx.graph.get_leaf_data(children[arity])
+            {
+                let mode = mode.to_u64();
+                children[arity] = ctx.add_leaf(
+                    SymKind::Constant,
+                    tir_symbolic::lang::SymPayload::Int(tir_adt::APInt::new(3, mode)),
+                );
+            }
+            return ctx.add_node(kind, &children);
+        }
         match builtin {
+            BuiltinFunction::FPFlags => {
+                let input = self.arguments[0].lower_with_ctx(ctx);
+                if !matches!(
+                    ctx.graph.get_kind(input),
+                    SymKind::FAddRound
+                        | SymKind::FSubRound
+                        | SymKind::FMulRound
+                        | SymKind::FDivRound
+                        | SymKind::FmaRound
+                        | SymKind::SqrtRound
+                        | SymKind::FCvtRound
+                        | SymKind::SIToFPRound
+                        | SymKind::UIToFPRound
+                        | SymKind::FPToSIRound
+                        | SymKind::FPToUIRound
+                ) {
+                    ctx.had_error = true;
+                }
+                let kind = *ctx.graph.get_kind(input);
+                let operands: Vec<_> = ctx.graph.children(input).collect();
+                let operation = ctx.add_node(kind, &operands);
+                ctx.add_node(SymKind::FPFlags, &[operation])
+            }
             BuiltinFunction::FAdd
             | BuiltinFunction::FSub
             | BuiltinFunction::FMul

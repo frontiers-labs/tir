@@ -300,6 +300,8 @@ pub(super) enum BuiltinFunction {
     Reduce,
     Zip,
     Iota,
+    #[serde(rename = "fp_flags")]
+    FPFlags,
     #[serde(rename = "fadd")]
     FAdd,
     #[serde(rename = "fsub")]
@@ -356,6 +358,7 @@ impl From<ast::BuiltinFunction> for BuiltinFunction {
             ast::BuiltinFunction::Reduce => Self::Reduce,
             ast::BuiltinFunction::Zip => Self::Zip,
             ast::BuiltinFunction::Iota => Self::Iota,
+            ast::BuiltinFunction::FPFlags => Self::FPFlags,
             ast::BuiltinFunction::FAdd => Self::FAdd,
             ast::BuiltinFunction::FSub => Self::FSub,
             ast::BuiltinFunction::FMul => Self::FMul,

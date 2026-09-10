@@ -10,10 +10,9 @@
 //! format is the IEEE binary16/binary32/binary64 interchange format of the
 //! configured SEW.
 //!
-//! Rounding follows the scalar float files: only the default dynamic rounding
-//! (frm = round-to-nearest-even) is modeled, so every arithmetic op and
-//! frm-governed conversion rounds to nearest-even, while the .rtz conversion
-//! forms truncate exactly as specified. The scalar operand of a .vf form is
+//! Vector arithmetic and frm-governed conversions currently round to
+//! nearest-even, while the .rtz conversion forms truncate.
+//! The scalar operand of a .vf form is
 //! taken from the f register file with the standard scalar-in-wider-register
 //! convention: the low SEW bits when NaN-boxed, the canonical NaN otherwise.
 //!
@@ -222,7 +221,7 @@ fn fp_neg(a) {
 // the bits above them are all ones (NaN-boxed), the canonical NaN otherwise.
 // At SEW = 64 both shifts saturate to zero and the whole register is taken.
 fn fp_scalar(rs1) {
-    hi = rs1 >> zext(VCFG::sew, 64);
+    hi = extract(rs1, 63, 0) >> zext(VCFG::sew, 64);
     ones = (zext(0b0, 64) - zext(0b1, 64)) >> zext(VCFG::sew, 64);
     if hi == ones {
         extract(rs1, VCFG::sew - zext(0b1, self.XLEN), 0)

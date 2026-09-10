@@ -6,6 +6,12 @@
 //! value-changing FP transform is allowed. Isolating an expression in its own
 //! block therefore scopes a relaxation (e.g. `contract`) to just that
 //! expression.
+//!
+//! Arithmetic results use round-to-nearest, ties-to-even. Non-NaN results,
+//! including signed zero and infinities, preserve their exact IEEE bits. When
+//! arithmetic produces a NaN, its sign and payload are unspecified, and a target
+//! may return any quiet NaN of the result format. This choice applies only to an
+//! arithmetic result. Constants, moves, and bitcasts preserve NaN bits.
 
 use crate::operation;
 

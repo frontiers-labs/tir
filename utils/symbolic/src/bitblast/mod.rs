@@ -251,12 +251,26 @@ impl<'g, V> Blaster<'g, V> {
                 out.extend(self.child_bits(id, 0));
                 Ok(out)
             }
-            Bitcast => Ok(self.child_bits(id, 0)),
+            AsFloat | Bitcast => Ok(self.child_bits(id, 0)),
             Extract => self.encode_extract(id),
             ZExt => self.encode_extend(id, false),
             SExt => self.encode_extend(id, true),
             If => self.encode_ite(id),
             Switch => self.encode_switch(id),
+            SIToFPRound | UIToFPRound
+                if self.const_u64(self.graph.children(id).nth(3).unwrap())? == 0 =>
+            {
+                self.encode_int_to_float(id, kind == SIToFPRound)
+            }
+            FPToSIRound | FPToUIRound
+                if self.const_u64(self.graph.children(id).nth(2).unwrap())? == 1 =>
+            {
+                let signed = kind == FPToSIRound;
+                let value = self.encode_float_to_int(id, signed)?;
+                let valid = self.float_to_int_defined(id, signed)?;
+                let zero = vec![self.zero(); value.len()];
+                Ok(self.mux_bits(valid, &value, &zero))
+            }
             SIToFP => self.encode_int_to_float(id, true),
             UIToFP => self.encode_int_to_float(id, false),
             FPToSI => self.encode_float_to_int(id, true),

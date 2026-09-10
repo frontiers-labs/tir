@@ -15,6 +15,8 @@ use crate::backend::{InstrInfo, MachineContext, MachineMemory, RegisterValue, Si
 pub enum SymSource {
     /// Register named by the attribute, read as a scalar.
     RegisterAttr(&'static str),
+    /// Register interpreted with its declared floating-point format.
+    FloatRegisterAttr(&'static str, u32, u32),
     /// Register named by the attribute, read as raw byte lanes (wide classes).
     WideRegisterAttr(&'static str),
     /// Integer attribute, as a signed value of the given width.
@@ -59,6 +61,16 @@ pub fn init_syms(
                 let (class, index) = register_phys(instance, mnemonic, name)?;
                 tir::sem::value_from_register(machine.read_register(class.name(), index)?)
             }
+            SymSource::FloatRegisterAttr(name, exponent, mantissa) => {
+                let (class, index) = register_phys(instance, mnemonic, name)?;
+                let bits = machine.read_register(class.name(), index)?;
+                tir::sem::Value::Float(tir::utils::APFloat::from_bits(
+                    *exponent,
+                    *mantissa,
+                    false,
+                    bits.to_u64() as u128,
+                ))
+            }
             SymSource::WideRegisterAttr(name) => {
                 let (class, index) = register_phys(instance, mnemonic, name)?;
                 tir::sem::value_from_raw_bits(machine.read_register_bits(class.name(), index)?)
@@ -102,13 +114,7 @@ pub fn eval(
     machine: &mut dyn MachineContext,
     mnemonic: &'static str,
 ) -> Result<RegisterValue, SimTrap> {
-    let mut g = tir::sem::SemGraph::new();
-    {
-        use tir::sem::ExtendSemBytes as _;
-        g.extend_sem_bytes(kinds, blob, offset)
-    };
-    let mut memory = MachineMemory(machine);
-    match tir::sem::execute_with_memory(&g, syms, &mut memory)? {
+    match eval_value(kinds, blob, offset, syms, machine)? {
         tir::sem::Value::Int(i) => Ok(RegisterValue::Int(i)),
         // A float result (e.g. `fadd`) and a lane concatenation (a vector
         // destination) are written back as raw bytes; the destination
@@ -121,6 +127,22 @@ pub fn eval(
                 .to_string(),
         }),
     }
+}
+
+fn eval_value(
+    kinds: &[tir::sem::SymKind],
+    blob: &[u8],
+    offset: u32,
+    syms: &[tir::sem::Value],
+    machine: &mut dyn MachineContext,
+) -> Result<tir::sem::Value, SimTrap> {
+    let mut graph = tir::sem::SemGraph::new();
+    {
+        use tir::sem::ExtendSemBytes as _;
+        graph.extend_sem_bytes(kinds, blob, offset)
+    };
+    let mut memory = MachineMemory(machine);
+    tir::sem::execute_with_memory(&graph, syms, &mut memory)
 }
 
 /// Writes `value` to the register named by attribute `name`, skipping the
@@ -271,8 +293,7 @@ fn run_effects(
                 }
             }
             Effect::Bind { offset, sym } => {
-                let value = evaluate(*offset, syms, machine)?;
-                bind_sym(syms, *sym, value);
+                syms[*sym] = eval_value(env.kinds, env.blob, *offset, syms, machine)?;
             }
             Effect::Trap { offset } => {
                 let value = evaluate(*offset, syms, machine)?;

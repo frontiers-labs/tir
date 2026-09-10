@@ -1,0 +1,27 @@
+// RUN: not tmdlc --action=emit-rust --dialect=test --text-only --output=- %s | filecheck %s
+// CHECK-COUNT-3: fp_flags requires an explicit-rounding operation
+
+isa Test { param XLEN: Integer = 32; }
+register_class GPR for [Test] {
+    param ENCODING_LEN: Integer = 5;
+    param WIDTH: Integer = self.XLEN;
+    registers { r0..r31 => {}, }
+}
+instruction Default for [Test] {
+    param MNEMONIC: String = "default";
+    operands { rd: GPR, a: GPR, b: GPR, }
+    asm { "default {rd}, {a}, {b}" }
+    behavior { rd = fp_flags(fadd(a, b)); }
+}
+instruction Register for [Test] {
+    param MNEMONIC: String = "register";
+    operands { rd: GPR, a: GPR, }
+    asm { "register {rd}, {a}" }
+    behavior { rd = fp_flags(a); }
+}
+instruction Binding for [Test] {
+    param MNEMONIC: String = "binding";
+    operands { rd: GPR, a: GPR, }
+    asm { "binding {rd}, {a}" }
+    behavior { let ordinary = a; rd = fp_flags(ordinary); }
+}

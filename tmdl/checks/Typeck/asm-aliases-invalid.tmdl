@@ -1,0 +1,16 @@
+// RUN: not tmdlc --action=emit-rust --dialect=test --output=- %s 2>&1 | filecheck %s
+// CHECK: Asm block must be a literal string or a nonempty tuple of literal strings
+
+isa Test {}
+register_class R for [Test] {
+    param ENCODING_LEN: Integer = 1;
+    param WIDTH: Integer = 32;
+    registers { r0..r1 => { traits = [] }, }
+}
+instruction Add for [Test] {
+    param MNEMONIC: String = "add";
+    operands { rd: R, rs: R, }
+    encoding { 0b000000, rd, rs }
+    asm { ("{self.MNEMONIC} {rd}, {rs}", 1) }
+    behavior { rd = rs; }
+}

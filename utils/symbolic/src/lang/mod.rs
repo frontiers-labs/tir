@@ -4,11 +4,12 @@ use tir_graph::Matchable;
 mod exec;
 mod infer;
 mod ops;
+mod rounded;
 mod sexpr;
 mod types;
 
 pub use exec::{Memory, execute, execute_with_memory};
-pub use infer::{canonicalize_for_selection, infer_types, infer_widths};
+pub use infer::{canonicalize_for_selection, infer_types, infer_widths, selection_fallback};
 pub use ops::{SCALAR_OPS, ScalarOp, SmtTemplate, WidthRule, scalar_op, scalar_op_named};
 pub use sexpr::{BuildError, SemBuilderHooks, SemExpr, build, op_kind, op_name, parse};
 pub use types::{FloatFormat, SemType, TypeError, TypeUnifier, TypeVar, Width, WidthVar};
@@ -176,6 +177,18 @@ pub enum SymKind {
     /// register bits) between IEEE binary formats.
     // #[arity = 3]
     FCvt,
+    FAddRound,
+    FSubRound,
+    FMulRound,
+    FDivRound,
+    FmaRound,
+    SqrtRound,
+    FCvtRound,
+    SIToFPRound,
+    UIToFPRound,
+    FPToSIRound,
+    FPToUIRound,
+    FPFlags,
 }
 
 impl SymKind {
@@ -209,7 +222,8 @@ impl SymKind {
             | SymKind::Log2Ceil
             | SymKind::Sqrt
             | SymKind::AsFloat
-            | SymKind::Port => 1,
+            | SymKind::Port
+            | SymKind::FPFlags => 1,
             SymKind::IterConcat => 1,
             SymKind::If
             | SymKind::Clamp
@@ -220,7 +234,17 @@ impl SymKind {
             | SymKind::Fma
             | SymKind::SIToFP
             | SymKind::UIToFP
-            | SymKind::FCvt => 3,
+            | SymKind::FCvt
+            | SymKind::FAddRound
+            | SymKind::FSubRound
+            | SymKind::FMulRound
+            | SymKind::FDivRound
+            | SymKind::FPToSIRound
+            | SymKind::FPToUIRound => 3,
+            SymKind::FmaRound
+            | SymKind::FCvtRound
+            | SymKind::SIToFPRound
+            | SymKind::UIToFPRound => 4,
             SymKind::StoreMemory | SymKind::StoreConditional | SymKind::Loop => 4,
             SymKind::AtomicRmw => 5,
             _ => 2,

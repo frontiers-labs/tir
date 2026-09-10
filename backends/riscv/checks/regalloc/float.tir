@@ -17,6 +17,6 @@ module {
 }
 
 // CHECK: asm.symbol {name = "mix", arg_regs = [%{{[0-9]+}}:FPR32, %{{[0-9]+}}:GPR, %{{[0-9]+}}:FPR64, %{{[0-9]+}}:FPR32]
-// CHECK: riscv.fadd.s {fd = %{{[0-9]+}}:{{f[0-9]+}}, fs1 = %{{[0-9]+}}:f10, fs2 = %{{[0-9]+}}:f12}
-// CHECK: riscv.fmul.s {fd = %{{[0-9]+}}:f10,
+// CHECK: riscv.fadd.s.rne {fd = %{{[0-9]+}}:{{f[0-9]+}}, fs1 = %{{[0-9]+}}:f10, fs2 = %{{[0-9]+}}:f12}
+// CHECK: riscv.fmul.s.rne {fd = %{{[0-9]+}}:f10,
 // CHECK: asm.vret

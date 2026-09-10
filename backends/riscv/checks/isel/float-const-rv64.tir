@@ -13,5 +13,5 @@ module {
 // CHECK: riscv.addi {rd = %{{[0-9]+}}:GPR, rs1 = x0,
 // CHECK: riscv.slli
 // CHECK: riscv.fmv.d.x {fd = %{{[0-9]+}}:FPR64, rs1 = %{{[0-9]+}}:GPR}
-// CHECK: riscv.fmul.d
+// CHECK: riscv.fmul.d.rne
 // CHECK-NOT: constantf

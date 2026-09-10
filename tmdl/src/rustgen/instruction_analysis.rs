@@ -59,9 +59,18 @@ fn analyze_instruction_semantics(
         )
     });
 
+    let (pattern, root, guarded_semantics) =
+        if let Some(candidate) = tir_symbolic::lang::selection_fallback(&pattern, lowering.root) {
+            use tir_graph::Dag;
+            let root = candidate.root()?;
+            (candidate, root, Some((pattern, lowering.root)))
+        } else {
+            (pattern, lowering.root, guarded_semantics)
+        };
+
     Some(InstructionSemantics {
         pattern,
-        root: lowering.root,
+        root,
         variable_symbols: lowering.variable_symbols,
         fixed_register_by_class,
         register_symbols: lowering.register_symbols,
@@ -352,7 +361,10 @@ fn value_zero_form_operands(
 /// reads a fixed bit range regardless of the bound value's width, and a
 /// memory read yields fresh bits unrelated to its address operands.
 fn width_sensitive_symbols(
-    dag: &impl tir_graph::Dag<Node = tir_symbolic::lang::SymKind, Leaf = tir_symbolic::lang::SymPayload<tir_symbolic::sem::ValueId>>,
+    dag: &impl tir_graph::Dag<
+        Node = tir_symbolic::lang::SymKind,
+        Leaf = tir_symbolic::lang::SymPayload<tir_symbolic::sem::ValueId>,
+    >,
     node_widths: &[Option<u32>],
 ) -> HashSet<u32> {
     use tir_symbolic::lang::SymKind as K;
@@ -385,7 +397,10 @@ fn width_sensitive_symbols(
 /// (memory reads) — symbols below them are not width-sensitive through this
 /// path (see [`width_sensitive_symbols`]).
 fn collect_symbols(
-    dag: &impl tir_graph::Dag<Node = tir_symbolic::lang::SymKind, Leaf = tir_symbolic::lang::SymPayload<tir_symbolic::sem::ValueId>>,
+    dag: &impl tir_graph::Dag<
+        Node = tir_symbolic::lang::SymKind,
+        Leaf = tir_symbolic::lang::SymPayload<tir_symbolic::sem::ValueId>,
+    >,
     node: tir_graph::NodeId,
     out: &mut HashSet<u32>,
 ) {
@@ -423,7 +438,10 @@ struct ImmediateRange {
 /// `extract(imm, hi, 0)` wrapper (a shift-amount mask) narrows the usable bits.
 /// Selection uses these to refuse constants the field cannot represent.
 fn immediate_operand_ranges(
-    dag: &impl tir_graph::Dag<Node = tir_symbolic::lang::SymKind, Leaf = tir_symbolic::lang::SymPayload<tir_symbolic::sem::ValueId>>,
+    dag: &impl tir_graph::Dag<
+        Node = tir_symbolic::lang::SymKind,
+        Leaf = tir_symbolic::lang::SymPayload<tir_symbolic::sem::ValueId>,
+    >,
     ops: &[(String, Type)],
     variable_symbols: &HashMap<String, u32>,
     constraints: &HashMap<String, OperandConstraint>,
@@ -758,9 +776,20 @@ pub(crate) fn resolve_string(expr: &ast::Expr) -> Option<String> {
     }
 }
 
-fn resolve_asm_template_for_instruction<'a>(
-    inst: &'a ast::Instruction,
-    item_cache: &HashMap<&'a str, &'a ast::Item>,
-) -> Option<String> {
-    resolve_effective_asm_for_instruction(inst, item_cache).and_then(resolve_string)
+pub(crate) fn resolve_asm_templates(expr: &ast::Expr) -> Option<Vec<String>> {
+    match expr {
+        ast::Expr::Block(block) if block.last_expr_return && block.stmts.len() == 1 => {
+            resolve_asm_templates(&block.stmts[0])
+        }
+        ast::Expr::Tuple(tuple) if !tuple.elements.is_empty() => tuple
+            .elements
+            .iter()
+            .map(|element| match element {
+                ast::Expr::Lit(ast::Lit::Str(value)) => Some(value.value().to_owned()),
+                _ => None,
+            })
+            .collect(),
+        ast::Expr::Lit(ast::Lit::Str(value)) => Some(vec![value.value().to_owned()]),
+        _ => None,
+    }
 }

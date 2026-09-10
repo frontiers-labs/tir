@@ -1,0 +1,19 @@
+// RUN: tmdlc --action=emit-rust --dialect=test --output=- %s | filecheck %s
+// CHECK-DAG: fn parse_add_inst
+// CHECK-DAG: fn parse_add_alias_1_inst
+// CHECK-DAG: Keyword("dyn")
+// CHECK-DAG: asm: Some(&DESC_ADD)
+
+isa Test {}
+register_class R for [Test] {
+    param ENCODING_LEN: Integer = 1;
+    param WIDTH: Integer = 32;
+    registers { r0..r1 => { traits = [] }, }
+}
+instruction Add for [Test] {
+    param MNEMONIC: String = "add";
+    operands { rd: R, rs: R, }
+    encoding { 0b000000, rd, rs }
+    asm { ("{self.MNEMONIC} {rd}, {rs}", "{self.MNEMONIC} {rd}, {rs}, dyn") }
+    behavior { rd = rs; }
+}

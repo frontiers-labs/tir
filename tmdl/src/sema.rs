@@ -1791,23 +1791,19 @@ fn check_asm(
     _params_cache: &HashMap<&str, (Type, Option<ast::Expr>)>,
     file_name: &str,
 ) -> Vec<(String, Diag)> {
-    // Asm may be wrapped in a block (`asm { "..." }`); unwrap a single-expression block.
-    let inner = match asm_ {
-        ast::Expr::Block(b) if b.stmts.len() == 1 => &b.stmts[0],
-        other => other,
-    };
-    match inner {
-        ast::Expr::Lit(ast::Lit::Str(_)) => vec![],
-        _ => vec![(
+    if crate::rustgen::resolve_asm_templates(asm_).is_some() {
+        vec![]
+    } else {
+        vec![(
             file_name.to_string(),
             Rich::custom(
                 instruction.span,
                 format!(
-                    "Asm block must be a single literal string for instruction '{}'",
+                    "Asm block must be a literal string or a nonempty tuple of literal strings for instruction '{}'",
                     instruction.name
                 ),
             ),
-        )],
+        )]
     }
 }
 
@@ -2028,12 +2024,14 @@ fn check_let_bindings(
     diags: &mut Vec<(String, Diag)>,
 ) {
     let mut bound = HashSet::new();
+    let mut uses_flags = false;
     crate::utils::visit_exprs(behavior, &mut |e| {
         if let ast::Expr::Let(l) = e {
             bound.insert(l.name.clone());
         }
+        uses_flags |= matches!(e, ast::Expr::BuiltinFunction(ast::BuiltinFunction::FPFlags));
     });
-    if bound.is_empty() {
+    if bound.is_empty() && !uses_flags {
         return;
     }
 
@@ -2045,18 +2043,51 @@ fn check_let_bindings(
     }
 
     impl Walker<'_> {
+        fn rounded(expr: &ast::Expr, scope: &[(String, bool)]) -> bool {
+            match expr {
+                ast::Expr::Call(call) => crate::typeck::float_call_rounding(call) == Ok(true),
+                ast::Expr::Ident(id) => scope
+                    .iter()
+                    .rev()
+                    .find(|(name, _)| name == &id.name)
+                    .is_some_and(|(_, rounded)| *rounded),
+                ast::Expr::Block(block) if block.last_expr_return => {
+                    let mut nested = scope.to_vec();
+                    for stmt in &block.stmts {
+                        if let ast::Expr::Let(binding) = stmt {
+                            nested.push((
+                                binding.name.clone(),
+                                Self::rounded(&binding.value, &nested),
+                            ));
+                        }
+                    }
+                    block
+                        .stmts
+                        .last()
+                        .is_some_and(|expr| Self::rounded(expr, &nested))
+                }
+                _ => false,
+            }
+        }
+
         fn err(&self, diags: &mut Vec<(String, Diag)>, span: Span, message: String) {
             diags.push((self.file_name.to_string(), Rich::custom(span, message)));
         }
 
         /// Walk `expr` in source order; `scope` holds the bindings visible at
         /// this point, and is truncated back on leaving a nested scope.
-        fn walk(&self, expr: &ast::Expr, scope: &mut Vec<String>, diags: &mut Vec<(String, Diag)>) {
-            let nested = |walker: &Self, e: &ast::Expr, scope: &mut Vec<String>, diags: &mut _| {
-                let depth = scope.len();
-                walker.walk(e, scope, diags);
-                scope.truncate(depth);
-            };
+        fn walk(
+            &self,
+            expr: &ast::Expr,
+            scope: &mut Vec<(String, bool)>,
+            diags: &mut Vec<(String, Diag)>,
+        ) {
+            let nested =
+                |walker: &Self, e: &ast::Expr, scope: &mut Vec<(String, bool)>, diags: &mut _| {
+                    let depth = scope.len();
+                    walker.walk(e, scope, diags);
+                    scope.truncate(depth);
+                };
             match expr {
                 ast::Expr::Let(l) => {
                     if let Some(width) = &l.width {
@@ -2064,7 +2095,9 @@ fn check_let_bindings(
                     }
                     self.walk(&l.value, scope, diags);
                     let owner = self.owner;
-                    if scope.contains(&l.name) || self.reserved.contains(&l.name) {
+                    if scope.iter().any(|(name, _)| name == &l.name)
+                        || self.reserved.contains(&l.name)
+                    {
                         self.err(
                             diags,
                             l.span,
@@ -2076,10 +2109,12 @@ fn check_let_bindings(
                     }
                     // Bind regardless, so a rejected redefinition does not also
                     // report every later use as undefined.
-                    scope.push(l.name.clone());
+                    scope.push((l.name.clone(), Self::rounded(&l.value, scope)));
                 }
                 ast::Expr::Ident(id) => {
-                    if self.bound.contains(&id.name) && !scope.contains(&id.name) {
+                    if self.bound.contains(&id.name)
+                        && !scope.iter().any(|(name, _)| name == &id.name)
+                    {
                         let owner = self.owner;
                         self.err(
                             diags,
@@ -2108,6 +2143,18 @@ fn check_let_bindings(
                 }
                 ast::Expr::Unary(u) => self.walk(&u.x, scope, diags),
                 ast::Expr::Call(c) => {
+                    if matches!(
+                        &*c.callee,
+                        ast::Expr::BuiltinFunction(ast::BuiltinFunction::FPFlags)
+                    ) && c.arguments.len() == 1
+                        && !Self::rounded(&c.arguments[0], scope)
+                    {
+                        self.err(
+                            diags,
+                            c.span,
+                            "fp_flags requires an explicit-rounding operation".to_string(),
+                        );
+                    }
                     for argument in &c.arguments {
                         self.walk(argument, scope, diags);
                     }
@@ -2134,7 +2181,12 @@ fn check_let_bindings(
                 }
                 ast::Expr::Lambda(l) => nested(self, &l.body, scope, diags),
                 ast::Expr::Lit(_) | ast::Expr::Path(_) | ast::Expr::BuiltinFunction(_) => {}
-                ast::Expr::Tuple(_) | ast::Expr::Invalid => {}
+                ast::Expr::Tuple(tuple) => {
+                    for element in &tuple.elements {
+                        self.walk(element, scope, diags);
+                    }
+                }
+                ast::Expr::Invalid => {}
             }
         }
     }

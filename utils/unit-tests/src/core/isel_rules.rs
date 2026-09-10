@@ -201,3 +201,31 @@ fn build_rules_resolves_register_widths() {
     assert!(rules[0].result_register.is_none());
     assert_eq!(rules[0].operand_registers[0].0, 0);
 }
+
+#[test]
+fn expression_conversion_clipping_is_proved_on_the_defined_domain() {
+    for (clipped, accepted) in [(0x8000_0000, true), (0, false)] {
+        let mut full = SemGraph::new();
+        let input = symbol(&mut full, 0);
+        let min_bits = constant(&mut full, (-2147483648.0f64).to_bits(), 64);
+        let min = nary(&mut full, SymKind::AsFloat, &[min_bits]);
+        let guard = binary(&mut full, SymKind::Lt, input, min);
+        let width = constant(&mut full, 32, 32);
+        let rm = constant(&mut full, 1, 3);
+        let converted = nary(&mut full, SymKind::FPToSIRound, &[input, width, rm]);
+        let clip = constant(&mut full, clipped, 32);
+        let selected = nary(&mut full, SymKind::If, &[guard, clip, converted]);
+        let xlen = symbol(&mut full, 1);
+        nary(&mut full, SymKind::SExt, &[selected, xlen]);
+        let mut pattern = SemGraph::new();
+        let input = symbol(&mut pattern, 0);
+        let width = constant(&mut pattern, 32, 32);
+        nary(&mut pattern, SymKind::FPToSI, &[input, width]);
+        let rule = Rule {
+            guarded_semantics: Some(full),
+            operand_registers: vec![(0, RegisterRequirement::whole(RegisterCapability::float(64)))],
+            ..Rule::new("clip", pattern, LATENCY_COST_SCALE, emit_unreachable)
+        };
+        assert_eq!(prove_guarded_relaxations(&[rule]).is_ok(), accepted);
+    }
+}

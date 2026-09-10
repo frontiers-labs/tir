@@ -1,0 +1,26 @@
+// RUN: tmdlc --action=emit-rust --dialect=test --output=- %s | filecheck %s
+// CHECK-DAG: SymKind::FAddRound
+// CHECK-DAG: SymKind::FPFlags
+
+isa Test { param XLEN: Integer = 64; }
+register_class FP for [Test] {
+    param ENCODING_LEN: Integer = 5;
+    param WIDTH: Integer = 64;
+    registers { f0..f31 => { traits = [float] }, }
+}
+register_class FLAGS for [Test] {
+    param ENCODING_LEN: Integer = 0;
+    param WIDTH: Integer = 5;
+    registers { flags => { traits = [status_flag] }, }
+}
+instruction Add for [Test] {
+    param MNEMONIC: String = "add";
+    operands { rd: FP, a: FP, b: FP, }
+    encoding { 0b0000000, b, a, 0b100, rd, 0b1010011 }
+    asm { "add {rd}, {a}, {b}" }
+    behavior {
+        let result = fadd(a, b, 0b100);
+        FLAGS::flags = FLAGS::flags | fp_flags(result);
+        rd = result;
+    }
+}

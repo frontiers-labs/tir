@@ -66,30 +66,30 @@ module {
 }
 
 // CHECK: asm.symbol {name = "fp32", arg_regs = [%[[V0:[0-9]+]]:FPR32, %[[V1:[0-9]+]]:FPR32]
-// CHECK: riscv.fadd.s {fd = %[[V2:[0-9]+]]:FPR32, fs1 = %[[V0]]:FPR32, fs2 = %[[V1]]:FPR32}
-// CHECK: riscv.fsub.s {fd = %[[V3:[0-9]+]]:FPR32, fs1 = %[[V2]]:FPR32, fs2 = %[[V1]]:FPR32}
-// CHECK: riscv.fmul.s {fd = %[[V4:[0-9]+]]:FPR32, fs1 = %[[V0]]:FPR32, fs2 = %[[V3]]:FPR32}
-// CHECK: riscv.fdiv.s {fd = %[[V5:[0-9]+]]:FPR32, fs1 = %[[V4]]:FPR32, fs2 = %[[V1]]:FPR32}
+// CHECK: riscv.fadd.s.rne {fd = %[[V2:[0-9]+]]:FPR32, fs1 = %[[V0]]:FPR32, fs2 = %[[V1]]:FPR32}
+// CHECK: riscv.fsub.s.rne {fd = %[[V3:[0-9]+]]:FPR32, fs1 = %[[V2]]:FPR32, fs2 = %[[V1]]:FPR32}
+// CHECK: riscv.fmul.s.rne {fd = %[[V4:[0-9]+]]:FPR32, fs1 = %[[V0]]:FPR32, fs2 = %[[V3]]:FPR32}
+// CHECK: riscv.fdiv.s.rne {fd = %[[V5:[0-9]+]]:FPR32, fs1 = %[[V4]]:FPR32, fs2 = %[[V1]]:FPR32}
 // CHECK: asm.vret
 
 // CHECK: asm.symbol {name = "fp64", arg_regs = [%{{[0-9]+}}:FPR64, %{{[0-9]+}}:FPR64]
-// CHECK: riscv.fadd.d {fd = %{{[0-9]+}}:FPR64, fs1 = %{{[0-9]+}}:FPR64, fs2 = %{{[0-9]+}}:FPR64}
-// CHECK: riscv.fsub.d
-// CHECK: riscv.fmul.d
-// CHECK: riscv.fdiv.d
+// CHECK: riscv.fadd.d.rne {fd = %{{[0-9]+}}:FPR64, fs1 = %{{[0-9]+}}:FPR64, fs2 = %{{[0-9]+}}:FPR64}
+// CHECK: riscv.fsub.d.rne
+// CHECK: riscv.fmul.d.rne
+// CHECK: riscv.fdiv.d.rne
 // CHECK: asm.vret
 
 // CHECK: asm.symbol {name = "convert", arg_regs = [%{{[0-9]+}}:GPR]
-// CHECK: riscv.fcvt.d.w {fd = %{{[0-9]+}}:FPR64, rs1 = %{{[0-9]+}}:GPR}
+// CHECK: riscv.fcvt.d.w.rne {fd = %{{[0-9]+}}:FPR64, rs1 = %{{[0-9]+}}:GPR}
 // CHECK: asm.vret
 // CHECK: asm.symbol {name = "convert_unsigned", arg_regs = [%{{[0-9]+}}:GPR]
-// CHECK: riscv.fcvt.d.wu {fd = %{{[0-9]+}}:FPR64, rs1 = %{{[0-9]+}}:GPR}
+// CHECK: riscv.fcvt.d.wu.rne {fd = %{{[0-9]+}}:FPR64, rs1 = %{{[0-9]+}}:GPR}
 // CHECK: asm.vret
 // CHECK: asm.symbol {name = "convert_to_signed", arg_regs = [%{{[0-9]+}}:FPR64]
-// CHECK: riscv.fcvt.w.d {rd = %{{[0-9]+}}:GPR, fs1 = %{{[0-9]+}}:FPR64}
+// CHECK: riscv.fcvt.w.d.rtz {rd = %{{[0-9]+}}:GPR, fs1 = %{{[0-9]+}}:FPR64}
 // CHECK: asm.vret
 // CHECK: asm.symbol {name = "convert_to_unsigned"
-// CHECK: riscv.fcvt.wu.d {rd = %{{[0-9]+}}:GPR, fs1 = %{{[0-9]+}}:FPR64}
+// CHECK: riscv.fcvt.wu.d.rtz {rd = %{{[0-9]+}}:GPR, fs1 = %{{[0-9]+}}:FPR64}
 // CHECK: asm.vret
 // CHECK-LABEL: asm.symbol {name = "less"
 // CHECK: riscv.flt.d

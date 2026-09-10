@@ -26,6 +26,15 @@ impl TargetConfig {
         if let Some(mattr) = mattr {
             tir::backend::apply_mattr(&mut config.features, mattr, "RISC-V", attr_features)?;
         }
+        if config.features.contains(&Feature::F) && !config.features.contains(&Feature::Zicsr) {
+            config.features.push(Feature::Zicsr);
+        }
+        if config.xlen == 64
+            && config.features.contains(&Feature::F)
+            && !config.features.contains(&Feature::F64)
+        {
+            config.features.push(Feature::F64);
+        }
         // D64 is the internal D∧RV64 conjunction (rv64-only D instructions
         // like fmv.d.x); it follows the D/XLEN selection automatically.
         if config.xlen == 64
@@ -127,6 +136,7 @@ impl TargetConfig {
             .filter(|f| match f {
                 Feature::RV32I | Feature::C32 | Feature::Zcf => xlen == 32,
                 Feature::RV64I
+                | Feature::F64
                 | Feature::D64
                 | Feature::C64
                 | Feature::Zmmul64

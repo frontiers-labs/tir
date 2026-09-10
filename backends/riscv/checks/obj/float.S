@@ -5,8 +5,8 @@
 convert:
     fcvt.d.w fa0, a0
     fcvt.d.wu fa1, a1
-    fcvt.w.d a2, fa2
-    fcvt.wu.d a3, fa3
+    fcvt.w.d a2, fa2, rtz
+    fcvt.wu.d a3, fa3, rtz
     flt.d a0, fa0, fa1
     fle.d a0, fa0, fa1
     feq.d a0, fa0, fa1

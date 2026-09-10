@@ -1209,3 +1209,31 @@ instruction names is a register, which the machine-IR verifier checks.
 | `AuxEmit` | what a block leaves a destruction to read: a fused branch, a materialized value, or a decided test |
 | `Destructor` | turns the structured regions into machine blocks once every block has committed |
 | `EmitRequest` | what an emitter writes into: backing op (if any) + destination values |
+
+## IEEE arithmetic result refinement
+
+Strict floating-point arithmetic requires the exact non-NaN result, including
+signed zero and infinity. An arithmetic NaN result permits any quiet NaN payload
+and sign. Instruction selection therefore checks result membership when a target
+chooses a particular quiet NaN. It does not equate arbitrary floating-point bit
+patterns or relax moves, constants, or bitcasts.
+
+The refinement proof first checks that the source arithmetic and the target's
+constant round-to-nearest arithmetic have the same operation and operands. It
+replaces that shared result with a fresh floating-point symbol and retains the
+target's result-selection expression. The proof checks two cases for every bit
+pattern of that symbol: a non-NaN result must keep every bit, and a NaN result
+must produce a quiet NaN. A typed SAT circuit proves this obligation without
+expanding an adder, multiplier, divider, square root, or fused multiply-add.
+
+A changed finite result, a signaling NaN replacement, a different rounding mode,
+or different arithmetic operands fails this check. The full target expression
+remains attached to the selection rule as its proof obligation.
+
+Rounded conversions retain their full result expression, including target
+clipping, as a proof obligation. A candidate can use the generic conversion
+only when its constant rounding mode matches that conversion's semantics. The
+typed refinement proof checks every input on which the source conversion is
+defined and requires the same result bits. Target behavior on invalid source
+inputs can define clipping or NaN results without weakening this check. A
+failed or unsupported proof rejects the candidate.

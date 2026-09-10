@@ -1,0 +1,29 @@
+// RUN: not tmdlc --action=emit-rust --dialect=test --text-only --output=- %s | filecheck %s
+// CHECK-DAG: fadd requires 2 or 3 arguments
+// CHECK-DAG: fmin requires 2 arguments
+// CHECK-DAG: fp_flags requires 1 argument
+
+isa Test { param XLEN: Integer = 32; }
+register_class GPR for [Test] {
+    param ENCODING_LEN: Integer = 5;
+    param WIDTH: Integer = self.XLEN;
+    registers { r0..r31 => {}, }
+}
+instruction Missing for [Test] {
+    param MNEMONIC: String = "missing";
+    operands { rd: GPR, }
+    asm { "missing {rd}" }
+    behavior { rd = fadd(); }
+}
+instruction Extra for [Test] {
+    param MNEMONIC: String = "extra";
+    operands { rd: GPR, a: GPR, b: GPR, }
+    asm { "extra {rd}, {a}, {b}" }
+    behavior { rd = fmin(a, b, 0b000); }
+}
+instruction Flags for [Test] {
+    param MNEMONIC: String = "flags";
+    operands { rd: GPR, }
+    asm { "flags {rd}" }
+    behavior { rd = fp_flags(); }
+}

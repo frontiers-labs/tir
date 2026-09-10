@@ -84,3 +84,40 @@ fn flag_reading_rules_compose_the_comparison_they_prove() {
         .rule_program("static RULE_SELECTEQ_VIA_CMP")
         .contains("If"));
 }
+
+#[test]
+fn float_flags_keep_the_operation_of_a_let_binding() {
+    let generated = generate(&fixture("checks/Rust/float-rounding.tmdl"), "test");
+    let flags = generated
+        .programs
+        .iter()
+        .find(|program| program.contains("FPFlags"))
+        .unwrap();
+    assert!(flags.contains("FAddRound"), "{flags}");
+}
+
+#[test]
+fn rounded_mode_literals_keep_the_semantic_three_bit_width() {
+    let source = std::fs::read_to_string(fixture("checks/Rust/float-rounding.tmdl")).unwrap();
+    for mode in ["0b000", "0b001"] {
+        let generated = super::support::generate_source(
+            "rounding-width.tmdl",
+            &source.replace("0b100", mode),
+            "test",
+        );
+        let expected = if mode == "0b000" {
+            "Constant0:3"
+        } else {
+            "Constant1:3"
+        };
+        let rounded: Vec<_> = generated
+            .programs
+            .iter()
+            .filter(|program| program.contains("FAddRound"))
+            .collect();
+        assert!(!rounded.is_empty());
+        for program in rounded {
+            assert!(program.contains(expected), "{program}");
+        }
+    }
+}
