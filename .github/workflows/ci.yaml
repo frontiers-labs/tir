@@ -68,7 +68,7 @@ jobs:
       - uses: taiki-e/install-action@nextest
       # The SPIR-V export checks validate their output; without the validator
       # they fail rather than pass by default.
-      - run: sudo apt-get update && sudo apt-get install -y spirv-tools
+      - run: .github/scripts/install-spirv-tools.sh
       - uses: mozilla-actions/sccache-action@v0.0.10
       - uses: Swatinem/rust-cache@v2
         with:
