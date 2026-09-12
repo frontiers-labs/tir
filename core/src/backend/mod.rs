@@ -13,6 +13,7 @@ pub mod liveness;
 pub mod lower;
 mod operations;
 mod parser;
+mod pbqp_dump;
 pub mod pipeline;
 pub mod prealloc;
 mod printer;

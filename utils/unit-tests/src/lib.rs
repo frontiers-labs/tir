@@ -17,6 +17,7 @@ mod fcc {
     mod link_host_compare;
     mod link_mixed_objects;
     mod link_support;
+    mod pbqp_dump;
     mod sema;
     mod slab;
     mod support;
