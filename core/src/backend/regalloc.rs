@@ -395,6 +395,7 @@ fn allocate_with_affinities(
         problem.matrix_bytes(),
     );
 
+    crate::backend::pbqp_dump::dump(&problem, crate::backend::pbqp_dump::PbqpTaskKind::RegAlloc);
     let solution = pbqp::solve(&problem).map_err(|e| RegAllocError::Solver(format!("{e:?}")))?;
 
     let mut assignment = HashMap::new();

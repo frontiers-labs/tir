@@ -84,6 +84,38 @@ Pass explicit file paths to (re)generate specific tests, including brand-new
 ones. Hand-authored tests (those without the generated header) are never
 touched by a bulk regeneration.
 
+### Dumping PBQP tasks
+
+Set `TIR_PBQP_DUMP_DIR` to capture each PBQP task that reaches the solver:
+
+```sh
+TIR_PBQP_DUMP_DIR=/tmp/pbqp fcc compile --stage asm --march riscv64 input.c -o output.s
+```
+
+An unset or empty value disables dumping. The compiler creates the directory
+and writes one file per solve immediately before the solve. This includes
+register allocation retries and unsuccessful solves. Dump failures produce a
+warning on stderr and do not stop compilation. Files use the name
+`<kind>-<pid>-<sequence>.json`. The compiler never replaces an existing file.
+
+Each file contains one version 1 `tir-pbqp` JSON object. `kind` is `isel` or
+`regalloc`. `node_costs` holds one cost vector per node. Each `edges` entry has
+`lhs`, `rhs`, and `matrix` IDs. Each `matrices` entry has `rows`, `cols`, and a
+flat `costs` array. Node IDs and matrix IDs are zero-based array positions.
+Edges are sorted by `(lhs, rhs)`, where `lhs < rhs`. Matrix rows index the `lhs`
+node's alternatives, and columns index the `rhs` node's alternatives. The
+`costs` array is row-major. The dump contains only matrices referenced by an
+edge, and shared matrices keep one matrix ID.
+
+`inf_cost` records the solver's infinity threshold. Costs at or above this
+threshold are forbidden by the objective, but the dump preserves every input
+cost as an unsigned 64-bit JSON integer. Readers must preserve integer
+precision. Python's `json` module does so. Parsing through a binary64 number
+can change costs.
+
+The dump records the mathematical task before solver reductions. It does not
+contain a solution.
+
 ### Running external benchmarks
 
 Use `cargo xtask extbench compile` to compare compilation times and memory,

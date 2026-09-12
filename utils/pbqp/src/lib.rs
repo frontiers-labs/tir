@@ -3,6 +3,8 @@
 
 use std::collections::{BTreeSet, VecDeque};
 
+mod dump;
+
 pub const INF_COST: u64 = u64::MAX / 4;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
