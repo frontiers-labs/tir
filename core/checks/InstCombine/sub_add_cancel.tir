@@ -1,0 +1,45 @@
+// RUN: tir opt --pass restructure-nodes,instcombine-nodes --verify %s | filecheck %s
+
+module {
+  %f1 = func.func @sub_add_cancel_1(%x: !i1, %y: !i1) -> !i1 {
+    %sum = addi %x, %y : !i1
+    %result = subi %sum, %y : !i1
+    func.return %result
+  }
+  %f8 = func.func @sub_add_cancel_8(%x: !i8, %y: !i8) -> !i8 {
+    %sum = addi %x, %y : !i8
+    %result = subi %sum, %y : !i8
+    func.return %result
+  }
+  %f32 = func.func @sub_add_cancel_32(%x: !i32, %y: !i32) -> !i32 {
+    %sum = addi %x, %y : !i32
+    %result = subi %sum, %y : !i32
+    func.return %result
+  }
+  %f64 = func.func @sub_add_cancel_64(%x: !i64, %y: !i64) -> !i64 {
+    %sum = addi %x, %y : !i64
+    %result = subi %sum, %y : !i64
+    func.return %result
+  }
+  module_end
+}
+
+// CHECK-LABEL: func.func @sub_add_cancel_1(%[[X1:[0-9]+]]: !i1, %[[Y1:[0-9]+]]: !i1)
+// CHECK-NOT: addi
+// CHECK-NOT: subi
+// CHECK: -> %[[X1]]
+
+// CHECK-LABEL: func.func @sub_add_cancel_8(%[[X8:[0-9]+]]: !i8, %[[Y8:[0-9]+]]: !i8)
+// CHECK-NOT: addi
+// CHECK-NOT: subi
+// CHECK: -> %[[X8]]
+
+// CHECK-LABEL: func.func @sub_add_cancel_32(%[[X32:[0-9]+]]: !i32, %[[Y32:[0-9]+]]: !i32)
+// CHECK-NOT: addi
+// CHECK-NOT: subi
+// CHECK: -> %[[X32]]
+
+// CHECK-LABEL: func.func @sub_add_cancel_64(%[[X64:[0-9]+]]: !i64, %[[Y64:[0-9]+]]: !i64)
+// CHECK-NOT: addi
+// CHECK-NOT: subi
+// CHECK: -> %[[X64]]

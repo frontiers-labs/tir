@@ -9,15 +9,35 @@ fn main() -> Result<(), Box<dyn Error>> {
     // it.
     check("defs/isel.pdl")?;
 
-    let input = "src/passes/instcombine/rules.pdl";
-    println!("cargo:rerun-if-changed={input}");
-    let source = fs::read_to_string(input)?;
+    let mut source = String::new();
+    let mut inputs = Vec::new();
+    for input in [
+        "src/passes/instcombine/rules/integer.pdl",
+        "src/passes/instcombine/rules/bitwise.pdl",
+        "src/passes/instcombine/rules/control.pdl",
+        "src/passes/instcombine/rules/fp.pdl",
+    ] {
+        println!("cargo:rerun-if-changed={input}");
+        let contents = fs::read_to_string(input)?;
+        let start = source.len();
+        source.push_str(&contents);
+        source.push('\n');
+        inputs.push((input, start, contents));
+    }
     let rust = match tir_pdl::compile_to_rust(&source) {
         Ok(rust) => rust,
         Err(diagnostics) => {
             let mut stderr = io::stderr().lock();
-            for diagnostic in diagnostics {
-                diagnostic.write(input, &source, &mut stderr)?;
+            for mut diagnostic in diagnostics {
+                let (input, start, contents) = inputs
+                    .iter()
+                    .rev()
+                    .find(|(_, start, _)| *start <= diagnostic.span.start)
+                    .expect("diagnostic belongs to an input");
+                diagnostic.span = ((diagnostic.span.start - start).min(contents.len())
+                    ..(diagnostic.span.end - start).min(contents.len()))
+                    .into();
+                diagnostic.write(input, contents, &mut stderr)?;
             }
             return Err("failed to compile instcombine PDL rules".into());
         }

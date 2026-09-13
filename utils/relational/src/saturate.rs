@@ -6,7 +6,7 @@ use std::collections::HashMap;
 
 use tir_adt::FxBuildHasher;
 
-use crate::telemetry::{RoundStats, Timer};
+use crate::telemetry::{RoundStats, Timer, apply_rule, register_rules};
 use crate::{ClassId, Engine, Externs, Label, Match, Plan, Rule, trace_enabled};
 
 /// Δ_h grouped by operator: for each, the classes holding it paired with the row
@@ -134,6 +134,7 @@ impl<L: Label> Engine<L> {
         node_limit: usize,
     ) {
         let timer = Timer::start();
+        register_rules(rules);
         let mut log = self.take_changed();
         let mut touched = log.clone();
         let mut delta = log.take().map(Delta::new);
@@ -177,7 +178,11 @@ impl<L: Label> Engine<L> {
                     if trace_enabled() {
                         eprintln!("M {} {}", rule.name, self.find(m.root).index());
                     }
-                    stats.apply(self, |eg| eg.apply_head(&rule.head, rule.head_vars, m));
+                    stats.apply(self, |eg| {
+                        apply_rule(&rule.name, eg, |eg| {
+                            eg.apply_head(&rule.head, rule.head_vars, m)
+                        })
+                    });
                 }
             }
             self.rebuild();
@@ -246,7 +251,9 @@ impl<L: Label> Engine<L> {
         }
         for (rule, matches) in &found {
             for m in matches {
-                self.apply_head(&rule.head, rule.head_vars, m);
+                apply_rule(&rule.name, self, |eg| {
+                    eg.apply_head(&rule.head, rule.head_vars, m)
+                });
             }
         }
         self.rebuild();

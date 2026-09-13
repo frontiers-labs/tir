@@ -1,0 +1,156 @@
+// RUN: tir opt --pass restructure-nodes,instcombine-nodes --verify %s | filecheck %s
+
+module {
+  %f8 = func.func @mul_const_reassociate_8(%x: !i8, %y: !i8, %z: !i8) -> !i8 {
+    %a = constant {value = 3} : !i8
+    %b = constant {value = 5} : !i8
+    %t = muli %x, %a : !i8
+    %r = muli %t, %b : !i8
+    func.return %r
+  }
+  %f32 = func.func @mul_const_reassociate_32(%x: !i32, %y: !i32, %z: !i32) -> !i32 {
+    %a = constant {value = 3} : !i32
+    %b = constant {value = 5} : !i32
+    %t = muli %x, %a : !i32
+    %r = muli %t, %b : !i32
+    func.return %r
+  }
+  %f64 = func.func @mul_const_reassociate_64(%x: !i64, %y: !i64, %z: !i64) -> !i64 {
+    %a = constant {value = 3} : !i64
+    %b = constant {value = 5} : !i64
+    %t = muli %x, %a : !i64
+    %r = muli %t, %b : !i64
+    func.return %r
+  }
+  module_end
+}
+
+// CHECK-LABEL: func.func @mul_const_reassociate_8(%[[X8:[0-9]+]]: !i8, %[[Y8:[0-9]+]]: !i8, %[[Z8:[0-9]+]]: !i8)
+// CHECK-NOT: addi
+// CHECK-NOT: subi
+// CHECK-NOT: muli
+// CHECK-NOT: divui
+// CHECK-NOT: divsi
+// CHECK-NOT: remui
+// CHECK-NOT: remsi
+// CHECK-NOT: andi
+// CHECK-NOT: ori
+// CHECK-NOT: xori
+// CHECK-NOT: shli
+// CHECK-NOT: shrui
+// CHECK-NOT: shrsi
+// CHECK: %[[C8_1:[0-9]+]] = constant {value = 15} : !i8
+// CHECK-NOT: addi
+// CHECK-NOT: subi
+// CHECK-NOT: muli
+// CHECK-NOT: divui
+// CHECK-NOT: divsi
+// CHECK-NOT: remui
+// CHECK-NOT: remsi
+// CHECK-NOT: andi
+// CHECK-NOT: ori
+// CHECK-NOT: xori
+// CHECK-NOT: shli
+// CHECK-NOT: shrui
+// CHECK-NOT: shrsi
+// CHECK: %[[R8:[0-9]+]] = muli %[[X8]], %[[C8_1]] : !i8
+// CHECK-NOT: addi
+// CHECK-NOT: subi
+// CHECK-NOT: muli
+// CHECK-NOT: divui
+// CHECK-NOT: divsi
+// CHECK-NOT: remui
+// CHECK-NOT: remsi
+// CHECK-NOT: andi
+// CHECK-NOT: ori
+// CHECK-NOT: xori
+// CHECK-NOT: shli
+// CHECK-NOT: shrui
+// CHECK-NOT: shrsi
+// CHECK: -> %[[R8]]
+// CHECK-LABEL: func.func @mul_const_reassociate_32(%[[X32:[0-9]+]]: !i32, %[[Y32:[0-9]+]]: !i32, %[[Z32:[0-9]+]]: !i32)
+// CHECK-NOT: addi
+// CHECK-NOT: subi
+// CHECK-NOT: muli
+// CHECK-NOT: divui
+// CHECK-NOT: divsi
+// CHECK-NOT: remui
+// CHECK-NOT: remsi
+// CHECK-NOT: andi
+// CHECK-NOT: ori
+// CHECK-NOT: xori
+// CHECK-NOT: shli
+// CHECK-NOT: shrui
+// CHECK-NOT: shrsi
+// CHECK: %[[C32_1:[0-9]+]] = constant {value = 15} : !i32
+// CHECK-NOT: addi
+// CHECK-NOT: subi
+// CHECK-NOT: muli
+// CHECK-NOT: divui
+// CHECK-NOT: divsi
+// CHECK-NOT: remui
+// CHECK-NOT: remsi
+// CHECK-NOT: andi
+// CHECK-NOT: ori
+// CHECK-NOT: xori
+// CHECK-NOT: shli
+// CHECK-NOT: shrui
+// CHECK-NOT: shrsi
+// CHECK: %[[R32:[0-9]+]] = muli %[[X32]], %[[C32_1]] : !i32
+// CHECK-NOT: addi
+// CHECK-NOT: subi
+// CHECK-NOT: muli
+// CHECK-NOT: divui
+// CHECK-NOT: divsi
+// CHECK-NOT: remui
+// CHECK-NOT: remsi
+// CHECK-NOT: andi
+// CHECK-NOT: ori
+// CHECK-NOT: xori
+// CHECK-NOT: shli
+// CHECK-NOT: shrui
+// CHECK-NOT: shrsi
+// CHECK: -> %[[R32]]
+// CHECK-LABEL: func.func @mul_const_reassociate_64(%[[X64:[0-9]+]]: !i64, %[[Y64:[0-9]+]]: !i64, %[[Z64:[0-9]+]]: !i64)
+// CHECK-NOT: addi
+// CHECK-NOT: subi
+// CHECK-NOT: muli
+// CHECK-NOT: divui
+// CHECK-NOT: divsi
+// CHECK-NOT: remui
+// CHECK-NOT: remsi
+// CHECK-NOT: andi
+// CHECK-NOT: ori
+// CHECK-NOT: xori
+// CHECK-NOT: shli
+// CHECK-NOT: shrui
+// CHECK-NOT: shrsi
+// CHECK: %[[C64_1:[0-9]+]] = constant {value = 15} : !i64
+// CHECK-NOT: addi
+// CHECK-NOT: subi
+// CHECK-NOT: muli
+// CHECK-NOT: divui
+// CHECK-NOT: divsi
+// CHECK-NOT: remui
+// CHECK-NOT: remsi
+// CHECK-NOT: andi
+// CHECK-NOT: ori
+// CHECK-NOT: xori
+// CHECK-NOT: shli
+// CHECK-NOT: shrui
+// CHECK-NOT: shrsi
+// CHECK: %[[R64:[0-9]+]] = muli %[[X64]], %[[C64_1]] : !i64
+// CHECK-NOT: addi
+// CHECK-NOT: subi
+// CHECK-NOT: muli
+// CHECK-NOT: divui
+// CHECK-NOT: divsi
+// CHECK-NOT: remui
+// CHECK-NOT: remsi
+// CHECK-NOT: andi
+// CHECK-NOT: ori
+// CHECK-NOT: xori
+// CHECK-NOT: shli
+// CHECK-NOT: shrui
+// CHECK-NOT: shrsi
+// CHECK: -> %[[R64]]

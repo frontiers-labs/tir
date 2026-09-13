@@ -496,13 +496,17 @@ fn names_same_memory_seen(
             .all(|&input| names_same_memory_seen(context, input, port, seen))
 }
 
-/// A pure value op the e-graph may reason about: one result, no regions, and a declared semantic expression.
+/// A value operation with declared semantics or exact floating-point bit behavior.
 fn is_pure_value(instance: &OpHandle) -> bool {
     instance.results().len() == 1
         && instance.regions().is_empty()
-        && instance
+        && (instance
             .clone()
             .as_dyn_op()
             .semantic_expr(&mut crate::sem::SemGraph::new())
             .is_some()
+            // These operations only transform sign bits and cannot trap.
+            || instance.is::<crate::fp::ops::NegOp>()
+            || instance.is::<crate::fp::ops::AbsOp>()
+            || instance.is::<crate::fp::ops::CopySignOp>())
 }

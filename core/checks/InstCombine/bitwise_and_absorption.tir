@@ -1,0 +1,105 @@
+// RUN: tir opt --pass restructure-nodes,instcombine-nodes --verify %s | filecheck %s
+
+module {
+  %f8 = func.func @and_absorption_8(%x: !i8, %y: !i8, %z: !i8) -> !i8 {
+    %a = ori %x, %y : !i8
+    %r = andi %a, %x : !i8
+    func.return %r
+  }
+  %f32 = func.func @and_absorption_32(%x: !i32, %y: !i32, %z: !i32) -> !i32 {
+    %a = ori %x, %y : !i32
+    %r = andi %a, %x : !i32
+    func.return %r
+  }
+  %f64 = func.func @and_absorption_64(%x: !i64, %y: !i64, %z: !i64) -> !i64 {
+    %a = ori %x, %y : !i64
+    %r = andi %a, %x : !i64
+    func.return %r
+  }
+  module_end
+}
+
+// CHECK-LABEL: func.func @and_absorption_8(%[[X8:[0-9]+]]: !i8, %[[Y8:[0-9]+]]: !i8, %[[Z8:[0-9]+]]: !i8)
+// CHECK-NOT: addi
+// CHECK-NOT: subi
+// CHECK-NOT: muli
+// CHECK-NOT: divui
+// CHECK-NOT: divsi
+// CHECK-NOT: remui
+// CHECK-NOT: remsi
+// CHECK-NOT: andi
+// CHECK-NOT: ori
+// CHECK-NOT: xori
+// CHECK-NOT: shli
+// CHECK-NOT: shrui
+// CHECK-NOT: shrsi
+// CHECK-NOT: addi
+// CHECK-NOT: subi
+// CHECK-NOT: muli
+// CHECK-NOT: divui
+// CHECK-NOT: divsi
+// CHECK-NOT: remui
+// CHECK-NOT: remsi
+// CHECK-NOT: andi
+// CHECK-NOT: ori
+// CHECK-NOT: xori
+// CHECK-NOT: shli
+// CHECK-NOT: shrui
+// CHECK-NOT: shrsi
+// CHECK: -> %[[X8]]
+// CHECK-LABEL: func.func @and_absorption_32(%[[X32:[0-9]+]]: !i32, %[[Y32:[0-9]+]]: !i32, %[[Z32:[0-9]+]]: !i32)
+// CHECK-NOT: addi
+// CHECK-NOT: subi
+// CHECK-NOT: muli
+// CHECK-NOT: divui
+// CHECK-NOT: divsi
+// CHECK-NOT: remui
+// CHECK-NOT: remsi
+// CHECK-NOT: andi
+// CHECK-NOT: ori
+// CHECK-NOT: xori
+// CHECK-NOT: shli
+// CHECK-NOT: shrui
+// CHECK-NOT: shrsi
+// CHECK-NOT: addi
+// CHECK-NOT: subi
+// CHECK-NOT: muli
+// CHECK-NOT: divui
+// CHECK-NOT: divsi
+// CHECK-NOT: remui
+// CHECK-NOT: remsi
+// CHECK-NOT: andi
+// CHECK-NOT: ori
+// CHECK-NOT: xori
+// CHECK-NOT: shli
+// CHECK-NOT: shrui
+// CHECK-NOT: shrsi
+// CHECK: -> %[[X32]]
+// CHECK-LABEL: func.func @and_absorption_64(%[[X64:[0-9]+]]: !i64, %[[Y64:[0-9]+]]: !i64, %[[Z64:[0-9]+]]: !i64)
+// CHECK-NOT: addi
+// CHECK-NOT: subi
+// CHECK-NOT: muli
+// CHECK-NOT: divui
+// CHECK-NOT: divsi
+// CHECK-NOT: remui
+// CHECK-NOT: remsi
+// CHECK-NOT: andi
+// CHECK-NOT: ori
+// CHECK-NOT: xori
+// CHECK-NOT: shli
+// CHECK-NOT: shrui
+// CHECK-NOT: shrsi
+// CHECK-NOT: addi
+// CHECK-NOT: subi
+// CHECK-NOT: muli
+// CHECK-NOT: divui
+// CHECK-NOT: divsi
+// CHECK-NOT: remui
+// CHECK-NOT: remsi
+// CHECK-NOT: andi
+// CHECK-NOT: ori
+// CHECK-NOT: xori
+// CHECK-NOT: shli
+// CHECK-NOT: shrui
+// CHECK-NOT: shrsi
+// CHECK: -> %[[X64]]

@@ -1,0 +1,37 @@
+// RUN: tir opt --pass restructure-nodes,instcombine-nodes,verify-deps --verify %s | filecheck %s
+
+module {
+  %cancel = func.func @cancel(%x: !f32, %y: !f32) -> !f32 {
+    %sum = fp.add %x, %y : !f32
+    %result = fp.sub %sum, %y : !f32
+    func.return %result
+  }
+  %telescope = func.func @telescope(%x: !f64, %y: !f64, %z: !f64) -> !f64 {
+    %a = fp.sub %x, %y : !f64
+    %b = fp.sub %y, %z : !f64
+    %result = fp.add %a, %b : !f64
+    func.return %result
+  }
+  %multiply_one = func.func @multiply_one(%x: !f32) -> !f32 {
+    %env = state.entry_state : !state<fp.env>
+    %one = fp.constant {bits = 1065353216} : !f32
+    %result, %next = fp.mul %x, %one state(%env) {semantics = {exceptions = "flags", rounding = "dynamic"}} : !f32
+    func.return %result state(%next)
+  }
+  module_end
+}
+
+// CHECK-LABEL: func.func @cancel(%[[X:[0-9]+]]: !f32, %[[Y:[0-9]+]]: !f32)
+// CHECK: %[[SUM:[0-9]+]] = fp.add %[[X]], %[[Y]] : !f32
+// CHECK: %[[RESULT:[0-9]+]] = fp.sub %[[SUM]], %[[Y]] : !f32
+// CHECK: -> %[[RESULT]]
+// CHECK-LABEL: func.func @telescope(%[[X:[0-9]+]]: !f64, %[[Y:[0-9]+]]: !f64, %[[Z:[0-9]+]]: !f64)
+// CHECK: %[[A:[0-9]+]] = fp.sub %[[X]], %[[Y]] : !f64
+// CHECK: %[[B:[0-9]+]] = fp.sub %[[Y]], %[[Z]] : !f64
+// CHECK: %[[RESULT:[0-9]+]] = fp.add %[[A]], %[[B]] : !f64
+// CHECK: -> %[[RESULT]]
+// CHECK-LABEL: func.func @multiply_one(%[[X:[0-9]+]]: !f32)
+// CHECK: %[[ENV:[0-9]+]] = state.entry_state : !state<fp.env>
+// CHECK: %[[ONE:[0-9]+]] = fp.constant {bits = 1065353216} : !f32
+// CHECK: %[[RESULT:[0-9]+]], %[[NEXT:[0-9]+]] = fp.mul %[[X]], %[[ONE]] state(%[[ENV]]) {semantics = {exceptions = "flags", rounding = "dynamic"}} : !f32
+// CHECK: -> %[[RESULT]], %[[NEXT]]

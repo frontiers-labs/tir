@@ -1,0 +1,61 @@
+// RUN: tir opt --pass restructure-nodes,instcombine-nodes --verify %s | filecheck %s
+
+module {
+  %f1 = func.func @telescope_1(%x: !i1, %y: !i1, %z: !i1) -> !i1 {
+    %a = subi %x, %y : !i1
+    %b = subi %y, %z : !i1
+    %result = addi %a, %b : !i1
+    func.return %result
+  }
+  %f8 = func.func @telescope_8(%x: !i8, %y: !i8, %z: !i8) -> !i8 {
+    %a = subi %x, %y : !i8
+    %b = subi %y, %z : !i8
+    %result = addi %a, %b : !i8
+    func.return %result
+  }
+  %f32 = func.func @telescope_32(%x: !i32, %y: !i32, %z: !i32) -> !i32 {
+    %a = subi %x, %y : !i32
+    %b = subi %y, %z : !i32
+    %result = addi %a, %b : !i32
+    func.return %result
+  }
+  %f64 = func.func @telescope_64(%x: !i64, %y: !i64, %z: !i64) -> !i64 {
+    %a = subi %x, %y : !i64
+    %b = subi %y, %z : !i64
+    %result = addi %a, %b : !i64
+    func.return %result
+  }
+  module_end
+}
+
+// CHECK-LABEL: func.func @telescope_1(%[[X1:[0-9]+]]: !i1, %[[Y1:[0-9]+]]: !i1, %[[Z1:[0-9]+]]: !i1)
+// CHECK-NOT: subi
+// CHECK-NOT: addi
+// CHECK: %[[R1:[0-9]+]] = subi %[[X1]], %[[Z1]] : !i1
+// CHECK-NOT: subi
+// CHECK-NOT: addi
+// CHECK: -> %[[R1]]
+
+// CHECK-LABEL: func.func @telescope_8(%[[X8:[0-9]+]]: !i8, %[[Y8:[0-9]+]]: !i8, %[[Z8:[0-9]+]]: !i8)
+// CHECK-NOT: subi
+// CHECK-NOT: addi
+// CHECK: %[[R8:[0-9]+]] = subi %[[X8]], %[[Z8]] : !i8
+// CHECK-NOT: subi
+// CHECK-NOT: addi
+// CHECK: -> %[[R8]]
+
+// CHECK-LABEL: func.func @telescope_32(%[[X32:[0-9]+]]: !i32, %[[Y32:[0-9]+]]: !i32, %[[Z32:[0-9]+]]: !i32)
+// CHECK-NOT: subi
+// CHECK-NOT: addi
+// CHECK: %[[R32:[0-9]+]] = subi %[[X32]], %[[Z32]] : !i32
+// CHECK-NOT: subi
+// CHECK-NOT: addi
+// CHECK: -> %[[R32]]
+
+// CHECK-LABEL: func.func @telescope_64(%[[X64:[0-9]+]]: !i64, %[[Y64:[0-9]+]]: !i64, %[[Z64:[0-9]+]]: !i64)
+// CHECK-NOT: subi
+// CHECK-NOT: addi
+// CHECK: %[[R64:[0-9]+]] = subi %[[X64]], %[[Z64]] : !i64
+// CHECK-NOT: subi
+// CHECK-NOT: addi
+// CHECK: -> %[[R64]]

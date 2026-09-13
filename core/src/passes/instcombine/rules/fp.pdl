@@ -1,0 +1,15 @@
+// These sign-bit operations neither round nor quiet signaling NaNs.
+rule fp-neg-neg: fp.neg(fp.neg(x)) => x;
+rule fp-copysign-self: fp.copysign(x, x) => x;
+rule fp-copysign-copysign-magnitude:
+  fp.copysign(fp.copysign(x, y), z) => fp.copysign(x, z);
+rule fp-copysign-copysign-sign:
+  fp.copysign(x, fp.copysign(y, z)) => fp.copysign(x, z);
+rule fp-abs-abs: fp.abs(fp.abs(x)) => fp.abs(x);
+rule fp-abs-neg: fp.abs(fp.neg(x)) => fp.abs(x);
+rule fp-abs-copysign: fp.abs(fp.copysign(x, y)) => fp.abs(x);
+rule fp-copysign-abs-magnitude: fp.copysign(fp.abs(x), y) => fp.copysign(x, y);
+rule fp-copysign-neg-magnitude: fp.copysign(fp.neg(x), y) => fp.copysign(x, y);
+rule fp-copysign-abs-sign: fp.copysign(x, fp.abs(y)) => fp.abs(x);
+rule fp-copysign-neg-self: fp.copysign(x, fp.neg(x)) => fp.neg(x);
+rule fp-neg-copysign-neg-sign: fp.neg(fp.copysign(x, fp.neg(y))) => fp.copysign(x, y);

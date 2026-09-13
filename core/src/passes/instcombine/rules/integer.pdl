@@ -1,0 +1,45 @@
+group AnyInt = int<_>;
+
+rule add-zero: builtin.addi(x: int<W>, 0) => x;
+rule mul-one: builtin.muli(x: int<W>, 1) => x;
+rule mul-zero: builtin.muli(x: int<W>, 0) => const<W>(0);
+rule mul-pow2-to-shl:
+  builtin.muli(x: int<W>, c: const) => builtin.shli(x, const<W>(ctz(c)))
+  where popcount(c) == 1, c != 1;
+rule sub-self: builtin.subi(x: int<W>, x) => const<W>(0);
+rule sub-zero: builtin.subi(x: int<W>, 0) => x;
+// Cancellation is valid modulo 2^W, but not for rounded floating-point arithmetic.
+rule sub-add-cancel: builtin.subi(builtin.addi(x: int<W>, y), y) => x;
+rule add-sub-cancel: builtin.addi(builtin.subi(x: int<W>, y), y) => x;
+rule sub-sub-cancel: builtin.subi(x: int<W>, builtin.subi(x, y)) => y;
+rule add-sub-telescope:
+  builtin.addi(builtin.subi(x: int<W>, y), builtin.subi(y, z)) => builtin.subi(x, z);
+rule sub-add-negate-right:
+  builtin.subi(x: int<W>, builtin.addi(x, y)) => builtin.subi(const<W>(0), y);
+rule sub-sub-left:
+  builtin.subi(builtin.subi(x: int<W>, y), x) => builtin.subi(const<W>(0), y);
+rule sub-common-left:
+  builtin.subi(builtin.subi(x: int<W>, y), builtin.subi(x, z)) => builtin.subi(z, y);
+rule sub-common-right:
+  builtin.subi(builtin.subi(x: int<W>, y), builtin.subi(z, y)) => builtin.subi(x, z);
+rule sub-add-common-left:
+  builtin.subi(builtin.addi(x: int<W>, y), builtin.addi(x, z)) => builtin.subi(y, z);
+rule add-add-sub-cancel:
+  builtin.addi(builtin.addi(x: int<W>, y), builtin.subi(z, y)) => builtin.addi(x, z);
+rule add-const-reassociate:
+  builtin.addi(builtin.addi(x: int<W>, a: const), b: const) => builtin.addi(x, const<W>(a + b));
+rule sub-const-reassociate:
+  builtin.subi(builtin.subi(x: int<W>, a: const), b: const) => builtin.subi(x, const<W>(a + b));
+rule add-sub-const-reassociate:
+  builtin.addi(builtin.subi(x: int<W>, a: const), b: const) => builtin.addi(x, const<W>(b - a));
+rule sub-add-const-reassociate:
+  builtin.subi(builtin.addi(x: int<W>, a: const), b: const) => builtin.addi(x, const<W>(a - b));
+rule mul-const-reassociate:
+  builtin.muli(builtin.muli(x: int<W>, a: const), b: const) => builtin.muli(x, const<W>(a * b));
+rule mul-neg-one:
+  builtin.muli(x: int<W>, c: const) => builtin.subi(const<W>(0), x)
+  where popcount(c) == W;
+rule udiv-one: builtin.divui(x: int<W>, 1) => x;
+rule sdiv-one: builtin.divsi(x: int<W>, 1) => x;
+rule urem-one: builtin.remui(x: int<W>, 1) => const<W>(0);
+rule srem-one: builtin.remsi(x: int<W>, 1) => const<W>(0);

@@ -1,0 +1,21 @@
+
+rule and-zero: builtin.andi(x: int<W>, 0) => const<W>(0);
+rule and-allones: builtin.andi(x: int<W>, c: const) => x where popcount(c) == W;
+rule and-self: builtin.andi(x: int<W>, x) => x;
+rule or-zero: builtin.ori(x: int<W>, 0) => x;
+rule or-allones: builtin.ori(x: int<W>, c: const) => const<W>(-1) where popcount(c) == W;
+rule or-self: builtin.ori(x: int<W>, x) => x;
+rule xor-zero: builtin.xori(x: int<W>, 0) => x;
+rule xor-self: builtin.xori(x: int<W>, x) => const<W>(0);
+rule and-absorption: builtin.andi(builtin.ori(x: int<W>, y), x) => x;
+rule xor-xor-and: builtin.xori(builtin.xori(x: int<W>, y), builtin.andi(x, y)) => builtin.ori(x, y);
+rule or-absorption: builtin.ori(builtin.andi(x: int<W>, y), x) => x;
+rule xor-cancel: builtin.xori(builtin.xori(x: int<W>, y), y) => x;
+rule and-complement: builtin.andi(x: int<W>, builtin.xori(x, c: const)) => const<W>(0) where popcount(c) == W;
+rule or-complement: builtin.ori(x: int<W>, builtin.xori(x, c: const)) => const<W>(-1) where popcount(c) == W;
+rule shl-zero: builtin.shli(x: int<W>, 0) => x;
+rule shrui-zero: builtin.shrui(x: int<W>, 0) => x;
+rule shrsi-zero: builtin.shrsi(x: int<W>, 0) => x;
+rule shl-wide: builtin.shli(x: int<W>, c: const) => const<W>(0) where c >= W;
+rule shrui-wide: builtin.shrui(x: int<W>, c: const) => const<W>(0) where c >= W;
+rule xor-or-and: builtin.xori(builtin.ori(x: int<W>, y), builtin.andi(x, y)) => builtin.xori(x, y);

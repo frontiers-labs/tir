@@ -1,0 +1,14 @@
+// RUN: tir opt --pass restructure-nodes,instcombine-nodes --verify %s | filecheck %s
+
+module {
+  %f = func.func @sub_zero(%x: !i32) -> !i32 {
+    %zero = constant {value = 0} : !i32
+    %result = subi %x, %zero : !i32
+    func.return %result
+  }
+  module_end
+}
+
+// CHECK: func.func @sub_zero(%[[X:[0-9]+]]: !i32)
+// CHECK-NOT: subi
+// CHECK: -> %[[X]]

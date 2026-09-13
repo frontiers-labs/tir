@@ -1,0 +1,17 @@
+// RUN: tir prove --width 1 %s | filecheck %s
+// RUN: tir prove --width 8 %s | filecheck %s
+// RUN: tir prove --width 32 %s | filecheck %s
+// RUN: tir prove --width 64 %s | filecheck %s
+
+rule sub-zero: #sub(x: int<W>, const<W>(0)) : int<W> => x;
+rule sub-add-cancel: #sub(#add(x: int<W>, y: int<W>), y) : int<W> => x;
+rule add-sub-cancel: #add(#sub(x: int<W>, y: int<W>), y) : int<W> => x;
+rule sub-sub-cancel: #sub(x: int<W>, #sub(x, y: int<W>)) : int<W> => y;
+rule add-sub-telescope:
+  #add(#sub(x: int<W>, y: int<W>), #sub(y, z: int<W>)) : int<W> => #sub(x, z);
+
+// CHECK: sub-zero: proven
+// CHECK-NEXT: sub-add-cancel: proven
+// CHECK-NEXT: add-sub-cancel: proven
+// CHECK-NEXT: sub-sub-cancel: proven
+// CHECK-NEXT: add-sub-telescope: proven

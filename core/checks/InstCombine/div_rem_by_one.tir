@@ -1,0 +1,41 @@
+// RUN: tir opt --pass restructure-nodes,instcombine-nodes --verify %s | filecheck %s
+
+module {
+  %fu = func.func @udiv_one(%x: !i32) -> !i32 {
+    %one = constant {value = 1} : !i32
+    %r = divui %x, %one : !i32
+    func.return %r
+  }
+  %fs = func.func @sdiv_one(%x: !i32) -> !i32 {
+    %one = constant {value = 1} : !i32
+    %r = divsi %x, %one : !i32
+    func.return %r
+  }
+  %fur = func.func @urem_one(%x: !i32) -> !i32 {
+    %one = constant {value = 1} : !i32
+    %r = remui %x, %one : !i32
+    func.return %r
+  }
+  %fsr = func.func @srem_one(%x: !i32) -> !i32 {
+    %one = constant {value = 1} : !i32
+    %r = remsi %x, %one : !i32
+    func.return %r
+  }
+  module_end
+}
+
+// CHECK-LABEL: func.func @udiv_one(%[[UX:[0-9]+]]: !i32)
+// CHECK-NOT: divui
+// CHECK: -> %[[UX]]
+
+// CHECK-LABEL: func.func @sdiv_one(%[[SX:[0-9]+]]: !i32)
+// CHECK-NOT: divsi
+// CHECK: -> %[[SX]]
+
+// CHECK-LABEL: func.func @urem_one
+// CHECK-NOT: remui
+// CHECK: constant {value = 0} : !i32
+
+// CHECK-LABEL: func.func @srem_one
+// CHECK-NOT: remsi
+// CHECK: constant {value = 0} : !i32

@@ -3,6 +3,7 @@
 //! on stderr under `TIR_TIME_PASSES`, alongside the pass-timing table.
 
 use std::cell::{Cell, RefCell};
+use std::collections::BTreeMap;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
@@ -27,9 +28,48 @@ struct Round {
 }
 
 thread_local! {
+    static RULES: RefCell<BTreeMap<String, RuleCounts>> = const { RefCell::new(BTreeMap::new()) };
     static ROUNDS: RefCell<Vec<Round>> = const { RefCell::new(Vec::new()) };
     static ELAPSED: Cell<Duration> = const { Cell::new(Duration::ZERO) };
     static EXTRACTED: Cell<(usize, Duration)> = const { Cell::new((0, Duration::ZERO)) };
+}
+
+#[derive(Default)]
+struct RuleCounts {
+    applications: usize,
+    changed: usize,
+}
+
+pub(super) fn register_rules<L: ENode>(rules: &[crate::Rule<L>]) {
+    if enabled() {
+        RULES.with(|counts| {
+            let mut counts = counts.borrow_mut();
+            for rule in rules {
+                counts.entry(rule.name.clone()).or_default();
+            }
+        });
+    }
+}
+
+pub(super) fn apply_rule<L: ENode>(
+    name: &str,
+    eg: &mut Engine<L>,
+    apply: impl FnOnce(&mut Engine<L>),
+) {
+    if !enabled() {
+        return apply(eg);
+    }
+    let before = eg.stats();
+    apply(eg);
+    let after = eg.stats();
+    RULES.with(|counts| {
+        let mut counts = counts.borrow_mut();
+        let count = counts.get_mut(name).expect("registered saturation rule");
+        count.applications += 1;
+        count.changed += usize::from(
+            (after.merges, after.adds, after.raises) != (before.merges, before.adds, before.raises),
+        );
+    });
 }
 
 /// Record one [`Engine::extract_best`](super::Engine::extract_best): it costs a
@@ -125,6 +165,16 @@ pub fn report_saturation(pass: &str) {
     if !enabled() {
         return;
     }
+    RULES.with(|counts| {
+        for (name, count) in std::mem::take(&mut *counts.borrow_mut()) {
+            eprintln!(
+                "tir-rule: pass={pass} rule={name} applications={} changed={} noop={}",
+                count.applications,
+                count.changed,
+                count.applications - count.changed,
+            );
+        }
+    });
     let extracts = EXTRACTED.replace((0, Duration::ZERO));
     let rounds = ROUNDS.with(|rounds| std::mem::take(&mut *rounds.borrow_mut()));
     if rounds.is_empty() {

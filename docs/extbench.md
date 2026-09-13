@@ -120,6 +120,27 @@ The existing per-pass report includes backend passes and can sum worker times;
 it is not used as the disjoint `passes_ms` interval. GCC and Clang report total
 wall time and RSS. Their absent phase metrics are omitted, not estimated.
 
+### Rule application counts
+
+With `TIR_TIME_PASSES=1`, saturation also writes one `tir-rule:` line per
+rule to compiler stderr:
+
+```text
+tir-rule: pass=instcombine-nodes rule=sub-zero applications=3 changed=1 noop=2
+```
+
+`applications` counts executed rule matches. `changed` counts applications
+that added nodes, merged classes, or raised facts; `noop` counts the rest.
+Counts include post-saturation rules and work in temporary assumption scopes.
+They measure saturation activity, not rewrites retained by final extraction.
+Rules with no applications are included. Counts aggregate by rule name within
+each pass report and reset after reporting. Sum repeated lines across functions
+and translation units for a benchmark total.
+
+For example, `TIR_TIME_PASSES=1 target/release/fcc -O2 -c input.c -o input.o
+2>rules.log` captures the counters with the timing diagnostics. The extbench
+runner does not retain raw compiler stderr in its result JSON.
+
 ## Results and baselines
 
 JSON records the mode, host architecture and OS, and samples keyed by package,

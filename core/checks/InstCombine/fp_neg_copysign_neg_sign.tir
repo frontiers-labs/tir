@@ -1,0 +1,55 @@
+// RUN: tir opt --pass restructure-nodes,instcombine-nodes --verify %s | filecheck %s
+// RUN: tir interp %s -f bits32 | filecheck %s --check-prefix=BITS32
+// RUN: tir opt --pass restructure-nodes,instcombine-nodes --verify %s | tir interp - -f bits32 | filecheck %s --check-prefix=BITS32
+// RUN: tir interp %s -f bits64 | filecheck %s --check-prefix=BITS64
+// RUN: tir opt --pass restructure-nodes,instcombine-nodes --verify %s | tir interp - -f bits64 | filecheck %s --check-prefix=BITS64
+
+module {
+  %f32 = func.func @f32(%x: !f32, %y: !f32) -> !f32 {
+    %negative = fp.neg %y : !f32
+    %inner = fp.copysign %x, %negative : !f32
+    %result = fp.neg %inner : !f32
+    func.return %result
+  }
+  %b32 = func.func @bits32() -> !i32 {
+    %x = fp.constant {bits = 2141266757} : !f32
+    %y = fp.constant {bits = 2147483648} : !f32
+    %negative = fp.neg %y : !f32
+    %inner = fp.copysign %x, %negative : !f32
+    %result = fp.neg %inner : !f32
+    %bits = bitcast %result : !i32
+    func.return %bits
+  }
+  %f64 = func.func @f64(%x: !f64, %y: !f64) -> !f64 {
+    %negative = fp.neg %y : !f64
+    %inner = fp.copysign %x, %negative : !f64
+    %result = fp.neg %inner : !f64
+    func.return %result
+  }
+  %b64 = func.func @bits64() -> !i64 {
+    %positive_zero = fp.constant {bits = 0} : !f64
+    %x = fp.neg %positive_zero : !f64
+    %y = fp.constant {bits = 0} : !f64
+    %negative = fp.neg %y : !f64
+    %inner = fp.copysign %x, %negative : !f64
+    %result = fp.neg %inner : !f64
+    %bits = bitcast %result : !i64
+    func.return %bits
+  }
+  module_end
+}
+
+// CHECK-LABEL: func.func @f32(%[[X32:[0-9]+]]: !f32, %[[Y32:[0-9]+]]: !f32)
+// CHECK-NOT: fp.
+// CHECK: %[[R32:[0-9]+]] = fp.copysign %[[X32]], %[[Y32]] : !f32
+// CHECK-NOT: fp.
+// CHECK: -> %[[R32]]
+
+// CHECK-LABEL: func.func @f64(%[[X64:[0-9]+]]: !f64, %[[Y64:[0-9]+]]: !f64)
+// CHECK-NOT: fp.
+// CHECK: %[[R64:[0-9]+]] = fp.copysign %[[X64]], %[[Y64]] : !f64
+// CHECK-NOT: fp.
+// CHECK: -> %[[R64]]
+
+// BITS32: i32 4288750405
+// BITS64: i64 0

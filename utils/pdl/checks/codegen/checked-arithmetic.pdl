@@ -1,0 +1,9 @@
+// RUN: tir-pdl %s --emit rust | filecheck %s
+
+rule add: builtin.addi(builtin.addi(x: int<W>, a: const), b: const) => builtin.addi(x, const<W>(a + b));
+rule sub: builtin.subi(builtin.addi(x: int<W>, a: const), b: const) => builtin.addi(x, const<W>(a - b));
+rule mul: builtin.muli(builtin.muli(x: int<W>, a: const), b: const) => builtin.muli(x, const<W>(a * b));
+
+// CHECK: checked_add
+// CHECK: checked_sub
+// CHECK: checked_mul

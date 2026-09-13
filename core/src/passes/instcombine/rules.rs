@@ -169,9 +169,83 @@ pub fn builtin_ruleset(context: &Context, seeded: &Seeded) -> Ruleset {
     ruleset
 }
 
+fn emit_sub() -> EmitFn {
+    Box::new(|context, operands, ty| {
+        let op = ops::subi(context, operands[0], operands[1], ty).build();
+        let result = op.result();
+        (Box::new(op), result)
+    })
+}
+
+fn emit_add() -> EmitFn {
+    Box::new(|context, operands, ty| {
+        let op = ops::addi(context, operands[0], operands[1], ty).build();
+        let result = op.result();
+        (Box::new(op), result)
+    })
+}
+
+fn emit_mul() -> EmitFn {
+    Box::new(|context, operands, ty| {
+        let op = ops::muli(context, operands[0], operands[1], ty).build();
+        let result = op.result();
+        (Box::new(op), result)
+    })
+}
+
 fn emit_shl() -> EmitFn {
     Box::new(|context, operands, ty| {
         let op = ops::shli(context, operands[0], operands[1], ty).build();
+        let result = op.result();
+        (Box::new(op), result)
+    })
+}
+
+fn emit_or() -> EmitFn {
+    Box::new(|context, operands, ty| {
+        let op = ops::ori(context, operands[0], operands[1], ty).build();
+        let result = op.result();
+        (Box::new(op), result)
+    })
+}
+
+fn emit_xor() -> EmitFn {
+    Box::new(|context, operands, ty| {
+        let op = ops::xori(context, operands[0], operands[1], ty).build();
+        let result = op.result();
+        (Box::new(op), result)
+    })
+}
+
+fn emit_fp_neg() -> EmitFn {
+    Box::new(|context, operands, ty| {
+        let op = crate::fp::ops::NegOpBuilder::new(context)
+            .input(operands[0])
+            .result_type(ty)
+            .build();
+        let result = op.result();
+        (Box::new(op), result)
+    })
+}
+
+fn emit_fp_abs() -> EmitFn {
+    Box::new(|context, operands, ty| {
+        let op = crate::fp::ops::AbsOpBuilder::new(context)
+            .input(operands[0])
+            .result_type(ty)
+            .build();
+        let result = op.result();
+        (Box::new(op), result)
+    })
+}
+
+fn emit_fp_copysign() -> EmitFn {
+    Box::new(|context, operands, ty| {
+        let op = crate::fp::ops::CopySignOpBuilder::new(context)
+            .magnitude(operands[0])
+            .sign(operands[1])
+            .result_type(ty)
+            .build();
         let result = op.result();
         (Box::new(op), result)
     })

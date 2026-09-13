@@ -1,0 +1,31 @@
+// RUN: tir prove --width 1 %s | filecheck %s
+
+rule sub-add-negate-right: #sub(x: int<W>, #add(x, y: int<W>)) : int<W> => #sub(const<W>(0), y);
+rule sub-sub-left: #sub(#sub(x: int<W>, y: int<W>), x) : int<W> => #sub(const<W>(0), y);
+rule double-neg: #sub(const<W>(0), #sub(const<W>(0), x: int<W>)) : int<W> => x;
+rule add-opposite-diffs: #add(#sub(x: int<W>, y: int<W>), #sub(y, x)) : int<W> => const<W>(0);
+rule sub-common-left: #sub(#sub(x: int<W>, y: int<W>), #sub(x, z: int<W>)) : int<W> => #sub(z, y);
+rule sub-common-right: #sub(#sub(x: int<W>, y: int<W>), #sub(z: int<W>, y)) : int<W> => #sub(x, z);
+rule sub-add-common-left: #sub(#add(x: int<W>, y: int<W>), #add(x, z: int<W>)) : int<W> => #sub(y, z);
+rule add-add-sub-cancel: #add(#add(x: int<W>, y: int<W>), #sub(z: int<W>, y)) : int<W> => #add(x, z);
+rule add-const-reassociate: #add(#add(x: int<W>, a: int<W>), b: int<W>) : int<W> => #add(x, #add(a, b));
+rule sub-const-reassociate: #sub(#sub(x: int<W>, a: int<W>), b: int<W>) : int<W> => #sub(x, #add(a, b));
+rule add-sub-const-reassociate: #add(#sub(x: int<W>, a: int<W>), b: int<W>) : int<W> => #add(x, #sub(b, a));
+rule sub-add-const-reassociate: #sub(#add(x: int<W>, a: int<W>), b: int<W>) : int<W> => #add(x, #sub(a, b));
+rule mul-const-reassociate: #mul(#mul(x: int<W>, a: int<W>), b: int<W>) : int<W> => #mul(x, #mul(a, b));
+rule mul-neg-one: #mul(x: int<W>, ones(W)) : int<W> => #sub(const<W>(0), x);
+
+// CHECK: sub-add-negate-right: proven
+// CHECK: sub-sub-left: proven
+// CHECK: double-neg: proven
+// CHECK: add-opposite-diffs: proven
+// CHECK: sub-common-left: proven
+// CHECK: sub-common-right: proven
+// CHECK: sub-add-common-left: proven
+// CHECK: add-add-sub-cancel: proven
+// CHECK: add-const-reassociate: proven
+// CHECK: sub-const-reassociate: proven
+// CHECK: add-sub-const-reassociate: proven
+// CHECK: sub-add-const-reassociate: proven
+// CHECK: mul-const-reassociate: proven
+// CHECK: mul-neg-one: proven

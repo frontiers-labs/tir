@@ -1,0 +1,35 @@
+// RUN: tir opt --pass restructure-nodes,instcombine-nodes --verify %s | filecheck %s
+
+module {
+  %fa = func.func @add_overflow(%x: !i64) -> !i64 {
+    %max = constant {value = 9223372036854775807} : !i64
+    %one = constant {value = 1} : !i64
+    %a = addi %x, %max : !i64
+    %r = addi %a, %one : !i64
+    func.return %r
+  }
+  %fs = func.func @sub_overflow(%x: !i64) -> !i64 {
+    %min = constant {value = -9223372036854775808} : !i64
+    %one = constant {value = 1} : !i64
+    %a = addi %x, %min : !i64
+    %r = subi %a, %one : !i64
+    func.return %r
+  }
+  %fm = func.func @mul_overflow(%x: !i64) -> !i64 {
+    %max = constant {value = 9223372036854775807} : !i64
+    %two = constant {value = 2} : !i64
+    %a = muli %x, %max : !i64
+    %r = muli %a, %two : !i64
+    func.return %r
+  }
+  module_end
+}
+
+// CHECK-LABEL: func.func @add_overflow
+// CHECK-COUNT-2: addi
+// CHECK-LABEL: func.func @sub_overflow
+// CHECK: addi
+// CHECK: subi
+// CHECK-LABEL: func.func @mul_overflow
+// CHECK: muli
+// CHECK: shli

@@ -18,19 +18,67 @@ fn rust_operation(operator: &Operator) -> Option<RustOperation> {
     match (dialect.as_str(), name.as_str()) {
         ("builtin", "addi") => Some(RustOperation {
             path: quote! { crate::builtin::AddIOp },
-            emitter: None,
+            emitter: Some(format_ident!("emit_add")),
         }),
         ("builtin", "muli") => Some(RustOperation {
             path: quote! { crate::builtin::MulIOp },
-            emitter: None,
+            emitter: Some(format_ident!("emit_mul")),
         }),
         ("builtin", "subi") => Some(RustOperation {
             path: quote! { crate::builtin::SubIOp },
+            emitter: Some(format_ident!("emit_sub")),
+        }),
+        ("builtin", "divui") => Some(RustOperation {
+            path: quote! { crate::builtin::DivUIOp },
+            emitter: None,
+        }),
+        ("builtin", "divsi") => Some(RustOperation {
+            path: quote! { crate::builtin::DivSIOp },
+            emitter: None,
+        }),
+        ("builtin", "remui") => Some(RustOperation {
+            path: quote! { crate::builtin::RemUIOp },
+            emitter: None,
+        }),
+        ("builtin", "remsi") => Some(RustOperation {
+            path: quote! { crate::builtin::RemSIOp },
             emitter: None,
         }),
         ("builtin", "shli") => Some(RustOperation {
             path: quote! { crate::builtin::ShlIOp },
             emitter: Some(format_ident!("emit_shl")),
+        }),
+        ("builtin", "andi") => Some(RustOperation {
+            path: quote! { crate::builtin::AndIOp },
+            emitter: None,
+        }),
+        ("builtin", "ori") => Some(RustOperation {
+            path: quote! { crate::builtin::OrIOp },
+            emitter: Some(format_ident!("emit_or")),
+        }),
+        ("builtin", "xori") => Some(RustOperation {
+            path: quote! { crate::builtin::XOrIOp },
+            emitter: Some(format_ident!("emit_xor")),
+        }),
+        ("builtin", "shrui") => Some(RustOperation {
+            path: quote! { crate::builtin::ShrUIOp },
+            emitter: None,
+        }),
+        ("builtin", "shrsi") => Some(RustOperation {
+            path: quote! { crate::builtin::ShrSIOp },
+            emitter: None,
+        }),
+        ("fp", "neg") => Some(RustOperation {
+            path: quote! { crate::fp::ops::NegOp },
+            emitter: Some(format_ident!("emit_fp_neg")),
+        }),
+        ("fp", "abs") => Some(RustOperation {
+            path: quote! { crate::fp::ops::AbsOp },
+            emitter: Some(format_ident!("emit_fp_abs")),
+        }),
+        ("fp", "copysign") => Some(RustOperation {
+            path: quote! { crate::fp::ops::CopySignOp },
+            emitter: Some(format_ident!("emit_fp_copysign")),
         }),
         _ => None,
     }
@@ -931,11 +979,26 @@ fn number_expr(
             let lhs = number_expr(lhs, binders, build)?;
             let rhs = number_expr(rhs, binders, build)?;
             match op {
-                BinaryOp::Multiply => Some(quote! { (#lhs) * (#rhs) }),
+                BinaryOp::Multiply => Some(quote! {{
+                    let Some(value) = (#lhs).checked_mul(#rhs) else {
+                        return false;
+                    };
+                    value
+                }}),
                 BinaryOp::Divide => Some(quote! { (#lhs) / (#rhs) }),
                 BinaryOp::Remainder => Some(quote! { (#lhs) % (#rhs) }),
-                BinaryOp::Add => Some(quote! { (#lhs) + (#rhs) }),
-                BinaryOp::Subtract => Some(quote! { (#lhs) - (#rhs) }),
+                BinaryOp::Add => Some(quote! {{
+                    let Some(value) = (#lhs).checked_add(#rhs) else {
+                        return false;
+                    };
+                    value
+                }}),
+                BinaryOp::Subtract => Some(quote! {{
+                    let Some(value) = (#lhs).checked_sub(#rhs) else {
+                        return false;
+                    };
+                    value
+                }}),
                 BinaryOp::ShiftLeft => Some(quote! { (#lhs) << (#rhs) }),
                 BinaryOp::ShiftRight => Some(quote! { (#lhs) >> (#rhs) }),
                 BinaryOp::BitAnd => Some(quote! { (#lhs) & (#rhs) }),

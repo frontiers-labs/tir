@@ -1,0 +1,46 @@
+// RUN: tir prove --width 1 %s | filecheck %s
+// RUN: tir prove --width 8 %s | filecheck %s
+// RUN: tir prove --width 32 %s | filecheck %s
+// RUN: tir prove --width 64 %s | filecheck %s
+
+rule and-zero: #and(x: int<W>, const<W>(0)) : int<W> => const<W>(0);
+rule and-allones: #and(x: int<W>, ones(W)) : int<W> => x;
+rule and-self: #and(x: int<W>, x) : int<W> => x;
+rule or-zero: #or(x: int<W>, const<W>(0)) : int<W> => x;
+rule or-allones: #or(x: int<W>, ones(W)) : int<W> => ones(W);
+rule or-self: #or(x: int<W>, x) : int<W> => x;
+rule xor-zero: #xor(x: int<W>, const<W>(0)) : int<W> => x;
+rule xor-self: #xor(x: int<W>, x) : int<W> => const<W>(0);
+rule and-absorption: #and(#or(x: int<W>, y: int<W>), x) : int<W> => x;
+rule xor-xor-and: #xor(#xor(x: int<W>, y: int<W>), #and(x, y)) : int<W> => #or(x, y);
+rule or-absorption: #or(#and(x: int<W>, y: int<W>), x) : int<W> => x;
+rule xor-cancel: #xor(#xor(x: int<W>, y: int<W>), y) : int<W> => x;
+rule and-complement: #and(x: int<W>, #xor(x, ones(W))) : int<W> => const<W>(0);
+rule or-complement: #or(x: int<W>, #xor(x, ones(W))) : int<W> => ones(W);
+rule shl-zero: #shl(x: int<W>, const<W>(0)) : int<W> => x;
+rule lshr-zero: #lshr(x: int<W>, const<W>(0)) : int<W> => x;
+rule ashr-zero: #ashr(x: int<W>, const<W>(0)) : int<W> => x;
+rule shl-wide: #if(#ult(c: int<W>, const<W>(W)), const<W>(0), #shl(x: int<W>, c)) : int<W> => const<W>(0);
+rule lshr-wide: #if(#ult(c: int<W>, const<W>(W)), const<W>(0), #lshr(x: int<W>, c)) : int<W> => const<W>(0);
+rule xor-or-and: #xor(#or(x: int<W>, y: int<W>), #and(x, y)) : int<W> => #xor(x, y);
+
+// CHECK: and-zero: proven
+// CHECK-NEXT: and-allones: proven
+// CHECK-NEXT: and-self: proven
+// CHECK-NEXT: or-zero: proven
+// CHECK-NEXT: or-allones: proven
+// CHECK-NEXT: or-self: proven
+// CHECK-NEXT: xor-zero: proven
+// CHECK-NEXT: xor-self: proven
+// CHECK-NEXT: and-absorption: proven
+// CHECK-NEXT: xor-xor-and: proven
+// CHECK-NEXT: or-absorption: proven
+// CHECK-NEXT: xor-cancel: proven
+// CHECK-NEXT: and-complement: proven
+// CHECK-NEXT: or-complement: proven
+// CHECK-NEXT: shl-zero: proven
+// CHECK-NEXT: lshr-zero: proven
+// CHECK-NEXT: ashr-zero: proven
+// CHECK-NEXT: shl-wide: proven
+// CHECK-NEXT: lshr-wide: proven
+// CHECK-NEXT: xor-or-and: proven

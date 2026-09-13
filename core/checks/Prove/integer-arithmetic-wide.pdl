@@ -1,0 +1,10 @@
+// RUN: tir prove --width 32 %s | filecheck %s
+// RUN: tir prove --width 64 %s | filecheck %s
+
+rule double-neg: #sub(const<W>(0), #sub(const<W>(0), x: int<W>)) : int<W> => x;
+rule sub-common-left: #sub(#sub(x: int<W>, y: int<W>), #sub(x, z: int<W>)) : int<W> => #sub(z, y);
+rule add-add-sub-cancel: #add(#add(x: int<W>, y: int<W>), #sub(z: int<W>, y)) : int<W> => #add(x, z);
+
+// CHECK: double-neg: proven
+// CHECK: sub-common-left: proven
+// CHECK: add-add-sub-cancel: proven

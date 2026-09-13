@@ -37,14 +37,24 @@ module {
   module_end
 }
 
-// CHECK-LABEL: %{{[0-9]+}} = func.func @ordering
+// CHECK-LABEL: %{{[0-9]+}} = func.func @ordering(
+// CHECK-SAME: %[[K:[0-9]+]]: !i1, %[[M:[0-9]+]]: !i1
 // CHECK: scf.switch
-// CHECK-NEXT: constant {value = 1} : !i1
-// CHECK: {
-// CHECK-NEXT: constant {value = 0} : !i1
+// CHECK-NEXT: %[[ONE:[0-9]+]] = constant {value = 1} : !i1
+// CHECK-NEXT: %[[X:[0-9]+]] = xori %[[ONE]], %[[M]] : !i1
+// CHECK-NEXT: -> %[[X]]
+// CHECK-NEXT: }
+// CHECK-NEXT: {
+// CHECK-NEXT: -> %[[K]]
+// CHECK-NEXT: }
 
-// CHECK-LABEL: %{{[0-9]+}} = func.func @equality
+// CHECK-LABEL: %{{[0-9]+}} = func.func @equality(
+// CHECK-SAME: %[[K:[0-9]+]]: !i1, %[[M:[0-9]+]]: !i1
 // CHECK: scf.switch
-// CHECK-NEXT: constant {value = 1} : !i1
-// CHECK: {
-// CHECK-NEXT: constant {value = 0} : !i1
+// CHECK-NEXT: %[[ONE:[0-9]+]] = constant {value = 1} : !i1
+// CHECK-NEXT: %[[X:[0-9]+]] = xori %[[ONE]], %[[M]] : !i1
+// CHECK-NEXT: -> %[[X]]
+// CHECK-NEXT: }
+// CHECK-NEXT: {
+// CHECK-NEXT: -> %[[K]]
+// CHECK-NEXT: }

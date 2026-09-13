@@ -1,0 +1,60 @@
+// RUN: tir opt --pass restructure-nodes,instcombine-nodes --verify %s | filecheck %s
+
+module {
+  %a = func.func @partial_mask(%x: !i8) -> !i8 {
+    %mask = constant {value = 127} : !i8
+    %r = andi %x, %mask : !i8
+    func.return %r
+  }
+  %b = func.func @partial_complement(%x: !i8) -> !i8 {
+    %mask = constant {value = 127} : !i8
+    %other = xori %x, %mask : !i8
+    %r = andi %x, %other : !i8
+    func.return %r
+  }
+  %c = func.func @shift_below_width(%x: !i8) -> !i8 {
+    %amount = constant {value = 7} : !i8
+    %r = shli %x, %amount : !i8
+    func.return %r
+  }
+  %d = func.func @shift_unknown(%x: !i64, %amount: !i64) -> !i64 {
+    %r = shrui %x, %amount : !i64
+    func.return %r
+  }
+  %e = func.func @divide_zero(%x: !i32) -> !i32 {
+    %zero = constant {value = 0} : !i32
+    %r = divui %x, %zero : !i32
+    func.return %r
+  }
+  %f = func.func @divide_negative_one(%x: !i32) -> !i32 {
+    %minus_one = constant {value = -1} : !i32
+    %r = divsi %x, %minus_one : !i32
+    func.return %r
+  }
+  module_end
+}
+
+// CHECK-LABEL: func.func @partial_mask(%[[X:[0-9]+]]: !i8)
+// CHECK: %[[MASK:[0-9]+]] = constant {value = 127} : !i8
+// CHECK: %[[R:[0-9]+]] = andi %[[X]], %[[MASK]] : !i8
+// CHECK: -> %[[R]]
+// CHECK-LABEL: func.func @partial_complement(%[[X:[0-9]+]]: !i8)
+// CHECK: %[[MASK:[0-9]+]] = constant {value = 127} : !i8
+// CHECK: %[[OTHER:[0-9]+]] = xori %[[X]], %[[MASK]] : !i8
+// CHECK: %[[R:[0-9]+]] = andi %[[X]], %[[OTHER]] : !i8
+// CHECK: -> %[[R]]
+// CHECK-LABEL: func.func @shift_below_width(%[[X:[0-9]+]]: !i8)
+// CHECK: %[[AMOUNT:[0-9]+]] = constant {value = 7} : !i8
+// CHECK: %[[R:[0-9]+]] = shli %[[X]], %[[AMOUNT]] : !i8
+// CHECK: -> %[[R]]
+// CHECK-LABEL: func.func @shift_unknown(%[[X:[0-9]+]]: !i64, %[[AMOUNT:[0-9]+]]: !i64)
+// CHECK: %[[R:[0-9]+]] = shrui %[[X]], %[[AMOUNT]] : !i64
+// CHECK: -> %[[R]]
+// CHECK-LABEL: func.func @divide_zero(%[[X:[0-9]+]]: !i32)
+// CHECK: %[[ZERO:[0-9]+]] = constant {value = 0} : !i32
+// CHECK: %[[R:[0-9]+]] = divui %[[X]], %[[ZERO]] : !i32
+// CHECK: -> %[[R]]
+// CHECK-LABEL: func.func @divide_negative_one(%[[X:[0-9]+]]: !i32)
+// CHECK: %[[MINUS_ONE:[0-9]+]] = constant {value = -1} : !i32
+// CHECK: %[[R:[0-9]+]] = divsi %[[X]], %[[MINUS_ONE]] : !i32
+// CHECK: -> %[[R]]

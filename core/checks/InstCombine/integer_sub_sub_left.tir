@@ -1,0 +1,150 @@
+// RUN: tir opt --pass restructure-nodes,instcombine-nodes --verify %s | filecheck %s
+
+module {
+  %f8 = func.func @sub_sub_left_8(%x: !i8, %y: !i8, %z: !i8) -> !i8 {
+    %a = subi %x, %y : !i8
+    %r = subi %a, %x : !i8
+    func.return %r
+  }
+  %f32 = func.func @sub_sub_left_32(%x: !i32, %y: !i32, %z: !i32) -> !i32 {
+    %a = subi %x, %y : !i32
+    %r = subi %a, %x : !i32
+    func.return %r
+  }
+  %f64 = func.func @sub_sub_left_64(%x: !i64, %y: !i64, %z: !i64) -> !i64 {
+    %a = subi %x, %y : !i64
+    %r = subi %a, %x : !i64
+    func.return %r
+  }
+  module_end
+}
+
+// CHECK-LABEL: func.func @sub_sub_left_8(%[[X8:[0-9]+]]: !i8, %[[Y8:[0-9]+]]: !i8, %[[Z8:[0-9]+]]: !i8)
+// CHECK-NOT: addi
+// CHECK-NOT: subi
+// CHECK-NOT: muli
+// CHECK-NOT: divui
+// CHECK-NOT: divsi
+// CHECK-NOT: remui
+// CHECK-NOT: remsi
+// CHECK-NOT: andi
+// CHECK-NOT: ori
+// CHECK-NOT: xori
+// CHECK-NOT: shli
+// CHECK-NOT: shrui
+// CHECK-NOT: shrsi
+// CHECK: %[[C8_0:[0-9]+]] = constant {value = 0} : !i8
+// CHECK-NOT: addi
+// CHECK-NOT: subi
+// CHECK-NOT: muli
+// CHECK-NOT: divui
+// CHECK-NOT: divsi
+// CHECK-NOT: remui
+// CHECK-NOT: remsi
+// CHECK-NOT: andi
+// CHECK-NOT: ori
+// CHECK-NOT: xori
+// CHECK-NOT: shli
+// CHECK-NOT: shrui
+// CHECK-NOT: shrsi
+// CHECK: %[[R8:[0-9]+]] = subi %[[C8_0]], %[[Y8]] : !i8
+// CHECK-NOT: addi
+// CHECK-NOT: subi
+// CHECK-NOT: muli
+// CHECK-NOT: divui
+// CHECK-NOT: divsi
+// CHECK-NOT: remui
+// CHECK-NOT: remsi
+// CHECK-NOT: andi
+// CHECK-NOT: ori
+// CHECK-NOT: xori
+// CHECK-NOT: shli
+// CHECK-NOT: shrui
+// CHECK-NOT: shrsi
+// CHECK: -> %[[R8]]
+// CHECK-LABEL: func.func @sub_sub_left_32(%[[X32:[0-9]+]]: !i32, %[[Y32:[0-9]+]]: !i32, %[[Z32:[0-9]+]]: !i32)
+// CHECK-NOT: addi
+// CHECK-NOT: subi
+// CHECK-NOT: muli
+// CHECK-NOT: divui
+// CHECK-NOT: divsi
+// CHECK-NOT: remui
+// CHECK-NOT: remsi
+// CHECK-NOT: andi
+// CHECK-NOT: ori
+// CHECK-NOT: xori
+// CHECK-NOT: shli
+// CHECK-NOT: shrui
+// CHECK-NOT: shrsi
+// CHECK: %[[C32_0:[0-9]+]] = constant {value = 0} : !i32
+// CHECK-NOT: addi
+// CHECK-NOT: subi
+// CHECK-NOT: muli
+// CHECK-NOT: divui
+// CHECK-NOT: divsi
+// CHECK-NOT: remui
+// CHECK-NOT: remsi
+// CHECK-NOT: andi
+// CHECK-NOT: ori
+// CHECK-NOT: xori
+// CHECK-NOT: shli
+// CHECK-NOT: shrui
+// CHECK-NOT: shrsi
+// CHECK: %[[R32:[0-9]+]] = subi %[[C32_0]], %[[Y32]] : !i32
+// CHECK-NOT: addi
+// CHECK-NOT: subi
+// CHECK-NOT: muli
+// CHECK-NOT: divui
+// CHECK-NOT: divsi
+// CHECK-NOT: remui
+// CHECK-NOT: remsi
+// CHECK-NOT: andi
+// CHECK-NOT: ori
+// CHECK-NOT: xori
+// CHECK-NOT: shli
+// CHECK-NOT: shrui
+// CHECK-NOT: shrsi
+// CHECK: -> %[[R32]]
+// CHECK-LABEL: func.func @sub_sub_left_64(%[[X64:[0-9]+]]: !i64, %[[Y64:[0-9]+]]: !i64, %[[Z64:[0-9]+]]: !i64)
+// CHECK-NOT: addi
+// CHECK-NOT: subi
+// CHECK-NOT: muli
+// CHECK-NOT: divui
+// CHECK-NOT: divsi
+// CHECK-NOT: remui
+// CHECK-NOT: remsi
+// CHECK-NOT: andi
+// CHECK-NOT: ori
+// CHECK-NOT: xori
+// CHECK-NOT: shli
+// CHECK-NOT: shrui
+// CHECK-NOT: shrsi
+// CHECK: %[[C64_0:[0-9]+]] = constant {value = 0} : !i64
+// CHECK-NOT: addi
+// CHECK-NOT: subi
+// CHECK-NOT: muli
+// CHECK-NOT: divui
+// CHECK-NOT: divsi
+// CHECK-NOT: remui
+// CHECK-NOT: remsi
+// CHECK-NOT: andi
+// CHECK-NOT: ori
+// CHECK-NOT: xori
+// CHECK-NOT: shli
+// CHECK-NOT: shrui
+// CHECK-NOT: shrsi
+// CHECK: %[[R64:[0-9]+]] = subi %[[C64_0]], %[[Y64]] : !i64
+// CHECK-NOT: addi
+// CHECK-NOT: subi
+// CHECK-NOT: muli
+// CHECK-NOT: divui
+// CHECK-NOT: divsi
+// CHECK-NOT: remui
+// CHECK-NOT: remsi
+// CHECK-NOT: andi
+// CHECK-NOT: ori
+// CHECK-NOT: xori
+// CHECK-NOT: shli
+// CHECK-NOT: shrui
+// CHECK-NOT: shrsi
+// CHECK: -> %[[R64]]
