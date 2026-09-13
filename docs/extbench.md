@@ -128,13 +128,15 @@ benchmark, compiler, level, and source. Each sample contains `wall_ms`,
 `time`, including waited-for child processes. It is not the sum of simultaneous
 process memory. Run samples for a linked benchmark use `source = "run"`.
 
-Baseline comparisons use shared sample keys and fail when total wall time grows
-by more than 10%, summed per-source peak RSS grows by more than 2%, or one peak
-grows by more than 35%. Totals are grouped by package, compiler, and level. The
-command rejects a different mode or a baseline with no matching samples. New
-samples remain in the output but do not contribute to the baseline comparison.
-Use the same host, compiler versions, flags, and inputs for comparable results.
-Samples are written before the baseline verdict.
+Baseline comparisons use shared sample keys. Totals are grouped by package,
+compiler, and level. GCC and Clang are still reported, but only FCC fails the
+command when total wall time grows by more than 10%, summed per-source peak RSS
+grows by more than 2%, or one peak grows by more than 35%. Host compilers move
+with the runner; FCC is the compiler this tree builds. The command rejects a
+different mode or a baseline with no matching samples. New samples remain in the
+output but do not contribute to the baseline comparison. Use the same host,
+compiler versions, flags, and inputs for comparable results. Samples are written
+before the baseline verdict.
 
 The nightly job uses the new JSON format and starts a new baseline history.
 `cargo xtask gate` retains its original FCC/GCC baseline format and thresholds;
