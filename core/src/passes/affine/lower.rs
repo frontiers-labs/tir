@@ -48,6 +48,10 @@ pub(super) struct Nest {
     /// The states the nest is entered with and the results it leaves them in.
     entry_states: Vec<ValueId>,
     exit_states: Vec<ValueId>,
+    /// Per dimension, the latch values that step that counter. The innermost
+    /// body may read one (`i + 1` CSEd with the increment); the rebuilt nest
+    /// names a new increment and the copy must follow it.
+    latches: Vec<Vec<ValueId>>,
 }
 
 /// A bound of the rebuilt nest. The nest is rectangular, so every bound is
@@ -169,6 +173,11 @@ impl Nest {
                 .iter()
                 .map(|&port| shape.finals[port])
                 .collect(),
+            latches: view
+                .loops
+                .iter()
+                .map(|level| latches_of(context, level.op))
+                .collect(),
         })
     }
 }
@@ -258,6 +267,8 @@ pub(super) struct Lowering<'a> {
     tile_steps: HashMap<usize, ValueId>,
     /// Per dimension counted plainly, the loop that counts it.
     built: HashMap<usize, OpId>,
+    /// Old latch values of each rebuilt dimension, named as the new increment.
+    latch_map: HashMap<ValueId, ValueId>,
 }
 
 impl<'a> Lowering<'a> {
@@ -269,6 +280,7 @@ impl<'a> Lowering<'a> {
             spelled: Vec::new(),
             tile_steps: HashMap::new(),
             built: HashMap::new(),
+            latch_map: HashMap::new(),
         }
     }
 
@@ -472,6 +484,17 @@ impl<'a> Lowering<'a> {
             self.built.insert(dimension, loop_op.id());
         }
 
+        let boolean = IntegerType::new(context, 1);
+        let compare = b::cmpi(context, counter.id(), upper, Predicate::Slt, boolean).build();
+        context.add(body, compare.id());
+        let advance = b::addi(context, counter.id(), step, ty).build();
+        context.add(body, advance.id());
+        if key == dimension {
+            for &old in &self.nest.latches[dimension] {
+                self.latch_map.insert(old, advance.result());
+            }
+        }
+
         let restored = bound.insert(key, counter.id());
         let left = self.emit(levels, index + 1, bound, dep_ports.clone(), body)?;
         match restored {
@@ -479,11 +502,6 @@ impl<'a> Lowering<'a> {
             None => bound.remove(&key),
         };
 
-        let boolean = IntegerType::new(context, 1);
-        let compare = b::cmpi(context, counter.id(), upper, Predicate::Slt, boolean).build();
-        context.add(body, compare.id());
-        let advance = b::addi(context, counter.id(), step, ty).build();
-        context.add(body, advance.id());
         let mut results = vec![compare.result(), advance.result()];
         results.extend(left);
         results.push(counter.id());
@@ -511,6 +529,9 @@ impl<'a> Lowering<'a> {
                     .map(move |&counter| (counter, bound[&dimension]))
             })
             .collect();
+        for (&old, &new) in &self.latch_map {
+            bindings.insert(old, new);
+        }
         for (port, &argument) in self.nest.body_arguments.iter().enumerate() {
             let target = if self.nest.body_counters.contains(&port) {
                 bound[&(self.nest.counters.len() - 1)]
@@ -634,6 +655,21 @@ fn hoistable(context: &Context, view: &AffineView) -> Option<Vec<OpId>> {
         }
     }
     Some(hoist)
+}
+
+/// The latch values that step `op`'s counter, which an inner body may read.
+fn latches_of(context: &Context, op: OpId) -> Vec<ValueId> {
+    let handle = context.get_op(op);
+    let Some(shape) = carried(context, &handle) else {
+        return Vec::new();
+    };
+    let counting = crate::analysis::affine::build::counter_ports(context, &handle);
+    shape
+        .args
+        .iter()
+        .enumerate()
+        .filter_map(|(port, argument)| counting.contains(argument).then_some(shape.latched[port]))
+        .collect()
 }
 
 /// The operations a loop's shape pins: the latch of every port counting with
