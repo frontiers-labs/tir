@@ -545,6 +545,7 @@ fn generate_rule(rule: &Rule, function: Ident, base: u32) -> Option<TokenStream>
     let (vars, scalars) = (pattern.vars, build.scalars);
     let head_vars = build.vars - pattern.vars;
     let (atoms, guards, head) = (&build.atoms, &build.guards, &build.head);
+    let post_saturation = rule.post_saturation;
     let externs = build.externs.iter().enumerate().map(|(id, body)| {
         let id = id as u32;
         quote! { #id => #body, }
@@ -565,7 +566,7 @@ fn generate_rule(rule: &Rule, function: Ident, base: u32) -> Option<TokenStream>
                 }),
                 head: vec![#(#head),*],
                 head_vars: #head_vars,
-                post_saturation: false,
+                post_saturation: #post_saturation,
             }
         }
 

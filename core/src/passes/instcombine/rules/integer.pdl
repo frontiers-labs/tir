@@ -24,16 +24,22 @@ rule sub-add-common-left:
   builtin.subi(builtin.addi(x: int<W>, y), builtin.addi(x, z)) => builtin.subi(y, z);
 rule add-add-sub-cancel:
   builtin.addi(builtin.addi(x: int<W>, y), builtin.subi(z, y)) => builtin.addi(x, z);
+// Keep generated constants from feeding a cyclic e-class back into reassociation.
 rule add-const-reassociate:
-  builtin.addi(builtin.addi(x: int<W>, a: const), b: const) => builtin.addi(x, const<W>(a + b));
+  builtin.addi(builtin.addi(x: int<W>, a: const), b: const) => builtin.addi(x, const<W>(a + b))
+  phase post-saturation;
 rule sub-const-reassociate:
-  builtin.subi(builtin.subi(x: int<W>, a: const), b: const) => builtin.subi(x, const<W>(a + b));
+  builtin.subi(builtin.subi(x: int<W>, a: const), b: const) => builtin.subi(x, const<W>(a + b))
+  phase post-saturation;
 rule add-sub-const-reassociate:
-  builtin.addi(builtin.subi(x: int<W>, a: const), b: const) => builtin.addi(x, const<W>(b - a));
+  builtin.addi(builtin.subi(x: int<W>, a: const), b: const) => builtin.addi(x, const<W>(b - a))
+  phase post-saturation;
 rule sub-add-const-reassociate:
-  builtin.subi(builtin.addi(x: int<W>, a: const), b: const) => builtin.addi(x, const<W>(a - b));
+  builtin.subi(builtin.addi(x: int<W>, a: const), b: const) => builtin.addi(x, const<W>(a - b))
+  phase post-saturation;
 rule mul-const-reassociate:
-  builtin.muli(builtin.muli(x: int<W>, a: const), b: const) => builtin.muli(x, const<W>(a * b));
+  builtin.muli(builtin.muli(x: int<W>, a: const), b: const) => builtin.muli(x, const<W>(a * b))
+  phase post-saturation;
 rule mul-neg-one:
   builtin.muli(x: int<W>, c: const) => builtin.subi(const<W>(0), x)
   where popcount(c) == W;

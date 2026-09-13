@@ -1,0 +1,7 @@
+// RUN: tir-pdl %s --emit rust | filecheck %s
+
+rule terminal-add:
+  builtin.addi(builtin.addi(x: int<W>, a: const), b: const) => builtin.addi(x, const<W>(a + b))
+  phase post-saturation;
+
+// CHECK: post_saturation: true
