@@ -1,0 +1,25 @@
+// RUN: tir opt --pass restructure-nodes,instcombine-nodes --verify %s | filecheck %s
+
+module {
+  %f = func.func @add_wraps_at_i64(%x: !i64) -> !i64 {
+    %max = constant {value = 9223372036854775807} : !i64
+    %one = constant {value = 1} : !i64
+    %a = addi %x, %max : !i64
+    %r = addi %a, %one : !i64
+    func.return %r
+  }
+  %g = func.func @multiply_wraps_at_i32(%x: !i32) -> !i32 {
+    %large = constant {value = 4000000000} : !i32
+    %a = muli %x, %large : !i32
+    %r = muli %a, %large : !i32
+    func.return %r
+  }
+  module_end
+}
+
+// CHECK-LABEL: func.func @add_wraps_at_i64
+// CHECK: constant {value = -9223372036854775808} : !i64
+// CHECK-COUNT-1: addi
+// CHECK-LABEL: func.func @multiply_wraps_at_i32
+// CHECK: constant {value = 1983905792} : !i32
+// CHECK-COUNT-1: muli

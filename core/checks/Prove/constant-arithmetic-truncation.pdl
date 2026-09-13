@@ -1,0 +1,16 @@
+// RUN: tir prove --width 1 %s | filecheck %s
+// RUN: tir prove --width 8 %s | filecheck %s
+// RUN: tir prove --width 32 %s | filecheck %s
+// RUN: tir prove --width 64 %s | filecheck %s
+
+// Reducing each operand to W bits before arithmetic preserves the low W bits.
+// This is the modular contract of const<W> arithmetic, including host overflow.
+rule truncate-add:
+  #extract(#add(a: int<64>, b: int<64>), const<64>(W - 1), const<64>(0)) : int<W>
+  => #add(#extract(a, const<64>(W - 1), const<64>(0)), #extract(b, const<64>(W - 1), const<64>(0)));
+rule truncate-sub:
+  #extract(#sub(a: int<64>, b: int<64>), const<64>(W - 1), const<64>(0)) : int<W>
+  => #sub(#extract(a, const<64>(W - 1), const<64>(0)), #extract(b, const<64>(W - 1), const<64>(0)));
+
+// CHECK: truncate-add: proven
+// CHECK-NEXT: truncate-sub: proven

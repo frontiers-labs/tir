@@ -1,0 +1,90 @@
+// RUN: tir opt --pass restructure-nodes,instcombine-nodes --verify %s | filecheck %s
+
+module {
+  %sub_add = func.func @sub_add_cancel_reversed(%x: !i32, %y: !i32, %p: !ptr.p<!i32>) -> !i32 {
+    %sum = addi %y, %x : !i32
+    %result = subi %sum, %y : !i32
+    ptr.store %sum, %p
+    func.return %result
+  }
+  %add_sub = func.func @add_sub_cancel_reversed(%x: !i32, %y: !i32, %p: !ptr.p<!i32>) -> !i32 {
+    %difference = subi %x, %y : !i32
+    %result = addi %y, %difference : !i32
+    ptr.store %difference, %p
+    func.return %result
+  }
+  %sub_sub = func.func @sub_sub_cancel_live_operand(%x: !i32, %y: !i32, %p: !ptr.p<!i32>) -> !i32 {
+    %difference = subi %y, %x : !i32
+    %result = subi %y, %difference : !i32
+    ptr.store %difference, %p
+    func.return %result
+  }
+  %add_add_sub = func.func @add_add_sub_cancel_reversed(%x: !i32, %y: !i32, %z: !i32, %p: !ptr.p<!i32>) -> !i32 {
+    %first = addi %y, %x : !i32
+    %second = subi %z, %y : !i32
+    %result = addi %second, %first : !i32
+    ptr.store %first, %p
+    func.return %result
+  }
+  %and_absorption = func.func @and_absorption_reversed(%x: !i32, %y: !i32, %p: !ptr.p<!i32>) -> !i32 {
+    %or = ori %y, %x : !i32
+    %result = andi %x, %or : !i32
+    ptr.store %or, %p
+    func.return %result
+  }
+  %or_absorption = func.func @or_absorption_reversed(%x: !i32, %y: !i32, %p: !ptr.p<!i32>) -> !i32 {
+    %and = andi %y, %x : !i32
+    %result = ori %x, %and : !i32
+    ptr.store %and, %p
+    func.return %result
+  }
+  %xor_xor_and = func.func @xor_xor_and_reversed(%x: !i32, %y: !i32, %p: !ptr.p<!i32>) -> !i32 {
+    %xor = xori %y, %x : !i32
+    %and = andi %y, %x : !i32
+    %result = xori %and, %xor : !i32
+    ptr.store %xor, %p
+    func.return %result
+  }
+  %xor_cancel = func.func @xor_cancel_reversed(%x: !i32, %y: !i32, %p: !ptr.p<!i32>) -> !i32 {
+    %xor = xori %y, %x : !i32
+    %result = xori %y, %xor : !i32
+    ptr.store %xor, %p
+    func.return %result
+  }
+  module_end
+}
+
+// CHECK-LABEL: func.func @sub_add_cancel_reversed(%[[X:[0-9]+]]: !i32, %[[Y:[0-9]+]]: !i32, %[[P:[0-9]+]]: !ptr.p<!i32>)
+// CHECK: %[[SUM:[0-9]+]] = addi %[[Y]], %[[X]] : !i32
+// CHECK: ptr.store %[[SUM]], %[[P]] state(%{{[0-9]+}})
+// CHECK: -> %[[X]], %{{[0-9]+}}
+// CHECK-LABEL: func.func @add_sub_cancel_reversed(%[[X:[0-9]+]]: !i32, %[[Y:[0-9]+]]: !i32, %[[P:[0-9]+]]: !ptr.p<!i32>)
+// CHECK: %[[DIFF:[0-9]+]] = subi %[[X]], %[[Y]] : !i32
+// CHECK: ptr.store %[[DIFF]], %[[P]] state(%{{[0-9]+}})
+// CHECK: -> %[[X]], %{{[0-9]+}}
+// CHECK-LABEL: func.func @sub_sub_cancel_live_operand(%[[X:[0-9]+]]: !i32, %[[Y:[0-9]+]]: !i32, %[[P:[0-9]+]]: !ptr.p<!i32>)
+// CHECK: %[[DIFF:[0-9]+]] = subi %[[Y]], %[[X]] : !i32
+// CHECK: ptr.store %[[DIFF]], %[[P]] state(%{{[0-9]+}})
+// CHECK: -> %[[X]], %{{[0-9]+}}
+// CHECK-LABEL: func.func @add_add_sub_cancel_reversed(%[[X:[0-9]+]]: !i32, %[[Y:[0-9]+]]: !i32, %[[Z:[0-9]+]]: !i32, %[[P:[0-9]+]]: !ptr.p<!i32>)
+// CHECK: %[[FIRST:[0-9]+]] = addi %[[Y]], %[[X]] : !i32
+// CHECK: ptr.store %[[FIRST]], %[[P]] state(%{{[0-9]+}})
+// CHECK: %[[RESULT:[0-9]+]] = addi %[[X]], %[[Z]] : !i32
+// CHECK: -> %[[RESULT]], %{{[0-9]+}}
+// CHECK-LABEL: func.func @and_absorption_reversed(%[[X:[0-9]+]]: !i32, %[[Y:[0-9]+]]: !i32, %[[P:[0-9]+]]: !ptr.p<!i32>)
+// CHECK: %[[OR:[0-9]+]] = ori %[[Y]], %[[X]] : !i32
+// CHECK: ptr.store %[[OR]], %[[P]] state(%{{[0-9]+}})
+// CHECK: -> %[[X]], %{{[0-9]+}}
+// CHECK-LABEL: func.func @or_absorption_reversed(%[[X:[0-9]+]]: !i32, %[[Y:[0-9]+]]: !i32, %[[P:[0-9]+]]: !ptr.p<!i32>)
+// CHECK: %[[AND:[0-9]+]] = andi %[[Y]], %[[X]] : !i32
+// CHECK: ptr.store %[[AND]], %[[P]] state(%{{[0-9]+}})
+// CHECK: -> %[[X]], %{{[0-9]+}}
+// CHECK-LABEL: func.func @xor_xor_and_reversed(%[[X:[0-9]+]]: !i32, %[[Y:[0-9]+]]: !i32, %[[P:[0-9]+]]: !ptr.p<!i32>)
+// CHECK: %[[XOR:[0-9]+]] = xori %[[Y]], %[[X]] : !i32
+// CHECK: ptr.store %[[XOR]], %[[P]] state(%{{[0-9]+}})
+// CHECK: %[[RESULT:[0-9]+]] = ori %[[X]], %[[Y]] : !i32
+// CHECK: -> %[[RESULT]], %{{[0-9]+}}
+// CHECK-LABEL: func.func @xor_cancel_reversed(%[[X:[0-9]+]]: !i32, %[[Y:[0-9]+]]: !i32, %[[P:[0-9]+]]: !ptr.p<!i32>)
+// CHECK: %[[XOR:[0-9]+]] = xori %[[Y]], %[[X]] : !i32
+// CHECK: ptr.store %[[XOR]], %[[P]] state(%{{[0-9]+}})
+// CHECK: -> %[[X]], %{{[0-9]+}}

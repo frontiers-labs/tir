@@ -3,7 +3,19 @@
 rule add: builtin.addi(builtin.addi(x: int<W>, a: const), b: const) => builtin.addi(x, const<W>(a + b));
 rule sub: builtin.subi(builtin.addi(x: int<W>, a: const), b: const) => builtin.addi(x, const<W>(a - b));
 rule mul: builtin.muli(builtin.muli(x: int<W>, a: const), b: const) => builtin.muli(x, const<W>(a * b));
+rule neg: builtin.addi(x: int<W>, c: const) => x where -c == 0;
+rule div: builtin.addi(x: int<W>, c: const) => x where c / 2 == 0;
+rule rem: builtin.addi(x: int<W>, c: const) => x where c % 2 == 0;
+rule shl: builtin.addi(x: int<W>, c: const) => x where c << 1 == 0;
+rule shr: builtin.addi(x: int<W>, c: const) => x where c >> 1 == 0;
 
-// CHECK: checked_add
-// CHECK: checked_sub
-// CHECK: checked_mul
+// CHECK: .add(
+// CHECK: .sub(
+// CHECK: .mul(
+// CHECK: checked_neg
+// CHECK: checked_div
+// CHECK: checked_rem
+// CHECK: let Ok(shift) = u32::try_from
+// CHECK: checked_shl
+// CHECK: let Ok(shift) = u32::try_from
+// CHECK: checked_shr

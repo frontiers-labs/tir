@@ -26,10 +26,11 @@ module {
 }
 
 // CHECK-LABEL: func.func @add_overflow
-// CHECK-COUNT-2: addi
+// CHECK: constant {value = -9223372036854775808} : !i64
+// CHECK-COUNT-1: addi
 // CHECK-LABEL: func.func @sub_overflow
-// CHECK: addi
-// CHECK: subi
+// CHECK: constant {value = 9223372036854775807} : !i64
+// CHECK-COUNT-1: addi
 // CHECK-LABEL: func.func @mul_overflow
-// CHECK: muli
-// CHECK: shli
+// CHECK: constant {value = -2} : !i64
+// CHECK-COUNT-1: muli

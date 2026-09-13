@@ -729,7 +729,9 @@ interference/affinity matrices → `tir-pbqp` solve → spill/retry.
 - Rewrite soundness is tiered: axioms are SMT-proved (at rule-load / CI /
   `TIR_VERIFY_AXIOMS`); θ-facts are proved by induction in the axiom
   prover; state laws are definitional (§6.5); speculation is guarded at
-  selection legality.
+  selection legality. InstCombine's dialect-op PDL rules are compiled to
+  Rust, not automatically proved. Their semantic proof checks live in
+  `core/checks/Prove/`; IR regression checks cover the generated rewrites.
 - Determinism is a hard requirement: identical input produces bit-identical
   output. Dense ids and ordered containers by construction; no iteration
   over unordered maps into anything that reaches output. The standing test

@@ -421,6 +421,12 @@ their semantic proofs run separately through the checks in
 The language is described in
 `docs/design/instruction_selection.md`.
 
+For the Rust-generated InstCombine rules, addition, subtraction, and
+multiplication in a right-hand-side `const<W>` use `APInt` arithmetic modulo
+`2^W`. Other numeric operators, and arithmetic in guards, use checked signed
+host arithmetic. An invalid host operation skips the match. A host operator
+such as division also keeps its nested arithmetic in the host domain.
+
 ## TMDL-Generated Dialects
 
 Target ISAs are usually too large to maintain as hand-written Rust. A TMDL file
