@@ -1,0 +1,21 @@
+// RUN: env TIR_SAT_TRACE=1 tir opt --pass restructure-nodes,instcombine-nodes --verify %s 2>&1 | filecheck %s
+
+module {
+  %add = func.func @reversed_add(%z: !i32, %y: !i32, %x: !i32) -> !i32 {
+    %xy = addi %x, %y : !i32
+    %zy = subi %z, %y : !i32
+    %result = addi %xy, %zy : !i32
+    func.return %result
+  }
+  %mul = func.func @reassociated_mul(%x: !i32) -> !i32 {
+    %two = constant {value = 2} : !i32
+    %three = constant {value = 3} : !i32
+    %first = muli %x, %two : !i32
+    %result = muli %first, %three : !i32
+    func.return %result
+  }
+  module_end
+}
+
+// CHECK: kind: Ir(IrOp { dialect: "builtin", name: "addi", attrs: [], commutative: true, cost: 1 }){{.*}}prov: Introduced{{.*}} [0, 2]
+// CHECK: kind: Ir(IrOp { dialect: "builtin", name: "muli", attrs: [], commutative: true, cost: 4 }){{.*}}prov: Introduced

@@ -365,6 +365,10 @@ fn coerce(lhs: APInt, rhs: APInt) -> (APInt, APInt) {
     (widen(lhs, width), widen(rhs, width))
 }
 
+fn shift_amount(value: &APInt, width: u32) -> u32 {
+    value.to_u64().min(u64::from(width)) as u32
+}
+
 impl ScalarOp {
     pub fn eval_int(&self, operands: &[APInt]) -> APInt {
         assert_eq!(operands.len(), self.arity);
@@ -396,9 +400,12 @@ impl ScalarOp {
             EvalRule::ULe => boolean(lhs.ule(&rhs)),
             EvalRule::UGt => boolean(lhs.ugt(&rhs)),
             EvalRule::UGe => boolean(lhs.uge(&rhs)),
-            EvalRule::Shl => lhs.shl(rhs.to_u64() as u32),
-            EvalRule::AShr => lhs.with_signed(true).ashr(rhs.to_u64() as u32),
-            EvalRule::LShr => lhs.lshr(rhs.to_u64() as u32),
+            EvalRule::Shl => lhs.shl(shift_amount(&rhs, lhs.width())),
+            EvalRule::AShr => {
+                let shift = shift_amount(&rhs, lhs.width());
+                lhs.with_signed(true).ashr(shift)
+            }
+            EvalRule::LShr => lhs.lshr(shift_amount(&rhs, lhs.width())),
             EvalRule::Or => lhs.or(&rhs),
             EvalRule::And => lhs.and(&rhs),
             EvalRule::Xor => lhs.xor(&rhs),

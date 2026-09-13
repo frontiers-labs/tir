@@ -1,0 +1,45 @@
+// RUN: tir opt --pass restructure-nodes,instcombine-nodes --verify %s | filecheck %s
+
+module {
+  %shl = func.func @shl() -> !i64 {
+    %value = constant {value = 1} : !i64
+    %amount = constant {value = 4294967296} : !i64
+    %result = shli %value, %amount : !i64
+    func.return %result
+  }
+  %lshr = func.func @lshr() -> !i64 {
+    %value = constant {value = 8} : !i64
+    %amount = constant {value = 4294967296} : !i64
+    %result = shrui %value, %amount : !i64
+    func.return %result
+  }
+  %ashr = func.func @ashr() -> !i64 {
+    %value = constant {value = -8} : !i64
+    %amount = constant {value = 4294967296} : !i64
+    %result = shrsi %value, %amount : !i64
+    func.return %result
+  }
+  %distinct = func.func @distinct_constants() -> !i64 {
+    %zero = constant {value = 0} : !i64
+    %one = constant {value = 1} : !i64
+    %amount = constant {value = 4294967296} : !i64
+    %shifted = shli %one, %amount : !i64
+    %difference = subi %one, %shifted : !i64
+    %result = addi %difference, %zero : !i64
+    func.return %result
+  }
+  module_end
+}
+
+// CHECK-LABEL: func.func @shl
+// CHECK-NOT: shli
+// CHECK: constant {value = 0} : !i64
+// CHECK-LABEL: func.func @lshr
+// CHECK-NOT: shrui
+// CHECK: constant {value = 0} : !i64
+// CHECK-LABEL: func.func @ashr
+// CHECK-NOT: shrsi
+// CHECK: constant {value = -1} : !i64
+// CHECK-LABEL: func.func @distinct_constants
+// CHECK-NEXT: %[[ONE:[0-9]+]] = constant {value = 1} : !i64
+// CHECK-NEXT: -> %[[ONE]]

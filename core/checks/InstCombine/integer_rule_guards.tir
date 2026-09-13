@@ -31,6 +31,11 @@ module {
     %r = divsi %x, %minus_one : !i32
     func.return %r
   }
+  %g = func.func @arithmetic_shift_wide(%x: !i64) -> !i64 {
+    %amount = constant {value = 64} : !i64
+    %r = shrsi %x, %amount : !i64
+    func.return %r
+  }
   module_end
 }
 
@@ -57,4 +62,8 @@ module {
 // CHECK-LABEL: func.func @divide_negative_one(%[[X:[0-9]+]]: !i32)
 // CHECK: %[[MINUS_ONE:[0-9]+]] = constant {value = -1} : !i32
 // CHECK: %[[R:[0-9]+]] = divsi %[[X]], %[[MINUS_ONE]] : !i32
+// CHECK: -> %[[R]]
+// CHECK-LABEL: func.func @arithmetic_shift_wide(%[[X:[0-9]+]]: !i64)
+// CHECK: %[[AMOUNT:[0-9]+]] = constant {value = 64} : !i64
+// CHECK: %[[R:[0-9]+]] = shrsi %[[X]], %[[AMOUNT]] : !i64
 // CHECK: -> %[[R]]

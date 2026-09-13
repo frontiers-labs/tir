@@ -1,0 +1,41 @@
+// RUN: tir prove --width 32 %s | filecheck %s
+// RUN: tir prove --width 64 %s | filecheck %s
+
+// Exact sign-bit definitions cover all bit patterns, including signaling NaNs.
+rule fp-neg-neg:
+  #xor(#xor(x: int<W>, #shl(const<W>(1), const<W>(W - 1))), #shl(const<W>(1), const<W>(W - 1))) : int<W> => x;
+rule fp-copysign-self:
+  #or(#and(x: int<W>, #lshr(ones(W), const<W>(1))), #and(x, #shl(const<W>(1), const<W>(W - 1)))) : int<W> => x;
+rule fp-copysign-copysign-magnitude:
+  #or(#and(#or(#and(x: int<W>, #lshr(ones(W), const<W>(1))), #and(y: int<W>, #shl(const<W>(1), const<W>(W - 1)))), #lshr(ones(W), const<W>(1))), #and(z: int<W>, #shl(const<W>(1), const<W>(W - 1)))) : int<W> => #or(#and(x, #lshr(ones(W), const<W>(1))), #and(z, #shl(const<W>(1), const<W>(W - 1))));
+rule fp-copysign-copysign-sign:
+  #or(#and(x: int<W>, #lshr(ones(W), const<W>(1))), #and(#or(#and(y: int<W>, #lshr(ones(W), const<W>(1))), #and(z: int<W>, #shl(const<W>(1), const<W>(W - 1)))), #shl(const<W>(1), const<W>(W - 1)))) : int<W> => #or(#and(x, #lshr(ones(W), const<W>(1))), #and(z, #shl(const<W>(1), const<W>(W - 1))));
+rule fp-abs-abs:
+  #and(#and(x: int<W>, #lshr(ones(W), const<W>(1))), #lshr(ones(W), const<W>(1))) : int<W> => #and(x, #lshr(ones(W), const<W>(1)));
+rule fp-abs-neg:
+  #and(#xor(x: int<W>, #shl(const<W>(1), const<W>(W - 1))), #lshr(ones(W), const<W>(1))) : int<W> => #and(x, #lshr(ones(W), const<W>(1)));
+rule fp-abs-copysign:
+  #and(#or(#and(x: int<W>, #lshr(ones(W), const<W>(1))), #and(y: int<W>, #shl(const<W>(1), const<W>(W - 1)))), #lshr(ones(W), const<W>(1))) : int<W> => #and(x, #lshr(ones(W), const<W>(1)));
+rule fp-copysign-abs-magnitude:
+  #or(#and(#and(x: int<W>, #lshr(ones(W), const<W>(1))), #lshr(ones(W), const<W>(1))), #and(y: int<W>, #shl(const<W>(1), const<W>(W - 1)))) : int<W> => #or(#and(x, #lshr(ones(W), const<W>(1))), #and(y, #shl(const<W>(1), const<W>(W - 1))));
+rule fp-copysign-neg-magnitude:
+  #or(#and(#xor(x: int<W>, #shl(const<W>(1), const<W>(W - 1))), #lshr(ones(W), const<W>(1))), #and(y: int<W>, #shl(const<W>(1), const<W>(W - 1)))) : int<W> => #or(#and(x, #lshr(ones(W), const<W>(1))), #and(y, #shl(const<W>(1), const<W>(W - 1))));
+rule fp-copysign-abs-sign:
+  #or(#and(x: int<W>, #lshr(ones(W), const<W>(1))), #and(#and(y: int<W>, #lshr(ones(W), const<W>(1))), #shl(const<W>(1), const<W>(W - 1)))) : int<W> => #and(x, #lshr(ones(W), const<W>(1)));
+rule fp-copysign-neg-self:
+  #or(#and(x: int<W>, #lshr(ones(W), const<W>(1))), #and(#xor(x, #shl(const<W>(1), const<W>(W - 1))), #shl(const<W>(1), const<W>(W - 1)))) : int<W> => #xor(x, #shl(const<W>(1), const<W>(W - 1)));
+rule fp-neg-copysign-neg-sign:
+  #xor(#or(#and(x: int<W>, #lshr(ones(W), const<W>(1))), #and(#xor(y: int<W>, #shl(const<W>(1), const<W>(W - 1))), #shl(const<W>(1), const<W>(W - 1)))), #shl(const<W>(1), const<W>(W - 1))) : int<W> => #or(#and(x, #lshr(ones(W), const<W>(1))), #and(y, #shl(const<W>(1), const<W>(W - 1))));
+
+// CHECK: fp-neg-neg: proven
+// CHECK: fp-copysign-self: proven
+// CHECK: fp-copysign-copysign-magnitude: proven
+// CHECK: fp-copysign-copysign-sign: proven
+// CHECK: fp-abs-abs: proven
+// CHECK: fp-abs-neg: proven
+// CHECK: fp-abs-copysign: proven
+// CHECK: fp-copysign-abs-magnitude: proven
+// CHECK: fp-copysign-neg-magnitude: proven
+// CHECK: fp-copysign-abs-sign: proven
+// CHECK: fp-copysign-neg-self: proven
+// CHECK: fp-neg-copysign-neg-sign: proven

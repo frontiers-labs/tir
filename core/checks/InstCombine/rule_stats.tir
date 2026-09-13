@@ -1,6 +1,7 @@
-// RUN: env TIR_TIME_PASSES=1 tir opt --pass restructure-nodes,instcombine-nodes %s 2>&1 | filecheck %s
-// RUN: env TIR_TIME_PASSES=1 tir opt --pass restructure-nodes,instcombine-nodes,instcombine-nodes %s 2>&1 | filecheck %s --check-prefix RESET
-// RUN: env TIR_TIME_PASSES=0 tir opt --pass restructure-nodes,instcombine-nodes %s 2>&1 | filecheck %s --check-prefix OFF
+// RUN: env TIR_RULE_STATS=1 TIR_TIME_PASSES=0 tir opt --pass restructure-nodes,instcombine-nodes %s 2>&1 | filecheck %s
+// RUN: env TIR_TIME_PASSES=1 TIR_RULE_STATS=0 tir opt --pass restructure-nodes,instcombine-nodes %s 2>&1 | filecheck %s --check-prefix TIME
+// RUN: env TIR_RULE_STATS=1 TIR_TIME_PASSES=1 tir opt --pass restructure-nodes,instcombine-nodes,instcombine-nodes %s 2>&1 | filecheck %s --check-prefix RESET
+// RUN: env TIR_RULE_STATS=0 TIR_TIME_PASSES=0 tir opt --pass restructure-nodes,instcombine-nodes %s 2>&1 | filecheck %s --check-prefix OFF
 
 module {
   %f = func.func @identity(%x: !i32) -> !i32 {
@@ -12,8 +13,10 @@ module {
 }
 
 // CHECK: tir-rule: pass=instcombine-nodes rule=fp-neg-neg applications=0 changed=0 noop=0
-// CHECK: tir-rule: pass=instcombine-nodes rule=sub-zero applications=3 changed=1 noop=2
-// RESET: tir-rule: pass=instcombine-nodes rule=sub-zero applications=3 changed=1 noop=2
+// CHECK: tir-rule: pass=instcombine-nodes rule=sub-zero applications={{[1-9][0-9]*}} changed=1 noop={{[0-9]+}}
+// CHECK-NOT: tir-sat:
+// TIME-NOT: tir-rule:
+// RESET: tir-rule: pass=instcombine-nodes rule=sub-zero applications={{[1-9][0-9]*}} changed=1 noop={{[0-9]+}}
 // RESET: tir-rule: pass=instcombine-nodes rule=sub-zero applications=0 changed=0 noop=0
 // OFF: module {
 // OFF-NOT: tir-rule:

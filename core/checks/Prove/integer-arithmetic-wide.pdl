@@ -1,6 +1,9 @@
 // RUN: tir prove --width 32 %s | filecheck %s
 // RUN: tir prove --width 64 %s | filecheck %s
 
+// Wider proofs are limited to these laws because the full portfolio exceeds
+// the current prover timeout; the width-1 file covers the remaining shapes.
+
 rule double-neg: #sub(const<W>(0), #sub(const<W>(0), x: int<W>)) : int<W> => x;
 rule sub-common-left: #sub(#sub(x: int<W>, y: int<W>), #sub(x, z: int<W>)) : int<W> => #sub(z, y);
 rule add-add-sub-cancel: #add(#add(x: int<W>, y: int<W>), #sub(z: int<W>, y)) : int<W> => #add(x, z);

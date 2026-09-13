@@ -413,9 +413,12 @@ rule add-zero: builtin.addi(x: int<W>, 0) => x;
 rule addi-is-add: builtin.addi(x: int<W>, y) <=> #add(x, y) proof trusted;
 ```
 
-`core/src/passes/instcombine/rules.pdl` holds the peephole rules,
+`core/src/passes/instcombine/rules/` holds the integer, bitwise, FP, and control peephole rules,
 `core/defs/isel.pdl` the target-independent semantic invariants, and each
-backend its own rule file. The language is described in
+backend its own rule file. InstCombine rules are compiled during the build;
+their semantic proofs run separately through the checks in
+`core/checks/Prove/`. Compilation alone does not establish SMT verification.
+The language is described in
 `docs/design/instruction_selection.md`.
 
 ## TMDL-Generated Dialects

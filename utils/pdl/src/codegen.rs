@@ -9,6 +9,9 @@ use crate::{Diagnostic, Span};
 struct RustOperation {
     path: TokenStream,
     emitter: Option<Ident>,
+    /// Metadata of the supported attribute-free op, matching its core interfaces.
+    commutative: bool,
+    cost: u32,
 }
 
 fn rust_operation(operator: &Operator) -> Option<RustOperation> {
@@ -19,66 +22,98 @@ fn rust_operation(operator: &Operator) -> Option<RustOperation> {
         ("builtin", "addi") => Some(RustOperation {
             path: quote! { crate::builtin::AddIOp },
             emitter: Some(format_ident!("emit_add")),
+            commutative: true,
+            cost: 1,
         }),
         ("builtin", "muli") => Some(RustOperation {
             path: quote! { crate::builtin::MulIOp },
             emitter: Some(format_ident!("emit_mul")),
+            commutative: true,
+            cost: 4,
         }),
         ("builtin", "subi") => Some(RustOperation {
             path: quote! { crate::builtin::SubIOp },
             emitter: Some(format_ident!("emit_sub")),
+            commutative: false,
+            cost: 1,
         }),
         ("builtin", "divui") => Some(RustOperation {
             path: quote! { crate::builtin::DivUIOp },
             emitter: None,
+            commutative: false,
+            cost: 1,
         }),
         ("builtin", "divsi") => Some(RustOperation {
             path: quote! { crate::builtin::DivSIOp },
             emitter: None,
+            commutative: false,
+            cost: 1,
         }),
         ("builtin", "remui") => Some(RustOperation {
             path: quote! { crate::builtin::RemUIOp },
             emitter: None,
+            commutative: false,
+            cost: 1,
         }),
         ("builtin", "remsi") => Some(RustOperation {
             path: quote! { crate::builtin::RemSIOp },
             emitter: None,
+            commutative: false,
+            cost: 1,
         }),
         ("builtin", "shli") => Some(RustOperation {
             path: quote! { crate::builtin::ShlIOp },
             emitter: Some(format_ident!("emit_shl")),
+            commutative: false,
+            cost: 1,
         }),
         ("builtin", "andi") => Some(RustOperation {
             path: quote! { crate::builtin::AndIOp },
             emitter: None,
+            commutative: true,
+            cost: 1,
         }),
         ("builtin", "ori") => Some(RustOperation {
             path: quote! { crate::builtin::OrIOp },
             emitter: Some(format_ident!("emit_or")),
+            commutative: true,
+            cost: 1,
         }),
         ("builtin", "xori") => Some(RustOperation {
             path: quote! { crate::builtin::XOrIOp },
             emitter: Some(format_ident!("emit_xor")),
+            commutative: true,
+            cost: 1,
         }),
         ("builtin", "shrui") => Some(RustOperation {
             path: quote! { crate::builtin::ShrUIOp },
             emitter: None,
+            commutative: false,
+            cost: 1,
         }),
         ("builtin", "shrsi") => Some(RustOperation {
             path: quote! { crate::builtin::ShrSIOp },
             emitter: None,
+            commutative: false,
+            cost: 1,
         }),
         ("fp", "neg") => Some(RustOperation {
             path: quote! { crate::fp::ops::NegOp },
             emitter: Some(format_ident!("emit_fp_neg")),
+            commutative: false,
+            cost: 1,
         }),
         ("fp", "abs") => Some(RustOperation {
             path: quote! { crate::fp::ops::AbsOp },
             emitter: Some(format_ident!("emit_fp_abs")),
+            commutative: false,
+            cost: 1,
         }),
         ("fp", "copysign") => Some(RustOperation {
             path: quote! { crate::fp::ops::CopySignOp },
             emitter: Some(format_ident!("emit_fp_copysign")),
+            commutative: false,
+            cost: 1,
         }),
         _ => None,
     }
@@ -799,7 +834,10 @@ fn generate_rhs(
         TermKind::Operation {
             operator, operands, ..
         } => {
-            let path = rust_operation(operator)?.path;
+            let operation = rust_operation(operator)?;
+            let path = operation.path;
+            let commutative = operation.commutative;
+            let cost = operation.cost;
             let operands: Vec<u32> = operands
                 .iter()
                 .map(|operand| rhs_operand(operand, binders, build))
@@ -816,7 +854,8 @@ fn generate_rhs(
                     label: LabelFill {
                         template: Node::introduced::<#path>(
                             TypeId::from_number(0),
-                            1,
+                            #commutative,
+                            #cost,
                             index,
                             vec![#(#children),*],
                         ),

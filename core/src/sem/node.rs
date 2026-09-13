@@ -233,13 +233,19 @@ impl SemNode {
     }
 
     /// An op a rewrite introduced, built by the ruleset's `idx`-th emitter.
-    pub fn introduced<O: Operation>(ty: TypeId, cost: u32, idx: usize, args: Vec<Id>) -> Self {
+    pub fn introduced<O: Operation>(
+        ty: TypeId,
+        commutative: bool,
+        cost: u32,
+        idx: usize,
+        args: Vec<Id>,
+    ) -> Self {
         Self::ir(
             IrOp {
                 dialect: O::dialect(),
                 name: O::name(),
                 attrs: Vec::new(),
-                commutative: false,
+                commutative,
                 cost,
             },
             Some(ty),

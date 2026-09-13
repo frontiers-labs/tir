@@ -16,6 +16,11 @@ pub fn enabled() -> bool {
     *FROM_ENV.get_or_init(|| std::env::var_os("TIR_TIME_PASSES").is_some_and(|value| value != "0"))
 }
 
+fn rule_stats_enabled() -> bool {
+    static FROM_ENV: OnceLock<bool> = OnceLock::new();
+    *FROM_ENV.get_or_init(|| std::env::var_os("TIR_RULE_STATS").is_some_and(|value| value != "0"))
+}
+
 #[derive(Default, Clone, Copy)]
 struct Round {
     changed: usize,
@@ -41,7 +46,7 @@ struct RuleCounts {
 }
 
 pub(super) fn register_rules<L: ENode>(rules: &[crate::Rule<L>]) {
-    if enabled() {
+    if rule_stats_enabled() {
         RULES.with(|counts| {
             let mut counts = counts.borrow_mut();
             for rule in rules {
@@ -56,7 +61,7 @@ pub(super) fn apply_rule<L: ENode>(
     eg: &mut Engine<L>,
     apply: impl FnOnce(&mut Engine<L>),
 ) {
-    if !enabled() {
+    if !rule_stats_enabled() {
         return apply(eg);
     }
     let before = eg.stats();
@@ -159,22 +164,23 @@ impl RoundStats {
     }
 }
 
-/// Print and reset the rounds recorded since the last call, one `tir-sat:` line
-/// per reporting caller. A no-op unless `TIR_TIME_PASSES` is set.
+/// Print and reset the telemetry recorded since the last call.
 pub fn report_saturation(pass: &str) {
+    if rule_stats_enabled() {
+        RULES.with(|counts| {
+            for (name, count) in std::mem::take(&mut *counts.borrow_mut()) {
+                eprintln!(
+                    "tir-rule: pass={pass} rule={name} applications={} changed={} noop={}",
+                    count.applications,
+                    count.changed,
+                    count.applications - count.changed,
+                );
+            }
+        });
+    }
     if !enabled() {
         return;
     }
-    RULES.with(|counts| {
-        for (name, count) in std::mem::take(&mut *counts.borrow_mut()) {
-            eprintln!(
-                "tir-rule: pass={pass} rule={name} applications={} changed={} noop={}",
-                count.applications,
-                count.changed,
-                count.applications - count.changed,
-            );
-        }
-    });
     let extracts = EXTRACTED.replace((0, Duration::ZERO));
     let rounds = ROUNDS.with(|rounds| std::mem::take(&mut *rounds.borrow_mut()));
     if rounds.is_empty() {

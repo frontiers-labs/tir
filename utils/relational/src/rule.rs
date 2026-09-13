@@ -92,6 +92,9 @@ impl<L: Label> Engine<L> {
                         };
                         *slot = class;
                     }
+                    if node.commutative() {
+                        node.children_mut().sort_by_key(|class| class.index());
+                    }
                     let class = self.add(node);
                     bound[*into as usize] = Some(class);
                 }

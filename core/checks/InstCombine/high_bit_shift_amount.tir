@@ -1,0 +1,22 @@
+// RUN: tir opt --pass restructure-nodes,instcombine-nodes --verify %s | filecheck %s
+
+module {
+  %left = func.func @left(%x: !i64) -> !i64 {
+    %amount = constant {value = -9223372036854775808} : !i64
+    %r = shli %x, %amount : !i64
+    func.return %r
+  }
+  %right = func.func @right(%x: !i64) -> !i64 {
+    %amount = constant {value = -1} : !i64
+    %r = shrui %x, %amount : !i64
+    func.return %r
+  }
+  module_end
+}
+
+// CHECK-LABEL: func.func @left
+// CHECK-NEXT: %[[ZERO:[0-9]+]] = constant {value = 0} : !i64
+// CHECK-NEXT: -> %[[ZERO]]
+// CHECK-LABEL: func.func @right
+// CHECK-NEXT: %[[ZERO:[0-9]+]] = constant {value = 0} : !i64
+// CHECK-NEXT: -> %[[ZERO]]

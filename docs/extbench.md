@@ -122,8 +122,8 @@ wall time and RSS. Their absent phase metrics are omitted, not estimated.
 
 ### Rule application counts
 
-With `TIR_TIME_PASSES=1`, saturation also writes one `tir-rule:` line per
-rule to compiler stderr:
+With `TIR_RULE_STATS=1`, saturation writes one `tir-rule:` line per rule to
+compiler stderr:
 
 ```text
 tir-rule: pass=instcombine-nodes rule=sub-zero applications=3 changed=1 noop=2
@@ -137,9 +137,10 @@ Rules with no applications are included. Counts aggregate by rule name within
 each pass report and reset after reporting. Sum repeated lines across functions
 and translation units for a benchmark total.
 
-For example, `TIR_TIME_PASSES=1 target/release/fcc -O2 -c input.c -o input.o
-2>rules.log` captures the counters with the timing diagnostics. The extbench
-runner does not retain raw compiler stderr in its result JSON.
+Set `TIR_TIME_PASSES=1` separately when you also need pass timing and round
+telemetry. For example, `TIR_RULE_STATS=1 target/release/fcc -O2 -c input.c -o
+input.o 2>rules.log` captures rule counters without timing diagnostics. The
+extbench runner does not retain raw compiler stderr in its result JSON.
 
 ## Results and baselines
 

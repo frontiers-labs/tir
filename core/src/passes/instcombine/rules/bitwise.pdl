@@ -16,6 +16,7 @@ rule or-complement: builtin.ori(x: int<W>, builtin.xori(x, c: const)) => const<W
 rule shl-zero: builtin.shli(x: int<W>, 0) => x;
 rule shrui-zero: builtin.shrui(x: int<W>, 0) => x;
 rule shrsi-zero: builtin.shrsi(x: int<W>, 0) => x;
-rule shl-wide: builtin.shli(x: int<W>, c: const) => const<W>(0) where c >= W;
-rule shrui-wide: builtin.shrui(x: int<W>, c: const) => const<W>(0) where c >= W;
+// A negative host i64 represents an unsigned shift amount with bit 63 set.
+rule shl-wide: builtin.shli(x: int<W>, c: const) => const<W>(0) where c < 0 || c >= W;
+rule shrui-wide: builtin.shrui(x: int<W>, c: const) => const<W>(0) where c < 0 || c >= W;
 rule xor-or-and: builtin.xori(builtin.ori(x: int<W>, y), builtin.andi(x, y)) => builtin.xori(x, y);
