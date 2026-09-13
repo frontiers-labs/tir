@@ -252,7 +252,9 @@ fn compare(baseline: &Results, current: &Results) -> anyhow::Result<()> {
         sum.1 += sample.measurement.wall_ms;
         sum.2 += old.measurement.peak_rss_kb;
         sum.3 += sample.measurement.peak_rss_kb;
-        if sample.measurement.peak_rss_kb as f64 > old.measurement.peak_rss_kb as f64 * 1.35 {
+        if gates_compiler(&sample.compiler)
+            && sample.measurement.peak_rss_kb as f64 > old.measurement.peak_rss_kb as f64 * 1.35
+        {
             regressions.push(format!(
                 "{} {} {} peak RSS grew by more than 35%",
                 sample.compiler, sample.benchmark, sample.source
@@ -262,10 +264,75 @@ fn compare(baseline: &Results, current: &Results) -> anyhow::Result<()> {
     anyhow::ensure!(!sums.is_empty(), "baseline has no matching samples");
     for ((package, compiler, level), (old_ms, ms, old_rss, rss)) in sums {
         println!("{package} {compiler} {level} baseline wall_ms={old_ms:.3}->{ms:.3} peak_rss_sum_kb={old_rss}->{rss}");
+        if !gates_compiler(compiler) {
+            continue;
+        }
         if ms > old_ms * 1.10 || rss as f64 > old_rss as f64 * 1.02 {
             regressions.push(format!("{package} {compiler} {level} time grew by more than 10% or peak RSS sum by more than 2%"));
         }
     }
     anyhow::ensure!(regressions.is_empty(), "{}", regressions.join("\n"));
     Ok(())
+}
+
+/// GCC and Clang compile times are runner weather; only FCC is this tree.
+fn gates_compiler(compiler: &str) -> bool {
+    compiler == "fcc"
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use command::Measurement;
+
+    fn sample(compiler: &str, source: &str, wall_ms: f64, peak_rss_kb: u64) -> Sample {
+        Sample {
+            package: "fcc".into(),
+            benchmark: "coremark".into(),
+            compiler: compiler.into(),
+            level: "-O0".into(),
+            source: source.into(),
+            measurement: Measurement {
+                wall_ms,
+                peak_rss_kb,
+                metrics: Default::default(),
+            },
+        }
+    }
+
+    fn results(samples: Vec<Sample>) -> Results {
+        Results {
+            mode: "compile".into(),
+            host: "x86_64-linux".into(),
+            samples,
+        }
+    }
+
+    #[test]
+    fn clang_wall_time_weather_is_not_a_regression() {
+        let baseline = results(vec![sample("clang", "core_list_join.c", 377.0, 84_000)]);
+        let current = results(vec![sample("clang", "core_list_join.c", 4276.0, 84_000)]);
+        compare(&baseline, &current).unwrap();
+    }
+
+    #[test]
+    fn fcc_wall_time_growth_is_a_regression() {
+        let baseline = results(vec![sample("fcc", "core_list_join.c", 100.0, 20_000)]);
+        let current = results(vec![sample("fcc", "core_list_join.c", 130.0, 20_000)]);
+        assert!(compare(&baseline, &current).is_err());
+    }
+
+    #[test]
+    fn clang_peak_rss_weather_is_not_a_regression() {
+        let baseline = results(vec![sample("clang", "core_list_join.c", 10.0, 10_000)]);
+        let current = results(vec![sample("clang", "core_list_join.c", 10.0, 20_000)]);
+        compare(&baseline, &current).unwrap();
+    }
+
+    #[test]
+    fn fcc_peak_rss_growth_is_a_regression() {
+        let baseline = results(vec![sample("fcc", "core_list_join.c", 10.0, 10_000)]);
+        let current = results(vec![sample("fcc", "core_list_join.c", 10.0, 20_000)]);
+        assert!(compare(&baseline, &current).is_err());
+    }
 }
