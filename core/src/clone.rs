@@ -82,6 +82,25 @@ pub fn clone_nodes_ops_into(
     (ops, results)
 }
 
+/// Copy `op` into `destination` with `bindings` applied to its operands, and
+/// extend `bindings` with the copy's results. Nested regions are copied with
+/// the same mapping.
+pub fn clone_op_into_with_bindings(
+    context: &Context,
+    op: OpId,
+    bindings: &mut HashMap<ValueId, ValueId>,
+    destination: RegionId,
+) -> OpId {
+    let mut mapping = Mapping {
+        values: bindings.clone(),
+        blocks: HashMap::new(),
+    };
+    let copy = clone_op_into(context, op, &mut mapping);
+    context.add(destination, copy);
+    *bindings = mapping.values;
+    copy
+}
+
 /// Blocks are created before any operation is copied, so a branch to a block
 /// later in the region already has its copy to name.
 fn clone_region_into(context: &Context, region: RegionId, mapping: &mut Mapping) -> RegionId {

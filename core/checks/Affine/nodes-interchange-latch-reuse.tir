@@ -1,0 +1,68 @@
+// RUN: tir opt --pass restructure-nodes,instcombine-nodes,affine,verify-deps --verify %s | filecheck %s
+// RUN: tir interp %s | filecheck %s --check-prefix=VALUE
+// RUN: tir opt --pass restructure-nodes,instcombine-nodes,affine %s | tir interp - | filecheck %s --check-prefix=VALUE
+
+// Nightly differential-fuzz #448 #449 #450. `A[j][i] += i + 1` names the outer
+// latch as a value of the inner body: instcombine folds the two `addi`s into
+// one. Rebuilding the nest for interchange used to clone the inner body still
+// pointing at that latch, then erase the old nest, and the copy named a dead
+// value. The rebuild now spells `i + 1` under the counter the new nest counts
+// with, so interchange still happens and the IR verifies.
+
+#data_layout = {types = {i32 = {abi = 32, size = 32}, i64 = {abi = 64, size = 64}, p = {abi = 64, size = 64}}}
+
+module {data_layout = #data_layout} {
+  %0 = func.func @main() -> !i32 {
+    %1 = ptr.alloca {size = 1024, align = 4} : !ptr.p
+    %2 = constant {value = 0} : !i32
+    %3 = constant {value = 16} : !i32
+    %4 = constant {value = 1} : !i32
+    %5 = constant {value = 64} : !i64
+    %6 = constant {value = 4} : !i64
+    %30 = constant {value = 1024} : !i64
+    %31 = constant {value = 4} : !i32
+    %32 = constant {value = 0} : !i8
+    ptr.memset %1, %32, %30
+    %i1_end, %7 = scf.ordered_for %i1 = %2 to %3 step %4 (%8 = %2) {
+      %i2_end, %9 = scf.ordered_for %i2 = %2 to %3 step %4 (%10 = %2) {
+        %11 = extsi %8 : !i64
+        %12 = extsi %10 : !i64
+        %13 = muli %12, %5 : !i64
+        %14 = muli %11, %6 : !i64
+        %15 = ptr.ptradd %1, %13 : !ptr.p
+        %16 = ptr.ptradd %15, %14 : !ptr.p
+        %17 = ptr.load %16 : !i32
+        %plus = addi %4, %8 : !i32
+        %18 = addi %17, %plus : !i32
+        ptr.store %18, %16
+        %20 = addi %10, %4 : !i32
+        scf.yield %20
+      }
+      %21 = addi %8, %4 : !i32
+      scf.yield %21
+    }
+    %22 = ptr.ptradd %1, %5 : !ptr.p
+    %23 = ptr.ptradd %22, %6 : !ptr.p
+    %24 = ptr.load %23 : !i32
+    %25 = ptr.ptradd %1, %5 : !ptr.p
+    %26 = ptr.load %25 : !i32
+    %27 = muli %24, %31 : !i32
+    %28 = addi %27, %26 : !i32
+    func.return %28
+  }
+  module_end
+}
+
+// CHECK: func.func @main
+// CHECK: scf.for %[[OUTER:[0-9]+]] = %{{[0-9]+}} to %{{[0-9]+}} step %{{[0-9]+}} (%{{[0-9]+}} = %{{[0-9]+}}) {
+// CHECK-NEXT: scf.for %[[INNER:[0-9]+]] = %{{[0-9]+}} to %{{[0-9]+}} step %{{[0-9]+}} (%{{[0-9]+}} = %{{[0-9]+}}) {
+// The latch `i + 1` is spelled from the inner counter, which is now the word
+// index; the row index is the outer counter.
+// CHECK: addi %{{[0-9]+}}, %[[INNER]]
+// CHECK-DAG: %[[WORD:[0-9]+]] = extsi %[[INNER]]
+// CHECK-DAG: %[[ROW:[0-9]+]] = extsi %[[OUTER]]
+// CHECK-DAG: shli %[[ROW]]
+// CHECK-DAG: shli %[[WORD]]
+
+// A[1][1] = 2, A[1][0] = 1: 2 * 4 + 1.
+// VALUE: i32 9
