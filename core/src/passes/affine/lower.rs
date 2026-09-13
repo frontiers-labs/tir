@@ -4,6 +4,9 @@
 //! which loop counts what and how far, and the loops that state it are fresh.
 //! Only the innermost body survives, cloned once per copy the tiling asks for,
 //! with each dimension's counter rebound to the loop that now counts it.
+//! Values the body reads from the levels above — a latch folded with `i + 1` —
+//! are spelled again under those counters, because the rebuild erases the old
+//! nest.
 //!
 //! What the rebuild may assume is checked first ([`Nest::read`]): every loop
 //! carries its counter and the memory chains and nothing else, the chains run
@@ -534,7 +537,14 @@ impl<'a> Lowering<'a> {
         states: Vec<ValueId>,
         site: RegionId,
     ) -> Result<Vec<ValueId>, PassError> {
-        let bindings = self.body_bindings(bound, &states);
+        let mut bindings = self.body_bindings(bound, &states);
+        bind_outer_uses(
+            self.context,
+            self.nest.root,
+            self.nest.body,
+            &mut bindings,
+            site,
+        );
         let (ops, results) =
             crate::clone::clone_nodes_ops_into(self.context, self.nest.body, &bindings, site);
         // The chains the copy carries on are the states its loop named among
@@ -552,6 +562,61 @@ impl<'a> Lowering<'a> {
         erase_unread(self.context, &ops)?;
         Ok(left)
     }
+}
+
+/// Values the innermost body reads that the nest defines above it — a latch
+/// folded with `i + 1` in the body, an address spelled in an outer level.
+/// The rebuild erases those levels, so the copy names them under the counters
+/// the new nest counts with.
+fn bind_outer_uses(
+    context: &Context,
+    root: OpId,
+    body: RegionId,
+    bindings: &mut HashMap<ValueId, ValueId>,
+    site: RegionId,
+) {
+    for op in context.get_region(body).op_ids() {
+        for value in crate::region::values_read(context, op) {
+            bind_outer_value(context, root, body, value, bindings, site);
+        }
+    }
+}
+
+fn bind_outer_value(
+    context: &Context,
+    root: OpId,
+    body: RegionId,
+    value: ValueId,
+    bindings: &mut HashMap<ValueId, ValueId>,
+    site: RegionId,
+) {
+    if bindings.contains_key(&value) || outside(context, root, value) {
+        return;
+    }
+    let Some(def) = context.get_value(value).defining_op() else {
+        return;
+    };
+    if defined_under_innermost(context, def, body) || !context.get_op(def).regions().is_empty() {
+        return;
+    }
+    for operand in context.get_op(def).operands() {
+        bind_outer_value(context, root, body, operand, bindings, site);
+    }
+    crate::clone::clone_op_into_with_bindings(context, def, bindings, site);
+}
+
+fn defined_under_innermost(context: &Context, def: OpId, body: RegionId) -> bool {
+    let Some(owner) = context.get_region(body).parent_op() else {
+        return false;
+    };
+    let mut current = Some(def);
+    while let Some(op) = current {
+        if op == owner {
+            return true;
+        }
+        current = context.parent_op(op);
+    }
+    false
 }
 
 /// Erase the pure copies nothing reads: the comparison and the latch a copied
