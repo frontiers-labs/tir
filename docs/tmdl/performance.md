@@ -1,17 +1,14 @@
 # Modelling performance with TMDL
 
-TIR's performance model has two halves that meet at a single source of truth:
+TMDL describes machine-independent scheduling classes and per-device timing.
+Instruction selection uses `InstrInfo::cost`, derived from scheduling-class
+defaults. Machine overrides do not change that selection cost.
 
-- **What instructions exist and what they nominally cost** — declared per ISA with
-  `sched_class` identities and instruction `schedule` membership.
-- **How a particular device executes them** — declared per device with a `machine`
-  block (issue width, pipeline, functional units, register files, latency bindings,
-  forwarding).
-
-The TMDL compiler resolves the two into one `MachineModel` per machine. Both the
-compiler's cost model and the static analyzer `tir sched` (an `llvm-mca`-style
-throughput tool) consume that same `MachineModel`, so they can never disagree about
-an instruction's cost.
+The static analyzer `tir sched` uses the selected machine's scheduling classes
+through `InstrInfo::sched_on`, including each override's fallback latency.
+The simulator can resolve [conditional latency](syntax.md#conditional-latency)
+from operand values before execution and replay those captured latencies.
+These costs can differ for the same instruction.
 
 ## Defining a machine
 

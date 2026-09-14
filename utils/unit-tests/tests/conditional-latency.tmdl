@@ -48,3 +48,17 @@ machine RegisterCore for [TestIsa] {
         when regnum(rhs) == 1 { latency = 3; }
     }
 }
+
+machine InvalidExtractCore for [TestIsa] {
+    override Div {
+        latency = 20;
+        when extract(rhs, 1000, 0) == 0 { latency = 3; }
+    }
+}
+
+machine InvalidExtensionCore for [TestIsa] {
+    override Div {
+        latency = 20;
+        when zext(rhs, 0) == 0 { latency = 3; }
+    }
+}

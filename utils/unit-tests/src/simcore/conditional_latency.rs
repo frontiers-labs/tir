@@ -155,3 +155,23 @@ fn conditional_latency_immediate_needs_no_register_values() {
         2
     );
 }
+
+#[test]
+fn conditional_latency_uses_later_matching_case() {
+    assert_eq!(div_latency(&ordered_core_model(), Some(1), 8), 7);
+}
+
+#[test]
+fn conditional_latency_empty_machine_cases_use_static_class() {
+    assert_eq!(div_latency(&immediate_core_model(), Some(1), 1), 20);
+}
+
+#[test]
+fn conditional_latency_invalid_extract_uses_fallback() {
+    assert_eq!(div_latency(&invalid_extract_core_model(), Some(1), 1), 20);
+}
+
+#[test]
+fn conditional_latency_invalid_extension_uses_fallback() {
+    assert_eq!(div_latency(&invalid_extension_core_model(), Some(1), 1), 20);
+}

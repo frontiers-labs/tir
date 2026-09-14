@@ -1069,18 +1069,12 @@ fn check_machine_overrides(
                 ),
             ));
         }
-        for case in &ov.latency_cases {
-            if !(1..=65535).contains(&case.latency) {
-                diags.push((
-                    file_name.to_string(),
-                    Rich::custom(case.span, "conditional latency case must be in 1..65535"),
-                ));
-            }
+        if !ov.latency_cases.is_empty() {
             if ov.eliminated == Some(true) {
                 diags.push((
                     file_name.to_string(),
                     Rich::custom(
-                        case.span,
+                        ov.span,
                         "conditional latency cannot be used with eliminated = true",
                     ),
                 ));
@@ -1089,7 +1083,7 @@ fn check_machine_overrides(
                 diags.push((
                     file_name.to_string(),
                     Rich::custom(
-                        case.span,
+                        ov.span,
                         "conditional latency cannot be used with zero_idiom = true",
                     ),
                 ));
@@ -1098,9 +1092,17 @@ fn check_machine_overrides(
                 diags.push((
                     file_name.to_string(),
                     Rich::custom(
-                        case.span,
+                        ov.span,
                         "conditional latency cannot be used with reads or writes phases",
                     ),
+                ));
+            }
+        }
+        for case in &ov.latency_cases {
+            if !(1..=65535).contains(&case.latency) {
+                diags.push((
+                    file_name.to_string(),
+                    Rich::custom(case.span, "conditional latency case must be in 1..65535"),
                 ));
             }
             if let Some(message) = latency_condition_error(&case.condition) {
@@ -1249,30 +1251,23 @@ fn latency_condition_error(expr: &ast::Expr) -> Option<&'static str> {
                 let valid_arity = match call.callee.as_ref() {
                     ast::Expr::BuiltinFunction(Clamp | Extract) => count == 3,
                     ast::Expr::BuiltinFunction(Bitcast | Log2Ceil | Regnum | Width) => count == 1,
-                    ast::Expr::BuiltinFunction(SExt | ZExt | Iota | Map | Reduce) => count == 2,
-                    ast::Expr::BuiltinFunction(Split) => matches!(count, 2 | 3),
-                    ast::Expr::BuiltinFunction(Concat) => count >= 1,
-                    ast::Expr::BuiltinFunction(Zip) => count >= 2,
-                    _ => true,
+                    ast::Expr::BuiltinFunction(SExt | ZExt) => count == 2,
+                    ast::Expr::BuiltinFunction(
+                        Load | Store | LoadReserved | StoreConditional | AtomicRmw | Fence | FenceI
+                        | Trap | Todo,
+                    ) => {
+                        error = Some(
+                            "conditional latency predicate cannot access memory or have side effects",
+                        );
+                        return;
+                    }
+                    _ => {
+                        error = Some("unsupported builtin in latency predicate");
+                        return;
+                    }
                 };
                 if !valid_arity {
                     error = Some("invalid argument count in latency predicate");
-                } else if matches!(
-                    call.callee.as_ref(),
-                    ast::Expr::BuiltinFunction(
-                        Load | Store
-                            | LoadReserved
-                            | StoreConditional
-                            | AtomicRmw
-                            | Fence
-                            | FenceI
-                            | Trap
-                            | Todo
-                    )
-                ) {
-                    error = Some(
-                        "conditional latency predicate cannot access memory or have side effects",
-                    );
                 }
             }
             _ => {}

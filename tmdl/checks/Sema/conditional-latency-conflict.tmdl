@@ -12,8 +12,10 @@ machine Core {
         zero_idiom = true;
         reads = EX;
         when 0b1 == 0b1 { latency = 2; }
+        when 0b0 == 0b1 { latency = 3; }
     }
 }
-// CHECK: conditional latency cannot be used with eliminated = true
-// CHECK: conditional latency cannot be used with zero_idiom = true
-// CHECK: conditional latency cannot be used with reads or writes phases
+// CHECK: Error:{{.*}} conditional latency cannot be used with eliminated = true
+// CHECK: Error:{{.*}} conditional latency cannot be used with zero_idiom = true
+// CHECK: Error:{{.*}} conditional latency cannot be used with reads or writes phases
+// CHECK-NOT: Error:{{.*}} conditional latency cannot be used with

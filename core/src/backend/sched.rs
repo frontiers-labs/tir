@@ -7,8 +7,9 @@
 //! buffer sizes, and the per-instruction scheduling classes obtained by resolving
 //! each instruction's `unit` membership against that machine's `bind`s.
 //!
-//! The compiler uses static fallback costs; the simulator can resolve conditional
-//! latency from the operand values captured during execution.
+//! Instruction selection uses machine-independent scheduling-class defaults.
+//! Static scheduling uses the machine class, including its fallback latency.
+//! The simulator resolves conditional latency from values captured before execution.
 
 /// One ordered latency predicate evaluated against the instruction's entry state.
 pub struct LatencyCase {
@@ -29,16 +30,10 @@ impl LatencyCase {
     ) -> Option<bool> {
         let syms =
             super::exec::init_syms(instance, context, name, self.sym_count, self.sources).ok()?;
-        super::exec::eval(
-            self.env.kinds,
-            self.env.blob,
-            self.condition,
-            &syms,
-            context,
-            name,
-        )
-        .ok()
-        .map(|value| value.to_u64() != 0)
+        use crate::sem::ExtendSemBytes as _;
+        let mut graph = crate::sem::SemGraph::new();
+        graph.extend_sem_bytes(self.env.kinds, self.env.blob, self.condition);
+        crate::sem::execute_pure(&graph, &syms).map(|value| !value.is_zero())
     }
 }
 

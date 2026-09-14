@@ -99,9 +99,9 @@ fn machine_model_ts(
 /// returns it) per TMDL `machine` block, and resolve every instruction's `unit`
 /// membership against each machine's `bind`s into a concrete scheduling class.
 /// Machines are numbered, so an instruction reaches its class by indexing rather
-/// than by looking its own name up in a per-machine table. This is the static
-/// half of the performance model: the same classes feed the compiler cost model
-/// and the cycle-approximate simulator, so they cannot disagree.
+/// than by looking its own name up in a per-machine table. These classes
+/// feed static scheduling and provide the simulator fallback; captured
+/// conditional latencies override that fallback during timing replay.
 fn emit_machine_models<'a>(
     files: &'a [ast::File],
     item_cache: &HashMap<&'a str, &'a ast::Item>,
@@ -421,9 +421,8 @@ impl SchedTables {
 }
 
 /// Machine-independent cost per instruction declaration, derived from its `unit`
-/// defaults (latency, falling back to 1). This is the single source of truth the
-/// compiler cost model consults — most importantly the instruction-selection
-/// `base_cost` — so selection and the simulator agree on relative cost.
+/// defaults (latency, falling back to 1). Instruction selection uses this cost
+/// independently of machine overrides and conditional simulator latencies.
 fn instruction_costs<'a>(
     files: &'a [ast::File],
     item_cache: &HashMap<&'a str, &'a ast::Item>,

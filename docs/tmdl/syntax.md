@@ -542,19 +542,27 @@ A machine override can choose scalar latency from the instruction's operands:
 ```tmdl
 override Div {
     latency = 20;
+    uses = [DIV];
     when rhs == 0b1 { latency = 4; }
 }
 ```
+
+The example assumes the machine declares a `DIV` unit. An override replaces
+class binding resolution, so repeat its `uses` or `uop` resources as needed.
+An instruction with a machine override receives a scheduling class even without
+a `schedule` block, including overrides that specify only resources.
 
 The cycle counts above illustrate the syntax. They are not hardware measurements.
 The first matching `when` wins. If no condition matches, or a condition cannot
 be evaluated, the override's ordinary `latency` is the fallback. An unavailable
 condition stops selection; later conditions cannot override that fallback.
+Invalid runtime bounds, such as an out-of-range extraction, also use the fallback.
 The fallback and each case latency must be in `1..65535`, inclusive.
 
-Conditions use the same pure expressions as instruction behavior and must have
-type `bits<1>`. An operand identifier reads its value: an immediate's bits or a
-register's contents. `regnum(src)` reads the register's encoding number instead.
+Conditions must have type `bits<1>`. They support integer expressions and pure
+helper functions using `clamp`, `extract`, `bitcast`, `log2Ceil`, `regnum`,
+`width`, `sext`, and `zext`. An operand identifier reads its value: an immediate's
+bits or a register's contents. `regnum(src)` reads the register's encoding number instead.
 For example, a condition on `regnum(src)` can distinguish an extended register
 that requires a prefix. Operand forms with different declared types continue to
 use separate instruction declarations and scheduling classes.
@@ -567,8 +575,13 @@ apply to every instance.
 Generated `MachineInstruction::sched_on(model, context)` resolves the latency
 using the instruction's entry state. `InstrInfo::sched_on(model)` returns the
 static fallback. The simulator records resolved latencies before execution and
-uses them during timing replay. The fallback is an author-supplied estimate;
-TMDL does not prove it is a worst-case bound.
+uses them during timing replay. `tir sched` always uses the static fallback, even
+for `regnum` conditions on physical registers. Instruction selection uses
+scheduling-class defaults and does not evaluate these conditions.
+
+The fallback is an author-supplied estimate; TMDL does not prove it is a worst-case
+bound. Choose a conservative fallback for exposed or `hard` pipelines: an
+optimistic value can schedule a consumer before its input is ready.
 
 These rules do not model separate input-to-output latencies or preserve extra
 prefix bytes from arbitrary decoded encodings.

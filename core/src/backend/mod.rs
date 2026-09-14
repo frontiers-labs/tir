@@ -366,7 +366,8 @@ impl InstrInfo {
     };
 
     /// Resolve the instruction's latency from its entry state. The first matching
-    /// case wins; an unavailable or unevaluable condition uses the static fallback.
+    /// case wins; a false condition continues to the next case. An unavailable or
+    /// unevaluable condition stops selection and uses the static fallback.
     pub fn sched_for(
         &self,
         instance: &tir::OpHandle,
@@ -407,6 +408,7 @@ pub trait MachineInstruction {
     fn info(&self) -> &'static InstrInfo;
     fn instance(&self) -> &tir::OpHandle;
     /// Scheduling facts for this instance, using register values before execution.
+    /// See [`InstrInfo::sched_for`] for first-match and fallback behavior.
     fn sched_on(
         &self,
         machine: &sched::MachineModel,

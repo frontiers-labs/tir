@@ -759,3 +759,22 @@ fn reduce_folds_to_horizontal_sum() {
 
     assert_eq!(as_i64(execute(&g, &[rb(&[0x01, 0x02, 0x03, 0x04])])), 10);
 }
+
+proptest::proptest! {
+    #[test]
+    fn pure_execution_preserves_scalar_semantics(lhs: i64, rhs: i64) {
+        for operation in tir_symbolic::lang::SCALAR_OPS {
+            let mut graph = Graph::new();
+            let args = (0..operation.arity as u32)
+                .map(|id| sym(&mut graph, id))
+                .collect::<Vec<_>>();
+            op(&mut graph, operation.kind, &args);
+            let inputs = [iv(lhs), iv(rhs)];
+            proptest::prop_assert_eq!(
+                tir_symbolic::lang::execute_pure(&graph, &inputs).map(Value::Int),
+                Some(execute(&graph, &inputs)),
+                "{:?}", operation.kind,
+            );
+        }
+    }
+}

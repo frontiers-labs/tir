@@ -1,3 +1,7 @@
+#[path = "exec_pure.rs"]
+mod pure;
+pub use pure::execute_pure;
+
 use tir_adt::{APFloat, APInt, RawBits};
 use tir_graph::{Dag, NodeId};
 
