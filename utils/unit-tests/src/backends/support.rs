@@ -115,8 +115,10 @@ fn guarded_relaxations_hold_for_all_rules() {
             report.proven.len(),
             report.unsupported.len()
         );
-        for (rule, reason) in report.unsupported {
-            println!("{backend}: {rule}: {reason}");
-        }
+        assert!(
+            report.unsupported.is_empty(),
+            "{backend}: unsupported rule proofs: {:?}",
+            report.unsupported
+        );
     }
 }

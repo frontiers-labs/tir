@@ -13,6 +13,7 @@ use tir::{
     func::FuncOp,
 };
 
+use crate::backend::isel::InstructionSelectPass;
 use crate::backend::lower::OpLoweringPass;
 use crate::backend::{ShuffleMachineOrderPass, TargetMachine};
 use crate::passes::{
@@ -161,10 +162,9 @@ fn add_function_passes(
 ) {
     pm.add_pass(TargetIntegerLegalizer::new(target));
     let function_pipeline = pm.nest::<FuncOp>();
-    function_pipeline.add_boxed_pass(Box::new(ResolveFpPass::with_selector(
-        target.isel_pass(context),
-    )));
-    function_pipeline.add_boxed_pass(Box::new(target.isel_pass(context)));
+    let isel = std::sync::Arc::new(std::sync::Mutex::new(target.isel_pass(context)));
+    function_pipeline.add_boxed_pass(Box::new(ResolveFpPass::shared(isel.clone())));
+    function_pipeline.add_boxed_pass(Box::new(SharedInstructionSelect(isel)));
     // Remove pure instructions left dead by selection (e.g. a value recomputed in
     // a consumer's block by cross-block fusion). Runs while results are still
     // virtual registers, so it must precede register allocation.
@@ -248,4 +248,24 @@ pub fn lower_and_emit(
     }
     tir::memstats::summary();
     Ok(())
+}
+
+struct SharedInstructionSelect(std::sync::Arc<std::sync::Mutex<InstructionSelectPass>>);
+
+impl Pass for SharedInstructionSelect {
+    fn name(&self) -> &'static str {
+        "instruction-select"
+    }
+
+    fn run(
+        &mut self,
+        op: &OperationRef,
+        context: &Context,
+        analyses: &AnalysisManager,
+    ) -> Result<(), PassError> {
+        self.0
+            .lock()
+            .expect("instruction select")
+            .run(op, context, analyses)
+    }
 }

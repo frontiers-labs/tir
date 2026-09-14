@@ -927,8 +927,8 @@ hand-written rule.
 Canonicalization observes this identity only at the pattern root; the complete
 target behavior remains attached to the rule for refinement proof.
 `prove_relaxation` separates effect-wrapper removal, candidate selection,
-register-derived symbol typing, and floating refinement proof. Unsupported
-rounded-conversion encodings remain distinct from proven rules.
+register-derived symbol typing, and floating refinement proof. The
+target-definition test rejects unsupported encodings.
 
 Instructions that read or write the PC *unconditionally* (`jal`, `jalr`,
 `auipc`) get **no value rule**: their pattern would hide the control-flow
@@ -1306,10 +1306,10 @@ typed refinement proof checks every input on which the source conversion is
 defined and requires the same result bits. Target behavior on invalid source
 inputs can define clipping or NaN results without weakening this check.
 `FPFlags` remains defined even when the numeric conversion result is not.
-The proof report separates proven rules from unsupported encodings; non-toward-zero
-rounded float-to-integer conversions currently need an unsupported bit-blast
-encoding. Failed proofs reject the rule set, and verification mode also rejects
-unsupported proofs.
+The proof report separates proven rules from unsupported encodings. Rounded
+float-to-integer conversions are bit-blasted for every IEEE rounding mode,
+including a symbolic mode bit-vector. Failed or unsupported proofs reject the
+rule set.
 
 ## Floating-point target coverage
 

@@ -136,7 +136,7 @@ fn ieee_arithmetic_preserves_signed_zero() {
 }
 
 #[test]
-fn non_rtz_conversion_proof_reports_unsupported() {
+fn nearest_even_conversion_clipping_is_proved_on_the_defined_domain() {
     let mut candidate = SemGraph::new();
     let input = symbol(&mut candidate, 0);
     let width = constant(&mut candidate, 64, 32);
@@ -156,8 +156,6 @@ fn non_rtz_conversion_proof_reports_unsupported() {
         ..Rule::new("non-rtz-conversion", candidate, LATENCY_COST_SCALE, no_emit)
     };
     let report = prove_guarded_relaxations(&[rule]).unwrap();
-    assert!(report.proven.is_empty());
-    assert_eq!(report.unsupported.len(), 1);
-    assert_eq!(report.unsupported[0].0, "non-rtz-conversion");
-    assert!(report.unsupported[0].1.contains("FPToSIRound"));
+    assert_eq!(report.proven, vec!["non-rtz-conversion".to_string()]);
+    assert!(report.unsupported.is_empty());
 }

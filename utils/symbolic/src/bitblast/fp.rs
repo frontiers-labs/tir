@@ -112,11 +112,13 @@ impl<V> Blaster<'_, V> {
     }
 
     /// The conversion's value bits: the significand shifted by the unbiased
-    /// exponent, negated for a signed destination when the sign bit is set.
+    /// exponent, rounded per `mode` (IEEE 0..4, toward-zero when absent), then
+    /// negated for a signed destination when the sign bit is set.
     pub(super) fn encode_float_to_int(
         &mut self,
         id: NodeId,
         signed: bool,
+        mode: Option<Vec<Lit>>,
     ) -> Result<Vec<Lit>, BitblastError> {
         let operand = self.float_to_int_operand(id)?;
         let exponent_is_zero = self.nor(operand.exponent());
@@ -142,12 +144,88 @@ impl<V> Blaster<'_, V> {
         let right = self.shift_by_bits(&significand, &right_amount, false);
         let mut magnitude = self.mux_bits(shift_left, &left, &right);
         magnitude.truncate(operand.width);
+        let increment = self.float_to_int_increment(
+            &significand,
+            &right_amount,
+            shift_left,
+            operand.sign(),
+            magnitude.first().copied().unwrap_or(self.zero()),
+            mode,
+        );
+        let zeros = vec![self.zero(); magnitude.len()];
+        let (rounded, carry) = self.adder(&magnitude, &zeros, increment);
+        let fits = if signed {
+            let msb = rounded[operand.width - 1];
+            let lower = self.or_reduce(&rounded[..operand.width - 1]);
+            let positive_overflow = self.gate_and(operand.sign().negate(), msb);
+            let mag_past_min = self.gate_and(msb, lower);
+            let negative_overflow = self.gate_and(operand.sign(), mag_past_min);
+            let signed_overflow = self.gate_or(positive_overflow, negative_overflow);
+            let overflow = self.gate_or(carry, signed_overflow);
+            overflow.negate()
+        } else {
+            let nonzero = self.or_reduce(&rounded);
+            let negative = self.gate_and(operand.sign(), nonzero);
+            self.gate_and(carry.negate(), negative.negate())
+        };
+        self.conversion_defined.insert(id.index(), fits);
+        magnitude = rounded;
 
         if !signed {
             return Ok(magnitude);
         }
         let negative = self.negate(&magnitude);
         Ok(self.mux_bits(operand.sign(), &negative, &magnitude))
+    }
+
+    /// Guard/round/sticky of a variable right shift, then the IEEE increment.
+    fn float_to_int_increment(
+        &mut self,
+        significand: &[Lit],
+        right_amount: &[Lit],
+        shift_left: Lit,
+        sign: Lit,
+        truncated_lsb: Lit,
+        mode: Option<Vec<Lit>>,
+    ) -> Lit {
+        let mode = mode.unwrap_or_else(|| self.const_bits(1, 3));
+        let (inexact, half_bit, below) = self.shifted_out_bits(significand, right_amount);
+        let greater = self.gate_and(half_bit, below);
+        let tie = self.gate_and(half_bit, below.negate());
+        let tie_up = self.gate_and(tie, truncated_lsb);
+        let rne = self.gate_or(greater, tie_up);
+        let rdn = self.gate_and(inexact, sign);
+        let rup = self.gate_and(inexact, sign.negate());
+        let rne_mode = self.eq_bits(&mode, &self.const_bits(0, mode.len()));
+        let rdn_mode = self.eq_bits(&mode, &self.const_bits(2, mode.len()));
+        let rup_mode = self.eq_bits(&mode, &self.const_bits(3, mode.len()));
+        let rmm_mode = self.eq_bits(&mode, &self.const_bits(4, mode.len()));
+        let choose_rne = self.gate_and(rne_mode, rne);
+        let choose_rdn = self.gate_and(rdn_mode, rdn);
+        let choose_rup = self.gate_and(rup_mode, rup);
+        let choose_rmm = self.gate_and(rmm_mode, half_bit);
+        let increment = self.gate_or(choose_rne, choose_rdn);
+        let increment = self.gate_or(increment, choose_rup);
+        let increment = self.gate_or(increment, choose_rmm);
+        self.gate_and(increment, shift_left.negate())
+    }
+
+    fn shifted_out_bits(&mut self, bits: &[Lit], amount: &[Lit]) -> (Lit, Lit, Lit) {
+        let mut inexact = self.zero();
+        let mut half_bit = self.zero();
+        let mut below = self.zero();
+        for (i, &bit) in bits.iter().enumerate() {
+            let index = self.const_bits(i as u64 + 1, amount.len());
+            let in_remainder = self.uge(amount, &index);
+            let is_half = self.eq_bits(amount, &index);
+            let contributed = self.gate_and(in_remainder, bit);
+            inexact = self.gate_or(inexact, contributed);
+            let half_contrib = self.gate_and(is_half, bit);
+            half_bit = self.gate_or(half_bit, half_contrib);
+            let lower = self.gate_and(contributed, is_half.negate());
+            below = self.gate_or(below, lower);
+        }
+        (inexact, half_bit, below)
     }
 
     /// The conversion is defined on finite values whose truncation fits the
@@ -193,7 +271,22 @@ impl<V> Blaster<'_, V> {
         let negative = self.gate_and(operand.sign(), negative_ok);
         let positive = self.gate_and(operand.sign().negate(), positive_ok);
         let in_range = self.gate_or(negative, positive);
-        Ok(self.gate_and(finite, in_range))
+        let defined = self.gate_and(finite, in_range);
+        let fits = self.conversion_defined.get(&id.index()).copied();
+        let defined = if let Some(fits) = fits {
+            self.gate_and(defined, fits)
+        } else {
+            defined
+        };
+        if matches!(
+            self.graph.get_kind(id),
+            SymKind::FPToSIRound | SymKind::FPToUIRound
+        ) {
+            let mode = self.child_bits(id, 2);
+            let allowed = self.uge(&self.const_bits(4, mode.len()), &mode);
+            return Ok(self.gate_and(defined, allowed));
+        }
+        Ok(defined)
     }
 
     /// Convert the integer `value` to the IEEE binary format with `e` exponent

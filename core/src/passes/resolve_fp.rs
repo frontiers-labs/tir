@@ -11,14 +11,22 @@ use crate::{
     RegionKind,
 };
 use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 pub struct ResolveFpPass {
-    selector: Option<InstructionSelectPass>,
+    selector: Option<Arc<Mutex<InstructionSelectPass>>>,
     target: Option<String>,
 }
 
 impl ResolveFpPass {
     pub fn with_selector(selector: InstructionSelectPass) -> Self {
+        Self {
+            selector: Some(Arc::new(Mutex::new(selector))),
+            target: None,
+        }
+    }
+
+    pub(crate) fn shared(selector: Arc<Mutex<InstructionSelectPass>>) -> Self {
         Self {
             selector: Some(selector),
             target: None,
@@ -30,6 +38,14 @@ impl ResolveFpPass {
             selector: None,
             target: Some(target),
         }
+    }
+
+    fn selector(&self) -> MutexGuard<'_, InstructionSelectPass> {
+        self.selector
+            .as_ref()
+            .expect("selector initialized")
+            .lock()
+            .expect("instruction select")
     }
 }
 
@@ -58,11 +74,14 @@ impl Pass for ResolveFpPass {
         context: &Context,
         _analyses: &AnalysisManager,
     ) -> Result<(), PassError> {
+        if find_round(context, op.op().id).is_none() {
+            return lower_fences(context, op.op().id);
+        }
         if self.selector.is_none() {
             let target = select_target(self.target.as_deref().expect("parsed target"), None, None)
                 .map_err(PassError::InvalidRuleSet)?;
             target.register_dialects(context);
-            self.selector = Some(target.isel_pass(context));
+            self.selector = Some(Arc::new(Mutex::new(target.isel_pass(context))));
         }
         self.resolve_all(context, op)?;
         lower_fences(context, op.op().id)
@@ -102,9 +121,7 @@ impl ResolveFpPass {
             self.resolve_all(&fork, &OperationRef::new(fork.get_op(function.op().id)))?;
             lower_fences(&fork, function.op().id)?;
             match self
-                .selector
-                .as_mut()
-                .expect("selector initialized")
+                .selector()
                 .estimate_function_cost(&fork, &OperationRef::new(fork.get_op(function.op().id)))
             {
                 Ok(cost) => best = Some((cost, fork)),
@@ -145,9 +162,7 @@ impl ResolveFpPass {
             self.resolve_all(&fork, &OperationRef::new(fork.get_op(function.op().id)))?;
             lower_fences(&fork, function.op().id)?;
             match self
-                .selector
-                .as_mut()
-                .expect("selector initialized")
+                .selector()
                 .estimate_function_cost(&fork, &OperationRef::new(fork.get_op(function.op().id)))
             {
                 Ok(cost)

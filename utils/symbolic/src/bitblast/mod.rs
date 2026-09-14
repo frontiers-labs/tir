@@ -139,6 +139,8 @@ pub(crate) struct Blaster<'g, V> {
     bits: Vec<Vec<Lit>>,
     defined: Vec<Lit>,
     sym_bits: HashMap<u32, Vec<Lit>>,
+    state_reads: HashMap<(u64, u64), Vec<Lit>>,
+    conversion_defined: HashMap<usize, Lit>,
     graph: &'g GenericDag<SymKind, SymPayload<V>>,
     widths: &'g [Option<u32>],
     types: &'g [SemType],
@@ -159,6 +161,8 @@ impl<'g, V> Blaster<'g, V> {
             bits: Vec::with_capacity(graph.len()),
             defined: Vec::with_capacity(graph.len()),
             sym_bits: HashMap::new(),
+            state_reads: HashMap::new(),
+            conversion_defined: HashMap::new(),
             graph,
             widths,
             types,
@@ -203,6 +207,8 @@ impl<'g, V> Blaster<'g, V> {
         let kind = *self.graph.get_kind(id);
         match kind {
             Symbol => self.encode_symbol(id),
+            StateBlock => Ok(vec![self.one]),
+            StateRead => self.encode_state_read(id),
             Constant => self.encode_constant(id),
             Not => Ok(self.child_bits(id, 0).iter().map(|l| l.negate()).collect()),
             And => self.bitwise(id, |s, a, b| s.gate_and(a, b)),
@@ -262,15 +268,13 @@ impl<'g, V> Blaster<'g, V> {
             {
                 self.encode_int_to_float(id, kind == SIToFPRound)
             }
-            FPToSIRound | FPToUIRound
-                if self.const_u64(self.graph.children(id).nth(2).unwrap())? == 1 =>
-            {
-                self.encode_float_to_int(id, kind == FPToSIRound)
+            FPToSIRound | FPToUIRound => {
+                self.encode_float_to_int(id, kind == FPToSIRound, Some(self.child_bits(id, 2)))
             }
             SIToFP => self.encode_int_to_float(id, true),
             UIToFP => self.encode_int_to_float(id, false),
-            FPToSI => self.encode_float_to_int(id, true),
-            FPToUI => self.encode_float_to_int(id, false),
+            FPToSI => self.encode_float_to_int(id, true, None),
+            FPToUI => self.encode_float_to_int(id, false, None),
             other => Err(BitblastError::Unsupported(other)),
         }
     }
@@ -311,6 +315,21 @@ impl<'g, V> Blaster<'g, V> {
         if let Some(SymPayload::SymbolId(sid)) = self.graph.get_leaf_data(id) {
             self.sym_bits.insert(*sid, bits.clone());
         }
+        Ok(bits)
+    }
+
+    fn encode_state_read(&mut self, id: NodeId) -> Result<Vec<Lit>, BitblastError> {
+        let children: Vec<NodeId> = self.graph.children(id).collect();
+        let resource = self.const_u64(children[1])?;
+        let field = self.const_u64(children[2])?;
+        let w = self.width(id)?;
+        if let Some(bits) = self.state_reads.get(&(resource, field))
+            && bits.len() == w
+        {
+            return Ok(bits.clone());
+        }
+        let bits: Vec<Lit> = (0..w).map(|_| self.fresh()).collect();
+        self.state_reads.insert((resource, field), bits.clone());
         Ok(bits)
     }
 

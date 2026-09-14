@@ -461,6 +461,18 @@ mod fp {
         matches!(blast(&g, &widths).unwrap().solve(), SolveOutcome::Unsat)
     }
 
+    fn converts_from_rounded(value: f64, width: u32, mode: u64, expected: u64) -> bool {
+        let mut g = G::new();
+        let input = con(&mut g, 64, value.to_bits());
+        let width_node = con(&mut g, 7, width as u64);
+        let rm = con(&mut g, 3, mode);
+        let converted = op(&mut g, SymKind::FPToSIRound, &[input, width_node, rm]);
+        let want = con(&mut g, width, expected);
+        op(&mut g, SymKind::Ne, &[converted, want]);
+        let widths = infer_widths(&g, |_| None);
+        matches!(blast(&g, &widths).unwrap().solve(), SolveOutcome::Unsat)
+    }
+
     #[test]
     fn float_to_integer_truncates_defined_values() {
         assert!(converts_from(SymKind::FPToUI, 0.5, 32, 0));
@@ -472,6 +484,21 @@ mod fp {
         ));
         assert!(converts_from(SymKind::FPToSI, -42.75, 64, (-42i64) as u64));
         assert!(converts_from(SymKind::FPToSI, 42.75, 32, 42));
+    }
+
+    #[test]
+    fn float_to_integer_applies_rounding_modes() {
+        assert!(converts_from_rounded(0.5, 32, 0, 0));
+        assert!(converts_from_rounded(1.5, 32, 0, 2));
+        assert!(converts_from_rounded(42.75, 32, 0, 43));
+        assert!(converts_from_rounded(42.75, 32, 1, 42));
+        assert!(converts_from_rounded(42.75, 32, 2, 42));
+        assert!(converts_from_rounded(42.75, 32, 3, 43));
+        assert!(converts_from_rounded(42.75, 32, 4, 43));
+        assert!(converts_from_rounded(-0.5, 32, 0, 0));
+        assert!(converts_from_rounded(-1.5, 32, 0, (-2i32) as u32 as u64));
+        assert!(converts_from_rounded(-0.5, 32, 2, (-1i32) as u32 as u64));
+        assert!(converts_from_rounded(-0.5, 32, 3, 0));
     }
 
     #[test]
