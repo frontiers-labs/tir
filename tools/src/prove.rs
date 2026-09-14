@@ -10,6 +10,10 @@ pub struct ToolArgs {
     #[arg(long, default_value_t = 8)]
     width: u64,
 
+    /// Exit successfully when every non-SMT obligation has checked admission.
+    #[arg(long)]
+    allow_admitted: bool,
+
     /// Input PDL file, or `-`/omitted for stdin.
     input: Option<OsString>,
 }
@@ -22,6 +26,12 @@ pub fn run(args: ToolArgs) -> Result<(), Box<dyn Error>> {
     for (name, result) in results {
         match result {
             tir::sem::RuleProofResult::Proven => println!("{name}: proven"),
+            tir::sem::RuleProofResult::Admitted => {
+                println!("{name}: admitted");
+                if !args.allow_admitted {
+                    failed = true;
+                }
+            }
             tir::sem::RuleProofResult::Disproven { counterexample } => {
                 print!("{name}: disproven");
                 if let Some(counterexample) = counterexample {

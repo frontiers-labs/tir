@@ -15,6 +15,7 @@ module {
   module_end
 }
 
+// Equal target cost keeps the reference evaluation.
 // CHECK: %[[PRODUCT:[0-9]+]] = fp.mul
-// CHECK: %[[RESULT:[0-9]+]] = fp.fma
+// CHECK: %[[RESULT:[0-9]+]] = fp.add %[[PRODUCT]],
 // CHECK: make_tuple %[[PRODUCT]], %[[RESULT]]

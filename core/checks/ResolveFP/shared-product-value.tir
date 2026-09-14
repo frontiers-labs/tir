@@ -21,4 +21,4 @@ module {
   module_end
 }
 
-// CHECK: !tuple<!i64, !i64> (unit 4607182418800017408, unit -4859383997932765184)
+// CHECK: !tuple<!i64, !i64> (unit 4607182418800017408, unit 0)

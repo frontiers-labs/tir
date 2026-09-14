@@ -1,18 +1,12 @@
-// RUN: tir opt --pass resolve-fp<rv64ifd> --verify %s | filecheck %s
-// RUN: tir opt --pass resolve-fp<rv64ifd>,resolve-fp<rv64ifd> --verify %s | filecheck %s
+// RUN: tir opt --pass resolve-fp<x86_64> --verify %s | filecheck %s
 
 #contract = {accuracy = {kind = "reference"}, arithmetic = {exceptions = "ignore", kind = "arithmetic", nan = "any_quiet", rounding = "nearest_even", subnormals = "gradual", tininess = "after_rounding"}, assumptions = {finite = false}, environment_epoch = 0, intermediate_exceptions = "allow_contracted_group_removal", permissions = {approved_approximation = false, cross_statement_contraction = false, expression_contraction = true, ignore_signed_zero = false, reassociation = false, reciprocal = false}, result_formats = [!f64]}
 
 module {
-  %f = func.func @fence(%a: !f64) -> !f64 {
-    %result = fp.fence %a : !f64
-    -> %result
-  }
-  %g = func.func @fence_blocks_contraction(%a: !f64, %b: !f64, %c: !f64) -> !f64 {
+  %f = func.func @missing_fma(%a: !f64, %b: !f64, %c: !f64) -> !f64 {
     %result = fp.round (%x = %a, %y = %b, %z = %c) {contract = #contract} : !f64 {
       %product = fp.mul %x, %y : !f64
-      %rounded = fp.fence %product : !f64
-      %sum = fp.add %rounded, %z : !f64
+      %sum = fp.add %product, %z : !f64
       -> %sum
     }
     -> %result
@@ -20,9 +14,7 @@ module {
   module_end
 }
 
-// CHECK-NOT: fp.fence
-// CHECK: -> %[[ARG:[0-9]+]]
-// CHECK-LABEL: func.func @fence_blocks_contraction
-// CHECK-NOT: fp.fma
-// CHECK: fp.mul
-// CHECK: fp.add
+// CHECK-NOT: fp.round
+// CHECK: %[[PRODUCT:[0-9]+]] = fp.mul %{{[0-9]+}}, %{{[0-9]+}} : !f64
+// CHECK: %[[SUM:[0-9]+]] = fp.add %[[PRODUCT]], %{{[0-9]+}} : !f64
+// CHECK: -> %[[SUM]]

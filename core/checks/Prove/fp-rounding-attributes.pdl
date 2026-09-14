@@ -1,0 +1,8 @@
+// RUN: not tir prove %s | filecheck %s
+
+rule rounding-mode-mismatch:
+  fp.add<rounding = "toward_zero">(a: f64, b: f64)
+  => fp.add<rounding = "nearest_even">(a, b)
+  proof smt;
+
+// CHECK: rounding-mode-mismatch: unsupported: cannot bit-blast FAddRound

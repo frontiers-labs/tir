@@ -4,49 +4,49 @@ refinement wrong-operands:
   fp.add(fp.mul(a: float<64>, b: float<64>), c: float<64>)
   ~> fp.fma(c, c, c)
   requires same_round_region, permits(contract_mul_add), compatible_formats_and_rounding,
-    permitted_effect_change, satisfies_domain_and_effect_contract proof smt;
+    permitted_effect_change, satisfies_domain_and_effect_contract proof contract;
 
 refinement wrong-sub-sign:
   fp.sub(fp.mul(a: float<64>, b: float<64>), c: float<64>)
   ~> fp.fma(a, b, c)
   requires same_round_region, permits(contract_mul_add), compatible_formats_and_rounding,
-    permitted_effect_change, satisfies_domain_and_effect_contract proof smt;
+    permitted_effect_change, satisfies_domain_and_effect_contract proof contract;
 
 refinement mixed-formats:
   fp.add(fp.mul(a: float<32>, b: float<64>), c: float<64>)
   ~> fp.fma(a, b, c)
   requires same_round_region, permits(contract_mul_add), compatible_formats_and_rounding,
-    permitted_effect_change, satisfies_domain_and_effect_contract proof smt;
+    permitted_effect_change, satisfies_domain_and_effect_contract proof contract;
 
 refinement mixed-shapes:
   fp.add(fp.mul(a: shaped_float<64, 4>, b: shaped_float<64, 8>), c: shaped_float<64, 4>)
   ~> fp.fma(a, b, c)
   requires same_round_region, permits(contract_mul_add), compatible_formats_and_rounding,
-    permitted_effect_change, satisfies_domain_and_effect_contract proof smt;
+    permitted_effect_change, satisfies_domain_and_effect_contract proof contract;
 
 refinement conflicting-semantics:
   fp.add<rounding = $mode>(fp.mul<rounding = "nearest_even">(a: float<64>, b: float<64>), c: float<64>)
   ~> fp.fma<rounding = $mode>(a, b, c)
   requires same_round_region, permits(contract_mul_add), compatible_formats_and_rounding,
-    permitted_effect_change, satisfies_domain_and_effect_contract proof smt;
+    permitted_effect_change, satisfies_domain_and_effect_contract proof contract;
 
 refinement conflicting-state-resources:
   fp.add(fp.mul(a: float<64>, b: float<64> | env: state<fp.env>), c: float<64> | memory: state<memory>)
   ~> fp.fma(a, b, c | env)
   requires same_round_region, permits(contract_mul_add), compatible_formats_and_rounding,
-    permitted_effect_change, satisfies_domain_and_effect_contract proof smt;
+    permitted_effect_change, satisfies_domain_and_effect_contract proof contract;
 
 refinement non-fp-state-resource:
   fp.add(fp.mul(a: float<64>, b: float<64> | memory: state<memory>), c: float<64> | memory)
   ~> fp.fma(a, b, c | memory)
   requires same_round_region, permits(contract_mul_add), compatible_formats_and_rounding,
-    permitted_effect_change, satisfies_domain_and_effect_contract proof smt;
+    permitted_effect_change, satisfies_domain_and_effect_contract proof contract;
 
 refinement malformed-mul-arity:
   fp.add(fp.mul(a: float<64>), b: float<64>)
   ~> fp.fma(a, b, b)
   requires same_round_region, permits(contract_mul_add), compatible_formats_and_rounding,
-    permitted_effect_change, satisfies_domain_and_effect_contract proof smt;
+    permitted_effect_change, satisfies_domain_and_effect_contract proof contract;
 
 // CHECK: wrong-operands: unsupported:
 // CHECK-NEXT: wrong-sub-sign: unsupported:

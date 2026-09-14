@@ -429,7 +429,7 @@ refinement contract-mul-add:
   fp.add(fp.mul(a: float<64>, b: float<64>), c: float<64>) ~> fp.fma(a, b, c)
   requires same_round_region, permits(contract_mul_add),
            compatible_formats_and_rounding, permitted_effect_change,
-           satisfies_domain_and_effect_contract proof smt;
+           satisfies_domain_and_effect_contract proof contract;
 ```
 
 Typed binders include `float<32>`, `float<64>`,
@@ -438,7 +438,12 @@ Typed binders include `float<32>`, `float<64>`,
 for a candidate resolver. The current Rust equality generator matches scalar
 float formats and state resources. It preserves shaped-float format and shape
 in the PDL AST and reports shaped IR matching as unsupported because the core
-type registry has no shaped or vector type.
+type registry has no shaped or vector type. Shaped refinement admission is also
+unsupported until those types have a runtime representation.
+
+`proof contract` requests checked admission of a licensed graph transformation.
+It is valid only for refinement rules. `tir prove --allow-admitted rules.pdl`
+explicitly accepts that result; `proof smt` on a refinement is unsupported.
 
 - A binder's type declares a capture and binds its e-class width: `x: int<N>`
   captures a value, `v: const<W>` captures one whose class holds a constant.
@@ -456,8 +461,10 @@ type registry has no shaped or vector type.
   `ufits(v, n)` (optionally negated) over a captured constant's magnitude.
 - `proof` states how the equivalence is discharged: `smt` bit-blasts it under
   `TIR_VERIFY_AXIOMS`, `trusted` asserts it, `definitional` marks a law of an
-  algebra the prover has no model for. The default is `smt` for a rule written
-  only in semantic operators and `trusted` once an op term appears.
+  algebra the prover has no model for. Floating-point rules and rules written
+  only in semantic operators default to `smt`. Other dialect-operation rules
+  retain the `trusted` default. Floating-point equality admission requires a
+  checked proof regardless of `TIR_VERIFY_AXIOMS`.
 
 Width expressions are integer literals, bound width names, `a - b`, and
 `ones(e)`. Semantic operator names use the same fixed-arity vocabulary as the
@@ -1333,8 +1340,22 @@ resource-state results. Its interned `EvaluationContract` contains resolved
 arithmetic semantics, transform permissions, scoped assumptions, accuracy,
 numeric result formats, the environment epoch, and the policy for intermediate
 exceptions. Cloning and inlining retain that contract on the owned region.
+The verifier requires every body write to contribute to the yielded resource
+state, including writes forwarded through reads or nested rounding regions.
 `fp.fence` preserves its numeric input and prevents combination across that
-boundary. It lowers to an identity after rounding regions have been resolved.
+boundary. Resolving a nested rounding region preserves a fence on each numeric
+output, including outputs from a selected candidate. Fences lower to identities
+only after all rounding regions in the function have been resolved. At that
+point the chosen ordinary FP operations retain their own strict semantics.
+
+Permissions allow transformations; they do not require the resolver to use
+them. This resolver only uses expression contraction. It does not use
+cross-statement, reassociation, reciprocal, approximation, or signed-zero
+relaxation grants, and it does not rely on the finite-input assumption.
+Multiply-subtract contraction negates the addend exactly and preserves signed
+zero under the fused semantics. The environment epoch identifies compatibility
+for future cross-statement combination; current candidates stay within one
+owned contract and must follow its actual resource-state chain.
 
 The `resolve-fp` pass runs before instruction selection. For standalone use,
 specify the target:
@@ -1347,21 +1368,28 @@ tir mc --march=rv64ifd --stage=isel input.tir
 The resolver keeps the reference intact while checking candidate overlays. It
 chooses a complete result-and-state implementation using the target's normal
 selection legality and whole-function cover cost. Candidate generation is
-bounded, structurally duplicate graphs are skipped, and equal costs select the
-later checked candidate in deterministic source order. An admissible reference
-is considered first. Missing target coverage is reported separately from the
+bounded at 32, and exceeding that limit reports search exhaustion. Structurally
+duplicate graphs are skipped. An admissible reference is considered first and
+retained on equal cost. Missing target coverage is reported separately from the
 absence of a legal evaluation.
+
+PDL admission, candidate discovery, and witness checking share one canonical
+contraction matcher. It preserves a multiply used as its own consumer's other
+operand, so `product + product` retains the separately rounded addend.
+Unsupported candidate discovery leaves the reference available for selection.
 
 Contraction candidates never enter equality saturation as equal alternatives.
 `ReferenceSnapshot` and `CandidateSnapshot` record typed graph structure;
 `RefinementWitness::validate` checks the full snapshots and contract again.
 Context-local operation, value, and type IDs do not serve as witness identity.
 
-`tir prove rules.pdl` reports `proven`, `disproven`, or `unsupported` for each
-rule and succeeds only if every rule is proven. Counterexamples include named
-input bit patterns and, when available, the two result bit patterns. A checked
-contraction theorem establishes admission under its required contract; it does
-not establish strict multiply-add equality. For binary64 inputs
+`tir prove rules.pdl` reports `proven`, `admitted`, `disproven`, or `unsupported`
+for each rule. By default it succeeds only if every rule is proven;
+`--allow-admitted` also accepts checked contract admission. Dialect FP equality
+encoding preserves supported fixed rounding modes and rejects attributes it
+cannot encode. Counterexamples include named input bit patterns and, when
+available, the two result bit patterns. Contract admission does not establish
+strict multiply-add equality. For binary64 inputs
 `a=0x3ff0000002000000`, `b=0x3feffffffc000000`, and
 `c=0xbff0000000000000`, separate multiply/add gives positive zero, while fused
 multiply-add gives `0xbc90000000000000` (`-2^-54`).

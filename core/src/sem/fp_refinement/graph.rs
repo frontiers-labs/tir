@@ -8,7 +8,7 @@ use crate::fp::{
 };
 use crate::{Context, OpId, Operation, ValueId};
 
-use super::{ContractionCandidate, RefinementError, RoundOp};
+use super::{ContractionCandidate, ContractionProposal, FusedForm, RefinementError, RoundOp};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ReferenceSnapshot(GraphSnapshot);
@@ -20,6 +20,75 @@ pub struct CandidateSnapshot(GraphSnapshot);
 pub(crate) struct ContractionSite {
     mul: usize,
     consumer: usize,
+    product_position: usize,
+}
+
+#[derive(Clone, Copy)]
+struct MatchedContraction {
+    mul: usize,
+    consumer: usize,
+    product_position: usize,
+    form: FusedForm,
+}
+
+impl MatchedContraction {
+    fn site(self) -> ContractionSite {
+        ContractionSite {
+            mul: self.mul,
+            consumer: self.consumer,
+            product_position: self.product_position,
+        }
+    }
+}
+
+pub(super) fn contraction_proposals(
+    context: &Context,
+    round: &RoundOp,
+) -> Result<Vec<ContractionProposal>, RefinementError> {
+    let reference = round.reference_region();
+    let captures = round.operands();
+    let aliases = capture_aliases(&captures);
+    let boundaries = reference
+        .ports()
+        .iter()
+        .enumerate()
+        .map(|(index, value)| (value.id(), aliases[index]))
+        .collect();
+    let (graph, operation_indices) =
+        GraphBuilder::new(context, captures.to_vec(), boundaries, Some(reference.id()))
+            .capture_indexed(&reference.results())?;
+    let live_operations: HashMap<_, _> = operation_indices
+        .into_iter()
+        .map(|(operation, index)| (index, operation))
+        .collect();
+    let mut proposals = graph
+        .contraction_sites()
+        .into_iter()
+        .map(|site| {
+            let mul = live_operations[&site.mul];
+            let add_or_sub = live_operations[&site.consumer];
+            let mul_handle = context.get_op(mul);
+            let consumer = context.get_op(add_or_sub);
+            ContractionProposal {
+                mul,
+                add_or_sub,
+                fused_operands: [
+                    mul_handle.value_operands()[0],
+                    mul_handle.value_operands()[1],
+                    consumer.value_operands()[1 - site.product_position],
+                ],
+                form: site.form,
+                retain_mul: graph.mul_is_used_elsewhere(
+                    site.mul,
+                    site.consumer,
+                    site.product_position,
+                ),
+            }
+        })
+        .collect::<Vec<_>>();
+    proposals.sort_by_key(|proposal| (proposal.add_or_sub, proposal.mul, proposal.form));
+    proposals.dedup();
+    Ok(proposals)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -113,24 +182,17 @@ pub(super) fn check_contraction_rule(rule: &tir_pdl::Rule) -> Result<(), Refinem
         ("fp", "sub") => super::FusedForm::MulSub,
         _ => return Err(RefinementError::UnsupportedForm),
     };
-    let mul = lhs_graph.operations[consumer]
-        .operands
-        .iter()
-        .take(2)
-        .find_map(|operand| match operand {
-            CanonicalValue::Result {
-                operation,
-                result: 0,
-            } if lhs_graph.is_op(*operation, "fp", "mul") => Some(*operation),
-            _ => None,
-        })
+    let site = lhs_graph
+        .contraction_sites()
+        .into_iter()
+        .find(|site| site.consumer == consumer && site.form == form)
         .ok_or(RefinementError::DisconnectedGroup)?;
-    lhs_graph.normalize_pdl_state_chain(mul, consumer)?;
+    lhs_graph.normalize_pdl_state_chain(site.mul, consumer)?;
     let mut rhs = PdlGraphBuilder::with_captures(captures);
     let rhs_output = rhs.value(&rule.rhs)?;
     let rhs_graph = rhs.finish(rhs_output);
     lhs_graph
-        .contract(mul, consumer, form)
+        .contract(site.site())
         .filter(|expected| expected == &rhs_graph)
         .map(|_| ())
         .ok_or(RefinementError::DisconnectedGroup)
@@ -370,7 +432,22 @@ impl ReferenceSnapshot {
                     &reference.results(),
                     [candidate.mul, candidate.add_or_sub],
                 )?;
-        Ok((Self(graph), ContractionSite { mul, consumer }))
+        let product_position = graph
+            .contraction_sites()
+            .into_iter()
+            .find(|site| {
+                site.mul == mul && site.consumer == consumer && site.form == candidate.form
+            })
+            .ok_or(RefinementError::DisconnectedGroup)?
+            .product_position;
+        Ok((
+            Self(graph),
+            ContractionSite {
+                mul,
+                consumer,
+                product_position,
+            },
+        ))
     }
 }
 
@@ -412,11 +489,10 @@ impl CandidateSnapshot {
         &self,
         reference: &ReferenceSnapshot,
         site: ContractionSite,
-        form: super::FusedForm,
     ) -> bool {
         reference
             .0
-            .contract(site.mul, site.consumer, form)
+            .contract(site)
             .is_some_and(|expected| expected == self.0)
     }
 }
@@ -428,7 +504,19 @@ impl GraphSnapshot {
             .is_some_and(|op| op.dialect == dialect && op.name == name)
     }
 
-    fn contract(&self, mul: usize, consumer: usize, form: super::FusedForm) -> Option<Self> {
+    fn contract(&self, site: ContractionSite) -> Option<Self> {
+        let ContractionSite {
+            mul,
+            consumer,
+            product_position,
+        } = site;
+        let form = if self.is_op(consumer, "fp", "add") {
+            FusedForm::MulAdd
+        } else if self.is_op(consumer, "fp", "sub") {
+            FusedForm::MulSub
+        } else {
+            return None;
+        };
         let consumer_name = match form {
             super::FusedForm::MulAdd => "add",
             super::FusedForm::MulSub => "sub",
@@ -436,18 +524,13 @@ impl GraphSnapshot {
         if !self.is_op(mul, "fp", "mul") || !self.is_op(consumer, "fp", consumer_name) {
             return None;
         }
-        let product_position =
-            self.operations[consumer]
-                .operands
-                .iter()
-                .take(2)
-                .position(|operand| {
-                    *operand
-                        == (CanonicalValue::Result {
-                            operation: mul,
-                            result: 0,
-                        })
-                })?;
+        let product = CanonicalValue::Result {
+            operation: mul,
+            result: 0,
+        };
+        if self.operations[consumer].operands.get(product_position) != Some(&product) {
+            return None;
+        }
         if form == super::FusedForm::MulSub && product_position != 0 {
             return None;
         }
@@ -510,6 +593,38 @@ impl GraphSnapshot {
         graph.recanonicalize()
     }
 
+    fn contraction_sites(&self) -> Vec<MatchedContraction> {
+        let mut sites = Vec::new();
+        for (consumer, operation) in self.operations.iter().enumerate() {
+            let form = match (operation.dialect.as_str(), operation.name.as_str()) {
+                ("fp", "add") => FusedForm::MulAdd,
+                ("fp", "sub") => FusedForm::MulSub,
+                _ => continue,
+            };
+            for (product_position, operand) in operation.operands.iter().take(2).enumerate() {
+                let CanonicalValue::Result {
+                    operation: mul,
+                    result: 0,
+                } = operand
+                else {
+                    continue;
+                };
+                if (form != FusedForm::MulSub || product_position == 0)
+                    && self.is_op(*mul, "fp", "mul")
+                    && self.compatible_group(&self.operations[*mul], operation, product_position)
+                {
+                    sites.push(MatchedContraction {
+                        mul: *mul,
+                        consumer,
+                        product_position,
+                        form,
+                    });
+                }
+            }
+        }
+        sites
+    }
+
     fn compatible_group(
         &self,
         mul: &CanonicalOperation,
@@ -519,10 +634,8 @@ impl GraphSnapshot {
         let Some(numeric_type) = mul.results.first() else {
             return false;
         };
-        if !matches!(
-            numeric_type,
-            CanonicalType::Float { .. } | CanonicalType::ShapedFloat { .. }
-        ) || mul.operands.len() < 2
+        if !matches!(numeric_type, CanonicalType::Float { .. })
+            || mul.operands.len() < 2
             || consumer.operands.len() < 2
             || consumer.results.first() != Some(numeric_type)
             || self.value_type(&mul.operands[0]) != Some(numeric_type)
@@ -764,6 +877,29 @@ impl<'a> GraphBuilder<'a> {
                 outputs,
             },
             selected,
+        ))
+    }
+
+    fn capture_indexed(
+        mut self,
+        outputs: &[ValueId],
+    ) -> Result<(GraphSnapshot, HashMap<OpId, usize>), RefinementError> {
+        let captures = self
+            .captures
+            .iter()
+            .map(|value| canonical_type(self.context, self.context.get_value(*value).ty()))
+            .collect::<Result<_, _>>()?;
+        let outputs = outputs
+            .iter()
+            .map(|output| self.value(*output))
+            .collect::<Result<_, _>>()?;
+        Ok((
+            GraphSnapshot {
+                captures,
+                operations: self.operations,
+                outputs,
+            },
+            self.operation_indices,
         ))
     }
 

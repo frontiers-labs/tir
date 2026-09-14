@@ -1,0 +1,49 @@
+// RUN: tir interp -f positive_separate %s | filecheck %s --check-prefix=POSITIVE-SEPARATE
+// RUN: tir interp -f positive_fused %s | filecheck %s --check-prefix=POSITIVE-FUSED
+// RUN: tir interp -f negative_separate %s | filecheck %s --check-prefix=NEGATIVE-SEPARATE
+// RUN: tir interp -f negative_fused %s | filecheck %s --check-prefix=NEGATIVE-FUSED
+
+module {
+  %positive_separate = func.func @positive_separate() -> !i1 {
+    %a = fp.constant {bits = 0} : !f32
+    %b = fp.constant {bits = 1065353216} : !f32
+    %c = fp.constant {bits = 0} : !f32
+    %product = fp.mul %a, %b : !f32
+    %result = fp.sub %product, %c : !f32
+    %sign = fp.signbit %result : !i1
+    func.return %sign
+  }
+  %positive_fused = func.func @positive_fused() -> !i1 {
+    %a = fp.constant {bits = 0} : !f32
+    %b = fp.constant {bits = 1065353216} : !f32
+    %c = fp.constant {bits = 0} : !f32
+    %negated = fp.neg %c : !f32
+    %result = fp.fma %a, %b, %negated : !f32
+    %sign = fp.signbit %result : !i1
+    func.return %sign
+  }
+  %negative_separate = func.func @negative_separate() -> !i1 {
+    %a = fp.constant {bits = 2147483648} : !f32
+    %b = fp.constant {bits = 1065353216} : !f32
+    %c = fp.constant {bits = 0} : !f32
+    %product = fp.mul %a, %b : !f32
+    %result = fp.sub %product, %c : !f32
+    %sign = fp.signbit %result : !i1
+    func.return %sign
+  }
+  %negative_fused = func.func @negative_fused() -> !i1 {
+    %a = fp.constant {bits = 2147483648} : !f32
+    %b = fp.constant {bits = 1065353216} : !f32
+    %c = fp.constant {bits = 0} : !f32
+    %negated = fp.neg %c : !f32
+    %result = fp.fma %a, %b, %negated : !f32
+    %sign = fp.signbit %result : !i1
+    func.return %sign
+  }
+  module_end
+}
+
+// POSITIVE-SEPARATE: i1 0
+// POSITIVE-FUSED: i1 0
+// NEGATIVE-SEPARATE: i1 1
+// NEGATIVE-FUSED: i1 1

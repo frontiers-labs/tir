@@ -1,0 +1,23 @@
+// RUN: tir opt --pass resolve-fp<rv64ifd> --verify %s | filecheck %s
+
+#contract = {accuracy = {kind = "reference"}, arithmetic = {exceptions = "flags_and_traps", kind = "arithmetic", nan = "any_quiet", rounding = "nearest_even", subnormals = "gradual", tininess = "after_rounding"}, assumptions = {finite = false}, environment_epoch = 0, intermediate_exceptions = "allow_contracted_group_removal", permissions = {approved_approximation = false, cross_statement_contraction = false, expression_contraction = true, ignore_signed_zero = false, reassociation = false, reciprocal = false}, result_formats = [!f64]}
+
+module {
+  %f = func.func @trapping_reference(%a: !f64, %b: !f64, %c: !f64) -> !f64 {
+    %env0 = state.entry_state : !state<fp.env>
+    %memory0 = state.entry_state : !state<memory>
+    %result, %env1, %memory1 = fp.round (%x = %a, %y = %b, %z = %c, %env = %env0, %memory = %memory0) {contract = #contract} : (!f64, !state<fp.env>, !state<memory>) {
+      %product, %env2, %memory2 = fp.mul %x, %y state(%env, %memory) {semantics = {exceptions = "flags_and_traps"}} : !f64
+      %sum, %env3, %memory3 = fp.add %product, %z state(%env2, %memory2) {semantics = {exceptions = "flags_and_traps"}} : !f64
+      -> %sum, %env3, %memory3
+    }
+    -> %result
+  }
+  module_end
+}
+
+// CHECK-NOT: fp.round
+// CHECK-NOT: fp.fma
+// CHECK: %[[PRODUCT:[0-9]+]], %[[MUL_ENV:[0-9]+]], %[[MUL_MEMORY:[0-9]+]] = fp.mul {{.*}} state(%{{[0-9]+}}, %{{[0-9]+}}) {semantics = {exceptions = "flags_and_traps"}} : !f64
+// CHECK: %[[SUM:[0-9]+]], %[[ADD_ENV:[0-9]+]], %[[ADD_MEMORY:[0-9]+]] = fp.add %[[PRODUCT]], {{.*}} state(%[[MUL_ENV]], %[[MUL_MEMORY]]) {semantics = {exceptions = "flags_and_traps"}} : !f64
+// CHECK: -> %[[SUM]]

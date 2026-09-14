@@ -1,0 +1,6 @@
+// Contract proof licenses directional refinements only.
+// RUN: not tir-pdl %s --emit ast 2>&1 | filecheck %s
+
+rule bad: #add(x, y) => #mul(x, y) proof contract;
+
+// CHECK: equality rule 'bad' cannot use contract proof

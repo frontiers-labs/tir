@@ -1,0 +1,13 @@
+// RUN: not tir prove --allow-admitted %s | filecheck %s
+
+refinement contract-shaped-mul-add:
+  fp.add(fp.mul(a: shaped_float<64, 4>, b: shaped_float<64, 4>), c: shaped_float<64, 4>)
+  ~> fp.fma(a, b, c)
+  requires same_round_region,
+    permits(contract_mul_add),
+    compatible_formats_and_rounding,
+    permitted_effect_change,
+    satisfies_domain_and_effect_contract
+  proof contract;
+
+// CHECK: contract-shaped-mul-add: unsupported: shaped floating-point refinements are not supported

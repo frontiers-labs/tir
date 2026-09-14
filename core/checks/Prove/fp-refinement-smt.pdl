@@ -1,0 +1,13 @@
+// RUN: not tir prove %s | filecheck %s
+
+refinement contract-mul-add:
+  fp.add(fp.mul(a: float<64>, b: float<64>), c: float<64>)
+  ~> fp.fma(a, b, c)
+  requires same_round_region,
+    permits(contract_mul_add),
+    compatible_formats_and_rounding,
+    permitted_effect_change,
+    satisfies_domain_and_effect_contract
+  proof smt;
+
+// CHECK: contract-mul-add: unsupported: SMT proofs for refinements are not supported; use `proof contract` for checked admission

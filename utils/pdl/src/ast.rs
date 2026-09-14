@@ -67,7 +67,7 @@ pub enum ContractPermission {
     ApprovedApproximation,
 }
 
-/// How a rule's equivalence is discharged.
+/// How a rule's proof or directional contract is checked.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Proof {
     /// Bit-blasted and checked under `TIR_VERIFY_AXIOMS`.
@@ -76,6 +76,8 @@ pub enum Proof {
     Trusted,
     /// A law of an algebra the prover has no model for, such as memory.
     Definitional,
+    /// Checked against the structural contract for a directional refinement.
+    Contract,
 }
 
 impl Rule {

@@ -94,9 +94,10 @@ where
             "smt" => Ok(Proof::Smt),
             "trusted" => Ok(Proof::Trusted),
             "definitional" => Ok(Proof::Definitional),
+            "contract" => Ok(Proof::Contract),
             _ => Err(Rich::custom(
                 span,
-                "proof mode is `smt`, `trusted` or `definitional`",
+                "proof mode is `smt`, `trusted`, `definitional` or `contract`",
             )),
         }))
         .or_not();
@@ -162,9 +163,10 @@ where
             "smt" => Ok(Proof::Smt),
             "trusted" => Ok(Proof::Trusted),
             "definitional" => Ok(Proof::Definitional),
+            "contract" => Ok(Proof::Contract),
             _ => Err(Rich::custom(
                 span,
-                "proof mode is `smt`, `trusted` or `definitional`",
+                "proof mode is `smt`, `trusted`, `definitional` or `contract`",
             )),
         }))
         .or_not();

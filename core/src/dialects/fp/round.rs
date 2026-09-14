@@ -211,6 +211,16 @@ impl tir::Verifiable for RoundOp {
             {
                 return Err(invalid("fp.round state ports do not match its contract"));
             }
+            if expected.iter().any(|&(candidate, access)| {
+                candidate == resource && access == ResourceAccess::Change
+            }) {
+                verify_changed_state_is_yielded(
+                    context,
+                    self.reference_region().id(),
+                    &yielded,
+                    resource,
+                )?;
+            }
         }
         Ok(())
     }
@@ -365,4 +375,81 @@ fn verify_body_effects(
         }
     }
     Ok(())
+}
+
+fn verify_changed_state_is_yielded(
+    context: &Context,
+    region: tir::RegionId,
+    yielded: &[ValueId],
+    resource: StateResource,
+) -> Result<(), Error> {
+    let mut predecessors = std::collections::HashMap::<ValueId, Vec<ValueId>>::new();
+    let mut changed = std::collections::HashSet::new();
+    collect_state_effects(context, region, resource, &mut predecessors, &mut changed);
+
+    let mut reachable = states_for(context, yielded, resource);
+    let mut visited = std::collections::HashSet::new();
+    while let Some(state) = reachable.pop() {
+        if visited.insert(state)
+            && let Some(previous) = predecessors.get(&state)
+        {
+            reachable.extend(previous);
+        }
+    }
+    if !changed.is_subset(&visited) {
+        return Err(invalid(
+            "fp.round reference must yield the final state of its body effects",
+        ));
+    }
+    Ok(())
+}
+
+fn collect_state_effects(
+    context: &Context,
+    region: tir::RegionId,
+    resource: StateResource,
+    predecessors: &mut std::collections::HashMap<ValueId, Vec<ValueId>>,
+    changed: &mut std::collections::HashSet<ValueId>,
+) {
+    for op in context.get_region(region).op_ids() {
+        let op = context.get_op(op);
+        if let Some(effects) = op.clone().as_interface::<dyn ResourceEffects>() {
+            for effect in effects
+                .resource_effects()
+                .into_iter()
+                .filter(|effect| effect.resource == resource)
+            {
+                for produced in &effect.produced {
+                    predecessors
+                        .entry(*produced)
+                        .or_default()
+                        .extend(&effect.observed);
+                }
+                if effect.access == ResourceAccess::Change {
+                    changed.extend(effect.produced);
+                }
+            }
+        }
+        for chain in binding::state_chains(context, &op) {
+            if context.state_resource(context.get_value(chain.left).ty()) != Some(resource) {
+                continue;
+            }
+            predecessors
+                .entry(chain.left)
+                .or_default()
+                .extend(&chain.exits);
+            for port in chain.ports {
+                predecessors.entry(port).or_default().push(chain.entered);
+            }
+            if let Some(next) = chain.next {
+                predecessors.entry(next).or_default().extend(&chain.exits);
+            }
+        }
+        if op.is::<RoundOp>() {
+            continue;
+        }
+        for nested in op.regions() {
+            collect_state_effects(context, nested, resource, predecessors, changed);
+        }
+    }
 }

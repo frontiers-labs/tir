@@ -44,6 +44,7 @@ pub struct Counterexample {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RuleProofResult {
     Proven,
+    Admitted,
     Disproven {
         counterexample: Option<Counterexample>,
     },
@@ -59,8 +60,8 @@ impl RuleProofResult {
 }
 
 /// Report the proof outcome of every PDL rule at `width` bits for each of its
-/// width names. Equality rules with SMT proofs use the solver, refinement rules
-/// use their structural checker, and unchecked rules report unsupported.
+/// width names. Equality rules with SMT proofs use the solver. Refinements with
+/// contract proofs use their structural checker and report admission.
 pub fn prove_rules(source: &str, width: u64) -> Result<Vec<(String, RuleProofResult)>, String> {
     let file = tir_pdl::compile(source).map_err(|diagnostics| {
         diagnostics
@@ -77,14 +78,29 @@ pub fn prove_rules(source: &str, width: u64) -> Result<Vec<(String, RuleProofRes
         })
         .map(|rule| {
             let result = match (rule.kind, rule.proof()) {
-                (tir_pdl::RuleKind::Refinement, _) => {
-                    match fp_refinement::check_contraction_rule(rule) {
-                        Ok(()) => RuleProofResult::Proven,
-                        Err(reason) => RuleProofResult::Unsupported {
-                            reason: UnsupportedReason::UnsupportedObligation(format!(
-                                "structural refinement check failed: {reason:?}"
-                            )),
-                        },
+                (tir_pdl::RuleKind::Refinement, tir_pdl::Proof::Contract) => {
+                    if rule_has_shaped_float(rule) {
+                        RuleProofResult::Unsupported {
+                            reason: UnsupportedReason::UnsupportedObligation(
+                                "shaped floating-point refinements are not supported".into(),
+                            ),
+                        }
+                    } else {
+                        match fp_refinement::check_contraction_rule(rule) {
+                            Ok(()) => RuleProofResult::Admitted,
+                            Err(reason) => RuleProofResult::Unsupported {
+                                reason: UnsupportedReason::UnsupportedObligation(format!(
+                                    "structural refinement check failed: {reason:?}"
+                                )),
+                            },
+                        }
+                    }
+                }
+                (tir_pdl::RuleKind::Refinement, tir_pdl::Proof::Smt) => {
+                    RuleProofResult::Unsupported {
+                        reason: UnsupportedReason::UnsupportedObligation(
+                            "SMT proofs for refinements are not supported; use `proof contract` for checked admission".into(),
+                        ),
                     }
                 }
                 (_, tir_pdl::Proof::Trusted) => RuleProofResult::Unsupported {
@@ -95,6 +111,11 @@ pub fn prove_rules(source: &str, width: u64) -> Result<Vec<(String, RuleProofRes
                 (_, tir_pdl::Proof::Definitional) => RuleProofResult::Unsupported {
                     reason: UnsupportedReason::UnsupportedObligation(
                         "definitional rules have no solver model".into(),
+                    ),
+                },
+                (_, tir_pdl::Proof::Contract) => RuleProofResult::Unsupported {
+                    reason: UnsupportedReason::UnsupportedObligation(
+                        "contract proofs only apply to refinements".into(),
                     ),
                 },
                 (_, tir_pdl::Proof::Smt) => match axioms::pdl::axiom_from_rule(rule) {
@@ -120,6 +141,32 @@ pub fn prove_rules(source: &str, width: u64) -> Result<Vec<(String, RuleProofRes
             Ok((rule.name.clone(), result))
         })
         .collect()
+}
+
+fn rule_has_shaped_float(rule: &tir_pdl::Rule) -> bool {
+    fn term_has_shaped_float(term: &tir_pdl::Term) -> bool {
+        if matches!(term.ty, Some(tir_pdl::Type::ShapedFloat { .. })) {
+            return true;
+        }
+        match &term.kind {
+            tir_pdl::TermKind::Binder {
+                ty: Some(tir_pdl::BindingType::Type(tir_pdl::Type::ShapedFloat { .. })),
+                ..
+            } => true,
+            tir_pdl::TermKind::Operation {
+                operands,
+                dependencies,
+                ..
+            } => operands
+                .iter()
+                .chain(dependencies)
+                .any(term_has_shaped_float),
+            tir_pdl::TermKind::Keep(inner) => term_has_shaped_float(inner),
+            _ => false,
+        }
+    }
+
+    term_has_shaped_float(&rule.lhs) || term_has_shaped_float(&rule.rhs)
 }
 pub(crate) mod egraph;
 pub mod node;

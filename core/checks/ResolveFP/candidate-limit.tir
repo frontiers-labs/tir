@@ -1,0 +1,81 @@
+// RUN: not tir opt --pass resolve-fp<rv64ifd> --verify %s 2>&1 | filecheck %s
+
+#contract = {accuracy = {kind = "reference"}, arithmetic = {exceptions = "ignore", kind = "arithmetic", nan = "any_quiet", rounding = "nearest_even", subnormals = "gradual", tininess = "after_rounding"}, assumptions = {finite = false}, environment_epoch = 0, intermediate_exceptions = "allow_contracted_group_removal", permissions = {approved_approximation = false, cross_statement_contraction = false, expression_contraction = true, ignore_signed_zero = false, reassociation = false, reciprocal = false}, result_formats = [!f64]}
+
+module {
+  %f = func.func @too_many_candidates(%a: !f64, %b: !f64, %c: !f64) -> !f64 {
+    %result = fp.round (%x = %a, %y = %b, %z = %c) {contract = #contract} : !f64 {
+      %m0 = fp.mul %x, %y : !f64
+      %s0 = fp.add %m0, %z : !f64
+      %m1 = fp.mul %s0, %y : !f64
+      %s1 = fp.add %m1, %z : !f64
+      %m2 = fp.mul %s1, %y : !f64
+      %s2 = fp.add %m2, %z : !f64
+      %m3 = fp.mul %s2, %y : !f64
+      %s3 = fp.add %m3, %z : !f64
+      %m4 = fp.mul %s3, %y : !f64
+      %s4 = fp.add %m4, %z : !f64
+      %m5 = fp.mul %s4, %y : !f64
+      %s5 = fp.add %m5, %z : !f64
+      %m6 = fp.mul %s5, %y : !f64
+      %s6 = fp.add %m6, %z : !f64
+      %m7 = fp.mul %s6, %y : !f64
+      %s7 = fp.add %m7, %z : !f64
+      %m8 = fp.mul %s7, %y : !f64
+      %s8 = fp.add %m8, %z : !f64
+      %m9 = fp.mul %s8, %y : !f64
+      %s9 = fp.add %m9, %z : !f64
+      %m10 = fp.mul %s9, %y : !f64
+      %s10 = fp.add %m10, %z : !f64
+      %m11 = fp.mul %s10, %y : !f64
+      %s11 = fp.add %m11, %z : !f64
+      %m12 = fp.mul %s11, %y : !f64
+      %s12 = fp.add %m12, %z : !f64
+      %m13 = fp.mul %s12, %y : !f64
+      %s13 = fp.add %m13, %z : !f64
+      %m14 = fp.mul %s13, %y : !f64
+      %s14 = fp.add %m14, %z : !f64
+      %m15 = fp.mul %s14, %y : !f64
+      %s15 = fp.add %m15, %z : !f64
+      %m16 = fp.mul %s15, %y : !f64
+      %s16 = fp.add %m16, %z : !f64
+      %m17 = fp.mul %s16, %y : !f64
+      %s17 = fp.add %m17, %z : !f64
+      %m18 = fp.mul %s17, %y : !f64
+      %s18 = fp.add %m18, %z : !f64
+      %m19 = fp.mul %s18, %y : !f64
+      %s19 = fp.add %m19, %z : !f64
+      %m20 = fp.mul %s19, %y : !f64
+      %s20 = fp.add %m20, %z : !f64
+      %m21 = fp.mul %s20, %y : !f64
+      %s21 = fp.add %m21, %z : !f64
+      %m22 = fp.mul %s21, %y : !f64
+      %s22 = fp.add %m22, %z : !f64
+      %m23 = fp.mul %s22, %y : !f64
+      %s23 = fp.add %m23, %z : !f64
+      %m24 = fp.mul %s23, %y : !f64
+      %s24 = fp.add %m24, %z : !f64
+      %m25 = fp.mul %s24, %y : !f64
+      %s25 = fp.add %m25, %z : !f64
+      %m26 = fp.mul %s25, %y : !f64
+      %s26 = fp.add %m26, %z : !f64
+      %m27 = fp.mul %s26, %y : !f64
+      %s27 = fp.add %m27, %z : !f64
+      %m28 = fp.mul %s27, %y : !f64
+      %s28 = fp.add %m28, %z : !f64
+      %m29 = fp.mul %s28, %y : !f64
+      %s29 = fp.add %m29, %z : !f64
+      %m30 = fp.mul %s29, %y : !f64
+      %s30 = fp.add %m30, %z : !f64
+      %m31 = fp.mul %s30, %y : !f64
+      %s31 = fp.add %m31, %z : !f64
+      %m32 = fp.mul %s31, %y : !f64
+      %s32 = fp.add %m32, %z : !f64
+      -> %s32
+    }
+    -> %result
+  }
+  module_end
+}
+
+// CHECK: fp.round contraction search exhausted: found 33 candidates, limit is 32

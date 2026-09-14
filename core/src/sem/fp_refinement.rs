@@ -25,6 +25,22 @@ pub struct ContractionCandidate {
     pub result_mapping: Vec<(ValueId, ValueId)>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct ContractionProposal {
+    pub mul: OpId,
+    pub add_or_sub: OpId,
+    pub fused_operands: [ValueId; 3],
+    pub form: FusedForm,
+    pub retain_mul: bool,
+}
+
+pub fn contraction_proposals(
+    context: &Context,
+    round: &RoundOp,
+) -> Result<Vec<ContractionProposal>, RefinementError> {
+    graph::contraction_proposals(context, round)
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RefinementError {
     StaleOperation,
@@ -113,6 +129,15 @@ pub fn check_contraction(
     {
         return Err(RefinementError::StaleOperation);
     }
+    contraction_proposals(context, round)?
+        .into_iter()
+        .find(|proposal| {
+            proposal.mul == candidate.mul
+                && proposal.add_or_sub == candidate.add_or_sub
+                && proposal.fused_operands == candidate.fused_operands
+                && proposal.form == candidate.form
+        })
+        .ok_or(RefinementError::DisconnectedGroup)?;
     let mul_handle = context.get_op(candidate.mul);
     let consumer_handle = context.get_op(candidate.add_or_sub);
     let implementation_handle = context.get_op(candidate.implementation);
@@ -127,38 +152,6 @@ pub fn check_contraction(
         .clone()
         .as_op::<FmaOp>()
         .ok_or(RefinementError::UnsupportedForm)?;
-    let consumer_operands = consumer_handle.value_operands();
-    match candidate.form {
-        FusedForm::MulAdd if !consumer_handle.is::<AddOp>() => {
-            return Err(RefinementError::UnsupportedForm);
-        }
-        FusedForm::MulSub if !consumer_handle.is::<SubOp>() => {
-            return Err(RefinementError::UnsupportedForm);
-        }
-        _ => {}
-    }
-    let product = mul_handle.results()[0];
-    if !consumer_operands.contains(&product) {
-        return Err(RefinementError::DisconnectedGroup);
-    }
-    let mul_operands = mul_handle.value_operands();
-    let [mul_lhs, mul_rhs] = mul_operands.as_slice() else {
-        return Err(RefinementError::UnsupportedForm);
-    };
-    let addend = match candidate.form {
-        FusedForm::MulAdd => consumer_operands
-            .iter()
-            .copied()
-            .find(|&operand| operand != product),
-        FusedForm::MulSub if consumer_operands.first() == Some(&product) => {
-            consumer_operands.get(1).copied()
-        }
-        FusedForm::MulSub => return Err(RefinementError::UnsupportedForm),
-    }
-    .ok_or(RefinementError::DisconnectedGroup)?;
-    if candidate.fused_operands != [*mul_lhs, *mul_rhs, addend] {
-        return Err(RefinementError::DisconnectedGroup);
-    }
     if !direct_state_chain(context, &mul_handle, &consumer_handle) {
         return Err(RefinementError::DisconnectedGroup);
     }
@@ -224,7 +217,7 @@ pub fn check_contraction(
     let contract = ContractSnapshot::capture(context, &round.contract())?;
     let (reference, site) = ReferenceSnapshot::capture_contraction(context, round, candidate)?;
     let candidate_snapshot = CandidateSnapshot::capture(context, round, candidate)?;
-    if !candidate_snapshot.is_contraction_of(&reference, site, candidate.form) {
+    if !candidate_snapshot.is_contraction_of(&reference, site) {
         return Err(RefinementError::DisconnectedGroup);
     }
     let mut hasher = std::collections::hash_map::DefaultHasher::new();

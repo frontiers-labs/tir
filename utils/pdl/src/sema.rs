@@ -40,6 +40,13 @@ pub fn analyze(file: &File) -> Vec<Diagnostic> {
                 rule.span,
             ));
         }
+        if matches!(rule.kind, RuleKind::Equality(_)) && rule.proof == Some(Proof::Contract) {
+            diagnostics.push(Diagnostic::new(
+                format!("equality rule '{}' cannot use contract proof", rule.name),
+                "contract proofs only license directional refinements",
+                rule.span,
+            ));
+        }
         let mut binders = HashSet::new();
         let mut widths = HashSet::new();
         collect_lhs_bindings(&rule.lhs, &mut binders, &mut widths, &mut diagnostics);

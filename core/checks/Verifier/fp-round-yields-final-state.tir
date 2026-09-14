@@ -1,0 +1,17 @@
+// RUN: not tir opt --verify %s 2>&1 | filecheck %s
+
+#contract = {accuracy = {kind = "reference"}, arithmetic = {exceptions = "flags", kind = "arithmetic", nan = "any_quiet", rounding = "nearest_even", subnormals = "gradual", tininess = "after_rounding"}, assumptions = {finite = false}, environment_epoch = 0, intermediate_exceptions = "preserve", permissions = {approved_approximation = false, cross_statement_contraction = false, expression_contraction = false, ignore_signed_zero = false, reassociation = false, reciprocal = false}, result_formats = [!f64]}
+
+module {
+  %f = func.func @drops_body_effect(%a: !f64, %b: !f64) -> !f64 {
+    %env0 = state.entry_state : !state<fp.env>
+    %result, %env1 = fp.round (%x = %a, %y = %b, %env = %env0) {contract = #contract} : (!f64, !state<fp.env>) {
+      %value, %changed = fp.add %x, %y state(%env) {semantics = {exceptions = "flags"}} : !f64
+      -> %value, %env
+    }
+    -> %result, %env1
+  }
+  module_end
+}
+
+// CHECK: fp.round reference must yield the final state of its body effects

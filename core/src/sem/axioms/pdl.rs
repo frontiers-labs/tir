@@ -6,7 +6,8 @@
 //! prover can only read through the op's `sem:` declaration.
 
 use tir_pdl::{
-    BinaryOp, BindingType, Expr, ExprKind, Operator, Proof, Term, TermKind, Type, UnaryOp, Width,
+    AttributeValue, BinaryOp, BindingType, Expr, ExprKind, Operator, Proof, Term, TermKind, Type,
+    UnaryOp, Width,
 };
 
 use super::{
@@ -288,6 +289,7 @@ fn node(term: &Term, side: Side, scope: &Scope) -> Result<AxNode, String> {
         )),
         TermKind::Operation {
             operator,
+            attributes,
             operands,
             dependencies,
             ..
@@ -321,8 +323,37 @@ fn node(term: &Term, side: Side, scope: &Scope) -> Result<AxNode, String> {
                 .map(|operand| node(operand, side, scope))
                 .collect::<Result<_, _>>()?;
             if matches!(operator, Operator::Dialect { dialect, .. } if dialect == "fp") {
+                let rounding = match attributes.as_slice() {
+                    [] => 0,
+                    [attribute] if attribute.name == "rounding" => match &attribute.value {
+                        AttributeValue::String(name) => match name.as_str() {
+                            "nearest_even" => 0,
+                            "toward_zero" => 1,
+                            "toward_negative" => 2,
+                            "toward_positive" => 3,
+                            "ties_away" => 4,
+                            _ => {
+                                return Err(format!(
+                                    "the prover does not encode rounding mode `{name}`"
+                                ));
+                            }
+                        },
+                        _ => {
+                            return Err(format!(
+                                "the prover requires a fixed rounding mode on `{}`",
+                                operator_name(operator)
+                            ));
+                        }
+                    },
+                    _ => {
+                        return Err(format!(
+                            "the prover does not encode these attributes on `{}`",
+                            operator_name(operator)
+                        ));
+                    }
+                };
                 children.push(AxNode::Const(
-                    WidthExpr::Lit(0),
+                    WidthExpr::Lit(rounding),
                     ConstWidth::Explicit(WidthExpr::Lit(3)),
                 ));
             }

@@ -3,7 +3,7 @@
 
 refinement contract-mul-add: fp.add(fp.mul(a: float<64>, b: float<64>), c: float<64>) ~> fp.fma(a, b, c)
     requires same_round_region, permits(contract_mul_add), compatible_formats_and_rounding
-    proof smt;
+    proof contract;
 
 // CHECK: kind: Refinement
 // CHECK: requirements: [
@@ -12,4 +12,4 @@ refinement contract-mul-add: fp.add(fp.mul(a: float<64>, b: float<64>), c: float
 // CHECK-NEXT: ContractMulAdd
 // CHECK: CompatibleFormatsAndRounding
 // CHECK: proof: Some(
-// CHECK-NEXT: Smt
+// CHECK-NEXT: Contract

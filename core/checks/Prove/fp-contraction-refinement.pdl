@@ -1,4 +1,5 @@
-// RUN: tir prove %s | filecheck %s
+// RUN: not tir prove %s | filecheck %s
+// RUN: tir prove --allow-admitted %s | filecheck %s
 
 refinement contract-mul-add:
   fp.add(fp.mul(a: float<64>, b: float<64>), c: float<64>)
@@ -8,7 +9,7 @@ refinement contract-mul-add:
     compatible_formats_and_rounding,
     permitted_effect_change,
     satisfies_domain_and_effect_contract
-  proof smt;
+  proof contract;
 
 refinement contract-add-mul-commuted:
   fp.add(c: float<64>, fp.mul(a: float<64>, b: float<64>))
@@ -18,17 +19,17 @@ refinement contract-add-mul-commuted:
     compatible_formats_and_rounding,
     permitted_effect_change,
     satisfies_domain_and_effect_contract
-  proof smt;
+  proof contract;
 
-refinement contract-shaped-mul-add:
-  fp.add(fp.mul(a: shaped_float<64, 4>, b: shaped_float<64, 4>), c: shaped_float<64, 4>)
-  ~> fp.fma(a, b, c)
+refinement contract-mul-sub:
+  fp.sub(fp.mul(a: float<64>, b: float<64>), c: float<64>)
+  ~> fp.fma(a, b, fp.neg(c))
   requires same_round_region,
     permits(contract_mul_add),
     compatible_formats_and_rounding,
     permitted_effect_change,
     satisfies_domain_and_effect_contract
-  proof smt;
+  proof contract;
 
 refinement contract-stateful-mul-add:
   fp.add(fp.mul(a: float<64>, b: float<64> | env: state<fp.env>), c: float<64> | env)
@@ -38,9 +39,9 @@ refinement contract-stateful-mul-add:
     compatible_formats_and_rounding,
     permitted_effect_change,
     satisfies_domain_and_effect_contract
-  proof smt;
+  proof contract;
 
-// CHECK: contract-mul-add: proven
-// CHECK-NEXT: contract-add-mul-commuted: proven
-// CHECK-NEXT: contract-shaped-mul-add: proven
-// CHECK-NEXT: contract-stateful-mul-add: proven
+// CHECK: contract-mul-add: admitted
+// CHECK-NEXT: contract-add-mul-commuted: admitted
+// CHECK-NEXT: contract-mul-sub: admitted
+// CHECK-NEXT: contract-stateful-mul-add: admitted

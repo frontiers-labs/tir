@@ -46,6 +46,23 @@ module {
 }
 "#;
 
+const DOUBLE_PRODUCT_MODULE: &str = r#"
+#contract = {accuracy = {kind = "reference"}, arithmetic = {exceptions = "ignore", kind = "arithmetic", nan = "any_quiet", rounding = "nearest_even", subnormals = "gradual", tininess = "after_rounding"}, assumptions = {finite = false}, environment_epoch = 0, intermediate_exceptions = "allow_contracted_group_removal", permissions = {approved_approximation = false, cross_statement_contraction = false, expression_contraction = true, ignore_signed_zero = false, reassociation = false, reciprocal = false}, result_formats = [!f64]}
+module {
+  %f = func.func @contract(%a: !f64, %b: !f64) -> !f64 {
+    %result = fp.round (%x = %a, %y = %b) {contract = #contract} : !f64 {
+      %product = fp.mul %x, %y : !f64
+      %sum = fp.add %product, %product : !f64
+      -> %sum
+    }
+    %retained = fp.mul %a, %b : !f64
+    %candidate = fp.fma %a, %b, %retained : !f64
+    -> %result
+  }
+  module_end
+}
+"#;
+
 #[test]
 fn changed_nan_policy_invalidates_witness() {
     let fixture = Fixture::new();
@@ -140,6 +157,38 @@ fn independent_candidate_output_cannot_reuse_witness() {
 
     assert!(check_contraction(&context, &round, &changed).is_err());
     assert!(witness.validate(&context, &round, &changed).is_err());
+}
+
+#[test]
+fn double_product_contraction_retains_product_as_addend() {
+    let context = Context::with_default_dialects();
+    let module = tir::parse::ir::parse_ir::<ModuleOp>(&context, DOUBLE_PRODUCT_MODULE).unwrap();
+    let root = module.id();
+    tir::verify_op_tree(&context, root).unwrap();
+    let round = context
+        .get_op(find_ops::<RoundOp>(&context, root)[0])
+        .as_op::<RoundOp>()
+        .unwrap();
+    let products = find_ops::<MulOp>(&context, root);
+    let add = find_ops::<AddOp>(&context, root)[0];
+    let fma = find_ops::<FmaOp>(&context, root)[0];
+    let candidate = ContractionCandidate {
+        mul: products[0],
+        add_or_sub: add,
+        implementation: fma,
+        fused_operands: [
+            round.reference_region().ports()[0].id(),
+            round.reference_region().ports()[1].id(),
+            context.get_op(products[0]).value_results()[0],
+        ],
+        form: FusedForm::MulAdd,
+        result_mapping: vec![(
+            round.reference_region().results()[0],
+            context.get_op(fma).value_results()[0],
+        )],
+    };
+
+    check_contraction(&context, &round, &candidate).unwrap();
 }
 
 struct Fixture {

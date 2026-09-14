@@ -1,8 +1,10 @@
 use crate::backend::{isel::InstructionSelectPass, select_target};
-use crate::fp::ops::{FenceOp, FmaOpBuilder, NegOpBuilder, RoundOp};
+use crate::builtin::FloatType;
+use crate::fp::ops::{FenceOp, FenceOpBuilder, FmaOpBuilder, NegOpBuilder, RoundOp};
 use crate::func::FuncOp;
 use crate::sem::fp_refinement::{
-    CandidateSnapshot, ContractionCandidate, FusedForm, RefinementError, check_contraction,
+    CandidateSnapshot, ContractionCandidate, ContractionProposal, FusedForm, RefinementError,
+    check_contraction, contraction_proposals,
 };
 use crate::{
     AnalysisManager, Context, OpId, Operation, OperationRef, Pass, PassError, PassTarget,
@@ -84,7 +86,7 @@ impl ResolveFpPass {
             .get_op(round_id)
             .as_op::<RoundOp>()
             .expect("found fp.round");
-        let candidates = contraction_candidates(context, &round);
+        let candidates = contraction_candidates(context, &round)?;
 
         let mut best: Option<(u64, Context)> = None;
         let mut unsupported = Vec::new();
@@ -151,7 +153,7 @@ impl ResolveFpPass {
                 Ok(cost)
                     if best
                         .as_ref()
-                        .is_none_or(|(best_cost, ..)| cost <= *best_cost) =>
+                        .is_none_or(|(best_cost, ..)| cost < *best_cost) =>
                 {
                     best = Some((cost, fork));
                 }
@@ -196,6 +198,9 @@ fn refinement_rejection(error: RefinementError) -> &'static str {
 }
 
 fn lower_fences(context: &Context, function: OpId) -> Result<(), PassError> {
+    if find_round(context, function).is_some() {
+        return Ok(());
+    }
     let fences: Vec<_> = super::regions_under(context, function)
         .into_iter()
         .flat_map(|region| context.get_region(region).op_ids())
@@ -214,58 +219,31 @@ fn find_round(context: &Context, function: OpId) -> Option<OpId> {
     super::regions_under(context, function)
         .into_iter()
         .flat_map(|region| context.get_region(region).op_ids())
-        .find(|op| context.get_op(*op).is::<RoundOp>())
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-struct ContractionProposal {
-    mul: OpId,
-    add_or_sub: OpId,
-    fused_operands: [crate::ValueId; 3],
-    form: FusedForm,
-}
-
-fn contraction_candidates(context: &Context, round: &RoundOp) -> Vec<ContractionProposal> {
-    let reference = round.reference_region();
-    let mut candidates = Vec::new();
-    for consumer_id in reference.op_ids() {
-        let consumer = context.get_op(consumer_id);
-        let form = if consumer.is::<crate::fp::ops::AddOp>() {
-            FusedForm::MulAdd
-        } else if consumer.is::<crate::fp::ops::SubOp>() {
-            FusedForm::MulSub
-        } else {
-            continue;
-        };
-        for (position, operand) in consumer.operands().iter().take(2).enumerate() {
-            let Some(mul_id) = context.get_value(*operand).defining_op() else {
-                continue;
-            };
-            let Some(mul) = context.get_op(mul_id).as_op::<crate::fp::ops::MulOp>() else {
-                continue;
-            };
-            if form == FusedForm::MulSub && position != 0 {
-                continue;
+        .filter(|op| context.get_op(*op).is::<RoundOp>())
+        .max_by_key(|op| {
+            let mut depth = 0;
+            let mut parent = context.parent_op(*op);
+            while let Some(op) = parent {
+                depth += 1;
+                parent = context.parent_op(op);
             }
-            let other = consumer.operands()[1 - position];
-            candidates.push(ContractionProposal {
-                mul: mul_id,
-                add_or_sub: consumer_id,
-                fused_operands: [mul.operands()[0], mul.operands()[1], other],
-                form,
-            });
-        }
+            depth
+        })
+}
+
+fn contraction_candidates(
+    context: &Context,
+    round: &RoundOp,
+) -> Result<Vec<ContractionProposal>, PassError> {
+    const MAX_CANDIDATES: usize = 32;
+    let candidates = contraction_proposals(context, round).unwrap_or_default();
+    if candidates.len() > MAX_CANDIDATES {
+        return Err(PassError::InvalidRuleSet(format!(
+            "fp.round contraction search exhausted: found {} candidates, limit is {MAX_CANDIDATES}",
+            candidates.len()
+        )));
     }
-    candidates.sort_by_key(|candidate| {
-        (
-            candidate.add_or_sub,
-            candidate.mul,
-            matches!(candidate.form, FusedForm::MulSub),
-        )
-    });
-    candidates.dedup();
-    candidates.truncate(32);
-    candidates
+    Ok(candidates)
 }
 
 fn materialize_candidate(
@@ -306,14 +284,7 @@ fn materialize_candidate(
     let consumer_copy = op_copies[&proposal.add_or_sub];
     let mul_copy = op_copies[&proposal.mul];
     let consumer = context.get_op(consumer_copy);
-    let mul = context.get_op(proposal.mul);
-    let retain_mul = mul.results().iter().any(|result| {
-        reference.results().contains(result)
-            || context
-                .users_of(*result)
-                .into_iter()
-                .any(|user| user != proposal.add_or_sub)
-    });
+    let retain_mul = proposal.retain_mul;
     let numeric_ty = context.get_value(consumer.value_results()[0]).ty();
     let mut addend = values[&proposal.fused_operands[2]];
     if proposal.form == FusedForm::MulSub {
@@ -372,14 +343,18 @@ fn select_candidate(
     round: &RoundOp,
     candidate: &ContractionCandidate,
 ) -> Result<(), PassError> {
+    let destination = context
+        .parent_nodes_region(round.handle().id)
+        .ok_or(PassError::RewriteFailed(round.handle().id))?;
     for (old, (_, new)) in round
         .handle()
         .results()
         .iter()
         .zip(&candidate.result_mapping)
     {
-        context.replace_value_uses(*old, *new);
-        replace_region_result(context, round.handle().id, *old, *new);
+        let new = preserve_nested_round_boundary(context, round, destination, *new);
+        context.replace_value_uses(*old, new);
+        replace_region_result(context, round.handle().id, *old, new);
     }
     context.erase_op(&OperationRef::new(round.handle().clone()))
 }
@@ -398,10 +373,40 @@ fn splice_reference(context: &Context, round: &RoundOp) -> Result<(), PassError>
     let (_, outputs) =
         crate::clone::clone_nodes_ops_into(context, reference.id(), &bindings, destination);
     for (old, new) in round.handle().results().iter().zip(outputs) {
+        let new = preserve_nested_round_boundary(context, round, destination, new);
         context.replace_value_uses(*old, new);
         replace_region_result(context, round.handle().id, *old, new);
     }
     context.erase_op(&OperationRef::new(round.handle().clone()))
+}
+
+fn preserve_nested_round_boundary(
+    context: &Context,
+    round: &RoundOp,
+    destination: crate::RegionId,
+    value: crate::ValueId,
+) -> crate::ValueId {
+    let mut parent = context.parent_op(round.handle().id);
+    while let Some(op) = parent {
+        if context.get_op(op).is::<RoundOp>() {
+            let ty = context.get_value(value).ty();
+            let ty_data = context.get_type_data(ty);
+            if (ty_data.as_ref() as &dyn std::any::Any)
+                .downcast_ref::<FloatType>()
+                .is_some()
+            {
+                let fence = FenceOpBuilder::new(context)
+                    .input(value)
+                    .result_type(ty)
+                    .build();
+                context.add(destination, fence.id());
+                return fence.result();
+            }
+            return value;
+        }
+        parent = context.parent_op(op);
+    }
+    value
 }
 
 fn replace_region_result(context: &Context, op: OpId, old: crate::ValueId, new: crate::ValueId) {
