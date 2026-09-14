@@ -97,6 +97,8 @@ struct Registry {
     /// only runs [`Type::eq`] against colliding candidates.
     type_lookup: HashMap<u64, Vec<TypeId>>,
     fp_semantics: HashMap<crate::fp::Semantics, Arc<crate::fp::Semantics>>,
+    evaluation_contracts:
+        HashMap<crate::fp::EvaluationContract, Arc<crate::fp::EvaluationContract>>,
     /// The names attributes are keyed by, so an op carries four bytes per
     /// attribute name instead of a heap `String` per instance.
     names: Interner,
@@ -244,6 +246,7 @@ impl Context {
                 type_cache: vec![],
                 type_lookup: HashMap::new(),
                 fp_semantics: HashMap::new(),
+                evaluation_contracts: HashMap::new(),
                 names,
                 op_names: Vec::new(),
                 op_name_ids: HashMap::new(),
@@ -314,6 +317,19 @@ impl Context {
             .fp_semantics
             .entry(semantics)
             .or_insert_with(|| Arc::new(semantics))
+            .clone()
+    }
+
+    pub fn intern_evaluation_contract(
+        &self,
+        contract: impl Into<crate::fp::EvaluationContract>,
+    ) -> Arc<crate::fp::EvaluationContract> {
+        let contract = contract.into();
+        let mut registry = self.registry_mut();
+        registry
+            .evaluation_contracts
+            .entry(contract)
+            .or_insert_with_key(|contract| Arc::new(contract.clone()))
             .clone()
     }
 

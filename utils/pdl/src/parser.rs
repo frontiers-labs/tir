@@ -28,6 +28,7 @@ where
 {
     choice((
         group().map(Item::Group),
+        refinement().map(|rule| Item::Rule(Box::new(rule))),
         rule().map(|rule| Item::Rule(Box::new(rule))),
     ))
     .repeated()
@@ -125,16 +126,128 @@ where
         .map_with(
             |((((((name, lhs), direction), rhs), guards), proof), post_saturation), extra| Rule {
                 name,
+                kind: RuleKind::Equality(direction),
                 lhs,
-                direction,
                 rhs,
                 guards,
+                requirements: Vec::new(),
                 proof,
                 post_saturation,
                 span: extra.span(),
             },
         )
         .labelled("rewrite rule")
+}
+
+fn refinement<'src, I>() -> impl Parser<'src, I, Rule, Error<'src>>
+where
+    I: ValueInput<'src, Token = Token, Span = Span>,
+{
+    let name = name_part()
+        .then(
+            just(Token::Minus)
+                .ignore_then(name_part())
+                .repeated()
+                .collect::<Vec<_>>(),
+        )
+        .map(|(head, tail)| {
+            tail.into_iter().fold(head, |mut name, part| {
+                name.push('-');
+                name.push_str(&part);
+                name
+            })
+        });
+    let proof = just(Token::Proof)
+        .ignore_then(identifier().try_map(|name, span| match name.as_str() {
+            "smt" => Ok(Proof::Smt),
+            "trusted" => Ok(Proof::Trusted),
+            "definitional" => Ok(Proof::Definitional),
+            _ => Err(Rich::custom(
+                span,
+                "proof mode is `smt`, `trusted` or `definitional`",
+            )),
+        }))
+        .or_not();
+    let permission = identifier()
+        .then(
+            identifier()
+                .delimited_by(just(Token::LeftParen), just(Token::RightParen))
+                .or_not(),
+        )
+        .try_map(|(name, argument), span| {
+            let requirement = match (name.as_str(), argument.as_deref()) {
+                ("same_round_region", None) => RefinementRequirement::SameRoundRegion,
+                ("compatible_formats_and_rounding", None) => {
+                    RefinementRequirement::CompatibleFormatsAndRounding
+                }
+                ("permitted_effect_change", None) => RefinementRequirement::PermittedEffectChange,
+                ("satisfies_domain_and_effect_contract", None) => {
+                    RefinementRequirement::SatisfiesDomainAndEffectContract
+                }
+                ("permits", Some("contract_mul_add")) => {
+                    RefinementRequirement::Permits(ContractPermission::ContractMulAdd)
+                }
+                ("permits", Some("cross_statement")) => {
+                    RefinementRequirement::Permits(ContractPermission::CrossStatement)
+                }
+                ("permits", Some("reassociation")) => {
+                    RefinementRequirement::Permits(ContractPermission::Reassociation)
+                }
+                ("permits", Some("reciprocal")) => {
+                    RefinementRequirement::Permits(ContractPermission::Reciprocal)
+                }
+                ("permits", Some("approved_approximation")) => {
+                    RefinementRequirement::Permits(ContractPermission::ApprovedApproximation)
+                }
+                _ => return Err(Rich::custom(span, "unknown refinement requirement")),
+            };
+            Ok(requirement)
+        });
+    let requirement = choice((
+        permission,
+        identifier().try_map(|name, span| match name.as_str() {
+            "same_round_region" => Ok(RefinementRequirement::SameRoundRegion),
+            "compatible_formats_and_rounding" => {
+                Ok(RefinementRequirement::CompatibleFormatsAndRounding)
+            }
+            "permitted_effect_change" => Ok(RefinementRequirement::PermittedEffectChange),
+            "satisfies_domain_and_effect_contract" => {
+                Ok(RefinementRequirement::SatisfiesDomainAndEffectContract)
+            }
+            _ => Err(Rich::custom(span, "unknown refinement requirement")),
+        }),
+    ));
+    just(Token::Refinement)
+        .ignore_then(name)
+        .then_ignore(just(Token::Colon))
+        .then(term())
+        .then_ignore(just(Token::RefinementArrow))
+        .then(term())
+        .then(
+            just(Token::Requires)
+                .ignore_then(
+                    requirement
+                        .separated_by(just(Token::Comma))
+                        .at_least(1)
+                        .collect(),
+                )
+                .or_not()
+                .map(Option::unwrap_or_default),
+        )
+        .then(proof)
+        .then_ignore(just(Token::Semicolon))
+        .map_with(|((((name, lhs), rhs), requirements), proof), extra| Rule {
+            name,
+            kind: RuleKind::Refinement,
+            lhs,
+            rhs,
+            guards: Vec::new(),
+            requirements,
+            proof,
+            post_saturation: false,
+            span: extra.span(),
+        })
+        .labelled("refinement rule")
 }
 
 fn term<'src, I>() -> impl Parser<'src, I, Term, Error<'src>> + Clone
@@ -300,13 +413,61 @@ where
             .delimited_by(just(Token::Less), just(Token::Greater)),
         )
         .map(Type::Integer);
-    generic.or(identifier().map(|name| {
-        name.strip_prefix('i')
-            .and_then(|width| width.parse().ok())
-            .map_or(Type::Named(name), |width| {
-                Type::Integer(Width::Concrete(width))
-            })
-    }))
+    let float = just(Token::Float)
+        .ignore_then(just(Token::Less))
+        .ignore_then(integer().try_map(|width, span| match width {
+            32 => Ok(Type::Float(FloatFormat::Binary32)),
+            64 => Ok(Type::Float(FloatFormat::Binary64)),
+            _ => Err(Rich::custom(span, "float format must be 32 or 64")),
+        }))
+        .then_ignore(just(Token::Greater));
+    let shaped_float = just(Token::ShapedFloat)
+        .ignore_then(just(Token::Less))
+        .ignore_then(integer().try_map(|width, span| match width {
+            32 => Ok(FloatFormat::Binary32),
+            64 => Ok(FloatFormat::Binary64),
+            _ => Err(Rich::custom(span, "float format must be 32 or 64")),
+        }))
+        .then_ignore(just(Token::Comma))
+        .then(integer().map_with(|value, extra| Expr {
+            kind: ExprKind::Integer(value),
+            span: extra.span(),
+        }))
+        .then_ignore(just(Token::Greater))
+        .map(|(format, shape)| Type::ShapedFloat {
+            format,
+            shape: vec![shape],
+        });
+    let state = identifier()
+        .filter(|name| name == "state")
+        .ignore_then(
+            just(Token::Less)
+                .ignore_then(
+                    identifier()
+                        .then(just(Token::Dot).ignore_then(identifier()).or_not())
+                        .map(
+                            |(resource, field)| match (resource.as_str(), field.as_deref()) {
+                                ("memory", None) => Resource::Memory,
+                                ("fp", Some("env")) => Resource::FpEnv,
+                                (name, None) => Resource::Named(name.to_string()),
+                                (name, Some(field)) => Resource::Named(format!("{name}.{field}")),
+                            },
+                        ),
+                )
+                .then_ignore(just(Token::Greater)),
+        )
+        .map(Type::State);
+    generic
+        .or(float)
+        .or(shaped_float)
+        .or(state)
+        .or(identifier().map(|name| {
+            name.strip_prefix('i')
+                .and_then(|width| width.parse().ok())
+                .map_or(Type::Named(name), |width| {
+                    Type::Integer(Width::Concrete(width))
+                })
+        }))
 }
 
 fn expression<'src, I>() -> impl Parser<'src, I, Expr, Error<'src>> + Clone
@@ -490,6 +651,8 @@ where
         Token::Keep => "keep".to_string(),
         Token::Const => "const".to_string(),
         Token::Int => "int".to_string(),
+        Token::Float => "float".to_string(),
+        Token::ShapedFloat => "shaped_float".to_string(),
     }
 }
 

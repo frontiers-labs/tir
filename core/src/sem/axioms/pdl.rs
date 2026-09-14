@@ -29,7 +29,12 @@ pub(crate) fn axioms_from_pdl(source: &str) -> Result<Vec<Axiom>, String> {
     file.items
         .iter()
         .filter_map(|item| match item {
-            tir_pdl::Item::Rule(rule) if rule.proof() != Proof::Definitional => Some(rule.as_ref()),
+            tir_pdl::Item::Rule(rule)
+                if matches!(rule.kind, tir_pdl::RuleKind::Equality(_))
+                    && rule.proof() != Proof::Definitional =>
+            {
+                Some(rule.as_ref())
+            }
             _ => None,
         })
         .map(axiom_from_rule)
@@ -41,6 +46,7 @@ pub(crate) fn axioms_from_pdl(source: &str) -> Result<Vec<Axiom>, String> {
 struct Scope {
     width_names: Vec<String>,
     vars: Vec<(String, WidthBinding)>,
+    symbol_types: Vec<Option<crate::sem::SemType>>,
     const_vars: Vec<usize>,
 }
 
@@ -51,6 +57,7 @@ impl Scope {
         let mut scope = Scope {
             width_names: Vec::new(),
             vars: Vec::new(),
+            symbol_types: Vec::new(),
             const_vars: Vec::new(),
         };
         scope.declare(&rule.lhs)?;
@@ -69,11 +76,52 @@ impl Scope {
                 }
             }
             TermKind::Binder { name, ty: Some(ty) } => {
-                let (width, is_const) = match ty {
-                    BindingType::Type(Type::Integer(width)) => (width_binding(width, self)?, false),
-                    BindingType::Constant(Some(width)) => (self.width_expr_binding(width)?, true),
+                let (width, is_const, symbol_type) = match ty {
+                    BindingType::Type(Type::Integer(width)) => {
+                        (width_binding(width, self)?, false, None)
+                    }
+                    BindingType::Type(Type::Float(format)) => {
+                        let (exponent, mantissa): (u32, u32) = match format {
+                            tir_pdl::FloatFormat::Binary32 => (8, 23),
+                            tir_pdl::FloatFormat::Binary64 => (11, 52),
+                        };
+                        (
+                            WidthBinding::Lit(u64::from(1 + exponent + mantissa)),
+                            false,
+                            Some(crate::sem::SemType::Float(crate::sem::FloatFormat::new(
+                                exponent, mantissa,
+                            ))),
+                        )
+                    }
+                    BindingType::Type(Type::ShapedFloat { .. }) => {
+                        return Err(format!(
+                            "shaped float binder `{name}` is not supported by the scalar prover"
+                        ));
+                    }
+                    BindingType::Type(Type::State(resource)) => {
+                        return Err(format!(
+                            "state binder `{name}` for resource `{resource:?}` is not supported by the solver"
+                        ));
+                    }
+                    BindingType::Constant(Some(width)) => {
+                        (self.width_expr_binding(width)?, true, None)
+                    }
                     BindingType::Constant(None) => {
                         return Err(format!("constant binder `{name}` needs a width"));
+                    }
+                    BindingType::Type(Type::Named(name)) if name == "f32" || name == "f64" => {
+                        let (exponent, mantissa, width) = if name == "f32" {
+                            (8, 23, 32)
+                        } else {
+                            (11, 52, 64)
+                        };
+                        (
+                            WidthBinding::Lit(width),
+                            false,
+                            Some(crate::sem::SemType::Float(crate::sem::FloatFormat::new(
+                                exponent, mantissa,
+                            ))),
+                        )
                     }
                     BindingType::Type(Type::Named(name)) => {
                         return Err(format!("type group `{name}` has no width"));
@@ -83,6 +131,7 @@ impl Scope {
                     self.const_vars.push(self.vars.len());
                 }
                 self.vars.push((name.clone(), width));
+                self.symbol_types.push(symbol_type);
             }
             _ => {}
         }
@@ -114,12 +163,32 @@ fn width_binding(width: &Width, scope: &mut Scope) -> Result<WidthBinding, Strin
 }
 
 pub(crate) fn axiom_from_rule(rule: &tir_pdl::Rule) -> Result<Axiom, String> {
+    if !matches!(rule.kind, tir_pdl::RuleKind::Equality(_)) {
+        return Err(format!(
+            "refinement rule `{}` cannot become an equality axiom",
+            rule.name
+        ));
+    }
     let mut scope = Scope::new(rule)?;
     let root_width = match (&rule.lhs.ty, rule.materializes()) {
         (Some(Type::Integer(width)), _) => width_binding(width, &mut scope)?,
+        (Some(Type::Float(format)), _) => WidthBinding::Lit(match format {
+            tir_pdl::FloatFormat::Binary32 => 32,
+            tir_pdl::FloatFormat::Binary64 => 64,
+        }),
+        (Some(Type::State(resource)), _) => {
+            return Err(format!(
+                "state result for resource `{resource:?}` is not supported by the solver"
+            ));
+        }
         // A materialize rule matches every constant class, so the constant's own
         // width is the root's.
         (None, true) => scope.vars[scope.const_vars[0]].1.clone(),
+        (None, false) if scope.symbol_types.iter().any(Option::is_some) => scope
+            .vars
+            .first()
+            .map(|(_, width)| width.clone())
+            .ok_or_else(|| format!("rule `{}` has no typed root or binder", rule.name))?,
         _ => return Err(format!("rule `{}` has no root width", rule.name)),
     };
 
@@ -177,6 +246,7 @@ pub(crate) fn axiom_from_rule(rule: &tir_pdl::Rule) -> Result<Axiom, String> {
         name: rule.name.clone(),
         width_names: scope.width_names,
         vars: scope.vars,
+        symbol_types: scope.symbol_types,
         const_vars: scope.const_vars,
         root_width,
         guards,
@@ -185,6 +255,7 @@ pub(crate) fn axiom_from_rule(rule: &tir_pdl::Rule) -> Result<Axiom, String> {
         rhs,
         uses_root,
         obligation,
+        floating_point: rule.is_floating_point(),
         post_saturation: rule.post_saturation,
         materialize: rule.materializes(),
     })
@@ -221,19 +292,40 @@ fn node(term: &Term, side: Side, scope: &Scope) -> Result<AxNode, String> {
             dependencies,
             ..
         } => {
-            let Operator::Semantic(name) = operator else {
-                return Err(format!(
-                    "op terms have no `sem:` expansion here; rule names `{}`",
-                    operator_name(operator)
-                ));
+            let kind = match operator {
+                Operator::Semantic(name) => {
+                    op_kind(name).ok_or_else(|| format!("unknown semantic operator `{name}`"))?
+                }
+                Operator::Dialect { dialect, name } if dialect == "fp" => match name.as_str() {
+                    "add" => SymKind::FAddRound,
+                    "sub" => SymKind::FSubRound,
+                    "mul" => SymKind::FMulRound,
+                    "div" => SymKind::FDivRound,
+                    "fma" => SymKind::FmaRound,
+                    _ => {
+                        return Err(format!(
+                            "the prover has no typed semantic binding for `{dialect}.{name}`"
+                        ));
+                    }
+                },
+                _ => {
+                    return Err(format!(
+                        "op terms have no `sem:` expansion here; rule names `{}`",
+                        operator_name(operator)
+                    ));
+                }
             };
-            let kind =
-                op_kind(name).ok_or_else(|| format!("unknown semantic operator `{name}`"))?;
-            let children = operands
+            let mut children: Vec<AxNode> = operands
                 .iter()
                 .chain(dependencies)
                 .map(|operand| node(operand, side, scope))
                 .collect::<Result<_, _>>()?;
+            if matches!(operator, Operator::Dialect { dialect, .. } if dialect == "fp") {
+                children.push(AxNode::Const(
+                    WidthExpr::Lit(0),
+                    ConstWidth::Explicit(WidthExpr::Lit(3)),
+                ));
+            }
             Ok(AxNode::Node(kind, children))
         }
         TermKind::String(_) => Err("a string is not a term the prover reads".into()),

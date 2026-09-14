@@ -1,0 +1,6 @@
+// FP state rules default to checked SMT proof, even for custom dialect ops.
+// RUN: not tir-pdl %s --emit rust 2>&1 | filecheck %s
+
+rule custom-fp-state: builtin.addi(s: state<fp.env>, x) => x;
+
+// CHECK: floating-point equality requires a checked proof binding

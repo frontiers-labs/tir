@@ -1,0 +1,21 @@
+// RUN: tir opt --verify %s | tir opt --verify - | filecheck %s
+
+#contract = {accuracy = {kind = "reference"}, arithmetic = {exceptions = "ignore", kind = "arithmetic", nan = "any_quiet", rounding = "nearest_even", subnormals = "gradual", tininess = "after_rounding"}, assumptions = {finite = false}, environment_epoch = 0, intermediate_exceptions = "allow_contracted_group_removal", permissions = {approved_approximation = false, cross_statement_contraction = false, expression_contraction = true, ignore_signed_zero = false, reassociation = false, reciprocal = false}, result_formats = [!f64, !f64]}
+
+module {
+  %f = func.func @two_results(%a: !f64, %b: !f64) -> !f64 {
+    %sum, %product = fp.round (%x = %a, %y = %b) {contract = #contract} : (!f64, !f64) {
+      %s = fp.add %x, %y : !f64
+      %p = fp.mul %x, %y : !f64
+      -> %s, %p
+    }
+    -> %product
+  }
+  module_end
+}
+
+// CHECK: %[[SUM:[0-9]+]], %[[PRODUCT:[0-9]+]] = fp.round (%[[X:[0-9]+]] = %{{[0-9]+}}, %[[Y:[0-9]+]] = %{{[0-9]+}}) {contract = {{.*}}result_formats = [!f64, !f64]{{.*}}} : (!f64, !f64) {
+// CHECK: %[[S:[0-9]+]] = fp.add %[[X]], %[[Y]] : !f64
+// CHECK: %[[P:[0-9]+]] = fp.mul %[[X]], %[[Y]] : !f64
+// CHECK: -> %[[S]], %[[P]]
+// CHECK: -> %[[PRODUCT]]

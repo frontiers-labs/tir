@@ -1,0 +1,6 @@
+// The FP equality proof gate prevents unchecked generated unions.
+// RUN: not tir-pdl %s --emit rust 2>&1 | filecheck %s
+
+rule f32-neg: fp.neg(x: float<32>) => x;
+
+// CHECK: floating-point equality requires a checked proof binding

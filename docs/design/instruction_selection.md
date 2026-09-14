@@ -421,6 +421,25 @@ rule name: lhs => rhs [where guard, ...] [proof smt|trusted|definitional]
 rule name: lhs <=> rhs ...;
 ```
 
+PDL also has directed refinement rules. They produce candidate descriptions for
+the refinement checker and never add an e-class equality:
+
+```text
+refinement contract-mul-add:
+  fp.add(fp.mul(a: float<64>, b: float<64>), c: float<64>) ~> fp.fma(a, b, c)
+  requires same_round_region, permits(contract_mul_add),
+           compatible_formats_and_rounding, permitted_effect_change,
+           satisfies_domain_and_effect_contract proof smt;
+```
+
+Typed binders include `float<32>`, `float<64>`,
+`shaped_float<64, 4>`, and `state<memory>` or `state<fp.env>`. The public
+`tir_pdl::compile_refinements` function returns the parsed refinement actions
+for a candidate resolver. The current Rust equality generator matches scalar
+float formats and state resources. It preserves shaped-float format and shape
+in the PDL AST and reports shaped IR matching as unsupported because the core
+type registry has no shaped or vector type.
+
 - A binder's type declares a capture and binds its e-class width: `x: int<N>`
   captures a value, `v: const<W>` captures one whose class holds a constant.
   Reusing a width name requires equal widths.
@@ -1305,3 +1324,44 @@ ARM64 FPSR access is deferred to the later target-coverage work. A strict multip
 followed by an add remains `fp.mul %a, %b : !f64` followed by
 `fp.add %product, %c : !f64`: the default semantics require separate roundings,
 ignore exceptions, and carry no state ports.
+
+## Owned rounding contracts
+
+`fp.round` owns a reference region. Its explicit capture bindings map outer
+values to region ports; its ordered yields map to the operation's numeric and
+resource-state results. Its interned `EvaluationContract` contains resolved
+arithmetic semantics, transform permissions, scoped assumptions, accuracy,
+numeric result formats, the environment epoch, and the policy for intermediate
+exceptions. Cloning and inlining retain that contract on the owned region.
+`fp.fence` preserves its numeric input and prevents combination across that
+boundary. It lowers to an identity after rounding regions have been resolved.
+
+The `resolve-fp` pass runs before instruction selection. For standalone use,
+specify the target:
+
+```sh
+tir opt --pass 'resolve-fp<rv64ifd>' --verify input.tir
+tir mc --march=rv64ifd --stage=isel input.tir
+```
+
+The resolver keeps the reference intact while checking candidate overlays. It
+chooses a complete result-and-state implementation using the target's normal
+selection legality and whole-function cover cost. Candidate generation is
+bounded, structurally duplicate graphs are skipped, and equal costs select the
+later checked candidate in deterministic source order. An admissible reference
+is considered first. Missing target coverage is reported separately from the
+absence of a legal evaluation.
+
+Contraction candidates never enter equality saturation as equal alternatives.
+`ReferenceSnapshot` and `CandidateSnapshot` record typed graph structure;
+`RefinementWitness::validate` checks the full snapshots and contract again.
+Context-local operation, value, and type IDs do not serve as witness identity.
+
+`tir prove rules.pdl` reports `proven`, `disproven`, or `unsupported` for each
+rule and succeeds only if every rule is proven. Counterexamples include named
+input bit patterns and, when available, the two result bit patterns. A checked
+contraction theorem establishes admission under its required contract; it does
+not establish strict multiply-add equality. For binary64 inputs
+`a=0x3ff0000002000000`, `b=0x3feffffffc000000`, and
+`c=0xbff0000000000000`, separate multiply/add gives positive zero, while fused
+multiply-add gives `0xbc90000000000000` (`-2^-54`).

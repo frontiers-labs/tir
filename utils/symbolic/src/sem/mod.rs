@@ -15,8 +15,8 @@ mod discover;
 mod float;
 
 pub use discover::{
-    EquivalenceOracle, FuzzOracle, SmtOracle, con, confirm_bool_via_if,
-    confirm_extension_via_shifts, op, sym,
+    EquivalenceOracle, FuzzOracle, ProofOutcome, SmtOracle, UnsupportedReason, con,
+    confirm_bool_via_if, confirm_extension_via_shifts, op, sym,
 };
 pub use float::cmpf_semantics;
 

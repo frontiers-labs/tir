@@ -9,7 +9,7 @@
 //! equivalence unsatisfiable-to-refute with this crate's QF_BV pipeline.
 //! Confirmed shapes become e-graph rewrites at the call site.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use tir_adt::APInt;
 use tir_graph::{Dag, GenericDag, MutDag, NodeId};
@@ -77,19 +77,64 @@ impl<A> EquivalenceOracle<A> for FuzzOracle {
 #[derive(Default)]
 pub struct SmtOracle;
 
+/// A complete answer from the SMT equivalence checker.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ProofOutcome {
+    Proven,
+    Disproven {
+        model: BTreeMap<u32, Vec<bool>>,
+        values: Option<(String, String)>,
+    },
+    Unsupported(UnsupportedReason),
+}
+
+impl ProofOutcome {
+    pub fn is_proven(&self) -> bool {
+        matches!(self, Self::Proven)
+    }
+}
+
+/// Why the SMT checker could not decide an obligation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum UnsupportedReason {
+    MissingTheory(String),
+    InvalidTypes(String),
+    UnsupportedObligation(String),
+    Timeout,
+}
+
 type OracleGraph = GenericDag<SymKind, SymPayload<ValueId>>;
 
 impl<A> EquivalenceOracle<A> for SmtOracle {
     fn equivalent(&self, lhs: &SemGraph<A>, rhs: &SemGraph<A>, symbol_widths: &[u32]) -> bool {
-        self.prove(lhs, rhs, symbol_widths, false)
+        self.equivalent_outcome(lhs, rhs, symbol_widths).is_proven()
     }
 
     fn refines(&self, lhs: &SemGraph<A>, rhs: &SemGraph<A>, symbol_widths: &[u32]) -> bool {
-        self.prove(lhs, rhs, symbol_widths, true)
+        self.prove_outcome(lhs, rhs, symbol_widths, true)
+            .is_proven()
     }
 }
 
 impl SmtOracle {
+    pub fn equivalent_outcome<A>(
+        &self,
+        lhs: &SemGraph<A>,
+        rhs: &SemGraph<A>,
+        symbol_widths: &[u32],
+    ) -> ProofOutcome {
+        self.prove_outcome(lhs, rhs, symbol_widths, false)
+    }
+
+    pub fn prove_refinement_outcome<A>(
+        &self,
+        lhs: &SemGraph<A>,
+        rhs: &SemGraph<A>,
+        symbol_widths: &[u32],
+    ) -> ProofOutcome {
+        self.prove_outcome(lhs, rhs, symbol_widths, true)
+    }
+
     /// Prove equivalence while preserving the semantic domains of shared symbols.
     pub fn equivalent_typed<A>(
         &self,
@@ -97,7 +142,8 @@ impl SmtOracle {
         rhs: &SemGraph<A>,
         symbol_types: &[SemType],
     ) -> bool {
-        self.prove_typed(lhs, rhs, symbol_types, false)
+        self.equivalent_typed_outcome(lhs, rhs, symbol_types)
+            .is_proven()
     }
 
     /// Prove that `rhs` refines `lhs` on its defined domain, preserving the
@@ -108,63 +154,323 @@ impl SmtOracle {
         rhs: &SemGraph<A>,
         symbol_types: &[SemType],
     ) -> bool {
-        self.prove_typed(lhs, rhs, symbol_types, true)
+        self.refines_typed_outcome(lhs, rhs, symbol_types)
+            .is_proven()
     }
 
-    fn prove_typed<A>(
+    pub fn equivalent_typed_outcome<A>(
+        &self,
+        lhs: &SemGraph<A>,
+        rhs: &SemGraph<A>,
+        symbol_types: &[SemType],
+    ) -> ProofOutcome {
+        self.prove_typed_outcome(lhs, rhs, symbol_types, false)
+    }
+
+    pub fn refines_typed_outcome<A>(
+        &self,
+        lhs: &SemGraph<A>,
+        rhs: &SemGraph<A>,
+        symbol_types: &[SemType],
+    ) -> ProofOutcome {
+        self.prove_typed_outcome(lhs, rhs, symbol_types, true)
+    }
+
+    fn prove_typed_outcome<A>(
         &self,
         lhs: &SemGraph<A>,
         rhs: &SemGraph<A>,
         symbol_types: &[SemType],
         defined_refinement: bool,
-    ) -> bool {
+    ) -> ProofOutcome {
         let Some((g, l, r)) = disequality(lhs, rhs) else {
-            return false;
+            return ProofOutcome::Unsupported(UnsupportedReason::InvalidTypes(
+                "an equivalence side is empty".into(),
+            ));
         };
         let symbol_type = |id: NodeId| match g.get_leaf_data(id) {
             Some(SymPayload::SymbolId(id)) => symbol_types.get(*id as usize).cloned(),
             _ => None,
         };
         let Ok(types) = infer_types(&g, symbol_type) else {
-            return false;
+            return ProofOutcome::Unsupported(UnsupportedReason::InvalidTypes(
+                "semantic type inference failed".into(),
+            ));
         };
         let widths = infer_widths(&g, |id| symbol_type(id).and_then(semantic_width));
         if !same_root_widths(&widths, l, r) {
-            return false;
+            return ProofOutcome::Unsupported(UnsupportedReason::InvalidTypes(
+                "equivalence roots have different widths".into(),
+            ));
+        }
+        if structurally_equal(lhs, rhs) {
+            return ProofOutcome::Proven;
         }
         match blast_with_types(&g, &widths, &types) {
             Ok(blasted) if defined_refinement => {
-                matches!(blasted.solve_defined_equivalence(l, r), SolveOutcome::Unsat)
+                proof_outcome(blasted.solve_defined_equivalence(l, r))
             }
-            Ok(blasted) => matches!(blasted.solve(), SolveOutcome::Unsat),
-            Err(_) => false,
+            Ok(blasted) => proof_outcome(blasted.solve()),
+            Err(error) => find_typed_counterexample(lhs, rhs, symbol_types).unwrap_or_else(|| {
+                ProofOutcome::Unsupported(UnsupportedReason::MissingTheory(error.to_string()))
+            }),
         }
     }
 
-    fn prove<A>(
+    fn prove_outcome<A>(
         &self,
         lhs: &SemGraph<A>,
         rhs: &SemGraph<A>,
         symbol_widths: &[u32],
         defined_refinement: bool,
-    ) -> bool {
+    ) -> ProofOutcome {
         let Some((g, l, r)) = disequality(lhs, rhs) else {
-            return false;
+            return ProofOutcome::Unsupported(UnsupportedReason::InvalidTypes(
+                "an equivalence side is empty".into(),
+            ));
         };
         let widths = infer_widths(&g, |id| match g.get_leaf_data(id) {
             Some(SymPayload::SymbolId(id)) => symbol_widths.get(*id as usize).copied(),
             _ => None,
         });
         if !same_root_widths(&widths, l, r) {
-            return false;
+            return ProofOutcome::Unsupported(UnsupportedReason::InvalidTypes(
+                "equivalence roots have different widths".into(),
+            ));
         }
         match blast(&g, &widths) {
-            Ok(b) if defined_refinement => {
-                matches!(b.solve_defined_equivalence(l, r), SolveOutcome::Unsat)
+            Ok(b) if defined_refinement => proof_outcome(b.solve_defined_equivalence(l, r)),
+            Ok(b) => proof_outcome(b.solve()),
+            Err(error) => {
+                ProofOutcome::Unsupported(UnsupportedReason::MissingTheory(error.to_string()))
             }
-            Ok(b) => matches!(b.solve(), SolveOutcome::Unsat),
-            Err(_) => false,
         }
+    }
+}
+
+fn structurally_equal<A>(lhs: &SemGraph<A>, rhs: &SemGraph<A>) -> bool {
+    lhs.len() == rhs.len()
+        && (0..lhs.len()).all(|index| {
+            let node = NodeId::from_index(index);
+            lhs.get_kind(node) == rhs.get_kind(node)
+                && lhs.get_leaf_data(node) == rhs.get_leaf_data(node)
+                && lhs.children(node).eq(rhs.children(node))
+        })
+}
+
+fn check_counterexample<A>(
+    lhs: &SemGraph<A>,
+    rhs: &SemGraph<A>,
+    inputs: &[Value],
+) -> Option<ProofOutcome> {
+    let lhs_value = execute(lhs, inputs);
+    let rhs_value = execute(rhs, inputs);
+    if matches!(&lhs_value, Value::Float(value) if value.is_nan())
+        || matches!(&rhs_value, Value::Float(value) if value.is_nan())
+    {
+        return None;
+    }
+    if values_bit_eq(&lhs_value, &rhs_value) {
+        return None;
+    }
+    Some(ProofOutcome::Disproven {
+        model: inputs
+            .iter()
+            .enumerate()
+            .filter_map(|(id, value)| value_bits(value).map(|bits| (id as u32, bits)))
+            .collect(),
+        values: Some((format_value_bits(&lhs_value), format_value_bits(&rhs_value))),
+    })
+}
+
+/// Search a bounded set of typed scalar inputs for a concrete refutation.
+///
+/// This can disprove an obligation, but absence of a counterexample is not a
+/// proof. The search only evaluates total operations in the interpreter's
+/// checked floating-point subset.
+fn find_typed_counterexample<A>(
+    lhs: &SemGraph<A>,
+    rhs: &SemGraph<A>,
+    symbol_types: &[SemType],
+) -> Option<ProofOutcome> {
+    if !concretely_evaluable(lhs, symbol_types) || !concretely_evaluable(rhs, symbol_types) {
+        return None;
+    }
+    let value_sets = symbol_types
+        .iter()
+        .map(concrete_samples)
+        .collect::<Option<Vec<_>>>()?;
+    if value_sets.len() >= 3 {
+        let mut cancellation = value_sets
+            .iter()
+            .map(|samples| samples[0].clone())
+            .collect::<Vec<_>>();
+        cancellation[0] = value_sets[0][4].clone();
+        cancellation[1] = value_sets[1][5].clone();
+        cancellation[2] = value_sets[2][3].clone();
+        if let Some(outcome) = check_counterexample(lhs, rhs, &cancellation) {
+            return Some(outcome);
+        }
+    }
+    let mut assignment = vec![0usize; value_sets.len()];
+    let mut remaining = 4096usize;
+    loop {
+        let inputs = assignment
+            .iter()
+            .enumerate()
+            .map(|(index, sample)| value_sets[index][*sample].clone())
+            .collect::<Vec<_>>();
+        if let Some(outcome) = check_counterexample(lhs, rhs, &inputs) {
+            return Some(outcome);
+        }
+        remaining -= 1;
+        if remaining == 0 || !advance_values(&mut assignment, &value_sets) {
+            return None;
+        }
+    }
+}
+
+fn concretely_evaluable<A>(graph: &SemGraph<A>, symbol_types: &[SemType]) -> bool {
+    if graph.root().is_none() {
+        return false;
+    }
+    let Ok(types) = infer_types(graph, |id| match graph.get_leaf_data(id) {
+        Some(SymPayload::SymbolId(id)) => symbol_types.get(*id as usize).cloned(),
+        _ => None,
+    }) else {
+        return false;
+    };
+    (0..graph.len()).all(|index| {
+        let node = NodeId::from_index(index);
+        let kind = graph.get_kind(node);
+        if !kind.accepts_arity(graph.children(node).count()) {
+            return false;
+        }
+        let supported = matches!(
+            kind,
+            SymKind::Symbol
+                | SymKind::Constant
+                | SymKind::FAdd
+                | SymKind::FSub
+                | SymKind::FMul
+                | SymKind::FDiv
+                | SymKind::Fma
+                | SymKind::FAddRound
+                | SymKind::FSubRound
+                | SymKind::FMulRound
+                | SymKind::FDivRound
+                | SymKind::FmaRound
+        );
+        if !supported {
+            return false;
+        }
+        match kind {
+            SymKind::Symbol => matches!(graph.get_leaf_data(node), Some(SymPayload::SymbolId(id)) if (*id as usize) < symbol_types.len()),
+            SymKind::Constant => match graph.get_leaf_data(node) {
+                Some(SymPayload::Int(_)) => true,
+                Some(SymPayload::Float(value)) => matches!(
+                    (value.exp_width(), value.mant_width()),
+                    (8, 23) | (11, 52)
+                ),
+                _ => false,
+            },
+            SymKind::FAdd | SymKind::FSub | SymKind::FMul | SymKind::FDiv | SymKind::Fma => {
+                supported_float_type(&types[node.index()])
+            }
+            SymKind::FAddRound
+            | SymKind::FSubRound
+            | SymKind::FMulRound
+            | SymKind::FDivRound
+            | SymKind::FmaRound => {
+                let rounding = graph.children(node).last().unwrap();
+                supported_float_type(&types[node.index()])
+                    && matches!(graph.get_leaf_data(rounding), Some(SymPayload::Int(value)) if value.to_u64() <= 4)
+            }
+            _ => true,
+        }
+    })
+}
+
+fn supported_float_type(ty: &SemType) -> bool {
+    matches!(
+        ty,
+        SemType::Float(crate::lang::FloatFormat {
+            exponent: Width::Const(8),
+            mantissa: Width::Const(23),
+        }) | SemType::Float(crate::lang::FloatFormat {
+            exponent: Width::Const(11),
+            mantissa: Width::Const(52),
+        })
+    )
+}
+
+fn concrete_samples(ty: &SemType) -> Option<Vec<Value>> {
+    let SemType::Float(format) = ty else {
+        return None;
+    };
+    let (Width::Const(exponent), Width::Const(mantissa)) = (&format.exponent, &format.mantissa)
+    else {
+        return None;
+    };
+    let width = 1 + exponent + mantissa;
+    if !matches!((*exponent, *mantissa), (8, 23) | (11, 52)) {
+        return None;
+    }
+    let bias = (1u128 << (exponent - 1)) - 1;
+    let sign = 1u128 << (width - 1);
+    let one = bias << mantissa;
+    let split = mantissa / 2 + 1;
+    let above_one = one | (1u128 << (mantissa - split));
+    let below_one = ((bias - 1) << mantissa)
+        | (((1u128 << mantissa) - 1) & !((1u128 << (mantissa - split + 1)) - 1));
+    Some(
+        [0, sign, one, sign | one, above_one, below_one]
+            .into_iter()
+            .map(|bits| {
+                Value::Float(tir_adt::APFloat::from_bits(
+                    *exponent, *mantissa, false, bits,
+                ))
+            })
+            .collect(),
+    )
+}
+
+fn advance_values(assignment: &mut [usize], value_sets: &[Vec<Value>]) -> bool {
+    for (slot, set) in assignment.iter_mut().zip(value_sets) {
+        *slot += 1;
+        if *slot < set.len() {
+            return true;
+        }
+        *slot = 0;
+    }
+    false
+}
+
+fn value_bits(value: &Value) -> Option<Vec<bool>> {
+    let (bits, width) = match value {
+        Value::Int(value) => (u128::from(value.to_u64()), value.width()),
+        Value::Float(value) => (value.to_bits(), value.bit_width()),
+        _ => return None,
+    };
+    Some((0..width).map(|bit| bits & (1 << bit) != 0).collect())
+}
+
+fn format_value_bits(value: &Value) -> String {
+    match value {
+        Value::Float(value) => format!("{:#018x}", value.to_bits()),
+        Value::Int(value) => format!("{:#x}", value.to_u64()),
+        _ => "<non-scalar>".into(),
+    }
+}
+
+fn proof_outcome(outcome: SolveOutcome) -> ProofOutcome {
+    match outcome {
+        SolveOutcome::Unsat => ProofOutcome::Proven,
+        SolveOutcome::Sat(model) => ProofOutcome::Disproven {
+            model: model.into_iter().collect(),
+            values: None,
+        },
+        SolveOutcome::Unknown => ProofOutcome::Unsupported(UnsupportedReason::Timeout),
     }
 }
 
@@ -263,6 +569,9 @@ fn values_bit_eq(a: &Value, b: &Value) -> bool {
                 (1u64 << width) - 1
             };
             width == b.width() && (a.to_u64() & mask) == (b.to_u64() & mask)
+        }
+        (Value::Float(a), Value::Float(b)) => {
+            a.bit_width() == b.bit_width() && a.to_bits() == b.to_bits()
         }
         _ => false,
     }
@@ -387,4 +696,119 @@ pub fn confirm_bool_via_if(oracle: &dyn EquivalenceOracle) -> bool {
     op(&mut rhs, SymKind::If, &[c, then_branch, else_branch]);
 
     oracle.equivalent(&lhs, &rhs, &[1])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::lang::FloatFormat;
+
+    fn strict_fma_graphs() -> (SemGraph, SemGraph) {
+        let mut lhs: SemGraph = SemGraph::new();
+        let a = sym(&mut lhs, 0);
+        let b = sym(&mut lhs, 1);
+        let c = sym(&mut lhs, 2);
+        let product = op(&mut lhs, SymKind::FMul, &[a, b]);
+        op(&mut lhs, SymKind::FAdd, &[product, c]);
+
+        let mut rhs: SemGraph = SemGraph::new();
+        let a = sym(&mut rhs, 0);
+        let b = sym(&mut rhs, 1);
+        let c = sym(&mut rhs, 2);
+        op(&mut rhs, SymKind::Fma, &[a, b, c]);
+        (lhs, rhs)
+    }
+
+    #[test]
+    fn typed_search_finds_strict_fma_counterexample() {
+        let (lhs, rhs) = strict_fma_graphs();
+        let f64 = SemType::Float(FloatFormat::new(11, 52));
+
+        let outcome = find_typed_counterexample(&lhs, &rhs, &[f64.clone(), f64.clone(), f64]);
+
+        assert!(matches!(outcome, Some(ProofOutcome::Disproven { .. })));
+    }
+
+    #[test]
+    fn typed_search_skips_unsupported_evaluator_nodes() {
+        let mut lhs: SemGraph = SemGraph::new();
+        let value = sym(&mut lhs, 0);
+        op(&mut lhs, SymKind::Loop, &[value, value, value, value]);
+        let mut rhs: SemGraph = SemGraph::new();
+        sym(&mut rhs, 0);
+
+        assert_eq!(
+            find_typed_counterexample(&lhs, &rhs, &[SemType::bits(1)]),
+            None
+        );
+    }
+
+    #[test]
+    fn typed_search_skips_unsupported_float_format() {
+        let (lhs, rhs) = strict_fma_graphs();
+        let f16 = SemType::Float(FloatFormat::new(5, 10));
+
+        assert_eq!(
+            find_typed_counterexample(&lhs, &rhs, &[f16.clone(), f16.clone(), f16]),
+            None
+        );
+    }
+
+    #[test]
+    fn typed_search_skips_invalid_rounding_mode() {
+        let mut lhs: SemGraph = SemGraph::new();
+        let a = sym(&mut lhs, 0);
+        let b = sym(&mut lhs, 1);
+        let mode = con(&mut lhs, 5, 3);
+        op(&mut lhs, SymKind::FAddRound, &[a, b, mode]);
+        let mut rhs: SemGraph = SemGraph::new();
+        let a = sym(&mut rhs, 0);
+        let b = sym(&mut rhs, 1);
+        let mode = con(&mut rhs, 5, 3);
+        op(&mut rhs, SymKind::FSubRound, &[a, b, mode]);
+        let f64 = SemType::Float(FloatFormat::new(11, 52));
+
+        assert_eq!(
+            find_typed_counterexample(&lhs, &rhs, &[f64.clone(), f64]),
+            None
+        );
+    }
+
+    #[test]
+    fn malformed_identical_graph_is_not_proven() {
+        let mut lhs: SemGraph = SemGraph::new();
+        sym(&mut lhs, 0);
+        let mut rhs: SemGraph = SemGraph::new();
+        sym(&mut rhs, 0);
+
+        assert!(matches!(
+            SmtOracle.equivalent_typed_outcome(&lhs, &rhs, &[]),
+            ProofOutcome::Unsupported(UnsupportedReason::InvalidTypes(_))
+        ));
+    }
+
+    #[test]
+    fn typed_search_skips_constant_only_unsupported_float_format() {
+        fn f16(g: &mut SemGraph, bits: u16) -> NodeId {
+            let node = g.add_node(SymKind::Constant);
+            g.set_leaf_data(
+                node,
+                SymPayload::Float(tir_adt::APFloat::from_bits(5, 10, false, bits.into())),
+            );
+            node
+        }
+
+        let mut lhs: SemGraph = SemGraph::new();
+        let a = f16(&mut lhs, 0x3c00);
+        let b = f16(&mut lhs, 0x3c00);
+        let mode = con(&mut lhs, 0, 3);
+        op(&mut lhs, SymKind::FAddRound, &[a, b, mode]);
+        let mut rhs: SemGraph = SemGraph::new();
+        let a = f16(&mut rhs, 0x3c00);
+        let b = f16(&mut rhs, 0x3c00);
+        let mode = con(&mut rhs, 0, 3);
+        op(&mut rhs, SymKind::FSubRound, &[a, b, mode]);
+
+        assert_eq!(find_typed_counterexample(&lhs, &rhs, &[]), None);
+    }
 }

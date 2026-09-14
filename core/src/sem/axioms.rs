@@ -45,7 +45,7 @@ pub(crate) mod pdl;
 
 use crate::builtin::{FloatType, IntegerType};
 use crate::sem::{
-    EquivalenceOracle, SemGraph, SmtOracle, SymKind, SymPayload, Value, con, execute, op, sym,
+    ProofOutcome, SemGraph, SmtOracle, SymKind, SymPayload, Value, con, execute, op, sym,
 };
 use crate::{Context, TypeId, graph::NodeId};
 
@@ -243,6 +243,7 @@ pub struct Axiom {
     /// Declared pattern vars (name, class-width binding); a var's `SymbolId` in
     /// proof graphs is its index here.
     vars: Vec<(String, WidthBinding)>,
+    symbol_types: Vec<Option<crate::sem::SemType>>,
     /// Indices into `vars` of operands that must match a `Constant` class — so a
     /// rule fires only on the immediate form. The proof treats them as ordinary
     /// symbols (the identity holds for any value); the applier checks constness.
@@ -257,6 +258,9 @@ pub struct Axiom {
     /// The RHS references the matched root itself (excludes var references).
     uses_root: bool,
     obligation: ProofObligation,
+    /// The source rule uses floating-point semantics and must always prove its
+    /// equality before the e-graph can apply it.
+    floating_point: bool,
     /// Declared `(phase post-saturation)`: applied once after the iterative
     /// fixpoint instead of participating in it.
     post_saturation: bool,
@@ -314,6 +318,34 @@ fn holes_of(node: &AxNode, out: &mut Vec<(String, Option<usize>)>) {
 }
 
 impl Axiom {
+    fn requires_mandatory_proof(&self) -> bool {
+        self.floating_point || self.symbol_types.iter().any(Option::is_some)
+    }
+
+    pub(crate) fn counterexample(
+        &self,
+        model: &std::collections::BTreeMap<u32, Vec<bool>>,
+        values: Option<(String, String)>,
+    ) -> crate::sem::Counterexample {
+        let bindings = model
+            .iter()
+            .filter_map(|(&id, bits)| {
+                self.vars
+                    .get(id as usize)
+                    .map(|(name, _)| crate::sem::CounterexampleBinding {
+                        name: name.clone(),
+                        bits: format_bits(bits),
+                    })
+            })
+            .collect();
+        let (lhs_bits, rhs_bits) = values.map_or((None, None), |(lhs, rhs)| (Some(lhs), Some(rhs)));
+        crate::sem::Counterexample {
+            bindings,
+            lhs_bits,
+            rhs_bits,
+        }
+    }
+
     pub(crate) fn materializes_constants(&self) -> bool {
         self.materialize
     }
@@ -378,12 +410,16 @@ impl Axiom {
     /// Prove one width instantiation with the [`SmtOracle`]; `widths` follows
     /// the width names' declaration order (`vars` first, then `root`).
     pub(crate) fn prove(&self, widths: &[u64]) -> bool {
+        self.prove_outcome(widths).is_proven()
+    }
+
+    pub(crate) fn prove_outcome(&self, widths: &[u64]) -> ProofOutcome {
         match self.obligation {
-            ProofObligation::Equivalence => self.prove_instance(widths, None, None),
-            ProofObligation::ThetaInvariant => {
-                self.prove_instance(widths, Some(ThetaPort::Init), None)
-                    && self.prove_instance(widths, Some(ThetaPort::Next), None)
-            }
+            ProofObligation::Equivalence => self.prove_instance_outcome(widths, None, None),
+            ProofObligation::ThetaInvariant => self.prove_instances(
+                widths,
+                &[(Some(ThetaPort::Init), None), (Some(ThetaPort::Next), None)],
+            ),
             ProofObligation::LoopInvariant { rhs_loops } => {
                 let phases: &[LoopPhase] = if rhs_loops {
                     &[
@@ -395,21 +431,37 @@ impl Axiom {
                 } else {
                     &[LoopPhase::Init, LoopPhase::Next, LoopPhase::Exit]
                 };
-                phases
+                let instances = phases
                     .iter()
-                    .all(|&phase| self.prove_instance(widths, None, Some(phase)))
+                    .map(|&phase| (None, Some(phase)))
+                    .collect::<Vec<_>>();
+                self.prove_instances(widths, &instances)
             }
         }
     }
 
+    fn prove_instances(
+        &self,
+        widths: &[u64],
+        instances: &[(Option<ThetaPort>, Option<LoopPhase>)],
+    ) -> ProofOutcome {
+        for &(theta, loop_phase) in instances {
+            let outcome = self.prove_instance_outcome(widths, theta, loop_phase);
+            if !outcome.is_proven() {
+                return outcome;
+            }
+        }
+        ProofOutcome::Proven
+    }
+
     /// One equivalence instance of this axiom's obligation, with every `theta`
     /// realized as `theta_port` and every `#loop` as `loop_phase` says.
-    fn prove_instance(
+    fn prove_instance_outcome(
         &self,
         widths: &[u64],
         theta_port: Option<ThetaPort>,
         loop_phase: Option<LoopPhase>,
-    ) -> bool {
+    ) -> ProofOutcome {
         let register_width = self.register_width(widths);
         let mut lhs = SemGraph::new();
         let mut rhs = SemGraph::new();
@@ -447,10 +499,27 @@ impl Axiom {
             (built, self.vars.len())
         };
         if !built {
-            return false;
+            return ProofOutcome::Unsupported(crate::sem::UnsupportedReason::InvalidTypes(
+                "the proof expression could not be realized".into(),
+            ));
         }
-        let symbol_widths = vec![register_width; symbol_count];
-        SmtOracle.refines(&lhs, &rhs, &symbol_widths)
+        if self.symbol_types.iter().any(Option::is_some) {
+            let symbol_types = self
+                .symbol_types
+                .iter()
+                .take(symbol_count)
+                .cloned()
+                .map(|ty| {
+                    ty.unwrap_or(crate::sem::SemType::Bits(crate::sem::Width::Const(
+                        register_width,
+                    )))
+                })
+                .collect::<Vec<_>>();
+            SmtOracle.refines_typed_outcome(&lhs, &rhs, &symbol_types)
+        } else {
+            let symbol_widths = vec![register_width; symbol_count];
+            SmtOracle.prove_refinement_outcome(&lhs, &rhs, &symbol_widths)
+        }
     }
 
     fn register_width(&self, widths: &[u64]) -> u32 {
@@ -601,6 +670,19 @@ impl Axiom {
     }
 }
 
+fn format_bits(bits: &[bool]) -> String {
+    let digits = bits.len().div_ceil(4);
+    let mut value = String::with_capacity(2 + digits);
+    value.push_str("0x");
+    for nibble in (0..digits).rev() {
+        let digit = (0..4)
+            .filter(|bit| bits.get(nibble * 4 + bit).copied().unwrap_or(false))
+            .fold(0u8, |value, bit| value | (1 << bit));
+        value.push(char::from_digit(u32::from(digit), 16).unwrap());
+    }
+    value
+}
+
 /// Execute a pure op over `(value, width)` constant operands via a throwaway
 /// [`SemGraph`]; `None` when the result is not an integer.
 fn execute_fold(kind: SymKind, operands: &[(u64, u32)]) -> Option<APInt> {
@@ -740,8 +822,13 @@ impl tir_relational::Externs<SemNode> for Interpretation<'_> {
                 fits == !negated
             }
             proof if proof >= call::VERIFY => {
+                let axiom = &self.axioms[(proof - call::VERIFY) as usize];
+                if axiom.requires_mandatory_proof() {
+                    return axiom
+                        .prove_outcome(&args[..axiom.width_names.len()])
+                        .is_proven();
+                }
                 if verify_axioms() {
-                    let axiom = &self.axioms[(proof - call::VERIFY) as usize];
                     // The scalars past the widths are there to order the guard,
                     // not to key the proof.
                     axiom.verify(&args[..axiom.width_names.len()]);
@@ -963,13 +1050,8 @@ impl<'a> Lowering<'a> {
 
     /// The width of the type `class`'s terms carry.
     fn width_of(&mut self, class: u32) -> u32 {
-        let ty = self.slots.scalar();
+        let ty = self.type_of(class);
         let width = self.slots.scalar();
-        self.atoms.push(Atom::Fact {
-            column: ColumnId::Type,
-            key: class,
-            value: ty,
-        });
         self.guards.push(Guard::Extern {
             call: call::WIDTH_OF,
             terms: SmallVec::new(),
@@ -977,6 +1059,16 @@ impl<'a> Lowering<'a> {
             out: smallvec![width],
         });
         width
+    }
+
+    fn type_of(&mut self, class: u32) -> u32 {
+        let ty = self.slots.scalar();
+        self.atoms.push(Atom::Fact {
+            column: ColumnId::Type,
+            key: class,
+            value: ty,
+        });
+        ty
     }
 
     fn bind(&mut self, binding: &WidthBinding, actual: u32) {
@@ -1000,6 +1092,26 @@ impl<'a> Lowering<'a> {
     /// The declared guards, the constant-operand requirement, the value
     /// predicates, and the proof obligation.
     fn predicates(&mut self, axiom: &Axiom, index: usize) {
+        for (symbol, ty) in axiom.symbol_types.iter().enumerate() {
+            let Some(crate::sem::SemType::Float(format)) = ty else {
+                continue;
+            };
+            let (crate::sem::Width::Const(exponent), crate::sem::Width::Const(mantissa)) =
+                (&format.exponent, &format.mantissa)
+            else {
+                continue;
+            };
+            let actual = self.type_of(self.declared[symbol]);
+            let expected = self.extern_type(
+                call::FLOAT_TYPE,
+                smallvec![Expr::Lit(*exponent as i64), Expr::Lit(*mantissa as i64)],
+            );
+            self.guards.push(Guard::Cmp(
+                Cmp::Eq,
+                Expr::Scalar(actual),
+                Expr::Scalar(expected),
+            ));
+        }
         for guard in &axiom.guards {
             let (cmp, a, b) = match guard {
                 Guard_::Lt(a, b) => (Cmp::Lt, a, b),
@@ -1052,7 +1164,7 @@ impl<'a> Lowering<'a> {
         // discharged at widths the axiom can never fire at. A materialize axiom
         // guarded on a constant too wide for the target immediate was proved at
         // every narrower width too, where its width arithmetic is undefined.
-        if verify_axioms() {
+        if verify_axioms() || axiom.requires_mandatory_proof() {
             self.guards.push(Guard::Extern {
                 call: call::VERIFY + index as u32,
                 terms: SmallVec::new(),

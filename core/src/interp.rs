@@ -381,6 +381,10 @@ impl Interpreter<'_, '_> {
             let flow = self.exec_call(op_id)?;
             return self.exec_value_flow(op_id, flow);
         }
+        if instance.is::<crate::fp::ops::RoundOp>() {
+            let flow = self.exec_round(&instance)?;
+            return self.exec_value_flow(op_id, flow);
+        }
         if let Some(theta) = instance.clone().as_interface::<dyn Theta>() {
             let flow = self.exec_theta(&instance, theta.as_ref())?;
             return self.exec_value_flow(op_id, flow);
@@ -583,6 +587,23 @@ impl Interpreter<'_, '_> {
             .map(|&arg| self.value_of(arg))
             .collect::<Result<_>>()?;
         Ok(Flow::Values(self.call_function(definition, arguments)?))
+    }
+
+    fn exec_round(&mut self, instance: &crate::OpHandle) -> Result<Flow> {
+        let op = crate::fp::ops::RoundOp::from_op_instance(instance.clone());
+        if !op.contract().reference_is_admissible() {
+            return Err(InterpError::Unsupported(
+                "fp.round reference does not satisfy its accuracy requirement".into(),
+            ));
+        }
+        let reference = op.reference_region();
+        for (port, capture) in reference.ports().iter().zip(instance.operands()) {
+            if self.context.is_state_type(port.ty()) {
+                continue;
+            }
+            self.env.insert(port.id(), self.value_of(capture)?);
+        }
+        self.exec_nodes_region(reference.id())
     }
 
     fn call_function(&mut self, function: OpId, arguments: Vec<Value>) -> Result<Vec<Value>> {

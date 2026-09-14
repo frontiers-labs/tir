@@ -1,0 +1,16 @@
+// RUN: not tir opt --verify %s 2>&1 | filecheck %s
+
+#contract = {accuracy = {kind = "reference"}, arithmetic = {exceptions = "ignore", kind = "arithmetic", nan = "any_quiet", rounding = "nearest_even", subnormals = "gradual", tininess = "after_rounding"}, assumptions = {finite = false}, environment_epoch = 0, intermediate_exceptions = "preserve", permissions = {approved_approximation = false, cross_statement_contraction = false, expression_contraction = false, ignore_signed_zero = false, reassociation = false, reciprocal = false}, result_formats = [!f64]}
+
+module {
+  %f = func.func @missing_capture(%a: !f64) -> !f64 {
+    %result = fp.round () {contract = #contract} : !f64 {
+      %value = fp.add %a, %a : !f64
+      -> %value
+    }
+    -> %result
+  }
+  module_end
+}
+
+// CHECK: fp.round reference may read outer values only through explicit capture ports

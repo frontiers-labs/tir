@@ -1,0 +1,22 @@
+// RUN: tir opt --pass func.func(restructure-nodes),inline<1000,0> --verify %s | filecheck %s
+
+#contract = {accuracy = {kind = "reference"}, arithmetic = {exceptions = "ignore", kind = "arithmetic", nan = "any_quiet", rounding = "nearest_even", subnormals = "gradual", tininess = "after_rounding"}, assumptions = {finite = false}, environment_epoch = 19, intermediate_exceptions = "preserve", permissions = {approved_approximation = false, cross_statement_contraction = false, expression_contraction = true, ignore_signed_zero = false, reassociation = false, reciprocal = false}, result_formats = [!f64]}
+
+module {
+  %callee = func.func private @relaxed(%a: !f64, %b: !f64) -> !f64 {
+    %sum = fp.round (%x = %a, %y = %b) {contract = #contract} : !f64 {
+      %value = fp.add %x, %y : !f64
+      -> %value
+    }
+    -> %sum
+  }
+  %caller = func.func @caller(%a: !f64, %b: !f64) -> !f64 {
+    %result = func.call %callee(%a, %b : !f64, !f64) -> !f64
+    -> %result
+  }
+  module_end
+}
+
+// CHECK-LABEL: func.func @caller
+// CHECK: fp.round
+// CHECK-SAME: environment_epoch = 19

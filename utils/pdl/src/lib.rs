@@ -36,3 +36,15 @@ pub fn compile_to_rust(source: &str) -> Result<String, Vec<Diagnostic>> {
     let file = compile(source)?;
     codegen::generate(&file)
 }
+
+pub fn compile_refinements(source: &str) -> Result<Vec<RefinementAction>, Vec<Diagnostic>> {
+    let file = compile(source)?;
+    Ok(file
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::Rule(rule) => rule.refinement_action(),
+            Item::Group(_) => None,
+        })
+        .collect())
+}

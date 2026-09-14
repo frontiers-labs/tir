@@ -1,0 +1,6 @@
+// Untyped semantic floating-point operators still require checked proofs.
+// RUN: not tir-pdl %s --emit rust 2>&1 | filecheck %s
+
+rule semantic-fp: #fadd(x, y) => x;
+
+// CHECK: floating-point equality requires a checked proof binding

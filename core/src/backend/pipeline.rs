@@ -17,7 +17,8 @@ use crate::backend::lower::OpLoweringPass;
 use crate::backend::{ShuffleMachineOrderPass, TargetMachine};
 use crate::passes::{
     CheckUniqueSymbolsPass, DeadCodeEliminationPass, LowerMemoryIntrinsicsPass,
-    LowerPtrDisjointPass, MaterializeSymbolAddressesPass, RestructureNodesPass, VerifyDepsPass,
+    LowerPtrDisjointPass, MaterializeSymbolAddressesPass, ResolveFpPass, RestructureNodesPass,
+    VerifyDepsPass,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -160,6 +161,9 @@ fn add_function_passes(
 ) {
     pm.add_pass(TargetIntegerLegalizer::new(target));
     let function_pipeline = pm.nest::<FuncOp>();
+    function_pipeline.add_boxed_pass(Box::new(ResolveFpPass::with_selector(
+        target.isel_pass(context),
+    )));
     function_pipeline.add_boxed_pass(Box::new(target.isel_pass(context)));
     // Remove pure instructions left dead by selection (e.g. a value recomputed in
     // a consumer's block by cross-block fusion). Runs while results are still

@@ -1,0 +1,16 @@
+// RUN: not tir interp %s 2>&1 | filecheck %s
+
+#contract = {accuracy = {kind = "correctly_rounded"}, arithmetic = {exceptions = "ignore", kind = "arithmetic", nan = "any_quiet", rounding = "nearest_even", subnormals = "gradual", tininess = "after_rounding"}, assumptions = {finite = false}, environment_epoch = 0, intermediate_exceptions = "preserve", permissions = {approved_approximation = false, cross_statement_contraction = false, expression_contraction = false, ignore_signed_zero = false, reassociation = false, reciprocal = false}, result_formats = [!f32]}
+
+module {
+  %main = func.func @main() -> !f32 {
+    %one = fp.constant {bits = 1065353216} : !f32
+    %result = fp.round (%x = %one) {contract = #contract} : !f32 {
+      -> %x
+    }
+    -> %result
+  }
+  module_end
+}
+
+// CHECK: cannot interpret fp.round reference does not satisfy its accuracy requirement

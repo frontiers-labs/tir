@@ -1,0 +1,22 @@
+// RUN: tir interp %s | filecheck %s
+
+#contract = {accuracy = {kind = "reference"}, arithmetic = {exceptions = "ignore", kind = "arithmetic", nan = "any_quiet", rounding = "nearest_even", subnormals = "gradual", tininess = "after_rounding"}, assumptions = {finite = false}, environment_epoch = 0, intermediate_exceptions = "preserve", permissions = {approved_approximation = false, cross_statement_contraction = false, expression_contraction = false, ignore_signed_zero = false, reassociation = false, reciprocal = false}, result_formats = [!f32, !f32]}
+
+module {
+  %main = func.func @main() -> !i32 {
+    %one = fp.constant {bits = 1065353216} : !f32
+    %two = fp.constant {bits = 1073741824} : !f32
+    %sum, %product = fp.round (%x = %one, %y = %two) {contract = #contract} : (!f32, !f32) {
+      %added = fp.add %x, %y : !f32
+      %multiplied = fp.mul %x, %y : !f32
+      -> %added, %multiplied
+    }
+    %sum_bits = bitcast %sum : !i32
+    %product_bits = bitcast %product : !i32
+    %combined = addi %sum_bits, %product_bits : !i32
+    -> %combined
+  }
+  module_end
+}
+
+// CHECK: !i32 2151677952

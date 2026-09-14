@@ -5,6 +5,7 @@
 rule theta-same: #theta(x: int<W>, x) : int<W> => x;
 rule eq-zero: #eq(x: int<W>, 0) : int<1> => #eq(x, #zext(const<1>(0), W)) phase post-saturation;
 rule addi-is-add: builtin.addi(x: int<W>, y) <=> #add(x, y) proof smt;
+rule three-float-identity: #add(x, y) => x;
 
 // CHECK: Semantic(
 // CHECK-NEXT: "theta"

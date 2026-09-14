@@ -17,6 +17,7 @@ pub enum AttributeValue {
     Array(Box<[AttributeValue]>),
     Dict(Box<BTreeMap<String, AttributeValue>>),
     FpSemantics(Arc<crate::fp::Semantics>),
+    EvaluationContract(Arc<crate::fp::EvaluationContract>),
     Register(RegisterAttr),
     /// The comparison a `cmpi`, `fp.cmp` or `ptr.cmp` performs.
     Predicate(Predicate),
@@ -160,6 +161,7 @@ impl AttributeValue {
                 fmt.write("}")
             }
             AttributeValue::FpSemantics(semantics) => semantics.print(fmt),
+            AttributeValue::EvaluationContract(contract) => contract.print(fmt, context),
             AttributeValue::Register(r) => match r {
                 RegisterAttr::Physical { class, index } => {
                     fmt.write(format!("{}[{}]", class.name(), index))

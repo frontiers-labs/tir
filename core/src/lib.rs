@@ -95,9 +95,9 @@ pub use interfaces::{
     Apply, Binding, BranchGuard, BranchTerminator, Callable, Commutative, ConstantFold,
     ConstantLike, CountedLoop, ExitScope, ExitScopeKind, ExitTarget, Gamma, Global,
     HasResourceSemantics, IntegerArithmetic, MemoryRead, MemoryWrite, NonLocalExit, OpCost,
-    PromotableAllocation, Pure, ResourceAccess, ResourceEffect, ResourceEffects, ResourceField,
-    ResourceSemantics, SameOperandAndResultType, Speculatable, Symbol, Terminator, Theta,
-    Visibility,
+    PromotableAllocation, Pure, RegionBinding, ResourceAccess, ResourceEffect, ResourceEffects,
+    ResourceField, ResourceSemantics, SameOperandAndResultType, Speculatable, Symbol, Terminator,
+    Theta, Visibility,
 };
 pub use interp::{
     ExecutionState, FloatEnvironment, Interp, InterpError, Memory as InterpMemory,

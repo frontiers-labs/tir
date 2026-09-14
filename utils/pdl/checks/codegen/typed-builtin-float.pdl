@@ -1,0 +1,6 @@
+// Typed builtin rules cannot bypass the FP equality proof gate.
+// RUN: not tir-pdl %s --emit rust 2>&1 | filecheck %s
+
+rule typed-builtin: builtin.addi(x: float<64>, y) => x;
+
+// CHECK: floating-point equality requires a checked proof binding

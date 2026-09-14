@@ -1204,6 +1204,41 @@ fn symbol_ids(g: &SemGraph) -> Vec<u32> {
 }
 
 impl InstructionSelectPass {
+    /// Price one complete function with the same legality checks and PBQP cover
+    /// used by selection, without emitting or changing its IR.
+    pub(crate) fn estimate_function_cost(
+        &mut self,
+        context: &Context,
+        function: &OperationRef,
+    ) -> Result<u64, PassError> {
+        let pricing = context.fork();
+        let function = OperationRef::new(pricing.get_op(function.op().id));
+        let context = &pricing;
+        self.solved.clear();
+        self.plans.clear();
+        self.preludes.clear();
+        self.emitted_values.clear();
+        self.region_values.clear();
+        if let Some(check) = self.function_check {
+            check(context, &function)?;
+        }
+        if let Some(lowering) = &mut self.call_lowering {
+            lowering.reset();
+            lowering.prepare_function(context, &function)?;
+        }
+        self.solve_function(context, &function)?;
+        let mut cost = 0u64;
+        for plan in self.plans.values() {
+            let plan = plan
+                .as_ref()
+                .map_err(|reason| PassError::InvalidRuleSet(reason.clone()))?;
+            for scheduled in &plan.schedule {
+                cost = cost.saturating_add(self.rules[scheduled.rule_index].base_cost as u64);
+            }
+        }
+        Ok(cost)
+    }
+
     /// Build the pass, panicking when a guarded rule's guard-relaxation obligation
     /// `D(pattern) => guarded_semantics == pattern` does not hold — checked only
     /// under [`verify_axioms`]. The generated backends call this: an unprovable

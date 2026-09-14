@@ -1,0 +1,25 @@
+// RUN: tir opt --pass resolve-fp<rv64ifd> --verify %s | filecheck %s
+// RUN: tir opt --pass resolve-fp<rv64ifd>,verify-deps --verify %s | filecheck %s
+
+#contract = {accuracy = {kind = "reference"}, arithmetic = {exceptions = "flags", kind = "arithmetic", nan = "any_quiet", rounding = "dynamic", subnormals = "gradual", tininess = "after_rounding"}, assumptions = {finite = false}, environment_epoch = 7, intermediate_exceptions = "allow_contracted_group_removal", permissions = {approved_approximation = false, cross_statement_contraction = false, expression_contraction = true, ignore_signed_zero = false, reassociation = false, reciprocal = false}, result_formats = [!f64]}
+
+module {
+  %f = func.func @change_mode_between(%a: !f64, %b: !f64, %c: !f64, %mode: !fp.rounding) -> !f64 {
+    %env0 = state.entry_state : !state<fp.env>
+    %sum, %env1 = fp.round (%x = %a, %y = %b, %z = %c, %new_mode = %mode, %env = %env0) {contract = #contract} : (!f64, !state<fp.env>) {
+      %product, %env2 = fp.mul %x, %y state(%env) {semantics = {exceptions = "flags", rounding = "dynamic"}} : !f64
+      %env3 = fp.set_round %new_mode state(%env2)
+      %value, %env4 = fp.add %product, %z state(%env3) {semantics = {exceptions = "flags", rounding = "dynamic"}} : !f64
+      -> %value, %env4
+    }
+    -> %sum, %env1
+  }
+  module_end
+}
+
+// CHECK-NOT: = fp.round
+// CHECK-NOT: fp.fma
+// CHECK: %[[PRODUCT:[0-9]+]], %[[MUL_ENV:[0-9]+]] = fp.mul {{.*}} state(%[[ENTRY:[0-9]+]]) {semantics = {exceptions = "flags", rounding = "dynamic"}} : !f64
+// CHECK: %[[SET_ENV:[0-9]+]] = fp.set_round {{.*}} state(%[[MUL_ENV]])
+// CHECK: %[[SUM:[0-9]+]], %[[ADD_ENV:[0-9]+]] = fp.add %[[PRODUCT]], {{.*}} state(%[[SET_ENV]]) {semantics = {exceptions = "flags", rounding = "dynamic"}} : !f64
+// CHECK: -> %[[SUM]], %[[ADD_ENV]]

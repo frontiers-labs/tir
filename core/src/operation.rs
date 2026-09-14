@@ -575,6 +575,7 @@ fn attr_type_matches(attr_type: &str, value: &crate::attributes::AttributeValue)
         "Array" => matches!(value, V::Array(_)),
         "Dict" => matches!(value, V::Dict(_)),
         "FpSemantics" => matches!(value, V::FpSemantics(_)),
+        "EvaluationContract" => matches!(value, V::EvaluationContract(_)),
         "Register" => matches!(value, V::Register(_)),
         "Type" => matches!(value, V::Type(_)),
         "Block" => matches!(value, V::Block(_)),

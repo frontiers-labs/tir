@@ -22,6 +22,8 @@ mod call {
     pub(super) const DECIDED_ARM: u32 = 1;
     /// The width of an integer type, for a rule that binds one by name.
     pub(super) const INT_WIDTH_OF: u32 = 2;
+    pub(super) const FLOAT_WIDTH_OF: u32 = 3;
+    pub(super) const STATE_RESOURCE_OF: u32 = 4;
     /// Where the generated rules' own host functions start.
     pub(super) const PDL: u32 = 16;
 }
@@ -50,6 +52,21 @@ impl Externs<Node> for Interpretation {
             call::INT_WIDTH_OF => match class_int_width_of(&self.context, args[0] as u32) {
                 Some(width) => {
                     out[0] = width as u64;
+                    true
+                }
+                None => false,
+            },
+            call::FLOAT_WIDTH_OF => match class_float_width_of(&self.context, args[0] as u32) {
+                Some(width) => {
+                    out[0] = width as u64;
+                    true
+                }
+                None => false,
+            },
+            call::STATE_RESOURCE_OF => match class_state_resource_of(&self.context, args[0] as u32)
+            {
+                Some(resource) => {
+                    out[0] = resource;
                     true
                 }
                 None => false,
@@ -609,6 +626,24 @@ fn class_int_width_of(context: &Context, ty: u32) -> Option<u32> {
     (context.get_type_data(ty).as_ref() as &dyn std::any::Any)
         .downcast_ref::<IntegerType>()
         .map(IntegerType::width)
+}
+
+fn class_float_width_of(context: &Context, ty: u32) -> Option<u32> {
+    let ty = TypeId::from_number(ty);
+    (context.get_type_data(ty).as_ref() as &dyn std::any::Any)
+        .downcast_ref::<crate::builtin::FloatType>()
+        .and_then(|float| match (float.exp_width(), float.mant_width()) {
+            (8, 23) => Some(32),
+            (11, 52) => Some(64),
+            _ => None,
+        })
+}
+
+fn class_state_resource_of(context: &Context, ty: u32) -> Option<u64> {
+    let ty = TypeId::from_number(ty);
+    (context.get_type_data(ty).as_ref() as &dyn std::any::Any)
+        .downcast_ref::<crate::builtin::StateType>()
+        .map(|state| state.resource().semantic_code())
 }
 
 fn konst(value: APInt) -> Node {

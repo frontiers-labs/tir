@@ -213,7 +213,23 @@ fn format_rust(tokens: TokenStream) -> Result<String, syn::Error> {
 }
 
 fn validate_codegen_rule(rule: &Rule, diagnostics: &mut Vec<Diagnostic>) {
-    if rule.direction == Direction::Bidirectional {
+    if matches!(rule.kind, RuleKind::Refinement) {
+        diagnostics.push(Diagnostic::new(
+            "refinement rules cannot be emitted as equality rewrites",
+            "use the refinement candidate resolver",
+            rule.span,
+        ));
+        return;
+    }
+    if rule.proof() == Proof::Smt && rule.is_floating_point() {
+        diagnostics.push(Diagnostic::new(
+            "floating-point equality requires a checked proof binding",
+            "the PDL Rust generator cannot establish floating-point equality",
+            rule.span,
+        ));
+        return;
+    }
+    if matches!(rule.kind, RuleKind::Equality(Direction::Bidirectional)) {
         diagnostics.push(Diagnostic::new(
             "bidirectional Rust code generation is not implemented",
             "use a forward rule in the initial compiler",
@@ -222,6 +238,7 @@ fn validate_codegen_rule(rule: &Rule, diagnostics: &mut Vec<Diagnostic>) {
     }
     let mut binders = BTreeMap::new();
     collect_binder_types(&rule.lhs, &mut binders);
+    validate_typed_binders(&rule.lhs, diagnostics);
     validate_lhs(&rule.lhs, diagnostics);
     validate_rhs(&rule.rhs, true, &binders, diagnostics);
     for guard in &rule.guards {
@@ -233,6 +250,37 @@ fn validate_codegen_rule(rule: &Rule, diagnostics: &mut Vec<Diagnostic>) {
             "materialize only one operation per rule",
             rule.rhs.span,
         ));
+    }
+}
+
+fn validate_typed_binders(term: &Term, diagnostics: &mut Vec<Diagnostic>) {
+    match &term.kind {
+        TermKind::Operation {
+            operands,
+            dependencies,
+            ..
+        } => {
+            for operand in operands.iter().chain(dependencies) {
+                validate_typed_binders(operand, diagnostics);
+            }
+        }
+        TermKind::Binder {
+            ty: Some(BindingType::Type(Type::ShapedFloat { .. })),
+            ..
+        } => diagnostics.push(Diagnostic::new(
+            "shaped floating-point matching is not available in Rust code generation",
+            "use the semantic candidate resolver for these bindings",
+            term.span,
+        )),
+        TermKind::Binder {
+            ty: Some(BindingType::Type(Type::State(Resource::Named(_)))),
+            ..
+        } => diagnostics.push(Diagnostic::new(
+            "this state resource is not supported by Rust code generation",
+            "use memory or fp.env",
+            term.span,
+        )),
+        _ => {}
     }
 }
 
@@ -816,6 +864,53 @@ fn generate_constraint(constraint: &Constraint, build: &mut RuleBuilder) -> Opti
                 }
             });
             build.bind_width(name, width);
+            Some(())
+        }
+        BindingType::Type(Type::Float(format)) => {
+            let ty = build.scalar();
+            let width = build.scalar();
+            let expected = match format {
+                FloatFormat::Binary32 => 32i64,
+                FloatFormat::Binary64 => 64i64,
+            };
+            build.atoms.push(quote! {
+                Atom::Fact { column: ColumnId::Type, key: #binder, value: #ty }
+            });
+            build.guards.push(quote! {
+                Guard::Extern {
+                    call: call::FLOAT_WIDTH_OF,
+                    terms: SmallVec::new(),
+                    args: smallvec![Expr::Scalar(#ty)],
+                    out: smallvec![Expr::Scalar(#width)],
+                }
+            });
+            build.guards.push(quote! {
+                Guard::Cmp(Cmp::Eq, Expr::Scalar(#width), Expr::Lit(#expected))
+            });
+            Some(())
+        }
+        BindingType::Type(Type::State(resource)) => {
+            let ty = build.scalar();
+            let value = build.scalar();
+            let expected = match resource {
+                Resource::Memory => 0i64,
+                Resource::FpEnv => 1i64,
+                Resource::Named(_) => return None,
+            };
+            build.atoms.push(quote! {
+                Atom::Fact { column: ColumnId::Type, key: #binder, value: #ty }
+            });
+            build.guards.push(quote! {
+                Guard::Extern {
+                    call: call::STATE_RESOURCE_OF,
+                    terms: SmallVec::new(),
+                    args: smallvec![Expr::Scalar(#ty)],
+                    out: smallvec![Expr::Scalar(#value)],
+                }
+            });
+            build.guards.push(quote! {
+                Guard::Cmp(Cmp::Eq, Expr::Scalar(#value), Expr::Lit(#expected))
+            });
             Some(())
         }
         _ => None,

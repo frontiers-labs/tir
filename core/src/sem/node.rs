@@ -558,6 +558,9 @@ fn hash_attr_value(value: &AttributeValue, h: &mut impl Hasher) {
             k.hash(h);
             hash_attr_value(v, h);
         }),
+        AttributeValue::EvaluationContract(contract) => {
+            contract.hash(h);
+        }
         // Register and value attributes are machine IR; the value vocabulary
         // never sees them.
         AttributeValue::Register(_) | AttributeValue::Value(_) | AttributeValue::FpSemantics(_) => {

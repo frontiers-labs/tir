@@ -1,0 +1,21 @@
+// RUN: tir opt --pass resolve-fp<rv64ifd> --verify %s | filecheck %s
+
+#contract = {accuracy = {kind = "reference"}, arithmetic = {exceptions = "flags", kind = "arithmetic", nan = "any_quiet", rounding = "nearest_even", subnormals = "gradual", tininess = "after_rounding"}, assumptions = {finite = false}, environment_epoch = 7, intermediate_exceptions = "preserve", permissions = {approved_approximation = false, cross_statement_contraction = false, expression_contraction = false, ignore_signed_zero = false, reassociation = false, reciprocal = false}, result_formats = [!f64]}
+
+module {
+  %f = func.func @stateful(%a: !f64, %b: !f64) -> !f64 {
+    %env0 = state.entry_state : !state<fp.env>
+    %sum, %env1 = fp.round (%x = %a, %y = %b, %env = %env0) {contract = #contract} : (!f64, !state<fp.env>) {
+      %value, %next = fp.add %x, %y state(%env) {semantics = {exceptions = "flags"}} : !f64
+      -> %value, %next
+    }
+    -> %sum, %env1
+  }
+  module_end
+}
+
+
+// CHECK-NOT: fp.round
+// CHECK: %[[ENV:[0-9]+]] = state.entry_state : !state<fp.env>
+// CHECK: %[[VALUE:[0-9]+]], %[[NEXT:[0-9]+]] = fp.add %{{[0-9]+}}, %{{[0-9]+}} state(%[[ENV]]) {semantics = {exceptions = "flags"}} : !f64
+// CHECK: -> %[[VALUE]], %[[NEXT]]

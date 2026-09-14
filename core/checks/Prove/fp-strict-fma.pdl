@@ -1,0 +1,14 @@
+// RUN: not tir prove %s | filecheck %s
+
+rule three-fp-identity:
+  fp.add(fp.mul(a: f64, b: f64), c: f64)
+  => fp.add(fp.mul(a, b), c)
+  proof smt;
+
+rule strict-fma-discriminator:
+  fp.add(fp.mul(a: f64, b: f64), c: f64)
+  => fp.fma(a, b, c)
+  proof smt;
+
+// CHECK: three-fp-identity: proven
+// CHECK-NEXT: strict-fma-discriminator: disproven a=0x3ff0000002000000 b=0x3feffffffc000000 c=0xbff0000000000000 lhs=0x0000000000000000 rhs=0xbc90000000000000

@@ -1,0 +1,12 @@
+// RUN: tir opt --pass resolve-fp<rv64ifd> --verify %s | filecheck %s
+
+module {
+  %f = func.func @fence(%a: !f64) -> !f64 {
+    %result = fp.fence %a : !f64
+    -> %result
+  }
+  module_end
+}
+
+// CHECK-NOT: fp.fence
+// CHECK: -> %[[ARG:[0-9]+]]

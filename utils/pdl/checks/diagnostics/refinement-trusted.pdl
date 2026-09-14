@@ -1,0 +1,6 @@
+// Refinements cannot claim an unchecked proof.
+// RUN: not tir-pdl %s --emit ast 2>&1 | filecheck %s
+
+refinement bad: #add(x, y) ~> #mul(x, y) requires same_round_region proof trusted;
+
+// CHECK: refinement rule 'bad' cannot use trusted proof

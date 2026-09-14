@@ -1,0 +1,25 @@
+// RUN: tir opt --pass resolve-fp<rv64ifd> --verify %s | filecheck %s
+
+#relaxed = {accuracy = {kind = "reference"}, arithmetic = {exceptions = "ignore", kind = "arithmetic", nan = "any_quiet", rounding = "nearest_even", subnormals = "gradual", tininess = "after_rounding"}, assumptions = {finite = false}, environment_epoch = 0, intermediate_exceptions = "allow_contracted_group_removal", permissions = {approved_approximation = false, cross_statement_contraction = false, expression_contraction = true, ignore_signed_zero = false, reassociation = false, reciprocal = false}, result_formats = [!f64, !f64]}
+#strict = {accuracy = {kind = "reference"}, arithmetic = {exceptions = "ignore", kind = "arithmetic", nan = "any_quiet", rounding = "nearest_even", subnormals = "gradual", tininess = "after_rounding"}, assumptions = {finite = false}, environment_epoch = 0, intermediate_exceptions = "preserve", permissions = {approved_approximation = false, cross_statement_contraction = false, expression_contraction = false, ignore_signed_zero = false, reassociation = false, reciprocal = false}, result_formats = [!f64]}
+
+module {
+  %f = func.func @nested_sibling(%a: !f64, %b: !f64, %c: !f64) -> !tuple<!f64, !f64> {
+    %strict_result, %result = fp.round (%x = %a, %y = %b, %z = %c) {contract = #relaxed} : (!f64, !f64) {
+      %product = fp.round (%u = %x, %v = %z) {contract = #strict} : !f64 {
+        %mul = fp.mul %u, %v : !f64
+        -> %mul
+      }
+      %direct = fp.mul %x, %y : !f64
+      %sum = fp.add %direct, %z : !f64
+      -> %product, %sum
+    }
+    %both = make_tuple %strict_result, %result : !tuple<!f64, !f64>
+    -> %both
+  }
+  module_end
+}
+
+// CHECK-DAG: %[[STRICT:[0-9]+]] = fp.mul
+// CHECK-DAG: %[[RELAXED:[0-9]+]] = fp.fma
+// CHECK: make_tuple %[[STRICT]], %[[RELAXED]]

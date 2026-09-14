@@ -1,0 +1,33 @@
+// RUN: tir opt --pass resolve-fp<rv64ifd> --verify %s | filecheck %s
+
+#contract = {accuracy = {kind = "reference"}, arithmetic = {exceptions = "ignore", kind = "arithmetic", nan = "any_quiet", rounding = "nearest_even", subnormals = "gradual", tininess = "after_rounding"}, assumptions = {finite = false}, environment_epoch = 0, intermediate_exceptions = "allow_contracted_group_removal", permissions = {approved_approximation = false, cross_statement_contraction = false, expression_contraction = true, ignore_signed_zero = false, reassociation = false, reciprocal = false}, result_formats = [!f64]}
+
+module {
+  %commuted = func.func @commuted_add(%a: !f64, %b: !f64, %c: !f64) -> !f64 {
+    %result = fp.round (%x = %a, %y = %b, %z = %c) {contract = #contract} : !f64 {
+      %product = fp.mul %x, %y : !f64
+      %sum = fp.add %z, %product : !f64
+      -> %sum
+    }
+    -> %result
+  }
+  %sub = func.func @product_first_sub(%a: !f64, %b: !f64, %c: !f64) -> !f64 {
+    %result = fp.round (%x = %a, %y = %b, %z = %c) {contract = #contract} : !f64 {
+      %product = fp.mul %x, %y : !f64
+      %difference = fp.sub %product, %z : !f64
+      -> %difference
+    }
+    -> %result
+  }
+  module_end
+}
+
+// CHECK-LABEL: func.func @commuted_add
+// CHECK-NOT: fp.mul
+// CHECK: %[[COMMUTED:[0-9]+]] = fp.fma
+// CHECK: -> %[[COMMUTED]]
+// CHECK-LABEL: func.func @product_first_sub
+// CHECK-NOT: fp.mul
+// CHECK: %[[NEGATED:[0-9]+]] = fp.neg %{{[0-9]+}} : !f64
+// CHECK: %[[SUBTRACTED:[0-9]+]] = fp.fma %{{[0-9]+}}, %{{[0-9]+}}, %[[NEGATED]] : !f64
+// CHECK: -> %[[SUBTRACTED]]

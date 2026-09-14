@@ -121,9 +121,12 @@ pub fn declared(op: &OpHandle) -> Option<Binding> {
     if let Some(theta) = op.clone().as_interface::<dyn crate::Theta>() {
         return Some(theta.binding());
     }
+    if let Some(gamma) = op.clone().as_interface::<dyn crate::Gamma>() {
+        return Some(gamma.binding());
+    }
     op.clone()
-        .as_interface::<dyn crate::Gamma>()
-        .map(|gamma| gamma.binding())
+        .as_interface::<dyn crate::RegionBinding>()
+        .map(|region| region.binding())
 }
 
 /// One value a loop carries, named on every side of the op: the operand it
@@ -187,7 +190,29 @@ pub fn state_chains(context: &Context, op: &OpHandle) -> Vec<StateChain> {
             .collect();
     }
     let Some(gamma) = op.clone().as_interface::<dyn crate::Gamma>() else {
-        return Vec::new();
+        let Some(owner) = op.clone().as_interface::<dyn crate::RegionBinding>() else {
+            return Vec::new();
+        };
+        let binding = owner.binding();
+        let region = context.get_region(owner.region());
+        let forwarded = (0..binding.operands.len())
+            .map(|index| binding.operands.start + index)
+            .filter(|&at| context.is_state_type(context.get_value(op.operands()[at]).ty()));
+        let joined = (0..binding.results.len())
+            .map(|index| binding.results.start + index)
+            .filter(|&at| context.is_state_type(context.get_value(op.results()[at]).ty()));
+        return forwarded
+            .zip(joined)
+            .map(|(entered, left)| StateChain {
+                entered: op.operands()[entered],
+                ports: vec![
+                    region.ports()[entered - binding.operands.start + binding.ports.start].id(),
+                ],
+                next: None,
+                exits: vec![region.results()[left - binding.results.start + binding.exit.start]],
+                left: op.results()[left],
+            })
+            .collect();
     };
     let binding = gamma.binding();
     let arms: Vec<_> = gamma

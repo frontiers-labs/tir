@@ -1,0 +1,6 @@
+// State resources are matched by their exact resource discriminator.
+// RUN: tir-pdl %s --emit rust | filecheck %s
+
+rule memory-state: builtin.addi(s: state<memory>, x) => x;
+
+// CHECK: Expr::Lit(0i64)

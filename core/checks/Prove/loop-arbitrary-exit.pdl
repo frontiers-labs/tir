@@ -8,5 +8,5 @@
 rule loop-drops-exit: #loop(x: int<W>, #port(l: int<W>), e: int<W>, p: int<1>) : int<W> => x;
 rule loop-moves-port: #loop(x: int<8>, #add(#port(l: int<8>), const<8>(1)), #port(l), p: int<1>) : int<8> => x;
 
-// CHECK: loop-drops-exit: refuted
-// CHECK: loop-moves-port: refuted
+// CHECK: loop-drops-exit: disproven
+// CHECK: loop-moves-port: disproven

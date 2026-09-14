@@ -1,0 +1,30 @@
+// RUN: tir opt --pass func.func(restructure-nodes),inline<1000,0>,resolve-fp<rv64ifd> --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(restructure-nodes),inline<1000,0>,func.func(instcombine-nodes),resolve-fp<rv64ifd> --verify %s | filecheck %s
+
+#relaxed = {accuracy = {kind = "reference"}, arithmetic = {exceptions = "ignore", kind = "arithmetic", nan = "any_quiet", rounding = "nearest_even", subnormals = "gradual", tininess = "after_rounding"}, assumptions = {finite = false}, environment_epoch = 0, intermediate_exceptions = "allow_contracted_group_removal", permissions = {approved_approximation = false, cross_statement_contraction = false, expression_contraction = true, ignore_signed_zero = false, reassociation = false, reciprocal = false}, result_formats = [!f64]}
+#strict = {accuracy = {kind = "reference"}, arithmetic = {exceptions = "ignore", kind = "arithmetic", nan = "any_quiet", rounding = "nearest_even", subnormals = "gradual", tininess = "after_rounding"}, assumptions = {finite = false}, environment_epoch = 0, intermediate_exceptions = "preserve", permissions = {approved_approximation = false, cross_statement_contraction = false, expression_contraction = false, ignore_signed_zero = false, reassociation = false, reciprocal = false}, result_formats = [!f64]}
+
+module {
+  %callee = func.func private @nested(%a: !f64, %b: !f64, %c: !f64) -> !f64 {
+    %result = fp.round (%x = %a, %y = %b, %z = %c) {contract = #relaxed} : !f64 {
+      %product = fp.round (%u = %x, %v = %y) {contract = #strict} : !f64 {
+        %mul = fp.mul %u, %v : !f64
+        -> %mul
+      }
+      %sum = fp.add %product, %z : !f64
+      -> %sum
+    }
+    -> %result
+  }
+  %caller = func.func @caller(%a: !f64, %b: !f64, %c: !f64) -> !f64 {
+    %result = func.call %callee(%a, %b, %c : !f64, !f64, !f64) -> !f64
+    -> %result
+  }
+  module_end
+}
+
+// CHECK-LABEL: func.func @caller
+// CHECK-NOT: fp.fma
+// CHECK: %[[PRODUCT:[0-9]+]] = fp.mul
+// CHECK: %[[SUM:[0-9]+]] = fp.add %[[PRODUCT]],
+// CHECK: -> %[[SUM]]

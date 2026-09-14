@@ -1,0 +1,12 @@
+// Typed binders preserve format, shape, and resource identity in the AST.
+// RUN: tir-pdl %s --emit ast | filecheck %s
+
+refinement typed: fp.add(a: float<32>, b: shaped_float<64, 4>, s: state<fp.env>) ~> fp.add(a, b)
+    requires compatible_formats_and_rounding proof smt;
+
+// CHECK: Float(
+// CHECK-NEXT: Binary32
+// CHECK: ShapedFloat {
+// CHECK: Binary64
+// CHECK: State(
+// CHECK-NEXT: FpEnv

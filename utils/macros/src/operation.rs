@@ -496,6 +496,13 @@ fn attr_accessor(ty: &str) -> Option<AttrAccessor> {
             read: quote! { value },
             write: quote! { value },
         },
+        "EvaluationContract" => AttrAccessor {
+            getter_ty: quote! { std::sync::Arc<tir::fp::EvaluationContract> },
+            setter_ty: quote! { std::sync::Arc<tir::fp::EvaluationContract> },
+            variant: format_ident!("EvaluationContract"),
+            read: quote! { value },
+            write: quote! { value },
+        },
         _ => return None,
     })
 }
@@ -1871,6 +1878,17 @@ fn make_parser(
                                    other => match tir::fp::Semantics::parse_for_operation(&other, #name) {
                                        Ok(semantics) => tir::attributes::AttributeValue::FpSemantics(
                                            context.intern_fp_semantics(semantics),
+                                       ),
+                                       Err(error) => return Err((parser.span(), error)),
+                                   },
+                               };
+                           }
+                           if attr_specs.iter().any(|(attr_name, ty)| *attr_name == name && *ty == "EvaluationContract") {
+                               val = match val {
+                                   tir::attributes::AttributeValue::EvaluationContract(_) => val,
+                                   other => match tir::fp::EvaluationContract::parse_attribute(&other) {
+                                       Ok(contract) => tir::attributes::AttributeValue::EvaluationContract(
+                                           context.intern_evaluation_contract(contract),
                                        ),
                                        Err(error) => return Err((parser.span(), error)),
                                    },

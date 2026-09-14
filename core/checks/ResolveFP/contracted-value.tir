@@ -1,0 +1,22 @@
+// RUN: tir opt --pass resolve-fp<rv64ifd> %s | tir interp - | filecheck %s
+
+#contract = {accuracy = {kind = "reference"}, arithmetic = {exceptions = "ignore", kind = "arithmetic", nan = "any_quiet", rounding = "nearest_even", subnormals = "gradual", tininess = "after_rounding"}, assumptions = {finite = false}, environment_epoch = 0, intermediate_exceptions = "allow_contracted_group_removal", permissions = {approved_approximation = false, cross_statement_contraction = false, expression_contraction = true, ignore_signed_zero = false, reassociation = false, reciprocal = false}, result_formats = [!f64]}
+
+module {
+  %main = func.func @main() -> !i64 {
+    %a = fp.constant {bits = 4607182418833571840} : !f64
+    %b = fp.constant {bits = 4607182418732908544} : !f64
+    %one = fp.constant {bits = 4607182418800017408} : !f64
+    %c = fp.neg %one : !f64
+    %result = fp.round (%x = %a, %y = %b, %z = %c) {contract = #contract} : !f64 {
+      %product = fp.mul %x, %y : !f64
+      %sum = fp.add %product, %z : !f64
+      -> %sum
+    }
+    %bits = bitcast %result : !i64
+    -> %bits
+  }
+  module_end
+}
+
+// CHECK: !i64 -4859383997932765184

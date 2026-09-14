@@ -1,0 +1,7 @@
+// Refinements have a separate candidate path and cannot become e-class unions.
+// RUN: not tir-pdl %s --emit rust 2>&1 | filecheck %s
+
+refinement contract-mul-add: fp.add(a: float<64>, c: float<64>) ~> fp.fma(a, c, c)
+    requires same_round_region proof smt;
+
+// CHECK: refinement rules cannot be emitted as equality rewrites

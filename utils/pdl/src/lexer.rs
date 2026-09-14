@@ -12,8 +12,12 @@ pub enum Token {
     Group,
     #[token("rule")]
     Rule,
+    #[token("refinement")]
+    Refinement,
     #[token("where")]
     Where,
+    #[token("requires")]
+    Requires,
     #[token("proof")]
     Proof,
     #[token("phase")]
@@ -26,10 +30,16 @@ pub enum Token {
     Const,
     #[token("int")]
     Int,
+    #[token("float")]
+    Float,
+    #[token("shaped_float")]
+    ShapedFloat,
     #[token("<=>")]
     Bidirectional,
     #[token("=>")]
     Forward,
+    #[token("~>")]
+    RefinementArrow,
     #[token("==")]
     EqualEqual,
     #[token("!=")]

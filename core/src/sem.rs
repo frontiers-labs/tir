@@ -19,26 +19,107 @@ pub use tir_symbolic::lang::{
 };
 
 pub use tir_symbolic::sem::{
-    EquivalenceOracle, ExtendSemBytes, FuzzOracle, SemBlobBuilder, SemOp, SemPayloadDesc,
-    SmtOracle, confirm_bool_via_if, confirm_extension_via_shifts, decode_sem_ops, float_payload,
-    int_payload,
+    EquivalenceOracle, ExtendSemBytes, FuzzOracle, ProofOutcome, SemBlobBuilder, SemOp,
+    SemPayloadDesc, SmtOracle, UnsupportedReason, confirm_bool_via_if,
+    confirm_extension_via_shifts, decode_sem_ops, float_payload, int_payload,
 };
 pub(crate) use tir_symbolic::sem::{con, op, sym};
 
 pub(crate) mod axioms;
+pub mod fp_refinement;
 
-/// Prove every `proof smt` rule of a PDL source at `width` bits for each of
-/// its width names, answering each rule's name with whether its obligations
-/// were discharged. Definitional and trusted rules are not read.
-pub fn prove_rules(source: &str, width: u64) -> Result<Vec<(String, bool)>, String> {
-    let axioms = axioms::pdl::axioms_from_pdl(source)?;
-    Ok(axioms
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CounterexampleBinding {
+    pub name: String,
+    pub bits: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Counterexample {
+    pub bindings: Vec<CounterexampleBinding>,
+    pub lhs_bits: Option<String>,
+    pub rhs_bits: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RuleProofResult {
+    Proven,
+    Disproven {
+        counterexample: Option<Counterexample>,
+    },
+    Unsupported {
+        reason: UnsupportedReason,
+    },
+}
+
+impl RuleProofResult {
+    pub fn is_proven(&self) -> bool {
+        matches!(self, Self::Proven)
+    }
+}
+
+/// Report the proof outcome of every PDL rule at `width` bits for each of its
+/// width names. Equality rules with SMT proofs use the solver, refinement rules
+/// use their structural checker, and unchecked rules report unsupported.
+pub fn prove_rules(source: &str, width: u64) -> Result<Vec<(String, RuleProofResult)>, String> {
+    let file = tir_pdl::compile(source).map_err(|diagnostics| {
+        diagnostics
+            .iter()
+            .map(|d| d.message.clone())
+            .collect::<Vec<_>>()
+            .join("; ")
+    })?;
+    file.items
         .iter()
-        .map(|axiom| {
-            let widths = vec![width; axiom.width_names.len()];
-            (axiom.name.clone(), axiom.prove(&widths))
+        .filter_map(|item| match item {
+            tir_pdl::Item::Rule(rule) => Some(rule.as_ref()),
+            _ => None,
         })
-        .collect())
+        .map(|rule| {
+            let result = match (rule.kind, rule.proof()) {
+                (tir_pdl::RuleKind::Refinement, _) => {
+                    match fp_refinement::check_contraction_rule(rule) {
+                        Ok(()) => RuleProofResult::Proven,
+                        Err(reason) => RuleProofResult::Unsupported {
+                            reason: UnsupportedReason::UnsupportedObligation(format!(
+                                "structural refinement check failed: {reason:?}"
+                            )),
+                        },
+                    }
+                }
+                (_, tir_pdl::Proof::Trusted) => RuleProofResult::Unsupported {
+                    reason: UnsupportedReason::UnsupportedObligation(
+                        "trusted rules have no checked proof".into(),
+                    ),
+                },
+                (_, tir_pdl::Proof::Definitional) => RuleProofResult::Unsupported {
+                    reason: UnsupportedReason::UnsupportedObligation(
+                        "definitional rules have no solver model".into(),
+                    ),
+                },
+                (_, tir_pdl::Proof::Smt) => match axioms::pdl::axiom_from_rule(rule) {
+                    Ok(axiom) => {
+                        let widths = vec![width; axiom.width_names.len()];
+                        match axiom.prove_outcome(&widths) {
+                            ProofOutcome::Proven => RuleProofResult::Proven,
+                            ProofOutcome::Disproven { model, values } => {
+                                RuleProofResult::Disproven {
+                                    counterexample: Some(axiom.counterexample(&model, values)),
+                                }
+                            }
+                            ProofOutcome::Unsupported(reason) => {
+                                RuleProofResult::Unsupported { reason }
+                            }
+                        }
+                    }
+                    Err(reason) => RuleProofResult::Unsupported {
+                        reason: UnsupportedReason::UnsupportedObligation(reason),
+                    },
+                },
+            };
+            Ok((rule.name.clone(), result))
+        })
+        .collect()
 }
 pub(crate) mod egraph;
 pub mod node;

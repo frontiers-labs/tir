@@ -228,6 +228,13 @@ pub struct Binding {
     pub results: std::ops::Range<usize>,
 }
 
+/// An operation that maps explicit operands to one region's ports and that
+/// region's yields to its results without loop or branch control flow.
+pub trait RegionBinding {
+    fn region(&self) -> RegionId;
+    fn binding(&self) -> Binding;
+}
+
 /// A structured conditional over unordered arms (γ): the predicate picks the
 /// arm, every arm reads the forwarded operands through its own ports, and the
 /// chosen arm's results become the op's.

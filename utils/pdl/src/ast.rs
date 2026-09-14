@@ -1,4 +1,5 @@
 use crate::Span;
+use tir_symbolic::lang::{SymKind, op_kind};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct File {
@@ -21,15 +22,49 @@ pub struct Group {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Rule {
     pub name: String,
+    pub kind: RuleKind,
     pub lhs: Term,
-    pub direction: Direction,
     pub rhs: Term,
     pub guards: Vec<Expr>,
-    /// `None` takes the namespace default: [`Proof::Smt`] for a rule whose terms
-    /// are all semantic, [`Proof::Trusted`] once a dialect op term appears.
+    pub requirements: Vec<RefinementRequirement>,
+    /// `None` uses [`Proof::Smt`] for floating-point and semantic rules, and
+    /// [`Proof::Trusted`] for other dialect rules.
     pub proof: Option<Proof>,
     pub post_saturation: bool,
     pub span: Span,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RefinementAction {
+    pub name: String,
+    pub lhs: Term,
+    pub rhs: Term,
+    pub requirements: Vec<RefinementRequirement>,
+    pub proof: Option<Proof>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RuleKind {
+    Equality(Direction),
+    Refinement,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RefinementRequirement {
+    SameRoundRegion,
+    Permits(ContractPermission),
+    CompatibleFormatsAndRounding,
+    PermittedEffectChange,
+    SatisfiesDomainAndEffectContract,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ContractPermission {
+    ContractMulAdd,
+    CrossStatement,
+    Reassociation,
+    Reciprocal,
+    ApprovedApproximation,
 }
 
 /// How a rule's equivalence is discharged.
@@ -44,14 +79,37 @@ pub enum Proof {
 }
 
 impl Rule {
+    pub fn is_floating_point(&self) -> bool {
+        names_fp_op(&self.lhs)
+            || names_fp_op(&self.rhs)
+            || names_fp_semantic_op(&self.lhs)
+            || names_fp_semantic_op(&self.rhs)
+            || contains_float_type(&self.lhs)
+            || contains_float_type(&self.rhs)
+            || contains_fp_env_state(&self.lhs)
+            || contains_fp_env_state(&self.rhs)
+    }
+
     /// The stated proof mode, or the default for the rule's vocabulary.
     pub fn proof(&self) -> Proof {
         self.proof.unwrap_or_else(|| {
-            if names_dialect_op(&self.lhs) || names_dialect_op(&self.rhs) {
+            if self.is_floating_point() {
+                Proof::Smt
+            } else if names_dialect_op(&self.lhs) || names_dialect_op(&self.rhs) {
                 Proof::Trusted
             } else {
                 Proof::Smt
             }
+        })
+    }
+
+    pub fn refinement_action(&self) -> Option<RefinementAction> {
+        matches!(self.kind, RuleKind::Refinement).then(|| RefinementAction {
+            name: self.name.clone(),
+            lhs: self.lhs.clone(),
+            rhs: self.rhs.clone(),
+            requirements: self.requirements.clone(),
+            proof: self.proof,
         })
     }
 
@@ -68,12 +126,125 @@ impl Rule {
     }
 }
 
+fn names_fp_op(term: &Term) -> bool {
+    match &term.kind {
+        TermKind::Operation {
+            operator,
+            operands,
+            dependencies,
+            ..
+        } => {
+            matches!(operator, Operator::Dialect { dialect, .. } if dialect == "fp")
+                || operands.iter().chain(dependencies).any(names_fp_op)
+        }
+        TermKind::Keep(inner) => names_fp_op(inner),
+        _ => false,
+    }
+}
+
 fn names_dialect_op(term: &Term) -> bool {
     match &term.kind {
         TermKind::Operation {
             operator, operands, ..
         } => matches!(operator, Operator::Dialect { .. }) || operands.iter().any(names_dialect_op),
         TermKind::Keep(inner) => names_dialect_op(inner),
+        _ => false,
+    }
+}
+
+fn names_fp_semantic_op(term: &Term) -> bool {
+    match &term.kind {
+        TermKind::Operation {
+            operator: Operator::Semantic(name),
+            operands,
+            dependencies,
+            ..
+        } => {
+            matches!(
+                op_kind(name),
+                Some(
+                    SymKind::Fma
+                        | SymKind::FAdd
+                        | SymKind::FSub
+                        | SymKind::FMul
+                        | SymKind::FDiv
+                        | SymKind::SIToFP
+                        | SymKind::UIToFP
+                        | SymKind::FPToSI
+                        | SymKind::FPToUI
+                        | SymKind::FMin
+                        | SymKind::FMax
+                        | SymKind::AsFloat
+                        | SymKind::FCvt
+                        | SymKind::FAddRound
+                        | SymKind::FSubRound
+                        | SymKind::FMulRound
+                        | SymKind::FDivRound
+                        | SymKind::FmaRound
+                        | SymKind::Sqrt
+                        | SymKind::SqrtRound
+                        | SymKind::FCvtRound
+                        | SymKind::SIToFPRound
+                        | SymKind::UIToFPRound
+                        | SymKind::FPToSIRound
+                        | SymKind::FPToUIRound
+                        | SymKind::FPFlags
+                )
+            ) || operands
+                .iter()
+                .chain(dependencies)
+                .any(names_fp_semantic_op)
+        }
+        TermKind::Operation {
+            operands,
+            dependencies,
+            ..
+        } => operands
+            .iter()
+            .chain(dependencies)
+            .any(names_fp_semantic_op),
+        TermKind::Keep(inner) => names_fp_semantic_op(inner),
+        _ => false,
+    }
+}
+
+fn contains_float_type(term: &Term) -> bool {
+    if matches!(term.ty, Some(Type::Float(_) | Type::ShapedFloat { .. })) {
+        return true;
+    }
+    match &term.kind {
+        TermKind::Binder {
+            ty: Some(BindingType::Type(Type::Float(_) | Type::ShapedFloat { .. })),
+            ..
+        } => true,
+        TermKind::Operation {
+            operands,
+            dependencies,
+            ..
+        } => operands.iter().chain(dependencies).any(contains_float_type),
+        TermKind::Keep(inner) => contains_float_type(inner),
+        _ => false,
+    }
+}
+
+fn contains_fp_env_state(term: &Term) -> bool {
+    if matches!(term.ty, Some(Type::State(Resource::FpEnv))) {
+        return true;
+    }
+    match &term.kind {
+        TermKind::Binder {
+            ty: Some(BindingType::Type(Type::State(Resource::FpEnv))),
+            ..
+        } => true,
+        TermKind::Operation {
+            operands,
+            dependencies,
+            ..
+        } => operands
+            .iter()
+            .chain(dependencies)
+            .any(contains_fp_env_state),
+        TermKind::Keep(inner) => contains_fp_env_state(inner),
         _ => false,
     }
 }
@@ -149,7 +320,26 @@ pub enum BindingType {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Type {
     Integer(Width),
+    Float(FloatFormat),
+    ShapedFloat {
+        format: FloatFormat,
+        shape: Vec<Expr>,
+    },
+    State(Resource),
     Named(String),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Resource {
+    Memory,
+    FpEnv,
+    Named(String),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FloatFormat {
+    Binary32,
+    Binary64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

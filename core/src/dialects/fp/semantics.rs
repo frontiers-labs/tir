@@ -246,7 +246,7 @@ impl Semantics {
         fields
     }
 
-    fn fields(self) -> BTreeMap<&'static str, &'static str> {
+    pub(crate) fn fields(self) -> BTreeMap<&'static str, &'static str> {
         let mut fields = BTreeMap::new();
         match self {
             Self::Arithmetic(value) => {
