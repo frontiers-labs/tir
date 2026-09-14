@@ -1426,6 +1426,23 @@
         }
       ]
     },
+    "LatencyCase": {
+      "type": "object",
+      "properties": {
+        "condition": {
+          "$ref": "#/$defs/Expr"
+        },
+        "latency": {
+          "type": "integer",
+          "format": "int64"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "condition",
+        "latency"
+      ]
+    },
     "MachineOverride": {
       "description": "Machine-specific timing override for one instruction.",
       "type": "object",
@@ -1450,6 +1467,12 @@
         "latency": {
           "type": "integer",
           "format": "int64"
+        },
+        "latency_cases": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/LatencyCase"
+          }
         },
         "reads": {
           "type": "string"

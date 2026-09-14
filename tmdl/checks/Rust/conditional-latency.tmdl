@@ -1,0 +1,7 @@
+// RUN: tmdlc --action=emit-rust --text-only --dialect=test --output=- %S/../Json/conditional-latency.tmdl | filecheck %s
+// CHECK: latency_cases: &[
+// CHECK: tir::backend::sched::LatencyCase {
+// CHECK: env: &EXEC_ENV,
+// CHECK: tir::backend::exec::SymSource::RegisterAttr("rhs")
+// CHECK: condition:
+// CHECK: latency: 4,

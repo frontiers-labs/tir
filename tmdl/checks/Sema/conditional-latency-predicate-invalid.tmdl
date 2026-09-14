@@ -1,0 +1,13 @@
+// RUN: not tmdlc --action=emit-ast-json --text-only --output=- %s | filecheck %s
+instruction I {
+    param MNEMONIC: String = "i";
+    asm { "i" }
+    behavior { todo(); }
+}
+machine Core {
+    override I {
+        latency = 4;
+        when load(0, 1, 0) == 0 { latency = 2; }
+    }
+}
+// CHECK: conditional latency predicate cannot access memory or have side effects

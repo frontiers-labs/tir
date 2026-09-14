@@ -1,0 +1,11 @@
+// RUN: not tmdlc --action=emit-ast-json --text-only --output=- %s | filecheck %s
+instruction I {
+    param MNEMONIC: String = "i";
+    asm { "{self.MNEMONIC}" }
+    behavior { todo(); }
+}
+machine Core {
+    override I { latency = 4; when regnum() == 0 { latency = 2; } }
+}
+// CHECK: invalid argument count in latency predicate
+// CHECK-NOT: panicked

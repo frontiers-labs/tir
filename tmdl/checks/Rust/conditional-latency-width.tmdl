@@ -1,0 +1,27 @@
+// RUN: tmdlc --action=emit-rust --text-only --dialect=test --output=- %s | filecheck %s
+
+isa TestIsa {}
+register_class GPR for [TestIsa] {
+    param WIDTH: Integer = 64;
+    param ENCODING_LEN: Integer = 5;
+    registers { r0..r7 => {} }
+}
+
+fn is_wide(x) { width(x) == 64 }
+
+instruction Div for [TestIsa] {
+    param MNEMONIC: String = "div";
+    operands { dst: GPR, rhs: GPR }
+    asm { "div {dst}, {rhs}" }
+    behavior { dst = rhs; }
+}
+
+machine TestCore ("test-core") for [TestIsa] {
+    override Div {
+        latency = 20;
+        when is_wide(rhs) { latency = 4; }
+    }
+}
+
+// CHECK: latency_cases: &[
+// CHECK: latency: 4,

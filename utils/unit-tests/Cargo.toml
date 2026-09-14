@@ -40,3 +40,6 @@ tempfile = "3.27.0"
 
 [lints]
 workspace = true
+
+[build-dependencies]
+tmdl = { workspace = true, default-features = false }

@@ -102,6 +102,8 @@ pub struct Executor {
     pc_explicitly_written: bool,
     record_trace: bool,
     trace: Vec<(tir::OpId, u64)>,
+    timing_model: Option<tir::backend::sched::MachineModel>,
+    latency_trace: Vec<u16>,
     /// Data-memory accesses per retired instruction, kept exactly parallel to
     /// `trace` (empty inner vec for non-memory instructions).
     mem_trace: Vec<Vec<MemAccess>>,
@@ -212,6 +214,21 @@ impl Executor {
     /// timing model can replay it. Off by default to avoid the memory cost.
     pub fn enable_trace_recording(&mut self) {
         self.record_trace = true;
+    }
+
+    /// Select the model used to capture entry-state latencies. Call before recording.
+    /// Panics if an instruction trace has already been recorded.
+    pub fn set_timing_model(&mut self, model: tir::backend::sched::MachineModel) {
+        assert!(
+            self.trace.is_empty(),
+            "select a timing model before recording"
+        );
+        self.timing_model = Some(model);
+    }
+
+    /// Resolved latencies parallel to `trace`, or empty when no model was selected.
+    pub fn latency_trace(&self) -> &[u16] {
+        &self.latency_trace
     }
 
     /// Declare which register classes share a physical register file (class name
@@ -482,6 +499,12 @@ impl Executor {
     /// Run `execute`, capturing its data-memory accesses, then drain them into
     /// `mem_trace` (in lockstep with the `trace` push) when recording.
     fn execute_capturing(&mut self, machine_inst: &dyn MachineInstruction) -> Result<(), SimTrap> {
+        if self.record_trace
+            && let Some(model) = self.timing_model
+        {
+            let latency = machine_inst.sched_on(&model, self).latency;
+            self.latency_trace.push(latency);
+        }
         self.capturing_mem = true;
         let result = machine_inst.execute(self);
         self.capturing_mem = false;

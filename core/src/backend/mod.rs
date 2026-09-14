@@ -340,6 +340,8 @@ pub struct InstrInfo {
     /// Scheduling class per machine, indexed by [`sched::MachineModel::id`].
     /// Empty for an opcode no machine describes.
     pub sched: &'static [sched::InstrSchedClass],
+    /// Ordered conditional latencies per machine, indexed like `sched`.
+    pub latency_cases: &'static [&'static [sched::LatencyCase]],
 }
 
 impl InstrInfo {
@@ -360,7 +362,35 @@ impl InstrInfo {
         encode: None,
         cost: 1,
         sched: &[],
+        latency_cases: &[],
     };
+
+    /// Resolve the instruction's latency from its entry state. The first matching
+    /// case wins; an unavailable or unevaluable condition uses the static fallback.
+    pub fn sched_for(
+        &self,
+        instance: &tir::OpHandle,
+        machine: &sched::MachineModel,
+        context: &mut dyn MachineContext,
+    ) -> sched::InstrSchedClass {
+        let mut class = self.sched_on(machine);
+        for case in self
+            .latency_cases
+            .get(machine.id)
+            .copied()
+            .unwrap_or_default()
+        {
+            match case.matches(instance, context, self.name) {
+                Some(true) => {
+                    class.latency = case.latency;
+                    break;
+                }
+                Some(false) => {}
+                None => break,
+            }
+        }
+        class
+    }
 
     /// This opcode's scheduling class on `machine`, or
     /// [`sched::InstrSchedClass::DEFAULT`] when no machine describes it or
@@ -376,6 +406,14 @@ impl InstrInfo {
 pub trait MachineInstruction {
     fn info(&self) -> &'static InstrInfo;
     fn instance(&self) -> &tir::OpHandle;
+    /// Scheduling facts for this instance, using register values before execution.
+    fn sched_on(
+        &self,
+        machine: &sched::MachineModel,
+        context: &mut dyn MachineContext,
+    ) -> sched::InstrSchedClass {
+        self.info().sched_for(self.instance(), machine, context)
+    }
     fn mnemonic(&self) -> &'static str {
         self.info().mnemonic
     }

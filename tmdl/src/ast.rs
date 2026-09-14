@@ -411,6 +411,8 @@ pub struct UnitBind {
 /// machine. Carries the same timing fields as a [`UnitBind`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MachineOverride {
+    /// Ordered instance-dependent latency overrides; the scalar latency is the fallback.
+    pub latency_cases: Vec<LatencyCase>,
     /// The overridden instruction, by its TMDL `instruction` name.
     pub instruction: String,
     pub latency: Option<i64>,
@@ -427,6 +429,14 @@ pub struct MachineOverride {
     /// The instruction breaks its input dependencies when its sources are a
     /// subset of its destinations.
     pub zero_idiom: Option<bool>,
+    pub span: Span,
+}
+
+/// A latency selected when an instruction predicate holds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LatencyCase {
+    pub condition: Expr,
+    pub latency: i64,
     pub span: Span,
 }
 

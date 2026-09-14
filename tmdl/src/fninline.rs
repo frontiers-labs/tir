@@ -63,6 +63,20 @@ pub fn inline_functions(files: &mut [ast::File]) -> Vec<(String, Diag)> {
                         ));
                     }
                 }
+                ast::Item::Machine(machine) => {
+                    for override_ in &mut machine.overrides {
+                        for case in &mut override_.latency_cases {
+                            let mut stack = Vec::new();
+                            case.condition = inline_expr(
+                                &case.condition,
+                                &fns,
+                                &mut stack,
+                                &mut diags,
+                                &file_name,
+                            );
+                        }
+                    }
+                }
                 ast::Item::Isa(isa) => {
                     if let Some(trap) = &mut isa.trap_handler {
                         let mut stack = Vec::new();

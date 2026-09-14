@@ -324,6 +324,7 @@ include!("instructions.rs");
 include!("registers.rs");
 include!("abis.rs");
 include!("scheduling.rs");
+include!("latency.rs");
 include!("register_traits.rs");
 include!("flag_analysis.rs");
 include!("flag_emission.rs");

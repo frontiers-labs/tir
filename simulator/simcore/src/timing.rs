@@ -25,6 +25,9 @@ pub use crate::scoreboard::{TimingConfig, TimingResult};
 /// register-file pressure on a renaming core. `handler` receives the pipeline
 /// events for report rendering.
 ///
+/// `latency_trace`, when supplied, must contain one entry-state latency per
+/// trace entry, captured for `model`. `None` uses static instruction latencies.
+///
 /// Only [`ControlFlow::Conditional`] instructions are predictor-scored: an
 /// unconditional transfer's target is known at decode, so it flows through the
 /// scoreboard as an ordinary instruction with its scheduled cost.
@@ -37,6 +40,7 @@ pub fn simulate(
     model: &MachineModel,
     context: &Context,
     trace: &[(OpId, u64)],
+    latency_trace: Option<&[u16]>,
     config: &TimingConfig,
     predictor: &mut dyn BranchPredictor,
     prf: Option<&Prf>,
@@ -44,6 +48,13 @@ pub fn simulate(
     mem: Option<&mut MemorySystem>,
     handler: Option<&mut dyn EventHandler>,
 ) -> TimingResult {
+    if let Some(latencies) = latency_trace {
+        assert_eq!(
+            latencies.len(),
+            trace.len(),
+            "latency trace must match instruction trace"
+        );
+    }
     // Pre-resolve each trace entry to its scheduling class, registers, and
     // (for conditional branches) PC and width — branch outcomes need the next
     // entry's PC, so they are filled in a second pass below.
@@ -60,9 +71,13 @@ pub fn simulate(
         let (op_name, class, width, is_branch) = match &mi {
             Some(mi) => {
                 let info = mi.info();
+                let mut class = info.sched_on(model);
+                if let Some(latencies) = latency_trace {
+                    class.latency = latencies[i];
+                }
                 (
                     info.name,
-                    info.sched_on(model),
+                    class,
                     u64::from(mi.width_bytes()),
                     info.control_flow == ControlFlow::Conditional,
                 )

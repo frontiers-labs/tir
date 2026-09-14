@@ -1,0 +1,50 @@
+isa TestIsa { param ENCODING_UNIT: Integer = 8; }
+register_class Gpr for [TestIsa] {
+    param WIDTH: Integer = 64;
+    param ENCODING_LEN: Integer = 3;
+    registers { r0..r7 => {} }
+}
+sched_class Divide { latency = 20; }
+instruction Div for [TestIsa] {
+    param MNEMONIC: String = "div";
+    operands { dst: Gpr, lhs: Gpr, rhs: Gpr }
+    asm { "{self.MNEMONIC} {dst}, {lhs}, {rhs}" }
+    encoding { (0b00, dst, lhs), (0b00000, rhs) }
+    behavior { dst = lhs / rhs; }
+    schedule { units = [Divide]; }
+}
+machine TestCore ("test-core") for [TestIsa] {
+    issue_width = 1;
+    override Div {
+        latency = 20;
+        when rhs == 0b1 { latency = 4; }
+    }
+}
+
+instruction AddImm for [TestIsa] {
+    param MNEMONIC: String = "addi";
+    operands { dst: Gpr, src: Gpr, imm: bits<8> }
+    asm { "{self.MNEMONIC} {dst}, {src}, {imm}" }
+    encoding { (0b01, dst, src), imm }
+    behavior { dst = src + imm; }
+}
+machine ImmediateCore for [TestIsa] {
+    override AddImm {
+        latency = 9;
+        when imm == 0 { latency = 2; }
+    }
+}
+
+machine OrderedCore for [TestIsa] {
+    override Div {
+        latency = 20;
+        when rhs == 0b1 { latency = 4; }
+        when 0b1 == 0b1 { latency = 7; }
+    }
+}
+machine RegisterCore for [TestIsa] {
+    override Div {
+        latency = 20;
+        when regnum(rhs) == 1 { latency = 3; }
+    }
+}

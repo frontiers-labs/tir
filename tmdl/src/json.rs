@@ -967,6 +967,8 @@ impl From<&ast::FusionDecl> for FusionDecl {
 /// Machine-specific timing override for one instruction.
 struct MachineOverride {
     instruction: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    latency_cases: Vec<LatencyCase>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schemars(with = "i64")]
     latency: Option<i64>,
@@ -1000,10 +1002,25 @@ struct MachineOverride {
     zero_idiom: Option<bool>,
 }
 
+#[derive(Serialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+struct LatencyCase {
+    condition: Expr,
+    latency: i64,
+}
+
 impl From<&ast::MachineOverride> for MachineOverride {
     fn from(override_: &ast::MachineOverride) -> Self {
         Self {
             instruction: override_.instruction.clone(),
+            latency_cases: override_
+                .latency_cases
+                .iter()
+                .map(|case| LatencyCase {
+                    condition: Expr::from(&case.condition),
+                    latency: case.latency,
+                })
+                .collect(),
             latency: override_.latency,
             throughput: override_.throughput,
             reads: override_.reads.clone(),

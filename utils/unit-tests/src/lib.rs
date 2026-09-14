@@ -86,6 +86,7 @@ mod fuzz;
 
 #[cfg(test)]
 mod simcore {
+    mod conditional_latency;
     mod executor;
     mod memsys;
     mod predictor;

@@ -1,0 +1,10 @@
+// RUN: not tmdlc --action=emit-ast-json --text-only --output=- %s | filecheck %s
+instruction I {
+    param MNEMONIC: String = "i";
+    asm { "i" }
+    behavior { todo(); }
+}
+machine Core {
+    override I { when 0b1 == 0b1 { latency = 4; } }
+}
+// CHECK: conditional latency requires a fallback latency in 1..65535

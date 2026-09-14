@@ -24,6 +24,7 @@ pub fn resolve_width_calls(files: &mut [ast::File]) -> Vec<Diag> {
     let classes = class_widths(files);
 
     let mut contexts: Vec<(usize, usize, HashMap<String, Type>)> = Vec::new();
+    let mut instruction_types = HashMap::new();
     for (file_index, file) in files.iter().enumerate() {
         for (item_index, item) in file.items.iter().enumerate() {
             let ast::Item::Instruction(instr) = item else {
@@ -36,6 +37,7 @@ pub fn resolve_width_calls(files: &mut [ast::File]) -> Vec<Diag> {
             for (name, (ty, _)) in utils::resolve_params_for_instruction(instr, &item_cache) {
                 types.entry(name).or_insert(ty);
             }
+            instruction_types.insert(instr.name.clone(), types.clone());
             contexts.push((file_index, item_index, types));
         }
     }
@@ -51,6 +53,28 @@ pub fn resolve_width_calls(files: &mut [ast::File]) -> Vec<Diag> {
             classes: &classes,
         };
         instr.behavior = ctx.resolve(&instr.behavior, &mut Vec::new(), &file_name, &mut diags);
+    }
+
+    for file in files.iter_mut() {
+        let file_name = file.file_name.clone();
+        for item in &mut file.items {
+            let ast::Item::Machine(machine) = item else {
+                continue;
+            };
+            for override_ in &mut machine.overrides {
+                let Some(types) = instruction_types.get(&override_.instruction) else {
+                    continue;
+                };
+                let ctx = WidthContext {
+                    types,
+                    classes: &classes,
+                };
+                for case in &mut override_.latency_cases {
+                    case.condition =
+                        ctx.resolve(&case.condition, &mut Vec::new(), &file_name, &mut diags);
+                }
+            }
+        }
     }
 
     // A trap handler names no operands, so only self-describing values (a

@@ -235,6 +235,7 @@ fn select_timing_model(
         std::process::exit(2);
     });
     executor.enable_trace_recording();
+    executor.set_timing_model(model);
     Some(model)
 }
 
@@ -295,6 +296,7 @@ fn report_timing(
         model,
         context,
         executor.trace(),
+        Some(executor.latency_trace()),
         &config,
         predictor.as_mut(),
         Some(&prf),

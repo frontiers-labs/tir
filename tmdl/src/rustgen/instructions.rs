@@ -1867,7 +1867,7 @@ fn emit_instruction(
 
     // One record per opcode, spelling only what departs from
     // `InstrInfo::BASE`.
-    let info_fields = instr_info_fields(
+    let mut info_fields = instr_info_fields(
         &InstrInfoParts {
             op_name_lit: &op_name_lit,
             mnemonic_lit: &mnemonic_lit,
@@ -1887,6 +1887,15 @@ fn emit_instruction(
         sched_tables,
         &inst.name,
     );
+    if let Some(cases) = sched_tables.latency_cases.get(&inst.name) {
+        let cases = emit_latency_cases(
+            cases,
+            &numeric_params,
+            &tables.register_index_map,
+            &behavior_ctx,
+        )?;
+        info_fields.push(quote! { latency_cases: &[#(#cases),*] });
+    }
     out.instruction_infos.push(quote! {
         static #info_ident: tir::backend::InstrInfo = tir::backend::InstrInfo {
             #(#info_fields,)*

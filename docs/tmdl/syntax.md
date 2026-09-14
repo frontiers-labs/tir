@@ -534,3 +534,41 @@ instruction And for [RV32I, RV64I] : RType {
   behavior { rd = rs1 & rs2; }
 }
 ```
+
+## Conditional latency
+
+A machine override can choose scalar latency from the instruction's operands:
+
+```tmdl
+override Div {
+    latency = 20;
+    when rhs == 0b1 { latency = 4; }
+}
+```
+
+The cycle counts above illustrate the syntax. They are not hardware measurements.
+The first matching `when` wins. If no condition matches, or a condition cannot
+be evaluated, the override's ordinary `latency` is the fallback. An unavailable
+condition stops selection; later conditions cannot override that fallback.
+The fallback and each case latency must be in `1..65535`, inclusive.
+
+Conditions use the same pure expressions as instruction behavior and must have
+type `bits<1>`. An operand identifier reads its value: an immediate's bits or a
+register's contents. `regnum(src)` reads the register's encoding number instead.
+For example, a condition on `regnum(src)` can distinguish an extended register
+that requires a prefix. Operand forms with different declared types continue to
+use separate instruction declarations and scheduling classes.
+
+Latency predicates cannot access memory or change machine state. Conditional
+latency cannot accompany `reads`/`writes` pipeline phases, `eliminated = true`,
+or `zero_idiom = true`. Cases change only latency; the other override fields
+apply to every instance.
+
+Generated `MachineInstruction::sched_on(model, context)` resolves the latency
+using the instruction's entry state. `InstrInfo::sched_on(model)` returns the
+static fallback. The simulator records resolved latencies before execution and
+uses them during timing replay. The fallback is an author-supplied estimate;
+TMDL does not prove it is a worst-case bound.
+
+These rules do not model separate input-to-output latencies or preserve extra
+prefix bytes from arbitrary decoded encodings.

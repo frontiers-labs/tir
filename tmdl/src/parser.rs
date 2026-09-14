@@ -1060,6 +1060,41 @@ where
         .delimited_by(just(Token::LBrace), just(Token::RBrace))
 }
 
+fn override_body<'src, I>()
+-> impl Parser<'src, I, (Vec<BindField>, Vec<LatencyCase>), extra::Err<Rich<'src, Token<'src>, Span>>>
+where
+    I: ValueInput<'src, Token = Token<'src>, Span = Span>,
+{
+    let case = just(Token::Identifier("when"))
+        .ignore_then(inline_expr())
+        .then(
+            just(Token::Identifier("latency"))
+                .ignore_then(just(Token::Equals))
+                .ignore_then(int_lit())
+                .then_ignore(just(Token::Semicolon))
+                .delimited_by(just(Token::LBrace), just(Token::RBrace)),
+        )
+        .map_with(|(condition, latency), e| LatencyCase {
+            condition,
+            latency,
+            span: e.span(),
+        });
+    choice((
+        bind_field().map(|field| (Some(field), None)),
+        case.map(|case| (None, Some(case))),
+    ))
+    .repeated()
+    .collect::<Vec<_>>()
+    .delimited_by(just(Token::LBrace), just(Token::RBrace))
+    .map(|fields| {
+        let (fields, cases): (Vec<_>, Vec<_>) = fields.into_iter().unzip();
+        (
+            fields.into_iter().flatten().collect(),
+            cases.into_iter().flatten().collect(),
+        )
+    })
+}
+
 #[derive(Clone)]
 enum MachineBody {
     IssueWidth(i64),
@@ -1355,11 +1390,12 @@ where
 
     let r#override = just(Token::KwOverride)
         .ignore_then(ident)
-        .then(bind_body())
-        .map_with(|(instruction, fields), e| {
+        .then(override_body())
+        .map_with(|(instruction, (fields, latency_cases)), e| {
             let f = aggregate_bind_fields(fields);
             MachineBody::Override(MachineOverride {
                 instruction,
+                latency_cases,
                 latency: f.latency,
                 throughput: f.throughput,
                 reads: f.reads,

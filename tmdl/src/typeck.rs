@@ -52,6 +52,52 @@ pub fn check<'a>(files: &'a [ast::File]) -> (TypeCache<'a>, Vec<(String, Diag)>)
                 &file.file_name,
             );
         }
+        for override_ in file.machines().flat_map(|machine| &machine.overrides) {
+            let Some(ast::Item::Instruction(instr)) =
+                item_cache.get(override_.instruction.as_str())
+            else {
+                continue;
+            };
+            if override_.latency_cases.is_empty() {
+                continue;
+            }
+            let env = build_instr_env(
+                instr,
+                &item_cache,
+                &synonyms,
+                &isa_param_vars,
+                &encoding_lens,
+                &mut tvg,
+            );
+            for case in &override_.latency_cases {
+                let mut subst = Substitution::new();
+                let ty = infer(
+                    &case.condition,
+                    &env,
+                    &mut tvg,
+                    &mut subst,
+                    &mut cache,
+                    &mut diags,
+                    &file.file_name,
+                )
+                .apply(&subst);
+                match bit_width(&ty) {
+                    Some(1) => {}
+                    Some(_) => diags.push((
+                        file.file_name.clone(),
+                        Rich::custom(case.span, "latency condition must be bits<1>"),
+                    )),
+                    None => constrain(
+                        &ty,
+                        &Type::Bits(1),
+                        &mut subst,
+                        case.span,
+                        &mut diags,
+                        &file.file_name,
+                    ),
+                }
+            }
+        }
         for item in &file.items {
             let ast::Item::Isa(isa) = item else { continue };
             let Some(trap) = &isa.trap_handler else {
