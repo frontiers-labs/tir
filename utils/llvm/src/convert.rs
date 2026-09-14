@@ -23,21 +23,7 @@ use crate::ast::{self, BinOp, CastOp, Inst, Type};
 use crate::error::Error;
 
 pub fn import(context: &Context, module: &ast::Module) -> Result<builtin::ModuleOp, Error> {
-    let mut module_builder = bops::module(context, None);
-    if !module.source_attributes.is_empty() {
-        module_builder = module_builder.attr(
-            "source_attributes",
-            AttributeValue::Array(
-                module
-                    .source_attributes
-                    .iter()
-                    .map(|attribute| AttributeValue::Str(attribute.clone().into()))
-                    .collect::<Vec<_>>()
-                    .into(),
-            ),
-        );
-    }
-    let m = module_builder.build();
+    let m = bops::module(context, None).build();
     let builder = m.body();
     let mut callees = Callees::default();
     let named_types: HashMap<_, _> = module.named_types.iter().cloned().collect();
@@ -147,18 +133,26 @@ impl Callees {
     }
 }
 
-fn lower_type(context: &Context, ty: &Type) -> TypeId {
-    match ty {
+fn lower_type(context: &Context, ty: &Type) -> Result<TypeId, Error> {
+    Ok(match ty {
         Type::Int(width) => IntegerType::new(context, *width),
         Type::Void => UnitType::new(context),
         Type::Ptr(None) => PtrType::opaque(context),
-        Type::Ptr(Some(pointee)) => PtrType::typed(context, lower_type(context, pointee)),
+        Type::Ptr(Some(pointee)) => PtrType::typed(context, lower_type(context, pointee)?),
         Type::Float(16) => FloatType::f16(context),
         Type::Float(32) => FloatType::f32(context),
         Type::Float(64) => FloatType::f64(context),
-        Type::Float(width) => panic!("unsupported LLVM float width {width}"),
-        Type::Array(_, _) | Type::Named(_) | Type::Struct(_) => UnitType::new(context),
-    }
+        Type::Float(width) => {
+            return Err(Error::Unsupported(format!("LLVM float width {width}")));
+        }
+        Type::Array(_, _) => return Err(Error::Unsupported("LLVM array value".into())),
+        Type::Named(name) => {
+            return Err(Error::Unsupported(format!(
+                "LLVM named aggregate value %{name}"
+            )));
+        }
+        Type::Struct(_) => return Err(Error::Unsupported("LLVM struct value".into())),
+    })
 }
 
 fn lower_globals(
@@ -182,10 +176,8 @@ fn lower_globals(
                 bytes[..copied].copy_from_slice(&raw[..copied]);
                 bops::global_bytes(context, &global.name, bytes, global.align)
             }
-            ast::GlobalInitializer::CString(bytes) => {
-                bops::global_bytes(context, &global.name, bytes.clone(), global.align)
-            }
-            ast::GlobalInitializer::Bytes(bytes) => {
+            ast::GlobalInitializer::CString(bytes) | ast::GlobalInitializer::Bytes(bytes) => {
+                validate_initializer_size(&global.name, size, bytes.len())?;
                 bops::global_bytes(context, &global.name, bytes.clone(), global.align)
             }
             ast::GlobalInitializer::Symbols(symbols) => {
@@ -244,6 +236,15 @@ fn lower_globals(
     Ok(values)
 }
 
+fn validate_initializer_size(name: &str, expected: u64, actual: usize) -> Result<(), Error> {
+    if u64::try_from(actual) != Ok(expected) {
+        return Err(Error::Parse(format!(
+            "global @{name} initializer has {actual} bytes, expected {expected}"
+        )));
+    }
+    Ok(())
+}
+
 fn type_size(ty: &Type, named: &HashMap<String, Type>) -> Result<u64, Error> {
     Ok(match ty {
         Type::Int(width) | Type::Float(width) => u64::from(width.div_ceil(8)),
@@ -300,7 +301,7 @@ fn lower_function(
     // Parameters become entry-block arguments.
     let mut entry_args = Vec::new();
     for param in &func.params {
-        let value = context.create_value(lower_type(context, &param.ty), None);
+        let value = context.create_value(lower_type(context, &param.ty)?, None);
         values.insert(param.name.clone(), value.id());
         entry_args.push(value);
     }
@@ -314,7 +315,7 @@ fn lower_function(
                         };
                         values.insert(
                             name.clone(),
-                            context.create_value(lower_type(context, ty), None).id(),
+                            context.create_value(lower_type(context, ty)?, None).id(),
                         );
                     }
                 }
@@ -333,7 +334,7 @@ fn lower_function(
         };
         for inst in &block.insts {
             if let Inst::Phi { result, ty, .. } = inst {
-                let value = context.create_value(lower_type(context, ty), None);
+                let value = context.create_value(lower_type(context, ty)?, None);
                 if let Some(old) = values.insert(result.clone(), value.id()) {
                     context.replace_value_uses(old, value.id());
                 }
@@ -348,12 +349,12 @@ fn lower_function(
         blocks.push(created);
     }
 
-    let ret_ty = lower_type(context, &func.ret);
+    let ret_ty = lower_type(context, &func.ret)?;
     let parameters: Vec<_> = func
         .params
         .iter()
         .map(|param| lower_type(context, &param.ty))
-        .collect();
+        .collect::<Result<_, _>>()?;
     let op = func_ops::func(
         context,
         func.name.as_str(),
@@ -475,7 +476,7 @@ fn lower_inst(
                         id
                     }
                     _ => {
-                        let c = bops::constant(context, *v, lower_type(context, $ty)).build();
+                        let c = bops::constant(context, *v, lower_type(context, $ty)?).build();
                         let id = c.result();
                         body.append_op(c);
                         id
@@ -511,11 +512,11 @@ fn lower_inst(
                         let mut params = params
                             .iter()
                             .map(|ty| lower_type(context, ty))
-                            .collect::<Vec<_>>();
+                            .collect::<Result<Vec<_>, _>>()?;
                         if *variadic {
                             params.push(VarArgsType::new(context));
                         }
-                        let ret = lower_type(context, ret);
+                        let ret = lower_type(context, ret)?;
                         let function = callees.value(context, name, &params, ret);
                         let op =
                             bops::fn_to_ptr(context, function, PtrType::opaque(context)).build();
@@ -540,13 +541,13 @@ fn lower_inst(
                     Type::Float(32) | Type::Float(64) => {
                         let op = fp::ConstantOpBuilder::new(context)
                             .bits(0)
-                            .result_type(lower_type(context, $ty))
+                            .result_type(lower_type(context, $ty)?)
                             .build();
                         let id = op.result();
                         body.append_op(op);
                         id
                     }
-                    _ => constant(context, body, 0, lower_type(context, $ty)),
+                    _ => constant(context, body, 0, lower_type(context, $ty)?),
                 },
                 ast::Operand::GetElementPtr {
                     source,
@@ -579,7 +580,7 @@ fn lower_inst(
             lhs,
             rhs,
         } => {
-            let t = lower_type(context, ty);
+            let t = lower_type(context, ty)?;
             let l = val!(lhs, ty);
             let r = val!(rhs, ty);
             let id = lower_binary(context, body, *op, l, r, t);
@@ -632,7 +633,7 @@ fn lower_inst(
                 *op,
                 *non_negative,
                 input,
-                lower_type(context, to),
+                lower_type(context, to)?,
             );
             values.insert(result.clone(), id);
         }
@@ -645,7 +646,7 @@ fn lower_inst(
         }
         Inst::Load { result, ty, ptr } => {
             let p = val!(ptr, &Type::Ptr(None));
-            let o = pops::load(context, p, lower_type(context, ty)).build();
+            let o = pops::load(context, p, lower_type(context, ty)?).build();
             values.insert(result.clone(), o.result());
             body.append_op(o);
         }
@@ -730,7 +731,7 @@ fn lower_inst(
             for (ty, op) in args {
                 arg_ids.push(val!(op, ty));
             }
-            let ret_ty = lower_type(context, ret);
+            let ret_ty = lower_type(context, ret)?;
             match callee {
                 ast::Operand::Global(name) if name.starts_with("llvm.") => {
                     let value = lower_intrinsic(context, body, name, &arg_ids, ret, ret_ty)?;
@@ -754,8 +755,9 @@ fn lower_inst(
                             params
                                 .iter()
                                 .map(|ty| lower_type(context, ty))
-                                .collect::<Vec<_>>()
+                                .collect::<Result<Vec<_>, _>>()
                         })
+                        .transpose()?
                         .unwrap_or_else(|| arg_types.clone());
                     if declared.is_some_and(|(_, _, variadic)| *variadic) {
                         params.push(VarArgsType::new(context));
@@ -984,7 +986,7 @@ fn lower_select(
     mut if_false: ValueId,
     ty: &Type,
 ) -> Result<ValueId, Error> {
-    let result_ty = lower_type(context, ty);
+    let result_ty = lower_type(context, ty)?;
     let work_ty = match ty {
         Type::Ptr(_) => {
             let int_ty = IntegerType::new(context, 64);
@@ -1210,7 +1212,7 @@ fn phi_arguments(
                     .copied()
                     .ok_or_else(|| Error::UndefinedValue(name.clone())),
                 ast::Operand::ConstInt(value) => {
-                    Ok(constant(context, body, *value, lower_type(context, ty)))
+                    Ok(constant(context, body, *value, lower_type(context, ty)?))
                 }
                 ast::Operand::Null => {
                     let op = pops::null(context, PtrType::opaque(context)).build();

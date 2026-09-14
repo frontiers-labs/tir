@@ -85,6 +85,9 @@ mod jit;
 mod fuzz;
 
 #[cfg(test)]
+mod llvm;
+
+#[cfg(test)]
 mod simcore {
     mod executor;
     mod memsys;

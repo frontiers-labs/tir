@@ -1,9 +1,9 @@
 //! Parser from an LLVM textual-IR token stream into [`ast`], built with
-//! `chumsky`. Top-level lines other than `define` (target triples, globals,
-//! metadata, attribute groups, `declare`) are skipped; each recognised
-//! instruction is parsed into a typed node, and anything else on an instruction
-//! line becomes [`ast::Inst::Unsupported`] so the module still parses and
-//! conversion can report precisely what it cannot lower.
+//! `chumsky`. The parser reads definitions, declarations, globals, and named
+//! types from one token stream. Unrecognised top-level lines are skipped; each
+//! recognised instruction is parsed into a typed node, and anything else on an
+//! instruction line becomes [`ast::Inst::Unsupported`] so conversion can report
+//! precisely what it cannot lower.
 
 use chumsky::input::ValueInput;
 use chumsky::prelude::*;
@@ -53,22 +53,15 @@ const SKIP: &[&str] = &[
 ];
 
 pub fn parse_module(src: &str) -> Result<Module, Error> {
-    let (without_attributes, source_attributes) = normalize_parameterized_attributes(src);
-    let normalized = normalize_constant_geps(&normalize_switches(&without_attributes)?);
+    let normalized = normalize_constant_geps(&normalize_switches(&normalize_attributes(src))?);
     let tokens = lex(&normalized);
     let eoi = Span::from(normalized.len()..normalized.len());
     let input = tokens.as_slice().map(eoi, |(t, s)| (t, s));
 
     let (out, errors) = module().parse(input).into_output_errors();
     match out {
-        Some(mut module) if errors.is_empty() => {
-            let (named_types, globals, declarations) = parse_top_level(src)?;
-            module.named_types = named_types;
-            module.globals = globals;
-            module.declarations = declarations;
-            module.source_attributes = source_attributes;
-            Ok(module)
-        }
+        Some(Ok(module)) if errors.is_empty() => Ok(module),
+        Some(Err(error)) if errors.is_empty() => Err(error),
         _ => Err(Error::Parse(
             errors
                 .iter()
@@ -79,7 +72,7 @@ pub fn parse_module(src: &str) -> Result<Module, Error> {
     }
 }
 
-fn normalize_parameterized_attributes(src: &str) -> (String, Vec<String>) {
+fn normalize_attributes(src: &str) -> String {
     const NAMES: &[&str] = &[
         "range",
         "captures",
@@ -88,27 +81,12 @@ fn normalize_parameterized_attributes(src: &str) -> (String, Vec<String>) {
         "dereferenceable_or_null",
     ];
     let mut text = src.to_string();
-    let mut attributes = src
-        .split(|character: char| !character.is_ascii_alphanumeric() && character != '_')
-        .filter(|word| {
-            matches!(
-                *word,
-                "nsw"
-                    | "nuw"
-                    | "exact"
-                    | "disjoint"
-                    | "nneg"
-                    | "inbounds"
-                    | "musttail"
-                    | "volatile"
-            )
-        })
-        .map(|word| word.to_string())
-        .collect::<Vec<_>>();
     loop {
         let found = NAMES
             .iter()
-            .filter_map(|name| text.find(&format!("{name}(")).map(|index| (index, *name)))
+            .filter_map(|name| {
+                find_unquoted(&text, &format!("{name}(")).map(|index| (index, *name))
+            })
             .min_by_key(|(index, _)| *index);
         let Some((start, name)) = found else {
             break;
@@ -117,12 +95,30 @@ fn normalize_parameterized_attributes(src: &str) -> (String, Vec<String>) {
         let Some(close) = matching_paren(&text, open) else {
             break;
         };
-        attributes.push(text[start..=close].to_string());
         text.replace_range(start..=close, "");
     }
-    attributes.sort();
-    attributes.dedup();
-    (text, attributes)
+    text
+}
+
+fn find_unquoted(text: &str, needle: &str) -> Option<usize> {
+    let mut quoted = false;
+    let mut escaped = false;
+    for (index, character) in text.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if quoted && character == '\\' {
+            escaped = true;
+            continue;
+        }
+        if character == '"' {
+            quoted = !quoted;
+        } else if !quoted && text[index..].starts_with(needle) {
+            return Some(index);
+        }
+    }
+    None
 }
 
 fn normalize_switches(src: &str) -> Result<String, Error> {
@@ -223,7 +219,7 @@ fn normalize_constant_geps(src: &str) -> String {
 fn innermost_constant_gep(line: &str) -> Option<(usize, usize)> {
     let mut search = 0;
     let mut found = None;
-    while let Some(relative) = line[search..].find("getelementptr") {
+    while let Some(relative) = find_unquoted(&line[search..], "getelementptr") {
         let start = search + relative;
         let open = line[start..].find('(').map(|index| start + index)?;
         let mut depth = 0;
@@ -257,6 +253,12 @@ where
             .then(ty.clone())
             .delimited_by(just(Token::LBracket), just(Token::RBracket))
             .map(|(count, elem)| Type::Array(count, Box::new(elem)));
+        let structure = ty
+            .clone()
+            .separated_by(just(Token::Comma))
+            .collect::<Vec<_>>()
+            .delimited_by(just(Token::LBrace), just(Token::RBrace))
+            .map(Type::Struct);
         choice((
             select! { Token::IntTy(w) => Type::Int(w) },
             select! { Token::Local(n) => Type::Named(n.to_string()) },
@@ -268,6 +270,7 @@ where
                 Token::Ident("double") => Type::Float(64),
             },
             array,
+            structure,
         ))
         .then(just(Token::Star).repeated().collect::<Vec<_>>())
         .map(|(base, stars)| {
@@ -319,7 +322,7 @@ where
     }
 }
 
-fn module<'src, I>() -> impl Parser<'src, I, Module, Extra<'src>>
+fn module<'src, I>() -> impl Parser<'src, I, Result<Module, Error>, Extra<'src>>
 where
     I: ValueInput<'src, Token = Token<'src>, Span = Span>,
 {
@@ -684,8 +687,38 @@ where
         .then_ignore(just(Token::RBrace))
         .map(|(((ret, name), params), items)| build_function(name, ret, params, items));
 
-    // A skipped top-level line: at least one token or a bare newline, always
-    // making progress so the outer `repeated` terminates.
+    choice((
+        function.map(|function| Ok(Some(TopItem::Function(function)))),
+        non_function_top_level(),
+    ))
+    .repeated()
+    .collect::<Vec<_>>()
+    .then_ignore(end())
+    .map(build_module)
+}
+
+fn non_function_top_level<'src, I>()
+-> impl Parser<'src, I, Result<Option<TopItem>, Error>, Extra<'src>>
+where
+    I: ValueInput<'src, Token = Token<'src>, Span = Span>,
+{
+    let named_type = select! { Token::Local(name) => name.to_string() }
+        .then_ignore(just(Token::Eq))
+        .then_ignore(just(Token::Ident("type")))
+        .then(type_parser())
+        .map(|(name, ty)| TopItem::NamedType(name, ty));
+    let top_line = any()
+        .and_is(just(Token::Newline).not())
+        .repeated()
+        .collect::<Vec<_>>()
+        .then_ignore(just(Token::Newline).or_not());
+    let global = select! { Token::Global(name) => name.to_string() }
+        .then_ignore(just(Token::Eq))
+        .then(top_line.clone())
+        .map(|(name, tokens)| parse_global_tokens(name, &tokens).map(TopItem::Global));
+    let declaration = just(Token::Ident("declare"))
+        .ignore_then(top_line)
+        .map(|tokens| parse_declaration_tokens(&tokens).map(TopItem::Declaration));
     let skip_line = choice((
         just(Token::Newline).ignored(),
         any()
@@ -697,18 +730,38 @@ where
             .then_ignore(just(Token::Newline).or_not())
             .ignored(),
     ));
+    choice((
+        named_type.map(|item| Ok(Some(item))),
+        global.map(|item| item.map(Some)),
+        declaration.map(|item| item.map(Some)),
+        skip_line.map(|()| Ok(None)),
+    ))
+}
 
-    choice((function.map(Some), skip_line.map(|()| None)))
-        .repeated()
-        .collect::<Vec<_>>()
-        .then_ignore(end())
-        .map(|items| Module {
-            named_types: Vec::new(),
-            globals: Vec::new(),
-            declarations: Vec::new(),
-            source_attributes: Vec::new(),
-            functions: items.into_iter().flatten().collect(),
-        })
+fn build_module(items: Vec<Result<Option<TopItem>, Error>>) -> Result<Module, Error> {
+    let mut module = Module {
+        named_types: Vec::new(),
+        globals: Vec::new(),
+        declarations: Vec::new(),
+        functions: Vec::new(),
+    };
+    for item in items {
+        match item? {
+            Some(TopItem::NamedType(name, ty)) => module.named_types.push((name, ty)),
+            Some(TopItem::Global(global)) => module.globals.push(global),
+            Some(TopItem::Declaration(declaration)) => module.declarations.push(declaration),
+            Some(TopItem::Function(function)) => module.functions.push(function),
+            None => {}
+        }
+    }
+    Ok(module)
+}
+
+enum TopItem {
+    NamedType(String, Type),
+    Global(Global),
+    Declaration(Declaration),
+    Function(Function),
 }
 
 #[derive(Clone)]
@@ -755,61 +808,71 @@ fn build_function(
     }
 }
 
-type TopLevel = (Vec<(String, Type)>, Vec<Global>, Vec<Declaration>);
-
-fn parse_top_level(src: &str) -> Result<TopLevel, Error> {
-    let mut named_types = Vec::new();
-    let mut globals = Vec::new();
-    let mut declarations = Vec::new();
-    for line in src.lines().map(str::trim) {
-        if line.starts_with('%') && line.contains(" = type ") {
-            let (name, body) = line.split_once(" = type ").unwrap();
-            named_types.push((name[1..].to_string(), parse_type_text(body)?));
-        } else if line.starts_with('@') && line.contains(" = ") {
-            globals.push(parse_global(line)?);
-        } else if line.starts_with("declare ") {
-            declarations.push(parse_declaration(line)?);
-        }
+fn parse_type_tokens(tokens: &[Token<'_>]) -> Result<Type, Error> {
+    let (ty, consumed) = type_prefix(tokens)?;
+    if consumed == tokens.len() {
+        Ok(ty)
+    } else {
+        Err(Error::Parse("invalid type".into()))
     }
-    Ok((named_types, globals, declarations))
 }
 
-fn parse_declaration(line: &str) -> Result<Declaration, Error> {
-    let at = line
-        .find('@')
-        .ok_or_else(|| Error::Parse(format!("invalid declaration: {line}")))?;
-    let prefix = line["declare ".len()..at].trim();
-    let ret = prefix
-        .split_whitespace()
+fn type_prefix(tokens: &[Token<'_>]) -> Result<(Type, usize), Error> {
+    let spanned = tokens
+        .iter()
+        .cloned()
+        .enumerate()
+        .map(|(index, token)| (token, Span::from(index..index + 1)))
+        .collect::<Vec<_>>();
+    let eoi = Span::from(tokens.len()..tokens.len());
+    let input = spanned.as_slice().map(eoi, |(token, span)| (token, span));
+    type_parser()
+        .then(any().repeated().collect::<Vec<_>>())
+        .then_ignore(end())
+        .parse(input)
+        .into_result()
+        .map(|(ty, remainder)| (ty, tokens.len() - remainder.len()))
+        .map_err(|errors| Error::Parse(format!("invalid type: {errors:?}")))
+}
+
+fn parse_declaration_tokens(tokens: &[Token<'_>]) -> Result<Declaration, Error> {
+    let symbol = tokens
+        .iter()
+        .position(|token| matches!(token, Token::Global(_)))
+        .ok_or_else(|| Error::Parse("invalid declaration".into()))?;
+    let (name, after_symbol) = match &tokens[symbol..] {
+        [Token::Global(name), Token::LParen, rest @ ..] => ((*name).to_string(), rest),
+        _ => return Err(Error::Parse("invalid declaration".into())),
+    };
+    let ret = (0..symbol)
         .rev()
-        .find_map(|word| parse_type_text(word).ok())
-        .ok_or_else(|| Error::Parse(format!("invalid declaration return type: {line}")))?;
-    let open = line[at..].find('(').map(|index| at + index).unwrap();
-    let close = matching_paren(line, open)
-        .ok_or_else(|| Error::Parse(format!("unterminated declaration: {line}")))?;
-    let name = line[at + 1..open].to_string();
+        .find_map(|start| parse_type_tokens(&tokens[start..symbol]).ok())
+        .ok_or_else(|| Error::Parse("invalid declaration return type".into()))?;
+    let mut depth = 0;
+    let close = after_symbol
+        .iter()
+        .position(|token| match token {
+            Token::LParen | Token::LBracket | Token::LBrace => {
+                depth += 1;
+                false
+            }
+            Token::RParen if depth == 0 => true,
+            Token::RParen | Token::RBracket | Token::RBrace => {
+                depth -= 1;
+                false
+            }
+            _ => false,
+        })
+        .ok_or_else(|| Error::Parse("unterminated declaration".into()))?;
     let mut variadic = false;
     let mut params = Vec::new();
-    for parameter in split_commas(&line[open + 1..close]) {
-        if parameter.is_empty() {
-            continue;
-        }
-        if parameter == "..." {
+    for parameter in split_token_commas(&after_symbol[..close]) {
+        if matches!(parameter, [Token::Ident("...")]) {
             variadic = true;
-            continue;
+        } else if !parameter.is_empty() {
+            let (ty, _) = type_prefix(parameter)?;
+            params.push(ty);
         }
-        let ty = parameter
-            .split_whitespace()
-            .scan(String::new(), |prefix, word| {
-                if !prefix.is_empty() {
-                    prefix.push(' ');
-                }
-                prefix.push_str(word);
-                Some(prefix.clone())
-            })
-            .find_map(|prefix| parse_type_text(&prefix).ok())
-            .ok_or_else(|| Error::Parse(format!("invalid declaration parameter: {parameter}")))?;
-        params.push(ty);
     }
     Ok(Declaration {
         name,
@@ -836,71 +899,72 @@ fn matching_paren(text: &str, open: usize) -> Option<usize> {
     None
 }
 
-fn parse_global(line: &str) -> Result<Global, Error> {
-    let (name, rest) = line
-        .split_once(" = ")
-        .ok_or_else(|| Error::Parse(format!("invalid global: {line}")))?;
-    let private = rest
-        .split_whitespace()
-        .any(|word| word == "private" || word == "internal");
-    let constant = rest.split_whitespace().any(|word| word == "constant");
-    let marker = if constant { "constant " } else { "global " };
-    let definition = rest
-        .find(marker)
-        .map(|index| &rest[index + marker.len()..])
-        .ok_or_else(|| Error::Parse(format!("unsupported global: {line}")))?;
-    let align = definition
-        .rsplit_once(", align ")
-        .and_then(|(_, value)| value.split_whitespace().next())
-        .and_then(|value| value.parse().ok())
+fn parse_global_tokens(name: String, tokens: &[Token<'_>]) -> Result<Global, Error> {
+    let marker = tokens
+        .iter()
+        .position(|token| matches!(token, Token::Ident("global" | "constant")))
+        .ok_or_else(|| Error::Parse(format!("unsupported global: @{name}")))?;
+    let private = tokens[..marker]
+        .iter()
+        .any(|token| matches!(token, Token::Ident("private" | "internal")));
+    let constant = matches!(tokens[marker], Token::Ident("constant"));
+    let external = tokens[..marker]
+        .iter()
+        .any(|token| matches!(token, Token::Ident("external")));
+    let definition = &tokens[marker + 1..];
+    let (ty, type_len) = type_prefix(definition)
+        .map_err(|_| Error::Parse(format!("invalid global type: @{name}")))?;
+    if has_wide_integer(&ty) {
+        return Err(Error::Parse(format!(
+            "unsupported integer global type: {ty:?}"
+        )));
+    }
+    let align = tokens
+        .windows(2)
+        .rev()
+        .find_map(|pair| match pair {
+            [Token::Ident("align"), Token::Int(value)] if *value >= 0 => Some(*value as u64),
+            _ => None,
+        })
         .unwrap_or(1);
-    let definition = definition.split(", align ").next().unwrap().trim();
-    let (ty, initializer) = if rest.split_whitespace().any(|word| word == "external") {
-        (parse_type_text(definition)?, GlobalInitializer::External)
-    } else {
-        let (ty, initializer) = split_type_value(definition)?;
-        if has_wide_integer(&ty) {
-            return Err(Error::Parse(format!(
-                "unsupported integer global type: {ty:?}"
-            )));
-        }
-        let initializer = if initializer == "zeroinitializer" {
-            GlobalInitializer::Zero
-        } else if initializer == "null" {
-            GlobalInitializer::Null
-        } else if let Some(text) = initializer
-            .strip_prefix("c\"")
-            .and_then(|s| s.strip_suffix('"'))
-        {
-            GlobalInitializer::CString(decode_c_string(text)?)
-        } else if let Ok(value) = initializer.parse() {
-            GlobalInitializer::Integer(value)
-        } else if initializer
-            .parse::<f64>()
-            .is_ok_and(|value| value == 0.0 && !value.is_sign_negative())
-        {
-            GlobalInitializer::Zero
-        } else if initializer.contains("trunc (i64 sub (") {
-            GlobalInitializer::SymbolDifferences(parse_symbol_differences(initializer, &ty)?)
-        } else if initializer.contains('@') {
-            GlobalInitializer::Symbols(parse_absolute_symbols(initializer)?)
-        } else if initializer.starts_with('[') {
-            GlobalInitializer::Bytes(parse_integer_array(initializer, &ty)?)
-        } else {
-            return Err(Error::Parse(format!(
-                "unsupported global initializer: {initializer}"
-            )));
-        };
-        (ty, initializer)
-    };
+    let initializer_tokens = &definition[type_len..];
+    let initializer_tokens = &initializer_tokens
+        [..first_top_level_comma(initializer_tokens).unwrap_or(initializer_tokens.len())];
+    let initializer = parse_global_initializer(initializer_tokens, &ty, external)?;
     Ok(Global {
-        name: name[1..].to_string(),
+        name,
         ty,
         initializer,
         align,
         private,
         constant,
     })
+}
+
+fn parse_global_initializer(
+    tokens: &[Token<'_>],
+    ty: &Type,
+    external: bool,
+) -> Result<GlobalInitializer, Error> {
+    if external {
+        return Ok(GlobalInitializer::External);
+    }
+    match tokens {
+        [Token::Ident("zeroinitializer")] => Ok(GlobalInitializer::Zero),
+        [Token::Ident("null")] => Ok(GlobalInitializer::Null),
+        [Token::CString(text)] => Ok(GlobalInitializer::CString(decode_c_string(text)?)),
+        [Token::Int(value)] => Ok(GlobalInitializer::Integer(*value)),
+        [Token::Float(value)] if *value == 0.0 && !value.is_sign_negative() => {
+            Ok(GlobalInitializer::Zero)
+        }
+        _ if tokens.iter().any(|token| matches!(token, Token::Global(_))) => {
+            parse_symbol_initializer(tokens, ty)
+        }
+        [Token::LBracket, inner @ .., Token::RBracket] => Ok(GlobalInitializer::Bytes(
+            parse_integer_array_tokens(inner, ty)?,
+        )),
+        _ => Err(Error::Parse("unsupported global initializer".into())),
+    }
 }
 
 fn has_wide_integer(ty: &Type) -> bool {
@@ -912,138 +976,137 @@ fn has_wide_integer(ty: &Type) -> bool {
     }
 }
 
-fn parse_symbols(initializer: &str) -> Vec<String> {
-    initializer
-        .split('@')
-        .skip(1)
-        .map(|part| {
-            part.split(|c: char| !(c.is_ascii_alphanumeric() || "._$".contains(c)))
-                .next()
-                .unwrap()
-                .to_string()
-        })
-        .collect()
-}
-
-fn parse_absolute_symbols(initializer: &str) -> Result<Vec<String>, Error> {
-    let entries = initializer
-        .strip_prefix('[')
-        .and_then(|text| text.strip_suffix(']'))
-        .map(split_commas)
-        .unwrap_or_else(|| vec![initializer]);
+fn parse_symbol_initializer(tokens: &[Token<'_>], ty: &Type) -> Result<GlobalInitializer, Error> {
+    let entries = match tokens {
+        [Token::LBracket, inner @ .., Token::RBracket] => split_token_commas(inner),
+        _ => vec![tokens],
+    };
+    let relative = entries.iter().any(|entry| {
+        entry
+            .iter()
+            .any(|token| matches!(token, Token::Ident("trunc")))
+    });
+    if relative {
+        if !matches!(ty, Type::Array(_, element) if **element == Type::Int(32)) {
+            return Err(Error::Parse(
+                "symbol differences require an i32 array".into(),
+            ));
+        }
+        let differences = entries
+            .into_iter()
+            .map(|entry| {
+                if let [
+                    Token::IntTy(32),
+                    Token::Ident("trunc"),
+                    Token::LParen,
+                    Token::IntTy(64),
+                    Token::Ident("sub"),
+                    Token::LParen,
+                    Token::IntTy(64),
+                    Token::Ident("ptrtoint"),
+                    Token::LParen,
+                    Token::Ident("ptr"),
+                    Token::Global(symbol),
+                    Token::Ident("to"),
+                    Token::IntTy(64),
+                    Token::RParen,
+                    Token::Comma,
+                    Token::IntTy(64),
+                    Token::Ident("ptrtoint"),
+                    Token::LParen,
+                    Token::Ident("ptr"),
+                    Token::Global(base),
+                    Token::Ident("to"),
+                    Token::IntTy(64),
+                    Token::RParen,
+                    Token::RParen,
+                    Token::Ident("to"),
+                    Token::IntTy(32),
+                    Token::RParen,
+                ] = entry
+                {
+                    Ok(SymbolDifference {
+                        symbol: (*symbol).to_string(),
+                        base: (*base).to_string(),
+                    })
+                } else {
+                    Err(Error::Parse(
+                        "unsupported symbolic global initializer".into(),
+                    ))
+                }
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        return Ok(GlobalInitializer::SymbolDifferences(differences));
+    }
     entries
         .into_iter()
-        .map(|entry| {
-            let entry = entry.trim();
-            let symbols = parse_symbols(entry);
-            if symbols.len() == 1 && entry.starts_with("ptr @") {
-                Ok(symbols[0].clone())
-            } else {
-                Err(Error::Parse(format!(
-                    "unsupported symbolic global initializer: {entry}"
-                )))
-            }
+        .map(|entry| match entry {
+            [Token::Ident("ptr"), Token::Global(symbol)] => Ok((*symbol).to_string()),
+            _ => Err(Error::Parse(
+                "unsupported symbolic global initializer".into(),
+            )),
         })
-        .collect()
+        .collect::<Result<Vec<_>, _>>()
+        .map(GlobalInitializer::Symbols)
 }
 
-fn parse_symbol_differences(initializer: &str, ty: &Type) -> Result<Vec<SymbolDifference>, Error> {
-    if !matches!(ty, Type::Array(_, element) if **element == Type::Int(32)) {
+fn parse_integer_array_tokens(tokens: &[Token<'_>], ty: &Type) -> Result<Vec<u8>, Error> {
+    let Type::Array(_, element) = ty else {
+        return Err(Error::Parse("array initializer has non-array type".into()));
+    };
+    let Type::Int(width) = element.as_ref() else {
         return Err(Error::Parse(
-            "symbol differences require an i32 array".into(),
+            "unsupported aggregate global initializer".into(),
         ));
+    };
+    let bytes_per_element = width.div_ceil(8) as usize;
+    let mut bytes = Vec::new();
+    for item in split_token_commas(tokens) {
+        let value = item
+            .iter()
+            .find_map(|token| match token {
+                Token::Int(value) => Some(*value),
+                _ => None,
+            })
+            .ok_or_else(|| Error::Parse("invalid integer initializer".into()))?;
+        bytes.extend_from_slice(&value.to_le_bytes()[..bytes_per_element]);
     }
-    let entries = initializer
-        .strip_prefix('[')
-        .and_then(|text| text.strip_suffix(']'))
-        .ok_or_else(|| Error::Parse("symbol differences require an array".into()))?;
-    split_commas(entries)
-        .into_iter()
-        .map(|entry| {
-            let symbols = parse_symbols(entry);
-            if entry.trim().starts_with("i32 trunc (i64 sub (")
-                && entry.trim().ends_with("to i32)")
-                && symbols.len() == 2
-            {
-                Ok(SymbolDifference {
-                    symbol: symbols[0].clone(),
-                    base: symbols[1].clone(),
-                })
-            } else {
-                Err(Error::Parse(format!(
-                    "unsupported symbolic global initializer: {entry}"
-                )))
-            }
-        })
-        .collect()
+    Ok(bytes)
 }
 
-fn split_type_value(text: &str) -> Result<(Type, &str), Error> {
-    for index in 1..text.len() {
-        if !text.is_char_boundary(index) || !text.as_bytes()[index].is_ascii_whitespace() {
-            continue;
-        }
-        if let Ok(ty) = parse_type_text(&text[..index]) {
-            return Ok((ty, text[index..].trim()));
-        }
-    }
-    Err(Error::Parse(format!("expected type and value: {text}")))
-}
-
-fn parse_type_text(text: &str) -> Result<Type, Error> {
-    let text = text.trim();
-    if let Some(width) = text.strip_prefix('i').and_then(|v| v.parse().ok()) {
-        return Ok(Type::Int(width));
-    }
-    match text {
-        "void" => return Ok(Type::Void),
-        "ptr" => return Ok(Type::Ptr(None)),
-        "half" => return Ok(Type::Float(16)),
-        "float" => return Ok(Type::Float(32)),
-        "double" => return Ok(Type::Float(64)),
-        _ => {}
-    }
-    if let Some(name) = text.strip_prefix('%') {
-        return Ok(Type::Named(name.to_string()));
-    }
-    if let Some(inner) = text.strip_prefix('[').and_then(|v| v.strip_suffix(']')) {
-        let (count, elem) = inner
-            .split_once(" x ")
-            .ok_or_else(|| Error::Parse(format!("invalid array type: {text}")))?;
-        return Ok(Type::Array(
-            count
-                .parse()
-                .map_err(|_| Error::Parse(format!("invalid array size: {count}")))?,
-            Box::new(parse_type_text(elem)?),
-        ));
-    }
-    if let Some(inner) = text.strip_prefix('{').and_then(|v| v.strip_suffix('}')) {
-        return split_commas(inner)
-            .into_iter()
-            .map(parse_type_text)
-            .collect::<Result<Vec<_>, _>>()
-            .map(Type::Struct);
-    }
-    Err(Error::Parse(format!("unsupported type: {text}")))
-}
-
-fn split_commas(text: &str) -> Vec<&str> {
+fn split_token_commas<'a, 'src>(tokens: &'a [Token<'src>]) -> Vec<&'a [Token<'src>]> {
     let mut depth = 0i32;
     let mut start = 0;
     let mut parts = Vec::new();
-    for (index, byte) in text.bytes().enumerate() {
-        match byte {
-            b'[' | b'{' | b'(' => depth += 1,
-            b']' | b'}' | b')' => depth -= 1,
-            b',' if depth == 0 => {
-                parts.push(text[start..index].trim());
+    for (index, token) in tokens.iter().enumerate() {
+        match token {
+            Token::LBracket | Token::LBrace | Token::LParen => depth += 1,
+            Token::RBracket | Token::RBrace | Token::RParen => depth -= 1,
+            Token::Comma if depth == 0 => {
+                parts.push(&tokens[start..index]);
                 start = index + 1;
             }
             _ => {}
         }
     }
-    parts.push(text[start..].trim());
+    parts.push(&tokens[start..]);
     parts
+}
+
+fn first_top_level_comma(tokens: &[Token<'_>]) -> Option<usize> {
+    let mut depth = 0i32;
+    tokens.iter().position(|token| match token {
+        Token::LBracket | Token::LBrace | Token::LParen => {
+            depth += 1;
+            false
+        }
+        Token::RBracket | Token::RBrace | Token::RParen => {
+            depth -= 1;
+            false
+        }
+        Token::Comma => depth == 0,
+        _ => false,
+    })
 }
 
 fn decode_c_string(text: &str) -> Result<Vec<u8>, Error> {
@@ -1066,32 +1129,6 @@ fn decode_c_string(text: &str) -> Result<Vec<u8>, Error> {
             .and_then(|digits| u8::from_str_radix(digits, 16).ok())
             .ok_or_else(|| Error::Parse("invalid string escape".into()))?;
         bytes.push(value);
-    }
-    Ok(bytes)
-}
-
-fn parse_integer_array(text: &str, ty: &Type) -> Result<Vec<u8>, Error> {
-    let Type::Array(_, elem) = ty else {
-        return Err(Error::Parse("array initializer has non-array type".into()));
-    };
-    let Type::Int(width) = elem.as_ref() else {
-        return Err(Error::Parse(
-            "unsupported aggregate global initializer".into(),
-        ));
-    };
-    let bytes_per_element = width.div_ceil(8) as usize;
-    let inner = text
-        .strip_prefix('[')
-        .and_then(|value| value.strip_suffix(']'))
-        .ok_or_else(|| Error::Parse("invalid array initializer".into()))?;
-    let mut bytes = Vec::new();
-    for item in split_commas(inner) {
-        let value: i64 = item
-            .split_whitespace()
-            .last()
-            .and_then(|value| value.parse().ok())
-            .ok_or_else(|| Error::Parse(format!("invalid integer initializer: {item}")))?;
-        bytes.extend_from_slice(&value.to_le_bytes()[..bytes_per_element]);
     }
     Ok(bytes)
 }

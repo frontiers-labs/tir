@@ -183,7 +183,6 @@ pub struct Module {
     pub named_types: Vec<(String, Type)>,
     pub globals: Vec<Global>,
     pub declarations: Vec<Declaration>,
-    pub source_attributes: Vec<String>,
     pub functions: Vec<Function>,
 }
 
