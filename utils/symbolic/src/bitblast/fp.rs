@@ -228,9 +228,8 @@ impl<V> Blaster<'_, V> {
         (inexact, half_bit, below)
     }
 
-    /// The conversion is defined on finite values whose truncation fits the
-    /// destination: the exponent stays below the destination's magnitude limit,
-    /// with the signed minimum admitted exactly at the boundary exponent.
+    /// The conversion is defined on finite values whose rounded result fits the
+    /// destination and whose rounding mode is valid.
     pub(super) fn float_to_int_defined(
         &mut self,
         id: NodeId,

@@ -858,7 +858,6 @@ pub struct GuardedRelaxationProofs {
 
 enum GuardedRelaxationProof {
     Proven,
-    Unsupported(String),
 }
 
 /// Prove guarded rule refinement, reporting unsupported encodings separately.
@@ -870,9 +869,6 @@ pub fn prove_guarded_relaxations(rules: &[Rule]) -> Result<GuardedRelaxationProo
             continue;
         };
         match prove_relaxation(rule, guarded).map_err(PassError::InvalidRuleSet)? {
-            GuardedRelaxationProof::Unsupported(reason) => {
-                report.unsupported.push((rule.name.to_string(), reason))
-            }
             GuardedRelaxationProof::Proven => report.proven.push(rule.name.to_string()),
         }
     }
@@ -1100,17 +1096,7 @@ fn prove_float_relaxation(
     if floating {
         match SmtOracle.refines_typed_outcome(&proof_candidate, &proof_guarded, symbol_types) {
             tir::sem::ProofOutcome::Proven => return Some(GuardedRelaxationProof::Proven),
-            tir::sem::ProofOutcome::Unsupported(reason) => {
-                let reason = match reason {
-                    tir::sem::UnsupportedReason::MissingTheory(reason)
-                    | tir::sem::UnsupportedReason::InvalidTypes(reason)
-                    | tir::sem::UnsupportedReason::UnsupportedObligation(reason) => reason,
-                    tir::sem::UnsupportedReason::Timeout => "solver timeout".into(),
-                };
-                if reason.contains("FPToSIRound") || reason.contains("FPToUIRound") {
-                    return Some(GuardedRelaxationProof::Unsupported(reason));
-                }
-            }
+            tir::sem::ProofOutcome::Unsupported(_) => {}
             tir::sem::ProofOutcome::Disproven { .. } => {}
         }
     }
