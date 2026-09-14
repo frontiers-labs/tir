@@ -1,12 +1,9 @@
 ; RUN: tir llvm-import %s | tir opt --verify | filecheck %s
 
-; The data layout, the uncalled `declare`, the global and the trailing
-; metadata carry no instructions, so the module holds the one defined
-; function and nothing else.
-
 ; CHECK: module {
+; CHECK-NEXT: %{{[0-9]+}} = global @g align 1 bytes [0, 0, 0, 0]
 ; CHECK-NEXT: %{{[0-9]+}} = func.func @sum(%{{[0-9]+}}: !i32, %{{[0-9]+}}: !i32) -> !i32 {
-; CHECK-NEXT: %{{[0-9]+}} = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
+; CHECK-NEXT: %{{[0-9]+}} = ptr.alloca {size = 4, align = 4} : !ptr.p
 ; CHECK-NEXT: %{{[0-9]+}} = addi %{{[0-9]+}}, %{{[0-9]+}} : !i32
 ; CHECK-NEXT: %{{[0-9]+}} = constant {value = 1} : !i32
 ; CHECK-NEXT: %{{[0-9]+}} = addi %{{[0-9]+}}, %{{[0-9]+}} : !i32

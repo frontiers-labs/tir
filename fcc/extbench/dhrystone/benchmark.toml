@@ -1,0 +1,4 @@
+sources = ["dhry_1.c", "dhry_2.c"]
+inputs = ["source", "llvm"]
+flags = ["-DTIME"]
+args = ["100000000"]

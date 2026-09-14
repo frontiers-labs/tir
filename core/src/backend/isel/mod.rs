@@ -2709,6 +2709,9 @@ impl InstructionSelectPass {
                 .map(|(index, meta)| {
                     let is_boundary = meta.boundary_like();
                     let mut class = fs.egraph.find(m.bindings[index]);
+                    let low_extract = is_boundary
+                        && meta.demand == cover::BoundaryDemand::Register
+                        && is_low_extract_view(&fs.egraph, class);
                     // A register boundary on a low-extract view reads the
                     // chased source's register, so the cover's edges, the
                     // schedule's dependencies, and availability all target
@@ -2724,6 +2727,7 @@ impl InstructionSelectPass {
                         demand: meta.demand,
                         view_offset: meta.view_offset(),
                         whole_width: meta.whole_width(),
+                        low_extract,
                     }
                 })
                 .collect();

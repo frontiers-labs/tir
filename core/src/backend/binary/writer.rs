@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::fmt::{self, Display};
 
-use tir::builtin::ModuleOp;
+use tir::builtin::{GlobalOp, ModuleOp, SymbolDifference};
 use tir::{BlockId, Context, Operation};
 
 use super::format::ObjectFormatInfo;
@@ -28,6 +28,7 @@ pub enum BinaryEmitError {
     MisalignedTarget { op: String, delta: i64 },
     FixupOutOfRange { op: String, value: i64 },
     SymbolOperandUnsupported { op: String },
+    CannotResolveSymbolDifference { symbol: String, base: String },
 }
 
 impl Display for BinaryEmitError {
@@ -54,6 +55,12 @@ impl Display for BinaryEmitError {
             }
             BinaryEmitError::SymbolOperandUnsupported { op } => {
                 write!(f, "instruction '{op}' cannot take a symbol operand")
+            }
+            BinaryEmitError::CannotResolveSymbolDifference { symbol, base } => {
+                write!(
+                    f,
+                    "symbol difference '{symbol} - {base}' requires definitions in the same section"
+                )
             }
         }
     }
@@ -91,6 +98,7 @@ pub struct ObjectEmission {
     assignment: crate::backend::RegAssignment,
     block_starts: HashMap<BlockId, u64>,
     fixups: Vec<PendingFixup>,
+    symbol_differences: Vec<(usize, SymbolDifference)>,
 }
 
 impl BinaryWriter {
@@ -116,6 +124,7 @@ impl BinaryWriter {
         fmt: &ObjectFormatInfo,
     ) -> Result<ObjectFile, BinaryEmitError> {
         self.resolve_fixups(&mut state, fmt)?;
+        resolve_symbol_differences(&mut state)?;
         Ok(state.obj)
     }
 
@@ -141,6 +150,9 @@ impl BinaryWriter {
         state: &mut ObjectEmission,
         fmt: &ObjectFormatInfo,
     ) -> Result<(), BinaryEmitError> {
+        if let Some(global) = op.clone().as_op::<GlobalOp>() {
+            return emit_global(&global, state, fmt);
+        }
         match crate::backend::asm_item(op) {
             AsmItem::Skip => Ok(()),
             AsmItem::Section(section) => {
@@ -306,6 +318,113 @@ impl BinaryWriter {
         }
         Ok(())
     }
+}
+
+fn resolve_symbol_differences(state: &mut ObjectEmission) -> Result<(), BinaryEmitError> {
+    let symbols: HashMap<_, _> = state
+        .obj
+        .symbols
+        .iter()
+        .map(|symbol| (symbol.name.as_str(), (symbol.section, symbol.value)))
+        .collect();
+    for (section, difference) in &state.symbol_differences {
+        let error = || BinaryEmitError::CannotResolveSymbolDifference {
+            symbol: difference.symbol.clone(),
+            base: difference.base.clone(),
+        };
+        let (Some(symbol_section), symbol) = symbols
+            .get(difference.symbol.as_str())
+            .copied()
+            .ok_or_else(error)?
+        else {
+            return Err(error());
+        };
+        let (Some(base_section), base) = symbols
+            .get(difference.base.as_str())
+            .copied()
+            .ok_or_else(error)?
+        else {
+            return Err(error());
+        };
+        if symbol_section != base_section {
+            return Err(error());
+        }
+        let offset = difference.offset as usize;
+        let width = difference.width as usize;
+        state.obj.sections[*section].data[offset..offset + width]
+            .copy_from_slice(&symbol.wrapping_sub(base).to_le_bytes()[..width]);
+    }
+    Ok(())
+}
+
+fn emit_global(
+    global: &GlobalOp,
+    state: &mut ObjectEmission,
+    fmt: &ObjectFormatInfo,
+) -> Result<(), BinaryEmitError> {
+    if global.is_external() {
+        return Ok(());
+    }
+    let align = global
+        .align()
+        .expect("global definitions have an alignment");
+    let bytes = global.bytes();
+    let name = global
+        .section()
+        .unwrap_or_else(|| if bytes.is_some() { ".data" } else { ".bss" }.to_string());
+    let section = ensure_section(&mut state.obj, &name);
+    let data = &mut state.obj.sections[section];
+    let offset = (data.data.len() as u64).div_ceil(align) * align;
+    data.data.resize(offset as usize, 0);
+    let size = match bytes {
+        Some(bytes) => {
+            let size = bytes.len() as u64;
+            data.data.extend(bytes);
+            size
+        }
+        None => {
+            let size = global.size().expect("zero-filled globals have a size");
+            data.data.resize((offset + size) as usize, 0);
+            size
+        }
+    };
+    data.align = data.align.max(align);
+    for (relative, symbol, addend, width) in global.relocations() {
+        let r_type = u8::try_from(width)
+            .ok()
+            .and_then(fmt.absolute_reloc)
+            .ok_or_else(|| BinaryEmitError::UnsupportedOp {
+                op: GlobalOp::name().to_string(),
+            })?;
+        data.relocs.push(ObjReloc {
+            offset: offset + relative,
+            symbol,
+            r_type,
+            addend,
+        });
+    }
+    for mut difference in
+        global
+            .symbol_differences()
+            .map_err(|_| BinaryEmitError::CannotEncode {
+                op: GlobalOp::name().to_string(),
+            })?
+    {
+        difference.offset += offset;
+        state.symbol_differences.push((section, difference));
+    }
+    state.obj.symbols.push(ObjSymbol {
+        name: global.sym_name(),
+        section: Some(section),
+        value: offset,
+        size,
+        binding: match tir::symbol_table::visibility_of(global) {
+            tir::Visibility::Private => SymBinding::Local,
+            tir::Visibility::Public => SymBinding::Global,
+        },
+        kind: SymKind::Object,
+    });
+    Ok(())
 }
 
 /// Append a data directive's bytes to the current section. String directives

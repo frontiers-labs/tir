@@ -14,6 +14,8 @@ once before measurement. Linux and macOS provide the supported RSS collectors.
 cargo xtask extbench compile --package fcc --bench coremark
 cargo xtask extbench run -p fcc -b coremark
 cargo xtask extbench compile -p fcc -b 'core*' --compiler clang
+cargo xtask extbench compile -p fcc -b coremark --input llvm
+cargo xtask extbench run -p fcc -b coremark --input llvm
 cargo xtask extbench compile --list
 cargo xtask extbench compile -p fcc --no-build --output samples.json
 cargo xtask extbench compile -p fcc --baseline samples.json --output current.json
@@ -24,6 +26,9 @@ names with a glob. `--compiler` selects one configured compiler. `--list` lists
 benchmarks without fetching or building. `--suite path/to/bench_suite.toml`
 selects an explicit suite. By default the command discovers suite manifests in
 the workspace, excluding hidden, generated, and LIT `Inputs` directories.
+`--input llvm` asks Clang to prepare LLVM IR and benchmarks compilers configured
+to consume it. The default, `--input source`, keeps the existing source path.
+The FCC suite enables LLVM input for CoreMark and Dhrystone.
 
 ## Benchmark directories
 
@@ -35,6 +40,7 @@ A local benchmark manifest can contain:
 
 ```toml
 sources = ["*.c", "!unused.c"]
+inputs = ["source", "llvm"]
 flags = ["-I."]
 link_flags = ["-lm"]
 args = ["1000"]
@@ -46,6 +52,10 @@ source. Flags, link flags, and arguments default to empty lists. Levels default
 to `-O0` and `-O2`; a suite for another language can use its own level strings.
 Sources are sorted before compilation. Each argument remains one argument,
 including arguments containing spaces.
+
+`inputs` lists the accepted input paths. It defaults to `["source"]`, so existing
+benchmarks retain their behavior. The runner omits benchmarks that do not list
+the requested input. CoreMark and Dhrystone list both paths.
 
 `separate = true` links and executes every source individually. GCC torture uses
 this setting. By default all source objects link into one executable.
@@ -78,6 +88,7 @@ package = "another-package"
 
 [[compiler]]
 name = "compiler-name"
+input = "llvm"
 build = ["cargo", "build", "--release", "-p", "another-package"]
 compile = ["compiler", "{level}", "{flags}", "-c", "{source}", "-o", "{output}"]
 link = ["compiler", "{objects}", "{link_flags}", "-o", "{output}"]
@@ -85,11 +96,14 @@ link = ["compiler", "{objects}", "{link_flags}", "-o", "{output}"]
 
 `build` is optional and runs from the workspace root. Compile and link commands
 run from the source directory. The runner imposes no source extension or
-language flags. Compiler commands and benchmarks define those choices.
+language flags. Compiler commands and benchmarks define those choices. `input`
+defaults to `source`; set it to `llvm` for a compiler that consumes the suite's
+prepared LLVM IR.
 
 | Placeholder | Value |
 | --- | --- |
 | `{root}` | Absolute workspace directory |
+| `{arch}` | Host architecture in TIR target spelling |
 | `{source}` | Absolute source path for compilation |
 | `{output}` | Absolute output path for compilation or linking |
 | `{level}` | Current benchmark level |
@@ -106,6 +120,21 @@ requires an explicit shell command in the configuration.
 `[compiler.metrics]` maps metric names to regular expressions. The first capture
 group must contain a finite nonnegative number. The runner sums repeated matches
 from compiler stderr. Missing configured metrics fail the measurement.
+
+Suites that support LLVM input also configure the producer:
+
+```toml
+[llvm]
+prepare = ["clang", "{level}", "{flags}", "-S", "-emit-llvm", "{source}", "-o", "{output}"]
+version = ["clang", "--version"]
+```
+
+The runner expands the same source flags and optimization level used by the
+source path. It runs IR preparation before the measured compiler command. Run
+mode also keeps benchmark compilation and linking outside the execution timer.
+TIR reports `import_ms` for input reading, LLVM import, target setup, and
+verification, and `backend_ms` for lowering and object emission. Clang's IR
+preparation time is outside both intervals.
 
 FCC enables `TIR_TIME_PASSES` and reports three disjoint wall-clock intervals:
 
@@ -144,17 +173,20 @@ extbench runner does not retain raw compiler stderr in its result JSON.
 
 ## Results and baselines
 
-JSON records the mode, host architecture and OS, and samples keyed by package,
-benchmark, compiler, level, and source. Each sample contains `wall_ms`,
+JSON records the mode, input kind, host architecture and OS, and samples keyed
+by package, benchmark, compiler, level, and source. LLVM results also record the
+producer version, command settings, and a SHA-256 digest of the prepared IR.
+Each sample contains `wall_ms`,
 `peak_rss_kb`, and a map of configured metrics. RSS is the maximum reported by
 `time`, including waited-for child processes. It is not the sum of simultaneous
 process memory. Run samples for a linked benchmark use `source = "run"`.
 
-Baseline comparisons use shared sample keys. Totals are grouped by package,
-compiler, and level. GCC and Clang are still reported, but only FCC fails the
-command when total wall time grows by more than 10%, summed per-source peak RSS
+Baseline comparisons require the same input kind, then use shared sample keys.
+Totals are grouped by package, compiler, and level. GCC and Clang are still
+reported, but only FCC and TIR fail the command when total wall time grows by
+more than 10%, summed per-source peak RSS
 grows by more than 2%, or one peak grows by more than 35%. Host compilers move
-with the runner; FCC is the compiler this tree builds. The command rejects a
+with the runner; FCC and TIR are the compilers this tree builds. The command rejects a
 different mode or a baseline with no matching samples. New samples remain in the
 output but do not contribute to the baseline comparison. Use the same host,
 compiler versions, flags, and inputs for comparable results. Samples are written

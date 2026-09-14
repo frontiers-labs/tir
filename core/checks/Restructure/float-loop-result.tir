@@ -1,0 +1,16 @@
+// RUN: tir opt --pass restructure-nodes,verify-deps --verify %s | filecheck %s
+
+// CHECK: scf.loop
+// CHECK: ptr.load
+
+module {
+  %f = func.func @read_last(%slot: !ptr.p, %again: !i1) -> !f64 {
+    cfg.br ^head
+  ^head:
+    %value = ptr.load %slot : !f64
+    cfg.cond_br %again, ^head, ^exit
+  ^exit:
+    func.return %value
+  }
+  module_end
+}

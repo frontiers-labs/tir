@@ -4,13 +4,29 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use globset::Glob;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Copy, Default, clap::ValueEnum, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum Input {
+    #[default]
+    Source,
+    Llvm,
+}
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Suite {
     pub suite: Package,
+    pub llvm: Option<LlvmInput>,
     pub compiler: Vec<Compiler>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LlvmInput {
+    pub prepare: Vec<String>,
+    pub version: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -23,6 +39,8 @@ pub struct Package {
 #[serde(deny_unknown_fields)]
 pub struct Compiler {
     pub name: String,
+    #[serde(default)]
+    pub input: Input,
     #[serde(default)]
     pub build: Vec<String>,
     pub compile: Vec<String>,
@@ -111,6 +129,8 @@ fn visit(directory: &Path, manifests: &mut Vec<PathBuf>) -> anyhow::Result<()> {
 #[serde(deny_unknown_fields)]
 pub struct Benchmark {
     pub sources: Vec<String>,
+    #[serde(default = "inputs")]
+    pub inputs: Vec<Input>,
     #[serde(default)]
     pub flags: Vec<String>,
     #[serde(default)]
@@ -126,6 +146,14 @@ pub struct Benchmark {
     pub source: Option<GitSource>,
 }
 
+pub fn supports_input(selection: &Selection, input: Input) -> anyhow::Result<bool> {
+    Ok(
+        read::<Benchmark>(&selection.directory.join("benchmark.toml"))?
+            .inputs
+            .contains(&input),
+    )
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GitSource {
@@ -137,6 +165,10 @@ pub struct GitSource {
 
 fn levels() -> Vec<String> {
     vec!["-O0".into(), "-O2".into()]
+}
+
+fn inputs() -> Vec<Input> {
+    vec![Input::Source]
 }
 
 pub struct Prepared {

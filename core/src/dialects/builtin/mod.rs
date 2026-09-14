@@ -59,7 +59,7 @@ dialect! {
             FnToPtrOp,
             PtrToFnOp,
         ],
-        types: [IntegerType, FloatType, IndexType, UnitType, TupleType, FnType, StateType],
+        types: [IntegerType, FloatType, IndexType, UnitType, TupleType, FnType, VarArgsType, StateType],
     }
 }
 

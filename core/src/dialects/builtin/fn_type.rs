@@ -6,6 +6,50 @@ use crate::{Context, Error, IRFormatter, Type, TypeId, parse::Span};
 
 use crate as tir;
 
+/// The open tail of a function's parameter list, independent of its source language.
+pub struct VarArgsType;
+
+impl VarArgsType {
+    #[allow(clippy::new_ret_no_self)]
+    pub fn new(context: &Context) -> TypeId {
+        context.get_type_id(Arc::new(Self))
+    }
+}
+
+impl TypeConstraint for VarArgsType {}
+
+impl Type for VarArgsType {
+    fn dialect(&self) -> &'static str {
+        "builtin"
+    }
+
+    fn parse_key() -> &'static str {
+        "varargs"
+    }
+
+    fn parse<'src>(
+        _mnemonic: &str,
+        _parser: &mut crate::parse::text::Parser<'src>,
+        context: &Context,
+    ) -> Result<TypeId, (Span, Error)> {
+        Ok(Self::new(context))
+    }
+
+    fn print(&self, fmt: &mut IRFormatter<'_>) -> Result<(), std::fmt::Error> {
+        fmt.write("varargs")
+    }
+
+    fn is_variadic_tail(&self) -> bool {
+        true
+    }
+
+    fn eq(&self, other: &dyn Type) -> bool {
+        (other as &dyn Any).is::<Self>()
+    }
+
+    fn hash(&self, _state: &mut dyn std::hash::Hasher) {}
+}
+
 /// The type of a function value, written `!fn<(!i32, !i32) -> !i32>`.
 ///
 /// A λ node produces one of these, and a call consumes it, so "which function

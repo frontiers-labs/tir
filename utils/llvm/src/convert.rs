@@ -4,23 +4,81 @@
 //! silent drop.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 use tir::BlockHandle;
 
-use tir::builtin::{self, FnType, IntegerType, UnitType, ops as bops};
+use tir::attributes::{AttributeValue, Predicate};
+use tir::builtin::{self, FloatType, FnType, IntegerType, UnitType, VarArgsType, ops as bops};
 use tir::cfg::ops as cbops;
+use tir::fp::{
+    ArithmeticSemantics, ComparisonBehavior, ComparisonSemantics, Exceptions,
+    IntegerConversionSemantics, InvalidConversion, Rounding, RoundingMode, SubnormalMode,
+    ops as fp,
+};
 use tir::func::ops as func_ops;
 use tir::ptr::{PtrType, ops as pops};
-use tir::{Context, Operand, Symbol, TypeId, ValueId};
+use tir::{Context, Operand, Operation, Symbol, TypeId, ValueId};
 
 use crate::ast::{self, BinOp, CastOp, Inst, Type};
 use crate::error::Error;
 
 pub fn import(context: &Context, module: &ast::Module) -> Result<builtin::ModuleOp, Error> {
-    let m = bops::module(context, None).build();
+    let mut module_builder = bops::module(context, None);
+    if !module.source_attributes.is_empty() {
+        module_builder = module_builder.attr(
+            "source_attributes",
+            AttributeValue::Array(
+                module
+                    .source_attributes
+                    .iter()
+                    .map(|attribute| AttributeValue::Str(attribute.clone().into()))
+                    .collect::<Vec<_>>()
+                    .into(),
+            ),
+        );
+    }
+    let m = module_builder.build();
     let builder = m.body();
     let mut callees = Callees::default();
+    let named_types: HashMap<_, _> = module.named_types.iter().cloned().collect();
+    let globals = lower_globals(context, module, &builder, &named_types)?;
+    let mut function_types: HashMap<_, _> = module
+        .functions
+        .iter()
+        .map(|function| {
+            (
+                function.name.clone(),
+                (
+                    function
+                        .params
+                        .iter()
+                        .map(|param| param.ty.clone())
+                        .collect(),
+                    function.ret.clone(),
+                    false,
+                ),
+            )
+        })
+        .collect();
+    function_types.extend(module.declarations.iter().map(|declaration| {
+        (
+            declaration.name.clone(),
+            (
+                declaration.params.clone(),
+                declaration.ret.clone(),
+                declaration.variadic,
+            ),
+        )
+    }));
     for func in &module.functions {
-        builder.append_op(lower_function(context, func, &mut callees)?);
+        builder.append_op(lower_function(
+            context,
+            func,
+            &mut callees,
+            &globals,
+            &named_types,
+            &function_types,
+        )?);
     }
     let bindings = callees.bind(context, &m, &builder);
     builder.append_op(bops::module_end(context).build());
@@ -52,7 +110,7 @@ impl Callees {
     }
 
     /// Pair every placeholder with the λ it names, declaring the functions this
-    /// module only calls: LLVM `declare` lines carry no body and are not parsed.
+    /// module only calls whose declarations have not appeared in the input.
     fn bind(
         self,
         context: &Context,
@@ -95,13 +153,146 @@ fn lower_type(context: &Context, ty: &Type) -> TypeId {
         Type::Void => UnitType::new(context),
         Type::Ptr(None) => PtrType::opaque(context),
         Type::Ptr(Some(pointee)) => PtrType::typed(context, lower_type(context, pointee)),
+        Type::Float(16) => FloatType::f16(context),
+        Type::Float(32) => FloatType::f32(context),
+        Type::Float(64) => FloatType::f64(context),
+        Type::Float(width) => panic!("unsupported LLVM float width {width}"),
+        Type::Array(_, _) | Type::Named(_) | Type::Struct(_) => UnitType::new(context),
     }
+}
+
+fn lower_globals(
+    context: &Context,
+    module: &ast::Module,
+    body: &BlockHandle,
+    named: &HashMap<String, Type>,
+) -> Result<HashMap<String, ValueId>, Error> {
+    let mut values = HashMap::new();
+    for global in &module.globals {
+        let size = type_size(&global.ty, named)?;
+        let mut builder = match &global.initializer {
+            ast::GlobalInitializer::External => bops::global_external(context, &global.name),
+            ast::GlobalInitializer::Zero | ast::GlobalInitializer::Null => {
+                bops::global_zero(context, &global.name, size, global.align)
+            }
+            ast::GlobalInitializer::Integer(value) => {
+                let mut bytes = vec![0; size as usize];
+                let raw = value.to_le_bytes();
+                let copied = bytes.len().min(raw.len());
+                bytes[..copied].copy_from_slice(&raw[..copied]);
+                bops::global_bytes(context, &global.name, bytes, global.align)
+            }
+            ast::GlobalInitializer::CString(bytes) => {
+                bops::global_bytes(context, &global.name, bytes.clone(), global.align)
+            }
+            ast::GlobalInitializer::Bytes(bytes) => {
+                bops::global_bytes(context, &global.name, bytes.clone(), global.align)
+            }
+            ast::GlobalInitializer::Symbols(symbols) => {
+                let bytes = vec![0; size as usize];
+                let relocations = symbols
+                    .iter()
+                    .enumerate()
+                    .map(|(index, symbol)| {
+                        AttributeValue::Dict(Box::new(std::collections::BTreeMap::from([
+                            ("offset".into(), AttributeValue::UInt(index as u64 * 8)),
+                            ("symbol".into(), AttributeValue::Str(symbol.clone().into())),
+                            ("addend".into(), AttributeValue::Int(0)),
+                            ("width".into(), AttributeValue::UInt(8)),
+                        ])))
+                    })
+                    .collect::<Vec<_>>();
+                bops::global_bytes(context, &global.name, bytes, global.align)
+                    .attr("relocations", AttributeValue::Array(relocations.into()))
+            }
+            ast::GlobalInitializer::SymbolDifferences(differences) => {
+                let entries = differences
+                    .iter()
+                    .enumerate()
+                    .map(|(index, difference)| {
+                        AttributeValue::Dict(Box::new(std::collections::BTreeMap::from([
+                            ("offset".into(), AttributeValue::UInt(index as u64 * 4)),
+                            (
+                                "symbol".into(),
+                                AttributeValue::Str(difference.symbol.clone().into()),
+                            ),
+                            (
+                                "base".into(),
+                                AttributeValue::Str(difference.base.clone().into()),
+                            ),
+                            ("width".into(), AttributeValue::UInt(4)),
+                        ])))
+                    })
+                    .collect::<Vec<_>>();
+                bops::global_bytes(context, &global.name, vec![0; size as usize], global.align)
+                    .attr("symbol_differences", AttributeValue::Array(entries.into()))
+            }
+        };
+        if global.private {
+            builder = builder.attr(
+                "sym_visibility",
+                AttributeValue::Str("private".to_string().into()),
+            );
+        }
+        if global.constant {
+            builder = builder.attr("section", AttributeValue::Str(".rodata".to_string().into()));
+        }
+        let op = builder.build();
+        values.insert(global.name.clone(), op.address());
+        body.append_op(op);
+    }
+    Ok(values)
+}
+
+fn type_size(ty: &Type, named: &HashMap<String, Type>) -> Result<u64, Error> {
+    Ok(match ty {
+        Type::Int(width) | Type::Float(width) => u64::from(width.div_ceil(8)),
+        Type::Ptr(_) => 8,
+        Type::Array(count, elem) => count * type_size(elem, named)?,
+        Type::Named(name) => type_size(
+            named
+                .get(name)
+                .ok_or_else(|| Error::Parse(format!("undefined type %{name}")))?,
+            named,
+        )?,
+        Type::Struct(fields) => struct_layout(fields, named)?.0,
+        Type::Void => 0,
+    })
+}
+
+fn type_align(ty: &Type, named: &HashMap<String, Type>) -> Result<u64, Error> {
+    Ok(match ty {
+        Type::Array(_, elem) => type_align(elem, named)?,
+        Type::Named(name) => type_align(
+            named
+                .get(name)
+                .ok_or_else(|| Error::Parse(format!("undefined type %{name}")))?,
+            named,
+        )?,
+        Type::Struct(fields) => struct_layout(fields, named)?.1,
+        _ => type_size(ty, named)?.clamp(1, 8),
+    })
+}
+
+fn struct_layout(fields: &[Type], named: &HashMap<String, Type>) -> Result<(u64, u64), Error> {
+    let mut size: u64 = 0;
+    let mut max_align = 1;
+    for field in fields {
+        let align = type_align(field, named)?;
+        size = size.div_ceil(align) * align;
+        size += type_size(field, named)?;
+        max_align = max_align.max(align);
+    }
+    Ok((size.div_ceil(max_align) * max_align, max_align))
 }
 
 fn lower_function(
     context: &Context,
     func: &ast::Function,
     callees: &mut Callees,
+    globals: &HashMap<String, ValueId>,
+    named: &HashMap<String, Type>,
+    function_types: &HashMap<String, (Vec<Type>, Type, bool)>,
 ) -> Result<tir::func::FuncOp, Error> {
     let region = context.create_region();
     let mut values: HashMap<String, ValueId> = HashMap::new();
@@ -113,16 +304,42 @@ fn lower_function(
         values.insert(param.name.clone(), value.id());
         entry_args.push(value);
     }
+    for block in &func.blocks {
+        for inst in &block.insts {
+            if let Inst::Phi { ty, incoming, .. } = inst {
+                for (operand, _) in incoming {
+                    if let ast::Operand::Ref(name) = operand {
+                        let Some(name) = (!values.contains_key(name)).then_some(name) else {
+                            continue;
+                        };
+                        values.insert(
+                            name.clone(),
+                            context.create_value(lower_type(context, ty), None).id(),
+                        );
+                    }
+                }
+            }
+        }
+    }
 
     // Pre-create every block so branches can resolve targets by label.
     let mut blocks: Vec<BlockHandle> = Vec::new();
     let mut by_label: HashMap<String, BlockHandle> = HashMap::new();
     for (i, block) in func.blocks.iter().enumerate() {
-        let args = if i == 0 {
+        let mut args = if i == 0 {
             std::mem::take(&mut entry_args)
         } else {
             Vec::new()
         };
+        for inst in &block.insts {
+            if let Inst::Phi { result, ty, .. } = inst {
+                let value = context.create_value(lower_type(context, ty), None);
+                if let Some(old) = values.insert(result.clone(), value.id()) {
+                    context.replace_value_uses(old, value.id());
+                }
+                args.push(value);
+            }
+        }
         let created = context.create_block(args);
         region.add_block(created.id());
         if let Some(label) = &block.label {
@@ -146,16 +363,77 @@ fn lower_function(
     )
     .build();
 
-    for (block, created) in func.blocks.iter().zip(blocks.iter()) {
+    let phis: HashMap<_, _> = func
+        .blocks
+        .iter()
+        .filter_map(|block| {
+            block
+                .label
+                .as_ref()
+                .map(|label| (label.clone(), &block.insts))
+        })
+        .collect();
+    let implicit_entry_label = func
+        .params
+        .iter()
+        .filter_map(|param| param.name.parse::<u64>().ok())
+        .max()
+        .map_or(0, |value| value + 1)
+        .to_string();
+    for (index, (block, created)) in func.blocks.iter().zip(blocks.iter()).enumerate() {
         let builder = created.clone();
+        let current_label = block.label.clone().unwrap_or_else(|| {
+            if index == 0 {
+                implicit_entry_label.clone()
+            } else {
+                index.to_string()
+            }
+        });
         for inst in &block.insts {
-            lower_inst(context, inst, &builder, &mut values, &by_label, callees)?;
+            let result_name = inst_result_name(inst);
+            let old_result = result_name.and_then(|name| values.get(name).copied());
+            lower_inst(
+                context,
+                inst,
+                &builder,
+                &mut values,
+                &by_label,
+                callees,
+                globals,
+                named,
+                function_types,
+                &current_label,
+                &phis,
+            )?;
+            if let Some((old, new)) = old_result
+                .zip(result_name.and_then(|name| values.get(name).copied()))
+                .filter(|(old, new)| old != new)
+            {
+                context.replace_value_uses(old, new);
+            }
         }
     }
 
     Ok(op)
 }
 
+fn inst_result_name(inst: &Inst) -> Option<&str> {
+    match inst {
+        Inst::Binary { result, .. }
+        | Inst::ICmp { result, .. }
+        | Inst::FCmp { result, .. }
+        | Inst::Cast { result, .. }
+        | Inst::Alloca { result, .. }
+        | Inst::Load { result, .. }
+        | Inst::GetElementPtr { result, .. }
+        | Inst::Phi { result, .. }
+        | Inst::Select { result, .. } => Some(result),
+        Inst::Call { result, .. } => result.as_deref(),
+        _ => None,
+    }
+}
+
+#[allow(clippy::cognitive_complexity, clippy::too_many_arguments)]
 fn lower_inst(
     context: &Context,
     inst: &Inst,
@@ -163,6 +441,11 @@ fn lower_inst(
     values: &mut HashMap<String, ValueId>,
     by_label: &HashMap<String, BlockHandle>,
     callees: &mut Callees,
+    globals: &HashMap<String, ValueId>,
+    named: &HashMap<String, Type>,
+    function_types: &HashMap<String, (Vec<Type>, Type, bool)>,
+    current_label: &str,
+    phis: &HashMap<String, &Vec<Inst>>,
 ) -> Result<(), Error> {
     // Resolve an operand to a value, materialising a `builtin.constant` for
     // inline integer literals (TIR has no inline constants).
@@ -172,16 +455,122 @@ fn lower_inst(
                 ast::Operand::Ref(name) => *values
                     .get(name)
                     .ok_or_else(|| Error::UndefinedValue(name.clone()))?,
-                ast::Operand::ConstInt(v) => {
-                    let c = bops::constant(context, *v, lower_type(context, $ty)).build();
-                    let id = c.result();
-                    body.append_op(c);
+                ast::Operand::ConstInt(v) => match $ty {
+                    Type::Float(32) => {
+                        let op = fp::ConstantOpBuilder::new(context)
+                            .bits((*v as f32).to_bits() as u64)
+                            .result_type(FloatType::f32(context))
+                            .build();
+                        let id = op.result();
+                        body.append_op(op);
+                        id
+                    }
+                    Type::Float(64) => {
+                        let op = fp::ConstantOpBuilder::new(context)
+                            .bits((*v as f64).to_bits())
+                            .result_type(FloatType::f64(context))
+                            .build();
+                        let id = op.result();
+                        body.append_op(op);
+                        id
+                    }
+                    _ => {
+                        let c = bops::constant(context, *v, lower_type(context, $ty)).build();
+                        let id = c.result();
+                        body.append_op(c);
+                        id
+                    }
+                },
+                ast::Operand::ConstFloat(value) => {
+                    let (bits, ty) = match $ty {
+                        Type::Float(32) => (
+                            (value.to_owned() as f32).to_bits() as u64,
+                            FloatType::f32(context),
+                        ),
+                        Type::Float(64) => (value.to_bits(), FloatType::f64(context)),
+                        _ => {
+                            return Err(Error::Unsupported(
+                                "floating literal with non-floating type".into(),
+                            ));
+                        }
+                    };
+                    let op = fp::ConstantOpBuilder::new(context)
+                        .bits(bits)
+                        .result_type(ty)
+                        .build();
+                    let id = op.result();
+                    body.append_op(op);
                     id
+                }
+                ast::Operand::Global(name) => match globals.get(name) {
+                    Some(value) => *value,
+                    None => {
+                        let (params, ret, variadic) = function_types
+                            .get(name)
+                            .ok_or_else(|| Error::UndefinedValue(format!("@{name}")))?;
+                        let mut params = params
+                            .iter()
+                            .map(|ty| lower_type(context, ty))
+                            .collect::<Vec<_>>();
+                        if *variadic {
+                            params.push(VarArgsType::new(context));
+                        }
+                        let ret = lower_type(context, ret);
+                        let function = callees.value(context, name, &params, ret);
+                        let op =
+                            bops::fn_to_ptr(context, function, PtrType::opaque(context)).build();
+                        let result = op.result();
+                        body.append_op(op);
+                        result
+                    }
+                },
+                ast::Operand::Null => {
+                    let o = pops::null(context, PtrType::opaque(context)).build();
+                    let id = o.result();
+                    body.append_op(o);
+                    id
+                }
+                ast::Operand::Undef => match $ty {
+                    Type::Ptr(_) => {
+                        let op = pops::null(context, PtrType::opaque(context)).build();
+                        let id = op.result();
+                        body.append_op(op);
+                        id
+                    }
+                    Type::Float(32) | Type::Float(64) => {
+                        let op = fp::ConstantOpBuilder::new(context)
+                            .bits(0)
+                            .result_type(lower_type(context, $ty))
+                            .build();
+                        let id = op.result();
+                        body.append_op(op);
+                        id
+                    }
+                    _ => constant(context, body, 0, lower_type(context, $ty)),
+                },
+                ast::Operand::GetElementPtr {
+                    source,
+                    base,
+                    indices,
+                } => {
+                    let base = match base.as_ref() {
+                        ast::Operand::Ref(name) => *values
+                            .get(name)
+                            .ok_or_else(|| Error::UndefinedValue(name.clone()))?,
+                        ast::Operand::Global(name) => *globals
+                            .get(name)
+                            .ok_or_else(|| Error::UndefinedValue(format!("@{name}")))?,
+                        _ => return Err(Error::Unsupported("nested getelementptr base".into())),
+                    };
+                    let offset = lower_gep_offset(context, body, source, indices, values, named)?;
+                    let op = pops::ptradd(context, base, offset, PtrType::opaque(context)).build();
+                    let result = op.result();
+                    body.append(op.id());
+                    result
                 }
             }
         };
     }
-
     match inst {
         Inst::Binary {
             result,
@@ -193,25 +582,7 @@ fn lower_inst(
             let t = lower_type(context, ty);
             let l = val!(lhs, ty);
             let r = val!(rhs, ty);
-            macro_rules! bin {
-                ($f:path) => {{
-                    let o = $f(context, l, r, t).build();
-                    let id = o.result();
-                    body.append_op(o);
-                    id
-                }};
-            }
-            let id = match op {
-                BinOp::Add => bin!(bops::addi),
-                BinOp::Sub => bin!(bops::subi),
-                BinOp::Mul => bin!(bops::muli),
-                BinOp::And => bin!(bops::andi),
-                BinOp::Or => bin!(bops::ori),
-                BinOp::Xor => bin!(bops::xori),
-                BinOp::Shl => bin!(bops::shli),
-                BinOp::LShr => bin!(bops::shrui),
-                BinOp::AShr => bin!(bops::shrsi),
-            };
+            let id = lower_binary(context, body, *op, l, r, t);
             values.insert(result.clone(), id);
         }
         Inst::ICmp {
@@ -223,50 +594,52 @@ fn lower_inst(
         } => {
             let l = val!(lhs, ty);
             let r = val!(rhs, ty);
-            let i1 = IntegerType::new(context, 1);
-            let o = bops::cmpi(context, l, r, pred.as_str(), i1).build();
-            values.insert(result.clone(), o.result());
-            body.append_op(o);
+            let id = lower_icmp(context, body, pred, ty, l, r)?;
+            values.insert(result.clone(), id);
+        }
+        Inst::FCmp {
+            result,
+            pred,
+            ty,
+            lhs,
+            rhs,
+        } => {
+            let lhs = val!(lhs, ty);
+            let rhs = val!(rhs, ty);
+            let predicate = parse_predicate(pred)?;
+            let op = fp::CmpOpBuilder::new(context)
+                .lhs(lhs)
+                .rhs(rhs)
+                .predicate(predicate)
+                .semantics(comparison_semantics(context))
+                .result_type(IntegerType::new(context, 1))
+                .build();
+            values.insert(result.clone(), op.result());
+            body.append_op(op);
         }
         Inst::Cast {
             result,
             op,
+            non_negative,
             from,
             value,
             to,
         } => {
             let input = val!(value, from);
-            let to_ty = lower_type(context, to);
-            let id = match op {
-                CastOp::SExt => {
-                    let o = bops::extsi(context, input, to_ty).build();
-                    let id = o.result();
-                    body.append_op(o);
-                    id
-                }
-                CastOp::ZExt => {
-                    let o = bops::extui(context, input, to_ty).build();
-                    let id = o.result();
-                    body.append_op(o);
-                    id
-                }
-                CastOp::Trunc => {
-                    let o = bops::trunci(context, input, to_ty).build();
-                    let id = o.result();
-                    body.append_op(o);
-                    id
-                }
-            };
+            let id = lower_cast(
+                context,
+                body,
+                *op,
+                *non_negative,
+                input,
+                lower_type(context, to),
+            );
             values.insert(result.clone(), id);
         }
-        Inst::Alloca { result, ty } => {
-            let ptr_ty = PtrType::typed(context, lower_type(context, ty));
-            let bytes = match ty {
-                Type::Int(width) => u64::from(width.div_ceil(8)),
-                Type::Ptr(_) => 8,
-                _ => 8,
-            };
-            let o = pops::alloca(context, bytes, bytes, ptr_ty).build();
+        Inst::Alloca { result, ty, align } => {
+            let bytes = type_size(ty, named)?;
+            let align = align.unwrap_or(type_align(ty, named)?);
+            let o = pops::alloca(context, bytes, align, PtrType::opaque(context)).build();
             values.insert(result.clone(), o.result());
             body.append_op(o);
         }
@@ -281,12 +654,43 @@ fn lower_inst(
             let p = val!(ptr, &Type::Ptr(None));
             body.append_op(pops::store(context, v, p).build());
         }
+        Inst::GetElementPtr {
+            result,
+            source,
+            base,
+            indices,
+        } => {
+            let base = val!(base, &Type::Ptr(None));
+            let offset = lower_gep_offset(context, body, source, indices, values, named)?;
+            let op = pops::ptradd(context, base, offset, PtrType::opaque(context)).build();
+            values.insert(result.clone(), op.result());
+            body.append_op(op);
+        }
+        Inst::Phi { .. } => {}
+        Inst::Select {
+            result,
+            cond,
+            ty,
+            if_true,
+            if_false,
+        } => {
+            let cond = val!(cond, &Type::Int(1));
+            let t = val!(if_true, ty);
+            let f = val!(if_false, ty);
+            let selected_value = lower_select(context, body, cond, t, f, ty)?;
+            values.insert(result.clone(), selected_value);
+        }
         Inst::Br { dest } => {
-            let target = by_label
-                .get(dest)
-                .ok_or_else(|| Error::UndefinedBlock(dest.clone()))?
-                .id();
-            body.append_op(cbops::br(context, vec![], target).build());
+            lower_br(
+                context,
+                body,
+                dest,
+                current_label,
+                phis,
+                values,
+                globals,
+                by_label,
+            )?;
         }
         Inst::CondBr {
             cond,
@@ -294,15 +698,18 @@ fn lower_inst(
             if_false,
         } => {
             let c = val!(cond, &Type::Int(1));
-            let t = by_label
-                .get(if_true)
-                .ok_or_else(|| Error::UndefinedBlock(if_true.clone()))?
-                .id();
-            let f = by_label
-                .get(if_false)
-                .ok_or_else(|| Error::UndefinedBlock(if_false.clone()))?
-                .id();
-            body.append_op(cbops::cond_br(context, c, vec![], vec![], t, f).build());
+            lower_cond_br(
+                context,
+                body,
+                c,
+                if_true,
+                if_false,
+                current_label,
+                phis,
+                values,
+                globals,
+                by_label,
+            )?;
         }
         Inst::Ret { value } => match value {
             None => {
@@ -324,20 +731,645 @@ fn lower_inst(
                 arg_ids.push(val!(op, ty));
             }
             let ret_ty = lower_type(context, ret);
+            match callee {
+                ast::Operand::Global(name) if name.starts_with("llvm.") => {
+                    let value = lower_intrinsic(context, body, name, &arg_ids, ret, ret_ty)?;
+                    if let (Some(result), Some(value)) = (result, value) {
+                        values.insert(result.clone(), value);
+                    }
+                    return Ok(());
+                }
+                _ => {}
+            }
             let arg_types: Vec<_> = arg_ids
                 .iter()
                 .map(|&arg| context.get_value(arg).ty())
                 .collect();
-            let callee = callees.value(context, callee.as_str(), &arg_types, ret_ty);
+            let signature = FnType::new(context, &arg_types, ret_ty);
+            let callee = match callee {
+                ast::Operand::Global(name) => {
+                    let declared = function_types.get(name);
+                    let mut params = declared
+                        .map(|(params, _, _)| {
+                            params
+                                .iter()
+                                .map(|ty| lower_type(context, ty))
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_else(|| arg_types.clone());
+                    if declared.is_some_and(|(_, _, variadic)| *variadic) {
+                        params.push(VarArgsType::new(context));
+                    }
+                    callees.value(context, name.as_str(), &params, ret_ty)
+                }
+                ast::Operand::Ref(name) => {
+                    let address = *values
+                        .get(name)
+                        .ok_or_else(|| Error::UndefinedValue(name.clone()))?;
+                    let op = bops::ptr_to_fn(context, address, signature).build();
+                    let result = op.result();
+                    body.append_op(op);
+                    result
+                }
+                _ => return Err(Error::Unsupported("invalid call target".into())),
+            };
             let o = func_ops::call(context, callee, arg_ids, ret_ty).build();
             if let Some(name) = result {
                 values.insert(name.clone(), o.result());
             }
             body.append_op(o);
         }
-        Inst::Unsupported(opcode) => {
-            return Err(Error::Unsupported(opcode.clone()));
-        }
+        Inst::Unsupported(opcode) => return Err(Error::Unsupported(opcode.clone())),
     }
     Ok(())
+}
+fn lower_binary(
+    context: &Context,
+    body: &BlockHandle,
+    kind: BinOp,
+    lhs: ValueId,
+    rhs: ValueId,
+    ty: TypeId,
+) -> ValueId {
+    macro_rules! integer {
+        ($builder:path) => {{
+            body.append_op($builder(context, lhs, rhs, ty).build())
+                .result()
+        }};
+    }
+    let operation: Box<dyn Operation> = match kind {
+        BinOp::Add => return integer!(bops::addi),
+        BinOp::Sub => return integer!(bops::subi),
+        BinOp::Mul => return integer!(bops::muli),
+        BinOp::And => return integer!(bops::andi),
+        BinOp::Or => return integer!(bops::ori),
+        BinOp::Xor => return integer!(bops::xori),
+        BinOp::Shl => return integer!(bops::shli),
+        BinOp::LShr => return integer!(bops::shrui),
+        BinOp::AShr => return integer!(bops::shrsi),
+        BinOp::SDiv => return integer!(bops::divsi),
+        BinOp::UDiv => return integer!(bops::divui),
+        BinOp::SRem => return integer!(bops::remsi),
+        BinOp::URem => return integer!(bops::remui),
+        kind => {
+            let semantics = arithmetic_semantics(context);
+            match kind {
+                BinOp::FAdd => Box::new(
+                    fp::AddOpBuilder::new(context)
+                        .lhs(lhs)
+                        .rhs(rhs)
+                        .semantics(semantics)
+                        .result_type(ty)
+                        .build(),
+                ),
+                BinOp::FSub => Box::new(
+                    fp::SubOpBuilder::new(context)
+                        .lhs(lhs)
+                        .rhs(rhs)
+                        .semantics(semantics)
+                        .result_type(ty)
+                        .build(),
+                ),
+                BinOp::FMul => Box::new(
+                    fp::MulOpBuilder::new(context)
+                        .lhs(lhs)
+                        .rhs(rhs)
+                        .semantics(semantics)
+                        .result_type(ty)
+                        .build(),
+                ),
+                BinOp::FDiv => Box::new(
+                    fp::DivOpBuilder::new(context)
+                        .lhs(lhs)
+                        .rhs(rhs)
+                        .semantics(semantics)
+                        .result_type(ty)
+                        .build(),
+                ),
+                _ => unreachable!(),
+            }
+        }
+    };
+    let result = operation.value_results()[0];
+    body.append(operation.id());
+    result
+}
+
+#[allow(clippy::too_many_arguments)]
+fn lower_br(
+    context: &Context,
+    body: &BlockHandle,
+    destination: &str,
+    current_label: &str,
+    phis: &HashMap<String, &Vec<Inst>>,
+    values: &HashMap<String, ValueId>,
+    globals: &HashMap<String, ValueId>,
+    by_label: &HashMap<String, BlockHandle>,
+) -> Result<(), Error> {
+    let target = by_label
+        .get(destination)
+        .ok_or_else(|| Error::UndefinedBlock(destination.into()))?
+        .id();
+    let args = phi_arguments(
+        context,
+        body,
+        destination,
+        current_label,
+        phis,
+        values,
+        globals,
+    )?;
+    body.append_op(cbops::br(context, args, target).build());
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn lower_cond_br(
+    context: &Context,
+    body: &BlockHandle,
+    condition: ValueId,
+    if_true: &str,
+    if_false: &str,
+    current_label: &str,
+    phis: &HashMap<String, &Vec<Inst>>,
+    values: &HashMap<String, ValueId>,
+    globals: &HashMap<String, ValueId>,
+    by_label: &HashMap<String, BlockHandle>,
+) -> Result<(), Error> {
+    let true_block = by_label
+        .get(if_true)
+        .ok_or_else(|| Error::UndefinedBlock(if_true.into()))?
+        .id();
+    let false_block = by_label
+        .get(if_false)
+        .ok_or_else(|| Error::UndefinedBlock(if_false.into()))?
+        .id();
+    let true_args = phi_arguments(context, body, if_true, current_label, phis, values, globals)?;
+    let false_args = phi_arguments(
+        context,
+        body,
+        if_false,
+        current_label,
+        phis,
+        values,
+        globals,
+    )?;
+    body.append_op(
+        cbops::cond_br(
+            context,
+            condition,
+            true_args,
+            false_args,
+            true_block,
+            false_block,
+        )
+        .build(),
+    );
+    Ok(())
+}
+
+fn lower_intrinsic(
+    context: &Context,
+    body: &BlockHandle,
+    name: &str,
+    args: &[ValueId],
+    ret: &Type,
+    ret_ty: TypeId,
+) -> Result<Option<ValueId>, Error> {
+    if name.starts_with("llvm.lifetime.") || name == "llvm.assume" {
+        return Ok(None);
+    }
+    if name.starts_with("llvm.memcpy.") {
+        body.append_op(pops::memcpy(context, args[0], args[1], args[2]).build());
+        return Ok(None);
+    }
+    if name.starts_with("llvm.memset.") {
+        body.append_op(pops::memset(context, args[0], args[1], args[2]).build());
+        return Ok(None);
+    }
+    if name.starts_with("llvm.umax.") {
+        let cmp = lower_icmp(context, body, "uge", ret, args[0], args[1])?;
+        return lower_select(context, body, cmp, args[0], args[1], ret).map(Some);
+    }
+    if name == "llvm.load.relative.i64" {
+        let address = body
+            .append_op(pops::ptradd(context, args[0], args[1], PtrType::opaque(context)).build())
+            .result();
+        let relative = body
+            .append_op(pops::load(context, address, IntegerType::new(context, 32)).build())
+            .result();
+        let relative = body
+            .append_op(bops::extsi(context, relative, IntegerType::new(context, 64)).build())
+            .result();
+        return Ok(Some(
+            body.append_op(pops::ptradd(context, args[0], relative, ret_ty).build())
+                .result(),
+        ));
+    }
+    Err(Error::Unsupported(format!("intrinsic {name}")))
+}
+
+fn constant(context: &Context, body: &BlockHandle, value: i64, ty: TypeId) -> ValueId {
+    let op = bops::constant(context, value, ty).build();
+    let result = op.result();
+    body.append_op(op);
+    result
+}
+
+fn lower_select(
+    context: &Context,
+    body: &BlockHandle,
+    cond: ValueId,
+    mut if_true: ValueId,
+    mut if_false: ValueId,
+    ty: &Type,
+) -> Result<ValueId, Error> {
+    let result_ty = lower_type(context, ty);
+    let work_ty = match ty {
+        Type::Ptr(_) => {
+            let int_ty = IntegerType::new(context, 64);
+            let null = body.append_op(pops::null(context, PtrType::opaque(context)).build());
+            if_true = body
+                .append_op(pops::ptrdiff(context, if_true, null.result(), int_ty).build())
+                .result();
+            if_false = body
+                .append_op(pops::ptrdiff(context, if_false, null.result(), int_ty).build())
+                .result();
+            int_ty
+        }
+        Type::Float(width) => {
+            let int_ty = IntegerType::new(context, *width);
+            if_true = body
+                .append_op(bops::bitcast(context, if_true, int_ty).build())
+                .result();
+            if_false = body
+                .append_op(bops::bitcast(context, if_false, int_ty).build())
+                .result();
+            int_ty
+        }
+        Type::Int(_) => result_ty,
+        _ => return Err(Error::Unsupported("aggregate select".into())),
+    };
+    let mask = if context.get_value(cond).ty() == work_ty {
+        cond
+    } else {
+        body.append_op(bops::extsi(context, cond, work_ty).build())
+            .result()
+    };
+    let selected_true = body
+        .append_op(bops::andi(context, if_true, mask, work_ty).build())
+        .result();
+    let inverted = body
+        .append_op(bops::xori(context, mask, constant(context, body, -1, work_ty), work_ty).build())
+        .result();
+    let selected_false = body
+        .append_op(bops::andi(context, if_false, inverted, work_ty).build())
+        .result();
+    let selected = body
+        .append_op(bops::ori(context, selected_true, selected_false, work_ty).build())
+        .result();
+    Ok(match ty {
+        Type::Ptr(_) => {
+            let null = body.append_op(pops::null(context, PtrType::opaque(context)).build());
+            body.append_op(pops::ptradd(context, null.result(), selected, result_ty).build())
+                .result()
+        }
+        Type::Float(_) => body
+            .append_op(bops::bitcast(context, selected, result_ty).build())
+            .result(),
+        _ => selected,
+    })
+}
+
+fn lower_icmp(
+    context: &Context,
+    body: &BlockHandle,
+    predicate: &str,
+    ty: &Type,
+    lhs: ValueId,
+    rhs: ValueId,
+) -> Result<ValueId, Error> {
+    let result_ty = IntegerType::new(context, 1);
+    let predicate = parse_integer_predicate(predicate)?;
+    Ok(if matches!(ty, Type::Ptr(_)) {
+        body.append_op(
+            pops::CmpOpBuilder::new(context)
+                .lhs(lhs)
+                .rhs(rhs)
+                .predicate(predicate)
+                .result_type(result_ty)
+                .build(),
+        )
+        .result()
+    } else {
+        body.append_op(
+            bops::CmpIOpBuilder::new(context)
+                .lhs(lhs)
+                .rhs(rhs)
+                .predicate(predicate)
+                .result_type(result_ty)
+                .build(),
+        )
+        .result()
+    })
+}
+
+fn lower_cast(
+    context: &Context,
+    body: &BlockHandle,
+    cast: CastOp,
+    non_negative: bool,
+    input: ValueId,
+    result_ty: TypeId,
+) -> ValueId {
+    macro_rules! append {
+        ($op:expr) => {{ body.append_op($op).result() }};
+    }
+    match cast {
+        CastOp::SExt => append!(bops::extsi(context, input, result_ty).build()),
+        CastOp::ZExt => append!(bops::extui(context, input, result_ty).build()),
+        CastOp::Trunc => append!(bops::trunci(context, input, result_ty).build()),
+        CastOp::PtrToInt => {
+            let null = append!(pops::null(context, PtrType::opaque(context)).build());
+            append!(pops::ptrdiff(context, input, null, result_ty).build())
+        }
+        CastOp::IntToPtr => {
+            let null = append!(pops::null(context, PtrType::opaque(context)).build());
+            append!(pops::ptradd(context, null, input, result_ty).build())
+        }
+        CastOp::SIToFP | CastOp::UIToFP => {
+            let semantics = arithmetic_semantics(context);
+            let op: Box<dyn Operation> = if cast == CastOp::SIToFP || non_negative {
+                Box::new(
+                    fp::FromSiOpBuilder::new(context)
+                        .input(input)
+                        .semantics(semantics)
+                        .result_type(result_ty)
+                        .build(),
+                )
+            } else {
+                Box::new(
+                    fp::FromUiOpBuilder::new(context)
+                        .input(input)
+                        .semantics(semantics)
+                        .result_type(result_ty)
+                        .build(),
+                )
+            };
+            let result = op.value_results()[0];
+            body.append(op.id());
+            result
+        }
+        CastOp::FPToSI | CastOp::FPToUI => {
+            let semantics = integer_conversion_semantics(context);
+            let result_data = context.get_type_data(result_ty);
+            let result_width = (result_data.as_ref() as &dyn std::any::Any)
+                .downcast_ref::<IntegerType>()
+                .map(IntegerType::width);
+            if cast == CastOp::FPToUI && result_width.is_some_and(|width| width < 64) {
+                let wide_ty = IntegerType::new(context, 64);
+                let wide = body
+                    .append_op(
+                        fp::ToSiOpBuilder::new(context)
+                            .input(input)
+                            .semantics(semantics)
+                            .result_type(wide_ty)
+                            .build(),
+                    )
+                    .result();
+                return append!(bops::trunci(context, wide, result_ty).build());
+            }
+            let op: Box<dyn Operation> = if cast == CastOp::FPToSI {
+                Box::new(
+                    fp::ToSiOpBuilder::new(context)
+                        .input(input)
+                        .semantics(semantics)
+                        .result_type(result_ty)
+                        .build(),
+                )
+            } else {
+                Box::new(
+                    fp::ToUiOpBuilder::new(context)
+                        .input(input)
+                        .semantics(semantics)
+                        .result_type(result_ty)
+                        .build(),
+                )
+            };
+            let result = op.value_results()[0];
+            body.append(op.id());
+            result
+        }
+        CastOp::FPExt | CastOp::FPTrunc => append!(
+            fp::ConvertOpBuilder::new(context)
+                .input(input)
+                .semantics(arithmetic_semantics(context))
+                .result_type(result_ty)
+                .build()
+        ),
+    }
+}
+
+fn phi_arguments(
+    context: &Context,
+    body: &BlockHandle,
+    destination: &str,
+    predecessor: &str,
+    phis: &HashMap<String, &Vec<Inst>>,
+    values: &HashMap<String, ValueId>,
+    globals: &HashMap<String, ValueId>,
+) -> Result<Vec<ValueId>, Error> {
+    phis.get(destination)
+        .into_iter()
+        .flat_map(|insts| insts.iter())
+        .filter_map(|inst| match inst {
+            Inst::Phi { ty, incoming, .. } => Some((ty, incoming)),
+            _ => None,
+        })
+        .map(|(ty, incoming)| {
+            let original_predecessor = predecessor
+                .strip_prefix("llvm.switch.next.")
+                .and_then(|suffix| suffix.rsplit_once('.'))
+                .and_then(|(prefix, _)| prefix.rsplit_once('.'))
+                .map(|(original, _)| original);
+            let operand = incoming
+                .iter()
+                .find(|(_, block)| {
+                    block == predecessor
+                        || original_predecessor.is_some_and(|original| block == original)
+                })
+                .map(|(operand, _)| operand)
+                .ok_or_else(|| {
+                    Error::Parse(format!(
+                        "phi in %{destination} has no incoming value from %{predecessor}"
+                    ))
+                })?;
+            match operand {
+                ast::Operand::Ref(name) => values
+                    .get(name)
+                    .copied()
+                    .ok_or_else(|| Error::UndefinedValue(name.clone())),
+                ast::Operand::ConstInt(value) => {
+                    Ok(constant(context, body, *value, lower_type(context, ty)))
+                }
+                ast::Operand::Null => {
+                    let op = pops::null(context, PtrType::opaque(context)).build();
+                    let result = op.result();
+                    body.append_op(op);
+                    Ok(result)
+                }
+                ast::Operand::Global(name) => globals
+                    .get(name)
+                    .copied()
+                    .ok_or_else(|| Error::UndefinedValue(format!("@{name}"))),
+                _ => Err(Error::Unsupported("non-integer phi operand".into())),
+            }
+        })
+        .collect()
+}
+
+fn lower_gep_offset(
+    context: &Context,
+    body: &BlockHandle,
+    source: &Type,
+    indices: &[(Type, ast::Operand)],
+    values: &HashMap<String, ValueId>,
+    named: &HashMap<String, Type>,
+) -> Result<ValueId, Error> {
+    let i64_ty = IntegerType::new(context, 64);
+    let mut offset = constant(context, body, 0, i64_ty);
+    let mut current = source.clone();
+    for (position, (index_ty, index)) in indices.iter().enumerate() {
+        let (scale, next, direct) = gep_step(&current, position, index, named)?;
+        if direct {
+            let addend = constant(context, body, scale as i64, i64_ty);
+            let add = bops::addi(context, offset, addend, i64_ty).build();
+            offset = add.result();
+            body.append_op(add);
+            current = next;
+            continue;
+        }
+        let index = match index {
+            ast::Operand::ConstInt(value) => constant(context, body, *value, i64_ty),
+            ast::Operand::Ref(name) => {
+                let value = *values
+                    .get(name)
+                    .ok_or_else(|| Error::UndefinedValue(name.clone()))?;
+                match index_ty {
+                    Type::Int(64) => value,
+                    Type::Int(_) => {
+                        let op = bops::extsi(context, value, i64_ty).build();
+                        let result = op.result();
+                        body.append_op(op);
+                        result
+                    }
+                    _ => return Err(Error::Unsupported("non-integer getelementptr index".into())),
+                }
+            }
+            _ => return Err(Error::Unsupported("non-integer getelementptr index".into())),
+        };
+        let scale = constant(context, body, scale as i64, i64_ty);
+        let product = bops::muli(context, index, scale, i64_ty).build();
+        let product_value = product.result();
+        body.append_op(product);
+        let add = bops::addi(context, offset, product_value, i64_ty).build();
+        offset = add.result();
+        body.append_op(add);
+        current = next;
+    }
+    Ok(offset)
+}
+
+fn gep_step(
+    current: &Type,
+    position: usize,
+    index: &ast::Operand,
+    named: &HashMap<String, Type>,
+) -> Result<(u64, Type, bool), Error> {
+    if position == 0 {
+        return Ok((type_size(current, named)?, current.clone(), false));
+    }
+    let current = match current {
+        Type::Named(name) => named
+            .get(name)
+            .ok_or_else(|| Error::Parse(format!("undefined type %{name}")))?,
+        other => other,
+    };
+    match current {
+        Type::Array(_, elem) => Ok((type_size(elem, named)?, (**elem).clone(), false)),
+        Type::Struct(fields) => {
+            let ast::Operand::ConstInt(field) = index else {
+                return Err(Error::Unsupported(
+                    "dynamic struct getelementptr index".into(),
+                ));
+            };
+            let field = usize::try_from(*field)
+                .ok()
+                .and_then(|field| fields.get(field).map(|ty| (field, ty)))
+                .ok_or_else(|| Error::Parse("struct getelementptr index out of range".into()))?;
+            let mut offset: u64 = 0;
+            for ty in &fields[..field.0] {
+                let align = type_align(ty, named)?;
+                offset = offset.div_ceil(align) * align + type_size(ty, named)?;
+            }
+            let align = type_align(field.1, named)?;
+            offset = offset.div_ceil(align) * align;
+            Ok((offset, field.1.clone(), true))
+        }
+        scalar => Ok((type_size(scalar, named)?, scalar.clone(), false)),
+    }
+}
+
+fn arithmetic_semantics(context: &Context) -> Arc<tir::fp::Semantics> {
+    context.intern_fp_semantics(ArithmeticSemantics::strict(
+        RoundingMode::TiesToEven,
+        Exceptions::Ignore,
+    ))
+}
+
+fn comparison_semantics(context: &Context) -> Arc<tir::fp::Semantics> {
+    context.intern_fp_semantics(tir::fp::Semantics::Comparison(ComparisonSemantics {
+        behavior: ComparisonBehavior::Quiet,
+        exceptions: Exceptions::Ignore,
+        subnormals: SubnormalMode::Gradual,
+    }))
+}
+
+fn integer_conversion_semantics(context: &Context) -> Arc<tir::fp::Semantics> {
+    context.intern_fp_semantics(tir::fp::Semantics::IntegerConversion(
+        IntegerConversionSemantics {
+            rounding: Rounding::Fixed(RoundingMode::TowardZero),
+            exceptions: Exceptions::Ignore,
+            subnormals: SubnormalMode::Gradual,
+            invalid: InvalidConversion::Indeterminate,
+        },
+    ))
+}
+
+fn parse_predicate(predicate: &str) -> Result<Predicate, Error> {
+    Ok(match predicate {
+        "oeq" => Predicate::Oeq,
+        "ogt" => Predicate::Ogt,
+        "oge" => Predicate::Oge,
+        "olt" => Predicate::Olt,
+        "ole" => Predicate::Ole,
+        "une" => Predicate::Une,
+        _ => return Err(Error::Unsupported(format!("fcmp {predicate}"))),
+    })
+}
+
+fn parse_integer_predicate(predicate: &str) -> Result<Predicate, Error> {
+    Ok(match predicate {
+        "eq" => Predicate::Eq,
+        "ne" => Predicate::Ne,
+        "slt" => Predicate::Slt,
+        "sgt" => Predicate::Sgt,
+        "sle" => Predicate::Sle,
+        "sge" => Predicate::Sge,
+        "ult" => Predicate::Ult,
+        "ugt" => Predicate::Ugt,
+        "ule" => Predicate::Ule,
+        "uge" => Predicate::Uge,
+        _ => return Err(Error::Unsupported(format!("pointer icmp {predicate}"))),
+    })
 }

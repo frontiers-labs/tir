@@ -1,0 +1,12 @@
+// RUN: tir mc --march=x86_64 --filetype=obj-ascii %s | filecheck %s
+
+// CHECK: .section .rodata
+// CHECK: table:
+// CHECK: [0x00, 0x00, 0x00, 0x00, 0xFC, 0xFF, 0xFF, 0xFF, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
+
+module {
+  %before = global private @before align 4 section ".rodata" bytes [0, 0, 0, 0]
+  %table = global private @table align 4 section ".rodata" bytes [0, 0, 0, 0, 0, 0, 0, 0] symbol_differences [{offset = 0, symbol = "before", base = "table", width = 4}, {offset = 4, symbol = "after", base = "table", width = 4}]
+  %after = global private @after align 4 section ".rodata" bytes [0, 0, 0, 0]
+  module_end
+}

@@ -1,2 +1,3 @@
 sources = ["*.c"]
+inputs = ["source", "llvm"]
 levels = ["-O0"]

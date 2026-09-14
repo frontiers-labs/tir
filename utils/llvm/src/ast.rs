@@ -12,6 +12,10 @@ pub enum Type {
     Ptr(Option<Box<Type>>),
     /// `void`
     Void,
+    Float(u32),
+    Array(u64, Box<Type>),
+    Named(String),
+    Struct(Vec<Type>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -20,6 +24,15 @@ pub enum Operand {
     Ref(String),
     /// An inline integer literal; materialised as a `builtin.constant` on lowering.
     ConstInt(i64),
+    ConstFloat(f64),
+    Global(String),
+    Null,
+    Undef,
+    GetElementPtr {
+        source: Type,
+        base: Box<Operand>,
+        indices: Vec<(Type, Operand)>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -33,6 +46,14 @@ pub enum BinOp {
     Shl,
     LShr,
     AShr,
+    SDiv,
+    UDiv,
+    SRem,
+    URem,
+    FAdd,
+    FSub,
+    FMul,
+    FDiv,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -40,6 +61,14 @@ pub enum CastOp {
     SExt,
     ZExt,
     Trunc,
+    PtrToInt,
+    IntToPtr,
+    SIToFP,
+    UIToFP,
+    FPToSI,
+    FPToUI,
+    FPExt,
+    FPTrunc,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -58,9 +87,17 @@ pub enum Inst {
         lhs: Operand,
         rhs: Operand,
     },
+    FCmp {
+        result: String,
+        pred: String,
+        ty: Type,
+        lhs: Operand,
+        rhs: Operand,
+    },
     Cast {
         result: String,
         op: CastOp,
+        non_negative: bool,
         from: Type,
         value: Operand,
         to: Type,
@@ -68,6 +105,7 @@ pub enum Inst {
     Alloca {
         result: String,
         ty: Type,
+        align: Option<u64>,
     },
     Load {
         result: String,
@@ -78,6 +116,24 @@ pub enum Inst {
         ty: Type,
         value: Operand,
         ptr: Operand,
+    },
+    GetElementPtr {
+        result: String,
+        source: Type,
+        base: Operand,
+        indices: Vec<(Type, Operand)>,
+    },
+    Phi {
+        result: String,
+        ty: Type,
+        incoming: Vec<(Operand, String)>,
+    },
+    Select {
+        result: String,
+        cond: Operand,
+        ty: Type,
+        if_true: Operand,
+        if_false: Operand,
     },
     Br {
         dest: String,
@@ -93,7 +149,7 @@ pub enum Inst {
     Call {
         result: Option<String>,
         ret: Type,
-        callee: String,
+        callee: Operand,
         args: Vec<(Type, Operand)>,
     },
     /// An instruction the parser recognised structurally but that has no TIR
@@ -124,5 +180,45 @@ pub struct Function {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Module {
+    pub named_types: Vec<(String, Type)>,
+    pub globals: Vec<Global>,
+    pub declarations: Vec<Declaration>,
+    pub source_attributes: Vec<String>,
     pub functions: Vec<Function>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Declaration {
+    pub name: String,
+    pub ret: Type,
+    pub params: Vec<Type>,
+    pub variadic: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Global {
+    pub name: String,
+    pub ty: Type,
+    pub initializer: GlobalInitializer,
+    pub align: u64,
+    pub private: bool,
+    pub constant: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum GlobalInitializer {
+    External,
+    Zero,
+    Integer(i64),
+    CString(Vec<u8>),
+    Null,
+    Symbols(Vec<String>),
+    SymbolDifferences(Vec<SymbolDifference>),
+    Bytes(Vec<u8>),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SymbolDifference {
+    pub symbol: String,
+    pub base: String,
 }

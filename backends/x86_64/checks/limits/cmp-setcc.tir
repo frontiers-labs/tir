@@ -11,9 +11,31 @@ module {
     %2 = cmpi %0, %1 {predicate = "slt"} : !i1
     func.return %2
   }
+  %fn_eq_i16 = func.func @eq_i16(%0: !i16) -> !i1 {
+    %1 = constant {value = 0} : !i16
+    %2 = cmpi %0, %1 {predicate = "eq"} : !i1
+    func.return %2
+  }
+  %fn_slt_i16 = func.func @slt_i16(%0: !i16, %1: !i16) -> !i1 {
+    %2 = cmpi %0, %1 {predicate = "slt"} : !i1
+    func.return %2
+  }
+  %fn_slt_i8 = func.func @slt_i8(%0: !i8, %1: !i8) -> !i1 {
+    %2 = cmpi %0, %1 {predicate = "slt"} : !i1
+    func.return %2
+  }
   module_end
 }
 
 // CHECK: asm.symbol {name = "f"
 // CHECK: x86_64.cmp
+// CHECK: x86_64.setl
+// CHECK: asm.symbol {name = "eq_i16"
+// CHECK: x86_64.cmp_imm16
+// CHECK: x86_64.sete
+// CHECK: asm.symbol {name = "slt_i16"
+// CHECK: x86_64.cmp16
+// CHECK: x86_64.setl
+// CHECK: asm.symbol {name = "slt_i8"
+// CHECK: x86_64.cmp8
 // CHECK: x86_64.setl

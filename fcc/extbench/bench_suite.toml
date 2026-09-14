@@ -1,6 +1,10 @@
 [suite]
 package = "fcc"
 
+[llvm]
+prepare = ["clang", "-std=gnu17", "{level}", "{flags}", "-fno-vectorize", "-fno-slp-vectorize", "-S", "-emit-llvm", "-Xclang", "-disable-O0-optnone", "{source}", "-o", "{output}"]
+version = ["clang", "--version"]
+
 [[compiler]]
 name = "fcc"
 build = ["cargo", "build", "--release", "-p", "fcc", "--bin", "fcc"]
@@ -14,6 +18,20 @@ TIR_TIME_PASSES = "1"
 frontend_ms = 'fcc-time: frontend_ms=([0-9.]+)'
 passes_ms = 'fcc-time: frontend_ms=[0-9.]+ passes_ms=([0-9.]+)'
 backend_ms = 'fcc-time: frontend_ms=[0-9.]+ passes_ms=[0-9.]+ backend_ms=([0-9.]+)'
+
+[[compiler]]
+name = "tir"
+input = "llvm"
+build = ["cargo", "build", "--release", "-p", "tir-tools"]
+compile = ["{root}/target/release/tir", "mc", "--march", "{arch}", "--filetype", "obj", "{source}", "-o", "{output}"]
+link = ["clang", "-no-pie", "{objects}", "{link_flags}", "-o", "{output}"]
+
+[compiler.env]
+TIR_TIME_PASSES = "1"
+
+[compiler.metrics]
+import_ms = 'tir-time: import_ms=([0-9.]+)'
+backend_ms = 'tir-time: import_ms=[0-9.]+ backend_ms=([0-9.]+)'
 
 [[compiler]]
 name = "gcc"

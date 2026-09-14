@@ -491,7 +491,7 @@ impl Emitter<'_> {
             if env.contains_key(&var) {
                 continue;
             }
-            let invented = self.constant(region, 0, self.cfg.var_types[var])?;
+            let invented = self.unassigned_value(region, self.cfg.var_types[var])?;
             env.insert(var, invented);
         }
         Ok(())
@@ -500,7 +500,7 @@ impl Emitter<'_> {
     fn read(&self, region: RegionId, env: &Env, var: VarId) -> Result<ValueId, PassError> {
         match env.get(&var) {
             Some(&value) => Ok(value),
-            None => self.constant(region, 0, self.cfg.var_types[var]),
+            None => self.unassigned_value(region, self.cfg.var_types[var]),
         }
     }
 
@@ -537,6 +537,26 @@ impl Emitter<'_> {
         }
     }
 
+    fn unassigned_value(&self, region: RegionId, ty: TypeId) -> Result<ValueId, PassError> {
+        let data = self.context.get_type_data(ty);
+        if (data.as_ref() as &dyn std::any::Any).is::<crate::ptr::PtrType>() {
+            let op = crate::ptr::NullOpBuilder::new(self.context)
+                .result_type(ty)
+                .build();
+            self.context.add(region, op.id());
+            Ok(op.result())
+        } else if (data.as_ref() as &dyn std::any::Any).is::<crate::builtin::FloatType>() {
+            let op = crate::fp::ops::ConstantOpBuilder::new(self.context)
+                .bits(0)
+                .result_type(ty)
+                .build();
+            self.context.add(region, op.id());
+            Ok(op.result())
+        } else {
+            self.constant(region, 0, ty)
+        }
+    }
+
     fn constant(&self, region: RegionId, value: i64, ty: TypeId) -> Result<ValueId, PassError> {
         if !is_integer(self.context, ty) {
             return Err(unsupported(&format!(
@@ -558,8 +578,6 @@ enum Decision {
     Switch(VarId, Vec<i64>),
 }
 
-/// Whether `ty` is an integer, the only type this pass knows how to invent a
-/// value of.
 fn is_integer(context: &Context, ty: TypeId) -> bool {
     let data = context.get_type_data(ty);
     (data.as_ref() as &dyn std::any::Any)

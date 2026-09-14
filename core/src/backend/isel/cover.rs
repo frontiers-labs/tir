@@ -48,6 +48,7 @@ pub(crate) struct PatternNodeBinding {
     /// The width this operand reads its register at, when it reads it whole
     /// (see [`super::RegisterRequirement::whole_width`]).
     pub(crate) whole_width: Option<u32>,
+    pub(crate) low_extract: bool,
 }
 
 /// What a boundary binding requires of its class. A register operand needs the
@@ -514,7 +515,7 @@ pub(crate) fn alternatives_compatible(
     let mut immediate = false;
     let mut owned_effect = false;
     let mut demanded_offsets: Vec<u32> = Vec::new();
-    let mut demanded_widths: Vec<u32> = Vec::new();
+    let mut demanded_widths: Vec<(u32, bool)> = Vec::new();
     for binding in &matched.bindings.pattern_nodes {
         if binding.class != child
             || (binding.pattern_node == matched.pattern_root && binding.class == matched.root)
@@ -529,9 +530,9 @@ pub(crate) fn alternatives_compatible(
                     demanded_offsets.push(binding.view_offset);
                 }
                 if let Some(width) = binding.whole_width
-                    && !demanded_widths.contains(&width)
+                    && !demanded_widths.contains(&(width, binding.low_extract))
                 {
-                    demanded_widths.push(width);
+                    demanded_widths.push((width, binding.low_extract));
                 }
             }
         } else if binding.pattern_node != matched.pattern_root
@@ -545,13 +546,12 @@ pub(crate) fn alternatives_compatible(
         if demanded_offsets != [produced_view_offset(child_alt, matches)] {
             return false;
         }
-        // An operand read whole is answered only by a tile that defines exactly
-        // the bits it reads: a narrower one leaves the rest of the register
-        // undefined, a wider one holds bits this operand drops. A value already
-        // in a register carries its own width, which the operand's requirement
-        // has already accepted.
+        // A direct operand read whole needs an exact-width definition. A
+        // low-extract view may read the low demanded bits of a wider definition.
         if let Some(width) = produced_width(child_alt, matches)
-            && demanded_widths.iter().any(|demanded| *demanded != width)
+            && demanded_widths.iter().any(|(demanded, low_extract)| {
+                *demanded != width && !(*low_extract && *demanded < width)
+            })
         {
             return false;
         }

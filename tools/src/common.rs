@@ -7,7 +7,7 @@ use std::{
 
 use clap::{Args, ValueEnum};
 use tir::backend::TargetMachine;
-use tir::{Context, builtin::ModuleOp};
+use tir::{Context, Operation, builtin::ModuleOp};
 
 /// The target flags a code-generating tool takes besides `--march`, which is
 /// the tool's own: only a tool that can read the target from its input makes it
@@ -42,6 +42,7 @@ pub enum InputKind {
     #[default]
     Auto,
     Tir,
+    Llvm,
     Assembly,
 }
 
@@ -74,15 +75,39 @@ pub fn parse_module(
             ))
         }
         InputKind::Tir => Ok((parse_tir(context, &input)?, true)),
+        InputKind::Llvm => {
+            let module = tir_llvm::import_str(context, &input)
+                .map_err(|e| format!("llvm import failed: {e}"))?;
+            let mut attributes = context.get_op(module.id()).attributes().to_vec();
+            for (name, value) in [
+                (tir::DATA_LAYOUT, target.data_layout()),
+                (tir::TARGET_ENV, target.target_env()),
+            ] {
+                if let Some(value) = value {
+                    attributes.push(context.named_attribute(name, value));
+                }
+            }
+            context.set_op_attributes(module.id(), attributes);
+            Ok((
+                context.get_op(module.id()).as_op::<ModuleOp>().unwrap(),
+                true,
+            ))
+        }
         InputKind::Auto => unreachable!(),
     }
 }
 
-/// Whether the input holds TIR or assembly, resolving [`InputKind::Auto`] by
+/// Whether the input holds TIR, LLVM IR or assembly, resolving [`InputKind::Auto`] by
 /// file extension.
 pub fn resolve_kind(input_path: Option<&OsString>, kind: InputKind) -> InputKind {
     if kind != InputKind::Auto {
         return kind;
+    }
+    if input_path
+        .and_then(|path| path.to_str())
+        .is_some_and(|path| path.ends_with(".ll"))
+    {
+        return InputKind::Llvm;
     }
     let is_assembly = input_path
         .and_then(|path| path.to_str())

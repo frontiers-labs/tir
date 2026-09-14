@@ -6,6 +6,14 @@ use crate::{
 
 use crate as tir;
 
+/// A truncated address difference patched into a global after data layout.
+pub struct SymbolDifference {
+    pub offset: u64,
+    pub symbol: String,
+    pub base: String,
+    pub width: u64,
+}
+
 // A δ node: a global data object, producing the address of its storage.
 //
 // A definition carries an alignment and either an initializer (`bytes`, plus the
@@ -62,6 +70,7 @@ impl Symbol for GlobalOp {
 
 impl tir::Verifiable for GlobalOp {
     fn verify_impl(&self, _context: &Context) -> Result<(), Error> {
+        self.symbol_differences()?;
         let name = self.sym_name();
         let defines = self.bytes().is_some() as u8 + self.size().is_some() as u8;
         if self.is_external() {
@@ -87,6 +96,65 @@ impl tir::Verifiable for GlobalOp {
 }
 
 impl GlobalOp {
+    /// Symbol differences whose operands must resolve in the same object section.
+    pub fn symbol_differences(&self) -> Result<Vec<SymbolDifference>, Error> {
+        let invalid = || {
+            Error::VerificationError(format!(
+                "invalid symbol differences in global '@{}'",
+                self.sym_name()
+            ))
+        };
+        let Some(attribute) = self.attr("symbol_differences") else {
+            return Ok(Vec::new());
+        };
+        let AttributeValue::Array(entries) = attribute else {
+            return Err(invalid());
+        };
+        let size = self
+            .bytes()
+            .map(|bytes| bytes.len() as u64)
+            .or_else(|| self.size())
+            .ok_or_else(invalid)?;
+        let number = |attribute: &AttributeValue| match attribute {
+            AttributeValue::UInt(value) => Some(*value),
+            AttributeValue::Int(value) => u64::try_from(*value).ok(),
+            _ => None,
+        };
+        entries
+            .iter()
+            .map(|entry| {
+                let AttributeValue::Dict(fields) = entry else {
+                    return Err(invalid());
+                };
+                let (
+                    Some(offset),
+                    Some(AttributeValue::Str(symbol)),
+                    Some(AttributeValue::Str(base)),
+                    Some(width),
+                ) = (
+                    fields.get("offset").and_then(number),
+                    fields.get("symbol"),
+                    fields.get("base"),
+                    fields.get("width").and_then(number),
+                )
+                else {
+                    return Err(invalid());
+                };
+                if !matches!(width, 1 | 2 | 4 | 8)
+                    || offset.checked_add(width).is_none_or(|end| end > size)
+                {
+                    return Err(invalid());
+                }
+                Ok(SymbolDifference {
+                    offset,
+                    symbol: symbol.to_string(),
+                    base: base.to_string(),
+                    width,
+                })
+            })
+            .collect()
+    }
+
     /// The address of this object's storage.
     pub fn address(&self) -> crate::ValueId {
         self.result()
@@ -191,6 +259,10 @@ impl GlobalOp {
             fmt.write(" relocations ")?;
             relocations.print(fmt, &context)?;
         }
+        if let Some(differences) = self.attr("symbol_differences") {
+            fmt.write(" symbol_differences ")?;
+            differences.print(fmt, &context)?;
+        }
         fmt.write("\n")
     }
 
@@ -232,7 +304,7 @@ impl GlobalOp {
                 .to_string();
             builder = builder.attr("section", AttributeValue::Str(section.into()));
         }
-        for name in ["bytes", "relocations"] {
+        for name in ["bytes", "relocations", "symbol_differences"] {
             if !parser.parse_token(name) {
                 continue;
             }

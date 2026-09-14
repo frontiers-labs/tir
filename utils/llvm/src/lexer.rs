@@ -32,6 +32,10 @@ pub enum Token<'src> {
     LBrace,
     #[token("}")]
     RBrace,
+    #[token("[")]
+    LBracket,
+    #[token("]")]
+    RBracket,
     #[token("=")]
     Eq,
     #[token("*")]
@@ -42,6 +46,9 @@ pub enum Token<'src> {
     /// `iN`, carrying the bit width.
     #[regex(r"i[0-9]+", |l| l.slice()[1..].parse().ok(), priority = 5)]
     IntTy(u32),
+
+    #[regex(r"-?[0-9]+\.[0-9]+([eE][+-]?[0-9]+)?", |l| l.slice().parse().ok(), priority = 6)]
+    Float(f64),
 
     #[regex(r"-?[0-9]+", |l| l.slice().parse().ok())]
     Int(i64),

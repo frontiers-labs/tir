@@ -6,7 +6,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use command::{execute, expand, measure, Measurement, Variables};
+use config::Input;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 #[derive(clap::Subcommand)]
 pub enum Task {
@@ -27,6 +29,9 @@ pub struct Options {
     /// Select a configured compiler by name.
     #[arg(long)]
     compiler: Option<String>,
+    /// Select source files or Clang-produced LLVM IR as compiler input.
+    #[arg(long, value_enum, default_value_t)]
+    input: Input,
     /// Use a specific bench_suite.toml instead of workspace discovery.
     #[arg(long)]
     suite: Option<PathBuf>,
@@ -59,7 +64,18 @@ struct Sample {
 struct Results {
     mode: String,
     host: String,
+    #[serde(default)]
+    input: Input,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    producer: Option<Producer>,
     samples: Vec<Sample>,
+}
+
+#[derive(Serialize, Deserialize, PartialEq)]
+struct Producer {
+    version: String,
+    settings: Vec<String>,
+    digest: String,
 }
 
 pub fn run(root: &Path, task: Task) -> anyhow::Result<()> {
@@ -68,12 +84,32 @@ pub fn run(root: &Path, task: Task) -> anyhow::Result<()> {
         Task::Run(options) => ("run", options),
     };
     let root = root.canonicalize()?;
-    let selected = config::discover(
+    let mut selected = config::discover(
         &root,
         options.suite.as_deref(),
         options.package.as_deref(),
         &options.bench,
     )?;
+    selected = selected
+        .into_iter()
+        .map(|selection| {
+            Ok((
+                config::supports_input(&selection, options.input)?,
+                selection,
+            ))
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?
+        .into_iter()
+        .filter_map(|(supported, selection)| supported.then_some(selection))
+        .collect();
+    anyhow::ensure!(
+        !selected.is_empty(),
+        "no benchmarks support {} input",
+        match options.input {
+            Input::Source => "source",
+            Input::Llvm => "llvm",
+        }
+    );
     if options.list {
         for selection in selected {
             println!("{}/{}", selection.suite.suite.package, selection.name);
@@ -87,8 +123,11 @@ pub fn run(root: &Path, task: Task) -> anyhow::Result<()> {
     let mut results = Results {
         mode: mode.into(),
         host: format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS),
+        input: options.input,
+        producer: None,
         samples: Vec::new(),
     };
+    let mut producer_digest = Sha256::new();
     for selection in &selected {
         let compilers = selection
             .suite
@@ -99,6 +138,7 @@ pub fn run(root: &Path, task: Task) -> anyhow::Result<()> {
                     .compiler
                     .as_ref()
                     .is_none_or(|name| name == &compiler.name)
+                    && options.input == compiler.input
             })
             .collect::<Vec<_>>();
         anyhow::ensure!(
@@ -106,10 +146,46 @@ pub fn run(root: &Path, task: Task) -> anyhow::Result<()> {
             "no compilers selected for {}",
             selection.suite.suite.package
         );
+        let llvm = if options.input == Input::Llvm {
+            Some(selection.suite.llvm.as_ref().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "{} has no LLVM input preparation configured",
+                    selection.suite.suite.package
+                )
+            })?)
+        } else {
+            None
+        };
+        if let Some(llvm) = llvm {
+            let version = execute(
+                &expand(&llvm.version, &Variables::new())?,
+                &root,
+                &Default::default(),
+            )?;
+            let version = String::from_utf8(version.stdout)?.trim().to_string();
+            anyhow::ensure!(
+                !version.is_empty(),
+                "LLVM producer reported an empty version"
+            );
+            results.producer.get_or_insert_with(|| Producer {
+                version,
+                settings: llvm.prepare.clone(),
+                digest: String::new(),
+            });
+        }
         let prepared = config::prepare(selection, &cache)?;
+        if let Some(producer) = &mut results.producer {
+            for level in &prepared.config.levels {
+                producer.settings.push(format!(
+                    "{}/{} level={} flags={:?}",
+                    selection.suite.suite.package, selection.name, level, prepared.config.flags
+                ));
+            }
+        }
         for compiler in compilers {
             let mut variables = Variables::from([
                 ("{root}", vec![root.display().to_string()]),
+                ("{arch}", vec![host_arch().into()]),
                 ("{flags}", prepared.config.flags.clone()),
                 ("{link_flags}", prepared.config.link_flags.clone()),
             ]);
@@ -124,7 +200,21 @@ pub fn run(root: &Path, task: Task) -> anyhow::Result<()> {
                 let mut objects = Vec::new();
                 for (index, source) in prepared.sources.iter().enumerate() {
                     let object = scratch.path().join(format!("{index}.o"));
-                    variables.insert("{source}", vec![source.display().to_string()]);
+                    let compiler_source = if let Some(llvm) = llvm {
+                        let ir = scratch.path().join(format!("{index}.ll"));
+                        variables.insert("{source}", vec![source.display().to_string()]);
+                        variables.insert("{output}", vec![ir.display().to_string()]);
+                        execute(
+                            &expand(&llvm.prepare, &variables)?,
+                            &prepared.directory,
+                            &Default::default(),
+                        )?;
+                        producer_digest.input(fs::read(&ir)?);
+                        ir
+                    } else {
+                        source.clone()
+                    };
+                    variables.insert("{source}", vec![compiler_source.display().to_string()]);
                     variables.insert("{output}", vec![object.display().to_string()]);
                     let argv = expand(&compiler.compile, &variables)?;
                     if mode == "run" {
@@ -191,6 +281,9 @@ pub fn run(root: &Path, task: Task) -> anyhow::Result<()> {
             }
         }
     }
+    if let Some(producer) = &mut results.producer {
+        producer.digest = format!("sha256:{:x}", producer_digest.result());
+    }
     if let Some(output) = &options.output {
         fs::write(output, serde_json::to_string_pretty(&results)?)?;
     }
@@ -218,12 +311,27 @@ fn report(sample: &Sample) {
     println!();
 }
 
+fn host_arch() -> &'static str {
+    match std::env::consts::ARCH {
+        "aarch64" => "arm64",
+        arch => arch,
+    }
+}
+
 fn compare(baseline: &Results, current: &Results) -> anyhow::Result<()> {
     use std::collections::BTreeMap;
 
     anyhow::ensure!(
         baseline.mode == current.mode,
         "baseline command differs from current command"
+    );
+    anyhow::ensure!(
+        baseline.input == current.input,
+        "baseline input differs from current input"
+    );
+    anyhow::ensure!(
+        baseline.producer == current.producer,
+        "baseline input producer differs from current input producer"
     );
     let key = |sample: &Sample| {
         (
@@ -263,7 +371,9 @@ fn compare(baseline: &Results, current: &Results) -> anyhow::Result<()> {
     }
     anyhow::ensure!(!sums.is_empty(), "baseline has no matching samples");
     for ((package, compiler, level), (old_ms, ms, old_rss, rss)) in sums {
-        println!("{package} {compiler} {level} baseline wall_ms={old_ms:.3}->{ms:.3} peak_rss_sum_kb={old_rss}->{rss}");
+        println!(
+            "{package} {compiler} {level} baseline wall_ms={old_ms:.3}->{ms:.3} peak_rss_sum_kb={old_rss}->{rss}"
+        );
         if !gates_compiler(compiler) {
             continue;
         }
@@ -275,9 +385,9 @@ fn compare(baseline: &Results, current: &Results) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// GCC and Clang compile times are runner weather; only FCC is this tree.
+/// Gate the compilers built from this tree.
 fn gates_compiler(compiler: &str) -> bool {
-    compiler == "fcc"
+    matches!(compiler, "fcc" | "tir")
 }
 
 #[cfg(test)]
@@ -304,6 +414,8 @@ mod tests {
         Results {
             mode: "compile".into(),
             host: "x86_64-linux".into(),
+            input: Input::Source,
+            producer: None,
             samples,
         }
     }
@@ -319,6 +431,13 @@ mod tests {
     fn fcc_wall_time_growth_is_a_regression() {
         let baseline = results(vec![sample("fcc", "core_list_join.c", 100.0, 20_000)]);
         let current = results(vec![sample("fcc", "core_list_join.c", 130.0, 20_000)]);
+        assert!(compare(&baseline, &current).is_err());
+    }
+
+    #[test]
+    fn tir_wall_time_growth_is_a_regression() {
+        let baseline = results(vec![sample("tir", "core_list_join.c", 100.0, 20_000)]);
+        let current = results(vec![sample("tir", "core_list_join.c", 130.0, 20_000)]);
         assert!(compare(&baseline, &current).is_err());
     }
 

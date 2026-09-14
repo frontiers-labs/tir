@@ -1,0 +1,15 @@
+// RUN: tir opt --verify %s | filecheck %s
+
+// CHECK: func.declare @report(!i32, !varargs) -> !i32
+// CHECK: func.call
+// CHECK: func.call
+
+module {
+  %report = func.declare @report(!i32, !varargs) -> !i32
+  %caller = func.func @caller(%count: !i32, %value: !f64) -> !i32 {
+    %first = func.call %report(%count : !i32) -> !i32
+    %second = func.call %report(%count, %value : !i32, !f64) -> !i32
+    func.return %second
+  }
+  module_end
+}

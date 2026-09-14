@@ -558,6 +558,13 @@ one bit offset. Each register boundary likewise binds the class its operand's
 register belongs to — a low-bit truncation reads its source's register, so the
 binding chases through it (`chase_low_extract`).
 
+The binding retains whether it crossed an explicit low-bit extraction. Cover
+compatibility requires an exact-width producer for a direct whole-register
+read. A low-bit extraction may instead read fewer bits from a wider producer.
+For example, an i64 floating-point conversion followed by `trunci` to i32 can
+feed a 32-bit compare without a truncation instruction. A narrower producer
+still cannot satisfy a wider read, and register-view offsets must agree.
+
 The function-wide legality (boundary constraints, pure-or-op-root interiors) does
 not depend on the assumption scope, so every block reads its matches out of one
 function-wide base search (`base_value_matches`), indexed by root class in

@@ -99,7 +99,7 @@ pub fn measure(
             .context("missing peak RSS")?
             .parse()?
     };
-    let mut metrics = BTreeMap::new();
+    let mut measured_metrics = BTreeMap::new();
     if let Some(compiler) = compiler {
         for (name, pattern) in &compiler.metrics {
             let regex = Regex::new(pattern)?;
@@ -120,12 +120,12 @@ pub fn measure(
                 "{} did not report {name}:\n{stderr}",
                 compiler.name
             );
-            metrics.insert(name.clone(), values.iter().sum());
+            measured_metrics.insert(name.clone(), values.iter().sum());
         }
     }
     Ok(Measurement {
         wall_ms,
         peak_rss_kb,
-        metrics,
+        metrics: measured_metrics,
     })
 }

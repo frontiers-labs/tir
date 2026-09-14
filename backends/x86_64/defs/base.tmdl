@@ -600,7 +600,8 @@ alu_rr!("16", "16", RegReg16, WriteIALU,
     (Sub, "sub", 0x29, { sub_flags!({ src }, { 15 }) dst = dst - src; }),
     (And, "and", 0x21, { logic_flags!({ dst & src }, { 16 }, { 15 }) dst = dst & src; }),
     (Or,  "or",  0x09, { logic_flags!({ dst | src }, { 16 }, { 15 }) dst = dst | src; }),
-    (Xor, "xor", 0x31, { logic_flags!({ dst ^ src }, { 16 }, { 15 }) dst = dst ^ src; })
+    (Xor, "xor", 0x31, { logic_flags!({ dst ^ src }, { 16 }, { 15 }) dst = dst ^ src; }),
+    (Cmp, "cmp", 0x39, { sub_flags!({ src }, { 15 }) })
 )
 
 alu_rr!("16", "16", RegReg16, WriteIMoveWide,
@@ -611,7 +612,8 @@ alu_ri!("16", "16", RegImm16, WriteIALUImm16,
     (AddImm, "add_imm", "add", 0x81, 0b000, { add_flags!({ dst }, { sext(imm, 16) }, { 16 }, { 15 }) dst = dst + sext(imm, 16); }),
     (OrImm,  "or_imm",  "or",  0x81, 0b001, { logic_flags!({ dst | sext(imm, 16) }, { 16 }, { 15 }) dst = dst | sext(imm, 16); }),
     (AndImm, "and_imm", "and", 0x81, 0b100, { logic_flags!({ dst & sext(imm, 16) }, { 16 }, { 15 }) dst = dst & sext(imm, 16); }),
-    (XorImm, "xor_imm", "xor", 0x81, 0b110, { logic_flags!({ dst ^ sext(imm, 16) }, { 16 }, { 15 }) dst = dst ^ sext(imm, 16); })
+    (XorImm, "xor_imm", "xor", 0x81, 0b110, { logic_flags!({ dst ^ sext(imm, 16) }, { 16 }, { 15 }) dst = dst ^ sext(imm, 16); }),
+    (CmpImm, "cmp_imm", "cmp", 0x81, 0b111, { sub_flags!({ sext(imm, 16) }, { 15 }) })
 )
 
 alu_ri!("16", "16", RegImm16, WriteIMoveImmediate16,
@@ -657,7 +659,8 @@ alu_rr!("8", "8", RegReg8, WriteIALU3B,
     (Sub, "sub", 0x28, { sub_flags!({ src }, { 7 }) dst = dst - src; }),
     (And, "and", 0x20, { logic_flags!({ dst & src }, { 8 }, { 7 }) dst = dst & src; }),
     (Or,  "or",  0x08, { logic_flags!({ dst | src }, { 8 }, { 7 }) dst = dst | src; }),
-    (Xor, "xor", 0x30, { logic_flags!({ dst ^ src }, { 8 }, { 7 }) dst = dst ^ src; })
+    (Xor, "xor", 0x30, { logic_flags!({ dst ^ src }, { 8 }, { 7 }) dst = dst ^ src; }),
+    (Cmp, "cmp", 0x38, { sub_flags!({ src }, { 7 }) })
 )
 
 alu_rr!("8", "8", RegReg8, WriteIMove3B,

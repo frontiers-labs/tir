@@ -33,9 +33,9 @@ pub struct ToolArgs {
     /// Output path; `-` writes to stdout.
     #[arg(short = 'o', default_value = "-")]
     output: OsString,
-    /// Input TIR file, or `-`/omitted for stdin.
+    /// Input TIR or LLVM IR file, or `-`/omitted for stdin.
     input: Option<OsString>,
-    /// Input kind: TIR or assembly
+    /// Input kind: TIR, LLVM IR or assembly
     kind: Option<InputKind>,
 }
 
@@ -60,6 +60,7 @@ pub enum FileType {
 }
 
 pub fn run(args: ToolArgs) -> Result<(), Box<dyn Error>> {
+    let started = std::time::Instant::now();
     let select = |march: &str| args.target.select(march);
 
     let context = Context::with_default_dialects();
@@ -79,6 +80,9 @@ pub fn run(args: ToolArgs) -> Result<(), Box<dyn Error>> {
         None if kind == InputKind::Assembly => {
             return Err("--march is required for assembly input".into());
         }
+        None if kind == InputKind::Llvm => {
+            return Err("--march is required for LLVM input".into());
+        }
         None => {
             let module = parse_tir(&context, &read_input(args.input.as_ref())?)?;
             let arch = tir::TargetEnv::for_op(&context, module.id())
@@ -94,6 +98,8 @@ pub fn run(args: ToolArgs) -> Result<(), Box<dyn Error>> {
         tir::verify_op_tree(&context, module.id())
             .map_err(|e| format!("verification failed: {e}"))?;
     }
+    let imported = started.elapsed();
+    let backend_started = std::time::Instant::now();
 
     let oracles = Oracles {
         shuffle_machine_order: args.shuffle_machine_order,
@@ -198,6 +204,16 @@ pub fn run(args: ToolArgs) -> Result<(), Box<dyn Error>> {
             rendered.into_bytes()
         }
     };
+
+    if kind == InputKind::Llvm
+        && std::env::var_os("TIR_TIME_PASSES").is_some_and(|value| value != "0")
+    {
+        eprintln!(
+            "tir-time: import_ms={:.3} backend_ms={:.3}",
+            imported.as_secs_f64() * 1000.0,
+            backend_started.elapsed().as_secs_f64() * 1000.0,
+        );
+    }
 
     if args.output == "-" {
         std::io::stdout().write_all(&output)?;

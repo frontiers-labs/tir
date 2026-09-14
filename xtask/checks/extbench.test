@@ -1,3 +1,13 @@
 # RUN: env CARGO_MANIFEST_DIR=%S/../../xtask xtask extbench compile --list --package fcc --bench coremark | filecheck %s
 # CHECK: fcc/coremark
 # CHECK-NOT: torture
+
+# RUN: env CARGO_MANIFEST_DIR=%S/../../xtask xtask extbench compile --list --package fcc | filecheck %s --check-prefix=SOURCE
+# SOURCE: fcc/coremark
+# SOURCE: fcc/dhrystone
+
+# RUN: env CARGO_MANIFEST_DIR=%S/../../xtask xtask extbench compile --list --package fcc --input llvm | filecheck %s --check-prefix=LLVM
+# LLVM: fcc/coremark
+# LLVM: fcc/dhrystone
+# LLVM-NOT: fcc/torture
+# LLVM-NOT: fcc/whetstone

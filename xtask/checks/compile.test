@@ -2,3 +2,11 @@
 # CHECK: fixture/integer gcc -O0 main.c
 # CHECK-SAME: wall_ms=
 # CHECK-SAME: peak_rss_kb=
+
+# RUN: xtask extbench compile --suite %S/Inputs/local/bench_suite.toml --input llvm --output /dev/stdout | filecheck %s --check-prefix=LLVM
+# LLVM: fixture/integer tir -O0 main.c
+# LLVM: "input": "llvm"
+# LLVM: "producer": {
+# LLVM: "version":
+# LLVM: "settings":
+# LLVM: sha256:
