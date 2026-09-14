@@ -7,21 +7,15 @@ use std::collections::HashMap;
 use tir::analysis::AnalysisManager;
 use tir::attributes::AttributeValue;
 use tir::builtin::{IntegerType, ModuleOp, ops as b};
-use tir::ptr::{PtrType, ops as p};
-use tir::{Context, Operation, OperationRef, Pass, PassError, PassTarget, ValueId};
+use tir::ptr::ops as p;
+use tir::{Context, Operation, OperationRef, Pass, PassError, PassTarget};
 
 use crate::cir;
 
 #[derive(Clone)]
-struct StructFieldLayout {
-    ty: tir::TypeId,
-    offset: u64,
-    array_size: Option<u64>,
-}
-
-#[derive(Clone)]
 struct StructLayout {
-    fields: Vec<StructFieldLayout>,
+    offsets: Vec<u64>,
+    size: u64,
 }
 
 #[derive(Clone)]
@@ -60,7 +54,7 @@ impl LowerCirStructsPass {
             .filter_map(|operation| operation.as_op::<cir::DefineStructOp>())
             .map(|definition| {
                 let name = definition.sym_name();
-                let fields = definition
+                let offsets = definition
                     .attr("fields")
                     .and_then(|value| match value {
                         AttributeValue::Array(fields) => Some(fields),
@@ -72,86 +66,21 @@ impl LowerCirStructsPass {
                         let AttributeValue::Dict(field) = field else {
                             unreachable!();
                         };
-                        let AttributeValue::Type(ty) = field["type"] else {
-                            unreachable!();
-                        };
                         let AttributeValue::UInt(offset) = field["offset"] else {
                             unreachable!();
                         };
-                        let array_size = field.get("array_size").map(|size| {
-                            let AttributeValue::UInt(size) = size else {
-                                unreachable!();
-                            };
-                            *size
-                        });
-                        StructFieldLayout {
-                            ty,
-                            offset,
-                            array_size,
-                        }
+                        offset
                     })
                     .collect();
-                (name, StructLayout { fields })
+                (
+                    name,
+                    StructLayout {
+                        offsets,
+                        size: definition.size(),
+                    },
+                )
             })
             .collect()
-    }
-
-    fn offset_pointer(
-        context: &Context,
-        target: &OperationRef,
-        base: ValueId,
-        offset: u64,
-        result_type: tir::TypeId,
-    ) -> Result<ValueId, PassError> {
-        let offset = b::constant(context, offset as i64, IntegerType::new(context, 64)).build();
-        context.insert_op_before(target, &offset)?;
-        let pointer = p::ptradd(context, base, offset.result(), result_type).build();
-        let result = pointer.result();
-        context.insert_op_before(target, &pointer)?;
-        Ok(result)
-    }
-
-    fn insert_copy(
-        context: &Context,
-        target: &OperationRef,
-        layouts: &HashMap<String, StructLayout>,
-        name: &str,
-        destination: ValueId,
-        source: ValueId,
-    ) -> Result<(), PassError> {
-        for field in &layouts[name].fields {
-            let pointer_type = PtrType::opaque(context);
-            let destination =
-                Self::offset_pointer(context, target, destination, field.offset, pointer_type)?;
-            let source = Self::offset_pointer(context, target, source, field.offset, pointer_type)?;
-            if let Some(size) = field.array_size {
-                let size = b::constant(context, size as i64, IntegerType::new(context, 64)).build();
-                context.insert_op_before(target, &size)?;
-                let copy = p::memcpy(context, destination, source, size.result()).build();
-                context.insert_op_before(target, &copy)?;
-                continue;
-            }
-            let field_type = context.get_type_data(field.ty);
-            if let Some(structure) =
-                (field_type.as_ref() as &dyn std::any::Any).downcast_ref::<cir::StructType>()
-            {
-                Self::insert_copy(
-                    context,
-                    target,
-                    layouts,
-                    structure.name(),
-                    destination,
-                    source,
-                )?;
-            } else {
-                let load = p::load(context, source, field.ty).build();
-                let value = load.result();
-                context.insert_op_before(target, &load)?;
-                let store = p::store(context, value, destination).build();
-                context.insert_op_before(target, &store)?;
-            }
-        }
-        Ok(())
     }
 }
 
@@ -197,7 +126,7 @@ impl Pass for LowerCirStructsPass {
             };
             let name = member.struct_name();
             let field = member.field() as usize;
-            let offset = layouts[&name].fields[field].offset;
+            let offset = layouts[&name].offsets[field];
             let result_type = context.get_value(member.result()).ty();
             let offset_value =
                 b::constant(context, offset as i64, IntegerType::new(context, 64)).build();
@@ -221,15 +150,21 @@ impl Pass for LowerCirStructsPass {
             }
             let target = Self::refresh(context, target);
             let copy = target.as_op::<cir::CopyStructOp>().unwrap();
-            Self::insert_copy(
+            let size = b::constant(
                 context,
-                &target,
-                &layouts,
-                &copy.struct_name(),
+                layouts[&copy.struct_name()].size as i64,
+                IntegerType::new(context, 64),
+            )
+            .build();
+            context.insert_op_before(&target, &size)?;
+            let replacement = p::memcpy(
+                context,
                 copy.operands()[0],
                 copy.operands()[1],
-            )?;
-            context.erase_op(&target)?;
+                size.result(),
+            )
+            .build();
+            context.replace_op(&target, &replacement)?;
         }
 
         for target in &descendants {

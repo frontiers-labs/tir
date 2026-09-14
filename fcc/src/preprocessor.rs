@@ -1023,56 +1023,17 @@ fn expand_tokens(
 }
 
 fn macro_identifier(token: &Token) -> Option<std::borrow::Cow<'_, str>> {
-    match token {
-        Token::Identifier(name) => Some(std::borrow::Cow::Borrowed(name)),
-        Token::KwAlignas
-        | Token::KwAlignof
-        | Token::KwAuto
-        | Token::KwBool
-        | Token::KwUnderscoreBool
-        | Token::KwBreak
-        | Token::KwCase
-        | Token::KwChar
-        | Token::KwConst
-        | Token::KwConstexpr
-        | Token::KwContinue
-        | Token::KwDefault
-        | Token::KwDo
-        | Token::KwDouble
-        | Token::KwElse
-        | Token::KwEnum
-        | Token::KwExtern
-        | Token::KwFalse
-        | Token::KwFloat
-        | Token::KwFor
-        | Token::KwGoto
-        | Token::KwIf
-        | Token::KwInline
-        | Token::KwInt
-        | Token::KwLong
-        | Token::KwNullptr
-        | Token::KwRegister
-        | Token::KwRestrict
-        | Token::KwReturn
-        | Token::KwShort
-        | Token::KwSigned
-        | Token::KwSizeof
-        | Token::KwStatic
-        | Token::KwStaticAssert
-        | Token::KwStruct
-        | Token::KwSwitch
-        | Token::KwThreadLocal
-        | Token::KwTrue
-        | Token::KwTypedef
-        | Token::KwTypeof
-        | Token::KwTypeofUnqual
-        | Token::KwUnion
-        | Token::KwUnsigned
-        | Token::KwVoid
-        | Token::KwVolatile
-        | Token::KwWhile => Some(std::borrow::Cow::Owned(token.to_string())),
-        _ => None,
+    if let Token::Identifier(name) = token {
+        return Some(std::borrow::Cow::Borrowed(name));
     }
+
+    let spelling = token.to_string();
+    let mut characters = spelling.chars();
+    let is_identifier = characters
+        .next()
+        .is_some_and(|character| character == '_' || character.is_ascii_alphabetic())
+        && characters.all(|character| character == '_' || character.is_ascii_alphanumeric());
+    is_identifier.then_some(std::borrow::Cow::Owned(spelling))
 }
 
 fn next_expanded(source: &mut impl ExpansionSource) -> Option<ExpansionToken> {

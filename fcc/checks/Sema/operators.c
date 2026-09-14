@@ -14,3 +14,6 @@ int remainder_of_floats(float left, float right) { return left % right; }
 int conditional_void_condition(void) { return sink() ? 1 : 2; }
 // CHECK: [E0402] Error: conditional operator requires a scalar condition
 // CHECK: N3220) 6.5.16p2
+
+int compare_pointer_with_nonzero(int *pointer) { return pointer == 1; }
+// CHECK: [E0402] Error: operator '==' requires compatible scalar operands

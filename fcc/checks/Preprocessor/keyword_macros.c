@@ -1,13 +1,10 @@
-// RUN: fcc compile --std gnu17 --stage obj --march x86_64 -O0 -o /dev/null %s
+// This file was generated with ./utils/scripts/update_checks.py. Do not modify CHECKs manually.
 
-#define false 0
-#define true (!false)
-#define VALUE(false) false
+// RUN: fcc compile --std gnu17 --stage preprocess -o - %S/../Inputs/keyword_macros.c | filecheck %s
 
-#if !defined(false) || !defined(true)
-#error keyword macros must be defined
-#endif
-
-int main(void) {
-    return false || !true || VALUE(7) != 7;
-}
+// CHECK: /* Keywords are preprocessing identifiers until expansion finishes. */
+// CHECK-EMPTY:
+// CHECK-EMPTY:
+// CHECK: int main(void) {
+// CHECK-NEXT:     return 0 || !(!0) || 7 != 7;
+// CHECK-NEXT: }

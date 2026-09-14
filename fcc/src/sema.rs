@@ -2165,22 +2165,20 @@ impl Analyzer<'_> {
         int: QualType,
         error: QualType,
     ) -> (QualType, ValueCategory) {
-        let operands = self.child_types(node);
+        let children = self.ast.children(node).collect::<Vec<_>>();
+        let mut operands = self.child_types(node);
+        for (&child, operand) in children.iter().zip(&mut operands) {
+            *operand = self.value_conversion(child, *operand);
+        }
         let arithmetic = operands.len() == 2 && operands.iter().all(|&ty| self.is_arithmetic(ty));
         let pointers = operands.len() == 2
             && operands
                 .iter()
                 .all(|&ty| matches!(self.types.kind(ty), TypeKind::Pointer(_)));
         if operands.len() == 2 && matches!(kind, AstKind::Eq | AstKind::Ne) {
-            let children = self.ast.children(node).collect::<Vec<_>>();
             for (pointer, null) in [(0, 1), (1, 0)] {
                 if matches!(self.types.kind(operands[pointer]), TypeKind::Pointer(_))
-                    && self.is_integer(operands[null])
-                    && self
-                        .ast
-                        .get_annotation(children[null])
-                        .and_then(|info| info.constant)
-                        == Some(0)
+                    && self.is_null_pointer_constant(operands[null], children[null])
                 {
                     self.record_conversion(children[null], operands[pointer]);
                     return (int, ValueCategory::Value);
@@ -2380,20 +2378,12 @@ impl Analyzer<'_> {
             (common, ValueCategory::Value)
         } else if types[1] == types[2]
             || matches!(self.types.kind(types[1]), TypeKind::Pointer(_))
-                && self
-                    .ast
-                    .get_annotation(children[2])
-                    .and_then(|info| info.constant)
-                    == Some(0)
+                && self.is_null_pointer_constant(types[2], children[2])
         {
             self.record_conversion(children[2], types[1]);
             (types[1], ValueCategory::Value)
         } else if matches!(self.types.kind(types[2]), TypeKind::Pointer(_))
-            && self
-                .ast
-                .get_annotation(children[1])
-                .and_then(|info| info.constant)
-                == Some(0)
+            && self.is_null_pointer_constant(types[1], children[1])
         {
             self.record_conversion(children[1], types[2]);
             (types[2], ValueCategory::Value)
@@ -2832,6 +2822,11 @@ impl Analyzer<'_> {
         )
     }
 
+    fn is_null_pointer_constant(&self, ty: QualType, node: NodeId) -> bool {
+        self.is_integer(ty)
+            && self.ast.get_annotation(node).and_then(|info| info.constant) == Some(0)
+    }
+
     fn is_scalar(&self, ty: QualType) -> bool {
         self.is_arithmetic(ty) || matches!(self.types.kind(ty), TypeKind::Pointer(_))
     }
@@ -2868,10 +2863,7 @@ impl Analyzer<'_> {
                 self.types.kind(*target) == self.types.kind(source)
             }
             (TypeKind::Pointer(_), TypeKind::Integer(_)) => {
-                self.ast
-                    .get_annotation(source_node)
-                    .and_then(|info| info.constant)
-                    == Some(0)
+                self.is_null_pointer_constant(source, source_node)
             }
             (left, right) => left == right,
         }

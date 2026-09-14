@@ -1,8 +1,16 @@
-// RUN: fcc compile --std gnu17 --stage obj --march x86_64 -O0 -o /dev/null %s
+// This file was generated with ./utils/scripts/update_checks.py. Do not modify CHECKs manually.
 
-/***/
-#define VALUE 7
-/****/
-int main(void) {
-    return VALUE != 7;
-}
+// RUN: fcc compile --std gnu17 --stage preprocess -o - %S/../Inputs/repeated_star_comments.c | filecheck %s
+
+// CHECK: /***/
+// CHECK-NEXT: /****/
+// CHECK-EMPTY:
+// CHECK: /****************************************************************************/
+// CHECK-NEXT: /*                   DHRYSTONE BENCHMARK PREPROCESSOR TEST                  */
+// CHECK-NEXT: /****************************************************************************/
+// CHECK-NEXT: /****************************************************************************/
+// CHECK-EMPTY:
+// CHECK-EMPTY:
+// CHECK: int main(void) {
+// CHECK-NEXT:     return 7 != 7 || 1 != 1;
+// CHECK-NEXT: }

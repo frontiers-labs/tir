@@ -1,5 +1,6 @@
-// RUN: fcc compile --std gnu17 --stage obj --march x86_64 -O0 -o /dev/null %s
-// RUN: fcc compile --std gnu17 --stage obj --march x86_64 -O2 -o /dev/null %s
+// REQUIRES: linux, x86_64
+// RUN: fcc compile --std gnu17 --stage obj --march x86_64 -O0 -o - %s | python3 %S/../Inputs/run_object.py
+// RUN: fcc compile --std gnu17 --stage obj --march x86_64 -O2 -o - %s | python3 %S/../Inputs/run_object.py
 
 int output = -1;
 

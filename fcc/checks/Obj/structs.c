@@ -11,26 +11,21 @@
 // A64: Symbol read:
 // A64: Symbol copy:
 
-// `copy` writes one field of a local and copies the whole struct into another
-// local; neither leaves the function. The mid-end forwards the 37 through the
-// field-by-field copy to the return and drops the destination, so only the
-// store of 37 into the source slot remains, with no byte copy.
 // RVASM: read:
 // RVASM-NEXT: {{(c\.)?lw}} {{.*}}, 4({{.*}})
 // RVASM: copy:
-// RVASM: addi x10, x0, 37
-// RVASM-NOT: lb
-// RVASM-NOT: sb
-// RVASM: sw x10, 4({{.*}})
-// RVASM-NOT: lw
+// RVASM: addi {{.*}}, x0, 37
+// RVASM: sw {{.*}}, 4({{.*}})
+// RVASM: jal x1, memcpy
+// RVASM: lw x10, 4({{.*}})
 // RVASM: c.jr x1
 
 // A64ASM: read:
 // A64ASM-NEXT: ldr {{.*}}, [{{.*}}, 4]
+// A64ASM-NEXT: ret x30
 // A64ASM: copy:
-// A64ASM: movz x0, 37
-// A64ASM-NOT: ldrb
-// A64ASM-NOT: strb
-// A64ASM: str x0, [{{.*}}, 4]
-// A64ASM-NOT: ldr
+// A64ASM: movz {{.*}}, 37
+// A64ASM: str {{.*}}, [{{.*}}, 4]
+// A64ASM: bl memcpy
+// A64ASM: ldr x0, [{{.*}}, 4]
 // A64ASM: ret x30
