@@ -16,6 +16,7 @@ use crate::cir;
 struct StructFieldLayout {
     ty: tir::TypeId,
     offset: u64,
+    array_size: Option<u64>,
 }
 
 #[derive(Clone)]
@@ -77,7 +78,17 @@ impl LowerCirStructsPass {
                         let AttributeValue::UInt(offset) = field["offset"] else {
                             unreachable!();
                         };
-                        StructFieldLayout { ty, offset }
+                        let array_size = field.get("array_size").map(|size| {
+                            let AttributeValue::UInt(size) = size else {
+                                unreachable!();
+                            };
+                            *size
+                        });
+                        StructFieldLayout {
+                            ty,
+                            offset,
+                            array_size,
+                        }
                     })
                     .collect();
                 (name, StructLayout { fields })
@@ -113,6 +124,13 @@ impl LowerCirStructsPass {
             let destination =
                 Self::offset_pointer(context, target, destination, field.offset, pointer_type)?;
             let source = Self::offset_pointer(context, target, source, field.offset, pointer_type)?;
+            if let Some(size) = field.array_size {
+                let size = b::constant(context, size as i64, IntegerType::new(context, 64)).build();
+                context.insert_op_before(target, &size)?;
+                let copy = p::memcpy(context, destination, source, size.result()).build();
+                context.insert_op_before(target, &copy)?;
+                continue;
+            }
             let field_type = context.get_type_data(field.ty);
             if let Some(structure) =
                 (field_type.as_ref() as &dyn std::any::Any).downcast_ref::<cir::StructType>()

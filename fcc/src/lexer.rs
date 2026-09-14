@@ -137,7 +137,7 @@ pub enum Token {
     #[regex(r"[ \t\n\r\f]+", |lex| lex.slice().to_string())]
     Whitespace(String),
     #[regex(r"//[^\n]*", |lex| lex.slice().to_string(), allow_greedy = true)]
-    #[regex(r"/\*([^*]|\*[^/])*\*/", |lex| lex.slice().to_string())]
+    #[regex(r"/\*([^*]|\*+[^*/])*\*+/", |lex| lex.slice().to_string())]
     Comment(String),
 
     #[token("alignas")]

@@ -467,7 +467,7 @@ pub fn codegen(context: &Context, typed: &TypedAst) -> Result<ModuleOp, Diagnost
             .fields
             .iter()
             .map(|field| {
-                AttributeValue::Dict(Box::new(BTreeMap::from([
+                let mut attributes = BTreeMap::from([
                     (
                         "name".to_string(),
                         AttributeValue::Str(field.name.clone().into()),
@@ -477,7 +477,14 @@ pub fn codegen(context: &Context, typed: &TypedAst) -> Result<ModuleOp, Diagnost
                         AttributeValue::Type(lower_type(context, typed, field.ty)),
                     ),
                     ("offset".to_string(), AttributeValue::UInt(field.offset)),
-                ])))
+                ]);
+                if matches!(typed.types().kind(field.ty), TypeKind::Array(_, Some(_))) {
+                    attributes.insert(
+                        "array_size".to_string(),
+                        AttributeValue::UInt(source_type_layout(typed, field.ty).0),
+                    );
+                }
+                AttributeValue::Dict(Box::new(attributes))
             })
             .collect();
         module.body().append_op(
@@ -2949,6 +2956,7 @@ impl FnCodegen<'_> {
                     self.lower_record_copy(value, slot.ptr, record.as_str())?;
                 } else {
                     let v = self.lower_expr(value)?;
+                    let v = self.promote_boolean_result(v, slot.elem);
                     self.emit(p::store(self.context, v, slot.ptr).build());
                 }
                 Ok(())

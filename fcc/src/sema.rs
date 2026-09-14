@@ -2171,6 +2171,22 @@ impl Analyzer<'_> {
             && operands
                 .iter()
                 .all(|&ty| matches!(self.types.kind(ty), TypeKind::Pointer(_)));
+        if operands.len() == 2 && matches!(kind, AstKind::Eq | AstKind::Ne) {
+            let children = self.ast.children(node).collect::<Vec<_>>();
+            for (pointer, null) in [(0, 1), (1, 0)] {
+                if matches!(self.types.kind(operands[pointer]), TypeKind::Pointer(_))
+                    && self.is_integer(operands[null])
+                    && self
+                        .ast
+                        .get_annotation(children[null])
+                        .and_then(|info| info.constant)
+                        == Some(0)
+                {
+                    self.record_conversion(children[null], operands[pointer]);
+                    return (int, ValueCategory::Value);
+                }
+            }
+        }
         if arithmetic {
             // The result is `int`, but the operands are still brought to
             // their common type first, so the comparison never sees two
@@ -2595,6 +2611,7 @@ impl Analyzer<'_> {
                 .get_annotation(argument)
                 .and_then(|info| info.ty)
                 .unwrap_or(error);
+            let source = self.value_conversion(argument, source);
             let promoted = match self.types.kind(source) {
                 TypeKind::Float => self.types.intern(TypeKind::Double),
                 TypeKind::Integer(_) | TypeKind::Enum(_) => self.integer_promotion(source),
