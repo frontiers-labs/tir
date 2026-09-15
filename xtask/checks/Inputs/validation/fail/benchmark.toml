@@ -1,0 +1,3 @@
+sources = ["*.c"]
+levels = ["-O0"]
+verify = ["python3", "{benchmark}/verify.py", "{stdout}"]

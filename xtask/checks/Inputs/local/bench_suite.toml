@@ -11,6 +11,12 @@ compile = ["gcc", "{level}", "{flags}", "-c", "{source}", "-o", "{output}"]
 link = ["gcc", "{objects}", "{link_flags}", "-o", "{output}"]
 
 [[compiler]]
+name = "tir2"
+input = "llvm"
+compile = ["gcc", "-x", "c", "-c", "{source}", "-o", "{output}"]
+link = ["gcc", "{objects}", "{link_flags}", "-o", "{output}"]
+
+[[compiler]]
 name = "tir"
 input = "llvm"
 compile = ["gcc", "-x", "c", "-c", "{source}", "-o", "{output}"]

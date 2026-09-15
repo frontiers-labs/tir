@@ -137,6 +137,8 @@ pub struct Benchmark {
     pub link_flags: Vec<String>,
     #[serde(default)]
     pub args: Vec<String>,
+    #[serde(default)]
+    pub verify: Vec<String>,
     #[serde(default = "levels")]
     pub levels: Vec<String>,
     #[serde(default)]

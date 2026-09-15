@@ -175,8 +175,8 @@ jobs:
       - uses: actions/cache/restore@v6
         with:
           path: extbench-baseline.json
-          key: extbench-results-${{ github.run_id }}
-          restore-keys: extbench-results-
+          key: extbench-results-v2-${{ github.run_id }}
+          restore-keys: extbench-results-v2-
       - run: sudo apt-get update && sudo apt-get install -y clang
       - run: cargo build --locked --release -p fcc --bin fcc
       - run: |
@@ -196,7 +196,7 @@ jobs:
       - uses: actions/cache/save@v6
         with:
           path: extbench-baseline.json
-          key: extbench-results-${{ github.run_id }}
+          key: extbench-results-v2-${{ github.run_id }}
 
   libfuzzer:
     # Only for the xtask binary, which reads the records embedded in open

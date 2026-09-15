@@ -1,11 +1,11 @@
 mod command;
 pub(crate) mod config;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use command::{execute, expand, measure, Measurement, Variables};
+use command::{execute, expand, measure, measure_output, Measurement, RawMeasurement, Variables};
 use config::Input;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -47,6 +47,15 @@ pub struct Options {
     /// Compare time and RSS against a previous run of the same command.
     #[arg(long)]
     baseline: Option<PathBuf>,
+    /// Keep inputs, outputs, executables, and run output in a new directory.
+    #[arg(long)]
+    artifacts: Option<PathBuf>,
+    /// Number of interleaved executions in run mode.
+    #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u32).range(1..))]
+    runs: u32,
+    /// Select one optimization level, such as -O2.
+    #[arg(long, allow_hyphen_values = true)]
+    level: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -68,7 +77,87 @@ struct Results {
     input: Input,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     producer: Option<Producer>,
+    #[serde(default)]
+    workload: String,
     samples: Vec<Sample>,
+}
+
+fn create_artifacts(path: &Path) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        !path.exists(),
+        "artifact directory already exists: {}",
+        path.display()
+    );
+    fs::create_dir_all(path)?;
+    Ok(())
+}
+
+fn summarize(measurements: Vec<Measurement>) -> Measurement {
+    let mut wall_times = measurements.iter().map(|m| m.wall_ms).collect::<Vec<_>>();
+    wall_times.sort_by(f64::total_cmp);
+    let middle = wall_times.len() / 2;
+    let wall_ms = if wall_times.len() % 2 == 0 {
+        (wall_times[middle - 1] + wall_times[middle]) / 2.0
+    } else {
+        wall_times[middle]
+    };
+    let peak_rss_kb = measurements.iter().map(|m| m.peak_rss_kb).max().unwrap();
+    let metrics = BTreeMap::new();
+    let runs = measurements
+        .into_iter()
+        .map(|m| RawMeasurement {
+            wall_ms: m.wall_ms,
+            peak_rss_kb: m.peak_rss_kb,
+            metrics: m.metrics,
+        })
+        .collect();
+    Measurement {
+        wall_ms,
+        peak_rss_kb,
+        metrics,
+        runs,
+    }
+}
+
+struct RunJob {
+    compiler: String,
+    executable: PathBuf,
+    source: String,
+    measurements: Vec<Measurement>,
+    directory: PathBuf,
+}
+
+fn measure_jobs(
+    jobs: &mut [RunJob],
+    runs: u32,
+    args: &[String],
+    verify: &[String],
+    benchmark: &Path,
+    workdir: &Path,
+) -> anyhow::Result<()> {
+    for round in 0..runs {
+        for offset in 0..jobs.len() {
+            let index = (round as usize + offset) % jobs.len();
+            let job = &mut jobs[index];
+            let mut argv = vec![job.executable.display().to_string()];
+            argv.extend_from_slice(args);
+            let (measurement, output) = measure_output(&argv, workdir, None)?;
+            let stdout = job.directory.join(format!("run-{round}.stdout"));
+            let stderr = job.directory.join(format!("run-{round}.stderr"));
+            fs::write(&stdout, &output.stdout)?;
+            fs::write(stderr, &output.stderr)?;
+            if !verify.is_empty() {
+                let variables = Variables::from([
+                    ("{stdout}", vec![stdout.display().to_string()]),
+                    ("{args}", args.to_vec()),
+                    ("{benchmark}", vec![benchmark.display().to_string()]),
+                ]);
+                execute(&expand(verify, &variables)?, workdir, &Default::default())?;
+            }
+            job.measurements.push(measurement);
+        }
+    }
+    Ok(())
 }
 
 #[derive(Serialize, Deserialize, PartialEq)]
@@ -78,30 +167,24 @@ struct Producer {
     digest: String,
 }
 
-pub fn run(root: &Path, task: Task) -> anyhow::Result<()> {
-    let (mode, options) = match task {
-        Task::Compile(options) => ("compile", options),
-        Task::Run(options) => ("run", options),
-    };
-    let root = root.canonicalize()?;
-    let mut selected = config::discover(
-        &root,
+fn select_benchmarks(root: &Path, options: &Options) -> anyhow::Result<Vec<config::Selection>> {
+    let selected = config::discover(
+        root,
         options.suite.as_deref(),
         options.package.as_deref(),
         &options.bench,
-    )?;
-    selected = selected
-        .into_iter()
-        .map(|selection| {
-            Ok((
-                config::supports_input(&selection, options.input)?,
-                selection,
-            ))
-        })
-        .collect::<anyhow::Result<Vec<_>>>()?
-        .into_iter()
-        .filter_map(|(supported, selection)| supported.then_some(selection))
-        .collect();
+    )?
+    .into_iter()
+    .map(|selection| {
+        Ok((
+            config::supports_input(&selection, options.input)?,
+            selection,
+        ))
+    })
+    .collect::<anyhow::Result<Vec<_>>>()?
+    .into_iter()
+    .filter_map(|(supported, selection)| supported.then_some(selection))
+    .collect::<Vec<_>>();
     anyhow::ensure!(
         !selected.is_empty(),
         "no benchmarks support {} input",
@@ -110,6 +193,36 @@ pub fn run(root: &Path, task: Task) -> anyhow::Result<()> {
             Input::Llvm => "llvm",
         }
     );
+    Ok(selected)
+}
+
+fn finish_results(
+    mut results: Results,
+    options: &Options,
+    producer_digest: Sha256,
+    workload_digest: Sha256,
+) -> anyhow::Result<()> {
+    if let Some(producer) = &mut results.producer {
+        producer.digest = format!("sha256:{:x}", producer_digest.result());
+    }
+    results.workload = format!("sha256:{:x}", workload_digest.result());
+    if let Some(output) = &options.output {
+        fs::write(output, serde_json::to_string_pretty(&results)?)?;
+    }
+    if let Some(path) = &options.baseline {
+        let baseline: Results = serde_json::from_str(&fs::read_to_string(path)?)?;
+        compare(&baseline, &results)?;
+    }
+    Ok(())
+}
+
+pub fn run(root: &Path, task: Task) -> anyhow::Result<()> {
+    let (mode, options) = match task {
+        Task::Compile(options) => ("compile", options),
+        Task::Run(options) => ("run", options),
+    };
+    let root = root.canonicalize()?;
+    let selected = select_benchmarks(&root, &options)?;
     if options.list {
         for selection in selected {
             println!("{}/{}", selection.suite.suite.package, selection.name);
@@ -119,15 +232,24 @@ pub fn run(root: &Path, task: Task) -> anyhow::Result<()> {
     let cache = root.join("target/extbench/sources");
     fs::create_dir_all(&cache)?;
     let scratch = tempfile::tempdir_in(root.join("target/extbench"))?;
+    let artifact_root = match &options.artifacts {
+        Some(path) => {
+            create_artifacts(path)?;
+            path.canonicalize()?
+        }
+        None => scratch.path().to_path_buf(),
+    };
     let mut built = BTreeSet::new();
     let mut results = Results {
         mode: mode.into(),
         host: format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS),
         input: options.input,
         producer: None,
+        workload: String::new(),
         samples: Vec::new(),
     };
     let mut producer_digest = Sha256::new();
+    let mut workload_digest = Sha256::new();
     for selection in &selected {
         let compilers = selection
             .suite
@@ -174,6 +296,21 @@ pub fn run(root: &Path, task: Task) -> anyhow::Result<()> {
             });
         }
         let prepared = config::prepare(selection, &cache)?;
+        workload_digest.input(selection.suite.suite.package.as_bytes());
+        workload_digest.input(selection.name.as_bytes());
+        for value in prepared
+            .config
+            .args
+            .iter()
+            .chain(prepared.config.flags.iter())
+            .chain(prepared.config.link_flags.iter())
+        {
+            workload_digest.input(value.as_bytes());
+            workload_digest.input([0]);
+        }
+        for source in &prepared.sources {
+            workload_digest.input(fs::read(source)?);
+        }
         if let Some(producer) = &mut results.producer {
             for level in &prepared.config.levels {
                 producer.settings.push(format!(
@@ -182,39 +319,69 @@ pub fn run(root: &Path, task: Task) -> anyhow::Result<()> {
                 ));
             }
         }
-        for compiler in compilers {
-            let mut variables = Variables::from([
-                ("{root}", vec![root.display().to_string()]),
-                ("{arch}", vec![host_arch().into()]),
-                ("{flags}", prepared.config.flags.clone()),
-                ("{link_flags}", prepared.config.link_flags.clone()),
-            ]);
-            if !options.no_build && !compiler.build.is_empty() {
-                let argv = expand(&compiler.build, &variables)?;
-                if built.insert(argv.clone()) {
-                    execute(&argv, &root, &compiler.env)?;
+        let levels = prepared
+            .config
+            .levels
+            .iter()
+            .filter(|level| options.level.as_ref().is_none_or(|wanted| wanted == *level))
+            .collect::<Vec<_>>();
+        anyhow::ensure!(
+            !levels.is_empty(),
+            "benchmark {}/{} has no selected level",
+            selection.suite.suite.package,
+            selection.name
+        );
+        for level in levels {
+            let level_dir = artifact_root
+                .join(&selection.suite.suite.package)
+                .join(&selection.name)
+                .join(level.trim_start_matches('-'));
+            fs::create_dir_all(&level_dir)?;
+            let mut inputs = Vec::new();
+            for (index, source) in prepared.sources.iter().enumerate() {
+                if let Some(llvm) = llvm {
+                    let ir = level_dir.join(format!("input-{index}.ll"));
+                    let variables = Variables::from([
+                        ("{root}", vec![root.display().to_string()]),
+                        ("{arch}", vec![host_arch().into()]),
+                        ("{flags}", prepared.config.flags.clone()),
+                        ("{link_flags}", prepared.config.link_flags.clone()),
+                        ("{level}", vec![level.clone()]),
+                        ("{source}", vec![source.display().to_string()]),
+                        ("{output}", vec![ir.display().to_string()]),
+                    ]);
+                    execute(
+                        &expand(&llvm.prepare, &variables)?,
+                        &prepared.directory,
+                        &Default::default(),
+                    )?;
+                    producer_digest.input(fs::read(&ir)?);
+                    inputs.push(ir);
+                } else {
+                    inputs.push(source.clone());
                 }
             }
-            for level in &prepared.config.levels {
+            let mut jobs = Vec::new();
+            for compiler in &compilers {
+                let mut variables = Variables::from([
+                    ("{root}", vec![root.display().to_string()]),
+                    ("{arch}", vec![host_arch().into()]),
+                    ("{flags}", prepared.config.flags.clone()),
+                    ("{link_flags}", prepared.config.link_flags.clone()),
+                ]);
+                if !options.no_build && !compiler.build.is_empty() {
+                    let argv = expand(&compiler.build, &variables)?;
+                    if built.insert(argv.clone()) {
+                        execute(&argv, &root, &compiler.env)?;
+                    }
+                }
                 variables.insert("{level}", vec![level.clone()]);
                 let mut objects = Vec::new();
-                for (index, source) in prepared.sources.iter().enumerate() {
-                    let object = scratch.path().join(format!("{index}.o"));
-                    let compiler_source = if let Some(llvm) = llvm {
-                        let ir = scratch.path().join(format!("{index}.ll"));
-                        variables.insert("{source}", vec![source.display().to_string()]);
-                        variables.insert("{output}", vec![ir.display().to_string()]);
-                        execute(
-                            &expand(&llvm.prepare, &variables)?,
-                            &prepared.directory,
-                            &Default::default(),
-                        )?;
-                        producer_digest.input(fs::read(&ir)?);
-                        ir
-                    } else {
-                        source.clone()
-                    };
-                    variables.insert("{source}", vec![compiler_source.display().to_string()]);
+                let compiler_dir = level_dir.join(&compiler.name);
+                fs::create_dir_all(&compiler_dir)?;
+                for (index, source) in inputs.iter().enumerate() {
+                    let object = compiler_dir.join(format!("{index}.o"));
+                    variables.insert("{source}", vec![source.display().to_string()]);
                     variables.insert("{output}", vec![object.display().to_string()]);
                     let argv = expand(&compiler.compile, &variables)?;
                     if mode == "run" {
@@ -228,7 +395,7 @@ pub fn run(root: &Path, task: Task) -> anyhow::Result<()> {
                         benchmark: selection.name.clone(),
                         compiler: compiler.name.clone(),
                         level: level.clone(),
-                        source: source
+                        source: prepared.sources[index]
                             .strip_prefix(&prepared.directory)?
                             .display()
                             .to_string(),
@@ -244,7 +411,7 @@ pub fn run(root: &Path, task: Task) -> anyhow::Result<()> {
                         vec![objects.as_slice()]
                     };
                     for (index, group) in groups.iter().enumerate() {
-                        let executable = scratch.path().join("benchmark");
+                        let executable = compiler_dir.join(format!("benchmark-{index}"));
                         variables.insert(
                             "{objects}",
                             group.iter().map(|p| p.display().to_string()).collect(),
@@ -255,9 +422,6 @@ pub fn run(root: &Path, task: Task) -> anyhow::Result<()> {
                             &prepared.directory,
                             &compiler.env,
                         )?;
-                        let mut argv = vec![executable.display().to_string()];
-                        argv.extend(prepared.config.args.clone());
-                        let measurement = measure(&argv, &prepared.directory, None)?;
                         let source = if prepared.config.separate {
                             prepared.sources[index]
                                 .strip_prefix(&prepared.directory)?
@@ -266,32 +430,43 @@ pub fn run(root: &Path, task: Task) -> anyhow::Result<()> {
                         } else {
                             "run".into()
                         };
-                        let sample = Sample {
-                            package: selection.suite.suite.package.clone(),
-                            benchmark: selection.name.clone(),
+                        let directory = compiler_dir.join(format!("run-{index}"));
+                        fs::create_dir_all(&directory)?;
+                        jobs.push(RunJob {
                             compiler: compiler.name.clone(),
-                            level: level.clone(),
+                            executable,
                             source,
-                            measurement,
-                        };
-                        report(&sample);
-                        results.samples.push(sample);
+                            measurements: Vec::new(),
+                            directory,
+                        });
                     }
+                }
+            }
+            if mode == "run" {
+                measure_jobs(
+                    &mut jobs,
+                    options.runs,
+                    &prepared.config.args,
+                    &prepared.config.verify,
+                    &selection.directory,
+                    &prepared.directory,
+                )?;
+                for job in jobs {
+                    let sample = Sample {
+                        package: selection.suite.suite.package.clone(),
+                        benchmark: selection.name.clone(),
+                        compiler: job.compiler,
+                        level: level.clone(),
+                        source: job.source,
+                        measurement: summarize(job.measurements),
+                    };
+                    report(&sample);
+                    results.samples.push(sample);
                 }
             }
         }
     }
-    if let Some(producer) = &mut results.producer {
-        producer.digest = format!("sha256:{:x}", producer_digest.result());
-    }
-    if let Some(output) = &options.output {
-        fs::write(output, serde_json::to_string_pretty(&results)?)?;
-    }
-    if let Some(path) = &options.baseline {
-        let baseline: Results = serde_json::from_str(&fs::read_to_string(path)?)?;
-        compare(&baseline, &results)?;
-    }
-    Ok(())
+    finish_results(results, &options, producer_digest, workload_digest)
 }
 
 fn report(sample: &Sample) {
@@ -332,6 +507,10 @@ fn compare(baseline: &Results, current: &Results) -> anyhow::Result<()> {
     anyhow::ensure!(
         baseline.producer == current.producer,
         "baseline input producer differs from current input producer"
+    );
+    anyhow::ensure!(
+        baseline.workload == current.workload,
+        "baseline workload differs from current workload"
     );
     let key = |sample: &Sample| {
         (
@@ -406,6 +585,7 @@ mod tests {
                 wall_ms,
                 peak_rss_kb,
                 metrics: Default::default(),
+                runs: Vec::new(),
             },
         }
     }
@@ -416,6 +596,7 @@ mod tests {
             host: "x86_64-linux".into(),
             input: Input::Source,
             producer: None,
+            workload: String::new(),
             samples,
         }
     }

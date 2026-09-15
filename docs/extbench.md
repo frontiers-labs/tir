@@ -7,8 +7,8 @@ then times each executable on the current host. A failed compile, link, or run
 fails the command and prints the process output.
 
 The FCC suite compares FCC, GCC, and Clang at `-O0` and `-O2`. Install GCC, Clang,
-and `/usr/bin/time` before running the whole suite. FCC builds in release mode
-once before measurement. Linux and macOS provide the supported RSS collectors.
+Python 3, and `/usr/bin/time` before running the whole suite. FCC builds in release
+mode once before measurement. Linux and macOS provide the supported RSS collectors.
 
 ```sh
 cargo xtask extbench compile --package fcc --bench coremark
@@ -16,6 +16,7 @@ cargo xtask extbench run -p fcc -b coremark
 cargo xtask extbench compile -p fcc -b 'core*' --compiler clang
 cargo xtask extbench compile -p fcc -b coremark --input llvm
 cargo xtask extbench run -p fcc -b coremark --input llvm
+cargo xtask extbench run -p fcc --input llvm --level=-O2 --runs 5 --artifacts /tmp/tir-bench-run --output samples.json
 cargo xtask extbench compile --list
 cargo xtask extbench compile -p fcc --no-build --output samples.json
 cargo xtask extbench compile -p fcc --baseline samples.json --output current.json
@@ -29,6 +30,73 @@ the workspace, excluding hidden, generated, and LIT `Inputs` directories.
 `--input llvm` asks Clang to prepare LLVM IR and benchmarks compilers configured
 to consume it. The default, `--input source`, keeps the existing source path.
 The FCC suite enables LLVM input for CoreMark and Dhrystone.
+
+`--level=-O2` selects one configured optimization level. `--runs 5` repeats
+execution five times for each benchmark and level after its selected executables
+have been built, interleaving the executables across rounds. Run summaries report median wall time and maximum
+peak RSS; JSON also retains the individual measurements. Compilation and output
+validation are outside the runtime measurement.
+
+`--artifacts path` retains prepared IR, objects, executables, and measured stdout
+and stderr. Use a new directory for each invocation; an existing directory is
+rejected. Without this option, temporary build products are removed on completion.
+
+### Comparing backend performance
+
+LLVM input selects `tir`, `clang-ir`, and `clang-ir-backend`. All three consume
+the same prepared scalar IR and link with `clang -no-pie`. `clang-ir` runs Clang's
+optimization pipeline again; `clang-ir-backend` uses
+`-Xclang -disable-llvm-passes` to isolate backend code generation. Source input
+also offers `clang-scalar`, which disables loop and SLP vectorization. Keep the
+ordinary `clang` source result as the end-to-end comparison.
+
+Include native FCC to measure its frontend, middle-end, and backend together:
+
+```sh
+taskset -c 2 cargo xtask extbench run -p fcc -b '{coremark,dhrystone}' --input source --compiler fcc --level=-O2 --runs 5 --artifacts /tmp/fcc-native-results --output fcc-native.json
+```
+
+This compiles C directly with FCC. It does not prepare LLVM IR. Use the same
+benchmark selection, level, arguments, and CPU affinity for the Clang controls.
+
+CoreMark runs with explicit arguments `0 0 0 1000000`. Its POSIX port takes the
+iteration count from the fourth argument; the `ITERATIONS` macro does not control
+this configuration. Omitting the argument lets each executable calibrate a
+different workload, so its wall times cannot be compared. The output validator
+checks the iteration count, known CRCs, and successful validation, including
+CoreMark's minimum execution duration. Dhrystone validates its final values for
+the requested iteration count.
+
+Use the same machine and CPU affinity for comparisons, and keep other heavy work
+outside the measurement. On Linux, prefix the command with `taskset -c 2` to pin
+it and its children to CPU 2. Inspect individual runs as well as their median.
+
+### Measured comparison, 2026-09-15
+
+AMD Ryzen AI MAX+ 395, CPU 2, Clang 22.1.8, generic x86-64, `-O2`.
+FCC and TIR use release builds at revision `a2b7b000` with the measurement
+changes described above. Each value is the median wall time of five runs.
+Dhrystone uses 100,000,000 iterations; CoreMark uses 1,000,000.
+
+| Compiler path | Dhrystone, seconds | CoreMark, seconds |
+| --- | ---: | ---: |
+| Native FCC | 2.258 | 62.379 |
+| Clang IR → TIR | 1.606 | 54.585 |
+| Clang IR → Clang backend | 1.022 | 18.778 |
+| Clang IR → Clang with optimization | 1.022 | 18.628 |
+| Clang from C, vectorization disabled | 1.021 | 18.204 |
+| Clang from C | 1.020 | 17.938 |
+
+All 60 measured outputs passed validation. All 30 CoreMark outputs shared final
+CRC `0x988c`, and every run exceeded ten seconds. The three LLVM-input variants
+ran in rotating order; source variants ran in separate batches. Ordinary Clang
+and FCC use their default linker settings; scalar Clang and the LLVM controls
+use `clang -no-pie`. The host was not otherwise isolated.
+
+Native FCC was 2.21× direct Clang on Dhrystone and 3.48× on CoreMark.
+With identical optimized IR, TIR was 1.57× and 2.91× the Clang backend.
+This establishes a backend gap but does not separate instruction selection,
+register allocation, and scheduling costs.
 
 ## Benchmark directories
 
@@ -45,6 +113,7 @@ flags = ["-I."]
 link_flags = ["-lm"]
 args = ["1000"]
 levels = ["-O0", "-O2"]
+verify = ["python3", "{benchmark}/verify.py", "--stdout", "{stdout}", "{args}"]
 ```
 
 Sources are globs relative to the benchmark directory. A leading `!` excludes a
@@ -52,6 +121,12 @@ source. Flags, link flags, and arguments default to empty lists. Levels default
 to `-O0` and `-O2`; a suite for another language can use its own level strings.
 Sources are sorted before compilation. Each argument remains one argument,
 including arguments containing spaces.
+
+Optional `verify` runs after each measured execution. `{benchmark}` is the local
+manifest directory, `{stdout}` is the saved output file, and `{args}` expands to
+the benchmark's runtime arguments. A nonzero validator exit fails the command,
+even when the benchmark executable returned success. Validation reads the saved
+output and must not rerun the executable.
 
 `inputs` lists the accepted input paths. It defaults to `["source"]`, so existing
 benchmarks retain their behavior. The runner omits benchmarks that do not list
@@ -130,7 +205,8 @@ version = ["clang", "--version"]
 ```
 
 The runner expands the same source flags and optimization level used by the
-source path. It runs IR preparation before the measured compiler command. Run
+source path. It prepares each source once per benchmark and level, before the
+measured compiler command, and reuses that IR for every selected compiler. Run
 mode also keeps benchmark compilation and linking outside the execution timer.
 TIR reports `import_ms` for input reading, LLVM import, target setup, and
 verification, and `backend_ms` for lowering and object emission. Clang's IR
@@ -176,6 +252,9 @@ extbench runner does not retain raw compiler stderr in its result JSON.
 JSON records the mode, input kind, host architecture and OS, and samples keyed
 by package, benchmark, compiler, level, and source. LLVM results also record the
 producer version, command settings, and a SHA-256 digest of the prepared IR.
+The IR digest does not depend on which compilers are selected. Runtime workload
+settings also form part of the baseline identity, so changing iteration arguments
+requires a new baseline.
 Each sample contains `wall_ms`,
 `peak_rss_kb`, and a map of configured metrics. RSS is the maximum reported by
 `time`, including waited-for child processes. It is not the sum of simultaneous
@@ -192,6 +271,7 @@ output but do not contribute to the baseline comparison. Use the same host,
 compiler versions, flags, and inputs for comparable results. Samples are written
 before the baseline verdict.
 
-The nightly job uses the new JSON format and starts a new baseline history.
+The nightly job starts a new baseline history for results that include workload
+identity. Older JSON without that identity cannot be used as a baseline.
 `cargo xtask gate` retains its original FCC/GCC baseline format and thresholds;
 it reads its pinned benchmark sources and flags from the new manifests.

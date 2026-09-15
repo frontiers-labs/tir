@@ -42,3 +42,20 @@ link = ["gcc", "{objects}", "{link_flags}", "-o", "{output}"]
 name = "clang"
 compile = ["clang", "-std=gnu17", "{level}", "{flags}", "-c", "{source}", "-o", "{output}"]
 link = ["clang", "{objects}", "{link_flags}", "-o", "{output}"]
+
+[[compiler]]
+name = "clang-scalar"
+compile = ["clang", "-std=gnu17", "{level}", "{flags}", "-fno-vectorize", "-fno-slp-vectorize", "-c", "{source}", "-o", "{output}"]
+link = ["clang", "-no-pie", "{objects}", "{link_flags}", "-o", "{output}"]
+
+[[compiler]]
+name = "clang-ir"
+input = "llvm"
+compile = ["clang", "{level}", "-c", "{source}", "-o", "{output}"]
+link = ["clang", "-no-pie", "{objects}", "{link_flags}", "-o", "{output}"]
+
+[[compiler]]
+name = "clang-ir-backend"
+input = "llvm"
+compile = ["clang", "{level}", "-Xclang", "-disable-llvm-passes", "-c", "{source}", "-o", "{output}"]
+link = ["clang", "-no-pie", "{objects}", "{link_flags}", "-o", "{output}"]

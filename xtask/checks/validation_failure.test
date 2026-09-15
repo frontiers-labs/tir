@@ -1,0 +1,2 @@
+# RUN: not xtask extbench run --suite %S/Inputs/validation/bench_suite.toml 2>&1 | filecheck %s
+# CHECK: python3 failed

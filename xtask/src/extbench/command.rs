@@ -56,11 +56,20 @@ pub fn execute(
     Ok(output)
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
+pub struct RawMeasurement {
+    pub wall_ms: f64,
+    pub peak_rss_kb: u64,
+    pub metrics: BTreeMap<String, f64>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Measurement {
     pub wall_ms: f64,
     pub peak_rss_kb: u64,
     pub metrics: BTreeMap<String, f64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub runs: Vec<RawMeasurement>,
 }
 
 pub fn measure(
@@ -68,6 +77,14 @@ pub fn measure(
     directory: &Path,
     compiler: Option<&Compiler>,
 ) -> anyhow::Result<Measurement> {
+    Ok(measure_output(argv, directory, compiler)?.0)
+}
+
+pub fn measure_output(
+    argv: &[String],
+    directory: &Path,
+    compiler: Option<&Compiler>,
+) -> anyhow::Result<(Measurement, Output)> {
     let mut timed = vec!["/usr/bin/time".to_string()];
     if cfg!(target_os = "macos") {
         timed.push("-l".into());
@@ -123,9 +140,13 @@ pub fn measure(
             measured_metrics.insert(name.clone(), values.iter().sum());
         }
     }
-    Ok(Measurement {
-        wall_ms,
-        peak_rss_kb,
-        metrics: measured_metrics,
-    })
+    Ok((
+        Measurement {
+            wall_ms,
+            peak_rss_kb,
+            metrics: measured_metrics,
+            runs: Vec::new(),
+        },
+        output,
+    ))
 }

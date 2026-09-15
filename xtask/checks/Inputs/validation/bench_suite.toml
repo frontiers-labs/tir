@@ -1,0 +1,7 @@
+[suite]
+package = "validation"
+
+[[compiler]]
+name = "gcc"
+compile = ["gcc", "-c", "{source}", "-o", "{output}"]
+link = ["gcc", "{objects}", "-o", "{output}"]
