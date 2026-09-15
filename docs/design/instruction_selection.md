@@ -371,6 +371,12 @@ The checked `core/defs/isel.pdl` theory is installed for every target. Target
 support is considered later: instruction patterns match whichever members of
 an equivalence class they can implement.
 
+Targets may add their own proved semantic PDL axioms to the same saturation.
+For example, x86 rewrites multiplication by 2, 4, or 8 into same-width shifts
+so a load or store pattern can consume the operation as a SIB scale. Its select
+mask axiom exposes `If` to the generated compare and conditional-move rules.
+These are semantic equalities, not hand-written instruction selectors.
+
 Most axioms participate in iterative saturation. A rule declaring
 `phase post-saturation` is applied once after that fixpoint instead. The
 zero-comparison shape axioms use it: their `zext(const(0, 1), W)` form exists

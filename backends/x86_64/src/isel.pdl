@@ -25,3 +25,20 @@ rule fptoui32-via-fptosi: #fptoui(x: int<32>, 32) : int<32>
 rule fptoui-via-fptosi: #fptoui(x: int<64>, 32) : int<32>
   => #extract(#fptosi(x, const<7>(64)), const<6>(31), const<1>(0));
 
+// Match the shift count width to the value so the equality remains provable at
+// every integer width where the rule can fire.
+rule mul2-to-shl: #mul(x: int<W>, 2) : int<W>
+  => #shl(x, const<W>(1));
+
+rule mul4-to-shl: #mul(x: int<W>, 4) : int<W>
+  => #shl(x, const<W>(2));
+
+rule mul8-to-shl: #mul(x: int<W>, 8) : int<W>
+  => #shl(x, const<W>(3));
+
+rule select-mask-to-if:
+  #or(
+    #and(t: int<W>, #sext(c: int<1>, W)),
+    #and(f: int<W>, #xor(#sext(c, W), const<W>(ones(W))))
+  ) : int<W>
+  => #if(c, t, f);

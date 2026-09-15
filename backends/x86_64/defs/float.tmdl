@@ -719,6 +719,108 @@ instruction Cvttsd2si64 for [X86_64] {
     }
 }
 
+instruction Movups for [SSE] {
+    param MNEMONIC: String = "movups";
+    schedule { units = [WriteFPMove]; }
+
+    operands {
+        dst: XMM128,
+        src: XMM128,
+    }
+
+    encoding {
+        rex(0b0, dst, src, 0b0),
+        0x0F,
+        0x10,
+        modrm_reg(dst, src),
+    }
+
+    asm {
+        "{self.MNEMONIC} {dst}, {src}"
+    }
+
+    behavior {
+        dst = src;
+    }
+}
+
+instruction MovupsLoadDisp for [SSE] {
+    param OPNAME: String = "movups_load_disp";
+    param MNEMONIC: String = "movups";
+
+    operands {
+        dst: XMM128,
+        base: GPR,
+        imm: bits<32>,
+    }
+
+    encoding {
+        rex(0b0, dst, base, 0b0),
+        0x0F,
+        0x10,
+        modrm_disp(dst, base, imm),
+    }
+
+    asm {
+        "{self.MNEMONIC} {dst}, [{base} + {imm}]"
+    }
+
+    behavior {
+        dst = load(base + sext(imm, self.XLEN), 16, 0b0);
+    }
+}
+
+instruction MovupsStoreDisp for [SSE] {
+    param OPNAME: String = "movups_store_disp";
+    param MNEMONIC: String = "movups";
+
+    operands {
+        base: GPR,
+        imm: bits<32>,
+        src: XMM128,
+    }
+
+    encoding {
+        rex(0b0, src, base, 0b0),
+        0x0F,
+        0x11,
+        modrm_disp(src, base, imm),
+    }
+
+    asm {
+        "{self.MNEMONIC} [{base} + {imm}], {src}"
+    }
+
+    behavior {
+        store(base + sext(imm, self.XLEN), 16, src);
+    }
+}
+
+instruction Movaps for [SSE] {
+    param MNEMONIC: String = "movaps";
+    schedule { units = [WriteFPMove]; }
+
+    operands {
+        dst: XMM128,
+        src: XMM128,
+    }
+
+    encoding {
+        rex(0b0, dst, src, 0b0),
+        0x0F,
+        0x28,
+        modrm_reg(dst, src),
+    }
+
+    asm {
+        "{self.MNEMONIC} {dst}, {src}"
+    }
+
+    behavior {
+        dst = src;
+    }
+}
+
 instruction MovssLoadDisp for [X86_64] {
     param OPNAME: String = "movss_load_disp";
     param MNEMONIC: String = "movss";

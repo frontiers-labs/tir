@@ -83,6 +83,18 @@ fn modrm_base(reg, base) {
     )
 }
 
+fn modrm_base_ext(ext, base) {
+    (
+        if forced_disp8(base) {
+            (0b01, ext, rm_field(base))
+        } else {
+            (0b00, ext, rm_field(base))
+        },
+        sib_byte(base),
+        if forced_disp8(base) { 0x00 } else { () },
+    )
+}
+
 // Whether the displacement is spelled in one byte: it has to fit, and it has to
 // be there at all, which a zero displacement only is through rbp or r13.
 fn needs_disp8(base, disp) {
@@ -111,11 +123,39 @@ fn modrm_disp(reg, base, disp) {
     )
 }
 
+fn modrm_disp_ext(ext, base, disp) {
+    (
+        if ~signed_fits(disp, 8) {
+            (0b10, ext, rm_field(base))
+        } else if needs_disp8(base, disp) {
+            (0b01, ext, rm_field(base))
+        } else {
+            (0b00, ext, rm_field(base))
+        },
+        sib_byte(base),
+        if ~signed_fits(disp, 8) {
+            disp
+        } else if needs_disp8(base, disp) {
+            disp as bits<8>
+        } else {
+            ()
+        },
+    )
+}
+
 // The prefix for an address with an index register, which has its own fourth
 // bit in REX.X.
-fn rex_sib(w, reg, index, base) {
-    if w | reg[3] | index[3] | base[3] {
+fn rex_sib(w, reg, index, base, needed) {
+    if w | reg[3] | index[3] | base[3] | needed {
         (0b0100, w, reg[3], index[3], base[3])
+    } else {
+        ()
+    }
+}
+
+fn rex_sib_ext(w, index, base) {
+    if w | index[3] | base[3] {
+        (0b0100, w, 0b0, index[3], base[3])
     } else {
         ()
     }
@@ -133,6 +173,46 @@ fn modrm_sib(reg, base, index, scale) {
         },
         (scale, index[2..0], base[2..0]),
         if forced_disp8(base) { 0x00 } else { () },
+    )
+}
+
+fn modrm_sib_disp(reg, base, index, scale, disp) {
+    (
+        if ~signed_fits(disp, 8) {
+            (0b10, reg[2..0], 0b100)
+        } else if needs_disp8(base, disp) {
+            (0b01, reg[2..0], 0b100)
+        } else {
+            (0b00, reg[2..0], 0b100)
+        },
+        (scale, index[2..0], base[2..0]),
+        if ~signed_fits(disp, 8) {
+            disp
+        } else if needs_disp8(base, disp) {
+            disp as bits<8>
+        } else {
+            ()
+        },
+    )
+}
+
+fn modrm_sib_disp_ext(ext, base, index, scale, disp) {
+    (
+        if ~signed_fits(disp, 8) {
+            (0b10, ext, 0b100)
+        } else if needs_disp8(base, disp) {
+            (0b01, ext, 0b100)
+        } else {
+            (0b00, ext, 0b100)
+        },
+        (scale, index[2..0], base[2..0]),
+        if ~signed_fits(disp, 8) {
+            disp
+        } else if needs_disp8(base, disp) {
+            disp as bits<8>
+        } else {
+            ()
+        },
     )
 }
 
