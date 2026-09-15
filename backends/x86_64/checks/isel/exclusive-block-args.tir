@@ -3,6 +3,8 @@
 // The two joins merge equal values, so they share an e-class, but neither block
 // dominates the other: a consumer must read its own block's argument register,
 // which is the only one its path wrote.
+// Use an independent subtrahend: %c is zero on the first path, so subtracting
+// it would fold away the consumer this fixture needs to check.
 
 module {
   %fn_exclusive = func.func @exclusive(%c: !i64, %a: !i64, %b: !i64, %d: !i64) -> !i64 {

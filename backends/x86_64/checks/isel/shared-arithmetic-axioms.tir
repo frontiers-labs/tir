@@ -11,6 +11,22 @@ module {
     %result = ptr.load %address : !i32
     func.return %result
   }
+
+  %fn_neutral = func.func @neutral(%0: !i64) -> !i64 {
+    %zero = constant {value = 0} : !i64
+    %one = constant {value = 1} : !i64
+    %scaled = muli %0, %one : !i64
+    %result = addi %zero, %scaled : !i64
+    func.return %result
+  }
+
+  %fn_nested_constants = func.func @nested_constants(%0: !i64) -> !i64 {
+    %three = constant {value = 3} : !i64
+    %four = constant {value = 4} : !i64
+    %inner = addi %0, %three : !i64
+    %result = addi %inner, %four : !i64
+    func.return %result
+  }
   module_end
 }
 
@@ -18,3 +34,12 @@ module {
 // CHECK-NOT: x86_64.imul
 // CHECK-NOT: x86_64.lea
 // CHECK: x86_64.mov_load32_disp {dst = %{{[0-9]+}}:GPR32, base = %{{[0-9]+}}:GPR, imm = 12}
+// CHECK-LABEL: asm.symbol {name = "neutral", arg_regs = [%[[ARG:[0-9]+]]:GPR]
+// CHECK-NOT: x86_64.imul
+// CHECK-NOT: x86_64.add
+// CHECK-NOT: x86_64.lea
+// CHECK: asm.vret %[[ARG]]
+// CHECK-LABEL: asm.symbol {name = "nested_constants"
+// CHECK-NOT: imm = 3
+// CHECK-NOT: imm = 4
+// CHECK: x86_64.lea_base_disp {dst = %{{[0-9]+}}:GPR, base = %{{[0-9]+}}:GPR, imm = 7}

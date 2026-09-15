@@ -384,6 +384,11 @@ constant cannot repeatedly expand the same equivalence class. This lets address
 expressions such as `base + (0 + 3 * 4)` reach a target's displacement pattern
 without relying on a frontend optimization pass.
 
+InstCombine matches builtin IR operations; these axioms match semantic
+expressions during selection. Lowering and path-specific equalities can expose
+constant operands after InstCombine has run, so its rules do not replace these
+selection-time folds.
+
 `if(c, x, x) = x` is verified as an ordinary equivalence. An axiom over a
 `Theta` carries the `ThetaInvariant` obligation instead, proved by induction
 over the iterations as two equivalence obligations: the identity must hold with
