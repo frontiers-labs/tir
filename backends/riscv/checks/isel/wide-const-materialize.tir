@@ -12,9 +12,7 @@ module {
   // CHECK-LABEL: bit31:
   // CHECK-NEXT: addi x5, x0, 128
   // CHECK-NEXT: slli x5, x5, 12
-  // CHECK-NEXT: addi x5, x5, 0
-  // CHECK-NEXT: slli x5, x5, 12
-  // CHECK-NEXT: addi x10, x5, 0
+  // CHECK-NEXT: slli x10, x5, 12
   // CHECK-NEXT: jalr x0, 0(x1)
 
   %fn_wide = func.func @wide() -> !i64 {
@@ -60,15 +58,10 @@ module {
   // CHECK-LABEL: min:
   // CHECK-NEXT: addi x5, x0, -8
   // CHECK-NEXT: slli x5, x5, 12
-  // CHECK-NEXT: addi x5, x5, 0
   // CHECK-NEXT: slli x5, x5, 12
-  // CHECK-NEXT: addi x5, x5, 0
   // CHECK-NEXT: slli x5, x5, 12
-  // CHECK-NEXT: addi x5, x5, 0
   // CHECK-NEXT: slli x5, x5, 12
-  // CHECK-NEXT: addi x5, x5, 0
-  // CHECK-NEXT: slli x5, x5, 12
-  // CHECK-NEXT: addi x10, x5, 0
+  // CHECK-NEXT: slli x10, x5, 12
   // CHECK-NEXT: jalr x0, 0(x1)
 
   %fn_max = func.func @max() -> !i64 {
@@ -78,13 +71,9 @@ module {
   // CHECK-LABEL: max:
   // CHECK-NEXT: addi x5, x0, -8
   // CHECK-NEXT: slli x5, x5, 12
-  // CHECK-NEXT: addi x5, x5, 0
   // CHECK-NEXT: slli x5, x5, 12
-  // CHECK-NEXT: addi x5, x5, 0
   // CHECK-NEXT: slli x5, x5, 12
-  // CHECK-NEXT: addi x5, x5, 0
   // CHECK-NEXT: slli x5, x5, 12
-  // CHECK-NEXT: addi x5, x5, 0
   // CHECK-NEXT: slli x5, x5, 12
   // CHECK-NEXT: addi x10, x5, -1
   // CHECK-NEXT: jalr x0, 0(x1)

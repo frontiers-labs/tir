@@ -5,18 +5,25 @@
 // constant outside the range is refused instead of silently truncating.
 
 module {
-  %fn_edges = func.func @edges(%0: !i64) -> !i64 {
+  %fn_upper = func.func @upper(%0: !i64) -> !i64 {
     %1 = constant {value = 2047} : !i64
     %2 = addi %0, %1 : !i64
+    func.return %2
+  }
+
+  %fn_lower = func.func @lower(%0: !i64) -> !i64 {
     %3 = constant {value = -2048} : !i64
-    %4 = addi %2, %3 : !i64
+    %4 = addi %0, %3 : !i64
     func.return %4
   }
   module_end
 }
 
-// CHECK: asm.symbol {name = "edges", arg_regs = [%[[V0:[0-9]+]]:GPR]
+// CHECK: asm.symbol {name = "upper", arg_regs = [%[[V0:[0-9]+]]:GPR]
 // CHECK-NOT: constant
 // CHECK: riscv.addi {rd = %[[V2:[0-9]+]]:GPR, rs1 = %[[V0]]:GPR, imm = 2047}
-// CHECK: riscv.addi {rd = %[[V4:[0-9]+]]:GPR, rs1 = %[[V2]]:GPR, imm = -2048}
+// CHECK: asm.vret
+// CHECK: asm.symbol {name = "lower", arg_regs = [%[[V1:[0-9]+]]:GPR]
+// CHECK-NOT: constant
+// CHECK: riscv.addi {rd = %[[V4:[0-9]+]]:GPR, rs1 = %[[V1]]:GPR, imm = -2048}
 // CHECK: asm.vret
