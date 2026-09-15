@@ -608,10 +608,12 @@ module_end
 
 #[test]
 fn immediate_rule_materializes_an_unannotated_constant_register_operand() {
+    // The sum exceeds the materializer's range, so constant folding cannot
+    // bypass the immediate rule whose register operand this test exercises.
     let (context, module, region) = function(
         r#"module {
 func.func @demo() -> !i64 {
-  %lhs = constant {value = 5} : !i64
+  %lhs = constant {value = 2047} : !i64
   %rhs = constant {value = 7} : !i64
   %add = addi %lhs, %rhs : !i64
   func.return %add
