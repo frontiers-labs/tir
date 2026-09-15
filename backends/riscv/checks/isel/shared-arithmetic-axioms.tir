@@ -1,0 +1,44 @@
+// RUN: env TIR_VERIFY_AXIOMS=1 tir mc --march=rv64im --stage=isel %s | filecheck %s
+
+module {
+  %fn_constant_address = func.func @constant_address(%0: !ptr.p<!i32>) -> !i32 {
+    %zero = constant {value = 0} : !i64
+    %three = constant {value = 3} : !i64
+    %four = constant {value = 4} : !i64
+    %scaled = muli %three, %four : !i64
+    %offset = addi %zero, %scaled : !i64
+    %address = ptr.ptradd %0, %offset : !ptr.p<!i32>
+    %result = ptr.load %address : !i32
+    func.return %result
+  }
+
+  %fn_neutral = func.func @neutral(%0: !i64) -> !i64 {
+    %zero = constant {value = 0} : !i64
+    %one = constant {value = 1} : !i64
+    %scaled = muli %0, %one : !i64
+    %result = addi %zero, %scaled : !i64
+    func.return %result
+  }
+
+  %fn_nested_constants = func.func @nested_constants(%0: !i64) -> !i64 {
+    %three = constant {value = 3} : !i64
+    %four = constant {value = 4} : !i64
+    %inner = addi %0, %three : !i64
+    %result = addi %inner, %four : !i64
+    func.return %result
+  }
+  module_end
+}
+
+// CHECK-LABEL: asm.symbol {name = "constant_address"
+// CHECK-NOT: riscv.mul
+// CHECK-NOT: riscv.add
+// CHECK: riscv.lw {rd = %{{[0-9]+}}:GPR, rs1 = %{{[0-9]+}}:GPR, imm = 12}
+// CHECK-LABEL: asm.symbol {name = "neutral", arg_regs = [%[[ARG:[0-9]+]]:GPR]
+// CHECK-NOT: riscv.mul
+// CHECK-NOT: riscv.add
+// CHECK: asm.vret %[[ARG]]
+// CHECK-LABEL: asm.symbol {name = "nested_constants"
+// CHECK-NOT: imm = 3
+// CHECK-NOT: imm = 4
+// CHECK: riscv.addi {rd = %{{[0-9]+}}:GPR, rs1 = %{{[0-9]+}}:GPR, imm = 7}

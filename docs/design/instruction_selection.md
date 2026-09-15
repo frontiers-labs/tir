@@ -377,6 +377,13 @@ zero-comparison shape axioms use it: their `zext(const(0, 1), W)` form exists
 for zero-register branch matching without feeding back through the boolean
 `*-via-if` identities and multiplying equivalent comparison forms.
 
+The shared theory also folds integer constant arithmetic and neutral operands
+before target patterns compete. Constant reassociation is deliberately narrow:
+it combines only a nested constant arm, and runs after saturation so the folded
+constant cannot repeatedly expand the same equivalence class. This lets address
+expressions such as `base + (0 + 3 * 4)` reach a target's displacement pattern
+without relying on a frontend optimization pass.
+
 `if(c, x, x) = x` is verified as an ordinary equivalence. An axiom over a
 `Theta` carries the `ThetaInvariant` obligation instead, proved by induction
 over the iterations as two equivalence obligations: the identity must hold with

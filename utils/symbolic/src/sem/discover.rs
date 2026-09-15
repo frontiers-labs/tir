@@ -239,6 +239,7 @@ impl SmtOracle {
             ));
         }
         match blast(&g, &widths) {
+            Ok(_) if structurally_equal(lhs, rhs) => ProofOutcome::Proven,
             Ok(b) if defined_refinement => proof_outcome(b.solve_defined_equivalence(l, r)),
             Ok(b) => proof_outcome(b.solve()),
             Err(error) => {

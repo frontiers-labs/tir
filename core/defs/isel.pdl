@@ -1,5 +1,51 @@
 // Target-independent instruction-selection invariants.
 
+rule add-constants:
+  #add(a: const<W>, b: const<W>) : int<W>
+  => #add(a, b);
+
+rule sub-constants:
+  #sub(a: const<W>, b: const<W>) : int<W>
+  => #sub(a, b);
+
+rule mul-constants:
+  #mul(a: const<W>, b: const<W>) : int<W>
+  => #mul(a, b);
+
+rule add-zero: #add(x: int<W>, 0) : int<W>
+  => x;
+
+rule sub-zero: #sub(x: int<W>, 0) : int<W>
+  => x;
+
+rule mul-one: #mul(x: int<W>, 1) : int<W>
+  => x;
+
+rule mul-zero: #mul(x: int<W>, 0) : int<W>
+  => const<W>(0);
+
+// Fold only the nested constant arm after the saturation fixpoint. Running
+// these rules iteratively would feed the new constant into the same e-class.
+rule add-const-reassociate:
+  #add(#add(x: int<W>, a: const<W>), b: const<W>) : int<W>
+  => #add(x, #add(a, b))
+  phase post-saturation;
+
+rule sub-const-reassociate:
+  #sub(#sub(x: int<W>, a: const<W>), b: const<W>) : int<W>
+  => #sub(x, #add(a, b))
+  phase post-saturation;
+
+rule add-sub-const-reassociate:
+  #add(#sub(x: int<W>, a: const<W>), b: const<W>) : int<W>
+  => #add(x, #sub(b, a))
+  phase post-saturation;
+
+rule sub-add-const-reassociate:
+  #sub(#add(x: int<W>, a: const<W>), b: const<W>) : int<W>
+  => #add(x, #sub(a, b))
+  phase post-saturation;
+
 rule sext-bridge: #sext(x: int<N>, W) : int<W>
   => #ashr(#shl(x, W - N), W - N)
   where N < W;

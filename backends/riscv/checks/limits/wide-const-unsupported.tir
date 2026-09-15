@@ -14,6 +14,5 @@ module {
 
 // CHECK: addi x5, x0, 128
 // CHECK-NEXT: slli x5, x5, 12
-// CHECK-NEXT: addi x5, x5, 0
 // CHECK-NEXT: slli x5, x5, 12
 // CHECK-NEXT: addi x10, x5, -1

@@ -81,6 +81,13 @@ fn smt_oracle_finds_counterexamples_over_two_symbols() {
 }
 
 #[test]
+fn smt_oracle_rejects_malformed_reflexive_graphs() {
+    let mut lhs = SemGraph::<()>::new();
+    sym(&mut lhs, 1);
+    assert!(!SmtOracle.equivalent(&lhs, &lhs, &[64]));
+}
+
+#[test]
 fn bool_via_if_identity_is_proved() {
     assert!(confirm_bool_via_if(&SmtOracle));
 }

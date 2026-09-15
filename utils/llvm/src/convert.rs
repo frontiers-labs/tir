@@ -1239,20 +1239,25 @@ fn lower_gep_offset(
     named: &HashMap<String, Type>,
 ) -> Result<ValueId, Error> {
     let i64_ty = IntegerType::new(context, 64);
-    let mut offset = constant(context, body, 0, i64_ty);
+    let mut offset = None;
+    let mut literal_offset = 0i64;
     let mut current = source.clone();
     for (position, (index_ty, index)) in indices.iter().enumerate() {
         let (scale, next, direct) = gep_step(&current, position, index, named)?;
-        if direct {
-            let addend = constant(context, body, scale as i64, i64_ty);
-            let add = bops::addi(context, offset, addend, i64_ty).build();
-            offset = add.result();
-            body.append_op(add);
+        if let ast::Operand::ConstInt(value) = index {
+            let value = if direct {
+                scale as i64
+            } else {
+                let Type::Int(width) = index_ty else {
+                    return Err(Error::Unsupported("non-integer getelementptr index".into()));
+                };
+                gep_index(*value, *width).wrapping_mul(scale as i64)
+            };
+            literal_offset = literal_offset.wrapping_add(value);
             current = next;
             continue;
         }
         let index = match index {
-            ast::Operand::ConstInt(value) => constant(context, body, *value, i64_ty),
             ast::Operand::Ref(name) => {
                 let value = *values
                     .get(name)
@@ -1270,16 +1275,51 @@ fn lower_gep_offset(
             }
             _ => return Err(Error::Unsupported("non-integer getelementptr index".into())),
         };
-        let scale = constant(context, body, scale as i64, i64_ty);
-        let product = bops::muli(context, index, scale, i64_ty).build();
-        let product_value = product.result();
-        body.append_op(product);
-        let add = bops::addi(context, offset, product_value, i64_ty).build();
-        offset = add.result();
-        body.append_op(add);
+        if scale == 0 {
+            current = next;
+            continue;
+        }
+        let term = if scale == 1 {
+            index
+        } else {
+            let scale = constant(context, body, scale as i64, i64_ty);
+            let product = bops::muli(context, index, scale, i64_ty).build();
+            let product_value = product.result();
+            body.append_op(product);
+            product_value
+        };
+        offset = Some(match offset {
+            Some(offset) => {
+                let add = bops::addi(context, offset, term, i64_ty).build();
+                let result = add.result();
+                body.append_op(add);
+                result
+            }
+            None => term,
+        });
         current = next;
     }
-    Ok(offset)
+    if literal_offset != 0 {
+        let literal = constant(context, body, literal_offset, i64_ty);
+        offset = Some(match offset {
+            Some(offset) => {
+                let add = bops::addi(context, offset, literal, i64_ty).build();
+                let result = add.result();
+                body.append_op(add);
+                result
+            }
+            None => literal,
+        });
+    }
+    Ok(offset.unwrap_or_else(|| constant(context, body, 0, i64_ty)))
+}
+
+fn gep_index(value: i64, width: u32) -> i64 {
+    if width == 0 || width >= 64 {
+        return value;
+    }
+    let shift = 64 - width;
+    (value << shift) >> shift
 }
 
 fn gep_step(
