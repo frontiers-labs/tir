@@ -47,7 +47,9 @@ LLVM input selects `tir`, `clang-ir`, and `clang-ir-backend`. All three consume
 the same prepared scalar IR and link with `clang -no-pie`. `clang-ir` runs Clang's
 optimization pipeline again; `clang-ir-backend` uses
 `-Xclang -disable-llvm-passes` to isolate backend code generation. Source input
-also offers `clang-scalar`, which disables loop and SLP vectorization. Keep the
+also offers `clang-scalar`, which disables loop and SLP vectorization. Select it
+explicitly with `--compiler clang-scalar`; default source runs keep FCC, GCC,
+and Clang. Keep the
 ordinary `clang` source result as the end-to-end comparison.
 
 Include native FCC to measure its frontend, middle-end, and backend together:
@@ -63,40 +65,14 @@ CoreMark runs with explicit arguments `0 0 0 1000000`. Its POSIX port takes the
 iteration count from the fourth argument; the `ITERATIONS` macro does not control
 this configuration. Omitting the argument lets each executable calibrate a
 different workload, so its wall times cannot be compared. The output validator
-checks the iteration count, known CRCs, and successful validation, including
-CoreMark's minimum execution duration. Dhrystone validates its final values for
+checks the iteration count and known CRCs, including the final CRC for the
+configured workload. A run shorter than ten seconds remains a valid fixed-work
+comparison, but cannot report an official CoreMark score. Dhrystone validates its final values for
 the requested iteration count.
 
 Use the same machine and CPU affinity for comparisons, and keep other heavy work
 outside the measurement. On Linux, prefix the command with `taskset -c 2` to pin
 it and its children to CPU 2. Inspect individual runs as well as their median.
-
-### Measured comparison, 2026-09-15
-
-AMD Ryzen AI MAX+ 395, CPU 2, Clang 22.1.8, generic x86-64, `-O2`.
-FCC and TIR use release builds at revision `a2b7b000` with the measurement
-changes described above. Each value is the median wall time of five runs.
-Dhrystone uses 100,000,000 iterations; CoreMark uses 1,000,000.
-
-| Compiler path | Dhrystone, seconds | CoreMark, seconds |
-| --- | ---: | ---: |
-| Native FCC | 2.258 | 62.379 |
-| Clang IR → TIR | 1.606 | 54.585 |
-| Clang IR → Clang backend | 1.022 | 18.778 |
-| Clang IR → Clang with optimization | 1.022 | 18.628 |
-| Clang from C, vectorization disabled | 1.021 | 18.204 |
-| Clang from C | 1.020 | 17.938 |
-
-All 60 measured outputs passed validation. All 30 CoreMark outputs shared final
-CRC `0x988c`, and every run exceeded ten seconds. The three LLVM-input variants
-ran in rotating order; source variants ran in separate batches. Ordinary Clang
-and FCC use their default linker settings; scalar Clang and the LLVM controls
-use `clang -no-pie`. The host was not otherwise isolated.
-
-Native FCC was 2.21× direct Clang on Dhrystone and 3.48× on CoreMark.
-With identical optimized IR, TIR was 1.57× and 2.91× the Clang backend.
-This establishes a backend gap but does not separate instruction selection,
-register allocation, and scheduling costs.
 
 ## Benchmark directories
 
@@ -168,6 +144,9 @@ build = ["cargo", "build", "--release", "-p", "another-package"]
 compile = ["compiler", "{level}", "{flags}", "-c", "{source}", "-o", "{output}"]
 link = ["compiler", "{objects}", "{link_flags}", "-o", "{output}"]
 ```
+
+`opt_in = true` excludes a compiler from default runs and requires an explicit
+`--compiler` selection. It defaults to false.
 
 `build` is optional and runs from the workspace root. Compile and link commands
 run from the source directory. The runner imposes no source extension or

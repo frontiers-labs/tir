@@ -15,38 +15,51 @@ EXPECTED_CRC = {
     "crcmatrix": "1fd7",
     "crcstate": "8e3a",
 }
+EXPECTED_FINAL_CRC = {(0, 0, 0, 1_000_000): "988c"}
+SHORT_RUN_ERROR = "ERROR! Must execute for at least 10 secs for a valid result!"
 
 
 def validate(output: str, args: list[str]) -> None:
     if len(args) < 4:
         raise AssertionError("CoreMark requires seed arguments and an iteration count")
     try:
+        seeds = tuple(int(value, 10) for value in args[:3])
         iterations = int(args[3], 10)
     except ValueError as error:
-        raise AssertionError(f"invalid CoreMark iteration count: {args[3]!r}") from error
+        raise AssertionError("invalid CoreMark seed or iteration argument") from error
     if iterations <= 0:
         raise AssertionError(f"invalid CoreMark iteration count: {iterations}")
-    if re.search(r"(?i)\b(error|failed|failure|runtime)\b", output):
-        raise AssertionError("CoreMark output reports a runtime error")
     iteration_match = re.search(r"(?mi)^\s*Iterations\s*:\s*(\d+)\s*$", output)
     if iteration_match is None or int(iteration_match.group(1)) != iterations:
         observed = iteration_match.group(1) if iteration_match else "missing"
         raise AssertionError(f"CoreMark iterations differ: expected {iterations}, observed {observed}")
     time_match = re.search(r"(?mi)^\s*Total time \(secs\)\s*:\s*([0-9]+(?:\.[0-9]+)?)\s*$", output)
-    if time_match is None or float(time_match.group(1)) < 10:
-        observed = time_match.group(1) if time_match else "missing"
-        raise AssertionError(f"CoreMark run is too short: expected at least 10 seconds, observed {observed}")
+    if time_match is None:
+        raise AssertionError("CoreMark total time is missing")
+    short_run = float(time_match.group(1)) < 10
+    short_run_error = any(line.strip() == SHORT_RUN_ERROR for line in output.splitlines())
+    for line in output.splitlines():
+        if re.search(r"(?i)error|failed|failure|cannot validate operation|errors detected", line):
+            if line.strip() == SHORT_RUN_ERROR:
+                continue
+            if line.strip() == "Errors detected" and short_run and short_run_error:
+                continue
+            raise AssertionError("CoreMark output reports a runtime or correctness error")
     for name, expected in EXPECTED_CRC.items():
         match = re.search(rf"(?mi)^\s*(?:\[\d+\])?{name}\s*:\s*0x([0-9a-f]+)\s*$", output)
         if match is None or match.group(1).lower() != expected:
             observed = match.group(1) if match else "missing"
             raise AssertionError(f"CoreMark {name} differs: expected 0x{expected}, observed {observed}")
-    if re.search(r"(?mi)^\s*(?:\[\d+\])?crcfinal\s*:\s*0x[0-9a-f]+\s*$", output) is None:
-        raise AssertionError("CoreMark output has no final CRC")
-    if "Correct operation validated." not in output:
-        raise AssertionError("CoreMark did not report correct operation")
-    if re.search(r"(?m)^\s*CoreMark\s+1\.0\s*:", output) is None:
-        raise AssertionError("CoreMark output has no score")
+    final_match = re.search(r"(?mi)^\s*(?:\[\d+\])?crcfinal\s*:\s*0x([0-9a-f]+)\s*$", output)
+    expected_final = EXPECTED_FINAL_CRC.get((*seeds, iterations))
+    if final_match is None or expected_final is None or final_match.group(1).lower() != expected_final:
+        observed = final_match.group(1) if final_match else "missing"
+        raise AssertionError(f"CoreMark final CRC differs: expected 0x{expected_final or 'known value'}, observed {observed}")
+    if not short_run:
+        if "Correct operation validated." not in output:
+            raise AssertionError("CoreMark did not report correct operation")
+        if re.search(r"(?m)^\s*CoreMark\s+1\.0\s*:", output) is None:
+            raise AssertionError("CoreMark output has no score")
 
 
 def main() -> None:

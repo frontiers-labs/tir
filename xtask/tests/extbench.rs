@@ -10,6 +10,13 @@ fn command(mode: &str) -> Command {
     command
 }
 
+fn suite_command(mode: &str, suite: &Path) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_xtask"));
+    command.args(["extbench", mode, "--suite"]);
+    command.arg(suite);
+    command
+}
+
 fn success(output: Output) -> Output {
     assert!(
         output.status.success(),
@@ -25,7 +32,7 @@ fn results(path: &Path) -> Value {
 }
 
 #[test]
-fn repeated_runs_report_median_and_peak_with_raw_measurements() {
+fn even_repeated_runs_report_median_and_peak_with_raw_measurements() {
     let temporary = tempfile::tempdir().unwrap();
     let output = temporary.path().join("results.json");
     success(
@@ -51,6 +58,107 @@ fn repeated_runs_report_median_and_peak_with_raw_measurements() {
         .max()
         .unwrap();
     assert_eq!(sample["peak_rss_kb"].as_u64().unwrap(), maximum);
+}
+
+#[test]
+fn odd_repeated_runs_report_median() {
+    let temporary = tempfile::tempdir().unwrap();
+    let output = temporary.path().join("results.json");
+    success(
+        command("run")
+            .args(["--runs", "3", "--level=-O0", "--output"])
+            .arg(&output)
+            .output()
+            .unwrap(),
+    );
+    let results = results(&output);
+    let sample = &results["samples"][0];
+    let runs = sample["runs"].as_array().unwrap();
+    assert_eq!(runs.len(), 3);
+    let mut wall_times = runs
+        .iter()
+        .map(|run| run["wall_ms"].as_f64().unwrap())
+        .collect::<Vec<_>>();
+    wall_times.sort_by(f64::total_cmp);
+    assert_eq!(sample["wall_ms"].as_f64().unwrap(), wall_times[1]);
+}
+
+#[test]
+fn opt_in_compiler_requires_an_explicit_filter() {
+    let temporary = tempfile::tempdir().unwrap();
+    let default_output = temporary.path().join("default.json");
+    let explicit_output = temporary.path().join("explicit.json");
+    success(
+        command("compile")
+            .args(["--input", "llvm", "--output"])
+            .arg(&default_output)
+            .output()
+            .unwrap(),
+    );
+    success(
+        command("compile")
+            .args(["--input", "llvm", "--compiler", "tir-opt-in", "--output"])
+            .arg(&explicit_output)
+            .output()
+            .unwrap(),
+    );
+    let default_results = results(&default_output);
+    let default_compilers = default_results["samples"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|sample| sample["compiler"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(default_compilers, ["tir2", "tir"]);
+    assert_eq!(
+        results(&explicit_output)["samples"][0]["compiler"],
+        "tir-opt-in"
+    );
+}
+
+#[test]
+fn workload_digest_frames_source_file_boundaries() {
+    let temporary = tempfile::tempdir().unwrap();
+    let suite = temporary.path().join("bench_suite.toml");
+    let benchmark = temporary.path().join("collision");
+    std::fs::create_dir(&benchmark).unwrap();
+    std::fs::write(
+        &suite,
+        r#"
+[suite]
+package = "fixture"
+
+[[compiler]]
+name = "copy"
+compile = ["cp", "{source}", "{output}"]
+link = []
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        benchmark.join("benchmark.toml"),
+        "sources = [\"a\", \"b\"]\nlevels = [\"-O0\"]\n",
+    )
+    .unwrap();
+    std::fs::write(benchmark.join("a"), "ab").unwrap();
+    std::fs::write(benchmark.join("b"), "c").unwrap();
+    let baseline = temporary.path().join("baseline.json");
+    success(
+        suite_command("compile", &suite)
+            .args(["--output"])
+            .arg(&baseline)
+            .output()
+            .unwrap(),
+    );
+    std::fs::write(benchmark.join("a"), "a").unwrap();
+    std::fs::write(benchmark.join("b"), "bc").unwrap();
+    let output = suite_command("compile", &suite)
+        .arg("--baseline")
+        .arg(&baseline)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("baseline workload differs"));
 }
 
 #[test]

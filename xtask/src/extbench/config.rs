@@ -40,6 +40,8 @@ pub struct Package {
 pub struct Compiler {
     pub name: String,
     #[serde(default)]
+    pub opt_in: bool,
+    #[serde(default)]
     pub input: Input,
     #[serde(default)]
     pub build: Vec<String>,

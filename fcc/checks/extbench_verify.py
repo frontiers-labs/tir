@@ -33,18 +33,24 @@ seedcrc           : 0xe9f5
 [0]crclist        : 0xe714
 [0]crcmatrix      : 0x1fd7
 [0]crcstate       : 0x8e3a
-[0]crcfinal       : 0x1234
+[0]crcfinal       : 0x988c
 Correct operation validated. See README.md for run and reporting rules.
 CoreMark 1.0 : 123.45 / GCC
 """
     validator = ROOT / "extbench/coremark/verify.py"
     assert run(validator, output, ["0", "0", "0", "1000000"]).returncode == 0
     assert run(validator, output.replace("0xe714", "0x0000"), ["0", "0", "0", "1000000"]).returncode != 0
+    assert run(validator, output.replace("0x988c", "0x1234"), ["0", "0", "0", "1000000"]).returncode != 0
     assert run(validator, output, ["0", "0", "0", "100"]).returncode != 0
-    assert run(validator, output.replace("10.00", "9.99"), ["0", "0", "0", "1000000"]).returncode != 0
+    short_output = output.replace("10.00", "1.00").replace(
+        "Correct operation validated. See README.md for run and reporting rules.\n", ""
+    ).replace("CoreMark 1.0 : 123.45 / GCC\n", "") + "ERROR! Must execute for at least 10 secs for a valid result!\nErrors detected\n"
+    assert run(validator, short_output, ["0", "0", "0", "1000000"]).returncode == 0
+    assert run(validator, short_output.replace("0x988c", "0x1234"), ["0", "0", "0", "1000000"]).returncode != 0
+    assert run(validator, short_output + "runtime error\n", ["0", "0", "0", "1000000"]).returncode != 0
     assert run(validator, output + "runtime error\n", ["0", "0", "0", "1000000"]).returncode != 0
     assert run(validator, output.replace("Correct operation validated. See README.md for run and reporting rules.\n", ""), ["0", "0", "0", "1000000"]).returncode != 0
-    assert run(validator, output.replace("[0]crcfinal       : 0x1234\n", ""), ["0", "0", "0", "1000000"]).returncode != 0
+    assert run(validator, output.replace("[0]crcfinal       : 0x988c\n", ""), ["0", "0", "0", "1000000"]).returncode != 0
 
 
 def test_dhrystone() -> None:

@@ -216,6 +216,11 @@ fn finish_results(
     Ok(())
 }
 
+fn digest_field(digest: &mut Sha256, value: &[u8]) {
+    digest.input((value.len() as u64).to_le_bytes());
+    digest.input(value);
+}
+
 pub fn run(root: &Path, task: Task) -> anyhow::Result<()> {
     let (mode, options) = match task {
         Task::Compile(options) => ("compile", options),
@@ -259,7 +264,7 @@ pub fn run(root: &Path, task: Task) -> anyhow::Result<()> {
                 options
                     .compiler
                     .as_ref()
-                    .is_none_or(|name| name == &compiler.name)
+                    .map_or(!compiler.opt_in, |name| name == &compiler.name)
                     && options.input == compiler.input
             })
             .collect::<Vec<_>>();
@@ -296,8 +301,11 @@ pub fn run(root: &Path, task: Task) -> anyhow::Result<()> {
             });
         }
         let prepared = config::prepare(selection, &cache)?;
-        workload_digest.input(selection.suite.suite.package.as_bytes());
-        workload_digest.input(selection.name.as_bytes());
+        digest_field(
+            &mut workload_digest,
+            selection.suite.suite.package.as_bytes(),
+        );
+        digest_field(&mut workload_digest, selection.name.as_bytes());
         for value in prepared
             .config
             .args
@@ -305,11 +313,10 @@ pub fn run(root: &Path, task: Task) -> anyhow::Result<()> {
             .chain(prepared.config.flags.iter())
             .chain(prepared.config.link_flags.iter())
         {
-            workload_digest.input(value.as_bytes());
-            workload_digest.input([0]);
+            digest_field(&mut workload_digest, value.as_bytes());
         }
         for source in &prepared.sources {
-            workload_digest.input(fs::read(source)?);
+            digest_field(&mut workload_digest, &fs::read(source)?);
         }
         if let Some(producer) = &mut results.producer {
             for level in &prepared.config.levels {

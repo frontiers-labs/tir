@@ -45,8 +45,9 @@ link = ["clang", "{objects}", "{link_flags}", "-o", "{output}"]
 
 [[compiler]]
 name = "clang-scalar"
+opt_in = true
 compile = ["clang", "-std=gnu17", "{level}", "{flags}", "-fno-vectorize", "-fno-slp-vectorize", "-c", "{source}", "-o", "{output}"]
-link = ["clang", "-no-pie", "{objects}", "{link_flags}", "-o", "{output}"]
+link = ["clang", "{objects}", "{link_flags}", "-o", "{output}"]
 
 [[compiler]]
 name = "clang-ir"

@@ -17,6 +17,13 @@ compile = ["gcc", "-x", "c", "-c", "{source}", "-o", "{output}"]
 link = ["gcc", "{objects}", "{link_flags}", "-o", "{output}"]
 
 [[compiler]]
+name = "tir-opt-in"
+opt_in = true
+input = "llvm"
+compile = ["gcc", "-x", "c", "-c", "{source}", "-o", "{output}"]
+link = ["gcc", "{objects}", "{link_flags}", "-o", "{output}"]
+
+[[compiler]]
 name = "tir"
 input = "llvm"
 compile = ["gcc", "-x", "c", "-c", "{source}", "-o", "{output}"]
