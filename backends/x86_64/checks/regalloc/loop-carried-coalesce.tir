@@ -1,14 +1,12 @@
 // RUN: tir mc --march=x86_64 --stage=regalloc %s | filecheck %s
 // RUN: tir mc --march=x86_64 --shuffle-machine-order --filetype=obj -o /dev/null %s
 
-// The copy that carries a loop's parameter around its back edge asks for one
-// register at both ends: the parameter dies where the edge's value is born,
-// so their live ranges never overlap and the edge needs no copy at all. The
-// pointer chase below loads straight into the register the header reads, and
-// no move survives between the header and its back edge.
+// Loading on the back-edge path lets the load overwrite the header register.
+// Loading before the condition keeps the old pointer live in the lowered
+// false arm and requires a separate register and a back-edge copy.
 
 module {
-  %fn_walk = func.func @walk(%0: !ptr.p, %1: !i64) -> !i64 {
+  %fn_walk = func.func @load_before_condition(%0: !ptr.p, %1: !i64) -> !i64 {
     %c0 = constant {value = 0} : !i64
     cfg.br ^loop(%0 : !ptr.p)
   ^loop(%p: !ptr.p):
@@ -18,8 +16,29 @@ module {
   ^exit:
     func.return %1
   }
+  %fn_step = func.func @load_on_back_edge(%0: !ptr.p, %1: !i64) -> !i64 {
+    %c0 = constant {value = 0} : !i64
+    cfg.br ^loop(%0 : !ptr.p)
+  ^loop(%p: !ptr.p):
+    %more = cmpi %1, %c0 {predicate = "ne"} : !i1
+    cfg.cond_br %more, ^step, ^exit
+  ^step:
+    %next = ptr.load %p : !ptr.p
+    cfg.br ^loop(%next : !ptr.p)
+  ^exit:
+    func.return %1
+  }
   module_end
 }
 
-// CHECK:      ^[[HEAD:bb[0-9]+]](%[[P:[0-9]+]]: !x86_64.GPR
-// CHECK-NEXT: %{{[0-9]+}} = x86_64.mov_load {dst = %{{[0-9]+}}:{{[a-z0-9]+}}, base = %[[P]]:{{[a-z0-9]+}}
+// CHECK-LABEL: asm.symbol {name = "load_before_condition"
+// CHECK: ^[[HEAD:bb[0-9]+]](%[[P:[0-9]+]]: !x86_64.GPR
+// CHECK-NEXT: %{{[0-9]+}} = x86_64.mov_load {dst = %{{[0-9]+}}:[[NEXT:[a-z0-9]+]], base = %[[P]]:[[REG:[a-z0-9]+]]}
+// CHECK: x86_64.mov {dst = %[[P]]:[[REG]], src = %{{[0-9]+}}:[[NEXT]]}
+// CHECK-NEXT: asm.vbr ^[[HEAD]]
+
+// CHECK-LABEL: asm.symbol {name = "load_on_back_edge"
+// CHECK: ^[[HEAD:bb[0-9]+]](%[[P:[0-9]+]]: !x86_64.GPR
+// CHECK: %{{[0-9]+}} = x86_64.mov_load {dst = %{{[0-9]+}}:[[REG:[a-z0-9]+]], base = %[[P]]:[[REG]]}
+// CHECK-NOT: x86_64.mov {dst = %{{[0-9]+}}:[[REG]]
+// CHECK: asm.vbr ^[[HEAD]]

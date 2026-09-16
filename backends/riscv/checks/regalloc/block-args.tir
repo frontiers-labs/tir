@@ -27,5 +27,6 @@ module {
 // The taken arm forwards %a into the very same register.
 // CHECK: ^[[TAKEN]]:
 // CHECK-NEXT: riscv.addi {rd = %{{[0-9]+}}:x10, rs1 = %{{[0-9]+}}:x12, imm = 0}
-// CHECK-NEXT: ^[[JOIN]](%{{[0-9]+}}: !riscv.GPR):
+// CHECK-NEXT: asm.vbr ^[[JOIN]]
+// CHECK: ^[[JOIN]](%{{[0-9]+}}: !riscv.GPR):
 // CHECK-NEXT: asm.vret

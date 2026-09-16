@@ -535,15 +535,19 @@ instruction And for [RV32I, RV64I] : RType {
 }
 ```
 
-## Conditional latency
+## Conditional scheduling
 
-A machine override can choose scalar latency from the instruction's operands:
+A machine override can choose result latency and resource occupancy from the
+instruction's operands:
 
 ```tmdl
 override Div {
     latency = 20;
-    uses = [DIV];
-    when rhs == 0b1 { latency = 4; }
+    uop(DIV<20>);
+    when rhs == 0b1 {
+        latency = 4;
+        uop(DIV<3>);
+    }
 }
 ```
 
@@ -569,13 +573,15 @@ use separate instruction declarations and scheduling classes.
 
 Latency predicates cannot access memory or change machine state. Conditional
 latency cannot accompany `reads`/`writes` pipeline phases, `eliminated = true`,
-or `zero_idiom = true`. Cases change only latency; the other override fields
-apply to every instance.
+or `zero_idiom = true`. A case may contain `uop` statements using the same
+resource expressions, counts, and occupancy cycles as a static override. These
+replace the fallback micro-ops. A case without `uop` inherits the fallback
+resources; the other override fields apply to every instance.
 
-Generated `MachineInstruction::sched_on(model, context)` resolves the latency
+Generated `MachineInstruction::sched_on(model, context)` resolves the scheduling class
 using the instruction's entry state. `InstrInfo::sched_on(model)` returns the
-static fallback. The simulator records resolved latencies before execution and
-uses them during timing replay. `tir sched` always uses the static fallback, even
+static fallback. The simulator records the full resolved scheduling class before execution and
+uses its latency and resources during timing replay. `tir sched` always uses the static fallback, even
 for `regnum` conditions on physical registers. Instruction selection uses
 scheduling-class defaults and does not evaluate these conditions.
 

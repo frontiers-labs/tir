@@ -1,7 +1,7 @@
 use tir_adt::{APFloat, APInt, RawBits};
 use tir_graph::NodeId;
 use tir_symbolic::lang::{
-    execute, execute_with_memory, AtomicRmwOp, MemOrdering, Memory, SymKind, Value,
+    execute, execute_with_memory, AtomicRmwOp, Continuation, MemOrdering, Memory, SymKind, Value,
 };
 
 use super::support::{arg, con, op, signed_con, sym, Graph};
@@ -115,6 +115,259 @@ fn memory_load_and_store_execute_little_endian() {
     );
     execute_with_memory(&g, &[], &mut memory).unwrap();
     assert_eq!(&memory.bytes[8..10], &[0xef, 0xbe]);
+}
+
+#[test]
+fn continuation_resumes_the_pending_load_without_repeating_completed_loads() {
+    let mut g = Graph::new();
+    let first_address = int_con(&mut g, 0);
+    let bytes = int_con(&mut g, 4);
+    let metadata = int_con(&mut g, 0);
+    let first = op(
+        &mut g,
+        SymKind::LoadMemory,
+        &[first_address, bytes, metadata],
+    );
+    op(&mut g, SymKind::LoadMemory, &[first, bytes, metadata]);
+
+    struct SuspendSecond {
+        reads: Vec<u64>,
+        suspended: bool,
+    }
+
+    impl Memory for SuspendSecond {
+        type Error = ();
+
+        fn read_memory(&mut self, address: u64, _size: usize) -> Result<u64, Self::Error> {
+            self.reads.push(address);
+            if address == 8 && !self.suspended {
+                self.suspended = true;
+                Err(())
+            } else {
+                Ok(if address == 0 { 8 } else { address + 1 })
+            }
+        }
+
+        fn write_memory(
+            &mut self,
+            _address: u64,
+            _size: usize,
+            _value: u64,
+        ) -> Result<(), Self::Error> {
+            unreachable!()
+        }
+    }
+
+    let mut continuation = Continuation::new(&g);
+    let mut memory = SuspendSecond {
+        reads: vec![],
+        suspended: false,
+    };
+    assert_eq!(continuation.resume(&g, &[], &mut memory), Err(()));
+    assert_eq!(
+        as_u64(continuation.resume(&g, &[], &mut memory).unwrap()),
+        9
+    );
+    assert_eq!(memory.reads, [0, 8, 8]);
+}
+
+#[test]
+fn continuation_evaluates_only_the_selected_branch() {
+    let mut g = Graph::new();
+    let condition = int_con(&mut g, 1);
+    let selected_address = int_con(&mut g, 0);
+    let skipped_address = int_con(&mut g, 8);
+    let bytes = int_con(&mut g, 4);
+    let metadata = int_con(&mut g, 0);
+    let selected = op(
+        &mut g,
+        SymKind::LoadMemory,
+        &[selected_address, bytes, metadata],
+    );
+    let skipped = op(
+        &mut g,
+        SymKind::LoadMemory,
+        &[skipped_address, bytes, metadata],
+    );
+    op(&mut g, SymKind::If, &[condition, selected, skipped]);
+
+    struct RecordingMemory(Vec<u64>);
+    impl Memory for RecordingMemory {
+        type Error = ();
+
+        fn read_memory(&mut self, address: u64, _size: usize) -> Result<u64, Self::Error> {
+            self.0.push(address);
+            Ok(42)
+        }
+
+        fn write_memory(
+            &mut self,
+            _address: u64,
+            _size: usize,
+            _value: u64,
+        ) -> Result<(), Self::Error> {
+            unreachable!()
+        }
+    }
+
+    let mut memory = RecordingMemory(vec![]);
+    assert_eq!(
+        as_u64(execute_with_memory(&g, &[], &mut memory).unwrap()),
+        42
+    );
+    assert_eq!(memory.0, [0]);
+}
+
+#[test]
+fn continuation_evaluates_only_the_selected_switch_arm() {
+    let mut g = Graph::new();
+    let predicate = int_con(&mut g, 1);
+    let first_address = int_con(&mut g, 0);
+    let second_address = int_con(&mut g, 8);
+    let bytes = int_con(&mut g, 4);
+    let metadata = int_con(&mut g, 0);
+    let first = op(
+        &mut g,
+        SymKind::LoadMemory,
+        &[first_address, bytes, metadata],
+    );
+    let second = op(
+        &mut g,
+        SymKind::LoadMemory,
+        &[second_address, bytes, metadata],
+    );
+    op(&mut g, SymKind::Switch, &[predicate, first, second]);
+
+    struct RecordingMemory(Vec<u64>);
+    impl Memory for RecordingMemory {
+        type Error = ();
+
+        fn read_memory(&mut self, address: u64, _size: usize) -> Result<u64, Self::Error> {
+            self.0.push(address);
+            Ok(address + 1)
+        }
+
+        fn write_memory(
+            &mut self,
+            _address: u64,
+            _size: usize,
+            _value: u64,
+        ) -> Result<(), Self::Error> {
+            unreachable!()
+        }
+    }
+
+    let mut memory = RecordingMemory(vec![]);
+    assert_eq!(
+        as_u64(execute_with_memory(&g, &[], &mut memory).unwrap()),
+        9
+    );
+    assert_eq!(memory.0, [8]);
+}
+
+#[test]
+fn map_resume_keeps_completed_lane_effects() {
+    let mut g = Graph::new();
+    let count = int_con(&mut g, 3);
+    let width = int_con(&mut g, 64);
+    let iter = op(&mut g, SymKind::Iota, &[count, width]);
+    let lane = arg(&mut g, 0);
+    let bytes = int_con(&mut g, 1);
+    let address_space = int_con(&mut g, 0);
+    let body = op(
+        &mut g,
+        SymKind::StoreMemory,
+        &[lane, bytes, lane, address_space],
+    );
+    op(&mut g, SymKind::Map, &[iter, body]);
+
+    #[derive(Default)]
+    struct SuspendLane {
+        calls: Vec<u64>,
+        accepted: Vec<u64>,
+        suspended: bool,
+    }
+    impl Memory for SuspendLane {
+        type Error = ();
+
+        fn read_memory(&mut self, _address: u64, _size: usize) -> Result<u64, Self::Error> {
+            unreachable!()
+        }
+
+        fn write_memory(
+            &mut self,
+            address: u64,
+            _size: usize,
+            _value: u64,
+        ) -> Result<(), Self::Error> {
+            self.calls.push(address);
+            if address == 1 && !self.suspended {
+                self.suspended = true;
+                return Err(());
+            }
+            self.accepted.push(address);
+            Ok(())
+        }
+    }
+
+    let mut continuation = Continuation::new(&g);
+    let mut memory = SuspendLane::default();
+    assert!(continuation.resume(&g, &[], &mut memory).is_err());
+    continuation.resume(&g, &[], &mut memory).unwrap();
+    assert_eq!(memory.calls, [0, 1, 1, 2]);
+    assert_eq!(memory.accepted, [0, 1, 2]);
+}
+
+#[test]
+fn reduce_resume_keeps_the_lane_index_accumulator_and_cache() {
+    let mut g = Graph::new();
+    let count = int_con(&mut g, 3);
+    let width = int_con(&mut g, 64);
+    let iter = op(&mut g, SymKind::Iota, &[count, width]);
+    let accumulator = arg(&mut g, 0);
+    let lane = arg(&mut g, 1);
+    let bytes = int_con(&mut g, 1);
+    let metadata = int_con(&mut g, 0);
+    let loaded = op(&mut g, SymKind::LoadMemory, &[lane, bytes, metadata]);
+    let body = op(&mut g, SymKind::Add, &[accumulator, loaded]);
+    op(&mut g, SymKind::Reduce, &[iter, body]);
+
+    #[derive(Default)]
+    struct SuspendLane {
+        calls: Vec<u64>,
+        suspended: bool,
+    }
+    impl Memory for SuspendLane {
+        type Error = ();
+
+        fn read_memory(&mut self, address: u64, _size: usize) -> Result<u64, Self::Error> {
+            self.calls.push(address);
+            if address == 2 && !self.suspended {
+                self.suspended = true;
+                Err(())
+            } else {
+                Ok(address + 10)
+            }
+        }
+
+        fn write_memory(
+            &mut self,
+            _address: u64,
+            _size: usize,
+            _value: u64,
+        ) -> Result<(), Self::Error> {
+            unreachable!()
+        }
+    }
+
+    let mut continuation = Continuation::new(&g);
+    let mut memory = SuspendLane::default();
+    assert!(continuation.resume(&g, &[], &mut memory).is_err());
+    assert_eq!(
+        as_u64(continuation.resume(&g, &[], &mut memory).unwrap()),
+        23
+    );
+    assert_eq!(memory.calls, [1, 2, 2]);
 }
 
 // ── Integer and float scalar ops, table-driven ─────────────────────────────

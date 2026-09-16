@@ -39,9 +39,12 @@ machine SCR1_3Stage ("scr1-3stage") for [RV32I] {
 
     // ALU ops: single cycle.
     bind WriteIALU { reads = ID; writes = EX; uses = [ALU]; }
+    bind WritePCRelative { reads = ID; writes = EX; uses = [ALU]; }
+    bind WriteBranch { reads = ID; writes = EX; uses = [ALU]; }
 
     // Loads: best-case 2-cycle latency (address generation + memory response).
     bind WriteLoad { latency = 2; uses = [LSU]; }
+    bind WriteFPLoad { latency = 2; uses = [LSU]; }
 
     // Stores occupy the LSU; the value they write is never a register dependency.
     bind WriteStore { reads = ID; writes = EX; uses = [LSU]; }

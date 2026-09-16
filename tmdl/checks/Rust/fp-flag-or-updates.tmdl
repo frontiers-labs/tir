@@ -1,0 +1,125 @@
+// RUN: tmdlc --action=emit-rust --text-only --dialect=test --output=- %s | filecheck %s
+
+isa Test {}
+register_class FLAGS for [Test] {
+    param WIDTH: Integer = 5;
+    param ENCODING_LEN: Integer = 1;
+    registers { flags => { traits = [fp_flags] }, ordinary => {}, alias => { index = 0 }, }
+}
+register_class ALIAS for [Test] {
+    file = FLAGS;
+    param WIDTH: Integer = 5;
+    param ENCODING_LEN: Integer = 1;
+    registers { flags => {}, }
+}
+
+instruction OperandAlias for [Test] {
+    param MNEMONIC: String = "operand_alias";
+    operands { old: ALIAS }
+    asm { "operand_alias {old}" }
+    behavior { FLAGS::flags = FLAGS::flags | old; }
+}
+
+// CHECK-LABEL: static INFO_OPERANDALIAS:
+// CHECK-NOT: implicit_or_updates:
+
+register_class GPR for [Test] {
+    param WIDTH: Integer = 5;
+    param ENCODING_LEN: Integer = 1;
+    registers { r0 => {}, }
+}
+
+register_class GPR64 for [Test] {
+    param WIDTH: Integer = 64;
+    param ENCODING_LEN: Integer = 1;
+    registers { r0 => {}, }
+}
+
+instruction GprSlice for [Test] {
+    param MNEMONIC: String = "gpr_slice";
+    operands { rs: GPR64 }
+    asm { "gpr_slice {rs}" }
+    behavior { FLAGS::flags = FLAGS::flags | extract(rs, 4, 0); }
+}
+
+// CHECK-LABEL: static INFO_GPRSLICE:
+// CHECK-NOT: implicit_or_updates:
+
+register_class FP for [Test] {
+    param WIDTH: Integer = 32;
+    param ENCODING_LEN: Integer = 1;
+    registers { f0 => { traits = [float] }, }
+}
+
+instruction IntToFloat for [Test] {
+    param MNEMONIC: String = "int_to_float";
+    operands { rd: FP, rs: GPR64 }
+    asm { "int_to_float {rd}, {rs}" }
+    behavior {
+        let result = sitofp(extract(rs, 31, 0), 8, 23, 0b000);
+        FLAGS::flags = FLAGS::flags | fp_flags(result);
+        rd = result;
+    }
+}
+
+// CHECK-LABEL: static INFO_INTTOFLOAT:
+// CHECK: implicit_or_updates: &[(RegClass::FLAGS.id(), 0)],
+
+instruction GuardRead for [Test] {
+    param MNEMONIC: String = "guard_read";
+    operands { dst: GPR }
+    asm { "guard_read {dst}" }
+    behavior {
+        let old = FLAGS::flags;
+        if old == 0b00000 { dst = 0b00001; } else { dst = 0b00000; };
+        FLAGS::flags = FLAGS::flags | 0b00001;
+    }
+}
+
+// CHECK-LABEL: static INFO_GUARDREAD:
+// CHECK-NOT: implicit_or_updates:
+
+fn old_flags() { FLAGS::flags }
+
+instruction HelperRead for [Test] {
+    param MNEMONIC: String = "helper_read";
+    operands { dst: GPR }
+    asm { "helper_read {dst}" }
+    behavior {
+        let old = old_flags();
+        dst = old;
+        FLAGS::flags = FLAGS::flags | 0b00001;
+    }
+}
+
+// CHECK-LABEL: static INFO_HELPERREAD:
+// CHECK-NOT: implicit_or_updates:
+
+instruction IntegerOr for [Test] {
+    param MNEMONIC: String = "integer_or";
+    asm { "integer_or" }
+    behavior { GPR::r0 = GPR::r0 | 0b00001; }
+}
+
+// CHECK-LABEL: static INFO_INTEGEROR:
+// CHECK-NOT: implicit_or_updates:
+
+
+instruction UntaggedRegister for [Test] {
+    param MNEMONIC: String = "untagged";
+    asm { "untagged" }
+    behavior { FLAGS::ordinary = FLAGS::ordinary | 0b00001; }
+}
+
+// CHECK-LABEL: static INFO_UNTAGGEDREGISTER:
+// CHECK-NOT: implicit_or_updates:
+
+
+instruction SameClassAlias for [Test] {
+    param MNEMONIC: String = "same_class_alias";
+    asm { "same_class_alias" }
+    behavior { FLAGS::flags = FLAGS::flags | FLAGS::alias; }
+}
+
+// CHECK-LABEL: static INFO_SAMECLASSALIAS:
+// CHECK-NOT: implicit_or_updates:

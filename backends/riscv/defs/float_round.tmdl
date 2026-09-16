@@ -11,6 +11,7 @@ fn scalar_canonical64(value) {
 }
 
 template FAddSRounded for [F] {
+    schedule { units = [WriteFPAdd]; }
     param MNEMONIC: String = "fadd.s";
     param OPNAME: String;
     param RM: bits<3>;
@@ -89,6 +90,7 @@ instruction FAddS for [F] : FAddSRounded {
 }
 
 template FSubSRounded for [F] {
+    schedule { units = [WriteFPAdd]; }
     param MNEMONIC: String = "fsub.s";
     param OPNAME: String;
     param RM: bits<3>;
@@ -167,6 +169,7 @@ instruction FSubS for [F] : FSubSRounded {
 }
 
 template FMulSRounded for [F] {
+    schedule { units = [WriteFPMul]; }
     param MNEMONIC: String = "fmul.s";
     param OPNAME: String;
     param RM: bits<3>;
@@ -245,6 +248,7 @@ instruction FMulS for [F] : FMulSRounded {
 }
 
 template FDivSRounded for [F] {
+    schedule { units = [WriteFPDivSingle]; }
     param MNEMONIC: String = "fdiv.s";
     param OPNAME: String;
     param RM: bits<3>;
@@ -323,6 +327,7 @@ instruction FDivS for [F] : FDivSRounded {
 }
 
 template FMAddSRounded for [F] {
+    schedule { units = [WriteFPFmaSingle]; }
     param MNEMONIC: String = "fmadd.s";
     param OPNAME: String;
     param RM: bits<3>;
@@ -401,6 +406,7 @@ instruction FMAddS for [F] : FMAddSRounded {
 }
 
 template FMSubSRounded for [F] {
+    schedule { units = [WriteFPFmaSingle]; }
     param MNEMONIC: String = "fmsub.s";
     param OPNAME: String;
     param RM: bits<3>;
@@ -479,6 +485,7 @@ instruction FMSubS for [F] : FMSubSRounded {
 }
 
 template FNMSubSRounded for [F] {
+    schedule { units = [WriteFPFmaSingle]; }
     param MNEMONIC: String = "fnmsub.s";
     param OPNAME: String;
     param RM: bits<3>;
@@ -557,6 +564,7 @@ instruction FNMSubS for [F] : FNMSubSRounded {
 }
 
 template FNMAddSRounded for [F] {
+    schedule { units = [WriteFPFmaSingle]; }
     param MNEMONIC: String = "fnmadd.s";
     param OPNAME: String;
     param RM: bits<3>;
@@ -635,6 +643,7 @@ instruction FNMAddS for [F] : FNMAddSRounded {
 }
 
 template FSqrtSRounded for [F] {
+    schedule { units = [WriteFPDivSingle]; }
     param MNEMONIC: String = "fsqrt.s";
     param OPNAME: String;
     param RM: bits<3>;
@@ -713,6 +722,7 @@ instruction FSqrtS for [F] : FSqrtSRounded {
 }
 
 template FCvtSWRounded for [F] {
+    schedule { units = [WriteFPConvert]; }
     param MNEMONIC: String = "fcvt.s.w";
     param OPNAME: String;
     param RM: bits<3>;
@@ -791,6 +801,7 @@ instruction FCvtSW for [F] : FCvtSWRounded {
 }
 
 template FCvtWSRounded for [F] {
+    schedule { units = [WriteFPConvert]; }
     param MNEMONIC: String = "fcvt.w.s";
     param OPNAME: String;
     param RM: bits<3>;
@@ -869,6 +880,7 @@ instruction FCvtWS for [F] : FCvtWSRounded {
 }
 
 template FCvtSWURounded for [F] {
+    schedule { units = [WriteFPConvert]; }
     param MNEMONIC: String = "fcvt.s.wu";
     param OPNAME: String;
     param RM: bits<3>;
@@ -947,6 +959,7 @@ instruction FCvtSWU for [F] : FCvtSWURounded {
 }
 
 template FCvtWUSRounded for [F] {
+    schedule { units = [WriteFPConvert]; }
     param MNEMONIC: String = "fcvt.wu.s";
     param OPNAME: String;
     param RM: bits<3>;
@@ -1025,6 +1038,7 @@ instruction FCvtWUS for [F] : FCvtWUSRounded {
 }
 
 template FCvtSLRounded for [F64] {
+    schedule { units = [WriteFPConvert]; }
     param MNEMONIC: String = "fcvt.s.l";
     param OPNAME: String;
     param RM: bits<3>;
@@ -1103,6 +1117,7 @@ instruction FCvtSL for [F64] : FCvtSLRounded {
 }
 
 template FCvtLSRounded for [F64] {
+    schedule { units = [WriteFPConvert]; }
     param MNEMONIC: String = "fcvt.l.s";
     param OPNAME: String;
     param RM: bits<3>;
@@ -1181,6 +1196,7 @@ instruction FCvtLS for [F64] : FCvtLSRounded {
 }
 
 template FCvtSLURounded for [F64] {
+    schedule { units = [WriteFPConvert]; }
     param MNEMONIC: String = "fcvt.s.lu";
     param OPNAME: String;
     param RM: bits<3>;
@@ -1259,6 +1275,7 @@ instruction FCvtSLU for [F64] : FCvtSLURounded {
 }
 
 template FCvtLUSRounded for [F64] {
+    schedule { units = [WriteFPConvert]; }
     param MNEMONIC: String = "fcvt.lu.s";
     param OPNAME: String;
     param RM: bits<3>;
@@ -1337,6 +1354,7 @@ instruction FCvtLUS for [F64] : FCvtLUSRounded {
 }
 
 template FCvtSDRounded for [D] {
+    schedule { units = [WriteFPConvert]; }
     param MNEMONIC: String = "fcvt.s.d";
     param OPNAME: String;
     param RM: bits<3>;
@@ -1415,6 +1433,7 @@ instruction FCvtSD for [D] : FCvtSDRounded {
 }
 
 template FAddDRounded for [D] {
+    schedule { units = [WriteFPAdd]; }
     param MNEMONIC: String = "fadd.d";
     param OPNAME: String;
     param RM: bits<3>;
@@ -1493,6 +1512,7 @@ instruction FAddD for [D] : FAddDRounded {
 }
 
 template FSubDRounded for [D] {
+    schedule { units = [WriteFPAdd]; }
     param MNEMONIC: String = "fsub.d";
     param OPNAME: String;
     param RM: bits<3>;
@@ -1571,6 +1591,7 @@ instruction FSubD for [D] : FSubDRounded {
 }
 
 template FMulDRounded for [D] {
+    schedule { units = [WriteFPMul]; }
     param MNEMONIC: String = "fmul.d";
     param OPNAME: String;
     param RM: bits<3>;
@@ -1649,6 +1670,7 @@ instruction FMulD for [D] : FMulDRounded {
 }
 
 template FDivDRounded for [D] {
+    schedule { units = [WriteFPDivDouble]; }
     param MNEMONIC: String = "fdiv.d";
     param OPNAME: String;
     param RM: bits<3>;
@@ -1727,6 +1749,7 @@ instruction FDivD for [D] : FDivDRounded {
 }
 
 template FMAddDRounded for [D] {
+    schedule { units = [WriteFPFmaDouble]; }
     param MNEMONIC: String = "fmadd.d";
     param OPNAME: String;
     param RM: bits<3>;
@@ -1805,6 +1828,7 @@ instruction FMAddD for [D] : FMAddDRounded {
 }
 
 template FMSubDRounded for [D] {
+    schedule { units = [WriteFPFmaDouble]; }
     param MNEMONIC: String = "fmsub.d";
     param OPNAME: String;
     param RM: bits<3>;
@@ -1883,6 +1907,7 @@ instruction FMSubD for [D] : FMSubDRounded {
 }
 
 template FNMSubDRounded for [D] {
+    schedule { units = [WriteFPFmaDouble]; }
     param MNEMONIC: String = "fnmsub.d";
     param OPNAME: String;
     param RM: bits<3>;
@@ -1961,6 +1986,7 @@ instruction FNMSubD for [D] : FNMSubDRounded {
 }
 
 template FNMAddDRounded for [D] {
+    schedule { units = [WriteFPFmaDouble]; }
     param MNEMONIC: String = "fnmadd.d";
     param OPNAME: String;
     param RM: bits<3>;
@@ -2039,6 +2065,7 @@ instruction FNMAddD for [D] : FNMAddDRounded {
 }
 
 template FSqrtDRounded for [D] {
+    schedule { units = [WriteFPDivDouble]; }
     param MNEMONIC: String = "fsqrt.d";
     param OPNAME: String;
     param RM: bits<3>;
@@ -2117,6 +2144,7 @@ instruction FSqrtD for [D] : FSqrtDRounded {
 }
 
 template FCvtDWRounded for [D] {
+    schedule { units = [WriteFPConvert]; }
     param MNEMONIC: String = "fcvt.d.w";
     param OPNAME: String;
     param RM: bits<3>;
@@ -2195,6 +2223,7 @@ instruction FCvtDW for [D] : FCvtDWRounded {
 }
 
 template FCvtWDRounded for [D] {
+    schedule { units = [WriteFPConvert]; }
     param MNEMONIC: String = "fcvt.w.d";
     param OPNAME: String;
     param RM: bits<3>;
@@ -2273,6 +2302,7 @@ instruction FCvtWD for [D] : FCvtWDRounded {
 }
 
 template FCvtDWURounded for [D] {
+    schedule { units = [WriteFPConvert]; }
     param MNEMONIC: String = "fcvt.d.wu";
     param OPNAME: String;
     param RM: bits<3>;
@@ -2351,6 +2381,7 @@ instruction FCvtDWU for [D] : FCvtDWURounded {
 }
 
 template FCvtWUDRounded for [D] {
+    schedule { units = [WriteFPConvert]; }
     param MNEMONIC: String = "fcvt.wu.d";
     param OPNAME: String;
     param RM: bits<3>;
@@ -2429,6 +2460,7 @@ instruction FCvtWUD for [D] : FCvtWUDRounded {
 }
 
 template FCvtDLRounded for [D64] {
+    schedule { units = [WriteFPConvert]; }
     param MNEMONIC: String = "fcvt.d.l";
     param OPNAME: String;
     param RM: bits<3>;
@@ -2507,6 +2539,7 @@ instruction FCvtDL for [D64] : FCvtDLRounded {
 }
 
 template FCvtLDRounded for [D64] {
+    schedule { units = [WriteFPConvert]; }
     param MNEMONIC: String = "fcvt.l.d";
     param OPNAME: String;
     param RM: bits<3>;
@@ -2585,6 +2618,7 @@ instruction FCvtLD for [D64] : FCvtLDRounded {
 }
 
 template FCvtDLURounded for [D64] {
+    schedule { units = [WriteFPConvert]; }
     param MNEMONIC: String = "fcvt.d.lu";
     param OPNAME: String;
     param RM: bits<3>;
@@ -2663,6 +2697,7 @@ instruction FCvtDLU for [D64] : FCvtDLURounded {
 }
 
 template FCvtLUDRounded for [D64] {
+    schedule { units = [WriteFPConvert]; }
     param MNEMONIC: String = "fcvt.lu.d";
     param OPNAME: String;
     param RM: bits<3>;
@@ -2741,6 +2776,7 @@ instruction FCvtLUD for [D64] : FCvtLUDRounded {
 }
 
 template FCvtDSRounded for [D] {
+    schedule { units = [WriteFPConvert]; }
     param MNEMONIC: String = "fcvt.d.s";
     param OPNAME: String;
     param RM: bits<3>;

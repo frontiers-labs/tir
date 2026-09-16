@@ -11,7 +11,7 @@
 //! Register files come from [`RegisterInfo`]; allocation order and calling
 //! convention policy come from the selected [`crate::backend::abi::AbiInfo`].
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 
 use tir::attributes::AttributeValue;
 use tir::{
@@ -1692,80 +1692,100 @@ fn collect_stack_arg_loads(
     Ok(args)
 }
 
-/// The loop-nesting depth of each block: how many natural loops (one per
-/// back edge, entry at the back edge's target) contain it. Iterative
-/// dominance over the body's blocks fixes the back edges; a reverse walk that
-/// never crosses the target closes each loop.
+/// Count natural loops by header, ignoring blocks unreachable from entry.
 fn loop_depths(
     blocks: &[BlockId],
     successors: &HashMap<BlockId, Vec<BlockId>>,
 ) -> HashMap<BlockId, u32> {
-    let mut depths: HashMap<BlockId, u32> = blocks.iter().map(|&b| (b, 0)).collect();
-    let entry = blocks
-        .first()
-        .copied()
-        .expect("allocation body has an entry block");
-    let mut dom: HashMap<BlockId, BTreeSet<BlockId>> = blocks
-        .iter()
-        .map(|&b| (b, blocks.iter().copied().collect()))
-        .collect();
-    dom.insert(entry, BTreeSet::from([entry]));
+    let indices: HashMap<_, _> = blocks.iter().enumerate().map(|(i, &b)| (b, i)).collect();
+    let mut edges = vec![Vec::new(); blocks.len()];
+    let mut predecessors = vec![Vec::new(); blocks.len()];
+    for (i, block) in blocks.iter().enumerate() {
+        for successor in successors.get(block).into_iter().flatten() {
+            let next = indices[successor];
+            edges[i].push(next);
+            predecessors[next].push(i);
+        }
+    }
+
+    let mut order = Vec::new();
+    let mut seen = vec![false; blocks.len()];
+    let mut dfs = vec![(0, false)];
+    while let Some((block, finish)) = dfs.pop() {
+        if finish {
+            order.push(block);
+        } else if !seen[block] {
+            seen[block] = true;
+            dfs.push((block, true));
+            dfs.extend(edges[block].iter().rev().map(|&next| (next, false)));
+        }
+    }
+    order.reverse();
+    let mut rank = vec![usize::MAX; blocks.len()];
+    for (i, &block) in order.iter().enumerate() {
+        rank[block] = i;
+    }
+
+    // Immediate dominators in reverse postorder keep storage linear in the CFG.
+    let mut idom = vec![None; blocks.len()];
+    idom[0] = Some(0);
     let mut changed = true;
     while changed {
         changed = false;
-        for &block in blocks {
-            if block == entry {
-                continue;
-            }
-            let mut dominators: Option<BTreeSet<BlockId>> = None;
-            for u in blocks {
-                if !successors.get(u).is_some_and(|ss| ss.contains(&block)) {
-                    continue;
+        for &block in &order[1..] {
+            let mut incoming = predecessors[block]
+                .iter()
+                .copied()
+                .filter(|&p| idom[p].is_some());
+            let mut parent = incoming.next().expect("reachable block has a predecessor");
+            for mut predecessor in incoming {
+                while parent != predecessor {
+                    if rank[parent] > rank[predecessor] {
+                        parent = idom[parent].expect("known dominator");
+                    } else {
+                        predecessor = idom[predecessor].expect("known dominator");
+                    }
                 }
-                let predecessor = dom.get(u).cloned().unwrap_or_default();
-                dominators = Some(match dominators {
-                    Some(accumulated) => accumulated.intersection(&predecessor).copied().collect(),
-                    None => predecessor,
-                });
             }
-            let mut together = BTreeSet::from([block]);
-            if let Some(dominating) = dominators {
-                together.extend(dominating);
-            }
-            if dom[&block] != together {
-                dom.insert(block, together);
+            if idom[block] != Some(parent) {
+                idom[block] = Some(parent);
                 changed = true;
             }
         }
     }
 
-    for &block in blocks {
-        let Some(succ) = successors.get(&block) else {
-            continue;
-        };
-        for s in succ {
-            if !dom[&block].contains(s) {
+    let mut depths = vec![0; blocks.len()];
+    let mut visited = vec![usize::MAX; blocks.len()];
+    let mut work = Vec::new();
+    for &header in &order {
+        for &latch in &predecessors[header] {
+            if !seen[latch] {
                 continue;
             }
-            // Natural loop of `block -> *s`: the target, the block, and
-            // everything reaching the block without crossing the target.
-            let mut whole = BTreeSet::from([*s, block]);
-            let mut work = vec![block];
-            while let Some(j) = work.pop() {
-                for u in blocks {
-                    if whole.contains(u) || !successors.get(u).is_some_and(|ss| ss.contains(&j)) {
-                        continue;
-                    }
-                    whole.insert(*u);
-                    work.push(*u);
-                }
+            let mut ancestor = latch;
+            while rank[ancestor] > rank[header] {
+                ancestor = idom[ancestor].expect("reachable block has a dominator");
             }
-            for b in whole {
-                *depths.get_mut(&b).expect("loop block is in the body") += 1;
+            if ancestor == header {
+                work.push(latch);
             }
         }
+        if work.is_empty() {
+            continue;
+        }
+        // Mark the header first so self-loops cannot walk into the preheader.
+        visited[header] = header;
+        depths[header] += 1;
+        while let Some(block) = work.pop() {
+            if visited[block] == header {
+                continue;
+            }
+            visited[block] = header;
+            depths[block] += 1;
+            work.extend(predecessors[block].iter().copied().filter(|&p| seen[p]));
+        }
     }
-    depths
+    blocks.iter().copied().zip(depths).collect()
 }
 
 /// Count how many times each virtual register is referenced (def or use)

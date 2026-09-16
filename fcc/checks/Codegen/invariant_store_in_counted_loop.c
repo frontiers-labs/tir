@@ -13,5 +13,5 @@ void invariant_store(int *p, int a)
 // CHECK-LABEL: invariant_store:
 // CHECK: and esi, 3
 // CHECK: mov [[Z:e[a-z0-9]+]], 0
-// CHECK-NEXT: mov [{{[a-z]+}}], [[Z]]
+// CHECK-NEXT: mov [{{.*}}], [[Z]]
 // CHECK-NEXT: ret

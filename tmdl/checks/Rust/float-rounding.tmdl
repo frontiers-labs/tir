@@ -1,10 +1,18 @@
 // RUN: tmdlc --action=emit-rust --dialect=test --output=- %s | filecheck %s
+// RUN: tmdlc --action=emit-rust --dialect=test --output=- %s | filecheck %s --check-prefix=NEG
 // CHECK-DAG: SymKind::FAddRound
 // CHECK-DAG: SymKind::FPFlags
 // CHECK-DAG: SymKind::FPEffect
 // CHECK-DAG: "add_rounded"
 // CHECK-DAG: "add_fp_effect"
 // CHECK-DAG: fp_flags: tir::backend::isel::FpFlags::Exact
+// CHECK-DAG: implicit_or_updates: &[(RegClass::FLAGS.id(), 0)],
+// NEG-LABEL: static INFO_CLOBBER:
+// NEG-NOT: implicit_or_updates:
+// NEG-LABEL: static INFO_DEPENDENT:
+// NEG-NOT: implicit_or_updates:
+// NEG-LABEL: static INFO_ALIASREAD:
+// NEG-NOT: implicit_or_updates:
 
 isa Test { param XLEN: Integer = 64; }
 register_class FP for [Test] {
@@ -17,6 +25,12 @@ register_class FLAGS for [Test] {
     param WIDTH: Integer = 5;
     registers { flags => { traits = [fp_flags] }, }
 }
+register_class FLAGS_ALIAS for [Test] {
+    file = FLAGS;
+    param ENCODING_LEN: Integer = 0;
+    param WIDTH: Integer = 5;
+    registers { alias => { index = 0 }, }
+}
 instruction Add for [Test] {
     param MNEMONIC: String = "add";
     operands { rd: FP, a: FP, b: FP, }
@@ -25,6 +39,42 @@ instruction Add for [Test] {
     behavior {
         let result = fadd(a, b, 0b000);
         FLAGS::flags = FLAGS::flags | fp_flags(result);
+        rd = result;
+    }
+}
+
+instruction Clobber for [Test] {
+    param MNEMONIC: String = "clobber";
+    operands { rd: FP, a: FP, b: FP, }
+    encoding { 0b0000000, b, a, 0b100, rd, 0b1010011 }
+    asm { "clobber {rd}, {a}, {b}" }
+    behavior {
+        let result = fadd(a, b, 0b000);
+        FLAGS::flags = fp_flags(result);
+        rd = result;
+    }
+}
+
+instruction Dependent for [Test] {
+    param MNEMONIC: String = "dependent";
+    operands { rd: FP, a: FP, b: FP, }
+    encoding { 0b0000000, b, a, 0b100, rd, 0b1010011 }
+    asm { "dependent {rd}, {a}, {b}" }
+    behavior {
+        let result = fadd(a, b, 0b000);
+        FLAGS::flags = FLAGS::flags | (fp_flags(result) | FLAGS::flags);
+        rd = result;
+    }
+}
+
+instruction AliasRead for [Test] {
+    param MNEMONIC: String = "alias_read";
+    operands { rd: FP, a: FP, b: FP, }
+    encoding { 0b0000000, b, a, 0b100, rd, 0b1010011 }
+    asm { "alias_read {rd}, {a}, {b}" }
+    behavior {
+        let result = fadd(a, b, 0b000);
+        FLAGS::flags = FLAGS::flags | (fp_flags(result) | FLAGS_ALIAS::alias);
         rd = result;
     }
 }

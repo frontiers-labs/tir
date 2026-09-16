@@ -1,0 +1,8 @@
+{
+  "mappings": [
+    {"start": "0x100000", "size": 4096, "permissions": "w"}
+  ],
+  "regions": [
+    {"start": "0x100000", "hex": "78563412"}
+  ]
+}

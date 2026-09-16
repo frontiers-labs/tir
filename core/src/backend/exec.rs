@@ -10,6 +10,15 @@ use crate::attributes::AttributeValue;
 use crate::backend::regalloc::RegClassId;
 use crate::backend::{InstrInfo, MachineContext, MachineMemory, RegisterValue, SimTrap};
 
+mod footprint;
+mod frame;
+mod protocol;
+pub use footprint::MemoryRange;
+pub use frame::SemanticFrame;
+pub use protocol::{
+    EffectRequest, EffectResponse, FrameYield, MemoryEffect, RequestId, ResponseValue,
+};
+
 /// How one slot of an instruction's entry symbol table is bound before its
 /// behavior evaluates: the operand/ISA-parameter sources a TMDL behavior reads.
 pub enum SymSource {
@@ -238,73 +247,81 @@ pub enum Program {
     Unsupported(&'static str),
 }
 
-/// Executes one instruction against `machine`, driven by its static info.
+/// Synchronously drives an instruction frame against `machine`.
+/// Register and PC writes remain provisional until completion; memory effects
+/// retain the visibility and fault policy provided by the caller's context.
 pub fn run(
     instance: &crate::OpHandle,
     info: &InstrInfo,
     machine: &mut dyn MachineContext,
 ) -> Result<(), SimTrap> {
-    match &info.program {
-        Program::Unsupported(reason) => Err(SimTrap::InvalidInstruction {
-            op: info.mnemonic,
-            reason: reason.to_string(),
-        }),
-        Program::Effects {
-            env,
-            sym_count,
-            sources,
-            effects,
-        } => {
-            let mut syms = init_syms(instance, machine, info.mnemonic, *sym_count, sources)?;
-            run_effects(instance, info.mnemonic, env, machine, &mut syms, effects)
+    let mut frame = SemanticFrame::from_program(0, machine.read_pc(), instance, info, machine)?;
+    let mut response = None;
+    loop {
+        match frame.resume(response)? {
+            FrameYield::Complete => return frame.commit(machine),
+            FrameYield::Effect(request) => {
+                response = Some(EffectResponse {
+                    id: request.id,
+                    result: service_synchronously(machine, request.effect),
+                });
+            }
         }
     }
 }
 
-fn run_effects(
-    instance: &crate::OpHandle,
-    mnemonic: &'static str,
-    env: &'static ExecEnv,
+fn service_synchronously(
     machine: &mut dyn MachineContext,
-    syms: &mut [tir::sem::Value],
-    effects: &[Effect],
-) -> Result<(), SimTrap> {
-    let evaluate = |offset: u32, syms: &[tir::sem::Value], machine: &mut dyn MachineContext| {
-        eval(env.kinds, env.blob, offset, syms, machine, mnemonic)
-    };
-    for effect in effects {
-        match effect {
-            Effect::Assign { offset, dest } => {
-                let value = evaluate(*offset, syms, machine)?;
-                match dest {
-                    Dest::Pc => machine.write_pc(value.to_u64()),
-                    Dest::Reg(name) => writeback_attr(
-                        instance,
-                        machine,
-                        mnemonic,
-                        name,
-                        value,
-                        env.is_hardwired_zero,
-                    )?,
-                    Dest::Fixed(class, index) => {
-                        writeback_fixed(machine, class, *index, value, env.is_hardwired_zero)?
-                    }
-                    Dest::Discard => {}
-                }
-            }
-            Effect::Bind { offset, sym } => {
-                syms[*sym] = eval_value(env.kinds, env.blob, *offset, syms, machine)?;
-            }
-            Effect::Trap { offset } => {
-                let value = evaluate(*offset, syms, machine)?;
-                machine.raise_exception(value.to_u64())?;
-            }
-            Effect::If { cond, then, els } => {
-                let value = evaluate(*cond, syms, machine)?;
-                let taken = if value.to_u64() != 0 { then } else { els };
-                run_effects(instance, mnemonic, env, machine, syms, taken)?;
-            }
+    effect: MemoryEffect,
+) -> Result<ResponseValue, SimTrap> {
+    use crate::sem::Memory;
+    let mut memory = MachineMemory(machine);
+    match effect {
+        MemoryEffect::Read { address, size } if size <= 8 => {
+            memory.read_memory(address, size).map(ResponseValue::Word)
+        }
+        MemoryEffect::Read { address, size } => memory
+            .read_memory_bytes(address, size)
+            .map(ResponseValue::Bytes),
+        MemoryEffect::Write { address, bytes } => {
+            memory.write_memory_bytes(
+                address,
+                bytes.len(),
+                crate::utils::RawBits::from_bytes(bytes),
+            )?;
+            Ok(ResponseValue::Done)
+        }
+        MemoryEffect::LoadReserved {
+            address,
+            size,
+            ordering,
+        } => memory
+            .load_reserved(address, size, ordering)
+            .map(ResponseValue::Word),
+        MemoryEffect::StoreConditional {
+            address,
+            size,
+            value,
+            ordering,
+        } => memory
+            .store_conditional(address, size, value, ordering)
+            .map(|success| ResponseValue::Word(u64::from(success))),
+        MemoryEffect::AtomicRmw {
+            op,
+            address,
+            size,
+            value,
+            ordering,
+        } => memory
+            .atomic_rmw(op, address, size, value, ordering)
+            .map(ResponseValue::Word),
+        MemoryEffect::Fence { pred, succ, kind } => {
+            memory.fence(pred, succ, kind)?;
+            Ok(ResponseValue::Done)
+        }
+        MemoryEffect::Exception { cause } => {
+            memory.0.raise_exception(cause)?;
+            Ok(ResponseValue::Done)
         }
     }
-    Ok(())
 }

@@ -219,14 +219,19 @@ fn in_order_and_ooo_differ_structurally() {
 #[test]
 fn machines_filter_by_feature_set() {
     let rv64 = target("rv64im");
-    assert_eq!(rv64.machines(), vec!["rv64-in-order", "rv64-ooo"]);
+    assert_eq!(
+        rv64.machines(),
+        vec!["rv64-in-order", "rv64-ooo", "spacemit-x100"]
+    );
     assert!(rv64.machine_model("rv64-ooo").is_some());
+    assert!(rv64.machine_model("spacemit-x100").is_some());
     assert!(rv64.machine_model("scr1-3stage").is_none());
 
     let rv32 = target("rv32i");
     assert_eq!(rv32.machines(), vec!["scr1-3stage"]);
     assert!(rv32.machine_model("scr1-3stage").is_some());
     assert!(rv32.machine_model("rv64-ooo").is_none());
+    assert!(rv32.machine_model("spacemit-x100").is_none());
 }
 
 #[test]

@@ -1,0 +1,5 @@
+{
+  "mappings": [
+    {"start": "0x100000", "size": 4096, "permissions": "rw"}
+  ]
+}

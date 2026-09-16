@@ -41,6 +41,7 @@ static READS_FLAGS: [ImplicitReg; 1] = [ImplicitReg {
 }];
 
 machine_op!(DefOp, "dep", "def", &RD_ONLY, &[]);
+machine_op!(UpdateParamOp, "dep", "update_param", rs, &RD_RS_PORTS, &[]);
 machine_op!(
     SetFlagsOp,
     "dep",
@@ -262,4 +263,29 @@ fn clobbers_are_edges() {
         [0, 1],
         "the reader follows the clobber"
     );
+}
+
+proptest::proptest! {
+    #[test]
+    fn parameter_updates_admit_topological_orders(count in 1usize..16, seed in proptest::prelude::any::<u64>()) {
+        let context = context();
+        UpdateParamOp::register_interfaces(&context);
+        let ty = RegClassType::new(&context, r());
+        let parameter = context.create_value(ty, None);
+        let value = parameter.id();
+        let block = context.create_block(vec![parameter]);
+        let mut updates = Vec::new();
+        for _ in 0..count {
+            let update = UpdateParamOpBuilder::new(&context)
+                .rs(value)
+                .result_types(vec![ty])
+                .build()
+                .id();
+            context.set_op_result(update, 0, value);
+            block.append(update);
+            updates.push(update);
+        }
+        let dependences = graph(&context, &block, &RegAssignment::default());
+        proptest::prop_assert_eq!(dependences.shuffle(seed), Some(updates));
+    }
 }

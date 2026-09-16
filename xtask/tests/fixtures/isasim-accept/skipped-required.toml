@@ -1,0 +1,9 @@
+schema_version = 1
+milestone = "m01"
+
+[[cases]]
+name = "required-with-no-tests"
+required = true
+command = ["sh", "-c", "printf 'test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out\\n'"]
+tool = "sh"
+expected_cases = 1

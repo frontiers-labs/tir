@@ -9,6 +9,7 @@ use std::io::Write;
 use std::rc::Rc;
 
 use tir::Context;
+use tir::backend::exec::{EffectRequest, FrameYield, MemoryEffect, ResponseValue, SemanticFrame};
 use tir::backend::{InstructionDecoder, MachineContext, MachineInstruction, PerfCounter, SimTrap};
 
 use crate::error::Error;
@@ -68,6 +69,23 @@ pub enum ExceptionAction {
 /// update architectural state), the cause code and the trapping PC.
 pub type ExceptionHandler = Box<dyn FnMut(&mut Executor, u64, u64) -> ExceptionAction>;
 
+/// Location and cause of a failed instruction effect.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FaultRecord {
+    pub pc: u64,
+    pub sequence: usize,
+    pub trap: SimTrap,
+}
+
+/// One accepted semantic effect and its response, before or after a fault.
+#[derive(Debug, Clone)]
+pub struct EffectEvent {
+    pub request: tir::backend::exec::EffectRequest,
+    pub result: Result<tir::backend::exec::ResponseValue, SimTrap>,
+    /// SC observation or visibility order. Aborted staged stores have no index.
+    pub memory_order: Option<u64>,
+}
+
 #[derive(Default)]
 pub struct Executor {
     program: Option<Rc<ProgramImage>>,
@@ -96,14 +114,14 @@ pub struct Executor {
     /// configuration, consulted by instruction behaviors via
     /// [`MachineContext::isa_param`].
     isa_params: HashMap<String, i64>,
-    memory: Vec<u8>,
-    memory_base: u64,
+    memory: crate::MemoryService,
+    next_instruction: u64,
     pc: u64,
     pc_explicitly_written: bool,
     record_trace: bool,
     trace: Vec<(tir::OpId, u64)>,
     timing_model: Option<tir::backend::sched::MachineModel>,
-    latency_trace: Vec<u16>,
+    sched_trace: Vec<tir::backend::sched::InstrSchedClass>,
     /// Data-memory accesses per retired instruction, kept exactly parallel to
     /// `trace` (empty inner vec for non-memory instructions).
     mem_trace: Vec<Vec<MemAccess>>,
@@ -122,22 +140,20 @@ pub struct Executor {
     retired_instructions: u64,
     exception_handler: Option<ExceptionHandler>,
     halted: bool,
+    last_fault: Option<FaultRecord>,
+    record_effects: bool,
+    effect_events: Vec<EffectEvent>,
     /// Decode-on-fetch state, used to execute raw machine code (an ELF loaded
     /// into `memory`) instead of a pre-built [`ProgramImage`]. The decoder turns
     /// the word at PC into an op built in `decode_context`; results are cached by
     /// address so a hot loop decodes each instruction once.
     decoder: Option<InstructionDecoder>,
     decode_context: Option<Context>,
-    decode_cache: HashMap<u64, tir::OpId>,
+    decode_cache: HashMap<u64, (u32, tir::OpId)>,
     /// `(class, index)` pairs that read as a hardwired zero (e.g. AArch64 `xzr`).
     /// Checked on the *original* class before file aliasing, so `GPR[31]` (xzr)
     /// reads 0 even though it shares a storage slot with `GPRsp[31]` (sp).
     hardwired_zero: HashSet<(String, u16)>,
-    /// LR/SC reservation of the single implicit hart: exact (address, size) of
-    /// the last load_reserved. Multi-hart seam: this field moves into a per-hart
-    /// struct together with `registers`/`pc` when harts become explicit, and
-    /// remote-hart writes must then clear overlapping reservations.
-    reservation: Option<(u64, u8)>,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -148,22 +164,50 @@ pub struct TraceOptions {
 }
 
 impl Executor {
+    /// Record accepted effects for diagnostics without enabling timing replay.
+    pub fn enable_effect_recording(&mut self) {
+        self.record_effects = true;
+    }
+
+    pub fn effect_events(&self) -> &[EffectEvent] {
+        &self.effect_events
+    }
+
+    /// The most recent execution fault, cleared when another instruction starts.
+    pub fn last_fault(&self) -> Option<&FaultRecord> {
+        self.last_fault.as_ref()
+    }
+
     pub fn new(memory_size: usize) -> Self {
         Self::new_at(memory_size, 0)
     }
 
     pub fn new_at(memory_size: usize, memory_base: u64) -> Self {
-        Self {
-            memory: vec![0u8; memory_size],
-            memory_base,
-            ..Self::default()
+        let mut executor = Self::default();
+        if memory_size != 0 {
+            let (memory, space) = executor.memory.memory_and_space_mut();
+            let backing = memory
+                .create_backing(memory_size as u64)
+                .expect("valid memory size");
+            memory
+                .map(
+                    space,
+                    memory_base,
+                    memory_size as u64,
+                    backing,
+                    0,
+                    crate::Permissions::ALL,
+                )
+                .expect("memory window must fit the guest address space");
         }
+        executor
     }
 
     pub fn load(&mut self, program: ProgramImage) -> Result<(), Error> {
         if self.program.is_some() {
             return Err(Error::ProgramAlreadyLoaded);
         }
+        self.map_program(&program)?;
         self.pc = program.entry_pc;
         self.program = Some(Rc::new(program));
         Ok(())
@@ -186,27 +230,59 @@ impl Executor {
     /// Copy `bytes` into guest memory starting at `address` (e.g. an ELF
     /// segment). Bounds-checked against the backing region.
     pub fn write_bytes(&mut self, address: u64, bytes: &[u8]) -> Result<(), SimTrap> {
-        let offset = address
-            .checked_sub(self.memory_base)
-            .ok_or(SimTrap::BadAddress {
-                address,
-                size: bytes.len(),
-            })?;
-        let start = usize::try_from(offset).map_err(|_| SimTrap::BadAddress {
-            address,
-            size: bytes.len(),
-        })?;
-        let end = start.checked_add(bytes.len()).ok_or(SimTrap::BadAddress {
-            address,
-            size: bytes.len(),
-        })?;
-        if end > self.memory.len() {
-            return Err(SimTrap::BadAddress {
-                address,
-                size: bytes.len(),
-            });
+        self.memory
+            .write(address, bytes)
+            .map_err(|error| crate::memory_trap(error, bytes.len()))
+    }
+
+    /// Memory mappings and serialized effects used by this executor.
+    pub fn memory_service(&self) -> &crate::MemoryService {
+        &self.memory
+    }
+
+    /// Change mappings or initialize memory between instruction executions.
+    pub fn memory_service_mut(&mut self) -> &mut crate::MemoryService {
+        &mut self.memory
+    }
+
+    fn map_program(&mut self, program: &ProgramImage) -> Result<(), SimTrap> {
+        for block in &program.blocks {
+            let mut address = block.start_address;
+            let end = address
+                .checked_add(block.byte_len)
+                .ok_or(SimTrap::BadAddress {
+                    address,
+                    size: block.byte_len as usize,
+                })?;
+            while address < end {
+                if let Some(mapping) = self.memory.address_space().mapping_at(address) {
+                    address = mapping.end.min(end);
+                    continue;
+                }
+                let next = self
+                    .memory
+                    .address_space()
+                    .mappings()
+                    .find(|mapping| mapping.start > address)
+                    .map_or(end, |mapping| mapping.start.min(end));
+                let size = next - address;
+                let (memory, space) = self.memory.memory_and_space_mut();
+                let backing = memory
+                    .create_backing(size)
+                    .map_err(|error| crate::memory_trap(error, size as usize))?;
+                memory
+                    .map(
+                        space,
+                        address,
+                        size,
+                        backing,
+                        0,
+                        crate::Permissions::READ_EXECUTE,
+                    )
+                    .map_err(|error| crate::memory_trap(error, size as usize))?;
+                address = next;
+            }
         }
-        self.memory[start..end].copy_from_slice(bytes);
         Ok(())
     }
 
@@ -226,9 +302,9 @@ impl Executor {
         self.timing_model = Some(model);
     }
 
-    /// Resolved latencies parallel to `trace`, or empty when no model was selected.
-    pub fn latency_trace(&self) -> &[u16] {
-        &self.latency_trace
+    /// Resolved scheduling classes parallel to `trace`, or empty when no model was selected.
+    pub fn sched_trace(&self) -> &[tir::backend::sched::InstrSchedClass] {
+        &self.sched_trace
     }
 
     /// Declare which register classes share a physical register file (class name
@@ -453,45 +529,36 @@ impl Executor {
     /// The recording wrapper lives in the [`MachineContext`] impl so the atomic
     /// methods can reuse the raw read while tagging their own access kind.
     fn read_memory_raw(&self, address: u64, size: usize) -> Result<u64, SimTrap> {
-        let offset = address
-            .checked_sub(self.memory_base)
-            .ok_or(SimTrap::BadAddress { address, size })?;
-        let start = usize::try_from(offset).map_err(|_| SimTrap::BadAddress { address, size })?;
-        let end = start
-            .checked_add(size)
-            .ok_or(SimTrap::BadAddress { address, size })?;
-        if end > self.memory.len() {
+        if size == 0 || size > 8 {
             return Err(SimTrap::BadAddress { address, size });
         }
-        let mut value = 0u64;
-        for (offset, byte) in self.memory[start..end].iter().enumerate() {
-            value |= u64::from(*byte) << (offset * 8);
-        }
-        Ok(value)
+        let mut bytes = [0; 8];
+        self.memory
+            .read(address, &mut bytes[..size])
+            .map_err(|error| crate::memory_trap(error, size))?;
+        Ok(u64::from_le_bytes(bytes))
     }
 
-    /// Bounds-checked little-endian write of `size` bytes, without trace recording.
     fn write_memory_raw(&mut self, address: u64, size: usize, value: u64) -> Result<(), SimTrap> {
-        let offset = address
-            .checked_sub(self.memory_base)
-            .ok_or(SimTrap::BadAddress { address, size })?;
-        let start = usize::try_from(offset).map_err(|_| SimTrap::BadAddress { address, size })?;
-        let end = start
-            .checked_add(size)
-            .ok_or(SimTrap::BadAddress { address, size })?;
-        if end > self.memory.len() {
+        if size == 0 || size > 8 {
             return Err(SimTrap::BadAddress { address, size });
         }
-        for offset in 0..size {
-            self.memory[start + offset] = ((value >> (offset * 8)) & 0xFF) as u8;
-        }
-        Ok(())
+        self.write_bytes(address, &value.to_le_bytes()[..size])
+    }
+
+    fn fetch_word(&self, pc: u64) -> Result<u32, SimTrap> {
+        let mut bytes = [0; 4];
+        self.memory
+            .memory()
+            .fetch(self.memory.address_space(), pc, &mut bytes)
+            .map_err(|error| crate::memory_trap(error, bytes.len()))?;
+        Ok(u32::from_le_bytes(bytes))
     }
 
     /// Record a memory-trace access, gated exactly like the plain read/write paths
     /// (only while capturing a machine instruction's execute with recording on).
     fn record_mem_access(&self, access: MemAccess) {
-        if self.record_trace && self.capturing_mem {
+        if self.capturing_mem {
             self.mem_stage.borrow_mut().push(access);
         }
     }
@@ -499,20 +566,198 @@ impl Executor {
     /// Run `execute`, capturing its data-memory accesses, then drain them into
     /// `mem_trace` (in lockstep with the `trace` push) when recording.
     fn execute_capturing(&mut self, machine_inst: &dyn MachineInstruction) -> Result<(), SimTrap> {
+        self.last_fault = None;
+        let instruction_pc = self.pc;
         if self.record_trace
             && let Some(model) = self.timing_model
         {
-            let latency = machine_inst.sched_on(&model, self).latency;
-            self.latency_trace.push(latency);
+            let class = machine_inst.sched_on(&model, self);
+            self.sched_trace.push(class);
         }
         self.capturing_mem = true;
-        let result = machine_inst.execute(self);
+        let result = self.execute_frame(machine_inst);
         self.capturing_mem = false;
         let accesses = std::mem::take(self.mem_stage.get_mut());
+        if let Err(trap) = &result
+            && self.last_fault.is_none()
+        {
+            self.last_fault = Some(FaultRecord {
+                pc: instruction_pc,
+                sequence: accesses.len(),
+                trap: trap.clone(),
+            });
+        }
         if self.record_trace {
             self.mem_trace.push(accesses);
         }
         result
+    }
+
+    fn execute_frame(&mut self, instruction: &dyn MachineInstruction) -> Result<(), SimTrap> {
+        let size = usize::from(instruction.width_bytes());
+        self.memory
+            .memory()
+            .validate(
+                self.memory.address_space(),
+                self.pc,
+                size,
+                crate::MemoryAccess::Fetch,
+            )
+            .map_err(|error| crate::memory_trap(error, size))?;
+        let id = self.next_instruction;
+        self.next_instruction = id.checked_add(1).expect("instruction identity exhausted");
+        let pc = self.pc;
+        let mut frame = SemanticFrame::new(id, pc, instruction, self)?;
+        for range in frame.preflight()? {
+            let access = if range.is_write {
+                crate::MemoryAccess::Write
+            } else {
+                crate::MemoryAccess::Read
+            };
+            self.memory
+                .validate_ram_access(range.address, range.size, access)
+                .map_err(|error| SimTrap::InvalidInstruction {
+                    op: instruction.mnemonic(),
+                    reason: format!("multi-access instruction rejected before effects: {error}"),
+                })?;
+        }
+        self.memory.begin_instruction(id)?;
+        let event_start = self.effect_events.len();
+        let result = self.drive_frame(&mut frame);
+        if let Err(trap) = result {
+            self.last_fault = Some(FaultRecord {
+                pc,
+                sequence: frame.sequence() as usize,
+                trap: trap.clone(),
+            });
+            self.memory.abort_instruction(id)?;
+            return Err(trap);
+        }
+        if let Err(trap) = self.memory.commit_instruction(id) {
+            self.memory.abort_instruction(id)?;
+            return Err(trap);
+        }
+        for event in &mut self.effect_events[event_start..] {
+            event.memory_order = self.memory.effect_order(event.request.id);
+        }
+        frame.commit(self)
+    }
+
+    fn drive_frame(&mut self, frame: &mut SemanticFrame) -> Result<(), SimTrap> {
+        let mut response = None;
+        loop {
+            match frame.resume(response.take())? {
+                FrameYield::Complete => return Ok(()),
+                FrameYield::Effect(request) => {
+                    let mut result = self
+                        .memory
+                        .service(&request, true)?
+                        .expect("functional service is ready");
+                    if result.result.is_ok() {
+                        if let MemoryEffect::Exception { cause } = request.effect {
+                            result.result =
+                                self.raise_exception(cause).map(|()| ResponseValue::Done);
+                        }
+                        if let Ok(value) = &result.result {
+                            self.record_effect_access(&request, value);
+                        }
+                    }
+                    if self.record_effects {
+                        self.effect_events.push(EffectEvent {
+                            memory_order: self.memory.effect_order(request.id),
+                            request,
+                            result: result.result.clone(),
+                        });
+                    }
+                    response = Some(result);
+                }
+            }
+        }
+    }
+
+    fn service_immediate(&mut self, effect: MemoryEffect) -> Result<ResponseValue, SimTrap> {
+        let id = self.next_instruction;
+        self.next_instruction = id.checked_add(1).expect("instruction identity exhausted");
+        self.memory.begin_instruction(id)?;
+        let request = EffectRequest {
+            id: tir::backend::exec::RequestId {
+                instruction: id,
+                sequence: 0,
+            },
+            pc: self.pc,
+            effect,
+        };
+        let response = self
+            .memory
+            .service(&request, true)?
+            .expect("functional service is ready");
+        match response.result {
+            Ok(value) => {
+                self.memory.commit_instruction(id)?;
+                self.record_effect_access(&request, &value);
+                Ok(value)
+            }
+            Err(trap) => {
+                self.memory.abort_instruction(id)?;
+                Err(trap)
+            }
+        }
+    }
+
+    fn record_effect_access(&self, request: &EffectRequest, result: &ResponseValue) {
+        let (address, size, is_write, kind) = match &request.effect {
+            MemoryEffect::Read { address, size } => (*address, *size, false, MemAccessKind::Data),
+            MemoryEffect::Write { address, bytes } => {
+                (*address, bytes.len(), true, MemAccessKind::Data)
+            }
+            MemoryEffect::LoadReserved { address, size, .. } => {
+                (*address, *size, false, MemAccessKind::LoadReserved)
+            }
+            MemoryEffect::StoreConditional { address, size, .. } => {
+                let success = matches!(result, ResponseValue::Word(1));
+                (
+                    *address,
+                    *size,
+                    success,
+                    MemAccessKind::StoreConditional { success },
+                )
+            }
+            MemoryEffect::AtomicRmw { address, size, .. } => {
+                (*address, *size, true, MemAccessKind::AtomicRmw)
+            }
+            MemoryEffect::Fence { pred, succ, kind } => (
+                0,
+                0,
+                false,
+                MemAccessKind::Fence {
+                    pred: *pred as u8,
+                    succ: *succ as u8,
+                    ifence: *kind == 1,
+                },
+            ),
+            MemoryEffect::Exception { .. } => return,
+        };
+        if kind == MemAccessKind::Data {
+            self.record_data_access(address, size, is_write);
+        } else {
+            self.record_mem_access(MemAccess {
+                addr: address,
+                size: size as u8,
+                is_write,
+                kind,
+            });
+        }
+    }
+
+    fn record_data_access(&self, address: u64, size: usize, is_write: bool) {
+        for offset in (0..size).step_by(8) {
+            self.record_mem_access(MemAccess {
+                addr: address + offset as u64,
+                size: (size - offset).min(8) as u8,
+                is_write,
+                kind: MemAccessKind::Data,
+            });
+        }
     }
 
     /// Decode the instruction at `pc` without executing it, using whichever fetch
@@ -523,7 +768,7 @@ impl Executor {
     /// an instruction boundary.
     pub fn decode_at(&self, pc: u64) -> Option<tir::OpId> {
         if let (Some(decoder), Some(context)) = (self.decoder, &self.decode_context) {
-            let word = self.read_memory(pc, 4).ok()? as u32;
+            let word = self.fetch_word(pc).ok()?;
             return decoder(context, word);
         }
         let program = self.program.as_ref()?;
@@ -558,11 +803,22 @@ impl Executor {
         trace: TraceOptions,
         out: &mut dyn Write,
     ) -> Result<(), Error> {
+        self.last_fault = None;
         let result = if self.program.is_some() {
             self.run_inner(until_pc, max_cycles, trace, out)
         } else {
             self.run_decoded_inner(until_pc, max_cycles, trace, out)
         };
+        if let Err(Error::Trap(trap)) = &result
+            && self.last_fault.is_none()
+            && !matches!(trap, SimTrap::MaxCyclesExceeded { .. })
+        {
+            self.last_fault = Some(FaultRecord {
+                pc: self.pc,
+                sequence: 0,
+                trap: trap.clone(),
+            });
+        }
         if trace.registers_at_end {
             self.emit_register_dump(out, "final registers");
         }
@@ -587,15 +843,21 @@ impl Executor {
             if pc == until_pc {
                 return Ok(());
             }
+            let word = self.fetch_word(pc).inspect_err(|trap| {
+                self.last_fault = Some(FaultRecord {
+                    pc,
+                    sequence: 0,
+                    trap: trap.clone(),
+                });
+            })?;
             let op_id = match self.decode_cache.get(&pc) {
-                Some(&id) => id,
-                None => {
-                    let word = self.read_memory(pc, 4)? as u32;
+                Some(&(cached_word, id)) if cached_word == word => id,
+                _ => {
                     let id = decoder(&context, word).ok_or(SimTrap::InvalidInstruction {
                         op: "<decode>",
                         reason: format!("no instruction matches word 0x{word:08x} at pc 0x{pc:x}"),
                     })?;
-                    self.decode_cache.insert(pc, id);
+                    self.decode_cache.insert(pc, (word, id));
                     id
                 }
             };
@@ -886,21 +1148,29 @@ impl MachineContext for Executor {
         Ok(())
     }
 
+    fn write_memory_bytes(&mut self, address: u64, bytes: &[u8]) -> Result<(), SimTrap> {
+        self.memory
+            .validate_ram_access(address, bytes.len(), crate::MemoryAccess::Write)
+            .map_err(|error| crate::memory_trap(error, bytes.len()))?;
+        self.write_bytes(address, bytes)?;
+        self.record_data_access(address, bytes.len(), true);
+        Ok(())
+    }
+
     fn load_reserved(
         &mut self,
         address: u64,
         size: usize,
         _ord: tir::sem::MemOrdering,
     ) -> Result<u64, SimTrap> {
-        let value = self.read_memory_raw(address, size)?;
-        self.reservation = Some((address, size as u8));
-        self.record_mem_access(MemAccess {
-            addr: address,
-            size: size as u8,
-            is_write: false,
-            kind: MemAccessKind::LoadReserved,
-        });
-        Ok(value)
+        match self.service_immediate(MemoryEffect::LoadReserved {
+            address,
+            size,
+            ordering: _ord,
+        })? {
+            ResponseValue::Word(value) => Ok(value),
+            _ => unreachable!("load-reserved returns a word"),
+        }
     }
 
     fn store_conditional(
@@ -908,22 +1178,17 @@ impl MachineContext for Executor {
         address: u64,
         size: usize,
         value: u64,
-        _ord: tir::sem::MemOrdering,
+        ordering: tir::sem::MemOrdering,
     ) -> Result<bool, SimTrap> {
-        // Success requires an exact (address, size) match; the reservation is
-        // consumed on both paths (matches Spike). Plain stores do not clear it.
-        let ok = self.reservation == Some((address, size as u8));
-        self.reservation = None;
-        if ok {
-            self.write_memory_raw(address, size, value)?;
+        match self.service_immediate(MemoryEffect::StoreConditional {
+            address,
+            size,
+            value,
+            ordering,
+        })? {
+            ResponseValue::Word(value) => Ok(value != 0),
+            _ => unreachable!("store-conditional returns a word"),
         }
-        self.record_mem_access(MemAccess {
-            addr: address,
-            size: size as u8,
-            is_write: ok,
-            kind: MemAccessKind::StoreConditional { success: ok },
-        });
-        Ok(ok)
     }
 
     fn atomic_rmw(
@@ -932,35 +1197,22 @@ impl MachineContext for Executor {
         address: u64,
         size: usize,
         value: u64,
-        _ord: tir::sem::MemOrdering,
+        ordering: tir::sem::MemOrdering,
     ) -> Result<u64, SimTrap> {
-        let old = self.read_memory_raw(address, size)?;
-        let width = (size as u32) * 8;
-        let result = op.apply(
-            tir::utils::APInt::new(width, old),
-            tir::utils::APInt::new(width, value),
-        );
-        self.write_memory_raw(address, size, result.to_u64())?;
-        self.record_mem_access(MemAccess {
-            addr: address,
-            size: size as u8,
-            is_write: true,
-            kind: MemAccessKind::AtomicRmw,
-        });
-        Ok(old)
+        match self.service_immediate(MemoryEffect::AtomicRmw {
+            op,
+            address,
+            size,
+            value,
+            ordering,
+        })? {
+            ResponseValue::Word(value) => Ok(value),
+            _ => unreachable!("atomic read-modify-write returns a word"),
+        }
     }
 
     fn fence(&mut self, pred: u32, succ: u32, kind: u32) -> Result<(), SimTrap> {
-        self.record_mem_access(MemAccess {
-            addr: 0,
-            size: 0,
-            is_write: false,
-            kind: MemAccessKind::Fence {
-                pred: pred as u8,
-                succ: succ as u8,
-                ifence: kind == 1,
-            },
-        });
+        self.service_immediate(MemoryEffect::Fence { pred, succ, kind })?;
         Ok(())
     }
 

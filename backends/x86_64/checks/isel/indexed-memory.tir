@@ -1,0 +1,44 @@
+// RUN: tir mc --march=x86_64 --stage=isel %s | filecheck %s
+
+module {
+  %fn_load_index2 = func.func @load_index2(%base: !ptr.p<!i32>, %index: !i64) -> !i32 {
+    %scale = constant {value = 2} : !i64
+    %offset = muli %index, %scale : !i64
+    %address = ptr.ptradd %base, %offset : !ptr.p<!i32>
+    %value = ptr.load %address : !i32
+    func.return %value
+  }
+
+  %fn_load_index4 = func.func @load_index4(%base: !ptr.p<!i32>, %index: !i64) -> !i32 {
+    %scale = constant {value = 4} : !i64
+    %offset = muli %index, %scale : !i64
+    %address = ptr.ptradd %base, %offset : !ptr.p<!i32>
+    %value = ptr.load %address : !i32
+    func.return %value
+  }
+
+  %fn_load_index8 = func.func @load_index8(%base: !ptr.p<!i32>, %index: !i64) -> !i32 {
+    %scale = constant {value = 8} : !i64
+    %offset = muli %index, %scale : !i64
+    %address = ptr.ptradd %base, %offset : !ptr.p<!i32>
+    %value = ptr.load %address : !i32
+    func.return %value
+  }
+  module_end
+}
+
+// CHECK-LABEL: asm.symbol {name = "load_index2"
+// CHECK: x86_64.mov_load32_index2
+// CHECK-NOT: x86_64.imul
+// CHECK-NOT: x86_64.shl
+// CHECK-NOT: x86_64.add
+// CHECK-LABEL: asm.symbol {name = "load_index4"
+// CHECK: x86_64.mov_load32_index4
+// CHECK-NOT: x86_64.imul
+// CHECK-NOT: x86_64.shl
+// CHECK-NOT: x86_64.add
+// CHECK-LABEL: asm.symbol {name = "load_index8"
+// CHECK: x86_64.mov_load32_index8
+// CHECK-NOT: x86_64.imul
+// CHECK-NOT: x86_64.shl
+// CHECK-NOT: x86_64.add

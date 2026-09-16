@@ -17,11 +17,18 @@ use tir_x86_64 as _;
 
 mod dump;
 mod elf;
+mod events;
 mod konata;
 mod memory;
 
 #[derive(Parser)]
 struct Cli {
+    /// Semantic execution engine.
+    #[arg(long, default_value = "interp", value_parser = ["interp"])]
+    engine: String,
+    /// Write precise instruction effects and faults as JSON.
+    #[arg(long)]
+    events: Option<String>,
     /// Target architecture (e.g. `riscv64`, `rv64im`, `arm64`).
     #[arg(long)]
     march: String,
@@ -97,7 +104,14 @@ struct Cli {
 }
 
 fn main() {
-    let args = Cli::parse();
+    let mut arguments: Vec<_> = std::env::args_os().collect();
+    if arguments
+        .get(1)
+        .is_some_and(|argument| argument == "snippet")
+    {
+        arguments.remove(1);
+    }
+    let args = Cli::parse_from(arguments);
     let bytes = std::fs::read(&args.program).expect("failed to read program path");
 
     let target = tir::backend::select_target_with_abi(
@@ -184,15 +198,7 @@ fn main() {
     let model = select_timing_model(&args, target.as_ref(), &mut executor);
 
     executor.load(program).expect("failed to load program");
-    let trace = TraceOptions {
-        instructions: args.trace_instructions,
-        registers_after_each_instruction: args.trace_registers_each,
-        registers_at_end: args.trace_registers_end,
-    };
-    let mut stdout = std::io::stdout();
-    executor
-        .run_with_trace(until_pc, args.max_cycles, trace, &mut stdout)
-        .expect("program execution failed");
+    execute(&args, &mut executor, until_pc);
 
     if let Some(model) = model {
         report_timing(&args, &context, &register_info, &model, &executor);
@@ -200,6 +206,29 @@ fn main() {
 
     if let Some(path) = &args.dump_state {
         dump::write_state_dump(&executor, path, &args.dump_mem);
+    }
+}
+
+fn execute(args: &Cli, executor: &mut Executor, until_pc: u64) {
+    if args.events.is_some() {
+        executor.enable_effect_recording();
+    }
+    let trace = TraceOptions {
+        instructions: args.trace_instructions,
+        registers_after_each_instruction: args.trace_registers_each,
+        registers_at_end: args.trace_registers_end,
+    };
+    let mut stdout = std::io::stdout();
+    let result = executor.run_with_trace(until_pc, args.max_cycles, trace, &mut stdout);
+    if let Some(path) = &args.events {
+        events::write(executor, path, &args.engine, result.is_ok());
+    }
+    if let Err(error) = result {
+        if let Some(path) = &args.dump_state {
+            dump::write_state_dump(executor, path, &args.dump_mem);
+        }
+        eprintln!("{error}");
+        std::process::exit(2);
     }
 }
 
@@ -296,7 +325,7 @@ fn report_timing(
         model,
         context,
         executor.trace(),
-        Some(executor.latency_trace()),
+        Some(executor.sched_trace()),
         &config,
         predictor.as_mut(),
         Some(&prf),
@@ -566,15 +595,7 @@ fn run_elf(
     let model = select_timing_model(args, target, &mut executor);
 
     let until_pc = args.until_pc.as_deref().map(parse_addr).unwrap_or(u64::MAX);
-    let trace = TraceOptions {
-        instructions: args.trace_instructions,
-        registers_after_each_instruction: args.trace_registers_each,
-        registers_at_end: args.trace_registers_end,
-    };
-    let mut stdout = std::io::stdout();
-    executor
-        .run_with_trace(until_pc, args.max_cycles, trace, &mut stdout)
-        .expect("program execution failed");
+    execute(args, &mut executor, until_pc);
 
     println!("exit: {}", exit_code.get());
 

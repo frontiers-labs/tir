@@ -8,7 +8,7 @@ mod rounded;
 mod sexpr;
 mod types;
 
-pub use exec::{Memory, execute, execute_pure, execute_with_memory};
+pub use exec::{Continuation, Memory, execute, execute_pure, execute_with_memory};
 pub use infer::{
     canonicalize_for_selection, infer_types, infer_widths, selection_fallback,
     selection_fallback_preserving_rounding,

@@ -7,7 +7,11 @@ use tir_graph::{Dag, NodeId};
 
 use crate::lang::{AtomicRmwOp, MemOrdering, SymKind, SymPayload, Value, scalar_op};
 
-/// Memory backend for `LoadMemory`/`StoreMemory` nodes.
+/// Memory backend for symbolic memory effects.
+///
+/// An error rejects the operation before it takes effect. A [`Continuation`]
+/// retries that same operation on its next resume. Effectful backends should
+/// override the byte methods so each wide access is accepted as one operation.
 pub trait Memory {
     type Error;
 
@@ -137,10 +141,388 @@ pub fn execute_with_memory<V, M: Memory>(
     symbols: &[Value],
     memory: &mut M,
 ) -> Result<Value, M::Error> {
-    let root = graph.root().expect("cannot execute empty graph");
-    let mut cache = vec![None::<Value>; graph.len()];
-    let mut args: Vec<Value> = Vec::new();
-    eval_node(graph, root, symbols, &mut cache, &mut args, memory)
+    Continuation::new(graph).resume(graph, symbols, memory)
+}
+
+enum EvalFrame {
+    Node {
+        node: NodeId,
+        context: usize,
+        next_child: usize,
+    },
+    Map {
+        node: NodeId,
+        context: usize,
+        body: NodeId,
+        elements: Option<Vec<Value>>,
+        lane: usize,
+        lane_context: Option<usize>,
+        results: Vec<Value>,
+    },
+    Reduce {
+        node: NodeId,
+        context: usize,
+        body: NodeId,
+        elements: Option<Vec<Value>>,
+        lane: usize,
+        lane_context: Option<usize>,
+        accumulator: Option<Value>,
+    },
+}
+
+struct EvalContext {
+    cache: Vec<Option<Value>>,
+    args: Vec<Value>,
+}
+
+/// A suspended symbolic evaluation.
+///
+/// Successful nodes remain cached across [`resume`](Self::resume) calls. If a
+/// memory backend returns an error, the exact effectful node remains pending and
+/// is retried without evaluating its completed predecessors again. Keep the graph
+/// and symbol bindings unchanged while an evaluation is suspended.
+pub struct Continuation {
+    root: NodeId,
+    contexts: Vec<EvalContext>,
+    stack: Vec<EvalFrame>,
+}
+
+impl Continuation {
+    pub fn new<V>(graph: &impl Dag<Node = SymKind, Leaf = SymPayload<V>>) -> Self {
+        let root = graph.root().expect("cannot execute empty graph");
+        Self {
+            root,
+            contexts: vec![EvalContext {
+                cache: vec![None; graph.len()],
+                args: vec![],
+            }],
+            stack: vec![EvalFrame::Node {
+                node: root,
+                context: 0,
+                next_child: 0,
+            }],
+        }
+    }
+
+    pub fn resume<V, M: Memory>(
+        &mut self,
+        graph: &impl Dag<Node = SymKind, Leaf = SymPayload<V>>,
+        symbols: &[Value],
+        memory: &mut M,
+    ) -> Result<Value, M::Error> {
+        if self.stack.is_empty() {
+            return Ok(self.contexts[0].cache[self.root.index()]
+                .as_ref()
+                .expect("completed continuation must cache its root")
+                .clone());
+        }
+
+        loop {
+            match self.stack.last().expect("evaluation stack is not empty") {
+                EvalFrame::Node {
+                    node,
+                    context,
+                    next_child,
+                } => {
+                    let (node, context, next_child) = (*node, *context, *next_child);
+                    self.step_node(graph, symbols, memory, node, context, next_child)?;
+                }
+                EvalFrame::Map { .. } => {
+                    let frame = self.stack.pop().unwrap();
+                    self.step_map(graph, frame);
+                }
+                EvalFrame::Reduce { .. } => {
+                    let frame = self.stack.pop().unwrap();
+                    self.step_reduce(graph, frame);
+                }
+            }
+
+            if self.stack.is_empty() {
+                return Ok(self.contexts[0].cache[self.root.index()]
+                    .as_ref()
+                    .expect("completed continuation must cache its root")
+                    .clone());
+            }
+        }
+    }
+
+    fn step_node<V, M: Memory>(
+        &mut self,
+        graph: &impl Dag<Node = SymKind, Leaf = SymPayload<V>>,
+        symbols: &[Value],
+        memory: &mut M,
+        node: NodeId,
+        context: usize,
+        next_child: usize,
+    ) -> Result<(), M::Error> {
+        if self.contexts[context].cache[node.index()].is_some() {
+            self.stack.pop();
+            return Ok(());
+        }
+
+        let children: Vec<_> = graph.children(node).collect();
+        match *graph.get_kind(node) {
+            SymKind::Map | SymKind::Reduce if next_child == 0 => {
+                let replacement = if *graph.get_kind(node) == SymKind::Map {
+                    EvalFrame::Map {
+                        node,
+                        context,
+                        body: children[1],
+                        elements: None,
+                        lane: 0,
+                        lane_context: None,
+                        results: vec![],
+                    }
+                } else {
+                    EvalFrame::Reduce {
+                        node,
+                        context,
+                        body: children[1],
+                        elements: None,
+                        lane: 0,
+                        lane_context: None,
+                        accumulator: None,
+                    }
+                };
+                *self.stack.last_mut().unwrap() = replacement;
+                return Ok(());
+            }
+            _ => {}
+        }
+
+        let child_index = match *graph.get_kind(node) {
+            SymKind::If if next_child == 0 => Some(0),
+            SymKind::If if next_child == 1 => {
+                let condition = child_val(graph, node, 0, &self.contexts[context].cache);
+                Some(if scalar_is_zero(condition) { 2 } else { 1 })
+            }
+            SymKind::Switch if next_child == 0 => Some(0),
+            SymKind::Switch if next_child == 1 => {
+                let Value::Int(index) = child_val(graph, node, 0, &self.contexts[context].cache)
+                else {
+                    panic!("switch requires an integer predicate");
+                };
+                let index = index.to_u64() as usize;
+                Some((index + 1).min(children.len() - 1))
+            }
+            SymKind::If | SymKind::Switch => None,
+            _ => (next_child < children.len()).then_some(next_child),
+        };
+
+        if let Some(index) = child_index {
+            let child = children[index];
+            if self.contexts[context].cache[child.index()].is_none() {
+                self.stack.push(EvalFrame::Node {
+                    node: child,
+                    context,
+                    next_child: 0,
+                });
+            } else if let EvalFrame::Node { next_child, .. } = self.stack.last_mut().unwrap() {
+                *next_child += 1;
+            }
+            return Ok(());
+        }
+
+        let result = eval_ready(
+            graph,
+            node,
+            symbols,
+            &self.contexts[context].cache,
+            &self.contexts[context].args,
+            memory,
+        )?;
+        self.contexts[context].cache[node.index()] = Some(result);
+        self.stack.pop();
+        Ok(())
+    }
+
+    fn new_lambda_context(&mut self, outer: usize, binding: Value, len: usize) -> usize {
+        let mut args = self.contexts[outer].args.clone();
+        args.push(binding);
+        self.contexts.push(EvalContext {
+            cache: vec![None; len],
+            args,
+        });
+        self.contexts.len() - 1
+    }
+
+    fn step_map<V>(
+        &mut self,
+        graph: &impl Dag<Node = SymKind, Leaf = SymPayload<V>>,
+        frame: EvalFrame,
+    ) {
+        let EvalFrame::Map {
+            node,
+            context,
+            body,
+            mut elements,
+            lane,
+            lane_context,
+            mut results,
+        } = frame
+        else {
+            unreachable!()
+        };
+        if elements.is_none() {
+            let iter = graph.children(node).next().unwrap();
+            match self.contexts[context].cache[iter.index()].clone() {
+                Some(Value::Iterator(values)) => elements = Some(values),
+                Some(_) => panic!("map requires an iterator operand"),
+                None => {
+                    self.stack.push(EvalFrame::Map {
+                        node,
+                        context,
+                        body,
+                        elements,
+                        lane,
+                        lane_context,
+                        results,
+                    });
+                    self.stack.push(EvalFrame::Node {
+                        node: iter,
+                        context,
+                        next_child: 0,
+                    });
+                    return;
+                }
+            }
+        }
+        let values = elements.as_ref().unwrap();
+        if lane == values.len() {
+            self.contexts[context].cache[node.index()] = Some(Value::Iterator(results));
+            return;
+        }
+        if let Some(lane_context) = lane_context {
+            if let Some(value) = self.contexts[lane_context].cache[body.index()].clone() {
+                results.push(value);
+                self.contexts.truncate(lane_context);
+                self.stack.push(EvalFrame::Map {
+                    node,
+                    context,
+                    body,
+                    elements,
+                    lane: lane + 1,
+                    lane_context: None,
+                    results,
+                });
+            }
+            return;
+        }
+        let lane_context = self.new_lambda_context(context, values[lane].clone(), graph.len());
+        self.stack.push(EvalFrame::Map {
+            node,
+            context,
+            body,
+            elements,
+            lane,
+            lane_context: Some(lane_context),
+            results,
+        });
+        self.stack.push(EvalFrame::Node {
+            node: body,
+            context: lane_context,
+            next_child: 0,
+        });
+    }
+
+    fn step_reduce<V>(
+        &mut self,
+        graph: &impl Dag<Node = SymKind, Leaf = SymPayload<V>>,
+        frame: EvalFrame,
+    ) {
+        let EvalFrame::Reduce {
+            node,
+            context,
+            body,
+            mut elements,
+            mut lane,
+            lane_context,
+            mut accumulator,
+        } = frame
+        else {
+            unreachable!()
+        };
+        if elements.is_none() {
+            let iter = graph.children(node).next().unwrap();
+            match self.contexts[context].cache[iter.index()].clone() {
+                Some(Value::Iterator(values)) => {
+                    accumulator = Some(
+                        values
+                            .first()
+                            .expect("reduce requires a non-empty iterator")
+                            .clone(),
+                    );
+                    lane = 1;
+                    elements = Some(values);
+                }
+                Some(_) => panic!("reduce requires an iterator operand"),
+                None => {
+                    self.stack.push(EvalFrame::Reduce {
+                        node,
+                        context,
+                        body,
+                        elements,
+                        lane,
+                        lane_context,
+                        accumulator,
+                    });
+                    self.stack.push(EvalFrame::Node {
+                        node: iter,
+                        context,
+                        next_child: 0,
+                    });
+                    return;
+                }
+            }
+        }
+        let values = elements.as_ref().unwrap();
+        if lane == values.len() {
+            self.contexts[context].cache[node.index()] = accumulator;
+            return;
+        }
+        if let Some(lane_context) = lane_context {
+            if let Some(value) = self.contexts[lane_context].cache[body.index()].clone() {
+                self.contexts.truncate(lane_context);
+                self.stack.push(EvalFrame::Reduce {
+                    node,
+                    context,
+                    body,
+                    elements,
+                    lane: lane + 1,
+                    lane_context: None,
+                    accumulator: Some(value),
+                });
+            }
+            return;
+        }
+        let binding = Value::Iterator(vec![
+            accumulator.as_ref().unwrap().clone(),
+            values[lane].clone(),
+        ]);
+        let lane_context = self.new_lambda_context(context, binding, graph.len());
+        self.stack.push(EvalFrame::Reduce {
+            node,
+            context,
+            body,
+            elements,
+            lane,
+            lane_context: Some(lane_context),
+            accumulator,
+        });
+        self.stack.push(EvalFrame::Node {
+            node: body,
+            context: lane_context,
+            next_child: 0,
+        });
+    }
+}
+
+fn scalar_is_zero(value: Value) -> bool {
+    match value {
+        Value::Int(value) => value.is_zero(),
+        Value::Float(value) => value.is_zero(),
+        Value::Iterator(_) | Value::RawBits(_) => panic!("condition must be scalar"),
+    }
 }
 
 fn child_val<V>(
@@ -302,75 +684,6 @@ fn float_binop(lhs: Value, rhs: Value, f: fn(&APFloat, &APFloat) -> APFloat, op:
     }
 }
 
-/// Evaluate `body` with `binding` pushed as the innermost lambda argument, under a
-/// fresh cache so each lane's `Arg` reads its own value rather than a stale cached one.
-fn eval_lambda_body<V, M: Memory>(
-    graph: &impl Dag<Node = SymKind, Leaf = SymPayload<V>>,
-    body: NodeId,
-    symbols: &[Value],
-    args: &mut Vec<Value>,
-    memory: &mut M,
-    binding: Value,
-) -> Result<Value, M::Error> {
-    args.push(binding);
-    let mut body_cache = vec![None::<Value>; graph.len()];
-    let result = eval_node(graph, body, symbols, &mut body_cache, args, memory);
-    args.pop();
-    result
-}
-
-/// Evaluate a `Map` node: apply `body` to each lane of `iter` via the lambda-argument stack.
-fn eval_map<V, M: Memory>(
-    graph: &impl Dag<Node = SymKind, Leaf = SymPayload<V>>,
-    node: NodeId,
-    symbols: &[Value],
-    cache: &mut Vec<Option<Value>>,
-    args: &mut Vec<Value>,
-    memory: &mut M,
-) -> Result<Value, M::Error> {
-    let children: Vec<NodeId> = graph.children(node).collect();
-    let (iter_n, body_n) = (children[0], children[1]);
-
-    let iter = eval_node(graph, iter_n, symbols, cache, args, memory)?;
-    let Value::Iterator(elems) = iter else {
-        panic!("map requires an iterator operand");
-    };
-
-    let mut out = Vec::with_capacity(elems.len());
-    for elem in elems {
-        out.push(eval_lambda_body(
-            graph, body_n, symbols, args, memory, elem,
-        )?);
-    }
-    Ok(Value::Iterator(out))
-}
-
-/// Evaluate a `Reduce` node: left-fold `body` over `iter`, `Arg(0)`=acc, `Arg(1)`=lane.
-fn eval_reduce<V, M: Memory>(
-    graph: &impl Dag<Node = SymKind, Leaf = SymPayload<V>>,
-    node: NodeId,
-    symbols: &[Value],
-    cache: &mut Vec<Option<Value>>,
-    args: &mut Vec<Value>,
-    memory: &mut M,
-) -> Result<Value, M::Error> {
-    let children: Vec<NodeId> = graph.children(node).collect();
-    let (iter_n, body_n) = (children[0], children[1]);
-
-    let iter = eval_node(graph, iter_n, symbols, cache, args, memory)?;
-    let Value::Iterator(elems) = iter else {
-        panic!("reduce requires an iterator operand");
-    };
-    let mut elems = elems.into_iter();
-    let mut acc = elems.next().expect("reduce requires a non-empty iterator");
-    for elem in elems {
-        // Pack acc/lane as a two-element binding read via `Arg(0)`/`Arg(1)`.
-        let binding = Value::Iterator(vec![acc, elem]);
-        acc = eval_lambda_body(graph, body_n, symbols, args, memory, binding)?;
-    }
-    Ok(acc)
-}
-
 /// Evaluate a `Split` node: cut raw bits into `n` integer lanes, lane 0 from the low bits.
 /// Reinterpret a value as raw bits: integers (e.g. a register file entry) are
 /// their two's-complement bit pattern.
@@ -464,41 +777,14 @@ fn concat_lanes(value: Value) -> Value {
     Value::RawBits(RawBits::from_bytes(storage))
 }
 
-fn eval_node<V, M: Memory>(
+fn eval_ready<V, M: Memory>(
     graph: &impl Dag<Node = SymKind, Leaf = SymPayload<V>>,
     node: NodeId,
     symbols: &[Value],
-    cache: &mut Vec<Option<Value>>,
-    args: &mut Vec<Value>,
+    cache: &[Option<Value>],
+    args: &[Value],
     memory: &mut M,
 ) -> Result<Value, M::Error> {
-    if let Some(ref v) = cache[node.index()] {
-        return Ok(v.clone());
-    }
-
-    // Intercept before generic child pre-evaluation: Map/Reduce re-evaluate their
-    // body per lane with a fresh `Arg`, so it must not be pre-evaluated here.
-    match *graph.get_kind(node) {
-        SymKind::Map => {
-            let result = eval_map(graph, node, symbols, cache, args, memory)?;
-            cache[node.index()] = Some(result.clone());
-            return Ok(result);
-        }
-        SymKind::Reduce => {
-            let result = eval_reduce(graph, node, symbols, cache, args, memory)?;
-            cache[node.index()] = Some(result.clone());
-            return Ok(result);
-        }
-        _ => {}
-    }
-
-    for child_id in graph.children(node) {
-        if cache[child_id.index()].is_none() {
-            let v = eval_node(graph, child_id, symbols, cache, args, memory)?;
-            cache[child_id.index()] = Some(v);
-        }
-    }
-
     let c = |idx: usize| child_val(graph, node, idx, cache);
 
     // Integer division and remainder are total under SMT-LIB div-by-zero rules,
@@ -506,7 +792,6 @@ fn eval_node<V, M: Memory>(
     // its dead arm eagerly, so a zero divisor must fold rather than trap in the
     // asserting APInt path `scalar_op` would take.
     if let Some(result) = eval_divrem(*graph.get_kind(node), &c) {
-        cache[node.index()] = Some(result.clone());
         return Ok(result);
     }
 
@@ -515,9 +800,7 @@ fn eval_node<V, M: Memory>(
             .map(|index| integer_view(c(index)))
             .collect::<Option<Vec<_>>>();
         if let Some(operands) = operands {
-            let result = Value::Int(op.eval_int(&operands));
-            cache[node.index()] = Some(result.clone());
-            return Ok(result);
+            return Ok(Value::Int(op.eval_int(&operands)));
         }
     }
 
@@ -579,7 +862,6 @@ fn eval_node<V, M: Memory>(
         _ => unreachable!("operator has no concrete evaluator"),
     };
 
-    cache[node.index()] = Some(result.clone());
     Ok(result)
 }
 

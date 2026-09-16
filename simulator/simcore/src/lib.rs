@@ -11,6 +11,8 @@
 
 pub mod error;
 mod executor;
+mod memory;
+mod memory_service;
 pub mod memsys;
 pub mod predictor;
 pub mod prefetch;
@@ -19,4 +21,6 @@ pub mod scoreboard;
 pub mod timing;
 
 pub use executor::*;
+pub use memory::*;
+pub use memory_service::*;
 pub use program::*;

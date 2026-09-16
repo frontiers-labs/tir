@@ -4,6 +4,7 @@ mod fcc_torture;
 mod fp_check;
 mod gate;
 mod gate_bench;
+mod isasim_accept;
 pub mod utils;
 mod verify_smt;
 
@@ -41,6 +42,8 @@ enum Task {
     },
     /// Run differential ISA tests against a golden oracle (riscv/Spike)
     IsaTestSuite,
+    /// Run a simulator milestone acceptance manifest.
+    IsasimAccept(isasim_accept::Options),
     /// Compile the pinned GCC C torture corpus through codegen and compare the
     /// failures against the recorded baseline
     FccTorture {
@@ -80,6 +83,7 @@ fn main() -> anyhow::Result<()> {
         Task::Docs => build_docs(&sh),
         Task::Verify { isa, args } => verify_smt::verify_smt(&sh, &isa, args.into_iter()),
         Task::IsaTestSuite => isa_test_suite(&sh),
+        Task::IsasimAccept(options) => isasim_accept::run(&project_root(), options),
         Task::FccTorture { bless, fcc } => {
             fcc_torture::run(&sh, &project_root(), bless, fcc.as_deref())
         }

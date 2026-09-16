@@ -432,11 +432,12 @@ pub struct MachineOverride {
     pub span: Span,
 }
 
-/// A latency selected when an instruction predicate holds.
+/// Scheduling values selected when an instruction predicate holds.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LatencyCase {
     pub condition: Expr,
     pub latency: i64,
+    pub uops: Vec<MicroOp>,
     pub span: Span,
 }
 

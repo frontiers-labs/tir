@@ -458,6 +458,736 @@ instruction Mov8StoreDisp for [X86_64] {
     }
 }
 
+macro memory_reg_template {
+    ( $name:ident, $cls:ident, rexw = $rexw:literal, p66 = $p66:literal,
+      byte = $byte:literal ) => {
+        template $name for [X86_64] {
+            param MNEMONIC: String;
+            param OPCODE: bits<8>;
+            param ESCAPE: bits<1>;
+            operands { dst: $cls, base: GPR, }
+            encoding {
+                if $p66 { 0x66 } else { () },
+                rex($rexw, dst, base, $byte & needs_rex8_one(dst)),
+                if ESCAPE { 0x0F } else { () },
+                OPCODE,
+                modrm_base(dst, base),
+            }
+        }
+    };
+}
+
+macro memory_reg_dest_template {
+    ( $name:ident, $cls:ident, rexw = $rexw:literal, p66 = $p66:literal,
+      byte = $byte:literal ) => {
+        template $name for [X86_64] {
+            param MNEMONIC: String;
+            param OPCODE: bits<8>;
+            operands { base: GPR, src: $cls, }
+            encoding {
+                if $p66 { 0x66 } else { () },
+                rex($rexw, src, base, $byte & needs_rex8_one(src)),
+                OPCODE,
+                modrm_base(src, base),
+            }
+        }
+    };
+}
+
+macro memory_unary_template {
+    ( $name:ident, rexw = $rexw:literal, p66 = $p66:literal, opcode = $opcode:literal ) => {
+        template $name for [X86_64] {
+            param MNEMONIC: String;
+            param EXT: bits<3>;
+            operands { base: GPR, }
+            encoding {
+                if $p66 { 0x66 } else { () },
+                rex_rm($rexw, base, 0b0),
+                $opcode,
+                modrm_base_ext(EXT, base),
+            }
+        }
+    };
+}
+
+macro memory_reg_disp_template {
+    ( $name:ident, $cls:ident, rexw = $rexw:literal, p66 = $p66:literal,
+      byte = $byte:literal ) => {
+        template $name for [X86_64] {
+            param MNEMONIC: String;
+            param OPCODE: bits<8>;
+            param ESCAPE: bits<1>;
+            operands { dst: $cls, base: GPR, imm: bits<32>, }
+            encoding {
+                if $p66 { 0x66 } else { () },
+                rex($rexw, dst, base, $byte & needs_rex8_one(dst)),
+                if ESCAPE { 0x0F } else { () },
+                OPCODE,
+                modrm_disp(dst, base, imm),
+            }
+        }
+    };
+}
+
+macro memory_reg_dest_disp_template {
+    ( $name:ident, $cls:ident, rexw = $rexw:literal, p66 = $p66:literal,
+      byte = $byte:literal ) => {
+        template $name for [X86_64] {
+            param MNEMONIC: String;
+            param OPCODE: bits<8>;
+            operands { base: GPR, imm: bits<32>, src: $cls, }
+            encoding {
+                if $p66 { 0x66 } else { () },
+                rex($rexw, src, base, $byte & needs_rex8_one(src)),
+                OPCODE,
+                modrm_disp(src, base, imm),
+            }
+        }
+    };
+}
+
+macro memory_unary_disp_template {
+    ( $name:ident, rexw = $rexw:literal, p66 = $p66:literal, opcode = $opcode:literal ) => {
+        template $name for [X86_64] {
+            param MNEMONIC: String;
+            param EXT: bits<3>;
+            operands { base: GPR, imm: bits<32>, }
+            encoding {
+                if $p66 { 0x66 } else { () },
+                rex_rm($rexw, base, 0b0),
+                $opcode,
+                modrm_disp_ext(EXT, base, imm),
+            }
+        }
+    };
+}
+
+memory_reg_template!(MemoryReg64, GPR, rexw = 0b1, p66 = 0b0, byte = 0b0)
+memory_reg_template!(MemoryReg32, GPR32, rexw = 0b0, p66 = 0b0, byte = 0b0)
+memory_reg_template!(MemoryReg16, GPR16, rexw = 0b0, p66 = 0b1, byte = 0b0)
+memory_reg_template!(MemoryReg8, GPR8, rexw = 0b0, p66 = 0b0, byte = 0b1)
+memory_reg_dest_template!(MemoryRegDest64, GPR, rexw = 0b1, p66 = 0b0, byte = 0b0)
+memory_reg_dest_template!(MemoryRegDest32, GPR32, rexw = 0b0, p66 = 0b0, byte = 0b0)
+memory_reg_dest_template!(MemoryRegDest16, GPR16, rexw = 0b0, p66 = 0b1, byte = 0b0)
+memory_reg_dest_template!(MemoryRegDest8, GPR8, rexw = 0b0, p66 = 0b0, byte = 0b1)
+memory_unary_template!(MemoryUnary64, rexw = 0b1, p66 = 0b0, opcode = 0xFF)
+memory_unary_template!(MemoryUnary32, rexw = 0b0, p66 = 0b0, opcode = 0xFF)
+memory_unary_template!(MemoryUnary16, rexw = 0b0, p66 = 0b1, opcode = 0xFF)
+memory_unary_template!(MemoryUnary8, rexw = 0b0, p66 = 0b0, opcode = 0xFE)
+memory_reg_disp_template!(MemoryRegDisp64, GPR, rexw = 0b1, p66 = 0b0, byte = 0b0)
+memory_reg_disp_template!(MemoryRegDisp32, GPR32, rexw = 0b0, p66 = 0b0, byte = 0b0)
+memory_reg_disp_template!(MemoryRegDisp16, GPR16, rexw = 0b0, p66 = 0b1, byte = 0b0)
+memory_reg_disp_template!(MemoryRegDisp8, GPR8, rexw = 0b0, p66 = 0b0, byte = 0b1)
+memory_reg_dest_disp_template!(MemoryRegDestDisp64, GPR, rexw = 0b1, p66 = 0b0, byte = 0b0)
+memory_reg_dest_disp_template!(MemoryRegDestDisp32, GPR32, rexw = 0b0, p66 = 0b0, byte = 0b0)
+memory_reg_dest_disp_template!(MemoryRegDestDisp16, GPR16, rexw = 0b0, p66 = 0b1, byte = 0b0)
+memory_reg_dest_disp_template!(MemoryRegDestDisp8, GPR8, rexw = 0b0, p66 = 0b0, byte = 0b1)
+memory_unary_disp_template!(MemoryUnaryDisp64, rexw = 0b1, p66 = 0b0, opcode = 0xFF)
+memory_unary_disp_template!(MemoryUnaryDisp32, rexw = 0b0, p66 = 0b0, opcode = 0xFF)
+memory_unary_disp_template!(MemoryUnaryDisp16, rexw = 0b0, p66 = 0b1, opcode = 0xFF)
+memory_unary_disp_template!(MemoryUnaryDisp8, rexw = 0b0, p66 = 0b0, opcode = 0xFE)
+
+macro memory_sub_flags {
+    ( { $($lhs:tt)* }, { $($rhs:tt)* }, { $($msb:tt)* } ) => {
+        EFLAGS::cf = if $($lhs)* ~< $($rhs)* { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::zf = if $($lhs)* == $($rhs)* { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::sf = extract($($lhs)* - $($rhs)*, $($msb)*, $($msb)*);
+        EFLAGS::of = extract(($($lhs)* ^ $($rhs)*) & ($($lhs)* ^ ($($lhs)* - $($rhs)*)), $($msb)*, $($msb)*);
+    };
+}
+
+macro memory_test_flags {
+    ( { $($lhs:tt)* }, { $($rhs:tt)* }, { $($width:tt)* }, { $($msb:tt)* } ) => {
+        EFLAGS::cf = zext(0b0, 1);
+        EFLAGS::zf = if ($($lhs)* & $($rhs)*) == zext(0b0, $($width)*) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::sf = extract($($lhs)* & $($rhs)*, $($msb)*, $($msb)*);
+        EFLAGS::of = zext(0b0, 1);
+    };
+}
+
+macro memory_source_ops {
+    ( $nsuf:literal, $osuf:literal, $tmpl:ident, $disp_tmpl:ident, $memory_prefix:literal,
+      $bytes:literal, $width:literal, $msb:literal,
+      $( ( $name:ident, $opstem:literal, $mnemonic:literal, $opcode:literal,
+           $escape:literal, { $($b:tt)* } ) ),* ) => {
+        $( instruction ${concat($name, $nsuf, "MemorySource")} for [X86_64] : $tmpl {
+               param OPNAME: String = ${concat($opstem, $osuf, "_mem")};
+               param MNEMONIC: String = $mnemonic;
+               param OPCODE: bits<8> = $opcode;
+               param ESCAPE: bits<1> = $escape;
+               asm { ${concat("{self.MNEMONIC} {dst}, ", $memory_prefix, " ptr [{base}]")} }
+               behavior {
+                   let rhs = load(base, $bytes, 0b0);
+                   $($b)*
+               }
+           } )*
+        $( instruction ${concat($name, $nsuf, "MemorySourceDisp")} for [X86_64] : $disp_tmpl {
+               param OPNAME: String = ${concat($opstem, $osuf, "_mem_disp")};
+               param MNEMONIC: String = $mnemonic;
+               param OPCODE: bits<8> = $opcode;
+               param ESCAPE: bits<1> = $escape;
+               asm { ${concat("{self.MNEMONIC} {dst}, ", $memory_prefix, " ptr [{base} + {imm}]")} }
+               behavior {
+                   let rhs = load(base + sext(imm, self.XLEN), $bytes, 0b0);
+                   $($b)*
+               }
+           } )*
+    };
+}
+
+macro memory_rmw_ops {
+    ( $nsuf:literal, $osuf:literal, $tmpl:ident, $disp_tmpl:ident, $memory_prefix:literal,
+      $bytes:literal, $width:literal, $msb:literal,
+      $( ( $name:ident, $opstem:literal, $mnemonic:literal, $opcode:literal,
+           { $($b:tt)* } ) ),* ) => {
+        $( instruction ${concat($name, $nsuf, "MemoryRmw")} for [X86_64] : $tmpl {
+               param OPNAME: String = ${concat($opstem, $osuf, "_mem_rmw")};
+               param MNEMONIC: String = $mnemonic;
+               param OPCODE: bits<8> = $opcode;
+               asm { ${concat("{self.MNEMONIC} ", $memory_prefix, " ptr [{base}], {src}")} }
+               behavior {
+                   let address = base;
+                   let lhs = load(address, $bytes, 0b0);
+                   $($b)*
+               }
+           } )*
+        $( instruction ${concat($name, $nsuf, "MemoryRmwDisp")} for [X86_64] : $disp_tmpl {
+               param OPNAME: String = ${concat($opstem, $osuf, "_mem_rmw_disp")};
+               param MNEMONIC: String = $mnemonic;
+               param OPCODE: bits<8> = $opcode;
+               asm { ${concat("{self.MNEMONIC} ", $memory_prefix, " ptr [{base} + {imm}], {src}")} }
+               behavior {
+                   let address = base + sext(imm, self.XLEN);
+                   let lhs = load(address, $bytes, 0b0);
+                   $($b)*
+               }
+           } )*
+    };
+}
+
+macro memory_compare_ops {
+    ( $nsuf:literal, $osuf:literal, $tmpl:ident, $disp_tmpl:ident, $memory_prefix:literal,
+      $bytes:literal, $width:literal, $msb:literal,
+      cmp = $cmp_opcode:literal, test = $test_opcode:literal ) => {
+        instruction ${concat($tmpl, "Cmp")} for [X86_64] : $tmpl {
+            param OPNAME: String = ${concat("cmp", $osuf, "_mem_reg")};
+            param MNEMONIC: String = "cmp";
+            param OPCODE: bits<8> = $cmp_opcode;
+            asm { ${concat("{self.MNEMONIC} ", $memory_prefix, " ptr [{base}], {src}")} }
+            behavior {
+                let lhs = load(base, $bytes, 0b0);
+                memory_sub_flags!({ lhs }, { src }, { $msb })
+            }
+        }
+        instruction ${concat($tmpl, "Test")} for [X86_64] : $tmpl {
+            param OPNAME: String = ${concat("test", $osuf, "_mem_reg")};
+            param MNEMONIC: String = "test";
+            param OPCODE: bits<8> = $test_opcode;
+            asm { ${concat("{self.MNEMONIC} ", $memory_prefix, " ptr [{base}], {src}")} }
+            behavior {
+                let lhs = load(base, $bytes, 0b0);
+                memory_test_flags!({ lhs }, { src }, { $width }, { $msb })
+            }
+        }
+        instruction ${concat($disp_tmpl, "Cmp")} for [X86_64] : $disp_tmpl {
+            param OPNAME: String = ${concat("cmp", $osuf, "_mem_reg_disp")};
+            param MNEMONIC: String = "cmp";
+            param OPCODE: bits<8> = $cmp_opcode;
+            asm { ${concat("{self.MNEMONIC} ", $memory_prefix, " ptr [{base} + {imm}], {src}")} }
+            behavior {
+                let lhs = load(base + sext(imm, self.XLEN), $bytes, 0b0);
+                memory_sub_flags!({ lhs }, { src }, { $msb })
+            }
+        }
+        instruction ${concat($disp_tmpl, "Test")} for [X86_64] : $disp_tmpl {
+            param OPNAME: String = ${concat("test", $osuf, "_mem_reg_disp")};
+            param MNEMONIC: String = "test";
+            param OPCODE: bits<8> = $test_opcode;
+            asm { ${concat("{self.MNEMONIC} ", $memory_prefix, " ptr [{base} + {imm}], {src}")} }
+            behavior {
+                let lhs = load(base + sext(imm, self.XLEN), $bytes, 0b0);
+                memory_test_flags!({ lhs }, { src }, { $width }, { $msb })
+            }
+        }
+    };
+}
+
+macro memory_unary_ops {
+    ( $nsuf:literal, $osuf:literal, $tmpl:ident, $disp_tmpl:ident, $memory_prefix:literal,
+      $bytes:literal, $width:literal, $msb:literal ) => {
+        instruction ${concat($tmpl, "Inc")} for [X86_64] : $tmpl {
+            param OPNAME: String = ${concat("inc", $osuf, "_mem")};
+            param MNEMONIC: String = "inc";
+            param EXT: bits<3> = 0b000;
+            asm { ${concat("{self.MNEMONIC} ", $memory_prefix, " ptr [{base}]")} }
+            behavior {
+                let old = load(base, $bytes, 0b0);
+                let result = old + zext(0b1, $width);
+                EFLAGS::zf = if result == zext(0b0, $width) { zext(0b1, 1) } else { zext(0b0, 1) };
+                EFLAGS::sf = extract(result, $msb, $msb);
+                EFLAGS::of = extract(~old & result, $msb, $msb);
+                store(base, $bytes, result);
+            }
+        }
+        instruction ${concat($tmpl, "Dec")} for [X86_64] : $tmpl {
+            param OPNAME: String = ${concat("dec", $osuf, "_mem")};
+            param MNEMONIC: String = "dec";
+            param EXT: bits<3> = 0b001;
+            asm { ${concat("{self.MNEMONIC} ", $memory_prefix, " ptr [{base}]")} }
+            behavior {
+                let old = load(base, $bytes, 0b0);
+                let result = old - zext(0b1, $width);
+                EFLAGS::zf = if result == zext(0b0, $width) { zext(0b1, 1) } else { zext(0b0, 1) };
+                EFLAGS::sf = extract(result, $msb, $msb);
+                EFLAGS::of = extract(old & ~result, $msb, $msb);
+                store(base, $bytes, result);
+            }
+        }
+        instruction ${concat($disp_tmpl, "Inc")} for [X86_64] : $disp_tmpl {
+            param OPNAME: String = ${concat("inc", $osuf, "_mem_disp")};
+            param MNEMONIC: String = "inc";
+            param EXT: bits<3> = 0b000;
+            asm { ${concat("{self.MNEMONIC} ", $memory_prefix, " ptr [{base} + {imm}]")} }
+            behavior {
+                let address = base + sext(imm, self.XLEN);
+                let old = load(address, $bytes, 0b0);
+                let result = old + zext(0b1, $width);
+                EFLAGS::zf = if result == zext(0b0, $width) { zext(0b1, 1) } else { zext(0b0, 1) };
+                EFLAGS::sf = extract(result, $msb, $msb);
+                EFLAGS::of = extract(~old & result, $msb, $msb);
+                store(address, $bytes, result);
+            }
+        }
+        instruction ${concat($disp_tmpl, "Dec")} for [X86_64] : $disp_tmpl {
+            param OPNAME: String = ${concat("dec", $osuf, "_mem_disp")};
+            param MNEMONIC: String = "dec";
+            param EXT: bits<3> = 0b001;
+            asm { ${concat("{self.MNEMONIC} ", $memory_prefix, " ptr [{base} + {imm}]")} }
+            behavior {
+                let address = base + sext(imm, self.XLEN);
+                let old = load(address, $bytes, 0b0);
+                let result = old - zext(0b1, $width);
+                EFLAGS::zf = if result == zext(0b0, $width) { zext(0b1, 1) } else { zext(0b0, 1) };
+                EFLAGS::sf = extract(result, $msb, $msb);
+                EFLAGS::of = extract(old & ~result, $msb, $msb);
+                store(address, $bytes, result);
+            }
+        }
+    };
+}
+
+macro scalar_memory_ops {
+    ( $nsuf:literal, $osuf:literal, $src_tmpl:ident, $dst_tmpl:ident, $unary_tmpl:ident,
+      $src_disp_tmpl:ident, $dst_disp_tmpl:ident, $unary_disp_tmpl:ident,
+      $memory_prefix:literal, $bytes:literal, $width:literal, $msb:literal,
+      add_src = $add_src:literal, sub_src = $sub_src:literal, and_src = $and_src:literal,
+      or_src = $or_src:literal, xor_src = $xor_src:literal,
+      add_dst = $add_dst:literal, sub_dst = $sub_dst:literal, and_dst = $and_dst:literal,
+      or_dst = $or_dst:literal, xor_dst = $xor_dst:literal,
+      cmp_src = $cmp_src:literal, cmp_dst = $cmp_dst:literal, test = $test:literal ) => {
+        memory_source_ops!($nsuf, $osuf, $src_tmpl, $src_disp_tmpl, $memory_prefix, $bytes, $width, $msb,
+            (Add, "add", "add", $add_src, 0b0, { add_flags!({ dst }, { rhs }, { $width }, { $msb }) dst = dst + rhs; }),
+            (Sub, "sub", "sub", $sub_src, 0b0, { sub_flags!({ rhs }, { $msb }) dst = dst - rhs; }),
+            (And, "and", "and", $and_src, 0b0, { logic_flags!({ dst & rhs }, { $width }, { $msb }) dst = dst & rhs; }),
+            (Or, "or", "or", $or_src, 0b0, { logic_flags!({ dst | rhs }, { $width }, { $msb }) dst = dst | rhs; }),
+            (Xor, "xor", "xor", $xor_src, 0b0, { logic_flags!({ dst ^ rhs }, { $width }, { $msb }) dst = dst ^ rhs; }),
+            (Cmp, "cmp", "cmp", $cmp_src, 0b0, { sub_flags!({ rhs }, { $msb }) })
+        )
+        memory_rmw_ops!($nsuf, $osuf, $dst_tmpl, $dst_disp_tmpl, $memory_prefix, $bytes, $width, $msb,
+            (Add, "add", "add", $add_dst, { add_flags!({ lhs }, { src }, { $width }, { $msb }) store(address, $bytes, lhs + src); }),
+            (Sub, "sub", "sub", $sub_dst, { memory_sub_flags!({ lhs }, { src }, { $msb }) store(address, $bytes, lhs - src); }),
+            (And, "and", "and", $and_dst, { logic_flags!({ lhs & src }, { $width }, { $msb }) store(address, $bytes, lhs & src); }),
+            (Or, "or", "or", $or_dst, { logic_flags!({ lhs | src }, { $width }, { $msb }) store(address, $bytes, lhs | src); }),
+            (Xor, "xor", "xor", $xor_dst, { logic_flags!({ lhs ^ src }, { $width }, { $msb }) store(address, $bytes, lhs ^ src); })
+        )
+        memory_compare_ops!($nsuf, $osuf, $dst_tmpl, $dst_disp_tmpl, $memory_prefix, $bytes, $width, $msb,
+            cmp = $cmp_dst, test = $test)
+        memory_unary_ops!($nsuf, $osuf, $unary_tmpl, $unary_disp_tmpl, $memory_prefix, $bytes, $width, $msb)
+    };
+}
+
+scalar_memory_ops!("", "", MemoryReg64, MemoryRegDest64, MemoryUnary64,
+    MemoryRegDisp64, MemoryRegDestDisp64, MemoryUnaryDisp64, "qword", 8, 64, 63,
+    add_src = 0x03, sub_src = 0x2B, and_src = 0x23, or_src = 0x0B, xor_src = 0x33,
+    add_dst = 0x01, sub_dst = 0x29, and_dst = 0x21, or_dst = 0x09, xor_dst = 0x31,
+    cmp_src = 0x3B, cmp_dst = 0x39, test = 0x85)
+scalar_memory_ops!("32", "32", MemoryReg32, MemoryRegDest32, MemoryUnary32,
+    MemoryRegDisp32, MemoryRegDestDisp32, MemoryUnaryDisp32, "dword", 4, 32, 31,
+    add_src = 0x03, sub_src = 0x2B, and_src = 0x23, or_src = 0x0B, xor_src = 0x33,
+    add_dst = 0x01, sub_dst = 0x29, and_dst = 0x21, or_dst = 0x09, xor_dst = 0x31,
+    cmp_src = 0x3B, cmp_dst = 0x39, test = 0x85)
+scalar_memory_ops!("16", "16", MemoryReg16, MemoryRegDest16, MemoryUnary16,
+    MemoryRegDisp16, MemoryRegDestDisp16, MemoryUnaryDisp16, "word", 2, 16, 15,
+    add_src = 0x03, sub_src = 0x2B, and_src = 0x23, or_src = 0x0B, xor_src = 0x33,
+    add_dst = 0x01, sub_dst = 0x29, and_dst = 0x21, or_dst = 0x09, xor_dst = 0x31,
+    cmp_src = 0x3B, cmp_dst = 0x39, test = 0x85)
+scalar_memory_ops!("8", "8", MemoryReg8, MemoryRegDest8, MemoryUnary8,
+    MemoryRegDisp8, MemoryRegDestDisp8, MemoryUnaryDisp8, "byte", 1, 8, 7,
+    add_src = 0x02, sub_src = 0x2A, and_src = 0x22, or_src = 0x0A, xor_src = 0x32,
+    add_dst = 0x00, sub_dst = 0x28, and_dst = 0x20, or_dst = 0x08, xor_dst = 0x30,
+    cmp_src = 0x3A, cmp_dst = 0x38, test = 0x84)
+
+memory_source_ops!("", "", MemoryReg64, MemoryRegDisp64, "qword", 8, 64, 63,
+    (Imul, "imul", "imul", 0xAF, 0b1, { dst = dst * rhs; }))
+memory_source_ops!("32", "32", MemoryReg32, MemoryRegDisp32, "dword", 4, 32, 31,
+    (Imul, "imul", "imul", 0xAF, 0b1, { dst = dst * rhs; }))
+memory_source_ops!("16", "16", MemoryReg16, MemoryRegDisp16, "word", 2, 16, 15,
+    (Imul, "imul", "imul", 0xAF, 0b1, { dst = dst * rhs; }))
+
+macro indexed_load_template {
+    ( $name:ident, $cls:ident, rexw = $rexw:literal, p66 = $p66:literal,
+      byte = $byte:literal ) => {
+        template $name for [X86_64] {
+            param MNEMONIC: String;
+            param OPCODE: bits<8>;
+            param ESCAPE: bits<1>;
+            param SCALE_BITS: bits<2>;
+            operands { dst: $cls, base: GPR, index: GPRaddrIndex, }
+            encoding {
+                if $p66 { 0x66 } else { () },
+                rex_sib($rexw, dst, index, base, $byte & needs_rex8_one(dst)),
+                if ESCAPE { 0x0F } else { () },
+                OPCODE,
+                modrm_sib(dst, base, index, SCALE_BITS),
+            }
+        }
+    };
+}
+
+macro indexed_store_template {
+    ( $name:ident, $cls:ident, rexw = $rexw:literal, p66 = $p66:literal,
+      byte = $byte:literal, opcode = $opcode:literal ) => {
+        template $name for [X86_64] {
+            param MNEMONIC: String;
+            param SCALE_BITS: bits<2>;
+            operands { base: GPR, index: GPRaddrIndex, src: $cls, }
+            encoding {
+                if $p66 { 0x66 } else { () },
+                rex_sib($rexw, src, index, base, $byte & needs_rex8_one(src)),
+                $opcode,
+                modrm_sib(src, base, index, SCALE_BITS),
+            }
+        }
+    };
+}
+
+indexed_load_template!(IndexedLoad64, GPR, rexw = 0b1, p66 = 0b0, byte = 0b0)
+indexed_load_template!(IndexedLoad32, GPR32, rexw = 0b0, p66 = 0b0, byte = 0b0)
+indexed_load_template!(IndexedLoad16, GPR16, rexw = 0b0, p66 = 0b1, byte = 0b0)
+indexed_load_template!(IndexedLoad8, GPR8, rexw = 0b0, p66 = 0b0, byte = 0b1)
+indexed_store_template!(IndexedStore64, GPR, rexw = 0b1, p66 = 0b0, byte = 0b0, opcode = 0x89)
+indexed_store_template!(IndexedStore32, GPR32, rexw = 0b0, p66 = 0b0, byte = 0b0, opcode = 0x89)
+indexed_store_template!(IndexedStore16, GPR16, rexw = 0b0, p66 = 0b1, byte = 0b0, opcode = 0x89)
+indexed_store_template!(IndexedStore8, GPR8, rexw = 0b0, p66 = 0b0, byte = 0b1, opcode = 0x88)
+
+macro indexed_load_disp_template {
+    ( $name:ident, $cls:ident, rexw = $rexw:literal, p66 = $p66:literal,
+      byte = $byte:literal ) => {
+        template $name for [X86_64] {
+            param MNEMONIC: String;
+            param OPCODE: bits<8>;
+            param ESCAPE: bits<1>;
+            param SCALE_BITS: bits<2>;
+            operands { dst: $cls, base: GPR, index: GPRaddrIndex, imm: bits<32>, }
+            encoding {
+                if $p66 { 0x66 } else { () },
+                rex_sib($rexw, dst, index, base, $byte & needs_rex8_one(dst)),
+                if ESCAPE { 0x0F } else { () },
+                OPCODE,
+                modrm_sib_disp(dst, base, index, SCALE_BITS, imm),
+            }
+        }
+    };
+}
+
+macro indexed_store_disp_template {
+    ( $name:ident, $cls:ident, rexw = $rexw:literal, p66 = $p66:literal,
+      byte = $byte:literal, opcode = $opcode:literal ) => {
+        template $name for [X86_64] {
+            param MNEMONIC: String;
+            param SCALE_BITS: bits<2>;
+            operands { base: GPR, index: GPRaddrIndex, imm: bits<32>, src: $cls, }
+            encoding {
+                if $p66 { 0x66 } else { () },
+                rex_sib($rexw, src, index, base, $byte & needs_rex8_one(src)),
+                $opcode,
+                modrm_sib_disp(src, base, index, SCALE_BITS, imm),
+            }
+        }
+    };
+}
+
+indexed_load_disp_template!(IndexedLoadDisp64, GPR, rexw = 0b1, p66 = 0b0, byte = 0b0)
+indexed_load_disp_template!(IndexedLoadDisp32, GPR32, rexw = 0b0, p66 = 0b0, byte = 0b0)
+indexed_load_disp_template!(IndexedLoadDisp16, GPR16, rexw = 0b0, p66 = 0b1, byte = 0b0)
+indexed_load_disp_template!(IndexedLoadDisp8, GPR8, rexw = 0b0, p66 = 0b0, byte = 0b1)
+indexed_store_disp_template!(IndexedStoreDisp64, GPR, rexw = 0b1, p66 = 0b0, byte = 0b0, opcode = 0x89)
+indexed_store_disp_template!(IndexedStoreDisp32, GPR32, rexw = 0b0, p66 = 0b0, byte = 0b0, opcode = 0x89)
+indexed_store_disp_template!(IndexedStoreDisp16, GPR16, rexw = 0b0, p66 = 0b1, byte = 0b0, opcode = 0x89)
+indexed_store_disp_template!(IndexedStoreDisp8, GPR8, rexw = 0b0, p66 = 0b0, byte = 0b1, opcode = 0x88)
+
+macro indexed_loads {
+    ( $stem:ident, $opstem:literal, $tmpl:ident, $mnemonic:literal,
+      $memory_prefix:literal, $opcode:literal, $escape:literal,
+      $bytes:literal, $dst_width:literal, $extend:ident ) => {
+        instruction ${concat($stem, "Index")} for [X86_64] : $tmpl {
+            param OPNAME: String = ${concat($opstem, "_index")};
+            param MNEMONIC: String = $mnemonic;
+            param OPCODE: bits<8> = $opcode;
+            param ESCAPE: bits<1> = $escape;
+            param SCALE_BITS: bits<2> = 0b00;
+            asm { ${concat("{self.MNEMONIC} {dst}, ", $memory_prefix, "[{base} + {index}]")} }
+            behavior { dst = $extend(load(base + index, $bytes, 0b0), $dst_width); }
+        }
+        instruction ${concat($stem, "Index2")} for [X86_64] : $tmpl {
+            param OPNAME: String = ${concat($opstem, "_index2")};
+            param MNEMONIC: String = $mnemonic;
+            param OPCODE: bits<8> = $opcode;
+            param ESCAPE: bits<1> = $escape;
+            param SCALE_BITS: bits<2> = 0b01;
+            asm { ${concat("{self.MNEMONIC} {dst}, ", $memory_prefix, "[{base} + 2*{index}]")} }
+            behavior { dst = $extend(load(base + (index << zext(0b1, 64)), $bytes, 0b0), $dst_width); }
+        }
+        instruction ${concat($stem, "Index4")} for [X86_64] : $tmpl {
+            param OPNAME: String = ${concat($opstem, "_index4")};
+            param MNEMONIC: String = $mnemonic;
+            param OPCODE: bits<8> = $opcode;
+            param ESCAPE: bits<1> = $escape;
+            param SCALE_BITS: bits<2> = 0b10;
+            asm { ${concat("{self.MNEMONIC} {dst}, ", $memory_prefix, "[{base} + 4*{index}]")} }
+            behavior { dst = $extend(load(base + (index << zext(0b10, 64)), $bytes, 0b0), $dst_width); }
+        }
+        instruction ${concat($stem, "Index8")} for [X86_64] : $tmpl {
+            param OPNAME: String = ${concat($opstem, "_index8")};
+            param MNEMONIC: String = $mnemonic;
+            param OPCODE: bits<8> = $opcode;
+            param ESCAPE: bits<1> = $escape;
+            param SCALE_BITS: bits<2> = 0b11;
+            asm { ${concat("{self.MNEMONIC} {dst}, ", $memory_prefix, "[{base} + 8*{index}]")} }
+            behavior { dst = $extend(load(base + (index << zext(0b11, 64)), $bytes, 0b0), $dst_width); }
+        }
+    };
+}
+
+macro indexed_stores {
+    ( $stem:ident, $opstem:literal, $tmpl:ident, $bytes:literal ) => {
+        instruction ${concat($stem, "Index")} for [X86_64] : $tmpl {
+            param OPNAME: String = ${concat($opstem, "_index")};
+            param MNEMONIC: String = "mov";
+            param SCALE_BITS: bits<2> = 0b00;
+            asm { "{self.MNEMONIC} [{base} + {index}], {src}" }
+            behavior { store(base + index, $bytes, src); }
+        }
+        instruction ${concat($stem, "Index2")} for [X86_64] : $tmpl {
+            param OPNAME: String = ${concat($opstem, "_index2")};
+            param MNEMONIC: String = "mov";
+            param SCALE_BITS: bits<2> = 0b01;
+            asm { "{self.MNEMONIC} [{base} + 2*{index}], {src}" }
+            behavior { store(base + (index << zext(0b1, 64)), $bytes, src); }
+        }
+        instruction ${concat($stem, "Index4")} for [X86_64] : $tmpl {
+            param OPNAME: String = ${concat($opstem, "_index4")};
+            param MNEMONIC: String = "mov";
+            param SCALE_BITS: bits<2> = 0b10;
+            asm { "{self.MNEMONIC} [{base} + 4*{index}], {src}" }
+            behavior { store(base + (index << zext(0b10, 64)), $bytes, src); }
+        }
+        instruction ${concat($stem, "Index8")} for [X86_64] : $tmpl {
+            param OPNAME: String = ${concat($opstem, "_index8")};
+            param MNEMONIC: String = "mov";
+            param SCALE_BITS: bits<2> = 0b11;
+            asm { "{self.MNEMONIC} [{base} + 8*{index}], {src}" }
+            behavior { store(base + (index << zext(0b11, 64)), $bytes, src); }
+        }
+    };
+}
+
+macro indexed_loads_disp {
+    ( $stem:ident, $opstem:literal, $tmpl:ident, $mnemonic:literal,
+      $memory_prefix:literal, $opcode:literal, $escape:literal,
+      $bytes:literal, $dst_width:literal, $extend:ident ) => {
+        instruction ${concat($stem, "IndexDisp")} for [X86_64] : $tmpl {
+            param OPNAME: String = ${concat($opstem, "_index_disp")};
+            param MNEMONIC: String = $mnemonic;
+            param OPCODE: bits<8> = $opcode;
+            param ESCAPE: bits<1> = $escape;
+            param SCALE_BITS: bits<2> = 0b00;
+            asm { ${concat("{self.MNEMONIC} {dst}, ", $memory_prefix, "[{base} + {index} + {imm}]")} }
+            behavior { dst = $extend(load(base + index + sext(imm, 64), $bytes, 0b0), $dst_width); }
+        }
+        instruction ${concat($stem, "Index2Disp")} for [X86_64] : $tmpl {
+            param OPNAME: String = ${concat($opstem, "_index2_disp")};
+            param MNEMONIC: String = $mnemonic;
+            param OPCODE: bits<8> = $opcode;
+            param ESCAPE: bits<1> = $escape;
+            param SCALE_BITS: bits<2> = 0b01;
+            asm { ${concat("{self.MNEMONIC} {dst}, ", $memory_prefix, "[{base} + 2*{index} + {imm}]")} }
+            behavior { dst = $extend(load(base + (index << zext(0b1, 64)) + sext(imm, 64), $bytes, 0b0), $dst_width); }
+        }
+        instruction ${concat($stem, "Index4Disp")} for [X86_64] : $tmpl {
+            param OPNAME: String = ${concat($opstem, "_index4_disp")};
+            param MNEMONIC: String = $mnemonic;
+            param OPCODE: bits<8> = $opcode;
+            param ESCAPE: bits<1> = $escape;
+            param SCALE_BITS: bits<2> = 0b10;
+            asm { ${concat("{self.MNEMONIC} {dst}, ", $memory_prefix, "[{base} + 4*{index} + {imm}]")} }
+            behavior { dst = $extend(load(base + (index << zext(0b10, 64)) + sext(imm, 64), $bytes, 0b0), $dst_width); }
+        }
+        instruction ${concat($stem, "Index8Disp")} for [X86_64] : $tmpl {
+            param OPNAME: String = ${concat($opstem, "_index8_disp")};
+            param MNEMONIC: String = $mnemonic;
+            param OPCODE: bits<8> = $opcode;
+            param ESCAPE: bits<1> = $escape;
+            param SCALE_BITS: bits<2> = 0b11;
+            asm { ${concat("{self.MNEMONIC} {dst}, ", $memory_prefix, "[{base} + 8*{index} + {imm}]")} }
+            behavior { dst = $extend(load(base + (index << zext(0b11, 64)) + sext(imm, 64), $bytes, 0b0), $dst_width); }
+        }
+    };
+}
+
+macro indexed_stores_disp {
+    ( $stem:ident, $opstem:literal, $tmpl:ident, $bytes:literal ) => {
+        instruction ${concat($stem, "IndexDisp")} for [X86_64] : $tmpl {
+            param OPNAME: String = ${concat($opstem, "_index_disp")};
+            param MNEMONIC: String = "mov";
+            param SCALE_BITS: bits<2> = 0b00;
+            asm { "{self.MNEMONIC} [{base} + {index} + {imm}], {src}" }
+            behavior { store(base + index + sext(imm, 64), $bytes, src); }
+        }
+        instruction ${concat($stem, "Index2Disp")} for [X86_64] : $tmpl {
+            param OPNAME: String = ${concat($opstem, "_index2_disp")};
+            param MNEMONIC: String = "mov";
+            param SCALE_BITS: bits<2> = 0b01;
+            asm { "{self.MNEMONIC} [{base} + 2*{index} + {imm}], {src}" }
+            behavior { store(base + (index << zext(0b1, 64)) + sext(imm, 64), $bytes, src); }
+        }
+        instruction ${concat($stem, "Index4Disp")} for [X86_64] : $tmpl {
+            param OPNAME: String = ${concat($opstem, "_index4_disp")};
+            param MNEMONIC: String = "mov";
+            param SCALE_BITS: bits<2> = 0b10;
+            asm { "{self.MNEMONIC} [{base} + 4*{index} + {imm}], {src}" }
+            behavior { store(base + (index << zext(0b10, 64)) + sext(imm, 64), $bytes, src); }
+        }
+        instruction ${concat($stem, "Index8Disp")} for [X86_64] : $tmpl {
+            param OPNAME: String = ${concat($opstem, "_index8_disp")};
+            param MNEMONIC: String = "mov";
+            param SCALE_BITS: bits<2> = 0b11;
+            asm { "{self.MNEMONIC} [{base} + 8*{index} + {imm}], {src}" }
+            behavior { store(base + (index << zext(0b11, 64)) + sext(imm, 64), $bytes, src); }
+        }
+    };
+}
+
+indexed_loads!(MovLoad, "mov_load", IndexedLoad64, "mov", "", 0x8B, 0b0, 8, 64, zext)
+indexed_loads!(Mov32Load, "mov_load32", IndexedLoad32, "mov", "", 0x8B, 0b0, 4, 32, zext)
+indexed_loads!(Mov16Load, "mov_load16", IndexedLoad16, "mov", "", 0x8B, 0b0, 2, 16, zext)
+indexed_loads!(Mov8Load, "mov_load8", IndexedLoad8, "mov", "", 0x8A, 0b0, 1, 8, zext)
+indexed_stores!(MovStore, "mov_store", IndexedStore64, 8)
+indexed_stores!(Mov32Store, "mov_store32", IndexedStore32, 4)
+indexed_stores!(Mov16Store, "mov_store16", IndexedStore16, 2)
+indexed_stores!(Mov8Store, "mov_store8", IndexedStore8, 1)
+indexed_loads!(Movzx8Load, "movzx8_load", IndexedLoad64, "movzx", "byte ptr ", 0xB6, 0b1, 1, 64, zext)
+indexed_loads!(Movzx16Load, "movzx16_load", IndexedLoad64, "movzx", "word ptr ", 0xB7, 0b1, 2, 64, zext)
+indexed_loads!(Movsx8Load, "movsx8_load", IndexedLoad64, "movsx", "byte ptr ", 0xBE, 0b1, 1, 64, sext)
+indexed_loads!(Movsx16Load, "movsx16_load", IndexedLoad64, "movsx", "word ptr ", 0xBF, 0b1, 2, 64, sext)
+indexed_loads!(Movzx8Load32, "movzx8_load32", IndexedLoad32, "movzx", "byte ptr ", 0xB6, 0b1, 1, 32, zext)
+indexed_loads!(Movzx16Load32, "movzx16_load32", IndexedLoad32, "movzx", "word ptr ", 0xB7, 0b1, 2, 32, zext)
+indexed_loads!(Movsx8Load32, "movsx8_load32", IndexedLoad32, "movsx", "byte ptr ", 0xBE, 0b1, 1, 32, sext)
+indexed_loads!(Movsx16Load32, "movsx16_load32", IndexedLoad32, "movsx", "word ptr ", 0xBF, 0b1, 2, 32, sext)
+indexed_loads!(MovsxdLoad, "movsxd_load", IndexedLoad64, "movsxd", "dword ptr ", 0x63, 0b0, 4, 64, sext)
+indexed_loads_disp!(MovLoad, "mov_load", IndexedLoadDisp64, "mov", "", 0x8B, 0b0, 8, 64, zext)
+indexed_loads_disp!(Mov32Load, "mov_load32", IndexedLoadDisp32, "mov", "", 0x8B, 0b0, 4, 32, zext)
+indexed_loads_disp!(Mov16Load, "mov_load16", IndexedLoadDisp16, "mov", "", 0x8B, 0b0, 2, 16, zext)
+indexed_loads_disp!(Mov8Load, "mov_load8", IndexedLoadDisp8, "mov", "", 0x8A, 0b0, 1, 8, zext)
+indexed_stores_disp!(MovStore, "mov_store", IndexedStoreDisp64, 8)
+indexed_stores_disp!(Mov32Store, "mov_store32", IndexedStoreDisp32, 4)
+indexed_stores_disp!(Mov16Store, "mov_store16", IndexedStoreDisp16, 2)
+indexed_stores_disp!(Mov8Store, "mov_store8", IndexedStoreDisp8, 1)
+indexed_loads_disp!(Movzx8Load, "movzx8_load", IndexedLoadDisp64, "movzx", "byte ptr ", 0xB6, 0b1, 1, 64, zext)
+indexed_loads_disp!(Movzx16Load, "movzx16_load", IndexedLoadDisp64, "movzx", "word ptr ", 0xB7, 0b1, 2, 64, zext)
+indexed_loads_disp!(Movsx8Load, "movsx8_load", IndexedLoadDisp64, "movsx", "byte ptr ", 0xBE, 0b1, 1, 64, sext)
+indexed_loads_disp!(Movsx16Load, "movsx16_load", IndexedLoadDisp64, "movsx", "word ptr ", 0xBF, 0b1, 2, 64, sext)
+indexed_loads_disp!(Movzx8Load32, "movzx8_load32", IndexedLoadDisp32, "movzx", "byte ptr ", 0xB6, 0b1, 1, 32, zext)
+indexed_loads_disp!(Movzx16Load32, "movzx16_load32", IndexedLoadDisp32, "movzx", "word ptr ", 0xB7, 0b1, 2, 32, zext)
+indexed_loads_disp!(Movsx8Load32, "movsx8_load32", IndexedLoadDisp32, "movsx", "byte ptr ", 0xBE, 0b1, 1, 32, sext)
+indexed_loads_disp!(Movsx16Load32, "movsx16_load32", IndexedLoadDisp32, "movsx", "word ptr ", 0xBF, 0b1, 2, 32, sext)
+indexed_loads_disp!(MovsxdLoad, "movsxd_load", IndexedLoadDisp64, "movsxd", "dword ptr ", 0x63, 0b0, 4, 64, sext)
+
+instruction Add16MemoryIndex2Rmw for [X86_64] {
+    param OPNAME: String = "add16_mem_index2_rmw";
+    param MNEMONIC: String = "add";
+    operands { base: GPR, index: GPRaddrIndex, src: GPR16, }
+    encoding {
+        0x66,
+        rex_sib(0b0, src, index, base, 0b0),
+        0x01,
+        modrm_sib(src, base, index, 0b01),
+    }
+    asm { "{self.MNEMONIC} word ptr [{base} + 2*{index}], {src}" }
+    behavior {
+        let lhs = load(base + (index << zext(0b1, 64)), 2, 0b0);
+        add_flags!({ lhs }, { src }, { 16 }, { 15 })
+        store(base + (index << zext(0b1, 64)), 2, lhs + src);
+    }
+}
+
+instruction Sub16MemoryIndex2Rmw for [X86_64] {
+    param OPNAME: String = "sub16_mem_index2_rmw";
+    param MNEMONIC: String = "sub";
+    operands { base: GPR, index: GPRaddrIndex, src: GPR16, }
+    encoding {
+        0x66,
+        rex_sib(0b0, src, index, base, 0b0),
+        0x29,
+        modrm_sib(src, base, index, 0b01),
+    }
+    asm { "{self.MNEMONIC} word ptr [{base} + 2*{index}], {src}" }
+    behavior {
+        let lhs = load(base + (index << zext(0b1, 64)), 2, 0b0);
+        memory_sub_flags!({ lhs }, { src }, { 15 })
+        store(base + (index << zext(0b1, 64)), 2, lhs - src);
+    }
+}
+
+instruction Xor16MemoryIndex2Source for [X86_64] {
+    param OPNAME: String = "xor16_mem_index2";
+    param MNEMONIC: String = "xor";
+    operands { dst: GPR16, base: GPR, index: GPRaddrIndex, }
+    encoding {
+        0x66,
+        rex_sib(0b0, dst, index, base, 0b0),
+        0x33,
+        modrm_sib(dst, base, index, 0b01),
+    }
+    asm { "{self.MNEMONIC} {dst}, word ptr [{base} + 2*{index}]" }
+    behavior {
+        let rhs = load(base + (index << zext(0b1, 64)), 2, 0b0);
+        logic_flags!({ dst ^ rhs }, { 16 }, { 15 })
+        dst = dst ^ rhs;
+    }
+}
+
+instruction Inc32MemoryIndex4Disp for [X86_64] {
+    param OPNAME: String = "inc32_mem_index4_disp";
+    param MNEMONIC: String = "inc";
+    operands { base: GPR, index: GPRaddrIndex, imm: bits<32>, }
+    encoding {
+        rex_sib_ext(0b0, index, base),
+        0xFF,
+        modrm_sib_disp_ext(0b000, base, index, 0b10, imm),
+    }
+    asm { "{self.MNEMONIC} dword ptr [{base} + 4*{index} + {imm}]" }
+    behavior {
+        let address = base + (index << zext(0b10, 64)) + sext(imm, 64);
+        let old = load(address, 4, 0b0);
+        let result = old + zext(0b1, 32);
+        EFLAGS::zf = if result == zext(0b0, 32) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::sf = extract(result, 31, 31);
+        EFLAGS::of = extract(~old & result, 31, 31);
+        store(address, 4, result);
+    }
+}
+
 // `lea r64, [base + index]` using a SIB byte with scale 1 and no displacement.
 template LeaBaseIndexTemplate for [X86_64] {
     param SCALE_BITS: bits<2>;
@@ -467,7 +1197,7 @@ template LeaBaseIndexTemplate for [X86_64] {
         index: GPRaddrIndex,
     }
     encoding {
-        rex_sib(0b1, dst, index, base),
+        rex_sib(0b1, dst, index, base, 0b0),
         0x8D,
         modrm_sib(dst, base, index, SCALE_BITS),
     }
@@ -499,7 +1229,7 @@ instruction LeaBaseIndex2 for [X86_64] : LeaBaseIndexTemplate {
     }
 
     behavior {
-        dst = base + (index << 1);
+        dst = base + (index << zext(0b1, 64));
     }
 }
 
@@ -515,7 +1245,7 @@ instruction LeaBaseIndex4 for [X86_64] : LeaBaseIndexTemplate {
     }
 
     behavior {
-        dst = base + (index << 2);
+        dst = base + (index << zext(0b10, 64));
     }
 }
 
@@ -530,7 +1260,7 @@ instruction LeaBaseIndex8 for [X86_64] : LeaBaseIndexTemplate {
     }
 
     behavior {
-        dst = base + (index << 3);
+        dst = base + (index << zext(0b11, 64));
     }
 }
 
@@ -576,7 +1306,7 @@ instruction LeaIndex4 for [X86_64] : LeaScaledIndex {
     }
 
     behavior {
-        dst = index << 2;
+        dst = index << zext(0b10, 64);
     }
 }
 
@@ -590,7 +1320,7 @@ instruction LeaIndex8 for [X86_64] : LeaScaledIndex {
     }
 
     behavior {
-        dst = index << 3;
+        dst = index << zext(0b11, 64);
     }
 }
 
@@ -647,7 +1377,7 @@ instruction LeaBaseIndex2Disp8 for [X86_64] : LeaBaseIndexDisp8Template {
     }
 
     behavior {
-        dst = base + (index << 1) + sext(imm, self.XLEN);
+        dst = base + (index << zext(0b1, 64)) + sext(imm, self.XLEN);
     }
 }
 
@@ -662,7 +1392,7 @@ instruction LeaBaseIndex4Disp8 for [X86_64] : LeaBaseIndexDisp8Template {
     }
 
     behavior {
-        dst = base + (index << 2) + sext(imm, self.XLEN);
+        dst = base + (index << zext(0b10, 64)) + sext(imm, self.XLEN);
     }
 }
 
@@ -677,7 +1407,7 @@ instruction LeaBaseIndex8Disp8 for [X86_64] : LeaBaseIndexDisp8Template {
     }
 
     behavior {
-        dst = base + (index << 3) + sext(imm, self.XLEN);
+        dst = base + (index << zext(0b11, 64)) + sext(imm, self.XLEN);
     }
 }
 
@@ -719,7 +1449,7 @@ instruction LeaIndex4Disp32 for [X86_64] : LeaIndexDisp32 {
     }
 
     behavior {
-        dst = (index << 2) + sext(imm, self.XLEN);
+        dst = (index << zext(0b10, 64)) + sext(imm, self.XLEN);
     }
 }
 
@@ -733,7 +1463,7 @@ instruction LeaIndex8Disp32 for [X86_64] : LeaIndexDisp32 {
     }
 
     behavior {
-        dst = (index << 3) + sext(imm, self.XLEN);
+        dst = (index << zext(0b11, 64)) + sext(imm, self.XLEN);
     }
 }
 
@@ -840,4 +1570,3 @@ instruction Pop for [X86_64] : PushPop {
         GPR::rsp = GPR::rsp + zext(0b1000, self.XLEN);
     }
 }
-

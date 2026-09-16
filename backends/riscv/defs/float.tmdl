@@ -77,6 +77,7 @@ abi LP64D("lp64d") for [D, RVV] : LP64 {
 }
 
 template FPCompare64 for [D] {
+    schedule { units = [WriteFPAdd]; }
     param MNEMONIC: String;
     param FUNCT3: bits<3>;
 
@@ -144,6 +145,7 @@ instruction FEqD for [D] : FPCompare64 {
 
 // Register copies use FSGNJ with both sources equal, preserving every bit.
 instruction FMoveS for [F] {
+    schedule { units = [WriteFPAdd]; }
     param MNEMONIC: String = "fsgnj.s";
 
     operands {
@@ -170,6 +172,7 @@ instruction FMoveS for [F] {
 }
 
 instruction FMoveD for [D] {
+    schedule { units = [WriteFPAdd]; }
     param MNEMONIC: String = "fsgnj.d";
 
     operands {
@@ -200,6 +203,7 @@ instruction FMoveD for [D] {
 // the whole binary64 pattern in one integer register, so it is rv64-only.
 
 instruction FMvWX for [F] {
+    schedule { units = [WriteFPAdd]; }
     param MNEMONIC: String = "fmv.w.x";
     param OPCODE: bits<7> = 0b1010011;
 
@@ -227,6 +231,7 @@ instruction FMvWX for [F] {
 }
 
 instruction FMvDX for [D64] {
+    schedule { units = [WriteFPAdd]; }
     param MNEMONIC: String = "fmv.d.x";
     param OPCODE: bits<7> = 0b1010011;
 
@@ -254,6 +259,7 @@ instruction FMvDX for [D64] {
 }
 
 instruction FMvXD for [D64] {
+    schedule { units = [WriteFPAdd]; }
     param MNEMONIC: String = "fmv.x.d";
     param OPCODE: bits<7> = 0b1010011;
 
@@ -311,7 +317,7 @@ instruction FLoadWord for [F] {
         fd = load(rs1 + sext(imm, self.XLEN), 4, 0b0);
     }
 
-    schedule { units = [WriteLoad]; }
+    schedule { units = [WriteFPLoad]; }
 }
 
 instruction FStoreWord for [F] {
@@ -372,7 +378,7 @@ instruction FLoadDouble for [D] {
         fd = load(rs1 + sext(imm, self.XLEN), 8, 0b0);
     }
 
-    schedule { units = [WriteLoad]; }
+    schedule { units = [WriteFPLoad]; }
 }
 
 instruction FStoreDouble for [D] {

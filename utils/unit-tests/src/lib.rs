@@ -91,6 +91,8 @@ mod llvm;
 mod simcore {
     mod conditional_latency;
     mod executor;
+    mod memory;
+    mod memory_service;
     mod memsys;
     mod predictor;
     mod prefetch;

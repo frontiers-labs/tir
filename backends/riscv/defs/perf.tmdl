@@ -7,7 +7,21 @@
 // may refine them for that silicon.
 sched_class WriteIALU { latency = 1; }
 sched_class WriteLoad { latency = 3; }
+sched_class WriteFPLoad { latency = 3; }
 sched_class WriteStore { latency = 1; }
+sched_class WriteIMul { latency = 1; }
+sched_class WriteIMulWord { latency = 1; }
+sched_class WriteFPAdd { latency = 1; }
+sched_class WriteFPMul { latency = 1; }
+sched_class WriteFPFmaSingle { latency = 1; }
+sched_class WriteFPFmaDouble { latency = 1; }
+sched_class WriteFPConvert { latency = 1; }
+sched_class WriteIDiv { latency = 1; }
+sched_class WriteIDivWord { latency = 1; }
+sched_class WriteFPDivSingle { latency = 1; }
+sched_class WriteFPDivDouble { latency = 1; }
+sched_class WritePCRelative { latency = 1; }
+sched_class WriteBranch { latency = 1; }
 
 // Generic in-order core: a single narrow pipeline with no reorder buffer (just a
 // small store buffer). The Rust simulator pairs this with an in-order execution
@@ -35,7 +49,10 @@ machine InOrderCore ("rv64-in-order") for [RV64I] {
     // Phase-based timing: operands read at ID, results written at EX/MEM. Latency
     // is the phase distance (EX-ID = 1, MEM-ID = 2), with a non-zero read cycle.
     bind WriteIALU { reads = ID; writes = EX;  uses = [ALU]; }
+    bind WritePCRelative { reads = ID; writes = EX;  uses = [ALU]; }
+    bind WriteBranch { reads = ID; writes = EX;  uses = [ALU]; }
     bind WriteLoad { reads = ID; writes = MEM; uses = [LSU]; }
+    bind WriteFPLoad { reads = ID; writes = MEM; uses = [LSU]; }
     bind WriteStore { reads = ID; writes = MEM; uses = [LSU]; }
 
     // Bypass network: an ALU result feeds a dependent ALU op back-to-back (0-cycle
@@ -66,7 +83,10 @@ machine OutOfOrderCore ("rv64-ooo") for [RV64I] {
     unit LSU { count = 2; }
 
     bind WriteIALU { latency = 1; uses = [ALU]; }
+    bind WritePCRelative { latency = 1; uses = [ALU]; }
+    bind WriteBranch { latency = 1; uses = [ALU]; }
     bind WriteLoad { latency = 4; uses = [LSU]; }
+    bind WriteFPLoad { latency = 4; uses = [LSU]; }
     bind WriteStore { latency = 1; uses = [LSU]; }
 
     // Per-instruction override (InstRW): this specific instruction costs more than

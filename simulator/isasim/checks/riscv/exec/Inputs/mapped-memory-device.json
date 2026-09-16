@@ -1,0 +1,6 @@
+{
+  "mappings": [],
+  "devices": [
+    {"start": "0x100000", "size": 4, "value": 3735928559, "permissions": "r"}
+  ]
+}

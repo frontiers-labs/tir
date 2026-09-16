@@ -237,6 +237,7 @@ struct TargetTables<'a> {
     pc_classes: HashSet<String>,
     flag_classes: HashSet<String>,
     fp_fields: HashMap<String, FpField>,
+    fp_flag_registers: HashSet<(String, String)>,
     effect_classes: HashSet<String>,
     register_name_map: HashMap<(String, u32), String>,
     register_files: HashMap<String, String>,
@@ -1341,6 +1342,16 @@ fn collect_target_tables(files: &[ast::File]) -> TargetTables<'_> {
                 .map(|field| (class.name.clone(), field))
         })
         .collect();
+    let fp_flag_registers = files
+        .iter()
+        .flat_map(|file| file.register_classes())
+        .flat_map(|class| {
+            class.resolve_registers().filter_map(|register| {
+                register.traits.contains(&ast::RegisterTrait::FpFlags)
+                    .then(|| (class.name.clone(), register.name))
+            })
+        })
+        .collect();
     let effect_classes = flag_classes
         .iter()
         .chain(fp_fields.keys())
@@ -1349,6 +1360,7 @@ fn collect_target_tables(files: &[ast::File]) -> TargetTables<'_> {
     TargetTables {
         files,
         fp_fields,
+        fp_flag_registers,
         effect_classes,
         register_index_map,
         pc_classes,
@@ -1392,6 +1404,7 @@ struct InstrInfoParts<'a> {
     cond_pc: bool,
     control_flow: &'a proc_macro2::TokenStream,
     implicit_items: &'a [proc_macro2::TokenStream],
+    implicit_or_update_items: &'a [proc_macro2::TokenStream],
     ports_ident: &'a proc_macro2::Ident,
     reads_memory: bool,
     writes_memory: bool,
@@ -1414,6 +1427,7 @@ fn instr_info_fields(
         cond_pc,
         control_flow,
         implicit_items,
+        implicit_or_update_items,
         ports_ident,
         reads_memory,
         writes_memory,
@@ -1433,6 +1447,11 @@ fn instr_info_fields(
     }
     if !implicit_items.is_empty() {
         info_fields.push(quote! { implicit_regs: &[ #(#implicit_items),* ] });
+    }
+    if !implicit_or_update_items.is_empty() {
+        info_fields.push(quote! {
+            implicit_or_updates: &[ #(#implicit_or_update_items),* ]
+        });
     }
     info_fields.push(quote! { regs: &#ports_ident });
     if *reads_memory || *writes_memory {
@@ -1662,6 +1681,14 @@ fn emit_instruction(
 
     let implicit_items =
         implicit_register_items(inst, &tables.register_index_map, &tables.pc_classes);
+    let implicit_or_update_items = implicit_or_update_items(
+        inst,
+        &ops,
+        &tables.float_classes,
+        &tables.register_index_map,
+        &tables.register_files,
+        &tables.fp_flag_registers,
+    );
 
     // One fact, two readers: the `InstrInfo::effects` derived from the
     // execute body says what the backend is told about the opcode's memory
@@ -1878,6 +1905,7 @@ fn emit_instruction(
             cond_pc,
             control_flow: &control_flow,
             implicit_items: &implicit_items,
+            implicit_or_update_items: &implicit_or_update_items,
             ports_ident: &ports_ident,
             reads_memory,
             writes_memory,

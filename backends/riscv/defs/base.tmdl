@@ -43,7 +43,7 @@ instruction AddUpperImmToPC for [RV32I, RV64I] : UType {
         rd = PC::pc + (sext(imm, self.XLEN) << 12);
     }
 
-    schedule { units = [WriteIALU]; }
+    schedule { units = [WritePCRelative]; }
 }
 
 instruction JumpAndLink for [RV32I, RV64I] : JType {
@@ -55,7 +55,7 @@ instruction JumpAndLink for [RV32I, RV64I] : JType {
         PC::pc = PC::pc + sext(imm, self.XLEN);
     }
 
-    schedule { units = [WriteIALU]; }
+    schedule { units = [WriteBranch]; }
 }
 
 instruction JumpAndLinkReg for [RV32I, RV64I] : IType {
@@ -72,12 +72,12 @@ instruction JumpAndLinkReg for [RV32I, RV64I] : IType {
         PC::pc = (rs1 + sext(imm, self.XLEN)) & ~1;
     }
 
-    schedule { units = [WriteIALU]; }
+    schedule { units = [WriteBranch]; }
 }
 
 template BranchOp for [RV32I, RV64I] : BType {
     param OPCODE: bits<7> = 0b1100011;
-    schedule { units = [WriteIALU]; }
+    schedule { units = [WriteBranch]; }
 }
 
 instruction BranchEq for [RV32I, RV64I] : BranchOp {
@@ -446,6 +446,7 @@ instruction AndImm for [RV32I, RV64I] : IALUOp {
 // Shift immediate forms
 
 template ShiftImm for [RV32I, RV64I] {
+    schedule { units = [WriteIALU]; }
     param OPCODE: bits<7> = 0b0010011;
     param MNEMONIC: String;
     param FUNCT3: bits<3>;
@@ -474,6 +475,7 @@ template ShiftImm for [RV32I, RV64I] {
 }
 
 template ShiftImmWord64 for [RV64I] {
+    schedule { units = [WriteIALU]; }
     param OPCODE: bits<7> = 0b0011011;
     param MNEMONIC: String;
     param FUNCT3: bits<3>;

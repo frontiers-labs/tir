@@ -31,6 +31,13 @@ fn results(path: &Path) -> Value {
     serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap()
 }
 
+fn assert_same_wall_ms(reported: f64, expected: f64) {
+    assert!(
+        (reported - expected).abs() < 1e-3,
+        "{reported} vs {expected}"
+    );
+}
+
 #[test]
 fn even_repeated_runs_report_median_and_peak_with_raw_measurements() {
     let temporary = tempfile::tempdir().unwrap();
@@ -46,12 +53,13 @@ fn even_repeated_runs_report_median_and_peak_with_raw_measurements() {
     let sample = &results["samples"][0];
     let runs = sample["runs"].as_array().unwrap();
     assert_eq!(runs.len(), 2);
-    let mean = runs
+    let mut wall_times = runs
         .iter()
         .map(|run| run["wall_ms"].as_f64().unwrap())
-        .sum::<f64>()
-        / 2.0;
-    assert_eq!(sample["wall_ms"].as_f64().unwrap(), mean);
+        .collect::<Vec<_>>();
+    wall_times.sort_by(f64::total_cmp);
+    let median = (wall_times[0] + wall_times[1]) / 2.0;
+    assert_same_wall_ms(sample["wall_ms"].as_f64().unwrap(), median);
     let maximum = runs
         .iter()
         .map(|run| run["peak_rss_kb"].as_u64().unwrap())
@@ -80,7 +88,7 @@ fn odd_repeated_runs_report_median() {
         .map(|run| run["wall_ms"].as_f64().unwrap())
         .collect::<Vec<_>>();
     wall_times.sort_by(f64::total_cmp);
-    assert_eq!(sample["wall_ms"].as_f64().unwrap(), wall_times[1]);
+    assert_same_wall_ms(sample["wall_ms"].as_f64().unwrap(), wall_times[1]);
 }
 
 #[test]

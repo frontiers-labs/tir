@@ -1,0 +1,17 @@
+schema_version = 1
+milestone = "m01"
+fixtures = ["xtask/tests/fixtures/isasim-accept/passing.toml"]
+
+[[cases]]
+name = "passing-required"
+required = true
+command = ["sh", "-c", "printf 'test fixture::one ... ok\\ntest fixture::two ... ok\\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out\\n'"]
+tool = "cargo"
+expected_cases = 2
+
+[[cases]]
+name = "unsupported-optional"
+required = false
+command = ["tir-test-tool-that-does-not-exist"]
+tool = "tir-test-tool-that-does-not-exist"
+expected_cases = 1

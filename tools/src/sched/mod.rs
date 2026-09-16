@@ -116,6 +116,7 @@ pub fn run(args: ToolArgs) -> Result<(), Box<dyn Error>> {
             class: info.sched_on(&model),
             defs: phys_regs(&regs.phys_defs, Some(&prf)),
             uses: phys_regs(&regs.phys_uses, Some(&prf)),
+            or_updates: phys_regs(info.implicit_or_updates, Some(&prf)),
             branch: None,
             pc,
             width_bytes,

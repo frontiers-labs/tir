@@ -16,6 +16,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         "./defs/zifencei.tmdl",
         "./defs/zicsr.tmdl",
         "./defs/perf.tmdl",
+        "./defs/cpu/spacemit/x100_integer.tmdl",
+        "./defs/cpu/spacemit/x100.tmdl",
         "./defs/vector.tmdl",
         "./defs/vector_int.tmdl",
         "./defs/vector_mask.tmdl",

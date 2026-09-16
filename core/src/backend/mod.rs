@@ -10,7 +10,6 @@ pub mod constmat;
 pub mod dependence;
 pub mod exec;
 pub mod isel;
-pub mod layout;
 mod lexer;
 pub mod liveness;
 pub mod lower;
@@ -87,6 +86,13 @@ pub enum SimTrap {
         address: u64,
         size: usize,
     },
+    /// A mapped-memory access failed before observing or changing bytes.
+    MemoryFault {
+        address: u64,
+        size: usize,
+        access: &'static str,
+        reason: &'static str,
+    },
     ProgramNotLoaded,
     PcNotMapped {
         pc: u64,
@@ -157,6 +163,23 @@ pub trait MachineContext {
     }
     fn read_memory(&self, address: u64, size: usize) -> Result<u64, SimTrap>;
     fn write_memory(&mut self, address: u64, size: usize, value: u64) -> Result<(), SimTrap>;
+    /// Write a complete byte range, with no bytes changed on failure.
+    /// Contexts must override this to support writes wider than one word.
+    fn write_memory_bytes(&mut self, address: u64, bytes: &[u8]) -> Result<(), SimTrap> {
+        if bytes.is_empty() {
+            return Ok(());
+        }
+        if bytes.len() > 8 {
+            return Err(SimTrap::InvalidInstruction {
+                op: "<machine-context>",
+                reason: "whole-range wide memory writes are not supported".into(),
+            });
+        }
+        let mut word = [0; 8];
+        word[..bytes.len()].copy_from_slice(bytes);
+        self.write_memory(address, bytes.len(), u64::from_le_bytes(word))
+    }
+
     /// Read `size` bytes and register a reservation covering the access. The
     /// default has no reservation concept and behaves like a plain read.
     fn load_reserved(
@@ -234,6 +257,17 @@ impl tir::sem::Memory for MachineMemory<'_> {
 
     fn write_memory(&mut self, address: u64, size: usize, value: u64) -> Result<(), Self::Error> {
         self.0.write_memory(address, size, value)
+    }
+
+    fn write_memory_bytes(
+        &mut self,
+        address: u64,
+        size: usize,
+        value: tir::utils::RawBits,
+    ) -> Result<(), Self::Error> {
+        let mut bytes = value.bytes().to_vec();
+        bytes.resize(size, 0);
+        self.0.write_memory_bytes(address, &bytes)
     }
 
     fn load_reserved(
@@ -331,6 +365,8 @@ pub struct InstrInfo {
     pub program: exec::Program,
     /// Fixed registers the behavior touches without naming them in an operand.
     pub implicit_regs: &'static [tir::attributes::ImplicitReg],
+    /// FP flag accumulations that an out-of-order scheduler may rename independently.
+    pub implicit_or_updates: &'static [crate::analysis::defuse::PhysReg],
     /// The opcode's register slots, in declaration order: which are results and
     /// which operands, and the class each admits. See [`RegPort`].
     pub regs: &'static [RegPort],
@@ -343,7 +379,7 @@ pub struct InstrInfo {
     /// Scheduling class per machine, indexed by [`sched::MachineModel::id`].
     /// Empty for an opcode no machine describes.
     pub sched: &'static [sched::InstrSchedClass],
-    /// Ordered conditional latencies per machine, indexed like `sched`.
+    /// Ordered conditional scheduling cases per machine, indexed like `sched`.
     pub latency_cases: &'static [&'static [sched::LatencyCase]],
 }
 
@@ -359,6 +395,7 @@ impl InstrInfo {
         control_flow: ControlFlow::None,
         program: exec::Program::Unsupported("instruction has no behavior"),
         implicit_regs: &[],
+        implicit_or_updates: &[],
         regs: &[],
         effects: MemoryEffects::NONE,
         asm: None,
@@ -368,9 +405,10 @@ impl InstrInfo {
         latency_cases: &[],
     };
 
-    /// Resolve the instruction's latency from its entry state. The first matching
-    /// case wins; a false condition continues to the next case. An unavailable or
-    /// unevaluable condition stops selection and uses the static fallback.
+    /// Resolve the instruction's scheduling class from its entry state. The first
+    /// matching case wins; a false condition continues to the next case. An
+    /// unavailable or unevaluable condition stops selection and uses the static
+    /// fallback. A matching case without micro-ops inherits the fallback routes.
     pub fn sched_for(
         &self,
         instance: &tir::OpHandle,
@@ -387,6 +425,9 @@ impl InstrInfo {
             match case.matches(instance, context, self.name) {
                 Some(true) => {
                     class.latency = case.latency;
+                    if let Some(uops) = case.uops {
+                        class.uops = uops;
+                    }
                     break;
                 }
                 Some(false) => {}

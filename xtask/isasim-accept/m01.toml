@@ -1,0 +1,43 @@
+schema_version = 1
+milestone = "m01"
+fixtures = [
+  "simulator/isasim/checks",
+  "utils/unit-tests/Cargo.toml",
+  "utils/unit-tests/build.rs",
+  "utils/unit-tests/src/simcore/conditional_latency.rs",
+  "utils/unit-tests/src/simcore/executor.rs",
+  "utils/unit-tests/src/simcore/memory.rs",
+  "utils/unit-tests/src/simcore/memory_service.rs",
+  "utils/unit-tests/src/symbolic/exec.rs",
+  "utils/unit-tests/tests/conditional-latency.tmdl",
+]
+
+[[cases]]
+name = "existing-simulator-lit-suite"
+required = true
+command = ["cargo", "test", "-p", "tir-lit", "--test", "lit"]
+tool = "cargo"
+expected_cases = 82
+[cases.env]
+LIT_FILTER = "^simulator/isasim/checks/"
+
+[[cases]]
+name = "simcore-runtime-unit-tests"
+required = true
+command = ["cargo", "test", "-p", "tir-unit-tests", "simcore::"]
+tool = "cargo"
+expected_cases = 122
+
+[[cases]]
+name = "symbolic-runtime-unit-tests"
+required = true
+command = ["cargo", "test", "-p", "tir-unit-tests", "symbolic::exec::"]
+tool = "cargo"
+expected_cases = 35
+
+[[cases]]
+name = "conditional-latency-unit-tests"
+required = true
+command = ["cargo", "test", "-p", "tir-unit-tests", "simcore::conditional_latency::"]
+tool = "cargo"
+expected_cases = 13

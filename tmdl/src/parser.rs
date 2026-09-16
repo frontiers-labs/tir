@@ -913,19 +913,11 @@ fn aggregate_bind_fields(fields: Vec<BindField>) -> BindFields {
     out
 }
 
-/// One `latency`/`throughput`/`uses`/`reads`/`writes` field of a `bind` or
-/// `override` body.
-fn bind_field<'src, I>()
--> impl Parser<'src, I, BindField, extra::Err<Rich<'src, Token<'src>, Span>>>
+fn uop_field<'src, I>() -> impl Parser<'src, I, BindField, extra::Err<Rich<'src, Token<'src>, Span>>>
 where
     I: ValueInput<'src, Token = Token<'src>, Span = Span>,
 {
-    let ident = select! { Token::Identifier(i) => i.to_string() };
-    let bool_lit = select! {
-        Token::Identifier("true") => true,
-        Token::Identifier("false") => false,
-    };
-    let uop = just(Token::Identifier("uop"))
+    just(Token::Identifier("uop"))
         .ignore_then(
             resource_expr()
                 .then(
@@ -944,7 +936,21 @@ where
                 count: count.unwrap_or(1),
                 span: e.span(),
             })
-        });
+        })
+}
+
+/// One `latency`/`throughput`/`uses`/`reads`/`writes` field of a `bind` or
+/// `override` body.
+fn bind_field<'src, I>()
+-> impl Parser<'src, I, BindField, extra::Err<Rich<'src, Token<'src>, Span>>>
+where
+    I: ValueInput<'src, Token = Token<'src>, Span = Span>,
+{
+    let ident = select! { Token::Identifier(i) => i.to_string() };
+    let bool_lit = select! {
+        Token::Identifier("true") => true,
+        Token::Identifier("false") => false,
+    };
     choice((
         just(Token::Identifier("latency"))
             .ignore_then(just(Token::Equals))
@@ -971,7 +977,7 @@ where
             .ignore_then(ident)
             .then_ignore(just(Token::Semicolon))
             .map(BindField::Writes),
-        uop,
+        uop_field(),
         just(Token::Identifier("decode_uops"))
             .ignore_then(just(Token::Equals))
             .ignore_then(int_lit())
@@ -1065,19 +1071,28 @@ fn override_body<'src, I>()
 where
     I: ValueInput<'src, Token = Token<'src>, Span = Span>,
 {
+    let case_body = choice((
+        just(Token::Identifier("latency"))
+            .ignore_then(just(Token::Equals))
+            .ignore_then(int_lit())
+            .then_ignore(just(Token::Semicolon))
+            .map(BindField::Latency),
+        uop_field(),
+    ))
+    .repeated()
+    .collect::<Vec<_>>()
+    .delimited_by(just(Token::LBrace), just(Token::RBrace));
     let case = just(Token::Identifier("when"))
         .ignore_then(inline_expr())
-        .then(
-            just(Token::Identifier("latency"))
-                .ignore_then(just(Token::Equals))
-                .ignore_then(int_lit())
-                .then_ignore(just(Token::Semicolon))
-                .delimited_by(just(Token::LBrace), just(Token::RBrace)),
-        )
-        .map_with(|(condition, latency), e| LatencyCase {
-            condition,
-            latency,
-            span: e.span(),
+        .then(case_body)
+        .map_with(|(condition, fields), e| {
+            let fields = aggregate_bind_fields(fields);
+            LatencyCase {
+                condition,
+                latency: fields.latency.unwrap_or(0),
+                uops: fields.uops,
+                span: e.span(),
+            }
         });
     choice((
         bind_field().map(|field| (Some(field), None)),
