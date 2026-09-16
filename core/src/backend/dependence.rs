@@ -293,7 +293,9 @@ fn parameter_edges(context: &Context, ops: &[OpId]) -> Vec<Vec<usize>> {
                 predecessors[index].push(writer);
             }
             for reader in read.remove(&value).unwrap_or_default() {
-                predecessors[index].push(reader);
+                if reader != index {
+                    predecessors[index].push(reader);
+                }
             }
             written.insert(value, index);
         }
