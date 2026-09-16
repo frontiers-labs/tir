@@ -31,6 +31,9 @@ struct OpInfo {
     /// shift count in `cl`). Their live range keeps the allocator from parking an
     /// unrelated vreg in the register between its def and this read.
     phys_uses: Vec<PhysReg>,
+    /// A copy the pre-allocation lowerings marked coalescable: its ends name the
+    /// same value at that point, so the def alone must not keep them apart.
+    coalescable_copy: bool,
 }
 
 struct BlockInfo {
@@ -224,6 +227,9 @@ fn collect_op_info(
         use_vregs,
         clobbers,
         phys_uses,
+        coalescable_copy: op
+            .attr(crate::backend::prealloc::COALESCABLE_COPY_ATTR)
+            .is_some(),
     }
 }
 
@@ -356,9 +362,15 @@ fn scan_op(
         }
     }
     // Each defined vreg interferes with all currently-live vregs and with
-    // the op's other defs.
+    // the op's other defs. A coalescable copy is the exception: its
+    // destination and source hold one value at the copy, so they may share a
+    // register — any later divergence (a redefinition of either) adds its own
+    // interference through the defining op.
     for &d in &op.def_vregs {
         for &l in live.iter() {
+            if op.coalescable_copy && op.use_vregs.contains(&l) {
+                continue;
+            }
             result.add_interference(d, l);
         }
         for &d2 in &op.def_vregs {

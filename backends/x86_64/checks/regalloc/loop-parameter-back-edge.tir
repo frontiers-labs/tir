@@ -31,6 +31,5 @@ module {
 // CHECK-NEXT: x86_64.mov {dst = %{{[0-9]+}}:{{r[a-z0-9]+}}, src = %[[P]]:[[REG:[a-z0-9]+]]}
 // CHECK:      asm.vcall state(%{{[0-9]+}}, %{{[0-9]+}}) {callee = "foo"
 // CHECK:      x86_64.add_imm32
-// CHECK-NEXT: asm.vbr
 // CHECK:      x86_64.mov {dst = %[[P]]:[[REG]], src = %{{[0-9]+}}:{{r[a-z0-9]+}}}
 // CHECK-NEXT: asm.vbr ^[[HEAD]]

@@ -12,6 +12,6 @@ void f(int *r, int n)
 }
 
 // CHECK-LABEL: f:
-// CHECK: mov [[Z:e[a-z0-9]+]], 0
+// CHECK: mov [[Z:[a-z0-9]+]], 0
 // CHECK-NEXT: cmp [[Z]],
 // CHECK-NEXT: je

@@ -21,4 +21,4 @@ module {
 // CHECK-NEXT: asm.vbr ^[[JOIN:bb[0-9]+]]
 // CHECK:      ^[[TAKEN]]:
 // CHECK-NEXT: x86_64.mov {dst = %{{[0-9]+}}:rax, src = %{{[0-9]+}}:rdi}
-// CHECK-NEXT: asm.vbr ^[[JOIN]]
+// CHECK-NEXT: ^[[JOIN]]

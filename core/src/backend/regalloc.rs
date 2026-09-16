@@ -11,7 +11,7 @@
 //! Register files come from [`RegisterInfo`]; allocation order and calling
 //! convention policy come from the selected [`crate::backend::abi::AbiInfo`].
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use tir::attributes::AttributeValue;
 use tir::{
@@ -20,6 +20,7 @@ use tir::{
 };
 use tir_pbqp::{self as pbqp, INF_COST, PbqpMatrix, PbqpNodeId, PbqpProblem};
 
+use crate::backend::constmat::{REMAT_SPILL_USE_COST, rematerializable};
 use crate::backend::liveness::{self, Liveness, PhysReg};
 use crate::backend::prealloc;
 use crate::backend::registers::fresh_reg;
@@ -313,8 +314,13 @@ fn allocate_with_affinities(
         spill_cost,
     } = config;
 
-    // Deterministic node order.
-    let vregs: Vec<u32> = liveness.vregs.iter().copied().collect();
+    // Deterministic node order. The solver forces alternatives for the
+    // lowest-index high-degree node first and commits to the first feasible
+    // assignment, so congestion evicts the nodes ordered last. Order by
+    // falling spill cost — the most expensive vreg to spill is solved first
+    // and keeps a register; the cheapest lands last and takes the spill.
+    let mut vregs: Vec<u32> = liveness.vregs.iter().copied().collect();
+    vregs.sort_by_key(|&v| std::cmp::Reverse(spill_cost(v)));
     let node_of: HashMap<u32, usize> = vregs.iter().enumerate().map(|(i, &v)| (v, i)).collect();
 
     let default_class = info.default_integer_class(abi);
@@ -707,6 +713,11 @@ impl Pass for RegisterAllocationPass {
 
         let precolor = self.lower_fixed_registers(context, op, &blocks)?;
         let scan = BodyScan::of(context, &blocks)?;
+        // The blocks' loop nesting is static: spills are priced per access,
+        // and a nested loop's iteration count is what the outer pays for
+        // every use it survives.
+        let depths = loop_depths(&blocks, &scan.successors);
+
         let affinities: Vec<_> = scan
             .coalescable_copies
             .iter()
@@ -726,7 +737,11 @@ impl Pass for RegisterAllocationPass {
             let liveness = liveness::analyze(context, &blocks, |b| {
                 scan.successors.get(&b).cloned().unwrap_or_default()
             });
-            let use_counts = reference_counts(context, &blocks);
+            // Definitions that count nothing but an immediate are free to
+            // spill: spilling one costs a replay per use, not a frame slot,
+            // so the solver prices them the cheapest possible way out.
+            let rematerializable = rematerializable(context, &blocks, &liveness);
+            let use_counts = weighted_reference_counts(context, &blocks, &depths);
             // Spill the least-used value first. Reload/store temps are unspillable:
             // they have single-instruction ranges and must occupy a register, so
             // forcing a longer-lived value to spill instead is what actually relieves
@@ -736,8 +751,10 @@ impl Pass for RegisterAllocationPass {
             let spill_cost = |v: u32| -> u64 {
                 if protected.contains(&v) {
                     INF_COST
+                } else if rematerializable.contains_key(&v) {
+                    REMAT_SPILL_USE_COST * (*use_counts.get(&v).unwrap_or(&1))
                 } else {
-                    10 * (*use_counts.get(&v).unwrap_or(&1)) as u64
+                    10 * (*use_counts.get(&v).unwrap_or(&1))
                 }
             };
 
@@ -762,7 +779,14 @@ impl Pass for RegisterAllocationPass {
                         ));
                     }
                     frame.rounds += 1;
-                    self.spill_all(context, &liveness, &blocks, &vregs, &mut frame)?;
+                    self.spill_all(
+                        context,
+                        &liveness,
+                        &blocks,
+                        &vregs,
+                        &mut frame,
+                        &rematerializable,
+                    )?;
                 }
             }
         };
@@ -830,6 +854,65 @@ impl Pass for RegisterAllocationPass {
 impl RegisterAllocationPass {
     fn frame_register(&self) -> PhysReg {
         self.abi.sp
+    }
+
+    /// Replay `def` — a definition whose single effect is defining `spilled`
+    /// with an immediate — ahead of every op naming `spilled`, and retire the
+    /// original. Each use gets a one-instruction live range through a fresh
+    /// register, and no stack slot is spent.
+    fn rematerialize(
+        &self,
+        context: &Context,
+        blocks: &[BlockId],
+        def_id: OpId,
+        spilled: ValueId,
+        frame: &mut FramePlan,
+    ) -> Result<(), PassError> {
+        let mut sites: HashMap<OpId, Vec<usize>> = HashMap::new();
+        for &block_id in blocks {
+            for op_id in context.get_block(block_id).op_ids() {
+                if op_id == def_id || !context.has_operation(op_id) {
+                    continue;
+                }
+                let op = context.get_op(op_id);
+                let uses: Vec<usize> = op
+                    .operands()
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, operand)| **operand == spilled)
+                    .map(|(index, _)| index)
+                    .collect();
+                if !uses.is_empty() {
+                    sites.insert(op_id, uses);
+                }
+            }
+        }
+        for (op_id, positions) in sites {
+            if !context.has_operation(op_id) {
+                continue;
+            }
+            let target = op_ref_in(context, op_id);
+            let replayed = crate::clone_op(context, def_id);
+            let fresh = context
+                .get_op(replayed)
+                .results()
+                .first()
+                .copied()
+                .ok_or_else(|| {
+                    PassError::InvalidRuleSet(format!(
+                        "rematerialized definition of %{} defines no value",
+                        spilled.number()
+                    ))
+                })?;
+            let replayed = context.get_op(replayed).as_dyn_op();
+            context.insert_op_before(&target, replayed.as_ref())?;
+            for position in positions {
+                context.set_op_operand(op_id, position, fresh);
+            }
+            frame.temps.insert(fresh.number());
+        }
+        context.erase_op(&op_ref_in(context, def_id))?;
+        Ok(())
     }
 
     /// Replace every use of an `alloca` result with a frame address computed
@@ -975,6 +1058,7 @@ impl RegisterAllocationPass {
         blocks: &[BlockId],
         vregs: &[u32],
         frame: &mut FramePlan,
+        rematerializable: &HashMap<u32, OpId>,
     ) -> Result<(), PassError> {
         let info = self.target.register_info();
         let default_class = info.default_integer_class(self.abi);
@@ -990,6 +1074,15 @@ impl RegisterAllocationPass {
                     PassError::InvalidRuleSet(format!("spilled vreg {vreg} has no register class"))
                 })?;
             let spilled = ValueId::from_number(vreg);
+
+            // A definition that writes one immediate needs no stack slot: replay it
+            // at each use and retire the original, so the constant occupies no
+            // frame slot and no live range at all.
+            if let Some(&def_id) = rematerializable.get(&vreg) {
+                self.rematerialize(context, blocks, def_id, spilled, frame)?;
+                continue;
+            }
+
             let offset = frame.alloc_slot();
 
             for &block_id in blocks {
@@ -1538,7 +1631,7 @@ impl BodyScan {
 
 /// The `(source, destination)` virtual registers of a copy op: its first read
 /// and first written virtual register.
-fn copy_endpoints(context: &Context, op_id: OpId) -> Option<(u32, u32)> {
+pub(crate) fn copy_endpoints(context: &Context, op_id: OpId) -> Option<(u32, u32)> {
     let regs = liveness::op_regs(&context.get_op(op_id));
     let src = regs.uses.first()?.number();
     let dst = regs.defs.first()?.number();
@@ -1599,16 +1692,100 @@ fn collect_stack_arg_loads(
     Ok(args)
 }
 
-/// Count how many times each virtual register is referenced (def or use) across the
-/// body, used to weight spill cost so the least-used register spills first.
-fn reference_counts(context: &Context, blocks: &[BlockId]) -> HashMap<u32, u32> {
-    let mut counts = HashMap::new();
+/// The loop-nesting depth of each block: how many natural loops (one per
+/// back edge, entry at the back edge's target) contain it. Iterative
+/// dominance over the body's blocks fixes the back edges; a reverse walk that
+/// never crosses the target closes each loop.
+fn loop_depths(
+    blocks: &[BlockId],
+    successors: &HashMap<BlockId, Vec<BlockId>>,
+) -> HashMap<BlockId, u32> {
+    let mut depths: HashMap<BlockId, u32> = blocks.iter().map(|&b| (b, 0)).collect();
+    let entry = blocks
+        .first()
+        .copied()
+        .expect("allocation body has an entry block");
+    let mut dom: HashMap<BlockId, BTreeSet<BlockId>> = blocks
+        .iter()
+        .map(|&b| (b, blocks.iter().copied().collect()))
+        .collect();
+    dom.insert(entry, BTreeSet::from([entry]));
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for &block in blocks {
+            if block == entry {
+                continue;
+            }
+            let mut dominators: Option<BTreeSet<BlockId>> = None;
+            for u in blocks {
+                if !successors.get(u).is_some_and(|ss| ss.contains(&block)) {
+                    continue;
+                }
+                let predecessor = dom.get(u).cloned().unwrap_or_default();
+                dominators = Some(match dominators {
+                    Some(accumulated) => accumulated.intersection(&predecessor).copied().collect(),
+                    None => predecessor,
+                });
+            }
+            let mut together = BTreeSet::from([block]);
+            if let Some(dominating) = dominators {
+                together.extend(dominating);
+            }
+            if dom[&block] != together {
+                dom.insert(block, together);
+                changed = true;
+            }
+        }
+    }
+
+    for &block in blocks {
+        let Some(succ) = successors.get(&block) else {
+            continue;
+        };
+        for s in succ {
+            if !dom[&block].contains(s) {
+                continue;
+            }
+            // Natural loop of `block -> *s`: the target, the block, and
+            // everything reaching the block without crossing the target.
+            let mut whole = BTreeSet::from([*s, block]);
+            let mut work = vec![block];
+            while let Some(j) = work.pop() {
+                for u in blocks {
+                    if whole.contains(u) || !successors.get(u).is_some_and(|ss| ss.contains(&j)) {
+                        continue;
+                    }
+                    whole.insert(*u);
+                    work.push(*u);
+                }
+            }
+            for b in whole {
+                *depths.get_mut(&b).expect("loop block is in the body") += 1;
+            }
+        }
+    }
+    depths
+}
+
+/// Count how many times each virtual register is referenced (def or use)
+/// across the body, each reference priced by the loop nesting of the block
+/// that pays it: 10 to the depth. What the allocator approximates per loop
+/// iteration is a use in a nested loop costing an order of magnitude more
+/// than the same use one nesting up.
+fn weighted_reference_counts(
+    context: &Context,
+    blocks: &[BlockId],
+    depths: &HashMap<BlockId, u32>,
+) -> HashMap<u32, u64> {
+    let mut counts: HashMap<u32, u64> = HashMap::new();
     for &block_id in blocks {
+        let weight = 10u64.saturating_pow(depths.get(&block_id).copied().unwrap_or(0));
         for op_id in context.get_block(block_id).op_ids() {
-            let op = context.get_op(op_id);
-            let regs = liveness::op_regs(&op);
+            let regs = liveness::op_regs(&context.get_op(op_id));
             for value in regs.defs.iter().chain(regs.uses.iter()) {
-                *counts.entry(value.number()).or_insert(0) += 1;
+                let current = counts.get(&value.number()).copied().unwrap_or(0);
+                counts.insert(value.number(), current.saturating_add(weight));
             }
         }
     }

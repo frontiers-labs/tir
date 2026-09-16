@@ -293,7 +293,11 @@ fn parameter_edges(context: &Context, ops: &[OpId]) -> Vec<Vec<usize>> {
                 predecessors[index].push(writer);
             }
             for reader in read.remove(&value).unwrap_or_default() {
-                predecessors[index].push(reader);
+                // A two-address op reads and writes the parameter at one
+                // point: its own read is no reason to follow itself.
+                if reader != index {
+                    predecessors[index].push(reader);
+                }
             }
             written.insert(value, index);
         }

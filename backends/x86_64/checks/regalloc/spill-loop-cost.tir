@@ -1,0 +1,60 @@
+// RUN: tir mc --march=x86_64 --stage=regalloc %s | filecheck %s
+
+// Twelve loop-carried accumulators leave no register free for the inner loop.
+// Spilling is unavoidable, but a spill's reloads and stores land where the
+// value is referenced: values referenced only in the outer loop must spill
+// before anything referenced inside the inner loop, because the inner loop's
+// iterations dominate the dynamic count. The inner loop body below keeps its
+// accumulators and temporaries in registers; the passive accumulators spill
+// around it.
+
+module {
+  %fn_pressure = func.func @pressure(%0: !i1, %1: !i64, %2: !i64, %3: !i64, %4: !i64, %5: !i64, %6: !i64, %7: !i64) -> !i64 {
+    %8 = addi %2, %3 : !i64
+    %9 = addi %4, %5 : !i64
+    %10 = addi %6, %7 : !i64
+    %11 = addi %8, %2 : !i64
+    %12 = addi %9, %3 : !i64
+    %13 = addi %10, %4 : !i64
+    cfg.br ^outer(%2, %3, %4, %5, %6, %7, %8, %9, %10, %11, %12, %13, %1 : !i64, !i64, !i64, !i64, !i64, !i64, !i64, !i64, !i64, !i64, !i64, !i64, !i64)
+  ^outer(%a0: !i64, %a1: !i64, %a2: !i64, %a3: !i64, %a4: !i64, %a5: !i64, %a6: !i64, %a7: !i64, %a8: !i64, %a9: !i64, %a10: !i64, %a11: !i64, %i: !i64):
+    cfg.br ^inner(%a0, %a1, %1 : !i64, !i64, !i64)
+  ^inner(%b0: !i64, %b1: !i64, %j: !i64):
+    %t0 = addi %b0, %b1 : !i64
+    %t1 = muli %t0, %b1 : !i64
+    %t2 = addi %t1, %b0 : !i64
+    %j1 = addi %j, %1 : !i64
+    %more = cmpi %j1, %1 {predicate = "slt"} : !i1
+    cfg.cond_br %more, ^inner(%t1, %t2, %j1 : !i64, !i64, !i64), ^tail(%t1, %t2 : !i64, !i64)
+  ^tail(%r0: !i64, %r1: !i64):
+    %s0 = addi %a2, %r0 : !i64
+    %s1 = addi %a3, %r1 : !i64
+    %s2 = addi %a4, %s0 : !i64
+    %s3 = addi %a5, %s1 : !i64
+    %s4 = addi %a6, %s2 : !i64
+    %s5 = addi %a7, %s3 : !i64
+    %s6 = addi %a8, %s4 : !i64
+    %s7 = addi %a9, %s5 : !i64
+    %s8 = addi %a10, %s6 : !i64
+    %s9 = addi %a11, %s7 : !i64
+    %i1 = addi %i, %1 : !i64
+    %again = cmpi %i1, %1 {predicate = "slt"} : !i1
+    cfg.cond_br %again, ^outer(%s8, %s9, %s0, %s1, %s2, %s3, %s4, %s5, %s6, %s7, %s8, %s9, %i1 : !i64, !i64, !i64, !i64, !i64, !i64, !i64, !i64, !i64, !i64, !i64, !i64, !i64), ^exit
+  ^exit:
+    %out = addi %s9, %i1 : !i64
+    func.return %out
+  }
+  module_end
+}
+
+// The inner loop is the five-argument block defining the imul; it ends where a
+// later block branches back to it. No spill reload or store may appear in that
+// whole region; spills of the passive accumulators belong to the entry and
+// tail blocks around it.
+// CHECK: ^[[INNER:bb[0-9]+]]({{(%[0-9]+: !x86_64.GPR, ){4}%[0-9]+: !x86_64.GPR}}):
+// CHECK-NOT: mov_load_disp
+// CHECK-NOT: mov_store_disp
+// CHECK: x86_64.imul
+// CHECK-NOT: mov_load_disp
+// CHECK-NOT: mov_store_disp
+// CHECK: asm.vbr ^[[INNER]]

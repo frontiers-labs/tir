@@ -1,0 +1,25 @@
+// RUN: tir mc --march=x86_64 --stage=regalloc %s | filecheck %s
+// RUN: tir mc --march=x86_64 --shuffle-machine-order --filetype=obj -o /dev/null %s
+
+// The copy that carries a loop's parameter around its back edge asks for one
+// register at both ends: the parameter dies where the edge's value is born,
+// so their live ranges never overlap and the edge needs no copy at all. The
+// pointer chase below loads straight into the register the header reads, and
+// no move survives between the header and its back edge.
+
+module {
+  %fn_walk = func.func @walk(%0: !ptr.p, %1: !i64) -> !i64 {
+    %c0 = constant {value = 0} : !i64
+    cfg.br ^loop(%0 : !ptr.p)
+  ^loop(%p: !ptr.p):
+    %next = ptr.load %p : !ptr.p
+    %more = cmpi %1, %c0 {predicate = "ne"} : !i1
+    cfg.cond_br %more, ^loop(%next : !ptr.p), ^exit
+  ^exit:
+    func.return %1
+  }
+  module_end
+}
+
+// CHECK:      ^[[HEAD:bb[0-9]+]](%[[P:[0-9]+]]: !x86_64.GPR
+// CHECK-NEXT: %{{[0-9]+}} = x86_64.mov_load {dst = %{{[0-9]+}}:{{[a-z0-9]+}}, base = %[[P]]:{{[a-z0-9]+}}

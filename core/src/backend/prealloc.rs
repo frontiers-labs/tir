@@ -55,7 +55,9 @@ pub fn regalloc_stage_for(
         Box::new(TiedOperandLoweringPass::new(make_target())),
         Box::new(BlockArgLoweringPass::new(make_target(), abi)),
         Box::new(AbiPrecolorPass::new(make_target(), abi)),
+        Box::new(crate::backend::coalesce::CoalescePass::new()),
         Box::new(RegisterAllocationPass::with_abi(make_target(), abi)),
+        Box::new(crate::backend::layout::LayoutPass::new()),
     ]
 }
 
