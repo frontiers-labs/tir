@@ -522,6 +522,32 @@ fn issue_cycles(model: &MachineModel, program: &[ScoreboardInstr]) -> Vec<u64> {
     issue_cycles_with_order(model, program, false)
 }
 
+fn indexed_issue_cycles(model: &MachineModel, program: &[ScoreboardInstr]) -> Vec<u64> {
+    let mut events = Recorder::default();
+    run(
+        model,
+        program,
+        1,
+        &TimingConfig {
+            in_order: false,
+            window: 0,
+            mispredict_penalty: 0,
+            unroll_stride: 0,
+        },
+        None,
+        None,
+        None,
+        Some(&mut events),
+    );
+    let mut cycles = vec![0; program.len()];
+    for (event, cycle, index) in events.0 {
+        if event == 'I' {
+            cycles[index as usize] = cycle;
+        }
+    }
+    cycles
+}
+
 fn issue_cycles_with_order(
     model: &MachineModel,
     program: &[ScoreboardInstr],
@@ -583,6 +609,74 @@ fn or_updates_do_not_serialize_and_readers_wait_for_every_contributor() {
     ];
 
     assert_eq!(issue_cycles(&model, &program), vec![0, 0, 9]);
+}
+
+#[test]
+fn readers_wait_for_an_older_contributor_that_issues_later() {
+    let model = resource_test_model(&[]);
+    let flags = [("CSR", 1)];
+    let gate = [("GPR", 0)];
+    let program = [
+        dependency_test_instr(7, &gate, &[], &[]),
+        dependency_test_instr(2, &flags, &[flags[0], gate[0]], &flags),
+        dependency_test_instr(4, &flags, &flags, &flags),
+        dependency_test_instr(1, &[], &flags, &[]),
+        dependency_test_instr(1, &[], &flags, &[]),
+        dependency_test_instr(1, &flags, &[], &[]),
+        dependency_test_instr(1, &[], &flags, &[]),
+    ];
+
+    assert_eq!(
+        indexed_issue_cycles(&model, &program),
+        vec![0, 7, 1, 9, 9, 2, 3]
+    );
+}
+
+#[test]
+fn contributor_readiness_respects_each_consumers_forwarding_path() {
+    const RESOURCES: &[ProcUnit] = &[
+        ProcUnit {
+            name: "P0",
+            units: 2,
+        },
+        ProcUnit {
+            name: "P1",
+            units: 2,
+        },
+    ];
+    let mut model = resource_test_model(RESOURCES);
+    model.forwards = &[Forward {
+        from: "P0",
+        to: "P1",
+        latency: 2,
+    }];
+    let flags = [("CSR", 1)];
+    let class = |latency, resource| InstrSchedClass {
+        latency,
+        resources: resource,
+        ..InstrSchedClass::DEFAULT
+    };
+    let mut slow_forwarded = dependency_test_instr(9, &flags, &flags, &flags);
+    slow_forwarded.class = class(9, &["P0"]);
+    let mut ordinary = dependency_test_instr(4, &flags, &flags, &flags);
+    ordinary.class = class(4, &["P1"]);
+    let mut forwarded_reader = dependency_test_instr(1, &[], &flags, &[]);
+    forwarded_reader.class = class(1, &["P1"]);
+    let mut unforwarded_reader = dependency_test_instr(1, &[], &flags, &[]);
+    unforwarded_reader.class = class(1, &["P0"]);
+
+    assert_eq!(
+        issue_cycles(
+            &model,
+            &[
+                slow_forwarded,
+                ordinary,
+                forwarded_reader,
+                unforwarded_reader,
+            ],
+        ),
+        vec![0, 0, 4, 9]
+    );
 }
 
 #[test]

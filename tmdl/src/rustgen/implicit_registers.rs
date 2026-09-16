@@ -62,10 +62,18 @@ fn implicit_register_items(
 fn implicit_or_update_items(
     inst: &ast::Instruction,
     operands: &[(String, Type)],
+    float_classes: &HashSet<String>,
     register_index_map: &HashMap<(String, String), u32>,
     register_files: &HashMap<String, String>,
     fp_flag_registers: &HashSet<(String, String)>,
 ) -> Vec<proc_macro2::TokenStream> {
+    if !operands
+        .iter()
+        .any(|(_, ty)| matches!(ty, Type::Struct(class) if float_classes.contains(class)))
+    {
+        return Vec::new();
+    }
+
     let mut candidates = Vec::new();
     let mut flag_assignments = 0;
     crate::utils::visit_exprs(&inst.behavior, &mut |expr| {

@@ -164,6 +164,11 @@ Median relative error is 1.03% for TIR and 25.77% for LLVM. The 461 integer bloc
 have MAE 0.1990 versus 0.3948; the 55 FP blocks have MAE 7.1022 versus 2.2968.
 The overlapping 19 divide/sqrt blocks have MAE 24.2102 versus 8.7786.
 
+Divider-heavy static blocks are not a merge gate. The runtime scheduling
+contract is checked by the `spacemit-x100-*` LIT tests under
+`simulator/isasim/checks/riscv/exec/`, which exercise `when` latency and `uop`
+occupancy with known operands.
+
 Static scheduling cannot select the measured short paths without operand state.
 Its conservative fallback overestimates many repeated divider bodies, and this
 sample's FP tail makes overall MAE worse than LLVM. Dynamic simulator tests
@@ -179,7 +184,9 @@ consistency, and Clippy with warnings denied for all affected packages.
 ### FP flag dependencies
 
 TMDL derives scheduling-only metadata for recognized OR accumulations of a
-register marked `fp_flags`. Architectural reads, writes, and execution semantics
+register marked `fp_flags`, provided an operand belongs to a register class
+marked `float`. CSR-only flag updates retain ordinary read/write dependencies.
+Architectural reads, writes, and execution semantics
 remain unchanged. Out-of-order scheduling allows independent contributions to
 execute in parallel. An explicit flag reader waits for all preceding contributors;
 an overwrite starts a new flag version. Unrecognized behavior retains ordinary

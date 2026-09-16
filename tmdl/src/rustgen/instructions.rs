@@ -1684,6 +1684,7 @@ fn emit_instruction(
     let implicit_or_update_items = implicit_or_update_items(
         inst,
         &ops,
+        &tables.float_classes,
         &tables.register_index_map,
         &tables.register_files,
         &tables.fp_flag_registers,

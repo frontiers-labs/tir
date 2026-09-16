@@ -29,6 +29,42 @@ register_class GPR for [Test] {
     registers { r0 => {}, }
 }
 
+register_class GPR64 for [Test] {
+    param WIDTH: Integer = 64;
+    param ENCODING_LEN: Integer = 1;
+    registers { r0 => {}, }
+}
+
+instruction GprSlice for [Test] {
+    param MNEMONIC: String = "gpr_slice";
+    operands { rs: GPR64 }
+    asm { "gpr_slice {rs}" }
+    behavior { FLAGS::flags = FLAGS::flags | extract(rs, 4, 0); }
+}
+
+// CHECK-LABEL: static INFO_GPRSLICE:
+// CHECK-NOT: implicit_or_updates:
+
+register_class FP for [Test] {
+    param WIDTH: Integer = 32;
+    param ENCODING_LEN: Integer = 1;
+    registers { f0 => { traits = [float] }, }
+}
+
+instruction IntToFloat for [Test] {
+    param MNEMONIC: String = "int_to_float";
+    operands { rd: FP, rs: GPR64 }
+    asm { "int_to_float {rd}, {rs}" }
+    behavior {
+        let result = sitofp(extract(rs, 31, 0), 8, 23, 0b000);
+        FLAGS::flags = FLAGS::flags | fp_flags(result);
+        rd = result;
+    }
+}
+
+// CHECK-LABEL: static INFO_INTTOFLOAT:
+// CHECK: implicit_or_updates: &[(RegClass::FLAGS.id(), 0)],
+
 instruction GuardRead for [Test] {
     param MNEMONIC: String = "guard_read";
     operands { dst: GPR }

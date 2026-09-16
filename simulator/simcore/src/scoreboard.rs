@@ -580,6 +580,73 @@ fn edge_latency(
     u64::from(producer.class.latency)
 }
 
+#[derive(Clone)]
+struct ReadinessSummary {
+    fallback: u64,
+    forwarded: Vec<u64>,
+}
+
+impl ReadinessSummary {
+    fn empty(forward_destinations: &[&'static str]) -> Self {
+        Self {
+            fallback: 0,
+            forwarded: vec![0; forward_destinations.len()],
+        }
+    }
+
+    fn from_producer(
+        model: &MachineModel,
+        forward_destinations: &[&'static str],
+        producer: &ScoreboardInstr,
+        issue: u64,
+        result_extra: u64,
+    ) -> Self {
+        let mut summary = Self::empty(forward_destinations);
+        summary.fallback = (issue + instr_latency(producer)).max(result_extra);
+        for (ready, destination) in summary.forwarded.iter_mut().zip(forward_destinations) {
+            let latency = if renamed(producer) {
+                0
+            } else {
+                producer
+                    .class
+                    .resources
+                    .first()
+                    .and_then(|source| model.forward_latency(source, destination))
+                    .map_or(u64::from(producer.class.latency), u64::from)
+            };
+            *ready = (issue + latency).max(result_extra);
+        }
+        summary
+    }
+
+    fn combine(&mut self, other: &Self) {
+        self.fallback = self.fallback.max(other.fallback);
+        for (ready, other_ready) in self.forwarded.iter_mut().zip(&other.forwarded) {
+            *ready = (*ready).max(*other_ready);
+        }
+    }
+
+    fn ready_for(&self, forward_destinations: &[&'static str], consumer: &InstrSchedClass) -> u64 {
+        let Some(destination) = consumer.resources.first() else {
+            return self.fallback;
+        };
+        forward_destinations
+            .iter()
+            .position(|candidate| candidate == destination)
+            .map_or(self.fallback, |index| self.forwarded[index])
+    }
+}
+
+fn forward_destinations(model: &MachineModel) -> Vec<&'static str> {
+    let mut destinations = Vec::new();
+    for forward in model.forwards {
+        if !destinations.contains(&forward.to) {
+            destinations.push(forward.to);
+        }
+    }
+    destinations
+}
+
 /// The cycle an instruction's result becomes available, given the cycle it
 /// issued. Without a memory system, a fixed per-class latency (the closed-form
 /// path the differential test guards). With one, each data access is charged
@@ -729,7 +796,8 @@ pub fn run(
     // "no extra" (the fixed-latency path), keeping the mem-less run identical.
     let mut result_extra = vec![0u64; n];
     let mut reg_writer: HashMap<(String, u16), usize> = HashMap::new();
-    let mut or_update_frontiers: HashMap<(String, u16), Vec<usize>> = HashMap::new();
+    let forward_destinations = forward_destinations(model);
+    let mut or_update_frontiers: HashMap<(String, u16), ReadinessSummary> = HashMap::new();
     // Per physical file, the retire cycles of in-flight register allocations
     // (FIFO: retire times are monotonic, so the oldest allocation frees first).
     let mut prf_inflight: HashMap<String, VecDeque<u64>> = HashMap::new();
@@ -782,10 +850,13 @@ pub fn run(
                 model,
                 base,
                 slot,
-                &issue,
-                &result_extra,
-                &reg_writer,
-                &or_update_frontiers,
+                &GeneralReadiness {
+                    issue: &issue,
+                    result_extra: &result_extra,
+                    writers: &reg_writer,
+                    frontiers: &or_update_frontiers,
+                    forward_destinations: &forward_destinations,
+                },
             )
         };
 
@@ -809,10 +880,10 @@ pub fn run(
             h.issued(t, i);
         }
 
-        record_writers(
+        record_general_writers(
             slot,
             i,
-            !config.in_order,
+            config.in_order,
             &mut reg_writer,
             &mut or_update_frontiers,
         );
@@ -839,6 +910,16 @@ pub fn run(
         // back dependents beyond forwarding; a hit leaves the fast path intact.
         if complete > issue[i] + instr_latency(slot) {
             result_extra[i] = complete;
+        }
+        if !config.in_order {
+            record_or_contribution(
+                model,
+                &forward_destinations,
+                slot,
+                issue[i],
+                result_extra[i],
+                &mut or_update_frontiers,
+            );
         }
         retire[i] = complete.max(if i > 0 { retire[i - 1] } else { 0 });
         if let Some(h) = handler.as_mut() {
@@ -906,10 +987,7 @@ fn operands_ready_cycle_ooo(
     model: &MachineModel,
     base: &[ScoreboardInstr],
     slot: &ScoreboardInstr,
-    issue: &[u64],
-    result_extra: &[u64],
-    reg_writer: &HashMap<(String, u16), usize>,
-    or_update_frontiers: &HashMap<(String, u16), Vec<usize>>,
+    state: &GeneralReadiness<'_>,
 ) -> u64 {
     let mut ready = 0;
     if is_zero_idiom(slot) {
@@ -919,18 +997,61 @@ fn operands_ready_cycle_ooo(
         if slot.or_updates.contains(register) {
             continue;
         }
-        let producers = reg_writer
-            .get(register)
-            .into_iter()
-            .chain(or_update_frontiers.get(register).into_iter().flatten());
-        for &producer in producers {
+        if let Some(&producer) = state.writers.get(register) {
             let producer_slot = &base[producer % base.len()];
             ready = ready
-                .max(issue[producer] + edge_latency(model, producer_slot, &slot.class))
-                .max(result_extra[producer]);
+                .max(state.issue[producer] + edge_latency(model, producer_slot, &slot.class))
+                .max(state.result_extra[producer]);
+        }
+        if let Some(summary) = state.frontiers.get(register) {
+            ready = ready.max(summary.ready_for(state.forward_destinations, &slot.class));
         }
     }
     ready
+}
+
+struct GeneralReadiness<'a> {
+    issue: &'a [u64],
+    result_extra: &'a [u64],
+    writers: &'a HashMap<(String, u16), usize>,
+    frontiers: &'a HashMap<(String, u16), ReadinessSummary>,
+    forward_destinations: &'a [&'static str],
+}
+
+fn record_general_writers(
+    slot: &ScoreboardInstr,
+    index: usize,
+    in_order: bool,
+    writers: &mut HashMap<(String, u16), usize>,
+    frontiers: &mut HashMap<(String, u16), ReadinessSummary>,
+) {
+    for register in &slot.defs {
+        if in_order || !slot.or_updates.contains(register) {
+            frontiers.remove(register);
+            writers.insert(register.clone(), index);
+        }
+    }
+}
+
+fn record_or_contribution(
+    model: &MachineModel,
+    forward_destinations: &[&'static str],
+    slot: &ScoreboardInstr,
+    issue: u64,
+    result_extra: u64,
+    frontiers: &mut HashMap<(String, u16), ReadinessSummary>,
+) {
+    if slot.or_updates.is_empty() {
+        return;
+    }
+    let contribution =
+        ReadinessSummary::from_producer(model, forward_destinations, slot, issue, result_extra);
+    for register in &slot.or_updates {
+        let summary = frontiers
+            .entry(register.clone())
+            .or_insert_with(|| ReadinessSummary::empty(forward_destinations));
+        summary.combine(&contribution);
+    }
 }
 
 /// Compare the predicted direction to the recorded outcome, stalling the front
@@ -1007,7 +1128,8 @@ fn run_ooo_compute(
     } else {
         config.window
     };
-    let dependencies = build_dependencies(base, n);
+    let forward_destinations = forward_destinations(model);
+    let (dependencies, mut frontiers, producer_frontiers) = build_dependencies(base, n);
 
     let mut lanes: HashMap<&'static str, Vec<u64>> = model
         .resources
@@ -1070,7 +1192,18 @@ fn run_ooo_compute(
                 continue;
             }
             let slot = &base[index % base.len()];
-            if !operands_ready(model, base, slot, &dependencies[index], &issued, cycle) {
+            if !operands_ready(
+                model,
+                base,
+                slot,
+                &dependencies[index],
+                &ComputeReadiness {
+                    issued: &issued,
+                    frontiers: &frontiers,
+                    forward_destinations: &forward_destinations,
+                },
+                cycle,
+            ) {
                 continue;
             }
             let Some(chosen) = reserve_lanes_at(slot, &mut lanes, &mut usage, cycle) else {
@@ -1078,6 +1211,16 @@ fn run_ooo_compute(
             };
             issued[index] = Some(cycle);
             completed[index] = Some(cycle + instr_latency(slot));
+            for &frontier in &producer_frontiers[index] {
+                resolve_frontier(
+                    frontier,
+                    model,
+                    base,
+                    &issued,
+                    &mut frontiers,
+                    &forward_destinations,
+                );
+            }
             issued_this_cycle += 1;
             if let Some(h) = handler.as_mut() {
                 for (resource, cycles) in &chosen {
@@ -1101,11 +1244,31 @@ fn run_ooo_compute(
     }
 }
 
-/// Program-order producer indices per instruction, over the unrolled trace.
-fn build_dependencies(base: &[ScoreboardInstr], n: usize) -> Vec<Vec<usize>> {
+#[derive(Clone, Copy)]
+enum Dependency {
+    Producer(usize),
+    Frontier(usize),
+}
+
+struct FrontierNode {
+    producer: usize,
+    previous: Option<usize>,
+    successor: Option<usize>,
+    readiness: Option<ReadinessSummary>,
+}
+
+/// Program-order dependencies and shared OR-update prefix nodes over the
+/// unrolled trace. Each contribution adds one node; every reader points at the
+/// current prefix instead of copying all preceding contributors.
+fn build_dependencies(
+    base: &[ScoreboardInstr],
+    n: usize,
+) -> (Vec<Vec<Dependency>>, Vec<FrontierNode>, Vec<Vec<usize>>) {
     let mut dependencies = vec![Vec::new(); n];
     let mut writers = HashMap::new();
-    let mut or_update_frontiers: HashMap<(String, u16), Vec<usize>> = HashMap::new();
+    let mut register_frontiers: HashMap<(String, u16), usize> = HashMap::new();
+    let mut frontiers = Vec::new();
+    let mut producer_frontiers = vec![Vec::new(); n];
     for i in 0..n {
         let slot = &base[i % base.len()];
         if !is_zero_idiom(slot) {
@@ -1114,37 +1277,73 @@ fn build_dependencies(base: &[ScoreboardInstr], n: usize) -> Vec<Vec<usize>> {
                     continue;
                 }
                 if let Some(&producer) = writers.get(register) {
-                    dependencies[i].push(producer);
+                    dependencies[i].push(Dependency::Producer(producer));
                 }
-                if let Some(contributors) = or_update_frontiers.get(register) {
-                    dependencies[i].extend(contributors);
+                if let Some(&frontier) = register_frontiers.get(register) {
+                    dependencies[i].push(Dependency::Frontier(frontier));
                 }
             }
         }
-        record_writers(slot, i, true, &mut writers, &mut or_update_frontiers);
+        for register in &slot.defs {
+            if slot.or_updates.contains(register) {
+                let previous = register_frontiers.get(register).copied();
+                let frontier = frontiers.len();
+                frontiers.push(FrontierNode {
+                    producer: i,
+                    previous,
+                    successor: None,
+                    readiness: None,
+                });
+                if let Some(previous) = previous {
+                    frontiers[previous].successor = Some(frontier);
+                }
+                register_frontiers.insert(register.clone(), frontier);
+                producer_frontiers[i].push(frontier);
+            } else {
+                register_frontiers.remove(register);
+                writers.insert(register.clone(), i);
+            }
+        }
     }
-    dependencies
+    (dependencies, frontiers, producer_frontiers)
 }
 
-fn record_writers(
-    slot: &ScoreboardInstr,
-    index: usize,
-    track_or_updates: bool,
-    writers: &mut HashMap<(String, u16), usize>,
-    or_update_frontiers: &mut HashMap<(String, u16), Vec<usize>>,
+fn resolve_frontier(
+    mut frontier: usize,
+    model: &MachineModel,
+    base: &[ScoreboardInstr],
+    issued: &[Option<u64>],
+    frontiers: &mut [FrontierNode],
+    forward_destinations: &[&'static str],
 ) {
-    for register in &slot.defs {
-        if track_or_updates && slot.or_updates.contains(register) {
-            or_update_frontiers
-                .entry(register.clone())
-                .or_default()
-                .push(index);
-        } else {
-            if track_or_updates {
-                or_update_frontiers.remove(register);
+    loop {
+        let producer = frontiers[frontier].producer;
+        let Some(issue) = issued[producer] else {
+            return;
+        };
+        let previous = frontiers[frontier].previous;
+        let mut readiness = match previous {
+            Some(previous) => {
+                let Some(readiness) = frontiers[previous].readiness.clone() else {
+                    return;
+                };
+                readiness
             }
-            writers.insert(register.clone(), index);
-        }
+            None => ReadinessSummary::empty(forward_destinations),
+        };
+        let producer_slot = &base[producer % base.len()];
+        readiness.combine(&ReadinessSummary::from_producer(
+            model,
+            forward_destinations,
+            producer_slot,
+            issue,
+            0,
+        ));
+        frontiers[frontier].readiness = Some(readiness);
+        let Some(successor) = frontiers[frontier].successor else {
+            return;
+        };
+        frontier = successor;
     }
 }
 
@@ -1183,16 +1382,30 @@ fn operands_ready(
     model: &MachineModel,
     base: &[ScoreboardInstr],
     slot: &ScoreboardInstr,
-    dependencies: &[usize],
-    issued: &[Option<u64>],
+    dependencies: &[Dependency],
+    state: &ComputeReadiness<'_>,
     cycle: u64,
 ) -> bool {
-    dependencies.iter().all(|&producer| {
-        issued[producer].is_some_and(|producer_issue| {
+    dependencies.iter().all(|dependency| match *dependency {
+        Dependency::Producer(producer) => state.issued[producer].is_some_and(|producer_issue| {
             let producer_slot = &base[producer % base.len()];
             producer_issue + edge_latency(model, producer_slot, &slot.class) <= cycle
-        })
+        }),
+        Dependency::Frontier(frontier) => {
+            state.frontiers[frontier]
+                .readiness
+                .as_ref()
+                .is_some_and(|readiness| {
+                    readiness.ready_for(state.forward_destinations, &slot.class) <= cycle
+                })
+        }
     })
+}
+
+struct ComputeReadiness<'a> {
+    issued: &'a [Option<u64>],
+    frontiers: &'a [FrontierNode],
+    forward_destinations: &'a [&'static str],
 }
 
 /// Reserve this instance's functional-unit lanes at exactly `cycle`, or `None`
