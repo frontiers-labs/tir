@@ -1,0 +1,33 @@
+macro x100_integer_divide_overrides {
+    ( $( ( $name:ident, $fallback:literal, $rhs:tt ) ),* ) => {
+        $(
+            override $name {
+                latency = $fallback;
+                uop(Int0 & IntDivide<$fallback>);
+                when $rhs == 0 {
+                    latency = 5;
+                    uop(Int0 & IntDivide<4>);
+                }
+                when $rhs == 1 {
+                    latency = 4;
+                    uop(Int0 & IntDivide<3>);
+                }
+            }
+        )*
+    };
+}
+
+macro x100_integer_divides {
+    () => {
+        x100_integer_divide_overrides!(
+            (Div,      22, (rs2)),
+            (DivU,     22, (rs2)),
+            (Rem,      22, (rs2)),
+            (RemU,     22, (rs2)),
+            (DivWord,  14, (extract(rs2, 31, 0))),
+            (DivUWord, 14, (extract(rs2, 31, 0))),
+            (RemWord,  14, (extract(rs2, 31, 0))),
+            (RemUWord, 14, (extract(rs2, 31, 0)))
+        )
+    };
+}

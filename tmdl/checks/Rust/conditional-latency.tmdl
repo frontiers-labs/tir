@@ -5,3 +5,8 @@
 // CHECK: tir::backend::exec::SymSource::RegisterAttr("rhs")
 // CHECK: condition:
 // CHECK: latency: 4,
+// CHECK: uops: Some(
+// CHECK: &[
+// CHECK: resource: "FP0",
+// CHECK: resource: "FloatDivide",
+// CHECK: cycles: 5,

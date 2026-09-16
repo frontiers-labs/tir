@@ -1007,6 +1007,8 @@ struct MachineOverride {
 struct LatencyCase {
     condition: Expr,
     latency: i64,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    uops: Vec<MicroOp>,
 }
 
 impl From<&ast::MachineOverride> for MachineOverride {
@@ -1019,6 +1021,7 @@ impl From<&ast::MachineOverride> for MachineOverride {
                 .map(|case| LatencyCase {
                     condition: Expr::from(&case.condition),
                     latency: case.latency,
+                    uops: case.uops.iter().map(MicroOp::from).collect(),
                 })
                 .collect(),
             latency: override_.latency,

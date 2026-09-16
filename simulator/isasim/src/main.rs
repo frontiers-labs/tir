@@ -296,7 +296,7 @@ fn report_timing(
         model,
         context,
         executor.trace(),
-        Some(executor.latency_trace()),
+        Some(executor.sched_trace()),
         &config,
         predictor.as_mut(),
         Some(&prf),

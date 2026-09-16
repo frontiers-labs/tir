@@ -1435,6 +1435,12 @@
         "latency": {
           "type": "integer",
           "format": "int64"
+        },
+        "uops": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/MicroOp"
+          }
         }
       },
       "additionalProperties": false,

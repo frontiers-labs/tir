@@ -11,7 +11,7 @@
 //! Static scheduling uses the machine class, including its fallback latency.
 //! The simulator resolves conditional latency from values captured before execution.
 
-/// One ordered latency predicate evaluated against the instruction's entry state.
+/// One ordered scheduling predicate evaluated against the instruction's entry state.
 pub struct LatencyCase {
     pub env: &'static super::exec::ExecEnv,
     pub sym_count: usize,
@@ -19,6 +19,8 @@ pub struct LatencyCase {
     /// Offset of a pure bits<1> expression in the semantic blob.
     pub condition: u32,
     pub latency: u16,
+    /// Replacement micro-op routes, or `None` to inherit the fallback class.
+    pub uops: Option<&'static [MicroOp]>,
 }
 
 impl LatencyCase {

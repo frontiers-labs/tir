@@ -22,12 +22,14 @@ template MulDivOpWord for [Zmmul64, RVM64] : RTypeWord {
 }
 
 instruction Mul for [Zmmul, RVM] : MulDivOp {
+    schedule { units = [WriteIMul]; }
     param MNEMONIC: String = "mul";
     param FUNCT3: bits<3> = 0b000;
     behavior { rd = rs1 * rs2; }
 }
 
 instruction MulH for [Zmmul, RVM] : MulDivOp {
+    schedule { units = [WriteIMul]; }
     param MNEMONIC: String = "mulh";
     param FUNCT3: bits<3> = 0b001;
     behavior { rd = extract(rs1 * rs2, (2 * self.XLEN) - 1, self.XLEN); }
@@ -39,6 +41,7 @@ instruction MulH for [Zmmul, RVM] : MulDivOp {
 // unsigned adds rs1 to the high word exactly when rs2's top bit is set, modulo
 // 2^XLEN. `sext(bit, XLEN) & x` selects x when the bit is set, 0 otherwise.
 instruction MulHSU for [Zmmul, RVM] : MulDivOp {
+    schedule { units = [WriteIMul]; }
     param MNEMONIC: String = "mulhsu";
     param FUNCT3: bits<3> = 0b010;
     behavior {
@@ -51,6 +54,7 @@ instruction MulHSU for [Zmmul, RVM] : MulDivOp {
 // each operand's unsigned bias (add the other operand when the top bit is set),
 // modulo 2^XLEN.
 instruction MulHU for [Zmmul, RVM] : MulDivOp {
+    schedule { units = [WriteIMul]; }
     param MNEMONIC: String = "mulhu";
     param FUNCT3: bits<3> = 0b011;
     behavior {
@@ -63,6 +67,7 @@ instruction MulHU for [Zmmul, RVM] : MulDivOp {
 // Signed division rounds toward zero. Division by zero yields all-ones (-1);
 // the MIN/-1 overflow case falls out of two's-complement bvsdiv (= MIN).
 instruction Div for [RVM] : MulDivOp {
+    schedule { units = [WriteIDiv]; }
     param MNEMONIC: String = "div";
     param FUNCT3: bits<3> = 0b100;
     behavior {
@@ -76,6 +81,7 @@ instruction Div for [RVM] : MulDivOp {
 
 // Unsigned division; division by zero yields all-ones (2^XLEN - 1).
 instruction DivU for [RVM] : MulDivOp {
+    schedule { units = [WriteIDiv]; }
     param MNEMONIC: String = "divu";
     param FUNCT3: bits<3> = 0b101;
     behavior {
@@ -90,6 +96,7 @@ instruction DivU for [RVM] : MulDivOp {
 // Signed remainder; remainder by zero yields the dividend. The MIN/-1 case
 // (remainder 0) falls out of the `rs1 - (rs1 / rs2) * rs2` identity.
 instruction Rem for [RVM] : MulDivOp {
+    schedule { units = [WriteIDiv]; }
     param MNEMONIC: String = "rem";
     param FUNCT3: bits<3> = 0b110;
     behavior {
@@ -103,6 +110,7 @@ instruction Rem for [RVM] : MulDivOp {
 
 // Unsigned remainder; remainder by zero yields the dividend.
 instruction RemU for [RVM] : MulDivOp {
+    schedule { units = [WriteIDiv]; }
     param MNEMONIC: String = "remu";
     param FUNCT3: bits<3> = 0b111;
     behavior {
@@ -116,6 +124,7 @@ instruction RemU for [RVM] : MulDivOp {
 
 // Low 32 bits multiplied, result sign-extended to XLEN.
 instruction MulWord for [Zmmul64, RVM64] : MulDivOpWord {
+    schedule { units = [WriteIMulWord]; }
     param MNEMONIC: String = "mulw";
     param FUNCT3: bits<3> = 0b000;
     behavior { rd = sext(extract(rs1 * rs2, 31, 0), self.XLEN); }
@@ -123,6 +132,7 @@ instruction MulWord for [Zmmul64, RVM64] : MulDivOpWord {
 
 // 32-bit signed division; the sign-extended 32-bit result is written back.
 instruction DivWord for [RVM64] : MulDivOpWord {
+    schedule { units = [WriteIDivWord]; }
     param MNEMONIC: String = "divw";
     param FUNCT3: bits<3> = 0b100;
     behavior {
@@ -137,6 +147,7 @@ instruction DivWord for [RVM64] : MulDivOpWord {
 // 32-bit unsigned division; division by zero yields all-ones (2^32 - 1),
 // which sign-extends to -1.
 instruction DivUWord for [RVM64] : MulDivOpWord {
+    schedule { units = [WriteIDivWord]; }
     param MNEMONIC: String = "divuw";
     param FUNCT3: bits<3> = 0b101;
     behavior {
@@ -150,6 +161,7 @@ instruction DivUWord for [RVM64] : MulDivOpWord {
 
 // 32-bit signed remainder.
 instruction RemWord for [RVM64] : MulDivOpWord {
+    schedule { units = [WriteIDivWord]; }
     param MNEMONIC: String = "remw";
     param FUNCT3: bits<3> = 0b110;
     behavior {
@@ -165,6 +177,7 @@ instruction RemWord for [RVM64] : MulDivOpWord {
 
 // 32-bit unsigned remainder.
 instruction RemUWord for [RVM64] : MulDivOpWord {
+    schedule { units = [WriteIDivWord]; }
     param MNEMONIC: String = "remuw";
     param FUNCT3: bits<3> = 0b111;
     behavior {

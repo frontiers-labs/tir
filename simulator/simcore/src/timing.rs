@@ -25,8 +25,8 @@ pub use crate::scoreboard::{TimingConfig, TimingResult};
 /// register-file pressure on a renaming core. `handler` receives the pipeline
 /// events for report rendering.
 ///
-/// `latency_trace`, when supplied, must contain one entry-state latency per
-/// trace entry, captured for `model`. `None` uses static instruction latencies.
+/// `sched_trace`, when supplied, must contain one entry-state scheduling class
+/// per trace entry, captured for `model`. `None` uses static instruction classes.
 ///
 /// Only [`ControlFlow::Conditional`] instructions are predictor-scored: an
 /// unconditional transfer's target is known at decode, so it flows through the
@@ -40,7 +40,7 @@ pub fn simulate(
     model: &MachineModel,
     context: &Context,
     trace: &[(OpId, u64)],
-    latency_trace: Option<&[u16]>,
+    sched_trace: Option<&[InstrSchedClass]>,
     config: &TimingConfig,
     predictor: &mut dyn BranchPredictor,
     prf: Option<&Prf>,
@@ -48,11 +48,11 @@ pub fn simulate(
     mem: Option<&mut MemorySystem>,
     handler: Option<&mut dyn EventHandler>,
 ) -> TimingResult {
-    if let Some(latencies) = latency_trace {
+    if let Some(classes) = sched_trace {
         assert_eq!(
-            latencies.len(),
+            classes.len(),
             trace.len(),
-            "latency trace must match instruction trace"
+            "schedule trace must match instruction trace"
         );
     }
     // Pre-resolve each trace entry to its scheduling class, registers, and
@@ -71,10 +71,7 @@ pub fn simulate(
         let (op_name, class, width, is_branch) = match &mi {
             Some(mi) => {
                 let info = mi.info();
-                let mut class = info.sched_on(model);
-                if let Some(latencies) = latency_trace {
-                    class.latency = latencies[i];
-                }
+                let class = sched_trace.map_or_else(|| info.sched_on(model), |classes| classes[i]);
                 (
                     info.name,
                     class,
@@ -96,6 +93,12 @@ pub fn simulate(
             class,
             defs: phys_regs(&regs.phys_defs, prf),
             uses: phys_regs(&regs.phys_uses, prf),
+            or_updates: phys_regs(
+                mi.as_ref()
+                    .map(|mi| mi.info().implicit_or_updates)
+                    .unwrap_or_default(),
+                prf,
+            ),
             branch: None,
             pc: *pc,
             width_bytes: width.min(u64::from(u16::MAX)) as u16,

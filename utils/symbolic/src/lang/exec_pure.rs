@@ -11,7 +11,7 @@ pub fn execute_pure<V>(
     symbols: &[Value],
 ) -> Option<APInt> {
     let mut cache = vec![None; graph.len()];
-    eval_pure_node(graph, graph.root()?, symbols, &mut cache)
+    integer_view(eval_pure_node(graph, graph.root()?, symbols, &mut cache)?)
 }
 
 fn eval_pure_node<V>(
@@ -19,9 +19,9 @@ fn eval_pure_node<V>(
     node: NodeId,
     symbols: &[Value],
     cache: &mut Vec<Option<Value>>,
-) -> Option<APInt> {
+) -> Option<Value> {
     if let Some(value) = &cache[node.index()] {
-        return integer_view(value.clone());
+        return Some(value.clone());
     }
     let kind = *graph.get_kind(node);
     let operands = graph
@@ -30,9 +30,9 @@ fn eval_pure_node<V>(
         .collect::<Option<Vec<_>>>()?;
     let leaf = match (kind, graph.get_leaf_data(node)) {
         (SymKind::Symbol, Some(SymPayload::SymbolId(id))) => {
-            Some(integer_view(symbols.get(*id as usize)?.clone())?)
+            Some(symbols.get(*id as usize)?.clone())
         }
-        (SymKind::Constant, Some(SymPayload::Int(value))) => Some(value.clone()),
+        (SymKind::Constant, Some(SymPayload::Int(value))) => Some(Value::Int(value.clone())),
         _ => None,
     };
     let value = if let Some(value) = leaf {
@@ -41,16 +41,28 @@ fn eval_pure_node<V>(
         }
         value
     } else {
-        if !valid_operands(kind, &operands) {
+        let valid = if kind == SymKind::Bitcast {
+            matches!(
+                operands.as_slice(),
+                [Value::Int(_) | Value::Float(_) | Value::RawBits(_)]
+            )
+        } else {
+            operands
+                .iter()
+                .cloned()
+                .map(integer_view)
+                .collect::<Option<Vec<_>>>()
+                .is_some_and(|operands| valid_operands(kind, &operands))
+        };
+        if !valid {
             return None;
         }
-        let value = match eval_node(graph, node, symbols, cache, &mut Vec::new(), &mut NoMemory) {
+        match eval_node(graph, node, symbols, cache, &mut Vec::new(), &mut NoMemory) {
             Ok(value) => value,
             Err(error) => match error {},
-        };
-        integer_view(value)?
+        }
     };
-    cache[node.index()] = Some(Value::Int(value.clone()));
+    cache[node.index()] = Some(value.clone());
     Some(value)
 }
 
@@ -64,7 +76,7 @@ fn valid_operands(kind: SymKind, operands: &[APInt]) -> bool {
                     .is_some());
     }
     match (kind, operands) {
-        (SymKind::Bitcast | SymKind::Log2Ceil, [_]) => true,
+        (SymKind::Log2Ceil, [_]) => true,
         (SymKind::If, [condition, _, _]) => condition.width() == 1,
         (SymKind::Clamp, [value, min, max]) => {
             value.width() == min.width() && value.width() == max.width()

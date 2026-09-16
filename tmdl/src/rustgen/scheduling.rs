@@ -118,12 +118,38 @@ fn emit_machine_models<'a>(
     // Per scheduled instruction, its class on each machine, in machine-id order.
     let mut per_instruction: Vec<Vec<proc_macro2::Ident>> = vec![Vec::new(); scheduled.len()];
     for (machine_id, machine) in files.iter().flat_map(|f| f.machines()).enumerate() {
+        let resource_groups: HashMap<&str, &ast::ResourceExpr> = machine
+            .resource_groups
+            .iter()
+            .map(|group| (group.name.as_str(), &group.resources))
+            .collect();
         for override_ in &machine.overrides {
             if !override_.latency_cases.is_empty() {
                 let cases = latency_cases
                     .entry(override_.instruction.clone())
                     .or_insert_with(|| vec![Vec::new(); machine_count]);
-                cases[machine_id] = override_.latency_cases.clone();
+                cases[machine_id] = override_
+                    .latency_cases
+                    .iter()
+                    .map(|case| ResolvedLatencyCase {
+                        condition: case.condition.clone(),
+                        latency: case.latency,
+                        uops: (!case.uops.is_empty()).then(|| {
+                            case.uops
+                                .iter()
+                                .flat_map(|uop| {
+                                    (0..uop.count.max(0)).map(|_| ResolvedMicroOp {
+                                        routes: resolve_resource_expr(
+                                            &uop.resources,
+                                            &resource_groups,
+                                            None,
+                                        ),
+                                    })
+                                })
+                                .collect()
+                        }),
+                    })
+                    .collect();
             }
         }
         let binds: HashMap<&str, &ast::UnitBind> =
@@ -133,12 +159,6 @@ fn emit_machine_models<'a>(
             .iter()
             .map(|o| (o.instruction.as_str(), o))
             .collect();
-        let resource_groups: HashMap<&str, &ast::ResourceExpr> = machine
-            .resource_groups
-            .iter()
-            .map(|group| (group.name.as_str(), &group.resources))
-            .collect();
-
         // Resolve each scheduled instruction to a concrete class on this machine. A
         // per-instruction `override` supersedes the `unit`-based resolution.
         let entries: Vec<ResolvedClass> = scheduled
@@ -279,30 +299,7 @@ fn sched_class_ts(c: &ResolvedClass) -> proc_macro2::TokenStream {
     let read_lit = proc_macro2::Literal::u16_unsuffixed(c.read_cycle);
     let rthr_lit = proc_macro2::Literal::u16_unsuffixed(c.rthroughput);
     let res_lits = c.resources.iter().map(|r| proc_macro2::Literal::string(r));
-    let uop_lits = c.uops.iter().map(|uop| {
-        let route_lits = uop.routes.iter().map(|route| {
-            let use_lits = route.iter().map(|use_| {
-                let resource = proc_macro2::Literal::string(&use_.resource);
-                let cycles = proc_macro2::Literal::u16_unsuffixed(use_.cycles);
-                quote! {
-                    tir::backend::sched::ResourceUse {
-                        resource: #resource,
-                        cycles: #cycles,
-                    }
-                }
-            });
-            quote! {
-                tir::backend::sched::ResourceRoute {
-                    resources: &[#(#use_lits),*],
-                }
-            }
-        });
-        quote! {
-            tir::backend::sched::MicroOp {
-                routes: &[#(#route_lits),*],
-            }
-        }
-    });
+    let uop_lits = emit_uops(&c.uops);
     let decode_uops = proc_macro2::Literal::u16_unsuffixed(c.decode_uops);
     let decoder = match &c.decoder {
         Some(decoder) => {
@@ -328,6 +325,33 @@ fn sched_class_ts(c: &ResolvedClass) -> proc_macro2::TokenStream {
             zero_idiom: #zero_idiom,
         }
     }
+}
+
+fn emit_uops(uops: &[ResolvedMicroOp]) -> Vec<proc_macro2::TokenStream> {
+    uops.iter().map(|uop| {
+        let route_lits = uop.routes.iter().map(|route| {
+            let use_lits = route.iter().map(|use_| {
+                let resource = proc_macro2::Literal::string(&use_.resource);
+                let cycles = proc_macro2::Literal::u16_unsuffixed(use_.cycles);
+                quote! {
+                    tir::backend::sched::ResourceUse {
+                        resource: #resource,
+                        cycles: #cycles,
+                    }
+                }
+            });
+            quote! {
+                tir::backend::sched::ResourceRoute {
+                    resources: &[#(#use_lits),*],
+                }
+            }
+        });
+        quote! {
+            tir::backend::sched::MicroOp {
+                routes: &[#(#route_lits),*],
+            }
+        }
+    }).collect()
 }
 
 /// Resource-agnostic `unit` defaults, keyed by name. Used both when a machine
@@ -399,11 +423,18 @@ fn collect_scheduled<'a>(
 /// for the `InstrInfo` records [`emit_instructions`] emits. Keyed by instruction
 /// declaration name.
 struct SchedTables {
-    latency_cases: HashMap<String, Vec<Vec<ast::LatencyCase>>>,
+    latency_cases: HashMap<String, Vec<Vec<ResolvedLatencyCase>>>,
     costs: HashMap<String, u32>,
     /// The `SCHED_C*` class of each instruction on each machine, in machine-id
     /// order. Absent for an instruction no machine describes.
     classes: HashMap<String, Vec<proc_macro2::Ident>>,
+}
+
+#[derive(Clone)]
+struct ResolvedLatencyCase {
+    condition: ast::Expr,
+    latency: i64,
+    uops: Option<Vec<ResolvedMicroOp>>,
 }
 
 impl SchedTables {

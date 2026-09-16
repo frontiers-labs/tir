@@ -1108,6 +1108,7 @@ fn check_machine_overrides(
             if let Some(message) = latency_condition_error(&case.condition) {
                 diags.push((file_name.to_string(), Rich::custom(case.span, message)));
             }
+            check_conditional_uops(file_name, machine, &case.uops, names, diags);
         }
         if ov.decode_uops.is_some_and(|count| count <= 0) {
             diags.push((
@@ -1227,6 +1228,43 @@ fn check_machine_overrides(
                         format!(
                             "override for '{}' references phase '{}' not in machine '{}' pipeline",
                             ov.instruction, phase, machine.name
+                        ),
+                    ),
+                ));
+            }
+        }
+    }
+}
+
+fn check_conditional_uops(
+    file_name: &str,
+    machine: &ast::Machine,
+    uops: &[ast::MicroOp],
+    names: &MachineNames<'_>,
+    diags: &mut Vec<(String, Diag)>,
+) {
+    for uop in uops {
+        if uop.count <= 0 {
+            diags.push((
+                file_name.to_string(),
+                Rich::custom(uop.span, "micro-op count must be positive"),
+            ));
+        }
+        if has_non_positive_occupancy(&uop.resources) {
+            diags.push((
+                file_name.to_string(),
+                Rich::custom(uop.span, "resource occupancy must be positive"),
+            ));
+        }
+        for referenced in resource_references(&uop.resources) {
+            if !names.modeled.contains(referenced) {
+                diags.push((
+                    file_name.to_string(),
+                    Rich::custom(
+                        uop.span,
+                        format!(
+                            "conditional micro-op references unknown resource '{}' in machine '{}'",
+                            referenced, machine.name
                         ),
                     ),
                 ));

@@ -237,9 +237,21 @@ def generate():
         )
         encoding = encoding.replace("self.RM", "RM")
         names = ", ".join("{" + name + "}" for name, _ in operands)
+        operation = mnemonic.split(".")[0]
+        schedule = {
+            "fadd": "WriteFPAdd",
+            "fsub": "WriteFPAdd",
+            "fmul": "WriteFPMul",
+            "fcvt": "WriteFPConvert",
+        }.get(operation)
+        if operation in {"fmadd", "fmsub", "fnmadd", "fnmsub"}:
+            schedule = "WriteFPFmaSingle" if mnemonic.endswith(".s") else "WriteFPFmaDouble"
+        if operation in {"fdiv", "fsqrt"}:
+            schedule = "WriteFPDivSingle" if mnemonic.endswith(".s") else "WriteFPDivDouble"
         defs.append(
             f"template {name}Rounded for [{extension}] {{\n"
-            f'    param MNEMONIC: String = "{mnemonic}";\n'
+            + (f"    schedule {{ units = [{schedule}]; }}\n" if schedule else "")
+            + f'    param MNEMONIC: String = "{mnemonic}";\n'
             "    param OPNAME: String;\n"
             "    param RM: bits<3>;\n"
             "    operands { "

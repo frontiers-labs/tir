@@ -204,7 +204,7 @@ instruction CFLoadDouble for [Zcd] {
         fd = load(rs1 + zext(imm, self.XLEN), 8, 0b0);
     }
 
-    schedule { units = [WriteLoad]; }
+    schedule { units = [WriteFPLoad]; }
 }
 
 instruction CFLoadWord for [Zcf] {
@@ -234,7 +234,7 @@ instruction CFLoadWord for [Zcf] {
         fd = load(rs1 + zext(imm, self.XLEN), 4, 0b0);
     }
 
-    schedule { units = [WriteLoad]; }
+    schedule { units = [WriteFPLoad]; }
 }
 
 // CS-format stores: same layouts with rs2' in bits 2..4.
@@ -648,7 +648,7 @@ template CJOp for [C] {
         "{self.MNEMONIC} {imm}"
     }
 
-    schedule { units = [WriteIALU]; }
+    schedule { units = [WriteBranch]; }
 }
 
 instruction CJumpAndLink for [C32] : CJOp {
@@ -696,7 +696,7 @@ template CBranchOp for [C] {
         "{self.MNEMONIC} {rs1}, {imm}"
     }
 
-    schedule { units = [WriteIALU]; }
+    schedule { units = [WriteBranch]; }
 }
 
 instruction CBranchEqZero for [C] : CBranchOp {
@@ -841,7 +841,7 @@ instruction CFLoadDoubleSp for [Zcd] {
         fd = load(GPR::x2 + zext(imm, self.XLEN), 8, 0b0);
     }
 
-    schedule { units = [WriteLoad]; }
+    schedule { units = [WriteFPLoad]; }
 }
 
 instruction CFLoadWordSp for [Zcf] {
@@ -869,7 +869,7 @@ instruction CFLoadWordSp for [Zcf] {
         fd = load(GPR::x2 + zext(imm, self.XLEN), 4, 0b0);
     }
 
-    schedule { units = [WriteLoad]; }
+    schedule { units = [WriteFPLoad]; }
 }
 
 instruction CJumpReg for [C] {
@@ -895,7 +895,7 @@ instruction CJumpReg for [C] {
         PC::pc = rs1 & ~1;
     }
 
-    schedule { units = [WriteIALU]; }
+    schedule { units = [WriteBranch]; }
 }
 
 instruction CMove for [C] {
@@ -972,7 +972,7 @@ instruction CJumpAndLinkReg for [C] {
         PC::pc = rs1 & ~1;
     }
 
-    schedule { units = [WriteIALU]; }
+    schedule { units = [WriteBranch]; }
 }
 
 instruction CAdd for [C] {

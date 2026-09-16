@@ -103,7 +103,7 @@ pub struct Executor {
     record_trace: bool,
     trace: Vec<(tir::OpId, u64)>,
     timing_model: Option<tir::backend::sched::MachineModel>,
-    latency_trace: Vec<u16>,
+    sched_trace: Vec<tir::backend::sched::InstrSchedClass>,
     /// Data-memory accesses per retired instruction, kept exactly parallel to
     /// `trace` (empty inner vec for non-memory instructions).
     mem_trace: Vec<Vec<MemAccess>>,
@@ -226,9 +226,9 @@ impl Executor {
         self.timing_model = Some(model);
     }
 
-    /// Resolved latencies parallel to `trace`, or empty when no model was selected.
-    pub fn latency_trace(&self) -> &[u16] {
-        &self.latency_trace
+    /// Resolved scheduling classes parallel to `trace`, or empty when no model was selected.
+    pub fn sched_trace(&self) -> &[tir::backend::sched::InstrSchedClass] {
+        &self.sched_trace
     }
 
     /// Declare which register classes share a physical register file (class name
@@ -502,8 +502,8 @@ impl Executor {
         if self.record_trace
             && let Some(model) = self.timing_model
         {
-            let latency = machine_inst.sched_on(&model, self).latency;
-            self.latency_trace.push(latency);
+            let class = machine_inst.sched_on(&model, self);
+            self.sched_trace.push(class);
         }
         self.capturing_mem = true;
         let result = machine_inst.execute(self);

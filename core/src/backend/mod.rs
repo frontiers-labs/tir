@@ -328,6 +328,8 @@ pub struct InstrInfo {
     pub program: exec::Program,
     /// Fixed registers the behavior touches without naming them in an operand.
     pub implicit_regs: &'static [tir::attributes::ImplicitReg],
+    /// FP flag accumulations that an out-of-order scheduler may rename independently.
+    pub implicit_or_updates: &'static [crate::analysis::defuse::PhysReg],
     /// The opcode's register slots, in declaration order: which are results and
     /// which operands, and the class each admits. See [`RegPort`].
     pub regs: &'static [RegPort],
@@ -340,7 +342,7 @@ pub struct InstrInfo {
     /// Scheduling class per machine, indexed by [`sched::MachineModel::id`].
     /// Empty for an opcode no machine describes.
     pub sched: &'static [sched::InstrSchedClass],
-    /// Ordered conditional latencies per machine, indexed like `sched`.
+    /// Ordered conditional scheduling cases per machine, indexed like `sched`.
     pub latency_cases: &'static [&'static [sched::LatencyCase]],
 }
 
@@ -356,6 +358,7 @@ impl InstrInfo {
         control_flow: ControlFlow::None,
         program: exec::Program::Unsupported("instruction has no behavior"),
         implicit_regs: &[],
+        implicit_or_updates: &[],
         regs: &[],
         effects: MemoryEffects::NONE,
         asm: None,
@@ -365,9 +368,10 @@ impl InstrInfo {
         latency_cases: &[],
     };
 
-    /// Resolve the instruction's latency from its entry state. The first matching
-    /// case wins; a false condition continues to the next case. An unavailable or
-    /// unevaluable condition stops selection and uses the static fallback.
+    /// Resolve the instruction's scheduling class from its entry state. The first
+    /// matching case wins; a false condition continues to the next case. An
+    /// unavailable or unevaluable condition stops selection and uses the static
+    /// fallback. A matching case without micro-ops inherits the fallback routes.
     pub fn sched_for(
         &self,
         instance: &tir::OpHandle,
@@ -384,6 +388,9 @@ impl InstrInfo {
             match case.matches(instance, context, self.name) {
                 Some(true) => {
                     class.latency = case.latency;
+                    if let Some(uops) = case.uops {
+                        class.uops = uops;
+                    }
                     break;
                 }
                 Some(false) => {}

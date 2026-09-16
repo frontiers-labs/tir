@@ -1,5 +1,5 @@
 fn emit_latency_cases(
-    machines: &[Vec<ast::LatencyCase>],
+    machines: &[Vec<ResolvedLatencyCase>],
     numeric_params: &HashMap<String, i64>,
     register_indices: &HashMap<(String, String), u32>,
     ctx: &RustBehaviorCtx<'_>,
@@ -33,6 +33,13 @@ fn emit_latency_cases(
                     let sym_count = proc_macro2::Literal::usize_unsuffixed(max_sym + 1);
                     let condition = lowered_value_offset(&graph, symbols.root);
                     let latency = proc_macro2::Literal::u16_unsuffixed(case.latency as u16);
+                    let uops = match &case.uops {
+                        Some(uops) => {
+                            let uops = emit_uops(uops);
+                            quote! { Some(&[#(#uops),*]) }
+                        }
+                        None => quote! { None },
+                    };
                     Ok(quote! {
                         tir::backend::sched::LatencyCase {
                             env: &EXEC_ENV,
@@ -40,6 +47,7 @@ fn emit_latency_cases(
                             sources: &[#(#sources),*],
                             condition: #condition,
                             latency: #latency,
+                            uops: #uops,
                         }
                     })
                 })

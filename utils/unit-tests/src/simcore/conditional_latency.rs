@@ -40,9 +40,15 @@ fn record() -> (tir::Context, Executor) {
 }
 
 #[test]
-fn conditional_latency_trace_captures_each_entry_value() {
+fn conditional_schedule_trace_captures_each_entry_class() {
     let (_, executor) = record();
-    assert_eq!(executor.latency_trace(), &[4, 20, 4]);
+    let trace = executor.sched_trace();
+    assert_eq!(
+        trace.iter().map(|class| class.latency).collect::<Vec<_>>(),
+        [4, 20, 4]
+    );
+    assert_eq!(trace[0].uops[0].routes[0].resources[1].cycles, 5);
+    assert_eq!(trace[1].uops[0].routes[0].resources[1].cycles, 20);
 }
 
 #[test]
@@ -52,12 +58,12 @@ fn conditional_latency_replay_uses_captured_values() {
     let (context, executor) = record();
     let model = test_core_model();
     let config = TimingConfig::for_model(&model);
-    let timing = |latencies| {
+    let timing = |classes| {
         simulate(
             &model,
             &context,
             executor.trace(),
-            latencies,
+            classes,
             &config,
             &mut AlwaysNotTaken,
             None,
@@ -67,8 +73,16 @@ fn conditional_latency_replay_uses_captured_values() {
         )
     };
     assert_eq!(
-        timing(None).cycles - timing(Some(executor.latency_trace())).cycles,
-        32
+        timing(None).cycles - timing(Some(executor.sched_trace())).cycles,
+        31
+    );
+    let mut fallback_occupancy = executor.sched_trace().to_vec();
+    let fallback_uops = fallback_occupancy[1].uops;
+    fallback_occupancy[0].uops = fallback_uops;
+    fallback_occupancy[2].uops = fallback_uops;
+    assert_eq!(
+        timing(Some(&fallback_occupancy)).cycles - timing(Some(executor.sched_trace())).cycles,
+        15
     );
 }
 
@@ -112,6 +126,35 @@ fn div_latency(model: &tir::backend::sched::MachineModel, rhs: Option<u16>, valu
         .write_register("Gpr", rhs.unwrap_or(1), tir::utils::APInt::new(64, value))
         .unwrap();
     mi.sched_on(model, &mut executor).latency
+}
+
+fn div_schedule(
+    model: &tir::backend::sched::MachineModel,
+    value: u64,
+) -> tir::backend::sched::InstrSchedClass {
+    use tir::backend::{phys_attr, MachineInstruction};
+    use tir::Operation;
+    let context = tir::Context::with_default_dialects();
+    context.register_dialect::<LatencyDialect>();
+    let op = DivOpBuilder::new(&context)
+        .attr("rhs", phys_attr((RegClass::Gpr.id(), 1)))
+        .build();
+    let mi = context
+        .get_op(op.id())
+        .as_interface::<dyn MachineInstruction>()
+        .unwrap();
+    let mut executor = Executor::new(0);
+    executor
+        .write_register("Gpr", 1, tir::utils::APInt::new(64, value))
+        .unwrap();
+    mi.sched_on(model, &mut executor)
+}
+
+#[test]
+fn conditional_latency_without_uops_inherits_fallback_resources() {
+    let class = div_schedule(&test_core_model(), 2);
+    assert_eq!(class.latency, 6);
+    assert_eq!(class.uops[0].routes[0].resources[1].cycles, 20);
 }
 
 #[test]

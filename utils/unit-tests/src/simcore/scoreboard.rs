@@ -4,6 +4,7 @@ use tir::backend::sched::{
     DecodedCache, Decoder, Forward, Frontend, FrontendDecode, FrontendFetch, InstrSchedClass,
     MachineModel, MicroOp, ProcUnit, ResourceRoute, ResourceUse,
 };
+use tir_sim::memsys::{CacheParams, MemParams, MemorySystem};
 use tir_sim::predictor::{AlwaysNotTaken, BranchPredictor};
 use tir_sim::scoreboard::*;
 
@@ -393,6 +394,7 @@ fn gen_program(rng: &mut Lcg, len: usize) -> Vec<ScoreboardInstr> {
                 class,
                 defs,
                 uses,
+                or_updates: vec![],
                 branch,
                 pc: 0,
                 width_bytes: 1,
@@ -508,6 +510,7 @@ fn resource_test_instr(class: InstrSchedClass) -> ScoreboardInstr {
         class,
         defs: vec![],
         uses: vec![],
+        or_updates: vec![],
         branch: None,
         pc: 0,
         width_bytes: 1,
@@ -516,13 +519,21 @@ fn resource_test_instr(class: InstrSchedClass) -> ScoreboardInstr {
 }
 
 fn issue_cycles(model: &MachineModel, program: &[ScoreboardInstr]) -> Vec<u64> {
+    issue_cycles_with_order(model, program, false)
+}
+
+fn issue_cycles_with_order(
+    model: &MachineModel,
+    program: &[ScoreboardInstr],
+    in_order: bool,
+) -> Vec<u64> {
     let mut events = Recorder::default();
     run(
         model,
         program,
         1,
         &TimingConfig {
-            in_order: false,
+            in_order,
             window: 0,
             mispredict_penalty: 0,
             unroll_stride: 0,
@@ -537,6 +548,221 @@ fn issue_cycles(model: &MachineModel, program: &[ScoreboardInstr]) -> Vec<u64> {
         .iter()
         .filter_map(|(event, cycle, _)| (*event == 'I').then_some(*cycle))
         .collect()
+}
+
+fn dependency_test_instr(
+    latency: u16,
+    defs: &[(&str, u16)],
+    uses: &[(&str, u16)],
+    or_updates: &[(&str, u16)],
+) -> ScoreboardInstr {
+    let registers = |registers: &[(&str, u16)]| {
+        registers
+            .iter()
+            .map(|(class, index)| ((*class).to_string(), *index))
+            .collect()
+    };
+    let mut instruction = resource_test_instr(InstrSchedClass {
+        latency,
+        ..InstrSchedClass::DEFAULT
+    });
+    instruction.defs = registers(defs);
+    instruction.uses = registers(uses);
+    instruction.or_updates = registers(or_updates);
+    instruction
+}
+
+#[test]
+fn or_updates_do_not_serialize_and_readers_wait_for_every_contributor() {
+    let model = resource_test_model(&[]);
+    let flags = [("CSR", 1)];
+    let program = [
+        dependency_test_instr(9, &flags, &flags, &flags),
+        dependency_test_instr(2, &flags, &flags, &flags),
+        dependency_test_instr(1, &[], &flags, &[]),
+    ];
+
+    assert_eq!(issue_cycles(&model, &program), vec![0, 0, 9]);
+}
+
+#[test]
+fn general_out_of_order_path_tracks_every_or_update() {
+    let model = resource_test_model(&[]);
+    let flags = [("CSR", 1)];
+    let mut long = dependency_test_instr(9, &flags, &flags, &flags);
+    long.branch = Some(BranchOutcome {
+        pc: 0,
+        target: 4,
+        taken: false,
+    });
+    let program = [
+        long,
+        dependency_test_instr(2, &flags, &flags, &flags),
+        dependency_test_instr(1, &[], &flags, &[]),
+    ];
+
+    assert_eq!(issue_cycles(&model, &program), vec![0, 0, 9]);
+}
+
+#[test]
+fn memory_enabled_timing_tracks_every_or_update() {
+    let model = resource_test_model(&[]);
+    let flags = [("CSR", 1)];
+    let program = [
+        dependency_test_instr(9, &flags, &flags, &flags),
+        dependency_test_instr(2, &flags, &flags, &flags),
+        dependency_test_instr(1, &[], &flags, &[]),
+    ];
+    let cache = CacheParams {
+        size: 64,
+        ways: 1,
+        line: 64,
+        latency: 1,
+        banks: 1,
+        mshrs: 1,
+    };
+    let mut memory = MemorySystem::new(MemParams {
+        l1i: cache,
+        l1d: cache,
+        l2: None,
+        l3: None,
+        dram_latency: 1,
+        dram_streams: 1,
+    });
+    let mut events = Recorder::default();
+    run(
+        &model,
+        &program,
+        1,
+        &TimingConfig {
+            in_order: false,
+            window: 0,
+            mispredict_penalty: 0,
+            unroll_stride: 0,
+        },
+        None,
+        None,
+        Some(&mut memory),
+        Some(&mut events),
+    );
+    let issues: Vec<_> = events
+        .0
+        .iter()
+        .filter_map(|(event, cycle, _)| (*event == 'I').then_some(*cycle))
+        .collect();
+
+    assert_eq!(issues[1], issues[0]);
+    assert_eq!(issues[2], issues[0] + 9);
+}
+
+#[test]
+fn in_order_issue_keeps_or_updates_conservative() {
+    let model = resource_test_model(&[]);
+    let flags = [("CSR", 1)];
+    let program = [
+        dependency_test_instr(9, &flags, &flags, &flags),
+        dependency_test_instr(2, &flags, &flags, &flags),
+        dependency_test_instr(1, &[], &flags, &[]),
+    ];
+
+    assert_eq!(
+        issue_cycles_with_order(&model, &program, true),
+        vec![0, 9, 11]
+    );
+}
+
+#[test]
+fn flag_overwrite_clears_the_contributor_frontier() {
+    let model = resource_test_model(&[]);
+    let flags = [("CSR", 1)];
+    let program = [
+        dependency_test_instr(9, &flags, &flags, &flags),
+        dependency_test_instr(2, &flags, &[], &[]),
+        dependency_test_instr(1, &[], &flags, &[]),
+    ];
+
+    assert_eq!(issue_cycles(&model, &program), vec![0, 0, 2]);
+}
+
+#[test]
+fn ordinary_flag_rmw_consumes_then_replaces_the_frontier() {
+    let model = resource_test_model(&[]);
+    let flags = [("CSR", 1)];
+    let program = [
+        dependency_test_instr(9, &flags, &flags, &flags),
+        dependency_test_instr(2, &flags, &flags, &[]),
+        dependency_test_instr(1, &[], &flags, &[]),
+    ];
+
+    assert_eq!(issue_cycles(&model, &program), vec![0, 9, 11]);
+}
+
+#[test]
+fn or_updates_preserve_ordinary_register_dependencies() {
+    let model = resource_test_model(&[]);
+    let flags = [("CSR", 1)];
+    let value = [("FPR", 3)];
+    let program = [
+        dependency_test_instr(7, &value, &[], &[]),
+        dependency_test_instr(2, &flags, &[flags[0], value[0]], &flags),
+    ];
+
+    assert_eq!(issue_cycles(&model, &program), vec![0, 7]);
+}
+
+#[test]
+fn normalized_flag_aliases_share_one_contributor_frontier() {
+    let model = resource_test_model(&[]);
+    let normalized_flags = [("CSR", 1)];
+    let program = [
+        dependency_test_instr(8, &normalized_flags, &normalized_flags, &normalized_flags),
+        dependency_test_instr(1, &[], &normalized_flags, &[]),
+    ];
+
+    assert_eq!(issue_cycles(&model, &program), vec![0, 8]);
+}
+
+#[test]
+fn fusion_drops_or_update_when_the_other_instruction_reads_the_flags() {
+    let mut model = resource_test_model(&[]);
+    model.fusions = &[tir::backend::sched::FusionGroup {
+        first: &["update"],
+        second: &["read"],
+    }];
+    let flags = [("CSR", 1)];
+    let mut contributor = dependency_test_instr(9, &flags, &flags, &flags);
+    contributor.op_name = "contributor".to_string();
+    let mut update = dependency_test_instr(1, &flags, &flags, &flags);
+    update.op_name = "update".to_string();
+    let mut read = dependency_test_instr(1, &[], &flags, &[]);
+    read.op_name = "read".to_string();
+
+    assert_eq!(
+        issue_cycles(&model, &[contributor, update, read]),
+        vec![0, 9]
+    );
+}
+
+#[test]
+fn fusion_preserves_or_update_when_both_instructions_are_contributors() {
+    let mut model = resource_test_model(&[]);
+    model.fusions = &[tir::backend::sched::FusionGroup {
+        first: &["first-update"],
+        second: &["second-update"],
+    }];
+    let flags = [("CSR", 1)];
+    let mut long = dependency_test_instr(9, &flags, &flags, &flags);
+    long.op_name = "long".to_string();
+    let mut first = dependency_test_instr(1, &flags, &flags, &flags);
+    first.op_name = "first-update".to_string();
+    let mut second = dependency_test_instr(1, &flags, &flags, &flags);
+    second.op_name = "second-update".to_string();
+    let read = dependency_test_instr(1, &[], &flags, &[]);
+
+    assert_eq!(
+        issue_cycles(&model, &[long, first, second, read]),
+        vec![0, 0, 9]
+    );
 }
 
 const TEST_DECODERS: &[Decoder] = &[
@@ -1319,6 +1545,7 @@ fn idiom_clone(instruction: &ScoreboardInstr) -> ScoreboardInstr {
         class: instruction.class,
         defs: instruction.defs.clone(),
         uses: instruction.uses.clone(),
+        or_updates: instruction.or_updates.clone(),
         branch: None,
         pc: instruction.pc,
         width_bytes: instruction.width_bytes,

@@ -15,9 +15,16 @@ instruction Div for [TestIsa] {
 }
 machine TestCore ("test-core") for [TestIsa] {
     issue_width = 1;
+    unit FP0 { count = 1; }
+    unit FloatDivide { count = 1; }
     override Div {
         latency = 20;
-        when rhs == 0b1 { latency = 4; }
+        uop(FP0 & FloatDivide<20>);
+        when rhs == 0b1 {
+            latency = 4;
+            uop(FP0 & FloatDivide<5>);
+        }
+        when rhs == 0b10 { latency = 6; }
     }
 }
 

@@ -15,12 +15,18 @@ instruction Div for [TestIsa] {
     schedule { units = [Divide]; }
 }
 machine TestCore ("test-core") for [TestIsa] {
+    unit FP0 { count = 1; }
+    unit FloatDivide { count = 1; }
     override Div {
         latency = 20;
-        when rhs == 0b1 { latency = 4; }
+        when rhs == 0b1 {
+            latency = 4;
+            uop(FP0 & FloatDivide<5>);
+        }
     }
 }
 
 // CHECK: "latency_cases": [
 // CHECK: "condition": {
 // CHECK: "latency": 4
+// CHECK: "uops": [

@@ -5,9 +5,16 @@ instruction I {
     behavior { todo(); }
 }
 machine Core {
+    unit P0 { count = 1; }
     override I {
         latency = 4;
-        when 0b1 == 0b1 { latency = 0; }
+        when 0b1 == 0b1 {
+            latency = 0;
+            uop(P0<0>);
+            uop(Missing);
+        }
     }
 }
 // CHECK: conditional latency case must be in 1..65535
+// CHECK: resource occupancy must be positive
+// CHECK: conditional micro-op references unknown resource 'Missing' in machine 'Core'

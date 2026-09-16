@@ -1,0 +1,138 @@
+// Scalar X100 model. Evidence and validation limits: docs/spacemit-x100.md.
+fn x100_fp32_div_special(lhs, rhs) {
+    let lhs_bits = bitcast(lhs);
+    let rhs_bits = bitcast(rhs);
+    let lhs_exp = extract(lhs_bits, 30, 23);
+    let rhs_exp = extract(rhs_bits, 30, 23);
+    let lhs_mag = extract(lhs_bits, 30, 0);
+    let rhs_mag = extract(rhs_bits, 30, 0);
+    (lhs_mag == 0) | (rhs_mag == 0) | (lhs_exp == 0xff) | (rhs_exp == 0xff)
+}
+
+fn x100_fp32_div_normal(lhs, rhs) {
+    let lhs_bits = bitcast(lhs);
+    let rhs_bits = bitcast(rhs);
+    let lhs_exp = extract(lhs_bits, 30, 23);
+    let rhs_exp = extract(rhs_bits, 30, 23);
+    let lhs_wide = zext(lhs_exp, 12);
+    let rhs_wide = zext(rhs_exp, 12);
+    (lhs_exp != 0) & (lhs_exp != 0xff) & (rhs_exp != 0) & (rhs_exp != 0xff)
+        & (lhs_wide + zext(0x7d, 12) >= rhs_wide)
+        & (lhs_wide <= rhs_wide + zext(0x7f, 12))
+}
+
+fn x100_fp64_div_special(lhs, rhs) {
+    let lhs_bits = bitcast(lhs);
+    let rhs_bits = bitcast(rhs);
+    let lhs_exp = extract(lhs_bits, 62, 52);
+    let rhs_exp = extract(rhs_bits, 62, 52);
+    let lhs_mag = extract(lhs_bits, 62, 0);
+    let rhs_mag = extract(rhs_bits, 62, 0);
+    (lhs_mag == 0) | (rhs_mag == 0) | (lhs_exp == 0x7ff) | (rhs_exp == 0x7ff)
+}
+
+fn x100_fp64_div_normal(lhs, rhs) {
+    let lhs_bits = bitcast(lhs);
+    let rhs_bits = bitcast(rhs);
+    let lhs_exp = extract(lhs_bits, 62, 52);
+    let rhs_exp = extract(rhs_bits, 62, 52);
+    let lhs_wide = zext(lhs_exp, 16);
+    let rhs_wide = zext(rhs_exp, 16);
+    (lhs_exp != 0) & (lhs_exp != 0x7ff) & (rhs_exp != 0) & (rhs_exp != 0x7ff)
+        & (lhs_wide + zext(0x3fd, 16) >= rhs_wide)
+        & (lhs_wide <= rhs_wide + zext(0x3ff, 16))
+}
+
+fn x100_fp32_sqrt_special(value) {
+    let bits = bitcast(value);
+    let exp = extract(bits, 30, 23);
+    (extract(bits, 31, 31) == 1) | (extract(bits, 30, 0) == 0) | (exp == 0xff)
+}
+
+fn x100_fp32_sqrt_normal(value) {
+    let bits = bitcast(value);
+    let exp = extract(bits, 30, 23);
+    (extract(bits, 31, 31) == 0) & (exp != 0) & (exp != 0xff)
+}
+
+fn x100_fp64_sqrt_special(value) {
+    let bits = bitcast(value);
+    let exp = extract(bits, 62, 52);
+    (extract(bits, 63, 63) == 1) | (extract(bits, 62, 0) == 0) | (exp == 0x7ff)
+}
+
+fn x100_fp64_sqrt_normal(value) {
+    let bits = bitcast(value);
+    let exp = extract(bits, 62, 52);
+    (extract(bits, 63, 63) == 0) & (exp != 0) & (exp != 0x7ff)
+}
+
+macro x100_fp_ops {
+    ($special:ident, $normal:ident, $args:tt, $fallback:literal, $latency:literal, $ii:literal; $( $name:ident ),*) => {
+        $(
+            override $name {
+                latency = $fallback;
+                uop(FP0 & FloatDivide<$fallback>);
+                when $special$args {
+                    latency = 6;
+                    uop(FP0 & FloatDivide<5>);
+                }
+                when $normal$args {
+                    latency = $latency;
+                    uop(FP0 & FloatDivide<$ii>);
+                }
+            }
+        )*
+    };
+}
+
+machine SpacemitX100 ("spacemit-x100") for [RV64I] {
+    issue_width = 4;
+
+    // The 64-entry ROB packs up to three micro-ops per entry. The scheduler
+    // counts instructions, so 192 is an upper bound on its effective window.
+    buffers { rob = 192; }
+
+    unit Int0 { count = 1; }
+    unit Int1 { count = 1; }
+    unit Branch { count = 1; }
+    unit LSU { count = 2; }
+    unit FP0 { count = 1; }
+    unit FP1 { count = 1; }
+    unit IntDivide { count = 1; }
+    unit FloatDivide { count = 1; }
+
+    group Integer = Int0 | Int1 | Branch;
+    group Float = FP0 | FP1;
+
+    bind WriteIALU { latency = 1; uop(Integer); }
+    bind WritePCRelative { latency = 1; uop(Branch); }
+    bind WriteBranch { latency = 2; uop(Branch); }
+    bind WriteIMul { latency = 3; uop(Int1); }
+    bind WriteIMulWord { latency = 2; uop(Int1); }
+    bind WriteFPAdd { latency = 3; uop(Float); }
+    bind WriteFPMul { latency = 4; uop(Float); }
+    bind WriteFPFmaSingle { latency = 5; uop(Float); }
+    bind WriteFPFmaDouble { latency = 4; uop(Float); }
+    bind WriteFPConvert { latency = 3; uop(FP1); }
+    // Operand values are unavailable to static scheduling. Use conservative
+    // fallback estimates instead of short paths from repeated benchmark bodies.
+    bind WriteIDiv { latency = 22; uop(Int0 & IntDivide<22>); }
+    bind WriteIDivWord { latency = 14; uop(Int0 & IntDivide<14>); }
+    bind WriteFPDivSingle { latency = 15; uop(FP0 & FloatDivide<15>); }
+    bind WriteFPDivDouble { latency = 23; uop(FP0 & FloatDivide<23>); }
+    // L1-hit priors. The compute corpus excludes memory instructions.
+    bind WriteLoad { latency = 3; uop(LSU); }
+    bind WriteFPLoad { latency = 4; uop(LSU); }
+    bind WriteStore { latency = 1; uop(LSU); }
+
+    x100_fp_ops!(x100_fp32_div_special, x100_fp32_div_normal, (fs1, fs2), 15, 11, 10;
+        FDivSRNE, FDivSRTZ, FDivSRDN, FDivSRUP, FDivSRMM, FDivS)
+    x100_fp_ops!(x100_fp64_div_special, x100_fp64_div_normal, (fs1, fs2), 23, 19, 18;
+        FDivDRNE, FDivDRTZ, FDivDRDN, FDivDRUP, FDivDRMM, FDivD)
+    x100_fp_ops!(x100_fp32_sqrt_special, x100_fp32_sqrt_normal, (fs1), 15, 11, 10;
+        FSqrtSRNE, FSqrtSRTZ, FSqrtSRDN, FSqrtSRUP, FSqrtSRMM, FSqrtS)
+    x100_fp_ops!(x100_fp64_sqrt_special, x100_fp64_sqrt_normal, (fs1), 23, 19, 18;
+        FSqrtDRNE, FSqrtDRTZ, FSqrtDRDN, FSqrtDRUP, FSqrtDRMM, FSqrtD)
+    x100_integer_divides!()
+}

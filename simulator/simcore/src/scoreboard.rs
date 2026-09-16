@@ -38,6 +38,8 @@ pub struct ScoreboardInstr {
     pub class: InstrSchedClass,
     pub defs: Vec<(String, u16)>,
     pub uses: Vec<(String, u16)>,
+    /// Definitions that accumulate with bitwise OR for scheduling purposes.
+    pub or_updates: Vec<(String, u16)>,
     /// The resolved outcome of a conditional branch, recovered from the
     /// executed trace. `None` for non-branches and in static mode, where no
     /// outcome exists to predict against.
@@ -519,6 +521,17 @@ fn fuse_pair(first: &ScoreboardInstr, second: &ScoreboardInstr) -> ScoreboardIns
     uses.extend(second.uses.iter().cloned());
     let mut mem = first.mem.clone();
     mem.extend(second.mem.iter().cloned());
+    let mut or_updates = first.or_updates.clone();
+    or_updates.extend(second.or_updates.iter().cloned());
+    or_updates.sort_unstable();
+    or_updates.dedup();
+    or_updates.retain(|register| {
+        [&first, &second].into_iter().all(|instruction| {
+            let touches =
+                instruction.defs.contains(register) || instruction.uses.contains(register);
+            !touches || instruction.or_updates.contains(register)
+        })
+    });
     // A length-changing-prefix stall on either side still applies to the pair.
     let class = InstrSchedClass {
         latency: first.class.latency.max(second.class.latency),
@@ -541,6 +554,7 @@ fn fuse_pair(first: &ScoreboardInstr, second: &ScoreboardInstr) -> ScoreboardIns
         class,
         defs,
         uses,
+        or_updates,
         branch: second.branch,
         pc: first.pc,
         width_bytes: first.width_bytes.saturating_add(second.width_bytes),
@@ -715,6 +729,7 @@ pub fn run(
     // "no extra" (the fixed-latency path), keeping the mem-less run identical.
     let mut result_extra = vec![0u64; n];
     let mut reg_writer: HashMap<(String, u16), usize> = HashMap::new();
+    let mut or_update_frontiers: HashMap<(String, u16), Vec<usize>> = HashMap::new();
     // Per physical file, the retire cycles of in-flight register allocations
     // (FIFO: retire times are monotonic, so the oldest allocation frees first).
     let mut prf_inflight: HashMap<String, VecDeque<u64>> = HashMap::new();
@@ -760,8 +775,19 @@ pub fn run(
 
         // Operands ready: the latest forwarding-aware producer result. A
         // dependency-breaking idiom reads none of its sources.
-        let operands_ready =
-            operands_ready_cycle(model, base, slot, &issue, &result_extra, &reg_writer);
+        let operands_ready = if config.in_order {
+            operands_ready_cycle(model, base, slot, &issue, &result_extra, &reg_writer)
+        } else {
+            operands_ready_cycle_ooo(
+                model,
+                base,
+                slot,
+                &issue,
+                &result_extra,
+                &reg_writer,
+                &or_update_frontiers,
+            )
+        };
 
         let mut t = cycle.max(operands_ready);
         if config.in_order && i > 0 {
@@ -783,9 +809,13 @@ pub fn run(
             h.issued(t, i);
         }
 
-        for def in &slot.defs {
-            reg_writer.insert(def.clone(), i);
-        }
+        record_writers(
+            slot,
+            i,
+            !config.in_order,
+            &mut reg_writer,
+            &mut or_update_frontiers,
+        );
 
         // Branch scoring: compare the predicted direction to the recorded
         // outcome, and stall the front end on a mispredict until the branch
@@ -867,6 +897,37 @@ fn operands_ready_cycle(
             ready = ready
                 .max(issue[j] + edge_latency(model, producer, &slot.class))
                 .max(result_extra[j]);
+        }
+    }
+    ready
+}
+
+fn operands_ready_cycle_ooo(
+    model: &MachineModel,
+    base: &[ScoreboardInstr],
+    slot: &ScoreboardInstr,
+    issue: &[u64],
+    result_extra: &[u64],
+    reg_writer: &HashMap<(String, u16), usize>,
+    or_update_frontiers: &HashMap<(String, u16), Vec<usize>>,
+) -> u64 {
+    let mut ready = 0;
+    if is_zero_idiom(slot) {
+        return ready;
+    }
+    for register in &slot.uses {
+        if slot.or_updates.contains(register) {
+            continue;
+        }
+        let producers = reg_writer
+            .get(register)
+            .into_iter()
+            .chain(or_update_frontiers.get(register).into_iter().flatten());
+        for &producer in producers {
+            let producer_slot = &base[producer % base.len()];
+            ready = ready
+                .max(issue[producer] + edge_latency(model, producer_slot, &slot.class))
+                .max(result_extra[producer]);
         }
     }
     ready
@@ -1044,20 +1105,47 @@ fn run_ooo_compute(
 fn build_dependencies(base: &[ScoreboardInstr], n: usize) -> Vec<Vec<usize>> {
     let mut dependencies = vec![Vec::new(); n];
     let mut writers = HashMap::new();
+    let mut or_update_frontiers: HashMap<(String, u16), Vec<usize>> = HashMap::new();
     for i in 0..n {
         let slot = &base[i % base.len()];
         if !is_zero_idiom(slot) {
             for register in &slot.uses {
+                if slot.or_updates.contains(register) {
+                    continue;
+                }
                 if let Some(&producer) = writers.get(register) {
                     dependencies[i].push(producer);
                 }
+                if let Some(contributors) = or_update_frontiers.get(register) {
+                    dependencies[i].extend(contributors);
+                }
             }
         }
-        for register in &slot.defs {
-            writers.insert(register.clone(), i);
-        }
+        record_writers(slot, i, true, &mut writers, &mut or_update_frontiers);
     }
     dependencies
+}
+
+fn record_writers(
+    slot: &ScoreboardInstr,
+    index: usize,
+    track_or_updates: bool,
+    writers: &mut HashMap<(String, u16), usize>,
+    or_update_frontiers: &mut HashMap<(String, u16), Vec<usize>>,
+) {
+    for register in &slot.defs {
+        if track_or_updates && slot.or_updates.contains(register) {
+            or_update_frontiers
+                .entry(register.clone())
+                .or_default()
+                .push(index);
+        } else {
+            if track_or_updates {
+                or_update_frontiers.remove(register);
+            }
+            writers.insert(register.clone(), index);
+        }
+    }
 }
 
 /// Retire the in-order prefix of `active` that has completed by `cycle`,

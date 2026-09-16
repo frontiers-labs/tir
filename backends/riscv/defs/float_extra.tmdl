@@ -31,6 +31,7 @@ fn scalar_snan64(a) {
 }
 
 template FPBits32 for [F] {
+    schedule { units = [WriteFPAdd]; }
     param MNEMONIC: String;
     param FUNCT7: bits<7>;
     param FUNCT3: bits<3>;
@@ -130,6 +131,7 @@ instruction FMaxS for [F] : FPBits32 {
 }
 
 template FPInspect32 for [F] {
+    schedule { units = [WriteFPAdd]; }
     param MNEMONIC: String;
     param FUNCT3: bits<3>;
     operands { rd: GPR, fs1: FPR32, }
@@ -162,6 +164,7 @@ instruction FClassS for [F] : FPInspect32 {
 }
 
 template FPBits64 for [D] {
+    schedule { units = [WriteFPAdd]; }
     param MNEMONIC: String;
     param FUNCT7: bits<7>;
     param FUNCT3: bits<3>;
@@ -261,6 +264,7 @@ instruction FMaxD for [D] : FPBits64 {
 }
 
 template FPInspect64 for [D] {
+    schedule { units = [WriteFPAdd]; }
     param MNEMONIC: String;
     param FUNCT3: bits<3>;
     operands { rd: GPR, fs1: FPR64, }
@@ -299,6 +303,7 @@ instruction FMvXW for [F] : FPInspect32 {
 }
 
 template FPCompare32 for [F] {
+    schedule { units = [WriteFPAdd]; }
     param MNEMONIC: String;
     param FUNCT3: bits<3>;
     operands { rd: GPR, fs1: FPR32, fs2: FPR32, }
