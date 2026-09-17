@@ -85,6 +85,16 @@ impl TargetConfig {
                 }
             }
         }
+        for (feature, base, xlen) in [
+            (Feature::Zba64, Feature::Zba, 64),
+            (Feature::Zbb32, Feature::Zbb, 32),
+            (Feature::Zbb64, Feature::Zbb, 64),
+        ] {
+            config.features.retain(|enabled| *enabled != feature);
+            if config.xlen == xlen && config.features.contains(&base) {
+                config.features.push(feature);
+            }
+        }
         validate_features(&config.features)?;
         let base = config.base_feature();
         if !config.features.contains(&base) {

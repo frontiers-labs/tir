@@ -1,0 +1,222 @@
+isa Zbb requires [RV32I | RV64I] {}
+isa Zbb32 requires [RV32I, Zbb] {}
+isa Zbb64 requires [RV64I, Zbb] {}
+
+fn zbbRotateRight(value, amount, bits) {
+    (value >> amount) | (value << extract(0 - amount, log2Ceil(bits) - 1, 0))
+}
+
+fn zbbRotateLeft(value, amount, bits) {
+    (value << amount) | (value >> extract(0 - amount, log2Ceil(bits) - 1, 0))
+}
+
+instruction RotateRight for [Zbb] : ALUOp {
+    param MNEMONIC: String = "ror";
+    param FUNCT7: bits<7> = 0b0110000;
+    param FUNCT3: bits<3> = 0b101;
+    behavior { rd = zbbRotateRight(rs1, extract(rs2, log2Ceil(self.XLEN) - 1, 0), self.XLEN); }
+}
+
+instruction RotateLeft for [Zbb] : ALUOp {
+    param MNEMONIC: String = "rol";
+    param FUNCT7: bits<7> = 0b0110000;
+    param FUNCT3: bits<3> = 0b001;
+    behavior { rd = zbbRotateLeft(rs1, extract(rs2, log2Ceil(self.XLEN) - 1, 0), self.XLEN); }
+}
+
+instruction RotateRightImm for [Zbb] : ShiftImm {
+    param MNEMONIC: String = "rori";
+    param FUNCT6: bits<6> = 0b011000;
+    param FUNCT3: bits<3> = 0b101;
+    behavior { rd = zbbRotateRight(rs1, extract(imm, log2Ceil(self.XLEN) - 1, 0), self.XLEN); }
+}
+
+instruction RotateRightWord for [Zbb64] : ALUOpWord {
+    param MNEMONIC: String = "rorw";
+    param FUNCT7: bits<7> = 0b0110000;
+    param FUNCT3: bits<3> = 0b101;
+    behavior { rd = sext(zbbRotateRight(extract(rs1, 31, 0), extract(rs2, 4, 0), 32), self.XLEN); }
+}
+
+instruction RotateLeftWord for [Zbb64] : ALUOpWord {
+    param MNEMONIC: String = "rolw";
+    param FUNCT7: bits<7> = 0b0110000;
+    param FUNCT3: bits<3> = 0b001;
+    behavior { rd = sext(zbbRotateLeft(extract(rs1, 31, 0), extract(rs2, 4, 0), 32), self.XLEN); }
+}
+
+instruction RotateRightImmWord for [Zbb64] : ShiftImmWord64 {
+    param MNEMONIC: String = "roriw";
+    param FUNCT7: bits<7> = 0b0110000;
+    param FUNCT3: bits<3> = 0b101;
+    behavior { rd = sext(zbbRotateRight(extract(rs1, 31, 0), extract(imm, 4, 0), 32), self.XLEN); }
+}
+
+template ZbbUnary for [Zbb, Zbb32, Zbb64] {
+    param MNEMONIC: String;
+    param FUNCT12: bits<12>;
+    param FUNCT3: bits<3> = 0b001;
+    param OPCODE: bits<7> = 0b0010011;
+    operands { rd: GPR, rs1: GPR, }
+    encoding { FUNCT12, rs1, FUNCT3, rd, OPCODE, }
+    asm { "{self.MNEMONIC} {rd}, {rs1}" }
+    schedule { units = [WriteIALU]; }
+}
+
+fn zbbPopulation(value, bits) {
+    reduce(map(iota(bits, self.XLEN), |i| (zext(value, self.XLEN) >> i) & zext(0b1, self.XLEN)), |a, b| a + b)
+}
+
+fn zbbLeadingZeros(value, bits) {
+    reduce(map(iota(bits, self.XLEN), |i| zext((zext(value, self.XLEN) >> i) == 0, self.XLEN)), |a, b| a + b)
+}
+
+fn zbbTrailingZeros(value, bits) {
+    reduce(map(iota(bits, self.XLEN), |i| zext(extract(zext(value, self.XLEN) << i, bits - 1, 0) == 0, self.XLEN)), |a, b| a + b)
+}
+
+instruction CountLeadingZeros for [Zbb] : ZbbUnary {
+    param MNEMONIC: String = "clz";
+    param FUNCT12: bits<12> = 0b011000000000;
+    behavior { rd = zbbLeadingZeros(rs1, self.XLEN); }
+}
+
+instruction CountTrailingZeros for [Zbb] : ZbbUnary {
+    param MNEMONIC: String = "ctz";
+    param FUNCT12: bits<12> = 0b011000000001;
+    behavior { rd = zbbTrailingZeros(rs1, self.XLEN); }
+}
+
+instruction CountPopulation for [Zbb] : ZbbUnary {
+    param MNEMONIC: String = "cpop";
+    param FUNCT12: bits<12> = 0b011000000010;
+    behavior { rd = zbbPopulation(rs1, self.XLEN); }
+}
+
+instruction CountLeadingZerosWord for [Zbb64] : ZbbUnary {
+    param MNEMONIC: String = "clzw";
+    param OPCODE: bits<7> = 0b0011011;
+    param FUNCT12: bits<12> = 0b011000000000;
+    behavior { rd = zbbLeadingZeros(extract(rs1, 31, 0), 32); }
+}
+
+instruction CountTrailingZerosWord for [Zbb64] : ZbbUnary {
+    param MNEMONIC: String = "ctzw";
+    param OPCODE: bits<7> = 0b0011011;
+    param FUNCT12: bits<12> = 0b011000000001;
+    behavior { rd = zbbTrailingZeros(extract(rs1, 31, 0), 32); }
+}
+
+instruction CountPopulationWord for [Zbb64] : ZbbUnary {
+    param MNEMONIC: String = "cpopw";
+    param OPCODE: bits<7> = 0b0011011;
+    param FUNCT12: bits<12> = 0b011000000010;
+    behavior { rd = zbbPopulation(extract(rs1, 31, 0), 32); }
+}
+
+instruction SignExtendByte for [Zbb] : ZbbUnary {
+    param MNEMONIC: String = "sext.b";
+    param FUNCT12: bits<12> = 0b011000000100;
+    behavior { rd = sext(extract(rs1, 7, 0), self.XLEN); }
+}
+
+instruction SignExtendHalf for [Zbb] : ZbbUnary {
+    param MNEMONIC: String = "sext.h";
+    param FUNCT12: bits<12> = 0b011000000101;
+    behavior { rd = sext(extract(rs1, 15, 0), self.XLEN); }
+}
+
+template ZbbZeroExtendHalf for [Zbb32, Zbb64] : ZbbUnary {
+    param MNEMONIC: String = "zext.h";
+    param FUNCT12: bits<12> = 0b000010000000;
+    param FUNCT3: bits<3> = 0b100;
+}
+
+instruction ZeroExtendHalf32 for [Zbb32] : ZbbZeroExtendHalf {
+    param OPNAME: String = "zext.h.rv32";
+    param OPCODE: bits<7> = 0b0110011;
+    behavior { rd = zext(extract(rs1, 15, 0), self.XLEN); }
+}
+
+instruction ZeroExtendHalf64 for [Zbb64] : ZbbZeroExtendHalf {
+    param OPCODE: bits<7> = 0b0111011;
+    behavior { rd = zext(extract(rs1, 15, 0), self.XLEN); }
+}
+
+instruction OrCombineByte for [Zbb] : ZbbUnary {
+    param MNEMONIC: String = "orc.b";
+    param FUNCT12: bits<12> = 0b001010000111;
+    param FUNCT3: bits<3> = 0b101;
+    behavior { rd = concat(map(split(rs1, self.XLEN / 8), |byte| sext(byte != 0, 8))); }
+}
+
+template ZbbReverseBytes for [Zbb32, Zbb64] : ZbbUnary {
+    param MNEMONIC: String = "rev8";
+    param FUNCT3: bits<3> = 0b101;
+}
+
+fn zbbReverseBytes(value) {
+    reduce(map(iota(self.XLEN / 8, self.XLEN), |i|
+        ((value >> (i * 8)) & zext(0xff, self.XLEN)) << (zext(extract(self.XLEN - 8, 5, 0), self.XLEN) - (i * 8))), |a, b| a | b)
+}
+
+instruction ReverseBytes32 for [Zbb32] : ZbbReverseBytes {
+    param OPNAME: String = "rev8.rv32";
+    param FUNCT12: bits<12> = 0b011010011000;
+    behavior { rd = zbbReverseBytes(rs1); }
+}
+
+instruction ReverseBytes64 for [Zbb64] : ZbbReverseBytes {
+    param FUNCT12: bits<12> = 0b011010111000;
+    behavior { rd = zbbReverseBytes(rs1); }
+}
+
+template ZbbLogic for [Zbb] : ALUOp {
+    param FUNCT7: bits<7> = 0b0100000;
+}
+
+instruction AndNot for [Zbb] : ZbbLogic {
+    param MNEMONIC: String = "andn";
+    param FUNCT3: bits<3> = 0b111;
+    behavior { rd = rs1 & ~rs2; }
+}
+
+instruction OrNot for [Zbb] : ZbbLogic {
+    param MNEMONIC: String = "orn";
+    param FUNCT3: bits<3> = 0b110;
+    behavior { rd = rs1 | ~rs2; }
+}
+
+instruction Xnor for [Zbb] : ZbbLogic {
+    param MNEMONIC: String = "xnor";
+    param FUNCT3: bits<3> = 0b100;
+    behavior { rd = ~(rs1 ^ rs2); }
+}
+
+template ZbbMinMax for [Zbb] : ALUOp {
+    param FUNCT7: bits<7> = 0b0000101;
+}
+
+instruction Min for [Zbb] : ZbbMinMax {
+    param MNEMONIC: String = "min";
+    param FUNCT3: bits<3> = 0b100;
+    behavior { rd = if rs1 < rs2 { rs1 } else { rs2 }; }
+}
+
+instruction Max for [Zbb] : ZbbMinMax {
+    param MNEMONIC: String = "max";
+    param FUNCT3: bits<3> = 0b110;
+    behavior { rd = if rs1 > rs2 { rs1 } else { rs2 }; }
+}
+
+instruction MinUnsigned for [Zbb] : ZbbMinMax {
+    param MNEMONIC: String = "minu";
+    param FUNCT3: bits<3> = 0b101;
+    behavior { rd = if rs1 ~< rs2 { rs1 } else { rs2 }; }
+}
+
+instruction MaxUnsigned for [Zbb] : ZbbMinMax {
+    param MNEMONIC: String = "maxu";
+    param FUNCT3: bits<3> = 0b111;
+    behavior { rd = if rs1 ~> rs2 { rs1 } else { rs2 }; }
+}

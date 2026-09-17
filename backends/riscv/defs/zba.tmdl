@@ -1,0 +1,83 @@
+isa Zba requires [RV32I | RV64I] {}
+isa Zba64 requires [RV64I, Zba] {}
+
+instruction Shift1Add for [Zba] : ALUOp {
+    param MNEMONIC: String = "sh1add";
+    param FUNCT7: bits<7> = 0b0010000;
+    param FUNCT3: bits<3> = 0b010;
+
+    behavior {
+        rd = (rs1 << 1) + rs2;
+    }
+}
+
+instruction Shift2Add for [Zba] : ALUOp {
+    param MNEMONIC: String = "sh2add";
+    param FUNCT7: bits<7> = 0b0010000;
+    param FUNCT3: bits<3> = 0b100;
+
+    behavior {
+        rd = (rs1 << 2) + rs2;
+    }
+}
+
+instruction Shift3Add for [Zba] : ALUOp {
+    param MNEMONIC: String = "sh3add";
+    param FUNCT7: bits<7> = 0b0010000;
+    param FUNCT3: bits<3> = 0b110;
+
+    behavior {
+        rd = (rs1 << 3) + rs2;
+    }
+}
+
+instruction AddUnsignedWord for [Zba64] : ALUOpWord {
+    param MNEMONIC: String = "add.uw";
+    param FUNCT7: bits<7> = 0b0000100;
+    param FUNCT3: bits<3> = 0b000;
+
+    behavior {
+        rd = zext(extract(rs1, 31, 0), self.XLEN) + rs2;
+    }
+}
+
+instruction Shift1AddUnsignedWord for [Zba64] : ALUOpWord {
+    param MNEMONIC: String = "sh1add.uw";
+    param FUNCT7: bits<7> = 0b0010000;
+    param FUNCT3: bits<3> = 0b010;
+
+    behavior {
+        rd = (zext(extract(rs1, 31, 0), self.XLEN) << 1) + rs2;
+    }
+}
+
+instruction Shift2AddUnsignedWord for [Zba64] : ALUOpWord {
+    param MNEMONIC: String = "sh2add.uw";
+    param FUNCT7: bits<7> = 0b0010000;
+    param FUNCT3: bits<3> = 0b100;
+
+    behavior {
+        rd = (zext(extract(rs1, 31, 0), self.XLEN) << 2) + rs2;
+    }
+}
+
+instruction Shift3AddUnsignedWord for [Zba64] : ALUOpWord {
+    param MNEMONIC: String = "sh3add.uw";
+    param FUNCT7: bits<7> = 0b0010000;
+    param FUNCT3: bits<3> = 0b110;
+
+    behavior {
+        rd = (zext(extract(rs1, 31, 0), self.XLEN) << 3) + rs2;
+    }
+}
+
+instruction ShiftLeftLogicalImmUnsignedWord for [Zba64] : ShiftImm {
+    param MNEMONIC: String = "slli.uw";
+    param OPCODE: bits<7> = 0b0011011;
+    param FUNCT3: bits<3> = 0b001;
+    param FUNCT6: bits<6> = 0b000010;
+
+    behavior {
+        rd = zext(extract(rs1, 31, 0), self.XLEN) << extract(imm, 5, 0);
+    }
+}
