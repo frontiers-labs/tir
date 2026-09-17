@@ -144,14 +144,16 @@ impl TargetConfig {
             .iter()
             .copied()
             .filter(|f| match f {
-                Feature::RV32I | Feature::C32 | Feature::Zcf => xlen == 32,
+                Feature::RV32I | Feature::C32 | Feature::Zcf | Feature::Zbb32 => xlen == 32,
                 Feature::RV64I
                 | Feature::F64
                 | Feature::D64
                 | Feature::C64
                 | Feature::Zmmul64
                 | Feature::RVM64
-                | Feature::A64 => xlen == 64,
+                | Feature::A64
+                | Feature::Zba64
+                | Feature::Zbb64 => xlen == 64,
                 _ => true,
             })
             .collect();

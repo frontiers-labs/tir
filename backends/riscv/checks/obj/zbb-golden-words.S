@@ -18,6 +18,7 @@ f:
     sext.b x10, x11
     sext.h x10, x11
     orc.b x10, x11
+    zext.h x10, x11
     rev8 x10, x11
 
 # CHECK: f:
@@ -51,5 +52,7 @@ f:
 # CHECK-NEXT: [0x13, 0x95, 0x55, 0x60]
 # orc.b x10, x11 -> 0x2875D513
 # CHECK-NEXT: [0x13, 0xD5, 0x75, 0x28]
+# zext.h x10, x11 -> 0x0805C53B
+# CHECK-NEXT: [0x3B, 0xC5, 0x05, 0x08]
 # rev8 x10, x11 -> 0x6B85D513
 # CHECK-NEXT: [0x13, 0xD5, 0x85, 0x6B]

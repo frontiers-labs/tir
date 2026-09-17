@@ -419,6 +419,8 @@ fn march_selects_extension_features() {
             Feature::RVM,
             Feature::Zmmul64,
             Feature::RVM64,
+            Feature::Zba,
+            Feature::Zbb,
             Feature::F,
             Feature::D,
             Feature::D64,
@@ -431,10 +433,16 @@ fn march_selects_extension_features() {
             Feature::Zifencei,
             Feature::Zicsr,
             Feature::RVV,
-            Feature::VF
+            Feature::VF,
+            Feature::Zba64,
+            Feature::Zbb64
         ]
     );
-    assert!(!features("riscv32", None).contains(&Feature::RV64I));
+    let generic_rv32 = features("riscv32", None);
+    assert!(!generic_rv32.contains(&Feature::RV64I));
+    assert!(generic_rv32.contains(&Feature::Zbb32));
+    assert!(!generic_rv32.contains(&Feature::Zba64));
+    assert!(!generic_rv32.contains(&Feature::Zbb64));
 }
 
 #[test]
