@@ -66,7 +66,7 @@ instruction LoadFloatDouble for [FP] : LoadStoreFloatImmUnsignedD {
     param MNEMONIC: String = "ldr";
     param OPNAME: String = "load_float_double";
     param OPC: bits<2> = 0b01;
-    schedule { units = [WriteFPLoad]; }
+    schedule { units = [WriteFPVectorLoad]; }
 
     behavior {
         ft = load(rn + zext(imm, self.XLEN), 8, 0b0);
@@ -77,7 +77,7 @@ instruction LoadFloatSingle for [FP] : LoadStoreFloatImmUnsignedS {
     param MNEMONIC: String = "ldr";
     param OPNAME: String = "load_float_single";
     param OPC: bits<2> = 0b01;
-    schedule { units = [WriteFPLoad]; }
+    schedule { units = [WriteFPVectorLoad]; }
 
     behavior {
         ft = load(rn + zext(imm, self.XLEN), 4, 0b0);
@@ -716,7 +716,7 @@ instruction StoreWordRegOffsetScaled32 for [ARMv8A64] : LoadStoreRegOffsetWord {
 instruction LoadVector128 for [AdvSIMD] {
     param MNEMONIC: String = "ldr";
     param OPNAME: String = "load_vector_128";
-    schedule { units = [WriteVectorLoad]; }
+    schedule { units = [WriteFPVectorLoad]; }
 
     operands {
         vt: QPR,

@@ -7,13 +7,17 @@ tir sched --march=armv8.0-a --mcpu=cortex-a720 block.s
 tir sched --march=armv8.0-a --model=cortex-a720 block.s
 ```
 
-The table covers only operation classes supported by the available measurements.
-It deliberately omits reorder-buffer, queue, register-file, branch, and store
-parameters rather than borrowing values from another model.
-Branches, system instructions, high multiply, FP moves, unmeasured SIMD
-operations, and FP/vector loads use distinct generic classes with no A720
-resource binding.
-Their class-default latency is a compatibility fallback, not an A720 claim.
+The table binds measured operation classes to measured resources. It omits
+reorder-buffer, queue, and register-file parameters rather than borrowing values
+from another model. Classes without execution-resource measurements share a
+single conservative `Unmodeled` resource. That resource prevents the scheduler
+from treating fallback operations as free; it does not represent an A720
+hardware pipeline. Conservative fallback latencies do not undercut the closest
+measured operation class.
+
+Unmeasured SIMD operations, branches and system instructions, high multiply,
+FP moves and comparisons, FP/vector loads, and stores use that conservative
+route. Their fallback latency is not presented as an A720 measurement.
 
 ## Evidence
 

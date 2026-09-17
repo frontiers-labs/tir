@@ -645,7 +645,7 @@ tmpl_loadstore_float_scaled!(LoadStoreFloatImmUnsignedD, FPR64, 15, 3, 14, align
 tmpl_loadstore_float_scaled!(LoadStoreFloatImmUnsignedS, FPR32, 14, 2, 13, align = 4, size = 0b10)
 
 template BranchImm for [ARMv8A64] {
-    schedule { units = [WriteBranch]; }
+    schedule { units = [WriteControl]; }
     param MNEMONIC: String;
 
     operands {
@@ -663,7 +663,7 @@ template BranchImm for [ARMv8A64] {
 }
 
 template BranchLinkImm for [ARMv8A64] {
-    schedule { units = [WriteBranch]; }
+    schedule { units = [WriteControl]; }
     param MNEMONIC: String;
 
     operands {
@@ -681,7 +681,7 @@ template BranchLinkImm for [ARMv8A64] {
 }
 
 template BranchReg for [ARMv8A64] {
-    schedule { units = [WriteBranch]; }
+    schedule { units = [WriteControl]; }
     param MNEMONIC: String;
     param OPCODE: bits<4>;
 
@@ -704,7 +704,7 @@ template BranchReg for [ARMv8A64] {
 }
 
 template CondBranchImm for [ARMv8A64] {
-    schedule { units = [WriteBranch]; }
+    schedule { units = [WriteControl]; }
     param MNEMONIC: String;
     param COND: bits<4>;
 
@@ -1023,7 +1023,7 @@ template CondSet for [ARMv8A64] {
 macro tmpl_compare_branch {
     ( $name:ident, $cls:ident, sf = $sf:literal ) => {
         template $name for [ARMv8A64] {
-            schedule { units = [WriteBranch]; }
+            schedule { units = [WriteControl]; }
             param MNEMONIC: String;
             param SF: bits<1> = $sf;
             param OP: bits<1>;
@@ -1054,7 +1054,7 @@ tmpl_compare_branch!(CompareBranchWord, GPR32, sf = 0b0)
 // Test-bit-and-branch (`tbz`/`tbnz`). The 6-bit bit number is stored split as
 // b5:b40; the immediate holds the pc-relative word offset.
 template TestBitBranch for [ARMv8A64] {
-    schedule { units = [WriteBranch]; }
+    schedule { units = [WriteControl]; }
     param MNEMONIC: String;
     param OP: bits<1>;
 
@@ -1079,7 +1079,7 @@ template TestBitBranch for [ARMv8A64] {
 }
 
 template TestBitBranchWord for [ARMv8A64] {
-    schedule { units = [WriteBranch]; }
+    schedule { units = [WriteControl]; }
     param MNEMONIC: String;
     param OP: bits<1>;
 

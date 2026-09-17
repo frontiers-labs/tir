@@ -1,6 +1,6 @@
 // Partial Cortex-A720 model derived from instruction throughput, dependency,
-// operand-sweep, and cache-latency measurements. Unmeasured parameters remain
-// unspecified.
+// operand-sweep, and cache-latency measurements. Classes without resource data
+// share a conservative fallback rather than claiming a hardware pipeline.
 machine CortexA720 ("cortex-a720") for [ARMv8A64] {
     issue_width = 5;
 
@@ -12,22 +12,31 @@ machine CortexA720 ("cortex-a720") for [ARMv8A64] {
     unit FP1 { count = 1; }
     unit IntDivide { count = 1; }
     unit FloatDivide { count = 1; }
-    unit FloatConvert { count = 1; }
     unit Load { count = 2; }
+    // Conservative capacity for classes without direct execution-resource data.
+    unit Unmodeled { count = 1; }
 
     group Integer = Int0 | Int1 | Int2 | Int3;
     group IntegerMultiply = Int0 | Int1;
     group Float = FP0 | FP1;
 
+    bind WriteIALU { latency = 2; uop(Unmodeled); }
     bind WriteScalarIALU { latency = 1; uop(Integer); }
     bind WriteIMul { latency = 2; uop(IntegerMultiply); }
+    bind WriteIMulHigh { latency = 3; uop(Unmodeled); }
     bind WriteIDiv { latency = 20; uop(Integer & IntDivide<6>); }
     bind WriteIDivWord { latency = 12; uop(Integer & IntDivide<6>); }
     bind WriteFPAdd { latency = 2; uop(Float); }
     bind WriteFPMul { latency = 3; uop(Float); }
     bind WriteFPDivSingle { latency = 8; uop(Float & FloatDivide); }
     bind WriteFPDivDouble { latency = 13; uop(Float & FloatDivide); }
-    bind WriteFPConvert { latency = 3; uop(Float & FloatConvert); }
+    bind WriteFPConvert { latency = 3; uop(Float); }
+    bind WriteFPMove { latency = 2; uop(Unmodeled); }
+    bind WriteFPCompare { latency = 2; uop(Unmodeled); }
+    bind WriteControl { latency = 2; uop(Unmodeled); }
     bind WriteVectorALU { latency = 2; uop(Float); }
+    bind WriteVectorMul { latency = 3; uop(Unmodeled); }
     bind WriteLoad { latency = 4; uop(Load); }
+    bind WriteFPVectorLoad { latency = 4; uop(Unmodeled); }
+    bind WriteStore { latency = 2; uop(Unmodeled); }
 }

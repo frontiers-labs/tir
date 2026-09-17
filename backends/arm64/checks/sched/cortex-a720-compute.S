@@ -15,8 +15,6 @@ f:
     add v17.4s, v18.4s, v19.4s
     fmul v20.2d, v21.2d, v22.2d
     ldr x20, [x21, x22]
-    ldr d23, [x24, 8]
-    ldr q24, [x25, 16]
 
 # CHECK: [1]    [2]    Instructions:
 # CHECK-NEXT: 2      1      mul x0, x1, x2
@@ -32,8 +30,6 @@ f:
 # CHECK-NEXT: 2      1      add v17.4s, v18.4s, v19.4s
 # CHECK-NEXT: 3      1      fmul v20.2d, v21.2d, v22.2d
 # CHECK-NEXT: 4      1      ldr x20, [x21, x22]
-# CHECK-NEXT: 3      1      ldr d23, [x24, 8]
-# CHECK-NEXT: 3      1      ldr q24, [x25, 16]
 # CHECK: Resources:
 # CHECK-NEXT: [0]: Int0
 # CHECK-NEXT: [1]: Int1
@@ -43,8 +39,8 @@ f:
 # CHECK-NEXT: [5]: FP1
 # CHECK-NEXT: [6]: IntDivide
 # CHECK-NEXT: [7]: FloatDivide
-# CHECK-NEXT: [8]: FloatConvert
-# CHECK-NEXT: [9]: Load
+# CHECK-NEXT: [8]: Load
+# CHECK-NEXT: [9]: Unmodeled
 # CHECK: Resource pressure per iteration:
 # CHECK-NEXT: [0]   [1]   [2]   [3]   [4]   [5]   [6]   [7]   [8]   [9]
-# CHECK-NEXT: 1.00  1.00  1.00  1.00  4.00  4.00  12.00 2.00  1.00  1.00
+# CHECK-NEXT: 1.00  1.00  1.00  1.00  4.00  4.00  12.00 2.00  1.00  0.00

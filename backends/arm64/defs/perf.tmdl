@@ -18,13 +18,12 @@ sched_class WriteFPDivSingle { latency = 1; }
 sched_class WriteFPDivDouble { latency = 1; }
 sched_class WriteFPConvert { latency = 1; }
 sched_class WriteFPMove { latency = 1; }
-sched_class WriteBranch { latency = 1; }
-sched_class WriteSystem { latency = 1; }
+sched_class WriteFPCompare { latency = 1; }
+sched_class WriteControl { latency = 1; }
 sched_class WriteVectorALU { latency = 1; }
 sched_class WriteVectorMul { latency = 3; }
 sched_class WriteLoad { latency = 3; }
-sched_class WriteFPLoad { latency = 3; }
-sched_class WriteVectorLoad { latency = 3; }
+sched_class WriteFPVectorLoad { latency = 3; }
 sched_class WriteStore { latency = 1; }
 
 // Generic in-order core: a single narrow pipeline, hardware-interlocked, paired
@@ -59,13 +58,12 @@ machine InOrderCore ("arm64-in-order") for [ARMv8A64] {
     bind WriteFPDivDouble { reads = ID; writes = EX; uses = [ALU]; }
     bind WriteFPConvert { reads = ID; writes = EX; uses = [ALU]; }
     bind WriteFPMove { reads = ID; writes = EX; uses = [ALU]; }
-    bind WriteBranch { reads = ID; writes = EX; uses = [ALU]; }
-    bind WriteSystem { reads = ID; writes = EX; uses = [ALU]; }
+    bind WriteFPCompare { reads = ID; writes = EX; uses = [ALU]; }
+    bind WriteControl { reads = ID; writes = EX; uses = [ALU]; }
     bind WriteVectorALU { reads = ID; writes = EX; uses = [ALU]; }
     bind WriteVectorMul { reads = ID; writes = MEM; uses = [ALU]; }
     bind WriteLoad { reads = ID; writes = MEM; uses = [LSU]; }
-    bind WriteFPLoad { reads = ID; writes = MEM; uses = [LSU]; }
-    bind WriteVectorLoad { reads = ID; writes = MEM; uses = [LSU]; }
+    bind WriteFPVectorLoad { reads = ID; writes = MEM; uses = [LSU]; }
     bind WriteStore { reads = ID; writes = MEM; uses = [LSU]; }
 
     forward ALU => ALU { latency = 0; }
@@ -104,12 +102,11 @@ machine OutOfOrderCore ("arm64-ooo") for [ARMv8A64] {
     bind WriteFPDivDouble { latency = 1; uses = [ALU]; }
     bind WriteFPConvert { latency = 1; uses = [ALU]; }
     bind WriteFPMove { latency = 1; uses = [ALU]; }
-    bind WriteBranch { latency = 1; uses = [ALU]; }
-    bind WriteSystem { latency = 1; uses = [ALU]; }
+    bind WriteFPCompare { latency = 1; uses = [ALU]; }
+    bind WriteControl { latency = 1; uses = [ALU]; }
     bind WriteVectorALU { latency = 1; uses = [ALU]; }
     bind WriteVectorMul { latency = 3; uses = [ALU]; }
     bind WriteLoad { latency = 4; uses = [LSU]; }
-    bind WriteFPLoad { latency = 4; uses = [LSU]; }
-    bind WriteVectorLoad { latency = 4; uses = [LSU]; }
+    bind WriteFPVectorLoad { latency = 4; uses = [LSU]; }
     bind WriteStore { latency = 1; uses = [LSU]; }
 }

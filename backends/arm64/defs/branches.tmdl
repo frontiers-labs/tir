@@ -297,7 +297,7 @@ instruction TestBitBranchNonZeroWord for [ARMv8A64] : TestBitBranchWord {
 // exception handler for syscall emulation. Linux ignores imm16 and takes the
 // syscall number from x8, so the behavior just traps.
 instruction Supervisor for [ARMv8A64] {
-    schedule { units = [WriteSystem]; }
+    schedule { units = [WriteControl]; }
     param MNEMONIC: String = "svc";
 
     operands {
@@ -323,7 +323,7 @@ instruction Supervisor for [ARMv8A64] {
 // NOP hint (`d503201f`): no architectural effect. The empty behavior touches no
 // register and leaves PC to auto-advance.
 instruction NoOperation for [ARMv8A64] {
-    schedule { units = [WriteSystem]; }
+    schedule { units = [WriteControl]; }
     param MNEMONIC: String = "nop";
 
     operands {

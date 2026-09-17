@@ -1362,6 +1362,7 @@ macro instr_fcmp {
         instruction $name for [FP] {
             param MNEMONIC: String = "fcmp";
             param OPNAME: String = $opname;
+            schedule { units = [WriteFPCompare]; }
 
             operands {
                 fa: $cls,
