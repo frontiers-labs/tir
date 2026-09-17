@@ -528,6 +528,7 @@ mod isa {
     const R_X86_64_PC32: u32 = 2;
     const R_X86_64_PLT32: u32 = 4;
     const R_X86_64_64: u32 = 1;
+    const R_X86_64_PC8: u32 = 15;
 
     /// The mnemonic an op name encodes. The base-ISA (`_legacy`) forms of the
     /// pc-relative branches share their 64-bit counterpart's encoding, so they
@@ -564,16 +565,23 @@ mod isa {
                 }),
                 // `jcc rel32` (0F 8x + disp32): the disp32 follows the 2-byte opcode.
                 "je" | "jne" | "jl" | "jge" | "jb" | "jae" | "jle" | "jg" | "jbe" | "ja" | "js"
-                | "jns" | "jo" | "jno" => Some(RelocKind {
+                | "jns" | "jo" | "jno" | "jp" | "jnp" => Some(RelocKind {
                     r_type: R_X86_64_PC32,
                     addend: -4,
                     field_offset: 2,
                 }),
+                // Counted transfers take rel8 (`loop [e]xx`, `jrcxz rel8` at 0xE0..0xE3).
+                "loop" | "loope" | "loopne" | "jrcxz" => Some(RelocKind {
+                    r_type: R_X86_64_PC8,
+                    addend: -1,
+                    field_offset: 1,
+                }),
                 _ => None,
             },
             pc_rel_scale: |_| 0,
-            // rel32 displacements are measured from the end of the instruction
-            // (RIP points past the branch when the displacement applies).
+            // rel32/rel8 displacements are measured from the end of the
+            // instruction (RIP points past the branch when the displacement
+            // applies).
             pc_rel_from_end: |op| {
                 matches!(
                     branch_mnemonic(op),
@@ -592,6 +600,12 @@ mod isa {
                         | "jns"
                         | "jo"
                         | "jno"
+                        | "jp"
+                        | "jnp"
+                        | "loop"
+                        | "loope"
+                        | "loopne"
+                        | "jrcxz"
                         | "call"
                 )
             },

@@ -125,6 +125,19 @@ shift_cl!(RegShiftCl,
         EFLAGS::of = if c == zext(0b0, 6) { EFLAGS::of } else { extract(res, self.XLEN - 1, self.XLEN - 1) ^ carry };
         dst = res;
     }),
+    // The `sal` mnemonic is a pure alias; without a mnemonic-alias mechanism
+    // the same shift behavior is spelled again under the sal name.
+    (SalCl, "sal_cl", "sal", 0b100, {
+        let c = extract(GPR::rcx, 5, 0);
+        let res = dst << c;
+        let carry = extract(dst << (c - zext(0b1, 6)), self.XLEN - 1, self.XLEN - 1);
+        let zero = if res == zext(0b0, self.XLEN) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::cf = if c == zext(0b0, 6) { EFLAGS::cf } else { carry };
+        EFLAGS::zf = if c == zext(0b0, 6) { EFLAGS::zf } else { zero };
+        EFLAGS::sf = if c == zext(0b0, 6) { EFLAGS::sf } else { extract(res, self.XLEN - 1, self.XLEN - 1) };
+        EFLAGS::of = if c == zext(0b0, 6) { EFLAGS::of } else { extract(res, self.XLEN - 1, self.XLEN - 1) ^ carry };
+        dst = res;
+    }),
     (ShrCl, "shr_cl", "shr", 0b101, {
         let c = extract(GPR::rcx, 5, 0);
         let res = dst >> c;
@@ -149,6 +162,18 @@ shift_cl!(RegShiftCl,
 
 shift_imm!(RegShift,
     (ShlImm, "shl", 0b100, {
+        let c = extract(imm, 5, 0);
+        let res = dst << c;
+        let carry = extract(dst << (c - zext(0b1, 6)), self.XLEN - 1, self.XLEN - 1);
+        let zero = if res == zext(0b0, self.XLEN) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::cf = if c == zext(0b0, 6) { EFLAGS::cf } else { carry };
+        EFLAGS::zf = if c == zext(0b0, 6) { EFLAGS::zf } else { zero };
+        EFLAGS::sf = if c == zext(0b0, 6) { EFLAGS::sf } else { extract(res, self.XLEN - 1, self.XLEN - 1) };
+        EFLAGS::of = if c == zext(0b0, 6) { EFLAGS::of } else { extract(res, self.XLEN - 1, self.XLEN - 1) ^ carry };
+        dst = res;
+    }),
+    // Pure `sal` alias, same duplication reason as the cl form above.
+    (SalImm, "sal", 0b100, {
         let c = extract(imm, 5, 0);
         let res = dst << c;
         let carry = extract(dst << (c - zext(0b1, 6)), self.XLEN - 1, self.XLEN - 1);
@@ -185,6 +210,15 @@ shift_imm!(RegShift,
 // count==0 preservation branch, and the count==1 overflow rules apply.
 shift_imm!("One", "_one", RegShiftOne,
     (Shl, "shl", 0b100, {
+        let res = dst << zext(0b1, self.XLEN);
+        let carry = extract(dst, self.XLEN - 1, self.XLEN - 1);
+        EFLAGS::cf = carry;
+        EFLAGS::zf = if res == zext(0b0, self.XLEN) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::sf = extract(res, self.XLEN - 1, self.XLEN - 1);
+        EFLAGS::of = extract(res, self.XLEN - 1, self.XLEN - 1) ^ carry;
+        dst = res;
+    }),
+    (Sal, "sal", 0b100, {
         let res = dst << zext(0b1, self.XLEN);
         let carry = extract(dst, self.XLEN - 1, self.XLEN - 1);
         EFLAGS::cf = carry;
@@ -268,9 +302,128 @@ jcc_ops!(
     (JumpAboveEq,   "jae", 0x83, { EFLAGS::cf == zext(0b0, 1) })
 )
 
+// Counted control transfers: `loop` decrements rcx (the 16/32-bit address-size
+// counter views are not modeled) and branches on the counter; `jrcxz` branches
+// without touching it. Both are rel32-less: rel8 from a 2-byte instruction.
+
+instruction Loop for [X86_64] {
+    param MNEMONIC: String = "loop";
+
+    schedule { units = [WriteJump]; }
+
+    operands {
+        imm: bits<8>,
+    }
+
+    encoding {
+        0xE2,
+        imm,
+    }
+
+    asm {
+        "{self.MNEMONIC} {imm}"
+    }
+
+    behavior {
+        let counter = extract(GPR::rcx - zext(0b1, self.XLEN), self.XLEN - 1, 0);
+        GPR::rcx = counter;
+        if counter != zext(0b0, self.XLEN) {
+            PC::pc = PC::pc + sext(imm, self.XLEN) + zext(0b10, self.XLEN);
+        }
+    }
+}
+
+instruction LoopEq for [X86_64] {
+    param OPNAME: String = "loope";
+    param MNEMONIC: String = "loope";
+
+    schedule { units = [WriteJump]; }
+
+    operands {
+        imm: bits<8>,
+    }
+
+    encoding {
+        0xE1,
+        imm,
+    }
+
+    asm {
+        "{self.MNEMONIC} {imm}"
+    }
+
+    behavior {
+        let counter = extract(GPR::rcx - zext(0b1, self.XLEN), self.XLEN - 1, 0);
+        GPR::rcx = counter;
+        if (counter != zext(0b0, self.XLEN)) & (EFLAGS::zf == zext(0b1, 1)) {
+            PC::pc = PC::pc + sext(imm, self.XLEN) + zext(0b10, self.XLEN);
+        }
+    }
+}
+
+instruction LoopNotEq for [X86_64] {
+    param OPNAME: String = "loopne";
+    param MNEMONIC: String = "loopne";
+
+    schedule { units = [WriteJump]; }
+
+    operands {
+        imm: bits<8>,
+    }
+
+    encoding {
+        0xE0,
+        imm,
+    }
+
+    asm {
+        "{self.MNEMONIC} {imm}"
+    }
+
+    behavior {
+        let counter = extract(GPR::rcx - zext(0b1, self.XLEN), self.XLEN - 1, 0);
+        GPR::rcx = counter;
+        if (counter != zext(0b0, self.XLEN)) & (EFLAGS::zf == zext(0b0, 1)) {
+            PC::pc = PC::pc + sext(imm, self.XLEN) + zext(0b10, self.XLEN);
+        }
+    }
+}
+
+instruction Jrcxz for [X86_64] {
+    param MNEMONIC: String = "jrcxz";
+
+    schedule { units = [WriteJump]; }
+
+    operands {
+        imm: bits<8>,
+    }
+
+    encoding {
+        0xE3,
+        imm,
+    }
+
+    asm {
+        "{self.MNEMONIC} {imm}"
+    }
+
+    behavior {
+        if GPR::rcx == zext(0b0, self.XLEN) {
+            PC::pc = PC::pc + sext(imm, self.XLEN) + zext(0b10, self.XLEN);
+        }
+    }
+}
+
+// Encoding-only: 0x90 does nothing and everything passes through it.
+instruction Nop for [X86_64] {
+    param MNEMONIC: String = "nop";
+    encoding { 0x90 }
+    asm { "{self.MNEMONIC}" }
+    behavior {}
+}
+
 instruction Call for [X86_64] {
     param MNEMONIC: String = "call";
-
     operands {
         imm: bits<32>,
     }

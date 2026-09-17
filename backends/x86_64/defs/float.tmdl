@@ -821,6 +821,274 @@ instruction Movaps for [SSE] {
     }
 }
 
+template PackedMove for [SSE2] {
+    param MNEMONIC: String;
+    param PREFIX: bits<8>;
+    param OPCODE: bits<8>;
+
+    schedule { units = [WriteFPMove]; }
+    operands { dst: XMM128, src: XMM128, }
+    encoding {
+        PREFIX,
+        rex(0b0, dst, src, 0b0),
+        0x0F,
+        OPCODE,
+        modrm_reg(dst, src),
+    }
+    asm { "{self.MNEMONIC} {dst}, {src}" }
+}
+
+instruction Movapd for [SSE2] : PackedMove {
+    param MNEMONIC: String = "movapd";
+    param PREFIX: bits<8> = 0x66;
+    param OPCODE: bits<8> = 0x28;
+    behavior { dst = src; }
+}
+
+instruction Movupd for [SSE2] : PackedMove {
+    param MNEMONIC: String = "movupd";
+    param PREFIX: bits<8> = 0x66;
+    param OPCODE: bits<8> = 0x10;
+    behavior { dst = src; }
+}
+
+instruction Movdqu for [SSE2] : PackedMove {
+    param MNEMONIC: String = "movdqu";
+    param PREFIX: bits<8> = 0xF3;
+    param OPCODE: bits<8> = 0x6F;
+    behavior { dst = src; }
+}
+
+template PackedLoadDisp for [SSE] {
+    param MNEMONIC: String;
+    param PREFIX: bits<8>;
+    param OPCODE: bits<8>;
+
+    operands { dst: XMM128, base: GPR, imm: bits<32>, }
+    encoding {
+        if PREFIX != 0x00 { PREFIX } else { () },
+        rex(0b0, dst, base, 0b0),
+        0x0F,
+        OPCODE,
+        modrm_disp(dst, base, imm),
+    }
+    asm { "{self.MNEMONIC} {dst}, [{base} + {imm}]" }
+}
+
+template PackedStoreDisp for [SSE] {
+    param MNEMONIC: String;
+    param PREFIX: bits<8>;
+    param OPCODE: bits<8>;
+
+    operands { base: GPR, imm: bits<32>, src: XMM128, }
+    encoding {
+        if PREFIX != 0x00 { PREFIX } else { () },
+        rex(0b0, src, base, 0b0),
+        0x0F,
+        OPCODE,
+        modrm_disp(src, base, imm),
+    }
+    asm { "{self.MNEMONIC} [{base} + {imm}], {src}" }
+}
+
+instruction MovupdLoadDisp for [SSE2] : PackedLoadDisp {
+    param OPNAME: String = "movupd_load_disp";
+    param MNEMONIC: String = "movupd";
+    param PREFIX: bits<8> = 0x66;
+    param OPCODE: bits<8> = 0x10;
+    behavior { dst = load(base + sext(imm, self.XLEN), 16, 0b0); }
+}
+
+instruction MovdquLoadDisp for [SSE2] : PackedLoadDisp {
+    param OPNAME: String = "movdqu_load_disp";
+    param MNEMONIC: String = "movdqu";
+    param PREFIX: bits<8> = 0xF3;
+    param OPCODE: bits<8> = 0x6F;
+    behavior { dst = load(base + sext(imm, self.XLEN), 16, 0b0); }
+}
+
+instruction MovupdStoreDisp for [SSE2] : PackedStoreDisp {
+    param OPNAME: String = "movupd_store_disp";
+    param MNEMONIC: String = "movupd";
+    param PREFIX: bits<8> = 0x66;
+    param OPCODE: bits<8> = 0x11;
+    behavior { store(base + sext(imm, self.XLEN), 16, src); }
+}
+
+instruction MovdquStoreDisp for [SSE2] : PackedStoreDisp {
+    param OPNAME: String = "movdqu_store_disp";
+    param MNEMONIC: String = "movdqu";
+    param PREFIX: bits<8> = 0xF3;
+    param OPCODE: bits<8> = 0x7F;
+    behavior { store(base + sext(imm, self.XLEN), 16, src); }
+}
+
+instruction MovlpsLoadDisp for [SSE] : PackedLoadDisp {
+    param OPNAME: String = "movlps_load_disp";
+    param MNEMONIC: String = "movlps";
+    param PREFIX: bits<8> = 0x00;
+    param OPCODE: bits<8> = 0x12;
+    behavior {
+        let value = load(base + sext(imm, self.XLEN), 8, 0b0);
+        dst = concat(map(zip(split(dst, 2, 64), iota(2, 64)),
+            |lane, index| if index == 0 { value } else { lane }));
+    }
+}
+
+instruction MovlpdLoadDisp for [SSE2] : PackedLoadDisp {
+    param OPNAME: String = "movlpd_load_disp";
+    param MNEMONIC: String = "movlpd";
+    param PREFIX: bits<8> = 0x66;
+    param OPCODE: bits<8> = 0x12;
+    behavior {
+        let value = load(base + sext(imm, self.XLEN), 8, 0b0);
+        dst = concat(map(zip(split(dst, 2, 64), iota(2, 64)),
+            |lane, index| if index == 0 { value } else { lane }));
+    }
+}
+
+instruction MovhpsLoadDisp for [SSE] : PackedLoadDisp {
+    param OPNAME: String = "movhps_load_disp";
+    param MNEMONIC: String = "movhps";
+    param PREFIX: bits<8> = 0x00;
+    param OPCODE: bits<8> = 0x16;
+    behavior {
+        let value = load(base + sext(imm, self.XLEN), 8, 0b0);
+        dst = concat(map(zip(split(dst, 2, 64), iota(2, 64)),
+            |lane, index| if index == 1 { value } else { lane }));
+    }
+}
+
+instruction MovhpdLoadDisp for [SSE2] : PackedLoadDisp {
+    param OPNAME: String = "movhpd_load_disp";
+    param MNEMONIC: String = "movhpd";
+    param PREFIX: bits<8> = 0x66;
+    param OPCODE: bits<8> = 0x16;
+    behavior {
+        let value = load(base + sext(imm, self.XLEN), 8, 0b0);
+        dst = concat(map(zip(split(dst, 2, 64), iota(2, 64)),
+            |lane, index| if index == 1 { value } else { lane }));
+    }
+}
+
+instruction MovhpsStoreDisp for [SSE] : PackedStoreDisp {
+    param OPNAME: String = "movhps_store_disp";
+    param MNEMONIC: String = "movhps";
+    param PREFIX: bits<8> = 0x00;
+    param OPCODE: bits<8> = 0x17;
+    behavior { store(base + sext(imm, self.XLEN), 8, pick_lane2(src, 0b1)); }
+}
+
+instruction MovhpdStoreDisp for [SSE2] : PackedStoreDisp {
+    param OPNAME: String = "movhpd_store_disp";
+    param MNEMONIC: String = "movhpd";
+    param PREFIX: bits<8> = 0x66;
+    param OPCODE: bits<8> = 0x17;
+    behavior { store(base + sext(imm, self.XLEN), 8, pick_lane2(src, 0b1)); }
+}
+
+instruction MovlpsStoreDisp for [SSE] : PackedStoreDisp {
+    param OPNAME: String = "movlps_store_disp";
+    param MNEMONIC: String = "movlps";
+    param PREFIX: bits<8> = 0x00;
+    param OPCODE: bits<8> = 0x13;
+    behavior { store(base + sext(imm, self.XLEN), 8, concat(split(src, 1, 64))); }
+}
+
+instruction MovlpdStoreDisp for [SSE2] : PackedStoreDisp {
+    param OPNAME: String = "movlpd_store_disp";
+    param MNEMONIC: String = "movlpd";
+    param PREFIX: bits<8> = 0x66;
+    param OPCODE: bits<8> = 0x13;
+    behavior { store(base + sext(imm, self.XLEN), 8, concat(split(src, 1, 64))); }
+}
+
+fn pick_lane2(value, sel) {
+    reduce(map(zip(split(value, 2, 64), iota(2, 1)),
+        |lane, index| if index == sel { lane } else { zext(0b0, 64) }),
+        |acc, lane| acc | lane)
+}
+
+fn pick_lane4(value, sel) {
+    reduce(map(zip(split(value, 4, 32), iota(4, 2)),
+        |lane, index| if index == sel { lane } else { zext(0b0, 32) }),
+        |acc, lane| acc | lane)
+}
+
+// Shuffles: each result lane comes from an element of dst (the in-place
+// operand) or src, chosen by the index bits of the immediate.
+
+instruction Shufps for [SSE] {
+    param MNEMONIC: String = "shufps";
+
+    schedule { units = [WriteFPShuffle]; }
+
+    operands {
+        dst: XMM128,
+        src: XMM128,
+        imm: bits<8>,
+    }
+
+    encoding {
+        rex(0b0, dst, src, 0b0),
+        0x0F,
+        0xC6,
+        modrm_reg(dst, src),
+        imm,
+    }
+
+    asm {
+        "{self.MNEMONIC} {dst}, {src}, {imm}"
+    }
+
+    behavior {
+        dst = concat(map(zip(split(dst, 4, 32), iota(4, 32)),
+            |lane, index| if index == zext(0b00, 32) {
+                pick_lane4(dst, extract(imm, 1, 0))
+            } else if index == zext(0b01, 32) {
+                pick_lane4(dst, extract(imm, 3, 2))
+            } else if index == zext(0b10, 32) {
+                pick_lane4(src, extract(imm, 5, 4))
+            } else {
+                pick_lane4(src, extract(imm, 7, 6))
+            }));
+    }
+}
+
+instruction Shufpd for [SSE2] {
+    param MNEMONIC: String = "shufpd";
+
+    schedule { units = [WriteFPShuffle]; }
+
+    operands {
+        dst: XMM128,
+        src: XMM128,
+        imm: bits<8>,
+    }
+
+    encoding {
+        0x66,
+        rex(0b0, dst, src, 0b0),
+        0x0F,
+        0xC6,
+        modrm_reg(dst, src),
+        imm,
+    }
+
+    asm {
+        "{self.MNEMONIC} {dst}, {src}, {imm}"
+    }
+
+    behavior {
+        dst = concat(map(zip(split(dst, 2, 64), iota(2, 64)),
+            |lane, index| if index == zext(0b00, 64) {
+                pick_lane2(dst, extract(imm, 0, 0))
+            } else {
+                pick_lane2(src, extract(imm, 1, 1))
+            }));
+    }
+}
+
 instruction MovssLoadDisp for [X86_64] {
     param OPNAME: String = "movss_load_disp";
     param MNEMONIC: String = "movss";

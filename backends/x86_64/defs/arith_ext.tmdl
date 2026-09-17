@@ -1,5 +1,98 @@
 //! Extended scalar integer arithmetic, shifts, multiplication, and widening moves.
 
+// Carry-and-borrow forms need a separate `pre_wrap` case when the source is
+// all ones and the carry input is set. The wrapped addend alone has already
+// produced the instruction's unsigned carry or borrow.
+instruction Adc for [X86_64] : RegReg {
+    param MNEMONIC: String = "adc";
+    param OPCODE: bits<8> = 0x11;
+
+    schedule { units = [WriteIALU3B]; }
+
+    behavior {
+        let carry = EFLAGS::cf;
+        let pre = src + zext(carry, self.XLEN);
+        let pre_wrap = (carry == zext(0b1, 1)) & (pre == zext(0b0, self.XLEN));
+        let value = dst + pre;
+        EFLAGS::cf = if pre_wrap { zext(0b1, 1) }
+            else if value ~< dst { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::of = extract(~(dst ^ src) & (dst ^ value), self.XLEN - 1, self.XLEN - 1);
+        EFLAGS::af = extract(dst ^ src ^ value, 4, 4);
+        dst = value;
+        EFLAGS::zf = if value == zext(0b0, self.XLEN) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::sf = extract(value, self.XLEN - 1, self.XLEN - 1);
+    }
+}
+
+instruction AdcImm for [X86_64] : RegImm {
+    param OPNAME: String = "adc_imm";
+    param MNEMONIC: String = "adc";
+    param OPCODE: bits<8> = 0x81;
+    param EXT: bits<3> = 0b010;
+
+    schedule { units = [WriteIALU]; }
+
+    behavior {
+        let addend = sext(imm, self.XLEN);
+        let carry = EFLAGS::cf;
+        let pre = addend + zext(carry, self.XLEN);
+        let pre_wrap = (carry == zext(0b1, 1)) & (pre == zext(0b0, self.XLEN));
+        let value = dst + pre;
+        EFLAGS::cf = if pre_wrap { zext(0b1, 1) }
+            else if value ~< dst { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::of = extract(~(dst ^ addend) & (dst ^ value), self.XLEN - 1, self.XLEN - 1);
+        EFLAGS::af = extract(dst ^ addend ^ value, 4, 4);
+        dst = value;
+        EFLAGS::zf = if value == zext(0b0, self.XLEN) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::sf = extract(value, self.XLEN - 1, self.XLEN - 1);
+    }
+}
+
+instruction Sbb for [X86_64] : RegReg {
+    param MNEMONIC: String = "sbb";
+    param OPCODE: bits<8> = 0x19;
+
+    schedule { units = [WriteIALU3B]; }
+
+    behavior {
+        let carry = EFLAGS::cf;
+        let pre = src + zext(carry, self.XLEN);
+        let pre_wrap = (carry == zext(0b1, 1)) & (pre == zext(0b0, self.XLEN));
+        let value = dst - pre;
+        EFLAGS::cf = if pre_wrap { zext(0b1, 1) }
+            else if dst ~< pre { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::of = extract((dst ^ src) & (dst ^ value), self.XLEN - 1, self.XLEN - 1);
+        EFLAGS::af = extract(dst ^ src ^ value, 4, 4);
+        dst = value;
+        EFLAGS::zf = if value == zext(0b0, self.XLEN) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::sf = extract(value, self.XLEN - 1, self.XLEN - 1);
+    }
+}
+
+instruction SbbImm for [X86_64] : RegImm {
+    param OPNAME: String = "sbb_imm";
+    param MNEMONIC: String = "sbb";
+    param OPCODE: bits<8> = 0x81;
+    param EXT: bits<3> = 0b011;
+
+    schedule { units = [WriteIALU]; }
+
+    behavior {
+        let subtrahend = sext(imm, self.XLEN);
+        let carry = EFLAGS::cf;
+        let pre = subtrahend + zext(carry, self.XLEN);
+        let pre_wrap = (carry == zext(0b1, 1)) & (pre == zext(0b0, self.XLEN));
+        let value = dst - pre;
+        EFLAGS::cf = if pre_wrap { zext(0b1, 1) }
+            else if dst ~< pre { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::of = extract((dst ^ subtrahend) & (dst ^ value), self.XLEN - 1, self.XLEN - 1);
+        EFLAGS::af = extract(dst ^ subtrahend ^ value, 4, 4);
+        dst = value;
+        EFLAGS::zf = if value == zext(0b0, self.XLEN) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::sf = extract(value, self.XLEN - 1, self.XLEN - 1);
+    }
+}
+
 // Scalar integer extensions beyond the base ALU set: immediate compare/test,
 // group-3 unary ops, CL-count and rotate shifts, widening multiply, and the
 // movzx/movsx register extensions and fixed-register signed/unsigned division.
@@ -12,6 +105,46 @@ tmpl_runary!(RegUnary32, X86_64, GPR32, rexw = 0b0, p66 = 0b0, byte = 0b0, opcod
 tmpl_runary!(RegUnary16, X86_64, GPR16, rexw = 0b0, p66 = 0b1, byte = 0b0, opcode = 0xF7)
 
 tmpl_runary!(RegUnary8, X86_64, GPR8, rexw = 0b0, p66 = 0b0, byte = 0b1, opcode = 0xF6)
+
+// Group-5 `inc/dec r/m`: 0xFF (/0, /1), byte 0xFE. Unlike add/sub 1 these
+// preserve cf.
+tmpl_runary!(RegUnaryIncDec64, X86_64, GPR, rexw = 0b1, p66 = 0b0, byte = 0b0, opcode = 0xFF)
+tmpl_runary!(RegUnaryIncDec32, X86_64, GPR32, rexw = 0b0, p66 = 0b0, byte = 0b0, opcode = 0xFF)
+tmpl_runary!(RegUnaryIncDec16, X86_64, GPR16, rexw = 0b0, p66 = 0b1, byte = 0b0, opcode = 0xFF)
+tmpl_runary!(RegUnaryIncDec8, X86_64, GPR8, rexw = 0b0, p66 = 0b0, byte = 0b1, opcode = 0xFE)
+
+reg_ext!(RegUnaryIncDec64, WriteIALU3B,
+    { let result = dst + zext(0b1, self.XLEN); EFLAGS::zf = if result == zext(0b0, self.XLEN) { zext(0b1, 1) } else { zext(0b0, 1) }; EFLAGS::sf = extract(result, self.XLEN - 1, self.XLEN - 1); EFLAGS::of = extract(~dst & result, self.XLEN - 1, self.XLEN - 1); dst = result; },
+    (Inc, "inc", "inc", 0b000)
+)
+reg_ext!(RegUnaryIncDec64, WriteIALU3B,
+    { let result = dst - zext(0b1, self.XLEN); EFLAGS::zf = if result == zext(0b0, self.XLEN) { zext(0b1, 1) } else { zext(0b0, 1) }; EFLAGS::sf = extract(result, self.XLEN - 1, self.XLEN - 1); EFLAGS::of = extract(dst & ~result, self.XLEN - 1, self.XLEN - 1); dst = result; },
+    (Dec, "dec", "dec", 0b001)
+)
+reg_ext!(RegUnaryIncDec32, WriteIALU3B,
+    { let result = dst + zext(0b1, 32); EFLAGS::zf = if result == zext(0b0, 32) { zext(0b1, 1) } else { zext(0b0, 1) }; EFLAGS::sf = extract(result, 31, 31); EFLAGS::of = extract(~dst & result, 31, 31); dst = result; },
+    (Inc32, "inc32", "inc", 0b000)
+)
+reg_ext!(RegUnaryIncDec32, WriteIALU3B,
+    { let result = dst - zext(0b1, 32); EFLAGS::zf = if result == zext(0b0, 32) { zext(0b1, 1) } else { zext(0b0, 1) }; EFLAGS::sf = extract(result, 31, 31); EFLAGS::of = extract(dst & ~result, 31, 31); dst = result; },
+    (Dec32, "dec32", "dec", 0b001)
+)
+reg_ext!(RegUnaryIncDec16, WriteIALU,
+    { let result = dst + zext(0b1, 16); EFLAGS::zf = if result == zext(0b0, 16) { zext(0b1, 1) } else { zext(0b0, 1) }; EFLAGS::sf = extract(result, 15, 15); EFLAGS::of = extract(~dst & result, 15, 15); dst = result; },
+    (Inc16, "inc16", "inc", 0b000)
+)
+reg_ext!(RegUnaryIncDec16, WriteIALU,
+    { let result = dst - zext(0b1, 16); EFLAGS::zf = if result == zext(0b0, 16) { zext(0b1, 1) } else { zext(0b0, 1) }; EFLAGS::sf = extract(result, 15, 15); EFLAGS::of = extract(dst & ~result, 15, 15); dst = result; },
+    (Dec16, "dec16", "dec", 0b001)
+)
+reg_ext!(RegUnaryIncDec8, WriteIALU,
+    { let result = dst + zext(0b1, 8); EFLAGS::zf = if result == zext(0b0, 8) { zext(0b1, 1) } else { zext(0b0, 1) }; EFLAGS::sf = extract(result, 7, 7); EFLAGS::of = extract(~dst & result, 7, 7); dst = result; },
+    (Inc8, "inc8", "inc", 0b000)
+)
+reg_ext!(RegUnaryIncDec8, WriteIALU,
+    { let result = dst - zext(0b1, 8); EFLAGS::zf = if result == zext(0b0, 8) { zext(0b1, 1) } else { zext(0b0, 1) }; EFLAGS::sf = extract(result, 7, 7); EFLAGS::of = extract(dst & ~result, 7, 7); dst = result; },
+    (Dec8, "dec8", "dec", 0b001)
+)
 
 // `movzx/movsx r64, r/m8`: REX.W + 0x0F + opcode, dst in ModR/M.reg, the
 // narrow source in rm (the `RegRegExt` field layout with a narrow source).
@@ -97,6 +230,73 @@ instruction ImulWide for [X86_64] : RegUnary {
     behavior {
         GPR::rdx = extract(GPR::rax * dst, (2 * self.XLEN) - 1, self.XLEN);
         GPR::rax = extract(GPR::rax * dst, self.XLEN - 1, 0);
+    }
+}
+
+// Unsigned widening multiply (0xF7 /4): rdx:rax = rax * r/m64. The semantic
+// language's extract(product, 2N-1, N) idiom computes a signed high half, so
+// the unsigned one adds the sign words back: (adst * bdst) mod 2^128 =
+// signed_product + 2^N * (a_msb * b + b_msb * a).
+instruction MulWide for [X86_64] : RegUnary {
+    param OPNAME: String = "mul_wide";
+    param MNEMONIC: String = "mul";
+    param EXT: bits<3> = 0b100;
+
+    schedule { units = [WriteIMul]; }
+
+    behavior {
+        GPR::rdx = extract(GPR::rax * dst, (2 * self.XLEN) - 1, self.XLEN)
+            + (if extract(GPR::rax, self.XLEN - 1, self.XLEN - 1) == zext(0b1, 1) { dst }
+               else { zext(0b0, self.XLEN) })
+            + (if extract(dst, self.XLEN - 1, self.XLEN - 1) == zext(0b1, 1) { GPR::rax }
+               else { zext(0b0, self.XLEN) });
+        GPR::rax = extract(GPR::rax * dst, self.XLEN - 1, 0);
+        EFLAGS::cf = if GPR::rdx == zext(0b0, self.XLEN) { zext(0b0, 1) } else { zext(0b1, 1) };
+        EFLAGS::of = EFLAGS::cf;
+    }
+}
+
+// In-register sign extension: cdqe (48 98) sext-e32 to rax, cwde (98) sext-ax
+// to eax, cbw (66 98) sext-al to ax, and cwd (66 99) sext-al to dx. These are
+// the operand-size members of the 0x98/0x99 opcode group.
+
+instruction Cdqe for [X86_64] {
+    param MNEMONIC: String = "cdqe";
+    schedule { units = [WriteIExtend]; }
+    encoding { 0x48, 0x98 }
+    asm { "{self.MNEMONIC}" }
+    behavior {
+        GPR::rax = sext(extract(GPR::rax, 31, 0), self.XLEN);
+    }
+}
+
+instruction Cwde for [X86_64] {
+    param MNEMONIC: String = "cwde";
+    schedule { units = [WriteIExtend]; }
+    encoding { 0x98 }
+    asm { "{self.MNEMONIC}" }
+    behavior {
+        GPR32::eax = sext(extract(GPR32::eax, 15, 0), 32);
+    }
+}
+
+instruction Cbw for [X86_64] {
+    param MNEMONIC: String = "cbw";
+    schedule { units = [WriteIExtend]; }
+    encoding { 0x66, 0x98 }
+    asm { "{self.MNEMONIC}" }
+    behavior {
+        GPR16::ax = sext(extract(GPR16::ax, 7, 0), 16);
+    }
+}
+
+instruction Cwd for [X86_64] {
+    param MNEMONIC: String = "cwd";
+    schedule { units = [WriteIExtend]; }
+    encoding { 0x66, 0x99 }
+    asm { "{self.MNEMONIC}" }
+    behavior {
+        GPR16::dx = sext(extract(GPR16::ax, 15, 15), 16);
     }
 }
 
@@ -279,8 +479,147 @@ shift_imm!(RegShift,
             extract(res, self.XLEN - 1, self.XLEN - 1) ^ extract(res, self.XLEN - 2, self.XLEN - 2)
         };
         dst = res;
+    }),
+    (RclImm, "rcl", 0b010, {
+        let c = extract(imm, 5, 0);
+        if c != zext(0b0, 6) {
+            let res = (dst << c)
+                | (zext(EFLAGS::cf, self.XLEN) << (c - zext(0b1, self.XLEN)))
+                | (dst >> (zext(65, self.XLEN) - zext(c, self.XLEN)));
+            let carry = extract(dst >> (zext(64, self.XLEN) - zext(c, self.XLEN)), 0, 0);
+            EFLAGS::cf = carry;
+            EFLAGS::of = if c == zext(0b1, 6) {
+                carry ^ extract(res, self.XLEN - 1, self.XLEN - 1)
+            } else { EFLAGS::of };
+            dst = res;
+        }
+    }),
+    (RcrImm, "rcr", 0b011, {
+        let c = extract(imm, 5, 0);
+        if c != zext(0b0, 6) {
+            let res = (dst >> c)
+                | (zext(EFLAGS::cf, self.XLEN)
+                    << (zext(64, self.XLEN) - zext(c, self.XLEN)))
+                | (dst << (zext(65, self.XLEN) - zext(c, self.XLEN)));
+            EFLAGS::cf = extract(dst >> (c - zext(0b1, self.XLEN)), 0, 0);
+            EFLAGS::of = if c == zext(0b1, 6) {
+                extract(res, self.XLEN - 1, self.XLEN - 1)
+                    ^ extract(res, self.XLEN - 2, self.XLEN - 2)
+            } else { EFLAGS::of };
+            dst = res;
+        }
     })
 )
+
+// Bit-test family (`op r/m64, r64`, the RegRegExt layout with rm = dst).
+// The bit index is the source masked to the operand width; only cf is
+// defined by bt (bts/btr/btc also write the bit back).
+
+instruction Bt for [X86_64] : RegRegExt {
+    param MNEMONIC: String = "bt";
+    param OPCODE: bits<8> = 0xA3;
+
+    schedule { units = [WriteIConditional]; }
+
+    encoding {
+        rex(0b1, src, dst, 0b0),
+        0x0F,
+        OPCODE,
+        modrm_reg(src, dst),
+    }
+
+    behavior {
+        let index = extract(src, 5, 0);
+        EFLAGS::cf = extract(dst >> index, 0, 0);
+    }
+}
+
+instruction Bts for [X86_64] : RegRegExt {
+    param MNEMONIC: String = "bts";
+    param OPCODE: bits<8> = 0xAB;
+
+    schedule { units = [WriteIConditional]; }
+
+    encoding {
+        rex(0b1, src, dst, 0b0),
+        0x0F,
+        OPCODE,
+        modrm_reg(src, dst),
+    }
+
+    behavior {
+        let index = extract(src, 5, 0);
+        EFLAGS::cf = extract(dst >> index, 0, 0);
+        dst = dst | (zext(0b1, self.XLEN) << index);
+    }
+}
+
+instruction Btr for [X86_64] : RegRegExt {
+    param MNEMONIC: String = "btr";
+    param OPCODE: bits<8> = 0xB3;
+
+    schedule { units = [WriteIConditional]; }
+
+    encoding {
+        rex(0b1, src, dst, 0b0),
+        0x0F,
+        OPCODE,
+        modrm_reg(src, dst),
+    }
+
+    behavior {
+        let index = extract(src, 5, 0);
+        EFLAGS::cf = extract(dst >> index, 0, 0);
+        dst = dst & ~(zext(0b1, self.XLEN) << index);
+    }
+}
+
+instruction Btc for [X86_64] : RegRegExt {
+    param MNEMONIC: String = "btc";
+    param OPCODE: bits<8> = 0xBB;
+
+    schedule { units = [WriteIConditional]; }
+
+    encoding {
+        rex(0b1, src, dst, 0b0),
+        0x0F,
+        OPCODE,
+        modrm_reg(src, dst),
+    }
+
+    behavior {
+        let index = extract(src, 5, 0);
+        EFLAGS::cf = extract(dst >> index, 0, 0);
+        dst = dst ^ (zext(0b1, self.XLEN) << index);
+    }
+}
+
+// `cmpxchg r/m64, r64` (0F B1) sets flags from target - rax. On equality the
+// target takes src; otherwise rax takes the target's old value.
+instruction Cmpxchg for [X86_64] : RegReg {
+    param MNEMONIC: String = "cmpxchg";
+    param OPCODE: bits<8> = 0xB1;
+
+    schedule { units = [WriteIConditional]; }
+
+    encoding {
+        rex(0b1, src, dst, 0b0),
+        0x0F,
+        OPCODE,
+        modrm_reg(src, dst),
+    }
+
+    behavior {
+        sub_flags!({ GPR::rax }, { self.XLEN - 1 })
+        if GPR::rax == dst {
+            dst = src;
+            EFLAGS::zf = zext(0b1, 1);
+        } else {
+            GPR::rax = dst;
+            EFLAGS::zf = zext(0b0, 1);
+        }
+    }
+}
 
 // Register-to-register zero/sign extensions (sxtb/sxth/sxtw parity).
 
@@ -375,6 +714,146 @@ instruction Movzxd for [X86_64] {
 
     behavior {
         dst = zext(src, self.XLEN);
+    }
+}
+
+// Double-precision shifts (0F A4/A5 shld, 0F AC/AD shrd): a `(dst, src)` pair
+// rotated in place, count masked to 6 bits. A zero count leaves everything;
+// otherwise cf is the last bit shifted out and of is defined only at count 1.
+template ShldRegImm for [X86_64] {
+    param MNEMONIC: String;
+    param OPCODE: bits<8>;
+
+    schedule { units = [WriteIShift]; }
+
+    operands {
+        dst: GPR,
+        src: GPR,
+        imm: bits<8>,
+    }
+
+    encoding {
+        rex(0b1, src, dst, 0b0),
+        0x0F,
+        OPCODE,
+        modrm_reg(src, dst),
+        imm,
+    }
+
+    asm {
+        "{self.MNEMONIC} {dst}, {src}, {imm}"
+    }
+}
+
+instruction ShldImm for [X86_64] : ShldRegImm {
+    param OPNAME: String = "shld_imm";
+    param MNEMONIC: String = "shld";
+    param OPCODE: bits<8> = 0xA4;
+
+    behavior {
+        let c = extract(imm, 5, 0);
+        if c != zext(0b0, 6) {
+            let fill = (zext(0b0, self.XLEN) - zext(c, self.XLEN)) & zext(0b111111, self.XLEN);
+            let res = (dst << c) | (src >> fill);
+            EFLAGS::cf = extract(dst << c, self.XLEN - 1, self.XLEN - 1);
+            EFLAGS::zf = if res == zext(0b0, self.XLEN) { zext(0b1, 1) } else { zext(0b0, 1) };
+            EFLAGS::sf = extract(res, self.XLEN - 1, self.XLEN - 1);
+            EFLAGS::of = if c == zext(0b1, 6) {
+                extract(dst, self.XLEN - 1, self.XLEN - 1) ^ extract(res, self.XLEN - 1, self.XLEN - 1)
+            } else {
+                EFLAGS::of
+            };
+            dst = res;
+        }
+    }
+}
+
+instruction ShrdImm for [X86_64] : ShldRegImm {
+    param OPNAME: String = "shrd_imm";
+    param MNEMONIC: String = "shrd";
+    param OPCODE: bits<8> = 0xAC;
+
+    behavior {
+        let c = extract(imm, 5, 0);
+        if c != zext(0b0, 6) {
+            let fill = (zext(0b0, self.XLEN) - zext(c, self.XLEN)) & zext(0b111111, self.XLEN);
+            let res = (dst >> c) | (src << fill);
+            EFLAGS::cf = extract(dst >> (c - zext(0b1, 6)), 0, 0);
+            EFLAGS::zf = if res == zext(0b0, self.XLEN) { zext(0b1, 1) } else { zext(0b0, 1) };
+            EFLAGS::sf = extract(res, self.XLEN - 1, self.XLEN - 1);
+            EFLAGS::of = if c == zext(0b1, 6) {
+                extract(dst, self.XLEN - 1, self.XLEN - 1) ^ extract(res, self.XLEN - 1, self.XLEN - 1)
+            } else {
+                EFLAGS::of
+            };
+            dst = res;
+        }
+    }
+}
+
+// cl-count forms follow the immediate twins; the count is the low bits of rcx.
+
+instruction ShldCl for [X86_64] : RegRegExt {
+    param OPNAME: String = "shld_cl";
+    param MNEMONIC: String = "shld";
+    param OPCODE: bits<8> = 0xA5;
+
+    schedule { units = [WriteIShift]; }
+    asm { "{self.MNEMONIC} {dst}, {src}, cl" }
+    encoding {
+        rex(0b1, src, dst, 0b0),
+        0x0F,
+        OPCODE,
+        modrm_reg(src, dst),
+    }
+
+    behavior {
+        let c = extract(GPR::rcx, 5, 0);
+        if c != zext(0b0, 6) {
+            let fill = (zext(0b0, self.XLEN) - zext(c, self.XLEN)) & zext(0b111111, self.XLEN);
+            let res = (dst << c) | (src >> fill);
+            EFLAGS::cf = extract(dst << c, self.XLEN - 1, self.XLEN - 1);
+            EFLAGS::zf = if res == zext(0b0, self.XLEN) { zext(0b1, 1) } else { zext(0b0, 1) };
+            EFLAGS::sf = extract(res, self.XLEN - 1, self.XLEN - 1);
+            EFLAGS::of = if c == zext(0b1, 6) {
+                extract(dst, self.XLEN - 1, self.XLEN - 1) ^ extract(res, self.XLEN - 1, self.XLEN - 1)
+            } else {
+                EFLAGS::of
+            };
+            dst = res;
+        }
+    }
+}
+
+instruction ShrdCl for [X86_64] : RegRegExt {
+    param OPNAME: String = "shrd_cl";
+    param MNEMONIC: String = "shrd";
+    param OPCODE: bits<8> = 0xAD;
+
+    schedule { units = [WriteIShift]; }
+    asm { "{self.MNEMONIC} {dst}, {src}, cl" }
+    encoding {
+        rex(0b1, src, dst, 0b0),
+        0x0F,
+        OPCODE,
+        modrm_reg(src, dst),
+    }
+
+    behavior {
+        let c = extract(GPR::rcx, 5, 0);
+        if c != zext(0b0, 6) {
+            let fill = (zext(0b0, self.XLEN) - zext(c, self.XLEN)) & zext(0b111111, self.XLEN);
+            let res = (dst >> c) | (src << fill);
+            EFLAGS::cf = extract(dst >> (c - zext(0b1, 6)), 0, 0);
+            EFLAGS::zf = if res == zext(0b0, self.XLEN) { zext(0b1, 1) } else { zext(0b0, 1) };
+            EFLAGS::sf = extract(res, self.XLEN - 1, self.XLEN - 1);
+            EFLAGS::of = if c == zext(0b1, 6) {
+                extract(dst, self.XLEN - 1, self.XLEN - 1) ^ extract(res, self.XLEN - 1, self.XLEN - 1)
+            } else {
+                EFLAGS::of
+            };
+            dst = res;
+        }
     }
 }
 
@@ -559,4 +1038,3 @@ shift_imm!("32", "32", RegShift32,
         dst = res;
     })
 )
-

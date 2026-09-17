@@ -28,6 +28,7 @@ sched_class WriteFPAdd { latency = 4; }
 sched_class WriteFPMul { latency = 4; }
 sched_class WriteFPDiv { latency = 13; }
 sched_class WriteFPMove { latency = 1; }
+sched_class WriteFPShuffle { latency = 1; }
 sched_class WriteFPConvert { latency = 4; }
 sched_class WriteSIToFP { latency = 4; }
 sched_class WriteFPToSI { latency = 1; }

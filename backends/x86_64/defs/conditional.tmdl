@@ -1,5 +1,110 @@
 //! Conditional branches, conditional moves, and condition-code materialization.
 
+// Direct carry and direction-flag updates.
+
+instruction Clc for [X86_64] {
+    param MNEMONIC: String = "clc";
+    encoding { 0xF8 }
+    asm { "{self.MNEMONIC}" }
+    behavior { EFLAGS::cf = zext(0b0, 1); }
+}
+
+instruction Stc for [X86_64] {
+    param MNEMONIC: String = "stc";
+    encoding { 0xF9 }
+    asm { "{self.MNEMONIC}" }
+    behavior { EFLAGS::cf = zext(0b1, 1); }
+}
+
+instruction Cmc for [X86_64] {
+    param MNEMONIC: String = "cmc";
+    encoding { 0xF5 }
+    asm { "{self.MNEMONIC}" }
+    behavior { EFLAGS::cf = if EFLAGS::cf == zext(0b0, 1) { zext(0b1, 1) } else { zext(0b0, 1) }; }
+}
+
+instruction Cld for [X86_64] {
+    param MNEMONIC: String = "cld";
+    encoding { 0xFC }
+    asm { "{self.MNEMONIC}" }
+    behavior { EFLAGS::df = zext(0b0, 1); }
+}
+
+instruction Std for [X86_64] {
+    param MNEMONIC: String = "std";
+    encoding { 0xFD }
+    asm { "{self.MNEMONIC}" }
+    behavior { EFLAGS::df = zext(0b1, 1); }
+}
+
+// RFLAGS roundtrip through the stack for the modeled flags. Bit 1 is fixed.
+
+instruction Pushf for [X86_64] {
+    param MNEMONIC: String = "pushf";
+    encoding { 0x9C }
+    asm { "{self.MNEMONIC}" }
+    behavior {
+        let value = zext(EFLAGS::cf, self.XLEN)
+            | zext(0b10, self.XLEN)
+            | (zext(EFLAGS::pf, self.XLEN) << zext(0b10, self.XLEN))
+            | (zext(EFLAGS::af, self.XLEN) << zext(0b100, self.XLEN))
+            | (zext(EFLAGS::zf, self.XLEN) << zext(0b110, self.XLEN))
+            | (zext(EFLAGS::sf, self.XLEN) << zext(0b111, self.XLEN))
+            | (zext(EFLAGS::df, self.XLEN) << zext(0b1010, self.XLEN))
+            | (zext(EFLAGS::of, self.XLEN) << zext(0b1011, self.XLEN));
+        GPR::rsp = GPR::rsp - zext(0b1000, self.XLEN);
+        store(GPR::rsp, 8, value);
+    }
+}
+
+instruction Popf for [X86_64] {
+    param MNEMONIC: String = "popf";
+    encoding { 0x9D }
+    asm { "{self.MNEMONIC}" }
+    behavior {
+        let value = load(GPR::rsp, 8, 0b0);
+        GPR::rsp = GPR::rsp + zext(0b1000, self.XLEN);
+        EFLAGS::cf = extract(value, 0, 0);
+        EFLAGS::pf = extract(value, 2, 2);
+        EFLAGS::af = extract(value, 4, 4);
+        EFLAGS::zf = extract(value, 6, 6);
+        EFLAGS::sf = extract(value, 7, 7);
+        EFLAGS::df = extract(value, 10, 10);
+        EFLAGS::of = extract(value, 11, 11);
+    }
+}
+
+// sahf/lahf: the status flags move through ah (bit7 sf, 6 zf, 5 reserved-0,
+// 4 af, 3 reserved-0, 2 pf, 1 reserved-1, 0 cf). Reads and writes the ah
+// byte view of the shared integer file.
+
+instruction Sahf for [X86_64] {
+    param MNEMONIC: String = "sahf";
+    encoding { 0x9E }
+    asm { "{self.MNEMONIC}" }
+    behavior {
+        EFLAGS::cf = extract(GPR8H::ah, 0, 0);
+        EFLAGS::pf = extract(GPR8H::ah, 2, 2);
+        EFLAGS::af = extract(GPR8H::ah, 4, 4);
+        EFLAGS::zf = extract(GPR8H::ah, 6, 6);
+        EFLAGS::sf = extract(GPR8H::ah, 7, 7);
+    }
+}
+
+instruction Lahf for [X86_64] {
+    param MNEMONIC: String = "lahf";
+    encoding { 0x9F }
+    asm { "{self.MNEMONIC}" }
+    behavior {
+        GPR8H::ah = (zext(EFLAGS::sf, 8) << zext(0b111, 8))
+            | (zext(EFLAGS::zf, 8) << zext(0b110, 8))
+            | (zext(EFLAGS::af, 8) << zext(0b100, 8))
+            | zext(0b10, 8)
+            | (zext(EFLAGS::pf, 8) << zext(0b10, 8))
+            | zext(EFLAGS::cf, 8);
+    }
+}
+
 // The rest of the EFLAGS consumers: the remaining jcc conditions, setcc
 // (cset/slt parity) and cmovcc (csel parity). Condition guards mirror the
 // jcc family in base.tmdl.
@@ -30,6 +135,8 @@ template SetccReg for [X86_64] {
 // Remaining conditional jumps.
 
 jcc_ops!(
+    (JumpNoParity,    "jnp", 0x8B, { EFLAGS::pf == zext(0b0, 1) }),
+    (JumpParity,      "jp",  0x8A, { EFLAGS::pf == zext(0b1, 1) }),
     (JumpLessEq,      "jle", 0x8E, { (EFLAGS::zf | (EFLAGS::sf ^ EFLAGS::of)) == zext(0b1, 1) }),
     (JumpGreater,     "jg",  0x8F, { (EFLAGS::zf | (EFLAGS::sf ^ EFLAGS::of)) == zext(0b0, 1) }),
     (JumpBelowEq,     "jbe", 0x86, { (EFLAGS::cf | EFLAGS::zf) == zext(0b1, 1) }),
@@ -43,6 +150,10 @@ jcc_ops!(
 // setcc family.
 
 setcc_ops!(
+    (SetSign,      "sets",  0x98, { EFLAGS::sf == zext(0b1, 1) }),
+    (SetNoSign,    "setns", 0x99, { EFLAGS::sf == zext(0b0, 1) }),
+    (SetOverflow,  "seto",  0x90, { EFLAGS::of == zext(0b1, 1) }),
+    (SetNoOverflow,"setno", 0x91, { EFLAGS::of == zext(0b0, 1) }),
     (SetParity,    "setp",  0x9A, { EFLAGS::pf == zext(0b1, 1) }),
     (SetNoParity,  "setnp", 0x9B, { EFLAGS::pf == zext(0b0, 1) }),
     (SetEq,        "sete",  0x94, { EFLAGS::zf == zext(0b1, 1) }),
@@ -61,6 +172,12 @@ setcc_ops!(
 // The destination is read on the not-taken path, so it stays tied.
 
 cmovcc_ops!(
+    (CmovSign,      "cmovs",  0x48, { EFLAGS::sf == zext(0b1, 1) }),
+    (CmovNoSign,    "cmovns", 0x49, { EFLAGS::sf == zext(0b0, 1) }),
+    (CmovParity,    "cmovp",  0x4A, { EFLAGS::pf == zext(0b1, 1) }),
+    (CmovNoParity,  "cmovnp", 0x4B, { EFLAGS::pf == zext(0b0, 1) }),
+    (CmovOverflow,  "cmovo",  0x40, { EFLAGS::of == zext(0b1, 1) }),
+    (CmovNoOverflow,"cmovno", 0x41, { EFLAGS::of == zext(0b0, 1) }),
     (CmovEq,        "cmove",  0x44, { EFLAGS::zf == zext(0b1, 1) }),
     (CmovNotEq,     "cmovne", 0x45, { EFLAGS::zf == zext(0b0, 1) }),
     (CmovLess,      "cmovl",  0x4C, { EFLAGS::sf != EFLAGS::of }),

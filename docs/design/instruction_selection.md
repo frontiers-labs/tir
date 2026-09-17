@@ -713,6 +713,14 @@ through low-bits-preserving operators (`and` under a compare, as in x86
 `test`), but stops at `extract` and memory reads, which cap the operand bits
 the consumer can see (`width_sensitive_symbols` in the TMDL generator).
 
+### Status-sensitive alternatives
+
+Target instruction behaviors include their status-register reads and writes.
+The selector may therefore use an instruction such as x86 `inc` for an integer
+`add 1` only when the different carry-flag behavior is not observable. If a
+later operation reads carry, the state edges keep `inc` and `add` in different
+e-classes and the replacement is unavailable.
+
 ### Dominance pruning (specificity)
 
 Before the solve, `prune_dominated_matches` deduplicates interchangeable

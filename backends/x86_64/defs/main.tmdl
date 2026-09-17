@@ -41,6 +41,8 @@ register_class EFLAGS for [X86] {
         zf => { traits = [status_flag] },
         sf => { traits = [status_flag] },
         of => { traits = [status_flag] },
+        af => { traits = [status_flag] },
+        df => { traits = [status_flag] },
     }
 }
 
