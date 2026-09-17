@@ -1700,6 +1700,8 @@ instruction Cmpsb for [X86_64] {
         EFLAGS::zf = if lhs == rhs { zext(0b1, 1) } else { zext(0b0, 1) };
         EFLAGS::sf = extract(lhs - rhs, 7, 7);
         EFLAGS::of = extract((lhs ^ rhs) & (lhs ^ (lhs - rhs)), 7, 7);
+        EFLAGS::af = extract(lhs ^ rhs ^ (lhs - rhs), 4, 4);
+        EFLAGS::pf = parity_flag(lhs - rhs);
         GPR::rsi = GPR::rsi + step;
         GPR::rdi = GPR::rdi + step;
     }
@@ -1722,6 +1724,8 @@ instruction Cmpsw for [X86_64] {
         EFLAGS::zf = if lhs == rhs { zext(0b1, 1) } else { zext(0b0, 1) };
         EFLAGS::sf = extract(lhs - rhs, 15, 15);
         EFLAGS::of = extract((lhs ^ rhs) & (lhs ^ (lhs - rhs)), 15, 15);
+        EFLAGS::af = extract(lhs ^ rhs ^ (lhs - rhs), 4, 4);
+        EFLAGS::pf = parity_flag(lhs - rhs);
         GPR::rsi = GPR::rsi + step;
         GPR::rdi = GPR::rdi + step;
     }
@@ -1745,6 +1749,8 @@ instruction CmpsdString for [X86_64] {
         EFLAGS::zf = if lhs == rhs { zext(0b1, 1) } else { zext(0b0, 1) };
         EFLAGS::sf = extract(lhs - rhs, 31, 31);
         EFLAGS::of = extract((lhs ^ rhs) & (lhs ^ (lhs - rhs)), 31, 31);
+        EFLAGS::af = extract(lhs ^ rhs ^ (lhs - rhs), 4, 4);
+        EFLAGS::pf = parity_flag(lhs - rhs);
         GPR::rsi = GPR::rsi + step;
         GPR::rdi = GPR::rdi + step;
     }
@@ -1767,6 +1773,8 @@ instruction Cmpsq for [X86_64] {
         EFLAGS::zf = if lhs == rhs { zext(0b1, 1) } else { zext(0b0, 1) };
         EFLAGS::sf = extract(lhs - rhs, 63, 63);
         EFLAGS::of = extract((lhs ^ rhs) & (lhs ^ (lhs - rhs)), 63, 63);
+        EFLAGS::af = extract(lhs ^ rhs ^ (lhs - rhs), 4, 4);
+        EFLAGS::pf = parity_flag(lhs - rhs);
         GPR::rsi = GPR::rsi + step;
         GPR::rdi = GPR::rdi + step;
     }

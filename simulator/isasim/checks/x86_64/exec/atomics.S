@@ -3,8 +3,9 @@
 # The locked read-modify-write forms write EFLAGS from the value the memory
 # location takes. The default test allocation holds `offset & 0xff` in every
 # byte, so the dword at 0x80001008 is 0x0b0a0908: `xadd` of its two's complement
-# wraps to zero (zf and the carry out set) and hands the pre-add word back in
-# ebx, and the following `or` leaves a non-zero, positive word.
+# wraps to zero with carry, auxiliary carry, zero, and parity set. It hands the
+# pre-add word back in ebx, and the following `or` leaves a non-zero, positive
+# word with odd low-byte parity.
 .global done
 done:
   add rax, rax
@@ -16,13 +17,17 @@ _start:
   lock or [rax + 8], ebx
 
 # CHECK: EFLAGS[0] = 0x1
+# CHECK-NEXT: EFLAGS[1] = 0x1
 # CHECK-NEXT: EFLAGS[2] = 0x1
 # CHECK-NEXT: EFLAGS[3] = 0x0
 # CHECK-NEXT: EFLAGS[4] = 0x0
+# CHECK-NEXT: EFLAGS[5] = 0x1
 # CHECK-NEXT: GPR[0] = 0x80001000
 # CHECK-NEXT: GPR[3] = 0xb0a0908
 
 # CHECK: EFLAGS[0] = 0x0
+# CHECK-NEXT: EFLAGS[1] = 0x0
 # CHECK-NEXT: EFLAGS[2] = 0x0
 # CHECK-NEXT: EFLAGS[3] = 0x0
 # CHECK-NEXT: EFLAGS[4] = 0x0
+# CHECK-NEXT: EFLAGS[5] = 0x1

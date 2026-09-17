@@ -92,14 +92,16 @@ fn collect_effects(
         match effect {
             Effect::Assign { offset, .. } | Effect::Bind { offset, .. } => {
                 let graph = graph(env, *offset);
-                collect_term(
-                    &graph,
-                    graph.root().unwrap(),
-                    symbols,
-                    available,
-                    &mut HashSet::new(),
-                    ranges,
-                )?;
+                if term_count(&graph) != 0 {
+                    collect_term(
+                        &graph,
+                        graph.root().unwrap(),
+                        symbols,
+                        available,
+                        &mut HashSet::new(),
+                        ranges,
+                    )?;
+                }
                 if let Effect::Bind { sym, .. } = effect {
                     let value = pure_at(&graph, graph.root().unwrap(), symbols, available);
                     available[*sym] = value.is_some();

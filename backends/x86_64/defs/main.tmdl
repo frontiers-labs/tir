@@ -697,6 +697,17 @@ macro cmovcc_ops {
     };
 }
 
+fn parity_flag(value) {
+    ~(extract(value, 0, 0)
+        ^ extract(value, 1, 1)
+        ^ extract(value, 2, 2)
+        ^ extract(value, 3, 3)
+        ^ extract(value, 4, 4)
+        ^ extract(value, 5, 5)
+        ^ extract(value, 6, 6)
+        ^ extract(value, 7, 7))
+}
+
 // Flag-computation statement macros for compare/test. `$rhs` is the second
 // operand (a register or a sign-extended immediate); `$w`/`$msb` are the operand
 // width and its most-significant bit index. Guards are passed as `{ ... }`
@@ -716,6 +727,8 @@ macro sub_flags {
         };
         EFLAGS::sf = extract(dst - $($rhs)*, $($msb)*, $($msb)*);
         EFLAGS::of = extract((dst ^ $($rhs)*) & (dst ^ (dst - $($rhs)*)), $($msb)*, $($msb)*);
+        EFLAGS::af = extract(dst ^ $($rhs)* ^ (dst - $($rhs)*), 4, 4);
+        EFLAGS::pf = parity_flag(dst - $($rhs)*);
     };
 }
 
@@ -735,6 +748,8 @@ macro add_flags {
         };
         EFLAGS::sf = extract($($lhs)* + $($rhs)*, $($msb)*, $($msb)*);
         EFLAGS::of = extract(~($($lhs)* ^ $($rhs)*) & ($($lhs)* ^ ($($lhs)* + $($rhs)*)), $($msb)*, $($msb)*);
+        EFLAGS::af = extract($($lhs)* ^ $($rhs)* ^ ($($lhs)* + $($rhs)*), 4, 4);
+        EFLAGS::pf = parity_flag($($lhs)* + $($rhs)*);
     };
 }
 
@@ -749,6 +764,7 @@ macro logic_flags {
         };
         EFLAGS::sf = extract($($res)*, $($msb)*, $($msb)*);
         EFLAGS::of = zext(0b0, 1);
+        EFLAGS::pf = parity_flag($($res)*);
     };
 }
 
@@ -762,6 +778,7 @@ macro test_flags {
         };
         EFLAGS::sf = extract(dst & $($rhs)*, $($msb)*, $($msb)*);
         EFLAGS::of = zext(0b0, 1);
+        EFLAGS::pf = parity_flag(dst & $($rhs)*);
     };
 }
 

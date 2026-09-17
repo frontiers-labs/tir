@@ -18,6 +18,7 @@ instruction Adc for [X86_64] : RegReg {
             else if value ~< dst { zext(0b1, 1) } else { zext(0b0, 1) };
         EFLAGS::of = extract(~(dst ^ src) & (dst ^ value), self.XLEN - 1, self.XLEN - 1);
         EFLAGS::af = extract(dst ^ src ^ value, 4, 4);
+        EFLAGS::pf = parity_flag(value);
         dst = value;
         EFLAGS::zf = if value == zext(0b0, self.XLEN) { zext(0b1, 1) } else { zext(0b0, 1) };
         EFLAGS::sf = extract(value, self.XLEN - 1, self.XLEN - 1);
@@ -42,6 +43,7 @@ instruction AdcImm for [X86_64] : RegImm {
             else if value ~< dst { zext(0b1, 1) } else { zext(0b0, 1) };
         EFLAGS::of = extract(~(dst ^ addend) & (dst ^ value), self.XLEN - 1, self.XLEN - 1);
         EFLAGS::af = extract(dst ^ addend ^ value, 4, 4);
+        EFLAGS::pf = parity_flag(value);
         dst = value;
         EFLAGS::zf = if value == zext(0b0, self.XLEN) { zext(0b1, 1) } else { zext(0b0, 1) };
         EFLAGS::sf = extract(value, self.XLEN - 1, self.XLEN - 1);
@@ -63,6 +65,7 @@ instruction Sbb for [X86_64] : RegReg {
             else if dst ~< pre { zext(0b1, 1) } else { zext(0b0, 1) };
         EFLAGS::of = extract((dst ^ src) & (dst ^ value), self.XLEN - 1, self.XLEN - 1);
         EFLAGS::af = extract(dst ^ src ^ value, 4, 4);
+        EFLAGS::pf = parity_flag(value);
         dst = value;
         EFLAGS::zf = if value == zext(0b0, self.XLEN) { zext(0b1, 1) } else { zext(0b0, 1) };
         EFLAGS::sf = extract(value, self.XLEN - 1, self.XLEN - 1);
@@ -87,6 +90,7 @@ instruction SbbImm for [X86_64] : RegImm {
             else if dst ~< pre { zext(0b1, 1) } else { zext(0b0, 1) };
         EFLAGS::of = extract((dst ^ subtrahend) & (dst ^ value), self.XLEN - 1, self.XLEN - 1);
         EFLAGS::af = extract(dst ^ subtrahend ^ value, 4, 4);
+        EFLAGS::pf = parity_flag(value);
         dst = value;
         EFLAGS::zf = if value == zext(0b0, self.XLEN) { zext(0b1, 1) } else { zext(0b0, 1) };
         EFLAGS::sf = extract(value, self.XLEN - 1, self.XLEN - 1);
@@ -114,35 +118,35 @@ tmpl_runary!(RegUnaryIncDec16, X86_64, GPR16, rexw = 0b0, p66 = 0b1, byte = 0b0,
 tmpl_runary!(RegUnaryIncDec8, X86_64, GPR8, rexw = 0b0, p66 = 0b0, byte = 0b1, opcode = 0xFE)
 
 reg_ext!(RegUnaryIncDec64, WriteIALU3B,
-    { let result = dst + zext(0b1, self.XLEN); EFLAGS::zf = if result == zext(0b0, self.XLEN) { zext(0b1, 1) } else { zext(0b0, 1) }; EFLAGS::sf = extract(result, self.XLEN - 1, self.XLEN - 1); EFLAGS::of = extract(~dst & result, self.XLEN - 1, self.XLEN - 1); dst = result; },
+    { let result = dst + zext(0b1, self.XLEN); EFLAGS::zf = if result == zext(0b0, self.XLEN) { zext(0b1, 1) } else { zext(0b0, 1) }; EFLAGS::sf = extract(result, self.XLEN - 1, self.XLEN - 1); EFLAGS::of = extract(~dst & result, self.XLEN - 1, self.XLEN - 1); EFLAGS::af = extract(dst ^ zext(0b1, self.XLEN) ^ result, 4, 4); EFLAGS::pf = parity_flag(result); dst = result; },
     (Inc, "inc", "inc", 0b000)
 )
 reg_ext!(RegUnaryIncDec64, WriteIALU3B,
-    { let result = dst - zext(0b1, self.XLEN); EFLAGS::zf = if result == zext(0b0, self.XLEN) { zext(0b1, 1) } else { zext(0b0, 1) }; EFLAGS::sf = extract(result, self.XLEN - 1, self.XLEN - 1); EFLAGS::of = extract(dst & ~result, self.XLEN - 1, self.XLEN - 1); dst = result; },
+    { let result = dst - zext(0b1, self.XLEN); EFLAGS::zf = if result == zext(0b0, self.XLEN) { zext(0b1, 1) } else { zext(0b0, 1) }; EFLAGS::sf = extract(result, self.XLEN - 1, self.XLEN - 1); EFLAGS::of = extract(dst & ~result, self.XLEN - 1, self.XLEN - 1); EFLAGS::af = extract(dst ^ zext(0b1, self.XLEN) ^ result, 4, 4); EFLAGS::pf = parity_flag(result); dst = result; },
     (Dec, "dec", "dec", 0b001)
 )
 reg_ext!(RegUnaryIncDec32, WriteIALU3B,
-    { let result = dst + zext(0b1, 32); EFLAGS::zf = if result == zext(0b0, 32) { zext(0b1, 1) } else { zext(0b0, 1) }; EFLAGS::sf = extract(result, 31, 31); EFLAGS::of = extract(~dst & result, 31, 31); dst = result; },
+    { let result = dst + zext(0b1, 32); EFLAGS::zf = if result == zext(0b0, 32) { zext(0b1, 1) } else { zext(0b0, 1) }; EFLAGS::sf = extract(result, 31, 31); EFLAGS::of = extract(~dst & result, 31, 31); EFLAGS::af = extract(dst ^ zext(0b1, 32) ^ result, 4, 4); EFLAGS::pf = parity_flag(result); dst = result; },
     (Inc32, "inc32", "inc", 0b000)
 )
 reg_ext!(RegUnaryIncDec32, WriteIALU3B,
-    { let result = dst - zext(0b1, 32); EFLAGS::zf = if result == zext(0b0, 32) { zext(0b1, 1) } else { zext(0b0, 1) }; EFLAGS::sf = extract(result, 31, 31); EFLAGS::of = extract(dst & ~result, 31, 31); dst = result; },
+    { let result = dst - zext(0b1, 32); EFLAGS::zf = if result == zext(0b0, 32) { zext(0b1, 1) } else { zext(0b0, 1) }; EFLAGS::sf = extract(result, 31, 31); EFLAGS::of = extract(dst & ~result, 31, 31); EFLAGS::af = extract(dst ^ zext(0b1, 32) ^ result, 4, 4); EFLAGS::pf = parity_flag(result); dst = result; },
     (Dec32, "dec32", "dec", 0b001)
 )
 reg_ext!(RegUnaryIncDec16, WriteIALU,
-    { let result = dst + zext(0b1, 16); EFLAGS::zf = if result == zext(0b0, 16) { zext(0b1, 1) } else { zext(0b0, 1) }; EFLAGS::sf = extract(result, 15, 15); EFLAGS::of = extract(~dst & result, 15, 15); dst = result; },
+    { let result = dst + zext(0b1, 16); EFLAGS::zf = if result == zext(0b0, 16) { zext(0b1, 1) } else { zext(0b0, 1) }; EFLAGS::sf = extract(result, 15, 15); EFLAGS::of = extract(~dst & result, 15, 15); EFLAGS::af = extract(dst ^ zext(0b1, 16) ^ result, 4, 4); EFLAGS::pf = parity_flag(result); dst = result; },
     (Inc16, "inc16", "inc", 0b000)
 )
 reg_ext!(RegUnaryIncDec16, WriteIALU,
-    { let result = dst - zext(0b1, 16); EFLAGS::zf = if result == zext(0b0, 16) { zext(0b1, 1) } else { zext(0b0, 1) }; EFLAGS::sf = extract(result, 15, 15); EFLAGS::of = extract(dst & ~result, 15, 15); dst = result; },
+    { let result = dst - zext(0b1, 16); EFLAGS::zf = if result == zext(0b0, 16) { zext(0b1, 1) } else { zext(0b0, 1) }; EFLAGS::sf = extract(result, 15, 15); EFLAGS::of = extract(dst & ~result, 15, 15); EFLAGS::af = extract(dst ^ zext(0b1, 16) ^ result, 4, 4); EFLAGS::pf = parity_flag(result); dst = result; },
     (Dec16, "dec16", "dec", 0b001)
 )
 reg_ext!(RegUnaryIncDec8, WriteIALU,
-    { let result = dst + zext(0b1, 8); EFLAGS::zf = if result == zext(0b0, 8) { zext(0b1, 1) } else { zext(0b0, 1) }; EFLAGS::sf = extract(result, 7, 7); EFLAGS::of = extract(~dst & result, 7, 7); dst = result; },
+    { let result = dst + zext(0b1, 8); EFLAGS::zf = if result == zext(0b0, 8) { zext(0b1, 1) } else { zext(0b0, 1) }; EFLAGS::sf = extract(result, 7, 7); EFLAGS::of = extract(~dst & result, 7, 7); EFLAGS::af = extract(dst ^ zext(0b1, 8) ^ result, 4, 4); EFLAGS::pf = parity_flag(result); dst = result; },
     (Inc8, "inc8", "inc", 0b000)
 )
 reg_ext!(RegUnaryIncDec8, WriteIALU,
-    { let result = dst - zext(0b1, 8); EFLAGS::zf = if result == zext(0b0, 8) { zext(0b1, 1) } else { zext(0b0, 1) }; EFLAGS::sf = extract(result, 7, 7); EFLAGS::of = extract(dst & ~result, 7, 7); dst = result; },
+    { let result = dst - zext(0b1, 8); EFLAGS::zf = if result == zext(0b0, 8) { zext(0b1, 1) } else { zext(0b0, 1) }; EFLAGS::sf = extract(result, 7, 7); EFLAGS::of = extract(dst & ~result, 7, 7); EFLAGS::af = extract(dst ^ zext(0b1, 8) ^ result, 4, 4); EFLAGS::pf = parity_flag(result); dst = result; },
     (Dec8, "dec8", "dec", 0b001)
 )
 
@@ -257,7 +261,7 @@ instruction MulWide for [X86_64] : RegUnary {
 }
 
 // In-register sign extension: cdqe (48 98) sext-e32 to rax, cwde (98) sext-ax
-// to eax, cbw (66 98) sext-al to ax, and cwd (66 99) sext-al to dx. These are
+// to eax, cbw (66 98) sext-al to ax, and cwd (66 99) sext-ax to dx. These are
 // the operand-size members of the 0x98/0x99 opcode group.
 
 instruction Cdqe for [X86_64] {
@@ -755,9 +759,10 @@ instruction ShldImm for [X86_64] : ShldRegImm {
         if c != zext(0b0, 6) {
             let fill = (zext(0b0, self.XLEN) - zext(c, self.XLEN)) & zext(0b111111, self.XLEN);
             let res = (dst << c) | (src >> fill);
-            EFLAGS::cf = extract(dst << c, self.XLEN - 1, self.XLEN - 1);
+            EFLAGS::cf = extract(dst << (c - zext(0b1, 6)), self.XLEN - 1, self.XLEN - 1);
             EFLAGS::zf = if res == zext(0b0, self.XLEN) { zext(0b1, 1) } else { zext(0b0, 1) };
             EFLAGS::sf = extract(res, self.XLEN - 1, self.XLEN - 1);
+            EFLAGS::pf = parity_flag(res);
             EFLAGS::of = if c == zext(0b1, 6) {
                 extract(dst, self.XLEN - 1, self.XLEN - 1) ^ extract(res, self.XLEN - 1, self.XLEN - 1)
             } else {
@@ -781,6 +786,7 @@ instruction ShrdImm for [X86_64] : ShldRegImm {
             EFLAGS::cf = extract(dst >> (c - zext(0b1, 6)), 0, 0);
             EFLAGS::zf = if res == zext(0b0, self.XLEN) { zext(0b1, 1) } else { zext(0b0, 1) };
             EFLAGS::sf = extract(res, self.XLEN - 1, self.XLEN - 1);
+            EFLAGS::pf = parity_flag(res);
             EFLAGS::of = if c == zext(0b1, 6) {
                 extract(dst, self.XLEN - 1, self.XLEN - 1) ^ extract(res, self.XLEN - 1, self.XLEN - 1)
             } else {
@@ -812,9 +818,10 @@ instruction ShldCl for [X86_64] : RegRegExt {
         if c != zext(0b0, 6) {
             let fill = (zext(0b0, self.XLEN) - zext(c, self.XLEN)) & zext(0b111111, self.XLEN);
             let res = (dst << c) | (src >> fill);
-            EFLAGS::cf = extract(dst << c, self.XLEN - 1, self.XLEN - 1);
+            EFLAGS::cf = extract(dst << (c - zext(0b1, 6)), self.XLEN - 1, self.XLEN - 1);
             EFLAGS::zf = if res == zext(0b0, self.XLEN) { zext(0b1, 1) } else { zext(0b0, 1) };
             EFLAGS::sf = extract(res, self.XLEN - 1, self.XLEN - 1);
+            EFLAGS::pf = parity_flag(res);
             EFLAGS::of = if c == zext(0b1, 6) {
                 extract(dst, self.XLEN - 1, self.XLEN - 1) ^ extract(res, self.XLEN - 1, self.XLEN - 1)
             } else {
@@ -847,6 +854,7 @@ instruction ShrdCl for [X86_64] : RegRegExt {
             EFLAGS::cf = extract(dst >> (c - zext(0b1, 6)), 0, 0);
             EFLAGS::zf = if res == zext(0b0, self.XLEN) { zext(0b1, 1) } else { zext(0b0, 1) };
             EFLAGS::sf = extract(res, self.XLEN - 1, self.XLEN - 1);
+            EFLAGS::pf = parity_flag(res);
             EFLAGS::of = if c == zext(0b1, 6) {
                 extract(dst, self.XLEN - 1, self.XLEN - 1) ^ extract(res, self.XLEN - 1, self.XLEN - 1)
             } else {
