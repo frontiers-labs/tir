@@ -14,6 +14,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         "./defs/atomics.tmdl",
         "./defs/branches.tmdl",
         "./defs/perf.tmdl",
+        "./defs/cpu/arm/cortex_a720.tmdl",
     ];
     for input in &inputs {
         println!("cargo:rerun-if-changed={input}");

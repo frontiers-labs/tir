@@ -5,10 +5,26 @@
 // each machine. The two generic cores (in-order / out-of-order) give `isasim`
 // something to drive under `--timing` without claiming to model any real
 // silicon.
+// Legacy fallback for AdvSIMD operations that do not yet have a measured class.
 sched_class WriteIALU { latency = 1; }
+sched_class WriteScalarIALU { latency = 1; }
 sched_class WriteIMul { latency = 3; }
+sched_class WriteIMulHigh { latency = 3; }
 sched_class WriteIDiv { latency = 12; }
+sched_class WriteIDivWord { latency = 12; }
+sched_class WriteFPAdd { latency = 1; }
+sched_class WriteFPMul { latency = 1; }
+sched_class WriteFPDivSingle { latency = 1; }
+sched_class WriteFPDivDouble { latency = 1; }
+sched_class WriteFPConvert { latency = 1; }
+sched_class WriteFPMove { latency = 1; }
+sched_class WriteBranch { latency = 1; }
+sched_class WriteSystem { latency = 1; }
+sched_class WriteVectorALU { latency = 1; }
+sched_class WriteVectorMul { latency = 3; }
 sched_class WriteLoad { latency = 3; }
+sched_class WriteFPLoad { latency = 3; }
+sched_class WriteVectorLoad { latency = 3; }
 sched_class WriteStore { latency = 1; }
 
 // Generic in-order core: a single narrow pipeline, hardware-interlocked, paired
@@ -32,9 +48,24 @@ machine InOrderCore ("arm64-in-order") for [ARMv8A64] {
     unit LSU { count = 1; }
 
     bind WriteIALU { reads = ID; writes = EX;  uses = [ALU]; }
+    bind WriteScalarIALU { reads = ID; writes = EX; uses = [ALU]; }
     bind WriteIMul { reads = ID; writes = MEM; uses = [ALU]; }
+    bind WriteIMulHigh { reads = ID; writes = MEM; uses = [ALU]; }
     bind WriteIDiv { reads = ID; writes = WB;  uses = [ALU]; }
+    bind WriteIDivWord { reads = ID; writes = WB; uses = [ALU]; }
+    bind WriteFPAdd { reads = ID; writes = EX; uses = [ALU]; }
+    bind WriteFPMul { reads = ID; writes = EX; uses = [ALU]; }
+    bind WriteFPDivSingle { reads = ID; writes = EX; uses = [ALU]; }
+    bind WriteFPDivDouble { reads = ID; writes = EX; uses = [ALU]; }
+    bind WriteFPConvert { reads = ID; writes = EX; uses = [ALU]; }
+    bind WriteFPMove { reads = ID; writes = EX; uses = [ALU]; }
+    bind WriteBranch { reads = ID; writes = EX; uses = [ALU]; }
+    bind WriteSystem { reads = ID; writes = EX; uses = [ALU]; }
+    bind WriteVectorALU { reads = ID; writes = EX; uses = [ALU]; }
+    bind WriteVectorMul { reads = ID; writes = MEM; uses = [ALU]; }
     bind WriteLoad { reads = ID; writes = MEM; uses = [LSU]; }
+    bind WriteFPLoad { reads = ID; writes = MEM; uses = [LSU]; }
+    bind WriteVectorLoad { reads = ID; writes = MEM; uses = [LSU]; }
     bind WriteStore { reads = ID; writes = MEM; uses = [LSU]; }
 
     forward ALU => ALU { latency = 0; }
@@ -62,8 +93,23 @@ machine OutOfOrderCore ("arm64-ooo") for [ARMv8A64] {
     unit LSU { count = 2; }
 
     bind WriteIALU { latency = 1; uses = [ALU]; }
+    bind WriteScalarIALU { latency = 1; uses = [ALU]; }
     bind WriteIMul { latency = 3; uses = [ALU]; }
+    bind WriteIMulHigh { latency = 3; uses = [ALU]; }
     bind WriteIDiv { latency = 12; uses = [ALU]; }
+    bind WriteIDivWord { latency = 12; uses = [ALU]; }
+    bind WriteFPAdd { latency = 1; uses = [ALU]; }
+    bind WriteFPMul { latency = 1; uses = [ALU]; }
+    bind WriteFPDivSingle { latency = 1; uses = [ALU]; }
+    bind WriteFPDivDouble { latency = 1; uses = [ALU]; }
+    bind WriteFPConvert { latency = 1; uses = [ALU]; }
+    bind WriteFPMove { latency = 1; uses = [ALU]; }
+    bind WriteBranch { latency = 1; uses = [ALU]; }
+    bind WriteSystem { latency = 1; uses = [ALU]; }
+    bind WriteVectorALU { latency = 1; uses = [ALU]; }
+    bind WriteVectorMul { latency = 3; uses = [ALU]; }
     bind WriteLoad { latency = 4; uses = [LSU]; }
+    bind WriteFPLoad { latency = 4; uses = [LSU]; }
+    bind WriteVectorLoad { latency = 4; uses = [LSU]; }
     bind WriteStore { latency = 1; uses = [LSU]; }
 }

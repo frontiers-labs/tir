@@ -1,0 +1,33 @@
+// Partial Cortex-A720 model derived from instruction throughput, dependency,
+// operand-sweep, and cache-latency measurements. Unmeasured parameters remain
+// unspecified.
+machine CortexA720 ("cortex-a720") for [ARMv8A64] {
+    issue_width = 5;
+
+    unit Int0 { count = 1; }
+    unit Int1 { count = 1; }
+    unit Int2 { count = 1; }
+    unit Int3 { count = 1; }
+    unit FP0 { count = 1; }
+    unit FP1 { count = 1; }
+    unit IntDivide { count = 1; }
+    unit FloatDivide { count = 1; }
+    unit FloatConvert { count = 1; }
+    unit Load { count = 2; }
+
+    group Integer = Int0 | Int1 | Int2 | Int3;
+    group IntegerMultiply = Int0 | Int1;
+    group Float = FP0 | FP1;
+
+    bind WriteScalarIALU { latency = 1; uop(Integer); }
+    bind WriteIMul { latency = 2; uop(IntegerMultiply); }
+    bind WriteIDiv { latency = 20; uop(Integer & IntDivide<6>); }
+    bind WriteIDivWord { latency = 12; uop(Integer & IntDivide<6>); }
+    bind WriteFPAdd { latency = 2; uop(Float); }
+    bind WriteFPMul { latency = 3; uop(Float); }
+    bind WriteFPDivSingle { latency = 8; uop(Float & FloatDivide); }
+    bind WriteFPDivDouble { latency = 13; uop(Float & FloatDivide); }
+    bind WriteFPConvert { latency = 3; uop(Float & FloatConvert); }
+    bind WriteVectorALU { latency = 2; uop(Float); }
+    bind WriteLoad { latency = 4; uop(Load); }
+}

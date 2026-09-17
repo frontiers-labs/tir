@@ -239,7 +239,7 @@ instruction CompareWord for [ARMv8A64] : CmpRegTemplateWord {
 
 instruction MoveWideZero for [ARMv8A64] {
     param MNEMONIC: String = "movz";
-    schedule { units = [WriteIALU]; }
+    schedule { units = [WriteScalarIALU]; }
 
     operands {
         rd: GPR,
@@ -620,7 +620,7 @@ instruction AddsImmediateWord for [ARMv8A64] : AddSubImmFlagsWord {
 // MOVN with hw = 0 (no shift): rd = NOT(imm16).
 instruction MoveWideNot for [ARMv8A64] {
     param MNEMONIC: String = "movn";
-    schedule { units = [WriteIALU]; }
+    schedule { units = [WriteScalarIALU]; }
 
     operands {
         rd: GPR,
@@ -648,7 +648,7 @@ instruction MoveWideNot for [ARMv8A64] {
 // MOVK with hw = 0 (no shift): insert imm16 into rd[15:0], keeping the rest.
 instruction MoveWideKeep for [ARMv8A64] {
     param MNEMONIC: String = "movk";
-    schedule { units = [WriteIALU]; }
+    schedule { units = [WriteScalarIALU]; }
 
     operands {
         rd: GPR,
@@ -680,7 +680,7 @@ instruction MoveWideKeep for [ARMv8A64] {
 instruction MoveWideKeepShifted for [ARMv8A64] {
     param MNEMONIC: String = "movk";
     param OPNAME: String = "movk_shifted";
-    schedule { units = [WriteIALU]; }
+    schedule { units = [WriteScalarIALU]; }
 
     operands {
         rd: GPR,
@@ -711,7 +711,7 @@ template MoveWideKeepFixed for [ARMv8A64] {
     param MNEMONIC: String = "movk";
     param OPNAME: String;
     param HW: bits<2>;
-    schedule { units = [WriteIALU]; }
+    schedule { units = [WriteScalarIALU]; }
 
     operands {
         rd: GPR,
@@ -888,6 +888,7 @@ instruction SignedMultiplyHigh for [ARMv8A64] : DataProc3SrcZr {
     param MNEMONIC: String = "smulh";
     param OP31: bits<3> = 0b010;
     param O0: bits<1> = 0b0;
+    schedule { units = [WriteIMulHigh]; }
 
     behavior {
         rd = extract(rn * rm, (2 * self.XLEN) - 1, self.XLEN);
@@ -913,7 +914,7 @@ instruction SignedDivideWord for [ARMv8A64] : ShiftRegWord {
     param OPNAME: String = "sdiv_word";
     param MNEMONIC: String = "sdiv";
     param OPCODE: bits<6> = 0b000011;
-    schedule { units = [WriteIDiv]; }
+    schedule { units = [WriteIDivWord]; }
 
     behavior {
         if rm == zext(0b0, 32) {
@@ -942,7 +943,7 @@ instruction UnsignedDivideWord for [ARMv8A64] : ShiftRegWord {
     param OPNAME: String = "udiv_word";
     param MNEMONIC: String = "udiv";
     param OPCODE: bits<6> = 0b000010;
-    schedule { units = [WriteIDiv]; }
+    schedule { units = [WriteIDivWord]; }
 
     behavior {
         if rm == zext(0b0, 32) {
@@ -985,7 +986,7 @@ instruction LogicalShiftRightImmWord for [ARMv8A64] : ShiftRightImmWordTemplate 
 instruction LogicalShiftRightImmHalfword for [ARMv8A64] {
     param MNEMONIC: String = "ubfm";
     param OPNAME: String = "lsr_h";
-    schedule { units = [WriteIALU]; }
+    schedule { units = [WriteScalarIALU]; }
 
     operands {
         rd: GPR32,
@@ -1017,7 +1018,7 @@ instruction LogicalShiftRightImmHalfword for [ARMv8A64] {
 instruction LogicalShiftRightImmByte for [ARMv8A64] {
     param MNEMONIC: String = "ubfm";
     param OPNAME: String = "lsr_b";
-    schedule { units = [WriteIALU]; }
+    schedule { units = [WriteScalarIALU]; }
 
     operands {
         rd: GPR32,
@@ -1118,7 +1119,7 @@ instruction SignExtendWord for [ARMv8A64] : SignExtendFixed {
 //   imms <  immr : low (imms+1) bits placed at bit (64 - immr)  (the lsl case)
 instruction UnsignedBitfieldMove for [ARMv8A64] {
     param MNEMONIC: String = "ubfm";
-    schedule { units = [WriteIALU]; }
+    schedule { units = [WriteScalarIALU]; }
 
     operands {
         rd: GPR,
@@ -1160,7 +1161,7 @@ instruction UnsignedBitfieldMove for [ARMv8A64] {
 instruction MoveWideZero32 for [ARMv8A64] {
     param MNEMONIC: String = "movz";
     param OPNAME: String = "movz_w";
-    schedule { units = [WriteIALU]; }
+    schedule { units = [WriteScalarIALU]; }
 
     operands {
         rd: GPR32,
@@ -1192,7 +1193,7 @@ instruction MoveWideZero32 for [ARMv8A64] {
 instruction AndImmediate for [ARMv8A64] {
     param MNEMONIC: String = "and";
     param OPNAME: String = "and_imm";
-    schedule { units = [WriteIALU]; }
+    schedule { units = [WriteScalarIALU]; }
 
     operands {
         rd: GPRsp,
@@ -1233,7 +1234,7 @@ instruction AndImmediate for [ARMv8A64] {
 instruction AndImmediate32 for [ARMv8A64] {
     param MNEMONIC: String = "and";
     param OPNAME: String = "and_imm_w";
-    schedule { units = [WriteIALU]; }
+    schedule { units = [WriteScalarIALU]; }
 
     operands {
         rd: GPRsp,
@@ -1275,6 +1276,7 @@ instruction AndImmediate32 for [ARMv8A64] {
 instruction FAddDouble for [FP] : FPArith64 {
     param MNEMONIC: String = "fadd";
     param OPCODE: bits<4> = 0b0010;
+    schedule { units = [WriteFPAdd]; }
 
     behavior {
         fd = fadd(fa, fb);
@@ -1284,6 +1286,7 @@ instruction FAddDouble for [FP] : FPArith64 {
 instruction FSubDouble for [FP] : FPArith64 {
     param MNEMONIC: String = "fsub";
     param OPCODE: bits<4> = 0b0011;
+    schedule { units = [WriteFPAdd]; }
 
     behavior {
         fd = fsub(fa, fb);
@@ -1293,6 +1296,7 @@ instruction FSubDouble for [FP] : FPArith64 {
 instruction FMulDouble for [FP] : FPArith64 {
     param MNEMONIC: String = "fmul";
     param OPCODE: bits<4> = 0b0000;
+    schedule { units = [WriteFPMul]; }
 
     behavior {
         fd = fmul(fa, fb);
@@ -1302,6 +1306,7 @@ instruction FMulDouble for [FP] : FPArith64 {
 instruction FDivDouble for [FP] : FPArith64 {
     param MNEMONIC: String = "fdiv";
     param OPCODE: bits<4> = 0b0001;
+    schedule { units = [WriteFPDivDouble]; }
 
     behavior {
         fd = fdiv(fa, fb);
@@ -1312,6 +1317,7 @@ instruction FAddSingle for [FP] : FPArith32 {
     param MNEMONIC: String = "fadd";
     param OPNAME: String = "fadd_s";
     param OPCODE: bits<4> = 0b0010;
+    schedule { units = [WriteFPAdd]; }
 
     behavior {
         fd = fadd(fa, fb);
@@ -1322,6 +1328,7 @@ instruction FSubSingle for [FP] : FPArith32 {
     param MNEMONIC: String = "fsub";
     param OPNAME: String = "fsub_s";
     param OPCODE: bits<4> = 0b0011;
+    schedule { units = [WriteFPAdd]; }
 
     behavior {
         fd = fsub(fa, fb);
@@ -1332,6 +1339,7 @@ instruction FMulSingle for [FP] : FPArith32 {
     param MNEMONIC: String = "fmul";
     param OPNAME: String = "fmul_s";
     param OPCODE: bits<4> = 0b0000;
+    schedule { units = [WriteFPMul]; }
 
     behavior {
         fd = fmul(fa, fb);
@@ -1342,6 +1350,7 @@ instruction FDivSingle for [FP] : FPArith32 {
     param MNEMONIC: String = "fdiv";
     param OPNAME: String = "fdiv_s";
     param OPCODE: bits<4> = 0b0001;
+    schedule { units = [WriteFPDivSingle]; }
 
     behavior {
         fd = fdiv(fa, fb);
@@ -1409,7 +1418,7 @@ instr_fcmp!(FCmpSingle, FPR32, "fcmp_s", ptype = 0b00)
 instruction SCvtfDoubleWord for [FP] {
     param MNEMONIC: String = "scvtf";
     param OPNAME: String = "scvtf_d_w";
-    schedule { units = [WriteIALU]; }
+    schedule { units = [WriteFPConvert]; }
 
     operands {
         fd: FPR64,
@@ -1441,7 +1450,7 @@ instruction SCvtfDoubleWord for [FP] {
 instruction UCvtfDoubleWord for [FP] {
     param MNEMONIC: String = "ucvtf";
     param OPNAME: String = "ucvtf_d_w";
-    schedule { units = [WriteIALU]; }
+    schedule { units = [WriteFPConvert]; }
 
     operands {
         fd: FPR64,
@@ -1472,7 +1481,7 @@ instruction UCvtfDoubleWord for [FP] {
 instruction SCvtfSingleWord for [FP] {
     param MNEMONIC: String = "scvtf";
     param OPNAME: String = "scvtf_s_w";
-    schedule { units = [WriteIALU]; }
+    schedule { units = [WriteFPConvert]; }
 
     operands {
         fd: FPR32,
@@ -1503,7 +1512,7 @@ instruction SCvtfSingleWord for [FP] {
 instruction UCvtfSingleWord for [FP] {
     param MNEMONIC: String = "ucvtf";
     param OPNAME: String = "ucvtf_s_w";
-    schedule { units = [WriteIALU]; }
+    schedule { units = [WriteFPConvert]; }
 
     operands {
         fd: FPR32,
@@ -1535,7 +1544,7 @@ instruction UCvtfSingleWord for [FP] {
 instruction FCvtzsWordDouble for [FP] {
     param MNEMONIC: String = "fcvtzs";
     param OPNAME: String = "fcvtzs_w_d";
-    schedule { units = [WriteIALU]; }
+    schedule { units = [WriteFPConvert]; }
 
     operands {
         rd: GPR,
@@ -1565,7 +1574,7 @@ instruction FCvtzsWordDouble for [FP] {
 instruction FCvtzuWordDouble for [FP] {
     param MNEMONIC: String = "fcvtzu";
     param OPNAME: String = "fcvtzu_w_d";
-    schedule { units = [WriteIALU]; }
+    schedule { units = [WriteFPConvert]; }
 
     operands {
         rd: GPR,
@@ -1595,7 +1604,7 @@ instruction FCvtzuWordDouble for [FP] {
 instruction FCvtzsWordSingle for [FP] {
     param MNEMONIC: String = "fcvtzs";
     param OPNAME: String = "fcvtzs_w_s";
-    schedule { units = [WriteIALU]; }
+    schedule { units = [WriteFPConvert]; }
 
     operands {
         rd: GPR32,
@@ -1625,7 +1634,7 @@ instruction FCvtzsWordSingle for [FP] {
 instruction FCvtzuWordSingle for [FP] {
     param MNEMONIC: String = "fcvtzu";
     param OPNAME: String = "fcvtzu_w_s";
-    schedule { units = [WriteIALU]; }
+    schedule { units = [WriteFPConvert]; }
 
     operands {
         rd: GPR32,
@@ -1657,7 +1666,7 @@ instruction FCvtzuWordSingle for [FP] {
 instruction FCvtzsDouble for [FP] {
     param MNEMONIC: String = "fcvtzs";
     param OPNAME: String = "fcvtzs_x_d";
-    schedule { units = [WriteIALU]; }
+    schedule { units = [WriteFPConvert]; }
 
     operands {
         rd: GPR,
@@ -1688,7 +1697,7 @@ instruction FCvtzsDouble for [FP] {
 instruction FCvtzuDouble for [FP] {
     param MNEMONIC: String = "fcvtzu";
     param OPNAME: String = "fcvtzu_x_d";
-    schedule { units = [WriteIALU]; }
+    schedule { units = [WriteFPConvert]; }
 
     operands {
         rd: GPR,
@@ -1719,7 +1728,7 @@ instruction FCvtzuDouble for [FP] {
 instruction FMoveRegisterDouble for [FP] {
     param MNEMONIC: String = "fmov";
     param OPNAME: String = "fmov_reg64";
-    schedule { units = [WriteIALU]; }
+    schedule { units = [WriteFPMove]; }
 
     operands {
         fd: FPR64,
@@ -1749,7 +1758,7 @@ instruction FMoveRegisterDouble for [FP] {
 instruction FMoveRegisterSingle for [FP] {
     param MNEMONIC: String = "fmov";
     param OPNAME: String = "fmov_reg32";
-    schedule { units = [WriteIALU]; }
+    schedule { units = [WriteFPMove]; }
 
     operands {
         fd: FPR32,
@@ -1782,7 +1791,7 @@ instruction FMoveRegisterSingle for [FP] {
 // (float) destination as raw bits, as the hardware does.
 instruction FMovImmediateDouble for [FP] {
     param MNEMONIC: String = "fmov";
-    schedule { units = [WriteIALU]; }
+    schedule { units = [WriteFPMove]; }
 
     operands {
         fd: FPR64,
@@ -1820,7 +1829,7 @@ instruction FMovImmediateDouble for [FP] {
 instruction FMovDoubleToGeneral for [FP] {
     param MNEMONIC: String = "fmov";
     param OPNAME: String = "fmov_x_d";
-    schedule { units = [WriteIALU]; }
+    schedule { units = [WriteFPMove]; }
 
     operands {
         rd: GPR,
@@ -1853,7 +1862,7 @@ instruction FMovDoubleToGeneral for [FP] {
 instruction FMovGeneralToDouble for [FP] {
     param MNEMONIC: String = "fmov";
     param OPNAME: String = "fmov_d_x";
-    schedule { units = [WriteIALU]; }
+    schedule { units = [WriteFPMove]; }
 
     operands {
         fd: FPR64,
@@ -1886,7 +1895,7 @@ instruction FMovGeneralToDouble for [FP] {
 instruction FMovSingleToGeneral for [FP] {
     param MNEMONIC: String = "fmov";
     param OPNAME: String = "fmov_w_s";
-    schedule { units = [WriteIALU]; }
+    schedule { units = [WriteFPMove]; }
 
     operands {
         rd: GPR32,
@@ -1917,7 +1926,7 @@ instruction FMovSingleToGeneral for [FP] {
 instruction FMovGeneralToSingle for [FP] {
     param MNEMONIC: String = "fmov";
     param OPNAME: String = "fmov_s_w";
-    schedule { units = [WriteIALU]; }
+    schedule { units = [WriteFPMove]; }
 
     operands {
         fd: FPR32,

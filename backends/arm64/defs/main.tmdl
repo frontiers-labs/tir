@@ -127,7 +127,6 @@ abi AAPCS64("aapcs64") for [ARMv8A64] {
 macro tmpl_fp_arith {
     ( $name:ident, $cls:ident, ptype = $ptype:literal ) => {
         template $name for [FP] {
-            schedule { units = [WriteIALU]; }
             param MNEMONIC: String;
             param OPCODE: bits<4>;
 
@@ -165,7 +164,7 @@ tmpl_fp_arith!(FPArith32, FPR32, ptype = 0b00)
 macro tmpl_addsub_reg {
     ( $name:ident, $cls:ident, sf = $sf:literal ) => {
         template $name for [ARMv8A64] {
-            schedule { units = [WriteIALU]; }
+            schedule { units = [WriteScalarIALU]; }
             param MNEMONIC: String;
             param SF: bits<1> = $sf;
             param OP: bits<1>;
@@ -204,7 +203,7 @@ tmpl_addsub_reg!(AddSubRegWord, GPR32, sf = 0b0)
 macro tmpl_cmp_reg {
     ( $name:ident, $cls:ident, sf = $sf:literal ) => {
         template $name for [ARMv8A64] {
-            schedule { units = [WriteIALU]; }
+            schedule { units = [WriteScalarIALU]; }
             param MNEMONIC: String;
             param SF: bits<1> = $sf;
             param OP: bits<1> = 0b1;
@@ -243,7 +242,7 @@ tmpl_cmp_reg!(CmpRegTemplateWord, GPR32, sf = 0b0)
 macro tmpl_cmp_imm {
     ( $name:ident, $cls:ident, sf = $sf:literal ) => {
         template $name for [ARMv8A64] {
-            schedule { units = [WriteIALU]; }
+            schedule { units = [WriteScalarIALU]; }
             param MNEMONIC: String;
             param SF: bits<1> = $sf;
             param OP: bits<1>;
@@ -279,7 +278,7 @@ tmpl_cmp_imm!(CmpImmTemplateWord, GPR32sp, sf = 0b0)
 macro tmpl_tst_reg {
     ( $name:ident, $cls:ident, sf = $sf:literal ) => {
         template $name for [ARMv8A64] {
-            schedule { units = [WriteIALU]; }
+            schedule { units = [WriteScalarIALU]; }
             param MNEMONIC: String;
             param SF: bits<1> = $sf;
             param SHIFT: bits<2> = 0b00;
@@ -315,7 +314,7 @@ tmpl_tst_reg!(TstRegTemplateWord, GPR32, sf = 0b0)
 macro tmpl_addsub_imm {
     ( $name:ident, $cls:ident, sf = $sf:literal ) => {
         template $name for [ARMv8A64] {
-            schedule { units = [WriteIALU]; }
+            schedule { units = [WriteScalarIALU]; }
             param MNEMONIC: String;
             param SF: bits<1> = $sf;
             param OP: bits<1>;
@@ -354,7 +353,7 @@ tmpl_addsub_imm!(AddSubImmWord, GPR32sp, sf = 0b0)
 macro tmpl_addsub_imm_flags {
     ( $name:ident, $rd_cls:ident, $rn_cls:ident, sf = $sf:literal ) => {
         template $name for [ARMv8A64] {
-            schedule { units = [WriteIALU]; }
+            schedule { units = [WriteScalarIALU]; }
             param MNEMONIC: String;
             param SF: bits<1> = $sf;
             param OP: bits<1>;
@@ -393,7 +392,7 @@ tmpl_addsub_imm_flags!(AddSubImmFlagsWord, GPR32, GPR32sp, sf = 0b0)
 macro tmpl_logical_reg {
     ( $name:ident, $cls:ident, sf = $sf:literal ) => {
         template $name for [ARMv8A64] {
-            schedule { units = [WriteIALU]; }
+            schedule { units = [WriteScalarIALU]; }
             param MNEMONIC: String;
             param SF: bits<1> = $sf;
             param OPC: bits<2>;
@@ -432,7 +431,7 @@ tmpl_logical_reg!(LogicalRegWord, GPR32, sf = 0b0)
 macro tmpl_shift_reg {
     ( $name:ident, $cls:ident, sf = $sf:literal ) => {
         template $name for [ARMv8A64] {
-            schedule { units = [WriteIALU]; }
+            schedule { units = [WriteScalarIALU]; }
             param MNEMONIC: String;
             param SF: bits<1> = $sf;
             param OPCODE: bits<6>;
@@ -646,7 +645,7 @@ tmpl_loadstore_float_scaled!(LoadStoreFloatImmUnsignedD, FPR64, 15, 3, 14, align
 tmpl_loadstore_float_scaled!(LoadStoreFloatImmUnsignedS, FPR32, 14, 2, 13, align = 4, size = 0b10)
 
 template BranchImm for [ARMv8A64] {
-    schedule { units = [WriteIALU]; }
+    schedule { units = [WriteBranch]; }
     param MNEMONIC: String;
 
     operands {
@@ -664,7 +663,7 @@ template BranchImm for [ARMv8A64] {
 }
 
 template BranchLinkImm for [ARMv8A64] {
-    schedule { units = [WriteIALU]; }
+    schedule { units = [WriteBranch]; }
     param MNEMONIC: String;
 
     operands {
@@ -682,7 +681,7 @@ template BranchLinkImm for [ARMv8A64] {
 }
 
 template BranchReg for [ARMv8A64] {
-    schedule { units = [WriteIALU]; }
+    schedule { units = [WriteBranch]; }
     param MNEMONIC: String;
     param OPCODE: bits<4>;
 
@@ -705,7 +704,7 @@ template BranchReg for [ARMv8A64] {
 }
 
 template CondBranchImm for [ARMv8A64] {
-    schedule { units = [WriteIALU]; }
+    schedule { units = [WriteBranch]; }
     param MNEMONIC: String;
     param COND: bits<4>;
 
@@ -807,7 +806,7 @@ tmpl_data_proc_3src_zr!(DataProc3SrcZrWord, GPR32, sf = 0b0)
 // Bitfield instructions with fixed immr/imms (`lsr`/`asr` immediate and the
 // sign-extend aliases of SBFM/UBFM). The x-form has N = 1.
 template BitfieldFixed for [ARMv8A64] {
-    schedule { units = [WriteIALU]; }
+    schedule { units = [WriteScalarIALU]; }
     param MNEMONIC: String;
     param SF: bits<1> = 0b1;
     param OPC: bits<2>;
@@ -841,7 +840,7 @@ template BitfieldFixed for [ARMv8A64] {
 macro tmpl_signext_fixed {
     ( $name:ident, $cls:ident, sf = $sf:literal ) => {
         template $name for [ARMv8A64] {
-            schedule { units = [WriteIALU]; }
+            schedule { units = [WriteScalarIALU]; }
             param MNEMONIC: String;
             param SF: bits<1> = $sf;
             param OPC: bits<2>;
@@ -878,7 +877,7 @@ tmpl_signext_fixed!(SignExtendFixedWord, GPR32, sf = 0b0)
 // immediate is not representable: its immr/imms are both derived from the
 // shift amount, which the encoding language cannot express.)
 template ShiftRightImmTemplate for [ARMv8A64] {
-    schedule { units = [WriteIALU]; }
+    schedule { units = [WriteScalarIALU]; }
     param MNEMONIC: String;
     param SF: bits<1> = 0b1;
     param OPC: bits<2>;
@@ -906,7 +905,7 @@ template ShiftRightImmTemplate for [ARMv8A64] {
 }
 
 template ShiftRightImmWordTemplate for [ARMv8A64] {
-    schedule { units = [WriteIALU]; }
+    schedule { units = [WriteScalarIALU]; }
     param MNEMONIC: String;
     param SF: bits<1> = 0b0;
     param OPC: bits<2>;
@@ -939,7 +938,7 @@ template ShiftRightImmWordTemplate for [ARMv8A64] {
 // signed offset (in bytes for adr, in 4KiB pages for adrp), stored split as
 // immhi:immlo.
 template PCRelAddr for [ARMv8A64] {
-    schedule { units = [WriteIALU]; }
+    schedule { units = [WriteScalarIALU]; }
     param MNEMONIC: String;
     param OP: bits<1>;
 
@@ -964,7 +963,7 @@ template PCRelAddr for [ARMv8A64] {
 // Conditional select (`csel`). COND holds the A64 condition code; each
 // instruction fixes it and spells the condition in its asm string.
 template CondSelect for [ARMv8A64] {
-    schedule { units = [WriteIALU]; }
+    schedule { units = [WriteScalarIALU]; }
     param MNEMONIC: String;
     param SF: bits<1> = 0b1;
     param COND: bits<4>;
@@ -994,7 +993,7 @@ template CondSelect for [ARMv8A64] {
 // Conditional set (`cset`): csinc rd, xzr, xzr, invert(cond). COND holds the
 // already-inverted condition code, as encoded in hardware.
 template CondSet for [ARMv8A64] {
-    schedule { units = [WriteIALU]; }
+    schedule { units = [WriteScalarIALU]; }
     param MNEMONIC: String;
     param SF: bits<1> = 0b1;
     param COND: bits<4>;
@@ -1024,7 +1023,7 @@ template CondSet for [ARMv8A64] {
 macro tmpl_compare_branch {
     ( $name:ident, $cls:ident, sf = $sf:literal ) => {
         template $name for [ARMv8A64] {
-            schedule { units = [WriteIALU]; }
+            schedule { units = [WriteBranch]; }
             param MNEMONIC: String;
             param SF: bits<1> = $sf;
             param OP: bits<1>;
@@ -1055,7 +1054,7 @@ tmpl_compare_branch!(CompareBranchWord, GPR32, sf = 0b0)
 // Test-bit-and-branch (`tbz`/`tbnz`). The 6-bit bit number is stored split as
 // b5:b40; the immediate holds the pc-relative word offset.
 template TestBitBranch for [ARMv8A64] {
-    schedule { units = [WriteIALU]; }
+    schedule { units = [WriteBranch]; }
     param MNEMONIC: String;
     param OP: bits<1>;
 
@@ -1080,7 +1079,7 @@ template TestBitBranch for [ARMv8A64] {
 }
 
 template TestBitBranchWord for [ARMv8A64] {
-    schedule { units = [WriteIALU]; }
+    schedule { units = [WriteBranch]; }
     param MNEMONIC: String;
     param OP: bits<1>;
 
@@ -1330,7 +1329,7 @@ template LoadStorePairWriteback for [ARMv8A64] {
 // amount. Same class as `LogicalReg` but the 6-bit shift amount is an operand
 // and SHIFT selects the shift type; each instruction applies it in behavior.
 template LogicalShiftedReg for [ARMv8A64] {
-    schedule { units = [WriteIALU]; }
+    schedule { units = [WriteScalarIALU]; }
     param MNEMONIC: String;
     param SF: bits<1> = 0b1;
     param OPC: bits<2>;
