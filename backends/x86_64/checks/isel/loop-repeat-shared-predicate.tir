@@ -1,0 +1,27 @@
+// RUN: tir mc --march=x86_64 --stage=isel %s | filecheck %s
+
+// A repeat whose inner comparison also escapes as a value keeps its
+// materialization: the latch branch still fuses, but the exit edge carries
+// the setcc register to the block returning it.
+
+// CHECK: x86_64.sete {dst = %[[DONE:[0-9]+]]:GPR8}
+// CHECK: x86_64.je {imm = ^[[EXIT:bb[0-9]+]]}
+// CHECK: ^[[EXIT]]:
+// CHECK-NEXT: asm.vbr %{{[0-9]+}}, %[[DONE]] ^[[RET:bb[0-9]+]]
+// CHECK: ^[[RET]](%{{[0-9]+}}: !x86_64.GPR, %{{[0-9]+}}: !x86_64.GPR):
+// CHECK-NEXT: asm.vret
+
+module {
+  %fn_down = func.func @down(%n: !i64) -> !i1 {
+    cfg.br ^loop(%n : !i64)
+  ^loop(%i: !i64):
+    %one = constant {value = 1} : !i64
+    %ni = subi %i, %one : !i64
+    %z = constant {value = 0} : !i64
+    %done = cmpi %ni, %z {predicate = "eq"} : !i1
+    cfg.cond_br %done, ^exit(%done : !i1), ^loop(%ni : !i64)
+  ^exit(%r: !i1):
+    func.return %r
+  }
+  module_end
+}

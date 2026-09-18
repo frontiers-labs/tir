@@ -2779,7 +2779,9 @@ impl InstructionSelectPass {
 /// read by nothing else, and the predicate computations they bypass. Only a
 /// repeat whose predicate has no use-list user and a single region-result
 /// naming qualifies — any other flow hands the value across an edge, which
-/// only a register does.
+/// only a register does. On the Unless path the recorded class is the inner
+/// comparison rather than the predicate, so the inner value must likewise be
+/// used only by the negation.
 fn fused_repeat_classes(
     context: &Context,
     fs: &FunctionSelection,
@@ -2803,6 +2805,20 @@ fn fused_repeat_classes(
             || fs.operand_uses.get(&predicate).copied().unwrap_or(0) > 1
         {
             continue;
+        }
+        let inner = crate::passes::destructure::unnegate(context, predicate);
+        if matches!(slot, AuxSlot::Unless(0)) {
+            let Some(inner) = inner else {
+                continue;
+            };
+            let def = context.get_value(predicate).defining_op();
+            let only_negation = context
+                .users_of(inner)
+                .iter()
+                .all(|user| Some(*user) == def);
+            if !only_negation || fs.operand_uses.get(&inner).copied().unwrap_or(0) > 1 {
+                continue;
+            }
         }
         if let Some(entry) = fs
             .region_aux
