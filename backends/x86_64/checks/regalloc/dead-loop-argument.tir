@@ -1,0 +1,19 @@
+// RUN: tir mc --march=x86_64 --stage=regalloc %s | filecheck %s
+
+module {
+  %f = func.func @count(%n: !i32) -> !i32 {
+    %zero = constant {value = 0} : !i32
+    %one = constant {value = 1} : !i32
+    %result, %unused_result = scf.loop (%i = %zero, %unused = %zero) {
+      %next = addi %i, %one : !i32
+      %again = cmpi %next, %n {predicate = "slt"} : !i1
+      -> %again, %next, %zero, %i, %unused
+    }
+    func.return %result
+  }
+  module_end
+}
+
+// CHECK: ^[[HEADER:bb[0-9]+]](%{{[0-9]+}}: !x86_64.GPR32, %[[UNUSED:[0-9]+]]: !x86_64.GPR):
+// CHECK-NOT: %[[UNUSED]]:
+// CHECK: asm.vret

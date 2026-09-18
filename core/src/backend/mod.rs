@@ -641,6 +641,31 @@ pub fn branch_successors(op: &dyn tir::Operation) -> Vec<tir::BlockId> {
         .collect()
 }
 
+pub(crate) fn fallthrough_branch(
+    context: &tir::Context,
+    block: tir::BlockId,
+    next: tir::BlockId,
+) -> Option<tir::OpId> {
+    for op_id in context.get_block(block).op_ids().into_iter().rev() {
+        let op = context.get_op(op_id);
+        match asm_item(&op) {
+            AsmItem::Skip => continue,
+            AsmItem::Instruction => {
+                let instruction = op.clone().as_interface::<dyn MachineInstruction>()?;
+                let registers = crate::analysis::execution_regs(&op);
+                return (instruction.info().control_flow == ControlFlow::Unconditional
+                    && instruction.info().effects == MemoryEffects::NONE
+                    && registers.defs.is_empty()
+                    && registers.phys_defs.is_empty()
+                    && branch_successors(op.as_dyn_op().as_ref()) == [next])
+                .then_some(op_id);
+            }
+            _ => return None,
+        }
+    }
+    None
+}
+
 /// The IEEE-754 bit pattern of an `fp.constant` f64.
 pub fn f64_constant_bits(context: &tir::Context, op: &crate::fp::ops::ConstantOp) -> Option<i64> {
     let ty = context.get_value(op.result()).ty();

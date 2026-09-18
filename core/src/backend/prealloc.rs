@@ -3,7 +3,7 @@
 //! pass so a fix in one cannot perturb the others, and each is exercisable in
 //! isolation; [`regalloc_stage_for`] composes them with the allocation pass.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use tir::attributes::AttributeValue;
 use tir::{AnalysisManager, Context, OperationRef, Pass, PassError, PassTarget, ValueId};
@@ -194,6 +194,7 @@ impl Pass for BlockArgLoweringPass {
     ) -> Result<(), PassError> {
         let blocks = symbol_body_blocks(context, op.op());
         let info = self.target.register_info();
+        let needed = demanded_arguments(context, &blocks);
         for &block_id in &blocks {
             for op_id in context.get_block(block_id).op_ids() {
                 let op = context.get_op(op_id);
@@ -235,7 +236,7 @@ impl Pass for BlockArgLoweringPass {
                 let value_params = context.get_block(dest).value_arguments().len();
                 let mut pairs: Vec<(ValueId, ValueId, RegClassId)> = Vec::new();
                 for (&param, &arg) in params.iter().zip(args.iter()).take(value_params) {
-                    if param == arg {
+                    if param == arg || !needed.contains(&param) {
                         continue;
                     }
                     let class = info
@@ -277,6 +278,41 @@ impl Pass for BlockArgLoweringPass {
             }
         }
         Ok(())
+    }
+}
+
+fn demanded_arguments(context: &Context, blocks: &[tir::BlockId]) -> HashSet<ValueId> {
+    let mut needed = HashSet::new();
+    let mut forwarded = Vec::new();
+    for &block in blocks {
+        for op in context.get_block(block).op_ids() {
+            let op = context.get_op(op);
+            if op.is::<VirtualBranchOp>() {
+                if let Some(AttributeValue::Block(dest)) = op.attr("dest") {
+                    forwarded.extend(
+                        context
+                            .get_block(dest)
+                            .arguments()
+                            .iter()
+                            .zip(op.operands().iter())
+                            .map(|(parameter, &argument)| (parameter.id(), argument)),
+                    );
+                }
+            } else {
+                needed.extend(crate::analysis::op_regs(&op).uses);
+            }
+        }
+    }
+    loop {
+        let mut changed = false;
+        for &(parameter, argument) in &forwarded {
+            if needed.contains(&parameter) {
+                changed |= needed.insert(argument);
+            }
+        }
+        if !changed {
+            return needed;
+        }
     }
 }
 

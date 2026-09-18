@@ -193,10 +193,18 @@ impl BinaryWriter {
         state.obj.sections[section].data.resize(aligned as usize, 0);
         state.obj.sections[section].align = state.obj.sections[section].align.max(align);
         let start = state.obj.sections[section].data.len() as u64;
-        for block_id in crate::backend::symbol_body_blocks(context, op) {
+        let blocks = crate::backend::symbol_body_blocks(context, op);
+        for (index, &block_id) in blocks.iter().enumerate() {
             let offset = state.obj.sections[section].data.len() as u64;
             state.block_starts.insert(block_id, offset);
-            self.walk_block(context, context.get_block(block_id), state, fmt)?;
+            let omitted = blocks
+                .get(index + 1)
+                .and_then(|&next| crate::backend::fallthrough_branch(context, block_id, next));
+            for op_id in context.get_block(block_id).op_ids() {
+                if Some(op_id) != omitted {
+                    self.write_op(context, &context.get_op(op_id), state, fmt)?;
+                }
+            }
         }
         let end = state.obj.sections[section].data.len() as u64;
 

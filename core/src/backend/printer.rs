@@ -156,7 +156,8 @@ impl AsmPrinter {
             out.push_str(":\n");
             // The symbol label above names the entry block, so only non-entry
             // blocks emit their own label (branch targets must be defined).
-            for (index, block_id) in symbol_body_blocks(context, op).into_iter().enumerate() {
+            let blocks = symbol_body_blocks(context, op);
+            for (index, &block_id) in blocks.iter().enumerate() {
                 let block = context.get_block(block_id);
                 if index > 0 {
                     match block.attr("name") {
@@ -168,7 +169,14 @@ impl AsmPrinter {
                     }
                     out.push_str(":\n");
                 }
-                self.print_block(context, block, out, assignment)?;
+                let omitted = blocks
+                    .get(index + 1)
+                    .and_then(|&next| crate::backend::fallthrough_branch(context, block_id, next));
+                for op_id in block.op_ids() {
+                    if Some(op_id) != omitted {
+                        self.print_op_in(context, &context.get_op(op_id), out, assignment)?;
+                    }
+                }
             }
             return Ok(());
         }
