@@ -123,7 +123,11 @@ the block whose plan must materialize it:
   last arm taking whatever is left; a one-bit predicate selecting arm 1 *is* that
   test and stands for itself, so the target's branch rules see the condition they
   were written against;
-- a `Theta` contributes the predicate its body names, held by the body;
+- a `Theta` contributes the predicate its body names, held by the body; a
+  negated repeat (`xori(cmp, 1)` over a head-tested loop's exit) contributes
+  the comparison instead, taken when it does *not* hold, so the target's
+  branch rules see the condition they were written against rather than a
+  materialized boolean;
 - a `CountedLoop` contributes its zero-trip guard `lb < ub`, held by the block the
   loop sits in, and — in its body — the counter's advance `counter + step` and the
   back-edge test `counter + step < ub`. The counter is minted as the body's
@@ -944,6 +948,10 @@ at its condition class whose operands all resolve at B (tie → most specific):
   demand overlay `mm_overlay`. The condition class is then demanded only if
   something else needs it: nothing does, and its compare op is erased with no tile;
   another consumer does, and the compare is materialized (`slt`) *and* fused.
+  A fused loop repeat read by nothing else, and the predicate computation it
+  bypasses, are additionally excused from the block's demand outright, since a
+  dead value tile for either would leave a flag-setting compare no later pass
+  removes.
 - **Fused on a minted operand**: a counted loop's counter advance names no value
   of the IR, so no register exists to bind while the rules are being chosen. It is
   a *value slot* of this block's `region_aux`, which the block materializes by

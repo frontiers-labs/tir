@@ -1,0 +1,28 @@
+// RUN: tir mc --march=x86_64 --stage=isel %s | filecheck %s
+
+// A loop that repeats while its exit comparison fails carries the negated
+// predicate. Selection sees through the negation and fuses the complemented
+// comparison into the latch branch instead of materializing the boolean.
+
+module {
+  %fn_down = func.func @down(%n: !i64) -> !i64 {
+    cfg.br ^loop(%n : !i64)
+  ^loop(%i: !i64):
+    %one = constant {value = 1} : !i64
+    %ni = subi %i, %one : !i64
+    %z = constant {value = 0} : !i64
+    %done = cmpi %ni, %z {predicate = "eq"} : !i1
+    cfg.cond_br %done, ^exit(%ni : !i64), ^loop(%ni : !i64)
+  ^exit(%r: !i64):
+    func.return %r
+  }
+  module_end
+}
+
+// The latch compares and leaves when equal: no setcc, no
+// boolean inversion, no flag-setting test.
+// CHECK: x86_64.cmp {dst = %{{[0-9]+}}:GPR, src = %{{[0-9]+}}:GPR}
+// CHECK-NEXT: x86_64.je {imm = ^bb{{[0-9]+}}}
+// CHECK-NOT: sete
+// CHECK-NOT: xor_imm
+// CHECK-NOT: test_imm32

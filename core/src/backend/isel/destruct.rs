@@ -47,7 +47,16 @@ impl MachineEdges<'_> {
     /// one the test holds on.
     fn selected(&self, op: &OpHandle, test: Test) -> Result<(&AuxEmit, bool), PassError> {
         let (slot, holds) = match test {
-            Test::Repeat => (AuxSlot::Test(0), true),
+            Test::Repeat => {
+                if self
+                    .region_values
+                    .contains_key(&(op.id, AuxSlot::Unless(0)))
+                {
+                    (AuxSlot::Unless(0), false)
+                } else {
+                    (AuxSlot::Test(0), true)
+                }
+            }
             Test::Arm(index) => {
                 if self
                     .region_values

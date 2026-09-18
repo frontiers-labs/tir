@@ -28,8 +28,8 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::analysis::AnalysisManager;
-use crate::attributes::Predicate;
-use crate::builtin::{CmpIOpBuilder, ConstantOpBuilder, IntegerType};
+use crate::attributes::{AttributeValue, Predicate};
+use crate::builtin::{CmpIOpBuilder, ConstantOp, ConstantOpBuilder, IntegerType, XOrIOp};
 use crate::cfg::{BranchOpBuilder, CondBranchOpBuilder};
 use crate::func::{FuncOp, ReturnOpBuilder};
 use crate::region::values_read;
@@ -152,7 +152,17 @@ impl Edges for CfgEdges<'_> {
         mint: &mut dyn FnMut() -> BlockId,
     ) -> Result<(), PassError> {
         let (condition, holds) = match test {
-            Test::Repeat => (theta(op)?.predicate(), true),
+            Test::Repeat => {
+                let predicate = theta(op)?.predicate();
+                // Restructure negates a head-tested loop's exit into a tail
+                // repeat (`xori(cmp, 1)`). Branch on the comparison with the
+                // edges swapped instead of materializing the negation, or
+                // selection can only test a register holding it.
+                match unnegate(self.context, predicate) {
+                    Some(inner) => (inner, false),
+                    None => (predicate, true),
+                }
+            }
             Test::Arm(index) => {
                 let predicate = gamma(op)?.predicate();
                 let ty = self.context.get_value(predicate).ty();
@@ -210,6 +220,39 @@ fn theta(op: &OpHandle) -> Result<Box<dyn Theta>, PassError> {
     op.clone()
         .as_interface::<dyn Theta>()
         .ok_or_else(|| decline(op, "not a loop"))
+}
+
+/// The comparison a negated loop predicate tests: restructure spells a
+/// head-tested loop's repeat as `xori(cmp, 1)`.
+pub(crate) fn unnegate(context: &Context, predicate: ValueId) -> Option<ValueId> {
+    if context.get_value(predicate).ty() != IntegerType::new(context, 1) {
+        return None;
+    }
+    let def = context.get_value(predicate).defining_op()?;
+    let instance = context.get_op(def);
+    if !instance.is::<XOrIOp>() {
+        return None;
+    }
+    let operands = instance.operands();
+    let (lhs, rhs) = (*operands.first()?, *operands.get(1)?);
+    if is_one(context, lhs) {
+        Some(rhs)
+    } else if is_one(context, rhs) {
+        Some(lhs)
+    } else {
+        None
+    }
+}
+
+fn is_one(context: &Context, value: ValueId) -> bool {
+    if context.get_value(value).ty() != IntegerType::new(context, 1) {
+        return false;
+    }
+    let Some(def) = context.get_value(value).defining_op() else {
+        return false;
+    };
+    let instance = context.get_op(def);
+    instance.is::<ConstantOp>() && matches!(instance.attr("value"), Some(AttributeValue::Int(1)))
 }
 
 fn gamma(op: &OpHandle) -> Result<Box<dyn Gamma>, PassError> {

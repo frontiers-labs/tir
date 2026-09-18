@@ -26,7 +26,7 @@ use std::collections::{HashMap, HashSet};
 
 use tir::{
     AnalysisManager, BlockId, Context, Gamma, OpHandle, OpId, Operation, OperationRef, Pass,
-    PassError, PassTarget, RegionId, TypeId, ValueId,
+    PassError, PassTarget, RegionId, Theta, TypeId, ValueId,
     graph::{Dag, MutDag, NodeId, OperandConstraint, subgraphs_equal},
     sem::{
         EquivalenceOracle, SemGraph, SmtOracle, SymKind, SymPayload, canonicalize_for_selection,
@@ -505,6 +505,10 @@ struct FunctionSelection {
     /// E-classes used as an operand by more than one consumer (function-wide). A
     /// memory effect in such a class cannot be internalized into a match.
     shared_classes: HashSet<Id>,
+    /// How many times each value is named as an operand or a region result
+    /// (function-wide). A use above its use-list users hands the value across
+    /// an edge, which only a register does.
+    operand_uses: HashMap<ValueId, usize>,
     /// Classes selected at their defining region because a surviving reader needs
     /// their register value.
     demand: HashSet<(Id, RegionId)>,
@@ -1657,6 +1661,7 @@ impl InstructionSelectPass {
             port_region,
             region_use,
             shared_classes,
+            operand_uses,
             demand,
             prepared: lowering.prepared,
             region_facts: lowering.region_facts,
@@ -2122,10 +2127,18 @@ impl InstructionSelectPass {
                 }
             }
         }
+        // A fused loop repeat recomputes its comparison inside the latch
+        // branch, so the covered test value needs no register in the body.
+        // Without this the cover emits a dead value tile for it next to the
+        // fused branch, and the tile's flag-setting compare survives every
+        // later pass. A test going through branch-if-nonzero keeps its overlay
+        // demand above; anything else reading the value still forces its tile
+        // through its own tile boundary.
+        let fused = fused_repeat_classes(context, fs, region, &aux_branches);
         let demanded: HashSet<Id> = covered
             .iter()
             .copied()
-            .filter(|class| fs.demanded_at(*class, region, &mm_overlay))
+            .filter(|class| !fused.contains(class) && fs.demanded_at(*class, region, &mm_overlay))
             .collect();
         let available = |class| {
             // A low-extract view owns no register of its own: it re-views its
@@ -2760,6 +2773,53 @@ impl InstructionSelectPass {
         }
         matches
     }
+}
+
+/// The test classes a region's cover may leave untiled: fused loop repeats
+/// read by nothing else, and the predicate computations they bypass. Only a
+/// repeat whose predicate has no use-list user and a single region-result
+/// naming qualifies — any other flow hands the value across an edge, which
+/// only a register does.
+fn fused_repeat_classes(
+    context: &Context,
+    fs: &FunctionSelection,
+    region: RegionId,
+    aux_branches: &[(OpId, AuxSlot, Option<AuxEmit>)],
+) -> HashSet<Id> {
+    let mut fused = HashSet::new();
+    for (op, slot, selected) in aux_branches {
+        if !matches!(selected, Some(AuxEmit::Branch(GuardBranch::Fused { .. }))) {
+            continue;
+        }
+        if !matches!(slot, AuxSlot::Test(0) | AuxSlot::Unless(0)) {
+            continue;
+        }
+        let handle = context.get_op(*op);
+        let Some(theta) = handle.as_interface::<dyn Theta>() else {
+            continue;
+        };
+        let predicate = theta.predicate();
+        if !context.users_of(predicate).is_empty()
+            || fs.operand_uses.get(&predicate).copied().unwrap_or(0) > 1
+        {
+            continue;
+        }
+        if let Some(entry) = fs
+            .region_aux
+            .get(&region)
+            .into_iter()
+            .flatten()
+            .find(|(o, s, _)| o == op && s == slot)
+        {
+            fused.insert(chase_low_extract(&fs.egraph, entry.2));
+        }
+        if let Some(def) = context.get_value(predicate).defining_op()
+            && let Some(root) = fs.op_root.get(&def)
+        {
+            fused.insert(chase_low_extract(&fs.egraph, fs.egraph.find(*root)));
+        }
+    }
+    fused
 }
 
 /// The assumption each region of a structured operation is entered under:

@@ -273,8 +273,17 @@ impl<'a> SemDagBuilder<'a> {
         if let Some(theta) = op.clone().as_interface::<dyn Theta>() {
             let predicate = theta.predicate();
             control.test_conditions.insert((op.id, predicate));
-            let class = self.build_from_value(predicate);
-            control.record(theta.body(), op.id, AuxSlot::Test(0), class);
+            // A negated repeat (`xori(cmp, 1)` over a head-tested loop's exit)
+            // branches on the comparison with the edges swapped, so the
+            // target's branch rules see the condition they were written
+            // against instead of a materialized boolean.
+            if let Some(inner) = crate::passes::destructure::unnegate(self.context, predicate) {
+                let class = self.build_from_value(inner);
+                control.record(theta.body(), op.id, AuxSlot::Unless(0), class);
+            } else {
+                let class = self.build_from_value(predicate);
+                control.record(theta.body(), op.id, AuxSlot::Test(0), class);
+            }
         }
     }
 
