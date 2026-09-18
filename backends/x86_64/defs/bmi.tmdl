@@ -1,16 +1,10 @@
 //! BMI1, TZCNT, and LZCNT integer instructions (Intel syntax).
 //!
 //! The VEX-encoded ops spell the 3-byte VEX prefix directly: 0xC4, the
-//! inverted R/X/B plus map, then W, the inverted vvvv source, L, and pp. The
-//! X bit is set: register-only forms use no SIB index. The BLS group carries
-//! its destination in vvvv with the opcode extension in ModR/M.reg, so its R
-//! bit is clear. LZCNT/TZCNT are legacy F3-prefixed forms, not VEX.
-
-//! BMI1, TZCNT, and LZCNT integer instructions (Intel syntax).
-//!
-//! The VEX-encoded ops spell the 3-byte VEX prefix directly: 0xC4, the
-//! inverted R/X/B plus map, then W, the inverted vvvv source, L, and pp. The
-//! X bit is set: register-only forms use no SIB index. The BLS group carries
+//! inverted R/X/B plus map, then W, the inverted vvvv source, L, and pp,
+//! followed by the opcode itself. The map lives in VEX.m-mmmm, so no 0F 38
+//! or 0F 3A bytes are emitted. The X bit is set: register-only forms use no
+//! SIB index. The BLS group carries
 //! its destination in vvvv with the opcode extension in ModR/M.reg, so its R
 //! bit is clear. Inverted bits are one condition each: the shape model fixes
 //! them per bit map. LZCNT/TZCNT are legacy F3-prefixed forms, not VEX.
@@ -30,8 +24,6 @@ template VexRvm for [BMI, BMI2] {
         0xC4,
         (nbit(dst[3]), 0b1, nbit(src2[3]), 0b00010),
         (0b1, nbit(src1[3]), nbit(src1[2]), nbit(src1[1]), nbit(src1[0]), 0b0, PP),
-        0x0F,
-        0x38,
         OPCODE,
         modrm_reg(dst, src2),
     }
@@ -47,8 +39,6 @@ template VexRvm32 for [BMI, BMI2] {
         0xC4,
         (nbit(dst[3]), 0b1, nbit(src2[3]), 0b00010),
         (0b0, nbit(src1[3]), nbit(src1[2]), nbit(src1[1]), nbit(src1[0]), 0b0, PP),
-        0x0F,
-        0x38,
         OPCODE,
         modrm_reg(dst, src2),
     }
@@ -65,8 +55,6 @@ template VexRmv for [BMI, BMI2] {
         0xC4,
         (nbit(dst[3]), 0b1, nbit(src[3]), 0b00010),
         (0b1, nbit(ctl[3]), nbit(ctl[2]), nbit(ctl[1]), nbit(ctl[0]), 0b0, PP),
-        0x0F,
-        0x38,
         OPCODE,
         modrm_reg(dst, src),
     }
@@ -82,8 +70,6 @@ template VexRmv32 for [BMI, BMI2] {
         0xC4,
         (nbit(dst[3]), 0b1, nbit(src[3]), 0b00010),
         (0b0, nbit(ctl[3]), nbit(ctl[2]), nbit(ctl[1]), nbit(ctl[0]), 0b0, PP),
-        0x0F,
-        0x38,
         OPCODE,
         modrm_reg(dst, src),
     }
@@ -100,8 +86,6 @@ template VexVm for [BMI] {
         0xC4,
         (0b1, 0b1, nbit(src[3]), 0b00010),
         (0b1, nbit(dst[3]), nbit(dst[2]), nbit(dst[1]), nbit(dst[0]), 0b0, 0b00),
-        0x0F,
-        0x38,
         0xF3,
         modrm_ext(EXT, src),
     }
@@ -116,8 +100,6 @@ template VexVm32 for [BMI] {
         0xC4,
         (0b1, 0b1, nbit(src[3]), 0b00010),
         (0b0, nbit(dst[3]), nbit(dst[2]), nbit(dst[1]), nbit(dst[0]), 0b0, 0b00),
-        0x0F,
-        0x38,
         0xF3,
         modrm_ext(EXT, src),
     }
@@ -134,8 +116,6 @@ template VexRmi for [BMI2] {
         0xC4,
         (nbit(dst[3]), 0b1, nbit(src[3]), 0b00011),
         (0b1, 0b1111, 0b0, PP),
-        0x0F,
-        0x3A,
         OPCODE,
         modrm_reg(dst, src),
         imm,
@@ -152,8 +132,6 @@ template VexRmi32 for [BMI2] {
         0xC4,
         (nbit(dst[3]), 0b1, nbit(src[3]), 0b00011),
         (0b0, 0b1111, 0b0, PP),
-        0x0F,
-        0x3A,
         OPCODE,
         modrm_reg(dst, src),
         imm,
@@ -170,8 +148,6 @@ template VexMulx for [BMI2] {
         0xC4,
         (nbit(hi[3]), 0b1, nbit(src[3]), 0b00010),
         (0b1, nbit(lo[3]), nbit(lo[2]), nbit(lo[1]), nbit(lo[0]), 0b0, 0b11),
-        0x0F,
-        0x38,
         0xF6,
         modrm_reg(hi, src),
     }
@@ -185,8 +161,6 @@ template VexMulx32 for [BMI2] {
         0xC4,
         (nbit(hi[3]), 0b1, nbit(src[3]), 0b00010),
         (0b0, nbit(lo[3]), nbit(lo[2]), nbit(lo[1]), nbit(lo[0]), 0b0, 0b11),
-        0x0F,
-        0x38,
         0xF6,
         modrm_reg(hi, src),
     }
