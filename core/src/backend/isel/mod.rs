@@ -1545,9 +1545,15 @@ impl InstructionSelectPass {
         fs: &mut FunctionSelection,
         matches: &mut Matches,
     ) {
-        rewrites::saturate(context, &mut fs.egraph, &self.theory, Default::default());
+        self.saturate_graph(context, &mut fs.egraph);
         let changed = fs.egraph.innermost_dirty();
         matches.open_scope(changed);
+    }
+
+    fn saturate_graph(&self, context: &Context, egraph: &mut SemEGraph) {
+        let mut limits = rewrites::SaturationLimits::default();
+        limits.max_nodes = egraph.total_size().saturating_add(limits.max_nodes);
+        rewrites::saturate(context, egraph, &self.theory, limits);
     }
 
     /// Lower every region of the function into one shared, base-saturated
@@ -1599,7 +1605,7 @@ impl InstructionSelectPass {
             lowering.roots_by_op.entry(op_id).or_insert(class);
         }
 
-        rewrites::saturate(context, &mut egraph, &self.theory, Default::default());
+        self.saturate_graph(context, &mut egraph);
 
         crate::memstats::egraph_census("isel", &egraph);
 

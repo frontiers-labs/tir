@@ -1,0 +1,9 @@
+// RUN: python3 %S/Inputs/large-comparison.py | tir mc --march=x86_64 --stage=isel | filecheck %s
+
+// Unused definitions grow the initial graph without adding work to the cover.
+// The comparison still needs the proved lt-via-if rewrite for setl.
+
+// CHECK-LABEL: asm.symbol {name = "large"
+// CHECK: x86_64.cmp32
+// CHECK: x86_64.setl
+// CHECK: asm.vret

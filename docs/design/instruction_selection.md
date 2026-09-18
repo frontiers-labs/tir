@@ -356,6 +356,13 @@ or the class itself when no scope is open); every table lookup (`is_op_root`,
 
 ## 2. Saturation with proved rewrites
 
+Base and assumption-scope saturation set the round-boundary node limit to
+the graph's initial size plus 10,000, retaining the 30-round limit. Counting
+input nodes against the growth allowance would skip all ordinary rewrites for
+large functions, including the comparison rewrites needed by value
+materializers. A round can exceed the node limit; the next round then stops
+rather than claiming the graph reached a fixpoint.
+
 Before tiling, the e-graph is saturated with target-independent algebraic
 identities (`self.rewrites`). These are **not** hand-written selection rules;
 they describe equivalent forms of the operation semantics as PDL rules

@@ -1,0 +1,10 @@
+print('module {')
+print('  %f = func.func @large(%a: !i32, %b: !i32) -> !i1 {')
+for i in range(6000):
+    print(f'    %constant{i} = constant {{value = {i}}} : !i32')
+    print(f'    %unused{i} = addi %a, %constant{i} : !i32')
+print('    %cmp = cmpi %a, %b {predicate = "slt"} : !i1')
+print('    func.return %cmp')
+print('  }')
+print('  module_end')
+print('}')
