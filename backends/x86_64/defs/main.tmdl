@@ -15,6 +15,12 @@ isa SSE requires X86 {}
 
 isa SSE2 requires SSE {}
 
+isa BMI requires X86_64 {}
+
+isa BMI2 requires BMI {}
+
+isa LZCNT requires X86_64 {}
+
 isa X86_64 requires [X86, SSE2] {
     param XLEN: Integer = 64;
     param ENCODING_UNIT: Integer = 8;

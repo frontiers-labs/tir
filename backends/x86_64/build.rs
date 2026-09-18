@@ -12,6 +12,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         "defs/conditional.tmdl",
         "defs/memory_ext.tmdl",
         "defs/atomics.tmdl",
+        "defs/bmi.tmdl",
+        "defs/bmi2.tmdl",
         "defs/ordering.tmdl",
         "defs/float.tmdl",
         "defs/perf.tmdl",

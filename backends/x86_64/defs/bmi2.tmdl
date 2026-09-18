@@ -1,0 +1,280 @@
+//! BMI2 integer instructions (Intel syntax), sharing the VEX templates in bmi.tmdl.
+
+fn bmiRank(mask, m) {
+    reduce(map(iota(self.XLEN, self.XLEN), |i| if (i ~< m) & (extract(mask >> i, 0, 0) == zext(0b1, 1)) { zext(0b1, self.XLEN) } else { zext(0b0, self.XLEN) }), |a, b| a + b)
+}
+
+fn bmiRank32(mask, m) {
+    reduce(map(iota(32, 32), |i| if (i ~< m) & (extract(mask >> i, 0, 0) == zext(0b1, 1)) { zext(0b1, 32) } else { zext(0b0, 32) }), |a, b| a + b)
+}
+
+// BZHI r64a, r/m64, r64b: dst = src with bits from idx[7:0] upward cleared.
+// An out-of-range index leaves src whole and sets CF. ZF/SF from the result;
+// OF clear.
+instruction Bzhi for [BMI2] : VexRmv {
+    param OPNAME: String = "bzhi";
+    param MNEMONIC: String = "bzhi";
+    param PP: bits<2> = 0b00;
+    param OPCODE: bits<8> = 0xF5;
+
+    schedule { units = [WriteIALU]; }
+
+    behavior {
+        let n = extract(ctl, 7, 0);
+        let big = n[7] | n[6];
+        let res = if big { src }
+            else { src & ((zext(0b1, self.XLEN) << zext(n, self.XLEN)) - zext(0b1, self.XLEN)) };
+        EFLAGS::zf = if res == zext(0b0, self.XLEN) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::sf = extract(res, self.XLEN - 1, self.XLEN - 1);
+        EFLAGS::cf = if big { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::of = zext(0b0, 1);
+        dst = res;
+    }
+}
+
+instruction Bzhi32 for [BMI2] : VexRmv32 {
+    param OPNAME: String = "bzhi32";
+    param MNEMONIC: String = "bzhi";
+    param PP: bits<2> = 0b00;
+    param OPCODE: bits<8> = 0xF5;
+
+    schedule { units = [WriteIALU]; }
+
+    behavior {
+        let n = extract(ctl, 7, 0);
+        let big = n[7] | n[6] | n[5];
+        let res = if big { src }
+            else { src & ((zext(0b1, 32) << zext(n, 32)) - zext(0b1, 32)) };
+        EFLAGS::zf = if res == zext(0b0, 32) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::sf = extract(res, 31, 31);
+        EFLAGS::cf = if big { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::of = zext(0b0, 1);
+        dst = res;
+    }
+}
+
+// MULX r64a, r64b, r/m64: unsigned multiply of RDX by src; hi holds the high
+// half, lo the low half. Like MulWide, the unsigned high half adds the sign
+// words back onto the signed product. No flags are read or written. A shared
+// hi/lo operand keeps the high half.
+instruction Mulx for [BMI2] : VexMulx {
+    param OPNAME: String = "mulx";
+    param MNEMONIC: String = "mulx";
+
+    schedule { units = [WriteIMul]; }
+
+    behavior {
+        let prod = GPR::rdx * src;
+        lo = extract(prod, self.XLEN - 1, 0);
+        hi = extract(prod, (2 * self.XLEN) - 1, self.XLEN)
+            + (if extract(GPR::rdx, self.XLEN - 1, self.XLEN - 1) == zext(0b1, 1) { src }
+               else { zext(0b0, self.XLEN) })
+            + (if extract(src, self.XLEN - 1, self.XLEN - 1) == zext(0b1, 1) { GPR::rdx }
+               else { zext(0b0, self.XLEN) });
+    }
+}
+
+instruction Mulx32 for [BMI2] : VexMulx32 {
+    param OPNAME: String = "mulx32";
+    param MNEMONIC: String = "mulx";
+
+    schedule { units = [WriteIMul]; }
+
+    behavior {
+        let prod = GPR32::edx * src;
+        lo = extract(prod, 31, 0);
+        hi = extract(prod, 63, 32)
+            + (if extract(GPR32::edx, 31, 31) == zext(0b1, 1) { src }
+               else { zext(0b0, 32) })
+            + (if extract(src, 31, 31) == zext(0b1, 1) { GPR32::edx }
+               else { zext(0b0, 32) });
+    }
+}
+
+// PDEP r64a, r64b, r/m64: deposit src low bits at mask positions. Each set
+// mask bit m takes src bit rank(m), the count of set mask bits below m.
+instruction Pdep for [BMI2] : VexRvm {
+    param OPNAME: String = "pdep";
+    param MNEMONIC: String = "pdep";
+    param PP: bits<2> = 0b11;
+    param OPCODE: bits<8> = 0xF5;
+
+    schedule { units = [WriteIALU]; }
+
+    behavior {
+        dst = reduce(map(iota(self.XLEN, self.XLEN), |m|
+            if extract(src2 >> m, 0, 0) == zext(0b1, 1) {
+                zext(extract(src1 >> bmiRank(src2, m), 0, 0), self.XLEN) << m
+            } else {
+                zext(0b0, self.XLEN)
+            }), |a, b| a | b);
+    }
+}
+
+instruction Pdep32 for [BMI2] : VexRvm32 {
+    param OPNAME: String = "pdep32";
+    param MNEMONIC: String = "pdep";
+    param PP: bits<2> = 0b11;
+    param OPCODE: bits<8> = 0xF5;
+
+    schedule { units = [WriteIALU]; }
+
+    behavior {
+        dst = reduce(map(iota(32, 32), |m|
+            if extract(src2 >> m, 0, 0) == zext(0b1, 1) {
+                zext(extract(src1 >> bmiRank32(src2, m), 0, 0), 32) << m
+            } else {
+                zext(0b0, 32)
+            }), |a, b| a | b);
+    }
+}
+
+// PEXT r64a, r64b, r/m64: extract src bits at mask positions into dst low
+// bits, zeroing above. Each set mask bit m contributes src bit m at rank(m).
+instruction Pext for [BMI2] : VexRvm {
+    param OPNAME: String = "pext";
+    param MNEMONIC: String = "pext";
+    param PP: bits<2> = 0b10;
+    param OPCODE: bits<8> = 0xF5;
+
+    schedule { units = [WriteIALU]; }
+
+    behavior {
+        dst = reduce(map(iota(self.XLEN, self.XLEN), |m|
+            if extract(src2 >> m, 0, 0) == zext(0b1, 1) {
+                zext(extract(src1 >> m, 0, 0), self.XLEN) << bmiRank(src2, m)
+            } else {
+                zext(0b0, self.XLEN)
+            }), |a, b| a | b);
+    }
+}
+
+instruction Pext32 for [BMI2] : VexRvm32 {
+    param OPNAME: String = "pext32";
+    param MNEMONIC: String = "pext";
+    param PP: bits<2> = 0b10;
+    param OPCODE: bits<8> = 0xF5;
+
+    schedule { units = [WriteIALU]; }
+
+    behavior {
+        dst = reduce(map(iota(32, 32), |m|
+            if extract(src2 >> m, 0, 0) == zext(0b1, 1) {
+                zext(extract(src1 >> m, 0, 0), 32) << bmiRank32(src2, m)
+            } else {
+                zext(0b0, 32)
+            }), |a, b| a | b);
+    }
+}
+
+// RORX r64, r/m64, imm8: rotate right by the masked count, flags untouched.
+// A zero count degenerates to `dst = src`.
+instruction Rorx for [BMI2] : VexRmi {
+    param OPNAME: String = "rorx";
+    param MNEMONIC: String = "rorx";
+    param PP: bits<2> = 0b11;
+    param OPCODE: bits<8> = 0xF0;
+
+    schedule { units = [WriteIALU]; }
+
+    behavior {
+        let c = extract(imm, 5, 0);
+        dst = (src >> c)
+            | (src << ((zext(0b0, self.XLEN) - zext(c, self.XLEN)) & zext(0b111111, self.XLEN)));
+    }
+}
+
+instruction Rorx32 for [BMI2] : VexRmi32 {
+    param OPNAME: String = "rorx32";
+    param MNEMONIC: String = "rorx";
+    param PP: bits<2> = 0b11;
+    param OPCODE: bits<8> = 0xF0;
+
+    schedule { units = [WriteIALU]; }
+
+    behavior {
+        let c = extract(imm, 4, 0);
+        dst = (src >> c)
+            | (src << ((zext(0b0, 32) - zext(c, 32)) & zext(0b11111, 32)));
+    }
+}
+
+// SARX/SHLX/SHRX r64a, r/m64, r64b: shifts by the masked count register,
+// flags untouched.
+instruction Sarx for [BMI2] : VexRmv {
+    param OPNAME: String = "sarx";
+    param MNEMONIC: String = "sarx";
+    param PP: bits<2> = 0b10;
+    param OPCODE: bits<8> = 0xF7;
+
+    schedule { units = [WriteIShift]; }
+
+    behavior {
+        dst = src >>> extract(ctl, 5, 0);
+    }
+}
+
+instruction Sarx32 for [BMI2] : VexRmv32 {
+    param OPNAME: String = "sarx32";
+    param MNEMONIC: String = "sarx";
+    param PP: bits<2> = 0b10;
+    param OPCODE: bits<8> = 0xF7;
+
+    schedule { units = [WriteIShift]; }
+
+    behavior {
+        dst = src >>> extract(ctl, 4, 0);
+    }
+}
+
+instruction Shlx for [BMI2] : VexRmv {
+    param OPNAME: String = "shlx";
+    param MNEMONIC: String = "shlx";
+    param PP: bits<2> = 0b01;
+    param OPCODE: bits<8> = 0xF7;
+
+    schedule { units = [WriteIShift]; }
+
+    behavior {
+        dst = src << extract(ctl, 5, 0);
+    }
+}
+
+instruction Shlx32 for [BMI2] : VexRmv32 {
+    param OPNAME: String = "shlx32";
+    param MNEMONIC: String = "shlx";
+    param PP: bits<2> = 0b01;
+    param OPCODE: bits<8> = 0xF7;
+
+    schedule { units = [WriteIShift]; }
+
+    behavior {
+        dst = src << extract(ctl, 4, 0);
+    }
+}
+
+instruction Shrx for [BMI2] : VexRmv {
+    param OPNAME: String = "shrx";
+    param MNEMONIC: String = "shrx";
+    param PP: bits<2> = 0b11;
+    param OPCODE: bits<8> = 0xF7;
+
+    schedule { units = [WriteIShift]; }
+
+    behavior {
+        dst = src >> extract(ctl, 5, 0);
+    }
+}
+
+instruction Shrx32 for [BMI2] : VexRmv32 {
+    param OPNAME: String = "shrx32";
+    param MNEMONIC: String = "shrx";
+    param PP: bits<2> = 0b11;
+    param OPCODE: bits<8> = 0xF7;
+
+    schedule { units = [WriteIShift]; }
+
+    behavior {
+        dst = src >> extract(ctl, 4, 0);
+    }
+}

@@ -1,0 +1,491 @@
+//! BMI1, TZCNT, and LZCNT integer instructions (Intel syntax).
+//!
+//! The VEX-encoded ops spell the 3-byte VEX prefix directly: 0xC4, the
+//! inverted R/X/B plus map, then W, the inverted vvvv source, L, and pp. The
+//! X bit is set: register-only forms use no SIB index. The BLS group carries
+//! its destination in vvvv with the opcode extension in ModR/M.reg, so its R
+//! bit is clear. LZCNT/TZCNT are legacy F3-prefixed forms, not VEX.
+
+//! BMI1, TZCNT, and LZCNT integer instructions (Intel syntax).
+//!
+//! The VEX-encoded ops spell the 3-byte VEX prefix directly: 0xC4, the
+//! inverted R/X/B plus map, then W, the inverted vvvv source, L, and pp. The
+//! X bit is set: register-only forms use no SIB index. The BLS group carries
+//! its destination in vvvv with the opcode extension in ModR/M.reg, so its R
+//! bit is clear. Inverted bits are one condition each: the shape model fixes
+//! them per bit map. LZCNT/TZCNT are legacy F3-prefixed forms, not VEX.
+
+// One inverted bit: the shape guard fixes the source bit, the map the output.
+fn nbit(x) {
+    if x { 0b0 } else { 0b1 }
+}
+
+// `op dst, src1, src2`: VEX.128.0F38 (ModRM.reg=dst, vvvv=src1, ModRM.rm=src2).
+template VexRvm for [BMI, BMI2] {
+    param MNEMONIC: String;
+    param PP: bits<2>;
+    param OPCODE: bits<8>;
+    operands { dst: GPR, src1: GPR, src2: GPR, }
+    encoding {
+        0xC4,
+        (nbit(dst[3]), 0b1, nbit(src2[3]), 0b00010),
+        (0b1, nbit(src1[3]), nbit(src1[2]), nbit(src1[1]), nbit(src1[0]), 0b0, PP),
+        0x0F,
+        0x38,
+        OPCODE,
+        modrm_reg(dst, src2),
+    }
+    asm { "{self.MNEMONIC} {dst}, {src1}, {src2}" }
+}
+
+template VexRvm32 for [BMI, BMI2] {
+    param MNEMONIC: String;
+    param PP: bits<2>;
+    param OPCODE: bits<8>;
+    operands { dst: GPR32, src1: GPR32, src2: GPR32, }
+    encoding {
+        0xC4,
+        (nbit(dst[3]), 0b1, nbit(src2[3]), 0b00010),
+        (0b0, nbit(src1[3]), nbit(src1[2]), nbit(src1[1]), nbit(src1[0]), 0b0, PP),
+        0x0F,
+        0x38,
+        OPCODE,
+        modrm_reg(dst, src2),
+    }
+    asm { "{self.MNEMONIC} {dst}, {src1}, {src2}" }
+}
+
+// `op dst, src, ctl`: VEX.128.0F38 (ModRM.reg=dst, ModRM.rm=src, vvvv=ctl).
+template VexRmv for [BMI, BMI2] {
+    param MNEMONIC: String;
+    param PP: bits<2>;
+    param OPCODE: bits<8>;
+    operands { dst: GPR, src: GPR, ctl: GPR, }
+    encoding {
+        0xC4,
+        (nbit(dst[3]), 0b1, nbit(src[3]), 0b00010),
+        (0b1, nbit(ctl[3]), nbit(ctl[2]), nbit(ctl[1]), nbit(ctl[0]), 0b0, PP),
+        0x0F,
+        0x38,
+        OPCODE,
+        modrm_reg(dst, src),
+    }
+    asm { "{self.MNEMONIC} {dst}, {src}, {ctl}" }
+}
+
+template VexRmv32 for [BMI, BMI2] {
+    param MNEMONIC: String;
+    param PP: bits<2>;
+    param OPCODE: bits<8>;
+    operands { dst: GPR32, src: GPR32, ctl: GPR32, }
+    encoding {
+        0xC4,
+        (nbit(dst[3]), 0b1, nbit(src[3]), 0b00010),
+        (0b0, nbit(ctl[3]), nbit(ctl[2]), nbit(ctl[1]), nbit(ctl[0]), 0b0, PP),
+        0x0F,
+        0x38,
+        OPCODE,
+        modrm_reg(dst, src),
+    }
+    asm { "{self.MNEMONIC} {dst}, {src}, {ctl}" }
+}
+
+// `op dst, src`: VEX.128.0F38 group form (ModRM.reg=/ext, ModRM.rm=src,
+// vvvv=dst). The /1-/3 extensions are below 8, so the R bit is clear.
+template VexVm for [BMI] {
+    param MNEMONIC: String;
+    param EXT: bits<3>;
+    operands { dst: GPR, src: GPR, }
+    encoding {
+        0xC4,
+        (0b1, 0b1, nbit(src[3]), 0b00010),
+        (0b1, nbit(dst[3]), nbit(dst[2]), nbit(dst[1]), nbit(dst[0]), 0b0, 0b00),
+        0x0F,
+        0x38,
+        0xF3,
+        modrm_ext(EXT, src),
+    }
+    asm { "{self.MNEMONIC} {dst}, {src}" }
+}
+
+template VexVm32 for [BMI] {
+    param MNEMONIC: String;
+    param EXT: bits<3>;
+    operands { dst: GPR32, src: GPR32, }
+    encoding {
+        0xC4,
+        (0b1, 0b1, nbit(src[3]), 0b00010),
+        (0b0, nbit(dst[3]), nbit(dst[2]), nbit(dst[1]), nbit(dst[0]), 0b0, 0b00),
+        0x0F,
+        0x38,
+        0xF3,
+        modrm_ext(EXT, src),
+    }
+    asm { "{self.MNEMONIC} {dst}, {src}" }
+}
+
+// `op dst, src, imm8`: VEX.128.0F3A (ModRM.reg=dst, ModRM.rm=src, vvvv=1111).
+template VexRmi for [BMI2] {
+    param MNEMONIC: String;
+    param PP: bits<2>;
+    param OPCODE: bits<8>;
+    operands { dst: GPR, src: GPR, imm: bits<8>, }
+    encoding {
+        0xC4,
+        (nbit(dst[3]), 0b1, nbit(src[3]), 0b00011),
+        (0b1, 0b1111, 0b0, PP),
+        0x0F,
+        0x3A,
+        OPCODE,
+        modrm_reg(dst, src),
+        imm,
+    }
+    asm { "{self.MNEMONIC} {dst}, {src}, {imm}" }
+}
+
+template VexRmi32 for [BMI2] {
+    param MNEMONIC: String;
+    param PP: bits<2>;
+    param OPCODE: bits<8>;
+    operands { dst: GPR32, src: GPR32, imm: bits<8>, }
+    encoding {
+        0xC4,
+        (nbit(dst[3]), 0b1, nbit(src[3]), 0b00011),
+        (0b0, 0b1111, 0b0, PP),
+        0x0F,
+        0x3A,
+        OPCODE,
+        modrm_reg(dst, src),
+        imm,
+    }
+    asm { "{self.MNEMONIC} {dst}, {src}, {imm}" }
+}
+
+// MULX reads the implicit EDX/RDX source and writes both halves: the low half
+// to the vvvv operand, the high half to the ModRM.reg operand.
+template VexMulx for [BMI2] {
+    param MNEMONIC: String;
+    operands { hi: GPR, lo: GPR, src: GPR, }
+    encoding {
+        0xC4,
+        (nbit(hi[3]), 0b1, nbit(src[3]), 0b00010),
+        (0b1, nbit(lo[3]), nbit(lo[2]), nbit(lo[1]), nbit(lo[0]), 0b0, 0b11),
+        0x0F,
+        0x38,
+        0xF6,
+        modrm_reg(hi, src),
+    }
+    asm { "{self.MNEMONIC} {hi}, {lo}, {src}" }
+}
+
+template VexMulx32 for [BMI2] {
+    param MNEMONIC: String;
+    operands { hi: GPR32, lo: GPR32, src: GPR32, }
+    encoding {
+        0xC4,
+        (nbit(hi[3]), 0b1, nbit(src[3]), 0b00010),
+        (0b0, nbit(lo[3]), nbit(lo[2]), nbit(lo[1]), nbit(lo[0]), 0b0, 0b11),
+        0x0F,
+        0x38,
+        0xF6,
+        modrm_reg(hi, src),
+    }
+    asm { "{self.MNEMONIC} {hi}, {lo}, {src}" }
+}
+
+// `op dst, src`: legacy F3-prefixed 0F BC/BD form shared by LZCNT and TZCNT.
+template CntReg for [BMI, LZCNT] {
+    param MNEMONIC: String;
+    param OPCODE: bits<8>;
+    operands { dst: GPR, src: GPR, }
+    encoding {
+        0xF3,
+        rex(0b1, dst, src, 0b0),
+        0x0F,
+        OPCODE,
+        modrm_reg(dst, src),
+    }
+    asm { "{self.MNEMONIC} {dst}, {src}" }
+}
+
+template CntReg32 for [BMI, LZCNT] {
+    param MNEMONIC: String;
+    param OPCODE: bits<8>;
+    operands { dst: GPR32, src: GPR32, }
+    encoding {
+        0xF3,
+        rex(0b0, dst, src, 0b0),
+        0x0F,
+        OPCODE,
+        modrm_reg(dst, src),
+    }
+    asm { "{self.MNEMONIC} {dst}, {src}" }
+}
+
+fn bmiLeadingZeros(value) {
+    reduce(map(iota(self.XLEN, self.XLEN), |i| zext((value >> i) == zext(0b0, self.XLEN), self.XLEN)), |a, b| a + b)
+}
+
+fn bmiTrailingZeros(value) {
+    reduce(map(iota(self.XLEN, self.XLEN), |i| zext(extract(value << i, self.XLEN - 1, 0) == zext(0b0, self.XLEN), self.XLEN)), |a, b| a + b)
+}
+
+// ANDN r64a, r64b, r/m64: dst = ~src1 & src2. SF/ZF from the result; CF/OF
+// clear; AF/PF undefined.
+instruction Andn for [BMI] : VexRvm {
+    param OPNAME: String = "andn";
+    param MNEMONIC: String = "andn";
+    param PP: bits<2> = 0b00;
+    param OPCODE: bits<8> = 0xF2;
+
+    schedule { units = [WriteIALU]; }
+
+    behavior {
+        let res = (~src1) & src2;
+        EFLAGS::cf = zext(0b0, 1);
+        EFLAGS::zf = if res == zext(0b0, self.XLEN) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::sf = extract(res, self.XLEN - 1, self.XLEN - 1);
+        EFLAGS::of = zext(0b0, 1);
+        dst = res;
+    }
+}
+
+instruction Andn32 for [BMI] : VexRvm32 {
+    param OPNAME: String = "andn32";
+    param MNEMONIC: String = "andn";
+    param PP: bits<2> = 0b00;
+    param OPCODE: bits<8> = 0xF2;
+
+    schedule { units = [WriteIALU]; }
+
+    behavior {
+        let res = (~src1) & src2;
+        EFLAGS::cf = zext(0b0, 1);
+        EFLAGS::zf = if res == zext(0b0, 32) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::sf = extract(res, 31, 31);
+        EFLAGS::of = zext(0b0, 1);
+        dst = res;
+    }
+}
+
+// BEXTR r64a, r/m64, r64b: START=ctl[7:0], LEN=ctl[15:8]; dst holds LEN bits
+// from src[START] upward, zeroed above. Out-of-range START clears dst. Only ZF
+// is defined; CF/OF clear.
+instruction Bextr for [BMI] : VexRmv {
+    param OPNAME: String = "bextr";
+    param MNEMONIC: String = "bextr";
+    param PP: bits<2> = 0b00;
+    param OPCODE: bits<8> = 0xF7;
+
+    schedule { units = [WriteIALU]; }
+
+    behavior {
+        let start = extract(ctl, 7, 0);
+        let len = extract(ctl, 15, 8);
+        let start_big = start[7] | start[6];
+        let len_big = len[7] | len[6];
+        let shifted = if start_big { zext(0b0, self.XLEN) } else { src >> zext(start, self.XLEN) };
+        let mask = if len_big { zext(0b0, self.XLEN) - zext(0b1, self.XLEN) }
+            else { (zext(0b1, self.XLEN) << zext(len, self.XLEN)) - zext(0b1, self.XLEN) };
+        let res = shifted & mask;
+        EFLAGS::zf = if res == zext(0b0, self.XLEN) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::cf = zext(0b0, 1);
+        EFLAGS::of = zext(0b0, 1);
+        dst = res;
+    }
+}
+
+instruction Bextr32 for [BMI] : VexRmv32 {
+    param OPNAME: String = "bextr32";
+    param MNEMONIC: String = "bextr";
+    param PP: bits<2> = 0b00;
+    param OPCODE: bits<8> = 0xF7;
+
+    schedule { units = [WriteIALU]; }
+
+    behavior {
+        let start = extract(ctl, 7, 0);
+        let len = extract(ctl, 15, 8);
+        let start_big = start[7] | start[6] | start[5];
+        let len_big = len[7] | len[6] | len[5];
+        let shifted = if start_big { zext(0b0, 32) } else { src >> zext(start, 32) };
+        let mask = if len_big { zext(0b0, 32) - zext(0b1, 32) }
+            else { (zext(0b1, 32) << zext(len, 32)) - zext(0b1, 32) };
+        let res = shifted & mask;
+        EFLAGS::zf = if res == zext(0b0, 32) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::cf = zext(0b0, 1);
+        EFLAGS::of = zext(0b0, 1);
+        dst = res;
+    }
+}
+
+// BLSI r64, r/m64: dst = isolated lowest set bit. CF set when src is nonzero.
+instruction Blsi for [BMI] : VexVm {
+    param OPNAME: String = "blsi";
+    param MNEMONIC: String = "blsi";
+    param EXT: bits<3> = 0b011;
+
+    schedule { units = [WriteIALU]; }
+
+    behavior {
+        let res = (zext(0b0, self.XLEN) - src) & src;
+        EFLAGS::sf = extract(res, self.XLEN - 1, self.XLEN - 1);
+        EFLAGS::zf = if res == zext(0b0, self.XLEN) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::cf = if src == zext(0b0, self.XLEN) { zext(0b0, 1) } else { zext(0b1, 1) };
+        EFLAGS::of = zext(0b0, 1);
+        dst = res;
+    }
+}
+
+instruction Blsi32 for [BMI] : VexVm32 {
+    param OPNAME: String = "blsi32";
+    param MNEMONIC: String = "blsi";
+    param EXT: bits<3> = 0b011;
+
+    schedule { units = [WriteIALU]; }
+
+    behavior {
+        let res = (zext(0b0, 32) - src) & src;
+        EFLAGS::sf = extract(res, 31, 31);
+        EFLAGS::zf = if res == zext(0b0, 32) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::cf = if src == zext(0b0, 32) { zext(0b0, 1) } else { zext(0b1, 1) };
+        EFLAGS::of = zext(0b0, 1);
+        dst = res;
+    }
+}
+
+// BLSMSK r64, r/m64: dst = mask through the lowest set bit. A zero source
+// sets all bits and CF. ZF/OF clear.
+instruction Blsmsk for [BMI] : VexVm {
+    param OPNAME: String = "blsmsk";
+    param MNEMONIC: String = "blsmsk";
+    param EXT: bits<3> = 0b010;
+
+    schedule { units = [WriteIALU]; }
+
+    behavior {
+        let res = (src - zext(0b1, self.XLEN)) ^ src;
+        EFLAGS::sf = extract(res, self.XLEN - 1, self.XLEN - 1);
+        EFLAGS::zf = zext(0b0, 1);
+        EFLAGS::cf = if src == zext(0b0, self.XLEN) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::of = zext(0b0, 1);
+        dst = res;
+    }
+}
+
+instruction Blsmsk32 for [BMI] : VexVm32 {
+    param OPNAME: String = "blsmsk32";
+    param MNEMONIC: String = "blsmsk";
+    param EXT: bits<3> = 0b010;
+
+    schedule { units = [WriteIALU]; }
+
+    behavior {
+        let res = (src - zext(0b1, 32)) ^ src;
+        EFLAGS::sf = extract(res, 31, 31);
+        EFLAGS::zf = zext(0b0, 1);
+        EFLAGS::cf = if src == zext(0b0, 32) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::of = zext(0b0, 1);
+        dst = res;
+    }
+}
+
+// BLSR r64, r/m64: dst = src with the lowest set bit cleared. CF set on zero
+// source.
+instruction Blsr for [BMI] : VexVm {
+    param OPNAME: String = "blsr";
+    param MNEMONIC: String = "blsr";
+    param EXT: bits<3> = 0b001;
+
+    schedule { units = [WriteIALU]; }
+
+    behavior {
+        let res = (src - zext(0b1, self.XLEN)) & src;
+        EFLAGS::sf = extract(res, self.XLEN - 1, self.XLEN - 1);
+        EFLAGS::zf = if res == zext(0b0, self.XLEN) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::cf = if src == zext(0b0, self.XLEN) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::of = zext(0b0, 1);
+        dst = res;
+    }
+}
+
+instruction Blsr32 for [BMI] : VexVm32 {
+    param OPNAME: String = "blsr32";
+    param MNEMONIC: String = "blsr";
+    param EXT: bits<3> = 0b001;
+
+    schedule { units = [WriteIALU]; }
+
+    behavior {
+        let res = (src - zext(0b1, 32)) & src;
+        EFLAGS::sf = extract(res, 31, 31);
+        EFLAGS::zf = if res == zext(0b0, 32) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::cf = if src == zext(0b0, 32) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::of = zext(0b0, 1);
+        dst = res;
+    }
+}
+
+// TZCNT r64, r/m64: trailing zero count; the full width on zero input. CF set
+// on zero input, ZF set on zero output; OF/SF/PF/AF undefined.
+instruction Tzcnt for [BMI] : CntReg {
+    param OPNAME: String = "tzcnt";
+    param MNEMONIC: String = "tzcnt";
+    param OPCODE: bits<8> = 0xBC;
+
+    schedule { units = [WriteIALU]; }
+
+    behavior {
+        let res = bmiTrailingZeros(src);
+        EFLAGS::cf = if src == zext(0b0, self.XLEN) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::zf = if res == zext(0b0, self.XLEN) { zext(0b1, 1) } else { zext(0b0, 1) };
+        dst = res;
+    }
+}
+
+instruction Tzcnt32 for [BMI] : CntReg32 {
+    param OPNAME: String = "tzcnt32";
+    param MNEMONIC: String = "tzcnt";
+    param OPCODE: bits<8> = 0xBC;
+
+    schedule { units = [WriteIALU]; }
+
+    behavior {
+        let count = reduce(map(iota(32, 32), |i| zext(extract(src << i, 31, 0) == zext(0b0, 32), 32)), |a, b| a + b);
+        EFLAGS::cf = if src == zext(0b0, 32) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::zf = if count == zext(0b0, 32) { zext(0b1, 1) } else { zext(0b0, 1) };
+        dst = count;
+    }
+}
+
+// LZCNT r64, r/m64: leading zero count; the full width on zero input. Same
+// flags as TZCNT.
+instruction Lzcnt for [LZCNT] : CntReg {
+    param OPNAME: String = "lzcnt";
+    param MNEMONIC: String = "lzcnt";
+    param OPCODE: bits<8> = 0xBD;
+
+    schedule { units = [WriteIALU]; }
+
+    behavior {
+        let res = bmiLeadingZeros(src);
+        EFLAGS::cf = if src == zext(0b0, self.XLEN) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::zf = if res == zext(0b0, self.XLEN) { zext(0b1, 1) } else { zext(0b0, 1) };
+        dst = res;
+    }
+}
+
+instruction Lzcnt32 for [LZCNT] : CntReg32 {
+    param OPNAME: String = "lzcnt32";
+    param MNEMONIC: String = "lzcnt";
+    param OPCODE: bits<8> = 0xBD;
+
+    schedule { units = [WriteIALU]; }
+
+    behavior {
+        let count = reduce(map(iota(32, 32), |i| zext((src >> i) == zext(0b0, 32), 32)), |a, b| a + b);
+        EFLAGS::cf = if src == zext(0b0, 32) { zext(0b1, 1) } else { zext(0b0, 1) };
+        EFLAGS::zf = if count == zext(0b0, 32) { zext(0b1, 1) } else { zext(0b0, 1) };
+        dst = count;
+    }
+}
