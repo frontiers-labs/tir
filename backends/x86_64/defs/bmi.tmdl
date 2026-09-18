@@ -4,10 +4,10 @@
 //! inverted R/X/B plus map, then W, the inverted vvvv source, L, and pp,
 //! followed by the opcode itself. The map lives in VEX.m-mmmm, so no 0F 38
 //! or 0F 3A bytes are emitted. The X bit is set: register-only forms use no
-//! SIB index. The BLS group carries
-//! its destination in vvvv with the opcode extension in ModR/M.reg, so its R
-//! bit is clear. Inverted bits are one condition each: the shape model fixes
-//! them per bit map. LZCNT/TZCNT are legacy F3-prefixed forms, not VEX.
+//! SIB index. The BLS group carries its destination in vvvv with the opcode
+//! extension in ModR/M.reg, so its R bit is clear. Each inverted bit is one
+//! shape condition fixing its bit map. LZCNT/TZCNT are legacy F3-prefixed
+//! forms, not VEX.
 
 // One inverted bit: the shape guard fixes the source bit, the map the output.
 fn nbit(x) {

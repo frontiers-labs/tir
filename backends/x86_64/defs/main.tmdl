@@ -17,7 +17,7 @@ isa SSE2 requires SSE {}
 
 isa BMI requires X86_64 {}
 
-isa BMI2 requires BMI {}
+isa BMI2 requires X86_64 {}
 
 isa LZCNT requires X86_64 {}
 

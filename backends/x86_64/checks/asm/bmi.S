@@ -13,7 +13,9 @@ bmi_ops:
 	blsi rax, rbx
 	blsi eax, ebx
 	blsmsk rcx, rdx
+	blsmsk ecx, edx
 	blsr rdx, rsi
+	blsr edx, esi
 	tzcnt rax, rbx
 	tzcnt eax, ebx
 
@@ -26,7 +28,9 @@ bmi_ops:
 # CHECK-NEXT: x86_64.blsi {dst = rax, src = rbx}
 # CHECK-NEXT: x86_64.blsi32 {dst = eax, src = ebx}
 # CHECK-NEXT: x86_64.blsmsk {dst = rcx, src = rdx}
+# CHECK-NEXT: x86_64.blsmsk32 {dst = ecx, src = edx}
 # CHECK-NEXT: x86_64.blsr {dst = rdx, src = rsi}
+# CHECK-NEXT: x86_64.blsr32 {dst = edx, src = esi}
 # CHECK-NEXT: x86_64.tzcnt {dst = rax, src = rbx}
 # CHECK-NEXT: x86_64.tzcnt32 {dst = eax, src = ebx}
 
@@ -38,6 +42,8 @@ bmi_ops:
 # ENC:      [0xC4, 0xE2, 0xF8, 0xF3, 0xDB]
 # ENC:      [0xC4, 0xE2, 0x78, 0xF3, 0xDB]
 # ENC:      [0xC4, 0xE2, 0xF0, 0xF3, 0xD2]
+# ENC:      [0xC4, 0xE2, 0x70, 0xF3, 0xD2]
 # ENC:      [0xC4, 0xE2, 0xE8, 0xF3, 0xCE]
+# ENC:      [0xC4, 0xE2, 0x68, 0xF3, 0xCE]
 # ENC:      [0xF3, 0x48, 0x0F, 0xBC, 0xC3]
 # ENC:      [0xF3, 0x0F, 0xBC, 0xC3]
