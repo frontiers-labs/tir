@@ -1,8 +1,7 @@
 // RUN: tir mc --march=rv64i --stage=isel %s | filecheck %s
 
-// The loop-header parameter is seeded as a recursive theta gate. Selection
-// preserves it through the back-edge assignment while selecting the latch
-// computation and loop condition normally.
+// Selection preserves the loop-header parameter through the merge and back
+// edge while selecting the latch computation and loop condition normally.
 
 module {
   %fn_count = func.func @count(%limit: !i64) -> !i64 {
@@ -26,8 +25,9 @@ module {
 // CHECK:      ^[[HDR]](%[[IV:[0-9]+]]: !riscv.GPR):
 // CHECK:      riscv.blt {rs1 = %[[IV]]:GPR
 // CHECK:      riscv.addi {rd = %[[NEXT:[0-9]+]]:GPR, rs1 = %[[IV]]:GPR, imm = 1}
-// The latch value reaches the merge block, whose continue test carries it
+// The latch value reaches the merge block, whose repeated condition carries it
 // back into the header parameter.
-// CHECK:      asm.vbr %[[NEXT]], %{{[0-9]+}} ^[[MERGE:bb[0-9]+]]
-// CHECK:      ^[[MERGE]](%[[CARRY:[0-9]+]]: !riscv.GPR, %{{[0-9]+}}: !riscv.GPR):
+// CHECK:      asm.vbr %[[NEXT]] ^[[MERGE:bb[0-9]+]]
+// CHECK:      ^[[MERGE]](%[[CARRY:[0-9]+]]: !riscv.GPR):
+// CHECK-NEXT: riscv.blt {rs1 = %[[IV]]:GPR
 // CHECK:      asm.vbr %[[CARRY]] ^[[HDR]]

@@ -1,9 +1,8 @@
 // RUN: tir mc --march=aarch64 --stage=isel %s | filecheck %s
 
-// A loop destructs into its header and its body whatever the target: the
-// header's compare fuses into the target's own flag branch, the body's yield
-// rides the edge into the merge block, and the merge's continue flag drives
-// the back edge through a trampoline into the header.
+// A loop destructs into its header and body whatever the target. The body's
+// yield rides the edge into a merge block, whose repeated condition chooses
+// the back edge or exit.
 
 module {
   %fn_sum = func.func @sum(%n: !i64, %acc: !i64) -> !i64 {
@@ -25,21 +24,21 @@ module {
 
 // CHECK-NOT: scf.
 // CHECK: asm.vbr %{{[0-9]+}}, %{{[0-9]+}} ^[[HDR:bb[0-9]+]]
-// CHECK: ^[[HDR]](%{{[0-9]+}}: !arm64.GPR, %[[I:[0-9]+]]: !arm64.GPR):
-// CHECK-NEXT: arm64.cmp_imm {rn = %[[I]]:GPR, imm = 0}
+// CHECK: ^[[HDR]](%[[A:[0-9]+]]: !arm64.GPR, %[[I:[0-9]+]]: !arm64.GPRsp):
+// CHECK-NEXT: arm64.cmp_imm {rn = %[[I]]:GPRsp, imm = 0}
+// CHECK-NEXT: arm64.cmp_imm {rn = %[[I]]:GPRsp, imm = 0}
 // CHECK-NEXT: arm64.b.gt {imm = ^[[BODY:bb[0-9]+]]}
-// CHECK-NEXT: asm.vbr ^[[LEAVE:bb[0-9]+]]
-// CHECK: ^[[LEAVE]]:
-// CHECK: asm.vbr %{{[0-9]+}}, %{{[0-9]+}}, %{{[0-9]+}} ^[[MERGE:bb[0-9]+]]
+// CHECK-NEXT: asm.vbr %[[A]], %[[I]] ^[[MERGE:bb[0-9]+]]
 // CHECK: ^[[BODY]]:
-// CHECK-NEXT: arm64.add
-// CHECK-NEXT: arm64.sub_imm {rd = %{{[0-9]+}}:GPRsp, rn = %[[I]]:GPR, imm = 1}
-// CHECK: asm.vbr %{{[0-9]+}}, %{{[0-9]+}}, %{{[0-9]+}} ^[[MERGE]]
-// CHECK: ^[[MERGE]](%[[A:[0-9]+]]: !arm64.GPR, %[[N:[0-9]+]]: !arm64.GPR, %{{[0-9]+}}: !arm64.GPR):
-// CHECK: arm64.cbnz {rt = %{{[0-9]+}}:GPR, imm = ^[[AGAIN:bb[0-9]+]]}
-// CHECK-NEXT: asm.vbr %[[A]], %[[N]] ^[[EXIT:bb[0-9]+]]
+// CHECK-NEXT: arm64.add {rd = %[[NA:[0-9]+]]:GPR, rn = %[[A]]:GPR, rm = %[[I]]:GPRsp}
+// CHECK-NEXT: arm64.sub_imm {rd = %[[NI:[0-9]+]]:GPRsp, rn = %[[I]]:GPRsp, imm = 1}
+// CHECK-NEXT: asm.vbr %[[NA]], %[[NI]] ^[[MERGE]]
+// CHECK: ^[[MERGE]](%[[MA:[0-9]+]]: !arm64.GPR, %[[MI:[0-9]+]]: !arm64.GPR):
+// CHECK-NEXT: arm64.cmp_imm {rn = %[[I]]:GPRsp, imm = 0}
+// CHECK-NEXT: arm64.b.gt {imm = ^[[AGAIN:bb[0-9]+]]}
+// CHECK-NEXT: asm.vbr %[[MA]], %[[MI]] ^[[EXIT:bb[0-9]+]]
 // CHECK: ^[[AGAIN]]:
-// CHECK-NEXT: asm.vbr %[[A]], %[[N]] ^[[HDR]]
+// CHECK-NEXT: asm.vbr %[[MA]], %[[MI]] ^[[HDR]]
 // CHECK: ^[[EXIT]](%[[R:[0-9]+]]: !arm64.GPR, %{{[0-9]+}}: !arm64.GPR):
 // CHECK-NEXT: asm.vret %[[R]]
 // CHECK-NOT: scf.

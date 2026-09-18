@@ -21,14 +21,15 @@ module {
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @irr
 // CHECK-NOT: br
-// CHECK: %[[ENTRY:[0-9]+]] = scf.switch %{{[0-9]+}} {
+// CHECK: %[[ENTRY:[0-9]+]] = xori %{{[0-9]+}}, %{{[0-9]+}} : !i1
 // CHECK: scf.loop (%[[SEL:[0-9]+]] = %[[ENTRY]]) {
+// CHECK-NEXT: %{{[0-9]+}} = constant {value = 0} : !i1
 // CHECK-NEXT: %{{[0-9]+}}, %{{[0-9]+}} = scf.switch %[[SEL]] {
 // CHECK-NEXT: %{{[0-9]+}} = addi
 // CHECK: -> %{{[0-9]+}}, %{{[0-9]+}}
 // CHECK-NEXT: }
 // CHECK-NEXT: {
 // CHECK-NEXT: %{{[0-9]+}} = subi
-// CHECK: -> %{{[0-9]+}}, %{{[0-9]+}}, %{{[0-9]+}}
+// CHECK: -> %{{[0-9]+}}, %{{[0-9]+}}
 // CHECK-NEXT: }
-// CHECK-NEXT: -> %{{[0-9]+}}
+// CHECK-NEXT: -> %{{[0-9]+}}, %{{[0-9]+}}, %{{[0-9]+}}

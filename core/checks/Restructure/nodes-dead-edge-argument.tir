@@ -1,0 +1,35 @@
+// RUN: tir opt --pass restructure-nodes --verify %s | filecheck %s
+// RUN: tir opt --pass restructure-nodes,dce --verify %s | filecheck --check-prefix=DEAD %s
+// RUN: tir opt --pass restructure-nodes %s | tir interp -f count --args=4 | filecheck --check-prefix=VALUE %s
+
+module {
+  %f = func.func @count(%n: !i32) -> !i32 {
+    %zero = constant {value = 0} : !i32
+    %one = constant {value = 1} : !i32
+    cfg.br ^body(%zero : !i32)
+  ^body(%i: !i32):
+    %dead = addi %i, %n : !i32
+    cfg.br ^tail
+  ^tail:
+    %next = addi %i, %one : !i32
+    %again = cmpi %next, %n {predicate = "slt"} : !i1
+    cfg.cond_br %again, ^body(%next : !i32), ^exit(%dead : !i32)
+  ^exit(%unused: !i32):
+    func.return %i
+  }
+  module_end
+}
+
+// CHECK-LABEL: func.func @count
+// CHECK: %[[ONE:[0-9]+]] = constant {value = 1}
+// CHECK: scf.loop (%[[I:[0-9]+]] = %{{[0-9]+}}) {
+// CHECK: %[[NEXT:[0-9]+]] = addi %[[I]], %[[ONE]]
+// CHECK: -> %{{[0-9]+}}, %[[NEXT]], %[[I]]
+// VALUE: i32 3
+
+// Keep the loop result live while DCE removes the unused edge producer.
+// DEAD-LABEL: func.func @count(%[[N:[0-9]+]]: !i32)
+// DEAD: scf.loop (%[[I:[0-9]+]] = %{{[0-9]+}}) {
+// DEAD-NOT: addi %[[I]], %[[N]]
+// DEAD: -> %{{[0-9]+}}, %{{[0-9]+}}, %[[I]]
+// DEAD-NEXT: }

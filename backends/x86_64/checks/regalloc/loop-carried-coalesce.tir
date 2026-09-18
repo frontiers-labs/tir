@@ -1,9 +1,8 @@
 // RUN: tir mc --march=x86_64 --stage=regalloc %s | filecheck %s
 // RUN: tir mc --march=x86_64 --shuffle-machine-order --filetype=obj -o /dev/null %s
 
-// Loading on the back-edge path lets the load overwrite the header register.
-// Loading before the condition keeps the old pointer live in the lowered
-// false arm and requires a separate register and a back-edge copy.
+// Both loop shapes let the carried load value use the header register. Neither
+// needs a back-edge copy after dead loop arguments are removed.
 
 module {
   %fn_walk = func.func @load_before_condition(%0: !ptr.p, %1: !i64) -> !i64 {
@@ -33,12 +32,14 @@ module {
 
 // CHECK-LABEL: asm.symbol {name = "load_before_condition"
 // CHECK: ^[[HEAD:bb[0-9]+]](%[[P:[0-9]+]]: !x86_64.GPR
-// CHECK-NEXT: %{{[0-9]+}} = x86_64.mov_load {dst = %{{[0-9]+}}:[[NEXT:[a-z0-9]+]], base = %[[P]]:[[REG:[a-z0-9]+]]}
-// CHECK: x86_64.mov {dst = %[[P]]:[[REG]], src = %{{[0-9]+}}:[[NEXT]]}
-// CHECK-NEXT: asm.vbr ^[[HEAD]]
+// CHECK-NEXT: %{{[0-9]+}} = x86_64.mov_load {dst = %[[P]]:[[BEFORE_REG:[a-z0-9]+]],
+// CHECK-SAME: base = %[[P]]:[[BEFORE_REG]]}
+// CHECK-NOT: x86_64.mov {dst = %[[P]]:[[BEFORE_REG]]
+// CHECK: asm.vbr ^[[HEAD]]
 
 // CHECK-LABEL: asm.symbol {name = "load_on_back_edge"
 // CHECK: ^[[HEAD:bb[0-9]+]](%[[P:[0-9]+]]: !x86_64.GPR
-// CHECK: %{{[0-9]+}} = x86_64.mov_load {dst = %{{[0-9]+}}:[[REG:[a-z0-9]+]], base = %[[P]]:[[REG]]}
+// CHECK: %{{[0-9]+}} = x86_64.mov_load {dst = %{{[0-9]+}}:[[REG:[a-z0-9]+]],
+// CHECK-SAME: base = %[[P]]:[[REG]]}
 // CHECK-NOT: x86_64.mov {dst = %{{[0-9]+}}:[[REG]]
 // CHECK: asm.vbr ^[[HEAD]]

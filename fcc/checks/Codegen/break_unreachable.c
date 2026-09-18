@@ -1,14 +1,13 @@
-// RUN: fcc compile --stage ir -o - %S/../Inputs/break_unreachable.c | filecheck %s
+// RUN: fcc compile --stage ir -o - %S/../Inputs/break_unreachable.c | filecheck --implicit-check-not=scf. %s
 
-// The body leaves on its first statement, so the loop is not a loop: what
-// remains of it is a switch with two empty arms, and what follows the `break`
-// is emitted nowhere.
+// The immediate break leaves no live conditional or loop. The load must
+// observe the initial zero, without the assignment after the break.
 
 // CHECK: %{{[0-9]+}} = func.func @stop
-// CHECK-NOT: scf.loop
-// CHECK: scf.switch %{{[0-9]+}} {
-// CHECK-NEXT: ->
-// CHECK-NEXT: }
-// CHECK-NEXT: {
-// CHECK-NEXT: ->
-// CHECK-NEXT: }
+// CHECK: %[[I:[0-9]+]] = ptr.alloca
+// CHECK: %[[ZERO:[0-9]+]] = constant {value = 0} : !i32
+// CHECK: %[[INIT:[0-9]+]] = ptr.store %[[ZERO]], %[[I]]
+// CHECK-NEXT: %[[VALUE:[0-9]+]], %{{[0-9]+}} = ptr.load %[[I]] state(%[[INIT]])
+// CHECK-NEXT: %{{[0-9]+}} = ptr.store %[[VALUE]], %[[RESULT_SLOT:[0-9]+]]
+// CHECK-NEXT: %[[RESULT:[0-9]+]], %{{[0-9]+}} = ptr.load %[[RESULT_SLOT]]
+// CHECK: -> %[[RESULT]],

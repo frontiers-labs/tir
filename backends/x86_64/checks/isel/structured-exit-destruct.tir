@@ -1,11 +1,7 @@
 // RUN: tir mc --march=x86_64 --stage=isel %s | filecheck %s
 
-// An edge leaving a loop from inside a gate nested in its body becomes a stop
-// flag: the converter carries the exit value and a cleared flag out of the arm
-// that leaves, the arm that stays carries the advanced counter and a set flag,
-// and the loop's latch tests the flag to choose between the back edge and the
-// continuation. Neither arm is folded into its edge, since each holds the
-// constant its flag is.
+// An edge leaving a loop from inside a gate nested in its body becomes a boolean
+// carried to the latch. The latch tests it to choose the back edge or exit.
 
 module {
   %fn_find = func.func @find(%n: !i64, %limit: !i64) -> !i64 {
@@ -29,18 +25,17 @@ module {
 // The body: the nested gate's taken arm leaves, the other stays.
 // CHECK: x86_64.lea_base_disp {dst = %[[NI:[0-9]+]]:GPR, base = %{{[0-9]+}}:GPR, imm = -1}
 // CHECK-NEXT: x86_64.cmp {dst = %[[NI]]:GPR, src = %{{[0-9]+}}:GPR}
+// CHECK-NEXT: x86_64.sete {dst = %[[EQ:[0-9]+]]:GPR8}
+// CHECK-NEXT: x86_64.xor_imm {dst = %[[GO:[0-9]+]]:GPR, dst_tied = %[[EQ]]:GPR8, imm = 1}
+// CHECK-NEXT: x86_64.cmp {dst = %[[NI]]:GPR, src = %{{[0-9]+}}:GPR}
 // CHECK-NEXT: x86_64.je {imm = ^[[BREAK:bb[0-9]+]]}
-// CHECK-NEXT: asm.vbr ^[[STAY:bb[0-9]+]]
-// CHECK: ^[[STAY]]:
-// CHECK-NEXT: x86_64.mov_imm8 {dst = %[[GO:[0-9]+]]:GPR8, imm = 1}
-// CHECK-NEXT: asm.vbr %[[NI]], %{{[0-9]+}}, %[[GO]] ^[[JOIN:bb[0-9]+]]
+// CHECK-NEXT: asm.vbr %[[NI]], %{{[0-9]+}} ^[[JOIN:bb[0-9]+]]
 // CHECK: ^[[BREAK]]:
-// CHECK-NEXT: x86_64.mov_imm8 {dst = %[[STOP:[0-9]+]]:GPR8, imm = 0}
-// CHECK-NEXT: asm.vbr %{{[0-9]+}}, %[[NI]], %[[STOP]] ^[[JOIN]]
+// CHECK-NEXT: asm.vbr %{{[0-9]+}}, %[[NI]] ^[[JOIN]]
 // The gate's join forwards all three to the latch, which reads the flag and
 // branches: back to the header or out.
-// CHECK: ^[[JOIN]](%{{[0-9]+}}: !x86_64.GPR, %{{[0-9]+}}: !x86_64.GPR, %{{[0-9]+}}: !x86_64.GPR):
-// CHECK-NEXT: asm.vbr %{{[0-9]+}}, %{{[0-9]+}}, %{{[0-9]+}} ^[[LATCH:bb[0-9]+]]
+// CHECK: ^[[JOIN]](%{{[0-9]+}}: !x86_64.GPR, %{{[0-9]+}}: !x86_64.GPR):
+// CHECK-NEXT: asm.vbr %{{[0-9]+}}, %{{[0-9]+}}, %[[GO]] ^[[LATCH:bb[0-9]+]]
 // CHECK: ^[[LATCH]](%[[I:[0-9]+]]: !x86_64.GPR, %[[R:[0-9]+]]: !x86_64.GPR, %[[FLAG:[0-9]+]]: !x86_64.GPR):
 // CHECK-NEXT: x86_64.test_imm32 {dst = %[[FLAG]]:GPR, imm = 1}
 // CHECK-NEXT: x86_64.jne {imm = ^[[BACK:bb[0-9]+]]}

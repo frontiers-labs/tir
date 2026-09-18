@@ -1,0 +1,33 @@
+// RUN: tir opt --pass restructure-nodes --verify %s | filecheck %s
+// RUN: tir mc --march x86_64 --filetype asm %s | filecheck --check-prefix=ASM %s
+// RUN: tir opt --pass restructure-nodes %s | tir interp -f inverted --args=0 | filecheck --check-prefix=FALSE %s
+// RUN: tir opt --pass restructure-nodes %s | tir interp -f inverted --args=1 | filecheck --check-prefix=TRUE %s
+
+module {
+  %f = func.func @inverted(%p: !i1) -> !i1 {
+    %false = constant {value = 0} : !i1
+    %true = constant {value = 1} : !i1
+    cfg.cond_br %p, ^yes, ^no
+  ^yes:
+    cfg.br ^join(%false : !i1)
+  ^no:
+    cfg.br ^join(%true : !i1)
+  ^join(%value: !i1):
+    func.return %value
+  }
+  module_end
+}
+
+// CHECK-LABEL: func.func @inverted(%[[P:[0-9]+]]: !i1)
+// CHECK-NOT: scf.switch
+// CHECK: %[[NOT:[0-9]+]] = xori %[[P]], %{{[0-9]+}}
+// CHECK-NOT: scf.switch
+// CHECK: -> %[[NOT]]
+// CHECK-NEXT: }
+// CHECK-NEXT: module_end
+// FALSE: i1 {{-?1}}
+// TRUE: i1 0
+
+// ASM: inverted:
+// ASM: xor
+// ASM: ret

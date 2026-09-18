@@ -1,5 +1,7 @@
 // RUN: tir opt --pass func.func(restructure-nodes,instcombine-nodes) %s | filecheck %s
 // RUN: tir opt --pass func.func(restructure-nodes),fixpoint<3>(func.func(instcombine-nodes)) %s | filecheck %s
+// RUN: tir opt --pass func.func(restructure-nodes,instcombine-nodes) %s | tir interp -f f --args=4 | filecheck --check-prefix=ZERO %s
+// RUN: tir opt --pass func.func(restructure-nodes),fixpoint<3>(func.func(instcombine-nodes)) %s | tir interp -f f --args=9 | filecheck --check-prefix=ONE %s
 
 // A counted loop with an early exit carrying a flag it never changes. One run
 // of the simplifier proves the carried flag is the constant it was entered on
@@ -21,7 +23,9 @@ module {
     %next = addi %i, %one : !i32
     cfg.cond_br %hit, ^exit(%one, %false, %one, %i : !i32, !i1, !i32, !i32), ^head(%a, %flag, %c, %next : !i32, !i1, !i32, !i32)
   ^exit(%ra: !i32, %rf: !i1, %rc: !i32, %ri: !i32):
-    func.return %ra
+    %flag_int = extui %rf : !i32
+    %result = addi %ra, %flag_int : !i32
+    func.return %result
   }
   module_end
 }
@@ -31,3 +35,6 @@ module {
 // CHECK-NOT: %[[PORT]]
 // CHECK: -> %{{[0-9]+}}, %{{[0-9]+}}, %[[FALSE]], %{{[0-9]+}}, %{{[0-9]+}}, %{{[0-9]+}}, %{{[0-9]+}}, %[[FALSE]],
 // CHECK-NEXT: }
+
+// ZERO: i32 0
+// ONE: i32 1

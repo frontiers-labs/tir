@@ -1,12 +1,8 @@
 // RUN: tir mc --march=x86_64 --stage=isel %s | filecheck %s
 
-// A counted loop written as a CFG destructs head-tested: the header reads the
-// counter and the carried value as parameters and its comparison fuses into the
-// branch that picks the body. Each arm of that decision sets a continue flag and
-// carries the ports to a latch, which tests the flag: taken, the back edge
-// re-enters the header; not taken, the ports leave to the continuation. Nothing
-// is rotated and no counter is minted: the counter is the block argument the
-// program already carries.
+// A counted loop written as a CFG destructs head-tested. The header reads the
+// counter and carried value as parameters. The body advances both values into a
+// merge, whose repeated condition chooses the back edge or continuation.
 
 #data_layout = {types = {p = {abi = 64, size = 64}}}
 
@@ -33,24 +29,20 @@ module {data_layout = #data_layout} {
 // CHECK: ^[[HEAD]](%[[IV:[0-9]+]]: !x86_64.GPR, %[[ACC:[0-9]+]]: !x86_64.GPR):
 // The counter test fuses into the header's branch.
 // CHECK-NEXT: x86_64.cmp {dst = %[[IV]]:GPR, src = %[[UB:[0-9]+]]:GPR}
+// CHECK-NEXT: x86_64.cmp {dst = %[[IV]]:GPR, src = %[[UB]]:GPR}
 // CHECK-NEXT: x86_64.jl {imm = ^[[BODY:bb[0-9]+]]}
-// CHECK-NEXT: asm.vbr ^[[DONE:bb[0-9]+]]
-// The exit arm clears the flag and forwards the ports unchanged.
-// CHECK: ^[[DONE]]:
-// CHECK-NEXT: x86_64.mov_imm8 {dst = %[[STOP:[0-9]+]]:GPR8, imm = 0}
-// CHECK-NEXT: asm.vbr %[[IV]], %[[ACC]], %[[STOP]] ^[[LATCH:bb[0-9]+]]
-// The body advances both ports and sets the flag; the constant folds into the
-// accumulator's instruction.
+// CHECK-NEXT: asm.vbr %[[IV]], %[[ACC]] ^[[LATCH:bb[0-9]+]]
+// The body advances both ports. The constant folds into the accumulator's
+// instruction.
 // CHECK: ^[[BODY]]:
 // CHECK-NEXT: x86_64.lea_base_disp {dst = %[[NACC:[0-9]+]]:GPR, base = %[[ACC]]:GPR, imm = 5}
 // CHECK-NEXT: x86_64.add {dst = %[[NEXT:[0-9]+]]:GPR, dst_tied = %[[IV]]:GPR, src = %[[ST:[0-9]+]]:GPR}
-// CHECK-NEXT: x86_64.mov_imm8 {dst = %[[GO:[0-9]+]]:GPR8, imm = 1}
-// CHECK-NEXT: asm.vbr %[[NEXT]], %[[NACC]], %[[GO]] ^[[LATCH]]
-// The latch tests the flag: the back edge re-enters the header, the other edge
-// leaves with both ports.
-// CHECK: ^[[LATCH]](%[[I2:[0-9]+]]: !x86_64.GPR, %[[A2:[0-9]+]]: !x86_64.GPR, %[[FLAG:[0-9]+]]: !x86_64.GPR):
-// CHECK-NEXT: x86_64.test_imm32 {dst = %[[FLAG]]:GPR, imm = 1}
-// CHECK-NEXT: x86_64.jne {imm = ^[[BACK:bb[0-9]+]]}
+// CHECK-NEXT: asm.vbr %[[NEXT]], %[[NACC]] ^[[LATCH]]
+// The merge repeats the condition. The taken edge re-enters the header and the
+// other edge leaves with both carried values.
+// CHECK: ^[[LATCH]](%[[I2:[0-9]+]]: !x86_64.GPR, %[[A2:[0-9]+]]: !x86_64.GPR):
+// CHECK-NEXT: x86_64.cmp {dst = %[[IV]]:GPR, src = %[[UB]]:GPR}
+// CHECK-NEXT: x86_64.jl {imm = ^[[BACK:bb[0-9]+]]}
 // CHECK-NEXT: asm.vbr %[[I2]], %[[A2]] ^[[EXIT:bb[0-9]+]]
 // CHECK: ^[[BACK]]:
 // CHECK-NEXT: asm.vbr %[[I2]], %[[A2]] ^[[HEAD]]

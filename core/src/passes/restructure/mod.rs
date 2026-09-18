@@ -3,7 +3,8 @@
 //! Follows Bahmann and Reissmann, "Perfect Reconstructability of Control Flow
 //! from Demand Dependence Graphs": loops are restructured first, one
 //! single-entry single-exit tail-controlled loop per strongly connected
-//! component, with dispatch predicates naming the entry and the exit an
+//! component. Existing tail decisions are preserved; other components use
+//! dispatch predicates naming the entry and the exit an
 //! iteration took; the acyclic graph that leaves behind is then restructured
 //! into a tree of conditionals, with a continuation predicate wherever a branch
 //! has several join points. Neither phase copies a node, so the output grows

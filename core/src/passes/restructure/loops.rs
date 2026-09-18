@@ -1,7 +1,8 @@
 //! Loop restructuring: every strongly connected component becomes one
 //! tail-controlled loop with a single entry and a single exit.
 //!
-//! The component keeps all its nodes. What changes is where its edges land: an
+//! An existing tail-controlled component keeps its decision. Otherwise, the
+//! component keeps all its nodes, but changes where its edges land: an
 //! edge entering it goes to a new head, naming the entry it wanted in a
 //! dispatch variable; an edge closing it or leaving it goes to a new tail,
 //! naming whether to repeat and, when leaving, which exit it wanted. The body
@@ -153,11 +154,25 @@ fn restructure_loop(
     let entries = entry_vertices(cfg, nodes, &members, *entry);
     let exits = exit_targets(cfg, &members);
 
-    let entry_var = (entries.len() > 1).then(|| cfg.add_var(cfg.int_type(32)));
-    let exit_var = (exits.len() > 1).then(|| cfg.add_var(cfg.int_type(32)));
+    if preserve_tail_loop(cfg, nodes, entry, &members, &entries) {
+        return;
+    }
+
+    let entry_var = (entries.len() > 1)
+        .then(|| cfg.add_var(cfg.int_type(if entries.len() == 2 { 1 } else { 32 })));
+    let exit_var =
+        (exits.len() > 1).then(|| cfg.add_var(cfg.int_type(if exits.len() == 2 { 1 } else { 32 })));
     let repeat_var = cfg.add_var(cfg.int_type(1));
 
     let body_entry = dispatch_node(cfg, entry_var, &entries);
+    cfg.nodes[body_entry]
+        .assigns
+        .push((repeat_var, Rhs::Const(0)));
+    if let Some(var) = exit_var {
+        // The selector is observed only when an exit overwrites it. Defining
+        // it per iteration prevents a spurious dependence on the last one.
+        cfg.nodes[body_entry].assigns.push((var, Rhs::Const(0)));
+    }
     let exit_node = match exits.len() {
         0 => exit,
         _ => dispatch_node(cfg, exit_var, &exits),
@@ -179,7 +194,11 @@ fn restructure_loop(
         term: Term::Jump(Edge::new(body_entry)),
         loop_body: Some(id),
     });
-    cfg.loops.push(Loop { body_entry, tail });
+    cfg.loops.push(Loop {
+        body_entry,
+        tail,
+        invert_predicate: false,
+    });
 
     // Edges are rewired as the structure sees them: a component member that is
     // already a loop leaves through its own tail, not through its head.
@@ -236,6 +255,95 @@ fn restructure_loop(
     if let Term::LoopTail { repeat, .. } = &mut cfg.nodes[tail].term {
         repeat.target = body_entry_slot;
     }
+}
+
+/// An existing tail decision already expresses theta's repetition predicate.
+/// Keeping it avoids a gamma that merely selects true or false for that predicate.
+fn preserve_tail_loop(
+    cfg: &mut Cfg,
+    nodes: &mut BTreeSet<NodeId>,
+    entry: &mut NodeId,
+    members: &BTreeSet<NodeId>,
+    entries: &[NodeId],
+) -> bool {
+    let [body_entry] = *entries else {
+        return false;
+    };
+    let boundary: Vec<_> = members
+        .iter()
+        .flat_map(|&node| {
+            cfg.structural_successors(node)
+                .into_iter()
+                .filter(move |target| *target == body_entry || !members.contains(target))
+                .map(move |target| (node, target))
+        })
+        .collect();
+    let [(tail, first), (other, second)] = boundary[..] else {
+        return false;
+    };
+    if tail != other || (first == body_entry) == (second == body_entry) {
+        return false;
+    }
+    if cfg.nodes[tail].loop_body.is_some() {
+        return false;
+    }
+    let Term::Cond {
+        pred,
+        if_true,
+        if_false,
+    } = cfg.nodes[tail].term.clone()
+    else {
+        return false;
+    };
+    let invert_predicate = if_false.target == body_entry;
+    let (repeat, exit) = if invert_predicate {
+        (if_false, if_true)
+    } else {
+        (if_true, if_false)
+    };
+    // An exit-edge copy used to read its source in the tail's block. It now
+    // runs after the loop, so even a locally used source needs a loop result.
+    for &(_, rhs) in &exit.assigns {
+        if let Rhs::Value(value) = rhs
+            && !cfg.value_var.contains_key(&value)
+        {
+            let var = cfg.add_var(cfg.context.get_value(value).ty());
+            cfg.value_var.insert(value, var);
+        }
+    }
+    let id = cfg.loops.len();
+    let head = cfg.add_node(Node {
+        block: None,
+        assigns: Vec::new(),
+        term: Term::Jump(Edge::new(body_entry)),
+        loop_body: Some(id),
+    });
+    for &node in nodes.iter().filter(|node| !members.contains(node)) {
+        cfg.edit_structural_edges(node, |edge| {
+            if edge.target == body_entry {
+                edge.target = head;
+            }
+        });
+    }
+    if *entry == body_entry {
+        *entry = head;
+    }
+    cfg.nodes[tail].term = Term::LoopTail { pred, repeat, exit };
+    cfg.loops.push(Loop {
+        body_entry,
+        tail,
+        invert_predicate,
+    });
+    let mut inner_entry = body_entry;
+    restructure_region(cfg, members.clone(), &mut inner_entry, tail);
+    cfg.loops[id].body_entry = inner_entry;
+    cfg.nodes[head].term = Term::Jump(Edge::new(inner_entry));
+    if let Term::LoopTail { repeat, .. } = &mut cfg.nodes[tail].term {
+        repeat.target = inner_entry;
+    }
+    nodes.retain(|node| !members.contains(node));
+    nodes.insert(head);
+    true
 }
 
 /// The members of `component` an edge from outside it lands on.

@@ -318,16 +318,20 @@ impl Seeder<'_> {
             self.eg.union(node, result);
             if self.eg.find(next) == self.eg.find(head) {
                 self.eg.union(head, init);
-                self.eg.union(result, exit);
-            } else {
-                ports.push(Port {
-                    head,
-                    init,
-                    edges: vec![next],
-                    result,
-                    published: exit,
-                });
+                if self.eg.find(exit) == self.eg.find(head)
+                    || self.eg.nodes(exit).any(|node| node.int().is_some())
+                {
+                    self.eg.union(result, exit);
+                    continue;
+                }
             }
+            ports.push(Port {
+                head,
+                init,
+                edges: vec![next],
+                result,
+                published: exit,
+            });
         }
         for dep in instance.state_results() {
             self.anchor(dep);

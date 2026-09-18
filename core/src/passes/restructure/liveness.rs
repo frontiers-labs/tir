@@ -31,8 +31,9 @@ fn through(cfg: &Cfg, live_in: &[BTreeSet<VarId>], edge: &Edge) -> BTreeSet<VarI
     for (var, _) in &edge.assigns {
         live.remove(var);
     }
-    for (_, rhs) in &edge.assigns {
-        if let Rhs::Value(value) = rhs
+    for (var, rhs) in &edge.assigns {
+        if live_in[edge.target].contains(var)
+            && let Rhs::Value(value) = rhs
             && let Some(var) = cfg.value_var.get(value).copied()
         {
             live.insert(var);

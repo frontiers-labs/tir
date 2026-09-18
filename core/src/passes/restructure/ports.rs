@@ -27,7 +27,11 @@ impl Emitter<'_> {
         if let Term::LoopTail { exit, .. } = &self.cfg.nodes[tail].term {
             needed.extend(self.live.along(self.cfg, exit));
         }
-        self.ports(&[body], needed)
+        let mut assigned = self.assigned(body);
+        if let Term::LoopTail { repeat, .. } = &self.cfg.nodes[tail].term {
+            assigned.extend(repeat.assigns.iter().map(|(var, _)| *var));
+        }
+        self.deps_last(&assigned.intersection(&needed).copied().collect::<Vec<_>>())
     }
 
     /// `ports` with the states moved after the values: the order every port

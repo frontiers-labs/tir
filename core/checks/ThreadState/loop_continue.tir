@@ -32,7 +32,8 @@ module {
 // CHECK-LABEL: %{{[0-9]+}} = func.func @f
 // CHECK: %{{[0-9]+}}, %[[FINAL:[0-9]+]] = scf.loop (%{{[0-9]+}} = %{{[0-9]+}}, %[[CARRIED:[0-9]+]] = %{{[0-9]+}}) {
 // CHECK-NEXT: %{{[0-9]+}} = cmpi
-// CHECK-NEXT: %{{[0-9]+}}, %{{[0-9]+}}, %[[EXIT:[0-9]+]] = scf.switch %{{[0-9]+}} args(%[[CARRIED]]) (%[[E:[0-9]+]]) {
+// CHECK-NEXT: %{{[0-9]+}} = constant {value = 0} : !i1
+// CHECK-NEXT: %[[REPEAT:[0-9]+]], %[[STATE:[0-9]+]] = scf.switch %{{[0-9]+}} args(%[[CARRIED]]) (%[[E:[0-9]+]]) {
 // CHECK: (%[[B:[0-9]+]]) {
 // CHECK-NEXT: %[[S:[0-9]+]] = ptr.store %{{[0-9]+}}, %{{[0-9]+}} state(%[[B]])
 // CHECK-NEXT: %{{[0-9]+}} = addi
@@ -44,8 +45,8 @@ module {
 // CHECK-NEXT: -> %[[K]]
 // CHECK-NEXT: }
 // CHECK-NEXT: %{{[0-9]+}} = constant {value = 1} : !i1
-// CHECK-NEXT: -> %{{[0-9]+}}, %{{[0-9]+}}, %[[GATE]]
+// CHECK-NEXT: -> %{{[0-9]+}}, %[[GATE]]
 // CHECK-NEXT: }
-// CHECK-NEXT: -> %{{[0-9]+}}, %{{[0-9]+}}, %{{[0-9]+}}, %[[EXIT]], %[[EXIT]]
+// CHECK-NEXT: -> %{{[0-9]+}}, %[[REPEAT]], %[[REPEAT]], %[[STATE]], %[[STATE]]
 // CHECK-NEXT: }
 // CHECK-NEXT: %{{[0-9]+}}, %{{[0-9]+}} = ptr.load %{{[0-9]+}} state(%[[FINAL]]) : !i32

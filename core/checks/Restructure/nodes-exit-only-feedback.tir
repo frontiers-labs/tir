@@ -1,0 +1,23 @@
+// RUN: tir opt --pass restructure-nodes --verify %s | filecheck %s
+// RUN: tir opt --pass restructure-nodes %s | tir interp -f count --args=4 | filecheck --check-prefix=VALUE %s
+
+module {
+  %f = func.func @count(%n: !i32) -> !i32 {
+    %zero = constant {value = 0} : !i32
+    %one = constant {value = 1} : !i32
+    cfg.br ^body(%zero : !i32)
+  ^body(%i: !i32):
+    %next = addi %i, %one : !i32
+    %again = cmpi %next, %n {predicate = "slt"} : !i1
+    cfg.cond_br %again, ^body(%next : !i32), ^exit
+  ^exit:
+    func.return %next
+  }
+  module_end
+}
+
+// CHECK-LABEL: func.func @count
+// CHECK: scf.loop (%[[I:[0-9]+]] = %{{[0-9]+}}, %{{[0-9]+}} = %[[INIT:[0-9]+]]) {
+// CHECK: %[[NEXT:[0-9]+]] = addi %[[I]],
+// CHECK: -> %{{[0-9]+}}, %[[NEXT]], %[[INIT]], %[[I]], %[[NEXT]]
+// VALUE: i32 4

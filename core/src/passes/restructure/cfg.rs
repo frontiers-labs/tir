@@ -94,6 +94,7 @@ pub type LoopId = usize;
 pub struct Loop {
     pub body_entry: NodeId,
     pub tail: NodeId,
+    pub invert_predicate: bool,
 }
 
 pub struct Cfg {

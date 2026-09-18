@@ -1,0 +1,39 @@
+// RUN: tir opt --pass restructure-nodes --verify %s | filecheck %s
+// RUN: tir opt --pass restructure-nodes %s | tir interp -f exit_value --args=2 | filecheck --check-prefix=BREAK %s
+// RUN: tir opt --pass restructure-nodes %s | tir interp -f exit_value --args=9 | filecheck --check-prefix=DONE %s
+
+module {
+  %f = func.func @exit_value(%n: !i32) -> !i32 {
+    %zero = constant {value = 0} : !i32
+    %one = constant {value = 1} : !i32
+    %five = constant {value = 5} : !i32
+    cfg.br ^head(%zero : !i32)
+  ^head(%i: !i32):
+    %more = cmpi %i, %five {predicate = "slt"} : !i1
+    cfg.cond_br %more, ^body, ^done
+  ^body:
+    %hit = cmpi %i, %n {predicate = "eq"} : !i1
+    cfg.cond_br %hit, ^found, ^step
+  ^step:
+    %next = addi %i, %one : !i32
+    cfg.br ^head(%next : !i32)
+  ^found:
+    func.return %one
+  ^done:
+    func.return %zero
+  }
+  module_end
+}
+
+// CHECK-LABEL: func.func @exit_value
+// CHECK: scf.loop (%[[I:[0-9]+]] = %{{[0-9]+}}, %[[SELECTOR:[0-9]+]] = %{{[0-9]+}}) {
+// CHECK-NEXT: %{{[0-9]+}} = cmpi %[[I]],
+// CHECK-NEXT: %{{[0-9]+}} = constant {value = 0} : !i1
+// CHECK-NEXT: %[[RESET:[0-9]+]] = constant {value = 0} : !i1
+// CHECK-NOT: %[[SELECTOR]]
+// CHECK: %[[NEXT:[0-9]+]] = addi %[[I]],
+// CHECK: -> %[[NEXT]], %[[RESET]]
+// CHECK-NOT: %[[SELECTOR]]
+// CHECK: module_end
+// BREAK: i32 1
+// DONE: i32 0

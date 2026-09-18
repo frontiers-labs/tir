@@ -19,7 +19,7 @@ module {
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @dowhile
 // CHECK-NOT: br
-// CHECK: scf.loop (%[[IV:[0-9]+]] = %{{[0-9]+}}, %{{[0-9]+}} = %{{[0-9]+}}) {
+// CHECK: scf.loop (%[[IV:[0-9]+]] = %{{[0-9]+}}, %{{[0-9]+}} = %[[INIT:[0-9]+]]) {
 // CHECK-NEXT: %[[SUM:[0-9]+]] = addi %[[IV]], %[[IV]] : !i32
-// CHECK-NEXT: cmpi %[[SUM]]
-// CHECK: -> %{{[0-9]+}}, %{{[0-9]+}}, %[[SUM]], %{{[0-9]+}}, %[[SUM]]
+// CHECK-NEXT: %[[PRED:[0-9]+]] = cmpi %[[SUM]]
+// CHECK-NEXT: -> %[[PRED]], %[[SUM]], %[[INIT]], %[[IV]], %[[SUM]]

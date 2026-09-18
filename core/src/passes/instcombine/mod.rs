@@ -127,13 +127,8 @@ impl Driver<'_> {
                 hypotheses.retain(|_| !dropped.next().copied().unwrap_or(false));
             }
             let promoted = !hypotheses.is_empty();
-            for port in hypotheses {
+            for port in &hypotheses {
                 self.eg.union(port.head, port.init);
-                // The loop is left with what its test forwarded, which is the
-                // head itself only where the test forwards it unchanged. Under a
-                // proven hypothesis the head is the constant everywhere, so the
-                // forwarded class says what the result is; the init does not.
-                self.eg.union(port.result, port.published);
             }
             self.eg.rebuild();
             // Back to a fixpoint before the next loop opens its scope, from the
@@ -142,6 +137,19 @@ impl Driver<'_> {
             // narrows.
             if promoted {
                 self.saturate();
+                let mut published = false;
+                for port in hypotheses {
+                    // Substitution can make the exit constant. A value that
+                    // still depends on another changing port stays in the loop.
+                    if self.is_constant(port.published) {
+                        self.eg.union(port.result, port.published);
+                        published = true;
+                    }
+                }
+                if published {
+                    self.eg.rebuild();
+                    self.saturate();
+                }
             }
             self.hypothesize_within(loops, order, Some(holder.op));
         }

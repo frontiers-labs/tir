@@ -23,6 +23,7 @@ module {
 
 // CHECK: ^bb{{[0-9]+}}(%[[CA:[0-9]+]]: !x86_64.GPR, %{{[0-9]+}}: !x86_64.GPR):
 // CHECK-NEXT: x86_64.cmp
+// CHECK-NEXT: x86_64.cmp
 // CHECK-NEXT: x86_64.je {imm = ^[[BODY:bb[0-9]+]]}
 // CHECK: ^[[BODY]]:
 // CHECK-NEXT: x86_64.sub {dst = %{{[0-9]+}}:GPR, dst_tied = %[[CA]]:GPR, src = %[[CA]]:GPR}

@@ -187,7 +187,8 @@ impl Structurer<'_> {
 
     /// One dispatch node standing for every place the arms rejoin at.
     fn join(&mut self, node: NodeId, joins: &[NodeId], exclusive: &BTreeSet<NodeId>) -> NodeId {
-        let var = self.cfg.add_var(self.cfg.int_type(32));
+        let width = if joins.len() == 2 { 1 } else { 32 };
+        let var = self.cfg.add_var(self.cfg.int_type(width));
         let (&default, cases) = joins.split_last().expect("a branch rejoins somewhere");
         let dispatch = self.cfg.add_node(Node {
             block: None,

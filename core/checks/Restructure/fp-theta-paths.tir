@@ -21,7 +21,7 @@ module {
 
 // CHECK: %[[ENTRY:[0-9]+]] = state.entry_state : !state<fp.env>
 // CHECK: %{{[0-9]+}}, %[[ENV:[0-9]+]] = scf.loop ({{.*}}%[[PORT:[0-9]+]] = %[[ENTRY]]) {
-// CHECK: %{{[0-9]+}}, %{{[0-9]+}}, %[[NEXT:[0-9]+]] = scf.switch {{.*}} args(%[[PORT]]) (%[[EXIT:[0-9]+]]) {
+// CHECK: %{{[0-9]+}}, %[[NEXT:[0-9]+]] = scf.switch {{.*}} args(%[[PORT]]) (%[[EXIT:[0-9]+]]) {
 // CHECK: -> {{.*}}%[[EXIT]]
 // CHECK: (%[[BODY:[0-9]+]]) {
 // CHECK: %{{[0-9]+}}, %[[DIV:[0-9]+]] = fp.div {{.*}} state(%[[BODY]]) {semantics = {exceptions = "flags"}}

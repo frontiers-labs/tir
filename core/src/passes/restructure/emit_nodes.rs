@@ -265,7 +265,7 @@ impl Emitter<'_> {
         region: RegionId,
         env: &mut Env,
     ) -> Result<(), PassError> {
-        let ports = self.ports(arms, self.live.at(continuation).clone());
+        let mut ports = self.ports(arms, self.live.at(continuation).clone());
         let chains = self.state_ports(&ports);
         let state_inits = self.port_values(&chains, region, env)?;
         let regions = arms
@@ -287,6 +287,41 @@ impl Emitter<'_> {
                 self.read(region, env, var)?
             }
         };
+        if regions.len() == 2
+            && self.context.get_value(predicate).ty() == IntegerType::new(self.context, 1)
+        {
+            let results: Vec<_> = regions
+                .iter()
+                .map(|&arm| self.context.get_region(arm).results().to_vec())
+                .collect();
+            let mut kept = Vec::new();
+            for (index, &var) in ports.iter().enumerate() {
+                let pair = (
+                    self.integer_constant(results[0][index]),
+                    self.integer_constant(results[1][index]),
+                );
+                if self.cfg.var_types[var] == IntegerType::new(self.context, 1)
+                    && matches!(pair, (Some(0), Some(1)) | (Some(1), Some(0)))
+                {
+                    let value = if pair.0 == Some(0) {
+                        predicate
+                    } else {
+                        self.invert(region, predicate)?
+                    };
+                    env.insert(var, value);
+                } else {
+                    kept.push(index);
+                }
+            }
+            for (&arm, results) in regions.iter().zip(&results) {
+                self.context
+                    .set_region_results(arm, kept.iter().map(|&index| results[index]).collect());
+            }
+            ports = kept.iter().map(|&index| ports[index]).collect();
+        }
+        if ports.is_empty() && state_inits.is_empty() {
+            return Ok(());
+        }
         let op = scf::SwitchOpBuilder::new(self.context)
             .predicate(predicate)
             .inputs(state_inits)
@@ -297,6 +332,30 @@ impl Emitter<'_> {
         self.context.add(region, op);
         self.bind_results(op, &ports, env);
         Ok(())
+    }
+
+    fn integer_constant(&self, value: ValueId) -> Option<i64> {
+        let op = self.context.get_value(value).defining_op()?;
+        let op = self.context.get_op(op);
+        if !op.is::<crate::builtin::ConstantOp>() {
+            return None;
+        }
+        match op.attr("value")? {
+            crate::attributes::AttributeValue::Int(value) => Some(value),
+            _ => None,
+        }
+    }
+
+    fn invert(&self, region: RegionId, value: ValueId) -> Result<ValueId, PassError> {
+        let ty = IntegerType::new(self.context, 1);
+        let one = self.constant(region, 1, ty)?;
+        let inverted = crate::builtin::XOrIOpBuilder::new(self.context)
+            .lhs(value)
+            .rhs(one)
+            .result_type(ty)
+            .build();
+        self.context.add(region, inverted.id());
+        Ok(inverted.result())
     }
 
     /// One arm of a gamma: its own region, entered on a port per chain and
@@ -329,8 +388,8 @@ impl Emitter<'_> {
 
     /// A θ: the body runs once per iteration and names the repeat predicate,
     /// then the values the next iteration carries, then the values the loop
-    /// leaves with. Restructuring made every loop tail-controlled, so both
-    /// groups are the variables as the tail finds them.
+    /// leaves with. Backedge assignments update the carried values separately:
+    /// an exit must observe the tail's values before those assignments.
     fn loop_op(
         &self,
         id: LoopId,
@@ -339,7 +398,7 @@ impl Emitter<'_> {
         env: &mut Env,
     ) -> Result<(), PassError> {
         let tail = self.cfg.loops[id].tail;
-        let Term::LoopTail { pred, .. } = self.cfg.nodes[tail].term.clone() else {
+        let Term::LoopTail { pred, repeat, .. } = self.cfg.nodes[tail].term.clone() else {
             return Err(unsupported("a loop whose tail moved"));
         };
         let ports = self.loop_ports(id, body);
@@ -356,15 +415,38 @@ impl Emitter<'_> {
             inner.insert(var, port.id());
         }
         self.statements(body, body_region, &mut inner)?;
-        let repeat = self.read_src(body_region, &inner, pred)?;
-        let carried = self.port_values(&ports, body_region, &inner)?;
-        let mut results = vec![repeat];
+        let mut predicate = self.read_src(body_region, &inner, pred)?;
+        if self.cfg.loops[id].invert_predicate {
+            predicate = self.invert(body_region, predicate)?;
+        }
+        let exited = self.port_values(&ports, body_region, &inner)?;
+        self.assign(&repeat.assigns, body_region, &mut inner)?;
+        let mut carried = self.port_values(&ports, body_region, &inner)?;
+        let inits = self.port_values(&ports, region, env)?;
+        let mut reads = std::collections::BTreeSet::from([predicate]);
+        reads.extend(carried.iter().chain(&exited).copied());
+        let mut pending = vec![body_region];
+        while let Some(region) = pending.pop() {
+            let region = self.context.get_region(region);
+            reads.extend(region.results());
+            for op in region.op_ids() {
+                let op = self.context.get_op(op);
+                reads.extend(op.operands().iter().copied());
+                pending.extend(op.regions().iter().copied());
+            }
+        }
+        for (index, port) in port_values.iter().enumerate() {
+            if !self.context.is_state_type(port.ty()) && !reads.contains(&port.id()) {
+                carried[index] = inits[index];
+            }
+        }
+        let mut results = vec![predicate];
         results.extend_from_slice(&carried);
-        results.extend_from_slice(&carried);
+        results.extend_from_slice(&exited);
         self.context.set_region_results(body_region, results);
 
         let op = scf::LoopOpBuilder::new(self.context)
-            .inits(self.port_values(&ports, region, env)?)
+            .inits(inits)
             .body(body_region)
             .result_types(self.port_types(&ports))
             .build()

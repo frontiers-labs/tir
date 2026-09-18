@@ -1,17 +1,13 @@
 // RUN: fcc compile --stage ir -o - %S/../Inputs/basic_while.c | filecheck %s
 
-// A `while` is an `scf.loop` whose body tests the condition first: the
-// `scf.switch` on it yields a false predicate in arm 0 (exit) and runs the
-// body and yields true in arm 1 (continue), and the loop's predicate is the
-// arm's result.
+// The original condition controls repetition. The switch carries the state
+// from the exit arm or the body that performs the store.
 
 // CHECK: scf.loop (%{{[0-9]+}} = %{{[0-9]+}}) {
 // CHECK: %[[C:[0-9]+]] = cmpi {{.*}} {predicate = "slt"}
-// CHECK: %[[P:[0-9]+]], %[[S:[0-9]+]] = scf.switch %[[C]] args(
-// CHECK: %[[F:[0-9]+]] = constant {value = 0} : !i1
-// CHECK-NEXT: -> %[[F]]
+// CHECK: %[[S:[0-9]+]] = scf.switch %[[C]] args(%{{[0-9]+}}) (%[[EXIT:[0-9]+]]) {
+// CHECK: -> %[[EXIT]]
 // CHECK: addi
-// CHECK: ptr.store
-// CHECK: %[[T:[0-9]+]] = constant {value = 1} : !i1
-// CHECK-NEXT: -> %[[T]]
-// CHECK: -> %[[P]], %[[S]], %[[S]]
+// CHECK: %[[STORED:[0-9]+]] = ptr.store
+// CHECK: -> %[[STORED]]
+// CHECK: -> %[[C]], %[[S]], %[[S]]

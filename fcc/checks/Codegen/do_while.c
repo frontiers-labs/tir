@@ -8,5 +8,5 @@
 // CHECK: addi
 // CHECK: ptr.store
 // CHECK: %[[C:[0-9]+]] = cmpi {{.*}} {predicate = "slt"}
-// CHECK: %[[P:[0-9]+]] = scf.switch %[[C]] {
-// CHECK: -> %[[P]], %
+// CHECK-NOT: scf.switch
+// CHECK: -> %[[C]], %

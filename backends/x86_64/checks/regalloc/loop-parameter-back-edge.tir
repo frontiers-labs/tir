@@ -1,12 +1,9 @@
 // RUN: tir mc --march=x86_64 --stage=regalloc %s | filecheck %s
 // RUN: tir mc --march=x86_64 --stage=isel --shuffle-machine-order %s -o /dev/null
 
-// Block-parameter destruction leaves machine IR that is not SSA: the back edge
-// of a loop assigns the header's own parameter, so the register the header read
-// on entry is written again on the way around. That copy is not the definition
-// the readers ahead of it depend on — they read the value the block was entered
-// with — so the order between them is a copy that follows its readers, not
-// readers that follow a copy.
+// Block-parameter destruction leaves machine IR that is not SSA. Regalloc
+// coalesces the increment with the header parameter, so the back edge needs no
+// copy and re-enters with the incremented register.
 
 module {
   %1 = func.declare @foo(!i32) -> !unit
@@ -25,12 +22,10 @@ module {
   module_end
 }
 
-// The parameter is read into the call argument in the header; only the back
-// edge's own block writes its register again, right before re-entering.
+// The parameter is read into the call argument. The increment then overwrites
+// the same physical register before the back edge.
 // CHECK:      ^[[HEAD:bb[0-9]+]](%[[P:[0-9]+]]: !x86_64.GPR32, %{{[0-9]+}}: !x86_64.GPR, %{{[0-9]+}}: !state<memory>, %{{[0-9]+}}: !state<fp.env>):
 // CHECK-NEXT: x86_64.mov {dst = %{{[0-9]+}}:{{r[a-z0-9]+}}, src = %[[P]]:[[REG:[a-z0-9]+]]}
 // CHECK:      asm.vcall state(%{{[0-9]+}}, %{{[0-9]+}}) {callee = "foo"
-// CHECK:      x86_64.inc32
-// CHECK-NEXT: asm.vbr
-// CHECK:      x86_64.mov {dst = %[[P]]:[[REG]], src = %{{[0-9]+}}:{{r[a-z0-9]+}}}
+// CHECK:      x86_64.inc32 {dst = %{{[0-9]+}}:[[REG]], dst_tied = %{{[0-9]+}}:[[REG]]}
 // CHECK-NEXT: asm.vbr ^[[HEAD]]

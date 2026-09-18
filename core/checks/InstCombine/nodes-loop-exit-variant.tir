@@ -1,0 +1,40 @@
+// RUN: tir opt --pass restructure-nodes,instcombine-nodes --verify %s | filecheck %s
+// RUN: tir interp %s -f f --args=1,2 | filecheck --check-prefix=VALUE %s
+// RUN: tir opt --pass restructure-nodes,instcombine-nodes %s | tir interp -f f --args=1,2 | filecheck --check-prefix=VALUE %s
+
+module {
+  %24 = func.func @f(%0: !i64, %1: !i64) -> !i64 {
+    %10 = addi %0, %1 : !i64
+    %11 = constant {value = 16} : !i64
+    %12 = constant {value = 1} : !i64
+    %13 = constant {value = 0} : !i64
+    cfg.br ^bb1(%10, %11 : !i64, !i64)
+    ^bb1(%2: !i64, %3: !i64):
+    %14 = addi %2, %10 : !i64
+    %15 = subi %3, %12 : !i64
+    %16 = cmpi %14, %10 {predicate = "sgt"} : !i1
+    cfg.cond_br %16, ^bb2(%14, %15 : !i64, !i64), ^bb2(%2, %15 : !i64, !i64)
+    ^bb2(%4: !i64, %5: !i64):
+    %17 = addi %4, %10 : !i64
+    %18 = subi %5, %12 : !i64
+    %19 = cmpi %18, %13 {predicate = "sgt"} : !i1
+    cfg.cond_br %19, ^bb1(%17, %18 : !i64, !i64), ^bb4(%4, %18 : !i64, !i64)
+    ^bb3(%6: !i64, %7: !i64):
+    %20 = subi %6, %10 : !i64
+    %21 = subi %7, %12 : !i64
+    %22 = cmpi %21, %13 {predicate = "sgt"} : !i1
+    cfg.cond_br %22, ^bb3(%20, %21 : !i64, !i64), ^bb4(%6, %21 : !i64, !i64)
+    ^bb4(%8: !i64, %9: !i64):
+    %23 = addi %8, %10 : !i64
+    func.return %23
+  }
+  module_end
+}
+
+// CHECK-LABEL: func.func @f
+// CHECK: %[[BASE:[0-9]+]] = addi
+// CHECK: %{{[0-9]+}}, %{{[0-9]+}}, %[[EXIT:[0-9]+]] = scf.loop
+// CHECK: %[[SUM:[0-9]+]] = addi %[[EXIT]], %[[BASE]]
+// CHECK-NEXT: -> %[[SUM]]
+
+// VALUE: i64 51
