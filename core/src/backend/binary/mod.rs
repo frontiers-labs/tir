@@ -22,6 +22,7 @@ pub use encodings::{
     EncodeSpec, FieldRun, Guard, PatchField, decode_with, encode_with, encoded_width, patch_with,
 };
 pub use format::{ElfClass, ObjectFormatInfo, RelocKind};
+pub(crate) use writer::valid_block_layout;
 pub use writer::{BinaryEmitError, BinaryWriter, ObjectEmission};
 
 use tir::BlockId;

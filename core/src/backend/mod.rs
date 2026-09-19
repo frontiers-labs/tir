@@ -4,6 +4,7 @@ pub mod abi;
 pub mod asm_desc;
 pub mod asm_syntax;
 pub mod binary;
+mod block_layout;
 pub mod call_lowering;
 pub mod coalesce;
 pub mod constmat;
@@ -13,6 +14,7 @@ pub mod isel;
 mod lexer;
 pub mod liveness;
 pub mod lower;
+mod machine_cfg;
 mod operations;
 mod parser;
 mod pbqp_dump;
@@ -45,6 +47,7 @@ pub use registers::{
     slot_register, type_class, value_class,
 };
 
+pub use block_layout::MachineBlockLayoutPass;
 pub use dependence::{Dependences, verify_block_order};
 pub use shuffle_order::ShuffleMachineOrderPass;
 pub use verify::verify_machine_ir;

@@ -1,0 +1,21 @@
+// RUN: tir mc --march=x86_64 --filetype=obj -o - %s | tir readobj - | filecheck %s
+
+module {
+  %fn_external = func.declare @external() -> !i64
+  %fn_caller = func.func @caller(%0: !i1) -> !i64 {
+    cfg.cond_br %0, ^bb1, ^bb2
+  ^bb1:
+    %1 = func.call %fn_external() -> !i64
+    func.return %1
+  ^bb2:
+    %2 = constant {value = 0} : !i64
+    func.return %2
+  }
+  module_end
+}
+
+// Layout validation must preserve ordinary external call relocations while
+// considering the machine block order.
+// CHECK: Symbol caller:
+// CHECK: Symbol external: value=0x0 size=0x0 bind=GLOBAL type=NOTYPE section=UND
+// CHECK: Reloc .text+{{.*}}: {{.*}} external

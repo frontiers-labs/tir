@@ -15,7 +15,7 @@ use tir::{
 
 use crate::backend::isel::InstructionSelectPass;
 use crate::backend::lower::OpLoweringPass;
-use crate::backend::{ShuffleMachineOrderPass, TargetMachine};
+use crate::backend::{MachineBlockLayoutPass, ShuffleMachineOrderPass, TargetMachine};
 use crate::passes::{
     CheckUniqueSymbolsPass, DeadCodeEliminationPass, LowerMemoryIntrinsicsPass,
     LowerPtrDisjointPass, MaterializeSymbolAddressesPass, ResolveFpPass, RestructureNodesPass,
@@ -198,6 +198,9 @@ fn add_function_passes(
     let finalize = target.finalize_lowerings();
     if !finalize.is_empty() {
         pm.add_pass(OpLoweringPass::new("finalize-lowering", finalize));
+    }
+    if let Some(format) = target.object_format() {
+        pm.add_pass(MachineBlockLayoutPass::new(format));
     }
 }
 

@@ -1,0 +1,40 @@
+// This file was generated with ./utils/scripts/update_checks.py. Do not modify CHECKs manually.
+
+// RUN: tir mc --march=x86_64 --filetype=asm %s | filecheck %s
+
+// The loop backedge should fall through to its header.
+module {
+  %fn_layout = func.func @layout(%cond: !i1, %again: !i1, %x: !i64) -> !i64 {
+    cfg.cond_br %cond, ^bb1, ^bb2
+  ^bb1:
+    %hot = addi %x, %x : !i64
+    cfg.cond_br %again, ^bb1, ^bb3(%hot : !i64)
+  ^bb2:
+    %cold = subi %x, %x : !i64
+    cfg.br ^bb3(%cold : !i64)
+  ^bb3(%result: !i64):
+    func.return %result
+  }
+  module_end
+}
+
+// CHECK: .global layout
+// CHECK-NEXT: layout:
+// CHECK-NEXT: 	mov rax, rdx
+// CHECK-NEXT: 	test edi, 1
+// CHECK-NEXT: 	jne .L8
+// CHECK-NEXT: .L7:
+// CHECK-NEXT: 	sub rax, rax
+// CHECK-NEXT: .L6:
+// CHECK-NEXT: 	ret
+// CHECK-NEXT: .L8:
+// CHECK-NEXT: 	mov rcx, 0
+// CHECK-NEXT: 	jmp .L10
+// CHECK-NEXT: .L12:
+// CHECK-NEXT: .L10:
+// CHECK-NEXT: 	test esi, 1
+// CHECK-NEXT: 	jne .L12
+// CHECK-NEXT: .L11:
+// CHECK-NEXT: 	add rax, rax
+// CHECK-NEXT: .L9:
+// CHECK-NEXT: 	jmp .L6

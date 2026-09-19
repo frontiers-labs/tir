@@ -1,6 +1,6 @@
 use std::{
     any::Any,
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     hash::{DefaultHasher, Hasher},
     sync::{
         Arc, RwLock, RwLockReadGuard, RwLockWriteGuard,
@@ -2017,6 +2017,40 @@ impl Context {
         let edited = edit(delta.store.block_mut(id).expect("live block"));
         delta.edit_block(base, id);
         edited
+    }
+
+    /// Reorder an ordered region without changing its entry, membership, or block identities.
+    /// Invalid permutations leave the region and its analysis versions unchanged.
+    pub fn reorder_region_blocks(
+        &self,
+        region: RegionId,
+        blocks: Vec<BlockId>,
+    ) -> Result<(), String> {
+        let handle = self.get_region(region);
+        if handle.is_nodes() {
+            return Err("cannot reorder blocks of an unordered region".into());
+        }
+        let original = handle.block_ids();
+        let mut remaining: HashSet<_> = original.iter().copied().collect();
+        if blocks.len() != original.len()
+            || blocks.first() != original.first()
+            || blocks.iter().any(|block| !remaining.remove(block))
+        {
+            return Err("block order must be a permutation preserving the entry".into());
+        }
+        if blocks == original {
+            return Ok(());
+        }
+        let mut view = self.view_mut();
+        let (base, delta) = view.parts();
+        assert!(delta.shadow_region(base, region), "live region");
+        *delta
+            .store
+            .region_mut(region)
+            .expect("live region")
+            .blocks_mut() = blocks;
+        delta.edit_region(base, region);
+        Ok(())
     }
 
     pub(crate) fn add_block_to_region(&self, region: RegionId, block: BlockId) {

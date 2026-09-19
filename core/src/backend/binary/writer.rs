@@ -194,18 +194,7 @@ impl BinaryWriter {
         state.obj.sections[section].align = state.obj.sections[section].align.max(align);
         let start = state.obj.sections[section].data.len() as u64;
         let blocks = crate::backend::symbol_body_blocks(context, op);
-        for (index, &block_id) in blocks.iter().enumerate() {
-            let offset = state.obj.sections[section].data.len() as u64;
-            state.block_starts.insert(block_id, offset);
-            let omitted = blocks
-                .get(index + 1)
-                .and_then(|&next| crate::backend::fallthrough_branch(context, block_id, next));
-            for op_id in context.get_block(block_id).op_ids() {
-                if Some(op_id) != omitted {
-                    self.write_op(context, &context.get_op(op_id), state, fmt)?;
-                }
-            }
-        }
+        self.write_blocks(context, &blocks, section, state, fmt)?;
         let end = state.obj.sections[section].data.len() as u64;
 
         state.obj.symbols.push(ObjSymbol {
@@ -224,6 +213,30 @@ impl BinaryWriter {
                 SymKind::Func
             },
         });
+        Ok(())
+    }
+
+    fn write_blocks(
+        &self,
+        context: &Context,
+        blocks: &[BlockId],
+        section: usize,
+        state: &mut ObjectEmission,
+        fmt: &ObjectFormatInfo,
+    ) -> Result<(), BinaryEmitError> {
+        for (index, &block) in blocks.iter().enumerate() {
+            state
+                .block_starts
+                .insert(block, state.obj.sections[section].data.len() as u64);
+            let omitted = blocks
+                .get(index + 1)
+                .and_then(|&next| crate::backend::fallthrough_branch(context, block, next));
+            for op_id in context.get_block(block).op_ids() {
+                if Some(op_id) != omitted {
+                    self.write_op(context, &context.get_op(op_id), state, fmt)?;
+                }
+            }
+        }
         Ok(())
     }
 
@@ -326,6 +339,35 @@ impl BinaryWriter {
         }
         Ok(())
     }
+}
+
+pub(crate) fn valid_block_layout(
+    context: &Context,
+    symbol: &tir::OpHandle,
+    blocks: &[BlockId],
+    format: &ObjectFormatInfo,
+) -> bool {
+    if blocks.iter().any(|&block| {
+        context.get_block(block).op_ids().iter().any(|&op| {
+            !matches!(
+                crate::backend::asm_item(&context.get_op(op)),
+                AsmItem::Skip | AsmItem::Instruction
+            )
+        })
+    }) {
+        return false;
+    }
+    let mut emission = ObjectEmission {
+        assignment: crate::backend::RegAssignment::of_op(symbol, crate::backend::ASSIGNMENT_ATTR),
+        ..ObjectEmission::default()
+    };
+    let section = ensure_section(&mut emission.obj, ".text");
+    emission.current_section = Some(section);
+    let writer = BinaryWriter::new();
+    writer
+        .write_blocks(context, blocks, section, &mut emission, format)
+        .and_then(|()| writer.resolve_fixups(&mut emission, format))
+        .is_ok()
 }
 
 fn resolve_symbol_differences(state: &mut ObjectEmission) -> Result<(), BinaryEmitError> {

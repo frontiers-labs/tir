@@ -119,6 +119,7 @@ mod core {
     mod backend;
     mod binary;
     mod binding;
+    mod block_layout;
     mod context;
     mod dependence;
     mod dialects;

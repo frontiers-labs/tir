@@ -727,3 +727,38 @@ fn erasing_operations_returns_their_run_storage() {
         "erased run storage is handed to the operations built after it"
     );
 }
+
+proptest::proptest! {
+    #[test]
+    fn block_permutations_preserve_identity_and_invalidate_the_owner(keys in proptest::collection::vec(proptest::num::u32::ANY, 2..24)) {
+        let context = Context::with_default_dialects();
+        let f = fixture(&context);
+        let region = context.get_region(f.body_region);
+        for _ in &keys {
+            region.add_block(context.create_block(vec![]).id());
+        }
+        let original = region.block_ids();
+        let mut tail: Vec<_> = original[1..].iter().copied().zip(&keys).collect();
+        tail.sort_by_key(|(_, key)| *key);
+        let order: Vec<_> = std::iter::once(original[0]).chain(tail.into_iter().map(|(block, _)| block)).collect();
+        let version = context.op_version(f.nest);
+        let contents = context.get_block(f.body_block).op_ids();
+        context.reorder_region_blocks(f.body_region, order.clone()).unwrap();
+        proptest::prop_assert_eq!(region.block_ids(), order.clone());
+        proptest::prop_assert_eq!(context.op_version(f.nest), version + u32::from(order != original));
+        proptest::prop_assert_eq!(context.get_block(f.body_block).op_ids(), contents);
+        for block in original {
+            proptest::prop_assert_eq!(context.parent_region(block), Some(f.body_region));
+        }
+        proptest::prop_assert!(context.has_value(f.old));
+        let version = context.op_version(f.nest);
+        let mut duplicate = order.clone();
+        duplicate[1] = duplicate[0];
+        proptest::prop_assert!(context.reorder_region_blocks(f.body_region, duplicate).is_err());
+        let mut changed_entry = order.clone();
+        changed_entry.swap(0, 1);
+        proptest::prop_assert!(context.reorder_region_blocks(f.body_region, changed_entry).is_err());
+        proptest::prop_assert_eq!(region.block_ids(), order);
+        proptest::prop_assert_eq!(context.op_version(f.nest), version);
+    }
+}
