@@ -788,6 +788,21 @@ macro test_flags {
     };
 }
 
+// Status flags an instruction leaves undefined on hardware. Written all the
+// same, so the dependence graph orders the instruction against the compare/jcc
+// pairs around it; the value is not architectural and nothing selects on it,
+// since branches pair only with definers that write flags alone.
+macro undefined_flags {
+    () => {
+        EFLAGS::cf = zext(0b0, 1);
+        EFLAGS::zf = zext(0b0, 1);
+        EFLAGS::sf = zext(0b0, 1);
+        EFLAGS::of = zext(0b0, 1);
+        EFLAGS::af = zext(0b0, 1);
+        EFLAGS::pf = zext(0b0, 1);
+    };
+}
+
 // Group-3 unary `op r/m` (0xF7 /digit) and the movzx/movsx register extensions
 // (0x0F escape, narrow source in rm). Both come in 64/32 and 8/16-source pairs.
 macro tmpl_runary {
