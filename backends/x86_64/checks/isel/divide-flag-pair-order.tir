@@ -1,0 +1,32 @@
+// RUN: tir mc --march=x86_64 --stage=isel %s | filecheck %s
+// RUN: tir mc --march=x86_64 --stage=isel --shuffle-machine-order %s | filecheck %s
+// RUN: env TIR_SHUFFLE_SEED=3 tir mc --march=x86_64 --stage=isel --shuffle-machine-order %s | filecheck %s
+// RUN: env TIR_SHUFFLE_SEED=5 tir mc --march=x86_64 --stage=isel --shuffle-machine-order %s | filecheck %s
+
+// A division leaves the flags undefined on hardware, so it writes them as far
+// as the dependence graph is concerned: an order that lets it fall between a
+// compare and the `setcc` reading the compare's flags reads garbage. The
+// divisions here share no value with the pair, so only the flag edge keeps them
+// out of it under another linearization of the block; the seeds are the ones
+// that let one in without it.
+
+module {
+  %fn_f = func.func @f(%0: !i64, %1: !i64, %2: !i32, %3: !i32) -> !i64 {
+    %4 = cmpi %0, %1 {predicate = "slt"} : !i1
+    %5 = divsi %0, %1 : !i64
+    %6 = divui %0, %1 : !i64
+    %7 = divsi %2, %3 : !i32
+    %8 = divui %2, %3 : !i32
+    %9 = extui %4 : !i64
+    %10 = addi %5, %6 : !i64
+    %11 = addi %7, %8 : !i32
+    %12 = extsi %11 : !i64
+    %13 = addi %10, %12 : !i64
+    %14 = addi %13, %9 : !i64
+    func.return %14
+  }
+  module_end
+}
+
+// CHECK: x86_64.cmp {dst = %{{[0-9]+}}:GPR, src = %{{[0-9]+}}:GPR}
+// CHECK-NEXT: x86_64.setl {dst = %{{[0-9]+}}:GPR8}
