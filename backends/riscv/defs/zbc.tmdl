@@ -1,0 +1,37 @@
+isa Zbc requires [RV32I | RV64I] {}
+
+fn zbcBitSet(value, i) {
+    ((value >> i) & zext(0b1, self.XLEN)) == zext(0b1, self.XLEN)
+}
+
+fn zbcXlenMinus1() {
+    zext(extract(self.XLEN - 1, 5, 0), self.XLEN)
+}
+
+template ZbcClmul for [Zbc] : ALUOp {
+    param FUNCT7: bits<7> = 0b0000101;
+}
+
+instruction CarrylessMulLow for [Zbc] : ZbcClmul {
+    param MNEMONIC: String = "clmul";
+    param FUNCT3: bits<3> = 0b001;
+    behavior {
+        rd = reduce(map(iota(self.XLEN, self.XLEN), |i| if zbcBitSet(rs1, i) { rs2 << i } else { zext(0b0, self.XLEN) }), |a, b| a ^ b);
+    }
+}
+
+instruction CarrylessMulHigh for [Zbc] : ZbcClmul {
+    param MNEMONIC: String = "clmulh";
+    param FUNCT3: bits<3> = 0b011;
+    behavior {
+        rd = reduce(map(iota(self.XLEN, self.XLEN), |i| if zbcBitSet(rs1, i) { (rs2 >> (zbcXlenMinus1() - i)) >> zext(0b1, self.XLEN) } else { zext(0b0, self.XLEN) }), |a, b| a ^ b);
+    }
+}
+
+instruction CarrylessMulReverse for [Zbc] : ZbcClmul {
+    param MNEMONIC: String = "clmulr";
+    param FUNCT3: bits<3> = 0b010;
+    behavior {
+        rd = reduce(map(iota(self.XLEN, self.XLEN), |i| if zbcBitSet(rs1, i) { rs2 >> (zbcXlenMinus1() - i) } else { zext(0b0, self.XLEN) }), |a, b| a ^ b);
+    }
+}

@@ -1,0 +1,65 @@
+isa Zbs requires [RV32I | RV64I] {}
+
+fn zbsMaskReg(rs2) {
+    zext(0b1, self.XLEN) << extract(rs2, log2Ceil(self.XLEN) - 1, 0)
+}
+
+fn zbsMaskImm(imm) {
+    zext(0b1, self.XLEN) << imm
+}
+
+instruction BitSet for [Zbs] : ALUOp {
+    param MNEMONIC: String = "bset";
+    param FUNCT7: bits<7> = 0b0010100;
+    param FUNCT3: bits<3> = 0b001;
+    behavior { rd = rs1 | zbsMaskReg(rs2); }
+}
+
+instruction BitClear for [Zbs] : ALUOp {
+    param MNEMONIC: String = "bclr";
+    param FUNCT7: bits<7> = 0b0100100;
+    param FUNCT3: bits<3> = 0b001;
+    behavior { rd = rs1 & ~zbsMaskReg(rs2); }
+}
+
+instruction BitInvert for [Zbs] : ALUOp {
+    param MNEMONIC: String = "binv";
+    param FUNCT7: bits<7> = 0b0110100;
+    param FUNCT3: bits<3> = 0b001;
+    behavior { rd = rs1 ^ zbsMaskReg(rs2); }
+}
+
+instruction BitExtract for [Zbs] : ALUOp {
+    param MNEMONIC: String = "bext";
+    param FUNCT7: bits<7> = 0b0100100;
+    param FUNCT3: bits<3> = 0b101;
+    behavior { rd = (rs1 >> extract(rs2, log2Ceil(self.XLEN) - 1, 0)) & zext(0b1, self.XLEN); }
+}
+
+instruction BitSetImm for [Zbs] : ShiftImm {
+    param MNEMONIC: String = "bseti";
+    param FUNCT6: bits<6> = 0b001010;
+    param FUNCT3: bits<3> = 0b001;
+    behavior { rd = rs1 | zbsMaskImm(imm); }
+}
+
+instruction BitClearImm for [Zbs] : ShiftImm {
+    param MNEMONIC: String = "bclri";
+    param FUNCT6: bits<6> = 0b010010;
+    param FUNCT3: bits<3> = 0b001;
+    behavior { rd = rs1 & ~zbsMaskImm(imm); }
+}
+
+instruction BitInvertImm for [Zbs] : ShiftImm {
+    param MNEMONIC: String = "binvi";
+    param FUNCT6: bits<6> = 0b011010;
+    param FUNCT3: bits<3> = 0b001;
+    behavior { rd = rs1 ^ zbsMaskImm(imm); }
+}
+
+instruction BitExtractImm for [Zbs] : ShiftImm {
+    param MNEMONIC: String = "bexti";
+    param FUNCT6: bits<6> = 0b010010;
+    param FUNCT3: bits<3> = 0b101;
+    behavior { rd = (rs1 >> imm) & zext(0b1, self.XLEN); }
+}

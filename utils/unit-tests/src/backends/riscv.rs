@@ -421,6 +421,8 @@ fn march_selects_extension_features() {
             Feature::RVM64,
             Feature::Zba,
             Feature::Zbb,
+            Feature::Zbc,
+            Feature::Zbs,
             Feature::F,
             Feature::D,
             Feature::D64,
