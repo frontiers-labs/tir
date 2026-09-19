@@ -1,40 +1,32 @@
-// This file was generated with ./utils/scripts/update_checks.py. Do not modify CHECKs manually.
-
 // RUN: tir mc --march=x86_64 --filetype=asm %s | filecheck %s
 
-// The loop backedge should fall through to its header.
+// The layout pass should place the unconditional backedge before the loop
+// header, so the backedge needs no explicit jump.
 module {
-  %fn_layout = func.func @layout(%cond: !i1, %again: !i1, %x: !i64) -> !i64 {
-    cfg.cond_br %cond, ^bb1, ^bb2
-  ^bb1:
-    %hot = addi %x, %x : !i64
-    cfg.cond_br %again, ^bb1, ^bb3(%hot : !i64)
-  ^bb2:
-    %cold = subi %x, %x : !i64
-    cfg.br ^bb3(%cold : !i64)
-  ^bb3(%result: !i64):
+  %fn_layout = func.func @layout(%remaining: !i64, %value: !i64) -> !i64 {
+    cfg.br ^loop(%remaining, %value : !i64, !i64)
+  ^loop(%remaining: !i64, %value: !i64):
+    %doubled = addi %value, %value : !i64
+    %one = constant {value = 1} : !i64
+    %next = subi %remaining, %one : !i64
+    %zero = constant {value = 0} : !i64
+    %more = cmpi %next, %zero {predicate = "ne"} : !i1
+    cfg.cond_br %more, ^backedge(%next, %doubled : !i64, !i64), ^exit(%doubled : !i64)
+  ^backedge(%remaining: !i64, %value: !i64):
+    cfg.br ^loop(%remaining, %value : !i64, !i64)
+  ^exit(%result: !i64):
     func.return %result
   }
   module_end
 }
 
-// CHECK: .global layout
-// CHECK-NEXT: layout:
-// CHECK-NEXT: 	mov rax, rdx
-// CHECK-NEXT: 	test edi, 1
-// CHECK-NEXT: 	jne .L8
-// CHECK-NEXT: .L7:
-// CHECK-NEXT: 	sub rax, rax
-// CHECK-NEXT: .L6:
-// CHECK-NEXT: 	ret
-// CHECK-NEXT: .L8:
-// CHECK-NEXT: 	mov rcx, 0
-// CHECK-NEXT: 	jmp .L10
-// CHECK-NEXT: .L12:
-// CHECK-NEXT: .L10:
-// CHECK-NEXT: 	test esi, 1
-// CHECK-NEXT: 	jne .L12
-// CHECK-NEXT: .L11:
-// CHECK-NEXT: 	add rax, rax
-// CHECK-NEXT: .L9:
-// CHECK-NEXT: 	jmp .L6
+// CHECK-LABEL: layout:
+// CHECK-NOT: .L{{[0-9]+}}:
+// CHECK: jmp .L[[HEADER:[0-9]+]]
+// CHECK-NEXT: .L[[BACKEDGE:[0-9]+]]:
+// CHECK-NOT: jmp .L[[HEADER]]
+// CHECK: .L[[HEADER]]:
+// CHECK: mov [[DOUBLED:r[a-z0-9]+]], [[VALUE:r[a-z0-9]+]]
+// CHECK-NEXT: add [[DOUBLED]], [[VALUE]]
+// CHECK: jne .L[[BACKEDGE]]
+// CHECK: ret

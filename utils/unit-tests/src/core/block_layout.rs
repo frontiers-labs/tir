@@ -1,5 +1,7 @@
-use tir::backend::binary::{BinaryWriter, ObjectFile, ObjectFormatInfo};
-use tir::backend::{MachineBlockLayoutPass, SectionOp, SymbolOp};
+use tir::backend::binary::{encode_with, BinaryWriter, EncodedInst, ObjectFile, ObjectFormatInfo};
+use tir::backend::{
+    MachineBlockLayoutPass, MachineInstruction, RegAssignment, SectionOp, SymbolOp,
+};
 use tir::builtin::ModuleOp;
 use tir::{AnalysisManager, BlockId, Context, Operation, OperationRef, Pass};
 
@@ -65,6 +67,27 @@ fn chain(prefix: &str, order: &[usize]) -> String {
     source
 }
 
+fn bounded_source(padding_count: usize) -> String {
+    let mut source = String::from(
+        ".global bounded\nbounded:\n jrcxz near\n jmp padding\nnear:\n jmp done\npadding:\n",
+    );
+    for _ in 0..padding_count {
+        source.push_str(" mov rbx, 0\n");
+    }
+    source.push_str(" jmp near\ndone:\n ret\n");
+    source
+}
+
+fn encode(assembly: &Assembly, op_id: tir::OpId) -> EncodedInst {
+    let op = assembly.context.get_op(op_id);
+    let instruction = op
+        .clone()
+        .as_interface::<dyn MachineInstruction>()
+        .expect("machine instruction");
+    let spec = instruction.info().encode.expect("encoded instruction");
+    encode_with(&op, spec, &RegAssignment::default()).expect("instruction encodes")
+}
+
 proptest::proptest! {
     #![proptest_config(proptest::test_runner::Config {
         cases: 32,
@@ -125,20 +148,26 @@ proptest::proptest! {
     }
 
     #[test]
-    fn a_short_branch_limits_block_motion(padding_count in 16usize..24) {
-        let mut source = String::from(".global bounded\nbounded:\n jrcxz near\n jmp padding\nnear:\n jmp done\npadding:\n");
-        for _ in 0..padding_count {
-            source.push_str(" mov rbx, 0\n");
-        }
-        source.push_str(" jmp near\ndone:\n ret\n");
-        let assembly = Assembly::new(&source);
+    fn a_short_branch_limits_block_motion(offset in 0usize..2) {
+        let sizing = Assembly::new(&bounded_source(1));
+        let blocks = sizing.order();
+        let bounded_ops = sizing.context.get_block(blocks[0]).op_ids();
+        let padding_ops = sizing.context.get_block(blocks[2]).op_ids();
+        let branch = encode(&sizing, bounded_ops[0]);
+        let (_, max_displacement) = branch.fixups[0].patch.range.expect("signed fixup");
+        let padding_width = encode(&sizing, padding_ops[0]).bytes.len();
+        let fitting_count = (max_displacement as usize - 1) / padding_width;
+        let padding_count = fitting_count + offset;
+        let assembly = Assembly::new(&bounded_source(padding_count));
         let original = assembly.order();
         let before = assembly.object();
         assembly.layout();
         let after = assembly.object();
-        if 7 * padding_count <= 127 {
-            proptest::prop_assert_ne!(assembly.order(), original);
-            proptest::prop_assert_eq!(after.sections[0].data.len() + 15, before.sections[0].data.len());
+        if offset == 0 {
+            proptest::prop_assert_eq!(
+                assembly.order(),
+                vec![original[0], original[2], original[1], original[3]],
+            );
         } else {
             proptest::prop_assert_eq!(assembly.order(), original);
             proptest::prop_assert_eq!(after, before);
