@@ -22,7 +22,7 @@ operations, and an operation can contain regions for branch arms or loop
 bodies. In an unordered region, dependencies determine execution order.
 State values express dependencies between effects, such as a store and a
 subsequent load. The [Core IR](core_ir.md) and
-[RVSDG and control flow](rvsgd.md) chapters introduce this representation.
+[RVSDG and control flow](rvsdg.md) chapters introduce this representation.
 
 Instcombine works on functions in this unordered form. Its output is still
 IR in the same form, with uses redirected to simplified values and operations

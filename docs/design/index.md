@@ -38,7 +38,7 @@ dependencies determine execution order. State values preserve the required order
 of effects such as memory reads and writes.
 
 The [Core IR chapter](core_ir.md) explains these concepts and their shared
-representation. [RVSDG and control flow](rvsgd.md) explains how TIR moves between
+representation. [RVSDG and control flow](rvsdg.md) explains how TIR moves between
 blocks and structured regions.
 
 ## A program's path through TIR
@@ -128,7 +128,7 @@ core's IR but keeps C-specific behavior in FCC. These boundaries let new
 languages and targets reuse the same compiler machinery.
 
 For a first read, start with [Core IR](core_ir.md), then follow
-[RVSDG and control flow](rvsgd.md) into [Instruction combining](instcombine.md)
+[RVSDG and control flow](rvsdg.md) into [Instruction combining](instcombine.md)
 and [Instruction selection](isel.md).
 For target work, read the [TMDL overview](../tmdl/index.md) alongside instruction
 selection. The [Developer's Guide](../dev_guide.md) covers building, testing,

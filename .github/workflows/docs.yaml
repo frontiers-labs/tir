@@ -28,6 +28,8 @@ jobs:
           tool: mdbook,mdbook-mermaid
       - name: Build docs
         run: |
+          cargo build -p tir-pdl
+          python3 utils/pdl/scripts/check-doc-examples.py
           cargo xtask docs
           python3 utils/scripts/check_isa_docs.py
           python3 utils/scripts/check_tmdl_reference.py

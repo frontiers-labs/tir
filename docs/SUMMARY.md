@@ -3,7 +3,7 @@
 - [Introduction](./intro.md)
 - [TIR internals](./design/index.md)
   - [Core IR](./design/core_ir.md)
-  - [RVSDG and control flow](./design/rvsgd.md)
+  - [RVSDG and control flow](./design/rvsdg.md)
   - [Instruction combining](./design/instcombine.md)
   - [Affine loop optimization](./design/affine.md)
   - [Instruction selection](./design/isel.md)

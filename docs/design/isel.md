@@ -23,7 +23,7 @@ connected by values. A region contains part of a program, such as a function
 body or a branch arm. Regions can contain other regions. The
 [Core IR chapter](core_ir.md) describes this representation in more detail.
 
-The [RVSDG and control flow chapter](rvsgd.md) explains how FCC builds these
+The [RVSDG and control flow chapter](rvsdg.md) explains how FCC builds these
 regions and how selection turns them back into machine blocks.
 
 Instruction selection works on a function whose data, control, and effect

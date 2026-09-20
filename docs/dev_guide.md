@@ -120,12 +120,44 @@ contain a solution.
 
 Use `cargo xtask extbench compile` to compare compilation times and memory,
 or `cargo xtask extbench run` to time executables on the current host.
-See [External benchmarks](extbench.md) for filters and TOML configuration.
+Select a package with `--package fcc`, benchmark names with `--bench 'core*'`,
+and a compiler with `--compiler clang`. Use `--list` to list benchmarks without
+building. `--suite path/to/bench_suite.toml` selects a suite explicitly.
+
+The FCC suite is `fcc/extbench/bench_suite.toml`. Each benchmark directory
+contains a `benchmark.toml` with source globs and optional compiler flags,
+link flags, runtime arguments, and optimization levels:
+
+```toml
+sources = ["*.c", "!unused.c"]
+flags = ["-I."]
+link_flags = ["-lm"]
+args = ["1000"]
+levels = ["-O0", "-O2"]
+```
+
+Suite manifests define `[[compiler]]` entries with `name`, `build`, `compile`,
+and `link` command arrays. See the FCC suite for working configurations.
+Use `--output samples.json` to save measurements and `--baseline samples.json`
+to compare a later run on the same host with the same inputs and flags.
 
 Use `cargo xtask fp-check` to record pinned GCC floating-point observations,
-compare cumulative semantic requirements, and summarize saved reports. See
-[Floating-point reference checks](fp_check.md) for the manifest and report
-schemas.
+compare cumulative semantic requirements, and summarize saved reports.
+The case manifest is `fcc/checks/Inputs/fp/cases.toml`. Each case records its ID,
+owning stage, inputs, and independent expectation. GCC-specific expectations
+use `reference_expectation`.
+
+```sh
+cargo xtask fp-check reference --gcc gcc --output /tmp/fp-reference.json
+cargo xtask fp-check check --stage reference --reference /tmp/fp-reference.json --output /tmp/fp-check.json
+cargo xtask fp-check report /tmp/fp-check.json
+```
+
+The default reference profile requires GCC 15.2. Use `--case ID` to select one
+case. Reports record compiler identity, commands, source and manifest digests,
+observations, and each case's status. `unsupported_capability` and
+`missing_infrastructure` never count as passes. The report command fails if
+any case is not `pass` or the report contains no cases.
 
 ### Running fuzz tests
 

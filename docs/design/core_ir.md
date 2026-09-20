@@ -83,7 +83,7 @@ The CFG-to-RVSDG transition recovers this structure from branches. It must also
 preserve effects before it removes block order. If a store must precede a load,
 the resulting graph needs a dependency that preserves that order.
 
-The [RVSDG and control flow chapter](rvsgd.md) describes the implemented
+The [RVSDG and control flow chapter](rvsdg.md) describes the implemented
 conversion, FCC's use of unordered regions, and reconstruction of machine
 blocks after instruction selection.
 

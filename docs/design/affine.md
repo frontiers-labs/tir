@@ -11,7 +11,7 @@ loop orders and tile shapes, and rebuilds the chosen loop nest. It also fully
 unrolls short loops when their bodies are small enough.
 
 This chapter explains that model and its limits. The engine operates on the
-shared IR described in [Core IR](core_ir.md). [RVSDG and control flow](rvsgd.md)
+shared IR described in [Core IR](core_ir.md). [RVSDG and control flow](rvsdg.md)
 explains the graph regions and memory dependencies that supply its input.
 
 ## Iteration order and memory locality
@@ -210,7 +210,7 @@ does not by itself prevent unrolling.
 FCC exposes counted loops before the affine pass runs. At higher optimization
 levels, simplification helps expose their bounds and address expressions.
 Another simplification step cleans up arithmetic introduced by rebuilding and
-unrolling. [RVSDG and control flow](rvsgd.md#fcc-keeps-regions-through-instruction-selection)
+unrolling. [RVSDG and control flow](rvsdg.md#fcc-keeps-regions-through-instruction-selection)
 places these steps within FCC's pipeline.
 
 The engine currently optimizes supported rectangular nests through interchange,
