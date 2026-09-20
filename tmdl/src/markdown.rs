@@ -336,14 +336,10 @@ fn write_instructions(
                 writeln!(output, "\n**Scheduling class:** {classes}")?;
             }
 
-            // One table per shape: an encoding with a condition spells more
-            // than one bit map, and the guard says which.
             let shapes = get_encoding_shapes(instruction, item_cache);
             let single = shapes.len() == 1;
             for (index, shape) in shapes.into_iter().enumerate() {
-                let mut encoding = shape.arms;
-                encoding.sort_by_key(|arm| std::cmp::Reverse(arm.end.unwrap_or(arm.start)));
-                if encoding.is_empty() {
+                if shape.arms.is_empty() {
                     continue;
                 }
                 match single {
@@ -356,15 +352,7 @@ fn write_instructions(
                         format_guard(&shape.guard)
                     )?,
                 }
-                writeln!(output, "| Bits | Value |")?;
-                writeln!(output, "| --- | --- |")?;
-                for arm in encoding {
-                    let bits = match arm.end {
-                        Some(end) if end != arm.start => format!("{end}–{}", arm.start),
-                        _ => arm.start.to_string(),
-                    };
-                    writeln!(output, "| {bits} | `{}` |", format_expr(&arm.value))?;
-                }
+                write_encoding_diagram(&shape, &parameters, &mut output)?;
             }
 
             if is_unmodeled(&instruction.behavior) {
@@ -378,6 +366,118 @@ fn write_instructions(
         }
     }
 
+    Ok(())
+}
+
+fn write_encoding_diagram(
+    shape: &crate::utils::EncodingShape,
+    parameters: &HashMap<String, (Type, Option<Expr>)>,
+    mut output: impl Write,
+) -> Result<(), TMDLError> {
+    let mut fields = shape
+        .arms
+        .iter()
+        .map(|arm| {
+            let label = format_expr(&arm.value);
+            let label = match label.strip_prefix("0b") {
+                Some(binary) if matches!(arm.value, Expr::Lit(_)) => binary.replace('_', ""),
+                _ => label,
+            };
+            let value = parameters
+                .get(&label)
+                .and_then(|(_, value)| value.as_ref())
+                .map(format_expr)
+                .unwrap_or_default();
+            (arm.start, arm.end.unwrap_or(arm.start), label, value)
+        })
+        .collect::<Vec<_>>();
+    fields.sort_by_key(|(_, end, _, _)| std::cmp::Reverse(*end));
+    let bit_width = 24;
+    let width = usize::from(shape.width_bits) * bit_width;
+    let height = if fields.iter().any(|(_, _, _, value)| !value.is_empty()) {
+        110
+    } else {
+        88
+    };
+    writeln!(
+        output,
+        "<div class=\"encoding-diagram\" style=\"overflow-x: auto\">\n<svg xmlns=\"http://www.w3.org/2000/svg\" role=\"img\" aria-label=\"{}-bit instruction encoding\" viewBox=\"0 0 {} {height}\" style=\"display: block; width: 100%; min-width: {}px; max-width: {}px; font: 16px sans-serif; color: inherit\">",
+        shape.width_bits,
+        width + 2,
+        (width + 2) * 4 / 5,
+        width + 2
+    )?;
+    writeln!(
+        output,
+        "<title>{}-bit instruction encoding, most significant bit on the left</title>",
+        shape.width_bits
+    )?;
+    let mut legend = Vec::new();
+    for (index, (start, end, label, value)) in fields.into_iter().enumerate() {
+        let bits = end - start + 1;
+        let x = usize::from(shape.width_bits - 1 - end) * bit_width + 1;
+        let field_width = usize::from(bits) * bit_width;
+        let center = x + field_width / 2;
+        let right = x + field_width;
+        let label = label
+            .replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;");
+        let value = value
+            .replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;");
+        writeln!(
+            output,
+            "<g fill=\"currentColor\" text-anchor=\"middle\">\n<title>Bits {end}:{start}: {label}</title>\n<rect x=\"{x}\" y=\"26\" width=\"{field_width}\" height=\"32\" fill=\"none\" stroke=\"currentColor\"/>"
+        )?;
+        if bits == 1 {
+            writeln!(output, "<text x=\"{center}\" y=\"20\">{start}</text>")?;
+        } else {
+            writeln!(
+                output,
+                "<text x=\"{}\" y=\"20\" text-anchor=\"start\">{end}</text>\n<text x=\"{}\" y=\"20\" text-anchor=\"end\">{start}</text>",
+                x + 4,
+                right - 4
+            )?;
+        }
+        let (label, value) = if label.len().max(value.len()) * 8 + 8 > field_width {
+            let key = format!("f{}", index + 1);
+            let description = if value.is_empty() {
+                label
+            } else {
+                format!("{label} = {value}")
+            };
+            legend.push(format!("<code>{key}</code>: <code>{description}</code>"));
+            (key, String::new())
+        } else {
+            (label, value)
+        };
+        writeln!(
+            output,
+            "<text x=\"{center}\" y=\"47\">{label}</text>\n<text x=\"{center}\" y=\"76\">{bits}</text>"
+        )?;
+        if !value.is_empty() {
+            writeln!(output, "<text x=\"{center}\" y=\"98\">{value}</text>")?;
+        }
+        for bit in 1..bits {
+            let tick = x + usize::from(bit) * bit_width;
+            writeln!(
+                output,
+                "<path d=\"M{tick} 26v4 M{tick} 58v-4\" stroke=\"currentColor\"/>"
+            )?;
+        }
+        writeln!(output, "</g>")?;
+    }
+    writeln!(output, "</svg>\n</div>")?;
+    if !legend.is_empty() {
+        writeln!(
+            output,
+            "<p class=\"encoding-legend\">{}</p>",
+            legend.join("; ")
+        )?;
+    }
+    writeln!(output)?;
     Ok(())
 }
 

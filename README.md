@@ -21,18 +21,6 @@ basics of compiler construction and do research in the field of compiler
 optimizations, including but not limited to ML-driven, affine, solver-based
 techniques or creating ISA extensions. 
 
-## Project overview
-
-- `backends/`
-  - [`common/`](./backends/common/) - common utils for binary code generation
-  - [`riscv/`](./backends/riscv/) - generic RISC-V backend
-  - [`x86_64/`](./backends/x86_64/) - prototype x86-64 backend
-- [`core/`](./core/src) - generic IR definitions
-  - [`src/builtin/`](./core/src/builtin/) - builtin dialect, roughly implementing
-    functionality of LLVM IR
-- [`tools/`](./tools/) - tools meant to be distributed as part of the toolchain
-- [`utils/`](./utils/) - internal utilities, primarily for testing purposes
-
 ## Building from source
 
 TIR is a Rust project, and can be built with `cargo`, just like any other Rust

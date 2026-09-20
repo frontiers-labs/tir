@@ -1,5 +1,9 @@
 //! Exclusive atomic memory operations.
 
+/// Large System Extensions atomic memory operations, including compare-and-swap and atomic
+/// read-modify-write instructions.
+///
+/// See [Arm Architecture Reference Manual, FEAT_LSE](https://developer.arm.com/documentation/ddi0487/latest/).
 isa LSE requires ARMv8A64 {}
 
 macro exclusive_load_template {

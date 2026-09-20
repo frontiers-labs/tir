@@ -1,0 +1,15 @@
+// RUN: tmdlc --action=emit-markdown --dialect=test --output=- %S/../Json/encoding-shapes.tmdl | filecheck %s
+
+// CHECK: #### `MovRR`
+// CHECK: **Encoding 1 (2 bytes), when
+// CHECK: <svg {{.*}}aria-label="16-bit instruction encoding"
+// CHECK: <title>Bits 15:14: 11</title>
+// CHECK: <title>Bits 13:11: dst[2..0]</title>
+// CHECK: <title>Bits 10:8: src[2..0]</title>
+// CHECK: <title>Bits 7:0: OPCODE</title>
+// CHECK: <text {{.*}} y="98">0x8b</text>
+// CHECK: **Encoding 2 (3 bytes), when
+// CHECK: <svg {{.*}}aria-label="24-bit instruction encoding"
+// CHECK: <title>Bits 7:4: 0100</title>
+// CHECK: <title>Bits 2:2: dst[3]</title>
+// CHECK: <title>Bits 0:0: src[3]</title>

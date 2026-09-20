@@ -1,11 +1,19 @@
 //! AArch64 architectural registers and the AAPCS64 calling convention.
 
+/// AArch64 base model for Armv8-A, with 64-bit general-purpose registers and fixed 32-bit
+/// instruction encodings.
+///
+/// See [Arm Architecture Reference Manual, AArch64 application-level programmers' model](https://developer.arm.com/documentation/ddi0487/latest/).
 isa ARMv8A64 {
     param XLEN: Integer = 64;
     param FLAG_WIDTH: Integer = 1;
     param ENCODING_UNIT: Integer = 32;
 }
 
+/// The 64-bit program counter. TIR exposes it as semantic state for branches and PC-relative
+/// addressing.
+///
+/// See [Arm Architecture Reference Manual, AArch64 application-level programmers' model](https://developer.arm.com/documentation/ddi0487/latest/).
 register_class PC for [ARMv8A64] {
     param ENCODING_LEN: Integer = 0;
     param WIDTH: Integer = self.XLEN;
@@ -15,6 +23,10 @@ register_class PC for [ARMv8A64] {
     }
 }
 
+/// The 64-bit `x0` through `x30` general-purpose registers and the zero-register operand `xzr` at
+/// encoding 31.
+///
+/// See [Arm Architecture Reference Manual, AArch64 application-level programmers' model](https://developer.arm.com/documentation/ddi0487/latest/).
 register_class GPR for [ARMv8A64] {
     param ENCODING_LEN: Integer = 5;
     param WIDTH: Integer = self.XLEN;
@@ -31,6 +43,10 @@ register_class GPR for [ARMv8A64] {
     }
 }
 
+/// The 32-bit `w0` through `w30` views of the general-purpose registers, plus `wzr` at encoding 31.
+/// Writes clear the upper 32 bits.
+///
+/// See [Arm Architecture Reference Manual, AArch64 application-level programmers' model](https://developer.arm.com/documentation/ddi0487/latest/).
 register_class GPR32 for [ARMv8A64] {
     file = GPR;
     param ENCODING_LEN: Integer = 5;
@@ -47,12 +63,20 @@ register_class GPR32 for [ARMv8A64] {
 // addressing modes and in the `rd`/`rn` of add/sub-immediate. `GPRsp` is the same
 // physical register file as `GPR` (x0..x30 are shared and alias index-for-index),
 // overriding only slot 31. Operands that can reference `sp` use this class.
+/// General-purpose operand view in which encoding 31 selects the 64-bit stack pointer `sp`. Other
+/// entries alias `GPR`.
+///
+/// See [Arm Architecture Reference Manual, AArch64 application-level programmers' model](https://developer.arm.com/documentation/ddi0487/latest/).
 register_class GPRsp for [ARMv8A64] : GPR {
     registers {
         sp => { index = 31 },
     }
 }
 
+/// General-purpose operand view in which encoding 31 selects `wsp`, the low 32 bits of the stack
+/// pointer.
+///
+/// See [Arm Architecture Reference Manual, AArch64 application-level programmers' model](https://developer.arm.com/documentation/ddi0487/latest/).
 register_class GPR32sp for [ARMv8A64] : GPR32 {
     file = GPR;
 
@@ -61,6 +85,10 @@ register_class GPR32sp for [ARMv8A64] : GPR32 {
     }
 }
 
+/// The negative, zero, carry, and overflow condition flags from PSTATE. TIR represents each flag as
+/// a separate one-bit register.
+///
+/// See [Arm Architecture Reference Manual, AArch64 application-level programmers' model](https://developer.arm.com/documentation/ddi0487/latest/).
 register_class PSTATE for [ARMv8A64] {
     param ENCODING_LEN: Integer = 2;
     param WIDTH: Integer = self.FLAG_WIDTH;
@@ -77,6 +105,10 @@ register_class PSTATE for [ARMv8A64] {
 // low 64/32 bits through the `FPR64` (`d`) / `FPR32` (`s`) classes, which share
 // this file index-for-index (like the RISC-V FPR32/FPR64 aliasing). The `float`
 // trait keeps float and integer operands from mixing in instruction selection.
+/// The 32 128-bit SIMD and floating-point registers `v0` through `v31`. Scalar and vector operand
+/// classes share this file.
+///
+/// See [Arm Architecture Reference Manual, AArch64 application-level programmers' model](https://developer.arm.com/documentation/ddi0487/latest/).
 register_class VPR for [ARMv8A64] {
     param ENCODING_LEN: Integer = 5;
     param WIDTH: Integer = 128;
@@ -86,6 +118,10 @@ register_class VPR for [ARMv8A64] {
     }
 }
 
+/// The low 64-bit scalar floating-point views `d0` through `d31` of the SIMD and floating-point
+/// register file.
+///
+/// See [Arm Architecture Reference Manual, AArch64 application-level programmers' model](https://developer.arm.com/documentation/ddi0487/latest/).
 register_class FPR64 for [ARMv8A64] {
     file = VPR;
     param ENCODING_LEN: Integer = 5;
@@ -96,6 +132,10 @@ register_class FPR64 for [ARMv8A64] {
     }
 }
 
+/// The low 32-bit scalar floating-point views `s0` through `s31` of the SIMD and floating-point
+/// register file.
+///
+/// See [Arm Architecture Reference Manual, AArch64 application-level programmers' model](https://developer.arm.com/documentation/ddi0487/latest/).
 register_class FPR32 for [ARMv8A64] {
     file = VPR;
     param ENCODING_LEN: Integer = 5;

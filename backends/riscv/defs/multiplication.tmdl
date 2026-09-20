@@ -1,12 +1,28 @@
 //! Integer multiplication and division extensions.
 
+/// Integer multiplication subset of the M extension, including low and high halves of products.
+/// Division is outside this subset.
+///
+/// See [RISC-V Unprivileged ISA, M integer multiplication and division](https://docs.riscv.org/reference/isa/unpriv/m-st-ext.html).
 isa Zmmul requires [RV32I | RV64I] {}
+/// M extension integer multiplication and division operations. The `RVM` name is TIR's feature name
+/// for architectural M.
+///
+/// See [RISC-V Unprivileged ISA, M integer multiplication and division](https://docs.riscv.org/reference/isa/unpriv/m-st-ext.html).
 isa RVM requires [RV32I | RV64I] {}
 
 // RV64-only *W forms of the M extension. Scoped to RV64I so the generated
 // SMT/decoder never offers these OP-32 encodings on RV32; the backend ties
 // them to Zmmul/RVM through feature enabling (see TargetConfig::parse).
+/// TIR feature for RV64 word multiplication. `mulw` multiplies the low 32 bits and sign-extends the
+/// result to 64 bits.
+///
+/// See [RISC-V Unprivileged ISA, M integer multiplication and division](https://docs.riscv.org/reference/isa/unpriv/m-st-ext.html).
 isa Zmmul64 requires [RV64I] {}
+/// TIR feature for RV64 word multiplication, division, and remainder operations from the M
+/// extension.
+///
+/// See [RISC-V Unprivileged ISA, M integer multiplication and division](https://docs.riscv.org/reference/isa/unpriv/m-st-ext.html).
 isa RVM64 requires [RV64I] {}
 
 // Common template for R-type multiply/divide instructions

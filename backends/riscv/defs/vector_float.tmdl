@@ -26,6 +26,10 @@
 // register file; the standard V extension mandates the D scalar extension.
 // Like D64, this internal conjunction is enabled automatically whenever both
 // RVV and D are.
+/// TIR feature for the modeled vector floating-point operations, requiring both RVV and scalar
+/// double-precision support.
+///
+/// See [RISC-V Unprivileged ISA, V vector operations](https://docs.riscv.org/reference/isa/unpriv/v-st-ext.html).
 isa VF requires [RVV, D] {}
 
 // OPFVV (funct3 = 001): both sources from vector registers.

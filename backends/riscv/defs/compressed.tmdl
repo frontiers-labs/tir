@@ -8,19 +8,42 @@
 // byte width with the hardwired low zero bits left unencoded, exactly like
 // the base branch offsets.
 
+/// Compressed instruction subset using 16-bit encodings for common integer operations.
+/// Mode-specific operations use `C32` and `C64`.
+///
+/// See [RISC-V Unprivileged ISA, C compressed instructions](https://docs.riscv.org/reference/isa/unpriv/c-st-ext.html).
 isa C requires [RV32I | RV64I] {}
 
 // Internal conjunctions, following the D64 pattern: the target enables these
 // automatically from the C/XLEN/F/D selection.
+/// TIR feature selecting compressed operations specific to RV32, including compressed
+/// jump-and-link.
+///
+/// See [RISC-V Unprivileged ISA, C compressed instructions](https://docs.riscv.org/reference/isa/unpriv/c-st-ext.html).
 isa C32 requires [C, RV32I] {}
+/// TIR feature selecting compressed RV64 operations, including doubleword loads and stores and word
+/// arithmetic.
+///
+/// See [RISC-V Unprivileged ISA, C compressed instructions](https://docs.riscv.org/reference/isa/unpriv/c-st-ext.html).
 isa C64 requires [C, RV64I] {}
+/// Compressed double-precision floating-point loads and stores, using the D floating-point register
+/// file.
+///
+/// See [RISC-V Unprivileged ISA, C compressed instructions](https://docs.riscv.org/reference/isa/unpriv/c-st-ext.html).
 isa Zcd requires [C, D] {}
+/// Compressed single-precision floating-point loads and stores available with F on RV32.
+///
+/// See [RISC-V Unprivileged ISA, C compressed instructions](https://docs.riscv.org/reference/isa/unpriv/c-st-ext.html).
 isa Zcf requires [C, F, RV32I] {}
 
 // The eight registers reachable from a 3-bit register field (x8..x15). The
 // architectural indices 8..15 are kept (`file = GPR` aliases them
 // index-for-index onto the integer file); the encoder's 3-bit field mask
 // yields the RVC encoding 0..7 since 8..15 already have those low bits.
+/// Compact integer operand view of `x8` through `x15`. Three-bit compressed register fields select
+/// these eight registers.
+///
+/// See [RISC-V Unprivileged ISA, C compressed instructions](https://docs.riscv.org/reference/isa/unpriv/c-st-ext.html).
 register_class GPRC for [C] {
     file = GPR;
     param ENCODING_LEN: Integer = 3;
@@ -40,6 +63,10 @@ register_class GPRC for [C] {
 
 // The float registers reachable from a 3-bit register field (f8..f15), as
 // binary64 values (c.fld/c.fsd).
+/// Compact double-precision operand view of `f8` through `f15` for compressed floating-point loads
+/// and stores.
+///
+/// See [RISC-V Unprivileged ISA, C compressed instructions](https://docs.riscv.org/reference/isa/unpriv/c-st-ext.html).
 register_class FPR64C for [Zcd] {
     file = FPR32;
     param ENCODING_LEN: Integer = 3;
@@ -58,6 +85,10 @@ register_class FPR64C for [Zcd] {
 }
 
 // The same eight registers as binary32 values (rv32 c.flw/c.fsw).
+/// Compact single-precision operand view of `f8` through `f15` for RV32 compressed floating-point
+/// loads and stores.
+///
+/// See [RISC-V Unprivileged ISA, C compressed instructions](https://docs.riscv.org/reference/isa/unpriv/c-st-ext.html).
 register_class FPR32C for [Zcf] {
     file = FPR32;
     param ENCODING_LEN: Integer = 3;

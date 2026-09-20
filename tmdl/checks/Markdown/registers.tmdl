@@ -3,6 +3,8 @@
 isa TestIsa {}
 
 /// General-purpose registers.
+///
+/// See the [register model](https://example.com/registers).
 register_class GPR for [TestIsa] {
     param ENCODING_LEN: Integer = 5;
     param WIDTH: Integer = 64;
@@ -15,6 +17,7 @@ register_class GPR for [TestIsa] {
 // CHECK: ## Registers
 // CHECK: ### `GPR`
 // CHECK: General-purpose registers.
+// CHECK: See the [register model](https://example.com/registers).
 // CHECK: **Available in:** `TestIsa`
 // CHECK: | Register | Encoding | Alias | Traits |
 // CHECK: | `x0` | 0 | `zero` | hardwired zero |

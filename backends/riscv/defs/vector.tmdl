@@ -8,6 +8,10 @@
 // these control registers rather than baking VLEN/SEW in, so an OPIVV op is
 // genuinely parametric over the configured element width and length.
 
+/// Modeled subset of the V vector extension. Vector operations use `vl` and `vtype`; this target
+/// sets the VLEN parameter to 128 bits.
+///
+/// See [RISC-V Unprivileged ISA, V vector operations](https://docs.riscv.org/reference/isa/unpriv/v-st-ext.html).
 isa RVV requires [RV32I | RV64I] {
     // The physical vector register width in bits. Implementations may differ;
     // this model fixes it at the Zvl128b minimum, the same assumption the
@@ -20,6 +24,10 @@ isa RVV requires [RV32I | RV64I] {
 // written by `vsetvl{i}` and the vector unit. `vxsat`/`vxrm` are the
 // fixed-point saturation flag and rounding mode (also aliased by `vcsr`);
 // fixed-point behaviors read `vxrm` and accumulate into `vxsat`.
+/// Vector control and status CSRs, including active length `vl`, configuration `vtype`, restart
+/// index `vstart`, and fixed-point rounding state.
+///
+/// See [RISC-V Unprivileged ISA, V vector operations](https://docs.riscv.org/reference/isa/unpriv/v-st-ext.html).
 register_class VCSR for [RVV] {
     param ENCODING_LEN: Integer = 12;
     param WIDTH: Integer = self.XLEN;
@@ -45,6 +53,10 @@ register_class VCSR for [RVV] {
 // on selected instructions, exactly like `VCSR::vl` reads surface as `vl`.
 // `lmul` is the signed LMUL exponent (vlmul interpreted as two's complement:
 // 0..3 = m1/m2/m4/m8, 111/110/101 = mf2/mf4/mf8).
+/// TIR internal decomposition of `vtype` into element width `sew` and signed LMUL exponent `lmul`.
+/// These are not separate architectural CSRs.
+///
+/// See [RISC-V Unprivileged ISA, V vector operations](https://docs.riscv.org/reference/isa/unpriv/v-st-ext.html).
 register_class VCFG for [RVV] {
     param ENCODING_LEN: Integer = 3;
     param WIDTH: Integer = self.XLEN;
@@ -58,6 +70,10 @@ register_class VCFG for [RVV] {
 // The 32 architectural vector registers v0..v31. Their physical width is the
 // implementation's VLEN, the same fixed quantity `vlenb` reports; how those bits
 // are partitioned into elements is governed dynamically by `vtype`.
+/// The 32 vector registers `v0` through `v31`. Each holds VLEN bits; `vtype` determines element
+/// width and register grouping.
+///
+/// See [RISC-V Unprivileged ISA, V vector operations](https://docs.riscv.org/reference/isa/unpriv/v-st-ext.html).
 register_class VR for [RVV] {
     param ENCODING_LEN: Integer = 5;
     // Dynamically sized: a vector register's width is the implementation's VLEN,
@@ -91,6 +107,10 @@ register_class VR for [RVV] {
 // await allocation. Argument/return traits follow the psABI: vector arguments
 // in v8..v23 (aligned groups), return values from v8.
 
+/// Allocation view of aligned groups of 2 consecutive vector registers for LMUL=2. Each group
+/// aliases its members in `VR`.
+///
+/// See [RISC-V Unprivileged ISA, V vector operations](https://docs.riscv.org/reference/isa/unpriv/v-st-ext.html).
 register_class VRM2 for [RVV] {
     file = VR;
     param GROUP_SIZE: Integer = 2;
@@ -117,6 +137,10 @@ register_class VRM2 for [RVV] {
     }
 }
 
+/// Allocation view of aligned groups of 4 consecutive vector registers for LMUL=4. Each group
+/// aliases its members in `VR`.
+///
+/// See [RISC-V Unprivileged ISA, V vector operations](https://docs.riscv.org/reference/isa/unpriv/v-st-ext.html).
 register_class VRM4 for [RVV] {
     file = VR;
     param GROUP_SIZE: Integer = 4;
@@ -135,6 +159,10 @@ register_class VRM4 for [RVV] {
     }
 }
 
+/// Allocation view of aligned groups of 8 consecutive vector registers for LMUL=8. Each group
+/// aliases its members in `VR`.
+///
+/// See [RISC-V Unprivileged ISA, V vector operations](https://docs.riscv.org/reference/isa/unpriv/v-st-ext.html).
 register_class VRM8 for [RVV] {
     file = VR;
     param GROUP_SIZE: Integer = 8;

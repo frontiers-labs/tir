@@ -7,6 +7,10 @@
 // with the AArch64 `FPR64` view of its 128-bit `VPR` file. The file class
 // itself roots no operands and carries no traits.
 
+/// The sixteen 128-bit XMM registers available in 64-bit mode. Scalar views share this physical
+/// register file.
+///
+/// See [Intel SDM, Volume 1, XMM Registers](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html).
 register_class XMM128 for [SSE] {
     param ENCODING_LEN: Integer = 4;
     param WIDTH: Integer = 128;
@@ -16,6 +20,10 @@ register_class XMM128 for [SSE] {
     }
 }
 
+/// Low 32-bit single-precision XMM view. Scalar writes through this view preserve the upper 96
+/// bits.
+///
+/// See [Intel SDM, Volume 2, MOVSS and scalar SSE instructions](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html).
 register_class XMM32 for [SSE] : XMM128 {
     param ENCODING_LEN: Integer = 4;
     param WIDTH: Integer = 32;
@@ -26,6 +34,10 @@ register_class XMM32 for [SSE] : XMM128 {
     }
 }
 
+/// Low 32-bit XMM view for operations that clear the remaining bits, such as scalar loads from
+/// memory.
+///
+/// See [Intel SDM, Volume 2, MOVSS](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html).
 register_class XMM32zx for [SSE2] : XMM128 {
     param ENCODING_LEN: Integer = 4;
     param WIDTH: Integer = 32;
@@ -41,6 +53,10 @@ register_class XMM32zx for [SSE2] : XMM128 {
 // floor). Two-address scalar arithmetic reads its destination anyway; the
 // merge matters for the one-source writers (cvtsi2sd, reg-reg movsd).
 
+/// Low 64-bit double-precision XMM view. Scalar writes through this view preserve the upper 64
+/// bits.
+///
+/// See [Intel SDM, Volume 2, MOVSD and scalar SSE2 instructions](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html).
 register_class XMM for [SSE2] : XMM128 {
     param ENCODING_LEN: Integer = 4;
     param WIDTH: Integer = 64;
@@ -54,6 +70,9 @@ register_class XMM for [SSE2] : XMM128 {
 // `movq xmm, r64` zero-extends through bit 127: same width, no merge, so its
 // destination write breaks dependencies instead of chaining on them.
 
+/// Low 64-bit XMM view for operations such as `movq` that clear the upper 64 bits.
+///
+/// See [Intel SDM, Volume 2, MOVQ](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html).
 register_class XMMzx for [SSE2] : XMM128 {
     param ENCODING_LEN: Integer = 4;
     param WIDTH: Integer = 64;

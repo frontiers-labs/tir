@@ -13,6 +13,9 @@
 //! arrangement's element size, combined with `map`/`zip`, and `concat`enated
 //! back, so no carry, shift or rounding crosses a lane boundary.
 
+/// Advanced SIMD view of each vector register as 8 lanes of 8 bits, using the `8b` arrangement.
+///
+/// See [Arm Architecture Reference Manual, A64 Advanced SIMD vector arrangements](https://developer.arm.com/documentation/ddi0487/latest/).
 register_class VPR8B for [AdvSIMD] {
     file = VPR;
     suffix = ".8b";
@@ -24,6 +27,9 @@ register_class VPR8B for [AdvSIMD] {
     }
 }
 
+/// Advanced SIMD view of each vector register as 16 lanes of 8 bits, using the `16b` arrangement.
+///
+/// See [Arm Architecture Reference Manual, A64 Advanced SIMD vector arrangements](https://developer.arm.com/documentation/ddi0487/latest/).
 register_class VPR16B for [AdvSIMD] {
     file = VPR;
     suffix = ".16b";
@@ -35,6 +41,9 @@ register_class VPR16B for [AdvSIMD] {
     }
 }
 
+/// Advanced SIMD view of each vector register as 4 lanes of 16 bits, using the `4h` arrangement.
+///
+/// See [Arm Architecture Reference Manual, A64 Advanced SIMD vector arrangements](https://developer.arm.com/documentation/ddi0487/latest/).
 register_class VPR4H for [AdvSIMD] {
     file = VPR;
     suffix = ".4h";
@@ -46,6 +55,9 @@ register_class VPR4H for [AdvSIMD] {
     }
 }
 
+/// Advanced SIMD view of each vector register as 8 lanes of 16 bits, using the `8h` arrangement.
+///
+/// See [Arm Architecture Reference Manual, A64 Advanced SIMD vector arrangements](https://developer.arm.com/documentation/ddi0487/latest/).
 register_class VPR8H for [AdvSIMD] {
     file = VPR;
     suffix = ".8h";
@@ -57,6 +69,9 @@ register_class VPR8H for [AdvSIMD] {
     }
 }
 
+/// Advanced SIMD view of each vector register as 2 lanes of 32 bits, using the `2s` arrangement.
+///
+/// See [Arm Architecture Reference Manual, A64 Advanced SIMD vector arrangements](https://developer.arm.com/documentation/ddi0487/latest/).
 register_class VPR2S for [AdvSIMD] {
     file = VPR;
     suffix = ".2s";
@@ -68,6 +83,9 @@ register_class VPR2S for [AdvSIMD] {
     }
 }
 
+/// Advanced SIMD view of each vector register as 4 lanes of 32 bits, using the `4s` arrangement.
+///
+/// See [Arm Architecture Reference Manual, A64 Advanced SIMD vector arrangements](https://developer.arm.com/documentation/ddi0487/latest/).
 register_class VPR4S for [AdvSIMD] {
     file = VPR;
     suffix = ".4s";
@@ -79,6 +97,9 @@ register_class VPR4S for [AdvSIMD] {
     }
 }
 
+/// Advanced SIMD view of each vector register as 1 lanes of 64 bits, using the `1d` arrangement.
+///
+/// See [Arm Architecture Reference Manual, A64 Advanced SIMD vector arrangements](https://developer.arm.com/documentation/ddi0487/latest/).
 register_class VPR1D for [AdvSIMD] {
     file = VPR;
     suffix = ".1d";
@@ -90,6 +111,9 @@ register_class VPR1D for [AdvSIMD] {
     }
 }
 
+/// Advanced SIMD view of each vector register as 2 lanes of 64 bits, using the `2d` arrangement.
+///
+/// See [Arm Architecture Reference Manual, A64 Advanced SIMD vector arrangements](https://developer.arm.com/documentation/ddi0487/latest/).
 register_class VPR2D for [AdvSIMD] {
     file = VPR;
     suffix = ".2d";
@@ -977,6 +1001,10 @@ advsimd_three_same_pair_wide!(
 
 // The 128-bit view of the SIMD&FP file used by whole-register loads and
 // stores, which name a register without an arrangement (`ldr q0, [x1]`).
+/// Whole-register 128-bit views `q0` through `q31` of the vector file, used by loads and stores
+/// without a lane arrangement.
+///
+/// See [Arm Architecture Reference Manual, AArch64 application-level programmers' model](https://developer.arm.com/documentation/ddi0487/latest/).
 register_class QPR for [AdvSIMD] {
     file = VPR;
     param ENCODING_LEN: Integer = 5;

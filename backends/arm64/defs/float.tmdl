@@ -1,4 +1,10 @@
 //! Floating-point and Advanced SIMD extensions.
 
+/// Scalar floating-point operations on the AArch64 SIMD and floating-point register file.
+///
+/// See [Arm Architecture Reference Manual, A64 floating-point instructions](https://developer.arm.com/documentation/ddi0487/latest/).
 isa FP requires ARMv8A64 {}
+/// Advanced SIMD operations over packed lanes in the AArch64 vector register file.
+///
+/// See [Arm Architecture Reference Manual, A64 Advanced SIMD instructions](https://developer.arm.com/documentation/ddi0487/latest/).
 isa AdvSIMD requires [ARMv8A64, FP] {}

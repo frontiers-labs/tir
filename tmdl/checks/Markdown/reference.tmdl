@@ -3,6 +3,8 @@
 //! Test ISA reference.
 
 /// Base test architecture.
+///
+/// See the [architecture manual](https://example.com/isa).
 isa TestIsa {
     param XLEN: Integer = 64;
 }
@@ -12,5 +14,6 @@ isa TestIsa {
 // CHECK: ## Instruction sets
 // CHECK: ### `TestIsa`
 // CHECK: Base test architecture.
+// CHECK: See the [architecture manual](https://example.com/isa).
 // CHECK: | Parameter | Type | Default |
 // CHECK: | `XLEN` | `Integer` | `64` |

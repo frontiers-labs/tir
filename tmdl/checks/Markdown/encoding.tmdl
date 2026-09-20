@@ -9,6 +9,38 @@ instruction Nop for [TestIsa] {
     behavior { todo(); }
 }
 
+instruction Split for [TestIsa] {
+    param MNEMONIC: String = "split";
+    operands { imm: bits<12>, rd: bits<3>, flag: bits<1> }
+    encoding { imm[11..5], flag, rd, imm[4..0] }
+    asm { "split {rd}, {imm}, {flag}" }
+    behavior { todo(); }
+}
+
+instruction Xml for [TestIsa] {
+    param MNEMONIC: String = "xml";
+    param OPCODE: bits<16> = 0xabcd & 0xffff;
+    encoding { OPCODE }
+    asm { "xml" }
+    behavior { todo(); }
+}
+
 // CHECK: **Encoding**
-// CHECK: | Bits | Value |
-// CHECK: | 31–0 | `0x00000000` |
+// CHECK: <svg {{.*}}aria-label="32-bit instruction encoding"
+// CHECK: <title>Bits 31:0: 0x00000000</title>
+// CHECK: <rect x="1" y="26" width="768" height="32"
+// CHECK: <text x="5" y="20" text-anchor="start">31</text>
+// CHECK: <text x="765" y="20" text-anchor="end">0</text>
+// CHECK: <text x="385" y="47">0x00000000</text>
+// CHECK: <text x="385" y="76">32</text>
+// CHECK: <path d="M25 26v4 M25 58v-4"
+// CHECK: </svg>
+// CHECK: <svg {{.*}}aria-label="16-bit instruction encoding"
+// CHECK: <title>Bits 15:9: imm[11..5]</title>
+// CHECK: <title>Bits 8:8: flag</title>
+// CHECK: <text {{.*}} y="20">8</text>
+// CHECK: <text {{.*}} y="76">1</text>
+// CHECK: <title>Bits 7:5: rd</title>
+// CHECK: <title>Bits 4:0: imm[4..0]</title>
+// CHECK: <p class="encoding-legend"><code>f2</code>: <code>flag</code></p>
+// CHECK: <text {{.*}} y="98">0xabcd &amp; 0xffff</text>

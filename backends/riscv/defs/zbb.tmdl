@@ -1,5 +1,15 @@
+/// Basic bit-manipulation operations, including bit counts, rotates, minimum/maximum, and logical
+/// operations with an inverted operand.
+///
+/// See [RISC-V Unprivileged ISA, B bit manipulation](https://docs.riscv.org/reference/isa/unpriv/b-st-ext.html).
 isa Zbb requires [RV32I | RV64I] {}
+/// TIR feature for Zbb encodings specialized to RV32 register width.
+///
+/// See [RISC-V Unprivileged ISA, B bit manipulation](https://docs.riscv.org/reference/isa/unpriv/b-st-ext.html).
 isa Zbb32 requires [RV32I, Zbb] {}
+/// TIR feature for RV64 Zbb operations and word-width variants.
+///
+/// See [RISC-V Unprivileged ISA, B bit manipulation](https://docs.riscv.org/reference/isa/unpriv/b-st-ext.html).
 isa Zbb64 requires [RV64I, Zbb] {}
 
 fn zbbRotateRight(value, amount, bits) {

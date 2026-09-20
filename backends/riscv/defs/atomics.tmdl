@@ -7,9 +7,17 @@
 // (relaxed/acquire/release/acq_rel); the aq/rl encoding bits (26/25) select
 // the form so all four decode without conflict. See docs/tmdl/memory_model.md.
 
+/// Atomic memory operations and load-reserved/store-conditional operations. This feature contains
+/// the modeled word-width forms.
+///
+/// See [RISC-V Unprivileged ISA, A atomic instructions](https://docs.riscv.org/reference/isa/unpriv/a-st-ext.html).
 isa A requires [RV32I | RV64I] {}
 // Internal conjunction, following the D64/C64 pattern: the rv64-only doubleword
 // atomics need XLEN = 64. The target enables A64 automatically from A on rv64.
+/// TIR feature for the RV64 doubleword forms of atomic memory and load-reserved/store-conditional
+/// operations.
+///
+/// See [RISC-V Unprivileged ISA, A atomic instructions](https://docs.riscv.org/reference/isa/unpriv/a-st-ext.html).
 isa A64 requires [A, RV64I] {}
 
 // AMO R-type: rd = old memory, rs2 = operand, (rs1) = address.

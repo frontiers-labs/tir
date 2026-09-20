@@ -1,5 +1,9 @@
 //! Floating-point comparisons, classification, sign injection, and minimum/maximum.
 
+/// The five accrued floating-point exception flags at CSR address `0x001`, also accessible through
+/// `fcsr`.
+///
+/// See [RISC-V Unprivileged ISA, F single-precision floating-point](https://docs.riscv.org/reference/isa/unpriv/f-st-ext.html).
 register_class FFLAGS for [F] {
     file = CSR;
     param ENCODING_LEN: Integer = 12;
@@ -7,6 +11,10 @@ register_class FFLAGS for [F] {
     registers { fflags => { index = 1, traits = [fp_flags] }, }
 }
 
+/// The three-bit dynamic floating-point rounding mode at CSR address `0x002`, also accessible
+/// through `fcsr`.
+///
+/// See [RISC-V Unprivileged ISA, F single-precision floating-point](https://docs.riscv.org/reference/isa/unpriv/f-st-ext.html).
 register_class FRM for [F] {
     file = CSR;
     param ENCODING_LEN: Integer = 12;
@@ -15,6 +23,10 @@ register_class FRM for [F] {
 }
 
 // RISC-V fcsr[12:8] is WPRI: trap enables read zero and ignore writes.
+/// TIR internal zero-valued trap-enable state for floating-point semantics. RISC-V F has no
+/// floating-point exception trap enables.
+///
+/// See [RISC-V Unprivileged ISA, F single-precision floating-point](https://docs.riscv.org/reference/isa/unpriv/f-st-ext.html).
 register_class FPTRAPS for [F] {
     file = CSR;
     param ENCODING_LEN: Integer = 12;

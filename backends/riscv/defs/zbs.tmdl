@@ -1,3 +1,6 @@
+/// Single-bit clear, extract, invert, and set operations with register or immediate bit indices.
+///
+/// See [RISC-V Unprivileged ISA, B bit manipulation](https://docs.riscv.org/reference/isa/unpriv/b-st-ext.html).
 isa Zbs requires [RV32I | RV64I] {}
 
 fn zbsMaskReg(rs2) {

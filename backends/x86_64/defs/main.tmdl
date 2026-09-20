@@ -6,26 +6,56 @@
 // stay in ModR/M. Register operands are spliced across both fields via slices,
 // e.g. `dst[2..0]` and `dst[3]`.
 
+/// Base feature for the modeled x86 instructions and shared register state. Encodings are sequences
+/// of bytes.
+///
+/// See [Intel SDM, Volume 1, Basic Execution Environment](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html).
 isa X86 {
     param XLEN: Integer = 32;
     param ENCODING_UNIT: Integer = 8;
 }
 
+/// Streaming SIMD Extensions feature used here for scalar single-precision operations on XMM
+/// registers.
+///
+/// See [Intel SDM, Volume 1, Programming with SSE](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html).
 isa SSE requires X86 {}
 
+/// SSE2 feature used here for scalar double-precision operations and additional XMM register
+/// transfers.
+///
+/// See [Intel SDM, Volume 1, Programming with SSE2](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html).
 isa SSE2 requires SSE {}
 
+/// BMI1 bit-manipulation feature, including AND with an inverted operand, bit extraction, and
+/// trailing-zero count.
+///
+/// See [Intel SDM, Volume 2, BMI1 instruction reference](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html).
 isa BMI requires X86_64 {}
 
+/// BMI2 bit-manipulation feature, including variable shifts and parallel bit deposit/extract.
+///
+/// See [Intel SDM, Volume 2, BMI2 instruction reference](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html).
 isa BMI2 requires X86_64 {}
 
+/// Leading-zero count instruction feature. `lzcnt` has feature-dependent behavior distinct from the
+/// legacy `bsr` interpretation of its encoding.
+///
+/// See [Intel SDM, Volume 2, LZCNT](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html).
 isa LZCNT requires X86_64 {}
 
+/// 64-bit execution-mode model with sixteen general-purpose registers and byte-oriented
+/// variable-length instruction encodings.
+///
+/// See [Intel SDM, Volume 1, 64-Bit Mode Execution Environment](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html).
 isa X86_64 requires [X86, SSE2] {
     param XLEN: Integer = 64;
     param ENCODING_UNIT: Integer = 8;
 }
 
+/// The 64-bit instruction pointer RIP, named `pc` in TIR semantic state.
+///
+/// See [Intel SDM, Volume 1, Instruction Pointer](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html).
 register_class PC for [X86_64] {
     param ENCODING_LEN: Integer = 0;
     param WIDTH: Integer = self.XLEN;
@@ -37,6 +67,10 @@ register_class PC for [X86_64] {
 
 // Status flags written by compare-style instructions and read by conditional
 // jumps. The registers carry no encoding slots, so the class is never allocated.
+/// Separate one-bit views of CF, PF, ZF, SF, OF, AF, and DF. This class models selected flags
+/// rather than the complete RFLAGS register.
+///
+/// See [Intel SDM, Volume 1, EFLAGS Register](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html).
 register_class EFLAGS for [X86] {
     param ENCODING_LEN: Integer = 0;
     param WIDTH: Integer = 1;
@@ -53,6 +87,10 @@ register_class EFLAGS for [X86] {
 }
 
 // Names carry no trailing digit, so each declares its register number.
+/// The sixteen 64-bit general-purpose registers `rax` through `r15`, including the stack pointer
+/// `rsp`.
+///
+/// See [Intel SDM, Volume 1, General-Purpose Registers in 64-Bit Mode](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html).
 register_class GPR for [X86_64] {
     param ENCODING_LEN: Integer = 4;
     param WIDTH: Integer = self.XLEN;
@@ -99,6 +137,10 @@ abi SysV("sysv") for [X86_64] {
     classifier = sysv;
 }
 
+/// Low 32-bit views of the sixteen general-purpose registers. A write clears the upper half of the
+/// corresponding 64-bit register.
+///
+/// See [Intel SDM, Volume 1, General-Purpose Registers in 64-Bit Mode](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html).
 register_class GPR32 for [X86_64] : GPR {
     param WIDTH: Integer = 32;
 
@@ -122,6 +164,10 @@ register_class GPR32 for [X86_64] : GPR {
     }
 }
 
+/// Low 16-bit views of the general-purpose registers. Writes preserve the remaining bits of the
+/// enclosing 64-bit register.
+///
+/// See [Intel SDM, Volume 1, General-Purpose Registers in 64-Bit Mode](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html).
 register_class GPR16 for [X86_64] : GPR {
     param WIDTH: Integer = 16;
     param WRITE_POLICY: String = "merge";
@@ -148,6 +194,10 @@ register_class GPR16 for [X86_64] : GPR {
 
 // spl/bpl/sil/dil and r8b..r15b are encodable only with a REX prefix, which the
 // templates always emit.
+/// Low eight-bit views of the sixteen general-purpose registers. Writes preserve the other bits;
+/// some register names require a REX prefix.
+///
+/// See [Intel SDM, Volume 1, General-Purpose Registers in 64-Bit Mode](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html).
 register_class GPR8 for [X86_64] : GPR {
     param WIDTH: Integer = 8;
     param WRITE_POLICY: String = "merge";
@@ -175,6 +225,10 @@ register_class GPR8 for [X86_64] : GPR {
 // ah/ch/dh/bh overlap bits 8..15 of rax..rbx, so they alias the GPR file at
 // indices 0..3 (`file = GPR` shares the file without importing its registers).
 // Their ModR/M numbers 4..7 are encodable only without a REX prefix.
+/// The high-byte registers `ah`, `ch`, `dh`, and `bh`, aliasing bits 15:8 of the first four
+/// general-purpose registers. REX encodings cannot name them.
+///
+/// See [Intel SDM, Volume 1, General-Purpose Registers in 64-Bit Mode](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html).
 register_class GPR8H for [X86] {
     file = GPR;
     param ENCODING_LEN: Integer = 4;
@@ -196,6 +250,10 @@ register_class GPR8H for [X86] {
 // GPR file (`file = GPR`), carries no `argument` traits, and is never an
 // allocation class.
 
+/// General-purpose register view for scaled-address indices. It excludes `rsp`, whose SIB index
+/// encoding denotes no index without REX.X.
+///
+/// See [Intel SDM, Volume 2, SIB byte](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html).
 register_class GPRaddrIndex for [X86_64] {
     file = GPR;
     param ENCODING_LEN: Integer = 4;

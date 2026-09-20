@@ -1,4 +1,10 @@
+/// Address-generation operations that add a shifted index to a base register.
+///
+/// See [RISC-V Unprivileged ISA, B bit manipulation](https://docs.riscv.org/reference/isa/unpriv/b-st-ext.html).
 isa Zba requires [RV32I | RV64I] {}
+/// TIR feature for RV64 Zba operations that zero-extend a 32-bit operand before address arithmetic.
+///
+/// See [RISC-V Unprivileged ISA, B bit manipulation](https://docs.riscv.org/reference/isa/unpriv/b-st-ext.html).
 isa Zba64 requires [RV64I, Zba] {}
 
 instruction Shift1Add for [Zba] : ALUOp {

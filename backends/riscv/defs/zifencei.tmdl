@@ -2,6 +2,10 @@
 
 // RISC-V Zifencei standard extension: instruction-stream fence.
 
+/// Instruction-fetch synchronization through `fence.i`, making earlier stores visible to subsequent
+/// instruction fetches on the same hart.
+///
+/// See [RISC-V Unprivileged ISA, Zifencei instruction-fetch fence](https://docs.riscv.org/reference/isa/unpriv/zifencei.html).
 isa Zifencei requires [RV32I | RV64I] {}
 
 instruction FenceI for [Zifencei] {

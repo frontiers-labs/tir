@@ -3,12 +3,20 @@
 // Zicsr extension: control and status register instructions, plus the
 // user-level counter CSRs backing basic performance monitoring.
 
+/// Instructions that read, write, set, and clear control and status registers addressed by a 12-bit
+/// CSR number.
+///
+/// See [RISC-V Unprivileged ISA, Zicsr control and status registers](https://docs.riscv.org/reference/isa/unpriv/zicsr.html).
 isa Zicsr requires [RV32I | RV64I] {}
 
 // CSRs are a register file addressed by the 12-bit csr field; each register's
 // explicit index is its architectural CSR address. Only the CSRs the simulator
 // models are listed; counters are read-only and provided by the simulator,
 // mscratch is an ordinary read-write register.
+/// XLEN-wide control and status register address space. Individual CSRs can expose narrower fields
+/// and have their own access rules.
+///
+/// See [RISC-V Unprivileged ISA, Zicsr control and status registers](https://docs.riscv.org/reference/isa/unpriv/zicsr.html).
 register_class CSR for [Zicsr] {
     param ENCODING_LEN: Integer = 12;
     param WIDTH: Integer = self.XLEN;

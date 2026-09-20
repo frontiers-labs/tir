@@ -1,5 +1,9 @@
 //! RISC-V instruction sets, architectural registers, and calling conventions implemented by TIR.
 
+/// Base integer ISA with 32-bit integer registers. This model uses 32-bit instruction words and
+/// includes the integer operations defined below.
+///
+/// See [RISC-V Unprivileged ISA, RV32I base integer ISA](https://docs.riscv.org/reference/isa/unpriv/rv32.html).
 isa RV32I {
     param XLEN: Integer = 32;
     param ENCODING_UNIT: Integer = 32;
@@ -19,6 +23,10 @@ isa RV32I {
     }
 }
 
+/// Base integer ISA with 64-bit integer registers, including word operations whose 32-bit results
+/// are sign-extended to XLEN.
+///
+/// See [RISC-V Unprivileged ISA, RV64I base integer ISA](https://docs.riscv.org/reference/isa/unpriv/rv64.html).
 isa RV64I {
     param XLEN: Integer = 64;
     param ENCODING_UNIT: Integer = 32;
@@ -38,6 +46,10 @@ isa RV64I {
     }
 }
 
+/// Program counter holding the address of the current instruction. TIR models it separately from
+/// the 32 integer registers.
+///
+/// See [RISC-V Unprivileged ISA, RV32I base integer ISA](https://docs.riscv.org/reference/isa/unpriv/rv32.html).
 register_class PC for [RV32I, RV64I] {
     param ENCODING_LEN: Integer = 0;
     param WIDTH: Integer = self.XLEN;
@@ -47,6 +59,10 @@ register_class PC for [RV32I, RV64I] {
     }
 }
 
+/// The 32 XLEN-wide integer registers `x0` through `x31`. Reads of `x0` return zero and writes have
+/// no effect.
+///
+/// See [RISC-V Unprivileged ISA, RV32I base integer ISA](https://docs.riscv.org/reference/isa/unpriv/rv32.html).
 register_class GPR for [RV32I, RV64I] {
     param ENCODING_LEN: Integer = 5;
     param WIDTH: Integer = self.XLEN;

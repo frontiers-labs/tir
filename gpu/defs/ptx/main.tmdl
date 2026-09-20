@@ -17,25 +17,45 @@
 
 // Base isa: carries the register classes and operand templates shared by every
 // PTX version. The per-version features in versions.tmdl `require` it.
+/// NVIDIA Parallel Thread Execution virtual ISA. This TMDL target describes text assembly forms;
+/// instruction behavior is unmodeled.
+///
+/// See [PTX ISA, Introduction](https://docs.nvidia.com/cuda/parallel-thread-execution/#introduction).
 isa PTX {
     param XLEN: Integer = 64;
 }
 
+/// One-bit predicate virtual register bank. The sixteen named entries are TIR operand-model
+/// entries, not a hardware register-count limit.
+///
+/// See [PTX ISA, Register State Space](https://docs.nvidia.com/cuda/parallel-thread-execution/#register-state-space).
 register_class P for [PTX] {
     param ENCODING_LEN: Integer = 4;
     param WIDTH: Integer = 1;
     registers { p0..p15 => {}, }
 }
+/// 16-bit integer virtual register bank. The sixteen named entries are TIR operand-model entries,
+/// not a hardware register-count limit.
+///
+/// See [PTX ISA, Register State Space](https://docs.nvidia.com/cuda/parallel-thread-execution/#register-state-space).
 register_class RS for [PTX] {
     param ENCODING_LEN: Integer = 4;
     param WIDTH: Integer = 16;
     registers { rs0..rs15 => {}, }
 }
+/// 32-bit integer virtual register bank. The sixteen named entries are TIR operand-model entries,
+/// not a hardware register-count limit.
+///
+/// See [PTX ISA, Register State Space](https://docs.nvidia.com/cuda/parallel-thread-execution/#register-state-space).
 register_class R for [PTX] {
     param ENCODING_LEN: Integer = 4;
     param WIDTH: Integer = 32;
     registers { r0..r15 => {}, }
 }
+/// 64-bit integer virtual register bank. The sixteen named entries are TIR operand-model entries,
+/// not a hardware register-count limit.
+///
+/// See [PTX ISA, Register State Space](https://docs.nvidia.com/cuda/parallel-thread-execution/#register-state-space).
 register_class RD for [PTX] {
     param ENCODING_LEN: Integer = 4;
     param WIDTH: Integer = 64;
@@ -44,11 +64,19 @@ register_class RD for [PTX] {
         rd8..rd15 => {},
     }
 }
+/// 32-bit floating-point virtual register bank. The sixteen named entries are TIR operand-model
+/// entries, not a hardware register-count limit.
+///
+/// See [PTX ISA, Register State Space](https://docs.nvidia.com/cuda/parallel-thread-execution/#register-state-space).
 register_class F for [PTX] {
     param ENCODING_LEN: Integer = 4;
     param WIDTH: Integer = 32;
     registers { f0..f15 => { traits = [float] }, }
 }
+/// 64-bit floating-point virtual register bank. The sixteen named entries are TIR operand-model
+/// entries, not a hardware register-count limit.
+///
+/// See [PTX ISA, Register State Space](https://docs.nvidia.com/cuda/parallel-thread-execution/#register-state-space).
 register_class FD for [PTX] {
     param ENCODING_LEN: Integer = 4;
     param WIDTH: Integer = 64;

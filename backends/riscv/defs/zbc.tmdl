@@ -1,3 +1,7 @@
+/// Carry-less multiplication operations over binary polynomial coefficients, producing selected
+/// halves of the product.
+///
+/// See [RISC-V Unprivileged ISA, B bit manipulation](https://docs.riscv.org/reference/isa/unpriv/b-st-ext.html).
 isa Zbc requires [RV32I | RV64I] {}
 
 fn zbcBitSet(value, i) {

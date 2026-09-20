@@ -1,60 +1,65 @@
 # The TIR project guidelines
 
-TIR is a post-modern compiler framework. Where LLVM or GCC manually traverse
-graphs and do rewrites, TIR prefers to use math and formal methods to infer
-desired transformations. This applies to optimizations and instruction selection.
+TIR (Target Intermediate Representation) is a scalable compiler framework
+inspired by MLIR. It still provides a notion of dialects and interfaces
+for describing custom behavior and generic transformations. But unlike
+traditional compilers, TIR prefers use of formal methods and math-backed
+algorithms over hand-rolled graph traversal transformations. These rewrites
+ride on strict e-graph or polytope model drivers. We provide two custom
+DSLs for these purposes: TMDL allows one to describe target ISAs in great
+detail, serving as a unified Architecture Description Language for both
+instruction behavior and uarch performance details; PDL describes mid-end
+instcombine-style transitions between concrete operations. TIR also expands
+beyond traditional SSA form and allows representing programs as RVSGD.
+
+Long-term goal for TIR is to be a generic framework for building classic
+and special purpose compilers (AI, HDL, etc) while taking advantages of
+modern day architectures (SIMD, parallelism) both inside the compiler
+and in the compiled code. At this point compiler is very new and lags
+behind in both compile time and runtime performance compared to GCC and
+Clang. Over the course of next months we hope to close these gaps entirely:
+provide a C compiler that emits code just as good (and better!) and takes
+the same amount of time (or less!) to do so.
 
 ## Coding guidelines
 
-1. Think before coding. Do not assume anything. Verify, don't hide confusion.
-   Consider tradeoffs. Consult with the user when the task is unclear. If
-   multiple interpretations exist, present them clearly - don't pick silently.
-2. Strive for simplicity. Produce the minimum amount of code required to solve
-   the problem. No features beyond what's asked. No abstractions for single-use
-   code. No flexibility or configurability that was not requested. No error
-   handling for impossible situations. If the solution of 200 lines of code can
-   be done in 50 - rewrite it. This does not give you permission to cheat.
-   Resolve core issue end-to-end. Examples of unacceptable behavior: removing
-   assertion from a test instead of fixing the bug; adding an escape hatch to
-   ISel rules instead of properly defining formal semantics. 
-3. Touch only those pieces of existing code that are relevant to the fix. Don't
-   improve adjacent code unless explicitly asked. If you need to refactor existing
-   interfaces, ask user first. Match existing style always. If you see existing
-   unrelated dead code - highlight that, but don't delete silently.
-4. Cover your changes with reasonable testing. Test only public interfaces. Do
-   not test mock instead of real behavior. Do not add test-only methods in production
-   code. Write tests before writing any real code. If you wrote code before tests,
-   throw that code away - no exceptions. Do not write all tests at once - move
-   step-by-step. Write single test, verify it's red, then write minimal code that fixes it.
-   Any test should focus only on single behavior. For IR changes, assembly, etc,
-   prefer snapshot testing via LIT checks. If a test can be expressed as a LIT
-   check, do not add a unit test that does the same thing. After writing all of your
-   code, do a refactor pass: remove all duplication, improve names, extract helpers.
-   Follow testing guidelines in docs/dev_guide.md.
-5. Keep code tidy. Remove imports/variables/functions that YOUR changes made
-   unused. Don't remove pre-existing dead code unless asked. Every changed line
-   should trace directly to the user's request. After all changes are done and
-   all tests are passing, run formatting routines and linters. Fix all warnings.
-   Do not put everything in a giant file. Split large functions to be no more
-   than 400 lines. Respect responsibility ownership between modules.
-6. Make your answers short and simple and on task. Do not apologize, do not try
-   to be polite, do not explain yourself unless explicitly asked. Avoid comments
-   in the code. Only add documentation for public interfaces or non-obvious
-   behavior justification. Such comments should answer "Why?" not "What?".
-   Code must explain itself via good function or variable names. In prose
-   or PR description avoid filler words (actually, well, etc).
-7. Use conventional commits v1.0.0 spec for commit titles and descriptions.
-   If future PR has multiple commits, PR title is also conventional commits.
-   All PRs are squashed anyways.
-8. Do not scan node_modules, target, build and other automatically-generated
-   files and directories, unless explicitly asked to.
+1. Produce minimal change required to achieve the goal. If it's a bug fix,
+   changes must address bug root cause only. If it's a new feature, commit
+   must contain only the minimal amount of code to make tests pass.
+2. Add minimal required testing. Do not add tests unless they are load-bearing.
+   Prefer LIT-style checks over hand-rolled IR builder for snapshot tests.
+   See `docs/dev_guide.md` for more information on testing.
+3. A good patch is the one that removes more code than it adds.
+4. When changing core structures or algorithms, always update docs with
+   relevant info. Do not write new docs unless explicitly asked to.
+5. Do not propose or introduce bespoke graph traversal passes. Every change
+   must be driven through existing mechanisms: isel axioms, PDL rules,
+   affine transformations, etc. Only deviate from these paths if explicitly
+   approved by the user.
+6. Rely on design documentation in `docs/design` as a summary of how TIR
+   works in general.
 
-## Working with code
+## Minimal quality gates
 
-- `cargo build`: build Rust code
-- `cargo test`: run Rust tests
-- `cargo fmt`: automatically format Rust code
-- `cargo clippy`: Rust linter
+- `cargo clippy --workspace --all-targets --no-deps -- -D warnings` passes cleanly
+- `cargo build` compiles
+- `cargo nextest r` (or `cargo test` if nextest is unavailable) passes cleanly
+- `cargo fmt` has no additional format changes
+- `cargo xtask fcc-torture` finds no new failures (mostly for core IR changes or FCC)
+- `cargo xtask extbench run` is no worse than before change (unless explicitly approved regressions)
 
-Make sure all code is formatted and linters are green before you hand over work
-back to the human.
+## Commit and PR rules
+
+- Use conventional commits for both commits and PR descriptions
+- Make commit and PR bodies concise. Only describe **why** the change is needed.
+  If a small example of before/after is possible, include it.
+- PR description is usually commit title and body.
+- Keep it tidy: no headings, no "validation" section, no bullet lists. Simple formatting with plain text only.
+
+## Where to put things
+
+- `core` - base IR and dialects, shared optimizations and frameworks
+- `backends/<backend name>` - real binary targets (x86, RISC-V, ARM, etc)
+- `gpu` - virtual ISAs (PTX, SPIR-V, etc) and common GPU operations and optimizations; real binary targets still go under `backends/...`
+- `utils` - things that are not necessarily related to compiler itself (generic algorithms and data structures, SMT utils)
+- `tmdl` - dedicated TMDL DSL compiler
