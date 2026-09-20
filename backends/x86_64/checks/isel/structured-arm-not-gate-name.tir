@@ -28,11 +28,10 @@ module {
   module_end
 }
 
-// Both edges into the inner join carry the zero register the block before the
-// gates defined.
+// Both inner outcomes carry the zero register directly to the outer
+// continuation. Neither may name that continuation's parameter on its edge.
 // CHECK: x86_64.mov_imm {dst = %[[Z:[0-9]+]]:GPR, imm = 0}
 // CHECK: x86_64.je {imm = ^[[ARM:bb[0-9]+]]}
-// CHECK-NEXT: asm.vbr %[[Z]] ^[[INNER:bb[0-9]+]]
+// CHECK-NEXT: asm.vbr %[[Z]] ^[[OUTER:bb[0-9]+]]
 // CHECK-NEXT: ^[[ARM]]:
-// CHECK-NEXT: asm.vbr %[[Z]] ^[[INNER]]
-// CHECK-NEXT: ^[[INNER]](%{{[0-9]+}}: !x86_64.GPR):
+// CHECK-NEXT: asm.vbr %[[Z]] ^[[OUTER]]

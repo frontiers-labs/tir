@@ -220,7 +220,7 @@ impl<'a> Writer<'a> {
         self.module.body().append(copy);
         let copy = FuncOp::from_op_instance(self.context.get_op(copy));
         let name = func.sym_name();
-        let structure = tir::passes::destructure(
+        let structure = tir::passes::recover_structured(
             self.context,
             copy.body_region().id(),
             &tir::passes::CfgEdges {

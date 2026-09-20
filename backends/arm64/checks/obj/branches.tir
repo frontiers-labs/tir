@@ -13,15 +13,13 @@ module {
   module_end
 }
 
-// The i1 condition defines only bit 0, so it is masked first: and x0, x0, #1;
-// then cbnz x0, +12 (CONDBR19 fixup patched) to the true arm. The false arm is
-// laid out next, so it needs no branch; each arm moves its result into x0, and
-// only the false arm branches to the single exit, which rets.
+// The false arm follows the conditional branch. Each arm materializes its
+// result locally and returns directly; the bytes check the branch fixup.
 // CHECK: .section .text
 // CHECK-NEXT: select:
 // CHECK-NEXT: [0x00, 0x00, 0x40, 0x92]
 // CHECK-NEXT: [0x60, 0x00, 0x00, 0xB5]
 // CHECK-NEXT: [0x00, 0x00, 0x80, 0xD2]
-// CHECK-NEXT: [0x02, 0x00, 0x00, 0x14]
+// CHECK-NEXT: [0xC0, 0x03, 0x5F, 0xD6]
 // CHECK-NEXT: [0x20, 0x00, 0x80, 0xD2]
 // CHECK-NEXT: [0xC0, 0x03, 0x5F, 0xD6]

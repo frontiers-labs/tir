@@ -1,0 +1,44 @@
+// RUN: tir interp %s --args=7 | filecheck --check-prefix=SEVEN %s
+// RUN: tir interp %s --args=11 | filecheck --check-prefix=ELEVEN %s
+// RUN: tir opt --pass destructure --verify %s | tir interp --args=7 | filecheck --check-prefix=SEVEN %s
+// RUN: tir opt --pass destructure --verify %s | tir interp --args=11 | filecheck --check-prefix=ELEVEN %s
+// RUN: tir mc --march x86_64 --filetype obj %s -o %t.x86.o
+// RUN: tir mc --march riscv64 --filetype obj %s -o %t.riscv64.o
+// RUN: tir mc --march armv8-a --filetype obj %s -o %t.armv8.o
+
+// The p and q control definitions feed separate Gammas, while the first
+// Gamma's data result flows through mid into the second Gamma. Recovery must
+// materialize a local control test instead of rejecting this valid cycle.
+
+module {
+  %fn_main = func.func @main(%x: !i64) -> !i64 {
+    %seven = constant {value = 7} : !i64
+    %one = constant {value = 1} : !i64
+    %two = constant {value = 2} : !i64
+    %bool_one = constant {value = 1} : !i1
+    %p = cmpi %x, %seven {predicate = "eq"} : !i1
+    %q = xori %p, %bool_one : !i1
+    %a = scf.switch %p {
+      %minus = subi %x, %one : !i64
+      -> %minus
+    }
+    {
+      %plus = addi %x, %one : !i64
+      -> %plus
+    }
+    %mid = addi %a, %two : !i64
+    %b = scf.switch %q args(%mid, %x) (%mid_arg, %x_arg) {
+      %sum = addi %mid_arg, %x_arg : !i64
+      -> %sum
+    }
+    (%m, %y) {
+      %double = addi %m, %m : !i64
+      -> %double
+    }
+    func.return %b
+  }
+  module_end
+}
+
+// SEVEN: i64 17
+// ELEVEN: i64 24

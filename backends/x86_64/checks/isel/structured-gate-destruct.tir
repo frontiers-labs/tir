@@ -2,9 +2,8 @@
 
 // Emission destructs the gate: the arms become blocks of the function, the test
 // the gate branches on was selected with the block holding it, and what each arm
-// yields rides the edge into the continuation, which reads it as a parameter.
-// The false arm is laid out first, then the true arm, then the join. Nothing
-// structured survives.
+// yields routes directly to the return continuation. The false arm is laid out
+// first, then the true arm. Nothing structured or join-only survives.
 
 module {
   %fn_pick = func.func @pick(%c: !i1, %a: !i64, %b: !i64) -> !i64 {
@@ -27,10 +26,8 @@ module {
 // CHECK-NEXT: asm.vbr ^[[ELSE:bb[0-9]+]]
 // CHECK: ^[[ELSE]]:
 // CHECK-NEXT: x86_64.sub
-// CHECK-NEXT: asm.vbr %{{[0-9]+}} ^[[JOIN:bb[0-9]+]]
+// CHECK-NEXT: asm.vret
 // CHECK: ^[[THEN]]:
 // CHECK-NEXT: x86_64.add
-// CHECK-NEXT: asm.vbr %{{[0-9]+}} ^[[JOIN]]
-// CHECK: ^[[JOIN]](%{{[0-9]+}}: !x86_64.GPR):
 // CHECK-NEXT: asm.vret
 // CHECK-NOT: scf.

@@ -47,16 +47,19 @@ module {
   module_end
 }
 
-// The inner loop is the five-argument block defining the imul; it ends where a
-// later block branches back to it. No spill reload or store may appear in that
-// whole region; spills of the passive accumulators belong to the entry and
-// tail blocks around it.
+// Recovery shares the two loop headers. The hot header and its taken backedge
+// remain free of spill traffic; the cold outer tail may reload accumulators.
 // CHECK: x86_64.mov_store_disp
-// CHECK: ^[[INNER:bb[0-9]+]]({{(%[0-9]+: !x86_64.GPR, ){4}%[0-9]+: !x86_64.GPR}}):
+// CHECK: ^[[INNER:bb[0-9]+]]({{.*}}):
 // CHECK-NOT: mov_load_disp
 // CHECK-NOT: mov_store_disp
 // CHECK: x86_64.imul
 // CHECK-NOT: mov_load_disp
 // CHECK-NOT: mov_store_disp
-// CHECK: asm.vbr ^[[INNER]]
+// CHECK: x86_64.jl {imm = ^[[BACK:bb[0-9]+]]}
+// CHECK-NEXT: asm.vbr
 // CHECK: x86_64.mov_load_disp
+// CHECK: ^[[BACK]]:
+// CHECK-NOT: mov_load_disp
+// CHECK-NOT: mov_store_disp
+// CHECK: asm.vbr ^[[INNER]]

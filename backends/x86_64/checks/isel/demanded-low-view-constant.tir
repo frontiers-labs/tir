@@ -27,6 +27,10 @@ module {
 }
 
 // CHECK-LABEL: asm.symbol {name = "demanded_low_view_constant"
-// CHECK: ^bb1:
+// CHECK: x86_64.jne {imm = ^[[NONZERO:bb[0-9]+]]}
+// CHECK: ^bb{{[0-9]+}}:
+// The false outcome must materialize a defined register in its own block,
+// rather than treating the unavailable low-bit view as a constant.
 // CHECK-NEXT: x86_64.mov_imm32 {dst = %[[ZERO:[0-9]+]]:GPR32, imm = 0}
-// CHECK-NEXT: asm.vbr %[[ZERO]] ^bb{{[0-9]+}}
+// CHECK-NEXT: asm.vret %[[ZERO]]
+// CHECK: ^[[NONZERO]]:

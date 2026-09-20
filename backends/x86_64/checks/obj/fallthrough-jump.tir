@@ -14,15 +14,17 @@ module {
   module_end
 }
 
+// The fallthrough arm and taken arm each return without an unconditional jump.
 // ASM-LABEL: choose:
 // ASM: jne .L[[YES:[0-9]+]]
 // ASM-NEXT: .L{{[0-9]+}}:
-// ASM: jmp .L[[EXIT:[0-9]+]]
+// ASM-NOT: jmp
+// ASM: ret
 // ASM-NEXT: .L[[YES]]:
 // ASM-NOT: jmp
-// ASM: .L[[EXIT]]:
-// ASM-NEXT: ret
+// ASM: ret
 // OBJ-LABEL: choose:
-// OBJ: [0xE9,
+// OBJ-NOT: [0xE9,
+// OBJ: [0xC3]
 // OBJ-NOT: [0xE9,
 // OBJ: [0xC3]

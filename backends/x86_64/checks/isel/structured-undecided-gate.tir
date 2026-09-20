@@ -1,7 +1,7 @@
 // RUN: tir mc --march=x86_64 --stage=isel %s | filecheck %s
 
-// Where every arm of a gate computes nothing, the converter drops that gate.
-// The loop condition remains in the header and merge.
+// Where every inner arm computes nothing, PCFR drops that gate. The outer
+// condition branches once: false returns and true reaches an empty self-loop.
 
 module {
   %fn_spin = func.func @spin(%c: !i1, %n: !i32) -> !i32 {
@@ -24,8 +24,9 @@ module {
 
 // CHECK: x86_64.test_imm32 {dst = %[[C:[0-9]+]]:GPR, imm = 1}
 // CHECK-NEXT: x86_64.jne {imm = ^[[BODY:bb[0-9]+]]}
+// CHECK-NEXT: asm.vbr ^[[EXIT:bb[0-9]+]]
+// CHECK: ^[[EXIT]]:
+// CHECK-NEXT: asm.vret
 // CHECK: ^[[BODY]]:
-// CHECK-NEXT: asm.vbr %[[I:[0-9]+]] ^[[MERGE:bb[0-9]+]]
-// CHECK: ^[[MERGE]](%[[CARRY:[0-9]+]]: !x86_64.GPR):
-// CHECK-NEXT: x86_64.test_imm32 {dst = %[[C]]:GPR, imm = 1}
-// CHECK: asm.vbr %[[CARRY]] ^{{bb[0-9]+}}
+// CHECK-NEXT: asm.vbr ^[[BODY]]
+// CHECK-NOT: x86_64.test_imm32

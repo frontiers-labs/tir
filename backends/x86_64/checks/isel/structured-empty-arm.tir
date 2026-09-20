@@ -1,8 +1,7 @@
 // RUN: tir mc --march=x86_64 --stage=isel %s | filecheck %s
 
-// An arm that computes nothing is not a block. What such an arm yields rides the
-// edge the gate's test already carries, so the only block destruction mints for
-// it is the trampoline the taken edge needs to perform its assignment on.
+// An arm that computes nothing is not a block. PCFR routes each outcome
+// directly to its return, without a join or assignment trampoline.
 
 module {
   %fn_pick = func.func @pick(%c: !i1, %a: !i64, %b: !i64) -> !i64 {
@@ -15,9 +14,9 @@ module {
 
 // CHECK: x86_64.test_imm32
 // CHECK-NEXT: x86_64.jne {imm = ^[[TAKEN:bb[0-9]+]]}
-// CHECK-NEXT: asm.vbr %{{[0-9]+}} ^[[JOIN:bb[0-9]+]]
+// CHECK-NEXT: asm.vbr ^[[OTHER:bb[0-9]+]]
 // CHECK-NEXT: asm.symbol_end
+// CHECK-NEXT: ^[[OTHER]]:
+// CHECK-NEXT: asm.vret %7
 // CHECK-NEXT: ^[[TAKEN]]:
-// CHECK-NEXT: asm.vbr %{{[0-9]+}} ^[[JOIN]]
-// CHECK-NEXT: ^[[JOIN]](%[[R:[0-9]+]]: !x86_64.GPR):
-// CHECK-NEXT: asm.vret %[[R]]
+// CHECK-NEXT: asm.vret %6

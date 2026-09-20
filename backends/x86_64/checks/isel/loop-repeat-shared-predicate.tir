@@ -7,9 +7,7 @@
 // CHECK: x86_64.sete {dst = %[[DONE:[0-9]+]]:GPR8}
 // CHECK: x86_64.je {imm = ^[[EXIT:bb[0-9]+]]}
 // CHECK: ^[[EXIT]]:
-// CHECK-NEXT: asm.vbr %{{[0-9]+}}, %[[DONE]] ^[[RET:bb[0-9]+]]
-// CHECK: ^[[RET]](%{{[0-9]+}}: !x86_64.GPR, %{{[0-9]+}}: !x86_64.GPR):
-// CHECK-NEXT: asm.vret
+// CHECK-NEXT: asm.vret %[[DONE]]
 
 module {
   %fn_down = func.func @down(%n: !i64) -> !i1 {

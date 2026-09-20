@@ -29,13 +29,22 @@ module {
 }
 
 // CHECK: %{{[0-9]+}} = func.func @main(%[[P:[0-9]+]]: !i32) -> !i32 {
-// CHECK-NEXT: %[[K0:[0-9]+]] = constant {value = 0} : !i32
-// CHECK-NEXT: %[[T0:[0-9]+]] = cmpi %[[P]], %[[K0]] {predicate = "eq"} : !i1
-// CHECK-NEXT: cfg.cond_br %[[T0]], ^bb1, ^bb4
-// CHECK: ^bb4:
+// CHECK: %[[K0:[0-9]+]] = constant {value = 0} : !i32
+// CHECK: %[[T0:[0-9]+]] = cmpi %[[P]], %[[K0]] {predicate = "eq"} : !i1
+// CHECK: cfg.cond_br %[[T0]], ^[[ARM0:bb[0-9]+]], ^[[DISPATCH:bb[0-9]+]]
+// CHECK: ^[[ARM0]]:
+// CHECK-NEXT: %[[V0:[0-9]+]] = constant {value = 10} : !i32
+// CHECK-NEXT: func.return %[[V0]]
+// CHECK: ^[[ARM1:bb[0-9]+]]:
+// CHECK-NEXT: %[[V1:[0-9]+]] = constant {value = 11} : !i32
+// CHECK-NEXT: func.return %[[V1]]
+// CHECK: ^[[ARM2:bb[0-9]+]]:
+// CHECK-NEXT: %[[V2:[0-9]+]] = constant {value = 12} : !i32
+// CHECK-NEXT: func.return %[[V2]]
+// CHECK: ^[[DISPATCH]]:
 // CHECK-NEXT: %[[K1:[0-9]+]] = constant {value = 1} : !i32
 // CHECK-NEXT: %[[T1:[0-9]+]] = cmpi %[[P]], %[[K1]] {predicate = "eq"} : !i1
-// CHECK-NEXT: cfg.cond_br %[[T1]], ^bb2, ^bb3
+// CHECK-NEXT: cfg.cond_br %[[T1]], ^[[ARM1]], ^[[ARM2]]
 
 // ZERO: i32 10
 // ONE: i32 11

@@ -25,9 +25,6 @@ module {
 // CHECK:      ^[[HDR]](%[[IV:[0-9]+]]: !riscv.GPR):
 // CHECK:      riscv.blt {rs1 = %[[IV]]:GPR
 // CHECK:      riscv.addi {rd = %[[NEXT:[0-9]+]]:GPR, rs1 = %[[IV]]:GPR, imm = 1}
-// The latch value reaches the merge block, whose repeated condition carries it
-// back into the header parameter.
-// CHECK:      asm.vbr %[[NEXT]] ^[[MERGE:bb[0-9]+]]
-// CHECK:      ^[[MERGE]](%[[CARRY:[0-9]+]]: !riscv.GPR):
-// CHECK-NEXT: riscv.blt {rs1 = %[[IV]]:GPR
-// CHECK:      asm.vbr %[[CARRY]] ^[[HDR]]
+// The latch value returns directly to the header without a repeated test.
+// CHECK-NEXT: asm.vbr %[[NEXT]] ^[[HDR]]
+// CHECK-NOT: riscv.blt

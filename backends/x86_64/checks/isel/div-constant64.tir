@@ -9,6 +9,6 @@ module {
   module_end
 }
 
-// CHECK: x86_64.mov_imm
-// CHECK: x86_64.sign_extend_dividend
+// CHECK-DAG: x86_64.mov_imm
+// CHECK-DAG: x86_64.sign_extend_dividend
 // CHECK: x86_64.signed_divide

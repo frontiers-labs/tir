@@ -24,7 +24,7 @@ module {
 
 // The parameter is read into the call argument. The increment then overwrites
 // the same physical register before the back edge.
-// CHECK:      ^[[HEAD:bb[0-9]+]](%[[P:[0-9]+]]: !x86_64.GPR32, %{{[0-9]+}}: !x86_64.GPR, %{{[0-9]+}}: !state<memory>, %{{[0-9]+}}: !state<fp.env>):
+// CHECK:      ^[[HEAD:bb[0-9]+]](%[[P:[0-9]+]]: !x86_64.GPR32, %{{[0-9]+}}: !state<memory>, %{{[0-9]+}}: !state<fp.env>):
 // CHECK-NEXT: x86_64.mov {dst = %{{[0-9]+}}:{{r[a-z0-9]+}}, src = %[[P]]:[[REG:[a-z0-9]+]]}
 // CHECK:      asm.vcall state(%{{[0-9]+}}, %{{[0-9]+}}) {callee = "foo"
 // CHECK:      x86_64.inc32 {dst = %{{[0-9]+}}:[[REG]], dst_tied = %{{[0-9]+}}:[[REG]]}

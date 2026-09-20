@@ -23,7 +23,7 @@ module {data_layout = #data_layout} {
 // into its branch, enters the body while it is below the bound.
 // CHECK: ^[[HDR:bb[0-9]+]](%[[IV:[0-9]+]]: !riscv.GPR, %{{[0-9]+}}: !riscv.GPR):
 // CHECK-NEXT: riscv.blt {rs1 = %[[IV]]:GPR, rs2 = %{{[0-9]+}}:GPR, imm = ^[[BODY:bb[0-9]+]]}
-// CHECK-NEXT: asm.vbr %[[IV]], %{{[0-9]+}} ^{{bb[0-9]+}}
+// CHECK-NEXT: asm.vbr ^{{bb[0-9]+}}
 // The body advances the counter by the step and carries it round the back edge.
 // CHECK: ^[[BODY]]:
 // CHECK-NEXT: riscv.addi {rd = %{{[0-9]+}}:GPR, rs1 = %{{[0-9]+}}:GPR, imm = 5}

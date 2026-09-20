@@ -211,10 +211,21 @@ then avoid instructions that would compute or branch on that test again.
 The assumption must stay within its scope. Treating it as a fact about the
 whole function would change the program.
 
-Conditional branches also have their own selection step. When a branch
-instruction can test the comparison directly, the selector can combine the
-comparison and branch. Otherwise, it requests the condition in a register and
-uses the target's branch-on-value sequence.
+Conditional branches also have their own selection step. A control-recovery
+plan identifies their predicates before source operations are replaced. When
+a predicate can directly own its continuation and a branch instruction can
+test its comparison, the selector can combine the comparison and branch.
+A predicate with data uses retains the value those readers need. Its local
+control test can still fuse a pure comparison at the consumer. If placement
+rejects a selected test, selection retries with that test materialized in a
+register. Every retry adds a permanent demotion, so the finite set of control
+requests bounds the retries. A producer-owned fused branch may only read
+operands available at that producer.
+
+Each selected instruction inherits its source computation's demand domain.
+Effectful computations from different lazy-loop paths cannot be fused into
+one instruction. A branch cannot internalize a resource effect whose state
+it does not publish.
 
 ## Small and large constants
 
@@ -240,13 +251,17 @@ sequence must compute the original value.
 
 ## From selected computations to executable instructions
 
-After selection, emitters construct machine operations and connect their
-results to consumers. Covered computations give way to the selected
-instructions, with effect dependencies preserved.
+Selection planning and emission run in a fork of the current context. Emitters
+construct machine operations there and connect their results to consumers.
+Covered computations give way to the selected instructions, with effect
+dependencies preserved. The source context remains available if the candidate
+is rejected.
 
-The compiler then converts structured control flow into machine blocks and
-branches. It orders instructions according to their dependencies. This order
-must make inputs available before use and preserve required effects.
+Predicative recovery then connects computation fragments using the saved
+control provenance and region bindings. Fused-branch inputs receive the same
+simultaneous substitutions as edge arguments. The compiler orders each block
+according to its machine dependencies before adopting the staged result.
+This order must make inputs available before use and preserve required effects.
 
 Register allocation assigns physical registers afterward. Later target passes
 can make choices that depend on those assignments. For example, RISC-V

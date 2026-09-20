@@ -28,17 +28,11 @@ module {
 // CHECK-NEXT: x86_64.cmp_imm {dst = %[[I]]:GPR, imm = 0}
 // CHECK-NEXT: x86_64.cmp_imm {dst = %[[I]]:GPR, imm = 0}
 // CHECK-NEXT: x86_64.jg {imm = ^[[BODY:bb[0-9]+]]}
-// CHECK-NEXT: asm.vbr %[[A]], %[[I]] ^[[LATCH:bb[0-9]+]]
+// CHECK-NEXT: asm.vbr ^[[EXIT:bb[0-9]+]]
+// CHECK: ^[[EXIT]]:
+// CHECK-NEXT: asm.vret %[[A]]
 // CHECK: ^[[BODY]]:
 // CHECK-NEXT: x86_64.add {dst = %[[NA:[0-9]+]]:GPR, dst_tied = %[[A]]:GPR, src = %[[I]]:GPR}
 // CHECK-NEXT: x86_64.lea_base_disp {dst = %[[NI:[0-9]+]]:GPR, base = %[[I]]:GPR, imm = -1}
-// CHECK-NEXT: asm.vbr %[[NA]], %[[NI]] ^[[LATCH]]
-// CHECK: ^[[LATCH]](%[[A2:[0-9]+]]: !x86_64.GPR, %[[I2:[0-9]+]]: !x86_64.GPR):
-// CHECK-NEXT: x86_64.cmp_imm {dst = %[[I]]:GPR, imm = 0}
-// CHECK-NEXT: x86_64.jg {imm = ^[[BACK:bb[0-9]+]]}
-// CHECK-NEXT: asm.vbr %[[A2]], %[[I2]] ^[[EXIT:bb[0-9]+]]
-// CHECK: ^[[BACK]]:
-// CHECK-NEXT: asm.vbr %[[A2]], %[[I2]] ^[[HEAD]]
-// CHECK: ^[[EXIT]](%[[R:[0-9]+]]: !x86_64.GPR, %{{[0-9]+}}: !x86_64.GPR):
-// CHECK-NEXT: asm.vret %[[R]]
+// CHECK-NEXT: asm.vbr %[[NA]], %[[NI]] ^[[HEAD]]
 // CHECK-NOT: scf.

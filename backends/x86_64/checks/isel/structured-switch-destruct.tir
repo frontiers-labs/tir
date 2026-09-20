@@ -30,7 +30,8 @@ module {
 }
 
 // CHECK-NOT: scf.
-// Each case tests in its own block: nothing computes a case it never reaches.
+// Each case tests in its own block and each selected literal returns directly
+// without synthetic inner or outer joins.
 // CHECK: x86_64.cmp_imm32 {dst = %[[V0:[0-9]+]]:GPR, imm = 1}
 // CHECK-NEXT: x86_64.je {imm = ^[[ONE:bb[0-9]+]]}
 // CHECK-NEXT: asm.vbr ^[[CHAIN:bb[0-9]+]]
@@ -39,16 +40,12 @@ module {
 // CHECK-NEXT: x86_64.je {imm = ^[[TWO:bb[0-9]+]]}
 // CHECK-NEXT: asm.vbr ^[[DEFAULT:bb[0-9]+]]
 // CHECK: ^[[DEFAULT]]:
-// CHECK-NEXT: x86_64.mov_imm32 {dst = %{{[0-9]+}}:GPR32, imm = 30}
-// CHECK-NEXT: asm.vbr %{{[0-9]+}} ^[[INNER:bb[0-9]+]]
+// CHECK-NEXT: x86_64.mov_imm32 {dst = %[[D:[0-9]+]]:GPR32, imm = 30}
+// CHECK-NEXT: asm.vret %[[D]]
 // CHECK: ^[[TWO]]:
-// CHECK-NEXT: x86_64.mov_imm32 {dst = %{{[0-9]+}}:GPR32, imm = 20}
-// CHECK-NEXT: asm.vbr %{{[0-9]+}} ^[[INNER]]
-// CHECK: ^[[INNER]](%[[R:[0-9]+]]: !x86_64.GPR):
-// CHECK-NEXT: asm.vbr %[[R]] ^[[JOIN:bb[0-9]+]]
+// CHECK-NEXT: x86_64.mov_imm32 {dst = %[[B:[0-9]+]]:GPR32, imm = 20}
+// CHECK-NEXT: asm.vret %[[B]]
 // CHECK: ^[[ONE]]:
-// CHECK-NEXT: x86_64.mov_imm32 {dst = %{{[0-9]+}}:GPR32, imm = 10}
-// CHECK-NEXT: asm.vbr %{{[0-9]+}} ^[[JOIN]]
-// CHECK: ^[[JOIN]](%{{[0-9]+}}: !x86_64.GPR):
-// CHECK-NEXT: asm.vret
+// CHECK-NEXT: x86_64.mov_imm32 {dst = %[[A:[0-9]+]]:GPR32, imm = 10}
+// CHECK-NEXT: asm.vret %[[A]]
 // CHECK-NOT: scf.

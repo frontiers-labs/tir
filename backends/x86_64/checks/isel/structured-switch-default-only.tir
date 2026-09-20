@@ -16,9 +16,9 @@ module {
 }
 
 // CHECK-NOT: scf.
-// Nothing tests the decision: the entry jumps straight into the only arm.
+// Nothing tests the decision or needs a distinct arm block: the computation
+// continues straight through the only arm.
 // CHECK-NOT: cmp
-// CHECK: asm.vbr ^[[ARM:bb[0-9]+]]
-// CHECK: ^[[ARM]]:
-// CHECK-NEXT: x86_64.add32
+// CHECK: x86_64.add32
+// CHECK-NEXT: asm.vret
 // CHECK-NOT: scf.

@@ -22,12 +22,12 @@ module {
 // CHECK: %{{[0-9]+}} = func.func @main() -> !i32 {
 // CHECK-NEXT: %[[INIT:[0-9]+]] = constant {value = 2} : !i32
 // CHECK-NEXT: %[[LIMIT:[0-9]+]] = constant {value = 100} : !i32
-// CHECK-NEXT: cfg.br ^bb1(%[[INIT]] : !i32)
-// CHECK-NEXT: ^bb1(%[[PORT:[0-9]+]]: !i32):
+// CHECK-NEXT: cfg.br ^[[LOOP:bb[0-9]+]](%[[INIT]] : !i32)
+// CHECK-NEXT: ^[[LOOP]](%[[PORT:[0-9]+]]: !i32):
 // CHECK-NEXT: %[[SQ:[0-9]+]] = muli %[[PORT]], %[[PORT]] : !i32
 // CHECK-NEXT: %[[AGAIN:[0-9]+]] = cmpi %[[SQ]], %[[LIMIT]] {predicate = "slt"} : !i1
-// CHECK-NEXT: cfg.cond_br %[[AGAIN]], ^bb1(%[[SQ]] : !i32), ^bb2(%[[SQ]] : !i32)
-// CHECK-NEXT: ^bb2(%[[RESULT:[0-9]+]]: !i32):
-// CHECK-NEXT: func.return %[[RESULT]]
+// CHECK-NEXT: cfg.cond_br %[[AGAIN]], ^[[LOOP]](%[[SQ]] : !i32), ^[[EXIT:bb[0-9]+]]
+// CHECK-NEXT: ^[[EXIT]]:
+// CHECK-NEXT: func.return %[[SQ]]
 
 // VALUE: i32 256

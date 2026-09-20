@@ -24,11 +24,9 @@ module {
 // CHECK-NEXT: riscv.bne {rs1 = %{{[0-9]+}}:GPR, rs2 = x0, imm = ^[[THEN:bb[0-9]+]]}
 // CHECK-NEXT: asm.vbr ^[[ELSE:bb[0-9]+]]
 // CHECK: ^[[ELSE]]:
-// CHECK-NEXT: riscv.sub
-// CHECK-NEXT: asm.vbr %{{[0-9]+}} ^[[JOIN:bb[0-9]+]]
+// CHECK-NEXT: riscv.sub {rd = %[[SUB:[0-9]+]]:GPR
+// CHECK-NEXT: asm.vret %[[SUB]]
 // CHECK: ^[[THEN]]:
-// CHECK-NEXT: riscv.add
-// CHECK-NEXT: asm.vbr %{{[0-9]+}} ^[[JOIN]]
-// CHECK: ^[[JOIN]](%{{[0-9]+}}: !riscv.GPR):
-// CHECK-NEXT: asm.vret
+// CHECK-NEXT: riscv.add {rd = %[[ADD:[0-9]+]]:GPR
+// CHECK-NEXT: asm.vret %[[ADD]]
 // CHECK-NOT: scf.

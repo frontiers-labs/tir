@@ -29,16 +29,18 @@ module {
 
 // CHECK: %{{[0-9]+}} = func.func @main(%[[P:[0-9]+]]: !i1, %[[X:[0-9]+]]: !i32) -> !i32 {
 // CHECK-NEXT: %[[SLOT:[0-9]+]], %[[D:[0-9]+]] = ptr.alloca
-// CHECK-NEXT: cfg.cond_br %[[P]], ^bb2(%[[X]], %[[D]] : !i32, !state<memory>), ^bb1(%[[X]], %[[D]] : !i32, !state<memory>)
-// CHECK-NEXT: ^bb1(%[[A:[0-9]+]]: !i32, %[[AD:[0-9]+]]: !state<memory>):
-// CHECK-NEXT: %[[AS:[0-9]+]] = ptr.store %[[A]], %[[SLOT]] state(%[[AD]])
-// CHECK-NEXT: cfg.br ^bb3(%[[A]], %[[AS]] : !i32, !state<memory>)
-// CHECK-NEXT: ^bb2(%[[B:[0-9]+]]: !i32, %[[BD:[0-9]+]]: !state<memory>):
-// CHECK-NEXT: %[[T:[0-9]+]] = addi %[[B]], %[[B]] : !i32
-// CHECK-NEXT: %[[BS:[0-9]+]] = ptr.store %[[T]], %[[SLOT]] state(%[[BD]])
-// CHECK-NEXT: cfg.br ^bb3(%[[T]], %[[BS]] : !i32, !state<memory>)
-// CHECK-NEXT: ^bb3(%[[R:[0-9]+]]: !i32, %[[RD:[0-9]+]]: !state<memory>):
-// CHECK-NEXT: %{{[0-9]+}} = ptr.load %[[SLOT]] state(%[[RD]]) : !i32
+// CHECK-NEXT: cfg.cond_br %[[P]], ^[[TRUE:bb[0-9]+]](%[[D]] : !state<memory>), ^[[FALSE:bb[0-9]+]](%[[D]] : !state<memory>)
+// CHECK-NEXT: ^[[FALSE]](%[[FD:[0-9]+]]: !state<memory>):
+// CHECK-NEXT: %[[FS:[0-9]+]] = ptr.store %[[X]], %[[SLOT]] state(%[[FD]])
+// CHECK-NEXT: cfg.br ^[[MERGE:bb[0-9]+]](%[[X]], %[[FS]] : !i32, !state<memory>)
+// CHECK-NEXT: ^[[MERGE]](%[[R:[0-9]+]]: !i32, %[[RD:[0-9]+]]: !state<memory>):
+// CHECK-NEXT: %[[LOAD:[0-9]+]] = ptr.load %[[SLOT]] state(%[[RD]]) : !i32
+// CHECK-NEXT: %[[SUM:[0-9]+]] = addi %[[R]], %[[LOAD]] : !i32
+// CHECK-NEXT: func.return %[[SUM]]
+// CHECK: ^[[TRUE]](%[[TD:[0-9]+]]: !state<memory>):
+// CHECK-NEXT: %[[T:[0-9]+]] = addi %[[X]], %[[X]] : !i32
+// CHECK-NEXT: %[[TS:[0-9]+]] = ptr.store %[[T]], %[[SLOT]] state(%[[TD]])
+// CHECK-NEXT: cfg.br ^[[MERGE]](%[[T]], %[[TS]] : !i32, !state<memory>)
 
 // TAKEN: i32 20
 // OTHER: i32 10

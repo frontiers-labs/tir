@@ -14,6 +14,8 @@ module {
   module_end
 }
 
-// CHECK: ^[[HEADER:bb[0-9]+]](%{{[0-9]+}}: !x86_64.GPR32, %[[UNUSED:[0-9]+]]: !x86_64.GPR):
-// CHECK-NOT: %[[UNUSED]]:
+// The unused carried value disappears before allocation. Only the live counter
+// remains on the header, with no spare general-purpose parameter.
+// CHECK: ^[[HEADER:bb[0-9]+]](%[[I:[0-9]+]]: !x86_64.GPR32):
+// CHECK: x86_64.inc32
 // CHECK: asm.vret

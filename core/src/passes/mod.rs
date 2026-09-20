@@ -18,6 +18,7 @@ pub use affine::{AffineSchedulePass, strip_mine};
 pub use dce::DeadCodeEliminationPass;
 pub use destructure::{
     CfgEdges, DestructurePass, Destructured, Edges, GateBlocks, LoopBlocks, Test, destructure,
+    recover_cfg, recover_structured,
 };
 pub use inline::{InlineBudget, InlinePass};
 pub use instcombine::InstCombineNodesPass;

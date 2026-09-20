@@ -1,0 +1,44 @@
+// RUN: tir interp %s -f select --args=1,2 | filecheck --check-prefix=START-HEAD %s
+// RUN: tir interp %s -f select --args=0,2 | filecheck --check-prefix=START-BODY %s
+// RUN: tir interp %s -f select --args=1,9 | filecheck --check-prefix=DONE %s
+// RUN: tir opt --pass restructure-nodes,destructure %s | tir interp -f select --args=1,2 | filecheck --check-prefix=START-HEAD %s
+// RUN: tir opt --pass restructure-nodes,destructure %s | tir interp -f select --args=0,2 | filecheck --check-prefix=START-BODY %s
+// RUN: tir opt --pass restructure-nodes,destructure %s | tir interp -f select --args=1,9 | filecheck --check-prefix=DONE %s
+// RUN: tir opt --pass restructure-nodes,destructure --verify %s | filecheck --check-prefix=CFG %s
+
+// Two entries (head and body) and two exits (found and done) form one SCC.
+// Restructuring carries an entry selector q and an exit selector r. Recovery
+// must preserve their correlation instead of dispatching on impossible q/r
+// combinations.
+
+module {
+  %fn_select = func.func @select(%start_head: !i1, %target: !i32) -> !i32 {
+    %zero = constant {value = 0} : !i32
+    %one = constant {value = 1} : !i32
+    %limit = constant {value = 5} : !i32
+    %found_value = constant {value = 100} : !i32
+    cfg.cond_br %start_head, ^head(%zero : !i32), ^body(%zero : !i32)
+  ^head(%i: !i32):
+    %more = cmpi %i, %limit {predicate = "slt"} : !i1
+    cfg.cond_br %more, ^body(%i : !i32), ^done(%i : !i32)
+  ^body(%i: !i32):
+    %hit = cmpi %i, %target {predicate = "eq"} : !i1
+    cfg.cond_br %hit, ^found, ^step
+  ^step:
+    %next = addi %i, %one : !i32
+    cfg.br ^head(%next : !i32)
+  ^found:
+    func.return %found_value
+  ^done(%done_i: !i32):
+    func.return %done_i
+  }
+  module_end
+}
+
+// START-HEAD: i32 100
+// START-BODY: i32 100
+// DONE: i32 5
+// CFG-NOT: scf.
+// CFG-COUNT-3: cfg.cond_br
+// CFG-NOT: cfg.cond_br
+// CFG-NOT: scf.

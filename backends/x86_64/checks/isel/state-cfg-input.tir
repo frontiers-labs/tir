@@ -20,8 +20,11 @@ module {
 }
 
 // CHECK: %[[ENTRY:[0-9]+]] = state.entry_state : !state<memory>
-// CHECK: ^{{bb[0-9]+}}(%[[ARM:[0-9]+]]: !state<memory>):
-// CHECK: %[[STORED:[0-9]+]] = x86_64.mov_store32 {{.*}} state(%[[ARM]])
-// CHECK-NEXT: asm.vbr %[[STORED]] ^[[JOIN:bb[0-9]+]]
-// CHECK: ^[[JOIN]](%[[MERGED:[0-9]+]]: !state<memory>):
+// Both the entry state and the stored state enter the load continuation.
+// CHECK: asm.vbr %[[ENTRY]] ^[[LOAD:bb[0-9]+]]
+// CHECK: ^[[LOAD]](%[[MERGED:[0-9]+]]: !state<memory>):
 // CHECK-NEXT: %{{[0-9]+}} = x86_64.mov_load32 {{.*}} state(%[[MERGED]])
+// CHECK: ^{{bb[0-9]+}}(%[[ARM:[0-9]+]]: !state<memory>):
+// The arm-local literal may be selected immediately before the store.
+// CHECK: %[[STORED:[0-9]+]] = x86_64.mov_store32 {{.*}} state(%[[ARM]])
+// CHECK-NEXT: asm.vbr %[[STORED]] ^[[LOAD]]

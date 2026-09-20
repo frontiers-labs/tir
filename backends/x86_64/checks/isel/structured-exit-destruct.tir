@@ -29,19 +29,10 @@ module {
 // CHECK-NEXT: x86_64.xor_imm {dst = %[[GO:[0-9]+]]:GPR, dst_tied = %[[EQ]]:GPR8, imm = 1}
 // CHECK-NEXT: x86_64.cmp {dst = %[[NI]]:GPR, src = %{{[0-9]+}}:GPR}
 // CHECK-NEXT: x86_64.je {imm = ^[[BREAK:bb[0-9]+]]}
-// CHECK-NEXT: asm.vbr %[[NI]], %{{[0-9]+}} ^[[JOIN:bb[0-9]+]]
+// CHECK-NEXT: asm.vbr %[[NI]] ^[[HEAD:bb[0-9]+]]
 // CHECK: ^[[BREAK]]:
-// CHECK-NEXT: asm.vbr %{{[0-9]+}}, %[[NI]] ^[[JOIN]]
-// The gate's join forwards all three to the latch, which reads the flag and
-// branches: back to the header or out.
-// CHECK: ^[[JOIN]](%{{[0-9]+}}: !x86_64.GPR, %{{[0-9]+}}: !x86_64.GPR):
-// CHECK-NEXT: asm.vbr %{{[0-9]+}}, %{{[0-9]+}}, %[[GO]] ^[[LATCH:bb[0-9]+]]
-// CHECK: ^[[LATCH]](%[[I:[0-9]+]]: !x86_64.GPR, %[[R:[0-9]+]]: !x86_64.GPR, %[[FLAG:[0-9]+]]: !x86_64.GPR):
-// CHECK-NEXT: x86_64.test_imm32 {dst = %[[FLAG]]:GPR, imm = 1}
-// CHECK-NEXT: x86_64.jne {imm = ^[[BACK:bb[0-9]+]]}
-// CHECK-NEXT: asm.vbr %[[I]], %[[R]] ^[[EXIT:bb[0-9]+]]
-// CHECK: ^[[BACK]]:
-// CHECK-NEXT: asm.vbr %[[I]], %[[R]] ^{{bb[0-9]+}}
-// CHECK: ^[[EXIT]](%{{[0-9]+}}: !x86_64.GPR, %[[OUT:[0-9]+]]: !x86_64.GPR):
-// CHECK-NEXT: asm.vret %[[OUT]]
+// CHECK-NEXT: asm.vret %[[NI]]
+// The known nested outcome routes directly; no materialized repeat test or
+// latch remains.
+// CHECK-NOT: x86_64.test_imm32
 // CHECK-NOT: scf.

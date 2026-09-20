@@ -3,7 +3,8 @@
 // Both arms of a `cfg.cond_br` may lead to the same block while forwarding
 // different values to its parameters — the shape a folded `if`-expression
 // takes. Each edge keeps its own arguments: the taken edge branches through a
-// block that forwards %1, the fallthrough forwards %2.
+// block that forwards %1, the fallthrough returns %2 directly. PCFR routes
+// both outcomes to their executable continuation without a synthetic join.
 
 module {
   %fn_pick = func.func @pick(%0: !i1, %1: !i64, %2: !i64) -> !i64 {
@@ -15,6 +16,8 @@ module {
 }
 
 // CHECK: x86_64.jne {imm = ^[[TAKEN:bb[0-9]+]]}
-// CHECK-NEXT: asm.vbr %7 ^[[JOIN:bb[0-9]+]]
+// CHECK-NEXT: asm.vbr ^[[OTHER:bb[0-9]+]]
+// CHECK: ^[[OTHER]]:
+// CHECK-NEXT: asm.vret %7
 // CHECK: ^[[TAKEN]]:
-// CHECK-NEXT: asm.vbr %6 ^[[JOIN]]
+// CHECK-NEXT: asm.vret %6

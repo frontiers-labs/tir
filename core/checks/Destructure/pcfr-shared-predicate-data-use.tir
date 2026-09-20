@@ -1,0 +1,34 @@
+// RUN: tir interp %s --args=7 | filecheck --check-prefix=BASE %s
+// RUN: tir opt --pass destructure %s | tir interp --args=7 | filecheck --check-prefix=BASE %s
+// RUN: tir opt --pass destructure %s | tir interp --args=11 | filecheck --check-prefix=FALSE %s
+// RUN: tir opt --pass destructure --verify %s | filecheck --check-prefix=CFG %s
+
+// The comparison is both ordinary data and a Gamma selector. The data use
+// must stay before the branch without forcing a scheduling cycle.
+
+module {
+  %fn_main = func.func @main(%x: !i32) -> !i32 {
+    %limit = constant {value = 10} : !i32
+    %one = constant {value = 1} : !i32
+    %zero = constant {value = 0} : !i32
+    %p = cmpi %x, %limit {predicate = "slt"} : !i1
+    %computed = extui %p : !i32
+    %result = scf.switch %p {
+      %false_result = addi %computed, %zero : !i32
+      -> %false_result
+    }
+    {
+      %true_result = addi %computed, %one : !i32
+      -> %true_result
+    }
+    func.return %result
+  }
+  module_end
+}
+
+// BASE: i32 2
+// FALSE: i32 0
+// CFG-NOT: scf.
+// CFG: %[[P:[0-9]+]] = cmpi
+// CFG-NEXT: %{{[0-9]+}} = extui %[[P]] : !i32
+// CFG: cfg.cond_br %[[P]]

@@ -9,14 +9,74 @@
 //! selected too and arrive through the map of what selection left each value
 //! as.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use tir::{BlockId, Context, OpHandle, OpId, PassError, ValueId};
 
 use super::builder::AuxSlot;
 use super::emit::{AuxEmit, GuardBranch};
 use super::{BranchEmitters, Rule, RuleKind};
-use crate::passes::destructure::{Edge, Edges, Test};
+use crate::passes::destructure::{
+    ControlId, ControlRequest, DemandDomainId, Edge, Edges, RecoveryPlan, Test, ValueBinding,
+};
+
+pub(crate) struct SelectedControl {
+    emit: AuxEmit,
+    taken_when: bool,
+}
+
+/// Bind semantic control identities before recovery changes their consumers.
+pub(crate) fn bind_controls(
+    recovery: &RecoveryPlan,
+    selected: &HashMap<(OpId, AuxSlot), AuxEmit>,
+) -> Result<HashMap<ControlId, SelectedControl>, PassError> {
+    recovery
+        .requirements()
+        .iter()
+        .map(|control| {
+            let (emit, taken_when) = selected_test(selected, control.consumer, control.test)?;
+            Ok((
+                control.id,
+                SelectedControl {
+                    emit: emit.clone(),
+                    taken_when,
+                },
+            ))
+        })
+        .collect()
+}
+
+fn selected_test(
+    selected: &HashMap<(OpId, AuxSlot), AuxEmit>,
+    consumer: OpId,
+    test: Test,
+) -> Result<(&AuxEmit, bool), PassError> {
+    let index = match test {
+        Test::Repeat => 0,
+        Test::Arm(index) => index,
+    };
+    let (slot, taken_when) = if selected.contains_key(&(consumer, AuxSlot::Unless(index))) {
+        (AuxSlot::Unless(index), false)
+    } else {
+        (AuxSlot::Test(index), true)
+    };
+    selected
+        .get(&(consumer, slot))
+        .map(|emit| (emit, taken_when))
+        .ok_or_else(|| {
+            PassError::InvalidRuleSet(format!(
+                "control test {slot:?} of {consumer:?} was not selected"
+            ))
+        })
+}
+
+fn reads(emit: &AuxEmit) -> Vec<ValueId> {
+    match emit {
+        AuxEmit::Branch(GuardBranch::Fused { m, .. }) => m.values().collect(),
+        AuxEmit::Branch(GuardBranch::Nonzero { condition }) => vec![*condition],
+        AuxEmit::Decided(_) => Vec::new(),
+    }
+}
 
 pub(crate) struct MachineEdges<'a> {
     pub(crate) context: &'a Context,
@@ -24,6 +84,9 @@ pub(crate) struct MachineEdges<'a> {
     /// What selection left each IR value as.
     pub(crate) emitted: &'a HashMap<ValueId, ValueId>,
     pub(crate) region_values: &'a HashMap<(OpId, AuxSlot), AuxEmit>,
+    pub(crate) controls: &'a HashMap<ControlId, SelectedControl>,
+    pub(crate) domains: &'a HashMap<OpId, DemandDomainId>,
+    pub(crate) literals: &'a HashSet<OpId>,
     /// The operations each instruction runs after besides those defining its
     /// operands: a rule's prelude, a call's tuple extractions.
     pub(crate) implicit: &'a HashMap<OpId, Vec<OpId>>,
@@ -39,39 +102,8 @@ impl MachineEdges<'_> {
         values.iter().map(|&value| self.value(value)).collect()
     }
 
-    fn decline(op: &OpHandle, reason: &str) -> PassError {
-        PassError::InvalidRuleSet(format!("cannot destructure {}: {reason}", op.name()))
-    }
-
-    /// The selected test for `test` of `op`, and whether the taken edge is the
-    /// one the test holds on.
     fn selected(&self, op: &OpHandle, test: Test) -> Result<(&AuxEmit, bool), PassError> {
-        let (slot, holds) = match test {
-            Test::Repeat => {
-                if self
-                    .region_values
-                    .contains_key(&(op.id, AuxSlot::Unless(0)))
-                {
-                    (AuxSlot::Unless(0), false)
-                } else {
-                    (AuxSlot::Test(0), true)
-                }
-            }
-            Test::Arm(index) => {
-                if self
-                    .region_values
-                    .contains_key(&(op.id, AuxSlot::Unless(index)))
-                {
-                    (AuxSlot::Unless(index), false)
-                } else {
-                    (AuxSlot::Test(index), true)
-                }
-            }
-        };
-        self.region_values
-            .get(&(op.id, slot))
-            .map(|emit| (emit, holds))
-            .ok_or_else(|| Self::decline(op, &format!("{slot:?} was not selected")))
+        selected_test(self.region_values, op.id, test)
     }
 
     fn emit_jump(&self, block: BlockId, dest: BlockId, args: &[ValueId]) {
@@ -79,26 +111,16 @@ impl MachineEdges<'_> {
             .get_block(block)
             .append((self.emitters.uncond)(self.context, dest, args).id());
     }
-}
-
-impl Edges for MachineEdges<'_> {
-    fn jump(&self, block: BlockId, edge: &Edge) {
-        self.emit_jump(block, edge.dest, &self.mapped(&edge.args));
-    }
-
-    /// Branch on a selected test: the taken edge goes through a block only it
-    /// reaches where it carries assignments, and the untaken one falls through
-    /// carrying its own.
-    fn branch(
+    fn emit_selected(
         &self,
+        selected: &SelectedControl,
         block: BlockId,
-        op: &OpHandle,
-        test: Test,
         taken: &Edge,
         fallthrough: &Edge,
         mint: &mut dyn FnMut() -> BlockId,
     ) -> Result<(), PassError> {
-        let (emit, holds) = self.selected(op, test)?;
+        let emit = &selected.emit;
+        let holds = selected.taken_when;
         let (taken, fallthrough) = if holds {
             (taken, fallthrough)
         } else {
@@ -163,6 +185,98 @@ impl Edges for MachineEdges<'_> {
         self.emit_jump(block, fallthrough.dest, &fallthrough_args);
         Ok(())
     }
+}
+
+impl Edges for MachineEdges<'_> {
+    fn jump(&self, block: BlockId, edge: &Edge) {
+        self.emit_jump(block, edge.dest, &self.mapped(&edge.args));
+    }
+
+    /// Branch on a selected test: the taken edge goes through a block only it
+    /// reaches where it carries assignments, and the untaken one falls through
+    /// carrying its own.
+    fn branch(
+        &self,
+        block: BlockId,
+        op: &OpHandle,
+        test: Test,
+        taken: &Edge,
+        fallthrough: &Edge,
+        mint: &mut dyn FnMut() -> BlockId,
+    ) -> Result<(), PassError> {
+        let (emit, taken_when) = self.selected(op, test)?;
+        let selected = SelectedControl {
+            emit: emit.clone(),
+            taken_when,
+        };
+        self.emit_selected(&selected, block, taken, fallthrough, mint)
+    }
+
+    fn branch_control(
+        &self,
+        control: &ControlRequest,
+        _predicate: ValueId,
+        bindings: &[ValueBinding],
+        block: BlockId,
+        _op: &OpHandle,
+        taken: &Edge,
+        fallthrough: &Edge,
+        mint: &mut dyn FnMut() -> BlockId,
+    ) -> Result<(), PassError> {
+        let selected = self.controls.get(&control.id).ok_or_else(|| {
+            PassError::InvalidRuleSet(format!("control {:?} has no selected branch", control.id))
+        })?;
+        let substitutions: HashMap<ValueId, ValueId> = bindings
+            .iter()
+            .map(|binding| (self.value(binding.source), self.value(binding.current)))
+            .collect();
+        let mut emit = selected.emit.clone();
+        match &mut emit {
+            AuxEmit::Branch(GuardBranch::Fused { m, .. }) => m.remap_values(&substitutions),
+            AuxEmit::Branch(GuardBranch::Nonzero { condition }) => {
+                *condition = substitutions.get(condition).copied().unwrap_or(*condition);
+            }
+            AuxEmit::Decided(_) => {}
+        }
+        let selected = SelectedControl {
+            emit,
+            taken_when: selected.taken_when,
+        };
+        self.emit_selected(&selected, block, taken, fallthrough, mint)
+    }
+
+    fn control_reads(&self, control: &ControlRequest, _op: &OpHandle) -> Vec<ValueId> {
+        self.controls
+            .get(&control.id)
+            .map_or_else(Vec::new, |selected| reads(&selected.emit))
+    }
+
+    fn decided_control(&self, control: &ControlRequest, _op: &OpHandle) -> Option<bool> {
+        let selected = self.controls.get(&control.id)?;
+        match &selected.emit {
+            AuxEmit::Decided(holds) => Some(*holds == selected.taken_when),
+            _ => None,
+        }
+    }
+
+    fn value(&self, source: ValueId) -> ValueId {
+        MachineEdges::value(self, source)
+    }
+
+    fn compatible_type(&self, source: tir::TypeId, selected: tir::TypeId) -> bool {
+        source == selected
+            || (!self.context.is_state_type(source)
+                && (self.context.get_type_data(selected).as_ref() as &dyn std::any::Any)
+                    .is::<crate::backend::registers::RegClassType>())
+    }
+
+    fn is_literal(&self, op: OpId) -> bool {
+        self.literals.contains(&op)
+    }
+
+    fn execution_domain(&self, op: OpId) -> Option<DemandDomainId> {
+        self.domains.get(&op).copied()
+    }
 
     fn decided(&self, op: &OpHandle, test: Test) -> Option<bool> {
         match self.selected(op, test) {
@@ -172,11 +286,8 @@ impl Edges for MachineEdges<'_> {
     }
 
     fn test_reads(&self, op: &OpHandle, test: Test) -> Vec<ValueId> {
-        match self.selected(op, test) {
-            Ok((AuxEmit::Branch(GuardBranch::Fused { m, .. }), _)) => m.values().collect(),
-            Ok((AuxEmit::Branch(GuardBranch::Nonzero { condition }), _)) => vec![*condition],
-            _ => Vec::new(),
-        }
+        self.selected(op, test)
+            .map_or_else(|_| Vec::new(), |(emit, _)| reads(emit))
     }
 
     fn implicit_inputs(&self, op: OpId) -> Vec<OpId> {

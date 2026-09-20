@@ -9,18 +9,27 @@
 // allocator with a register-class conflict.
 
 module {
+  %tick = func.declare @tick() -> !unit
   %fn_fwd = func.func @fwd(%0: !i1, %1: !f64, %2: !f64) -> !f64 {
     cfg.cond_br %0, ^bb1(%1 : !f64), ^bb1(%2 : !f64)
   ^bb1(%3: !f64):
+    func.call %tick()
     func.return %3
   }
   module_end
 }
 
+// The call keeps a shared continuation and forces the forwarded float to
+// survive its clobbers. Both incoming copies and the reload use XMM storage.
 // CHECK: asm.symbol
 // CHECK-NOT: x86_64.mov {
-// CHECK:      ^bb{{[0-9]+}}:
-// CHECK-NEXT: x86_64.movsd {dst = %{{[0-9]+}}:[[P:xmm[0-9]+]], src = %{{[0-9]+}}:xmm0}
+// CHECK: x86_64.jne {imm = ^[[OTHER:bb[0-9]+]]}
+// CHECK: x86_64.movsd_store_disp {base = rsp, src = %{{[0-9]+}}:xmm1, imm = [[SLOT:[0-9]+]]}
 // CHECK-NEXT: asm.vbr ^[[JOIN:bb[0-9]+]]
-// CHECK:      ^[[JOIN]](%{{[0-9]+}}: !x86_64.XMM):
-// CHECK-NEXT: x86_64.movsd {dst = %{{[0-9]+}}:xmm0, src = %{{[0-9]+}}:[[P]]}
+// CHECK: ^[[JOIN]](%{{[0-9]+}}: !x86_64.XMM,
+// CHECK: asm.vcall
+// CHECK: x86_64.movsd_load_disp {dst = %{{[0-9]+}}:xmm0, base = rsp, imm = [[SLOT]]}
+// CHECK: ^[[OTHER]]:
+// CHECK-NOT: x86_64.mov {
+// CHECK: x86_64.movsd_store_disp {base = rsp, src = %{{[0-9]+}}:xmm0, imm = [[SLOT]]}
+// CHECK-NEXT: asm.vbr ^[[JOIN]]

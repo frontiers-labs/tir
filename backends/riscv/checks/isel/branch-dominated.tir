@@ -32,6 +32,7 @@ module {
 // CHECK: riscv.blt {rs1 = %{{[0-9]+}}:GPR, rs2 = %{{[0-9]+}}:GPR, imm = ^[[ARM:bb[0-9]+]]}
 // CHECK-NEXT: asm.vbr ^bb{{[0-9]+}}
 // CHECK: ^[[ARM]]:
-// CHECK-NEXT: asm.vbr ^bb{{[0-9]+}}
+// CHECK-NEXT: riscv.addi {rd = %[[R:[0-9]+]]:GPR, rs1 = x0, imm = 1}
+// CHECK-NEXT: asm.vret %[[R]]
 // CHECK-NOT: riscv.blt
 // CHECK-NOT: imm = 2

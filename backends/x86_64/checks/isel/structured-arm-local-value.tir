@@ -22,11 +22,13 @@ module {
   module_end
 }
 
+// The continuation computes its own product before the taken arm appears in
+// layout; the arm's distinct product only feeds its add and outgoing edge.
+// CHECK: ^[[CONT:bb[0-9]+]](%{{[0-9]+}}: !x86_64.GPR):
+// CHECK-NEXT: x86_64.imul {dst = %[[POST:[0-9]+]]:GPR, dst_tied = %{{[0-9]+}}:GPR, src = %{{[0-9]+}}:GPR}
+// CHECK-NEXT: x86_64.sub
+// CHECK-NEXT: asm.vret
 // CHECK: ^[[THEN:bb[0-9]+]]:
 // CHECK-NEXT: x86_64.imul {dst = %[[ARM:[0-9]+]]:GPR
 // CHECK-NEXT: x86_64.add
-// CHECK: ^{{bb[0-9]+}}(%{{[0-9]+}}: !x86_64.GPR):
-// CHECK-NEXT: x86_64.imul {dst = %{{[0-9]+}}:GPR, dst_tied = %{{[0-9]+}}:GPR, src = %{{[0-9]+}}:GPR}
-// CHECK-NEXT: x86_64.sub
-// CHECK-NEXT: asm.vret
-// CHECK-NOT: %[[ARM]]:GPR
+// CHECK-NEXT: asm.vbr %{{[0-9]+}} ^[[CONT]]

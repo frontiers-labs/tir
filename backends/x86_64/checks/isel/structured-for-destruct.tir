@@ -31,21 +31,15 @@ module {data_layout = #data_layout} {
 // CHECK-NEXT: x86_64.cmp {dst = %[[IV]]:GPR, src = %[[UB:[0-9]+]]:GPR}
 // CHECK-NEXT: x86_64.cmp {dst = %[[IV]]:GPR, src = %[[UB]]:GPR}
 // CHECK-NEXT: x86_64.jl {imm = ^[[BODY:bb[0-9]+]]}
-// CHECK-NEXT: asm.vbr %[[IV]], %[[ACC]] ^[[LATCH:bb[0-9]+]]
+// CHECK-NEXT: asm.vbr ^[[EXIT:bb[0-9]+]]
+// PCFR routes the false outcome directly to the return continuation, which is
+// laid out before the body.
+// CHECK: ^[[EXIT]]:
+// CHECK-NEXT: asm.vret %[[ACC]]
 // The body advances both ports. The constant folds into the accumulator's
 // instruction.
 // CHECK: ^[[BODY]]:
 // CHECK-NEXT: x86_64.lea_base_disp {dst = %[[NACC:[0-9]+]]:GPR, base = %[[ACC]]:GPR, imm = 5}
 // CHECK-NEXT: x86_64.add {dst = %[[NEXT:[0-9]+]]:GPR, dst_tied = %[[IV]]:GPR, src = %[[ST:[0-9]+]]:GPR}
-// CHECK-NEXT: asm.vbr %[[NEXT]], %[[NACC]] ^[[LATCH]]
-// The merge repeats the condition. The taken edge re-enters the header and the
-// other edge leaves with both carried values.
-// CHECK: ^[[LATCH]](%[[I2:[0-9]+]]: !x86_64.GPR, %[[A2:[0-9]+]]: !x86_64.GPR):
-// CHECK-NEXT: x86_64.cmp {dst = %[[IV]]:GPR, src = %[[UB]]:GPR}
-// CHECK-NEXT: x86_64.jl {imm = ^[[BACK:bb[0-9]+]]}
-// CHECK-NEXT: asm.vbr %[[I2]], %[[A2]] ^[[EXIT:bb[0-9]+]]
-// CHECK: ^[[BACK]]:
-// CHECK-NEXT: asm.vbr %[[I2]], %[[A2]] ^[[HEAD]]
-// CHECK: ^[[EXIT]](%{{[0-9]+}}: !x86_64.GPR, %{{[0-9]+}}: !x86_64.GPR):
-// CHECK-NEXT: asm.vret
+// CHECK-NEXT: asm.vbr %[[NEXT]], %[[NACC]] ^[[HEAD]]
 // CHECK-NOT: scf.

@@ -31,7 +31,7 @@ module {
 // the body writes back, and the exit's own reload.
 // CHECK: riscv.sw
 // CHECK: riscv.lw
+// CHECK: riscv.lw
 // CHECK-NOT: riscv.lw
 // CHECK: riscv.sw
-// CHECK: riscv.lw
 // CHECK-NOT: riscv.lw

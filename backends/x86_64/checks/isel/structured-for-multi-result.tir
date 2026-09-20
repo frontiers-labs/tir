@@ -28,17 +28,14 @@ module {data_layout = #data_layout} {
 // CHECK-NOT: scf.
 // The header reads the counter and one argument per port.
 // CHECK: ^[[HEAD:bb[0-9]+]](%{{[0-9]+}}: !x86_64.GPR, %{{[0-9]+}}: !x86_64.GPR, %{{[0-9]+}}: !x86_64.GPR):
-// The body advances both ports and the counter, and carries all three to the
-// merge.
+// The false outcome computes the final sum directly. The true outcome advances
+// both ports and the counter, then carries all three back to the header.
+// CHECK: asm.vbr ^[[EXIT:bb[0-9]+]]
+// CHECK: ^[[EXIT]]:
+// CHECK-NEXT: x86_64.add
+// CHECK-NEXT: asm.vret
 // CHECK: x86_64.add
 // CHECK-NEXT: x86_64.sub
 // CHECK-NEXT: x86_64.add
-// CHECK-NEXT: asm.vbr %{{[0-9]+}}, %{{[0-9]+}}, %{{[0-9]+}} ^[[LATCH:bb[0-9]+]]
-// The merge sends all three around the back edge or out to the continuation,
-// which reads them and sums the two ports.
-// CHECK: ^[[LATCH]](%[[I:[0-9]+]]: !x86_64.GPR, %[[X:[0-9]+]]: !x86_64.GPR, %[[Y:[0-9]+]]: !x86_64.GPR):
-// CHECK: asm.vbr %[[I]], %[[X]], %[[Y]] ^[[JOIN:bb[0-9]+]]
-// CHECK: asm.vbr %[[I]], %[[X]], %[[Y]] ^[[HEAD]]
-// CHECK: ^[[JOIN]](%{{[0-9]+}}: !x86_64.GPR, %[[RX:[0-9]+]]: !x86_64.GPR, %[[RY:[0-9]+]]: !x86_64.GPR):
-// CHECK-NEXT: x86_64.add {dst = %{{[0-9]+}}:GPR, dst_tied = %[[RX]]:GPR, src = %[[RY]]:GPR}
+// CHECK-NEXT: asm.vbr %{{[0-9]+}}, %{{[0-9]+}}, %{{[0-9]+}} ^[[HEAD]]
 // CHECK-NOT: scf.

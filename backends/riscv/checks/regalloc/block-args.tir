@@ -3,8 +3,7 @@
 // A diamond whose two arms forward different values into the merge block's
 // parameter on unconditional edges. Register allocation lowers each forwarded
 // value to an explicit copy into the parameter's register, so the merge sees one
-// consistently-colored parameter: both arms copy into the same register (a0, the
-// func.return register, since the merge value is returned).
+// return value: both arms copy into the same ABI result register, a0.
 
 module {
   %fn_sel = func.func @sel(%c: !i64, %d: !i64, %a: !i64, %b: !i64) -> !i64 {
@@ -20,13 +19,12 @@ module {
   module_end
 }
 
+// Both forwarded values reach the ABI return register in their own arm.
 // CHECK: riscv.blt {rs1 = %{{[0-9]+}}:x10, rs2 = %{{[0-9]+}}:x11, imm = ^[[TAKEN:bb[0-9]+]]}
-// The fallthrough arm forwards %b into the merge parameter's register (a0 = x10).
+// CHECK-NEXT: asm.vbr ^[[OTHER:bb[0-9]+]]
+// CHECK: ^[[OTHER]]:
 // CHECK-NEXT: riscv.addi {rd = %{{[0-9]+}}:x10, rs1 = %{{[0-9]+}}:x13, imm = 0}
-// CHECK-NEXT: asm.vbr ^[[JOIN:bb[0-9]+]]
-// The taken arm forwards %a into the very same register.
+// CHECK-NEXT: asm.vret
 // CHECK: ^[[TAKEN]]:
 // CHECK-NEXT: riscv.addi {rd = %{{[0-9]+}}:x10, rs1 = %{{[0-9]+}}:x12, imm = 0}
-// CHECK-NEXT: asm.vbr ^[[JOIN]]
-// CHECK: ^[[JOIN]](%{{[0-9]+}}: !riscv.GPR):
 // CHECK-NEXT: asm.vret

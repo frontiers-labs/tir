@@ -1,0 +1,31 @@
+// RUN: tir interp %s | filecheck --check-prefix=BASE %s
+// RUN: tir opt --pass destructure %s | tir interp | filecheck --check-prefix=BASE %s
+// RUN: tir opt --pass destructure --verify %s | filecheck --check-prefix=CFG %s
+
+// The continue edge swaps two carried values at once. The edge binding must
+// read both incoming values before either destination is assigned.
+
+module {
+  %fn_main = func.func @main() -> !i32 {
+    %zero = constant {value = 0} : !i32
+    %one = constant {value = 1} : !i32
+    %ten = constant {value = 10} : !i32
+    %twenty = constant {value = 20} : !i32
+    %hundred = constant {value = 100} : !i32
+    %result_i, %result_a, %result_b = scf.loop (%i = %zero, %a = %ten, %b = %twenty) {
+      %more = cmpi %i, %one {predicate = "slt"} : !i1
+      %next_i = addi %i, %one : !i32
+      -> %more, %next_i, %b, %a, %i, %a, %b
+    }
+    %scaled = muli %result_a, %hundred : !i32
+    %result = addi %scaled, %result_b : !i32
+    func.return %result
+  }
+  module_end
+}
+
+// BASE: i32 2010
+// CFG-NOT: scf.
+// CFG: ^[[LOOP:bb[0-9]+]](%[[I:[0-9]+]]: !i32, %[[A:[0-9]+]]: !i32, %[[B:[0-9]+]]: !i32):
+// CFG: %[[NEXT_I:[0-9]+]] = addi %[[I]], %{{[0-9]+}} : !i32
+// CFG: cfg.br ^[[LOOP]](%[[NEXT_I]], %[[B]], %[[A]] : !i32, !i32, !i32)

@@ -21,12 +21,12 @@ module {
 }
 
 // CHECK-LABEL: layout:
+// CHECK: mov [[VALUE:r[a-z0-9]+]], rsi
 // CHECK-NOT: .L{{[0-9]+}}:
 // CHECK: jmp .L[[HEADER:[0-9]+]]
 // CHECK-NEXT: .L[[BACKEDGE:[0-9]+]]:
 // CHECK-NOT: jmp .L[[HEADER]]
 // CHECK: .L[[HEADER]]:
-// CHECK: mov [[DOUBLED:r[a-z0-9]+]], [[VALUE:r[a-z0-9]+]]
-// CHECK-NEXT: add [[DOUBLED]], [[VALUE]]
+// CHECK: add [[VALUE]], [[VALUE]]
 // CHECK: jne .L[[BACKEDGE]]
 // CHECK: ret

@@ -10,6 +10,6 @@ module {
   module_end
 }
 
-// CHECK: arm64.sub
-// CHECK: arm64.movz
+// CHECK-DAG: arm64.sub
+// CHECK-DAG: arm64.movz
 // CHECK: arm64.sdiv
