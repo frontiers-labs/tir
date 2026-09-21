@@ -209,9 +209,8 @@ impl Driver<'_> {
             return;
         };
         let mut state = leaves;
-        let mut seen = HashSet::new();
         loop {
-            if !seen.insert(state) || published(self.context, scope, state) {
+            if published(self.context, scope, state) {
                 return;
             }
             let readers: Vec<OpId> = self
@@ -268,7 +267,8 @@ impl Driver<'_> {
         readers: &[OpId],
         scope: &[RegionId],
     ) -> Option<ValueId> {
-        let store = self.access_node(written, SymKind::StoreMemory)?;
+        let (object, offset, bytes) = self.extent(written)?;
+        let written_end = offset.checked_add(i64::try_from(bytes).ok()?);
         let mut outputs = Vec::new();
         let mut join = None;
         for &reader in readers {
@@ -288,29 +288,14 @@ impl Driver<'_> {
                 return None;
             }
             let read = instance.clone().as_interface::<dyn MemoryRead>()?;
-            let load = self.access_node(read.read_value(), SymKind::LoadMemory)?;
-            let load_class = self.eg.find(*self.value_class.get(&read.read_value())?);
-            let store_class = self.eg.find(*self.value_class.get(&written)?);
-            let allowed = |var: u32, class: Id| {
-                let bound = match var {
-                    1..=3 => Some(load.children[var as usize - 1]),
-                    4 => Some(store_class),
-                    6..=10 => Some(store.children[var as usize - 6]),
-                    _ => None,
-                };
-                bound.is_none_or(|bound| self.eg.find(bound) == class)
-            };
-            if !state::disjoint_extents().iter().any(|plan| {
-                !plan
-                    .search(
-                        &self.eg,
-                        [load_class],
-                        &allowed,
-                        false,
-                        &tir_relational::NoExterns,
-                    )
-                    .is_empty()
-            }) {
+            let (read_object, read_offset, read_bytes) = self.extent(read.read_value())?;
+            let read_end = read_offset.checked_add(i64::try_from(read_bytes).ok()?);
+            if object != read_object
+                || bytes == 0
+                || read_bytes == 0
+                || !(read_end.is_some_and(|end| end <= offset)
+                    || written_end.is_some_and(|end| end <= read_offset))
+            {
                 return None;
             }
             let output = produced_state(&instance)?;
@@ -343,22 +328,20 @@ impl Driver<'_> {
         join.state_results().first().copied()
     }
 
-    fn access_node(&self, value: ValueId, kind: SymKind) -> Option<&Node> {
+    /// The extent a load value or a store's published state covers: the
+    /// address's object, offset into it, and byte count.
+    fn extent(&self, value: ValueId) -> Option<(Id, i64, u64)> {
         let class = self.eg.find(*self.value_class.get(&value)?);
-        self.eg
-            .nodes(class)
-            .find(|node| node.prov == Prov::Value(value) && node.sym() == Some(kind))
-    }
-
-    /// The extent the write publishing `state` covers: the object its address
-    /// derives from, the offset into it and the byte count.
-    fn extent(&self, state: ValueId) -> Option<(Id, i64, u64)> {
-        let class = self.eg.find(*self.value_class.get(&state)?);
         let node = self
             .eg
             .nodes(class)
-            .find(|node| node.prov == Prov::Value(state))?;
-        if node.sym() != Some(SymKind::StoreMemory) || node.children.len() != state::STORE_ARITY {
+            .find(|node| node.prov == Prov::Value(value))?;
+        let arity = match node.sym()? {
+            SymKind::LoadMemory => state::LOAD_ARITY,
+            SymKind::StoreMemory => state::STORE_ARITY,
+            _ => return None,
+        };
+        if node.children.len() != arity {
             return None;
         }
         let (object, offset) = self.eg.object_of(node.children[state::ADDRESS])?;

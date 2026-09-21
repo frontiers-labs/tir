@@ -14,93 +14,13 @@ use tir_relational::{Atom, Cmp, ColumnId, Expr, Guard, HeadOp, Plan, Query, Sour
 use crate::sem::{SemNode as Node, SymKind, node::field};
 
 /// `Load(address, bytes, metadata, state)`.
-const LOAD_ARITY: usize = 4;
+pub(super) const LOAD_ARITY: usize = 4;
 const LOAD_STATE: usize = 3;
 /// `Store(address, bytes, value, address_space, state)`.
 pub(super) const STORE_ARITY: usize = 5;
 const STORE_VALUE: usize = 2;
 pub(super) const ADDRESS: usize = 0;
 pub(super) const BYTES: usize = 1;
-
-/// The extent guard for `Load(b, m, Store(s, a, n, v)) = Load(b, m, s)`.
-/// The commit uses this equality only while removing the intervening store,
-/// so no independently moved read can fork a state still consumed by a write.
-pub(super) fn disjoint_extents() -> &'static [Plan<Node>; 2] {
-    static PLANS: std::sync::LazyLock<[Plan<Node>; 2]> = std::sync::LazyLock::new(|| {
-        // Variables: load, its four operands, shared object, store operands.
-        [(0, 4, 1), (1, 5, 0)].map(|(offset, bytes, other)| {
-            Plan::compile(Query {
-                vars: 11,
-                scalars: 6,
-                root: 0,
-                atoms: vec![
-                    Atom::Node {
-                        template: Node::sym_pattern(
-                            SymKind::LoadMemory,
-                            (1..=4).map(Id::from_raw).collect(),
-                        ),
-                        args: smallvec![1, 2, 3, 4],
-                        class: 0,
-                        row: None,
-                    },
-                    Atom::Node {
-                        template: Node::sym_pattern(
-                            SymKind::StoreMemory,
-                            (6..=10).map(Id::from_raw).collect(),
-                        ),
-                        args: smallvec![6, 7, 8, 9, 10],
-                        class: 4,
-                        row: None,
-                    },
-                    Atom::Object {
-                        key: 1,
-                        base: 5,
-                        offset: 0,
-                    },
-                    Atom::Object {
-                        key: 6,
-                        base: 5,
-                        offset: 1,
-                    },
-                    Atom::Fact {
-                        column: ColumnId::Const,
-                        key: 2,
-                        value: 2,
-                    },
-                    Atom::Fact {
-                        column: ColumnId::Const,
-                        key: 7,
-                        value: 3,
-                    },
-                ],
-                guards: vec![
-                    Guard::Read {
-                        term: Source::Label(2),
-                        field: field::INT_SIGNED,
-                        out: 4,
-                    },
-                    Guard::Read {
-                        term: Source::Label(3),
-                        field: field::INT_SIGNED,
-                        out: 5,
-                    },
-                    Guard::Cmp(Cmp::Lt, Expr::Lit(0), Expr::Scalar(4)),
-                    Guard::Cmp(Cmp::Lt, Expr::Lit(0), Expr::Scalar(5)),
-                    Guard::Cmp(
-                        Cmp::Le,
-                        Expr::Add(
-                            Box::new(Expr::Scalar(offset)),
-                            Box::new(Expr::Scalar(bytes)),
-                        ),
-                        Expr::Scalar(other),
-                    ),
-                ],
-                nots: Vec::new(),
-            })
-        })
-    });
-    &PLANS
-}
 
 /// The object an address is derived from, one `ptradd` at a time: pointer
 /// arithmetic lands in the object it started from, further along by what it

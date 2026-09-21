@@ -4,7 +4,7 @@
 // The surviving write must still depend on every disjoint read.
 
 module {
-  %fn_fork = func.func @fork(%p: !ptr.p<!i32>, %a: !i32, %b: !i32, %offset: !i64) -> !i32 {
+  %fn_fork = func.func @fork(%p: !ptr.p<!i32>, %a: !i32, %b: !i32) -> !i32 {
     %c = constant {value = 4} : !i64
     %q = ptr.ptradd %p, %c : !ptr.p<!i32>
     %entry = state.entry_state : !state<memory>
@@ -18,7 +18,7 @@ module {
     %s2 = ptr.store %b, %p state(%join)
     func.return %sum state(%s2)
   }
-  %fn_before = func.func @before(%p: !ptr.p<!i32>, %a: !i32, %b: !i32, %offset: !i64) -> !i32 {
+  %fn_before = func.func @before(%p: !ptr.p<!i32>, %a: !i32, %b: !i32) -> !i32 {
     %c = constant {value = -4} : !i64
     %q = ptr.ptradd %p, %c : !ptr.p<!i32>
     %entry = state.entry_state : !state<memory>
@@ -27,7 +27,7 @@ module {
     %s2 = ptr.store %b, %p state(%sx)
     func.return %x state(%s2)
   }
-  %fn_overlap = func.func @overlap(%p: !ptr.p<!i32>, %a: !i32, %b: !i32, %offset: !i64) -> !i32 {
+  %fn_overlap = func.func @overlap(%p: !ptr.p<!i32>, %a: !i32, %b: !i32) -> !i32 {
     %c = constant {value = 2} : !i64
     %q = ptr.ptradd %p, %c : !ptr.p<!i32>
     %entry = state.entry_state : !state<memory>
@@ -52,10 +52,37 @@ module {
     %x, %sx = ptr.load %q state(%s1) : !i32
     func.return %x state(%sx)
   }
+  %fn_sequential = func.func @sequential(%p: !ptr.p<!i32>, %a: !i32, %b: !i32) -> !i32 {
+    %c = constant {value = 4} : !i64
+    %q = ptr.ptradd %p, %c : !ptr.p<!i32>
+    %d = constant {value = 8} : !i64
+    %r = ptr.ptradd %p, %d : !ptr.p<!i32>
+    %entry = state.entry_state : !state<memory>
+    %s1 = ptr.store %a, %p state(%entry)
+    %x, %sx = ptr.load %q state(%s1) : !i32
+    %y, %sy = ptr.load %r state(%sx) : !i32
+    %sum = addi %x, %y : !i32
+    %s2 = ptr.store %b, %p state(%sy)
+    func.return %sum state(%s2)
+  }
+  %fn_mixed_fork = func.func @mixed_fork(%p: !ptr.p<!i32>, %a: !i32, %b: !i32) -> !i32 {
+    %c = constant {value = 4} : !i64
+    %q = ptr.ptradd %p, %c : !ptr.p<!i32>
+    %d = constant {value = 2} : !i64
+    %r = ptr.ptradd %p, %d : !ptr.p<!i32>
+    %entry = state.entry_state : !state<memory>
+    %s1 = ptr.store %a, %p state(%entry)
+    %x, %sx = ptr.load %q state(%s1) : !i32
+    %y, %sy = ptr.load %r state(%s1) : !i32
+    %join = state.join state(%sx, %sy)
+    %sum = addi %x, %y : !i32
+    %s2 = ptr.store %b, %p state(%join)
+    func.return %sum state(%s2)
+  }
   module_end
 }
 
-// CHECK-LABEL: func.func @fork(%[[P:[0-9]+]]: {{.*}}, %[[A:[0-9]+]]: !i32, %[[B:[0-9]+]]: !i32,
+// CHECK-LABEL: func.func @fork(%[[P:[0-9]+]]: {{.*}}, %[[A:[0-9]+]]: !i32, %[[B:[0-9]+]]: !i32)
 // CHECK: %[[ENTRY:[0-9]+]] = state.entry_state
 // CHECK-NOT: ptr.store %[[A]],
 // CHECK: %[[X:[0-9]+]], %[[SX:[0-9]+]] = ptr.load %{{[0-9]+}} state(%[[ENTRY]]) : !i32
@@ -63,13 +90,13 @@ module {
 // CHECK: %[[JOIN:[0-9]+]] = state.join state(%[[SX]], %[[SY]])
 // CHECK: %[[S2:[0-9]+]] = ptr.store %[[B]], %[[P]] state(%[[JOIN]])
 
-// CHECK-LABEL: func.func @before(%[[P:[0-9]+]]: {{.*}}, %[[A:[0-9]+]]: !i32, %[[B:[0-9]+]]: !i32,
+// CHECK-LABEL: func.func @before(%[[P:[0-9]+]]: {{.*}}, %[[A:[0-9]+]]: !i32, %[[B:[0-9]+]]: !i32)
 // CHECK: %[[ENTRY:[0-9]+]] = state.entry_state
 // CHECK-NOT: ptr.store %[[A]],
 // CHECK: %[[X:[0-9]+]], %[[SX:[0-9]+]] = ptr.load %{{[0-9]+}} state(%[[ENTRY]]) : !i32
 // CHECK: %[[S2:[0-9]+]] = ptr.store %[[B]], %[[P]] state(%[[SX]])
 
-// CHECK-LABEL: func.func @overlap(%[[P:[0-9]+]]: {{.*}}, %[[A:[0-9]+]]: !i32, %[[B:[0-9]+]]: !i32,
+// CHECK-LABEL: func.func @overlap(%[[P:[0-9]+]]: {{.*}}, %[[A:[0-9]+]]: !i32, %[[B:[0-9]+]]: !i32)
 // CHECK: %[[ENTRY:[0-9]+]] = state.entry_state
 // CHECK: %[[S1:[0-9]+]] = ptr.store %[[A]], %[[P]] state(%[[ENTRY]])
 // CHECK: %[[X:[0-9]+]], %[[SX:[0-9]+]] = ptr.load %{{[0-9]+}} state(%[[S1]]) : !i32
@@ -86,3 +113,18 @@ module {
 // CHECK: %[[S1:[0-9]+]] = ptr.store %[[A]], %[[P]] state(%[[ENTRY]])
 // CHECK: %[[X:[0-9]+]], %[[SX:[0-9]+]] = ptr.load %{{[0-9]+}} state(%[[S1]]) : !i32
 // CHECK: -> %[[X]], %[[SX]]
+
+// CHECK-LABEL: func.func @sequential(%[[P:[0-9]+]]: {{.*}}, %[[A:[0-9]+]]: !i32, %[[B:[0-9]+]]: !i32)
+// CHECK: %[[ENTRY:[0-9]+]] = state.entry_state
+// CHECK-NOT: ptr.store %[[A]],
+// CHECK: %[[X:[0-9]+]], %[[SX:[0-9]+]] = ptr.load %{{[0-9]+}} state(%[[ENTRY]]) : !i32
+// CHECK: %[[Y:[0-9]+]], %[[SY:[0-9]+]] = ptr.load %{{[0-9]+}} state(%[[SX]]) : !i32
+// CHECK: %[[S2:[0-9]+]] = ptr.store %[[B]], %[[P]] state(%[[SY]])
+
+// CHECK-LABEL: func.func @mixed_fork(%[[P:[0-9]+]]: {{.*}}, %[[A:[0-9]+]]: !i32, %[[B:[0-9]+]]: !i32)
+// CHECK: %[[ENTRY:[0-9]+]] = state.entry_state
+// CHECK: %[[S1:[0-9]+]] = ptr.store %[[A]], %[[P]] state(%[[ENTRY]])
+// CHECK: %[[X:[0-9]+]], %[[SX:[0-9]+]] = ptr.load %{{[0-9]+}} state(%[[S1]]) : !i32
+// CHECK: %[[Y:[0-9]+]], %[[SY:[0-9]+]] = ptr.load %{{[0-9]+}} state(%[[S1]]) : !i32
+// CHECK: %[[JOIN:[0-9]+]] = state.join state(%[[SX]], %[[SY]])
+// CHECK: %[[S2:[0-9]+]] = ptr.store %[[B]], %[[P]] state(%[[JOIN]])

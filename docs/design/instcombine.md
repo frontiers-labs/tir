@@ -246,10 +246,10 @@ remaining program demands, not an arithmetic equality between values.
 The IR update handles that cleanup after expression choices have been made.
 
 A disjoint read can observe the state before an overwritten store without
-changing its value. The commit checks this with a relational query over the
-same object, offsets, and positive byte counts. It accepts a single read or
-a fork of reads that reconverges at one join, and requires the continuation
-to reach a write of the original extent. Only then does it bypass the old
+changing its value. The commit compares the two access extents, requiring the
+same object and nonoverlapping ranges with positive byte counts. It accepts a
+single read or a fork of reads that reconverges at one join, and requires the
+continuation to reach a write of the original extent. Only then does it bypass the old
 store. The reads keep their output states and join, so the surviving write
 still depends on them. The final sweep erases the old store before state-fork
 verification. Unknown extents and other fork shapes keep the store.
