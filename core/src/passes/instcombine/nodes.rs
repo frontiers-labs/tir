@@ -194,8 +194,8 @@ impl Driver<'_> {
 
     /// A write nothing observes before the next write of its own extent is
     /// overwritten unread: its readers take the state it was handed, and the
-    /// sweep takes it. The walk follows that write's chain alone, since the
-    /// names a split and a join give it on the way are the same memory.
+    /// sweep takes it. Disjoint reads may remain on that chain: their state
+    /// outputs still order the overwriting write after them.
     fn forward_dead_write(&self, op: OpId, scope: &[RegionId]) {
         let instance = self.context.get_op(op);
         if !instance.has_interface::<dyn MemoryWrite>() {
@@ -209,8 +209,9 @@ impl Driver<'_> {
             return;
         };
         let mut state = leaves;
+        let mut seen = HashSet::new();
         loop {
-            if published(self.context, scope, state) {
+            if !seen.insert(state) || published(self.context, scope, state) {
                 return;
             }
             let readers: Vec<OpId> = self
@@ -219,6 +220,10 @@ impl Driver<'_> {
                 .into_iter()
                 .filter(|&reader| !is_dead_read(self.context, scope, reader))
                 .collect();
+            if let Some(next) = self.disjoint_read_continuation(state, leaves, &readers, scope) {
+                state = next;
+                continue;
+            }
             let [reader] = readers[..] else {
                 return;
             };
@@ -251,6 +256,98 @@ impl Driver<'_> {
         // write leaves, so no result list here names it either.
         debug_assert!(!published(self.context, scope, leaves));
         self.context.replace_value_uses(leaves, taken);
+    }
+
+    /// Accept a single disjoint read, or a fork of disjoint reads that meets at
+    /// one join. A join may also name `state` after CSE bypasses a duplicate
+    /// read. Other fork shapes remain unchanged.
+    fn disjoint_read_continuation(
+        &self,
+        state: ValueId,
+        written: ValueId,
+        readers: &[OpId],
+        scope: &[RegionId],
+    ) -> Option<ValueId> {
+        let store = self.access_node(written, SymKind::StoreMemory)?;
+        let mut outputs = Vec::new();
+        let mut join = None;
+        for &reader in readers {
+            let instance = self.context.get_op(reader);
+            if instance.is::<crate::state::JoinOp>() {
+                if join
+                    .replace(reader)
+                    .is_some_and(|previous| previous != reader)
+                {
+                    return None;
+                }
+                continue;
+            }
+            if instance.has_interface::<dyn MemoryWrite>()
+                || observed_state(&instance) != Some(state)
+            {
+                return None;
+            }
+            let read = instance.clone().as_interface::<dyn MemoryRead>()?;
+            let load = self.access_node(read.read_value(), SymKind::LoadMemory)?;
+            let load_class = self.eg.find(*self.value_class.get(&read.read_value())?);
+            let store_class = self.eg.find(*self.value_class.get(&written)?);
+            let allowed = |var: u32, class: Id| {
+                let bound = match var {
+                    1..=3 => Some(load.children[var as usize - 1]),
+                    4 => Some(store_class),
+                    6..=10 => Some(store.children[var as usize - 6]),
+                    _ => None,
+                };
+                bound.is_none_or(|bound| self.eg.find(bound) == class)
+            };
+            if !state::disjoint_extents().iter().any(|plan| {
+                !plan
+                    .search(
+                        &self.eg,
+                        [load_class],
+                        &allowed,
+                        false,
+                        &tir_relational::NoExterns,
+                    )
+                    .is_empty()
+            }) {
+                return None;
+            }
+            let output = produced_state(&instance)?;
+            if published(self.context, scope, output) {
+                return None;
+            }
+            if readers.len() == 1 {
+                return Some(output);
+            }
+            let users = self.context.users_of(output);
+            let [user] = users[..] else { return None };
+            if !self.context.get_op(user).is::<crate::state::JoinOp>()
+                || join.replace(user).is_some_and(|previous| previous != user)
+            {
+                return None;
+            }
+            outputs.push(output);
+        }
+        if outputs.is_empty() {
+            return None;
+        }
+        let join = self.context.get_op(join?);
+        if !join
+            .state_operands()
+            .iter()
+            .all(|input| *input == state || outputs.contains(input))
+        {
+            return None;
+        }
+        join.state_results().first().copied()
+    }
+
+    fn access_node(&self, value: ValueId, kind: SymKind) -> Option<&Node> {
+        let class = self.eg.find(*self.value_class.get(&value)?);
+        self.eg
+            .nodes(class)
+            .find(|node| node.prov == Prov::Value(value) && node.sym() == Some(kind))
     }
 
     /// The extent the write publishing `state` covers: the object its address

@@ -1,14 +1,8 @@
 // RUN: tir opt --pass func.func(restructure-nodes,promote-nodes,instcombine-nodes) --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(restructure-nodes,promote-nodes) --verify --shuffle-seed 7 %s | tir opt --pass func.func(instcombine-nodes) --verify - -o /dev/null
 
-// The reads that forked off what the first write published name bytes it never
-// wrote, so nothing they answer would change if they read the memory before it.
-// The commit does not know that: it may move a write back only over writes
-// nothing else reads, and the reads are other readers. The write they fork off
-// stays.
-//
-// Saying it properly takes the companion law — `Load(b,m,Store(s,a,n,v))` is
-// `Load(b,m,s)` for disjoint extents — which moves the reads back with the
-// write. Until it lands (#384) this case is a write more than it needs.
+// Disjoint reads retain their values and ordering when the overwritten write
+// they fork from is removed.
 
 #data_layout = {types = {i32 = {abi = 32, size = 32}, i64 = {abi = 64, size = 64}, p = {abi = 64, size = 64}}}
 
@@ -35,7 +29,7 @@ module {data_layout = #data_layout} {
 // CHECK: %[[P:[0-9]+]] = ptr.alloca
 // CHECK: %[[Q:[0-9]+]] = ptr.ptradd %[[P]]
 // CHECK: %[[S0:[0-9]+]] = ptr.store %[[A]], %[[P]] state(%{{[0-9]+}})
-// CHECK-NEXT: %[[S1:[0-9]+]] = ptr.store %[[B]], %[[P]] state(%[[S0]])
-// CHECK: %[[R:[0-9]+]], %{{[0-9]+}} = ptr.load %[[Q]] state(%[[S1]]) : !i32
+// CHECK-NOT: ptr.store %[[B]], %[[P]]
+// CHECK: %[[R:[0-9]+]], %{{[0-9]+}} = ptr.load %[[Q]] state(%[[S0]]) : !i32
 // CHECK: addi %[[R]], %[[R]]
 // CHECK: addi %[[A]],

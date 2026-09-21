@@ -3,8 +3,8 @@
 // The load between the two writes names the extent the first one wrote, so it
 // is answered with the value that write stored and goes. What is left is a
 // write nothing reads under a write of the same extent, and the second is the
-// one the function makes. A read that survives keeps the write it reads —
-// `dse_read_fork_off_a_read` is that case.
+// one the function makes. A surviving read keeps the write when their extents
+// overlap; disjoint reads are covered by `dse_read_fork_off_a_read`.
 
 module {
   %fn_f = func.func @f(%0: !ptr.p<!i32>, %1: !i32, %2: !i32) -> !i32 {
