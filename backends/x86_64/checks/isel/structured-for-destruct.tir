@@ -29,7 +29,6 @@ module {data_layout = #data_layout} {
 // CHECK: ^[[HEAD]](%[[IV:[0-9]+]]: !x86_64.GPR, %[[ACC:[0-9]+]]: !x86_64.GPR):
 // The counter test fuses into the header's branch.
 // CHECK-NEXT: x86_64.cmp {dst = %[[IV]]:GPR, src = %[[UB:[0-9]+]]:GPR}
-// CHECK-NEXT: x86_64.cmp {dst = %[[IV]]:GPR, src = %[[UB]]:GPR}
 // CHECK-NEXT: x86_64.jl {imm = ^[[BODY:bb[0-9]+]]}
 // CHECK-NEXT: asm.vbr ^[[EXIT:bb[0-9]+]]
 // PCFR routes the false outcome directly to the return continuation, which is

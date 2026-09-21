@@ -27,8 +27,8 @@ use std::collections::{HashMap, HashSet};
 
 pub(crate) use recovery::RecoveryError;
 pub use recovery::{
-    ControlId, ControlRequest, DemandDomain, DemandDomainId, DemandDomainKind, RecoveryPlan,
-    ValueBinding,
+    ControlDefinition, ControlId, ControlKind, ControlOutcome, ControlRoute, DemandDomain,
+    DemandDomainId, DemandDomainKind, RecoveryPlan, ValueBinding,
 };
 
 use crate::analysis::AnalysisManager;
@@ -100,18 +100,23 @@ pub trait Edges {
     #[allow(clippy::too_many_arguments)]
     fn branch_control(
         &self,
-        control: &ControlRequest,
+        control: &ControlDefinition,
+        outcome: usize,
         predicate: ValueId,
         bindings: &[ValueBinding],
-        block: BlockId,
-        op: &OpHandle,
-        taken: &Edge,
-        fallthrough: &Edge,
-        mint: &mut dyn FnMut() -> BlockId,
+        _block: BlockId,
+        _taken: &Edge,
+        _fallthrough: &Edge,
+        _mint: &mut dyn FnMut() -> BlockId,
     ) -> Result<(), PassError> {
         let _ = bindings;
         let _ = predicate;
-        self.branch(block, op, control.test, taken, fallthrough, mint)
+        let _ = outcome;
+        let _ = control;
+        let _ = predicate;
+        Err(PassError::InvalidRuleSet(
+            "this edge adapter does not implement producer-owned recovery control".into(),
+        ))
     }
 
     /// End `block` by leaving the callable with `values` and `deps`.
@@ -124,8 +129,8 @@ pub trait Edges {
     }
 
     /// The selected outcome of a recovery control, when selection proved it.
-    fn decided_control(&self, control: &ControlRequest, op: &OpHandle) -> Option<bool> {
-        self.decided(op, control.test)
+    fn decided_control(&self, _control: &ControlDefinition, _outcome: usize) -> Option<bool> {
+        None
     }
 
     /// What deciding `test` of `op` reads besides the operation's own operands
@@ -139,19 +144,8 @@ pub trait Edges {
     /// reads the current structured predicate plus [`Edges::test_reads`]. A
     /// target override names the complete selected branch input set instead;
     /// a fused branch need not retain an erased source predicate.
-    fn control_reads(&self, control: &ControlRequest, op: &OpHandle) -> Vec<ValueId> {
-        let mut read = match control.test {
-            Test::Repeat => op
-                .clone()
-                .as_interface::<dyn Theta>()
-                .map_or_else(Vec::new, |theta| vec![theta.predicate()]),
-            Test::Arm(_) => op
-                .clone()
-                .as_interface::<dyn Gamma>()
-                .map_or_else(Vec::new, |gamma| vec![gamma.predicate()]),
-        };
-        read.extend(self.test_reads(op, control.test));
-        read
+    fn control_reads(&self, control: &ControlDefinition, _outcome: usize) -> Vec<ValueId> {
+        vec![control.source_predicate]
     }
 
     /// Map semantic source values to the values emitted by selection.
@@ -290,16 +284,29 @@ impl Edges for CfgEdges<'_> {
     #[allow(clippy::too_many_arguments)]
     fn branch_control(
         &self,
-        control: &ControlRequest,
+        control: &ControlDefinition,
+        outcome: usize,
         predicate: ValueId,
         _bindings: &[ValueBinding],
         block: BlockId,
-        _op: &OpHandle,
         taken: &Edge,
         fallthrough: &Edge,
         mint: &mut dyn FnMut() -> BlockId,
     ) -> Result<(), PassError> {
-        self.branch_value(block, predicate, control.test, taken, fallthrough, mint);
+        let test = match control.outcomes.get(outcome) {
+            Some(ControlOutcome::Exact(value)) => Test::Arm(*value as usize),
+            Some(ControlOutcome::DefaultFrom(_))
+                if control.predicate_type == IntegerType::new(self.context, 1) =>
+            {
+                Test::Repeat
+            }
+            _ => {
+                return Err(PassError::InvalidRuleSet(
+                    "generic CFG cannot emit a non-boolean default control outcome".into(),
+                ));
+            }
+        };
+        self.branch_value(block, predicate, test, taken, fallthrough, mint);
         Ok(())
     }
 

@@ -38,7 +38,9 @@ use tir::{
 use tir_adt::APInt;
 use tir_relational::{ClassId as Id, Label as ENode};
 
-use crate::passes::destructure::{DemandDomainId, RecoveryError, RecoveryPlan, Test};
+use crate::passes::destructure::{
+    ControlId, ControlKind, DemandDomainId, RecoveryError, RecoveryPlan,
+};
 
 pub use fp_environment::check_default_fp_environment;
 pub use rules::{
@@ -852,7 +854,7 @@ pub struct InstructionSelectPass {
     execution_domains: HashMap<OpId, DemandDomainId>,
     literal_ops: HashSet<OpId>,
     /// Control uses that PCF normalization represents as local tests of data.
-    materialized_tests: HashSet<(OpId, usize)>,
+    materialized_tests: HashSet<ControlId>,
     emitted_values: HashMap<ValueId, ValueId>,
     /// Where each structured operation's destruction reads its tests, filled as
     /// the regions holding them commit.
@@ -1439,7 +1441,7 @@ impl InstructionSelectPass {
         &mut self,
         context: &Context,
         op: &OperationRef,
-        materialized: &HashSet<(OpId, Test)>,
+        materialized: &HashSet<ControlId>,
     ) -> Result<bool, PassError> {
         let root = op.op().id;
         if !self.solved.insert(root) {
@@ -1455,29 +1457,21 @@ impl InstructionSelectPass {
             None
         };
         if let Some(recovery) = &mut self.recovery {
-            let demoted: Vec<_> = recovery
-                .requirements()
-                .iter()
-                .filter(|request| materialized.contains(&(request.consumer, request.test)))
-                .map(|request| request.id)
-                .collect();
-            for control in demoted {
+            let initial: HashSet<_> = recovery.requirements().map(|control| control.id).collect();
+            for &control in materialized {
                 recovery.demote(control);
             }
+            // Demotion activates local conversions with their own stable IDs.
+            // Those new tests must read the materialized selector on a retry.
+            self.materialized_tests = recovery
+                .requirements()
+                .filter(|control| {
+                    matches!(control.kind, ControlKind::LocalConversion { .. })
+                        && !initial.contains(&control.id)
+                })
+                .map(|control| control.id)
+                .collect();
         }
-        self.materialized_tests = self
-            .recovery
-            .iter()
-            .flat_map(RecoveryPlan::requirements)
-            .filter(|request| materialized.contains(&(request.consumer, request.test)))
-            .map(|request| {
-                let index = match request.test {
-                    Test::Arm(index) => index,
-                    Test::Repeat => 0,
-                };
-                (request.consumer, index)
-            })
-            .collect();
         let scopes = Scopes::build(context, op)?;
         if let Some(recovery) = &self.recovery {
             for &source in scopes.op_region.keys() {
@@ -1770,7 +1764,9 @@ impl InstructionSelectPass {
                 if inner.regions().is_empty() {
                     continue;
                 }
-                builder.build_region_control(&inner, region, &mut region_control);
+                if self.recovery.is_none() {
+                    builder.build_region_control(&inner, region, &mut region_control);
+                }
                 for (entered, condition, holds) in entry_facts(context, &inner) {
                     region_facts.insert(entered, (condition, holds));
                     if let std::collections::hash_map::Entry::Vacant(slot) =
@@ -1782,6 +1778,12 @@ impl InstructionSelectPass {
                         });
                     }
                 }
+            }
+        }
+
+        if let Some(recovery) = &self.recovery {
+            for definition in recovery.requirements() {
+                builder.build_recovery_control(definition, &mut region_control);
             }
         }
 
@@ -1812,6 +1814,13 @@ impl InstructionSelectPass {
             ..
         } = lowering;
         let needs_register = |result: ValueId, class: Id, def_region: RegionId| {
+            if self
+                .recovery
+                .as_ref()
+                .is_some_and(|plan| plan.control_only(result))
+            {
+                return false;
+            }
             let users = context.users_of(result);
             let unselected_use = users.iter().any(|user| {
                 if roots_by_op.contains_key(user) {
@@ -1885,11 +1894,6 @@ impl InstructionSelectPass {
                 lowering.prepare_function(&staged, &function)?;
             }
             self.solve_function(&staged, &function, &materialized)?;
-            let controls = self
-                .recovery
-                .as_ref()
-                .map(|plan| plan.requirements().to_vec())
-                .unwrap_or_default();
             match self.commit_function(&staged, &function) {
                 Ok(()) => {
                     context.adopt(staged);
@@ -1898,15 +1902,7 @@ impl InstructionSelectPass {
                 Err(RecoveryError::Invalid(error)) => return Err(error),
                 Err(RecoveryError::Placement(conflicts)) => {
                     let before = materialized.len();
-                    for id in conflicts {
-                        let request = controls
-                            .iter()
-                            .find(|request| request.id == id)
-                            .ok_or_else(|| {
-                                PassError::InvalidRuleSet("unknown rejected control".into())
-                            })?;
-                        materialized.insert((request.consumer, request.test));
-                    }
+                    materialized.extend(conflicts);
                     if materialized.len() == before {
                         return Err(PassError::InvalidRuleSet(
                             "control materialization did not resolve its placement conflict".into(),
@@ -1964,9 +1960,11 @@ impl InstructionSelectPass {
         recovery.emit_selected(context, region, &edges)?;
         for block in context.get_region(region).block_ids() {
             let block = context.get_block(block);
+            let mut reference = block.op_ids();
+            self.place_block_literals(context, &mut reference);
             let graph = crate::backend::Dependences::of_ops(
                 context,
-                &block.op_ids(),
+                &reference,
                 &crate::backend::RegAssignment::default(),
             );
             let order = graph.linearize().ok_or_else(|| {
@@ -1978,6 +1976,76 @@ impl InstructionSelectPass {
             block.set_ops(order);
         }
         Ok(())
+    }
+
+    /// Recovery first places a literal in a dominating block. Once branch
+    /// instructions exist, its first reader determines its place in that block.
+    fn place_block_literals(&self, context: &Context, order: &mut Vec<OpId>) {
+        let barriers: Vec<_> = order
+            .iter()
+            .map(|&op| {
+                let op = context.get_op(op);
+                !crate::analysis::execution_regs(&op).phys_defs.is_empty()
+                    || op
+                        .as_interface::<dyn crate::backend::MachineInstruction>()
+                        .is_some_and(|instruction| {
+                            !matches!(
+                                instruction.info().control_flow,
+                                crate::backend::ControlFlow::None
+                            )
+                        })
+            })
+            .collect();
+        let reads: Vec<_> = order
+            .iter()
+            .map(|&op| crate::analysis::execution_regs(&context.get_op(op)).uses)
+            .collect();
+        let mut placed: Vec<_> = order
+            .iter()
+            .enumerate()
+            .map(|(index, &op)| {
+                let instance = context.get_op(op);
+                let registers = crate::analysis::execution_regs(&instance);
+                let movable = self.literal_ops.contains(&op)
+                    && instance.operands().is_empty()
+                    && instance.state_results().is_empty()
+                    && instance.regions().is_empty()
+                    && registers.phys_defs.is_empty()
+                    && registers.phys_uses.is_empty()
+                    && instance
+                        .clone()
+                        .as_interface::<dyn crate::backend::MachineInstruction>()
+                        .is_some_and(|instruction| {
+                            let info = instruction.info();
+                            !info.effects.reads
+                                && !info.effects.writes
+                                && matches!(info.control_flow, crate::backend::ControlFlow::None)
+                        });
+                let reader = movable
+                    .then(|| {
+                        reads
+                            .iter()
+                            .enumerate()
+                            .skip(index + 1)
+                            .find(|(_, read)| {
+                                registers.defs.iter().any(|value| read.contains(value))
+                            })
+                            .map(|(reader, _)| {
+                                // A machine block can contain a conditional
+                                // transfer before its final jump. Keep literals
+                                // before that transfer and its flag producer,
+                                // since a successor may also read the value.
+                                (index + 1..reader)
+                                    .find(|&at| barriers[at])
+                                    .unwrap_or(reader)
+                            })
+                    })
+                    .flatten();
+                (reader.map_or((index, 1), |reader| (reader, 0)), op)
+            })
+            .collect();
+        placed.sort_by_key(|(key, _)| *key);
+        *order = placed.into_iter().map(|(_, op)| op).collect();
     }
 
     fn commit_region_solution(
@@ -2186,6 +2254,24 @@ impl InstructionSelectPass {
         Ok(())
     }
 
+    fn control_anchor(
+        &self,
+        fs: &FunctionSelection,
+        region: RegionId,
+        op: OpId,
+        slot: AuxSlot,
+    ) -> Option<OpId> {
+        if let AuxSlot::Control { id, .. } = slot {
+            let definition = self.recovery.as_ref()?.definition(id)?;
+            let at = match definition.kind {
+                ControlKind::Direct => definition.producer,
+                ControlKind::LocalConversion { consumer, .. } => Some(consumer),
+            };
+            return at.filter(|op| fs.scopes.op_region.get(op) == Some(&region));
+        }
+        (fs.scopes.op_region.get(&op) == Some(&region)).then_some(op)
+    }
+
     /// Solve `region` against the (already scoped) shared graph, restricting
     /// matching and the cover to what `region` computes.
     fn solve_region(
@@ -2234,22 +2320,6 @@ impl InstructionSelectPass {
         // A continuation branch belongs to its predicate producer. Resolving
         // operands at the old consumer could choose a later equal value that
         // is unavailable where recovery places the branch.
-        let anchor = |op: OpId, index: usize| {
-            self.recovery
-                .iter()
-                .flat_map(RecoveryPlan::requirements)
-                .find(|request| {
-                    request.consumer == op
-                        && request.direct
-                        && match request.test {
-                            Test::Arm(arm) => arm == index,
-                            Test::Repeat => index == 0,
-                        }
-                })
-                .and_then(|request| request.source_producer)
-                .filter(|producer| fs.scopes.op_region.get(producer) == Some(&region))
-                .or_else(|| (fs.scopes.op_region.get(&op) == Some(&region)).then_some(op))
-        };
         let mut mm_overlay: HashSet<Id> = HashSet::new();
         let mut aux_branches: Vec<(OpId, AuxSlot, Option<AuxEmit>)> = Vec::new();
         for &(op, slot, class) in fs.region_aux.get(&region).into_iter().flatten() {
@@ -2266,14 +2336,18 @@ impl InstructionSelectPass {
                 .get(&class)
                 .map(Vec::as_slice)
                 .unwrap_or(&[]);
-            let index = match slot {
-                AuxSlot::Test(index) | AuxSlot::Unless(index) => index,
-            };
-            let fused = if self.materialized_tests.contains(&(op, index)) {
-                None
-            } else {
-                self.best_guard_branch(context, fs, region, anchor(op, index), candidates)
-            };
+            let materialized = matches!(slot, AuxSlot::Control { id, .. } if self.materialized_tests.contains(&id));
+            let fused = (!materialized)
+                .then(|| {
+                    self.best_guard_branch(
+                        context,
+                        fs,
+                        region,
+                        self.control_anchor(fs, region, op, slot),
+                        candidates,
+                    )
+                })
+                .flatten();
             match fused {
                 Some(guard) => {
                     for boundary in guard.boundaries {
@@ -2301,11 +2375,15 @@ impl InstructionSelectPass {
         // later pass. A test going through branch-if-nonzero keeps its overlay
         // demand above; anything else reading the value still forces its tile
         // through its own tile boundary.
-        let fused = fused_repeat_classes(context, fs, region, &aux_branches);
+        let fused =
+            fused_control_classes(context, fs, region, &aux_branches, self.recovery.as_ref());
         let demanded: HashSet<Id> = covered
             .iter()
             .copied()
-            .filter(|class| !fused.contains(class) && fs.demanded_at(*class, region, &mm_overlay))
+            .filter(|class| {
+                (!fused.contains(class) || mm_overlay.contains(class))
+                    && fs.demanded_at(*class, region, &mm_overlay)
+            })
             .collect();
         let available = |class| {
             // A low-extract view owns no register of its own: it re-views its
@@ -2974,15 +3052,39 @@ impl InstructionSelectPass {
 /// only a register does. On the Unless path the recorded class is the inner
 /// comparison rather than the predicate, so the inner value must likewise be
 /// used only by the negation.
-fn fused_repeat_classes(
+fn fused_control_classes(
     context: &Context,
     fs: &FunctionSelection,
     region: RegionId,
     aux_branches: &[(OpId, AuxSlot, Option<AuxEmit>)],
+    recovery: Option<&RecoveryPlan>,
 ) -> HashSet<Id> {
     let mut fused = HashSet::new();
     for (op, slot, selected) in aux_branches {
         if !matches!(selected, Some(AuxEmit::Branch(GuardBranch::Fused { .. }))) {
+            continue;
+        }
+        if let AuxSlot::Control { id, .. } = slot {
+            let Some(definition) = recovery.and_then(|plan| plan.definition(*id)) else {
+                continue;
+            };
+            if !matches!(definition.kind, ControlKind::Direct) {
+                continue;
+            }
+            if let Some(entry) = fs
+                .region_aux
+                .get(&region)
+                .into_iter()
+                .flatten()
+                .find(|(o, s, _)| o == op && s == slot)
+            {
+                fused.insert(chase_low_extract(&fs.egraph, entry.2));
+            }
+            if let Some(producer) = definition.producer
+                && let Some(root) = fs.op_root.get(&producer)
+            {
+                fused.insert(chase_low_extract(&fs.egraph, fs.egraph.find(*root)));
+            }
             continue;
         }
         if !matches!(slot, AuxSlot::Test(0) | AuxSlot::Unless(0)) {

@@ -1,15 +1,23 @@
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 
 use super::{
-    BlockId, Context, ControlId, ControlRequest, Edge, Edges, GammaPlan, OpId, OperationRef,
-    PassError, Point, Prepared, PreparedFact, RecoveryError, RecoveryPlan, RegionId, SequenceEnd,
-    Test, ThetaPlan, ValueBinding, ValueId, values_read, values_then_states,
+    BlockId, Context, ControlDefinition, ControlId, ControlOutcome, ControlPortId, Edge, Edges,
+    GammaPlan, OpId, OperationRef, PassError, Point, Prepared, PreparedFact, RecoveryError,
+    RecoveryPlan, RegionId, SequenceEnd, Test, ThetaPlan, ValueBinding, ValueId, values_read,
+    values_then_states,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 enum Fact {
     Exact(u64),
     DefaultFrom(usize),
+}
+
+fn outcome_fact(outcome: ControlOutcome) -> Fact {
+    match outcome {
+        ControlOutcome::Exact(value) => Fact::Exact(value),
+        ControlOutcome::DefaultFrom(first) => Fact::DefaultFrom(first),
+    }
 }
 
 /// Bindings name values at the originating fragment, not at an intermediate
@@ -19,6 +27,8 @@ struct Route {
     point: Point,
     bindings: Vec<ValueBinding>,
     facts: HashMap<ValueId, Fact>,
+    control_facts: HashMap<ControlPortId, Fact>,
+    skip_control: Option<ControlId>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -36,6 +46,7 @@ enum Term {
     Jump(Transfer),
     Branch {
         control: ControlId,
+        outcome: usize,
         predicate: ValueId,
         bindings: Vec<ValueBinding>,
         taken: Transfer,
@@ -65,10 +76,18 @@ struct Fragment {
 
 enum Destination {
     Computation(usize),
+    Producer(ControlId),
     Gamma(OpId),
     Repeat(OpId),
     Return(Vec<ValueId>, Vec<ValueId>),
-    Cycle(Vec<(ValueId, Fact)>),
+    Cycle(Vec<(ValueId, Fact)>, Vec<(ControlPortId, Fact)>),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct CycleKey {
+    point: Point,
+    values: Vec<(ValueId, Fact)>,
+    controls: Vec<(ControlPortId, Fact)>,
 }
 
 /// FINISH produces a graph of transfers before creating IR blocks. In
@@ -82,10 +101,12 @@ struct Finish<'a> {
     fragments: Vec<Fragment>,
     computations: HashMap<usize, Node>,
     controls: HashMap<OpId, Node>,
-    cycles: HashMap<(Point, Vec<(ValueId, Fact)>), Node>,
+    definitions: HashMap<ControlId, Node>,
+    cycles: HashMap<CycleKey, Node>,
     constants: HashMap<ValueId, Fact>,
     ambiguous_facts: HashSet<ValueId>,
     literals: HashSet<OpId>,
+    lost_direct: HashSet<ControlId>,
 }
 
 pub(crate) fn emit_recovery(
@@ -156,10 +177,12 @@ pub(crate) fn emit_recovery(
         fragments: Vec::new(),
         computations: HashMap::new(),
         controls: HashMap::new(),
+        definitions: HashMap::new(),
         cycles: HashMap::new(),
         constants,
         ambiguous_facts,
         literals: hoisted.iter().copied().collect(),
+        lost_direct: HashSet::new(),
     };
     let entry = finish.new_fragment(hoisted);
     let point = Point {
@@ -167,6 +190,11 @@ pub(crate) fn emit_recovery(
         index: 0,
     };
     finish.connect(entry, finish.canonical(point))?;
+    if !finish.lost_direct.is_empty() {
+        let mut controls: Vec<_> = finish.lost_direct.iter().copied().collect();
+        controls.sort();
+        return Err(RecoveryError::Placement(controls));
+    }
     finish.emit(region, entry).map_err(RecoveryError::Invalid)
 }
 
@@ -236,6 +264,8 @@ impl Finish<'_> {
             point,
             bindings: Vec::new(),
             facts,
+            control_facts: HashMap::new(),
+            skip_control: None,
         }
     }
 
@@ -357,7 +387,14 @@ impl Finish<'_> {
         }
     }
 
-    fn repeat_outcome(&self, route: &Route, theta: &ThetaPlan) -> Option<bool> {
+    fn repeat_outcome(&self, route: &Route, theta_id: OpId, theta: &ThetaPlan) -> Option<bool> {
+        if let Some(repeated) = self.recovery.repeated_control(theta_id) {
+            return match route.control_facts.get(&repeated.port)? {
+                Fact::Exact(value) => Some(*value != 0),
+                Fact::DefaultFrom(first) if *first > 0 => Some(true),
+                Fact::DefaultFrom(_) => None,
+            };
+        }
         match self.fact(route, theta.predicate)? {
             Fact::Exact(value) => Some(value != 0),
             Fact::DefaultFrom(first) if first > 0 => Some(true),
@@ -394,6 +431,13 @@ impl Finish<'_> {
     }
 
     fn forget_iteration(&self, route: &mut Route, theta: &ThetaPlan) {
+        route.control_facts.retain(|port, _| {
+            !self
+                .recovery
+                .repeated_controls
+                .values()
+                .any(|repeated| repeated.port == *port && repeated.scope == theta.body)
+        });
         let regions: HashSet<_> = self
             .context
             .nested_regions(theta.body)
@@ -453,12 +497,30 @@ impl Finish<'_> {
         facts
     }
 
+    fn dynamic_control_facts(&self, route: &Route) -> Vec<(ControlPortId, Fact)> {
+        let mut facts: Vec<_> = route
+            .control_facts
+            .iter()
+            .map(|(&port, &fact)| (port, fact))
+            .collect();
+        facts.sort();
+        facts
+    }
+
     fn advance(&self, route: &mut Route) -> Result<Destination, PassError> {
         let mut seen = HashSet::new();
         loop {
+            if let Some(&control) = self.prepared.control_at.get(&route.point) {
+                if route.skip_control == Some(control) {
+                    route.skip_control = None;
+                } else {
+                    return Ok(Destination::Producer(control));
+                }
+            }
             let facts = self.dynamic_facts(route);
-            if !seen.insert((route.point, facts.clone())) {
-                return Ok(Destination::Cycle(facts));
+            let control_facts = self.dynamic_control_facts(route);
+            if !seen.insert((route.point, facts.clone(), control_facts.clone())) {
+                return Ok(Destination::Cycle(facts, control_facts));
             }
             if let Some(&fragment) = self.prepared.fragment_at.get(&route.point) {
                 if self.prepared.fragments[fragment].ops.is_empty() {
@@ -493,13 +555,23 @@ impl Finish<'_> {
                     return Ok(Destination::Return(values.clone(), deps.clone()));
                 }
                 SequenceEnd::GammaArm { gamma, arm, parent } => {
-                    let gamma = &self.prepared.gammas[gamma];
+                    let gamma_id = *gamma;
+                    let gamma = &self.prepared.gammas[&gamma_id];
                     self.bind(route, &gamma.outputs, &gamma.arms[*arm].results)?;
+                    for repeated in self.recovery.repeated_controls.values() {
+                        if repeated.gamma == gamma_id
+                            && self.recovery.repeated_control(repeated.theta).is_some()
+                        {
+                            route
+                                .control_facts
+                                .insert(repeated.port, Fact::Exact(*arm as u64));
+                        }
+                    }
                     route.point = *parent;
                 }
                 SequenceEnd::ThetaHead { theta } => {
                     let plan = &self.prepared.thetas[theta];
-                    let Some(repeat) = self.repeat_outcome(route, plan) else {
+                    let Some(repeat) = self.repeat_outcome(route, *theta, plan) else {
                         return Ok(Destination::Repeat(*theta));
                     };
                     route.point = Point {
@@ -560,6 +632,18 @@ impl Finish<'_> {
     fn target(&mut self, mut route: Route) -> Result<Transfer, PassError> {
         match self.advance(&mut route)? {
             Destination::Computation(id) => self.computation(id, route),
+            Destination::Producer(control) => {
+                if let Some(&node) = self.definitions.get(&control) {
+                    return Ok(Self::transfer(node, route));
+                }
+                let node = self.new_fragment(Vec::new());
+                self.definitions.insert(control, node);
+                // All entries, including loop feedback, supply this point's
+                // bindings through SSA parameters. A first incoming route is
+                // not the environment of subsequent invocations.
+                self.producer_branch(node, self.canonical(route.point), control)?;
+                Ok(Self::transfer(node, route))
+            }
             Destination::Gamma(op) | Destination::Repeat(op) => {
                 if let Some(&node) = self.controls.get(&op) {
                     return Ok(Self::transfer(node, route));
@@ -578,8 +662,12 @@ impl Finish<'_> {
                 };
                 Ok(Self::transfer(node, route))
             }
-            Destination::Cycle(facts) => {
-                let key = (route.point, facts.clone());
+            Destination::Cycle(facts, control_facts) => {
+                let key = CycleKey {
+                    point: route.point,
+                    values: facts.clone(),
+                    controls: control_facts.clone(),
+                };
                 if let Some(&node) = self.cycles.get(&key) {
                     return Ok(Self::transfer(node, route));
                 }
@@ -587,6 +675,7 @@ impl Finish<'_> {
                 self.cycles.insert(key, node);
                 let mut canonical = self.canonical(route.point);
                 canonical.facts.extend(facts);
+                canonical.control_facts.extend(control_facts);
                 self.connect(node, canonical)?;
                 Ok(Self::transfer(node, route))
             }
@@ -633,12 +722,79 @@ impl Finish<'_> {
                 self.fragments[node.0].term = Term::Jump(edge);
                 Ok(())
             }
-            Destination::Cycle(_) => {
+            Destination::Producer(_) => {
+                let edge = self.target(route)?;
+                self.fragments[node.0].term = Term::Jump(edge);
+                Ok(())
+            }
+            Destination::Cycle(_, _) => {
                 let edge = self.target(route)?;
                 self.fragments[node.0].term = Term::Jump(edge);
                 Ok(())
             }
         }
+    }
+
+    fn producer_branch(
+        &mut self,
+        node: Node,
+        route: Route,
+        control: ControlId,
+    ) -> Result<(), PassError> {
+        let definition = self.request(control)?.clone();
+        let mut reachable = Vec::new();
+        for (index, &outcome) in definition.outcomes.iter().enumerate() {
+            let decision = self.edges.decided_control(&definition, index);
+            if decision != Some(false) {
+                reachable.push((index, outcome));
+            }
+            if decision == Some(true) {
+                break;
+            }
+        }
+        let Some((_, last)) = reachable.pop() else {
+            return Err(PassError::InvalidRuleSet(
+                "control definition has no reachable outcomes".into(),
+            ));
+        };
+        let mut taken_routes = Vec::with_capacity(reachable.len());
+        for (outcome, fact) in reachable {
+            let mut selected = route.clone();
+            selected
+                .facts
+                .insert(self.value(definition.source_predicate), outcome_fact(fact));
+            selected.skip_control = Some(control);
+            taken_routes.push((outcome, self.target(selected)?));
+        }
+        let mut last_route = route.clone();
+        last_route
+            .facts
+            .insert(self.value(definition.source_predicate), outcome_fact(last));
+        last_route.skip_control = Some(control);
+        let mut other = self.target(last_route)?;
+        for (position, (outcome, taken)) in taken_routes.into_iter().enumerate().rev() {
+            let here = if position == 0 {
+                node
+            } else {
+                self.new_fragment(Vec::new())
+            };
+            self.fragments[here.0].term = Term::Branch {
+                control,
+                outcome,
+                predicate: self.read(&route, definition.source_predicate),
+                bindings: route.bindings.clone(),
+                taken,
+                other,
+            };
+            other = Transfer {
+                target: here,
+                bindings: Vec::new(),
+            };
+        }
+        if matches!(self.fragments[node.0].term, Term::Pending) {
+            self.fragments[node.0].term = Term::Jump(other);
+        }
+        Ok(())
     }
 
     fn owns_control(&self, node: Node, consumer: OpId, predicate: ValueId) -> bool {
@@ -652,15 +808,23 @@ impl Finish<'_> {
 
     fn gamma_branch(&mut self, node: Node, route: Route, op: OpId) -> Result<(), PassError> {
         let gamma = self.prepared.gammas[&op].clone();
+        if self.recovery.control(op, Test::Arm(0)).is_none() {
+            self.lost_direct.extend(
+                self.recovery
+                    .covering_controls(op, Test::Arm(0))
+                    .iter()
+                    .copied(),
+            );
+            let edge = self.target(self.select_arm(route, op, 0)?)?;
+            self.fragments[node.0].term = Term::Jump(edge);
+            return Ok(());
+        }
         let mut arms = Vec::new();
         for index in 0..gamma.arms.len() {
             let decision = self
                 .recovery
                 .control(op, Test::Arm(index))
-                .and_then(|control| {
-                    self.edges
-                        .decided_control(control, &self.context.get_op(op))
-                });
+                .and_then(|(control, route)| self.edges.decided_control(control, route.outcome));
             if decision != Some(false) {
                 arms.push(index);
             }
@@ -688,7 +852,7 @@ impl Finish<'_> {
             } else {
                 self.new_fragment(Vec::new())
             };
-            let control = self
+            let (control, control_route) = self
                 .recovery
                 .control(op, Test::Arm(arms[position]))
                 .ok_or_else(|| {
@@ -696,6 +860,7 @@ impl Finish<'_> {
                 })?;
             self.fragments[here.0].term = Term::Branch {
                 control: control.id,
+                outcome: control_route.outcome,
                 predicate: self.read(&route, gamma.predicate),
                 bindings: route.bindings.clone(),
                 taken,
@@ -711,10 +876,24 @@ impl Finish<'_> {
 
     fn repeat_branch(&mut self, node: Node, route: Route, op: OpId) -> Result<(), PassError> {
         let theta = &self.prepared.thetas[&op];
-        let control = self.recovery.control(op, Test::Repeat).ok_or_else(|| {
-            PassError::InvalidRuleSet("recovery Theta lost its repeat request".into())
-        })?;
-        let control_id = control.id;
+        let routed = self.recovery.control(op, Test::Repeat);
+        let (control_id, outcome) = if let Some((control, route)) = routed {
+            (control.id, route.outcome)
+        } else if let Some(repeated) = self.recovery.repeated_control(op) {
+            self.lost_direct
+                .extend(repeated.source_controls.iter().copied());
+            (repeated.fallback_control, 0)
+        } else {
+            self.lost_direct.extend(
+                self.recovery
+                    .covering_controls(op, Test::Repeat)
+                    .iter()
+                    .copied(),
+            );
+            let edge = self.target(route)?;
+            self.fragments[node.0].term = Term::Jump(edge);
+            return Ok(());
+        };
         let predicate = self.read(&route, theta.predicate);
         let mut repeat = route.clone();
         let logical = self.value(theta.predicate);
@@ -737,6 +916,7 @@ impl Finish<'_> {
         let other = self.target(exit)?;
         self.fragments[node.0].term = Term::Branch {
             control: control_id,
+            outcome,
             predicate,
             bindings: route.bindings,
             taken,
@@ -745,14 +925,10 @@ impl Finish<'_> {
         Ok(())
     }
 
-    fn request(&self, id: ControlId) -> Result<&ControlRequest, PassError> {
-        self.recovery
-            .requirements()
-            .iter()
-            .find(|control| control.id == id)
-            .ok_or_else(|| {
-                PassError::InvalidRuleSet("recovery branch has no semantic control".into())
-            })
+    fn request(&self, id: ControlId) -> Result<&ControlDefinition, PassError> {
+        self.recovery.definition(id).ok_or_else(|| {
+            PassError::InvalidRuleSet("recovery branch has no semantic control".into())
+        })
     }
 }
 
@@ -816,16 +992,18 @@ impl Ssa {
 impl Finish<'_> {
     fn branch_reads(&self, term: &Term) -> Result<Vec<ValueId>, PassError> {
         let Term::Branch {
-            control, bindings, ..
+            control,
+            outcome,
+            bindings,
+            ..
         } = term
         else {
             return Ok(Vec::new());
         };
         let request = self.request(*control)?;
-        let op = self.context.get_op(request.consumer);
         Ok(self
             .edges
-            .control_reads(request, &op)
+            .control_reads(request, *outcome)
             .into_iter()
             .map(|value| Self::resolved(bindings, self.value(value)))
             .collect())
@@ -1266,6 +1444,7 @@ impl Finish<'_> {
     ) -> Result<(), PassError> {
         let Term::Branch {
             control,
+            outcome,
             predicate,
             bindings,
             taken,
@@ -1275,9 +1454,8 @@ impl Finish<'_> {
             unreachable!("called for branch terminator");
         };
         let request = self.request(*control)?;
-        let op = self.context.get_op(request.consumer);
         let mut substitutions = Vec::new();
-        for value in self.edges.control_reads(request, &op) {
+        for value in self.edges.control_reads(request, *outcome) {
             let raw = Self::resolved(bindings, self.value(value));
             substitutions.push(ValueBinding {
                 source: value,
@@ -1294,10 +1472,10 @@ impl Finish<'_> {
         let other = self.emitted_edge(ssa, source, other)?;
         self.edges.branch_control(
             request,
+            *outcome,
             predicate,
             &substitutions,
             ssa.blocks[source.0],
-            &op,
             &taken,
             &other,
             &mut || {
@@ -1333,7 +1511,14 @@ impl Finish<'_> {
                     .iter()
                     .map(|&value| ssa.value(Node(index), value))
                     .collect::<Result<Vec<_>, _>>()?;
-                self.context.set_op_operands(op, operands);
+                let renames: Vec<_> = instance
+                    .operands()
+                    .iter()
+                    .copied()
+                    .zip(operands)
+                    .filter(|(source, current)| source != current)
+                    .collect();
+                super::super::rename_within(self.context, op, &renames);
                 if let Some(region) = self.context.parent_nodes_region(op) {
                     self.context.remove_from_region(region, op);
                 }
@@ -1373,6 +1558,47 @@ impl Finish<'_> {
         let mut blocks: Vec<_> = groups.iter().map(|group| ssa.blocks[group[0].0]).collect();
         blocks.extend(extra_blocks);
         self.context.replace_region_with_blocks(region, blocks);
+        self.discard_unused_controls()?;
+        Ok(())
+    }
+
+    /// Retire control aliases replaced by routing, and their dead literals.
+    /// Other computations remain: an unused demanded load can still trap.
+    fn discard_unused_controls(&self) -> Result<(), PassError> {
+        let mut candidates = self.literals.clone();
+        for alias in &self.recovery.control_aliases {
+            let value = self.value(alias.value);
+            if self.context.has_value(value)
+                && let Some(op) = self.context.get_value(value).defining_op()
+                && self.context.has_operation(op)
+                && self.context.get_op(op).is::<crate::builtin::ops::XOrIOp>()
+            {
+                candidates.insert(op);
+            }
+        }
+        let mut pending: Vec<_> = candidates.iter().copied().collect();
+        pending.sort_by_key(|op| op.number());
+        while let Some(op) = pending.pop() {
+            if !self.context.has_operation(op) || self.context.parent_block(op).is_none() {
+                continue;
+            }
+            let instance = self.context.get_op(op);
+            if instance
+                .results()
+                .iter()
+                .any(|&value| self.context.use_count(value) != 0)
+            {
+                continue;
+            }
+            let inputs: Vec<_> = instance
+                .operands()
+                .iter()
+                .filter_map(|&value| self.context.get_value(value).defining_op())
+                .filter(|producer| candidates.contains(producer))
+                .collect();
+            self.context.erase_op(&OperationRef::new(instance))?;
+            pending.extend(inputs);
+        }
         Ok(())
     }
 }

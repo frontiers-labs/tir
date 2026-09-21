@@ -2,9 +2,9 @@
 // RUN: tir interp %s --args=11 | filecheck --check-prefix=ELEVEN %s
 // RUN: tir opt --pass destructure --verify %s | tir interp --args=7 | filecheck --check-prefix=SEVEN %s
 // RUN: tir opt --pass destructure --verify %s | tir interp --args=11 | filecheck --check-prefix=ELEVEN %s
-// RUN: tir mc --march x86_64 --filetype obj %s -o %t.x86.o
-// RUN: tir mc --march riscv64 --filetype obj %s -o %t.riscv64.o
-// RUN: tir mc --march armv8-a --filetype obj %s -o %t.armv8.o
+// RUN: tir mc --march x86_64 --filetype obj %s -o /dev/null
+// RUN: tir mc --march riscv64 --filetype obj %s -o /dev/null
+// RUN: tir mc --march armv8-a --filetype obj %s -o /dev/null
 
 // The p and q control definitions feed separate Gammas, while the first
 // Gamma's data result flows through mid into the second Gamma. Recovery must

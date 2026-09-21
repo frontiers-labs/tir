@@ -1,0 +1,26 @@
+// RUN: tir interp %s -f advance --args=5 | filecheck --check-prefix=VALUE %s
+// RUN: tir opt --pass destructure --verify %s | tir interp -f advance --args=5 | filecheck --check-prefix=VALUE %s
+// RUN: tir mc --march=x86_64 --stage=isel %s | filecheck %s
+// RUN: tir mc --march=x86_64 --filetype=obj %s -o /dev/null
+
+// Fusing the comparison leaves no body computation before the producer
+// branch. Its input must still be a loop parameter, never the first incoming
+// argument. Otherwise input 5 tests 5 forever after feedback assigns 10.
+module {
+  %f = func.func @advance(%input: !i64) -> !i64 {
+    %ten = constant {value = 10} : !i64
+    %result = scf.loop (%x = %input) {
+      %repeat = cmpi %x, %ten {predicate = "slt"} : !i1
+      -> %repeat, %ten, %x
+    }
+    func.return %result
+  }
+  module_end
+}
+
+// VALUE: i64 10
+// CHECK: x86_64.mov_imm {dst = %[[TEN:[0-9]+]]:GPR, imm = 10}
+// CHECK: asm.vbr %{{[0-9]+}} ^[[HEAD:bb[0-9]+]]
+// CHECK: ^[[HEAD]](%[[X:[0-9]+]]: !x86_64.GPR):
+// CHECK: x86_64.cmp {dst = %[[X]]:GPR, src = %[[TEN]]:GPR}
+// CHECK: asm.vbr %[[TEN]] ^[[HEAD]]

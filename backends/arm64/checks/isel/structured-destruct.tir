@@ -24,15 +24,14 @@ module {
 
 // CHECK-NOT: scf.
 // CHECK: asm.vbr %{{[0-9]+}}, %{{[0-9]+}} ^[[HDR:bb[0-9]+]]
-// CHECK: ^[[HDR]](%[[A:[0-9]+]]: !arm64.GPR, %[[I:[0-9]+]]: !arm64.GPRsp):
-// CHECK-NEXT: arm64.cmp_imm {rn = %[[I]]:GPRsp, imm = 0}
-// CHECK-NEXT: arm64.cmp_imm {rn = %[[I]]:GPRsp, imm = 0}
+// CHECK: ^[[HDR]](%[[A:[0-9]+]]: !arm64.GPR, %[[I:[0-9]+]]: !arm64.GPR):
+// CHECK-NEXT: arm64.cmp_imm {rn = %[[I]]:GPR, imm = 0}
 // CHECK-NEXT: arm64.b.gt {imm = ^[[BODY:bb[0-9]+]]}
 // CHECK-NEXT: asm.vbr ^[[EXIT:bb[0-9]+]]
 // CHECK: ^[[EXIT]]:
 // CHECK-NEXT: asm.vret %[[A]]
 // CHECK: ^[[BODY]]:
-// CHECK-NEXT: arm64.add {rd = %[[NA:[0-9]+]]:GPR, rn = %[[A]]:GPR, rm = %[[I]]:GPRsp}
-// CHECK-NEXT: arm64.sub_imm {rd = %[[NI:[0-9]+]]:GPRsp, rn = %[[I]]:GPRsp, imm = 1}
+// CHECK-NEXT: arm64.add {rd = %[[NA:[0-9]+]]:GPR, rn = %[[A]]:GPR, rm = %[[I]]:GPR}
+// CHECK-NEXT: arm64.sub_imm {rd = %[[NI:[0-9]+]]:GPRsp, rn = %[[I]]:GPR, imm = 1}
 // CHECK-NEXT: asm.vbr %[[NA]], %[[NI]] ^[[HDR]]
 // CHECK-NOT: scf.

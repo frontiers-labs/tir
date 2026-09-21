@@ -120,6 +120,22 @@ struct ThetaPlan {
     exit: SequenceId,
 }
 
+/// Identity of a recovery-only control lane. These ports never name IR values.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub(super) struct ControlPortId(u32);
+
+/// A Gamma outcome that privately supplies its owning Theta's repeat decision.
+#[derive(Clone, Debug)]
+pub(super) struct RepeatedControl {
+    pub port: ControlPortId,
+    pub theta: OpId,
+    pub gamma: OpId,
+    pub predicate_type: TypeId,
+    pub scope: RegionId,
+    pub source_controls: Vec<ControlId>,
+    pub fallback_control: ControlId,
+}
+
 #[derive(Clone, Debug)]
 struct Fragment {
     sequence: SequenceId,
@@ -149,6 +165,7 @@ struct Prepared {
     thetas: HashMap<OpId, ThetaPlan>,
     fragments: Vec<Fragment>,
     fragment_at: HashMap<Point, usize>,
+    control_at: HashMap<Point, ControlId>,
     structured: Vec<OpId>,
     pub(super) entry_facts: HashMap<SequenceId, Vec<EntryFact>>,
 }
@@ -186,6 +203,7 @@ impl Prepared {
                 thetas: HashMap::new(),
                 fragments: Vec::new(),
                 fragment_at: HashMap::new(),
+                control_at: HashMap::new(),
                 structured: Vec::new(),
                 entry_facts: HashMap::new(),
             },
@@ -193,7 +211,7 @@ impl Prepared {
         let root = prepare.normal_region(region, root_domain, end)?;
         prepare.prepared.root = root;
         prepare.propagate_entry_facts();
-        prepare.make_fragments();
+        prepare.make_fragments()?;
         Ok(prepare.prepared)
     }
 }
@@ -223,9 +241,25 @@ fn stable_group_order(
 }
 
 impl Prepare<'_> {
+    fn definition_reads(&self, domain: DemandDomainId) -> Vec<ValueId> {
+        self.recovery
+            .requirements()
+            .filter(|definition| {
+                definition.kind == ControlKind::Direct && definition.domain == domain
+            })
+            .flat_map(|definition| {
+                definition
+                    .outcomes
+                    .iter()
+                    .enumerate()
+                    .flat_map(|(outcome, _)| self.edges.control_reads(definition, outcome))
+            })
+            .collect()
+    }
+
     fn control_reads(&self, op: &OpHandle, test: Test) -> Vec<ValueId> {
         match self.recovery.control(op.id, test) {
-            Some(control) => self.edges.control_reads(control, op),
+            Some((control, route)) => self.edges.control_reads(control, route.outcome),
             None => self.edges.test_reads(op, test),
         }
     }
@@ -240,6 +274,14 @@ impl Prepare<'_> {
             read.extend(self.control_reads(&instance, Test::Repeat));
         }
         for region in instance.regions() {
+            for domain in self
+                .recovery
+                .domains()
+                .iter()
+                .filter(|domain| domain.region == region)
+            {
+                read.extend(self.definition_reads(domain.id));
+            }
             for child in self.context.get_region(region).op_ids() {
                 self.test_reads_under(child, read);
             }
@@ -359,15 +401,9 @@ impl Prepare<'_> {
         for control in self
             .recovery
             .requirements()
-            .iter()
-            .filter(|control| control.direct && control.consumer_scope == region)
+            .filter(|control| control.kind == ControlKind::Direct && control.scope == region)
         {
-            let consumer = self.context.get_op(control.consumer);
-            let predicate = match control.test {
-                Test::Arm(_) => gamma(&consumer)?.predicate(),
-                Test::Repeat => theta(&consumer)?.predicate(),
-            };
-            let Some(producer) = self.context.get_value(predicate).defining_op() else {
+            let Some(producer) = control.producer else {
                 continue;
             };
             // A fused branch retains the source predicate's identity after
@@ -376,7 +412,30 @@ impl Prepare<'_> {
             if !indices.contains_key(&producer) {
                 continue;
             }
-            if !moved.insert((producer, control.consumer)) {
+            let mut routed: Vec<_> = self
+                .recovery
+                .control_by_test
+                .iter()
+                .filter_map(|(&(consumer, test), routing)| {
+                    routing
+                        .direct
+                        .contains(&control.id)
+                        .then_some((consumer, test))
+                })
+                .collect();
+            routed.sort_by_key(|(consumer, test)| {
+                (
+                    consumer.number(),
+                    match test {
+                        Test::Arm(index) => *index,
+                        Test::Repeat => usize::MAX,
+                    },
+                )
+            });
+            let Some(&(consumer_id, _)) = routed.first() else {
+                continue;
+            };
+            if !moved.insert((producer, consumer_id)) {
                 continue;
             }
             let group = self.direct_control_group(producer, region, control.domain);
@@ -394,14 +453,14 @@ impl Prepare<'_> {
             for pair in group.windows(2) {
                 constraints.push((pair[0], pair[1], control.id));
             }
-            if let Some(&consumer) = indices.get(&control.consumer) {
+            if let Some(&consumer) = indices.get(&consumer_id) {
                 join(&mut parents, anchor, consumer);
                 constraints.push((
                     *group.last().expect("a direct control group has a producer"),
                     consumer,
                     control.id,
                 ));
-            } else if control.test == Test::Repeat {
+            } else {
                 terminals.push((anchor, control.id));
             }
             anchors.push((anchor, control.id));
@@ -530,6 +589,9 @@ impl Prepare<'_> {
         region: RegionId,
         domain: DemandDomainId,
     ) -> HashSet<OpId> {
+        if !self.context.has_operation(producer) {
+            return HashSet::new();
+        }
         let mut group = HashSet::from([producer]);
         let mut values: HashSet<ValueId> = self
             .context
@@ -622,7 +684,9 @@ impl Prepare<'_> {
     ) -> Result<SequenceId, RecoveryError> {
         let handle = self.context.get_region(region);
         let order = self.order(region)?;
-        let demanded = self.cone(region, &handle.results());
+        let mut roots = handle.results();
+        roots.extend(self.definition_reads(domain));
+        let demanded = self.cone(region, &roots);
         self.require_effects(&order, &demanded)?;
         let ops = order
             .into_iter()
@@ -675,7 +739,7 @@ impl Prepare<'_> {
         let semantic_control = (arm_regions.len() > 1)
             .then(|| self.recovery.control(op_id, Test::Arm(0)))
             .flatten()
-            .map(|control| (control.source_predicate, control.predicate_type));
+            .map(|(control, _)| (control.source_predicate, control.predicate_type));
         self.prepared.structured.push(op_id);
         for (index, region) in arm_regions.into_iter().enumerate() {
             let domain = self
@@ -742,9 +806,28 @@ impl Prepare<'_> {
         let predicate_value = theta.predicate();
         let mut tested = vec![predicate_value];
         tested.extend(self.control_reads(&op, Test::Repeat));
+        tested.extend(
+            self.definition_reads(
+                self.recovery
+                    .theta_domain(op_id, DemandDomainKind::ThetaHead)
+                    .ok_or_else(|| decline(&op, "has no head demand domain"))?,
+            ),
+        );
         let predicate = self.cone(body, &tested);
-        let continue_cone = self.cone(body, &continue_values);
-        let exit_cone = self.cone(body, &exit_values);
+        let continue_domain = self
+            .recovery
+            .theta_domain(op_id, DemandDomainKind::ThetaContinue)
+            .ok_or_else(|| decline(&op, "has no continue demand domain"))?;
+        let exit_domain = self
+            .recovery
+            .theta_domain(op_id, DemandDomainKind::ThetaExit)
+            .ok_or_else(|| decline(&op, "has no exit demand domain"))?;
+        let mut continue_roots = continue_values.clone();
+        continue_roots.extend(self.definition_reads(continue_domain));
+        let mut exit_roots = exit_values.clone();
+        exit_roots.extend(self.definition_reads(exit_domain));
+        let continue_cone = self.cone(body, &continue_roots);
+        let exit_cone = self.cone(body, &exit_roots);
         let head_ops: HashSet<OpId> = predicate
             .iter()
             .copied()
@@ -764,14 +847,6 @@ impl Prepare<'_> {
             .recovery
             .theta_domain(op_id, DemandDomainKind::ThetaHead)
             .ok_or_else(|| decline(&op, "has no head demand domain"))?;
-        let continue_domain = self
-            .recovery
-            .theta_domain(op_id, DemandDomainKind::ThetaContinue)
-            .ok_or_else(|| decline(&op, "has no continue demand domain"))?;
-        let exit_domain = self
-            .recovery
-            .theta_domain(op_id, DemandDomainKind::ThetaExit)
-            .ok_or_else(|| decline(&op, "has no exit demand domain"))?;
         // Selection can remove a use and narrow an operation's computed
         // cone. Retain its original execution domain rather than moving it
         // across the lazy repeat decision.
@@ -837,6 +912,15 @@ impl Prepare<'_> {
         self.prepare_structured(head)?;
         self.prepare_structured(continue_)?;
         self.prepare_structured(exit)?;
+        if let Some(repeated) = self.recovery.repeated_control(op_id) {
+            let head_ops = &self.prepared.sequences[head.0].ops;
+            let Some(gamma) = head_ops.iter().position(|&op| op == repeated.gamma) else {
+                return Err(RecoveryError::Placement(repeated.source_controls.clone()));
+            };
+            if gamma + 1 != head_ops.len() {
+                return Err(RecoveryError::Placement(repeated.source_controls.clone()));
+            }
+        }
         Ok(())
     }
 
@@ -879,9 +963,81 @@ impl Prepare<'_> {
         }
     }
 
-    fn make_fragments(&mut self) {
+    fn make_fragments(&mut self) -> Result<(), RecoveryError> {
         for (sequence_index, sequence) in self.prepared.sequences.iter().enumerate() {
             let sequence_id = SequenceId(sequence_index);
+            let positions: HashMap<_, _> = sequence
+                .ops
+                .iter()
+                .enumerate()
+                .map(|(index, &op)| (op, index))
+                .collect();
+            for control in self.recovery.requirements().filter(|control| {
+                control.kind == ControlKind::Direct && control.domain == sequence.domain
+            }) {
+                let live_producer = control.producer.and_then(|producer| {
+                    if !self.context.has_operation(producer) {
+                        return None;
+                    }
+                    self.direct_control_group(producer, control.scope, control.domain)
+                        .into_iter()
+                        .filter_map(|op| positions.get(&op).copied())
+                        .max()
+                });
+                let consumers: Vec<_> = self
+                    .recovery
+                    .control_by_test
+                    .iter()
+                    .filter_map(|(&(consumer, _), routing)| {
+                        routing.direct.contains(&control.id).then_some(consumer)
+                    })
+                    .collect();
+                let mut local_consumers: Vec<_> = consumers
+                    .iter()
+                    .filter_map(|consumer| positions.get(consumer).copied())
+                    .collect();
+                local_consumers.sort_unstable();
+                local_consumers.dedup();
+                if local_consumers.len() > 1 {
+                    return Err(RecoveryError::Placement(vec![control.id]));
+                }
+                let position = local_consumers
+                    .first()
+                    .copied()
+                    .unwrap_or(sequence.ops.len());
+                if live_producer.is_some_and(|producer| producer >= position) {
+                    return Err(RecoveryError::Placement(vec![control.id]));
+                }
+                for value in control
+                    .outcomes
+                    .iter()
+                    .enumerate()
+                    .flat_map(|(outcome, _)| self.edges.control_reads(control, outcome))
+                {
+                    let Some(producer) = self
+                        .context
+                        .get_value(self.edges.value(value))
+                        .defining_op()
+                    else {
+                        continue;
+                    };
+                    if positions
+                        .get(&producer)
+                        .is_some_and(|&producer| producer >= position)
+                    {
+                        return Err(RecoveryError::Placement(vec![control.id]));
+                    }
+                }
+                let point = Point {
+                    sequence: sequence_id,
+                    index: position,
+                };
+                if let Some(previous) = self.prepared.control_at.insert(point, control.id)
+                    && previous != control.id
+                {
+                    return Err(RecoveryError::Placement(vec![previous, control.id]));
+                }
+            }
             let mut start = 0;
             while start < sequence.ops.len() {
                 if is_structured(&self.context.get_op(sequence.ops[start])) {
@@ -891,6 +1047,10 @@ impl Prepare<'_> {
                 let mut end = start + 1;
                 while end < sequence.ops.len()
                     && !is_structured(&self.context.get_op(sequence.ops[end]))
+                    && !self.prepared.control_at.contains_key(&Point {
+                        sequence: sequence_id,
+                        index: end,
+                    })
                 {
                     end += 1;
                 }
@@ -910,6 +1070,7 @@ impl Prepare<'_> {
                 start = end;
             }
         }
+        Ok(())
     }
 }
 mod finish;
@@ -931,22 +1092,45 @@ pub struct ValueBinding {
     pub current: ValueId,
 }
 
-/// A selector that instruction selection must preserve or implement.
+/// One outcome in a control definition's finite partition.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ControlOutcome {
+    Exact(u64),
+    DefaultFrom(usize),
+}
+
+/// Where a control decision is defined.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ControlKind {
+    Direct,
+    LocalConversion { consumer: OpId, test: Test },
+}
+
+/// A producer-owned selector definition that selection must implement.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ControlRequest {
+pub struct ControlDefinition {
     pub id: ControlId,
-    pub consumer: OpId,
-    pub test: Test,
     pub source_predicate: ValueId,
     pub predicate_type: TypeId,
-    pub source_producer: Option<OpId>,
-    pub origin_scope: RegionId,
-    pub consumer_scope: RegionId,
+    pub producer: Option<OpId>,
+    pub scope: RegionId,
     pub domain: DemandDomainId,
-    /// Whether the predicate producer satisfies the conservative PCF check.
-    /// False requests must retain ordinary selector data until their local
-    /// conversion at the consumer.
-    pub direct: bool,
+    pub kind: ControlKind,
+    pub outcomes: Vec<ControlOutcome>,
+}
+
+/// A structural consumer's route from one definition outcome.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ControlRoute {
+    pub control: ControlId,
+    pub outcome: usize,
+}
+
+#[derive(Clone, Debug)]
+struct ControlRouting {
+    predicate: ValueId,
+    direct: Vec<ControlId>,
+    local: ControlId,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -979,21 +1163,80 @@ pub(super) struct ControlAlias {
 pub struct RecoveryPlan {
     root: RegionId,
     external_values: HashSet<ValueId>,
-    controls: Vec<ControlRequest>,
-    control_by_test: HashMap<(OpId, Test), usize>,
+    controls: Vec<ControlDefinition>,
+    active_controls: HashSet<ControlId>,
+    control_by_test: HashMap<(OpId, Test), ControlRouting>,
+    repeated_controls: HashMap<OpId, RepeatedControl>,
     domains: Vec<DemandDomain>,
     op_domains: HashMap<OpId, DemandDomainId>,
     region_domains: HashMap<RegionId, DemandDomainId>,
     theta_domains: HashMap<(OpId, DemandDomainKind), DemandDomainId>,
     constants: HashMap<ValueId, u64>,
     boundaries: HashMap<OpId, BoundarySnapshot>,
-    control_values: HashSet<ValueId>,
     control_only_values: HashSet<ValueId>,
+    control_roots: HashMap<ValueId, Vec<ValueId>>,
     pub(super) control_types: HashMap<ValueId, TypeId>,
     pub(super) control_aliases: Vec<ControlAlias>,
 }
 
 impl RecoveryPlan {
+    fn recompute_control_only(&mut self) {
+        let mut materialized: HashSet<_> = self
+            .requirements()
+            .filter_map(|control| {
+                matches!(control.kind, ControlKind::LocalConversion { .. })
+                    .then_some(control.source_predicate)
+            })
+            .collect();
+        loop {
+            let mut changed = false;
+            for alias in &self.control_aliases {
+                if materialized.contains(&alias.source) || materialized.contains(&alias.value) {
+                    changed |= materialized.insert(alias.source);
+                    changed |= materialized.insert(alias.value);
+                }
+            }
+            for (&role, roots) in &self.control_roots {
+                if materialized.contains(&role)
+                    || roots.iter().any(|root| materialized.contains(root))
+                {
+                    changed |= materialized.insert(role);
+                    for &root in roots {
+                        changed |= materialized.insert(root);
+                    }
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        self.control_only_values
+            .retain(|value| !materialized.contains(value));
+    }
+
+    fn normalize_control_materialization(&mut self) {
+        loop {
+            self.recompute_control_only();
+            let demoted: Vec<_> = self
+                .requirements()
+                .filter(|control| control.kind == ControlKind::Direct)
+                .filter(|control| {
+                    !self.control_only(control.source_predicate)
+                        || self.control_roots.iter().any(|(&role, roots)| {
+                            roots.contains(&control.source_predicate) && !self.control_only(role)
+                        })
+                })
+                .map(|control| control.id)
+                .collect();
+            if demoted.is_empty() {
+                break;
+            }
+            for control in demoted {
+                self.demote(control);
+            }
+        }
+    }
+
     /// Normalize the structured semantic region into private control requests
     /// and lazy-Theta execution domains. This does not mutate IR.
     pub fn analyze(context: &Context, root: RegionId) -> Result<Self, PassError> {
@@ -1023,9 +1266,9 @@ impl RecoveryPlan {
             .into_iter()
             .filter(|value| !local_values.contains(value))
             .collect();
-        let (control_values, control_only_values, control_aliases) =
-            discover_control_roles(context, root);
-        let control_types = control_values
+        let roles = discover_control_roles(context, root);
+        let control_types = roles
+            .values
             .iter()
             .map(|&value| (value, context.get_value(value).ty()))
             .collect();
@@ -1035,54 +1278,91 @@ impl RecoveryPlan {
                 root,
                 external_values,
                 controls: Vec::new(),
+                active_controls: HashSet::new(),
                 control_by_test: HashMap::new(),
+                repeated_controls: HashMap::new(),
                 domains: Vec::new(),
                 op_domains: HashMap::new(),
                 region_domains: HashMap::new(),
                 theta_domains: HashMap::new(),
                 constants: HashMap::new(),
                 boundaries: HashMap::new(),
-                control_values,
-                control_only_values,
+                control_only_values: roles.control_only,
+                control_roots: roles.roots,
                 control_types,
-                control_aliases,
+                control_aliases: roles.aliases,
             },
         };
         let root_domain = builder.domain(root, DemandDomainKind::Region, None);
-        builder.walk_region(root, root_domain)?;
+        builder.assign_domains(root, root_domain)?;
+        builder.discover_repeated_controls(root);
+        builder.add_controls(root)?;
+        builder.finish_repeated_controls();
+        builder.plan.normalize_control_materialization();
         builder.verify()?;
         Ok(builder.plan)
     }
 
-    pub fn requirements(&self) -> &[ControlRequest] {
-        &self.controls
+    pub fn requirements(&self) -> impl Iterator<Item = &ControlDefinition> {
+        self.controls
+            .iter()
+            .filter(|control| self.active_controls.contains(&control.id))
+    }
+
+    pub fn definition(&self, id: ControlId) -> Option<&ControlDefinition> {
+        self.controls
+            .get(id.0 as usize)
+            .filter(|control| control.id == id)
+    }
+
+    pub fn route(&self, consumer: OpId, test: Test) -> Option<ControlRoute> {
+        let routing = self.control_by_test.get(&(consumer, test))?;
+        self.active_controls
+            .contains(&routing.local)
+            .then_some(ControlRoute {
+                control: routing.local,
+                outcome: 0,
+            })
     }
 
     /// Permanently turn one direct control definition into a consumer-local
     /// data test. Returns false when the request does not exist or was already
     /// demoted, so a retry loop can prove that each iteration makes progress.
     pub fn demote(&mut self, id: ControlId) -> bool {
-        let Some(index) = self.controls.iter().position(|control| control.id == id) else {
+        let Some(control) = self.definition(id) else {
             return false;
         };
-        if !self.controls[index].direct {
+        if control.kind != ControlKind::Direct || !self.active_controls.remove(&id) {
             return false;
         }
-        let consumer = self.controls[index].consumer;
-        let test = self.controls[index].test;
-        let local = match test {
-            Test::Arm(_) => self.op_domains.get(&consumer).copied(),
-            Test::Repeat => self
-                .theta_domains
-                .get(&(consumer, DemandDomainKind::ThetaHead))
-                .copied(),
-        };
-        let Some(domain) = local else {
-            return false;
-        };
-        let control = &mut self.controls[index];
-        control.direct = false;
-        control.domain = domain;
+        let mut group = HashSet::from([id]);
+        let mut locals = HashSet::new();
+        loop {
+            let before = group.len();
+            for routing in self.control_by_test.values() {
+                if routing.direct.iter().any(|direct| group.contains(direct)) {
+                    group.extend(routing.direct.iter().copied());
+                    locals.insert(routing.local);
+                }
+            }
+            if group.len() == before {
+                break;
+            }
+        }
+        for &direct in &group {
+            self.active_controls.remove(&direct);
+        }
+        self.active_controls.extend(locals);
+        for repeated in self.repeated_controls.values() {
+            if repeated
+                .source_controls
+                .iter()
+                .any(|control| group.contains(control))
+            {
+                self.active_controls.insert(repeated.fallback_control);
+            }
+        }
+        self.recompute_control_only();
         true
     }
 
@@ -1120,10 +1400,29 @@ impl RecoveryPlan {
         self.theta_domains.get(&(owner, kind)).copied()
     }
 
-    pub(crate) fn control(&self, consumer: OpId, test: Test) -> Option<&ControlRequest> {
+    pub(crate) fn control(
+        &self,
+        consumer: OpId,
+        test: Test,
+    ) -> Option<(&ControlDefinition, ControlRoute)> {
+        let route = self.route(consumer, test)?;
+        Some((self.definition(route.control)?, route))
+    }
+
+    pub(crate) fn covering_controls(&self, consumer: OpId, test: Test) -> &[ControlId] {
         self.control_by_test
             .get(&(consumer, test))
-            .map(|&index| &self.controls[index])
+            .map_or(&[], |routing| routing.direct.as_slice())
+    }
+
+    pub(super) fn repeated_control(&self, theta: OpId) -> Option<&RepeatedControl> {
+        let repeated = self.repeated_controls.get(&theta)?;
+        (!repeated.source_controls.is_empty()
+            && repeated
+                .source_controls
+                .iter()
+                .all(|control| self.active_controls.contains(control)))
+        .then_some(repeated)
     }
 
     pub(crate) fn check_live(
@@ -1139,20 +1438,20 @@ impl RecoveryPlan {
                 region.number()
             )));
         }
-        for control in &self.controls {
-            if !context.has_operation(control.consumer) {
+        for (&(consumer, test), routing) in &self.control_by_test {
+            if !context.has_operation(consumer) {
                 return Err(PassError::InvalidRuleSet(format!(
                     "recovery control {:?} lost structured consumer {}",
-                    control.id,
-                    control.consumer.number()
+                    routing.local,
+                    consumer.number()
                 )));
             }
-            let op = context.get_op(control.consumer);
-            let current = match control.test {
+            let op = context.get_op(consumer);
+            let current = match test {
                 Test::Repeat => theta(&op)?.predicate(),
                 Test::Arm(_) => gamma(&op)?.predicate(),
             };
-            let mapped = edges.value(control.source_predicate);
+            let mapped = edges.value(routing.predicate);
             if current != mapped || !context.has_value(mapped) {
                 return Err(decline(&op, "lost its recovery predicate"));
             }
@@ -1253,10 +1552,14 @@ impl RecoveryPlan {
 /// by CFG restructuring. These are roles in the private recovery graph. An
 /// `i1` can still have an ordinary data use, which `direct_control` checks
 /// separately before granting predicate-definition ownership.
-fn discover_control_roles(
-    context: &Context,
-    root: RegionId,
-) -> (HashSet<ValueId>, HashSet<ValueId>, Vec<ControlAlias>) {
+struct ControlRoles {
+    values: HashSet<ValueId>,
+    control_only: HashSet<ValueId>,
+    aliases: Vec<ControlAlias>,
+    roots: HashMap<ValueId, Vec<ValueId>>,
+}
+
+fn discover_control_roles(context: &Context, root: RegionId) -> ControlRoles {
     let mut seeds = Vec::new();
     let mut predecessors: HashMap<ValueId, Vec<ValueId>> = HashMap::new();
     let mut aliases = Vec::new();
@@ -1317,12 +1620,46 @@ fn discover_control_roles(
         pending.extend(predecessors.get(&value).into_iter().flatten().copied());
     }
     aliases.retain(|alias| roles.contains(&alias.value));
+    fn roots(
+        value: ValueId,
+        predecessors: &HashMap<ValueId, Vec<ValueId>>,
+        seen: &mut HashSet<ValueId>,
+        found: &mut Vec<ValueId>,
+    ) {
+        if !seen.insert(value) {
+            return;
+        }
+        match predecessors.get(&value) {
+            Some(inputs) if !inputs.is_empty() => {
+                for &input in inputs {
+                    roots(input, predecessors, seen, found);
+                }
+            }
+            _ => found.push(value),
+        }
+    }
+    let control_roots = roles
+        .iter()
+        .copied()
+        .map(|value| {
+            let mut found = Vec::new();
+            roots(value, &predecessors, &mut HashSet::new(), &mut found);
+            found.sort();
+            found.dedup();
+            (value, found)
+        })
+        .collect();
     let control_only = roles
         .iter()
         .copied()
         .filter(|&value| control_value_has_no_data_use(context, root, value, &roles, &aliases))
         .collect();
-    (roles, control_only, aliases)
+    ControlRoles {
+        values: roles,
+        control_only,
+        aliases,
+        roots: control_roots,
+    }
 }
 
 fn control_value_has_no_data_use(
@@ -1432,7 +1769,123 @@ struct PlanBuilder<'a> {
 }
 
 impl PlanBuilder<'_> {
+    fn discover_repeated_controls(&mut self, region: RegionId) {
+        for op_id in self.context.get_region(region).op_ids() {
+            let op = self.context.get_op(op_id);
+            if let Some(gamma) = op.clone().as_interface::<dyn Gamma>() {
+                for arm in gamma.arms() {
+                    self.discover_repeated_controls(arm);
+                }
+                continue;
+            }
+            let Some(loop_) = op.clone().as_interface::<dyn Theta>() else {
+                continue;
+            };
+            let body = loop_.body();
+            let predicate = loop_.predicate();
+            let binding = loop_.binding();
+            let results = self.context.get_region(body).results();
+            let continue_values = &results[binding.continue_.clone()];
+            let exit_values = &results[binding.exit.clone()];
+            let continue_cone = self.cone(body, continue_values);
+            let exit_cone = self.cone(body, exit_values);
+            let head_domain = self
+                .plan
+                .theta_domains
+                .get(&(op_id, DemandDomainKind::ThetaHead))
+                .copied();
+            let candidates: Vec<_> = self
+                .context
+                .get_region(body)
+                .op_ids()
+                .into_iter()
+                .filter(|&candidate| {
+                    let candidate_op = self.context.get_op(candidate);
+                    let Some(gate) = candidate_op.clone().as_interface::<dyn Gamma>() else {
+                        return false;
+                    };
+                    gate.arms().len() == 2
+                        && gate.predicate() == predicate
+                        && candidate_op.results().as_slice() == continue_values
+                        && candidate_op.results().as_slice() == exit_values
+                        && continue_cone.contains(&candidate)
+                        && exit_cone.contains(&candidate)
+                        && self.plan.op_domains.get(&candidate).copied() == head_domain
+                })
+                .collect();
+            if let [gamma] = candidates.as_slice()
+                && let Some(producer) = self.context.get_value(predicate).defining_op()
+                && self.context.get_op(producer).results().as_slice() == [predicate]
+                && self.control_socket_count(predicate) == 2
+            {
+                let gamma_uses = self
+                    .context
+                    .uses_of(predicate)
+                    .into_iter()
+                    .filter(|r#use| r#use.op == *gamma)
+                    .count();
+                let repeat_sockets = results.iter().filter(|&&value| value == predicate).count();
+                if gamma_uses == 1 && repeat_sockets == 1 {
+                    let port = ControlPortId(self.plan.repeated_controls.len() as u32);
+                    self.plan.repeated_controls.insert(
+                        op_id,
+                        RepeatedControl {
+                            port,
+                            theta: op_id,
+                            gamma: *gamma,
+                            predicate_type: self.context.get_value(predicate).ty(),
+                            scope: body,
+                            source_controls: Vec::new(),
+                            fallback_control: ControlId(u32::MAX),
+                        },
+                    );
+                }
+            }
+            self.discover_repeated_controls(body);
+        }
+    }
+
+    fn finish_repeated_controls(&mut self) {
+        for repeated in self.plan.repeated_controls.values_mut() {
+            let Some(gamma) = self
+                .plan
+                .control_by_test
+                .get(&(repeated.gamma, Test::Arm(0)))
+            else {
+                continue;
+            };
+            let Some(theta) = self
+                .plan
+                .control_by_test
+                .get(&(repeated.theta, Test::Repeat))
+            else {
+                continue;
+            };
+            repeated.source_controls.clone_from(&gamma.direct);
+            repeated.fallback_control = theta.local;
+            if !repeated.source_controls.is_empty() {
+                self.plan.active_controls.remove(&theta.local);
+            }
+        }
+    }
+
     fn verify(&self) -> Result<(), PassError> {
+        for repeated in self.plan.repeated_controls.values() {
+            let theta_op = self.context.get_op(repeated.theta);
+            let loop_ = theta(&theta_op)?;
+            let gamma_op = self.context.get_op(repeated.gamma);
+            let gate = gamma(&gamma_op)?;
+            if loop_.body() != repeated.scope
+                || self.context.region_of_op(repeated.gamma) != Some(repeated.scope)
+                || loop_.predicate() != gate.predicate()
+                || self.context.get_value(loop_.predicate()).ty() != repeated.predicate_type
+            {
+                return Err(decline(
+                    &theta_op,
+                    "has an invalid private repeated-control lane",
+                ));
+            }
+        }
         for (&op, &domain) in &self.plan.op_domains {
             let descriptor = self
                 .plan
@@ -1453,47 +1906,39 @@ impl PlanBuilder<'_> {
                 )));
             }
         }
-        let mut direct_owner: HashMap<OpId, OpId> = HashMap::new();
-        for control in &self.plan.controls {
-            let op = self.context.get_op(control.consumer);
-            let predicate = match control.test {
+        for (&(consumer, test), routing) in &self.plan.control_by_test {
+            let op = self.context.get_op(consumer);
+            let _ = match test {
                 Test::Arm(_) => gamma(&op)?.predicate(),
                 Test::Repeat => theta(&op)?.predicate(),
             };
-            if predicate != control.source_predicate {
-                return Err(decline(&op, "changed predicate during recovery analysis"));
-            }
-            if self.context.get_value(predicate).ty() != control.predicate_type {
-                return Err(decline(&op, "has an inconsistent predicate type"));
-            }
-            if !control.direct {
-                continue;
-            }
-            let producer = control
-                .source_producer
-                .ok_or_else(|| decline(&op, "marks an argument control as a direct definition"))?;
-            if self.plan.domain_of(producer) != Some(control.domain) {
-                return Err(decline(
-                    &op,
-                    "separates a direct control from its demand domain",
-                ));
-            }
-            if !self.direct_control(
-                producer,
-                predicate,
-                control.consumer,
-                control.consumer_scope,
-                control.test,
-            ) {
-                return Err(decline(&op, "does not satisfy predicate continuation form"));
-            }
-            if let Some(previous) = direct_owner.insert(producer, control.consumer)
-                && previous != control.consumer
-            {
-                return Err(decline(
-                    &op,
-                    "shares one direct predicate definition across consumers",
-                ));
+            for &id in &routing.direct {
+                let control = self.plan.definition(id).ok_or_else(|| {
+                    PassError::InvalidRuleSet("recovery route names a missing definition".into())
+                })?;
+                if self.context.get_value(control.source_predicate).ty() != control.predicate_type {
+                    return Err(decline(&op, "has an inconsistent predicate type"));
+                }
+                let producer = control.producer.ok_or_else(|| {
+                    decline(&op, "marks an argument control as a direct definition")
+                })?;
+                if self.plan.domain_of(producer) != Some(control.domain) {
+                    return Err(decline(
+                        &op,
+                        "separates a direct control from its demand domain",
+                    ));
+                }
+                if !self.direct_control(
+                    producer,
+                    control.source_predicate,
+                    consumer,
+                    self.context
+                        .region_of_op(consumer)
+                        .ok_or_else(|| decline(&op, "has no scope"))?,
+                    test,
+                ) {
+                    return Err(decline(&op, "does not satisfy predicate continuation form"));
+                }
             }
         }
         Ok(())
@@ -1521,7 +1966,11 @@ impl PlanBuilder<'_> {
         id
     }
 
-    fn walk_region(&mut self, region: RegionId, fallback: DemandDomainId) -> Result<(), PassError> {
+    fn assign_domains(
+        &mut self,
+        region: RegionId,
+        fallback: DemandDomainId,
+    ) -> Result<(), PassError> {
         let ops = self.context.get_region(region).op_ids();
         for &op in &ops {
             self.plan.op_domains.entry(op).or_insert(fallback);
@@ -1542,10 +1991,9 @@ impl PlanBuilder<'_> {
                             .collect(),
                     },
                 );
-                self.add_gamma_controls(region, &op, gate.as_ref())?;
                 for arm in gate.arms() {
                     let domain = self.domain(arm, DemandDomainKind::Region, None);
-                    self.walk_region(arm, domain)?;
+                    self.assign_domains(arm, domain)?;
                 }
                 continue;
             }
@@ -1569,8 +2017,23 @@ impl PlanBuilder<'_> {
             let continue_ = self.domain(body, DemandDomainKind::ThetaContinue, Some(op_id));
             let exit = self.domain(body, DemandDomainKind::ThetaExit, Some(op_id));
             self.assign_theta_domains(loop_.as_ref(), head, continue_, exit);
-            self.add_control(body, &op, Test::Repeat, loop_.predicate())?;
-            self.walk_region(body, head)?;
+            self.assign_domains(body, head)?;
+        }
+        Ok(())
+    }
+
+    fn add_controls(&mut self, region: RegionId) -> Result<(), PassError> {
+        for op_id in self.context.get_region(region).op_ids() {
+            let op = self.context.get_op(op_id);
+            if let Some(gate) = op.clone().as_interface::<dyn Gamma>() {
+                self.add_gamma_controls(region, &op, gate.as_ref())?;
+                for arm in gate.arms() {
+                    self.add_controls(arm)?;
+                }
+            } else if let Some(loop_) = op.clone().as_interface::<dyn Theta>() {
+                self.add_control(loop_.body(), &op, Test::Repeat, loop_.predicate())?;
+                self.add_controls(loop_.body())?;
+            }
         }
         Ok(())
     }
@@ -1609,13 +2072,15 @@ impl PlanBuilder<'_> {
         test: Test,
         predicate: ValueId,
     ) -> Result<(), PassError> {
-        let producer = self.context.get_value(predicate).defining_op();
-        let origin_scope = producer
-            .and_then(|op| self.context.region_of_op(op))
-            .unwrap_or(consumer_scope);
-        let direct = producer.is_some_and(|producer| {
-            self.direct_control(producer, predicate, consumer.id, consumer_scope, test)
-        });
+        let nonconstant_roots: Vec<_> = self
+            .plan
+            .control_roots
+            .get(&predicate)
+            .into_iter()
+            .flatten()
+            .copied()
+            .filter(|root| !self.plan.constants.contains_key(root))
+            .collect();
         let local_domain = match test {
             Test::Arm(_) => self.plan.op_domains.get(&consumer.id).copied(),
             Test::Repeat => self
@@ -1624,28 +2089,112 @@ impl PlanBuilder<'_> {
                 .get(&(consumer.id, DemandDomainKind::ThetaHead))
                 .copied(),
         };
-        let domain = if direct {
-            producer.and_then(|op| self.plan.op_domains.get(&op).copied())
-        } else {
-            local_domain
-        }
-        .ok_or_else(|| decline(consumer, "has no recovery demand domain"))?;
-        let request = ControlRequest {
-            id: ControlId(self.plan.controls.len() as u32),
-            consumer: consumer.id,
-            test,
+        let local_domain =
+            local_domain.ok_or_else(|| decline(consumer, "has no recovery demand domain"))?;
+        let desired = match test {
+            Test::Arm(index) => ControlOutcome::Exact(index as u64),
+            Test::Repeat => ControlOutcome::DefaultFrom(1),
+        };
+        let complement = match test {
+            Test::Arm(index) => ControlOutcome::DefaultFrom(index + 1),
+            Test::Repeat => ControlOutcome::Exact(0),
+        };
+        let local_id = ControlId(self.plan.controls.len() as u32);
+        self.plan.controls.push(ControlDefinition {
+            id: local_id,
             source_predicate: predicate,
             predicate_type: self.context.get_value(predicate).ty(),
-            source_producer: producer,
-            origin_scope,
-            consumer_scope,
-            domain,
-            direct,
-        };
-        self.plan
-            .control_by_test
-            .insert((consumer.id, test), self.plan.controls.len());
-        self.plan.controls.push(request);
+            producer: None,
+            scope: consumer_scope,
+            domain: local_domain,
+            kind: ControlKind::LocalConversion {
+                consumer: consumer.id,
+                test,
+            },
+            outcomes: vec![desired, complement],
+        });
+        let mut direct_ids = Vec::new();
+        for source_predicate in nonconstant_roots {
+            let Some(producer) = self.context.get_value(source_predicate).defining_op() else {
+                direct_ids.clear();
+                break;
+            };
+            if !self.direct_control(
+                producer,
+                source_predicate,
+                consumer.id,
+                consumer_scope,
+                test,
+            ) {
+                direct_ids.clear();
+                break;
+            }
+            let Some(domain) = self.plan.op_domains.get(&producer).copied() else {
+                direct_ids.clear();
+                break;
+            };
+            let origin_scope = self
+                .context
+                .region_of_op(producer)
+                .unwrap_or(consumer_scope);
+            let direct_id = self
+                .plan
+                .controls
+                .iter()
+                .find(|definition| {
+                    definition.kind == ControlKind::Direct
+                        && definition.producer == Some(producer)
+                        && definition.source_predicate == source_predicate
+                        && definition.domain == domain
+                })
+                .map(|definition| definition.id)
+                .unwrap_or_else(|| {
+                    let id = ControlId(self.plan.controls.len() as u32);
+                    let outcomes = match test {
+                        Test::Arm(_) => {
+                            let arms = gamma(consumer)
+                                .expect("a Gamma control has a Gamma consumer")
+                                .arms()
+                                .len();
+                            let mut outcomes = (0..arms.saturating_sub(1))
+                                .map(|index| ControlOutcome::Exact(index as u64))
+                                .collect::<Vec<_>>();
+                            outcomes.push(ControlOutcome::DefaultFrom(arms.saturating_sub(1)));
+                            outcomes
+                        }
+                        Test::Repeat => {
+                            vec![ControlOutcome::DefaultFrom(1), ControlOutcome::Exact(0)]
+                        }
+                    };
+                    self.plan.controls.push(ControlDefinition {
+                        id,
+                        source_predicate,
+                        predicate_type: self.context.get_value(source_predicate).ty(),
+                        producer: Some(producer),
+                        scope: origin_scope,
+                        domain,
+                        kind: ControlKind::Direct,
+                        outcomes,
+                    });
+                    id
+                });
+            direct_ids.push(direct_id);
+        }
+        direct_ids.sort();
+        direct_ids.dedup();
+        if direct_ids.is_empty() {
+            self.plan.active_controls.insert(local_id);
+        } else {
+            self.plan.active_controls.extend(direct_ids.iter().copied());
+        }
+        self.plan.control_by_test.insert(
+            (consumer.id, test),
+            ControlRouting {
+                predicate,
+                direct: direct_ids.clone(),
+                local: local_id,
+            },
+        );
         Ok(())
     }
 
@@ -1654,51 +2203,61 @@ impl PlanBuilder<'_> {
         producer: OpId,
         predicate: ValueId,
         consumer: OpId,
-        consumer_scope: RegionId,
+        _consumer_scope: RegionId,
         test: Test,
     ) -> bool {
-        if self.context.region_of_op(producer) != Some(consumer_scope) {
-            return false;
-        }
-        if !self.plan.control_only(predicate) {
+        if self
+            .plan
+            .repeated_controls
+            .get(&consumer)
+            .is_some_and(|repeated| test == Test::Repeat && repeated.theta == consumer)
+        {
             return false;
         }
         let op = self.context.get_op(producer);
-        match test {
-            Test::Arm(_) => {
-                let boundary = self.context.get_region(consumer_scope).results();
-                self.context
-                    .get_op(consumer)
-                    .operands()
-                    .iter()
-                    .filter(|&&operand| operand == predicate)
-                    .count()
-                    == 1
-                    && op.results().iter().all(|&result| {
-                        let uses = self.context.users_of(result);
-                        !uses.is_empty()
-                            && uses.iter().all(|&user| {
-                                user == consumer || self.is_control_alias_use(result, user)
-                            })
-                            && (!boundary.contains(&result)
-                                || self.plan.control_values.contains(&result))
-                    })
-            }
-            Test::Repeat => {
-                let boundary = self.context.get_region(consumer_scope).results();
-                op.results().iter().all(|&result| {
-                    self.context.use_count(result) == 0 && boundary.contains(&result)
-                }) && boundary.iter().filter(|&&value| value == predicate).count() == 1
-            }
-        }
+        op.results().as_slice() == [predicate]
+            && self.plan.control_only(predicate)
+            && self
+                .plan
+                .control_roots
+                .iter()
+                .filter(|(_, roots)| roots.contains(&predicate))
+                .all(|(&role, _)| {
+                    let normalized_repeat = self.plan.repeated_controls.values().any(|repeated| {
+                        repeated.gamma == consumer
+                            && matches!(test, Test::Arm(_))
+                            && role == predicate
+                    });
+                    let scope = self.context.region_of_port(role).or_else(|| {
+                        self.context
+                            .get_value(role)
+                            .defining_op()
+                            .and_then(|producer| self.context.region_of_op(producer))
+                    });
+                    self.control_socket_count(role) == 1 + usize::from(normalized_repeat)
+                        // An implicit capture is a data boundary. Testing it
+                        // in the inner region starts with a local conversion;
+                        // it is not a producer continuation across that scope.
+                        && self.context.uses_of(role).iter().all(|use_| {
+                            self.context.region_of_op(use_.op) == scope
+                        })
+                })
     }
 
-    fn is_control_alias_use(&self, input: ValueId, user: OpId) -> bool {
-        self.plan.control_aliases.iter().any(|alias| {
-            alias.source == input
-                && self.context.get_value(alias.value).defining_op() == Some(user)
-                && self.plan.control_only(alias.value)
-        })
+    fn control_socket_count(&self, value: ValueId) -> usize {
+        let uses = self.context.uses_of(value).len();
+        let boundaries = std::iter::once(self.plan.root)
+            .chain(self.context.nested_regions(self.plan.root))
+            .map(|region| {
+                self.context
+                    .get_region(region)
+                    .results()
+                    .iter()
+                    .filter(|&&result| result == value)
+                    .count()
+            })
+            .sum::<usize>();
+        uses + boundaries
     }
 
     fn assign_theta_domains(

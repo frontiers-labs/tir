@@ -17,7 +17,7 @@ use super::builder::AuxSlot;
 use super::emit::{AuxEmit, GuardBranch};
 use super::{BranchEmitters, Rule, RuleKind};
 use crate::passes::destructure::{
-    ControlId, ControlRequest, DemandDomainId, Edge, Edges, RecoveryPlan, Test, ValueBinding,
+    ControlDefinition, ControlId, DemandDomainId, Edge, Edges, RecoveryPlan, Test, ValueBinding,
 };
 
 pub(crate) struct SelectedControl {
@@ -29,21 +29,38 @@ pub(crate) struct SelectedControl {
 pub(crate) fn bind_controls(
     recovery: &RecoveryPlan,
     selected: &HashMap<(OpId, AuxSlot), AuxEmit>,
-) -> Result<HashMap<ControlId, SelectedControl>, PassError> {
-    recovery
-        .requirements()
+) -> Result<HashMap<(ControlId, usize), SelectedControl>, PassError> {
+    let controls: HashMap<_, _> = selected
         .iter()
-        .map(|control| {
-            let (emit, taken_when) = selected_test(selected, control.consumer, control.test)?;
-            Ok((
-                control.id,
+        .filter_map(|((_, slot), emit)| {
+            let AuxSlot::Control {
+                id,
+                outcome,
+                inverted,
+            } = *slot
+            else {
+                return None;
+            };
+            Some((
+                (id, outcome),
                 SelectedControl {
                     emit: emit.clone(),
-                    taken_when,
+                    taken_when: !inverted,
                 },
             ))
         })
-        .collect()
+        .collect();
+    for definition in recovery.requirements() {
+        for outcome in 0..definition.outcomes.len().saturating_sub(1) {
+            if !controls.contains_key(&(definition.id, outcome)) {
+                return Err(PassError::InvalidRuleSet(format!(
+                    "control {:?} outcome {outcome} was not selected",
+                    definition.id
+                )));
+            }
+        }
+    }
+    Ok(controls)
 }
 
 fn selected_test(
@@ -84,7 +101,7 @@ pub(crate) struct MachineEdges<'a> {
     /// What selection left each IR value as.
     pub(crate) emitted: &'a HashMap<ValueId, ValueId>,
     pub(crate) region_values: &'a HashMap<(OpId, AuxSlot), AuxEmit>,
-    pub(crate) controls: &'a HashMap<ControlId, SelectedControl>,
+    pub(crate) controls: &'a HashMap<(ControlId, usize), SelectedControl>,
     pub(crate) domains: &'a HashMap<OpId, DemandDomainId>,
     pub(crate) literals: &'a HashSet<OpId>,
     /// The operations each instruction runs after besides those defining its
@@ -214,16 +231,16 @@ impl Edges for MachineEdges<'_> {
 
     fn branch_control(
         &self,
-        control: &ControlRequest,
+        control: &ControlDefinition,
+        outcome: usize,
         _predicate: ValueId,
         bindings: &[ValueBinding],
         block: BlockId,
-        _op: &OpHandle,
         taken: &Edge,
         fallthrough: &Edge,
         mint: &mut dyn FnMut() -> BlockId,
     ) -> Result<(), PassError> {
-        let selected = self.controls.get(&control.id).ok_or_else(|| {
+        let selected = self.controls.get(&(control.id, outcome)).ok_or_else(|| {
             PassError::InvalidRuleSet(format!("control {:?} has no selected branch", control.id))
         })?;
         let substitutions: HashMap<ValueId, ValueId> = bindings
@@ -245,14 +262,14 @@ impl Edges for MachineEdges<'_> {
         self.emit_selected(&selected, block, taken, fallthrough, mint)
     }
 
-    fn control_reads(&self, control: &ControlRequest, _op: &OpHandle) -> Vec<ValueId> {
+    fn control_reads(&self, control: &ControlDefinition, outcome: usize) -> Vec<ValueId> {
         self.controls
-            .get(&control.id)
+            .get(&(control.id, outcome))
             .map_or_else(Vec::new, |selected| reads(&selected.emit))
     }
 
-    fn decided_control(&self, control: &ControlRequest, _op: &OpHandle) -> Option<bool> {
-        let selected = self.controls.get(&control.id)?;
+    fn decided_control(&self, control: &ControlDefinition, outcome: usize) -> Option<bool> {
+        let selected = self.controls.get(&(control.id, outcome))?;
         match &selected.emit {
             AuxEmit::Decided(holds) => Some(*holds == selected.taken_when),
             _ => None,

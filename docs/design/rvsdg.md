@@ -191,12 +191,14 @@ control-flow recovery. A private recovery plan records predicate definitions,
 region bindings, and the computations each path demands before instruction
 selection replaces the source operations.
 
-Recovery first prepares computation fragments and unresolved continuations.
-It then follows each predicate outcome through conditional and loop
-boundaries to the next computation. A structural operation need not become a
-branch or a merge block. For example, when a conditional produces `false` on
-one arm as the repeat predicate of a loop, that arm can reach the loop exit
-directly, without first storing and testing the boolean.
+Recovery first prepares computation fragments, producer-owned control
+definitions, and unresolved continuations. Each definition has a finite set of
+exact or default outcomes. A separate routing map records which outcome a
+conditional or loop consumes. FINISH starts at the definition, selects an
+outcome, and follows its fact through region bindings to the next computation.
+A structural operation need not become a branch or a merge block. For example,
+when a conditional produces `false` as a loop's repeat selector, that outcome
+can reach the loop exit directly without storing and retesting the boolean.
 
 The algorithm follows the PREPARE and FINISH organization of
 [Bahmann et al.'s predicative recovery](https://www.sjalander.com/research/pdf/reissmann-PhD-thesis.pdf#page=129).
@@ -208,9 +210,10 @@ optimized TIR program.
 
 A boolean used as ordinary data must remain available to its readers. Recovery
 cannot eliminate its computation merely because it also selects a branch.
-When a producer cannot be placed directly next to its control consumer,
-normalization retains its value and requests a local test. It does not add
-artificial dependency edges to force an invalid order or duplicate effects.
+When a producer's successor structure prevents a legal control definition,
+normalization retains its value and creates a consumer-local conversion. The
+conversion owns a new control definition at that consumer. Normalization does
+not add dependency edges to force an invalid order or duplicate effects.
 
 Constant selectors can pass through several boundaries. Their facts travel
 together with the corresponding value bindings, so a loop's entry, repetition,
@@ -235,6 +238,14 @@ selector. Its false arm computes exit values and produces a false selector.
 Each original computation keeps one execution owner, including each resource
 state transition. An effect that no result demands remains an error.
 
+A counted loop can use the same comparison for a Gamma and its repetition
+result. When the mandatory Gamma yields both the feedback and exit tuples,
+normalization adds a private Boolean result to its alternatives. Each arm
+assigns that result after its computations, and the Theta reads it instead of
+using the comparison a second time. This control port has its own identity;
+its fact is cleared between iterations. If later placement loses that fact,
+recovery discards the candidate and restores a materialized repetition test.
+
 ### Edges preserve simultaneous value transfer
 
 Crossing a region boundary changes the names through which computations read
@@ -244,9 +255,9 @@ value. Surviving joins and loop entries use block arguments; existing machine
 SSA destruction later implements their parallel copies.
 
 The `Edges` adapter supplies generic CFG or target branch operations. Selected
-branches are identified by stable control requests, and their register inputs
-are remapped through the same bindings as ordinary operands. This includes
-inputs captured inside a fused comparison and its branch prelude.
+branches are identified by stable control definition and outcome IDs. Their
+register inputs are remapped through the same bindings as ordinary operands.
+This includes inputs captured inside a fused comparison and its branch prelude.
 
 ### SPIR-V explicitly retains structured recovery
 

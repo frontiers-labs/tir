@@ -1,0 +1,50 @@
+// RUN: tir mc --march=x86_64 --stage=isel %s | filecheck %s
+// RUN: tir mc --march=x86_64 --filetype=obj %s -o /dev/null
+// RUN: tir mc --march=riscv64 --filetype=obj %s -o /dev/null
+// RUN: tir mc --march=armv8-a --filetype=obj %s -o /dev/null
+
+// The predicate for the outer switch is produced inside either arm of the
+// inner switch. The compare in each producer arm should own the branch that
+// consumes the predicate, without materializing a boolean at the join. The
+// multiply is captured only by those comparisons and must remain demanded.
+
+module {
+  %fn_main = func.func @choose(%x: !i64, %y: !i64) -> !i64 {
+    %zero = constant {value = 0} : !i64
+    %limit = constant {value = 9} : !i64
+    %true_value = constant {value = 111} : !i64
+    %false_value = constant {value = 222} : !i64
+    %square = muli %y, %y : !i64
+    %path = cmpi %x, %zero {predicate = "eq"} : !i1
+    %predicate = scf.switch %path {
+      %left = cmpi %square, %limit {predicate = "slt"} : !i1
+      -> %left
+    }
+    {
+      %right = cmpi %square, %limit {predicate = "eq"} : !i1
+      -> %right
+    }
+    %result = scf.switch %predicate {
+      -> %false_value
+    }
+    {
+      -> %true_value
+    }
+    func.return %result
+  }
+  module_end
+}
+
+// CHECK: x86_64.imul {dst = %[[SQUARE:[0-9]+]]:GPR
+
+// Each producer compare should feed a conditional branch directly. A setcc
+// followed by test_imm32 would show that the selector joined the predicate as
+// a byte value before selecting the outer switch.
+// CHECK: x86_64.cmp_imm {dst = %[[SQUARE]]:GPR, imm = 9}
+// CHECK-NOT: x86_64.set
+// CHECK-NOT: x86_64.test_imm32
+// CHECK: x86_64.j{{.*}}
+// CHECK: x86_64.cmp_imm {dst = %[[SQUARE]]:GPR, imm = 9}
+// CHECK-NOT: x86_64.set
+// CHECK-NOT: x86_64.test_imm32
+// CHECK: x86_64.j{{.*}}

@@ -5,6 +5,7 @@
 // RUN: tir opt --pass restructure-nodes,destructure %s | tir interp -f select --args=0,2 | filecheck --check-prefix=START-BODY %s
 // RUN: tir opt --pass restructure-nodes,destructure %s | tir interp -f select --args=1,9 | filecheck --check-prefix=DONE %s
 // RUN: tir opt --pass restructure-nodes,destructure --verify %s | filecheck --check-prefix=CFG %s
+// RUN: tir opt --pass restructure-nodes,destructure --verify %s | filecheck --check-prefix=NO-SELECTORS %s
 
 // Two entries (head and body) and two exits (found and done) form one SCC.
 // Restructuring carries an entry selector q and an exit selector r. Recovery
@@ -39,6 +40,9 @@ module {
 // START-BODY: i32 100
 // DONE: i32 5
 // CFG-NOT: scf.
+// NO-SELECTORS-NOT: xori
+// NO-SELECTORS-NOT: constant {{.*}} : !i1
+// NO-SELECTORS: module_end
 // CFG-COUNT-3: cfg.cond_br
 // CFG-NOT: cfg.cond_br
 // CFG-NOT: scf.

@@ -18,6 +18,7 @@ use tir_relational::ClassId as Id;
 
 use super::node::class_is_pure;
 use crate::analysis::effects::{observed_state, produced_state};
+use crate::passes::destructure::{ControlDefinition, ControlId, ControlKind, ControlOutcome};
 
 /// What a walk records for the cover: the class each operation is rooted at, and
 /// the float constants a target materializer could build.
@@ -30,6 +31,13 @@ pub(crate) struct Seeds {
 /// Which test of a structured operation's destruction a class stands for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum AuxSlot {
+    /// One outcome of a producer-owned recovery definition. The last outcome
+    /// is the default edge and needs no separate instruction.
+    Control {
+        id: ControlId,
+        outcome: usize,
+        inverted: bool,
+    },
     /// The test selecting arm `k` of a gate, or a loop's repeat predicate
     /// (`k == 0`): taken when the class holds.
     Test(usize),
@@ -284,6 +292,77 @@ impl<'a> SemDagBuilder<'a> {
                 let class = self.build_from_value(predicate);
                 control.record(theta.body(), op.id, AuxSlot::Test(0), class);
             }
+        }
+    }
+
+    /// Select each branch where its predicate is defined. Structural region
+    /// boundaries only forward its outcome during control-flow recovery.
+    pub(crate) fn build_recovery_control(
+        &mut self,
+        definition: &ControlDefinition,
+        control: &mut RegionControl,
+    ) {
+        let predicate = definition.source_predicate;
+        let ty = definition.predicate_type;
+        let Some(width) = type_width(self.context, ty) else {
+            return;
+        };
+        let anchor = match definition.kind {
+            ControlKind::Direct => definition.producer.expect("direct control has a producer"),
+            ControlKind::LocalConversion { consumer, .. } => consumer,
+        };
+        let boolean = IntegerType::new(self.context, 1);
+        for (outcome, partition) in definition
+            .outcomes
+            .iter()
+            .enumerate()
+            .take(definition.outcomes.len().saturating_sub(1))
+        {
+            let (class, mut inverted) = match *partition {
+                ControlOutcome::Exact(value) if width == 1 => {
+                    (self.build_from_value(predicate), value == 0)
+                }
+                ControlOutcome::Exact(value) => {
+                    let class = self.build_from_value(predicate);
+                    let expected = self.add_int(APInt::new(width, value), Some(ty));
+                    (
+                        self.add_op(SymKind::Eq, vec![class, expected], Some(boolean)),
+                        false,
+                    )
+                }
+                ControlOutcome::DefaultFrom(1) if width == 1 => {
+                    (self.build_from_value(predicate), false)
+                }
+                ControlOutcome::DefaultFrom(first) => {
+                    let class = self.build_from_value(predicate);
+                    let first = self.add_int(APInt::new(width, first as u64), Some(ty));
+                    (
+                        self.add_op(SymKind::ULt, vec![class, first], Some(boolean)),
+                        true,
+                    )
+                }
+            };
+            // Preserve the existing fused form of a negated boolean test.
+            let class = if width == 1 {
+                if let Some(inner) = crate::passes::destructure::unnegate(self.context, predicate) {
+                    inverted = !inverted;
+                    self.build_from_value(inner)
+                } else {
+                    class
+                }
+            } else {
+                class
+            };
+            control.record(
+                definition.scope,
+                anchor,
+                AuxSlot::Control {
+                    id: definition.id,
+                    outcome,
+                    inverted,
+                },
+                class,
+            );
         }
     }
 

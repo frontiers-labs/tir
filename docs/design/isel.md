@@ -215,12 +215,18 @@ Conditional branches also have their own selection step. A control-recovery
 plan identifies their predicates before source operations are replaced. When
 a predicate can directly own its continuation and a branch instruction can
 test its comparison, the selector can combine the comparison and branch.
-A predicate with data uses retains the value those readers need. Its local
-control test can still fuse a pure comparison at the consumer. If placement
-rejects a selected test, selection retries with that test materialized in a
-register. Every retry adds a permanent demotion, so the finite set of control
-requests bounds the retries. A producer-owned fused branch may only read
-operands available at that producer.
+The plan assigns a stable identity and an outcome partition to each predicate
+definition. A predicate returned by a Gamma arm is selected in that arm, before
+its outcome crosses the region boundary. Structural consumers route these
+outcomes without owning another branch.
+
+A predicate with data uses retains the value those readers need. A local
+conversion can fuse a pure comparison when its inputs are available there.
+If placement rejects a continuation, selection discards the staged function
+and retries with its connected selector roles materialized. Those replacement
+tests must read the materialized value. Every retry permanently demotes at
+least one definition. A fused branch may only read operands available where
+it executes.
 
 Each selected instruction inherits its source computation's demand domain.
 Effectful computations from different lazy-loop paths cannot be fused into

@@ -1,0 +1,47 @@
+// RUN: tir interp %s -f main --args=0,5 | filecheck --check-prefix=TRUE %s
+// RUN: tir interp %s -f main --args=1,10 | filecheck --check-prefix=TRUE %s
+// RUN: tir interp %s -f main --args=2,11 | filecheck --check-prefix=TRUE %s
+// RUN: tir interp %s -f main --args=9,10 | filecheck --check-prefix=FALSE %s
+// RUN: tir opt --pass destructure --verify %s | tir interp -f main --args=0,5 | filecheck --check-prefix=TRUE %s
+// RUN: tir opt --pass destructure --verify %s | tir interp -f main --args=1,10 | filecheck --check-prefix=TRUE %s
+// RUN: tir opt --pass destructure --verify %s | tir interp -f main --args=2,11 | filecheck --check-prefix=TRUE %s
+// RUN: tir opt --pass destructure --verify %s | tir interp -f main --args=9,10 | filecheck --check-prefix=FALSE %s
+// RUN: tir opt --pass destructure --verify %s | filecheck --check-prefix=CFG %s
+
+// A three-arm Gamma and its default arm each produce a nonconstant selector
+// for the following Gamma. Recovery must keep every producer path connected
+// to the outer branch.
+
+module {
+  %fn_main = func.func @main(%arm: !i32, %x: !i32) -> !i32 {
+    %ten = constant {value = 10} : !i32
+    %true_value = constant {value = 111} : !i32
+    %false_value = constant {value = 222} : !i32
+    %predicate = scf.switch %arm {
+      %first = cmpi %x, %ten {predicate = "slt"} : !i1
+      -> %first
+    }
+    () {
+      %second = cmpi %x, %ten {predicate = "eq"} : !i1
+      -> %second
+    }
+    () {
+      %default = cmpi %x, %ten {predicate = "sgt"} : !i1
+      -> %default
+    }
+    %result = scf.switch %predicate {
+      -> %false_value
+    }
+    {
+      -> %true_value
+    }
+    func.return %result
+  }
+  module_end
+}
+
+// TRUE: i32 111
+// FALSE: i32 222
+// CFG-NOT: scf.
+// CFG-COUNT-4: cfg.cond_br
+// CFG-NOT: ^{{.*}}(%{{[0-9]+}}: !i1):
