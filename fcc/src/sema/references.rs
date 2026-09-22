@@ -1,3 +1,5 @@
+//! C standard references attached to semantic diagnostics.
+
 use crate::ast::AstKind;
 use crate::lang_options::{LangOptions, StdVersion};
 

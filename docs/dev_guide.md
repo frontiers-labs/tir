@@ -30,6 +30,30 @@ cargo nextest r
 
 `nextest` is much faster than the default test runner.
 
+### Working on the C frontend
+
+FCC keeps its public entry points in `fcc/src/parser.rs`, `sema.rs`,
+`codegen.rs`, and `diagnostics.rs`. Their child modules group the implementation
+by responsibility:
+
+- `parser/` contains declarations, expressions, statements, and the existing
+  language-version checks. `lang_options.rs` owns dialect selection and the
+  predefined standard-version value.
+- `sema/` contains C types, target properties, declarations, expressions,
+  statements, conversions, initialization, and diagnostic standard references.
+  Semantic analysis annotates the existing AST and returns `TypedAst`.
+- `codegen/` contains ABI classification, calls, scalar operations, expressions,
+  control flow, initialization, and data lowering. It consumes `TypedAst` and
+  emits the existing TIR and CIR operations.
+- `diagnostics/` contains source storage, the typed diagnostic catalog, and
+  diagnostic construction and rendering. The catalog supplies stable codes and
+  the text used by `fcc --explain`.
+
+The parser grammar, semantic annotations, and lowering algorithms are shared
+within these modules. Run the FCC LIT checks and frontend unit tests when
+changing them; preserve existing diagnostic and generated-code expectations
+unless the change intentionally alters behavior.
+
 ### Running check tests
 
 Check-tests are very similar to LLVM Integrated Tests (LIT). Each test file
