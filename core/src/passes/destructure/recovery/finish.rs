@@ -15,7 +15,6 @@ struct Route {
     facts: HashMap<ValueId, ControlOutcome>,
     control_facts: HashMap<ControlPortId, ControlOutcome>,
     skip_control: Option<ControlId>,
-    skip_head: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -67,10 +66,6 @@ enum Destination {
     Gamma(OpId),
     Repeat(OpId),
     Return(Vec<ValueId>, Vec<ValueId>),
-    LoopHead(
-        Vec<(ValueId, ControlOutcome)>,
-        Vec<(ControlPortId, ControlOutcome)>,
-    ),
     Cycle(
         Vec<(ValueId, ControlOutcome)>,
         Vec<(ControlPortId, ControlOutcome)>,
@@ -97,7 +92,6 @@ struct Finish<'a> {
     controls: HashMap<OpId, Node>,
     definitions: HashMap<ControlId, Node>,
     cycles: HashMap<CycleKey, Node>,
-    loop_heads: HashSet<Point>,
     constants: HashMap<ValueId, ControlOutcome>,
     ambiguous_facts: HashSet<ValueId>,
     literals: HashSet<OpId>,
@@ -175,38 +169,6 @@ pub(crate) fn emit_recovery(
             )
         })
         .collect();
-    // A computation or control producer already creates a join. Keep an
-    // empty outer head when its prepared prefix enters a nested Theta
-    // directly, apart from hoisted literals.
-    let loop_heads = prepared
-        .thetas
-        .values()
-        .filter(|theta| {
-            let mut point = Point {
-                sequence: theta.head,
-                index: 0,
-            };
-            while !prepared.control_at.contains_key(&point) {
-                if let Some(&id) = prepared.fragment_at.get(&point) {
-                    let fragment = &prepared.fragments[id];
-                    if !fragment.ops.is_empty() {
-                        return false;
-                    }
-                    point.index = fragment.end;
-                    continue;
-                }
-                return prepared.sequences[point.sequence.0]
-                    .ops
-                    .get(point.index)
-                    .is_some_and(|op| prepared.thetas.contains_key(op));
-            }
-            false
-        })
-        .map(|theta| Point {
-            sequence: theta.head,
-            index: 0,
-        })
-        .collect();
     let mut finish = Finish {
         context,
         edges,
@@ -217,7 +179,6 @@ pub(crate) fn emit_recovery(
         controls: HashMap::new(),
         definitions: HashMap::new(),
         cycles: HashMap::new(),
-        loop_heads,
         constants,
         ambiguous_facts,
         literals: hoisted.iter().copied().collect(),
@@ -304,7 +265,6 @@ impl Finish<'_> {
             facts,
             control_facts: HashMap::new(),
             skip_control: None,
-            skip_head: false,
         }
     }
 
@@ -548,16 +508,6 @@ impl Finish<'_> {
     fn advance(&self, route: &mut Route) -> Result<Destination, PassError> {
         let mut seen = HashSet::new();
         loop {
-            if self.loop_heads.contains(&route.point) && route.skip_control.is_none() {
-                if route.skip_head {
-                    route.skip_head = false;
-                } else {
-                    return Ok(Destination::LoopHead(
-                        self.dynamic_facts(route),
-                        self.dynamic_control_facts(route),
-                    ));
-                }
-            }
             if let Some(&control) = self.prepared.control_at.get(&route.point) {
                 if route.skip_control == Some(control) {
                     route.skip_control = None;
@@ -678,13 +628,7 @@ impl Finish<'_> {
     }
 
     fn target(&mut self, mut route: Route) -> Result<Transfer, PassError> {
-        let destination = self.advance(&mut route)?;
-        self.target_at(route, destination)
-    }
-
-    fn target_at(&mut self, route: Route, destination: Destination) -> Result<Transfer, PassError> {
-        let loop_head = matches!(&destination, Destination::LoopHead(..));
-        match destination {
+        match self.advance(&mut route)? {
             Destination::Computation(id) => self.computation(id, route),
             Destination::Producer(control) => {
                 if let Some(&node) = self.definitions.get(&control) {
@@ -704,8 +648,7 @@ impl Finish<'_> {
                 }
                 let node = self.new_fragment(Vec::new());
                 self.controls.insert(op, node);
-                let mut canonical = self.canonical(route.point);
-                canonical.skip_head = self.loop_heads.contains(&route.point);
+                let canonical = self.canonical(route.point);
                 self.connect(node, canonical)?;
                 Ok(Self::transfer(node, route))
             }
@@ -717,8 +660,7 @@ impl Finish<'_> {
                 };
                 Ok(Self::transfer(node, route))
             }
-            Destination::LoopHead(facts, control_facts)
-            | Destination::Cycle(facts, control_facts) => {
+            Destination::Cycle(facts, control_facts) => {
                 let key = CycleKey {
                     point: route.point,
                     values: facts.clone(),
@@ -732,9 +674,6 @@ impl Finish<'_> {
                 let mut canonical = self.canonical(route.point);
                 canonical.facts.extend(facts);
                 canonical.control_facts.extend(control_facts);
-                // Keep nested loop entries distinct even when no computation
-                // separates them. Their joins carry different feedback tuples.
-                canonical.skip_head = loop_head;
                 self.connect(node, canonical)?;
                 Ok(Self::transfer(node, route))
             }
@@ -748,7 +687,7 @@ impl Finish<'_> {
                 if self.owns_control(node, op, predicate) {
                     self.gamma_branch(node, route, op)
                 } else {
-                    let edge = self.target_at(route, Destination::Gamma(op))?;
+                    let edge = self.target(route)?;
                     self.fragments[node.0].term = Term::Jump(edge);
                     Ok(())
                 }
@@ -758,7 +697,7 @@ impl Finish<'_> {
                 if self.owns_control(node, op, predicate) {
                     self.repeat_branch(node, route, op)
                 } else {
-                    let edge = self.target_at(route, Destination::Repeat(op))?;
+                    let edge = self.target(route)?;
                     self.fragments[node.0].term = Term::Jump(edge);
                     Ok(())
                 }
@@ -781,13 +720,13 @@ impl Finish<'_> {
                 self.fragments[node.0].term = Term::Jump(edge);
                 Ok(())
             }
-            destination @ Destination::Producer(_) => {
-                let edge = self.target_at(route, destination)?;
+            Destination::Producer(_) => {
+                let edge = self.target(route)?;
                 self.fragments[node.0].term = Term::Jump(edge);
                 Ok(())
             }
-            destination @ (Destination::LoopHead(_, _) | Destination::Cycle(_, _)) => {
-                let edge = self.target_at(route, destination)?;
+            Destination::Cycle(_, _) => {
+                let edge = self.target(route)?;
                 self.fragments[node.0].term = Term::Jump(edge);
                 Ok(())
             }
@@ -1581,7 +1520,7 @@ impl Finish<'_> {
         self.place_literals(&ssa, root)?;
         let groups = self.block_groups(&mut ssa, root)?;
         self.allocate(&mut ssa, root, &ports, &groups);
-        let mut extra_blocks = Vec::new();
+        let mut extra_blocks = vec![Vec::new(); self.fragments.len()];
         for node in groups.iter().flatten() {
             let index = node.0;
             let fragment = &self.fragments[index];
@@ -1615,7 +1554,7 @@ impl Finish<'_> {
                     .edges
                     .jump(block, &self.emitted_edge(&ssa, Node(index), edge)?),
                 Term::Branch { .. } => {
-                    self.emit_branch(&ssa, Node(index), &fragment.term, &mut extra_blocks)?
+                    self.emit_branch(&ssa, Node(index), &fragment.term, &mut extra_blocks[index])?
                 }
                 Term::Leave { values, states } => {
                     let values = values
@@ -1637,8 +1576,16 @@ impl Finish<'_> {
                     .erase_op(&OperationRef::new(self.context.get_op(op)))?;
             }
         }
-        let mut blocks: Vec<_> = groups.iter().map(|group| ssa.blocks[group[0].0]).collect();
-        blocks.extend(extra_blocks);
+        let mut blocks = Vec::new();
+        for group in &groups {
+            blocks.push(ssa.blocks[group[0].0]);
+            // Keep edge-transfer blocks with the branch that creates them.
+            // Appending them after unrelated code biases equal-affinity
+            // layout choices against short loop backedges.
+            for node in group {
+                blocks.append(&mut extra_blocks[node.0]);
+            }
+        }
         self.context.replace_region_with_blocks(region, blocks);
         self.discard_unused_controls()?;
         Ok(())

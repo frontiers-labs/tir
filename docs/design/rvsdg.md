@@ -260,8 +260,9 @@ values. Recovery composes these bindings simultaneously. A loop edge swapping
 `x` and `y` must read both incoming values before writing either next-iteration
 value. Surviving joins and loop entries use block arguments; existing machine
 SSA destruction later implements their parallel copies.
-Empty outer loop entries keep a join when they lead directly into a nested
-loop, so their feedback tuples remain distinct.
+Blocks created for branch-edge assignments follow their source block. This
+keeps layout tie-breaking independent of late edge-block allocation and lets
+short loop backedges become fallthroughs.
 
 The `Edges` adapter supplies generic CFG or target branch operations. Selected
 branches are identified by stable control definition and outcome IDs. Their

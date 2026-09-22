@@ -48,10 +48,11 @@ module {
   module_end
 }
 
-// Separate loop headers keep the inner feedback tuple at three registers.
+// Recovery shares the loop header, but edge-copy blocks stay with their
+// source branches so layout can give the inner backedge a fallthrough.
 // The inner body and its backedge copies must remain free of spill traffic.
 // CHECK: x86_64.mov_store_disp
-// CHECK: ^[[INNER:bb[0-9]+]]({{(%[0-9]+: !x86_64.GPR, ){2}%[0-9]+: !x86_64.GPR}}):
+// CHECK: ^[[INNER:bb[0-9]+]]({{(%[0-9]+: !x86_64.GPR, ){13}%[0-9]+: !x86_64.GPR}}):
 // CHECK-NOT: mov_load_disp
 // CHECK-NOT: mov_store_disp
 // CHECK: x86_64.imul
@@ -59,16 +60,15 @@ module {
 // CHECK-NOT: mov_store_disp
 // CHECK: x86_64.jl {imm = ^[[BACK:bb[0-9]+]]}
 // CHECK-NEXT: asm.vbr
-// CHECK: x86_64.mov_load_disp
-// CHECK: ^[[BACK]]:
+// CHECK-NEXT: ^[[BACK]]:
 // CHECK-NEXT: x86_64.mov
 // CHECK-NEXT: x86_64.mov
 // CHECK-NEXT: asm.vbr ^[[INNER]]
+// CHECK: x86_64.mov_load_disp
 
 // Layout must put the inner backedge copies immediately before its header.
 // Each inner iteration executes one conditional jump and no extra jump.
 // ASM-LABEL: pressure:
-// ASM: jmp .L{{[0-9]+}}
 // ASM: jmp .L[[INNER:[0-9]+]]
 // ASM-NEXT: .L[[BACK:[0-9]+]]:
 // ASM-NEXT: mov

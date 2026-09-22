@@ -26,10 +26,10 @@ module {
 // CHECK: x86_64.jne {imm = ^[[OTHER:bb[0-9]+]]}
 // CHECK: x86_64.movsd_store_disp {base = rsp, src = %{{[0-9]+}}:xmm1, imm = [[SLOT:[0-9]+]]}
 // CHECK-NEXT: asm.vbr ^[[JOIN:bb[0-9]+]]
-// CHECK: ^[[JOIN]](%{{[0-9]+}}: !x86_64.XMM,
-// CHECK: asm.vcall
-// CHECK: x86_64.movsd_load_disp {dst = %{{[0-9]+}}:xmm0, base = rsp, imm = [[SLOT]]}
 // CHECK: ^[[OTHER]]:
 // CHECK-NOT: x86_64.mov {
 // CHECK: x86_64.movsd_store_disp {base = rsp, src = %{{[0-9]+}}:xmm0, imm = [[SLOT]]}
 // CHECK-NEXT: asm.vbr ^[[JOIN]]
+// CHECK: ^[[JOIN]](%{{[0-9]+}}: !x86_64.XMM,
+// CHECK: asm.vcall
+// CHECK: x86_64.movsd_load_disp {dst = %{{[0-9]+}}:xmm0, base = rsp, imm = [[SLOT]]}

@@ -35,9 +35,9 @@ module {
 // CHECK:      asm.symbol {name = "pure"
 // CHECK-NOT:  x86_64.cmov
 // CHECK:      asm.vbr %{{[0-9]+}} ^[[JOIN:bb[0-9]+]]
+// CHECK:      asm.vbr %{{[0-9]+}} ^[[JOIN]]
 // CHECK:      ^[[JOIN]](%{{[0-9]+}}: !x86_64.GPR):
 // CHECK-NEXT: x86_64.add {dst = %{{[0-9]+}}:GPR, dst_tied = %{{[0-9]+}}:GPR, src = %{{[0-9]+}}:GPR}
-// CHECK:      asm.vbr %{{[0-9]+}} ^[[JOIN]]
 
 // CHECK:      asm.symbol {name = "trapping"
 // CHECK-NOT:  x86_64.cmov
