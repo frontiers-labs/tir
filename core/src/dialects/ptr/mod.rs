@@ -4,6 +4,8 @@
 //! local lives in a stack slot. Pointer arithmetic is byte-based and loads/stores
 //! carry no offset.
 
+mod intrinsics;
+
 use std::any::Any;
 use std::sync::Arc;
 
@@ -376,6 +378,8 @@ fn reject_function_value(context: &Context, value: crate::ValueId, op: &str) -> 
     }
 }
 
+// Copy exactly `size` bytes between non-overlapping ranges. A zero-sized copy
+// accesses neither pointer. This operation has no volatile or atomic semantics.
 operation! {
     MemcpyOp {
         name: "memcpy",
@@ -385,7 +389,7 @@ operation! {
             source: "crate::ptr::PtrType",
             size: "crate::Integer<64>",
         },
-        interfaces: [ResourceEffects, crate::interp::Interp],
+        interfaces: [ResourceEffects, crate::interp::Interp, crate::Intrinsic],
         state: "in_out",
     }
 }
@@ -399,7 +403,7 @@ operation! {
             value: "crate::Integer<8>",
             size: "crate::Integer<64>",
         },
-        interfaces: [MemoryWrite, ResourceEffects, crate::interp::Interp],
+        interfaces: [MemoryWrite, ResourceEffects, crate::interp::Interp, crate::Intrinsic],
         state: "in_out",
     }
 }

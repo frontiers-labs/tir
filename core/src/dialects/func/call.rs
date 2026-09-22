@@ -28,7 +28,8 @@ operation! {
 
 impl ResourceEffects for CallOp {
     fn resource_effects(&self) -> Vec<ResourceEffect> {
-        [StateResource::Memory, StateResource::FpEnv]
+        self.resources()
+            .unwrap_or_else(|_| vec![StateResource::Memory, StateResource::FpEnv])
             .into_iter()
             .map(|resource| ResourceEffect {
                 resource,
@@ -65,6 +66,7 @@ impl Apply for CallOp {
 
 impl tir::Verifiable for CallOp {
     fn verify_impl(&self, context: &Context) -> Result<(), Error> {
+        self.resources()?;
         let args = self.args();
         super::verify_argument_alignments(self, args.len(), "call")?;
         verify_result_address(self, context, &args)?;
@@ -98,6 +100,36 @@ impl tir::Verifiable for CallOp {
 }
 
 impl CallOp {
+    /// Resources the callee may access. An omitted summary is conservative.
+    pub fn resources(&self) -> Result<Vec<StateResource>, Error> {
+        let Some(value) = self.attr("resources") else {
+            return Ok(vec![StateResource::Memory, StateResource::FpEnv]);
+        };
+        let invalid = || {
+            Error::VerificationError(
+                "call resources must be a list of distinct resource names".into(),
+            )
+        };
+        let AttributeValue::Array(values) = value else {
+            return Err(invalid());
+        };
+        let mut resources = Vec::new();
+        for value in values {
+            let AttributeValue::Str(name) = value else {
+                return Err(invalid());
+            };
+            let resource = [StateResource::Memory, StateResource::FpEnv]
+                .into_iter()
+                .find(|resource| resource.name() == name.as_ref())
+                .ok_or_else(invalid)?;
+            if resources.contains(&resource) {
+                return Err(invalid());
+            }
+            resources.push(resource);
+        }
+        Ok(resources)
+    }
+
     pub fn callee(&self) -> ValueId {
         self.operands()[0]
     }
@@ -173,6 +205,14 @@ impl CallOp {
             fmt.write(format!(" callee @{symbol}"))?;
         }
         super::print_keyed_list(fmt, "argument_alignments", &self.argument_alignments())?;
+        if self.attr("resources").is_some() {
+            let resources = self.resources().map_err(|_| std::fmt::Error)?;
+            let names = resources
+                .iter()
+                .map(|resource| format!("\"{}\"", resource.name()))
+                .collect::<Vec<_>>();
+            fmt.write(format!(" resources [{}]", names.join(", ")))?;
+        }
         tir::region_format::print_state_operands(fmt, &self.0)?;
         fmt.write("\n")
     }
@@ -202,6 +242,7 @@ impl CallOp {
         let argument_alignments =
             super::parse_keyed_array(parser, context, "argument_alignments", "alignment list")?;
 
+        let resources = super::parse_keyed_array(parser, context, "resources", "resource list")?;
         let mut builder = CallOpBuilder::new(context)
             .callee(callee)
             .args(args)
@@ -216,11 +257,27 @@ impl CallOp {
         if let Some(argument_alignments) = argument_alignments {
             builder = builder.attr("argument_alignments", argument_alignments);
         }
+        if let Some(resources) = resources {
+            builder = builder.attr("resources", resources);
+        }
         Ok(Box::new(builder.build()))
     }
 }
 
 impl CallOpBuilder {
+    /// Record a known callee's effect contract instead of assuming all resources.
+    pub fn resources(self, resources: &[StateResource]) -> Self {
+        self.attr(
+            "resources",
+            AttributeValue::Array(
+                resources
+                    .iter()
+                    .map(|resource| AttributeValue::from(resource.name()))
+                    .collect(),
+            ),
+        )
+    }
+
     pub fn result_address(self) -> Self {
         self.attr("result_address", AttributeValue::Bool(true))
     }

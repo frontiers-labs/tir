@@ -1,4 +1,4 @@
-// RUN: tir opt --pass lower-memory-intrinsics %s | filecheck %s
+// RUN: tir opt --pass lower-intrinsics %s | filecheck %s
 
 module {
   %fn_fill = func.func @fill(%0: !ptr.p, %1: !i8, %2: !i64) {

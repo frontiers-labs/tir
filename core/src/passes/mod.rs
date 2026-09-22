@@ -5,7 +5,7 @@ pub mod dce;
 pub mod destructure;
 pub mod inline;
 pub mod instcombine;
-pub mod lower_memory_intrinsics;
+pub mod lower_intrinsics;
 pub mod lower_ptr_disjoint;
 pub mod materialize_symbol_addresses;
 pub mod promote_nodes;
@@ -21,7 +21,7 @@ pub use destructure::{
 };
 pub use inline::{InlineBudget, InlinePass};
 pub use instcombine::InstCombineNodesPass;
-pub use lower_memory_intrinsics::LowerMemoryIntrinsicsPass;
+pub use lower_intrinsics::LowerIntrinsicsPass;
 pub use lower_ptr_disjoint::LowerPtrDisjointPass;
 pub use materialize_symbol_addresses::MaterializeSymbolAddressesPass;
 pub use promote_nodes::PromoteNodesPass;

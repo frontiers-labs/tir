@@ -1,0 +1,27 @@
+// RUN: tir opt --pass lower-intrinsics --verify %s | filecheck %s
+
+module {target_env = {memory_scalar_bytes = [1, 2, 4, 8], memory_inline_bytes = 0}} {
+  %fallback = func.func @fallback(%dst: !ptr.p, %src: !ptr.p) {
+    %n = constant {value = 8} : !i64
+    ptr.memcpy %dst, %src, %n
+    func.return
+  }
+  module {target_env = {memory_inline_bytes = 8}} {
+    %inline = func.func @inline(%dst: !ptr.p, %src: !ptr.p) {
+      %n = constant {value = 8} : !i64
+      ptr.memcpy %dst, %src, %n
+      func.return
+    }
+    module_end
+  }
+  module_end
+}
+
+// CHECK: func.declare @memcpy
+// CHECK-LABEL: func.func @fallback
+// CHECK: func.call
+// CHECK-LABEL: func.func @inline
+// CHECK: ptr.load %{{[0-9]+}} : !i64
+// CHECK: ptr.store
+// CHECK-NOT: func.call
+// CHECK-NOT: ptr.memcpy

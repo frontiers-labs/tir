@@ -1,0 +1,25 @@
+// RUN: tir mc --march x86_64 --stage isel %s | filecheck %s --check-prefix=X86
+// RUN: tir mc --march arm64 --stage isel %s | filecheck %s --check-prefix=ARM
+// RUN: tir mc --march riscv64 --stage isel %s | filecheck %s --check-prefix=RISCV
+
+module {
+  %copy = func.func @copy(%dst: !ptr.p, %src: !ptr.p) {
+    %n = constant {value = 8} : !i64
+    ptr.memcpy %dst, %src, %n
+    func.return
+  }
+  module_end
+}
+
+// X86: x86_64.mov_load
+// X86-NEXT: {{.*}}x86_64.mov_store
+// X86-NOT: asm.vcall
+// X86-NOT: ptr.memcpy
+// ARM: arm64.load_doubleword
+// ARM-NEXT: {{.*}}arm64.store_doubleword
+// ARM-NOT: asm.vcall
+// ARM-NOT: ptr.memcpy
+// RISCV: riscv.lb
+// RISCV: riscv.sb
+// RISCV-NOT: asm.vcall
+// RISCV-NOT: ptr.memcpy

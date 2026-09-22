@@ -16,7 +16,11 @@
 // RVASM: copy:
 // RVASM: addi {{.*}}, x0, 37
 // RVASM: sw {{.*}}, 4({{.*}})
-// RVASM: jal x1, memcpy
+// RVASM-NOT: jal x1, memcpy
+// RVASM: lb {{.*}}, 0({{.*}})
+// RVASM: sb {{.*}}, 0({{.*}})
+// RVASM: lb {{.*}}, 7({{.*}})
+// RVASM: sb {{.*}}, 7({{.*}})
 // RVASM: lw x10, 4({{.*}})
 // RVASM: c.jr x1
 
@@ -26,6 +30,8 @@
 // A64ASM: copy:
 // A64ASM: movz {{.*}}, 37
 // A64ASM: str {{.*}}, [{{.*}}, 4]
-// A64ASM: bl memcpy
+// A64ASM-NOT: bl memcpy
+// A64ASM: ldr {{.*}}, [{{.*}}, 0]
+// A64ASM: str {{.*}}, [{{.*}}, 0]
 // A64ASM: ldr x0, [{{.*}}, 4]
 // A64ASM: ret x30

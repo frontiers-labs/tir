@@ -35,7 +35,19 @@ struct Large forward_large(long a, long b, long c) {
 // CHECK-NEXT: -> %[[FORWARD_OUT]], %[[CALL_FP]]
 
 // ASM-LABEL: make_large:
-// ASM: bl memcpy
+// ASM-NOT: bl memcpy
+// ASM: ldr {{.*}}, [{{.*}}, 0]
+// ASM: str {{.*}}, [{{.*}}, 0]
+// ASM: ldr {{.*}}, [{{.*}}, 8]
+// ASM: str {{.*}}, [{{.*}}, 8]
+// ASM: ldr {{.*}}, [{{.*}}, 16]
+// ASM: str {{.*}}, [{{.*}}, 16]
 // ASM-LABEL: forward_large:
 // ASM: bl make_large
-// ASM: bl memcpy
+// ASM-NOT: bl memcpy
+// ASM: ldr {{.*}}, [{{.*}}, 0]
+// ASM: str {{.*}}, [{{.*}}, 0]
+// ASM: ldr {{.*}}, [{{.*}}, 8]
+// ASM: str {{.*}}, [{{.*}}, 8]
+// ASM: ldr {{.*}}, [{{.*}}, 16]
+// ASM: str {{.*}}, [{{.*}}, 16]

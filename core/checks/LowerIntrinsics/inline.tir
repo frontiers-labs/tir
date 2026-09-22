@@ -1,0 +1,31 @@
+// RUN: tir opt --pass lower-intrinsics --verify %s | filecheck %s
+// RUN: tir opt --pass restructure-nodes --pass lower-intrinsics --pass verify-deps --verify %s -o /dev/null
+
+module {target_env = {memory_scalar_bytes = [1, 2, 4, 8]}} {
+  %copy = func.func @copy(%dst: !ptr.p, %src: !ptr.p) {
+    %n = constant {value = 11} : !i64
+    ptr.memcpy %dst, %src, %n
+    func.return
+  }
+  %fill = func.func @fill(%dst: !ptr.p, %byte: !i8) {
+    %n = constant {value = 8} : !i64
+    ptr.memset %dst, %byte, %n
+    func.return
+  }
+  module_end
+}
+
+// CHECK-LABEL: func.func @copy
+// CHECK: ptr.load %{{[0-9]+}} : !i64
+// CHECK: ptr.store
+// CHECK: ptr.load %{{[0-9]+}} : !i16
+// CHECK: ptr.store
+// CHECK: ptr.load %{{[0-9]+}} : !i8
+// CHECK: ptr.store
+// CHECK-NOT: ptr.memcpy
+// CHECK-LABEL: func.func @fill
+// CHECK: extui %{{[0-9]+}} : !i64
+// CHECK: constant {value = 72340172838076673} : !i64
+// CHECK: muli
+// CHECK: ptr.store
+// CHECK-NOT: ptr.memset

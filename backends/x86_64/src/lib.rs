@@ -703,6 +703,10 @@ mod isa {
         abis: x86_64_abis,
         sources: super::MODEL_CHECK_SOURCES,
 
+        fn unaligned_scalar_bytes(&self) -> &'static [u32] {
+            &[1, 2, 4, 8]
+        }
+
         fn pre_ra_lowerings(&self) -> Vec<tir::backend::isel::OpLowering> {
             vec![
                 Box::new(lower_float_constant),

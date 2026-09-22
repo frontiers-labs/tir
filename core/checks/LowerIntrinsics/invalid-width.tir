@@ -1,0 +1,12 @@
+// RUN: not tir opt --pass lower-intrinsics %s 2>&1 | filecheck %s
+
+module {target_env = {memory_scalar_bytes = [3]}} {
+  %copy = func.func @copy(%dst: !ptr.p, %src: !ptr.p) {
+    %n = constant {value = 3} : !i64
+    ptr.memcpy %dst, %src, %n
+    func.return
+  }
+  module_end
+}
+
+// CHECK: memory_scalar_bytes contains an unsupported access width

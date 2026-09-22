@@ -32,6 +32,22 @@ impl TargetEnv {
         scoped_dict(context, op, TARGET_ENV).map(|entries| Self { entries })
     }
 
+    /// Scoped IR facts override the selected target's defaults key by key.
+    pub fn for_op_with_default(
+        context: &Context,
+        op: OpId,
+        default: Option<&AttributeValue>,
+    ) -> Option<Self> {
+        let Some(AttributeValue::Dict(default)) = default else {
+            return Self::for_op(context, op);
+        };
+        let mut entries = (**default).clone();
+        if let Some(declared) = scoped_dict(context, op, TARGET_ENV) {
+            crate::scoped_attr::merge_into(&mut entries, declared);
+        }
+        Some(Self { entries })
+    }
+
     /// An environment read from a spec that is not attached to the IR — a
     /// target's own description of itself.
     pub fn from_value(value: &AttributeValue) -> Option<Self> {

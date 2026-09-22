@@ -54,6 +54,47 @@ the target's calling convention, which specifies how arguments and results
 travel between functions. Semantic pattern matching is part of this larger
 lowering process.
 
+## Intrinsic expansion
+
+Operations such as `ptr.memcpy` and `ptr.memset` retain their meaning through
+mid-end optimization. They implement `Intrinsic::expand`, which chooses an
+implementation using `ExpansionEnv` and the ordinary `Context` rewrite APIs.
+The `lower-intrinsics` pass dispatches through this interface using the existing
+pass walker. It runs before symbol-address materialization, integer legalization,
+and instruction selection, so an expansion can introduce runtime declarations
+as well as ordinary arithmetic and memory operations. Memory runtime calls carry
+`resources ["memory"]`, so expansion does not introduce an FP-environment effect
+that the original operation did not have. Calls without a resource summary
+retain their conservative effects. An expansion must remove
+its intrinsic and preserve its results and resource dependencies. It emits
+ordinary operations, not further intrinsics.
+
+Expansion logic belongs to the operation and is shared across targets. The
+environment exposes the scoped target facts and data layout. Target defaults
+apply where the IR supplies no override. Backends report legal unaligned scalar
+and fixed byte-vector memory widths; they do not implement separate copy loops.
+Absent those facts, memory expansion uses byte accesses. The x86-64 and AArch64
+backends report scalar widths of 1, 2, 4, and 8 bytes. RISC-V retains the byte-only
+default because wider unaligned accesses can trap.
+
+Memory expansion recognizes these `target_env` entries:
+
+| Entry | Meaning | Default |
+|---|---|---|
+| `memory_scalar_bytes` | Additional legal unaligned integer access sizes, powers of two up to 8 bytes | None beyond byte accesses |
+| `memory_vector_bytes` | Legal unaligned fixed byte-vector access sizes, powers of two up to 256 bytes | None |
+| `memory_inline_bytes` | Maximum constant copy or fill size to inline | 64 |
+| `libc` | Whether the environment permits the existing C memory runtime calls | `true` |
+
+A constant copy uses the widest legal accesses that fit entirely inside its
+range, including scalar tails after vector accesses. A constant fill uses scalar
+stores with the byte repeated across each stored integer. Zero-length operations
+forward their incoming memory state without accessing memory. Other sizes use a
+runtime call. If that call is unavailable, expansion reports an error. The byte
+budget is a code-size policy, not a calibrated target cost model. Vector widths
+must describe types that the selected backend can actually select; they are not
+inferred from register width alone.
+
 ## A shared language for computations
 
 An IR operation has a semantic description of its result and effects. Integer

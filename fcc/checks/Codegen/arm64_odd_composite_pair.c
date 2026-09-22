@@ -33,5 +33,9 @@ struct Twelve make_twelve(struct Twelve *value) {
 // CHECK: make_tuple {{.*}} : !tuple<!i64, !i64>
 
 // ASM-LABEL: call_twelve:
-// ASM: bl memcpy
+// ASM-NOT: bl memcpy
+// ASM: ldr {{.*}}, [{{.*}}, 0]
+// ASM: str {{.*}}, [{{.*}}, 0]
+// ASM: ldr {{.*}}, [{{.*}}, 8]
+// ASM: str {{.*}}, [{{.*}}, 8]
 // ASM: bl consume_twelve

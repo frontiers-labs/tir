@@ -1,0 +1,22 @@
+// RUN: tir interp %s | filecheck %s
+// RUN: tir opt --pass lower-intrinsics --verify %s | tir interp | filecheck %s
+// RUN: tir opt --pass restructure-nodes --pass lower-intrinsics --pass verify-deps --verify %s | tir interp | filecheck %s
+
+// Fill and copy seven bytes. The eighth byte must remain unchanged.
+module {target_env = {memory_scalar_bytes = [1, 2, 4, 8]}} {
+  %main = func.func @main() -> !i64 {
+    %src = ptr.alloca {size = 7, align = 1} : !ptr.p
+    %dst = ptr.alloca {size = 8, align = 1} : !ptr.p
+    %initial = constant {value = 72057594037927936} : !i64
+    ptr.store %initial, %dst
+    %byte = constant {value = 255} : !i8
+    %n = constant {value = 7} : !i64
+    ptr.memset %src, %byte, %n
+    ptr.memcpy %dst, %src, %n
+    %result = ptr.load %dst : !i64
+    func.return %result
+  }
+  module_end
+}
+
+// CHECK: i64 144115188075855871

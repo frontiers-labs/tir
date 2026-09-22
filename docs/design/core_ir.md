@@ -210,6 +210,12 @@ memory order. Independent work can remain unordered, but removing a required
 state dependency changes the program. State splits and joins must preserve the
 resource's rules, including the order between reads and writes.
 
+A `func.call` conservatively accesses memory and the FP environment. A producer
+that knows the callee's contract can restrict this with a `resources` list, such
+as `resources ["memory"]` for a memory runtime routine. Entries must be distinct
+known resource names. The summary must include every resource the callee may
+read or change; it is a semantic promise, not an optimization hint.
+
 ## Modification APIs and strategies
 
 ### Local edits

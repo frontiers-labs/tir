@@ -1,0 +1,12 @@
+// RUN: not tir opt --verify %s 2>&1 | filecheck %s
+
+module {
+  %external = func.declare @external(!i32) -> !i32
+  %caller = func.func @caller(%arg: !i32) -> !i32 {
+    %result = func.call %external(%arg : !i32) -> !i32 resources ["unknown"]
+    func.return %result
+  }
+  module_end
+}
+
+// CHECK: call resources must be a list of distinct resource names

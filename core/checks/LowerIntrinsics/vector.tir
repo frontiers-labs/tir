@@ -1,0 +1,20 @@
+// RUN: tir opt --pass lower-intrinsics --verify %s | filecheck %s
+// RUN: tir opt --pass restructure-nodes --pass lower-intrinsics --pass verify-deps --verify %s -o /dev/null
+
+module {target_env = {memory_vector_bytes = [16], memory_scalar_bytes = [1, 2, 4, 8]}} {
+  %copy = func.func @copy(%dst: !ptr.p, %src: !ptr.p) {
+    %n = constant {value = 19} : !i64
+    ptr.memcpy %dst, %src, %n
+    func.return
+  }
+  module_end
+}
+
+// CHECK-LABEL: func.func @copy
+// CHECK: ptr.load %{{[0-9]+}} : !vector.vec<16xi8>
+// CHECK: ptr.store
+// CHECK: ptr.load %{{[0-9]+}} : !i16
+// CHECK: ptr.store
+// CHECK: ptr.load %{{[0-9]+}} : !i8
+// CHECK: ptr.store
+// CHECK-NOT: ptr.memcpy

@@ -1,4 +1,4 @@
-// RUN: not tir opt --pass lower-memory-intrinsics %s
+// RUN: not tir opt --pass lower-intrinsics %s
 
 module {
   %fn_memcpy = func.declare @memcpy(!ptr.p, !ptr.p, !i32) -> !ptr.p

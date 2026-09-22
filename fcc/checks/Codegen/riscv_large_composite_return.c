@@ -39,4 +39,8 @@ struct Large forward_large(long a, long b, long c) {
 // ASM-LABEL: forward_large:
 // ASM: c.mv x10,
 // ASM: jal x1, sink_large
-// ASM: jal x1, memcpy
+// ASM-NOT: jal x1, memcpy
+// ASM: lb {{.*}}, 0({{.*}})
+// ASM: sb {{.*}}, 0({{.*}})
+// ASM: lb {{.*}}, 23({{.*}})
+// ASM: sb {{.*}}, 23({{.*}})

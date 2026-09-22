@@ -43,5 +43,9 @@ struct Three make_three(struct Three *value) {
 // CHECK-NEXT: -> %[[RET_WORD]], %[[RET_OUT]]
 
 // ASM-LABEL: call_three:
-// ASM: bl memcpy
+// ASM-NOT: bl memcpy
+// ASM: ldrh
+// ASM: strh
+// ASM: ldrb
+// ASM: strb
 // ASM: bl consume_three

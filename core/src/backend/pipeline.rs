@@ -17,9 +17,8 @@ use crate::backend::isel::InstructionSelectPass;
 use crate::backend::lower::OpLoweringPass;
 use crate::backend::{MachineBlockLayoutPass, ShuffleMachineOrderPass, TargetMachine};
 use crate::passes::{
-    CheckUniqueSymbolsPass, DeadCodeEliminationPass, LowerMemoryIntrinsicsPass,
-    LowerPtrDisjointPass, MaterializeSymbolAddressesPass, ResolveFpPass, RestructureNodesPass,
-    VerifyDepsPass,
+    CheckUniqueSymbolsPass, DeadCodeEliminationPass, LowerIntrinsicsPass, LowerPtrDisjointPass,
+    MaterializeSymbolAddressesPass, ResolveFpPass, RestructureNodesPass, VerifyDepsPass,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -117,14 +116,14 @@ pub fn build_pipeline(
     stop: StopAfter,
     oracles: Oracles,
 ) -> PassManager {
-    let mut pm = module_prologue();
+    let mut pm = module_prologue(target);
     add_function_passes(&mut pm, target, context, stop, oracles);
     pm
 }
 
 /// The passes that must see the whole module: they run once, ahead of any
 /// function's lowering.
-fn module_prologue() -> PassManager {
+fn module_prologue(target: &dyn TargetMachine) -> PassManager {
     let mut pm = PassManager::new();
     {
         let functions = pm.nest::<FuncOp>();
@@ -143,7 +142,7 @@ fn module_prologue() -> PassManager {
     }
     // Object symbols are unique by name, so overloads must already be mangled.
     pm.add_pass(CheckUniqueSymbolsPass::new());
-    pm.add_pass(LowerMemoryIntrinsicsPass::new());
+    pm.add_pass(LowerIntrinsicsPass::for_target(target));
     // Machine code cannot reach a value defined outside the function it runs in,
     // and functions are lowered one at a time: uses of module-level λ and δ
     // values become symbol addresses while the whole module is still here.
@@ -219,7 +218,7 @@ pub fn lower_and_emit(
 ) -> Result<(), String> {
     let failed = |error: PassError| format!("backend pipeline failed: {error}");
     let body = module.body().id();
-    module_prologue()
+    module_prologue(target)
         .run_on_op_ref(
             context,
             OperationRef::new(context.get_op(module.id())),

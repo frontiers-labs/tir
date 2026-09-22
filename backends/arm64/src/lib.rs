@@ -479,6 +479,10 @@ tir::impl_target_machine! {
     abis: arm64_abis,
     sources: MODEL_CHECK_SOURCES,
 
+    fn unaligned_scalar_bytes(&self) -> &'static [u32] {
+        &[1, 2, 4, 8]
+    }
+
     fn pre_ra_lowerings(&self) -> Vec<tir::backend::isel::OpLowering> {
         vec![Box::new(obj::lower_symbol_address)]
     }

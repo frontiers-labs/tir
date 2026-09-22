@@ -56,6 +56,7 @@ mod error;
 pub mod graph;
 mod interfaces;
 pub mod interp;
+mod intrinsic;
 mod ir_formatter;
 mod layout;
 pub mod memstats;
@@ -103,6 +104,7 @@ pub use interp::{
     ExecutionState, FloatEnvironment, Interp, InterpError, Memory as InterpMemory,
     Value as InterpValue,
 };
+pub use intrinsic::{ExpansionEnv, Intrinsic};
 pub use ir_formatter::IRFormatter;
 pub use layout::{DATA_LAYOUT, DataLayout, Endianness, data_layout_spec};
 pub use operand::Operand;

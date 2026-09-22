@@ -1,0 +1,41 @@
+// RUN: tir opt --pass lower-intrinsics --verify %s | filecheck %s
+// RUN: tir opt --pass restructure-nodes --pass lower-intrinsics --verify %s | tir opt --pass verify-deps --verify | filecheck %s --check-prefix=SUMMARY
+// RUN: tir opt --pass restructure-nodes --pass lower-intrinsics --pass verify-deps --verify %s -o /dev/null
+
+module {target_env = {memory_scalar_bytes = [1, 2, 4, 8]}} {
+  %copy63 = func.func @copy63(%dst: !ptr.p, %src: !ptr.p) {
+    %n = constant {value = 63} : !i64
+    ptr.memcpy %dst, %src, %n
+    func.return
+  }
+  %copy64 = func.func @copy64(%dst: !ptr.p, %src: !ptr.p) {
+    %n = constant {value = 64} : !i64
+    ptr.memcpy %dst, %src, %n
+    func.return
+  }
+  %copy65 = func.func @copy65(%dst: !ptr.p, %src: !ptr.p) {
+    %n = constant {value = 65} : !i64
+    ptr.memcpy %dst, %src, %n
+    func.return
+  }
+  module_end
+}
+
+// CHECK: func.declare @memcpy
+// CHECK-LABEL: func.func @copy63
+// CHECK: ptr.load %{{[0-9]+}} : !i64
+// CHECK: ptr.load %{{[0-9]+}} : !i32
+// CHECK: ptr.load %{{[0-9]+}} : !i16
+// CHECK: ptr.load %{{[0-9]+}} : !i8
+// CHECK-NOT: func.call
+// CHECK: func.return
+// CHECK-LABEL: func.func @copy64
+// CHECK: ptr.load %{{[0-9]+}} : !i64
+// CHECK-NOT: func.call
+// CHECK: func.return
+// CHECK-LABEL: func.func @copy65
+// CHECK: func.call
+// CHECK-NOT: ptr.load
+// CHECK: func.return
+
+// SUMMARY: resources ["memory"] state(

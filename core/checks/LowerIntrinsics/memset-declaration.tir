@@ -1,4 +1,4 @@
-// RUN: not tir opt --pass lower-memory-intrinsics %s
+// RUN: not tir opt --pass lower-intrinsics %s
 
 module {
   %fn_memset = func.declare @memset(!ptr.p, !i8, !i64) -> !ptr.p
