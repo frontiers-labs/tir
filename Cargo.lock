@@ -2324,7 +2324,6 @@ dependencies = [
  "tir-adt",
  "tir-arm64",
  "tir-capi",
- "tir-fuzz",
  "tir-graph",
  "tir-jit",
  "tir-lit",

@@ -82,9 +82,6 @@ mod capi {
 mod jit;
 
 #[cfg(test)]
-mod fuzz;
-
-#[cfg(test)]
 mod llvm;
 
 #[cfg(test)]

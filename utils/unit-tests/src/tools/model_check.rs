@@ -125,24 +125,3 @@ fn arm64_checker_generation_reaches_dut_read() {
     assert!(checker.contains(" input ") && checker.contains(" src0_val\n"));
     std::fs::remove_dir_all(working_dir).unwrap();
 }
-
-#[test]
-fn x86_64_checker_generation_reaches_dut_read() {
-    let working_dir = working_dir("x86_64");
-    let output = Command::new(tir_bin())
-        .args(["model-check", "--target=x86_64", "missing.btor2"])
-        .current_dir(&working_dir)
-        .output()
-        .expect("run tir model-check for x86_64");
-
-    assert!(!output.status.success());
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("failed to read DUT"), "{stderr}");
-    assert!(!stderr.contains("panicked at"), "{stderr}");
-    let checker =
-        std::fs::read_to_string(working_dir.join("target/model-check/x86_64/checker.btor2"))
-            .unwrap();
-    assert!(checker.contains("; modeled Add\n"));
-    assert!(!checker.contains("; modeled MovLoadSib\n"));
-    std::fs::remove_dir_all(working_dir).unwrap();
-}

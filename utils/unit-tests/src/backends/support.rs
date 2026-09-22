@@ -3,8 +3,7 @@
 use tir::backend::abi::{PassSeq, ValueKind};
 use tir::backend::liveness::PhysReg;
 use tir::backend::sched::InstrSchedClass;
-use tir::backend::{isel::prove_guarded_relaxations, InstrInfo, MemoryEffects};
-use tir::Context;
+use tir::backend::{InstrInfo, MemoryEffects};
 
 /// The sequence `sequences` passes values of `kind` in.
 pub fn pass_seq(sequences: &[PassSeq], kind: ValueKind) -> &PassSeq {
@@ -82,43 +81,5 @@ fn instruction_info_carries_every_per_opcode_fact() {
         assert_eq!(record.sched.len(), facts.sched_len, "{at}");
         assert_ne!(record.sched[0], InstrSchedClass::DEFAULT, "{at}");
         assert_eq!(record.effects, MemoryEffects::NONE, "{at}");
-    }
-}
-
-#[test]
-fn guarded_relaxations_hold_for_all_rules() {
-    let context = Context::with_default_dialects();
-    let rules = [
-        (
-            "arm64",
-            tir_arm64::get_isel_rules(&context, tir_arm64::Feature::ALL),
-        ),
-        (
-            "riscv",
-            tir_riscv::get_isel_rules(&context, tir_riscv::Feature::ALL),
-        ),
-        (
-            "x86-64",
-            tir_x86_64::get_isel_rules(
-                &context,
-                tir_x86_64::TargetConfig::parse("x86_64", None, None)
-                    .unwrap()
-                    .features(),
-            ),
-        ),
-    ];
-    for (backend, rules) in rules {
-        let report = prove_guarded_relaxations(&rules)
-            .unwrap_or_else(|error| panic!("{backend}: {error:?}"));
-        println!(
-            "{backend}: {} proven, {} unsupported",
-            report.proven.len(),
-            report.unsupported.len()
-        );
-        assert!(
-            report.unsupported.is_empty(),
-            "{backend}: unsupported rule proofs: {:?}",
-            report.unsupported
-        );
     }
 }

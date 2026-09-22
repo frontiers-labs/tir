@@ -27,7 +27,6 @@ tir-sim.workspace = true
 tir-jit.workspace = true
 tir-llvm.workspace = true
 tir-capi = { path = "../capi" }
-tir-fuzz = { path = "../fuzz" }
 tir-tools = { path = "../../tools" }
 fcc = { path = "../../fcc" }
 tmdl = { path = "../../tmdl" }
