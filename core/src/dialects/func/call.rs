@@ -107,12 +107,15 @@ impl CallOp {
         };
         let invalid = || {
             Error::VerificationError(
-                "call resources must be a list of distinct resource names".into(),
+                "call resources must be a non-empty list of distinct resource names".into(),
             )
         };
         let AttributeValue::Array(values) = value else {
             return Err(invalid());
         };
+        if values.is_empty() {
+            return Err(invalid());
+        }
         let mut resources = Vec::new();
         for value in values {
             let AttributeValue::Str(name) = value else {

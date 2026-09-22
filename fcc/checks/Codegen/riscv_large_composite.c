@@ -18,9 +18,5 @@ long call_large(struct Large *value) {
 // CHECK: func.call %{{[0-9]+}}(%[[COPY]] : !ptr.p) -> !i64
 
 // ASM-LABEL: call_large:
-// ASM-NOT: jal x1, memcpy
-// ASM: lb {{.*}}, 0({{.*}})
-// ASM: sb {{.*}}, 0({{.*}})
-// ASM: lb {{.*}}, 23({{.*}})
-// ASM: sb {{.*}}, 23({{.*}})
+// ASM: jal x1, memcpy
 // ASM: jal x1, consume_large

@@ -1,6 +1,6 @@
 // RUN: tir opt --pass restructure-nodes --pass lower-intrinsics --pass verify-deps --verify %s | filecheck %s
 
-module {target_env = {libc = false, memory_inline_bytes = 0}} {
+module {target_env = {memory_inline_bytes = 0}} {
   %copy = func.func @zero(%dst: !ptr.p, %src: !ptr.p, %byte: !i8) {
     %n = constant {value = 0} : !i64
     ptr.memcpy %dst, %src, %n

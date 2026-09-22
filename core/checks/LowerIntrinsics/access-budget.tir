@@ -1,0 +1,70 @@
+// RUN: tir opt --pass lower-intrinsics --verify %s | filecheck %s
+// RUN: tir mc --march riscv64 --stage isel %s | filecheck %s --check-prefix=RISCV
+// RUN: tir opt --pass restructure-nodes --pass lower-intrinsics --pass verify-deps --verify %s -o /dev/null
+
+// Without wider legal accesses, eight bytes fit and nine bytes require a call.
+module {
+  %copy8 = func.func @copy8(%dst: !ptr.p, %src: !ptr.p) {
+    %n = constant {value = 8} : !i64
+    ptr.memcpy %dst, %src, %n
+    func.return
+  }
+  %copy9 = func.func @copy9(%dst: !ptr.p, %src: !ptr.p) {
+    %n = constant {value = 9} : !i64
+    ptr.memcpy %dst, %src, %n
+    func.return
+  }
+  %copy64 = func.func @copy64(%dst: !ptr.p, %src: !ptr.p) {
+    %n = constant {value = 64} : !i64
+    ptr.memcpy %dst, %src, %n
+    func.return
+  }
+  %fill8 = func.func @fill8(%dst: !ptr.p, %byte: !i8) {
+    %n = constant {value = 8} : !i64
+    ptr.memset %dst, %byte, %n
+    func.return
+  }
+  %fill9 = func.func @fill9(%dst: !ptr.p, %byte: !i8) {
+    %n = constant {value = 9} : !i64
+    ptr.memset %dst, %byte, %n
+    func.return
+  }
+  module_end
+}
+
+// CHECK-LABEL: func.func @copy8
+// CHECK: ptr.load
+// CHECK: ptr.store
+// CHECK-NOT: func.call
+// CHECK: func.return
+// CHECK-LABEL: func.func @copy9
+// CHECK-NOT: ptr.load
+// CHECK-NOT: ptr.store
+// CHECK: func.call
+// CHECK: func.return
+// CHECK-LABEL: func.func @copy64
+// CHECK-NOT: ptr.load
+// CHECK-NOT: ptr.store
+// CHECK: func.call
+// CHECK: func.return
+// CHECK-LABEL: func.func @fill8
+// CHECK: ptr.store
+// CHECK-NOT: func.call
+// CHECK: func.return
+// CHECK-LABEL: func.func @fill9
+// CHECK-NOT: ptr.store
+// CHECK: func.call
+// CHECK: func.return
+
+// RISCV-LABEL: asm.symbol {name = "copy8"
+// RISCV: riscv.lb
+// RISCV: riscv.sb
+// RISCV-NOT: asm.vcall
+// RISCV-LABEL: asm.symbol {name = "copy9"
+// RISCV-NOT: riscv.lb
+// RISCV-NOT: riscv.sb
+// RISCV: asm.vcall {{.*}}callee = "memcpy"
+// RISCV-LABEL: asm.symbol {name = "copy64"
+// RISCV-NOT: riscv.lb
+// RISCV-NOT: riscv.sb
+// RISCV: asm.vcall {{.*}}callee = "memcpy"

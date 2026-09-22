@@ -86,11 +86,6 @@ pub trait TargetMachine {
         &[1]
     }
 
-    /// Fixed byte-vector load/store sizes supported by selection at byte alignment.
-    fn unaligned_vector_bytes(&self) -> &'static [u32] {
-        &[]
-    }
-
     fn abis(&self) -> &'static [crate::backend::abi::AbiInfo] {
         &[]
     }

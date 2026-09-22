@@ -5,31 +5,21 @@ use crate::attributes::AttributeValue;
 use crate::builtin::{FnType, IntegerType, ModuleOp, StateResource, ops as b};
 use crate::func::ops as func_ops;
 use crate::ptr::{LoadOpBuilder, MemcpyOp, MemsetOp, PtrType, StoreOpBuilder, ops as p};
-use crate::vector::VectorType;
 use crate::{
-    ConstantLike, Context, ExpansionEnv, Intrinsic, Operation, OperationRef, PassError, Symbol,
+    ConstantLike, Context, Intrinsic, Operation, OperationRef, PassError, Symbol, TargetEnv,
     TypeId, ValueId,
 };
 
 impl Intrinsic for MemcpyOp {
-    fn expand(&self, context: &Context, env: &ExpansionEnv) -> Result<(), PassError> {
+    fn expand(&self, context: &Context, env: Option<&TargetEnv>) -> Result<(), PassError> {
         let operation = OperationRef::new(context.get_op(self.id()));
         let [destination, source, size] = self.operands()[..3] else {
             unreachable!()
         };
-        if let Some(chunks) = inline_chunks(context, size, env, true)? {
+        if let Some(chunks) = inline_chunks(context, size, env)? {
             let mut state = observed_state(operation.op());
-            for Chunk {
-                offset,
-                bytes,
-                vector,
-            } in chunks
-            {
-                let ty = if vector {
-                    VectorType::fixed(context, IntegerType::new(context, 8), bytes)
-                } else {
-                    IntegerType::new(context, bytes * 8)
-                };
+            for Chunk { offset, bytes } in chunks {
+                let ty = IntegerType::new(context, bytes * 8);
                 let src = address(context, &operation, source, offset)?;
                 let dst = address(context, &operation, destination, offset)?;
                 let mut load = LoadOpBuilder::new(context).ptr(src).result_type(ty);
@@ -47,7 +37,6 @@ impl Intrinsic for MemcpyOp {
         library_call(
             context,
             &operation,
-            env,
             "memcpy",
             vec![destination, source, size],
         )
@@ -55,14 +44,14 @@ impl Intrinsic for MemcpyOp {
 }
 
 impl Intrinsic for MemsetOp {
-    fn expand(&self, context: &Context, env: &ExpansionEnv) -> Result<(), PassError> {
+    fn expand(&self, context: &Context, env: Option<&TargetEnv>) -> Result<(), PassError> {
         let operation = OperationRef::new(context.get_op(self.id()));
         let [destination, value, size] = self.operands()[..3] else {
             unreachable!()
         };
-        if let Some(chunks) = inline_chunks(context, size, env, false)? {
+        if let Some(chunks) = inline_chunks(context, size, env)? {
             let mut state = observed_state(operation.op());
-            for Chunk { offset, bytes, .. } in chunks {
+            for Chunk { offset, bytes } in chunks {
                 let dst = address(context, &operation, destination, offset)?;
                 let mut fill = value;
                 if bytes > 1 {
@@ -85,7 +74,6 @@ impl Intrinsic for MemsetOp {
         library_call(
             context,
             &operation,
-            env,
             "memset",
             vec![destination, value, size],
         )
@@ -95,7 +83,6 @@ impl Intrinsic for MemsetOp {
 struct Chunk {
     offset: u64,
     bytes: u32,
-    vector: bool,
 }
 
 /// An exact partition: no access may read or write beyond the copied range.
@@ -104,31 +91,26 @@ struct Chunk {
 fn inline_chunks(
     context: &Context,
     size: ValueId,
-    env: &ExpansionEnv,
-    vectors: bool,
+    env: Option<&TargetEnv>,
 ) -> Result<Option<Vec<Chunk>>, PassError> {
-    let limit = match env.get("memory_inline_bytes") {
+    let limit = match env.and_then(|env| env.get("memory_inline_bytes")) {
         None => 64,
         Some(value) => unsigned(value)
             .ok_or_else(|| invalid("memory_inline_bytes must be an unsigned byte count"))?,
     };
-    let mut widths = vec![(1, false)];
-    for (key, vector) in [
-        ("memory_scalar_bytes", false),
-        ("memory_vector_bytes", true),
-    ] {
-        let Some(value) = env.get(key) else { continue };
+    let mut widths = vec![1];
+    if let Some(value) = env.and_then(|env| env.get("memory_scalar_bytes")) {
         let AttributeValue::Array(values) = value else {
-            return Err(invalid(format!("{key} must be an array")));
+            return Err(invalid("memory_scalar_bytes must be an array"));
         };
         for value in values {
             let bytes = unsigned(value)
                 .and_then(|n| u32::try_from(n).ok())
-                .filter(|n| n.is_power_of_two() && if vector { *n <= 256 } else { *n <= 8 })
-                .ok_or_else(|| invalid(format!("{key} contains an unsupported access width")))?;
-            if !vector || vectors {
-                widths.push((bytes, vector));
-            }
+                .filter(|n| n.is_power_of_two() && *n <= 8)
+                .ok_or_else(|| {
+                    invalid("memory_scalar_bytes contains an unsupported access width")
+                })?;
+            widths.push(bytes);
         }
     }
     let Some(constant) = context
@@ -142,18 +124,21 @@ fn inline_chunks(
     if bytes > limit {
         return Ok(None);
     }
-    widths.sort_unstable_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+    widths.sort_unstable_by(|a, b| b.cmp(a));
     let mut offset = 0;
     let mut chunks = Vec::new();
     while offset < bytes {
-        let &(width, vector) = widths
+        // Bound emitted accesses even when the target only permits byte loads.
+        if chunks.len() == 8 {
+            return Ok(None);
+        }
+        let &width = widths
             .iter()
-            .find(|(width, _)| u64::from(*width) <= bytes - offset)
+            .find(|width| u64::from(**width) <= bytes - offset)
             .expect("byte access is always available");
         chunks.push(Chunk {
             offset,
             bytes: width,
-            vector,
         });
         offset += u64::from(width);
     }
@@ -223,19 +208,9 @@ fn finish(
 fn library_call(
     context: &Context,
     operation: &OperationRef,
-    env: &ExpansionEnv,
     name: &str,
     mut args: Vec<ValueId>,
 ) -> Result<(), PassError> {
-    match env.get("libc") {
-        None | Some(AttributeValue::Bool(true)) => {}
-        Some(AttributeValue::Bool(false)) => {
-            return Err(invalid(format!(
-                "cannot expand {name}: no inline implementation fits and libc is unavailable"
-            )));
-        }
-        Some(_) => return Err(invalid("libc must be a boolean")),
-    }
     let mut parent = context.parent_op(operation.op().id);
     let module = loop {
         let id =
