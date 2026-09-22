@@ -1,13 +1,9 @@
 //! The target's edges for destructuring a selected function.
 //!
-//! Once a function's regions hold machine instructions, the shared
-//! destructuring turns its structure into blocks; what joins them is the
-//! target's own branches. A test was selected with the region holding it and
-//! arrives here as the [`AuxEmit`] the region's plan left: a branch rule fused
-//! over the condition, the target's branch-if-nonzero over its register, or a
-//! decision the region's facts already made. The values the edges carry were
-//! selected too and arrive through the map of what selection left each value
-//! as.
+//! Once a function's regions hold machine instructions, recovery turns its
+//! structure into blocks joined by target branches. Each recorded control
+//! outcome arrives as the [`AuxEmit`] selected where its predicate is defined.
+//! Edge values arrive through the map of selection results.
 
 use std::collections::{HashMap, HashSet};
 
@@ -32,22 +28,19 @@ pub(crate) fn bind_controls(
 ) -> Result<HashMap<(ControlId, usize), SelectedControl>, PassError> {
     let controls: HashMap<_, _> = selected
         .iter()
-        .filter_map(|((_, slot), emit)| {
+        .map(|((_, slot), emit)| {
             let AuxSlot::Control {
                 id,
                 outcome,
                 inverted,
-            } = *slot
-            else {
-                return None;
-            };
-            Some((
+            } = *slot;
+            (
                 (id, outcome),
                 SelectedControl {
                     emit: emit.clone(),
                     taken_when: !inverted,
                 },
-            ))
+            )
         })
         .collect();
     for definition in recovery.requirements() {
@@ -63,30 +56,6 @@ pub(crate) fn bind_controls(
     Ok(controls)
 }
 
-fn selected_test(
-    selected: &HashMap<(OpId, AuxSlot), AuxEmit>,
-    consumer: OpId,
-    test: Test,
-) -> Result<(&AuxEmit, bool), PassError> {
-    let index = match test {
-        Test::Repeat => 0,
-        Test::Arm(index) => index,
-    };
-    let (slot, taken_when) = if selected.contains_key(&(consumer, AuxSlot::Unless(index))) {
-        (AuxSlot::Unless(index), false)
-    } else {
-        (AuxSlot::Test(index), true)
-    };
-    selected
-        .get(&(consumer, slot))
-        .map(|emit| (emit, taken_when))
-        .ok_or_else(|| {
-            PassError::InvalidRuleSet(format!(
-                "control test {slot:?} of {consumer:?} was not selected"
-            ))
-        })
-}
-
 fn reads(emit: &AuxEmit) -> Vec<ValueId> {
     match emit {
         AuxEmit::Branch(GuardBranch::Fused { m, .. }) => m.values().collect(),
@@ -100,7 +69,6 @@ pub(crate) struct MachineEdges<'a> {
     pub(crate) emitters: &'a BranchEmitters,
     /// What selection left each IR value as.
     pub(crate) emitted: &'a HashMap<ValueId, ValueId>,
-    pub(crate) region_values: &'a HashMap<(OpId, AuxSlot), AuxEmit>,
     pub(crate) controls: &'a HashMap<(ControlId, usize), SelectedControl>,
     pub(crate) domains: &'a HashMap<OpId, DemandDomainId>,
     pub(crate) literals: &'a HashSet<OpId>,
@@ -117,10 +85,6 @@ impl MachineEdges<'_> {
 
     fn mapped(&self, values: &[ValueId]) -> Vec<ValueId> {
         values.iter().map(|&value| self.value(value)).collect()
-    }
-
-    fn selected(&self, op: &OpHandle, test: Test) -> Result<(&AuxEmit, bool), PassError> {
-        selected_test(self.region_values, op.id, test)
     }
 
     fn emit_jump(&self, block: BlockId, dest: BlockId, args: &[ValueId]) {
@@ -214,19 +178,16 @@ impl Edges for MachineEdges<'_> {
     /// carrying its own.
     fn branch(
         &self,
-        block: BlockId,
-        op: &OpHandle,
-        test: Test,
-        taken: &Edge,
-        fallthrough: &Edge,
-        mint: &mut dyn FnMut() -> BlockId,
+        _block: BlockId,
+        _op: &OpHandle,
+        _test: Test,
+        _taken: &Edge,
+        _fallthrough: &Edge,
+        _mint: &mut dyn FnMut() -> BlockId,
     ) -> Result<(), PassError> {
-        let (emit, taken_when) = self.selected(op, test)?;
-        let selected = SelectedControl {
-            emit: emit.clone(),
-            taken_when,
-        };
-        self.emit_selected(&selected, block, taken, fallthrough, mint)
+        Err(PassError::InvalidRuleSet(
+            "machine CFG recovery requires recorded control definitions".into(),
+        ))
     }
 
     fn branch_control(
@@ -293,18 +254,6 @@ impl Edges for MachineEdges<'_> {
 
     fn execution_domain(&self, op: OpId) -> Option<DemandDomainId> {
         self.domains.get(&op).copied()
-    }
-
-    fn decided(&self, op: &OpHandle, test: Test) -> Option<bool> {
-        match self.selected(op, test) {
-            Ok((AuxEmit::Decided(holds), taken_when)) => Some(*holds == taken_when),
-            _ => None,
-        }
-    }
-
-    fn test_reads(&self, op: &OpHandle, test: Test) -> Vec<ValueId> {
-        self.selected(op, test)
-            .map_or_else(|_| Vec::new(), |(emit, _)| reads(emit))
     }
 
     fn implicit_inputs(&self, op: OpId) -> Vec<OpId> {

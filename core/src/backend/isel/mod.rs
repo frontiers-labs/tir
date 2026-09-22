@@ -26,7 +26,7 @@ use std::collections::{HashMap, HashSet};
 
 use tir::{
     AnalysisManager, BlockId, Context, Gamma, OpHandle, OpId, Operation, OperationRef, Pass,
-    PassError, PassTarget, RegionId, Theta, TypeId, ValueId,
+    PassError, PassTarget, RegionId, TypeId, ValueId,
     graph::{Dag, MutDag, NodeId, OperandConstraint, subgraphs_equal},
     sem::{
         EquivalenceOracle, SemGraph, SmtOracle, SymKind, SymPayload, canonicalize_for_selection,
@@ -509,10 +509,6 @@ struct FunctionSelection {
     /// E-classes used as an operand by more than one consumer (function-wide). A
     /// memory effect in such a class cannot be internalized into a match.
     shared_classes: HashSet<Id>,
-    /// How many times each value is named as an operand or a region result
-    /// (function-wide). A use above its use-list users hands the value across
-    /// an edge, which only a register does.
-    operand_uses: HashMap<ValueId, usize>,
     /// Classes selected at their defining region because a surviving reader needs
     /// their register value.
     demand: HashSet<(Id, RegionId)>,
@@ -856,8 +852,7 @@ pub struct InstructionSelectPass {
     /// Control uses that PCF normalization represents as local tests of data.
     materialized_tests: HashSet<ControlId>,
     emitted_values: HashMap<ValueId, ValueId>,
-    /// Where each structured operation's destruction reads its tests, filled as
-    /// the regions holding them commit.
+    /// Selected recovery controls, filled as their regions commit.
     region_values: HashMap<(OpId, AuxSlot), AuxEmit>,
     /// The instruction a rule put ahead of each tile it emitted, defining a
     /// register the tile reads implicitly.
@@ -1458,8 +1453,14 @@ impl InstructionSelectPass {
         };
         if let Some(recovery) = &mut self.recovery {
             let initial: HashSet<_> = recovery.requirements().map(|control| control.id).collect();
+            let mut changed = materialized.is_empty();
             for &control in materialized {
-                recovery.demote(control);
+                changed |= recovery.demote(control);
+            }
+            if !changed {
+                return Err(PassError::InvalidRuleSet(
+                    "control materialization did not change the recovery plan".into(),
+                ));
             }
             // Demotion activates local conversions with their own stable IDs.
             // Those new tests must read the materialized selector on a retry.
@@ -1725,7 +1726,6 @@ impl InstructionSelectPass {
             port_region,
             region_use,
             shared_classes,
-            operand_uses,
             demand,
             prepared: lowering.prepared,
             region_facts: lowering.region_facts,
@@ -1755,17 +1755,11 @@ impl InstructionSelectPass {
             builder.build_region(body, &self.float_constant_materializer_widths, &mut seeds);
         }
 
-        // The structured operations' own control: the tests a destruction
-        // branches on, seeded before saturation so the cover selects them like
-        // any other class.
         for &region in &scopes.regions {
             for &op_id in &scopes.order[&region] {
                 let inner = context.get_op(op_id);
                 if inner.regions().is_empty() {
                     continue;
-                }
-                if self.recovery.is_none() {
-                    builder.build_region_control(&inner, region, &mut region_control);
                 }
                 for (entered, condition, holds) in entry_facts(context, &inner) {
                     region_facts.insert(entered, (condition, holds));
@@ -1810,7 +1804,6 @@ impl InstructionSelectPass {
         let RegionLowering {
             roots_by_op,
             constant_candidates,
-            region_control,
             ..
         } = lowering;
         let needs_register = |result: ValueId, class: Id, def_region: RegionId| {
@@ -1822,13 +1815,7 @@ impl InstructionSelectPass {
                 return false;
             }
             let users = context.users_of(result);
-            let unselected_use = users.iter().any(|user| {
-                if roots_by_op.contains_key(user) {
-                    return false;
-                }
-                // A destruction's branch recomputes the test it reads.
-                !region_control.test_conditions.contains(&(*user, result))
-            });
+            let unselected_use = users.iter().any(|user| !roots_by_op.contains_key(user));
             // A region naming the value as its result hands it across an edge,
             // which only a register does.
             let result_use = operand_uses.get(&result).copied().unwrap_or(0) > users.len();
@@ -1901,13 +1888,18 @@ impl InstructionSelectPass {
                 }
                 Err(RecoveryError::Invalid(error)) => return Err(error),
                 Err(RecoveryError::Placement(conflicts)) => {
-                    let before = materialized.len();
-                    materialized.extend(conflicts);
-                    if materialized.len() == before {
+                    let mut changed = false;
+                    if let Some(recovery) = &mut self.recovery {
+                        for &control in &conflicts {
+                            changed |= recovery.demote(control);
+                        }
+                    }
+                    if !changed {
                         return Err(PassError::InvalidRuleSet(
                             "control materialization did not resolve its placement conflict".into(),
                         ));
                     }
+                    materialized.extend(conflicts);
                     // Every retry permanently materializes at least one of
                     // this finite set of controls. No source edit was adopted.
                     self.reset_function_scratch();
@@ -1942,15 +1934,14 @@ impl InstructionSelectPass {
         for (&tile, &prelude) in &self.preludes {
             implicit.entry(tile).or_default().push(prelude);
         }
-        let recovery = self.recovery.take().ok_or_else(|| {
+        let recovery = self.recovery.as_ref().ok_or_else(|| {
             PassError::InvalidRuleSet("selected function has no control recovery plan".into())
         })?;
-        let controls = destruct::bind_controls(&recovery, &self.region_values)?;
+        let controls = destruct::bind_controls(recovery, &self.region_values)?;
         let edges = destruct::MachineEdges {
             context,
             emitters,
             emitted: &self.emitted_values,
-            region_values: &self.region_values,
             controls: &controls,
             domains: &self.execution_domains,
             literals: &self.literal_ops,
@@ -1960,8 +1951,7 @@ impl InstructionSelectPass {
         recovery.emit_selected(context, region, &edges)?;
         for block in context.get_region(region).block_ids() {
             let block = context.get_block(block);
-            let mut reference = block.op_ids();
-            self.place_block_literals(context, &mut reference);
+            let reference = block.op_ids();
             let graph = crate::backend::Dependences::of_ops(
                 context,
                 &reference,
@@ -1976,76 +1966,6 @@ impl InstructionSelectPass {
             block.set_ops(order);
         }
         Ok(())
-    }
-
-    /// Recovery first places a literal in a dominating block. Once branch
-    /// instructions exist, its first reader determines its place in that block.
-    fn place_block_literals(&self, context: &Context, order: &mut Vec<OpId>) {
-        let barriers: Vec<_> = order
-            .iter()
-            .map(|&op| {
-                let op = context.get_op(op);
-                !crate::analysis::execution_regs(&op).phys_defs.is_empty()
-                    || op
-                        .as_interface::<dyn crate::backend::MachineInstruction>()
-                        .is_some_and(|instruction| {
-                            !matches!(
-                                instruction.info().control_flow,
-                                crate::backend::ControlFlow::None
-                            )
-                        })
-            })
-            .collect();
-        let reads: Vec<_> = order
-            .iter()
-            .map(|&op| crate::analysis::execution_regs(&context.get_op(op)).uses)
-            .collect();
-        let mut placed: Vec<_> = order
-            .iter()
-            .enumerate()
-            .map(|(index, &op)| {
-                let instance = context.get_op(op);
-                let registers = crate::analysis::execution_regs(&instance);
-                let movable = self.literal_ops.contains(&op)
-                    && instance.operands().is_empty()
-                    && instance.state_results().is_empty()
-                    && instance.regions().is_empty()
-                    && registers.phys_defs.is_empty()
-                    && registers.phys_uses.is_empty()
-                    && instance
-                        .clone()
-                        .as_interface::<dyn crate::backend::MachineInstruction>()
-                        .is_some_and(|instruction| {
-                            let info = instruction.info();
-                            !info.effects.reads
-                                && !info.effects.writes
-                                && matches!(info.control_flow, crate::backend::ControlFlow::None)
-                        });
-                let reader = movable
-                    .then(|| {
-                        reads
-                            .iter()
-                            .enumerate()
-                            .skip(index + 1)
-                            .find(|(_, read)| {
-                                registers.defs.iter().any(|value| read.contains(value))
-                            })
-                            .map(|(reader, _)| {
-                                // A machine block can contain a conditional
-                                // transfer before its final jump. Keep literals
-                                // before that transfer and its flag producer,
-                                // since a successor may also read the value.
-                                (index + 1..reader)
-                                    .find(|&at| barriers[at])
-                                    .unwrap_or(reader)
-                            })
-                    })
-                    .flatten();
-                (reader.map_or((index, 1), |reader| (reader, 0)), op)
-            })
-            .collect();
-        placed.sort_by_key(|(key, _)| *key);
-        *order = placed.into_iter().map(|(_, op)| op).collect();
     }
 
     fn commit_region_solution(
@@ -2258,18 +2178,16 @@ impl InstructionSelectPass {
         &self,
         fs: &FunctionSelection,
         region: RegionId,
-        op: OpId,
+        _op: OpId,
         slot: AuxSlot,
     ) -> Option<OpId> {
-        if let AuxSlot::Control { id, .. } = slot {
-            let definition = self.recovery.as_ref()?.definition(id)?;
-            let at = match definition.kind {
-                ControlKind::Direct => definition.producer,
-                ControlKind::LocalConversion { consumer, .. } => Some(consumer),
-            };
-            return at.filter(|op| fs.scopes.op_region.get(op) == Some(&region));
-        }
-        (fs.scopes.op_region.get(&op) == Some(&region)).then_some(op)
+        let AuxSlot::Control { id, .. } = slot;
+        let definition = self.recovery.as_ref()?.definition(id)?;
+        let at = match definition.kind {
+            ControlKind::Direct => definition.producer,
+            ControlKind::LocalConversion { consumer, .. } => Some(consumer),
+        };
+        at.filter(|op| fs.scopes.op_region.get(op) == Some(&region))
     }
 
     /// Solve `region` against the (already scoped) shared graph, restricting
@@ -2368,15 +2286,8 @@ impl InstructionSelectPass {
                 }
             }
         }
-        // A fused loop repeat recomputes its comparison inside the latch
-        // branch, so the covered test value needs no register in the body.
-        // Without this the cover emits a dead value tile for it next to the
-        // fused branch, and the tile's flag-setting compare survives every
-        // later pass. A test going through branch-if-nonzero keeps its overlay
-        // demand above; anything else reading the value still forces its tile
-        // through its own tile boundary.
-        let fused =
-            fused_control_classes(context, fs, region, &aux_branches, self.recovery.as_ref());
+        // A direct control fused into its branch needs no separate value tile.
+        let fused = fused_control_classes(fs, region, &aux_branches, self.recovery.as_ref());
         let demanded: HashSet<Id> = covered
             .iter()
             .copied()
@@ -3045,15 +2956,8 @@ impl InstructionSelectPass {
     }
 }
 
-/// The test classes a region's cover may leave untiled: fused loop repeats
-/// read by nothing else, and the predicate computations they bypass. Only a
-/// repeat whose predicate has no use-list user and a single region-result
-/// naming qualifies — any other flow hands the value across an edge, which
-/// only a register does. On the Unless path the recorded class is the inner
-/// comparison rather than the predicate, so the inner value must likewise be
-/// used only by the negation.
+/// Direct recovery controls fused into a selected branch may remain untiled.
 fn fused_control_classes(
-    context: &Context,
     fs: &FunctionSelection,
     region: RegionId,
     aux_branches: &[(OpId, AuxSlot, Option<AuxEmit>)],
@@ -3064,55 +2968,12 @@ fn fused_control_classes(
         if !matches!(selected, Some(AuxEmit::Branch(GuardBranch::Fused { .. }))) {
             continue;
         }
-        if let AuxSlot::Control { id, .. } = slot {
-            let Some(definition) = recovery.and_then(|plan| plan.definition(*id)) else {
-                continue;
-            };
-            if !matches!(definition.kind, ControlKind::Direct) {
-                continue;
-            }
-            if let Some(entry) = fs
-                .region_aux
-                .get(&region)
-                .into_iter()
-                .flatten()
-                .find(|(o, s, _)| o == op && s == slot)
-            {
-                fused.insert(chase_low_extract(&fs.egraph, entry.2));
-            }
-            if let Some(producer) = definition.producer
-                && let Some(root) = fs.op_root.get(&producer)
-            {
-                fused.insert(chase_low_extract(&fs.egraph, fs.egraph.find(*root)));
-            }
-            continue;
-        }
-        if !matches!(slot, AuxSlot::Test(0) | AuxSlot::Unless(0)) {
-            continue;
-        }
-        let handle = context.get_op(*op);
-        let Some(theta) = handle.as_interface::<dyn Theta>() else {
+        let AuxSlot::Control { id, .. } = slot;
+        let Some(definition) = recovery.and_then(|plan| plan.definition(*id)) else {
             continue;
         };
-        let predicate = theta.predicate();
-        if !context.users_of(predicate).is_empty()
-            || fs.operand_uses.get(&predicate).copied().unwrap_or(0) > 1
-        {
+        if !matches!(definition.kind, ControlKind::Direct) {
             continue;
-        }
-        let inner = crate::passes::destructure::unnegate(context, predicate);
-        if matches!(slot, AuxSlot::Unless(0)) {
-            let Some(inner) = inner else {
-                continue;
-            };
-            let def = context.get_value(predicate).defining_op();
-            let only_negation = context
-                .users_of(inner)
-                .iter()
-                .all(|user| Some(*user) == def);
-            if !only_negation || fs.operand_uses.get(&inner).copied().unwrap_or(0) > 1 {
-                continue;
-            }
         }
         if let Some(entry) = fs
             .region_aux
@@ -3123,8 +2984,8 @@ fn fused_control_classes(
         {
             fused.insert(chase_low_extract(&fs.egraph, entry.2));
         }
-        if let Some(def) = context.get_value(predicate).defining_op()
-            && let Some(root) = fs.op_root.get(&def)
+        if let Some(producer) = definition.producer
+            && let Some(root) = fs.op_root.get(&producer)
         {
             fused.insert(chase_low_extract(&fs.egraph, fs.egraph.find(*root)));
         }

@@ -214,6 +214,9 @@ When a producer's successor structure prevents a legal control definition,
 normalization retains its value and creates a consumer-local conversion. The
 conversion owns a new control definition at that consumer. Normalization does
 not add dependency edges to force an invalid order or duplicate effects.
+Consumers share a direct definition only when their outcome partitions agree.
+A wider selector used by conditionals with different arm counts requires a
+local conversion for the incompatible consumer.
 
 Constant selectors can pass through several boundaries. Their facts travel
 together with the corresponding value bindings, so a loop's entry, repetition,
@@ -222,7 +225,9 @@ whose execution is still required. Pure literal definitions do not interrupt
 this tracing. FINISH places the surviving literals along paths that dominate
 their uses, stopping at joins so loop invariants are not rematerialized on each
 iteration. A constant replaced under an arm's selection assumption is a local
-fact, not evidence that its replacement is constant on every path.
+fact, not evidence that its replacement is constant on every path. Routes
+carry only dynamic facts; literal values remain in a shared table. A backedge
+forgets facts owned by the loop body and facts whose owner is unknown.
 
 ### Loop paths keep their demand semantics
 

@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::builtin::IntegerType;
 use crate::region::values_read;
@@ -144,15 +144,9 @@ struct Fragment {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(super) enum PreparedFact {
-    Exact(u64),
-    DefaultFrom(usize),
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(super) struct EntryFact {
     pub predicate: ValueId,
-    pub fact: PreparedFact,
+    pub fact: ControlOutcome,
 }
 
 /// PREPARE's private graph. Continuations stay symbolic until FINISH has an
@@ -175,6 +169,7 @@ struct Prepare<'a> {
     edges: &'a dyn Edges,
     recovery: &'a RecoveryPlan,
     prepared: Prepared,
+    placement_conflicts: BTreeSet<ControlId>,
 }
 
 impl Prepared {
@@ -196,6 +191,7 @@ impl Prepared {
             context,
             edges,
             recovery,
+            placement_conflicts: BTreeSet::new(),
             prepared: Self {
                 root: SequenceId(0),
                 sequences: Vec::new(),
@@ -212,32 +208,13 @@ impl Prepared {
         prepare.prepared.root = root;
         prepare.propagate_entry_facts();
         prepare.make_fragments()?;
+        if !prepare.placement_conflicts.is_empty() {
+            return Err(RecoveryError::Placement(
+                prepare.placement_conflicts.into_iter().collect(),
+            ));
+        }
         Ok(prepare.prepared)
     }
-}
-
-/// Stable Kahn order for contracted groups and the operations inside them.
-fn stable_group_order(
-    outgoing: &[HashSet<usize>],
-    pending: &mut [usize],
-    ranks: &[usize],
-) -> Vec<usize> {
-    let mut ready: std::collections::BTreeSet<_> = pending
-        .iter()
-        .enumerate()
-        .filter_map(|(node, &count)| (count == 0).then_some((ranks[node], node)))
-        .collect();
-    let mut order = Vec::with_capacity(pending.len());
-    while let Some((_, node)) = ready.pop_first() {
-        order.push(node);
-        for &reader in &outgoing[node] {
-            pending[reader] -= 1;
-            if pending[reader] == 0 {
-                ready.insert((ranks[reader], reader));
-            }
-        }
-    }
-    order
 }
 
 impl Prepare<'_> {
@@ -299,49 +276,15 @@ impl Prepare<'_> {
         inputs
     }
 
-    fn order(&self, region: RegionId) -> Result<Vec<OpId>, RecoveryError> {
-        let ops = self.context.get_region(region).op_ids();
-        let held: HashSet<OpId> = ops.iter().copied().collect();
-        let mut pending: HashMap<OpId, usize> = HashMap::new();
-        let mut readers: HashMap<OpId, Vec<OpId>> = HashMap::new();
-        for &op in &ops {
-            let inputs: HashSet<OpId> = self
-                .inputs(op)
-                .into_iter()
-                .filter(|input| held.contains(input))
-                .collect();
-            for &input in &inputs {
-                readers.entry(input).or_default().push(op);
+    fn order(&mut self, region: RegionId) -> Result<Vec<OpId>, RecoveryError> {
+        let mut order = super::stable_order(self.context, region, |op| self.inputs(op))?;
+        match self.abut_direct_controls(region, &mut order) {
+            Ok(()) => {}
+            Err(RecoveryError::Placement(controls)) => {
+                self.placement_conflicts.extend(controls);
             }
-            pending.insert(op, inputs.len());
+            Err(error) => return Err(error),
         }
-        let mut order = Vec::with_capacity(ops.len());
-        let mut ready: Vec<OpId> = ops
-            .iter()
-            .rev()
-            .copied()
-            .filter(|op| pending[op] == 0)
-            .collect();
-        while let Some(op) = ready.pop() {
-            order.push(op);
-            for &reader in readers.get(&op).into_iter().flatten() {
-                let count = pending.get_mut(&reader).expect("reader belongs to region");
-                *count -= 1;
-                if *count == 0 {
-                    ready.push(reader);
-                    ready.sort_by_key(|op| {
-                        std::cmp::Reverse(ops.iter().position(|held| held == op))
-                    });
-                }
-            }
-        }
-        if order.len() != ops.len() {
-            return Err(PassError::InvalidRuleSet(
-                "an unordered recovery region contains a dependency cycle".into(),
-            )
-            .into());
-        }
-        self.abut_direct_controls(region, &mut order)?;
         super::abut_implicit_inputs(self.edges, &mut order);
         Ok(order)
     }
@@ -487,12 +430,10 @@ impl Prepare<'_> {
             component_of.push(component);
         }
 
-        let mut component_controls = vec![None; components.len()];
+        let mut component_controls = vec![BTreeSet::new(); components.len()];
         for &(anchor, control) in &anchors {
             let component = component_of[anchor];
-            component_controls[component] = Some(
-                component_controls[component].map_or(control, |held: ControlId| held.min(control)),
-            );
+            component_controls[component].insert(control);
         }
         let mut outgoing = vec![HashSet::new(); components.len()];
         let mut pending = vec![0; components.len()];
@@ -517,19 +458,24 @@ impl Prepare<'_> {
         }
 
         let ranks: Vec<usize> = components.iter().map(|members| members[0]).collect();
-        let component_order = stable_group_order(&outgoing, &mut pending, &ranks);
+        let component_order = super::stable_group_order(&outgoing, &mut pending, &ranks);
         if component_order.len() != components.len() {
-            let control = pending
+            let controls: BTreeSet<_> = pending
                 .iter()
                 .enumerate()
                 .filter(|&(_, &count)| count != 0)
-                .filter_map(|(component, _)| component_controls[component])
-                .min()
-                .unwrap_or(anchors[0].1);
-            return Err(RecoveryError::Placement(vec![control]));
+                .flat_map(|(component, _)| component_controls[component].iter().copied())
+                .collect();
+            let controls = if controls.is_empty() {
+                anchors.iter().map(|&(_, control)| control).collect()
+            } else {
+                controls
+            };
+            return Err(RecoveryError::Placement(controls.into_iter().collect()));
         }
 
         let mut scheduled = Vec::with_capacity(original.len());
+        let mut conflicts = BTreeSet::new();
         for component in component_order {
             let members = &components[component];
             if members.len() == 1 {
@@ -562,22 +508,28 @@ impl Prepare<'_> {
                 add_edge(&mut local_outgoing, &mut local_pending, from, to);
             }
             let start = scheduled.len();
-            let local_order = stable_group_order(&local_outgoing, &mut local_pending, members);
+            let local_order =
+                super::stable_group_order(&local_outgoing, &mut local_pending, members);
             scheduled.extend(
                 local_order
                     .into_iter()
                     .map(|local| original[members[local]]),
             );
             if scheduled.len() - start != members.len() {
-                let control = constraints
+                let mut controls: BTreeSet<_> = constraints
                     .iter()
                     .filter(|(from, _, _)| component_of[*from] == component)
                     .map(|&(_, _, control)| control)
-                    .min()
-                    .or(component_controls[component])
-                    .unwrap_or(anchors[0].1);
-                return Err(RecoveryError::Placement(vec![control]));
+                    .collect();
+                controls.extend(component_controls[component].iter().copied());
+                if controls.is_empty() {
+                    controls.extend(anchors.iter().map(|&(_, control)| control));
+                }
+                conflicts.extend(controls);
             }
+        }
+        if !conflicts.is_empty() {
+            return Err(RecoveryError::Placement(conflicts.into_iter().collect()));
         }
         *order = scheduled;
         Ok(())
@@ -629,18 +581,7 @@ impl Prepare<'_> {
     }
 
     fn cone(&self, region: RegionId, roots: &[ValueId]) -> HashSet<OpId> {
-        let mut cone = HashSet::new();
-        let mut pending: Vec<OpId> = roots
-            .iter()
-            .filter_map(|&value| self.context.get_value(value).defining_op())
-            .collect();
-        while let Some(op) = pending.pop() {
-            if self.context.parent_nodes_region(op) != Some(region) || !cone.insert(op) {
-                continue;
-            }
-            pending.extend(self.inputs(op));
-        }
-        cone
+        super::demand_cone(self.context, region, roots, |op| self.inputs(op))
     }
 
     fn require_effects(&self, order: &[OpId], placed: &HashSet<OpId>) -> Result<(), PassError> {
@@ -758,9 +699,9 @@ impl Prepare<'_> {
             if let Some((source_predicate, predicate_type)) = semantic_control {
                 let boolean = predicate_type == IntegerType::new(self.context, 1);
                 let fact = if index < last || (boolean && last == 1) {
-                    PreparedFact::Exact(index as u64)
+                    ControlOutcome::Exact(index as u64)
                 } else {
-                    PreparedFact::DefaultFrom(index)
+                    ControlOutcome::DefaultFrom(index)
                 };
                 self.prepared
                     .entry_facts
@@ -914,11 +855,9 @@ impl Prepare<'_> {
         self.prepare_structured(exit)?;
         if let Some(repeated) = self.recovery.repeated_control(op_id) {
             let head_ops = &self.prepared.sequences[head.0].ops;
-            let Some(gamma) = head_ops.iter().position(|&op| op == repeated.gamma) else {
-                return Err(RecoveryError::Placement(repeated.source_controls.clone()));
-            };
-            if gamma + 1 != head_ops.len() {
-                return Err(RecoveryError::Placement(repeated.source_controls.clone()));
+            if head_ops.last() != Some(&repeated.gamma) {
+                self.placement_conflicts
+                    .extend(repeated.source_controls.iter().copied());
             }
         }
         Ok(())
@@ -999,14 +938,14 @@ impl Prepare<'_> {
                 local_consumers.sort_unstable();
                 local_consumers.dedup();
                 if local_consumers.len() > 1 {
-                    return Err(RecoveryError::Placement(vec![control.id]));
+                    self.placement_conflicts.insert(control.id);
                 }
                 let position = local_consumers
                     .first()
                     .copied()
                     .unwrap_or(sequence.ops.len());
                 if live_producer.is_some_and(|producer| producer >= position) {
-                    return Err(RecoveryError::Placement(vec![control.id]));
+                    self.placement_conflicts.insert(control.id);
                 }
                 for value in control
                     .outcomes
@@ -1025,7 +964,7 @@ impl Prepare<'_> {
                         .get(&producer)
                         .is_some_and(|&producer| producer >= position)
                     {
-                        return Err(RecoveryError::Placement(vec![control.id]));
+                        self.placement_conflicts.insert(control.id);
                     }
                 }
                 let point = Point {
@@ -1035,7 +974,7 @@ impl Prepare<'_> {
                 if let Some(previous) = self.prepared.control_at.insert(point, control.id)
                     && previous != control.id
                 {
-                    return Err(RecoveryError::Placement(vec![previous, control.id]));
+                    self.placement_conflicts.extend([previous, control.id]);
                 }
             }
             let mut start = 0;
@@ -1093,7 +1032,7 @@ pub struct ValueBinding {
 }
 
 /// One outcome in a control definition's finite partition.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum ControlOutcome {
     Exact(u64),
     DefaultFrom(usize),
@@ -1378,14 +1317,6 @@ impl RecoveryPlan {
     /// inversion, or structured forwarding lane.
     pub fn control_only(&self, value: ValueId) -> bool {
         self.control_only_values.contains(&value)
-    }
-
-    /// The source value whose boolean fact `value` inverts.
-    pub fn inverse_of(&self, value: ValueId) -> Option<ValueId> {
-        self.control_aliases
-            .iter()
-            .find(|alias| alias.value == value && alias.inverted)
-            .map(|alias| alias.source)
     }
 
     pub(crate) fn region_domain(&self, region: RegionId) -> Option<DemandDomainId> {
@@ -1913,6 +1844,9 @@ impl PlanBuilder<'_> {
                 Test::Repeat => theta(&op)?.predicate(),
             };
             for &id in &routing.direct {
+                if !self.plan.active_controls.contains(&id) {
+                    continue;
+                }
                 let control = self.plan.definition(id).ok_or_else(|| {
                     PassError::InvalidRuleSet("recovery route names a missing definition".into())
                 })?;
@@ -2099,6 +2033,20 @@ impl PlanBuilder<'_> {
             Test::Arm(index) => ControlOutcome::DefaultFrom(index + 1),
             Test::Repeat => ControlOutcome::Exact(0),
         };
+        let outcomes = match test {
+            Test::Arm(_) => {
+                let arms = gamma(consumer)
+                    .expect("a Gamma control has a Gamma consumer")
+                    .arms()
+                    .len();
+                let mut outcomes = (0..arms.saturating_sub(1))
+                    .map(|index| ControlOutcome::Exact(index as u64))
+                    .collect::<Vec<_>>();
+                outcomes.push(ControlOutcome::DefaultFrom(arms.saturating_sub(1)));
+                outcomes
+            }
+            Test::Repeat => vec![ControlOutcome::DefaultFrom(1), ControlOutcome::Exact(0)],
+        };
         let local_id = ControlId(self.plan.controls.len() as u32);
         self.plan.controls.push(ControlDefinition {
             id: local_id,
@@ -2137,6 +2085,17 @@ impl PlanBuilder<'_> {
                 .context
                 .region_of_op(producer)
                 .unwrap_or(consumer_scope);
+            let incompatible_partition = self.plan.controls.iter().any(|definition| {
+                definition.kind == ControlKind::Direct
+                    && definition.producer == Some(producer)
+                    && definition.source_predicate == source_predicate
+                    && definition.domain == domain
+                    && definition.outcomes != outcomes
+            });
+            if incompatible_partition {
+                direct_ids.clear();
+                break;
+            }
             let direct_id = self
                 .plan
                 .controls
@@ -2146,26 +2105,11 @@ impl PlanBuilder<'_> {
                         && definition.producer == Some(producer)
                         && definition.source_predicate == source_predicate
                         && definition.domain == domain
+                        && definition.outcomes == outcomes
                 })
                 .map(|definition| definition.id)
                 .unwrap_or_else(|| {
                     let id = ControlId(self.plan.controls.len() as u32);
-                    let outcomes = match test {
-                        Test::Arm(_) => {
-                            let arms = gamma(consumer)
-                                .expect("a Gamma control has a Gamma consumer")
-                                .arms()
-                                .len();
-                            let mut outcomes = (0..arms.saturating_sub(1))
-                                .map(|index| ControlOutcome::Exact(index as u64))
-                                .collect::<Vec<_>>();
-                            outcomes.push(ControlOutcome::DefaultFrom(arms.saturating_sub(1)));
-                            outcomes
-                        }
-                        Test::Repeat => {
-                            vec![ControlOutcome::DefaultFrom(1), ControlOutcome::Exact(0)]
-                        }
-                    };
                     self.plan.controls.push(ControlDefinition {
                         id,
                         source_predicate,
@@ -2174,7 +2118,7 @@ impl PlanBuilder<'_> {
                         scope: origin_scope,
                         domain,
                         kind: ControlKind::Direct,
-                        outcomes,
+                        outcomes: outcomes.clone(),
                     });
                     id
                 });
@@ -2292,21 +2236,11 @@ impl PlanBuilder<'_> {
     }
 
     fn cone(&self, region: RegionId, roots: &[ValueId]) -> HashSet<OpId> {
-        let mut cone = HashSet::new();
-        let mut pending: Vec<OpId> = roots
-            .iter()
-            .filter_map(|&value| self.context.get_value(value).defining_op())
-            .collect();
-        while let Some(op) = pending.pop() {
-            if self.context.parent_nodes_region(op) != Some(region) || !cone.insert(op) {
-                continue;
-            }
-            pending.extend(
-                values_read(self.context, op)
-                    .into_iter()
-                    .filter_map(|value| self.context.get_value(value).defining_op()),
-            );
-        }
-        cone
+        super::demand_cone(self.context, region, roots, |op| {
+            values_read(self.context, op)
+                .into_iter()
+                .filter_map(|value| self.context.get_value(value).defining_op())
+                .collect()
+        })
     }
 }

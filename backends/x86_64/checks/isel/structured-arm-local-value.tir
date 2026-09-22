@@ -1,4 +1,5 @@
 // RUN: tir mc --march=x86_64 --stage=isel %s | filecheck %s
+// RUN: tir mc --march=x86_64 --stage=isel %s | filecheck --check-prefix=NOESCAPE %s
 
 // An arm-local value does not escape its arm. The product the arm computes and
 // the one computed after the gate are the same term, so they share an e-class,
@@ -32,3 +33,9 @@ module {
 // CHECK-NEXT: x86_64.imul {dst = %[[ARM:[0-9]+]]:GPR
 // CHECK-NEXT: x86_64.add
 // CHECK-NEXT: asm.vbr %{{[0-9]+}} ^[[CONT]]
+
+// Capture the later arm definition before checking that the preceding join
+// does not read it. DAG resolves ARM before evaluating the pending NOT.
+// NOESCAPE: x86_64.jne {imm = ^[[THEN:bb[0-9]+]]}
+// NOESCAPE-NOT: %[[ARM]]:GPR
+// NOESCAPE-DAG: ^[[THEN]]:{{\n[ ]*}}x86_64.imul {dst = %[[ARM:[0-9]+]]:GPR

@@ -27,8 +27,8 @@ use std::collections::{HashMap, HashSet};
 
 pub(crate) use recovery::RecoveryError;
 pub use recovery::{
-    ControlDefinition, ControlId, ControlKind, ControlOutcome, ControlRoute, DemandDomain,
-    DemandDomainId, DemandDomainKind, RecoveryPlan, ValueBinding,
+    ControlDefinition, ControlId, ControlKind, ControlOutcome, DemandDomainId, DemandDomainKind,
+    RecoveryPlan, ValueBinding,
 };
 
 use crate::analysis::AnalysisManager;
@@ -405,15 +405,6 @@ pub struct Destructured {
     pub gates: Vec<GateBlocks>,
 }
 
-/// Recover a callable body as a CFG using predicate-owned control.
-pub fn destructure(
-    context: &Context,
-    region: RegionId,
-    edges: &dyn Edges,
-) -> Result<(), PassError> {
-    recover_cfg(context, region, edges)
-}
-
 /// Explicit compatibility entry point for consumers that require structured
 /// merge and loop records, such as SPIR-V emission.
 pub fn recover_structured(
@@ -563,30 +554,96 @@ struct Lowering<'a> {
     record: Destructured,
 }
 
+/// Operations in `region` needed by `roots`, following the dependencies each
+/// caller uses for its form of recovery.
+pub(super) fn demand_cone(
+    context: &Context,
+    region: RegionId,
+    roots: &[ValueId],
+    mut inputs: impl FnMut(OpId) -> Vec<OpId>,
+) -> HashSet<OpId> {
+    let mut cone = HashSet::new();
+    let mut pending: Vec<OpId> = roots
+        .iter()
+        .filter_map(|&value| context.get_value(value).defining_op())
+        .collect();
+    while let Some(op) = pending.pop() {
+        if context.parent_nodes_region(op) != Some(region) || !cone.insert(op) {
+            continue;
+        }
+        pending.extend(inputs(op));
+    }
+    cone
+}
+
+/// Stable Kahn order for a node region. Ties retain insertion order.
+pub(super) fn stable_order(
+    context: &Context,
+    region: RegionId,
+    mut inputs: impl FnMut(OpId) -> Vec<OpId>,
+) -> Result<Vec<OpId>, PassError> {
+    let ops = context.get_region(region).op_ids();
+    let positions: HashMap<OpId, usize> = ops
+        .iter()
+        .enumerate()
+        .map(|(index, &op)| (op, index))
+        .collect();
+    let mut pending = vec![0; ops.len()];
+    let mut readers = vec![HashSet::new(); ops.len()];
+    for (index, &op) in ops.iter().enumerate() {
+        for input in inputs(op) {
+            if let Some(&dependency) = positions.get(&input)
+                && readers[dependency].insert(index)
+            {
+                pending[index] += 1;
+            }
+        }
+    }
+    let ranks: Vec<_> = (0..ops.len()).collect();
+    let order = stable_group_order(&readers, &mut pending, &ranks);
+    if order.len() != ops.len() {
+        return Err(PassError::InvalidRuleSet(
+            "an unordered region contains a dependency cycle".into(),
+        ));
+    }
+    Ok(order.into_iter().map(|index| ops[index]).collect())
+}
+
+/// Stable Kahn order for contracted groups and the operations inside them.
+pub(super) fn stable_group_order(
+    outgoing: &[HashSet<usize>],
+    pending: &mut [usize],
+    ranks: &[usize],
+) -> Vec<usize> {
+    let mut ready: std::collections::BTreeSet<_> = pending
+        .iter()
+        .enumerate()
+        .filter_map(|(node, &count)| (count == 0).then_some((ranks[node], node)))
+        .collect();
+    let mut order = Vec::with_capacity(pending.len());
+    while let Some((_, node)) = ready.pop_first() {
+        order.push(node);
+        for &reader in &outgoing[node] {
+            pending[reader] -= 1;
+            if pending[reader] == 0 {
+                ready.insert((ranks[reader], reader));
+            }
+        }
+    }
+    order
+}
+
 impl Lowering<'_> {
-    fn decided(&self, op: &OpHandle, test: Test) -> Option<bool> {
-        self.edges.decided(op, test)
-    }
-
-    fn control_reads(&self, op: &OpHandle, test: Test) -> Vec<ValueId> {
-        self.edges.test_reads(op, test)
-    }
-
-    #[allow(clippy::too_many_arguments)]
     fn branch(
         &mut self,
         block: BlockId,
         op: &OpHandle,
         test: Test,
-        predicate: ValueId,
-        bindings: &[ValueBinding],
         taken: &Edge,
         fallthrough: &Edge,
     ) -> Result<(), PassError> {
         let context = self.context;
         let blocks = &mut self.blocks;
-        let _ = predicate;
-        let _ = bindings;
         self.edges
             .branch(block, op, test, taken, fallthrough, &mut || {
                 mint(context, blocks)
@@ -642,10 +699,10 @@ impl Lowering<'_> {
         let instance = self.context.get_op(op);
         if let Some(gamma) = instance.clone().as_interface::<dyn Gamma>() {
             for index in 0..gamma.arms().len().saturating_sub(1) {
-                read.extend(self.control_reads(&instance, Test::Arm(index)));
+                read.extend(self.edges.test_reads(&instance, Test::Arm(index)));
             }
         } else if instance.clone().as_interface::<dyn Theta>().is_some() {
-            read.extend(self.control_reads(&instance, Test::Repeat));
+            read.extend(self.edges.test_reads(&instance, Test::Repeat));
         }
         for region in instance.regions() {
             for child in self.context.get_region(region).op_ids() {
@@ -658,85 +715,15 @@ impl Lowering<'_> {
     /// insertion order: the order a machine region was emitted in keeps an
     /// instruction's implicit inputs ahead of it.
     fn order(&self, region: RegionId) -> Result<Vec<OpId>, PassError> {
-        let ops = self.context.get_region(region).op_ids();
-        let held: HashSet<OpId> = ops.iter().copied().collect();
-        let mut pending: HashMap<OpId, usize> = HashMap::new();
-        let mut readers: HashMap<OpId, Vec<OpId>> = HashMap::new();
-        for &op in &ops {
-            let inputs: HashSet<OpId> = self
-                .inputs(op)
-                .into_iter()
-                .filter(|input| held.contains(input))
-                .collect();
-            for &input in &inputs {
-                readers.entry(input).or_default().push(op);
-            }
-            pending.insert(op, inputs.len());
-        }
-        let mut order = Vec::with_capacity(ops.len());
-        let mut ready: Vec<OpId> = ops
-            .iter()
-            .rev()
-            .copied()
-            .filter(|op| pending[op] == 0)
-            .collect();
-        while let Some(op) = ready.pop() {
-            order.push(op);
-            for &reader in readers.get(&op).into_iter().flatten() {
-                let count = pending.get_mut(&reader).expect("a reader of a region op");
-                *count -= 1;
-                if *count == 0 {
-                    ready.push(reader);
-                    ready.sort_by_key(|op| {
-                        std::cmp::Reverse(ops.iter().position(|held| held == op))
-                    });
-                }
-            }
-        }
-        if order.len() == ops.len() {
-            self.sink_leaves(&mut order);
-            abut_implicit_inputs(self.edges, &mut order);
-        }
-        if order.len() != ops.len() {
-            let stuck: Vec<String> = ops
-                .iter()
-                .filter(|op| pending[op] > 0)
-                .map(|&op| {
-                    let instance = self.context.get_op(op);
-                    format!(
-                        "{}.{} -> {:?}",
-                        instance.dialect(),
-                        instance.name(),
-                        self.inputs(op)
-                            .iter()
-                            .filter(|input| pending.get(input).is_some_and(|left| *left > 0))
-                            .map(|input| self.context.get_op(*input).name().to_string())
-                            .collect::<Vec<_>>()
-                    )
-                })
-                .collect();
-            return Err(PassError::InvalidRuleSet(format!(
-                "an unordered region holds a dependency cycle among: {}",
-                stuck.join("; ")
-            )));
-        }
+        let mut order = stable_order(self.context, region, |op| self.inputs(op))?;
+        self.sink_leaves(&mut order);
+        abut_implicit_inputs(self.edges, &mut order);
         Ok(order)
     }
 
     /// The operations of `region` that computing `roots` demands.
     fn cone(&self, region: RegionId, roots: &[ValueId]) -> HashSet<OpId> {
-        let mut cone = HashSet::new();
-        let mut pending: Vec<OpId> = roots
-            .iter()
-            .filter_map(|&value| self.context.get_value(value).defining_op())
-            .collect();
-        while let Some(op) = pending.pop() {
-            if self.context.parent_nodes_region(op) != Some(region) || !cone.insert(op) {
-                continue;
-            }
-            pending.extend(self.inputs(op));
-        }
-        cone
+        demand_cone(self.context, region, roots, |op| self.inputs(op))
     }
 
     /// Refuse a region whose cones leave an effect out. [`Self::ops`] moves
@@ -892,7 +879,7 @@ impl Lowering<'_> {
         let mut reachable = Vec::new();
         for index in 0..=last {
             let decided = (index < last)
-                .then(|| self.decided(op, Test::Arm(index)))
+                .then(|| self.edges.decided(op, Test::Arm(index)))
                 .flatten();
             if decided != Some(false) {
                 reachable.push(index);
@@ -945,15 +932,7 @@ impl Lowering<'_> {
             } else {
                 Edge::to(self.block())
             };
-            self.branch(
-                current,
-                op,
-                Test::Arm(index),
-                self.edges.value(gamma.predicate()),
-                &[],
-                &arms[&index],
-                &next,
-            )?;
+            self.branch(current, op, Test::Arm(index), &arms[&index], &next)?;
             current = next.dest;
         }
         self.record.gates.push(GateBlocks { head: block, merge });
@@ -975,7 +954,7 @@ impl Lowering<'_> {
         let mut exit_values = results[binding.exit.clone()].to_vec();
 
         let mut tested = vec![theta.predicate()];
-        tested.extend(self.control_reads(op, Test::Repeat));
+        tested.extend(self.edges.test_reads(op, Test::Repeat));
         let predicate = self.cone(body, &tested);
         let continue_cone = self.cone(body, &continue_values);
         let exit_cone = self.cone(body, &exit_values);
@@ -1014,15 +993,7 @@ impl Lowering<'_> {
             self.edges.jump(end, &Edge::with(merge, &exit_values));
             Edge::with(block, &entered)
         };
-        self.branch(
-            header_end,
-            op,
-            Test::Repeat,
-            self.edges.value(theta.predicate()),
-            &[],
-            &continue_,
-            &exit,
-        )?;
+        self.branch(header_end, op, Test::Repeat, &continue_, &exit)?;
 
         self.record.loops.push(LoopBlocks {
             header,

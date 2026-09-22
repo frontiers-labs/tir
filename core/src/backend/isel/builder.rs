@@ -28,7 +28,7 @@ pub(crate) struct Seeds {
     pub(crate) constant_candidates: Vec<(OpId, Id)>,
 }
 
-/// Which test of a structured operation's destruction a class stands for.
+/// Which recovery control outcome a class stands for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum AuxSlot {
     /// One outcome of a producer-owned recovery definition. The last outcome
@@ -38,26 +38,13 @@ pub(crate) enum AuxSlot {
         outcome: usize,
         inverted: bool,
     },
-    /// The test selecting arm `k` of a gate, or a loop's repeat predicate
-    /// (`k == 0`): taken when the class holds.
-    Test(usize),
-    /// The test selecting arm `k` of a gate, taken when the class does *not*
-    /// hold: a one-bit predicate selects arm 0 by being false, and the class
-    /// is the predicate itself, so the target's branch rules see the condition
-    /// they were written against.
-    Unless(usize),
 }
 
-/// The tests a destruction branches on, which no operation spells: a gate
-/// selects an arm by its predicate's value, a loop repeats on a body result.
-/// The seeder builds the terms so the cover selects them like any other, keyed
-/// by the region whose plan must materialize them.
+/// Recovery controls the cover must select, keyed by the region that
+/// materializes them.
 #[derive(Default)]
 pub(crate) struct RegionControl {
     pub(crate) aux: HashMap<RegionId, Vec<(OpId, AuxSlot, Id)>>,
-    /// Each (consumer, condition) pair a destruction's branch recomputes, so the
-    /// consumer's use of it does not also force the condition into a register.
-    pub(crate) test_conditions: HashSet<(OpId, ValueId)>,
 }
 
 impl RegionControl {
@@ -264,37 +251,6 @@ impl<'a> SemDagBuilder<'a> {
         self.egraph.rebuild();
     }
 
-    /// Build what destructing `op` will branch on, recording each class against
-    /// the region whose cover must materialize it: a gate's arm tests where the
-    /// gate sits, a loop's repeat predicate in its body.
-    pub(crate) fn build_region_control(
-        &mut self,
-        op: &OpHandle,
-        region: RegionId,
-        control: &mut RegionControl,
-    ) {
-        if let Some(gamma) = op.clone().as_interface::<dyn Gamma>() {
-            control.test_conditions.insert((op.id, gamma.predicate()));
-            self.build_arm_tests(op, region, gamma.as_ref(), control);
-            return;
-        }
-        if let Some(theta) = op.clone().as_interface::<dyn Theta>() {
-            let predicate = theta.predicate();
-            control.test_conditions.insert((op.id, predicate));
-            // A negated repeat (`xori(cmp, 1)` over a head-tested loop's exit)
-            // branches on the comparison with the edges swapped, so the
-            // target's branch rules see the condition they were written
-            // against instead of a materialized boolean.
-            if let Some(inner) = crate::passes::destructure::unnegate(self.context, predicate) {
-                let class = self.build_from_value(inner);
-                control.record(theta.body(), op.id, AuxSlot::Unless(0), class);
-            } else {
-                let class = self.build_from_value(predicate);
-                control.record(theta.body(), op.id, AuxSlot::Test(0), class);
-            }
-        }
-    }
-
     /// Select each branch where its predicate is defined. Structural region
     /// boundaries only forward its outcome during control-flow recovery.
     pub(crate) fn build_recovery_control(
@@ -363,37 +319,6 @@ impl<'a> SemDagBuilder<'a> {
                 },
                 class,
             );
-        }
-    }
-
-    /// A gate's arms are entered on `predicate == index`, tested in arm order
-    /// with the last arm taking whatever is left. A one-bit predicate selects
-    /// arm 1 by holding and arm 0 by not, so it stands for itself either way.
-    fn build_arm_tests(
-        &mut self,
-        op: &OpHandle,
-        region: RegionId,
-        gamma: &dyn Gamma,
-        control: &mut RegionControl,
-    ) {
-        let predicate = gamma.predicate();
-        let ty = self.context.get_value(predicate).ty();
-        let Some(width) = type_width(self.context, ty) else {
-            return;
-        };
-        let class = self.build_from_value(predicate);
-        let boolean = IntegerType::new(self.context, 1);
-        for index in 0..gamma.arms().len().saturating_sub(1) {
-            let (slot, test) = match (width, index) {
-                (1, 0) => (AuxSlot::Unless(0), class),
-                (1, _) => (AuxSlot::Test(index), class),
-                _ => {
-                    let expected = self.add_int(APInt::new(width, index as u64), Some(ty));
-                    let test = self.add_op(SymKind::Eq, vec![class, expected], Some(boolean));
-                    (AuxSlot::Test(index), test)
-                }
-            };
-            control.record(region, op.id, slot, test);
         }
     }
 

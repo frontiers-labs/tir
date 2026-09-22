@@ -7,6 +7,7 @@
 // RUN: tir opt --pass destructure --verify %s | tir interp -f main --args=2,11 | filecheck --check-prefix=TRUE %s
 // RUN: tir opt --pass destructure --verify %s | tir interp -f main --args=9,10 | filecheck --check-prefix=FALSE %s
 // RUN: tir opt --pass destructure --verify %s | filecheck --check-prefix=CFG %s
+// RUN: tir opt --pass destructure --verify %s | filecheck --check-prefix=COUNT %s
 
 // A three-arm Gamma and its default arm each produce a nonconstant selector
 // for the following Gamma. Recovery must keep every producer path connected
@@ -43,5 +44,15 @@ module {
 // TRUE: i32 111
 // FALSE: i32 222
 // CFG-NOT: scf.
-// CFG-COUNT-4: cfg.cond_br
+// CFG: %{{[0-9]+}} = func.func @main(%[[ARM:[0-9]+]]: !i32,
+// CFG-DAG: %[[ZERO:[0-9]+]] = constant {value = 0} : !i32
+// CFG-DAG: %[[CASE0:[0-9]+]] = cmpi %[[ARM]], %[[ZERO]] {predicate = "eq"} : !i1
+// CFG-DAG: %[[ONE:[0-9]+]] = constant {value = 1} : !i32
+// CFG-DAG: %[[CASE1:[0-9]+]] = cmpi %[[ARM]], %[[ONE]] {predicate = "eq"} : !i1
+// CFG-DAG: cfg.cond_br %[[CASE0]], ^{{bb[0-9]+}}, ^{{bb[0-9]+}}
+// CFG-DAG: cfg.cond_br %[[CASE1]], ^{{bb[0-9]+}}, ^[[DEFAULT:bb[0-9]+]]
+// CFG-DAG: ^[[DEFAULT]]:
+// CFG-DAG: cmpi %{{[0-9]+}}, %{{[0-9]+}} {predicate = "sgt"} : !i1
+// COUNT-COUNT-5: cfg.cond_br
+// COUNT-NOT: cfg.cond_br
 // CFG-NOT: ^{{.*}}(%{{[0-9]+}}: !i1):

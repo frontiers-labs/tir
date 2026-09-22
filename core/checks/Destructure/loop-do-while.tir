@@ -20,8 +20,8 @@ module {
 }
 
 // CHECK: %{{[0-9]+}} = func.func @main() -> !i32 {
-// CHECK-NEXT: %[[INIT:[0-9]+]] = constant {value = 2} : !i32
 // CHECK-NEXT: %[[LIMIT:[0-9]+]] = constant {value = 100} : !i32
+// CHECK-NEXT: %[[INIT:[0-9]+]] = constant {value = 2} : !i32
 // CHECK-NEXT: cfg.br ^[[LOOP:bb[0-9]+]](%[[INIT]] : !i32)
 // CHECK-NEXT: ^[[LOOP]](%[[PORT:[0-9]+]]: !i32):
 // CHECK-NEXT: %[[SQ:[0-9]+]] = muli %[[PORT]], %[[PORT]] : !i32

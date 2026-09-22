@@ -49,8 +49,12 @@ module {
 
 // Recovery shares the two loop headers. The hot header and its taken backedge
 // remain free of spill traffic; the cold outer tail may reload accumulators.
+// The taken edge needs a separate block for the two loop-carried register
+// copies. Executing those copies before the branch would overwrite values
+// still used by the exit path. Both backedges reach the shared header, so
+// only one can fall through; the final layout currently favors the outer one.
 // CHECK: x86_64.mov_store_disp
-// CHECK: ^[[INNER:bb[0-9]+]]({{.*}}):
+// CHECK: ^[[INNER:bb[0-9]+]]({{(%[0-9]+: !x86_64.GPR, ){13}%[0-9]+: !x86_64.GPR}}):
 // CHECK-NOT: mov_load_disp
 // CHECK-NOT: mov_store_disp
 // CHECK: x86_64.imul
@@ -60,6 +64,6 @@ module {
 // CHECK-NEXT: asm.vbr
 // CHECK: x86_64.mov_load_disp
 // CHECK: ^[[BACK]]:
-// CHECK-NOT: mov_load_disp
-// CHECK-NOT: mov_store_disp
-// CHECK: asm.vbr ^[[INNER]]
+// CHECK-NEXT: x86_64.mov
+// CHECK-NEXT: x86_64.mov
+// CHECK-NEXT: asm.vbr ^[[INNER]]

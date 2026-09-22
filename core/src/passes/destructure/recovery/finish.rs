@@ -2,23 +2,9 @@ use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 
 use super::{
     BlockId, Context, ControlDefinition, ControlId, ControlOutcome, ControlPortId, Edge, Edges,
-    GammaPlan, OpId, OperationRef, PassError, Point, Prepared, PreparedFact, RecoveryError,
-    RecoveryPlan, RegionId, SequenceEnd, Test, ThetaPlan, ValueBinding, ValueId, values_read,
-    values_then_states,
+    GammaPlan, OpId, OperationRef, PassError, Point, Prepared, RecoveryError, RecoveryPlan,
+    RegionId, SequenceEnd, Test, ThetaPlan, ValueBinding, ValueId, values_read, values_then_states,
 };
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-enum Fact {
-    Exact(u64),
-    DefaultFrom(usize),
-}
-
-fn outcome_fact(outcome: ControlOutcome) -> Fact {
-    match outcome {
-        ControlOutcome::Exact(value) => Fact::Exact(value),
-        ControlOutcome::DefaultFrom(first) => Fact::DefaultFrom(first),
-    }
-}
 
 /// Bindings name values at the originating fragment, not at an intermediate
 /// region boundary. Each boundary composes one parallel assignment into them.
@@ -26,8 +12,8 @@ fn outcome_fact(outcome: ControlOutcome) -> Fact {
 struct Route {
     point: Point,
     bindings: Vec<ValueBinding>,
-    facts: HashMap<ValueId, Fact>,
-    control_facts: HashMap<ControlPortId, Fact>,
+    facts: HashMap<ValueId, ControlOutcome>,
+    control_facts: HashMap<ControlPortId, ControlOutcome>,
     skip_control: Option<ControlId>,
 }
 
@@ -80,14 +66,17 @@ enum Destination {
     Gamma(OpId),
     Repeat(OpId),
     Return(Vec<ValueId>, Vec<ValueId>),
-    Cycle(Vec<(ValueId, Fact)>, Vec<(ControlPortId, Fact)>),
+    Cycle(
+        Vec<(ValueId, ControlOutcome)>,
+        Vec<(ControlPortId, ControlOutcome)>,
+    ),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct CycleKey {
     point: Point,
-    values: Vec<(ValueId, Fact)>,
-    controls: Vec<(ControlPortId, Fact)>,
+    values: Vec<(ValueId, ControlOutcome)>,
+    controls: Vec<(ControlPortId, ControlOutcome)>,
 }
 
 /// FINISH produces a graph of transfers before creating IR blocks. In
@@ -103,9 +92,10 @@ struct Finish<'a> {
     controls: HashMap<OpId, Node>,
     definitions: HashMap<ControlId, Node>,
     cycles: HashMap<CycleKey, Node>,
-    constants: HashMap<ValueId, Fact>,
+    constants: HashMap<ValueId, ControlOutcome>,
     ambiguous_facts: HashSet<ValueId>,
     literals: HashSet<OpId>,
+    theta_regions: HashMap<RegionId, HashSet<RegionId>>,
     lost_direct: HashSet<ControlId>,
 }
 
@@ -131,8 +121,8 @@ pub(crate) fn emit_recovery(
     for (&value, &bits) in &recovery.constants {
         let value = edges.value(value);
         if constants
-            .insert(value, Fact::Exact(bits))
-            .is_some_and(|old| old != Fact::Exact(bits))
+            .insert(value, ControlOutcome::Exact(bits))
+            .is_some_and(|old| old != ControlOutcome::Exact(bits))
         {
             ambiguous_facts.insert(value);
         }
@@ -169,6 +159,16 @@ pub(crate) fn emit_recovery(
             }
         });
     }
+    let theta_regions = prepared
+        .thetas
+        .values()
+        .map(|theta| {
+            (
+                theta.body,
+                context.nested_regions(theta.body).into_iter().collect(),
+            )
+        })
+        .collect();
     let mut finish = Finish {
         context,
         edges,
@@ -182,6 +182,7 @@ pub(crate) fn emit_recovery(
         constants,
         ambiguous_facts,
         literals: hoisted.iter().copied().collect(),
+        theta_regions,
         lost_direct: HashSet::new(),
     };
     let entry = finish.new_fragment(hoisted);
@@ -201,7 +202,7 @@ pub(crate) fn emit_recovery(
 fn movable_literal(
     context: &Context,
     edges: &dyn Edges,
-    constants: &HashMap<ValueId, Fact>,
+    constants: &HashMap<ValueId, ControlOutcome>,
     op: OpId,
 ) -> bool {
     let op = context.get_op(op);
@@ -228,6 +229,8 @@ fn movable_literal(
                 crate::backend::ControlFlow::None
             )
             && crate::analysis::execution_regs(&op).phys_defs.is_empty()
+            // Selected literals may read a hardwired zero register, as in
+            // RISC-V addi rd, x0, imm. Their selection proves that read invariant.
             && (edges.is_literal(op.id)
                 || crate::analysis::execution_regs(&op).phys_uses.is_empty())
     } else {
@@ -241,7 +244,7 @@ impl Finish<'_> {
     }
 
     fn canonical(&self, point: Point) -> Route {
-        let mut facts = self.constants.clone();
+        let mut facts = HashMap::new();
         for entry in self
             .prepared
             .entry_facts
@@ -250,14 +253,10 @@ impl Finish<'_> {
             .flatten()
         {
             let predicate = self.value(entry.predicate);
-            if !self.ambiguous_facts.contains(&predicate) {
-                facts.insert(
-                    predicate,
-                    match entry.fact {
-                        PreparedFact::Exact(value) => Fact::Exact(value),
-                        PreparedFact::DefaultFrom(first) => Fact::DefaultFrom(first),
-                    },
-                );
+            if !self.ambiguous_facts.contains(&predicate)
+                && !self.constants.contains_key(&predicate)
+            {
+                facts.insert(predicate, entry.fact);
             }
         }
         Route {
@@ -289,7 +288,7 @@ impl Finish<'_> {
         Self::resolved(&route.bindings, self.value(value))
     }
 
-    fn fact(&self, route: &Route, value: ValueId) -> Option<Fact> {
+    fn fact(&self, route: &Route, value: ValueId) -> Option<ControlOutcome> {
         self.fact_with(route, value, &mut HashSet::new())
     }
 
@@ -298,7 +297,7 @@ impl Finish<'_> {
         route: &Route,
         value: ValueId,
         seen: &mut HashSet<ValueId>,
-    ) -> Option<Fact> {
+    ) -> Option<ControlOutcome> {
         let value = self.value(value);
         if self.ambiguous_facts.contains(&value) || !seen.insert(value) {
             return None;
@@ -310,6 +309,9 @@ impl Finish<'_> {
         // later fact about the overwritten name cannot describe that value.
         if route.bindings.iter().any(|binding| binding.source == value) {
             return None;
+        }
+        if let Some(&fact) = self.constants.get(&value) {
+            return Some(fact);
         }
         for alias in &self.recovery.control_aliases {
             let result = self.value(alias.value);
@@ -328,8 +330,10 @@ impl Finish<'_> {
                 return Some(fact);
             }
             match fact {
-                Fact::Exact(0) => return Some(Fact::Exact(1)),
-                Fact::Exact(1) | Fact::DefaultFrom(1) => return Some(Fact::Exact(0)),
+                ControlOutcome::Exact(0) => return Some(ControlOutcome::Exact(1)),
+                ControlOutcome::Exact(1) | ControlOutcome::DefaultFrom(1) => {
+                    return Some(ControlOutcome::Exact(0));
+                }
                 _ => {}
             }
         }
@@ -358,11 +362,11 @@ impl Finish<'_> {
                 )
             })
             .collect();
-        Self::assign(route, incoming);
+        self.assign(route, incoming);
         Ok(())
     }
 
-    fn assign(route: &mut Route, incoming: Vec<(ValueId, ValueId, Option<Fact>)>) {
+    fn assign(&self, route: &mut Route, incoming: Vec<(ValueId, ValueId, Option<ControlOutcome>)>) {
         for (to, from, fact) in incoming {
             route.bindings.retain(|binding| binding.source != to);
             if to != from {
@@ -372,7 +376,7 @@ impl Finish<'_> {
                 });
             }
             route.facts.remove(&to);
-            if let Some(fact) = fact {
+            if let Some(fact) = fact.filter(|fact| self.constants.get(&to) != Some(fact)) {
                 route.facts.insert(to, fact);
             }
         }
@@ -381,24 +385,26 @@ impl Finish<'_> {
     fn gamma_outcome(&self, route: &Route, gamma: &GammaPlan) -> Option<usize> {
         let last = gamma.arms.len().checked_sub(1)?;
         match self.fact(route, gamma.predicate)? {
-            Fact::Exact(value) => Some(usize::try_from(value).unwrap_or(usize::MAX).min(last)),
-            Fact::DefaultFrom(first) if first >= last => Some(last),
-            Fact::DefaultFrom(_) => None,
+            ControlOutcome::Exact(value) => {
+                Some(usize::try_from(value).unwrap_or(usize::MAX).min(last))
+            }
+            ControlOutcome::DefaultFrom(first) if first >= last => Some(last),
+            ControlOutcome::DefaultFrom(_) => None,
         }
     }
 
     fn repeat_outcome(&self, route: &Route, theta_id: OpId, theta: &ThetaPlan) -> Option<bool> {
         if let Some(repeated) = self.recovery.repeated_control(theta_id) {
             return match route.control_facts.get(&repeated.port)? {
-                Fact::Exact(value) => Some(*value != 0),
-                Fact::DefaultFrom(first) if *first > 0 => Some(true),
-                Fact::DefaultFrom(_) => None,
+                ControlOutcome::Exact(value) => Some(*value != 0),
+                ControlOutcome::DefaultFrom(first) if *first > 0 => Some(true),
+                ControlOutcome::DefaultFrom(_) => None,
             };
         }
         match self.fact(route, theta.predicate)? {
-            Fact::Exact(value) => Some(value != 0),
-            Fact::DefaultFrom(first) if first > 0 => Some(true),
-            Fact::DefaultFrom(_) => None,
+            ControlOutcome::Exact(value) => Some(value != 0),
+            ControlOutcome::DefaultFrom(first) if first > 0 => Some(true),
+            ControlOutcome::DefaultFrom(_) => None,
         }
     }
 
@@ -406,17 +412,17 @@ impl Finish<'_> {
         let gamma = &self.prepared.gammas[&op];
         let arm = &gamma.arms[index];
         let fact = if index + 1 == gamma.arms.len() {
-            Fact::DefaultFrom(index)
+            ControlOutcome::DefaultFrom(index)
         } else {
-            Fact::Exact(index as u64)
+            ControlOutcome::Exact(index as u64)
         };
         let predicate = self.value(gamma.predicate);
-        if !self.ambiguous_facts.contains(&predicate) {
+        if !self.ambiguous_facts.contains(&predicate) && !self.constants.contains_key(&predicate) {
             route
                 .facts
                 .entry(predicate)
                 .and_modify(|old| {
-                    if !matches!(old, Fact::Exact(_)) {
+                    if !matches!(old, ControlOutcome::Exact(_)) {
                         *old = fact;
                     }
                 })
@@ -438,15 +444,8 @@ impl Finish<'_> {
                 .values()
                 .any(|repeated| repeated.port == *port && repeated.scope == theta.body)
         });
-        let regions: HashSet<_> = self
-            .context
-            .nested_regions(theta.body)
-            .into_iter()
-            .collect();
+        let regions = &self.theta_regions[&theta.body];
         route.facts.retain(|value, _| {
-            if self.constants.contains_key(value) {
-                return true;
-            }
             let owner = self.context.region_of_port(*value).or_else(|| {
                 self.context.get_value(*value).defining_op().and_then(|op| {
                     self.context.region_of_op(op).or_else(|| {
@@ -459,7 +458,7 @@ impl Finish<'_> {
                     })
                 })
             });
-            owner.is_none_or(|region| region != theta.body && !regions.contains(&region))
+            owner.is_some_and(|region| region != theta.body && !regions.contains(&region))
         });
     }
 
@@ -478,7 +477,7 @@ impl Finish<'_> {
             .zip(carried)
             .map(|(&port, (value, fact))| (self.value(port), value, fact))
             .collect();
-        Self::assign(route, incoming);
+        self.assign(route, incoming);
         route.point = Point {
             sequence: theta.head,
             index: 0,
@@ -486,18 +485,17 @@ impl Finish<'_> {
         Ok(())
     }
 
-    fn dynamic_facts(&self, route: &Route) -> Vec<(ValueId, Fact)> {
+    fn dynamic_facts(&self, route: &Route) -> Vec<(ValueId, ControlOutcome)> {
         let mut facts: Vec<_> = route
             .facts
             .iter()
-            .filter(|(value, _)| !self.constants.contains_key(value))
             .map(|(&value, &fact)| (value, fact))
             .collect();
         facts.sort();
         facts
     }
 
-    fn dynamic_control_facts(&self, route: &Route) -> Vec<(ControlPortId, Fact)> {
+    fn dynamic_control_facts(&self, route: &Route) -> Vec<(ControlPortId, ControlOutcome)> {
         let mut facts: Vec<_> = route
             .control_facts
             .iter()
@@ -564,7 +562,7 @@ impl Finish<'_> {
                         {
                             route
                                 .control_facts
-                                .insert(repeated.port, Fact::Exact(*arm as u64));
+                                .insert(repeated.port, ControlOutcome::Exact(*arm as u64));
                         }
                     }
                     route.point = *parent;
@@ -760,16 +758,18 @@ impl Finish<'_> {
         let mut taken_routes = Vec::with_capacity(reachable.len());
         for (outcome, fact) in reachable {
             let mut selected = route.clone();
-            selected
-                .facts
-                .insert(self.value(definition.source_predicate), outcome_fact(fact));
+            let predicate = self.value(definition.source_predicate);
+            if !self.constants.contains_key(&predicate) {
+                selected.facts.insert(predicate, fact);
+            }
             selected.skip_control = Some(control);
             taken_routes.push((outcome, self.target(selected)?));
         }
         let mut last_route = route.clone();
-        last_route
-            .facts
-            .insert(self.value(definition.source_predicate), outcome_fact(last));
+        let predicate = self.value(definition.source_predicate);
+        if !self.constants.contains_key(&predicate) {
+            last_route.facts.insert(predicate, last);
+        }
         last_route.skip_control = Some(control);
         let mut other = self.target(last_route)?;
         for (position, (outcome, taken)) in taken_routes.into_iter().enumerate().rev() {
@@ -897,16 +897,16 @@ impl Finish<'_> {
         let predicate = self.read(&route, theta.predicate);
         let mut repeat = route.clone();
         let logical = self.value(theta.predicate);
-        if !self.ambiguous_facts.contains(&logical) {
-            repeat.facts.insert(logical, Fact::DefaultFrom(1));
+        if !self.ambiguous_facts.contains(&logical) && !self.constants.contains_key(&logical) {
+            repeat.facts.insert(logical, ControlOutcome::DefaultFrom(1));
         }
         repeat.point = Point {
             sequence: theta.continue_,
             index: 0,
         };
         let mut exit = route.clone();
-        if !self.ambiguous_facts.contains(&logical) {
-            exit.facts.insert(logical, Fact::Exact(0));
+        if !self.ambiguous_facts.contains(&logical) && !self.constants.contains_key(&logical) {
+            exit.facts.insert(logical, ControlOutcome::Exact(0));
         }
         exit.point = Point {
             sequence: theta.exit,
@@ -1309,25 +1309,32 @@ impl Finish<'_> {
                     node = target;
                 }
             }
-            if node != root {
-                self.fragments[root.0].ops.retain(|&held| held != op);
-                let mut position = self.fragments[node.0].ops.len();
-                for (index, &held) in self.fragments[node.0].ops.iter().enumerate() {
-                    let reads = values_read(self.context, held);
-                    if reads.into_iter().any(|raw| {
-                        ssa.at(node, raw).is_ok_and(|value| {
-                            let value = ssa.canonical(value);
-                            results
-                                .iter()
-                                .any(|&result| value == SsaValue::Definition(result))
-                        })
-                    }) {
-                        position = index;
-                        break;
-                    }
+            self.fragments[root.0].ops.retain(|&held| held != op);
+            // A literal retained for later blocks must precede the literals
+            // read by this fragment's terminator, whose test is emitted later.
+            let mut position = if results
+                .iter()
+                .any(|value| local_reads[node.0].contains(&SsaValue::Definition(*value)))
+            {
+                self.fragments[node.0].ops.len()
+            } else {
+                0
+            };
+            for (index, &held) in self.fragments[node.0].ops.iter().enumerate() {
+                let reads = values_read(self.context, held);
+                if reads.into_iter().any(|raw| {
+                    ssa.at(node, raw).is_ok_and(|value| {
+                        let value = ssa.canonical(value);
+                        results
+                            .iter()
+                            .any(|&result| value == SsaValue::Definition(result))
+                    })
+                }) {
+                    position = index;
+                    break;
                 }
-                self.fragments[node.0].ops.insert(position, op);
             }
+            self.fragments[node.0].ops.insert(position, op);
         }
         Ok(())
     }

@@ -225,7 +225,9 @@ conversion can fuse a pure comparison when its inputs are available there.
 If placement rejects a continuation, selection discards the staged function
 and retries with its connected selector roles materialized. Those replacement
 tests must read the materialized value. Every retry permanently demotes at
-least one definition. A fused branch may only read operands available where
+least one definition; a request that cannot demote a definition fails before
+reselection. Recovery reports placement conflicts together. A fused branch
+may only read operands available where
 it executes.
 
 Each selected instruction inherits its source computation's demand domain.
