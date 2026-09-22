@@ -1310,18 +1310,14 @@ instruction VVsoxei64M for [RVV] : VVsoxeiMMem {
     }
 }
 
-instruction VL1Re8 for [RVV] {
-    param MNEMONIC: String = "vl1re8.v";
-    param WIDTH3: bits<3> = 0b000;
-    param OPCODE: bits<7> = 0b0000111;
-
-    operands {
-        vd: VR,
-        rs1: GPR,
-    }
+template VLeWholeMem for [RVV] {
+    param MNEMONIC: String;
+    param WIDTH3: bits<3>;
+    param OPCODE: bits<7>;
+    param NF: bits<3> = 0b000;
 
     encoding {
-        0b000,
+        NF,
         0b000,
         0b1,
         0b01000,
@@ -1331,125 +1327,18 @@ instruction VL1Re8 for [RVV] {
         OPCODE,
     }
 
-    asm {
-        "{self.MNEMONIC} {vd}, ({rs1})"
-    }
-
-    behavior {
-        vd = load(rs1, zext(self.VLEN / 8, self.XLEN), 0b0);
-    }
-
+    asm { "{self.MNEMONIC} {vd}, ({rs1})" }
     schedule { units = [WriteIALU]; }
 }
 
-instruction VL1Re16 for [RVV] {
-    param MNEMONIC: String = "vl1re16.v";
-    param WIDTH3: bits<3> = 0b101;
-    param OPCODE: bits<7> = 0b0000111;
-
-    operands {
-        vd: VR,
-        rs1: GPR,
-    }
+template VSeWholeMem for [RVV] {
+    param MNEMONIC: String;
+    param WIDTH3: bits<3>;
+    param OPCODE: bits<7>;
+    param NF: bits<3> = 0b000;
 
     encoding {
-        0b000,
-        0b000,
-        0b1,
-        0b01000,
-        rs1,
-        WIDTH3,
-        vd,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {vd}, ({rs1})"
-    }
-
-    behavior {
-        vd = load(rs1, zext(self.VLEN / 8, self.XLEN), 0b0);
-    }
-
-    schedule { units = [WriteIALU]; }
-}
-
-instruction VL1Re32 for [RVV] {
-    param MNEMONIC: String = "vl1re32.v";
-    param WIDTH3: bits<3> = 0b110;
-    param OPCODE: bits<7> = 0b0000111;
-
-    operands {
-        vd: VR,
-        rs1: GPR,
-    }
-
-    encoding {
-        0b000,
-        0b000,
-        0b1,
-        0b01000,
-        rs1,
-        WIDTH3,
-        vd,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {vd}, ({rs1})"
-    }
-
-    behavior {
-        vd = load(rs1, zext(self.VLEN / 8, self.XLEN), 0b0);
-    }
-
-    schedule { units = [WriteIALU]; }
-}
-
-instruction VL1Re64 for [RVV] {
-    param MNEMONIC: String = "vl1re64.v";
-    param WIDTH3: bits<3> = 0b111;
-    param OPCODE: bits<7> = 0b0000111;
-
-    operands {
-        vd: VR,
-        rs1: GPR,
-    }
-
-    encoding {
-        0b000,
-        0b000,
-        0b1,
-        0b01000,
-        rs1,
-        WIDTH3,
-        vd,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {vd}, ({rs1})"
-    }
-
-    behavior {
-        vd = load(rs1, zext(self.VLEN / 8, self.XLEN), 0b0);
-    }
-
-    schedule { units = [WriteIALU]; }
-}
-
-instruction VS1R for [RVV] {
-    param MNEMONIC: String = "vs1r.v";
-    param WIDTH3: bits<3> = 0b000;
-    param OPCODE: bits<7> = 0b0100111;
-
-    operands {
-        vs3: VR,
-        rs1: GPR,
-    }
-
-    encoding {
-        0b000,
+        NF,
         0b000,
         0b1,
         0b01000,
@@ -1459,495 +1348,318 @@ instruction VS1R for [RVV] {
         OPCODE,
     }
 
-    asm {
-        "{self.MNEMONIC} {vs3}, ({rs1})"
+    asm { "{self.MNEMONIC} {vs3}, ({rs1})" }
+    schedule { units = [WriteIALU]; }
+}
+
+instruction VL1Re8 for [RVV] : VLeWholeMem {
+    param MNEMONIC: String = "vl1re8.v";
+    param WIDTH3: bits<3> = 0b000;
+    param OPCODE: bits<7> = 0b0000111;
+    operands {
+        vd: VR,
+        rs1: GPR,
+    }
+
+    behavior {
+        vd = load(rs1, zext(self.VLEN / 8, self.XLEN), 0b0);
+    }
+}
+
+instruction VL1Re16 for [RVV] : VLeWholeMem {
+    param MNEMONIC: String = "vl1re16.v";
+    param WIDTH3: bits<3> = 0b101;
+    param OPCODE: bits<7> = 0b0000111;
+    operands {
+        vd: VR,
+        rs1: GPR,
+    }
+
+    behavior {
+        vd = load(rs1, zext(self.VLEN / 8, self.XLEN), 0b0);
+    }
+}
+
+instruction VL1Re32 for [RVV] : VLeWholeMem {
+    param MNEMONIC: String = "vl1re32.v";
+    param WIDTH3: bits<3> = 0b110;
+    param OPCODE: bits<7> = 0b0000111;
+    operands {
+        vd: VR,
+        rs1: GPR,
+    }
+
+    behavior {
+        vd = load(rs1, zext(self.VLEN / 8, self.XLEN), 0b0);
+    }
+}
+
+instruction VL1Re64 for [RVV] : VLeWholeMem {
+    param MNEMONIC: String = "vl1re64.v";
+    param WIDTH3: bits<3> = 0b111;
+    param OPCODE: bits<7> = 0b0000111;
+    operands {
+        vd: VR,
+        rs1: GPR,
+    }
+
+    behavior {
+        vd = load(rs1, zext(self.VLEN / 8, self.XLEN), 0b0);
+    }
+}
+
+instruction VS1R for [RVV] : VSeWholeMem {
+    param MNEMONIC: String = "vs1r.v";
+    param WIDTH3: bits<3> = 0b000;
+    param OPCODE: bits<7> = 0b0100111;
+    operands {
+        vs3: VR,
+        rs1: GPR,
     }
 
     behavior {
         store(rs1, zext(self.VLEN / 8, self.XLEN), vs3);
     }
-
-    schedule { units = [WriteIALU]; }
 }
 
-instruction VL2Re8 for [RVV] {
+instruction VL2Re8 for [RVV] : VLeWholeMem {
     param MNEMONIC: String = "vl2re8.v";
     param WIDTH3: bits<3> = 0b000;
     param OPCODE: bits<7> = 0b0000111;
+    param NF: bits<3> = 0b001;
 
     operands {
         vd: VRM2,
         rs1: GPR,
     }
 
-    encoding {
-        0b001,
-        0b000,
-        0b1,
-        0b01000,
-        rs1,
-        WIDTH3,
-        vd,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {vd}, ({rs1})"
-    }
-
     behavior {
         vd = load(rs1, zext(self.VLEN / 8 * 2, self.XLEN), 0b0);
     }
-
-    schedule { units = [WriteIALU]; }
 }
 
-instruction VL2Re16 for [RVV] {
+instruction VL2Re16 for [RVV] : VLeWholeMem {
     param MNEMONIC: String = "vl2re16.v";
     param WIDTH3: bits<3> = 0b101;
     param OPCODE: bits<7> = 0b0000111;
+    param NF: bits<3> = 0b001;
 
     operands {
         vd: VRM2,
         rs1: GPR,
     }
 
-    encoding {
-        0b001,
-        0b000,
-        0b1,
-        0b01000,
-        rs1,
-        WIDTH3,
-        vd,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {vd}, ({rs1})"
-    }
-
     behavior {
         vd = load(rs1, zext(self.VLEN / 8 * 2, self.XLEN), 0b0);
     }
-
-    schedule { units = [WriteIALU]; }
 }
 
-instruction VL2Re32 for [RVV] {
+instruction VL2Re32 for [RVV] : VLeWholeMem {
     param MNEMONIC: String = "vl2re32.v";
     param WIDTH3: bits<3> = 0b110;
     param OPCODE: bits<7> = 0b0000111;
+    param NF: bits<3> = 0b001;
 
     operands {
         vd: VRM2,
         rs1: GPR,
     }
 
-    encoding {
-        0b001,
-        0b000,
-        0b1,
-        0b01000,
-        rs1,
-        WIDTH3,
-        vd,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {vd}, ({rs1})"
-    }
-
     behavior {
         vd = load(rs1, zext(self.VLEN / 8 * 2, self.XLEN), 0b0);
     }
-
-    schedule { units = [WriteIALU]; }
 }
 
-instruction VL2Re64 for [RVV] {
+instruction VL2Re64 for [RVV] : VLeWholeMem {
     param MNEMONIC: String = "vl2re64.v";
     param WIDTH3: bits<3> = 0b111;
     param OPCODE: bits<7> = 0b0000111;
+    param NF: bits<3> = 0b001;
 
     operands {
         vd: VRM2,
         rs1: GPR,
     }
 
-    encoding {
-        0b001,
-        0b000,
-        0b1,
-        0b01000,
-        rs1,
-        WIDTH3,
-        vd,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {vd}, ({rs1})"
-    }
-
     behavior {
         vd = load(rs1, zext(self.VLEN / 8 * 2, self.XLEN), 0b0);
     }
-
-    schedule { units = [WriteIALU]; }
 }
 
-instruction VS2R for [RVV] {
+instruction VS2R for [RVV] : VSeWholeMem {
     param MNEMONIC: String = "vs2r.v";
     param WIDTH3: bits<3> = 0b000;
     param OPCODE: bits<7> = 0b0100111;
+    param NF: bits<3> = 0b001;
 
     operands {
         vs3: VRM2,
         rs1: GPR,
     }
 
-    encoding {
-        0b001,
-        0b000,
-        0b1,
-        0b01000,
-        rs1,
-        WIDTH3,
-        vs3,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {vs3}, ({rs1})"
-    }
-
     behavior {
         store(rs1, zext(self.VLEN / 8 * 2, self.XLEN), vs3);
     }
-
-    schedule { units = [WriteIALU]; }
 }
 
-instruction VL4Re8 for [RVV] {
+instruction VL4Re8 for [RVV] : VLeWholeMem {
     param MNEMONIC: String = "vl4re8.v";
     param WIDTH3: bits<3> = 0b000;
     param OPCODE: bits<7> = 0b0000111;
+    param NF: bits<3> = 0b011;
 
     operands {
         vd: VRM4,
         rs1: GPR,
     }
 
-    encoding {
-        0b011,
-        0b000,
-        0b1,
-        0b01000,
-        rs1,
-        WIDTH3,
-        vd,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {vd}, ({rs1})"
-    }
-
     behavior {
         vd = load(rs1, zext(self.VLEN / 8 * 4, self.XLEN), 0b0);
     }
-
-    schedule { units = [WriteIALU]; }
 }
 
-instruction VL4Re16 for [RVV] {
+instruction VL4Re16 for [RVV] : VLeWholeMem {
     param MNEMONIC: String = "vl4re16.v";
     param WIDTH3: bits<3> = 0b101;
     param OPCODE: bits<7> = 0b0000111;
+    param NF: bits<3> = 0b011;
 
     operands {
         vd: VRM4,
         rs1: GPR,
     }
 
-    encoding {
-        0b011,
-        0b000,
-        0b1,
-        0b01000,
-        rs1,
-        WIDTH3,
-        vd,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {vd}, ({rs1})"
-    }
-
     behavior {
         vd = load(rs1, zext(self.VLEN / 8 * 4, self.XLEN), 0b0);
     }
-
-    schedule { units = [WriteIALU]; }
 }
 
-instruction VL4Re32 for [RVV] {
+instruction VL4Re32 for [RVV] : VLeWholeMem {
     param MNEMONIC: String = "vl4re32.v";
     param WIDTH3: bits<3> = 0b110;
     param OPCODE: bits<7> = 0b0000111;
+    param NF: bits<3> = 0b011;
 
     operands {
         vd: VRM4,
         rs1: GPR,
     }
 
-    encoding {
-        0b011,
-        0b000,
-        0b1,
-        0b01000,
-        rs1,
-        WIDTH3,
-        vd,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {vd}, ({rs1})"
-    }
-
     behavior {
         vd = load(rs1, zext(self.VLEN / 8 * 4, self.XLEN), 0b0);
     }
-
-    schedule { units = [WriteIALU]; }
 }
 
-instruction VL4Re64 for [RVV] {
+instruction VL4Re64 for [RVV] : VLeWholeMem {
     param MNEMONIC: String = "vl4re64.v";
     param WIDTH3: bits<3> = 0b111;
     param OPCODE: bits<7> = 0b0000111;
+    param NF: bits<3> = 0b011;
 
     operands {
         vd: VRM4,
         rs1: GPR,
     }
 
-    encoding {
-        0b011,
-        0b000,
-        0b1,
-        0b01000,
-        rs1,
-        WIDTH3,
-        vd,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {vd}, ({rs1})"
-    }
-
     behavior {
         vd = load(rs1, zext(self.VLEN / 8 * 4, self.XLEN), 0b0);
     }
-
-    schedule { units = [WriteIALU]; }
 }
 
-instruction VS4R for [RVV] {
+instruction VS4R for [RVV] : VSeWholeMem {
     param MNEMONIC: String = "vs4r.v";
     param WIDTH3: bits<3> = 0b000;
     param OPCODE: bits<7> = 0b0100111;
+    param NF: bits<3> = 0b011;
 
     operands {
         vs3: VRM4,
         rs1: GPR,
     }
 
-    encoding {
-        0b011,
-        0b000,
-        0b1,
-        0b01000,
-        rs1,
-        WIDTH3,
-        vs3,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {vs3}, ({rs1})"
-    }
-
     behavior {
         store(rs1, zext(self.VLEN / 8 * 4, self.XLEN), vs3);
     }
-
-    schedule { units = [WriteIALU]; }
 }
 
-instruction VL8Re8 for [RVV] {
+instruction VL8Re8 for [RVV] : VLeWholeMem {
     param MNEMONIC: String = "vl8re8.v";
     param WIDTH3: bits<3> = 0b000;
     param OPCODE: bits<7> = 0b0000111;
+    param NF: bits<3> = 0b111;
 
     operands {
         vd: VRM8,
         rs1: GPR,
     }
 
-    encoding {
-        0b111,
-        0b000,
-        0b1,
-        0b01000,
-        rs1,
-        WIDTH3,
-        vd,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {vd}, ({rs1})"
-    }
-
     behavior {
         vd = load(rs1, zext(self.VLEN / 8 * 8, self.XLEN), 0b0);
     }
-
-    schedule { units = [WriteIALU]; }
 }
 
-instruction VL8Re16 for [RVV] {
+instruction VL8Re16 for [RVV] : VLeWholeMem {
     param MNEMONIC: String = "vl8re16.v";
     param WIDTH3: bits<3> = 0b101;
     param OPCODE: bits<7> = 0b0000111;
+    param NF: bits<3> = 0b111;
 
     operands {
         vd: VRM8,
         rs1: GPR,
     }
 
-    encoding {
-        0b111,
-        0b000,
-        0b1,
-        0b01000,
-        rs1,
-        WIDTH3,
-        vd,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {vd}, ({rs1})"
-    }
-
     behavior {
         vd = load(rs1, zext(self.VLEN / 8 * 8, self.XLEN), 0b0);
     }
-
-    schedule { units = [WriteIALU]; }
 }
 
-instruction VL8Re32 for [RVV] {
+instruction VL8Re32 for [RVV] : VLeWholeMem {
     param MNEMONIC: String = "vl8re32.v";
     param WIDTH3: bits<3> = 0b110;
     param OPCODE: bits<7> = 0b0000111;
+    param NF: bits<3> = 0b111;
 
     operands {
         vd: VRM8,
         rs1: GPR,
     }
 
-    encoding {
-        0b111,
-        0b000,
-        0b1,
-        0b01000,
-        rs1,
-        WIDTH3,
-        vd,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {vd}, ({rs1})"
-    }
-
     behavior {
         vd = load(rs1, zext(self.VLEN / 8 * 8, self.XLEN), 0b0);
     }
-
-    schedule { units = [WriteIALU]; }
 }
 
-instruction VL8Re64 for [RVV] {
+instruction VL8Re64 for [RVV] : VLeWholeMem {
     param MNEMONIC: String = "vl8re64.v";
     param WIDTH3: bits<3> = 0b111;
     param OPCODE: bits<7> = 0b0000111;
+    param NF: bits<3> = 0b111;
 
     operands {
         vd: VRM8,
         rs1: GPR,
     }
 
-    encoding {
-        0b111,
-        0b000,
-        0b1,
-        0b01000,
-        rs1,
-        WIDTH3,
-        vd,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {vd}, ({rs1})"
-    }
-
     behavior {
         vd = load(rs1, zext(self.VLEN / 8 * 8, self.XLEN), 0b0);
     }
-
-    schedule { units = [WriteIALU]; }
 }
 
-instruction VS8R for [RVV] {
+instruction VS8R for [RVV] : VSeWholeMem {
     param MNEMONIC: String = "vs8r.v";
     param WIDTH3: bits<3> = 0b000;
     param OPCODE: bits<7> = 0b0100111;
+    param NF: bits<3> = 0b111;
 
     operands {
         vs3: VRM8,
         rs1: GPR,
     }
 
-    encoding {
-        0b111,
-        0b000,
-        0b1,
-        0b01000,
-        rs1,
-        WIDTH3,
-        vs3,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {vs3}, ({rs1})"
-    }
-
     behavior {
         store(rs1, zext(self.VLEN / 8 * 8, self.XLEN), vs3);
     }
-
-    schedule { units = [WriteIALU]; }
 }
 
 instruction VLmV for [RVV] {
