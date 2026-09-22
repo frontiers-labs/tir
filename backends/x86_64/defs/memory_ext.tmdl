@@ -1548,237 +1548,94 @@ instruction Leave for [X86_64] {
 // stos stores the accumulator (al/ax/eax/rax) through [rdi]; cmps compares
 // [rsi] with [rdi] driving EFLAGS like a subtraction.
 
-instruction Movsb for [X86_64] {
-    param MNEMONIC: String = "movsb";
-    schedule { units = [WriteILeaSimple]; }
-    encoding { 0xA4 }
-    asm { "{self.MNEMONIC}" }
-    behavior {
-        let step = if EFLAGS::df == zext(0b1, 1) {
-            zext(0b0, self.XLEN) - zext(1, self.XLEN)
-        } else {
-            zext(1, self.XLEN)
-        };
-        store(GPR::rdi, 1, load(GPR::rsi, 1, 0b0));
-        GPR::rsi = GPR::rsi + step;
-        GPR::rdi = GPR::rdi + step;
-    }
+macro string_mov {
+    ($name:ident, $mnemonic:literal, $opname:literal, $bytes:tt, $size:literal) => {
+        instruction $name for [X86_64] {
+            param OPNAME: String = $opname;
+            param MNEMONIC: String = $mnemonic;
+            schedule { units = [WriteILeaSimple]; }
+            encoding $bytes
+            asm { "{self.MNEMONIC}" }
+            behavior {
+                let step = if EFLAGS::df == zext(0b1, 1) {
+                    zext(0b0, self.XLEN) - zext($size, self.XLEN)
+                } else {
+                    zext($size, self.XLEN)
+                };
+                store(GPR::rdi, $size, load(GPR::rsi, $size, 0b0));
+                GPR::rsi = GPR::rsi + step;
+                GPR::rdi = GPR::rdi + step;
+            }
+        }
+    };
 }
 
-instruction Movsw for [X86_64] {
-    param MNEMONIC: String = "movsw";
-    schedule { units = [WriteILeaSimple]; }
-    encoding { 0x66, 0xA5 }
-    asm { "{self.MNEMONIC}" }
-    behavior {
-        let step = if EFLAGS::df == zext(0b1, 1) {
-            zext(0b0, self.XLEN) - zext(2, self.XLEN)
-        } else {
-            zext(2, self.XLEN)
-        };
-        store(GPR::rdi, 2, load(GPR::rsi, 2, 0b0));
-        GPR::rsi = GPR::rsi + step;
-        GPR::rdi = GPR::rdi + step;
-    }
+macro string_stos {
+    ($name:ident, $mnemonic:literal, $opname:literal, $bytes:tt, $size:literal, $reg:ident, $subreg:ident) => {
+        instruction $name for [X86_64] {
+            param OPNAME: String = $opname;
+            param MNEMONIC: String = $mnemonic;
+            schedule { units = [WriteILeaSimple]; }
+            encoding $bytes
+            asm { "{self.MNEMONIC}" }
+            behavior {
+                let step = if EFLAGS::df == zext(0b1, 1) {
+                    zext(0b0, self.XLEN) - zext($size, self.XLEN)
+                } else {
+                    zext($size, self.XLEN)
+                };
+                store(GPR::rdi, $size, $reg::$subreg);
+                GPR::rdi = GPR::rdi + step;
+            }
+        }
+    };
 }
 
+macro string_cmps {
+    ($name:ident, $mnemonic:literal, $opname:literal, $bytes:tt, $size:literal, $sign:literal) => {
+        instruction $name for [X86_64] {
+            param OPNAME: String = $opname;
+            param MNEMONIC: String = $mnemonic;
+            schedule { units = [WriteIALU]; }
+            encoding $bytes
+            asm { "{self.MNEMONIC}" }
+            behavior {
+                let step = if EFLAGS::df == zext(0b1, 1) {
+                    zext(0b0, self.XLEN) - zext($size, self.XLEN)
+                } else {
+                    zext($size, self.XLEN)
+                };
+                let lhs = load(GPR::rsi, $size, 0b0);
+                let rhs = load(GPR::rdi, $size, 0b0);
+                EFLAGS::cf = if lhs ~< rhs { zext(0b1, 1) } else { zext(0b0, 1) };
+                EFLAGS::zf = if lhs == rhs { zext(0b1, 1) } else { zext(0b0, 1) };
+                EFLAGS::sf = extract(lhs - rhs, $sign, $sign);
+                EFLAGS::of = extract((lhs ^ rhs) & (lhs ^ (lhs - rhs)), $sign, $sign);
+                EFLAGS::af = extract(lhs ^ rhs ^ (lhs - rhs), 4, 4);
+                EFLAGS::pf = parity_flag(lhs - rhs);
+                GPR::rsi = GPR::rsi + step;
+                GPR::rdi = GPR::rdi + step;
+            }
+        }
+    };
+}
+
+string_mov!(Movsb, "movsb", "movsb", { 0xA4 }, 1)
+string_mov!(Movsw, "movsw", "movsw", { 0x66, 0xA5 }, 2)
 // The mnemonic `movsd` is shared with the SSE scalar move; assembler forms
 // pull the no-operand spelling here and the register forms there.
-instruction MovsdString for [X86_64] {
-    param OPNAME: String = "movsd_string";
-    param MNEMONIC: String = "movsd";
-    schedule { units = [WriteILeaSimple]; }
-    encoding { 0xA5 }
-    asm { "{self.MNEMONIC}" }
-    behavior {
-        let step = if EFLAGS::df == zext(0b1, 1) {
-            zext(0b0, self.XLEN) - zext(4, self.XLEN)
-        } else {
-            zext(4, self.XLEN)
-        };
-        store(GPR::rdi, 4, load(GPR::rsi, 4, 0b0));
-        GPR::rsi = GPR::rsi + step;
-        GPR::rdi = GPR::rdi + step;
-    }
-}
+string_mov!(MovsdString, "movsd", "movsd_string", { 0xA5 }, 4)
+string_mov!(Movsq, "movsq", "movsq", { 0x48, 0xA5 }, 8)
 
-instruction Movsq for [X86_64] {
-    param MNEMONIC: String = "movsq";
-    schedule { units = [WriteILeaSimple]; }
-    encoding { 0x48, 0xA5 }
-    asm { "{self.MNEMONIC}" }
-    behavior {
-        let step = if EFLAGS::df == zext(0b1, 1) {
-            zext(0b0, self.XLEN) - zext(8, self.XLEN)
-        } else {
-            zext(8, self.XLEN)
-        };
-        store(GPR::rdi, 8, load(GPR::rsi, 8, 0b0));
-        GPR::rsi = GPR::rsi + step;
-        GPR::rdi = GPR::rdi + step;
-    }
-}
+string_stos!(Stosb, "stosb", "stosb", { 0xAA }, 1, GPR8, al)
+string_stos!(Stosw, "stosw", "stosw", { 0x66, 0xAB }, 2, GPR16, ax)
+string_stos!(Stosd, "stosd", "stosd", { 0xAB }, 4, GPR32, eax)
+string_stos!(Stosq, "stosq", "stosq", { 0x48, 0xAB }, 8, GPR, rax)
 
-instruction Stosb for [X86_64] {
-    param MNEMONIC: String = "stosb";
-    schedule { units = [WriteILeaSimple]; }
-    encoding { 0xAA }
-    asm { "{self.MNEMONIC}" }
-    behavior {
-        let step = if EFLAGS::df == zext(0b1, 1) {
-            zext(0b0, self.XLEN) - zext(1, self.XLEN)
-        } else {
-            zext(1, self.XLEN)
-        };
-        store(GPR::rdi, 1, GPR8::al);
-        GPR::rdi = GPR::rdi + step;
-    }
-}
-
-instruction Stosw for [X86_64] {
-    param MNEMONIC: String = "stosw";
-    schedule { units = [WriteILeaSimple]; }
-    encoding { 0x66, 0xAB }
-    asm { "{self.MNEMONIC}" }
-    behavior {
-        let step = if EFLAGS::df == zext(0b1, 1) {
-            zext(0b0, self.XLEN) - zext(2, self.XLEN)
-        } else {
-            zext(2, self.XLEN)
-        };
-        store(GPR::rdi, 2, GPR16::ax);
-        GPR::rdi = GPR::rdi + step;
-    }
-}
-
-instruction Stosd for [X86_64] {
-    param MNEMONIC: String = "stosd";
-    schedule { units = [WriteILeaSimple]; }
-    encoding { 0xAB }
-    asm { "{self.MNEMONIC}" }
-    behavior {
-        let step = if EFLAGS::df == zext(0b1, 1) {
-            zext(0b0, self.XLEN) - zext(4, self.XLEN)
-        } else {
-            zext(4, self.XLEN)
-        };
-        store(GPR::rdi, 4, GPR32::eax);
-        GPR::rdi = GPR::rdi + step;
-    }
-}
-
-instruction Stosq for [X86_64] {
-    param MNEMONIC: String = "stosq";
-    schedule { units = [WriteILeaSimple]; }
-    encoding { 0x48, 0xAB }
-    asm { "{self.MNEMONIC}" }
-    behavior {
-        let step = if EFLAGS::df == zext(0b1, 1) {
-            zext(0b0, self.XLEN) - zext(8, self.XLEN)
-        } else {
-            zext(8, self.XLEN)
-        };
-        store(GPR::rdi, 8, GPR::rax);
-        GPR::rdi = GPR::rdi + step;
-    }
-}
-
-instruction Cmpsb for [X86_64] {
-    param MNEMONIC: String = "cmpsb";
-    schedule { units = [WriteIALU]; }
-    encoding { 0xA6 }
-    asm { "{self.MNEMONIC}" }
-    behavior {
-        let step = if EFLAGS::df == zext(0b1, 1) {
-            zext(0b0, self.XLEN) - zext(1, self.XLEN)
-        } else {
-            zext(1, self.XLEN)
-        };
-        let lhs = load(GPR::rsi, 1, 0b0);
-        let rhs = load(GPR::rdi, 1, 0b0);
-        EFLAGS::cf = if lhs ~< rhs { zext(0b1, 1) } else { zext(0b0, 1) };
-        EFLAGS::zf = if lhs == rhs { zext(0b1, 1) } else { zext(0b0, 1) };
-        EFLAGS::sf = extract(lhs - rhs, 7, 7);
-        EFLAGS::of = extract((lhs ^ rhs) & (lhs ^ (lhs - rhs)), 7, 7);
-        EFLAGS::af = extract(lhs ^ rhs ^ (lhs - rhs), 4, 4);
-        EFLAGS::pf = parity_flag(lhs - rhs);
-        GPR::rsi = GPR::rsi + step;
-        GPR::rdi = GPR::rdi + step;
-    }
-}
-
-instruction Cmpsw for [X86_64] {
-    param MNEMONIC: String = "cmpsw";
-    schedule { units = [WriteIALU]; }
-    encoding { 0x66, 0xA7 }
-    asm { "{self.MNEMONIC}" }
-    behavior {
-        let step = if EFLAGS::df == zext(0b1, 1) {
-            zext(0b0, self.XLEN) - zext(2, self.XLEN)
-        } else {
-            zext(2, self.XLEN)
-        };
-        let lhs = load(GPR::rsi, 2, 0b0);
-        let rhs = load(GPR::rdi, 2, 0b0);
-        EFLAGS::cf = if lhs ~< rhs { zext(0b1, 1) } else { zext(0b0, 1) };
-        EFLAGS::zf = if lhs == rhs { zext(0b1, 1) } else { zext(0b0, 1) };
-        EFLAGS::sf = extract(lhs - rhs, 15, 15);
-        EFLAGS::of = extract((lhs ^ rhs) & (lhs ^ (lhs - rhs)), 15, 15);
-        EFLAGS::af = extract(lhs ^ rhs ^ (lhs - rhs), 4, 4);
-        EFLAGS::pf = parity_flag(lhs - rhs);
-        GPR::rsi = GPR::rsi + step;
-        GPR::rdi = GPR::rdi + step;
-    }
-}
-
-instruction CmpsdString for [X86_64] {
-    param OPNAME: String = "cmpsd_string";
-    param MNEMONIC: String = "cmpsd";
-    schedule { units = [WriteIALU]; }
-    encoding { 0xA7 }
-    asm { "{self.MNEMONIC}" }
-    behavior {
-        let step = if EFLAGS::df == zext(0b1, 1) {
-            zext(0b0, self.XLEN) - zext(4, self.XLEN)
-        } else {
-            zext(4, self.XLEN)
-        };
-        let lhs = load(GPR::rsi, 4, 0b0);
-        let rhs = load(GPR::rdi, 4, 0b0);
-        EFLAGS::cf = if lhs ~< rhs { zext(0b1, 1) } else { zext(0b0, 1) };
-        EFLAGS::zf = if lhs == rhs { zext(0b1, 1) } else { zext(0b0, 1) };
-        EFLAGS::sf = extract(lhs - rhs, 31, 31);
-        EFLAGS::of = extract((lhs ^ rhs) & (lhs ^ (lhs - rhs)), 31, 31);
-        EFLAGS::af = extract(lhs ^ rhs ^ (lhs - rhs), 4, 4);
-        EFLAGS::pf = parity_flag(lhs - rhs);
-        GPR::rsi = GPR::rsi + step;
-        GPR::rdi = GPR::rdi + step;
-    }
-}
-
-instruction Cmpsq for [X86_64] {
-    param MNEMONIC: String = "cmpsq";
-    schedule { units = [WriteIALU]; }
-    encoding { 0x48, 0xA7 }
-    asm { "{self.MNEMONIC}" }
-    behavior {
-        let step = if EFLAGS::df == zext(0b1, 1) {
-            zext(0b0, self.XLEN) - zext(8, self.XLEN)
-        } else {
-            zext(8, self.XLEN)
-        };
-        let lhs = load(GPR::rsi, 8, 0b0);
-        let rhs = load(GPR::rdi, 8, 0b0);
-        EFLAGS::cf = if lhs ~< rhs { zext(0b1, 1) } else { zext(0b0, 1) };
-        EFLAGS::zf = if lhs == rhs { zext(0b1, 1) } else { zext(0b0, 1) };
-        EFLAGS::sf = extract(lhs - rhs, 63, 63);
-        EFLAGS::of = extract((lhs ^ rhs) & (lhs ^ (lhs - rhs)), 63, 63);
-        EFLAGS::af = extract(lhs ^ rhs ^ (lhs - rhs), 4, 4);
-        EFLAGS::pf = parity_flag(lhs - rhs);
-        GPR::rsi = GPR::rsi + step;
-        GPR::rdi = GPR::rdi + step;
-    }
-}
+string_cmps!(Cmpsb, "cmpsb", "cmpsb", { 0xA6 }, 1, 7)
+string_cmps!(Cmpsw, "cmpsw", "cmpsw", { 0x66, 0xA7 }, 2, 15)
+string_cmps!(CmpsdString, "cmpsd", "cmpsd_string", { 0xA7 }, 4, 31)
+string_cmps!(Cmpsq, "cmpsq", "cmpsq", { 0x48, 0xA7 }, 8, 63)
 
 // `push r64` / `pop r64` (0x50+rd / 0x58+rd): the register number's low bits
 // live in the opcode byte; a plain REX carries the 4th bit.

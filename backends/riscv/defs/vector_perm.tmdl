@@ -152,200 +152,70 @@ fn scalar_sew(rs1) {
 
 // vslideup: lanes below the offset keep the old destination; lanes at or
 // above it take vs2[i - offset].
-instruction VSlideupVX for [RVV] : OpSlideVX {
-    param MNEMONIC: String = "vslideup.vx";
-    param FUNCT6: bits<6> = 0b001110;
+vector_pair!(VSlideupVX, VSlideupVXM, RVV, OpSlideVX, OpSlideVXM, "vslideup.vx", 0b001110, {
+    vd = concat(map(zip(iota(VCSR::vl, self.XLEN), split(vd, VCSR::vl, VCFG::sew)), |i, old| if i ~< rs1 { old } else { elem_at(vs2, i - rs1) }));
+}, {
+    vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), iota(VCSR::vl, self.XLEN), split(vd, VCSR::vl, VCFG::sew)), |m, i, old| if m & (i ~>= rs1) { elem_at(vs2, i - rs1) } else { old }));
+})
 
-    behavior {
-        vd = concat(map(zip(iota(VCSR::vl, self.XLEN), split(vd, VCSR::vl, VCFG::sew)), |i, old| if i ~< rs1 { old } else { elem_at(vs2, i - rs1) }));
-    }
-}
-
-instruction VSlideupVXM for [RVV] : OpSlideVXM {
-    param MNEMONIC: String = "vslideup.vx";
-    param OPNAME: String = "vslideup.vx.m";
-    param FUNCT6: bits<6> = 0b001110;
-
-    behavior {
-        vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), iota(VCSR::vl, self.XLEN), split(vd, VCSR::vl, VCFG::sew)), |m, i, old| if m & (i ~>= rs1) { elem_at(vs2, i - rs1) } else { old }));
-    }
-}
-
-instruction VSlideupVI for [RVV] : OpSlideVI {
-    param MNEMONIC: String = "vslideup.vi";
-    param FUNCT6: bits<6> = 0b001110;
-
-    behavior {
-        vd = concat(map(zip(iota(VCSR::vl, self.XLEN), split(vd, VCSR::vl, VCFG::sew)), |i, old| if i ~< zext(imm, self.XLEN) { old } else { elem_at(vs2, i - zext(imm, self.XLEN)) }));
-    }
-}
-
-instruction VSlideupVIM for [RVV] : OpSlideVIM {
-    param MNEMONIC: String = "vslideup.vi";
-    param OPNAME: String = "vslideup.vi.m";
-    param FUNCT6: bits<6> = 0b001110;
-
-    behavior {
-        vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), iota(VCSR::vl, self.XLEN), split(vd, VCSR::vl, VCFG::sew)), |m, i, old| if m & (i ~>= zext(imm, self.XLEN)) { elem_at(vs2, i - zext(imm, self.XLEN)) } else { old }));
-    }
-}
+vector_pair!(VSlideupVI, VSlideupVIM, RVV, OpSlideVI, OpSlideVIM, "vslideup.vi", 0b001110, {
+    vd = concat(map(zip(iota(VCSR::vl, self.XLEN), split(vd, VCSR::vl, VCFG::sew)), |i, old| if i ~< zext(imm, self.XLEN) { old } else { elem_at(vs2, i - zext(imm, self.XLEN)) }));
+}, {
+    vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), iota(VCSR::vl, self.XLEN), split(vd, VCSR::vl, VCFG::sew)), |m, i, old| if m & (i ~>= zext(imm, self.XLEN)) { elem_at(vs2, i - zext(imm, self.XLEN)) } else { old }));
+})
 
 // vslidedown: lane i takes vs2[i + offset], zero past VLMAX.
-instruction VSlidedownVX for [RVV] : OpSlideVX {
-    param MNEMONIC: String = "vslidedown.vx";
-    param FUNCT6: bits<6> = 0b001111;
+vector_pair!(VSlidedownVX, VSlidedownVXM, RVV, OpSlideVX, OpSlideVXM, "vslidedown.vx", 0b001111, {
+    vd = concat(map(iota(VCSR::vl, self.XLEN), |i| if (i + rs1) ~< current_vlmax() { elem_at(vs2, i + rs1) } else { zext(0b0, VCFG::sew) }));
+}, {
+    vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), iota(VCSR::vl, self.XLEN), split(vd, VCSR::vl, VCFG::sew)), |m, i, old| if m { if (i + rs1) ~< current_vlmax() { elem_at(vs2, i + rs1) } else { zext(0b0, VCFG::sew) } } else { old }));
+})
 
-    behavior {
-        vd = concat(map(iota(VCSR::vl, self.XLEN), |i| if (i + rs1) ~< current_vlmax() { elem_at(vs2, i + rs1) } else { zext(0b0, VCFG::sew) }));
-    }
-}
-
-instruction VSlidedownVXM for [RVV] : OpSlideVXM {
-    param MNEMONIC: String = "vslidedown.vx";
-    param OPNAME: String = "vslidedown.vx.m";
-    param FUNCT6: bits<6> = 0b001111;
-
-    behavior {
-        vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), iota(VCSR::vl, self.XLEN), split(vd, VCSR::vl, VCFG::sew)), |m, i, old| if m { if (i + rs1) ~< current_vlmax() { elem_at(vs2, i + rs1) } else { zext(0b0, VCFG::sew) } } else { old }));
-    }
-}
-
-instruction VSlidedownVI for [RVV] : OpSlideVI {
-    param MNEMONIC: String = "vslidedown.vi";
-    param FUNCT6: bits<6> = 0b001111;
-
-    behavior {
-        vd = concat(map(iota(VCSR::vl, self.XLEN), |i| if (i + zext(imm, self.XLEN)) ~< current_vlmax() { elem_at(vs2, i + zext(imm, self.XLEN)) } else { zext(0b0, VCFG::sew) }));
-    }
-}
-
-instruction VSlidedownVIM for [RVV] : OpSlideVIM {
-    param MNEMONIC: String = "vslidedown.vi";
-    param OPNAME: String = "vslidedown.vi.m";
-    param FUNCT6: bits<6> = 0b001111;
-
-    behavior {
-        vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), iota(VCSR::vl, self.XLEN), split(vd, VCSR::vl, VCFG::sew)), |m, i, old| if m { if (i + zext(imm, self.XLEN)) ~< current_vlmax() { elem_at(vs2, i + zext(imm, self.XLEN)) } else { zext(0b0, VCFG::sew) } } else { old }));
-    }
-}
+vector_pair!(VSlidedownVI, VSlidedownVIM, RVV, OpSlideVI, OpSlideVIM, "vslidedown.vi", 0b001111, {
+    vd = concat(map(iota(VCSR::vl, self.XLEN), |i| if (i + zext(imm, self.XLEN)) ~< current_vlmax() { elem_at(vs2, i + zext(imm, self.XLEN)) } else { zext(0b0, VCFG::sew) }));
+}, {
+    vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), iota(VCSR::vl, self.XLEN), split(vd, VCSR::vl, VCFG::sew)), |m, i, old| if m { if (i + zext(imm, self.XLEN)) ~< current_vlmax() { elem_at(vs2, i + zext(imm, self.XLEN)) } else { zext(0b0, VCFG::sew) } } else { old }));
+})
 
 // vslide1up: lane 0 takes the scalar; lane i takes vs2[i - 1].
-instruction VSlide1upVX for [RVV] : OpSlide1VX {
-    param MNEMONIC: String = "vslide1up.vx";
-    param FUNCT6: bits<6> = 0b001110;
-
-    behavior {
-        vd = concat(map(iota(VCSR::vl, self.XLEN), |i| if i == zext(0b0, self.XLEN) { scalar_sew(rs1) } else { elem_at(vs2, i - zext(0b1, self.XLEN)) }));
-    }
-}
-
-instruction VSlide1upVXM for [RVV] : OpSlide1VXM {
-    param MNEMONIC: String = "vslide1up.vx";
-    param OPNAME: String = "vslide1up.vx.m";
-    param FUNCT6: bits<6> = 0b001110;
-
-    behavior {
-        vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), iota(VCSR::vl, self.XLEN), split(vd, VCSR::vl, VCFG::sew)), |m, i, old| if m { if i == zext(0b0, self.XLEN) { scalar_sew(rs1) } else { elem_at(vs2, i - zext(0b1, self.XLEN)) } } else { old }));
-    }
-}
+vector_pair!(VSlide1upVX, VSlide1upVXM, RVV, OpSlide1VX, OpSlide1VXM, "vslide1up.vx", 0b001110, {
+    vd = concat(map(iota(VCSR::vl, self.XLEN), |i| if i == zext(0b0, self.XLEN) { scalar_sew(rs1) } else { elem_at(vs2, i - zext(0b1, self.XLEN)) }));
+}, {
+    vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), iota(VCSR::vl, self.XLEN), split(vd, VCSR::vl, VCFG::sew)), |m, i, old| if m { if i == zext(0b0, self.XLEN) { scalar_sew(rs1) } else { elem_at(vs2, i - zext(0b1, self.XLEN)) } } else { old }));
+})
 
 // vslide1down: lane i takes vs2[i + 1]; the last active lane takes the scalar.
-instruction VSlide1downVX for [RVV] : OpSlide1VX {
-    param MNEMONIC: String = "vslide1down.vx";
-    param FUNCT6: bits<6> = 0b001111;
-
-    behavior {
-        vd = concat(map(iota(VCSR::vl, self.XLEN), |i| if (i + zext(0b1, self.XLEN)) ~< VCSR::vl { elem_at(vs2, i + zext(0b1, self.XLEN)) } else { scalar_sew(rs1) }));
-    }
-}
-
-instruction VSlide1downVXM for [RVV] : OpSlide1VXM {
-    param MNEMONIC: String = "vslide1down.vx";
-    param OPNAME: String = "vslide1down.vx.m";
-    param FUNCT6: bits<6> = 0b001111;
-
-    behavior {
-        vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), iota(VCSR::vl, self.XLEN), split(vd, VCSR::vl, VCFG::sew)), |m, i, old| if m { if (i + zext(0b1, self.XLEN)) ~< VCSR::vl { elem_at(vs2, i + zext(0b1, self.XLEN)) } else { scalar_sew(rs1) } } else { old }));
-    }
-}
+vector_pair!(VSlide1downVX, VSlide1downVXM, RVV, OpSlide1VX, OpSlide1VXM, "vslide1down.vx", 0b001111, {
+    vd = concat(map(iota(VCSR::vl, self.XLEN), |i| if (i + zext(0b1, self.XLEN)) ~< VCSR::vl { elem_at(vs2, i + zext(0b1, self.XLEN)) } else { scalar_sew(rs1) }));
+}, {
+    vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), iota(VCSR::vl, self.XLEN), split(vd, VCSR::vl, VCFG::sew)), |m, i, old| if m { if (i + zext(0b1, self.XLEN)) ~< VCSR::vl { elem_at(vs2, i + zext(0b1, self.XLEN)) } else { scalar_sew(rs1) } } else { old }));
+})
 
 // vrgather: lane i takes vs2[idx], zero when the index reaches VLMAX.
-instruction VRgatherVV for [RVV] : OpGatherVV {
-    param MNEMONIC: String = "vrgather.vv";
-    param FUNCT6: bits<6> = 0b001100;
+vector_pair!(VRgatherVV, VRgatherVVM, RVV, OpGatherVV, OpGatherVVM, "vrgather.vv", 0b001100, {
+    vd = concat(map(split(vs1, VCSR::vl, VCFG::sew), |idx| if zext(idx, self.XLEN) ~< current_vlmax() { elem_at(vs2, zext(idx, self.XLEN)) } else { zext(0b0, VCFG::sew) }));
+}, {
+    vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs1, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, idx, old| if m { if zext(idx, self.XLEN) ~< current_vlmax() { elem_at(vs2, zext(idx, self.XLEN)) } else { zext(0b0, VCFG::sew) } } else { old }));
+})
 
-    behavior {
-        vd = concat(map(split(vs1, VCSR::vl, VCFG::sew), |idx| if zext(idx, self.XLEN) ~< current_vlmax() { elem_at(vs2, zext(idx, self.XLEN)) } else { zext(0b0, VCFG::sew) }));
-    }
-}
+vector_pair!(VRgatherVX, VRgatherVXM, RVV, OpSlideVX, OpSlideVXM, "vrgather.vx", 0b001100, {
+    vd = concat(map(iota(VCSR::vl, self.XLEN), |i| if rs1 ~< current_vlmax() { elem_at(vs2, rs1) } else { zext(0b0, VCFG::sew) }));
+}, {
+    vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vd, VCSR::vl, VCFG::sew)), |m, old| if m { if rs1 ~< current_vlmax() { elem_at(vs2, rs1) } else { zext(0b0, VCFG::sew) } } else { old }));
+})
 
-instruction VRgatherVVM for [RVV] : OpGatherVVM {
-    param MNEMONIC: String = "vrgather.vv";
-    param OPNAME: String = "vrgather.vv.m";
-    param FUNCT6: bits<6> = 0b001100;
-
-    behavior {
-        vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs1, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, idx, old| if m { if zext(idx, self.XLEN) ~< current_vlmax() { elem_at(vs2, zext(idx, self.XLEN)) } else { zext(0b0, VCFG::sew) } } else { old }));
-    }
-}
-
-instruction VRgatherVX for [RVV] : OpSlideVX {
-    param MNEMONIC: String = "vrgather.vx";
-    param FUNCT6: bits<6> = 0b001100;
-
-    behavior {
-        vd = concat(map(iota(VCSR::vl, self.XLEN), |i| if rs1 ~< current_vlmax() { elem_at(vs2, rs1) } else { zext(0b0, VCFG::sew) }));
-    }
-}
-
-instruction VRgatherVXM for [RVV] : OpSlideVXM {
-    param MNEMONIC: String = "vrgather.vx";
-    param OPNAME: String = "vrgather.vx.m";
-    param FUNCT6: bits<6> = 0b001100;
-
-    behavior {
-        vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vd, VCSR::vl, VCFG::sew)), |m, old| if m { if rs1 ~< current_vlmax() { elem_at(vs2, rs1) } else { zext(0b0, VCFG::sew) } } else { old }));
-    }
-}
-
-instruction VRgatherVI for [RVV] : OpSlideVI {
-    param MNEMONIC: String = "vrgather.vi";
-    param FUNCT6: bits<6> = 0b001100;
-
-    behavior {
-        vd = concat(map(iota(VCSR::vl, self.XLEN), |i| if zext(imm, self.XLEN) ~< current_vlmax() { elem_at(vs2, zext(imm, self.XLEN)) } else { zext(0b0, VCFG::sew) }));
-    }
-}
-
-instruction VRgatherVIM for [RVV] : OpSlideVIM {
-    param MNEMONIC: String = "vrgather.vi";
-    param OPNAME: String = "vrgather.vi.m";
-    param FUNCT6: bits<6> = 0b001100;
-
-    behavior {
-        vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vd, VCSR::vl, VCFG::sew)), |m, old| if m { if zext(imm, self.XLEN) ~< current_vlmax() { elem_at(vs2, zext(imm, self.XLEN)) } else { zext(0b0, VCFG::sew) } } else { old }));
-    }
-}
+vector_pair!(VRgatherVI, VRgatherVIM, RVV, OpSlideVI, OpSlideVIM, "vrgather.vi", 0b001100, {
+    vd = concat(map(iota(VCSR::vl, self.XLEN), |i| if zext(imm, self.XLEN) ~< current_vlmax() { elem_at(vs2, zext(imm, self.XLEN)) } else { zext(0b0, VCFG::sew) }));
+}, {
+    vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vd, VCSR::vl, VCFG::sew)), |m, old| if m { if zext(imm, self.XLEN) ~< current_vlmax() { elem_at(vs2, zext(imm, self.XLEN)) } else { zext(0b0, VCFG::sew) } } else { old }));
+})
 
 // vrgatherei16: the indices are packed 16-bit lanes of vs1 regardless of SEW.
-instruction VRgatherei16VV for [RVV] : OpGatherVV {
-    param MNEMONIC: String = "vrgatherei16.vv";
-    param FUNCT6: bits<6> = 0b001110;
-
-    behavior {
-        vd = concat(map(split(vs1, VCSR::vl, 16), |idx| if zext(idx, self.XLEN) ~< current_vlmax() { elem_at(vs2, zext(idx, self.XLEN)) } else { zext(0b0, VCFG::sew) }));
-    }
-}
-
-instruction VRgatherei16VVM for [RVV] : OpGatherVVM {
-    param MNEMONIC: String = "vrgatherei16.vv";
-    param OPNAME: String = "vrgatherei16.vv.m";
-    param FUNCT6: bits<6> = 0b001110;
-
-    behavior {
-        vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs1, VCSR::vl, 16), split(vd, VCSR::vl, VCFG::sew)), |m, idx, old| if m { if zext(idx, self.XLEN) ~< current_vlmax() { elem_at(vs2, zext(idx, self.XLEN)) } else { zext(0b0, VCFG::sew) } } else { old }));
-    }
-}
+vector_pair!(VRgatherei16VV, VRgatherei16VVM, RVV, OpGatherVV, OpGatherVVM, "vrgatherei16.vv", 0b001110, {
+    vd = concat(map(split(vs1, VCSR::vl, 16), |idx| if zext(idx, self.XLEN) ~< current_vlmax() { elem_at(vs2, zext(idx, self.XLEN)) } else { zext(0b0, VCFG::sew) }));
+}, {
+    vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs1, VCSR::vl, 16), split(vd, VCSR::vl, VCFG::sew)), |m, idx, old| if m { if zext(idx, self.XLEN) ~< current_vlmax() { elem_at(vs2, zext(idx, self.XLEN)) } else { zext(0b0, VCFG::sew) } } else { old }));
+})
 
 // vcompress packs the active elements of vs2 at the bottom of vd. Modeling it
 // needs a per-lane "index of the i-th set bit" computation, which the

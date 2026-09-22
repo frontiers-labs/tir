@@ -56,719 +56,303 @@ fn sat_unsigned_happened(x, wide) {
 }
 
 
-instruction VSadduVV for [RVV] : VArithVV {
-    param MNEMONIC: String = "vsaddu.vv";
-    param FUNCT6: bits<6> = 0b100000;
-
-    behavior {
-        vd = concat(map(zip(split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew)), |a, b| sat_unsigned(zext(a, (VCFG::sew + zext(0b1, self.XLEN))) + zext(b, (VCFG::sew + zext(0b1, self.XLEN))), (VCFG::sew + zext(0b1, self.XLEN)))));
-        n = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b1, self.XLEN) } else { VCSR::vl };
-                sat = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b0, 1) } else { reduce(map(zip(split(vs2, n, VCFG::sew), split(vs1, n, VCFG::sew)), |a, b| sat_unsigned_happened(zext(a, (VCFG::sew + zext(0b1, self.XLEN))) + zext(b, (VCFG::sew + zext(0b1, self.XLEN))), (VCFG::sew + zext(0b1, self.XLEN)))), |acc, x| acc | x) };
-                VCSR::vxsat = VCSR::vxsat | zext(sat, self.XLEN);
-    }
-}
-
-instruction VSadduVVM for [RVV] : VArithVVM {
-    param OPNAME: String = "vsaddu.vv.m";
-    param MNEMONIC: String = "vsaddu.vv";
-    param FUNCT6: bits<6> = 0b100000;
-
-    behavior {
-        vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, b, old| if m { sat_unsigned(zext(a, (VCFG::sew + zext(0b1, self.XLEN))) + zext(b, (VCFG::sew + zext(0b1, self.XLEN))), (VCFG::sew + zext(0b1, self.XLEN))) } else { old }));
-        n = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b1, self.XLEN) } else { VCSR::vl };
-                sat = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b0, 1) } else { reduce(map(zip(split(VR::v0, n, 1), split(vs2, n, VCFG::sew), split(vs1, n, VCFG::sew)), |m, a, b| if m { sat_unsigned_happened(zext(a, (VCFG::sew + zext(0b1, self.XLEN))) + zext(b, (VCFG::sew + zext(0b1, self.XLEN))), (VCFG::sew + zext(0b1, self.XLEN))) } else { zext(0b0, 1) }), |acc, x| acc | x) };
-                VCSR::vxsat = VCSR::vxsat | zext(sat, self.XLEN);
-    }
-}
-
-instruction VSadduVX for [RVV] : VArithVX {
-    param MNEMONIC: String = "vsaddu.vx";
-    param FUNCT6: bits<6> = 0b100000;
-
-    behavior {
-        vd = concat(map(split(vs2, VCSR::vl, VCFG::sew), |a| sat_unsigned(zext(a, (VCFG::sew + zext(0b1, self.XLEN))) + zext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), (VCFG::sew + zext(0b1, self.XLEN))), (VCFG::sew + zext(0b1, self.XLEN)))));
-        n = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b1, self.XLEN) } else { VCSR::vl };
-                sat = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b0, 1) } else { reduce(map(split(vs2, n, VCFG::sew), |a| sat_unsigned_happened(zext(a, (VCFG::sew + zext(0b1, self.XLEN))) + zext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), (VCFG::sew + zext(0b1, self.XLEN))), (VCFG::sew + zext(0b1, self.XLEN)))), |acc, x| acc | x) };
-                VCSR::vxsat = VCSR::vxsat | zext(sat, self.XLEN);
-    }
-}
-
-instruction VSadduVXM for [RVV] : VArithVXM {
-    param OPNAME: String = "vsaddu.vx.m";
-    param MNEMONIC: String = "vsaddu.vx";
-    param FUNCT6: bits<6> = 0b100000;
-
-    behavior {
-        vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, old| if m { sat_unsigned(zext(a, (VCFG::sew + zext(0b1, self.XLEN))) + zext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), (VCFG::sew + zext(0b1, self.XLEN))), (VCFG::sew + zext(0b1, self.XLEN))) } else { old }));
-        n = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b1, self.XLEN) } else { VCSR::vl };
-                sat = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b0, 1) } else { reduce(map(zip(split(VR::v0, n, 1), split(vs2, n, VCFG::sew)), |m, a| if m { sat_unsigned_happened(zext(a, (VCFG::sew + zext(0b1, self.XLEN))) + zext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), (VCFG::sew + zext(0b1, self.XLEN))), (VCFG::sew + zext(0b1, self.XLEN))) } else { zext(0b0, 1) }), |acc, x| acc | x) };
-                VCSR::vxsat = VCSR::vxsat | zext(sat, self.XLEN);
-    }
-}
-
-instruction VSadduVI for [RVV] : VArithVI {
-    param MNEMONIC: String = "vsaddu.vi";
-    param FUNCT6: bits<6> = 0b100000;
-
-    behavior {
-        vd = concat(map(split(vs2, VCSR::vl, VCFG::sew), |a| sat_unsigned(zext(a, (VCFG::sew + zext(0b1, self.XLEN))) + zext(sext(imm, VCFG::sew), (VCFG::sew + zext(0b1, self.XLEN))), (VCFG::sew + zext(0b1, self.XLEN)))));
-        n = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b1, self.XLEN) } else { VCSR::vl };
-                sat = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b0, 1) } else { reduce(map(split(vs2, n, VCFG::sew), |a| sat_unsigned_happened(zext(a, (VCFG::sew + zext(0b1, self.XLEN))) + zext(sext(imm, VCFG::sew), (VCFG::sew + zext(0b1, self.XLEN))), (VCFG::sew + zext(0b1, self.XLEN)))), |acc, x| acc | x) };
-                VCSR::vxsat = VCSR::vxsat | zext(sat, self.XLEN);
-    }
-}
-
-instruction VSadduVIM for [RVV] : VArithVIM {
-    param OPNAME: String = "vsaddu.vi.m";
-    param MNEMONIC: String = "vsaddu.vi";
-    param FUNCT6: bits<6> = 0b100000;
-
-    behavior {
-        vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, old| if m { sat_unsigned(zext(a, (VCFG::sew + zext(0b1, self.XLEN))) + zext(sext(imm, VCFG::sew), (VCFG::sew + zext(0b1, self.XLEN))), (VCFG::sew + zext(0b1, self.XLEN))) } else { old }));
-        n = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b1, self.XLEN) } else { VCSR::vl };
-                sat = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b0, 1) } else { reduce(map(zip(split(VR::v0, n, 1), split(vs2, n, VCFG::sew)), |m, a| if m { sat_unsigned_happened(zext(a, (VCFG::sew + zext(0b1, self.XLEN))) + zext(sext(imm, VCFG::sew), (VCFG::sew + zext(0b1, self.XLEN))), (VCFG::sew + zext(0b1, self.XLEN))) } else { zext(0b0, 1) }), |acc, x| acc | x) };
-                VCSR::vxsat = VCSR::vxsat | zext(sat, self.XLEN);
-    }
-}
-
-instruction VSaddVV for [RVV] : VArithVV {
-    param MNEMONIC: String = "vsadd.vv";
-    param FUNCT6: bits<6> = 0b100001;
-
-    behavior {
-        vd = concat(map(zip(split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew)), |a, b| sat_signed(sext(a, (VCFG::sew + zext(0b1, self.XLEN))) + sext(b, (VCFG::sew + zext(0b1, self.XLEN))), (VCFG::sew + zext(0b1, self.XLEN)))));
-        n = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b1, self.XLEN) } else { VCSR::vl };
-                sat = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b0, 1) } else { reduce(map(zip(split(vs2, n, VCFG::sew), split(vs1, n, VCFG::sew)), |a, b| sat_signed_happened(sext(a, (VCFG::sew + zext(0b1, self.XLEN))) + sext(b, (VCFG::sew + zext(0b1, self.XLEN))), (VCFG::sew + zext(0b1, self.XLEN)))), |acc, x| acc | x) };
-                VCSR::vxsat = VCSR::vxsat | zext(sat, self.XLEN);
-    }
-}
-
-instruction VSaddVVM for [RVV] : VArithVVM {
-    param OPNAME: String = "vsadd.vv.m";
-    param MNEMONIC: String = "vsadd.vv";
-    param FUNCT6: bits<6> = 0b100001;
-
-    behavior {
-        vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, b, old| if m { sat_signed(sext(a, (VCFG::sew + zext(0b1, self.XLEN))) + sext(b, (VCFG::sew + zext(0b1, self.XLEN))), (VCFG::sew + zext(0b1, self.XLEN))) } else { old }));
-        n = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b1, self.XLEN) } else { VCSR::vl };
-                sat = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b0, 1) } else { reduce(map(zip(split(VR::v0, n, 1), split(vs2, n, VCFG::sew), split(vs1, n, VCFG::sew)), |m, a, b| if m { sat_signed_happened(sext(a, (VCFG::sew + zext(0b1, self.XLEN))) + sext(b, (VCFG::sew + zext(0b1, self.XLEN))), (VCFG::sew + zext(0b1, self.XLEN))) } else { zext(0b0, 1) }), |acc, x| acc | x) };
-                VCSR::vxsat = VCSR::vxsat | zext(sat, self.XLEN);
-    }
-}
-
-instruction VSaddVX for [RVV] : VArithVX {
-    param MNEMONIC: String = "vsadd.vx";
-    param FUNCT6: bits<6> = 0b100001;
-
-    behavior {
-        vd = concat(map(split(vs2, VCSR::vl, VCFG::sew), |a| sat_signed(sext(a, (VCFG::sew + zext(0b1, self.XLEN))) + sext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), (VCFG::sew + zext(0b1, self.XLEN))), (VCFG::sew + zext(0b1, self.XLEN)))));
-        n = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b1, self.XLEN) } else { VCSR::vl };
-                sat = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b0, 1) } else { reduce(map(split(vs2, n, VCFG::sew), |a| sat_signed_happened(sext(a, (VCFG::sew + zext(0b1, self.XLEN))) + sext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), (VCFG::sew + zext(0b1, self.XLEN))), (VCFG::sew + zext(0b1, self.XLEN)))), |acc, x| acc | x) };
-                VCSR::vxsat = VCSR::vxsat | zext(sat, self.XLEN);
-    }
-}
-
-instruction VSaddVXM for [RVV] : VArithVXM {
-    param OPNAME: String = "vsadd.vx.m";
-    param MNEMONIC: String = "vsadd.vx";
-    param FUNCT6: bits<6> = 0b100001;
-
-    behavior {
-        vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, old| if m { sat_signed(sext(a, (VCFG::sew + zext(0b1, self.XLEN))) + sext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), (VCFG::sew + zext(0b1, self.XLEN))), (VCFG::sew + zext(0b1, self.XLEN))) } else { old }));
-        n = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b1, self.XLEN) } else { VCSR::vl };
-                sat = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b0, 1) } else { reduce(map(zip(split(VR::v0, n, 1), split(vs2, n, VCFG::sew)), |m, a| if m { sat_signed_happened(sext(a, (VCFG::sew + zext(0b1, self.XLEN))) + sext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), (VCFG::sew + zext(0b1, self.XLEN))), (VCFG::sew + zext(0b1, self.XLEN))) } else { zext(0b0, 1) }), |acc, x| acc | x) };
-                VCSR::vxsat = VCSR::vxsat | zext(sat, self.XLEN);
-    }
-}
-
-instruction VSaddVI for [RVV] : VArithVI {
-    param MNEMONIC: String = "vsadd.vi";
-    param FUNCT6: bits<6> = 0b100001;
-
-    behavior {
-        vd = concat(map(split(vs2, VCSR::vl, VCFG::sew), |a| sat_signed(sext(a, (VCFG::sew + zext(0b1, self.XLEN))) + sext(sext(imm, VCFG::sew), (VCFG::sew + zext(0b1, self.XLEN))), (VCFG::sew + zext(0b1, self.XLEN)))));
-        n = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b1, self.XLEN) } else { VCSR::vl };
-                sat = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b0, 1) } else { reduce(map(split(vs2, n, VCFG::sew), |a| sat_signed_happened(sext(a, (VCFG::sew + zext(0b1, self.XLEN))) + sext(sext(imm, VCFG::sew), (VCFG::sew + zext(0b1, self.XLEN))), (VCFG::sew + zext(0b1, self.XLEN)))), |acc, x| acc | x) };
-                VCSR::vxsat = VCSR::vxsat | zext(sat, self.XLEN);
-    }
-}
-
-instruction VSaddVIM for [RVV] : VArithVIM {
-    param OPNAME: String = "vsadd.vi.m";
-    param MNEMONIC: String = "vsadd.vi";
-    param FUNCT6: bits<6> = 0b100001;
-
-    behavior {
-        vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, old| if m { sat_signed(sext(a, (VCFG::sew + zext(0b1, self.XLEN))) + sext(sext(imm, VCFG::sew), (VCFG::sew + zext(0b1, self.XLEN))), (VCFG::sew + zext(0b1, self.XLEN))) } else { old }));
-        n = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b1, self.XLEN) } else { VCSR::vl };
-                sat = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b0, 1) } else { reduce(map(zip(split(VR::v0, n, 1), split(vs2, n, VCFG::sew)), |m, a| if m { sat_signed_happened(sext(a, (VCFG::sew + zext(0b1, self.XLEN))) + sext(sext(imm, VCFG::sew), (VCFG::sew + zext(0b1, self.XLEN))), (VCFG::sew + zext(0b1, self.XLEN))) } else { zext(0b0, 1) }), |acc, x| acc | x) };
-                VCSR::vxsat = VCSR::vxsat | zext(sat, self.XLEN);
-    }
-}
-
-instruction VSsubuVV for [RVV] : VArithVV {
-    param MNEMONIC: String = "vssubu.vv";
-    param FUNCT6: bits<6> = 0b100010;
-
-    behavior {
-        vd = concat(map(zip(split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew)), |a, b| if a ~< b { zext(0b0, VCFG::sew) } else { a - b }));
-        n = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b1, self.XLEN) } else { VCSR::vl };
-                sat = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b0, 1) } else { reduce(map(zip(split(vs2, n, VCFG::sew), split(vs1, n, VCFG::sew)), |a, b| if a ~< b { zext(0b1, 1) } else { zext(0b0, 1) }), |acc, x| acc | x) };
-                VCSR::vxsat = VCSR::vxsat | zext(sat, self.XLEN);
-    }
-}
-
-instruction VSsubuVVM for [RVV] : VArithVVM {
-    param OPNAME: String = "vssubu.vv.m";
-    param MNEMONIC: String = "vssubu.vv";
-    param FUNCT6: bits<6> = 0b100010;
-
-    behavior {
-        vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, b, old| if m { if a ~< b { zext(0b0, VCFG::sew) } else { a - b } } else { old }));
-        n = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b1, self.XLEN) } else { VCSR::vl };
-                sat = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b0, 1) } else { reduce(map(zip(split(VR::v0, n, 1), split(vs2, n, VCFG::sew), split(vs1, n, VCFG::sew)), |m, a, b| if m { if a ~< b { zext(0b1, 1) } else { zext(0b0, 1) } } else { zext(0b0, 1) }), |acc, x| acc | x) };
-                VCSR::vxsat = VCSR::vxsat | zext(sat, self.XLEN);
-    }
-}
-
-instruction VSsubuVX for [RVV] : VArithVX {
-    param MNEMONIC: String = "vssubu.vx";
-    param FUNCT6: bits<6> = 0b100010;
-
-    behavior {
-        vd = concat(map(split(vs2, VCSR::vl, VCFG::sew), |a| if a ~< extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0) { zext(0b0, VCFG::sew) } else { a - extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0) }));
-        n = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b1, self.XLEN) } else { VCSR::vl };
-                sat = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b0, 1) } else { reduce(map(split(vs2, n, VCFG::sew), |a| if a ~< extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0) { zext(0b1, 1) } else { zext(0b0, 1) }), |acc, x| acc | x) };
-                VCSR::vxsat = VCSR::vxsat | zext(sat, self.XLEN);
-    }
-}
-
-instruction VSsubuVXM for [RVV] : VArithVXM {
-    param OPNAME: String = "vssubu.vx.m";
-    param MNEMONIC: String = "vssubu.vx";
-    param FUNCT6: bits<6> = 0b100010;
-
-    behavior {
-        vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, old| if m { if a ~< extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0) { zext(0b0, VCFG::sew) } else { a - extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0) } } else { old }));
-        n = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b1, self.XLEN) } else { VCSR::vl };
-                sat = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b0, 1) } else { reduce(map(zip(split(VR::v0, n, 1), split(vs2, n, VCFG::sew)), |m, a| if m { if a ~< extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0) { zext(0b1, 1) } else { zext(0b0, 1) } } else { zext(0b0, 1) }), |acc, x| acc | x) };
-                VCSR::vxsat = VCSR::vxsat | zext(sat, self.XLEN);
-    }
-}
-
-instruction VSsubVV for [RVV] : VArithVV {
-    param MNEMONIC: String = "vssub.vv";
-    param FUNCT6: bits<6> = 0b100011;
-
-    behavior {
-        vd = concat(map(zip(split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew)), |a, b| sat_signed(sext(a, (VCFG::sew + zext(0b1, self.XLEN))) - sext(b, (VCFG::sew + zext(0b1, self.XLEN))), (VCFG::sew + zext(0b1, self.XLEN)))));
-        n = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b1, self.XLEN) } else { VCSR::vl };
-                sat = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b0, 1) } else { reduce(map(zip(split(vs2, n, VCFG::sew), split(vs1, n, VCFG::sew)), |a, b| sat_signed_happened(sext(a, (VCFG::sew + zext(0b1, self.XLEN))) - sext(b, (VCFG::sew + zext(0b1, self.XLEN))), (VCFG::sew + zext(0b1, self.XLEN)))), |acc, x| acc | x) };
-                VCSR::vxsat = VCSR::vxsat | zext(sat, self.XLEN);
-    }
-}
-
-instruction VSsubVVM for [RVV] : VArithVVM {
-    param OPNAME: String = "vssub.vv.m";
-    param MNEMONIC: String = "vssub.vv";
-    param FUNCT6: bits<6> = 0b100011;
-
-    behavior {
-        vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, b, old| if m { sat_signed(sext(a, (VCFG::sew + zext(0b1, self.XLEN))) - sext(b, (VCFG::sew + zext(0b1, self.XLEN))), (VCFG::sew + zext(0b1, self.XLEN))) } else { old }));
-        n = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b1, self.XLEN) } else { VCSR::vl };
-                sat = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b0, 1) } else { reduce(map(zip(split(VR::v0, n, 1), split(vs2, n, VCFG::sew), split(vs1, n, VCFG::sew)), |m, a, b| if m { sat_signed_happened(sext(a, (VCFG::sew + zext(0b1, self.XLEN))) - sext(b, (VCFG::sew + zext(0b1, self.XLEN))), (VCFG::sew + zext(0b1, self.XLEN))) } else { zext(0b0, 1) }), |acc, x| acc | x) };
-                VCSR::vxsat = VCSR::vxsat | zext(sat, self.XLEN);
-    }
-}
-
-instruction VSsubVX for [RVV] : VArithVX {
-    param MNEMONIC: String = "vssub.vx";
-    param FUNCT6: bits<6> = 0b100011;
-
-    behavior {
-        vd = concat(map(split(vs2, VCSR::vl, VCFG::sew), |a| sat_signed(sext(a, (VCFG::sew + zext(0b1, self.XLEN))) - sext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), (VCFG::sew + zext(0b1, self.XLEN))), (VCFG::sew + zext(0b1, self.XLEN)))));
-        n = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b1, self.XLEN) } else { VCSR::vl };
-                sat = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b0, 1) } else { reduce(map(split(vs2, n, VCFG::sew), |a| sat_signed_happened(sext(a, (VCFG::sew + zext(0b1, self.XLEN))) - sext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), (VCFG::sew + zext(0b1, self.XLEN))), (VCFG::sew + zext(0b1, self.XLEN)))), |acc, x| acc | x) };
-                VCSR::vxsat = VCSR::vxsat | zext(sat, self.XLEN);
-    }
-}
-
-instruction VSsubVXM for [RVV] : VArithVXM {
-    param OPNAME: String = "vssub.vx.m";
-    param MNEMONIC: String = "vssub.vx";
-    param FUNCT6: bits<6> = 0b100011;
-
-    behavior {
-        vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, old| if m { sat_signed(sext(a, (VCFG::sew + zext(0b1, self.XLEN))) - sext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), (VCFG::sew + zext(0b1, self.XLEN))), (VCFG::sew + zext(0b1, self.XLEN))) } else { old }));
-        n = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b1, self.XLEN) } else { VCSR::vl };
-                sat = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b0, 1) } else { reduce(map(zip(split(VR::v0, n, 1), split(vs2, n, VCFG::sew)), |m, a| if m { sat_signed_happened(sext(a, (VCFG::sew + zext(0b1, self.XLEN))) - sext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), (VCFG::sew + zext(0b1, self.XLEN))), (VCFG::sew + zext(0b1, self.XLEN))) } else { zext(0b0, 1) }), |acc, x| acc | x) };
-                VCSR::vxsat = VCSR::vxsat | zext(sat, self.XLEN);
-    }
-}
-
-instruction VSmulVV for [RVV] : VArithVV {
-    param MNEMONIC: String = "vsmul.vv";
-    param FUNCT6: bits<6> = 0b100111;
-
-    behavior {
-        vd = concat(map(zip(split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew)), |a, b| sat_signed(extract((((sext(a, (VCFG::sew * zext(0b10, self.XLEN))) * sext(b, (VCFG::sew * zext(0b10, self.XLEN)))) >> (VCFG::sew - zext(0b1, self.XLEN))) + zext(round_incr((sext(a, (VCFG::sew * zext(0b10, self.XLEN))) * sext(b, (VCFG::sew * zext(0b10, self.XLEN)))), (VCFG::sew - zext(0b1, self.XLEN))), (VCFG::sew * zext(0b10, self.XLEN)))), VCFG::sew, 0), (VCFG::sew + zext(0b1, self.XLEN)))));
-        n = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b1, self.XLEN) } else { VCSR::vl };
-                sat = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b0, 1) } else { reduce(map(zip(split(vs2, n, VCFG::sew), split(vs1, n, VCFG::sew)), |a, b| sat_signed_happened(extract((((sext(a, (VCFG::sew * zext(0b10, self.XLEN))) * sext(b, (VCFG::sew * zext(0b10, self.XLEN)))) >> (VCFG::sew - zext(0b1, self.XLEN))) + zext(round_incr((sext(a, (VCFG::sew * zext(0b10, self.XLEN))) * sext(b, (VCFG::sew * zext(0b10, self.XLEN)))), (VCFG::sew - zext(0b1, self.XLEN))), (VCFG::sew * zext(0b10, self.XLEN)))), VCFG::sew, 0), (VCFG::sew + zext(0b1, self.XLEN)))), |acc, x| acc | x) };
-                VCSR::vxsat = VCSR::vxsat | zext(sat, self.XLEN);
-    }
-}
-
-instruction VSmulVVM for [RVV] : VArithVVM {
-    param OPNAME: String = "vsmul.vv.m";
-    param MNEMONIC: String = "vsmul.vv";
-    param FUNCT6: bits<6> = 0b100111;
-
-    behavior {
-        vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, b, old| if m { sat_signed(extract((((sext(a, (VCFG::sew * zext(0b10, self.XLEN))) * sext(b, (VCFG::sew * zext(0b10, self.XLEN)))) >> (VCFG::sew - zext(0b1, self.XLEN))) + zext(round_incr((sext(a, (VCFG::sew * zext(0b10, self.XLEN))) * sext(b, (VCFG::sew * zext(0b10, self.XLEN)))), (VCFG::sew - zext(0b1, self.XLEN))), (VCFG::sew * zext(0b10, self.XLEN)))), VCFG::sew, 0), (VCFG::sew + zext(0b1, self.XLEN))) } else { old }));
-        n = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b1, self.XLEN) } else { VCSR::vl };
-                sat = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b0, 1) } else { reduce(map(zip(split(VR::v0, n, 1), split(vs2, n, VCFG::sew), split(vs1, n, VCFG::sew)), |m, a, b| if m { sat_signed_happened(extract((((sext(a, (VCFG::sew * zext(0b10, self.XLEN))) * sext(b, (VCFG::sew * zext(0b10, self.XLEN)))) >> (VCFG::sew - zext(0b1, self.XLEN))) + zext(round_incr((sext(a, (VCFG::sew * zext(0b10, self.XLEN))) * sext(b, (VCFG::sew * zext(0b10, self.XLEN)))), (VCFG::sew - zext(0b1, self.XLEN))), (VCFG::sew * zext(0b10, self.XLEN)))), VCFG::sew, 0), (VCFG::sew + zext(0b1, self.XLEN))) } else { zext(0b0, 1) }), |acc, x| acc | x) };
-                VCSR::vxsat = VCSR::vxsat | zext(sat, self.XLEN);
-    }
-}
-
-instruction VSmulVX for [RVV] : VArithVX {
-    param MNEMONIC: String = "vsmul.vx";
-    param FUNCT6: bits<6> = 0b100111;
-
-    behavior {
-        vd = concat(map(split(vs2, VCSR::vl, VCFG::sew), |a| sat_signed(extract((((sext(a, (VCFG::sew * zext(0b10, self.XLEN))) * sext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), (VCFG::sew * zext(0b10, self.XLEN)))) >> (VCFG::sew - zext(0b1, self.XLEN))) + zext(round_incr((sext(a, (VCFG::sew * zext(0b10, self.XLEN))) * sext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), (VCFG::sew * zext(0b10, self.XLEN)))), (VCFG::sew - zext(0b1, self.XLEN))), (VCFG::sew * zext(0b10, self.XLEN)))), VCFG::sew, 0), (VCFG::sew + zext(0b1, self.XLEN)))));
-        n = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b1, self.XLEN) } else { VCSR::vl };
-                sat = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b0, 1) } else { reduce(map(split(vs2, n, VCFG::sew), |a| sat_signed_happened(extract((((sext(a, (VCFG::sew * zext(0b10, self.XLEN))) * sext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), (VCFG::sew * zext(0b10, self.XLEN)))) >> (VCFG::sew - zext(0b1, self.XLEN))) + zext(round_incr((sext(a, (VCFG::sew * zext(0b10, self.XLEN))) * sext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), (VCFG::sew * zext(0b10, self.XLEN)))), (VCFG::sew - zext(0b1, self.XLEN))), (VCFG::sew * zext(0b10, self.XLEN)))), VCFG::sew, 0), (VCFG::sew + zext(0b1, self.XLEN)))), |acc, x| acc | x) };
-                VCSR::vxsat = VCSR::vxsat | zext(sat, self.XLEN);
-    }
-}
-
-instruction VSmulVXM for [RVV] : VArithVXM {
-    param OPNAME: String = "vsmul.vx.m";
-    param MNEMONIC: String = "vsmul.vx";
-    param FUNCT6: bits<6> = 0b100111;
-
-    behavior {
-        vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, old| if m { sat_signed(extract((((sext(a, (VCFG::sew * zext(0b10, self.XLEN))) * sext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), (VCFG::sew * zext(0b10, self.XLEN)))) >> (VCFG::sew - zext(0b1, self.XLEN))) + zext(round_incr((sext(a, (VCFG::sew * zext(0b10, self.XLEN))) * sext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), (VCFG::sew * zext(0b10, self.XLEN)))), (VCFG::sew - zext(0b1, self.XLEN))), (VCFG::sew * zext(0b10, self.XLEN)))), VCFG::sew, 0), (VCFG::sew + zext(0b1, self.XLEN))) } else { old }));
-        n = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b1, self.XLEN) } else { VCSR::vl };
-                sat = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b0, 1) } else { reduce(map(zip(split(VR::v0, n, 1), split(vs2, n, VCFG::sew)), |m, a| if m { sat_signed_happened(extract((((sext(a, (VCFG::sew * zext(0b10, self.XLEN))) * sext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), (VCFG::sew * zext(0b10, self.XLEN)))) >> (VCFG::sew - zext(0b1, self.XLEN))) + zext(round_incr((sext(a, (VCFG::sew * zext(0b10, self.XLEN))) * sext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), (VCFG::sew * zext(0b10, self.XLEN)))), (VCFG::sew - zext(0b1, self.XLEN))), (VCFG::sew * zext(0b10, self.XLEN)))), VCFG::sew, 0), (VCFG::sew + zext(0b1, self.XLEN))) } else { zext(0b0, 1) }), |acc, x| acc | x) };
-                VCSR::vxsat = VCSR::vxsat | zext(sat, self.XLEN);
-    }
-}
-
-instruction VSsrlVV for [RVV] : VArithVV {
-    param MNEMONIC: String = "vssrl.vv";
-    param FUNCT6: bits<6> = 0b101010;
-
-    behavior {
-        vd = concat(map(zip(split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew)), |a, b| (a >> (b & (VCFG::sew - zext(0b1, self.XLEN)))) + zext(round_incr(a, (b & (VCFG::sew - zext(0b1, self.XLEN)))), VCFG::sew)));
-    }
-}
-
-instruction VSsrlVVM for [RVV] : VArithVVM {
-    param OPNAME: String = "vssrl.vv.m";
-    param MNEMONIC: String = "vssrl.vv";
-    param FUNCT6: bits<6> = 0b101010;
-
-    behavior {
-        vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, b, old| if m { (a >> (b & (VCFG::sew - zext(0b1, self.XLEN)))) + zext(round_incr(a, (b & (VCFG::sew - zext(0b1, self.XLEN)))), VCFG::sew) } else { old }));
-    }
-}
-
-instruction VSsrlVX for [RVV] : VArithVX {
-    param MNEMONIC: String = "vssrl.vx";
-    param FUNCT6: bits<6> = 0b101010;
-
-    behavior {
-        vd = concat(map(split(vs2, VCSR::vl, VCFG::sew), |a| (a >> (extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0) & (VCFG::sew - zext(0b1, self.XLEN)))) + zext(round_incr(a, (extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0) & (VCFG::sew - zext(0b1, self.XLEN)))), VCFG::sew)));
-    }
-}
-
-instruction VSsrlVXM for [RVV] : VArithVXM {
-    param OPNAME: String = "vssrl.vx.m";
-    param MNEMONIC: String = "vssrl.vx";
-    param FUNCT6: bits<6> = 0b101010;
-
-    behavior {
-        vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, old| if m { (a >> (extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0) & (VCFG::sew - zext(0b1, self.XLEN)))) + zext(round_incr(a, (extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0) & (VCFG::sew - zext(0b1, self.XLEN)))), VCFG::sew) } else { old }));
-    }
-}
-
-instruction VSsrlVI for [RVV] : VArithVI {
-    param MNEMONIC: String = "vssrl.vi";
-    param FUNCT6: bits<6> = 0b101010;
-
-    behavior {
-        vd = concat(map(split(vs2, VCSR::vl, VCFG::sew), |a| (a >> (zext(imm, self.XLEN) & (VCFG::sew - zext(0b1, self.XLEN)))) + zext(round_incr(a, (zext(imm, self.XLEN) & (VCFG::sew - zext(0b1, self.XLEN)))), VCFG::sew)));
-    }
-}
-
-instruction VSsrlVIM for [RVV] : VArithVIM {
-    param OPNAME: String = "vssrl.vi.m";
-    param MNEMONIC: String = "vssrl.vi";
-    param FUNCT6: bits<6> = 0b101010;
-
-    behavior {
-        vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, old| if m { (a >> (zext(imm, self.XLEN) & (VCFG::sew - zext(0b1, self.XLEN)))) + zext(round_incr(a, (zext(imm, self.XLEN) & (VCFG::sew - zext(0b1, self.XLEN)))), VCFG::sew) } else { old }));
-    }
-}
-
-instruction VSsraVV for [RVV] : VArithVV {
-    param MNEMONIC: String = "vssra.vv";
-    param FUNCT6: bits<6> = 0b101011;
-
-    behavior {
-        vd = concat(map(zip(split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew)), |a, b| (a >>> (b & (VCFG::sew - zext(0b1, self.XLEN)))) + zext(round_incr(a, (b & (VCFG::sew - zext(0b1, self.XLEN)))), VCFG::sew)));
-    }
-}
-
-instruction VSsraVVM for [RVV] : VArithVVM {
-    param OPNAME: String = "vssra.vv.m";
-    param MNEMONIC: String = "vssra.vv";
-    param FUNCT6: bits<6> = 0b101011;
-
-    behavior {
-        vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, b, old| if m { (a >>> (b & (VCFG::sew - zext(0b1, self.XLEN)))) + zext(round_incr(a, (b & (VCFG::sew - zext(0b1, self.XLEN)))), VCFG::sew) } else { old }));
-    }
-}
-
-instruction VSsraVX for [RVV] : VArithVX {
-    param MNEMONIC: String = "vssra.vx";
-    param FUNCT6: bits<6> = 0b101011;
-
-    behavior {
-        vd = concat(map(split(vs2, VCSR::vl, VCFG::sew), |a| (a >>> (extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0) & (VCFG::sew - zext(0b1, self.XLEN)))) + zext(round_incr(a, (extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0) & (VCFG::sew - zext(0b1, self.XLEN)))), VCFG::sew)));
-    }
-}
-
-instruction VSsraVXM for [RVV] : VArithVXM {
-    param OPNAME: String = "vssra.vx.m";
-    param MNEMONIC: String = "vssra.vx";
-    param FUNCT6: bits<6> = 0b101011;
-
-    behavior {
-        vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, old| if m { (a >>> (extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0) & (VCFG::sew - zext(0b1, self.XLEN)))) + zext(round_incr(a, (extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0) & (VCFG::sew - zext(0b1, self.XLEN)))), VCFG::sew) } else { old }));
-    }
-}
-
-instruction VSsraVI for [RVV] : VArithVI {
-    param MNEMONIC: String = "vssra.vi";
-    param FUNCT6: bits<6> = 0b101011;
-
-    behavior {
-        vd = concat(map(split(vs2, VCSR::vl, VCFG::sew), |a| (a >>> (zext(imm, self.XLEN) & (VCFG::sew - zext(0b1, self.XLEN)))) + zext(round_incr(a, (zext(imm, self.XLEN) & (VCFG::sew - zext(0b1, self.XLEN)))), VCFG::sew)));
-    }
-}
-
-instruction VSsraVIM for [RVV] : VArithVIM {
-    param OPNAME: String = "vssra.vi.m";
-    param MNEMONIC: String = "vssra.vi";
-    param FUNCT6: bits<6> = 0b101011;
-
-    behavior {
-        vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, old| if m { (a >>> (zext(imm, self.XLEN) & (VCFG::sew - zext(0b1, self.XLEN)))) + zext(round_incr(a, (zext(imm, self.XLEN) & (VCFG::sew - zext(0b1, self.XLEN)))), VCFG::sew) } else { old }));
-    }
-}
-
-instruction VAadduVV for [RVV] : OpMVV {
-    param MNEMONIC: String = "vaaddu.vv";
-    param FUNCT6: bits<6> = 0b001000;
-
-    behavior {
-        vd = concat(map(zip(split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew)), |a, b| extract((zext(a, (VCFG::sew + zext(0b1, self.XLEN))) + zext(b, (VCFG::sew + zext(0b1, self.XLEN)))) >> zext(0b1, self.XLEN), (VCFG::sew - zext(0b1, self.XLEN)), 0) + zext(round_incr(zext(a, (VCFG::sew + zext(0b1, self.XLEN))) + zext(b, (VCFG::sew + zext(0b1, self.XLEN))), zext(0b1, self.XLEN)), VCFG::sew)));
-    }
-}
-
-instruction VAadduVVM for [RVV] : OpMVVM {
-    param OPNAME: String = "vaaddu.vv.m";
-    param MNEMONIC: String = "vaaddu.vv";
-    param FUNCT6: bits<6> = 0b001000;
-
-    behavior {
-        vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, b, old| if m { extract((zext(a, (VCFG::sew + zext(0b1, self.XLEN))) + zext(b, (VCFG::sew + zext(0b1, self.XLEN)))) >> zext(0b1, self.XLEN), (VCFG::sew - zext(0b1, self.XLEN)), 0) + zext(round_incr(zext(a, (VCFG::sew + zext(0b1, self.XLEN))) + zext(b, (VCFG::sew + zext(0b1, self.XLEN))), zext(0b1, self.XLEN)), VCFG::sew) } else { old }));
-    }
-}
-
-instruction VAadduVX for [RVV] : OpMVX {
-    param MNEMONIC: String = "vaaddu.vx";
-    param FUNCT6: bits<6> = 0b001000;
-
-    behavior {
-        vd = concat(map(split(vs2, VCSR::vl, VCFG::sew), |a| extract((zext(a, (VCFG::sew + zext(0b1, self.XLEN))) + zext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), (VCFG::sew + zext(0b1, self.XLEN)))) >> zext(0b1, self.XLEN), (VCFG::sew - zext(0b1, self.XLEN)), 0) + zext(round_incr(zext(a, (VCFG::sew + zext(0b1, self.XLEN))) + zext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), (VCFG::sew + zext(0b1, self.XLEN))), zext(0b1, self.XLEN)), VCFG::sew)));
-    }
-}
-
-instruction VAadduVXM for [RVV] : OpMVXM {
-    param OPNAME: String = "vaaddu.vx.m";
-    param MNEMONIC: String = "vaaddu.vx";
-    param FUNCT6: bits<6> = 0b001000;
-
-    behavior {
-        vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, old| if m { extract((zext(a, (VCFG::sew + zext(0b1, self.XLEN))) + zext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), (VCFG::sew + zext(0b1, self.XLEN)))) >> zext(0b1, self.XLEN), (VCFG::sew - zext(0b1, self.XLEN)), 0) + zext(round_incr(zext(a, (VCFG::sew + zext(0b1, self.XLEN))) + zext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), (VCFG::sew + zext(0b1, self.XLEN))), zext(0b1, self.XLEN)), VCFG::sew) } else { old }));
-    }
-}
-
-instruction VAaddVV for [RVV] : OpMVV {
-    param MNEMONIC: String = "vaadd.vv";
-    param FUNCT6: bits<6> = 0b001001;
-
-    behavior {
-        vd = concat(map(zip(split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew)), |a, b| extract((sext(a, (VCFG::sew + zext(0b1, self.XLEN))) + sext(b, (VCFG::sew + zext(0b1, self.XLEN)))) >> zext(0b1, self.XLEN), (VCFG::sew - zext(0b1, self.XLEN)), 0) + zext(round_incr(sext(a, (VCFG::sew + zext(0b1, self.XLEN))) + sext(b, (VCFG::sew + zext(0b1, self.XLEN))), zext(0b1, self.XLEN)), VCFG::sew)));
-    }
-}
-
-instruction VAaddVVM for [RVV] : OpMVVM {
-    param OPNAME: String = "vaadd.vv.m";
-    param MNEMONIC: String = "vaadd.vv";
-    param FUNCT6: bits<6> = 0b001001;
-
-    behavior {
-        vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, b, old| if m { extract((sext(a, (VCFG::sew + zext(0b1, self.XLEN))) + sext(b, (VCFG::sew + zext(0b1, self.XLEN)))) >> zext(0b1, self.XLEN), (VCFG::sew - zext(0b1, self.XLEN)), 0) + zext(round_incr(sext(a, (VCFG::sew + zext(0b1, self.XLEN))) + sext(b, (VCFG::sew + zext(0b1, self.XLEN))), zext(0b1, self.XLEN)), VCFG::sew) } else { old }));
-    }
-}
-
-instruction VAaddVX for [RVV] : OpMVX {
-    param MNEMONIC: String = "vaadd.vx";
-    param FUNCT6: bits<6> = 0b001001;
-
-    behavior {
-        vd = concat(map(split(vs2, VCSR::vl, VCFG::sew), |a| extract((sext(a, (VCFG::sew + zext(0b1, self.XLEN))) + sext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), (VCFG::sew + zext(0b1, self.XLEN)))) >> zext(0b1, self.XLEN), (VCFG::sew - zext(0b1, self.XLEN)), 0) + zext(round_incr(sext(a, (VCFG::sew + zext(0b1, self.XLEN))) + sext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), (VCFG::sew + zext(0b1, self.XLEN))), zext(0b1, self.XLEN)), VCFG::sew)));
-    }
-}
-
-instruction VAaddVXM for [RVV] : OpMVXM {
-    param OPNAME: String = "vaadd.vx.m";
-    param MNEMONIC: String = "vaadd.vx";
-    param FUNCT6: bits<6> = 0b001001;
-
-    behavior {
-        vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, old| if m { extract((sext(a, (VCFG::sew + zext(0b1, self.XLEN))) + sext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), (VCFG::sew + zext(0b1, self.XLEN)))) >> zext(0b1, self.XLEN), (VCFG::sew - zext(0b1, self.XLEN)), 0) + zext(round_incr(sext(a, (VCFG::sew + zext(0b1, self.XLEN))) + sext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), (VCFG::sew + zext(0b1, self.XLEN))), zext(0b1, self.XLEN)), VCFG::sew) } else { old }));
-    }
-}
-
-instruction VAsubuVV for [RVV] : OpMVV {
-    param MNEMONIC: String = "vasubu.vv";
-    param FUNCT6: bits<6> = 0b001010;
-
-    behavior {
-        vd = concat(map(zip(split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew)), |a, b| extract((zext(a, (VCFG::sew + zext(0b1, self.XLEN))) - zext(b, (VCFG::sew + zext(0b1, self.XLEN)))) >> zext(0b1, self.XLEN), (VCFG::sew - zext(0b1, self.XLEN)), 0) + zext(round_incr(zext(a, (VCFG::sew + zext(0b1, self.XLEN))) - zext(b, (VCFG::sew + zext(0b1, self.XLEN))), zext(0b1, self.XLEN)), VCFG::sew)));
-    }
-}
-
-instruction VAsubuVVM for [RVV] : OpMVVM {
-    param OPNAME: String = "vasubu.vv.m";
-    param MNEMONIC: String = "vasubu.vv";
-    param FUNCT6: bits<6> = 0b001010;
-
-    behavior {
-        vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, b, old| if m { extract((zext(a, (VCFG::sew + zext(0b1, self.XLEN))) - zext(b, (VCFG::sew + zext(0b1, self.XLEN)))) >> zext(0b1, self.XLEN), (VCFG::sew - zext(0b1, self.XLEN)), 0) + zext(round_incr(zext(a, (VCFG::sew + zext(0b1, self.XLEN))) - zext(b, (VCFG::sew + zext(0b1, self.XLEN))), zext(0b1, self.XLEN)), VCFG::sew) } else { old }));
-    }
-}
-
-instruction VAsubuVX for [RVV] : OpMVX {
-    param MNEMONIC: String = "vasubu.vx";
-    param FUNCT6: bits<6> = 0b001010;
-
-    behavior {
-        vd = concat(map(split(vs2, VCSR::vl, VCFG::sew), |a| extract((zext(a, (VCFG::sew + zext(0b1, self.XLEN))) - zext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), (VCFG::sew + zext(0b1, self.XLEN)))) >> zext(0b1, self.XLEN), (VCFG::sew - zext(0b1, self.XLEN)), 0) + zext(round_incr(zext(a, (VCFG::sew + zext(0b1, self.XLEN))) - zext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), (VCFG::sew + zext(0b1, self.XLEN))), zext(0b1, self.XLEN)), VCFG::sew)));
-    }
-}
-
-instruction VAsubuVXM for [RVV] : OpMVXM {
-    param OPNAME: String = "vasubu.vx.m";
-    param MNEMONIC: String = "vasubu.vx";
-    param FUNCT6: bits<6> = 0b001010;
-
-    behavior {
-        vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, old| if m { extract((zext(a, (VCFG::sew + zext(0b1, self.XLEN))) - zext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), (VCFG::sew + zext(0b1, self.XLEN)))) >> zext(0b1, self.XLEN), (VCFG::sew - zext(0b1, self.XLEN)), 0) + zext(round_incr(zext(a, (VCFG::sew + zext(0b1, self.XLEN))) - zext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), (VCFG::sew + zext(0b1, self.XLEN))), zext(0b1, self.XLEN)), VCFG::sew) } else { old }));
-    }
-}
-
-instruction VAsubVV for [RVV] : OpMVV {
-    param MNEMONIC: String = "vasub.vv";
-    param FUNCT6: bits<6> = 0b001011;
-
-    behavior {
-        vd = concat(map(zip(split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew)), |a, b| extract((sext(a, (VCFG::sew + zext(0b1, self.XLEN))) - sext(b, (VCFG::sew + zext(0b1, self.XLEN)))) >> zext(0b1, self.XLEN), (VCFG::sew - zext(0b1, self.XLEN)), 0) + zext(round_incr(sext(a, (VCFG::sew + zext(0b1, self.XLEN))) - sext(b, (VCFG::sew + zext(0b1, self.XLEN))), zext(0b1, self.XLEN)), VCFG::sew)));
-    }
-}
-
-instruction VAsubVVM for [RVV] : OpMVVM {
-    param OPNAME: String = "vasub.vv.m";
-    param MNEMONIC: String = "vasub.vv";
-    param FUNCT6: bits<6> = 0b001011;
-
-    behavior {
-        vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, b, old| if m { extract((sext(a, (VCFG::sew + zext(0b1, self.XLEN))) - sext(b, (VCFG::sew + zext(0b1, self.XLEN)))) >> zext(0b1, self.XLEN), (VCFG::sew - zext(0b1, self.XLEN)), 0) + zext(round_incr(sext(a, (VCFG::sew + zext(0b1, self.XLEN))) - sext(b, (VCFG::sew + zext(0b1, self.XLEN))), zext(0b1, self.XLEN)), VCFG::sew) } else { old }));
-    }
-}
-
-instruction VAsubVX for [RVV] : OpMVX {
-    param MNEMONIC: String = "vasub.vx";
-    param FUNCT6: bits<6> = 0b001011;
-
-    behavior {
-        vd = concat(map(split(vs2, VCSR::vl, VCFG::sew), |a| extract((sext(a, (VCFG::sew + zext(0b1, self.XLEN))) - sext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), (VCFG::sew + zext(0b1, self.XLEN)))) >> zext(0b1, self.XLEN), (VCFG::sew - zext(0b1, self.XLEN)), 0) + zext(round_incr(sext(a, (VCFG::sew + zext(0b1, self.XLEN))) - sext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), (VCFG::sew + zext(0b1, self.XLEN))), zext(0b1, self.XLEN)), VCFG::sew)));
-    }
-}
-
-instruction VAsubVXM for [RVV] : OpMVXM {
-    param OPNAME: String = "vasub.vx.m";
-    param MNEMONIC: String = "vasub.vx";
-    param FUNCT6: bits<6> = 0b001011;
-
-    behavior {
-        vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, old| if m { extract((sext(a, (VCFG::sew + zext(0b1, self.XLEN))) - sext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), (VCFG::sew + zext(0b1, self.XLEN)))) >> zext(0b1, self.XLEN), (VCFG::sew - zext(0b1, self.XLEN)), 0) + zext(round_incr(sext(a, (VCFG::sew + zext(0b1, self.XLEN))) - sext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), (VCFG::sew + zext(0b1, self.XLEN))), zext(0b1, self.XLEN)), VCFG::sew) } else { old }));
-    }
-}
-
-instruction VNclipuWV for [RVV] : OpNarrowWV {
-    param MNEMONIC: String = "vnclipu.wv";
-    param FUNCT6: bits<6> = 0b101110;
-
-    behavior {
-        vd = concat(map(zip(split(vs2, VCSR::vl, (VCFG::sew * zext(0b10, self.XLEN))), split(vs1, VCSR::vl, VCFG::sew)), |a, b| sat_unsigned(((a >> (zext(b, self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))) + zext(round_incr(a, (zext(b, self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN)))));
-        n = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b1, self.XLEN) } else { VCSR::vl };
-                sat = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b0, 1) } else { reduce(map(zip(split(vs2, n, (VCFG::sew * zext(0b10, self.XLEN))), split(vs1, n, VCFG::sew)), |a, b| sat_unsigned_happened(((a >> (zext(b, self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))) + zext(round_incr(a, (zext(b, self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN)))), |acc, x| acc | x) };
-                VCSR::vxsat = VCSR::vxsat | zext(sat, self.XLEN);
-    }
-}
-
-instruction VNclipuWVM for [RVV] : OpNarrowWVM {
-    param OPNAME: String = "vnclipu.wv.m";
-    param MNEMONIC: String = "vnclipu.wv";
-    param FUNCT6: bits<6> = 0b101110;
-
-    behavior {
-        vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, (VCFG::sew * zext(0b10, self.XLEN))), split(vs1, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, b, old| if m { sat_unsigned(((a >> (zext(b, self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))) + zext(round_incr(a, (zext(b, self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN))) } else { old }));
-        n = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b1, self.XLEN) } else { VCSR::vl };
-                sat = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b0, 1) } else { reduce(map(zip(split(VR::v0, n, 1), split(vs2, n, (VCFG::sew * zext(0b10, self.XLEN))), split(vs1, n, VCFG::sew)), |m, a, b| if m { sat_unsigned_happened(((a >> (zext(b, self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))) + zext(round_incr(a, (zext(b, self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN))) } else { zext(0b0, 1) }), |acc, x| acc | x) };
-                VCSR::vxsat = VCSR::vxsat | zext(sat, self.XLEN);
-    }
-}
-
-instruction VNclipuWX for [RVV] : OpNarrowWX {
-    param MNEMONIC: String = "vnclipu.wx";
-    param FUNCT6: bits<6> = 0b101110;
-
-    behavior {
-        vd = concat(map(split(vs2, VCSR::vl, (VCFG::sew * zext(0b10, self.XLEN))), |a| sat_unsigned(((a >> (zext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))) + zext(round_incr(a, (zext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN)))));
-        n = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b1, self.XLEN) } else { VCSR::vl };
-                sat = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b0, 1) } else { reduce(map(split(vs2, n, (VCFG::sew * zext(0b10, self.XLEN))), |a| sat_unsigned_happened(((a >> (zext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))) + zext(round_incr(a, (zext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN)))), |acc, x| acc | x) };
-                VCSR::vxsat = VCSR::vxsat | zext(sat, self.XLEN);
-    }
-}
-
-instruction VNclipuWXM for [RVV] : OpNarrowWXM {
-    param OPNAME: String = "vnclipu.wx.m";
-    param MNEMONIC: String = "vnclipu.wx";
-    param FUNCT6: bits<6> = 0b101110;
-
-    behavior {
-        vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, (VCFG::sew * zext(0b10, self.XLEN))), split(vd, VCSR::vl, VCFG::sew)), |m, a, old| if m { sat_unsigned(((a >> (zext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))) + zext(round_incr(a, (zext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN))) } else { old }));
-        n = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b1, self.XLEN) } else { VCSR::vl };
-                sat = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b0, 1) } else { reduce(map(zip(split(VR::v0, n, 1), split(vs2, n, (VCFG::sew * zext(0b10, self.XLEN)))), |m, a| if m { sat_unsigned_happened(((a >> (zext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))) + zext(round_incr(a, (zext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN))) } else { zext(0b0, 1) }), |acc, x| acc | x) };
-                VCSR::vxsat = VCSR::vxsat | zext(sat, self.XLEN);
-    }
-}
-
-instruction VNclipuWI for [RVV] : OpNarrowWI {
-    param MNEMONIC: String = "vnclipu.wi";
-    param FUNCT6: bits<6> = 0b101110;
-
-    behavior {
-        vd = concat(map(split(vs2, VCSR::vl, (VCFG::sew * zext(0b10, self.XLEN))), |a| sat_unsigned(((a >> (zext(zext(imm, self.XLEN), self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))) + zext(round_incr(a, (zext(zext(imm, self.XLEN), self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN)))));
-        n = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b1, self.XLEN) } else { VCSR::vl };
-                sat = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b0, 1) } else { reduce(map(split(vs2, n, (VCFG::sew * zext(0b10, self.XLEN))), |a| sat_unsigned_happened(((a >> (zext(zext(imm, self.XLEN), self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))) + zext(round_incr(a, (zext(zext(imm, self.XLEN), self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN)))), |acc, x| acc | x) };
-                VCSR::vxsat = VCSR::vxsat | zext(sat, self.XLEN);
-    }
-}
-
-instruction VNclipuWIM for [RVV] : OpNarrowWIM {
-    param OPNAME: String = "vnclipu.wi.m";
-    param MNEMONIC: String = "vnclipu.wi";
-    param FUNCT6: bits<6> = 0b101110;
-
-    behavior {
-        vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, (VCFG::sew * zext(0b10, self.XLEN))), split(vd, VCSR::vl, VCFG::sew)), |m, a, old| if m { sat_unsigned(((a >> (zext(zext(imm, self.XLEN), self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))) + zext(round_incr(a, (zext(zext(imm, self.XLEN), self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN))) } else { old }));
-        n = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b1, self.XLEN) } else { VCSR::vl };
-                sat = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b0, 1) } else { reduce(map(zip(split(VR::v0, n, 1), split(vs2, n, (VCFG::sew * zext(0b10, self.XLEN)))), |m, a| if m { sat_unsigned_happened(((a >> (zext(zext(imm, self.XLEN), self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))) + zext(round_incr(a, (zext(zext(imm, self.XLEN), self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN))) } else { zext(0b0, 1) }), |acc, x| acc | x) };
-                VCSR::vxsat = VCSR::vxsat | zext(sat, self.XLEN);
-    }
-}
-
-instruction VNclipWV for [RVV] : OpNarrowWV {
-    param MNEMONIC: String = "vnclip.wv";
-    param FUNCT6: bits<6> = 0b101111;
-
-    behavior {
-        vd = concat(map(zip(split(vs2, VCSR::vl, (VCFG::sew * zext(0b10, self.XLEN))), split(vs1, VCSR::vl, VCFG::sew)), |a, b| sat_signed(((a >>> (zext(b, self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))) + zext(round_incr(a, (zext(b, self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN)))));
-        n = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b1, self.XLEN) } else { VCSR::vl };
-                sat = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b0, 1) } else { reduce(map(zip(split(vs2, n, (VCFG::sew * zext(0b10, self.XLEN))), split(vs1, n, VCFG::sew)), |a, b| sat_signed_happened(((a >>> (zext(b, self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))) + zext(round_incr(a, (zext(b, self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN)))), |acc, x| acc | x) };
-                VCSR::vxsat = VCSR::vxsat | zext(sat, self.XLEN);
-    }
-}
-
-instruction VNclipWVM for [RVV] : OpNarrowWVM {
-    param OPNAME: String = "vnclip.wv.m";
-    param MNEMONIC: String = "vnclip.wv";
-    param FUNCT6: bits<6> = 0b101111;
-
-    behavior {
-        vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, (VCFG::sew * zext(0b10, self.XLEN))), split(vs1, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, b, old| if m { sat_signed(((a >>> (zext(b, self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))) + zext(round_incr(a, (zext(b, self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN))) } else { old }));
-        n = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b1, self.XLEN) } else { VCSR::vl };
-                sat = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b0, 1) } else { reduce(map(zip(split(VR::v0, n, 1), split(vs2, n, (VCFG::sew * zext(0b10, self.XLEN))), split(vs1, n, VCFG::sew)), |m, a, b| if m { sat_signed_happened(((a >>> (zext(b, self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))) + zext(round_incr(a, (zext(b, self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN))) } else { zext(0b0, 1) }), |acc, x| acc | x) };
-                VCSR::vxsat = VCSR::vxsat | zext(sat, self.XLEN);
-    }
-}
-
-instruction VNclipWX for [RVV] : OpNarrowWX {
-    param MNEMONIC: String = "vnclip.wx";
-    param FUNCT6: bits<6> = 0b101111;
-
-    behavior {
-        vd = concat(map(split(vs2, VCSR::vl, (VCFG::sew * zext(0b10, self.XLEN))), |a| sat_signed(((a >>> (zext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))) + zext(round_incr(a, (zext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN)))));
-        n = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b1, self.XLEN) } else { VCSR::vl };
-                sat = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b0, 1) } else { reduce(map(split(vs2, n, (VCFG::sew * zext(0b10, self.XLEN))), |a| sat_signed_happened(((a >>> (zext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))) + zext(round_incr(a, (zext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN)))), |acc, x| acc | x) };
-                VCSR::vxsat = VCSR::vxsat | zext(sat, self.XLEN);
-    }
-}
-
-instruction VNclipWXM for [RVV] : OpNarrowWXM {
-    param OPNAME: String = "vnclip.wx.m";
-    param MNEMONIC: String = "vnclip.wx";
-    param FUNCT6: bits<6> = 0b101111;
-
-    behavior {
-        vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, (VCFG::sew * zext(0b10, self.XLEN))), split(vd, VCSR::vl, VCFG::sew)), |m, a, old| if m { sat_signed(((a >>> (zext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))) + zext(round_incr(a, (zext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN))) } else { old }));
-        n = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b1, self.XLEN) } else { VCSR::vl };
-                sat = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b0, 1) } else { reduce(map(zip(split(VR::v0, n, 1), split(vs2, n, (VCFG::sew * zext(0b10, self.XLEN)))), |m, a| if m { sat_signed_happened(((a >>> (zext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))) + zext(round_incr(a, (zext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN))) } else { zext(0b0, 1) }), |acc, x| acc | x) };
-                VCSR::vxsat = VCSR::vxsat | zext(sat, self.XLEN);
-    }
-}
-
-instruction VNclipWI for [RVV] : OpNarrowWI {
-    param MNEMONIC: String = "vnclip.wi";
-    param FUNCT6: bits<6> = 0b101111;
-
-    behavior {
-        vd = concat(map(split(vs2, VCSR::vl, (VCFG::sew * zext(0b10, self.XLEN))), |a| sat_signed(((a >>> (zext(zext(imm, self.XLEN), self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))) + zext(round_incr(a, (zext(zext(imm, self.XLEN), self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN)))));
-        n = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b1, self.XLEN) } else { VCSR::vl };
-                sat = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b0, 1) } else { reduce(map(split(vs2, n, (VCFG::sew * zext(0b10, self.XLEN))), |a| sat_signed_happened(((a >>> (zext(zext(imm, self.XLEN), self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))) + zext(round_incr(a, (zext(zext(imm, self.XLEN), self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN)))), |acc, x| acc | x) };
-                VCSR::vxsat = VCSR::vxsat | zext(sat, self.XLEN);
-    }
-}
-
-instruction VNclipWIM for [RVV] : OpNarrowWIM {
-    param OPNAME: String = "vnclip.wi.m";
-    param MNEMONIC: String = "vnclip.wi";
-    param FUNCT6: bits<6> = 0b101111;
-
-    behavior {
-        vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, (VCFG::sew * zext(0b10, self.XLEN))), split(vd, VCSR::vl, VCFG::sew)), |m, a, old| if m { sat_signed(((a >>> (zext(zext(imm, self.XLEN), self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))) + zext(round_incr(a, (zext(zext(imm, self.XLEN), self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN))) } else { old }));
-        n = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b1, self.XLEN) } else { VCSR::vl };
-                sat = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b0, 1) } else { reduce(map(zip(split(VR::v0, n, 1), split(vs2, n, (VCFG::sew * zext(0b10, self.XLEN)))), |m, a| if m { sat_signed_happened(((a >>> (zext(zext(imm, self.XLEN), self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))) + zext(round_incr(a, (zext(zext(imm, self.XLEN), self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN))) } else { zext(0b0, 1) }), |acc, x| acc | x) };
-                VCSR::vxsat = VCSR::vxsat | zext(sat, self.XLEN);
-    }
-}
+vector_pair!(VSadduVV, VSadduVVM, RVV, VArithVV, VArithVVM, "vsaddu.vv", 0b100000, {
+    vd = concat(map(zip(split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew)), |a, b| sat_unsigned(zext(a, (VCFG::sew + zext(0b1, self.XLEN))) + zext(b, (VCFG::sew + zext(0b1, self.XLEN))), (VCFG::sew + zext(0b1, self.XLEN)))));
+    n = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b1, self.XLEN) } else { VCSR::vl };
+    sat = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b0, 1) } else { reduce(map(zip(split(vs2, n, VCFG::sew), split(vs1, n, VCFG::sew)), |a, b| sat_unsigned_happened(zext(a, (VCFG::sew + zext(0b1, self.XLEN))) + zext(b, (VCFG::sew + zext(0b1, self.XLEN))), (VCFG::sew + zext(0b1, self.XLEN)))), |acc, x| acc | x) };
+    VCSR::vxsat = VCSR::vxsat | zext(sat, self.XLEN);
+}, {
+    vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, b, old| if m { sat_unsigned(zext(a, (VCFG::sew + zext(0b1, self.XLEN))) + zext(b, (VCFG::sew + zext(0b1, self.XLEN))), (VCFG::sew + zext(0b1, self.XLEN))) } else { old }));
+    n = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b1, self.XLEN) } else { VCSR::vl };
+    sat = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b0, 1) } else { reduce(map(zip(split(VR::v0, n, 1), split(vs2, n, VCFG::sew), split(vs1, n, VCFG::sew)), |m, a, b| if m { sat_unsigned_happened(zext(a, (VCFG::sew + zext(0b1, self.XLEN))) + zext(b, (VCFG::sew + zext(0b1, self.XLEN))), (VCFG::sew + zext(0b1, self.XLEN))) } else { zext(0b0, 1) }), |acc, x| acc | x) };
+    VCSR::vxsat = VCSR::vxsat | zext(sat, self.XLEN);
+})
+
+vector_pair!(VSadduVX, VSadduVXM, RVV, VArithVX, VArithVXM, "vsaddu.vx", 0b100000, {
+    vd = concat(map(split(vs2, VCSR::vl, VCFG::sew), |a| sat_unsigned(zext(a, (VCFG::sew + zext(0b1, self.XLEN))) + zext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), (VCFG::sew + zext(0b1, self.XLEN))), (VCFG::sew + zext(0b1, self.XLEN)))));
+    n = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b1, self.XLEN) } else { VCSR::vl };
+    sat = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b0, 1) } else { reduce(map(split(vs2, n, VCFG::sew), |a| sat_unsigned_happened(zext(a, (VCFG::sew + zext(0b1, self.XLEN))) + zext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), (VCFG::sew + zext(0b1, self.XLEN))), (VCFG::sew + zext(0b1, self.XLEN)))), |acc, x| acc | x) };
+    VCSR::vxsat = VCSR::vxsat | zext(sat, self.XLEN);
+}, {
+    vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, old| if m { sat_unsigned(zext(a, (VCFG::sew + zext(0b1, self.XLEN))) + zext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), (VCFG::sew + zext(0b1, self.XLEN))), (VCFG::sew + zext(0b1, self.XLEN))) } else { old }));
+    n = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b1, self.XLEN) } else { VCSR::vl };
+    sat = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b0, 1) } else { reduce(map(zip(split(VR::v0, n, 1), split(vs2, n, VCFG::sew)), |m, a| if m { sat_unsigned_happened(zext(a, (VCFG::sew + zext(0b1, self.XLEN))) + zext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), (VCFG::sew + zext(0b1, self.XLEN))), (VCFG::sew + zext(0b1, self.XLEN))) } else { zext(0b0, 1) }), |acc, x| acc | x) };
+    VCSR::vxsat = VCSR::vxsat | zext(sat, self.XLEN);
+})
+
+vector_pair!(VSadduVI, VSadduVIM, RVV, VArithVI, VArithVIM, "vsaddu.vi", 0b100000, {
+    vd = concat(map(split(vs2, VCSR::vl, VCFG::sew), |a| sat_unsigned(zext(a, (VCFG::sew + zext(0b1, self.XLEN))) + zext(sext(imm, VCFG::sew), (VCFG::sew + zext(0b1, self.XLEN))), (VCFG::sew + zext(0b1, self.XLEN)))));
+    n = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b1, self.XLEN) } else { VCSR::vl };
+    sat = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b0, 1) } else { reduce(map(split(vs2, n, VCFG::sew), |a| sat_unsigned_happened(zext(a, (VCFG::sew + zext(0b1, self.XLEN))) + zext(sext(imm, VCFG::sew), (VCFG::sew + zext(0b1, self.XLEN))), (VCFG::sew + zext(0b1, self.XLEN)))), |acc, x| acc | x) };
+    VCSR::vxsat = VCSR::vxsat | zext(sat, self.XLEN);
+}, {
+    vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, old| if m { sat_unsigned(zext(a, (VCFG::sew + zext(0b1, self.XLEN))) + zext(sext(imm, VCFG::sew), (VCFG::sew + zext(0b1, self.XLEN))), (VCFG::sew + zext(0b1, self.XLEN))) } else { old }));
+    n = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b1, self.XLEN) } else { VCSR::vl };
+    sat = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b0, 1) } else { reduce(map(zip(split(VR::v0, n, 1), split(vs2, n, VCFG::sew)), |m, a| if m { sat_unsigned_happened(zext(a, (VCFG::sew + zext(0b1, self.XLEN))) + zext(sext(imm, VCFG::sew), (VCFG::sew + zext(0b1, self.XLEN))), (VCFG::sew + zext(0b1, self.XLEN))) } else { zext(0b0, 1) }), |acc, x| acc | x) };
+    VCSR::vxsat = VCSR::vxsat | zext(sat, self.XLEN);
+})
+
+vector_pair!(VSaddVV, VSaddVVM, RVV, VArithVV, VArithVVM, "vsadd.vv", 0b100001, {
+    vd = concat(map(zip(split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew)), |a, b| sat_signed(sext(a, (VCFG::sew + zext(0b1, self.XLEN))) + sext(b, (VCFG::sew + zext(0b1, self.XLEN))), (VCFG::sew + zext(0b1, self.XLEN)))));
+    n = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b1, self.XLEN) } else { VCSR::vl };
+    sat = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b0, 1) } else { reduce(map(zip(split(vs2, n, VCFG::sew), split(vs1, n, VCFG::sew)), |a, b| sat_signed_happened(sext(a, (VCFG::sew + zext(0b1, self.XLEN))) + sext(b, (VCFG::sew + zext(0b1, self.XLEN))), (VCFG::sew + zext(0b1, self.XLEN)))), |acc, x| acc | x) };
+    VCSR::vxsat = VCSR::vxsat | zext(sat, self.XLEN);
+}, {
+    vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, b, old| if m { sat_signed(sext(a, (VCFG::sew + zext(0b1, self.XLEN))) + sext(b, (VCFG::sew + zext(0b1, self.XLEN))), (VCFG::sew + zext(0b1, self.XLEN))) } else { old }));
+    n = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b1, self.XLEN) } else { VCSR::vl };
+    sat = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b0, 1) } else { reduce(map(zip(split(VR::v0, n, 1), split(vs2, n, VCFG::sew), split(vs1, n, VCFG::sew)), |m, a, b| if m { sat_signed_happened(sext(a, (VCFG::sew + zext(0b1, self.XLEN))) + sext(b, (VCFG::sew + zext(0b1, self.XLEN))), (VCFG::sew + zext(0b1, self.XLEN))) } else { zext(0b0, 1) }), |acc, x| acc | x) };
+    VCSR::vxsat = VCSR::vxsat | zext(sat, self.XLEN);
+})
+
+vector_pair!(VSaddVX, VSaddVXM, RVV, VArithVX, VArithVXM, "vsadd.vx", 0b100001, {
+    vd = concat(map(split(vs2, VCSR::vl, VCFG::sew), |a| sat_signed(sext(a, (VCFG::sew + zext(0b1, self.XLEN))) + sext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), (VCFG::sew + zext(0b1, self.XLEN))), (VCFG::sew + zext(0b1, self.XLEN)))));
+    n = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b1, self.XLEN) } else { VCSR::vl };
+    sat = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b0, 1) } else { reduce(map(split(vs2, n, VCFG::sew), |a| sat_signed_happened(sext(a, (VCFG::sew + zext(0b1, self.XLEN))) + sext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), (VCFG::sew + zext(0b1, self.XLEN))), (VCFG::sew + zext(0b1, self.XLEN)))), |acc, x| acc | x) };
+    VCSR::vxsat = VCSR::vxsat | zext(sat, self.XLEN);
+}, {
+    vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, old| if m { sat_signed(sext(a, (VCFG::sew + zext(0b1, self.XLEN))) + sext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), (VCFG::sew + zext(0b1, self.XLEN))), (VCFG::sew + zext(0b1, self.XLEN))) } else { old }));
+    n = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b1, self.XLEN) } else { VCSR::vl };
+    sat = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b0, 1) } else { reduce(map(zip(split(VR::v0, n, 1), split(vs2, n, VCFG::sew)), |m, a| if m { sat_signed_happened(sext(a, (VCFG::sew + zext(0b1, self.XLEN))) + sext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), (VCFG::sew + zext(0b1, self.XLEN))), (VCFG::sew + zext(0b1, self.XLEN))) } else { zext(0b0, 1) }), |acc, x| acc | x) };
+    VCSR::vxsat = VCSR::vxsat | zext(sat, self.XLEN);
+})
+
+vector_pair!(VSaddVI, VSaddVIM, RVV, VArithVI, VArithVIM, "vsadd.vi", 0b100001, {
+    vd = concat(map(split(vs2, VCSR::vl, VCFG::sew), |a| sat_signed(sext(a, (VCFG::sew + zext(0b1, self.XLEN))) + sext(sext(imm, VCFG::sew), (VCFG::sew + zext(0b1, self.XLEN))), (VCFG::sew + zext(0b1, self.XLEN)))));
+    n = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b1, self.XLEN) } else { VCSR::vl };
+    sat = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b0, 1) } else { reduce(map(split(vs2, n, VCFG::sew), |a| sat_signed_happened(sext(a, (VCFG::sew + zext(0b1, self.XLEN))) + sext(sext(imm, VCFG::sew), (VCFG::sew + zext(0b1, self.XLEN))), (VCFG::sew + zext(0b1, self.XLEN)))), |acc, x| acc | x) };
+    VCSR::vxsat = VCSR::vxsat | zext(sat, self.XLEN);
+}, {
+    vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, old| if m { sat_signed(sext(a, (VCFG::sew + zext(0b1, self.XLEN))) + sext(sext(imm, VCFG::sew), (VCFG::sew + zext(0b1, self.XLEN))), (VCFG::sew + zext(0b1, self.XLEN))) } else { old }));
+    n = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b1, self.XLEN) } else { VCSR::vl };
+    sat = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b0, 1) } else { reduce(map(zip(split(VR::v0, n, 1), split(vs2, n, VCFG::sew)), |m, a| if m { sat_signed_happened(sext(a, (VCFG::sew + zext(0b1, self.XLEN))) + sext(sext(imm, VCFG::sew), (VCFG::sew + zext(0b1, self.XLEN))), (VCFG::sew + zext(0b1, self.XLEN))) } else { zext(0b0, 1) }), |acc, x| acc | x) };
+    VCSR::vxsat = VCSR::vxsat | zext(sat, self.XLEN);
+})
+
+vector_pair!(VSsubuVV, VSsubuVVM, RVV, VArithVV, VArithVVM, "vssubu.vv", 0b100010, {
+    vd = concat(map(zip(split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew)), |a, b| if a ~< b { zext(0b0, VCFG::sew) } else { a - b }));
+    n = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b1, self.XLEN) } else { VCSR::vl };
+    sat = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b0, 1) } else { reduce(map(zip(split(vs2, n, VCFG::sew), split(vs1, n, VCFG::sew)), |a, b| if a ~< b { zext(0b1, 1) } else { zext(0b0, 1) }), |acc, x| acc | x) };
+    VCSR::vxsat = VCSR::vxsat | zext(sat, self.XLEN);
+}, {
+    vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, b, old| if m { if a ~< b { zext(0b0, VCFG::sew) } else { a - b } } else { old }));
+    n = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b1, self.XLEN) } else { VCSR::vl };
+    sat = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b0, 1) } else { reduce(map(zip(split(VR::v0, n, 1), split(vs2, n, VCFG::sew), split(vs1, n, VCFG::sew)), |m, a, b| if m { if a ~< b { zext(0b1, 1) } else { zext(0b0, 1) } } else { zext(0b0, 1) }), |acc, x| acc | x) };
+    VCSR::vxsat = VCSR::vxsat | zext(sat, self.XLEN);
+})
+
+vector_pair!(VSsubuVX, VSsubuVXM, RVV, VArithVX, VArithVXM, "vssubu.vx", 0b100010, {
+    vd = concat(map(split(vs2, VCSR::vl, VCFG::sew), |a| if a ~< extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0) { zext(0b0, VCFG::sew) } else { a - extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0) }));
+    n = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b1, self.XLEN) } else { VCSR::vl };
+    sat = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b0, 1) } else { reduce(map(split(vs2, n, VCFG::sew), |a| if a ~< extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0) { zext(0b1, 1) } else { zext(0b0, 1) }), |acc, x| acc | x) };
+    VCSR::vxsat = VCSR::vxsat | zext(sat, self.XLEN);
+}, {
+    vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, old| if m { if a ~< extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0) { zext(0b0, VCFG::sew) } else { a - extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0) } } else { old }));
+    n = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b1, self.XLEN) } else { VCSR::vl };
+    sat = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b0, 1) } else { reduce(map(zip(split(VR::v0, n, 1), split(vs2, n, VCFG::sew)), |m, a| if m { if a ~< extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0) { zext(0b1, 1) } else { zext(0b0, 1) } } else { zext(0b0, 1) }), |acc, x| acc | x) };
+    VCSR::vxsat = VCSR::vxsat | zext(sat, self.XLEN);
+})
+
+vector_pair!(VSsubVV, VSsubVVM, RVV, VArithVV, VArithVVM, "vssub.vv", 0b100011, {
+    vd = concat(map(zip(split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew)), |a, b| sat_signed(sext(a, (VCFG::sew + zext(0b1, self.XLEN))) - sext(b, (VCFG::sew + zext(0b1, self.XLEN))), (VCFG::sew + zext(0b1, self.XLEN)))));
+    n = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b1, self.XLEN) } else { VCSR::vl };
+    sat = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b0, 1) } else { reduce(map(zip(split(vs2, n, VCFG::sew), split(vs1, n, VCFG::sew)), |a, b| sat_signed_happened(sext(a, (VCFG::sew + zext(0b1, self.XLEN))) - sext(b, (VCFG::sew + zext(0b1, self.XLEN))), (VCFG::sew + zext(0b1, self.XLEN)))), |acc, x| acc | x) };
+    VCSR::vxsat = VCSR::vxsat | zext(sat, self.XLEN);
+}, {
+    vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, b, old| if m { sat_signed(sext(a, (VCFG::sew + zext(0b1, self.XLEN))) - sext(b, (VCFG::sew + zext(0b1, self.XLEN))), (VCFG::sew + zext(0b1, self.XLEN))) } else { old }));
+    n = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b1, self.XLEN) } else { VCSR::vl };
+    sat = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b0, 1) } else { reduce(map(zip(split(VR::v0, n, 1), split(vs2, n, VCFG::sew), split(vs1, n, VCFG::sew)), |m, a, b| if m { sat_signed_happened(sext(a, (VCFG::sew + zext(0b1, self.XLEN))) - sext(b, (VCFG::sew + zext(0b1, self.XLEN))), (VCFG::sew + zext(0b1, self.XLEN))) } else { zext(0b0, 1) }), |acc, x| acc | x) };
+    VCSR::vxsat = VCSR::vxsat | zext(sat, self.XLEN);
+})
+
+vector_pair!(VSsubVX, VSsubVXM, RVV, VArithVX, VArithVXM, "vssub.vx", 0b100011, {
+    vd = concat(map(split(vs2, VCSR::vl, VCFG::sew), |a| sat_signed(sext(a, (VCFG::sew + zext(0b1, self.XLEN))) - sext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), (VCFG::sew + zext(0b1, self.XLEN))), (VCFG::sew + zext(0b1, self.XLEN)))));
+    n = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b1, self.XLEN) } else { VCSR::vl };
+    sat = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b0, 1) } else { reduce(map(split(vs2, n, VCFG::sew), |a| sat_signed_happened(sext(a, (VCFG::sew + zext(0b1, self.XLEN))) - sext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), (VCFG::sew + zext(0b1, self.XLEN))), (VCFG::sew + zext(0b1, self.XLEN)))), |acc, x| acc | x) };
+    VCSR::vxsat = VCSR::vxsat | zext(sat, self.XLEN);
+}, {
+    vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, old| if m { sat_signed(sext(a, (VCFG::sew + zext(0b1, self.XLEN))) - sext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), (VCFG::sew + zext(0b1, self.XLEN))), (VCFG::sew + zext(0b1, self.XLEN))) } else { old }));
+    n = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b1, self.XLEN) } else { VCSR::vl };
+    sat = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b0, 1) } else { reduce(map(zip(split(VR::v0, n, 1), split(vs2, n, VCFG::sew)), |m, a| if m { sat_signed_happened(sext(a, (VCFG::sew + zext(0b1, self.XLEN))) - sext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), (VCFG::sew + zext(0b1, self.XLEN))), (VCFG::sew + zext(0b1, self.XLEN))) } else { zext(0b0, 1) }), |acc, x| acc | x) };
+    VCSR::vxsat = VCSR::vxsat | zext(sat, self.XLEN);
+})
+
+vector_pair!(VSmulVV, VSmulVVM, RVV, VArithVV, VArithVVM, "vsmul.vv", 0b100111, {
+    vd = concat(map(zip(split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew)), |a, b| sat_signed(extract((((sext(a, (VCFG::sew * zext(0b10, self.XLEN))) * sext(b, (VCFG::sew * zext(0b10, self.XLEN)))) >> (VCFG::sew - zext(0b1, self.XLEN))) + zext(round_incr((sext(a, (VCFG::sew * zext(0b10, self.XLEN))) * sext(b, (VCFG::sew * zext(0b10, self.XLEN)))), (VCFG::sew - zext(0b1, self.XLEN))), (VCFG::sew * zext(0b10, self.XLEN)))), VCFG::sew, 0), (VCFG::sew + zext(0b1, self.XLEN)))));
+    n = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b1, self.XLEN) } else { VCSR::vl };
+    sat = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b0, 1) } else { reduce(map(zip(split(vs2, n, VCFG::sew), split(vs1, n, VCFG::sew)), |a, b| sat_signed_happened(extract((((sext(a, (VCFG::sew * zext(0b10, self.XLEN))) * sext(b, (VCFG::sew * zext(0b10, self.XLEN)))) >> (VCFG::sew - zext(0b1, self.XLEN))) + zext(round_incr((sext(a, (VCFG::sew * zext(0b10, self.XLEN))) * sext(b, (VCFG::sew * zext(0b10, self.XLEN)))), (VCFG::sew - zext(0b1, self.XLEN))), (VCFG::sew * zext(0b10, self.XLEN)))), VCFG::sew, 0), (VCFG::sew + zext(0b1, self.XLEN)))), |acc, x| acc | x) };
+    VCSR::vxsat = VCSR::vxsat | zext(sat, self.XLEN);
+}, {
+    vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, b, old| if m { sat_signed(extract((((sext(a, (VCFG::sew * zext(0b10, self.XLEN))) * sext(b, (VCFG::sew * zext(0b10, self.XLEN)))) >> (VCFG::sew - zext(0b1, self.XLEN))) + zext(round_incr((sext(a, (VCFG::sew * zext(0b10, self.XLEN))) * sext(b, (VCFG::sew * zext(0b10, self.XLEN)))), (VCFG::sew - zext(0b1, self.XLEN))), (VCFG::sew * zext(0b10, self.XLEN)))), VCFG::sew, 0), (VCFG::sew + zext(0b1, self.XLEN))) } else { old }));
+    n = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b1, self.XLEN) } else { VCSR::vl };
+    sat = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b0, 1) } else { reduce(map(zip(split(VR::v0, n, 1), split(vs2, n, VCFG::sew), split(vs1, n, VCFG::sew)), |m, a, b| if m { sat_signed_happened(extract((((sext(a, (VCFG::sew * zext(0b10, self.XLEN))) * sext(b, (VCFG::sew * zext(0b10, self.XLEN)))) >> (VCFG::sew - zext(0b1, self.XLEN))) + zext(round_incr((sext(a, (VCFG::sew * zext(0b10, self.XLEN))) * sext(b, (VCFG::sew * zext(0b10, self.XLEN)))), (VCFG::sew - zext(0b1, self.XLEN))), (VCFG::sew * zext(0b10, self.XLEN)))), VCFG::sew, 0), (VCFG::sew + zext(0b1, self.XLEN))) } else { zext(0b0, 1) }), |acc, x| acc | x) };
+    VCSR::vxsat = VCSR::vxsat | zext(sat, self.XLEN);
+})
+
+vector_pair!(VSmulVX, VSmulVXM, RVV, VArithVX, VArithVXM, "vsmul.vx", 0b100111, {
+    vd = concat(map(split(vs2, VCSR::vl, VCFG::sew), |a| sat_signed(extract((((sext(a, (VCFG::sew * zext(0b10, self.XLEN))) * sext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), (VCFG::sew * zext(0b10, self.XLEN)))) >> (VCFG::sew - zext(0b1, self.XLEN))) + zext(round_incr((sext(a, (VCFG::sew * zext(0b10, self.XLEN))) * sext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), (VCFG::sew * zext(0b10, self.XLEN)))), (VCFG::sew - zext(0b1, self.XLEN))), (VCFG::sew * zext(0b10, self.XLEN)))), VCFG::sew, 0), (VCFG::sew + zext(0b1, self.XLEN)))));
+    n = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b1, self.XLEN) } else { VCSR::vl };
+    sat = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b0, 1) } else { reduce(map(split(vs2, n, VCFG::sew), |a| sat_signed_happened(extract((((sext(a, (VCFG::sew * zext(0b10, self.XLEN))) * sext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), (VCFG::sew * zext(0b10, self.XLEN)))) >> (VCFG::sew - zext(0b1, self.XLEN))) + zext(round_incr((sext(a, (VCFG::sew * zext(0b10, self.XLEN))) * sext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), (VCFG::sew * zext(0b10, self.XLEN)))), (VCFG::sew - zext(0b1, self.XLEN))), (VCFG::sew * zext(0b10, self.XLEN)))), VCFG::sew, 0), (VCFG::sew + zext(0b1, self.XLEN)))), |acc, x| acc | x) };
+    VCSR::vxsat = VCSR::vxsat | zext(sat, self.XLEN);
+}, {
+    vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, old| if m { sat_signed(extract((((sext(a, (VCFG::sew * zext(0b10, self.XLEN))) * sext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), (VCFG::sew * zext(0b10, self.XLEN)))) >> (VCFG::sew - zext(0b1, self.XLEN))) + zext(round_incr((sext(a, (VCFG::sew * zext(0b10, self.XLEN))) * sext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), (VCFG::sew * zext(0b10, self.XLEN)))), (VCFG::sew - zext(0b1, self.XLEN))), (VCFG::sew * zext(0b10, self.XLEN)))), VCFG::sew, 0), (VCFG::sew + zext(0b1, self.XLEN))) } else { old }));
+    n = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b1, self.XLEN) } else { VCSR::vl };
+    sat = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b0, 1) } else { reduce(map(zip(split(VR::v0, n, 1), split(vs2, n, VCFG::sew)), |m, a| if m { sat_signed_happened(extract((((sext(a, (VCFG::sew * zext(0b10, self.XLEN))) * sext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), (VCFG::sew * zext(0b10, self.XLEN)))) >> (VCFG::sew - zext(0b1, self.XLEN))) + zext(round_incr((sext(a, (VCFG::sew * zext(0b10, self.XLEN))) * sext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), (VCFG::sew * zext(0b10, self.XLEN)))), (VCFG::sew - zext(0b1, self.XLEN))), (VCFG::sew * zext(0b10, self.XLEN)))), VCFG::sew, 0), (VCFG::sew + zext(0b1, self.XLEN))) } else { zext(0b0, 1) }), |acc, x| acc | x) };
+    VCSR::vxsat = VCSR::vxsat | zext(sat, self.XLEN);
+})
+
+vector_pair!(VSsrlVV, VSsrlVVM, RVV, VArithVV, VArithVVM, "vssrl.vv", 0b101010, {
+    vd = concat(map(zip(split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew)), |a, b| (a >> (b & (VCFG::sew - zext(0b1, self.XLEN)))) + zext(round_incr(a, (b & (VCFG::sew - zext(0b1, self.XLEN)))), VCFG::sew)));
+}, {
+    vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, b, old| if m { (a >> (b & (VCFG::sew - zext(0b1, self.XLEN)))) + zext(round_incr(a, (b & (VCFG::sew - zext(0b1, self.XLEN)))), VCFG::sew) } else { old }));
+})
+
+vector_pair!(VSsrlVX, VSsrlVXM, RVV, VArithVX, VArithVXM, "vssrl.vx", 0b101010, {
+    vd = concat(map(split(vs2, VCSR::vl, VCFG::sew), |a| (a >> (extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0) & (VCFG::sew - zext(0b1, self.XLEN)))) + zext(round_incr(a, (extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0) & (VCFG::sew - zext(0b1, self.XLEN)))), VCFG::sew)));
+}, {
+    vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, old| if m { (a >> (extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0) & (VCFG::sew - zext(0b1, self.XLEN)))) + zext(round_incr(a, (extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0) & (VCFG::sew - zext(0b1, self.XLEN)))), VCFG::sew) } else { old }));
+})
+
+vector_pair!(VSsrlVI, VSsrlVIM, RVV, VArithVI, VArithVIM, "vssrl.vi", 0b101010, {
+    vd = concat(map(split(vs2, VCSR::vl, VCFG::sew), |a| (a >> (zext(imm, self.XLEN) & (VCFG::sew - zext(0b1, self.XLEN)))) + zext(round_incr(a, (zext(imm, self.XLEN) & (VCFG::sew - zext(0b1, self.XLEN)))), VCFG::sew)));
+}, {
+    vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, old| if m { (a >> (zext(imm, self.XLEN) & (VCFG::sew - zext(0b1, self.XLEN)))) + zext(round_incr(a, (zext(imm, self.XLEN) & (VCFG::sew - zext(0b1, self.XLEN)))), VCFG::sew) } else { old }));
+})
+
+vector_pair!(VSsraVV, VSsraVVM, RVV, VArithVV, VArithVVM, "vssra.vv", 0b101011, {
+    vd = concat(map(zip(split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew)), |a, b| (a >>> (b & (VCFG::sew - zext(0b1, self.XLEN)))) + zext(round_incr(a, (b & (VCFG::sew - zext(0b1, self.XLEN)))), VCFG::sew)));
+}, {
+    vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, b, old| if m { (a >>> (b & (VCFG::sew - zext(0b1, self.XLEN)))) + zext(round_incr(a, (b & (VCFG::sew - zext(0b1, self.XLEN)))), VCFG::sew) } else { old }));
+})
+
+vector_pair!(VSsraVX, VSsraVXM, RVV, VArithVX, VArithVXM, "vssra.vx", 0b101011, {
+    vd = concat(map(split(vs2, VCSR::vl, VCFG::sew), |a| (a >>> (extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0) & (VCFG::sew - zext(0b1, self.XLEN)))) + zext(round_incr(a, (extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0) & (VCFG::sew - zext(0b1, self.XLEN)))), VCFG::sew)));
+}, {
+    vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, old| if m { (a >>> (extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0) & (VCFG::sew - zext(0b1, self.XLEN)))) + zext(round_incr(a, (extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0) & (VCFG::sew - zext(0b1, self.XLEN)))), VCFG::sew) } else { old }));
+})
+
+vector_pair!(VSsraVI, VSsraVIM, RVV, VArithVI, VArithVIM, "vssra.vi", 0b101011, {
+    vd = concat(map(split(vs2, VCSR::vl, VCFG::sew), |a| (a >>> (zext(imm, self.XLEN) & (VCFG::sew - zext(0b1, self.XLEN)))) + zext(round_incr(a, (zext(imm, self.XLEN) & (VCFG::sew - zext(0b1, self.XLEN)))), VCFG::sew)));
+}, {
+    vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, old| if m { (a >>> (zext(imm, self.XLEN) & (VCFG::sew - zext(0b1, self.XLEN)))) + zext(round_incr(a, (zext(imm, self.XLEN) & (VCFG::sew - zext(0b1, self.XLEN)))), VCFG::sew) } else { old }));
+})
+
+vector_pair!(VAadduVV, VAadduVVM, RVV, OpMVV, OpMVVM, "vaaddu.vv", 0b001000, {
+    vd = concat(map(zip(split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew)), |a, b| extract((zext(a, (VCFG::sew + zext(0b1, self.XLEN))) + zext(b, (VCFG::sew + zext(0b1, self.XLEN)))) >> zext(0b1, self.XLEN), (VCFG::sew - zext(0b1, self.XLEN)), 0) + zext(round_incr(zext(a, (VCFG::sew + zext(0b1, self.XLEN))) + zext(b, (VCFG::sew + zext(0b1, self.XLEN))), zext(0b1, self.XLEN)), VCFG::sew)));
+}, {
+    vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, b, old| if m { extract((zext(a, (VCFG::sew + zext(0b1, self.XLEN))) + zext(b, (VCFG::sew + zext(0b1, self.XLEN)))) >> zext(0b1, self.XLEN), (VCFG::sew - zext(0b1, self.XLEN)), 0) + zext(round_incr(zext(a, (VCFG::sew + zext(0b1, self.XLEN))) + zext(b, (VCFG::sew + zext(0b1, self.XLEN))), zext(0b1, self.XLEN)), VCFG::sew) } else { old }));
+})
+
+vector_pair!(VAadduVX, VAadduVXM, RVV, OpMVX, OpMVXM, "vaaddu.vx", 0b001000, {
+    vd = concat(map(split(vs2, VCSR::vl, VCFG::sew), |a| extract((zext(a, (VCFG::sew + zext(0b1, self.XLEN))) + zext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), (VCFG::sew + zext(0b1, self.XLEN)))) >> zext(0b1, self.XLEN), (VCFG::sew - zext(0b1, self.XLEN)), 0) + zext(round_incr(zext(a, (VCFG::sew + zext(0b1, self.XLEN))) + zext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), (VCFG::sew + zext(0b1, self.XLEN))), zext(0b1, self.XLEN)), VCFG::sew)));
+}, {
+    vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, old| if m { extract((zext(a, (VCFG::sew + zext(0b1, self.XLEN))) + zext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), (VCFG::sew + zext(0b1, self.XLEN)))) >> zext(0b1, self.XLEN), (VCFG::sew - zext(0b1, self.XLEN)), 0) + zext(round_incr(zext(a, (VCFG::sew + zext(0b1, self.XLEN))) + zext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), (VCFG::sew + zext(0b1, self.XLEN))), zext(0b1, self.XLEN)), VCFG::sew) } else { old }));
+})
+
+vector_pair!(VAaddVV, VAaddVVM, RVV, OpMVV, OpMVVM, "vaadd.vv", 0b001001, {
+    vd = concat(map(zip(split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew)), |a, b| extract((sext(a, (VCFG::sew + zext(0b1, self.XLEN))) + sext(b, (VCFG::sew + zext(0b1, self.XLEN)))) >> zext(0b1, self.XLEN), (VCFG::sew - zext(0b1, self.XLEN)), 0) + zext(round_incr(sext(a, (VCFG::sew + zext(0b1, self.XLEN))) + sext(b, (VCFG::sew + zext(0b1, self.XLEN))), zext(0b1, self.XLEN)), VCFG::sew)));
+}, {
+    vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, b, old| if m { extract((sext(a, (VCFG::sew + zext(0b1, self.XLEN))) + sext(b, (VCFG::sew + zext(0b1, self.XLEN)))) >> zext(0b1, self.XLEN), (VCFG::sew - zext(0b1, self.XLEN)), 0) + zext(round_incr(sext(a, (VCFG::sew + zext(0b1, self.XLEN))) + sext(b, (VCFG::sew + zext(0b1, self.XLEN))), zext(0b1, self.XLEN)), VCFG::sew) } else { old }));
+})
+
+vector_pair!(VAaddVX, VAaddVXM, RVV, OpMVX, OpMVXM, "vaadd.vx", 0b001001, {
+    vd = concat(map(split(vs2, VCSR::vl, VCFG::sew), |a| extract((sext(a, (VCFG::sew + zext(0b1, self.XLEN))) + sext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), (VCFG::sew + zext(0b1, self.XLEN)))) >> zext(0b1, self.XLEN), (VCFG::sew - zext(0b1, self.XLEN)), 0) + zext(round_incr(sext(a, (VCFG::sew + zext(0b1, self.XLEN))) + sext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), (VCFG::sew + zext(0b1, self.XLEN))), zext(0b1, self.XLEN)), VCFG::sew)));
+}, {
+    vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, old| if m { extract((sext(a, (VCFG::sew + zext(0b1, self.XLEN))) + sext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), (VCFG::sew + zext(0b1, self.XLEN)))) >> zext(0b1, self.XLEN), (VCFG::sew - zext(0b1, self.XLEN)), 0) + zext(round_incr(sext(a, (VCFG::sew + zext(0b1, self.XLEN))) + sext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), (VCFG::sew + zext(0b1, self.XLEN))), zext(0b1, self.XLEN)), VCFG::sew) } else { old }));
+})
+
+vector_pair!(VAsubuVV, VAsubuVVM, RVV, OpMVV, OpMVVM, "vasubu.vv", 0b001010, {
+    vd = concat(map(zip(split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew)), |a, b| extract((zext(a, (VCFG::sew + zext(0b1, self.XLEN))) - zext(b, (VCFG::sew + zext(0b1, self.XLEN)))) >> zext(0b1, self.XLEN), (VCFG::sew - zext(0b1, self.XLEN)), 0) + zext(round_incr(zext(a, (VCFG::sew + zext(0b1, self.XLEN))) - zext(b, (VCFG::sew + zext(0b1, self.XLEN))), zext(0b1, self.XLEN)), VCFG::sew)));
+}, {
+    vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, b, old| if m { extract((zext(a, (VCFG::sew + zext(0b1, self.XLEN))) - zext(b, (VCFG::sew + zext(0b1, self.XLEN)))) >> zext(0b1, self.XLEN), (VCFG::sew - zext(0b1, self.XLEN)), 0) + zext(round_incr(zext(a, (VCFG::sew + zext(0b1, self.XLEN))) - zext(b, (VCFG::sew + zext(0b1, self.XLEN))), zext(0b1, self.XLEN)), VCFG::sew) } else { old }));
+})
+
+vector_pair!(VAsubuVX, VAsubuVXM, RVV, OpMVX, OpMVXM, "vasubu.vx", 0b001010, {
+    vd = concat(map(split(vs2, VCSR::vl, VCFG::sew), |a| extract((zext(a, (VCFG::sew + zext(0b1, self.XLEN))) - zext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), (VCFG::sew + zext(0b1, self.XLEN)))) >> zext(0b1, self.XLEN), (VCFG::sew - zext(0b1, self.XLEN)), 0) + zext(round_incr(zext(a, (VCFG::sew + zext(0b1, self.XLEN))) - zext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), (VCFG::sew + zext(0b1, self.XLEN))), zext(0b1, self.XLEN)), VCFG::sew)));
+}, {
+    vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, old| if m { extract((zext(a, (VCFG::sew + zext(0b1, self.XLEN))) - zext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), (VCFG::sew + zext(0b1, self.XLEN)))) >> zext(0b1, self.XLEN), (VCFG::sew - zext(0b1, self.XLEN)), 0) + zext(round_incr(zext(a, (VCFG::sew + zext(0b1, self.XLEN))) - zext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), (VCFG::sew + zext(0b1, self.XLEN))), zext(0b1, self.XLEN)), VCFG::sew) } else { old }));
+})
+
+vector_pair!(VAsubVV, VAsubVVM, RVV, OpMVV, OpMVVM, "vasub.vv", 0b001011, {
+    vd = concat(map(zip(split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew)), |a, b| extract((sext(a, (VCFG::sew + zext(0b1, self.XLEN))) - sext(b, (VCFG::sew + zext(0b1, self.XLEN)))) >> zext(0b1, self.XLEN), (VCFG::sew - zext(0b1, self.XLEN)), 0) + zext(round_incr(sext(a, (VCFG::sew + zext(0b1, self.XLEN))) - sext(b, (VCFG::sew + zext(0b1, self.XLEN))), zext(0b1, self.XLEN)), VCFG::sew)));
+}, {
+    vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vs1, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, b, old| if m { extract((sext(a, (VCFG::sew + zext(0b1, self.XLEN))) - sext(b, (VCFG::sew + zext(0b1, self.XLEN)))) >> zext(0b1, self.XLEN), (VCFG::sew - zext(0b1, self.XLEN)), 0) + zext(round_incr(sext(a, (VCFG::sew + zext(0b1, self.XLEN))) - sext(b, (VCFG::sew + zext(0b1, self.XLEN))), zext(0b1, self.XLEN)), VCFG::sew) } else { old }));
+})
+
+vector_pair!(VAsubVX, VAsubVXM, RVV, OpMVX, OpMVXM, "vasub.vx", 0b001011, {
+    vd = concat(map(split(vs2, VCSR::vl, VCFG::sew), |a| extract((sext(a, (VCFG::sew + zext(0b1, self.XLEN))) - sext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), (VCFG::sew + zext(0b1, self.XLEN)))) >> zext(0b1, self.XLEN), (VCFG::sew - zext(0b1, self.XLEN)), 0) + zext(round_incr(sext(a, (VCFG::sew + zext(0b1, self.XLEN))) - sext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), (VCFG::sew + zext(0b1, self.XLEN))), zext(0b1, self.XLEN)), VCFG::sew)));
+}, {
+    vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, old| if m { extract((sext(a, (VCFG::sew + zext(0b1, self.XLEN))) - sext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), (VCFG::sew + zext(0b1, self.XLEN)))) >> zext(0b1, self.XLEN), (VCFG::sew - zext(0b1, self.XLEN)), 0) + zext(round_incr(sext(a, (VCFG::sew + zext(0b1, self.XLEN))) - sext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), (VCFG::sew + zext(0b1, self.XLEN))), zext(0b1, self.XLEN)), VCFG::sew) } else { old }));
+})
+
+vector_pair!(VNclipuWV, VNclipuWVM, RVV, OpNarrowWV, OpNarrowWVM, "vnclipu.wv", 0b101110, {
+    vd = concat(map(zip(split(vs2, VCSR::vl, (VCFG::sew * zext(0b10, self.XLEN))), split(vs1, VCSR::vl, VCFG::sew)), |a, b| sat_unsigned(((a >> (zext(b, self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))) + zext(round_incr(a, (zext(b, self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN)))));
+    n = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b1, self.XLEN) } else { VCSR::vl };
+    sat = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b0, 1) } else { reduce(map(zip(split(vs2, n, (VCFG::sew * zext(0b10, self.XLEN))), split(vs1, n, VCFG::sew)), |a, b| sat_unsigned_happened(((a >> (zext(b, self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))) + zext(round_incr(a, (zext(b, self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN)))), |acc, x| acc | x) };
+    VCSR::vxsat = VCSR::vxsat | zext(sat, self.XLEN);
+}, {
+    vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, (VCFG::sew * zext(0b10, self.XLEN))), split(vs1, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, b, old| if m { sat_unsigned(((a >> (zext(b, self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))) + zext(round_incr(a, (zext(b, self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN))) } else { old }));
+    n = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b1, self.XLEN) } else { VCSR::vl };
+    sat = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b0, 1) } else { reduce(map(zip(split(VR::v0, n, 1), split(vs2, n, (VCFG::sew * zext(0b10, self.XLEN))), split(vs1, n, VCFG::sew)), |m, a, b| if m { sat_unsigned_happened(((a >> (zext(b, self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))) + zext(round_incr(a, (zext(b, self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN))) } else { zext(0b0, 1) }), |acc, x| acc | x) };
+    VCSR::vxsat = VCSR::vxsat | zext(sat, self.XLEN);
+})
+
+vector_pair!(VNclipuWX, VNclipuWXM, RVV, OpNarrowWX, OpNarrowWXM, "vnclipu.wx", 0b101110, {
+    vd = concat(map(split(vs2, VCSR::vl, (VCFG::sew * zext(0b10, self.XLEN))), |a| sat_unsigned(((a >> (zext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))) + zext(round_incr(a, (zext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN)))));
+    n = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b1, self.XLEN) } else { VCSR::vl };
+    sat = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b0, 1) } else { reduce(map(split(vs2, n, (VCFG::sew * zext(0b10, self.XLEN))), |a| sat_unsigned_happened(((a >> (zext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))) + zext(round_incr(a, (zext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN)))), |acc, x| acc | x) };
+    VCSR::vxsat = VCSR::vxsat | zext(sat, self.XLEN);
+}, {
+    vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, (VCFG::sew * zext(0b10, self.XLEN))), split(vd, VCSR::vl, VCFG::sew)), |m, a, old| if m { sat_unsigned(((a >> (zext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))) + zext(round_incr(a, (zext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN))) } else { old }));
+    n = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b1, self.XLEN) } else { VCSR::vl };
+    sat = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b0, 1) } else { reduce(map(zip(split(VR::v0, n, 1), split(vs2, n, (VCFG::sew * zext(0b10, self.XLEN)))), |m, a| if m { sat_unsigned_happened(((a >> (zext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))) + zext(round_incr(a, (zext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN))) } else { zext(0b0, 1) }), |acc, x| acc | x) };
+    VCSR::vxsat = VCSR::vxsat | zext(sat, self.XLEN);
+})
+
+vector_pair!(VNclipuWI, VNclipuWIM, RVV, OpNarrowWI, OpNarrowWIM, "vnclipu.wi", 0b101110, {
+    vd = concat(map(split(vs2, VCSR::vl, (VCFG::sew * zext(0b10, self.XLEN))), |a| sat_unsigned(((a >> (zext(zext(imm, self.XLEN), self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))) + zext(round_incr(a, (zext(zext(imm, self.XLEN), self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN)))));
+    n = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b1, self.XLEN) } else { VCSR::vl };
+    sat = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b0, 1) } else { reduce(map(split(vs2, n, (VCFG::sew * zext(0b10, self.XLEN))), |a| sat_unsigned_happened(((a >> (zext(zext(imm, self.XLEN), self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))) + zext(round_incr(a, (zext(zext(imm, self.XLEN), self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN)))), |acc, x| acc | x) };
+    VCSR::vxsat = VCSR::vxsat | zext(sat, self.XLEN);
+}, {
+    vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, (VCFG::sew * zext(0b10, self.XLEN))), split(vd, VCSR::vl, VCFG::sew)), |m, a, old| if m { sat_unsigned(((a >> (zext(zext(imm, self.XLEN), self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))) + zext(round_incr(a, (zext(zext(imm, self.XLEN), self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN))) } else { old }));
+    n = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b1, self.XLEN) } else { VCSR::vl };
+    sat = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b0, 1) } else { reduce(map(zip(split(VR::v0, n, 1), split(vs2, n, (VCFG::sew * zext(0b10, self.XLEN)))), |m, a| if m { sat_unsigned_happened(((a >> (zext(zext(imm, self.XLEN), self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))) + zext(round_incr(a, (zext(zext(imm, self.XLEN), self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN))) } else { zext(0b0, 1) }), |acc, x| acc | x) };
+    VCSR::vxsat = VCSR::vxsat | zext(sat, self.XLEN);
+})
+
+vector_pair!(VNclipWV, VNclipWVM, RVV, OpNarrowWV, OpNarrowWVM, "vnclip.wv", 0b101111, {
+    vd = concat(map(zip(split(vs2, VCSR::vl, (VCFG::sew * zext(0b10, self.XLEN))), split(vs1, VCSR::vl, VCFG::sew)), |a, b| sat_signed(((a >>> (zext(b, self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))) + zext(round_incr(a, (zext(b, self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN)))));
+    n = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b1, self.XLEN) } else { VCSR::vl };
+    sat = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b0, 1) } else { reduce(map(zip(split(vs2, n, (VCFG::sew * zext(0b10, self.XLEN))), split(vs1, n, VCFG::sew)), |a, b| sat_signed_happened(((a >>> (zext(b, self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))) + zext(round_incr(a, (zext(b, self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN)))), |acc, x| acc | x) };
+    VCSR::vxsat = VCSR::vxsat | zext(sat, self.XLEN);
+}, {
+    vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, (VCFG::sew * zext(0b10, self.XLEN))), split(vs1, VCSR::vl, VCFG::sew), split(vd, VCSR::vl, VCFG::sew)), |m, a, b, old| if m { sat_signed(((a >>> (zext(b, self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))) + zext(round_incr(a, (zext(b, self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN))) } else { old }));
+    n = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b1, self.XLEN) } else { VCSR::vl };
+    sat = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b0, 1) } else { reduce(map(zip(split(VR::v0, n, 1), split(vs2, n, (VCFG::sew * zext(0b10, self.XLEN))), split(vs1, n, VCFG::sew)), |m, a, b| if m { sat_signed_happened(((a >>> (zext(b, self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))) + zext(round_incr(a, (zext(b, self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN))) } else { zext(0b0, 1) }), |acc, x| acc | x) };
+    VCSR::vxsat = VCSR::vxsat | zext(sat, self.XLEN);
+})
+
+vector_pair!(VNclipWX, VNclipWXM, RVV, OpNarrowWX, OpNarrowWXM, "vnclip.wx", 0b101111, {
+    vd = concat(map(split(vs2, VCSR::vl, (VCFG::sew * zext(0b10, self.XLEN))), |a| sat_signed(((a >>> (zext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))) + zext(round_incr(a, (zext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN)))));
+    n = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b1, self.XLEN) } else { VCSR::vl };
+    sat = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b0, 1) } else { reduce(map(split(vs2, n, (VCFG::sew * zext(0b10, self.XLEN))), |a| sat_signed_happened(((a >>> (zext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))) + zext(round_incr(a, (zext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN)))), |acc, x| acc | x) };
+    VCSR::vxsat = VCSR::vxsat | zext(sat, self.XLEN);
+}, {
+    vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, (VCFG::sew * zext(0b10, self.XLEN))), split(vd, VCSR::vl, VCFG::sew)), |m, a, old| if m { sat_signed(((a >>> (zext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))) + zext(round_incr(a, (zext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN))) } else { old }));
+    n = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b1, self.XLEN) } else { VCSR::vl };
+    sat = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b0, 1) } else { reduce(map(zip(split(VR::v0, n, 1), split(vs2, n, (VCFG::sew * zext(0b10, self.XLEN)))), |m, a| if m { sat_signed_happened(((a >>> (zext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))) + zext(round_incr(a, (zext(extract(rs1, (VCFG::sew - zext(0b1, self.XLEN)), 0), self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN))) } else { zext(0b0, 1) }), |acc, x| acc | x) };
+    VCSR::vxsat = VCSR::vxsat | zext(sat, self.XLEN);
+})
+
+vector_pair!(VNclipWI, VNclipWIM, RVV, OpNarrowWI, OpNarrowWIM, "vnclip.wi", 0b101111, {
+    vd = concat(map(split(vs2, VCSR::vl, (VCFG::sew * zext(0b10, self.XLEN))), |a| sat_signed(((a >>> (zext(zext(imm, self.XLEN), self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))) + zext(round_incr(a, (zext(zext(imm, self.XLEN), self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN)))));
+    n = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b1, self.XLEN) } else { VCSR::vl };
+    sat = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b0, 1) } else { reduce(map(split(vs2, n, (VCFG::sew * zext(0b10, self.XLEN))), |a| sat_signed_happened(((a >>> (zext(zext(imm, self.XLEN), self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))) + zext(round_incr(a, (zext(zext(imm, self.XLEN), self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN)))), |acc, x| acc | x) };
+    VCSR::vxsat = VCSR::vxsat | zext(sat, self.XLEN);
+}, {
+    vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, (VCFG::sew * zext(0b10, self.XLEN))), split(vd, VCSR::vl, VCFG::sew)), |m, a, old| if m { sat_signed(((a >>> (zext(zext(imm, self.XLEN), self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))) + zext(round_incr(a, (zext(zext(imm, self.XLEN), self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN))) } else { old }));
+    n = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b1, self.XLEN) } else { VCSR::vl };
+    sat = if VCSR::vl == zext(0b0, self.XLEN) { zext(0b0, 1) } else { reduce(map(zip(split(VR::v0, n, 1), split(vs2, n, (VCFG::sew * zext(0b10, self.XLEN)))), |m, a| if m { sat_signed_happened(((a >>> (zext(zext(imm, self.XLEN), self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))) + zext(round_incr(a, (zext(zext(imm, self.XLEN), self.XLEN) & ((VCFG::sew * zext(0b10, self.XLEN)) - zext(0b1, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN)))), (VCFG::sew * zext(0b10, self.XLEN))) } else { zext(0b0, 1) }), |acc, x| acc | x) };
+    VCSR::vxsat = VCSR::vxsat | zext(sat, self.XLEN);
+})
 

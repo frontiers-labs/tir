@@ -494,17 +494,12 @@ fn check_does_not_count_future_gcc_evidence_as_tir_support() {
     assert_eq!(report["results"][0]["stage"], "scalar");
 }
 
-#[test]
-fn reference_preserves_a_malformed_probe() {
+fn check_preserved_probe(contents: &str) {
     let directory = tempfile::tempdir().unwrap();
     let source = directory.path().join("probe.c");
     let manifest = directory.path().join("cases.toml");
     let report = directory.path().join("reference.json");
-    fs::write(
-        &source,
-        "#include <stdio.h>\nint main(void) { puts(\"not json\"); return 0; }\n",
-    )
-    .unwrap();
+    fs::write(&source, contents).unwrap();
     fs::write(
         &manifest,
         format!(
@@ -515,77 +510,7 @@ profile = "gcc-15.2"
 compiler_version = "15.2.0"
 
 [[cases]]
-id = "malformed.probe"
-stage = "reference"
-source = "{}"
-language_mode = "c17"
-target_requirements = []
-compiler_args = []
-runtime_input_bits = []
-probe = "execute"
-
-[cases.expectation]
-kind = "exact_bits"
-bits = "0x0000000000000000"
-flags = []
-
-[cases.oracle]
-kind = "fixture"
-identity = "fixture"
-version = "1"
-reference = "fixture"
-"#,
-            source.display()
-        ),
-    )
-    .unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
-        .args([
-            "fp-check",
-            "reference",
-            "--gcc",
-            "gcc",
-            "--profile",
-            "host-test",
-            "--manifest",
-            manifest.to_str().unwrap(),
-            "--output",
-            report.to_str().unwrap(),
-        ])
-        .output()
-        .unwrap();
-
-    assert!(!output.status.success());
-    let report: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string(report).unwrap()).unwrap();
-    assert_eq!(report["results"][0]["status"], "fail");
-    let artifacts = report["results"][0]["artifacts"].as_str().unwrap();
-    assert!(std::path::Path::new(artifacts).join("probe.c").is_file());
-    fs::remove_dir_all(artifacts).unwrap();
-}
-
-#[test]
-fn reference_preserves_a_probe_that_misses_its_expectation() {
-    let directory = tempfile::tempdir().unwrap();
-    let source = directory.path().join("probe.c");
-    let manifest = directory.path().join("cases.toml");
-    let report = directory.path().join("reference.json");
-    fs::write(
-        &source,
-        "#include <stdio.h>\nint main(void) { puts(\"{\\\"kind\\\":\\\"exact_bits\\\",\\\"bits\\\":\\\"0x1\\\",\\\"flags\\\":[]}\"); return 0; }\n",
-    )
-    .unwrap();
-    fs::write(
-        &manifest,
-        format!(
-            r#"schema_version = 1
-
-[reference]
-profile = "gcc-15.2"
-compiler_version = "15.2.0"
-
-[[cases]]
-id = "wrong.probe"
+id = "failed.probe"
 stage = "reference"
 source = "{}"
 language_mode = "c17"
@@ -632,6 +557,18 @@ reference = "fixture"
     let artifacts = report["results"][0]["artifacts"].as_str().unwrap();
     assert!(std::path::Path::new(artifacts).join("probe.c").is_file());
     fs::remove_dir_all(artifacts).unwrap();
+}
+
+#[test]
+fn reference_preserves_a_malformed_probe() {
+    check_preserved_probe("#include <stdio.h>\nint main(void) { puts(\"not json\"); return 0; }\n");
+}
+
+#[test]
+fn reference_preserves_a_probe_that_misses_its_expectation() {
+    check_preserved_probe(
+        "#include <stdio.h>\nint main(void) { puts(\"{\\\"kind\\\":\\\"exact_bits\\\",\\\"bits\\\":\\\"0x1\\\",\\\"flags\\\":[]}\"); return 0; }\n",
+    );
 }
 
 #[test]
@@ -919,8 +856,7 @@ fn check_rejects_an_empty_case_selection() {
     assert!(!checked.exists());
 }
 
-#[test]
-fn reference_records_same_expression_contraction() {
+fn reference_case(case: &str) -> serde_json::Value {
     let directory = tempfile::tempdir().unwrap();
     let report = directory.path().join("reference.json");
     let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
@@ -932,21 +868,24 @@ fn reference_records_same_expression_contraction() {
             "--profile",
             "host-test",
             "--case",
-            "contraction.gnu17.same.default",
+            case,
             "--output",
             report.to_str().unwrap(),
         ])
         .output()
         .unwrap();
-
     assert!(
         output.status.success(),
-        "stdout:\n{}\nstderr:\n{}",
+        "{case}: stdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    let report: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string(report).unwrap()).unwrap();
+    serde_json::from_str(&fs::read_to_string(report).unwrap()).unwrap()
+}
+
+#[test]
+fn reference_records_same_expression_contraction() {
+    let report = reference_case("contraction.gnu17.same.default");
     assert_eq!(report["results"][0]["status"], "pass");
     assert!(report["results"][0]["observation"]["instructions"]
         .as_array()
@@ -957,31 +896,7 @@ fn reference_records_same_expression_contraction() {
 
 #[test]
 fn reference_records_underflow_for_minimum_subnormal_scaling() {
-    let directory = tempfile::tempdir().unwrap();
-    let report = directory.path().join("reference.json");
-    let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
-        .args([
-            "fp-check",
-            "reference",
-            "--gcc",
-            "gcc",
-            "--profile",
-            "host-test",
-            "--case",
-            "scale.binary64.positive_min_subnormal",
-            "--output",
-            report.to_str().unwrap(),
-        ])
-        .output()
-        .unwrap();
-
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let report: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string(report).unwrap()).unwrap();
+    let report = reference_case("scale.binary64.positive_min_subnormal");
     assert_eq!(
         report["results"][0]["observation"]["bits"],
         "0x0000000000000000"
@@ -994,31 +909,7 @@ fn reference_records_underflow_for_minimum_subnormal_scaling() {
 
 #[test]
 fn reference_records_directed_halfway_rounding() {
-    let directory = tempfile::tempdir().unwrap();
-    let report = directory.path().join("reference.json");
-    let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
-        .args([
-            "fp-check",
-            "reference",
-            "--gcc",
-            "gcc",
-            "--profile",
-            "host-test",
-            "--case",
-            "round.binary64.halfway.upward",
-            "--output",
-            report.to_str().unwrap(),
-        ])
-        .output()
-        .unwrap();
-
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let report: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string(report).unwrap()).unwrap();
+    let report = reference_case("round.binary64.halfway.upward");
     assert_eq!(
         report["results"][0]["observation"]["bits"],
         "0x3ff0000000000001"
@@ -1031,31 +922,7 @@ fn reference_records_directed_halfway_rounding() {
 
 #[test]
 fn reference_records_observable_dead_arithmetic() {
-    let directory = tempfile::tempdir().unwrap();
-    let report = directory.path().join("reference.json");
-    let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
-        .args([
-            "fp-check",
-            "reference",
-            "--gcc",
-            "gcc",
-            "--profile",
-            "host-test",
-            "--case",
-            "effects.dead_division.flags",
-            "--output",
-            report.to_str().unwrap(),
-        ])
-        .output()
-        .unwrap();
-
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let report: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string(report).unwrap()).unwrap();
+    let report = reference_case("effects.dead_division.flags");
     assert_eq!(
         report["results"][0]["observation"]["flags"],
         serde_json::json!([])
@@ -1066,31 +933,7 @@ fn reference_records_observable_dead_arithmetic() {
 
 #[test]
 fn reference_records_negative_sqrt_reporting() {
-    let directory = tempfile::tempdir().unwrap();
-    let report = directory.path().join("reference.json");
-    let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
-        .args([
-            "fp-check",
-            "reference",
-            "--gcc",
-            "gcc",
-            "--profile",
-            "host-test",
-            "--case",
-            "math.sqrt.negative.glibc",
-            "--output",
-            report.to_str().unwrap(),
-        ])
-        .output()
-        .unwrap();
-
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let report: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string(report).unwrap()).unwrap();
+    let report = reference_case("math.sqrt.negative.glibc");
     assert_eq!(
         report["results"][0]["observation"]["flags"],
         serde_json::json!(["invalid"])
@@ -1104,31 +947,7 @@ fn reference_records_negative_sqrt_reporting() {
 
 #[test]
 fn reference_records_disabled_builtin_recognition() {
-    let directory = tempfile::tempdir().unwrap();
-    let report = directory.path().join("reference.json");
-    let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
-        .args([
-            "fp-check",
-            "reference",
-            "--gcc",
-            "gcc",
-            "--profile",
-            "host-test",
-            "--case",
-            "recognition.sqrt.builtin_disabled",
-            "--output",
-            report.to_str().unwrap(),
-        ])
-        .output()
-        .unwrap();
-
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let report: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string(report).unwrap()).unwrap();
+    let report = reference_case("recognition.sqrt.builtin_disabled");
     assert!(report["results"][0]["observation"]["instructions"]
         .as_array()
         .unwrap()
@@ -1138,31 +957,7 @@ fn reference_records_disabled_builtin_recognition() {
 
 #[test]
 fn reference_records_the_mixed_policy_inline_boundary() {
-    let directory = tempfile::tempdir().unwrap();
-    let report = directory.path().join("reference.json");
-    let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
-        .args([
-            "fp-check",
-            "reference",
-            "--gcc",
-            "gcc",
-            "--profile",
-            "host-test",
-            "--case",
-            "scope.fp_contract.mixed_inline",
-            "--output",
-            report.to_str().unwrap(),
-        ])
-        .output()
-        .unwrap();
-
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let report: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string(report).unwrap()).unwrap();
+    let report = reference_case("scope.fp_contract.mixed_inline");
     assert_eq!(report["results"][0]["status"], "pass");
     assert!(report["results"][0]["observation"]["instructions"]
         .as_array()
@@ -1173,31 +968,7 @@ fn reference_records_the_mixed_policy_inline_boundary() {
 
 #[test]
 fn reference_accepts_the_expected_declaration_diagnostic() {
-    let directory = tempfile::tempdir().unwrap();
-    let report = directory.path().join("reference.json");
-    let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
-        .args([
-            "fp-check",
-            "reference",
-            "--gcc",
-            "gcc",
-            "--profile",
-            "host-test",
-            "--case",
-            "recognition.sqrt.declaration_mismatch",
-            "--output",
-            report.to_str().unwrap(),
-        ])
-        .output()
-        .unwrap();
-
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let report: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string(report).unwrap()).unwrap();
+    let report = reference_case("recognition.sqrt.declaration_mismatch");
     assert_eq!(report["results"][0]["status"], "pass");
     assert!(report["results"][0]["observation"]["message"]
         .as_str()
@@ -1207,31 +978,7 @@ fn reference_accepts_the_expected_declaration_diagnostic() {
 
 #[test]
 fn reference_records_reserved_cases_as_unsupported() {
-    let directory = tempfile::tempdir().unwrap();
-    let report = directory.path().join("reference.json");
-    let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
-        .args([
-            "fp-check",
-            "reference",
-            "--gcc",
-            "gcc",
-            "--profile",
-            "host-test",
-            "--case",
-            "vector.sqrt.inactive_lane",
-            "--output",
-            report.to_str().unwrap(),
-        ])
-        .output()
-        .unwrap();
-
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let report: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string(report).unwrap()).unwrap();
+    let report = reference_case("vector.sqrt.inactive_lane");
     assert_eq!(report["results"][0]["status"], "unsupported_capability");
     assert!(report["results"][0]["observation"].is_null());
 }

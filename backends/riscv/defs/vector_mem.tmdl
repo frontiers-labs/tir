@@ -28,10 +28,10 @@ fn elem_bytes() {
 }
 
 
-instruction VLe8 for [RVV] {
-    param MNEMONIC: String = "vle8.v";
-    param WIDTH3: bits<3> = 0b000;
-    param OPCODE: bits<7> = 0b0000111;
+template VLeMem for [RVV] {
+    param MNEMONIC: String;
+    param WIDTH3: bits<3>;
+    param OPCODE: bits<7>;
 
     operands {
         vd: VR,
@@ -52,17 +52,13 @@ instruction VLe8 for [RVV] {
         "{self.MNEMONIC} {vd}, ({rs1})"
     }
 
-    behavior {
-        vd = load(rs1, VCSR::vl, 0b0);
-    }
-
     schedule { units = [WriteIALU]; }
 }
 
-instruction VSe8 for [RVV] {
-    param MNEMONIC: String = "vse8.v";
-    param WIDTH3: bits<3> = 0b000;
-    param OPCODE: bits<7> = 0b0100111;
+template VSeMem for [RVV] {
+    param MNEMONIC: String;
+    param WIDTH3: bits<3>;
+    param OPCODE: bits<7>;
 
     operands {
         vs3: VR,
@@ -83,17 +79,13 @@ instruction VSe8 for [RVV] {
         "{self.MNEMONIC} {vs3}, ({rs1})"
     }
 
-    behavior {
-        store(rs1, VCSR::vl, vs3);
-    }
-
     schedule { units = [WriteIALU]; }
 }
 
-instruction VLe8FF for [RVV] {
-    param MNEMONIC: String = "vle8ff.v";
-    param WIDTH3: bits<3> = 0b000;
-    param OPCODE: bits<7> = 0b0000111;
+template VLeFFMem for [RVV] {
+    param MNEMONIC: String;
+    param WIDTH3: bits<3>;
+    param OPCODE: bits<7>;
 
     operands {
         vd: VR,
@@ -114,17 +106,13 @@ instruction VLe8FF for [RVV] {
         "{self.MNEMONIC} {vd}, ({rs1})"
     }
 
-    behavior {
-        vd = load(rs1, VCSR::vl, 0b0);
-    }
-
     schedule { units = [WriteIALU]; }
 }
 
-instruction VLse8 for [RVV] {
-    param MNEMONIC: String = "vlse8.v";
-    param WIDTH3: bits<3> = 0b000;
-    param OPCODE: bits<7> = 0b0000111;
+template VLseMem for [RVV] {
+    param MNEMONIC: String;
+    param WIDTH3: bits<3>;
+    param OPCODE: bits<7>;
 
     operands {
         vd: VR,
@@ -147,17 +135,13 @@ instruction VLse8 for [RVV] {
         "{self.MNEMONIC} {vd}, ({rs1}), {rs2}"
     }
 
-    behavior {
-        vd = concat(map(iota(VCSR::vl, self.XLEN), |i| load(rs1 + i * rs2, 1, 0b0)));
-    }
-
     schedule { units = [WriteIALU]; }
 }
 
-instruction VSse8 for [RVV] {
-    param MNEMONIC: String = "vsse8.v";
-    param WIDTH3: bits<3> = 0b000;
-    param OPCODE: bits<7> = 0b0100111;
+template VSseMem for [RVV] {
+    param MNEMONIC: String;
+    param WIDTH3: bits<3>;
+    param OPCODE: bits<7>;
 
     operands {
         vs3: VR,
@@ -180,17 +164,13 @@ instruction VSse8 for [RVV] {
         "{self.MNEMONIC} {vs3}, ({rs1}), {rs2}"
     }
 
-    behavior {
-        concat(map(zip(iota(VCSR::vl, self.XLEN), split(vs3, VCSR::vl, 8)), |i, v| store(rs1 + i * rs2, 1, v)));
-    }
-
     schedule { units = [WriteIALU]; }
 }
 
-instruction VVluxei8 for [RVV] {
-    param MNEMONIC: String = "vluxei8.v";
-    param WIDTH3: bits<3> = 0b000;
-    param OPCODE: bits<7> = 0b0000111;
+template VVluxeiMem for [RVV] {
+    param MNEMONIC: String;
+    param WIDTH3: bits<3>;
+    param OPCODE: bits<7>;
 
     operands {
         vd: VR,
@@ -213,17 +193,13 @@ instruction VVluxei8 for [RVV] {
         "{self.MNEMONIC} {vd}, ({rs1}), {vs2}"
     }
 
-    behavior {
-        vd = concat(map(split(vs2, VCSR::vl, 8), |idx| load(rs1 + zext(idx, self.XLEN), elem_bytes(), 0b0)));
-    }
-
     schedule { units = [WriteIALU]; }
 }
 
-instruction VVloxei8 for [RVV] {
-    param MNEMONIC: String = "vloxei8.v";
-    param WIDTH3: bits<3> = 0b000;
-    param OPCODE: bits<7> = 0b0000111;
+template VVloxeiMem for [RVV] {
+    param MNEMONIC: String;
+    param WIDTH3: bits<3>;
+    param OPCODE: bits<7>;
 
     operands {
         vd: VR,
@@ -246,17 +222,13 @@ instruction VVloxei8 for [RVV] {
         "{self.MNEMONIC} {vd}, ({rs1}), {vs2}"
     }
 
-    behavior {
-        vd = concat(map(split(vs2, VCSR::vl, 8), |idx| load(rs1 + zext(idx, self.XLEN), elem_bytes(), 0b0)));
-    }
-
     schedule { units = [WriteIALU]; }
 }
 
-instruction VVsuxei8 for [RVV] {
-    param MNEMONIC: String = "vsuxei8.v";
-    param WIDTH3: bits<3> = 0b000;
-    param OPCODE: bits<7> = 0b0100111;
+template VVsuxeiMem for [RVV] {
+    param MNEMONIC: String;
+    param WIDTH3: bits<3>;
+    param OPCODE: bits<7>;
 
     operands {
         vs3: VR,
@@ -279,17 +251,13 @@ instruction VVsuxei8 for [RVV] {
         "{self.MNEMONIC} {vs3}, ({rs1}), {vs2}"
     }
 
-    behavior {
-        concat(map(zip(split(vs2, VCSR::vl, 8), split(vs3, VCSR::vl, VCFG::sew)), |idx, v| store(rs1 + zext(idx, self.XLEN), elem_bytes(), v)));
-    }
-
     schedule { units = [WriteIALU]; }
 }
 
-instruction VVsoxei8 for [RVV] {
-    param MNEMONIC: String = "vsoxei8.v";
-    param WIDTH3: bits<3> = 0b000;
-    param OPCODE: bits<7> = 0b0100111;
+template VVsoxeiMem for [RVV] {
+    param MNEMONIC: String;
+    param WIDTH3: bits<3>;
+    param OPCODE: bits<7>;
 
     operands {
         vs3: VR,
@@ -312,18 +280,13 @@ instruction VVsoxei8 for [RVV] {
         "{self.MNEMONIC} {vs3}, ({rs1}), {vs2}"
     }
 
-    behavior {
-        concat(map(zip(split(vs2, VCSR::vl, 8), split(vs3, VCSR::vl, VCFG::sew)), |idx, v| store(rs1 + zext(idx, self.XLEN), elem_bytes(), v)));
-    }
-
     schedule { units = [WriteIALU]; }
 }
 
-instruction VLe8M for [RVV] {
-    param MNEMONIC: String = "vle8.v";
-    param OPNAME: String = "vle8.v.m";
-    param WIDTH3: bits<3> = 0b000;
-    param OPCODE: bits<7> = 0b0000111;
+template VLeMMem for [RVV] {
+    param MNEMONIC: String;
+    param WIDTH3: bits<3>;
+    param OPCODE: bits<7>;
 
     operands {
         vd: VR,
@@ -344,19 +307,13 @@ instruction VLe8M for [RVV] {
         "{self.MNEMONIC} {vd}, ({rs1}), v0.t"
     }
 
-    behavior {
-        loaded = load(rs1, VCSR::vl, 0b0);
-        vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(loaded, VCSR::vl, 8), split(vd, VCSR::vl, 8)), |m, n, o| if m { n } else { o }));
-    }
-
     schedule { units = [WriteIALU]; }
 }
 
-instruction VSe8M for [RVV] {
-    param MNEMONIC: String = "vse8.v";
-    param OPNAME: String = "vse8.v.m";
-    param WIDTH3: bits<3> = 0b000;
-    param OPCODE: bits<7> = 0b0100111;
+template VSeMMem for [RVV] {
+    param MNEMONIC: String;
+    param WIDTH3: bits<3>;
+    param OPCODE: bits<7>;
 
     operands {
         vs3: VR,
@@ -376,2036 +333,981 @@ instruction VSe8M for [RVV] {
     asm {
         "{self.MNEMONIC} {vs3}, ({rs1}), v0.t"
     }
+
+    schedule { units = [WriteIALU]; }
+}
+
+template VLeFFMMem for [RVV] {
+    param MNEMONIC: String;
+    param WIDTH3: bits<3>;
+    param OPCODE: bits<7>;
+
+    operands {
+        vd: VR,
+        rs1: GPR,
+    }
+
+    encoding {
+        0b000000,
+        0b0,
+        0b10000,
+        rs1,
+        WIDTH3,
+        vd,
+        OPCODE,
+    }
+
+    asm {
+        "{self.MNEMONIC} {vd}, ({rs1}), v0.t"
+    }
+
+    schedule { units = [WriteIALU]; }
+}
+
+template VLseMMem for [RVV] {
+    param MNEMONIC: String;
+    param WIDTH3: bits<3>;
+    param OPCODE: bits<7>;
+
+    operands {
+        vd: VR,
+        rs1: GPR,
+        rs2: GPR,
+    }
+
+    encoding {
+        0b0000,
+        0b10,
+        0b0,
+        rs2,
+        rs1,
+        WIDTH3,
+        vd,
+        OPCODE,
+    }
+
+    asm {
+        "{self.MNEMONIC} {vd}, ({rs1}), {rs2}, v0.t"
+    }
+
+    schedule { units = [WriteIALU]; }
+}
+
+template VSseMMem for [RVV] {
+    param MNEMONIC: String;
+    param WIDTH3: bits<3>;
+    param OPCODE: bits<7>;
+
+    operands {
+        vs3: VR,
+        rs1: GPR,
+        rs2: GPR,
+    }
+
+    encoding {
+        0b0000,
+        0b10,
+        0b0,
+        rs2,
+        rs1,
+        WIDTH3,
+        vs3,
+        OPCODE,
+    }
+
+    asm {
+        "{self.MNEMONIC} {vs3}, ({rs1}), {rs2}, v0.t"
+    }
+
+    schedule { units = [WriteIALU]; }
+}
+
+template VVluxeiMMem for [RVV] {
+    param MNEMONIC: String;
+    param WIDTH3: bits<3>;
+    param OPCODE: bits<7>;
+
+    operands {
+        vd: VR,
+        rs1: GPR,
+        vs2: VR,
+    }
+
+    encoding {
+        0b0000,
+        0b01,
+        0b0,
+        vs2,
+        rs1,
+        WIDTH3,
+        vd,
+        OPCODE,
+    }
+
+    asm {
+        "{self.MNEMONIC} {vd}, ({rs1}), {vs2}, v0.t"
+    }
+
+    schedule { units = [WriteIALU]; }
+}
+
+template VVloxeiMMem for [RVV] {
+    param MNEMONIC: String;
+    param WIDTH3: bits<3>;
+    param OPCODE: bits<7>;
+
+    operands {
+        vd: VR,
+        rs1: GPR,
+        vs2: VR,
+    }
+
+    encoding {
+        0b0000,
+        0b11,
+        0b0,
+        vs2,
+        rs1,
+        WIDTH3,
+        vd,
+        OPCODE,
+    }
+
+    asm {
+        "{self.MNEMONIC} {vd}, ({rs1}), {vs2}, v0.t"
+    }
+
+    schedule { units = [WriteIALU]; }
+}
+
+template VVsuxeiMMem for [RVV] {
+    param MNEMONIC: String;
+    param WIDTH3: bits<3>;
+    param OPCODE: bits<7>;
+
+    operands {
+        vs3: VR,
+        rs1: GPR,
+        vs2: VR,
+    }
+
+    encoding {
+        0b0000,
+        0b01,
+        0b0,
+        vs2,
+        rs1,
+        WIDTH3,
+        vs3,
+        OPCODE,
+    }
+
+    asm {
+        "{self.MNEMONIC} {vs3}, ({rs1}), {vs2}, v0.t"
+    }
+
+    schedule { units = [WriteIALU]; }
+}
+
+template VVsoxeiMMem for [RVV] {
+    param MNEMONIC: String;
+    param WIDTH3: bits<3>;
+    param OPCODE: bits<7>;
+
+    operands {
+        vs3: VR,
+        rs1: GPR,
+        vs2: VR,
+    }
+
+    encoding {
+        0b0000,
+        0b11,
+        0b0,
+        vs2,
+        rs1,
+        WIDTH3,
+        vs3,
+        OPCODE,
+    }
+
+    asm {
+        "{self.MNEMONIC} {vs3}, ({rs1}), {vs2}, v0.t"
+    }
+
+    schedule { units = [WriteIALU]; }
+}
+
+instruction VLe8 for [RVV] : VLeMem {
+    param MNEMONIC: String = "vle8.v";
+    param WIDTH3: bits<3> = 0b000;
+    param OPCODE: bits<7> = 0b0000111;
+
+    behavior {
+        vd = load(rs1, VCSR::vl, 0b0);
+    }
+}
+
+instruction VSe8 for [RVV] : VSeMem {
+    param MNEMONIC: String = "vse8.v";
+    param WIDTH3: bits<3> = 0b000;
+    param OPCODE: bits<7> = 0b0100111;
+
+    behavior {
+        store(rs1, VCSR::vl, vs3);
+    }
+}
+
+instruction VLe8FF for [RVV] : VLeFFMem {
+    param MNEMONIC: String = "vle8ff.v";
+    param WIDTH3: bits<3> = 0b000;
+    param OPCODE: bits<7> = 0b0000111;
+
+    behavior {
+        vd = load(rs1, VCSR::vl, 0b0);
+    }
+}
+
+instruction VLse8 for [RVV] : VLseMem {
+    param MNEMONIC: String = "vlse8.v";
+    param WIDTH3: bits<3> = 0b000;
+    param OPCODE: bits<7> = 0b0000111;
+
+    behavior {
+        vd = concat(map(iota(VCSR::vl, self.XLEN), |i| load(rs1 + i * rs2, 1, 0b0)));
+    }
+}
+
+instruction VSse8 for [RVV] : VSseMem {
+    param MNEMONIC: String = "vsse8.v";
+    param WIDTH3: bits<3> = 0b000;
+    param OPCODE: bits<7> = 0b0100111;
+
+    behavior {
+        concat(map(zip(iota(VCSR::vl, self.XLEN), split(vs3, VCSR::vl, 8)), |i, v| store(rs1 + i * rs2, 1, v)));
+    }
+}
+
+instruction VVluxei8 for [RVV] : VVluxeiMem {
+    param MNEMONIC: String = "vluxei8.v";
+    param WIDTH3: bits<3> = 0b000;
+    param OPCODE: bits<7> = 0b0000111;
+
+    behavior {
+        vd = concat(map(split(vs2, VCSR::vl, 8), |idx| load(rs1 + zext(idx, self.XLEN), elem_bytes(), 0b0)));
+    }
+}
+
+instruction VVloxei8 for [RVV] : VVloxeiMem {
+    param MNEMONIC: String = "vloxei8.v";
+    param WIDTH3: bits<3> = 0b000;
+    param OPCODE: bits<7> = 0b0000111;
+
+    behavior {
+        vd = concat(map(split(vs2, VCSR::vl, 8), |idx| load(rs1 + zext(idx, self.XLEN), elem_bytes(), 0b0)));
+    }
+}
+
+instruction VVsuxei8 for [RVV] : VVsuxeiMem {
+    param MNEMONIC: String = "vsuxei8.v";
+    param WIDTH3: bits<3> = 0b000;
+    param OPCODE: bits<7> = 0b0100111;
+
+    behavior {
+        concat(map(zip(split(vs2, VCSR::vl, 8), split(vs3, VCSR::vl, VCFG::sew)), |idx, v| store(rs1 + zext(idx, self.XLEN), elem_bytes(), v)));
+    }
+}
+
+instruction VVsoxei8 for [RVV] : VVsoxeiMem {
+    param MNEMONIC: String = "vsoxei8.v";
+    param WIDTH3: bits<3> = 0b000;
+    param OPCODE: bits<7> = 0b0100111;
+
+    behavior {
+        concat(map(zip(split(vs2, VCSR::vl, 8), split(vs3, VCSR::vl, VCFG::sew)), |idx, v| store(rs1 + zext(idx, self.XLEN), elem_bytes(), v)));
+    }
+}
+
+instruction VLe8M for [RVV] : VLeMMem {
+    param MNEMONIC: String = "vle8.v";
+    param OPNAME: String = "vle8.v.m";
+    param WIDTH3: bits<3> = 0b000;
+    param OPCODE: bits<7> = 0b0000111;
+
+    behavior {
+        loaded = load(rs1, VCSR::vl, 0b0);
+        vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(loaded, VCSR::vl, 8), split(vd, VCSR::vl, 8)), |m, n, o| if m { n } else { o }));
+    }
+}
+
+instruction VSe8M for [RVV] : VSeMMem {
+    param MNEMONIC: String = "vse8.v";
+    param OPNAME: String = "vse8.v.m";
+    param WIDTH3: bits<3> = 0b000;
+    param OPCODE: bits<7> = 0b0100111;
 
     behavior {
         current = load(rs1, VCSR::vl, 0b0);
         merged = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs3, VCSR::vl, 8), split(current, VCSR::vl, 8)), |m, v, o| if m { v } else { o }));
         store(rs1, VCSR::vl, merged);
     }
-
-    schedule { units = [WriteIALU]; }
 }
 
-instruction VLe8FFM for [RVV] {
+instruction VLe8FFM for [RVV] : VLeFFMMem {
     param MNEMONIC: String = "vle8ff.v";
     param OPNAME: String = "vle8ff.v.m";
     param WIDTH3: bits<3> = 0b000;
     param OPCODE: bits<7> = 0b0000111;
 
-    operands {
-        vd: VR,
-        rs1: GPR,
-    }
-
-    encoding {
-        0b000000,
-        0b0,
-        0b10000,
-        rs1,
-        WIDTH3,
-        vd,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {vd}, ({rs1}), v0.t"
-    }
-
     behavior {
         loaded = load(rs1, VCSR::vl, 0b0);
         vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(loaded, VCSR::vl, 8), split(vd, VCSR::vl, 8)), |m, n, o| if m { n } else { o }));
     }
-
-    schedule { units = [WriteIALU]; }
 }
 
-instruction VLse8M for [RVV] {
+instruction VLse8M for [RVV] : VLseMMem {
     param MNEMONIC: String = "vlse8.v";
     param OPNAME: String = "vlse8.v.m";
     param WIDTH3: bits<3> = 0b000;
     param OPCODE: bits<7> = 0b0000111;
 
-    operands {
-        vd: VR,
-        rs1: GPR,
-        rs2: GPR,
-    }
-
-    encoding {
-        0b0000,
-        0b10,
-        0b0,
-        rs2,
-        rs1,
-        WIDTH3,
-        vd,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {vd}, ({rs1}), {rs2}, v0.t"
-    }
-
     behavior {
         vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), iota(VCSR::vl, self.XLEN), split(vd, VCSR::vl, 8)), |m, i, o| if m { load(rs1 + i * rs2, 1, 0b0) } else { o }));
     }
-
-    schedule { units = [WriteIALU]; }
 }
 
-instruction VSse8M for [RVV] {
+instruction VSse8M for [RVV] : VSseMMem {
     param MNEMONIC: String = "vsse8.v";
     param OPNAME: String = "vsse8.v.m";
     param WIDTH3: bits<3> = 0b000;
     param OPCODE: bits<7> = 0b0100111;
 
-    operands {
-        vs3: VR,
-        rs1: GPR,
-        rs2: GPR,
-    }
-
-    encoding {
-        0b0000,
-        0b10,
-        0b0,
-        rs2,
-        rs1,
-        WIDTH3,
-        vs3,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {vs3}, ({rs1}), {rs2}, v0.t"
-    }
-
     behavior {
         concat(map(zip(split(VR::v0, VCSR::vl, 1), iota(VCSR::vl, self.XLEN), split(vs3, VCSR::vl, 8)), |m, i, v| store(rs1 + i * rs2, 1, if m { v } else { extract(load(rs1 + i * rs2, 1, 0b0), 7, 0) })));
     }
-
-    schedule { units = [WriteIALU]; }
 }
 
-instruction VVluxei8M for [RVV] {
+instruction VVluxei8M for [RVV] : VVluxeiMMem {
     param MNEMONIC: String = "vluxei8.v";
     param OPNAME: String = "vluxei8.v.m";
     param WIDTH3: bits<3> = 0b000;
     param OPCODE: bits<7> = 0b0000111;
 
-    operands {
-        vd: VR,
-        rs1: GPR,
-        vs2: VR,
-    }
-
-    encoding {
-        0b0000,
-        0b01,
-        0b0,
-        vs2,
-        rs1,
-        WIDTH3,
-        vd,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {vd}, ({rs1}), {vs2}, v0.t"
-    }
-
     behavior {
         vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, 8), split(vd, VCSR::vl, VCFG::sew)), |m, idx, o| if m { load(rs1 + zext(idx, self.XLEN), elem_bytes(), 0b0) } else { o }));
     }
-
-    schedule { units = [WriteIALU]; }
 }
 
-instruction VVloxei8M for [RVV] {
+instruction VVloxei8M for [RVV] : VVloxeiMMem {
     param MNEMONIC: String = "vloxei8.v";
     param OPNAME: String = "vloxei8.v.m";
     param WIDTH3: bits<3> = 0b000;
     param OPCODE: bits<7> = 0b0000111;
 
-    operands {
-        vd: VR,
-        rs1: GPR,
-        vs2: VR,
-    }
-
-    encoding {
-        0b0000,
-        0b11,
-        0b0,
-        vs2,
-        rs1,
-        WIDTH3,
-        vd,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {vd}, ({rs1}), {vs2}, v0.t"
-    }
-
     behavior {
         vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, 8), split(vd, VCSR::vl, VCFG::sew)), |m, idx, o| if m { load(rs1 + zext(idx, self.XLEN), elem_bytes(), 0b0) } else { o }));
     }
-
-    schedule { units = [WriteIALU]; }
 }
 
-instruction VVsuxei8M for [RVV] {
+instruction VVsuxei8M for [RVV] : VVsuxeiMMem {
     param MNEMONIC: String = "vsuxei8.v";
     param OPNAME: String = "vsuxei8.v.m";
     param WIDTH3: bits<3> = 0b000;
     param OPCODE: bits<7> = 0b0100111;
 
-    operands {
-        vs3: VR,
-        rs1: GPR,
-        vs2: VR,
-    }
-
-    encoding {
-        0b0000,
-        0b01,
-        0b0,
-        vs2,
-        rs1,
-        WIDTH3,
-        vs3,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {vs3}, ({rs1}), {vs2}, v0.t"
-    }
-
     behavior {
         concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, 8), split(vs3, VCSR::vl, VCFG::sew)), |m, idx, v| store(rs1 + zext(idx, self.XLEN), elem_bytes(), if m { v } else { extract(load(rs1 + zext(idx, self.XLEN), elem_bytes(), 0b0), (VCFG::sew - zext(0b1, self.XLEN)), 0) })));
     }
-
-    schedule { units = [WriteIALU]; }
 }
 
-instruction VVsoxei8M for [RVV] {
+instruction VVsoxei8M for [RVV] : VVsoxeiMMem {
     param MNEMONIC: String = "vsoxei8.v";
     param OPNAME: String = "vsoxei8.v.m";
     param WIDTH3: bits<3> = 0b000;
     param OPCODE: bits<7> = 0b0100111;
 
-    operands {
-        vs3: VR,
-        rs1: GPR,
-        vs2: VR,
-    }
-
-    encoding {
-        0b0000,
-        0b11,
-        0b0,
-        vs2,
-        rs1,
-        WIDTH3,
-        vs3,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {vs3}, ({rs1}), {vs2}, v0.t"
-    }
-
     behavior {
         concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, 8), split(vs3, VCSR::vl, VCFG::sew)), |m, idx, v| store(rs1 + zext(idx, self.XLEN), elem_bytes(), if m { v } else { extract(load(rs1 + zext(idx, self.XLEN), elem_bytes(), 0b0), (VCFG::sew - zext(0b1, self.XLEN)), 0) })));
     }
-
-    schedule { units = [WriteIALU]; }
 }
 
-instruction VLe16 for [RVV] {
+instruction VLe16 for [RVV] : VLeMem {
     param MNEMONIC: String = "vle16.v";
     param WIDTH3: bits<3> = 0b101;
     param OPCODE: bits<7> = 0b0000111;
 
-    operands {
-        vd: VR,
-        rs1: GPR,
-    }
-
-    encoding {
-        0b000000,
-        0b1,
-        0b00000,
-        rs1,
-        WIDTH3,
-        vd,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {vd}, ({rs1})"
-    }
-
     behavior {
         vd = load(rs1, VCSR::vl * zext(0b10, self.XLEN), 0b0);
     }
-
-    schedule { units = [WriteIALU]; }
 }
 
-instruction VSe16 for [RVV] {
+instruction VSe16 for [RVV] : VSeMem {
     param MNEMONIC: String = "vse16.v";
     param WIDTH3: bits<3> = 0b101;
     param OPCODE: bits<7> = 0b0100111;
 
-    operands {
-        vs3: VR,
-        rs1: GPR,
-    }
-
-    encoding {
-        0b000000,
-        0b1,
-        0b00000,
-        rs1,
-        WIDTH3,
-        vs3,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {vs3}, ({rs1})"
-    }
-
     behavior {
         store(rs1, VCSR::vl * zext(0b10, self.XLEN), vs3);
     }
-
-    schedule { units = [WriteIALU]; }
 }
 
-instruction VLe16FF for [RVV] {
+instruction VLe16FF for [RVV] : VLeFFMem {
     param MNEMONIC: String = "vle16ff.v";
     param WIDTH3: bits<3> = 0b101;
     param OPCODE: bits<7> = 0b0000111;
 
-    operands {
-        vd: VR,
-        rs1: GPR,
-    }
-
-    encoding {
-        0b000000,
-        0b1,
-        0b10000,
-        rs1,
-        WIDTH3,
-        vd,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {vd}, ({rs1})"
-    }
-
     behavior {
         vd = load(rs1, VCSR::vl * zext(0b10, self.XLEN), 0b0);
     }
-
-    schedule { units = [WriteIALU]; }
 }
 
-instruction VLse16 for [RVV] {
+instruction VLse16 for [RVV] : VLseMem {
     param MNEMONIC: String = "vlse16.v";
     param WIDTH3: bits<3> = 0b101;
     param OPCODE: bits<7> = 0b0000111;
 
-    operands {
-        vd: VR,
-        rs1: GPR,
-        rs2: GPR,
-    }
-
-    encoding {
-        0b0000,
-        0b10,
-        0b1,
-        rs2,
-        rs1,
-        WIDTH3,
-        vd,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {vd}, ({rs1}), {rs2}"
-    }
-
     behavior {
         vd = concat(map(iota(VCSR::vl, self.XLEN), |i| load(rs1 + i * rs2, 2, 0b0)));
     }
-
-    schedule { units = [WriteIALU]; }
 }
 
-instruction VSse16 for [RVV] {
+instruction VSse16 for [RVV] : VSseMem {
     param MNEMONIC: String = "vsse16.v";
     param WIDTH3: bits<3> = 0b101;
     param OPCODE: bits<7> = 0b0100111;
 
-    operands {
-        vs3: VR,
-        rs1: GPR,
-        rs2: GPR,
-    }
-
-    encoding {
-        0b0000,
-        0b10,
-        0b1,
-        rs2,
-        rs1,
-        WIDTH3,
-        vs3,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {vs3}, ({rs1}), {rs2}"
-    }
-
     behavior {
         concat(map(zip(iota(VCSR::vl, self.XLEN), split(vs3, VCSR::vl, 16)), |i, v| store(rs1 + i * rs2, 2, v)));
     }
-
-    schedule { units = [WriteIALU]; }
 }
 
-instruction VVluxei16 for [RVV] {
+instruction VVluxei16 for [RVV] : VVluxeiMem {
     param MNEMONIC: String = "vluxei16.v";
     param WIDTH3: bits<3> = 0b101;
     param OPCODE: bits<7> = 0b0000111;
 
-    operands {
-        vd: VR,
-        rs1: GPR,
-        vs2: VR,
-    }
-
-    encoding {
-        0b0000,
-        0b01,
-        0b1,
-        vs2,
-        rs1,
-        WIDTH3,
-        vd,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {vd}, ({rs1}), {vs2}"
-    }
-
     behavior {
         vd = concat(map(split(vs2, VCSR::vl, 16), |idx| load(rs1 + zext(idx, self.XLEN), elem_bytes(), 0b0)));
     }
-
-    schedule { units = [WriteIALU]; }
 }
 
-instruction VVloxei16 for [RVV] {
+instruction VVloxei16 for [RVV] : VVloxeiMem {
     param MNEMONIC: String = "vloxei16.v";
     param WIDTH3: bits<3> = 0b101;
     param OPCODE: bits<7> = 0b0000111;
 
-    operands {
-        vd: VR,
-        rs1: GPR,
-        vs2: VR,
-    }
-
-    encoding {
-        0b0000,
-        0b11,
-        0b1,
-        vs2,
-        rs1,
-        WIDTH3,
-        vd,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {vd}, ({rs1}), {vs2}"
-    }
-
     behavior {
         vd = concat(map(split(vs2, VCSR::vl, 16), |idx| load(rs1 + zext(idx, self.XLEN), elem_bytes(), 0b0)));
     }
-
-    schedule { units = [WriteIALU]; }
 }
 
-instruction VVsuxei16 for [RVV] {
+instruction VVsuxei16 for [RVV] : VVsuxeiMem {
     param MNEMONIC: String = "vsuxei16.v";
     param WIDTH3: bits<3> = 0b101;
     param OPCODE: bits<7> = 0b0100111;
 
-    operands {
-        vs3: VR,
-        rs1: GPR,
-        vs2: VR,
-    }
-
-    encoding {
-        0b0000,
-        0b01,
-        0b1,
-        vs2,
-        rs1,
-        WIDTH3,
-        vs3,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {vs3}, ({rs1}), {vs2}"
-    }
-
     behavior {
         concat(map(zip(split(vs2, VCSR::vl, 16), split(vs3, VCSR::vl, VCFG::sew)), |idx, v| store(rs1 + zext(idx, self.XLEN), elem_bytes(), v)));
     }
-
-    schedule { units = [WriteIALU]; }
 }
 
-instruction VVsoxei16 for [RVV] {
+instruction VVsoxei16 for [RVV] : VVsoxeiMem {
     param MNEMONIC: String = "vsoxei16.v";
     param WIDTH3: bits<3> = 0b101;
     param OPCODE: bits<7> = 0b0100111;
 
-    operands {
-        vs3: VR,
-        rs1: GPR,
-        vs2: VR,
-    }
-
-    encoding {
-        0b0000,
-        0b11,
-        0b1,
-        vs2,
-        rs1,
-        WIDTH3,
-        vs3,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {vs3}, ({rs1}), {vs2}"
-    }
-
     behavior {
         concat(map(zip(split(vs2, VCSR::vl, 16), split(vs3, VCSR::vl, VCFG::sew)), |idx, v| store(rs1 + zext(idx, self.XLEN), elem_bytes(), v)));
     }
-
-    schedule { units = [WriteIALU]; }
 }
 
-instruction VLe16M for [RVV] {
+instruction VLe16M for [RVV] : VLeMMem {
     param MNEMONIC: String = "vle16.v";
     param OPNAME: String = "vle16.v.m";
     param WIDTH3: bits<3> = 0b101;
     param OPCODE: bits<7> = 0b0000111;
 
-    operands {
-        vd: VR,
-        rs1: GPR,
-    }
-
-    encoding {
-        0b000000,
-        0b0,
-        0b00000,
-        rs1,
-        WIDTH3,
-        vd,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {vd}, ({rs1}), v0.t"
-    }
-
     behavior {
         loaded = load(rs1, VCSR::vl * zext(0b10, self.XLEN), 0b0);
         vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(loaded, VCSR::vl, 16), split(vd, VCSR::vl, 16)), |m, n, o| if m { n } else { o }));
     }
-
-    schedule { units = [WriteIALU]; }
 }
 
-instruction VSe16M for [RVV] {
+instruction VSe16M for [RVV] : VSeMMem {
     param MNEMONIC: String = "vse16.v";
     param OPNAME: String = "vse16.v.m";
     param WIDTH3: bits<3> = 0b101;
     param OPCODE: bits<7> = 0b0100111;
-
-    operands {
-        vs3: VR,
-        rs1: GPR,
-    }
-
-    encoding {
-        0b000000,
-        0b0,
-        0b00000,
-        rs1,
-        WIDTH3,
-        vs3,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {vs3}, ({rs1}), v0.t"
-    }
 
     behavior {
         current = load(rs1, VCSR::vl * zext(0b10, self.XLEN), 0b0);
         merged = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs3, VCSR::vl, 16), split(current, VCSR::vl, 16)), |m, v, o| if m { v } else { o }));
         store(rs1, VCSR::vl * zext(0b10, self.XLEN), merged);
     }
-
-    schedule { units = [WriteIALU]; }
 }
 
-instruction VLe16FFM for [RVV] {
+instruction VLe16FFM for [RVV] : VLeFFMMem {
     param MNEMONIC: String = "vle16ff.v";
     param OPNAME: String = "vle16ff.v.m";
     param WIDTH3: bits<3> = 0b101;
     param OPCODE: bits<7> = 0b0000111;
 
-    operands {
-        vd: VR,
-        rs1: GPR,
-    }
-
-    encoding {
-        0b000000,
-        0b0,
-        0b10000,
-        rs1,
-        WIDTH3,
-        vd,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {vd}, ({rs1}), v0.t"
-    }
-
     behavior {
         loaded = load(rs1, VCSR::vl * zext(0b10, self.XLEN), 0b0);
         vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(loaded, VCSR::vl, 16), split(vd, VCSR::vl, 16)), |m, n, o| if m { n } else { o }));
     }
-
-    schedule { units = [WriteIALU]; }
 }
 
-instruction VLse16M for [RVV] {
+instruction VLse16M for [RVV] : VLseMMem {
     param MNEMONIC: String = "vlse16.v";
     param OPNAME: String = "vlse16.v.m";
     param WIDTH3: bits<3> = 0b101;
     param OPCODE: bits<7> = 0b0000111;
 
-    operands {
-        vd: VR,
-        rs1: GPR,
-        rs2: GPR,
-    }
-
-    encoding {
-        0b0000,
-        0b10,
-        0b0,
-        rs2,
-        rs1,
-        WIDTH3,
-        vd,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {vd}, ({rs1}), {rs2}, v0.t"
-    }
-
     behavior {
         vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), iota(VCSR::vl, self.XLEN), split(vd, VCSR::vl, 16)), |m, i, o| if m { load(rs1 + i * rs2, 2, 0b0) } else { o }));
     }
-
-    schedule { units = [WriteIALU]; }
 }
 
-instruction VSse16M for [RVV] {
+instruction VSse16M for [RVV] : VSseMMem {
     param MNEMONIC: String = "vsse16.v";
     param OPNAME: String = "vsse16.v.m";
     param WIDTH3: bits<3> = 0b101;
     param OPCODE: bits<7> = 0b0100111;
 
-    operands {
-        vs3: VR,
-        rs1: GPR,
-        rs2: GPR,
-    }
-
-    encoding {
-        0b0000,
-        0b10,
-        0b0,
-        rs2,
-        rs1,
-        WIDTH3,
-        vs3,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {vs3}, ({rs1}), {rs2}, v0.t"
-    }
-
     behavior {
         concat(map(zip(split(VR::v0, VCSR::vl, 1), iota(VCSR::vl, self.XLEN), split(vs3, VCSR::vl, 16)), |m, i, v| store(rs1 + i * rs2, 2, if m { v } else { extract(load(rs1 + i * rs2, 2, 0b0), 15, 0) })));
     }
-
-    schedule { units = [WriteIALU]; }
 }
 
-instruction VVluxei16M for [RVV] {
+instruction VVluxei16M for [RVV] : VVluxeiMMem {
     param MNEMONIC: String = "vluxei16.v";
     param OPNAME: String = "vluxei16.v.m";
     param WIDTH3: bits<3> = 0b101;
     param OPCODE: bits<7> = 0b0000111;
 
-    operands {
-        vd: VR,
-        rs1: GPR,
-        vs2: VR,
-    }
-
-    encoding {
-        0b0000,
-        0b01,
-        0b0,
-        vs2,
-        rs1,
-        WIDTH3,
-        vd,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {vd}, ({rs1}), {vs2}, v0.t"
-    }
-
     behavior {
         vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, 16), split(vd, VCSR::vl, VCFG::sew)), |m, idx, o| if m { load(rs1 + zext(idx, self.XLEN), elem_bytes(), 0b0) } else { o }));
     }
-
-    schedule { units = [WriteIALU]; }
 }
 
-instruction VVloxei16M for [RVV] {
+instruction VVloxei16M for [RVV] : VVloxeiMMem {
     param MNEMONIC: String = "vloxei16.v";
     param OPNAME: String = "vloxei16.v.m";
     param WIDTH3: bits<3> = 0b101;
     param OPCODE: bits<7> = 0b0000111;
 
-    operands {
-        vd: VR,
-        rs1: GPR,
-        vs2: VR,
-    }
-
-    encoding {
-        0b0000,
-        0b11,
-        0b0,
-        vs2,
-        rs1,
-        WIDTH3,
-        vd,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {vd}, ({rs1}), {vs2}, v0.t"
-    }
-
     behavior {
         vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, 16), split(vd, VCSR::vl, VCFG::sew)), |m, idx, o| if m { load(rs1 + zext(idx, self.XLEN), elem_bytes(), 0b0) } else { o }));
     }
-
-    schedule { units = [WriteIALU]; }
 }
 
-instruction VVsuxei16M for [RVV] {
+instruction VVsuxei16M for [RVV] : VVsuxeiMMem {
     param MNEMONIC: String = "vsuxei16.v";
     param OPNAME: String = "vsuxei16.v.m";
     param WIDTH3: bits<3> = 0b101;
     param OPCODE: bits<7> = 0b0100111;
 
-    operands {
-        vs3: VR,
-        rs1: GPR,
-        vs2: VR,
-    }
-
-    encoding {
-        0b0000,
-        0b01,
-        0b0,
-        vs2,
-        rs1,
-        WIDTH3,
-        vs3,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {vs3}, ({rs1}), {vs2}, v0.t"
-    }
-
     behavior {
         concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, 16), split(vs3, VCSR::vl, VCFG::sew)), |m, idx, v| store(rs1 + zext(idx, self.XLEN), elem_bytes(), if m { v } else { extract(load(rs1 + zext(idx, self.XLEN), elem_bytes(), 0b0), (VCFG::sew - zext(0b1, self.XLEN)), 0) })));
     }
-
-    schedule { units = [WriteIALU]; }
 }
 
-instruction VVsoxei16M for [RVV] {
+instruction VVsoxei16M for [RVV] : VVsoxeiMMem {
     param MNEMONIC: String = "vsoxei16.v";
     param OPNAME: String = "vsoxei16.v.m";
     param WIDTH3: bits<3> = 0b101;
     param OPCODE: bits<7> = 0b0100111;
 
-    operands {
-        vs3: VR,
-        rs1: GPR,
-        vs2: VR,
-    }
-
-    encoding {
-        0b0000,
-        0b11,
-        0b0,
-        vs2,
-        rs1,
-        WIDTH3,
-        vs3,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {vs3}, ({rs1}), {vs2}, v0.t"
-    }
-
     behavior {
         concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, 16), split(vs3, VCSR::vl, VCFG::sew)), |m, idx, v| store(rs1 + zext(idx, self.XLEN), elem_bytes(), if m { v } else { extract(load(rs1 + zext(idx, self.XLEN), elem_bytes(), 0b0), (VCFG::sew - zext(0b1, self.XLEN)), 0) })));
     }
-
-    schedule { units = [WriteIALU]; }
 }
 
-instruction VLe32 for [RVV] {
+instruction VLe32 for [RVV] : VLeMem {
     param MNEMONIC: String = "vle32.v";
     param WIDTH3: bits<3> = 0b110;
     param OPCODE: bits<7> = 0b0000111;
 
-    operands {
-        vd: VR,
-        rs1: GPR,
-    }
-
-    encoding {
-        0b000000,
-        0b1,
-        0b00000,
-        rs1,
-        WIDTH3,
-        vd,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {vd}, ({rs1})"
-    }
-
     behavior {
         vd = load(rs1, VCSR::vl * zext(0b100, self.XLEN), 0b0);
     }
-
-    schedule { units = [WriteIALU]; }
 }
 
-instruction VSe32 for [RVV] {
+instruction VSe32 for [RVV] : VSeMem {
     param MNEMONIC: String = "vse32.v";
     param WIDTH3: bits<3> = 0b110;
     param OPCODE: bits<7> = 0b0100111;
 
-    operands {
-        vs3: VR,
-        rs1: GPR,
-    }
-
-    encoding {
-        0b000000,
-        0b1,
-        0b00000,
-        rs1,
-        WIDTH3,
-        vs3,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {vs3}, ({rs1})"
-    }
-
     behavior {
         store(rs1, VCSR::vl * zext(0b100, self.XLEN), vs3);
     }
-
-    schedule { units = [WriteIALU]; }
 }
 
-instruction VLe32FF for [RVV] {
+instruction VLe32FF for [RVV] : VLeFFMem {
     param MNEMONIC: String = "vle32ff.v";
     param WIDTH3: bits<3> = 0b110;
     param OPCODE: bits<7> = 0b0000111;
 
-    operands {
-        vd: VR,
-        rs1: GPR,
-    }
-
-    encoding {
-        0b000000,
-        0b1,
-        0b10000,
-        rs1,
-        WIDTH3,
-        vd,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {vd}, ({rs1})"
-    }
-
     behavior {
         vd = load(rs1, VCSR::vl * zext(0b100, self.XLEN), 0b0);
     }
-
-    schedule { units = [WriteIALU]; }
 }
 
-instruction VLse32 for [RVV] {
+instruction VLse32 for [RVV] : VLseMem {
     param MNEMONIC: String = "vlse32.v";
     param WIDTH3: bits<3> = 0b110;
     param OPCODE: bits<7> = 0b0000111;
 
-    operands {
-        vd: VR,
-        rs1: GPR,
-        rs2: GPR,
-    }
-
-    encoding {
-        0b0000,
-        0b10,
-        0b1,
-        rs2,
-        rs1,
-        WIDTH3,
-        vd,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {vd}, ({rs1}), {rs2}"
-    }
-
     behavior {
         vd = concat(map(iota(VCSR::vl, self.XLEN), |i| load(rs1 + i * rs2, 4, 0b0)));
     }
-
-    schedule { units = [WriteIALU]; }
 }
 
-instruction VSse32 for [RVV] {
+instruction VSse32 for [RVV] : VSseMem {
     param MNEMONIC: String = "vsse32.v";
     param WIDTH3: bits<3> = 0b110;
     param OPCODE: bits<7> = 0b0100111;
 
-    operands {
-        vs3: VR,
-        rs1: GPR,
-        rs2: GPR,
-    }
-
-    encoding {
-        0b0000,
-        0b10,
-        0b1,
-        rs2,
-        rs1,
-        WIDTH3,
-        vs3,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {vs3}, ({rs1}), {rs2}"
-    }
-
     behavior {
         concat(map(zip(iota(VCSR::vl, self.XLEN), split(vs3, VCSR::vl, 32)), |i, v| store(rs1 + i * rs2, 4, v)));
     }
-
-    schedule { units = [WriteIALU]; }
 }
 
-instruction VVluxei32 for [RVV] {
+instruction VVluxei32 for [RVV] : VVluxeiMem {
     param MNEMONIC: String = "vluxei32.v";
     param WIDTH3: bits<3> = 0b110;
     param OPCODE: bits<7> = 0b0000111;
 
-    operands {
-        vd: VR,
-        rs1: GPR,
-        vs2: VR,
-    }
-
-    encoding {
-        0b0000,
-        0b01,
-        0b1,
-        vs2,
-        rs1,
-        WIDTH3,
-        vd,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {vd}, ({rs1}), {vs2}"
-    }
-
     behavior {
         vd = concat(map(split(vs2, VCSR::vl, 32), |idx| load(rs1 + zext(idx, self.XLEN), elem_bytes(), 0b0)));
     }
-
-    schedule { units = [WriteIALU]; }
 }
 
-instruction VVloxei32 for [RVV] {
+instruction VVloxei32 for [RVV] : VVloxeiMem {
     param MNEMONIC: String = "vloxei32.v";
     param WIDTH3: bits<3> = 0b110;
     param OPCODE: bits<7> = 0b0000111;
 
-    operands {
-        vd: VR,
-        rs1: GPR,
-        vs2: VR,
-    }
-
-    encoding {
-        0b0000,
-        0b11,
-        0b1,
-        vs2,
-        rs1,
-        WIDTH3,
-        vd,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {vd}, ({rs1}), {vs2}"
-    }
-
     behavior {
         vd = concat(map(split(vs2, VCSR::vl, 32), |idx| load(rs1 + zext(idx, self.XLEN), elem_bytes(), 0b0)));
     }
-
-    schedule { units = [WriteIALU]; }
 }
 
-instruction VVsuxei32 for [RVV] {
+instruction VVsuxei32 for [RVV] : VVsuxeiMem {
     param MNEMONIC: String = "vsuxei32.v";
     param WIDTH3: bits<3> = 0b110;
     param OPCODE: bits<7> = 0b0100111;
 
-    operands {
-        vs3: VR,
-        rs1: GPR,
-        vs2: VR,
-    }
-
-    encoding {
-        0b0000,
-        0b01,
-        0b1,
-        vs2,
-        rs1,
-        WIDTH3,
-        vs3,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {vs3}, ({rs1}), {vs2}"
-    }
-
     behavior {
         concat(map(zip(split(vs2, VCSR::vl, 32), split(vs3, VCSR::vl, VCFG::sew)), |idx, v| store(rs1 + zext(idx, self.XLEN), elem_bytes(), v)));
     }
-
-    schedule { units = [WriteIALU]; }
 }
 
-instruction VVsoxei32 for [RVV] {
+instruction VVsoxei32 for [RVV] : VVsoxeiMem {
     param MNEMONIC: String = "vsoxei32.v";
     param WIDTH3: bits<3> = 0b110;
     param OPCODE: bits<7> = 0b0100111;
 
-    operands {
-        vs3: VR,
-        rs1: GPR,
-        vs2: VR,
-    }
-
-    encoding {
-        0b0000,
-        0b11,
-        0b1,
-        vs2,
-        rs1,
-        WIDTH3,
-        vs3,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {vs3}, ({rs1}), {vs2}"
-    }
-
     behavior {
         concat(map(zip(split(vs2, VCSR::vl, 32), split(vs3, VCSR::vl, VCFG::sew)), |idx, v| store(rs1 + zext(idx, self.XLEN), elem_bytes(), v)));
     }
-
-    schedule { units = [WriteIALU]; }
 }
 
-instruction VLe32M for [RVV] {
+instruction VLe32M for [RVV] : VLeMMem {
     param MNEMONIC: String = "vle32.v";
     param OPNAME: String = "vle32.v.m";
     param WIDTH3: bits<3> = 0b110;
     param OPCODE: bits<7> = 0b0000111;
 
-    operands {
-        vd: VR,
-        rs1: GPR,
-    }
-
-    encoding {
-        0b000000,
-        0b0,
-        0b00000,
-        rs1,
-        WIDTH3,
-        vd,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {vd}, ({rs1}), v0.t"
-    }
-
     behavior {
         loaded = load(rs1, VCSR::vl * zext(0b100, self.XLEN), 0b0);
         vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(loaded, VCSR::vl, 32), split(vd, VCSR::vl, 32)), |m, n, o| if m { n } else { o }));
     }
-
-    schedule { units = [WriteIALU]; }
 }
 
-instruction VSe32M for [RVV] {
+instruction VSe32M for [RVV] : VSeMMem {
     param MNEMONIC: String = "vse32.v";
     param OPNAME: String = "vse32.v.m";
     param WIDTH3: bits<3> = 0b110;
     param OPCODE: bits<7> = 0b0100111;
-
-    operands {
-        vs3: VR,
-        rs1: GPR,
-    }
-
-    encoding {
-        0b000000,
-        0b0,
-        0b00000,
-        rs1,
-        WIDTH3,
-        vs3,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {vs3}, ({rs1}), v0.t"
-    }
 
     behavior {
         current = load(rs1, VCSR::vl * zext(0b100, self.XLEN), 0b0);
         merged = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs3, VCSR::vl, 32), split(current, VCSR::vl, 32)), |m, v, o| if m { v } else { o }));
         store(rs1, VCSR::vl * zext(0b100, self.XLEN), merged);
     }
-
-    schedule { units = [WriteIALU]; }
 }
 
-instruction VLe32FFM for [RVV] {
+instruction VLe32FFM for [RVV] : VLeFFMMem {
     param MNEMONIC: String = "vle32ff.v";
     param OPNAME: String = "vle32ff.v.m";
     param WIDTH3: bits<3> = 0b110;
     param OPCODE: bits<7> = 0b0000111;
 
-    operands {
-        vd: VR,
-        rs1: GPR,
-    }
-
-    encoding {
-        0b000000,
-        0b0,
-        0b10000,
-        rs1,
-        WIDTH3,
-        vd,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {vd}, ({rs1}), v0.t"
-    }
-
     behavior {
         loaded = load(rs1, VCSR::vl * zext(0b100, self.XLEN), 0b0);
         vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(loaded, VCSR::vl, 32), split(vd, VCSR::vl, 32)), |m, n, o| if m { n } else { o }));
     }
-
-    schedule { units = [WriteIALU]; }
 }
 
-instruction VLse32M for [RVV] {
+instruction VLse32M for [RVV] : VLseMMem {
     param MNEMONIC: String = "vlse32.v";
     param OPNAME: String = "vlse32.v.m";
     param WIDTH3: bits<3> = 0b110;
     param OPCODE: bits<7> = 0b0000111;
 
-    operands {
-        vd: VR,
-        rs1: GPR,
-        rs2: GPR,
-    }
-
-    encoding {
-        0b0000,
-        0b10,
-        0b0,
-        rs2,
-        rs1,
-        WIDTH3,
-        vd,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {vd}, ({rs1}), {rs2}, v0.t"
-    }
-
     behavior {
         vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), iota(VCSR::vl, self.XLEN), split(vd, VCSR::vl, 32)), |m, i, o| if m { load(rs1 + i * rs2, 4, 0b0) } else { o }));
     }
-
-    schedule { units = [WriteIALU]; }
 }
 
-instruction VSse32M for [RVV] {
+instruction VSse32M for [RVV] : VSseMMem {
     param MNEMONIC: String = "vsse32.v";
     param OPNAME: String = "vsse32.v.m";
     param WIDTH3: bits<3> = 0b110;
     param OPCODE: bits<7> = 0b0100111;
 
-    operands {
-        vs3: VR,
-        rs1: GPR,
-        rs2: GPR,
-    }
-
-    encoding {
-        0b0000,
-        0b10,
-        0b0,
-        rs2,
-        rs1,
-        WIDTH3,
-        vs3,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {vs3}, ({rs1}), {rs2}, v0.t"
-    }
-
     behavior {
         concat(map(zip(split(VR::v0, VCSR::vl, 1), iota(VCSR::vl, self.XLEN), split(vs3, VCSR::vl, 32)), |m, i, v| store(rs1 + i * rs2, 4, if m { v } else { extract(load(rs1 + i * rs2, 4, 0b0), 31, 0) })));
     }
-
-    schedule { units = [WriteIALU]; }
 }
 
-instruction VVluxei32M for [RVV] {
+instruction VVluxei32M for [RVV] : VVluxeiMMem {
     param MNEMONIC: String = "vluxei32.v";
     param OPNAME: String = "vluxei32.v.m";
     param WIDTH3: bits<3> = 0b110;
     param OPCODE: bits<7> = 0b0000111;
 
-    operands {
-        vd: VR,
-        rs1: GPR,
-        vs2: VR,
-    }
-
-    encoding {
-        0b0000,
-        0b01,
-        0b0,
-        vs2,
-        rs1,
-        WIDTH3,
-        vd,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {vd}, ({rs1}), {vs2}, v0.t"
-    }
-
     behavior {
         vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, 32), split(vd, VCSR::vl, VCFG::sew)), |m, idx, o| if m { load(rs1 + zext(idx, self.XLEN), elem_bytes(), 0b0) } else { o }));
     }
-
-    schedule { units = [WriteIALU]; }
 }
 
-instruction VVloxei32M for [RVV] {
+instruction VVloxei32M for [RVV] : VVloxeiMMem {
     param MNEMONIC: String = "vloxei32.v";
     param OPNAME: String = "vloxei32.v.m";
     param WIDTH3: bits<3> = 0b110;
     param OPCODE: bits<7> = 0b0000111;
 
-    operands {
-        vd: VR,
-        rs1: GPR,
-        vs2: VR,
-    }
-
-    encoding {
-        0b0000,
-        0b11,
-        0b0,
-        vs2,
-        rs1,
-        WIDTH3,
-        vd,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {vd}, ({rs1}), {vs2}, v0.t"
-    }
-
     behavior {
         vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, 32), split(vd, VCSR::vl, VCFG::sew)), |m, idx, o| if m { load(rs1 + zext(idx, self.XLEN), elem_bytes(), 0b0) } else { o }));
     }
-
-    schedule { units = [WriteIALU]; }
 }
 
-instruction VVsuxei32M for [RVV] {
+instruction VVsuxei32M for [RVV] : VVsuxeiMMem {
     param MNEMONIC: String = "vsuxei32.v";
     param OPNAME: String = "vsuxei32.v.m";
     param WIDTH3: bits<3> = 0b110;
     param OPCODE: bits<7> = 0b0100111;
 
-    operands {
-        vs3: VR,
-        rs1: GPR,
-        vs2: VR,
-    }
-
-    encoding {
-        0b0000,
-        0b01,
-        0b0,
-        vs2,
-        rs1,
-        WIDTH3,
-        vs3,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {vs3}, ({rs1}), {vs2}, v0.t"
-    }
-
     behavior {
         concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, 32), split(vs3, VCSR::vl, VCFG::sew)), |m, idx, v| store(rs1 + zext(idx, self.XLEN), elem_bytes(), if m { v } else { extract(load(rs1 + zext(idx, self.XLEN), elem_bytes(), 0b0), (VCFG::sew - zext(0b1, self.XLEN)), 0) })));
     }
-
-    schedule { units = [WriteIALU]; }
 }
 
-instruction VVsoxei32M for [RVV] {
+instruction VVsoxei32M for [RVV] : VVsoxeiMMem {
     param MNEMONIC: String = "vsoxei32.v";
     param OPNAME: String = "vsoxei32.v.m";
     param WIDTH3: bits<3> = 0b110;
     param OPCODE: bits<7> = 0b0100111;
 
-    operands {
-        vs3: VR,
-        rs1: GPR,
-        vs2: VR,
-    }
-
-    encoding {
-        0b0000,
-        0b11,
-        0b0,
-        vs2,
-        rs1,
-        WIDTH3,
-        vs3,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {vs3}, ({rs1}), {vs2}, v0.t"
-    }
-
     behavior {
         concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, 32), split(vs3, VCSR::vl, VCFG::sew)), |m, idx, v| store(rs1 + zext(idx, self.XLEN), elem_bytes(), if m { v } else { extract(load(rs1 + zext(idx, self.XLEN), elem_bytes(), 0b0), (VCFG::sew - zext(0b1, self.XLEN)), 0) })));
     }
-
-    schedule { units = [WriteIALU]; }
 }
 
-instruction VLe64 for [RVV] {
+instruction VLe64 for [RVV] : VLeMem {
     param MNEMONIC: String = "vle64.v";
     param WIDTH3: bits<3> = 0b111;
     param OPCODE: bits<7> = 0b0000111;
 
-    operands {
-        vd: VR,
-        rs1: GPR,
-    }
-
-    encoding {
-        0b000000,
-        0b1,
-        0b00000,
-        rs1,
-        WIDTH3,
-        vd,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {vd}, ({rs1})"
-    }
-
     behavior {
         vd = load(rs1, VCSR::vl * zext(0b1000, self.XLEN), 0b0);
     }
-
-    schedule { units = [WriteIALU]; }
 }
 
-instruction VSe64 for [RVV] {
+instruction VSe64 for [RVV] : VSeMem {
     param MNEMONIC: String = "vse64.v";
     param WIDTH3: bits<3> = 0b111;
     param OPCODE: bits<7> = 0b0100111;
 
-    operands {
-        vs3: VR,
-        rs1: GPR,
-    }
-
-    encoding {
-        0b000000,
-        0b1,
-        0b00000,
-        rs1,
-        WIDTH3,
-        vs3,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {vs3}, ({rs1})"
-    }
-
     behavior {
         store(rs1, VCSR::vl * zext(0b1000, self.XLEN), vs3);
     }
-
-    schedule { units = [WriteIALU]; }
 }
 
-instruction VLe64FF for [RVV] {
+instruction VLe64FF for [RVV] : VLeFFMem {
     param MNEMONIC: String = "vle64ff.v";
     param WIDTH3: bits<3> = 0b111;
     param OPCODE: bits<7> = 0b0000111;
 
-    operands {
-        vd: VR,
-        rs1: GPR,
-    }
-
-    encoding {
-        0b000000,
-        0b1,
-        0b10000,
-        rs1,
-        WIDTH3,
-        vd,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {vd}, ({rs1})"
-    }
-
     behavior {
         vd = load(rs1, VCSR::vl * zext(0b1000, self.XLEN), 0b0);
     }
-
-    schedule { units = [WriteIALU]; }
 }
 
-instruction VLse64 for [RVV] {
+instruction VLse64 for [RVV] : VLseMem {
     param MNEMONIC: String = "vlse64.v";
     param WIDTH3: bits<3> = 0b111;
     param OPCODE: bits<7> = 0b0000111;
 
-    operands {
-        vd: VR,
-        rs1: GPR,
-        rs2: GPR,
-    }
-
-    encoding {
-        0b0000,
-        0b10,
-        0b1,
-        rs2,
-        rs1,
-        WIDTH3,
-        vd,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {vd}, ({rs1}), {rs2}"
-    }
-
     behavior {
         vd = concat(map(iota(VCSR::vl, self.XLEN), |i| load(rs1 + i * rs2, 8, 0b0)));
     }
-
-    schedule { units = [WriteIALU]; }
 }
 
-instruction VSse64 for [RVV] {
+instruction VSse64 for [RVV] : VSseMem {
     param MNEMONIC: String = "vsse64.v";
     param WIDTH3: bits<3> = 0b111;
     param OPCODE: bits<7> = 0b0100111;
 
-    operands {
-        vs3: VR,
-        rs1: GPR,
-        rs2: GPR,
-    }
-
-    encoding {
-        0b0000,
-        0b10,
-        0b1,
-        rs2,
-        rs1,
-        WIDTH3,
-        vs3,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {vs3}, ({rs1}), {rs2}"
-    }
-
     behavior {
         concat(map(zip(iota(VCSR::vl, self.XLEN), split(vs3, VCSR::vl, 64)), |i, v| store(rs1 + i * rs2, 8, v)));
     }
-
-    schedule { units = [WriteIALU]; }
 }
 
-instruction VVluxei64 for [RVV] {
+instruction VVluxei64 for [RVV] : VVluxeiMem {
     param MNEMONIC: String = "vluxei64.v";
     param WIDTH3: bits<3> = 0b111;
     param OPCODE: bits<7> = 0b0000111;
 
-    operands {
-        vd: VR,
-        rs1: GPR,
-        vs2: VR,
-    }
-
-    encoding {
-        0b0000,
-        0b01,
-        0b1,
-        vs2,
-        rs1,
-        WIDTH3,
-        vd,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {vd}, ({rs1}), {vs2}"
-    }
-
     behavior {
         vd = concat(map(split(vs2, VCSR::vl, 64), |idx| load(rs1 + zext(idx, self.XLEN), elem_bytes(), 0b0)));
     }
-
-    schedule { units = [WriteIALU]; }
 }
 
-instruction VVloxei64 for [RVV] {
+instruction VVloxei64 for [RVV] : VVloxeiMem {
     param MNEMONIC: String = "vloxei64.v";
     param WIDTH3: bits<3> = 0b111;
     param OPCODE: bits<7> = 0b0000111;
 
-    operands {
-        vd: VR,
-        rs1: GPR,
-        vs2: VR,
-    }
-
-    encoding {
-        0b0000,
-        0b11,
-        0b1,
-        vs2,
-        rs1,
-        WIDTH3,
-        vd,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {vd}, ({rs1}), {vs2}"
-    }
-
     behavior {
         vd = concat(map(split(vs2, VCSR::vl, 64), |idx| load(rs1 + zext(idx, self.XLEN), elem_bytes(), 0b0)));
     }
-
-    schedule { units = [WriteIALU]; }
 }
 
-instruction VVsuxei64 for [RVV] {
+instruction VVsuxei64 for [RVV] : VVsuxeiMem {
     param MNEMONIC: String = "vsuxei64.v";
     param WIDTH3: bits<3> = 0b111;
     param OPCODE: bits<7> = 0b0100111;
 
-    operands {
-        vs3: VR,
-        rs1: GPR,
-        vs2: VR,
-    }
-
-    encoding {
-        0b0000,
-        0b01,
-        0b1,
-        vs2,
-        rs1,
-        WIDTH3,
-        vs3,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {vs3}, ({rs1}), {vs2}"
-    }
-
     behavior {
         concat(map(zip(split(vs2, VCSR::vl, 64), split(vs3, VCSR::vl, VCFG::sew)), |idx, v| store(rs1 + zext(idx, self.XLEN), elem_bytes(), v)));
     }
-
-    schedule { units = [WriteIALU]; }
 }
 
-instruction VVsoxei64 for [RVV] {
+instruction VVsoxei64 for [RVV] : VVsoxeiMem {
     param MNEMONIC: String = "vsoxei64.v";
     param WIDTH3: bits<3> = 0b111;
     param OPCODE: bits<7> = 0b0100111;
 
-    operands {
-        vs3: VR,
-        rs1: GPR,
-        vs2: VR,
-    }
-
-    encoding {
-        0b0000,
-        0b11,
-        0b1,
-        vs2,
-        rs1,
-        WIDTH3,
-        vs3,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {vs3}, ({rs1}), {vs2}"
-    }
-
     behavior {
         concat(map(zip(split(vs2, VCSR::vl, 64), split(vs3, VCSR::vl, VCFG::sew)), |idx, v| store(rs1 + zext(idx, self.XLEN), elem_bytes(), v)));
     }
-
-    schedule { units = [WriteIALU]; }
 }
 
-instruction VLe64M for [RVV] {
+instruction VLe64M for [RVV] : VLeMMem {
     param MNEMONIC: String = "vle64.v";
     param OPNAME: String = "vle64.v.m";
     param WIDTH3: bits<3> = 0b111;
     param OPCODE: bits<7> = 0b0000111;
 
-    operands {
-        vd: VR,
-        rs1: GPR,
-    }
-
-    encoding {
-        0b000000,
-        0b0,
-        0b00000,
-        rs1,
-        WIDTH3,
-        vd,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {vd}, ({rs1}), v0.t"
-    }
-
     behavior {
         loaded = load(rs1, VCSR::vl * zext(0b1000, self.XLEN), 0b0);
         vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(loaded, VCSR::vl, 64), split(vd, VCSR::vl, 64)), |m, n, o| if m { n } else { o }));
     }
-
-    schedule { units = [WriteIALU]; }
 }
 
-instruction VSe64M for [RVV] {
+instruction VSe64M for [RVV] : VSeMMem {
     param MNEMONIC: String = "vse64.v";
     param OPNAME: String = "vse64.v.m";
     param WIDTH3: bits<3> = 0b111;
     param OPCODE: bits<7> = 0b0100111;
-
-    operands {
-        vs3: VR,
-        rs1: GPR,
-    }
-
-    encoding {
-        0b000000,
-        0b0,
-        0b00000,
-        rs1,
-        WIDTH3,
-        vs3,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {vs3}, ({rs1}), v0.t"
-    }
 
     behavior {
         current = load(rs1, VCSR::vl * zext(0b1000, self.XLEN), 0b0);
         merged = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs3, VCSR::vl, 64), split(current, VCSR::vl, 64)), |m, v, o| if m { v } else { o }));
         store(rs1, VCSR::vl * zext(0b1000, self.XLEN), merged);
     }
-
-    schedule { units = [WriteIALU]; }
 }
 
-instruction VLe64FFM for [RVV] {
+instruction VLe64FFM for [RVV] : VLeFFMMem {
     param MNEMONIC: String = "vle64ff.v";
     param OPNAME: String = "vle64ff.v.m";
     param WIDTH3: bits<3> = 0b111;
     param OPCODE: bits<7> = 0b0000111;
 
-    operands {
-        vd: VR,
-        rs1: GPR,
-    }
-
-    encoding {
-        0b000000,
-        0b0,
-        0b10000,
-        rs1,
-        WIDTH3,
-        vd,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {vd}, ({rs1}), v0.t"
-    }
-
     behavior {
         loaded = load(rs1, VCSR::vl * zext(0b1000, self.XLEN), 0b0);
         vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(loaded, VCSR::vl, 64), split(vd, VCSR::vl, 64)), |m, n, o| if m { n } else { o }));
     }
-
-    schedule { units = [WriteIALU]; }
 }
 
-instruction VLse64M for [RVV] {
+instruction VLse64M for [RVV] : VLseMMem {
     param MNEMONIC: String = "vlse64.v";
     param OPNAME: String = "vlse64.v.m";
     param WIDTH3: bits<3> = 0b111;
     param OPCODE: bits<7> = 0b0000111;
 
-    operands {
-        vd: VR,
-        rs1: GPR,
-        rs2: GPR,
-    }
-
-    encoding {
-        0b0000,
-        0b10,
-        0b0,
-        rs2,
-        rs1,
-        WIDTH3,
-        vd,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {vd}, ({rs1}), {rs2}, v0.t"
-    }
-
     behavior {
         vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), iota(VCSR::vl, self.XLEN), split(vd, VCSR::vl, 64)), |m, i, o| if m { load(rs1 + i * rs2, 8, 0b0) } else { o }));
     }
-
-    schedule { units = [WriteIALU]; }
 }
 
-instruction VSse64M for [RVV] {
+instruction VSse64M for [RVV] : VSseMMem {
     param MNEMONIC: String = "vsse64.v";
     param OPNAME: String = "vsse64.v.m";
     param WIDTH3: bits<3> = 0b111;
     param OPCODE: bits<7> = 0b0100111;
 
-    operands {
-        vs3: VR,
-        rs1: GPR,
-        rs2: GPR,
-    }
-
-    encoding {
-        0b0000,
-        0b10,
-        0b0,
-        rs2,
-        rs1,
-        WIDTH3,
-        vs3,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {vs3}, ({rs1}), {rs2}, v0.t"
-    }
-
     behavior {
         concat(map(zip(split(VR::v0, VCSR::vl, 1), iota(VCSR::vl, self.XLEN), split(vs3, VCSR::vl, 64)), |m, i, v| store(rs1 + i * rs2, 8, if m { v } else { extract(load(rs1 + i * rs2, 8, 0b0), 63, 0) })));
     }
-
-    schedule { units = [WriteIALU]; }
 }
 
-instruction VVluxei64M for [RVV] {
+instruction VVluxei64M for [RVV] : VVluxeiMMem {
     param MNEMONIC: String = "vluxei64.v";
     param OPNAME: String = "vluxei64.v.m";
     param WIDTH3: bits<3> = 0b111;
     param OPCODE: bits<7> = 0b0000111;
 
-    operands {
-        vd: VR,
-        rs1: GPR,
-        vs2: VR,
-    }
-
-    encoding {
-        0b0000,
-        0b01,
-        0b0,
-        vs2,
-        rs1,
-        WIDTH3,
-        vd,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {vd}, ({rs1}), {vs2}, v0.t"
-    }
-
     behavior {
         vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, 64), split(vd, VCSR::vl, VCFG::sew)), |m, idx, o| if m { load(rs1 + zext(idx, self.XLEN), elem_bytes(), 0b0) } else { o }));
     }
-
-    schedule { units = [WriteIALU]; }
 }
 
-instruction VVloxei64M for [RVV] {
+instruction VVloxei64M for [RVV] : VVloxeiMMem {
     param MNEMONIC: String = "vloxei64.v";
     param OPNAME: String = "vloxei64.v.m";
     param WIDTH3: bits<3> = 0b111;
     param OPCODE: bits<7> = 0b0000111;
 
-    operands {
-        vd: VR,
-        rs1: GPR,
-        vs2: VR,
-    }
-
-    encoding {
-        0b0000,
-        0b11,
-        0b0,
-        vs2,
-        rs1,
-        WIDTH3,
-        vd,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {vd}, ({rs1}), {vs2}, v0.t"
-    }
-
     behavior {
         vd = concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, 64), split(vd, VCSR::vl, VCFG::sew)), |m, idx, o| if m { load(rs1 + zext(idx, self.XLEN), elem_bytes(), 0b0) } else { o }));
     }
-
-    schedule { units = [WriteIALU]; }
 }
 
-instruction VVsuxei64M for [RVV] {
+instruction VVsuxei64M for [RVV] : VVsuxeiMMem {
     param MNEMONIC: String = "vsuxei64.v";
     param OPNAME: String = "vsuxei64.v.m";
     param WIDTH3: bits<3> = 0b111;
     param OPCODE: bits<7> = 0b0100111;
 
-    operands {
-        vs3: VR,
-        rs1: GPR,
-        vs2: VR,
-    }
-
-    encoding {
-        0b0000,
-        0b01,
-        0b0,
-        vs2,
-        rs1,
-        WIDTH3,
-        vs3,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {vs3}, ({rs1}), {vs2}, v0.t"
-    }
-
     behavior {
         concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, 64), split(vs3, VCSR::vl, VCFG::sew)), |m, idx, v| store(rs1 + zext(idx, self.XLEN), elem_bytes(), if m { v } else { extract(load(rs1 + zext(idx, self.XLEN), elem_bytes(), 0b0), (VCFG::sew - zext(0b1, self.XLEN)), 0) })));
     }
-
-    schedule { units = [WriteIALU]; }
 }
 
-instruction VVsoxei64M for [RVV] {
+instruction VVsoxei64M for [RVV] : VVsoxeiMMem {
     param MNEMONIC: String = "vsoxei64.v";
     param OPNAME: String = "vsoxei64.v.m";
     param WIDTH3: bits<3> = 0b111;
     param OPCODE: bits<7> = 0b0100111;
 
-    operands {
-        vs3: VR,
-        rs1: GPR,
-        vs2: VR,
-    }
-
-    encoding {
-        0b0000,
-        0b11,
-        0b0,
-        vs2,
-        rs1,
-        WIDTH3,
-        vs3,
-        OPCODE,
-    }
-
-    asm {
-        "{self.MNEMONIC} {vs3}, ({rs1}), {vs2}, v0.t"
-    }
-
     behavior {
         concat(map(zip(split(VR::v0, VCSR::vl, 1), split(vs2, VCSR::vl, 64), split(vs3, VCSR::vl, VCFG::sew)), |m, idx, v| store(rs1 + zext(idx, self.XLEN), elem_bytes(), if m { v } else { extract(load(rs1 + zext(idx, self.XLEN), elem_bytes(), 0b0), (VCFG::sew - zext(0b1, self.XLEN)), 0) })));
     }
-
-    schedule { units = [WriteIALU]; }
 }
 
 instruction VL1Re8 for [RVV] {

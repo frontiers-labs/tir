@@ -453,3 +453,21 @@ whole_register_moves!(
     (VMove8R, "vmv8r.v", VRM8, 7)
 )
 
+
+// Keep the encoding fields and masked name shared between paired forms.
+macro vector_pair {
+    ($name:ident, $masked:ident, $feature:ident, $plain:ident, $mask:ident,
+     $mnemonic:literal, $funct6:literal, { $($body:tt)* }, { $($masked_body:tt)* }) => {
+        instruction $name for [$feature] : $plain {
+            param MNEMONIC: String = $mnemonic;
+            param FUNCT6: bits<6> = $funct6;
+            behavior { $($body)* }
+        }
+        instruction $masked for [$feature] : $mask {
+            param OPNAME: String = ${concat($mnemonic, ".m")};
+            param MNEMONIC: String = $mnemonic;
+            param FUNCT6: bits<6> = $funct6;
+            behavior { $($masked_body)* }
+        }
+    };
+}

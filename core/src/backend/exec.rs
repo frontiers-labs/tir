@@ -8,7 +8,7 @@
 
 use crate::attributes::AttributeValue;
 use crate::backend::regalloc::RegClassId;
-use crate::backend::{InstrInfo, MachineContext, MachineMemory, RegisterValue, SimTrap};
+use crate::backend::{InstrInfo, MachineContext, MachineMemory, SimTrap};
 
 mod footprint;
 mod frame;
@@ -111,88 +111,6 @@ pub fn init_syms(
         .into_iter()
         .map(|value| value.unwrap_or_else(|| tir::sem::int_value(64, 0)))
         .collect())
-}
-
-/// Evaluates the behavior value term stored at `offset` in the sem blob against
-/// the current symbol table, interpreting memory operations through `machine`.
-pub fn eval(
-    kinds: &[tir::sem::SymKind],
-    blob: &[u8],
-    offset: u32,
-    syms: &[tir::sem::Value],
-    machine: &mut dyn MachineContext,
-    mnemonic: &'static str,
-) -> Result<RegisterValue, SimTrap> {
-    match eval_value(kinds, blob, offset, syms, machine)? {
-        tir::sem::Value::Int(i) => Ok(RegisterValue::Int(i)),
-        // A float result (e.g. `fadd`) and a lane concatenation (a vector
-        // destination) are written back as raw bytes; the destination
-        // register's storage keeps the bit pattern.
-        tir::sem::Value::Float(f) => Ok(RegisterValue::Bits(tir::utils::RawBits::from_apfloat(&f))),
-        tir::sem::Value::RawBits(b) => Ok(RegisterValue::Bits(b)),
-        tir::sem::Value::Iterator(_) => Err(SimTrap::InvalidInstruction {
-            op: mnemonic,
-            reason: "instruction semantic expression did not evaluate to a register value"
-                .to_string(),
-        }),
-    }
-}
-
-fn eval_value(
-    kinds: &[tir::sem::SymKind],
-    blob: &[u8],
-    offset: u32,
-    syms: &[tir::sem::Value],
-    machine: &mut dyn MachineContext,
-) -> Result<tir::sem::Value, SimTrap> {
-    let mut graph = tir::sem::SemGraph::new();
-    {
-        use tir::sem::ExtendSemBytes as _;
-        graph.extend_sem_bytes(kinds, blob, offset)
-    };
-    let mut memory = MachineMemory(machine);
-    tir::sem::execute_with_memory(&graph, syms, &mut memory)
-}
-
-/// Writes `value` to the register named by attribute `name`, skipping the
-/// target's hardwired-zero registers.
-pub fn writeback_attr(
-    instance: &crate::OpHandle,
-    machine: &mut dyn MachineContext,
-    mnemonic: &'static str,
-    name: &'static str,
-    value: RegisterValue,
-    is_hardwired_zero: fn(&str, u16) -> bool,
-) -> Result<(), SimTrap> {
-    let (class, index) = register_phys(instance, mnemonic, name)?;
-    if !is_hardwired_zero(class.name(), index) {
-        machine.write_register_value(class.name(), index, value)?;
-    }
-    Ok(())
-}
-
-/// Writes `value` to a fixed architectural register, skipping the target's
-/// hardwired-zero registers.
-pub fn writeback_fixed(
-    machine: &mut dyn MachineContext,
-    class: &'static str,
-    index: u16,
-    value: RegisterValue,
-    is_hardwired_zero: fn(&str, u16) -> bool,
-) -> Result<(), SimTrap> {
-    if !is_hardwired_zero(class, index) {
-        machine.write_register_value(class, index, value)?;
-    }
-    Ok(())
-}
-
-/// Parks a `let`-bound value back into the symbol table; later statements read
-/// the symbol instead of re-evaluating the term.
-pub fn bind_sym(syms: &mut [tir::sem::Value], index: usize, value: RegisterValue) {
-    syms[index] = match value {
-        RegisterValue::Int(i) => tir::sem::value_from_register(i),
-        RegisterValue::Bits(b) => tir::sem::value_from_raw_bits(b),
-    };
 }
 
 /// The sem programs and target facts every instruction of one target shares.

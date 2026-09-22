@@ -20,86 +20,8 @@ module {
 }
 
 // CHECK-LABEL: func.func @or_zero_8(%[[X8:[0-9]+]]: !i8, %[[Y8:[0-9]+]]: !i8, %[[Z8:[0-9]+]]: !i8)
-// CHECK-NOT: addi
-// CHECK-NOT: subi
-// CHECK-NOT: muli
-// CHECK-NOT: divui
-// CHECK-NOT: divsi
-// CHECK-NOT: remui
-// CHECK-NOT: remsi
-// CHECK-NOT: andi
-// CHECK-NOT: ori
-// CHECK-NOT: xori
-// CHECK-NOT: shli
-// CHECK-NOT: shrui
-// CHECK-NOT: shrsi
-// CHECK-NOT: addi
-// CHECK-NOT: subi
-// CHECK-NOT: muli
-// CHECK-NOT: divui
-// CHECK-NOT: divsi
-// CHECK-NOT: remui
-// CHECK-NOT: remsi
-// CHECK-NOT: andi
-// CHECK-NOT: ori
-// CHECK-NOT: xori
-// CHECK-NOT: shli
-// CHECK-NOT: shrui
-// CHECK-NOT: shrsi
-// CHECK: -> %[[X8]]
+// CHECK-NEXT: -> %[[X8]]
 // CHECK-LABEL: func.func @or_zero_32(%[[X32:[0-9]+]]: !i32, %[[Y32:[0-9]+]]: !i32, %[[Z32:[0-9]+]]: !i32)
-// CHECK-NOT: addi
-// CHECK-NOT: subi
-// CHECK-NOT: muli
-// CHECK-NOT: divui
-// CHECK-NOT: divsi
-// CHECK-NOT: remui
-// CHECK-NOT: remsi
-// CHECK-NOT: andi
-// CHECK-NOT: ori
-// CHECK-NOT: xori
-// CHECK-NOT: shli
-// CHECK-NOT: shrui
-// CHECK-NOT: shrsi
-// CHECK-NOT: addi
-// CHECK-NOT: subi
-// CHECK-NOT: muli
-// CHECK-NOT: divui
-// CHECK-NOT: divsi
-// CHECK-NOT: remui
-// CHECK-NOT: remsi
-// CHECK-NOT: andi
-// CHECK-NOT: ori
-// CHECK-NOT: xori
-// CHECK-NOT: shli
-// CHECK-NOT: shrui
-// CHECK-NOT: shrsi
-// CHECK: -> %[[X32]]
+// CHECK-NEXT: -> %[[X32]]
 // CHECK-LABEL: func.func @or_zero_64(%[[X64:[0-9]+]]: !i64, %[[Y64:[0-9]+]]: !i64, %[[Z64:[0-9]+]]: !i64)
-// CHECK-NOT: addi
-// CHECK-NOT: subi
-// CHECK-NOT: muli
-// CHECK-NOT: divui
-// CHECK-NOT: divsi
-// CHECK-NOT: remui
-// CHECK-NOT: remsi
-// CHECK-NOT: andi
-// CHECK-NOT: ori
-// CHECK-NOT: xori
-// CHECK-NOT: shli
-// CHECK-NOT: shrui
-// CHECK-NOT: shrsi
-// CHECK-NOT: addi
-// CHECK-NOT: subi
-// CHECK-NOT: muli
-// CHECK-NOT: divui
-// CHECK-NOT: divsi
-// CHECK-NOT: remui
-// CHECK-NOT: remsi
-// CHECK-NOT: andi
-// CHECK-NOT: ori
-// CHECK-NOT: xori
-// CHECK-NOT: shli
-// CHECK-NOT: shrui
-// CHECK-NOT: shrsi
-// CHECK: -> %[[X64]]
+// CHECK-NEXT: -> %[[X64]]
