@@ -1,8 +1,11 @@
-use std::sync::{Arc, Mutex, OnceLock};
+//! Source positions are [`Span`]s: a single `u64` packing an interned [`FileId`]
+//! (high 32 bits) with a byte offset (low 32 bits). Because the file is part of
+//! the span, a diagnostic raised inside an `#include`d file resolves to that
+//! file's own text. The interner ([`intern_file`]) owns each file's name and
+//! source so a [`Diagnostic`](super::Diagnostic) can render itself without the
+//! caller threading that text around.
 
-// ---------------------------------------------------------------------------
-// Source files and spans
-// ---------------------------------------------------------------------------
+use std::sync::{Arc, Mutex, OnceLock};
 
 /// Handle to an interned source file (its name and text). See [`intern_file`].
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
@@ -56,6 +59,3 @@ pub fn file_source(file: FileId) -> Arc<str> {
 fn file_name(file: FileId) -> String {
     files().lock().unwrap()[file.0 as usize].0.clone()
 }
-
-// ---------------------------------------------------------------------------
-// Catalog

@@ -1,27 +1,15 @@
 //! Classifies C function signatures for target ABIs.
 
 use super::{lower_type, node_entity, node_type, source_type_layout};
-use crate::ast::AstLeaf;
-use crate::ast::RecordKind;
+use crate::ast::{AstLeaf, RecordKind};
 use crate::cir::VarArgsType;
 use crate::diagnostics::Diagnostic;
-use crate::sema::EntityId;
-use crate::sema::QualType;
-use crate::sema::TargetProfile;
-use crate::sema::TypeKind;
-use crate::sema::TypedAst;
-use tir::Context;
-use tir::TypeId;
-use tir::backend::abi::Overflow;
-use tir::backend::abi::ValueKind;
-use tir::backend::abi::type_kind;
-use tir::builtin::FloatType;
-use tir::builtin::IntegerType;
-use tir::builtin::TupleType;
-use tir::builtin::UnitType;
-use tir::graph::Dag;
-use tir::graph::NodeId;
+use crate::sema::{EntityId, QualType, TargetProfile, TypeKind, TypedAst};
+use tir::backend::abi::{Overflow, ValueKind, type_kind};
+use tir::builtin::{FloatType, IntegerType, TupleType, UnitType};
+use tir::graph::{Dag, NodeId};
 use tir::ptr::PtrType;
+use tir::{Context, TypeId};
 
 #[derive(Clone)]
 pub(super) struct Signature {

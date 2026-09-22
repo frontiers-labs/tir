@@ -4,24 +4,16 @@ use super::{
     AbiParameter, AbiPiece, FnCodegen, LoweredExpr, abi_storage_layout, classify_function_type,
     converted_node_type, lower_type, node_entity, node_type, source_type_layout, unsupported,
 };
-use crate::ast::AstKind;
-use crate::ast::AstLeaf;
+use crate::ast::{AstKind, AstLeaf};
 use crate::cir;
 use crate::diagnostics::Diagnostic;
-use crate::sema::QualType;
-use crate::sema::TypeKind;
+use crate::sema::{QualType, TypeKind};
 use tir::ValueId;
-use tir::backend::abi::ValueKind;
-use tir::backend::abi::type_kind;
-use tir::builtin::FnType;
-use tir::builtin::IntegerType;
-use tir::builtin::TupleType;
-use tir::builtin::ops as b;
+use tir::backend::abi::{ValueKind, type_kind};
+use tir::builtin::{FnType, IntegerType, TupleType, ops as b};
 use tir::func::ops as func_ops;
-use tir::graph::Dag;
-use tir::graph::NodeId;
-use tir::ptr::PtrType;
-use tir::ptr::ops as p;
+use tir::graph::{Dag, NodeId};
+use tir::ptr::{PtrType, ops as p};
 
 impl FnCodegen<'_> {
     pub(super) fn materialize(&mut self, expression: LoweredExpr) -> ValueId {

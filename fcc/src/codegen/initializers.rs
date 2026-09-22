@@ -4,23 +4,13 @@ use super::{
     ConstantData, DataRelocation, FnCodegen, Global, lower_type, node_entity, node_type,
     source_type_layout, unsupported,
 };
-use crate::ast::Ast;
-use crate::ast::AstKind;
-use crate::ast::AstLeaf;
-use crate::ast::InitializerDesignator;
-use crate::ast::RecordKind;
+use crate::ast::{Ast, AstKind, AstLeaf, InitializerDesignator, RecordKind};
 use crate::diagnostics::Diagnostic;
-use crate::sema::EntityId;
-use crate::sema::QualType;
-use crate::sema::TypeKind;
-use crate::sema::TypedAst;
-use crate::sema::ValueCategory;
-use std::collections::BTreeMap;
-use std::collections::HashMap;
+use crate::sema::{EntityId, QualType, TypeKind, TypedAst, ValueCategory};
+use std::collections::{BTreeMap, HashMap};
 use tir::ValueId;
 use tir::builtin::ops as b;
-use tir::graph::Dag;
-use tir::graph::NodeId;
+use tir::graph::{Dag, NodeId};
 use tir::ptr::ops as p;
 use tir::utils::APFloat;
 

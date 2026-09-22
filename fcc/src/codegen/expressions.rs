@@ -4,22 +4,17 @@ use super::{
     FnCodegen, LoweredExpr, converted_node_type, lower_type, node_entity, node_type,
     source_type_layout, unsupported,
 };
-use crate::ast::AstKind;
-use crate::ast::AstLeaf;
+use crate::ast::{AstKind, AstLeaf};
 use crate::cir;
 use crate::diagnostics::Diagnostic;
 use crate::lexer::decode_character_constant;
-use crate::sema::TypeKind;
-use crate::sema::ValueCategory;
+use crate::sema::{TypeKind, ValueCategory};
 use tir::ValueId;
 use tir::attributes::Predicate;
-use tir::builtin::IntegerType;
-use tir::builtin::ops as b;
+use tir::builtin::{IntegerType, ops as b};
 use tir::cfg::ops as cb;
-use tir::graph::Dag;
-use tir::graph::NodeId;
-use tir::ptr::PtrType;
-use tir::ptr::ops as p;
+use tir::graph::{Dag, NodeId};
+use tir::ptr::{PtrType, ops as p};
 
 impl FnCodegen<'_> {
     pub(super) fn lower_expr(&mut self, root: NodeId) -> Result<ValueId, Diagnostic> {

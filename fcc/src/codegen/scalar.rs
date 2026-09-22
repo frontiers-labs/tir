@@ -2,31 +2,18 @@
 
 use super::{FnCodegen, LoweredExpr, Slot, lower_type, source_type_layout};
 use crate::ast::AstKind;
-use crate::sema::QualType;
-use crate::sema::TypeKind;
-use std::cmp::Ordering;
-use std::sync::Arc;
-use tir::Operation;
-use tir::TypeId;
-use tir::ValueId;
+use crate::sema::{QualType, TypeKind};
+use std::{cmp::Ordering, sync::Arc};
 use tir::attributes::Predicate;
-use tir::builtin::FloatType;
-use tir::builtin::IntegerType;
-use tir::builtin::ops as b;
-use tir::fp::ArithmeticSemantics;
-use tir::fp::ComparisonBehavior;
-use tir::fp::ComparisonSemantics;
-use tir::fp::Exceptions;
-use tir::fp::IntegerConversionSemantics;
-use tir::fp::InvalidConversion;
-use tir::fp::Rounding;
-use tir::fp::RoundingMode;
-use tir::fp::SubnormalMode;
-use tir::fp::ops as fp;
-use tir::graph::Dag;
-use tir::graph::NodeId;
-use tir::ptr::PtrType;
-use tir::ptr::ops as p;
+use tir::builtin::{FloatType, IntegerType, ops as b};
+use tir::fp::{
+    ArithmeticSemantics, ComparisonBehavior, ComparisonSemantics, Exceptions,
+    IntegerConversionSemantics, InvalidConversion, Rounding, RoundingMode, SubnormalMode,
+    ops as fp,
+};
+use tir::graph::{Dag, NodeId};
+use tir::ptr::{PtrType, ops as p};
+use tir::{Operation, TypeId, ValueId};
 
 impl FnCodegen<'_> {
     pub(super) fn emit<T: Operation>(&self, op: T) -> T {

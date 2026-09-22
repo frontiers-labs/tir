@@ -1,6 +1,11 @@
-use super::{Diagnostic, Span};
+//! The whole catalog is one [`diagnostics!`] table. Each row declares a stable
+//! [`Code`] (e.g. `E0001`, `W0300`), its title, standard reference and the
+//! long-form text shown by `fcc --explain`, plus a concrete builder type
+//! (`UnexpectedToken`, `UndeclaredIdentifier`, …) constructed with `new` and
+//! converted into a [`Diagnostic`] with `.into()`. Severity is read from the
+//! code's first letter (`W` = warning).
 
-// ---------------------------------------------------------------------------
+use super::{Diagnostic, Span};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Severity {
@@ -513,5 +518,3 @@ fn directive_message(code: Code, text: String) -> String {
         text
     }
 }
-
-// ---------------------------------------------------------------------------

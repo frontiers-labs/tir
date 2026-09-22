@@ -320,7 +320,14 @@ fn add_default_defines(
     defines
         .entry("__VERSION__".to_string())
         .or_insert_with(|| format!("\"fcc {}\"", env!("CARGO_PKG_VERSION")));
-    if let Some(value) = options.predefined_stdc_version() {
+    let stdc_version = match options.std_version {
+        crate::lang_options::StdVersion::C89 => None,
+        crate::lang_options::StdVersion::C99 => Some("199901L"),
+        crate::lang_options::StdVersion::C11 => Some("201112L"),
+        crate::lang_options::StdVersion::C17 => Some("201710L"),
+        crate::lang_options::StdVersion::C23 => Some("202311L"),
+    };
+    if let Some(value) = stdc_version {
         defines
             .entry("__STDC_VERSION__".to_string())
             .or_insert_with(|| value.to_string());

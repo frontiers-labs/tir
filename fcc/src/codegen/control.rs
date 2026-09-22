@@ -4,28 +4,18 @@ use super::{
     AbiParameter, ExitTarget, FnCodegen, Slot, SwitchItem, abi_storage_layout,
     crosses_loop_boundary, lower_type, node_entity, node_type, source_type_layout, unsupported,
 };
-use crate::ast::AstKind;
-use crate::ast::AstLeaf;
+use crate::ast::{AstKind, AstLeaf};
 use crate::cir;
 use crate::diagnostics::Diagnostic;
-use crate::sema::QualType;
-use crate::sema::TypeKind;
-use tir::Operand;
-use tir::Operation;
-use tir::TypeId;
-use tir::ValueId;
+use crate::sema::{QualType, TypeKind};
 use tir::attributes::Predicate;
-use tir::builtin::FloatType;
-use tir::builtin::IntegerType;
-use tir::builtin::UnitType;
-use tir::builtin::ops as b;
+use tir::builtin::{FloatType, IntegerType, UnitType, ops as b};
 use tir::cfg::ops as cb;
 use tir::fp::ops as fp;
 use tir::func::ops as func_ops;
-use tir::graph::Dag;
-use tir::graph::NodeId;
-use tir::ptr::PtrType;
-use tir::ptr::ops as p;
+use tir::graph::{Dag, NodeId};
+use tir::ptr::{PtrType, ops as p};
+use tir::{Operand, Operation, TypeId, ValueId};
 
 impl FnCodegen<'_> {
     /// Lower a function: spill parameters into stack slots, then lower each body

@@ -4,9 +4,6 @@ use ariadne::{Color, Config, IndexType, Label, Report, ReportKind, sources};
 
 use super::{Code, Severity, Span, file_source};
 
-// Diagnostic
-// ---------------------------------------------------------------------------
-
 /// The rendered form every diagnostic lowers to, built by the catalog's
 /// `build` closures. `label` ties the message to a position in a source file;
 /// when absent the diagnostic renders as a compact header without a snippet.

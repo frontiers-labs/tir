@@ -1,9 +1,8 @@
 //! Emits global data sections from frontend definitions.
 
-use tir::Context;
-use tir::Operation;
 use tir::builtin::ModuleOp;
 use tir::builtin::ops as b;
+use tir::{Context, Operation};
 
 /// Lower frontend data definitions immediately ahead of the machine backend.
 /// String uses become addresses into `.rodata`; scalar globals become symbols
