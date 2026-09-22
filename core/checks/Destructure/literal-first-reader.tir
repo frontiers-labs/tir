@@ -1,0 +1,31 @@
+// RUN: tir opt --pass destructure --verify %s | filecheck %s
+// RUN: tir opt --pass destructure --verify %s | tir interp -f main --args=2,15 | filecheck --check-prefix=VALUE %s
+
+// The invariant belongs outside the loop, after the preheader computation.
+// Defining it before the multiply would unnecessarily extend its live range.
+
+module {
+  %fn_main = func.func @main(%x: !i32, %limit: !i32) -> !i32 {
+    %constant = constant {value = 5} : !i32
+    %product = muli %x, %x : !i32
+    %result = scf.loop (%i = %product) {
+      %next = addi %i, %constant : !i32
+      %predicate = cmpi %next, %limit {predicate = "slt"} : !i1
+      -> %predicate, %next, %next
+    }
+    func.return %result
+  }
+  module_end
+}
+
+// CHECK: func.func @main(%[[X:[0-9]+]]: !i32, %[[LIMIT:[0-9]+]]: !i32)
+// CHECK-NEXT: %[[PRODUCT:[0-9]+]] = muli %[[X]], %[[X]] : !i32
+// CHECK-NEXT: %[[CONSTANT:[0-9]+]] = constant {value = 5} : !i32
+// CHECK-NEXT: cfg.br ^[[LOOP:bb[0-9]+]](%[[PRODUCT]] : !i32)
+// CHECK-NEXT: ^[[LOOP]](%[[I:[0-9]+]]: !i32):
+// CHECK-NEXT: %[[NEXT:[0-9]+]] = addi %[[I]], %[[CONSTANT]] : !i32
+// CHECK-NEXT: %[[P:[0-9]+]] = cmpi %[[NEXT]], %[[LIMIT]] {predicate = "slt"} : !i1
+// CHECK-NEXT: cfg.cond_br %[[P]], ^[[LOOP]](%[[NEXT]] : !i32), ^[[EXIT:bb[0-9]+]]
+// CHECK-NEXT: ^[[EXIT]]:
+// CHECK-NEXT: func.return %[[NEXT]]
+// VALUE: i32 19

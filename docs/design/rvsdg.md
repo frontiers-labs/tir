@@ -224,7 +224,9 @@ and exit selectors keep their correlation. Recovery stops at computations
 whose execution is still required. Pure literal definitions do not interrupt
 this tracing. FINISH places the surviving literals along paths that dominate
 their uses, stopping at joins so loop invariants are not rematerialized on each
-iteration. A constant replaced under an arm's selection assumption is a local
+iteration. Within a fragment, literals wait until their first reader; a literal
+needed only beyond the terminator follows the fragment's computations.
+A constant replaced under an arm's selection assumption is a local
 fact, not evidence that its replacement is constant on every path. Routes
 carry only dynamic facts; literal values remain in a shared table. A backedge
 forgets facts owned by the loop body and facts whose owner is unknown.

@@ -1261,6 +1261,7 @@ impl Finish<'_> {
             .copied()
             .filter(|op| self.literals.contains(op))
             .collect();
+        let mut placements = vec![Vec::new(); self.fragments.len()];
         for op in literals {
             let results = self.context.get_op(op).results();
             let uses: Vec<_> = local_reads
@@ -1309,17 +1310,10 @@ impl Finish<'_> {
                     node = target;
                 }
             }
-            self.fragments[root.0].ops.retain(|&held| held != op);
-            // A literal retained for later blocks must precede the literals
-            // read by this fragment's terminator, whose test is emitted later.
-            let mut position = if results
+            let local = results
                 .iter()
-                .any(|value| local_reads[node.0].contains(&SsaValue::Definition(*value)))
-            {
-                self.fragments[node.0].ops.len()
-            } else {
-                0
-            };
+                .any(|value| local_reads[node.0].contains(&SsaValue::Definition(*value)));
+            let mut position = self.fragments[node.0].ops.len();
             for (index, &held) in self.fragments[node.0].ops.iter().enumerate() {
                 let reads = values_read(self.context, held);
                 if reads.into_iter().any(|raw| {
@@ -1334,7 +1328,27 @@ impl Finish<'_> {
                     break;
                 }
             }
-            self.fragments[node.0].ops.insert(position, op);
+            placements[node.0].push((position, local, op));
+        }
+        for (fragment, mut placed) in self.fragments.iter_mut().zip(placements) {
+            // At the terminator, keep successor-only literals before the
+            // current test's literals. Equal reader positions retain source
+            // order without extending live ranges across earlier operations.
+            placed.sort_by_key(|&(position, local, _)| (position, local));
+            let mut placed = placed.into_iter().peekable();
+            let original = std::mem::take(&mut fragment.ops);
+            for (index, op) in original.into_iter().enumerate() {
+                while placed
+                    .peek()
+                    .is_some_and(|&(position, _, _)| position == index)
+                {
+                    fragment.ops.push(placed.next().unwrap().2);
+                }
+                if !self.literals.contains(&op) {
+                    fragment.ops.push(op);
+                }
+            }
+            fragment.ops.extend(placed.map(|(_, _, op)| op));
         }
         Ok(())
     }
