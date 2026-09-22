@@ -30,25 +30,22 @@ pub(crate) struct Seeds {
 
 /// Which recovery control outcome a class stands for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum AuxSlot {
-    /// One outcome of a producer-owned recovery definition. The last outcome
-    /// is the default edge and needs no separate instruction.
-    Control {
-        id: ControlId,
-        outcome: usize,
-        inverted: bool,
-    },
+pub(crate) struct ControlSlot {
+    pub(crate) id: ControlId,
+    /// The last outcome is the default edge and needs no separate instruction.
+    pub(crate) outcome: usize,
+    pub(crate) inverted: bool,
 }
 
 /// Recovery controls the cover must select, keyed by the region that
 /// materializes them.
 #[derive(Default)]
 pub(crate) struct RegionControl {
-    pub(crate) aux: HashMap<RegionId, Vec<(OpId, AuxSlot, Id)>>,
+    pub(crate) aux: HashMap<RegionId, Vec<(OpId, ControlSlot, Id)>>,
 }
 
 impl RegionControl {
-    fn record(&mut self, region: RegionId, op: OpId, slot: AuxSlot, class: Id) {
+    fn record(&mut self, region: RegionId, op: OpId, slot: ControlSlot, class: Id) {
         self.aux.entry(region).or_default().push((op, slot, class));
     }
 }
@@ -312,7 +309,7 @@ impl<'a> SemDagBuilder<'a> {
             control.record(
                 definition.scope,
                 anchor,
-                AuxSlot::Control {
+                ControlSlot {
                     id: definition.id,
                     outcome,
                     inverted,

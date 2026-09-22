@@ -122,6 +122,7 @@ mod core {
     mod block_layout;
     mod context;
     mod dependence;
+    mod destructure;
     mod dialects;
     mod edits;
     mod encodings;

@@ -50,7 +50,7 @@ pub use rules::{
 pub use tir::sem::{SaturationLimits, SemEGraph, SemNode, SemPayload, Theory};
 pub use tir_relational::Match as IselMatch;
 
-use builder::{AuxSlot, SemDagBuilder};
+use builder::{ControlSlot, SemDagBuilder};
 use cover::{
     BoundaryDemand, CaptureBindings, FullMatchBindings, PatternNodeBinding, PbqpIselAlternative,
     PbqpIselMatch, build_eclass_cover, completeness_error, prune_dominated_matches,
@@ -521,7 +521,7 @@ struct FunctionSelection {
     /// operation's own binding (see [`entry_facts`]).
     region_facts: HashMap<RegionId, (ValueId, bool)>,
     /// What each region must materialize for a destruction to branch on it.
-    region_aux: HashMap<RegionId, Vec<(OpId, AuxSlot, Id)>>,
+    region_aux: HashMap<RegionId, Vec<(OpId, ControlSlot, Id)>>,
 }
 
 /// A boundary class resolved to concrete operands for a consumer: the proven
@@ -853,7 +853,7 @@ pub struct InstructionSelectPass {
     materialized_tests: HashSet<ControlId>,
     emitted_values: HashMap<ValueId, ValueId>,
     /// Selected recovery controls, filled as their regions commit.
-    region_values: HashMap<(OpId, AuxSlot), AuxEmit>,
+    region_values: HashMap<(OpId, ControlSlot), AuxEmit>,
     /// The instruction a rule put ahead of each tile it emitted, defining a
     /// register the tile reads implicitly.
     preludes: HashMap<OpId, OpId>,
@@ -2179,9 +2179,9 @@ impl InstructionSelectPass {
         fs: &FunctionSelection,
         region: RegionId,
         _op: OpId,
-        slot: AuxSlot,
+        slot: ControlSlot,
     ) -> Option<OpId> {
-        let AuxSlot::Control { id, .. } = slot;
+        let ControlSlot { id, .. } = slot;
         let definition = self.recovery.as_ref()?.definition(id)?;
         let at = match definition.kind {
             ControlKind::Direct => definition.producer,
@@ -2239,7 +2239,7 @@ impl InstructionSelectPass {
         // operands at the old consumer could choose a later equal value that
         // is unavailable where recovery places the branch.
         let mut mm_overlay: HashSet<Id> = HashSet::new();
-        let mut aux_branches: Vec<(OpId, AuxSlot, Option<AuxEmit>)> = Vec::new();
+        let mut aux_branches: Vec<(OpId, ControlSlot, Option<AuxEmit>)> = Vec::new();
         for &(op, slot, class) in fs.region_aux.get(&region).into_iter().flatten() {
             let class = fs.egraph.find(class);
             // The scope this region solves under may already decide the test —
@@ -2254,7 +2254,7 @@ impl InstructionSelectPass {
                 .get(&class)
                 .map(Vec::as_slice)
                 .unwrap_or(&[]);
-            let materialized = matches!(slot, AuxSlot::Control { id, .. } if self.materialized_tests.contains(&id));
+            let materialized = self.materialized_tests.contains(&slot.id);
             let fused = (!materialized)
                 .then(|| {
                     self.best_guard_branch(
@@ -2543,7 +2543,7 @@ impl InstructionSelectPass {
             })
             .collect();
 
-        let aux_class: HashMap<(OpId, AuxSlot), Id> = fs
+        let aux_class: HashMap<(OpId, ControlSlot), Id> = fs
             .region_aux
             .get(&region)
             .into_iter()
@@ -2960,7 +2960,7 @@ impl InstructionSelectPass {
 fn fused_control_classes(
     fs: &FunctionSelection,
     region: RegionId,
-    aux_branches: &[(OpId, AuxSlot, Option<AuxEmit>)],
+    aux_branches: &[(OpId, ControlSlot, Option<AuxEmit>)],
     recovery: Option<&RecoveryPlan>,
 ) -> HashSet<Id> {
     let mut fused = HashSet::new();
@@ -2968,7 +2968,7 @@ fn fused_control_classes(
         if !matches!(selected, Some(AuxEmit::Branch(GuardBranch::Fused { .. }))) {
             continue;
         }
-        let AuxSlot::Control { id, .. } = slot;
+        let ControlSlot { id, .. } = slot;
         let Some(definition) = recovery.and_then(|plan| plan.definition(*id)) else {
             continue;
         };

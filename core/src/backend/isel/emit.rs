@@ -5,7 +5,7 @@ use tir_relational::ClassId as Id;
 
 use super::{
     FunctionSelection, RuleMatch,
-    builder::AuxSlot,
+    builder::ControlSlot,
     cover::{BoundaryDemand, PbqpIselMatch},
     node::chase_low_extract,
 };
@@ -20,7 +20,7 @@ pub(crate) struct RegionPlan {
     pub(crate) value_remaps: Vec<(ValueId, ValueId)>,
     /// What this region leaves a destruction to read: the branch each test
     /// selected into.
-    pub(crate) aux: Vec<(OpId, AuxSlot, AuxEmit)>,
+    pub(crate) aux: Vec<(OpId, ControlSlot, AuxEmit)>,
 }
 
 /// What a destruction emits for one of a structured operation's tests.

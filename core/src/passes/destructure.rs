@@ -100,20 +100,15 @@ pub trait Edges {
     #[allow(clippy::too_many_arguments)]
     fn branch_control(
         &self,
-        control: &ControlDefinition,
-        outcome: usize,
-        predicate: ValueId,
-        bindings: &[ValueBinding],
+        _control: &ControlDefinition,
+        _outcome: usize,
+        _predicate: ValueId,
+        _bindings: &[ValueBinding],
         _block: BlockId,
         _taken: &Edge,
         _fallthrough: &Edge,
         _mint: &mut dyn FnMut() -> BlockId,
     ) -> Result<(), PassError> {
-        let _ = bindings;
-        let _ = predicate;
-        let _ = outcome;
-        let _ = control;
-        let _ = predicate;
         Err(PassError::InvalidRuleSet(
             "this edge adapter does not implement producer-owned recovery control".into(),
         ))
@@ -556,7 +551,7 @@ struct Lowering<'a> {
 
 /// Operations in `region` needed by `roots`, following the dependencies each
 /// caller uses for its form of recovery.
-pub(super) fn demand_cone(
+pub(super) fn cone(
     context: &Context,
     region: RegionId,
     roots: &[ValueId],
@@ -672,7 +667,7 @@ impl Lowering<'_> {
     /// the results are available in.
     fn region(&mut self, region: RegionId, block: BlockId) -> Result<BlockId, PassError> {
         let results = self.context.get_region(region).results();
-        let demanded = self.cone(region, &results);
+        let demanded = cone(self.context, region, &results, |op| self.inputs(op));
         let order = self.order(region)?;
         self.require_effects_demanded(&order, &demanded)?;
         self.ops(region, &order, &demanded, block)
@@ -719,11 +714,6 @@ impl Lowering<'_> {
         self.sink_leaves(&mut order);
         abut_implicit_inputs(self.edges, &mut order);
         Ok(order)
-    }
-
-    /// The operations of `region` that computing `roots` demands.
-    fn cone(&self, region: RegionId, roots: &[ValueId]) -> HashSet<OpId> {
-        demand_cone(self.context, region, roots, |op| self.inputs(op))
     }
 
     /// Refuse a region whose cones leave an effect out. [`Self::ops`] moves
@@ -896,7 +886,7 @@ impl Lowering<'_> {
             let arm = regions[index];
             let handle = self.context.get_region(arm);
             let results = handle.results();
-            if self.cone(arm, &results).is_empty() {
+            if cone(self.context, arm, &results, |op| self.inputs(op)).is_empty() {
                 let ports: Vec<ValueId> = handle.ports().iter().map(|port| port.id()).collect();
                 let forwarded: Vec<ValueId> = results
                     .iter()
@@ -955,9 +945,10 @@ impl Lowering<'_> {
 
         let mut tested = vec![theta.predicate()];
         tested.extend(self.edges.test_reads(op, Test::Repeat));
-        let predicate = self.cone(body, &tested);
-        let continue_cone = self.cone(body, &continue_values);
-        let exit_cone = self.cone(body, &exit_values);
+        let demand = |roots: &[ValueId]| cone(self.context, body, roots, |op| self.inputs(op));
+        let predicate = demand(&tested);
+        let continue_cone = demand(&continue_values);
+        let exit_cone = demand(&exit_values);
         let header_ops: HashSet<OpId> = predicate
             .iter()
             .copied()

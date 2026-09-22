@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 
 use tir::{BlockId, Context, OpHandle, OpId, PassError, ValueId};
 
-use super::builder::AuxSlot;
+use super::builder::ControlSlot;
 use super::emit::{AuxEmit, GuardBranch};
 use super::{BranchEmitters, Rule, RuleKind};
 use crate::passes::destructure::{
@@ -24,12 +24,12 @@ pub(crate) struct SelectedControl {
 /// Bind semantic control identities before recovery changes their consumers.
 pub(crate) fn bind_controls(
     recovery: &RecoveryPlan,
-    selected: &HashMap<(OpId, AuxSlot), AuxEmit>,
+    selected: &HashMap<(OpId, ControlSlot), AuxEmit>,
 ) -> Result<HashMap<(ControlId, usize), SelectedControl>, PassError> {
     let controls: HashMap<_, _> = selected
         .iter()
         .map(|((_, slot), emit)| {
-            let AuxSlot::Control {
+            let ControlSlot {
                 id,
                 outcome,
                 inverted,

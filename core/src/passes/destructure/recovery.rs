@@ -580,10 +580,6 @@ impl Prepare<'_> {
         }
     }
 
-    fn cone(&self, region: RegionId, roots: &[ValueId]) -> HashSet<OpId> {
-        super::demand_cone(self.context, region, roots, |op| self.inputs(op))
-    }
-
     fn require_effects(&self, order: &[OpId], placed: &HashSet<OpId>) -> Result<(), PassError> {
         for &op in order {
             if placed.contains(&op) || self.context.get_op(op).state_results().is_empty() {
@@ -627,7 +623,7 @@ impl Prepare<'_> {
         let order = self.order(region)?;
         let mut roots = handle.results();
         roots.extend(self.definition_reads(domain));
-        let demanded = self.cone(region, &roots);
+        let demanded = super::cone(self.context, region, &roots, |op| self.inputs(op));
         self.require_effects(&order, &demanded)?;
         let ops = order
             .into_iter()
@@ -754,7 +750,7 @@ impl Prepare<'_> {
                     .ok_or_else(|| decline(&op, "has no head demand domain"))?,
             ),
         );
-        let predicate = self.cone(body, &tested);
+        let predicate = super::cone(self.context, body, &tested, |op| self.inputs(op));
         let continue_domain = self
             .recovery
             .theta_domain(op_id, DemandDomainKind::ThetaContinue)
@@ -767,8 +763,8 @@ impl Prepare<'_> {
         continue_roots.extend(self.definition_reads(continue_domain));
         let mut exit_roots = exit_values.clone();
         exit_roots.extend(self.definition_reads(exit_domain));
-        let continue_cone = self.cone(body, &continue_roots);
-        let exit_cone = self.cone(body, &exit_roots);
+        let continue_cone = super::cone(self.context, body, &continue_roots, |op| self.inputs(op));
+        let exit_cone = super::cone(self.context, body, &exit_roots, |op| self.inputs(op));
         let head_ops: HashSet<OpId> = predicate
             .iter()
             .copied()
@@ -1718,8 +1714,14 @@ impl PlanBuilder<'_> {
             let results = self.context.get_region(body).results();
             let continue_values = &results[binding.continue_.clone()];
             let exit_values = &results[binding.exit.clone()];
-            let continue_cone = self.cone(body, continue_values);
-            let exit_cone = self.cone(body, exit_values);
+            let inputs = |op| {
+                values_read(self.context, op)
+                    .into_iter()
+                    .filter_map(|value| self.context.get_value(value).defining_op())
+                    .collect()
+            };
+            let continue_cone = super::cone(self.context, body, continue_values, inputs);
+            let exit_cone = super::cone(self.context, body, exit_values, inputs);
             let head_domain = self
                 .plan
                 .theta_domains
@@ -2085,30 +2087,19 @@ impl PlanBuilder<'_> {
                 .context
                 .region_of_op(producer)
                 .unwrap_or(consumer_scope);
-            let incompatible_partition = self.plan.controls.iter().any(|definition| {
+            let existing = self.plan.controls.iter().find(|definition| {
                 definition.kind == ControlKind::Direct
                     && definition.producer == Some(producer)
                     && definition.source_predicate == source_predicate
                     && definition.domain == domain
-                    && definition.outcomes != outcomes
             });
-            if incompatible_partition {
-                direct_ids.clear();
-                break;
-            }
-            let direct_id = self
-                .plan
-                .controls
-                .iter()
-                .find(|definition| {
-                    definition.kind == ControlKind::Direct
-                        && definition.producer == Some(producer)
-                        && definition.source_predicate == source_predicate
-                        && definition.domain == domain
-                        && definition.outcomes == outcomes
-                })
-                .map(|definition| definition.id)
-                .unwrap_or_else(|| {
+            let direct_id = match existing {
+                Some(definition) if definition.outcomes != outcomes => {
+                    direct_ids.clear();
+                    break;
+                }
+                Some(definition) => definition.id,
+                None => {
                     let id = ControlId(self.plan.controls.len() as u32);
                     self.plan.controls.push(ControlDefinition {
                         id,
@@ -2121,7 +2112,8 @@ impl PlanBuilder<'_> {
                         outcomes: outcomes.clone(),
                     });
                     id
-                });
+                }
+            };
             direct_ids.push(direct_id);
         }
         direct_ids.sort();
@@ -2214,9 +2206,15 @@ impl PlanBuilder<'_> {
         let body = loop_.body();
         let binding = loop_.binding();
         let results = self.context.get_region(body).results();
-        let predicate = self.cone(body, &[loop_.predicate()]);
-        let continue_cone = self.cone(body, &results[binding.continue_]);
-        let exit_cone = self.cone(body, &results[binding.exit]);
+        let inputs = |op| {
+            values_read(self.context, op)
+                .into_iter()
+                .filter_map(|value| self.context.get_value(value).defining_op())
+                .collect()
+        };
+        let predicate = super::cone(self.context, body, &[loop_.predicate()], inputs);
+        let continue_cone = super::cone(self.context, body, &results[binding.continue_], inputs);
+        let exit_cone = super::cone(self.context, body, &results[binding.exit], inputs);
         let shared: HashSet<OpId> = predicate
             .into_iter()
             .chain(continue_cone.intersection(&exit_cone).copied())
@@ -2233,14 +2231,5 @@ impl PlanBuilder<'_> {
             };
             self.plan.op_domains.insert(op, domain);
         }
-    }
-
-    fn cone(&self, region: RegionId, roots: &[ValueId]) -> HashSet<OpId> {
-        super::demand_cone(self.context, region, roots, |op| {
-            values_read(self.context, op)
-                .into_iter()
-                .filter_map(|value| self.context.get_value(value).defining_op())
-                .collect()
-        })
     }
 }

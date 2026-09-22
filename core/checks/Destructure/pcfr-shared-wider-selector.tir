@@ -14,8 +14,9 @@
 // RUN: tir opt --pass destructure --verify %s | tir interp -f main --args=1,9 | filecheck --check-prefix=VALUE30 %s
 
 // Explicit Gamma ports forward one producer into mutually exclusive consumers
-// with different arities. Each port has one control use, so direct recovery is
-// eligible, but the two-arm default cannot establish the three-arm default.
+// with different arities. Recovery must preserve both consumers' values.
+// The unit test checks their partition compatibility before placement can
+// independently demote the shared producer to local comparisons.
 module {
   %fn_main = func.func @main(%branch: !i1, %input: !i32) -> !i32 {
     %zero = constant {value = 0} : !i32
