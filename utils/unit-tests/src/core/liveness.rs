@@ -279,6 +279,7 @@ fn taken_edge_keeps_parameter_live_across_fallthrough_copy() {
     br(&context, &taken, header.id());
 
     let liveness = analyze(&context, &[entry.id(), header.id(), taken.id()]);
+    assert!(!liveness.live_in[&entry.id()].contains(&a_id.number()));
     assert!(
         liveness.interferes(p.number(), t.number()),
         "a parameter read on the taken edge is live across a def ahead of the branch",

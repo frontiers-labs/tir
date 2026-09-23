@@ -259,6 +259,10 @@ fn solve_live_sets(
             let mut in_set: BTreeSet<u32> = live.into_iter().collect();
             if Some(info.block) != entry && has_pred.contains(&info.block) {
                 in_set.extend(info.params.iter().copied());
+            } else {
+                for param in &info.params {
+                    in_set.remove(param);
+                }
             }
             if in_set != live_in[i] {
                 live_in[i] = in_set;
