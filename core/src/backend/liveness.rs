@@ -4,16 +4,23 @@
 //! (see [`crate::analysis::defuse`]); a virtual register is a value, named here
 //! by its value number.
 //!
-//! The analysis computes, per block, the standard backward live-in/live-out sets,
-//! then replays a backward scan to derive the interference the register allocator
+//! The analysis computes, per block, the standard backward live-in sets, then
+//! replays a backward scan to derive the interference the register allocator
 //! consumes: which virtual registers are simultaneously live (so must get distinct
 //! physical registers) and which physical registers each virtual register is live
 //! across (so must avoid — e.g. a call's caller-saved clobbers).
+//!
+//! A block may hold several terminators: a conditional branch followed by the
+//! fallthrough `vbr`, with the block-argument copies of the fallthrough edge
+//! between them. Each terminator's successors are therefore live at that
+//! terminator, not at the block's end — otherwise a copy redefining a
+//! parameter for the fallthrough would hide the parameter's liveness along the
+//! conditional edge, and its register could be reused ahead of the branch.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use tir::backend::regalloc::RegClassId;
-use tir::{BlockId, Context, OpId, ValueId};
+use tir::{BlockId, Context, OpId, Terminator, ValueId};
 
 pub use crate::analysis::defuse::{OpRegs, PhysReg, execution_regs, op_regs};
 
@@ -34,6 +41,8 @@ struct OpInfo {
     /// A copy the pre-allocation lowerings marked coalescable: its ends name the
     /// same value at that point, so the def alone must not keep them apart.
     coalescable_copy: bool,
+    /// Control-flow successors of this op when it is a terminator.
+    successors: Vec<BlockId>,
 }
 
 struct BlockInfo {
@@ -41,10 +50,6 @@ struct BlockInfo {
     /// Block-argument value ids — defined at block entry.
     params: Vec<u32>,
     ops: Vec<OpInfo>,
-    /// Upward-exposed uses: read before any def within the block.
-    exposed_uses: BTreeSet<u32>,
-    /// Every vreg defined somewhere in the block (params included).
-    defs: BTreeSet<u32>,
 }
 
 /// The result of liveness analysis: the interference relation the allocator needs.
@@ -92,22 +97,23 @@ fn ordered(a: u32, b: u32) -> (u32, u32) {
     (a.min(b), a.max(b))
 }
 
-/// Analyze liveness over `blocks` (in program order), using `successors` for the
-/// inter-block dataflow: `successors(b)` returns the control-flow successor blocks
-/// of `b`. A value defined in one block and used in another is live across the
-/// edge between them, so the backward fixpoint carries it into every block on the
-/// path — giving it the interference edges that keep it from being clobbered.
-pub fn analyze(
-    context: &Context,
-    blocks: &[BlockId],
-    successors: impl Fn(BlockId) -> Vec<BlockId>,
-) -> Liveness {
+/// Analyze liveness over `blocks` (in program order). The inter-block dataflow
+/// follows every [`Terminator`] a block contains. A value defined in one block
+/// and used in another is live across the edge between them, so the backward
+/// fixpoint carries it into every block on the path — giving it the
+/// interference edges that keep it from being clobbered.
+pub fn analyze(context: &Context, blocks: &[BlockId]) -> Liveness {
     let mut result = Liveness::default();
     let mut value_classes: HashMap<ValueId, Option<RegClassId>> = HashMap::new();
 
     let block_infos = collect_block_infos(context, blocks, &mut result, &mut value_classes);
-    let (live_in, live_out) = solve_live_sets(&block_infos, blocks.first().copied(), &successors);
-    build_interference(&mut result, &block_infos, &live_in, &live_out);
+    let index: HashMap<BlockId, usize> = block_infos
+        .iter()
+        .enumerate()
+        .map(|(i, b)| (b.block, i))
+        .collect();
+    let live_in = solve_live_sets(&block_infos, &index, blocks.first().copied());
+    build_interference(&mut result, &block_infos, &index, &live_in);
 
     result
 }
@@ -128,29 +134,16 @@ fn collect_block_infos(
             .map(|v| v.id().number())
             .collect();
 
-        let mut ops = Vec::new();
-        let mut exposed_uses = BTreeSet::new();
-        let mut defined: BTreeSet<u32> = params.iter().copied().collect();
-        let mut block_defs: BTreeSet<u32> = params.iter().copied().collect();
-
-        for op_id in block.op_ids() {
-            ops.push(collect_op_info(
-                context,
-                op_id,
-                result,
-                value_classes,
-                &mut exposed_uses,
-                &mut defined,
-                &mut block_defs,
-            ));
-        }
+        let ops = block
+            .op_ids()
+            .iter()
+            .map(|&op_id| collect_op_info(context, op_id, result, value_classes))
+            .collect();
 
         block_infos.push(BlockInfo {
             block: block_id,
             params,
             ops,
-            exposed_uses,
-            defs: block_defs,
         });
     }
 
@@ -176,9 +169,6 @@ fn collect_op_info(
     op_id: OpId,
     result: &mut Liveness,
     value_classes: &mut HashMap<ValueId, Option<RegClassId>>,
-    exposed_uses: &mut BTreeSet<u32>,
-    defined: &mut BTreeSet<u32>,
-    block_defs: &mut BTreeSet<u32>,
 ) -> OpInfo {
     let op = context.get_op(op_id);
     let slots = crate::backend::reg_slots(&op);
@@ -201,9 +191,6 @@ fn collect_op_info(
         );
         result.vregs.insert(id);
         use_vregs.push(id);
-        if !defined.contains(&id) {
-            exposed_uses.insert(id);
-        }
     }
     for value in regs.defs.iter().filter(|v| context.has_value(**v)) {
         let id = value.number();
@@ -216,8 +203,6 @@ fn collect_op_info(
         );
         result.vregs.insert(id);
         def_vregs.push(id);
-        defined.insert(id);
-        block_defs.insert(id);
     }
     phys_uses.extend(regs.phys_uses.iter().copied());
     clobbers.extend(regs.phys_defs.iter().copied());
@@ -230,21 +215,21 @@ fn collect_op_info(
         coalescable_copy: op
             .attr(crate::backend::prealloc::COALESCABLE_COPY_ATTR)
             .is_some(),
+        successors: op
+            .as_interface::<dyn Terminator>()
+            .map(|term| term.successors())
+            .unwrap_or_default(),
     }
 }
 
-/// Backward dataflow for live-in / live-out to a fixpoint.
+/// Backward dataflow for live-in to a fixpoint. Every terminator joins its
+/// successors' live-in where it stands, so a value defined later in the block
+/// stays live along an earlier conditional edge.
 fn solve_live_sets(
     block_infos: &[BlockInfo],
+    index: &HashMap<BlockId, usize>,
     entry: Option<BlockId>,
-    successors: &impl Fn(BlockId) -> Vec<BlockId>,
-) -> (Vec<BTreeSet<u32>>, Vec<BTreeSet<u32>>) {
-    let index: HashMap<BlockId, usize> = block_infos
-        .iter()
-        .enumerate()
-        .map(|(i, b)| (b.block, i))
-        .collect();
-
+) -> Vec<BTreeSet<u32>> {
     // Blocks reached by a control-flow edge. A non-entry block's parameters are
     // defined by its predecessors (each forwards them through the copies that
     // `lower_block_args` inserts before the branch), so they are live on entry to
@@ -252,39 +237,28 @@ fn solve_live_sets(
     // those copies would look dead and their registers could be reused. The entry
     // block's parameters are the function arguments: defined by the ABI, pinned by
     // pre-coloring, and never live-in.
-    let mut has_pred: HashSet<BlockId> = HashSet::new();
-    for info in block_infos {
-        for succ in successors(info.block) {
-            has_pred.insert(succ);
-        }
-    }
+    let has_pred: HashSet<BlockId> = block_infos
+        .iter()
+        .flat_map(|info| info.ops.iter())
+        .flat_map(|op| op.successors.iter().copied())
+        .collect();
     let mut live_in: Vec<BTreeSet<u32>> = vec![BTreeSet::new(); block_infos.len()];
-    let mut live_out: Vec<BTreeSet<u32>> = vec![BTreeSet::new(); block_infos.len()];
 
     let mut changed = true;
     while changed {
         changed = false;
         for (i, info) in block_infos.iter().enumerate().rev() {
-            let mut out = BTreeSet::new();
-            for succ in successors(info.block) {
-                if let Some(&j) = index.get(&succ) {
-                    out.extend(live_in[j].iter().copied());
+            let mut live = HashSet::new();
+            for op in info.ops.iter().rev() {
+                join_successors(op, &live_in, index, &mut live);
+                for &d in &op.def_vregs {
+                    live.remove(&d);
                 }
+                live.extend(op.use_vregs.iter().copied());
             }
-            // live_in = params ∪ exposed_uses ∪ (live_out − defs), where params
-            // contribute only for a non-entry block reached by an edge.
-            let mut in_set = info.exposed_uses.clone();
-            for v in &out {
-                if !info.defs.contains(v) {
-                    in_set.insert(*v);
-                }
-            }
+            let mut in_set: BTreeSet<u32> = live.into_iter().collect();
             if Some(info.block) != entry && has_pred.contains(&info.block) {
                 in_set.extend(info.params.iter().copied());
-            }
-            if out != live_out[i] {
-                live_out[i] = out;
-                changed = true;
             }
             if in_set != live_in[i] {
                 live_in[i] = in_set;
@@ -293,20 +267,34 @@ fn solve_live_sets(
         }
     }
 
-    (live_in, live_out)
+    live_in
+}
+
+/// What is live right after `op`: whatever its successors read on entry.
+fn join_successors(
+    op: &OpInfo,
+    live_in: &[BTreeSet<u32>],
+    index: &HashMap<BlockId, usize>,
+    live: &mut HashSet<u32>,
+) {
+    for succ in &op.successors {
+        if let Some(&j) = index.get(succ) {
+            live.extend(live_in[j].iter().copied());
+        }
+    }
 }
 
 /// Backward scan within each block to build the interference relation.
 fn build_interference(
     result: &mut Liveness,
     block_infos: &[BlockInfo],
+    index: &HashMap<BlockId, usize>,
     live_in: &[BTreeSet<u32>],
-    live_out: &[BTreeSet<u32>],
 ) {
     for (i, info) in block_infos.iter().enumerate() {
         result.live_in.insert(info.block, live_in[i].clone());
 
-        let mut live: HashSet<u32> = live_out[i].iter().copied().collect();
+        let mut live: HashSet<u32> = HashSet::new();
         // Physical registers read later in the block and not yet re-defined, so
         // still live across the current op. Seeded empty: fixed-register def/use
         // pairs (e.g. a shift count moved into `cl` right before the shift) are
@@ -315,6 +303,7 @@ fn build_interference(
         let mut live_phys: HashSet<PhysReg> = HashSet::new();
 
         for op in info.ops.iter().rev() {
+            join_successors(op, live_in, index, &mut live);
             scan_op(result, op, &mut live, &mut live_phys);
         }
 

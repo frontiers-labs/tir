@@ -1,0 +1,29 @@
+// RUN: tir mc --march=x86_64 --stage=isel %s | filecheck %s
+// RUN: tir mc --march=x86_64 --stage=isel --shuffle-machine-order %s | filecheck %s
+// RUN: env TIR_SHUFFLE_SEED=1 tir mc --march=x86_64 --stage=isel --shuffle-machine-order %s | filecheck %s
+// RUN: env TIR_SHUFFLE_SEED=2 tir mc --march=x86_64 --stage=isel --shuffle-machine-order %s | filecheck %s
+// RUN: env TIR_SHUFFLE_SEED=3 tir mc --march=x86_64 --stage=isel --shuffle-machine-order %s | filecheck %s
+// RUN: env TIR_SHUFFLE_SEED=5 tir mc --march=x86_64 --stage=isel --shuffle-machine-order %s | filecheck %s
+
+// `neg` writes the flags, so its behavior must say so: otherwise the
+// dependence graph holds no edge between it and a compare/`setcc` pair, and
+// another linearization of the block may read the negation's flags instead of
+// the compare's. The negations share no value with the pair here.
+
+module {
+  %fn_f = func.func @f(%0: !i64, %1: !i64, %2: !i32, %3: !i32) -> !i64 {
+    %4 = cmpi %0, %1 {predicate = "slt"} : !i1
+    %zero = constant {value = 0} : !i32
+    %5 = subi %zero, %2 : !i32
+    %6 = subi %zero, %3 : !i32
+    %7 = extui %4 : !i64
+    %8 = addi %5, %6 : !i32
+    %9 = extsi %8 : !i64
+    %10 = addi %9, %7 : !i64
+    func.return %10
+  }
+  module_end
+}
+
+// CHECK: x86_64.cmp {dst = %{{[0-9]+}}:GPR, src = %{{[0-9]+}}:GPR}
+// CHECK-NEXT: x86_64.setl {dst = %{{[0-9]+}}:GPR8}

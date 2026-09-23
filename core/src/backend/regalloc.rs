@@ -751,9 +751,7 @@ impl Pass for RegisterAllocationPass {
         // would write names a value this erasure is about to retire.
         erase_stack_allocas(context, &stack_allocas)?;
         let assignment = loop {
-            let liveness = liveness::analyze(context, &blocks, |b| {
-                scan.successors.get(&b).cloned().unwrap_or_default()
-            });
+            let liveness = liveness::analyze(context, &blocks);
             // Definitions that count nothing but an immediate are free to
             // spill: spilling one costs a replay per use, not a frame slot,
             // so the solver prices them the cheapest possible way out.
@@ -1547,8 +1545,8 @@ struct ScannedAlloca {
 /// - the stack allocations, which the frame plan then places;
 /// - the class each value is first named through, for a value whose own type
 ///   does not name one (an `alloca` address);
-/// - the control-flow successors of each block, for liveness's inter-block
-///   dataflow. A machine block may hold several branch-shaped ops — a mid-block
+/// - the control-flow successors of each block, for the loop nesting that
+///   prices spills. A machine block may hold several branch-shaped ops — a mid-block
 ///   conditional jump for the taken edge plus a trailing virtual branch for the
 ///   fallthrough — so a block's successors are the union of
 ///   `Terminator::successors` over every op it contains, not just its last op's.

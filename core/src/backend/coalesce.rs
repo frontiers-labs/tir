@@ -20,7 +20,6 @@
 
 use std::collections::HashSet;
 
-use tir::Terminator;
 use tir::backend::regalloc::copy_endpoints;
 use tir::{AnalysisManager, BlockId, Context, OperationRef, Pass, PassError, PassTarget, ValueId};
 
@@ -58,7 +57,7 @@ impl Pass for CoalescePass {
         let blocks = symbol_body_blocks(context, op.op());
         loop {
             let pinned = pinned_vregs(context, &blocks, op.op());
-            let liveness = liveness::analyze(context, &blocks, |b| successors(context, &blocks, b));
+            let liveness = liveness::analyze(context, &blocks);
 
             let mut merged = false;
             'blocks: for &block_id in &blocks {
@@ -228,19 +227,4 @@ fn pinned_vregs(context: &Context, blocks: &[BlockId], symbol: &tir::OpHandle) -
         pinned.insert(value.number());
     }
     pinned
-}
-
-fn successors(context: &Context, _blocks: &[BlockId], block: BlockId) -> Vec<BlockId> {
-    let mut result = Vec::new();
-    for op_id in context.get_block(block).op_ids() {
-        let op = context.get_op(op_id);
-        if let Some(term) = op.as_interface::<dyn Terminator>() {
-            for succ in term.successors() {
-                if !result.contains(&succ) {
-                    result.push(succ);
-                }
-            }
-        }
-    }
-    result
 }

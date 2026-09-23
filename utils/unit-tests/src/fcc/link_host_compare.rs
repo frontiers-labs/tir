@@ -515,6 +515,10 @@ int main(void) { if (read() == 61) return 0; return 1; }
 
 host_tests! {
     assert_fcc_matches_host_at_optimization_levels:
+    /// A loop whose taken branch reads the header's counter while the
+    /// fallthrough backedge redefines it: the counter must stay live across the
+    /// address materialized between the two.
+    scalar_loop_argmax_matches_host_compiler => (include_str!("corpus/scalar/loop_argmax.c"));
     floating_negation_preserves_ieee_sign => (r#"int main(void) {
     volatile double positive = 0.0;
     double runtime_negative = -positive;

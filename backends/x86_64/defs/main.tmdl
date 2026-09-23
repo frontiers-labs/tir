@@ -846,6 +846,26 @@ macro test_flags {
     };
 }
 
+// `neg` flags: those of `0 - dst`, with CF set unless the operand is zero.
+macro neg_flags {
+    ( { $($width:tt)* }, { $($msb:tt)* } ) => {
+        EFLAGS::cf = if dst == zext(0b0, $($width)*) {
+            zext(0b0, 1)
+        } else {
+            zext(0b1, 1)
+        };
+        EFLAGS::zf = if dst == zext(0b0, $($width)*) {
+            zext(0b1, 1)
+        } else {
+            zext(0b0, 1)
+        };
+        EFLAGS::sf = extract(zext(0b0, $($width)*) - dst, $($msb)*, $($msb)*);
+        EFLAGS::of = extract(dst & (zext(0b0, $($width)*) - dst), $($msb)*, $($msb)*);
+        EFLAGS::af = extract(dst ^ (zext(0b0, $($width)*) - dst), 4, 4);
+        EFLAGS::pf = parity_flag(zext(0b0, $($width)*) - dst);
+    };
+}
+
 // Status flags an instruction leaves undefined on hardware. Written all the
 // same, so the dependence graph orders the instruction against the compare/jcc
 // pairs around it; the value is not architectural and nothing selects on it,
