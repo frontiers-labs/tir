@@ -178,24 +178,39 @@ jobs:
             lscpu | sed -n '/Model name/p'
           } > benchmark-environment.txt
           echo "digest=$(sha256sum benchmark-environment.txt | cut -d ' ' -f1)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v6
+        with:
+          path: target/bench-sources
+          key: coremark-source-1f483d5b8316753a742cbf5590caf5bd0a4e4777
       # Nightly runs use trusted default-branch baselines. A changed harness,
       # workload or toolchain starts a new baseline instead of mixing contracts.
       - uses: actions/cache/restore@v6
         with:
-          path: benchmark-baseline.json
-          key: bench-v1-${{ steps.environment.outputs.digest }}-${{ hashFiles('Cargo.lock', 'benchmarks/programs/**', 'utils/bench/**') }}-${{ github.run_id }}
-          restore-keys: bench-v1-${{ steps.environment.outputs.digest }}-${{ hashFiles('Cargo.lock', 'benchmarks/programs/**', 'utils/bench/**') }}-
+          path: |
+            benchmark-programs-baseline.json
+            benchmark-functions-baseline.json
+          key: bench-v2-${{ steps.environment.outputs.digest }}-${{ hashFiles('.github/workflows/nightly.yaml', 'Cargo.toml', 'Cargo.lock', 'utils/bench/**', 'benchmarks/programs/**', 'utils/pbqp/benches/**') }}-${{ github.run_id }}
+          restore-keys: bench-v2-${{ steps.environment.outputs.digest }}-${{ hashFiles('.github/workflows/nightly.yaml', 'Cargo.toml', 'Cargo.lock', 'utils/bench/**', 'benchmarks/programs/**', 'utils/pbqp/benches/**') }}-
       # Shared runners gate fixed-work instruction counts. Output validation
       # remains outside profiling; native time needs a dedicated runner.
       - shell: bash
         run: |
           baseline=()
-          if [ -f benchmark-baseline.json ]; then
-            baseline=(--baseline "$PWD/benchmark-baseline.json")
+          if [ -f benchmark-programs-baseline.json ]; then
+            baseline=(--baseline "$PWD/benchmark-programs-baseline.json")
           fi
           cargo bench --locked -p fcc --bench programs -- \
-            --engine cachegrind --phase compile --filter 'fcc/dhrystone/*/O2/*' \
-            --compiler fcc --level O2 --min-cases 2 --output "$PWD/bench-results" "${baseline[@]}"
+            --engine cachegrind --phase compile --filter '{fcc/dhrystone,fcc/coremark}/*/O2/compile/*' \
+            --compiler fcc --level O2 --min-cases 8 --output "$PWD/bench-results/programs" "${baseline[@]}"
+      - shell: bash
+        run: |
+          baseline=()
+          if [ -f benchmark-functions-baseline.json ]; then
+            baseline=(--baseline "$PWD/benchmark-functions-baseline.json")
+          fi
+          cargo bench --locked -p tir-pbqp --bench pbqp --features tir-bench/cachegrind -- \
+            --engine cachegrind --filter dense_search/16 --iterations 1 --min-cases 1 \
+            --output "$PWD/bench-results/functions" "${baseline[@]}"
       - uses: actions/upload-artifact@v7
         if: always()
         with:
@@ -203,11 +218,18 @@ jobs:
           path: |
             bench-results
             benchmark-environment.txt
-      - run: cp bench-results/*/results.json benchmark-baseline.json
+      - shell: bash
+        run: |
+          cp bench-results/programs/*/results.json benchmark-programs-baseline.json
+          cp bench-results/functions/*/results.json benchmark-functions-baseline.json
+          jq -e '.status == "complete"' benchmark-programs-baseline.json >/dev/null
+          jq -e '.status == "complete"' benchmark-functions-baseline.json >/dev/null
       - uses: actions/cache/save@v6
         with:
-          path: benchmark-baseline.json
-          key: bench-v1-${{ steps.environment.outputs.digest }}-${{ hashFiles('Cargo.lock', 'benchmarks/programs/**', 'utils/bench/**') }}-${{ github.run_id }}
+          path: |
+            benchmark-programs-baseline.json
+            benchmark-functions-baseline.json
+          key: bench-v2-${{ steps.environment.outputs.digest }}-${{ hashFiles('.github/workflows/nightly.yaml', 'Cargo.toml', 'Cargo.lock', 'utils/bench/**', 'benchmarks/programs/**', 'utils/pbqp/benches/**') }}-${{ github.run_id }}
 
   libfuzzer:
     # Only for the xtask binary, which reads the records embedded in open

@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command as StdCommand;
@@ -475,7 +476,9 @@ impl PreparedLevel<'_> {
             "gcc" => "gcc",
             _ => "clang",
         };
-        metadata["reference_linker"] = reference_tool(linker, timeout)?;
+        // FCC is the direct link driver and delegates system linking to cc.
+        metadata["link_driver"] = json!(if compiler == "fcc" { "fcc" } else { linker });
+        metadata["system_linker_driver"] = reference_tool(linker, timeout)?;
         for (group, run_group) in groups.run.iter_mut().enumerate() {
             if program.separate && !selected_indices.contains(&group) {
                 continue;
@@ -546,10 +549,16 @@ impl PreparedLevel<'_> {
                 let id = format!("{base}/compile/{}", source.display());
                 if compile_enabled && suite.matches(&id) {
                     let validation = Arc::clone(&validation);
+                    let object = objects[index].clone();
+                    let validated = MemoizedValidation::new(object_digest(&object)?);
+                    let trace_children = !matches!(compiler, "fcc" | "tir");
                     groups.compile[index].push(ProcessCase {
                         id,
-                        command: recipes[index].measured(),
-                        verify: Some(Box::new(move |_| validate_program(&validation))),
+                        command: recipes[index].measured().trace_children(trace_children),
+                        verify: Some(Box::new(move |_| {
+                            validated
+                                .verify(&object_digest(&object)?, || validate_program(&validation))
+                        })),
                         metadata: metadata.clone(),
                         gate: matches!(compiler, "fcc" | "tir"),
                     });
@@ -558,6 +567,36 @@ impl PreparedLevel<'_> {
         }
         Ok(())
     }
+}
+
+/// Cache only the last output whose full program validation succeeded.
+struct MemoizedValidation {
+    validated_hash: RefCell<String>,
+}
+
+impl MemoizedValidation {
+    fn new(validated_hash: String) -> Self {
+        Self {
+            validated_hash: RefCell::new(validated_hash),
+        }
+    }
+
+    fn verify(&self, hash: &str, validate: impl FnOnce() -> Result<()>) -> Result<()> {
+        if *self.validated_hash.borrow() == hash {
+            return Ok(());
+        }
+        validate()?;
+        *self.validated_hash.borrow_mut() = hash.to_owned();
+        Ok(())
+    }
+}
+
+fn object_digest(object: &Path) -> Result<String> {
+    digest_inputs(
+        object.parent().expect("object has a directory"),
+        &[object.to_owned()],
+        &[],
+    )
 }
 
 fn reference_tool(program: &str, timeout: Duration) -> Result<serde_json::Value> {
@@ -659,5 +698,33 @@ mod tests {
         assert_eq!(phases.len(), 3);
         assert_eq!(phases["passes_ms"], 2.0);
         assert_eq!(phases["backend_ms"], 3.0);
+    }
+    #[test]
+    fn validation_cache_skips_unchanged_and_retries_rejected_outputs() -> tir_bench::Result<()> {
+        let validated = super::MemoizedValidation::new("initial".into());
+        let checks = std::cell::Cell::new(0);
+        let accept = || {
+            checks.set(checks.get() + 1);
+            Ok(())
+        };
+        validated.verify("initial", accept)?;
+        assert_eq!(checks.get(), 0);
+        validated.verify("changed", accept)?;
+        assert_eq!(checks.get(), 1);
+        validated.verify("changed", accept)?;
+        assert_eq!(checks.get(), 1);
+        for expected in [2, 3] {
+            let result = validated.verify("rejected", || {
+                checks.set(checks.get() + 1);
+                anyhow::bail!("invalid generated program")
+            });
+            assert!(result.is_err());
+            assert_eq!(checks.get(), expected);
+        }
+        validated.verify("changed", accept)?;
+        assert_eq!(checks.get(), 3);
+        validated.verify("initial", accept)?;
+        assert_eq!(checks.get(), 4);
+        Ok(())
     }
 }

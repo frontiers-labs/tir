@@ -147,7 +147,7 @@ cargo bench -- --list
 cargo bench -- --filter '*dhrystone*' --level O2 --samples 5
 cargo bench -p fcc --bench programs -- --compiler fcc --phase compile
 cargo bench -- --engine cachegrind --filter '*dhrystone*' --phase compile
-cargo bench -- --cpu 2 --environment strict
+cargo bench -- --cpu 2
 ```
 
 The full default workload includes the pinned GCC torture corpus and can take a
@@ -172,13 +172,18 @@ measurements require GNU `/usr/bin/time` as a small accounting supervisor: direc
 `wait4` RSS includes the spawning harness's memory on Linux. RSS is read from a
 separate output file; wall and CPU time include supervisor overhead. Function cases
 exclude declared setup and report per-operation time; they do not report RSS.
-Program output verification runs outside measurement. Compiler variants run in
+Program output verification runs outside measurement. Compilation validates the
+initial executable and caches successful object hashes; unchanged outputs need
+only a hash check, while changed outputs are linked and validated again. Compiler variants run in
 rotated order with 3 warmups and 15 samples by default; override these explicitly
-with `--warmups` and `--samples`. Compiler phase diagnostics are collected in
+with `--warmups` and `--samples`. Native function calibration discards a cold call
+and grows warm batches toward `--sample-time-ms`, which defaults to 100 ms.
+Compiler phase diagnostics are collected in
 untimed preparation; primary timing runs do not enable that instrumentation.
 
 Cachegrind requires Valgrind on PATH and records instruction/cache/branch counts
-instead of instrumented time or RSS. It runs one fixed-work sample. Rust function
+instead of instrumented time or RSS. It runs one fixed-work sample. Child execution tracing defaults off and compiler
+helpers enable it for GCC/Clang driver processes. Rust function
 profiling additionally requires `--features tir-bench/cachegrind` on the Cargo
 command and the headers and executable from Valgrind 3.22 or newer. Install
 the headers before building. For an isolated installation, set
@@ -190,12 +195,12 @@ CI but are not a substitute for native performance measurements.
 
 Use a dedicated Linux runner for native regression gates. Pin an allowed CPU,
 reserve its sibling cores, and control frequency/boost policy and background
-work. The harness takes a cooperative host lock. Strict mode requires explicit
-CPU affinity, a performance governor and a readable disabled boost policy;
-it checks configuration and throttle counters again before accepting results.
-It never changes privileged settings. Local mode records the environment without
-claiming hardware isolation. Pin software and source versions too. A container
-alone does not control host contention.
+work. The harness takes a cooperative host lock, checks that a requested CPU is
+allowed, and verifies affinity before completing the run. It records the host
+and tool identities. Frequency, thermal and background-load control belong to
+the runner configuration; the harness does not tune or audit privileged host
+policy. Pin software and source versions too. A container alone does not control
+host contention.
 
 Adding a workload means adding a Rust module and registering it in the package's
 Cargo harness. Shared command/source helpers handle common preparation; custom

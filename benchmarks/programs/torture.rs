@@ -21,21 +21,12 @@ fn prepare_sources(
     root: &std::path::Path,
     directory: &std::path::Path,
 ) -> tir_bench::Result<(Vec<std::path::PathBuf>, Vec<std::path::PathBuf>)> {
-    let mut excluded = std::collections::BTreeSet::new();
-    let mut dependencies = Vec::new();
-    for name in [
+    let dependencies = [
         "gcc-torture-known-failures.txt",
         "gcc-torture-execute-known-failures.txt",
-    ] {
-        let file = root.join("fcc/tests").join(name);
-        for line in std::fs::read_to_string(&file)?.lines() {
-            let value = line.split('#').next().unwrap_or("").trim();
-            if !value.is_empty() {
-                excluded.insert(value.to_owned());
-            }
-        }
-        dependencies.push(file);
-    }
+    ]
+    .map(|name| root.join("fcc/tests").join(name))
+    .to_vec();
     let mut sources = Vec::new();
     super::collect(&directory.join("execute"), &mut sources, "c")?;
     sources.sort();
@@ -46,15 +37,10 @@ fn prepare_sources(
         sources == expected,
         "update torture/sources.txt to match the pinned Git tree"
     );
-    sources.retain(|path| {
-        !excluded.contains(
-            &path
-                .strip_prefix(directory)
-                .unwrap()
-                .to_string_lossy()
-                .into_owned(),
-        )
-    });
+    let sources = declared_sources()
+        .into_iter()
+        .map(|name| directory.join(name))
+        .collect();
     Ok((sources, dependencies))
 }
 

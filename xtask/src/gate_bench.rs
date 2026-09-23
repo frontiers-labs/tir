@@ -119,9 +119,9 @@ pub(crate) fn cases(_sh: &Shell, root: &Path) -> anyhow::Result<Vec<Case>> {
     {
         let prepared = program.prepare(
             root,
-            &root.join("target/bench-sources"),
+            &tir_bench::source_cache(&root.join("target")),
             false,
-            std::time::Duration::from_secs(300),
+            std::time::Duration::from_secs(tir_bench::DEFAULT_TIMEOUT_SECS),
         )?;
         for file in prepared.sources {
             let relative = file.strip_prefix(&prepared.directory)?;

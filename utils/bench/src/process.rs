@@ -17,6 +17,7 @@ pub struct Command {
     pub directory: PathBuf,
     pub env: BTreeMap<OsString, OsString>,
     pub cachegrind_regions: bool,
+    pub trace_children: bool,
 }
 
 /// Measurements of one command. Native RSS comes from a fresh GNU time supervisor.
@@ -40,6 +41,7 @@ impl Command {
             directory: PathBuf::from("."),
             env: BTreeMap::new(),
             cachegrind_regions: false,
+            trace_children: false,
         }
     }
     pub fn arg(mut self, arg: impl Into<OsString>) -> Self {
@@ -60,6 +62,11 @@ impl Command {
     }
     pub fn cachegrind_regions(mut self, enabled: bool) -> Self {
         self.cachegrind_regions = enabled;
+        self
+    }
+    /// Include exec'd child processes in Cachegrind measurements when requested.
+    pub fn trace_children(mut self, enabled: bool) -> Self {
+        self.trace_children = enabled;
         self
     }
     pub fn run(&self, output_dir: &Path, timeout: Duration) -> Result<ProcessSample> {
@@ -109,7 +116,11 @@ impl Command {
             command
                 .args([
                     "--tool=cachegrind",
-                    "--trace-children=yes",
+                    if self.trace_children {
+                        "--trace-children=yes"
+                    } else {
+                        "--trace-children=no"
+                    },
                     "--cache-sim=yes",
                     "--branch-sim=yes",
                     "--error-exitcode=125",

@@ -164,28 +164,21 @@ fn workload_contract(metadata: &Value) -> Value {
     let mut contract = metadata.clone();
     if let Some(object) = contract.as_object_mut() {
         object.remove("provenance");
+        if let Some(workload) = object.get_mut("workload").and_then(Value::as_object_mut) {
+            workload.remove("provenance");
+        }
     }
     contract
 }
 
 fn environment_contract(environment: &Value, engine: Engine) -> Value {
     let mut contract = environment.clone();
-    if let Some(object) = contract.as_object_mut() {
-        object.remove("observations");
-        if engine == Engine::Cachegrind {
-            // A profiler counts the selected instruction stream on a fixed simulated
-            // cache. Runner identity, scheduling and thermal policy do not define it.
-            for key in [
-                "hostname",
-                "cpu",
-                "allowed_cpus",
-                "applied_cpus",
-                "configuration",
-                "governors",
-                "strict",
-            ] {
-                object.remove(key);
-            }
+    if engine == Engine::Cachegrind
+        && let Some(object) = contract.as_object_mut()
+    {
+        // Counts use a fixed simulated cache; physical scheduling is not the model.
+        for key in ["hostname", "cpu", "allowed_cpus", "applied_cpus"] {
+            object.remove(key);
         }
     }
     contract

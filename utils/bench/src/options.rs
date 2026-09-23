@@ -21,13 +21,8 @@ pub enum Phase {
     Run,
 }
 
-/// Environment enforcement for native measurements.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum)]
-pub enum Environment {
-    #[default]
-    Local,
-    Strict,
-}
+/// Default per-process timeout, shared by Cargo harnesses and corpus tools.
+pub const DEFAULT_TIMEOUT_SECS: u64 = 300;
 
 /// Shared arguments understood by every Cargo benchmark target.
 #[derive(Clone, Debug, Parser)]
@@ -54,13 +49,14 @@ pub struct Options {
     /// Fixed function iterations per sample; zero calibrates native functions.
     #[arg(long, default_value_t = 0)]
     pub iterations: u64,
+    /// Target duration of each calibrated native function sample in milliseconds.
+    #[arg(long, default_value_t = 100, value_parser = clap::value_parser!(u64).range(1..))]
+    pub sample_time_ms: u64,
     /// Timeout in seconds for each subprocess, including preparation.
-    #[arg(long, default_value_t = 300, value_parser = clap::value_parser!(u64).range(1..))]
+    #[arg(long, default_value_t = DEFAULT_TIMEOUT_SECS, value_parser = clap::value_parser!(u64).range(1..))]
     pub timeout: u64,
     #[arg(long)]
     pub cpu: Option<usize>,
-    #[arg(long, value_enum, default_value_t)]
-    pub environment: Environment,
     /// Parent directory for unique per-target result bundles.
     #[arg(long)]
     pub output: Option<PathBuf>,

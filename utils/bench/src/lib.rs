@@ -10,7 +10,7 @@ pub mod sources;
 
 pub use anyhow::Result;
 pub use function::Bencher;
-pub use options::{Engine, Environment, Options, Phase};
+pub use options::{DEFAULT_TIMEOUT_SECS, Engine, Options, Phase};
 pub use process::Command;
 
 use anyhow::{Context, ensure};
@@ -66,8 +66,8 @@ impl Suite {
             "thresholds must be finite and nonnegative"
         );
         ensure!(
-            options.samples > 0 && options.timeout > 0,
-            "samples and timeout must be positive"
+            options.samples > 0 && options.timeout > 0 && options.sample_time_ms > 0,
+            "samples, sample duration and timeout must be positive"
         );
         let filter = Glob::new(&options.filter)?.compile_matcher();
         let (target, workspace) = cargo_directories(Duration::from_secs(options.timeout))?;
@@ -101,7 +101,6 @@ impl Suite {
             Some(environment::EnvironmentGuard::acquire(
                 &std::env::temp_dir().join(format!("tir-bench-{}.lock", unsafe { libc::getuid() })),
                 options.cpu,
-                options.environment == Environment::Strict,
             )?)
         } else {
             None
@@ -127,7 +126,7 @@ impl Suite {
             });
         }
         let results = Results {
-            schema: 2,
+            schema: 3,
             namespace: namespace.into(),
             engine: options.engine,
             environment,
@@ -163,9 +162,7 @@ impl Suite {
         &self.directory
     }
     pub fn source_cache(&self) -> PathBuf {
-        std::env::var_os("TIR_BENCH_SOURCE_CACHE")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| self.target.join("bench-sources"))
+        source_cache(&self.target)
     }
     pub fn timeout(&self) -> Duration {
         Duration::from_secs(self.options.timeout)
@@ -202,13 +199,13 @@ impl Suite {
         Ok(())
     }
 
-    /// Bytes processed by subsequent function cases, for bytes/second reporting.
     /// Version of the workload's inputs and setup semantics. Increment when those
     /// change so earlier measurements cannot pass compatibility checks silently.
     pub fn set_contract_version(&mut self, version: u32) {
         self.contract_version = version;
     }
 
+    /// Bytes processed by subsequent function cases, for bytes/second reporting.
     pub fn set_throughput(&mut self, bytes: u64) {
         self.throughput = Some(bytes);
     }
@@ -253,14 +250,18 @@ impl Suite {
         }
         let mut iterations = self.options.iterations.max(1);
         if self.options.iterations == 0 {
-            let mut calibration = Bencher::new(1, false);
-            operation(&mut calibration);
-            ensure!(
-                calibration.calls == 1,
-                "benchmark must call iter or iter_batched exactly once"
-            );
-            iterations =
-                (1_000_000 / calibration.elapsed.as_nanos().max(1)).clamp(1, 1_000_000) as u64;
+            iterations = function::calibrate(
+                Duration::from_millis(self.options.sample_time_ms),
+                |count| {
+                    let mut calibration = Bencher::new(count, false);
+                    operation(&mut calibration);
+                    ensure!(
+                        calibration.calls == 1,
+                        "benchmark must call iter or iter_batched exactly once"
+                    );
+                    Ok(calibration.elapsed)
+                },
+            )?;
         }
         let mut samples = Vec::new();
         for index in 0..u64::from(self.options.warmups) + u64::from(self.options.samples) {
@@ -290,7 +291,7 @@ impl Suite {
             }
             samples.push(metrics);
         }
-        self.record(id, json!({"scope":"function", "contract":self.contract_version, "bytes_per_iteration":self.throughput, "fixed_iterations":self.options.iterations}), true, samples)
+        self.record(id, json!({"scope":"function", "contract":self.contract_version, "bytes_per_iteration":self.throughput, "fixed_iterations":self.options.iterations,"sample_time_ms":self.options.sample_time_ms}), true, samples)
     }
 
     /// Interleave variants in rotated order, validating every successful execution
@@ -363,7 +364,9 @@ impl Suite {
             }
         }
         for (case, samples) in cases.into_iter().zip(samples) {
-            self.record(case.id, case.metadata, case.gate, samples)?;
+            let metadata =
+                json!({"workload":case.metadata,"trace_children":case.command.trace_children});
+            self.record(case.id, metadata, case.gate, samples)?;
         }
         Ok(())
     }
@@ -417,11 +420,7 @@ impl Suite {
             let baseline = serde_json::from_slice(&std::fs::read(path)?)?;
             self.results.compare(&baseline, &self.options)?;
         }
-        // Simulated counts remain usable when a shared runner changes frequency.
-        if (self.options.engine == Engine::Native
-            || self.options.environment == Environment::Strict)
-            && let Some(environment) = &self._environment
-        {
+        if let Some(environment) = &self._environment {
             environment.check_stable()?;
         }
         self.results.status = "complete".into();
@@ -508,4 +507,11 @@ fn executable_digest() -> Option<String> {
         hash.input(&buffer[..count]);
     }
     Some(format!("{:x}", hash.result()))
+}
+
+/// Resolve the shared pinned-source cache, honouring an explicit environment override.
+pub fn source_cache(target: &Path) -> PathBuf {
+    std::env::var_os("TIR_BENCH_SOURCE_CACHE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| target.join("bench-sources"))
 }

@@ -30,7 +30,11 @@ issue_for() {
 reproduce() {
   case "$1" in
     corpus) echo 'cargo xtask fcc-fuzz --corpus' ;;
-    benchmarks) echo "cargo bench -p fcc --bench programs -- --engine cachegrind --phase compile --filter 'fcc/dhrystone/*/O2/*' --compiler fcc --level O2 --min-cases 2" ;;
+    benchmarks)
+      printf '%s\n' \
+        "cargo bench --locked -p fcc --bench programs -- --engine cachegrind --phase compile --filter '{fcc/dhrystone,fcc/coremark}/*/O2/compile/*' --compiler fcc --level O2 --min-cases 8" \
+        'cargo bench --locked -p tir-pbqp --bench pbqp --features tir-bench/cachegrind -- --engine cachegrind --filter dense_search/16 --iterations 1 --min-cases 1'
+      ;;
     differential-fuzz) echo 'cargo xtask fcc-fuzz --self-test' ;;
     libfuzzer) echo 'cargo +nightly fuzz run --fuzz-dir utils/fuzz <target>' ;;
     lints) echo 'cargo clippy --workspace --all-targets --no-deps -- -D warnings' ;;
@@ -84,7 +88,10 @@ while read -r job result; do
 harness problem rather than a miscompile.
 
 - Run: $RUN_URL
-- Reproduce: \`$(reproduce "$job")\`
+- Reproduce:
+\`\`\`sh
+$(reproduce "$job")
+\`\`\`
 
 Closes automatically once \`$job\` completes again."
       if [ -n "$number" ]; then

@@ -46,7 +46,7 @@ the same amount of time (or less!) to do so.
 - `cargo nextest r` (or `cargo test` if nextest is unavailable) passes cleanly
 - `cargo fmt` has no additional format changes
 - `cargo xtask fcc-torture` finds no new failures (mostly for core IR changes or FCC)
-- `cargo xtask extbench run` is no worse than before change (unless explicitly approved regressions)
+- `cargo bench` is no worse than before change (unless explicitly approved regressions)
 
 ## Commit and PR rules
 

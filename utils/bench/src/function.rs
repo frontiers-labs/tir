@@ -88,3 +88,48 @@ pub(crate) fn header_version() -> Option<(u32, u32)> {
         None
     }
 }
+
+/// Discard the cold call, then scale warm batches until their measured work meets
+/// the requested duration. Setup remains outside the elapsed duration supplied here.
+pub(crate) fn calibrate(
+    target: Duration,
+    mut measure: impl FnMut(u64) -> crate::Result<Duration>,
+) -> crate::Result<u64> {
+    measure(1)?;
+    let mut iterations = 1u64;
+    loop {
+        let elapsed = measure(iterations)?;
+        if elapsed >= target {
+            return Ok(iterations);
+        }
+        anyhow::ensure!(
+            iterations < 1_000_000_000,
+            "function calibration exceeded its iteration budget; set --iterations explicitly"
+        );
+        let ratio = target
+            .as_nanos()
+            .div_ceil(elapsed.as_nanos().max(1))
+            .clamp(2, 10) as u64;
+        iterations = iterations.saturating_mul(ratio).min(1_000_000_000);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn calibration_ignores_cold_cost_and_reaches_target_with_warm_batches() {
+        let mut calls = 0;
+        let iterations = calibrate(Duration::from_millis(100), |iterations| {
+            calls += 1;
+            Ok(if calls == 1 {
+                Duration::from_secs(1)
+            } else {
+                Duration::from_micros(iterations * 10)
+            })
+        })
+        .unwrap();
+        assert!(calls > 2);
+        assert!(Duration::from_micros(iterations * 10) >= Duration::from_millis(100));
+    }
+}
