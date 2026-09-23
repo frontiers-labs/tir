@@ -27,6 +27,12 @@ module {
     %result = addi %inner, %four : !i64
     func.return %result
   }
+  %fn_zero_mask = func.func @zero_mask(%0: !i64, %1: !i64) -> !i64 {
+    %zero = constant {value = 0} : !i64
+    %masked = andi %0, %zero : !i64
+    %result = ori %1, %masked : !i64
+    func.return %result
+  }
   module_end
 }
 
@@ -43,3 +49,7 @@ module {
 // CHECK-NOT: imm = 3
 // CHECK-NOT: imm = 4
 // CHECK: x86_64.lea_base_disp {dst = %{{[0-9]+}}:GPR, base = %{{[0-9]+}}:GPR, imm = 7}
+// CHECK-LABEL: asm.symbol {name = "zero_mask", arg_regs = [%{{[0-9]+}}:GPR, %[[VALUE:[0-9]+]]:GPR]
+// CHECK-NOT: x86_64.and
+// CHECK-NOT: x86_64.or
+// CHECK: asm.vret %[[VALUE]]

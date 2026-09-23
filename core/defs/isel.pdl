@@ -24,6 +24,12 @@ rule mul-one: #mul(x: int<W>, 1) : int<W>
 rule mul-zero: #mul(x: int<W>, 0) : int<W>
   => const<W>(0);
 
+rule and-zero: #and(x: int<W>, 0) : int<W>
+  => const<W>(0);
+
+rule or-zero: #or(x: int<W>, 0) : int<W>
+  => x;
+
 // Fold only the nested constant arm after the saturation fixpoint. Running
 // these rules iteratively would feed the new constant into the same e-class.
 rule add-const-reassociate:

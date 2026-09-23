@@ -337,6 +337,9 @@ For constant-arm selects, shared selection axioms rewrite the mask blend as
 an XOR with the differing constant bits. A one-bit mask is reduced through an
 explicit low-bit extraction before zero extension, preserving correctness when
 its physical register has unspecified upper bits.
+Shared zero identities remove a zero-valued `and` arm and its surrounding `or`
+before instruction matching, so a lowered select with a zero arm does not
+require a separate mask chain.
 
 Register allocation can replay an immediate producer instead of spilling its
 value. Replay sites retain block order so fresh register numbering and allocation
