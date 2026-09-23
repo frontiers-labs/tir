@@ -9,6 +9,36 @@
 // physical defs and uses. Target-agnostic: it keys off register paths, never
 // off register names.
 
+/// A register assigned only inside a conditional statement retains its old
+/// value when that statement does not execute. Track it as a read as well as a
+/// write in the machine dependence graph.
+fn conditional_register_writes(
+    expr: &ast::Expr,
+    out: &mut HashSet<(String, String)>,
+) {
+    match expr {
+        ast::Expr::Block(block) => {
+            for statement in &block.stmts {
+                conditional_register_writes(statement, out);
+            }
+        }
+        ast::Expr::If(branch) => {
+            let mut writes = Vec::new();
+            collect_register_path_writes(&branch.then, &mut writes);
+            if let Some(else_) = &branch.else_ {
+                collect_register_path_writes(else_, &mut writes);
+            }
+            out.extend(writes.into_iter().map(|(path, _)| path));
+        }
+        ast::Expr::Try(try_) => {
+            let mut writes = Vec::new();
+            collect_register_path_writes(&try_.body, &mut writes);
+            out.extend(writes.into_iter().map(|(path, _)| path));
+        }
+        _ => {}
+    }
+}
+
 /// The `implicit: [...]` entries for one instruction: an [`ImplicitReg`] per
 /// register path its behavior reads or writes, sorted for stable output.
 /// Program-counter classes are excluded — control flow is modeled by the
@@ -24,6 +54,8 @@ fn implicit_register_items(
     let mut write_list = Vec::new();
     collect_register_path_writes(&inst.behavior, &mut write_list);
     let writes: HashSet<(String, String)> = write_list.into_iter().map(|(path, _)| path).collect();
+    let mut conditional_writes = HashSet::new();
+    conditional_register_writes(&inst.behavior, &mut conditional_writes);
 
     let mut paths: Vec<(String, String)> = reads.union(&writes).cloned().collect();
     paths.sort();
@@ -38,7 +70,10 @@ fn implicit_register_items(
         let Some(index) = register_index_map.get(&path) else {
             continue;
         };
-        let role = match (reads.contains(&path), writes.contains(&path)) {
+        let role = match (
+            reads.contains(&path) || conditional_writes.contains(&path),
+            writes.contains(&path),
+        ) {
             (true, true) => quote! { ReadWrite },
             (false, true) => quote! { Def },
             _ => quote! { Use },
