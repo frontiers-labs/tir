@@ -50,6 +50,8 @@ pub struct Dependences {
     ops: Vec<OpId>,
     /// Predecessors as indices into `ops`, ascending and deduplicated.
     predecessors: Vec<Vec<usize>>,
+    register_users: Vec<Vec<OpId>>,
+    register_live_out: Vec<bool>,
 }
 
 impl Dependences {
@@ -60,6 +62,8 @@ impl Dependences {
         let mut graph = Self {
             ops: ops.to_vec(),
             predecessors: value_edges(context, ops),
+            register_users: vec![Vec::new(); ops.len()],
+            register_live_out: vec![false; ops.len()],
         };
         for (entry, parameter) in graph
             .predecessors
@@ -101,6 +105,7 @@ impl Dependences {
             {
                 if let Some(&writer) = written.get(&register) {
                     follows(writer);
+                    self.register_users[writer].push(self.ops[index]);
                 }
                 read.entry(register).or_default().push(index);
             }
@@ -120,6 +125,15 @@ impl Dependences {
                 written.insert(register, index);
             }
         }
+        for writer in written.into_values() {
+            self.register_live_out[writer] = true;
+        }
+    }
+
+    /// Readers of this operation's register definitions, unless a definition
+    /// leaves the block. A final write remains observable in successor blocks.
+    pub fn local_register_users(&self, index: usize) -> Option<&[OpId]> {
+        (!self.register_live_out[index]).then_some(&self.register_users[index])
     }
 
     /// What leaves a block is not a scheduling question: a terminator is a

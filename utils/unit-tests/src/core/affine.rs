@@ -260,3 +260,59 @@ fn strip_mining_an_unordered_loop_keeps_its_sum() {
     let after: Vec<String> = [15, 4, 0].into_iter().map(run).collect();
     assert_eq!(before, after);
 }
+
+/// Compare the rewritten loop to bit-vector arithmetic at entry, one step,
+/// and after wraparound, for every possible invariant i8 coefficient.
+#[test]
+fn modular_recurrence_preserves_base_step_and_wrapped_exits() {
+    use tir::interp::{self, Value};
+    use tir::Symbol;
+
+    let source = include_str!("../../../../core/checks/Affine/modular-recurrence.tir");
+    for trips in [0, 1, 2, 129, 130] {
+        let source = source.replace("value = 130", &format!("value = {trips}"));
+        let (context, module) = fixtures::parse(&source);
+        tir::parse_pipeline("restructure-nodes,affine,instcombine-nodes")
+            .unwrap()
+            .run(&context, context.get_op(module.id()))
+            .unwrap();
+        tir::verify_op_tree(&context, module.id()).unwrap();
+        let function = fixtures::module_ops(&context, module.id())
+            .into_iter()
+            .find(|&op| {
+                context
+                    .get_op(op)
+                    .as_interface::<dyn Symbol>()
+                    .is_some_and(|s| s.symbol_name() == "calculate")
+            })
+            .unwrap();
+        for coefficient in 0u8..=255 {
+            let offset = coefficient.wrapping_mul(17).wrapping_add(11);
+            let args = [coefficient, offset]
+                .map(|v| Value::Int(tir::utils::APInt::new_signed(8, i64::from(v))));
+            let result = interp::run_function(&context, function, args.to_vec()).unwrap()[0]
+                .to_i64()
+                .unwrap() as u8;
+            let counter = 250u8.wrapping_add((2 * trips) as u8);
+            let last = if trips == 0 {
+                250
+            } else {
+                coefficient
+                    .wrapping_mul(counter.wrapping_sub(2))
+                    .wrapping_add(offset)
+            };
+            let last2 = if trips == 0 {
+                250
+            } else {
+                coefficient
+                    .wrapping_mul(counter.wrapping_sub(1))
+                    .wrapping_add(offset)
+            };
+            assert_eq!(
+                result,
+                last.wrapping_add(last2).wrapping_add(counter),
+                "trips={trips}, coefficient={coefficient}"
+            );
+        }
+    }
+}

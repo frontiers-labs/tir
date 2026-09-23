@@ -17,8 +17,9 @@ use crate::backend::isel::InstructionSelectPass;
 use crate::backend::lower::OpLoweringPass;
 use crate::backend::{MachineBlockLayoutPass, ShuffleMachineOrderPass, TargetMachine};
 use crate::passes::{
-    CheckUniqueSymbolsPass, DeadCodeEliminationPass, LowerIntrinsicsPass, LowerPtrDisjointPass,
-    MaterializeSymbolAddressesPass, ResolveFpPass, RestructureNodesPass, VerifyDepsPass,
+    AffineSchedulePass, CheckUniqueSymbolsPass, DeadCodeEliminationPass, LowerIntrinsicsPass,
+    LowerPtrDisjointPass, MaterializeSymbolAddressesPass, ResolveFpPass, RestructureNodesPass,
+    VerifyDepsPass,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -138,6 +139,8 @@ fn module_prologue(target: &dyn TargetMachine) -> PassManager {
         // lowered one at a time the λ those name may already be a machine
         // symbol.
         functions.add_pass(RestructureNodesPass::new());
+        functions.add_pass(AffineSchedulePass::new());
+        functions.add_pass(DeadCodeEliminationPass::new());
         functions.add_pass(VerifyDepsPass::new());
     }
     // Object symbols are unique by name, so overloads must already be mangled.

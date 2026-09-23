@@ -73,8 +73,8 @@ module {
 // CHECK: arm64.strb
 
 // CHECK: asm.symbol {name = "signed_i16_load_to_i32"
-// CHECK: arm64.lslv_w
-// CHECK: arm64.asr_w {rd = %{{[0-9]+}}:GPR32, rn = %{{[0-9]+}}:GPR32, imm = 16}
+// CHECK: arm64.load_halfword_signed_w
+// CHECK-NEXT: asm.vret
 // CHECK: asm.symbol {name = "signed_i8_arg_to_i32"
 // CHECK: arm64.lslv_w
 // CHECK: arm64.asr_w {rd = %{{[0-9]+}}:GPR32, rn = %{{[0-9]+}}:GPR32, imm = 24}

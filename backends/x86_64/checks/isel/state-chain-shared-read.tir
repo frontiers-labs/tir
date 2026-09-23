@@ -1,13 +1,14 @@
 // RUN: tir mc --march=x86_64 --stage=isel %s | filecheck %s
 
+// A runtime bound keeps the loop and its state edges visible to selection.
 module {
-  %fn_f = func.func @f(%0: !i32) -> !i32 {
+  %fn_f = func.func @f(%0: !i32, %limit: !i32) -> !i32 {
     %1 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
     %2 = constant {value = 0} : !i32
     %3 = constant {value = 1} : !i32
     %4 = constant {value = 4} : !i32
     %5 = state.entry_state : !state<memory>
-    %6, %7, %8 = scf.for %9 = %2 to %4 step %3 (%10 = %0, %11 = %5) {
+    %6, %7, %8 = scf.for %9 = %2 to %limit step %3 (%10 = %0, %11 = %5) {
       %12 = ptr.store %4, %1 state(%11)
       %13, %14 = ptr.load %1 state(%12) : !i32
       %15, %16 = ptr.load %1 state(%14) : !i32

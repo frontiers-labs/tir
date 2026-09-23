@@ -1,7 +1,7 @@
 // RUN: tir mc --march=x86_64 --stage=regalloc %s | filecheck %s
 
-// Seven computed values remain live across the call, exceeding the six SysV
-// callee-saved GPRs and forcing one value through the stack frame.
+// Eight computed values remain live across the call, exceeding the six SysV
+// callee-saved GPRs and forcing two values through separate stack slots.
 
 module {
   %fn_external = func.declare @external() -> !i64
@@ -13,6 +13,7 @@ module {
     %5 = addi %4, %0 : !i64
     %6 = subi %5, %0 : !i64
     %7 = addi %6, %0 : !i64
+    %extra = subi %7, %0 : !i64
     %8 = func.call %fn_external() -> !i64
     %9 = addi %1, %2 : !i64
     %10 = addi %3, %4 : !i64
@@ -21,7 +22,8 @@ module {
     %13 = addi %11, %7 : !i64
     %14 = addi %12, %13 : !i64
     %15 = addi %14, %8 : !i64
-    func.return %15
+    %answer = addi %15, %extra : !i64
+    func.return %answer
   }
   module_end
 }

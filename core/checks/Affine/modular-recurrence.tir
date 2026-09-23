@@ -1,0 +1,42 @@
+// RUN: tir opt --pass restructure-nodes,affine,instcombine-nodes,verify-deps --verify %s | filecheck %s
+// RUN: tir interp %s | filecheck %s --check-prefix=VALUE
+// RUN: tir opt --pass restructure-nodes,affine,instcombine-nodes %s | tir interp - | filecheck %s --check-prefix=VALUE
+
+// The runtime coefficient and offset are invariant, while the i8 counter
+// wraps twice. Both the last product and the counter leave the loop.
+module {
+  %f = func.func @calculate(%n: !i8, %col: !i8) -> !i8 {
+    %zero = constant {value = 0} : !i32
+    %end = constant {value = 130} : !i32
+    %one = constant {value = 1} : !i32
+    %start = constant {value = 250} : !i8
+    %two = constant {value = 2} : !i8
+    %i_end, %k_end, %result, %result2 = scf.ordered_for %i = %zero to %end step %one (%k = %start, %last = %start, %last2 = %start) {
+      %product = muli %n, %k : !i8
+      %index = addi %product, %col : !i8
+      %one8 = constant {value = 1} : !i8
+      %k1 = addi %k, %one8 : !i8
+      %product2 = muli %n, %k1 : !i8
+      %index2 = addi %product2, %col : !i8
+      %next = addi %k, %two : !i8
+      scf.yield %next, %index, %index2
+    }
+    %sum = addi %result, %result2 : !i8
+    %answer = addi %sum, %k_end : !i8
+    func.return %answer
+  }
+  %main = func.func @main() -> !i8 {
+    %n = constant {value = 7} : !i8
+    %col = constant {value = 11} : !i8
+    %answer = func.call %f(%n, %col : !i8, !i8) -> !i8
+    func.return %answer
+  }
+  module_end
+}
+
+// CHECK-LABEL: func.func @calculate
+// CHECK: muli
+// CHECK: scf.for
+// CHECK-NOT: muli
+// CHECK-LABEL: func.func @main
+// VALUE: i8 -29

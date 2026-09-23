@@ -48,8 +48,14 @@ pub(crate) struct ScheduledEmit {
 /// materialized condition.
 #[derive(Clone, Debug)]
 pub(crate) enum GuardBranch {
-    Fused { rule_index: usize, m: RuleMatch },
-    Nonzero { condition: ValueId },
+    Fused {
+        rule_index: usize,
+        m: RuleMatch,
+        inverse: Option<(usize, RuleMatch)>,
+    },
+    Nonzero {
+        condition: ValueId,
+    },
 }
 
 /// The order the cover's tiles are emitted in: a topological order of the

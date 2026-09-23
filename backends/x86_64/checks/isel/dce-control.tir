@@ -1,0 +1,19 @@
+// RUN: tir mc --march=x86_64 --stage=isel %S/Inputs/dce-control.ll llvm | filecheck %s
+
+// Recovery specializes the loop selector, leaving its materialized boolean
+// unused. The second comparison overwrites the dead inversion's flags.
+// CHECK-LABEL: name = "find"
+// CHECK-NOT: x86_64.sete
+// CHECK-NOT: x86_64.xor_imm
+// CHECK: x86_64.mov_load {dst = %[[NEXT:[0-9]+]]:GPR,
+// CHECK-NEXT: x86_64.cmp_imm {dst = %[[NEXT]]:GPR, imm = 0}
+// CHECK-NEXT: x86_64.jne
+// CHECK-NOT: x86_64.sete
+// CHECK-NOT: x86_64.xor_imm
+// CHECK-LABEL: name = "find_data"
+// CHECK: x86_64.cmp_imm
+// CHECK-NEXT: x86_64.sete
+// CHECK: x86_64.mov_store32
+// CHECK-NOT: x86_64.xor_imm
+// CHECK: x86_64.cmp_imm
+// CHECK-NEXT: x86_64.jne

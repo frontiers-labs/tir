@@ -40,12 +40,11 @@ module {
 }
 
 // CHECK-LABEL: asm.symbol {name = "crc_bit_branch"
-// CHECK: arm64.ldrh
-// CHECK: arm64.lslv_w
-// CHECK: arm64.asr_w {rd = %{{[0-9]+}}:GPR32, rn = %{{[0-9]+}}:GPR32, imm = 16}
-// CHECK: arm64.asr_w
+// The signed load supplies the i32 extension directly.
+// CHECK: arm64.load_halfword_signed_w
+// CHECK-NEXT: arm64.asr_w {rd = %{{[0-9]+}}:GPR32, rn = %{{[0-9]+}}:GPR32, imm = 7}
 // CHECK: arm64.strb
-// CHECK: arm64.ldrb
+// CHECK: arm64.load_byte_unsigned_w
 // CHECK: arm64.cbnz_w {rt = %{{[0-9]+}}:GPR32, imm = ^bb1}
 // CHECK-LABEL: asm.symbol {name = "crc_shift_u16"
 // CHECK: arm64.lsr_h

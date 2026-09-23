@@ -12,6 +12,7 @@
 
 use std::collections::HashMap;
 
+use tir::graph::{Dag, MutDag, NodeId, PostOrderDag};
 use tir::{Context, OpId, OperationRef, PassError, RegionId};
 
 pub(crate) struct Scopes {
@@ -25,6 +26,8 @@ pub(crate) struct Scopes {
     pub(crate) op_region: HashMap<OpId, RegionId>,
     /// The region enclosing each nested region, and the operation carrying it.
     parent: HashMap<RegionId, (RegionId, OpId)>,
+    dependencies: PostOrderDag<OpId, ()>,
+    dependency_nodes: HashMap<OpId, NodeId>,
 }
 
 impl Scopes {
@@ -35,6 +38,8 @@ impl Scopes {
             position: HashMap::new(),
             op_region: HashMap::new(),
             parent: HashMap::new(),
+            dependencies: PostOrderDag::new(),
+            dependency_nodes: HashMap::new(),
         };
         let mut pending: Vec<RegionId> = op.op().regions().iter().rev().copied().collect();
         while let Some(region) = pending.pop() {
@@ -42,6 +47,17 @@ impl Scopes {
             let order = crate::region::insertion_topological_order(context, region)
                 .map_err(|error| PassError::InvalidRuleSet(error.to_string()))?;
             for (position, &id) in order.iter().enumerate() {
+                let node = scopes.dependencies.add_node(id);
+                for value in crate::region::values_read(context, id) {
+                    if let Some(dependency) = context
+                        .get_value(value)
+                        .defining_op()
+                        .and_then(|op| scopes.dependency_nodes.get(&op))
+                    {
+                        scopes.dependencies.add_edge(node, *dependency);
+                    }
+                }
+                scopes.dependency_nodes.insert(id, node);
                 scopes.position.insert(id, position);
                 scopes.op_region.insert(id, region);
                 let nested = context.get_op(id).regions();
@@ -53,6 +69,16 @@ impl Scopes {
             scopes.order.insert(region, order);
         }
         Ok(scopes)
+    }
+
+    /// Whether an operand's producer needs an operation a tile would absorb.
+    pub(crate) fn depends_on(&self, op: OpId, dependency: OpId) -> bool {
+        let Some(&node) = self.dependency_nodes.get(&op) else {
+            return false;
+        };
+        self.dependencies
+            .postorder(node)
+            .any(|node| *self.dependencies.get_node(node) == dependency)
     }
 
     /// Whether `outer` is `inner` or a region enclosing it.

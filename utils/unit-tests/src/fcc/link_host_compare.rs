@@ -559,3 +559,30 @@ host_tests! {
     floating_initializers_match_host_object_layout => ("struct Mixed { float value; int tag; }; float values[3] = { 1.25f }; struct Mixed item = { 1.5f, 7 }; double negative = -0.0;\n",
         "struct Mixed { float value; int tag; }; extern float values[3]; extern struct Mixed item; extern double negative; int main(void) { return values[0] == 1.25f && values[1] == 0.0f && values[2] == 0.0f && item.value == 1.5f && item.tag == 7 && 1.0 / negative < 0.0 ? 0 : 1; }\n",);
 }
+
+#[test]
+fn optimized_load_before_call_preserves_observed_value() {
+    use super::link_support::{compile_host_object, exit_code, run_fcc, run_program};
+    if !cc_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    // Keep the writer in another object so optimization cannot inline it.
+    std::fs::write(
+        dir.path().join("fcc.c"),
+        "extern int update(int *);\n\
+         int observe(int *p) { int old = *p; int result = update(p); return old + result; }\n",
+    )
+    .unwrap();
+    run_fcc(dir.path(), &["cc", "-O2", "-c", "fcc.c", "-o", "fcc.o"]);
+    compile_host_object(
+        dir.path(),
+        "int observe(int *);\n\
+         int update(int *p) { *p = 100; return 4; }\n\
+         int main(void) { int value = 2; int result = observe(&value);\n\
+         return result == 6 && value == 100 ? 0 : 1; }\n",
+        "host.o",
+    );
+    run_fcc(dir.path(), &["cc", "fcc.o", "host.o", "-o", "program"]);
+    assert_eq!(exit_code(&run_program(dir.path(), "program")), 0);
+}

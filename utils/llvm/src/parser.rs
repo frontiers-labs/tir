@@ -355,7 +355,12 @@ where
         .then(operand.clone())
         .map(|(((((result, op), flags), ty), lhs), rhs)| Inst::Binary {
             result,
-            op,
+            // Disjoint inputs have no carries; overlapping bits produce LLVM poison.
+            op: if matches!(op, BinOp::Or) && flags.contains(&Token::Ident("disjoint")) {
+                BinOp::Add
+            } else {
+                op
+            },
             no_signed_wrap: flags.contains(&Token::Ident("nsw")),
             no_unsigned_wrap: flags.contains(&Token::Ident("nuw")),
             ty,

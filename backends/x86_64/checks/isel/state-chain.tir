@@ -19,4 +19,4 @@ module {
 // CHECK: %[[ENTRY:[0-9]+]] = state.entry_state : !state<memory>
 // CHECK-NEXT: %[[READ:[0-9]+]] = x86_64.mov_load32 {{.*}} state(%[[ENTRY]])
 // CHECK-NEXT: %[[WRITTEN:[0-9]+]] = x86_64.mov_store32 {{.*}} state(%[[READ]])
-// CHECK-NEXT: %{{[0-9]+}} = x86_64.mov_load32 {{.*}} state(%[[WRITTEN]])
+// CHECK-NEXT: %{{[0-9]+}} = x86_64.add32_mem {{.*}} state(%[[WRITTEN]])

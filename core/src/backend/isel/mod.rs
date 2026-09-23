@@ -477,6 +477,12 @@ pub struct BranchEmitters {
     /// `b.ne`).
     pub cond_nonzero: fn(&Context, ValueId, BlockId) -> Vec<Box<dyn Operation>>,
 }
+#[derive(Default)]
+struct PlacementDemand {
+    registers: HashSet<(Id, RegionId)>,
+    effects: HashSet<(Id, RegionId)>,
+}
+
 /// The whole function lowered into one shared, base-saturated e-graph, with the
 /// canonical side tables every region's solve reads. Built once when the pass
 /// visits the function op; each region then solves against it inside its own
@@ -511,7 +517,7 @@ struct FunctionSelection {
     shared_classes: HashSet<Id>,
     /// Classes selected at their defining region because a surviving reader needs
     /// their register value.
-    demand: HashSet<(Id, RegionId)>,
+    demand: PlacementDemand,
     /// Each region-entry condition prepared against the base graph: the
     /// condition's class and, when its definer is a comparison, the comparison
     /// class with its kind and operand classes. Keyed by the condition value; the
@@ -522,6 +528,7 @@ struct FunctionSelection {
     region_facts: HashMap<RegionId, (ValueId, bool)>,
     /// What each region must materialize for a destruction to branch on it.
     region_aux: HashMap<RegionId, Vec<(OpId, ControlSlot, Id)>>,
+    control_inverses: HashMap<ControlSlot, Id>,
 }
 
 /// A boundary class resolved to concrete operands for a consumer: the proven
@@ -576,8 +583,10 @@ impl FunctionSelection {
     }
 
     fn placed_at(&self, class: Id, region: RegionId) -> bool {
-        self.base_members(class)
-            .any(|member| self.demand.contains(&(member, region)))
+        self.base_members(class).any(|member| {
+            self.demand.registers.contains(&(member, region))
+                || self.demand.effects.contains(&(member, region))
+        })
     }
 
     /// Whether any base member of `class` computes an IR value (a candidate for a
@@ -639,7 +648,9 @@ impl FunctionSelection {
             }
             def_region != region
                 && self.has_run_at(def, def_region, region)
-                && self.placed_at(class, def_region)
+                && self
+                    .base_members(class)
+                    .any(|member| self.demand.registers.contains(&(member, def_region)))
         })
     }
 
@@ -784,7 +795,7 @@ impl FunctionSelection {
                         // not of the whole class: a scope may merge a class the
                         // region materialized with one it folded into an
                         // encoding, and only the first leaves a register behind.
-                        if !survives && !self.demand.contains(&(member, def_region)) {
+                        if !survives && !self.demand.registers.contains(&(member, def_region)) {
                             continue;
                         }
                         (2, self.scopes.distance(region, def_region), v.number())
@@ -1521,6 +1532,20 @@ impl InstructionSelectPass {
         let order = fs.scopes.order[&region].clone();
         if !order.is_empty() || fs.region_aux.contains_key(&region) {
             let plan = self.solve_region(context, region, fs, matches);
+            if let Ok(plan) = &plan {
+                // Children may reuse registers the enclosing cover actually
+                // produces, including loads demanded only by a fused branch.
+                // An effect absorbed into another tile supplies no register.
+                // Pure values keep the demand policy's choice to recompute.
+                for scheduled in &plan.schedule {
+                    if !scheduled.results.is_empty()
+                        && let Some(class) = scheduled.source_op.and_then(|op| fs.op_root.get(&op))
+                        && !node::class_is_pure(&fs.egraph, *class)
+                    {
+                        fs.demand.registers.insert((*class, region));
+                    }
+                }
+            }
             self.plans.insert(region, plan);
         }
 
@@ -1730,6 +1755,7 @@ impl InstructionSelectPass {
             prepared: lowering.prepared,
             region_facts: lowering.region_facts,
             region_aux: lowering.region_control.aux,
+            control_inverses: lowering.region_control.inverses,
         }
     }
 
@@ -1800,7 +1826,7 @@ impl InstructionSelectPass {
         lowering: &RegionLowering,
         scopes: &Scopes,
         operand_uses: &HashMap<ValueId, usize>,
-    ) -> HashSet<(Id, RegionId)> {
+    ) -> PlacementDemand {
         let RegionLowering {
             roots_by_op,
             constant_candidates,
@@ -1834,7 +1860,7 @@ impl InstructionSelectPass {
         };
         // A low-bit truncation re-views its source's register, so demand lands
         // on the chased source class — the one a tile can define.
-        let mut demand = HashSet::new();
+        let mut demand = PlacementDemand::default();
         for (&op_id, &class) in roots_by_op {
             let def_region = scopes.op_region[&op_id];
             let root = egraph.find(class);
@@ -1848,11 +1874,13 @@ impl InstructionSelectPass {
                 && !unused_read
                 && !node::is_identity_effect(egraph, root)
             {
-                demand.insert((root, def_region));
+                demand.effects.insert((root, def_region));
             }
             for result in context.get_op(op_id).value_results() {
                 if needs_register(result, class, def_region) {
-                    demand.insert((chase_low_extract(egraph, class), def_region));
+                    demand
+                        .registers
+                        .insert((chase_low_extract(egraph, class), def_region));
                 }
             }
         }
@@ -1860,7 +1888,9 @@ impl InstructionSelectPass {
             let def_region = scopes.op_region[&op_id];
             for result in context.get_op(op_id).results() {
                 if needs_register(result, class, def_region) {
-                    demand.insert((chase_low_extract(egraph, class), def_region));
+                    demand
+                        .registers
+                        .insert((chase_low_extract(egraph, class), def_region));
                 }
             }
         }
@@ -2083,8 +2113,11 @@ impl InstructionSelectPass {
 
         for (op, slot, emit) in &mut plan.aux {
             match emit {
-                AuxEmit::Branch(GuardBranch::Fused { m, .. }) => {
-                    m.remap_values(&self.emitted_values)
+                AuxEmit::Branch(GuardBranch::Fused { m, inverse, .. }) => {
+                    m.remap_values(&self.emitted_values);
+                    if let Some((_, inverse)) = inverse {
+                        inverse.remap_values(&self.emitted_values);
+                    }
                 }
                 AuxEmit::Branch(GuardBranch::Nonzero { condition }) => {
                     if let Some(replacement) = self.emitted_values.get(condition) {
@@ -2228,7 +2261,16 @@ impl InstructionSelectPass {
         let guard_branch_hits = if guard_classes.is_empty() {
             HashMap::new()
         } else {
-            self.guard_branch_hits(context, fs, &guard_classes)
+            let mut both = guard_classes.clone();
+            both.extend(
+                fs.region_aux
+                    .get(&region)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|(_, slot, _)| fs.control_inverses.get(slot))
+                    .map(|class| fs.egraph.find(*class)),
+            );
+            self.guard_branch_hits(context, fs, &both)
         };
 
         // A destruction branches on its tests: fuse each into a branch rule where
@@ -2268,6 +2310,29 @@ impl InstructionSelectPass {
                 .flatten();
             match fused {
                 Some(guard) => {
+                    let inverse =
+                        fs.control_inverses
+                            .get(&slot)
+                            .and_then(|class| guard_branch_hits.get(&fs.egraph.find(*class)))
+                            .and_then(|hits| {
+                                self.best_guard_branch(
+                                    context,
+                                    fs,
+                                    region,
+                                    self.control_anchor(fs, region, op, slot),
+                                    hits,
+                                )
+                            })
+                            .filter(|inverse| {
+                                inverse
+                                    .boundaries
+                                    .iter()
+                                    .all(|class| guard.boundaries.contains(class))
+                                    && inverse.m.values().all(|value| {
+                                        guard.m.values().any(|original| original == value)
+                                    })
+                            })
+                            .map(|inverse| (inverse.rule_index, inverse.m));
                     for boundary in guard.boundaries {
                         mm_overlay.insert(chase_low_extract(&fs.egraph, boundary));
                     }
@@ -2277,6 +2342,7 @@ impl InstructionSelectPass {
                         Some(AuxEmit::Branch(GuardBranch::Fused {
                             rule_index: guard.rule_index,
                             m: guard.m,
+                            inverse,
                         })),
                     ));
                 }
@@ -2323,6 +2389,12 @@ impl InstructionSelectPass {
             &cover::ClassPolicies {
                 demanded: &|class| demanded.contains(&fs.egraph.find(class)),
                 available: &available,
+                materialized: &|class| {
+                    mm_overlay.contains(&class)
+                        || fs
+                            .base_members(class)
+                            .any(|member| fs.demand.registers.contains(&(member, region)))
+                },
             },
             &matches,
         )
@@ -2426,6 +2498,7 @@ impl InstructionSelectPass {
                             .filter(|binding| {
                                 !binding.is_boundary
                                     && !binding.is_state
+                                    && binding.pattern_node != matches[match_id].pattern_root
                                     && !node::class_is_pure(&fs.egraph, binding.class)
                             })
                             .flat_map(|binding| {
@@ -2438,6 +2511,28 @@ impl InstructionSelectPass {
                     )
                     .collect();
                 states.dedup_by_key(|state| (state.observed, state.published));
+                // State edges internal to one instruction disappear with the
+                // covered accesses. Keep only the instruction's external ports.
+                loop {
+                    let internal = states.iter().enumerate().find_map(|(index, state)| {
+                        let published = state.published?;
+                        states
+                            .iter()
+                            .any(|other| other.observed == published)
+                            .then_some((index, state.observed, published))
+                    });
+                    let Some((index, observed, published)) = internal else {
+                        break;
+                    };
+                    states.remove(index);
+                    for state in &mut states {
+                        if state.observed == published {
+                            state.observed = observed;
+                        }
+                    }
+                }
+                let mut unique_states = HashSet::new();
+                states.retain(|state| unique_states.insert((state.observed, state.published)));
                 ScheduledEmit {
                     rule_index: matches[match_id].rule_index,
                     m: resolve_match(
@@ -2852,6 +2947,32 @@ impl InstructionSelectPass {
                 let class = fs.egraph.find(m.bindings[node.index()]);
                 node::class_is_pure(&fs.egraph, class)
                     || (region_op_by_root.get(&class).is_some_and(|interior| {
+                        if let Some(root) = region_op {
+                            let root = context.get_op(root);
+                            let writes =
+                                root.clone()
+                                    .as_interface::<dyn tir::ResourceEffects>()
+                                    .is_some_and(|effects| {
+                                        effects.resource_effects().iter().any(|effect| {
+                                            effect.access != tir::ResourceAccess::Read
+                                        })
+                                    });
+                            // An RMW can contract a direct read/write chain.
+                            // A join between them must retain the read's own
+                            // publication, or the fused instruction depends on
+                            // the state it publishes through that join.
+                            let publications = context.get_op(*interior).state_results();
+                            if writes
+                                && root.state_operands().iter().any(|state| {
+                                    !publications.contains(state)
+                                        && context.get_value(*state).defining_op().is_some_and(
+                                            |provider| fs.scopes.depends_on(provider, *interior),
+                                        )
+                                })
+                            {
+                                return false;
+                            }
+                        }
                         self.recovery.is_none()
                             || region_op
                                 .and_then(|root| self.execution_domains.get(&root))
@@ -2909,6 +3030,45 @@ impl InstructionSelectPass {
                     }
                 })
                 .collect();
+            // Contracting an effect into this tile must not also contract a
+            // dependency of one of its register inputs. That would make the
+            // instruction depend on its own state publication, for example a
+            // load fused into an add whose other operand comes from a call
+            // ordered after that load.
+            if pattern_nodes.iter().any(|effect| {
+                if effect.is_boundary
+                    || effect.is_state
+                    || effect.pattern_node == pattern_root
+                    || node::class_is_pure(&fs.egraph, effect.class)
+                {
+                    return false;
+                }
+                let Some(&interior) = region_op_by_root.get(&effect.class) else {
+                    return false;
+                };
+                let region = fs.scopes.op_region[&interior];
+                pattern_nodes.iter().any(|boundary| {
+                    boundary.is_boundary
+                        && boundary.demand == BoundaryDemand::Register
+                        && region_op_by_root
+                            .get(&boundary.class)
+                            .copied()
+                            .or_else(|| {
+                                fs.resolve_binding(
+                                    context,
+                                    boundary.class,
+                                    region,
+                                    region_op,
+                                    false,
+                                )
+                                .value
+                                .and_then(|value| context.get_value(value).defining_op())
+                            })
+                            .is_some_and(|provider| fs.scopes.depends_on(provider, interior))
+                })
+            }) {
+                continue;
+            }
             // Extraction is acyclic: a tile may not register-read its own
             // root class (it would compute the value from itself). Identity
             // members put e.g. `add(x, 0)` inside `x`'s class, so an

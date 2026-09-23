@@ -543,9 +543,10 @@ fn allocation_order(abi: &crate::backend::abi::AbiInfo, class: RegClassId) -> Ve
             && register.1 % class.group_width.max(1) == 0
         {
             let candidate = (class, register.1);
+            // Frames are SP-relative. The ABI's optional frame pointer is an
+            // ordinary callee-saved register in this allocator.
             let is_role = std::iter::once(&abi.sp)
                 .chain(abi.ra.iter())
-                .chain(abi.fp.iter())
                 .chain(abi.reserved)
                 .any(|role| candidate.0.overlaps(candidate.1, role.0, role.1));
             if !is_role && !result.contains(&candidate) {

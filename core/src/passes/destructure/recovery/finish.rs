@@ -15,6 +15,8 @@ struct Route {
     facts: HashMap<ValueId, ControlOutcome>,
     control_facts: HashMap<ControlPortId, ControlOutcome>,
     skip_control: Option<ControlId>,
+    /// Set only while routing the current transfer across a Theta repeat.
+    loops_back: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -24,6 +26,7 @@ struct Node(usize);
 struct Transfer {
     target: Node,
     bindings: Vec<ValueBinding>,
+    loops_back: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -265,6 +268,8 @@ impl Finish<'_> {
             facts,
             control_facts: HashMap::new(),
             skip_control: None,
+            // A new fragment starts a new transfer, regardless of its entries.
+            loops_back: false,
         }
     }
 
@@ -482,6 +487,7 @@ impl Finish<'_> {
             sequence: theta.head,
             index: 0,
         };
+        route.loops_back = true;
         Ok(())
     }
 
@@ -593,6 +599,7 @@ impl Finish<'_> {
         Transfer {
             target,
             bindings: route.bindings,
+            loops_back: route.loops_back,
         }
     }
 
@@ -789,6 +796,7 @@ impl Finish<'_> {
             other = Transfer {
                 target: here,
                 bindings: Vec::new(),
+                loops_back: false,
             };
         }
         if matches!(self.fragments[node.0].term, Term::Pending) {
@@ -869,6 +877,7 @@ impl Finish<'_> {
             other = Transfer {
                 target: here,
                 bindings: Vec::new(),
+                loops_back: false,
             };
         }
         Ok(())
@@ -1453,7 +1462,9 @@ impl Finish<'_> {
             .into_iter()
             .map(|raw| ssa.value(source, Self::resolved(&transfer.bindings, raw)))
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(Edge::with(ssa.blocks[transfer.target.0], &args))
+        let mut edge = Edge::with(ssa.blocks[transfer.target.0], &args);
+        edge.loops_back = transfer.loops_back;
+        Ok(edge)
     }
 
     fn emit_branch(

@@ -56,6 +56,21 @@ flowchart TD
 	R --> B["Final lowering and encoding"]
 ```
 
+Before selection, the affine pass replaces supported modular address recurrences
+with loop-carried values. Dead-code elimination removes the replaced arithmetic.
+
+The selector retains matching complementary branch forms over the same inputs.
+Recovery records edges that continue a loop, so machine emission can branch
+back conditionally and let the exit fall through. Edge copies stay on their
+original path; the existing block layout pass places their transfer blocks.
+
+After control recovery, dead-code elimination removes unused selected values.
+The machine dependence graph also records which instructions read each physical
+register definition. A definition overwritten in the same block can disappear
+when all its readers have disappeared. Every final register write remains
+observable, so this local cleanup preserves values needed in successor blocks
+and at function exits.
+
 Target preparation also matters. For example, unsupported integer widths need
 legalization into computations the target can handle. Calls and returns need
 the target's calling convention, which specifies how arguments and results
@@ -237,6 +252,22 @@ Several uses can share a computed value. Selection must account for those uses
 when it decides whether to keep the value in a register or compute it within a
 consumer's instruction.
 
+An effect can execute as its own tile or inside a selected tile that owns it.
+The latter choice requires that exact owner and does not provide a register for
+an independent reader. State edges between accesses inside one instruction
+contract to its external state ports. An indirect dependency through an
+external state producer or register operand prevents contraction: it would
+make the instruction depend on its own publication. The existing dependency
+DAG supplies reachability for this legality check. Independent state inputs
+remain external ports. Register demands across regions remain separate from
+effect demands. Child regions can reuse registers actually produced for
+ancestor effects, while pure computations retain the demand analysis's
+choice to recompute.
+
+Extending loads retain both their narrow and full behavior-derived patterns.
+Extension widths are structural integers, so their matching does not depend on
+the bit width used to encode an IR attribute.
+
 Effects impose stricter constraints. If two matches each include the same
 effect, selecting both could execute that effect twice. The cover rejects
 incompatible overlaps. State dependencies also preserve the order required by
@@ -340,6 +371,11 @@ its physical register has unspecified upper bits.
 Shared zero identities remove a zero-valued `and` arm and its surrounding `or`
 before instruction matching, so a lowered select with a zero arm does not
 require a separate mask chain.
+
+Frames use the stack pointer as their base, so the ABI's optional frame-pointer
+register remains available for allocation. Its ordinary callee-save obligation
+still applies; stack, return-address, and explicitly reserved registers remain
+excluded.
 
 Register allocation can replay an immediate producer instead of spilling its
 value. Replay sites retain block order so fresh register numbering and allocation

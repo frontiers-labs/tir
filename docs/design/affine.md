@@ -223,3 +223,24 @@ The central separation is between description, legality, and profitability.
 The affine view describes what the analysis understands. Dependence checks
 limit which schedules preserve behavior. The cost model chooses among those
 schedules, and the rebuilder must still be able to express the chosen result.
+
+## Modular affine recurrences
+
+After scheduling and unrolling, the affine pass reduces repeated integer
+products in theta bodies. This analysis uses the ring `Z/(2^W)` for widths
+up to 64 bits. It does not supply dependence proofs or assume that counters
+cannot wrap. An expression is represented by its initial value and step,
+both sparse affine forms over values defined outside the entire loop.
+
+Addition, subtraction and truncation preserve this representation. A product
+is admitted when an invariant multiplies a recurrence with constant initial
+value and step, or when one operand is a constant. For example, `N*k + col`
+with `k` initially zero and advancing by two has initial value `col` and
+step `2*N`, including when the arithmetic wraps.
+
+Product-containing expressions with equal width and step share a carried
+value. Their initial-value differences are computed before the loop. An
+existing carried counter can supply the same recurrence. The rewrite retains
+the original predicate and exit bindings and changes no iteration order.
+It reads only direct pure arithmetic in the body; nested-region values cannot
+be treated as invariant, and unsupported or nonlinear expressions are refused.

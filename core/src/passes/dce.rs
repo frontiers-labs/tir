@@ -3,13 +3,13 @@
 //! unused, retiring the erased op's reads so newly dead producers are revisited
 //! without rescanning.
 //!
-//! In backend pipelines it must run before register allocation — a
-//! physical-register write counts as a side effect, so nothing is eligible
-//! after allocation.
+//! In backend pipelines it must run before register allocation.
+//! An explicit physical-register write counts as a side effect. Implicit writes
+//! may disappear when their readers die and a later write replaces them.
 
 use crate::analysis::{DefUse, execution_regs, op_regs};
 use crate::backend::SymbolOp;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::{
     AnalysisManager, Context, MemoryWrite, OpHandle, OpId, OperationRef, Pass, PassError,
@@ -66,6 +66,28 @@ fn erase_dead_with(
         .iter()
         .flat_map(|&region| context.get_region(region).results())
         .collect();
+    // Reuse the machine dependence scan to keep every final register write,
+    // while allowing writes overwritten in the block once their readers die.
+    let mut register_users = HashMap::new();
+    let mut register_producers: HashMap<OpId, Vec<OpId>> = HashMap::new();
+    for &region in regions {
+        for block in context.get_region(region).block_ids() {
+            let ops = context.get_block(block).op_ids();
+            let graph = crate::backend::Dependences::of_ops(
+                context,
+                &ops,
+                &crate::backend::RegAssignment::default(),
+            );
+            for (index, &op) in ops.iter().enumerate() {
+                if let Some(users) = graph.local_register_users(index) {
+                    register_users.insert(op, users.to_vec());
+                    for &user in users {
+                        register_producers.entry(user).or_default().push(op);
+                    }
+                }
+            }
+        }
+    }
     // LIFO over walk order visits consumers before their producers.
     let mut queue: Vec<OpId> = defuse.ops().to_vec();
 
@@ -74,7 +96,10 @@ fn erase_dead_with(
             continue;
         }
         let instance = context.get_op(op_id);
-        if !is_erasable(context, &instance, &named) {
+        let unused_registers = register_users
+            .get(&op_id)
+            .is_some_and(|users| users.iter().all(|&user| !context.has_operation(user)));
+        if !is_erasable(context, &instance, &named, unused_registers) {
             continue;
         }
 
@@ -106,6 +131,14 @@ fn erase_dead_with(
         let used_regs = op_regs(&instance).uses;
         context.erase_op(&OperationRef::new(instance.clone()))?;
 
+        queue.extend(
+            register_producers
+                .get(&op_id)
+                .into_iter()
+                .flatten()
+                .copied(),
+        );
+
         // The erase retired the op's own reads, so a value it held alone is
         // now unread and its producers are candidates in turn.
         for used in used_regs {
@@ -118,7 +151,7 @@ fn erase_dead_with(
 }
 
 /// An op whose every virtual def is unused and whose absence nothing else can
-/// tell. Nested regions, a terminator, or any physical-register write keep it; a
+/// tell. Nested regions, a terminator, or an observable register write keep it; a
 /// mid-end op with SSA results must additionally declare pure semantics, so
 /// effectful ops like calls survive even when their result is unread.
 ///
@@ -129,7 +162,12 @@ fn erase_dead_with(
 /// either, and its readers are handed the state it observed. Where no chain is
 /// threaded a write publishes nothing, defines nothing, and the last test below
 /// leaves it alone.
-fn is_erasable(context: &Context, instance: &OpHandle, named: &HashSet<ValueId>) -> bool {
+fn is_erasable(
+    context: &Context,
+    instance: &OpHandle,
+    named: &HashSet<ValueId>,
+    unused_registers: bool,
+) -> bool {
     if instance.clone().as_interface::<dyn Terminator>().is_some() {
         return false;
     }
@@ -183,8 +221,11 @@ fn is_erasable(context: &Context, instance: &OpHandle, named: &HashSet<ValueId>)
         _ => {}
     }
 
+    if !op_regs(instance).phys_defs.is_empty() {
+        return false;
+    }
     let regs = execution_regs(instance);
-    if !regs.phys_defs.is_empty() {
+    if !regs.phys_defs.is_empty() && !unused_registers {
         return false;
     }
 
@@ -192,7 +233,16 @@ fn is_erasable(context: &Context, instance: &OpHandle, named: &HashSet<ValueId>)
     // one keeping it alive; every other dependency an op leaves is a definition
     // like its values.
     let published = instance.state_results();
-    let mut defines = false;
+    let mut defines = !regs.phys_defs.is_empty()
+        && machine.as_ref().is_some_and(|mi| {
+            use crate::backend::exec::{Dest, Effect, Program};
+            let info = mi.info();
+            info.effects == crate::backend::MemoryEffects::NONE
+                && info.control_flow == crate::backend::ControlFlow::None
+                && matches!(&info.program, Program::Effects { effects, .. }
+                    if !effects.is_empty() && effects.iter().all(|effect| matches!(effect,
+                        Effect::Assign { dest: Dest::Reg(_) | Dest::Fixed(_, _), .. })))
+        });
     for def in regs
         .defs
         .iter()

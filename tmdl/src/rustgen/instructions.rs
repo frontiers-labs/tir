@@ -379,6 +379,64 @@ fn fp_value_patterns(
     patterns
 }
 
+
+// The narrow load pattern observes only the loaded bits. Keep the full
+// extension as well so a wider consumer can select the same instruction.
+fn extending_load_pattern(
+    semantics: &InstructionSemantics,
+    immediate_symbols: &HashSet<u32>,
+    canonical: &tir_graph::GenericDag<
+        tir_symbolic::lang::SymKind,
+        tir_symbolic::lang::SymPayload<tir_symbolic::sem::ValueId>,
+    >,
+    load_root: tir_graph::NodeId,
+    pattern_widths: &[Option<u32>],
+) -> Option<SpecPattern> {
+    use tir_graph::{Dag, MutDag};
+    use tir_symbolic::lang::{SymKind, SymPayload};
+    let kind = *semantics.pattern.get_node(semantics.root);
+    if !matches!(kind, SymKind::ZExt | SymKind::SExt)
+        || *canonical.get_node(load_root) != SymKind::LoadMemory
+    {
+        return None;
+    }
+    let children: Vec<_> = semantics.pattern.children(semantics.root).collect();
+    let [loaded, width] = children.as_slice() else {
+        return None;
+    };
+    if *semantics.pattern.get_node(*loaded) != SymKind::LoadMemory {
+        return None;
+    }
+    let SymPayload::Int(width_value) = semantics.pattern.get_leaf_data(*width)? else {
+        return None;
+    };
+    let load_width = tir_symbolic::lang::infer_widths(&semantics.pattern, |_| None)[loaded.index()]?;
+    let extension_width = u32::try_from(width_value.to_u64()).ok()?;
+    if extension_width <= load_width {
+        return None;
+    }
+    let (mut full, load_root, _) = tir_symbolic::lang::canonicalize_for_selection(
+        &semantics.pattern,
+        semantics.root,
+        immediate_symbols,
+    );
+    let width = full.add_node(SymKind::Constant);
+    full.set_leaf_data(width, SymPayload::Int(width_value.clone()));
+    let root = full.add_node(kind);
+    full.add_edge(root, load_root);
+    full.add_edge(root, width);
+    let mut widths = pattern_widths.to_vec();
+    widths.resize(full.len(), None);
+    widths[load_root.index()] = Some(load_width);
+    widths[root.index()] = Some(extension_width);
+    let (offset, typed) = intern_dag(&full, root, &widths);
+    Some(SpecPattern {
+        offset,
+        typed,
+        float_width: None,
+    })
+}
+
 fn emit_value_rules(
     tables: &TargetTables<'_>,
     ctx: &InstrEmitCtx<'_>,
@@ -601,6 +659,17 @@ fn emit_value_rules(
         _ => None,
     };
     let mut patterns = vec![("", pattern_spec, true)];
+    patterns.extend(
+        extending_load_pattern(
+            semantics,
+            &immediate_symbols,
+            &canon_pattern,
+            canon_root,
+            &pattern_widths,
+        )
+        .map(|pattern| ("extended_load", pattern, true)),
+    );
+
     patterns.extend(fp_value_patterns(
         semantics,
         &immediate_symbols,

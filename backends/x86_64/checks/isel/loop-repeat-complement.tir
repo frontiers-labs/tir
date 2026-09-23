@@ -19,17 +19,14 @@ module {
   module_end
 }
 
-// The header compares once and returns directly when equal: no setcc, boolean
-// inversion, flag-setting test, second compare, latch, or exit-only join.
+// The header compares once and branches directly to the backedge when unequal.
+// Neither outcome needs a materialized boolean or another comparison.
 // CHECK: ^[[HEAD:bb[0-9]+]](%{{[0-9]+}}: !x86_64.GPR):
-// CHECK-NEXT: x86_64.lea_base_disp {dst = %{{[0-9]+}}:GPR, base = %{{[0-9]+}}:GPR, imm = -1}
-// CHECK-NEXT: x86_64.cmp {dst = %{{[0-9]+}}:GPR, src = %{{[0-9]+}}:GPR}
-// CHECK-NEXT: x86_64.je {imm = ^[[EXIT:bb[0-9]+]]}
-// CHECK-NEXT: asm.vbr %{{[0-9]+}} ^[[HEAD]]
-// CHECK-NOT: x86_64.cmp
-// CHECK-NOT: x86_64.sete
-// CHECK-NOT: x86_64.xor_imm
-// CHECK-NOT: x86_64.xor {
-// CHECK-NOT: x86_64.test_imm32
-// CHECK: ^[[EXIT]]:
-// CHECK-NEXT: asm.vret
+// CHECK-NEXT: x86_64.lea_base_disp {dst = %[[NEXT:[0-9]+]]:GPR, base = %{{[0-9]+}}:GPR, imm = -1}
+// CHECK-NEXT: x86_64.cmp {dst = %{{[0-9]+}}:GPR, src = %[[NEXT]]:GPR}
+// CHECK-NEXT: x86_64.jne {imm = ^[[BACK:bb[0-9]+]]}
+// CHECK-NEXT: asm.vbr ^[[EXIT:bb[0-9]+]]
+// CHECK-NEXT: ^[[BACK]]:
+// CHECK-NEXT: asm.vbr %[[NEXT]] ^[[HEAD]]
+// CHECK-NEXT: ^[[EXIT]]:
+// CHECK-NEXT: asm.vret %[[NEXT]]

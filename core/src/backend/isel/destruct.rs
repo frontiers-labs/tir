@@ -100,8 +100,28 @@ impl MachineEdges<'_> {
         fallthrough: &Edge,
         mint: &mut dyn FnMut() -> BlockId,
     ) -> Result<(), PassError> {
-        let emit = &selected.emit;
-        let holds = selected.taken_when;
+        let mut emit = &selected.emit;
+        let mut holds = selected.taken_when;
+        let reversed;
+        // Recovery identifies a repeat edge after resolving structural control.
+        // Prefer a conditional backedge; its transfer copies stay on that edge.
+        let current_taken = if holds { taken } else { fallthrough };
+        let current_other = if holds { fallthrough } else { taken };
+        if !current_taken.loops_back
+            && current_other.loops_back
+            && let AuxEmit::Branch(GuardBranch::Fused {
+                inverse: Some((rule_index, m)),
+                ..
+            }) = emit
+        {
+            reversed = AuxEmit::Branch(GuardBranch::Fused {
+                rule_index: *rule_index,
+                m: m.clone(),
+                inverse: None,
+            });
+            emit = &reversed;
+            holds = !holds;
+        }
         let (taken, fallthrough) = if holds {
             (taken, fallthrough)
         } else {
@@ -142,7 +162,7 @@ impl MachineEdges<'_> {
                     holder.append(op.id());
                 }
             }
-            GuardBranch::Fused { rule_index, m } => {
+            GuardBranch::Fused { rule_index, m, .. } => {
                 let rule = &self.rules[*rule_index];
                 let RuleKind::CondBranch { target_symbol } = rule.kind else {
                     return Err(PassError::InvalidRuleSet(
@@ -210,7 +230,12 @@ impl Edges for MachineEdges<'_> {
             .collect();
         let mut emit = selected.emit.clone();
         match &mut emit {
-            AuxEmit::Branch(GuardBranch::Fused { m, .. }) => m.remap_values(&substitutions),
+            AuxEmit::Branch(GuardBranch::Fused { m, inverse, .. }) => {
+                m.remap_values(&substitutions);
+                if let Some((_, inverse)) = inverse {
+                    inverse.remap_values(&substitutions);
+                }
+            }
             AuxEmit::Branch(GuardBranch::Nonzero { condition }) => {
                 *condition = substitutions.get(condition).copied().unwrap_or(*condition);
             }

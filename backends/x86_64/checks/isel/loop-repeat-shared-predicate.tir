@@ -5,7 +5,8 @@
 // the setcc register to the block returning it.
 
 // CHECK: x86_64.sete {dst = %[[DONE:[0-9]+]]:GPR8}
-// CHECK: x86_64.je {imm = ^[[EXIT:bb[0-9]+]]}
+// CHECK: x86_64.jne {imm = ^[[BACK:bb[0-9]+]]}
+// CHECK-NEXT: asm.vbr ^[[EXIT:bb[0-9]+]]
 // CHECK: ^[[EXIT]]:
 // CHECK-NEXT: asm.vret %[[DONE]]
 

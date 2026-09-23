@@ -74,7 +74,13 @@ pub(crate) struct FullMatchBindings {
 #[derive(Clone, Debug)]
 pub(crate) enum PbqpIselAlternative {
     NotDemanded,
-    Tile { match_id: usize },
+    /// The effect executes inside this selected match, without a separate value.
+    CoveredBy {
+        match_id: usize,
+    },
+    Tile {
+        match_id: usize,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -103,6 +109,7 @@ pub(crate) struct ClassCover {
 pub(crate) struct ClassPolicies<'a> {
     pub(crate) demanded: &'a dyn Fn(Id) -> bool,
     pub(crate) available: &'a dyn Fn(Id) -> bool,
+    pub(crate) materialized: &'a dyn Fn(Id) -> bool,
 }
 
 pub(crate) fn build_eclass_cover(
@@ -127,6 +134,26 @@ pub(crate) fn build_eclass_cover(
             continue;
         };
         alternatives_by_node[root_index].push(PbqpIselAlternative::Tile { match_id });
+        for binding in &m.bindings.pattern_nodes {
+            let class = egraph.find(binding.class);
+            if binding.is_boundary
+                || binding.is_state
+                || class == egraph.find(m.root)
+                || class_is_pure(egraph, class)
+                || (policies.materialized)(class)
+            {
+                continue;
+            }
+            if let Some(index) = class_index(class) {
+                let alternatives = &mut alternatives_by_node[index];
+                if !alternatives.iter().any(|alternative| {
+                    matches!(alternative,
+                    PbqpIselAlternative::CoveredBy { match_id: owner } if *owner == match_id)
+                }) {
+                    alternatives.push(PbqpIselAlternative::CoveredBy { match_id });
+                }
+            }
+        }
     }
 
     if alternatives_by_node.iter().any(Vec::is_empty) {
@@ -148,7 +175,7 @@ pub(crate) fn build_eclass_cover(
             .iter()
             .map(|alternative| match alternative {
                 PbqpIselAlternative::Tile { match_id } => matches[*match_id].cost,
-                PbqpIselAlternative::NotDemanded => 0,
+                PbqpIselAlternative::NotDemanded | PbqpIselAlternative::CoveredBy { .. } => 0,
             })
             .collect();
         problem.add_node(costs);
@@ -485,7 +512,7 @@ pub(crate) fn completeness_error(
 fn produced_view_offset(alternative: &PbqpIselAlternative, matches: &[PbqpIselMatch]) -> u32 {
     match alternative {
         PbqpIselAlternative::Tile { match_id } => matches[*match_id].result_view_offset,
-        PbqpIselAlternative::NotDemanded => 0,
+        PbqpIselAlternative::NotDemanded | PbqpIselAlternative::CoveredBy { .. } => 0,
     }
 }
 
@@ -495,7 +522,7 @@ fn produced_view_offset(alternative: &PbqpIselAlternative, matches: &[PbqpIselMa
 fn produced_width(alternative: &PbqpIselAlternative, matches: &[PbqpIselMatch]) -> Option<u32> {
     match alternative {
         PbqpIselAlternative::Tile { match_id } => matches[*match_id].result_width,
-        PbqpIselAlternative::NotDemanded => None,
+        PbqpIselAlternative::NotDemanded | PbqpIselAlternative::CoveredBy { .. } => None,
     }
 }
 
@@ -507,6 +534,10 @@ pub(crate) fn alternatives_compatible(
     matches: &[PbqpIselMatch],
     available: &dyn Fn(Id) -> bool,
 ) -> bool {
+    if let PbqpIselAlternative::CoveredBy { match_id } = parent_alt {
+        return egraph.find(matches[*match_id].root) != child
+            || matches!(child_alt, PbqpIselAlternative::Tile { match_id: owner } if owner == match_id);
+    }
     let PbqpIselAlternative::Tile { match_id } = parent_alt else {
         return true;
     };
@@ -558,11 +589,13 @@ pub(crate) fn alternatives_compatible(
         match child_alt {
             PbqpIselAlternative::Tile { .. } => true,
             PbqpIselAlternative::NotDemanded => available(child),
+            PbqpIselAlternative::CoveredBy { .. } => false,
         }
     } else if immediate {
         class_int_binding(egraph, child).is_some()
     } else if owned_effect {
         matches!(child_alt, PbqpIselAlternative::NotDemanded)
+            || matches!(child_alt, PbqpIselAlternative::CoveredBy { match_id: owner } if owner == match_id)
     } else {
         true
     }

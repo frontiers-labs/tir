@@ -25,12 +25,11 @@ module {
 // The body: the nested gate's taken arm leaves, the other stays.
 // CHECK: x86_64.lea_base_disp {dst = %[[NI:[0-9]+]]:GPR, base = %{{[0-9]+}}:GPR, imm = -1}
 // CHECK-NEXT: x86_64.cmp {dst = %[[NI]]:GPR, src = %{{[0-9]+}}:GPR}
-// CHECK-NEXT: x86_64.sete {dst = %[[EQ:[0-9]+]]:GPR8}
-// CHECK-NEXT: x86_64.xor_imm {dst = %[[GO:[0-9]+]]:GPR, dst_tied = %[[EQ]]:GPR8, imm = 1}
-// CHECK-NEXT: x86_64.cmp {dst = %[[NI]]:GPR, src = %{{[0-9]+}}:GPR}
-// CHECK-NEXT: x86_64.je {imm = ^[[BREAK:bb[0-9]+]]}
+// CHECK-NEXT: x86_64.jne {imm = ^[[BACK:bb[0-9]+]]}
+// CHECK-NEXT: asm.vbr ^[[BREAK:bb[0-9]+]]
+// CHECK-NEXT: ^[[BACK]]:
 // CHECK-NEXT: asm.vbr %[[NI]] ^[[HEAD:bb[0-9]+]]
-// CHECK: ^[[BREAK]]:
+// CHECK-NEXT: ^[[BREAK]]:
 // CHECK-NEXT: asm.vret %[[NI]]
 // The known nested outcome routes directly; no materialized repeat test or
 // latch remains.

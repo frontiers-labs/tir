@@ -1,11 +1,11 @@
 // RUN: tir mc --march=rv64i --stage=regalloc %s | filecheck %s
 
 // %a is computed, passed to an external call, then read again after it, so it is
-// live across the call and must occupy a callee-saved register (s1 = x9). The
+// live across the call and must occupy a callee-saved register (s0 = x8). The
 // func.return address saved across the call rides the same mechanism in a second
-// callee-saved register (s2 = x18). Both must be preserved for this function's
-// caller: the prologue saves them into the frame and the epilogue restores them
-// before the func.return.
+// callee-saved register (s1 = x9). Both must be preserved for this function's
+// caller. SP-relative frames leave s0 available. The prologue saves both and
+// the epilogue restores them before the func.return.
 
 module {
   %fn_ext = func.declare @ext(!i64) -> !i64
@@ -20,11 +20,11 @@ module {
 
 // Prologue: reserve the frame, then save the two callee-saved registers used.
 // CHECK: riscv.addi {rd = x2, rs1 = x2, imm = -16}
-// CHECK: riscv.sd {rs1 = x2, rs2 = x9, imm = 0}
-// CHECK: riscv.sd {rs1 = x2, rs2 = x18, imm = 8}
+// CHECK: riscv.sd {rs1 = x2, rs2 = x8, imm = 0}
+// CHECK: riscv.sd {rs1 = x2, rs2 = x9, imm = 8}
 // CHECK: asm.vcall state(%{{[0-9]+}}, %{{[0-9]+}}) {callee = "ext"
 // Epilogue: restore both and release the frame before the func.return.
-// CHECK: riscv.ld {rd = x9, rs1 = x2, imm = 0}
-// CHECK: riscv.ld {rd = x18, rs1 = x2, imm = 8}
+// CHECK: riscv.ld {rd = x8, rs1 = x2, imm = 0}
+// CHECK: riscv.ld {rd = x9, rs1 = x2, imm = 8}
 // CHECK: riscv.addi {rd = x2, rs1 = x2, imm = 16}
 // CHECK: asm.vret

@@ -57,6 +57,9 @@ pub enum Test {
 pub struct Edge {
     pub dest: BlockId,
     pub args: Vec<ValueId>,
+    /// This transfer crosses a Theta continuation into its next iteration.
+    /// Targets may use this provenance to choose a branch orientation.
+    pub loops_back: bool,
 }
 
 impl Edge {
@@ -64,6 +67,7 @@ impl Edge {
         Self {
             dest,
             args: Vec::new(),
+            loops_back: false,
         }
     }
 
@@ -71,6 +75,7 @@ impl Edge {
         Self {
             dest,
             args: args.to_vec(),
+            loops_back: false,
         }
     }
 }

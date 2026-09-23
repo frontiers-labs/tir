@@ -1,10 +1,10 @@
 // RUN: tir mc --march=rv64ifd --stage=isel %s | filecheck %s
 
+// A runtime bound keeps the loop and its state edges visible to selection.
 module {
-  %f = func.func @shared_read(%initial: !i5) -> !i5 {
+  %f = func.func @shared_read(%initial: !i5, %end: !i64) -> !i5 {
     %start = constant {value = 0} : !i64
     %step = constant {value = 1} : !i64
-    %end = constant {value = 4} : !i64
     %env0 = state.entry_state : !state<fp.env>
     %index, %value, %env = scf.for %i = %start to %end step %step (%v = %initial, %s = %env0) {
       %first, %s1 = fp.get_flags state(%s) : !i5

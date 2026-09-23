@@ -42,6 +42,7 @@ pub(crate) struct ControlSlot {
 #[derive(Default)]
 pub(crate) struct RegionControl {
     pub(crate) aux: HashMap<RegionId, Vec<(OpId, ControlSlot, Id)>>,
+    pub(crate) inverses: HashMap<ControlSlot, Id>,
 }
 
 impl RegionControl {
@@ -306,16 +307,23 @@ impl<'a> SemDagBuilder<'a> {
             } else {
                 class
             };
-            control.record(
-                definition.scope,
-                anchor,
-                ControlSlot {
-                    id: definition.id,
-                    outcome,
-                    inverted,
-                },
-                class,
-            );
+            let slot = ControlSlot {
+                id: definition.id,
+                outcome,
+                inverted,
+            };
+            let comparison = self.egraph.nodes(class).find_map(|node| {
+                tir::sem::egraph::complement_comparison(node.sym()?)
+                    .map(|kind| (kind, node.children.clone()))
+            });
+            let inverse = if let Some((kind, operands)) = comparison {
+                self.add_op(kind, operands, Some(boolean))
+            } else {
+                let one = self.add_int(APInt::new(1, 1), Some(boolean));
+                self.add_op(SymKind::Xor, vec![class, one], Some(boolean))
+            };
+            control.inverses.insert(slot, inverse);
+            control.record(definition.scope, anchor, slot, class);
         }
     }
 
@@ -380,6 +388,13 @@ impl<'a> SemDagBuilder<'a> {
     /// Build an operator node, canonicalizing commutative operands so `a op b` and
     /// `b op a` hash-cons to the same e-node (mirroring the program's CSE).
     fn add_op(&mut self, kind: SymKind, mut children: Vec<Id>, ty: Option<TypeId>) -> Id {
+        // An extension's width is a structural integer, not a bitvector value.
+        // IR attributes and target patterns may encode it at different widths.
+        if matches!(kind, SymKind::SExt | SymKind::ZExt)
+            && let Some(value) = tir::sem::egraph::class_int_binding(self.egraph, children[1])
+        {
+            children[1] = self.add_u64_const(value.to_u64());
+        }
         if kind.is_commutative() {
             children.sort();
         }

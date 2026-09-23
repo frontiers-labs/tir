@@ -17,6 +17,7 @@
 //! turns the copies into straight-line code.
 
 mod lower;
+mod recurrence;
 mod schedule;
 mod strip_mine;
 mod unroll;
@@ -63,7 +64,9 @@ impl Pass for AffineSchedulePass {
         for view in nests_under(context, op.op().id) {
             schedule_nest(context, op.op().id, &view, line)?;
         }
-        unroll::run(context, op.op().id)
+        unroll::run(context, op.op().id)?;
+        recurrence::run(context, op.op().id);
+        Ok(())
     }
 }
 

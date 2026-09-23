@@ -24,9 +24,8 @@ module {data_layout = #data_layout} {
 // Nothing of the arm precedes the branch.
 // CHECK-NOT: x86_64.mov_load
 // CHECK-NOT: x86_64.mov_store
+// CHECK-NOT: x86_64.add_mem_rmw
 // CHECK: x86_64.test_imm32 {dst = %[[V0:[0-9]+]]:GPR, imm = 1}
 // CHECK-NEXT: x86_64.jne {imm = ^[[THEN:bb[0-9]+]]}
 // CHECK: ^[[THEN]](
-// CHECK-NEXT: x86_64.mov_load
-// CHECK-NEXT: x86_64.add
-// CHECK-NEXT: x86_64.mov_store
+// CHECK-NEXT: %{{[0-9]+}} = x86_64.add_mem_rmw

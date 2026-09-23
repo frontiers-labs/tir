@@ -238,3 +238,14 @@ rule sext-bool-low-bit:
   #and(#sext(c: int<1>, W), 1) : int<W>
   => #zext(#extract(c, 0, 0), W)
   where 1 < W;
+
+// Only the low byte participates in a masked XOR equality.
+rule low-byte-xor-eq:
+  #eq(#and(#xor(a: int<W>, b: int<W>), const<W>(255)), const<W>(0)) : int<1>
+  => #eq(#extract(a, const<3>(7), const<1>(0)), #extract(b, const<3>(7), const<1>(0)))
+  where 8 < W;
+
+rule low-byte-xor-ne:
+  #ne(#and(#xor(a: int<W>, b: int<W>), const<W>(255)), const<W>(0)) : int<1>
+  => #ne(#extract(a, const<3>(7), const<1>(0)), #extract(b, const<3>(7), const<1>(0)))
+  where 8 < W;
