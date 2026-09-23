@@ -1,6 +1,6 @@
 use std::hint::black_box;
 
-use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
+use tir_bench::Suite;
 use tir_pbqp::{PbqpMatrix, PbqpNodeId, PbqpProblem, solve};
 
 fn dense_problem(node_count: usize, alternative_count: usize) -> PbqpProblem {
@@ -70,44 +70,51 @@ fn block_problem(node_count: usize, alternative_count: usize) -> PbqpProblem {
     problem
 }
 
-fn bench_block_search(c: &mut Criterion) {
-    let mut group = c.benchmark_group("pbqp/block_search");
-    group.sample_size(20);
+fn bench_block_search(suite: &mut Suite) -> tir_bench::Result<()> {
     for node_count in [512, 4096] {
+        let name = format!("block_search/{node_count}");
+        if suite.options().list {
+            suite.list_function(&name)?;
+            continue;
+        }
+        if !suite.matches(&name) {
+            continue;
+        }
         let problem = block_problem(node_count, 8);
-        group.bench_with_input(
-            BenchmarkId::from_parameter(node_count),
-            &problem,
-            |b, problem| {
-                b.iter_batched(
-                    || problem.clone(),
-                    |problem| black_box(solve(&problem).expect("PBQP should be solvable")),
-                    BatchSize::SmallInput,
-                );
-            },
-        );
+        suite.function(&name, |b| {
+            b.iter_batched(
+                || problem.clone(),
+                |problem| black_box(solve(&problem).expect("PBQP should be solvable")),
+            );
+        })?;
     }
-    group.finish();
+    Ok(())
 }
 
-fn bench_dense_search(c: &mut Criterion) {
-    let mut group = c.benchmark_group("pbqp/dense_search");
+fn bench_dense_search(suite: &mut Suite) -> tir_bench::Result<()> {
     for node_count in [16, 32] {
+        let name = format!("dense_search/{node_count}");
+        if suite.options().list {
+            suite.list_function(&name)?;
+            continue;
+        }
+        if !suite.matches(&name) {
+            continue;
+        }
         let problem = dense_problem(node_count, 4);
-        group.bench_with_input(
-            BenchmarkId::from_parameter(node_count),
-            &problem,
-            |b, problem| {
-                b.iter_batched(
-                    || problem.clone(),
-                    |problem| black_box(solve(&problem).expect("PBQP should be solvable")),
-                    BatchSize::SmallInput,
-                );
-            },
-        );
+        suite.function(&name, |b| {
+            b.iter_batched(
+                || problem.clone(),
+                |problem| black_box(solve(&problem).expect("PBQP should be solvable")),
+            );
+        })?;
     }
-    group.finish();
+    Ok(())
 }
 
-criterion_group!(benches, bench_dense_search, bench_block_search);
-criterion_main!(benches);
+fn main() -> tir_bench::Result<()> {
+    let mut suite = Suite::from_args(concat!(env!("CARGO_PKG_NAME"), "/pbqp"))?;
+    bench_dense_search(&mut suite)?;
+    bench_block_search(&mut suite)?;
+    suite.finish()
+}

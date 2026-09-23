@@ -1,6 +1,0 @@
-# RUN: not xtask extbench compile --suite %S/Inputs/local/bench_suite.toml --package missing 2>&1 | filecheck %s --check-prefix=PACKAGE
-# RUN: not xtask extbench run --suite %S/Inputs/local/bench_suite.toml --bench missing 2>&1 | filecheck %s --check-prefix=BENCH
-# RUN: not xtask extbench compile --suite %S/Inputs/local/bench_suite.toml --compiler missing 2>&1 | filecheck %s --check-prefix=COMPILER
-# PACKAGE: no benchmarks match the filters
-# BENCH: no benchmarks match the filters
-# COMPILER: no compilers selected

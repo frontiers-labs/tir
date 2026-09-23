@@ -17,6 +17,7 @@ tir-pdl = { path = "../pdl", default-features = false }
 tir-jit.workspace = true
 
 [lib]
+bench = false
 path = "src/lib.rs"
 test = false
 doctest = false

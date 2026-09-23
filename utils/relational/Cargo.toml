@@ -1,4 +1,5 @@
 [package]
+autobenches = false
 name = "tir-relational"
 version = "0.1.0"
 edition = "2024"
@@ -8,7 +9,7 @@ smallvec = "1.15.2"
 tir-adt.workspace = true
 
 [dev-dependencies]
-criterion = { workspace = true }
+tir-bench.workspace = true
 egg = "0.11"
 proptest.workspace = true
 smallvec = "1.15.2"
@@ -23,3 +24,6 @@ harness = false
 
 [lints]
 workspace = true
+
+[lib]
+bench = false

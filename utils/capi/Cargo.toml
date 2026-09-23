@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [lib]
+bench = false
 name = "tir_capi"
 crate-type = ["cdylib", "staticlib", "rlib"]
 test = false

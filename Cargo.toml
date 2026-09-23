@@ -2,6 +2,7 @@
 resolver = "2"
 
 members = [
+    "utils/bench",
     "utils/filecheck",
     "utils/lit",
     "utils/not",
@@ -59,7 +60,7 @@ tir-gpu = { path = "gpu" }
 anyhow = "1.0.102"
 ariadne = "0.6.0"
 clap = "4.6.1"
-criterion = "0.8.2"
+tir-bench = { path = "utils/bench" }
 jsonschema = { version = "0.33.0", default-features = false }
 linkme = "0.3.36"
 logos = "0.16.1"

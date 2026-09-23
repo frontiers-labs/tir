@@ -1,0 +1,24 @@
+[package]
+name = "tir-bench"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+cachegrind = ["dep:gungraun"]
+
+[dependencies]
+anyhow.workspace = true
+clap = { workspace = true, features = ["derive"] }
+globset.workspace = true
+gungraun = { version = "0.19.4", optional = true, default-features = false, features = ["client_requests"] }
+libc = "0.2"
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+sha2 = "0.8.2"
+tempfile = "3.27.0"
+
+[lib]
+bench = false
+
+[lints]
+workspace = true

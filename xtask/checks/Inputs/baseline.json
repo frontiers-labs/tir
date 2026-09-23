@@ -1,1 +1,0 @@
-{"mode":"compile","host":"x86_64-linux","samples":[{"package":"fixture","benchmark":"integer","compiler":"gcc","level":"-O0","source":"main.c","wall_ms":100000,"peak_rss_kb":1000000,"metrics":{}}]}

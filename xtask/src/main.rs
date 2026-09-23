@@ -1,4 +1,3 @@
-mod extbench;
 mod fcc_fuzz;
 mod fcc_torture;
 mod fp_check;
@@ -18,9 +17,6 @@ use crate::utils::project_root;
 
 #[derive(Parser)]
 enum Task {
-    /// Compile or run directory-defined external benchmarks.
-    #[command(subcommand)]
-    Extbench(extbench::Task),
     /// Record and compare floating-point reference behavior.
     #[command(subcommand)]
     FpCheck(fp_check::Task),
@@ -72,7 +68,6 @@ enum Task {
 fn main() -> anyhow::Result<()> {
     let sh = Shell::new()?;
     match Task::parse() {
-        Task::Extbench(task) => extbench::run(&project_root(), task),
         Task::FpCheck(task) => fp_check::run(&project_root(), task),
         Task::Build => build(&sh),
         Task::Check => {

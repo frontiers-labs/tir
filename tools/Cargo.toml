@@ -1,13 +1,16 @@
 [package]
+autobenches = false
 name = "tir-tools"
 version = "0.1.0"
 edition = "2024"
 
 [lib]
+bench = false
 test = false
 doctest = false
 
 [[bin]]
+bench = false
 name = "tir"
 path = "src/main.rs"
 
@@ -25,3 +28,12 @@ tir-llvm.workspace = true
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+anyhow.workspace = true
+tir-bench.workspace = true
+serde_json.workspace = true
+
+[[bench]]
+name = "programs"
+harness = false

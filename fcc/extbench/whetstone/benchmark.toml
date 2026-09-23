@@ -1,4 +1,0 @@
-sources = ["whetstone.c"]
-link_flags = ["-lm"]
-args = ["1000000"]
-

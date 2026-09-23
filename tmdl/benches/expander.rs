@@ -1,4 +1,4 @@
-use criterion::{Criterion, Throughput, criterion_group, criterion_main};
+use tir_bench::Suite;
 
 use tmdl::{MacroTable, StringArena, collect_macros, expand, lex};
 
@@ -14,7 +14,15 @@ const DEFS: &[&str] = &[
     include_str!("../../backends/x86_64/defs/float.tmdl"),
 ];
 
-fn x86_defs(c: &mut Criterion) {
+fn main() -> tir_bench::Result<()> {
+    let mut suite = Suite::from_args(concat!(env!("CARGO_PKG_NAME"), "/expander"))?;
+    if suite.options().list {
+        suite.list_function("x86_defs/collect_and_expand")?;
+        return suite.finish();
+    }
+    if !suite.matches("x86_defs/collect_and_expand") {
+        return suite.finish();
+    }
     let input = DEFS.join("\n");
     let (tokens, errs) = lex(&input);
     assert!(errs.is_empty());
@@ -22,9 +30,8 @@ fn x86_defs(c: &mut Criterion) {
     // Synthesized-string arena lifetime is unified with the token lifetime, so
     // it must outlive the loop; it grows across iterations but the run is short.
     let arena = StringArena::new();
-    let mut group = c.benchmark_group("x86_defs");
-    group.throughput(Throughput::Bytes(input.len() as u64));
-    group.bench_function("collect_and_expand", |b| {
+    suite.set_throughput(input.len() as u64);
+    suite.function("x86_defs/collect_and_expand", |b| {
         b.iter(|| {
             let mut table = MacroTable::new();
             let mut diags = Vec::new();
@@ -33,9 +40,6 @@ fn x86_defs(c: &mut Criterion) {
             let (_out, diags) = expand("<bench>", toks, &table, &arena);
             assert!(diags.is_empty());
         })
-    });
-    group.finish()
+    })?;
+    suite.finish()
 }
-
-criterion_group!(benches, x86_defs);
-criterion_main!(benches);

@@ -1,4 +1,5 @@
 [package]
+autobenches = false
 name = "tir"
 version = "0.1.0"
 edition = "2024"
@@ -6,6 +7,7 @@ edition = "2024"
 # Unit tests live in utils/unit-tests (crate tir-unit-tests); FileCheck tests
 # in checks/ run through the workspace lit driver.
 [lib]
+bench = false
 test = false
 doctest = false
 
@@ -28,7 +30,7 @@ tir-pdl = { path = "../utils/pdl", default-features = false }
 tir-pdl = { path = "../utils/pdl", default-features = false }
 
 [dev-dependencies]
-criterion = { workspace = true }
+tir-bench.workspace = true
 
 [[bench]]
 name = "lexer"

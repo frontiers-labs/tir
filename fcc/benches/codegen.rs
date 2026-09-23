@@ -5,10 +5,9 @@
 
 use std::fmt::Write;
 use std::hint::black_box;
-use std::time::Duration;
 
-use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use logos::Logos;
+use tir_bench::Suite;
 
 use fcc::cir::CirDialect;
 use fcc::codegen::codegen;
@@ -20,7 +19,10 @@ use fcc::sema::{TypedAst, analyze};
 use tir::backend::TargetMachine;
 use tir::backend::pipeline::{Oracles, StopAfter, build_pipeline};
 use tir::func::FuncOp;
-use tir::passes::{InstCombineNodesPass, PromoteNodesPass, RestructureNodesPass, VerifyDepsPass};
+use tir::passes::{
+    InstCombineNodesPass, MaterializeSymbolAddressesPass, PromoteNodesPass, RestructureNodesPass,
+    VerifyDepsPass,
+};
 use tir::{Context, Operation, PassManager};
 
 const GCC_20011219_1: &str = r#"
@@ -146,48 +148,62 @@ fn lower_before_isel(ast: &TypedAst) -> (Context, tir::builtin::ModuleOp, Box<dy
     let mut pm = PassManager::new();
     let function_pipeline = pm.nest::<FuncOp>();
     function_pipeline.add_pass(InstCombineNodesPass::new());
+    pm.add_pass(MaterializeSymbolAddressesPass::new());
     pm.run(&context, context.get_op(module.id())).unwrap();
     fcc::codegen::lower_data(&context, &module).unwrap();
     (context, module, target)
 }
 
-fn bench_codegen(c: &mut Criterion) {
+fn bench_codegen(suite: &mut Suite) -> tir_bench::Result<()> {
+    if suite.options().list {
+        return suite.list_function("codegen/ast_to_ir");
+    }
+    if !suite.matches("codegen/ast_to_ir") {
+        return Ok(());
+    }
     let src = gen_source(50, 40);
     let ast = parse_src(&src);
 
-    let mut group = c.benchmark_group("fcc/codegen");
-    group.bench_function("ast_to_ir", |b| {
+    suite.function("codegen/ast_to_ir", |b| {
         b.iter(|| {
             let ctx = Context::with_default_dialects();
             black_box(codegen(&ctx, &ast).unwrap());
         });
-    });
-    group.finish();
+    })
 }
 
-fn bench_codegen_expr_heavy(c: &mut Criterion) {
+fn bench_codegen_expr_heavy(suite: &mut Suite) -> tir_bench::Result<()> {
+    if suite.options().list {
+        return suite.list_function("codegen_expr_heavy/ast_to_ir");
+    }
+    if !suite.matches("codegen_expr_heavy/ast_to_ir") {
+        return Ok(());
+    }
     let src = gen_expr_heavy(20, 12);
     let ast = parse_src(&src);
 
-    let mut group = c.benchmark_group("fcc/codegen_expr_heavy");
-    group.bench_function("ast_to_ir", |b| {
+    suite.function("codegen_expr_heavy/ast_to_ir", |b| {
         b.iter(|| {
             let ctx = Context::with_default_dialects();
             black_box(codegen(&ctx, &ast).unwrap());
         });
-    });
-    group.finish();
+    })
 }
 
 /// Run the promotion path over the decl-heavy unit. fcc lowers locals to
 /// alloca/load/store, so promotion is replace-uses heavy; `iter_batched` rebuilds
 /// fresh IR per run so only the passes are timed.
-fn bench_promote(c: &mut Criterion) {
+fn bench_promote(suite: &mut Suite) -> tir_bench::Result<()> {
+    if suite.options().list {
+        return suite.list_function("promote/promote");
+    }
+    if !suite.matches("promote/promote") {
+        return Ok(());
+    }
     let src = gen_source(50, 40);
     let ast = parse_src(&src);
 
-    let mut group = c.benchmark_group("fcc/promote");
-    group.bench_function("promote", |b| {
+    suite.function("promote/promote", |b| {
         b.iter_batched(
             || {
                 let ctx = Context::with_default_dialects();
@@ -201,34 +217,46 @@ fn bench_promote(c: &mut Criterion) {
                 .unwrap();
                 pm.run(&ctx, ctx.get_op(module.id())).unwrap();
             },
-            BatchSize::SmallInput,
         );
-    });
-    group.finish();
+    })
 }
 
-fn bench_pipeline(c: &mut Criterion) {
+fn bench_pipeline(suite: &mut Suite) -> tir_bench::Result<()> {
+    if suite.options().list {
+        return suite.list_function("pipeline/source_to_ir");
+    }
+    if !suite.matches("pipeline/source_to_ir") {
+        return Ok(());
+    }
     let src = gen_source(50, 40);
 
-    let mut group = c.benchmark_group("fcc/pipeline");
-    group.bench_function("source_to_ir", |b| {
+    suite.function("pipeline/source_to_ir", |b| {
         b.iter(|| {
             let ast = parse_src(&src);
             let ctx = Context::with_default_dialects();
             black_box(codegen(&ctx, &ast).unwrap());
         });
-    });
-    group.finish();
+    })
 }
 
-fn bench_gcc_20011219_1(c: &mut Criterion) {
+fn bench_gcc_20011219_1(suite: &mut Suite) -> tir_bench::Result<()> {
+    const CASES: &[&str] = &[
+        "gcc_20011219_1/instcombine",
+        "gcc_20011219_1/instruction_selection",
+        "gcc_20011219_1/backend_through_finalize",
+    ];
+    if suite.options().list {
+        for name in CASES {
+            suite.list_function(name)?;
+        }
+        return Ok(());
+    }
+    if !CASES.iter().any(|name| suite.matches(name)) {
+        return Ok(());
+    }
     let ast = parse_src(GCC_20011219_1);
-    let mut group = c.benchmark_group("fcc/gcc_20011219_1");
-    group.sample_size(10);
-    group.warm_up_time(Duration::from_secs(1));
-    group.measurement_time(Duration::from_secs(5));
 
-    group.bench_function("instcombine", |b| {
+    suite.function("gcc_20011219_1/instcombine", |b| {
         b.iter_batched(
             || lower_before_instcombine(&ast),
             |(context, module)| {
@@ -236,10 +264,9 @@ fn bench_gcc_20011219_1(c: &mut Criterion) {
                 pm.nest::<FuncOp>().add_pass(InstCombineNodesPass::new());
                 pm.run(&context, context.get_op(module.id())).unwrap();
             },
-            BatchSize::SmallInput,
         );
-    });
-    group.bench_function("instruction_selection", |b| {
+    })?;
+    suite.function("gcc_20011219_1/instruction_selection", |b| {
         b.iter_batched(
             || lower_before_isel(&ast),
             |(context, module, target)| {
@@ -251,10 +278,9 @@ fn bench_gcc_20011219_1(c: &mut Criterion) {
                 );
                 pm.run(&context, context.get_op(module.id())).unwrap();
             },
-            BatchSize::SmallInput,
         );
-    });
-    group.bench_function("backend_through_finalize", |b| {
+    })?;
+    suite.function("gcc_20011219_1/backend_through_finalize", |b| {
         b.iter_batched(
             || lower_before_isel(&ast),
             |(context, module, target)| {
@@ -266,18 +292,16 @@ fn bench_gcc_20011219_1(c: &mut Criterion) {
                 );
                 pm.run(&context, context.get_op(module.id())).unwrap();
             },
-            BatchSize::SmallInput,
         );
-    });
-    group.finish();
+    })
 }
 
-criterion_group!(
-    benches,
-    bench_codegen,
-    bench_codegen_expr_heavy,
-    bench_promote,
-    bench_pipeline,
-    bench_gcc_20011219_1
-);
-criterion_main!(benches);
+fn main() -> tir_bench::Result<()> {
+    let mut suite = Suite::from_args(env!("CARGO_PKG_NAME"))?;
+    bench_codegen(&mut suite)?;
+    bench_codegen_expr_heavy(&mut suite)?;
+    bench_promote(&mut suite)?;
+    bench_pipeline(&mut suite)?;
+    bench_gcc_20011219_1(&mut suite)?;
+    suite.finish()
+}

@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [lib]
+bench = false
 test = false
 doctest = false
 
@@ -23,6 +24,7 @@ syn.workspace = true
 tir-symbolic.workspace = true
 
 [[bin]]
+bench = false
 name = "tir-pdl"
 path = "src/main.rs"
 required-features = ["cli"]

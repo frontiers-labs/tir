@@ -149,16 +149,13 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
-  # Compile-time tracking for fcc: the sum over the passing torture execute
-  # cases plus coremark, against last night's numbers restored from the cache.
-  # The bench needs a release compiler, not the `ci` profile the other jobs
-  # ship, so it builds its own.
-  extbench:
-    runs-on: ubuntu-latest
+  # Cargo builds the measured compiler in the bench profile. Shared CI uses
+  # instruction counts; native wall-time gates require a dedicated runner.
+  benchmarks:
+    runs-on: ubuntu-24.04
     timeout-minutes: 120
     env:
       CARGO_INCREMENTAL: "0"
-      CARGO_MANIFEST_DIR: ${{ github.workspace }}/xtask
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -166,37 +163,51 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: bench
-      - uses: actions/cache@v6
-        with:
-          path: target/extbench/sources
-          key: extbench-corpus-9aab80ddc5b2fa0eef80008e718067ab45f42c50-1f483d5b8316753a742cbf5590caf5bd0a4e4777
-      # Cache keys are immutable, so every run saves under its own id and the
-      # next run restores the newest one as its baseline.
+      - run: sudo apt-get update && sudo apt-get install -y clang libclang-dev valgrind time
+      - name: Identify the measurement environment
+        id: environment
+        shell: bash
+        run: |
+          {
+            rustc -vV
+            clang --version
+            gcc --version
+            valgrind --version
+            ldd --version
+            uname -r
+            lscpu | sed -n '/Model name/p'
+          } > benchmark-environment.txt
+          echo "digest=$(sha256sum benchmark-environment.txt | cut -d ' ' -f1)" >> "$GITHUB_OUTPUT"
+      # Nightly runs use trusted default-branch baselines. A changed harness,
+      # workload or toolchain starts a new baseline instead of mixing contracts.
       - uses: actions/cache/restore@v6
         with:
-          path: extbench-baseline.json
-          key: extbench-results-v2-${{ github.run_id }}
-          restore-keys: extbench-results-v2-
-      - run: sudo apt-get update && sudo apt-get install -y clang
-      - run: cargo build --locked --release -p fcc --bin fcc
-      - run: |
-          if [ -f extbench-baseline.json ]; then
-            baseline="--baseline extbench-baseline.json"
+          path: benchmark-baseline.json
+          key: bench-v1-${{ steps.environment.outputs.digest }}-${{ hashFiles('Cargo.lock', 'benchmarks/programs/**', 'utils/bench/**') }}-${{ github.run_id }}
+          restore-keys: bench-v1-${{ steps.environment.outputs.digest }}-${{ hashFiles('Cargo.lock', 'benchmarks/programs/**', 'utils/bench/**') }}-
+      # Shared runners gate fixed-work instruction counts. Output validation
+      # remains outside profiling; native time needs a dedicated runner.
+      - shell: bash
+        run: |
+          baseline=()
+          if [ -f benchmark-baseline.json ]; then
+            baseline=(--baseline "$PWD/benchmark-baseline.json")
           fi
-          cargo run --locked -p xtask -- extbench compile --package fcc --no-build \
-            --output extbench.json $baseline
+          cargo bench --locked -p fcc --bench programs -- \
+            --engine cachegrind --phase compile --filter 'fcc/dhrystone/*/O2/*' \
+            --compiler fcc --level O2 --min-cases 2 --output "$PWD/bench-results" "${baseline[@]}"
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: extbench
-          path: extbench.json
-      # Only a green run becomes the next baseline, so the threshold ratchets
-      # instead of following a regression.
-      - run: mv extbench.json extbench-baseline.json
+          name: benchmarks
+          path: |
+            bench-results
+            benchmark-environment.txt
+      - run: cp bench-results/*/results.json benchmark-baseline.json
       - uses: actions/cache/save@v6
         with:
-          path: extbench-baseline.json
-          key: extbench-results-v2-${{ github.run_id }}
+          path: benchmark-baseline.json
+          key: bench-v1-${{ steps.environment.outputs.digest }}-${{ hashFiles('Cargo.lock', 'benchmarks/programs/**', 'utils/bench/**') }}-${{ github.run_id }}
 
   libfuzzer:
     # Only for the xtask binary, which reads the records embedded in open
@@ -272,7 +283,7 @@ jobs:
         lints,
         corpus,
         differential-fuzz,
-        extbench,
+        benchmarks,
         libfuzzer,
       ]
     runs-on: ubuntu-latest

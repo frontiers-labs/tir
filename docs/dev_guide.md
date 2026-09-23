@@ -135,30 +135,76 @@ can change costs.
 The dump records the mathematical task before solver reductions. It does not
 contain a solution.
 
-### Running external benchmarks
+### Running benchmarks
 
-Use `cargo xtask extbench compile` to compare compilation times and memory,
-or `cargo xtask extbench run` to time executables on the current host.
-Select a package with `--package fcc`, benchmark names with `--bench 'core*'`,
-and a compiler with `--compiler clang`. Use `--list` to list benchmarks without
-building. `--suite path/to/bench_suite.toml` selects a suite explicitly.
+Run `cargo bench` from the workspace root to measure Rust functions and the
+compilation/runtime of the C workloads. Cargo builds the compilers in its bench
+profile. Workloads are Rust modules under `benchmarks/programs`; `utils/bench`
+provides the shared harness. No benchmark TOML files are needed.
 
-The FCC suite is `fcc/extbench/bench_suite.toml`. Each benchmark directory
-contains a `benchmark.toml` with source globs and optional compiler flags,
-link flags, runtime arguments, and optimization levels:
-
-```toml
-sources = ["*.c", "!unused.c"]
-flags = ["-I."]
-link_flags = ["-lm"]
-args = ["1000"]
-levels = ["-O0", "-O2"]
+```sh
+cargo bench -- --list
+cargo bench -- --filter '*dhrystone*' --level O2 --samples 5
+cargo bench -p fcc --bench programs -- --compiler fcc --phase compile
+cargo bench -- --engine cachegrind --filter '*dhrystone*' --phase compile
+cargo bench -- --cpu 2 --environment strict
 ```
 
-Suite manifests define `[[compiler]]` entries with `name`, `build`, `compile`,
-and `link` command arrays. See the FCC suite for working configurations.
-Use `--output samples.json` to save measurements and `--baseline samples.json`
-to compare a later run on the same host with the same inputs and flags.
+The full default workload includes the pinned GCC torture corpus and can take a
+long time. Filtering does not change workload arguments. The harness's `--list`
+does no corpus fetching or benchmark compiler invocation; Cargo may build the
+targets first. Git corpora are cached in `target/bench-sources`;
+`TIR_BENCH_SOURCE_CACHE` overrides that path, and `--offline` rejects cache misses.
+CoreMark and Dhrystone also run through the LLVM-input target in `tir-tools`,
+sharing prepared IR with the Clang backend controls.
+
+Each Cargo target writes a unique bundle under `target/bench`, or `--output DIR`.
+Relative output and baseline paths resolve from the workspace root.
+`summary.bmf.json` uses Bencher Metric Format. `results.json` retains samples,
+workload identity, environment and status; command logs and Cachegrind profiles
+remain alongside it. A failed run never becomes a complete baseline. Compare an
+identical selection with `--baseline PATH`, naming its bundle or `results.json`.
+Use `--min-cases N` in a focused CI job to reject empty selections.
+
+Native runs report nanoseconds and peak process RSS in bytes. RSS is the kernel
+process high-water mark, not simultaneous process-tree memory. External process
+measurements require GNU `/usr/bin/time` as a small accounting supervisor: direct
+`wait4` RSS includes the spawning harness's memory on Linux. RSS is read from a
+separate output file; wall and CPU time include supervisor overhead. Function cases
+exclude declared setup and report per-operation time; they do not report RSS.
+Program output verification runs outside measurement. Compiler variants run in
+rotated order with 3 warmups and 15 samples by default; override these explicitly
+with `--warmups` and `--samples`. Compiler phase diagnostics are collected in
+untimed preparation; primary timing runs do not enable that instrumentation.
+
+Cachegrind requires Valgrind on PATH and records instruction/cache/branch counts
+instead of instrumented time or RSS. It runs one fixed-work sample. Rust function
+profiling additionally requires `--features tir-bench/cachegrind` on the Cargo
+command and the headers and executable from Valgrind 3.22 or newer. Install
+the headers before building. For an isolated installation, set
+`VALGRIND_REQUESTS_VALGRIND_INCLUDE` to its include directory. If the headers were
+installed after a native build, rebuild the bindings with
+`cargo clean -p valgrind-requests` before profiling. Use
+`--iterations N` to choose a fixed operation count. Counts are useful in shared
+CI but are not a substitute for native performance measurements.
+
+Use a dedicated Linux runner for native regression gates. Pin an allowed CPU,
+reserve its sibling cores, and control frequency/boost policy and background
+work. The harness takes a cooperative host lock. Strict mode requires explicit
+CPU affinity, a performance governor and a readable disabled boost policy;
+it checks configuration and throttle counters again before accepting results.
+It never changes privileged settings. Local mode records the environment without
+claiming hardware isolation. Pin software and source versions too. A container
+alone does not control host contention.
+
+Adding a workload means adding a Rust module and registering it in the package's
+Cargo harness. Shared command/source helpers handle common preparation; custom
+Rust setup and validators can define new behavior without changing a manifest
+schema. Keep input identities and fixed arguments explicit so incompatible
+baselines are rejected. Function benchmarks can call `set_contract_version` to
+mark changes to their input generation or measurement boundaries. The optional
+`cachegrind` feature builds client bindings and requires Clang/libclang. Native
+benchmarks do not require that feature, those bindings, or Valgrind.
 
 Use `cargo xtask fp-check` to record pinned GCC floating-point observations,
 compare cumulative semantic requirements, and summarize saved reports.

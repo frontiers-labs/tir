@@ -6,10 +6,12 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [lib]
+bench = false
 name = "filecheck"
 path = "src/lib.rs"
 
 [[bin]]
+bench = false
 name = "filecheck"
 path = "src/main.rs"
 

@@ -1,2 +1,0 @@
-# RUN: xtask extbench run --suite %S/Inputs/local/bench_suite.toml | filecheck %s
-# CHECK: fixture/integer gcc -O0 run wall_ms=

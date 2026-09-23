@@ -10,11 +10,11 @@
 use std::hint::black_box;
 use std::time::Duration;
 
-use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
 use egg::{
     ConditionalApplier, CostFunction, EGraph, Extractor, Id, Language, Pattern, Rewrite, Runner,
     SimpleScheduler, Subst, Symbol, Var, define_language,
 };
+use tir_bench::Suite;
 
 #[path = "math_shared.rs"]
 mod shared;
@@ -109,27 +109,39 @@ fn seed_runner(iters: usize) -> Runner<Math, ()> {
     runner
 }
 
-fn bench_saturate(c: &mut Criterion) {
-    let rules = build_rules();
-    let mut group = c.benchmark_group("egg_math/saturate");
-    for &iters in SAT_ITERS {
-        group.bench_with_input(BenchmarkId::from_parameter(iters), &iters, |b, &iters| {
-            b.iter_batched(
-                || seed_runner(iters),
-                |runner| runner.run(&rules),
-                BatchSize::SmallInput,
-            );
-        });
+fn bench_saturate(suite: &mut Suite) -> tir_bench::Result<()> {
+    if suite.options().list {
+        for &iters in SAT_ITERS {
+            suite.list_function(&format!("egg_math/saturate/{iters}"))?;
+        }
+        return Ok(());
     }
-    group.finish();
+    if !SAT_ITERS
+        .iter()
+        .any(|iters| suite.matches(&format!("egg_math/saturate/{iters}")))
+    {
+        return Ok(());
+    }
+    let rules = build_rules();
+    for &iters in SAT_ITERS {
+        suite.function(&format!("egg_math/saturate/{iters}"), |b| {
+            b.iter_batched(|| seed_runner(iters), |runner| runner.run(&rules));
+        })?;
+    }
+    Ok(())
 }
 
-fn bench_ematch(c: &mut Criterion) {
+fn bench_ematch(suite: &mut Suite) -> tir_bench::Result<()> {
+    if suite.options().list {
+        return suite.list_function("egg_math/ematch/all_rules");
+    }
+    if !suite.matches("egg_math/ematch/all_rules") {
+        return Ok(());
+    }
     let rules = build_rules();
     let runner = seed_runner(PRE_SAT_ITERS).run(&rules);
     let egraph = &runner.egraph;
-    let mut group = c.benchmark_group("egg_math/ematch");
-    group.bench_function("all_rules", |b| {
+    suite.function("egg_math/ematch/all_rules", |b| {
         b.iter(|| {
             let mut total = 0usize;
             for rule in &rules {
@@ -139,17 +151,21 @@ fn bench_ematch(c: &mut Criterion) {
             }
             total
         });
-    });
-    group.finish();
+    })
 }
 
-fn bench_extract(c: &mut Criterion) {
+fn bench_extract(suite: &mut Suite) -> tir_bench::Result<()> {
+    if suite.options().list {
+        return suite.list_function("egg_math/extract/best");
+    }
+    if !suite.matches("egg_math/extract/best") {
+        return Ok(());
+    }
     let rules = build_rules();
     let runner = seed_runner(PRE_SAT_ITERS).run(&rules);
     let egraph = &runner.egraph;
     let roots = runner.roots.clone();
-    let mut group = c.benchmark_group("egg_math/extract");
-    group.bench_function("best", |b| {
+    suite.function("egg_math/extract/best", |b| {
         b.iter(|| {
             let extractor = Extractor::new(egraph, MathCost);
             let mut total = 0usize;
@@ -158,9 +174,13 @@ fn bench_extract(c: &mut Criterion) {
             }
             total
         });
-    });
-    group.finish();
+    })
 }
 
-criterion_group!(benches, bench_saturate, bench_ematch, bench_extract);
-criterion_main!(benches);
+fn main() -> tir_bench::Result<()> {
+    let mut suite = Suite::from_args(concat!(env!("CARGO_PKG_NAME"), "/egg_math"))?;
+    bench_saturate(&mut suite)?;
+    bench_ematch(&mut suite)?;
+    bench_extract(&mut suite)?;
+    suite.finish()
+}

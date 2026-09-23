@@ -1,3 +1,0 @@
-[suite]
-name = "xtask command checks"
-glob = ["*.test"]

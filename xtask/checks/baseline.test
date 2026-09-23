@@ -1,5 +1,0 @@
-# RUN: not xtask extbench compile --suite %S/Inputs/local/bench_suite.toml --output /dev/null --baseline %S/Inputs/baseline.json 2>&1 | filecheck %s
-# CHECK: baseline workload differs from current workload
-
-# RUN: not xtask extbench compile --suite %S/Inputs/local/bench_suite.toml --input llvm --baseline %S/Inputs/baseline.json 2>&1 | filecheck %s --check-prefix=INPUT
-# INPUT: baseline input differs from current input

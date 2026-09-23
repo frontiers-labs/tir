@@ -8,6 +8,7 @@ edition = "2021"
 # libtest-mimic.
 
 [lib]
+bench = false
 name = "tir_lit"
 path = "src/lib.rs"
 

@@ -1,5 +1,0 @@
-sources = ["*.c"]
-inputs = ["source", "llvm"]
-levels = ["-O0"]
-args = ["fixture"]
-verify = ["python3", "{benchmark}/verify.py", "--stdout", "{stdout}", "{args}"]

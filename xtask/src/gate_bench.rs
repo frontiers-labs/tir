@@ -1,3 +1,7 @@
+#[path = "../../benchmarks/programs/mod.rs"]
+#[allow(dead_code)]
+mod programs;
+
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -109,26 +113,33 @@ pub(crate) fn built_fcc(sh: &Shell, root: &Path, fcc: Option<PathBuf>) -> anyhow
 /// units.
 pub(crate) fn cases(_sh: &Shell, root: &Path) -> anyhow::Result<Vec<Case>> {
     let mut cases = Vec::new();
-    for name in ["torture", "coremark"] {
-        for selection in crate::extbench::config::discover(root, None, Some("fcc"), name)? {
-            let prepared = crate::extbench::config::prepare(
-                &selection,
-                &root.join("target/extbench/sources"),
-            )?;
-            for file in prepared.sources {
-                let relative = file.strip_prefix(&prepared.directory)?;
-                let label = if name == "torture" {
-                    relative.strip_prefix("execute")?
-                } else {
-                    relative
-                };
-                cases.push(Case {
-                    label: format!("{name}/{}", label.display()),
-                    file,
-                    cwd: Some(prepared.directory.clone()),
-                    flags: prepared.config.flags.clone(),
-                });
-            }
+    for program in programs::definitions()
+        .into_iter()
+        .filter(|program| matches!(program.name, "torture" | "coremark"))
+    {
+        let prepared = program.prepare(
+            root,
+            &root.join("target/bench-sources"),
+            false,
+            std::time::Duration::from_secs(300),
+        )?;
+        for file in prepared.sources {
+            let relative = file.strip_prefix(&prepared.directory)?;
+            let label = if program.name == "torture" {
+                relative.strip_prefix("execute")?
+            } else {
+                relative
+            };
+            cases.push(Case {
+                label: format!("{}/{}", program.name, label.display()),
+                file,
+                cwd: Some(prepared.directory.clone()),
+                flags: program
+                    .flags
+                    .iter()
+                    .map(|flag| (*flag).to_owned())
+                    .collect(),
+            });
         }
     }
     Ok(cases)

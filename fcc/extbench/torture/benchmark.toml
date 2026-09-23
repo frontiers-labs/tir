@@ -1,9 +1,0 @@
-sources = ["execute/*.c"]
-exclude_files = ["../../tests/gcc-torture-known-failures.txt", "../../tests/gcc-torture-execute-known-failures.txt"]
-separate = true
-link_flags = ["-lm"]
-
-[source]
-repository = "https://github.com/gcc-mirror/gcc.git"
-revision = "9aab80ddc5b2fa0eef80008e718067ab45f42c50"
-subdir = "gcc/testsuite/gcc.c-torture"

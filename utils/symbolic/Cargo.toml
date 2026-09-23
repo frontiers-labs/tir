@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [lib]
+bench = false
 test = false
 doctest = false
 
@@ -13,6 +14,7 @@ tir-adt.workspace = true
 chumsky.workspace = true
 
 [[bin]]
+bench = false
 name = "tir-smt"
 path = "src/bin/main.rs"
 

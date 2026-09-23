@@ -8,6 +8,7 @@ edition = "2024"
 # that a second instance on a different axis reuses it unchanged.
 
 [lib]
+bench = false
 doctest = false
 
 [lints]

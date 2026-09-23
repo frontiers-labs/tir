@@ -1,3 +1,0 @@
-# RUN: not xtask extbench run --suite %S/Inputs/failing/bench_suite.toml 2>&1 | filecheck %s
-# CHECK: failed
-# CHECK: 23

@@ -7,3 +7,6 @@ edition = "2024"
 
 [lints]
 workspace = true
+
+[lib]
+bench = false
