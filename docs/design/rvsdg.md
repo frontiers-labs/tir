@@ -263,6 +263,9 @@ SSA destruction later implements their parallel copies. Those copies sit
 between a block's conditional branch and its fallthrough branch, so register
 liveness treats every terminator as its own exit: a parameter the taken edge
 still reads stays live across the copy that redefines it for the fallthrough.
+The interference graph also retains the conservative block-exit live set.
+Per-terminator joins supplement it rather than relaxing existing coalescing
+constraints on fallthrough copies.
 Blocks created for branch-edge assignments follow their source block. This
 keeps layout tie-breaking independent of late edge-block allocation and lets
 short loop backedges become fallthroughs.

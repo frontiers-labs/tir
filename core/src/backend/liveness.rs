@@ -299,6 +299,13 @@ fn build_interference(
         result.live_in.insert(info.block, live_in[i].clone());
 
         let mut live: HashSet<u32> = HashSet::new();
+        // Keep successor values live at block exit so fallthrough copies
+        // retain their conservative interference and coalescing constraints.
+        // The joins below additionally protect taken-edge values from later
+        // definitions on the fallthrough path.
+        for op in &info.ops {
+            join_successors(op, live_in, index, &mut live);
+        }
         // Physical registers read later in the block and not yet re-defined, so
         // still live across the current op. Seeded empty: fixed-register def/use
         // pairs (e.g. a shift count moved into `cl` right before the shift) are
