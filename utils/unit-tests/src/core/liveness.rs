@@ -6,6 +6,7 @@ use tir::backend::liveness::analyze;
 use tir::backend::regalloc::{RegClassId, RegClassInfo};
 use tir::backend::{RegClassType, RegPort};
 use tir::builtin::{ops, IntegerType};
+use tir::cfg::{BranchOpBuilder, CondBranchOpBuilder};
 use tir::{BlockHandle, BlockId, Context, Operation, TypeId, ValueId};
 
 use super::fixtures::{machine_op, r, r_high, reg_class};
@@ -28,6 +29,7 @@ macro_rules! slot_op {
 
 slot_op!(PhysDefOp, PHYS_DEF_PORTS, "phys_def", None, true);
 slot_op!(PhysUseOp, PHYS_USE_PORTS, "phys_use", None, false);
+slot_op!(DefROp, DEF_R_PORTS, "def_r", Some(r()), true);
 slot_op!(UseROp, USE_R_PORTS, "use_r", Some(r()), false);
 slot_op!(UseRlowOp, USE_RLOW_PORTS, "use_rlow", Some(r_low()), false);
 slot_op!(
@@ -112,7 +114,7 @@ fn narrower_class_constraint_wins() {
             vreg_use(&context, &block, a, r());
         }
 
-        let liveness = analyze(&context, &[block.id()], cfg(&[]));
+        let liveness = analyze(&context, &[block.id()]);
         assert_eq!(
             liveness.vreg_class.get(&a.number()),
             Some(&r_low()),
@@ -137,7 +139,7 @@ fn overlapping_classes_intersect_their_indices() {
     vreg_use(&context, &block, a, r_low()); // {0, 1}
     vreg_use(&context, &block, a, r_mid()); // {1, 2, 3}
 
-    let liveness = analyze(&context, &[block.id()], cfg(&[]));
+    let liveness = analyze(&context, &[block.id()]);
     assert!(liveness.class_conflicts.is_empty());
     assert_eq!(
         liveness.allowed_indices.get(&a.number()),
@@ -155,7 +157,7 @@ fn disjoint_classes_over_one_view_are_reported() {
     vreg_use(&context, &block, a, r_low()); // {0, 1}
     vreg_use(&context, &block, a, r_other()); // {2, 3}
 
-    let liveness = analyze(&context, &[block.id()], cfg(&[]));
+    let liveness = analyze(&context, &[block.id()]);
     assert!(liveness.class_conflicts.contains_key(&a.number()));
 }
 
@@ -170,22 +172,40 @@ fn incompatible_class_constraints_are_reported() {
 
     vreg_use(&context, &block, a, r_high());
 
-    let liveness = analyze(&context, &[block.id()], cfg(&[]));
+    let liveness = analyze(&context, &[block.id()]);
     assert_eq!(
         liveness.class_conflicts.get(&a.number()),
         Some(&(r_low(), r_high())),
     );
 }
 
-/// The successor function of the CFG holding `edges`: a block no edge leaves
-/// ends the traversal.
-fn cfg<'a>(edges: &'a [(BlockId, &'a [BlockId])]) -> impl Fn(BlockId) -> Vec<BlockId> + 'a {
-    move |block| {
-        edges
-            .iter()
-            .find(|(from, _)| *from == block)
-            .map_or_else(Vec::new, |(_, to)| to.to_vec())
-    }
+// `cfg.br ^dest`: the edge liveness follows out of `block`.
+fn br(context: &Context, block: &BlockHandle, dest: BlockId) {
+    block.append_op(
+        BranchOpBuilder::new(context)
+            .dest_args(Vec::new())
+            .dest(dest)
+            .build(),
+    );
+}
+
+// `cfg.cond_br %condition, ^on_true, ^on_false`.
+fn cond_br(
+    context: &Context,
+    block: &BlockHandle,
+    condition: ValueId,
+    on_true: BlockId,
+    on_false: BlockId,
+) {
+    block.append_op(
+        CondBranchOpBuilder::new(context)
+            .condition(condition)
+            .true_args(Vec::new())
+            .false_args(Vec::new())
+            .true_dest(on_true)
+            .false_dest(on_false)
+            .build(),
+    );
 }
 
 // `addi %a, %b` whose fresh result names a new virtual register (a def), with
@@ -198,12 +218,11 @@ fn addi(context: &Context, block: &BlockHandle, a: ValueId, b: ValueId, ty: Type
 }
 
 // Two defs in the entry block where the first is used only in a successor
-// block: the two entry defs interfere iff the successor edge is wired, because
-// that is what keeps the first value live across the second's def. With the
-// edge dropped (the old `|_| Vec::new()`), the first value looks dead at its
-// def and the allocator is free to reuse its register — the miscompile.
+// block: the successor edge keeps the first value live across the second's
+// def, so the two interfere. Otherwise the first value looks dead at its def
+// and the allocator is free to reuse its register — the miscompile.
 #[test]
-fn cross_block_def_interferes_only_with_wired_successors() {
+fn cross_block_def_interferes_through_successor_edge() {
     let context = Context::with_default_dialects();
     let ty = IntegerType::new(&context, 64);
     let a = context.create_value(ty, None);
@@ -217,23 +236,52 @@ fn cross_block_def_interferes_only_with_wired_successors() {
     let v = addi(&context, &entry, a_id, a_id, ty);
     let w = addi(&context, &entry, a_id, a_id, ty);
     addi(&context, &entry, w, w, ty);
+    br(&context, &entry, succ.id());
     addi(&context, &succ, v, a_id, ty);
 
-    let blocks = [entry.id(), succ.id()];
-    let with_edge = analyze(&context, &blocks, cfg(&[(entry.id(), &[succ.id()])]));
+    let liveness = analyze(&context, &[entry.id(), succ.id()]);
     assert!(
-        with_edge.interferes(v.number(), w.number()),
+        liveness.interferes(v.number(), w.number()),
         "a value live across a later def must interfere with it",
     );
     assert!(
-        with_edge.live_in[&succ.id()].contains(&v.number()),
+        liveness.live_in[&succ.id()].contains(&v.number()),
         "the cross-block value is live into its using block",
     );
+}
 
-    let no_edge = analyze(&context, &blocks, cfg(&[]));
+// The block-argument copies of a fallthrough edge follow the block's
+// conditional branch. A copy redefining a parameter the taken edge still reads
+// must not end that parameter's range ahead of the branch: it is live across
+// every def before the branch.
+#[test]
+fn taken_edge_keeps_parameter_live_across_fallthrough_copy() {
+    let context = Context::with_default_dialects();
+    let ty = IntegerType::new(&context, 64);
+    let a = context.create_value(ty, None);
+    let a_id = a.id();
+    let entry = context.create_block(vec![a]);
+    let condition = context.create_value(IntegerType::new(&context, 1), None);
+    let condition_id = condition.id();
+    let p = reg_value(&context, r());
+    let header = context.create_block(vec![condition, context.get_value(p)]);
+    let taken = context.create_block(vec![]);
+
+    br(&context, &entry, header.id());
+    // `t` is defined while `p` is still needed by the taken edge, then the
+    // fallthrough copy redefines `p` for the next iteration.
+    let t = addi(&context, &header, a_id, a_id, ty);
+    cond_br(&context, &header, condition_id, taken.id(), header.id());
+    DefROp::register_interfaces(&context);
+    header.append_op(DefROpBuilder::new(&context).result_values(vec![p]).build());
+    br(&context, &header, header.id());
+    vreg_use(&context, &taken, p, r());
+    br(&context, &taken, header.id());
+
+    let liveness = analyze(&context, &[entry.id(), header.id(), taken.id()]);
     assert!(
-        !no_edge.interferes(v.number(), w.number()),
-        "without the CFG edge the bug hides the interference (regression guard)",
+        liveness.interferes(p.number(), t.number()),
+        "a parameter read on the taken edge is live across a def ahead of the branch",
     );
 }
 
@@ -245,26 +293,22 @@ fn diamond_live_through_interferes_on_both_arms() {
     let ty = IntegerType::new(&context, 64);
     let a = context.create_value(ty, None);
     let a_id = a.id();
-    let entry = context.create_block(vec![a]);
+    let condition = context.create_value(IntegerType::new(&context, 1), None);
+    let condition_id = condition.id();
+    let entry = context.create_block(vec![a, condition]);
     let left = context.create_block(vec![]);
     let right = context.create_block(vec![]);
     let merge = context.create_block(vec![]);
 
     let v = addi(&context, &entry, a_id, a_id, ty);
+    cond_br(&context, &entry, condition_id, left.id(), right.id());
     let la = addi(&context, &left, a_id, a_id, ty);
+    br(&context, &left, merge.id());
     let ra = addi(&context, &right, a_id, a_id, ty);
+    br(&context, &right, merge.id());
     addi(&context, &merge, v, a_id, ty);
 
-    let blocks = [entry.id(), left.id(), right.id(), merge.id()];
-    let liveness = analyze(
-        &context,
-        &blocks,
-        cfg(&[
-            (entry.id(), &[left.id(), right.id()]),
-            (left.id(), &[merge.id()]),
-            (right.id(), &[merge.id()]),
-        ]),
-    );
+    let liveness = analyze(&context, &[entry.id(), left.id(), right.id(), merge.id()]);
 
     assert!(liveness.live_in[&left.id()].contains(&v.number()));
     assert!(liveness.live_in[&right.id()].contains(&v.number()));
@@ -318,7 +362,7 @@ fn physical_read_forbids_live_vreg() {
     phys_op(&context, &block, r(), 0, false); // use P
     addi(&context, &block, v1, a_id, ty); // use v1
 
-    let liveness = analyze(&context, &[block.id()], cfg(&[]));
+    let liveness = analyze(&context, &[block.id()]);
 
     assert!(
         liveness.forbidden[&v1.number()].contains(&(r(), 0)),
@@ -338,15 +382,11 @@ fn loop_back_edge_converges() {
     let body = context.create_block(vec![]);
 
     let carried = addi(&context, &header, a_id, a_id, ty);
+    br(&context, &header, body.id());
     addi(&context, &body, carried, a_id, ty);
+    br(&context, &body, header.id());
 
-    // header -> body -> header (back edge).
-    let blocks = [header.id(), body.id()];
-    let liveness = analyze(
-        &context,
-        &blocks,
-        cfg(&[(header.id(), &[body.id()]), (body.id(), &[header.id()])]),
-    );
+    let liveness = analyze(&context, &[header.id(), body.id()]);
 
     assert!(
         liveness.live_in[&body.id()].contains(&carried.number()),
