@@ -428,6 +428,7 @@ fn lower_function(
 fn inst_result_name(inst: &Inst) -> Option<&str> {
     match inst {
         Inst::Binary { result, .. }
+        | Inst::FNeg { result, .. }
         | Inst::ICmp { result, .. }
         | Inst::FCmp { result, .. }
         | Inst::Cast { result, .. }
@@ -570,27 +571,7 @@ fn lower_inst(
                         id
                     }
                 },
-                ast::Operand::ConstFloat(value) => {
-                    let (bits, ty) = match $ty {
-                        Type::Float(32) => (
-                            (value.to_owned() as f32).to_bits() as u64,
-                            FloatType::f32(context),
-                        ),
-                        Type::Float(64) => (value.to_bits(), FloatType::f64(context)),
-                        _ => {
-                            return Err(Error::Unsupported(
-                                "floating literal with non-floating type".into(),
-                            ));
-                        }
-                    };
-                    let op = fp::ConstantOpBuilder::new(context)
-                        .bits(bits)
-                        .result_type(ty)
-                        .build();
-                    let id = op.result();
-                    body.append_op(op);
-                    id
-                }
+                ast::Operand::ConstFloat(value) => float_constant(context, body, *value, $ty)?,
                 ast::Operand::Global(name) => match globals.get(name) {
                     Some(value) => *value,
                     None => {
@@ -680,6 +661,25 @@ fn lower_inst(
             let id = lower_binary(context, body, *op, l, r, t);
             values.insert(result.clone(), id);
         }
+        Inst::FNeg { result, ty, value } => {
+            let input = val!(value, ty);
+            let width = match ty {
+                Type::Float(width @ (32 | 64)) => *width,
+                _ => return Err(Error::Unsupported("fneg type".into())),
+            };
+            let bits_ty = IntegerType::new(context, width);
+            // LLVM fneg flips the sign bit, including for zero and NaN.
+            let bits = body
+                .append_op(bops::bitcast(context, input, bits_ty).build())
+                .result();
+            let sign = constant(context, body, 1_i64 << (width - 1), bits_ty);
+            let negated = body
+                .append_op(bops::xori(context, bits, sign, bits_ty).build())
+                .result();
+            let op = bops::bitcast(context, negated, lower_type(context, ty)?).build();
+            values.insert(result.clone(), op.result());
+            body.append_op(op);
+        }
         Inst::ICmp {
             result,
             pred,
@@ -701,7 +701,7 @@ fn lower_inst(
         } => {
             let lhs = val!(lhs, ty);
             let rhs = val!(rhs, ty);
-            let predicate = parse_predicate(pred)?;
+            let predicate = parse_predicate(if pred == "ult" { "oge" } else { pred })?;
             let op = fp::CmpOpBuilder::new(context)
                 .lhs(lhs)
                 .rhs(rhs)
@@ -709,8 +709,23 @@ fn lower_inst(
                 .semantics(comparison_semantics(context))
                 .result_type(IntegerType::new(context, 1))
                 .build();
-            values.insert(result.clone(), op.result());
+            let comparison = op.result();
             body.append_op(op);
+            let value = if pred == "ult" {
+                body.append_op(
+                    bops::xori(
+                        context,
+                        comparison,
+                        constant(context, body, 1, IntegerType::new(context, 1)),
+                        IntegerType::new(context, 1),
+                    )
+                    .build(),
+                )
+                .result()
+            } else {
+                comparison
+            };
+            values.insert(result.clone(), value);
         }
         Inst::Cast {
             result,
@@ -1058,6 +1073,10 @@ fn lower_intrinsic(
         let cmp = lower_icmp(context, body, "uge", ret, args[0], args[1])?;
         return lower_select(context, body, cmp, args[0], args[1], ret).map(Some);
     }
+    if name.starts_with("llvm.smax.") {
+        let cmp = lower_icmp(context, body, "sge", ret, args[0], args[1])?;
+        return lower_select(context, body, cmp, args[0], args[1], ret).map(Some);
+    }
     if name == "llvm.load.relative.i64" {
         let address = body
             .append_op(pops::ptradd(context, args[0], args[1], PtrType::opaque(context)).build())
@@ -1081,6 +1100,30 @@ fn constant(context: &Context, body: &BlockHandle, value: i64, ty: TypeId) -> Va
     let result = op.result();
     body.append_op(op);
     result
+}
+
+fn float_constant(
+    context: &Context,
+    body: &BlockHandle,
+    value: f64,
+    ty: &Type,
+) -> Result<ValueId, Error> {
+    let (bits, ty) = match ty {
+        Type::Float(32) => ((value as f32).to_bits() as u64, FloatType::f32(context)),
+        Type::Float(64) => (value.to_bits(), FloatType::f64(context)),
+        _ => {
+            return Err(Error::Unsupported(
+                "floating literal with non-floating type".into(),
+            ));
+        }
+    };
+    let op = fp::ConstantOpBuilder::new(context)
+        .bits(bits)
+        .result_type(ty)
+        .build();
+    let result = op.result();
+    body.append_op(op);
+    Ok(result)
 }
 
 fn lower_select(
@@ -1319,6 +1362,7 @@ fn phi_arguments(
                 ast::Operand::ConstInt(value) => {
                     Ok(constant(context, body, *value, lower_type(context, ty)?))
                 }
+                ast::Operand::ConstFloat(value) => float_constant(context, body, *value, ty),
                 ast::Operand::Null => {
                     let op = pops::null(context, PtrType::opaque(context)).build();
                     let result = op.result();

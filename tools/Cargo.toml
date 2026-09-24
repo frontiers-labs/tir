@@ -43,3 +43,8 @@ harness = false
 name = "dhrystone"
 path = "../fcc/benches/dhrystone.rs"
 harness = false
+
+[[bench]]
+name = "whetstone"
+path = "../fcc/benches/whetstone.rs"
+harness = false

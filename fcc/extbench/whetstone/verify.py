@@ -38,7 +38,9 @@ class ModuleResult:
     spellings: tuple[str, str, str, str]
 
 
-def parse_results(output: str) -> list[ModuleResult]:
+def parse_results(
+    output: str, expected_counts: tuple[tuple[int, int, int], ...] | None = COUNTS
+) -> list[ModuleResult]:
     results: list[ModuleResult] = []
     for line in output.splitlines():
         match = RESULT.match(line)
@@ -53,7 +55,7 @@ def parse_results(output: str) -> list[ModuleResult]:
     if len(results) != len(MODULES):
         raise AssertionError(f"expected {len(MODULES)} module results, found {len(results)}")
     actual_counts = tuple(result.counts for result in results)
-    if actual_counts != COUNTS:
+    if expected_counts is not None and actual_counts != expected_counts:
         raise AssertionError(f"missing or reordered module results: {actual_counts}")
     return results
 
@@ -132,7 +134,22 @@ def main() -> None:
     parser.add_argument("--fcc", default="fcc")
     parser.add_argument("--gcc", default="gcc")
     parser.add_argument("--clang", default="clang")
+    parser.add_argument("--stdout", type=Path)
+    parser.add_argument("args", nargs="*")
     args = parser.parse_args()
+    if args.stdout is not None:
+        if args.args != ["1000000"]:
+            raise AssertionError(f"unexpected Whetstone workload: {args.args}")
+        output = args.stdout.read_text()
+        summary = r"^Loops:\s+1000000, Iterations:\s+1, Duration:\s+[1-9]\d* sec\.$"
+        if not re.search(summary, output, re.MULTILINE):
+            raise AssertionError("Whetstone did not complete exactly one fixed-work iteration")
+        reference = parse_results(Path(__file__).with_name("expected.out").read_text(), None)
+        counts = tuple(result.counts for result in reference)
+        compare_results("candidate", parse_results(output, counts), "Clang reference", reference)
+        return
+    if args.args:
+        parser.error("positional arguments require --stdout")
     source = Path(__file__).with_name("whetstone.c").resolve()
     with tempfile.TemporaryDirectory(prefix="whetstone-verify-") as temporary:
         directory = Path(temporary)
@@ -151,4 +168,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

@@ -289,6 +289,7 @@ where
         Token::Local(n) => Operand::Ref(n.to_string()),
         Token::Int(v) => Operand::ConstInt(v),
         Token::Float(v) => Operand::ConstFloat(v),
+        Token::HexFloat(bits) => Operand::ConstFloat(f64::from_bits(bits)),
         Token::Ident("true") => Operand::ConstInt(1),
         Token::Ident("false") => Operand::ConstInt(0),
         Token::Global(n) => Operand::Global(n.to_string()),
@@ -367,6 +368,13 @@ where
             lhs,
             rhs,
         });
+
+    let fneg = binding
+        .clone()
+        .then_ignore(just(Token::Ident("fneg")))
+        .then(ty.clone())
+        .then(operand.clone())
+        .map(|((result, ty), value)| Inst::FNeg { result, ty, value });
 
     let icmp = binding
         .clone()
@@ -640,6 +648,7 @@ where
 
     let inst = choice((
         binary,
+        fneg,
         icmp,
         fcmp,
         cast,

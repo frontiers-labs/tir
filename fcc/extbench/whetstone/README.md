@@ -18,3 +18,7 @@ reported module states with GCC and Clang, and validates its comparator with a
 corrupted result. Integer fields must match exactly. Floating fields may differ
 by at most one unit in the last printed decimal place, derived from each
 `%12.4e` result's exponent.
+
+The Cargo benchmark builds with `PRINTOUT` and checks its fixed `1000000` loop
+run against the ten module states in `expected.out`. That reference was produced
+from `whetstone.c` with Clang, `-O2`, `-DPRINTOUT`, and scalar code generation.

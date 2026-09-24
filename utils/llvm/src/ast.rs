@@ -82,6 +82,11 @@ pub enum Inst {
         lhs: Operand,
         rhs: Operand,
     },
+    FNeg {
+        result: String,
+        ty: Type,
+        value: Operand,
+    },
     ICmp {
         result: String,
         pred: String,
