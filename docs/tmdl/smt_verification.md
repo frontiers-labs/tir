@@ -54,8 +54,8 @@ Reported with the results, and deliberate:
 - x86 DIV status flags and SHL/SHR carry flags for counts at least as wide as
   the operand are undefined and are not compared. For immediate ROR, the pinned
   Sail snapshot's carry bit is replaced by the architectural high bit of its
-  result. Its widened unsigned DIV32 calculation is reduced to 64 bits after
-  checking the zero-extension form and a nonzero divisor. The snapshot's CMPS
+  result. Unsigned DIV32 remains unsupported until its guarded narrow behavior
+  has a complete cross-width division proof. The snapshot's CMPS
   flag calculation subtracts RSI from RDI in the wrong order, so the verifier
   recomputes the flags from Sail's two memory operands in architectural order.
 - x86 instructions that the pinned Sail snapshot never completes, including

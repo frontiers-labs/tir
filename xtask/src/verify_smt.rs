@@ -453,6 +453,12 @@ fn unsupported_reason(spec: &IsaSpec, model: &FlatModel, instr: &Instruction) ->
             instr.name
         ));
     }
+    if spec.name == "x86_64" && instr.name == "unsigneddivide32" {
+        return Some(format!(
+            "{} (guarded narrow division proof incomplete)",
+            instr.name
+        ));
+    }
     // Atomics (A extension) reference the reservation state, whose mapping onto
     // Sail's reservation register is follow-up work (see module docs).
     if instr.uses_reservation {
@@ -1878,68 +1884,6 @@ fn analyze_trace(spec: &IsaSpec, events: &[tir_verify::TraceEvent]) -> TraceInfo
     info
 }
 
-/// The pinned x86 model widens DIV r/m32 to signed 128-bit division after
-/// zero-extending the 64-bit dividend and the 32-bit divisor. Reduce that
-/// positive division back to 64 bits before asking the bitvector solver.
-fn normalize_x86_unsigned_div32(trace: &mut TraceInfo) -> anyhow::Result<()> {
-    let definitions: HashMap<_, _> = trace.defines.iter().cloned().collect();
-    let mut divisors = HashSet::new();
-    let unary_var = |expression: &str, prefix: &str| -> Option<String> {
-        let variable = expression.strip_prefix(prefix)?.strip_suffix(')')?;
-        variable
-            .strip_prefix('v')
-            .is_some_and(|digits| !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()))
-            .then(|| variable.to_string())
-    };
-    for (_, expression) in &mut trace.defines {
-        let (unsigned_op, args) = if let Some(args) = expression
-            .strip_prefix("(bvsdiv ")
-            .and_then(|s| s.strip_suffix(')'))
-        {
-            ("bvudiv", args)
-        } else if let Some(args) = expression
-            .strip_prefix("(bvsrem ")
-            .and_then(|s| s.strip_suffix(')'))
-        {
-            ("bvurem", args)
-        } else {
-            continue;
-        };
-        let (dividend, divisor) = args
-            .split_once(' ')
-            .context("unexpected Sail DIV operands")?;
-        let wide_dividend = definitions.get(dividend).context("missing Sail dividend")?;
-        let wide_divisor = definitions.get(divisor).context("missing Sail divisor")?;
-        let low_dividend = unary_var(wide_dividend, "((_ zero_extend 64) ");
-        let low_divisor = unary_var(wide_divisor, "((_ sign_extend 64) ");
-        let low_divisor = low_divisor
-            .as_ref()
-            .and_then(|name| definitions.get(name))
-            .and_then(|value| unary_var(value, "((_ extract 63 0) "))
-            .and_then(|name| definitions.get(&name))
-            .and_then(|value| unary_var(value, "((_ zero_extend 96) "))
-            .and_then(|name| definitions.get(&name))
-            .and_then(|value| unary_var(value, "((_ extract 31 0) "));
-        anyhow::ensure!(
-            low_dividend.is_some(),
-            "Sail DIV dividend is no longer zero-extended"
-        );
-        anyhow::ensure!(low_divisor.is_some(), "Sail DIV divisor form changed");
-        divisors.insert(divisor.to_string());
-        *expression = format!(
-            "((_ zero_extend 64) ({unsigned_op} ((_ extract 63 0) {dividend}) ((_ extract 63 0) {divisor})))"
-        );
-    }
-    // Division by zero traps. It is outside the comparison domain and has a
-    // width-dependent SMT-LIB result, so the reduction needs this condition.
-    for divisor in divisors {
-        trace
-            .asserts
-            .push(format!("(distinct {divisor} (_ bv0 128))"));
-    }
-    Ok(())
-}
-
 /// The pinned x86 snapshot subtracts CMPS operands in the opposite order.
 /// Build its status flags from its own RSI and RDI bytes in ISA order.
 fn normalize_x86_cmps_flags(trace: &mut TraceInfo, bytes: u32) -> anyhow::Result<()> {
@@ -2770,9 +2714,6 @@ fn verify_instruction(
                     .or_default() += 1;
                 line.push('-');
                 continue;
-            }
-            if spec.name == "x86_64" && instr.name == "unsigneddivide32" {
-                normalize_x86_unsigned_div32(&mut info)?;
             }
             if spec.name == "x86_64" {
                 let bytes = match instr.name.as_str() {

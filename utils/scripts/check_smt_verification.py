@@ -63,9 +63,9 @@ if __name__ == "__main__":
         "x86_64",
         [
             "setparity", "setnoparity", "sarcl", "leabaseindex",
-            "movsw", "shlimm8", "sarcl16", "rorimm", "unsigneddivide32",
+            "movsw", "shlimm8", "sarcl16", "rorimm",
         ],
-        unsupported=["andn", "btr", "rorx"],
+        unsupported=["andn", "btr", "rorx", "unsigneddivide32"],
     )
     check_counterexample()
     check("riscv32", ["loadword", "storeword", "bitset", "readfenv", "setfenv"])

@@ -268,6 +268,10 @@ Extending loads retain both their narrow and full behavior-derived patterns.
 Extension widths are structural integers, so their matching does not depend on
 the bit width used to encode an IR attribute.
 
+The fixed-register x86 division forms use a guarded single-width arm. The
+preceding dividend-extension instruction establishes its guard, letting the
+selector match an IR division as one atomic operation.
+
 Effects impose stricter constraints. If two matches each include the same
 effect, selecting both could execute that effect twice. The cover rejects
 incompatible overlaps. State dependencies also preserve the order required by
