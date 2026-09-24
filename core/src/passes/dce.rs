@@ -49,19 +49,19 @@ impl Pass for DeadCodeEliminationPass {
         }
 
         let defuse = analyses.get::<DefUse>(context, op.op().id);
-        let regions = super::regions_under(context, op.op().id);
-        erase_dead_with(context, &defuse, &regions)
+        erase_dead_with(context, &defuse, op.op().id)
     }
 }
 
 /// A gate or a loop goes with the rest once nothing under it can be told to
-/// have happened. The results of `regions` sit in no use list, so what they
-/// name is read here and renamed here.
-fn erase_dead_with(
-    context: &Context,
-    defuse: &DefUse,
-    regions: &[RegionId],
-) -> Result<(), PassError> {
+/// have happened. The results of the regions under `root` sit in no use list,
+/// so what they name is read here and renamed here.
+fn erase_dead_with(context: &Context, defuse: &DefUse, root: OpId) -> Result<(), PassError> {
+    // Renames walk from the root's own regions: those outlive every erase here,
+    // while a region nested under an erased gate is gone by the time a later
+    // read hands over its state.
+    let roots = context.get_op(root).regions();
+    let regions: Vec<RegionId> = super::regions_under(context, root);
     let mut named: HashSet<ValueId> = regions
         .iter()
         .flat_map(|&region| context.get_region(region).results())
@@ -70,7 +70,7 @@ fn erase_dead_with(
     // while allowing writes overwritten in the block once their readers die.
     let mut register_users = HashMap::new();
     let mut register_producers: HashMap<OpId, Vec<OpId>> = HashMap::new();
-    for &region in regions {
+    for &region in &regions {
         for block in context.get_region(region).block_ids() {
             let ops = context.get_block(block).op_ids();
             let graph = crate::backend::Dependences::of_ops(
@@ -120,7 +120,7 @@ fn erase_dead_with(
                     context.replace_value_uses(*published, *observed);
                     if named.remove(published) {
                         named.insert(*observed);
-                        for &region in regions {
+                        for &region in &roots {
                             context.rename_region_results(region, *published, *observed, &[]);
                         }
                     }
