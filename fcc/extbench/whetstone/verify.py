@@ -82,7 +82,7 @@ def compare_results(
             zip(actual.values, actual.spellings, expected.values, expected.spellings, strict=True),
             start=1,
         ):
-            tolerance = max(printed_quantum(spelling), printed_quantum(expected_spelling))
+            tolerance = min(printed_quantum(spelling), printed_quantum(expected_spelling))
             if abs(value - expected_value) > tolerance:
                 raise AssertionError(
                     f"module {module} value {index} differs: "
@@ -97,11 +97,32 @@ def validate_comparator(reference: list[ModuleResult]) -> None:
     corrupted_values[0] += 10.0 * printed_quantum(first.spellings[0])
     corrupted = list(reference)
     corrupted[0] = ModuleResult(first.counts, tuple(corrupted_values), first.spellings)
-    try:
-        compare_results("corrupted", corrupted, "reference", reference)
-    except AssertionError:
-        return
-    raise AssertionError("the numerical comparator accepted a deliberately corrupted result")
+
+    def assert_rejected(candidate: list[ModuleResult], expected: list[ModuleResult]) -> None:
+        try:
+            compare_results("corrupted", candidate, "reference", expected)
+        except AssertionError:
+            return
+        raise AssertionError("the numerical comparator accepted a deliberately corrupted result")
+
+    assert_rejected(corrupted, reference)
+    for actual_spelling, expected_spelling in (
+        ("0.0000e+00", "-1.7680e-313"),
+        ("1.0000e+00", "9.9994e-01"),
+    ):
+        candidate = list(reference)
+        expected = list(reference)
+        candidate[0] = ModuleResult(
+            first.counts,
+            (float(actual_spelling), *first.values[1:]),
+            (actual_spelling, *first.spellings[1:]),
+        )
+        expected[0] = ModuleResult(
+            first.counts,
+            (float(expected_spelling), *first.values[1:]),
+            (expected_spelling, *first.spellings[1:]),
+        )
+        assert_rejected(candidate, expected)
 
 
 def compile_and_run(

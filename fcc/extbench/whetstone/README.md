@@ -16,7 +16,7 @@ python3 fcc/extbench/whetstone/verify.py --fcc target/release/fcc
 The checker builds `PRINTOUT` variants at `-O0` and `-O2`, compares all ten
 reported module states with GCC and Clang, and validates its comparator with a
 corrupted result. Integer fields must match exactly. Floating fields may differ
-by at most one unit in the last printed decimal place, derived from each
+by at most the smaller unit in the last printed decimal place, derived from each
 `%12.4e` result's exponent.
 
 The Cargo benchmark builds with `PRINTOUT` and checks its fixed `1000000` loop
