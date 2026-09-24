@@ -438,18 +438,12 @@ instruction UnsignedDivide32 for [X86_64] : RegUnary32 {
     param EXT: bits<3> = 0b110;
 
     behavior {
-        if GPR32::edx == zext(0b0, 32) {
-            undefined_flags!()
-            GPR32::edx = GPR32::eax - (GPR32::eax ~/ dst) * dst;
-            GPR32::eax = GPR32::eax ~/ dst;
-        } else {
-            undefined_flags!()
-            let dividend = (zext(GPR32::edx, 64) << 32) | zext(GPR32::eax, 64);
-            let divisor = zext(dst, 64);
-            let quotient = dividend ~/ divisor;
-            GPR32::edx = extract(dividend - quotient * divisor, 31, 0);
-            GPR32::eax = extract(quotient, 31, 0);
-        }
+        undefined_flags!()
+        let dividend = (zext(GPR32::edx, 64) << 32) | zext(GPR32::eax, 64);
+        let divisor = zext(dst, 64);
+        let quotient = dividend ~/ divisor;
+        GPR32::edx = extract(dividend - quotient * divisor, 31, 0);
+        GPR32::eax = extract(quotient, 31, 0);
     }
 }
 

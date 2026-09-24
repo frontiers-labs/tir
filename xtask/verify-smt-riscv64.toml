@@ -43,10 +43,14 @@ top = "0x80410000"
 stride = "0x10"
 
 [registers.defaults]
+# This older RV64 snapshot implements the F/D switch as a register rather
+# than the sys_enable_fdext config primop used by the RV32 snapshot.
+rv_enable_fdext = true
 satp = "0x0000000000000000"
-# RV64 (MXL=2) with I and M enabled; C is disabled in this Sail snapshot.
-misa = "{ bits = 0x8000000000001100 }"
-mstatus = "{ bits = 0x0000000000000000 }"
+# RV64 (MXL=2) with I, M, B, F, and D enabled; C is disabled in this Sail snapshot.
+misa = "{ bits = 0x800000000000112a }"
+# FS=Dirty requires the derived SD bit, and keeps FCSR writes in the same mode.
+mstatus = "{ bits = 0x8000000000006000 }"
 # Direct mode, base 0: trap paths must reach the architectural state writes
 # (mcause, mepc, ...) instead of asserting on a symbolic tvec mode.
 mtvec = "{ bits = 0x0000000000000000 }"
@@ -61,14 +65,14 @@ get_config_print_reg = false
 get_config_print_instr = false
 get_config_print_platform = false
 get_config_print_mem = false
-sys_enable_fdext = false
+sys_enable_fdext = true
 sys_enable_zfinx = false
 sys_enable_rvc = true
 sys_enable_next = false
 sys_enable_vext = false
 sys_enable_writable_fiom = true
 sys_enable_writable_misa = true
-sys_enable_bext = false
+sys_enable_bext = true
 sys_pmp_count = "0 : %i64"
 plat_enable_pmp = false
 plat_enable_dirty_update = false

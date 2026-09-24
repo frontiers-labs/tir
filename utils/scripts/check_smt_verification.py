@@ -12,17 +12,19 @@ import subprocess
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def check(isa, instructions):
+def check(isa, instructions, unsupported=()):
     result = subprocess.run(
         ["cargo", "xtask", "verify", isa],
         cwd=ROOT,
-        env={**os.environ, "TIR_VERIFY_SMT_FILTER": ",".join(instructions)},
+        env={**os.environ, "TIR_VERIFY_SMT_FILTER": ",".join([*instructions, *unsupported])},
         check=False,
     )
     assert result.returncode == 0, f"{isa} verification failed"
     report = json.loads((ROOT / f"target/verify/smt/{isa}/report.json").read_text())
     checked = {entry["instruction"] for entry in report["instructions"]}
     assert checked == set(instructions), f"unchecked instructions: {set(instructions) - checked}"
+    skipped = {entry.split()[0] for entry in report["unsupported"]}
+    assert skipped == set(unsupported), f"unexpected unsupported instructions: {skipped}"
     assert report["verified"] > 0
     assert report["failed"] == 0
     assert report["unknown"] == 0
@@ -57,7 +59,21 @@ def check_counterexample():
 
 
 if __name__ == "__main__":
-    check("x86_64", ["setparity", "setnoparity", "sarcl", "leabaseindex"])
+    check(
+        "x86_64",
+        [
+            "setparity", "setnoparity", "sarcl", "leabaseindex",
+            "movsw", "shlimm8", "sarcl16", "rorimm", "unsigneddivide32",
+        ],
+        unsupported=["andn", "btr", "rorx"],
+    )
     check_counterexample()
-    check("riscv32", ["loadword", "storeword"])
-    check("armv8", ["loadacquire", "storerelease", "subword"])
+    check("riscv32", ["loadword", "storeword", "bitset", "readfenv", "setfenv"])
+    check("riscv64", ["bitset", "readfenv", "setfenv"])
+    check(
+        "armv8",
+        [
+            "loadacquire", "storerelease", "subword",
+            "addvector16b", "subvector16b", "andvector16b",
+        ],
+    )

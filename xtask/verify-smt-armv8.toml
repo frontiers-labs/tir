@@ -67,6 +67,10 @@ ignore = [
 
 # These registers are set before any symbolic execution occurs
 [registers.defaults]
+# Permit AdvSIMD/FP at EL1 so vector instructions reach their state updates.
+"CPACR_EL1" = "0x00300000"
+"CPTR_EL2" = "0x00000000"
+"CPTR_EL3" = "0x00000000"
 "__isla_vector_gpr" = false
 "__isla_continue_on_see" = true
 "__monomorphize_reads" = false

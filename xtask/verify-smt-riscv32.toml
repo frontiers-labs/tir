@@ -57,9 +57,10 @@ value = "AlignmentException"
 
 [registers.defaults]
 satp = "0x00000000"
-# RV32 (MXL=1) with I and M enabled; C is disabled in this Sail snapshot.
-misa = "{ bits = 0x40001100 }"
-mstatus = "{ bits = 0x0000000000000000 }"
+# RV32 (MXL=1) with I, M, B, F, and D enabled; C is disabled in this Sail snapshot.
+misa = "{ bits = 0x4000112a }"
+# FS=Dirty requires the derived SD bit, and keeps FCSR writes in the same mode.
+mstatus = "{ bits = 0x0000000080006000 }"
 mtvec = "{ bits = 0x00000000 }"
 # No delegation: machine mode handles all traps (there is no S-mode in the
 # verified model), and a symbolic medeleg would otherwise taint every trap path.
@@ -76,14 +77,14 @@ get_config_print_reg = false
 get_config_print_instr = false
 get_config_print_platform = false
 get_config_print_mem = false
-sys_enable_fdext = false
+sys_enable_fdext = true
 sys_enable_zfinx = false
 sys_enable_rvc = true
 sys_enable_next = false
 sys_enable_vext = false
 sys_enable_writable_fiom = true
 sys_enable_writable_misa = true
-sys_enable_bext = false
+sys_enable_bext = true
 sys_pmp_count = "0 : %i64"
 plat_enable_pmp = false
 plat_enable_dirty_update = false

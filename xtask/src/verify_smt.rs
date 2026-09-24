@@ -62,7 +62,7 @@ use std::process::Command;
 use std::time::Instant;
 
 use crate::utils::{download_file, project_root};
-use anyhow::anyhow;
+use anyhow::{anyhow, Context};
 use serde::Serialize;
 use tmdl::{FlatStateFieldMetadata, MemoryAccessMetadata, RegisterClassMetadata, SmtMetadata};
 use xshell::{cmd, Shell};
@@ -159,6 +159,11 @@ impl IsaSpec {
                 .classes
                 .get(class)
                 .is_some_and(|info| info.storage == "gpr")
+            || (self.name == "armv8"
+                && model
+                    .classes
+                    .get(class)
+                    .is_some_and(|info| info.storage == "vpr"))
             || self.extra_regs.iter().any(|(_, c, _, _)| *c == class)
     }
 
@@ -199,6 +204,39 @@ const ARMV8_EXTRA_REGS: &[(&str, &str, u64, u32)] = &[
     ("SP_EL1", "gprsp", 31, 5),
     ("SP_EL2", "gprsp", 31, 5),
     ("SP_EL3", "gprsp", 31, 5),
+];
+
+// These AdvSIMD operations have been checked across every lane arrangement.
+// Keep other vector operations out of the nightly proof set until their Sail
+// paths have the same coverage, since many fork once per lane.
+const ARM_VECTOR_PROOFS: &[&str] = &[
+    "addvector8b",
+    "addvector16b",
+    "addvector4h",
+    "addvector8h",
+    "addvector2s",
+    "addvector4s",
+    "addvector2d",
+    "subvector8b",
+    "subvector16b",
+    "subvector4h",
+    "subvector8h",
+    "subvector2s",
+    "subvector4s",
+    "subvector2d",
+    "andvector8b",
+    "andvector16b",
+    "orrvector8b",
+    "orrvector16b",
+    "eorvector8b",
+    "eorvector16b",
+];
+
+// The pinned ACL2-derived snapshot has no execution semantics for these
+// instructions: every Sail path stops before writing RIP.
+const X86_SAIL_UNIMPLEMENTED: &[&str] = &[
+    "andn", "andn32", "bextr", "bextr32", "blsi", "blsi32", "blsmsk", "btc", "btr", "bts",
+    "bzhi32", "mulx", "rorx", "rorx32", "sarx", "sarx32", "shlx", "shlx32", "shrx",
 ];
 
 const ISA_SPECS: &[IsaSpec] = &[
@@ -352,12 +390,12 @@ const ISA_SPECS: &[IsaSpec] = &[
         trap_cause: None,
         initial_registers: &[],
         reg_names: X86_REG_NAMES,
-        // rflags bit layout: cf=0, pf=2, zf=6, sf=7, of=11 (Intel SDM). TMDL EFLAGS
-        // slots cf=0, pf=1, zf=2, sf=3, of=4 (declaration order).
+        // rflags bit layout: cf=0, pf=2, af=4, zf=6, sf=7, df=10, of=11
+        // (Intel SDM). TMDL EFLAGS slots follow declaration order.
         flag_reg: Some((
             "rflags",
             "eflags",
-            &[(0, 0), (1, 2), (2, 6), (3, 7), (4, 11)],
+            &[(0, 0), (1, 2), (2, 6), (3, 7), (4, 11), (5, 4), (6, 10)],
         )),
         simplify: false,
         align_pc: false,
@@ -409,6 +447,12 @@ fn unsupported_reason(spec: &IsaSpec, model: &FlatModel, instr: &Instruction) ->
     if !instr.supported {
         return Some(instr.name.clone());
     }
+    if spec.name == "x86_64" && X86_SAIL_UNIMPLEMENTED.contains(&instr.name.as_str()) {
+        return Some(format!(
+            "{} (not implemented by pinned Sail snapshot)",
+            instr.name
+        ));
+    }
     // Atomics (A extension) reference the reservation state, whose mapping onto
     // Sail's reservation register is follow-up work (see module docs).
     if instr.uses_reservation {
@@ -419,6 +463,26 @@ fn unsupported_reason(spec: &IsaSpec, model: &FlatModel, instr: &Instruction) ->
     }
     if instr.flat_execute.is_none() {
         return Some(format!("{} (no flat SMT behavior)", instr.name));
+    }
+    if spec.name == "armv8"
+        && (instr.operands.iter().any(|(_, kind)| match kind {
+            OperandKind::Reg { class, .. } => model
+                .classes
+                .get(class)
+                .is_some_and(|info| info.storage == "vpr"),
+            _ => false,
+        }) || instr.write_classes.iter().any(|class| {
+            model
+                .classes
+                .get(class)
+                .is_some_and(|info| info.storage == "vpr")
+        }))
+        && !ARM_VECTOR_PROOFS.contains(&instr.name.as_str())
+    {
+        return Some(format!(
+            "{} (ARM vector equivalence not yet checked)",
+            instr.name
+        ));
     }
     // Operands in register classes that have no correspondence to Sail state
     // (e.g. the TMDL `pc` operand class).
@@ -1486,6 +1550,12 @@ struct TraceInfo {
     /// `flag slot -> bit expression` from a write of the flag register (last
     /// write wins). Only compared when the TMDL behavior also writes flags.
     flag_writes: HashMap<u64, String>,
+    /// RISC-V fcsr combines the independent TMDL fflags and frm slots.
+    fcsr_reads: Vec<String>,
+    fcsr_write: Option<String>,
+    /// ARM's `_V` register is one 32-element array of 128-bit values.
+    vector_reads: Vec<(usize, String)>,
+    vector_write: Option<Vec<String>>,
     /// Why this path cannot be checked against the TMDL state (trap paths,
     /// CSR accesses, ...), if so.
     excluded: Option<String>,
@@ -1495,6 +1565,16 @@ fn exclude(info: &mut TraceInfo, reason: String) {
     if info.excluded.is_none() {
         info.excluded = Some(reason);
     }
+}
+
+fn arm_vector_elements(value: &tir_verify::TraceValue) -> Option<Vec<String>> {
+    let body = value.smt.strip_prefix("(_ vec ")?.strip_suffix(')')?;
+    let elements: Vec<_> = body.split_whitespace().map(str::to_string).collect();
+    (elements.len() == 32
+        && elements
+            .iter()
+            .all(|element| element.starts_with('v') || element.starts_with('#')))
+    .then_some(elements)
 }
 
 fn register_value(spec: &IsaSpec, name: &str, value: &tir_verify::TraceValue) -> String {
@@ -1515,6 +1595,26 @@ fn analyze_register_read(
     value: &tir_verify::TraceValue,
 ) {
     if spec.ignore_regs.contains(&name) {
+        return;
+    }
+    if spec.name == "armv8" && name == "_V" {
+        match arm_vector_elements(value) {
+            Some(elements) => {
+                for (index, element) in elements.into_iter().enumerate() {
+                    if element.starts_with('v') && !defined_vars.contains(&element) {
+                        info.vector_reads.push((index, element));
+                    }
+                }
+            }
+            None => exclude(info, "unrecognized ARM vector register value".to_string()),
+        }
+        return;
+    }
+    if spec.name.starts_with("riscv") && name == "fcsr" {
+        let value = unwrap_bits_struct(value);
+        if value.smt.starts_with('v') && !defined_vars.contains(&value.smt) {
+            info.fcsr_reads.push(value.smt.clone());
+        }
         return;
     }
     // A bitfield flag register (x86 `rflags`) read: each mapped bit
@@ -1581,6 +1681,17 @@ fn analyze_register_write(
     value: &tir_verify::TraceValue,
 ) {
     if spec.ignore_regs.contains(&name) {
+        return;
+    }
+    if spec.name == "armv8" && name == "_V" {
+        match arm_vector_elements(value) {
+            Some(elements) => info.vector_write = Some(elements),
+            None => exclude(info, "unrecognized ARM vector register write".to_string()),
+        }
+        return;
+    }
+    if spec.name.starts_with("riscv") && name == "fcsr" {
+        info.fcsr_write = Some(unwrap_bits_struct(value).smt.clone());
         return;
     }
     // A write of the bitfield flag register: record each mapped bit
@@ -1765,6 +1876,112 @@ fn analyze_trace(spec: &IsaSpec, events: &[tir_verify::TraceEvent]) -> TraceInfo
         exclude(&mut info, "incomplete path (no PC write)".to_string());
     }
     info
+}
+
+/// The pinned x86 model widens DIV r/m32 to signed 128-bit division after
+/// zero-extending the 64-bit dividend and the 32-bit divisor. Reduce that
+/// positive division back to 64 bits before asking the bitvector solver.
+fn normalize_x86_unsigned_div32(trace: &mut TraceInfo) -> anyhow::Result<()> {
+    let definitions: HashMap<_, _> = trace.defines.iter().cloned().collect();
+    let mut divisors = HashSet::new();
+    let unary_var = |expression: &str, prefix: &str| -> Option<String> {
+        let variable = expression.strip_prefix(prefix)?.strip_suffix(')')?;
+        variable
+            .strip_prefix('v')
+            .is_some_and(|digits| !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()))
+            .then(|| variable.to_string())
+    };
+    for (_, expression) in &mut trace.defines {
+        let (unsigned_op, args) = if let Some(args) = expression
+            .strip_prefix("(bvsdiv ")
+            .and_then(|s| s.strip_suffix(')'))
+        {
+            ("bvudiv", args)
+        } else if let Some(args) = expression
+            .strip_prefix("(bvsrem ")
+            .and_then(|s| s.strip_suffix(')'))
+        {
+            ("bvurem", args)
+        } else {
+            continue;
+        };
+        let (dividend, divisor) = args
+            .split_once(' ')
+            .context("unexpected Sail DIV operands")?;
+        let wide_dividend = definitions.get(dividend).context("missing Sail dividend")?;
+        let wide_divisor = definitions.get(divisor).context("missing Sail divisor")?;
+        let low_dividend = unary_var(wide_dividend, "((_ zero_extend 64) ");
+        let low_divisor = unary_var(wide_divisor, "((_ sign_extend 64) ");
+        let low_divisor = low_divisor
+            .as_ref()
+            .and_then(|name| definitions.get(name))
+            .and_then(|value| unary_var(value, "((_ extract 63 0) "))
+            .and_then(|name| definitions.get(&name))
+            .and_then(|value| unary_var(value, "((_ zero_extend 96) "))
+            .and_then(|name| definitions.get(&name))
+            .and_then(|value| unary_var(value, "((_ extract 31 0) "));
+        anyhow::ensure!(
+            low_dividend.is_some(),
+            "Sail DIV dividend is no longer zero-extended"
+        );
+        anyhow::ensure!(low_divisor.is_some(), "Sail DIV divisor form changed");
+        divisors.insert(divisor.to_string());
+        *expression = format!(
+            "((_ zero_extend 64) ({unsigned_op} ((_ extract 63 0) {dividend}) ((_ extract 63 0) {divisor})))"
+        );
+    }
+    // Division by zero traps. It is outside the comparison domain and has a
+    // width-dependent SMT-LIB result, so the reduction needs this condition.
+    for divisor in divisors {
+        trace
+            .asserts
+            .push(format!("(distinct {divisor} (_ bv0 128))"));
+    }
+    Ok(())
+}
+
+/// The pinned x86 snapshot subtracts CMPS operands in the opposite order.
+/// Build its status flags from its own RSI and RDI bytes in ISA order.
+fn normalize_x86_cmps_flags(trace: &mut TraceInfo, bytes: u32) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        trace.mem_reads.len() == 2 * bytes as usize
+            && trace.mem_reads.iter().all(|read| read.bytes == 1)
+            && trace.mem_writes.is_empty(),
+        "Sail CMPS memory trace changed"
+    );
+    let operand = |start: usize| {
+        trace.mem_reads[start..start + bytes as usize]
+            .iter()
+            .rev()
+            .map(|read| read.value.clone())
+            .reduce(|high, low| format!("(concat {high} {low})"))
+            .expect("CMPS has at least one byte")
+    };
+    let lhs = operand(0);
+    let rhs = operand(bytes as usize);
+    let width = bytes * 8;
+    let diff = format!("(bvsub {lhs} {rhs})");
+    let parity = (0..8)
+        .map(|bit| format!("((_ extract {bit} {bit}) {diff})"))
+        .reduce(|a, b| format!("(bvxor {a} {b})"))
+        .context("CMPS has at least one parity bit")?;
+    let high = width - 1;
+    let flags = [
+        (0, format!("(ite (bvult {lhs} {rhs}) #b1 #b0)")),
+        (1, format!("(bvnot {parity})")),
+        (2, format!("(ite (= {lhs} {rhs}) #b1 #b0)")),
+        (3, format!("((_ extract {high} {high}) {diff})")),
+        (
+            4,
+            format!("((_ extract {high} {high}) (bvand (bvxor {lhs} {rhs}) (bvxor {lhs} {diff})))"),
+        ),
+        (
+            5,
+            format!("((_ extract 4 4) (bvxor (bvxor {lhs} {rhs}) {diff}))"),
+        ),
+    ];
+    trace.flag_writes.extend(flags);
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -1953,6 +2170,19 @@ fn emit_trace_read_constraints(
             );
         }
     }
+    for var in &trace.fcsr_reads {
+        let flags = flat_read_register(model, "fflags", "st0", "(_ bv1 12)");
+        let round = flat_read_register(model, "frm", "st0", "(_ bv2 12)");
+        let _ = writeln!(q, "(assert (= ((_ extract 4 0) {var}) {flags}))");
+        let _ = writeln!(q, "(assert (= ((_ extract 7 5) {var}) {round}))");
+        // The architectural FCSR exposes only fflags and frm; reserved bits
+        // read as zero even though the Sail snapshot starts them symbolic.
+        let _ = writeln!(q, "(assert (= ((_ extract 31 8) {var}) (_ bv0 24)))");
+    }
+    for (index, value) in &trace.vector_reads {
+        let initial = flat_read_register(model, "vpr", "st0", &format!("(_ bv{index} 5)"));
+        let _ = writeln!(q, "(assert (= {value} {initial}))");
+    }
     for (reg, var) in &trace.reads {
         let init = match reg {
             MappedReg::X(n) => {
@@ -1965,6 +2195,112 @@ fn emit_trace_read_constraints(
         let _ = writeln!(q, "(assert (= {} {}))", var, init);
     }
     q
+}
+
+/// The reference x86 model gives a concrete CF for oversized narrow shifts.
+/// Intel leaves SHL/SHR CF undefined there; SAR's CF remains the old sign bit.
+fn x86_narrow_shift_count(
+    model: &FlatModel,
+    instr: &Instruction,
+    case: &[u64],
+) -> Option<(u32, String)> {
+    let name = instr.name.as_str();
+    if !["shl", "shr", "sal", "sar"]
+        .iter()
+        .any(|op| name.starts_with(op))
+    {
+        return None;
+    }
+    let OperandKind::Reg { class, .. } = &instr.operands.first()?.1 else {
+        return None;
+    };
+    let width = model.classes[class].value_width;
+    if !matches!(width, 8 | 16) {
+        return None;
+    }
+    let count = if name.contains("imm") {
+        format!("(_ bv{} 64)", case.get(1)? & 31)
+    } else if name.contains("cl") {
+        format!(
+            "(bvand {} (_ bv31 64))",
+            flat_read_register(model, "gpr", "st0", "(_ bv1 4)")
+        )
+    } else {
+        return None;
+    };
+    Some((u32::from(width), count))
+}
+
+fn append_flag_equalities(
+    spec: &IsaSpec,
+    model: &FlatModel,
+    instr: &Instruction,
+    case: &[u64],
+    trace: &TraceInfo,
+    final_eq: &mut Vec<String>,
+) {
+    // Only compare flags that the TMDL behavior writes.
+    let Some((_, class, bit_map)) = spec.flag_reg else {
+        return;
+    };
+    if !instr.write_classes.iter().any(|written| written == class) {
+        return;
+    }
+    let idx_w = model.classes[class].index_width;
+    for (slot, _) in bit_map {
+        if !instr
+            .fixed_register_writes
+            .iter()
+            .any(|(written, index)| written == class && u64::from(*index) == *slot)
+        {
+            continue;
+        }
+        // DIV/IDIV leave every status flag undefined. TMDL writes a
+        // placeholder value to preserve dependence ordering.
+        if spec.name == "x86_64"
+            && matches!(instr.name.as_str(), "signeddivide32" | "unsigneddivide32")
+        {
+            continue;
+        }
+        let sail = trace.flag_writes.get(slot).cloned().unwrap_or_else(|| {
+            flat_read_register(model, class, "st0", &format!("(_ bv{slot} {idx_w})"))
+        });
+        let tmdl = flat_read_register(model, class, "st1", &format!("(_ bv{slot} {idx_w})"));
+        if spec.name == "x86_64" && *slot == 0 {
+            if let Some((width, count)) = x86_narrow_shift_count(model, instr, case) {
+                let defined = format!("(bvult {count} (_ bv{width} 64))");
+                if instr.name.starts_with("sar") {
+                    let OperandKind::Reg { class, idx_width } = &instr.operands[0].1 else {
+                        unreachable!()
+                    };
+                    let old = flat_read_register(
+                        model,
+                        class,
+                        "st0",
+                        &format!("(_ bv{} {idx_width})", case[0]),
+                    );
+                    let sign = format!("((_ extract {} {}) {old})", width - 1, width - 1);
+                    final_eq.push(format!("(= {tmdl} (ite {defined} {sail} {sign}))"));
+                } else {
+                    final_eq.push(format!("(or (not {defined}) (= {tmdl} {sail}))"));
+                }
+                continue;
+            }
+            // The pinned ACL2-derived snapshot copies the low bit of ROR's
+            // result into CF. The architectural CF is its high bit.
+            let rotate_mask = if instr.name == "rorimm" { 63 } else { 31 };
+            if matches!(instr.name.as_str(), "rorimm" | "rorimm32") && (case[1] & rotate_mask) != 0
+            {
+                if let Some(result) = trace.writes.get(&MappedReg::X(case[0] as u32)) {
+                    let width = if instr.name == "rorimm" { 64 } else { 32 };
+                    let high = width - 1;
+                    final_eq.push(format!("(= {tmdl} ((_ extract {high} {high}) {result}))"));
+                    continue;
+                }
+            }
+        }
+        final_eq.push(format!("(= {tmdl} {sail})"));
+    }
 }
 
 fn build_query(
@@ -2005,28 +2341,36 @@ fn build_query(
             )
         })
         .collect();
-    // Flag equivalence, only where the TMDL behavior models flags (its
-    // execute writes the flag class). The ALU ops deliberately leave flags
-    // unmodeled, so Sail's flag writes are ignored for them.
-    if let Some((_, class, bit_map)) = spec.flag_reg {
-        if instr.write_classes.iter().any(|written| written == class) {
-            let idx_w = model.classes[class].index_width;
-            for (slot, _) in bit_map {
-                if !instr
-                    .fixed_register_writes
-                    .iter()
-                    .any(|(written, index)| written == class && u64::from(*index) == *slot)
-                {
-                    continue;
-                }
-                let sail = trace.flag_writes.get(slot).cloned().unwrap_or_else(|| {
-                    flat_read_register(model, class, "st0", &format!("(_ bv{slot} {idx_w})"))
-                });
+    append_flag_equalities(spec, model, instr, case, trace, &mut final_eq);
+    if let Some(fcsr) = &trace.fcsr_write {
+        for (class, slot, high, low) in [("fflags", 1, 4, 0), ("frm", 2, 7, 5)] {
+            if instr
+                .fixed_register_writes
+                .iter()
+                .any(|(written, index)| written == class && *index == slot)
+            {
+                let final_value =
+                    flat_read_register(model, class, "st1", &format!("(_ bv{slot} 12)"));
                 final_eq.push(format!(
-                    "(= {} {sail})",
-                    flat_read_register(model, class, "st1", &format!("(_ bv{slot} {idx_w})"))
+                    "(= {final_value} ((_ extract {high} {low}) {fcsr}))"
                 ));
             }
+        }
+    }
+    if spec.name == "armv8"
+        && (trace.vector_write.is_some()
+            || instr
+                .write_classes
+                .iter()
+                .any(|class| model.classes[class].storage == "vpr"))
+    {
+        for index in 0..32 {
+            let sail = trace.vector_write.as_ref().map_or_else(
+                || flat_read_register(model, "vpr", "st0", &format!("(_ bv{index} 5)")),
+                |elements| elements[index].clone(),
+            );
+            let tmdl = flat_read_register(model, "vpr", "st1", &format!("(_ bv{index} 5)"));
+            final_eq.push(format!("(= {tmdl} {sail})"));
         }
     }
     // Extra mapped state, deduplicated by underlying TMDL slot since several
@@ -2417,7 +2761,7 @@ fn verify_instruction(
 
         for (path_idx, events) in traces.iter().enumerate() {
             timing.paths += 1;
-            let info = analyze_trace(spec, events);
+            let mut info = analyze_trace(spec, events);
             if let Some(reason) = &info.excluded {
                 report.excluded_paths += 1;
                 *report
@@ -2426,6 +2770,20 @@ fn verify_instruction(
                     .or_default() += 1;
                 line.push('-');
                 continue;
+            }
+            if spec.name == "x86_64" && instr.name == "unsigneddivide32" {
+                normalize_x86_unsigned_div32(&mut info)?;
+            }
+            if spec.name == "x86_64" {
+                let bytes = match instr.name.as_str() {
+                    "cmpsb" => Some(1),
+                    "cmpsw" => Some(2),
+                    "cmpsdstring" => Some(4),
+                    _ => None,
+                };
+                if let Some(bytes) = bytes {
+                    normalize_x86_cmps_flags(&mut info, bytes)?;
+                }
             }
             // A path writing a trap cause TMDL does not model (access fault)
             // lies outside the all-of-memory-is-RAM assumption.
