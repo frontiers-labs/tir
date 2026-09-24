@@ -239,6 +239,10 @@ const X86_SAIL_UNIMPLEMENTED: &[&str] = &[
     "bzhi32", "mulx", "rorx", "rorx32", "sarx", "sarx32", "shlx", "shlx32", "shrx",
 ];
 
+// The pinned Isla evaluator panics when Sail's 64-bit SHLD/SHRD forms convert
+// their symbolic 128-bit intermediate to an integer.
+const X86_ISLA_128BIT_SHIFTS: &[&str] = &["shldimm", "shrdimm", "shldcl", "shrdcl"];
+
 const ISA_SPECS: &[IsaSpec] = &[
     IsaSpec {
         name: "riscv64",
@@ -450,6 +454,12 @@ fn unsupported_reason(spec: &IsaSpec, model: &FlatModel, instr: &Instruction) ->
     if spec.name == "x86_64" && X86_SAIL_UNIMPLEMENTED.contains(&instr.name.as_str()) {
         return Some(format!(
             "{} (not implemented by pinned Sail snapshot)",
+            instr.name
+        ));
+    }
+    if spec.name == "x86_64" && X86_ISLA_128BIT_SHIFTS.contains(&instr.name.as_str()) {
+        return Some(format!(
+            "{} (pinned Isla evaluator cannot execute symbolic 128-bit shift)",
             instr.name
         ));
     }

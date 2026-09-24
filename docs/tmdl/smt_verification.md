@@ -61,6 +61,8 @@ Reported with the results, and deliberate:
 - x86 instructions that the pinned Sail snapshot never completes, including
   its BMI/BMI2 and register bit-test gaps, are reported as unsupported rather
   than counted as proved paths.
+- The pinned Isla evaluator cannot execute the symbolic 128-bit intermediate
+  in x86-64 SHLD/SHRD forms, so those forms are reported as unsupported.
 
 ## Setup
 
