@@ -249,25 +249,96 @@ and micro-ops.
 
 ## Fusion
 
-Cores fuse certain adjacent operations into a single micro-op. Both kinds are
-expressible:
-
-**Macro-fusion** merges two adjacent instructions (x86: a flag-writing ALU op
-followed by a conditional branch). A machine declares fusable pairs over
-*mnemonics*; every instruction carrying the mnemonic participates:
+An ordered `fusion` rule matches a contiguous sequence of one or more
+instructions. A step can select exact TMDL instruction names or all instructions
+with a mnemonic. The first matching rule supplies the front-end and execution
+recipe. If a required operand or layout fact is unknown, timing falls back to
+the unfused instructions; a later rule does not override that uncertainty.
 
 ```
-fusion {
-    first = [test, and];
-    second = [je, jne, jl, jge];
+fusion ShiftAdd {
+    match = [shift: instruction[Slli], add: mnemonic[add]];
+    when same_register(shift.rd, add.rs1) &
+         (shift.shamt == 0b011) & same_block(shift, add, 32);
+    schedule {
+        decode_uops = 1;
+        decoded_cache_uops = 1;
+        rename_slots = 1;
+        rob_entries = 1;
+        retire_slots = 1;
+        uop combined(Int) {
+            inputs = [shift.rs1, add.rs1, add.rs2];
+            outputs = [shift.rd, add.rd];
+            memory = [];
+            control = [];
+            read_cycle = 0;
+            write_cycle = 1;
+        }
+    }
 }
 ```
 
-A `first` instruction immediately followed by a `second` instruction decodes,
-issues, and retires as one micro-op executing on the second instruction's
-resources, with the pair's register accesses unioned and both encodings counted
-against fetch. Multiple `fusion` blocks may be declared (x86 pairs differ by
-condition group). The checker rejects mnemonics that match no instruction.
+The `when` expression uses pure operand and layout facts. It supports numeric
+comparisons and arithmetic, `same_register`, `overlap_register`, `same_block`,
+`aligned`, instruction `pc` and byte `width`, `regnum(step.operand)`,
+`operand_width(step.operand)` in bits, and `encoded_byte(step, index)`.
+The byte predicate can test a prefix or shape bit when encoding bytes are
+available. Use `&`, `|`, and `~` to combine
+conditions. Named operands must exist with compatible types in every instruction
+selected by that step. Unknown functions and unsupported expressions are errors.
+Numeric guard arithmetic uses checked signed 128-bit integers. It does not wrap
+at the operand's ISA bit width. Overflow and division by zero make the guard
+unknown, so the sequence runs unfused.
+
+Each named `uop` supplies a resource expression or `inherit = step` to reuse a
+matched instruction's execution routes. `depends_on = [name]` orders uops; the
+read and write cycles determine when each output becomes available. `inputs`
+and `outputs` accept named operands or `all_inputs(step)` and
+`all_outputs(step)` for implicit register effects. `memory` assigns original
+accesses to a uop using a step name or `step.memory[index]`; `control` assigns
+branch effects. The checker requires every register, memory, and control effect
+to have a recipe assignment. Fusion only changes timing; architectural behavior
+still executes each original instruction.
+
+The scalar decode, rename, ROB, and retire counts apply to the whole sequence.
+For different partitions at a stage, add ordered groups such as
+`decode_group([shift, add], slots = 1);` or separate
+`rename_group([shift], slots = 1); rename_group([add], slots = 1);`.
+Groups at a stage must cover every step once and preserve program order.
+`decoded_cache_uops` defaults to `decode_uops`; `decoder` and `decode_cycles`
+use the same meanings as instruction scheduling. Multiple rules express
+conditional recipes, with more specific rules placed first.
+
+The SpacemiT X100 model uses one such rule for `c.slli; c.srli` on the same
+64-bit register with nonzero amounts and the left amount no greater than the
+right. The inference subset from
+`dataset-rva23/compute-blocks.jsonl.zst`
+and `out/milkv2` used repeated 64-iteration chains on
+CPUs 4 through 7. Its 41 eligible rows had a median 1.2444 cycles per pair; 90
+reverse-amount rows had a median 2.00003. Three full-width `slli; srli`
+controls using two registers stayed near 2.0004 cycles per pair; they do not
+isolate encoding width. No zero-amount pair was measured. One
+`c.srli; c.slli` row at 32, 32 measured 1.2503 cycles per copy because
+contiguous copies form `c.slli; c.srli` at their boundary.
+An isolated reversed pair has no such boundary. The shorter dependent path
+supports the rule, but roughly 0.244 cycles of residual time remain outside
+its ideal one-cycle recipe. The corpus does not identify a physical micro-op
+count or front-end packing, so the rule keeps two decode, rename, ROB, and
+retirement charges. Only three eligible equal-amount rows were available as a
+holdout, with no reverse-amount holdout control.
+
+A second X100 rule covers `slli dst, src; c.srli dst` when `src` and `dst`
+are different registers and both shift amounts are positive, with the left
+amount no greater than the right. Among accepted inference rows, 189 eligible
+pairs had a median 0.5324 cycles per block against 0.6740 for 10
+greater-amount controls. These rows had the same six-byte geometry, repetition
+count, and start alignment; one contrast also matched CPU, source,
+destination, and left amount. This is independent-pair throughput evidence,
+so the rule uses one execution uop but preserves the original two-cycle result
+latency and both instructions' front-end charges. Four eligible holdout rows
+were available, with only one from the selection set and no greater-amount
+holdout control. Three `c.slli; srli` rows lacked same-topology
+greater-amount controls, so that mixed order remains unmodeled.
 
 **Micro-fusion** (one instruction whose front-end cost is smaller than its
 execution micro-op count, e.g. an x86 load+ALU form) needs no dedicated

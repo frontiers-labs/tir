@@ -1,0 +1,43 @@
+// RUN: not tmdlc --action=emit-rust --dialect=test --text-only --output=- %s | filecheck %s
+
+// CHECK: same_register requires register operands
+// CHECK: fusion rename group needs positive slots and steps
+// CHECK: fusion output 'a.src' is assigned more than once
+// CHECK: fusion step 'a' leaves an input of 'Move' unassigned
+// CHECK: fusion step 'a' leaves an output of 'Move' unassigned
+
+isa TestIsa {}
+register_class Gpr for [TestIsa] {
+    param WIDTH: Integer = 64;
+    param ENCODING_LEN: Integer = 3;
+    registers { r0..r7 => {} }
+}
+
+instruction Move for [TestIsa] {
+    param MNEMONIC: String = "mov";
+    operands { dst: Gpr, src: Gpr, imm: bits<8> }
+    asm { "mov {dst}, {src}, {imm}" }
+    behavior { dst = src; }
+}
+
+machine TestCore for [TestIsa] {
+    unit P0 { count = 1; }
+    fusion Bad {
+        match = [a: instruction[Move]];
+        when same_register(a.src, a.imm);
+        schedule {
+            decode_uops = 1;
+            rename_slots = 1;
+            rob_entries = 1;
+            retire_slots = 1;
+            rename_group([a], slots = 0);
+            uop only(P0) {
+                inputs = [a.imm];
+                outputs = [a.src];
+            }
+            uop again(P0) {
+                outputs = [a.src];
+            }
+        }
+    }
+}

@@ -1,0 +1,75 @@
+// RUN: tmdlc --action=emit-rust --dialect=test --text-only --output=- %s | filecheck %s
+
+// CHECK: name: "ShiftAdd",
+// CHECK: SameRegister(
+// CHECK: SameBlock {
+// CHECK: EncodedByte {
+// CHECK: Regnum(
+// CHECK: OperandWidth(
+// CHECK: Pc(0)
+// CHECK: Width(0)
+// CHECK: Sub(
+// CHECK: rename_groups: &[
+// CHECK: name: "shift",
+// CHECK: name: "combined",
+// CHECK: depends_on: &["shift"],
+
+isa TestIsa { param ENCODING_UNIT: Integer = 8; }
+
+fn shift_three(x) { x == 0b011 }
+
+register_class Gpr for [TestIsa] {
+    param WIDTH: Integer = 64;
+    param ENCODING_LEN: Integer = 3;
+    registers { r0..r7 => {} }
+}
+
+instruction Shift for [TestIsa] {
+    param MNEMONIC: String = "slli";
+    operands { dst: Gpr, src: Gpr, imm: bits<3> }
+    asm { "slli {dst}, {src}, {imm}" }
+    encoding { (0b00, dst, src), (0b00000, imm) }
+    behavior { dst = src << imm; }
+}
+
+instruction Add for [TestIsa] {
+    param MNEMONIC: String = "add";
+    operands { dst: Gpr, lhs: Gpr, rhs: Gpr }
+    asm { "add {dst}, {lhs}, {rhs}" }
+    encoding { (0b00, dst, lhs), (0b00000, rhs) }
+    behavior { dst = lhs + rhs; }
+}
+
+machine TestCore for [TestIsa] {
+    unit P0 { count = 1; }
+    fusion ShiftAdd {
+        match = [a: instruction[Shift], b: mnemonic[add]];
+        when same_register(a.dst, b.lhs) & shift_three(a.imm) &
+            same_block(a, b, 0x20) & (encoded_byte(a, 0) == 0b1) &
+            (regnum(a.dst) == regnum(b.lhs)) &
+            (operand_width(a.dst) == 64) &
+            (pc(a) + width(a) <= pc(b)) & ~(a.imm == (0 - 1)) & true;
+        schedule {
+            decode_uops = 2;
+            decoded_cache_uops = 1;
+            rename_slots = 2;
+            rob_entries = 1;
+            retire_slots = 1;
+            rename_group([a], slots = 1);
+            rename_group([b], slots = 1);
+            uop shift(P0) {
+                inputs = [a.src];
+                outputs = [a.dst];
+                read_cycle = 0;
+                write_cycle = 1;
+            }
+            uop combined(P0) {
+                inputs = [b.lhs, b.rhs];
+                outputs = [b.dst];
+                depends_on = [shift];
+                read_cycle = 1;
+                write_cycle = 2;
+            }
+        }
+    }
+}

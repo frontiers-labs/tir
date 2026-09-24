@@ -13,7 +13,21 @@ instruction Cmp {
 machine M for [RV64I] {
     unit P0 { count = 1; }
     bind W { latency = 1; uop(P0); }
-    fusion { first = [cmp]; second = [jne]; }
+    fusion Bad {
+        match = [a: mnemonic[cmp], b: mnemonic[jne]];
+        schedule {
+            decode_uops = 1;
+            rename_slots = 1;
+            rob_entries = 1;
+            retire_slots = 1;
+            uop fused(P0) {
+                inputs = [all_inputs(a), all_inputs(b)];
+                outputs = [all_outputs(a), all_outputs(b)];
+                memory = [a, b];
+                control = [a, b];
+            }
+        }
+    }
 }
 
 // CHECK: fusion mnemonic 'jne' matches no instruction

@@ -42,6 +42,29 @@ machine ImmediateCore for [TestIsa] {
     }
 }
 
+machine FusionCore for [TestIsa] {
+    unit P0 { count = 1; }
+    fusion AddImmediatePair {
+        match = [a: instruction[AddImm], b: instruction[AddImm]];
+        when same_register(a.dst, b.src) & (operand_width(a.dst) == 64) &
+            (operand_width(a.imm) == 8) & (a.imm == 1) & (b.imm == 2) &
+            same_block(a, b, 32);
+        schedule {
+            decode_uops = 1;
+            decoded_cache_uops = 1;
+            rename_slots = 1;
+            rob_entries = 1;
+            retire_slots = 1;
+            uop combined(P0) {
+                inputs = [all_inputs(a), all_inputs(b)];
+                outputs = [all_outputs(a), all_outputs(b)];
+                memory = [a, b];
+                control = [a, b];
+            }
+        }
+    }
+}
+
 machine OrderedCore for [TestIsa] {
     override Div {
         latency = 20;

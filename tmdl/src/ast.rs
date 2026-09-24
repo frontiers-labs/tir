@@ -451,15 +451,86 @@ pub struct Forward {
     pub span: Span,
 }
 
-/// A macro-fusion rule: an instruction whose mnemonic is in `first`, immediately
-/// followed by one whose mnemonic is in `second`, decodes and executes as a
-/// single micro-op on this machine.
+/// One position in an ordered fusion pattern.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FusionStep {
+    pub name: String,
+    pub instruction_names: Vec<String>,
+    pub mnemonics: Vec<String>,
+    pub span: Span,
+}
+
+/// A named operand of a pattern step, or all operands of one direction.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FusionOperandRef {
+    pub step: String,
+    pub operand: String,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FusionOperandSelector {
+    Operand(FusionOperandRef),
+    AllInputs(String),
+    AllOutputs(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FusionMemoryRef {
+    pub step: String,
+    pub index: Option<i64>,
+    pub span: Span,
+}
+
+/// Execution cost and dependency edges for one fused micro-op.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FusionMicroOp {
+    pub name: String,
+    pub resources: Option<ResourceExpr>,
+    pub inherit_routes: Option<String>,
+    pub inputs: Vec<FusionOperandSelector>,
+    pub outputs: Vec<FusionOperandSelector>,
+    pub depends_on: Vec<String>,
+    pub memory: Vec<FusionMemoryRef>,
+    pub control_steps: Vec<String>,
+    pub read_cycle: i64,
+    pub write_cycle: i64,
+    pub span: Span,
+}
+
+/// Explicit front-end and execution cost of one fusion rule.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FusionSchedule {
+    pub decode_uops: i64,
+    pub decoded_cache_uops: Option<i64>,
+    pub decoder: Option<String>,
+    pub decode_cycles: i64,
+    pub rename_slots: i64,
+    pub rob_entries: i64,
+    pub retire_slots: i64,
+    pub decode_groups: Vec<FusionStageGroup>,
+    pub rename_groups: Vec<FusionStageGroup>,
+    pub rob_groups: Vec<FusionStageGroup>,
+    pub retire_groups: Vec<FusionStageGroup>,
+    pub uops: Vec<FusionMicroOp>,
+    pub span: Span,
+}
+
+/// One contiguous set of pattern steps sharing a stage allocation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FusionStageGroup {
+    pub steps: Vec<String>,
+    pub slots: i64,
+    pub span: Span,
+}
+
+/// A named, ordered pattern. The first matching rule wins.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FusionDecl {
-    /// Mnemonics of the producing side (x86: the flag-writing ALU op).
-    pub first: Vec<String>,
-    /// Mnemonics of the consuming side (x86: the conditional branch).
-    pub second: Vec<String>,
+    pub name: String,
+    pub steps: Vec<FusionStep>,
+    pub condition: Option<Expr>,
+    pub schedule: FusionSchedule,
     pub span: Span,
 }
 

@@ -11,15 +11,15 @@ mod expr;
 use abi::{AbiPassSequence, AbiRegisterSequence, AbiRole, AbiStack};
 use expr::Expr;
 
-const VERSION: u8 = 1;
+const VERSION: u8 = 2;
 
 /// # TMDL checked AST
 /// Versioned, checked TMDL abstract syntax tree.
 #[derive(Serialize, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub(crate) struct Document {
-    /// JSON contract revision. Its schema is fixed to `1`.
-    #[schemars(extend("const" = 1))]
+    /// JSON contract revision. Its schema is fixed to `2`.
+    #[schemars(extend("const" = 2))]
     version: u8,
     /// Checked input files in command-line order.
     files: Vec<File>,
@@ -946,18 +946,193 @@ impl From<&ast::UnitBind> for UnitBind {
 
 #[derive(Serialize, JsonSchema)]
 #[schemars(deny_unknown_fields)]
-/// A macro-fusion rule: adjacent `first`-then-`second` mnemonics decode and
-/// execute as one micro-op.
+/// An ordered fusion pattern and its explicit scheduling recipe.
 struct FusionDecl {
-    first: Vec<String>,
-    second: Vec<String>,
+    name: String,
+    steps: Vec<FusionStep>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Expr")]
+    condition: Option<Expr>,
+    schedule: FusionSchedule,
 }
 
 impl From<&ast::FusionDecl> for FusionDecl {
     fn from(fusion: &ast::FusionDecl) -> Self {
         Self {
-            first: fusion.first.clone(),
-            second: fusion.second.clone(),
+            name: fusion.name.clone(),
+            steps: fusion.steps.iter().map(FusionStep::from).collect(),
+            condition: fusion.condition.as_ref().map(Expr::from),
+            schedule: FusionSchedule::from(&fusion.schedule),
+        }
+    }
+}
+
+#[derive(Serialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+struct FusionStep {
+    name: String,
+    instruction_names: Vec<String>,
+    mnemonics: Vec<String>,
+}
+
+impl From<&ast::FusionStep> for FusionStep {
+    fn from(step: &ast::FusionStep) -> Self {
+        Self {
+            name: step.name.clone(),
+            instruction_names: step.instruction_names.clone(),
+            mnemonics: step.mnemonics.clone(),
+        }
+    }
+}
+
+#[derive(Serialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum FusionOperandSelector {
+    Operand { step: String, operand: String },
+    AllInputs { step: String },
+    AllOutputs { step: String },
+}
+
+impl From<&ast::FusionOperandSelector> for FusionOperandSelector {
+    fn from(selector: &ast::FusionOperandSelector) -> Self {
+        match selector {
+            ast::FusionOperandSelector::Operand(reference) => Self::Operand {
+                step: reference.step.clone(),
+                operand: reference.operand.clone(),
+            },
+            ast::FusionOperandSelector::AllInputs(step) => Self::AllInputs { step: step.clone() },
+            ast::FusionOperandSelector::AllOutputs(step) => Self::AllOutputs { step: step.clone() },
+        }
+    }
+}
+
+#[derive(Serialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+struct FusionMicroOp {
+    name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "ResourceExpr")]
+    resources: Option<ResourceExpr>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "String")]
+    inherit_routes: Option<String>,
+    inputs: Vec<FusionOperandSelector>,
+    outputs: Vec<FusionOperandSelector>,
+    depends_on: Vec<String>,
+    memory: Vec<FusionMemoryRef>,
+    control_steps: Vec<String>,
+    read_cycle: i64,
+    write_cycle: i64,
+}
+
+impl From<&ast::FusionMicroOp> for FusionMicroOp {
+    fn from(uop: &ast::FusionMicroOp) -> Self {
+        Self {
+            name: uop.name.clone(),
+            resources: uop.resources.as_ref().map(ResourceExpr::from),
+            inherit_routes: uop.inherit_routes.clone(),
+            inputs: uop.inputs.iter().map(FusionOperandSelector::from).collect(),
+            outputs: uop
+                .outputs
+                .iter()
+                .map(FusionOperandSelector::from)
+                .collect(),
+            depends_on: uop.depends_on.clone(),
+            memory: uop.memory.iter().map(FusionMemoryRef::from).collect(),
+            control_steps: uop.control_steps.clone(),
+            read_cycle: uop.read_cycle,
+            write_cycle: uop.write_cycle,
+        }
+    }
+}
+
+#[derive(Serialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+struct FusionMemoryRef {
+    step: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "i64")]
+    index: Option<i64>,
+}
+
+impl From<&ast::FusionMemoryRef> for FusionMemoryRef {
+    fn from(reference: &ast::FusionMemoryRef) -> Self {
+        Self {
+            step: reference.step.clone(),
+            index: reference.index,
+        }
+    }
+}
+
+#[derive(Serialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+struct FusionSchedule {
+    decode_uops: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "i64")]
+    decoded_cache_uops: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "String")]
+    decoder: Option<String>,
+    decode_cycles: i64,
+    rename_slots: i64,
+    rob_entries: i64,
+    retire_slots: i64,
+    decode_groups: Vec<FusionStageGroup>,
+    rename_groups: Vec<FusionStageGroup>,
+    rob_groups: Vec<FusionStageGroup>,
+    retire_groups: Vec<FusionStageGroup>,
+    uops: Vec<FusionMicroOp>,
+}
+
+impl From<&ast::FusionSchedule> for FusionSchedule {
+    fn from(schedule: &ast::FusionSchedule) -> Self {
+        Self {
+            decode_uops: schedule.decode_uops,
+            decoded_cache_uops: schedule.decoded_cache_uops,
+            decoder: schedule.decoder.clone(),
+            decode_cycles: schedule.decode_cycles,
+            rename_slots: schedule.rename_slots,
+            rob_entries: schedule.rob_entries,
+            retire_slots: schedule.retire_slots,
+            decode_groups: schedule
+                .decode_groups
+                .iter()
+                .map(FusionStageGroup::from)
+                .collect(),
+            rename_groups: schedule
+                .rename_groups
+                .iter()
+                .map(FusionStageGroup::from)
+                .collect(),
+            rob_groups: schedule
+                .rob_groups
+                .iter()
+                .map(FusionStageGroup::from)
+                .collect(),
+            retire_groups: schedule
+                .retire_groups
+                .iter()
+                .map(FusionStageGroup::from)
+                .collect(),
+            uops: schedule.uops.iter().map(FusionMicroOp::from).collect(),
+        }
+    }
+}
+
+#[derive(Serialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+struct FusionStageGroup {
+    steps: Vec<String>,
+    slots: i64,
+}
+
+impl From<&ast::FusionStageGroup> for FusionStageGroup {
+    fn from(group: &ast::FusionStageGroup) -> Self {
+        Self {
+            steps: group.steps.clone(),
+            slots: group.slots,
         }
     }
 }

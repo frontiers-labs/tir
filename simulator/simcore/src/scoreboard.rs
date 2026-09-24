@@ -21,6 +21,8 @@ use tir::backend::liveness::PhysReg;
 use tir::backend::regalloc::RegisterInfo;
 use tir::backend::sched::{InstrSchedClass, MachineModel};
 
+mod fusion;
+
 use crate::MemAccess;
 use crate::memsys::MemorySystem;
 use crate::predictor::BranchPredictor;
@@ -52,6 +54,32 @@ pub struct ScoreboardInstr {
     /// Data-memory accesses this instruction performs (trace mode only; empty in
     /// static mode). Drives the memory hierarchy when one is present.
     pub mem: Vec<MemAccess>,
+    /// Encoded instruction bytes, if available before execution.
+    pub encoded_bytes: Option<Vec<u8>>,
+    /// Named, pre-execution operand facts for pure fusion guards and recipes.
+    pub fusion_operands: Vec<FusionOperandFact>,
+    /// Whether `pc` and `width_bytes` came from an encoded layout or trace.
+    pub layout_known: bool,
+    /// A control-flow or static-region boundary immediately before this entry.
+    pub fusion_boundary: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FusionOperandFact {
+    pub name: String,
+    pub value: FusionOperandValue,
+    pub width_bits: Option<u16>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FusionOperandValue {
+    Register {
+        file: String,
+        index: u16,
+        /// Half-open bit range in the physical file, including register groups.
+        bit_range: Option<(u64, u64)>,
+    },
+    Immediate(i128),
 }
 
 /// What a conditional branch actually did, so a predictor can be scored.
@@ -428,6 +456,17 @@ pub struct SimContext<'a> {
 /// `i % ctx.base.len()` and the iteration is `i / ctx.base.len()`.
 pub trait EventHandler {
     fn start(&mut self, _ctx: &SimContext) {}
+    /// A selected fusion rule covers these original architectural indices.
+    /// Counts describe work after fusion, before resource-route selection.
+    fn fused_group(
+        &mut self,
+        _first: usize,
+        _members: usize,
+        _name: &'static str,
+        _decoded_uops: u16,
+        _execution_uops: u16,
+    ) {
+    }
     fn dispatched(&mut self, _cycle: u64, _i: usize) {}
     fn issued(&mut self, _cycle: u64, _i: usize) {}
     /// Instruction `i` reserved `resource` for `cycles` at `cycle`. Emitted per
@@ -485,80 +524,6 @@ fn instr_latency(slot: &ScoreboardInstr) -> u64 {
         0
     } else {
         u64::from(slot.class.latency)
-    }
-}
-
-/// Merge every adjacent macro-fused pair into one instruction: it decodes
-/// once, occupies one window slot, executes on the second instruction's units,
-/// unions the pair's register accesses, spans both encodings for fetch, and
-/// keeps the second's branch outcome.
-fn fuse_macro_ops(model: &MachineModel, base: &[ScoreboardInstr]) -> Vec<ScoreboardInstr> {
-    let fusable = |first: &ScoreboardInstr, second: &ScoreboardInstr| {
-        !first.op_name.is_empty()
-            && model.fusions.iter().any(|group| {
-                group.first.contains(&first.op_name.as_str())
-                    && group.second.contains(&second.op_name.as_str())
-            })
-    };
-    let mut fused = Vec::with_capacity(base.len());
-    let mut i = 0;
-    while i < base.len() {
-        if i + 1 < base.len() && fusable(&base[i], &base[i + 1]) {
-            fused.push(fuse_pair(&base[i], &base[i + 1]));
-            i += 2;
-        } else {
-            fused.push(base[i].clone());
-            i += 1;
-        }
-    }
-    fused
-}
-
-fn fuse_pair(first: &ScoreboardInstr, second: &ScoreboardInstr) -> ScoreboardInstr {
-    let mut defs = first.defs.clone();
-    defs.extend(second.defs.iter().cloned());
-    let mut uses = first.uses.clone();
-    uses.extend(second.uses.iter().cloned());
-    let mut mem = first.mem.clone();
-    mem.extend(second.mem.iter().cloned());
-    let mut or_updates = first.or_updates.clone();
-    or_updates.extend(second.or_updates.iter().cloned());
-    or_updates.sort_unstable();
-    or_updates.dedup();
-    or_updates.retain(|register| {
-        [&first, &second].into_iter().all(|instruction| {
-            let touches =
-                instruction.defs.contains(register) || instruction.uses.contains(register);
-            !touches || instruction.or_updates.contains(register)
-        })
-    });
-    // A length-changing-prefix stall on either side still applies to the pair.
-    let class = InstrSchedClass {
-        latency: first.class.latency.max(second.class.latency),
-        read_cycle: second.class.read_cycle,
-        rthroughput: second.class.rthroughput,
-        resources: second.class.resources,
-        uops: second.class.uops,
-        decode_uops: 1,
-        decoder: first.class.decoder.or(second.class.decoder),
-        decode_cycles: first.class.decode_cycles.max(second.class.decode_cycles),
-        eliminated: false,
-        zero_idiom: false,
-    };
-    ScoreboardInstr {
-        text: match (first.text.is_empty(), second.text.is_empty()) {
-            (true, true) => String::new(),
-            _ => format!("{}; {}", first.text, second.text),
-        },
-        op_name: second.op_name.clone(),
-        class,
-        defs,
-        uses,
-        or_updates,
-        branch: second.branch,
-        pc: first.pc,
-        width_bytes: first.width_bytes.saturating_add(second.width_bytes),
-        mem,
     }
 }
 
@@ -745,13 +710,11 @@ pub fn run(
     mut mem: Option<&mut MemorySystem>,
     mut handler: Option<&mut dyn EventHandler>,
 ) -> TimingResult {
-    let fused_base;
-    let base = if model.fusions.is_empty() {
-        base
-    } else {
-        fused_base = fuse_macro_ops(model, base);
-        &fused_base
-    };
+    if !model.fusions.is_empty() {
+        return fusion::run_fused(
+            model, base, iterations, config, predictor, prf, mem, handler,
+        );
+    }
 
     if !config.in_order
         && predictor.is_none()

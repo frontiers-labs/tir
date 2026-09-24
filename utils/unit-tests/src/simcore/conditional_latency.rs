@@ -13,6 +13,103 @@ dialect! {
     }
 }
 
+struct FusionEvents(Vec<(usize, usize, &'static str)>);
+
+impl tir_sim::scoreboard::EventHandler for FusionEvents {
+    fn fused_group(
+        &mut self,
+        first: usize,
+        members: usize,
+        name: &'static str,
+        _decoded_uops: u16,
+        _execution_uops: u16,
+    ) {
+        self.0.push((first, members, name));
+    }
+
+    fn render(&self) -> String {
+        String::new()
+    }
+}
+
+fn fusion_pair(
+    src_index: u16,
+    second_imm: i64,
+    first_pc: u64,
+    layout_known: bool,
+) -> (
+    tir::Context,
+    [tir_sim::scoreboard::ScoreboardInstr; 2],
+    tir_sim::scoreboard::Prf,
+) {
+    use tir::attributes::AttributeValue;
+    use tir::backend::liveness::execution_regs;
+    use tir::backend::{phys_attr, MachineInstruction};
+    use tir::Operation;
+    use tir_sim::scoreboard::{phys_regs, Prf, ScoreboardInstr};
+
+    let context = tir::Context::with_default_dialects();
+    context.register_dialect::<LatencyDialect>();
+    let model = fusion_core_model();
+    let prf = Prf {
+        class_to_file: std::collections::HashMap::from([("Gpr".to_string(), "Gpr".to_string())]),
+        capacity: std::collections::HashMap::new(),
+    };
+    let widths = [("Gpr", 64)];
+    let specifications = [(0, 1, 1), (1, src_index, second_imm)];
+    let mut slots = Vec::new();
+    let mut pc = first_pc;
+    for (index, src, imm) in specifications {
+        let op_id = AddImmOpBuilder::new(&context)
+            .attr("dst", phys_attr((RegClass::Gpr.id(), 1)))
+            .attr("src", phys_attr((RegClass::Gpr.id(), src)))
+            .attr("imm", AttributeValue::Int(imm))
+            .build();
+        let op = context.get_op(op_id.id());
+        let mi = op.clone().as_interface::<dyn MachineInstruction>().unwrap();
+        let info = mi.info();
+        let regs = execution_regs(&op);
+        let width_bytes = u16::from(mi.width_bytes());
+        slots.push(ScoreboardInstr {
+            text: format!("addi r1, r{src}, {imm}"),
+            op_name: info.name.to_string(),
+            class: info.sched_on(&model),
+            defs: phys_regs(&regs.phys_defs, Some(&prf)),
+            uses: phys_regs(&regs.phys_uses, Some(&prf)),
+            or_updates: Vec::new(),
+            fusion_operands: tir_sim::timing::fusion_operands(&op, info, Some(&prf), &widths),
+            fusion_boundary: index == 0,
+            layout_known,
+            encoded_bytes: None,
+            branch: None,
+            pc,
+            width_bytes,
+            mem: Vec::new(),
+        });
+        pc += u64::from(width_bytes);
+    }
+    (context, [slots.remove(0), slots.remove(0)], prf)
+}
+
+fn fusion_groups(
+    base: &[tir_sim::scoreboard::ScoreboardInstr],
+    prf: &tir_sim::scoreboard::Prf,
+) -> Vec<(usize, usize, &'static str)> {
+    let model = fusion_core_model();
+    let mut events = FusionEvents(Vec::new());
+    tir_sim::scoreboard::run(
+        &model,
+        base,
+        1,
+        &tir_sim::scoreboard::TimingConfig::for_model(&model),
+        None,
+        Some(prf),
+        None,
+        Some(&mut events),
+    );
+    events.0
+}
+
 fn record() -> (tir::Context, Executor) {
     let context = tir::Context::with_default_dialects();
     context.register_dialect::<AsmDialect>();
@@ -66,6 +163,8 @@ fn conditional_latency_replay_uses_captured_values() {
             classes,
             &config,
             &mut AlwaysNotTaken,
+            None,
+            &[],
             None,
             None,
             None,
@@ -207,6 +306,28 @@ fn conditional_latency_uses_later_matching_case() {
 #[test]
 fn conditional_latency_empty_machine_cases_use_static_class() {
     assert_eq!(div_latency(&immediate_core_model(), Some(1), 1), 20);
+}
+
+#[test]
+fn generated_fusion_rule_checks_register_immediate_and_layout_facts() {
+    for (src, imm, pc, layout_known) in [
+        (1, 2, 0, true),  // matching register, immediates, and block
+        (2, 2, 0, true),  // wrong source register
+        (1, 3, 0, true),  // wrong immediate
+        (1, 2, 31, true), // pair crosses a 32-byte block
+        (1, 2, 0, false), // no encoded layout was available
+    ] {
+        let (_context, pair, prf) = fusion_pair(src, imm, pc, layout_known);
+        let groups = fusion_groups(&pair, &prf);
+        if src == 1 && imm == 2 && pc == 0 && layout_known {
+            assert_eq!(groups, [(0, 2, "AddImmediatePair")]);
+        } else {
+            assert!(
+                groups.is_empty(),
+                "unexpected fusion for {src}, {imm}, {pc}, {layout_known}"
+            );
+        }
+    }
 }
 
 #[test]

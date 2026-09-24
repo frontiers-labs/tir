@@ -764,7 +764,7 @@ fn collect_behavior_assignments<'a>(expr: &'a ast::Expr, out: &mut Vec<(String, 
 /// Register operands the behavior *reads*: referenced anywhere outside an
 /// assignment-destination position. An operand that is also defined is a tied
 /// (two-address) operand, e.g. the x86 `dst = dst + src`.
-fn infer_read_register_operands(
+pub(crate) fn infer_read_register_operands(
     behavior: &ast::Expr,
     operands: &[(String, Type)],
 ) -> HashSet<String> {
@@ -805,7 +805,7 @@ fn infer_read_register_operands(
     reads.into_iter().collect()
 }
 
-fn infer_defined_register_operands(
+pub(crate) fn infer_defined_register_operands(
     behavior: &ast::Expr,
     operands: &[(String, Type)],
 ) -> Vec<String> {

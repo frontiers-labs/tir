@@ -120,6 +120,9 @@ pub struct Executor {
     pc_explicitly_written: bool,
     record_trace: bool,
     trace: Vec<(tir::OpId, u64)>,
+    /// Encoded bytes captured at fetch time for fusion guards, parallel to
+    /// `trace`. ProgramImage instructions have no backing code bytes.
+    encoded_trace: Option<Vec<Option<Vec<u8>>>>,
     timing_model: Option<tir::backend::sched::MachineModel>,
     sched_trace: Vec<tir::backend::sched::InstrSchedClass>,
     /// Data-memory accesses per retired instruction, kept exactly parallel to
@@ -299,6 +302,9 @@ impl Executor {
             self.trace.is_empty(),
             "select a timing model before recording"
         );
+        if !model.fusions.is_empty() {
+            self.encoded_trace = Some(Vec::new());
+        }
         self.timing_model = Some(model);
     }
 
@@ -520,6 +526,12 @@ impl Executor {
         &self.trace
     }
 
+    /// Encoded instruction bytes captured from executable memory at fetch time.
+    /// ProgramImage traces contain `None` because they have no encoded backing.
+    pub fn encoded_trace(&self) -> Option<&[Option<Vec<u8>>]> {
+        self.encoded_trace.as_deref()
+    }
+
     /// Data-memory accesses per retired instruction, parallel to [`Executor::trace`].
     pub fn mem_trace(&self) -> &[Vec<MemAccess>] {
         &self.mem_trace
@@ -544,6 +556,15 @@ impl Executor {
             return Err(SimTrap::BadAddress { address, size });
         }
         self.write_bytes(address, &value.to_le_bytes()[..size])
+    }
+
+    fn fetch_instruction_bytes(&self, pc: u64, width: u8) -> Option<Vec<u8>> {
+        let mut bytes = vec![0; usize::from(width)];
+        self.memory
+            .memory()
+            .fetch(self.memory.address_space(), pc, &mut bytes)
+            .ok()?;
+        Some(bytes)
     }
 
     fn fetch_word(&self, pc: u64) -> Result<u32, SimTrap> {
@@ -878,6 +899,13 @@ impl Executor {
             }
             if self.record_trace {
                 self.trace.push((op_id, pc));
+                let bytes = self
+                    .encoded_trace
+                    .as_ref()
+                    .map(|_| self.fetch_instruction_bytes(pc, machine_inst.width_bytes()));
+                if let (Some(encoded_trace), Some(bytes)) = (&mut self.encoded_trace, bytes) {
+                    encoded_trace.push(bytes);
+                }
             }
             self.pc = pc;
             self.pc_explicitly_written = false;
@@ -964,6 +992,9 @@ impl Executor {
             }
             if self.record_trace {
                 self.trace.push((op_id, inst_pc));
+                if let Some(encoded_trace) = &mut self.encoded_trace {
+                    encoded_trace.push(None);
+                }
             }
             // Expose this instruction's own address so PC-relative semantics
             // (`PC::pc`) resolve correctly even mid-block.

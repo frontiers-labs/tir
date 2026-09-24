@@ -196,12 +196,24 @@ fn main() {
 
     // Pick the timing model up front so a bad `--machine` fails before running.
     let model = select_timing_model(&args, target.as_ref(), &mut executor);
+    let register_widths = if model.as_ref().is_none_or(|model| model.fusions.is_empty()) {
+        Vec::new()
+    } else {
+        target.register_widths()
+    };
 
     executor.load(program).expect("failed to load program");
     execute(&args, &mut executor, until_pc);
 
     if let Some(model) = model {
-        report_timing(&args, &context, &register_info, &model, &executor);
+        report_timing(
+            &args,
+            &context,
+            &register_info,
+            &register_widths,
+            &model,
+            &executor,
+        );
     }
 
     if let Some(path) = &args.dump_state {
@@ -274,6 +286,7 @@ fn report_timing(
     args: &Cli,
     context: &tir::Context,
     register_info: &tir::backend::regalloc::RegisterInfo,
+    register_widths: &[(&'static str, u32)],
     model: &tir::backend::sched::MachineModel,
     executor: &Executor,
 ) {
@@ -329,6 +342,8 @@ fn report_timing(
         &config,
         predictor.as_mut(),
         Some(&prf),
+        register_widths,
+        executor.encoded_trace(),
         mem_trace,
         mem.as_mut(),
         konata_view.as_mut().map(|v| v as &mut dyn EventHandler),
@@ -600,7 +615,19 @@ fn run_elf(
     println!("exit: {}", exit_code.get());
 
     if let Some(model) = model {
-        report_timing(args, context, &register_info, &model, &executor);
+        let register_widths = if model.fusions.is_empty() {
+            Vec::new()
+        } else {
+            target.register_widths()
+        };
+        report_timing(
+            args,
+            context,
+            &register_info,
+            &register_widths,
+            &model,
+            &executor,
+        );
     }
 
     if let Some(path) = &args.dump_state {

@@ -14,7 +14,7 @@ each instruction. The one derived field is an instruction's `encoding_shapes`:
 the fixed bit maps its encoding expression expands to, resolved against the
 whole template chain.
 
-The root `version` identifies the JSON contract. Version 1 uses flat records with
+The root `version` identifies the JSON contract. Version 2 uses flat records with
 a snake-case `kind` field. Optional values, empty collections, and false defaults
 are omitted; consumers should interpret their absence as `None`, an empty
 collection, or `false`, respectively. Numeric literals remain strings so their
@@ -23,7 +23,7 @@ source radix and spelling are preserved. Source spans are not exported.
 ## Schema
 
 The complete field and variant reference is the generated
-[JSON Schema](./ast-v1.schema.json). Generate the schema supported by the current
+[JSON Schema](./ast-v2.schema.json). Generate the schema supported by the current
 compiler with:
 
 ```console
@@ -34,7 +34,7 @@ The schema action accepts no TMDL inputs. To update the committed schema after a
 intentional contract change, run:
 
 ```console
-tmdlc --action=emit-ast-json-schema --output=docs/tmdl/ast-v1.schema.json
+tmdlc --action=emit-ast-json-schema --output=docs/tmdl/ast-v2.schema.json
 ```
 
 The schema is generated from the same Rust export types as the JSON output and a

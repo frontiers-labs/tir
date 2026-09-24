@@ -106,6 +106,7 @@ mod verify {
 #[cfg(test)]
 mod tools {
     mod model_check;
+    mod sched;
 }
 
 #[cfg(test)]

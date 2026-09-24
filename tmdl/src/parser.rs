@@ -1125,6 +1125,296 @@ enum MachineBody {
     Fusion(FusionDecl),
 }
 
+enum FusionScheduleField {
+    DecodeUops(i64),
+    DecodedCacheUops(i64),
+    Decoder(String),
+    DecodeCycles(i64),
+    RenameSlots(i64),
+    RobEntries(i64),
+    RetireSlots(i64),
+    DecodeGroup(FusionStageGroup),
+    RenameGroup(FusionStageGroup),
+    RobGroup(FusionStageGroup),
+    RetireGroup(FusionStageGroup),
+    Uop(FusionMicroOp),
+}
+
+enum FusionUopField {
+    Inputs(Vec<FusionOperandSelector>),
+    Outputs(Vec<FusionOperandSelector>),
+    DependsOn(Vec<String>),
+    Memory(Vec<FusionMemoryRef>),
+    Control(Vec<String>),
+    ReadCycle(i64),
+    WriteCycle(i64),
+}
+
+fn fusion_decl<'src, I>()
+-> impl Parser<'src, I, FusionDecl, extra::Err<Rich<'src, Token<'src>, Span>>>
+where
+    I: ValueInput<'src, Token = Token<'src>, Span = Span>,
+{
+    let ident = select! { Token::Identifier(i) => i.to_string() };
+    let names = ident
+        .separated_by(just(Token::Comma))
+        .at_least(1)
+        .collect::<Vec<_>>()
+        .delimited_by(just(Token::LBracket), just(Token::RBracket));
+    let step = ident
+        .then_ignore(just(Token::Colon))
+        .then(choice((
+            just(Token::KwInstruction)
+                .ignore_then(names.clone())
+                .map(|names| (names, Vec::new())),
+            just(Token::Identifier("mnemonic"))
+                .ignore_then(names)
+                .map(|names| (Vec::new(), names)),
+        )))
+        .map_with(|(name, (instruction_names, mnemonics)), e| FusionStep {
+            name,
+            instruction_names,
+            mnemonics,
+            span: e.span(),
+        });
+    let steps = just(Token::Identifier("match"))
+        .ignore_then(just(Token::Equals))
+        .ignore_then(
+            step.separated_by(just(Token::Comma))
+                .at_least(1)
+                .collect::<Vec<_>>()
+                .delimited_by(just(Token::LBracket), just(Token::RBracket)),
+        )
+        .then_ignore(just(Token::Semicolon));
+
+    let operand = ident
+        .then_ignore(just(Token::Dot))
+        .then(ident)
+        .map_with(|(step, operand), e| {
+            FusionOperandSelector::Operand(FusionOperandRef {
+                step,
+                operand,
+                span: e.span(),
+            })
+        });
+    let all_inputs = just(Token::Identifier("all_inputs"))
+        .ignore_then(ident.delimited_by(just(Token::LParen), just(Token::RParen)))
+        .map(FusionOperandSelector::AllInputs);
+    let all_outputs = just(Token::Identifier("all_outputs"))
+        .ignore_then(ident.delimited_by(just(Token::LParen), just(Token::RParen)))
+        .map(FusionOperandSelector::AllOutputs);
+    let selectors = choice((all_inputs, all_outputs, operand))
+        .separated_by(just(Token::Comma))
+        .collect::<Vec<_>>()
+        .delimited_by(just(Token::LBracket), just(Token::RBracket));
+    let ident_list = || {
+        ident
+            .separated_by(just(Token::Comma))
+            .collect::<Vec<_>>()
+            .delimited_by(just(Token::LBracket), just(Token::RBracket))
+    };
+    let memory_ref = ident
+        .then(
+            just(Token::Dot)
+                .ignore_then(just(Token::Identifier("memory")))
+                .ignore_then(int_lit().delimited_by(just(Token::LBracket), just(Token::RBracket)))
+                .or_not(),
+        )
+        .map_with(|(step, index), e| FusionMemoryRef {
+            step,
+            index,
+            span: e.span(),
+        });
+    let memory_refs = memory_ref
+        .separated_by(just(Token::Comma))
+        .collect::<Vec<_>>()
+        .delimited_by(just(Token::LBracket), just(Token::RBracket));
+    let uop_field = choice((
+        just(Token::Identifier("inputs"))
+            .ignore_then(just(Token::Equals))
+            .ignore_then(selectors.clone())
+            .then_ignore(just(Token::Semicolon))
+            .map(FusionUopField::Inputs),
+        just(Token::Identifier("outputs"))
+            .ignore_then(just(Token::Equals))
+            .ignore_then(selectors)
+            .then_ignore(just(Token::Semicolon))
+            .map(FusionUopField::Outputs),
+        just(Token::Identifier("depends_on"))
+            .ignore_then(just(Token::Equals))
+            .ignore_then(ident_list())
+            .then_ignore(just(Token::Semicolon))
+            .map(FusionUopField::DependsOn),
+        just(Token::Identifier("memory"))
+            .ignore_then(just(Token::Equals))
+            .ignore_then(memory_refs)
+            .then_ignore(just(Token::Semicolon))
+            .map(FusionUopField::Memory),
+        just(Token::Identifier("control"))
+            .ignore_then(just(Token::Equals))
+            .ignore_then(ident_list())
+            .then_ignore(just(Token::Semicolon))
+            .map(FusionUopField::Control),
+        just(Token::Identifier("read_cycle"))
+            .ignore_then(just(Token::Equals))
+            .ignore_then(int_lit())
+            .then_ignore(just(Token::Semicolon))
+            .map(FusionUopField::ReadCycle),
+        just(Token::Identifier("write_cycle"))
+            .ignore_then(just(Token::Equals))
+            .ignore_then(int_lit())
+            .then_ignore(just(Token::Semicolon))
+            .map(FusionUopField::WriteCycle),
+    ));
+    let uop = just(Token::Identifier("uop"))
+        .ignore_then(ident)
+        .then(
+            just(Token::Identifier("inherit"))
+                .ignore_then(just(Token::Equals))
+                .ignore_then(ident)
+                .map(|name| (None, Some(name)))
+                .or(resource_expr().map(|resources| (Some(resources), None)))
+                .delimited_by(just(Token::LParen), just(Token::RParen)),
+        )
+        .then(
+            uop_field
+                .repeated()
+                .collect::<Vec<_>>()
+                .delimited_by(just(Token::LBrace), just(Token::RBrace)),
+        )
+        .map_with(|((name, (resources, inherit_routes)), fields), e| {
+            let mut uop = FusionMicroOp {
+                name,
+                resources,
+                inherit_routes,
+                inputs: Vec::new(),
+                outputs: Vec::new(),
+                depends_on: Vec::new(),
+                memory: Vec::new(),
+                control_steps: Vec::new(),
+                read_cycle: 0,
+                write_cycle: 1,
+                span: e.span(),
+            };
+            for field in fields {
+                match field {
+                    FusionUopField::Inputs(v) => uop.inputs = v,
+                    FusionUopField::Outputs(v) => uop.outputs = v,
+                    FusionUopField::DependsOn(v) => uop.depends_on = v,
+                    FusionUopField::Memory(v) => uop.memory = v,
+                    FusionUopField::Control(v) => uop.control_steps = v,
+                    FusionUopField::ReadCycle(v) => uop.read_cycle = v,
+                    FusionUopField::WriteCycle(v) => uop.write_cycle = v,
+                }
+            }
+            uop
+        });
+    let int_field = |name: &'static str| {
+        just(Token::Identifier(name))
+            .ignore_then(just(Token::Equals))
+            .ignore_then(int_lit())
+            .then_ignore(just(Token::Semicolon))
+    };
+    let stage_group = |name: &'static str| {
+        just(Token::Identifier(name))
+            .ignore_then(
+                ident_list()
+                    .then_ignore(just(Token::Comma))
+                    .then_ignore(just(Token::Identifier("slots")))
+                    .then_ignore(just(Token::Equals))
+                    .then(int_lit())
+                    .delimited_by(just(Token::LParen), just(Token::RParen)),
+            )
+            .then_ignore(just(Token::Semicolon))
+            .map_with(|(steps, slots), e| FusionStageGroup {
+                steps,
+                slots,
+                span: e.span(),
+            })
+    };
+    let schedule_field = choice((
+        int_field("decode_uops").map(FusionScheduleField::DecodeUops),
+        int_field("decoded_cache_uops").map(FusionScheduleField::DecodedCacheUops),
+        int_field("decode_cycles").map(FusionScheduleField::DecodeCycles),
+        int_field("rename_slots").map(FusionScheduleField::RenameSlots),
+        int_field("rob_entries").map(FusionScheduleField::RobEntries),
+        int_field("retire_slots").map(FusionScheduleField::RetireSlots),
+        stage_group("decode_group").map(FusionScheduleField::DecodeGroup),
+        stage_group("rename_group").map(FusionScheduleField::RenameGroup),
+        stage_group("rob_group").map(FusionScheduleField::RobGroup),
+        stage_group("retire_group").map(FusionScheduleField::RetireGroup),
+        just(Token::Identifier("decoder"))
+            .ignore_then(just(Token::Equals))
+            .ignore_then(ident)
+            .then_ignore(just(Token::Semicolon))
+            .map(FusionScheduleField::Decoder),
+        uop.map(FusionScheduleField::Uop),
+    ));
+    let schedule = just(Token::KwSchedule)
+        .ignore_then(
+            schedule_field
+                .repeated()
+                .collect::<Vec<_>>()
+                .delimited_by(just(Token::LBrace), just(Token::RBrace)),
+        )
+        .map_with(|fields, e| {
+            let mut schedule = FusionSchedule {
+                decode_uops: -1,
+                decoded_cache_uops: None,
+                decoder: None,
+                decode_cycles: 1,
+                rename_slots: -1,
+                rob_entries: -1,
+                retire_slots: -1,
+                decode_groups: Vec::new(),
+                rename_groups: Vec::new(),
+                rob_groups: Vec::new(),
+                retire_groups: Vec::new(),
+                uops: Vec::new(),
+                span: e.span(),
+            };
+            for field in fields {
+                match field {
+                    FusionScheduleField::DecodeUops(v) => schedule.decode_uops = v,
+                    FusionScheduleField::DecodedCacheUops(v) => {
+                        schedule.decoded_cache_uops = Some(v)
+                    }
+                    FusionScheduleField::Decoder(v) => schedule.decoder = Some(v),
+                    FusionScheduleField::DecodeCycles(v) => schedule.decode_cycles = v,
+                    FusionScheduleField::RenameSlots(v) => schedule.rename_slots = v,
+                    FusionScheduleField::RobEntries(v) => schedule.rob_entries = v,
+                    FusionScheduleField::RetireSlots(v) => schedule.retire_slots = v,
+                    FusionScheduleField::DecodeGroup(v) => schedule.decode_groups.push(v),
+                    FusionScheduleField::RenameGroup(v) => schedule.rename_groups.push(v),
+                    FusionScheduleField::RobGroup(v) => schedule.rob_groups.push(v),
+                    FusionScheduleField::RetireGroup(v) => schedule.retire_groups.push(v),
+                    FusionScheduleField::Uop(v) => schedule.uops.push(v),
+                }
+            }
+            schedule
+        });
+    just(Token::Identifier("fusion"))
+        .ignore_then(ident)
+        .then(
+            steps
+                .then(
+                    just(Token::Identifier("when"))
+                        .ignore_then(inline_expr())
+                        .then_ignore(just(Token::Semicolon))
+                        .or_not(),
+                )
+                .then(schedule)
+                .delimited_by(just(Token::LBrace), just(Token::RBrace)),
+        )
+        .map_with(|(name, ((steps, condition), schedule)), e| FusionDecl {
+            name,
+            steps,
+            condition,
+            schedule,
+            span: e.span(),
+        })
+}
+
 #[derive(Clone)]
 enum DecodeField {
     Slots(Vec<String>),
@@ -1447,32 +1737,7 @@ where
             })
         });
 
-    // `fusion { first = [cmp, test]; second = [je, jne]; }` — mnemonic lists.
-    let mnemonic_list = |field: &'static str| {
-        let mnemonic = select! { Token::Identifier(i) => i.to_string() };
-        just(Token::Identifier(field))
-            .ignore_then(just(Token::Equals))
-            .ignore_then(
-                mnemonic
-                    .separated_by(just(Token::Comma))
-                    .collect::<Vec<String>>()
-                    .delimited_by(just(Token::LBracket), just(Token::RBracket)),
-            )
-            .then_ignore(just(Token::Semicolon))
-    };
-    let fusion = just(Token::Identifier("fusion"))
-        .ignore_then(
-            mnemonic_list("first")
-                .then(mnemonic_list("second"))
-                .delimited_by(just(Token::LBrace), just(Token::RBrace)),
-        )
-        .map_with(|(first, second), e| {
-            MachineBody::Fusion(FusionDecl {
-                first,
-                second,
-                span: e.span(),
-            })
-        });
+    let fusion = fusion_decl().map(MachineBody::Fusion);
 
     let machine_alias = just(Token::LParen)
         .ignore_then(select! { Token::StringLit(s) => s.to_string() })

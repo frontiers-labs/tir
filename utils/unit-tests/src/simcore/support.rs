@@ -27,6 +27,17 @@ pub fn run_sim(
     predictor: &mut dyn BranchPredictor,
 ) -> TimingResult {
     simulate(
-        model, context, trace, None, config, predictor, None, None, None, None,
+        model,
+        context,
+        trace,
+        None,
+        config,
+        predictor,
+        None,
+        &[],
+        None,
+        None,
+        None,
+        None,
     )
 }

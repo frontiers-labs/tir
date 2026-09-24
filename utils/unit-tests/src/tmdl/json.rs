@@ -17,6 +17,7 @@ fn uncommon_expressions_validate_against_the_committed_schema() {
 #[test]
 fn scheduling_models_validate_against_the_committed_schema() {
     validate_output("scheduling", "checks/Json/scheduling.tmdl", true);
+    validate_output("fusion", "checks/Rust/fusion-guard.tmdl", true);
 }
 
 #[test]
@@ -37,7 +38,7 @@ fn validate_output(name: &str, input: &str, text_only: bool) {
         .unwrap();
 
     let schema =
-        serde_json::from_str(include_str!("../../../../docs/tmdl/ast-v1.schema.json")).unwrap();
+        serde_json::from_str(include_str!("../../../../docs/tmdl/ast-v2.schema.json")).unwrap();
     let instance = serde_json::from_slice(&fs::read(&output).unwrap()).unwrap();
     let validator = jsonschema::validator_for(&schema).unwrap();
     let errors = validator

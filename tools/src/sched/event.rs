@@ -40,7 +40,12 @@ struct ResourceView {
     dispatch_width: u16,
     cycles: u64,
     retired: u64,
+    decoded_uops: u64,
+    execution_uops: u64,
+    fused_groups: u64,
     instrs: Vec<InstrRow>,
+    /// Per-instruction default counts, before selected fusion recipes replace them.
+    source_uops: Vec<(u16, u16)>,
     resource_names: Vec<&'static str>,
     /// `usage[base_idx][resource]`: accumulated resource-cycles over all iterations.
     usage: Vec<Vec<f64>>,
@@ -52,6 +57,40 @@ impl EventHandler for ResourceView {
         self.base_len = ctx.base.len();
         self.dispatch_width = ctx.model.issue_width.max(1);
         self.resource_names = ctx.model.resources.iter().map(|r| r.name).collect();
+        let iterations = ctx.iterations.max(1) as u64;
+        self.source_uops = ctx
+            .base
+            .iter()
+            .map(|instruction| {
+                let zero_idiom = instruction.class.zero_idiom
+                    && !instruction.uses.is_empty()
+                    && instruction
+                        .uses
+                        .iter()
+                        .all(|used| instruction.defs.contains(used));
+                (
+                    instruction.class.decode_uops,
+                    if instruction.class.eliminated || zero_idiom {
+                        0
+                    } else {
+                        instruction.class.uops.len().max(1).min(u16::MAX as usize) as u16
+                    },
+                )
+            })
+            .collect();
+        self.decoded_uops = self
+            .source_uops
+            .iter()
+            .map(|(decoded, _)| u64::from(*decoded))
+            .sum::<u64>()
+            .saturating_mul(iterations);
+        self.execution_uops = self
+            .source_uops
+            .iter()
+            .map(|(_, execution)| u64::from(*execution))
+            .sum::<u64>()
+            .saturating_mul(iterations);
+        self.fused_groups = 0;
         self.instrs = ctx
             .base
             .iter()
@@ -62,6 +101,36 @@ impl EventHandler for ResourceView {
             })
             .collect();
         self.usage = vec![vec![0.0; self.resource_names.len()]; self.base_len];
+    }
+
+    fn fused_group(
+        &mut self,
+        first: usize,
+        members: usize,
+        _name: &'static str,
+        decoded_uops: u16,
+        execution_uops: u16,
+    ) {
+        if self.source_uops.is_empty() || members == 0 {
+            return;
+        }
+        if first.saturating_add(members) > self.source_uops.len().saturating_mul(self.iterations) {
+            return;
+        }
+        let (source_decoded, source_execution) = (0..members)
+            .map(|offset| self.source_uops[(first + offset) % self.source_uops.len()])
+            .fold((0u64, 0u64), |(decoded, execution), (d, e)| {
+                (decoded + u64::from(d), execution + u64::from(e))
+            });
+        self.decoded_uops = self
+            .decoded_uops
+            .saturating_sub(source_decoded)
+            .saturating_add(u64::from(decoded_uops));
+        self.execution_uops = self
+            .execution_uops
+            .saturating_sub(source_execution)
+            .saturating_add(u64::from(execution_uops));
+        self.fused_groups = self.fused_groups.saturating_add(1);
     }
 
     fn reserved(&mut self, _cycle: u64, i: usize, resource: &'static str, cycles: u16) {
@@ -94,6 +163,9 @@ impl EventHandler for ResourceView {
 
         let _ = writeln!(out, "Iterations:        {}", self.iterations);
         let _ = writeln!(out, "Instructions:      {}", self.retired);
+        let _ = writeln!(out, "Decoded uops:      {}", self.decoded_uops);
+        let _ = writeln!(out, "Execution uops:    {}", self.execution_uops);
+        let _ = writeln!(out, "Fused groups:      {}", self.fused_groups);
         let _ = writeln!(out, "Total Cycles:      {}", self.cycles);
         let _ = writeln!(out, "Dispatch Width:    {}", self.dispatch_width);
         let _ = writeln!(out, "IPC:               {ipc:.2}");

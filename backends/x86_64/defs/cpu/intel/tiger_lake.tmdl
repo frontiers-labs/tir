@@ -1,3 +1,27 @@
+macro tiger_lake_fusion {
+    ( $name:ident, [ $($alu:ident),* ], [ $($branch:ident),* ], $latency:literal, $decode_cycles:literal, { $($decoder:tt)* } ) => {
+        fusion $name {
+            match = [alu: instruction[$($alu),*], branch: instruction[$($branch),*]];
+            schedule {
+                decode_uops = 1;
+                decode_cycles = $decode_cycles;
+                $($decoder)*
+                rename_slots = 1;
+                rob_entries = 1;
+                retire_slots = 1;
+                uop fused(inherit = branch) {
+                    inputs = [all_inputs(alu), all_inputs(branch)];
+                    outputs = [all_outputs(alu), all_outputs(branch)];
+                    memory = [alu, branch];
+                    control = [alu, branch];
+                    read_cycle = 0;
+                    write_cycle = $latency;
+                }
+            }
+        }
+    };
+}
+
 machine TigerLake ("tiger-lake") for [X86_64] {
     issue_width = 5;
 
@@ -159,17 +183,21 @@ machine TigerLake ("tiger-lake") for [X86_64] {
         uop(Res3);
     }
 
-    // Macro-fusion: a flag-writing ALU op immediately followed by a
-    // conditional branch decodes and executes as one micro-op. test/and pair
-    // with every jcc; cmp/add/sub with all but the sign/overflow conditions.
-    fusion {
-        first = [test, and];
-        second = [je, jne, jl, jge, jb, jae, jle, jg, jbe, ja, js, jns, jo, jno];
-    }
-    fusion {
-        first = [cmp, add, sub];
-        second = [je, jne, jl, jge, jb, jae, jle, jg, jbe, ja];
-    }
+    // These exact instruction sets preserve the old model's eligible forms.
+    // High-byte forms keep their 3-cycle latency; 16-bit immediate forms keep
+    // the length-changing-prefix decoder and its 3-cycle occupancy.
+    tiger_lake_fusion!(TestBranch, [And, Test, AndImm, And32, AndImm32, And16, And8, AndImm8, TestImm8, TestImm, Test32, Test8, TestImm32],
+        [JumpEq, JumpEqLegacy, JumpNotEq, JumpNotEqLegacy, JumpLess, JumpLessLegacy, JumpGreaterEq, JumpGreaterEqLegacy, JumpBelow, JumpBelowLegacy, JumpAboveEq, JumpAboveEqLegacy, JumpLessEq, JumpLessEqLegacy, JumpGreater, JumpGreaterLegacy, JumpBelowEq, JumpBelowEqLegacy, JumpAbove, JumpAboveLegacy, JumpSign, JumpSignLegacy, JumpNoSign, JumpNoSignLegacy, JumpOverflow, JumpOverflowLegacy, JumpNoOverflow, JumpNoOverflowLegacy], 1, 1, {})
+    tiger_lake_fusion!(TestBranchHighByte, [And8H, And8HL, And8LH, AndImm8H],
+        [JumpEq, JumpEqLegacy, JumpNotEq, JumpNotEqLegacy, JumpLess, JumpLessLegacy, JumpGreaterEq, JumpGreaterEqLegacy, JumpBelow, JumpBelowLegacy, JumpAboveEq, JumpAboveEqLegacy, JumpLessEq, JumpLessEqLegacy, JumpGreater, JumpGreaterLegacy, JumpBelowEq, JumpBelowEqLegacy, JumpAbove, JumpAboveLegacy, JumpSign, JumpSignLegacy, JumpNoSign, JumpNoSignLegacy, JumpOverflow, JumpOverflowLegacy, JumpNoOverflow, JumpNoOverflowLegacy], 3, 1, {})
+    tiger_lake_fusion!(TestBranchLcp, [AndImm16],
+        [JumpEq, JumpEqLegacy, JumpNotEq, JumpNotEqLegacy, JumpLess, JumpLessLegacy, JumpGreaterEq, JumpGreaterEqLegacy, JumpBelow, JumpBelowLegacy, JumpAboveEq, JumpAboveEqLegacy, JumpLessEq, JumpLessEqLegacy, JumpGreater, JumpGreaterLegacy, JumpBelowEq, JumpBelowEqLegacy, JumpAbove, JumpAboveLegacy, JumpSign, JumpSignLegacy, JumpNoSign, JumpNoSignLegacy, JumpOverflow, JumpOverflowLegacy, JumpNoOverflow, JumpNoOverflowLegacy], 1, 3, { decoder = lcp; })
+    tiger_lake_fusion!(CompareBranch, [Add, Sub, Cmp, AddImm, Add32, Sub32, AddImm32, Add16, Sub16, Cmp16, Add8, Sub8, Cmp8, AddImm8, CmpImm8, CmpImm, SubImm, Cmp32, CmpImm32, SubImm32],
+        [JumpEq, JumpEqLegacy, JumpNotEq, JumpNotEqLegacy, JumpLess, JumpLessLegacy, JumpGreaterEq, JumpGreaterEqLegacy, JumpBelow, JumpBelowLegacy, JumpAboveEq, JumpAboveEqLegacy, JumpLessEq, JumpLessEqLegacy, JumpGreater, JumpGreaterLegacy, JumpBelowEq, JumpBelowEqLegacy, JumpAbove, JumpAboveLegacy], 1, 1, {})
+    tiger_lake_fusion!(CompareBranchHighByte, [Add8H, Sub8H, Add8HL, Sub8HL, Add8LH, Sub8LH, AddImm8H],
+        [JumpEq, JumpEqLegacy, JumpNotEq, JumpNotEqLegacy, JumpLess, JumpLessLegacy, JumpGreaterEq, JumpGreaterEqLegacy, JumpBelow, JumpBelowLegacy, JumpAboveEq, JumpAboveEqLegacy, JumpLessEq, JumpLessEqLegacy, JumpGreater, JumpGreaterLegacy, JumpBelowEq, JumpBelowEqLegacy, JumpAbove, JumpAboveLegacy], 3, 1, {})
+    tiger_lake_fusion!(CompareBranchLcp, [AddImm16, CmpImm16],
+        [JumpEq, JumpEqLegacy, JumpNotEq, JumpNotEqLegacy, JumpLess, JumpLessLegacy, JumpGreaterEq, JumpGreaterEqLegacy, JumpBelow, JumpBelowLegacy, JumpAboveEq, JumpAboveEqLegacy, JumpLessEq, JumpLessEqLegacy, JumpGreater, JumpGreaterLegacy, JumpBelowEq, JumpBelowEqLegacy, JumpAbove, JumpAboveLegacy], 1, 3, { decoder = lcp; })
 
     // Dependency-breaking idioms the renamer recognizes: xor/sub of a register
     // with itself (64/32-bit forms only; narrower writes merge and stay

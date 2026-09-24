@@ -1,4 +1,4 @@
-// Scalar X100 model. Evidence and validation limits: docs/spacemit-x100.md.
+// Scalar X100 model. Evidence and validation limits: docs/tmdl/performance.md.
 fn x100_fp32_div_special(lhs, rhs) {
     let lhs_bits = bitcast(lhs);
     let rhs_bits = bitcast(rhs);
@@ -125,6 +125,57 @@ machine SpacemitX100 ("spacemit-x100") for [RV64I] {
     bind WriteLoad { latency = 3; uop(LSU); }
     bind WriteFPLoad { latency = 4; uop(LSU); }
     bind WriteStore { latency = 1; uop(LSU); }
+
+    // Repeated compressed same-register shift chains distinguish this order
+    // and immediate relation; keep both instructions' front-end charges.
+    fusion CompressedShiftPair {
+        match = [left: instruction[CShiftLeftLogicalImm], right: instruction[CShiftRightLogicalImm]];
+        when same_register(left.rd, right.rd) &
+             (operand_width(left.rd) == 64) &
+             (left.imm > 0) & (right.imm > 0) &
+             (left.imm <= right.imm);
+        schedule {
+            decode_uops = 2;
+            decoded_cache_uops = 2;
+            rename_slots = 2;
+            rob_entries = 2;
+            retire_slots = 2;
+            uop combined(Integer) {
+                inputs = [all_inputs(left), all_inputs(right)];
+                outputs = [all_outputs(left), all_outputs(right)];
+                memory = [];
+                control = [];
+                read_cycle = 0;
+                write_cycle = 1;
+            }
+        }
+    }
+
+    // Independent source and destination chains show higher pair throughput;
+    // retain the two-cycle dependent path and both front-end charges.
+    fusion ShiftToCompressedShiftPair {
+        match = [left: instruction[ShiftLeftLogicalImm], right: instruction[CShiftRightLogicalImm]];
+        when same_register(left.rd, right.rd) &
+             ~same_register(left.rs1, left.rd) &
+             (operand_width(left.rd) == 64) &
+             (left.imm > 0) & (right.imm > 0) &
+             (left.imm <= right.imm);
+        schedule {
+            decode_uops = 2;
+            decoded_cache_uops = 2;
+            rename_slots = 2;
+            rob_entries = 2;
+            retire_slots = 2;
+            uop combined(Integer) {
+                inputs = [all_inputs(left), all_inputs(right)];
+                outputs = [all_outputs(left), all_outputs(right)];
+                memory = [];
+                control = [];
+                read_cycle = 0;
+                write_cycle = 2;
+            }
+        }
+    }
 
     x100_fp_ops!(x100_fp32_div_special, x100_fp32_div_normal, (fs1, fs2), 15, 11, 10;
         FDivSRNE, FDivSRTZ, FDivSRDN, FDivSRUP, FDivSRMM, FDivS)

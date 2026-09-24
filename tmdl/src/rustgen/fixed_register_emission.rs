@@ -616,7 +616,7 @@ fn pair_definers_with_readers<'a, 'b>(
 
 /// The register paths an expression assigns, as `((class, register name), rhs)`,
 /// walking blocks, both arms of an `if`, and the no-trap body of a `try`.
-fn collect_register_path_writes<'a>(
+pub(crate) fn collect_register_path_writes<'a>(
     expr: &'a ast::Expr,
     out: &mut Vec<((String, String), &'a ast::Expr)>,
 ) {
@@ -644,7 +644,7 @@ fn collect_register_path_writes<'a>(
 
 /// The register paths an expression reads (register paths in value position),
 /// as `(class, register name)`.
-fn collect_register_path_reads(expr: &ast::Expr, out: &mut HashSet<(String, String)>) {
+pub(crate) fn collect_register_path_reads(expr: &ast::Expr, out: &mut HashSet<(String, String)>) {
     match expr {
         ast::Expr::Path(path) if path.remainder.len() == 1 => {
             out.insert((path.base.clone(), path.remainder[0].clone()));

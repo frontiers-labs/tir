@@ -619,7 +619,7 @@ fn check_performance_model(
             check_machine_reg_files(file_name, machine, files, &mut diags);
             check_machine_binds(file_name, machine, item_cache, &names, &mut diags);
             check_machine_overrides(file_name, machine, item_cache, &names, &mut diags);
-            check_machine_fusions(file_name, machine, files, item_cache, &mut diags);
+            check_machine_fusions(file_name, machine, files, item_cache, &names, &mut diags);
             check_machine_forwards(file_name, machine, &names, &mut diags);
         }
     }
@@ -1319,35 +1319,774 @@ fn check_machine_fusions(
     machine: &ast::Machine,
     files: &[ast::File],
     item_cache: &HashMap<&str, &ast::Item>,
+    names: &MachineNames<'_>,
     diags: &mut Vec<(String, Diag)>,
 ) {
-    // Fusion rules name instruction mnemonics on both sides.
-    if !machine.fusions.is_empty() {
-        let known_mnemonics: HashSet<String> = files
-            .iter()
-            .flat_map(|f| f.instructions())
-            .filter_map(|inst| {
+    let instructions: Vec<_> = files.iter().flat_map(|f| f.instructions()).collect();
+    let pc_classes: HashSet<String> = files
+        .iter()
+        .flat_map(|file| file.register_classes())
+        .filter(|class| class.is_program_counter())
+        .map(|class| class.name.clone())
+        .collect();
+    let mut rule_names = HashSet::new();
+    for fusion in &machine.fusions {
+        let mut report = |span, message: String| {
+            diags.push((file_name.to_string(), Rich::custom(span, message)));
+        };
+        if !rule_names.insert(&fusion.name) {
+            report(
+                fusion.span,
+                format!("duplicate fusion rule '{}'", fusion.name),
+            );
+        }
+        let mut steps = HashMap::new();
+        for (index, step) in fusion.steps.iter().enumerate() {
+            if steps.insert(step.name.as_str(), index).is_some() {
+                report(step.span, format!("duplicate fusion step '{}'", step.name));
+            }
+            for name in &step.instruction_names {
+                if !instructions.iter().any(|inst| inst.name == *name) {
+                    report(
+                        step.span,
+                        format!("fusion instruction '{}' matches no instruction", name),
+                    );
+                }
+            }
+            for mnemonic in &step.mnemonics {
+                if !instructions.iter().any(|inst| {
+                    resolve_params_for_instruction(inst, item_cache)
+                        .get("MNEMONIC")
+                        .and_then(|(_, value)| value.as_ref())
+                        .and_then(as_string_literal)
+                        .is_some_and(|value| value == *mnemonic)
+                }) {
+                    report(
+                        step.span,
+                        format!("fusion mnemonic '{}' matches no instruction", mnemonic),
+                    );
+                }
+            }
+            for inst in &instructions {
                 let params = resolve_params_for_instruction(inst, item_cache);
-                params
-                    .get("MNEMONIC")
-                    .and_then(|(_, value)| value.as_ref())
-                    .and_then(as_string_literal)
-            })
-            .collect();
-        for fusion in &machine.fusions {
-            for mnemonic in fusion.first.iter().chain(fusion.second.iter()) {
-                if !known_mnemonics.contains(mnemonic) {
-                    diags.push((
-                        file_name.to_string(),
-                        Rich::custom(
-                            fusion.span,
-                            format!("fusion mnemonic '{}' matches no instruction", mnemonic),
-                        ),
-                    ));
+                let selected = step.instruction_names.contains(&inst.name)
+                    || params
+                        .get("MNEMONIC")
+                        .and_then(|(_, value)| value.as_ref())
+                        .and_then(as_string_literal)
+                        .is_some_and(|value| step.mnemonics.contains(&value));
+                if selected
+                    && params
+                        .get("OPNAME")
+                        .and_then(|(_, value)| value.as_ref())
+                        .and_then(as_string_literal)
+                        .or_else(|| {
+                            params
+                                .get("MNEMONIC")
+                                .and_then(|(_, value)| value.as_ref())
+                                .and_then(as_string_literal)
+                        })
+                        .is_none()
+                {
+                    report(
+                        step.span,
+                        format!("fusion instruction '{}' has no operation name", inst.name),
+                    );
                 }
             }
         }
+        let validate_ref = |reference: &ast::FusionOperandRef| -> Result<Type, String> {
+            let Some(step) = fusion.steps.iter().find(|step| step.name == reference.step) else {
+                return Err(format!("unknown fusion step '{}'", reference.step));
+            };
+            let selected: Vec<_> = instructions
+                .iter()
+                .filter(|inst| {
+                    step.instruction_names.contains(&inst.name)
+                        || resolve_params_for_instruction(inst, item_cache)
+                            .get("MNEMONIC")
+                            .and_then(|(_, value)| value.as_ref())
+                            .and_then(as_string_literal)
+                            .is_some_and(|value| step.mnemonics.contains(&value))
+                })
+                .collect();
+            let mut expected = None;
+            for inst in selected {
+                let operand = crate::utils::resolve_operands_for_instruction(inst, item_cache)
+                    .into_iter()
+                    .find(|(name, _)| *name == reference.operand)
+                    .ok_or_else(|| {
+                        format!(
+                            "fusion operand '{}.{}' is absent from instruction '{}'",
+                            reference.step, reference.operand, inst.name
+                        )
+                    })?;
+                if let Some(ty) = &expected {
+                    if ty != &operand.1 {
+                        return Err(format!(
+                            "fusion operand '{}.{}' has incompatible types across its instruction set",
+                            reference.step, reference.operand
+                        ));
+                    }
+                } else {
+                    expected = Some(operand.1);
+                }
+            }
+            expected.ok_or_else(|| {
+                format!(
+                    "fusion operand '{}.{}' matches no instruction",
+                    reference.step, reference.operand
+                )
+            })
+        };
+        if let Some(condition) = &fusion.condition
+            && let Err(message) = validate_fusion_guard(condition, &steps, &validate_ref)
+        {
+            report(expr_span(condition), message);
+        }
+        let assignments = check_fusion_schedule(fusion, names, &steps, &validate_ref, &mut report);
+        check_fusion_effect_coverage(
+            fusion,
+            &instructions,
+            item_cache,
+            &pc_classes,
+            &assignments,
+            &mut report,
+        );
     }
+}
+
+fn check_fusion_schedule<'a>(
+    fusion: &'a ast::FusionDecl,
+    names: &MachineNames<'_>,
+    steps: &HashMap<&str, usize>,
+    validate_ref: &impl Fn(&ast::FusionOperandRef) -> Result<Type, String>,
+    report: &mut impl FnMut(Span, String),
+) -> FusionAssignments<'a> {
+    let schedule = &fusion.schedule;
+    check_fusion_stage_costs(fusion, names, report);
+    if schedule.uops.is_empty() {
+        report(
+            schedule.span,
+            "fusion schedule needs at least one uop".to_string(),
+        );
+    }
+    let mut uop_names = HashSet::new();
+    let mut all_inputs = HashSet::new();
+    let mut all_outputs = HashSet::new();
+    let mut named_inputs = HashSet::new();
+    let mut named_outputs = HashSet::new();
+    let mut memory: HashSet<(&String, Option<i64>)> = HashSet::new();
+    let mut control = HashSet::new();
+    for uop in &schedule.uops {
+        if !uop_names.insert(uop.name.as_str()) {
+            report(uop.span, format!("duplicate fusion uop '{}'", uop.name));
+        }
+        for dependency in &uop.depends_on {
+            if !uop_names.contains(dependency.as_str()) || dependency == &uop.name {
+                report(
+                    uop.span,
+                    format!(
+                        "fusion uop '{}' depends on unknown or later uop '{dependency}'",
+                        uop.name
+                    ),
+                );
+            }
+        }
+        check_fusion_uop_resources(uop, names, steps, report);
+        for selector in &uop.inputs {
+            match selector {
+                ast::FusionOperandSelector::Operand(reference) => {
+                    if let Err(message) = validate_ref(reference) {
+                        report(reference.span, message);
+                    }
+                    named_inputs.insert((reference.step.as_str(), reference.operand.as_str()));
+                }
+                ast::FusionOperandSelector::AllInputs(step) => {
+                    if !steps.contains_key(step.as_str()) {
+                        report(uop.span, format!("unknown fusion step '{step}'"));
+                    }
+                    all_inputs.insert(step.as_str());
+                }
+                ast::FusionOperandSelector::AllOutputs(_) => {
+                    report(uop.span, "all_outputs is invalid in inputs".to_string())
+                }
+            }
+        }
+        for selector in &uop.outputs {
+            match selector {
+                ast::FusionOperandSelector::Operand(reference) => {
+                    if let Err(message) = validate_ref(reference) {
+                        report(reference.span, message);
+                    }
+                    if !named_outputs.insert((reference.step.as_str(), reference.operand.as_str()))
+                    {
+                        report(
+                            reference.span,
+                            format!(
+                                "fusion output '{}.{}' is assigned more than once",
+                                reference.step, reference.operand
+                            ),
+                        );
+                    }
+                }
+                ast::FusionOperandSelector::AllOutputs(step) => {
+                    if !steps.contains_key(step.as_str()) {
+                        report(uop.span, format!("unknown fusion step '{step}'"));
+                    }
+                    if !all_outputs.insert(step.as_str()) {
+                        report(
+                            uop.span,
+                            format!("fusion outputs of step '{step}' are assigned more than once"),
+                        );
+                    }
+                }
+                ast::FusionOperandSelector::AllInputs(_) => {
+                    report(uop.span, "all_inputs is invalid in outputs".to_string())
+                }
+            }
+        }
+        for reference in &uop.memory {
+            if !steps.contains_key(reference.step.as_str())
+                || reference.index.is_some_and(|index| index < 0)
+            {
+                report(
+                    reference.span,
+                    format!(
+                        "invalid fusion memory reference '{}.memory'",
+                        reference.step
+                    ),
+                );
+            }
+            let overlaps = memory.iter().any(|(step, index)| {
+                *step == &reference.step
+                    && (reference.index.is_none() || index.is_none() || *index == reference.index)
+            });
+            if overlaps || !memory.insert((&reference.step, reference.index)) {
+                report(
+                    reference.span,
+                    format!(
+                        "fusion memory reference '{}' is assigned more than once",
+                        reference.step
+                    ),
+                );
+            }
+        }
+        for step in &uop.control_steps {
+            if !steps.contains_key(step.as_str()) {
+                report(uop.span, format!("unknown fusion control step '{step}'"));
+            }
+            if !control.insert(step.as_str()) {
+                report(
+                    uop.span,
+                    format!("fusion control step '{step}' is assigned more than once"),
+                );
+            }
+        }
+    }
+    for (step, _) in &named_outputs {
+        if all_outputs.contains(step) {
+            report(
+                schedule.span,
+                format!(
+                    "fusion outputs of step '{step}' have both named and whole-step assignments"
+                ),
+            );
+        }
+    }
+    FusionAssignments {
+        all_inputs,
+        all_outputs,
+        named_inputs,
+        named_outputs,
+        memory,
+        control,
+    }
+}
+
+fn check_fusion_uop_resources(
+    uop: &ast::FusionMicroOp,
+    names: &MachineNames<'_>,
+    steps: &HashMap<&str, usize>,
+    report: &mut impl FnMut(Span, String),
+) {
+    if let Some(inherit) = &uop.inherit_routes
+        && !steps.contains_key(inherit.as_str())
+    {
+        report(uop.span, format!("unknown fusion route source '{inherit}'"));
+    }
+    if let Some(resources) = &uop.resources {
+        if has_non_positive_occupancy(resources) {
+            report(
+                uop.span,
+                "fusion resource occupancy must be positive".to_string(),
+            );
+        }
+        for resource in resource_references(resources) {
+            if !names.modeled.contains(resource) {
+                report(
+                    uop.span,
+                    format!("fusion uop references unknown resource '{resource}'"),
+                );
+            }
+        }
+    }
+    if uop.read_cycle < 0 || uop.write_cycle < uop.read_cycle || uop.write_cycle > u16::MAX as i64 {
+        report(
+            uop.span,
+            "fusion uop cycles must be ordered and in 0..=65535".to_string(),
+        );
+    }
+}
+
+struct FusionAssignments<'a> {
+    all_inputs: HashSet<&'a str>,
+    all_outputs: HashSet<&'a str>,
+    named_inputs: HashSet<(&'a str, &'a str)>,
+    named_outputs: HashSet<(&'a str, &'a str)>,
+    memory: HashSet<(&'a String, Option<i64>)>,
+    control: HashSet<&'a str>,
+}
+
+fn check_fusion_effect_coverage<'a>(
+    fusion: &ast::FusionDecl,
+    instructions: &[&'a ast::Instruction],
+    item_cache: &HashMap<&'a str, &'a ast::Item>,
+    pc_classes: &HashSet<String>,
+    assignments: &FusionAssignments<'_>,
+    report: &mut impl FnMut(Span, String),
+) {
+    let schedule = &fusion.schedule;
+    let FusionAssignments {
+        all_inputs,
+        all_outputs,
+        named_inputs,
+        named_outputs,
+        memory,
+        control,
+    } = assignments;
+    for step in &fusion.steps {
+        let selected = instructions.iter().filter(|inst| {
+            step.instruction_names.contains(&inst.name)
+                || resolve_params_for_instruction(inst, item_cache)
+                    .get("MNEMONIC")
+                    .and_then(|(_, value)| value.as_ref())
+                    .and_then(as_string_literal)
+                    .is_some_and(|value| step.mnemonics.contains(&value))
+        });
+        for inst in selected {
+            let operands = crate::utils::resolve_operands_for_instruction(inst, item_cache);
+            let effects = fusion_required_effects(inst, &operands, pc_classes);
+            for (mapped_step, index) in memory {
+                if *mapped_step == &step.name
+                    && index
+                        .is_some_and(|index| index < 0 || index as usize >= effects.memory_count)
+                {
+                    report(
+                        schedule.span,
+                        format!(
+                            "fusion memory index for step '{}' exceeds effects of '{}'",
+                            step.name, inst.name
+                        ),
+                    );
+                }
+            }
+            if effects.reads.iter().any(|name| {
+                !all_inputs.contains(step.name.as_str())
+                    && !named_inputs.contains(&(step.name.as_str(), name.as_str()))
+            }) || effects.implicit_reads && !all_inputs.contains(step.name.as_str())
+            {
+                report(
+                    schedule.span,
+                    format!(
+                        "fusion step '{}' leaves an input of '{}' unassigned",
+                        step.name, inst.name
+                    ),
+                );
+            }
+            if effects.writes.iter().any(|name| {
+                !all_outputs.contains(step.name.as_str())
+                    && !named_outputs.contains(&(step.name.as_str(), name.as_str()))
+            }) || effects.implicit_writes && !all_outputs.contains(step.name.as_str())
+            {
+                report(
+                    schedule.span,
+                    format!(
+                        "fusion step '{}' leaves an output of '{}' unassigned",
+                        step.name, inst.name
+                    ),
+                );
+            }
+            if effects.memory_count > 0
+                && !memory.contains(&(&step.name, None))
+                && (0..effects.memory_count)
+                    .any(|index| !memory.contains(&(&step.name, Some(index as i64))))
+            {
+                report(
+                    schedule.span,
+                    format!(
+                        "fusion step '{}' leaves memory effects of '{}' unassigned",
+                        step.name, inst.name
+                    ),
+                );
+            }
+            if effects.control && !control.contains(step.name.as_str()) {
+                report(
+                    schedule.span,
+                    format!(
+                        "fusion step '{}' leaves control effect of '{}' unassigned",
+                        step.name, inst.name
+                    ),
+                );
+            }
+            if effects.unknown
+                && (!all_inputs.contains(step.name.as_str())
+                    || !all_outputs.contains(step.name.as_str())
+                    || !memory.contains(&(&step.name, None))
+                    || !control.contains(step.name.as_str()))
+            {
+                report(
+                    schedule.span,
+                    format!(
+                        "fusion step '{}' has unknown behavior and needs whole-step effect selectors",
+                        step.name
+                    ),
+                );
+            }
+        }
+    }
+}
+
+fn check_fusion_stage_costs(
+    fusion: &ast::FusionDecl,
+    names: &MachineNames<'_>,
+    report: &mut impl FnMut(Span, String),
+) {
+    let schedule = &fusion.schedule;
+    for (label, count) in [
+        ("decode_uops", schedule.decode_uops),
+        ("decode_cycles", schedule.decode_cycles),
+        ("rename_slots", schedule.rename_slots),
+        ("rob_entries", schedule.rob_entries),
+        ("retire_slots", schedule.retire_slots),
+    ] {
+        if !(1..=u16::MAX as i64).contains(&count) {
+            report(
+                schedule.span,
+                format!("fusion {label} must be in 1..=65535"),
+            );
+        }
+    }
+    if schedule
+        .decoded_cache_uops
+        .is_some_and(|count| !(1..=u16::MAX as i64).contains(&count))
+    {
+        report(
+            schedule.span,
+            "fusion decoded_cache_uops must be in 1..=65535".to_string(),
+        );
+    }
+    if let Some(decoder) = &schedule.decoder
+        && !names.frontend_decoders.contains(decoder.as_str())
+    {
+        report(
+            schedule.span,
+            format!("fusion references unknown decoder '{decoder}'"),
+        );
+    }
+    for (label, groups) in [
+        ("decode", &schedule.decode_groups),
+        ("rename", &schedule.rename_groups),
+        ("rob", &schedule.rob_groups),
+        ("retire", &schedule.retire_groups),
+    ] {
+        if !groups.is_empty() {
+            let mut position = 0;
+            for group in groups {
+                if !(1..=u16::MAX as i64).contains(&group.slots) || group.steps.is_empty() {
+                    report(
+                        group.span,
+                        format!("fusion {label} group needs positive slots and steps"),
+                    );
+                }
+                for step in &group.steps {
+                    if fusion
+                        .steps
+                        .get(position)
+                        .is_none_or(|expected| expected.name != *step)
+                    {
+                        report(
+                            group.span,
+                            format!("fusion {label} groups must partition steps in order"),
+                        );
+                    }
+                    position += 1;
+                }
+            }
+            if position != fusion.steps.len() {
+                report(
+                    schedule.span,
+                    format!("fusion {label} groups must cover every step"),
+                );
+            }
+        }
+    }
+}
+
+struct FusionRequiredEffects {
+    reads: HashSet<String>,
+    writes: HashSet<String>,
+    implicit_reads: bool,
+    implicit_writes: bool,
+    memory_count: usize,
+    control: bool,
+    unknown: bool,
+}
+
+fn fusion_required_effects(
+    inst: &ast::Instruction,
+    operands: &[(String, Type)],
+    pc_classes: &HashSet<String>,
+) -> FusionRequiredEffects {
+    let reads = crate::rustgen::infer_read_register_operands(&inst.behavior, operands);
+    let writes = crate::rustgen::infer_defined_register_operands(&inst.behavior, operands)
+        .into_iter()
+        .collect();
+    let mut implicit_reads = HashSet::new();
+    crate::rustgen::collect_register_path_reads(&inst.behavior, &mut implicit_reads);
+    let mut implicit_writes = Vec::new();
+    crate::rustgen::collect_register_path_writes(&inst.behavior, &mut implicit_writes);
+    let control = implicit_writes
+        .iter()
+        .any(|((class, _), _)| pc_classes.contains(class));
+    let mut memory_count = 0;
+    crate::utils::visit_exprs(&inst.behavior, &mut |expr| {
+        if let ast::Expr::Call(call) = expr
+            && matches!(
+                call.callee.as_ref(),
+                ast::Expr::BuiltinFunction(
+                    ast::BuiltinFunction::Load
+                        | ast::BuiltinFunction::Store
+                        | ast::BuiltinFunction::LoadReserved
+                        | ast::BuiltinFunction::StoreConditional
+                        | ast::BuiltinFunction::AtomicRmw
+                )
+            )
+        {
+            memory_count += 1;
+        }
+    });
+    FusionRequiredEffects {
+        reads,
+        writes,
+        implicit_reads: implicit_reads
+            .iter()
+            .any(|(class, _)| !pc_classes.contains(class)),
+        implicit_writes: implicit_writes
+            .iter()
+            .any(|((class, _), _)| !pc_classes.contains(class)),
+        memory_count,
+        control,
+        unknown: crate::utils::behavior_uses_todo(&inst.behavior),
+    }
+}
+
+fn validate_fusion_guard(
+    expr: &ast::Expr,
+    steps: &HashMap<&str, usize>,
+    reference: &impl Fn(&ast::FusionOperandRef) -> Result<Type, String>,
+) -> Result<(), String> {
+    match expr {
+        ast::Expr::Block(block) if block.last_expr_return && block.stmts.len() == 1 => {
+            validate_fusion_guard(&block.stmts[0], steps, reference)
+        }
+        ast::Expr::Ident(id) if id.name == "true" || id.name == "false" => Ok(()),
+        ast::Expr::Binary(binary)
+            if matches!(binary.op, ast::BinOp::BitwiseAnd | ast::BinOp::BitwiseOr) =>
+        {
+            validate_fusion_guard(&binary.lhs, steps, reference)?;
+            validate_fusion_guard(&binary.rhs, steps, reference)
+        }
+        ast::Expr::Unary(unary) if unary.op == ast::UnOp::BitwiseNot => {
+            validate_fusion_guard(&unary.x, steps, reference)
+        }
+        ast::Expr::Binary(binary)
+            if matches!(
+                binary.op,
+                ast::BinOp::Equal
+                    | ast::BinOp::NotEqual
+                    | ast::BinOp::LessThan
+                    | ast::BinOp::LessThenEqual
+                    | ast::BinOp::GreaterThan
+                    | ast::BinOp::GreaterThanEqual
+            ) =>
+        {
+            if validate_fusion_value(&binary.lhs, steps, reference)? != FusionValueKind::Integer
+                || validate_fusion_value(&binary.rhs, steps, reference)? != FusionValueKind::Integer
+            {
+                return Err("fusion comparison requires numeric values".to_string());
+            }
+            Ok(())
+        }
+        ast::Expr::Call(call) => {
+            let ast::Expr::Ident(callee) = call.callee.as_ref() else {
+                return Err("unsupported fusion guard call".to_string());
+            };
+            match (callee.name.as_str(), call.arguments.as_slice()) {
+                ("same_register" | "overlap_register", [a, b]) => {
+                    if validate_fusion_value(a, steps, reference)? != FusionValueKind::Register
+                        || validate_fusion_value(b, steps, reference)? != FusionValueKind::Register
+                    {
+                        return Err(format!("{} requires register operands", callee.name));
+                    }
+                    Ok(())
+                }
+                ("same_block", [a, b, bytes]) => {
+                    validate_fusion_step(a, steps)?;
+                    validate_fusion_step(b, steps)?;
+                    validate_fusion_positive_literal(bytes)
+                }
+                ("aligned", [step, bytes]) => {
+                    validate_fusion_step(step, steps)?;
+                    validate_fusion_positive_literal(bytes)
+                }
+                _ => Err(format!("unsupported fusion guard call '{}'", callee.name)),
+            }
+        }
+        _ => Err("unsupported fusion guard expression".to_string()),
+    }
+}
+
+fn validate_fusion_step(expr: &ast::Expr, steps: &HashMap<&str, usize>) -> Result<(), String> {
+    match expr {
+        ast::Expr::Ident(id) if steps.contains_key(id.name.as_str()) => Ok(()),
+        _ => Err("fusion layout guard requires a named pattern step".to_string()),
+    }
+}
+
+fn validate_fusion_positive_literal(expr: &ast::Expr) -> Result<(), String> {
+    match expr {
+        ast::Expr::Lit(ast::Lit::Int(value))
+            if fusion_literal_i128(value)
+                .is_some_and(|value| value > 0 && value <= u64::MAX as i128) =>
+        {
+            Ok(())
+        }
+        _ => Err("fusion layout byte count must be a positive integer literal".to_string()),
+    }
+}
+
+fn fusion_literal_i128(value: &ast::LitInt) -> Option<i128> {
+    let spelling = value.value();
+    let (radix, digits) = if let Some(digits) = spelling
+        .strip_prefix("0x")
+        .or_else(|| spelling.strip_prefix("0X"))
+    {
+        (16, digits)
+    } else if let Some(digits) = spelling
+        .strip_prefix("0b")
+        .or_else(|| spelling.strip_prefix("0B"))
+    {
+        (2, digits)
+    } else {
+        (10, spelling)
+    };
+    i128::from_str_radix(digits, radix).ok()
+}
+
+fn validate_fusion_value(
+    expr: &ast::Expr,
+    steps: &HashMap<&str, usize>,
+    reference: &impl Fn(&ast::FusionOperandRef) -> Result<Type, String>,
+) -> Result<FusionValueKind, String> {
+    match expr {
+        ast::Expr::Block(block) if block.last_expr_return && block.stmts.len() == 1 => {
+            validate_fusion_value(&block.stmts[0], steps, reference)
+        }
+        ast::Expr::Lit(ast::Lit::Int(_)) => Ok(FusionValueKind::Integer),
+        ast::Expr::Field(field) => {
+            let ast::Expr::Ident(step) = field.base.as_ref() else {
+                return Err("fusion operand must be step.operand".to_string());
+            };
+            let ty = reference(&ast::FusionOperandRef {
+                step: step.name.clone(),
+                operand: field.member.clone(),
+                span: field.span,
+            })?;
+            match ty {
+                Type::Struct(_) => Ok(FusionValueKind::Register),
+                Type::Bits(_) | Type::BitsExpr(_) | Type::Integer => Ok(FusionValueKind::Integer),
+                _ => Err("fusion guard operand has unsupported type".to_string()),
+            }
+        }
+        ast::Expr::Call(call) => {
+            let name = match call.callee.as_ref() {
+                ast::Expr::Ident(id) => id.name.as_str(),
+                ast::Expr::BuiltinFunction(ast::BuiltinFunction::Width) => "width",
+                ast::Expr::BuiltinFunction(ast::BuiltinFunction::Regnum) => "regnum",
+                _ => return Err("unsupported fusion value call".to_string()),
+            };
+            match (name, call.arguments.as_slice()) {
+                ("pc" | "width", [step]) => {
+                    validate_fusion_step(step, steps)?;
+                    Ok(FusionValueKind::Integer)
+                }
+                ("regnum" | "operand_width", [operand]) => {
+                    let ast::Expr::Field(field) = operand else {
+                        return Err(format!("fusion {name} requires step.operand"));
+                    };
+                    let ast::Expr::Ident(step) = field.base.as_ref() else {
+                        return Err(format!("fusion {name} requires step.operand"));
+                    };
+                    let ty = reference(&ast::FusionOperandRef {
+                        step: step.name.clone(),
+                        operand: field.member.clone(),
+                        span: field.span,
+                    })?;
+                    if name == "regnum" && !matches!(ty, Type::Struct(_)) {
+                        return Err("fusion regnum requires a register operand".to_string());
+                    }
+                    Ok(FusionValueKind::Integer)
+                }
+                ("encoded_byte", [step, index]) => {
+                    validate_fusion_step(step, steps)?;
+                    match index {
+                        ast::Expr::Lit(ast::Lit::Int(value))
+                            if fusion_literal_i128(value)
+                                .is_some_and(|value| usize::try_from(value).is_ok()) =>
+                        {
+                            Ok(FusionValueKind::Integer)
+                        }
+                        _ => Err(
+                            "fusion encoded_byte index must be a nonnegative integer literal"
+                                .to_string(),
+                        ),
+                    }
+                }
+                _ => Err(format!("unsupported fusion value call '{name}'")),
+            }
+        }
+        ast::Expr::Binary(binary)
+            if matches!(
+                binary.op,
+                ast::BinOp::Add | ast::BinOp::Sub | ast::BinOp::Mul | ast::BinOp::Div
+            ) =>
+        {
+            if validate_fusion_value(&binary.lhs, steps, reference)? != FusionValueKind::Integer
+                || validate_fusion_value(&binary.rhs, steps, reference)? != FusionValueKind::Integer
+            {
+                return Err("fusion arithmetic requires numeric values".to_string());
+            }
+            Ok(FusionValueKind::Integer)
+        }
+        _ => Err("unsupported fusion value expression".to_string()),
+    }
+}
+
+#[derive(PartialEq, Eq)]
+enum FusionValueKind {
+    Register,
+    Integer,
 }
 
 fn check_machine_forwards(

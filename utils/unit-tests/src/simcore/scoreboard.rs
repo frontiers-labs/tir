@@ -1,12 +1,15 @@
 use std::collections::{HashMap, VecDeque};
 
 use tir::backend::sched::{
-    DecodedCache, Decoder, Forward, Frontend, FrontendDecode, FrontendFetch, InstrSchedClass,
-    MachineModel, MicroOp, ProcUnit, ResourceRoute, ResourceUse,
+    DecodedCache, Decoder, Forward, Frontend, FrontendDecode, FrontendFetch, FusionExpr,
+    FusionMemoryRef, FusionMicroOp, FusionOperandSelector, FusionPattern, FusionSchedule,
+    FusionStageGroup, FusionStep, InstrSchedClass, MachineModel, MicroOp, ProcUnit, ResourceRoute,
+    ResourceUse,
 };
 use tir_sim::memsys::{CacheParams, MemParams, MemorySystem};
 use tir_sim::predictor::{AlwaysNotTaken, BranchPredictor};
 use tir_sim::scoreboard::*;
+use tir_sim::{MemAccess, MemAccessKind};
 
 /// Verbatim copies of the engine's tiny latency/pressure helpers, so the
 /// closed-form oracle below stays a fully independent reimplementation.
@@ -399,6 +402,10 @@ fn gen_program(rng: &mut Lcg, len: usize) -> Vec<ScoreboardInstr> {
                 pc: 0,
                 width_bytes: 1,
                 mem: Vec::new(),
+                encoded_bytes: None,
+                fusion_operands: vec![],
+                layout_known: false,
+                fusion_boundary: false,
             }
         })
         .collect()
@@ -515,6 +522,10 @@ fn resource_test_instr(class: InstrSchedClass) -> ScoreboardInstr {
         pc: 0,
         width_bytes: 1,
         mem: vec![],
+        encoded_bytes: None,
+        fusion_operands: vec![],
+        layout_known: false,
+        fusion_boundary: false,
     }
 }
 
@@ -816,13 +827,70 @@ fn normalized_flag_aliases_share_one_contributor_frontier() {
     assert_eq!(issue_cycles(&model, &program), vec![0, 8]);
 }
 
+fn pair_rule(first: &'static str, second: &'static str) -> &'static [FusionPattern] {
+    const INPUTS: &[FusionOperandSelector] = &[
+        FusionOperandSelector::AllInputs(0),
+        FusionOperandSelector::AllInputs(1),
+    ];
+    const OUTPUTS: &[FusionOperandSelector] = &[
+        FusionOperandSelector::AllOutputs(0),
+        FusionOperandSelector::AllOutputs(1),
+    ];
+    const MEMORY: &[FusionMemoryRef] = &[
+        FusionMemoryRef {
+            step: 0,
+            index: None,
+        },
+        FusionMemoryRef {
+            step: 1,
+            index: None,
+        },
+    ];
+    const UOPS: &[FusionMicroOp] = &[FusionMicroOp {
+        name: "pair",
+        routes: &[],
+        inherit_routes: Some(1),
+        inputs: INPUTS,
+        outputs: OUTPUTS,
+        depends_on: &[],
+        read_cycle: 0,
+        write_cycle: 1,
+        memory: MEMORY,
+        control_steps: &[0, 1],
+    }];
+    let steps = Box::leak(Box::new([
+        FusionStep {
+            ops: Box::leak(Box::new([first])),
+        },
+        FusionStep {
+            ops: Box::leak(Box::new([second])),
+        },
+    ]));
+    Box::leak(Box::new([FusionPattern {
+        name: "pair",
+        steps,
+        guard: FusionExpr::True,
+        schedule: FusionSchedule {
+            decode_uops: 1,
+            decoded_cache_uops: 1,
+            decoder: None,
+            decode_cycles: 1,
+            rename_slots: 1,
+            rob_slots: 1,
+            retire_slots: 1,
+            decode_groups: &[],
+            rename_groups: &[],
+            rob_groups: &[],
+            retire_groups: &[],
+            uops: UOPS,
+        },
+    }]))
+}
+
 #[test]
 fn fusion_drops_or_update_when_the_other_instruction_reads_the_flags() {
     let mut model = resource_test_model(&[]);
-    model.fusions = &[tir::backend::sched::FusionGroup {
-        first: &["update"],
-        second: &["read"],
-    }];
+    model.fusions = pair_rule("update", "read");
     let flags = [("CSR", 1)];
     let mut contributor = dependency_test_instr(9, &flags, &flags, &flags);
     contributor.op_name = "contributor".to_string();
@@ -833,17 +901,14 @@ fn fusion_drops_or_update_when_the_other_instruction_reads_the_flags() {
 
     assert_eq!(
         issue_cycles(&model, &[contributor, update, read]),
-        vec![0, 9]
+        vec![0, 9, 9]
     );
 }
 
 #[test]
 fn fusion_preserves_or_update_when_both_instructions_are_contributors() {
     let mut model = resource_test_model(&[]);
-    model.fusions = &[tir::backend::sched::FusionGroup {
-        first: &["first-update"],
-        second: &["second-update"],
-    }];
+    model.fusions = pair_rule("first-update", "second-update");
     let flags = [("CSR", 1)];
     let mut long = dependency_test_instr(9, &flags, &flags, &flags);
     long.op_name = "long".to_string();
@@ -855,7 +920,7 @@ fn fusion_preserves_or_update_when_both_instructions_are_contributors() {
 
     assert_eq!(
         issue_cycles(&model, &[long, first, second, read]),
-        vec![0, 0, 9]
+        vec![0, 0, 0, 9]
     );
 }
 
@@ -908,10 +973,7 @@ fn macro_fused_pair_costs_one_micro_op() {
         units: 1,
     }]);
     model.issue_width = 1;
-    model.fusions = &[tir::backend::sched::FusionGroup {
-        first: &["cmp"],
-        second: &["jne"],
-    }];
+    model.fusions = pair_rule("cmp", "jne");
 
     let class = InstrSchedClass {
         uops: &[UOP_P0],
@@ -1644,5 +1706,782 @@ fn idiom_clone(instruction: &ScoreboardInstr) -> ScoreboardInstr {
         pc: instruction.pc,
         width_bytes: instruction.width_bytes,
         mem: vec![],
+        encoded_bytes: instruction.encoded_bytes.clone(),
+        fusion_operands: instruction.fusion_operands.clone(),
+        layout_known: instruction.layout_known,
+        fusion_boundary: instruction.fusion_boundary,
     }
+}
+
+#[test]
+fn nonmatching_fusion_rules_leave_existing_scheduler_unchanged() {
+    let mut model = resource_test_model(&[ProcUnit {
+        name: "P0",
+        units: 1,
+    }]);
+    let class = InstrSchedClass {
+        latency: 3,
+        resources: &["P0"],
+        ..InstrSchedClass::DEFAULT
+    };
+    let mut first = resource_test_instr(class);
+    first.op_name = "producer".to_string();
+    first.defs.push(("GPR".to_string(), 1));
+    let mut second = resource_test_instr(class);
+    second.op_name = "consumer".to_string();
+    second.uses.push(("GPR".to_string(), 1));
+    let program = [first, second];
+    let config = TimingConfig {
+        in_order: false,
+        window: 2,
+        mispredict_penalty: 0,
+        unroll_stride: 0,
+    };
+    let mut plain_events = Recorder::default();
+    let plain = run(
+        &model,
+        &program,
+        4,
+        &config,
+        None,
+        None,
+        None,
+        Some(&mut plain_events),
+    );
+    model.fusions = pair_rule("cmp", "jne");
+    let mut ruled_events = Recorder::default();
+    let ruled = run(
+        &model,
+        &program,
+        4,
+        &config,
+        None,
+        None,
+        None,
+        Some(&mut ruled_events),
+    );
+    assert_eq!(
+        (ruled.cycles, ruled.instructions),
+        (plain.cycles, plain.instructions)
+    );
+    assert_eq!(ruled_events, plain_events);
+}
+
+fn split_result_rule(
+    rob_groups: &'static [FusionStageGroup],
+    retire_groups: &'static [FusionStageGroup],
+) -> &'static [FusionPattern] {
+    const FIRST_OUTPUT: &[FusionOperandSelector] = &[FusionOperandSelector::AllOutputs(0)];
+    const SECOND_OUTPUT: &[FusionOperandSelector] = &[FusionOperandSelector::AllOutputs(1)];
+    const UOPS: &[FusionMicroOp] = &[
+        FusionMicroOp {
+            name: "early",
+            routes: &[],
+            inherit_routes: None,
+            inputs: &[],
+            outputs: FIRST_OUTPUT,
+            depends_on: &[],
+            read_cycle: 0,
+            write_cycle: 1,
+            memory: &[],
+            control_steps: &[],
+        },
+        FusionMicroOp {
+            name: "late",
+            routes: &[],
+            inherit_routes: None,
+            inputs: &[],
+            outputs: SECOND_OUTPUT,
+            depends_on: &[],
+            read_cycle: 0,
+            write_cycle: 7,
+            memory: &[],
+            control_steps: &[],
+        },
+    ];
+    let steps = Box::leak(Box::new([
+        FusionStep {
+            ops: &["early-def"],
+        },
+        FusionStep { ops: &["late-def"] },
+    ]));
+    Box::leak(Box::new([FusionPattern {
+        name: "two-results",
+        steps,
+        guard: FusionExpr::True,
+        schedule: FusionSchedule {
+            decode_uops: 2,
+            decoded_cache_uops: 2,
+            decoder: None,
+            decode_cycles: 1,
+            rename_slots: 1,
+            rob_slots: 2,
+            retire_slots: 1,
+            decode_groups: &[],
+            rename_groups: &[],
+            rob_groups,
+            retire_groups,
+            uops: UOPS,
+        },
+    }]))
+}
+
+#[test]
+fn fused_outputs_wake_dependents_at_their_own_uop_times() {
+    let mut model = resource_test_model(&[]);
+    model.issue_width = 4;
+    model.fusions = split_result_rule(&[], &[]);
+    let mut first = dependency_test_instr(1, &[("GPR", 1)], &[], &[]);
+    first.op_name = "early-def".to_string();
+    let mut second = dependency_test_instr(1, &[("GPR", 2)], &[], &[]);
+    second.op_name = "late-def".to_string();
+    let early_reader = dependency_test_instr(1, &[], &[("GPR", 1)], &[]);
+    let late_reader = dependency_test_instr(1, &[], &[("GPR", 2)], &[]);
+    let issues = indexed_issue_cycles(&model, &[first, second, early_reader, late_reader]);
+    assert_eq!(issues[0], 0);
+    assert_eq!(issues[1], 0);
+    assert_eq!(issues[2], 1);
+    assert_eq!(issues[3], 7);
+}
+
+#[derive(Default)]
+struct FusionCount(usize);
+impl EventHandler for FusionCount {
+    fn fused_group(
+        &mut self,
+        _first: usize,
+        _members: usize,
+        _name: &'static str,
+        _decoded: u16,
+        _execution: u16,
+    ) {
+        self.0 += 1;
+    }
+    fn render(&self) -> String {
+        String::new()
+    }
+}
+
+fn fusion_count(
+    model: &MachineModel,
+    program: &[ScoreboardInstr],
+    iterations: usize,
+    stride: u64,
+) -> usize {
+    let mut counter = FusionCount::default();
+    run(
+        model,
+        program,
+        iterations,
+        &TimingConfig {
+            in_order: false,
+            window: 0,
+            mispredict_penalty: 0,
+            unroll_stride: stride,
+        },
+        None,
+        None,
+        None,
+        Some(&mut counter),
+    );
+    counter.0
+}
+
+#[test]
+fn unknown_guard_stops_ordered_fusion_selection() {
+    use tir::backend::sched::{FusionOperandRef, FusionValue};
+    let pair = pair_rule("cmp", "jne")[0];
+    let missing = FusionValue::Operand(FusionOperandRef {
+        step: 0,
+        name: "missing",
+    });
+    let fallback = FusionPattern {
+        name: "fallback",
+        ..pair
+    };
+    let mut model = resource_test_model(&[]);
+    let mut cmp = resource_test_instr(InstrSchedClass::DEFAULT);
+    cmp.op_name = "cmp".to_string();
+    let mut jne = resource_test_instr(InstrSchedClass::DEFAULT);
+    jne.op_name = "jne".to_string();
+    let overflow = FusionValue::Add(
+        Box::leak(Box::new(FusionValue::Integer(i128::MAX))),
+        Box::leak(Box::new(FusionValue::Integer(1))),
+    );
+    let divide_by_zero = FusionValue::Div(
+        Box::leak(Box::new(FusionValue::Integer(1))),
+        Box::leak(Box::new(FusionValue::Integer(0))),
+    );
+    for value in [missing, overflow, divide_by_zero] {
+        let guarded = FusionPattern {
+            name: "unknown",
+            guard: FusionExpr::Eq(value, FusionValue::Integer(1)),
+            ..pair
+        };
+        model.fusions = Box::leak(Box::new([guarded, fallback]));
+        assert_eq!(fusion_count(&model, &[cmp.clone(), jne.clone()], 1, 0), 0);
+    }
+}
+
+#[test]
+fn layout_guard_checks_last_byte_and_each_repeated_instance() {
+    let pair = pair_rule("cmp", "jne")[0];
+    let mut model = resource_test_model(&[]);
+    model.fusions = Box::leak(Box::new([FusionPattern {
+        guard: FusionExpr::SameBlock {
+            first: 0,
+            second: 1,
+            bytes: 4,
+        },
+        ..pair
+    }]));
+    let mut cmp = resource_test_instr(InstrSchedClass::DEFAULT);
+    cmp.op_name = "cmp".to_string();
+    cmp.layout_known = true;
+    cmp.pc = 0;
+    cmp.width_bytes = 2;
+    let mut jne = resource_test_instr(InstrSchedClass::DEFAULT);
+    jne.op_name = "jne".to_string();
+    jne.layout_known = true;
+    jne.pc = 2;
+    jne.width_bytes = 1;
+    assert_eq!(fusion_count(&model, &[cmp.clone(), jne.clone()], 2, 3), 1);
+    cmp.pc = 2;
+    jne.pc = 4;
+    assert_eq!(fusion_count(&model, &[cmp, jne], 1, 0), 0);
+}
+
+#[test]
+fn fusion_rename_cost_larger_than_width_spans_cycles() {
+    let pair = pair_rule("cmp", "jne")[0];
+    let schedule = FusionSchedule {
+        rename_slots: 3,
+        ..pair.schedule
+    };
+    let mut model = resource_test_model(&[]);
+    model.issue_width = 1;
+    model.fusions = Box::leak(Box::new([FusionPattern { schedule, ..pair }]));
+    let mut cmp = resource_test_instr(InstrSchedClass::DEFAULT);
+    cmp.op_name = "cmp".to_string();
+    let mut jne = resource_test_instr(InstrSchedClass::DEFAULT);
+    jne.op_name = "jne".to_string();
+    let mut events = Recorder::default();
+    let result = run(
+        &model,
+        &[cmp, jne],
+        1,
+        &TimingConfig {
+            in_order: false,
+            window: 0,
+            mispredict_penalty: 0,
+            unroll_stride: 0,
+        },
+        None,
+        None,
+        None,
+        Some(&mut events),
+    );
+    assert_eq!(result.instructions, 2);
+    assert_eq!(
+        events
+            .0
+            .iter()
+            .filter(|(event, _, _)| *event == 'D')
+            .map(|(_, cycle, _)| *cycle)
+            .collect::<Vec<_>>(),
+        vec![2, 2]
+    );
+}
+
+#[test]
+fn split_retire_and_rob_groups_release_capacity_after_early_result() {
+    const GROUPS: &[FusionStageGroup] = &[
+        FusionStageGroup {
+            steps: &[0],
+            slots: 1,
+        },
+        FusionStageGroup {
+            steps: &[1],
+            slots: 1,
+        },
+    ];
+    let mut model = resource_test_model(&[]);
+    model.issue_width = 2;
+    let mut first = dependency_test_instr(1, &[("GPR", 1)], &[], &[]);
+    first.op_name = "early-def".to_string();
+    let mut second = dependency_test_instr(1, &[("GPR", 2)], &[], &[]);
+    second.op_name = "late-def".to_string();
+    let tail = resource_test_instr(InstrSchedClass::DEFAULT);
+    let program = [first, second, tail];
+    let config = TimingConfig {
+        in_order: false,
+        window: 2,
+        mispredict_penalty: 0,
+        unroll_stride: 0,
+    };
+    model.fusions = split_result_rule(&[], &[]);
+    let mut grouped = Recorder::default();
+    run(
+        &model,
+        &program,
+        1,
+        &config,
+        None,
+        None,
+        None,
+        Some(&mut grouped),
+    );
+    model.fusions = split_result_rule(GROUPS, GROUPS);
+    let mut split = Recorder::default();
+    run(
+        &model,
+        &program,
+        1,
+        &config,
+        None,
+        None,
+        None,
+        Some(&mut split),
+    );
+    let dispatch_of_tail = |events: &Recorder| {
+        events
+            .0
+            .iter()
+            .find_map(|(kind, cycle, index)| (*kind == 'D' && *index == 2).then_some(*cycle))
+            .unwrap()
+    };
+    assert_eq!(dispatch_of_tail(&grouped), 7);
+    assert_eq!(dispatch_of_tail(&split), 1);
+}
+
+fn whole_sequence_rule(names: &'static [&'static str]) -> &'static [FusionPattern] {
+    let steps: &'static [FusionStep] = Box::leak(
+        names
+            .iter()
+            .map(|name| FusionStep {
+                ops: Box::leak(Box::new([*name])),
+            })
+            .collect::<Vec<_>>()
+            .into_boxed_slice(),
+    );
+    let inputs: &'static [FusionOperandSelector] = Box::leak(
+        (0..names.len())
+            .map(FusionOperandSelector::AllInputs)
+            .collect::<Vec<_>>()
+            .into_boxed_slice(),
+    );
+    let outputs: &'static [FusionOperandSelector] = Box::leak(
+        (0..names.len())
+            .map(FusionOperandSelector::AllOutputs)
+            .collect::<Vec<_>>()
+            .into_boxed_slice(),
+    );
+    let memory: &'static [FusionMemoryRef] = Box::leak(
+        (0..names.len())
+            .map(|step| FusionMemoryRef { step, index: None })
+            .collect::<Vec<_>>()
+            .into_boxed_slice(),
+    );
+    let controls: &'static [usize] =
+        Box::leak((0..names.len()).collect::<Vec<_>>().into_boxed_slice());
+    let uops = Box::leak(Box::new([FusionMicroOp {
+        name: "whole",
+        routes: &[],
+        inherit_routes: Some(names.len() - 1),
+        inputs,
+        outputs,
+        depends_on: &[],
+        read_cycle: 0,
+        write_cycle: 1,
+        memory,
+        control_steps: controls,
+    }]));
+    Box::leak(Box::new([FusionPattern {
+        name: "whole",
+        steps,
+        guard: FusionExpr::True,
+        schedule: FusionSchedule {
+            decode_uops: 1,
+            decoded_cache_uops: 1,
+            decoder: None,
+            decode_cycles: 1,
+            rename_slots: 1,
+            rob_slots: 1,
+            retire_slots: 1,
+            decode_groups: &[],
+            rename_groups: &[],
+            rob_groups: &[],
+            retire_groups: &[],
+            uops,
+        },
+    }]))
+}
+
+#[test]
+fn singleton_and_three_step_patterns_preserve_architectural_events() {
+    let mut model = resource_test_model(&[]);
+    let make = |name: &str| {
+        let mut slot = resource_test_instr(InstrSchedClass::DEFAULT);
+        slot.op_name = name.to_string();
+        slot
+    };
+    model.fusions = whole_sequence_rule(&["single"]);
+    let one = [make("single")];
+    assert_eq!(fusion_count(&model, &one, 2, 0), 2);
+    let mut events = Recorder::default();
+    let result = run(
+        &model,
+        &one,
+        2,
+        &TimingConfig {
+            in_order: false,
+            window: 0,
+            mispredict_penalty: 0,
+            unroll_stride: 0,
+        },
+        None,
+        None,
+        None,
+        Some(&mut events),
+    );
+    assert_eq!(result.instructions, 2);
+    assert_eq!(
+        events.0.iter().filter(|(kind, _, _)| *kind == 'R').count(),
+        2
+    );
+
+    model.fusions = whole_sequence_rule(&["a", "b", "c"]);
+    let three = [make("a"), make("b"), make("c")];
+    assert_eq!(fusion_count(&model, &three, 1, 0), 1);
+    let mut boundary = three.clone();
+    boundary[1].fusion_boundary = true;
+    assert_eq!(fusion_count(&model, &boundary, 1, 0), 0);
+}
+
+#[test]
+fn split_rename_groups_let_first_member_issue_before_second() {
+    const RENAME: &[FusionStageGroup] = &[
+        FusionStageGroup {
+            steps: &[0],
+            slots: 1,
+        },
+        FusionStageGroup {
+            steps: &[1],
+            slots: 1,
+        },
+    ];
+    let mut model = resource_test_model(&[]);
+    model.issue_width = 1;
+    let pair = split_result_rule(&[], &[])[0];
+    model.fusions = Box::leak(Box::new([FusionPattern {
+        schedule: FusionSchedule {
+            rename_groups: RENAME,
+            ..pair.schedule
+        },
+        ..pair
+    }]));
+    let mut first = dependency_test_instr(1, &[("GPR", 1)], &[], &[]);
+    first.op_name = "early-def".to_string();
+    let mut second = dependency_test_instr(1, &[("GPR", 2)], &[], &[]);
+    second.op_name = "late-def".to_string();
+    let mut events = Recorder::default();
+    run(
+        &model,
+        &[first, second],
+        1,
+        &TimingConfig {
+            in_order: false,
+            window: 0,
+            mispredict_penalty: 0,
+            unroll_stride: 0,
+        },
+        None,
+        None,
+        None,
+        Some(&mut events),
+    );
+    let event_cycles = |event| {
+        events
+            .0
+            .iter()
+            .filter_map(|(kind, cycle, _)| (*kind == event).then_some(*cycle))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(event_cycles('D'), vec![0, 1]);
+    assert_eq!(event_cycles('I'), vec![0, 1]);
+}
+
+#[test]
+fn fused_indexed_load_delays_only_its_result() {
+    const INPUTS: &[FusionOperandSelector] = &[];
+    const FIRST_OUTPUT: &[FusionOperandSelector] = &[FusionOperandSelector::AllOutputs(0)];
+    const SECOND_OUTPUT: &[FusionOperandSelector] = &[FusionOperandSelector::AllOutputs(1)];
+    const UOPS: &[FusionMicroOp] = &[
+        FusionMicroOp {
+            name: "load",
+            routes: &[],
+            inherit_routes: None,
+            inputs: INPUTS,
+            outputs: FIRST_OUTPUT,
+            depends_on: &[],
+            read_cycle: 2,
+            write_cycle: 2,
+            memory: &[FusionMemoryRef {
+                step: 0,
+                index: Some(0),
+            }],
+            control_steps: &[],
+        },
+        FusionMicroOp {
+            name: "alu",
+            routes: &[],
+            inherit_routes: None,
+            inputs: INPUTS,
+            outputs: SECOND_OUTPUT,
+            depends_on: &[],
+            read_cycle: 0,
+            write_cycle: 1,
+            memory: &[],
+            control_steps: &[],
+        },
+    ];
+    let pair = split_result_rule(&[], &[])[0];
+    let mut model = resource_test_model(&[]);
+    model.issue_width = 4;
+    model.fusions = Box::leak(Box::new([FusionPattern {
+        schedule: FusionSchedule {
+            uops: UOPS,
+            ..pair.schedule
+        },
+        ..pair
+    }]));
+    let mut first = dependency_test_instr(1, &[("GPR", 1)], &[], &[]);
+    first.op_name = "early-def".to_string();
+    first.mem.push(MemAccess {
+        addr: 0x1000,
+        size: 4,
+        is_write: false,
+        kind: MemAccessKind::Data,
+    });
+    let mut second = dependency_test_instr(1, &[("GPR", 2)], &[], &[]);
+    second.op_name = "late-def".to_string();
+    let load_reader = dependency_test_instr(1, &[], &[("GPR", 1)], &[]);
+    let alu_reader = dependency_test_instr(1, &[], &[("GPR", 2)], &[]);
+    let cache = CacheParams {
+        size: 64,
+        ways: 1,
+        line: 64,
+        latency: 2,
+        banks: 1,
+        mshrs: 1,
+    };
+    let mut memory = MemorySystem::new(MemParams {
+        l1i: cache,
+        l1d: cache,
+        l2: None,
+        l3: None,
+        dram_latency: 12,
+        dram_streams: 1,
+    });
+    let mut events = Recorder::default();
+    let result = run(
+        &model,
+        &[first, second, load_reader, alu_reader],
+        1,
+        &TimingConfig {
+            in_order: false,
+            window: 0,
+            mispredict_penalty: 0,
+            unroll_stride: 0,
+        },
+        None,
+        None,
+        Some(&mut memory),
+        Some(&mut events),
+    );
+    let mut issues = vec![0; 4];
+    for (kind, cycle, index) in &events.0 {
+        if *kind == 'I' {
+            issues[*index as usize] = *cycle;
+        }
+    }
+    assert_eq!(result.instructions, 4);
+    assert_eq!(memory.stats().l1d.accesses, 1);
+    assert_eq!(
+        issues[3],
+        issues[0] + 1,
+        "the independent ALU output should wake at one cycle"
+    );
+    assert!(
+        issues[2] >= issues[0] + 14,
+        "the load read two cycles after issue must wait for the miss: {issues:?}"
+    );
+}
+
+#[test]
+fn rename_bandwidth_is_charged_when_pressure_releases() {
+    let pair = split_result_rule(&[], &[])[0];
+    let mut model = resource_test_model(&[]);
+    model.issue_width = 1;
+    model.fusions = Box::leak(Box::new([FusionPattern {
+        schedule: FusionSchedule {
+            rename_slots: 2,
+            ..pair.schedule
+        },
+        ..pair
+    }]));
+    let mut incumbent = dependency_test_instr(7, &[("GPR", 0)], &[], &[]);
+    incumbent.op_name = "incumbent".to_string();
+    let mut first = dependency_test_instr(1, &[("GPR", 1)], &[], &[]);
+    first.op_name = "early-def".to_string();
+    let mut second = dependency_test_instr(1, &[("GPR", 2)], &[], &[]);
+    second.op_name = "late-def".to_string();
+    let tail = resource_test_instr(InstrSchedClass::DEFAULT);
+    let pressure = Prf {
+        class_to_file: [("GPR".to_string(), "GPR".to_string())]
+            .into_iter()
+            .collect(),
+        capacity: [("GPR".to_string(), 2)].into_iter().collect(),
+    };
+    let mut events = Recorder::default();
+    run(
+        &model,
+        &[incumbent, first, second, tail],
+        1,
+        &TimingConfig {
+            in_order: false,
+            window: 4,
+            mispredict_penalty: 0,
+            unroll_stride: 0,
+        },
+        None,
+        Some(&pressure),
+        None,
+        Some(&mut events),
+    );
+    let mut dispatch = vec![0; 4];
+    for (kind, cycle, index) in &events.0 {
+        if *kind == 'D' {
+            dispatch[*index as usize] = *cycle;
+        }
+    }
+    assert_eq!(dispatch, vec![0, 8, 8, 9]);
+}
+
+#[test]
+fn register_overlap_guards_use_bit_ranges_and_unknown_stops_priority() {
+    use tir::backend::sched::{FusionOperandRef, FusionValue};
+    let pair = pair_rule("a", "b")[0];
+    let left = FusionValue::Operand(FusionOperandRef { step: 0, name: "r" });
+    let right = FusionValue::Operand(FusionOperandRef { step: 1, name: "r" });
+    let mut model = resource_test_model(&[]);
+    model.fusions = Box::leak(Box::new([
+        FusionPattern {
+            guard: FusionExpr::OverlapRegister(left, right),
+            ..pair
+        },
+        FusionPattern {
+            name: "fallback",
+            ..pair
+        },
+    ]));
+    let fact = |index, bit_range| FusionOperandFact {
+        name: "r".to_string(),
+        width_bits: Some(32),
+        value: FusionOperandValue::Register {
+            file: "GPR".to_string(),
+            index,
+            bit_range,
+        },
+    };
+    let mut a = resource_test_instr(InstrSchedClass::DEFAULT);
+    a.op_name = "a".to_string();
+    a.fusion_operands.push(fact(0, Some((0, 64))));
+    let mut b = resource_test_instr(InstrSchedClass::DEFAULT);
+    b.op_name = "b".to_string();
+    b.fusion_operands.push(fact(1, Some((32, 64))));
+    assert_eq!(fusion_count(&model, &[a.clone(), b.clone()], 1, 0), 1);
+    b.fusion_operands[0] = fact(1, Some((64, 96)));
+    // A false first guard permits the lower-priority rule.
+    assert_eq!(fusion_count(&model, &[a.clone(), b.clone()], 1, 0), 1);
+    b.fusion_operands[0] = fact(1, None);
+    assert_eq!(fusion_count(&model, &[a, b], 1, 0), 0);
+}
+
+#[test]
+fn fused_branch_keeps_original_prediction_and_handler_identity() {
+    let mut model = resource_test_model(&[]);
+    model.issue_width = 2;
+    model.fusions = pair_rule("cmp", "jne");
+    let mut cmp = resource_test_instr(InstrSchedClass::DEFAULT);
+    cmp.op_name = "cmp".to_string();
+    let mut jne = resource_test_instr(InstrSchedClass::DEFAULT);
+    jne.op_name = "jne".to_string();
+    jne.branch = Some(BranchOutcome {
+        pc: 0x20,
+        target: 0x80,
+        taken: true,
+    });
+    let successor = resource_test_instr(InstrSchedClass::DEFAULT);
+    let mut predictor = AlwaysNotTaken;
+    let mut events = Recorder::default();
+    let result = run(
+        &model,
+        &[cmp, jne, successor],
+        1,
+        &TimingConfig {
+            in_order: false,
+            window: 0,
+            mispredict_penalty: 4,
+            unroll_stride: 0,
+        },
+        Some(&mut predictor),
+        None,
+        None,
+        Some(&mut events),
+    );
+    assert_eq!(result.instructions, 3);
+    assert_eq!(result.mispredicts, 1);
+    assert!(events
+        .0
+        .iter()
+        .any(|(kind, _, index)| *kind == 'M' && *index == 1));
+    assert_eq!(
+        events.0.iter().filter(|(kind, _, _)| *kind == 'R').count(),
+        3
+    );
+    let successor_dispatch = events
+        .0
+        .iter()
+        .find_map(|(kind, cycle, index)| (*kind == 'D' && *index == 2).then_some(*cycle))
+        .unwrap();
+    assert!(successor_dispatch >= 5);
+}
+
+#[test]
+fn fusion_falls_back_when_runtime_outputs_alias_across_uops() {
+    let pair = split_result_rule(&[], &[])[0];
+    let uops = Box::leak(Box::new([
+        pair.schedule.uops[0],
+        FusionMicroOp {
+            outputs: &[
+                FusionOperandSelector::AllOutputs(0),
+                FusionOperandSelector::AllOutputs(1),
+            ],
+            ..pair.schedule.uops[1]
+        },
+    ]));
+    let mut model = resource_test_model(&[]);
+    model.fusions = Box::leak(Box::new([FusionPattern {
+        schedule: FusionSchedule {
+            uops,
+            ..pair.schedule
+        },
+        ..pair
+    }]));
+    let mut first = dependency_test_instr(1, &[("GPR", 1)], &[], &[]);
+    first.op_name = "early-def".to_string();
+    let mut second = dependency_test_instr(1, &[("GPR", 2)], &[], &[]);
+    second.op_name = "late-def".to_string();
+    assert_eq!(fusion_count(&model, &[first, second], 1, 0), 0);
 }

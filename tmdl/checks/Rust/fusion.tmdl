@@ -1,12 +1,14 @@
 // RUN: tmdlc --action=emit-rust --dialect=test --text-only --output=- %s | filecheck %s
 
-// The fusion declaration names mnemonics; the generated model carries every
-// scheduling key with that mnemonic (both cmp forms), so the engine can match
-// adjacent pairs.
+// The mnemonic selector expands to both cmp operations; the recipe carries
+// the explicit front-end costs and fused execution operation.
 
-// CHECK: FusionGroup {
-// CHECK: first: &["cmp_a", "cmp_b"],
-// CHECK: second: &["jne_a"],
+// CHECK: FusionPattern {
+// CHECK: name: "CmpBranch",
+// CHECK: ops: &["cmp_a", "cmp_b"],
+// CHECK: ops: &["jne_a"],
+// CHECK: decode_uops: 1,
+// CHECK: inherit_routes: Some(1),
 
 isa TestIsa {}
 
@@ -43,8 +45,19 @@ machine Fused ("fused") for [TestIsa] {
     bind WriteALU { latency = 1; uop(P0); }
     bind WriteBranch { latency = 1; uop(P0); }
 
-    fusion {
-        first = [cmp];
-        second = [jne];
+    fusion CmpBranch {
+        match = [a: mnemonic[cmp], b: instruction[JneA]];
+        schedule {
+            decode_uops = 1;
+            rename_slots = 1;
+            rob_entries = 1;
+            retire_slots = 1;
+            uop fused(inherit = b) {
+                inputs = [all_inputs(a), all_inputs(b)];
+                outputs = [all_outputs(a), all_outputs(b)];
+                memory = [a, b];
+                control = [a, b];
+            }
+        }
     }
 }

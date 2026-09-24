@@ -1,8 +1,8 @@
 fn machine_model_ts(
     machine: &ast::Machine,
     machine_id: usize,
-    scheduled: &[(String, String, String, Vec<String>)],
-) -> (proc_macro2::Ident, proc_macro2::TokenStream) {
+    instructions: &[(String, String, String)],
+) -> Result<(proc_macro2::Ident, proc_macro2::TokenStream), TMDLError> {
     let id_lit = proc_macro2::Literal::usize_unsuffixed(machine_id);
 
     let pipeline_lits = machine.pipeline.iter().map(|p| {
@@ -41,35 +41,46 @@ fn machine_model_ts(
     });
 
     let name_lit = proc_macro2::Literal::string(&machine.name);
-    let issue_width_lit = proc_macro2::Literal::u16_unsuffixed(clamp_u16(
-        machine.issue_width.unwrap_or(1).max(1),
-    ));
+    let issue_width_lit =
+        proc_macro2::Literal::u16_unsuffixed(clamp_u16(machine.issue_width.unwrap_or(1).max(1)));
     let fn_ident = format_ident!("{}_model", to_snake_case(&machine.name));
     let frontend = frontend_ts(machine.frontend.as_ref());
 
-    // Fusion rules are declared over mnemonics; the engine matches op
-    // names, so expand each mnemonic to every op named after it.
-    let ops_with_mnemonics = |mnemonics: &[String]| -> Vec<proc_macro2::Literal> {
-        scheduled
-            .iter()
-            .filter(|(_, _, mnemonic, _)| mnemonics.iter().any(|m| m == mnemonic))
-            .map(|(_, operation, _, _)| proc_macro2::Literal::string(operation))
-            .collect()
-    };
     let fusion_lits: Vec<_> = machine
         .fusions
         .iter()
-        .map(|fusion| {
-            let first = ops_with_mnemonics(&fusion.first);
-            let second = ops_with_mnemonics(&fusion.second);
-            quote! {
-                tir::backend::sched::FusionGroup {
-                    first: &[#(#first),*],
-                    second: &[#(#second),*],
+        .map(|fusion| -> Result<_, TMDLError> {
+            let name = proc_macro2::Literal::string(&fusion.name);
+            let steps: Vec<_> = fusion
+                .steps
+                .iter()
+                .map(|step| {
+                    let ops: Vec<_> = instructions
+                        .iter()
+                        .filter(|(instruction, _, mnemonic)| {
+                            step.instruction_names.contains(instruction)
+                                || step.mnemonics.contains(mnemonic)
+                        })
+                        .map(|(_, op, _)| proc_macro2::Literal::string(op))
+                        .collect();
+                    quote! { tir::backend::sched::FusionStep { ops: &[#(#ops),*] } }
+                })
+                .collect();
+            let guard = match &fusion.condition {
+                Some(condition) => fusion_guard_ts(condition, fusion)?,
+                None => quote! { tir::backend::sched::FusionExpr::True },
+            };
+            let schedule = fusion_schedule_ts(&fusion.schedule, fusion, machine)?;
+            Ok(quote! {
+                tir::backend::sched::FusionPattern {
+                    name: #name,
+                    steps: &[#(#steps),*],
+                    guard: #guard,
+                    schedule: #schedule,
                 }
-            }
+            })
         })
-        .collect();
+        .collect::<Result<_, _>>()?;
 
     let screaming = to_snake_case(&machine.name).to_uppercase();
     let model_ident = format_ident!("{screaming}_MODEL");
@@ -92,7 +103,405 @@ fn machine_model_ts(
             #model_ident
         }
     };
-    (fn_ident, model)
+    Ok((fn_ident, model))
+}
+
+fn fusion_step_index(fusion: &ast::FusionDecl, name: &str) -> Result<usize, TMDLError> {
+    fusion
+        .steps
+        .iter()
+        .position(|step| step.name == name)
+        .ok_or_else(|| {
+            TMDLError::Codegen(format!(
+                "fusion '{}' references unknown step '{name}'",
+                fusion.name
+            ))
+        })
+}
+
+fn fusion_int(expr: &ast::Expr) -> Result<i128, TMDLError> {
+    let ast::Expr::Lit(ast::Lit::Int(value)) = expr else {
+        return Err(TMDLError::Codegen(
+            "fusion guard requires an integer literal".to_string(),
+        ));
+    };
+    let spelling = value.value();
+    let (radix, digits) = if let Some(digits) = spelling
+        .strip_prefix("0x")
+        .or_else(|| spelling.strip_prefix("0X"))
+    {
+        (16, digits)
+    } else if let Some(digits) = spelling
+        .strip_prefix("0b")
+        .or_else(|| spelling.strip_prefix("0B"))
+    {
+        (2, digits)
+    } else {
+        (10, spelling)
+    };
+    i128::from_str_radix(digits, radix)
+        .map_err(|_| TMDLError::Codegen(format!("invalid fusion integer '{spelling}'")))
+}
+
+fn fusion_step_arg(expr: &ast::Expr, fusion: &ast::FusionDecl) -> Result<usize, TMDLError> {
+    let ast::Expr::Ident(step) = expr else {
+        return Err(TMDLError::Codegen(
+            "fusion guard requires a named step".to_string(),
+        ));
+    };
+    fusion_step_index(fusion, &step.name)
+}
+
+fn fusion_operand_ref_ts(
+    reference: &ast::FusionOperandRef,
+    fusion: &ast::FusionDecl,
+) -> Result<proc_macro2::TokenStream, TMDLError> {
+    let step = proc_macro2::Literal::usize_unsuffixed(fusion_step_index(fusion, &reference.step)?);
+    let name = proc_macro2::Literal::string(&reference.operand);
+    Ok(quote! { tir::backend::sched::FusionOperandRef { step: #step, name: #name } })
+}
+
+fn fusion_value_ts(
+    expr: &ast::Expr,
+    fusion: &ast::FusionDecl,
+) -> Result<proc_macro2::TokenStream, TMDLError> {
+    match expr {
+        ast::Expr::Block(block) if block.last_expr_return && block.stmts.len() == 1 => {
+            fusion_value_ts(&block.stmts[0], fusion)
+        }
+        ast::Expr::Lit(ast::Lit::Int(_)) => {
+            let value = proc_macro2::Literal::i128_unsuffixed(fusion_int(expr)?);
+            Ok(quote! { tir::backend::sched::FusionValue::Integer(#value) })
+        }
+        ast::Expr::Field(field) => {
+            let ast::Expr::Ident(step) = field.base.as_ref() else {
+                return Err(TMDLError::Codegen(
+                    "fusion operand must be step.operand".to_string(),
+                ));
+            };
+            let reference = fusion_operand_ref_ts(
+                &ast::FusionOperandRef {
+                    step: step.name.clone(),
+                    operand: field.member.clone(),
+                    span: field.span,
+                },
+                fusion,
+            )?;
+            Ok(quote! { tir::backend::sched::FusionValue::Operand(#reference) })
+        }
+        ast::Expr::Call(call) => {
+            let name = match call.callee.as_ref() {
+                ast::Expr::Ident(id) => id.name.as_str(),
+                ast::Expr::BuiltinFunction(ast::BuiltinFunction::Width) => "width",
+                ast::Expr::BuiltinFunction(ast::BuiltinFunction::Regnum) => "regnum",
+                _ => {
+                    return Err(TMDLError::Codegen(
+                        "unsupported fusion value call".to_string(),
+                    ));
+                }
+            };
+            match (name, call.arguments.as_slice()) {
+                ("pc" | "width", [step]) => {
+                    let index =
+                        proc_macro2::Literal::usize_unsuffixed(fusion_step_arg(step, fusion)?);
+                    if name == "pc" {
+                        Ok(quote! { tir::backend::sched::FusionValue::Pc(#index) })
+                    } else {
+                        Ok(quote! { tir::backend::sched::FusionValue::Width(#index) })
+                    }
+                }
+                ("regnum" | "operand_width", [operand]) => {
+                    let ast::Expr::Field(field) = operand else {
+                        return Err(TMDLError::Codegen(format!(
+                            "fusion {name} requires step.operand"
+                        )));
+                    };
+                    let ast::Expr::Ident(step) = field.base.as_ref() else {
+                        return Err(TMDLError::Codegen(format!(
+                            "fusion {name} requires step.operand"
+                        )));
+                    };
+                    let reference = fusion_operand_ref_ts(
+                        &ast::FusionOperandRef {
+                            step: step.name.clone(),
+                            operand: field.member.clone(),
+                            span: field.span,
+                        },
+                        fusion,
+                    )?;
+                    if name == "regnum" {
+                        Ok(quote! { tir::backend::sched::FusionValue::Regnum(#reference) })
+                    } else {
+                        Ok(quote! { tir::backend::sched::FusionValue::OperandWidth(#reference) })
+                    }
+                }
+                ("encoded_byte", [step, index]) => {
+                    let step =
+                        proc_macro2::Literal::usize_unsuffixed(fusion_step_arg(step, fusion)?);
+                    let index = proc_macro2::Literal::usize_unsuffixed(
+                        usize::try_from(fusion_int(index)?).map_err(|_| {
+                            TMDLError::Codegen("fusion encoded_byte index out of range".to_string())
+                        })?,
+                    );
+                    Ok(
+                        quote! { tir::backend::sched::FusionValue::EncodedByte { step: #step, index: #index } },
+                    )
+                }
+                _ => Err(TMDLError::Codegen(format!(
+                    "unsupported fusion value call '{name}'"
+                ))),
+            }
+        }
+        ast::Expr::Binary(binary) => {
+            let variant = match binary.op {
+                ast::BinOp::Add => quote! { Add },
+                ast::BinOp::Sub => quote! { Sub },
+                ast::BinOp::Mul => quote! { Mul },
+                ast::BinOp::Div => quote! { Div },
+                _ => {
+                    return Err(TMDLError::Codegen(
+                        "unsupported fusion value operator".to_string(),
+                    ));
+                }
+            };
+            let lhs = fusion_value_ts(&binary.lhs, fusion)?;
+            let rhs = fusion_value_ts(&binary.rhs, fusion)?;
+            Ok(quote! { tir::backend::sched::FusionValue::#variant(&#lhs, &#rhs) })
+        }
+        _ => Err(TMDLError::Codegen(
+            "unsupported fusion value expression".to_string(),
+        )),
+    }
+}
+
+fn fusion_guard_ts(
+    expr: &ast::Expr,
+    fusion: &ast::FusionDecl,
+) -> Result<proc_macro2::TokenStream, TMDLError> {
+    match expr {
+        ast::Expr::Block(block) if block.last_expr_return && block.stmts.len() == 1 => {
+            fusion_guard_ts(&block.stmts[0], fusion)
+        }
+        ast::Expr::Ident(id) if id.name == "true" => {
+            Ok(quote! { tir::backend::sched::FusionExpr::True })
+        }
+        ast::Expr::Ident(id) if id.name == "false" => Ok(
+            quote! { tir::backend::sched::FusionExpr::Not(&tir::backend::sched::FusionExpr::True) },
+        ),
+        ast::Expr::Unary(unary) if unary.op == ast::UnOp::BitwiseNot => {
+            let x = fusion_guard_ts(&unary.x, fusion)?;
+            Ok(quote! { tir::backend::sched::FusionExpr::Not(&#x) })
+        }
+        ast::Expr::Binary(binary) => {
+            let variant = match binary.op {
+                ast::BinOp::BitwiseAnd => quote! { And },
+                ast::BinOp::BitwiseOr => quote! { Or },
+                ast::BinOp::Equal => quote! { Eq },
+                ast::BinOp::NotEqual => quote! { Ne },
+                ast::BinOp::LessThan => quote! { Lt },
+                ast::BinOp::LessThenEqual => quote! { Le },
+                ast::BinOp::GreaterThan => quote! { Gt },
+                ast::BinOp::GreaterThanEqual => quote! { Ge },
+                _ => {
+                    return Err(TMDLError::Codegen(
+                        "unsupported fusion guard operator".to_string(),
+                    ));
+                }
+            };
+            if matches!(binary.op, ast::BinOp::BitwiseAnd | ast::BinOp::BitwiseOr) {
+                let lhs = fusion_guard_ts(&binary.lhs, fusion)?;
+                let rhs = fusion_guard_ts(&binary.rhs, fusion)?;
+                Ok(quote! { tir::backend::sched::FusionExpr::#variant(&[#lhs, #rhs]) })
+            } else {
+                let lhs = fusion_value_ts(&binary.lhs, fusion)?;
+                let rhs = fusion_value_ts(&binary.rhs, fusion)?;
+                Ok(quote! { tir::backend::sched::FusionExpr::#variant(#lhs, #rhs) })
+            }
+        }
+        ast::Expr::Call(call) => {
+            let ast::Expr::Ident(callee) = call.callee.as_ref() else {
+                return Err(TMDLError::Codegen(
+                    "unsupported fusion guard call".to_string(),
+                ));
+            };
+            match (callee.name.as_str(), call.arguments.as_slice()) {
+                ("same_register", [a, b]) | ("overlap_register", [a, b]) => {
+                    let a = fusion_value_ts(a, fusion)?;
+                    let b = fusion_value_ts(b, fusion)?;
+                    if callee.name == "same_register" {
+                        Ok(quote! { tir::backend::sched::FusionExpr::SameRegister(#a, #b) })
+                    } else {
+                        Ok(quote! { tir::backend::sched::FusionExpr::OverlapRegister(#a, #b) })
+                    }
+                }
+                ("same_block", [a, b, bytes]) => {
+                    let first = proc_macro2::Literal::usize_unsuffixed(fusion_step_arg(a, fusion)?);
+                    let second =
+                        proc_macro2::Literal::usize_unsuffixed(fusion_step_arg(b, fusion)?);
+                    let bytes = proc_macro2::Literal::u64_unsuffixed(
+                        u64::try_from(fusion_int(bytes)?).map_err(|_| {
+                            TMDLError::Codegen("fusion block size out of range".to_string())
+                        })?,
+                    );
+                    Ok(
+                        quote! { tir::backend::sched::FusionExpr::SameBlock { first: #first, second: #second, bytes: #bytes } },
+                    )
+                }
+                ("aligned", [step, bytes]) => {
+                    let step =
+                        proc_macro2::Literal::usize_unsuffixed(fusion_step_arg(step, fusion)?);
+                    let bytes = proc_macro2::Literal::u64_unsuffixed(
+                        u64::try_from(fusion_int(bytes)?).map_err(|_| {
+                            TMDLError::Codegen("fusion alignment out of range".to_string())
+                        })?,
+                    );
+                    Ok(
+                        quote! { tir::backend::sched::FusionExpr::Aligned { step: #step, bytes: #bytes } },
+                    )
+                }
+                _ => Err(TMDLError::Codegen(format!(
+                    "unsupported fusion guard call '{}'",
+                    callee.name
+                ))),
+            }
+        }
+        _ => Err(TMDLError::Codegen(
+            "unsupported fusion guard expression".to_string(),
+        )),
+    }
+}
+
+fn fusion_selector_ts(
+    selector: &ast::FusionOperandSelector,
+    fusion: &ast::FusionDecl,
+) -> Result<proc_macro2::TokenStream, TMDLError> {
+    Ok(match selector {
+        ast::FusionOperandSelector::Operand(reference) => {
+            let reference = fusion_operand_ref_ts(reference, fusion)?;
+            quote! { tir::backend::sched::FusionOperandSelector::Operand(#reference) }
+        }
+        ast::FusionOperandSelector::AllInputs(step) => {
+            let step = proc_macro2::Literal::usize_unsuffixed(fusion_step_index(fusion, step)?);
+            quote! { tir::backend::sched::FusionOperandSelector::AllInputs(#step) }
+        }
+        ast::FusionOperandSelector::AllOutputs(step) => {
+            let step = proc_macro2::Literal::usize_unsuffixed(fusion_step_index(fusion, step)?);
+            quote! { tir::backend::sched::FusionOperandSelector::AllOutputs(#step) }
+        }
+    })
+}
+
+fn fusion_groups_ts(
+    groups: &[ast::FusionStageGroup],
+    fusion: &ast::FusionDecl,
+) -> Result<proc_macro2::TokenStream, TMDLError> {
+    let groups: Vec<_> = groups.iter().map(|group| -> Result<_, TMDLError> {
+        let steps: Vec<_> = group.steps.iter().map(|step| {
+            fusion_step_index(fusion, step).map(proc_macro2::Literal::usize_unsuffixed)
+        }).collect::<Result<_, _>>()?;
+        let slots = proc_macro2::Literal::u16_unsuffixed(clamp_u16(group.slots));
+        Ok(quote! { tir::backend::sched::FusionStageGroup { steps: &[#(#steps),*], slots: #slots } })
+    }).collect::<Result<_, _>>()?;
+    Ok(quote! { &[#(#groups),*] })
+}
+
+fn fusion_schedule_ts(
+    schedule: &ast::FusionSchedule,
+    fusion: &ast::FusionDecl,
+    machine: &ast::Machine,
+) -> Result<proc_macro2::TokenStream, TMDLError> {
+    let decode_uops = proc_macro2::Literal::u16_unsuffixed(clamp_u16(schedule.decode_uops));
+    let decoded_cache_uops = proc_macro2::Literal::u16_unsuffixed(clamp_u16(
+        schedule.decoded_cache_uops.unwrap_or(schedule.decode_uops),
+    ));
+    let decoder = match &schedule.decoder {
+        Some(name) => {
+            let name = proc_macro2::Literal::string(name);
+            quote! { Some(#name) }
+        }
+        None => quote! { None },
+    };
+    let decode_cycles = proc_macro2::Literal::u16_unsuffixed(clamp_u16(schedule.decode_cycles));
+    let rename_slots = proc_macro2::Literal::u16_unsuffixed(clamp_u16(schedule.rename_slots));
+    let rob_slots = proc_macro2::Literal::u16_unsuffixed(clamp_u16(schedule.rob_entries));
+    let retire_slots = proc_macro2::Literal::u16_unsuffixed(clamp_u16(schedule.retire_slots));
+    let decode_groups = fusion_groups_ts(&schedule.decode_groups, fusion)?;
+    let rename_groups = fusion_groups_ts(&schedule.rename_groups, fusion)?;
+    let rob_groups = fusion_groups_ts(&schedule.rob_groups, fusion)?;
+    let retire_groups = fusion_groups_ts(&schedule.retire_groups, fusion)?;
+    let resource_groups: HashMap<&str, &ast::ResourceExpr> = machine
+        .resource_groups
+        .iter()
+        .map(|group| (group.name.as_str(), &group.resources))
+        .collect();
+    let uops: Vec<_> = schedule.uops.iter().map(|uop| -> Result<_, TMDLError> {
+        let name = proc_macro2::Literal::string(&uop.name);
+        let routes: Vec<_> = uop.resources.as_ref().map(|resources| resolve_resource_expr(resources, &resource_groups, None))
+            .unwrap_or_default().iter().map(|route| {
+                let resources = route.iter().map(|use_| {
+                    let resource = proc_macro2::Literal::string(&use_.resource);
+                    let cycles = proc_macro2::Literal::u16_unsuffixed(use_.cycles);
+                    quote! { tir::backend::sched::ResourceUse { resource: #resource, cycles: #cycles } }
+                });
+                quote! { tir::backend::sched::ResourceRoute { resources: &[#(#resources),*] } }
+            }).collect();
+        let inherit_routes = match &uop.inherit_routes {
+            Some(step) => {
+                let index = proc_macro2::Literal::usize_unsuffixed(fusion_step_index(fusion, step)?);
+                quote! { Some(#index) }
+            }
+            None => quote! { None },
+        };
+        let inputs: Vec<_> = uop.inputs.iter().map(|selector| fusion_selector_ts(selector, fusion)).collect::<Result<_, _>>()?;
+        let outputs: Vec<_> = uop.outputs.iter().map(|selector| fusion_selector_ts(selector, fusion)).collect::<Result<_, _>>()?;
+        let depends_on: Vec<_> = uop.depends_on.iter().map(|name| proc_macro2::Literal::string(name)).collect();
+        let read_cycle = proc_macro2::Literal::u16_unsuffixed(clamp_u16(uop.read_cycle));
+        let write_cycle = proc_macro2::Literal::u16_unsuffixed(clamp_u16(uop.write_cycle));
+        let memory: Vec<_> = uop.memory.iter().map(|reference| -> Result<_, TMDLError> {
+            let step = proc_macro2::Literal::usize_unsuffixed(fusion_step_index(fusion, &reference.step)?);
+            let index = match reference.index {
+                Some(index) => {
+                    let index = proc_macro2::Literal::usize_unsuffixed(usize::try_from(index).map_err(|_| TMDLError::Codegen("negative fusion memory index".to_string()))?);
+                    quote! { Some(#index) }
+                }
+                None => quote! { None },
+            };
+            Ok(quote! { tir::backend::sched::FusionMemoryRef { step: #step, index: #index } })
+        }).collect::<Result<_, _>>()?;
+        let control_steps: Vec<_> = uop.control_steps.iter().map(|step| {
+            fusion_step_index(fusion, step).map(proc_macro2::Literal::usize_unsuffixed)
+        }).collect::<Result<_, _>>()?;
+        Ok(quote! {
+            tir::backend::sched::FusionMicroOp {
+                name: #name,
+                routes: &[#(#routes),*],
+                inherit_routes: #inherit_routes,
+                inputs: &[#(#inputs),*],
+                outputs: &[#(#outputs),*],
+                depends_on: &[#(#depends_on),*],
+                read_cycle: #read_cycle,
+                write_cycle: #write_cycle,
+                memory: &[#(#memory),*],
+                control_steps: &[#(#control_steps),*],
+            }
+        })
+    }).collect::<Result<_, _>>()?;
+    Ok(quote! {
+        tir::backend::sched::FusionSchedule {
+            decode_uops: #decode_uops,
+            decoded_cache_uops: #decoded_cache_uops,
+            decoder: #decoder,
+            decode_cycles: #decode_cycles,
+            rename_slots: #rename_slots,
+            rob_slots: #rob_slots,
+            retire_slots: #retire_slots,
+            decode_groups: #decode_groups,
+            rename_groups: #rename_groups,
+            rob_groups: #rob_groups,
+            retire_groups: #retire_groups,
+            uops: &[#(#uops),*],
+        }
+    })
 }
 
 /// Emit one `static <MACHINE>_MODEL` (plus the `fn <machine>_model()` accessor that
@@ -108,6 +517,7 @@ fn emit_machine_models<'a>(
 ) -> Result<(proc_macro2::TokenStream, SchedTables), TMDLError> {
     let unit_defaults = collect_unit_defaults(files);
     let scheduled = collect_scheduled(files, item_cache);
+    let all_instructions = collect_all_instruction_ops(files, item_cache);
 
     let mut model_fns = Vec::new();
     let mut lookup_arms = Vec::new();
@@ -163,8 +573,8 @@ fn emit_machine_models<'a>(
         // per-instruction `override` supersedes the `unit`-based resolution.
         let entries: Vec<ResolvedClass> = scheduled
             .iter()
-            .map(|(name, _operation, _mnemonic, units)| {
-                match overrides.get(name.as_str()) {
+            .map(
+                |(name, _operation, _mnemonic, units)| match overrides.get(name.as_str()) {
                     Some(ov) => resolve_spec(
                         ExplicitTimingSpec {
                             reads: ov.reads.as_deref(),
@@ -189,13 +599,13 @@ fn emit_machine_models<'a>(
                         &resource_groups,
                         &machine.pipeline,
                     ),
-                }
-            })
+                },
+            )
             .collect();
         for (index, class) in entries.iter().enumerate() {
             per_instruction[index].push(sched_class_ident(class, &mut class_pool));
         }
-        let (fn_ident, model) = machine_model_ts(machine, machine_id, &scheduled);
+        let (fn_ident, model) = machine_model_ts(machine, machine_id, &all_instructions)?;
         model_fns.push(model);
 
         // Select by the machine name, and by its alias when one is declared, so
@@ -230,17 +640,20 @@ fn emit_machine_models<'a>(
     // A target with no `machine` models (e.g. a text-only pseudo-ISA) gets
     // trivial accessors so `features` and `names` are not spuriously unused.
     if machine_names.is_empty() {
-        return Ok((quote! {
-            /// No machine models are declared for this target.
-            pub fn machine_model(_name: &str, _features: &[Feature]) -> Option<tir::backend::sched::MachineModel> {
-                None
-            }
+        return Ok((
+            quote! {
+                /// No machine models are declared for this target.
+                pub fn machine_model(_name: &str, _features: &[Feature]) -> Option<tir::backend::sched::MachineModel> {
+                    None
+                }
 
-            /// No machine models are declared for this target.
-            pub fn machines(_features: &[Feature]) -> Vec<&'static str> {
-                Vec::new()
-            }
-        }, tables));
+                /// No machine models are declared for this target.
+                pub fn machines(_features: &[Feature]) -> Vec<&'static str> {
+                    Vec::new()
+                }
+            },
+            tables,
+        ));
     }
 
     let class_defs = class_pool.classes.iter().enumerate().map(|(i, class)| {
@@ -249,27 +662,30 @@ fn emit_machine_models<'a>(
         quote! { const #ident: tir::backend::sched::InstrSchedClass = #body; }
     });
 
-    Ok((quote! {
-        #(#class_defs)*
+    Ok((
+        quote! {
+            #(#class_defs)*
 
-        #(#model_fns)*
+            #(#model_fns)*
 
-        /// Resolve a machine by its TMDL name or alias. `None` when the name is
-        /// unknown or the machine's `for [...]` clause is disjoint from `features`.
-        pub fn machine_model(name: &str, features: &[Feature]) -> Option<tir::backend::sched::MachineModel> {
-            match name {
-                #(#lookup_arms,)*
-                _ => None,
+            /// Resolve a machine by its TMDL name or alias. `None` when the name is
+            /// unknown or the machine's `for [...]` clause is disjoint from `features`.
+            pub fn machine_model(name: &str, features: &[Feature]) -> Option<tir::backend::sched::MachineModel> {
+                match name {
+                    #(#lookup_arms,)*
+                    _ => None,
+                }
             }
-        }
 
-        /// Tool-facing names (alias preferred) of the machines compatible with `features`.
-        pub fn machines(features: &[Feature]) -> Vec<&'static str> {
-            let mut names = Vec::new();
-            #(#machine_names)*
-            names
-        }
-    }, tables))
+            /// Tool-facing names (alias preferred) of the machines compatible with `features`.
+            pub fn machines(features: &[Feature]) -> Vec<&'static str> {
+                let mut names = Vec::new();
+                #(#machine_names)*
+                names
+            }
+        },
+        tables,
+    ))
 }
 
 /// Distinct scheduling classes across all machines, each emitted once as a
@@ -328,30 +744,32 @@ fn sched_class_ts(c: &ResolvedClass) -> proc_macro2::TokenStream {
 }
 
 fn emit_uops(uops: &[ResolvedMicroOp]) -> Vec<proc_macro2::TokenStream> {
-    uops.iter().map(|uop| {
-        let route_lits = uop.routes.iter().map(|route| {
-            let use_lits = route.iter().map(|use_| {
-                let resource = proc_macro2::Literal::string(&use_.resource);
-                let cycles = proc_macro2::Literal::u16_unsuffixed(use_.cycles);
+    uops.iter()
+        .map(|uop| {
+            let route_lits = uop.routes.iter().map(|route| {
+                let use_lits = route.iter().map(|use_| {
+                    let resource = proc_macro2::Literal::string(&use_.resource);
+                    let cycles = proc_macro2::Literal::u16_unsuffixed(use_.cycles);
+                    quote! {
+                        tir::backend::sched::ResourceUse {
+                            resource: #resource,
+                            cycles: #cycles,
+                        }
+                    }
+                });
                 quote! {
-                    tir::backend::sched::ResourceUse {
-                        resource: #resource,
-                        cycles: #cycles,
+                    tir::backend::sched::ResourceRoute {
+                        resources: &[#(#use_lits),*],
                     }
                 }
             });
             quote! {
-                tir::backend::sched::ResourceRoute {
-                    resources: &[#(#use_lits),*],
+                tir::backend::sched::MicroOp {
+                    routes: &[#(#route_lits),*],
                 }
             }
-        });
-        quote! {
-            tir::backend::sched::MicroOp {
-                routes: &[#(#route_lits),*],
-            }
-        }
-    }).collect()
+        })
+        .collect()
 }
 
 /// Resource-agnostic `unit` defaults, keyed by name. Used both when a machine
@@ -368,6 +786,35 @@ fn collect_unit_defaults(files: &[ast::File]) -> HashMap<&str, &ast::SchedClassD
 /// instruction carrying a `schedule` block. The declaration name keys
 /// per-instruction machine `override`s; operation identity keys the runtime
 /// scheduling table; mnemonic remains the machine-independent cost key.
+fn collect_all_instruction_ops<'a>(
+    files: &'a [ast::File],
+    item_cache: &HashMap<&'a str, &'a ast::Item>,
+) -> Vec<(String, String, String)> {
+    files
+        .iter()
+        .flat_map(|file| file.instructions())
+        .filter_map(|inst| {
+            let params = resolve_params_for_instruction(inst, item_cache);
+            let operation = params
+                .get("OPNAME")
+                .and_then(|(_, value)| value.as_ref())
+                .and_then(resolve_string)
+                .or_else(|| {
+                    params
+                        .get("MNEMONIC")
+                        .and_then(|(_, value)| value.as_ref())
+                        .and_then(resolve_string)
+                })?;
+            let mnemonic = params
+                .get("MNEMONIC")
+                .and_then(|(_, value)| value.as_ref())
+                .and_then(resolve_string)
+                .unwrap_or_else(|| operation.clone());
+            Some((inst.name.clone(), operation, mnemonic))
+        })
+        .collect()
+}
+
 fn collect_scheduled<'a>(
     files: &'a [ast::File],
     item_cache: &HashMap<&'a str, &'a ast::Item>,
@@ -678,11 +1125,9 @@ fn frontend_ts(frontend: Option<&ast::Frontend>) -> proc_macro2::TokenStream {
     let Some(frontend) = frontend else {
         return quote! { None };
     };
-    let bytes_per_cycle = proc_macro2::Literal::u16_unsuffixed(clamp_u16(
-        frontend.fetch.bytes_per_cycle,
-    ));
-    let window_bytes =
-        proc_macro2::Literal::u16_unsuffixed(clamp_u16(frontend.fetch.window_bytes));
+    let bytes_per_cycle =
+        proc_macro2::Literal::u16_unsuffixed(clamp_u16(frontend.fetch.bytes_per_cycle));
+    let window_bytes = proc_macro2::Literal::u16_unsuffixed(clamp_u16(frontend.fetch.window_bytes));
     let alignment = proc_macro2::Literal::u16_unsuffixed(clamp_u16(frontend.fetch.alignment));
     let queue_bytes = proc_macro2::Literal::u16_unsuffixed(clamp_u16(frontend.fetch.queue_bytes));
     let slots = frontend
@@ -692,13 +1137,11 @@ fn frontend_ts(frontend: Option<&ast::Frontend>) -> proc_macro2::TokenStream {
         .map(|slot| proc_macro2::Literal::string(slot));
     let uops_per_cycle =
         proc_macro2::Literal::u16_unsuffixed(clamp_u16(frontend.decode.uops_per_cycle));
-    let queue_uops =
-        proc_macro2::Literal::u16_unsuffixed(clamp_u16(frontend.decode.queue_uops));
+    let queue_uops = proc_macro2::Literal::u16_unsuffixed(clamp_u16(frontend.decode.queue_uops));
     let decoders = frontend.decode.decoders.iter().map(|decoder| {
         let name = proc_macro2::Literal::string(&decoder.name);
-        let max_uops = proc_macro2::Literal::u16_unsuffixed(clamp_u16(
-            decoder.max_uops_per_instruction,
-        ));
+        let max_uops =
+            proc_macro2::Literal::u16_unsuffixed(clamp_u16(decoder.max_uops_per_instruction));
         quote! {
             tir::backend::sched::Decoder {
                 name: #name,
@@ -712,9 +1155,8 @@ fn frontend_ts(frontend: Option<&ast::Frontend>) -> proc_macro2::TokenStream {
             let ways = proc_macro2::Literal::u16_unsuffixed(clamp_u16(cache.ways));
             let line_bytes = proc_macro2::Literal::u16_unsuffixed(clamp_u16(cache.line_bytes));
             let line_uops = proc_macro2::Literal::u16_unsuffixed(clamp_u16(cache.line_uops));
-            let deliver = proc_macro2::Literal::u16_unsuffixed(clamp_u16(
-                cache.deliver_uops_per_cycle,
-            ));
+            let deliver =
+                proc_macro2::Literal::u16_unsuffixed(clamp_u16(cache.deliver_uops_per_cycle));
             quote! {
                 Some(tir::backend::sched::DecodedCache {
                     sets: #sets,
@@ -763,9 +1205,8 @@ fn resolve_resource_expr(
             .iter()
             .flat_map(|resource| resolve_resource_expr(resource, groups, occupancy))
             .collect(),
-        ast::ResourceExpr::All(resources) => resources.iter().fold(
-            vec![Vec::new()],
-            |routes, resource| {
+        ast::ResourceExpr::All(resources) => {
+            resources.iter().fold(vec![Vec::new()], |routes, resource| {
                 let rhs = resolve_resource_expr(resource, groups, occupancy);
                 routes
                     .into_iter()
@@ -777,8 +1218,8 @@ fn resolve_resource_expr(
                         })
                     })
                     .collect()
-            },
-        ),
+            })
+        }
         ast::ResourceExpr::Occupied { resource, cycles } => resolve_resource_expr(
             resource,
             groups,

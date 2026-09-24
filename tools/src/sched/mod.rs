@@ -15,14 +15,14 @@ use tir::Context;
 use tir::backend::TargetMachine;
 use tir::backend::binary::{ObjectFile, SectionKind};
 use tir::backend::liveness::execution_regs;
-use tir::backend::{MachineInstruction, SectionOp, SymbolOp};
+use tir::backend::{ControlFlow, MachineInstruction, SectionOp, SymbolOp};
 use tir::builtin::ModuleOp;
 use tir_sim::scoreboard::{self, Prf, ScoreboardInstr, TimingConfig, phys_regs};
 
 use crate::common::{InputKind, TargetArgs, parse_module};
 use crate::sched::event::View;
 
-mod event;
+pub mod event;
 
 /// The scheduling fallback when no `--model` is selected: a generic single-issue
 /// core with no functional units. It is no target's machine, so every
@@ -91,12 +91,17 @@ pub fn run(args: ToolArgs) -> Result<(), Box<dyn Error>> {
     // its scheduling class and the physical registers it reads/writes.
     let asm_printer = tir::backend::AsmPrinter::new();
     let prf = Prf::for_target(&target.register_info(), &model);
+    let register_widths = if model.fusions.is_empty() {
+        Vec::new()
+    } else {
+        target.register_widths()
+    };
     let mut op_ids = Vec::new();
-    collect_instructions(&context, module.body(), &mut op_ids);
+    collect_instructions(&context, module.body(), true, &mut op_ids);
     let layout = encoded_instruction_layout(target.as_ref(), &context, &module, op_ids.len())?;
 
     let mut base = Vec::with_capacity(op_ids.len());
-    for (index, op_id) in op_ids.into_iter().enumerate() {
+    for (index, (op_id, fusion_boundary)) in op_ids.into_iter().enumerate() {
         let op = context.get_op(op_id);
         let Some(mi) = op.clone().as_interface::<dyn MachineInstruction>() else {
             continue;
@@ -106,9 +111,9 @@ pub fn run(args: ToolArgs) -> Result<(), Box<dyn Error>> {
         let text = asm_printer
             .print_instruction(&context, &op, &tir::backend::RegAssignment::default())?
             .ok_or_else(|| format!("'{}' has no assembly syntax", op.name()))?;
-        let (pc, width_bytes) = layout
-            .as_ref()
-            .and_then(|layout| layout.get(index).copied())
+        let layout_entry = layout.as_ref().and_then(|layout| layout.get(index));
+        let (pc, width_bytes) = layout_entry
+            .map(|(pc, width, _)| (*pc, *width))
             .unwrap_or((0, u16::from(mi.width_bytes().max(1))));
         base.push(ScoreboardInstr {
             text,
@@ -117,6 +122,14 @@ pub fn run(args: ToolArgs) -> Result<(), Box<dyn Error>> {
             defs: phys_regs(&regs.phys_defs, Some(&prf)),
             uses: phys_regs(&regs.phys_uses, Some(&prf)),
             or_updates: phys_regs(info.implicit_or_updates, Some(&prf)),
+            fusion_operands: if model.fusions.is_empty() {
+                Vec::new()
+            } else {
+                tir_sim::timing::fusion_operands(&op, info, Some(&prf), &register_widths)
+            },
+            fusion_boundary,
+            layout_known: layout_entry.is_some(),
+            encoded_bytes: layout_entry.map(|(_, _, bytes)| bytes.clone()),
             branch: None,
             pc,
             width_bytes,
@@ -152,12 +165,12 @@ pub fn run(args: ToolArgs) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-type InstructionLayout = Vec<(u64, u16)>;
+type InstructionLayout = Vec<(u64, u16, Vec<u8>)>;
 
-fn static_unroll_stride(layout: &[(u64, u16)]) -> u64 {
+fn static_unroll_stride(layout: &[(u64, u16, Vec<u8>)]) -> u64 {
     layout
         .iter()
-        .map(|(pc, width)| pc.saturating_add(u64::from(*width)))
+        .map(|(pc, width, _)| pc.saturating_add(u64::from(*width)))
         .max()
         .unwrap_or(0)
 }
@@ -190,12 +203,12 @@ fn text_instruction_layout(object: &ObjectFile, expected: usize) -> Option<Instr
     {
         let alignment = section.align.max(1);
         base = base.div_ceil(alignment) * alignment;
-        layout.extend(
-            section
-                .insn_spans
-                .iter()
-                .map(|(offset, width)| (base + offset, u16::from(*width))),
-        );
+        for (offset, width) in &section.insn_spans {
+            let start = *offset as usize;
+            let end = start.checked_add(usize::from(*width))?;
+            let bytes = section.data.get(start..end)?.to_vec();
+            layout.push((base + offset, u16::from(*width), bytes));
+        }
         base = base.saturating_add(section.data.len() as u64);
     }
     (layout.len() == expected).then_some(layout)
@@ -203,15 +216,23 @@ fn text_instruction_layout(object: &ObjectFile, expected: usize) -> Option<Instr
 
 /// Recursively gather the ids of every machine instruction reachable from `block`,
 /// in program order, descending through `section`/`symbol` containers.
-fn collect_instructions(context: &Context, block: tir::BlockHandle, out: &mut Vec<tir::OpId>) {
+fn collect_instructions(
+    context: &Context,
+    block: tir::BlockHandle,
+    mut boundary_before: bool,
+    out: &mut Vec<(tir::OpId, bool)>,
+) {
     for op_id in block.op_ids() {
         let op = context.get_op(op_id);
         if let Some(section) = op.clone().as_op::<SectionOp>() {
-            collect_instructions(context, section.body(), out);
+            collect_instructions(context, section.body(), true, out);
+            boundary_before = true;
         } else if let Some(symbol) = op.clone().as_op::<SymbolOp>() {
-            collect_instructions(context, symbol.body(), out);
-        } else if op.as_interface::<dyn MachineInstruction>().is_some() {
-            out.push(op_id);
+            collect_instructions(context, symbol.body(), true, out);
+            boundary_before = true;
+        } else if let Some(mi) = op.clone().as_interface::<dyn MachineInstruction>() {
+            out.push((op_id, boundary_before));
+            boundary_before = mi.info().control_flow != ControlFlow::None;
         }
     }
 }

@@ -46,12 +46,18 @@ pub fn inline_functions(files: &mut [ast::File]) -> Vec<(String, Diag)> {
             match item {
                 ast::Item::Instruction(inst) => {
                     let mut stack = Vec::new();
-                    inst.behavior =
-                        inline_expr(&inst.behavior, &fns, &mut stack, &mut diags, &file_name);
+                    inst.behavior = inline_expr(
+                        &inst.behavior,
+                        &fns,
+                        &mut stack,
+                        &mut diags,
+                        &file_name,
+                        false,
+                    );
                     if let Some(encoding) = &inst.encoding {
                         let mut stack = Vec::new();
                         inst.encoding = Some(inline_expr(
-                            encoding, &fns, &mut stack, &mut diags, &file_name,
+                            encoding, &fns, &mut stack, &mut diags, &file_name, false,
                         ));
                     }
                 }
@@ -59,7 +65,7 @@ pub fn inline_functions(files: &mut [ast::File]) -> Vec<(String, Diag)> {
                     if let Some(encoding) = &template.encoding {
                         let mut stack = Vec::new();
                         template.encoding = Some(inline_expr(
-                            encoding, &fns, &mut stack, &mut diags, &file_name,
+                            encoding, &fns, &mut stack, &mut diags, &file_name, false,
                         ));
                     }
                 }
@@ -73,15 +79,26 @@ pub fn inline_functions(files: &mut [ast::File]) -> Vec<(String, Diag)> {
                                 &mut stack,
                                 &mut diags,
                                 &file_name,
+                                false,
                             );
+                        }
+                    }
+                    for fusion in &mut machine.fusions {
+                        if let Some(condition) = &fusion.condition {
+                            let mut stack = Vec::new();
+                            let condition = inline_expr(
+                                condition, &fns, &mut stack, &mut diags, &file_name, true,
+                            );
+                            fusion.condition = Some(crate::utils::inline_let_bindings(&condition));
                         }
                     }
                 }
                 ast::Item::Isa(isa) => {
                     if let Some(trap) = &mut isa.trap_handler {
                         let mut stack = Vec::new();
-                        trap.body =
-                            inline_expr(&trap.body, &fns, &mut stack, &mut diags, &file_name);
+                        trap.body = inline_expr(
+                            &trap.body, &fns, &mut stack, &mut diags, &file_name, false,
+                        );
                     }
                 }
                 _ => {}
@@ -97,10 +114,11 @@ fn inline_expr(
     stack: &mut Vec<String>,
     diags: &mut Vec<(String, Diag)>,
     file_name: &str,
+    fusion_guard: bool,
 ) -> ast::Expr {
     // Inline nested calls everywhere first, then expand this call.
     let expr = crate::utils::map_child_exprs(expr, &mut |child| {
-        inline_expr(child, fns, stack, diags, file_name)
+        inline_expr(child, fns, stack, diags, file_name, fusion_guard)
     });
     let ast::Expr::Call(call) = &expr else {
         return expr;
@@ -108,6 +126,21 @@ fn inline_expr(
     let ast::Expr::Ident(callee) = &*call.callee else {
         return expr;
     };
+    if fusion_guard
+        && matches!(
+            callee.name.as_str(),
+            "same_register"
+                | "overlap_register"
+                | "same_block"
+                | "aligned"
+                | "pc"
+                | "width"
+                | "operand_width"
+                | "encoded_byte"
+        )
+    {
+        return expr;
+    }
     let Some((def, _)) = fns.get(&callee.name) else {
         diags.push((
             file_name.to_string(),
@@ -148,7 +181,7 @@ fn inline_expr(
         .collect();
     let body = substitute(&def.body, &bindings);
     stack.push(callee.name.clone());
-    let inlined = inline_expr(&body, fns, stack, diags, file_name);
+    let inlined = inline_expr(&body, fns, stack, diags, file_name, fusion_guard);
     stack.pop();
     inlined
 }

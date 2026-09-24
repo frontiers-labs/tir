@@ -237,17 +237,134 @@ pub struct MachineModel {
     /// Physical register-file sizes for renaming, keyed by physical-file name. A
     /// file absent here defaults to its architectural register count.
     pub reg_files: &'static [RegFile],
-    /// Macro-fusion rules: an instruction whose name is in a group's `first`,
-    /// immediately followed by one whose name is in its `second`, decodes and
-    /// executes as a single micro-op.
-    pub fusions: &'static [FusionGroup],
+    /// Ordered fusion rules. The first matching contiguous sequence supplies
+    /// its explicit schedule. An unknown guard operand prevents fusion.
+    pub fusions: &'static [FusionPattern],
 }
 
-/// One macro-fusion rule, over op names (see [`MachineModel::fusions`]).
+/// One position in a contiguous fusion pattern. Any listed operation matches.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct FusionGroup {
-    pub first: &'static [&'static str],
-    pub second: &'static [&'static str],
+pub struct FusionStep {
+    pub ops: &'static [&'static str],
+}
+
+/// A named operand of a particular instruction in the matched sequence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FusionOperandRef {
+    pub step: usize,
+    pub name: &'static str,
+}
+
+/// A pure value available before instruction execution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FusionValue {
+    Operand(FusionOperandRef),
+    Regnum(FusionOperandRef),
+    OperandWidth(FusionOperandRef),
+    EncodedByte { step: usize, index: usize },
+    Pc(usize),
+    Width(usize),
+    Integer(i128),
+    Add(&'static FusionValue, &'static FusionValue),
+    Sub(&'static FusionValue, &'static FusionValue),
+    Mul(&'static FusionValue, &'static FusionValue),
+    Div(&'static FusionValue, &'static FusionValue),
+}
+
+/// A pure guard over matched instruction instances. Missing facts evaluate to
+/// unknown, which blocks this rule and all lower-priority rules at that point.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FusionExpr {
+    True,
+    And(&'static [FusionExpr]),
+    Or(&'static [FusionExpr]),
+    Not(&'static FusionExpr),
+    Eq(FusionValue, FusionValue),
+    Ne(FusionValue, FusionValue),
+    Lt(FusionValue, FusionValue),
+    Le(FusionValue, FusionValue),
+    Gt(FusionValue, FusionValue),
+    Ge(FusionValue, FusionValue),
+    SameRegister(FusionValue, FusionValue),
+    OverlapRegister(FusionValue, FusionValue),
+    SameBlock {
+        first: usize,
+        second: usize,
+        bytes: u64,
+    },
+    Aligned {
+        step: usize,
+        bytes: u64,
+    },
+}
+
+/// A register input or output of a fused micro-op.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FusionOperandSelector {
+    Operand(FusionOperandRef),
+    AllInputs(usize),
+    AllOutputs(usize),
+}
+
+/// One memory access of a matched instruction, or all its accesses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FusionMemoryRef {
+    pub step: usize,
+    pub index: Option<usize>,
+}
+
+/// One named execution operation inside a fused schedule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FusionMicroOp {
+    pub name: &'static str,
+    pub routes: &'static [ResourceRoute],
+    /// Reuse one matched instruction's class routes for legacy rules.
+    pub inherit_routes: Option<usize>,
+    pub inputs: &'static [FusionOperandSelector],
+    pub outputs: &'static [FusionOperandSelector],
+    pub depends_on: &'static [&'static str],
+    pub read_cycle: u16,
+    pub write_cycle: u16,
+    /// Original data-memory records served by this micro-op.
+    pub memory: &'static [FusionMemoryRef],
+    /// Original instruction positions whose branch resolves with this uop.
+    pub control_steps: &'static [usize],
+}
+
+/// Members that share one allocation at a pipeline stage. The groups of each
+/// stage must form a partition of all matched members in program order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FusionStageGroup {
+    pub steps: &'static [usize],
+    pub slots: u16,
+}
+
+/// Pipeline costs paid once for a matched sequence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FusionSchedule {
+    pub decode_uops: u16,
+    /// Storage and delivery cost in the decoded-instruction cache.
+    pub decoded_cache_uops: u16,
+    pub decoder: Option<&'static str>,
+    pub decode_cycles: u16,
+    pub rename_slots: u16,
+    pub rob_slots: u16,
+    pub retire_slots: u16,
+    /// Empty arrays use the corresponding scalar cost for the whole sequence.
+    pub decode_groups: &'static [FusionStageGroup],
+    pub rename_groups: &'static [FusionStageGroup],
+    pub rob_groups: &'static [FusionStageGroup],
+    pub retire_groups: &'static [FusionStageGroup],
+    pub uops: &'static [FusionMicroOp],
+}
+
+/// One ordered rule over a finite contiguous sequence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FusionPattern {
+    pub name: &'static str,
+    pub steps: &'static [FusionStep],
+    pub guard: FusionExpr,
+    pub schedule: FusionSchedule,
 }
 
 impl MachineModel {
