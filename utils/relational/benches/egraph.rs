@@ -2,6 +2,10 @@
 //! on the same [`shared::RULES`]/[`shared::SEED_EXPRS`]. Names intern to `u32` (see [`intern`])
 //! so the comparison measures e-matching, not string handling — matching egg's `Copy` names.
 
+#[macro_use]
+#[path = "../../../benchmarks/functions.rs"]
+pub mod functions;
+
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::hint::black_box;
@@ -9,8 +13,9 @@ use std::sync::{Mutex, OnceLock};
 
 use smallvec::{SmallVec, smallvec};
 use tir_adt::{APInt, FxHasher};
-use tir_bench::Suite;
-use tir_relational::{Atom, Guard, HeadOp, LabelFill, Match, Nested, NoExterns, Plan, Query, Rule};
+use tir_relational::{
+    Atom, Extraction, Guard, HeadOp, LabelFill, Match, Nested, NoExterns, Plan, Query, Rule,
+};
 use tir_relational::{ClassId as Id, Engine, Label as ENode};
 
 #[path = "math_shared.rs"]
@@ -396,29 +401,9 @@ fn extract_cost(node: &Math) -> u64 {
     }
 }
 
-fn bench_saturate(suite: &mut Suite) -> tir_bench::Result<()> {
-    if suite.options().list {
-        for &iters in SAT_ITERS {
-            suite.list_function(&format!("tir_math/saturate/{iters}"))?;
-        }
-        return Ok(());
-    }
-    if !SAT_ITERS
-        .iter()
-        .any(|iters| suite.matches(&format!("tir_math/saturate/{iters}")))
-    {
-        return Ok(());
-    }
-    let rules = build_rules();
-    for &iters in SAT_ITERS {
-        suite.function(&format!("tir_math/saturate/{iters}"), |b| {
-            b.iter_batched(seed_all, |mut g| {
-                g.saturate_rules(&rules, &NoExterns, iters, NODE_LIMIT);
-                g
-            });
-        })?;
-    }
-    Ok(())
+fn saturate(mut g: Engine<Math>, rules: &[Rule<Math>], iters: usize) -> Engine<Math> {
+    g.saturate_rules(rules, &NoExterns, iters, NODE_LIMIT);
+    g
 }
 
 /// The pre-semi-naive driver: every round searches every rule over the whole
@@ -451,70 +436,48 @@ fn saturate_naive(g: &mut Engine<Math>, rules: &[Rule<Math>], iters: usize) {
     }
 }
 
-fn bench_saturate_naive(suite: &mut Suite) -> tir_bench::Result<()> {
-    if suite.options().list {
-        for &iters in SAT_ITERS {
-            suite.list_function(&format!("tir_math/saturate_naive/{iters}"))?;
-        }
-        return Ok(());
+fn run_saturate_naive(mut g: Engine<Math>, rules: &[Rule<Math>], iters: usize) -> Engine<Math> {
+    saturate_naive(&mut g, rules, iters);
+    g
+}
+
+fn ematch_all(rules: &[Rule<Math>], g: &Engine<Math>) -> usize {
+    let mut total = 0usize;
+    for rule in rules {
+        let roots = rule.plan.roots(g);
+        total += black_box(rule.plan.search(g, roots, &|_, _| true, false, &NoExterns)).len();
     }
-    if !SAT_ITERS
-        .iter()
-        .any(|iters| suite.matches(&format!("tir_math/saturate_naive/{iters}")))
-    {
-        return Ok(());
-    }
+    total
+}
+
+fn extract_best(g: &Engine<Math>) -> Extraction<'static, Math> {
+    g.extract_best(|_, node| extract_cost(node))
+}
+
+fn bench_saturate(b: &mut functions::Bencher<'_, '_>, iters: usize) {
     let rules = build_rules();
-    for &iters in SAT_ITERS {
-        suite.function(&format!("tir_math/saturate_naive/{iters}"), |b| {
-            b.iter_batched(seed_all, |mut g| {
-                saturate_naive(&mut g, &rules, iters);
-                g
-            });
-        })?;
-    }
-    Ok(())
+    b.iter_batched(seed_all, |g| saturate(g, &rules, iters));
 }
 
-fn bench_ematch(suite: &mut Suite) -> tir_bench::Result<()> {
-    if suite.options().list {
-        return suite.list_function("tir_math/ematch/all_rules");
-    }
-    if !suite.matches("tir_math/ematch/all_rules") {
-        return Ok(());
-    }
-    let (rules, g) = pre_saturated();
-    suite.function("tir_math/ematch/all_rules", |b| {
-        b.iter(|| {
-            let mut total = 0usize;
-            for rule in &rules {
-                let roots = rule.plan.roots(&g);
-                total +=
-                    black_box(rule.plan.search(&g, roots, &|_, _| true, false, &NoExterns)).len();
-            }
-            total
-        });
-    })
+fn bench_saturate_naive(b: &mut functions::Bencher<'_, '_>, iters: usize) {
+    let rules = build_rules();
+    b.iter_batched(seed_all, |g| run_saturate_naive(g, &rules, iters));
 }
 
-fn bench_extract(suite: &mut Suite) -> tir_bench::Result<()> {
-    if suite.options().list {
-        return suite.list_function("tir_math/extract/best");
+benchmarks! {
+    compiler = "tir";
+    saturate_1("tir_math/saturate/1") |b| { bench_saturate(b, SAT_ITERS[0]); }
+    saturate_2("tir_math/saturate/2") |b| { bench_saturate(b, SAT_ITERS[1]); }
+    saturate_3("tir_math/saturate/3") |b| { bench_saturate(b, SAT_ITERS[2]); }
+    saturate_naive_1("tir_math/saturate_naive/1") |b| { bench_saturate_naive(b, SAT_ITERS[0]); }
+    saturate_naive_2("tir_math/saturate_naive/2") |b| { bench_saturate_naive(b, SAT_ITERS[1]); }
+    saturate_naive_3("tir_math/saturate_naive/3") |b| { bench_saturate_naive(b, SAT_ITERS[2]); }
+    bench_ematch("tir_math/ematch/all_rules") |b| {
+        let (rules, g) = pre_saturated();
+        b.iter(|| ematch_all(&rules, &g));
     }
-    if !suite.matches("tir_math/extract/best") {
-        return Ok(());
+    bench_extract("tir_math/extract/best") |b| {
+        let (_, g) = pre_saturated();
+        b.iter(|| black_box(extract_best(&g)));
     }
-    let (_, g) = pre_saturated();
-    suite.function("tir_math/extract/best", |b| {
-        b.iter(|| black_box(g.extract_best(|_, node| extract_cost(node))));
-    })
-}
-
-fn main() -> tir_bench::Result<()> {
-    let mut suite = Suite::from_args(concat!(env!("CARGO_PKG_NAME"), "/egraph"))?;
-    bench_saturate(&mut suite)?;
-    bench_saturate_naive(&mut suite)?;
-    bench_ematch(&mut suite)?;
-    bench_extract(&mut suite)?;
-    suite.finish()
 }

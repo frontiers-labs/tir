@@ -35,5 +35,11 @@ tir-bench.workspace = true
 serde_json.workspace = true
 
 [[bench]]
-name = "programs"
+name = "coremark"
+path = "../fcc/benches/coremark.rs"
+harness = false
+
+[[bench]]
+name = "dhrystone"
+path = "../fcc/benches/dhrystone.rs"
 harness = false

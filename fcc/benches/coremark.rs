@@ -1,9 +1,11 @@
-use super::{Program, Source};
+use tir_bench::program::{Program, Source};
 use tir_bench::sources::GitSource;
 
-pub fn definition() -> Program {
+pub fn definition(root: &std::path::Path) -> Program {
     Program {
         name: "coremark",
+        resources: root.join("fcc/extbench/coremark"),
+        definition: root.join("fcc/benches/coremark.rs"),
         source: Source::Git(GitSource {
             repository: "https://github.com/eembc/coremark.git",
             revision: "1f483d5b8316753a742cbf5590caf5bd0a4e4777",
@@ -24,3 +26,5 @@ pub fn definition() -> Program {
         ..Program::default()
     }
 }
+
+tir_bench::program_main!(definition);

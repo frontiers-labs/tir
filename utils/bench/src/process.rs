@@ -16,7 +16,6 @@ pub struct Command {
     pub args: Vec<OsString>,
     pub directory: PathBuf,
     pub env: BTreeMap<OsString, OsString>,
-    pub cachegrind_regions: bool,
     pub trace_children: bool,
 }
 
@@ -40,7 +39,6 @@ impl Command {
             args: Vec::new(),
             directory: PathBuf::from("."),
             env: BTreeMap::new(),
-            cachegrind_regions: false,
             trace_children: false,
         }
     }
@@ -58,10 +56,6 @@ impl Command {
     }
     pub fn env(mut self, key: impl Into<OsString>, value: impl Into<OsString>) -> Self {
         self.env.insert(key.into(), value.into());
-        self
-    }
-    pub fn cachegrind_regions(mut self, enabled: bool) -> Self {
-        self.cachegrind_regions = enabled;
         self
     }
     /// Include exec'd child processes in Cachegrind measurements when requested.
@@ -110,9 +104,6 @@ impl Command {
                 "cachegrind output directory already contains profiles: {}",
                 output_dir.display()
             );
-            if self.cachegrind_regions {
-                command.arg("--instr-at-start=no");
-            }
             command
                 .args([
                     "--tool=cachegrind",

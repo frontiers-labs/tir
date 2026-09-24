@@ -137,79 +137,44 @@ contain a solution.
 
 ### Running benchmarks
 
-Run `cargo bench` from the workspace root to measure Rust functions and the
-compilation/runtime of the C workloads. Cargo builds the compilers in its bench
-profile. Workloads are Rust modules under `benchmarks/programs`; `utils/bench`
-provides the shared harness. No benchmark TOML files are needed.
+Benchmarks live in each package's `benches` directory and are declared in its
+`Cargo.toml`. Run a target with `cargo bench -p <package> --bench <target>`.
+Pass `-- --help` to see that target's options.
 
-```sh
-cargo bench -- --list
-cargo bench -- --filter '*dhrystone*' --level O2 --samples 5
-cargo bench -p fcc --bench programs -- --compiler fcc --phase compile
-cargo bench -- --engine cachegrind --filter '*dhrystone*' --phase compile
-cargo bench -- --cpu 2
-```
+Rust function benchmarks use Criterion for native timing. The
+`nightly-cachegrind` feature selects Gungraun for instruction, cache, and branch
+counts. Profiling requires Valgrind, its build headers, and a matching
+`gungraun-runner`. Use the dependency versions recorded in `Cargo.lock`.
+Declare each function case once with `benchmarks!` from
+`benchmarks/functions.rs`. Use `b.iter` for the measured operation, or
+`b.iter_batched` to prepare fresh input outside measurement. The declaration
+supplies both runners and the result inventory. CI discovers Cargo benchmark
+targets automatically; adding a case needs no CI or importer edits. Declare
+fixture contents from outside the benchmark directory with `inputs` so changes
+invalidate the baseline.
 
-The full default workload includes the pinned GCC torture corpus and can take a
-long time. Filtering does not change workload arguments. The harness's `--list`
-does no corpus fetching or benchmark compiler invocation; Cargo may build the
-targets first. Git corpora are cached in `target/bench-sources`;
-`TIR_BENCH_SOURCE_CACHE` overrides that path, and `--offline` rejects cache misses.
-CoreMark and Dhrystone also run through the LLVM-input target in `tir-tools`,
-sharing prepared IR with the Clang backend controls.
+External program benchmarks use `utils/bench`. Their Rust definitions declare
+sources, fixed arguments, reference compilers, and output validators. The
+harness prepares inputs and validates results outside measurement, then runs
+compiler variants in rotated order. `--list` lists cases without fetching
+sources or invoking benchmark compilers. Use `--filter` and `--phase` to limit
+work, and `--offline` to reject source-cache misses. Filtering must not change
+workload arguments.
 
-Each Cargo target writes a unique bundle under `target/bench`, or `--output DIR`.
-Relative output and baseline paths resolve from the workspace root.
-`summary.bmf.json` uses Bencher Metric Format. `results.json` retains samples,
-workload identity, environment and status; command logs and Cachegrind profiles
-remain alongside it. A failed run never becomes a complete baseline. Compare an
-identical selection with `--baseline PATH`, naming its bundle or `results.json`.
-Use `--min-cases N` in a focused CI job to reject empty selections.
+Program runs write samples, workload identities, command logs, and a Bencher
+Metric Format summary under `target/bench`. `--output` changes that location;
+relative paths resolve from the workspace root. Baseline comparisons reject
+incompatible workload identities. Change the declared inputs or contract when
+measurement boundaries change, so old results cannot silently pass a gate.
 
-Native runs report nanoseconds and peak process RSS in bytes. RSS is the kernel
-process high-water mark, not simultaneous process-tree memory. External process
-measurements require GNU `/usr/bin/time` as a small accounting supervisor: direct
-`wait4` RSS includes the spawning harness's memory on Linux. RSS is read from a
-separate output file; wall and CPU time include supervisor overhead. Function cases
-exclude declared setup and report per-operation time; they do not report RSS.
-Program output verification runs outside measurement. Compilation validates the
-initial executable and caches successful object hashes; unchanged outputs need
-only a hash check, while changed outputs are linked and validated again. Compiler variants run in
-rotated order with 3 warmups and 15 samples by default; override these explicitly
-with `--warmups` and `--samples`. Native function calibration discards a cold call
-and grows warm batches toward `--sample-time-ms`, which defaults to 100 ms.
-Compiler phase diagnostics are collected in
-untimed preparation; primary timing runs do not enable that instrumentation.
+Native program measurements require GNU `/usr/bin/time`. They report elapsed
+time and peak process RSS, not simultaneous process-tree memory. Cachegrind
+counts are useful in shared CI but do not replace native performance checks.
+For native regression gates, use a dedicated Linux runner, pin an allowed CPU,
+and control frequency policy, sibling-core activity, and background load.
+The harness records the environment; it does not configure the host.
 
-Cachegrind requires Valgrind on PATH and records instruction/cache/branch counts
-instead of instrumented time or RSS. It runs one fixed-work sample. Child execution tracing defaults off and compiler
-helpers enable it for GCC/Clang driver processes. Rust function
-profiling additionally requires `--features tir-bench/cachegrind` on the Cargo
-command and the headers and executable from Valgrind 3.22 or newer. Install
-the headers before building. For an isolated installation, set
-`VALGRIND_REQUESTS_VALGRIND_INCLUDE` to its include directory. If the headers were
-installed after a native build, rebuild the bindings with
-`cargo clean -p valgrind-requests` before profiling. Use
-`--iterations N` to choose a fixed operation count. Counts are useful in shared
-CI but are not a substitute for native performance measurements.
-
-Use a dedicated Linux runner for native regression gates. Pin an allowed CPU,
-reserve its sibling cores, and control frequency/boost policy and background
-work. The harness takes a cooperative host lock, checks that a requested CPU is
-allowed, and verifies affinity before completing the run. It records the host
-and tool identities. Frequency, thermal and background-load control belong to
-the runner configuration; the harness does not tune or audit privileged host
-policy. Pin software and source versions too. A container alone does not control
-host contention.
-
-Adding a workload means adding a Rust module and registering it in the package's
-Cargo harness. Shared command/source helpers handle common preparation; custom
-Rust setup and validators can define new behavior without changing a manifest
-schema. Keep input identities and fixed arguments explicit so incompatible
-baselines are rejected. Function benchmarks can call `set_contract_version` to
-mark changes to their input generation or measurement boundaries. The optional
-`cachegrind` feature builds client bindings and requires Clang/libclang. Native
-benchmarks do not require that feature, those bindings, or Valgrind.
+The nightly workflow defines the scheduled targets and artifact publication.
 
 Use `cargo xtask fp-check` to record pinned GCC floating-point observations,
 compare cumulative semantic requirements, and summarize saved reports.

@@ -1,6 +1,7 @@
-#[path = "../../benchmarks/programs/mod.rs"]
-#[allow(dead_code)]
-mod programs;
+#[path = "../../fcc/benches/coremark.rs"]
+mod coremark_bench;
+#[path = "../../fcc/benches/torture.rs"]
+mod torture_bench;
 
 use std::collections::HashMap;
 use std::fs;
@@ -113,10 +114,10 @@ pub(crate) fn built_fcc(sh: &Shell, root: &Path, fcc: Option<PathBuf>) -> anyhow
 /// units.
 pub(crate) fn cases(_sh: &Shell, root: &Path) -> anyhow::Result<Vec<Case>> {
     let mut cases = Vec::new();
-    for program in programs::definitions()
-        .into_iter()
-        .filter(|program| matches!(program.name, "torture" | "coremark"))
-    {
+    for program in [
+        coremark_bench::definition(root),
+        torture_bench::definition(root),
+    ] {
         let prepared = program.prepare(
             root,
             &tir_bench::source_cache(&root.join("target")),

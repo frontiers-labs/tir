@@ -22,8 +22,13 @@ doctest = false
 
 [dev-dependencies]
 anyhow.workspace = true
+criterion.workspace = true
+gungraun.workspace = true
 serde_json.workspace = true
 tir-bench.workspace = true
+
+[features]
+nightly-cachegrind = []
 
 [[bin]]
 bench = false
@@ -38,5 +43,17 @@ harness = false
 workspace = true
 
 [[bench]]
-name = "programs"
+name = "coremark"
+harness = false
+
+[[bench]]
+name = "dhrystone"
+harness = false
+
+[[bench]]
+name = "torture"
+harness = false
+
+[[bench]]
+name = "whetstone"
 harness = false

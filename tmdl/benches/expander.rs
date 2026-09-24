@@ -1,4 +1,6 @@
-use tir_bench::Suite;
+#[macro_use]
+#[path = "../../benchmarks/functions.rs"]
+pub mod functions;
 
 use tmdl::{MacroTable, StringArena, collect_macros, expand, lex};
 
@@ -14,32 +16,23 @@ const DEFS: &[&str] = &[
     include_str!("../../backends/x86_64/defs/float.tmdl"),
 ];
 
-fn main() -> tir_bench::Result<()> {
-    let mut suite = Suite::from_args(concat!(env!("CARGO_PKG_NAME"), "/expander"))?;
-    if suite.options().list {
-        suite.list_function("x86_defs/collect_and_expand")?;
-        return suite.finish();
-    }
-    if !suite.matches("x86_defs/collect_and_expand") {
-        return suite.finish();
-    }
-    let input = DEFS.join("\n");
-    let (tokens, errs) = lex(&input);
-    assert!(errs.is_empty());
-
-    // Synthesized-string arena lifetime is unified with the token lifetime, so
-    // it must outlive the loop; it grows across iterations but the run is short.
-    let arena = StringArena::new();
-    suite.set_throughput(input.len() as u64);
-    suite.function("x86_defs/collect_and_expand", |b| {
+benchmarks! {
+    compiler = "tir", inputs = DEFS;
+    x86_defs_collect_and_expand("x86_defs/collect_and_expand", functions::Settings {
+        bytes: Some(DEFS.join("\n").len() as u64),
+        ..Default::default()
+    }) |b| {
+        let input = DEFS.join("\n");
+        let (tokens, errors) = lex(&input);
+        assert!(errors.is_empty());
+        let arena = StringArena::new();
         b.iter(|| {
             let mut table = MacroTable::new();
-            let mut diags = Vec::new();
-            let toks = collect_macros("<bench>", tokens.clone(), &mut table, &mut diags);
-            assert!(diags.is_empty());
-            let (_out, diags) = expand("<bench>", toks, &table, &arena);
-            assert!(diags.is_empty());
-        })
-    })?;
-    suite.finish()
+            let mut diagnostics = Vec::new();
+            let tokens = collect_macros("<bench>", tokens.clone(), &mut table, &mut diagnostics);
+            assert!(diagnostics.is_empty());
+            let (_output, diagnostics) = expand("<bench>", tokens, &table, &arena);
+            assert!(diagnostics.is_empty());
+        });
+    }
 }

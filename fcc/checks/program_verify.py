@@ -37,7 +37,7 @@ seedcrc           : 0xe9f5
 Correct operation validated. See README.md for run and reporting rules.
 CoreMark 1.0 : 123.45 / GCC
 """
-    validator = ROOT.parent / "benchmarks/programs/coremark/verify.py"
+    validator = ROOT / "extbench/coremark/verify.py"
     assert run(validator, output, ["0", "0", "0", "1000000"]).returncode == 0
     assert run(validator, output.replace("0xe714", "0x0000"), ["0", "0", "0", "1000000"]).returncode != 0
     assert run(validator, output.replace("0x988c", "0x1234"), ["0", "0", "0", "1000000"]).returncode != 0
@@ -54,13 +54,13 @@ CoreMark 1.0 : 123.45 / GCC
 
 
 def test_dhrystone() -> None:
-    expected = (ROOT.parent / "benchmarks/programs/dhrystone/expected.out").read_text()
+    expected = (ROOT / "extbench/dhrystone/expected.out").read_text()
     output = "Execution starts, 100 runs through Dhrystone\n\n"
     output += "Final values of the variables used in the benchmark:\n" + expected.replace(
         "100000010", "110"
     ).replace("<pointer>", "0x1234")
     output += "Measured time 0.01 sec\n"
-    validator = ROOT.parent / "benchmarks/programs/dhrystone/verify.py"
+    validator = ROOT / "extbench/dhrystone/verify.py"
     assert run(validator, output, ["100"]).returncode == 0
     assert run(validator, output.replace("110", "111", 1), ["100"]).returncode != 0
     assert run(validator, output, ["101"]).returncode != 0

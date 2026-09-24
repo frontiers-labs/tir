@@ -11,13 +11,13 @@ The local port adds C17 function declarations, standard library headers,
 pointer-safe diagnostic printing, and an explicit successful return from
 `main`. The iteration count comes from the command line instead of stdin.
 The measurement loop and benchmark procedure bodies retain the upstream
-operations. The manifest runs 100 million iterations with `time()` timing.
+operations. The benchmark definition runs 100 million iterations with `time()` timing.
 The external runner reports wall time independently of Dhrystone's timer.
 
 Check a built executable with:
 
 ```sh
-python3 benchmarks/programs/dhrystone/verify.py ./dhrystone
+python3 fcc/extbench/dhrystone/verify.py ./dhrystone
 ```
 
 The check compares all final values with `expected.out` and requires the two

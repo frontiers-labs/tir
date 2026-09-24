@@ -1,6 +1,5 @@
 #![cfg(target_os = "linux")]
 
-use std::cell::Cell;
 use std::path::{Path, PathBuf};
 
 use clap::Parser;
@@ -10,16 +9,8 @@ use tir_bench::{Options, ProcessCase, Suite, process::Command};
 const NAMESPACE: &str = "tir-bench/runner-test";
 
 fn options(output: &Path) -> Options {
-    let mut options = Options::try_parse_from([
-        "runner",
-        "--samples",
-        "2",
-        "--warmups",
-        "0",
-        "--iterations",
-        "1",
-    ])
-    .unwrap();
+    let mut options =
+        Options::try_parse_from(["runner", "--samples", "2", "--warmups", "0"]).unwrap();
     options.output = Some(output.to_owned());
     options
 }
@@ -38,39 +29,18 @@ fn process_case(script: &str, metadata: Value) -> ProcessCase {
     }
 }
 
-fn add_function(suite: &mut Suite) -> tir_bench::Result<()> {
-    let setups = Cell::new(0);
-    let operations = Cell::new(0);
-    suite.function("batched", |b| {
-        b.iter_batched(
-            || {
-                setups.set(setups.get() + 1);
-                7
-            },
-            |input| {
-                operations.set(operations.get() + 1);
-                input + 1
-            },
-        );
-    })?;
-    assert_eq!(setups.get(), 2);
-    assert_eq!(operations.get(), 2);
-    Ok(())
-}
-
 fn run_suite(
     options: Options,
     script: &str,
     metadata: Value,
-    include_function: bool,
+    include_case: bool,
 ) -> (PathBuf, tir_bench::Result<()>) {
     let mut suite = Suite::new(NAMESPACE, options).unwrap();
     let path = suite.artifacts().to_owned();
-    suite
-        .process_group(vec![process_case(script, metadata)])
-        .unwrap();
-    if include_function {
-        add_function(&mut suite).unwrap();
+    if include_case {
+        suite
+            .process_group(vec![process_case(script, metadata)])
+            .unwrap();
     }
     (path, suite.finish())
 }
@@ -93,7 +63,7 @@ fn native_suite_records_validates_and_compares() {
     baseline_status.unwrap();
     let baseline = result(&baseline_path);
     assert_eq!(baseline["status"], "complete");
-    assert_eq!(baseline["cases"].as_array().unwrap().len(), 2);
+    assert_eq!(baseline["cases"].as_array().unwrap().len(), 1);
     let process = baseline["cases"]
         .as_array()
         .unwrap()
@@ -125,7 +95,6 @@ fn native_suite_records_validates_and_compares() {
         json!(median)
     );
     assert!(bmf[format!("{NAMESPACE}/process")]["peak_process_rss_bytes"]["value"].is_number());
-    assert!(bmf[format!("{NAMESPACE}/batched")]["latency"]["value"].is_number());
 
     let mut compatible = options(temp.path());
     compatible.baseline = Some(baseline_path.clone());

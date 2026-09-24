@@ -5,12 +5,12 @@ workload from <https://www.netlib.org/benchmark/whetstone.c>, retrieved on
 2026-09-11. Its SHA-256 digest is
 `333e4ceca042c146f63eec605573d16ae8b07166cbc44a17bec1ea97c6f1efbf`.
 
-The benchmark manifest runs enough loops for the fastest reference compiler to
+The benchmark definition runs enough loops for the fastest reference compiler to
 take several wall-clock seconds on the validation host. Run the numerical check
 from the repository root:
 
 ```sh
-python3 benchmarks/programs/whetstone/verify.py --fcc target/release/fcc
+python3 fcc/extbench/whetstone/verify.py --fcc target/release/fcc
 ```
 
 The checker builds `PRINTOUT` variants at `-O0` and `-O2`, compares all ten

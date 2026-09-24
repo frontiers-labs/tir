@@ -8,8 +8,12 @@ edition = "2024"
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 
+[features]
+nightly-cachegrind = []
+
 [dev-dependencies]
-tir-bench.workspace = true
+criterion.workspace = true
+gungraun.workspace = true
 
 [[bench]]
 name = "pbqp"

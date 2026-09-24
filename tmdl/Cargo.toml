@@ -26,6 +26,7 @@ typed-arena.workspace = true
 [features]
 default = ["json"]
 json = ["dep:schemars"]
+nightly-cachegrind = []
 
 [lib]
 bench = false
@@ -38,7 +39,8 @@ name = "tmdlc"
 path = "bin.rs"
 
 [dev-dependencies]
-tir-bench.workspace = true
+criterion.workspace = true
+gungraun.workspace = true
 
 [[bench]]
 name = "lexer"

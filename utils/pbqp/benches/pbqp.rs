@@ -1,6 +1,8 @@
-use std::hint::black_box;
+#[macro_use]
+#[path = "../../../benchmarks/functions.rs"]
+pub mod functions;
 
-use tir_bench::Suite;
+use std::hint::black_box;
 use tir_pbqp::{PbqpMatrix, PbqpNodeId, PbqpProblem, solve};
 
 fn dense_problem(node_count: usize, alternative_count: usize) -> PbqpProblem {
@@ -70,51 +72,31 @@ fn block_problem(node_count: usize, alternative_count: usize) -> PbqpProblem {
     problem
 }
 
-fn bench_block_search(suite: &mut Suite) -> tir_bench::Result<()> {
-    for node_count in [512, 4096] {
-        let name = format!("block_search/{node_count}");
-        if suite.options().list {
-            suite.list_function(&name)?;
-            continue;
-        }
-        if !suite.matches(&name) {
-            continue;
-        }
-        let problem = block_problem(node_count, 8);
-        suite.function(&name, |b| {
-            b.iter_batched(
-                || problem.clone(),
-                |problem| black_box(solve(&problem).expect("PBQP should be solvable")),
-            );
-        })?;
-    }
-    Ok(())
+fn solve_problem(problem: &PbqpProblem) {
+    black_box(solve(problem).expect("PBQP should be solvable"));
 }
 
-fn bench_dense_search(suite: &mut Suite) -> tir_bench::Result<()> {
-    for node_count in [16, 32] {
-        let name = format!("dense_search/{node_count}");
-        if suite.options().list {
-            suite.list_function(&name)?;
-            continue;
-        }
-        if !suite.matches(&name) {
-            continue;
-        }
-        let problem = dense_problem(node_count, 4);
-        suite.function(&name, |b| {
-            b.iter_batched(
-                || problem.clone(),
-                |problem| black_box(solve(&problem).expect("PBQP should be solvable")),
-            );
-        })?;
-    }
-    Ok(())
+fn bench_dense(b: &mut functions::Bencher<'_, '_>, nodes: usize) {
+    let problem = dense_problem(nodes, 4);
+    b.iter_batched(|| problem.clone(), |problem| solve_problem(&problem));
 }
 
-fn main() -> tir_bench::Result<()> {
-    let mut suite = Suite::from_args(concat!(env!("CARGO_PKG_NAME"), "/pbqp"))?;
-    bench_dense_search(&mut suite)?;
-    bench_block_search(&mut suite)?;
-    suite.finish()
+fn bench_block(b: &mut functions::Bencher<'_, '_>, nodes: usize) {
+    let problem = block_problem(nodes, 8);
+    b.iter_batched(|| problem.clone(), |problem| solve_problem(&problem));
+}
+
+fn block_settings() -> functions::Settings {
+    functions::Settings {
+        samples: Some(20),
+        ..Default::default()
+    }
+}
+
+benchmarks! {
+    compiler = "tir";
+    dense_search_16("pbqp/dense_search/16") |b| { bench_dense(b, 16); }
+    dense_search_32("pbqp/dense_search/32") |b| { bench_dense(b, 32); }
+    block_search_512("pbqp/block_search/512", block_settings()) |b| { bench_block(b, 512); }
+    block_search_4096("pbqp/block_search/4096", block_settings()) |b| { bench_block(b, 4096); }
 }

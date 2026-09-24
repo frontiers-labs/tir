@@ -46,12 +46,6 @@ pub struct Options {
     pub samples: u32,
     #[arg(long, default_value_t = 3)]
     pub warmups: u32,
-    /// Fixed function iterations per sample; zero calibrates native functions.
-    #[arg(long, default_value_t = 0)]
-    pub iterations: u64,
-    /// Target duration of each calibrated native function sample in milliseconds.
-    #[arg(long, default_value_t = 100, value_parser = clap::value_parser!(u64).range(1..))]
-    pub sample_time_ms: u64,
     /// Timeout in seconds for each subprocess, including preparation.
     #[arg(long, default_value_t = DEFAULT_TIMEOUT_SECS, value_parser = clap::value_parser!(u64).range(1..))]
     pub timeout: u64,
@@ -77,6 +71,4 @@ pub struct Options {
     pub min_cases: usize,
     #[arg(long, hide = true)]
     pub bench: bool,
-    #[arg(long, hide = true)]
-    pub worker: Option<String>,
 }

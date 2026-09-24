@@ -30,11 +30,8 @@ issue_for() {
 reproduce() {
   case "$1" in
     corpus) echo 'cargo xtask fcc-fuzz --corpus' ;;
-    benchmarks)
-      printf '%s\n' \
-        "cargo bench --locked -p fcc --bench programs -- --engine cachegrind --phase compile --filter '{fcc/dhrystone,fcc/coremark}/*/O2/compile/*' --compiler fcc --level O2 --min-cases 8" \
-        'cargo bench --locked -p tir-pbqp --bench pbqp --features tir-bench/cachegrind -- --engine cachegrind --filter dense_search/16 --iterations 1 --min-cases 1'
-      ;;
+    benchmark-programs) echo 'bash .github/scripts/run-nightly-benchmarks.sh programs' ;;
+    benchmark-micro) echo 'bash .github/scripts/run-nightly-benchmarks.sh micro' ;;
     differential-fuzz) echo 'cargo xtask fcc-fuzz --self-test' ;;
     libfuzzer) echo 'cargo +nightly fuzz run --fuzz-dir utils/fuzz <target>' ;;
     lints) echo 'cargo clippy --workspace --all-targets --no-deps -- -D warnings' ;;

@@ -3,7 +3,7 @@ name: Nightly
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 3 * * *"
+    - cron: "0 0 * * *"
 
 permissions:
   contents: read
@@ -151,9 +151,9 @@ jobs:
 
   # Cargo builds the measured compiler in the bench profile. Shared CI uses
   # instruction counts; native wall-time gates require a dedicated runner.
-  benchmarks:
+  benchmark-programs:
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    timeout-minutes: 360
     env:
       CARGO_INCREMENTAL: "0"
     steps:
@@ -165,7 +165,6 @@ jobs:
           shared-key: bench
       - run: sudo apt-get update && sudo apt-get install -y clang libclang-dev valgrind time
       - name: Identify the measurement environment
-        id: environment
         shell: bash
         run: |
           {
@@ -177,59 +176,108 @@ jobs:
             uname -r
             lscpu | sed -n '/Model name/p'
           } > benchmark-environment.txt
-          echo "digest=$(sha256sum benchmark-environment.txt | cut -d ' ' -f1)" >> "$GITHUB_OUTPUT"
       - uses: actions/cache@v6
         with:
           path: target/bench-sources
           key: coremark-source-1f483d5b8316753a742cbf5590caf5bd0a4e4777
-      # Nightly runs use trusted default-branch baselines. A changed harness,
-      # workload or toolchain starts a new baseline instead of mixing contracts.
-      - uses: actions/cache/restore@v6
-        with:
-          path: |
-            benchmark-programs-baseline.json
-            benchmark-functions-baseline.json
-          key: bench-v2-${{ steps.environment.outputs.digest }}-${{ hashFiles('.github/workflows/nightly.yaml', 'Cargo.toml', 'Cargo.lock', 'utils/bench/**', 'benchmarks/programs/**', 'utils/pbqp/benches/**') }}-${{ github.run_id }}
-          restore-keys: bench-v2-${{ steps.environment.outputs.digest }}-${{ hashFiles('.github/workflows/nightly.yaml', 'Cargo.toml', 'Cargo.lock', 'utils/bench/**', 'benchmarks/programs/**', 'utils/pbqp/benches/**') }}-
-      # Shared runners gate fixed-work instruction counts. Output validation
-      # remains outside profiling; native time needs a dedicated runner.
-      - shell: bash
-        run: |
-          baseline=()
-          if [ -f benchmark-programs-baseline.json ]; then
-            baseline=(--baseline "$PWD/benchmark-programs-baseline.json")
-          fi
-          cargo bench --locked -p fcc --bench programs -- \
-            --engine cachegrind --phase compile --filter '{fcc/dhrystone,fcc/coremark}/*/O2/compile/*' \
-            --compiler fcc --level O2 --min-cases 8 --output "$PWD/bench-results/programs" "${baseline[@]}"
-      - shell: bash
-        run: |
-          baseline=()
-          if [ -f benchmark-functions-baseline.json ]; then
-            baseline=(--baseline "$PWD/benchmark-functions-baseline.json")
-          fi
-          cargo bench --locked -p tir-pbqp --bench pbqp --features tir-bench/cachegrind -- \
-            --engine cachegrind --filter dense_search/16 --iterations 1 --min-cases 1 \
-            --output "$PWD/bench-results/functions" "${baseline[@]}"
+      # Output validation stays outside profiling. Full program execution uses
+      # the same fixed arguments as local runs and needs a longer timeout.
+      - name: Profile program compilation and runtime
+        run: bash .github/scripts/run-nightly-benchmarks.sh programs
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: benchmarks
+          name: benchmark-programs
           path: |
             bench-results
             benchmark-environment.txt
-      - shell: bash
-        run: |
-          cp bench-results/programs/*/results.json benchmark-programs-baseline.json
-          cp bench-results/functions/*/results.json benchmark-functions-baseline.json
-          jq -e '.status == "complete"' benchmark-programs-baseline.json >/dev/null
-          jq -e '.status == "complete"' benchmark-functions-baseline.json >/dev/null
-      - uses: actions/cache/save@v6
+
+  benchmark-micro:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    env:
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: rui314/setup-mold@v1
+      - uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            benchmark-programs-baseline.json
-            benchmark-functions-baseline.json
-          key: bench-v2-${{ steps.environment.outputs.digest }}-${{ hashFiles('.github/workflows/nightly.yaml', 'Cargo.toml', 'Cargo.lock', 'utils/bench/**', 'benchmarks/programs/**', 'utils/pbqp/benches/**') }}-${{ github.run_id }}
+          shared-key: bench-micro
+      - run: sudo apt-get update && sudo apt-get install -y clang libclang-dev valgrind
+      - run: cargo install --locked --version 0.19.4 gungraun-runner
+      - name: Profile Rust functions
+        run: bash .github/scripts/run-nightly-benchmarks.sh micro
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: benchmark-micro
+          path: target/gungraun
+
+  benchboard-publish:
+    if: github.ref == 'refs/heads/master'
+    needs: [benchmark-programs, benchmark-micro]
+    runs-on: ubuntu-24.04
+    env:
+      BENCHBOARD_URL: ${{ vars.BENCHBOARD_URL || vars.BENCHBOARD_API_URL || 'https://benchboard-api.terantamoulamp.workers.dev' }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
+        with:
+          repository: frontiers-labs/benchboard
+          ref: a77547ad514754f4ac91b17f92b5675a1aab9fff
+          path: .benchboard
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - run: npm ci --prefix .benchboard
+      - uses: actions/download-artifact@v8
+        with:
+          name: benchmark-programs
+          path: incoming/programs
+      - uses: actions/download-artifact@v8
+        with:
+          name: benchmark-micro
+          path: incoming/micro
+      - name: Import Cachegrind results
+        shell: bash
+        run: |
+          mapfile -t reports < <(find incoming/programs -name results.json)
+          [ "${#reports[@]}" -eq 2 ] || { echo 'Expected two complete program reports' >&2; exit 1; }
+          .benchboard/node_modules/.bin/tsx .benchboard/cli/main.ts import-tir \
+            --input "${reports[0]}" --input "${reports[1]}" \
+            --id "tir-${{ github.run_id }}-${{ github.run_attempt }}" \
+            --project tir --commit "${{ github.sha }}" --branch master --kind nightly \
+            --machine github-ubuntu-24.04 --config cachegrind-v1 \
+            --timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --output benchboard-run.json
+          python3 .github/scripts/benchboard-add-gungraun.py benchboard-run.json incoming/micro
+      - uses: actions/upload-artifact@v7
+        with:
+          name: benchboard-run
+          path: benchboard-run.json
+      - name: Compare with the previous nightly
+        id: comparison
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          .benchboard/node_modules/.bin/tsx .benchboard/cli/main.ts check \
+            --run benchboard-run.json --branch master --threshold 5 > comparison.json
+          status=$?
+          set -e
+          cat comparison.json
+          if [ "$status" -eq 2 ] && python3 -c 'import json; r=json.load(open("comparison.json")); assert r["status"] == "incomparable" and r["baselineId"] is None and r["reason"] == "No matching nightly baseline"'; then
+            exit 0
+          fi
+          exit "$status"
+      - name: Store nightly result
+        env:
+          BENCHBOARD_TOKEN: ${{ secrets.BENCHBOARD_TOKEN }}
+        run: .benchboard/node_modules/.bin/tsx .benchboard/cli/main.ts submit --run benchboard-run.json
+      - name: Fail on regression
+        if: steps.comparison.outcome == 'failure'
+        run: exit 1
 
   libfuzzer:
     # Only for the xtask binary, which reads the records embedded in open
@@ -305,7 +353,9 @@ jobs:
         lints,
         corpus,
         differential-fuzz,
-        benchmarks,
+        benchmark-programs,
+        benchmark-micro,
+        benchboard-publish,
         libfuzzer,
       ]
     runs-on: ubuntu-latest

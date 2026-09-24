@@ -9,10 +9,15 @@ smallvec = "1.15.2"
 tir-adt.workspace = true
 
 [dev-dependencies]
-tir-bench.workspace = true
+serde_json.workspace = true
+criterion.workspace = true
+gungraun.workspace = true
 egg = "0.11"
 proptest.workspace = true
 smallvec = "1.15.2"
+
+[features]
+nightly-cachegrind = []
 
 [[bench]]
 name = "egraph"

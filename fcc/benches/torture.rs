@@ -1,9 +1,11 @@
-use super::{Program, Source};
+use tir_bench::program::{Program, Source};
 use tir_bench::sources::GitSource;
 
-pub fn definition() -> Program {
+pub fn definition(root: &std::path::Path) -> Program {
     Program {
         name: "torture",
+        resources: root.join("fcc/extbench/torture"),
+        definition: root.join("fcc/benches/torture.rs"),
         source: Source::Git(GitSource {
             repository: "https://github.com/gcc-mirror/gcc.git",
             revision: "9aab80ddc5b2fa0eef80008e718067ab45f42c50",
@@ -28,7 +30,7 @@ fn prepare_sources(
     .map(|name| root.join("fcc/tests").join(name))
     .to_vec();
     let mut sources = Vec::new();
-    super::collect(&directory.join("execute"), &mut sources, "c")?;
+    tir_bench::program::collect(&directory.join("execute"), &mut sources, "c")?;
     sources.sort();
     let expected = inventory()
         .map(|name| directory.join(name))
@@ -45,7 +47,7 @@ fn prepare_sources(
 }
 
 // Generated from the pinned Git tree, so filtering and listing never need a fetch.
-const INVENTORY: &str = include_str!("torture/sources.txt");
+const INVENTORY: &str = include_str!("../extbench/torture/sources.txt");
 
 fn inventory() -> impl Iterator<Item = &'static str> {
     INVENTORY
@@ -55,8 +57,8 @@ fn inventory() -> impl Iterator<Item = &'static str> {
 
 fn declared_sources() -> Vec<&'static str> {
     let excluded = [
-        include_str!("../../fcc/tests/gcc-torture-known-failures.txt"),
-        include_str!("../../fcc/tests/gcc-torture-execute-known-failures.txt"),
+        include_str!("../tests/gcc-torture-known-failures.txt"),
+        include_str!("../tests/gcc-torture-execute-known-failures.txt"),
     ]
     .into_iter()
     .flat_map(str::lines)
@@ -66,3 +68,5 @@ fn declared_sources() -> Vec<&'static str> {
         .filter(|name| !excluded.contains(name))
         .collect()
 }
+
+tir_bench::program_main!(definition);

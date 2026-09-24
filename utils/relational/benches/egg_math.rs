@@ -7,6 +7,10 @@
 //! exactly as the TIR bench does. The `SimpleScheduler` applies every match each
 //! iteration, matching TIR's `saturate`.
 
+#[macro_use]
+#[path = "../../../benchmarks/functions.rs"]
+pub mod functions;
+
 use std::hint::black_box;
 use std::time::Duration;
 
@@ -14,7 +18,6 @@ use egg::{
     ConditionalApplier, CostFunction, EGraph, Extractor, Id, Language, Pattern, Rewrite, Runner,
     SimpleScheduler, Subst, Symbol, Var, define_language,
 };
-use tir_bench::Suite;
 
 #[path = "math_shared.rs"]
 mod shared;
@@ -109,78 +112,52 @@ fn seed_runner(iters: usize) -> Runner<Math, ()> {
     runner
 }
 
-fn bench_saturate(suite: &mut Suite) -> tir_bench::Result<()> {
-    if suite.options().list {
-        for &iters in SAT_ITERS {
-            suite.list_function(&format!("egg_math/saturate/{iters}"))?;
+fn saturate(runner: Runner<Math, ()>, rules: &[Rewrite<Math, ()>]) -> Runner<Math, ()> {
+    runner.run(rules)
+}
+
+fn pre_saturated() -> (Vec<Rewrite<Math, ()>>, Runner<Math, ()>) {
+    let rules = build_rules();
+    let runner = saturate(seed_runner(PRE_SAT_ITERS), &rules);
+    (rules, runner)
+}
+
+fn ematch_all(rules: &[Rewrite<Math, ()>], egraph: &EGraph<Math, ()>) -> usize {
+    let mut total = 0usize;
+    for rule in rules {
+        for matched in rule.search(egraph) {
+            total += black_box(matched.substs.len());
         }
-        return Ok(());
     }
-    if !SAT_ITERS
-        .iter()
-        .any(|iters| suite.matches(&format!("egg_math/saturate/{iters}")))
-    {
-        return Ok(());
-    }
-    let rules = build_rules();
-    for &iters in SAT_ITERS {
-        suite.function(&format!("egg_math/saturate/{iters}"), |b| {
-            b.iter_batched(|| seed_runner(iters), |runner| runner.run(&rules));
-        })?;
-    }
-    Ok(())
+    total
 }
 
-fn bench_ematch(suite: &mut Suite) -> tir_bench::Result<()> {
-    if suite.options().list {
-        return suite.list_function("egg_math/ematch/all_rules");
+fn extract_all(egraph: &EGraph<Math, ()>, roots: &[Id]) -> usize {
+    let extractor = Extractor::new(egraph, MathCost);
+    let mut total = 0usize;
+    for &root in roots {
+        total += black_box(extractor.find_best_cost(root));
     }
-    if !suite.matches("egg_math/ematch/all_rules") {
-        return Ok(());
-    }
-    let rules = build_rules();
-    let runner = seed_runner(PRE_SAT_ITERS).run(&rules);
-    let egraph = &runner.egraph;
-    suite.function("egg_math/ematch/all_rules", |b| {
-        b.iter(|| {
-            let mut total = 0usize;
-            for rule in &rules {
-                for m in rule.search(egraph) {
-                    total += black_box(m.substs.len());
-                }
-            }
-            total
-        });
-    })
+    total
 }
 
-fn bench_extract(suite: &mut Suite) -> tir_bench::Result<()> {
-    if suite.options().list {
-        return suite.list_function("egg_math/extract/best");
-    }
-    if !suite.matches("egg_math/extract/best") {
-        return Ok(());
-    }
+fn bench_saturate(b: &mut functions::Bencher<'_, '_>, iters: usize) {
     let rules = build_rules();
-    let runner = seed_runner(PRE_SAT_ITERS).run(&rules);
-    let egraph = &runner.egraph;
-    let roots = runner.roots.clone();
-    suite.function("egg_math/extract/best", |b| {
-        b.iter(|| {
-            let extractor = Extractor::new(egraph, MathCost);
-            let mut total = 0usize;
-            for &root in &roots {
-                total += black_box(extractor.find_best_cost(root));
-            }
-            total
-        });
-    })
+    b.iter_batched(|| seed_runner(iters), |runner| saturate(runner, &rules));
 }
 
-fn main() -> tir_bench::Result<()> {
-    let mut suite = Suite::from_args(concat!(env!("CARGO_PKG_NAME"), "/egg_math"))?;
-    bench_saturate(&mut suite)?;
-    bench_ematch(&mut suite)?;
-    bench_extract(&mut suite)?;
-    suite.finish()
+benchmarks! {
+    compiler = "egg";
+    saturate_1("egg_math/saturate/1") |b| { bench_saturate(b, SAT_ITERS[0]); }
+    saturate_2("egg_math/saturate/2") |b| { bench_saturate(b, SAT_ITERS[1]); }
+    saturate_3("egg_math/saturate/3") |b| { bench_saturate(b, SAT_ITERS[2]); }
+    bench_ematch("egg_math/ematch/all_rules") |b| {
+        let (rules, runner) = pre_saturated();
+        b.iter(|| ematch_all(&rules, &runner.egraph));
+    }
+    bench_extract("egg_math/extract/best") |b| {
+        let (_, runner) = pre_saturated();
+        let roots = runner.roots.clone();
+        b.iter(|| extract_all(&runner.egraph, &roots));
+    }
 }

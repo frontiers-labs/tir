@@ -1,7 +1,5 @@
-//! Cargo benchmark harness for Rust functions and verified external programs.
-//! Benchmark definitions are Rust code; native and Cachegrind runs share cases.
+//! Cargo benchmark harness for verified external programs.
 pub mod environment;
-mod function;
 mod options;
 pub mod process;
 pub mod program;
@@ -9,7 +7,6 @@ mod results;
 pub mod sources;
 
 pub use anyhow::Result;
-pub use function::Bencher;
 pub use options::{DEFAULT_TIMEOUT_SECS, Engine, Options, Phase};
 pub use process::Command;
 
@@ -44,8 +41,6 @@ pub struct Suite {
     target: PathBuf,
     results: Results,
     seen: BTreeSet<String>,
-    throughput: Option<u64>,
-    contract_version: u32,
     _environment: Option<environment::EnvironmentGuard>,
 }
 
@@ -55,8 +50,7 @@ impl Suite {
         Self::new(namespace, Options::parse())
     }
 
-    /// Create a harness with explicit options. Listing and profiling workers do
-    /// not acquire a second host lock or create another result bundle.
+    /// Create a harness with explicit options. Listing does not acquire a host lock.
     pub fn new(namespace: &str, mut options: Options) -> Result<Self> {
         ensure!(
             options.threshold.is_finite()
@@ -66,8 +60,8 @@ impl Suite {
             "thresholds must be finite and nonnegative"
         );
         ensure!(
-            options.samples > 0 && options.timeout > 0 && options.sample_time_ms > 0,
-            "samples, sample duration and timeout must be positive"
+            options.samples > 0 && options.timeout > 0,
+            "samples and timeout must be positive"
         );
         let filter = Glob::new(&options.filter)?.compile_matcher();
         let (target, workspace) = cargo_directories(Duration::from_secs(options.timeout))?;
@@ -79,7 +73,7 @@ impl Suite {
                 *path = workspace.join(&*path);
             }
         }
-        let active = !options.list && options.worker.is_none();
+        let active = !options.list;
         let directory = if active {
             let parent = options
                 .output
@@ -119,10 +113,17 @@ impl Suite {
         }
         if active {
             environment["build"] = build_configuration();
+            let supervisor_version = process::capture(
+                std::process::Command::new("/usr/bin/time").arg("--version"),
+                Duration::from_secs(options.timeout),
+            )
+            .ok()
+            .filter(|output| output.status.success())
+            .map(|output| String::from_utf8_lossy(&output.stdout).into_owned());
             environment["native_process_accounting"] = json!({
-                "wall_and_cpu_scope":"GNU time supervisor plus command",
-                "rss_scope":"command process high-water, GNU time %M in KiB normalized to bytes",
-                "supervisor_version":process::capture(std::process::Command::new("/usr/bin/time").arg("--version"), Duration::from_secs(options.timeout)).ok().filter(|o|o.status.success()).map(|o|String::from_utf8_lossy(&o.stdout).into_owned())
+                "wall_and_cpu_scope": "GNU time supervisor plus command",
+                "rss_scope": "command process high-water, GNU time %M in KiB normalized to bytes",
+                "supervisor_version": supervisor_version,
             });
         }
         let results = Results {
@@ -148,8 +149,6 @@ impl Suite {
             target,
             results,
             seen: BTreeSet::new(),
-            throughput: None,
-            contract_version: 1,
             _environment: guard,
         })
     }
@@ -168,14 +167,11 @@ impl Suite {
         Duration::from_secs(self.options.timeout)
     }
 
-    /// Match a full process ID or a function name relative to this target.
+    /// Match a full process ID relative to this target.
     pub fn matches(&self, name: &str) -> bool {
         let prefix = format!("{}/", self.results.namespace);
         let relative = name.strip_prefix(&prefix).unwrap_or(name);
         let qualified = format!("{prefix}{relative}");
-        if let Some(worker) = &self.options.worker {
-            return relative == worker || qualified == *worker;
-        }
         self.filter.is_match(relative) || self.filter.is_match(qualified)
     }
 
@@ -188,110 +184,6 @@ impl Suite {
             println!("{name}");
         }
         Ok(())
-    }
-
-    pub fn list_function(&mut self, name: &str) -> Result<()> {
-        if self.options.list && self.matches(name) {
-            let id = format!("{}/{}", self.results.namespace, name);
-            ensure!(self.seen.insert(id.clone()), "duplicate benchmark ID {id}");
-            println!("{id}");
-        }
-        Ok(())
-    }
-
-    /// Version of the workload's inputs and setup semantics. Increment when those
-    /// change so earlier measurements cannot pass compatibility checks silently.
-    pub fn set_contract_version(&mut self, version: u32) {
-        self.contract_version = version;
-    }
-
-    /// Bytes processed by subsequent function cases, for bytes/second reporting.
-    pub fn set_throughput(&mut self, bytes: u64) {
-        self.throughput = Some(bytes);
-    }
-
-    /// Measure a function, excluding code outside the bencher operation. The
-    /// callback must call `iter` or `iter_batched` exactly once per invocation.
-    pub fn function(&mut self, name: &str, mut operation: impl FnMut(&mut Bencher)) -> Result<()> {
-        if !self.matches(name) {
-            return Ok(());
-        }
-        let id = format!("{}/{}", self.results.namespace, name);
-        if self.options.list {
-            return self.list_function(name);
-        }
-        ensure!(!self.seen.contains(&id), "duplicate benchmark ID {id}");
-        if self.options.worker.is_some() || self.options.engine == Engine::Cachegrind {
-            ensure!(
-                function::header_version().is_some_and(|version| version >= (3, 22)),
-                "function profiling requires --features tir-bench/cachegrind and Valgrind 3.22+ headers; rebuild valgrind-requests after installing headers, or set VALGRIND_REQUESTS_VALGRIND_INCLUDE"
-            );
-        }
-        if self.options.worker.is_some() {
-            let mut bencher = Bencher::new(self.options.iterations.max(1), true);
-            operation(&mut bencher);
-            ensure!(
-                bencher.calls == 1,
-                "benchmark must call iter or iter_batched exactly once"
-            );
-            self.seen.insert(id);
-            return Ok(());
-        }
-        if self.options.engine == Engine::Cachegrind {
-            let command = Command::new(std::env::current_exe()?)
-                .args([
-                    "--worker",
-                    &id,
-                    "--iterations",
-                    &self.options.iterations.max(1).to_string(),
-                ])
-                .cachegrind_regions(true);
-            return self.process_group(vec![ProcessCase { id, command, verify: None, metadata: json!({"scope":"function-region", "contract":self.contract_version, "iterations":self.options.iterations.max(1)}), gate: true }]);
-        }
-        let mut iterations = self.options.iterations.max(1);
-        if self.options.iterations == 0 {
-            iterations = function::calibrate(
-                Duration::from_millis(self.options.sample_time_ms),
-                |count| {
-                    let mut calibration = Bencher::new(count, false);
-                    operation(&mut calibration);
-                    ensure!(
-                        calibration.calls == 1,
-                        "benchmark must call iter or iter_batched exactly once"
-                    );
-                    Ok(calibration.elapsed)
-                },
-            )?;
-        }
-        let mut samples = Vec::new();
-        for index in 0..u64::from(self.options.warmups) + u64::from(self.options.samples) {
-            let mut bencher = Bencher::new(iterations, false);
-            operation(&mut bencher);
-            ensure!(
-                bencher.calls == 1,
-                "benchmark must call iter or iter_batched exactly once"
-            );
-            if index < u64::from(self.options.warmups) {
-                continue;
-            }
-            let latency = bencher.elapsed.as_secs_f64() * 1e9 / iterations as f64;
-            let mut metrics = Metrics::from([
-                ("latency".into(), latency),
-                (
-                    "batch_elapsed_ns".into(),
-                    bencher.elapsed.as_secs_f64() * 1e9,
-                ),
-                ("iterations".into(), iterations as f64),
-            ]);
-            if let Some(bytes) = self.throughput.filter(|_| latency > 0.0) {
-                metrics.insert(
-                    "throughput_bytes_per_second".into(),
-                    bytes as f64 * 1e9 / latency,
-                );
-            }
-            samples.push(metrics);
-        }
-        self.record(id, json!({"scope":"function", "contract":self.contract_version, "bytes_per_iteration":self.throughput, "fixed_iterations":self.options.iterations,"sample_time_ms":self.options.sample_time_ms}), true, samples)
     }
 
     /// Interleave variants in rotated order, validating every successful execution
@@ -397,13 +289,6 @@ impl Suite {
         if self.options.list {
             return Ok(());
         }
-        if self.options.worker.is_some() {
-            ensure!(
-                self.seen.len() == 1,
-                "profiling worker did not execute exactly one case"
-            );
-            return Ok(());
-        }
         ensure!(
             self.results.cases.len() >= self.options.min_cases,
             "expected at least {} cases, measured {}",
@@ -485,12 +370,25 @@ fn provenance(timeout: Duration) -> Value {
             .filter(|o| o.status.success())
             .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
     };
-    json!({"revision":git(&["rev-parse","HEAD"]),"dirty":git(&["status","--porcelain"]),"executable":std::env::current_exe().ok(),"executable_sha256":executable_digest(),"arguments":std::env::args().collect::<Vec<_>>()})
+    json!({
+        "revision": git(&["rev-parse", "HEAD"]),
+        "dirty": git(&["status", "--porcelain"]),
+        "executable": std::env::current_exe().ok(),
+        "executable_sha256": executable_digest(),
+        "arguments": std::env::args().collect::<Vec<_>>(),
+    })
 }
 
 /// Build settings of the harness and its Cargo-built compiler dependencies.
 pub fn build_configuration() -> Value {
-    json!({"profile":env!("TIR_BENCH_PROFILE"), "opt_level":env!("TIR_BENCH_OPT_LEVEL"), "debug":env!("TIR_BENCH_DEBUG"), "target":env!("TIR_BENCH_TARGET"), "rustflags":env!("TIR_BENCH_CARGO_ENCODED_RUSTFLAGS"), "rustc":env!("TIR_BENCH_RUSTC"), "valgrind_headers":function::header_version()})
+    json!({
+        "profile": env!("TIR_BENCH_PROFILE"),
+        "opt_level": env!("TIR_BENCH_OPT_LEVEL"),
+        "debug": env!("TIR_BENCH_DEBUG"),
+        "target": env!("TIR_BENCH_TARGET"),
+        "rustflags": env!("TIR_BENCH_CARGO_ENCODED_RUSTFLAGS"),
+        "rustc": env!("TIR_BENCH_RUSTC"),
+    })
 }
 
 fn executable_digest() -> Option<String> {

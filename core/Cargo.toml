@@ -30,7 +30,12 @@ tir-pdl = { path = "../utils/pdl", default-features = false }
 tir-pdl = { path = "../utils/pdl", default-features = false }
 
 [dev-dependencies]
-tir-bench.workspace = true
+serde_json.workspace = true
+criterion.workspace = true
+gungraun.workspace = true
+
+[features]
+nightly-cachegrind = []
 
 [[bench]]
 name = "lexer"
