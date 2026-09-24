@@ -1206,6 +1206,60 @@ fn reserved_events_report_the_chosen_route() {
 }
 
 #[test]
+fn fused_inherited_route_reservation_belongs_to_its_member() {
+    const P0_ROUTE: ResourceRoute = ResourceRoute {
+        resources: &[TEST_P0],
+    };
+    const P1_ROUTE: ResourceRoute = ResourceRoute {
+        resources: &[TEST_P1],
+    };
+    const P0_UOP: MicroOp = MicroOp {
+        routes: &[P0_ROUTE],
+    };
+    const P1_UOP: MicroOp = MicroOp {
+        routes: &[P1_ROUTE],
+    };
+    let mut model = resource_test_model(&[
+        ProcUnit {
+            name: "P0",
+            units: 1,
+        },
+        ProcUnit {
+            name: "P1",
+            units: 1,
+        },
+    ]);
+    model.fusions = pair_rule("cmp", "jne");
+    let mut cmp = resource_test_instr(InstrSchedClass {
+        uops: &[P0_UOP],
+        ..InstrSchedClass::DEFAULT
+    });
+    cmp.op_name = "cmp".to_string();
+    let mut jne = resource_test_instr(InstrSchedClass {
+        uops: &[P1_UOP],
+        ..InstrSchedClass::DEFAULT
+    });
+    jne.op_name = "jne".to_string();
+    let mut events = ReservationRecorder::default();
+    run(
+        &model,
+        &[cmp, jne],
+        1,
+        &TimingConfig {
+            in_order: false,
+            window: 0,
+            mispredict_penalty: 0,
+            unroll_stride: 0,
+        },
+        None,
+        None,
+        None,
+        Some(&mut events),
+    );
+    assert_eq!(events.0, vec![(1, "P1", 1)]);
+}
+
+#[test]
 fn resource_occupancy_delays_the_next_micro_op() {
     const P0_THREE_CYCLES: ResourceUse = ResourceUse {
         resource: "P0",
@@ -1991,6 +2045,94 @@ fn fusion_rename_cost_larger_than_width_spans_cycles() {
             .collect::<Vec<_>>(),
         vec![2, 2]
     );
+}
+
+#[test]
+fn ordinary_members_retire_together_after_a_fused_pair_is_selected() {
+    let mut model = resource_test_model(&[]);
+    model.issue_width = 2;
+    let mut program = vec![dependency_test_instr(10, &[], &[], &[])];
+    program.extend((0..3).map(|_| resource_test_instr(InstrSchedClass::DEFAULT)));
+    let mut cmp = resource_test_instr(InstrSchedClass::DEFAULT);
+    cmp.op_name = "cmp".to_string();
+    let mut jne = resource_test_instr(InstrSchedClass::DEFAULT);
+    jne.op_name = "jne".to_string();
+    program.extend([cmp, jne]);
+    let config = TimingConfig {
+        in_order: false,
+        window: 0,
+        mispredict_penalty: 0,
+        unroll_stride: 0,
+    };
+    let mut plain_events = Recorder::default();
+    run(
+        &model,
+        &program,
+        1,
+        &config,
+        None,
+        None,
+        None,
+        Some(&mut plain_events),
+    );
+    model.fusions = pair_rule("cmp", "jne");
+    let mut fused_events = Recorder::default();
+    run(
+        &model,
+        &program,
+        1,
+        &config,
+        None,
+        None,
+        None,
+        Some(&mut fused_events),
+    );
+    let ordinary_retire_cycles = |events: &Recorder| {
+        events
+            .0
+            .iter()
+            .filter_map(|(kind, cycle, index)| (*kind == 'R' && *index < 4).then_some(*cycle))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(ordinary_retire_cycles(&plain_events), vec![10; 4]);
+    assert_eq!(ordinary_retire_cycles(&fused_events), vec![10; 4]);
+}
+
+#[test]
+fn fused_retire_cost_above_width_spans_cycles() {
+    let pair = pair_rule("cmp", "jne")[0];
+    let mut model = resource_test_model(&[]);
+    model.issue_width = 1;
+    model.fusions = Box::leak(Box::new([FusionPattern {
+        schedule: FusionSchedule {
+            retire_slots: 3,
+            ..pair.schedule
+        },
+        ..pair
+    }]));
+    let mut cmp = resource_test_instr(InstrSchedClass::DEFAULT);
+    cmp.op_name = "cmp".to_string();
+    let mut jne = resource_test_instr(InstrSchedClass::DEFAULT);
+    jne.op_name = "jne".to_string();
+    let mut events = Recorder::default();
+    run(
+        &model,
+        &[cmp, jne],
+        1,
+        &TimingConfig {
+            in_order: false,
+            window: 0,
+            mispredict_penalty: 0,
+            unroll_stride: 0,
+        },
+        None,
+        None,
+        None,
+        Some(&mut events),
+    );
+    let issue = events.0.iter().find(|(kind, _, _)| *kind == 'I').unwrap().1;
+    let retire = events.0.iter().find(|(kind, _, _)| *kind == 'R').unwrap().1;
+    assert_eq!(retire, issue + 3);
 }
 
 #[test]

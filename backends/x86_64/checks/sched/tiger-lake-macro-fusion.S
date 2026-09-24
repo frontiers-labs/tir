@@ -19,3 +19,7 @@ f:
 # CHECK: [1]    [2]    Instructions:
 # CHECK-NEXT: 1      1      cmp rax, rbx
 # CHECK-NEXT: 1      1      jne 16
+# CHECK: Resource pressure by instruction:
+# CHECK-NEXT: [0]   [1]   [2]   [3]   Instructions:
+# CHECK-NEXT: -     -     -     -     cmp rax, rbx
+# CHECK-NEXT: -     -     0.50  0.50  jne 16

@@ -281,12 +281,16 @@ impl Engine<'_, '_> {
         {
             return false;
         }
-        let ready = *self
-            .retire_ready
-            .entry(self.next_retire)
-            .or_insert_with(|| {
-                reserve_capacity(&mut self.retire_calendar, self.cycle, *cost, self.width)
-            });
+        let ready = if item.group.rule.is_some() {
+            *self
+                .retire_ready
+                .entry(self.next_retire)
+                .or_insert_with(|| {
+                    reserve_capacity(&mut self.retire_calendar, self.cycle, *cost, self.width)
+                })
+        } else {
+            self.cycle
+        };
         if ready > self.cycle {
             return false;
         }
@@ -579,10 +583,14 @@ impl Engine<'_, '_> {
             return false;
         };
         let arch_start = item.arch_start;
+        let reservation_owner = item
+            .uop(uop_index)
+            .and_then(|uop| uop.inherit_routes)
+            .map_or(arch_start, |step| arch_start + step);
         self.work[id].uop_issued[uop_index] = Some(self.cycle);
         if let Some(handler) = services.handler.as_mut() {
             for (resource, cycles) in chosen {
-                handler.reserved(self.cycle, arch_start, resource, cycles);
+                handler.reserved(self.cycle, reservation_owner, resource, cycles);
             }
         }
         if let Some(uop) = self.work[id].uop(uop_index).copied() {
