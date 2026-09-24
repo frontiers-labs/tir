@@ -1,4 +1,5 @@
 //! One function declaration feeds Criterion, Cachegrind, and result discovery.
+#[cfg(feature = "nightly-cachegrind")]
 use std::hint::black_box;
 use std::time::Duration;
 
@@ -29,27 +30,32 @@ impl Settings {
     }
 }
 
-struct Native<'a, 'b> {
-    group: &'a mut Group<'b>,
-    name: &'a str,
+enum Runner<'a, 'b> {
+    Native {
+        group: &'a mut Group<'b>,
+        name: &'a str,
+    },
+    #[cfg(feature = "nightly-cachegrind")]
+    Cachegrind,
 }
 
 pub struct Bencher<'a, 'b> {
-    native: Option<Native<'a, 'b>>,
+    runner: Runner<'a, 'b>,
     calls: usize,
 }
 
 impl<'a, 'b> Bencher<'a, 'b> {
     pub fn native(group: &'a mut Group<'b>, name: &'a str) -> Self {
         Self {
-            native: Some(Native { group, name }),
+            runner: Runner::Native { group, name },
             calls: 0,
         }
     }
 
+    #[cfg(feature = "nightly-cachegrind")]
     pub fn profile() -> Self {
         Self {
-            native: None,
+            runner: Runner::Cachegrind,
             calls: 0,
         }
     }
@@ -57,14 +63,16 @@ impl<'a, 'b> Bencher<'a, 'b> {
     /// Measure the operation, including destruction of its return value.
     pub fn iter<O>(&mut self, mut operation: impl FnMut() -> O) {
         self.calls += 1;
-        if let Some(native) = &mut self.native {
-            native
-                .group
-                .bench_function(native.name, |b| b.iter(&mut operation));
-        } else {
-            gungraun::client_requests::cachegrind::start_instrumentation();
-            black_box(operation());
-            gungraun::client_requests::cachegrind::stop_instrumentation();
+        match &mut self.runner {
+            Runner::Native { group, name } => {
+                group.bench_function(*name, |b| b.iter(&mut operation));
+            }
+            #[cfg(feature = "nightly-cachegrind")]
+            Runner::Cachegrind => {
+                gungraun::client_requests::cachegrind::start_instrumentation();
+                black_box(operation());
+                gungraun::client_requests::cachegrind::stop_instrumentation();
+            }
         }
     }
 
@@ -75,16 +83,20 @@ impl<'a, 'b> Bencher<'a, 'b> {
         mut operation: impl FnMut(I) -> O,
     ) {
         self.calls += 1;
-        if let Some(native) = &mut self.native {
-            native.group.bench_function(native.name, |b| {
-                b.iter_batched(&mut setup, &mut operation, criterion::BatchSize::SmallInput);
-            });
-        } else {
-            let input = black_box(setup());
-            gungraun::client_requests::cachegrind::start_instrumentation();
-            let output = black_box(operation(input));
-            gungraun::client_requests::cachegrind::stop_instrumentation();
-            drop(output);
+        match &mut self.runner {
+            Runner::Native { group, name } => {
+                group.bench_function(*name, |b| {
+                    b.iter_batched(&mut setup, &mut operation, criterion::BatchSize::SmallInput);
+                });
+            }
+            #[cfg(feature = "nightly-cachegrind")]
+            Runner::Cachegrind => {
+                let input = black_box(setup());
+                gungraun::client_requests::cachegrind::start_instrumentation();
+                let output = black_box(operation(input));
+                gungraun::client_requests::cachegrind::stop_instrumentation();
+                drop(output);
+            }
         }
     }
 
@@ -96,6 +108,7 @@ impl<'a, 'b> Bencher<'a, 'b> {
     }
 }
 
+#[cfg(feature = "nightly-cachegrind")]
 pub fn cachegrind_config() -> gungraun::LibraryBenchmarkConfig {
     use gungraun::{Cachegrind, LibraryBenchmarkConfig, ValgrindTool};
     let mut config = LibraryBenchmarkConfig::default();
