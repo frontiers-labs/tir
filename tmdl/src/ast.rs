@@ -460,7 +460,7 @@ pub struct FusionStep {
     pub span: Span,
 }
 
-/// A named operand of a pattern step, or all operands of one direction.
+/// A named operand of one pattern step.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FusionOperandRef {
     pub step: String,
@@ -468,6 +468,7 @@ pub struct FusionOperandRef {
     pub span: Span,
 }
 
+/// Selects a named operand or all inputs or outputs of one pattern step.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FusionOperandSelector {
     Operand(FusionOperandRef),
