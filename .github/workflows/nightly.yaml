@@ -221,12 +221,20 @@ jobs:
     env:
       BENCHBOARD_URL: ${{ vars.BENCHBOARD_URL || vars.BENCHBOARD_API_URL || 'https://benchboard-api.terantamoulamp.workers.dev' }}
     steps:
+      - name: Verify Benchboard credentials
+        env:
+          BENCHBOARD_DEPLOY_KEY: ${{ secrets.BENCHBOARD_DEPLOY_KEY }}
+          BENCHBOARD_TOKEN: ${{ secrets.BENCHBOARD_TOKEN }}
+        run: |
+          test -n "$BENCHBOARD_DEPLOY_KEY" || { echo 'BENCHBOARD_DEPLOY_KEY is required' >&2; exit 1; }
+          test -n "$BENCHBOARD_TOKEN" || { echo 'BENCHBOARD_TOKEN is required' >&2; exit 1; }
       - uses: actions/checkout@v7
       - uses: actions/checkout@v7
         with:
           repository: frontiers-labs/benchboard
           ref: a77547ad514754f4ac91b17f92b5675a1aab9fff
           path: .benchboard
+          ssh-key: ${{ secrets.BENCHBOARD_DEPLOY_KEY }}
           persist-credentials: false
       - uses: actions/setup-node@v6
         with:
