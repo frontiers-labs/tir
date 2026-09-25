@@ -1,0 +1,36 @@
+# Sail RISC-V (RV32) against TMDL RV32I. See docs/tmdl/smt_verification.md.
+
+tmdl_isa = "RV32I"
+dialect = "riscv"
+defs_dir = "backends/riscv/defs"
+snapshot = "rv32d.ir"
+snapshot_repo = "rems-project/isla-snapshots"
+snapshot_ref = "d8b31014643035a3b11071e56ef30001de3f52ab"
+isla_config = "verify-smt-riscv32.toml"
+xlen = 32
+simplify = true
+initial_registers = ["cur_privilege=Machine"]
+
+pc = "PC"
+next_pc = "nextPC"
+align_pc = true
+ignore = ["cur_privilege"]
+mmio = ["mtime", "mtimecmp", "mip"]
+# 3: breakpoint, 4: load address misaligned, 6: store/AMO address misaligned,
+# 11: environment call from M-mode.
+trap_cause = { register = "mcause", causes = [3, 4, 6, 11] }
+operand_values = { csr = [0x340] }
+
+map = [
+  { sail = "x{n}", class = "gpr", n = [0, 31] },
+  { sail = "mscratch", class = "csr", index = 0x340 },
+  # Sail keeps the 64-bit mstatus layout on RV32; the low half is the CSR.
+  { sail = "mstatus", bits = [31, 0], class = "csr", index = 0x300 },
+  { sail = "mtvec", class = "csr", index = 0x305 },
+  { sail = "mepc", class = "csr", index = 0x341 },
+  { sail = "mcause", class = "csr", index = 0x342 },
+  { sail = "mtval", class = "csr", index = 0x343 },
+  { sail = "fcsr", bits = [4, 0], class = "fflags", index = 1, if_written = true },
+  { sail = "fcsr", bits = [7, 5], class = "frm", index = 2, if_written = true },
+  { sail = "fcsr", bits = [31, 8] },
+]

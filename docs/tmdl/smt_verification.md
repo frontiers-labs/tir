@@ -33,6 +33,29 @@ Sail traces are cached in `target/verify/smt/<isa>/cache/`, keyed by instruction
 word plus a fingerprint of the snapshot and isla config, so swapping either
 invalidates the cache automatically.
 
+## State map
+
+Each ISA is described by `xtask/verify/<isa>.toml`: the snapshot and its pin,
+the Isla config, the modeling assumptions that apply, and a `map` relating Sail
+locations to TMDL register slots. Every row has the same shape:
+
+```toml
+{ sail = "rflags", bits = [6, 6], class = "eflags", index = 2 }
+```
+
+`sail` names a register, a struct field (`PSTATE.N`) or a vector element
+(`_V[3]`), and `bits` optionally narrows it. `{n}` in `sail` expands over an
+inclusive range `n`, which is also the slot index (`x{n}` for the RISC-V GPRs).
+A row without `class` holds bits the architecture fixes at zero.
+
+A Sail read of a mapped location is pinned to the slot's initial value, and
+every mapped slot is compared after the instruction: TMDL's final value
+against Sail's last write, or the initial value when Sail left it alone. Rows
+marked `if_written` are compared only when the TMDL behavior writes the slot.
+A path that writes a register with no row, or reads a symbolic one, is
+excluded. Registers listed in `ignore` never exclude a path, and a read of one
+listed in `mmio` always does.
+
 ## Modeling assumptions
 
 Reported with the results, and deliberate:
@@ -60,7 +83,8 @@ External inputs are:
 - a Sail RISC-V snapshot, e.g. `rv64d.ir` from
   [isla-snapshots](https://github.com/rems-project/isla-snapshots).
 
-The isla configurations live in `xtask/`. The RISC-V configurations disable C,
+The isla configurations live in `xtask/`, next to the state maps in
+`xtask/verify/`. The RISC-V configurations disable C,
 which the PC alignment assumptions rely on. Point the harness at the tools:
 
 ```sh

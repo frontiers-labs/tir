@@ -1,0 +1,41 @@
+# Sail Armv8.5-A against TMDL ARMv8A64. See docs/tmdl/smt_verification.md.
+
+tmdl_isa = "ARMv8A64"
+dialect = "arm64"
+defs_dir = "backends/arm64/defs"
+snapshot = "armv8p5.ir"
+snapshot_repo = "rems-project/isla-snapshots"
+snapshot_ref = "d8b31014643035a3b11071e56ef30001de3f52ab"
+isla_config = "verify-smt-armv8.toml"
+xlen = 64
+simplify = true
+
+pc = "_PC"
+align_pc = true
+ignore = [
+  "SEE",
+  "__unconditional",
+  "__PC_changed",
+  "__currentInstrLength",
+  "BTypeNext",
+  "BTypeCompatible",
+  # Load/store instruction syndrome, model bookkeeping for fault reporting;
+  # written on every memory access path.
+  "__LSISyndrome",
+]
+
+map = [
+  { sail = "R{n}", class = "gpr", n = [0, 30] },
+  # The stack pointer is slot 31 of the GPR file, reachable through the gprsp
+  # accessors. Whichever SP_ELx a path touches plays the role of TMDL's SP.
+  { sail = "SP_EL0", class = "gprsp", index = 31 },
+  { sail = "SP_EL1", class = "gprsp", index = 31 },
+  { sail = "SP_EL2", class = "gprsp", index = 31 },
+  { sail = "SP_EL3", class = "gprsp", index = 31 },
+  # Other PSTATE fields (EL, nRW, ...) are pinned by each path's assertions.
+  { sail = "PSTATE.N", class = "pstate", index = 0 },
+  { sail = "PSTATE.Z", class = "pstate", index = 1 },
+  { sail = "PSTATE.C", class = "pstate", index = 2 },
+  { sail = "PSTATE.V", class = "pstate", index = 3 },
+  { sail = "_V[{n}]", class = "vpr", n = [0, 31] },
+]

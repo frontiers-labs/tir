@@ -1,0 +1,60 @@
+# The ACL2-derived Sail x86 model against TMDL X86_64. See
+# docs/tmdl/smt_verification.md.
+
+tmdl_isa = "X86_64"
+dialect = "x86_64"
+defs_dir = "backends/x86_64/defs"
+snapshot = "x86.ir"
+snapshot_repo = "frontiers-labs/isla-snapshots"
+snapshot_ref = "3c4f457ea9ac2702dae9203414cbdad498be602d"
+isla_config = "verify-smt-x86_64.toml"
+xlen = 64
+# The simplifier mishandles the model's wide struct values.
+simplify = false
+
+pc = "rip"
+# The config pins rip to a concrete aligned value instead of align_pc.
+canonical_addrs = true
+requires_pc_write = true
+# Footprint-setup and model-bookkeeping registers: their reads/writes
+# (application view, 64-bit mode, the fetch buffer) carry no architectural
+# meaning the TMDL model tracks.
+ignore = [
+  "app_view",
+  "marking_view",
+  "ms_reg",
+  "fault_reg",
+  "msrs",
+  "seg_hidden_attrs",
+  "seg_hidden_bases",
+  "seg_hidden_limits",
+  "seg_visibles",
+  "isla_ifetch_buf",
+  "log_register_writes",
+  # Control registers (CR0/CR3/CR4): read during memory access checks even in
+  # the application view, where paging is bypassed.
+  "ctrs",
+  "os",
+]
+
+map = [
+  { sail = "rax", class = "gpr", index = 0 },
+  { sail = "rcx", class = "gpr", index = 1 },
+  { sail = "rdx", class = "gpr", index = 2 },
+  { sail = "rbx", class = "gpr", index = 3 },
+  { sail = "rsp", class = "gpr", index = 4 },
+  { sail = "rbp", class = "gpr", index = 5 },
+  { sail = "rsi", class = "gpr", index = 6 },
+  { sail = "rdi", class = "gpr", index = 7 },
+  { sail = "r{n}", class = "gpr", n = [8, 15] },
+  # rflags bits (Intel SDM) to EFLAGS slots in TMDL declaration order. The
+  # ALU ops deliberately leave flags unmodeled, so a flag is compared only
+  # when the TMDL behavior writes it.
+  { sail = "rflags", bits = [0, 0], class = "eflags", index = 0, if_written = true },
+  { sail = "rflags", bits = [2, 2], class = "eflags", index = 1, if_written = true },
+  { sail = "rflags", bits = [6, 6], class = "eflags", index = 2, if_written = true },
+  { sail = "rflags", bits = [7, 7], class = "eflags", index = 3, if_written = true },
+  { sail = "rflags", bits = [11, 11], class = "eflags", index = 4, if_written = true },
+  { sail = "rflags", bits = [4, 4], class = "eflags", index = 5, if_written = true },
+  { sail = "rflags", bits = [10, 10], class = "eflags", index = 6, if_written = true },
+]

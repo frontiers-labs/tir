@@ -65,7 +65,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: target/verify/smt/${{ matrix.isa }}/cache
-          key: smt-traces-${{ matrix.isa }}-${{ matrix.shard }}-${{ hashFiles('Cargo.lock', 'utils/verify/**', 'xtask/src/verify_smt.rs', 'xtask/verify-smt-*') }}
+          key: smt-traces-${{ matrix.isa }}-${{ matrix.shard }}-${{ hashFiles('Cargo.lock', 'utils/verify/**', 'xtask/src/verify_smt.rs', 'xtask/verify-smt-*', 'xtask/verify/**') }}
       - name: Verify
         run: cargo xtask verify ${{ matrix.isa }} --shard ${{ matrix.shard }}/4
       - name: Upload report

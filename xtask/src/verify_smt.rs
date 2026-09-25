@@ -35,6 +35,7 @@
 //!     memory map (CLINT) are excluded via their backing-register reads.
 //!
 //! External inputs: Bitwuzla, z3, a Sail snapshot, and an Isla config per ISA.
+//! `xtask/verify/<isa>.toml` names them and maps Sail state to TMDL slots.
 //! The Isla library revision is pinned in `utils/verify/Cargo.toml` and snapshots are downloaded on
 //! demand. Override locations with `TIR_ISLA_SNAPSHOT`, `TIR_ISLA_CONFIG`,
 //! `TIR_BITWUZLA`, and `TIR_Z3`; `TIR_ISLA_SNAPSHOTS_REF` overrides the snapshot pin.
@@ -63,148 +64,241 @@ use std::time::Instant;
 
 use crate::utils::{download_file, project_root};
 use anyhow::{anyhow, Context};
-use serde::Serialize;
+use serde::de::Error as _;
+use serde::{Deserialize, Serialize};
 use tmdl::{FlatStateFieldMetadata, MemoryAccessMetadata, RegisterClassMetadata, SmtMetadata};
 use xshell::{cmd, Shell};
 
-/// A Sail bitfield flag register mapped to TMDL flag slots:
-/// `(sail register, tmdl class, [(slot, bit index)])`.
-type FlagReg = (&'static str, &'static str, &'static [(u64, u32)]);
-
+/// One ISA's verification setup, read from `xtask/verify/<isa>.toml`.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct IsaSpec {
-    name: &'static str,
-    tmdl_isa: &'static str,
-    dialect: &'static str,
-    defs_dir: &'static str,
-    /// Snapshot file name in the isla-snapshots repository.
-    snapshot: &'static str,
-    /// Snapshot repository on GitHub.
-    snapshot_repo: &'static str,
-    /// Default repository ref, overridden by `TIR_ISLA_SNAPSHOTS_REF`.
-    snapshot_ref: &'static str,
-    /// isla config file name under `xtask/`.
-    config: &'static str,
+    #[serde(skip)]
+    name: String,
+    tmdl_isa: String,
+    dialect: String,
+    defs_dir: String,
+    /// Snapshot file, its GitHub repository and the pinned commit the configs
+    /// were validated against (`TIR_ISLA_SNAPSHOTS_REF` overrides it).
+    snapshot: String,
+    snapshot_repo: String,
+    snapshot_ref: String,
+    /// Isla config file name under `xtask/`.
+    isla_config: String,
     xlen: u32,
-    /// Sail GPR names are `{reg_prefix}{n}` for `n < reg_count`.
-    reg_prefix: &'static str,
-    reg_count: u32,
-    /// Encoding index that names the hardwired-zero register, if it is not a
-    /// real Sail register (RISC-V `x0`; AArch64 has no `R31`).
-    zero_reg: Option<u32>,
-    pc: &'static str,
-    /// Sail's delayed PC register written by branches, when the model has one
-    /// (RISC-V `nextPC`); the ARM model writes the PC directly.
-    next_pc: Option<&'static str>,
+    /// Simplify Isla traces.
+    simplify: bool,
+    #[serde(default)]
+    initial_registers: Vec<String>,
+    /// The Sail PC, and the delayed PC branches write when the model has one
+    /// (RISC-V `nextPC`).
+    pc: String,
+    next_pc: Option<String>,
     /// Model bookkeeping registers with no architectural meaning; reads and
     /// writes of them never exclude a path.
-    ignore_regs: &'static [&'static str],
-    /// Registers backing memory-mapped devices (RISC-V CLINT): a read means
-    /// the access resolved into the platform memory map, which TMDL's flat
-    /// memory does not model, so the path is excluded even when the value is
-    /// concrete (`mtimecmp` is pinned by the config).
-    mmio_regs: &'static [&'static str],
-    /// Named Sail registers mapped onto single slots of TMDL register-file
-    /// classes beyond the GPR file: `(sail name, tmdl class, slot, index
-    /// width)`. Fields of `struct_reg` are named `<reg>.<field>`. Several
-    /// Sail names may alias one slot (AArch64 `SP_ELx`).
-    extra_regs: &'static [(&'static str, &'static str, u64, u32)],
-    /// Sail struct register accessed via `(_ field |F|)` accessors (AArch64
-    /// `PSTATE`); its fields map through `extra_regs`.
-    struct_reg: Option<&'static str>,
+    #[serde(default)]
+    ignore: Vec<String>,
+    /// Registers backing memory-mapped devices: a read means the access
+    /// resolved into the platform memory map, which TMDL's flat memory does
+    /// not model, so the path is excluded even when the value is concrete.
+    #[serde(default)]
+    mmio: Vec<String>,
+    /// A path writing a trap cause outside `causes` (access faults: the TMDL
+    /// model treats all of memory as RAM) is excluded, established by a solver
+    /// probe since the written value is a path expression.
+    trap_cause: Option<TrapCause>,
     /// Concrete operand values for register classes whose encoding space is
     /// mostly unimplemented (CSR addresses), instead of the GPR patterns.
-    fixed_reg_values: &'static [(&'static str, &'static [u64])],
-    /// Sail trap-cause register and the causes TMDL behaviors model. A path
-    /// writing a cause outside this set (access faults: the TMDL model treats
-    /// all of memory as RAM) is excluded, established by a z3 probe since the
-    /// written value is a path expression.
-    trap_cause: Option<(&'static str, &'static [u64])>,
-    initial_registers: &'static [&'static str],
-    /// Sail GPR register name -> encoding index, for ISAs whose registers are
-    /// named individually rather than `{prefix}{n}` (x86 `rax`..`r15`). Empty
-    /// for `{prefix}{n}` ISAs.
-    reg_names: &'static [(&'static str, u32)],
-    /// A Sail bitfield register whose bits carry TMDL flag slots:
-    /// `(sail register, tmdl class, [(slot, bit index)])`. The whole-register
-    /// read/write is decomposed into per-flag bits (x86 `rflags`), unlike a
-    /// field-accessor struct register. Flags are only compared for
-    /// instructions whose TMDL behavior writes them (`x86` ALU ops deliberately
-    /// leave flags unmodeled).
-    flag_reg: Option<FlagReg>,
-    /// Simplify Isla traces. The x86 traces must stay
-    /// unsimplified: the simplifier mishandles the model's wide struct values.
-    simplify: bool,
-    /// Assert the initial PC is 4-byte aligned (fixed-width fetch). x86 pins the
-    /// PC to a concrete aligned value via the config instead.
+    #[serde(default)]
+    operand_values: HashMap<String, Vec<u64>>,
+    /// Assume the initial PC is aligned to the instruction width.
+    #[serde(default)]
     align_pc: bool,
-    /// Assume data-access and indirect-jump-target addresses are canonical
-    /// (bits 63..47 sign-extended), so the model's non-canonical `#GP` paths are
-    /// vacuous. x86 only; the analogue of the RISC-V aligned-address assumption.
+    /// Assume data-access and branch-target addresses are canonical, so the
+    /// model's non-canonical `#GP` paths are vacuous.
+    #[serde(default)]
     canonical_addrs: bool,
-    /// Every completing instruction advances the PC (x86 always writes `rip`
-    /// via the fetch-decode-execute epilogue), so a path that does not write it
+    /// Every completing instruction writes the PC, so a path that does not
     /// faulted or decoded to something else and is excluded.
+    #[serde(default)]
     requires_pc_write: bool,
-    /// Optional local snapshot path, bypassing the download.
-    local_snapshot: Option<&'static str>,
+    #[serde(deserialize_with = "expand_map")]
+    map: Vec<MapRow>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TrapCause {
+    register: String,
+    causes: Vec<u64>,
+}
+
+/// A `map` entry as written. `sail` is `reg`, `reg.field` (struct field
+/// accessor) or `reg[element]` (vector element); `{n}` in it expands over the
+/// inclusive range `n`, which is then the slot index. A row without `class`
+/// holds bits the architecture fixes at zero.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MapEntry {
+    sail: String,
+    bits: Option<(u32, u32)>,
+    class: Option<String>,
+    index: Option<u64>,
+    n: Option<(u64, u64)>,
+    #[serde(default)]
+    if_written: bool,
+}
+
+/// One Sail location related to one piece of TMDL state.
+struct MapRow {
+    register: String,
+    field: Option<String>,
+    element: Option<usize>,
+    /// `(high, low)` bits of the Sail value that hold the state.
+    bits: Option<(u32, u32)>,
+    state: State,
+    /// Compared only when the TMDL behavior writes the slot.
+    if_written: bool,
+}
+
+/// TMDL state a Sail location relates to.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+enum State {
+    Pc,
+    /// The fall-through PC, which Sail's delayed PC starts at.
+    NextPc,
+    Slot {
+        class: String,
+        index: u64,
+    },
+    /// Architecturally zero bits of this width.
+    Zero(u32),
+}
+
+fn expand_map<'de, D: serde::Deserializer<'de>>(de: D) -> Result<Vec<MapRow>, D::Error> {
+    let mut rows = Vec::new();
+    for entry in Vec::<MapEntry>::deserialize(de)? {
+        let slots = match entry.n {
+            Some((low, high)) => (low..=high).map(Some).collect(),
+            None => vec![entry.index],
+        };
+        for index in slots {
+            let sail = match index {
+                Some(n) => entry.sail.replace("{n}", &n.to_string()),
+                None => entry.sail.clone(),
+            };
+            let (register, element) = match sail.strip_suffix(']').and_then(|s| s.split_once('[')) {
+                Some((register, element)) => {
+                    (register, Some(element.parse().map_err(D::Error::custom)?))
+                }
+                None => (sail.as_str(), None),
+            };
+            let (register, field) = match register.split_once('.') {
+                Some((register, field)) => (register, Some(field.to_string())),
+                None => (register, None),
+            };
+            let state = match (&entry.class, index, entry.bits) {
+                (Some(class), Some(index), _) => State::Slot {
+                    class: class.clone(),
+                    index,
+                },
+                (None, None, Some((high, low))) => State::Zero(high - low + 1),
+                _ => {
+                    return Err(D::Error::custom(format!(
+                        "{sail}: need class and index, or bits alone"
+                    )))
+                }
+            };
+            rows.push(MapRow {
+                register: register.to_string(),
+                field,
+                element,
+                bits: entry.bits,
+                state,
+                if_written: entry.if_written,
+            });
+        }
+    }
+    Ok(rows)
 }
 
 impl IsaSpec {
-    /// TMDL register classes the driver can relate to Sail state. The x86
-    /// sub-register views (`gpr8`/`gpr16`/`gpr32`/`gpr8h`) alias the GPR file
-    /// and are named by the same Sail registers, so they map like `gpr`.
-    fn class_is_mapped(&self, model: &FlatModel, class: &str) -> bool {
-        class == "gpr"
-            || model
-                .classes
-                .get(class)
-                .is_some_and(|info| info.storage == "gpr")
-            || (self.name == "armv8"
-                && model
-                    .classes
-                    .get(class)
-                    .is_some_and(|info| info.storage == "vpr"))
-            || self.extra_regs.iter().any(|(_, c, _, _)| *c == class)
+    fn load(isa: &str) -> anyhow::Result<Self> {
+        let path = project_root()
+            .join("xtask/verify")
+            .join(format!("{isa}.toml"));
+        let text = std::fs::read_to_string(&path)
+            .with_context(|| format!("unsupported ISA {isa}: cannot read {}", path.display()))?;
+        let mut spec: Self =
+            toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
+        spec.name = isa.to_string();
+        let pcs = [
+            (Some(spec.pc.clone()), State::Pc),
+            (spec.next_pc.clone(), State::NextPc),
+        ];
+        for (register, state) in pcs {
+            if let Some(register) = register {
+                spec.map.push(MapRow {
+                    register,
+                    field: None,
+                    element: None,
+                    bits: None,
+                    state,
+                    if_written: false,
+                });
+            }
+        }
+        Ok(spec)
     }
 
-    /// Bit width of the GPR file's encoding index (`read_gpr` parameter): the
-    /// bits needed to name `reg_count` registers (RISC-V/AArch64: 5, x86: 4).
-    fn gpr_idx_width(&self) -> u32 {
-        32 - (self.reg_count - 1).leading_zeros()
+    /// TMDL register classes the driver can relate to Sail state: those
+    /// sharing storage with a mapped class (the x86 `gpr8`/`gpr16`/`gpr32`
+    /// views alias the GPR file).
+    fn class_is_mapped(&self, model: &FlatModel, class: &str) -> bool {
+        let storage = |class: &str| model.classes.get(class).map(|info| &info.storage);
+        storage(class).is_some_and(|mapped| {
+            self.map.iter().any(|row| {
+                matches!(&row.state, State::Slot { class, .. } if storage(class) == Some(mapped))
+            })
+        })
     }
 }
 
-/// Plain read-write CSR storage (`mscratch`) plus the machine-mode trap setup
-/// state written by exception handlers in TMDL behaviors. The counter CSRs
-/// stay unmapped: they are read-only and their Sail accesses trap or go
-/// through mcounteren, which is outside the no-trap assumptions.
-const RISCV_EXTRA_REGS: &[(&str, &str, u64, u32)] = &[
-    ("mscratch", "csr", 0x340, 12),
-    ("mstatus", "csr", 0x300, 12),
-    ("mtvec", "csr", 0x305, 12),
-    ("mepc", "csr", 0x341, 12),
-    ("mcause", "csr", 0x342, 12),
-    ("mtval", "csr", 0x343, 12),
-];
+impl MapRow {
+    /// This row's part of a register access, before `bits`: `Ok(None)` when
+    /// the access names another field.
+    fn select(
+        &self,
+        fields: &[String],
+        value: &tir_verify::TraceValue,
+    ) -> Result<Option<String>, String> {
+        if let Some(field) = &self.field {
+            if fields.first() != Some(field) {
+                return Ok(None);
+            }
+            return Ok(value.fields.get(field).map(|value| value.smt.clone()));
+        }
+        // Bitfield registers carry their value in a single-field struct.
+        let value = &unwrap_bits_struct(value).smt;
+        let Some(element) = self.element else {
+            return Ok(Some(value.clone()));
+        };
+        value
+            .strip_prefix("(_ vec ")
+            .and_then(|body| body.strip_suffix(')'))
+            .filter(|body| !body.contains('('))
+            .and_then(|body| body.split_whitespace().nth(element))
+            .map(|element| Some(element.to_string()))
+            .ok_or_else(|| format!("unrecognized {} vector value", self.register))
+    }
 
-/// CLINT-backed state: loads/stores whose address falls into the CLINT MMIO
-/// window read or write these instead of memory.
-const RISCV_MMIO_REGS: &[&str] = &["mtime", "mtimecmp", "mip"];
-
-/// The TMDL `pstate` file holds the NZCV flags at their declaration-order
-/// indices; the stack pointer is slot 31 of the shared GPR file, reachable
-/// through the `gprsp` accessors (no hardwired-zero special case). Whichever
-/// `SP_ELx` a path touches plays the role of TMDL's single SP.
-const ARMV8_EXTRA_REGS: &[(&str, &str, u64, u32)] = &[
-    ("PSTATE.N", "pstate", 0, 2),
-    ("PSTATE.Z", "pstate", 1, 2),
-    ("PSTATE.C", "pstate", 2, 2),
-    ("PSTATE.V", "pstate", 3, 2),
-    ("SP_EL0", "gprsp", 31, 5),
-    ("SP_EL1", "gprsp", 31, 5),
-    ("SP_EL2", "gprsp", 31, 5),
-    ("SP_EL3", "gprsp", 31, 5),
-];
+    fn slice(&self, value: String) -> String {
+        match self.bits {
+            Some((high, low)) => format!("((_ extract {high} {low}) {value})"),
+            None => value,
+        }
+    }
+}
 
 // These AdvSIMD operations have been checked across every lane arrangement.
 // Keep other vector operations out of the nightly proof set until their Sail
@@ -247,192 +341,6 @@ const X86_ISLA_128BIT_SHIFTS: &[&str] = &["shldimm", "shrdimm", "shldcl", "shrdc
 // These pinned Sail forms do not complete a trace within Isla's execution
 // limit, so there is no path on which to compare architectural state.
 const X86_ISLA_UNEXECUTABLE: &[&str] = &["pushf", "signeddivide32"];
-
-const ISA_SPECS: &[IsaSpec] = &[
-    IsaSpec {
-        name: "riscv64",
-        tmdl_isa: "RV64I",
-        dialect: "riscv",
-        defs_dir: "backends/riscv/defs",
-        snapshot: "riscv64.ir",
-        snapshot_repo: "rems-project/isla-snapshots",
-        snapshot_ref: ISLA_SNAPSHOTS_PIN,
-        config: "verify-smt-riscv64.toml",
-        xlen: 64,
-        reg_prefix: "x",
-        reg_count: 32,
-        zero_reg: Some(0),
-        pc: "PC",
-        next_pc: Some("nextPC"),
-        // cur_privilege is pinned to Machine and machine-mode traps stay in
-        // Machine, so its (enum-valued) reads and re-writes carry no state
-        // the TMDL model could diverge on.
-        ignore_regs: &["cur_privilege"],
-        mmio_regs: RISCV_MMIO_REGS,
-        extra_regs: RISCV_EXTRA_REGS,
-        struct_reg: None,
-        fixed_reg_values: &[("csr", &[0x340])],
-        // 3: breakpoint, 4: load address misaligned, 6: store/AMO address
-        // misaligned, 11: environment call from M-mode.
-        trap_cause: Some(("mcause", &[3, 4, 6, 11])),
-        initial_registers: &["cur_privilege=Machine"],
-        reg_names: &[],
-        flag_reg: None,
-        simplify: true,
-        align_pc: true,
-        canonical_addrs: false,
-        requires_pc_write: false,
-        local_snapshot: None,
-    },
-    IsaSpec {
-        name: "riscv32",
-        tmdl_isa: "RV32I",
-        dialect: "riscv",
-        defs_dir: "backends/riscv/defs",
-        snapshot: "rv32d.ir",
-        snapshot_repo: "rems-project/isla-snapshots",
-        snapshot_ref: ISLA_SNAPSHOTS_PIN,
-        config: "verify-smt-riscv32.toml",
-        xlen: 32,
-        reg_prefix: "x",
-        reg_count: 32,
-        zero_reg: Some(0),
-        pc: "PC",
-        next_pc: Some("nextPC"),
-        ignore_regs: &["cur_privilege"],
-        mmio_regs: RISCV_MMIO_REGS,
-        extra_regs: RISCV_EXTRA_REGS,
-        struct_reg: None,
-        fixed_reg_values: &[("csr", &[0x340])],
-        // 3: breakpoint, 4: load address misaligned, 6: store/AMO address
-        // misaligned, 11: environment call from M-mode.
-        trap_cause: Some(("mcause", &[3, 4, 6, 11])),
-        initial_registers: &["cur_privilege=Machine"],
-        reg_names: &[],
-        flag_reg: None,
-        simplify: true,
-        align_pc: true,
-        canonical_addrs: false,
-        requires_pc_write: false,
-        local_snapshot: None,
-    },
-    IsaSpec {
-        name: "armv8",
-        tmdl_isa: "ARMv8A64",
-        dialect: "arm64",
-        defs_dir: "backends/arm64/defs",
-        snapshot: "armv8p5.ir",
-        snapshot_repo: "rems-project/isla-snapshots",
-        snapshot_ref: ISLA_SNAPSHOTS_PIN,
-        config: "verify-smt-armv8.toml",
-        xlen: 64,
-        reg_prefix: "R",
-        reg_count: 31,
-        zero_reg: None,
-        pc: "_PC",
-        next_pc: None,
-        ignore_regs: &[
-            "SEE",
-            "__unconditional",
-            "__PC_changed",
-            "__currentInstrLength",
-            "BTypeNext",
-            "BTypeCompatible",
-            // Load/store instruction syndrome, model bookkeeping for fault
-            // reporting; written on every memory access path.
-            "__LSISyndrome",
-        ],
-        mmio_regs: &[],
-        extra_regs: ARMV8_EXTRA_REGS,
-        struct_reg: Some("PSTATE"),
-        fixed_reg_values: &[],
-        trap_cause: None,
-        initial_registers: &[],
-        reg_names: &[],
-        flag_reg: None,
-        simplify: true,
-        align_pc: true,
-        canonical_addrs: false,
-        requires_pc_write: false,
-        local_snapshot: None,
-    },
-    IsaSpec {
-        name: "x86_64",
-        tmdl_isa: "X86_64",
-        dialect: "x86_64",
-        defs_dir: "backends/x86_64/defs",
-        snapshot: "x86.ir",
-        snapshot_repo: "frontiers-labs/isla-snapshots",
-        snapshot_ref: "3c4f457ea9ac2702dae9203414cbdad498be602d",
-        config: "verify-smt-x86_64.toml",
-        xlen: 64,
-        // x86 GPRs are named individually; see reg_names.
-        reg_prefix: "",
-        reg_count: 16,
-        zero_reg: None,
-        pc: "rip",
-        next_pc: None,
-        // Footprint-setup and model-bookkeeping registers: their reads/writes
-        // (application view, 64-bit mode, the fetch buffer) carry no
-        // architectural meaning the TMDL model tracks.
-        ignore_regs: &[
-            "app_view",
-            "marking_view",
-            "ms_reg",
-            "fault_reg",
-            "msrs",
-            "seg_hidden_attrs",
-            "seg_hidden_bases",
-            "seg_hidden_limits",
-            "seg_visibles",
-            "isla_ifetch_buf",
-            "log_register_writes",
-            // Control registers (CR0/CR3/CR4): read during memory access checks
-            // even in the application view, where paging is bypassed.
-            "ctrs",
-            "os",
-        ],
-        mmio_regs: &[],
-        extra_regs: &[],
-        struct_reg: None,
-        fixed_reg_values: &[],
-        trap_cause: None,
-        initial_registers: &[],
-        reg_names: X86_REG_NAMES,
-        // rflags bit layout: cf=0, pf=2, af=4, zf=6, sf=7, df=10, of=11
-        // (Intel SDM). TMDL EFLAGS slots follow declaration order.
-        flag_reg: Some((
-            "rflags",
-            "eflags",
-            &[(0, 0), (1, 2), (2, 6), (3, 7), (4, 11), (5, 4), (6, 10)],
-        )),
-        simplify: false,
-        align_pc: false,
-        canonical_addrs: true,
-        requires_pc_write: true,
-        local_snapshot: None,
-    },
-];
-
-/// x86 Sail GPR names in TMDL encoding-index order (`rax`=0 .. `r15`=15).
-const X86_REG_NAMES: &[(&str, u32)] = &[
-    ("rax", 0),
-    ("rcx", 1),
-    ("rdx", 2),
-    ("rbx", 3),
-    ("rsp", 4),
-    ("rbp", 5),
-    ("rsi", 6),
-    ("rdi", 7),
-    ("r8", 8),
-    ("r9", 9),
-    ("r10", 10),
-    ("r11", 11),
-    ("r12", 12),
-    ("r13", 13),
-    ("r14", 14),
-    ("r15", 15),
-];
 
 fn x86_unsupported_reason(name: &str) -> Option<&'static str> {
     if X86_SAIL_UNIMPLEMENTED.contains(&name) {
@@ -522,13 +430,11 @@ fn unsupported_reason(spec: &IsaSpec, model: &FlatModel, instr: &Instruction) ->
 }
 
 pub fn verify_smt(sh: &Shell, isa: &str, args: impl Iterator<Item = String>) -> anyhow::Result<()> {
-    let spec = ISA_SPECS.iter().find(|s| s.name == isa).ok_or_else(|| {
-        anyhow!("unsupported ISA {isa}; available: riscv64, riscv32, armv8, x86_64")
-    })?;
+    let spec = &IsaSpec::load(isa)?;
     let shard = parse_shard(args)?;
     let tools = Tools::ensure(sh, spec)?;
     let root = project_root();
-    let out_dir = root.join("target/verify/smt").join(spec.name);
+    let out_dir = root.join("target/verify/smt").join(&spec.name);
     std::fs::create_dir_all(out_dir.join("cache"))?;
     std::fs::create_dir_all(out_dir.join("queries"))?;
 
@@ -544,12 +450,22 @@ pub fn verify_smt(sh: &Shell, isa: &str, args: impl Iterator<Item = String>) -> 
         inventory.isa,
         inventory.dialect
     );
+    for row in &spec.map {
+        if let State::Slot { class, .. } = &row.state {
+            anyhow::ensure!(
+                inventory.flat.classes.contains_key(class),
+                "{} maps {} to unknown TMDL class {class}",
+                spec.name,
+                row.register
+            );
+        }
+    }
     let instructions = inventory.instructions;
     let filter: Option<Vec<String>> = std::env::var("TIR_VERIFY_SMT_FILTER")
         .ok()
         .map(|f| f.split(',').map(|s| s.trim().to_string()).collect());
 
-    let mut report = Report::new(spec.name, shard);
+    let mut report = Report::new(&spec.name, shard);
     let started = Instant::now();
     let mut selected = Vec::new();
 
@@ -659,15 +575,13 @@ impl Tools {
     /// Resolve the external tools, fetching anything that is not overridden
     /// by an environment variable.
     fn ensure(sh: &Shell, spec: &IsaSpec) -> anyhow::Result<Self> {
-        let snapshot = match (std::env::var("TIR_ISLA_SNAPSHOT"), spec.local_snapshot) {
-            (Ok(path), _) => path.into(),
-            // Allow local snapshots for development and CI overrides.
-            (Err(_), Some(local)) => PathBuf::from(local),
-            (Err(_), None) => ensure_snapshot(sh, spec)?,
+        let snapshot = match std::env::var("TIR_ISLA_SNAPSHOT") {
+            Ok(path) => path.into(),
+            Err(_) => ensure_snapshot(sh, spec)?,
         };
         let isla_config = std::env::var("TIR_ISLA_CONFIG")
             .map(PathBuf::from)
-            .unwrap_or_else(|_| project_root().join("xtask").join(spec.config));
+            .unwrap_or_else(|_| project_root().join("xtask").join(&spec.isla_config));
         let threads = std::env::var("TIR_VERIFY_SMT_ISLA_JOBS")
             .ok()
             .and_then(|jobs| jobs.parse().ok())
@@ -676,15 +590,10 @@ impl Tools {
                     .map(usize::from)
                     .unwrap_or(1)
             });
-        let initial_registers = spec
-            .initial_registers
-            .iter()
-            .map(|assignment| assignment.to_string())
-            .collect::<Vec<_>>();
         let verifier = tir_verify::Verifier::load(
             &snapshot,
             &isla_config,
-            &initial_registers,
+            &spec.initial_registers,
             "isla_footprint_no_init",
             threads,
             60,
@@ -710,15 +619,10 @@ impl Tools {
     }
 }
 
-/// Pinned isla-snapshots commit: the models the specs and configs were
-/// validated against. A floating ref breaks silently when upstream swaps
-/// model generations (rv32d.ir became a new-interface build on 2026-06-02).
-const ISLA_SNAPSHOTS_PIN: &str = "d8b31014643035a3b11071e56ef30001de3f52ab";
-
 fn ensure_snapshot(sh: &Shell, spec: &IsaSpec) -> anyhow::Result<PathBuf> {
-    let file = spec.snapshot;
+    let file = &spec.snapshot;
     let snap_ref =
-        std::env::var("TIR_ISLA_SNAPSHOTS_REF").unwrap_or_else(|_| spec.snapshot_ref.to_string());
+        std::env::var("TIR_ISLA_SNAPSHOTS_REF").unwrap_or_else(|_| spec.snapshot_ref.clone());
     let dest = project_root()
         .join("target/verify/snapshots")
         .join(snap_ref.replace('/', "-"))
@@ -732,13 +636,13 @@ fn ensure_snapshot(sh: &Shell, spec: &IsaSpec) -> anyhow::Result<PathBuf> {
 }
 
 fn generate_tmdl_smt(sh: &Shell, spec: &IsaSpec, root: &Path, out: &Path) -> anyhow::Result<()> {
-    let defs: Vec<PathBuf> = std::fs::read_dir(root.join(spec.defs_dir))?
+    let defs: Vec<PathBuf> = std::fs::read_dir(root.join(&spec.defs_dir))?
         .filter_map(|e| e.ok().map(|e| e.path()))
         .filter(|p| p.extension().is_some_and(|e| e == "tmdl"))
         .collect();
     let out_str = out.to_string_lossy().to_string();
-    let dialect = spec.dialect;
-    let tmdl_isa = spec.tmdl_isa;
+    let dialect = &spec.dialect;
+    let tmdl_isa = &spec.tmdl_isa;
     cmd!(
         sh,
         "cargo run -p tmdl --bin tmdlc -- --action emit-smtlib --dialect {dialect} --isa {tmdl_isa} --output {out_str} {defs...}"
@@ -963,12 +867,7 @@ fn parse_inventory(json: &str) -> anyhow::Result<Inventory> {
 /// instructions get 4-byte aligned immediates so that, together with the
 /// aligned-PC assumption, Sail's misaligned-fetch trap paths are vacuous.
 fn operand_cases(spec: &IsaSpec, instr: &Instruction) -> Vec<Vec<u64>> {
-    let fixed_values = |class: &str| {
-        spec.fixed_reg_values
-            .iter()
-            .find(|(c, _)| *c == class)
-            .map(|(_, vals)| *vals)
-    };
+    let fixed_values = |class: &str| spec.operand_values.get(class).map(Vec::as_slice);
     // Operands with a fixed value list (CSR addresses) sit outside the GPR
     // patterns; they get their fixed values appended below.
     let fixed_positions: Vec<(usize, &[u64])> = instr
@@ -1089,7 +988,7 @@ fn operand_case_is_valid(
         return false;
     }
     let value = |index: usize| case[index];
-    match (spec.name, instr.name.as_str()) {
+    match (spec.name.as_str(), instr.name.as_str()) {
         ("armv8", "loaddoublewordpreindex" | "loaddoublewordpostindex") => value(0) != value(1),
         ("armv8", "storedoublewordpreindex") => value(0) != value(1),
         ("armv8", "loadpair") => value(0) != value(1),
@@ -1497,39 +1396,6 @@ fn sail_traces(
 // Structured Isla trace analysis
 // ---------------------------------------------------------------------------
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-enum MappedReg {
-    X(u32),
-    Pc,
-    NextPc,
-    /// Index into `spec.extra_regs`.
-    Slot(usize),
-}
-
-fn map_register(spec: &IsaSpec, name: &str) -> Option<MappedReg> {
-    let name = name.trim_matches('|');
-    if name == spec.pc {
-        return Some(MappedReg::Pc);
-    }
-    if spec.next_pc == Some(name) {
-        return Some(MappedReg::NextPc);
-    }
-    if let Some(i) = spec.extra_regs.iter().position(|(n, _, _, _)| *n == name) {
-        return Some(MappedReg::Slot(i));
-    }
-    if !spec.reg_names.is_empty() {
-        return spec
-            .reg_names
-            .iter()
-            .find(|(n, _)| *n == name)
-            .map(|(_, idx)| MappedReg::X(*idx));
-    }
-    name.strip_prefix(spec.reg_prefix)
-        .and_then(|n| n.parse::<u32>().ok())
-        .filter(|n| *n < spec.reg_count)
-        .map(MappedReg::X)
-}
-
 /// Whether a memory event's kind is a plain data access. Old-interface
 /// models (RISC-V) use enum atoms (`|Read_plain|`); new-interface models
 /// (ARM) embed the whole request struct, whose `access_kind` must be an
@@ -1539,9 +1405,6 @@ fn is_plain_access(kind: &tir_verify::TraceValue) -> bool {
     kind.smt.trim_matches('|').ends_with("_plain") || kind.smt.contains("|AV_plain|")
 }
 
-/// Whether the value mentions any isla symbolic variable (`vN`). Struct
-/// register reads (RISC-V `mip`) wrap their symbolic fields in a
-/// `(_ struct ...)` literal, so a bare-atom check is not enough.
 /// The payload of a single-field `(_ struct (|bits| value))` literal, as
 /// written for Sail bitfield registers; anything else is returned as is.
 fn unwrap_bits_struct(value: &tir_verify::TraceValue) -> &tir_verify::TraceValue {
@@ -1561,10 +1424,10 @@ struct MemAccess {
 
 #[derive(Default)]
 struct TraceInfo {
-    /// `(register, symbolic-variable)` for symbolic initial-state reads.
-    reads: Vec<(MappedReg, String)>,
-    /// Final value per written register (last write wins).
-    writes: HashMap<MappedReg, String>,
+    /// Initial state the model read, as `(state, Sail value)`.
+    reads: Vec<(State, String)>,
+    /// Final value per written state (last write wins).
+    writes: HashMap<State, String>,
     /// Plain memory reads, related to the initial TMDL memory array.
     mem_reads: Vec<MemAccess>,
     /// Plain memory writes in order, folded into the expected final array.
@@ -1575,19 +1438,6 @@ struct TraceInfo {
     /// Ordered `define-const` bindings, replayed as a `let` chain.
     defines: Vec<(String, String)>,
     asserts: Vec<String>,
-    /// `(flag slot, whole-register value, bit index)` for symbolic reads of a
-    /// bitfield flag register (x86 `rflags`): each bit relates to a flag slot's
-    /// initial state.
-    flag_reads: Vec<(u64, String, u32)>,
-    /// `flag slot -> bit expression` from a write of the flag register (last
-    /// write wins). Only compared when the TMDL behavior also writes flags.
-    flag_writes: HashMap<u64, String>,
-    /// RISC-V fcsr combines the independent TMDL fflags and frm slots.
-    fcsr_reads: Vec<String>,
-    fcsr_write: Option<String>,
-    /// ARM's `_V` register is one 32-element array of 128-bit values.
-    vector_reads: Vec<(usize, String)>,
-    vector_write: Option<Vec<String>>,
     /// Why this path cannot be checked against the TMDL state (trap paths,
     /// CSR accesses, ...), if so.
     excluded: Option<String>,
@@ -1599,25 +1449,9 @@ fn exclude(info: &mut TraceInfo, reason: String) {
     }
 }
 
-fn arm_vector_elements(value: &tir_verify::TraceValue) -> Option<Vec<String>> {
-    let body = value.smt.strip_prefix("(_ vec ")?.strip_suffix(')')?;
-    let elements: Vec<_> = body.split_whitespace().map(str::to_string).collect();
-    (elements.len() == 32
-        && elements
-            .iter()
-            .all(|element| element.starts_with('v') || element.starts_with('#')))
-    .then_some(elements)
-}
-
-fn register_value(spec: &IsaSpec, name: &str, value: &tir_verify::TraceValue) -> String {
-    let value = &unwrap_bits_struct(value).smt;
-    if spec.name == "riscv32" && name == "mstatus" {
-        format!("((_ extract 31 0) {value})")
-    } else {
-        value.clone()
-    }
-}
-
+/// Relate a register read to TMDL's initial state. A read returning a
+/// `define-const` variable, or following a write, reads back a value the
+/// model computed rather than initial state.
 fn analyze_register_read(
     spec: &IsaSpec,
     info: &mut TraceInfo,
@@ -1626,82 +1460,32 @@ fn analyze_register_read(
     fields: &[String],
     value: &tir_verify::TraceValue,
 ) {
-    if spec.ignore_regs.contains(&name) {
+    let name = name.trim_matches('|');
+    if spec.ignore.iter().any(|ignored| ignored == name) {
         return;
     }
-    if spec.name == "armv8" && name == "_V" {
-        match arm_vector_elements(value) {
-            Some(elements) => {
-                for (index, element) in elements.into_iter().enumerate() {
-                    if element.starts_with('v') && !defined_vars.contains(&element) {
-                        info.vector_reads.push((index, element));
-                    }
-                }
-            }
-            None => exclude(info, "unrecognized ARM vector register value".to_string()),
-        }
-        return;
-    }
-    if spec.name.starts_with("riscv") && name == "fcsr" {
-        let value = unwrap_bits_struct(value);
-        if value.smt.starts_with('v') && !defined_vars.contains(&value.smt) {
-            info.fcsr_reads.push(value.smt.clone());
-        }
-        return;
-    }
-    // A bitfield flag register (x86 `rflags`) read: each mapped bit
-    // of the symbolic initial value relates to a flag slot.
-    if let Some((flag_name, _, bit_map)) = spec.flag_reg {
-        if name == flag_name {
-            let value = unwrap_bits_struct(value);
-            if value.smt.starts_with('v') && !defined_vars.contains(&value.smt) {
-                for (slot, bit) in bit_map {
-                    info.flag_reads.push((*slot, value.smt.clone(), *bit));
-                }
-            }
-            return;
-        }
-    }
-    if spec.mmio_regs.contains(&name) {
+    if spec.mmio.iter().any(|mmio| mmio == name) {
         exclude(
             info,
             format!("reads MMIO-backed register {name} (platform memory map)"),
         );
         return;
     }
-    if spec.struct_reg == Some(name) {
-        // Mapped fields (NZCV) relate to TMDL state; other fields
-        // (EL, nRW, ...) are pinned by each path's assertions.
-        if let Some(field) = fields.first() {
-            let full = format!("{name}.{field}");
-            if let Some(i) = spec.extra_regs.iter().position(|(n, _, _, _)| *n == full) {
-                let reg = MappedReg::Slot(i);
-                if let Some(field_value) = value.fields.get(field) {
-                    if field_value.smt.starts_with('v')
-                        && !info.writes.contains_key(&reg)
-                        && !defined_vars.contains(&field_value.smt)
-                    {
-                        info.reads.push((reg, field_value.smt.clone()));
-                    }
-                }
+    let mut mapped = false;
+    for row in spec.map.iter().filter(|row| row.register == name) {
+        mapped = true;
+        match row.select(fields, value) {
+            Ok(Some(read))
+                if !info.writes.contains_key(&row.state) && !defined_vars.contains(&read) =>
+            {
+                info.reads.push((row.state.clone(), row.slice(read)));
             }
+            Ok(_) => {}
+            Err(reason) => exclude(info, reason),
         }
-        return;
     }
-    // Bitfield registers (RISC-V mstatus, mtvec, mcause) carry
-    // their value in a single-field struct literal.
-    let value = unwrap_bits_struct(value);
-    match map_register(spec, name) {
-        Some(reg) => {
-            let concrete = value.smt.starts_with('#');
-            if !info.writes.contains_key(&reg) && (concrete || !defined_vars.contains(&value.smt)) {
-                info.reads.push((reg, register_value(spec, name, value)));
-            }
-        }
-        None if value.symbolic => {
-            exclude(info, format!("reads unmapped register {}", name));
-        }
-        None => {}
+    if !mapped && value.symbolic {
+        exclude(info, format!("reads unmapped register {name}"));
     }
 }
 
@@ -1712,59 +1496,23 @@ fn analyze_register_write(
     fields: &[String],
     value: &tir_verify::TraceValue,
 ) {
-    if spec.ignore_regs.contains(&name) {
+    let name = name.trim_matches('|');
+    if spec.ignore.iter().any(|ignored| ignored == name) {
         return;
     }
-    if spec.name == "armv8" && name == "_V" {
-        match arm_vector_elements(value) {
-            Some(elements) => info.vector_write = Some(elements),
-            None => exclude(info, "unrecognized ARM vector register write".to_string()),
-        }
-        return;
-    }
-    if spec.name.starts_with("riscv") && name == "fcsr" {
-        info.fcsr_write = Some(unwrap_bits_struct(value).smt.clone());
-        return;
-    }
-    // A write of the bitfield flag register: record each mapped bit
-    // as that flag slot's final value (last write wins).
-    if let Some((flag_name, _, bit_map)) = spec.flag_reg {
-        if name == flag_name {
-            let value = unwrap_bits_struct(value);
-            for (slot, bit) in bit_map {
-                info.flag_writes
-                    .insert(*slot, format!("((_ extract {bit} {bit}) {})", value.smt));
+    let mut mapped = false;
+    for row in spec.map.iter().filter(|row| row.register == name) {
+        match row.select(fields, value) {
+            Ok(Some(written)) => {
+                info.writes.insert(row.state.clone(), row.slice(written));
+                mapped = true;
             }
-            return;
+            Ok(None) => {}
+            Err(reason) => exclude(info, reason),
         }
     }
-    if spec.struct_reg == Some(name) {
-        let mapped = fields.first().and_then(|field| {
-            let full = format!("{name}.{field}");
-            let i = spec.extra_regs.iter().position(|(n, _, _, _)| *n == full)?;
-            Some((i, value.fields.get(field)?))
-        });
-        match mapped {
-            Some((i, field_value)) => {
-                info.writes
-                    .insert(MappedReg::Slot(i), field_value.smt.clone());
-            }
-            None => exclude(
-                info,
-                format!("writes unmapped {name} field (trap/system path)"),
-            ),
-        }
-        return;
-    }
-    match map_register(spec, name) {
-        Some(MappedReg::X(n)) if Some(n) == spec.zero_reg => {}
-        Some(reg) => {
-            info.writes.insert(reg, register_value(spec, name, value));
-        }
-        None => exclude(
-            info,
-            format!("writes unmapped register {} (trap/system path)", name),
-        ),
+    if !mapped {
+        exclude(info, format!("writes unmapped {name} (trap/system path)"));
     }
 }
 
@@ -1902,8 +1650,8 @@ fn analyze_trace(spec: &IsaSpec, events: &[tir_verify::TraceEvent]) -> TraceInfo
     // the model's forking address decode), so it cannot be checked against TMDL.
     if spec.requires_pc_write
         && info.excluded.is_none()
-        && !info.writes.contains_key(&MappedReg::Pc)
-        && !info.writes.contains_key(&MappedReg::NextPc)
+        && !info.writes.contains_key(&State::Pc)
+        && !info.writes.contains_key(&State::NextPc)
     {
         exclude(&mut info, "incomplete path (no PC write)".to_string());
     }
@@ -1950,7 +1698,13 @@ fn normalize_x86_cmps_flags(trace: &mut TraceInfo, bytes: u32) -> anyhow::Result
             format!("((_ extract 4 4) (bvxor (bvxor {lhs} {rhs}) {diff}))"),
         ),
     ];
-    trace.flag_writes.extend(flags);
+    trace.writes.extend(flags.map(|(index, value)| {
+        let flag = State::Slot {
+            class: "eflags".to_string(),
+            index,
+        };
+        (flag, value)
+    }));
     Ok(())
 }
 
@@ -2120,6 +1874,11 @@ fn emit_address_assumptions(
     q
 }
 
+fn read_slot(model: &FlatModel, class: &str, index: u64, state: &str) -> String {
+    let width = model.classes[class].index_width;
+    flat_read_register(model, class, state, &format!("(_ bv{index} {width})"))
+}
+
 /// Pin the symbolic initial values the model read back to TMDL's initial state.
 fn emit_trace_read_constraints(
     spec: &IsaSpec,
@@ -2129,52 +1888,22 @@ fn emit_trace_read_constraints(
     trace: &TraceInfo,
 ) -> String {
     let mut q = String::new();
-    let xlen = spec.xlen;
-    let gw = spec.gpr_idx_width();
-    let width_bytes = instr.width_bytes(case);
-    let slot_access = |i: usize, state: &str| {
-        let (_, class, slot, w) = spec.extra_regs[i];
-        flat_read_register(model, class, state, &format!("(_ bv{} {})", slot, w))
-    };
     for decl in &trace.declares {
         q.push_str(decl);
         q.push('\n');
     }
-    // A read of a bitfield flag register pins each mapped bit of the symbolic
-    // initial value to that flag slot's initial TMDL state.
-    if let Some((_, class, _)) = spec.flag_reg {
-        let idx_w = model.classes[class].index_width;
-        for (slot, var, bit) in &trace.flag_reads {
-            let _ = writeln!(
-                q,
-                "(assert (= ((_ extract {bit} {bit}) {var}) {}))",
-                flat_read_register(model, class, "st0", &format!("(_ bv{slot} {idx_w})")),
-            );
-        }
-    }
-    for var in &trace.fcsr_reads {
-        let flags = flat_read_register(model, "fflags", "st0", "(_ bv1 12)");
-        let round = flat_read_register(model, "frm", "st0", "(_ bv2 12)");
-        let _ = writeln!(q, "(assert (= ((_ extract 4 0) {var}) {flags}))");
-        let _ = writeln!(q, "(assert (= ((_ extract 7 5) {var}) {round}))");
-        // The architectural FCSR exposes only fflags and frm; reserved bits
-        // read as zero even though the Sail snapshot starts them symbolic.
-        let _ = writeln!(q, "(assert (= ((_ extract 31 8) {var}) (_ bv0 24)))");
-    }
-    for (index, value) in &trace.vector_reads {
-        let initial = flat_read_register(model, "vpr", "st0", &format!("(_ bv{index} 5)"));
-        let _ = writeln!(q, "(assert (= {value} {initial}))");
-    }
-    for (reg, var) in &trace.reads {
-        let init = match reg {
-            MappedReg::X(n) => {
-                flat_read_register(model, "gpr", "st0", &format!("(_ bv{} {})", n, gw))
-            }
-            MappedReg::Pc => "st0_pc".to_string(),
-            MappedReg::NextPc => format!("(bvadd st0_pc (_ bv{width_bytes} {xlen}))"),
-            MappedReg::Slot(i) => slot_access(*i, "st0"),
+    for (state, value) in &trace.reads {
+        let initial = match state {
+            State::Pc => "st0_pc".to_string(),
+            State::NextPc => format!(
+                "(bvadd st0_pc (_ bv{} {}))",
+                instr.width_bytes(case),
+                spec.xlen
+            ),
+            State::Slot { class, index } => read_slot(model, class, *index, "st0"),
+            State::Zero(width) => format!("(_ bv0 {width})"),
         };
-        let _ = writeln!(q, "(assert (= {} {}))", var, init);
+        let _ = writeln!(q, "(assert (= {value} {initial}))");
     }
     q
 }
@@ -2248,94 +1977,12 @@ fn x86_carry_equality(
     if *case.get(1)? & mask == 0 {
         return None;
     }
-    let result = trace.writes.get(&MappedReg::X(*case.first()? as u32))?;
+    let result = trace.writes.get(&State::Slot {
+        class: "gpr".to_string(),
+        index: *case.first()?,
+    })?;
     let high = width - 1;
     Some(format!("(= {tmdl} ((_ extract {high} {high}) {result}))"))
-}
-
-fn append_flag_equalities(
-    spec: &IsaSpec,
-    model: &FlatModel,
-    instr: &Instruction,
-    case: &[u64],
-    trace: &TraceInfo,
-    final_eq: &mut Vec<String>,
-) {
-    // Only compare flags that the TMDL behavior writes.
-    let Some((_, class, bit_map)) = spec.flag_reg else {
-        return;
-    };
-    if !instr.write_classes.iter().any(|written| written == class) {
-        return;
-    }
-    let idx_w = model.classes[class].index_width;
-    for (slot, _) in bit_map {
-        if !instr
-            .fixed_register_writes
-            .iter()
-            .any(|(written, index)| written == class && u64::from(*index) == *slot)
-        {
-            continue;
-        }
-        let sail = trace.flag_writes.get(slot).cloned().unwrap_or_else(|| {
-            flat_read_register(model, class, "st0", &format!("(_ bv{slot} {idx_w})"))
-        });
-        let tmdl = flat_read_register(model, class, "st1", &format!("(_ bv{slot} {idx_w})"));
-        if spec.name == "x86_64" && *slot == 0 {
-            if let Some(equality) = x86_carry_equality(model, instr, case, trace, &tmdl, &sail) {
-                final_eq.push(equality);
-                continue;
-            }
-        }
-        final_eq.push(format!("(= {tmdl} {sail})"));
-    }
-}
-
-fn append_fcsr_equalities(
-    model: &FlatModel,
-    instr: &Instruction,
-    trace: &TraceInfo,
-    final_eq: &mut Vec<String>,
-) {
-    let Some(fcsr) = &trace.fcsr_write else {
-        return;
-    };
-    for (class, slot, high, low) in [("fflags", 1, 4, 0), ("frm", 2, 7, 5)] {
-        if instr
-            .fixed_register_writes
-            .iter()
-            .any(|(written, index)| written == class && *index == slot)
-        {
-            let final_value = flat_read_register(model, class, "st1", &format!("(_ bv{slot} 12)"));
-            final_eq.push(format!(
-                "(= {final_value} ((_ extract {high} {low}) {fcsr}))"
-            ));
-        }
-    }
-}
-
-fn append_arm_vector_equalities(
-    model: &FlatModel,
-    instr: &Instruction,
-    trace: &TraceInfo,
-    final_eq: &mut Vec<String>,
-) {
-    if trace.vector_write.is_none()
-        && !instr
-            .write_classes
-            .iter()
-            .any(|class| model.classes[class].storage == "vpr")
-    {
-        return;
-    }
-    for index in 0..32 {
-        let sail = trace.vector_write.as_ref().map_or_else(
-            || flat_read_register(model, "vpr", "st0", &format!("(_ bv{index} 5)")),
-            |elements| elements[index].clone(),
-        );
-        let tmdl = flat_read_register(model, "vpr", "st1", &format!("(_ bv{index} 5)"));
-        final_eq.push(format!("(= {tmdl} {sail})"));
-    }
 }
 
 fn query_prelude(
@@ -2429,57 +2076,41 @@ fn build_query(
     let xlen = spec.xlen;
     let mut q = query_prelude(spec, model, instr, case, trace);
 
-    let gw = spec.gpr_idx_width();
     let width_bytes = instr.width_bytes(case);
-    let slot_access = |i: usize, state: &str| {
-        let (_, class, slot, w) = spec.extra_regs[i];
-        flat_read_register(model, class, state, &format!("(_ bv{} {})", slot, w))
-    };
-    let mut final_eq: Vec<String> = (0..spec.reg_count)
-        .filter(|n| Some(*n) != spec.zero_reg)
-        .map(|n| {
-            let sail = trace
-                .writes
-                .get(&MappedReg::X(n))
-                .cloned()
-                .unwrap_or_else(|| {
-                    flat_read_register(model, "gpr", "st0", &format!("(_ bv{} {})", n, gw))
-                });
-            format!(
-                "(= {} {})",
-                flat_read_register(model, "gpr", "st1", &format!("(_ bv{} {})", n, gw)),
-                sail
-            )
-        })
-        .collect();
-    append_flag_equalities(spec, model, instr, case, trace, &mut final_eq);
-    append_fcsr_equalities(model, instr, trace, &mut final_eq);
-    if spec.name == "armv8" {
-        append_arm_vector_equalities(model, instr, trace, &mut final_eq);
-    }
-    // Extra mapped state, deduplicated by underlying TMDL slot since several
-    // Sail names may alias one slot (SP_ELx); a write through any alias is
-    // the slot's final value.
-    let mut seen_slots = std::collections::HashSet::new();
-    for (i, (_, class, slot, _)) in spec.extra_regs.iter().enumerate() {
-        if !seen_slots.insert((*class, *slot)) {
+    // Every mapped slot, once: several Sail names may alias one slot (SP_ELx),
+    // and a write through any alias is the slot's final value.
+    let mut final_eq = Vec::new();
+    let mut compared = HashSet::new();
+    for row in &spec.map {
+        let State::Slot { class, index } = &row.state else {
+            continue;
+        };
+        let written = || {
+            instr
+                .fixed_register_writes
+                .iter()
+                .any(|(written, slot)| written == class && u64::from(*slot) == *index)
+        };
+        if !compared.insert(&row.state) || (row.if_written && !written()) {
             continue;
         }
-        let sail = spec
-            .extra_regs
-            .iter()
-            .enumerate()
-            .filter(|(_, (_, c, s, _))| c == class && s == slot)
-            .find_map(|(j, _)| trace.writes.get(&MappedReg::Slot(j)).cloned())
-            .unwrap_or_else(|| slot_access(i, "st0"));
-        final_eq.push(format!("(= {} {})", slot_access(i, "st1"), sail));
+        let sail = trace
+            .writes
+            .get(&row.state)
+            .cloned()
+            .unwrap_or_else(|| read_slot(model, class, *index, "st0"));
+        let tmdl = read_slot(model, class, *index, "st1");
+        let carry = (class == "eflags" && *index == 0)
+            .then(|| x86_carry_equality(model, instr, case, trace, &tmdl, &sail))
+            .flatten();
+        final_eq.push(carry.unwrap_or_else(|| format!("(= {tmdl} {sail})")));
     }
     // Models with a delayed PC (RISC-V `nextPC`) announce taken branches
     // there; the ARM model writes the PC register directly.
     let sail_pc = trace
         .writes
-        .get(&MappedReg::NextPc)
-        .or_else(|| trace.writes.get(&MappedReg::Pc));
+        .get(&State::NextPc)
+        .or_else(|| trace.writes.get(&State::Pc));
     let mut asserts = trace.asserts.clone();
 
     // Memory: Sail's read values come from TMDL's initial array, and the
@@ -2619,13 +2250,12 @@ fn build_query(
 
     // Counterexample probes, only evaluated on `sat`.
     let mut probes: Vec<String> = vec!["st0_pc".into(), "st1_pc".into()];
-    for n in (0..spec.reg_count).filter(|n| Some(*n) != spec.zero_reg) {
-        probes.push(flat_read_register(
-            model,
-            "gpr",
-            "st0",
-            &format!("(_ bv{} {})", n, gw),
-        ));
+    for row in &spec.map {
+        if let State::Slot { class, index } = &row.state {
+            if class == "gpr" {
+                probes.push(read_slot(model, class, *index, "st0"));
+            }
+        }
     }
     let _ = writeln!(q, "(get-value ({}))", probes.join(" "));
     q
@@ -2912,12 +2542,9 @@ fn verify_instruction(
             )?;
             // A path writing a trap cause TMDL does not model (access fault)
             // lies outside the all-of-memory-is-RAM assumption.
-            let written_cause = spec.trap_cause.and_then(|(cause_reg, causes)| {
-                let slot = spec
-                    .extra_regs
-                    .iter()
-                    .position(|(n, _, _, _)| *n == cause_reg)?;
-                Some((info.writes.get(&MappedReg::Slot(slot))?, causes))
+            let written_cause = spec.trap_cause.as_ref().and_then(|trap| {
+                let row = spec.map.iter().find(|row| row.register == trap.register)?;
+                Some((info.writes.get(&row.state)?, trap.causes.as_slice()))
             });
             let cause = written_cause.map(|(cause, causes)| (cause.as_str(), causes));
             let query = build_query(spec, model, instr, case, &info, cause);
@@ -3226,18 +2853,15 @@ mod tests {
                {"name": "imm", "kind": "bits", "class": null, "width": 12, "align": 4, "nonzero": true}"#,
         );
         let inventory = parse_inventory(&json).unwrap();
-        let spec = ISA_SPECS
-            .iter()
-            .find(|spec| spec.name == "riscv64")
-            .unwrap();
-        let cases = operand_cases(spec, &inventory.instructions[0]);
+        let spec = IsaSpec::load("riscv64").unwrap();
+        let cases = operand_cases(&spec, &inventory.instructions[0]);
         assert!(!cases.is_empty());
         assert!(cases.iter().all(|case| case[1] != 0 && case[1] % 4 == 0));
     }
 
     #[test]
     fn x86_flag_queries_use_eflags_storage_slots() {
-        let spec = ISA_SPECS.iter().find(|spec| spec.name == "x86_64").unwrap();
+        let spec = &IsaSpec::load("x86_64").unwrap();
         let model = FlatModel {
             fields: vec![],
             classes: [

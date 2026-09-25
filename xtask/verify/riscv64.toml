@@ -1,0 +1,46 @@
+# Sail RISC-V (RV64) against TMDL RV64I. See docs/tmdl/smt_verification.md.
+
+tmdl_isa = "RV64I"
+dialect = "riscv"
+defs_dir = "backends/riscv/defs"
+snapshot = "riscv64.ir"
+snapshot_repo = "rems-project/isla-snapshots"
+snapshot_ref = "d8b31014643035a3b11071e56ef30001de3f52ab"
+isla_config = "verify-smt-riscv64.toml"
+xlen = 64
+simplify = true
+initial_registers = ["cur_privilege=Machine"]
+
+pc = "PC"
+next_pc = "nextPC"
+align_pc = true
+# cur_privilege is pinned to Machine and machine-mode traps stay in Machine,
+# so its (enum-valued) reads and re-writes carry no state the TMDL model could
+# diverge on.
+ignore = ["cur_privilege"]
+# CLINT-backed state: loads/stores whose address falls into the CLINT MMIO
+# window read or write these instead of memory.
+mmio = ["mtime", "mtimecmp", "mip"]
+# 3: breakpoint, 4: load address misaligned, 6: store/AMO address misaligned,
+# 11: environment call from M-mode.
+trap_cause = { register = "mcause", causes = [3, 4, 6, 11] }
+# The CSR encoding space is mostly unimplemented; sample mscratch only.
+operand_values = { csr = [0x340] }
+
+# x0 is not a Sail register; TMDL reads its slot as zero.
+map = [
+  { sail = "x{n}", class = "gpr", n = [0, 31] },
+  # Plain read-write CSR storage plus the machine-mode trap state written by
+  # exception handlers in TMDL behaviors. The counter CSRs stay unmapped: they
+  # are read-only and their Sail accesses trap or go through mcounteren.
+  { sail = "mscratch", class = "csr", index = 0x340 },
+  { sail = "mstatus", class = "csr", index = 0x300 },
+  { sail = "mtvec", class = "csr", index = 0x305 },
+  { sail = "mepc", class = "csr", index = 0x341 },
+  { sail = "mcause", class = "csr", index = 0x342 },
+  { sail = "mtval", class = "csr", index = 0x343 },
+  { sail = "fcsr", bits = [4, 0], class = "fflags", index = 1, if_written = true },
+  { sail = "fcsr", bits = [7, 5], class = "frm", index = 2, if_written = true },
+  # Reserved FCSR bits read as zero; the snapshot starts them symbolic.
+  { sail = "fcsr", bits = [31, 8] },
+]
