@@ -1,12 +1,9 @@
 # SMT equivalence checking against Sail models
 
-`cargo xtask verify <isa>` proves, per instruction and per concrete operand
-assignment, that the TMDL behavior and the [Sail RISC-V
-model](https://github.com/riscv/sail-riscv) compute the same architectural
-state — for **all** 2^64 values of every register, not just sampled ones. It
-needs no hand-written tests and no hand-written proofs, so it is suitable for
-nightly runs: `unsat` from the solver is a proof of agreement, `sat` is a
-concrete counterexample.
+`cargo xtask verify <isa>` compares TMDL behavior with pinned Sail models. It
+samples instruction operands and keeps architectural state symbolic. An `unsat`
+result proves agreement for one execution path; `sat` gives a counterexample.
+Excluded paths and solver unknowns remain visible in the report.
 
 ## How it works
 
@@ -21,18 +18,12 @@ set (x0 corner cases, register aliasing, immediate extremes):
    fully symbolic register state.
    Each execution path yields a trace of register reads/writes plus SMT
    definitions and path constraints.
-3. For every path, a QF_AUFBV query asserts: initial states agree, the path
-   constraints hold, and the mapped final registers, flags, memory, or PC differ.
-   `unsat` proves equivalence on that path; `sat` prints the input register
-   values that expose the divergence. Architectural state is flattened to one
-   constant per field rather than encoded as an SMT datatype. Bitwuzla runs
-   first; z3 is the fallback and cross-checks every `sat` result. Query files
-   are left in `target/verify/smt/<isa>/queries/` for inspection.
-   For x86 memory IMUL, a separate query first proves that Sail's byte-read
-   addresses equal TMDL's effective addresses before the multiplication query
-   uses the shared addresses.
+3. For every path, an SMT query asks whether the models can reach different
+   mapped architectural states from the same initial state under the path
+   constraints. `unsat` proves agreement; `sat` supplies a counterexample.
+   Queries are saved in `target/verify/smt/<isa>/queries/` for inspection.
 
-Sail traces are cached in `target/verify/smt/cache/`, keyed by instruction
+Sail traces are cached in `target/verify/smt/<isa>/cache/`, keyed by instruction
 word plus a fingerprint of the snapshot and isla config, so swapping either
 invalidates the cache automatically.
 
@@ -41,33 +32,17 @@ invalidates the cache automatically.
 Reported with the results, and deliberate:
 
 - Machine mode, no unmodeled traps: Sail paths that touch architectural state
-  without a TMDL mapping are excluded and counted. The verifier maps selected
-  CSRs, x86 flags, and ARM vector registers as well as general registers.
+  without a TMDL mapping are excluded and counted.
 - The initial PC is 4-byte aligned and `nextPC = PC + 4` — the fetch invariant
   for non-compressed instructions. Together with 4-aligned branch immediates
   this makes Sail's misaligned-fetch trap paths vacuous.
 - TMDL leaves the PC unchanged for fall-through instructions, so a Sail path
   that does not write `nextPC` requires TMDL's final PC to equal the initial
   PC; a path that writes it requires equality with the written value.
-- Instructions whose behavior cannot be expressed in the SMT model are marked
-  unsupported in generated metadata and reported as skipped.
-- RISC-V `fcsr` is related to TMDL's separate `fflags` and `frm` slots; its
-  reserved bits are zero. ARM AdvSIMD proofs currently cover vector add,
-  subtract, AND, OR, and XOR across the mapped 128-bit register bank.
-- x86 DIV status flags and SHL/SHR carry flags for counts at least as wide as
-  the operand are undefined and are not compared. For immediate ROR, the pinned
-  Sail snapshot's carry bit is replaced by the architectural high bit of its
-  result. Unsigned DIV32 remains unsupported until its guarded narrow behavior
-  has a complete cross-width division proof. The snapshot's CMPS
-  flag calculation subtracts RSI from RDI in the wrong order, so the verifier
-  recomputes the flags from Sail's two memory operands in architectural order.
-- x86 instructions that the pinned Sail snapshot never completes, including
-  its BMI/BMI2 and register bit-test gaps, are reported as unsupported rather
-  than counted as proved paths.
-- The pinned Isla evaluator cannot execute the symbolic 128-bit intermediate
-  in x86-64 SHLD/SHRD forms, so those forms are reported as unsupported.
-- The pinned Isla evaluator does not complete x86 PUSHF or signed DIV32
-  execution within its limit, so those forms are reported as unsupported.
+- Only modeled, defined status flags are compared. The verifier corrects known
+  flag errors in the pinned reference model from its execution trace.
+- Instructions without SMT behavior or executable reference traces are
+  reported as unsupported.
 
 ## Setup
 
@@ -79,10 +54,8 @@ External inputs are:
 - a Sail RISC-V snapshot, e.g. `rv64d.ir` from
   [isla-snapshots](https://github.com/rems-project/isla-snapshots).
 
-The isla configurations live in `xtask/`. The RISC-V configurations enable
-I, M, B, F, and D with consistent floating-point status bits; C remains
-disabled, which the harness alignment assumptions rely on. Point
-the harness at the tools:
+The isla configurations live in `xtask/`. The RISC-V configurations disable C,
+which the PC alignment assumptions rely on. Point the harness at the tools:
 
 ```sh
 export TIR_ISLA_SNAPSHOT=/path/to/isla-snapshots/rv64d.ir

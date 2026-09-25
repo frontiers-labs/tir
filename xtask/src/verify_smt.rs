@@ -434,6 +434,34 @@ const X86_REG_NAMES: &[(&str, u32)] = &[
     ("r15", 15),
 ];
 
+fn x86_unsupported_reason(name: &str) -> Option<&'static str> {
+    if X86_SAIL_UNIMPLEMENTED.contains(&name) {
+        Some("not implemented by pinned Sail snapshot")
+    } else if X86_ISLA_128BIT_SHIFTS.contains(&name) {
+        Some("pinned Isla evaluator cannot execute symbolic 128-bit shift")
+    } else if X86_ISLA_UNEXECUTABLE.contains(&name) {
+        Some("pinned Isla evaluator cannot complete Sail execution")
+    } else if name == "unsigneddivide32" {
+        Some("guarded narrow division proof incomplete")
+    } else {
+        None
+    }
+}
+
+fn uses_arm_vector(model: &FlatModel, instr: &Instruction) -> bool {
+    let is_vector = |class: &str| {
+        model
+            .classes
+            .get(class)
+            .is_some_and(|info| info.storage == "vpr")
+    };
+    instr
+        .operands
+        .iter()
+        .any(|(_, kind)| matches!(kind, OperandKind::Reg { class, .. } if is_vector(class)))
+        || instr.write_classes.iter().any(|class| is_vector(class))
+}
+
 /// Why `instr` cannot be verified against the model, as the report names it,
 /// or `None` when it can.
 fn unsupported_reason(spec: &IsaSpec, model: &FlatModel, instr: &Instruction) -> Option<String> {
@@ -456,29 +484,10 @@ fn unsupported_reason(spec: &IsaSpec, model: &FlatModel, instr: &Instruction) ->
     if !instr.supported {
         return Some(instr.name.clone());
     }
-    if spec.name == "x86_64" && X86_SAIL_UNIMPLEMENTED.contains(&instr.name.as_str()) {
-        return Some(format!(
-            "{} (not implemented by pinned Sail snapshot)",
-            instr.name
-        ));
-    }
-    if spec.name == "x86_64" && X86_ISLA_128BIT_SHIFTS.contains(&instr.name.as_str()) {
-        return Some(format!(
-            "{} (pinned Isla evaluator cannot execute symbolic 128-bit shift)",
-            instr.name
-        ));
-    }
-    if spec.name == "x86_64" && X86_ISLA_UNEXECUTABLE.contains(&instr.name.as_str()) {
-        return Some(format!(
-            "{} (pinned Isla evaluator cannot complete Sail execution)",
-            instr.name
-        ));
-    }
-    if spec.name == "x86_64" && instr.name == "unsigneddivide32" {
-        return Some(format!(
-            "{} (guarded narrow division proof incomplete)",
-            instr.name
-        ));
+    if spec.name == "x86_64" {
+        if let Some(reason) = x86_unsupported_reason(&instr.name) {
+            return Some(format!("{} ({reason})", instr.name));
+        }
     }
     // Atomics (A extension) reference the reservation state, whose mapping onto
     // Sail's reservation register is follow-up work (see module docs).
@@ -492,18 +501,7 @@ fn unsupported_reason(spec: &IsaSpec, model: &FlatModel, instr: &Instruction) ->
         return Some(format!("{} (no flat SMT behavior)", instr.name));
     }
     if spec.name == "armv8"
-        && (instr.operands.iter().any(|(_, kind)| match kind {
-            OperandKind::Reg { class, .. } => model
-                .classes
-                .get(class)
-                .is_some_and(|info| info.storage == "vpr"),
-            _ => false,
-        }) || instr.write_classes.iter().any(|class| {
-            model
-                .classes
-                .get(class)
-                .is_some_and(|info| info.storage == "vpr")
-        }))
+        && uses_arm_vector(model, instr)
         && !ARM_VECTOR_PROOFS.contains(&instr.name.as_str())
     {
         return Some(format!(
@@ -1989,6 +1987,7 @@ fn flat_read_memory(xlen: u32, bytes: u32, state: &str, address: &str) -> String
         .expect("memory access has at least one byte")
 }
 
+/// Replay only the Sail definitions reached from this query body.
 fn with_trace_defines(trace: &TraceInfo, mut body: String) -> String {
     let mut needed: HashSet<String> = symbolic_variables(&body).map(str::to_owned).collect();
     for (var, expr) in trace.defines.iter().rev() {
@@ -2207,6 +2206,46 @@ fn x86_narrow_shift_count(
     Some((u32::from(width), count))
 }
 
+fn x86_carry_equality(
+    model: &FlatModel,
+    instr: &Instruction,
+    case: &[u64],
+    trace: &TraceInfo,
+    tmdl: &str,
+    sail: &str,
+) -> Option<String> {
+    if let Some((width, count)) = x86_narrow_shift_count(model, instr, case) {
+        let defined = format!("(bvult {count} (_ bv{width} 64))");
+        if instr.name.starts_with("sar") {
+            let OperandKind::Reg { class, idx_width } = &instr.operands[0].1 else {
+                unreachable!()
+            };
+            let old = flat_read_register(
+                model,
+                class,
+                "st0",
+                &format!("(_ bv{} {idx_width})", case[0]),
+            );
+            let sign = format!("((_ extract {} {}) {old})", width - 1, width - 1);
+            return Some(format!("(= {tmdl} (ite {defined} {sail} {sign}))"));
+        }
+        return Some(format!("(or (not {defined}) (= {tmdl} {sail}))"));
+    }
+
+    // The pinned model uses the result's low bit for ROR carry.
+    let (width, mask) = match instr.name.as_str() {
+        "rorimm" => (64, 63),
+        "rorimm32" => (32, 31),
+        _ => return None,
+    };
+    if *case.get(1)? & mask == 0 {
+        return None;
+    }
+    let result = trace.writes.get(&MappedReg::X(*case.first()? as u32))?;
+    let high = width - 1;
+    Some(format!("(= {tmdl} ((_ extract {high} {high}) {result}))"))
+}
+
 fn append_flag_equalities(
     spec: &IsaSpec,
     model: &FlatModel,
@@ -2231,82 +2270,111 @@ fn append_flag_equalities(
         {
             continue;
         }
-        // DIV/IDIV leave every status flag undefined. TMDL writes a
-        // placeholder value to preserve dependence ordering.
-        if spec.name == "x86_64"
-            && matches!(instr.name.as_str(), "signeddivide32" | "unsigneddivide32")
-        {
-            continue;
-        }
         let sail = trace.flag_writes.get(slot).cloned().unwrap_or_else(|| {
             flat_read_register(model, class, "st0", &format!("(_ bv{slot} {idx_w})"))
         });
         let tmdl = flat_read_register(model, class, "st1", &format!("(_ bv{slot} {idx_w})"));
         if spec.name == "x86_64" && *slot == 0 {
-            if let Some((width, count)) = x86_narrow_shift_count(model, instr, case) {
-                let defined = format!("(bvult {count} (_ bv{width} 64))");
-                if instr.name.starts_with("sar") {
-                    let OperandKind::Reg { class, idx_width } = &instr.operands[0].1 else {
-                        unreachable!()
-                    };
-                    let old = flat_read_register(
-                        model,
-                        class,
-                        "st0",
-                        &format!("(_ bv{} {idx_width})", case[0]),
-                    );
-                    let sign = format!("((_ extract {} {}) {old})", width - 1, width - 1);
-                    final_eq.push(format!("(= {tmdl} (ite {defined} {sail} {sign}))"));
-                } else {
-                    final_eq.push(format!("(or (not {defined}) (= {tmdl} {sail}))"));
-                }
+            if let Some(equality) = x86_carry_equality(model, instr, case, trace, &tmdl, &sail) {
+                final_eq.push(equality);
                 continue;
-            }
-            // The pinned ACL2-derived snapshot copies the low bit of ROR's
-            // result into CF. The architectural CF is its high bit.
-            let rotate_mask = if instr.name == "rorimm" { 63 } else { 31 };
-            if matches!(instr.name.as_str(), "rorimm" | "rorimm32") && (case[1] & rotate_mask) != 0
-            {
-                if let Some(result) = trace.writes.get(&MappedReg::X(case[0] as u32)) {
-                    let width = if instr.name == "rorimm" { 64 } else { 32 };
-                    let high = width - 1;
-                    final_eq.push(format!("(= {tmdl} ((_ extract {high} {high}) {result}))"));
-                    continue;
-                }
             }
         }
         final_eq.push(format!("(= {tmdl} {sail})"));
     }
 }
 
-/// Memory IMUL traces use a masked Sail address. Prove that each byte read
-/// uses TMDL's effective address before sharing that address in the main
-/// equivalence query, where otherwise the address alias and multiplication
-/// together exhaust the solver timeout.
-fn prove_x86_imul_read_addresses(
-    tools: &Tools,
+fn append_fcsr_equalities(
+    model: &FlatModel,
+    instr: &Instruction,
+    trace: &TraceInfo,
+    final_eq: &mut Vec<String>,
+) {
+    let Some(fcsr) = &trace.fcsr_write else {
+        return;
+    };
+    for (class, slot, high, low) in [("fflags", 1, 4, 0), ("frm", 2, 7, 5)] {
+        if instr
+            .fixed_register_writes
+            .iter()
+            .any(|(written, index)| written == class && *index == slot)
+        {
+            let final_value = flat_read_register(model, class, "st1", &format!("(_ bv{slot} 12)"));
+            final_eq.push(format!(
+                "(= {final_value} ((_ extract {high} {low}) {fcsr}))"
+            ));
+        }
+    }
+}
+
+fn append_arm_vector_equalities(
+    model: &FlatModel,
+    instr: &Instruction,
+    trace: &TraceInfo,
+    final_eq: &mut Vec<String>,
+) {
+    if trace.vector_write.is_none()
+        && !instr
+            .write_classes
+            .iter()
+            .any(|class| model.classes[class].storage == "vpr")
+    {
+        return;
+    }
+    for index in 0..32 {
+        let sail = trace.vector_write.as_ref().map_or_else(
+            || flat_read_register(model, "vpr", "st0", &format!("(_ bv{index} 5)")),
+            |elements| elements[index].clone(),
+        );
+        let tmdl = flat_read_register(model, "vpr", "st1", &format!("(_ bv{index} 5)"));
+        final_eq.push(format!("(= {tmdl} {sail})"));
+    }
+}
+
+fn query_prelude(
     spec: &IsaSpec,
     model: &FlatModel,
     instr: &Instruction,
     case: &[u64],
     trace: &TraceInfo,
+) -> String {
+    let mut query = emit_state_transition(spec, model, instr, case);
+    query.push_str(&emit_address_assumptions(spec, model, instr, case));
+    query.push_str(&emit_trace_read_constraints(
+        spec, model, instr, case, trace,
+    ));
+    query
+}
+
+/// Prove the Sail and TMDL read addresses agree before replacing Sail's
+/// masked addresses. This keeps multiplication out of the address proof.
+fn normalize_x86_imul_read_addresses(
+    tools: &Tools,
+    spec: &IsaSpec,
+    model: &FlatModel,
+    instr: &Instruction,
+    case: &[u64],
+    trace: &mut TraceInfo,
     query_path: &Path,
-) -> anyhow::Result<Option<Vec<String>>> {
-    let Some(access) = instr.memory_accesses.first() else {
-        return Ok(None);
+) -> anyhow::Result<()> {
+    // Match one TMDL load to Isla's bytewise reads before comparing addresses.
+    let [access] = instr.memory_accesses.as_slice() else {
+        return Ok(());
     };
     if spec.name != "x86_64"
         || !instr.name.starts_with("imul")
-        || instr.memory_accesses.len() != 1
         || access.kind != "load"
         || trace.mem_reads.len() != access.bytes as usize
         || !trace.mem_reads.iter().all(|read| read.bytes == 1)
         || !trace.mem_writes.is_empty()
     {
-        return Ok(None);
+        return Ok(());
     }
 
-    let base = mem_addr_exprs(instr, case, spec).remove(0);
+    let base = mem_addr_exprs(instr, case, spec)
+        .into_iter()
+        .next()
+        .expect("single memory access");
     let addresses: Vec<String> = (0..access.bytes)
         .map(|offset| {
             if offset == 0 {
@@ -2323,21 +2391,24 @@ fn prove_x86_imul_read_addresses(
         .map(|(read, expected)| format!("(= {} {expected})", read.address))
         .collect::<Vec<_>>()
         .join(" ");
+    // A satisfiable query would expose a path where the addresses differ.
     let path = trace.asserts.join(" ");
-    let mut query = emit_state_transition(spec, model, instr, case);
-    query.push_str(&emit_address_assumptions(spec, model, instr, case));
-    query.push_str(&emit_trace_read_constraints(
-        spec, model, instr, case, trace,
-    ));
+    let mut query = query_prelude(spec, model, instr, case, trace);
     let body = with_trace_defines(trace, format!("(and {path} (not (and {equalities})))"));
     let _ = writeln!(query, "(assert {body})\n(check-sat)");
     let address_path = query_path.with_extension("addr.smt2");
     std::fs::write(&address_path, query)?;
     let output = run_solver(tools, &address_path)?;
-    Ok(solver_statuses(&output)
+    // A counterexample or solver unknown keeps the original Sail addresses.
+    if solver_statuses(&output)
         .last()
         .is_some_and(|status| status == "unsat")
-        .then_some(addresses))
+    {
+        for (read, address) in trace.mem_reads.iter_mut().zip(addresses) {
+            read.address = address;
+        }
+    }
+    Ok(())
 }
 
 fn build_query(
@@ -2347,14 +2418,9 @@ fn build_query(
     case: &[u64],
     trace: &TraceInfo,
     modeled_cause: Option<(&str, &[u64])>,
-    read_addresses: Option<&[String]>,
 ) -> String {
     let xlen = spec.xlen;
-    let mut q = emit_state_transition(spec, model, instr, case);
-    q.push_str(&emit_address_assumptions(spec, model, instr, case));
-    q.push_str(&emit_trace_read_constraints(
-        spec, model, instr, case, trace,
-    ));
+    let mut q = query_prelude(spec, model, instr, case, trace);
 
     let gw = spec.gpr_idx_width();
     let width_bytes = instr.width_bytes(case);
@@ -2380,36 +2446,9 @@ fn build_query(
         })
         .collect();
     append_flag_equalities(spec, model, instr, case, trace, &mut final_eq);
-    if let Some(fcsr) = &trace.fcsr_write {
-        for (class, slot, high, low) in [("fflags", 1, 4, 0), ("frm", 2, 7, 5)] {
-            if instr
-                .fixed_register_writes
-                .iter()
-                .any(|(written, index)| written == class && *index == slot)
-            {
-                let final_value =
-                    flat_read_register(model, class, "st1", &format!("(_ bv{slot} 12)"));
-                final_eq.push(format!(
-                    "(= {final_value} ((_ extract {high} {low}) {fcsr}))"
-                ));
-            }
-        }
-    }
-    if spec.name == "armv8"
-        && (trace.vector_write.is_some()
-            || instr
-                .write_classes
-                .iter()
-                .any(|class| model.classes[class].storage == "vpr"))
-    {
-        for index in 0..32 {
-            let sail = trace.vector_write.as_ref().map_or_else(
-                || flat_read_register(model, "vpr", "st0", &format!("(_ bv{index} 5)")),
-                |elements| elements[index].clone(),
-            );
-            let tmdl = flat_read_register(model, "vpr", "st1", &format!("(_ bv{index} 5)"));
-            final_eq.push(format!("(= {tmdl} {sail})"));
-        }
+    append_fcsr_equalities(model, instr, trace, &mut final_eq);
+    if spec.name == "armv8" {
+        append_arm_vector_equalities(model, instr, trace, &mut final_eq);
     }
     // Extra mapped state, deduplicated by underlying TMDL slot since several
     // Sail names may alias one slot (SP_ELx); a write through any alias is
@@ -2441,12 +2480,11 @@ fn build_query(
     // little-endian byte by byte (the `write_mem_*` convention). Both the
     // constraints and the equality can mention `define-const` variables, so
     // they live inside the let chain with the path asserts.
-    for (index, read) in trace.mem_reads.iter().enumerate() {
-        let address = read_addresses.map_or(read.address.as_str(), |addresses| &addresses[index]);
+    for read in &trace.mem_reads {
         asserts.push(format!(
             "(= {} {})",
             read.value,
-            flat_read_memory(xlen, read.bytes, "st0", address)
+            flat_read_memory(xlen, read.bytes, "st0", &read.address)
         ));
     }
     if trace.mem_writes.is_empty() {
@@ -2813,6 +2851,19 @@ fn verify_instruction(
                     normalize_x86_cmps_flags(&mut info, bytes)?;
                 }
             }
+            let query_path = out_dir
+                .join("queries")
+                .join(format!("{}_{:08x}_p{}.smt2", instr.name, word, path_idx));
+            let solver_started = Instant::now();
+            normalize_x86_imul_read_addresses(
+                tools,
+                spec,
+                model,
+                instr,
+                case,
+                &mut info,
+                &query_path,
+            )?;
             // A path writing a trap cause TMDL does not model (access fault)
             // lies outside the all-of-memory-is-RAM assumption.
             let written_cause = spec.trap_cause.and_then(|(cause_reg, causes)| {
@@ -2822,12 +2873,6 @@ fn verify_instruction(
                     .position(|(n, _, _, _)| *n == cause_reg)?;
                 Some((info.writes.get(&MappedReg::Slot(slot))?, causes))
             });
-            let query_path = out_dir
-                .join("queries")
-                .join(format!("{}_{:08x}_p{}.smt2", instr.name, word, path_idx));
-            let solver_started = Instant::now();
-            let read_addresses =
-                prove_x86_imul_read_addresses(tools, spec, model, instr, case, &info, &query_path)?;
             let query = build_query(
                 spec,
                 model,
@@ -2835,7 +2880,6 @@ fn verify_instruction(
                 case,
                 &info,
                 written_cause.map(|(cause, causes)| (cause.as_str(), causes)),
-                read_addresses.as_deref(),
             );
             std::fs::write(&query_path, &query)?;
             let output = run_solver(tools, &query_path)?;
@@ -3196,7 +3240,7 @@ mod tests {
             }],
         );
 
-        let query = build_query(spec, &model, &instruction, &[], &trace, None, None);
+        let query = build_query(spec, &model, &instruction, &[], &trace, None);
 
         for (slot, bit) in [(0, 0), (2, 6), (3, 7), (4, 11)] {
             assert!(query.contains(&format!(
