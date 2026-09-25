@@ -903,18 +903,19 @@ fn operand_cases(spec: &IsaSpec, instr: &Instruction) -> Vec<Vec<u64>> {
         ],
     };
 
-    let imm_position: Option<(usize, u32, ImmConstraint)> = instr
+    // Every immediate walks its own boundary list, in step with the others: a
+    // second immediate left at zero hides behavior (a zero branch offset turns
+    // a taken branch into a self-jump).
+    let imm_values: Vec<(usize, Vec<u64>)> = instr
         .operands
         .iter()
         .enumerate()
-        .find_map(|(i, (_, k))| match k {
+        .filter_map(|(i, (_, k))| match k {
             OperandKind::Bits(w, c) => Some((i, *w, *c)),
             OperandKind::Int(c) => Some((i, 64, *c)),
             OperandKind::Reg { .. } => None,
-        });
-    let imm_values: Vec<u64> = match imm_position {
-        None => vec![0],
-        Some((_, w, constraint)) => {
+        })
+        .map(|(i, w, constraint)| {
             let mask = if w >= 64 { u64::MAX } else { (1u64 << w) - 1 };
             let values = if instr.writes_pc {
                 vec![4, 8, mask & !3, 1u64 << (w - 1), (1u64 << (w - 1)) - 4]
@@ -936,24 +937,30 @@ fn operand_cases(spec: &IsaSpec, instr: &Instruction) -> Vec<Vec<u64>> {
                     admitted.push(value);
                 }
             }
-            admitted
-        }
+            (i, admitted)
+        })
+        .collect();
+    let imm_cases = if imm_values.iter().any(|(_, values)| values.is_empty()) {
+        0
+    } else {
+        imm_values
+            .iter()
+            .map(|(_, values)| values.len())
+            .max()
+            .unwrap_or(1)
     };
 
     let mut cases = vec![];
     for regs in &reg_patterns {
-        for imm in &imm_values {
+        for k in 0..imm_cases {
             let mut case = vec![0u64; instr.operands.len()];
             for (slot, value) in reg_positions.iter().zip(regs) {
                 case[*slot] = *value;
             }
-            if let Some((slot, _, _)) = imm_position {
-                case[slot] = *imm;
+            for (slot, values) in &imm_values {
+                case[*slot] = values[k % values.len()];
             }
             cases.push(case);
-            if imm_position.is_none() {
-                break;
-            }
         }
         if reg_positions.is_empty() {
             break;
@@ -996,6 +1003,8 @@ fn operand_case_is_valid(
             value(0) != value(1) && value(0) != value(2) && value(1) != value(2)
         }
         ("armv8", "storepairpreindex") => value(0) != value(2) && value(1) != value(2),
+        ("armv8", "andimmediate") => !reserved_bitmask(true, value(3)),
+        ("armv8", "andimmediate32") => !reserved_bitmask(false, value(3)),
         (name, "cmove" | "cadd") if name.starts_with("riscv") => value(0) != 0 && value(1) != 0,
         (name, "cjumpreg" | "cjumpandlinkreg") if name.starts_with("riscv") => value(0) != 0,
         (name, "caddimm" | "cloadimm") if name.starts_with("riscv") => value(0) != 0,
@@ -1008,6 +1017,21 @@ fn operand_case_is_valid(
         (name, "cloadwordsp" | "cloaddoublesp") if name.starts_with("riscv") => value(0) != 0,
         _ => true,
     }
+}
+
+/// Whether a logical-immediate `N:imms` is the reserved all-ones element
+/// (`DecodeBitMasks` is UNDEFINED there).
+fn reserved_bitmask(n: bool, imms: u64) -> bool {
+    let len = if n {
+        6
+    } else {
+        match (!imms & 0x3f).checked_ilog2() {
+            Some(len) => len,
+            None => return true,
+        }
+    };
+    let levels = (1 << len) - 1;
+    imms & levels == levels
 }
 
 fn operand_smt_literal(spec: &IsaSpec, kind: &OperandKind, value: u64) -> String {
