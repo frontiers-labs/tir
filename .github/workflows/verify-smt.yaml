@@ -17,7 +17,7 @@ jobs:
       fail-fast: false
       matrix:
         isa: [riscv64, riscv32, armv8, x86_64]
-        shard: [0, 1, 2, 3, 4]
+        shard: [0, 1, 2, 3]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -67,7 +67,7 @@ jobs:
           path: target/verify/smt/${{ matrix.isa }}/cache
           key: smt-traces-${{ matrix.isa }}-${{ matrix.shard }}-${{ hashFiles('Cargo.lock', 'utils/verify/**', 'xtask/src/verify_smt.rs', 'xtask/verify-smt-*') }}
       - name: Verify
-        run: cargo xtask verify ${{ matrix.isa }} --shard ${{ matrix.shard }}/5
+        run: cargo xtask verify ${{ matrix.isa }} --shard ${{ matrix.shard }}/4
       - name: Upload report
         if: always()
         uses: actions/upload-artifact@v7
