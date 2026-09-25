@@ -1229,8 +1229,8 @@ instruction AndImmediate for [ARMv8A64] {
     }
 }
 
-// 32-bit AND (immediate): sf = 0, N = 0, element size 32; the mask rotates
-// within 32 bits and the result zero-extends to 64.
+// 32-bit AND (immediate): sf = 0, N = 0, so the element size is 32 or a
+// replicated 16/8/4/2-bit pattern; the result zero-extends to 64.
 instruction AndImmediate32 for [ARMv8A64] {
     param MNEMONIC: String = "and";
     param OPNAME: String = "and_imm_w";
@@ -1258,14 +1258,35 @@ instruction AndImmediate32 for [ARMv8A64] {
         "{self.MNEMONIC} {rd}, {rn}, {immr}, {imms}"
     }
 
+    // DecodeBitMasks with N = 0: the highest clear bit of imms picks the
+    // element size, whose low S+1 bits are set, rotated right by R within the
+    // element and replicated across 32 bits. Computed at XLEN so no shift
+    // reaches the operand width.
     behavior {
-        rd = zext(extract(rn, 31, 0) & extract(
-            (((zext(0b1, self.XLEN) << (zext(imms, self.XLEN) + zext(0b1, self.XLEN)))
-                - zext(0b1, self.XLEN)) >> zext(immr, self.XLEN))
-            | (((zext(0b1, self.XLEN) << (zext(imms, self.XLEN) + zext(0b1, self.XLEN)))
-                - zext(0b1, self.XLEN))
-                << ((zext(0b100000, self.XLEN) - zext(immr, self.XLEN)) & zext(0b11111, self.XLEN))),
-            31, 0), self.XLEN);
+        let one = zext(0b1, self.XLEN);
+        let esize = if imms[5] {
+            if imms[4] {
+                if imms[3] {
+                    if imms[2] { zext(0b10, self.XLEN) } else { zext(0b100, self.XLEN) }
+                } else {
+                    zext(0b1000, self.XLEN)
+                }
+            } else {
+                zext(0b10000, self.XLEN)
+            }
+        } else {
+            zext(0b100000, self.XLEN)
+        };
+        let levels = esize - one;
+        let s = zext(imms, self.XLEN) & levels;
+        let r = zext(immr, self.XLEN) & levels;
+        let welem = (one << (s + one)) - one;
+        let elem = ((welem >> r) | (welem << (esize - r))) & ((one << esize) - one);
+        let m2 = elem | (elem << esize);
+        let m4 = m2 | (m2 << ((esize << one) & zext(0b111111, self.XLEN)));
+        let m8 = m4 | (m4 << ((esize << zext(0b10, self.XLEN)) & zext(0b111111, self.XLEN)));
+        let m16 = m8 | (m8 << ((esize << zext(0b11, self.XLEN)) & zext(0b111111, self.XLEN)));
+        rd = zext(extract(rn, 31, 0) & extract(m16, 31, 0), self.XLEN);
     }
 }
 
