@@ -24,6 +24,9 @@ set (x0 corner cases, register aliasing, immediate extremes):
    the path constraints. `unsat` proves agreement; `sat` supplies a
    counterexample. An unreachable path proves nothing and is reported as
    vacuous.
+4. Verified paths are checked again with the TMDL behavior replaced by a
+   no-op, until one of them tells the two apart. An instruction that still
+   verifies is reported: its proofs compare none of the state it writes.
    Queries are saved in `target/verify/smt/<isa>/queries/` for inspection.
 
 Sail traces are cached in `target/verify/smt/<isa>/cache/`, keyed by instruction

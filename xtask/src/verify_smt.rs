@@ -595,6 +595,13 @@ pub fn verify_smt(sh: &Shell, isa: &str, args: impl Iterator<Item = String>) -> 
             report.failed
         );
     }
+    if !report.behavior_independent.is_empty() {
+        anyhow::bail!(
+            "{} instruction(s) verify with their TMDL behavior replaced by a no-op: {}",
+            report.behavior_independent.len(),
+            report.behavior_independent.join(", ")
+        );
+    }
     let uncovered = report.uncovered_shapes();
     if !uncovered.is_empty() {
         anyhow::bail!(
@@ -2647,6 +2654,9 @@ struct Report {
     /// bytes land in the second list: the word cannot say which one it was.
     roundtrip_proved: Vec<String>,
     roundtrip_open: Vec<String>,
+    /// Instructions whose verified paths also verify with the TMDL behavior
+    /// replaced by a no-op: the proofs compare none of the state they write.
+    behavior_independent: Vec<String>,
     failures: Vec<String>,
     instructions: Vec<InstructionTiming>,
 }
@@ -2670,6 +2680,8 @@ impl Report {
             *self.excluded_reasons.entry(reason).or_default() += count;
         }
         self.unsupported.append(&mut other.unsupported);
+        self.behavior_independent
+            .append(&mut other.behavior_independent);
         self.failures.append(&mut other.failures);
     }
 
@@ -2717,6 +2729,12 @@ impl Report {
         );
         if !uncovered.is_empty() {
             println!("  unchecked: {}", uncovered.join(", "));
+        }
+        if !self.behavior_independent.is_empty() {
+            println!(
+                "proofs independent of TMDL behavior: {}",
+                self.behavior_independent.join(", ")
+            );
         }
         if !self.unsupported.is_empty() {
             println!(
@@ -2796,6 +2814,26 @@ fn verify_instruction(
         })
         .collect();
     let mut verified_by_case = vec![0usize; cases.len()];
+    // The TMDL behavior replaced by a no-op. A proof that still holds for it
+    // compares none of the state the instruction writes, so verified paths are
+    // re-checked against it until one tells the two apart.
+    let mut nop = instr
+        .flat_execute
+        .as_ref()
+        .filter(|execute| {
+            execute
+                .iter()
+                .any(|(field, expr)| *expr != format!("st0_{field}"))
+        })
+        .map(|execute| Instruction {
+            flat_execute: Some(
+                execute
+                    .keys()
+                    .map(|f| (f.clone(), format!("st0_{f}")))
+                    .collect(),
+            ),
+            ..instr.clone()
+        });
     let started = Instant::now();
     let words = encode_words(instr, &cases);
     timing.encode_ms = started.elapsed().as_millis();
@@ -2881,14 +2919,8 @@ fn verify_instruction(
                     .position(|(n, _, _, _)| *n == cause_reg)?;
                 Some((info.writes.get(&MappedReg::Slot(slot))?, causes))
             });
-            let query = build_query(
-                spec,
-                model,
-                instr,
-                case,
-                &info,
-                written_cause.map(|(cause, causes)| (cause.as_str(), causes)),
-            );
+            let cause = written_cause.map(|(cause, causes)| (cause.as_str(), causes));
+            let query = build_query(spec, model, instr, case, &info, cause);
             std::fs::write(&query_path, &query)?;
             let output = run_solver(tools, &query_path)?;
             timing.solver_ms += solver_started.elapsed().as_millis();
@@ -2915,6 +2947,19 @@ fn verify_instruction(
                 report.verified += 1;
                 verified_by_case[index] += 1;
                 line.push('.');
+                if let Some(mutant) = &nop {
+                    let mutant_started = Instant::now();
+                    let mutant_path = query_path.with_extension("nop.smt2");
+                    std::fs::write(
+                        &mutant_path,
+                        build_query(spec, model, mutant, case, &info, cause),
+                    )?;
+                    let statuses = solver_statuses(&run_solver(tools, &mutant_path)?);
+                    timing.solver_ms += mutant_started.elapsed().as_millis();
+                    if statuses.last().is_some_and(|status| status == "sat") {
+                        nop = None;
+                    }
+                }
             } else if equivalence_status == Some("sat") {
                 report.failed += 1;
                 line.push('X');
@@ -2956,6 +3001,9 @@ fn verify_instruction(
             (shape.name.clone(), verified)
         })
         .collect();
+    if nop.is_some() && report.verified > 0 {
+        report.behavior_independent.push(instr.name.clone());
+    }
     timing.total_ms = total_started.elapsed().as_millis();
     Ok((report, timing, format!("{:24}{}", instr.name, line)))
 }
