@@ -63,10 +63,13 @@ if __name__ == "__main__":
         "x86_64",
         [
             "setparity", "setnoparity", "sarcl", "leabaseindex",
-            "movsw", "shlimm8", "sarcl16", "rorimm",
+            "movsw", "cmpsq", "shlimm8", "sarcl16", "rorimm",
+            "imul16memorysourcedisp", "imul32memorysourcedisp", "imulmemorysourcedisp",
         ],
         unsupported=[
             "andn", "btr", "rorx", "unsigneddivide32",
+            "blsr", "blsr32", "blsmsk32", "bzhi", "mulx32", "shrx32",
+            "pushf", "signeddivide32",
             "shldimm", "shrdimm", "shldcl", "shrdcl",
         ],
     )

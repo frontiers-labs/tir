@@ -28,6 +28,9 @@ set (x0 corner cases, register aliasing, immediate extremes):
    constant per field rather than encoded as an SMT datatype. Bitwuzla runs
    first; z3 is the fallback and cross-checks every `sat` result. Query files
    are left in `target/verify/smt/<isa>/queries/` for inspection.
+   For x86 memory IMUL, a separate query first proves that Sail's byte-read
+   addresses equal TMDL's effective addresses before the multiplication query
+   uses the shared addresses.
 
 Sail traces are cached in `target/verify/smt/cache/`, keyed by instruction
 word plus a fingerprint of the snapshot and isla config, so swapping either
@@ -63,6 +66,8 @@ Reported with the results, and deliberate:
   than counted as proved paths.
 - The pinned Isla evaluator cannot execute the symbolic 128-bit intermediate
   in x86-64 SHLD/SHRD forms, so those forms are reported as unsupported.
+- The pinned Isla evaluator does not complete x86 PUSHF or signed DIV32
+  execution within its limit, so those forms are reported as unsupported.
 
 ## Setup
 

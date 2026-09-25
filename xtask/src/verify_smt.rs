@@ -235,13 +235,18 @@ const ARM_VECTOR_PROOFS: &[&str] = &[
 // The pinned ACL2-derived snapshot has no execution semantics for these
 // instructions: every Sail path stops before writing RIP.
 const X86_SAIL_UNIMPLEMENTED: &[&str] = &[
-    "andn", "andn32", "bextr", "bextr32", "blsi", "blsi32", "blsmsk", "btc", "btr", "bts",
-    "bzhi32", "mulx", "rorx", "rorx32", "sarx", "sarx32", "shlx", "shlx32", "shrx",
+    "andn", "andn32", "bextr", "bextr32", "blsi", "blsi32", "blsmsk", "blsmsk32", "blsr", "blsr32",
+    "btc", "btr", "bts", "bzhi", "bzhi32", "mulx", "mulx32", "rorx", "rorx32", "sarx", "sarx32",
+    "shlx", "shlx32", "shrx", "shrx32",
 ];
 
 // The pinned Isla evaluator panics when Sail's 64-bit SHLD/SHRD forms convert
 // their symbolic 128-bit intermediate to an integer.
 const X86_ISLA_128BIT_SHIFTS: &[&str] = &["shldimm", "shrdimm", "shldcl", "shrdcl"];
+
+// These pinned Sail forms do not complete a trace within Isla's execution
+// limit, so there is no path on which to compare architectural state.
+const X86_ISLA_UNEXECUTABLE: &[&str] = &["pushf", "signeddivide32"];
 
 const ISA_SPECS: &[IsaSpec] = &[
     IsaSpec {
@@ -460,6 +465,12 @@ fn unsupported_reason(spec: &IsaSpec, model: &FlatModel, instr: &Instruction) ->
     if spec.name == "x86_64" && X86_ISLA_128BIT_SHIFTS.contains(&instr.name.as_str()) {
         return Some(format!(
             "{} (pinned Isla evaluator cannot execute symbolic 128-bit shift)",
+            instr.name
+        ));
+    }
+    if spec.name == "x86_64" && X86_ISLA_UNEXECUTABLE.contains(&instr.name.as_str()) {
+        return Some(format!(
+            "{} (pinned Isla evaluator cannot complete Sail execution)",
             instr.name
         ));
     }
@@ -1978,6 +1989,17 @@ fn flat_read_memory(xlen: u32, bytes: u32, state: &str, address: &str) -> String
         .expect("memory access has at least one byte")
 }
 
+fn with_trace_defines(trace: &TraceInfo, mut body: String) -> String {
+    let mut needed: HashSet<String> = symbolic_variables(&body).map(str::to_owned).collect();
+    for (var, expr) in trace.defines.iter().rev() {
+        if needed.remove(var) {
+            needed.extend(symbolic_variables(expr).map(str::to_owned));
+            body = format!("(let (({} {}))\n{})", var, expr, body);
+        }
+    }
+    body
+}
+
 fn emit_state_transition(
     spec: &IsaSpec,
     model: &FlatModel,
@@ -2257,6 +2279,67 @@ fn append_flag_equalities(
     }
 }
 
+/// Memory IMUL traces use a masked Sail address. Prove that each byte read
+/// uses TMDL's effective address before sharing that address in the main
+/// equivalence query, where otherwise the address alias and multiplication
+/// together exhaust the solver timeout.
+fn prove_x86_imul_read_addresses(
+    tools: &Tools,
+    spec: &IsaSpec,
+    model: &FlatModel,
+    instr: &Instruction,
+    case: &[u64],
+    trace: &TraceInfo,
+    query_path: &Path,
+) -> anyhow::Result<Option<Vec<String>>> {
+    let Some(access) = instr.memory_accesses.first() else {
+        return Ok(None);
+    };
+    if spec.name != "x86_64"
+        || !instr.name.starts_with("imul")
+        || instr.memory_accesses.len() != 1
+        || access.kind != "load"
+        || trace.mem_reads.len() != access.bytes as usize
+        || !trace.mem_reads.iter().all(|read| read.bytes == 1)
+        || !trace.mem_writes.is_empty()
+    {
+        return Ok(None);
+    }
+
+    let base = mem_addr_exprs(instr, case, spec).remove(0);
+    let addresses: Vec<String> = (0..access.bytes)
+        .map(|offset| {
+            if offset == 0 {
+                base.clone()
+            } else {
+                format!("(bvadd {base} (_ bv{offset} {}))", spec.xlen)
+            }
+        })
+        .collect();
+    let equalities = trace
+        .mem_reads
+        .iter()
+        .zip(&addresses)
+        .map(|(read, expected)| format!("(= {} {expected})", read.address))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let path = trace.asserts.join(" ");
+    let mut query = emit_state_transition(spec, model, instr, case);
+    query.push_str(&emit_address_assumptions(spec, model, instr, case));
+    query.push_str(&emit_trace_read_constraints(
+        spec, model, instr, case, trace,
+    ));
+    let body = with_trace_defines(trace, format!("(and {path} (not (and {equalities})))"));
+    let _ = writeln!(query, "(assert {body})\n(check-sat)");
+    let address_path = query_path.with_extension("addr.smt2");
+    std::fs::write(&address_path, query)?;
+    let output = run_solver(tools, &address_path)?;
+    Ok(solver_statuses(&output)
+        .last()
+        .is_some_and(|status| status == "unsat")
+        .then_some(addresses))
+}
+
 fn build_query(
     spec: &IsaSpec,
     model: &FlatModel,
@@ -2264,6 +2347,7 @@ fn build_query(
     case: &[u64],
     trace: &TraceInfo,
     modeled_cause: Option<(&str, &[u64])>,
+    read_addresses: Option<&[String]>,
 ) -> String {
     let xlen = spec.xlen;
     let mut q = emit_state_transition(spec, model, instr, case);
@@ -2357,11 +2441,12 @@ fn build_query(
     // little-endian byte by byte (the `write_mem_*` convention). Both the
     // constraints and the equality can mention `define-const` variables, so
     // they live inside the let chain with the path asserts.
-    for read in &trace.mem_reads {
+    for (index, read) in trace.mem_reads.iter().enumerate() {
+        let address = read_addresses.map_or(read.address.as_str(), |addresses| &addresses[index]);
         asserts.push(format!(
             "(= {} {})",
             read.value,
-            flat_read_memory(xlen, read.bytes, "st0", &read.address)
+            flat_read_memory(xlen, read.bytes, "st0", address)
         ));
     }
     if trace.mem_writes.is_empty() {
@@ -2433,16 +2518,7 @@ fn build_query(
     } else {
         asserts.join(" ")
     };
-    let with_defines = |mut body: String| {
-        let mut needed: HashSet<String> = symbolic_variables(&body).map(str::to_owned).collect();
-        for (var, expr) in trace.defines.iter().rev() {
-            if needed.remove(var) {
-                needed.extend(symbolic_variables(expr).map(str::to_owned));
-                body = format!("(let (({} {}))\n{})", var, expr, body);
-            }
-        }
-        body
-    };
+    let with_defines = |body| with_trace_defines(trace, body);
     let modeled = modeled_cause.map(|(cause, causes)| {
         format!(
             "(or {})",
@@ -2730,6 +2806,7 @@ fn verify_instruction(
                     "cmpsb" => Some(1),
                     "cmpsw" => Some(2),
                     "cmpsdstring" => Some(4),
+                    "cmpsq" => Some(8),
                     _ => None,
                 };
                 if let Some(bytes) = bytes {
@@ -2745,6 +2822,12 @@ fn verify_instruction(
                     .position(|(n, _, _, _)| *n == cause_reg)?;
                 Some((info.writes.get(&MappedReg::Slot(slot))?, causes))
             });
+            let query_path = out_dir
+                .join("queries")
+                .join(format!("{}_{:08x}_p{}.smt2", instr.name, word, path_idx));
+            let solver_started = Instant::now();
+            let read_addresses =
+                prove_x86_imul_read_addresses(tools, spec, model, instr, case, &info, &query_path)?;
             let query = build_query(
                 spec,
                 model,
@@ -2752,12 +2835,9 @@ fn verify_instruction(
                 case,
                 &info,
                 written_cause.map(|(cause, causes)| (cause.as_str(), causes)),
+                read_addresses.as_deref(),
             );
-            let query_path = out_dir
-                .join("queries")
-                .join(format!("{}_{:08x}_p{}.smt2", instr.name, word, path_idx));
             std::fs::write(&query_path, &query)?;
-            let solver_started = Instant::now();
             let output = run_solver(tools, &query_path)?;
             timing.solver_ms += solver_started.elapsed().as_millis();
             let stdout = String::from_utf8_lossy(&output.stdout);
@@ -3116,7 +3196,7 @@ mod tests {
             }],
         );
 
-        let query = build_query(spec, &model, &instruction, &[], &trace, None);
+        let query = build_query(spec, &model, &instruction, &[], &trace, None, None);
 
         for (slot, bit) in [(0, 0), (2, 6), (3, 7), (4, 11)] {
             assert!(query.contains(&format!(
