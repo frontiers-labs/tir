@@ -33,14 +33,19 @@ def check(isa, instructions, unsupported=()):
         assert all(count > 0 for _, count in entry["shape_cases"]), entry["instruction"]
 
 
+def verdict(path):
+    """The final check-sat answer; earlier ones are probes such as reachability."""
+    result = subprocess.run(["z3", "-T:20", str(path)], capture_output=True, text=True)
+    return [line for line in result.stdout.splitlines() if line in ("sat", "unsat", "unknown")][-1]
+
+
 def check_counterexample():
     queries = ROOT / "target/verify/smt/x86_64/queries"
     for path in sorted(queries.glob("sarcl_00f8d348_p*.smt2")):
         query = path.read_text()
         if "(exists " not in query:
             continue
-        result = subprocess.run(["z3", "-T:20", str(path)], capture_output=True, text=True)
-        if result.stdout.splitlines()[0] != "unsat":
+        if verdict(path) != "unsat":
             continue
         query, count = re.subn(
             r"(\(define-fun st1_gpr \(\) \(Array \(_ BitVec 4\) \(_ BitVec 64\)\) )(.*)\)\n",
@@ -52,8 +57,7 @@ def check_counterexample():
         with tempfile.NamedTemporaryFile(mode="w", suffix=".smt2") as mutated:
             mutated.write(query)
             mutated.flush()
-            result = subprocess.run(["z3", "-T:20", mutated.name], capture_output=True, text=True)
-        assert result.stdout.splitlines()[0] == "sat", result.stdout
+            assert verdict(mutated.name) == "sat"
         return
     raise AssertionError("no verified sarcl query with undefined flag choices")
 

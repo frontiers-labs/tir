@@ -18,9 +18,12 @@ set (x0 corner cases, register aliasing, immediate extremes):
    fully symbolic register state.
    Each execution path yields a trace of register reads/writes plus SMT
    definitions and path constraints.
-3. For every path, an SMT query asks whether the models can reach different
-   mapped architectural states from the same initial state under the path
-   constraints. `unsat` proves agreement; `sat` supplies a counterexample.
+3. For every path, an SMT query first checks that the path is reachable under
+   the modeling assumptions below, then asks whether the models can reach
+   different mapped architectural states from the same initial state under
+   the path constraints. `unsat` proves agreement; `sat` supplies a
+   counterexample. An unreachable path proves nothing and is reported as
+   vacuous.
    Queries are saved in `target/verify/smt/<isa>/queries/` for inspection.
 
 Sail traces are cached in `target/verify/smt/<isa>/cache/`, keyed by instruction
@@ -95,7 +98,7 @@ inference, the interpreter, and SMT generation consume that table.
 ## Reading the output
 
 One line per instruction, one character per checked path: `.` proven
-equivalent, `X` divergence (counterexample printed below the summary), `-`
-excluded trap/system path, `E` no Sail execution path (the word is likely
-illegal — an encoding bug), `I` isla failed or timed out on the word, `?`
-solver timeout.
+equivalent, `X` divergence (counterexample printed below the summary), `V`
+path unreachable under the modeling assumptions, `-` excluded trap/system
+path, `E` no Sail execution path (the word is likely illegal — an encoding
+bug), `I` isla failed or timed out on the word, `?` solver timeout.

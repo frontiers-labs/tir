@@ -2568,13 +2568,16 @@ fn build_query(
         )
     });
     if let Some(modeled) = &modeled {
-        q.push_str("(push)\n");
+        q.push_str("(push 1)\n");
         let probe = with_defines(format!("(and {path} (not {modeled}))"));
         let _ = writeln!(q, "(assert {probe})");
-        q.push_str("(check-sat)\n(pop)\n");
+        q.push_str("(check-sat)\n(pop 1)\n");
     }
     let cause_constraint = modeled.as_deref().unwrap_or("true");
     let reachable = with_defines(format!("(and {path} {cause_constraint})"));
+    // An unsat equivalence query proves nothing when the path is unreachable
+    // under the assumptions above, so the path must be shown reachable first.
+    let _ = writeln!(q, "(push 1)\n(assert {reachable})\n(check-sat)\n(pop 1)");
     let agrees = with_defines(format!(
         "(and {path} {cause_constraint} {})",
         final_eq.join("\n  ")
@@ -2633,6 +2636,9 @@ struct Report {
     verified: usize,
     failed: usize,
     unknown: usize,
+    /// Paths unreachable under the checker's assumptions, whose equivalence
+    /// query would be unsat without proving anything.
+    vacuous: usize,
     excluded_paths: usize,
     excluded_reasons: HashMap<String, usize>,
     unsupported: Vec<String>,
@@ -2658,6 +2664,7 @@ impl Report {
         self.verified += other.verified;
         self.failed += other.failed;
         self.unknown += other.unknown;
+        self.vacuous += other.vacuous;
         self.excluded_paths += other.excluded_paths;
         for (reason, count) in other.excluded_reasons {
             *self.excluded_reasons.entry(reason).or_default() += count;
@@ -2683,6 +2690,7 @@ impl Report {
         println!("verified paths:  {}", self.verified);
         println!("divergences:     {}", self.failed);
         println!("solver unknown:  {}", self.unknown);
+        println!("vacuous paths:   {}", self.vacuous);
         println!(
             "round trips:     {} proved, {} open",
             self.roundtrip_proved.len(),
@@ -2885,15 +2893,11 @@ fn verify_instruction(
             let output = run_solver(tools, &query_path)?;
             timing.solver_ms += solver_started.elapsed().as_millis();
             let stdout = String::from_utf8_lossy(&output.stdout);
-            let statuses: Vec<&str> = stdout
-                .lines()
-                .filter(|line| matches!(*line, "sat" | "unsat" | "unknown"))
-                .collect();
-            let (unmodeled_status, equivalence_status) = if written_cause.is_some() {
-                (statuses.first().copied(), statuses.get(1).copied())
-            } else {
-                (None, statuses.first().copied())
-            };
+            let is_status = |line: &&str| matches!(*line, "sat" | "unsat" | "unknown");
+            let mut statuses = stdout.lines().filter(is_status);
+            let unmodeled_status = written_cause.and_then(|_| statuses.next());
+            let reachable_status = statuses.next();
+            let equivalence_status = statuses.next();
             if unmodeled_status == Some("sat") {
                 report.excluded_paths += 1;
                 *report
@@ -2904,6 +2908,9 @@ fn verify_instruction(
                     ))
                     .or_default() += 1;
                 line.push('-');
+            } else if reachable_status == Some("unsat") {
+                report.vacuous += 1;
+                line.push('V');
             } else if equivalence_status == Some("unsat") {
                 report.verified += 1;
                 verified_by_case[index] += 1;
@@ -2913,7 +2920,7 @@ fn verify_instruction(
                 line.push('X');
                 let model = stdout
                     .lines()
-                    .skip(if written_cause.is_some() { 2 } else { 1 })
+                    .filter(|line| !is_status(line))
                     .collect::<Vec<_>>()
                     .join("\n");
                 report.failures.push(format!(
@@ -3055,7 +3062,9 @@ fn run_solver(tools: &Tools, path: &Path) -> anyhow::Result<std::process::Output
     if !output.status.success() || statuses.is_empty() || statuses.iter().any(|s| s == "unknown") {
         return run_z3(tools, path);
     }
-    if statuses.iter().any(|s| s == "sat") {
+    // Only the final verdict can be a counterexample; earlier probes such as
+    // path reachability are expected to be sat.
+    if statuses.last().is_some_and(|s| s == "sat") {
         let z3 = run_z3(tools, path)?;
         anyhow::ensure!(
             statuses == solver_statuses(&z3),

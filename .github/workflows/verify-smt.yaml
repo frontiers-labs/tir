@@ -93,7 +93,7 @@ jobs:
       - name: Aggregate reports
         run: |
           mapfile -t files < <(find reports -name report.json -print | sort)
-          jq -s '{reports: ., totals: {verified: (map(.verified) | add), divergences: (map(.failed) | add), unknown: (map(.unknown) | add), excluded: (map(.excluded_paths) | add), wall_ms_max: (map(.wall_ms) | max)}}' "${files[@]}" > smt-report.json
+          jq -s '{reports: ., totals: {verified: (map(.verified) | add), divergences: (map(.failed) | add), unknown: (map(.unknown) | add), vacuous: (map(.vacuous) | add), excluded: (map(.excluded_paths) | add), wall_ms_max: (map(.wall_ms) | max)}}' "${files[@]}" > smt-report.json
       - uses: actions/upload-artifact@v7
         with:
           name: smt-report
