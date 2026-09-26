@@ -20,7 +20,6 @@ members = [
     "utils/isa-test-suite",
     "utils/capi",
     "utils/adt",
-    "utils/graph",
     "utils/symbolic",
     "utils/verify",
     "utils/llvm",
@@ -42,7 +41,6 @@ tmdl = { path = "tmdl", default-features = false }
 # Common utils
 tir-adt = { path = "utils/adt" }
 tir-arrange = { path = "utils/arrange" }
-tir-graph = { path = "utils/graph" }
 tir-symbolic = { path = "utils/symbolic" }
 tir-macros = { path = "utils/macros" }
 tir-lit = { path = "utils/lit" }

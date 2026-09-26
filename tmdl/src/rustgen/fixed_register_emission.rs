@@ -299,7 +299,6 @@ fn guard_folds_to_true(
     written_index: u16,
     register_index_map: &HashMap<(String, String), u32>,
 ) -> bool {
-    use tir_graph::Dag;
     let mut graph = tir_symbolic::sem::SemGraph::new();
     let params = HashMap::new();
     let Some((roots, lowering)) = ast::Expr::lower_all_to_sema_with_isa(
@@ -344,7 +343,7 @@ fn guard_folds_to_true(
     // The composed guard folds to true when its two sides are the same
     // expression: the definer establishes exactly the region the reader is
     // valid in.
-    tir_graph::subgraphs_equal(&composed, *lhs, &composed, *rhs)
+    composed.subgraph_eq(*lhs, &composed, *rhs)
 }
 
 /// Copy `node`'s subgraph from `src` into `dst`, replacing every `Symbol` leaf
@@ -352,12 +351,11 @@ fn guard_folds_to_true(
 fn substitute_symbol_with_subgraph(
     dst: &mut tir_symbolic::sem::SemGraph,
     src: &tir_symbolic::sem::SemGraph,
-    node: tir_graph::NodeId,
+    node: tir_adt::NodeId,
     symbol: u32,
-    replacement: tir_graph::NodeId,
-    memo: &mut HashMap<usize, tir_graph::NodeId>,
-) -> tir_graph::NodeId {
-    use tir_graph::Dag;
+    replacement: tir_adt::NodeId,
+    memo: &mut HashMap<usize, tir_adt::NodeId>,
+) -> tir_adt::NodeId {
     use tir_symbolic::lang::{SymKind, SymPayload};
     use tir_symbolic::sem::{CopyAction, copy_subgraph_with};
     copy_subgraph_with(
@@ -558,11 +556,11 @@ fn emit_one_division_rule(
     let constraints = [
         constraint_entry(
             lhs_symbol,
-            quote! { tir::graph::OperandConstraint::Register },
+            quote! { tir::backend::isel::OperandConstraint::Register },
         ),
         constraint_entry(
             divisor_symbol,
-            quote! { tir::graph::OperandConstraint::Register },
+            quote! { tir::backend::isel::OperandConstraint::Register },
         ),
     ];
     let (rule_ts, rule_ident) = emit_rule_spec(

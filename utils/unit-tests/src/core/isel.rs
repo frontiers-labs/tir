@@ -5,14 +5,13 @@ use tir::{
     builtin::{ops, IntegerType, ModuleOp},
     fp::ops as fp_ops,
     func::FuncOp,
-    graph::{MetaMutDag, MutDag, OperandConstraint},
     sem::{SemGraph, SymKind},
     Context, Operation, PassError, PassManager, RegionId, TypeId,
 };
 
 use tir::backend::isel::{
-    EmitRequest, ImmRange, InstructionSelectPass, RegisterCapability, RegisterRequirement, Rule,
-    RuleEmitFn, RuleMatch, LATENCY_COST_SCALE,
+    EmitRequest, ImmRange, InstructionSelectPass, OperandConstraint, RegisterCapability,
+    RegisterRequirement, Rule, RuleEmitFn, RuleMatch, LATENCY_COST_SCALE,
 };
 use tir::ptr::{LoadOpBuilder, StoreOpBuilder};
 use tir::sem::template_node;
@@ -386,7 +385,7 @@ fn typed_binary_pattern(kind: SymKind, ty: TypeId) -> SemGraph {
     let lhs = symbol(&mut g, 0);
     let rhs = symbol(&mut g, 1);
     let root = binary(&mut g, kind, lhs, rhs);
-    g.set_actual_type(root, ty);
+    g.annotation_mut(root).actual_type = Some(ty);
     g
 }
 
@@ -449,7 +448,7 @@ module_end
     let s2 = symbol(&mut pattern, 2);
     binary(&mut pattern, SymKind::Add, inner, s2);
     if let Some(width) = inner_width {
-        pattern.set_actual_type(inner, IntegerType::new(&context, width));
+        pattern.annotation_mut(inner).actual_type = Some(IntegerType::new(&context, width));
     }
 
     let rules = vec![

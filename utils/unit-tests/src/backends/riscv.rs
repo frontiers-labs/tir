@@ -1,7 +1,6 @@
 //! Unit tests for the `tir-riscv` backend's public API.
 
 use tir::backend::TargetMachine;
-use tir::graph::Dag;
 use tir::sem::{FloatFormat, SemType, SymKind, SymPayload};
 use tir::Context;
 use tir_riscv::{Feature, RegClass, TargetConfig};
@@ -279,7 +278,7 @@ fn directed_float_rule_keeps_its_rounding_mode() {
     );
     let rule = rules.iter().find(|rule| rule.name == "fadddrup").unwrap();
     let outcome = rule.pattern.root().unwrap();
-    assert_eq!(*rule.pattern.get_kind(outcome), SymKind::FAddRound);
+    assert_eq!(*rule.pattern.get_node(outcome), SymKind::FAddRound);
     let rounding = rule.pattern.children(outcome).last().unwrap();
     assert!(matches!(
         rule.pattern.get_leaf_data(rounding),
@@ -552,9 +551,9 @@ fn division_rule_records_exact_raised_flags() {
         panic!("rounded division must describe its exact raised flags");
     };
     let root = flags.root().unwrap();
-    assert_eq!(*flags.get_kind(root), SymKind::FPFlags);
+    assert_eq!(*flags.get_node(root), SymKind::FPFlags);
     let value = flags.children(root).next().unwrap();
-    assert_eq!(*flags.get_kind(value), SymKind::FDivRound);
+    assert_eq!(*flags.get_node(value), SymKind::FDivRound);
 }
 
 #[test]

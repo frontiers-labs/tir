@@ -4,7 +4,7 @@
 //! Conversions round to nearest, ties-to-even; the input range (≤64 bits) never
 //! overflows the exponent, so no infinity/NaN path.
 
-use tir_graph::{Dag, NodeId};
+use tir_adt::NodeId;
 
 use super::{BitblastError, Blaster};
 use crate::lang::SymKind;
@@ -278,7 +278,7 @@ impl<V> Blaster<'_, V> {
             defined
         };
         if matches!(
-            self.graph.get_kind(id),
+            self.graph.get_node(id),
             SymKind::FPToSIRound | SymKind::FPToUIRound
         ) {
             let mode = self.child_bits(id, 2);

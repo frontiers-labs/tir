@@ -8,7 +8,7 @@ use crate::lexer::Token;
 use chumsky::input::{MapExtra, ValueInput};
 use chumsky::inspector::SimpleState;
 use chumsky::prelude::*;
-use tir::graph::{Dag, MutDag, NodeId};
+use tir::NodeId;
 
 pub(super) fn ctype<'src, I>() -> impl Parser<'src, I, CType, Extra<'src>> + Clone
 where

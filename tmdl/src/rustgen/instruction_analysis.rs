@@ -92,7 +92,6 @@ fn analyze_instruction_semantics(
         .filter_map(|((class, _), symbol)| fp_fields.get(class).map(|field| (*symbol, *field)))
         .collect();
     if !reads.is_empty() {
-        use tir_graph::Dag;
         let original = pattern;
         pattern = tir_symbolic::sem::SemGraph::new();
         let mut memo = HashMap::new();
@@ -120,7 +119,6 @@ fn analyze_instruction_semantics(
             .retain(|(class, _), _| !fp_fields.contains_key(class));
     }
     let root = if assigns_state {
-        use tir_graph::MutDag;
         let mut state = pattern.add_node(tir_symbolic::lang::SymKind::StateBlock);
         for ((_, field), value) in assignments.iter().zip(&roots) {
             state = fp_state_term(&mut pattern, *field, Some(state), Some(*value));
@@ -157,7 +155,6 @@ fn analyze_instruction_semantics(
 
     let (pattern, root, guarded_semantics) =
         if let Some(candidate) = tir_symbolic::lang::selection_fallback(&pattern, root) {
-            use tir_graph::Dag;
             let candidate_root = candidate.root()?;
             (candidate, candidate_root, Some((pattern, root)))
         } else {
@@ -186,8 +183,7 @@ fn analyze_guarded_semantics(
     numeric_params: &HashMap<String, i64>,
     isa_param_values: &HashMap<String, i64>,
     register_index_map: &HashMap<(String, String), u32>,
-) -> Option<(tir_symbolic::sem::SemGraph, tir_graph::NodeId)> {
-    use tir_graph::MutDag;
+) -> Option<(tir_symbolic::sem::SemGraph, tir_adt::NodeId)> {
     let (cond, then_value, else_value) = guarded_assignment_shape(behavior, dst)?;
     // Resolve `self.XLEN` and friends to their concrete per-ISA width (the value
     // `execute()` uses, e.g. 64 for RV32+RV64), so the guarded semantics is a
@@ -382,11 +378,8 @@ fn collect_referenced_idents(expr: &ast::Expr, operands: &HashSet<&str>, out: &m
 /// and untied, with no implicit register reads.
 /// Returns `(source register operand name, its class, immediate symbol)`.
 fn value_zero_form_operands(
-    canon_pattern: &impl tir_graph::Dag<
-        Node = tir_symbolic::lang::SymKind,
-        Leaf = tir_symbolic::lang::SymPayload<tir_symbolic::sem::ValueId>,
-    >,
-    canon_root: tir_graph::NodeId,
+    canon_pattern: &tir_symbolic::sem::SemGraph,
+    canon_root: tir_adt::NodeId,
     ops: &[(String, Type)],
     variable_symbols: &HashMap<String, u32>,
     rd_name: &str,
@@ -397,11 +390,11 @@ fn value_zero_form_operands(
     if *canon_pattern.get_node(canon_root) != SymKind::Add {
         return None;
     }
-    let children: Vec<tir_graph::NodeId> = canon_pattern.children(canon_root).collect();
+    let children: Vec<tir_adt::NodeId> = canon_pattern.children(canon_root).collect();
     if children.len() != 2 {
         return None;
     }
-    let symbol_of = |node: tir_graph::NodeId| {
+    let symbol_of = |node: tir_adt::NodeId| {
         (*canon_pattern.get_node(node) == SymKind::Symbol)
             .then(|| match canon_pattern.get_leaf_data(node) {
                 Some(SymPayload::SymbolId(s)) => Some(*s),
@@ -458,17 +451,14 @@ fn value_zero_form_operands(
 /// reads a fixed bit range regardless of the bound value's width, and a
 /// memory read yields fresh bits unrelated to its address operands.
 fn width_sensitive_symbols(
-    dag: &impl tir_graph::Dag<
-        Node = tir_symbolic::lang::SymKind,
-        Leaf = tir_symbolic::lang::SymPayload<tir_symbolic::sem::ValueId>,
-    >,
+    dag: &tir_symbolic::sem::SemGraph,
     node_widths: &[Option<u32>],
 ) -> HashSet<u32> {
     use tir_symbolic::lang::SymKind as K;
 
     let mut out = HashSet::new();
     for index in 0..dag.len() {
-        let node = tir_graph::NodeId::from_index(index);
+        let node = tir_adt::NodeId::from_index(index);
         let untyped = node_widths.get(index).copied().flatten().is_none();
         let sensitive_children: &[usize] = match dag.get_node(node) {
             K::Eq | K::Ne | K::Lt | K::Le | K::Gt | K::Ge | K::ULt | K::ULe | K::UGt | K::UGe => {
@@ -486,7 +476,7 @@ fn width_sensitive_symbols(
             K::SExt | K::ZExt => &[0],
             _ => &[],
         };
-        let children: Vec<tir_graph::NodeId> = dag.children(node).collect();
+        let children: Vec<tir_adt::NodeId> = dag.children(node).collect();
         for &slot in sensitive_children {
             if let Some(child) = children.get(slot) {
                 collect_symbols(dag, *child, &mut out);
@@ -501,11 +491,8 @@ fn width_sensitive_symbols(
 /// (memory reads) — symbols below them are not width-sensitive through this
 /// path (see [`width_sensitive_symbols`]).
 fn collect_symbols(
-    dag: &impl tir_graph::Dag<
-        Node = tir_symbolic::lang::SymKind,
-        Leaf = tir_symbolic::lang::SymPayload<tir_symbolic::sem::ValueId>,
-    >,
-    node: tir_graph::NodeId,
+    dag: &tir_symbolic::sem::SemGraph,
+    node: tir_adt::NodeId,
     out: &mut HashSet<u32>,
 ) {
     use tir_symbolic::lang::SymKind as K;
@@ -542,24 +529,21 @@ struct ImmediateRange {
 /// `extract(imm, hi, 0)` wrapper (a shift-amount mask) narrows the usable bits.
 /// Selection uses these to refuse constants the field cannot represent.
 fn immediate_operand_ranges(
-    dag: &impl tir_graph::Dag<
-        Node = tir_symbolic::lang::SymKind,
-        Leaf = tir_symbolic::lang::SymPayload<tir_symbolic::sem::ValueId>,
-    >,
+    dag: &tir_symbolic::sem::SemGraph,
     ops: &[(String, Type)],
     variable_symbols: &HashMap<String, u32>,
     constraints: &HashMap<String, OperandConstraint>,
 ) -> Vec<ImmediateRange> {
     use tir_symbolic::lang::{SymKind as K, SymPayload};
 
-    let is_symbol_leaf = |node: tir_graph::NodeId, symbol: u32| {
+    let is_symbol_leaf = |node: tir_adt::NodeId, symbol: u32| {
         *dag.get_node(node) == K::Symbol
             && matches!(
                 dag.get_leaf_data(node),
                 Some(SymPayload::SymbolId(id)) if *id == symbol
             )
     };
-    let const_value = |node: tir_graph::NodeId| match dag.get_leaf_data(node) {
+    let const_value = |node: tir_adt::NodeId| match dag.get_leaf_data(node) {
         Some(SymPayload::Int(v)) => Some(v.to_u64()),
         _ => None,
     };
@@ -573,8 +557,8 @@ fn immediate_operand_ranges(
         let mut signed = false;
         let mut width = u32::from(*bits);
         for index in 0..dag.len() {
-            let node = tir_graph::NodeId::from_index(index);
-            let children: Vec<tir_graph::NodeId> = dag.children(node).collect();
+            let node = tir_adt::NodeId::from_index(index);
+            let children: Vec<tir_adt::NodeId> = dag.children(node).collect();
             let uses_symbol = children
                 .first()
                 .is_some_and(|&child| is_symbol_leaf(child, symbol));
@@ -913,10 +897,9 @@ fn behavior_updates_fp_environment(expr: &ast::Expr) -> bool {
 fn fp_state_term(
     graph: &mut tir_symbolic::sem::SemGraph,
     field: FpField,
-    state: Option<tir_graph::NodeId>,
-    value: Option<tir_graph::NodeId>,
-) -> tir_graph::NodeId {
-    use tir_graph::MutDag;
+    state: Option<tir_adt::NodeId>,
+    value: Option<tir_adt::NodeId>,
+) -> tir_adt::NodeId {
     use tir_symbolic::lang::{StateAccessKind, StateResourceKind, SymKind, SymPayload};
     let mut constant = |width, value| {
         let node = graph.add_node(SymKind::Constant);

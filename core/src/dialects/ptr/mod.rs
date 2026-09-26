@@ -190,13 +190,7 @@ impl NullOp {
     /// The null pointer: the all-zero address, at the pointer width the data
     /// layout in scope declares. Without a layout the address width is unknown,
     /// so the op offers no semantics rather than guessing one.
-    fn null_address(
-        &self,
-        g: &mut impl tir::graph::MutDag<
-            Node = tir::sem::SymKind,
-            Leaf = tir::sem::SymPayload<tir::ValueId>,
-        >,
-    ) -> Option<tir::graph::NodeId> {
+    fn null_address(&self, g: &mut tir::sem::SemGraph) -> Option<tir::NodeId> {
         let context = self.0.context.clone();
         let width = crate::DataLayout::for_instance(&context, &self.0)?.pointer_size()?;
         let node = g.add_node(tir::sem::SymKind::Constant);
@@ -231,13 +225,7 @@ impl CmpOp {
     /// the data layout in scope declares for a pointer. Without a layout the
     /// address width is unknown, so the op offers no semantics rather than
     /// guessing one.
-    fn cmp_expr(
-        &self,
-        g: &mut impl tir::graph::MutDag<
-            Node = tir::sem::SymKind,
-            Leaf = tir::sem::SymPayload<tir::ValueId>,
-        >,
-    ) -> Option<tir::graph::NodeId> {
+    fn cmp_expr(&self, g: &mut tir::sem::SemGraph) -> Option<tir::NodeId> {
         let context = self.0.context.clone();
         crate::DataLayout::for_instance(&context, &self.0)?.pointer_size()?;
 

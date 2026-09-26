@@ -54,8 +54,6 @@ fn ieee_arithmetic_accepts_quiet_nan_payload_choice() {
 
 #[test]
 fn ieee_arithmetic_rejects_finite_result_corruption() {
-    use tir::graph::Dag;
-
     let mut rule = rule(SymKind::FAdd, SymKind::FAddRound, 32, 0x7fc00000, 0);
     let full = rule.guarded_semantics.as_mut().unwrap();
     let original = full.root().unwrap();
@@ -122,8 +120,6 @@ fn float_copy_keeps_nan_payload_bits() {
 
 #[test]
 fn ieee_arithmetic_preserves_signed_zero() {
-    use tir::graph::Dag;
-
     let mut rule = rule(SymKind::FAdd, SymKind::FAddRound, 32, 0x7fc00000, 0);
     let full = rule.guarded_semantics.as_mut().unwrap();
     let original = full.root().unwrap();

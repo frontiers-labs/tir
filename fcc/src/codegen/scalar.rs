@@ -4,6 +4,7 @@ use super::{FnCodegen, LoweredExpr, Slot, lower_type, source_type_layout};
 use crate::ast::AstKind;
 use crate::sema::{QualType, TypeKind};
 use std::{cmp::Ordering, sync::Arc};
+use tir::NodeId;
 use tir::attributes::Predicate;
 use tir::builtin::{FloatType, IntegerType, ops as b};
 use tir::fp::{
@@ -11,7 +12,6 @@ use tir::fp::{
     IntegerConversionSemantics, InvalidConversion, Rounding, RoundingMode, SubnormalMode,
     ops as fp,
 };
-use tir::graph::{Dag, NodeId};
 use tir::ptr::{PtrType, ops as p};
 use tir::{Operation, TypeId, ValueId};
 

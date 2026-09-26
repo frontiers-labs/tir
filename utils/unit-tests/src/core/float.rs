@@ -2,7 +2,6 @@ use tir::fp::{
     ops, ArithmeticSemantics, Exceptions, IntegerConversionSemantics, InvalidConversion, NaNPolicy,
     Rounding, RoundingMode, SubnormalMode, Tininess,
 };
-use tir::graph::Dag;
 use tir::sem::{SemGraph, SymKind, Value};
 use tir::{
     builtin::{FloatType, IntegerType},
@@ -204,7 +203,7 @@ fn preserve_payload_arithmetic_exposes_an_exact_bit_observation() {
         .as_dyn_op()
         .semantic_expr(&mut graph)
         .unwrap();
-    assert_eq!(*graph.get_kind(root), SymKind::AsFloat);
+    assert_eq!(*graph.get_node(root), SymKind::AsFloat);
     let bits = graph.children(root).next().unwrap();
-    assert_eq!(*graph.get_kind(bits), SymKind::Bitcast);
+    assert_eq!(*graph.get_node(bits), SymKind::Bitcast);
 }

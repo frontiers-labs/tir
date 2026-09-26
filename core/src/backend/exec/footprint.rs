@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::graph::{Dag, NodeId};
+use crate::NodeId;
 use crate::sem::{ExtendSemBytes, SemGraph, SymKind, SymPayload, Value, execute_pure};
 
 use super::{Effect, ExecEnv};
@@ -43,11 +43,11 @@ fn term_count(graph: &SemGraph) -> usize {
         .preorder(graph.root().unwrap())
         .filter(|node| seen.insert(*node))
         .fold(0_usize, |count, node| {
-            let kind = *graph.get_kind(node);
+            let kind = *graph.get_node(node);
             if matches!(kind, SymKind::Map | SymKind::Reduce) {
                 let has_effect = graph
                     .preorder(node)
-                    .any(|child| is_memory(*graph.get_kind(child)));
+                    .any(|child| is_memory(*graph.get_node(child)));
                 if has_effect {
                     return usize::MAX;
                 }
@@ -141,7 +141,7 @@ fn collect_term(
     if !seen.insert(node) {
         return Ok(());
     }
-    let kind = *graph.get_kind(node);
+    let kind = *graph.get_node(node);
     let children: Vec<_> = graph.children(node).collect();
     if matches!(kind, SymKind::If | SymKind::Switch) {
         let condition = pure_at(graph, children[0], symbols, available)
@@ -159,7 +159,7 @@ fn collect_term(
     if matches!(kind, SymKind::Map | SymKind::Reduce) {
         if graph
             .preorder(node)
-            .any(|child| is_memory(*graph.get_kind(child)))
+            .any(|child| is_memory(*graph.get_node(child)))
         {
             return Err("effectful vector iteration requires an explicit restart policy");
         }

@@ -8,12 +8,12 @@ use crate::ast::{AstKind, AstLeaf};
 use crate::cir;
 use crate::diagnostics::Diagnostic;
 use crate::sema::{QualType, TypeKind};
+use tir::NodeId;
 use tir::attributes::Predicate;
 use tir::builtin::{FloatType, IntegerType, UnitType, ops as b};
 use tir::cfg::ops as cb;
 use tir::fp::ops as fp;
 use tir::func::ops as func_ops;
-use tir::graph::{Dag, NodeId};
 use tir::ptr::{PtrType, ops as p};
 use tir::{Operand, Operation, TypeId, ValueId};
 

@@ -1,21 +1,20 @@
 use super::{NoMemory, eval_ready, integer_view};
 use crate::lang::{SymKind, SymPayload, Value, scalar_op};
-use tir_adt::APInt;
-use tir_graph::{Dag, NodeId};
+use tir_adt::{APInt, Dag, NodeId};
 
 /// Evaluate a pure integer expression, returning `None` for unsupported kinds,
 /// unavailable symbols, or invalid operand bounds. Uses the ordinary interpreter's
 /// integer semantics after checking each operation's preconditions.
-pub fn execute_pure<V>(
-    graph: &impl Dag<Node = SymKind, Leaf = SymPayload<V>>,
+pub fn execute_pure<V, A>(
+    graph: &Dag<SymKind, SymPayload<V>, A>,
     symbols: &[Value],
 ) -> Option<APInt> {
     let mut cache = vec![None; graph.len()];
     integer_view(eval_pure_node(graph, graph.root()?, symbols, &mut cache)?)
 }
 
-fn eval_pure_node<V>(
-    graph: &impl Dag<Node = SymKind, Leaf = SymPayload<V>>,
+fn eval_pure_node<V, A>(
+    graph: &Dag<SymKind, SymPayload<V>, A>,
     node: NodeId,
     symbols: &[Value],
     cache: &mut Vec<Option<Value>>,
@@ -23,7 +22,7 @@ fn eval_pure_node<V>(
     if let Some(value) = &cache[node.index()] {
         return Some(value.clone());
     }
-    let kind = *graph.get_kind(node);
+    let kind = *graph.get_node(node);
     let operands = graph
         .children(node)
         .map(|child| eval_pure_node(graph, child, symbols, cache))

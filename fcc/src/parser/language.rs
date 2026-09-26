@@ -4,7 +4,6 @@ use crate::ast::{Ast, AstKind, AstLeaf, CType};
 use crate::diagnostics::{Diagnostic, LanguageFeatureUnavailable};
 use crate::lang_options::LangOptions;
 use crate::lexer::Token;
-use tir::graph::Dag;
 
 pub(super) fn validate_tokens(
     tokens: &[(Token, crate::diagnostics::Span)],

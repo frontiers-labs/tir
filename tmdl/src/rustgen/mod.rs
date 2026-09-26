@@ -299,7 +299,7 @@ pub fn generate_operation_list(
 }
 
 fn selection_pattern_widths(
-    graph: &tir_graph::GenericDag<
+    graph: &tir_adt::Dag<
         tir_symbolic::lang::SymKind,
         tir_symbolic::lang::SymPayload<tir_symbolic::sem::ValueId>,
     >,

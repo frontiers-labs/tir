@@ -3,14 +3,14 @@
 
 use std::collections::HashMap;
 
-use tir_graph::{Dag, GenericDag, MutDag, NodeId};
+use tir_adt::{Dag, NodeId};
 use tir_symbolic::lang::{SymKind, SymPayload};
 use tir_symbolic::sem::ValueId;
 
 use crate::ast;
 
-pub type ValueGraph = GenericDag<SymKind, SymPayload<ValueId>>;
-pub type UnifiedGraph = GenericDag<SymKind, BehaviorPayload>;
+pub type ValueGraph = Dag<SymKind, SymPayload<ValueId>>;
+pub type UnifiedGraph = Dag<SymKind, BehaviorPayload>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Destination {

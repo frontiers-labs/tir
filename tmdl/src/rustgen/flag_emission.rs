@@ -159,7 +159,7 @@ fn emit_flag_branch_rules(
             };
 
             let mut spliced = tir_symbolic::sem::SemGraph::new();
-            let substitute: HashMap<u32, tir_graph::NodeId> = b_sem
+            let substitute: HashMap<u32, tir_adt::NodeId> = b_sem
                 .flag_symbols
                 .iter()
                 .map(|(symbol, index)| (*symbol, d_sem.flag_roots[index]))
@@ -268,10 +268,10 @@ fn emit_flag_branch_rules(
 fn copy_subgraph_alias(
     dst: &mut tir_symbolic::sem::SemGraph,
     src: &tir_symbolic::sem::SemGraph,
-    node: tir_graph::NodeId,
+    node: tir_adt::NodeId,
     map: &HashMap<u32, u32>,
-    memo: &mut HashMap<usize, tir_graph::NodeId>,
-) -> tir_graph::NodeId {
+    memo: &mut HashMap<usize, tir_adt::NodeId>,
+) -> tir_adt::NodeId {
     copy_subgraph_remapping(dst, src, node, memo, &mut |id| map.get(&id).copied())
 }
 
@@ -280,8 +280,7 @@ fn copy_subgraph_alias(
 fn zero_vs_candidate(
     kind: tir_symbolic::lang::SymKind,
     width: u32,
-) -> (tir_symbolic::sem::SemGraph, tir_graph::NodeId) {
-    use tir_graph::MutDag;
+) -> (tir_symbolic::sem::SemGraph, tir_adt::NodeId) {
     let mut g = tir_symbolic::sem::SemGraph::new();
     let s = g.add_node(tir_symbolic::lang::SymKind::Symbol);
     g.set_leaf_data(s, tir_symbolic::lang::SymPayload::SymbolId(0));
@@ -319,8 +318,7 @@ fn zero_equivalent(
 fn zero_branch_pattern(
     kind: tir_symbolic::lang::SymKind,
     width_symbol: u32,
-) -> (tir_symbolic::sem::SemGraph, tir_graph::NodeId) {
-    use tir_graph::MutDag;
+) -> (tir_symbolic::sem::SemGraph, tir_adt::NodeId) {
     let mut g = tir_symbolic::sem::SemGraph::new();
     let s = g.add_node(tir_symbolic::lang::SymKind::Symbol);
     g.set_leaf_data(s, tir_symbolic::lang::SymPayload::SymbolId(0));
@@ -405,8 +403,8 @@ fn emit_aliased_zero_branch_rules(
 
             let map = HashMap::from([(sym_a, 0u32), (sym_b, 0u32)]);
             let mut aliased_graph = tir_symbolic::sem::SemGraph::new();
-            let mut alias_memo: HashMap<usize, tir_graph::NodeId> = HashMap::new();
-            let aliased_roots: HashMap<u32, tir_graph::NodeId> = d_sem
+            let mut alias_memo: HashMap<usize, tir_adt::NodeId> = HashMap::new();
+            let aliased_roots: HashMap<u32, tir_adt::NodeId> = d_sem
                 .flag_roots
                 .iter()
                 .map(|(&index, &root)| {
@@ -424,7 +422,7 @@ fn emit_aliased_zero_branch_rules(
                 .collect();
 
             let mut spliced = tir_symbolic::sem::SemGraph::new();
-            let substitute: HashMap<u32, tir_graph::NodeId> = b_sem
+            let substitute: HashMap<u32, tir_adt::NodeId> = b_sem
                 .flag_symbols
                 .iter()
                 .map(|(symbol, index)| (*symbol, aliased_roots[index]))
@@ -500,7 +498,7 @@ fn emit_aliased_zero_branch_rules(
             );
             let constraints = [constraint_entry(
                 0,
-                quote! { tir::graph::OperandConstraint::Register },
+                quote! { tir::backend::isel::OperandConstraint::Register },
             )];
             let (rule_ts, rule_ident) = emit_rule_spec(
                 &rule_key,
@@ -607,7 +605,6 @@ fn emit_flag_reader_rules(
     rule_spec_idents: &mut Vec<proc_macro2::Ident>,
 ) {
     let (float_classes, polymorphic_classes) = register_class_kinds(files);
-    use tir_graph::MutDag;
     let isa_closure = isa_requires_closure(files);
     for (r, r_sem) in readers {
         for (d, d_sem) in definers {
@@ -634,7 +631,7 @@ fn emit_flag_reader_rules(
             };
 
             let mut spliced = tir_symbolic::sem::SemGraph::new();
-            let substitute: HashMap<u32, tir_graph::NodeId> = r_sem
+            let substitute: HashMap<u32, tir_adt::NodeId> = r_sem
                 .flag_symbols
                 .iter()
                 .map(|(symbol, index)| (*symbol, d_sem.flag_roots[index]))
@@ -789,7 +786,7 @@ fn emit_flag_reader_rules(
                     Type::Struct(_) => {
                         reader_constraint_entries.push(constraint_entry(
                             symbol,
-                            quote! { tir::graph::OperandConstraint::Register },
+                            quote! { tir::backend::isel::OperandConstraint::Register },
                         ));
                         // A two-address reader reads its own destination; that
                         // operand becomes the tie attribute rather than a source.
@@ -803,7 +800,7 @@ fn emit_flag_reader_rules(
                     Type::Bits(_) | Type::Integer => {
                         reader_constraint_entries.push(constraint_entry(
                             symbol,
-                            quote! { tir::graph::OperandConstraint::Immediate },
+                            quote! { tir::backend::isel::OperandConstraint::Immediate },
                         ));
                         reader_attrs.push(emit_attr_int(name, symbol));
                     }

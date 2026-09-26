@@ -5,8 +5,7 @@ use std::collections::{HashMap, HashSet};
 
 use smallvec::SmallVec;
 use tir::{
-    Context,
-    graph::{Dag, MetaDag, NodeId, OperandConstraint},
+    Context, NodeId,
     sem::{
         SemGraph, SemNode, SemType, SymKind, SymPayload, TypeUnifier, Width,
         egraph::{SemEGraph, class_int_binding, class_semantic_type},
@@ -17,7 +16,7 @@ use tir_relational::ClassId as Id;
 use tir_relational::{Atom, Cmp, ColumnId, Expr, Guard, Match, NoExterns, Plan, Query, Source};
 
 use super::node::{class_register_type, is_memory_kind};
-use super::{ImmRange, RegisterRequirement};
+use super::{ImmRange, OperandConstraint, RegisterRequirement};
 
 /// One node of a rule's pattern: a template operator, or an operand the rule
 /// names.
@@ -635,7 +634,7 @@ fn compile_isel_pattern_node(
                     .find(|(s, _)| s == symbol)
                     .map(|(_, r)| *r),
                 semantic_type: Some(inferred_types[node.index()].clone()),
-                declared_type: expr.get_actual_type(node),
+                declared_type: expr.get_annotation(node).and_then(|m| m.actual_type),
                 ..Default::default()
             });
             compiled
@@ -648,7 +647,7 @@ fn compile_isel_pattern_node(
                     PatternNode::Template(template_node(
                         SymKind::Constant,
                         Some(SymPayload::Int(value)),
-                        expr.get_actual_type(node),
+                        expr.get_annotation(node).and_then(|m| m.actual_type),
                     )),
                 );
                 // A constant is pure and folds into the encoding, so any number of
@@ -710,7 +709,7 @@ fn compile_isel_pattern_node(
                 children.push(state);
             }
             let pattern_type = (*kind != SymKind::StateRead)
-                .then(|| expr.get_actual_type(node))
+                .then(|| expr.get_annotation(node).and_then(|m| m.actual_type))
                 .flatten();
             let mut compiled = template_node(*kind, None, pattern_type);
             compiled.children = children;

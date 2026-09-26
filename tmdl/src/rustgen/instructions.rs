@@ -266,20 +266,19 @@ struct InstrEmitCtx<'a> {
 fn fp_value_patterns(
     semantics: &InstructionSemantics,
     immediate_symbols: &HashSet<u32>,
-    canon_pattern: &tir_graph::GenericDag<
+    canon_pattern: &tir_adt::Dag<
         tir_symbolic::lang::SymKind,
         tir_symbolic::lang::SymPayload<tir_symbolic::sem::ValueId>,
     >,
-    canon_root: tir_graph::NodeId,
+    canon_root: tir_adt::NodeId,
     pattern_widths: &[Option<u32>],
 ) -> Vec<(&'static str, SpecPattern, bool)> {
     if matches!(semantics.fp_flags, FpFlags::None)
-        && *tir_graph::Dag::get_node(canon_pattern, canon_root)
+        && *tir_adt::Dag::get_node(canon_pattern, canon_root)
             != tir_symbolic::lang::SymKind::StateAssign
     {
         return Vec::new();
     }
-    use tir_graph::{Dag, MutDag};
     use tir_symbolic::lang::SymKind;
     let (full, full_root) = semantics
         .guarded_semantics
@@ -298,13 +297,13 @@ fn fp_value_patterns(
         widths[rounded_root.index()] = pattern_widths[canon_root.index()];
     }
     let needs_rounded_value =
-        !tir_graph::subgraphs_equal(&rounded, rounded_root, canon_pattern, canon_root);
+        !rounded.subgraph_eq(rounded_root, canon_pattern, canon_root);
     let (full_pattern, full_pattern_root, forced) =
         tir_symbolic::lang::canonicalize_for_selection(full, full_root, immediate_symbols);
     let rounded_is_full =
-        tir_graph::subgraphs_equal(&rounded, rounded_root, &full_pattern, full_pattern_root);
+        rounded.subgraph_eq(rounded_root, &full_pattern, full_pattern_root);
     let needs_full_value = !rounded_is_full
-        && !tir_graph::subgraphs_equal(&full_pattern, full_pattern_root, canon_pattern, canon_root);
+        && !full_pattern.subgraph_eq(full_pattern_root, canon_pattern, canon_root);
     let full_widths = selection_pattern_widths(&full_pattern, forced);
     let (effect_pattern, effect_root, _) = tir_symbolic::lang::canonicalize_for_selection(
         &semantics.pattern,
@@ -385,14 +384,13 @@ fn fp_value_patterns(
 fn extending_load_pattern(
     semantics: &InstructionSemantics,
     immediate_symbols: &HashSet<u32>,
-    canonical: &tir_graph::GenericDag<
+    canonical: &tir_adt::Dag<
         tir_symbolic::lang::SymKind,
         tir_symbolic::lang::SymPayload<tir_symbolic::sem::ValueId>,
     >,
-    load_root: tir_graph::NodeId,
+    load_root: tir_adt::NodeId,
     pattern_widths: &[Option<u32>],
 ) -> Option<SpecPattern> {
-    use tir_graph::{Dag, MutDag};
     use tir_symbolic::lang::{SymKind, SymPayload};
     let kind = *semantics.pattern.get_node(semantics.root);
     if !matches!(kind, SymKind::ZExt | SymKind::SExt)
@@ -453,9 +451,9 @@ fn emit_value_rules(
             continue;
         };
         let constraint = match op_ty {
-            Type::Struct(_) => quote! { tir::graph::OperandConstraint::Register },
+            Type::Struct(_) => quote! { tir::backend::isel::OperandConstraint::Register },
             Type::Bits(_) | Type::Integer => {
-                quote! { tir::graph::OperandConstraint::Immediate }
+                quote! { tir::backend::isel::OperandConstraint::Immediate }
             }
             _ => continue,
         };
@@ -494,7 +492,7 @@ fn emit_value_rules(
         if is_implicit && let Some(value_class) = value_class {
             operand_constraint_entries.push(constraint_entry(
                 *symbol,
-                quote! { tir::graph::OperandConstraint::Register },
+                quote! { tir::backend::isel::OperandConstraint::Register },
             ));
             let index = u16::try_from(*index).expect("register indices fit u16");
             fixed_value_reads.insert(*symbol, ((*value_class).to_string(), index));
@@ -569,7 +567,7 @@ fn emit_value_rules(
             _ => None,
         });
     if pattern_widths[canon_root.index()].is_none()
-        && scalar_root_kind(tir_graph::Dag::get_node(&canon_pattern, canon_root))
+        && scalar_root_kind(tir_adt::Dag::get_node(&canon_pattern, canon_root))
         && let Some(dst_class) = dst_class
         && let Some(width) = literal_register_class_width(tables.files, dst_class)
     {
@@ -595,7 +593,7 @@ fn emit_value_rules(
                 float_width: None,
             }
         });
-    if *tir_graph::Dag::get_node(&canon_pattern, canon_root) == tir_symbolic::lang::SymKind::Bitcast
+    if *tir_adt::Dag::get_node(&canon_pattern, canon_root) == tir_symbolic::lang::SymKind::Bitcast
         && let Some(dst_class) = dst_class
         && tables.float_classes.contains(dst_class)
         && let Some(width) = literal_register_class_width(tables.files, dst_class)
@@ -751,7 +749,6 @@ fn emit_value_rules(
         // The zero pattern, built here and interned into the sem blob:
         // `zext(0b0, W) + imm`, typed at the canonical root width.
         let (zero_pattern_offset, zero_pattern_typed) = {
-            use tir_graph::{Dag as _, MutDag};
             let mut g = tir_symbolic::sem::SemGraph::<()>::new();
             let zero = g.add_node(tir_symbolic::lang::SymKind::Constant);
             g.set_leaf_data(zero, tir_symbolic::sem::int_payload(1, 0, false));
@@ -822,7 +819,7 @@ fn emit_value_rules(
         };
         let zero_constraints = [constraint_entry(
             imm_sym,
-            quote! { tir::graph::OperandConstraint::Immediate },
+            quote! { tir::backend::isel::OperandConstraint::Immediate },
         )];
         let (zero_rule_ts, zero_rule_ident) = emit_rule_spec(
             &zero_rule_key,
@@ -898,7 +895,6 @@ fn emit_branch_rules(
         // lowered as `zext(0b0, W)` — the shape the arm64 cbz/cbnz path and the
         // bare-i1 bridge produce, so all three unify in the program e-graph.
         let (root_kind, root_children) = {
-            use tir_graph::Dag;
             (
                 *branch.pattern.get_node(branch.root),
                 branch.pattern.children(branch.root).collect::<Vec<_>>(),
@@ -917,7 +913,6 @@ fn emit_branch_rules(
         let operand_slots: Option<Vec<(String, String, u32)>> = (root_is_comparison
             && root_children.len() == 2)
             .then(|| {
-                use tir_graph::Dag;
                 root_children
                     .iter()
                     .map(|&child| {

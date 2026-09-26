@@ -6,7 +6,7 @@ use crate::ast::*;
 use crate::lexer::Token;
 use chumsky::input::{MapExtra, ValueInput};
 use chumsky::prelude::*;
-use tir::graph::{MutDag, NodeId};
+use tir::NodeId;
 
 #[derive(Clone)]
 enum PostfixOp {

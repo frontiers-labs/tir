@@ -1,6 +1,5 @@
 //! SemNode e-graph identity and the serialized sem-op blob format.
 
-use tir::graph::{Dag, MutDag};
 use tir::sem::{
     decode_sem_ops, int_payload, ExtendSemBytes, IrOp, Kind, Prov, SemBlobBuilder, SemGraph,
     SemNode, SemOp, SemPayloadDesc, SymKind,
@@ -167,7 +166,7 @@ fn two_spellings_of_one_constant_are_one_fact() {
     );
 }
 
-fn assert_same_graph(actual: &SemGraph, expected: &SemGraph, root: tir::graph::NodeId) {
+fn assert_same_graph(actual: &SemGraph, expected: &SemGraph, root: tir::NodeId) {
     for node in expected.postorder(root) {
         assert_eq!(actual.get_node(node), expected.get_node(node));
         assert_eq!(actual.get_leaf_data(node), expected.get_leaf_data(node));

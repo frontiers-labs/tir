@@ -26,7 +26,7 @@ use crate::sem_expr_state;
 use crate::utils::{
     EncodingShape, behavior_uses_todo, get_encoding_shapes, isa_param_values, item_supports_isa,
 };
-use tir_graph::NodeId;
+use tir_adt::NodeId;
 use tir_symbolic::lang::SymKind as ExprKind;
 
 // ---------------------------------------------------------------------------
@@ -272,9 +272,9 @@ impl crate::semgen::TermBackend for Btor2Term<'_, '_> {
         self.b.as_bool(value)
     }
 
-    fn special<G: crate::semgen::ValueDag>(
+    fn special(
         &mut self,
-        graph: &G,
+        graph: &crate::sem_expr_state::ValueGraph,
         node: NodeId,
         emit: &mut dyn FnMut(&mut Self, NodeId) -> Option<Bv>,
     ) -> Option<Bv> {

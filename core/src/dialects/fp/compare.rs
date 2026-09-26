@@ -3,8 +3,8 @@ use tir_adt::{APInt, ComparisonKind, compare_float};
 use super::arithmetic::{float_width, width_of_float};
 use super::resource::{apply_flags, effect_records, effects_for, verify_ports};
 use super::{ComparisonBehavior, Exceptions, SubnormalMode};
+use crate::NodeId;
 use crate::builtin::{IntegerType, StateResource};
-use crate::graph::{Dag, MetaMutDag, NodeId};
 use crate::sem::{SemGraph, SymKind, SymPayload};
 use crate::{
     Context, Error, HasResourceSemantics, ResourceEffect, ResourceEffects, ResourceSemantics,
@@ -27,13 +27,7 @@ operation! {
 }
 
 impl CmpOp {
-    fn cmp_expr(
-        &self,
-        graph: &mut impl tir::graph::MutDag<
-            Node = tir::sem::SymKind,
-            Leaf = tir::sem::SymPayload<tir::ValueId>,
-        >,
-    ) -> Option<tir::graph::NodeId> {
+    fn cmp_expr(&self, graph: &mut tir::sem::SemGraph) -> Option<tir::NodeId> {
         tir_symbolic::sem::cmpf_semantics(graph, self.predicate())
     }
 }
@@ -92,7 +86,7 @@ fn comparison_result(op: &CmpOp, graph: &mut SemGraph) -> NodeId {
         );
     }
     let result = tir_symbolic::sem::copy_subgraph(graph, &expression, root, &mut memo);
-    graph.set_actual_type(result, IntegerType::new(&op.0.context, 1));
+    graph.annotation_mut(result).actual_type = Some(IntegerType::new(&op.0.context, 1));
     result
 }
 
@@ -104,7 +98,7 @@ fn nan_test(
     signaling_only: bool,
 ) -> NodeId {
     let bits = super::resource::operation(graph, SymKind::Bitcast, &[input]);
-    graph.set_actual_type(bits, IntegerType::new(context, width));
+    graph.annotation_mut(bits).actual_type = Some(IntegerType::new(context, width));
     let (signless, infinity, quiet) = match width {
         32 => (0x7fff_ffff, 0x7f80_0000, 0x0040_0000),
         64 => (
@@ -118,7 +112,7 @@ fn nan_test(
     let magnitude = super::resource::operation(graph, SymKind::And, &[bits, mask]);
     let infinity = super::resource::constant(graph, width, infinity);
     let nan = super::resource::operation(graph, SymKind::UGt, &[magnitude, infinity]);
-    graph.set_actual_type(nan, IntegerType::new(context, 1));
+    graph.annotation_mut(nan).actual_type = Some(IntegerType::new(context, 1));
     if !signaling_only {
         return nan;
     }
@@ -126,9 +120,9 @@ fn nan_test(
     let quiet = super::resource::operation(graph, SymKind::And, &[bits, quiet]);
     let zero = super::resource::constant(graph, width, 0);
     let signaling = super::resource::operation(graph, SymKind::Eq, &[quiet, zero]);
-    graph.set_actual_type(signaling, IntegerType::new(context, 1));
+    graph.annotation_mut(signaling).actual_type = Some(IntegerType::new(context, 1));
     let result = super::resource::operation(graph, SymKind::And, &[nan, signaling]);
-    graph.set_actual_type(result, IntegerType::new(context, 1));
+    graph.annotation_mut(result).actual_type = Some(IntegerType::new(context, 1));
     result
 }
 
@@ -160,12 +154,12 @@ impl HasResourceSemantics for CmpOp {
         let rhs_invalid = nan_test(&mut graph, &self.0.context, rhs, width, signaling_only);
         let invalid =
             super::resource::operation(&mut graph, SymKind::Or, &[lhs_invalid, rhs_invalid]);
-        graph.set_actual_type(invalid, IntegerType::new(&self.0.context, 1));
+        graph.annotation_mut(invalid).actual_type = Some(IntegerType::new(&self.0.context, 1));
         let invalid_flag = super::resource::constant(&mut graph, 5, 0b1_0000);
         let no_flags = super::resource::constant(&mut graph, 5, 0);
         let raised =
             super::resource::operation(&mut graph, SymKind::If, &[invalid, invalid_flag, no_flags]);
-        graph.set_actual_type(raised, IntegerType::new(&self.0.context, 5));
+        graph.annotation_mut(raised).actual_type = Some(IntegerType::new(&self.0.context, 5));
         let environment = super::resource::value(
             &mut graph,
             &self.0,

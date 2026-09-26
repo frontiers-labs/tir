@@ -1,11 +1,10 @@
-use tir_adt::{APInt, RawBits};
-use tir_graph::{Dag, GenericDag, MutDag, NodeId};
+use tir_adt::{APInt, Dag, NodeId, RawBits};
 use tir_symbolic::lang::{
     build, execute, op_kind, op_name, parse, BuildError, SemBuilderHooks, SemExpr, SymKind,
     SymPayload, Value,
 };
 
-type Graph = GenericDag<SymKind, SymPayload<()>>;
+type Graph = Dag<SymKind, SymPayload<()>>;
 
 /// Hooks whose `$get_vlen` splices a constant lane count; mirrors the vector dialect.
 struct TestHooks {
@@ -69,7 +68,7 @@ fn builds_and_executes_binary_op() {
         &no_hooks(),
     )
     .unwrap();
-    assert_eq!(*g.get_kind(root), SymKind::Add);
+    assert_eq!(*g.get_node(root), SymKind::Add);
     let out = execute(
         &g,
         &[
@@ -96,7 +95,7 @@ fn builds_sext_with_result_width() {
         },
     )
     .unwrap();
-    assert_eq!(*g.get_kind(root), SymKind::SExt);
+    assert_eq!(*g.get_node(root), SymKind::SExt);
     let out = execute(&g, &[Value::Int(APInt::new_signed(8, -5))]);
     match out {
         Value::Int(v) => assert_eq!(v.to_i64(), -5),
@@ -117,7 +116,7 @@ fn builds_trunc_as_extract() {
         },
     )
     .unwrap();
-    assert_eq!(*g.get_kind(root), SymKind::Extract);
+    assert_eq!(*g.get_node(root), SymKind::Extract);
     let out = execute(&g, &[Value::Int(APInt::new(32, 0x1234))]);
     match out {
         Value::Int(v) => assert_eq!(v.to_u64(), 0x34),
@@ -176,7 +175,7 @@ fn builds_explicit_width_extension() {
     // The binary form takes the target width from its operand, no hooks.
     let mut g = Graph::new();
     let root = build(&mut g, "(set r (zext x 16))", &[("x", 0)], &no_hooks()).unwrap();
-    assert_eq!(*g.get_kind(root), SymKind::ZExt);
+    assert_eq!(*g.get_node(root), SymKind::ZExt);
     match execute(&g, &[Value::Int(APInt::new(8, 0xff))]) {
         Value::Int(v) => {
             assert_eq!(v.width(), 16);

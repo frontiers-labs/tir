@@ -1,7 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use tir_adt::APInt;
-use tir_graph::{Dag, GenericDag, MutDag, NodeId};
+use tir_adt::{APInt, Dag, NodeId};
 
 use crate::lang::types::TypeUnifier;
 use crate::lang::{
@@ -16,8 +15,8 @@ fn state_field_type(resource: u64, field: u64) -> Result<Option<SemType>, TypeEr
     Ok(schema.bit_width.map(SemType::bits))
 }
 
-fn state_field_type_at<V>(
-    graph: &impl Dag<Node = SymKind, Leaf = SymPayload<V>>,
+fn state_field_type_at<V, A>(
+    graph: &Dag<SymKind, SymPayload<V>, A>,
     resource: NodeId,
     field: NodeId,
 ) -> Result<Option<SemType>, TypeError> {
@@ -31,8 +30,8 @@ fn state_field_type_at<V>(
 /// Infer semantic value types by instantiating each operator's polymorphic
 /// signature and unifying it with the types of its operands. `seed` supplies
 /// externally known types, normally the IR types of symbol leaves and roots.
-pub fn infer_types<V>(
-    graph: &impl Dag<Node = SymKind, Leaf = SymPayload<V>>,
+pub fn infer_types<V, A>(
+    graph: &Dag<SymKind, SymPayload<V>, A>,
     seed: impl Fn(NodeId) -> Option<SemType>,
 ) -> Result<Vec<SemType>, TypeError> {
     let mut inference = TypeUnifier::default();
@@ -42,7 +41,7 @@ pub fn infer_types<V>(
         let node = NodeId::from_index(index);
         let children: Vec<NodeId> = graph.children(node).collect();
         let child = |slot: usize| types[children[slot].index()].clone();
-        let kind = *graph.get_kind(node);
+        let kind = *graph.get_node(node);
         if super::rounded::operation(kind).is_some() {
             inference.unify(&child(children.len() - 1), &SemType::bits(3))?;
         }
@@ -299,8 +298,8 @@ pub fn infer_types<V>(
 /// Infer each node's integer bit-width bottom-up; `leaf_width` supplies `Symbol`
 /// widths, `None` means unknown and propagates. Relies on children having lower
 /// indices than parents (holds for post-order graphs); result indexed by node index.
-pub fn infer_widths<V>(
-    graph: &impl Dag<Node = SymKind, Leaf = SymPayload<V>>,
+pub fn infer_widths<V, A>(
+    graph: &Dag<SymKind, SymPayload<V>, A>,
     leaf_width: impl Fn(NodeId) -> Option<u32>,
 ) -> Vec<Option<u32>> {
     let count = graph.len();
@@ -311,7 +310,7 @@ pub fn infer_widths<V>(
         let children: Vec<NodeId> = graph.children(id).collect();
         let child_width = |slot: usize| children.get(slot).and_then(|c| widths[c.index()]);
 
-        let kind = *graph.get_kind(id);
+        let kind = *graph.get_node(id);
         let width = if let Some(op) = scalar_op(kind) {
             match op.width {
                 WidthRule::First => child_width(0),
@@ -456,12 +455,12 @@ pub fn infer_widths<V>(
 /// Rewrite a behavior-derived pattern into the form isel matches against, returning
 /// the new graph, root, and forced widths (indexed by new node index). The rewrites
 /// (see `canon_rebuild`) only simplify the selection pattern, never execution semantics.
-pub fn canonicalize_for_selection<V: Clone>(
-    graph: &impl Dag<Node = SymKind, Leaf = SymPayload<V>>,
+pub fn canonicalize_for_selection<V: Clone, A>(
+    graph: &Dag<SymKind, SymPayload<V>, A>,
     root: NodeId,
     immediate_symbols: &HashSet<u32>,
-) -> (GenericDag<SymKind, SymPayload<V>>, NodeId, Vec<Option<u32>>) {
-    let mut out = GenericDag::new();
+) -> (Dag<SymKind, SymPayload<V>>, NodeId, Vec<Option<u32>>) {
+    let mut out = Dag::new();
     let mut memo: HashMap<usize, NodeId> = HashMap::new();
     let mut forced: HashMap<usize, u32> = HashMap::new();
     let mut new_root = canon_rebuild(
@@ -499,10 +498,7 @@ pub fn canonicalize_for_selection<V: Clone>(
     (out, new_root, widths)
 }
 
-fn const_u64<V>(
-    graph: &impl Dag<Node = SymKind, Leaf = SymPayload<V>>,
-    node: NodeId,
-) -> Option<u64> {
+fn const_u64<V, A>(graph: &Dag<SymKind, SymPayload<V>, A>, node: NodeId) -> Option<u64> {
     match graph.get_leaf_data(node)? {
         SymPayload::Int(v) => Some(v.to_u64()),
         _ => None,
@@ -519,10 +515,7 @@ fn is_shift(kind: SymKind) -> bool {
 /// The shift-amount operand's source with its implicit encoding mask stripped:
 /// `Extract(amt, k, 0)` / `Clamp(amt, _, _)` -> `amt` (the shift encoding masks
 /// the amount, so the mask is redundant for matching).
-fn shift_amount_src<V>(
-    graph: &impl Dag<Node = SymKind, Leaf = SymPayload<V>>,
-    src: NodeId,
-) -> NodeId {
+fn shift_amount_src<V, A>(graph: &Dag<SymKind, SymPayload<V>, A>, src: NodeId) -> NodeId {
     match *graph.get_node(src) {
         SymKind::Extract => {
             let ec: Vec<NodeId> = graph.children(src).collect();
@@ -537,8 +530,8 @@ fn shift_amount_src<V>(
     }
 }
 
-fn extract_from_zero_hi<V>(
-    graph: &impl Dag<Node = SymKind, Leaf = SymPayload<V>>,
+fn extract_from_zero_hi<V, A>(
+    graph: &Dag<SymKind, SymPayload<V>, A>,
     node: NodeId,
 ) -> Option<(NodeId, u64)> {
     if *graph.get_node(node) != SymKind::Extract {
@@ -553,15 +546,15 @@ fn extract_from_zero_hi<V>(
 
 /// Whether `node` is a low slice `Extract(x, hi, 0)` (lo == 0), a re-view of the
 /// low bits of `x`. The hi bound may be constant or symbolic (`XLEN - 1`).
-fn is_low_extract<V>(graph: &impl Dag<Node = SymKind, Leaf = SymPayload<V>>, node: NodeId) -> bool {
+fn is_low_extract<V, A>(graph: &Dag<SymKind, SymPayload<V>, A>, node: NodeId) -> bool {
     *graph.get_node(node) == SymKind::Extract && {
         let children: Vec<NodeId> = graph.children(node).collect();
         children.len() == 3 && const_u64(graph, children[2]) == Some(0)
     }
 }
 
-fn is_immediate_leaf<V>(
-    graph: &impl Dag<Node = SymKind, Leaf = SymPayload<V>>,
+fn is_immediate_leaf<V, A>(
+    graph: &Dag<SymKind, SymPayload<V>, A>,
     node: NodeId,
     immediate_symbols: &HashSet<u32>,
 ) -> bool {
@@ -572,10 +565,7 @@ fn is_immediate_leaf<V>(
         )
 }
 
-fn is_extended_zero<V>(
-    graph: &impl Dag<Node = SymKind, Leaf = SymPayload<V>>,
-    node: NodeId,
-) -> bool {
+fn is_extended_zero<V, A>(graph: &Dag<SymKind, SymPayload<V>, A>, node: NodeId) -> bool {
     if *graph.get_node(node) != SymKind::ZExt {
         return false;
     }
@@ -583,12 +573,12 @@ fn is_extended_zero<V>(
     children.len() == 2 && const_u64(graph, children[0]) == Some(0)
 }
 
-fn canon_rebuild<V: Clone>(
-    graph: &impl Dag<Node = SymKind, Leaf = SymPayload<V>>,
+fn canon_rebuild<V: Clone, A>(
+    graph: &Dag<SymKind, SymPayload<V>, A>,
     node: NodeId,
     root: NodeId,
     immediate_symbols: &HashSet<u32>,
-    out: &mut GenericDag<SymKind, SymPayload<V>>,
+    out: &mut Dag<SymKind, SymPayload<V>>,
     memo: &mut HashMap<usize, NodeId>,
     forced: &mut HashMap<usize, u32>,
 ) -> NodeId {
@@ -898,7 +888,7 @@ fn canon_rebuild<V: Clone>(
             .children(operation)
             .map(|child| canon_rebuild(graph, child, root, immediate_symbols, out, memo, forced))
             .collect();
-        let rounded = out.add_node(*graph.get_kind(operation));
+        let rounded = out.add_node(*graph.get_node(operation));
         for operand in operands {
             out.add_edge(rounded, operand);
         }
@@ -931,7 +921,7 @@ fn canon_rebuild<V: Clone>(
 }
 
 fn selection_default_kind<A>(graph: &crate::sem::SemGraph<A>, node: NodeId) -> Option<SymKind> {
-    let (kind, rounding) = match graph.get_kind(node) {
+    let (kind, rounding) = match graph.get_node(node) {
         SymKind::FCvtRound => (SymKind::FCvt, 0),
         SymKind::FAddRound => (SymKind::FAdd, 0),
         SymKind::FSubRound => (SymKind::FSub, 0),
@@ -978,7 +968,7 @@ fn selection_fallback_impl<A: Clone>(
 ) -> Option<crate::sem::SemGraph<A>> {
     fn rounded_kind<A>(graph: &crate::sem::SemGraph<A>, node: NodeId) -> bool {
         matches!(
-            graph.get_kind(node),
+            graph.get_node(node),
             SymKind::FAddRound
                 | SymKind::FSubRound
                 | SymKind::FMulRound
@@ -993,12 +983,12 @@ fn selection_fallback_impl<A: Clone>(
         )
     }
     fn quiet_nan_constant<A>(graph: &crate::sem::SemGraph<A>, node: NodeId) -> bool {
-        if *graph.get_kind(node) != SymKind::AsFloat {
+        if *graph.get_node(node) != SymKind::AsFloat {
             return false;
         }
         if graph
             .preorder(node)
-            .any(|candidate| *graph.get_kind(candidate) == SymKind::Symbol)
+            .any(|candidate| *graph.get_node(candidate) == SymKind::Symbol)
         {
             return false;
         }
@@ -1025,7 +1015,7 @@ fn selection_fallback_impl<A: Clone>(
         if let Some(&existing) = memo.get(&node.index()) {
             return existing;
         }
-        let mut kind = *graph.get_kind(node);
+        let mut kind = *graph.get_node(node);
         if matches!(kind, SymKind::FPFlags | SymKind::StateAssign) {
             let result = crate::sem::copy_subgraph(out, graph, node, &mut HashMap::new());
             memo.insert(node.index(), result);
@@ -1063,7 +1053,7 @@ fn selection_fallback_impl<A: Clone>(
             let conversion_branch = [children[2], children[1]].into_iter().find(|&branch| {
                 graph.preorder(branch).any(|node| {
                     matches!(
-                        graph.get_kind(node),
+                        graph.get_node(node),
                         SymKind::FPToSIRound | SymKind::FPToUIRound
                     )
                 })

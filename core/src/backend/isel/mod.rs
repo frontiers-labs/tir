@@ -25,9 +25,8 @@ mod scopes;
 use std::collections::{HashMap, HashSet};
 
 use tir::{
-    AnalysisManager, BlockId, Context, Gamma, OpHandle, OpId, Operation, OperationRef, Pass,
-    PassError, PassTarget, RegionId, TypeId, ValueId,
-    graph::{Dag, MutDag, NodeId, OperandConstraint, subgraphs_equal},
+    AnalysisManager, BlockId, Context, Gamma, NodeId, OpHandle, OpId, Operation, OperationRef,
+    Pass, PassError, PassTarget, RegionId, TypeId, ValueId,
     sem::{
         EquivalenceOracle, SemGraph, SmtOracle, SymKind, SymPayload, canonicalize_for_selection,
         definedness_condition,
@@ -44,8 +43,8 @@ use crate::passes::destructure::{
 
 pub use fp_environment::check_default_fp_environment;
 pub use rules::{
-    CapabilityKind, EmitAttr, EmitSpec, PatternRef, RegOperandSpec, ResultRegSpec, RuleSpec,
-    build_rules, emit_with,
+    CapabilityKind, EmitAttr, EmitSpec, OperandConstraint, PatternRef, RegOperandSpec,
+    ResultRegSpec, RuleSpec, build_rules, emit_with,
 };
 pub use tir::sem::{SaturationLimits, SemEGraph, SemNode, SemPayload, Theory};
 pub use tir_relational::Match as IselMatch;
@@ -919,12 +918,12 @@ fn prove_relaxation(rule: &Rule, guarded: &SemGraph) -> Result<GuardedRelaxation
     let register_width = infer_widths(guarded, |_| None)[full_root.index()].unwrap_or(64);
     let floating = relaxation_uses_float(&candidate);
     if !floating
-        && *guarded.get_kind(full_root) == SymKind::If
+        && *guarded.get_node(full_root) == SymKind::If
         && let Some(else_arm) = guarded.children(full_root).nth(2)
     {
         let (canonical_else, else_root, _) =
             canonicalize_for_selection(guarded, else_arm, &immediate_symbols);
-        if subgraphs_equal(&canonical_else, else_root, pattern, pattern_root)
+        if canonical_else.subgraph_eq(else_root, pattern, pattern_root)
             && relaxation_holds(guarded, full_root, else_arm, register_width)
         {
             return Ok(GuardedRelaxationProof::Proven);
@@ -948,7 +947,7 @@ fn peel_relaxation_effect(rule: &Rule, guarded: &SemGraph) -> Result<(SemGraph, 
         .pattern
         .root()
         .ok_or_else(|| relaxation_error(rule, "empty selection pattern"))?;
-    let effect = *rule.pattern.get_kind(pattern_root) == SymKind::FPEffect;
+    let effect = *rule.pattern.get_node(pattern_root) == SymKind::FPEffect;
     let root = if effect {
         rule.pattern.children(pattern_root).next().unwrap()
     } else {
@@ -962,7 +961,7 @@ fn peel_relaxation_effect(rule: &Rule, guarded: &SemGraph) -> Result<(SemGraph, 
         .ok_or_else(|| relaxation_error(rule, "empty guarded semantics"))?;
     let mut observed = SemGraph::new();
     let observed_root =
-        if effect && matches!(guarded.get_kind(full_root), SymKind::SExt | SymKind::ZExt) {
+        if effect && matches!(guarded.get_node(full_root), SymKind::SExt | SymKind::ZExt) {
             let child = guarded.children(full_root).next().unwrap();
             let width = infer_widths(guarded, |_| None)[child.index()];
             if width.is_some() && width == infer_widths(pattern, |_| None)[pattern_root.index()] {
@@ -988,7 +987,7 @@ fn relaxation_candidate(
     let matches_pattern = |candidate: &SemGraph| {
         let (canonical, root, _) =
             canonicalize_for_selection(candidate, candidate.root().unwrap(), immediate_symbols);
-        subgraphs_equal(&canonical, root, pattern, pattern_root)
+        canonical.subgraph_eq(root, pattern, pattern_root)
     };
     let candidate = tir_symbolic::lang::selection_fallback_preserving_rounding(guarded, full_root)
         .filter(&matches_pattern)
@@ -996,7 +995,7 @@ fn relaxation_candidate(
             tir_symbolic::lang::selection_fallback(guarded, full_root).filter(&matches_pattern)
         })
         .or_else(|| {
-            if *guarded.get_kind(full_root) != SymKind::If {
+            if *guarded.get_node(full_root) != SymKind::If {
                 return None;
             }
             let else_arm = guarded.children(full_root).nth(2)?;
@@ -1022,7 +1021,7 @@ fn relaxation_candidate(
 fn relaxation_uses_float(candidate: &SemGraph) -> bool {
     candidate.postorder(candidate.root().unwrap()).any(|node| {
         matches!(
-            candidate.get_kind(node),
+            candidate.get_node(node),
             SymKind::FPToSI
                 | SymKind::FPToUI
                 | SymKind::SIToFP
@@ -1086,11 +1085,10 @@ fn prove_float_relaxation(
     let mut proof_candidate_root = candidate_root;
     let mut proof_guarded_root = full_root;
     if matches!(
-        candidate.get_kind(candidate_root),
+        candidate.get_node(candidate_root),
         SymKind::SExt | SymKind::ZExt
-    ) && candidate.get_kind(candidate_root) == guarded.get_kind(full_root)
-        && subgraphs_equal(
-            candidate,
+    ) && candidate.get_node(candidate_root) == guarded.get_node(full_root)
+        && candidate.subgraph_eq(
             candidate.children(candidate_root).nth(1).unwrap(),
             guarded,
             guarded.children(full_root).nth(1).unwrap(),

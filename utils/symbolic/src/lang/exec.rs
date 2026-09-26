@@ -2,8 +2,7 @@
 mod pure;
 pub use pure::execute_pure;
 
-use tir_adt::{APFloat, APInt, RawBits};
-use tir_graph::{Dag, NodeId};
+use tir_adt::{APFloat, APInt, Dag, NodeId, RawBits};
 
 use crate::lang::{AtomicRmwOp, MemOrdering, SymKind, SymPayload, Value, scalar_op};
 
@@ -125,10 +124,7 @@ impl Memory for NoMemory {
 }
 
 /// Evaluate the expression DAG; `symbols[i]` is the value for `SymbolId(i)`.
-pub fn execute<V>(
-    graph: &impl Dag<Node = SymKind, Leaf = SymPayload<V>>,
-    symbols: &[Value],
-) -> Value {
+pub fn execute<V, A>(graph: &Dag<SymKind, SymPayload<V>, A>, symbols: &[Value]) -> Value {
     match execute_with_memory(graph, symbols, &mut NoMemory) {
         Ok(value) => value,
         Err(err) => match err {},
@@ -136,8 +132,8 @@ pub fn execute<V>(
 }
 
 /// Like [`execute`] but routes load/store nodes through `memory`; stores yield a dummy 1-bit value.
-pub fn execute_with_memory<V, M: Memory>(
-    graph: &impl Dag<Node = SymKind, Leaf = SymPayload<V>>,
+pub fn execute_with_memory<V, M: Memory, A>(
+    graph: &Dag<SymKind, SymPayload<V>, A>,
     symbols: &[Value],
     memory: &mut M,
 ) -> Result<Value, M::Error> {
@@ -188,7 +184,7 @@ pub struct Continuation {
 }
 
 impl Continuation {
-    pub fn new<V>(graph: &impl Dag<Node = SymKind, Leaf = SymPayload<V>>) -> Self {
+    pub fn new<V, A>(graph: &Dag<SymKind, SymPayload<V>, A>) -> Self {
         let root = graph.root().expect("cannot execute empty graph");
         Self {
             root,
@@ -204,9 +200,9 @@ impl Continuation {
         }
     }
 
-    pub fn resume<V, M: Memory>(
+    pub fn resume<V, M: Memory, A>(
         &mut self,
-        graph: &impl Dag<Node = SymKind, Leaf = SymPayload<V>>,
+        graph: &Dag<SymKind, SymPayload<V>, A>,
         symbols: &[Value],
         memory: &mut M,
     ) -> Result<Value, M::Error> {
@@ -246,9 +242,9 @@ impl Continuation {
         }
     }
 
-    fn step_node<V, M: Memory>(
+    fn step_node<V, M: Memory, A>(
         &mut self,
-        graph: &impl Dag<Node = SymKind, Leaf = SymPayload<V>>,
+        graph: &Dag<SymKind, SymPayload<V>, A>,
         symbols: &[Value],
         memory: &mut M,
         node: NodeId,
@@ -261,9 +257,9 @@ impl Continuation {
         }
 
         let children: Vec<_> = graph.children(node).collect();
-        match *graph.get_kind(node) {
+        match *graph.get_node(node) {
             SymKind::Map | SymKind::Reduce if next_child == 0 => {
-                let replacement = if *graph.get_kind(node) == SymKind::Map {
+                let replacement = if *graph.get_node(node) == SymKind::Map {
                     EvalFrame::Map {
                         node,
                         context,
@@ -290,7 +286,7 @@ impl Continuation {
             _ => {}
         }
 
-        let child_index = match *graph.get_kind(node) {
+        let child_index = match *graph.get_node(node) {
             SymKind::If if next_child == 0 => Some(0),
             SymKind::If if next_child == 1 => {
                 let condition = child_val(graph, node, 0, &self.contexts[context].cache);
@@ -346,11 +342,7 @@ impl Continuation {
         self.contexts.len() - 1
     }
 
-    fn step_map<V>(
-        &mut self,
-        graph: &impl Dag<Node = SymKind, Leaf = SymPayload<V>>,
-        frame: EvalFrame,
-    ) {
+    fn step_map<V, A>(&mut self, graph: &Dag<SymKind, SymPayload<V>, A>, frame: EvalFrame) {
         let EvalFrame::Map {
             node,
             context,
@@ -425,11 +417,7 @@ impl Continuation {
         });
     }
 
-    fn step_reduce<V>(
-        &mut self,
-        graph: &impl Dag<Node = SymKind, Leaf = SymPayload<V>>,
-        frame: EvalFrame,
-    ) {
+    fn step_reduce<V, A>(&mut self, graph: &Dag<SymKind, SymPayload<V>, A>, frame: EvalFrame) {
         let EvalFrame::Reduce {
             node,
             context,
@@ -525,8 +513,8 @@ fn scalar_is_zero(value: Value) -> bool {
     }
 }
 
-fn child_val<V>(
-    graph: &impl Dag<Node = SymKind, Leaf = SymPayload<V>>,
+fn child_val<V, A>(
+    graph: &Dag<SymKind, SymPayload<V>, A>,
     node: NodeId,
     idx: usize,
     cache: &[Option<Value>],
@@ -777,8 +765,8 @@ fn concat_lanes(value: Value) -> Value {
     Value::RawBits(RawBits::from_bytes(storage))
 }
 
-fn eval_ready<V, M: Memory>(
-    graph: &impl Dag<Node = SymKind, Leaf = SymPayload<V>>,
+fn eval_ready<V, M: Memory, A>(
+    graph: &Dag<SymKind, SymPayload<V>, A>,
     node: NodeId,
     symbols: &[Value],
     cache: &[Option<Value>],
@@ -791,11 +779,11 @@ fn eval_ready<V, M: Memory>(
     // matching the bitblaster. An if-guarded behavior (e.g. riscv `div`) evaluates
     // its dead arm eagerly, so a zero divisor must fold rather than trap in the
     // asserting APInt path `scalar_op` would take.
-    if let Some(result) = eval_divrem(*graph.get_kind(node), &c) {
+    if let Some(result) = eval_divrem(*graph.get_node(node), &c) {
         return Ok(result);
     }
 
-    if let Some(op) = scalar_op(*graph.get_kind(node)) {
+    if let Some(op) = scalar_op(*graph.get_node(node)) {
         let operands = (0..op.arity)
             .map(|index| integer_view(c(index)))
             .collect::<Option<Vec<_>>>();
@@ -804,11 +792,11 @@ fn eval_ready<V, M: Memory>(
         }
     }
 
-    let result = match *graph.get_kind(node) {
+    let result = match *graph.get_node(node) {
         kind if super::rounded::operation(kind).is_some() => super::rounded::evaluate(kind, &c).0,
         SymKind::FPFlags => {
             let operation = graph.children(node).next().unwrap();
-            let kind = *graph.get_kind(operation);
+            let kind = *graph.get_node(operation);
             let (_, flags) =
                 super::rounded::evaluate(kind, &|index| child_val(graph, operation, index, cache));
             Value::Int(APInt::new(5, u64::from(flags)))
@@ -865,11 +853,7 @@ fn eval_ready<V, M: Memory>(
     Ok(result)
 }
 
-fn eval_arg<V>(
-    graph: &impl Dag<Node = SymKind, Leaf = SymPayload<V>>,
-    node: NodeId,
-    args: &[Value],
-) -> Value {
+fn eval_arg<V, A>(graph: &Dag<SymKind, SymPayload<V>, A>, node: NodeId, args: &[Value]) -> Value {
     let SymPayload::Int(idx) = graph.get_leaf_data(node).unwrap() else {
         panic!("Arg node must have Int payload");
     };
@@ -886,8 +870,8 @@ fn eval_arg<V>(
     }
 }
 
-fn eval_leaf<V>(
-    graph: &impl Dag<Node = SymKind, Leaf = SymPayload<V>>,
+fn eval_leaf<V, A>(
+    graph: &Dag<SymKind, SymPayload<V>, A>,
     node: NodeId,
     kind: SymKind,
     symbols: &[Value],
@@ -901,8 +885,8 @@ fn eval_leaf<V>(
     }
 }
 
-fn eval_iterator<V>(
-    graph: &impl Dag<Node = SymKind, Leaf = SymPayload<V>>,
+fn eval_iterator<V, A>(
+    graph: &Dag<SymKind, SymPayload<V>, A>,
     node: NodeId,
     kind: SymKind,
     c: &impl Fn(usize) -> Value,
@@ -1116,8 +1100,8 @@ fn eval_control(kind: SymKind, c: &impl Fn(usize) -> Value) -> Value {
     }
 }
 
-fn eval_math<V>(
-    graph: &impl Dag<Node = SymKind, Leaf = SymPayload<V>>,
+fn eval_math<V, A>(
+    graph: &Dag<SymKind, SymPayload<V>, A>,
     node: NodeId,
     cache: &[Option<Value>],
     kind: SymKind,
@@ -1173,8 +1157,8 @@ fn eval_math<V>(
     }
 }
 
-fn eval_extract<V>(
-    graph: &impl Dag<Node = SymKind, Leaf = SymPayload<V>>,
+fn eval_extract<V, A>(
+    graph: &Dag<SymKind, SymPayload<V>, A>,
     node: NodeId,
     cache: &[Option<Value>],
     c: &impl Fn(usize) -> Value,
@@ -1186,7 +1170,7 @@ fn eval_extract<V>(
     // (e.g. `mulh`); `Mul` keeps only the low N bits, so when the slice lies
     // wholly past the product width, recompute it as a signed full-width product.
     let mul = graph.children(node).next().expect("extract has children");
-    if low >= value.width() && matches!(graph.get_kind(mul), SymKind::Mul) {
+    if low >= value.width() && matches!(graph.get_node(mul), SymKind::Mul) {
         let (a, b) = coerce_ints(
             as_int!(child_val(graph, mul, 0, cache), "extract"),
             as_int!(child_val(graph, mul, 1, cache), "extract"),

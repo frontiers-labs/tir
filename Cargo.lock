@@ -2360,7 +2360,6 @@ dependencies = [
  "thiserror 2.0.18",
  "tir-adt",
  "tir-arrange",
- "tir-graph",
  "tir-macros",
  "tir-pbqp",
  "tir-pdl",
@@ -2432,10 +2431,6 @@ dependencies = [
  "tir",
  "tmdl",
 ]
-
-[[package]]
-name = "tir-graph"
-version = "0.1.0"
 
 [[package]]
 name = "tir-isa-test-suite"
@@ -2563,7 +2558,6 @@ version = "0.1.0"
 dependencies = [
  "chumsky",
  "tir-adt",
- "tir-graph",
 ]
 
 [[package]]
@@ -2599,7 +2593,6 @@ dependencies = [
  "tir-adt",
  "tir-arm64",
  "tir-capi",
- "tir-graph",
  "tir-jit",
  "tir-lit",
  "tir-llvm",
@@ -2651,7 +2644,6 @@ dependencies = [
  "syn 2.0.118",
  "thiserror 2.0.18",
  "tir-adt",
- "tir-graph",
  "tir-symbolic",
  "typed-arena",
 ]

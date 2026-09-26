@@ -9,7 +9,7 @@ use crate::ast::{ArrayLength, AstKind, AstLeaf, CParam, CType};
 use crate::diagnostics::InvalidIntegerLiteral;
 use crate::lang_options::StdVersion;
 use crate::lexer::decode_character_constant;
-use tir::graph::{Dag, MutDag, NodeId};
+use tir::NodeId;
 
 impl Analyzer<'_> {
     pub(super) fn constant_value(

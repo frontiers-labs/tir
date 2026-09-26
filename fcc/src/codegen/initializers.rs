@@ -8,9 +8,9 @@ use crate::ast::{Ast, AstKind, AstLeaf, InitializerDesignator, RecordKind};
 use crate::diagnostics::Diagnostic;
 use crate::sema::{EntityId, QualType, TypeKind, TypedAst, ValueCategory};
 use std::collections::{BTreeMap, HashMap};
+use tir::NodeId;
 use tir::ValueId;
 use tir::builtin::ops as b;
-use tir::graph::{Dag, NodeId};
 use tir::ptr::ops as p;
 use tir::utils::APFloat;
 

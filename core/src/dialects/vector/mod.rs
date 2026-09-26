@@ -187,10 +187,7 @@ operation! {
 /// The active lane count for `$get_vlen`, the `n` each `split` cuts the operand
 /// bits into: a fixed vector takes it from the result type's static length (a
 /// constant); a scalable vector takes it from the dynamic `vl` operand (index 2).
-fn vlen_node(
-    op: &tir::OpHandle,
-    g: &mut impl tir::graph::MutDag<Node = tir::sem::SymKind, Leaf = tir::sem::SymPayload<tir::ValueId>>,
-) -> tir::graph::NodeId {
+fn vlen_node(op: &tir::OpHandle, g: &mut tir::sem::SemGraph) -> tir::NodeId {
     if op.operands().len() > 2 {
         let n = g.add_node(tir::sem::SymKind::Symbol);
         g.set_leaf_data(n, tir::sem::SymPayload::SymbolId(2));
@@ -213,10 +210,7 @@ fn vlen_node(
 /// The lane width for `$get_sew`: the result type's element width, a constant
 /// for fixed and scalable vectors alike (scalability varies the lane count, not
 /// the element width). On RVV this is the demanded SEW.
-fn sew_node(
-    op: &tir::OpHandle,
-    g: &mut impl tir::graph::MutDag<Node = tir::sem::SymKind, Leaf = tir::sem::SymPayload<tir::ValueId>>,
-) -> tir::graph::NodeId {
+fn sew_node(op: &tir::OpHandle, g: &mut tir::sem::SemGraph) -> tir::NodeId {
     let context = op.context.clone();
     let ty = context.get_value(op.results()[0]).ty();
     let width = (context.get_type_data(ty).as_ref() as &dyn Any)
@@ -237,23 +231,11 @@ fn sew_node(
 macro_rules! impl_vlen_hooks {
     ($op:ty) => {
         impl $op {
-            fn get_vlen(
-                &self,
-                g: &mut impl tir::graph::MutDag<
-                    Node = tir::sem::SymKind,
-                    Leaf = tir::sem::SymPayload<tir::ValueId>,
-                >,
-            ) -> tir::graph::NodeId {
+            fn get_vlen(&self, g: &mut tir::sem::SemGraph) -> tir::NodeId {
                 vlen_node(&self.0, g)
             }
 
-            fn get_sew(
-                &self,
-                g: &mut impl tir::graph::MutDag<
-                    Node = tir::sem::SymKind,
-                    Leaf = tir::sem::SymPayload<tir::ValueId>,
-                >,
-            ) -> tir::graph::NodeId {
+            fn get_sew(&self, g: &mut tir::sem::SemGraph) -> tir::NodeId {
                 sew_node(&self.0, g)
             }
         }

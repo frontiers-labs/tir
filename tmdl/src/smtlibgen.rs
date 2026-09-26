@@ -10,7 +10,7 @@ use crate::utils::{
     EncodingShape, get_encoding_shapes, isa_param_values, item_supports_isa,
     resolve_operand_constraints_for_instruction, resolve_params_for_instruction,
 };
-use tir_graph::{Dag, NodeId};
+use tir_adt::NodeId;
 
 /// The SMT model of one ISA: its register files, its flattened state and one
 /// entry per instruction. Emitted as JSON and read back by the equivalence
@@ -1728,7 +1728,7 @@ fn amo_combine(op: u8, old: &str, val: &str) -> Option<String> {
 }
 
 fn emit_sem_expr(
-    graph: &impl crate::semgen::ValueDag,
+    graph: &crate::sem_expr_state::ValueGraph,
     node: NodeId,
     resolver: &SmtSymbolResolver<'_>,
 ) -> Option<SmtVal> {
@@ -1907,9 +1907,9 @@ impl crate::semgen::TermBackend for SmtTerm<'_, '_> {
         SmtVal::boolean(value.as_bool())
     }
 
-    fn special<G: crate::semgen::ValueDag>(
+    fn special(
         &mut self,
-        graph: &G,
+        graph: &crate::sem_expr_state::ValueGraph,
         node: NodeId,
         emit: &mut dyn FnMut(&mut Self, NodeId) -> Option<SmtVal>,
     ) -> Option<SmtVal> {
@@ -2060,9 +2060,9 @@ impl crate::semgen::TermBackend for SmtTerm<'_, '_> {
     }
 }
 
-fn emit_smt_fcvt<'a, 'b, G: crate::semgen::ValueDag>(
+fn emit_smt_fcvt<'a, 'b>(
     term: &mut SmtTerm<'a, 'b>,
-    graph: &G,
+    graph: &crate::sem_expr_state::ValueGraph,
     node: NodeId,
     emit: &mut dyn FnMut(&mut SmtTerm<'a, 'b>, NodeId) -> Option<SmtVal>,
 ) -> Option<SmtVal> {
@@ -2132,13 +2132,7 @@ enum AtomicOp {
     },
 }
 
-fn atomic_of_node(
-    graph: &impl Dag<
-        Node = tir_symbolic::lang::SymKind,
-        Leaf = tir_symbolic::lang::SymPayload<tir_symbolic::sem::ValueId>,
-    >,
-    node: NodeId,
-) -> Option<AtomicOp> {
+fn atomic_of_node(graph: &crate::sem_expr_state::ValueGraph, node: NodeId) -> Option<AtomicOp> {
     let children = graph.children(node).collect::<Vec<_>>();
     let constant =
         |index: usize| crate::semgen::eval_const(graph, *children.get(index)?).map(|v| v.0);
@@ -2172,13 +2166,7 @@ fn is_atomic_kind(kind: tir_symbolic::lang::SymKind) -> bool {
 
 /// The atomic call within `e`, descending through pure wrappers
 /// (`sext`/`zext`/`extract`/`if`/...) as sema permits.
-fn find_atomic(
-    graph: &impl Dag<
-        Node = tir_symbolic::lang::SymKind,
-        Leaf = tir_symbolic::lang::SymPayload<tir_symbolic::sem::ValueId>,
-    >,
-    node: NodeId,
-) -> Option<AtomicOp> {
+fn find_atomic(graph: &crate::sem_expr_state::ValueGraph, node: NodeId) -> Option<AtomicOp> {
     if let Some(op) = atomic_of_node(graph, node) {
         return Some(op);
     }

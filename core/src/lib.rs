@@ -53,7 +53,6 @@ mod dialect;
 mod dialects;
 mod edits;
 mod error;
-pub mod graph;
 mod interfaces;
 pub mod interp;
 mod intrinsic;
@@ -129,6 +128,7 @@ pub use scoped_attr::{AttributeDict, scoped_dict};
 pub use symbol_table::{SymbolEntry, SymbolTable};
 pub use target_env::{TARGET_ENV, TargetEnv, target_env_spec};
 pub use tir_adt::Sym;
+pub use tir_adt::{Dag, NodeId};
 pub use ty::{Any, Type, TypeConstraint, TypeId, TypeParser};
 pub use value::{Use, Value, ValueId};
 

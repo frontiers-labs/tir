@@ -29,13 +29,7 @@ fn int_width(context: &Context, ty: TypeId) -> Result<FloatWidth, Error> {
     }
 }
 
-fn width_node(
-    graph: &mut impl tir::graph::MutDag<
-        Node = tir::sem::SymKind,
-        Leaf = tir::sem::SymPayload<tir::ValueId>,
-    >,
-    value: u32,
-) -> tir::graph::NodeId {
+fn width_node(graph: &mut tir::sem::SemGraph, value: u32) -> tir::NodeId {
     let width = (u32::BITS - value.leading_zeros()).max(1);
     let node = graph.add_node(tir::sem::SymKind::Constant);
     graph.set_leaf_data(
@@ -65,12 +59,7 @@ fn rounding(value: Rounding, state: &crate::interp::ExecutionState) -> tir_adt::
     }
 }
 
-fn input_node(
-    graph: &mut impl tir::graph::MutDag<
-        Node = tir::sem::SymKind,
-        Leaf = tir::sem::SymPayload<tir::ValueId>,
-    >,
-) -> tir::graph::NodeId {
+fn input_node(graph: &mut tir::sem::SemGraph) -> tir::NodeId {
     let node = graph.add_node(tir::sem::SymKind::Symbol);
     graph.set_leaf_data(node, tir::sem::SymPayload::SymbolId(0));
     node
@@ -78,14 +67,11 @@ fn input_node(
 
 fn arithmetic_conversion_semantics(
     op: &tir::OpHandle,
-    graph: &mut impl tir::graph::MutDag<
-        Node = tir::sem::SymKind,
-        Leaf = tir::sem::SymPayload<tir::ValueId>,
-    >,
+    graph: &mut tir::sem::SemGraph,
     generic: tir::sem::SymKind,
     rounded: tir::sem::SymKind,
     semantics: &ArithmeticSemantics,
-) -> Option<tir::graph::NodeId> {
+) -> Option<tir::NodeId> {
     let nearest_any_quiet = semantics.nan == super::NaNPolicy::AnyQuiet
         && semantics.rounding == Rounding::Fixed(tir_adt::RoundingMode::TiesToEven);
     let input = input_node(graph);
@@ -118,14 +104,11 @@ fn arithmetic_conversion_semantics(
 
 fn integer_conversion_semantics(
     op: &tir::OpHandle,
-    graph: &mut impl tir::graph::MutDag<
-        Node = tir::sem::SymKind,
-        Leaf = tir::sem::SymPayload<tir::ValueId>,
-    >,
+    graph: &mut tir::sem::SemGraph,
     generic: tir::sem::SymKind,
     rounded: tir::sem::SymKind,
     semantics: &IntegerConversionSemantics,
-) -> Option<tir::graph::NodeId> {
+) -> Option<tir::NodeId> {
     let toward_zero = semantics.rounding == Rounding::Fixed(tir_adt::RoundingMode::TowardZero);
     let result_type = op.context.get_value(op.value_results()[0]).ty();
     let data = op.context.get_type_data(result_type);
@@ -168,11 +151,8 @@ macro_rules! arithmetic_conversion {
         impl $op {
             fn value_semantics(
                 &self,
-                graph: &mut impl tir::graph::MutDag<
-                    Node = tir::sem::SymKind,
-                    Leaf = tir::sem::SymPayload<tir::ValueId>,
-                >,
-            ) -> Option<tir::graph::NodeId> {
+                graph: &mut tir::sem::SemGraph,
+            ) -> Option<tir::NodeId> {
                 let semantics = self.semantics();
                 arithmetic_conversion_semantics(
                     &self.0,
@@ -315,11 +295,8 @@ macro_rules! to_integer {
         impl $op {
             fn value_semantics(
                 &self,
-                graph: &mut impl tir::graph::MutDag<
-                    Node = tir::sem::SymKind,
-                    Leaf = tir::sem::SymPayload<tir::ValueId>,
-                >,
-            ) -> Option<tir::graph::NodeId> {
+                graph: &mut tir::sem::SemGraph,
+            ) -> Option<tir::NodeId> {
                 let semantics = self.semantics();
                 integer_conversion_semantics(
                     &self.0,

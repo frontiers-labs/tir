@@ -202,13 +202,7 @@ operation! {
 impl crate::Speculatable for CmpIOp {}
 
 impl CmpIOp {
-    fn cmp_expr(
-        &self,
-        g: &mut impl tir::graph::MutDag<
-            Node = tir::sem::SymKind,
-            Leaf = tir::sem::SymPayload<tir::ValueId>,
-        >,
-    ) -> Option<tir::graph::NodeId> {
+    fn cmp_expr(&self, g: &mut tir::sem::SemGraph) -> Option<tir::NodeId> {
         let tir::attributes::AttributeValue::Predicate(predicate) = self.0.attr("predicate")?
         else {
             return None;
@@ -223,10 +217,10 @@ impl CmpIOp {
 /// `unsigned_only` offers no semantics for a signed comparison, which an
 /// address ordering has no meaning for.
 pub(crate) fn compare_expr(
-    g: &mut impl tir::graph::MutDag<Node = tir::sem::SymKind, Leaf = tir::sem::SymPayload<tir::ValueId>>,
+    g: &mut tir::sem::SemGraph,
     predicate: tir::attributes::Predicate,
     unsigned_only: bool,
-) -> Option<tir::graph::NodeId> {
+) -> Option<tir::NodeId> {
     use tir::attributes::Predicate;
     use tir::sem::SymKind;
 

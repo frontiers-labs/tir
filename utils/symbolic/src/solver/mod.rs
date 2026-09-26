@@ -8,7 +8,6 @@ pub use driver::run_script;
 use std::collections::HashMap;
 
 use tir_adt::APInt;
-use tir_graph::Dag;
 
 use crate::bitblast::{SolveOutcome, blast};
 use crate::sat::SatResult;

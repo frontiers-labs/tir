@@ -7,7 +7,7 @@ mod fp;
 use std::collections::HashMap;
 use std::fmt::{self, Display, Formatter};
 
-use tir_graph::{Dag, GenericDag, NodeId};
+use tir_adt::{Dag, NodeId};
 
 use crate::lang::{SemType, SymKind, SymPayload};
 use crate::sat::{Lit, SatResult, Solver};
@@ -100,7 +100,7 @@ pub enum SolveOutcome {
 
 /// Bit-blast a lowered formula graph rooted at its last node.
 pub fn blast<V>(
-    graph: &GenericDag<SymKind, SymPayload<V>>,
+    graph: &Dag<SymKind, SymPayload<V>>,
     widths: &[Option<u32>],
 ) -> Result<Blasted, BitblastError> {
     blast_with_types(graph, widths, &[])
@@ -109,7 +109,7 @@ pub fn blast<V>(
 /// Bit-blast a graph with semantic types for overloaded scalar operations. An
 /// empty `types` leaves every node in the bit-vector domain.
 pub fn blast_with_types<V>(
-    graph: &GenericDag<SymKind, SymPayload<V>>,
+    graph: &Dag<SymKind, SymPayload<V>>,
     widths: &[Option<u32>],
     types: &[SemType],
 ) -> Result<Blasted, BitblastError> {
@@ -141,14 +141,14 @@ pub(crate) struct Blaster<'g, V> {
     sym_bits: HashMap<u32, Vec<Lit>>,
     state_reads: HashMap<(u64, u64), Vec<Lit>>,
     conversion_defined: HashMap<usize, Lit>,
-    graph: &'g GenericDag<SymKind, SymPayload<V>>,
+    graph: &'g Dag<SymKind, SymPayload<V>>,
     widths: &'g [Option<u32>],
     types: &'g [SemType],
 }
 
 impl<'g, V> Blaster<'g, V> {
     fn new(
-        graph: &'g GenericDag<SymKind, SymPayload<V>>,
+        graph: &'g Dag<SymKind, SymPayload<V>>,
         widths: &'g [Option<u32>],
         types: &'g [SemType],
     ) -> Self {
@@ -204,7 +204,7 @@ impl<'g, V> Blaster<'g, V> {
 
     fn encode(&mut self, id: NodeId) -> Result<Vec<Lit>, BitblastError> {
         use SymKind::*;
-        let kind = *self.graph.get_kind(id);
+        let kind = *self.graph.get_node(id);
         match kind {
             Symbol => self.encode_symbol(id),
             StateBlock => Ok(vec![self.one]),
@@ -280,7 +280,7 @@ impl<'g, V> Blaster<'g, V> {
     }
 
     fn encode_defined(&mut self, id: NodeId) -> Result<Lit, BitblastError> {
-        if *self.graph.get_kind(id) == SymKind::FPFlags {
+        if *self.graph.get_node(id) == SymKind::FPFlags {
             return Ok(self.one);
         }
         let mut defined = self.one;
@@ -289,7 +289,7 @@ impl<'g, V> Blaster<'g, V> {
             defined = self.gate_and(defined, self.defined[child.index()]);
         }
 
-        match self.graph.get_kind(id) {
+        match self.graph.get_node(id) {
             SymKind::FPToSI | SymKind::FPToSIRound => {
                 let in_range = self.float_to_int_defined(id, true)?;
                 Ok(self.gate_and(defined, in_range))

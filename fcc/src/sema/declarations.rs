@@ -14,7 +14,7 @@ use crate::diagnostics::{
 };
 use crate::lang_options::StdVersion;
 use std::collections::HashMap;
-use tir::graph::{Dag, MutDag, NodeId};
+use tir::NodeId;
 
 impl Analyzer<'_> {
     pub(super) fn new_entity(&mut self) -> EntityId {

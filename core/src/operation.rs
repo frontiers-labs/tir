@@ -200,7 +200,7 @@ pub trait Operation: 'static + Any + Verifiable + OpDefVerifiable {
         self.handle().attr(name)
     }
 
-    fn semantic_expr(&self, _g: &mut crate::sem::SemGraph) -> Option<crate::graph::NodeId> {
+    fn semantic_expr(&self, _g: &mut crate::sem::SemGraph) -> Option<crate::NodeId> {
         None
     }
 

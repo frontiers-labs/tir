@@ -5,15 +5,15 @@
 
 use std::collections::{HashMap, HashSet};
 
-use tir_graph::{Dag, NodeId};
+use tir_adt::{Dag, NodeId};
 
 use super::{ConvertError, SymbolInfo};
 use crate::lang::{SymKind, SymPayload, infer_widths};
 use crate::smtlib::ast::*;
 
 /// Lift the graph rooted at `root` into a single term.
-pub fn lift_term<V>(
-    graph: &impl Dag<Node = SymKind, Leaf = SymPayload<V>>,
+pub fn lift_term<V, A>(
+    graph: &Dag<SymKind, SymPayload<V>, A>,
     root: NodeId,
     symbols: &[SymbolInfo],
 ) -> Result<Term, ConvertError> {
@@ -24,8 +24,8 @@ pub fn lift_term<V>(
 
 /// Lift the graph into a `declare-const`s + `(assert root)` script. `assert` is
 /// a boolean position, so the root is lifted in boolean context.
-pub fn lift_script<V>(
-    graph: &impl Dag<Node = SymKind, Leaf = SymPayload<V>>,
+pub fn lift_script<V, A>(
+    graph: &Dag<SymKind, SymPayload<V>, A>,
     root: NodeId,
     symbols: &[SymbolInfo],
 ) -> Result<Script, ConvertError> {
@@ -51,8 +51,8 @@ pub fn lift_script<V>(
     Ok(Script(commands))
 }
 
-struct Lifter<'a, G> {
-    graph: &'a G,
+struct Lifter<'a, V, A> {
+    graph: &'a Dag<SymKind, SymPayload<V>, A>,
     symbols: &'a [SymbolInfo],
     widths: Vec<Option<u32>>,
     /// Cache of structural boolean-ness, independent of context.
@@ -62,11 +62,8 @@ struct Lifter<'a, G> {
     used: HashSet<u32>,
 }
 
-impl<'a, V, G> Lifter<'a, G>
-where
-    G: Dag<Node = SymKind, Leaf = SymPayload<V>>,
-{
-    fn new(graph: &'a G, symbols: &'a [SymbolInfo]) -> Self {
+impl<'a, V, A> Lifter<'a, V, A> {
+    fn new(graph: &'a Dag<SymKind, SymPayload<V>, A>, symbols: &'a [SymbolInfo]) -> Self {
         let widths = infer_widths(graph, |id| match graph.get_leaf_data(id) {
             Some(SymPayload::SymbolId(sid)) => symbols.get(*sid as usize).and_then(|s| s.width),
             _ => None,
@@ -92,7 +89,7 @@ where
             return b;
         }
         use SymKind::*;
-        let b = match *self.graph.get_kind(id) {
+        let b = match *self.graph.get_node(id) {
             Eq | Ne | Lt | Le | Gt | Ge | ULt | ULe | UGt | UGe => true,
             And | Or | Xor => self.children(id).into_iter().any(|c| self.is_bool(c)),
             Not => self.children(id).first().is_some_and(|&c| self.is_bool(c)),
@@ -130,7 +127,7 @@ where
 
     fn lift_uncached(&mut self, id: NodeId, bool_ctx: bool) -> Result<(Term, bool), ConvertError> {
         use SymKind::*;
-        match *self.graph.get_kind(id) {
+        match *self.graph.get_node(id) {
             Symbol => {
                 let sid = match self.graph.get_leaf_data(id) {
                     Some(SymPayload::SymbolId(s)) => *s,
@@ -316,8 +313,8 @@ where
     }
 }
 
-fn first_child<V>(
-    graph: &impl Dag<Node = SymKind, Leaf = SymPayload<V>>,
+fn first_child<V, A>(
+    graph: &Dag<SymKind, SymPayload<V>, A>,
     id: NodeId,
 ) -> Result<NodeId, ConvertError> {
     graph

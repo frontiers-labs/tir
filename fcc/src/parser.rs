@@ -15,7 +15,7 @@ use chumsky::inspector::SimpleState;
 use chumsky::prelude::*;
 use std::collections::{HashMap, HashSet};
 
-use tir::graph::{MutDag, NodeId};
+use tir::NodeId;
 
 use crate::ast::*;
 use crate::diagnostics::{Diagnostic, FileId, UnexpectedEof, UnexpectedToken};

@@ -5,9 +5,9 @@ use tir::backend::regalloc::{RegClassId, RegClassInfo, RegisterInfo, RegisterVie
 use tir::backend::{RegPort, SymbolOp, SymbolOpBuilder};
 use tir::builtin::ModuleOp;
 use tir::func::FuncOp;
-use tir::graph::{MutDag, NodeId};
 use tir::parse::ir::parse_ir;
 use tir::sem::{SemGraph, SymKind, SymPayload};
+use tir::NodeId;
 use tir::{BlockHandle, Context, OpId, Operation, RegionId};
 use tir_adt::APInt;
 

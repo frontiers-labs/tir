@@ -1,5 +1,4 @@
 use tir_adt::{APFloat, APInt, RawBits};
-use tir_graph::Matchable;
 
 mod exec;
 mod infer;
@@ -448,25 +447,6 @@ impl MemOrdering {
             4 => MemOrdering::SeqCst,
             _ => MemOrdering::Relaxed,
         }
-    }
-}
-
-/// Structural matcher facts; context `C` is ignored so a label matches in any context.
-impl<C> Matchable<C> for SymKind {
-    fn is_leaf(&self, _: &C) -> bool {
-        self.arity() == 0
-    }
-
-    fn num_children(&self, _: &C) -> usize {
-        self.arity()
-    }
-
-    fn is_commutative(&self) -> bool {
-        SymKind::is_commutative(self)
-    }
-
-    fn is_constant(&self) -> bool {
-        matches!(self, SymKind::Constant)
     }
 }
 

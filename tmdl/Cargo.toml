@@ -18,7 +18,6 @@ schemars = { workspace = true, optional = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 tir-adt.workspace = true
-tir-graph.workspace = true
 tir-symbolic.workspace = true
 typed-arena.workspace = true
 

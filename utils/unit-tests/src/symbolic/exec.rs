@@ -1,5 +1,4 @@
-use tir_adt::{APFloat, APInt, RawBits};
-use tir_graph::NodeId;
+use tir_adt::{APFloat, APInt, NodeId, RawBits};
 use tir_symbolic::lang::{
     execute, execute_with_memory, AtomicRmwOp, Continuation, MemOrdering, Memory, SymKind, Value,
 };

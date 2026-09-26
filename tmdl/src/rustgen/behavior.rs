@@ -14,8 +14,8 @@ fn emit_as_sem_expr_impl(
         impl tir::sem::AsSemExpr for #name_ident {
             fn convert(
                 &self,
-                g: &mut impl tir::graph::MutDag<Node = tir::sem::SymKind, Leaf = tir::sem::SymPayload<tir::ValueId>>,
-            ) -> tir::graph::NodeId {
+                g: &mut tir::sem::SemGraph,
+            ) -> tir::NodeId {
                 #root_expr
             }
         }
@@ -187,11 +187,9 @@ struct RustBehaviorCtx<'a> {
 
 fn emit_behavior_effect(
     behavior: &sem_expr_state::BehaviorGraph,
-    effect: tir_graph::NodeId,
+    effect: tir_adt::NodeId,
     ctx: &RustBehaviorCtx<'_>,
 ) -> Option<Vec<proc_macro2::TokenStream>> {
-    use tir_graph::Dag as _;
-
     let children: Vec<_> = behavior.graph.children(effect).collect();
     match behavior.graph.get_node(effect) {
         tir_symbolic::lang::SymKind::StateAssign => match behavior.effect_payload(effect)? {
@@ -270,7 +268,7 @@ fn emit_behavior_effect(
 
 fn emit_behavior_value_offset(
     behavior: &sem_expr_state::BehaviorGraph,
-    root: tir_graph::NodeId,
+    root: tir_adt::NodeId,
 ) -> Option<proc_macro2::Literal> {
     let (values, root) = behavior.bound_value_graph(root)?;
     Some(lowered_value_offset(&values, root))
@@ -278,18 +276,15 @@ fn emit_behavior_value_offset(
 
 fn emit_binding_value_offset(
     behavior: &sem_expr_state::BehaviorGraph,
-    root: tir_graph::NodeId,
+    root: tir_adt::NodeId,
 ) -> Option<proc_macro2::Literal> {
     let (values, root) = behavior.binding_value_graph(root)?;
     Some(lowered_value_offset(&values, root))
 }
 
 fn lowered_value_offset(
-    dag: &impl tir_graph::Dag<
-        Node = tir_symbolic::lang::SymKind,
-        Leaf = tir_symbolic::lang::SymPayload<tir_symbolic::sem::ValueId>,
-    >,
-    root: tir_graph::NodeId,
+    dag: &tir_symbolic::sem::SemGraph,
+    root: tir_adt::NodeId,
 ) -> proc_macro2::Literal {
     // Behavior value terms carry no type annotations, so no typed nodes.
     let (offset, has_typed_node) = intern_dag(dag, root, &[]);
@@ -447,7 +442,7 @@ fn emit_cond_branch_rule(
     for_isas: &[String],
     ops: &[(String, Type)],
     pattern: &tir_symbolic::sem::SemGraph,
-    root: tir_graph::NodeId,
+    root: tir_adt::NodeId,
     variable_symbols: &HashMap<String, u32>,
     target_operand: &str,
     target_symbol: u32,
@@ -478,14 +473,14 @@ fn emit_cond_branch_rule(
             Type::Struct(_) => {
                 operand_constraint_entries.push(constraint_entry(
                     symbol,
-                    quote! { tir::graph::OperandConstraint::Register },
+                    quote! { tir::backend::isel::OperandConstraint::Register },
                 ));
                 emit_attrs.push(emit_attr_value(op_name, symbol));
             }
             Type::Integer | Type::Bits(_) => {
                 operand_constraint_entries.push(constraint_entry(
                     symbol,
-                    quote! { tir::graph::OperandConstraint::Immediate },
+                    quote! { tir::backend::isel::OperandConstraint::Immediate },
                 ));
                 emit_attrs.push(emit_attr_int(op_name, symbol));
             }
@@ -564,12 +559,12 @@ fn emit_cond_branch_rule(
 /// width binds to — matched but never read by the emitter.
 fn branch_pattern_with_zero(
     pattern: &tir_symbolic::sem::SemGraph,
-    root: tir_graph::NodeId,
+    root: tir_adt::NodeId,
     reg_symbol: u32,
     width_symbol: u32,
-) -> (tir_symbolic::sem::SemGraph, tir_graph::NodeId) {
+) -> (tir_symbolic::sem::SemGraph, tir_adt::NodeId) {
     let mut out = tir_symbolic::sem::SemGraph::new();
-    let mut memo: HashMap<usize, tir_graph::NodeId> = HashMap::new();
+    let mut memo: HashMap<usize, tir_adt::NodeId> = HashMap::new();
     let new_root =
         clone_pattern_with_zero(pattern, root, reg_symbol, width_symbol, &mut out, &mut memo);
     (out, new_root)
@@ -577,13 +572,12 @@ fn branch_pattern_with_zero(
 
 fn clone_pattern_with_zero(
     pattern: &tir_symbolic::sem::SemGraph,
-    node: tir_graph::NodeId,
+    node: tir_adt::NodeId,
     reg_symbol: u32,
     width_symbol: u32,
     out: &mut tir_symbolic::sem::SemGraph,
-    memo: &mut HashMap<usize, tir_graph::NodeId>,
-) -> tir_graph::NodeId {
-    use tir_graph::{Dag, MutDag};
+    memo: &mut HashMap<usize, tir_adt::NodeId>,
+) -> tir_adt::NodeId {
     if let Some(&existing) = memo.get(&node.index()) {
         return existing;
     }
@@ -609,7 +603,7 @@ fn clone_pattern_with_zero(
     // Children first: the store keeps strict post-order (a child's index must
     // precede its parent's).
     let kind = *pattern.get_node(node);
-    let new_children: Vec<tir_graph::NodeId> = pattern
+    let new_children: Vec<tir_adt::NodeId> = pattern
         .children(node)
         .collect::<Vec<_>>()
         .into_iter()
@@ -629,11 +623,8 @@ fn clone_pattern_with_zero(
 /// Serializes `dag` into the sem blob, returning its offset and whether any
 /// node carries a type annotation (requiring the typed loader at use site).
 fn intern_dag(
-    dag: &impl tir_graph::Dag<
-        Node = tir_symbolic::lang::SymKind,
-        Leaf = tir_symbolic::lang::SymPayload<tir_symbolic::sem::ValueId>,
-    >,
-    root: tir_graph::NodeId,
+    dag: &tir_symbolic::sem::SemGraph,
+    root: tir_adt::NodeId,
     widths: &[Option<u32>],
 ) -> (u32, bool) {
     let mut ops: Vec<tir_symbolic::sem::SemOp> = Vec::new();
@@ -672,7 +663,7 @@ fn intern_dag(
             has_typed_node = true;
         }
 
-        let children: Vec<tir_graph::NodeId> = dag.children(node_id).collect();
+        let children: Vec<tir_adt::NodeId> = dag.children(node_id).collect();
         for child_id in children {
             ops.push(tir_symbolic::sem::SemOp::Edge(
                 counter as u32,
@@ -687,11 +678,8 @@ fn intern_dag(
 }
 
 fn emit_dag_as_code(
-    dag: &impl tir_graph::Dag<
-        Node = tir_symbolic::lang::SymKind,
-        Leaf = tir_symbolic::lang::SymPayload<tir_symbolic::sem::ValueId>,
-    >,
-    root: tir_graph::NodeId,
+    dag: &tir_symbolic::sem::SemGraph,
+    root: tir_adt::NodeId,
     widths: &[Option<u32>],
 ) -> proc_macro2::TokenStream {
     let (offset, has_typed_node) = intern_dag(dag, root, widths);

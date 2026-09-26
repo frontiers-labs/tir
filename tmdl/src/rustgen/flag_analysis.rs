@@ -9,9 +9,9 @@ enum FpFlags<T> {
 }
 
 struct InstructionSemantics {
-    fp_flags: FpFlags<(tir_symbolic::sem::SemGraph, tir_graph::NodeId)>,
+    fp_flags: FpFlags<(tir_symbolic::sem::SemGraph, tir_adt::NodeId)>,
     pattern: tir_symbolic::sem::SemGraph,
-    root: tir_graph::NodeId,
+    root: tir_adt::NodeId,
     variable_symbols: HashMap<String, u32>,
     fixed_register_by_class: HashMap<String, Option<u16>>,
     /// `(register class, index) -> pattern symbol` for every register the behavior
@@ -20,7 +20,7 @@ struct InstructionSemantics {
     register_symbols: HashMap<(String, u32), u32>,
     /// The full destination expression before proposing a generalized selection
     /// pattern. Rule validation proves the retained expression refines it.
-    guarded_semantics: Option<(tir_symbolic::sem::SemGraph, tir_graph::NodeId)>,
+    guarded_semantics: Option<(tir_symbolic::sem::SemGraph, tir_adt::NodeId)>,
 }
 
 /// The selectable semantics of a conditional-branch instruction: the branch
@@ -28,7 +28,7 @@ struct InstructionSemantics {
 struct BranchSemantics {
     /// The condition expression (`rs1 == rs2`, …) as a pattern graph.
     pattern: tir_symbolic::sem::SemGraph,
-    root: tir_graph::NodeId,
+    root: tir_adt::NodeId,
     variable_symbols: HashMap<String, u32>,
     /// The immediate operand encoding the taken target (`imm`), and the fresh
     /// pattern symbol the emitter reads it from as a block binding.
@@ -143,7 +143,7 @@ fn analyze_branch_semantics(
 struct FlagDefinerSemantics {
     class: String,
     graph: tir_symbolic::sem::SemGraph,
-    flag_roots: HashMap<u32, tir_graph::NodeId>,
+    flag_roots: HashMap<u32, tir_adt::NodeId>,
     variable_symbols: HashMap<String, u32>,
 }
 
@@ -152,7 +152,7 @@ struct FlagDefinerSemantics {
 struct FlagBranchSemantics {
     class: String,
     graph: tir_symbolic::sem::SemGraph,
-    root: tir_graph::NodeId,
+    root: tir_adt::NodeId,
     /// Guard symbol id -> the flag register index it reads.
     flag_symbols: HashMap<u32, u32>,
     target_operand: String,
@@ -166,9 +166,9 @@ struct FlagReaderSemantics {
     class: String,
     graph: tir_symbolic::sem::SemGraph,
     /// The `if`'s condition, then, and else subgraphs.
-    cond_root: tir_graph::NodeId,
-    then_root: tir_graph::NodeId,
-    else_root: tir_graph::NodeId,
+    cond_root: tir_adt::NodeId,
+    then_root: tir_adt::NodeId,
+    else_root: tir_adt::NodeId,
     /// Condition symbol id -> the flag register index it reads.
     flag_symbols: HashMap<u32, u32>,
     /// Encoded value operand name -> symbol id used by either arm.
@@ -367,7 +367,6 @@ fn analyze_flag_reader_semantics(
     flag_classes: &HashSet<String>,
     pc_classes: &HashSet<String>,
 ) -> Option<FlagReaderSemantics> {
-    use tir_graph::Dag;
     if flag_classes.is_empty() {
         return None;
     }
@@ -418,7 +417,7 @@ fn analyze_flag_reader_semantics(
     if *graph.get_node(root) != tir_symbolic::lang::SymKind::If {
         return None;
     }
-    let children: Vec<tir_graph::NodeId> = graph.children(root).collect();
+    let children: Vec<tir_adt::NodeId> = graph.children(root).collect();
     let [cond_root, then_root, else_root] = children.as_slice() else {
         return None;
     };
@@ -465,11 +464,11 @@ fn analyze_flag_reader_semantics(
 fn copy_subgraph_remap_symbols(
     dst: &mut tir_symbolic::sem::SemGraph,
     src: &tir_symbolic::sem::SemGraph,
-    node: tir_graph::NodeId,
-    memo: &mut HashMap<usize, tir_graph::NodeId>,
+    node: tir_adt::NodeId,
+    memo: &mut HashMap<usize, tir_adt::NodeId>,
     remap: &mut HashMap<u32, u32>,
     next: &mut u32,
-) -> tir_graph::NodeId {
+) -> tir_adt::NodeId {
     copy_subgraph_remapping(dst, src, node, memo, &mut |id| {
         Some(*remap.entry(id).or_insert_with(|| {
             let assigned = *next;
@@ -484,11 +483,10 @@ fn copy_subgraph_remap_symbols(
 fn copy_subgraph_remapping(
     dst: &mut tir_symbolic::sem::SemGraph,
     src: &tir_symbolic::sem::SemGraph,
-    node: tir_graph::NodeId,
-    memo: &mut HashMap<usize, tir_graph::NodeId>,
+    node: tir_adt::NodeId,
+    memo: &mut HashMap<usize, tir_adt::NodeId>,
     remap: &mut dyn FnMut(u32) -> Option<u32>,
-) -> tir_graph::NodeId {
-    use tir_graph::Dag;
+) -> tir_adt::NodeId {
     use tir_symbolic::lang::SymPayload;
     use tir_symbolic::sem::{CopyAction, copy_subgraph_with};
     copy_subgraph_with(
@@ -515,17 +513,16 @@ fn copy_subgraph_remapping(
 fn copy_reader_arm(
     dst: &mut tir_symbolic::sem::SemGraph,
     src: &tir_symbolic::sem::SemGraph,
-    arm_root: tir_graph::NodeId,
+    arm_root: tir_adt::NodeId,
     remap: &mut HashMap<u32, u32>,
     next: &mut u32,
-) -> tir_graph::NodeId {
-    use tir_graph::{Dag, MutDag};
+) -> tir_adt::NodeId {
     let kind = *src.get_node(arm_root);
     if matches!(
         kind,
         tir_symbolic::lang::SymKind::ZExt | tir_symbolic::lang::SymKind::SExt
     ) {
-        let children: Vec<tir_graph::NodeId> = src.children(arm_root).collect();
+        let children: Vec<tir_adt::NodeId> = src.children(arm_root).collect();
         if children.len() == 2 {
             let value = copy_subgraph_remap_symbols(
                 dst,
@@ -554,13 +551,12 @@ fn copy_reader_arm(
 fn compose_guard_with_definer(
     dst: &mut tir_symbolic::sem::SemGraph,
     guard: &tir_symbolic::sem::SemGraph,
-    node: tir_graph::NodeId,
-    substitute: &HashMap<u32, tir_graph::NodeId>,
+    node: tir_adt::NodeId,
+    substitute: &HashMap<u32, tir_adt::NodeId>,
     definer: &tir_symbolic::sem::SemGraph,
-    guard_memo: &mut HashMap<usize, tir_graph::NodeId>,
-    definer_memo: &mut HashMap<usize, tir_graph::NodeId>,
-) -> tir_graph::NodeId {
-    use tir_graph::Dag;
+    guard_memo: &mut HashMap<usize, tir_adt::NodeId>,
+    definer_memo: &mut HashMap<usize, tir_adt::NodeId>,
+) -> tir_adt::NodeId {
     use tir_symbolic::lang::SymPayload;
     use tir_symbolic::sem::{CopyAction, copy_subgraph, copy_subgraph_with};
     copy_subgraph_with(dst, guard, node, guard_memo, &mut |dst, node| match guard
@@ -609,14 +605,12 @@ fn foldable_kind(kind: &tir_symbolic::lang::SymKind) -> bool {
 /// extension widths, so they are evaluated here with the reference interpreter.
 fn fold_constant_subtrees(
     src: &tir_symbolic::sem::SemGraph,
-    root: tir_graph::NodeId,
-) -> (tir_symbolic::sem::SemGraph, tir_graph::NodeId) {
-    use tir_graph::{Dag, MutDag};
-
+    root: tir_adt::NodeId,
+) -> (tir_symbolic::sem::SemGraph, tir_adt::NodeId) {
     // Whether every leaf under `node` is a constant and every operator foldable.
     fn all_constant(
         src: &tir_symbolic::sem::SemGraph,
-        node: tir_graph::NodeId,
+        node: tir_adt::NodeId,
         memo: &mut HashMap<usize, bool>,
     ) -> bool {
         if let Some(&known) = memo.get(&node.index()) {
@@ -641,10 +635,10 @@ fn fold_constant_subtrees(
     fn walk(
         dst: &mut tir_symbolic::sem::SemGraph,
         src: &tir_symbolic::sem::SemGraph,
-        node: tir_graph::NodeId,
+        node: tir_adt::NodeId,
         const_memo: &mut HashMap<usize, bool>,
-        copy_memo: &mut HashMap<usize, tir_graph::NodeId>,
-    ) -> tir_graph::NodeId {
+        copy_memo: &mut HashMap<usize, tir_adt::NodeId>,
+    ) -> tir_adt::NodeId {
         if let Some(&copied) = copy_memo.get(&node.index()) {
             return copied;
         }
@@ -660,8 +654,8 @@ fn fold_constant_subtrees(
             dst.set_leaf_data(leaf, tir_symbolic::lang::SymPayload::Int(value));
             leaf
         } else {
-            let children: Vec<tir_graph::NodeId> = src.children(node).collect();
-            let copied_children: Vec<tir_graph::NodeId> = children
+            let children: Vec<tir_adt::NodeId> = src.children(node).collect();
+            let copied_children: Vec<tir_adt::NodeId> = children
                 .into_iter()
                 .map(|child| walk(dst, src, child, const_memo, copy_memo))
                 .collect();
@@ -694,8 +688,7 @@ fn fold_constant_subtrees(
 fn comparison_candidate(
     kind: tir_symbolic::lang::SymKind,
     swap: bool,
-) -> (tir_symbolic::sem::SemGraph, tir_graph::NodeId) {
-    use tir_graph::MutDag;
+) -> (tir_symbolic::sem::SemGraph, tir_adt::NodeId) {
     let mut g = tir_symbolic::sem::SemGraph::new();
     let a = g.add_node(tir_symbolic::lang::SymKind::Symbol);
     g.set_leaf_data(a, tir_symbolic::lang::SymPayload::SymbolId(0));
@@ -712,7 +705,7 @@ fn comparison_candidate(
 /// so it has no single-kind candidate.
 fn floating_equality_candidate(
     predicate: tir_adt::Predicate,
-) -> (tir_symbolic::sem::SemGraph, tir_graph::NodeId) {
+) -> (tir_symbolic::sem::SemGraph, tir_adt::NodeId) {
     let mut g = tir_symbolic::sem::SemGraph::new();
     let root = tir_symbolic::sem::cmpf_semantics(&mut g, predicate)
         .expect("the builtin floating comparison predicate must be valid");
@@ -728,7 +721,7 @@ fn floating_equality_candidate(
 fn find_equivalent_comparison(
     composed: &tir_symbolic::sem::SemGraph,
     symbols: &ComparisonSymbols,
-) -> Option<(tir_symbolic::sem::SemGraph, tir_graph::NodeId)> {
+) -> Option<(tir_symbolic::sem::SemGraph, tir_adt::NodeId)> {
     use tir_symbolic::lang::SymKind;
     use tir_symbolic::sem::{EquivalenceOracle, FuzzOracle, SmtOracle};
     const EQUALITY: &[(SymKind, bool)] = &[(SymKind::Eq, false), (SymKind::Ne, false)];
@@ -916,14 +909,14 @@ fn emit_flag_definer_prelude(
             Type::Struct(_) => {
                 operand_constraint_entries.push(constraint_entry(
                     symbol,
-                    quote! { tir::graph::OperandConstraint::Register },
+                    quote! { tir::backend::isel::OperandConstraint::Register },
                 ));
                 prelude_attrs.push(emit_attr_value(op_name, symbol));
             }
             Type::Bits(_) | Type::Integer => {
                 operand_constraint_entries.push(constraint_entry(
                     symbol,
-                    quote! { tir::graph::OperandConstraint::Immediate },
+                    quote! { tir::backend::isel::OperandConstraint::Immediate },
                 ));
                 prelude_attrs.push(emit_attr_int(op_name, symbol));
             }

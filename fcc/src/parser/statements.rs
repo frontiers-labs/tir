@@ -7,7 +7,7 @@ use crate::ast::*;
 use crate::lexer::Token;
 use chumsky::input::{MapExtra, ValueInput};
 use chumsky::prelude::*;
-use tir::graph::{MutDag, NodeId};
+use tir::NodeId;
 
 /// Build an `int x = init` declaration node (without the trailing `;`, so the
 /// same body serves both a declaration statement and a `for` init clause).

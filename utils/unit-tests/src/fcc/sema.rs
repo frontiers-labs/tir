@@ -2,7 +2,6 @@
 //! properties of the analysis result, not of any printable output.
 
 use fcc::lang_options::LangOptions;
-use tir::graph::Dag;
 
 use super::support::{lex, typed_for};
 

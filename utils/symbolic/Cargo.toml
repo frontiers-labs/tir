@@ -9,7 +9,6 @@ test = false
 doctest = false
 
 [dependencies]
-tir-graph.workspace = true
 tir-adt.workspace = true
 chumsky.workspace = true
 

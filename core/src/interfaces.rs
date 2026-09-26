@@ -1,4 +1,4 @@
-use crate::graph::NodeId;
+use crate::NodeId;
 use crate::sem::SemGraph;
 use crate::sem::Value;
 use crate::utils::APInt;

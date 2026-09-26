@@ -5,8 +5,7 @@
 
 use std::collections::HashMap;
 
-use tir_adt::APInt;
-use tir_graph::{GenericDag, MutDag, NodeId};
+use tir_adt::{APInt, Dag, NodeId};
 
 use super::{ConvertError, SymbolInfo};
 use crate::lang::{SymKind, SymPayload};
@@ -15,7 +14,7 @@ use crate::smtlib::ast::*;
 /// A graph rooted at the conjunction of all assertions, plus the per-`SymbolId`
 /// table and per-node widths.
 pub struct Lowered<V> {
-    pub graph: GenericDag<SymKind, SymPayload<V>>,
+    pub graph: Dag<SymKind, SymPayload<V>>,
     pub root: NodeId,
     pub symbols: Vec<SymbolInfo>,
     pub widths: Vec<Option<u32>>,
@@ -62,7 +61,7 @@ pub fn lower_script<V>(script: &Script) -> Result<Lowered<V>, ConvertError> {
 }
 
 struct Lowerer<V> {
-    graph: GenericDag<SymKind, SymPayload<V>>,
+    graph: Dag<SymKind, SymPayload<V>>,
     width: Vec<Option<u32>>,
     decls: HashMap<String, Sort>,
     defs: HashMap<String, FunctionDef>,
@@ -74,7 +73,7 @@ struct Lowerer<V> {
 impl<V> Lowerer<V> {
     fn new() -> Self {
         Lowerer {
-            graph: GenericDag::new(),
+            graph: Dag::new(),
             width: Vec::new(),
             decls: HashMap::new(),
             defs: HashMap::new(),

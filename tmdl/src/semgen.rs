@@ -8,20 +8,16 @@
 
 use std::collections::HashMap;
 
-use tir_graph::{Dag, NodeId};
+use tir_adt::NodeId;
 use tir_symbolic::lang::{SmtTemplate, SymKind, SymPayload, scalar_op};
-use tir_symbolic::sem::ValueId;
 
 use crate::Type;
 use crate::ast;
+use crate::sem_expr_state::ValueGraph;
 use crate::utils::{
     EncodingShape, parse_literal_value, resolve_isa_param_values, resolve_operand_widths,
     resolve_operands_for_instruction, resolve_params_for_instruction,
 };
-
-/// A graph of value terms, as [`crate::sem_expr_state`] lowers a behavior to.
-pub(crate) trait ValueDag: Dag<Node = SymKind, Leaf = SymPayload<ValueId>> {}
-impl<G: Dag<Node = SymKind, Leaf = SymPayload<ValueId>>> ValueDag for G {}
 
 /// One solver format's spelling of the terms [`emit`] builds. Every operand
 /// handed to a binary operator, comparison or `ite` already has the width the
@@ -60,9 +56,9 @@ pub(crate) trait TermBackend {
     fn bitcast(&mut self, value: Self::Val) -> Self::Val;
     /// A term outside the shared vocabulary (memory, atomics, clamping):
     /// `emit` yields the backend's spelling of an operand.
-    fn special<G: ValueDag>(
+    fn special(
         &mut self,
-        graph: &G,
+        graph: &ValueGraph,
         node: NodeId,
         emit: &mut dyn FnMut(&mut Self, NodeId) -> Option<Self::Val>,
     ) -> Option<Self::Val>;
@@ -88,7 +84,7 @@ pub(crate) trait TermBackend {
 /// Fold a symbol-free subtree to a constant at the interpreter's widths.
 /// Width expressions such as `log2Ceil(self.XLEN) - 1` reach the emitters
 /// unfolded, so structural `Constant` matching is not enough.
-pub(crate) fn eval_const(graph: &impl ValueDag, node: NodeId) -> Option<(u64, u32)> {
+pub(crate) fn eval_const(graph: &ValueGraph, node: NodeId) -> Option<(u64, u32)> {
     let child = |index: usize| eval_const(graph, graph.children(node).nth(index)?);
     let arith = |f: fn(u64, u64) -> u64| -> Option<(u64, u32)> {
         let (a, wa) = child(0)?;
@@ -122,11 +118,7 @@ pub(crate) fn eval_const(graph: &impl ValueDag, node: NodeId) -> Option<(u64, u3
 /// model there. Operands are emitted left to right, before the operator, so a
 /// backend numbering its nodes in emission order numbers them the same way
 /// whatever the format.
-pub(crate) fn emit<B: TermBackend>(
-    graph: &impl ValueDag,
-    node: NodeId,
-    b: &mut B,
-) -> Option<B::Val> {
+pub(crate) fn emit<B: TermBackend>(graph: &ValueGraph, node: NodeId, b: &mut B) -> Option<B::Val> {
     let kind = *graph.get_node(node);
     if !b.supports(kind) {
         return None;
@@ -185,7 +177,7 @@ pub(crate) fn emit<B: TermBackend>(
 }
 
 fn emit_scalar_op<B: TermBackend>(
-    graph: &impl ValueDag,
+    graph: &ValueGraph,
     node: NodeId,
     kind: SymKind,
     template: &SmtTemplate,
@@ -237,7 +229,7 @@ fn emit_scalar_op<B: TermBackend>(
     }
 }
 
-fn emit_extract<B: TermBackend>(graph: &impl ValueDag, node: NodeId, b: &mut B) -> Option<B::Val> {
+fn emit_extract<B: TermBackend>(graph: &ValueGraph, node: NodeId, b: &mut B) -> Option<B::Val> {
     let child_node = |index: usize| graph.children(node).nth(index);
     let const_child =
         |index: usize| -> Option<u64> { Some(eval_const(graph, child_node(index)?)?.0) };

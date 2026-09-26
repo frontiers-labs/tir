@@ -1,22 +1,13 @@
 //! Float-comparison semantics, shared by the IR's `fp.cmp` operation and by
 //! backend flag composition so both prove against the very same graph.
 
-use tir_adt::Predicate;
-use tir_graph::{MutDag, NodeId};
+use tir_adt::{NodeId, Predicate};
 
-use super::ValueId;
+use super::SemGraph;
 use crate::lang::{SymKind, SymPayload};
 
-/// The semantic-graph builder [`cmpf_semantics`] writes into.
-trait SemBuilder: MutDag<Node = SymKind, Leaf = SymPayload<ValueId>> {}
-
-impl<T> SemBuilder for T where T: MutDag<Node = SymKind, Leaf = SymPayload<ValueId>> {}
-
 /// Build the target-independent semantic graph for an `fp.cmp` predicate.
-pub fn cmpf_semantics(
-    g: &mut impl MutDag<Node = SymKind, Leaf = SymPayload<ValueId>>,
-    predicate: Predicate,
-) -> Option<NodeId> {
+pub fn cmpf_semantics<A>(g: &mut SemGraph<A>, predicate: Predicate) -> Option<NodeId> {
     let lhs = symbol(g, 0);
     let rhs = symbol(g, 1);
     Some(match predicate {
@@ -37,19 +28,19 @@ pub fn cmpf_semantics(
 
 /// Ordered equality without an atomic float `eq`: both `>=` directions hold,
 /// which is false whenever either operand is NaN.
-fn ordered_equal(g: &mut impl SemBuilder, lhs: NodeId, rhs: NodeId) -> NodeId {
+fn ordered_equal<A>(g: &mut SemGraph<A>, lhs: NodeId, rhs: NodeId) -> NodeId {
     let left_ge = binary(g, SymKind::Ge, lhs, rhs);
     let right_ge = binary(g, SymKind::Ge, rhs, lhs);
     binary(g, SymKind::And, left_ge, right_ge)
 }
 
-fn symbol(g: &mut impl SemBuilder, index: u32) -> NodeId {
+fn symbol<A>(g: &mut SemGraph<A>, index: u32) -> NodeId {
     let leaf = g.add_node(SymKind::Symbol);
     g.set_leaf_data(leaf, SymPayload::SymbolId(index));
     leaf
 }
 
-fn binary(g: &mut impl SemBuilder, kind: SymKind, lhs: NodeId, rhs: NodeId) -> NodeId {
+fn binary<A>(g: &mut SemGraph<A>, kind: SymKind, lhs: NodeId, rhs: NodeId) -> NodeId {
     let node = g.add_node(kind);
     g.add_edge(node, lhs);
     g.add_edge(node, rhs);

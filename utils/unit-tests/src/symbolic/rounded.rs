@@ -1,11 +1,10 @@
-use tir_adt::{APFloat, APInt};
-use tir_graph::{GenericDag, MutDag};
+use tir_adt::{APFloat, APInt, Dag};
 use tir_symbolic::lang::{execute, SymKind, SymPayload, Value};
 
 #[test]
 fn rounded_add_and_flags() {
     for (rounding, expected) in [(0, 0x3f800000), (3, 0x3f800001)] {
-        let mut graph = GenericDag::<SymKind, SymPayload<()>>::new();
+        let mut graph = Dag::<SymKind, SymPayload<()>>::new();
         let a = graph.add_node(SymKind::Symbol);
         graph.set_leaf_data(a, SymPayload::SymbolId(0));
         let b = graph.add_node(SymKind::Symbol);
@@ -32,7 +31,7 @@ fn rounded_add_and_flags() {
 
 #[test]
 fn integer_to_float_avoids_double_rounding() {
-    let mut graph = GenericDag::<SymKind, SymPayload<()>>::new();
+    let mut graph = Dag::<SymKind, SymPayload<()>>::new();
     let input = graph.add_node(SymKind::Constant);
     graph.set_leaf_data(
         input,
@@ -89,7 +88,6 @@ fn rounded_rtz_conversion_refines_partial_conversion() {
 
 #[test]
 fn selection_fallback_preserves_conversion_width_wrapper() {
-    use tir_graph::Dag;
     use tir_symbolic::lang::selection_fallback;
     use tir_symbolic::sem::SemGraph;
     let mut graph = SemGraph::<()>::new();
@@ -115,16 +113,15 @@ fn selection_fallback_preserves_conversion_width_wrapper() {
     graph.add_edge(extend, width);
     let fallback = selection_fallback(&graph, extend).unwrap();
     let root = fallback.root().unwrap();
-    assert_eq!(*fallback.get_kind(root), SymKind::SExt);
+    assert_eq!(*fallback.get_node(root), SymKind::SExt);
     assert_eq!(
-        *fallback.get_kind(fallback.children(root).next().unwrap()),
+        *fallback.get_node(fallback.children(root).next().unwrap()),
         SymKind::FPToSI
     );
 }
 
 #[test]
 fn selection_fallback_proposes_arithmetic_inside_nan_wrapper() {
-    use tir_graph::Dag;
     use tir_symbolic::lang::selection_fallback;
     use tir_symbolic::sem::SemGraph;
     let mut graph = SemGraph::<()>::new();
@@ -152,14 +149,13 @@ fn selection_fallback_proposes_arithmetic_inside_nan_wrapper() {
     }
     let candidate = selection_fallback(&graph, full).unwrap();
     assert_eq!(
-        *candidate.get_kind(candidate.root().unwrap()),
+        *candidate.get_node(candidate.root().unwrap()),
         SymKind::FAdd
     );
 }
 
 #[test]
 fn selection_fallback_preserves_nondefault_rounding_inside_nan_wrapper() {
-    use tir_graph::Dag;
     use tir_symbolic::lang::selection_fallback;
     use tir_symbolic::sem::SemGraph;
     let mut graph = SemGraph::<()>::new();
@@ -187,7 +183,7 @@ fn selection_fallback_preserves_nondefault_rounding_inside_nan_wrapper() {
     }
     let candidate = selection_fallback(&graph, full).unwrap();
     assert_eq!(
-        *candidate.get_kind(candidate.root().unwrap()),
+        *candidate.get_node(candidate.root().unwrap()),
         SymKind::FAddRound
     );
 }
@@ -209,7 +205,7 @@ fn typed_refinement_observes_float_result_bits() {
 
 #[test]
 fn float_bit_extraction_preserves_nan_payload() {
-    let mut graph = GenericDag::<SymKind, SymPayload<()>>::new();
+    let mut graph = Dag::<SymKind, SymPayload<()>>::new();
     let value = graph.add_node(SymKind::Symbol);
     graph.set_leaf_data(value, SymPayload::SymbolId(0));
     let high = graph.add_node(SymKind::Constant);
@@ -278,7 +274,6 @@ fn selection_fallback_preserves_existing_unrounded_guards() {
 
 #[test]
 fn selection_fallback_preserves_rounded_conversion_inside_invalid_guard() {
-    use tir_graph::Dag;
     use tir_symbolic::lang::selection_fallback_preserving_rounding;
     use tir_symbolic::sem::SemGraph;
     let mut graph = SemGraph::<()>::new();
@@ -306,7 +301,7 @@ fn selection_fallback_preserves_rounded_conversion_inside_invalid_guard() {
     }
     let candidate = selection_fallback_preserving_rounding(&graph, outer).unwrap();
     assert_eq!(
-        *candidate.get_kind(candidate.root().unwrap()),
+        *candidate.get_node(candidate.root().unwrap()),
         SymKind::FPToSIRound
     );
 }

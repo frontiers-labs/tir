@@ -12,7 +12,7 @@ use crate::diagnostics::{
     MisplacedSwitchLabel, UnknownLabel,
 };
 use std::collections::HashMap;
-use tir::graph::{Dag, NodeId};
+use tir::NodeId;
 
 impl Analyzer<'_> {
     pub(super) fn function(&mut self, function: NodeId) {

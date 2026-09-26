@@ -6,7 +6,6 @@
 //! the specs.
 
 use tir::attributes::{AttributeValue, RegisterAttr};
-use tir::graph::OperandConstraint;
 use tir::sem::{ExtendSemBytes, ExtendSemBytesTyped, SymKind};
 use tir::{Context, NewOp, OpHandle, Operation, PassError};
 
@@ -15,7 +14,16 @@ use crate::backend::isel::{
     RuleKind, RuleMatch,
 };
 use crate::backend::regalloc::RegClassId;
-use crate::graph::MetaMutDag;
+
+/// Restricts what a boundary (operand) pattern node may bind to, distinguishing
+/// register operands from immediates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OperandConstraint {
+    /// Must bind to a non-constant value (a register / SSA value).
+    Register,
+    /// Must bind to a compile-time constant (an immediate).
+    Immediate,
+}
 
 /// One slot of the emitted instruction: where its contents come from.
 #[derive(Clone, Copy)]
@@ -295,7 +303,7 @@ fn build_pattern(
             64 => crate::builtin::FloatType::f64(context),
             _ => unreachable!("unsupported scalar float register width {width}"),
         };
-        g.set_actual_type(root, ty);
+        g.annotation_mut(root).actual_type = Some(ty);
     }
     g
 }

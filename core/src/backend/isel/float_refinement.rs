@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use tir::graph::{Dag, MutDag, NodeId, subgraphs_equal};
+use tir::NodeId;
 use tir::sem::{
     FloatFormat, SemGraph, SemType, SmtOracle, SymKind, SymPayload, Width, infer_types,
 };
@@ -14,7 +14,7 @@ pub(super) fn ieee_arithmetic_refines(
     let (Some(full_root), Some(candidate_root)) = (full.root(), candidate.root()) else {
         return false;
     };
-    let Some(rounded) = rounded_kind(*candidate.get_kind(candidate_root)) else {
+    let Some(rounded) = rounded_kind(*candidate.get_node(candidate_root)) else {
         return false;
     };
     let Ok(types) = infer_types(candidate, |node| match candidate.get_leaf_data(node) {
@@ -33,11 +33,11 @@ pub(super) fn ieee_arithmetic_refines(
     let shared: HashSet<_> = full
         .postorder(full_root)
         .filter(|&node| {
-            if *full.get_kind(node) != rounded {
+            if *full.get_node(node) != rounded {
                 return false;
             }
             let children: Vec<_> = full.children(node).collect();
-            (if *candidate.get_kind(candidate_root) == rounded {
+            (if *candidate.get_node(candidate_root) == rounded {
                 children.len() == operands.len()
             } else {
                 children.len() == operands.len() + 1
@@ -46,7 +46,7 @@ pub(super) fn ieee_arithmetic_refines(
             }) && operands
                 .iter()
                 .zip(&children)
-                .all(|(&lhs, &rhs)| subgraphs_equal(candidate, lhs, full, rhs))
+                .all(|(&lhs, &rhs)| candidate.subgraph_eq(lhs, full, rhs))
         })
         .collect();
     if shared.is_empty() {
@@ -119,7 +119,7 @@ fn copy_result(
         .children(root)
         .map(|child| copy_result(full, child, proof, memo))
         .collect();
-    let copied = node(proof, *full.get_kind(root), &children);
+    let copied = node(proof, *full.get_node(root), &children);
     if let Some(payload) = full.get_leaf_data(root) {
         let payload = match payload {
             SymPayload::SymbolId(id) => SymPayload::SymbolId(id + 1),

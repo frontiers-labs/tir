@@ -1,6 +1,6 @@
 //! Arithmetic, shift and comparison circuits; all vectors little-endian (bit 0 = LSB).
 
-use tir_graph::NodeId;
+use tir_adt::NodeId;
 
 use super::{BitblastError, Blaster, Shift};
 use crate::lang::SymKind;

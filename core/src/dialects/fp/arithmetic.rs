@@ -108,11 +108,8 @@ macro_rules! arithmetic_op {
         impl $op {
             fn value_semantics(
                 &self,
-                graph: &mut impl tir::graph::MutDag<
-                    Node = tir::sem::SymKind,
-                    Leaf = tir::sem::SymPayload<tir::ValueId>,
-                >,
-            ) -> Option<tir::graph::NodeId> {
+                graph: &mut tir::sem::SemGraph,
+            ) -> Option<tir::NodeId> {
                 let semantics = self.semantics();
                 arithmetic_semantics(
                     graph,
@@ -181,12 +178,9 @@ macro_rules! arithmetic_op {
 }
 
 pub(crate) fn rounding_node(
-    graph: &mut impl tir::graph::MutDag<
-        Node = tir::sem::SymKind,
-        Leaf = tir::sem::SymPayload<tir::ValueId>,
-    >,
+    graph: &mut tir::sem::SemGraph,
     rounding: Rounding,
-) -> Option<tir::graph::NodeId> {
+) -> Option<tir::NodeId> {
     let Rounding::Fixed(rounding) = rounding else {
         return None;
     };
@@ -255,16 +249,13 @@ arithmetic_op!(
 );
 
 fn arithmetic_semantics(
-    graph: &mut impl tir::graph::MutDag<
-        Node = tir::sem::SymKind,
-        Leaf = tir::sem::SymPayload<tir::ValueId>,
-    >,
+    graph: &mut tir::sem::SemGraph,
     generic: tir::sem::SymKind,
     rounded: tir::sem::SymKind,
     arity: usize,
     width: FloatWidth,
     semantics: &ArithmeticSemantics,
-) -> Option<tir::graph::NodeId> {
+) -> Option<tir::NodeId> {
     let operands: Vec<_> = (0..arity)
         .map(|index| {
             let node = graph.add_node(tir::sem::SymKind::Symbol);
@@ -296,17 +287,14 @@ fn arithmetic_semantics(
 }
 
 pub(super) fn build_arithmetic_value(
-    graph: &mut impl tir::graph::MutDag<
-        Node = tir::sem::SymKind,
-        Leaf = tir::sem::SymPayload<tir::ValueId>,
-    >,
-    operands: &[tir::graph::NodeId],
+    graph: &mut tir::sem::SemGraph,
+    operands: &[tir::NodeId],
     kinds: (tir::sem::SymKind, tir::sem::SymKind),
     use_generic: bool,
-    rounding: Option<tir::graph::NodeId>,
+    rounding: Option<tir::NodeId>,
     nan: NaNPolicy,
-    canonical_bits: Option<tir::graph::NodeId>,
-) -> (tir::graph::NodeId, tir::graph::NodeId) {
+    canonical_bits: Option<tir::NodeId>,
+) -> (tir::NodeId, tir::NodeId) {
     let evaluation = value_operation(
         graph,
         if use_generic { kinds.0 } else { kinds.1 },
@@ -326,14 +314,11 @@ pub(super) fn build_arithmetic_value(
 }
 
 pub(super) fn value_operation(
-    graph: &mut impl tir::graph::MutDag<
-        Node = tir::sem::SymKind,
-        Leaf = tir::sem::SymPayload<tir::ValueId>,
-    >,
+    graph: &mut tir::sem::SemGraph,
     kind: tir::sem::SymKind,
-    operands: &[tir::graph::NodeId],
-    rounding: Option<tir::graph::NodeId>,
-) -> tir::graph::NodeId {
+    operands: &[tir::NodeId],
+    rounding: Option<tir::NodeId>,
+) -> tir::NodeId {
     let operation = graph.add_node(kind);
     for &operand in operands {
         graph.add_edge(operation, operand);
@@ -346,12 +331,9 @@ pub(super) fn value_operation(
 }
 
 pub(crate) fn preserve_payload_observation(
-    graph: &mut impl tir::graph::MutDag<
-        Node = tir::sem::SymKind,
-        Leaf = tir::sem::SymPayload<tir::ValueId>,
-    >,
-    value: tir::graph::NodeId,
-) -> tir::graph::NodeId {
+    graph: &mut tir::sem::SemGraph,
+    value: tir::NodeId,
+) -> tir::NodeId {
     let bits = graph.add_node(tir::sem::SymKind::Bitcast);
     graph.add_edge(bits, value);
     let observed = graph.add_node(tir::sem::SymKind::AsFloat);

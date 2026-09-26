@@ -1,7 +1,6 @@
 use std::collections::HashSet;
 
-use tir_adt::APInt;
-use tir_graph::{Dag, NodeId};
+use tir_adt::{APInt, NodeId};
 use tir_symbolic::lang::{
     canonicalize_for_selection, execute, infer_types, FloatFormat, SemType, StateAccessKind,
     StateFieldKind, StateResourceKind, SymKind, SymPayload, TypeUnifier, Value, Width,

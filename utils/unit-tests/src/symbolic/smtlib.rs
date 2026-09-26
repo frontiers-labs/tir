@@ -3,7 +3,7 @@ use tir_symbolic::smtlib::ast::*;
 use tir_symbolic::smtlib::convert::{lift_script, lower_script, ConvertError, Lowered, SymbolInfo};
 use tir_symbolic::smtlib::parser::{parse_script, parse_term};
 
-use tir_graph::{Dag, GenericDag, NodeId};
+use tir_adt::{Dag, NodeId};
 
 // ── Parser ─────────────────────────────────────────────────────────────────
 
@@ -111,7 +111,7 @@ fn roundtrips_terms() {
 
 // ── SMT <-> graph conversion ───────────────────────────────────────────────
 
-type Graph = GenericDag<SymKind, SymPayload<()>>;
+type Graph = Dag<SymKind, SymPayload<()>>;
 
 fn lower(src: &str) -> Lowered<()> {
     lower_script::<()>(&parse_script(src).unwrap()).unwrap()
@@ -127,8 +127,8 @@ fn iso(
     n2: NodeId,
     s2: &[SymbolInfo],
 ) -> bool {
-    let k1 = *g1.get_kind(n1);
-    if k1 != *g2.get_kind(n2) {
+    let k1 = *g1.get_node(n1);
+    if k1 != *g2.get_node(n2) {
         return false;
     }
     match k1 {
@@ -167,10 +167,10 @@ fn lowers_structure_and_sharing() {
          (assert (= (bvadd x y) x))",
     );
     let g = &lo.graph;
-    assert_eq!(*g.get_kind(lo.root), SymKind::Eq);
+    assert_eq!(*g.get_node(lo.root), SymKind::Eq);
     let rc: Vec<_> = g.children(lo.root).collect();
-    assert_eq!(*g.get_kind(rc[0]), SymKind::Add);
-    assert_eq!(*g.get_kind(rc[1]), SymKind::Symbol);
+    assert_eq!(*g.get_node(rc[0]), SymKind::Add);
+    assert_eq!(*g.get_node(rc[1]), SymKind::Symbol);
     let add: Vec<_> = g.children(rc[0]).collect();
     // Both occurrences of `x` share one node.
     assert_eq!(add[0], rc[1]);
@@ -186,7 +186,7 @@ fn lowers_extract_and_literal() {
     );
     let g = &lo.graph;
     let rc: Vec<_> = g.children(lo.root).collect();
-    assert_eq!(*g.get_kind(rc[0]), SymKind::Extract);
+    assert_eq!(*g.get_node(rc[0]), SymKind::Extract);
     assert_eq!(lo.widths[rc[0].index()], Some(4));
     // `#x5` is a 4-bit constant.
     match g.get_leaf_data(rc[1]) {
@@ -207,7 +207,7 @@ fn inlines_define_fun() {
     );
     let g = &lo.graph;
     let rc: Vec<_> = g.children(lo.root).collect();
-    assert_eq!(*g.get_kind(rc[0]), SymKind::Add);
+    assert_eq!(*g.get_node(rc[0]), SymKind::Add);
     let add: Vec<_> = g.children(rc[0]).collect();
     assert_eq!(add[0], add[1]); // both `a` bind to the same `x` node
 }

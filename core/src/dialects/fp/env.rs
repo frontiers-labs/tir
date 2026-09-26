@@ -3,8 +3,8 @@ use tir_adt::{APInt, RoundingMode};
 use super::resource::{effect_records, state_for, transition_semantics, verify_ports};
 use super::semantics::{parse_rounding, rounding_code};
 use super::{EnvironmentType, RoundingType, resource};
+use crate::NodeId;
 use crate::builtin::StateResource;
-use crate::graph::{MetaMutDag, NodeId};
 use crate::sem::{SemGraph, SymKind};
 use crate::{
     Context, Error, HasResourceSemantics, ResourceAccess, ResourceEffect, ResourceEffects,
@@ -42,10 +42,7 @@ operation! {
 }
 
 impl RoundingConstantOp {
-    fn value_semantics(
-        &self,
-        graph: &mut impl crate::graph::MutDag<Node = SymKind, Leaf = crate::sem::SymPayload<ValueId>>,
-    ) -> Option<NodeId> {
+    fn value_semantics(&self, graph: &mut crate::sem::SemGraph) -> Option<NodeId> {
         Some(resource::constant(
             graph,
             3,
@@ -411,7 +408,7 @@ fn snapshot_value(context: &Context, graph: &mut SemGraph, state: NodeId) -> Nod
         let value = resource::operation(graph, SymKind::ShiftLeft, &[value, shift]);
         snapshot = resource::operation(graph, SymKind::Or, &[snapshot, value]);
     }
-    graph.set_actual_type(snapshot, EnvironmentType::new(context));
+    graph.annotation_mut(snapshot).actual_type = Some(EnvironmentType::new(context));
     snapshot
 }
 
@@ -438,7 +435,7 @@ fn trap_state(op: &tir::OpHandle, graph: &mut SemGraph, raised: NodeId, traps: N
     let memory_value = memory_state(op);
     let memory = resource::value(graph, op, memory_value);
     let trapped = resource::operation(graph, SymKind::StateTrap, &[memory, raised, traps]);
-    graph.set_actual_type(trapped, op.context.get_value(memory_value).ty());
+    graph.annotation_mut(trapped).actual_type = Some(op.context.get_value(memory_value).ty());
     trapped
 }
 
@@ -452,7 +449,7 @@ impl HasResourceSemantics for RaiseFlagsOp {
         let old = read_field(&mut graph, environment, ResourceField::FpFlags, flags_ty);
         let raised = resource::value(&mut graph, &self.0, self.0.value_operands()[0]);
         let flags = resource::operation(&mut graph, SymKind::Or, &[old, raised]);
-        graph.set_actual_type(flags, flags_ty);
+        graph.annotation_mut(flags).actual_type = Some(flags_ty);
         let environment = assign_field(
             &mut graph,
             environment,
@@ -506,9 +503,9 @@ impl HasResourceSemantics for UpdateOp {
         let hi = resource::constant(&mut graph, 13, 4);
         let lo = resource::constant(&mut graph, 13, 0);
         let saved_flags = resource::operation(&mut graph, SymKind::Extract, &[snapshot, hi, lo]);
-        graph.set_actual_type(saved_flags, flags_ty);
+        graph.annotation_mut(saved_flags).actual_type = Some(flags_ty);
         let flags = resource::operation(&mut graph, SymKind::Or, &[saved_flags, raised]);
-        graph.set_actual_type(flags, flags_ty);
+        graph.annotation_mut(flags).actual_type = Some(flags_ty);
         let environment = restore_snapshot(
             &mut graph,
             environment,

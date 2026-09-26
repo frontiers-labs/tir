@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 
-use tir_graph::{Dag, MutDag, NodeId, PostOrderDag};
+use tir_adt::{Dag, NodeId};
 
 use crate::lang::{SymKind, SymPayload};
 
@@ -41,9 +41,9 @@ impl ValueId {
 
 /// The post-order graph semantic expressions are built into: [`SymKind`] nodes
 /// over `SymPayload<ValueId>` leaves, annotated with `A` so a node can carry
-/// whatever provenance its producer tracks (the IR carries `tir::graph::NodeMeta`;
+/// whatever provenance its producer tracks (the IR carries `tir::sem::NodeMeta`;
 /// TMDL carries nothing).
-pub type SemGraph<A = ()> = PostOrderDag<SymKind, SymPayload<ValueId>, A>;
+pub type SemGraph<A = ()> = Dag<SymKind, SymPayload<ValueId>, A>;
 
 /// What [`copy_subgraph_with`] makes of one source node.
 pub enum CopyAction {
@@ -149,10 +149,9 @@ pub enum SemOp {
     Edge(u32, u32),
 }
 
-fn replay_sem_ops<G, F>(g: &mut G, ops: &[SemOp], mut set_type: F) -> NodeId
+fn replay_sem_ops<A, F>(g: &mut SemGraph<A>, ops: &[SemOp], mut set_type: F) -> NodeId
 where
-    G: MutDag<Node = SymKind, Leaf = SymPayload<ValueId>>,
-    F: FnMut(&mut G, NodeId, u32),
+    F: FnMut(&mut SemGraph<A>, NodeId, u32),
 {
     let mut nodes: Vec<NodeId> = Vec::new();
     for op in ops {
@@ -357,7 +356,7 @@ pub fn decode_sem_ops(blob: &[u8], offset: u32, kinds: &[SymKind]) -> Vec<SemOp>
 
 /// Replays the program at `offset` into any semantic-graph sink; returns the
 /// root (the last node, as programs are serialized in post order).
-pub trait ExtendSemBytes: MutDag<Node = SymKind, Leaf = SymPayload<ValueId>> + Sized {
+pub trait ExtendSemBytes: Sized {
     fn extend_sem_bytes(&mut self, kinds: &[SymKind], blob: &[u8], offset: u32) -> NodeId {
         self.extend_sem_bytes_with(kinds, blob, offset, |_, _, _| {
             unreachable!("SemOp::Typed requires a type sink")
@@ -372,12 +371,20 @@ pub trait ExtendSemBytes: MutDag<Node = SymKind, Leaf = SymPayload<ValueId>> + S
         blob: &[u8],
         offset: u32,
         set_type: impl FnMut(&mut Self, NodeId, u32),
+    ) -> NodeId;
+}
+
+impl<A> ExtendSemBytes for SemGraph<A> {
+    fn extend_sem_bytes_with(
+        &mut self,
+        kinds: &[SymKind],
+        blob: &[u8],
+        offset: u32,
+        set_type: impl FnMut(&mut Self, NodeId, u32),
     ) -> NodeId {
         replay_sem_ops(self, &decode_sem_ops(blob, offset, kinds), set_type)
     }
 }
-
-impl<G: MutDag<Node = SymKind, Leaf = SymPayload<ValueId>>> ExtendSemBytes for G {}
 
 // ── APInt boundary helpers ──────────────────────────────────────────────────
 //

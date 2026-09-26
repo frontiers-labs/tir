@@ -1030,21 +1030,15 @@ fn make_sem_impls(
             quote! {
                 let __tir_ctx = self.0.context.clone();
                 let __tir_ty = __tir_ctx.get_value(self.result()).ty();
-                g.set_actual_type(__tir_sem_root, __tir_ty);
+                g.annotation_mut(__tir_sem_root).actual_type = Some(__tir_ty);
             }
         } else {
             quote! {}
         };
 
         let hooks = quote! {
-            impl<__G> tir_symbolic::lang::SemBuilderHooks<__G> for #struct_name
-            where
-                __G: tir::graph::MutDag<
-                    Node = tir_symbolic::lang::SymKind,
-                    Leaf = tir_symbolic::lang::SymPayload<tir::ValueId>,
-                >,
-            {
-                fn splice(&self, __name: &str, g: &mut __G) -> Option<tir::graph::NodeId> {
+            impl tir_symbolic::lang::SemBuilderHooks<tir::sem::SemGraph> for #struct_name {
+                fn splice(&self, __name: &str, g: &mut tir::sem::SemGraph) -> Option<tir::NodeId> {
                     match __name {
                         #(#splice_arms)*
                         _ => None,
@@ -1056,28 +1050,19 @@ fn make_sem_impls(
             }
         };
         let sem_method = quote! {
-            fn semantic_expr(&self, g: &mut tir::sem::SemGraph) -> Option<tir::graph::NodeId> {
-                use tir::graph::MetaMutDag;
+            fn semantic_expr(&self, g: &mut tir::sem::SemGraph) -> Option<tir::NodeId> {
                 let __tir_sem_root = tir_symbolic::lang::build(g, #src, &[#(#sym_pairs),*], self).ok()?;
-                g.set_original_op(__tir_sem_root, <Self as tir::Operation>::id(self));
+                g.annotation_mut(__tir_sem_root).original_op = Some(<Self as tir::Operation>::id(self));
                 #actual_type_setter
                 Some(__tir_sem_root)
             }
         };
         let as_impl = quote! {
             impl tir::sem::AsSemExpr for #struct_name {
-                fn convert(
-                    &self,
-                    g: &mut impl tir::graph::MutDag<
-                        Node = tir_symbolic::lang::SymKind,
-                        Leaf = tir_symbolic::lang::SymPayload<tir::ValueId>,
-                        Annotation = tir::graph::NodeMeta,
-                    >,
-                ) -> tir::graph::NodeId {
-                    use tir::graph::MetaMutDag;
+                fn convert(&self, g: &mut tir::sem::SemGraph) -> tir::NodeId {
                     let __tir_sem_root = tir_symbolic::lang::build(g, #src, &[#(#sym_pairs),*], self)
                         .expect("semantic expression should build");
-                    g.set_original_op(__tir_sem_root, <Self as tir::Operation>::id(self));
+                    g.annotation_mut(__tir_sem_root).original_op = Some(<Self as tir::Operation>::id(self));
                     #actual_type_setter
                     __tir_sem_root
                 }

@@ -1,7 +1,6 @@
 use std::fmt;
 
-use tir_adt::APInt;
-use tir_graph::{MutDag, NodeId};
+use tir_adt::{APInt, Dag, NodeId};
 
 use crate::lang::{SymKind, SymPayload, scalar_op, scalar_op_named};
 
@@ -188,15 +187,14 @@ impl fmt::Display for BuildError {
 impl std::error::Error for BuildError {}
 
 /// Lower a `sem = "(set <dst> <rhs>)"` declaration into a [`SymKind`] graph.
-pub fn build<V, G, H>(
-    g: &mut G,
+pub fn build<V, A, H>(
+    g: &mut Dag<SymKind, SymPayload<V>, A>,
     sem: &str,
     symbols: &[(&str, u32)],
     hooks: &H,
 ) -> Result<NodeId, BuildError>
 where
-    G: MutDag<Node = SymKind, Leaf = SymPayload<V>>,
-    H: SemBuilderHooks<G>,
+    H: SemBuilderHooks<Dag<SymKind, SymPayload<V>, A>>,
 {
     let parsed = parse(sem).ok_or(BuildError::Parse)?;
     let SemExpr::List(items) = &parsed else {
@@ -212,19 +210,21 @@ where
     build_node(g, rhs, symbols, &mut lambda_params, hooks)
 }
 
-fn leaf<V, G>(g: &mut G, kind: SymKind, data: SymPayload<V>) -> NodeId
-where
-    G: MutDag<Node = SymKind, Leaf = SymPayload<V>>,
-{
+fn leaf<V, A>(
+    g: &mut Dag<SymKind, SymPayload<V>, A>,
+    kind: SymKind,
+    data: SymPayload<V>,
+) -> NodeId {
     let n = g.add_node(kind);
     g.set_leaf_data(n, data);
     n
 }
 
-fn node<V, G>(g: &mut G, kind: SymKind, children: &[NodeId]) -> NodeId
-where
-    G: MutDag<Node = SymKind, Leaf = SymPayload<V>>,
-{
+fn node<V, A>(
+    g: &mut Dag<SymKind, SymPayload<V>, A>,
+    kind: SymKind,
+    children: &[NodeId],
+) -> NodeId {
     let n = g.add_node(kind);
     for &child in children {
         g.add_edge(n, child);
@@ -232,16 +232,15 @@ where
     n
 }
 
-fn build_node<V, G, H>(
-    g: &mut G,
+fn build_node<V, A, H>(
+    g: &mut Dag<SymKind, SymPayload<V>, A>,
     expr: &SemExpr,
     symbols: &[(&str, u32)],
     lambda_params: &mut Vec<Vec<String>>,
     hooks: &H,
 ) -> Result<NodeId, BuildError>
 where
-    G: MutDag<Node = SymKind, Leaf = SymPayload<V>>,
-    H: SemBuilderHooks<G>,
+    H: SemBuilderHooks<Dag<SymKind, SymPayload<V>, A>>,
 {
     match expr {
         SemExpr::Atom(name) => {
@@ -275,16 +274,15 @@ where
     }
 }
 
-fn build_list<V, G, H>(
-    g: &mut G,
+fn build_list<V, A, H>(
+    g: &mut Dag<SymKind, SymPayload<V>, A>,
     items: &[SemExpr],
     symbols: &[(&str, u32)],
     lambda_params: &mut Vec<Vec<String>>,
     hooks: &H,
 ) -> Result<NodeId, BuildError>
 where
-    G: MutDag<Node = SymKind, Leaf = SymPayload<V>>,
-    H: SemBuilderHooks<G>,
+    H: SemBuilderHooks<Dag<SymKind, SymPayload<V>, A>>,
 {
     // `(concat iter)`: matched before width-changing ops to avoid the single-operand clash.
     if let [SemExpr::Atom(op), arg] = items

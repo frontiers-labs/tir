@@ -2,7 +2,6 @@
 
 use tir::{
     builtin::{ops, IntegerType},
-    graph::{Dag, MetaDag},
     sem::{AsSemExpr, SemGraph, SymKind, SymPayload},
     Context, Operation,
 };
@@ -59,13 +58,13 @@ fn op_cost_read_through_interface() {
         .is_none());
 }
 
-fn check_binary_sem(g: &SemGraph, root: tir::graph::NodeId, expected_kind: SymKind) {
+fn check_binary_sem(g: &SemGraph, root: tir::NodeId, expected_kind: SymKind) {
     assert_eq!(g.len(), 3, "expected 3 nodes: lhs symbol, rhs symbol, op");
-    assert_eq!(g.get_kind(root), &expected_kind);
+    assert_eq!(g.get_node(root), &expected_kind);
     let children: Vec<_> = g.children(root).collect();
     assert_eq!(children.len(), 2);
-    assert_eq!(g.get_kind(children[0]), &SymKind::Symbol);
-    assert_eq!(g.get_kind(children[1]), &SymKind::Symbol);
+    assert_eq!(g.get_node(children[0]), &SymKind::Symbol);
+    assert_eq!(g.get_node(children[1]), &SymKind::Symbol);
     assert!(
         matches!(g.get_leaf_data(children[0]), Some(SymPayload::SymbolId(0))),
         "lhs should be symbol 0"
@@ -86,7 +85,7 @@ fn binary_ops_convert_to_their_sem_kind() {
         tir::ValueId,
         tir::TypeId,
         &mut SemGraph,
-    ) -> (tir::graph::NodeId, tir::OpId);
+    ) -> (tir::NodeId, tir::OpId);
 
     macro_rules! converter {
         ($name:ident) => {
@@ -120,15 +119,23 @@ fn binary_ops_convert_to_their_sem_kind() {
         let mut g = SemGraph::new();
         let (root, op_id) = convert(&context, lhs.id(), rhs.id(), i32_ty, &mut g);
         check_binary_sem(&g, root, *kind);
-        assert_eq!(g.get_original_op(root), Some(op_id), "{name}");
-        assert_eq!(g.get_actual_type(root), Some(i32_ty), "{name}");
+        assert_eq!(
+            g.get_annotation(root).and_then(|m| m.original_op),
+            Some(op_id),
+            "{name}"
+        );
+        assert_eq!(
+            g.get_annotation(root).and_then(|m| m.actual_type),
+            Some(i32_ty),
+            "{name}"
+        );
     }
 }
 
 /// The width-changing ops take their width from the result type via the unary
 /// sem-DSL forms: `extsi -> SExt(x, W)`, `extui -> ZExt(x, W)`,
 /// `trunci -> Extract(x, W-1, 0)`.
-fn const_value(g: &SemGraph, node: tir::graph::NodeId) -> u64 {
+fn const_value(g: &SemGraph, node: tir::NodeId) -> u64 {
     match g.get_leaf_data(node) {
         Some(SymPayload::Int(v)) => v.to_u64(),
         other => panic!("expected an integer constant, got {other:?}"),
@@ -142,9 +149,9 @@ fn extsi_sem_expr_uses_result_width() {
     let op = ops::extsi(&context, input.id(), IntegerType::new(&context, 64)).build();
     let mut g = SemGraph::new();
     let root = op.convert(&mut g);
-    assert_eq!(g.get_kind(root), &SymKind::SExt);
+    assert_eq!(g.get_node(root), &SymKind::SExt);
     let children: Vec<_> = g.children(root).collect();
-    assert_eq!(g.get_kind(children[0]), &SymKind::Symbol);
+    assert_eq!(g.get_node(children[0]), &SymKind::Symbol);
     assert_eq!(const_value(&g, children[1]), 64);
 }
 
@@ -155,7 +162,7 @@ fn extui_sem_expr_uses_result_width() {
     let op = ops::extui(&context, input.id(), IntegerType::new(&context, 32)).build();
     let mut g = SemGraph::new();
     let root = op.convert(&mut g);
-    assert_eq!(g.get_kind(root), &SymKind::ZExt);
+    assert_eq!(g.get_node(root), &SymKind::ZExt);
     assert_eq!(const_value(&g, g.children(root).nth(1).unwrap()), 32);
 }
 
@@ -166,9 +173,9 @@ fn trunci_sem_expr_is_low_bit_extract() {
     let op = ops::trunci(&context, input.id(), IntegerType::new(&context, 16)).build();
     let mut g = SemGraph::new();
     let root = op.convert(&mut g);
-    assert_eq!(g.get_kind(root), &SymKind::Extract);
+    assert_eq!(g.get_node(root), &SymKind::Extract);
     let children: Vec<_> = g.children(root).collect();
-    assert_eq!(g.get_kind(children[0]), &SymKind::Symbol);
+    assert_eq!(g.get_node(children[0]), &SymKind::Symbol);
     assert_eq!(const_value(&g, children[1]), 15); // high = W - 1
     assert_eq!(const_value(&g, children[2]), 0); // low
 }

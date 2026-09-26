@@ -959,7 +959,7 @@ pub enum Expr {
 }
 
 pub struct SemaLowering {
-    pub root: tir_graph::NodeId,
+    pub root: tir_adt::NodeId,
     pub variable_symbols: HashMap<String, u32>,
     pub register_symbols: HashMap<(String, u32), u32>,
     /// Operand name -> symbol id for `regnum(op)`: a symbol bound to the
@@ -970,17 +970,11 @@ pub struct SemaLowering {
     /// Node -> symbol id for each `let` binding. Targets that evaluate
     /// statements independently read the binding through this symbol instead of
     /// re-evaluating the bound term.
-    pub let_symbols: HashMap<tir_graph::NodeId, u32>,
+    pub let_symbols: HashMap<tir_adt::NodeId, u32>,
 }
 
-struct SemaExprLoweringCtx<
-    'a,
-    G: tir_graph::MutDag<
-            Node = tir_symbolic::lang::SymKind,
-            Leaf = tir_symbolic::lang::SymPayload<tir_symbolic::sem::ValueId>,
-        >,
-> {
-    graph: &'a mut G,
+struct SemaExprLoweringCtx<'a> {
+    graph: &'a mut tir_symbolic::sem::SemGraph,
     params: &'a HashMap<String, i64>,
     /// Maps `(class, register-name)` to the register's canonical encoding index, so
     /// register paths like `PSTATE::z` that carry no numeric index in their name can
@@ -998,8 +992,8 @@ struct SemaExprLoweringCtx<
     regnum_symbols: HashMap<String, u32>,
     /// `let` bindings in scope: the bound name maps to the node lowered for its
     /// right-hand side, so every use shares that single term.
-    let_bindings: HashMap<String, tir_graph::NodeId>,
-    let_symbols: HashMap<tir_graph::NodeId, u32>,
+    let_bindings: HashMap<String, tir_adt::NodeId>,
+    let_symbols: HashMap<tir_adt::NodeId, u32>,
     had_error: bool,
     /// Stack of `map`/`reduce` lambda parameter names, innermost last. An `Ident`
     /// matching a parameter of the innermost lambda lowers to an `Arg` node whose
@@ -1007,15 +1001,8 @@ struct SemaExprLoweringCtx<
     lambda_params: Vec<Vec<String>>,
 }
 
-impl<
-    'a,
-    G: tir_graph::MutDag<
-            Node = tir_symbolic::lang::SymKind,
-            Leaf = tir_symbolic::lang::SymPayload<tir_symbolic::sem::ValueId>,
-        >,
-> SemaExprLoweringCtx<'a, G>
-{
-    fn new(graph: &'a mut G, params: &'a HashMap<String, i64>) -> Self {
+impl<'a> SemaExprLoweringCtx<'a> {
+    fn new(graph: &'a mut tir_symbolic::sem::SemGraph, params: &'a HashMap<String, i64>) -> Self {
         Self {
             graph,
             params,
@@ -1033,7 +1020,7 @@ impl<
     }
 
     fn new_with_registers(
-        graph: &'a mut G,
+        graph: &'a mut tir_symbolic::sem::SemGraph,
         params: &'a HashMap<String, i64>,
         register_indices: &'a HashMap<(String, String), u32>,
     ) -> Self {
@@ -1056,8 +1043,8 @@ impl<
     fn add_node(
         &mut self,
         kind: tir_symbolic::lang::SymKind,
-        children: &[tir_graph::NodeId],
-    ) -> tir_graph::NodeId {
+        children: &[tir_adt::NodeId],
+    ) -> tir_adt::NodeId {
         let node = self.graph.add_node(kind);
         for &child in children {
             self.graph.add_edge(node, child);
@@ -1069,13 +1056,13 @@ impl<
         &mut self,
         kind: tir_symbolic::lang::SymKind,
         data: tir_symbolic::lang::SymPayload<tir_symbolic::sem::ValueId>,
-    ) -> tir_graph::NodeId {
+    ) -> tir_adt::NodeId {
         let node = self.graph.add_node(kind);
         self.graph.set_leaf_data(node, data);
         node
     }
 
-    fn add_int_const(&mut self, value: tir_adt::APInt) -> tir_graph::NodeId {
+    fn add_int_const(&mut self, value: tir_adt::APInt) -> tir_adt::NodeId {
         self.add_leaf(
             tir_symbolic::lang::SymKind::Constant,
             tir_symbolic::lang::SymPayload::Int(value),
@@ -1086,7 +1073,7 @@ impl<
     /// (`self.XLEN / 8`) is folded to the concrete byte count of this ISA
     /// instantiation instead of staying symbolic like other `self.PARAM` uses:
     /// a selection pattern can only match a concrete access size.
-    fn lower_memory_size(&mut self, expr: &Expr) -> tir_graph::NodeId {
+    fn lower_memory_size(&mut self, expr: &Expr) -> tir_adt::NodeId {
         let folded = const_eval_params(expr, self.params, &self.isa_consts);
         match folded {
             Some(bytes) if bytes > 0 => {
@@ -1097,7 +1084,7 @@ impl<
         }
     }
 
-    fn add_bool_const(&mut self, value: bool) -> tir_graph::NodeId {
+    fn add_bool_const(&mut self, value: bool) -> tir_adt::NodeId {
         self.add_int_const(tir_adt::APInt::new(1, value as u64))
     }
 
@@ -1138,7 +1125,7 @@ impl<
     /// Lower a `map`/`reduce` lambda's body, binding its parameters so that
     /// references to them become `Arg` nodes. Non-lambda arguments are an error
     /// (caught by the type checker); lowering them directly keeps the graph valid.
-    fn lower_lambda_body(&mut self, arg: &Expr) -> tir_graph::NodeId {
+    fn lower_lambda_body(&mut self, arg: &Expr) -> tir_adt::NodeId {
         let Expr::Lambda(lambda) = arg else {
             self.had_error = true;
             return arg.lower_with_ctx(self);
@@ -1151,10 +1138,10 @@ impl<
 
     fn build_extract(
         &mut self,
-        input_node: tir_graph::NodeId,
-        high_node: tir_graph::NodeId,
-        low_node: tir_graph::NodeId,
-    ) -> tir_graph::NodeId {
+        input_node: tir_adt::NodeId,
+        high_node: tir_adt::NodeId,
+        low_node: tir_adt::NodeId,
+    ) -> tir_adt::NodeId {
         // A single canonical `Extract` node rather than a shift/and/mask tree, so
         // instruction selection can match truncation/bit-slicing structurally
         // (e.g. addw = sext(extract(rs1+rs2, 31, 0), XLEN)) instead of pattern-
@@ -1281,15 +1268,7 @@ impl From<Tuple> for Expr {
 }
 
 impl Expr {
-    fn lower_with_ctx<
-        G: tir_graph::MutDag<
-                Node = tir_symbolic::lang::SymKind,
-                Leaf = tir_symbolic::lang::SymPayload<tir_symbolic::sem::ValueId>,
-            >,
-    >(
-        &self,
-        ctx: &mut SemaExprLoweringCtx<'_, G>,
-    ) -> tir_graph::NodeId {
+    fn lower_with_ctx(&self, ctx: &mut SemaExprLoweringCtx<'_>) -> tir_adt::NodeId {
         // Inside a `map`/`reduce` lambda, a reference to one of its parameters
         // lowers to an `Arg` leaf carrying the parameter's position.
         if let Expr::Ident(id) = self
@@ -1329,24 +1308,15 @@ impl Expr {
         }
     }
 
-    pub fn as_sema_expr(
-        &self,
-        g: &mut impl tir_graph::MutDag<
-            Node = tir_symbolic::lang::SymKind,
-            Leaf = tir_symbolic::lang::SymPayload<tir_symbolic::sem::ValueId>,
-        >,
-    ) -> tir_graph::NodeId {
+    pub fn as_sema_expr(&self, g: &mut tir_symbolic::sem::SemGraph) -> tir_adt::NodeId {
         self.as_sema_expr_with_params(g, &HashMap::new())
     }
 
     pub(crate) fn as_sema_expr_with_params(
         &self,
-        g: &mut impl tir_graph::MutDag<
-            Node = tir_symbolic::lang::SymKind,
-            Leaf = tir_symbolic::lang::SymPayload<tir_symbolic::sem::ValueId>,
-        >,
+        g: &mut tir_symbolic::sem::SemGraph,
         params: &HashMap<String, i64>,
-    ) -> tir_graph::NodeId {
+    ) -> tir_adt::NodeId {
         let mut ctx = SemaExprLoweringCtx::new(g, params);
         self.lower_with_ctx(&mut ctx)
     }
@@ -1356,10 +1326,7 @@ impl Expr {
     /// contains operations that cannot be represented.
     pub fn lower_to_sema(
         &self,
-        g: &mut impl tir_graph::MutDag<
-            Node = tir_symbolic::lang::SymKind,
-            Leaf = tir_symbolic::lang::SymPayload<tir_symbolic::sem::ValueId>,
-        >,
+        g: &mut tir_symbolic::sem::SemGraph,
         params: &HashMap<String, i64>,
         isa_consts: &HashMap<String, i64>,
     ) -> Option<SemaLowering> {
@@ -1383,10 +1350,7 @@ impl Expr {
     /// concrete width that instruction selection can match.
     pub fn lower_to_sema_with_isa(
         &self,
-        g: &mut impl tir_graph::MutDag<
-            Node = tir_symbolic::lang::SymKind,
-            Leaf = tir_symbolic::lang::SymPayload<tir_symbolic::sem::ValueId>,
-        >,
+        g: &mut tir_symbolic::sem::SemGraph,
         params: &HashMap<String, i64>,
         isa_consts: &HashMap<String, i64>,
         register_indices: &HashMap<(String, String), u32>,
@@ -1412,14 +1376,11 @@ impl Expr {
     /// same `rn`/`rm`). Returns each expression's root in order.
     pub fn lower_all_to_sema_with_isa(
         exprs: &[&Expr],
-        g: &mut impl tir_graph::MutDag<
-            Node = tir_symbolic::lang::SymKind,
-            Leaf = tir_symbolic::lang::SymPayload<tir_symbolic::sem::ValueId>,
-        >,
+        g: &mut tir_symbolic::sem::SemGraph,
         params: &HashMap<String, i64>,
         isa_consts: &HashMap<String, i64>,
         register_indices: &HashMap<(String, String), u32>,
-    ) -> Option<(Vec<tir_graph::NodeId>, SemaLowering)> {
+    ) -> Option<(Vec<tir_adt::NodeId>, SemaLowering)> {
         let mut ctx = SemaExprLoweringCtx::new_with_registers(g, params, register_indices);
         ctx.isa_consts = isa_consts.clone();
         let roots: Vec<_> = exprs
@@ -1444,29 +1405,13 @@ impl Expr {
 }
 
 impl Assign {
-    fn as_sema_expr<
-        G: tir_graph::MutDag<
-                Node = tir_symbolic::lang::SymKind,
-                Leaf = tir_symbolic::lang::SymPayload<tir_symbolic::sem::ValueId>,
-            >,
-    >(
-        &self,
-        ctx: &mut SemaExprLoweringCtx<'_, G>,
-    ) -> tir_graph::NodeId {
+    fn as_sema_expr(&self, ctx: &mut SemaExprLoweringCtx<'_>) -> tir_adt::NodeId {
         self.value.lower_with_ctx(ctx)
     }
 }
 
 impl Let {
-    fn as_sema_expr<
-        G: tir_graph::MutDag<
-                Node = tir_symbolic::lang::SymKind,
-                Leaf = tir_symbolic::lang::SymPayload<tir_symbolic::sem::ValueId>,
-            >,
-    >(
-        &self,
-        ctx: &mut SemaExprLoweringCtx<'_, G>,
-    ) -> tir_graph::NodeId {
+    fn as_sema_expr(&self, ctx: &mut SemaExprLoweringCtx<'_>) -> tir_adt::NodeId {
         let node = self.value.lower_with_ctx(ctx);
         let symbol = ctx.alloc_variable_symbol();
         ctx.let_symbols.insert(node, symbol);
@@ -1476,15 +1421,7 @@ impl Let {
 }
 
 impl Lit {
-    fn as_sema_expr<
-        G: tir_graph::MutDag<
-                Node = tir_symbolic::lang::SymKind,
-                Leaf = tir_symbolic::lang::SymPayload<tir_symbolic::sem::ValueId>,
-            >,
-    >(
-        &self,
-        ctx: &mut SemaExprLoweringCtx<'_, G>,
-    ) -> tir_graph::NodeId {
+    fn as_sema_expr(&self, ctx: &mut SemaExprLoweringCtx<'_>) -> tir_adt::NodeId {
         match self {
             Lit::Int(lit_int) => {
                 let value = lit_int.parse_u64();
@@ -1503,15 +1440,7 @@ impl Lit {
 }
 
 impl Ident {
-    fn as_sema_expr<
-        G: tir_graph::MutDag<
-                Node = tir_symbolic::lang::SymKind,
-                Leaf = tir_symbolic::lang::SymPayload<tir_symbolic::sem::ValueId>,
-            >,
-    >(
-        &self,
-        ctx: &mut SemaExprLoweringCtx<'_, G>,
-    ) -> tir_graph::NodeId {
+    fn as_sema_expr(&self, ctx: &mut SemaExprLoweringCtx<'_>) -> tir_adt::NodeId {
         if let Some(&node) = ctx.let_bindings.get(&self.name) {
             return node;
         }
@@ -1546,15 +1475,7 @@ impl Ident {
 }
 
 impl Path {
-    fn as_sema_expr<
-        G: tir_graph::MutDag<
-                Node = tir_symbolic::lang::SymKind,
-                Leaf = tir_symbolic::lang::SymPayload<tir_symbolic::sem::ValueId>,
-            >,
-    >(
-        &self,
-        ctx: &mut SemaExprLoweringCtx<'_, G>,
-    ) -> tir_graph::NodeId {
+    fn as_sema_expr(&self, ctx: &mut SemaExprLoweringCtx<'_>) -> tir_adt::NodeId {
         if self.remainder.len() != 1 {
             ctx.had_error = true;
             return ctx.add_int_const(tir_adt::APInt::new(64, 0));
@@ -1600,15 +1521,7 @@ impl Path {
 }
 
 impl Field {
-    fn as_sema_expr<
-        G: tir_graph::MutDag<
-                Node = tir_symbolic::lang::SymKind,
-                Leaf = tir_symbolic::lang::SymPayload<tir_symbolic::sem::ValueId>,
-            >,
-    >(
-        &self,
-        ctx: &mut SemaExprLoweringCtx<'_, G>,
-    ) -> tir_graph::NodeId {
+    fn as_sema_expr(&self, ctx: &mut SemaExprLoweringCtx<'_>) -> tir_adt::NodeId {
         if let Expr::Ident(base_ident) = &*self.base {
             if base_ident.name == "self" {
                 return Ident::new(self.member.clone(), self.span).as_sema_expr(ctx);
@@ -1652,15 +1565,7 @@ impl Field {
 }
 
 impl Binary {
-    fn as_sema_expr<
-        G: tir_graph::MutDag<
-                Node = tir_symbolic::lang::SymKind,
-                Leaf = tir_symbolic::lang::SymPayload<tir_symbolic::sem::ValueId>,
-            >,
-    >(
-        &self,
-        ctx: &mut SemaExprLoweringCtx<'_, G>,
-    ) -> tir_graph::NodeId {
+    fn as_sema_expr(&self, ctx: &mut SemaExprLoweringCtx<'_>) -> tir_adt::NodeId {
         let lhs = self.lhs.lower_with_ctx(ctx);
         let rhs = self.rhs.lower_with_ctx(ctx);
 
@@ -1693,15 +1598,7 @@ impl Binary {
 }
 
 impl Unary {
-    fn as_sema_expr<
-        G: tir_graph::MutDag<
-                Node = tir_symbolic::lang::SymKind,
-                Leaf = tir_symbolic::lang::SymPayload<tir_symbolic::sem::ValueId>,
-            >,
-    >(
-        &self,
-        ctx: &mut SemaExprLoweringCtx<'_, G>,
-    ) -> tir_graph::NodeId {
+    fn as_sema_expr(&self, ctx: &mut SemaExprLoweringCtx<'_>) -> tir_adt::NodeId {
         use tir_symbolic::lang::SymKind as K;
 
         match self.op {
@@ -1733,15 +1630,7 @@ impl Unary {
 }
 
 impl If {
-    fn as_sema_expr<
-        G: tir_graph::MutDag<
-                Node = tir_symbolic::lang::SymKind,
-                Leaf = tir_symbolic::lang::SymPayload<tir_symbolic::sem::ValueId>,
-            >,
-    >(
-        &self,
-        ctx: &mut SemaExprLoweringCtx<'_, G>,
-    ) -> tir_graph::NodeId {
+    fn as_sema_expr(&self, ctx: &mut SemaExprLoweringCtx<'_>) -> tir_adt::NodeId {
         let cond = self.cond.lower_with_ctx(ctx);
         let then_ = self.then.lower_with_ctx(ctx);
         let else_ = if let Some(else_expr) = &self.else_ {
@@ -1755,15 +1644,7 @@ impl If {
 }
 
 impl Block {
-    fn as_sema_expr<
-        G: tir_graph::MutDag<
-                Node = tir_symbolic::lang::SymKind,
-                Leaf = tir_symbolic::lang::SymPayload<tir_symbolic::sem::ValueId>,
-            >,
-    >(
-        &self,
-        ctx: &mut SemaExprLoweringCtx<'_, G>,
-    ) -> tir_graph::NodeId {
+    fn as_sema_expr(&self, ctx: &mut SemaExprLoweringCtx<'_>) -> tir_adt::NodeId {
         if self.stmts.is_empty() {
             ctx.add_bool_const(false)
         } else {
@@ -1776,15 +1657,7 @@ impl Block {
 }
 
 impl Slice {
-    fn as_sema_expr<
-        G: tir_graph::MutDag<
-                Node = tir_symbolic::lang::SymKind,
-                Leaf = tir_symbolic::lang::SymPayload<tir_symbolic::sem::ValueId>,
-            >,
-    >(
-        &self,
-        ctx: &mut SemaExprLoweringCtx<'_, G>,
-    ) -> tir_graph::NodeId {
+    fn as_sema_expr(&self, ctx: &mut SemaExprLoweringCtx<'_>) -> tir_adt::NodeId {
         let input = self.base.lower_with_ctx(ctx);
         let high = Lit::Int(LitInt::new(self.hi.to_string(), self.span)).as_sema_expr(ctx);
         let low = Lit::Int(LitInt::new(self.lo.to_string(), self.span)).as_sema_expr(ctx);
@@ -1793,15 +1666,7 @@ impl Slice {
 }
 
 impl Cast {
-    fn as_sema_expr<
-        G: tir_graph::MutDag<
-                Node = tir_symbolic::lang::SymKind,
-                Leaf = tir_symbolic::lang::SymPayload<tir_symbolic::sem::ValueId>,
-            >,
-    >(
-        &self,
-        ctx: &mut SemaExprLoweringCtx<'_, G>,
-    ) -> tir_graph::NodeId {
+    fn as_sema_expr(&self, ctx: &mut SemaExprLoweringCtx<'_>) -> tir_adt::NodeId {
         let input = self.x.lower_with_ctx(ctx);
         // A literal width folds to the constant `Extract` wants, so `x as
         // bits<8>` and `extract(x, 7, 0)` lower to the same term. A width over
@@ -1826,15 +1691,7 @@ impl Cast {
 }
 
 impl IndexAccess {
-    fn as_sema_expr<
-        G: tir_graph::MutDag<
-                Node = tir_symbolic::lang::SymKind,
-                Leaf = tir_symbolic::lang::SymPayload<tir_symbolic::sem::ValueId>,
-            >,
-    >(
-        &self,
-        ctx: &mut SemaExprLoweringCtx<'_, G>,
-    ) -> tir_graph::NodeId {
+    fn as_sema_expr(&self, ctx: &mut SemaExprLoweringCtx<'_>) -> tir_adt::NodeId {
         let input = self.base.lower_with_ctx(ctx);
         let idx = Lit::Int(LitInt::new(self.index.to_string(), self.span)).as_sema_expr(ctx);
         ctx.build_extract(input, idx, idx)
@@ -1890,17 +1747,11 @@ fn const_eval_u64(expr: &Expr) -> Option<u64> {
 /// code. `base_meta` is the load's metadata arg (`None` for store, whose bit 0
 /// is always 0); `ordering` is the optional trailing ordering arg. A missing
 /// ordering reproduces the pre-atomics IR exactly (relaxed = 0).
-fn pack_ordering_meta<G>(
-    ctx: &mut SemaExprLoweringCtx<'_, G>,
+fn pack_ordering_meta(
+    ctx: &mut SemaExprLoweringCtx<'_>,
     base_meta: Option<&Expr>,
     ordering: Option<&Expr>,
-) -> tir_graph::NodeId
-where
-    G: tir_graph::MutDag<
-            Node = tir_symbolic::lang::SymKind,
-            Leaf = tir_symbolic::lang::SymPayload<tir_symbolic::sem::ValueId>,
-        >,
-{
+) -> tir_adt::NodeId {
     let Some(ordering) = ordering else {
         return match base_meta {
             Some(m) => m.lower_with_ctx(ctx),
@@ -1931,15 +1782,7 @@ where
 }
 
 impl Call {
-    fn as_sema_expr<
-        G: tir_graph::MutDag<
-                Node = tir_symbolic::lang::SymKind,
-                Leaf = tir_symbolic::lang::SymPayload<tir_symbolic::sem::ValueId>,
-            >,
-    >(
-        &self,
-        ctx: &mut SemaExprLoweringCtx<'_, G>,
-    ) -> tir_graph::NodeId {
+    fn as_sema_expr(&self, ctx: &mut SemaExprLoweringCtx<'_>) -> tir_adt::NodeId {
         let Expr::BuiltinFunction(builtin) = &*self.callee else {
             panic!("only builtin functions are supported");
         };
@@ -2094,16 +1937,11 @@ impl Call {
         }
     }
 
-    fn lower_memory_builtin<
-        G: tir_graph::MutDag<
-                Node = tir_symbolic::lang::SymKind,
-                Leaf = tir_symbolic::lang::SymPayload<tir_symbolic::sem::ValueId>,
-            >,
-    >(
+    fn lower_memory_builtin(
         &self,
         builtin: &BuiltinFunction,
-        ctx: &mut SemaExprLoweringCtx<'_, G>,
-    ) -> tir_graph::NodeId {
+        ctx: &mut SemaExprLoweringCtx<'_>,
+    ) -> tir_adt::NodeId {
         match builtin {
             BuiltinFunction::Load => {
                 assert!(
@@ -2200,16 +2038,11 @@ impl Call {
         }
     }
 
-    fn lower_float_builtin<
-        G: tir_graph::MutDag<
-                Node = tir_symbolic::lang::SymKind,
-                Leaf = tir_symbolic::lang::SymPayload<tir_symbolic::sem::ValueId>,
-            >,
-    >(
+    fn lower_float_builtin(
         &self,
         builtin: &BuiltinFunction,
-        ctx: &mut SemaExprLoweringCtx<'_, G>,
-    ) -> tir_graph::NodeId {
+        ctx: &mut SemaExprLoweringCtx<'_>,
+    ) -> tir_adt::NodeId {
         use tir_symbolic::lang::SymKind;
         let rounded = match builtin {
             BuiltinFunction::FAdd => Some((2, SymKind::FAddRound)),
@@ -2248,7 +2081,7 @@ impl Call {
             BuiltinFunction::FPFlags => {
                 let outcome = self.arguments[0].lower_with_ctx(ctx);
                 if !matches!(
-                    ctx.graph.get_kind(outcome),
+                    ctx.graph.get_node(outcome),
                     SymKind::FAddRound
                         | SymKind::FSubRound
                         | SymKind::FMulRound

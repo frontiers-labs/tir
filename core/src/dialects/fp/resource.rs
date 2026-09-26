@@ -1,8 +1,8 @@
 use tir_adt::APInt;
 
 use super::{ArithmeticSemantics, Exceptions, IntegerConversionSemantics, NaNPolicy, Rounding};
+use crate::NodeId;
 use crate::builtin::{IntegerType, StateResource};
-use crate::graph::{MetaMutDag, MutDag, NodeId};
 use crate::sem::{SemGraph, SymKind, SymPayload};
 use crate::{
     Error, OpHandle, ResourceAccess, ResourceEffect, ResourceField, ResourceSemantics, ValueId,
@@ -31,25 +31,17 @@ pub(super) fn effects_for(
 pub(super) fn value(graph: &mut SemGraph, op: &OpHandle, value: ValueId) -> NodeId {
     let node = graph.add_node(SymKind::Symbol);
     graph.set_leaf_data(node, SymPayload::Value(value));
-    graph.set_actual_type(node, op.context.get_value(value).ty());
+    graph.annotation_mut(node).actual_type = Some(op.context.get_value(value).ty());
     node
 }
 
-pub(super) fn constant(
-    graph: &mut impl MutDag<Node = SymKind, Leaf = SymPayload<ValueId>>,
-    width: u32,
-    value: u64,
-) -> NodeId {
+pub(super) fn constant(graph: &mut SemGraph, width: u32, value: u64) -> NodeId {
     let node = graph.add_node(SymKind::Constant);
     graph.set_leaf_data(node, SymPayload::Int(APInt::new(width, value)));
     node
 }
 
-pub(super) fn operation(
-    graph: &mut impl MutDag<Node = SymKind, Leaf = SymPayload<ValueId>>,
-    kind: SymKind,
-    children: &[NodeId],
-) -> NodeId {
+pub(super) fn operation(graph: &mut SemGraph, kind: SymKind, children: &[NodeId]) -> NodeId {
     let node = graph.add_node(kind);
     for &child in children {
         graph.add_edge(node, child);
@@ -166,7 +158,7 @@ pub(super) fn state_read(
     ty: crate::TypeId,
 ) -> NodeId {
     let read = operation(graph, SymKind::StateRead, &[state, resource, field]);
-    graph.set_actual_type(read, ty);
+    graph.annotation_mut(read).actual_type = Some(ty);
     read
 }
 
@@ -185,7 +177,7 @@ pub(super) fn state_assign(
         SymKind::StateAssign,
         &[state, resource, field, access, value],
     );
-    graph.set_actual_type(assigned, ty);
+    graph.annotation_mut(assigned).actual_type = Some(ty);
     assigned
 }
 
@@ -242,7 +234,8 @@ fn arithmetic_value(
             width.bit_width(),
             super::arithmetic::canonical_nan(width),
         );
-        graph.set_actual_type(bits, IntegerType::new(&op.context, width.bit_width()));
+        graph.annotation_mut(bits).actual_type =
+            Some(IntegerType::new(&op.context, width.bit_width()));
         bits
     });
     let (result, evaluation) = super::arithmetic::build_arithmetic_value(
@@ -254,13 +247,13 @@ fn arithmetic_value(
         semantics.nan,
         canonical_bits,
     );
-    graph.set_actual_type(evaluation, result_ty);
-    graph.set_actual_type(result, result_ty);
+    graph.annotation_mut(evaluation).actual_type = Some(result_ty);
+    graph.annotation_mut(result).actual_type = Some(result_ty);
     (result, evaluation, rounding)
 }
 
 pub(super) fn canonicalize_nan(
-    graph: &mut impl MutDag<Node = SymKind, Leaf = SymPayload<ValueId>>,
+    graph: &mut SemGraph,
     value: NodeId,
     canonical_bits: NodeId,
 ) -> NodeId {
@@ -316,7 +309,7 @@ pub(super) fn flagged_result(
     let flags_ty = IntegerType::new(&op.context, 5);
     let old = state_read(&mut graph, environment, fp_resource, flags_field, flags_ty);
     let flags = operation(&mut graph, SymKind::Or, &[old, raised]);
-    graph.set_actual_type(flags, flags_ty);
+    graph.annotation_mut(flags).actual_type = Some(flags_ty);
     let environment = state_assign(
         &mut graph,
         environment,
@@ -332,7 +325,7 @@ pub(super) fn flagged_result(
         let traps_field = field(&mut graph, ResourceField::FpTraps);
         let traps = state_read(&mut graph, environment, fp_resource, traps_field, flags_ty);
         let trap = operation(&mut graph, SymKind::StateTrap, &[memory, raised, traps]);
-        graph.set_actual_type(trap, op.context.get_value(memory_value).ty());
+        graph.annotation_mut(trap).actual_type = Some(op.context.get_value(memory_value).ty());
         trap
     });
     let mut semantics = transition_semantics(op, Some(result), environment, memory, graph);
@@ -351,7 +344,7 @@ fn finish_rounded(
 ) -> ResourceSemantics {
     if matches!(exceptions, Exceptions::Flags | Exceptions::FlagsAndTraps) {
         let raised = operation(&mut graph, SymKind::FPFlags, &[outcome]);
-        graph.set_actual_type(raised, IntegerType::new(&op.context, 5));
+        graph.annotation_mut(raised).actual_type = Some(IntegerType::new(&op.context, 5));
         return flagged_result(
             op,
             graph,
@@ -464,7 +457,7 @@ pub(super) fn integer_conversion(
     } else {
         outcome
     };
-    graph.set_actual_type(result, result_ty);
+    graph.annotation_mut(result).actual_type = Some(result_ty);
     finish_rounded(
         op,
         graph,

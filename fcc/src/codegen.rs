@@ -14,10 +14,10 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
+use tir::NodeId;
 use tir::attributes::AttributeValue;
 use tir::builtin::{FloatType, FnType, IntegerType, ModuleOp, TupleType, UnitType, ops as b};
 use tir::func::ops as func_ops;
-use tir::graph::{Dag, NodeId};
 use tir::ptr::PtrType;
 use tir::{Context, Operation, TypeId, ValueId};
 

@@ -5,9 +5,9 @@ use crate::ast::{AstLeaf, RecordKind};
 use crate::cir::VarArgsType;
 use crate::diagnostics::Diagnostic;
 use crate::sema::{EntityId, QualType, TargetProfile, TypeKind, TypedAst};
+use tir::NodeId;
 use tir::backend::abi::{Overflow, ValueKind, type_kind};
 use tir::builtin::{FloatType, IntegerType, TupleType, UnitType};
-use tir::graph::{Dag, NodeId};
 use tir::ptr::PtrType;
 use tir::{Context, TypeId};
 

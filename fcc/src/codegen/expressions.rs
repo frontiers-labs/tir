@@ -9,11 +9,11 @@ use crate::cir;
 use crate::diagnostics::Diagnostic;
 use crate::lexer::decode_character_constant;
 use crate::sema::{TypeKind, ValueCategory};
+use tir::NodeId;
 use tir::ValueId;
 use tir::attributes::Predicate;
 use tir::builtin::{IntegerType, ops as b};
 use tir::cfg::ops as cb;
-use tir::graph::{Dag, NodeId};
 use tir::ptr::{PtrType, ops as p};
 
 impl FnCodegen<'_> {

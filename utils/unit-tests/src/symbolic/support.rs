@@ -1,7 +1,6 @@
 //! Shared helpers for the tir-symbolic unit tests.
 
-use tir_adt::APInt;
-use tir_graph::{GenericDag, MutDag, NodeId};
+use tir_adt::{APInt, Dag, NodeId};
 use tir_symbolic::lang::{SymKind, SymPayload};
 
 /// Deterministic PRNG so randomized tests are reproducible without a dependency.
@@ -21,7 +20,7 @@ impl Rng {
     }
 }
 
-pub type Graph = GenericDag<SymKind, SymPayload<()>>;
+pub type Graph = Dag<SymKind, SymPayload<()>>;
 
 pub fn sym(g: &mut Graph, id: u32) -> NodeId {
     let node = g.add_node(SymKind::Symbol);

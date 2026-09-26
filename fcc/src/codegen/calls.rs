@@ -8,11 +8,11 @@ use crate::ast::{AstKind, AstLeaf};
 use crate::cir;
 use crate::diagnostics::Diagnostic;
 use crate::sema::{QualType, TypeKind};
+use tir::NodeId;
 use tir::ValueId;
 use tir::backend::abi::{ValueKind, type_kind};
 use tir::builtin::{FnType, IntegerType, TupleType, ops as b};
 use tir::func::ops as func_ops;
-use tir::graph::{Dag, NodeId};
 use tir::ptr::{PtrType, ops as p};
 
 impl FnCodegen<'_> {

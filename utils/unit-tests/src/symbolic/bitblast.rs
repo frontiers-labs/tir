@@ -355,7 +355,6 @@ fn random_formulas_match_reference() {
 // ----- integer-to-float conversion circuits -----
 
 mod fp {
-    use tir_graph::Dag;
     use tir_symbolic::bitblast::{blast, SolveOutcome};
     use tir_symbolic::lang::{infer_widths, SymKind, SymPayload};
 

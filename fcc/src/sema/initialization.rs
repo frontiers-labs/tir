@@ -9,7 +9,7 @@ use crate::diagnostics::{
     CompleteObjectTypeRequired, IncompatibleConversion, InvalidOperands, InvalidTypeQualifier,
     Redefinition,
 };
-use tir::graph::{Dag, MutDag, NodeId};
+use tir::NodeId;
 
 impl Analyzer<'_> {
     pub(super) fn declaration(&mut self, node: NodeId) {

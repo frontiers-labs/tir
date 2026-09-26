@@ -2,20 +2,20 @@
 //! ranks, declarators, literal spelling, expressions, and control-flow syntax;
 //! codegen still lowers only its original subset.
 //!
-//! The tree is stored in core's [`PostOrderDag`], the same cache-friendly,
-//! post-order layout the semantic-expression graph uses: node *kinds* live in a
-//! flat vector while the variable-sized payload (names, literals, types) sits in
-//! a sparse side table keyed by node id. Children always precede their parent,
-//! so the root is the last node.
+//! The tree is stored in core's [`Dag`], the same layout the
+//! semantic-expression graph uses: nodes live in a flat vector while the
+//! variable-sized payload (names, literals, types) sits in a dense side vector
+//! only nodes carrying one occupy. Children always precede their parent, so the
+//! root is the last node.
 
-use tir::graph::{Dag, NodeId, PostOrderDag};
+use tir::{Dag, NodeId};
 
 use crate::diagnostics::Span;
 use crate::lexer::{FloatingLiteral, IntegerLiteral};
 
 /// The AST: node payloads ([`AstNode`], kind + source span) live in the DAG's
-/// dense vector, while the variable-sized leaf payload sits in its side table.
-pub type Ast = PostOrderDag<AstNode, AstLeaf, crate::sema::NodeSemantics>;
+/// node vector, while the variable-sized leaf payload sits in its side vector.
+pub type Ast = Dag<AstNode, AstLeaf, crate::sema::NodeSemantics>;
 
 /// A node's dense payload: its structural [`AstKind`] and the source [`Span`]
 /// where the construct begins, used to point diagnostics at the offending code.

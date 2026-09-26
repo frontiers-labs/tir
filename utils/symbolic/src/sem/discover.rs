@@ -11,8 +11,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use tir_adt::APInt;
-use tir_graph::{Dag, GenericDag, MutDag, NodeId};
+use tir_adt::{APInt, Dag, NodeId};
 
 use super::{SemGraph, ValueId};
 use crate::bitblast::{SolveOutcome, blast, blast_with_types};
@@ -103,7 +102,7 @@ pub enum UnsupportedReason {
     Timeout,
 }
 
-type OracleGraph = GenericDag<SymKind, SymPayload<ValueId>>;
+type OracleGraph = Dag<SymKind, SymPayload<ValueId>>;
 
 impl<A> EquivalenceOracle<A> for SmtOracle {
     fn equivalent(&self, lhs: &SemGraph<A>, rhs: &SemGraph<A>, symbol_widths: &[u32]) -> bool {
@@ -253,7 +252,7 @@ fn structurally_equal<A>(lhs: &SemGraph<A>, rhs: &SemGraph<A>) -> bool {
     lhs.len() == rhs.len()
         && (0..lhs.len()).all(|index| {
             let node = NodeId::from_index(index);
-            lhs.get_kind(node) == rhs.get_kind(node)
+            lhs.get_node(node) == rhs.get_node(node)
                 && lhs.get_leaf_data(node) == rhs.get_leaf_data(node)
                 && lhs.children(node).eq(rhs.children(node))
         })
@@ -343,7 +342,7 @@ fn concretely_evaluable<A>(graph: &SemGraph<A>, symbol_types: &[SemType]) -> boo
     };
     (0..graph.len()).all(|index| {
         let node = NodeId::from_index(index);
-        let kind = graph.get_kind(node);
+        let kind = graph.get_node(node);
         if !kind.accepts_arity(graph.children(node).count()) {
             return false;
         }
@@ -533,7 +532,7 @@ fn copy_reachable<A>(
             .children(node)
             .map(|c| copy_reachable(src, c, dst, symbols, memo))
             .collect();
-        let n = dst.add_node(*src.get_kind(node));
+        let n = dst.add_node(*src.get_node(node));
         if let Some(data) = src.get_leaf_data(node) {
             dst.set_leaf_data(n, data.clone());
         }

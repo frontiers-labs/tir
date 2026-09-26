@@ -47,7 +47,7 @@ use crate::builtin::{FloatType, IntegerType};
 use crate::sem::{
     ProofOutcome, SemGraph, SmtOracle, SymKind, SymPayload, Value, con, execute, op, sym,
 };
-use crate::{Context, TypeId, graph::NodeId};
+use crate::{Context, NodeId, TypeId};
 
 use super::egraph::{is_comparison, type_width};
 use super::node::{SemNode, field, template_node};

@@ -6,8 +6,7 @@
 //! [`NodeMeta`], type-resolving replay, the `AsSemExpr` trait and constant
 //! folding via [`Operation::semantic_expr`].
 
-use crate::graph::{Dag, MutDag, NodeId, NodeMeta};
-use crate::{Operation, ValueId};
+use crate::{NodeId, OpId, Operation, TypeId};
 
 pub use tir_symbolic::lang::{
     AtomicRmwOp, BuildError, Continuation, FloatFormat, MemOrdering, Memory, SCALAR_OPS, ScalarOp,
@@ -175,6 +174,13 @@ pub use egraph::SemEGraph;
 pub use node::{IrOp, Kind, Prov, SemNode, SemPayload, template_node};
 pub use rewrites::{SaturationLimits, Theory};
 
+/// Provenance a [`SemGraph`] node may carry; kept out of the node label/leaf payload so it never affects e-node identity.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct NodeMeta {
+    pub original_op: Option<OpId>,
+    pub actual_type: Option<TypeId>,
+}
+
 /// The post-order graph core builds semantic expressions into: the shared
 /// [`tir_symbolic::sem::SemGraph`] annotated with [`NodeMeta`], so a node can
 /// carry its originating op and inferred type.
@@ -182,9 +188,17 @@ pub type SemGraph = tir_symbolic::sem::SemGraph<NodeMeta>;
 
 /// [`ExtendSemBytes`] for graphs that carry [`NodeMeta`], resolving
 /// [`SemOp::Typed`] widths against the context's interned integer types.
-pub trait ExtendSemBytesTyped:
-    MutDag<Node = SymKind, Leaf = SymPayload<ValueId>, Annotation = NodeMeta> + Sized
-{
+pub trait ExtendSemBytesTyped {
+    fn extend_sem_bytes_typed(
+        &mut self,
+        context: &crate::Context,
+        kinds: &[SymKind],
+        blob: &[u8],
+        offset: u32,
+    ) -> NodeId;
+}
+
+impl ExtendSemBytesTyped for SemGraph {
     fn extend_sem_bytes_typed(
         &mut self,
         context: &crate::Context,
@@ -192,16 +206,11 @@ pub trait ExtendSemBytesTyped:
         blob: &[u8],
         offset: u32,
     ) -> NodeId {
-        use crate::graph::MetaMutDag as _;
         self.extend_sem_bytes_with(kinds, blob, offset, |g, node, width| {
-            g.set_actual_type(node, crate::builtin::IntegerType::new(context, width));
+            g.annotation_mut(node).actual_type =
+                Some(crate::builtin::IntegerType::new(context, width));
         })
     }
-}
-
-impl<G: MutDag<Node = SymKind, Leaf = SymPayload<ValueId>, Annotation = NodeMeta>>
-    ExtendSemBytesTyped for G
-{
 }
 
 /// The definedness condition of a partial integer operation, materialized as new
@@ -254,14 +263,10 @@ fn ones_mask(width: u32) -> u64 {
     }
 }
 
-/// Build an operation's semantic expression into any graph backend. Unlike
-/// [`Operation::semantic_expr`] (nailed to [`SemGraph`] so it stays `dyn`-callable),
-/// this is generic, so isel and TMDL can lower into their own graph stores.
+/// Build an operation's semantic expression into `g`, returning its root. Unlike
+/// [`Operation::semantic_expr`], the expression must build.
 pub trait AsSemExpr: Operation {
-    fn convert(
-        &self,
-        g: &mut impl MutDag<Node = SymKind, Leaf = SymPayload<ValueId>, Annotation = NodeMeta>,
-    ) -> NodeId;
+    fn convert(&self, g: &mut SemGraph) -> NodeId;
 }
 
 /// Fold an operation over constant operand `values` by evaluating its declared

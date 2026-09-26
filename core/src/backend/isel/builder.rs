@@ -3,10 +3,10 @@
 use std::collections::{HashMap, HashSet};
 
 use tir::{
-    Context, Gamma, MemoryRead, MemoryWrite, OpHandle, OpId, RegionId, Theta, TypeId, ValueId,
+    Context, Gamma, MemoryRead, MemoryWrite, NodeId, OpHandle, OpId, RegionId, Theta, TypeId,
+    ValueId,
     attributes::AttributeValue,
     builtin::{FloatType, IntegerType},
-    graph::{Dag, MetaDag, NodeId},
     sem::{
         SemGraph, SemNode, SemPayload, SemType, SymKind, SymPayload,
         egraph::{SemEGraph, ir_type, minimal_unsigned_apint, semantic_type, type_width},
@@ -680,7 +680,8 @@ impl<'a> SemDagBuilder<'a> {
     fn infer_local_types(&self, graph: &SemGraph, operands: &[Id]) -> Option<Vec<SemType>> {
         infer_types(graph, |node| {
             graph
-                .get_actual_type(node)
+                .get_annotation(node)
+                .and_then(|m| m.actual_type)
                 .and_then(|ty| semantic_type(self.context, ty))
                 .or_else(|| match graph.get_leaf_data(node) {
                     Some(SymPayload::SymbolId(id)) => operands
@@ -709,7 +710,8 @@ impl<'a> SemDagBuilder<'a> {
         types: Option<&[SemType]>,
     ) -> Id {
         let node_ty = graph
-            .get_actual_type(node)
+            .get_annotation(node)
+            .and_then(|m| m.actual_type)
             .map(|ty| {
                 semantic_type(self.context, ty)
                     .and_then(|ty| ir_type(self.context, &ty))

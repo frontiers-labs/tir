@@ -1,8 +1,7 @@
 use std::collections::HashMap;
 
 use tir::{
-    Context, HasResourceSemantics, OpId,
-    graph::{Dag, MetaDag, MetaMutDag, MutDag, NodeId, subgraphs_equal},
+    Context, HasResourceSemantics, NodeId, OpId,
     sem::{SemGraph, SymKind, SymPayload, canonicalize_for_selection},
 };
 
@@ -48,7 +47,8 @@ pub(super) fn accepts(
         for node in normalized.preorder(root) {
             if let Some(SymPayload::SymbolId(class)) = normalized.get_leaf_data(node)
                 && let Some(declared) = normalized
-                    .get_actual_type(node)
+                    .get_annotation(node)
+                    .and_then(|m| m.actual_type)
                     .and_then(|ty| tir::sem::egraph::semantic_type(context, ty))
                 && let Some(bound) = tir::sem::egraph::class_semantic_type(
                     context,
@@ -63,7 +63,8 @@ pub(super) fn accepts(
         }
         let types = tir::sem::infer_types(&normalized, |node| {
             normalized
-                .get_actual_type(node)
+                .get_annotation(node)
+                .and_then(|m| m.actual_type)
                 .and_then(|ty| tir::sem::egraph::semantic_type(context, ty))
                 .or_else(|| match normalized.get_leaf_data(node) {
                     Some(SymPayload::SymbolId(class)) => tir::sem::egraph::class_semantic_type(
@@ -97,7 +98,7 @@ pub(super) fn accepts(
     else {
         return false;
     };
-    subgraphs_equal(&source, source_root, &target, target_root)
+    source.subgraph_eq(source_root, &target, target_root)
 }
 
 fn normalize_node(
@@ -133,8 +134,8 @@ fn normalize_node(
             },
         );
     }
-    if let Some(ty) = source.get_actual_type(node) {
-        target.set_actual_type(copied, ty);
+    if let Some(ty) = source.get_annotation(node).and_then(|m| m.actual_type) {
+        target.annotation_mut(copied).actual_type = Some(ty);
     }
     for child in children {
         target.add_edge(copied, child);

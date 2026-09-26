@@ -14,7 +14,7 @@ use crate::diagnostics::{
     ArgumentMismatch, CalledObjectNotFunction, CompleteObjectTypeRequired, IncompatibleConversion,
     InvalidOperands, InvalidTypeSpecifiers, ModifiableLvalueRequired, Span, UndeclaredIdentifier,
 };
-use tir::graph::{Dag, MutDag, NodeId};
+use tir::NodeId;
 
 impl Analyzer<'_> {
     pub(super) fn validate_parsed_type(&mut self, span: Span, parsed: &CType) {

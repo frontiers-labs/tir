@@ -12,8 +12,7 @@
 
 use std::collections::HashMap;
 
-use tir::graph::{Dag, MutDag, NodeId, PostOrderDag};
-use tir::{Context, OpId, OperationRef, PassError, RegionId};
+use tir::{Context, Dag, NodeId, OpId, OperationRef, PassError, RegionId};
 
 pub(crate) struct Scopes {
     /// Every region of the function, each ahead of the regions nested in it.
@@ -26,7 +25,7 @@ pub(crate) struct Scopes {
     pub(crate) op_region: HashMap<OpId, RegionId>,
     /// The region enclosing each nested region, and the operation carrying it.
     parent: HashMap<RegionId, (RegionId, OpId)>,
-    dependencies: PostOrderDag<OpId, ()>,
+    dependencies: Dag<OpId, ()>,
     dependency_nodes: HashMap<OpId, NodeId>,
 }
 
@@ -38,7 +37,7 @@ impl Scopes {
             position: HashMap::new(),
             op_region: HashMap::new(),
             parent: HashMap::new(),
-            dependencies: PostOrderDag::new(),
+            dependencies: Dag::new(),
             dependency_nodes: HashMap::new(),
         };
         let mut pending: Vec<RegionId> = op.op().regions().iter().rev().copied().collect();
@@ -73,12 +72,13 @@ impl Scopes {
 
     /// Whether an operand's producer needs an operation a tile would absorb.
     pub(crate) fn depends_on(&self, op: OpId, dependency: OpId) -> bool {
-        let Some(&node) = self.dependency_nodes.get(&op) else {
+        let (Some(&node), Some(&dependency_node)) = (
+            self.dependency_nodes.get(&op),
+            self.dependency_nodes.get(&dependency),
+        ) else {
             return false;
         };
-        self.dependencies
-            .postorder(node)
-            .any(|node| *self.dependencies.get_node(node) == dependency)
+        self.dependencies.reaches(node, dependency_node)
     }
 
     /// Whether `outer` is `inner` or a region enclosing it.
