@@ -9,7 +9,7 @@ use tir_relational::Rule;
 
 use super::SymKind;
 use super::axioms::pdl::axioms_from_pdl;
-use super::axioms::{Axiom, Folding, Interpretation};
+use super::axioms::{Axiom, Folding, Interpretation, Materializable};
 use super::egraph::SemEGraph;
 use super::node::SemNode;
 use crate::Context;
@@ -23,6 +23,8 @@ pub struct Theory {
     axioms: Vec<Axiom>,
     /// The pure ops the heads fold over constants; an extern id names one.
     folds: Vec<SymKind>,
+    /// The target's answer to a `materializable(v)` guard.
+    materializable: Option<Box<Materializable>>,
 }
 
 impl Theory {
@@ -127,13 +129,28 @@ impl Theory {
         self
     }
 
+    /// Answer `materializable(v)` guards with the target's constant
+    /// materializers.
+    pub fn with_materializable(
+        mut self,
+        materializable: impl Fn(&tir_adt::APInt) -> bool + Send + Sync + 'static,
+    ) -> Self {
+        self.materializable = Some(Box::new(materializable));
+        self
+    }
+
     /// Whether any axiom decomposes a wide constant in place.
     pub fn materializes_constants(&self) -> bool {
         self.axioms.iter().any(Axiom::materializes_constants)
     }
 
     fn interpretation<'a>(&'a self, context: &'a Context) -> Interpretation<'a> {
-        Interpretation::new(context, &self.axioms, &self.folds)
+        Interpretation::new(
+            context,
+            &self.axioms,
+            &self.folds,
+            self.materializable.as_deref(),
+        )
     }
 }
 

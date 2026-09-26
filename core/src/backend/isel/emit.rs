@@ -121,12 +121,18 @@ pub(crate) fn resolve_match(
             ints.push((*symbol, value));
         }
         // A low-extract capture reads its chased source's register, which may
-        // be defined by a tile scheduled in this region.
+        // be defined by a tile scheduled in this region, unless the view was
+        // tiled in its own right.
         let chased = chase_low_extract(&fs.egraph, class);
-        if let Some(value) = destinations.get(&chased).copied().or_else(|| {
-            fs.resolve_binding(context, class, region, consumer, false)
-                .value
-        }) {
+        if let Some(value) = destinations
+            .get(&class)
+            .or_else(|| destinations.get(&chased))
+            .copied()
+            .or_else(|| {
+                fs.resolve_binding(context, class, region, consumer, false)
+                    .value
+            })
+        {
             values.push((*symbol, value));
         }
     }

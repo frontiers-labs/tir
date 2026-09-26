@@ -67,6 +67,17 @@ rule zext-shifts: #zext(x: int<N>, W) : int<W>
 rule zext-zero: #zext(0, W) : int<W>
   => const<W>(0);
 
+// Widening a value the narrow-operation rules below already extended to 32
+// bits extends the original once.
+rule zext-zext32: #zext(#zext(x: int<N>, 32), W) : int<W>
+  => #zext(#extract(x, N - 1, 0), W) where N < 32, 32 < W;
+
+rule sext-sext32: #sext(#sext(x: int<N>, 32), W) : int<W>
+  => #sext(#extract(x, N - 1, 0), W) where N < 32, 32 < W;
+
+rule sext-zext32: #sext(#zext(x: int<N>, 32), W) : int<W>
+  => #zext(#extract(x, N - 1, 0), W) where N < 32, 32 < W;
+
 rule if-same: #if(c: int<1>, x: int<W>, x) : int<W>
   => x;
 
@@ -229,6 +240,105 @@ rule ule-via-cmp: #ule(a: int<W>, b: int<W>) : int<1>
 rule sub-via-add-neg: #sub(a: int<W>, c: const<W>) : int<W>
   => #add(a, #neg(c));
 
+// Multiplication by a small power of two is a left shift. The shift count has
+// the value's width so the equality holds at every width the rule fires at.
+rule mul2-to-shl: #mul(x: int<W>, 2) : int<W>
+  => #shl(x, const<W>(1));
+
+rule mul4-to-shl: #mul(x: int<W>, 4) : int<W>
+  => #shl(x, const<W>(2));
+
+rule mul8-to-shl: #mul(x: int<W>, 8) : int<W>
+  => #shl(x, const<W>(3));
+
+// Narrow operations whose low result bits depend on high operand bits. A target
+// may compare, shift right, or divide only at its register widths, so each such
+// operation also takes the form computed on extended operands. Comparisons
+// widen to 32 and 64 bits. Right shifts widen to 32 bits, where every target
+// shifts. Division widens 8-bit operands to 32 bits only: the axiom proofs
+// cannot bit-blast a division of wider inputs. Addition, multiplication, and bitwise operations need no rule: their
+// low bits read only low operand bits. The e-graph keeps every width, and
+// selection covers the form the target's instructions implement.
+rule eq-widen32: #eq(a: int<N>, b: int<N>) : int<1>
+  => #eq(#zext(a, 32), #zext(b, 32)) where N < 32;
+rule eq-widen64: #eq(a: int<N>, b: int<N>) : int<1>
+  => #eq(#zext(a, 64), #zext(b, 64)) where N < 64;
+rule ne-widen32: #ne(a: int<N>, b: int<N>) : int<1>
+  => #ne(#zext(a, 32), #zext(b, 32)) where N < 32;
+rule ne-widen64: #ne(a: int<N>, b: int<N>) : int<1>
+  => #ne(#zext(a, 64), #zext(b, 64)) where N < 64;
+rule lt-widen32: #lt(a: int<N>, b: int<N>) : int<1>
+  => #lt(#sext(a, 32), #sext(b, 32)) where N < 32;
+rule lt-widen64: #lt(a: int<N>, b: int<N>) : int<1>
+  => #lt(#sext(a, 64), #sext(b, 64)) where N < 64;
+rule le-widen32: #le(a: int<N>, b: int<N>) : int<1>
+  => #le(#sext(a, 32), #sext(b, 32)) where N < 32;
+rule le-widen64: #le(a: int<N>, b: int<N>) : int<1>
+  => #le(#sext(a, 64), #sext(b, 64)) where N < 64;
+rule gt-widen32: #gt(a: int<N>, b: int<N>) : int<1>
+  => #gt(#sext(a, 32), #sext(b, 32)) where N < 32;
+rule gt-widen64: #gt(a: int<N>, b: int<N>) : int<1>
+  => #gt(#sext(a, 64), #sext(b, 64)) where N < 64;
+rule ge-widen32: #ge(a: int<N>, b: int<N>) : int<1>
+  => #ge(#sext(a, 32), #sext(b, 32)) where N < 32;
+rule ge-widen64: #ge(a: int<N>, b: int<N>) : int<1>
+  => #ge(#sext(a, 64), #sext(b, 64)) where N < 64;
+rule ult-widen32: #ult(a: int<N>, b: int<N>) : int<1>
+  => #ult(#zext(a, 32), #zext(b, 32)) where N < 32;
+rule ult-widen64: #ult(a: int<N>, b: int<N>) : int<1>
+  => #ult(#zext(a, 64), #zext(b, 64)) where N < 64;
+rule ule-widen32: #ule(a: int<N>, b: int<N>) : int<1>
+  => #ule(#zext(a, 32), #zext(b, 32)) where N < 32;
+rule ule-widen64: #ule(a: int<N>, b: int<N>) : int<1>
+  => #ule(#zext(a, 64), #zext(b, 64)) where N < 64;
+rule ugt-widen32: #ugt(a: int<N>, b: int<N>) : int<1>
+  => #ugt(#zext(a, 32), #zext(b, 32)) where N < 32;
+rule ugt-widen64: #ugt(a: int<N>, b: int<N>) : int<1>
+  => #ugt(#zext(a, 64), #zext(b, 64)) where N < 64;
+rule uge-widen32: #uge(a: int<N>, b: int<N>) : int<1>
+  => #uge(#zext(a, 32), #zext(b, 32)) where N < 32;
+rule uge-widen64: #uge(a: int<N>, b: int<N>) : int<1>
+  => #uge(#zext(a, 64), #zext(b, 64)) where N < 64;
+
+rule lshr-widen32: #lshr(a: int<N>, s: int<N>) : int<N>
+  => #extract(#lshr(#zext(a, 32), #zext(s, 32)), N - 1, 0) where N < 32;
+rule ashr-widen32: #ashr(a: int<N>, s: int<N>) : int<N>
+  => #extract(#ashr(#sext(a, 32), #zext(s, 32)), N - 1, 0) where N < 32;
+rule udiv-widen32: #udiv(a: int<N>, b: int<N>) : int<N>
+  => #extract(#udiv(#zext(a, 32), #zext(b, 32)), N - 1, 0) where N < 16;
+rule urem-widen32: #urem(a: int<N>, b: int<N>) : int<N>
+  => #extract(#urem(#zext(a, 32), #zext(b, 32)), N - 1, 0) where N < 16;
+rule div-widen32: #div(a: int<N>, b: int<N>) : int<N>
+  => #extract(#div(#sext(a, 32), #sext(b, 32)), N - 1, 0) where N < 16;
+rule srem-widen32: #srem(a: int<N>, b: int<N>) : int<N>
+  => #extract(#srem(#sext(a, 32), #sext(b, 32)), N - 1, 0) where N < 16;
+
+// An unsigned binary32 or binary64 conversion of a 32-bit integer equals the
+// signed conversion of its 64-bit zero extension, since that extension clears
+// the sign bit.
+rule uitofp32-via-sitofp: #uitofp(x: int<N>, 8, 23) : int<32>
+  => #sitofp(#zext(x, 64), const<4>(8), const<5>(23))
+  where N == 32;
+
+rule uitofp-via-sitofp: #uitofp(x: int<N>, 11, 52) : int<64>
+  => #sitofp(#zext(#extract(x, const<6>(31), const<1>(0)), 64), const<4>(11), const<6>(52))
+  where N == 32;
+
+rule fptoui32-via-fptosi: #fptoui(x: int<32>, 32) : int<32>
+  => #extract(#fptosi(x, const<7>(64)), const<6>(31), const<1>(0));
+
+rule fptoui-via-fptosi: #fptoui(x: int<64>, 32) : int<32>
+  => #extract(#fptosi(x, const<7>(64)), const<6>(31), const<1>(0));
+
+// A mask blend selects between two values. Its conditional form exposes
+// conditional moves and selects.
+rule select-mask-to-if:
+  #or(
+    #and(t: int<W>, #sext(c: int<1>, W)),
+    #and(f: int<W>, #xor(#sext(c, W), const<W>(ones(W))))
+  ) : int<W>
+  => #if(c, t, f);
+
 // Constant select arms share their mask; fold the differing bits first.
 rule constant-mask-blend:
   #or(#and(t: const<W>, m: int<W>),
@@ -249,3 +359,63 @@ rule low-byte-xor-ne:
   #ne(#and(#xor(a: int<W>, b: int<W>), const<W>(255)), const<W>(0)) : int<1>
   => #ne(#extract(a, const<3>(7), const<1>(0)), #extract(b, const<3>(7), const<1>(0)))
   where 8 < W;
+
+// Wide constants. Each rule decomposes a constant no single target instruction
+// materializes into operations over narrower constants. `keep` marks the
+// operations that survive as instructions; everything unmarked folds to a
+// constant, which the rules decompose again until the target materializes it.
+// Selection costs the alternatives, so a target uses the decomposition its
+// instructions cover.
+//
+// A signed 12-bit low part `lo = (v << (W - 12)) >> (W - 12)` splits off an
+// immediate addition, and `v - lo` is a multiple of 4096:
+//
+//   v == ((((v - lo) >> 12) << 12) + lo)
+//
+// The recovered high part `(v - lo) >> 12` is narrower by 12 bits, which bounds
+// the descent.
+rule wide-const-split: v: const<W>
+  => keep #add(
+       keep #shl(#ashr(#sub(v, #ashr(#shl(v, W - 12), W - 12)), 12), 12),
+       #ashr(#shl(v, W - 12), W - 12)
+     )
+  where !materializable(v);
+
+// A 16-bit halfword inserted at bit 16, 32, or 48 keeps the other bits and
+// replaces its own. Each partition covers the values whose highest nonzero
+// halfword it inserts; the kept tree is the halfword insertion itself.
+rule wide-const-u32: v: const<W>
+  => keep #or(
+       keep #and(
+         #and(v, #not(#mul(65535, 65536))),
+         keep #not(keep #mul(
+           keep #zext(const<16>(65535), W),
+           keep #zext(const<17>(65536), W)))
+       ),
+       keep #mul(#and(#lshr(v, 16), 65535), keep #zext(const<17>(65536), W))
+     )
+  where !materializable(v), ufits(v, 32);
+
+rule wide-const-u48: v: const<W>
+  => keep #or(
+       keep #and(
+         #and(v, #not(#mul(65535, 4294967296))),
+         keep #not(keep #mul(
+           keep #zext(const<16>(65535), W),
+           keep #zext(const<33>(4294967296), W)))
+       ),
+       keep #mul(#and(#lshr(v, 32), 65535), keep #zext(const<33>(4294967296), W))
+     )
+  where !materializable(v), !ufits(v, 32), ufits(v, 48);
+
+rule wide-const-u64: v: const<W>
+  => keep #or(
+       keep #and(
+         #and(v, #not(#mul(65535, 281474976710656))),
+         keep #not(keep #mul(
+           keep #zext(const<16>(65535), W),
+           keep #zext(const<49>(281474976710656), W)))
+       ),
+       keep #mul(#and(#lshr(v, 48), 65535), keep #zext(const<49>(281474976710656), W))
+     )
+  where !materializable(v), !ufits(v, 48);

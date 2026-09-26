@@ -177,10 +177,13 @@ flowchart TD
 	A -. "matches when the immediate fits" .-> I["Add-immediate instruction"]
 ```
 
-The selector expands this graph with semantic rewrite rules. Shared rules
-express identities, constant computations, and alternative forms of operations.
-Targets can add rules that expose useful instruction sequences, including
-sequences for large constants.
+The selector expands this graph with semantic rewrite rules. The rules are
+shared by every target and live in `core/defs/isel.pdl`. They express
+identities, constant computations, and alternative forms of operations. A rule
+never names a target: the graph keeps every form, and the target's instruction
+patterns decide which forms selection can cover. The only target fact a rule
+reads is whether one of the target's instructions materializes a constant
+alone, which the patterns derived from its machine description answer.
 
 Repeated application of these rules is called saturation. Selection bounds the
 search to control compilation time and memory use. The graph therefore contains
@@ -245,6 +248,26 @@ Costs account for declared instruction cost and encoding size. They guide the
 choice between legal alternatives, but they do not predict every runtime
 effect. Register pressure and later machine transformations can affect the
 final result. Selection does not promise the globally cheapest machine program.
+
+### Narrow operations
+
+A target may compare, shift right, or divide only at its register widths.
+RISC-V compares 64-bit registers; AArch64 compares 32- or 64-bit registers;
+x86-64 also has 8- and 16-bit forms. Addition, multiplication, and bitwise
+operations need no special handling, because their low result bits read only
+the low bits of their operands. A comparison, a right shift, or a division
+reads every operand bit. Shared rules therefore give each narrow form an
+equivalent computed on extended operands: comparisons at 32 and 64 bits, right
+shifts at 32 bits, and 8-bit divisions at 32 bits. The axiom proofs cannot
+bit-blast a division of wider inputs. A comparison keeps its one-bit result. A
+shift or division yields the low bits of the wide result, so the narrow value
+becomes a low-bit view of the wide computation.
+
+A view reads its source's register and needs no instruction of its own. When a
+rewrite introduced the source, no IR operation computes it, and its only
+readers are views. Selection may then leave the source uncomputed and select
+each view with an instruction of its own. The cover makes this choice by cost:
+x86-64 keeps its 8-bit `shr`, and RISC-V shifts the extended value with `srlw`.
 
 ### Shared values and memory effects
 
@@ -344,9 +367,11 @@ register-register addition. One valid materialization sequence starts with
 `1`, shifts left by 12 bits to obtain `4096`, and adds `-2048`. Both immediate
 additions fit their encoding fields.
 
-Target rewrite rules expose such decompositions in the semantic graph.
-Instruction matching and cover selection then choose instructions for the
-parts. The exact sequence can change with available target features and costs.
+Shared rewrite rules expose such decompositions in the semantic graph. They fire
+only on constants that none of the target's materializing instructions
+produces alone. One rule splits off a signed 12-bit low part for an immediate
+addition. Others insert a 16-bit halfword into a narrower constant. Instruction
+matching and cover selection then choose instructions for the parts. The exact sequence can change with available target features and costs.
 The design requirement stays the same: every immediate must fit, and the
 sequence must compute the original value.
 

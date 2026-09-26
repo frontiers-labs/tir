@@ -129,7 +129,6 @@ compile/20040310-1.c
 compile/20040317-1.c
 compile/20040317-3.c
 compile/20040323-1.c
-compile/20040419-1.c
 compile/20040610-1.c
 compile/20040611-1.c
 compile/20040614-1.c
@@ -140,7 +139,6 @@ compile/20040817-1.c
 compile/20040824-1.c
 compile/20040907-1.c
 compile/20040909-1.c
-compile/20040916-1.c
 compile/20041005-1.c
 compile/20041026-1.c
 compile/20041119-1.c
@@ -908,10 +906,8 @@ compile/pr60502.c
 compile/pr60556.c
 compile/pr60655-1.c
 compile/pr60655-2.c
-compile/pr60818.c
 compile/pr61159.c
 compile/pr61684.c
-compile/pr62312.c
 compile/pr63282.c
 compile/pr64067.c
 compile/pr64269.c

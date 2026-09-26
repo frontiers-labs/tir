@@ -1,10 +1,10 @@
 // RUN: tir mc --march=rv32i --stage=isel %s | filecheck %s
-// RUN: not tir mc --march=rv64i --stage=isel %s
+// RUN: tir mc --march=rv64i --stage=isel %s | filecheck %s --check-prefix=RV64
 
 // Comparison operands are width-sensitive: their upper register bits reach the
-// result. An i32 compare matches the branch/slt rules only when the register
-// width is 32 (rv32); on rv64 selecting `blt` would compare garbage upper
-// bits, so selection must refuse instead of miscompiling.
+// result. An i32 compare matches the branch/slt rules directly when the register
+// width is 32 (rv32); on rv64 it compares the sign-extended operands, never the
+// undefined upper bits.
 
 module {
   %fn_pick = func.func @pick(%0: !i32, %1: !i32) -> !i32 {
@@ -23,3 +23,10 @@ module {
 // CHECK: asm.symbol {name = "pick"
 // CHECK: riscv.blt {rs1 = %[[V6:[0-9]+]]:GPR, rs2 = %[[V7:[0-9]+]]:GPR, imm = ^bb2}
 // CHECK-NEXT: asm.vbr ^bb1
+
+// RV64: asm.symbol {name = "pick", arg_regs = [%[[A:[0-9]+]]:GPR, %[[B:[0-9]+]]:GPR]}
+// RV64-NEXT: riscv.slli {rd = %[[AS:[0-9]+]]:GPR, rs1 = %[[A]]:GPR, imm = 32}
+// RV64-NEXT: riscv.srai {rd = %[[AX:[0-9]+]]:GPR, rs1 = %[[AS]]:GPR, imm = 32}
+// RV64-NEXT: riscv.slli {rd = %[[BS:[0-9]+]]:GPR, rs1 = %[[B]]:GPR, imm = 32}
+// RV64-NEXT: riscv.srai {rd = %[[BX:[0-9]+]]:GPR, rs1 = %[[BS]]:GPR, imm = 32}
+// RV64-NEXT: riscv.slt {rd = %{{[0-9]+}}:GPR, rs1 = %[[AX]]:GPR, rs2 = %[[BX]]:GPR}

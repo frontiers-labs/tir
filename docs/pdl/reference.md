@@ -341,11 +341,13 @@ functions in a PDL file. A consumer determines which functions it supports.
 | `ones(W)` | A mask with `W` low bits set. | Semantic axioms and their width expressions. |
 | `fits(c, N)` | Whether the constant fits in a signed `N`-bit field. | Semantic axiom guards. |
 | `ufits(c, N)` | Whether the constant fits in an unsigned `N`-bit field. | Semantic axiom guards. |
+| `materializable(c)` | Whether one of the target's instructions produces the constant alone. Without a target, every constant qualifies. | Semantic axiom guards. |
 
 The bit-count functions take one constant binder directly. Expressions such
 as `popcount(c + 1)` do not preserve a binder width and are rejected by the
 Rust generator. `fits` and `ufits` take a bound constant and a literal field
 width from 1 through 64. Their negations, such as `!fits(c, 12)`, are supported.
+`materializable` takes a bound constant and may also be negated.
 
 Semantic axiom guards support width comparisons with `<` and `==`, and the
 `fits` family. They do not support the whole generated-rule expression

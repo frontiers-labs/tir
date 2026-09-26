@@ -60,7 +60,6 @@ use matches::{MatchRef, Matches};
 use node::{chase_low_extract, is_low_extract_view};
 use pattern::{CompiledIselPattern, PatternNode, compile_isel_pattern};
 use scopes::Scopes;
-use tir::sem::axioms;
 use tir::sem::rewrites::{self, discover_rewrites};
 
 /// A conditional-branch rule chosen for a destruction's test: the rule, its
@@ -733,7 +732,14 @@ impl FunctionSelection {
     ) -> Option<ValueId> {
         // A low-bit truncation re-views its operand's register: bind the operand
         // (chasing a chain of truncations), never the erased truncation itself.
-        let class = chase_low_extract(&self.egraph, class);
+        // A rewrite-introduced operand holds no IR value, so a view of it keeps
+        // its own: selection either tiles the view or remaps its value.
+        let chased = chase_low_extract(&self.egraph, class);
+        let class = if self.has_values(chased) {
+            chased
+        } else {
+            self.egraph.find(class)
+        };
         // A class a fact proves equal to a literal may read a register already
         // holding that literal, and a literal may read the register of a value
         // proven equal to it: the union used to make them one class, and this is
@@ -818,6 +824,24 @@ struct ConditionExpr {
 }
 
 pub type OpLowering = Box<dyn Fn(&Context, &OperationRef) -> Result<bool, PassError> + Send + Sync>;
+
+/// The low-extract views of each demanded source a rewrite introduced. No IR
+/// operation computes such a source, so it need not be computed where every
+/// view reading it is tiled in its own right.
+fn deferrable_views(
+    fs: &FunctionSelection,
+    covered: &[Id],
+    demanded: &HashSet<Id>,
+) -> HashMap<Id, Vec<Id>> {
+    let mut views: HashMap<Id, Vec<Id>> = HashMap::new();
+    for &class in covered {
+        let source = chase_low_extract(&fs.egraph, class);
+        if source != class && demanded.contains(&source) && !fs.has_values(source) {
+            views.entry(source).or_default().push(class);
+        }
+    }
+    views
+}
 
 /// Validate a function before instruction selection changes its operations.
 pub type FunctionCheck = fn(&Context, &OperationRef) -> Result<(), PassError>;
@@ -1272,7 +1296,6 @@ impl InstructionSelectPass {
             })
             .collect();
 
-        let theory = discover_rewrites();
         let specificity = compiled_patterns
             .iter()
             .map(|pattern| pattern.specificity)
@@ -1300,12 +1323,20 @@ impl InstructionSelectPass {
             .iter()
             .filter_map(CompiledIselPattern::constant_materializer_range)
             .collect();
+        // A target without formal materializers keeps bare constants for its
+        // pre-RA hook, so no constant is decomposed for it.
+        let theory = discover_rewrites().with_materializable({
+            let ranges = constant_materializer_ranges.clone();
+            move |value| ranges.is_empty() || ranges.iter().any(|range| range.contains(value))
+        });
+        // Decomposed constants reach any width, so floating-point bits do too.
         let float_constant_materializer_widths = declared_float_constant_materializer_widths
             .into_iter()
             .filter(|width| {
-                constant_materializer_ranges
-                    .iter()
-                    .any(|range| range.width >= *width)
+                (theory.materializes_constants() && !constant_materializer_ranges.is_empty())
+                    || constant_materializer_ranges
+                        .iter()
+                        .any(|range| range.width >= *width)
             })
             .collect();
 
@@ -1368,23 +1399,6 @@ impl InstructionSelectPass {
     /// declares none (see [`DataLayout::for_op_with_default`](crate::DataLayout)).
     pub fn with_data_layout(mut self, spec: Option<crate::attributes::AttributeValue>) -> Self {
         self.default_layout = spec;
-        self
-    }
-
-    /// Install a target's own semantic invariants, as a PDL rule set.
-    pub fn with_rules(mut self, file: &str) -> Self {
-        let axioms = axioms::pdl::axioms_from_pdl(file)
-            .unwrap_or_else(|e| panic!("invalid target rule set: {e}"));
-        for axiom in axioms {
-            self.theory.push(axiom);
-        }
-        if self.theory.materializes_constants() && !self.constant_materializer_ranges.is_empty() {
-            self.float_constant_materializer_widths.extend(
-                self.rules
-                    .iter()
-                    .filter_map(|rule| rule.float_constant_width),
-            );
-        }
         self
     }
 
@@ -2379,7 +2393,14 @@ impl InstructionSelectPass {
                 source_available || demanded.contains(&source)
             }
         };
-        if let Some(message) = completeness_error(&fs.egraph, &demanded, &matches, &available) {
+        let views = deferrable_views(fs, &covered, &demanded);
+        let rooted: HashSet<Id> = matches.iter().map(|m| fs.egraph.find(m.root)).collect();
+        if let Some(message) = completeness_error(&fs.egraph, &demanded, &matches, &|class| {
+            available(class)
+                || views
+                    .get(&class)
+                    .is_some_and(|views| views.iter().all(|view| rooted.contains(view)))
+        }) {
             return Err(message);
         }
 
@@ -2395,6 +2416,7 @@ impl InstructionSelectPass {
                             .base_members(class)
                             .any(|member| fs.demand.registers.contains(&(member, region)))
                 },
+                views: &views,
             },
             &matches,
         )
@@ -2864,6 +2886,13 @@ impl InstructionSelectPass {
         work.sort_unstable();
         let mut matches: Vec<PbqpIselMatch> = Vec::new();
         while let Some(class) = work.pop() {
+            // A low-extract view reads its source's register, so the source is
+            // computed here even when no IR operation roots it: a rewrite can make
+            // a narrow class the view of a wider computation.
+            let source = chase_low_extract(&fs.egraph, class);
+            if covered.insert(source) {
+                work.push(source);
+            }
             // Domination groups a match with the others at its own root, so
             // pruning per class is the same verdict as pruning the whole region at
             // once — and it keeps what feeds the closure below down to survivors.

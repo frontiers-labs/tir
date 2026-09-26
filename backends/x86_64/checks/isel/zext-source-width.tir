@@ -40,7 +40,8 @@ module {
   module_end
 }
 
-// CHECK: x86_64.mov_imm8 {dst = %[[Z:[0-9]+]]:GPR8, imm = 1}
-// CHECK-NEXT: x86_64.cmp_imm8 {dst = %[[Z]]:GPR8, imm = 0}
-// CHECK: x86_64.cmp_imm8 {dst = %[[Z]]:GPR8, imm = 1}
+// CHECK: x86_64.mov_imm8 {dst = %[[Z:[0-9]+]]:GPR8, imm = 0}
+// CHECK-NEXT: x86_64.cmp_imm8 {dst = %[[Z]]:GPR8, imm = 1}
+// CHECK: x86_64.mov_imm8 {dst = %[[O:[0-9]+]]:GPR8, imm = 1}
+// CHECK-NEXT: x86_64.cmp_imm8 {dst = %[[O]]:GPR8, imm = 1}
 // CHECK-NOT: x86_64.movzxd

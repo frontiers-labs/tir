@@ -81,6 +81,9 @@ pub(crate) enum PbqpIselAlternative {
     Tile {
         match_id: usize,
     },
+    /// A rewrite-introduced source left uncomputed: each low-extract view of it
+    /// is tiled in its own right instead.
+    Deferred,
 }
 
 #[derive(Clone, Debug)]
@@ -110,6 +113,8 @@ pub(crate) struct ClassPolicies<'a> {
     pub(crate) demanded: &'a dyn Fn(Id) -> bool,
     pub(crate) available: &'a dyn Fn(Id) -> bool,
     pub(crate) materialized: &'a dyn Fn(Id) -> bool,
+    /// The low-extract views of each source that may be deferred.
+    pub(crate) views: &'a HashMap<Id, Vec<Id>>,
 }
 
 pub(crate) fn build_eclass_cover(
@@ -127,6 +132,12 @@ pub(crate) fn build_eclass_cover(
         if !(policies.demanded)(c) || (policies.available)(c) {
             alternatives_by_node[i].push(PbqpIselAlternative::NotDemanded);
         }
+        alternatives_by_node[i].extend(
+            policies
+                .views
+                .contains_key(&c)
+                .then_some(PbqpIselAlternative::Deferred),
+        );
     }
 
     for (match_id, m) in matches.iter().enumerate() {
@@ -175,13 +186,15 @@ pub(crate) fn build_eclass_cover(
             .iter()
             .map(|alternative| match alternative {
                 PbqpIselAlternative::Tile { match_id } => matches[*match_id].cost,
-                PbqpIselAlternative::NotDemanded | PbqpIselAlternative::CoveredBy { .. } => 0,
+                PbqpIselAlternative::NotDemanded
+                | PbqpIselAlternative::CoveredBy { .. }
+                | PbqpIselAlternative::Deferred => 0,
             })
             .collect();
         problem.add_node(costs);
     }
 
-    let mut edge_pairs: HashSet<(usize, usize)> = HashSet::new();
+    let mut edge_pairs = deferral_edges(policies, &class_index);
     for m in matches {
         let Some(ri) = class_index(m.root) else {
             continue;
@@ -272,7 +285,21 @@ pub(crate) fn build_eclass_cover(
                         left_alt,
                         matches,
                         policies.available,
-                    ) && !effect_tiles_conflict(left_alt, right_alt, &effect_footprints);
+                    ) && !effect_tiles_conflict(left_alt, right_alt, &effect_footprints)
+                        && deferral_compatible(
+                            left_class,
+                            left_alt,
+                            right_class,
+                            right_alt,
+                            policies,
+                        )
+                        && deferral_compatible(
+                            right_class,
+                            right_alt,
+                            left_class,
+                            left_alt,
+                            policies,
+                        );
                 if !compatible {
                     matrix.set(left_idx, right_idx, INF_COST);
                 }
@@ -302,6 +329,35 @@ pub(crate) fn build_eclass_cover(
         .map(|(node, choice)| alternatives_by_node[node][choice].clone())
         .collect();
     Some(ClassCover { choices, classes })
+}
+
+/// The PBQP edges joining each deferrable source to its views.
+fn deferral_edges(
+    policies: &ClassPolicies,
+    class_index: &dyn Fn(Id) -> Option<usize>,
+) -> HashSet<(usize, usize)> {
+    policies
+        .views
+        .iter()
+        .flat_map(|(&source, views)| views.iter().map(move |&view| (source, view)))
+        .filter_map(|(source, view)| Some(ordered_pair(class_index(source)?, class_index(view)?)))
+        .collect()
+}
+
+/// A deferred source leaves each of its views to a tile of its own.
+fn deferral_compatible(
+    source: Id,
+    source_alt: &PbqpIselAlternative,
+    view: Id,
+    view_alt: &PbqpIselAlternative,
+    policies: &ClassPolicies,
+) -> bool {
+    !matches!(source_alt, PbqpIselAlternative::Deferred)
+        || !policies
+            .views
+            .get(&source)
+            .is_some_and(|views| views.contains(&view))
+        || matches!(view_alt, PbqpIselAlternative::Tile { .. })
 }
 
 fn ordered_pair(lhs: usize, rhs: usize) -> (usize, usize) {
@@ -512,7 +568,9 @@ pub(crate) fn completeness_error(
 fn produced_view_offset(alternative: &PbqpIselAlternative, matches: &[PbqpIselMatch]) -> u32 {
     match alternative {
         PbqpIselAlternative::Tile { match_id } => matches[*match_id].result_view_offset,
-        PbqpIselAlternative::NotDemanded | PbqpIselAlternative::CoveredBy { .. } => 0,
+        PbqpIselAlternative::NotDemanded
+        | PbqpIselAlternative::CoveredBy { .. }
+        | PbqpIselAlternative::Deferred => 0,
     }
 }
 
@@ -522,7 +580,9 @@ fn produced_view_offset(alternative: &PbqpIselAlternative, matches: &[PbqpIselMa
 fn produced_width(alternative: &PbqpIselAlternative, matches: &[PbqpIselMatch]) -> Option<u32> {
     match alternative {
         PbqpIselAlternative::Tile { match_id } => matches[*match_id].result_width,
-        PbqpIselAlternative::NotDemanded | PbqpIselAlternative::CoveredBy { .. } => None,
+        PbqpIselAlternative::NotDemanded
+        | PbqpIselAlternative::CoveredBy { .. }
+        | PbqpIselAlternative::Deferred => None,
     }
 }
 
@@ -589,7 +649,7 @@ pub(crate) fn alternatives_compatible(
         match child_alt {
             PbqpIselAlternative::Tile { .. } => true,
             PbqpIselAlternative::NotDemanded => available(child),
-            PbqpIselAlternative::CoveredBy { .. } => false,
+            PbqpIselAlternative::CoveredBy { .. } | PbqpIselAlternative::Deferred => false,
         }
     } else if immediate {
         class_int_binding(egraph, child).is_some()

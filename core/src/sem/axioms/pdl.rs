@@ -11,8 +11,8 @@ use tir_pdl::{
 };
 
 use super::{
-    AxNode, Axiom, ConstWidth, Guard_, ProofObligation, Side, ValueGuard, WidthBinding, WidthExpr,
-    contains_kind, holes_of, intern, references,
+    AxNode, Axiom, ConstWidth, Guard_, ProofObligation, Side, ValueGuard, ValueTest, WidthBinding,
+    WidthExpr, contains_kind, holes_of, intern, references,
 };
 use crate::sem::{SymKind, op_kind};
 
@@ -443,13 +443,29 @@ fn push_guard(
             }
             value_guards.push(ValueGuard {
                 var,
-                bits,
-                unsigned: name == "ufits",
+                test: ValueTest::Fits {
+                    bits,
+                    unsigned: name == "ufits",
+                },
                 negated,
             });
             Ok(())
         }
-        _ if negated => Err("only `fits` and `ufits` may be negated".into()),
+        ExprKind::Call { name, args } if name == "materializable" => {
+            let [ExprKind::Name(var)] = [&args[0].kind] else {
+                return Err("`materializable` takes a constant binder".into());
+            };
+            let var = scope
+                .var(var)
+                .ok_or_else(|| format!("`materializable` names an undeclared binder `{var}`"))?;
+            value_guards.push(ValueGuard {
+                var,
+                test: ValueTest::Materializable,
+                negated,
+            });
+            Ok(())
+        }
+        _ if negated => Err("only `fits`, `ufits`, and `materializable` may be negated".into()),
         ExprKind::Binary { op, lhs, rhs } => {
             let (lhs, rhs) = (width_expr(lhs, scope)?, width_expr(rhs, scope)?);
             guards.push(match op {
@@ -459,6 +475,9 @@ fn push_guard(
             });
             Ok(())
         }
-        _ => Err("guards are `a < b`, `a == b`, `[u]fits(v, n)` or their negation".into()),
+        _ => Err(
+            "guards are `a < b`, `a == b`, `[u]fits(v, n)`, `materializable(v)` or their negation"
+                .into(),
+        ),
     }
 }

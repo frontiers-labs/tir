@@ -118,16 +118,23 @@ enum Guard_ {
     Eq(WidthExpr, WidthExpr),
 }
 
-/// A predicate over a matched constant's *value* (not its width): whether the
-/// bound constant `var` fits a signed `bits`-bit immediate. A `materialize`
-/// decomposition axiom guards on the negation so it fires only on constants too
-/// wide for the target's immediate, bounding the saturation descent.
+/// A predicate over a matched constant's *value* (not its width). A
+/// `materialize` decomposition axiom guards on a negated one so it fires only on
+/// constants no target instruction produces alone, bounding the saturation
+/// descent.
 #[derive(Clone)]
 struct ValueGuard {
     var: usize,
-    bits: u32,
-    unsigned: bool,
+    test: ValueTest,
     negated: bool,
+}
+
+#[derive(Clone, Copy)]
+enum ValueTest {
+    /// The constant fits a `bits`-bit immediate field.
+    Fits { bits: u32, unsigned: bool },
+    /// One of the target's constant materializers produces the constant.
+    Materializable,
 }
 
 /// `v`'s low `width` bits read as a two's-complement signed value.
@@ -696,6 +703,14 @@ fn format_bits(bits: &[bool]) -> String {
 /// Execute a pure op over `(value, width)` constant operands via a throwaway
 /// [`SemGraph`]; `None` when the result is not an integer.
 fn execute_fold(kind: SymKind, operands: &[(u64, u32)]) -> Option<APInt> {
+    // A constant wider than a machine word has no `APInt`; its axiom fails to
+    // match rather than fold.
+    if operands
+        .iter()
+        .any(|&(_, width)| !(1..=64).contains(&width))
+    {
+        return None;
+    }
     let mut g = SemGraph::new();
     let ids: Vec<NodeId> = operands.iter().map(|&(v, w)| con(&mut g, v, w)).collect();
     op(&mut g, kind, &ids);
@@ -751,6 +766,7 @@ pub(crate) mod call {
     pub(crate) const EXTRACT_TYPE: u32 = 3;
     pub(crate) const MAX: u32 = 4;
     pub(crate) const FITS: u32 = 5;
+    pub(crate) const MATERIALIZABLE: u32 = 6;
     /// One per pure op a head folds over constants, so the id names the kind.
     pub(crate) const FOLD: u32 = 8;
     /// One per pure op the folding rules execute, by the same table as
@@ -768,14 +784,24 @@ pub struct Interpretation<'a> {
     context: &'a Context,
     axioms: &'a [Axiom],
     folds: &'a [SymKind],
+    materializable: Option<&'a Materializable>,
 }
 
+/// Whether one of a target's instructions produces a constant alone.
+pub type Materializable = dyn Fn(&APInt) -> bool + Send + Sync;
+
 impl<'a> Interpretation<'a> {
-    pub fn new(context: &'a Context, axioms: &'a [Axiom], folds: &'a [SymKind]) -> Self {
+    pub fn new(
+        context: &'a Context,
+        axioms: &'a [Axiom],
+        folds: &'a [SymKind],
+        materializable: Option<&'a Materializable>,
+    ) -> Self {
         Self {
             context,
             axioms,
             folds,
+            materializable,
         }
     }
 }
@@ -830,6 +856,20 @@ impl tir_relational::Externs<SemNode> for Interpretation<'_> {
                     fits_signed(&value, bits)
                 };
                 fits == !negated
+            }
+            // Without a target every constant counts as materialized, so no
+            // decomposition fires; neither does one wider than a machine word.
+            call::MATERIALIZABLE => {
+                let width = args[1] as u32;
+                let materializable = !(1..=64).contains(&width)
+                    || self
+                        .materializable
+                        // Read at its own width as two's complement, as the
+                        // matcher reads a signed literal: i32 `-1` fits `addi`.
+                        .is_none_or(|test| {
+                            test(&APInt::new_signed(width, sign_extend(args[0], width)))
+                        });
+                materializable == (args[2] == 0)
             }
             proof if proof >= call::VERIFY => {
                 let axiom = &self.axioms[(proof - call::VERIFY) as usize];
@@ -887,6 +927,8 @@ struct Built {
     /// Whether the node is an operand the graph may turn out to have made a
     /// constant, so a fold may ask for it to be one.
     assumable: bool,
+    /// The scalar holding the type of a node the head inserts.
+    ty: Option<u32>,
 }
 
 /// One axiom's left-hand side as atoms and guards, and the numbering the head
@@ -1166,16 +1208,27 @@ impl<'a> Lowering<'a> {
                 .expect("a value predicate names a constant var");
             let width = self.width_of(class);
             gated_on.extend([Expr::Scalar(value), Expr::Scalar(width)]);
+            let negated = Expr::Lit(i64::from(predicate.negated));
+            let (call, args) = match predicate.test {
+                ValueTest::Fits { bits, unsigned } => (
+                    call::FITS,
+                    smallvec![
+                        Expr::Scalar(value),
+                        Expr::Scalar(width),
+                        Expr::Lit(bits as i64),
+                        Expr::Lit(i64::from(unsigned)),
+                        negated,
+                    ],
+                ),
+                ValueTest::Materializable => (
+                    call::MATERIALIZABLE,
+                    smallvec![Expr::Scalar(value), Expr::Scalar(width), negated],
+                ),
+            };
             self.guards.push(Guard::Extern {
-                call: call::FITS,
+                call,
                 terms: SmallVec::new(),
-                args: smallvec![
-                    Expr::Scalar(value),
-                    Expr::Scalar(width),
-                    Expr::Lit(predicate.bits as i64),
-                    Expr::Lit(i64::from(predicate.unsigned)),
-                    Expr::Lit(i64::from(predicate.negated)),
-                ],
+                args,
                 out: SmallVec::new(),
             });
         }
@@ -1248,6 +1301,7 @@ impl<'a> Lowering<'a> {
                 var: 0,
                 value: None,
                 assumable: false,
+                ty: None,
             },
             AxNode::ConstMatch(..) => unreachable!("const-match holes are lhs-only"),
             AxNode::Hole(name, var) => {
@@ -1256,6 +1310,7 @@ impl<'a> Lowering<'a> {
                     var: class,
                     value: var.and_then(|index| self.const_values.get(&index).copied()),
                     assumable: true,
+                    ty: None,
                 }
             }
             AxNode::Const(expr, width) => {
@@ -1274,6 +1329,7 @@ impl<'a> Lowering<'a> {
                     var,
                     value: Some((value, width)),
                     assumable: false,
+                    ty: None,
                 }
             }
             // A kept materialize node stays structural — an emitted instruction —
@@ -1293,6 +1349,7 @@ impl<'a> Lowering<'a> {
                     var: self.insert(*kind, &args, Some(ty), head),
                     value: None,
                     assumable: false,
+                    ty: Some(ty),
                 }
             }
             AxNode::Node(kind, children) => {
@@ -1319,6 +1376,7 @@ impl<'a> Lowering<'a> {
                         var: self.literal(value, sixty_four, Some(ty), head),
                         value: Some((value, sixty_four)),
                         assumable: false,
+                        ty: Some(ty),
                     });
                 }
                 let built: Vec<Built> = children
@@ -1336,6 +1394,7 @@ impl<'a> Lowering<'a> {
                         var: self.literal(value, width, None, head),
                         value: Some(folded),
                         assumable: false,
+                        ty: None,
                     });
                 }
                 let args: Vec<u32> = built.iter().map(|built| built.var).collect();
@@ -1344,6 +1403,7 @@ impl<'a> Lowering<'a> {
                     var: self.insert(*kind, &args, Some(ty), head),
                     value: None,
                     assumable: false,
+                    ty: Some(ty),
                 }
             }
         })
@@ -1411,8 +1471,9 @@ impl<'a> Lowering<'a> {
     }
 
     /// The type a right-hand side node carries. A conversion names it through
-    /// its own format or width operands; a comparison is one bit; everything
-    /// else is register-wide.
+    /// its own format or width operands; a comparison is one bit; an operation
+    /// whose result has its operand's width takes the type of an operand the
+    /// head built, such as an extension; everything else is register-wide.
     fn result_type(&mut self, axiom: &Axiom, kind: SymKind, children: &[Built]) -> u32 {
         let operand = |slot: usize| {
             children
@@ -1447,6 +1508,14 @@ impl<'a> Lowering<'a> {
             kind if is_comparison(kind) => {
                 let one = self.let_expr(Expr::Lit(1));
                 self.int_type(one)
+            }
+            SymKind::If if children.get(1).and_then(|built| built.ty).is_some() => {
+                children[1].ty.unwrap()
+            }
+            kind if SAME_WIDTH.contains(&kind)
+                && children.first().and_then(|built| built.ty).is_some() =>
+            {
+                children[0].ty.unwrap()
             }
             _ => {
                 let register = self.register_width(axiom);
@@ -1553,6 +1622,25 @@ pub(crate) const FOLDABLE: [SymKind; 11] = [
     SymKind::Add,
     SymKind::Sub,
     SymKind::Mul,
+    SymKind::And,
+    SymKind::Or,
+    SymKind::Xor,
+    SymKind::ShiftLeft,
+    SymKind::ShiftRightLogic,
+    SymKind::ShiftRightArithmetic,
+    SymKind::Neg,
+    SymKind::Not,
+];
+
+/// Operations whose result has the width of their first operand.
+const SAME_WIDTH: [SymKind; 15] = [
+    SymKind::Add,
+    SymKind::Sub,
+    SymKind::Mul,
+    SymKind::Div,
+    SymKind::UDiv,
+    SymKind::SRem,
+    SymKind::URem,
     SymKind::And,
     SymKind::Or,
     SymKind::Xor,
