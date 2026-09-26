@@ -23,7 +23,7 @@ set (x0 corner cases, register aliasing, immediate extremes):
    different mapped architectural states from the same initial state under
    the path constraints. `unsat` proves agreement; `sat` supplies a
    counterexample. An unreachable path proves nothing and is reported as
-   vacuous.
+   vacuous; a path the solver cannot show reachable counts as unknown.
 4. Verified paths are checked again with the TMDL behavior replaced by a
    no-op, until one of them tells the two apart. An instruction that still
    verifies is reported: its proofs compare none of the state it writes.

@@ -2594,7 +2594,7 @@ fn verify_instruction(
             } else if reachable_status == Some("unsat") {
                 report.vacuous += 1;
                 line.push('V');
-            } else if equivalence_status == Some("unsat") {
+            } else if reachable_status == Some("sat") && equivalence_status == Some("unsat") {
                 report.verified += 1;
                 verified_by_case[index] += 1;
                 line.push('.');
@@ -2607,7 +2607,10 @@ fn verify_instruction(
                     )?;
                     let statuses = solver_statuses(&run_solver(tools, &mutant_path)?);
                     timing.solver_ms += mutant_started.elapsed().as_millis();
-                    if statuses.last().is_some_and(|status| status == "sat") {
+                    // Only a reachable path the no-op still verifies counts
+                    // against the proof.
+                    let probes = usize::from(cause.is_some());
+                    if !statuses.iter().skip(probes).eq(["sat", "unsat"]) {
                         nop = None;
                     }
                 }
