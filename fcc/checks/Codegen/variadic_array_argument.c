@@ -14,7 +14,7 @@ void pass_array(void) {
 // CHECK-EMPTY:
 // CHECK: module {data_layout = #data_layout, target_env = #target_env} {
 // CHECK-NEXT:   %0 = global @text size 2 align 1
-// CHECK-NEXT:   %1 = func.declare @consume(!i32, !cir.varargs) -> !unit
+// CHECK-NEXT:   %1 = func.declare @consume(!i32, !varargs) -> !unit
 // CHECK-NEXT:   %2 = func.func @pass_array() {
 // CHECK-NEXT:     %3 = constant {value = 0} : !i32
 // CHECK-NEXT:     %13 = state.entry_state : !state<memory>

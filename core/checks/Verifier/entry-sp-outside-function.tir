@@ -1,0 +1,11 @@
+// RUN: not tir opt --verify %s 2>&1 | filecheck %s
+
+module {
+  %outside = constant {value = 0} : !i64
+  %fn_bad = func.func @bad(%entry: !ptr.p, ...) implicit_arguments 1 entry_sp %outside {
+    func.return
+  }
+  module_end
+}
+
+// CHECK: function entry stack pointer must name an implicit argument

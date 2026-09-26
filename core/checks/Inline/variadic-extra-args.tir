@@ -1,0 +1,27 @@
+// RUN: tir opt --pass func.func(restructure-nodes),inline<1000,0> --verify %s | filecheck %s
+
+module {
+  %callee = func.func @take_first(%x: !i32, ...) -> !i32 {
+    func.return %x
+  }
+  %caller = func.func @caller(%x: !i32, %extra: !i64) -> !i32 {
+    %result = func.call %callee(%x, %extra : !i32, !i64) -> !i32
+    func.return %result
+  }
+  %hidden = func.func @hidden(%x: !i32, %entry: !ptr.p, ...) -> !i32
+      implicit_arguments 1 entry_sp %entry {
+    func.return %x
+  }
+  %hidden_caller = func.func @hidden_caller(%x: !i32, %extra: !ptr.p) -> !i32 {
+    %result = func.call %hidden(%x, %extra : !i32, !ptr.p) -> !i32
+    func.return %result
+  }
+  module_end
+}
+
+// CHECK-LABEL: func.func @caller
+// CHECK-NOT: func.call
+// CHECK: ->
+
+// CHECK-LABEL: func.func @hidden_caller
+// CHECK: func.call

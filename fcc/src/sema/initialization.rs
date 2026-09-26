@@ -15,7 +15,7 @@ impl Analyzer<'_> {
     pub(super) fn declaration(&mut self, node: NodeId) {
         let leaf = self.ast.get_leaf_data(node).cloned();
         let (name, parsed_ty, typedef) = match leaf {
-            Some(AstLeaf::Param { name, ty }) | Some(AstLeaf::Decl { name, ty }) => {
+            Some(AstLeaf::Param { name, ty }) | Some(AstLeaf::Decl { name, ty, .. }) => {
                 (name, ty, false)
             }
             Some(AstLeaf::Typedef { name, ty }) => (name, ty, true),

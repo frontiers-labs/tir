@@ -1,0 +1,10 @@
+// RUN: not tir opt --verify %s 2>&1 | filecheck %s
+
+module {
+  %fn_bad = func.func @bad(%hidden: !i64) implicit_arguments 1 {
+    func.return
+  }
+  module_end
+}
+
+// CHECK: only variadic functions may have implicit arguments

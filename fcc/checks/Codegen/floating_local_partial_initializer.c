@@ -6,4 +6,5 @@ float tail(void) {
 }
 
 // CHECK-LABEL: func.func @tail
-// CHECK: fp.constant {bits = 0} : !f32
+// CHECK: constant {value = 0} : !i32
+// CHECK: bitcast {{%[0-9]+}} : !f32

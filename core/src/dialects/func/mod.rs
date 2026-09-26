@@ -39,6 +39,58 @@ fn argument_alignments(op: &impl Operation) -> Vec<u64> {
     }
 }
 
+fn stack_arguments(op: &impl Operation) -> Vec<usize> {
+    match op.attr("stack_arguments") {
+        Some(AttributeValue::Array(values)) => values
+            .iter()
+            .filter_map(|value| match value {
+                AttributeValue::UInt(value) => usize::try_from(*value).ok(),
+                AttributeValue::Int(value) => usize::try_from(*value).ok(),
+                _ => None,
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn verify_stack_arguments(
+    op: &impl Operation,
+    arguments: usize,
+    operation: &str,
+) -> Result<(), Error> {
+    let Some(attribute) = op.attr("stack_arguments") else {
+        return Ok(());
+    };
+    let AttributeValue::Array(indices) = attribute else {
+        return Err(Error::VerificationError(format!(
+            "{operation} stack arguments must be an array"
+        )));
+    };
+    let mut previous = None;
+    for index in indices.iter() {
+        let index = match index {
+            AttributeValue::UInt(index) => *index,
+            AttributeValue::Int(index) if *index >= 0 => *index as u64,
+            _ => {
+                return Err(Error::VerificationError(format!(
+                    "{operation} stack argument indices must be nonnegative integers"
+                )));
+            }
+        };
+        if usize::try_from(index)
+            .ok()
+            .is_none_or(|index| index >= arguments)
+            || previous.is_some_and(|previous| index <= previous)
+        {
+            return Err(Error::VerificationError(format!(
+                "{operation} stack argument indices must be ordered and in range"
+            )));
+        }
+        previous = Some(index);
+    }
+    Ok(())
+}
+
 /// The arguments a function's caller guarantees name memory nothing else in the
 /// function reaches: `restrict` in C, `noalias` in LLVM.
 fn noalias_arguments(op: &impl Operation) -> Vec<usize> {

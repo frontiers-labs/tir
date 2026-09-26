@@ -250,7 +250,10 @@ impl<'src> Parser<'src> {
         if let Some(value) = self.parse_float() {
             return Ok(Some(AttributeValue::F64(value)));
         }
-        Ok(self.parse_number().map(AttributeValue::Int))
+        if let Some(value) = self.parse_number() {
+            return Ok(Some(AttributeValue::Int(value)));
+        }
+        Ok(self.parse_unsigned_number().map(AttributeValue::UInt))
     }
 
     /// A register-valued attribute: `%3` (a value the op names but does not
@@ -347,6 +350,21 @@ impl<'src> Parser<'src> {
         self.position = i as u32;
         self.skip_trivia();
         Some(val)
+    }
+
+    fn parse_unsigned_number(&mut self) -> Option<u64> {
+        let mut end = self.position as usize;
+        let bytes = self.src.as_bytes();
+        while end < bytes.len() && bytes[end].is_ascii_digit() {
+            end += 1;
+        }
+        if end == self.position as usize {
+            return None;
+        }
+        let value = self.src[self.position as usize..end].parse().ok()?;
+        self.position = end as u32;
+        self.skip_trivia();
+        Some(value)
     }
 
     /// Parse a float literal in Rust `{:?}` notation: a decimal point is

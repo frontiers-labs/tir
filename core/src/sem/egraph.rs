@@ -66,7 +66,7 @@ pub(crate) fn is_comparison(kind: SymKind) -> bool {
     complement_comparison(kind).is_some()
 }
 
-/// The bit-width of an IR integer or float type, or `None` for any other type.
+/// The bit-width of a fixed-size IR value, or `None` when its size is unknown.
 pub(crate) fn type_width(context: &Context, ty: TypeId) -> Option<u32> {
     if context.is_state_type(ty) {
         return None;
@@ -76,6 +76,12 @@ pub(crate) fn type_width(context: &Context, ty: TypeId) -> Option<u32> {
     any.downcast_ref::<IntegerType>()
         .map(IntegerType::width)
         .or_else(|| any.downcast_ref::<FloatType>().map(FloatType::bit_width))
+        .or_else(|| {
+            let vector = any.downcast_ref::<crate::vector::VectorType>()?;
+            vector
+                .length()?
+                .checked_mul(type_width(context, vector.element(context))?)
+        })
 }
 
 /// The context-independent semantic type represented by an IR type. Register
@@ -91,6 +97,10 @@ pub(crate) fn semantic_type(context: &Context, ty: TypeId) -> Option<SemType> {
         .or_else(|| {
             any.downcast_ref::<FloatType>()
                 .map(|ty| SemType::Float(FloatFormat::new(ty.exp_width(), ty.mant_width())))
+        })
+        .or_else(|| {
+            any.downcast_ref::<crate::vector::VectorType>()
+                .and_then(|_| type_width(context, ty).map(SemType::raw_bits))
         })
         .or_else(|| {
             any.downcast_ref::<crate::fp::RoundingType>()

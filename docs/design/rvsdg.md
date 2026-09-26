@@ -309,6 +309,9 @@ to unordered `scf.for` bodies. Retaining the counter and bounds gives
 Loops that `raise-loops` cannot prove counted become CFG blocks and take the
 general restructuring path. A label or `goto` anywhere in a function, or a
 return inside a loop, makes the frontend flatten all loops in that function.
+When a branch bypasses a value definition, restructuring uses a zero placeholder
+for that branch. Fixed vectors up to 64 bits use a same-width integer zero
+bitcast to the vector type.
 
 FCC runs struct lowering, loop raising, and restructuring at every optimization
 level. Optimizing levels then run inlining, memory-slot promotion, dependency

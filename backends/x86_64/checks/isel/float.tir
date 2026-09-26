@@ -102,12 +102,12 @@ module {
 // CHECK-LABEL: asm.symbol {name = "convert_bound"
 // CHECK:      x86_64.cvttsd2si64 {dst = %[[BOUND:[0-9]+]]:GPR
 // CHECK-NEXT: x86_64.cmp_imm32 {dst = %[[BOUND]]:GPR, imm = 1}
-// CHECK:      x86_64.movq_xmm_gpr {dst = %{{[0-9]+}}:XMMzx, src = %{{[0-9]+}}:GPR}
+// CHECK:      x86_64.movq_xmm_gpr {dst = %{{[0-9]+}}:XMM64, src = %{{[0-9]+}}:GPR}
 // CHECK:      x86_64.movq_gpr_xmm {dst = %{{[0-9]+}}:GPR, src = %{{[0-9]+}}:XMM}
 // CHECK-LABEL: asm.symbol {name = "shared_zero"
 // CHECK:      x86_64.mov_imm {dst = %[[ZERO:[0-9]+]]:GPR, imm = 0}
 // State-chain setup may sit between the shared literal and its floating view.
-// CHECK:      x86_64.movq_xmm_gpr {dst = %{{[0-9]+}}:XMMzx, src = %[[ZERO]]:GPR}
+// CHECK:      x86_64.movq_xmm_gpr {dst = %{{[0-9]+}}:XMM64, src = %[[ZERO]]:GPR}
 // CHECK:      x86_64.movsd_store_disp
 // CHECK:      x86_64.mov_load
 // CHECK:      x86_64.ucomisd {lhs = %{{[0-9]+}}:XMM, rhs = %{{[0-9]+}}:XMM}

@@ -88,6 +88,11 @@ impl Analyzer<'_> {
                     crate::lexer::FloatingLiteralKind::Float => TypeKind::Float,
                     crate::lexer::FloatingLiteralKind::Double => TypeKind::Double,
                     crate::lexer::FloatingLiteralKind::LongDouble => TypeKind::LongDouble,
+                    crate::lexer::FloatingLiteralKind::ImaginaryFloat => TypeKind::ComplexFloat,
+                    crate::lexer::FloatingLiteralKind::ImaginaryDouble => TypeKind::ComplexDouble,
+                    crate::lexer::FloatingLiteralKind::ImaginaryLongDouble => {
+                        TypeKind::ComplexLongDouble
+                    }
                 };
                 (self.types.intern(kind), ValueCategory::Value)
             }
@@ -120,6 +125,15 @@ impl Analyzer<'_> {
                 self.infer_call(node, &name, error, &mut semantics)
             }
             AstKind::CallExpr => self.infer_call_expr(node, error, &mut semantics),
+            AstKind::VaStart | AstKind::VaEnd => {
+                (self.types.intern(TypeKind::Void), ValueCategory::Value)
+            }
+            AstKind::VaArg => {
+                let Some(AstLeaf::Type(ty)) = self.ast.get_leaf_data(node).cloned() else {
+                    return;
+                };
+                (self.canonical_type(&ty), ValueCategory::Value)
+            }
             AstKind::Add | AstKind::Sub | AstKind::Mul | AstKind::Div => {
                 self.infer_additive(node, kind, error)
             }

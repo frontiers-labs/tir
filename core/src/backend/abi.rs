@@ -170,6 +170,7 @@ impl AbiInfo {
 pub(crate) struct ArgumentMember {
     pub kind: ValueKind,
     pub class: Option<RegClassId>,
+    pub stack_slots: usize,
 }
 
 /// An argument placed as a unit, with the alignment its source type demanded.
@@ -177,6 +178,7 @@ pub(crate) struct ArgumentMember {
 pub(crate) struct ArgumentGroup {
     pub members: Vec<ArgumentMember>,
     pub alignment: u64,
+    pub force_stack: bool,
 }
 
 /// Where [`place_arguments`] put one group member.
@@ -201,7 +203,7 @@ pub(crate) fn place_arguments(
         reserve_indirect_result_argument(abi, &mut next_slot);
     }
     let mut slots = Vec::new();
-    let mut stack_slots = 0;
+    let mut stack_slots: usize = 0;
     for group in groups {
         let mut trial_slots = next_slot.clone();
         align_argument_group(
@@ -210,29 +212,36 @@ pub(crate) fn place_arguments(
             group.members.iter().map(|member| member.kind),
             &mut trial_slots,
         );
-        let direct = abi
-            .argument_group_fits_register_limit(group.members.len())
-            .then(|| {
-                group
-                    .members
-                    .iter()
-                    .map(|member| {
-                        next_argument_register(abi, member.class, member.kind, &mut trial_slots)
-                    })
-                    .collect::<Option<Vec<_>>>()
-            })
-            .flatten();
+        let direct = (!group.force_stack
+            && abi.argument_group_fits_register_limit(group.members.len()))
+        .then(|| {
+            group
+                .members
+                .iter()
+                .map(|member| {
+                    next_argument_register(abi, member.class, member.kind, &mut trial_slots)
+                })
+                .collect::<Option<Vec<_>>>()
+        })
+        .flatten();
         if let Some(registers) = direct {
             next_slot = trial_slots;
             slots.extend(registers.into_iter().map(ArgumentSlot::Register));
             continue;
         }
+        let stack_alignment = group
+            .alignment
+            .min(u64::from(abi.stack.align))
+            .div_ceil(u64::from(abi.stack.slot_size))
+            .max(1) as usize;
+        stack_slots = stack_slots.div_ceil(stack_alignment) * stack_alignment;
         for member in &group.members {
-            if abi.argument_group_rollback() == GroupRollback::Exhaust {
+            if !group.force_stack && abi.argument_group_rollback() == GroupRollback::Exhaust {
                 exhaust_argument_registers(abi, member.kind, &mut next_slot);
             }
+            stack_slots = stack_slots.div_ceil(member.stack_slots) * member.stack_slots;
             slots.push(ArgumentSlot::Stack(stack_slots));
-            stack_slots += 1;
+            stack_slots += member.stack_slots;
         }
     }
     (slots, stack_slots)
@@ -243,23 +252,39 @@ pub(crate) fn place_arguments(
 pub(crate) fn encode_argument_group(
     members: Vec<AttributeValue>,
     alignment: u64,
+    force_stack: bool,
 ) -> AttributeValue {
-    if alignment == 1 {
+    if alignment == 1 && !force_stack {
         return AttributeValue::Array(members.into());
     }
-    AttributeValue::Dict(Box::new(std::collections::BTreeMap::from([
+    let mut group = std::collections::BTreeMap::from([
         ("alignment".to_string(), AttributeValue::UInt(alignment)),
         ("members".to_string(), AttributeValue::Array(members.into())),
-    ])))
+    ]);
+    if force_stack {
+        group.insert("stack".to_string(), AttributeValue::Bool(true));
+    }
+    AttributeValue::Dict(Box::new(group))
 }
 
-/// The members and alignment of an argument group attribute, or `None` for an
+#[derive(Clone, Copy)]
+pub(crate) struct ArgumentGroupAttribute<'a> {
+    pub members: &'a [AttributeValue],
+    pub alignment: u64,
+    pub force_stack: bool,
+}
+
+/// The members and placement of an argument group attribute, or `None` for an
 /// attribute that does not carry a group.
 pub(crate) fn decode_argument_group(
     attribute: &AttributeValue,
-) -> Result<Option<(&[AttributeValue], u64)>, PassError> {
+) -> Result<Option<ArgumentGroupAttribute<'_>>, PassError> {
     match attribute {
-        AttributeValue::Array(members) => Ok(Some((members, 1))),
+        AttributeValue::Array(members) => Ok(Some(ArgumentGroupAttribute {
+            members,
+            alignment: 1,
+            force_stack: false,
+        })),
         AttributeValue::Dict(group) => {
             let Some(AttributeValue::Array(members)) = group.get("members") else {
                 return Err(PassError::InvalidRuleSet(
@@ -275,7 +300,20 @@ pub(crate) fn decode_argument_group(
                     ));
                 }
             };
-            Ok(Some((members, alignment)))
+            let force_stack = match group.get("stack") {
+                None => false,
+                Some(AttributeValue::Bool(stack)) => *stack,
+                _ => {
+                    return Err(PassError::InvalidRuleSet(
+                        "ABI argument group has invalid stack placement".to_string(),
+                    ));
+                }
+            };
+            Ok(Some(ArgumentGroupAttribute {
+                members,
+                alignment,
+                force_stack,
+            }))
         }
         _ => Ok(None),
     }

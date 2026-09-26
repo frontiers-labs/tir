@@ -49,13 +49,24 @@ pub fn lower_function_and_return(
         let signature = tir::builtin::FnType::signature_of(context, func.fn_value())
             .map(|(params, _)| params)
             .unwrap_or_default();
+        let variadic = signature.last().copied() == Some(tir::builtin::VarArgsType::new(context));
+        let public_parameter_count = signature.len().saturating_sub(usize::from(variadic));
+        let implicit_argument_types = func.implicit_argument_types();
+        let entry_sp = func.entry_sp_argument();
         let function_arguments: Vec<(tir::Value, tir::TypeId)> = func
             .body()
             .value_arguments()
             .into_iter()
             .enumerate()
             .map(|(index, argument)| {
-                let ty = signature.get(index).copied().unwrap_or(argument.ty());
+                let ty = if index < public_parameter_count {
+                    signature[index]
+                } else {
+                    implicit_argument_types
+                        .get(index - public_parameter_count)
+                        .copied()
+                        .unwrap_or_else(|| argument.ty())
+                };
                 (argument, ty)
             })
             .collect();
@@ -69,6 +80,8 @@ pub fn lower_function_and_return(
         }
         let mut function_arguments = function_arguments.into_iter();
         let mut argument_alignments = argument_alignments.into_iter();
+        let stack_arguments = func.stack_arguments();
+        let mut argument_index = 0;
         let result_address = if func.has_result_address() {
             let (argument, ty) = function_arguments.next().ok_or_else(|| {
                 PassError::InvalidRuleSet(
@@ -76,6 +89,7 @@ pub fn lower_function_and_return(
                 )
             })?;
             argument_alignments.next();
+            argument_index += 1;
             let class = argument_class(ty)?;
             retype(context, argument.id(), class);
             Some(AttributeValue::Value(argument.id()))
@@ -83,12 +97,24 @@ pub fn lower_function_and_return(
             None
         };
         for ((argument, ty), alignment) in function_arguments.zip(argument_alignments) {
+            let force_stack = stack_arguments.binary_search(&argument_index).is_ok();
+            argument_index += 1;
+            if Some(argument.id()) == entry_sp {
+                let class = argument_class(ty)?;
+                retype(context, argument.id(), class);
+                continue;
+            }
             let ty = context.get_type_data(ty);
             let Some(tuple) = (ty.as_ref() as &dyn std::any::Any).downcast_ref::<TupleType>()
             else {
                 let class = argument_class(context.get_type_id(ty))?;
                 retype(context, argument.id(), class);
-                arguments.push(AttributeValue::Value(argument.id()));
+                let value = AttributeValue::Value(argument.id());
+                arguments.push(if force_stack {
+                    encode_argument_group(vec![value], alignment, true)
+                } else {
+                    value
+                });
                 continue;
             };
 
@@ -130,7 +156,7 @@ pub fn lower_function_and_return(
                     Ok(AttributeValue::Value(element))
                 })
                 .collect::<Result<Vec<_>, PassError>>()?;
-            arguments.push(encode_argument_group(group, alignment));
+            arguments.push(encode_argument_group(group, alignment, force_stack));
         }
         // Block parameters carrying a region's results are the other values that
         // reach machine instructions without being defined by one, so they are
@@ -163,6 +189,12 @@ pub fn lower_function_and_return(
             .body(op.op().regions()[0])
             .attr("name", AttributeValue::Str(name.into()))
             .attr("arg_regs", AttributeValue::Array(arguments.into()));
+        if variadic {
+            symbol = symbol.attr("variadic", AttributeValue::Bool(true));
+        }
+        if let Some(entry_sp) = entry_sp {
+            symbol = symbol.attr("entry_sp", AttributeValue::Value(entry_sp));
+        }
         if let Some(result_address) = result_address {
             symbol = symbol.attr("result_address", result_address);
         }

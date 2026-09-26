@@ -6,7 +6,8 @@ define i1 @below_or_unordered(double %value) {
 }
 
 ; CHECK-LABEL: func.func @below_or_unordered
-; CHECK: fp.constant {bits = 4652007308572753920} : !f64
+; CHECK: constant {value = 4652007308572753920} : !i64
+; CHECK: bitcast
 ; CHECK: fp.cmp {{.*}} {predicate = "oge"}
 ; CHECK: xori
 ; CHECK: func.return

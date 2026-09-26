@@ -14,6 +14,7 @@ pub enum Type {
     Void,
     Float(u32),
     Array(u64, Box<Type>),
+    Vector(u32, Box<Type>),
     Named(String),
     Struct(Vec<Type>),
 }
@@ -25,9 +26,11 @@ pub enum Operand {
     /// An inline integer literal; materialised as a `builtin.constant` on lowering.
     ConstInt(i64),
     ConstFloat(f64),
+    ConstFloatBits(u64),
     Global(String),
     Null,
     Undef,
+    Poison,
     GetElementPtr {
         source: Type,
         base: Box<Operand>,
@@ -73,6 +76,16 @@ pub enum CastOp {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Inst {
+    Freeze {
+        result: String,
+        ty: Type,
+        value: Operand,
+    },
+    FNeg {
+        result: String,
+        ty: Type,
+        value: Operand,
+    },
     Binary {
         result: String,
         op: BinOp,
@@ -81,11 +94,6 @@ pub enum Inst {
         ty: Type,
         lhs: Operand,
         rhs: Operand,
-    },
-    FNeg {
-        result: String,
-        ty: Type,
-        value: Operand,
     },
     ICmp {
         result: String,
@@ -119,6 +127,33 @@ pub enum Inst {
         ty: Type,
         ptr: Operand,
     },
+    ExtractValue {
+        result: String,
+        aggregate: Type,
+        value: Operand,
+        indices: Vec<u32>,
+    },
+    InsertValue {
+        result: String,
+        aggregate: Type,
+        value: Operand,
+        element_type: Type,
+        element: Operand,
+        index: u32,
+    },
+    ExtractElement {
+        result: String,
+        vector: Type,
+        value: Operand,
+        index: Operand,
+    },
+    InsertElement {
+        result: String,
+        vector: Type,
+        value: Operand,
+        element: Operand,
+        index: Operand,
+    },
     Store {
         ty: Type,
         value: Operand,
@@ -150,6 +185,7 @@ pub enum Inst {
         if_true: String,
         if_false: String,
     },
+    Unreachable,
     Ret {
         value: Option<(Type, Operand)>,
     },
@@ -157,7 +193,7 @@ pub enum Inst {
         result: Option<String>,
         ret: Type,
         callee: Operand,
-        args: Vec<(Type, Operand)>,
+        args: Vec<CallArg>,
     },
     /// An instruction the parser recognised structurally but that has no TIR
     /// equivalent. Carries the opcode so conversion can fail with a useful
@@ -175,13 +211,30 @@ pub struct Block {
 pub struct Param {
     pub name: String,
     pub ty: Type,
+    pub abi: AbiAttrs,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct AbiAttrs {
+    pub sret: Option<Type>,
+    pub byval: Option<Type>,
+    pub align: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CallArg {
+    pub ty: Type,
+    pub value: Operand,
+    pub abi: AbiAttrs,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Function {
     pub name: String,
+    pub internal: bool,
     pub ret: Type,
     pub params: Vec<Param>,
+    pub variadic: bool,
     pub blocks: Vec<Block>,
 }
 

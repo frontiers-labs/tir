@@ -51,6 +51,10 @@ name = "dhrystone"
 harness = false
 
 [[bench]]
+name = "libquantum"
+harness = false
+
+[[bench]]
 name = "torture"
 harness = false
 

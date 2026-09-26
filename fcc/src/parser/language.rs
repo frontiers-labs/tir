@@ -47,6 +47,7 @@ pub(super) fn keyword_for_standard(token: Token, options: LangOptions) -> Token 
             Token::KwInline => return Token::Identifier("inline".to_string()),
             Token::KwRestrict => return Token::Identifier("restrict".to_string()),
             Token::KwUnderscoreBool => return Token::Identifier("_Bool".to_string()),
+            Token::KwComplex => return Token::Identifier("_Complex".to_string()),
             _ => {}
         }
     }

@@ -67,18 +67,15 @@ register_class XMM for [SSE2] : XMM128 {
     }
 }
 
-// `movq xmm, r64` zero-extends through bit 127: same width, no merge, so its
-// destination write breaks dependencies instead of chaining on them.
-
-/// Low 64-bit XMM view for operations such as `movq` that clear the upper 64 bits.
+/// Low 64-bit XMM view for packed values and bitwise transfers.
 ///
 /// See [Intel SDM, Volume 2, MOVQ](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html).
-register_class XMMzx for [SSE2] : XMM128 {
+register_class XMM64 for [SSE2] : XMM128 {
     param ENCODING_LEN: Integer = 4;
     param WIDTH: Integer = 64;
 
     registers {
-        xmm0..xmm15 => { traits = [float] },
+        xmm0..xmm15 => { traits = [polymorphic] },
     }
 }
 
@@ -354,7 +351,7 @@ instruction Movsd for [X86_64] {
     }
 }
 
-// `movq xmm, r64` copies an integer bit pattern into the low binary64 lane.
+// `movq xmm, r64` copies the low 64 bits without interpreting them as a float.
 instruction MovqXmmGpr for [X86_64] {
     param OPNAME: String = "movq_xmm_gpr";
     param MNEMONIC: String = "movq";
@@ -362,7 +359,7 @@ instruction MovqXmmGpr for [X86_64] {
     schedule { units = [WriteFPMove]; }
 
     operands {
-        dst: XMMzx,
+        dst: XMM64,
         src: GPR,
     }
 
@@ -383,7 +380,7 @@ instruction MovqXmmGpr for [X86_64] {
     }
 }
 
-// `movq r64, xmm` copies the low binary64 lane into an integer register.
+// `movq r64, xmm` copies the low 64 bits into an integer register.
 instruction MovqGprXmm for [X86_64] {
     param OPNAME: String = "movq_gpr_xmm";
     param MNEMONIC: String = "movq";
@@ -392,7 +389,7 @@ instruction MovqGprXmm for [X86_64] {
 
     operands {
         dst: GPR,
-        src: XMM,
+        src: XMM64,
     }
 
     encoding {
@@ -1214,4 +1211,36 @@ instruction MovsdStoreDisp for [X86_64] {
     behavior {
         store(base + sext(imm, self.XLEN), 8, src);
     }
+}
+
+instruction MovqLoadDisp for [SSE2] {
+    param OPNAME: String = "movq_load_disp";
+    param MNEMONIC: String = "movq";
+
+    operands { dst: XMM64, base: GPR, imm: bits<32>, }
+    encoding {
+        0xF3,
+        rex(0b0, dst, base, 0b0),
+        0x0F,
+        0x7E,
+        modrm_disp(dst, base, imm),
+    }
+    asm { "{self.MNEMONIC} {dst}, [{base} + {imm}]" }
+    behavior { dst = load(base + sext(imm, self.XLEN), 8, 0b0); }
+}
+
+instruction MovqStoreDisp for [SSE2] {
+    param OPNAME: String = "movq_store_disp";
+    param MNEMONIC: String = "movq";
+
+    operands { base: GPR, imm: bits<32>, src: XMM64, }
+    encoding {
+        0x66,
+        rex(0b0, src, base, 0b0),
+        0x0F,
+        0xD6,
+        modrm_disp(src, base, imm),
+    }
+    asm { "{self.MNEMONIC} [{base} + {imm}], {src}" }
+    behavior { store(base + sext(imm, self.XLEN), 8, src); }
 }

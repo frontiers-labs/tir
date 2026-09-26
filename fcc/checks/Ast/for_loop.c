@@ -9,12 +9,14 @@
 // CHECK-NEXT:       Int 0
 // CHECK-NEXT:     Decl "i": Int
 // CHECK-NEXT:     For
-// CHECK-NEXT:       Assign "i"
+// CHECK-NEXT:       AssignExpr
+// CHECK-NEXT:         Var "i"
 // CHECK-NEXT:         Int 1
 // CHECK-NEXT:       Le
 // CHECK-NEXT:         Var "i"
 // CHECK-NEXT:         Var "n"
-// CHECK-NEXT:       Assign "i"
+// CHECK-NEXT:       AssignExpr
+// CHECK-NEXT:         Var "i"
 // CHECK-NEXT:         Add
 // CHECK-NEXT:           Var "i"
 // CHECK-NEXT:           Int 1

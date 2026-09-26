@@ -45,6 +45,49 @@ pub fn lambda(
 }
 
 impl FuncOpBuilder {
+    /// Declare `count` trailing body arguments that are supplied by the ABI and
+    /// are absent from the public function type.
+    pub fn implicit_arguments(mut self, count: usize) -> Self {
+        if let Some(body) = self.body {
+            let arguments = self.context.get_region(body).value_arguments();
+            if count <= arguments.len() {
+                self = self.attr(
+                    "implicit_argument_types",
+                    tir::attributes::AttributeValue::Array(
+                        arguments[arguments.len() - count..]
+                            .iter()
+                            .map(|argument| tir::attributes::AttributeValue::Type(argument.ty()))
+                            .collect::<Vec<_>>()
+                            .into(),
+                    ),
+                );
+            }
+        }
+        self.attr(
+            "implicit_arguments",
+            tir::attributes::AttributeValue::UInt(count as u64),
+        )
+    }
+
+    /// Mark an implicit pointer argument that receives the stack pointer at
+    /// function entry, before any frame adjustment.
+    pub fn entry_sp(mut self, argument: tir::ValueId) -> Self {
+        if let Some(body) = self.body
+            && let Some(index) = self
+                .context
+                .get_region(body)
+                .value_arguments()
+                .iter()
+                .position(|value| value.id() == argument)
+        {
+            self = self.attr(
+                "entry_sp_index",
+                tir::attributes::AttributeValue::UInt(index as u64),
+            );
+        }
+        self.attr("entry_sp", tir::attributes::AttributeValue::Value(argument))
+    }
+
     pub fn result_address(self) -> Self {
         self.attr(
             "result_address",
@@ -78,6 +121,19 @@ impl FuncOpBuilder {
             ),
         )
     }
+
+    pub fn stack_arguments(self, arguments: &[usize]) -> Self {
+        self.attr(
+            "stack_arguments",
+            tir::attributes::AttributeValue::Array(
+                arguments
+                    .iter()
+                    .map(|&argument| tir::attributes::AttributeValue::UInt(argument as u64))
+                    .collect::<Vec<_>>()
+                    .into(),
+            ),
+        )
+    }
 }
 
 impl Callable for FuncOp {
@@ -90,7 +146,10 @@ impl Callable for FuncOp {
     }
 
     fn params(&self) -> Vec<tir::TypeId> {
-        self.parameters().iter().map(tir::Value::ty).collect()
+        self.public_parameters()
+            .iter()
+            .map(tir::Value::ty)
+            .collect()
     }
 
     fn result(&self) -> tir::TypeId {
@@ -111,6 +170,52 @@ impl FuncOp {
         self.body_region().value_arguments()
     }
 
+    pub fn implicit_argument_count(&self) -> usize {
+        match self.attr("implicit_arguments") {
+            Some(tir::attributes::AttributeValue::UInt(count)) => count as usize,
+            _ => 0,
+        }
+    }
+
+    /// The body arguments represented by the public function type.
+    pub fn public_parameters(&self) -> Vec<tir::Value> {
+        let parameters = self.parameters();
+        let public_count = parameters
+            .len()
+            .saturating_sub(self.implicit_argument_count());
+        parameters[..public_count].to_vec()
+    }
+
+    pub fn implicit_argument_types(&self) -> Vec<tir::TypeId> {
+        match self.attr("implicit_argument_types") {
+            Some(tir::attributes::AttributeValue::Array(types)) => types
+                .iter()
+                .filter_map(|ty| match ty {
+                    tir::attributes::AttributeValue::Type(ty) => Some(*ty),
+                    _ => None,
+                })
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    pub fn entry_sp_argument(&self) -> Option<tir::ValueId> {
+        let marked = match self.attr("entry_sp") {
+            Some(tir::attributes::AttributeValue::Value(value)) => value,
+            _ => return None,
+        };
+        let parameters = self.parameters();
+        if parameters.iter().any(|argument| argument.id() == marked) {
+            return Some(marked);
+        }
+        match self.attr("entry_sp_index") {
+            Some(tir::attributes::AttributeValue::UInt(index)) => parameters
+                .get(usize::try_from(index).ok()?)
+                .map(tir::Value::id),
+            _ => None,
+        }
+    }
+
     /// The λ value this definition produces: what a call to it takes as callee.
     pub fn fn_value(&self) -> tir::ValueId {
         self.result()
@@ -122,6 +227,10 @@ impl FuncOp {
 
     pub fn argument_alignments(&self) -> Vec<u64> {
         super::argument_alignments(self)
+    }
+
+    pub fn stack_arguments(&self) -> Vec<usize> {
+        super::stack_arguments(self)
     }
 
     /// The parameters the caller guarantees name memory nothing else the
@@ -137,7 +246,8 @@ impl Symbol for FuncOp {
     }
 
     fn symbol_signature(&self) -> Option<Vec<tir::TypeId>> {
-        Some(self.parameters().iter().map(tir::Value::ty).collect())
+        tir::builtin::FnType::signature_of(&self.0.context, self.fn_value())
+            .map(|(parameters, _)| parameters)
     }
 
     fn symbol_result_type(&self) -> Option<tir::TypeId> {
@@ -181,6 +291,15 @@ impl FuncOp {
             fmt.write(format!("%{}: ", arg.id().number()))?;
             context.print_type(arg.ty(), fmt)?;
         }
+        let variadic = tir::builtin::FnType::signature_of(&context, self.fn_value())
+            .and_then(|(params, _)| params.last().copied())
+            == Some(tir::builtin::VarArgsType::new(&context));
+        if variadic {
+            if !args.is_empty() {
+                fmt.write(", ")?;
+            }
+            fmt.write("...")?;
+        }
         fmt.write(")")?;
 
         let ret_type = self.ret_type();
@@ -192,7 +311,17 @@ impl FuncOp {
         if self.has_result_address() {
             fmt.write(" result_address")?;
         }
+        if self.implicit_argument_count() > 0 {
+            fmt.write(format!(
+                " implicit_arguments {}",
+                self.implicit_argument_count()
+            ))?;
+        }
+        if let Some(entry_sp) = self.entry_sp_argument() {
+            fmt.write(format!(" entry_sp %{}", entry_sp.number()))?;
+        }
         super::print_keyed_list(fmt, "argument_alignments", &self.argument_alignments())?;
+        super::print_keyed_list(fmt, "stack_arguments", &self.stack_arguments())?;
         super::print_keyed_list(fmt, "noalias", &self.noalias_arguments())?;
 
         tir::region_format::print_op_region(fmt, &context, self, 0)?;
@@ -213,8 +342,11 @@ impl FuncOp {
             .ok_or_else(|| (parser.span(), tir::Error::ExpectedSymbolName))?
             .to_string();
 
-        let block_args = parser
+        let parsed_args = parser
             .parse_delimited("(", ")", |parser| {
+                if parser.parse_token("...") {
+                    return Ok(None);
+                }
                 let val_name = parser
                     .parse_value_ref()
                     .ok_or_else(|| (parser.span(), tir::Error::ExpectedValueRef))?
@@ -230,9 +362,21 @@ impl FuncOp {
 
                 let value = context.create_value(ty, None);
                 parser.define_value(&val_name, value.id());
-                Ok(value)
+                Ok(Some(value))
             })?
             .ok_or_else(|| (parser.span(), tir::Error::ExpectedToken("(")))?;
+        let variadic = parsed_args.last().is_some_and(Option::is_none);
+        if parsed_args
+            .iter()
+            .take(parsed_args.len().saturating_sub(1))
+            .any(Option::is_none)
+        {
+            return Err((
+                parser.span(),
+                tir::Error::ExpectedToken("final variadic marker"),
+            ));
+        }
+        let block_args: Vec<_> = parsed_args.into_iter().flatten().collect();
 
         let ret_type = if parser.parse_token("->") {
             parser
@@ -242,11 +386,47 @@ impl FuncOp {
             UnitType::new(context)
         };
         let result_address = parser.parse_token("result_address");
+        let implicit_arguments = if parser.parse_token("implicit_arguments") {
+            let count = parser.parse_number().ok_or_else(|| {
+                (
+                    parser.span(),
+                    tir::Error::ExpectedToken("implicit argument count"),
+                )
+            })?;
+            Some(u64::try_from(count).map_err(|_| {
+                (
+                    parser.span(),
+                    tir::Error::ExpectedToken("nonnegative implicit argument count"),
+                )
+            })?)
+        } else {
+            None
+        };
+        let entry_sp = if parser.parse_token("entry_sp") {
+            let name = parser
+                .parse_value_ref()
+                .ok_or_else(|| (parser.span(), tir::Error::ExpectedValueRef))?
+                .to_string();
+            Some(parser.resolve_value(context, &name))
+        } else {
+            None
+        };
         let argument_alignments =
             super::parse_keyed_array(parser, context, "argument_alignments", "alignment list")?;
+        let stack_arguments =
+            super::parse_keyed_array(parser, context, "stack_arguments", "argument list")?;
         let noalias = super::parse_keyed_array(parser, context, "noalias", "argument list")?;
 
-        let parameters: Vec<tir::TypeId> = block_args.iter().map(tir::Value::ty).collect();
+        let public_count = block_args
+            .len()
+            .saturating_sub(implicit_arguments.unwrap_or(0) as usize);
+        let mut parameters: Vec<tir::TypeId> = block_args[..public_count]
+            .iter()
+            .map(tir::Value::ty)
+            .collect();
+        if variadic {
+            parameters.push(tir::builtin::VarArgsType::new(context));
+        }
         let body_region = parser.parse_region_with_entry_args(context, block_args)?;
 
         let mut builder = FuncOpBuilder::new(context)
@@ -257,8 +437,17 @@ impl FuncOp {
         if result_address {
             builder = builder.result_address();
         }
+        if let Some(count) = implicit_arguments {
+            builder = builder.implicit_arguments(count as usize);
+        }
+        if let Some(entry_sp) = entry_sp {
+            builder = builder.entry_sp(entry_sp);
+        }
         if let Some(argument_alignments) = argument_alignments {
             builder = builder.attr("argument_alignments", argument_alignments);
+        }
+        if let Some(stack_arguments) = stack_arguments {
+            builder = builder.attr("stack_arguments", stack_arguments);
         }
         if let Some(noalias) = noalias {
             builder = builder.attr("noalias", noalias);
@@ -317,8 +506,79 @@ impl FuncOp {
 impl tir::Verifiable for FuncOp {
     fn verify_impl(&self, context: &Context) -> Result<(), Error> {
         super::verify_argument_alignments(self, self.parameters().len(), "function")?;
-        let parameters: Vec<_> = self.parameters().iter().map(tir::Value::ty).collect();
+        super::verify_stack_arguments(self, self.parameters().len(), "function")?;
+        let body_parameters = self.parameters();
+        let implicit_count = match self.attr("implicit_arguments") {
+            None => 0,
+            Some(tir::attributes::AttributeValue::UInt(count)) => {
+                usize::try_from(count).map_err(|_| {
+                    Error::VerificationError(
+                        "function implicit argument count is too large".to_string(),
+                    )
+                })?
+            }
+            Some(_) => {
+                return Err(Error::VerificationError(
+                    "function implicit argument count must be an unsigned integer".to_string(),
+                ));
+            }
+        };
+        if implicit_count > body_parameters.len() {
+            return Err(Error::VerificationError(
+                "function implicit argument count exceeds its body arguments".to_string(),
+            ));
+        }
+        let public_count = body_parameters.len() - implicit_count;
+        let mut parameters: Vec<_> = body_parameters[..public_count]
+            .iter()
+            .map(tir::Value::ty)
+            .collect();
         super::verify_noalias_arguments(self, context, &parameters)?;
+        let variadic = tir::builtin::FnType::signature_of(context, self.fn_value())
+            .and_then(|(params, _)| params.last().copied())
+            == Some(tir::builtin::VarArgsType::new(context));
+        if implicit_count > 0 && !variadic {
+            return Err(Error::VerificationError(
+                "only variadic functions may have implicit arguments".to_string(),
+            ));
+        }
+        if self.attr("entry_sp").is_some()
+            && !matches!(
+                self.attr("entry_sp"),
+                Some(tir::attributes::AttributeValue::Value(_))
+            )
+        {
+            return Err(Error::VerificationError(
+                "function entry stack pointer must be a value".to_string(),
+            ));
+        }
+        if self.attr("entry_sp").is_some() && self.entry_sp_argument().is_none() {
+            return Err(Error::VerificationError(
+                "function entry stack pointer must name an implicit argument".to_string(),
+            ));
+        }
+        if let Some(entry_sp) = self.entry_sp_argument() {
+            if !body_parameters[public_count..]
+                .iter()
+                .any(|argument| argument.id() == entry_sp)
+            {
+                return Err(Error::VerificationError(
+                    "function entry stack pointer must name an implicit argument".to_string(),
+                ));
+            }
+            let ty = context.get_type_data(context.get_value(entry_sp).ty());
+            if (ty.as_ref() as &dyn std::any::Any)
+                .downcast_ref::<crate::ptr::PtrType>()
+                .is_none()
+            {
+                return Err(Error::VerificationError(
+                    "function entry stack pointer argument must have pointer type".to_string(),
+                ));
+            }
+        }
+        if variadic {
+            parameters.push(tir::builtin::VarArgsType::new(context));
+        }
         let expected = tir::builtin::FnType::new(context, &parameters, self.ret_type());
         if context.get_value(self.fn_value()).ty() != expected {
             return Err(Error::VerificationError(format!(

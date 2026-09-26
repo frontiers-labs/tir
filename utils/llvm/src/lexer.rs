@@ -35,6 +35,10 @@ pub enum Token<'src> {
     LBracket,
     #[token("]")]
     RBracket,
+    #[token("<")]
+    LAngle,
+    #[token(">")]
+    RAngle,
     #[token("=")]
     Eq,
     #[token("*")]
@@ -52,8 +56,8 @@ pub enum Token<'src> {
     #[regex(r"-?[0-9]+\.[0-9]+([eE][+-]?[0-9]+)?", |l| l.slice().parse().ok(), priority = 6)]
     Float(f64),
 
-    #[regex(r"0x[0-9A-Fa-f]{16}", |l| u64::from_str_radix(&l.slice()[2..], 16).ok(), priority = 7)]
-    HexFloat(u64),
+    #[regex(r"0x[0-9a-fA-F]+", |l| u64::from_str_radix(&l.slice()[2..], 16).ok(), priority = 7)]
+    HexFloatBits(u64),
 
     #[regex(r"-?[0-9]+", |l| l.slice().parse().ok())]
     Int(i64),

@@ -634,6 +634,13 @@ impl Emitter<'_> {
                 .build();
             self.context.add(region, op.id());
             Ok(op.result())
+        } else if (data.as_ref() as &dyn std::any::Any).is::<crate::vector::VectorType>()
+            && let Some(width @ 1..=64) = crate::sem::egraph::type_width(self.context, ty)
+        {
+            let zero = self.constant(region, 0, IntegerType::new(self.context, width))?;
+            let op = crate::builtin::ops::bitcast(self.context, zero, ty).build();
+            self.context.add(region, op.id());
+            Ok(op.result())
         } else {
             self.constant(region, 0, ty)
         }

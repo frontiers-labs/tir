@@ -9,11 +9,14 @@ fn import_rejects_unsupported_float_width() {
         declarations: Vec::new(),
         functions: vec![Function {
             name: "unsupported_float".into(),
+            internal: false,
             ret: Type::Void,
             params: vec![Param {
                 name: "%value".into(),
                 ty: Type::Float(128),
+                abi: Default::default(),
             }],
+            variadic: false,
             blocks: vec![Block {
                 label: None,
                 insts: Vec::new(),

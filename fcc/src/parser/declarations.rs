@@ -31,6 +31,7 @@ where
         tok @ Token::KwUnderscoreBool => tok,
         tok @ Token::KwFloat => tok,
         tok @ Token::KwDouble => tok,
+        tok @ Token::KwComplex => tok,
     };
     let builtin = builtin_atom
         .repeated()
@@ -449,7 +450,8 @@ impl<'a> DeclParser<'a> {
                     | Token::KwSigned
                     | Token::KwUnsigned
                     | Token::KwFloat
-                    | Token::KwDouble,
+                    | Token::KwDouble
+                    | Token::KwComplex,
                 ) => spec_tokens.push(self.next().unwrap()),
                 Some(Token::Identifier(name)) if is_decl_attr_name(name) => {
                     let attr = self.parse_attr()?;
@@ -917,12 +919,13 @@ fn builtin_type(tokens: &[Token]) -> CType {
 }
 
 /// How often each builtin type specifier keyword occurs in a declaration's specifier list.
-#[derive(Default)]
+#[derive(Clone, Copy, Default)]
 struct SpecCounts {
     void: usize,
     boolean: usize,
     float: usize,
     double: usize,
+    complex: usize,
     char_: usize,
     short: usize,
     long: usize,
@@ -941,6 +944,7 @@ impl SpecCounts {
                 Token::KwBool | Token::KwUnderscoreBool => &mut counts.boolean,
                 Token::KwFloat => &mut counts.float,
                 Token::KwDouble => &mut counts.double,
+                Token::KwComplex => &mut counts.complex,
                 Token::KwChar => &mut counts.char_,
                 Token::KwShort => &mut counts.short,
                 Token::KwLong => &mut counts.long,
@@ -957,6 +961,22 @@ impl SpecCounts {
     /// The type these specifiers name, or `None` for a combination C does not allow
     /// (`long short`, `unsigned float`, a repeated keyword, ...).
     fn ctype(&self) -> Option<CType> {
+        if self.complex != 0 {
+            if self.complex != 1 {
+                return None;
+            }
+            let mut real = *self;
+            real.complex = 0;
+            if real.float == 0 && real.double == 0 && real.long == 0 {
+                real.double = 1;
+            }
+            return match real.ctype()? {
+                CType::Float => Some(CType::ComplexFloat),
+                CType::Double => Some(CType::ComplexDouble),
+                CType::LongDouble => Some(CType::ComplexLongDouble),
+                _ => None,
+            };
+        }
         if self.other > 0 || self.int > 1 {
             return None;
         }
@@ -1288,6 +1308,10 @@ fn parse_local_decl_tokens(
 ) -> Result<NodeId, String> {
     let mut parser = DeclParser::new(tokens);
     let specs = parser.parse_specs(state, tok)?;
+    let is_static = specs
+        .storage
+        .iter()
+        .any(|tok| matches!(tok, Token::KwStatic));
     let mut nodes = specs.type_decl.into_iter().collect::<Vec<_>>();
 
     if parser.is_done() {
@@ -1319,6 +1343,7 @@ fn parse_local_decl_tokens(
             AstLeaf::Decl {
                 name: declarator.name,
                 ty: declarator.ty,
+                is_static,
             },
         );
         if let Some(initializer) = initializer {
@@ -1460,7 +1485,7 @@ pub(super) fn local_decl<'src, I>() -> impl Parser<'src, I, NodeId, Extra<'src>>
 where
     I: ValueInput<'src, Token = Token, Span = Span>,
 {
-    ctype()
+    choice((just(Token::KwStatic).to(()), ctype().to(())))
         .rewind()
         .ignore_then(declaration_tokens())
         .try_map_with(|tokens, e: &mut MapExtra<'src, '_, I, Extra<'src>>| {

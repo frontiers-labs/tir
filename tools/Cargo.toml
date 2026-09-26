@@ -48,3 +48,8 @@ harness = false
 name = "whetstone"
 path = "../fcc/benches/whetstone.rs"
 harness = false
+
+[[bench]]
+name = "libquantum"
+path = "../fcc/benches/libquantum.rs"
+harness = false

@@ -44,6 +44,12 @@ pub(super) fn constant_initializer_data(
             })
         }
         TypeKind::Pointer(_) => {
+            if ast.get_annotation(initializer)?.constant == Some(0) {
+                return Some(ConstantData {
+                    bytes: vec![0; source_type_layout(typed, target).0 as usize],
+                    relocations: Vec::new(),
+                });
+            }
             let initializer = if ast.get_node(initializer).kind == AstKind::Cast {
                 ast.children(initializer).next()?
             } else {

@@ -217,6 +217,7 @@ pub struct RegisterRequirement {
     capability: RegisterCapability,
     whole: bool,
     view_offset: u32,
+    file: Option<&'static str>,
 }
 
 impl RegisterRequirement {
@@ -241,6 +242,7 @@ impl RegisterRequirement {
             capability,
             whole: false,
             view_offset: 0,
+            file: None,
         }
     }
 
@@ -249,6 +251,7 @@ impl RegisterRequirement {
             capability,
             whole: true,
             view_offset: 0,
+            file: None,
         }
     }
 
@@ -259,6 +262,15 @@ impl RegisterRequirement {
     pub fn at_view_offset(mut self, offset: u32) -> Self {
         self.view_offset = offset;
         self
+    }
+
+    pub fn at_file(mut self, file: &'static str) -> Self {
+        self.file = Some(file);
+        self
+    }
+
+    pub fn file(self) -> Option<&'static str> {
+        self.file
     }
 
     pub fn view_offset(&self) -> u32 {
@@ -1615,12 +1627,26 @@ impl InstructionSelectPass {
     ) {
         let compiled = &self.compiled_patterns[pattern_index];
         let pattern_root = Id::from_raw(compiled.root() as u32);
+        let vector_file = self
+            .call_lowering
+            .as_ref()
+            .and_then(|lowering| lowering.register_file(crate::backend::abi::ValueKind::Vector));
         let matched = compiled.search_roots_with_legality(
             &fs.egraph,
             context,
             roots,
             fs.pointer_width,
-            &|node, class| value_match_allowed(fs, context, compiled, pattern_root, node, class),
+            &|node, class| {
+                value_match_allowed(
+                    fs,
+                    context,
+                    compiled,
+                    pattern_root,
+                    node,
+                    class,
+                    vector_file,
+                )
+            },
         );
         found.extend(matched.into_iter().map(|mut m| {
             m.root = fs.egraph.find(m.root);
@@ -2109,6 +2135,37 @@ impl InstructionSelectPass {
                 self.emitted_values.insert(*old, new);
                 context.replace_value_uses(*old, new);
             }
+        }
+
+        let mut erased: HashSet<OpId> = plan.erase_ops.iter().copied().collect();
+        let returned = context.get_region(region).results();
+        for &op in &plan.order {
+            if erased.contains(&op) || !context.has_operation(op) {
+                continue;
+            }
+            let instance = context.get_op(op);
+            if instance
+                .clone()
+                .as_interface::<dyn tir::MemoryRead>()
+                .is_none()
+                || instance
+                    .clone()
+                    .as_interface::<dyn tir::ResourceEffects>()
+                    .is_none_or(|effects| {
+                        effects
+                            .resource_effects()
+                            .iter()
+                            .any(|effect| effect.access != tir::ResourceAccess::Read)
+                    })
+                || instance
+                    .value_results()
+                    .iter()
+                    .any(|value| context.is_used(*value) || returned.contains(value))
+            {
+                continue;
+            }
+            plan.erase_ops.push(op);
+            erased.insert(op);
         }
 
         for (op, slot, emit) in &mut plan.aux {
@@ -3181,6 +3238,7 @@ fn value_match_allowed(
     pattern_root: Id,
     pattern_node: Id,
     class: Id,
+    vector_file: Option<&'static str>,
 ) -> bool {
     if !compiled.boundary_ok(&fs.egraph, context, pattern_node, class, fs.pointer_width) {
         return false;
@@ -3188,6 +3246,30 @@ fn value_match_allowed(
     let Some(meta) = compiled.node_meta.get(pattern_node.index()) else {
         return true;
     };
+    let required_file = if pattern_node == pattern_root {
+        compiled.result_file()
+    } else {
+        meta.register.and_then(RegisterRequirement::file)
+    };
+    if let (Some(required_file), Some(vector_file)) = (required_file, vector_file)
+        && required_file != vector_file
+        && fs.any_class_value(class, |value| {
+            let ty = context.get_type_data(context.get_value(*value).ty());
+            (ty.as_ref() as &dyn std::any::Any)
+                .downcast_ref::<crate::vector::VectorType>()
+                .is_some()
+        })
+    {
+        return false;
+    }
+    if let Some(required_file) = meta.register.and_then(RegisterRequirement::file)
+        && fs.any_class_value(class, |value| {
+            crate::backend::value_class(context, *value)
+                .is_some_and(|actual| actual.file() != required_file)
+        })
+    {
+        return false;
+    }
     if pattern_node == pattern_root || meta.duplicable || meta.is_state {
         return true;
     }

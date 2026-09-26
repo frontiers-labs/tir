@@ -69,6 +69,7 @@ impl tir::Verifiable for CallOp {
         self.resources()?;
         let args = self.args();
         super::verify_argument_alignments(self, args.len(), "call")?;
+        super::verify_stack_arguments(self, args.len(), "call")?;
         verify_result_address(self, context, &args)?;
 
         let Some((parameters, ret_type)) = FnType::signature_of(context, self.callee()) else {
@@ -149,6 +150,10 @@ impl CallOp {
         super::argument_alignments(self)
     }
 
+    pub fn stack_arguments(&self) -> Vec<usize> {
+        super::stack_arguments(self)
+    }
+
     /// The symbol this call was bound to for machine lowering, once the callee
     /// has been resolved to a λ of the module.
     pub fn callee_symbol(&self) -> Option<String> {
@@ -208,6 +213,7 @@ impl CallOp {
             fmt.write(format!(" callee @{symbol}"))?;
         }
         super::print_keyed_list(fmt, "argument_alignments", &self.argument_alignments())?;
+        super::print_keyed_list(fmt, "stack_arguments", &self.stack_arguments())?;
         if self.attr("resources").is_some() {
             let resources = self.resources().map_err(|_| std::fmt::Error)?;
             let names = resources
@@ -244,6 +250,8 @@ impl CallOp {
             .transpose()?;
         let argument_alignments =
             super::parse_keyed_array(parser, context, "argument_alignments", "alignment list")?;
+        let stack_arguments =
+            super::parse_keyed_array(parser, context, "stack_arguments", "argument list")?;
 
         let resources = super::parse_keyed_array(parser, context, "resources", "resource list")?;
         let mut builder = CallOpBuilder::new(context)
@@ -259,6 +267,9 @@ impl CallOp {
         }
         if let Some(argument_alignments) = argument_alignments {
             builder = builder.attr("argument_alignments", argument_alignments);
+        }
+        if let Some(stack_arguments) = stack_arguments {
+            builder = builder.attr("stack_arguments", stack_arguments);
         }
         if let Some(resources) = resources {
             builder = builder.attr("resources", resources);
@@ -293,6 +304,19 @@ impl CallOpBuilder {
                     .iter()
                     .copied()
                     .map(AttributeValue::UInt)
+                    .collect::<Vec<_>>()
+                    .into(),
+            ),
+        )
+    }
+
+    pub fn stack_arguments(self, arguments: &[usize]) -> Self {
+        self.attr(
+            "stack_arguments",
+            AttributeValue::Array(
+                arguments
+                    .iter()
+                    .map(|&argument| AttributeValue::UInt(argument as u64))
                     .collect::<Vec<_>>()
                     .into(),
             ),

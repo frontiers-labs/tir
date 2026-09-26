@@ -4,7 +4,7 @@
 //! SSA" shape a C frontend emits before any promotion pass): every parameter and
 //! local lives in a stack slot produced by `ptr.alloca`, reads become
 //! `ptr.load` and writes become `ptr.store`. Arithmetic uses the `builtin`
-//! integer ops; C-only literals and variadic markers use the local `cir` dialect.
+//! integer ops; C-only literals use the local `cir` dialect.
 //!
 //! Loops are emitted as `cir` loop ops, which keep the source shape — condition,
 //! step and body in regions of their own — for the `raise-loops` pass to read.
@@ -15,14 +15,16 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use tir::attributes::AttributeValue;
+use tir::backend::abi::{ValueKind, type_kind};
 use tir::builtin::{FloatType, FnType, IntegerType, ModuleOp, TupleType, UnitType, ops as b};
 use tir::func::ops as func_ops;
 use tir::graph::{Dag, NodeId};
 use tir::ptr::PtrType;
+use tir::vector::VectorType;
 use tir::{Context, Operation, TypeId, ValueId};
 
 use crate::ast::*;
-use crate::cir::{self, StructType, VarArgsType};
+use crate::cir::{self, StructType};
 use crate::diagnostics::{Diagnostic, EmptyTranslationUnit, UnsupportedConstruct};
 use crate::lexer::decode_c_escapes;
 use crate::sema::{EntityId, QualType, TypeKind, TypedAst};
@@ -34,6 +36,7 @@ mod data;
 mod expressions;
 mod initializers;
 mod scalar;
+mod varargs;
 
 pub use data::lower_data;
 
@@ -42,6 +45,7 @@ use abi::{
     lower_signature,
 };
 use initializers::constant_initializer_data;
+use varargs::VarargsEntry;
 
 /// Where a `break` or a `continue` leaves the innermost construct that owns it.
 #[derive(Clone)]
@@ -190,6 +194,7 @@ struct FnCodegen<'a> {
     /// Lowered values in the expression subtree currently being emitted. The AST
     /// is a DAG, so shared children reuse their first lowering.
     values: HashMap<NodeId, LoweredExpr>,
+    varargs: Option<VarargsEntry>,
 }
 
 pub fn codegen(context: &Context, typed: &TypedAst) -> Result<ModuleOp, Diagnostic> {
@@ -278,6 +283,8 @@ pub fn codegen(context: &Context, typed: &TypedAst) -> Result<ModuleOp, Diagnost
             _ => return Err(unsupported(ast, item, "top-level item".to_string())),
         }
     }
+
+    let static_locals = collect_static_locals(context, typed, &items, &mut globals);
 
     for record in typed.records() {
         let fields = record
@@ -454,9 +461,120 @@ pub fn codegen(context: &Context, typed: &TypedAst) -> Result<ModuleOp, Diagnost
             _ => unreachable!("top-level item was checked before emission"),
         }
     }
+    emit_static_locals(
+        context,
+        typed,
+        &module,
+        &globals,
+        &global_strings,
+        static_locals,
+    )?;
     symbols.bind(context, &module);
     module.body().append_op(b::module_end(context).build());
     Ok(module)
+}
+
+fn collect_static_locals(
+    context: &Context,
+    typed: &TypedAst,
+    items: &[NodeId],
+    globals: &mut HashMap<EntityId, Global>,
+) -> Vec<NodeId> {
+    let ast = typed.ast();
+    let mut static_locals = Vec::new();
+    for &item in items {
+        if ast.get_node(item).kind != AstKind::Function {
+            continue;
+        }
+        for node in ast.preorder(item) {
+            if !matches!(
+                ast.get_leaf_data(node),
+                Some(AstLeaf::Decl {
+                    is_static: true,
+                    ..
+                })
+            ) {
+                continue;
+            }
+            let entity = node_entity(typed, node);
+            globals.insert(
+                entity,
+                Global {
+                    name: format!(".L.fcc.static.{}", static_locals.len()),
+                    elem: lower_type(context, typed, node_type(typed, node)),
+                },
+            );
+            static_locals.push(node);
+        }
+    }
+    static_locals
+}
+
+fn emit_static_locals(
+    context: &Context,
+    typed: &TypedAst,
+    module: &ModuleOp,
+    globals: &HashMap<EntityId, Global>,
+    global_strings: &BTreeMap<String, String>,
+    static_locals: Vec<NodeId>,
+) -> Result<(), Diagnostic> {
+    let ast = typed.ast();
+    for node in static_locals {
+        let source_ty = node_type(typed, node);
+        let (size, align) = source_type_layout(typed, source_ty);
+        let global = &globals[&node_entity(typed, node)];
+        let Some(initializer) = ast.children(node).next() else {
+            module.body().append_op(
+                b::global_zero(context, &global.name, size, align)
+                    .attr(
+                        "sym_visibility",
+                        AttributeValue::Str("private".to_string().into()),
+                    )
+                    .build(),
+            );
+            continue;
+        };
+        let Some(data) =
+            constant_initializer_data(typed, globals, global_strings, source_ty, initializer)
+        else {
+            return Err(unsupported(
+                ast,
+                initializer,
+                "non-constant static initializer".to_string(),
+            ));
+        };
+        let mut definition = b::global_bytes(context, &global.name, data.bytes, align).attr(
+            "sym_visibility",
+            AttributeValue::Str("private".to_string().into()),
+        );
+        if !data.relocations.is_empty() {
+            definition = definition.attr(
+                "relocations",
+                AttributeValue::Array(
+                    data.relocations
+                        .into_iter()
+                        .map(|relocation| {
+                            AttributeValue::Dict(Box::new(BTreeMap::from([
+                                (
+                                    "offset".to_string(),
+                                    AttributeValue::UInt(relocation.offset),
+                                ),
+                                (
+                                    "symbol".to_string(),
+                                    AttributeValue::Str(relocation.symbol.into()),
+                                ),
+                                ("addend".to_string(), AttributeValue::Int(relocation.addend)),
+                                ("width".to_string(), AttributeValue::UInt(relocation.width)),
+                            ])))
+                        })
+                        .collect::<Vec<_>>()
+                        .into(),
+                ),
+            );
+        }
+        module.body().append_op(definition.build());
+    }
+    Ok(())
 }
 
 /// A construct the parser accepts but codegen does not lower yet.
@@ -472,6 +590,10 @@ fn lower_type(context: &Context, typed: &TypedAst, ty: QualType) -> TypeId {
         TypeKind::Enum(_) => IntegerType::new(context, 32),
         TypeKind::Float => FloatType::f32(context),
         TypeKind::Double => FloatType::f64(context),
+        TypeKind::ComplexFloat => VectorType::fixed(context, FloatType::f32(context), 2),
+        TypeKind::ComplexDouble => TupleType::new(context, vec![FloatType::f64(context); 2]),
+        TypeKind::ComplexLongDouble => IntegerType::new(context, 256),
+        TypeKind::VaList => cir::VaListType::new(context),
         TypeKind::Error | TypeKind::LongDouble | TypeKind::Function { .. } => {
             IntegerType::new(context, 64)
         }
@@ -572,8 +694,53 @@ fn lower_function(
             );
         }
     }
-    if signature.varargs {
-        param_values.push(context.create_value(VarArgsType::new(context), None));
+    let named_arguments = param_values.len();
+    let mut varargs = None;
+    if ast
+        .preorder(func)
+        .any(|node| ast.get_node(node).kind == AstKind::VaStart)
+    {
+        if !signature.varargs || !typed.target().uses_sysv_abi() {
+            return Err(unsupported(ast, func, "va_start target ABI".to_string()));
+        }
+        if signature.params.iter().any(|parameter| {
+            parameter
+                .pieces
+                .iter()
+                .any(|piece| type_kind(context, piece.ty) == ValueKind::Vector)
+        }) {
+            return Err(unsupported(
+                ast,
+                func,
+                "variadic vector parameter".to_string(),
+            ));
+        }
+        let usage = signature.register_usage;
+        let gp_start = usage.integers;
+        let fp_start = usage.floats;
+        let mut gp = Vec::new();
+        let mut fp = Vec::new();
+        for _ in gp_start..typed.target().argument_registers(ValueKind::Int) {
+            let value = context.create_value(IntegerType::new(context, 64), None);
+            gp.push(value.id());
+            param_values.push(value);
+        }
+        for _ in fp_start..typed.target().argument_registers(ValueKind::Float) {
+            let value = context.create_value(FloatType::f64(context), None);
+            fp.push(value.id());
+            param_values.push(value);
+        }
+        let entry_sp = context.create_value(PtrType::opaque(context), None);
+        param_values.push(entry_sp.clone());
+        varargs = Some(VarargsEntry {
+            gp_start,
+            fp_start,
+            stack_slots: usage.stack_slots,
+            gp,
+            fp,
+            entry_sp: entry_sp.id(),
+            register_area: None,
+        });
     }
     let param_ids: Vec<ValueId> = param_values.iter().map(|v| v.id()).collect();
 
@@ -594,6 +761,11 @@ fn lower_function(
     );
     if signature.ret.indirect {
         func_builder = func_builder.result_address();
+    }
+    if let Some(varargs) = &varargs {
+        func_builder = func_builder
+            .implicit_arguments(param_ids.len() - named_arguments)
+            .entry_sp(varargs.entry_sp);
     }
     let argument_alignments = signature.argument_alignments();
     if argument_alignments.iter().any(|&alignment| alignment > 1) {
@@ -630,8 +802,14 @@ fn lower_function(
         break_targets: Vec::new(),
         continue_targets: Vec::new(),
         values: HashMap::new(),
+        varargs,
     };
-    cg.lower_body(func, &param_ids[parameter_start..], &signature.params)?;
+    cg.init_varargs();
+    cg.lower_body(
+        func,
+        &param_ids[parameter_start..named_arguments],
+        &signature.params,
+    )?;
 
     Ok(func_op)
 }

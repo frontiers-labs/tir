@@ -23,6 +23,17 @@ pub trait CallEmitter: Send + Sync {
     /// reads, or a physical register the calling convention names.
     fn copy(&self, context: &Context, dst: RegSlot, src: RegSlot) -> Box<dyn Operation>;
 
+    /// Choose the register view for a call result when the ABI sequence names
+    /// a narrower view of the same physical register file.
+    fn result_class(&self, _context: &Context, _result: ValueId, register: PhysReg) -> RegClassId {
+        register.0
+    }
+
+    /// Bytes reserved for one stack argument of this register class.
+    fn stack_arg_size(&self, abi: &AbiInfo, _class: RegClassId) -> u32 {
+        abi.stack.slot_size
+    }
+
     fn stack_arg_store(
         &self,
         _context: &Context,
@@ -71,6 +82,15 @@ impl CallLowering {
             prepared_functions: HashSet::new(),
             tuple_argument_elements: HashMap::new(),
         }
+    }
+
+    pub fn register_file(&self, kind: ValueKind) -> Option<&'static str> {
+        self.abi
+            .args
+            .iter()
+            .chain(self.abi.rets.iter())
+            .find(|sequence| sequence.kind == kind && !sequence.regs.is_empty())
+            .map(|sequence| sequence.regs[0].0.file())
     }
 
     /// Drop the scratch of the function just finished. Both maps are keyed by
@@ -254,8 +274,14 @@ impl CallLowering {
         };
         let argument_offset = usize::from(result_address.is_some());
 
-        let (lowered_arguments, tuple_arguments) =
-            self.flatten_arguments(context, op, args, argument_alignments, argument_offset)?;
+        let (lowered_arguments, tuple_arguments) = self.flatten_arguments(
+            context,
+            op,
+            args,
+            argument_alignments,
+            &call.stack_arguments(),
+            argument_offset,
+        )?;
 
         let (argument_values, argument_locations, outgoing_size) =
             self.assign_argument_locations(context, lowered_arguments, result_address.is_some())?;
@@ -464,14 +490,17 @@ impl CallLowering {
         let kind = value_kind(context, self.abi, result);
         let return_reg = next_return_register(self.abi, kind, &mut HashMap::new())
             .ok_or_else(|| PassError::InvalidRuleSet("ABI has no return register".to_string()))?;
+        let return_class = self.emitter.result_class(context, result, return_reg);
         // The call op is erased below and takes its result with it, so the copy
         // defines a register value of its own. The rewiring is explicit: the
         // call publishes a state as well as a value, so the shapes of the two
         // ops do not line up for [`Context::replace_op`] to do it.
-        let returned = fresh_reg(context, return_reg.0);
-        let copy = self
-            .emitter
-            .copy(context, RegSlot::Value(returned), RegSlot::Phys(return_reg));
+        let returned = fresh_reg(context, return_class);
+        let copy = self.emitter.copy(
+            context,
+            RegSlot::Value(returned),
+            RegSlot::Phys((return_class, return_reg.1)),
+        );
         context.replace_value_uses(result, returned);
         context.replace_op(op, copy.as_ref())?;
         erase_dead_tuple_arguments(context, &tuple_arguments)?;
@@ -486,6 +515,7 @@ impl CallLowering {
         op: &OperationRef,
         args: Vec<ValueId>,
         argument_alignments: Vec<u64>,
+        stack_arguments: &[usize],
         argument_offset: usize,
     ) -> Result<(ArgumentGroups, Vec<(OpId, ValueId)>), PassError> {
         let mut tuple_arguments = Vec::new();
@@ -493,6 +523,9 @@ impl CallLowering {
         for (argument_index, (arg, alignment)) in
             args.into_iter().zip(argument_alignments).enumerate()
         {
+            let force_stack = stack_arguments
+                .binary_search(&(argument_index + argument_offset))
+                .is_ok();
             // The elements the preparation pass recorded describe the argument
             // on their own, so a tuple whose producing call has already been
             // lowered away need not be read back.
@@ -500,7 +533,7 @@ impl CallLowering {
                 .tuple_argument_elements
                 .get(&(op.op().id, argument_index + argument_offset))
             {
-                lowered_arguments.push((elements.clone(), alignment));
+                lowered_arguments.push((elements.clone(), alignment, force_stack));
                 continue;
             }
             let ty = context.get_type_data(context.get_value(arg).ty());
@@ -508,7 +541,7 @@ impl CallLowering {
                 .downcast_ref::<TupleType>()
                 .is_none()
             {
-                lowered_arguments.push((vec![arg], alignment));
+                lowered_arguments.push((vec![arg], alignment, force_stack));
                 continue;
             }
             let defining_op = context.get_value(arg).defining_op().ok_or_else(|| {
@@ -523,7 +556,7 @@ impl CallLowering {
                         "tuple call argument has no scalar elements".to_string(),
                     )
                 })?;
-            lowered_arguments.push((tuple.operands().to_vec(), alignment));
+            lowered_arguments.push((tuple.operands().to_vec(), alignment, force_stack));
             tuple_arguments.push((defining_op, arg));
         }
         Ok((lowered_arguments, tuple_arguments))
@@ -539,21 +572,29 @@ impl CallLowering {
     ) -> Result<(Vec<ValueId>, Vec<ArgumentLocation>, u32), PassError> {
         let groups = lowered_arguments
             .iter()
-            .map(|(values, alignment)| ArgumentGroup {
+            .map(|(values, alignment, force_stack)| ArgumentGroup {
                 members: values
                     .iter()
                     .map(|&value| ArgumentMember {
                         kind: value_kind(context, self.abi, value),
-                        class: None,
+                        class: crate::backend::value_class(context, value).filter(|&class| {
+                            self.emitter.stack_arg_size(self.abi, class) > self.abi.stack.slot_size
+                        }),
+                        stack_slots: crate::backend::value_class(context, value)
+                            .map(|class| self.emitter.stack_arg_size(self.abi, class))
+                            .unwrap_or(self.abi.stack.slot_size)
+                            .div_ceil(self.abi.stack.slot_size)
+                            as usize,
                     })
                     .collect(),
                 alignment: *alignment,
+                force_stack: *force_stack,
             })
             .collect::<Vec<_>>();
         let (slots, stack_args) = place_arguments(self.abi, &groups, has_result_address);
         let argument_values = lowered_arguments
             .into_iter()
-            .flat_map(|(values, _)| values)
+            .flat_map(|(values, _, _)| values)
             .collect::<Vec<_>>();
         let argument_locations = argument_values
             .iter()
@@ -565,6 +606,13 @@ impl CallLowering {
                         .ok_or_else(|| {
                             PassError::InvalidRuleSet("ABI has no argument sequence".to_string())
                         })?;
+                    let class = crate::backend::value_class(context, value)
+                        .filter(|&value_class| {
+                            value_class.file() == class.file()
+                                && self.emitter.stack_arg_size(self.abi, value_class)
+                                    > self.abi.stack.slot_size
+                        })
+                        .unwrap_or(class);
                     Ok(ArgumentLocation::Stack {
                         class,
                         offset: i64::from(index as u32 * self.abi.stack.slot_size),
@@ -649,7 +697,7 @@ impl CallLowering {
 
 /// The scalars each call argument lowers to, with the alignment of the group
 /// they came from.
-type ArgumentGroups = Vec<(Vec<ValueId>, u64)>;
+type ArgumentGroups = Vec<(Vec<ValueId>, u64, bool)>;
 
 fn insert_tuple_extractions(
     context: &Context,

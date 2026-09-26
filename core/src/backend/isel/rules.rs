@@ -319,7 +319,11 @@ fn requirement(
     } else {
         RegisterRequirement::low_bits(capability)
     };
-    Some(requirement.at_view_offset(class.info().view.bit_offset))
+    Some(
+        requirement
+            .at_view_offset(class.info().view.bit_offset)
+            .at_file(class.file()),
+    )
 }
 
 /// Build the rules available under `enabled_features` (feature ids, `Feature

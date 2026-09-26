@@ -11,6 +11,7 @@ operation! {
         operands: O { input: "crate::builtin::FloatType" },
         results: R { result: "crate::builtin::FloatType" },
         interfaces: [SameOperandAndResultType, Speculatable, crate::interp::Interp],
+        sem: "(set result $value_semantics)",
     }
 }
 
@@ -20,6 +21,7 @@ operation! {
         operands: O { input: "crate::builtin::FloatType" },
         results: R { result: "crate::builtin::FloatType" },
         interfaces: [SameOperandAndResultType, Speculatable, crate::interp::Interp],
+        sem: "(set result $value_semantics)",
     }
 }
 
@@ -60,6 +62,88 @@ impl Speculatable for AbsOp {}
 impl Speculatable for CopySignOp {}
 impl Speculatable for SignBitOp {}
 impl Speculatable for ClassifyOp {}
+
+fn unary_bit_semantics(
+    context: &tir::Context,
+    result: tir::ValueId,
+    graph: &mut impl tir::graph::MutDag<
+        Node = tir::sem::SymKind,
+        Leaf = tir::sem::SymPayload<tir::ValueId>,
+    >,
+    op: tir::sem::SymKind,
+    mask: u64,
+) -> Option<tir::graph::NodeId> {
+    use tir::sem::{SymKind, SymPayload};
+
+    let ty = context.get_type_data(context.get_value(result).ty());
+    let width = (ty.as_ref() as &dyn std::any::Any)
+        .downcast_ref::<crate::builtin::FloatType>()?
+        .bit_width();
+    let input = graph.add_node(SymKind::Symbol);
+    graph.set_leaf_data(input, SymPayload::SymbolId(0));
+    let bits = graph.add_node(SymKind::Bitcast);
+    graph.add_edge(bits, input);
+    let constant = graph.add_node(SymKind::Constant);
+    graph.set_leaf_data(constant, SymPayload::Int(APInt::new(width, mask)));
+    let changed = graph.add_node(op);
+    graph.add_edge(changed, bits);
+    graph.add_edge(changed, constant);
+    let output = graph.add_node(SymKind::Bitcast);
+    graph.add_edge(output, changed);
+    Some(output)
+}
+
+impl NegOp {
+    fn value_semantics(
+        &self,
+        graph: &mut impl tir::graph::MutDag<
+            Node = tir::sem::SymKind,
+            Leaf = tir::sem::SymPayload<tir::ValueId>,
+        >,
+    ) -> Option<tir::graph::NodeId> {
+        let ty = self
+            .0
+            .context
+            .get_type_data(self.0.context.get_value(self.result()).ty());
+        let width = (ty.as_ref() as &dyn std::any::Any)
+            .downcast_ref::<crate::builtin::FloatType>()?
+            .bit_width();
+        let sign = 1u64 << (width - 1);
+        unary_bit_semantics(
+            &self.0.context,
+            self.result(),
+            graph,
+            tir::sem::SymKind::Xor,
+            sign,
+        )
+    }
+}
+
+impl AbsOp {
+    fn value_semantics(
+        &self,
+        graph: &mut impl tir::graph::MutDag<
+            Node = tir::sem::SymKind,
+            Leaf = tir::sem::SymPayload<tir::ValueId>,
+        >,
+    ) -> Option<tir::graph::NodeId> {
+        let ty = self
+            .0
+            .context
+            .get_type_data(self.0.context.get_value(self.result()).ty());
+        let width = (ty.as_ref() as &dyn std::any::Any)
+            .downcast_ref::<crate::builtin::FloatType>()?
+            .bit_width();
+        let mask = (1u64 << (width - 1)) - 1;
+        unary_bit_semantics(
+            &self.0.context,
+            self.result(),
+            graph,
+            tir::sem::SymKind::And,
+            mask,
+        )
+    }
+}
 
 impl tir::Verifiable for ClassifyOp {
     fn verify_impl(&self, _: &tir::Context) -> Result<(), tir::Error> {

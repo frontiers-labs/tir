@@ -5,12 +5,13 @@ use crate::ast::AstKind;
 use crate::sema::{QualType, TypeKind};
 use std::{cmp::Ordering, sync::Arc};
 use tir::attributes::Predicate;
-use tir::builtin::{FloatType, IntegerType, ops as b};
+use tir::builtin::{FloatType, FnType, IntegerType, TupleType, ops as b};
 use tir::fp::{
     ArithmeticSemantics, ComparisonBehavior, ComparisonSemantics, Exceptions,
     IntegerConversionSemantics, InvalidConversion, Rounding, RoundingMode, SubnormalMode,
     ops as fp,
 };
+use tir::func::ops as func_ops;
 use tir::graph::{Dag, NodeId};
 use tir::ptr::{PtrType, ops as p};
 use tir::{Operation, TypeId, ValueId};
@@ -50,13 +51,21 @@ impl FnCodegen<'_> {
     }
 
     pub(super) fn float_constant(&self, bits: u64, ty: TypeId) -> ValueId {
-        self.emit(
-            fp::ConstantOpBuilder::new(self.context)
-                .bits(bits)
-                .result_type(ty)
-                .build(),
-        )
-        .result()
+        let data = self.context.get_type_data(ty);
+        let width = (data.as_ref() as &dyn std::any::Any)
+            .downcast_ref::<FloatType>()
+            .expect("floating constant type")
+            .bit_width();
+        let bits = match width {
+            32 => (bits as u32 as i32) as i64,
+            64 => bits as i64,
+            _ => unreachable!("fcc supports binary32 and binary64"),
+        };
+        let integer = self
+            .emit(b::constant(self.context, bits, IntegerType::new(self.context, width)).build())
+            .result();
+        self.emit(b::bitcast(self.context, integer, ty).build())
+            .result()
     }
 
     pub(super) fn float_zero(&self, ty: TypeId) -> ValueId {
@@ -124,6 +133,11 @@ impl FnCodegen<'_> {
         source: QualType,
         target: QualType,
     ) -> ValueId {
+        match self.typed.types().kind(target) {
+            TypeKind::ComplexFloat => return self.convert_to_complex_float(value, source),
+            TypeKind::ComplexDouble => return self.convert_to_complex_double(value, source),
+            _ => {}
+        }
         let source_floating = matches!(
             self.typed.types().kind(source),
             TypeKind::Float | TypeKind::Double
@@ -234,6 +248,298 @@ impl FnCodegen<'_> {
             self.promote_boolean_result(value, lower_type(self.context, self.typed, source));
         let signed = self.typed.integer_is_signed(source).unwrap();
         self.resize(value, source_width, target_width, signed)
+    }
+
+    fn convert_to_complex_float(&mut self, value: ValueId, source: QualType) -> ValueId {
+        if matches!(self.typed.types().kind(source), TypeKind::ComplexFloat) {
+            return value;
+        }
+        let float_ty = FloatType::f32(self.context);
+        if matches!(self.typed.types().kind(source), TypeKind::ComplexDouble) {
+            let (real, imag) = self.unpack_complex_double(value);
+            let convert = |this: &Self, input| {
+                this.emit(
+                    fp::ConvertOpBuilder::new(this.context)
+                        .input(input)
+                        .semantics(this.arithmetic_semantics())
+                        .result_type(float_ty)
+                        .build(),
+                )
+                .result()
+            };
+            let real = convert(self, real);
+            let imag = convert(self, imag);
+            return self.pack_complex_float(real, imag);
+        }
+        let real = if matches!(self.typed.types().kind(source), TypeKind::Float) {
+            value
+        } else if matches!(self.typed.types().kind(source), TypeKind::Double) {
+            self.emit(
+                fp::ConvertOpBuilder::new(self.context)
+                    .input(value)
+                    .semantics(self.arithmetic_semantics())
+                    .result_type(float_ty)
+                    .build(),
+            )
+            .result()
+        } else if self.typed.integer_width(source).is_some() {
+            if self.typed.integer_is_signed(source) == Some(true) {
+                self.emit(
+                    fp::FromSiOpBuilder::new(self.context)
+                        .input(value)
+                        .semantics(self.arithmetic_semantics())
+                        .result_type(float_ty)
+                        .build(),
+                )
+                .result()
+            } else {
+                self.emit(
+                    fp::FromUiOpBuilder::new(self.context)
+                        .input(value)
+                        .semantics(self.arithmetic_semantics())
+                        .result_type(float_ty)
+                        .build(),
+                )
+                .result()
+            }
+        } else {
+            return value;
+        };
+        let zero = self.float_zero(float_ty);
+        self.pack_complex_float(real, zero)
+    }
+
+    fn convert_to_complex_double(&mut self, value: ValueId, source: QualType) -> ValueId {
+        if matches!(self.typed.types().kind(source), TypeKind::ComplexDouble) {
+            return value;
+        }
+        let float_ty = FloatType::f64(self.context);
+        let convert = |this: &Self, input| {
+            this.emit(
+                fp::ConvertOpBuilder::new(this.context)
+                    .input(input)
+                    .semantics(this.arithmetic_semantics())
+                    .result_type(float_ty)
+                    .build(),
+            )
+            .result()
+        };
+        let (real, imag) = if matches!(self.typed.types().kind(source), TypeKind::ComplexFloat) {
+            let (real, imag) = self.unpack_complex_float(value);
+            (convert(self, real), convert(self, imag))
+        } else if matches!(self.typed.types().kind(source), TypeKind::Double) {
+            (value, self.float_zero(float_ty))
+        } else if matches!(self.typed.types().kind(source), TypeKind::Float) {
+            (convert(self, value), self.float_zero(float_ty))
+        } else if self.typed.integer_width(source).is_some() {
+            let real = if self.typed.integer_is_signed(source) == Some(true) {
+                self.emit(
+                    fp::FromSiOpBuilder::new(self.context)
+                        .input(value)
+                        .semantics(self.arithmetic_semantics())
+                        .result_type(float_ty)
+                        .build(),
+                )
+                .result()
+            } else {
+                self.emit(
+                    fp::FromUiOpBuilder::new(self.context)
+                        .input(value)
+                        .semantics(self.arithmetic_semantics())
+                        .result_type(float_ty)
+                        .build(),
+                )
+                .result()
+            };
+            (real, self.float_zero(float_ty))
+        } else {
+            return value;
+        };
+        self.pack_complex_double(real, imag)
+    }
+
+    pub(super) fn pack_complex_float(&mut self, real: ValueId, imag: ValueId) -> ValueId {
+        let word = IntegerType::new(self.context, 32);
+        let wide = IntegerType::new(self.context, 64);
+        let bits = |this: &mut Self, value| {
+            let bits = this
+                .emit(
+                    b::BitcastOpBuilder::new(this.context)
+                        .input(value)
+                        .result_type(word)
+                        .build(),
+                )
+                .result();
+            this.emit(b::extui(this.context, bits, wide).build())
+                .result()
+        };
+        let real = bits(self, real);
+        let imag = bits(self, imag);
+        let shift = self
+            .emit(b::constant(self.context, 32, wide).build())
+            .result();
+        let imag = self
+            .emit(b::shli(self.context, imag, shift, wide).build())
+            .result();
+        let packed = self
+            .emit(b::ori(self.context, real, imag, wide).build())
+            .result();
+        let ty = tir::vector::VectorType::fixed(self.context, FloatType::f32(self.context), 2);
+        self.emit(
+            b::BitcastOpBuilder::new(self.context)
+                .input(packed)
+                .result_type(ty)
+                .build(),
+        )
+        .result()
+    }
+
+    pub(super) fn unpack_complex_float(&mut self, value: ValueId) -> (ValueId, ValueId) {
+        let word = IntegerType::new(self.context, 32);
+        let wide = IntegerType::new(self.context, 64);
+        let packed = self
+            .emit(
+                b::BitcastOpBuilder::new(self.context)
+                    .input(value)
+                    .result_type(wide)
+                    .build(),
+            )
+            .result();
+        let real_bits = self
+            .emit(b::trunci(self.context, packed, word).build())
+            .result();
+        let shift = self
+            .emit(b::constant(self.context, 32, wide).build())
+            .result();
+        let imag_bits = self
+            .emit(b::shrui(self.context, packed, shift, wide).build())
+            .result();
+        let imag_bits = self
+            .emit(b::trunci(self.context, imag_bits, word).build())
+            .result();
+        let float = FloatType::f32(self.context);
+        let component = |this: &Self, bits| {
+            this.emit(
+                b::BitcastOpBuilder::new(this.context)
+                    .input(bits)
+                    .result_type(float)
+                    .build(),
+            )
+            .result()
+        };
+        (component(self, real_bits), component(self, imag_bits))
+    }
+
+    pub(super) fn pack_complex_double(&self, real: ValueId, imag: ValueId) -> ValueId {
+        let float = FloatType::f64(self.context);
+        let ty = TupleType::new(self.context, vec![float; 2]);
+        self.emit(
+            b::MakeTupleOpBuilder::new(self.context)
+                .elements(vec![real, imag])
+                .result_type(ty)
+                .build(),
+        )
+        .result()
+    }
+
+    pub(super) fn unpack_complex_double(&self, value: ValueId) -> (ValueId, ValueId) {
+        if let Some(definition) = self.context.get_value(value).defining_op()
+            && let Some(tuple) = self.context.get_op(definition).as_op::<b::MakeTupleOp>()
+        {
+            let operands = tuple.operands();
+            let [real, imag] = operands.as_slice() else {
+                unreachable!("complex double has two components")
+            };
+            return (*real, *imag);
+        }
+        let float = FloatType::f64(self.context);
+        let component = |index| {
+            self.emit(
+                b::TupleGetOpBuilder::new(self.context)
+                    .tuple(value)
+                    .index(index)
+                    .result_type(float)
+                    .build(),
+            )
+            .result()
+        };
+        (component(0), component(1))
+    }
+
+    pub(super) fn lower_complex_float_binary(
+        &mut self,
+        kind: AstKind,
+        lhs: ValueId,
+        rhs: ValueId,
+    ) -> ValueId {
+        let (left_real, left_imag) = self.unpack_complex_float(lhs);
+        let (right_real, right_imag) = self.unpack_complex_float(rhs);
+        match kind {
+            AstKind::Add | AstKind::Sub | AstKind::AddAssign | AstKind::SubAssign => {
+                let float = FloatType::f32(self.context);
+                let real = self.emit_fp_binop(kind, left_real, right_real, float);
+                let imag = self.emit_fp_binop(kind, left_imag, right_imag, float);
+                self.pack_complex_float(real, imag)
+            }
+            AstKind::Mul | AstKind::Div | AstKind::MulAssign | AstKind::DivAssign => {
+                let float = FloatType::f32(self.context);
+                let complex = tir::vector::VectorType::fixed(self.context, float, 2);
+                let name = if matches!(kind, AstKind::Mul | AstKind::MulAssign) {
+                    "__mulsc3"
+                } else {
+                    "__divsc3"
+                };
+                let signature = FnType::new(self.context, &[float; 4], complex);
+                let callee = self.symbols.value(self.context, name, signature);
+                self.emit(
+                    func_ops::CallOpBuilder::new(self.context)
+                        .callee(callee)
+                        .args(vec![left_real, left_imag, right_real, right_imag])
+                        .result_type(complex)
+                        .build(),
+                )
+                .result()
+            }
+            _ => unreachable!("complex arithmetic operator"),
+        }
+    }
+
+    pub(super) fn lower_complex_double_binary(
+        &mut self,
+        kind: AstKind,
+        lhs: ValueId,
+        rhs: ValueId,
+    ) -> ValueId {
+        let (left_real, left_imag) = self.unpack_complex_double(lhs);
+        let (right_real, right_imag) = self.unpack_complex_double(rhs);
+        match kind {
+            AstKind::Add | AstKind::Sub | AstKind::AddAssign | AstKind::SubAssign => {
+                let float = FloatType::f64(self.context);
+                let real = self.emit_fp_binop(kind, left_real, right_real, float);
+                let imag = self.emit_fp_binop(kind, left_imag, right_imag, float);
+                self.pack_complex_double(real, imag)
+            }
+            AstKind::Mul | AstKind::Div | AstKind::MulAssign | AstKind::DivAssign => {
+                let float = FloatType::f64(self.context);
+                let complex = TupleType::new(self.context, vec![float; 2]);
+                let name = if matches!(kind, AstKind::Mul | AstKind::MulAssign) {
+                    "__muldc3"
+                } else {
+                    "__divdc3"
+                };
+                let signature = FnType::new(self.context, &[float; 4], complex);
+                let callee = self.symbols.value(self.context, name, signature);
+                self.emit(
+                    func_ops::CallOpBuilder::new(self.context)
+                        .callee(callee)
+                        .args(vec![left_real, left_imag, right_real, right_imag])
+                        .result_type(complex)
+                        .build(),
+                )
+                .result()
+            }
+            _ => unreachable!("complex arithmetic operator"),
+        }
     }
 
     /// `value`, an integer `from` bits wide, as one of `to` bits.

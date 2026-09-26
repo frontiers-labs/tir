@@ -27,7 +27,7 @@ module {
 // CHECK: %[[COMMUTED:[0-9]+]] = fp.fma
 // CHECK: -> %[[COMMUTED]]
 // CHECK-LABEL: func.func @product_first_sub
-// CHECK-NOT: fp.mul
-// CHECK: %[[NEGATED:[0-9]+]] = fp.neg %{{[0-9]+}} : !f64
-// CHECK: %[[SUBTRACTED:[0-9]+]] = fp.fma %{{[0-9]+}}, %{{[0-9]+}}, %[[NEGATED]] : !f64
+// A separate sign flip costs more on this target than the saved multiply.
+// CHECK: %[[PRODUCT:[0-9]+]] = fp.mul %{{[0-9]+}}, %{{[0-9]+}} : !f64
+// CHECK: %[[SUBTRACTED:[0-9]+]] = fp.sub %[[PRODUCT]], %{{[0-9]+}} : !f64
 // CHECK: -> %[[SUBTRACTED]]

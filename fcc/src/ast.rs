@@ -50,6 +50,9 @@ pub enum CType {
     Float,
     Double,
     LongDouble,
+    ComplexFloat,
+    ComplexDouble,
+    ComplexLongDouble,
     Named(String),
     Record(RecordKind, RecordId, Option<String>),
     Enum(Option<String>),
@@ -231,6 +234,12 @@ pub enum AstKind {
     PostDec,
     /// Children: the argument expressions. Callee name lives in [`AstLeaf::Call`].
     Call,
+    /// Children: the list expression and the last named parameter.
+    VaStart,
+    /// Child: the list expression. The requested type is the leaf payload.
+    VaArg,
+    /// Child: the list expression.
+    VaEnd,
     /// Children: the callee expression followed by the argument expressions.
     CallExpr,
     /// Child: the base expression. Field name and access form live in [`AstLeaf::Member`].
@@ -286,6 +295,7 @@ pub enum AstLeaf {
     Decl {
         name: String,
         ty: CType,
+        is_static: bool,
     },
     DesignatedInitializer(InitializerDesignator),
     Assign(String),
@@ -359,6 +369,9 @@ fn render_leaf_ctype(ty: &CType) -> String {
         CType::Float => "Float".to_string(),
         CType::Double => "Double".to_string(),
         CType::LongDouble => "LongDouble".to_string(),
+        CType::ComplexFloat => "ComplexFloat".to_string(),
+        CType::ComplexDouble => "ComplexDouble".to_string(),
+        CType::ComplexLongDouble => "ComplexLongDouble".to_string(),
         CType::Named(name) => format!("Named({name})"),
         CType::Record(kind, _, name) => {
             let kind = match kind {
@@ -462,7 +475,15 @@ fn payload_label(ast: &Ast, id: NodeId) -> Option<String> {
         AstLeaf::Param { name, ty } => {
             format!("Param {}: {}", declarator_name(name), render_ctype(ty))
         }
-        AstLeaf::Decl { name, ty } => format!("Decl {name:?}: {}", render_ctype(ty)),
+        AstLeaf::Decl {
+            name,
+            ty,
+            is_static,
+        } => format!(
+            "Decl {name:?}{}: {}",
+            if *is_static { " static" } else { "" },
+            render_ctype(ty)
+        ),
         AstLeaf::DesignatedInitializer(InitializerDesignator::Field(name)) => {
             format!("FieldDesignator {name:?}")
         }

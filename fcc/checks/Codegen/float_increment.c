@@ -5,5 +5,6 @@ float increment(float value) {
 }
 
 // CHECK-LABEL: func.func @increment
-// CHECK: fp.constant {bits = 1065353216} : !f32
+// CHECK: constant {value = 1065353216} : !i32
+// CHECK: bitcast {{%[0-9]+}} : !f32
 // CHECK: fp.add {{%[0-9]+}}, {{%[0-9]+}} : !f32

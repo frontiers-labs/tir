@@ -215,6 +215,9 @@ impl Analyzer<'_> {
                 | TypeKind::Float
                 | TypeKind::Double
                 | TypeKind::LongDouble
+                | TypeKind::ComplexFloat
+                | TypeKind::ComplexDouble
+                | TypeKind::ComplexLongDouble
         )
     }
 
@@ -258,6 +261,17 @@ impl Analyzer<'_> {
                 | TypeKind::Double
                 | TypeKind::LongDouble,
             ) => true,
+            (
+                TypeKind::ComplexFloat | TypeKind::ComplexDouble | TypeKind::ComplexLongDouble,
+                TypeKind::Integer(_)
+                | TypeKind::Enum(_)
+                | TypeKind::Float
+                | TypeKind::Double
+                | TypeKind::LongDouble
+                | TypeKind::ComplexFloat
+                | TypeKind::ComplexDouble
+                | TypeKind::ComplexLongDouble,
+            ) => true,
             (TypeKind::Pointer(_), TypeKind::Pointer(_)) => true,
             (TypeKind::Pointer(target), TypeKind::Array(source, _)) => {
                 self.types.kind(*target) == self.types.kind(*source)
@@ -282,6 +296,10 @@ impl Analyzer<'_> {
         match self.types.kind(ty) {
             TypeKind::Integer(_) => "integer",
             TypeKind::Float | TypeKind::Double | TypeKind::LongDouble => "floating",
+            TypeKind::ComplexFloat | TypeKind::ComplexDouble | TypeKind::ComplexLongDouble => {
+                "complex"
+            }
+            TypeKind::VaList => "va_list",
             TypeKind::Pointer(_) => "pointer",
             TypeKind::Array(_, _) => "array",
             TypeKind::Function { .. } => "function",
@@ -408,6 +426,24 @@ impl Analyzer<'_> {
         if left == right {
             return left;
         }
+        if matches!(
+            (self.types.kind(left), self.types.kind(right)),
+            (
+                TypeKind::ComplexFloat | TypeKind::ComplexDouble | TypeKind::ComplexLongDouble,
+                _
+            ) | (
+                _,
+                TypeKind::ComplexFloat | TypeKind::ComplexDouble | TypeKind::ComplexLongDouble
+            )
+        ) {
+            return self.types.intern(
+                match self.integer_rank(left).max(self.integer_rank(right)) {
+                    8 => TypeKind::ComplexLongDouble,
+                    7 => TypeKind::ComplexDouble,
+                    _ => TypeKind::ComplexFloat,
+                },
+            );
+        }
         let (TypeKind::Integer(left_kind), TypeKind::Integer(right_kind)) =
             (self.types.kind(left), self.types.kind(right))
         else {
@@ -455,6 +491,9 @@ impl Analyzer<'_> {
             TypeKind::Float => 6,
             TypeKind::Double => 7,
             TypeKind::LongDouble => 8,
+            TypeKind::ComplexFloat => 6,
+            TypeKind::ComplexDouble => 7,
+            TypeKind::ComplexLongDouble => 8,
             _ => 0,
         }
     }
@@ -536,6 +575,9 @@ impl Analyzer<'_> {
             CType::Float => self.types.intern(TypeKind::Float),
             CType::Double => self.types.intern(TypeKind::Double),
             CType::LongDouble => self.types.intern(TypeKind::LongDouble),
+            CType::ComplexFloat => self.types.intern(TypeKind::ComplexFloat),
+            CType::ComplexDouble => self.types.intern(TypeKind::ComplexDouble),
+            CType::ComplexLongDouble => self.types.intern(TypeKind::ComplexLongDouble),
             CType::Function {
                 ret,
                 params,
@@ -554,6 +596,9 @@ impl Analyzer<'_> {
             }
             CType::Record(_, id, _) => self.types.intern(TypeKind::Record(*id)),
             CType::Enum(name) => self.types.intern(TypeKind::Enum(name.clone())),
+            CType::Named(name) if name == "__builtin_va_list" => {
+                self.types.intern(TypeKind::VaList)
+            }
             CType::Named(name) => self
                 .lookup(name)
                 .filter(|symbol| symbol.typedef)

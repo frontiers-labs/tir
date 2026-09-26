@@ -27,22 +27,47 @@ mod isa {
         }
     }
 
+    fn vector_class(
+        context: &tir::Context,
+        vector: &tir::vector::VectorType,
+    ) -> Option<tir::backend::regalloc::RegClassId> {
+        let element = context.get_type_data(vector.element(context));
+        let element = element.as_ref() as &dyn std::any::Any;
+        let element_width = element
+            .downcast_ref::<tir::builtin::FloatType>()
+            .map(tir::builtin::FloatType::bit_width)
+            .or_else(|| {
+                element
+                    .downcast_ref::<tir::builtin::IntegerType>()
+                    .map(tir::builtin::IntegerType::width)
+            });
+        let width = vector.length()?.checked_mul(element_width?)?;
+        match width {
+            32 => Some(RegClass::XMM32.id()),
+            64 => Some(RegClass::XMM64.id()),
+            128 => Some(RegClass::XMM128.id()),
+            _ => None,
+        }
+    }
+
     fn lower_func_and_return_to_asm_symbol(
         context: &tir::Context,
         op: &tir::OperationRef,
     ) -> Result<bool, tir::PassError> {
         tir::backend::lower::lower_function_and_return(context, op, |ty| {
             let ty = context.get_type_data(ty);
-            Ok(
-                if (ty.as_ref() as &dyn std::any::Any)
-                    .downcast_ref::<tir::builtin::FloatType>()
-                    .is_some()
-                {
-                    RegClass::XMM.id()
-                } else {
-                    RegClass::GPR.id()
-                },
-            )
+            let any = ty.as_ref() as &dyn std::any::Any;
+            if any.downcast_ref::<tir::builtin::FloatType>().is_some() {
+                return Ok(RegClass::XMM.id());
+            }
+            if let Some(vector) = any.downcast_ref::<tir::vector::VectorType>() {
+                return vector_class(context, vector).ok_or_else(|| {
+                    tir::PassError::InvalidRuleSet(
+                        "x86-64 has no register class for this vector type".into(),
+                    )
+                });
+            }
+            Ok(RegClass::GPR.id())
         })
     }
 
@@ -68,7 +93,7 @@ mod isa {
         let move_bits = MovqXmmGprOpBuilder::new(context)
             .result_types(vec![tir::backend::RegClassType::new(
                 context,
-                RegClass::XMMzx.id(),
+                RegClass::XMM64.id(),
             )])
             .src(temp)
             .build();
@@ -171,6 +196,11 @@ mod isa {
                 let builder = tir::reg_use!(builder, src, src);
                 Box::new(tir::reg_def!(builder, dst, dst).build())
             }
+            "XMM128" => {
+                let builder = MovupsOpBuilder::new(context);
+                let builder = tir::reg_use!(builder, src, src);
+                Box::new(tir::reg_def!(builder, dst, dst).build())
+            }
             other => unreachable!("unknown x86-64 ABI register class {other}"),
         }
     }
@@ -180,6 +210,40 @@ mod isa {
     impl tir::backend::call_lowering::CallEmitter for X86CallEmitter {
         fn copy(&self, context: &tir::Context, dst: RegSlot, src: RegSlot) -> Box<dyn Operation> {
             abi_copy(context, dst, src)
+        }
+
+        fn result_class(
+            &self,
+            context: &tir::Context,
+            result: tir::ValueId,
+            register: tir::backend::liveness::PhysReg,
+        ) -> tir::backend::regalloc::RegClassId {
+            if tir::backend::value_class(context, result) == Some(RegClass::XMM128.id()) {
+                return RegClass::XMM128.id();
+            }
+            let ty = context.get_type_data(context.get_value(result).ty());
+            let Some(vector) =
+                (ty.as_ref() as &dyn std::any::Any).downcast_ref::<tir::vector::VectorType>()
+            else {
+                return register.0;
+            };
+            if vector_class(context, vector) == Some(RegClass::XMM128.id()) {
+                RegClass::XMM128.id()
+            } else {
+                register.0
+            }
+        }
+
+        fn stack_arg_size(
+            &self,
+            abi: &tir::backend::abi::AbiInfo,
+            class: tir::backend::regalloc::RegClassId,
+        ) -> u32 {
+            if class == RegClass::XMM128.id() {
+                16
+            } else {
+                abi.stack.slot_size
+            }
         }
 
         fn stack_arg_store(
@@ -202,6 +266,13 @@ mod isa {
                 )),
                 "XMM" => Ok(Box::new(
                     MovsdStoreDispOpBuilder::new(context)
+                        .attr("base", base)
+                        .attr("imm", offset)
+                        .src(value)
+                        .build(),
+                )),
+                "XMM128" => Ok(Box::new(
+                    MovupsStoreDispOpBuilder::new(context)
                         .attr("base", base)
                         .attr("imm", offset)
                         .src(value)

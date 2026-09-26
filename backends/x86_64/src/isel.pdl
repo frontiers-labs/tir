@@ -19,6 +19,18 @@ rule uitofp-via-sitofp: #uitofp(x: int<N>, 11, 52) : int<64>
   => #sitofp(#zext(#extract(x, const<6>(31), const<1>(0)), 64), const<4>(11), const<6>(52))
   where N == 32;
 
+// For the upper half of u64, shift once and retain the discarded bit as a
+// sticky bit before a signed conversion. Doubling a normal binary64 value is
+// one increment of its exponent field. The lower half converts directly.
+rule uitofp64-via-signed:
+  #uitofp(x: int<64>, 11, 52) : int<64>
+  => #bitcast(#add(
+    #bitcast(#sitofp(
+      #if(#ult(x, #shl(const<64>(1), const<64>(63))),
+        x, #or(#lshr(x, const<64>(1)), #and(x, const<64>(1)))),
+      const<4>(11), const<6>(52))),
+    #shl(#lshr(x, const<64>(63)), const<64>(52))));
+
 rule fptoui32-via-fptosi: #fptoui(x: int<32>, 32) : int<32>
   => #extract(#fptosi(x, const<7>(64)), const<6>(31), const<1>(0));
 

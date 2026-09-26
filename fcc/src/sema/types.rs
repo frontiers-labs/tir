@@ -61,6 +61,10 @@ pub enum TypeKind {
     Float,
     Double,
     LongDouble,
+    ComplexFloat,
+    ComplexDouble,
+    ComplexLongDouble,
+    VaList,
     Pointer(QualType),
     Array(QualType, Option<u64>),
     Function {

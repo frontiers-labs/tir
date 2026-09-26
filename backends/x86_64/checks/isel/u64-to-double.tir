@@ -1,0 +1,10 @@
+// REQUIRES: linux, x86_64
+// RUN: tir mc --march=x86_64 --filetype=obj %s | python3 %S/Inputs/u64-to-double.py
+
+module {
+  %f = func.func @from_unsigned64(%0: !i64) -> !f64 {
+    %1 = fp.from_ui %0 {semantics = {exceptions = "ignore", kind = "arithmetic", nan = "any_quiet", rounding = "nearest_even", subnormals = "gradual", tininess = "after_rounding"}} : !f64
+    func.return %1
+  }
+  module_end
+}

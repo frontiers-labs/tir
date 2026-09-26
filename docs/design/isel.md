@@ -77,6 +77,14 @@ the target's calling convention, which specifies how arguments and results
 travel between functions. Semantic pattern matching is part of this larger
 lowering process.
 
+The x86-64 target axioms lower unsigned 64-bit conversion to binary64 through
+signed conversion. Values with the high bit set are shifted right once, with
+the discarded bit retained as a sticky bit. An integer select chooses this
+value or the original lower-half input before signed conversion. The upper
+half then adds one to the floating-point exponent field to double the result.
+Explicit bitcasts connect the integer bit operations to the floating-point
+registers. The PDL identity is proved for round-to-nearest-even semantics.
+
 ## Intrinsic expansion
 
 Operations such as `ptr.memcpy` and `ptr.memset` retain their meaning through
@@ -210,6 +218,17 @@ The selector checks those requirements before it accepts a match. It also
 checks target features and the availability of values at the proposed use.
 An expression elsewhere in the function does not automatically supply a usable
 register here.
+
+Fixed vectors carry their raw bit width in the semantic graph. When a target
+can move the same width through multiple register files, selection uses the
+ABI's vector register file to reject a match that would read or define a
+vector through another file. If a selected value replaces a nonvolatile load,
+selection removes that unused read and forwards its memory state to the read's
+predecessor.
+On x86-64, packed 64-bit values use a raw-bit XMM view, while binary64
+operations use a float-typed view of the same register file.
+FCC represents floating literals as integer bits followed by a bitcast, so
+the ordinary bit-transfer rules materialize them through the same selector.
 
 ## Compatible choices and their cost
 

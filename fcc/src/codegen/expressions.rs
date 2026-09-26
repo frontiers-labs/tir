@@ -7,12 +7,13 @@ use super::{
 use crate::ast::{AstKind, AstLeaf};
 use crate::cir;
 use crate::diagnostics::Diagnostic;
-use crate::lexer::decode_character_constant;
+use crate::lexer::{FloatingLiteralKind, decode_character_constant};
 use crate::sema::{TypeKind, ValueCategory};
 use tir::ValueId;
 use tir::attributes::Predicate;
 use tir::builtin::{IntegerType, ops as b};
 use tir::cfg::ops as cb;
+use tir::fp::ops as fp;
 use tir::graph::{Dag, NodeId};
 use tir::ptr::{PtrType, ops as p};
 
@@ -95,10 +96,36 @@ impl FnCodegen<'_> {
                     let AstLeaf::Float(n) = ast.get_leaf_data(node).unwrap() else {
                         unreachable!("floating literal node carries a floating payload");
                     };
-                    LoweredExpr::Value(self.float_constant(
-                        n.value.to_bits() as u64,
-                        lower_type(self.context, self.typed, node_type(self.typed, node)),
-                    ))
+                    let ty = lower_type(self.context, self.typed, node_type(self.typed, node));
+                    match n.kind {
+                        FloatingLiteralKind::ImaginaryFloat => {
+                            let bits = ((n.value.to_bits() as u64) << 32) as i64;
+                            let raw = self
+                                .emit(
+                                    b::constant(
+                                        self.context,
+                                        bits,
+                                        IntegerType::new(self.context, 64),
+                                    )
+                                    .build(),
+                                )
+                                .result();
+                            LoweredExpr::Value(
+                                self.emit(
+                                    b::BitcastOpBuilder::new(self.context)
+                                        .input(raw)
+                                        .result_type(ty)
+                                        .build(),
+                                )
+                                .result(),
+                            )
+                        }
+                        FloatingLiteralKind::ImaginaryDouble
+                        | FloatingLiteralKind::ImaginaryLongDouble => {
+                            return Err(unsupported(ast, node, "imaginary literal".to_string()));
+                        }
+                        _ => LoweredExpr::Value(self.float_constant(n.value.to_bits() as u64, ty)),
+                    }
                 }
                 AstKind::Character => {
                     let AstLeaf::Character(spelling) = ast.get_leaf_data(node).unwrap() else {
@@ -125,6 +152,9 @@ impl FnCodegen<'_> {
                     LoweredExpr::Value(self.symbols.data(self.context, &label))
                 }
                 AstKind::Var => self.lower_var(node)?,
+                AstKind::VaStart => self.lower_va_start(node)?,
+                AstKind::VaEnd => self.lower_va_end(),
+                AstKind::VaArg => self.lower_va_arg(node)?,
                 AstKind::Member => self.lower_member(node)?,
                 kind @ (AstKind::Call | AstKind::CallExpr) => self.lower_call(node, kind)?,
                 kind @ (AstKind::Add
@@ -142,14 +172,23 @@ impl FnCodegen<'_> {
                 }
                 AstKind::AddressOf => {
                     let child = ast.children(node).next().unwrap();
-                    let LoweredExpr::Address { ptr, .. } = self.values[&child] else {
-                        return Err(unsupported(
-                            ast,
-                            node,
-                            "non-addressable address-of operand".to_string(),
-                        ));
-                    };
-                    LoweredExpr::Value(ptr)
+                    match self.values[&child] {
+                        LoweredExpr::Address { ptr, .. } => LoweredExpr::Value(ptr),
+                        LoweredExpr::Value(ptr)
+                            if ast
+                                .get_annotation(child)
+                                .is_some_and(|info| info.category == ValueCategory::Function) =>
+                        {
+                            LoweredExpr::Value(ptr)
+                        }
+                        _ => {
+                            return Err(unsupported(
+                                ast,
+                                node,
+                                "non-addressable address-of operand".to_string(),
+                            ));
+                        }
+                    }
                 }
                 AstKind::Deref => {
                     let child = ast.children(node).next().unwrap();
@@ -334,6 +373,12 @@ impl FnCodegen<'_> {
             {
                 self.lower_floating_binary(kind, l, r, source_ty)
             }
+            _ if matches!(self.typed.types().kind(source_ty), TypeKind::ComplexFloat) => {
+                self.lower_complex_float_binary(kind, l, r)
+            }
+            _ if matches!(self.typed.types().kind(source_ty), TypeKind::ComplexDouble) => {
+                self.lower_complex_double_binary(kind, l, r)
+            }
             _ => self.lower_integer_binary(kind, l, r, source_ty),
         };
         Ok(LoweredExpr::Value(value))
@@ -364,6 +409,27 @@ impl FnCodegen<'_> {
         let result_ty = lower_type(self.context, self.typed, node_type(self.typed, node));
         let value = match kind {
             AstKind::Pos => operand,
+            AstKind::Neg
+                if matches!(
+                    self.typed.types().kind(node_type(self.typed, node)),
+                    TypeKind::ComplexFloat
+                ) =>
+            {
+                let (real, imag) = self.unpack_complex_float(operand);
+                let float = tir::builtin::FloatType::f32(self.context);
+                let negate = |this: &Self, value| {
+                    this.emit(
+                        fp::NegOpBuilder::new(this.context)
+                            .input(value)
+                            .result_type(float)
+                            .build(),
+                    )
+                    .result()
+                };
+                let real = negate(self, real);
+                let imag = negate(self, imag);
+                self.pack_complex_float(real, imag)
+            }
             AstKind::Neg
                 if matches!(
                     self.typed.types().kind(node_type(self.typed, node)),
@@ -507,6 +573,27 @@ impl FnCodegen<'_> {
         let operand_ty = converted_node_type(self.typed, lhs_node);
         let value = match self.typed.types().kind(operand_ty) {
             TypeKind::Float | TypeKind::Double => self.lower_floating_compare(kind, lhs, rhs),
+            TypeKind::ComplexFloat if matches!(kind, AstKind::Eq | AstKind::Ne) => {
+                let (left_real, left_imag) = self.unpack_complex_float(lhs);
+                let (right_real, right_imag) = self.unpack_complex_float(rhs);
+                let real = self.lower_floating_compare(kind, left_real, right_real);
+                let imag = self.lower_floating_compare(kind, left_imag, right_imag);
+                let boolean = IntegerType::new(self.context, 1);
+                if kind == AstKind::Eq {
+                    self.emit(b::andi(self.context, real, imag, boolean).build())
+                        .result()
+                } else {
+                    self.emit(b::ori(self.context, real, imag, boolean).build())
+                        .result()
+                }
+            }
+            TypeKind::ComplexFloat => {
+                return Err(unsupported(
+                    ast,
+                    node,
+                    "complex relational comparison".to_string(),
+                ));
+            }
             TypeKind::Pointer(_) | TypeKind::Array(_, _) => {
                 let predicate = match kind {
                     AstKind::Lt => Predicate::Ult,
@@ -595,6 +682,8 @@ impl FnCodegen<'_> {
                 TypeKind::Float | TypeKind::Double => {
                     self.lower_floating_binary(kind, lhs, rhs, operand_ty)
                 }
+                TypeKind::ComplexFloat => self.lower_complex_float_binary(kind, lhs, rhs),
+                TypeKind::ComplexDouble => self.lower_complex_double_binary(kind, lhs, rhs),
                 _ => self.lower_integer_binary(kind, lhs, rhs, operand_ty),
             };
             self.convert_scalar(result, operand_ty, source_ty)

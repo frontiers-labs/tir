@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::analysis::{AnalysisManager, regions::subtree_ops};
-use crate::builtin::{MakeTupleOp, ModuleOp, TupleGetOp};
+use crate::builtin::{FnType, MakeTupleOp, ModuleOp, TupleGetOp, VarArgsType};
 use crate::func::{CallOp, FuncOp};
 use crate::ptr::AllocaOp;
 use crate::{
@@ -181,16 +181,26 @@ impl CallGraph {
                 };
                 let op = call.op().clone().as_op::<CallOp>().expect("a call");
                 let args = op.args();
-                if args.len()
-                    != context
-                        .get_region(nodes[callee].body)
-                        .value_arguments()
-                        .len()
-                {
+                let function = context
+                    .get_op(nodes[callee].func)
+                    .as_op::<FuncOp>()
+                    .expect("a function");
+                // ABI-supplied parameters cannot be bound to call operands.
+                if function.implicit_argument_count() != 0 {
+                    continue;
+                }
+                let named = context
+                    .get_region(nodes[callee].body)
+                    .value_arguments()
+                    .len();
+                let variadic = FnType::signature_of(context, nodes[callee].value)
+                    .is_some_and(|(params, _)| params.last() == Some(&VarArgsType::new(context)));
+                if args.len() < named || (!variadic && args.len() != named) {
                     continue;
                 }
                 let constant_args = args
                     .iter()
+                    .take(named)
                     .filter(|&&arg| is_constant(context, arg))
                     .count() as u32;
                 nodes[index].sites.push(Site {

@@ -742,6 +742,9 @@ impl Pass for RegisterAllocationPass {
         let depths = crate::backend::machine_cfg::loop_depths(&blocks, &scan.successors);
 
         let mut frame = FramePlan::new(self.abi);
+        if let Some(AttributeValue::Value(entry_sp)) = op.op().attr("entry_sp") {
+            frame.temps.insert(entry_sp.number());
+        }
         frame.reserve_outgoing(scan.outgoing_size);
         let stack_allocas = scan.stack_allocas(&mut frame);
         self.rematerialize_stack_allocas(context, &blocks, &scan, &stack_allocas, &mut frame)?;
@@ -860,6 +863,15 @@ impl Pass for RegisterAllocationPass {
             frame_size,
             saves.len(),
         )?;
+        self.materialize_entry_stack_pointer(
+            context,
+            op,
+            &blocks,
+            &assignment,
+            &frame,
+            frame_size,
+            saves.len(),
+        )?;
         // Record the final assignment after spilling and copy removal.
         // Coalescing and spilling retire values; the map describes the ones the
         // function still names.
@@ -882,6 +894,44 @@ impl Pass for RegisterAllocationPass {
 }
 
 impl RegisterAllocationPass {
+    #[allow(clippy::too_many_arguments)]
+    fn materialize_entry_stack_pointer(
+        &self,
+        context: &Context,
+        function: &OperationRef,
+        blocks: &[BlockId],
+        assignment: &HashMap<u32, PhysReg>,
+        frame: &FramePlan,
+        frame_size: u32,
+        pushed_saves: usize,
+    ) -> Result<(), PassError> {
+        let Some(AttributeValue::Value(value)) = function.op().attr("entry_sp") else {
+            return Ok(());
+        };
+        let copy = blocks
+            .first()
+            .into_iter()
+            .flat_map(|block| context.get_block(*block).op_ids())
+            .find(|&op| {
+                context.get_op(op).attr(prealloc::ENTRY_SP_COPY_ATTR)
+                    == Some(AttributeValue::Bool(true))
+            })
+            .ok_or_else(|| PassError::InvalidRuleSet("missing entry stack pointer copy".into()))?;
+        let register = assignment.get(&value.number()).ok_or_else(|| {
+            PassError::InvalidRuleSet("entry stack pointer has no assigned register".into())
+        })?;
+        let offset = frame.entry_sp_offset(frame_size, pushed_saves);
+        let target = op_ref_in(context, copy);
+        for address in
+            self.target
+                .emit_frame_address(context, value, register.0, &self.abi.sp, offset)?
+        {
+            context.insert_op_before(&target, address.as_ref())?;
+        }
+        context.erase_op_keeping_results(&target)?;
+        Ok(())
+    }
+
     fn frame_register(&self) -> PhysReg {
         self.abi.sp
     }
@@ -1349,6 +1399,15 @@ impl FramePlan {
                     + i64::from(prologue_adjustment)
                     + slot
                     + stack_index as i64 * slot
+            }
+        }
+    }
+
+    fn entry_sp_offset(&self, prologue_adjustment: u32, pushed_saves: usize) -> i64 {
+        match self.save_style {
+            crate::backend::abi::SaveStyle::FrameSlots => i64::from(prologue_adjustment),
+            crate::backend::abi::SaveStyle::PushPop => {
+                i64::from(prologue_adjustment) + pushed_saves as i64 * i64::from(self.slot_size)
             }
         }
     }

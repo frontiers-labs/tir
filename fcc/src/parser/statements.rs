@@ -1,7 +1,7 @@
 //! Statement grammar and lexical block scopes.
 
 use super::declarations::{ctype, local_decl};
-use super::expressions::{expr, initializer};
+use super::expressions::{assignment_expr, expr, initializer};
 use super::{Extra, Span, ident};
 use crate::ast::*;
 use crate::lexer::Token;
@@ -36,7 +36,14 @@ where
                     CType::Array(Box::new(element), length)
                 });
                 let id = st.add(AstKind::Decl, tok);
-                st.ast.set_leaf_data(id, AstLeaf::Decl { name, ty });
+                st.ast.set_leaf_data(
+                    id,
+                    AstLeaf::Decl {
+                        name,
+                        ty,
+                        is_static: false,
+                    },
+                );
                 if let Some(init) = init {
                     st.ast.add_edge(id, init);
                 }
@@ -52,7 +59,7 @@ where
 {
     ident()
         .then_ignore(just(Token::Assign))
-        .then(expr())
+        .then(assignment_expr())
         .map_with(
             |(name, value), e: &mut MapExtra<'src, '_, I, Extra<'src>>| {
                 let tok = e.span().start;
@@ -188,13 +195,13 @@ where
 
         // Each `for` clause may be omitted; an omitted clause becomes an
         // `Empty` node so the node always has exactly four children.
-        let for_init = choice((decl_body(), assign_body()))
+        let for_init = choice((decl_body(), expr()))
             .or_not()
             .map_with(|c, e| c.unwrap_or_else(|| empty_node(e)));
         let for_cond = expr()
             .or_not()
             .map_with(|c, e| c.unwrap_or_else(|| empty_node(e)));
-        let for_step = choice((assign_body(), expr()))
+        let for_step = expr()
             .or_not()
             .map_with(|c, e| c.unwrap_or_else(|| empty_node(e)));
 

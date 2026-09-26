@@ -97,7 +97,11 @@ impl FnCodegen<'_> {
         let result = *result;
         let returns_void = matches!(self.typed.types().kind(result), TypeKind::Void);
 
-        let statements = ast.children(func).skip(params.len()).collect::<Vec<_>>();
+        let statements = ast
+            .children(func)
+            .skip(params.len())
+            .filter(|&child| ast.get_node(child).kind != AstKind::VarArgs)
+            .collect::<Vec<_>>();
         self.lower_statements(&statements, result, returns_void)
     }
 
@@ -142,7 +146,15 @@ impl FnCodegen<'_> {
 
     fn hoist_declarations(&mut self, statement: NodeId) {
         let ast = self.ast;
-        if ast.get_node(statement).kind == AstKind::Decl {
+        if ast.get_node(statement).kind == AstKind::Decl
+            && !matches!(
+                ast.get_leaf_data(statement),
+                Some(AstLeaf::Decl {
+                    is_static: true,
+                    ..
+                })
+            )
+        {
             let slot = self.declare_slot(statement);
             self.locals.insert(node_entity(self.typed, statement), slot);
         }
@@ -345,8 +357,12 @@ impl FnCodegen<'_> {
                     unreachable!("for statement has four children");
                 };
                 // The init clause runs once, before the loop, so it stays inline.
-                if ast.get_node(init).kind != AstKind::Empty {
-                    self.lower_stmt(init)?;
+                match ast.get_node(init).kind {
+                    AstKind::Empty => {}
+                    AstKind::Decl | AstKind::DeclGroup | AstKind::Assign => {
+                        self.lower_stmt(init)?
+                    }
+                    _ => self.lower_discarded_expr(init)?,
                 }
                 if !self.structured_loops {
                     return self.lower_flat_for(condition, step, body);
@@ -668,9 +684,12 @@ impl FnCodegen<'_> {
         match ast.get_node(stmt).kind {
             AstKind::EnumDecl | AstKind::Empty => Ok(()),
             AstKind::Decl => {
-                let AstLeaf::Decl { .. } = ast.get_leaf_data(stmt).unwrap() else {
+                let AstLeaf::Decl { is_static, .. } = ast.get_leaf_data(stmt).unwrap() else {
                     unreachable!("decl node carries a decl payload");
                 };
+                if *is_static {
+                    return Ok(());
+                }
                 let source_ty = node_type(self.typed, stmt);
                 let entity = node_entity(self.typed, stmt);
                 let slot = match self.locals.get(&entity) {
@@ -792,6 +811,45 @@ impl FnCodegen<'_> {
     /// Compare a scalar with zero using the source domain's equality rules.
     pub(super) fn compare_against_zero(&mut self, value: ValueId, predicate: Predicate) -> ValueId {
         let ty = self.context.get_value(value).ty();
+        let is_complex_float = {
+            let data = self.context.get_type_data(ty);
+            (data.as_ref() as &dyn std::any::Any)
+                .downcast_ref::<tir::vector::VectorType>()
+                .is_some_and(|vector| {
+                    vector.length() == Some(2)
+                        && vector.element(self.context) == FloatType::f32(self.context)
+                })
+        };
+        if is_complex_float {
+            let (real, imag) = self.unpack_complex_float(value);
+            let zero = self.float_zero(FloatType::f32(self.context));
+            let component = |this: &Self, input| {
+                this.emit(
+                    fp::CmpOpBuilder::new(this.context)
+                        .lhs(input)
+                        .rhs(zero)
+                        .predicate(if predicate == Predicate::Eq {
+                            Predicate::Oeq
+                        } else {
+                            Predicate::Une
+                        })
+                        .semantics(this.comparison_semantics())
+                        .result_type(IntegerType::new(this.context, 1))
+                        .build(),
+                )
+                .result()
+            };
+            let real = component(self, real);
+            let imag = component(self, imag);
+            let boolean = IntegerType::new(self.context, 1);
+            return if predicate == Predicate::Eq {
+                self.emit(b::andi(self.context, real, imag, boolean).build())
+                    .result()
+            } else {
+                self.emit(b::ori(self.context, real, imag, boolean).build())
+                    .result()
+            };
+        }
         let is_float = {
             let data = self.context.get_type_data(ty);
             (data.as_ref() as &dyn std::any::Any)

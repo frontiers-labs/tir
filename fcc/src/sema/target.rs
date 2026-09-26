@@ -1,7 +1,9 @@
 //! Target data layout and ABI properties used by C semantic analysis.
 
 use super::{IntegerKind, TypeKind};
-use tir::backend::abi::{ArgumentGroupAlignment, ClassifierKind, Overflow, ValueKind};
+use tir::backend::abi::{
+    ArgumentGroupAlignment, ArgumentGroupPolicy, ClassifierKind, GroupRollback, Overflow, ValueKind,
+};
 
 /// The TIR layout classes fcc's scalar C types map onto. Which class a C type
 /// takes is C's rule; how wide and how aligned that class is, is the target's
@@ -61,6 +63,7 @@ pub struct TargetProfile {
     float_argument_registers: usize,
     float_argument_overflow: Overflow,
     argument_group_alignment: Option<ArgumentGroupAlignment>,
+    argument_group_policy: Option<ArgumentGroupPolicy>,
     indirect_result_argument_slots: Option<(ValueKind, usize)>,
 }
 
@@ -109,6 +112,7 @@ impl TargetProfile {
                     sequence.overflow
                 }),
             argument_group_alignment: abi.argument_group_alignment,
+            argument_group_policy: abi.argument_group_policy,
             indirect_result_argument_slots: abi.indirect_result_argument_slots(),
         })
     }
@@ -134,6 +138,16 @@ impl TargetProfile {
             TypeKind::Enum(_) => LayoutClass::I32,
             TypeKind::Float => LayoutClass::F32,
             TypeKind::Double => LayoutClass::F64,
+            TypeKind::ComplexFloat => {
+                let (size, align) = self.class_layout(LayoutClass::F32);
+                return Some((2 * size, align));
+            }
+            TypeKind::ComplexDouble => {
+                let (size, align) = self.class_layout(LayoutClass::F64);
+                return Some((2 * size, align));
+            }
+            TypeKind::ComplexLongDouble => return Some((32, 16)),
+            TypeKind::VaList => return Some((24, 8)),
             // `long double` maps onto no TIR layout class: fcc carries it as an
             // opaque object rather than an arithmetic type, so its ABI size and
             // alignment have nowhere in the data layout to come from.
@@ -193,6 +207,16 @@ impl TargetProfile {
 
     pub(crate) fn float_argument_overflow(self) -> Overflow {
         self.float_argument_overflow
+    }
+
+    pub(crate) fn argument_group_fits_register_limit(self, members: usize) -> bool {
+        self.argument_group_policy
+            .is_none_or(|policy| policy.fits_register_limit(members))
+    }
+
+    pub(crate) fn argument_group_rollback(self) -> GroupRollback {
+        self.argument_group_policy
+            .map_or(GroupRollback::Exhaust, |policy| policy.rollback)
     }
 
     pub(crate) fn align_argument_slot(

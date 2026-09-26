@@ -19,6 +19,8 @@ use crate::backend::regalloc::{
 use crate::backend::registers::{RegAssignment, RegSlot, fresh_reg, value_class};
 use crate::backend::{SymbolOp, VirtualBranchOp, VirtualReturnOp, reg_slots, symbol_body_blocks};
 
+pub(crate) const ENTRY_SP_COPY_ATTR: &str = "entry_sp_copy";
+
 /// A fresh value of `class`: the type a machine instruction reads it through.
 /// Require the slot of `op` holding `value` to be `register`. A copy whose
 /// slots do not name the value cannot carry the constraint, and the ABI
@@ -387,7 +389,14 @@ impl Pass for AbiPrecolorPass {
                 Some(AttributeValue::Value(value)) => Some(value),
                 _ => None,
             };
-            let plan = plan_arguments(context, &info, self.abi, &args, result_address)?;
+            let plan = plan_arguments(
+                context,
+                &info,
+                self.target.as_ref(),
+                self.abi,
+                &args,
+                result_address,
+            )?;
             let entry = blocks
                 .first()
                 .and_then(|block| context.get_block(*block).op_ids().first().copied())
@@ -399,6 +408,28 @@ impl Pass for AbiPrecolorPass {
                     )
                 })
             };
+            if let Some(AttributeValue::Value(entry_sp)) = op.op().attr("entry_sp") {
+                let class = value_class(context, entry_sp).ok_or_else(|| {
+                    PassError::InvalidRuleSet(format!(
+                        "entry stack pointer %{} has no register class",
+                        entry_sp.number()
+                    ))
+                })?;
+                let copy = self.target.emit_copy(
+                    context,
+                    class,
+                    RegSlot::Value(entry_sp),
+                    RegSlot::Phys(self.abi.sp),
+                );
+                let copy_id = copy.id();
+                context.insert_op_before(&entry()?, copy.as_ref())?;
+                mark_op(
+                    context,
+                    copy_id,
+                    ENTRY_SP_COPY_ATTR,
+                    AttributeValue::Bool(true),
+                );
+            }
             for &(incoming, pin) in &plan.pins {
                 let body = fresh_reg(context, pin.0);
                 // Rename first: the copy is the one op that must keep reading
@@ -521,6 +552,7 @@ struct ArgumentPlan {
 fn plan_arguments(
     context: &Context,
     info: &RegisterInfo,
+    target: &dyn TargetRegAlloc,
     abi: &crate::backend::abi::AbiInfo,
     args: &[AttributeValue],
     result_address: Option<ValueId>,
@@ -538,7 +570,8 @@ fn plan_arguments(
     for attribute in args {
         let group = decode_argument_group(attribute)?;
         let members = match group {
-            Some((members, _)) => members
+            Some(group) => group
+                .members
                 .iter()
                 .map(|member| {
                     let AttributeValue::Value(value) = member else {
@@ -574,9 +607,13 @@ fn plan_arguments(
                 .map(|&(value, class)| ArgumentMember {
                     kind: value_kind(context, abi, value),
                     class: Some(class),
+                    stack_slots: target
+                        .spill_slot_size(class, abi)
+                        .div_ceil(abi.stack.slot_size) as usize,
                 })
                 .collect(),
-            alignment: group.map_or(1, |(_, alignment)| alignment),
+            alignment: group.map_or(1, |group| group.alignment),
+            force_stack: group.is_some_and(|group| group.force_stack),
         });
         placed.extend(members);
     }

@@ -60,14 +60,22 @@ pub enum FloatingLiteralKind {
     Float,
     Double,
     LongDouble,
+    ImaginaryFloat,
+    ImaginaryDouble,
+    ImaginaryLongDouble,
 }
 
 fn parse_floating_literal(spelling: &str) -> Option<FloatingLiteral> {
-    let suffix_start = spelling.trim_end_matches(['f', 'F', 'l', 'L']).len();
-    let kind = match &spelling[suffix_start..] {
-        "f" | "F" => FloatingLiteralKind::Float,
+    let suffix_start = spelling
+        .trim_end_matches(['f', 'F', 'l', 'L', 'i', 'I'])
+        .len();
+    let kind = match spelling[suffix_start..].to_ascii_lowercase().as_str() {
+        "f" => FloatingLiteralKind::Float,
         "" => FloatingLiteralKind::Double,
-        "l" | "L" => FloatingLiteralKind::LongDouble,
+        "l" => FloatingLiteralKind::LongDouble,
+        "if" | "fi" => FloatingLiteralKind::ImaginaryFloat,
+        "i" => FloatingLiteralKind::ImaginaryDouble,
+        "il" | "li" => FloatingLiteralKind::ImaginaryLongDouble,
         _ => return None,
     };
     let digits = spelling[..suffix_start].replace('\'', "");
@@ -75,10 +83,13 @@ fn parse_floating_literal(spelling: &str) -> Option<FloatingLiteral> {
         parse_hexadecimal_floating_literal(&digits, kind)?
     } else {
         match kind {
-            FloatingLiteralKind::Float => {
+            FloatingLiteralKind::Float | FloatingLiteralKind::ImaginaryFloat => {
                 APFloat::from_bits(8, 23, false, digits.parse::<f32>().ok()?.to_bits() as u128)
             }
-            FloatingLiteralKind::Double | FloatingLiteralKind::LongDouble => {
+            FloatingLiteralKind::Double
+            | FloatingLiteralKind::LongDouble
+            | FloatingLiteralKind::ImaginaryDouble
+            | FloatingLiteralKind::ImaginaryLongDouble => {
                 APFloat::from_f64(digits.parse::<f64>().ok()?)
             }
         }
@@ -99,8 +110,11 @@ fn parse_hexadecimal_floating_literal(digits: &str, kind: FloatingLiteralKind) -
     let significand = u128::from_str_radix(&format!("{integer}{fraction}"), 16).ok()?;
     let exp2 = exponent.checked_sub(i32::try_from(fraction.len()).ok()?.checked_mul(4)?)?;
     let (exp_width, mant_width) = match kind {
-        FloatingLiteralKind::Float => (8, 23),
-        FloatingLiteralKind::Double | FloatingLiteralKind::LongDouble => (11, 52),
+        FloatingLiteralKind::Float | FloatingLiteralKind::ImaginaryFloat => (8, 23),
+        FloatingLiteralKind::Double
+        | FloatingLiteralKind::LongDouble
+        | FloatingLiteralKind::ImaginaryDouble
+        | FloatingLiteralKind::ImaginaryLongDouble => (11, 52),
     };
     Some(APFloat::from_significand(
         exp_width,
@@ -150,6 +164,8 @@ pub enum Token {
     KwBool,
     #[token("_Bool")]
     KwUnderscoreBool,
+    #[token("_Complex")]
+    KwComplex,
     #[token("break")]
     KwBreak,
     #[token("case")]
@@ -244,8 +260,8 @@ pub enum Token {
     // Or regular expressions.
     #[regex("[a-zA-Z_][a-zA-Z0-9_]*", |lex| lex.slice().to_string())]
     Identifier(String),
-    #[regex(r"0[xX](([0-9a-fA-F][0-9a-fA-F']*(\.[0-9a-fA-F']*)?)|(\.[0-9a-fA-F][0-9a-fA-F']*))[pP][+-]?[0-9][0-9']*[fFlL]?", |lex| parse_floating_literal(lex.slice()))]
-    #[regex(r"(([0-9][0-9']*\.[0-9']*|\.[0-9][0-9']*)([eE][+-]?[0-9][0-9']*)?|[0-9][0-9']*[eE][+-]?[0-9][0-9']*)[fFlL]?", |lex| parse_floating_literal(lex.slice()))]
+    #[regex(r"0[xX](([0-9a-fA-F][0-9a-fA-F']*(\.[0-9a-fA-F']*)?)|(\.[0-9a-fA-F][0-9a-fA-F']*))[pP][+-]?[0-9][0-9']*[fFlLiI]{0,2}", |lex| parse_floating_literal(lex.slice()))]
+    #[regex(r"(([0-9][0-9']*\.[0-9']*|\.[0-9][0-9']*)([eE][+-]?[0-9][0-9']*)?|[0-9][0-9']*[eE][+-]?[0-9][0-9']*)[fFlLiI]{0,2}", |lex| parse_floating_literal(lex.slice()))]
     FloatingLiteral(FloatingLiteral),
     #[regex("0[xX][0-9a-fA-F'][0-9a-fA-F']*[uUlL]*|0[bB][01'][01']*[uUlL]*|[0-9][0-9']*[uUlL]*", |lex| parse_integer_literal(lex.slice()))]
     IntegerLiteral(IntegerLiteral),
@@ -361,6 +377,7 @@ impl fmt::Display for Token {
             Token::KwAuto => f.write_str("auto"),
             Token::KwBool => f.write_str("bool"),
             Token::KwUnderscoreBool => f.write_str("_Bool"),
+            Token::KwComplex => f.write_str("_Complex"),
             Token::KwBreak => f.write_str("break"),
             Token::KwCase => f.write_str("case"),
             Token::KwChar => f.write_str("char"),

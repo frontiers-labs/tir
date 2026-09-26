@@ -6,7 +6,7 @@
 // memory of unknown provenance.
 
 // CHECK: %[[STR:[0-9]+]] = global private @.L.str{{[0-9]+}} align 1 section ".rodata" bytes [104, 101, 108, 108, 111, 44, 32, 119, 111, 114, 108, 100, 10, 0]
-// CHECK: %[[PRINTF:[0-9]+]] = func.declare @printf(!ptr.p, !cir.varargs) -> !i32
+// CHECK: %[[PRINTF:[0-9]+]] = func.declare @printf(!ptr.p, !varargs) -> !i32
 // CHECK: %{{[0-9]+}} = func.func @main() -> !i32 {
 // CHECK: %[[ENTRY:[0-9]+]] = state.entry_state : !state<memory>
 // CHECK-NEXT: %[[LOCAL:[0-9]+]], %[[WORLD:[0-9]+]] = state.split state(%[[ENTRY]])

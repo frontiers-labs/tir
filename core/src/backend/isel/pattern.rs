@@ -125,6 +125,10 @@ impl CompiledIselPattern {
         self.root as usize
     }
 
+    pub(crate) fn result_file(&self) -> Option<&'static str> {
+        self.result_register.and_then(RegisterRequirement::file)
+    }
+
     pub(crate) fn constant_materializer_range(&self) -> Option<ImmRange> {
         self.nodes[self.root as usize].symbol()?;
         let meta = &self.node_meta[self.root as usize];

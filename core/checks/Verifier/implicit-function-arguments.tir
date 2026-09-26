@@ -1,0 +1,12 @@
+// RUN: tir opt --verify %s | filecheck %s
+
+module {
+  %fn_hidden = func.func @hidden(%named: !i64, %hidden: !i64, %entry: !ptr.p, ...)
+      -> !i64 implicit_arguments 2 entry_sp %entry {
+    %sum = addi %named, %hidden : !i64
+    func.return %sum
+  }
+  module_end
+}
+
+// CHECK: func.func @hidden(%{{[0-9]+}}: !i64, %{{[0-9]+}}: !i64, %{{[0-9]+}}: !ptr.p, ...) -> !i64 implicit_arguments 2 entry_sp %{{[0-9]+}}

@@ -16,9 +16,20 @@ pub use error::Error;
 pub use parser::parse_module;
 
 use tir::Context;
+use tir::backend::abi::AbiInfo;
 use tir::builtin::ModuleOp;
 
 /// Parse LLVM textual IR and lower it to a TIR module in one step.
 pub fn import_str(context: &Context, src: &str) -> Result<ModuleOp, Error> {
     import(context, &parse_module(src)?)
+}
+
+/// Parse LLVM textual IR and lower it using `abi` for target-dependent entry
+/// state such as a variadic register-save area.
+pub fn import_str_with_abi(
+    context: &Context,
+    src: &str,
+    abi: &'static AbiInfo,
+) -> Result<ModuleOp, Error> {
+    convert::import_with_abi(context, &parse_module(src)?, abi)
 }

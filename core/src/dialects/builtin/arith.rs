@@ -335,24 +335,19 @@ impl tir::Verifiable for BitcastOp {
         let layout = crate::DataLayout::for_op(context, self.0.id);
         let width = |value| {
             let ty = context.get_value(value).ty();
-            let ty = context.get_type_data(ty);
-            let ty = ty.as_ref() as &dyn std::any::Any;
-            ty.downcast_ref::<crate::builtin::IntegerType>()
-                .map(crate::builtin::IntegerType::width)
-                .or_else(|| {
-                    ty.downcast_ref::<crate::builtin::FloatType>()
-                        .map(crate::builtin::FloatType::bit_width)
-                })
-                .or_else(|| {
-                    ty.downcast_ref::<crate::builtin::IndexType>()
-                        .and_then(|_| layout.as_ref()?.index_width())
-                })
+            crate::sem::egraph::type_width(context, ty).or_else(|| {
+                let ty = context.get_type_data(ty);
+                let ty = ty.as_ref() as &dyn std::any::Any;
+                ty.downcast_ref::<crate::builtin::IndexType>()
+                    .and_then(|_| layout.as_ref()?.index_width())
+            })
         };
         let input_width = width(self.operands()[0]);
         let result_width = width(self.result());
         if input_width.is_none() || result_width.is_none() {
             return Err(Error::VerificationError(
-                "bitcast requires scalar integer, floating-point or index types".to_string(),
+                "bitcast requires fixed-width integer, floating-point, vector or index types"
+                    .to_string(),
             ));
         }
         if input_width != result_width {

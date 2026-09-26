@@ -23,7 +23,7 @@ where
     expression_parsers().0
 }
 
-fn assignment_expr<'src, I>() -> impl Parser<'src, I, NodeId, Extra<'src>> + Clone
+pub(super) fn assignment_expr<'src, I>() -> impl Parser<'src, I, NodeId, Extra<'src>> + Clone
 where
     I: ValueInput<'src, Token = Token, Span = Span>,
 {
@@ -84,6 +84,51 @@ where
                 id
             },
         );
+        let va_start = just(Token::Identifier("__builtin_va_start".to_string()))
+            .ignore_then(
+                assignment
+                    .clone()
+                    .then_ignore(just(Token::Comma))
+                    .then(assignment.clone())
+                    .delimited_by(just(Token::LParen), just(Token::RParen)),
+            )
+            .map_with(|(list, last), e: &mut MapExtra<'src, '_, I, Extra<'src>>| {
+                let tok = e.span().start;
+                let st = &mut e.state().0;
+                let id = st.add(AstKind::VaStart, tok);
+                st.ast.add_edge(id, list);
+                st.ast.add_edge(id, last);
+                id
+            });
+        let va_arg = just(Token::Identifier("__builtin_va_arg".to_string()))
+            .ignore_then(
+                assignment
+                    .clone()
+                    .then_ignore(just(Token::Comma))
+                    .then(ctype())
+                    .delimited_by(just(Token::LParen), just(Token::RParen)),
+            )
+            .map_with(|(list, ty), e: &mut MapExtra<'src, '_, I, Extra<'src>>| {
+                let tok = e.span().start;
+                let st = &mut e.state().0;
+                let id = st.add(AstKind::VaArg, tok);
+                st.ast.set_leaf_data(id, AstLeaf::Type(ty));
+                st.ast.add_edge(id, list);
+                id
+            });
+        let va_end = just(Token::Identifier("__builtin_va_end".to_string()))
+            .ignore_then(
+                assignment
+                    .clone()
+                    .delimited_by(just(Token::LParen), just(Token::RParen)),
+            )
+            .map_with(|list, e: &mut MapExtra<'src, '_, I, Extra<'src>>| {
+                let tok = e.span().start;
+                let st = &mut e.state().0;
+                let id = st.add(AstKind::VaEnd, tok);
+                st.ast.add_edge(id, list);
+                id
+            });
         let call = ident()
             .then(
                 assignment
@@ -114,6 +159,9 @@ where
             floating,
             character,
             string,
+            va_start,
+            va_arg,
+            va_end,
             call,
             var,
             expr.clone()

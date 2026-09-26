@@ -76,7 +76,7 @@ pub fn parse_module(
         }
         InputKind::Tir => Ok((parse_tir(context, &input)?, true)),
         InputKind::Llvm => {
-            let module = tir_llvm::import_str(context, &input)
+            let module = tir_llvm::import_str_with_abi(context, &input, target.abi())
                 .map_err(|e| format!("llvm import failed: {e}"))?;
             let mut attributes = context.get_op(module.id()).attributes().to_vec();
             for (name, value) in [
