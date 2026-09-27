@@ -283,6 +283,11 @@ fn node(term: &Term, side: Side, scope: &Scope) -> Result<AxNode, String> {
                 Side::Rhs => AxNode::Const(value, ConstWidth::Register),
             })
         }
+        // On the left a constructor matches by value like a bare literal: the
+        // graph's constants carry the width a head gave them, not the operand's.
+        TermKind::Constant { value, .. } if side == Side::Lhs => {
+            Ok(AxNode::ConstMatch(width_expr(value, scope)?))
+        }
         TermKind::Constant { width, value } => Ok(AxNode::Const(
             width_expr(value, scope)?,
             ConstWidth::Explicit(width_expr(width, scope)?),

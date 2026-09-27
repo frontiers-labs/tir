@@ -1,0 +1,26 @@
+// RUN: tir mc --march=x86_64 --stage=isel %s | filecheck %s
+
+// A comparison of a masked XOR narrows to its low byte only under the 255 mask
+// against zero. The widened form `ne(zext(xor(a, b), 64), zext(1000, 64))`
+// unfolds to `ne(and(xor(a, b), 0xffffffff), 1000)`, which a left-hand
+// `const<W>(...)` used to accept for any constant.
+
+module {
+  %f = func.func @f(%b: !i32, %u: !i8) -> !i32 {
+    %z = extui %u : !i32
+    %x = xori %b, %z : !i32
+    %k = constant {value = 1000} : !i32
+    %c = cmpi %x, %k {predicate = "ne"} : !i1
+    cfg.cond_br %c, ^bb1, ^bb2
+  ^bb1:
+    %one = constant {value = 1} : !i32
+    func.return %one
+  ^bb2:
+    %zero = constant {value = 0} : !i32
+    func.return %zero
+  }
+  module_end
+}
+
+// CHECK-NOT: x86_64.cmp8
+// CHECK: x86_64.cmp_imm32 {dst = %{{[0-9]+}}:GPR32, imm = 1000}

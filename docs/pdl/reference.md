@@ -276,7 +276,8 @@ Constant construction truncates the value to the requested width.
 On the generated-rule left-hand side, constant patterns use plain nonnegative
 literals or constant binders such as `c: const<W>`. Unary negative terms,
 computed expressions, and `const<W>(...)` constructors can parse there but
-are not supported by Rust lowering.
+are not supported by Rust lowering. In an axiom, a left-hand `const<W>(...)`
+matches a constant by value, as a bare literal does; the width is not checked.
 
 The scalar expression `a + b` computes a constant while applying the rule.
 The term `builtin.addi(a, b)` describes a program operation. The distinction
