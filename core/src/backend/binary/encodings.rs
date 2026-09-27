@@ -488,6 +488,25 @@ pub struct DecodeSpec {
     pub attrs: &'static [&'static str],
 }
 
+/// The register of `class` a field holding `value` names. A field narrower
+/// than the class's indices supplies only their low bits (RVC `GPRC` is
+/// `x8..x15` through three bits); when every member shares the bits above
+/// the field, those bits complete the index, otherwise the field is the index.
+fn register_index(class: RegClassId, value: u64, runs: &[FieldRun]) -> u16 {
+    let bits = runs.iter().map(|r| r.op_lo + r.width).max().unwrap_or(0);
+    let low = if bits >= 16 {
+        u16::MAX
+    } else {
+        (1 << bits) - 1
+    };
+    let high = class.registers.first().map_or(0, |r| r & !low);
+    if class.registers.iter().all(|r| r & !low == high) {
+        high | value as u16
+    } else {
+        value as u16
+    }
+}
+
 /// Interprets a [`DecodeSpec`]: matches a shape's fixed bits, rebuilds each
 /// operand, and builds the op in `context`.
 ///
@@ -509,7 +528,7 @@ pub fn decode_with(context: &Context, word: u32, spec: &DecodeSpec) -> Option<Op
                 DecodeFieldKind::Register(class) => {
                     AttributeValue::Register(RegisterAttr::Physical {
                         class,
-                        index: value as u16,
+                        index: register_index(class, value, field.runs),
                     })
                 }
                 DecodeFieldKind::Int => AttributeValue::Int(value as i64),

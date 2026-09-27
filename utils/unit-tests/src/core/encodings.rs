@@ -6,10 +6,11 @@ use tir::backend::binary::{
     DecodeShape, DecodeSpec, EncodeField, EncodeShape, EncodeSpec, EncodedInst, FieldRun,
     FixupTarget, Guard, PatchField,
 };
+use tir::backend::regalloc::{RegClassId, RegClassInfo};
 use tir::backend::{RegAssignment, RegClassType};
 use tir::{Context, NewOp, OpHandle, Operation};
 
-use super::fixtures::{machine_op, r, RD_RS_PORTS};
+use super::fixtures::{machine_op, r, reg_class, RD_RS_PORTS};
 
 fn phys(index: u16) -> AttributeValue {
     AttributeValue::Register(RegisterAttr::Physical { class: r(), index })
@@ -481,4 +482,46 @@ fn decode_matches_a_two_byte_shape_in_the_fetch_window() {
     assert_eq!(op.name().as_str(), "cmv");
     assert_eq!(op.attr("rd"), Some(phys(5)));
     assert_eq!(op.attr("rs"), Some(phys(2)));
+}
+
+static RC: RegClassInfo = reg_class("RC", "R", &[8, 9, 10, 11, 12, 13, 14, 15], 1, 0, false);
+static HOLEY: RegClassInfo = reg_class(
+    "Rholey",
+    "R",
+    &[0, 1, 2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+    1,
+    0,
+    false,
+);
+
+/// A three-bit field of a class spanning `x8..x15`, like RVC `GPRC`, and one
+/// of a class with members on both sides of the field, like x86 `GPRaddrIndex`.
+const NARROW_DECODE: DecodeSpec = DecodeSpec {
+    op: ("test", "narrow"),
+    attrs: &["rc", "rh"],
+    shapes: &[DecodeShape {
+        fixed_mask: 0,
+        const_word: 0,
+        fields: &[
+            decoded(
+                "rc",
+                DecodeFieldKind::Register(RegClassId::new(&RC)),
+                &[run(0, 0, 3)],
+            ),
+            decoded(
+                "rh",
+                DecodeFieldKind::Register(RegClassId::new(&HOLEY)),
+                &[run(0, 3, 3)],
+            ),
+        ],
+    }],
+};
+
+#[test]
+fn decode_completes_a_narrow_register_field_from_its_class() {
+    let context = Context::with_default_dialects();
+    let op = context.get_op(decode_with(&context, 1 | 4 << 3, &NARROW_DECODE).expect("decodes"));
+    let reg = |class, index| AttributeValue::Register(RegisterAttr::Physical { class, index });
+    assert_eq!(op.attr("rc"), Some(reg(RegClassId::new(&RC), 9)));
+    assert_eq!(op.attr("rh"), Some(reg(RegClassId::new(&HOLEY), 4)));
 }
