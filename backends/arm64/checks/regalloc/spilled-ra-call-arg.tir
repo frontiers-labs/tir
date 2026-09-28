@@ -26,7 +26,18 @@ module {
     %21 = addi %20, %9 : !i64
     %22 = addi %21, %10 : !i64
     %23 = addi %22, %11 : !i64
-    func.return %23
+    %24 = addi %23, %1 : !i64
+    %25 = addi %24, %2 : !i64
+    %26 = addi %25, %3 : !i64
+    %27 = addi %26, %4 : !i64
+    %28 = addi %27, %5 : !i64
+    %29 = addi %28, %6 : !i64
+    %30 = addi %29, %7 : !i64
+    %31 = addi %30, %8 : !i64
+    %32 = addi %31, %9 : !i64
+    %33 = addi %32, %10 : !i64
+    %34 = addi %33, %11 : !i64
+    func.return %34
   }
   module_end
 }

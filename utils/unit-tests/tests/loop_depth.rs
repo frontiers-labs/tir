@@ -5,7 +5,10 @@ use tir::backend::{fresh_reg, RegSlot};
 use tir::{AnalysisManager, Context, Operation, OperationRef, Pass};
 use tir_x86_64 as _;
 
-fn spill_costs(source: &str) -> Vec<u64> {
+/// Each block's value is copied in from one fixed register and out to
+/// another; missing either copy costs its block's weight, so the cheapest
+/// register of each node is that weight.
+fn copy_weights(source: &str) -> Vec<u64> {
     let directory = tempfile::tempdir().unwrap();
     let output = Command::new(std::env::current_exe().unwrap())
         .args(["--ignored", "--exact", "dump_fixture"])
@@ -27,7 +30,14 @@ fn spill_costs(source: &str) -> Vec<u64> {
         .as_array()
         .unwrap()
         .iter()
-        .map(|row| row.as_array().unwrap().last().unwrap().as_u64().unwrap())
+        .map(|row| {
+            row.as_array()
+                .unwrap()
+                .iter()
+                .map(|cost| cost.as_u64().unwrap())
+                .min()
+                .unwrap()
+        })
         .collect();
     costs.sort_unstable();
     costs
@@ -93,11 +103,9 @@ proptest::proptest! {
         if reverse { blocks.reverse(); }
         source.extend(blocks);
         source.push('}');
-        let mut costs = spill_costs(&source);
-        // The condition is defined once outside and read once per decision.
-        let condition = costs.iter().position(|&cost| cost == 10 + 100 * (latches as u64 - 1));
-        proptest::prop_assert!(condition.is_some(), "costs: {:?}", costs);
-        costs.remove(condition.unwrap());
+        let mut costs = copy_weights(&source);
+        // The condition takes part in no copy.
+        proptest::prop_assert_eq!(costs.remove(0), 0);
         proptest::prop_assert_eq!(costs.len(), 2 * latches);
         let entry_cost = costs[0];
         proptest::prop_assert!(costs[1..].iter().all(|&cost| cost == 10 * entry_cost), "costs: {:?}", costs);
@@ -111,7 +119,7 @@ proptest::proptest! {
             source.push_str(&format!("^p{i}: cfg.br ^p{next} "));
         }
         source.push('}');
-        let costs = spill_costs(&source);
+        let costs = copy_weights(&source);
         proptest::prop_assert_eq!(costs.len(), preheaders + 1);
         proptest::prop_assert!(costs[..preheaders].iter().all(|&cost| cost == costs[0]));
         proptest::prop_assert_eq!(costs[preheaders], 10 * costs[0]);

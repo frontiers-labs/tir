@@ -32,9 +32,9 @@ module {
 
 // CHECK-LABEL: asm.symbol {name = "load_before_condition"
 // CHECK: ^[[HEAD:bb[0-9]+]](%[[P:[0-9]+]]: !x86_64.GPR
-// CHECK-NEXT: %{{[0-9]+}} = x86_64.mov_load {dst = %[[P]]:[[BEFORE_REG:[a-z0-9]+]],
+// CHECK-NEXT: %{{[0-9]+}} = x86_64.mov_load {dst = %{{[0-9]+}}:[[BEFORE_REG:[a-z0-9]+]],
 // CHECK-SAME: base = %[[P]]:[[BEFORE_REG]]}
-// CHECK-NOT: x86_64.mov {dst = %[[P]]:[[BEFORE_REG]]
+// CHECK-NOT: x86_64.mov {dst = %{{[0-9]+}}:[[BEFORE_REG]]
 // CHECK: asm.vbr ^[[HEAD]]
 
 // CHECK-LABEL: asm.symbol {name = "load_on_back_edge"

@@ -319,7 +319,9 @@ pub(crate) fn build_eclass_cover(
         problem.matrix_bytes(),
     );
 
-    crate::backend::pbqp_dump::dump(&problem, crate::backend::pbqp_dump::PbqpTaskKind::Isel);
+    crate::backend::pbqp_dump::dump(crate::backend::pbqp_dump::PbqpTaskKind::Isel, |w, kind| {
+        problem.write_json(w, kind)
+    });
     let solution = pbqp::solve(&problem).ok()?;
     let choices = solution
         .choices

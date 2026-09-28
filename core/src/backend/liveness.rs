@@ -75,6 +75,32 @@ pub struct Liveness {
     pub vregs: BTreeSet<u32>,
     /// Virtual registers live on entry to each block (keyed by block).
     pub live_in: HashMap<BlockId, BTreeSet<u32>>,
+    /// Every virtual register in the order its first definition is reached
+    /// walking the blocks in reverse postorder — a block parameter at its
+    /// block's entry. A definition is reached before any it dominates, so this
+    /// is the coloring order (a reversed perfect elimination order) of SSA
+    /// interference.
+    pub definition_order: Vec<u32>,
+    /// What each instruction holds in registers at once, for the spiller.
+    pub points: Vec<PressurePoint>,
+    /// The `(source, destination)` of every copy the pre-allocation lowerings
+    /// marked coalescable. Its ends hold one value, so they do not interfere
+    /// through it and may both stay live in one register.
+    pub copies: Vec<(u32, u32)>,
+}
+
+/// The registers one instruction needs at once.
+#[derive(Debug, Default)]
+pub struct PressurePoint {
+    /// Values live across the instruction: live after it, not defined by it.
+    pub across: Vec<u32>,
+    /// Values the instruction defines.
+    pub defs: Vec<u32>,
+    /// Values the instruction reads for the last time.
+    pub dying: Vec<u32>,
+    /// Physical registers the instruction clobbers or that stay reserved
+    /// across it for a later fixed-register read; `across` cannot use them.
+    pub blocked: Vec<PhysReg>,
 }
 
 impl Liveness {
@@ -112,8 +138,15 @@ pub fn analyze(context: &Context, blocks: &[BlockId]) -> Liveness {
         .enumerate()
         .map(|(i, b)| (b.block, i))
         .collect();
+    result.copies = block_infos
+        .iter()
+        .flat_map(|info| info.ops.iter())
+        .filter(|op| op.coalescable_copy)
+        .filter_map(|op| Some((*op.use_vregs.first()?, *op.def_vregs.first()?)))
+        .collect();
     let live_in = solve_live_sets(&block_infos, &index, blocks.first().copied());
     build_interference(&mut result, &block_infos, &index, &live_in);
+    result.definition_order = definition_order(&block_infos, &index);
 
     result
 }
@@ -288,6 +321,47 @@ fn join_successors(
     }
 }
 
+/// Blocks in reverse postorder from the entry, then each block's parameters
+/// and definitions in program order; unreachable blocks follow in layout order.
+fn definition_order(block_infos: &[BlockInfo], index: &HashMap<BlockId, usize>) -> Vec<u32> {
+    let mut postorder = Vec::with_capacity(block_infos.len());
+    let mut seen = vec![false; block_infos.len()];
+    let mut stack = vec![(0, false)];
+    while let Some((block, finished)) = stack.pop() {
+        if finished {
+            postorder.push(block);
+            continue;
+        }
+        if block >= block_infos.len() || seen[block] {
+            continue;
+        }
+        seen[block] = true;
+        stack.push((block, true));
+        let successors: Vec<usize> = block_infos[block]
+            .ops
+            .iter()
+            .flat_map(|op| op.successors.iter())
+            .filter_map(|succ| index.get(succ).copied())
+            .collect();
+        stack.extend(successors.into_iter().rev().map(|next| (next, false)));
+    }
+    let unreachable = (0..block_infos.len()).filter(|&block| !seen[block]);
+    let blocks = postorder.into_iter().rev().chain(unreachable);
+
+    let mut placed = HashSet::new();
+    let mut order = Vec::new();
+    for block in blocks {
+        let info = &block_infos[block];
+        let defs = info.ops.iter().flat_map(|op| op.def_vregs.iter());
+        for &vreg in info.params.iter().chain(defs) {
+            if placed.insert(vreg) {
+                order.push(vreg);
+            }
+        }
+    }
+    order
+}
+
 /// Backward scan within each block to build the interference relation.
 fn build_interference(
     result: &mut Liveness,
@@ -344,6 +418,34 @@ fn scan_op(
     live: &mut HashSet<u32>,
     live_phys: &mut HashSet<PhysReg>,
 ) {
+    let mut across: Vec<u32> = live
+        .iter()
+        .copied()
+        .filter(|vreg| !op.def_vregs.contains(vreg))
+        .collect();
+    across.sort_unstable();
+    let mut dying: Vec<u32> = op
+        .use_vregs
+        .iter()
+        .copied()
+        .filter(|vreg| !live.contains(vreg))
+        .collect();
+    dying.sort_unstable();
+    dying.dedup();
+    let mut defs = op.def_vregs.clone();
+    defs.sort_unstable();
+    defs.dedup();
+    result.points.push(PressurePoint {
+        across,
+        defs,
+        dying,
+        blocked: op
+            .clobbers
+            .iter()
+            .chain(live_phys.iter())
+            .copied()
+            .collect(),
+    });
     // A physical clobber conflicts with everything live across this op.
     for phys in &op.clobbers {
         for &l in live.iter() {

@@ -423,7 +423,18 @@ simultaneous substitutions as edge arguments. The compiler orders each block
 according to its machine dependencies before adopting the staged result.
 This order must make inputs available before use and preserve required effects.
 
-Register allocation assigns physical registers afterward. Later target passes
+Register allocation assigns physical registers afterward. It follows
+Buchwald, Zwinkau, and Bersch, "SSA-based Register Allocation with PBQP"
+(CC 2011). Spilling runs first, as its own step. Wherever an instruction needs
+more registers of a file than the file has, the allocator spills the values
+cheapest for the pressure they relieve. Assignment and copy coalescing then share
+one PBQP solve, where copies are affinity edges weighted by loop depth. The
+solver does not backtrack. It applies the optimal reductions and decides the
+remaining nodes in definition order, which for SSA interference is a reversed
+perfect elimination order, so the solve is linear in the size of the graph.
+Block arguments become copies before allocation, so the interference is not
+strictly SSA; a value the solve leaves without a register is spilled, or the
+cheapest interfering value is, and allocation runs again. Later target passes
 can make choices that depend on those assignments. For example, RISC-V
 compression can replace an instruction with a shorter encoding when its actual
 registers and immediates meet the compressed form's restrictions.

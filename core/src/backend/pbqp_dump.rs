@@ -4,8 +4,6 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use tir_pbqp::PbqpProblem;
-
 static SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 pub(super) enum PbqpTaskKind {
@@ -22,7 +20,12 @@ impl PbqpTaskKind {
     }
 }
 
-pub(super) fn dump(problem: &PbqpProblem, kind: PbqpTaskKind) {
+/// Write one task through `write`, which receives the output and the kind's
+/// name, when `TIR_PBQP_DUMP_DIR` asks for dumps.
+pub(super) fn dump(
+    kind: PbqpTaskKind,
+    write: impl FnOnce(&mut dyn Write, &str) -> std::io::Result<()>,
+) {
     let Some(directory) = dump_directory() else {
         return;
     };
@@ -52,9 +55,7 @@ pub(super) fn dump(problem: &PbqpProblem, kind: PbqpTaskKind) {
     };
 
     let mut writer = BufWriter::new(file);
-    let result = problem
-        .write_json(&mut writer, kind.as_str())
-        .and_then(|()| writer.flush());
+    let result = write(&mut writer, kind.as_str()).and_then(|()| writer.flush());
     drop(writer);
     if let Err(error) = result {
         eprintln!("tir-pbqp: cannot write '{}': {error}", path.display());

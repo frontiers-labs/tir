@@ -2,8 +2,9 @@
 //!
 //! The allocator works on machine IR produced by instruction selection, where a
 //! register operand is an SSA operand or result whose type is its register
-//! class. It computes liveness, builds an interference graph, and solves an
-//! optimal coloring with the shared PBQP solver ([`tir_pbqp`]). Nothing is
+//! class. It computes liveness, spills until register pressure fits, then
+//! assigns registers and coalesces copies in one PBQP solve
+//! ([`crate::backend::pbqp`]). Nothing else is
 //! rewritten: the chosen registers are written onto the function's `asm.symbol`
 //! as a [`crate::backend::RegAssignment`], which assembly printing and encoding
 //! read.
@@ -12,16 +13,17 @@
 //! convention policy come from the selected [`crate::backend::abi::AbiInfo`].
 
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 
 use tir::attributes::AttributeValue;
 use tir::{
     AnalysisManager, BlockId, Context, OpId, Operation, OperationRef, Pass, PassError, PassTarget,
     ValueId,
 };
-use tir_pbqp::{self as pbqp, INF_COST, PbqpMatrix, PbqpNodeId, PbqpProblem};
 
 use crate::backend::constmat::{REMAT_SPILL_USE_COST, rematerializable};
 use crate::backend::liveness::{self, Liveness, PhysReg};
+use crate::backend::pbqp::{self, INF_COST};
 use crate::backend::prealloc;
 use crate::backend::registers::fresh_reg;
 use crate::backend::{
@@ -246,14 +248,6 @@ impl RegisterInfo {
     }
 }
 
-/// One choice the allocator can make for a virtual register: a concrete physical
-/// register, or spilling it to a stack slot.
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum Alternative {
-    Phys(PhysReg),
-    Spill,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RegAllocError {
     /// A virtual register could not be colored or spilled (e.g. an over-constrained
@@ -262,8 +256,6 @@ pub enum RegAllocError {
     /// A virtual register is referenced through register classes that cannot both
     /// be honored (see [`Liveness::class_conflicts`]). Carries the offending vreg.
     ClassConflict(u32),
-    /// The PBQP instance itself was malformed.
-    Solver(String),
 }
 
 /// The outcome of one allocation round.
@@ -293,19 +285,26 @@ pub struct AllocConfig<'a> {
 
 /// Solve one register-allocation round over the analyzed function.
 ///
-/// Each virtual register becomes a PBQP node whose alternatives are the allocatable
-/// physical registers of its class plus a spill alternative; interference edges
-/// forbid two simultaneously-live vregs from sharing a register. An optimal
-/// assignment is read back from the PBQP solution. If the optimum spills any vreg,
-/// the spilled set is returned so the caller can lower it and retry.
+/// Spilling comes first and apart from assignment: wherever more values are
+/// live than their register file holds, the cheapest of them are spilled and
+/// returned for the caller to lower and retry. Once pressure fits, every
+/// virtual register becomes a PBQP node whose alternatives are the allocatable
+/// registers of its class; interference edges forbid two simultaneously-live
+/// vregs from sharing a register, and [`crate::backend::pbqp`] assigns them in
+/// definition order. Should that still leave a vreg without a register, the
+/// cheapest value in its way is spilled instead.
 pub fn allocate(config: &AllocConfig) -> Result<AllocResult, RegAllocError> {
     allocate_with_affinities(config, &[], &[])
 }
 
+/// A copy the allocator would rather not emit: its two ends, and what it costs
+/// when they land in different registers.
+type Affinity<T> = (u32, T, u64);
+
 fn allocate_with_affinities(
     config: &AllocConfig,
-    affinities: &[(u32, u32)],
-    physical_preferences: &[(u32, PhysReg)],
+    affinities: &[Affinity<u32>],
+    physical_preferences: &[Affinity<PhysReg>],
 ) -> Result<AllocResult, RegAllocError> {
     let AllocConfig {
         info,
@@ -315,62 +314,62 @@ fn allocate_with_affinities(
         spill_cost,
     } = config;
 
-    // Deterministic node order. The solver forces alternatives for the
-    // lowest-index high-degree node first and commits to the first feasible
-    // assignment, so congestion evicts the nodes ordered last. Order by
-    // falling spill cost — the most expensive vreg to spill is solved first
-    // and keeps a register; the cheapest lands last and takes the spill.
-    let mut vregs: Vec<u32> = liveness.vregs.iter().copied().collect();
-    vregs.sort_by_key(|&v| std::cmp::Reverse(spill_cost(v)));
+    let vregs: Vec<u32> = liveness.vregs.iter().copied().collect();
     let node_of: HashMap<u32, usize> = vregs.iter().enumerate().map(|(i, &v)| (v, i)).collect();
+    // A pinned value is where its instruction needs it and cannot move.
+    let spill = |vreg: u32| {
+        if precolor.contains_key(&vreg) {
+            INF_COST
+        } else {
+            spill_cost(vreg)
+        }
+    };
 
     let default_class = info.default_integer_class(abi);
-
-    // Per-node alternative lists, resolved to concrete physical registers. The
-    // allocation order depends on the class alone, so it is computed once per
-    // class rather than once per vreg.
+    // Each node's registers, resolved to physical registers. Nodes of one class
+    // and constraint share a list, and the interference matrix between two
+    // lists is built once.
     let mut orders: HashMap<RegClassId, Vec<PhysReg>> = HashMap::new();
-    let mut alternatives: Vec<Vec<Alternative>> = Vec::with_capacity(vregs.len());
+    let mut lists: Vec<Vec<PhysReg>> = Vec::new();
+    let mut list_ids: HashMap<Vec<PhysReg>, usize> = HashMap::new();
+    let mut node_list = Vec::with_capacity(vregs.len());
     for &vreg in &vregs {
         let class = resolve_class(liveness, precolor, default_class, vreg)?;
         // A vreg referenced through several classes over one view (an x86 value
         // that is both a REX-free operand and a SIB index) is allocatable only
         // from the indices all of them encode.
         let allowed = liveness.allowed_indices.get(&vreg);
-        let mut alts: Vec<Alternative> = orders
+        let registers: Vec<PhysReg> = orders
             .entry(class)
             .or_insert_with(|| allocation_order(abi, class))
             .iter()
             .copied()
             .filter(|(_, index)| allowed.is_none_or(|allowed| allowed.contains(index)))
-            .map(Alternative::Phys)
             .collect();
-        alts.push(Alternative::Spill);
-        alternatives.push(alts);
+        let id = *list_ids.entry(registers).or_insert_with_key(|registers| {
+            lists.push(registers.clone());
+            lists.len() - 1
+        });
+        node_list.push(id);
     }
 
-    let mut problem = PbqpProblem::new();
+    let spilled = pressure_spills(liveness, &lists, &node_list, &node_of, &spill);
+    if !spilled.is_empty() {
+        return Ok(AllocResult::Spill(spilled));
+    }
+
+    let mut problem = pbqp::Problem::default();
     for (i, &vreg) in vregs.iter().enumerate() {
-        let mut costs = node_costs(
-            info,
-            &alternatives[i],
-            vreg,
-            liveness,
-            precolor,
-            abi,
-            spill_cost,
-        );
-        for &(_, preferred) in physical_preferences.iter().filter(|(v, _)| *v == vreg) {
-            for (cost, alternative) in costs.iter_mut().zip(&alternatives[i]) {
-                if let Alternative::Phys(actual) = alternative
-                    && *cost < INF_COST
-                    && actual.0.span(actual.1) != preferred.0.span(preferred.1)
-                {
-                    *cost = cost.saturating_add(1).min(INF_COST);
+        let registers = &lists[node_list[i]];
+        let mut costs = node_costs(info, registers, vreg, liveness, precolor, abi);
+        for &(_, preferred, weight) in physical_preferences.iter().filter(|(v, ..)| *v == vreg) {
+            for (cost, actual) in costs.iter_mut().zip(registers) {
+                if *cost < INF_COST && actual.0.span(actual.1) != preferred.0.span(preferred.1) {
+                    *cost = cost.saturating_add(weight).min(INF_COST);
                 }
             }
         }
-        // A node with no finite alternative is unallocatable and unspillable.
+        // A node with no finite alternative is unallocatable.
         if costs.iter().all(|&c| c >= INF_COST) {
             return Err(RegAllocError::Infeasible(vreg));
         }
@@ -378,31 +377,36 @@ fn allocate_with_affinities(
     }
 
     // Interference edges: only between vregs whose classes share physical registers.
+    let mut neighbors = vec![Vec::new(); vregs.len()];
+    let mut matrices: HashMap<(usize, usize), Option<Rc<pbqp::Matrix>>> = HashMap::new();
     for &(u, v) in &liveness.interference {
         let (Some(&iu), Some(&iv)) = (node_of.get(&u), node_of.get(&v)) else {
             continue;
         };
-        if let Some(matrix) = interference_matrix(info, &alternatives[iu], &alternatives[iv]) {
-            problem.add_edge(
-                PbqpNodeId::from_index(iu),
-                PbqpNodeId::from_index(iv),
-                matrix,
-            );
+        let (lu, lv) = (node_list[iu], node_list[iv]);
+        let matrix = matrices
+            .entry((lu, lv))
+            .or_insert_with(|| interference_matrix(info, &lists[lu], &lists[lv]).map(Rc::new));
+        if let Some(matrix) = matrix {
+            problem.add_edge(iu, iv, matrix.clone());
+            neighbors[iu].push(iv);
+            neighbors[iv].push(iu);
         }
     }
 
-    for &(u, v) in affinities {
+    // The relation is a hash set; the spill fallback breaks ties by this order.
+    for list in &mut neighbors {
+        list.sort_unstable();
+    }
+
+    for &(u, v, weight) in affinities {
         let (Some(&iu), Some(&iv)) = (node_of.get(&u), node_of.get(&v)) else {
             continue;
         };
-        if iu == iv {
-            continue;
+        if iu != iv {
+            let matrix = affinity_matrix(&lists[node_list[iu]], &lists[node_list[iv]], weight);
+            problem.add_edge(iu, iv, Rc::new(matrix));
         }
-        problem.add_edge(
-            PbqpNodeId::from_index(iu),
-            PbqpNodeId::from_index(iv),
-            affinity_matrix(&alternatives[iu], &alternatives[iv]),
-        );
     }
 
     crate::memstats::pbqp_census(
@@ -411,36 +415,269 @@ fn allocate_with_affinities(
         problem.edge_count(),
         problem.matrix_bytes(),
     );
+    crate::backend::pbqp_dump::dump(
+        crate::backend::pbqp_dump::PbqpTaskKind::RegAlloc,
+        |w, kind| problem.write_json(w, kind),
+    );
 
-    crate::backend::pbqp_dump::dump(&problem, crate::backend::pbqp_dump::PbqpTaskKind::RegAlloc);
-    let solution = pbqp::solve(&problem).map_err(|e| RegAllocError::Solver(format!("{e:?}")))?;
+    let order: Vec<usize> = liveness
+        .definition_order
+        .iter()
+        .filter_map(|vreg| node_of.get(vreg).copied())
+        .collect();
+    let solution = problem.solve(&order);
 
-    let mut assignment = HashMap::new();
-    let mut spilled = Vec::new();
-    for (i, &vreg) in vregs.iter().enumerate() {
-        match &alternatives[i][solution.choices[i]] {
-            Alternative::Phys(p) => {
-                assignment.insert(vreg, *p);
+    if !solution.infeasible.is_empty() {
+        // The order promised a register to every node, but the program is not
+        // strictly SSA (lowered block arguments are defined once per edge) and
+        // constrained registers are not counted by pressure. Spill the
+        // cheapest value in each stuck node's way: the node itself or one of
+        // its interfering neighbors not already given up for another.
+        let mut chosen: Vec<usize> = Vec::new();
+        for &node in &solution.infeasible {
+            if chosen.contains(&node) {
+                continue;
             }
-            Alternative::Spill => spilled.push(vreg),
+            let candidate = std::iter::once(node)
+                .chain(neighbors[node].iter().copied())
+                .filter(|&m| spill(vregs[m]) < INF_COST && !chosen.contains(&m))
+                .min_by_key(|&m| (spill(vregs[m]), m != node));
+            match candidate {
+                Some(m) => chosen.push(m),
+                // Spilling a neighbor for another stuck node frees room here too.
+                None if neighbors[node].iter().any(|m| chosen.contains(m)) => {}
+                None => return Err(RegAllocError::Infeasible(vregs[node])),
+            }
+        }
+        return Ok(AllocResult::Spill(
+            chosen.into_iter().map(|m| vregs[m]).collect(),
+        ));
+    }
+
+    let assignment = vregs
+        .iter()
+        .enumerate()
+        .map(|(i, &vreg)| (vreg, lists[node_list[i]][solution.choices[i]]))
+        .collect();
+    Ok(AllocResult::Assigned(assignment))
+}
+
+/// Spill until no instruction needs more registers of a file than the file
+/// has: at each instruction, the values live across it, plus the larger of
+/// what it defines and what it reads for the last time, must fit in the file's
+/// allocatable registers, and the values live across must also avoid what it
+/// clobbers. Copy-related values that do not interfere hold one value and
+/// count once. A value spilled everywhere leaves every point it was live
+/// across. Each overfull instruction gives up the values cheapest to spill for
+/// the number of overfull instructions they relieve.
+fn pressure_spills(
+    liveness: &Liveness,
+    lists: &[Vec<PhysReg>],
+    node_list: &[usize],
+    node_of: &HashMap<u32, usize>,
+    spill: &dyn Fn(u32) -> u64,
+) -> Vec<u32> {
+    let files = Files::of(lists);
+    let shape = |vreg: u32| {
+        let register = lists[node_list[*node_of.get(&vreg)?]].first()?;
+        let (file, _, width) = register.0.span(register.1);
+        Some((file, u64::from(width)))
+    };
+    let mut groups = CopyGroups::default();
+    for &(src, dst) in &liveness.copies {
+        if !liveness.interferes(src, dst) {
+            groups.union(src, dst);
         }
     }
 
-    if spilled.is_empty() {
-        Ok(AllocResult::Assigned(assignment))
-    } else {
-        Ok(AllocResult::Spill(spilled))
+    let mut overfull: Vec<Overfull> = Vec::new();
+    for point in &liveness.points {
+        let mut across: Vec<LiveGroup> = Vec::new();
+        for &vreg in &point.across {
+            let Some((file, width)) = shape(vreg) else {
+                continue;
+            };
+            let root = groups.find(vreg);
+            match across.iter_mut().find(|group| group.root == root) {
+                Some(group) => group.members.push(vreg),
+                None => across.push(LiveGroup {
+                    root,
+                    file,
+                    width,
+                    members: vec![vreg],
+                }),
+            }
+        }
+        let width_in = |vregs: &[u32], file: &str| -> u64 {
+            vregs
+                .iter()
+                .filter_map(|&vreg| shape(vreg))
+                .filter(|(f, _)| *f == file)
+                .map(|(_, width)| width)
+                .sum()
+        };
+        let mut seen: Vec<&'static str> = Vec::new();
+        for file in across.iter().map(|group| group.file) {
+            if seen.contains(&file) {
+                continue;
+            }
+            seen.push(file);
+            let in_file: Vec<LiveGroup> = across
+                .iter()
+                .filter(|group| group.file == file)
+                .cloned()
+                .collect();
+            let live: u64 = in_file.iter().map(|group| group.width).sum();
+            let own = width_in(&point.defs, file).max(width_in(&point.dying, file));
+            let demand = (live + own).max(live + files.blocked(file, &point.blocked));
+            let excess = demand.saturating_sub(files.capacity[file]);
+            if excess > 0 {
+                overfull.push(Overfull {
+                    excess,
+                    groups: in_file,
+                });
+            }
+        }
+    }
+    choose_spills(overfull, spill)
+}
+
+/// Values joined by coalescable copies, as live across one instruction.
+#[derive(Clone)]
+struct LiveGroup {
+    root: u32,
+    file: &'static str,
+    width: u64,
+    members: Vec<u32>,
+}
+
+/// An instruction that needs `excess` more registers than its file has.
+struct Overfull {
+    excess: u64,
+    groups: Vec<LiveGroup>,
+}
+
+/// The allocatable register units of each file: a group register covers
+/// several indices.
+struct Files {
+    units: HashSet<(&'static str, u16)>,
+    capacity: HashMap<&'static str, u64>,
+}
+
+impl Files {
+    fn of(lists: &[Vec<PhysReg>]) -> Self {
+        let units: HashSet<_> = lists.iter().flatten().flat_map(|r| units_of(*r)).collect();
+        let mut capacity = HashMap::new();
+        for (file, _) in &units {
+            *capacity.entry(*file).or_default() += 1;
+        }
+        Self { units, capacity }
+    }
+
+    /// How many of `file`'s allocatable units `registers` cover.
+    fn blocked(&self, file: &str, registers: &[PhysReg]) -> u64 {
+        let covered: HashSet<_> = registers
+            .iter()
+            .flat_map(|r| units_of(*r))
+            .filter(|unit| unit.0 == file && self.units.contains(unit))
+            .collect();
+        covered.len() as u64
     }
 }
 
-fn affinity_matrix(left: &[Alternative], right: &[Alternative]) -> PbqpMatrix {
-    let mut matrix = PbqpMatrix::zero(left.len(), right.len());
+fn units_of(register: PhysReg) -> impl Iterator<Item = (&'static str, u16)> {
+    let (file, start, width) = register.0.span(register.1);
+    (start..start + width).map(move |index| (file, index))
+}
+
+/// Relieve each overfull instruction in turn, spilling the groups cheapest
+/// for the number of overfull instructions they are live across; a group
+/// spilled for an earlier instruction relieves the later ones too.
+fn choose_spills(overfull: Vec<Overfull>, spill: &dyn Fn(u32) -> u64) -> Vec<u32> {
+    let mut coverage: HashMap<u32, u128> = HashMap::new();
+    for group in overfull.iter().flat_map(|point| &point.groups) {
+        *coverage.entry(group.root).or_default() += 1;
+    }
+    let mut chosen: Vec<u32> = Vec::new();
+    let mut spilled: HashSet<u32> = HashSet::new();
+    for point in overfull {
+        let relieved: u64 = point
+            .groups
+            .iter()
+            .filter(|group| group.members.iter().all(|vreg| spilled.contains(vreg)))
+            .map(|group| group.width)
+            .sum();
+        let mut remaining = point.excess.saturating_sub(relieved);
+        while remaining > 0 {
+            let cost = |group: &LiveGroup| -> u128 {
+                group
+                    .members
+                    .iter()
+                    .filter(|vreg| !spilled.contains(vreg))
+                    .map(|&vreg| u128::from(spill(vreg)))
+                    .sum()
+            };
+            // Cheapest per instruction relieved: cost(a) / cover(a) < cost(b) / cover(b).
+            let candidate = point
+                .groups
+                .iter()
+                .filter(|group| {
+                    group.members.iter().any(|vreg| !spilled.contains(vreg))
+                        && group.members.iter().all(|&vreg| spill(vreg) < INF_COST)
+                })
+                .min_by(|a, b| {
+                    (cost(a) * coverage[&b.root])
+                        .cmp(&(cost(b) * coverage[&a.root]))
+                        .then(a.root.cmp(&b.root))
+                });
+            let Some(group) = candidate else {
+                break;
+            };
+            for &vreg in &group.members {
+                if spilled.insert(vreg) {
+                    chosen.push(vreg);
+                }
+            }
+            remaining = remaining.saturating_sub(group.width);
+        }
+    }
+    chosen
+}
+
+/// Union-find over values joined by coalescable copies.
+#[derive(Default)]
+struct CopyGroups {
+    parent: HashMap<u32, u32>,
+}
+
+impl CopyGroups {
+    fn find(&mut self, vreg: u32) -> u32 {
+        let mut current = vreg;
+        while let Some(&parent) = self.parent.get(&current) {
+            if parent == current {
+                break;
+            }
+            let grandparent = self.parent.get(&parent).copied().unwrap_or(parent);
+            self.parent.insert(current, grandparent);
+            current = grandparent;
+        }
+        current
+    }
+
+    fn union(&mut self, a: u32, b: u32) {
+        let (a, b) = (self.find(a), self.find(b));
+        if a != b {
+            self.parent.insert(a.max(b), a.min(b));
+        }
+    }
+}
+
+fn affinity_matrix(left: &[PhysReg], right: &[PhysReg], weight: u64) -> pbqp::Matrix {
+    let mut matrix = pbqp::Matrix::zero(left.len(), right.len());
     for (i, l) in left.iter().enumerate() {
         for (j, r) in right.iter().enumerate() {
-            if let (Alternative::Phys(lp), Alternative::Phys(rp)) = (l, r)
-                && lp.0.span(lp.1) != rp.0.span(rp.1)
-            {
-                matrix.set(i, j, 1);
+            if l.0.span(l.1) != r.0.span(r.1) {
+                matrix.set(i, j, weight);
             }
         }
     }
@@ -475,61 +712,50 @@ fn resolve_class(
     }
 }
 
-/// Build the cost vector for one node's alternatives, honoring pre-coloring,
+/// Build the cost vector for one node's registers, honoring pre-coloring,
 /// forbidden physical registers, and the callee-saved bias.
 fn node_costs(
     info: &RegisterInfo,
-    alternatives: &[Alternative],
+    registers: &[PhysReg],
     vreg: u32,
     liveness: &Liveness,
     precolor: &HashMap<u32, PhysReg>,
     abi: &crate::backend::abi::AbiInfo,
-    spill_cost: &dyn Fn(u32) -> u64,
 ) -> Vec<u64> {
     let pinned = precolor.get(&vreg);
     let forbidden = liveness.forbidden.get(&vreg);
 
-    alternatives
+    registers
         .iter()
-        .map(|alt| match alt {
-            Alternative::Phys(p) => {
-                if let Some(target) = pinned {
-                    // Pinned vregs accept only their target register. Compare by
-                    // physical identity so a precolor reached through one class
-                    // (e.g. an ABI `GPR` arg) matches an alternative in an aliasing
-                    // class (`GPRsp`). A pin on a register the vreg is also live
-                    // across a clobber of (e.g. an incoming argument that survives
-                    // a call) is unsatisfiable: every alternative goes infinite so
-                    // allocation fails loudly instead of silently producing a
-                    // clobbered value.
-                    let conflict = forbidden
-                        .is_some_and(|set| set.iter().any(|f| info.phys_overlap(f, target)));
-                    return if !conflict && p.0.span(p.1) == target.0.span(target.1) {
-                        0
-                    } else {
-                        INF_COST
-                    };
-                }
-                if forbidden.is_some_and(|set| set.iter().any(|f| info.phys_overlap(f, p))) {
-                    return INF_COST;
-                }
-                if abi
-                    .callee_saved
-                    .iter()
-                    .any(|saved| info.phys_overlap(saved, p))
-                {
-                    CALLEE_SAVED_COST
-                } else {
+        .map(|p| {
+            if let Some(target) = pinned {
+                // Pinned vregs accept only their target register. Compare by
+                // physical identity so a precolor reached through one class
+                // (e.g. an ABI `GPR` arg) matches an alternative in an aliasing
+                // class (`GPRsp`). A pin on a register the vreg is also live
+                // across a clobber of (e.g. an incoming argument that survives
+                // a call) is unsatisfiable: every alternative goes infinite so
+                // allocation fails loudly instead of silently producing a
+                // clobbered value.
+                let conflict =
+                    forbidden.is_some_and(|set| set.iter().any(|f| info.phys_overlap(f, target)));
+                return if !conflict && p.0.span(p.1) == target.0.span(target.1) {
                     0
-                }
-            }
-            // A pinned vreg cannot spill; otherwise spilling costs its estimate.
-            Alternative::Spill => {
-                if pinned.is_some() {
-                    INF_COST
                 } else {
-                    spill_cost(vreg)
-                }
+                    INF_COST
+                };
+            }
+            if forbidden.is_some_and(|set| set.iter().any(|f| info.phys_overlap(f, p))) {
+                return INF_COST;
+            }
+            if abi
+                .callee_saved
+                .iter()
+                .any(|saved| info.phys_overlap(saved, p))
+            {
+                CALLEE_SAVED_COST
+            } else {
+                0
             }
         })
         .collect()
@@ -557,27 +783,23 @@ fn allocation_order(abi: &crate::backend::abi::AbiInfo, class: RegClassId) -> Ve
     result
 }
 
-/// Build the interference matrix between two nodes, or `None` if their alternative
-/// sets share no physical register (so they can never conflict and no edge is
-/// needed). Two alternatives conflict when they resolve to the same physical
-/// register; spilling never conflicts.
+/// Build the interference matrix between two register lists, or `None` if they
+/// share no physical register (so they can never conflict and no edge is
+/// needed). Two alternatives conflict when they overlap: the same register
+/// through aliasing classes (`GPR`/`GPRsp` index 7), or a group register
+/// covering another (`VRM2` v8..v9 vs `VR` v9).
 fn interference_matrix(
     info: &RegisterInfo,
-    left: &[Alternative],
-    right: &[Alternative],
-) -> Option<PbqpMatrix> {
-    let mut matrix = PbqpMatrix::zero(left.len(), right.len());
+    left: &[PhysReg],
+    right: &[PhysReg],
+) -> Option<pbqp::Matrix> {
+    let mut matrix = pbqp::Matrix::zero(left.len(), right.len());
     let mut any = false;
     for (i, l) in left.iter().enumerate() {
         for (j, r) in right.iter().enumerate() {
-            if let (Alternative::Phys(lp), Alternative::Phys(rp)) = (l, r) {
-                // Conflict when the two alternatives overlap: the same register
-                // through aliasing classes (`GPR`/`GPRsp` index 7), or a group
-                // register covering another (`VRM2` v8..v9 vs `VR` v9).
-                if info.phys_overlap(lp, rp) {
-                    matrix.set(i, j, INF_COST);
-                    any = true;
-                }
+            if info.phys_overlap(l, r) {
+                matrix.set(i, j, INF_COST);
+                any = true;
             }
         }
     }
@@ -774,16 +996,18 @@ impl Pass for RegisterAllocationPass {
                 }
             };
 
+            // A copy left standing runs as often as its block does.
             let mut affinities = Vec::new();
             let mut physical_preferences = Vec::new();
-            for &copy in &scan.copies {
+            for &(copy, block) in &scan.copies {
+                let weight = 10u64.saturating_pow(depths.get(&block).copied().unwrap_or(0));
                 match allocation_copy_endpoints(context, copy) {
                     Some((RegSlot::Value(src), RegSlot::Value(dst))) => {
-                        affinities.push((src.number(), dst.number()));
+                        affinities.push((src.number(), dst.number(), weight));
                     }
                     Some((RegSlot::Value(value), RegSlot::Phys(phys)))
                     | Some((RegSlot::Phys(phys), RegSlot::Value(value))) => {
-                        physical_preferences.push((value.number(), phys));
+                        physical_preferences.push((value.number(), phys, weight));
                     }
                     _ => {}
                 }
@@ -823,7 +1047,7 @@ impl Pass for RegisterAllocationPass {
             }
         };
 
-        for &copy in &scan.copies {
+        for &(copy, _) in &scan.copies {
             if !context.has_operation(copy) {
                 continue;
             }
@@ -1554,7 +1778,7 @@ struct ScannedAlloca {
 ///   holds for every round.
 #[derive(Default)]
 struct BodyScan {
-    copies: Vec<OpId>,
+    copies: Vec<(OpId, BlockId)>,
     outgoing_size: u32,
     has_calls: bool,
     allocas: Vec<ScannedAlloca>,
@@ -1575,9 +1799,9 @@ impl BodyScan {
                             "coalescable copy {op_id:?} does not move one virtual register to another"
                         ))
                     })?;
-                    scan.copies.push(op_id);
+                    scan.copies.push((op_id, block_id));
                 } else if allocation_copy_endpoints(context, op_id).is_some() {
-                    scan.copies.push(op_id);
+                    scan.copies.push((op_id, block_id));
                 }
 
                 let outgoing = op

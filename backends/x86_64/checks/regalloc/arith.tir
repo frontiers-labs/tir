@@ -24,13 +24,14 @@ module {
 
 // %0 and %1 arrive in rdi and rsi. A tie is a request for one register at both
 // ends, so its copy stands only where the two interfere: %0 stays live to the
-// last op, so no destination may take rdi, while %1 dies at the multiply and
-// that tie coalesces onto rsi. The result is pinned to rax by the func.return.
-// CHECK:      x86_64.mov {dst = %{{[0-9]+}}:[[T1:(?:rax|rbx|rcx|rdx|rsi|rbp|r8|r9|r1[0-5])]], src = %{{[0-9]+}}:rdi}
+// last op, so no destination may take its register, while %1 dies at the
+// multiply and that tie coalesces onto rsi. The result is pinned to rax by the
+// func.return, so %0 moves there once and the last tie coalesces too.
+// CHECK:      x86_64.mov {dst = %{{[0-9]+}}:rax, src = %{{[0-9]+}}:rdi}
+// CHECK-NEXT: x86_64.mov {dst = %{{[0-9]+}}:[[T1:(?:rbx|rcx|rdx|rsi|rbp|r8|r9|r1[0-5])]], src = %{{[0-9]+}}:rax}
 // CHECK-NEXT: x86_64.add {dst = %{{[0-9]+}}:[[T1]], dst_tied = %{{[0-9]+}}:[[T1]], src = %{{[0-9]+}}:rsi}
-// CHECK-NEXT: x86_64.mov {dst = %{{[0-9]+}}:[[T2:(?:rax|rbx|rcx|rdx|rsi|rbp|r8|r9|r1[0-5])]], src = %{{[0-9]+}}:rdi}
+// CHECK-NEXT: x86_64.mov {dst = %{{[0-9]+}}:[[T2:(?:rbx|rcx|rdx|rsi|rbp|r8|r9|r1[0-5])]], src = %{{[0-9]+}}:rax}
 // CHECK-NEXT: x86_64.sub {dst = %{{[0-9]+}}:[[T2]], dst_tied = %{{[0-9]+}}:[[T2]], src = %{{[0-9]+}}:[[T1]]}
 // CHECK-NEXT: x86_64.imul {dst = %{{[0-9]+}}:rsi, dst_tied = %{{[0-9]+}}:rsi, src = %{{[0-9]+}}:[[T2]]}
-// CHECK-NEXT: x86_64.mov {dst = %{{[0-9]+}}:rax, src = %{{[0-9]+}}:rdi}
 // CHECK-NEXT: x86_64.or {dst = %{{[0-9]+}}:rax, dst_tied = %{{[0-9]+}}:rax, src = %{{[0-9]+}}:rsi}
 // CHECK-NEXT: asm.vret
