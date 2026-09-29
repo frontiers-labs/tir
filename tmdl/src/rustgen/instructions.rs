@@ -2293,6 +2293,7 @@ fn emit_instructions<'a>(
             item_cache,
             &tables.register_index_map,
             &tables.register_name_map,
+            &tables.flag_classes,
             dialect,
             &mut isel_rule_emitters,
             &mut rule_spec_idents,

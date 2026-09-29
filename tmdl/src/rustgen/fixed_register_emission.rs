@@ -14,8 +14,10 @@
 /// A register written or read by path, as `(class, encoding index)`.
 type FixedReg = (String, u16);
 
-/// An instruction whose behavior writes exactly one fixed register as a pure
-/// function of other fixed-register reads and constants, taking no operands.
+/// An instruction whose behavior writes exactly one fixed allocatable register
+/// as a pure function of other fixed-register reads and constants, taking no
+/// operands. Status flags it sets along the way (`xor edx, edx`) are side
+/// effects, as they are for readers.
 struct Definer<'a> {
     inst: &'a ast::Instruction,
     /// The op's registered name (`OPNAME`, falling back to `MNEMONIC`).
@@ -43,11 +45,13 @@ struct Reader<'a> {
     isa_param_values: HashMap<String, i64>,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn emit_fixed_register_rules<'a>(
     files: &'a [ast::File],
     item_cache: &HashMap<&'a str, &'a ast::Item>,
     register_index_map: &HashMap<(String, String), u32>,
     register_name_map: &HashMap<(String, u32), String>,
+    flag_classes: &HashSet<String>,
     dialect: &str,
     isel_rule_emitters: &mut Vec<proc_macro2::TokenStream>,
     rule_spec_idents: &mut Vec<proc_macro2::Ident>,
@@ -69,8 +73,14 @@ fn emit_fixed_register_rules<'a>(
             &isa_param_values,
         );
 
-        if let Some(definer) = classify_definer(inst, &op_name, &mnemonic, &ops, register_index_map)
-        {
+        if let Some(definer) = classify_definer(
+            inst,
+            &op_name,
+            &mnemonic,
+            &ops,
+            register_index_map,
+            flag_classes,
+        ) {
             definers.push(definer);
         } else if let Some(reader) = classify_reader(
             inst,
@@ -187,9 +197,13 @@ fn emit_division_rules(
 
 /// Whether an instruction is a fixed-register definer or reader — the shapes
 /// `emit_fixed_register_rules` composes. A definer takes no register operand and
-/// writes exactly one register path; a reader takes a register operand and its
-/// behavior is `if COND { <register-path writes> } else { … }`.
-fn is_fixed_register_shape(inst: &ast::Instruction, ops: &[(String, Type)]) -> bool {
+/// writes exactly one non-flag register path; a reader takes a register operand
+/// and its behavior is `if COND { <register-path writes> } else { … }`.
+fn is_fixed_register_shape(
+    inst: &ast::Instruction,
+    ops: &[(String, Type)],
+    flag_classes: &HashSet<String>,
+) -> bool {
     let has_register_operand = ops.iter().any(|(_, ty)| matches!(ty, Type::Struct(_)));
     if has_register_operand {
         let ast::Expr::If(if_expr) = unwrap_single_stmt(&inst.behavior) else {
@@ -204,12 +218,22 @@ fn is_fixed_register_shape(inst: &ast::Instruction, ops: &[(String, Type)]) -> b
         collect_register_path_reads(&inst.behavior, &mut reads);
         return !then_writes.is_empty() && !reads.is_empty();
     }
-    let mut writes = Vec::new();
-    collect_register_path_writes(&inst.behavior, &mut writes);
+    let writes = definer_writes(inst, flag_classes);
     let [(_, rhs)] = writes.as_slice() else {
         return false;
     };
     referenced_operands(rhs, &register_operand_names(ops)).is_empty()
+}
+
+/// The register-path writes a definer is judged by: all but status flags.
+fn definer_writes<'a>(
+    inst: &'a ast::Instruction,
+    flag_classes: &HashSet<String>,
+) -> Vec<((String, String), &'a ast::Expr)> {
+    let mut writes = Vec::new();
+    collect_register_path_writes(&inst.behavior, &mut writes);
+    writes.retain(|((class, _), _)| !flag_classes.contains(class));
+    writes
 }
 
 /// The register ports of a fixed-register definer/reader op: a use slot for
@@ -226,7 +250,7 @@ fn fixed_register_role_items(
     flag_classes: &HashSet<String>,
     pc_classes: &HashSet<String>,
 ) -> Vec<(String, String, bool)> {
-    if !is_fixed_register_shape(inst, ops) {
+    if !is_fixed_register_shape(inst, ops, flag_classes) {
         return Vec::new();
     }
     let allocatable = |class: &str| !flag_classes.contains(class) && !pc_classes.contains(class);
@@ -719,12 +743,12 @@ fn classify_definer<'a>(
     mnemonic: &str,
     ops: &[(String, Type)],
     register_index_map: &HashMap<(String, String), u32>,
+    flag_classes: &HashSet<String>,
 ) -> Option<Definer<'a>> {
     if ops.iter().any(|(_, ty)| matches!(ty, Type::Struct(_))) {
         return None;
     }
-    let mut writes = Vec::new();
-    collect_register_path_writes(&inst.behavior, &mut writes);
+    let writes = definer_writes(inst, flag_classes);
     let [(path, rhs)] = writes.as_slice() else {
         return None;
     };

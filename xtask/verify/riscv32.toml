@@ -30,7 +30,7 @@ map = [
   { sail = "mepc", class = "csr", index = 0x341 },
   { sail = "mcause", class = "csr", index = 0x342 },
   { sail = "mtval", class = "csr", index = 0x343 },
-  { sail = "fcsr", bits = [4, 0], class = "fflags", index = 1, if_written = true },
-  { sail = "fcsr", bits = [7, 5], class = "frm", index = 2, if_written = true },
+  { sail = "fcsr", bits = [4, 0], class = "fflags", index = 1 },
+  { sail = "fcsr", bits = [7, 5], class = "frm", index = 2 },
   { sail = "fcsr", bits = [31, 8] },
 ]

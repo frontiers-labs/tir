@@ -53,6 +53,7 @@ instruction Imul for [X86_64] : RegRegExt {
     schedule { units = [WriteIMul]; }
 
     behavior {
+        imul_flags!({ dst }, { src }, { self.XLEN })
         dst = dst * src;
     }
 }
@@ -65,6 +66,7 @@ instruction Imul32 for [X86_64] : RegRegExt32 {
     schedule { units = [WriteIMul]; }
 
     behavior {
+        imul_flags!({ dst }, { src }, { 32 })
         dst = dst * src;
     }
 }
@@ -80,6 +82,7 @@ instruction ImulImm for [X86_64] : RegRegImm {
     schedule { units = [WriteIMul]; }
 
     behavior {
+        imul_flags!({ src }, { sext(imm, self.XLEN) }, { self.XLEN })
         dst = src * sext(imm, self.XLEN);
     }
 }
@@ -92,6 +95,7 @@ instruction ImulImm32 for [X86_64] : RegRegImm32 {
     schedule { units = [WriteIMul]; }
 
     behavior {
+        imul_flags!({ src }, { sext(imm, 32) }, { 32 })
         dst = src * sext(imm, 32);
     }
 }
@@ -122,6 +126,7 @@ shift_cl!(RegShiftCl,
         EFLAGS::cf = if c == zext(0b0, 6) { EFLAGS::cf } else { carry };
         EFLAGS::zf = if c == zext(0b0, 6) { EFLAGS::zf } else { zero };
         EFLAGS::sf = if c == zext(0b0, 6) { EFLAGS::sf } else { extract(res, self.XLEN - 1, self.XLEN - 1) };
+        EFLAGS::pf = if c == zext(0b0, 6) { EFLAGS::pf } else { parity_flag(res) };
         EFLAGS::of = if c == zext(0b0, 6) { EFLAGS::of } else { extract(res, self.XLEN - 1, self.XLEN - 1) ^ carry };
         dst = res;
     }),
@@ -135,6 +140,7 @@ shift_cl!(RegShiftCl,
         EFLAGS::cf = if c == zext(0b0, 6) { EFLAGS::cf } else { carry };
         EFLAGS::zf = if c == zext(0b0, 6) { EFLAGS::zf } else { zero };
         EFLAGS::sf = if c == zext(0b0, 6) { EFLAGS::sf } else { extract(res, self.XLEN - 1, self.XLEN - 1) };
+        EFLAGS::pf = if c == zext(0b0, 6) { EFLAGS::pf } else { parity_flag(res) };
         EFLAGS::of = if c == zext(0b0, 6) { EFLAGS::of } else { extract(res, self.XLEN - 1, self.XLEN - 1) ^ carry };
         dst = res;
     }),
@@ -145,6 +151,7 @@ shift_cl!(RegShiftCl,
         EFLAGS::cf = if c == zext(0b0, 6) { EFLAGS::cf } else { extract(dst >> (c - zext(0b1, 6)), 0, 0) };
         EFLAGS::zf = if c == zext(0b0, 6) { EFLAGS::zf } else { zero };
         EFLAGS::sf = if c == zext(0b0, 6) { EFLAGS::sf } else { extract(res, self.XLEN - 1, self.XLEN - 1) };
+        EFLAGS::pf = if c == zext(0b0, 6) { EFLAGS::pf } else { parity_flag(res) };
         EFLAGS::of = if c == zext(0b0, 6) { EFLAGS::of } else { extract(dst, self.XLEN - 1, self.XLEN - 1) };
         dst = res;
     }),
@@ -155,6 +162,7 @@ shift_cl!(RegShiftCl,
         EFLAGS::cf = if c == zext(0b0, 6) { EFLAGS::cf } else { extract(dst >>> (c - zext(0b1, 6)), 0, 0) };
         EFLAGS::zf = if c == zext(0b0, 6) { EFLAGS::zf } else { zero };
         EFLAGS::sf = if c == zext(0b0, 6) { EFLAGS::sf } else { extract(res, self.XLEN - 1, self.XLEN - 1) };
+        EFLAGS::pf = if c == zext(0b0, 6) { EFLAGS::pf } else { parity_flag(res) };
         EFLAGS::of = if c == zext(0b0, 6) { EFLAGS::of } else { zext(0b0, 1) };
         dst = res;
     })
@@ -169,6 +177,7 @@ shift_imm!(RegShift,
         EFLAGS::cf = if c == zext(0b0, 6) { EFLAGS::cf } else { carry };
         EFLAGS::zf = if c == zext(0b0, 6) { EFLAGS::zf } else { zero };
         EFLAGS::sf = if c == zext(0b0, 6) { EFLAGS::sf } else { extract(res, self.XLEN - 1, self.XLEN - 1) };
+        EFLAGS::pf = if c == zext(0b0, 6) { EFLAGS::pf } else { parity_flag(res) };
         EFLAGS::of = if c == zext(0b0, 6) { EFLAGS::of } else { extract(res, self.XLEN - 1, self.XLEN - 1) ^ carry };
         dst = res;
     }),
@@ -181,6 +190,7 @@ shift_imm!(RegShift,
         EFLAGS::cf = if c == zext(0b0, 6) { EFLAGS::cf } else { carry };
         EFLAGS::zf = if c == zext(0b0, 6) { EFLAGS::zf } else { zero };
         EFLAGS::sf = if c == zext(0b0, 6) { EFLAGS::sf } else { extract(res, self.XLEN - 1, self.XLEN - 1) };
+        EFLAGS::pf = if c == zext(0b0, 6) { EFLAGS::pf } else { parity_flag(res) };
         EFLAGS::of = if c == zext(0b0, 6) { EFLAGS::of } else { extract(res, self.XLEN - 1, self.XLEN - 1) ^ carry };
         dst = res;
     }),
@@ -191,6 +201,7 @@ shift_imm!(RegShift,
         EFLAGS::cf = if c == zext(0b0, 6) { EFLAGS::cf } else { extract(dst >> (c - zext(0b1, 6)), 0, 0) };
         EFLAGS::zf = if c == zext(0b0, 6) { EFLAGS::zf } else { zero };
         EFLAGS::sf = if c == zext(0b0, 6) { EFLAGS::sf } else { extract(res, self.XLEN - 1, self.XLEN - 1) };
+        EFLAGS::pf = if c == zext(0b0, 6) { EFLAGS::pf } else { parity_flag(res) };
         EFLAGS::of = if c == zext(0b0, 6) { EFLAGS::of } else { extract(dst, self.XLEN - 1, self.XLEN - 1) };
         dst = res;
     }),
@@ -201,6 +212,7 @@ shift_imm!(RegShift,
         EFLAGS::cf = if c == zext(0b0, 6) { EFLAGS::cf } else { extract(dst >>> (c - zext(0b1, 6)), 0, 0) };
         EFLAGS::zf = if c == zext(0b0, 6) { EFLAGS::zf } else { zero };
         EFLAGS::sf = if c == zext(0b0, 6) { EFLAGS::sf } else { extract(res, self.XLEN - 1, self.XLEN - 1) };
+        EFLAGS::pf = if c == zext(0b0, 6) { EFLAGS::pf } else { parity_flag(res) };
         EFLAGS::of = if c == zext(0b0, 6) { EFLAGS::of } else { zext(0b0, 1) };
         dst = res;
     })
@@ -215,6 +227,7 @@ shift_imm!("One", "_one", RegShiftOne,
         EFLAGS::cf = carry;
         EFLAGS::zf = if res == zext(0b0, self.XLEN) { zext(0b1, 1) } else { zext(0b0, 1) };
         EFLAGS::sf = extract(res, self.XLEN - 1, self.XLEN - 1);
+        EFLAGS::pf = parity_flag(res);
         EFLAGS::of = extract(res, self.XLEN - 1, self.XLEN - 1) ^ carry;
         dst = res;
     }),
@@ -224,6 +237,7 @@ shift_imm!("One", "_one", RegShiftOne,
         EFLAGS::cf = carry;
         EFLAGS::zf = if res == zext(0b0, self.XLEN) { zext(0b1, 1) } else { zext(0b0, 1) };
         EFLAGS::sf = extract(res, self.XLEN - 1, self.XLEN - 1);
+        EFLAGS::pf = parity_flag(res);
         EFLAGS::of = extract(res, self.XLEN - 1, self.XLEN - 1) ^ carry;
         dst = res;
     }),
@@ -232,6 +246,7 @@ shift_imm!("One", "_one", RegShiftOne,
         EFLAGS::cf = extract(dst, 0, 0);
         EFLAGS::zf = if res == zext(0b0, self.XLEN) { zext(0b1, 1) } else { zext(0b0, 1) };
         EFLAGS::sf = extract(res, self.XLEN - 1, self.XLEN - 1);
+        EFLAGS::pf = parity_flag(res);
         EFLAGS::of = extract(dst, self.XLEN - 1, self.XLEN - 1);
         dst = res;
     }),
@@ -240,6 +255,7 @@ shift_imm!("One", "_one", RegShiftOne,
         EFLAGS::cf = extract(dst, 0, 0);
         EFLAGS::zf = if res == zext(0b0, self.XLEN) { zext(0b1, 1) } else { zext(0b0, 1) };
         EFLAGS::sf = extract(res, self.XLEN - 1, self.XLEN - 1);
+        EFLAGS::pf = parity_flag(res);
         EFLAGS::of = zext(0b0, 1);
         dst = res;
     }),
@@ -654,6 +670,7 @@ shift_cl!("32", "32", RegShiftCl32,
         EFLAGS::cf = if c == zext(0b0, 5) { EFLAGS::cf } else { carry };
         EFLAGS::zf = if c == zext(0b0, 5) { EFLAGS::zf } else { zero };
         EFLAGS::sf = if c == zext(0b0, 5) { EFLAGS::sf } else { extract(res, 31, 31) };
+        EFLAGS::pf = if c == zext(0b0, 5) { EFLAGS::pf } else { parity_flag(res) };
         EFLAGS::of = if c == zext(0b0, 5) { EFLAGS::of } else { extract(res, 31, 31) ^ carry };
         dst = res;
     }),
@@ -664,6 +681,7 @@ shift_cl!("32", "32", RegShiftCl32,
         EFLAGS::cf = if c == zext(0b0, 5) { EFLAGS::cf } else { extract(dst >> (c - zext(0b1, 5)), 0, 0) };
         EFLAGS::zf = if c == zext(0b0, 5) { EFLAGS::zf } else { zero };
         EFLAGS::sf = if c == zext(0b0, 5) { EFLAGS::sf } else { extract(res, 31, 31) };
+        EFLAGS::pf = if c == zext(0b0, 5) { EFLAGS::pf } else { parity_flag(res) };
         EFLAGS::of = if c == zext(0b0, 5) { EFLAGS::of } else { extract(dst, 31, 31) };
         dst = res;
     }),
@@ -674,6 +692,7 @@ shift_cl!("32", "32", RegShiftCl32,
         EFLAGS::cf = if c == zext(0b0, 5) { EFLAGS::cf } else { extract(dst >>> (c - zext(0b1, 5)), 0, 0) };
         EFLAGS::zf = if c == zext(0b0, 5) { EFLAGS::zf } else { zero };
         EFLAGS::sf = if c == zext(0b0, 5) { EFLAGS::sf } else { extract(res, 31, 31) };
+        EFLAGS::pf = if c == zext(0b0, 5) { EFLAGS::pf } else { parity_flag(res) };
         EFLAGS::of = if c == zext(0b0, 5) { EFLAGS::of } else { zext(0b0, 1) };
         dst = res;
     })
@@ -688,6 +707,7 @@ shift_imm!("32", "32", RegShift32,
         EFLAGS::cf = if c == zext(0b0, 5) { EFLAGS::cf } else { carry };
         EFLAGS::zf = if c == zext(0b0, 5) { EFLAGS::zf } else { zero };
         EFLAGS::sf = if c == zext(0b0, 5) { EFLAGS::sf } else { extract(res, 31, 31) };
+        EFLAGS::pf = if c == zext(0b0, 5) { EFLAGS::pf } else { parity_flag(res) };
         EFLAGS::of = if c == zext(0b0, 5) { EFLAGS::of } else { extract(res, 31, 31) ^ carry };
         dst = res;
     }),
@@ -698,6 +718,7 @@ shift_imm!("32", "32", RegShift32,
         EFLAGS::cf = if c == zext(0b0, 5) { EFLAGS::cf } else { extract(dst >> (c - zext(0b1, 5)), 0, 0) };
         EFLAGS::zf = if c == zext(0b0, 5) { EFLAGS::zf } else { zero };
         EFLAGS::sf = if c == zext(0b0, 5) { EFLAGS::sf } else { extract(res, 31, 31) };
+        EFLAGS::pf = if c == zext(0b0, 5) { EFLAGS::pf } else { parity_flag(res) };
         EFLAGS::of = if c == zext(0b0, 5) { EFLAGS::of } else { extract(dst, 31, 31) };
         dst = res;
     }),
@@ -708,6 +729,7 @@ shift_imm!("32", "32", RegShift32,
         EFLAGS::cf = if c == zext(0b0, 5) { EFLAGS::cf } else { extract(dst >>> (c - zext(0b1, 5)), 0, 0) };
         EFLAGS::zf = if c == zext(0b0, 5) { EFLAGS::zf } else { zero };
         EFLAGS::sf = if c == zext(0b0, 5) { EFLAGS::sf } else { extract(res, 31, 31) };
+        EFLAGS::pf = if c == zext(0b0, 5) { EFLAGS::pf } else { parity_flag(res) };
         EFLAGS::of = if c == zext(0b0, 5) { EFLAGS::of } else { zext(0b0, 1) };
         dst = res;
     })
@@ -720,6 +742,7 @@ shift_imm!("One32", "_one32", RegShiftOne32,
         EFLAGS::cf = carry;
         EFLAGS::zf = if res == zext(0b0, 32) { zext(0b1, 1) } else { zext(0b0, 1) };
         EFLAGS::sf = extract(res, 31, 31);
+        EFLAGS::pf = parity_flag(res);
         EFLAGS::of = extract(res, 31, 31) ^ carry;
         dst = res;
     }),
@@ -728,6 +751,7 @@ shift_imm!("One32", "_one32", RegShiftOne32,
         EFLAGS::cf = extract(dst, 0, 0);
         EFLAGS::zf = if res == zext(0b0, 32) { zext(0b1, 1) } else { zext(0b0, 1) };
         EFLAGS::sf = extract(res, 31, 31);
+        EFLAGS::pf = parity_flag(res);
         EFLAGS::of = extract(dst, 31, 31);
         dst = res;
     }),
@@ -736,6 +760,7 @@ shift_imm!("One32", "_one32", RegShiftOne32,
         EFLAGS::cf = extract(dst, 0, 0);
         EFLAGS::zf = if res == zext(0b0, 32) { zext(0b1, 1) } else { zext(0b0, 1) };
         EFLAGS::sf = extract(res, 31, 31);
+        EFLAGS::pf = parity_flag(res);
         EFLAGS::of = zext(0b0, 1);
         dst = res;
     }),
@@ -782,6 +807,7 @@ shift_imm!("16", "16", RegShift16,
         EFLAGS::cf = if c == zext(0b0, 5) { EFLAGS::cf } else { carry };
         EFLAGS::zf = if c == zext(0b0, 5) { EFLAGS::zf } else { zero };
         EFLAGS::sf = if c == zext(0b0, 5) { EFLAGS::sf } else { extract(res, 15, 15) };
+        EFLAGS::pf = if c == zext(0b0, 5) { EFLAGS::pf } else { parity_flag(res) };
         EFLAGS::of = if c == zext(0b0, 5) { EFLAGS::of } else { extract(res, 15, 15) ^ carry };
         dst = res;
     }),
@@ -792,6 +818,7 @@ shift_imm!("16", "16", RegShift16,
         EFLAGS::cf = if c == zext(0b0, 5) { EFLAGS::cf } else { extract(dst >> (c - zext(0b1, 5)), 0, 0) };
         EFLAGS::zf = if c == zext(0b0, 5) { EFLAGS::zf } else { zero };
         EFLAGS::sf = if c == zext(0b0, 5) { EFLAGS::sf } else { extract(res, 15, 15) };
+        EFLAGS::pf = if c == zext(0b0, 5) { EFLAGS::pf } else { parity_flag(res) };
         EFLAGS::of = if c == zext(0b0, 5) { EFLAGS::of } else { extract(dst, 15, 15) };
         dst = res;
     }),
@@ -802,6 +829,7 @@ shift_imm!("16", "16", RegShift16,
         EFLAGS::cf = if c == zext(0b0, 5) { EFLAGS::cf } else { extract(dst >>> (c - zext(0b1, 5)), 0, 0) };
         EFLAGS::zf = if c == zext(0b0, 5) { EFLAGS::zf } else { zero };
         EFLAGS::sf = if c == zext(0b0, 5) { EFLAGS::sf } else { extract(res, 15, 15) };
+        EFLAGS::pf = if c == zext(0b0, 5) { EFLAGS::pf } else { parity_flag(res) };
         EFLAGS::of = if c == zext(0b0, 5) { EFLAGS::of } else { zext(0b0, 1) };
         dst = res;
     })
@@ -842,6 +870,7 @@ shift_imm!("8", "8", RegShift8,
         EFLAGS::cf = if c == zext(0b0, 5) { EFLAGS::cf } else { carry };
         EFLAGS::zf = if c == zext(0b0, 5) { EFLAGS::zf } else { zero };
         EFLAGS::sf = if c == zext(0b0, 5) { EFLAGS::sf } else { extract(res, 7, 7) };
+        EFLAGS::pf = if c == zext(0b0, 5) { EFLAGS::pf } else { parity_flag(res) };
         EFLAGS::of = if c == zext(0b0, 5) { EFLAGS::of } else { extract(res, 7, 7) ^ carry };
         dst = res;
     }),
@@ -852,6 +881,7 @@ shift_imm!("8", "8", RegShift8,
         EFLAGS::cf = if c == zext(0b0, 5) { EFLAGS::cf } else { extract(dst >> (c - zext(0b1, 5)), 0, 0) };
         EFLAGS::zf = if c == zext(0b0, 5) { EFLAGS::zf } else { zero };
         EFLAGS::sf = if c == zext(0b0, 5) { EFLAGS::sf } else { extract(res, 7, 7) };
+        EFLAGS::pf = if c == zext(0b0, 5) { EFLAGS::pf } else { parity_flag(res) };
         EFLAGS::of = if c == zext(0b0, 5) { EFLAGS::of } else { extract(dst, 7, 7) };
         dst = res;
     }),
@@ -862,6 +892,7 @@ shift_imm!("8", "8", RegShift8,
         EFLAGS::cf = if c == zext(0b0, 5) { EFLAGS::cf } else { extract(dst >>> (c - zext(0b1, 5)), 0, 0) };
         EFLAGS::zf = if c == zext(0b0, 5) { EFLAGS::zf } else { zero };
         EFLAGS::sf = if c == zext(0b0, 5) { EFLAGS::sf } else { extract(res, 7, 7) };
+        EFLAGS::pf = if c == zext(0b0, 5) { EFLAGS::pf } else { parity_flag(res) };
         EFLAGS::of = if c == zext(0b0, 5) { EFLAGS::of } else { zext(0b0, 1) };
         dst = res;
     })
@@ -893,6 +924,7 @@ reg_ext!(RegShiftCl16, WriteIShift,
         EFLAGS::cf = if c == zext(0b0, 5) { EFLAGS::cf } else { carry };
         EFLAGS::zf = if c == zext(0b0, 5) { EFLAGS::zf } else { zero };
         EFLAGS::sf = if c == zext(0b0, 5) { EFLAGS::sf } else { extract(res, 15, 15) };
+        EFLAGS::pf = if c == zext(0b0, 5) { EFLAGS::pf } else { parity_flag(res) };
         EFLAGS::of = if c == zext(0b0, 5) { EFLAGS::of } else { extract(res, 15, 15) ^ carry };
         dst = res;
     },
@@ -905,6 +937,7 @@ reg_ext!(RegShiftCl16, WriteIShift,
         EFLAGS::cf = if c == zext(0b0, 5) { EFLAGS::cf } else { extract(dst >> (c - zext(0b1, 5)), 0, 0) };
         EFLAGS::zf = if c == zext(0b0, 5) { EFLAGS::zf } else { zero };
         EFLAGS::sf = if c == zext(0b0, 5) { EFLAGS::sf } else { extract(res, 15, 15) };
+        EFLAGS::pf = if c == zext(0b0, 5) { EFLAGS::pf } else { parity_flag(res) };
         EFLAGS::of = if c == zext(0b0, 5) { EFLAGS::of } else { extract(dst, 15, 15) };
         dst = res;
     },
@@ -917,6 +950,7 @@ reg_ext!(RegShiftCl16, WriteIShift,
         EFLAGS::cf = if c == zext(0b0, 5) { EFLAGS::cf } else { extract(dst >>> (c - zext(0b1, 5)), 0, 0) };
         EFLAGS::zf = if c == zext(0b0, 5) { EFLAGS::zf } else { zero };
         EFLAGS::sf = if c == zext(0b0, 5) { EFLAGS::sf } else { extract(res, 15, 15) };
+        EFLAGS::pf = if c == zext(0b0, 5) { EFLAGS::pf } else { parity_flag(res) };
         EFLAGS::of = if c == zext(0b0, 5) { EFLAGS::of } else { zext(0b0, 1) };
         dst = res;
     },
@@ -931,6 +965,7 @@ reg_ext!(RegShiftCl8, WriteIShift,
         EFLAGS::cf = if c == zext(0b0, 5) { EFLAGS::cf } else { carry };
         EFLAGS::zf = if c == zext(0b0, 5) { EFLAGS::zf } else { zero };
         EFLAGS::sf = if c == zext(0b0, 5) { EFLAGS::sf } else { extract(res, 7, 7) };
+        EFLAGS::pf = if c == zext(0b0, 5) { EFLAGS::pf } else { parity_flag(res) };
         EFLAGS::of = if c == zext(0b0, 5) { EFLAGS::of } else { extract(res, 7, 7) ^ carry };
         dst = res;
     },
@@ -943,6 +978,7 @@ reg_ext!(RegShiftCl8, WriteIShift,
         EFLAGS::cf = if c == zext(0b0, 5) { EFLAGS::cf } else { extract(dst >> (c - zext(0b1, 5)), 0, 0) };
         EFLAGS::zf = if c == zext(0b0, 5) { EFLAGS::zf } else { zero };
         EFLAGS::sf = if c == zext(0b0, 5) { EFLAGS::sf } else { extract(res, 7, 7) };
+        EFLAGS::pf = if c == zext(0b0, 5) { EFLAGS::pf } else { parity_flag(res) };
         EFLAGS::of = if c == zext(0b0, 5) { EFLAGS::of } else { extract(dst, 7, 7) };
         dst = res;
     },
@@ -955,6 +991,7 @@ reg_ext!(RegShiftCl8, WriteIShift,
         EFLAGS::cf = if c == zext(0b0, 5) { EFLAGS::cf } else { extract(dst >>> (c - zext(0b1, 5)), 0, 0) };
         EFLAGS::zf = if c == zext(0b0, 5) { EFLAGS::zf } else { zero };
         EFLAGS::sf = if c == zext(0b0, 5) { EFLAGS::sf } else { extract(res, 7, 7) };
+        EFLAGS::pf = if c == zext(0b0, 5) { EFLAGS::pf } else { parity_flag(res) };
         EFLAGS::of = if c == zext(0b0, 5) { EFLAGS::of } else { zext(0b0, 1) };
         dst = res;
     },
@@ -980,6 +1017,7 @@ shift_imm!(X86, "8H", "8h", RegShift8H,
         EFLAGS::cf = if c == zext(0b0, 5) { EFLAGS::cf } else { carry };
         EFLAGS::zf = if c == zext(0b0, 5) { EFLAGS::zf } else { zero };
         EFLAGS::sf = if c == zext(0b0, 5) { EFLAGS::sf } else { extract(res, 7, 7) };
+        EFLAGS::pf = if c == zext(0b0, 5) { EFLAGS::pf } else { parity_flag(res) };
         EFLAGS::of = if c == zext(0b0, 5) { EFLAGS::of } else { extract(res, 7, 7) ^ carry };
         dst = res;
     }),
@@ -990,6 +1028,7 @@ shift_imm!(X86, "8H", "8h", RegShift8H,
         EFLAGS::cf = if c == zext(0b0, 5) { EFLAGS::cf } else { extract(dst >> (c - zext(0b1, 5)), 0, 0) };
         EFLAGS::zf = if c == zext(0b0, 5) { EFLAGS::zf } else { zero };
         EFLAGS::sf = if c == zext(0b0, 5) { EFLAGS::sf } else { extract(res, 7, 7) };
+        EFLAGS::pf = if c == zext(0b0, 5) { EFLAGS::pf } else { parity_flag(res) };
         EFLAGS::of = if c == zext(0b0, 5) { EFLAGS::of } else { extract(dst, 7, 7) };
         dst = res;
     }),
@@ -1000,6 +1039,7 @@ shift_imm!(X86, "8H", "8h", RegShift8H,
         EFLAGS::cf = if c == zext(0b0, 5) { EFLAGS::cf } else { extract(dst >>> (c - zext(0b1, 5)), 0, 0) };
         EFLAGS::zf = if c == zext(0b0, 5) { EFLAGS::zf } else { zero };
         EFLAGS::sf = if c == zext(0b0, 5) { EFLAGS::sf } else { extract(res, 7, 7) };
+        EFLAGS::pf = if c == zext(0b0, 5) { EFLAGS::pf } else { parity_flag(res) };
         EFLAGS::of = if c == zext(0b0, 5) { EFLAGS::of } else { zext(0b0, 1) };
         dst = res;
     })

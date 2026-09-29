@@ -33,7 +33,6 @@ pub struct InstructionMetadata {
     pub operands: Vec<OperandMetadata>,
     pub supported: bool,
     pub write_classes: Vec<String>,
-    pub fixed_register_writes: Vec<(String, u32)>,
     pub uses_reservation: bool,
     pub pc_source_operands: Vec<usize>,
     pub memory_accesses: Vec<MemoryAccessMetadata>,
@@ -399,6 +398,12 @@ fn flat_state_fields(ctx: &SmtCtx<'_>) -> Vec<FlatStateFieldMetadata> {
             name: "pc".to_string(),
             sort: format!("(_ BitVec {})", ctx.xlen),
         },
+        // Whether the instruction wrote the PC: fall-through leaves `pc`
+        // untouched, which alone cannot tell a jump to itself apart.
+        FlatStateFieldMetadata {
+            name: "pc_written".to_string(),
+            sort: "Bool".to_string(),
+        },
     ]);
     fields
 }
@@ -732,9 +737,6 @@ fn build_instructions<'a>(
             write_classes: behavior
                 .as_ref()
                 .map_or_else(Vec::new, |behavior| behavior.write_classes.clone()),
-            fixed_register_writes: behavior
-                .as_ref()
-                .map_or_else(Vec::new, |behavior| behavior.fixed_register_writes.clone()),
             uses_reservation: behavior
                 .as_ref()
                 .is_some_and(|behavior| behavior.uses_reservation),
@@ -1427,7 +1429,7 @@ impl FlatState {
                 fields.insert(name.clone(), format!("st0_{name}"));
             }
         }
-        for name in ["mem", "resv", "resa", "pc"] {
+        for name in ["mem", "resv", "resa", "pc", "pc_written"] {
             fields.insert(name.to_string(), format!("st0_{name}"));
         }
         Self { fields }
@@ -1442,6 +1444,8 @@ impl SmtState for FlatState {
     fn write_pc(&self, value: &str) -> Self {
         let mut next = self.clone();
         next.fields.insert("pc".to_string(), value.to_string());
+        next.fields
+            .insert("pc_written".to_string(), "true".to_string());
         next
     }
 
@@ -2192,7 +2196,6 @@ struct BehaviorEmitter<'a, S> {
     failed: std::cell::Cell<bool>,
     writes_pc: std::cell::Cell<bool>,
     write_classes: std::cell::RefCell<BTreeSet<String>>,
-    fixed_register_writes: std::cell::RefCell<BTreeSet<(String, u32)>>,
     pc_value_roots: std::cell::RefCell<Vec<NodeId>>,
 }
 
@@ -2370,9 +2373,6 @@ impl<S: SmtState> sem_expr_state::BehaviorEmitter for BehaviorEmitter<'_, S> {
         // `PSTATE::n`).
         if let sem_expr_state::Destination::FixedRegister { class, index, .. } = destination {
             let class = class.to_lowercase();
-            self.fixed_register_writes
-                .borrow_mut()
-                .insert((class.clone(), *index));
             self.write_classes.borrow_mut().insert(class.clone());
             return commit(state.write_register(
                 ctx,
@@ -2558,7 +2558,6 @@ struct BehaviorMetadata {
     body: String,
     writes_pc: bool,
     write_classes: Vec<String>,
-    fixed_register_writes: Vec<(String, u32)>,
     pc_source_names: BTreeSet<String>,
     memory_accesses: Vec<MemoryAccessMetadata>,
     uses_reservation: bool,
@@ -2700,7 +2699,6 @@ fn build_smt_behavior<'a>(
         failed: Default::default(),
         writes_pc: Default::default(),
         write_classes: Default::default(),
-        fixed_register_writes: Default::default(),
         pc_value_roots: Default::default(),
     };
     let body = sem_expr_state::fold_behavior(&behavior_graph, &emitter.entry.clone(), &emitter);
@@ -2718,7 +2716,6 @@ fn build_smt_behavior<'a>(
         failed: Default::default(),
         writes_pc: Default::default(),
         write_classes: Default::default(),
-        fixed_register_writes: Default::default(),
         pc_value_roots: Default::default(),
     };
     let flat_state =
@@ -2748,7 +2745,6 @@ fn build_smt_behavior<'a>(
             body,
             writes_pc: emitter.writes_pc.get(),
             write_classes: emitter.write_classes.into_inner().into_iter().collect(),
-            fixed_register_writes: emitter.fixed_register_writes.into_inner().into_iter().collect(),
             pc_source_names: behavior_graph
                 .variable_symbols
                 .iter()

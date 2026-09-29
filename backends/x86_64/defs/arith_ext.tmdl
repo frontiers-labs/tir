@@ -233,6 +233,7 @@ instruction ImulWide for [X86_64] : RegUnary {
     schedule { units = [WriteIMul]; }
 
     behavior {
+        imul_flags!({ GPR::rax }, { dst }, { self.XLEN })
         GPR::rdx = extract(GPR::rax * dst, (2 * self.XLEN) - 1, self.XLEN);
         GPR::rax = extract(GPR::rax * dst, self.XLEN - 1, 0);
     }
@@ -356,6 +357,7 @@ instruction ZeroExtendDividend for [X86_64] {
     encoding { 0x31, 0xD2 }
     asm { "{self.MNEMONIC} edx, edx" }
     behavior {
+        logic_flags!({ zext(0b0, 32) }, { 32 }, { 31 })
         GPR::rdx = zext(0b0, self.XLEN);
     }
 }
@@ -428,6 +430,7 @@ instruction ZeroExtendDividend32 for [X86_64] {
     encoding { 0x31, 0xD2 }
     asm { "{self.MNEMONIC} edx, edx" }
     behavior {
+        logic_flags!({ zext(0b0, 32) }, { 32 }, { 31 })
         GPR32::edx = zext(0b0, 32);
     }
 }

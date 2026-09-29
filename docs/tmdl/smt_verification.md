@@ -53,8 +53,7 @@ A row without `class` holds bits the architecture fixes at zero.
 
 A Sail read of a mapped location is pinned to the slot's initial value, and
 every mapped slot is compared after the instruction: TMDL's final value
-against Sail's last write, or the initial value when Sail left it alone. Rows
-marked `if_written` are compared only when the TMDL behavior writes the slot.
+against Sail's last write, or the initial value when Sail left it alone.
 A path that writes a register with no row, or reads a symbolic one, is
 excluded. Registers listed in `ignore` never exclude a path, and a read of one
 listed in `mmio` always does.
@@ -68,11 +67,14 @@ Reported with the results, and deliberate:
 - The initial PC is 4-byte aligned and `nextPC = PC + 4` — the fetch invariant
   for non-compressed instructions. Together with 4-aligned branch immediates
   this makes Sail's misaligned-fetch trap paths vacuous.
-- TMDL leaves the PC unchanged for fall-through instructions, so a Sail path
-  that does not write `nextPC` requires TMDL's final PC to equal the initial
-  PC; a path that writes it requires equality with the written value.
-- Only modeled, defined status flags are compared. The verifier corrects known
-  flag errors in the pinned reference model from its execution trace.
+- TMDL's flat state records whether the behavior wrote the PC. A Sail path
+  that does not write `nextPC` requires TMDL not to write the PC; a path that
+  writes it requires TMDL's next PC (the written PC, or the fall-through
+  address) to equal the written value.
+- Every mapped status flag is compared, whether or not the TMDL behavior
+  writes it. A value Sail leaves undefined accepts any TMDL result, and the
+  verifier corrects known flag errors in the pinned reference model from its
+  execution trace.
 - Instructions without SMT behavior or executable reference traces are
   reported as unsupported.
 

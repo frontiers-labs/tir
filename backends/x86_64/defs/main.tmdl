@@ -817,6 +817,21 @@ macro add_flags {
     };
 }
 
+// Signed multiplies set carry and overflow when the product does not fit the
+// destination: its high half is not the sign extension of its low half.
+macro imul_flags {
+    ( { $($lhs:tt)* }, { $($rhs:tt)* }, { $($w:tt)* } ) => {
+        let product = ($($lhs)*) * ($($rhs)*);
+        let low_sign = extract(product, $($w)* - 1, $($w)* - 1);
+        EFLAGS::cf = if extract(product, (2 * $($w)*) - 1, $($w)*) == sext(low_sign, $($w)*) {
+            zext(0b0, 1)
+        } else {
+            zext(0b1, 1)
+        };
+        EFLAGS::of = EFLAGS::cf;
+    };
+}
+
 // Logical ops clear carry and overflow and set zf/sf from the result.
 macro logic_flags {
     ( { $($res:tt)* }, { $($w:tt)* }, { $($msb:tt)* } ) => {

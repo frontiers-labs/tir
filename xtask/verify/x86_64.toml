@@ -47,14 +47,12 @@ map = [
   { sail = "rsi", class = "gpr", index = 6 },
   { sail = "rdi", class = "gpr", index = 7 },
   { sail = "r{n}", class = "gpr", n = [8, 15] },
-  # rflags bits (Intel SDM) to EFLAGS slots in TMDL declaration order. The
-  # ALU ops deliberately leave flags unmodeled, so a flag is compared only
-  # when the TMDL behavior writes it.
-  { sail = "rflags", bits = [0, 0], class = "eflags", index = 0, if_written = true },
-  { sail = "rflags", bits = [2, 2], class = "eflags", index = 1, if_written = true },
-  { sail = "rflags", bits = [6, 6], class = "eflags", index = 2, if_written = true },
-  { sail = "rflags", bits = [7, 7], class = "eflags", index = 3, if_written = true },
-  { sail = "rflags", bits = [11, 11], class = "eflags", index = 4, if_written = true },
-  { sail = "rflags", bits = [4, 4], class = "eflags", index = 5, if_written = true },
-  { sail = "rflags", bits = [10, 10], class = "eflags", index = 6, if_written = true },
+  # rflags bits (Intel SDM) to EFLAGS slots in TMDL declaration order.
+  { sail = "rflags", bits = [0, 0], class = "eflags", index = 0 },
+  { sail = "rflags", bits = [2, 2], class = "eflags", index = 1 },
+  { sail = "rflags", bits = [6, 6], class = "eflags", index = 2 },
+  { sail = "rflags", bits = [7, 7], class = "eflags", index = 3 },
+  { sail = "rflags", bits = [11, 11], class = "eflags", index = 4 },
+  { sail = "rflags", bits = [4, 4], class = "eflags", index = 5 },
+  { sail = "rflags", bits = [10, 10], class = "eflags", index = 6 },
 ]

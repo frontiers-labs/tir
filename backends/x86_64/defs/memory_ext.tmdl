@@ -593,6 +593,8 @@ macro memory_sub_flags {
         EFLAGS::zf = if $($lhs)* == $($rhs)* { zext(0b1, 1) } else { zext(0b0, 1) };
         EFLAGS::sf = extract($($lhs)* - $($rhs)*, $($msb)*, $($msb)*);
         EFLAGS::of = extract(($($lhs)* ^ $($rhs)*) & ($($lhs)* ^ ($($lhs)* - $($rhs)*)), $($msb)*, $($msb)*);
+        EFLAGS::af = extract($($lhs)* ^ $($rhs)* ^ ($($lhs)* - $($rhs)*), 4, 4);
+        EFLAGS::pf = parity_flag($($lhs)* - $($rhs)*);
     };
 }
 
@@ -602,6 +604,7 @@ macro memory_test_flags {
         EFLAGS::zf = if ($($lhs)* & $($rhs)*) == zext(0b0, $($width)*) { zext(0b1, 1) } else { zext(0b0, 1) };
         EFLAGS::sf = extract($($lhs)* & $($rhs)*, $($msb)*, $($msb)*);
         EFLAGS::of = zext(0b0, 1);
+        EFLAGS::pf = parity_flag($($lhs)* & $($rhs)*);
     };
 }
 
@@ -726,6 +729,8 @@ macro memory_unary_ops {
                 EFLAGS::zf = if result == zext(0b0, $width) { zext(0b1, 1) } else { zext(0b0, 1) };
                 EFLAGS::sf = extract(result, $msb, $msb);
                 EFLAGS::of = extract(~old & result, $msb, $msb);
+                EFLAGS::af = extract(old ^ zext(0b1, $width) ^ result, 4, 4);
+                EFLAGS::pf = parity_flag(result);
                 store(base, $bytes, result);
             }
         }
@@ -740,6 +745,8 @@ macro memory_unary_ops {
                 EFLAGS::zf = if result == zext(0b0, $width) { zext(0b1, 1) } else { zext(0b0, 1) };
                 EFLAGS::sf = extract(result, $msb, $msb);
                 EFLAGS::of = extract(old & ~result, $msb, $msb);
+                EFLAGS::af = extract(old ^ zext(0b1, $width) ^ result, 4, 4);
+                EFLAGS::pf = parity_flag(result);
                 store(base, $bytes, result);
             }
         }
@@ -755,6 +762,8 @@ macro memory_unary_ops {
                 EFLAGS::zf = if result == zext(0b0, $width) { zext(0b1, 1) } else { zext(0b0, 1) };
                 EFLAGS::sf = extract(result, $msb, $msb);
                 EFLAGS::of = extract(~old & result, $msb, $msb);
+                EFLAGS::af = extract(old ^ zext(0b1, $width) ^ result, 4, 4);
+                EFLAGS::pf = parity_flag(result);
                 store(address, $bytes, result);
             }
         }
@@ -770,6 +779,8 @@ macro memory_unary_ops {
                 EFLAGS::zf = if result == zext(0b0, $width) { zext(0b1, 1) } else { zext(0b0, 1) };
                 EFLAGS::sf = extract(result, $msb, $msb);
                 EFLAGS::of = extract(old & ~result, $msb, $msb);
+                EFLAGS::af = extract(old ^ zext(0b1, $width) ^ result, 4, 4);
+                EFLAGS::pf = parity_flag(result);
                 store(address, $bytes, result);
             }
         }
@@ -828,11 +839,11 @@ scalar_memory_ops!("8", "8", MemoryReg8, MemoryRegDest8, MemoryUnary8,
     cmp_src = 0x3A, cmp_dst = 0x38, test = 0x84)
 
 memory_source_ops!("", "", MemoryReg64, MemoryRegDisp64, "qword", 8, 64, 63,
-    (Imul, "imul", "imul", 0xAF, 0b1, { dst = dst * rhs; }))
+    (Imul, "imul", "imul", 0xAF, 0b1, { imul_flags!({ dst }, { rhs }, { 64 }) dst = dst * rhs; }))
 memory_source_ops!("32", "32", MemoryReg32, MemoryRegDisp32, "dword", 4, 32, 31,
-    (Imul, "imul", "imul", 0xAF, 0b1, { dst = dst * rhs; }))
+    (Imul, "imul", "imul", 0xAF, 0b1, { imul_flags!({ dst }, { rhs }, { 32 }) dst = dst * rhs; }))
 memory_source_ops!("16", "16", MemoryReg16, MemoryRegDisp16, "word", 2, 16, 15,
-    (Imul, "imul", "imul", 0xAF, 0b1, { dst = dst * rhs; }))
+    (Imul, "imul", "imul", 0xAF, 0b1, { imul_flags!({ dst }, { rhs }, { 16 }) dst = dst * rhs; }))
 
 macro indexed_load_template {
     ( $name:ident, $cls:ident, rexw = $rexw:literal, p66 = $p66:literal,
@@ -1184,6 +1195,8 @@ instruction Inc32MemoryIndex4Disp for [X86_64] {
         EFLAGS::zf = if result == zext(0b0, 32) { zext(0b1, 1) } else { zext(0b0, 1) };
         EFLAGS::sf = extract(result, 31, 31);
         EFLAGS::of = extract(~old & result, 31, 31);
+        EFLAGS::af = extract(old ^ zext(0b1, 32) ^ result, 4, 4);
+        EFLAGS::pf = parity_flag(result);
         store(address, 4, result);
     }
 }

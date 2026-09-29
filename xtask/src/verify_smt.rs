@@ -26,9 +26,9 @@
 //!   - registers feeding an indirect jump (`jalr` base) hold 4-byte-aligned
 //!     values, so misaligned-fetch trap paths are vacuous (temporary until the
 //!     C extension is modeled);
-//!   - TMDL leaves PC untouched for fall-through instructions, so a Sail path
-//!     that does not write the (next) PC requires TMDL's final PC to equal the
-//!     initial one, and a path that writes it requires equality with it;
+//!   - TMDL marks the paths that write the PC, so a Sail path that does not
+//!     write the (next) PC requires TMDL not to write it either, and a path
+//!     that writes it requires TMDL's next PC to equal the written value;
 //!   - memory is the TMDL flat little-endian byte array: Sail's plain read
 //!     values are constrained against the initial array and its writes are
 //!     folded into the expected final array. Paths through the platform
@@ -51,10 +51,7 @@
 //!     (the spliced `rb`) so isla does not fork the byte-at-a-time decoder;
 //!   - data-access and branch-target addresses are assumed canonical (the
 //!     model masks linear addresses to 48 bits, TMDL's flat memory is 64-bit),
-//!     the analogue of the RISC-V aligned-address assumption;
-//!   - flags (`rflags` cf/zf/sf/of) are compared only for instructions whose
-//!     TMDL behavior writes them; the ALU ops deliberately leave flags
-//!     unmodeled, so their flag writes are ignored.
+//!     the analogue of the RISC-V aligned-address assumption.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -150,8 +147,6 @@ struct MapEntry {
     class: Option<String>,
     index: Option<u64>,
     n: Option<(u64, u64)>,
-    #[serde(default)]
-    if_written: bool,
 }
 
 /// One Sail location related to one piece of TMDL state.
@@ -162,8 +157,6 @@ struct MapRow {
     /// `(high, low)` bits of the Sail value that hold the state.
     bits: Option<(u32, u32)>,
     state: State,
-    /// Compared only when the TMDL behavior writes the slot.
-    if_written: bool,
 }
 
 /// TMDL state a Sail location relates to.
@@ -220,7 +213,6 @@ fn expand_map<'de, D: serde::Deserializer<'de>>(de: D) -> Result<Vec<MapRow>, D:
                 element,
                 bits: entry.bits,
                 state,
-                if_written: entry.if_written,
             });
         }
     }
@@ -249,7 +241,6 @@ impl IsaSpec {
                     element: None,
                     bits: None,
                     state,
-                    if_written: false,
                 });
             }
         }
@@ -690,7 +681,6 @@ struct Instruction {
     operands: Vec<(String, OperandKind)>,
     supported: bool,
     write_classes: Vec<String>,
-    fixed_register_writes: Vec<(String, u32)>,
     uses_reservation: bool,
     pc_source_operands: Vec<usize>,
     memory_accesses: Vec<MemoryAccess>,
@@ -848,7 +838,6 @@ fn parse_inventory(json: &str) -> anyhow::Result<Inventory> {
                 operands,
                 supported: raw.supported,
                 write_classes: raw.write_classes,
-                fixed_register_writes: raw.fixed_register_writes,
                 uses_reservation: raw.uses_reservation,
                 pc_source_operands: raw.pc_source_operands,
                 memory_accesses: raw
@@ -1638,11 +1627,23 @@ fn analyze_trace(spec: &IsaSpec, events: &[tir_verify::TraceEvent]) -> TraceInfo
     // of values the model computed (e.g. Sail writes `nextPC = PC + 4` and
     // reads it back later), not symbolic initial state.
     let mut defined_vars = HashSet::new();
+    // A read of a location this path already wrote returns the written value,
+    // so it names no initial state: an undefined value the model wrote and
+    // reads back stays a choice.
+    let mut written = HashSet::new();
 
     for event in events {
         let input = match event {
-            tir_verify::TraceEvent::ReadRegister { value, .. }
-            | tir_verify::TraceEvent::ReadMemory { value, .. } => Some(value),
+            tir_verify::TraceEvent::ReadRegister {
+                name,
+                fields,
+                value,
+            } if !written.contains(&(name, fields)) => Some(value),
+            tir_verify::TraceEvent::ReadMemory { value, .. } => Some(value),
+            tir_verify::TraceEvent::WriteRegister { name, fields, .. } => {
+                written.insert((name, fields));
+                None
+            }
             _ => None,
         };
         for term in input.iter().flat_map(|input| input.terms()) {
@@ -1911,6 +1912,7 @@ fn emit_state_transition(
         .map(|(name, sort)| SmtCommand::DeclareConst(Symbol(format!("st0_{name}")), sort.clone()))
         .collect();
     commands.push(assert(not(Term::ident("st0_resv"))));
+    commands.push(assert(not(Term::ident("st0_pc_written"))));
     let execute = instr
         .flat_execute
         .as_ref()
@@ -2221,13 +2223,7 @@ fn build_query(
         let State::Slot { class, index } = &row.state else {
             continue;
         };
-        let written = || {
-            instr
-                .fixed_register_writes
-                .iter()
-                .any(|(written, slot)| written == class && u64::from(*slot) == *index)
-        };
-        if !compared.insert(&row.state) || (row.if_written && !written()) {
+        if !compared.insert(&row.state) {
             continue;
         }
         let sail = trace
@@ -2300,19 +2296,17 @@ fn build_query(
 
     let st0_pc = || Term::ident("st0_pc");
     let st1_pc = || Term::ident("st1_pc");
+    let pc_written = || Term::ident("st1_pc_written");
     match sail_pc {
         Some(target) => {
-            // TMDL encodes fall-through as "PC untouched", while current Sail
+            // TMDL leaves the PC untouched on fall-through, while current Sail
             // models write the next PC unconditionally, so compare against
-            // TMDL's effective next PC. A self-jump (target == initial PC) is
-            // indistinguishable from fall-through under this convention;
-            // assume it away rather than reporting a fake divergence.
-            path.push(Term::app("distinct", vec![target.clone(), st0_pc()]));
+            // TMDL's effective next PC.
             let next = bvadd(st0_pc(), bv(u64::from(width_bytes), xlen));
-            let effective = Term::app("ite", vec![eq(st1_pc(), st0_pc()), next, st1_pc()]);
+            let effective = Term::app("ite", vec![pc_written(), st1_pc(), next]);
             final_eq.push(eq(effective, target.clone()));
         }
-        None => final_eq.push(eq(st1_pc(), st0_pc())),
+        None => final_eq.push(not(pc_written())),
     }
 
     let with_defines = |body| with_trace_defines(trace, body).0;
@@ -2920,7 +2914,7 @@ mod tests {
           "instructions": [{
             "name": "load", "writes_pc": false, "width_bits": 32,
             "operands": [OPERANDS],
-            "supported": true, "write_classes": ["gpr"], "fixed_register_writes": [],
+            "supported": true, "write_classes": ["gpr"],
             "uses_reservation": false, "pc_source_operands": [],
             "memory_accesses": [{"kind": "load", "bytes": 4, "address": "(read_gpr st rd)", "flat_address": "(select st0_gpr rd)"}],
             "trap_kinds": ["misaligned_load"],
@@ -3014,7 +3008,6 @@ mod tests {
             operands: vec![],
             supported: true,
             write_classes: vec!["eflags".into()],
-            fixed_register_writes: vec![("eflags".into(), 0)],
             uses_reservation: false,
             pc_source_operands: vec![],
             memory_accesses: vec![],
