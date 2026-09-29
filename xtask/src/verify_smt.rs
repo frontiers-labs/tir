@@ -1870,11 +1870,7 @@ fn flat_read_memory(xlen: u32, bytes: u32, state: &str, address: &Term) -> Term 
     (0..bytes)
         .rev()
         .map(|offset| {
-            let slot = if offset == 0 {
-                address.clone()
-            } else {
-                bvadd(address.clone(), bv(u64::from(offset), xlen))
-            };
+            let slot = byte_address(address, u64::from(offset), xlen);
             select(Term::ident(format!("{state}_mem")), slot)
         })
         .reduce(|high, low| Term::app("concat", vec![high, low]))
@@ -2114,9 +2110,20 @@ fn query_prelude(
     commands
 }
 
-/// Prove the Sail and TMDL read addresses agree before replacing Sail's
-/// masked addresses. This keeps multiplication out of the address proof.
-fn normalize_x86_imul_read_addresses(
+/// `address + offset`, the address of a later byte of an access.
+fn byte_address(address: &Term, offset: u64, xlen: u32) -> Term {
+    match offset {
+        0 => address.clone(),
+        _ => bvadd(address.clone(), bv(offset, xlen)),
+    }
+}
+
+/// Prove that each Sail access starts at the address TMDL gives the same
+/// byte, then use TMDL's address terms. Address arithmetic (a scaled index, a
+/// masked linear address) stays out of the equivalence query that way.
+/// Accesses whose bytes do not line up with TMDL's, or whose proof does not go
+/// through, keep Sail's addresses, which the equivalence query still checks.
+fn align_trace_addresses(
     tools: &Tools,
     spec: &IsaSpec,
     model: &FlatModel,
@@ -2125,38 +2132,49 @@ fn normalize_x86_imul_read_addresses(
     trace: &mut TraceInfo,
     query_path: &Path,
 ) -> anyhow::Result<()> {
-    // Match one TMDL load to Isla's bytewise reads before comparing addresses.
-    let [access] = instr.memory_accesses.as_slice() else {
+    let addresses = mem_addr_exprs(instr, case, spec);
+    // TMDL's accessed bytes of one kind, in access order.
+    let tmdl_bytes = |kind: &str| -> Vec<Term> {
+        instr
+            .memory_accesses
+            .iter()
+            .zip(&addresses)
+            .filter(|(access, _)| access.kind == kind)
+            .flat_map(|(access, address)| {
+                (0..access.bytes).map(|offset| byte_address(address, offset, spec.xlen))
+            })
+            .collect()
+    };
+    // The TMDL address of the byte each Sail access starts at.
+    let starts = |accesses: &[MemAccess], bytes: Vec<Term>| {
+        let total: usize = accesses.iter().map(|access| access.bytes as usize).sum();
+        (total == bytes.len()).then(|| {
+            let mut next = 0;
+            accesses
+                .iter()
+                .map(|access| {
+                    let start = bytes[next].clone();
+                    next += access.bytes as usize;
+                    start
+                })
+                .collect::<Vec<_>>()
+        })
+    };
+    let (Some(reads), Some(writes)) = (
+        starts(&trace.mem_reads, tmdl_bytes("load")),
+        starts(&trace.mem_writes, tmdl_bytes("store")),
+    ) else {
         return Ok(());
     };
-    if spec.name != "x86_64"
-        || !instr.name.starts_with("imul")
-        || access.kind != "load"
-        || trace.mem_reads.len() != access.bytes as usize
-        || !trace.mem_reads.iter().all(|read| read.bytes == 1)
-        || !trace.mem_writes.is_empty()
-    {
+    if reads.is_empty() && writes.is_empty() {
         return Ok(());
     }
-
-    let base = mem_addr_exprs(instr, case, spec)
-        .into_iter()
-        .next()
-        .expect("single memory access");
-    let addresses: Vec<Term> = (0..access.bytes)
-        .map(|offset| {
-            if offset == 0 {
-                base.clone()
-            } else {
-                bvadd(base.clone(), bv(offset, spec.xlen))
-            }
-        })
-        .collect();
     let equalities = trace
         .mem_reads
         .iter()
-        .zip(&addresses)
-        .map(|(read, expected)| eq(read.address.clone(), expected.clone()))
+        .chain(&trace.mem_writes)
+        .zip(reads.iter().chain(&writes))
+        .map(|(access, expected)| eq(access.address.clone(), expected.clone()))
         .collect();
     // A satisfiable query would expose a path where the addresses differ.
     let mut commands = query_prelude(spec, model, instr, case, trace);
@@ -2167,13 +2185,17 @@ fn normalize_x86_imul_read_addresses(
     let address_path = query_path.with_extension("addr.smt2");
     std::fs::write(&address_path, script("QF_AUFBV", commands))?;
     let output = run_solver(tools, &address_path)?;
-    // A counterexample or solver unknown keeps the original Sail addresses.
     if solver_statuses(&output)
         .last()
         .is_some_and(|status| status == "unsat")
     {
-        for (read, address) in trace.mem_reads.iter_mut().zip(addresses) {
-            read.address = address;
+        for (access, address) in trace
+            .mem_reads
+            .iter_mut()
+            .chain(&mut trace.mem_writes)
+            .zip(reads.into_iter().chain(writes))
+        {
+            access.address = address;
         }
     }
     Ok(())
@@ -2254,11 +2276,7 @@ fn build_query(
         let mut slots = Vec::new();
         for write in &trace.mem_writes {
             for i in 0..write.bytes {
-                let slot = if i == 0 {
-                    write.address.clone()
-                } else {
-                    bvadd(write.address.clone(), bv(u64::from(i), xlen))
-                };
+                let slot = byte_address(&write.address, u64::from(i), xlen);
                 let byte = extract(i * 8 + 7, i * 8, write.value.clone());
                 sail_mem = Term::app("store", vec![sail_mem, slot.clone(), byte]);
                 slots.push(slot);
@@ -2626,15 +2644,7 @@ fn verify_instruction(
                 .join("queries")
                 .join(format!("{}_{:08x}_p{}.smt2", instr.name, word, path_idx));
             let solver_started = Instant::now();
-            normalize_x86_imul_read_addresses(
-                tools,
-                spec,
-                model,
-                instr,
-                case,
-                &mut info,
-                &query_path,
-            )?;
+            align_trace_addresses(tools, spec, model, instr, case, &mut info, &query_path)?;
             // A path writing a trap cause TMDL does not model (access fault)
             // lies outside the all-of-memory-is-RAM assumption.
             let written_cause = spec.trap_cause.as_ref().and_then(|trap| {

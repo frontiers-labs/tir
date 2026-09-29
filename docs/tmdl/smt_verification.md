@@ -24,6 +24,9 @@ set (x0 corner cases, register aliasing, immediate extremes):
    the path constraints. `unsat` proves agreement; `sat` supplies a
    counterexample. An unreachable path proves nothing and is reported as
    vacuous; a path the solver cannot show reachable counts as unknown.
+   Memory addresses are proved first: each Sail access must start at the
+   address TMDL gives the same byte. When that holds, the equivalence query
+   uses TMDL's address terms, which keeps address arithmetic out of it.
 4. Verified paths are checked again with the TMDL behavior replaced by a
    no-op, until one of them tells the two apart. An instruction that still
    verifies is reported: its proofs compare none of the state it writes.
