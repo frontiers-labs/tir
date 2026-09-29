@@ -183,6 +183,7 @@ impl<V> Lowerer<V> {
                 self.scope.pop();
                 result
             }
+            Term::Exists(..) => Err(ConvertError::Unsupported("quantifier".into())),
             Term::Annotated(inner, _) => self.lower_term(inner),
         }
     }

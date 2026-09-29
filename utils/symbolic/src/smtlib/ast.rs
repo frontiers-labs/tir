@@ -1,5 +1,7 @@
 //! AST mirroring SMT-LIB 2.7 grammar; theory meaning is resolved at conversion, not baked in here.
 
+use std::collections::HashSet;
+
 /// Non-alphanumeric characters permitted in a simple (unquoted) symbol.
 pub const SYMBOL_CHARS: &str = "+-/*=%?!.$_~&^<>@";
 
@@ -72,6 +74,18 @@ impl Sort {
             params: Vec::new(),
         }
     }
+
+    pub fn bool() -> Self {
+        Sort::simple(Identifier::simple("Bool"))
+    }
+
+    /// `(_ BitVec width)`.
+    pub fn bitvec(width: u32) -> Self {
+        Sort::simple(Identifier {
+            symbol: Symbol("BitVec".into()),
+            indices: vec![Index::Numeral(u128::from(width))],
+        })
+    }
 }
 
 /// A `<qual_identifier>`: an identifier, optionally `(as id sort)`-annotated to disambiguate overloads.
@@ -134,7 +148,84 @@ pub enum Term {
     Ident(QualIdentifier),
     App(QualIdentifier, Vec<Term>),
     Let(Vec<VarBinding>, Box<Term>),
+    Exists(Vec<SortedVar>, Box<Term>),
     Annotated(Box<Term>, Vec<Attribute>),
+}
+
+impl Term {
+    /// A constant, variable or nullary function by name.
+    pub fn ident(name: impl Into<String>) -> Self {
+        Term::Ident(QualIdentifier::Plain(Identifier::simple(name)))
+    }
+
+    pub fn bool(value: bool) -> Self {
+        Term::ident(if value { "true" } else { "false" })
+    }
+
+    /// The bit-vector literal `(_ bv<value> width)`.
+    pub fn bv(value: u128, width: u32) -> Self {
+        Term::Ident(QualIdentifier::Plain(Identifier {
+            symbol: Symbol(format!("bv{value}")),
+            indices: vec![Index::Numeral(u128::from(width))],
+        }))
+    }
+
+    pub fn app(op: &str, args: Vec<Term>) -> Self {
+        Term::App(QualIdentifier::Plain(Identifier::simple(op)), args)
+    }
+
+    /// An application of an indexed function such as `(_ extract 7 0)`.
+    pub fn indexed_app(op: &str, indices: &[u128], args: Vec<Term>) -> Self {
+        Term::App(
+            QualIdentifier::Plain(Identifier {
+                symbol: Symbol(op.into()),
+                indices: indices.iter().map(|&index| Index::Numeral(index)).collect(),
+            }),
+            args,
+        )
+    }
+
+    /// Simple symbols this term names outside its own `let` and `exists`
+    /// binders: its free constants and variables.
+    pub fn free_symbols(&self) -> HashSet<&str> {
+        let mut free = HashSet::new();
+        self.collect_free(&mut Vec::new(), &mut free);
+        free
+    }
+
+    fn collect_free<'a>(&'a self, bound: &mut Vec<&'a str>, free: &mut HashSet<&'a str>) {
+        match self {
+            Term::Constant(_) => {}
+            Term::Ident(id) => {
+                let id = id.identifier();
+                if id.is_simple() && !bound.contains(&id.symbol.0.as_str()) {
+                    free.insert(&id.symbol.0);
+                }
+            }
+            Term::App(_, args) => {
+                for arg in args {
+                    arg.collect_free(bound, free);
+                }
+            }
+            // `let` binds in parallel: its terms see only the enclosing scope.
+            Term::Let(binds, body) => {
+                for bind in binds {
+                    bind.term.collect_free(bound, free);
+                }
+                let depth = bound.len();
+                bound.extend(binds.iter().map(|bind| bind.var.0.as_str()));
+                body.collect_free(bound, free);
+                bound.truncate(depth);
+            }
+            Term::Exists(vars, body) => {
+                let depth = bound.len();
+                bound.extend(vars.iter().map(|var| var.var.0.as_str()));
+                body.collect_free(bound, free);
+                bound.truncate(depth);
+            }
+            Term::Annotated(term, _) => term.collect_free(bound, free),
+        }
+    }
 }
 
 /// A `function_def`: `symbol (sorted_var*) sort term`, as used by `define-fun`.

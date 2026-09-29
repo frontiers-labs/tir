@@ -247,6 +247,7 @@ impl Solver {
             Term::Ident(q) => self.ident_is_bool(q.identifier()),
             Term::App(q, args) => self.app_is_bool(q.identifier(), args),
             Term::Let(_, body) => self.term_is_bool(body),
+            Term::Exists(..) => true,
             Term::Annotated(inner, _) => self.term_is_bool(inner),
         }
     }

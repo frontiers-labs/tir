@@ -57,7 +57,6 @@
 //!     unmodeled, so their flag writes are ignored.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Instant;
@@ -66,7 +65,13 @@ use crate::utils::{download_file, project_root};
 use anyhow::{anyhow, Context};
 use serde::de::Error as _;
 use serde::{Deserialize, Serialize};
-use tmdl::{FlatStateFieldMetadata, MemoryAccessMetadata, RegisterClassMetadata, SmtMetadata};
+use tir_symbolic::smtlib::ast::{
+    Attribute, AttributeValue, Command as SmtCommand, FunctionDef, Keyword, Script, Sort,
+    SortedVar, Symbol, Term, VarBinding,
+};
+use tir_symbolic::smtlib::parser::{parse_sort, parse_term};
+use tir_verify::TraceValue;
+use tmdl::{RegisterClassMetadata, SmtMetadata};
 use xshell::{cmd, Shell};
 
 /// One ISA's verification setup, read from `xtask/verify/<isa>.toml`.
@@ -267,34 +272,30 @@ impl IsaSpec {
 impl MapRow {
     /// This row's part of a register access, before `bits`: `Ok(None)` when
     /// the access names another field.
-    fn select(
-        &self,
-        fields: &[String],
-        value: &tir_verify::TraceValue,
-    ) -> Result<Option<String>, String> {
-        if let Some(field) = &self.field {
-            if fields.first() != Some(field) {
-                return Ok(None);
-            }
-            return Ok(value.fields.get(field).map(|value| value.smt.clone()));
-        }
-        // Bitfield registers carry their value in a single-field struct.
-        let value = &unwrap_bits_struct(value).smt;
-        let Some(element) = self.element else {
-            return Ok(Some(value.clone()));
+    fn select(&self, fields: &[String], value: &TraceValue) -> Result<Option<Term>, String> {
+        let value = match &self.field {
+            Some(field) if fields.first() != Some(field) => return Ok(None),
+            Some(field) => match value.field(field) {
+                Some(value) => value,
+                None => return Ok(None),
+            },
+            // Bitfield registers carry their value in a single-field struct.
+            None => unwrap_bits_struct(value),
+        };
+        let value = match (self.element, value) {
+            (Some(element), TraceValue::Vector(elements)) => elements.get(element),
+            (Some(_), _) => None,
+            (None, value) => Some(value),
         };
         value
-            .strip_prefix("(_ vec ")
-            .and_then(|body| body.strip_suffix(')'))
-            .filter(|body| !body.contains('('))
-            .and_then(|body| body.split_whitespace().nth(element))
-            .map(|element| Some(element.to_string()))
-            .ok_or_else(|| format!("unrecognized {} vector value", self.register))
+            .and_then(TraceValue::term)
+            .map(|term| Some(term.clone()))
+            .ok_or_else(|| format!("unrecognized {} value", self.register))
     }
 
-    fn slice(&self, value: String) -> String {
+    fn slice(&self, value: Term) -> Term {
         match self.bits {
-            Some((high, low)) => format!("((_ extract {high} {low}) {value})"),
+            Some((high, low)) => extract(high, low, value),
             None => value,
         }
     }
@@ -692,11 +693,19 @@ struct Instruction {
     fixed_register_writes: Vec<(String, u32)>,
     uses_reservation: bool,
     pc_source_operands: Vec<usize>,
-    memory_accesses: Vec<MemoryAccessMetadata>,
+    memory_accesses: Vec<MemoryAccess>,
     /// The fixed bit maps this instruction encodes to, each with the guard over
     /// the operands that selects it. Every ISA but x86 has exactly one.
     shapes: Vec<Shape>,
-    flat_execute: Option<BTreeMap<String, String>>,
+    flat_execute: Option<BTreeMap<String, Term>>,
+}
+
+#[derive(Clone, Debug)]
+struct MemoryAccess {
+    kind: String,
+    bytes: u64,
+    /// The address over the flat state and the instruction's operands.
+    address: Term,
 }
 
 #[derive(Clone, Debug)]
@@ -752,8 +761,13 @@ struct Inventory {
 
 #[derive(Clone)]
 struct FlatModel {
-    fields: Vec<FlatStateFieldMetadata>,
+    /// Flat state fields and their sorts.
+    fields: Vec<(String, Sort)>,
     classes: HashMap<String, RegisterClassMetadata>,
+}
+
+fn smt_term(src: &str) -> anyhow::Result<Term> {
+    parse_term(src).map_err(|errors| anyhow!("invalid SMT term {src}: {}", errors.join("; ")))
 }
 
 fn parse_inventory(json: &str) -> anyhow::Result<Inventory> {
@@ -837,9 +851,27 @@ fn parse_inventory(json: &str) -> anyhow::Result<Inventory> {
                 fixed_register_writes: raw.fixed_register_writes,
                 uses_reservation: raw.uses_reservation,
                 pc_source_operands: raw.pc_source_operands,
-                memory_accesses: raw.memory_accesses,
+                memory_accesses: raw
+                    .memory_accesses
+                    .into_iter()
+                    .map(|access| {
+                        Ok(MemoryAccess {
+                            kind: access.kind,
+                            bytes: access.bytes,
+                            address: smt_term(&access.flat_address)?,
+                        })
+                    })
+                    .collect::<anyhow::Result<_>>()?,
                 shapes,
-                flat_execute: raw.flat_execute,
+                flat_execute: raw
+                    .flat_execute
+                    .map(|execute| {
+                        execute
+                            .into_iter()
+                            .map(|(field, expr)| Ok((field, smt_term(&expr)?)))
+                            .collect::<anyhow::Result<_>>()
+                    })
+                    .transpose()?,
             })
         })
         .collect::<anyhow::Result<Vec<_>>>()?;
@@ -847,7 +879,16 @@ fn parse_inventory(json: &str) -> anyhow::Result<Inventory> {
         isa: metadata.isa,
         dialect: metadata.dialect,
         flat: FlatModel {
-            fields: metadata.flat_state,
+            fields: metadata
+                .flat_state
+                .into_iter()
+                .map(|field| {
+                    let sort = parse_sort(&field.sort).map_err(|errors| {
+                        anyhow!("invalid SMT sort {}: {}", field.sort, errors.join("; "))
+                    })?;
+                    Ok((field.name, sort))
+                })
+                .collect::<anyhow::Result<_>>()?,
             classes: metadata
                 .register_classes
                 .into_iter()
@@ -1034,32 +1075,34 @@ fn reserved_bitmask(n: bool, imms: u64) -> bool {
     imms & levels == levels
 }
 
-fn operand_smt_literal(spec: &IsaSpec, kind: &OperandKind, value: u64) -> String {
-    match kind {
-        OperandKind::Reg { idx_width, .. } => format!("(_ bv{} {})", value, idx_width),
-        _ => format!("(_ bv{} {})", value, spec.xlen),
+/// `body` with the instruction's operands bound to one case's values.
+fn with_operands(spec: &IsaSpec, instr: &Instruction, case: &[u64], body: Term) -> Term {
+    if instr.operands.is_empty() {
+        return body;
     }
-}
-
-fn mem_addr_exprs(instr: &Instruction, case: &[u64], spec: &IsaSpec) -> Vec<String> {
     let bindings = instr
         .operands
         .iter()
         .zip(case)
         .map(|((name, kind), value)| {
-            format!("({name} {})", operand_smt_literal(spec, kind, *value))
+            let width = match kind {
+                OperandKind::Reg { idx_width, .. } => *idx_width,
+                _ => spec.xlen,
+            };
+            VarBinding {
+                var: Symbol(name.clone()),
+                term: bv(*value, width),
+            }
         })
-        .collect::<Vec<_>>();
+        .collect();
+    Term::Let(bindings, Box::new(body))
+}
+
+fn mem_addr_exprs(instr: &Instruction, case: &[u64], spec: &IsaSpec) -> Vec<Term> {
     instr
         .memory_accesses
         .iter()
-        .map(|access| {
-            if bindings.is_empty() {
-                access.flat_address.clone()
-            } else {
-                format!("(let ({}) {})", bindings.join(" "), access.flat_address)
-            }
-        })
+        .map(|access| with_operands(spec, instr, case, access.address.clone()))
         .collect()
 }
 
@@ -1421,19 +1464,26 @@ fn sail_traces(
 // ---------------------------------------------------------------------------
 
 /// Whether a memory event's kind is a plain data access. Old-interface
-/// models (RISC-V) use enum atoms (`|Read_plain|`); new-interface models
+/// models (RISC-V) use enum atoms (`Read_plain`); new-interface models
 /// (ARM) embed the whole request struct, whose `access_kind` must be an
 /// explicit access of plain variety. Acquire/release strength changes ordering,
 /// which a single-instruction state comparison does not model.
-fn is_plain_access(kind: &tir_verify::TraceValue) -> bool {
-    kind.smt.trim_matches('|').ends_with("_plain") || kind.smt.contains("|AV_plain|")
+fn is_plain_access(kind: &TraceValue) -> bool {
+    let is_symbol = |value: Option<&TraceValue>, test: &dyn Fn(&str) -> bool| matches!(value.and_then(TraceValue::term), Some(Term::Ident(id)) if test(&id.identifier().symbol.0));
+    match kind.field("access_kind") {
+        Some(TraceValue::Ctor(_, access)) => {
+            is_symbol(access.field("variety"), &|name| name == "AV_plain")
+        }
+        Some(_) => false,
+        None => is_symbol(Some(kind), &|name| name.ends_with("_plain")),
+    }
 }
 
-/// The payload of a single-field `(_ struct (|bits| value))` literal, as
-/// written for Sail bitfield registers; anything else is returned as is.
-fn unwrap_bits_struct(value: &tir_verify::TraceValue) -> &tir_verify::TraceValue {
-    match value.fields.get("bits") {
-        Some(bits) if value.fields.len() == 1 => bits,
+/// The payload of a single-field `bits` struct, as written for Sail bitfield
+/// registers; anything else is returned as is.
+fn unwrap_bits_struct(value: &TraceValue) -> &TraceValue {
+    match value {
+        TraceValue::Struct(fields) if fields.len() == 1 => fields.get("bits").unwrap_or(value),
         _ => value,
     }
 }
@@ -1441,27 +1491,27 @@ fn unwrap_bits_struct(value: &tir_verify::TraceValue) -> &tir_verify::TraceValue
 /// One memory access event: `value` is the read result variable or the
 /// written data expression.
 struct MemAccess {
-    value: String,
-    address: String,
+    value: Term,
+    address: Term,
     bytes: u32,
 }
 
 #[derive(Default)]
 struct TraceInfo {
     /// Initial state the model read, as `(state, Sail value)`.
-    reads: Vec<(State, String)>,
+    reads: Vec<(State, Term)>,
     /// Final value per written state (last write wins).
-    writes: HashMap<State, String>,
+    writes: HashMap<State, Term>,
     /// Plain memory reads, related to the initial TMDL memory array.
     mem_reads: Vec<MemAccess>,
     /// Plain memory writes in order, folded into the expected final array.
     mem_writes: Vec<MemAccess>,
-    /// Verbatim `(declare-const v Sort)` lines.
-    declares: Vec<String>,
-    inputs: std::collections::HashSet<String>,
+    /// Declared variables and their sorts.
+    declares: Vec<(String, Sort)>,
+    inputs: HashSet<String>,
     /// Ordered `define-const` bindings, replayed as a `let` chain.
-    defines: Vec<(String, String)>,
-    asserts: Vec<String>,
+    defines: Vec<(String, Term)>,
+    asserts: Vec<Term>,
     /// Why this path cannot be checked against the TMDL state (trap paths,
     /// CSR accesses, ...), if so.
     excluded: Option<String>,
@@ -1479,10 +1529,10 @@ fn exclude(info: &mut TraceInfo, reason: String) {
 fn analyze_register_read(
     spec: &IsaSpec,
     info: &mut TraceInfo,
-    defined_vars: &std::collections::HashSet<String>,
+    defined_vars: &HashSet<String>,
     name: &str,
     fields: &[String],
-    value: &tir_verify::TraceValue,
+    value: &TraceValue,
 ) {
     let name = name.trim_matches('|');
     if spec.ignore.iter().any(|ignored| ignored == name) {
@@ -1495,20 +1545,21 @@ fn analyze_register_read(
         );
         return;
     }
+    // A read returning a `define-const` variable reads back a value the model
+    // computed, not initial state.
+    let is_defined = |read: &Term| matches!(read, Term::Ident(id) if defined_vars.contains(&id.identifier().symbol.0));
     let mut mapped = false;
     for row in spec.map.iter().filter(|row| row.register == name) {
         mapped = true;
         match row.select(fields, value) {
-            Ok(Some(read))
-                if !info.writes.contains_key(&row.state) && !defined_vars.contains(&read) =>
-            {
+            Ok(Some(read)) if !info.writes.contains_key(&row.state) && !is_defined(&read) => {
                 info.reads.push((row.state.clone(), row.slice(read)));
             }
             Ok(_) => {}
             Err(reason) => exclude(info, reason),
         }
     }
-    if !mapped && value.symbolic {
+    if !mapped && value.is_symbolic() {
         exclude(info, format!("reads unmapped register {name}"));
     }
 }
@@ -1518,7 +1569,7 @@ fn analyze_register_write(
     info: &mut TraceInfo,
     name: &str,
     fields: &[String],
-    value: &tir_verify::TraceValue,
+    value: &TraceValue,
 ) {
     let name = name.trim_matches('|');
     if spec.ignore.iter().any(|ignored| ignored == name) {
@@ -1544,25 +1595,29 @@ fn analyze_memory_access(
     spec: &IsaSpec,
     info: &mut TraceInfo,
     is_read: bool,
-    kind: &tir_verify::TraceValue,
-    address: &tir_verify::TraceValue,
-    value: &tir_verify::TraceValue,
+    kind: &TraceValue,
+    address: &TraceValue,
+    value: &TraceValue,
     bytes: u32,
 ) {
     if !is_plain_access(kind) {
-        exclude(info, format!("non-plain memory access {}", kind.smt));
+        exclude(info, format!("non-plain memory access {kind}"));
         return;
     }
     if !matches!(bytes, 1 | 2 | 4 | 8) {
         exclude(info, format!("unsupported access width {}", bytes));
         return;
     }
+    let (Some(value), Some(address)) = (value.term(), address.term()) else {
+        exclude(info, "memory access without a bit-vector value".to_string());
+        return;
+    };
     let access = MemAccess {
-        value: value.smt.clone(),
+        value: value.clone(),
         address: if spec.xlen == 32 {
-            format!("((_ extract 31 0) {})", address.smt)
+            extract(31, 0, address.clone())
         } else {
-            address.smt.clone()
+            address.clone()
         },
         bytes,
     };
@@ -1577,22 +1632,12 @@ fn analyze_memory_access(
     }
 }
 
-fn symbolic_variables(expression: &str) -> impl Iterator<Item = &str> {
-    expression
-        .split(|c: char| !c.is_ascii_alphanumeric())
-        .filter(|word| {
-            word.strip_prefix('v').is_some_and(|digits| {
-                !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit())
-            })
-        })
-}
-
 fn analyze_trace(spec: &IsaSpec, events: &[tir_verify::TraceEvent]) -> TraceInfo {
     let mut info = TraceInfo::default();
     // Variables bound by `define-const`: reads returning them are read-backs
     // of values the model computed (e.g. Sail writes `nextPC = PC + 4` and
     // reads it back later), not symbolic initial state.
-    let mut defined_vars = std::collections::HashSet::new();
+    let mut defined_vars = HashSet::new();
 
     for event in events {
         let input = match event {
@@ -1600,9 +1645,9 @@ fn analyze_trace(spec: &IsaSpec, events: &[tir_verify::TraceEvent]) -> TraceInfo
             | tir_verify::TraceEvent::ReadMemory { value, .. } => Some(value),
             _ => None,
         };
-        if let Some(input) = input {
+        for term in input.iter().flat_map(|input| input.terms()) {
             info.inputs
-                .extend(symbolic_variables(&input.smt).map(str::to_owned));
+                .extend(term.free_symbols().into_iter().map(str::to_owned));
         }
         match event {
             tir_verify::TraceEvent::ReadRegister {
@@ -1615,13 +1660,13 @@ fn analyze_trace(spec: &IsaSpec, events: &[tir_verify::TraceEvent]) -> TraceInfo
                 fields,
                 value,
             } => analyze_register_write(spec, &mut info, name, fields, value),
-            tir_verify::TraceEvent::Declare { declaration } => {
-                if declaration.contains("(_ BitVec ") || declaration.ends_with(" Bool)") {
-                    info.declares.push(declaration.clone());
+            tir_verify::TraceEvent::Declare { variable, sort } => {
+                if *sort == Sort::bool() || sort.id.symbol.0 == "BitVec" {
+                    info.declares.push((variable.clone(), sort.clone()));
                 } else {
                     exclude(
                         &mut info,
-                        format!("symbolic non-bitvector state: {declaration}"),
+                        format!("symbolic non-bitvector state: {variable} {sort}"),
                     );
                 }
             }
@@ -1657,12 +1702,12 @@ fn analyze_trace(spec: &IsaSpec, events: &[tir_verify::TraceEvent]) -> TraceInfo
     let definitions: HashMap<_, _> = info
         .defines
         .iter()
-        .map(|(name, value)| (name.as_str(), value.as_str()))
+        .map(|(name, value)| (name.as_str(), value))
         .collect();
     let mut pending: Vec<_> = info.inputs.iter().cloned().collect();
     while let Some(name) = pending.pop() {
         if let Some(expression) = definitions.get(name.as_str()) {
-            for dependency in symbolic_variables(expression) {
+            for dependency in expression.free_symbols() {
                 if info.inputs.insert(dependency.to_owned()) {
                     pending.push(dependency.to_owned());
                 }
@@ -1696,31 +1741,33 @@ fn normalize_x86_cmps_flags(trace: &mut TraceInfo, bytes: u32) -> anyhow::Result
             .iter()
             .rev()
             .map(|read| read.value.clone())
-            .reduce(|high, low| format!("(concat {high} {low})"))
+            .reduce(|high, low| Term::app("concat", vec![high, low]))
             .expect("CMPS has at least one byte")
     };
     let lhs = operand(0);
     let rhs = operand(bytes as usize);
-    let width = bytes * 8;
-    let diff = format!("(bvsub {lhs} {rhs})");
+    let high = bytes * 8 - 1;
+    let xor = |a: &Term, b: &Term| Term::app("bvxor", vec![a.clone(), b.clone()]);
+    let flag = |condition| Term::app("ite", vec![condition, bv(1, 1), bv(0, 1)]);
+    let diff = Term::app("bvsub", vec![lhs.clone(), rhs.clone()]);
     let parity = (0..8)
-        .map(|bit| format!("((_ extract {bit} {bit}) {diff})"))
-        .reduce(|a, b| format!("(bvxor {a} {b})"))
+        .map(|bit| extract(bit, bit, diff.clone()))
+        .reduce(|a, b| xor(&a, &b))
         .context("CMPS has at least one parity bit")?;
-    let high = width - 1;
     let flags = [
-        (0, format!("(ite (bvult {lhs} {rhs}) #b1 #b0)")),
-        (1, format!("(bvnot {parity})")),
-        (2, format!("(ite (= {lhs} {rhs}) #b1 #b0)")),
-        (3, format!("((_ extract {high} {high}) {diff})")),
+        (0, flag(Term::app("bvult", vec![lhs.clone(), rhs.clone()]))),
+        (1, Term::app("bvnot", vec![parity])),
+        (2, flag(eq(lhs.clone(), rhs.clone()))),
+        (3, extract(high, high, diff.clone())),
         (
             4,
-            format!("((_ extract {high} {high}) (bvand (bvxor {lhs} {rhs}) (bvxor {lhs} {diff})))"),
+            extract(
+                high,
+                high,
+                Term::app("bvand", vec![xor(&lhs, &rhs), xor(&lhs, &diff)]),
+            ),
         ),
-        (
-            5,
-            format!("((_ extract 4 4) (bvxor (bvxor {lhs} {rhs}) {diff}))"),
-        ),
+        (5, extract(4, 4, xor(&xor(&lhs, &rhs), &diff))),
     ];
     trace.writes.extend(flags.map(|(index, value)| {
         let flag = State::Slot {
@@ -1736,52 +1783,124 @@ fn normalize_x86_cmps_flags(trace: &mut TraceInfo, bytes: u32) -> anyhow::Result
 // Equivalence query construction
 // ---------------------------------------------------------------------------
 
-fn flat_read_register(model: &FlatModel, class: &str, state: &str, index: &str) -> String {
+fn bv(value: u64, width: u32) -> Term {
+    Term::bv(u128::from(value), width)
+}
+
+fn eq(lhs: Term, rhs: Term) -> Term {
+    Term::app("=", vec![lhs, rhs])
+}
+
+fn not(term: Term) -> Term {
+    Term::app("not", vec![term])
+}
+
+fn and(mut terms: Vec<Term>) -> Term {
+    match terms.len() {
+        0 => Term::bool(true),
+        1 => terms.pop().expect("one term"),
+        _ => Term::app("and", terms),
+    }
+}
+
+fn or(mut terms: Vec<Term>) -> Term {
+    match terms.len() {
+        0 => Term::bool(false),
+        1 => terms.pop().expect("one term"),
+        _ => Term::app("or", terms),
+    }
+}
+
+fn extract(high: u32, low: u32, value: Term) -> Term {
+    Term::indexed_app("extract", &[u128::from(high), u128::from(low)], vec![value])
+}
+
+fn select(array: Term, index: Term) -> Term {
+    Term::app("select", vec![array, index])
+}
+
+fn bvadd(lhs: Term, rhs: Term) -> Term {
+    Term::app("bvadd", vec![lhs, rhs])
+}
+
+fn assert(term: Term) -> SmtCommand {
+    SmtCommand::Assert(term)
+}
+
+/// The query text: `commands` under `logic`, with models enabled for the
+/// counterexample probes.
+fn script(logic: &str, commands: Vec<SmtCommand>) -> String {
+    let mut script = vec![
+        SmtCommand::SetLogic(Symbol(logic.into())),
+        SmtCommand::SetOption(Attribute {
+            keyword: Keyword("produce-models".into()),
+            value: Some(AttributeValue::Symbol(Symbol("true".into()))),
+        }),
+    ];
+    script.extend(commands);
+    Script(script).to_string()
+}
+
+fn flat_read_register(model: &FlatModel, class: &str, state: &str, index: Term) -> Term {
     let info = &model.classes[class];
-    let selected = format!("(select {state}_{} {index})", info.storage);
-    let value = if info.value_width < info.storage_width || info.bit_offset > 0 {
-        format!(
-            "((_ extract {} {}) {selected})",
-            info.bit_offset + info.value_width - 1,
-            info.bit_offset
-        )
+    let selected = select(
+        Term::ident(format!("{state}_{}", info.storage)),
+        index.clone(),
+    );
+    let (value_width, bit_offset) = (u32::from(info.value_width), u32::from(info.bit_offset));
+    let value = if info.value_width < info.storage_width || bit_offset > 0 {
+        extract(bit_offset + value_width - 1, bit_offset, selected)
     } else {
         selected
     };
     match info.zero_index {
-        Some(zero) => format!(
-            "(ite (= {index} (_ bv{zero} {})) (_ bv0 {}) {value})",
-            info.index_width, info.value_width
+        Some(zero) => Term::app(
+            "ite",
+            vec![
+                eq(index, bv(u64::from(zero), u32::from(info.index_width))),
+                bv(0, value_width),
+                value,
+            ],
         ),
         None => value,
     }
 }
 
-fn flat_read_memory(xlen: u32, bytes: u32, state: &str, address: &str) -> String {
+fn flat_read_memory(xlen: u32, bytes: u32, state: &str, address: &Term) -> Term {
     (0..bytes)
         .rev()
         .map(|offset| {
             let slot = if offset == 0 {
-                address.to_string()
+                address.clone()
             } else {
-                format!("(bvadd {address} (_ bv{offset} {xlen}))")
+                bvadd(address.clone(), bv(u64::from(offset), xlen))
             };
-            format!("(select {state}_mem {slot})")
+            select(Term::ident(format!("{state}_mem")), slot)
         })
-        .reduce(|high, low| format!("(concat {high} {low})"))
+        .reduce(|high, low| Term::app("concat", vec![high, low]))
         .expect("memory access has at least one byte")
 }
 
-/// Replay only the Sail definitions reached from this query body.
-fn with_trace_defines(trace: &TraceInfo, mut body: String) -> String {
-    let mut needed: HashSet<String> = symbolic_variables(&body).map(str::to_owned).collect();
+/// Replay only the Sail definitions reached from `body`. Also returns every
+/// symbol the result mentions.
+fn with_trace_defines(trace: &TraceInfo, mut body: Term) -> (Term, HashSet<String>) {
+    let mut mentioned: HashSet<String> =
+        body.free_symbols().into_iter().map(str::to_owned).collect();
+    let mut needed = mentioned.clone();
     for (var, expr) in trace.defines.iter().rev() {
         if needed.remove(var) {
-            needed.extend(symbolic_variables(expr).map(str::to_owned));
-            body = format!("(let (({} {}))\n{})", var, expr, body);
+            for symbol in expr.free_symbols() {
+                needed.insert(symbol.to_owned());
+                mentioned.insert(symbol.to_owned());
+            }
+            let binding = VarBinding {
+                var: Symbol(var.clone()),
+                term: expr.clone(),
+            };
+            body = Term::Let(vec![binding], Box::new(body));
         }
     }
-    body
+    (body, mentioned)
 }
 
 fn emit_state_transition(
@@ -1789,43 +1908,26 @@ fn emit_state_transition(
     model: &FlatModel,
     instr: &Instruction,
     case: &[u64],
-) -> String {
-    let mut q = String::from("(set-logic QF_AUFBV)\n(set-option :produce-models true)\n");
-    for field in &model.fields {
-        let _ = writeln!(q, "(declare-const st0_{} {})", field.name, field.sort);
-    }
-    q.push_str("(assert (not st0_resv))\n");
-    let bindings = instr
-        .operands
+) -> Vec<SmtCommand> {
+    let mut commands: Vec<SmtCommand> = model
+        .fields
         .iter()
-        .zip(case)
-        .map(|((name, kind), value)| {
-            format!("({name} {})", operand_smt_literal(spec, kind, *value))
-        })
-        .collect::<Vec<_>>();
+        .map(|(name, sort)| SmtCommand::DeclareConst(Symbol(format!("st0_{name}")), sort.clone()))
+        .collect();
+    commands.push(assert(not(Term::ident("st0_resv"))));
     let execute = instr
         .flat_execute
         .as_ref()
         .expect("supported instruction has flat execute metadata");
-    for field in &model.fields {
-        let expression = &execute[&field.name];
-        if bindings.is_empty() {
-            let _ = writeln!(
-                q,
-                "(define-fun st1_{} () {} {expression})",
-                field.name, field.sort
-            );
-        } else {
-            let _ = writeln!(
-                q,
-                "(define-fun st1_{} () {} (let ({}) {expression}))",
-                field.name,
-                field.sort,
-                bindings.join(" ")
-            );
-        }
+    for (name, sort) in &model.fields {
+        commands.push(SmtCommand::DefineFun(FunctionDef {
+            name: Symbol(format!("st1_{name}")),
+            params: vec![],
+            return_sort: sort.clone(),
+            body: with_operands(spec, instr, case, execute[name].clone()),
+        }));
     }
-    q
+    commands
 }
 
 /// Assumptions on the addresses this instance may form: PC alignment on a
@@ -1835,72 +1937,62 @@ fn emit_address_assumptions(
     model: &FlatModel,
     instr: &Instruction,
     case: &[u64],
-) -> String {
-    let mut q = String::new();
-    // A value is (low-half) canonical when bits 63..47 are all zero: a valid
-    // user x86-64 linear address that the model's 52-bit physical masking leaves
-    // unchanged. Non-canonical accesses/jumps `#GP`, which TMDL's flat model
-    // does not track.
-    let canonical = |v: &str| format!("(= ((_ extract 63 47) {v}) (_ bv0 17))");
+) -> Vec<SmtCommand> {
+    let mut commands = Vec::new();
+    let aligned = |value: Term| {
+        let alignment_bits = instr.width_bytes(case).trailing_zeros();
+        (alignment_bits > 0).then(|| {
+            assert(eq(
+                extract(alignment_bits - 1, 0, value),
+                bv(0, alignment_bits),
+            ))
+        })
+    };
 
     // Fixed-width ISAs align the PC to the concrete instruction width. x86
     // pins the PC to a concrete aligned value in its config instead.
     if spec.align_pc {
-        let alignment_bits = instr.width_bytes(case).trailing_zeros();
-        if alignment_bits > 0 {
-            let _ = writeln!(
-                q,
-                "(assert (= ((_ extract {} 0) st0_pc) (_ bv0 {})))",
-                alignment_bits - 1,
-                alignment_bits
-            );
-        }
+        commands.extend(aligned(Term::ident("st0_pc")));
     }
 
     if spec.canonical_addrs {
-        // Any address the branch target resolves to (an indirect jump register,
-        // a `ret`'s loaded return address, a `call` displacement) is assumed
-        // canonical, so the model's 48-bit-truncated PC equals TMDL's full one.
+        // A value is (low-half) canonical when bits 63..47 are all zero: a
+        // valid user x86-64 linear address that the model's 52-bit physical
+        // masking leaves unchanged. Non-canonical accesses/jumps `#GP`, which
+        // TMDL's flat model does not track. Any address the branch target
+        // resolves to (an indirect jump register, a `ret`'s loaded return
+        // address, a `call` displacement) is assumed canonical, so the model's
+        // 48-bit-truncated PC equals TMDL's full one.
         if instr.writes_pc {
-            let _ = writeln!(q, "(assert {})", canonical("st1_pc"));
+            commands.push(assert(eq(
+                extract(63, 47, Term::ident("st1_pc")),
+                bv(0, 17),
+            )));
         }
         // Each memory-access effective address is assumed to sit below 2^46 (a
         // stricter canonical form): the model's 48-bit sign-masking then leaves
         // it unchanged, and a multi-byte access cannot straddle the 2^47
         // canonical boundary (where the model sign-extends but TMDL's flat
         // 64-bit memory does not).
-        for addr in mem_addr_exprs(instr, case, spec) {
-            let _ = writeln!(q, "(assert (= ((_ extract 63 46) {addr}) (_ bv0 18)))");
+        for address in mem_addr_exprs(instr, case, spec) {
+            commands.push(assert(eq(extract(63, 46, address), bv(0, 18))));
         }
     } else {
         // Registers feeding an indirect jump obey the target instruction
         // alignment, so misaligned-fetch trap paths are vacuous.
-        let alignment_bits = instr.width_bytes(case).trailing_zeros();
         for &i in &instr.pc_source_operands {
             if let OperandKind::Reg { class, idx_width } = &instr.operands[i].1 {
-                let reg = flat_read_register(
-                    model,
-                    class,
-                    "st0",
-                    &format!("(_ bv{} {})", case[i], idx_width),
-                );
-                if alignment_bits > 0 {
-                    let _ = writeln!(
-                        q,
-                        "(assert (= ((_ extract {} 0) {reg}) (_ bv0 {})))",
-                        alignment_bits - 1,
-                        alignment_bits
-                    );
-                }
+                let reg = flat_read_register(model, class, "st0", bv(case[i], *idx_width));
+                commands.extend(aligned(reg));
             }
         }
     }
-    q
+    commands
 }
 
-fn read_slot(model: &FlatModel, class: &str, index: u64, state: &str) -> String {
-    let width = model.classes[class].index_width;
-    flat_read_register(model, class, state, &format!("(_ bv{index} {width})"))
+fn read_slot(model: &FlatModel, class: &str, index: u64, state: &str) -> Term {
+    let width = u32::from(model.classes[class].index_width);
+    flat_read_register(model, class, state, bv(index, width))
 }
 
 /// Pin the symbolic initial values the model read back to TMDL's initial state.
@@ -1910,26 +2002,25 @@ fn emit_trace_read_constraints(
     instr: &Instruction,
     case: &[u64],
     trace: &TraceInfo,
-) -> String {
-    let mut q = String::new();
-    for decl in &trace.declares {
-        q.push_str(decl);
-        q.push('\n');
-    }
+) -> Vec<SmtCommand> {
+    let mut commands: Vec<SmtCommand> = trace
+        .declares
+        .iter()
+        .map(|(name, sort)| SmtCommand::DeclareConst(Symbol(name.clone()), sort.clone()))
+        .collect();
     for (state, value) in &trace.reads {
         let initial = match state {
-            State::Pc => "st0_pc".to_string(),
-            State::NextPc => format!(
-                "(bvadd st0_pc (_ bv{} {}))",
-                instr.width_bytes(case),
-                spec.xlen
+            State::Pc => Term::ident("st0_pc"),
+            State::NextPc => bvadd(
+                Term::ident("st0_pc"),
+                bv(u64::from(instr.width_bytes(case)), spec.xlen),
             ),
             State::Slot { class, index } => read_slot(model, class, *index, "st0"),
-            State::Zero(width) => format!("(_ bv0 {width})"),
+            State::Zero(width) => bv(0, *width),
         };
-        let _ = writeln!(q, "(assert (= {value} {initial}))");
+        commands.push(assert(eq(value.clone(), initial)));
     }
-    q
+    commands
 }
 
 /// The reference x86 model gives a concrete CF for oversized narrow shifts.
@@ -1938,7 +2029,7 @@ fn x86_narrow_shift_count(
     model: &FlatModel,
     instr: &Instruction,
     case: &[u64],
-) -> Option<(u32, String)> {
+) -> Option<(u32, Term)> {
     let name = instr.name.as_str();
     if !["shl", "shr", "sal", "sar"]
         .iter()
@@ -1954,11 +2045,14 @@ fn x86_narrow_shift_count(
         return None;
     }
     let count = if name.contains("imm") {
-        format!("(_ bv{} 64)", case.get(1)? & 31)
+        bv(case.get(1)? & 31, 64)
     } else if name.contains("cl") {
-        format!(
-            "(bvand {} (_ bv31 64))",
-            flat_read_register(model, "gpr", "st0", "(_ bv1 4)")
+        Term::app(
+            "bvand",
+            vec![
+                flat_read_register(model, "gpr", "st0", bv(1, 4)),
+                bv(31, 64),
+            ],
         )
     } else {
         return None;
@@ -1971,25 +2065,23 @@ fn x86_carry_equality(
     instr: &Instruction,
     case: &[u64],
     trace: &TraceInfo,
-    tmdl: &str,
-    sail: &str,
-) -> Option<String> {
+    tmdl: &Term,
+    sail: &Term,
+) -> Option<Term> {
     if let Some((width, count)) = x86_narrow_shift_count(model, instr, case) {
-        let defined = format!("(bvult {count} (_ bv{width} 64))");
+        let defined = Term::app("bvult", vec![count, bv(u64::from(width), 64)]);
         if instr.name.starts_with("sar") {
             let OperandKind::Reg { class, idx_width } = &instr.operands[0].1 else {
                 unreachable!()
             };
-            let old = flat_read_register(
-                model,
-                class,
-                "st0",
-                &format!("(_ bv{} {idx_width})", case[0]),
-            );
-            let sign = format!("((_ extract {} {}) {old})", width - 1, width - 1);
-            return Some(format!("(= {tmdl} (ite {defined} {sail} {sign}))"));
+            let old = flat_read_register(model, class, "st0", bv(case[0], *idx_width));
+            let sign = extract(width - 1, width - 1, old);
+            return Some(eq(
+                tmdl.clone(),
+                Term::app("ite", vec![defined, sail.clone(), sign]),
+            ));
         }
-        return Some(format!("(or (not {defined}) (= {tmdl} {sail}))"));
+        return Some(or(vec![not(defined), eq(tmdl.clone(), sail.clone())]));
     }
 
     // The pinned model uses the result's low bit for ROR carry.
@@ -2006,7 +2098,7 @@ fn x86_carry_equality(
         index: *case.first()?,
     })?;
     let high = width - 1;
-    Some(format!("(= {tmdl} ((_ extract {high} {high}) {result}))"))
+    Some(eq(tmdl.clone(), extract(high, high, result.clone())))
 }
 
 fn query_prelude(
@@ -2015,13 +2107,11 @@ fn query_prelude(
     instr: &Instruction,
     case: &[u64],
     trace: &TraceInfo,
-) -> String {
-    let mut query = emit_state_transition(spec, model, instr, case);
-    query.push_str(&emit_address_assumptions(spec, model, instr, case));
-    query.push_str(&emit_trace_read_constraints(
-        spec, model, instr, case, trace,
-    ));
-    query
+) -> Vec<SmtCommand> {
+    let mut commands = emit_state_transition(spec, model, instr, case);
+    commands.extend(emit_address_assumptions(spec, model, instr, case));
+    commands.extend(emit_trace_read_constraints(spec, model, instr, case, trace));
+    commands
 }
 
 /// Prove the Sail and TMDL read addresses agree before replacing Sail's
@@ -2053,12 +2143,12 @@ fn normalize_x86_imul_read_addresses(
         .into_iter()
         .next()
         .expect("single memory access");
-    let addresses: Vec<String> = (0..access.bytes)
+    let addresses: Vec<Term> = (0..access.bytes)
         .map(|offset| {
             if offset == 0 {
                 base.clone()
             } else {
-                format!("(bvadd {base} (_ bv{offset} {}))", spec.xlen)
+                bvadd(base.clone(), bv(offset, spec.xlen))
             }
         })
         .collect();
@@ -2066,16 +2156,16 @@ fn normalize_x86_imul_read_addresses(
         .mem_reads
         .iter()
         .zip(&addresses)
-        .map(|(read, expected)| format!("(= {} {expected})", read.address))
-        .collect::<Vec<_>>()
-        .join(" ");
+        .map(|(read, expected)| eq(read.address.clone(), expected.clone()))
+        .collect();
     // A satisfiable query would expose a path where the addresses differ.
-    let path = trace.asserts.join(" ");
-    let mut query = query_prelude(spec, model, instr, case, trace);
-    let body = with_trace_defines(trace, format!("(and {path} (not (and {equalities})))"));
-    let _ = writeln!(query, "(assert {body})\n(check-sat)");
+    let mut commands = query_prelude(spec, model, instr, case, trace);
+    let mut body = trace.asserts.clone();
+    body.push(not(and(equalities)));
+    commands.push(assert(with_trace_defines(trace, and(body)).0));
+    commands.push(SmtCommand::CheckSat);
     let address_path = query_path.with_extension("addr.smt2");
-    std::fs::write(&address_path, query)?;
+    std::fs::write(&address_path, script("QF_AUFBV", commands))?;
     let output = run_solver(tools, &address_path)?;
     // A counterexample or solver unknown keeps the original Sail addresses.
     if solver_statuses(&output)
@@ -2095,10 +2185,10 @@ fn build_query(
     instr: &Instruction,
     case: &[u64],
     trace: &TraceInfo,
-    modeled_cause: Option<(&str, &[u64])>,
+    modeled_cause: Option<(&Term, &[u64])>,
 ) -> String {
     let xlen = spec.xlen;
-    let mut q = query_prelude(spec, model, instr, case, trace);
+    let mut commands = query_prelude(spec, model, instr, case, trace);
 
     let width_bytes = instr.width_bytes(case);
     // Every mapped slot, once: several Sail names may alias one slot (SP_ELx),
@@ -2127,7 +2217,7 @@ fn build_query(
         let carry = (class == "eflags" && *index == 0)
             .then(|| x86_carry_equality(model, instr, case, trace, &tmdl, &sail))
             .flatten();
-        final_eq.push(carry.unwrap_or_else(|| format!("(= {tmdl} {sail})")));
+        final_eq.push(carry.unwrap_or_else(|| eq(tmdl, sail)));
     }
     // Models with a delayed PC (RISC-V `nextPC`) announce taken branches
     // there; the ARM model writes the PC register directly.
@@ -2135,7 +2225,9 @@ fn build_query(
         .writes
         .get(&State::NextPc)
         .or_else(|| trace.writes.get(&State::Pc));
-    let mut asserts = trace.asserts.clone();
+    let mut path = trace.asserts.clone();
+    let st0_mem = || Term::ident("st0_mem");
+    let st1_mem = || Term::ident("st1_mem");
 
     // Memory: Sail's read values come from TMDL's initial array, and the
     // final array must equal the initial one with Sail's writes applied
@@ -2143,60 +2235,53 @@ fn build_query(
     // constraints and the equality can mention `define-const` variables, so
     // they live inside the let chain with the path asserts.
     for read in &trace.mem_reads {
-        asserts.push(format!(
-            "(= {} {})",
-            read.value,
-            flat_read_memory(xlen, read.bytes, "st0", &read.address)
+        path.push(eq(
+            read.value.clone(),
+            flat_read_memory(xlen, read.bytes, "st0", &read.address),
         ));
     }
     if trace.mem_writes.is_empty() {
         // Both sides reduce to the untouched initial array; congruence
         // closes this cheaply.
-        final_eq.push("(= st1_mem st0_mem)".to_string());
+        final_eq.push(eq(st1_mem(), st0_mem()));
     } else {
         // Whole-array equality of two store chains makes z3 enumerate index
         // aliasing through the (long) address define-chains — minutes per
         // query. Equisatisfiable select formulation instead: equality at
         // every written slot, plus a frame condition at one fresh index
         // (the extensionality witness), each a directed bitvector goal.
-        let mut sail_mem = "st0_mem".to_string();
+        let mut sail_mem = st0_mem();
         let mut slots = Vec::new();
         for write in &trace.mem_writes {
             for i in 0..write.bytes {
                 let slot = if i == 0 {
                     write.address.clone()
                 } else {
-                    format!("(bvadd {} (_ bv{} {}))", write.address, i, xlen)
+                    bvadd(write.address.clone(), bv(u64::from(i), xlen))
                 };
-                sail_mem = format!(
-                    "(store {} {} ((_ extract {} {}) {}))",
-                    sail_mem,
-                    slot,
-                    i * 8 + 7,
-                    i * 8,
-                    write.value
-                );
+                let byte = extract(i * 8 + 7, i * 8, write.value.clone());
+                sail_mem = Term::app("store", vec![sail_mem, slot.clone(), byte]);
                 slots.push(slot);
             }
         }
         for slot in &slots {
-            final_eq.push(format!(
-                "(= (select st1_mem {}) (select {} {}))",
-                slot, sail_mem, slot
+            final_eq.push(eq(
+                select(st1_mem(), slot.clone()),
+                select(sail_mem.clone(), slot.clone()),
             ));
         }
-        let _ = writeln!(q, "(declare-const mem_frame_idx (_ BitVec {xlen}))");
-        let written = slots
-            .iter()
-            .map(|slot| format!("(= mem_frame_idx {})", slot))
-            .collect::<Vec<_>>()
-            .join(" ");
-        final_eq.push(format!(
-            "(or {} (= (select st1_mem mem_frame_idx) (select st0_mem mem_frame_idx)))",
-            written
+        commands.push(SmtCommand::DeclareConst(
+            Symbol("mem_frame_idx".into()),
+            Sort::bitvec(xlen),
         ));
+        let frame = || Term::ident("mem_frame_idx");
+        let mut frame_eq: Vec<Term> = slots.into_iter().map(|slot| eq(frame(), slot)).collect();
+        frame_eq.push(eq(select(st1_mem(), frame()), select(st0_mem(), frame())));
+        final_eq.push(or(frame_eq));
     }
 
+    let st0_pc = || Term::ident("st0_pc");
+    let st1_pc = || Term::ident("st1_pc");
     match sail_pc {
         Some(target) => {
             // TMDL encodes fall-through as "PC untouched", while current Sail
@@ -2204,76 +2289,62 @@ fn build_query(
             // TMDL's effective next PC. A self-jump (target == initial PC) is
             // indistinguishable from fall-through under this convention;
             // assume it away rather than reporting a fake divergence.
-            asserts.push(format!("(distinct {} st0_pc)", target));
-            final_eq.push(format!(
-                "(= (ite (= st1_pc st0_pc) (bvadd st0_pc (_ bv{width_bytes} {xlen})) st1_pc) {})",
-                target
-            ));
+            path.push(Term::app("distinct", vec![target.clone(), st0_pc()]));
+            let next = bvadd(st0_pc(), bv(u64::from(width_bytes), xlen));
+            let effective = Term::app("ite", vec![eq(st1_pc(), st0_pc()), next, st1_pc()]);
+            final_eq.push(eq(effective, target.clone()));
         }
-        None => final_eq.push("(= st1_pc st0_pc)".to_string()),
+        None => final_eq.push(eq(st1_pc(), st0_pc())),
     }
 
-    let path = if asserts.is_empty() {
-        "true".to_string()
-    } else {
-        asserts.join(" ")
-    };
-    let with_defines = |body| with_trace_defines(trace, body);
+    let with_defines = |body| with_trace_defines(trace, body).0;
     let modeled = modeled_cause.map(|(cause, causes)| {
-        format!(
-            "(or {})",
-            causes
-                .iter()
-                .map(|c| format!("(= {} (_ bv{} {}))", cause, c, xlen))
-                .collect::<Vec<_>>()
-                .join(" ")
-        )
+        or(causes
+            .iter()
+            .map(|c| eq(cause.clone(), bv(*c, xlen)))
+            .collect())
     });
     if let Some(modeled) = &modeled {
-        q.push_str("(push 1)\n");
-        let probe = with_defines(format!("(and {path} (not {modeled}))"));
-        let _ = writeln!(q, "(assert {probe})");
-        q.push_str("(check-sat)\n(pop 1)\n");
+        let probe = with_defines(and([path.clone(), vec![not(modeled.clone())]].concat()));
+        commands.extend([
+            SmtCommand::Push(1),
+            assert(probe),
+            SmtCommand::CheckSat,
+            SmtCommand::Pop(1),
+        ]);
     }
-    let cause_constraint = modeled.as_deref().unwrap_or("true");
-    let reachable = with_defines(format!("(and {path} {cause_constraint})"));
+    path.extend(modeled);
+    let reachable = with_defines(and(path.clone()));
     // An unsat equivalence query proves nothing when the path is unreachable
     // under the assumptions above, so the path must be shown reachable first.
-    let _ = writeln!(q, "(push 1)\n(assert {reachable})\n(check-sat)\n(pop 1)");
-    let agrees = with_defines(format!(
-        "(and {path} {cause_constraint} {})",
-        final_eq.join("\n  ")
-    ));
-    let compared = with_defines(format!("(and {})", final_eq.join(" ")));
-    let used: HashSet<_> = symbolic_variables(&compared).collect();
-    let choices = trace
+    commands.extend([
+        SmtCommand::Push(1),
+        assert(reachable.clone()),
+        SmtCommand::CheckSat,
+        SmtCommand::Pop(1),
+    ]);
+    let (_, used) = with_trace_defines(trace, and(final_eq.clone()));
+    let choices: Vec<SortedVar> = trace
         .declares
         .iter()
-        .filter_map(|declaration| {
-            let binding = declaration
-                .strip_prefix("(declare-const ")?
-                .strip_suffix(')')?;
-            let (name, _) = binding.split_once(' ')?;
-            (used.contains(name) && !trace.inputs.contains(name)).then(|| format!("({binding})"))
+        .filter(|(name, _)| used.contains(name) && !trace.inputs.contains(name))
+        .map(|(name, sort)| SortedVar {
+            var: Symbol(name.clone()),
+            sort: sort.clone(),
         })
-        .collect::<Vec<_>>();
-    let body = if choices.is_empty() {
-        with_defines(format!(
-            "(and {path} {cause_constraint} (not (and {})))",
-            final_eq.join("\n  ")
-        ))
+        .collect();
+    let (logic, body) = if choices.is_empty() {
+        let body = and([path, vec![not(and(final_eq))]].concat());
+        ("QF_AUFBV", with_defines(body))
     } else {
-        q = q.replacen("(set-logic QF_AUFBV)", "(set-logic AUFBV)", 1);
-        format!(
-            "(and {reachable} (not (exists ({}) {agrees})))",
-            choices.join(" ")
-        )
+        let agrees = with_defines(and([path, final_eq].concat()));
+        let disagrees = not(Term::Exists(choices, Box::new(agrees)));
+        ("AUFBV", and(vec![reachable, disagrees]))
     };
-    let _ = writeln!(q, "(assert {})", body);
-    q.push_str("(check-sat)\n");
+    commands.extend([assert(body), SmtCommand::CheckSat]);
 
     // Counterexample probes, only evaluated on `sat`.
-    let mut probes: Vec<String> = vec!["st0_pc".into(), "st1_pc".into()];
+    let mut probes = vec![st0_pc(), st1_pc()];
     for row in &spec.map {
         if let State::Slot { class, index } = &row.state {
             if class == "gpr" {
@@ -2281,8 +2352,8 @@ fn build_query(
             }
         }
     }
-    let _ = writeln!(q, "(get-value ({}))", probes.join(" "));
-    q
+    commands.push(SmtCommand::GetValue(probes));
+    script(logic, commands)
 }
 
 // ---------------------------------------------------------------------------
@@ -2477,13 +2548,13 @@ fn verify_instruction(
         .filter(|execute| {
             execute
                 .iter()
-                .any(|(field, expr)| *expr != format!("st0_{field}"))
+                .any(|(field, expr)| *expr != Term::ident(format!("st0_{field}")))
         })
         .map(|execute| Instruction {
             flat_execute: Some(
                 execute
                     .keys()
-                    .map(|f| (f.clone(), format!("st0_{f}")))
+                    .map(|f| (f.clone(), Term::ident(format!("st0_{f}"))))
                     .collect(),
             ),
             ..instr.clone()
@@ -2570,7 +2641,7 @@ fn verify_instruction(
                 let row = spec.map.iter().find(|row| row.register == trap.register)?;
                 Some((info.writes.get(&row.state)?, trap.causes.as_slice()))
             });
-            let cause = written_cause.map(|(cause, causes)| (cause.as_str(), causes));
+            let cause = written_cause;
             let query = build_query(spec, model, instr, case, &info, cause);
             std::fs::write(&query_path, &query)?;
             let output = run_solver(tools, &query_path)?;
@@ -2696,21 +2767,26 @@ fn prove_roundtrip(
     model: &Path,
     instr: &Instruction,
 ) -> anyhow::Result<bool> {
-    let mut query = std::fs::read_to_string(model)?;
+    let mut commands = Vec::new();
     let mut args = Vec::new();
     for (name, kind) in &instr.operands {
         let width = match kind {
             OperandKind::Reg { idx_width, .. } => *idx_width,
             _ => spec.xlen,
         };
-        let _ = writeln!(query, "(declare-const rt_{name} (_ BitVec {width}))");
-        args.push(format!("rt_{name}"));
+        commands.push(SmtCommand::DeclareConst(
+            Symbol(format!("rt_{name}")),
+            Sort::bitvec(width),
+        ));
+        args.push(Term::ident(format!("rt_{name}")));
     }
+    let function = format!("roundtrip_{}", instr.name);
     let call = match args.is_empty() {
-        true => format!("roundtrip_{}", instr.name),
-        false => format!("(roundtrip_{} {})", instr.name, args.join(" ")),
+        true => Term::ident(function),
+        false => Term::app(&function, args),
     };
-    let _ = writeln!(query, "(assert (not {call}))\n(check-sat)");
+    commands.extend([assert(not(call)), SmtCommand::CheckSat]);
+    let query = std::fs::read_to_string(model)? + &Script(commands).to_string();
     let path = out_dir
         .join("queries")
         .join(format!("{}_roundtrip.smt2", instr.name));
@@ -2862,7 +2938,7 @@ mod tests {
         assert_eq!(inventory.dialect, "test");
         assert_eq!(instruction.write_classes, ["gpr"]);
         assert_eq!(
-            instruction.memory_accesses[0].flat_address,
+            instruction.memory_accesses[0].address.to_string(),
             "(select st0_gpr rd)"
         );
         let cases = [vec![5, 0]];
@@ -2940,10 +3016,9 @@ mod tests {
             &[tir_verify::TraceEvent::ReadRegister {
                 name: "rflags".into(),
                 fields: vec![],
-                value: tir_verify::TraceValue {
-                    smt: "v0".into(),
+                value: TraceValue::Term {
+                    term: Term::ident("v0"),
                     symbolic: true,
-                    fields: HashMap::new(),
                 },
             }],
         );

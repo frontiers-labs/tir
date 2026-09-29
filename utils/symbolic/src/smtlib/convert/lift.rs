@@ -38,12 +38,12 @@ pub fn lift_script<V, A>(
     for sid in ids {
         let info = &symbols[sid as usize];
         let sort = if info.is_bool {
-            bool_sort()
+            Sort::bool()
         } else {
             let width = info
                 .width
                 .ok_or_else(|| ConvertError::UnknownWidth(format!("symbol `{}`", info.name)))?;
-            bitvec_sort(width)
+            Sort::bitvec(width)
         };
         commands.push(Command::DeclareConst(Symbol(info.name.clone()), sort));
     }
@@ -138,7 +138,7 @@ impl<'a, V, A> Lifter<'a, V, A> {
                     .get(sid as usize)
                     .ok_or_else(|| ConvertError::UnknownSymbol(format!("symbol id {sid}")))?;
                 self.used.insert(sid);
-                Ok((ident(&info.name), info.is_bool))
+                Ok((Term::ident(info.name.clone()), info.is_bool))
             }
             Constant => self.lift_constant(id, bool_ctx),
 
@@ -187,9 +187,9 @@ impl<'a, V, A> Lifter<'a, V, A> {
             _ => return Err(ConvertError::Unsupported("non-integer constant".into())),
         };
         if bool_ctx && width == 1 {
-            Ok((bool_const(value != 0), true))
+            Ok((Term::bool(value != 0), true))
         } else {
-            Ok((bv_const(value, width), false))
+            Ok((Term::bv(u128::from(value), width), false))
         }
     }
 
@@ -205,7 +205,7 @@ impl<'a, V, A> Lifter<'a, V, A> {
         for child in self.children(id) {
             terms.push(self.lift(child, false)?.0);
         }
-        Ok((app(op, terms), result_bool))
+        Ok((Term::app(op, terms), result_bool))
     }
 
     fn bv_app(&mut self, op: &str, id: NodeId) -> Result<(Term, bool), ConvertError> {
@@ -224,7 +224,7 @@ impl<'a, V, A> Lifter<'a, V, A> {
             terms.push(self.lift(child, node_bool)?.0);
         }
         let op = if node_bool { bool_op } else { bv_op };
-        Ok((app(op, terms), node_bool))
+        Ok((Term::app(op, terms), node_bool))
     }
 
     fn logical_unary(
@@ -237,7 +237,7 @@ impl<'a, V, A> Lifter<'a, V, A> {
         let child = first_child(self.graph, id)?;
         let term = self.lift(child, node_bool)?.0;
         let op = if node_bool { bool_op } else { bv_op };
-        Ok((app(op, vec![term]), node_bool))
+        Ok((Term::app(op, vec![term]), node_bool))
     }
 
     /// `=` / `(not (= ..))`; operand context is boolean iff any operand is.
@@ -248,8 +248,12 @@ impl<'a, V, A> Lifter<'a, V, A> {
         for child in children {
             terms.push(self.lift(child, operand_ctx)?.0);
         }
-        let eq = app("=", terms);
-        let term = if negate { app("not", vec![eq]) } else { eq };
+        let eq = Term::app("=", terms);
+        let term = if negate {
+            Term::app("not", vec![eq])
+        } else {
+            eq
+        };
         Ok((term, true))
     }
 
@@ -267,7 +271,7 @@ impl<'a, V, A> Lifter<'a, V, A> {
         let cond = self.lift(children[0], true)?.0;
         let then = self.lift(children[1], node_bool)?.0;
         let other = self.lift(children[2], node_bool)?.0;
-        Ok((app("ite", vec![cond, then, other]), node_bool))
+        Ok((Term::app("ite", vec![cond, then, other]), node_bool))
     }
 
     fn extract(&mut self, id: NodeId) -> Result<(Term, bool), ConvertError> {
@@ -281,11 +285,7 @@ impl<'a, V, A> Lifter<'a, V, A> {
         let low = self.const_value(children[2])?;
         let value = self.lift(children[0], false)?.0;
         Ok((
-            indexed_app(
-                "extract",
-                vec![Index::Numeral(high as u128), Index::Numeral(low as u128)],
-                vec![value],
-            ),
+            Term::indexed_app("extract", &[u128::from(high), u128::from(low)], vec![value]),
             false,
         ))
     }
@@ -307,7 +307,7 @@ impl<'a, V, A> Lifter<'a, V, A> {
         })?;
         let value = self.lift(children[0], false)?.0;
         Ok((
-            indexed_app(op, vec![Index::Numeral(added as u128)], vec![value]),
+            Term::indexed_app(op, &[u128::from(added)], vec![value]),
             false,
         ))
     }
@@ -321,44 +321,4 @@ fn first_child<V, A>(
         .children(id)
         .next()
         .ok_or_else(|| ConvertError::Unsupported("unary node without an operand".into()))
-}
-
-fn ident(name: &str) -> Term {
-    Term::Ident(QualIdentifier::Plain(Identifier::simple(name)))
-}
-
-fn bool_const(value: bool) -> Term {
-    ident(if value { "true" } else { "false" })
-}
-
-fn bv_const(value: u64, width: u32) -> Term {
-    Term::Ident(QualIdentifier::Plain(Identifier {
-        symbol: Symbol(format!("bv{value}")),
-        indices: vec![Index::Numeral(width as u128)],
-    }))
-}
-
-fn app(op: &str, args: Vec<Term>) -> Term {
-    Term::App(QualIdentifier::Plain(Identifier::simple(op)), args)
-}
-
-fn indexed_app(op: &str, indices: Vec<Index>, args: Vec<Term>) -> Term {
-    Term::App(
-        QualIdentifier::Plain(Identifier {
-            symbol: Symbol(op.into()),
-            indices,
-        }),
-        args,
-    )
-}
-
-fn bitvec_sort(width: u32) -> Sort {
-    Sort::simple(Identifier {
-        symbol: Symbol("BitVec".into()),
-        indices: vec![Index::Numeral(width as u128)],
-    })
-}
-
-fn bool_sort() -> Sort {
-    Sort::simple(Identifier::simple("Bool"))
 }

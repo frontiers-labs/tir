@@ -389,6 +389,15 @@ pub fn parse_script(src: &str) -> Result<Script, Vec<String>> {
         .map_err(|errs| errs.into_iter().map(|e| e.to_string()).collect())
 }
 
+/// Parse a single sort, such as `(Array (_ BitVec 5) (_ BitVec 64))`.
+pub fn parse_sort(src: &str) -> Result<Sort, Vec<String>> {
+    ws().ignore_then(sort_p())
+        .then_ignore(end())
+        .parse(src)
+        .into_result()
+        .map_err(|errs| errs.into_iter().map(|e| e.to_string()).collect())
+}
+
 /// Parse a single term (no surrounding script), for tests and term-level use.
 pub fn parse_term(src: &str) -> Result<Term, Vec<String>> {
     ws().ignore_then(term_p())

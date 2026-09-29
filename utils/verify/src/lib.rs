@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -10,7 +10,7 @@ use isla_lib::config::ISAConfig;
 use isla_lib::error::ExecError;
 use isla_lib::executor::{self, LocalFrame, StopConditions, TaskId, TaskState};
 use isla_lib::init::{initialize_architecture, Initialized};
-use isla_lib::ir::{AssertionMode, Def, IRTypeInfo, Instr, Loc, Name, Symtab, Val};
+use isla_lib::ir::{AssertionMode, BitsSegment, Def, IRTypeInfo, Instr, Loc, Name, Symtab, Val};
 use isla_lib::ir_lexer::new_ir_lexer;
 use isla_lib::ir_parser;
 use isla_lib::memory::Memory;
@@ -20,28 +20,109 @@ use isla_lib::value_parser;
 use isla_lib::zencode;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use tir_symbolic::smtlib::ast::{Sort, Term};
 
 mod constants;
 mod smt_format;
 
+/// A model value. Isla values outside SMT (structs, vectors, union
+/// constructors) keep their shape so callers can pick the part they need.
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct TraceValue {
-    pub smt: String,
-    pub symbolic: bool,
-    pub fields: HashMap<String, TraceValue>,
+pub enum TraceValue {
+    /// Bits, booleans, enum members and symbolic variables.
+    Term {
+        #[serde(with = "text")]
+        term: Term,
+        symbolic: bool,
+    },
+    Struct(BTreeMap<String, TraceValue>),
+    Vector(Vec<TraceValue>),
+    Ctor(String, Box<TraceValue>),
+    /// Values no SMT term names (unit, strings, lists, references), as Isla
+    /// prints them.
+    Other {
+        text: String,
+        symbolic: bool,
+    },
+}
+
+impl TraceValue {
+    pub fn is_symbolic(&self) -> bool {
+        match self {
+            TraceValue::Term { symbolic, .. } | TraceValue::Other { symbolic, .. } => *symbolic,
+            TraceValue::Struct(fields) => fields.values().any(TraceValue::is_symbolic),
+            TraceValue::Vector(elements) => elements.iter().any(TraceValue::is_symbolic),
+            TraceValue::Ctor(_, value) => value.is_symbolic(),
+        }
+    }
+
+    pub fn term(&self) -> Option<&Term> {
+        match self {
+            TraceValue::Term { term, .. } => Some(term),
+            _ => None,
+        }
+    }
+
+    pub fn field(&self, name: &str) -> Option<&TraceValue> {
+        match self {
+            TraceValue::Struct(fields) => fields.get(name),
+            _ => None,
+        }
+    }
+
+    /// Every SMT term this value holds.
+    pub fn terms(&self) -> Vec<&Term> {
+        match self {
+            TraceValue::Term { term, .. } => vec![term],
+            TraceValue::Struct(fields) => fields.values().flat_map(TraceValue::terms).collect(),
+            TraceValue::Vector(elements) => elements.iter().flat_map(TraceValue::terms).collect(),
+            TraceValue::Ctor(_, value) => value.terms(),
+            TraceValue::Other { .. } => Vec::new(),
+        }
+    }
+}
+
+impl std::fmt::Display for TraceValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TraceValue::Term { term, .. } => write!(f, "{term}"),
+            TraceValue::Struct(fields) => {
+                f.write_str("{")?;
+                for (index, (name, value)) in fields.iter().enumerate() {
+                    let separator = if index == 0 { "" } else { ", " };
+                    write!(f, "{separator}{name}: {value}")?;
+                }
+                f.write_str("}")
+            }
+            TraceValue::Vector(elements) => {
+                f.write_str("[")?;
+                for (index, element) in elements.iter().enumerate() {
+                    let separator = if index == 0 { "" } else { ", " };
+                    write!(f, "{separator}{element}")?;
+                }
+                f.write_str("]")
+            }
+            TraceValue::Ctor(name, value) => write!(f, "{name}({value})"),
+            TraceValue::Other { text, .. } => f.write_str(text),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub enum TraceEvent {
     Declare {
-        declaration: String,
+        variable: String,
+        #[serde(with = "text")]
+        sort: Sort,
     },
     Define {
         variable: String,
-        expression: String,
+        #[serde(with = "text")]
+        expression: Term,
     },
     Assume {
-        expression: String,
+        #[serde(with = "text")]
+        expression: Term,
     },
     ReadRegister {
         name: String,
@@ -65,6 +146,45 @@ pub enum TraceEvent {
         value: TraceValue,
         bytes: u32,
     },
+}
+
+/// Terms and sorts are cached as SMT-LIB text.
+mod text {
+    use std::fmt::Display;
+
+    use serde::{Deserialize, Deserializer, Serializer};
+    use tir_symbolic::smtlib::ast::{Sort, Term};
+    use tir_symbolic::smtlib::parser::{parse_sort, parse_term};
+
+    pub trait Parse: Sized {
+        fn parse(src: &str) -> Result<Self, Vec<String>>;
+    }
+
+    impl Parse for Term {
+        fn parse(src: &str) -> Result<Self, Vec<String>> {
+            parse_term(src)
+        }
+    }
+
+    impl Parse for Sort {
+        fn parse(src: &str) -> Result<Self, Vec<String>> {
+            parse_sort(src)
+        }
+    }
+
+    pub fn serialize<T: Display, S: Serializer>(
+        value: &T,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(value)
+    }
+
+    pub fn deserialize<'de, T: Parse, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<T, D::Error> {
+        let src = String::deserialize(deserializer)?;
+        T::parse(&src).map_err(|errors| serde::de::Error::custom(errors.join("; ")))
+    }
 }
 
 pub struct Verifier {
@@ -154,7 +274,7 @@ impl Verifier {
         let mut hasher = Sha256::new();
         let mut isa_config = ISAConfig::from_file(&mut hasher, config, None, &symtab, &type_info)
             .map_err(|error| anyhow!("Isla config error: {error}"))?;
-        hasher.input(b"tir-sail-traces-v2\0");
+        hasher.input(b"tir-sail-traces-v3\0");
         hasher.input(source.as_bytes());
         hasher.input(function.as_bytes());
         hasher.input([u8::from(simplify)]);
@@ -333,25 +453,54 @@ fn value(
     value: &Val<B129>,
     shared: &isla_lib::ir::SharedState<'_, B129>,
 ) -> anyhow::Result<TraceValue> {
-    let mut smt = Vec::new();
-    value.write(&mut smt, shared)?;
-    let fields = match value {
-        Val::Struct(fields) => fields
-            .iter()
-            .map(|(name, value)| {
-                Ok((
-                    zencode::decode(shared.symtab.to_str(*name)),
-                    self::value(value, shared)?,
-                ))
-            })
-            .collect::<anyhow::Result<HashMap<_, _>>>()?,
-        _ => HashMap::new(),
-    };
-    Ok(TraceValue {
-        smt: String::from_utf8(smt)?,
-        symbolic: value.is_symbolic(),
-        fields,
-    })
+    let symbolic = value.is_symbolic();
+    let term = |term| Ok(TraceValue::Term { term, symbolic });
+    let name = |name: Name| zencode::decode(shared.symtab.to_str(name));
+    match value {
+        Val::Symbolic(variable) => term(Term::ident(smt_format::var(*variable))),
+        Val::Bool(bit) => term(Term::bool(*bit)),
+        Val::Bits(bits) => term(smt_format::bits_literal(&bits.to_string())?),
+        Val::I64(n) => term(Term::bv(u128::from(*n as u64), 64)),
+        Val::I128(n) => term(Term::bv(*n as u128, 128)),
+        Val::MixedBits(segments) => {
+            let segments = segments
+                .iter()
+                .map(|segment| match segment {
+                    BitsSegment::Symbolic(variable) => Ok(Term::ident(smt_format::var(*variable))),
+                    BitsSegment::Concrete(bits) => smt_format::bits_literal(&bits.to_string()),
+                })
+                .collect::<anyhow::Result<Vec<_>>>()?;
+            term(Term::app("concat", segments))
+        }
+        Val::Enum(member) => {
+            let members = shared
+                .type_info
+                .enums
+                .get(&member.enum_id.to_name())
+                .ok_or_else(|| anyhow!("missing Isla enum"))?;
+            term(Term::ident(name(members[member.member])))
+        }
+        Val::Struct(fields) => Ok(TraceValue::Struct(
+            fields
+                .iter()
+                .map(|(field, value)| Ok((name(*field), self::value(value, shared)?)))
+                .collect::<anyhow::Result<_>>()?,
+        )),
+        Val::Vector(elements) => Ok(TraceValue::Vector(
+            elements
+                .iter()
+                .map(|element| self::value(element, shared))
+                .collect::<anyhow::Result<_>>()?,
+        )),
+        Val::Ctor(ctor, value) => Ok(TraceValue::Ctor(
+            zencode::decode(shared.symtab.to_str_demangled(*ctor)),
+            Box::new(self::value(value, shared)?),
+        )),
+        _ => Ok(TraceValue::Other {
+            text: value.to_string(shared),
+            symbolic,
+        }),
+    }
 }
 
 fn register(
@@ -379,35 +528,21 @@ fn normalize_event(
     use isla_lib::smt::smtlib::Def as SmtDef;
     Ok(match event {
         Event::Smt(SmtDef::DeclareConst(variable, ty), _, _) => Some(TraceEvent::Declare {
-            declaration: format!(
-                "(declare-const v{variable} {})",
-                smt_format::ty(&ty, &shared.symtab)?
-            ),
+            variable: smt_format::var(variable),
+            sort: smt_format::sort(&ty, &shared.symtab),
         }),
-        Event::Smt(SmtDef::DeclareFun(variable, args, result), _, _) => {
-            let args = args
-                .iter()
-                .map(|ty| smt_format::ty(ty, &shared.symtab))
-                .collect::<Result<Vec<_>, _>>()?
-                .join(" ");
-            Some(TraceEvent::Declare {
-                declaration: format!(
-                    "(declare-fun v{variable} ({args}) {})",
-                    smt_format::ty(&result, &shared.symtab)?
-                ),
-            })
+        Event::Smt(SmtDef::DeclareFun(..), _, _) => {
+            anyhow::bail!("Isla trace declares an uninterpreted function")
         }
         Event::Smt(SmtDef::DefineConst(variable, expression), _, _) => Some(TraceEvent::Define {
-            variable: format!("v{variable}"),
-            expression: smt_format::exp_sym(&expression, shared)?,
+            variable: smt_format::var(variable),
+            expression: smt_format::term(&expression, shared)?,
         }),
         Event::Smt(SmtDef::Assert(expression), _, _) => Some(TraceEvent::Assume {
-            expression: smt_format::exp_sym(&expression, shared)?,
+            expression: smt_format::term(&expression, shared)?,
         }),
         Event::Smt(SmtDef::DefineEnum(_, _), _, _) => None,
-        Event::Assume(expression) => Some(TraceEvent::Assume {
-            expression: smt_format::exp_loc(&expression, shared)?,
-        }),
+        Event::Assume(_) => anyhow::bail!("Isla trace assumes a register location"),
         Event::ReadReg(name, accessors, register_value) => {
             let (name, fields) = register(name, &accessors, shared);
             Some(TraceEvent::ReadRegister {

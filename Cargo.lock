@@ -2615,6 +2615,7 @@ dependencies = [
  "isla-lib",
  "serde",
  "sha2",
+ "tir-symbolic",
  "toml 0.9.12+spec-1.1.0",
 ]
 
@@ -3041,6 +3042,7 @@ dependencies = [
  "tempfile",
  "tir-bench",
  "tir-isa-test-suite",
+ "tir-symbolic",
  "tir-verify",
  "tmdl",
  "toml 0.9.12+spec-1.1.0",

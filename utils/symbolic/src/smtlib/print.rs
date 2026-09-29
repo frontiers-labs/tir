@@ -149,6 +149,11 @@ impl Display for Term {
                 join(f, binds)?;
                 write!(f, ") {body})")
             }
+            Term::Exists(vars, body) => {
+                f.write_str("(exists (")?;
+                join(f, vars)?;
+                write!(f, ") {body})")
+            }
             Term::Annotated(term, attrs) => {
                 write!(f, "(! {term} ")?;
                 join(f, attrs)?;
