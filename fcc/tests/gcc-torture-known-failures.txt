@@ -538,7 +538,6 @@ compile/libcall-1.c
 compile/limits-caselabels.c
 compile/limits-declparen.c
 compile/limits-externdecl.c
-compile/limits-fnargs.c
 compile/limits-fndefn.c
 compile/limits-pointer.c
 compile/limits-stringlit.c

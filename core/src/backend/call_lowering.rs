@@ -301,8 +301,20 @@ impl CallLowering {
             })
             .transpose()?;
         let mut fresh_args = Vec::with_capacity(argument_values.len());
+        // Repeated arguments read one snapshot; separate copies would all stay
+        // live until placement and create interference between equal values.
+        let mut snapshots = HashMap::new();
         for (&arg, location) in argument_values.iter().zip(&argument_locations) {
-            fresh_args.push(detach(arg, location.class())?);
+            let key = (arg, location.class());
+            let fresh = match snapshots.get(&key) {
+                Some(&fresh) => fresh,
+                None => {
+                    let fresh = detach(arg, location.class())?;
+                    snapshots.insert(key, fresh);
+                    fresh
+                }
+            };
+            fresh_args.push(fresh);
         }
 
         let vector_register_args = argument_values

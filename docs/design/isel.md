@@ -423,6 +423,11 @@ simultaneous substitutions as edge arguments. The compiler orders each block
 according to its machine dependencies before adopting the staged result.
 This order must make inputs available before use and preserve required effects.
 
+Call lowering snapshots each distinct argument value and register class once
+per call, before placing arguments in their ABI registers or stack slots.
+Repeated arguments share that snapshot, so their copies do not create
+overlapping live ranges proportional to the argument count.
+
 Register allocation assigns physical registers afterward. It follows
 Buchwald, Zwinkau, and Bersch, "SSA-based Register Allocation with PBQP"
 (CC 2011). Spilling runs first, as its own step. Wherever an instruction needs
