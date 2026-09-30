@@ -122,7 +122,7 @@ impl Emitter<'_> {
                 env,
             ),
             Stmt::Switch {
-                var,
+                pred,
                 arms,
                 default,
                 continuation,
@@ -134,7 +134,7 @@ impl Emitter<'_> {
                     .collect::<Vec<_>>();
                 bodies.push(default);
                 self.conditional(
-                    Decision::Switch(*var, cases),
+                    Decision::Switch(*pred, cases),
                     &bodies,
                     *continuation,
                     region,
@@ -252,8 +252,8 @@ impl Emitter<'_> {
         Ok(())
     }
 
-    /// A γ: the predicate indexes the arms, so a conditional's arms go false
-    /// first and a dispatch's cases are its arm indices. The arms read values
+    /// A γ: a conditional's arms go false first, and a dispatch's arms carry
+    /// its cases, the default last. The arms read values
     /// from the enclosing scope, but a chain they consume enters each arm as a
     /// state port of its own: two arms changing one state would read as a
     /// fork the order forbids, when they are alternatives.
@@ -272,20 +272,13 @@ impl Emitter<'_> {
             .iter()
             .map(|arm| self.arm(arm, &ports, &chains, env))
             .collect::<Result<Vec<_>, _>>()?;
+        let cases = match &decision {
+            Decision::If(_) => Vec::new(),
+            Decision::Switch(_, cases) => cases.clone(),
+        };
         let predicate = match decision {
             Decision::If(pred) => self.read_src(region, env, pred)?,
-            Decision::Switch(var, cases) => {
-                if cases
-                    .iter()
-                    .enumerate()
-                    .any(|(index, &case)| case != index as i64)
-                {
-                    return Err(unsupported(
-                        "a dispatch whose cases are not its arm indices",
-                    ));
-                }
-                self.read(region, env, var)?
-            }
+            Decision::Switch(pred, _) => self.read_src(region, env, pred)?,
         };
         if regions.len() == 2
             && self.context.get_value(predicate).ty() == IntegerType::new(self.context, 1)
@@ -324,6 +317,7 @@ impl Emitter<'_> {
         }
         let op = scf::SwitchOpBuilder::new(self.context)
             .predicate(predicate)
+            .cases(&cases)
             .inputs(state_inits)
             .arms(regions)
             .result_types(self.port_types(&ports))
@@ -657,7 +651,7 @@ impl Emitter<'_> {
 
 enum Decision {
     If(Src),
-    Switch(VarId, Vec<i64>),
+    Switch(Src, Vec<u64>),
 }
 
 fn is_integer(context: &Context, ty: TypeId) -> bool {

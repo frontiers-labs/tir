@@ -4,6 +4,8 @@
 //!
 //! A theta prints as `%r = dialect.op (%port = %init, ..) { .. }` and a
 //! gamma as `%r = dialect.op %pred args(%in, ..) (%port, ..) { .. } (..) { .. }`.
+//! A gamma whose cases are not its arm indices labels each arm:
+//! `case 10 (%port, ..) { .. } .. default (..) { .. }`.
 //! Types are not spelled: a port has its init's type, a theta result its
 //! init's, and a gamma result the type of the first arm's result. A memory
 //! state is carried like any other value.
@@ -60,6 +62,108 @@ pub fn region_list_len(context: &Context, op: &OpHandle, index: usize, ports: bo
 
 fn fail(message: String) -> Error {
     Error::VerificationError(message)
+}
+
+/// The attribute a gamma names its cases in; see [`crate::Gamma::cases`].
+pub const GAMMA_CASES: &str = "cases";
+
+/// A gamma's cases: the ones it names, else the arm indices.
+pub fn gamma_cases(op: &OpHandle, arms: usize) -> Vec<u64> {
+    match op.attr(GAMMA_CASES) {
+        Some(AttributeValue::Array(items)) => items
+            .iter()
+            .map(|item| match item {
+                AttributeValue::UInt(bits) => *bits,
+                _ => u64::MAX,
+            })
+            .collect(),
+        _ => (0..arms.saturating_sub(1) as u64).collect(),
+    }
+}
+
+/// The attribute naming `cases`, or `None` where they are the arm indices a
+/// gamma has without one.
+pub fn gamma_cases_attribute(cases: &[u64]) -> Option<AttributeValue> {
+    let indexes = cases
+        .iter()
+        .enumerate()
+        .all(|(index, &case)| case == index as u64);
+    (!indexes).then(|| {
+        AttributeValue::Array(
+            cases
+                .iter()
+                .map(|&case| AttributeValue::UInt(case))
+                .collect::<Vec<_>>()
+                .into(),
+        )
+    })
+}
+
+fn predicate_width(context: &Context, predicate: ValueId) -> u32 {
+    crate::sem::egraph::type_width(context, context.get_value(predicate).ty()).unwrap_or(64)
+}
+
+/// `value` truncated to `width` bits.
+pub fn truncate_bits(value: i64, width: u32) -> u64 {
+    if width >= 64 {
+        value as u64
+    } else {
+        value as u64 & ((1 << width) - 1)
+    }
+}
+
+/// `bits` of a `width`-bit value read as signed, the way a case is spelled.
+pub fn signed_bits(bits: u64, width: u32) -> i64 {
+    if width == 0 || width >= 64 {
+        return bits as i64;
+    }
+    let shift = 64 - width;
+    ((bits << shift) as i64) >> shift
+}
+
+/// The cases a gamma names, checked against its arms and predicate: one per
+/// arm but the last, distinct, and within the predicate's width. A one-bit
+/// predicate has nothing to name: its gamma indexes its arms.
+fn verify_gamma_cases(
+    context: &Context,
+    op: &OpHandle,
+    name: &str,
+    predicate: ValueId,
+    arms: usize,
+) -> Result<(), Error> {
+    let Some(attribute) = op.attr(GAMMA_CASES) else {
+        return Ok(());
+    };
+    let AttributeValue::Array(items) = attribute else {
+        return Err(fail(format!("{name} cases must be an array")));
+    };
+    if items.len() + 1 != arms {
+        return Err(fail(format!(
+            "{name} names {} cases for {arms} arms: every arm but the default has one",
+            items.len()
+        )));
+    }
+    let width = predicate_width(context, predicate);
+    if width == 1 {
+        return Err(fail(format!(
+            "{name} on a one-bit predicate indexes its arms and names no cases"
+        )));
+    }
+    let mut seen = std::collections::HashSet::new();
+    for item in items.iter() {
+        let &AttributeValue::UInt(bits) = item else {
+            return Err(fail(format!("{name} cases must be unsigned bit patterns")));
+        };
+        if truncate_bits(bits as i64, width) != bits {
+            return Err(fail(format!(
+                "{name} case {bits:#x} does not fit its {width}-bit predicate"
+            )));
+        }
+        if !seen.insert(bits) {
+            return Err(fail(format!("{name} names case {bits:#x} twice")));
+        }
+    }
+    Ok(())
 }
 
 /// How many entries of a list `range` reaches: the range's length when it
@@ -329,12 +433,14 @@ pub fn verify_gamma(
     context: &Context,
     op: &OpHandle,
     name: &str,
+    predicate: ValueId,
     arms: &[RegionId],
     binding: &Binding,
 ) -> Result<(), Error> {
     if arms.is_empty() {
         return Err(fail(format!("{name} needs at least one arm")));
     }
+    verify_gamma_cases(context, op, name, predicate, arms.len())?;
     let inputs = slice(&op.operands(), &binding.operands);
     let results = slice(&op.results(), &binding.results);
     for (index, &arm) in arms.iter().enumerate() {
@@ -490,7 +596,7 @@ pub fn print_theta(
 }
 
 /// The generic gamma printer: the predicate, the forwarded operands, then
-/// each arm's ports and body.
+/// each arm's label, ports and body.
 pub fn print_gamma(
     fmt: &mut IRFormatter,
     op: &OpHandle,
@@ -508,7 +614,21 @@ pub fn print_gamma(
         region_format::print_value_list(fmt, &inputs)?;
         fmt.write(")")?;
     }
-    for &arm in arms {
+    let cases = gamma_cases(op, arms.len());
+    let labelled = gamma_cases_attribute(&cases).is_some();
+    let width = predicate_width(&context, predicate);
+    for (index, &arm) in arms.iter().enumerate() {
+        if labelled {
+            let label = match cases.get(index) {
+                Some(&bits) => format!("case {}", signed_bits(bits, width)),
+                None => "default".to_string(),
+            };
+            fmt.write(if fmt.at_line_start() {
+                label
+            } else {
+                format!(" {label}")
+            })?;
+        }
         let ports = slice(&port_ids(&context, arm), &binding.ports);
         if !ports.is_empty() {
             fmt.write(if fmt.at_line_start() { "(" } else { " (" })?;
@@ -534,6 +654,8 @@ pub struct ParsedGamma {
     pub inputs: Vec<ValueId>,
     pub arms: Vec<RegionId>,
     pub result_types: Vec<TypeId>,
+    /// The [`GAMMA_CASES`] attribute, where the arms are labelled.
+    pub cases: Option<AttributeValue>,
 }
 
 type ParseResult<T> = Result<T, (Span, Error)>;
@@ -644,7 +766,19 @@ pub fn parse_gamma(parser: &mut Parser, context: &Context) -> ParseResult<Parsed
         expect(parser, ")")?;
     }
     let mut arms = vec![];
+    let mut labels = vec![];
     loop {
+        let label = if parser.parse_token("case") {
+            let span = parser.span();
+            let case = parser
+                .parse_number()
+                .ok_or((span, Error::ExpectedToken("case value")))?;
+            Some(Some(case))
+        } else if parser.parse_token("default") {
+            Some(None)
+        } else {
+            None
+        };
         let mut ports = vec![];
         if parser.parse_token("(") {
             for (index, &input) in inputs.iter().enumerate() {
@@ -659,19 +793,38 @@ pub fn parse_gamma(parser: &mut Parser, context: &Context) -> ParseResult<Parsed
                 ports.push(bind_port(parser, context, &name, ty));
             }
             expect(parser, ")")?;
-        } else if parser.peek_char() != Some('{') {
+        } else if label.is_none() && parser.peek_char() != Some('{') {
             break;
         }
+        labels.push(label);
         arms.push(parser.parse_region_with_entry_args(context, ports)?.id());
     }
     let Some(&first) = arms.first() else {
         return Err((parser.span(), Error::ExpectedToken("{")));
+    };
+    let cases = if labels.iter().all(Option::is_none) {
+        None
+    } else {
+        let (default, cases) = labels.split_last().expect("an arm was parsed");
+        if *default != Some(None) {
+            return Err((parser.span(), Error::ExpectedToken("default")));
+        }
+        let width = predicate_width(context, predicate);
+        let cases = cases
+            .iter()
+            .map(|label| match label {
+                Some(Some(case)) => Ok(truncate_bits(*case, width)),
+                _ => Err((parser.span(), Error::ExpectedToken("case"))),
+            })
+            .collect::<ParseResult<Vec<_>>>()?;
+        gamma_cases_attribute(&cases)
     };
     let first = context.get_region(first);
     Ok(ParsedGamma {
         predicate,
         inputs,
         arms,
+        cases,
         result_types: first
             .results()
             .iter()

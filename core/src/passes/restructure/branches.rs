@@ -24,8 +24,8 @@ pub enum Stmt {
         continuation: NodeId,
     },
     Switch {
-        var: VarId,
-        arms: Vec<(i64, Vec<Stmt>)>,
+        pred: Src,
+        arms: Vec<(u64, Vec<Stmt>)>,
         default: Vec<Stmt>,
         continuation: NodeId,
     },
@@ -123,8 +123,12 @@ impl Structurer<'_> {
                 else_arm: self.arm(if_false, continuation)?,
                 continuation,
             },
-            Term::Dispatch { var, arms, default } => Stmt::Switch {
-                var,
+            Term::Dispatch {
+                pred,
+                arms,
+                default,
+            } => Stmt::Switch {
+                pred,
                 arms: arms
                     .into_iter()
                     .map(|(case, edge)| Ok((case, self.arm(edge, continuation)?)))
@@ -194,11 +198,11 @@ impl Structurer<'_> {
             block: None,
             assigns: Vec::new(),
             term: Term::Dispatch {
-                var,
+                pred: Src::Var(var),
                 arms: cases
                     .iter()
                     .enumerate()
-                    .map(|(index, &target)| (index as i64, Edge::new(target)))
+                    .map(|(index, &target)| (index as u64, Edge::new(target)))
                     .collect(),
                 default: Edge::new(default),
             },

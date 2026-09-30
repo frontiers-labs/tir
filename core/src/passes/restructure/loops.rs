@@ -393,13 +393,13 @@ fn dispatch_node(cfg: &mut Cfg, var: Option<VarId>, targets: &[NodeId]) -> NodeI
     let arms = arms
         .iter()
         .enumerate()
-        .map(|(index, &target)| (index as i64, Edge::new(target)))
+        .map(|(index, &target)| (index as u64, Edge::new(target)))
         .collect();
     cfg.add_node(Node {
         block: None,
         assigns: Vec::new(),
         term: Term::Dispatch {
-            var,
+            pred: Src::Var(var),
             arms,
             default: Edge::new(default),
         },

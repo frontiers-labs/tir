@@ -1,0 +1,47 @@
+// RUN: tir opt --pass restructure-nodes --verify %s | filecheck %s
+// RUN: tir interp %s --args=10 | filecheck --check-prefix=TEN %s
+// RUN: tir interp %s --args=-1 | filecheck --check-prefix=MINUS %s
+// RUN: tir interp %s --args=7 | filecheck --check-prefix=DEFAULT %s
+// RUN: tir opt --pass restructure-nodes %s | tir interp --args=10 | filecheck --check-prefix=TEN %s
+// RUN: tir opt --pass restructure-nodes %s | tir interp --args=-1 | filecheck --check-prefix=MINUS %s
+// RUN: tir opt --pass restructure-nodes %s | tir interp --args=7 | filecheck --check-prefix=DEFAULT %s
+
+// A multi-way branch is one gate whatever its case count: each case is an arm
+// labelled with its value, and the default takes every other value.
+
+module {
+  %fn_main = func.func @main(%x: !i32) -> !i32 {
+    cfg.switch %x : !i32, [
+      default: ^bb3(%x : !i32),
+      10: ^bb1,
+      -1: ^bb2
+    ]
+  ^bb1:
+    %a = constant {value = 100} : !i32
+    cfg.br ^bb3(%a : !i32)
+  ^bb2:
+    %b = constant {value = 200} : !i32
+    cfg.br ^bb3(%b : !i32)
+  ^bb3(%r: !i32):
+    func.return %r
+  }
+  module_end
+}
+
+// CHECK: %{{[0-9]+}} = func.func @main(%[[X:[0-9]+]]: !i32) -> !i32 {
+// CHECK-NEXT: %[[R:[0-9]+]] = scf.switch %[[X]] case 10 {
+// CHECK-NEXT: %[[A:[0-9]+]] = constant {value = 100} : !i32
+// CHECK-NEXT: -> %[[A]]
+// CHECK-NEXT: }
+// CHECK-NEXT: case -1 {
+// CHECK-NEXT: %[[B:[0-9]+]] = constant {value = 200} : !i32
+// CHECK-NEXT: -> %[[B]]
+// CHECK-NEXT: }
+// CHECK-NEXT: default {
+// CHECK-NEXT: -> %[[X]]
+// CHECK-NEXT: }
+// CHECK-NEXT: -> %[[R]]
+
+// TEN: i32 100
+// MINUS: i32 200
+// DEFAULT: i32 7

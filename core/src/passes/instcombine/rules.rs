@@ -447,9 +447,9 @@ fn gate_cases(context: &Context, node: &Node) -> Option<Vec<Option<i64>>> {
         return None;
     }
     let instance = context.get_op(gate);
-    // A γ indexes its arms by the predicate, the last arm taking every value
-    // past it. The seeding spells a boolean one as `If(p, arm 1, arm 0)`, so
-    // its node lists the case-1 arm first.
+    // A γ selects its arms by case, the last arm taking every other value. The
+    // seeding spells a boolean one, which indexes its arms, as
+    // `If(p, arm 1, arm 0)`, so its node lists the case-1 arm first.
     let gamma = instance.as_interface::<dyn crate::Gamma>()?;
     let arms = gamma.arms().len();
     let boolean =
@@ -458,7 +458,9 @@ fn gate_cases(context: &Context, node: &Node) -> Option<Vec<Option<i64>>> {
     Some(if boolean && arms == 2 {
         vec![Some(1), None]
     } else {
-        (0..arms - 1)
+        gamma
+            .cases()
+            .into_iter()
             .map(|case| Some(case as i64))
             .chain([None])
             .collect()

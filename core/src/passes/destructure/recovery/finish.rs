@@ -390,11 +390,20 @@ impl Finish<'_> {
     fn gamma_outcome(&self, route: &Route, gamma: &GammaPlan) -> Option<usize> {
         let last = gamma.arms.len().checked_sub(1)?;
         match self.fact(route, gamma.predicate)? {
-            ControlOutcome::Exact(value) => {
-                Some(usize::try_from(value).unwrap_or(usize::MAX).min(last))
+            ControlOutcome::Exact(value) => Some(
+                gamma
+                    .cases
+                    .iter()
+                    .position(|&case| case == value)
+                    .unwrap_or(last)
+                    .min(last),
+            ),
+            ControlOutcome::DefaultFrom(first)
+                if gamma.cases.iter().all(|&case| case < first as u64) =>
+            {
+                Some(last)
             }
-            ControlOutcome::DefaultFrom(first) if first >= last => Some(last),
-            ControlOutcome::DefaultFrom(_) => None,
+            ControlOutcome::DefaultFrom(_) | ControlOutcome::Rest => None,
         }
     }
 
@@ -403,26 +412,25 @@ impl Finish<'_> {
             return match route.control_facts.get(&repeated.port)? {
                 ControlOutcome::Exact(value) => Some(*value != 0),
                 ControlOutcome::DefaultFrom(first) if *first > 0 => Some(true),
-                ControlOutcome::DefaultFrom(_) => None,
+                ControlOutcome::DefaultFrom(_) | ControlOutcome::Rest => None,
             };
         }
         match self.fact(route, theta.predicate)? {
             ControlOutcome::Exact(value) => Some(value != 0),
             ControlOutcome::DefaultFrom(first) if first > 0 => Some(true),
-            ControlOutcome::DefaultFrom(_) => None,
+            ControlOutcome::DefaultFrom(_) | ControlOutcome::Rest => None,
         }
     }
 
     fn select_arm(&self, mut route: Route, op: OpId, index: usize) -> Result<Route, PassError> {
         let gamma = &self.prepared.gammas[&op];
         let arm = &gamma.arms[index];
-        let fact = if index + 1 == gamma.arms.len() {
-            ControlOutcome::DefaultFrom(index)
-        } else {
-            ControlOutcome::Exact(index as u64)
-        };
+        let fact = super::arm_fact(&gamma.cases, index, false);
         let predicate = self.value(gamma.predicate);
-        if !self.ambiguous_facts.contains(&predicate) && !self.constants.contains_key(&predicate) {
+        if let Some(fact) = fact
+            && !self.ambiguous_facts.contains(&predicate)
+            && !self.constants.contains_key(&predicate)
+        {
             route
                 .facts
                 .entry(predicate)
@@ -766,7 +774,7 @@ impl Finish<'_> {
         for (outcome, fact) in reachable {
             let mut selected = route.clone();
             let predicate = self.value(definition.source_predicate);
-            if !self.constants.contains_key(&predicate) {
+            if !self.constants.contains_key(&predicate) && fact != ControlOutcome::Rest {
                 selected.facts.insert(predicate, fact);
             }
             selected.skip_control = Some(control);
@@ -774,7 +782,7 @@ impl Finish<'_> {
         }
         let mut last_route = route.clone();
         let predicate = self.value(definition.source_predicate);
-        if !self.constants.contains_key(&predicate) {
+        if !self.constants.contains_key(&predicate) && last != ControlOutcome::Rest {
             last_route.facts.insert(predicate, last);
         }
         last_route.skip_control = Some(control);

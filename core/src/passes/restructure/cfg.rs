@@ -10,8 +10,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{
-    BlockId, BranchGuard, BranchTerminator, Context, OpId, PassError, RegionId, Terminator, TypeId,
-    ValueId,
+    BlockId, BranchGuard, BranchTerminator, CaseGuard, Context, OpId, PassError, RegionId,
+    Terminator, TypeId, ValueId,
 };
 
 pub type NodeId = usize;
@@ -60,9 +60,10 @@ pub enum Term {
         if_true: Edge,
         if_false: Edge,
     },
+    /// Take the arm whose case `pred` equals, else `default`.
     Dispatch {
-        var: VarId,
-        arms: Vec<(i64, Edge)>,
+        pred: Src,
+        arms: Vec<(u64, Edge)>,
         default: Edge,
     },
     /// The tail of a restructured loop: repeat the body or leave it.
@@ -312,6 +313,9 @@ impl Builder<'_> {
             .iter()
             .map(|(block, arguments)| self.edge(*block, arguments))
             .collect::<Vec<_>>();
+        if let Some(guard) = instance.clone().as_interface::<dyn CaseGuard>() {
+            return self.case_terminator(guard.as_ref(), edges);
+        }
         match edges.len() {
             0 => Ok(Term::Sink { op, args: None }),
             1 => Ok(Term::Jump(edges[0].clone())),
@@ -338,6 +342,44 @@ impl Builder<'_> {
             }
             _ => Err(unsupported("a branch with more than two successors")),
         }
+    }
+
+    /// A branch choosing its edge by the selector's value: one decision over all
+    /// of them. A one-bit selector has two values to tell apart, which is a
+    /// conditional.
+    fn case_terminator(
+        &self,
+        guard: &dyn CaseGuard,
+        mut edges: Vec<Edge>,
+    ) -> Result<Term, PassError> {
+        let cases = guard.cases();
+        let default = edges
+            .pop()
+            .filter(|_| edges.len() == cases.len())
+            .ok_or_else(|| unsupported("a switch whose cases and successors disagree"))?;
+        if cases.is_empty() {
+            return Ok(Term::Jump(default));
+        }
+        let pred = Src::Value(guard.selector());
+        let ty = self.context.get_value(guard.selector()).ty();
+        if ty == crate::builtin::IntegerType::new(self.context, 1) {
+            let taken = |bits: u64| {
+                cases
+                    .iter()
+                    .position(|&case| case == bits)
+                    .map_or_else(|| default.clone(), |index| edges[index].clone())
+            };
+            return Ok(Term::Cond {
+                pred,
+                if_true: taken(1),
+                if_false: taken(0),
+            });
+        }
+        Ok(Term::Dispatch {
+            pred,
+            arms: cases.into_iter().zip(edges).collect(),
+            default,
+        })
     }
 
     fn edge(&self, block: BlockId, arguments: &[ValueId]) -> Edge {

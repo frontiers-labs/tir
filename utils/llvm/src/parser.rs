@@ -53,7 +53,7 @@ const SKIP: &[&str] = &[
 ];
 
 pub fn parse_module(src: &str) -> Result<Module, Error> {
-    let normalized = normalize_constant_geps(&normalize_switches(&normalize_attributes(src))?);
+    let normalized = normalize_constant_geps(&normalize_attributes(src));
     let tokens = lex(&normalized);
     let eoi = Span::from(normalized.len()..normalized.len());
     let input = tokens.as_slice().map(eoi, |(t, s)| (t, s));
@@ -119,74 +119,6 @@ fn find_unquoted(text: &str, needle: &str) -> Option<usize> {
         }
     }
     None
-}
-
-fn normalize_switches(src: &str) -> Result<String, Error> {
-    let lines = src.lines().collect::<Vec<_>>();
-    let mut output = String::new();
-    let mut index = 0;
-    let mut next_switch = 0;
-    let mut current_label = "0".to_string();
-    while index < lines.len() {
-        let trimmed = lines[index].trim();
-        if !trimmed.starts_with("switch ") {
-            if let Some((label, _)) = trimmed
-                .split_once(':')
-                .filter(|(label, _)| !label.contains(' '))
-            {
-                current_label = label.to_string();
-            }
-            output.push_str(lines[index]);
-            output.push('\n');
-            index += 1;
-            continue;
-        }
-        let header = trimmed
-            .strip_prefix("switch ")
-            .and_then(|line| line.strip_suffix('['))
-            .ok_or_else(|| Error::Parse(format!("invalid switch: {trimmed}")))?
-            .trim();
-        let (condition, default) = header
-            .split_once(", label %")
-            .ok_or_else(|| Error::Parse(format!("invalid switch: {trimmed}")))?;
-        let (ty, value) = condition
-            .split_once(' ')
-            .ok_or_else(|| Error::Parse(format!("invalid switch condition: {condition}")))?;
-        index += 1;
-        let mut cases = Vec::new();
-        while index < lines.len() && lines[index].trim() != "]" {
-            let case = lines[index].trim();
-            let (constant, destination) = case
-                .strip_prefix(ty)
-                .map(str::trim_start)
-                .and_then(|case| case.split_once(", label %"))
-                .ok_or_else(|| Error::Parse(format!("invalid switch case: {case}")))?;
-            cases.push((constant.to_string(), destination.to_string()));
-            index += 1;
-        }
-        index += 1;
-        for (case_index, (constant, destination)) in cases.iter().enumerate() {
-            let compare = format!("%llvm.switch.cmp.{next_switch}.{case_index}");
-            let next = format!("llvm.switch.next.{current_label}.{next_switch}.{case_index}");
-            output.push_str(&format!("  {compare} = icmp eq {ty} {value}, {constant}\n"));
-            let false_dest = if case_index + 1 == cases.len() {
-                default
-            } else {
-                &next
-            };
-            output.push_str(&format!(
-                "  br i1 {compare}, label %{destination}, label %{false_dest}\n"
-            ));
-            if case_index + 1 != cases.len() {
-                output.push_str(&format!("{next}:\n"));
-            }
-        }
-        if cases.is_empty() {
-            output.push_str(&format!("  br label %{default}\n"));
-        }
-        next_switch += 1;
-    }
-    Ok(output)
 }
 
 fn normalize_constant_geps(src: &str) -> String {
@@ -579,6 +511,42 @@ where
         just(Token::Ident("br")).ignore_then(uncond.or(cond))
     };
 
+    // `switch i32 %x, label %default [ i32 1, label %one ... ]`, one case to a
+    // line.
+    let switch = {
+        let dest = just(Token::Ident("label")).ignore_then(target);
+        let newlines = just(Token::Newline).repeated();
+        let value = select! {
+            Token::Int(value) => value,
+            Token::Ident("true") => 1,
+            Token::Ident("false") => 0,
+        };
+        let case = ty
+            .clone()
+            .ignore_then(value)
+            .then_ignore(just(Token::Comma))
+            .then(dest.clone());
+        let cases = newlines
+            .clone()
+            .ignore_then(case)
+            .repeated()
+            .collect::<Vec<_>>()
+            .then_ignore(newlines)
+            .delimited_by(just(Token::LBracket), just(Token::RBracket));
+        just(Token::Ident("switch"))
+            .ignore_then(ty.clone())
+            .then(operand.clone())
+            .then_ignore(just(Token::Comma))
+            .then(dest)
+            .then(cases)
+            .map(|(((ty, value), default), cases)| Inst::Switch {
+                ty,
+                value,
+                default,
+                cases,
+            })
+    };
+
     let ret = {
         let void = just(Token::Ident("void")).to(Inst::Ret { value: None });
         let val = ty.clone().then(operand.clone()).map(|(ty, op)| Inst::Ret {
@@ -660,6 +628,7 @@ where
         call,
         store,
         br,
+        switch,
         ret,
         unsupported,
     ));

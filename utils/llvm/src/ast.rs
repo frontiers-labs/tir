@@ -150,6 +150,12 @@ pub enum Inst {
         if_true: String,
         if_false: String,
     },
+    Switch {
+        ty: Type,
+        value: Operand,
+        default: String,
+        cases: Vec<(i64, String)>,
+    },
     Ret {
         value: Option<(Type, Operand)>,
     },

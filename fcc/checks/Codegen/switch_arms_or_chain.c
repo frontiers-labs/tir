@@ -35,8 +35,8 @@ int classify(int value, int flag)
 // CHECK:     cmp edi, 5
 // CHECK-NOT: rsp
 // CHECK:     mov eax, -1
-// CHECK:     mov eax, 110
-// CHECK:     mov eax, 106
 // CHECK:     mov eax, 100
+// CHECK:     mov eax, 106
+// CHECK:     mov eax, 110
 // CHECK:     mov eax, 0
 // CHECK:     ret

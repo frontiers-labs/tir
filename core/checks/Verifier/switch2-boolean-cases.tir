@@ -1,0 +1,20 @@
+// RUN: not tir opt --verify %s 2>&1 | filecheck %s
+
+// A one-bit predicate has two values, and its gate indexes its arms by them;
+// naming them as cases would give the same gate a second spelling.
+
+module {
+  %fn_main = func.func @main(%0: !i1, %1: !i32) -> !i32 {
+    %2 = scf.switch %0 case 1 {
+      -> %1
+    }
+    default {
+      %3 = addi %1, %1 : !i32
+      -> %3
+    }
+    func.return %2
+  }
+  module_end
+}
+
+// CHECK: scf.switch on a one-bit predicate indexes its arms and names no cases

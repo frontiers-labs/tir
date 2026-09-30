@@ -92,7 +92,7 @@ pub use diagnostics::{print_error_range, print_parse_error};
 pub use dialect::{Dialect, OperationParser};
 pub use error::Error;
 pub use interfaces::{
-    Apply, Binding, BranchGuard, BranchTerminator, Callable, Commutative, ConstantFold,
+    Apply, Binding, BranchGuard, BranchTerminator, Callable, CaseGuard, Commutative, ConstantFold,
     ConstantLike, CountedLoop, ExitScope, ExitScopeKind, ExitTarget, Gamma, Global,
     HasResourceSemantics, IntegerArithmetic, MemoryRead, MemoryWrite, NonLocalExit, OpCost,
     PromotableAllocation, Pure, RegionBinding, ResourceAccess, ResourceEffect, ResourceEffects,

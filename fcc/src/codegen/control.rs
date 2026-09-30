@@ -509,9 +509,9 @@ impl FnCodegen<'_> {
         self.terminated = true;
     }
 
-    /// Lower a `switch` as the comparison chain it is: the controlling value is
-    /// tested against each case in turn, the arms fall through to one another in
-    /// source order, and an unmatched value reaches the default arm or leaves.
+    /// Lower a `switch` as one branch on the controlling value: each case takes
+    /// its arm, the arms fall through to one another in source order, and an
+    /// unmatched value reaches the default arm or leaves.
     fn lower_switch(&mut self, stmt: NodeId) -> Result<(), Diagnostic> {
         let mut children = self.ast.children(stmt);
         let value = self.lower_expr(children.next().unwrap())?;
@@ -533,28 +533,27 @@ impl FnCodegen<'_> {
             _ => None,
         });
 
-        for (item, arm) in items.iter().zip(&arms) {
-            let (SwitchItem::Case(case), Some(arm)) = (item, arm) else {
-                continue;
-            };
-            let case = self
-                .emit(b::constant(self.context, *case, value_ty).build())
-                .result();
-            let matches = self
-                .emit(
-                    b::CmpIOpBuilder::new(self.context)
-                        .lhs(value)
-                        .rhs(case)
-                        .predicate(Predicate::Eq)
-                        .result_type(IntegerType::new(self.context, 1))
-                        .build(),
-                )
-                .result();
-            let next = self.new_block();
-            self.branch_on(matches, arm, &next);
-            self.enter_block(next);
-        }
-        self.leave_block(default.as_ref().unwrap_or(&exit));
+        let width = (self.context.get_type_data(value_ty).as_ref() as &dyn std::any::Any)
+            .downcast_ref::<IntegerType>()
+            .map_or(64, IntegerType::width);
+        let cases = items
+            .iter()
+            .zip(&arms)
+            .filter_map(|(item, arm)| match (item, arm) {
+                (SwitchItem::Case(case), Some(arm)) => Some((
+                    tir::binding::truncate_bits(*case, width),
+                    (arm.id(), vec![]),
+                )),
+                _ => None,
+            })
+            .collect();
+        let default = default.as_ref().unwrap_or(&exit).id();
+        self.terminate_with(
+            tir::cfg::SwitchOpBuilder::new(self.context)
+                .selector(value)
+                .successors(cases, (default, vec![]))
+                .build(),
+        );
 
         self.break_targets.push(ExitTarget::Block(exit.clone()));
         let lowered = self.lower_switch_arms(&items, &arms);

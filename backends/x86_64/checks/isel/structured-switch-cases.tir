@@ -1,0 +1,39 @@
+// RUN: tir mc --march=x86_64 --stage=isel %s | filecheck %s
+
+// A multi-way branch selects to one comparison per case against the case
+// value itself, a negative one included, with no arm index computed first.
+
+module {
+  %fn_select = func.func @select(%p: !i32) -> !i32 {
+    cfg.switch %p : !i32, [
+      default: ^bb3,
+      10: ^bb1,
+      -1: ^bb2
+    ]
+  ^bb1:
+    %a = constant {value = 100} : !i32
+    func.return %a
+  ^bb2:
+    %b = constant {value = 200} : !i32
+    func.return %b
+  ^bb3:
+    %c = constant {value = 300} : !i32
+    func.return %c
+  }
+  module_end
+}
+
+// CHECK-NOT: scf.
+// CHECK: x86_64.cmp_imm32 {dst = %[[P:[0-9]+]]:GPR, imm = 10}
+// CHECK-NEXT: x86_64.je {imm = ^[[TEN:bb[0-9]+]]}
+// CHECK-NEXT: asm.vbr ^[[CHAIN:bb[0-9]+]]
+// CHECK: ^[[TEN]]:
+// CHECK-NEXT: x86_64.mov_imm32 {dst = %{{[0-9]+}}:GPR32, imm = 100}
+// CHECK: ^[[MINUS:bb[0-9]+]]:
+// CHECK-NEXT: x86_64.mov_imm32 {dst = %{{[0-9]+}}:GPR32, imm = 200}
+// CHECK: ^[[DEFAULT:bb[0-9]+]]:
+// CHECK-NEXT: x86_64.mov_imm32 {dst = %{{[0-9]+}}:GPR32, imm = 300}
+// CHECK: ^[[CHAIN]]:
+// CHECK-NEXT: x86_64.cmp_imm32 {dst = %[[P]]:GPR, imm = -1}
+// CHECK-NEXT: x86_64.je {imm = ^[[MINUS]]}
+// CHECK-NEXT: asm.vbr ^[[DEFAULT]]

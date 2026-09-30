@@ -1,19 +1,20 @@
 use crate::Any;
+use crate::attributes::AttributeValue;
 use crate::{
-    BlockId, BranchGuard, BranchTerminator, Context, Error, Operation, Terminator, ValueId,
-    dialect, operation,
+    BlockId, BranchGuard, BranchTerminator, CaseGuard, Context, Error, Operation, Terminator,
+    ValueId, dialect, operation,
 };
 
 use crate as tir;
 
 pub mod ops {
-    pub use super::{br, cond_br};
+    pub use super::{br, cond_br, switch};
 }
 
 dialect! {
     CfgDialect {
         name: "cfg",
-        operations: [BranchOp, CondBranchOp],
+        operations: [BranchOp, CondBranchOp, SwitchOp],
         types: [],
     }
 }
@@ -166,6 +167,214 @@ impl CondBranchOp {
     }
 }
 
+operation! {
+    SwitchOp {
+        name: "switch",
+        dialect: "cfg",
+        format: "custom",
+        verifier: "true",
+        operands: O {
+            selector: "crate::builtin::IntegerType",
+            args: "*Any",
+        },
+        interfaces: [Terminator, BranchTerminator, CaseGuard],
+    }
+}
+
+/// The successor blocks, one per case and the default last.
+const DESTS: &str = "dests";
+/// The selector bits taking each case edge.
+const CASES: &str = "cases";
+/// How many of the forwarded values each successor takes, in successor order.
+const ARG_COUNTS: &str = "arg_counts";
+
+fn unsigned_list(values: impl IntoIterator<Item = u64>) -> AttributeValue {
+    AttributeValue::Array(
+        values
+            .into_iter()
+            .map(AttributeValue::UInt)
+            .collect::<Vec<_>>()
+            .into(),
+    )
+}
+
+impl SwitchOpBuilder {
+    /// Take `cases[i].1` where the selector's bits are `cases[i].0`, and
+    /// `default` where they are none of them, each entered on its values.
+    pub fn successors(self, cases: Vec<(u64, Successor)>, default: Successor) -> Self {
+        let (values, edges): (Vec<u64>, Vec<Successor>) = cases.into_iter().unzip();
+        let edges = edges.into_iter().chain([default]).collect::<Vec<_>>();
+        let dests = edges.iter().map(|(dest, _)| AttributeValue::Block(*dest));
+        let counts = edges.iter().map(|(_, args)| args.len() as u64);
+        let args = edges.iter().flat_map(|(_, args)| args.clone()).collect();
+        self.args(args)
+            .attr(
+                DESTS,
+                AttributeValue::Array(dests.collect::<Vec<_>>().into()),
+            )
+            .attr(CASES, unsigned_list(values))
+            .attr(ARG_COUNTS, unsigned_list(counts))
+    }
+}
+
+impl SwitchOp {
+    pub fn selector(&self) -> ValueId {
+        self.operands()[0]
+    }
+
+    fn unsigned(&self, name: &str) -> Vec<u64> {
+        match self.attr(name) {
+            Some(AttributeValue::Array(items)) => items
+                .iter()
+                .map(|item| match item {
+                    AttributeValue::UInt(value) => *value,
+                    _ => 0,
+                })
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// Every successor edge, the cases' first and the default last.
+    fn edges(&self) -> Vec<Successor> {
+        let dests = match self.attr(DESTS) {
+            Some(AttributeValue::Array(items)) => items
+                .iter()
+                .filter_map(|item| match item {
+                    AttributeValue::Block(block) => Some(*block),
+                    _ => None,
+                })
+                .collect(),
+            _ => Vec::new(),
+        };
+        let operands = self.operands();
+        let mut start = 1;
+        dests
+            .into_iter()
+            .zip(self.unsigned(ARG_COUNTS))
+            .map(|(dest, count)| {
+                let end = (start + count as usize).min(operands.len());
+                let args = operands[start.min(end)..end].to_vec();
+                start = end;
+                (dest, args)
+            })
+            .collect()
+    }
+
+    fn custom_print(&self, fmt: &mut tir::IRFormatter) -> Result<(), std::fmt::Error> {
+        let context = self.0.context.clone();
+        let selector = self.selector();
+        fmt.write(format!("cfg.switch %{} : ", selector.number()))?;
+        context.print_type(context.get_value(selector).ty(), fmt)?;
+        fmt.write(", [\n")?;
+        fmt.push();
+        let mut edges = self.edges();
+        let default = edges.pop();
+        if let Some((dest, args)) = default {
+            fmt.write("default: ")?;
+            print_successor(fmt, &context, dest, &args)?;
+        }
+        let width = crate::sem::egraph::type_width(&context, context.get_value(selector).ty())
+            .unwrap_or(64);
+        for (case, (dest, args)) in self.cases().into_iter().zip(edges) {
+            fmt.write(",\n")?;
+            fmt.write(format!("{}: ", crate::binding::signed_bits(case, width)))?;
+            print_successor(fmt, &context, dest, &args)?;
+        }
+        fmt.write("\n")?;
+        fmt.pop();
+        fmt.write("]\n")
+    }
+
+    fn custom_parse(
+        parser: &mut tir::parse::text::Parser,
+        context: &Context,
+    ) -> Result<Box<dyn Operation>, (tir::parse::Span, Error)> {
+        use tir::parse::common::Cursor;
+        let selector = parse_value_id(parser, context)?;
+        expect_token(parser, ":")?;
+        let ty = parse_arg_type(parser, context)?;
+        let width = crate::sem::egraph::type_width(context, ty).unwrap_or(64);
+        expect_token(parser, ",")?;
+        expect_token(parser, "[")?;
+        expect_token(parser, "default")?;
+        expect_token(parser, ":")?;
+        let default = parse_successor(parser, context)?;
+        let mut cases = Vec::new();
+        while parser.parse_token(",") {
+            let span = parser.span();
+            let case = parser
+                .parse_number()
+                .ok_or((span, Error::ExpectedToken("case value")))?;
+            expect_token(parser, ":")?;
+            let successor = parse_successor(parser, context)?;
+            cases.push((crate::binding::truncate_bits(case, width), successor));
+        }
+        expect_token(parser, "]")?;
+        let op = SwitchOpBuilder::new(context)
+            .selector(selector)
+            .successors(cases, default)
+            .build();
+        Ok(Box::new(op))
+    }
+}
+
+impl tir::Verifiable for SwitchOp {
+    fn verify_impl(&self, context: &Context) -> Result<(), Error> {
+        let fail = |message: String| Err(Error::VerificationError(format!("cfg.switch {message}")));
+        let edges = self.edges();
+        let cases = self.cases();
+        let counts = self.unsigned(ARG_COUNTS);
+        if edges.len() != cases.len() + 1 || counts.len() != edges.len() {
+            return fail(format!(
+                "names {} successors for {} cases: each case and the default has one",
+                edges.len(),
+                cases.len()
+            ));
+        }
+        if counts.iter().sum::<u64>() as usize + 1 != self.operands().len() {
+            return fail("forwards values its successors do not take".to_string());
+        }
+        let width =
+            crate::sem::egraph::type_width(context, context.get_value(self.selector()).ty())
+                .unwrap_or(64);
+        let mut seen = std::collections::HashSet::new();
+        for &case in &cases {
+            if crate::binding::truncate_bits(case as i64, width) != case {
+                return fail(format!(
+                    "case {case:#x} does not fit its {width}-bit selector"
+                ));
+            }
+            if !seen.insert(case) {
+                return fail(format!("names case {case:#x} twice"));
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Terminator for SwitchOp {
+    fn successors(&self) -> Vec<BlockId> {
+        self.edges().into_iter().map(|(dest, _)| dest).collect()
+    }
+}
+
+impl BranchTerminator for SwitchOp {
+    fn successor_operands(&self) -> Vec<(BlockId, Vec<ValueId>)> {
+        self.edges()
+    }
+}
+
+impl CaseGuard for SwitchOp {
+    fn selector(&self) -> ValueId {
+        SwitchOp::selector(self)
+    }
+
+    fn cases(&self) -> Vec<u64> {
+        self.unsigned(CASES)
+    }
+}
+
 /// Print a successor as `^bbN` followed by an optional MLIR-style argument list
 /// `(%a, %b : t1, t2)` when the branch forwards block arguments.
 fn print_successor(
@@ -190,8 +399,8 @@ fn print_successor(
     fmt.write(")")
 }
 
-/// A parsed successor: its label and the values it is entered on.
-type Successor = (BlockId, Vec<ValueId>);
+/// A successor: its block and the values it is entered on.
+pub type Successor = (BlockId, Vec<ValueId>);
 
 fn parse_successor(
     parser: &mut tir::parse::text::Parser,

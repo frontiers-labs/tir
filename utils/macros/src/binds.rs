@@ -586,6 +586,10 @@ fn emit_gamma(binds: &Binds, shape: &OpShape) -> BindsCode {
                 self.0.regions()[#arms_index..#arms_end].to_vec()
             }
 
+            fn cases(&self) -> Vec<u64> {
+                tir::binding::gamma_cases(&self.0, #arms_end - #arms_index)
+            }
+
             fn binding(&self) -> tir::Binding {
                 let __context = self.0.context.clone();
                 let __segments = tir::binding::operand_segments(&self.0, #groups);
@@ -602,6 +606,7 @@ fn emit_gamma(binds: &Binds, shape: &OpShape) -> BindsCode {
             context,
             &self.0,
             #spelled,
+            <Self as tir::Gamma>::predicate(self),
             &<Self as tir::Gamma>::arms(self),
             &<Self as tir::Gamma>::binding(self),
         )?;
@@ -645,6 +650,10 @@ fn emit_gamma(binds: &Binds, shape: &OpShape) -> BindsCode {
                         .#inputs(parsed.inputs)
                         .#arms(parsed.arms)
                         .result_types(parsed.result_types);
+                    let builder = match parsed.cases {
+                        Some(cases) => builder.attr(tir::binding::GAMMA_CASES, cases),
+                        None => builder,
+                    };
                     Ok(Box::new(builder.build()))
                 }
             }),

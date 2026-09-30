@@ -101,6 +101,8 @@ struct GammaArmPlan {
 #[derive(Clone, Debug)]
 struct GammaPlan {
     predicate: ValueId,
+    /// The predicate bits selecting each arm but the last; see [`Gamma::cases`].
+    cases: Vec<u64>,
     inputs: Vec<ValueId>,
     outputs: Vec<ValueId>,
     arms: Vec<GammaArmPlan>,
@@ -672,7 +674,7 @@ impl Prepare<'_> {
         let outputs = op.results().to_vec();
         let mut arms = Vec::new();
         let arm_regions = gamma.arms();
-        let last = arm_regions.len().saturating_sub(1);
+        let cases = gamma.cases();
         let semantic_control = (arm_regions.len() > 1)
             .then(|| self.recovery.control(op_id, Test::Arm(0)))
             .flatten()
@@ -692,13 +694,13 @@ impl Prepare<'_> {
                 parent,
             };
             let sequence = self.normal_region(region, domain, end)?;
-            if let Some((source_predicate, predicate_type)) = semantic_control {
-                let boolean = predicate_type == IntegerType::new(self.context, 1);
-                let fact = if index < last || (boolean && last == 1) {
-                    ControlOutcome::Exact(index as u64)
-                } else {
-                    ControlOutcome::DefaultFrom(index)
-                };
+            if let Some((source_predicate, predicate_type)) = semantic_control
+                && let Some(fact) = arm_fact(
+                    &cases,
+                    index,
+                    predicate_type == IntegerType::new(self.context, 1),
+                )
+            {
                 self.prepared
                     .entry_facts
                     .entry(sequence)
@@ -718,6 +720,7 @@ impl Prepare<'_> {
             op_id,
             GammaPlan {
                 predicate,
+                cases,
                 inputs,
                 outputs,
                 arms,
@@ -1032,6 +1035,30 @@ pub struct ValueBinding {
 pub enum ControlOutcome {
     Exact(u64),
     DefaultFrom(usize),
+    /// Every value the partition's other outcomes do not name, as a gate's
+    /// default past named cases takes: no range states it, so it is no fact.
+    Rest,
+}
+
+/// What entering arm `index` of a gate selecting its arms on `cases` says of
+/// its predicate. A default arm past arm indices has every value from its own
+/// index up; one past named cases has every value but those, which no outcome
+/// states, so it says nothing.
+fn arm_fact(cases: &[u64], index: usize, boolean: bool) -> Option<ControlOutcome> {
+    if let Some(&case) = cases.get(index) {
+        return Some(ControlOutcome::Exact(case));
+    }
+    let indexes = cases
+        .iter()
+        .enumerate()
+        .all(|(position, &case)| case == position as u64);
+    if boolean && index == 1 {
+        Some(ControlOutcome::Exact(1))
+    } else if indexes {
+        Some(ControlOutcome::DefaultFrom(index))
+    } else {
+        None
+    }
 }
 
 /// Where a control decision is defined.
@@ -2027,24 +2054,34 @@ impl PlanBuilder<'_> {
         };
         let local_domain =
             local_domain.ok_or_else(|| decline(consumer, "has no recovery demand domain"))?;
+        // A gate tests its arms in order, so arm `index`'s complement is what the
+        // later arms take: every index from the next one up where the cases
+        // are the arm indices, else just the rest.
+        let cases = match test {
+            Test::Arm(_) => gamma(consumer)
+                .expect("a Gamma control has a Gamma consumer")
+                .cases(),
+            Test::Repeat => Vec::new(),
+        };
         let desired = match test {
-            Test::Arm(index) => ControlOutcome::Exact(index as u64),
+            Test::Arm(index) => ControlOutcome::Exact(cases[index]),
             Test::Repeat => ControlOutcome::DefaultFrom(1),
         };
+        let rest = |first: usize| match arm_fact(&cases, first, false) {
+            Some(ControlOutcome::DefaultFrom(first)) => ControlOutcome::DefaultFrom(first),
+            _ => ControlOutcome::Rest,
+        };
         let complement = match test {
-            Test::Arm(index) => ControlOutcome::DefaultFrom(index + 1),
+            Test::Arm(index) => rest(index + 1),
             Test::Repeat => ControlOutcome::Exact(0),
         };
         let outcomes = match test {
             Test::Arm(_) => {
-                let arms = gamma(consumer)
-                    .expect("a Gamma control has a Gamma consumer")
-                    .arms()
-                    .len();
-                let mut outcomes = (0..arms.saturating_sub(1))
-                    .map(|index| ControlOutcome::Exact(index as u64))
+                let mut outcomes = cases
+                    .iter()
+                    .map(|&case| ControlOutcome::Exact(case))
                     .collect::<Vec<_>>();
-                outcomes.push(ControlOutcome::DefaultFrom(arms.saturating_sub(1)));
+                outcomes.push(rest(cases.len()));
                 outcomes
             }
             Test::Repeat => vec![ControlOutcome::DefaultFrom(1), ControlOutcome::Exact(0)],

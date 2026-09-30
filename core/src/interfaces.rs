@@ -122,6 +122,15 @@ pub trait BranchGuard {
     fn guarded_successors(&self) -> Vec<(BlockId, ValueId, bool)>;
 }
 
+/// A [`BranchTerminator`] choosing its successor edge by value: edge `i` is taken
+/// where the selector equals case `i`, and the last edge where it equals none.
+/// The CFG analog of a [`Gamma`] naming its cases.
+pub trait CaseGuard {
+    fn selector(&self) -> ValueId;
+    /// The selector bits taking each edge but the last.
+    fn cases(&self) -> Vec<u64>;
+}
+
 /// An operation whose operands and results all carry one type.
 /// Checked by [`verify_opdef_operands`](crate::verify_opdef_operands).
 pub trait SameOperandAndResultType {}
@@ -243,6 +252,27 @@ pub trait Gamma {
     fn arms(&self) -> Vec<RegionId>;
     /// Operands to arm ports, and arm results to op results.
     fn binding(&self) -> Binding;
+    /// The predicate value selecting each arm but the last, as bits of the
+    /// predicate's width; the last arm takes every other value. A gate that
+    /// names no cases indexes its arms: `0, 1, .., arms - 2`.
+    fn cases(&self) -> Vec<u64>;
+
+    /// Whether the predicate is the arm index, as a gate naming no cases has it.
+    fn indexes_arms(&self) -> bool {
+        self.cases()
+            .iter()
+            .enumerate()
+            .all(|(index, &case)| case == index as u64)
+    }
+
+    /// The arm the predicate value `bits` selects.
+    fn arm_for(&self, bits: u64) -> usize {
+        let cases = self.cases();
+        cases
+            .iter()
+            .position(|&case| case == bits)
+            .unwrap_or(cases.len())
+    }
 }
 
 /// A structured loop over an unordered body (θ): the body reads the carried

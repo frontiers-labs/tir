@@ -82,14 +82,13 @@ fn transfer(cfg: &Cfg, live_in: &[BTreeSet<VarId>], node: NodeId) -> BTreeSet<Va
                 }
             }
         },
-        Term::Cond { pred, .. } | Term::LoopTail { pred, .. } => match pred {
-            Src::Value(value) => live.extend(var_of(cfg, *value)),
-            Src::Var(var) => {
-                live.insert(*var);
+        Term::Cond { pred, .. } | Term::LoopTail { pred, .. } | Term::Dispatch { pred, .. } => {
+            match pred {
+                Src::Value(value) => live.extend(var_of(cfg, *value)),
+                Src::Var(var) => {
+                    live.insert(*var);
+                }
             }
-        },
-        Term::Dispatch { var, .. } => {
-            live.insert(*var);
         }
         Term::Jump(_) => {}
     }

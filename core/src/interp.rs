@@ -393,7 +393,10 @@ impl Interpreter<'_, '_> {
             let flow = self.exec_gamma(&instance, gamma.as_ref())?;
             return self.exec_value_flow(op_id, flow);
         }
-        if instance.is::<crate::cfg::BranchOp>() || instance.is::<crate::cfg::CondBranchOp>() {
+        if instance.is::<crate::cfg::BranchOp>()
+            || instance.is::<crate::cfg::CondBranchOp>()
+            || instance.is::<crate::cfg::SwitchOp>()
+        {
             return Ok(Some(self.exec_branch(&instance)?));
         }
         let values = self.eval_leaf(op_id)?;
@@ -424,6 +427,17 @@ impl Interpreter<'_, '_> {
             let condition = self.value_of(instance.operands()[0])?;
             let taken = condition.to_i64().unwrap_or_default() != 0;
             edges[if taken { 0 } else { 1 }].clone()
+        } else if let Some(switch) = instance.clone().as_interface::<dyn crate::CaseGuard>() {
+            let selector = match self.value_of(switch.selector())? {
+                Value::Int(bits) => bits.to_u64(),
+                _ => 0,
+            };
+            let cases = switch.cases();
+            let edge = cases
+                .iter()
+                .position(|&case| case == selector)
+                .unwrap_or(cases.len());
+            edges[edge].clone()
         } else {
             edges[0].clone()
         };
@@ -544,21 +558,19 @@ impl Interpreter<'_, '_> {
         }
     }
 
-    /// A γ: the predicate indexes the arms, past the end selecting the last;
-    /// the chosen arm reads the forwarded operands through its ports and its
-    /// results are the op's.
+    /// A γ: the arm whose case the predicate equals runs, the last arm when
+    /// none does; the chosen arm reads the forwarded operands through its
+    /// ports and its results are the op's.
     fn exec_gamma(&mut self, instance: &crate::OpHandle, gamma: &dyn Gamma) -> Result<Flow> {
         let arms = gamma.arms();
         let binding = gamma.binding();
-        // An arm index has no sign: an `i1` predicate that is true is arm 1,
-        // whatever a signed reading of its one bit says.
+        // A case is bits, not a number: an `i1` predicate that is true is
+        // case 1, whatever a signed reading of its one bit says.
         let chosen = match self.value_of(gamma.predicate())? {
-            Value::Int(index) => index.to_u64(),
+            Value::Int(bits) => bits.to_u64(),
             _ => 0,
         };
-        let arm = arms[usize::try_from(chosen)
-            .unwrap_or(usize::MAX)
-            .min(arms.len() - 1)];
+        let arm = arms[gamma.arm_for(chosen).min(arms.len() - 1)];
         let ports = self.context.get_region(arm).ports();
         let inputs = instance.operands();
         for (port, &input) in ports[binding.ports.clone()]

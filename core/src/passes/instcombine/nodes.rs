@@ -133,34 +133,38 @@ impl Driver<'_> {
         }
         for &op in &ops {
             let instance = self.context.get_op(op);
-            let arms = instance
-                .clone()
-                .as_interface::<dyn Gamma>()
-                .filter(|gamma| {
-                    gamma.arms().len() == 2
-                        && type_width(self.context, self.context.get_value(gamma.predicate()).ty())
-                            == Some(1)
-                })
-                .map(|gamma| (gamma.predicate(), gamma.arms()));
-            match arms {
-                Some((predicate, arms)) => {
-                    for (index, arm) in arms.into_iter().enumerate() {
-                        self.eg.push_context();
-                        self.inject(predicate, index == 1);
-                        self.saturate();
-                        let dirty = self.eg.innermost_dirty();
-                        let scoped = extraction.refresh(&self.eg, &dirty, |_, node| cost(node));
-                        // A spelling built under this arm's fact answers only here.
-                        let mut scoped_memo = memo.clone();
-                        self.commit_nodes(arm, &scoped, &mut scoped_memo)?;
-                        self.eg.pop_context();
-                    }
+            let Some(gamma) = instance.clone().as_interface::<dyn Gamma>() else {
+                for sub in instance.regions() {
+                    self.commit_nodes(sub, extraction, memo)?;
                 }
-                None => {
-                    for sub in instance.regions() {
-                        self.commit_nodes(sub, extraction, memo)?;
-                    }
-                }
+                continue;
+            };
+            // An arm runs where the predicate equals its case; a boolean's
+            // second arm, its default, runs where the predicate is 1.
+            let predicate = gamma.predicate();
+            let width = type_width(self.context, self.context.get_value(predicate).ty());
+            let arms = gamma.arms();
+            let boolean = width == Some(1) && arms.len() == 2;
+            let cases = gamma.cases();
+            for (index, arm) in arms.into_iter().enumerate() {
+                let case = if boolean {
+                    Some(index as u64)
+                } else {
+                    cases.get(index).copied()
+                };
+                let (Some(width), Some(case)) = (width, case) else {
+                    self.commit_nodes(arm, extraction, memo)?;
+                    continue;
+                };
+                self.eg.push_context();
+                self.inject(predicate, width, case);
+                self.saturate();
+                let dirty = self.eg.innermost_dirty();
+                let scoped = extraction.refresh(&self.eg, &dirty, |_, node| cost(node));
+                // A spelling built under this arm's fact answers only here.
+                let mut scoped_memo = memo.clone();
+                self.commit_nodes(arm, &scoped, &mut scoped_memo)?;
+                self.eg.pop_context();
             }
         }
         Ok(())

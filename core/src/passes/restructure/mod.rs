@@ -10,10 +10,11 @@
 //! has several join points. Neither phase copies a node, so the output grows
 //! linearly with the input.
 //!
-//! The pass reads the CFG through [`Terminator`], [`BranchTerminator`] and
-//! [`BranchGuard`] only, so it restructures any dialect's control flow. The
-//! operations it *creates* are `scf` ones plus the integer constants the
-//! predicates need.
+//! The pass reads the CFG through [`Terminator`], [`BranchTerminator`],
+//! [`BranchGuard`] and [`CaseGuard`] only, so it restructures any dialect's
+//! control flow. A multi-way branch becomes one conditional over all its
+//! cases rather than a conditional per case. The operations it *creates* are
+//! `scf` ones plus the integer constants the predicates need.
 //!
 //! `restructure-nodes` produces unordered regions of `scf.switch`, `scf.loop`
 //! and `scf.for`, constructing memory order first, since an unordered region

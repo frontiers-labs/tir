@@ -197,17 +197,19 @@ impl CfgEdges<'_> {
         self.context.get_block(block).append(op.id());
     }
 
+    /// Branch on `predicate` equalling `case`, or, without one, on a loop's
+    /// repeat predicate holding.
     fn branch_value(
         &self,
         block: BlockId,
         predicate: ValueId,
-        test: Test,
+        case: Option<u64>,
         taken: &Edge,
         fallthrough: &Edge,
         mint: &mut dyn FnMut() -> BlockId,
     ) {
-        let (condition, holds) = match test {
-            Test::Repeat => {
+        let (condition, holds) = match case {
+            None => {
                 // Restructure negates a head-tested loop's exit into a tail
                 // repeat (`xori(cmp, 1)`). Branch on the comparison with the
                 // edges swapped instead of materializing the negation.
@@ -216,22 +218,23 @@ impl CfgEdges<'_> {
                     None => (predicate, true),
                 }
             }
-            Test::Arm(index) => {
+            Some(case) => {
                 let ty = self.context.get_value(predicate).ty();
                 if ty == IntegerType::new(self.context, 1) {
-                    (predicate, index == 1)
+                    (predicate, case == 1)
                 } else {
+                    let width = crate::sem::egraph::type_width(self.context, ty).unwrap_or(64);
                     let holder = self.context.get_block(block);
-                    let index = holder.append_op(
+                    let case = holder.append_op(
                         ConstantOpBuilder::new(self.context)
-                            .value(index as i64)
+                            .value(crate::binding::signed_bits(case, width))
                             .result_type(ty)
                             .build(),
                     );
                     let equal = holder.append_op(
                         CmpIOpBuilder::new(self.context)
                             .lhs(predicate)
-                            .rhs(index.result())
+                            .rhs(case.result())
                             .predicate(Predicate::Eq)
                             .result_type(IntegerType::new(self.context, 1))
                             .build(),
@@ -273,11 +276,14 @@ impl Edges for CfgEdges<'_> {
         fallthrough: &Edge,
         mint: &mut dyn FnMut() -> BlockId,
     ) -> Result<(), PassError> {
-        let predicate = match test {
-            Test::Repeat => theta(op)?.predicate(),
-            Test::Arm(_) => gamma(op)?.predicate(),
+        let (predicate, case) = match test {
+            Test::Repeat => (theta(op)?.predicate(), None),
+            Test::Arm(index) => {
+                let gamma = gamma(op)?;
+                (gamma.predicate(), gamma.cases().get(index).copied())
+            }
         };
-        self.branch_value(block, predicate, test, taken, fallthrough, mint);
+        self.branch_value(block, predicate, case, taken, fallthrough, mint);
         Ok(())
     }
 
@@ -293,12 +299,12 @@ impl Edges for CfgEdges<'_> {
         fallthrough: &Edge,
         mint: &mut dyn FnMut() -> BlockId,
     ) -> Result<(), PassError> {
-        let test = match control.outcomes.get(outcome) {
-            Some(ControlOutcome::Exact(value)) => Test::Arm(*value as usize),
+        let case = match control.outcomes.get(outcome) {
+            Some(ControlOutcome::Exact(value)) => Some(*value),
             Some(ControlOutcome::DefaultFrom(_))
                 if control.predicate_type == IntegerType::new(self.context, 1) =>
             {
-                Test::Repeat
+                None
             }
             _ => {
                 return Err(PassError::InvalidRuleSet(
@@ -306,7 +312,7 @@ impl Edges for CfgEdges<'_> {
                 ));
             }
         };
-        self.branch_value(block, predicate, test, taken, fallthrough, mint);
+        self.branch_value(block, predicate, case, taken, fallthrough, mint);
         Ok(())
     }
 

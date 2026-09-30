@@ -40,8 +40,13 @@ conditional's results.
 TIR uses three SCF operations to express this structure:
 
 - `scf.switch` selects one alternative and produces that alternative's results.
-  Its integer predicate indexes the alternatives. A value beyond the last
-  index selects the last alternative.
+  Each alternative but the last has a case value, and the last is the default.
+  The predicate selects the alternative whose case it equals, or the default
+  when it equals none. Without a `cases` attribute, the cases are the
+  alternative indices, so a value beyond the last index selects the last
+  alternative. The text labels named cases as `case 10 { .. }` and the
+  default as `default { .. }`, the way MLIR's `scf.index_switch` does. A
+  one-bit predicate always indexes its two alternatives.
 - `scf.loop` carries values through repeated evaluations of a body region.
   The body produces a repeat predicate, values for the next iteration, and
   values to return when the loop stops.
@@ -174,10 +179,13 @@ terminator inside it.
 
 ### Input boundaries
 
-The CFG reader uses the `Terminator`, `BranchTerminator`, and `BranchGuard`
-interfaces. It accepts unconditional branches and two-way conditional branches
-whose guard describes both edges. Branches with more than two successors need
-lowering before this conversion.
+The CFG reader uses the `Terminator`, `BranchTerminator`, `BranchGuard`, and
+`CaseGuard` interfaces. It accepts unconditional branches, two-way conditional
+branches whose guard describes both edges, and multi-way branches such as
+`cfg.switch` whose guard names a case for every edge but the default. A
+multi-way branch becomes one `scf.switch` carrying its cases, so a `switch`
+statement nests one level however many cases it has. Other branches with more
+than two successors need lowering before this conversion.
 
 The input also needs an exit node. Multiple exits must have compatible
 terminators and operands so the pass can combine them. These requirements
@@ -193,7 +201,11 @@ selection replaces the source operations.
 
 Recovery first prepares computation fragments, producer-owned control
 definitions, and unresolved continuations. Each definition has a finite set of
-exact or default outcomes. A separate routing map records which outcome a
+exact or default outcomes. An exact outcome is a predicate value: a case value
+for a conditional that names its cases, or the arm index for one that does
+not. A default outcome is every value from some index up, which only holds for
+indexed arms. The default past named cases is every other value, so it records
+no fact on its path. A separate routing map records which outcome a
 conditional or loop consumes. FINISH starts at the definition, selects an
 outcome, and follows its fact through region bindings to the next computation.
 A structural operation need not become a branch or a merge block. For example,

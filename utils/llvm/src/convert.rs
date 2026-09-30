@@ -832,6 +832,27 @@ fn lower_inst(
                 by_label,
             )?;
         }
+        Inst::Switch {
+            ty,
+            value,
+            default,
+            cases,
+        } => {
+            let selector = val!(value, ty);
+            lower_switch(
+                context,
+                body,
+                selector,
+                ty,
+                default,
+                cases,
+                current_label,
+                phis,
+                values,
+                globals,
+                by_label,
+            )?;
+        }
         Inst::Ret { value } => match value {
             None => {
                 body.append_op(func_ops::r#return(context, Operand::none()).build());
@@ -1046,6 +1067,49 @@ fn lower_cond_br(
             false_block,
         )
         .build(),
+    );
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn lower_switch(
+    context: &Context,
+    body: &BlockHandle,
+    selector: ValueId,
+    ty: &Type,
+    default: &str,
+    cases: &[(i64, String)],
+    current_label: &str,
+    phis: &HashMap<String, &Vec<Inst>>,
+    values: &HashMap<String, ValueId>,
+    globals: &HashMap<String, ValueId>,
+    by_label: &HashMap<String, BlockHandle>,
+) -> Result<(), Error> {
+    let Type::Int(width) = ty else {
+        return Err(Error::Parse(format!("switch on a non-integer type {ty:?}")));
+    };
+    let successor = |label: &str| -> Result<tir::cfg::Successor, Error> {
+        let block = by_label
+            .get(label)
+            .ok_or_else(|| Error::UndefinedBlock(label.into()))?
+            .id();
+        let args = phi_arguments(context, body, label, current_label, phis, values, globals)?;
+        Ok((block, args))
+    };
+    let cases = cases
+        .iter()
+        .map(|(case, label)| {
+            Ok((
+                tir::binding::truncate_bits(*case, *width),
+                successor(label)?,
+            ))
+        })
+        .collect::<Result<Vec<_>, Error>>()?;
+    body.append_op(
+        tir::cfg::SwitchOpBuilder::new(context)
+            .selector(selector)
+            .successors(cases, successor(default)?)
+            .build(),
     );
     Ok(())
 }
@@ -1337,17 +1401,9 @@ fn phi_arguments(
             _ => None,
         })
         .map(|(ty, incoming)| {
-            let original_predecessor = predecessor
-                .strip_prefix("llvm.switch.next.")
-                .and_then(|suffix| suffix.rsplit_once('.'))
-                .and_then(|(prefix, _)| prefix.rsplit_once('.'))
-                .map(|(original, _)| original);
             let operand = incoming
                 .iter()
-                .find(|(_, block)| {
-                    block == predecessor
-                        || original_predecessor.is_some_and(|original| block == original)
-                })
+                .find(|(_, block)| block == predecessor)
                 .map(|(operand, _)| operand)
                 .ok_or_else(|| {
                     Error::Parse(format!(

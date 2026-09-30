@@ -182,18 +182,20 @@ impl Driver<'_> {
         depth
     }
 
-    /// Assume `value == holds` in the current context by unioning its class with the
-    /// matching boolean constant. An equality the assumption settles says more than
-    /// the truth of the condition: the two operands name one value there, so their
-    /// classes are merged as well and every term over either is a term over the
-    /// cheapest form of both — the literal, where one side is one.
-    fn inject(&mut self, value: ValueId, holds: bool) {
-        let cond = self.class_of(value);
+    /// Assume the `width`-bit `value` is `bits` in the current context by unioning
+    /// its class with that constant. An equality a boolean assumption settles says
+    /// more than the truth of the condition: the two operands name one value
+    /// there, so their classes are merged as well and every term over either is a
+    /// term over the cheapest form of both — the literal, where one side is one.
+    fn inject(&mut self, value: ValueId, width: u32, bits: u64) {
+        let class = self.class_of(value);
         let constant = self
             .eg
-            .add(Node::constant(APInt::new(1, holds as u64), Prov::None));
-        self.eg.union(cond, constant);
-        if let Some((lhs, rhs)) = self.settled_equality(value, holds) {
+            .add(Node::constant(APInt::new(width, bits), Prov::None));
+        self.eg.union(class, constant);
+        if width == 1
+            && let Some((lhs, rhs)) = self.settled_equality(value, bits == 1)
+        {
             self.eg.union(lhs, rhs);
         }
         self.eg.rebuild();

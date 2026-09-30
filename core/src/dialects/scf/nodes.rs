@@ -43,8 +43,9 @@ impl ExitScope for LoopOp {
     }
 }
 
-// A γ: the predicate is the index of the arm that runs, and a predicate past
-// the last arm selects the last arm, so every predicate value picks one.
+// A γ: arm `i` runs when the predicate equals case `i`, and the last arm, the
+// default, takes every other value. Without a `cases` attribute the cases are
+// the arm indices, so a predicate past the last arm selects the last arm.
 operation! {
     SwitchOp {
         name: "switch",
@@ -74,6 +75,17 @@ operation! {
 impl ExitScope for SwitchOp {
     fn exit_scope(&self) -> ExitScopeKind {
         ExitScopeKind::Switch
+    }
+}
+
+impl SwitchOpBuilder {
+    /// Run arm `i` on the predicate bits `cases[i]` and the last arm on every
+    /// other value.
+    pub fn cases(self, cases: &[u64]) -> Self {
+        match binding::gamma_cases_attribute(cases) {
+            Some(cases) => self.attr(binding::GAMMA_CASES, cases),
+            None => self,
+        }
     }
 }
 

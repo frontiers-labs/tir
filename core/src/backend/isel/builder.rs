@@ -278,7 +278,12 @@ impl<'a> SemDagBuilder<'a> {
                 }
                 ControlOutcome::Exact(value) => {
                     let class = self.build_from_value(predicate);
-                    let expected = self.add_int(APInt::new(width, value), Some(ty));
+                    // Spelled as the IR spells a literal, so a negative case
+                    // is the immediate a compare takes rather than its bits.
+                    let expected = self.add_int(
+                        APInt::new_signed(width, crate::binding::signed_bits(value, width)),
+                        Some(ty),
+                    );
                     (
                         self.add_op(SymKind::Eq, vec![class, expected], Some(boolean)),
                         false,
@@ -295,6 +300,9 @@ impl<'a> SemDagBuilder<'a> {
                         true,
                     )
                 }
+                // The rest of a partition is where its tests all fail, so it
+                // is only ever last, and the last outcome is never tested.
+                ControlOutcome::Rest => continue,
             };
             // Preserve the existing fused form of a negated boolean test.
             let class = if width == 1 {

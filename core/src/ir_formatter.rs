@@ -7,7 +7,7 @@ use crate::utils::Rng;
 
 pub struct IRFormatter<'a> {
     w: &'a mut dyn Write,
-    padding: u8,
+    padding: usize,
     new_line: bool,
     region_block_numbers: Vec<HashMap<BlockId, u32>>,
     /// Attribute values printed as `#name` because the file defines an alias for
