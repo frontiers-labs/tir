@@ -322,6 +322,15 @@ impl SwitchOp {
 impl tir::Verifiable for SwitchOp {
     fn verify_impl(&self, context: &Context) -> Result<(), Error> {
         let fail = |message: String| Err(Error::VerificationError(format!("cfg.switch {message}")));
+        for name in [CASES, ARG_COUNTS] {
+            if let Some(AttributeValue::Array(items)) = self.attr(name)
+                && items
+                    .iter()
+                    .any(|item| !matches!(item, AttributeValue::UInt(_)))
+            {
+                return fail(format!("{name} must be unsigned integers"));
+            }
+        }
         let edges = self.edges();
         let cases = self.cases();
         let counts = self.unsigned(ARG_COUNTS);
