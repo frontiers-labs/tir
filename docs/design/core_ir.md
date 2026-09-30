@@ -48,6 +48,12 @@ definitions support reasoning about equivalent computations and can supply
 constant folding. They complement structural verification, which checks whether
 the operation has valid inputs, outputs, and regions.
 
+Maps whose traversal selects a diagnostic use `tir_adt::IndexMap` when the
+input walk defines the order. The module symbol table retains first-definition
+order, and state-fork verification checks states in first-encounter order.
+Lookup-only maps remain `HashMap`. Insertion order is deterministic only when
+the input walk is deterministic; use `shift_remove` when survivor order matters.
+
 ## Proposed flows
 
 The following flows are a proposed organization for compilation. They describe

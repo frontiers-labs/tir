@@ -16,8 +16,8 @@ use crate::{Context, Error, OpHandle, OpId, RegionId};
 /// State crossing a region boundary does so as a carried argument, which is a
 /// fresh value, so a single walk of the whole tree suffices.
 pub(crate) fn verify_state_forks(context: &Context, op_id: OpId) -> Result<(), Error> {
-    let mut consumers: std::collections::HashMap<crate::ValueId, Vec<(StateConsumer, bool)>> =
-        std::collections::HashMap::new();
+    let mut consumers: tir_adt::IndexMap<crate::ValueId, Vec<(StateConsumer, bool)>> =
+        tir_adt::IndexMap::new();
     let mut theta_paths = std::collections::HashMap::new();
     let mut worklist = vec![op_id];
     while let Some(op_id) = worklist.pop() {

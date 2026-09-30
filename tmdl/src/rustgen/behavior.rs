@@ -315,7 +315,7 @@ fn emit_sym_inits(
     .max()
     .unwrap_or(0) as usize;
 
-    let mut entries: Vec<proc_macro2::TokenStream> = Vec::new();
+    let mut entries: Vec<(u32, proc_macro2::TokenStream)> = Vec::new();
     for (name, &sym_id) in variable_symbols {
         let sym_lit = proc_macro2::Literal::usize_unsuffixed(sym_id as usize);
         let name_lit = proc_macro2::Literal::string(name);
@@ -330,11 +330,11 @@ fn emit_sym_inits(
                             32 => (8, 23),
                             _ => (11, 52),
                         };
-                        entries.push(quote! {
+                        entries.push((sym_id, quote! {
                             (#sym_lit, tir::backend::exec::SymSource::FloatRegisterAttr(
                                 #name_lit, #exponent, #mantissa
                             ))
-                        });
+                        }));
                         continue;
                     }
                     let variant = if width > 64 {
@@ -342,18 +342,18 @@ fn emit_sym_inits(
                     } else {
                         format_ident!("RegisterAttr")
                     };
-                    entries.push(quote! {
+                    entries.push((sym_id, quote! {
                         (#sym_lit, tir::backend::exec::SymSource::#variant(#name_lit))
-                    });
+                    }));
                 }
-                Type::Integer => entries.push(quote! {
+                Type::Integer => entries.push((sym_id, quote! {
                     (#sym_lit, tir::backend::exec::SymSource::IntAttr(#name_lit, 64))
-                }),
+                })),
                 Type::Bits(width) => {
                     let width_lit = proc_macro2::Literal::u32_unsuffixed(*width as u32);
-                    entries.push(quote! {
+                    entries.push((sym_id, quote! {
                         (#sym_lit, tir::backend::exec::SymSource::IntAttr(#name_lit, #width_lit))
-                    });
+                    }));
                 }
                 _ => {}
             }
@@ -362,18 +362,18 @@ fn emit_sym_inits(
             // selected feature set, falling back to the widest TMDL value for
             // contexts that don't configure ISA params.
             let value_lit = proc_macro2::Literal::i64_unsuffixed(value);
-            entries.push(quote! {
+            entries.push((sym_id, quote! {
                 (#sym_lit, tir::backend::exec::SymSource::IsaParam(#name_lit, #value_lit))
-            });
+            }));
         }
     }
     for ((class, number), &sym_id) in register_symbols {
         let sym_lit = proc_macro2::Literal::usize_unsuffixed(sym_id as usize);
         let class_lit = proc_macro2::Literal::string(class);
         let number_lit = proc_macro2::Literal::u16_unsuffixed(*number as u16);
-        entries.push(quote! {
+        entries.push((sym_id, quote! {
             (#sym_lit, tir::backend::exec::SymSource::FixedRegister(#class_lit, #number_lit))
-        });
+        }));
     }
 
     // `regnum(op)` binds a symbol to the operand's encoding index. The index is
@@ -382,12 +382,14 @@ fn emit_sym_inits(
     for (name, &sym_id) in regnum_symbols {
         let sym_lit = proc_macro2::Literal::usize_unsuffixed(sym_id as usize);
         let name_lit = proc_macro2::Literal::string(name);
-        entries.push(quote! {
+        entries.push((sym_id, quote! {
             (#sym_lit, tir::backend::exec::SymSource::RegAttrIndex(#name_lit))
-        });
+        }));
     }
 
-    (max_sym_id, entries)
+    // Symbol IDs follow expression traversal, independent of hash order.
+    entries.sort_unstable_by_key(|(id, _)| *id);
+    (max_sym_id, entries.into_iter().map(|(_, entry)| entry).collect())
 }
 
 fn emit_graph_destination(

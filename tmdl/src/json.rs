@@ -377,7 +377,9 @@ struct Parameter {
     value: Option<Expr>,
 }
 
-fn parameters(params: &HashMap<String, (AstType, Option<ast::Expr>)>) -> Vec<Parameter> {
+fn parameters(
+    params: &crate::utils::StableHashMap<String, (AstType, Option<ast::Expr>)>,
+) -> Vec<Parameter> {
     let mut result = params
         .iter()
         .map(|(name, (ty, value))| Parameter {

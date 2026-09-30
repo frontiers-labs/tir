@@ -1,25 +1,24 @@
 use core::fmt;
-use std::collections::hash_map::{
-    IntoIter as HashMapIntoIter, Iter as HashMapIter, IterMut as HashMapIterMut,
-};
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 use std::ops::{Deref, DerefMut};
+use tir_adt::{FxBuildHasher, IndexMap};
 
 use crate::Type;
 use crate::ast::{self, Instruction, Item};
 
+/// Parameters traverse declaration order; debug output retains sorted keys.
 #[derive(PartialEq, Clone)]
-pub struct StableHashMap<K: Eq + Hash, V: PartialEq>(HashMap<K, V>);
+pub struct StableHashMap<K: Eq + Hash, V: PartialEq>(IndexMap<K, V, FxBuildHasher>);
 
 impl<K: Eq + Hash, V: PartialEq> Default for StableHashMap<K, V> {
     fn default() -> Self {
-        Self(HashMap::new())
+        Self(IndexMap::default())
     }
 }
 
 impl<K: Eq + Hash, V: PartialEq> Deref for StableHashMap<K, V> {
-    type Target = HashMap<K, V>;
+    type Target = IndexMap<K, V, FxBuildHasher>;
 
     fn deref(&self) -> &Self::Target {
         &self.0
@@ -44,24 +43,18 @@ where
     }
 }
 
-impl<K: Eq + Hash, V: PartialEq> From<HashMap<K, V>> for StableHashMap<K, V> {
-    fn from(val: HashMap<K, V>) -> Self {
-        StableHashMap(val)
-    }
-}
-
 impl<K: Eq + Hash, V: PartialEq> FromIterator<(K, V)> for StableHashMap<K, V>
 where
     K: Eq + Hash,
 {
     fn from_iter<I: IntoIterator<Item = (K, V)>>(iter: I) -> Self {
-        Self(HashMap::from_iter(iter))
+        Self(IndexMap::from_iter(iter))
     }
 }
 
 impl<K: Eq + Hash, V: PartialEq> IntoIterator for StableHashMap<K, V> {
     type Item = (K, V);
-    type IntoIter = HashMapIntoIter<K, V>;
+    type IntoIter = <IndexMap<K, V, FxBuildHasher> as IntoIterator>::IntoIter;
 
     fn into_iter(self) -> Self::IntoIter {
         self.0.into_iter()
@@ -70,7 +63,7 @@ impl<K: Eq + Hash, V: PartialEq> IntoIterator for StableHashMap<K, V> {
 
 impl<'a, K: Eq + Hash, V: PartialEq> IntoIterator for &'a StableHashMap<K, V> {
     type Item = (&'a K, &'a V);
-    type IntoIter = HashMapIter<'a, K, V>;
+    type IntoIter = <&'a IndexMap<K, V, FxBuildHasher> as IntoIterator>::IntoIter;
 
     fn into_iter(self) -> Self::IntoIter {
         self.0.iter()
@@ -79,7 +72,7 @@ impl<'a, K: Eq + Hash, V: PartialEq> IntoIterator for &'a StableHashMap<K, V> {
 
 impl<'a, K: Eq + Hash, V: PartialEq> IntoIterator for &'a mut StableHashMap<K, V> {
     type Item = (&'a K, &'a mut V);
-    type IntoIter = HashMapIterMut<'a, K, V>;
+    type IntoIter = <&'a mut IndexMap<K, V, FxBuildHasher> as IntoIterator>::IntoIter;
 
     fn into_iter(self) -> Self::IntoIter {
         self.0.iter_mut()

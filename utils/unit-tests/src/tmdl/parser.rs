@@ -4,6 +4,34 @@ use tir_symbolic::sem::{decode_sem_ops, ExtendSemBytes, SemGraph, SemOp, SemPayl
 
 use super::support::generate_source;
 
+#[test]
+fn parameters_follow_declaration_order() {
+    let source = "isa Test { param Z: Integer = 1; param A: Integer = 2; param M: Integer = 3; }";
+    for _ in 0..16 {
+        let (tokens, errors) = tmdl::lex(source);
+        assert!(errors.is_empty());
+        let (file, errors) = tmdl::parse(source, &tokens, "parameters.tmdl");
+        assert!(errors.is_empty());
+        let file = file.unwrap();
+        let isa = file.isas().next().unwrap();
+        assert_eq!(
+            isa.parameters
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            ["Z", "A", "M"]
+        );
+        assert_eq!(
+            isa.parameters
+                .clone()
+                .into_iter()
+                .map(|(name, _)| name)
+                .collect::<Vec<_>>(),
+            ["Z", "A", "M"]
+        );
+    }
+}
+
 const HSUM: &str = r#"
 isa Test { param XLEN: Integer = 32; }
 

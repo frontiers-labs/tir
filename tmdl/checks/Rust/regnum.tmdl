@@ -70,7 +70,11 @@ instruction TCsrSet for [RegIsa] {
 // The index symbol binds to the operand's decoded attribute index, not its
 // register value (`RegAttrIndex`, unlike the `RegisterAttr` value read), and is
 // captured in the entry symbol table before any behavior statement executes.
-// CHECK: tir::backend::exec::SymSource::RegAttrIndex("rs1")
+// CHECK: sources: &[
+// CHECK-NEXT: (0, tir::backend::exec::SymSource::RegisterAttr("csr")),
+// CHECK-NEXT: (1, tir::backend::exec::SymSource::RegAttrIndex("rs1")),
+// CHECK-NEXT: (2, tir::backend::exec::SymSource::RegisterAttr("rs1")),
+// CHECK-NEXT: ],
 
 // The guard's condition is a Ne over the captured index symbol and zero; the
 // condition itself lives in the sem blob (tmdl/tests/sem_blob.rs).

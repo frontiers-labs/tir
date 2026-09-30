@@ -7,6 +7,61 @@ use tir::{
 
 use super::fixtures;
 
+#[test]
+fn symbol_errors_follow_definition_order() {
+    for _ in 0..16 {
+        let (context, module) = fixtures::parse(
+            r#"module {
+%z1 = func.func @zeta() { func.return }
+%z2 = func.func @zeta() { func.return }
+%a1 = func.func @alpha() { func.return }
+%a2 = func.func @alpha() { func.return }
+module_end
+}"#,
+        );
+        let table = tir::SymbolTable::build(&context, module.id());
+        assert_eq!(table.names().collect::<Vec<_>>(), ["zeta", "alpha"]);
+        assert!(table
+            .verify(&context)
+            .unwrap_err()
+            .to_string()
+            .contains("@zeta()"));
+    }
+}
+
+#[test]
+fn state_errors_follow_operand_walk_order() {
+    for _ in 0..16 {
+        let (context, module, _, body) = fixtures::parse_function(
+            r#"module {
+%f = func.func @main() {
+  %s0 = state.entry_state : !state<fp.env>
+  %s1 = state.entry_state : !state<fp.env>
+  %r0, %s2 = fp.get_round state(%s0) : !fp.rounding
+  %r1, %s3 = fp.get_round state(%s0) : !fp.rounding
+  %r2, %s4 = fp.get_round state(%s1) : !fp.rounding
+  %r3, %s5 = fp.get_round state(%s1) : !fp.rounding
+  func.return
+}
+module_end
+}"#,
+        );
+        let first = context
+            .get_op(context.get_region(body).op_ids()[0])
+            .results()[0];
+        let error = tir::verify_op_tree(&context, module.id())
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains(&format!(
+                "state %{} has incompatible concurrent uses",
+                first.number()
+            )),
+            "{error}"
+        );
+    }
+}
+
 // An operation holding one ordered region and nothing else, so a commit to it
 // is a commit to a region an op owns without also being a port contract the
 // staged body would have to satisfy.

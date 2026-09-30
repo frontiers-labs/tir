@@ -9,7 +9,7 @@
 //! overloadable — and data symbols carry no signature and own their name
 //! exclusively.
 
-use std::collections::HashMap;
+use tir_adt::IndexMap;
 
 use crate::analysis::{Analysis, AnalysisManager};
 use crate::attributes::AttributeValue;
@@ -25,14 +25,14 @@ pub struct SymbolEntry {
 }
 
 pub struct SymbolTable {
-    symbols: HashMap<String, Vec<SymbolEntry>>,
+    symbols: IndexMap<String, Vec<SymbolEntry>>,
 }
 
 impl SymbolTable {
     /// Collect the symbols defined directly in `module`'s body. Nested regions
     /// are not scanned: a module is the only symbol table, and it is flat.
     pub fn build(context: &Context, module: OpId) -> Self {
-        let mut symbols: HashMap<String, Vec<SymbolEntry>> = HashMap::new();
+        let mut symbols: IndexMap<String, Vec<SymbolEntry>> = IndexMap::new();
         let instance = context.get_op(module);
         for region in instance.regions() {
             for block in context.get_region(region).iter(context.clone()) {
@@ -62,6 +62,7 @@ impl SymbolTable {
         self.symbols.get(name).map_or(&[], Vec::as_slice)
     }
 
+    /// Distinct symbol names in first-definition order.
     pub fn names(&self) -> impl Iterator<Item = &str> {
         self.symbols.keys().map(String::as_str)
     }
