@@ -9,7 +9,7 @@ use std::{
 };
 
 use std::cell::{Ref, RefCell, RefMut};
-use tir_adt::{Interner, Sym};
+use tir_adt::{IndexMap, Interner, Sym};
 
 use crate::overlay::{Delta, EditBatch, Frozen, commit_epoch, conflict};
 use crate::run::AttrRunId;
@@ -951,7 +951,7 @@ impl Context {
     pub fn verify_use_lists(&self) -> Result<(), Error> {
         let view = self.view();
         let (base, delta) = (view.base(), &view.delta);
-        let mut expected: HashMap<ValueId, Vec<Use>> = HashMap::new();
+        let mut expected: IndexMap<ValueId, Vec<Use>> = IndexMap::new();
         let base_ops = base
             .ops
             .handles()

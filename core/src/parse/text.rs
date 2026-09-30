@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use tir_adt::IndexMap;
 
 use crate::attributes::{AttributeValue, RegisterAttr};
 use crate::block::BlockId;
@@ -11,7 +12,7 @@ pub(crate) struct RegionParseState {
     /// Every label seen so far, whether defined by `^name:` or only referenced
     /// as a successor. A referenced-only label owns a block that joins the
     /// region once its definition appears.
-    pub labels: HashMap<String, BlockId>,
+    pub labels: IndexMap<String, BlockId>,
     /// The labels whose defining `^name:` has been parsed. The entry block is
     /// defined under the name `bb0` as soon as it exists.
     pub defined: HashSet<String>,

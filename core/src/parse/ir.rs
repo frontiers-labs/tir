@@ -1,7 +1,8 @@
 use crate::BlockHandle;
 use crate::RegionHandle;
 use std::any::Any;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
+use tir_adt::IndexMap;
 
 use crate::attributes::{AttributeValue, NamedAttribute};
 use crate::block::BlockId;
@@ -270,7 +271,7 @@ impl<'src> TextParser<'src> {
         let enclosing = self.region_parse.take();
         self.region_parse = Some(super::text::RegionParseState {
             region: region.id(),
-            labels: HashMap::new(),
+            labels: IndexMap::new(),
             defined: HashSet::new(),
             entry: None,
             arguments: entry_args,
