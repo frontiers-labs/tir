@@ -36,8 +36,9 @@ pub struct Parser<'src> {
     /// Placeholder values standing in for names not yet defined when they were
     /// first used. Module-level λ and δ values are usable before their
     /// definition appears, so a reference creates a placeholder and the parse
-    /// rewrites it once the whole operation is in.
-    forward: HashMap<String, ValueId>,
+    /// rewrites it once the whole operation is in. Keep first-reference order
+    /// so unresolved-name diagnostics are stable.
+    forward: IndexMap<String, ValueId>,
     /// Whether a name this parse has not bound yet may still be defined later.
     /// A detached single-op parse says no: there, an unbound numeric name is a
     /// value the caller already owns.
@@ -54,7 +55,7 @@ impl<'src> Parser<'src> {
             position: 0,
             region_parse: None,
             value_names: HashMap::new(),
-            forward: HashMap::new(),
+            forward: IndexMap::new(),
             forward_references: true,
             aliases: HashMap::new(),
         }

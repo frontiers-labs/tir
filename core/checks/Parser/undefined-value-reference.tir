@@ -1,0 +1,13 @@
+// RUN: not tir opt %s 2>&1 | filecheck %s
+
+// Unresolved names are reported in reference order.
+
+module {
+  %f = func.func @unbound() -> !i32 {
+    %r = addi %zeta, %alpha : !i32
+    func.return %r
+  }
+  module_end
+}
+
+// CHECK: UnknownValueRef(\"zeta\")

@@ -50,7 +50,8 @@ the operation has valid inputs, outputs, and regions.
 
 Maps whose traversal selects a diagnostic use `tir_adt::IndexMap` when the
 input walk defines the order. The module symbol table retains first-definition
-order, and the parser reports undefined labels in first-reference order.
+order, and the parser reports undefined labels and values in first-reference
+order.
 State-fork and use-list verification check values in first-encounter order.
 Lookup-only maps remain `HashMap`. Insertion order is deterministic only when
 the input walk is deterministic; use `shift_remove` when survivor order matters.
