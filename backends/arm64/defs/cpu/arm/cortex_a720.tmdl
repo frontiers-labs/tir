@@ -7,6 +7,12 @@ machine CortexA720 ("cortex-a720") for [ARMv8A64] {
     // Effective scheduling window; this does not identify physical ROB capacity.
     buffers { rob = 64; }
 
+    // Effective rename capacities keep the scheduling window available.
+    reg_file {
+        GPR { count = 64; }
+        VPR { count = 64; }
+    }
+
     unit Int0 { count = 1; }
     unit Int1 { count = 1; }
     unit Int2 { count = 1; }
