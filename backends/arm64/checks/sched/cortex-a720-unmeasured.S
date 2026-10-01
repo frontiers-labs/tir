@@ -27,5 +27,5 @@ f:
 # CHECK-NEXT: 4      1      ldr q9, [x1, 16]
 # CHECK-NEXT: 2      1      str w2, [sp, 8]
 # CHECK: Resource pressure per iteration:
-# CHECK-NEXT: [0]   [1]   [2]   [3]   [4]   [5]   [6]   [7]   [8]   [9]
-# CHECK-NEXT: 0.00  0.00  0.00  0.00  0.00  0.00  0.00  0.00  0.00  11.00
+# CHECK-NEXT: [0]   [1]   [2]   [3]   [4]   [5]   [6]   [7]   [8]   [9]   [10]
+# CHECK-NEXT: 0.00  0.00  0.00  0.00  1.00  1.00  0.00  0.00  2.00  6.00  1.00

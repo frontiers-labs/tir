@@ -6,7 +6,7 @@ use std::fmt::Write;
 
 use clap::ValueEnum;
 
-use tir_sim::scoreboard::{EventHandler, SimContext};
+use tir_sim::scoreboard::{EventHandler, SimContext, is_eliminated};
 
 /// The selectable report formats.
 #[derive(Copy, Clone, PartialEq, Eq, ValueEnum)]
@@ -62,15 +62,9 @@ impl EventHandler for ResourceView {
             .base
             .iter()
             .map(|instruction| {
-                let zero_idiom = instruction.class.zero_idiom
-                    && !instruction.uses.is_empty()
-                    && instruction
-                        .uses
-                        .iter()
-                        .all(|used| instruction.defs.contains(used));
                 (
                     instruction.class.decode_uops,
-                    if instruction.class.eliminated || zero_idiom {
+                    if is_eliminated(instruction) {
                         0
                     } else {
                         instruction.class.uops.len().max(1).min(u16::MAX as usize) as u16
@@ -96,7 +90,7 @@ impl EventHandler for ResourceView {
             .iter()
             .map(|b| InstrRow {
                 text: b.text.clone(),
-                latency: b.class.latency,
+                latency: if is_eliminated(b) { 0 } else { b.class.latency },
                 rthroughput: b.class.rthroughput,
             })
             .collect();

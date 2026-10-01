@@ -514,13 +514,13 @@ fn is_zero_idiom(slot: &ScoreboardInstr) -> bool {
 
 /// Whether this instance completes in the rename stage: it reserves no
 /// execution resource and its result is available the cycle it issues.
-fn renamed(slot: &ScoreboardInstr) -> bool {
+pub fn is_eliminated(slot: &ScoreboardInstr) -> bool {
     slot.class.eliminated || is_zero_idiom(slot)
 }
 
 /// The latency of this instance: zero when the rename stage completes it.
 fn instr_latency(slot: &ScoreboardInstr) -> u64 {
-    if renamed(slot) {
+    if is_eliminated(slot) {
         0
     } else {
         u64::from(slot.class.latency)
@@ -534,7 +534,7 @@ fn edge_latency(
     producer: &ScoreboardInstr,
     consumer: &InstrSchedClass,
 ) -> u64 {
-    if renamed(producer) {
+    if is_eliminated(producer) {
         return 0;
     }
     if let (Some(p), Some(c)) = (producer.class.resources.first(), consumer.resources.first())
@@ -569,7 +569,7 @@ impl ReadinessSummary {
         let mut summary = Self::empty(forward_destinations);
         summary.fallback = (issue + instr_latency(producer)).max(result_extra);
         for (ready, destination) in summary.forwarded.iter_mut().zip(forward_destinations) {
-            let latency = if renamed(producer) {
+            let latency = if is_eliminated(producer) {
                 0
             } else {
                 producer
@@ -829,7 +829,7 @@ pub fn run(
         }
 
         let mut chosen = Vec::new();
-        if !renamed(slot) {
+        if !is_eliminated(slot) {
             t = reserve_class_resources(&slot.class, &mut lanes, t, &mut chosen, &usage);
             for (resource, cycles) in &chosen {
                 *usage.entry(resource).or_default() += u64::from(*cycles);
@@ -1380,7 +1380,7 @@ fn reserve_lanes_at(
     cycle: u64,
 ) -> Option<Vec<(&'static str, u16)>> {
     let mut chosen = Vec::new();
-    if renamed(slot) {
+    if is_eliminated(slot) {
         return Some(chosen);
     }
     let mut candidate_lanes = lanes.clone();
