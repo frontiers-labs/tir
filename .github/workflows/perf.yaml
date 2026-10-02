@@ -41,11 +41,9 @@ jobs:
         with:
           shared-key: bench
       - run: sudo apt-get update && sudo apt-get install -y clang valgrind time
-      # Counts shift when any of these change, with no change in TIR. Benchboard
-      # records a run under a new key without gating it.
       - name: Identify the measurement environment
         id: environment
-        run: echo "key=$(rustc --version); $(valgrind --version); $(ldd --version | head -1)" >> "$GITHUB_OUTPUT"
+        run: echo "key=$(bash .github/scripts/run-perf-benchmarks.sh environment)" >> "$GITHUB_OUTPUT"
       - uses: actions/cache@v6
         with:
           path: target/bench-sources
@@ -63,6 +61,8 @@ jobs:
   functions:
     runs-on: ubuntu-24.04
     timeout-minutes: 120
+    outputs:
+      environment: ${{ steps.environment.outputs.key }}
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -71,6 +71,9 @@ jobs:
         with:
           shared-key: bench-functions
       - run: sudo apt-get update && sudo apt-get install -y valgrind
+      - name: Identify the measurement environment
+        id: environment
+        run: echo "key=$(bash .github/scripts/run-perf-benchmarks.sh environment)" >> "$GITHUB_OUTPUT"
       - name: Count Rust functions
         run: bash .github/scripts/run-perf-benchmarks.sh functions
       - uses: actions/upload-artifact@v7
@@ -91,12 +94,17 @@ jobs:
         with:
           pattern: benchmark-*
           path: results
-      - uses: frontiers-labs/benchboard@f0aa1e784def86a955112e1a9a86455c55f59b46
+      - uses: frontiers-labs/benchboard@d31f2a116f595b148387875153d8c0d38eab9de1
         with:
           results: results/**/summary.bmf.json
           gate-metrics: Ir
           threshold: 2
-          env-key: ${{ needs.programs.outputs.environment }}
+          # Benchboard records a run under a new key without gating it. The two
+          # jobs can land on different runner images, so both keys count.
+          env-key: >-
+            ${{ needs.programs.outputs.environment == needs.functions.outputs.environment
+            && needs.programs.outputs.environment
+            || format('programs: {0} | functions: {1}', needs.programs.outputs.environment, needs.functions.outputs.environment) }}
           data-branch: ${{ inputs.data-branch || 'perf-data' }}
 
   # A benchmark that fails to build, run or validate is a defect of its own,

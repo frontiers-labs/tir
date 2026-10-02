@@ -200,6 +200,9 @@ fn native_criterion(options: &Options) -> criterion::Criterion {
     let mut criterion = criterion::Criterion::default();
     if let Some(samples) = options.sample_size {
         // Criterion rejects fewer than 10 samples. Smaller values still apply to processes.
+        if samples < 10 {
+            eprintln!("--sample-size {samples} is below Criterion's minimum; functions use 10");
+        }
         criterion = criterion.sample_size(samples.max(10) as usize);
     }
     if let Some(seconds) = options.warm_up_time {
