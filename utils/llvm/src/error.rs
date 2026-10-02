@@ -1,13 +1,22 @@
-use thiserror::Error;
+use std::fmt;
 
-#[derive(Debug, Error)]
+#[derive(Debug)]
 pub enum Error {
-    #[error("failed to parse LLVM IR: {0}")]
     Parse(String),
-    #[error("unsupported instruction: {0}")]
     Unsupported(String),
-    #[error("reference to undefined value '{0}'")]
     UndefinedValue(String),
-    #[error("branch to undefined block '{0}'")]
     UndefinedBlock(String),
 }
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Parse(e) => write!(f, "failed to parse LLVM IR: {e}"),
+            Self::Unsupported(i) => write!(f, "unsupported instruction: {i}"),
+            Self::UndefinedValue(v) => write!(f, "reference to undefined value '{v}'"),
+            Self::UndefinedBlock(b) => write!(f, "branch to undefined block '{b}'"),
+        }
+    }
+}
+
+impl std::error::Error for Error {}

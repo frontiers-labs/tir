@@ -51,7 +51,7 @@ fn result(path: &Path) -> Value {
 
 #[test]
 fn native_suite_records_validates_and_compares() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = tir_adt::TempDir::new().unwrap();
     let workload = json!({"workload": "fixed-output-v1"});
 
     let (baseline_path, baseline_status) = run_suite(

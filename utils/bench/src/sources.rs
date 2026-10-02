@@ -107,7 +107,7 @@ mod tests {
 
     #[test]
     fn offline_cache_miss_does_not_fetch_or_create_a_checkout() -> Result<()> {
-        let cache = tempfile::tempdir()?;
+        let cache = tir_adt::TempDir::new()?;
         let source = GitSource {
             repository: "https://invalid.example/source",
             revision: "0000000000000000000000000000000000000000",

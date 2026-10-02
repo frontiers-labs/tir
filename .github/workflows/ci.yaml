@@ -27,6 +27,8 @@ jobs:
         with:
           components: rustfmt
       - run: cargo fmt --all --check
+      # Reads manifests only, so it is as cheap as rustfmt.
+      - run: .github/scripts/check-dependencies.py
 
   clippy:
     needs: formatting

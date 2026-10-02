@@ -19,6 +19,7 @@ path = "src/lib.rs"
 anyhow.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
+tir-adt.workspace = true
 
 [lints]
 workspace = true

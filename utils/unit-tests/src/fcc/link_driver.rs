@@ -14,7 +14,7 @@ fn compile_and_link_in_one_step() {
     if !cc_available() {
         return;
     }
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tir_adt::TempDir::new().unwrap();
     std::fs::write(dir.path().join("r.c"), SOURCE).unwrap();
     run_fcc(dir.path(), &["cc", "r.c", "-o", "r"]);
     assert_eq!(exit_code(&run_program(dir.path(), "r")), 42);
@@ -25,7 +25,7 @@ fn system_headers_compile_across_translation_units() {
     if !cc_available() {
         return;
     }
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tir_adt::TempDir::new().unwrap();
     fs::write(
         dir.path().join("helper.c"),
         "#include <stdio.h>\nint helper(void) { return printf(\"fcc\"); }\n",
@@ -48,7 +48,7 @@ fn separate_compile_then_link() {
     if !cc_available() {
         return;
     }
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tir_adt::TempDir::new().unwrap();
     std::fs::write(dir.path().join("r.c"), SOURCE).unwrap();
     run_fcc(dir.path(), &["cc", "-c", "r.c"]);
     assert!(dir.path().join("r.o").exists(), "r.o was not produced");
@@ -64,7 +64,7 @@ fn captures_program_output() {
     let source = r#"int puts(const char *text);
 int main(void) { puts("fcc output"); return 0; }
 "#;
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tir_adt::TempDir::new().unwrap();
     compile_fcc(dir.path(), source, "output");
     let output = run_program(dir.path(), "output");
     assert_eq!(exit_code(&output), 0);

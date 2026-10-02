@@ -996,7 +996,7 @@ mod tests {
 
     #[test]
     fn prepared_source_order_keeps_declared_case_names() -> Result<()> {
-        let directory = tempfile::tempdir()?;
+        let directory = tir_adt::TempDir::new()?;
         let root = directory.path();
         std::fs::create_dir(root.join("nested"))?;
         for source in ["z.c", "nested/a.c"] {
@@ -1056,8 +1056,8 @@ mod tests {
 
     #[test]
     fn input_identity_tracks_headers_parameters_and_relative_names() -> Result<()> {
-        let first = tempfile::tempdir()?;
-        let second = tempfile::tempdir()?;
+        let first = tir_adt::TempDir::new()?;
+        let second = tir_adt::TempDir::new()?;
         for directory in [first.path(), second.path()] {
             std::fs::write(directory.join("input.c"), "#include \"input.h\"\n")?;
             std::fs::write(directory.join("input.h"), "#define N 42\n")?;

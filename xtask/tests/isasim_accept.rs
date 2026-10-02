@@ -2,7 +2,7 @@ use std::process::Command;
 
 #[test]
 fn report_records_padded_lit_test_names() {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = tir_adt::TempDir::new().unwrap();
     let report_path = directory.path().join("report.json");
     let manifest_path = directory.path().join("manifest.toml");
     std::fs::write(
@@ -43,7 +43,7 @@ expected_cases = 1
 
 #[test]
 fn report_marks_an_unavailable_simulator_binary() {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = tir_adt::TempDir::new().unwrap();
     let xtask = directory.path().join("xtask");
     std::fs::copy(env!("CARGO_BIN_EXE_xtask"), &xtask).unwrap();
     let report_path = directory.path().join("report.json");
@@ -72,7 +72,7 @@ fn report_marks_an_unavailable_simulator_binary() {
 
 #[test]
 fn strict_mode_rejects_a_skipped_required_case() {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = tir_adt::TempDir::new().unwrap();
     let report = directory.path().join("report.json");
     let manifest = format!(
         "{}/tests/fixtures/isasim-accept/skipped-required.toml",
@@ -101,7 +101,7 @@ fn strict_mode_rejects_a_skipped_required_case() {
 
 #[test]
 fn report_records_provenance_and_optional_unsupported_cases() {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = tir_adt::TempDir::new().unwrap();
     let report_path = directory.path().join("report.json");
     let manifest = format!(
         "{}/tests/fixtures/isasim-accept/passing.toml",

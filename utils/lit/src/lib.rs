@@ -54,7 +54,6 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, OnceLock};
 
-use globset::{Glob, GlobSet, GlobSetBuilder};
 use libtest_mimic::{Arguments, Failed, Trial};
 use regex::Regex;
 use serde::Deserialize;
@@ -242,14 +241,67 @@ fn find_workspace_root(start: &Path) -> Option<PathBuf> {
     })
 }
 
+/// A glob over `/`-separated text. `*` matches any text, `/` included; `**/`
+/// at the start of a path component matches any number of whole directories;
+/// `{a,b}` matches either alternative. Everything else matches itself, except
+/// the unsupported `?`, `[` and `\`, which are rejected.
+pub struct Glob(Regex);
+
+impl Glob {
+    /// Compile `pattern`, failing on unsupported syntax or unbalanced braces.
+    pub fn new(pattern: &str) -> Result<Self, String> {
+        let mut re = String::from("(?s)^");
+        let mut depth = 0;
+        let mut component_start = true;
+        let mut chars = pattern.chars().peekable();
+        while let Some(c) = chars.next() {
+            match c {
+                '*' => {
+                    let doubled = chars.next_if_eq(&'*').is_some();
+                    if doubled && component_start && chars.next_if_eq(&'/').is_some() {
+                        re.push_str("(?:.*/)?");
+                        // The `/` is consumed, so a component starts here too.
+                        continue;
+                    }
+                    re.push_str(".*");
+                }
+                '{' => {
+                    depth += 1;
+                    re.push_str("(?:");
+                }
+                ',' if depth > 0 => re.push('|'),
+                '}' if depth > 0 => {
+                    depth -= 1;
+                    re.push(')');
+                }
+                '?' | '[' | '\\' | '}' => {
+                    return Err(format!("unsupported `{c}` in glob `{pattern}`"));
+                }
+                _ => re.push_str(&regex::escape(c.encode_utf8(&mut [0; 4]))),
+            }
+            component_start = matches!(c, '/' | '{') || (c == ',' && depth > 0);
+        }
+        if depth > 0 {
+            return Err(format!("unclosed `{{` in glob `{pattern}`"));
+        }
+        re.push('$');
+        Regex::new(&re).map(Self).map_err(|e| e.to_string())
+    }
+
+    /// Whether the glob matches all of `text`.
+    pub fn is_match(&self, text: &str) -> bool {
+        self.0.is_match(text)
+    }
+}
+
 /// A test suite declared by a `test_suite.toml` file.
 struct Suite {
     /// Directory holding the `test_suite.toml`.
     root: PathBuf,
     /// Human-readable suite name, used in diagnostics.
     name: String,
-    include: GlobSet,
-    exclude: GlobSet,
+    include: Vec<Glob>,
+    exclude: Vec<Glob>,
 }
 
 #[derive(Deserialize)]
@@ -270,20 +322,20 @@ const SUITE_FILE: &str = "test_suite.toml";
 fn load_suite(manifest: &Path) -> Result<Suite, String> {
     let contents = std::fs::read_to_string(manifest).map_err(|e| e.to_string())?;
     let parsed: SuiteFile = toml::from_str(&contents).map_err(|e| e.to_string())?;
-    let mut include = GlobSetBuilder::new();
-    let mut exclude = GlobSetBuilder::new();
+    let mut include = Vec::new();
+    let mut exclude = Vec::new();
     for pattern in &parsed.suite.glob {
-        let (builder, pattern) = match pattern.strip_prefix('!') {
+        let (globs, pattern) = match pattern.strip_prefix('!') {
             Some(rest) => (&mut exclude, rest),
             None => (&mut include, pattern.as_str()),
         };
-        builder.add(Glob::new(pattern).map_err(|e| e.to_string())?);
+        globs.push(Glob::new(pattern)?);
     }
     Ok(Suite {
         root: manifest.parent().unwrap_or(Path::new(".")).to_path_buf(),
         name: parsed.suite.name,
-        include: include.build().map_err(|e| e.to_string())?,
-        exclude: exclude.build().map_err(|e| e.to_string())?,
+        include,
+        exclude,
     })
 }
 
@@ -391,7 +443,11 @@ pub fn workspace_harness_main(tools: &[(&str, Tool)]) {
 impl Suite {
     /// Whether a path relative to the suite root is one of its tests.
     fn matches(&self, relative: &Path) -> bool {
-        self.include.is_match(relative) && !self.exclude.is_match(relative)
+        let path = relative
+            .to_string_lossy()
+            .replace(std::path::MAIN_SEPARATOR, "/");
+        self.include.iter().any(|glob| glob.is_match(&path))
+            && !self.exclude.iter().any(|glob| glob.is_match(&path))
     }
 }
 
@@ -729,8 +785,8 @@ mod tests {
         Regex::new(pattern).unwrap()
     }
 
-    fn suite(globs: &str) -> (tempfile::TempDir, Suite) {
-        let tmp = tempfile::tempdir().unwrap();
+    fn suite(globs: &str) -> (tir_adt::TempDir, Suite) {
+        let tmp = tir_adt::TempDir::new().unwrap();
         std::fs::write(
             tmp.path().join(SUITE_FILE),
             format!("[suite]\nname = \"demo\"\nglob = {globs}\n"),
@@ -746,8 +802,10 @@ mod tests {
         assert_eq!(suite.name, "demo");
         assert!(suite.matches(Path::new("Restructure/loop.tir")));
         assert!(suite.matches(Path::new("obj/golden.S")));
+        assert!(suite.matches(Path::new("top.tir")));
         assert!(!suite.matches(Path::new("README.md")));
         assert!(!suite.matches(Path::new("Diagnostics/Inputs/decl.tir")));
+        assert!(suite.matches(Path::new("TestInputs/decl.tir")));
     }
 
     #[test]
@@ -759,7 +817,7 @@ mod tests {
 
     #[test]
     fn discovers_every_suite_manifest() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = tir_adt::TempDir::new().unwrap();
         let root = tmp.path();
         for dir in [
             "core/checks",
@@ -801,15 +859,17 @@ mod tests {
 
     #[test]
     fn invalid_suite_manifest_is_an_error() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = tir_adt::TempDir::new().unwrap();
         let manifest = tmp.path().join(SUITE_FILE);
         std::fs::write(&manifest, "[suite]\nname = \"s\"\n").unwrap();
+        assert!(load_suite(&manifest).is_err());
+        std::fs::write(&manifest, "[suite]\nname = \"s\"\nglob = [\"*.ti?\"]").unwrap();
         assert!(load_suite(&manifest).is_err());
     }
 
     #[test]
     fn workspace_root_is_first_manifest_with_workspace_section() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = tir_adt::TempDir::new().unwrap();
         let root = tmp.path();
         std::fs::create_dir_all(root.join("utils/lit")).unwrap();
         std::fs::write(root.join("Cargo.toml"), "[workspace]\nmembers = []").unwrap();

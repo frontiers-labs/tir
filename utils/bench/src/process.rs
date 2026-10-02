@@ -215,9 +215,7 @@ pub fn capture(
     timeout: Duration,
 ) -> Result<std::process::Output> {
     ensure!(!timeout.is_zero(), "process timeout must be positive");
-    let directory = tempfile::Builder::new()
-        .prefix("tir-bench-command-")
-        .tempdir()?;
+    let directory = tir_adt::TempDir::with_prefix("tir-bench-command-")?;
     let result = execute_accounted(command, directory.path(), timeout);
     let (sample, status) = match result {
         Ok(output) => output,
@@ -395,7 +393,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn deterministic_environment_allows_explicit_overrides() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = tir_adt::TempDir::new().unwrap();
         let sample = Command::new("/bin/sh")
             .args([
                 "-c",
@@ -410,7 +408,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn failure_retains_output() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = tir_adt::TempDir::new().unwrap();
         assert!(
             Command::new("/bin/sh")
                 .args(["-c", "echo failure >&2; exit 7"])
@@ -425,7 +423,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn timeout_kills_process_group() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = tir_adt::TempDir::new().unwrap();
         let start = std::time::Instant::now();
         let error = Command::new("/bin/sh")
             .args(["-c", "sleep 30 & wait"])
@@ -437,7 +435,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn target_rss_excludes_live_harness_allocations() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = tir_adt::TempDir::new().unwrap();
         let small = vec![42_u8; 16 * 1024 * 1024];
         std::hint::black_box(&small);
         let first = Command::new("/bin/true")
@@ -461,7 +459,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn accounts_for_process_memory() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = tir_adt::TempDir::new().unwrap();
         let sample = Command::new("/bin/sh")
             .args(["-c", "printf captured"])
             .run(dir.path(), Duration::from_secs(5))

@@ -1,18 +1,27 @@
-use thiserror::Error;
+use std::fmt;
 
-#[derive(Error, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub enum TMDLError {
-    #[error("Unknown error")]
     Unknown,
-    #[error("File error: {0}")]
     IO(String),
-    #[error("Serialization error: {0}")]
     Serialization(String),
-    #[error("Unexpected expression")]
     UnexpectedExpression,
-    #[error("Code generation error: {0}")]
     Codegen(String),
 }
+
+impl fmt::Display for TMDLError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Unknown => f.write_str("Unknown error"),
+            Self::IO(e) => write!(f, "File error: {e}"),
+            Self::Serialization(e) => write!(f, "Serialization error: {e}"),
+            Self::UnexpectedExpression => f.write_str("Unexpected expression"),
+            Self::Codegen(e) => write!(f, "Code generation error: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for TMDLError {}
 
 impl From<std::io::Error> for TMDLError {
     fn from(value: std::io::Error) -> Self {

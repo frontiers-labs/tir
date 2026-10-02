@@ -1,9 +1,8 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, Context as _};
-use crossbeam::queue::SegQueue;
 use isla_lib::bitvector::b129::B129;
 use isla_lib::bitvector::BV;
 use isla_lib::config::ISAConfig;
@@ -372,7 +371,7 @@ impl Verifier {
             task.set_stop_conditions(&stop_conditions);
             tasks.push(task);
         }
-        let queue: Arc<BatchQueue> = Arc::new(SegQueue::new());
+        let queue: Arc<BatchQueue> = Arc::new(Mutex::new(Vec::new()));
         executor::start_multi(
             self.threads,
             Some(self.timeout_seconds),
@@ -383,7 +382,7 @@ impl Verifier {
         );
         let mut traces: HashMap<u128, Vec<Vec<TraceEvent>>> = HashMap::new();
         let mut failed = HashSet::new();
-        while let Some(result) = queue.pop() {
+        for result in std::mem::take(&mut *queue.lock().unwrap()) {
             let (task_id, mut events) = match result {
                 Ok(result) => result,
                 Err((task_id, error)) => {
@@ -417,7 +416,7 @@ impl Verifier {
     }
 }
 
-type BatchQueue = SegQueue<Result<(TaskId, Vec<Event<B129>>), (TaskId, String)>>;
+type BatchQueue = Mutex<Vec<Result<(TaskId, Vec<Event<B129>>), (TaskId, String)>>>;
 
 fn batch_collector<'ir>(
     _thread_id: usize,
@@ -430,13 +429,22 @@ fn batch_collector<'ir>(
     match result {
         Ok((executor::Run::Finished(_) | executor::Run::Exit, _)) => {
             let mut events = solver.trace().to_vec();
-            queue.push(Ok((task_id, events.drain(..).cloned().collect())));
+            queue
+                .lock()
+                .unwrap()
+                .push(Ok((task_id, events.drain(..).cloned().collect())));
         }
         Ok((executor::Run::Dead, _)) => {
-            queue.push(Err((task_id, "execution path is dead".to_string())));
+            queue
+                .lock()
+                .unwrap()
+                .push(Err((task_id, "execution path is dead".to_string())));
         }
         Ok((executor::Run::Suspended, _)) => {
-            queue.push(Err((task_id, "execution path suspended".to_string())));
+            queue
+                .lock()
+                .unwrap()
+                .push(Err((task_id, "execution path suspended".to_string())));
         }
         Err((error, backtrace)) => {
             let backtrace = backtrace
@@ -444,7 +452,10 @@ fn batch_collector<'ir>(
                 .map(|(name, pc)| format!("{}:{pc}", zencode::decode(shared.symtab.to_str(*name))))
                 .collect::<Vec<_>>()
                 .join(" -> ");
-            queue.push(Err((task_id, format!("{error}; backtrace: {backtrace}"))));
+            queue
+                .lock()
+                .unwrap()
+                .push(Err((task_id, format!("{error}; backtrace: {backtrace}"))));
         }
     }
 }

@@ -195,7 +195,7 @@ mod tests {
     #[test]
     fn affinity_is_checked_and_restored() {
         let before = current_cpus().unwrap();
-        let dir = tempfile::tempdir().unwrap();
+        let dir = tir_adt::TempDir::new().unwrap();
         let mut guard =
             EnvironmentGuard::acquire(&dir.path().join("lock"), Some(before[0])).unwrap();
         assert_eq!(current_cpus().unwrap(), vec![before[0]]);
@@ -208,7 +208,7 @@ mod tests {
 
     #[test]
     fn lock_excludes_other_runners_and_releases() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = tir_adt::TempDir::new().unwrap();
         let path = dir.path().join("host.lock");
         let guard = EnvironmentGuard::acquire(&path, None).unwrap();
         assert!(EnvironmentGuard::acquire(&path, None).is_err());

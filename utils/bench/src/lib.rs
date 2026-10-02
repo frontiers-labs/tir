@@ -12,12 +12,12 @@ pub use process::Command;
 
 use anyhow::{Context, ensure};
 use clap::Parser;
-use globset::{Glob, GlobMatcher};
 use results::{Metrics, Record, Results};
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use tir_lit::Glob;
 
 /// A check of captured stdout, executed after the measured operation.
 pub type Validator = Box<dyn Fn(&Path) -> Result<()>>;
@@ -36,7 +36,7 @@ pub struct ProcessCase {
 /// One Cargo benchmark target. All measured work runs serially under a host lock.
 pub struct Suite {
     options: Options,
-    filter: GlobMatcher,
+    filter: Glob,
     directory: PathBuf,
     target: PathBuf,
     results: Results,
@@ -63,7 +63,7 @@ impl Suite {
             options.samples > 0 && options.timeout > 0,
             "samples and timeout must be positive"
         );
-        let filter = Glob::new(&options.filter)?.compile_matcher();
+        let filter = Glob::new(&options.filter).map_err(anyhow::Error::msg)?;
         let (target, workspace) = cargo_directories(Duration::from_secs(options.timeout))?;
         for path in [&mut options.output, &mut options.baseline]
             .into_iter()
@@ -172,7 +172,7 @@ impl Suite {
         let prefix = format!("{}/", self.results.namespace);
         let relative = name.strip_prefix(&prefix).unwrap_or(name);
         let qualified = format!("{prefix}{relative}");
-        self.filter.is_match(relative) || self.filter.is_match(qualified)
+        self.filter.is_match(relative) || self.filter.is_match(&qualified)
     }
 
     pub fn list_case(&mut self, name: &str) -> Result<()> {

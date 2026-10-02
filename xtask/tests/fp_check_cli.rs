@@ -39,7 +39,7 @@ fn check_fixture_with_provenance(
     recorded_source_digest: Option<&str>,
     recorded_manifest_digest: Option<&str>,
 ) -> (bool, serde_json::Value) {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = tir_adt::TempDir::new().unwrap();
     let source = directory.path().join("probe.c");
     let manifest = directory.path().join("cases.toml");
     let reference = directory.path().join("reference.json");
@@ -190,7 +190,7 @@ fn check_rejects_stale_case_configuration() {
 
 #[test]
 fn report_rejects_a_wrong_result_bit() {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = tir_adt::TempDir::new().unwrap();
     let report = directory.path().join("report.json");
     fs::write(
         &report,
@@ -240,7 +240,7 @@ fn report_rejects_a_wrong_result_bit() {
 }
 
 fn report_with_effects_observation(observation: &str) -> Output {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = tir_adt::TempDir::new().unwrap();
     let report = directory.path().join("report.json");
     fs::write(
         &report,
@@ -495,7 +495,7 @@ fn check_does_not_count_future_gcc_evidence_as_tir_support() {
 }
 
 fn check_preserved_probe(contents: &str) {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = tir_adt::TempDir::new().unwrap();
     let source = directory.path().join("probe.c");
     let manifest = directory.path().join("cases.toml");
     let report = directory.path().join("reference.json");
@@ -573,7 +573,7 @@ fn reference_preserves_a_probe_that_misses_its_expectation() {
 
 #[test]
 fn reference_detects_a_store_moved_before_a_trap() {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = tir_adt::TempDir::new().unwrap();
     let source = directory.path().join("probe.c");
     let manifest = directory.path().join("cases.toml");
     let report = directory.path().join("reference.json");
@@ -654,7 +654,7 @@ reference = "fixture"
 
 #[test]
 fn check_accepts_the_fma_reference_bits_and_flags() {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = tir_adt::TempDir::new().unwrap();
     let reference = directory.path().join("reference.json");
     let output_path = directory.path().join("checked.json");
     fs::write(
@@ -737,7 +737,7 @@ fn check_accepts_the_fma_reference_bits_and_flags() {
 
 #[test]
 fn reference_records_gcc_provenance() {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = tir_adt::TempDir::new().unwrap();
     let report = directory.path().join("reference.json");
     let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
         .args([
@@ -791,7 +791,7 @@ fn reference_records_gcc_provenance() {
 
 #[test]
 fn reference_rejects_a_missing_compiler() {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = tir_adt::TempDir::new().unwrap();
     let report = directory.path().join("reference.json");
     let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
         .args([
@@ -821,7 +821,7 @@ fn reference_rejects_a_missing_compiler() {
 
 #[test]
 fn check_rejects_an_empty_case_selection() {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = tir_adt::TempDir::new().unwrap();
     let reference = directory.path().join("reference.json");
     let checked = directory.path().join("checked.json");
     fs::write(
@@ -857,7 +857,7 @@ fn check_rejects_an_empty_case_selection() {
 }
 
 fn reference_case(case: &str) -> serde_json::Value {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = tir_adt::TempDir::new().unwrap();
     let report = directory.path().join("reference.json");
     let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
         .args([

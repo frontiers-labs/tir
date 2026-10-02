@@ -17,7 +17,6 @@ use anyhow::{Context, Result, bail};
 use isasim_oracle::IsasimOracle;
 use oracle::Oracle;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Run every target's suite. `isasim_bin` is the built `tir-isasim` binary.
 /// Returns `true` if all tests passed (or were skipped for missing tools).
@@ -112,7 +111,7 @@ fn run_one(
         .with_context(|| format!("reading snippet {}", path.display()))?;
     let program = compose(&body);
 
-    let work = TempDir::new("isa-test")?;
+    let work = tir_adt::TempDir::with_prefix("tir-isa-test-").context("creating temp dir")?;
     let sim_state = simulator
         .run(&program, work.path())
         .with_context(|| format!("running {} oracle", simulator.name()))?;
@@ -145,32 +144,4 @@ fn tool_in_path(name: &str) -> bool {
         return false;
     };
     std::env::split_paths(&paths).any(|dir| dir.join(name).is_file())
-}
-
-/// A throwaway working directory, removed on drop.
-struct TempDir {
-    path: PathBuf,
-}
-
-impl TempDir {
-    fn new(tag: &str) -> Result<Self> {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        let path = std::env::temp_dir().join(format!("tir-{tag}-{}-{nanos}", std::process::id()));
-        std::fs::create_dir_all(&path)
-            .with_context(|| format!("creating temp dir {}", path.display()))?;
-        Ok(Self { path })
-    }
-
-    fn path(&self) -> &Path {
-        &self.path
-    }
-}
-
-impl Drop for TempDir {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.path);
-    }
 }

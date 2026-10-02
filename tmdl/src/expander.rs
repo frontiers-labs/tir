@@ -22,10 +22,10 @@ fn diag(file: &str, span: Span, msg: impl Into<String>) -> Diag {
     (file.to_string(), Rich::custom(span, msg.into()))
 }
 
-/// Arena for strings synthesized by `${concat(...)}`. Wraps `typed_arena::Arena`
+/// Arena for strings synthesized by `${concat(...)}`. Wraps `tir_adt::Arena`
 /// so results live as long as the borrowed arena, avoiding `Box::leak` (the
 /// fuzzer flags leaks).
-pub struct StringArena(typed_arena::Arena<String>);
+pub struct StringArena(tir_adt::Arena<String>);
 
 impl Default for StringArena {
     fn default() -> Self {
@@ -35,11 +35,11 @@ impl Default for StringArena {
 
 impl StringArena {
     pub fn new() -> Self {
-        StringArena(typed_arena::Arena::new())
+        StringArena(tir_adt::Arena::new())
     }
 
     fn alloc(&self, s: String) -> &str {
-        self.0.alloc(s).as_str()
+        self.0.alloc(s)
     }
 }
 

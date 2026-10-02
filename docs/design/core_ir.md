@@ -54,7 +54,8 @@ order, and the parser reports undefined labels and values in first-reference
 order.
 State-fork and use-list verification check values in first-encounter order.
 Lookup-only maps remain `HashMap`. Insertion order is deterministic only when
-the input walk is deterministic; use `shift_remove` when survivor order matters.
+the input walk is deterministic. The map has no removal, so survivor order
+cannot change.
 
 ## Proposed flows
 

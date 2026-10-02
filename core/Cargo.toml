@@ -22,7 +22,6 @@ tir-pbqp.workspace = true
 linkme.workspace = true
 logos.workspace = true
 smallvec = "1.15.2"
-thiserror = "2.0.12"
 ariadne.workspace = true
 tir-pdl = { path = "../utils/pdl", default-features = false }
 
