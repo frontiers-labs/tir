@@ -381,7 +381,8 @@ fn effect_tiles_conflict(
 }
 
 /// Drop matches dominated by an interchangeable alternative: same root class,
-/// same internal-class coverage, same boundary operands, but no cheaper, no
+/// same internal-class coverage, same boundary operands, same width contracts
+/// (the width defined and the width each operand is read at), but no cheaper, no
 /// more specific, and no less demanding of its boundaries. Specificity (the
 /// number of type-constrained pattern nodes) breaks ties between otherwise
 /// identical matches without ever touching the PBQP objective — an i32 `addw`
@@ -395,7 +396,13 @@ pub(crate) fn prune_dominated_matches(specificity: &[usize], matches: &mut Vec<P
         let mut internals = Vec::new();
         for binding in &m.bindings.pattern_nodes {
             if binding.is_boundary {
-                boundaries.push((binding.class, binding.view_offset, binding.demand));
+                // The width a register is read at is part of what the operand
+                // demands; an immediate or structural operand reads none.
+                let read = match binding.demand {
+                    BoundaryDemand::Register => (binding.whole_width, binding.low_extract),
+                    BoundaryDemand::Immediate | BoundaryDemand::Structural => (None, false),
+                };
+                boundaries.push(((binding.class, binding.view_offset), (binding.demand, read)));
             } else if binding.pattern_node != m.pattern_root && !binding.is_state {
                 internals.push(binding.class);
             }
@@ -405,21 +412,25 @@ pub(crate) fn prune_dominated_matches(specificity: &[usize], matches: &mut Vec<P
         // over aligned classes.
         boundaries.sort();
         internals.sort();
-        let (classes, demands): (Vec<(Id, u32)>, Vec<BoundaryDemand>) = boundaries
-            .into_iter()
-            .map(|(class, offset, demand)| ((class, offset), demand))
-            .unzip();
-        (m.root, m.result_view_offset, classes, demands, internals)
+        let (classes, demands): (Vec<(Id, u32)>, Vec<_>) = boundaries.into_iter().unzip();
+        (
+            (m.root, m.result_view_offset, m.result_width),
+            classes,
+            demands,
+            internals,
+        )
     };
     let footprints: Vec<_> = matches.iter().map(footprint).collect();
 
     // Matches reading or writing a different register view are not
     // interchangeable — a value at one bit offset is not the value at another —
-    // so the view offsets join the grouping key rather than the comparison.
+    // and a reader read whole meets only a producer of its width. The view
+    // offsets and the width defined join the grouping key rather than the
+    // comparison.
     let mut groups: HashMap<_, Vec<usize>> = HashMap::new();
-    for (index, (root, result_offset, classes, _, internals)) in footprints.iter().enumerate() {
+    for (index, (result, classes, _, internals)) in footprints.iter().enumerate() {
         groups
-            .entry((*root, *result_offset, classes, internals))
+            .entry((result, classes, internals))
             .or_default()
             .push(index);
     }
@@ -428,13 +439,24 @@ pub(crate) fn prune_dominated_matches(specificity: &[usize], matches: &mut Vec<P
         (
             matches[index].cost,
             specificity[matches[index].pattern_index],
-            &footprints[index].3,
+            &footprints[index].2,
         )
+    };
+    // An operand demands no more than another when it asks for no more of the
+    // class and admits every producer the other admits: it reads no whole
+    // width, or the same one, and reads through a view wherever the other does.
+    let demands_no_more = |a: &(BoundaryDemand, (Option<u32>, bool)),
+                           b: &(BoundaryDemand, (Option<u32>, bool))| {
+        let ((demand_a, (whole_a, view_a)), (demand_b, (whole_b, view_b))) = (a, b);
+        demand_a <= demand_b && (whole_a.is_none() || (whole_a == whole_b && (*view_a || !view_b)))
     };
     let dominates = |a: usize, b: usize| {
         let (cost_a, spec_a, demands_a) = comparison_key(a);
         let (cost_b, spec_b, demands_b) = comparison_key(b);
-        let demands_le = demands_a.iter().zip(demands_b).all(|(da, db)| da <= db);
+        let demands_le = demands_a
+            .iter()
+            .zip(demands_b)
+            .all(|(da, db)| demands_no_more(da, db));
         cost_a <= cost_b
             && spec_a >= spec_b
             && demands_le
@@ -471,8 +493,9 @@ pub(crate) fn prune_dominated_matches(specificity: &[usize], matches: &mut Vec<P
 
     // A free tile constrains nothing: every binding is state, the root itself,
     // or a structural boundary, so its compatibility rows are all-true and its
-    // effect footprint empty. Any tile at the same root and view offset that
-    // costs no less is dominated by it outright, whatever its boundaries — this
+    // effect footprint empty. Any tile defining the same root at the same view
+    // offset and width that costs no less is dominated by it outright, whatever
+    // its boundaries — this
     // is what keeps a constant class (into which assumptions merge every proven
     // condition) from carrying thousands of comparison-shaped alternatives.
     let is_free = |m: &PbqpIselMatch| {
@@ -488,13 +511,14 @@ pub(crate) fn prune_dominated_matches(specificity: &[usize], matches: &mut Vec<P
             std::cmp::Reverse(specificity[matches[index].pattern_index]),
         )
     };
-    let mut best_free: HashMap<(Id, u32), usize> = HashMap::new();
+    let result = |m: &PbqpIselMatch| (m.root, m.result_view_offset, m.result_width);
+    let mut best_free: HashMap<_, usize> = HashMap::new();
     for (index, m) in matches.iter().enumerate() {
         if !keep[index] || !is_free(m) {
             continue;
         }
         best_free
-            .entry((m.root, m.result_view_offset))
+            .entry(result(m))
             .and_modify(|best| {
                 if free_key(index) < free_key(*best) {
                     *best = index;
@@ -504,7 +528,7 @@ pub(crate) fn prune_dominated_matches(specificity: &[usize], matches: &mut Vec<P
     }
     if !best_free.is_empty() {
         for (index, m) in matches.iter().enumerate() {
-            let Some(&free) = best_free.get(&(m.root, m.result_view_offset)) else {
+            let Some(&free) = best_free.get(&result(m)) else {
                 continue;
             };
             if free == index || !keep[index] {
@@ -521,6 +545,10 @@ pub(crate) fn prune_dominated_matches(specificity: &[usize], matches: &mut Vec<P
 
     let mut kept = keep.iter();
     matches.retain(|_| *kept.next().unwrap());
+    // Survivors with different width contracts no longer meet in a group. The
+    // cover takes the first of equal-cost alternatives, so the more specific
+    // match goes first.
+    matches.sort_by_key(|matched| std::cmp::Reverse(specificity[matched.pattern_index]));
 }
 
 pub(crate) fn completeness_error(

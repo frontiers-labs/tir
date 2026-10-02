@@ -824,6 +824,58 @@ fn square_sign_extension_lowers_to_shift_pair() {
     assert_eq!(body_ops, vec!["addi", "shli", "shrsi"]);
 }
 
+/// The sum's only producer defines a 64-bit register. The cheaper multiply
+/// reads its operands whole at 32 bits, which that register does not answer;
+/// the dearer one reads their low bits and must survive pruning.
+#[test]
+fn pruning_keeps_the_reader_a_producer_width_admits() {
+    let (context, module, region) = function(
+        r#"module {
+func.func @demo(%a: !i32, %b: !i32) -> !i32 {
+  %add = addi %a, %b : !i32
+  %mul = muli %add, %add : !i32
+  func.return %mul
+}
+module_end
+}"#,
+    );
+    let wide = RegisterRequirement::low_bits(RegisterCapability::integer(64));
+    let whole = RegisterRequirement::whole(RegisterCapability::integer(32));
+    let rules = vec![
+        Rule {
+            result_register: Some(wide),
+            ..Rule::new(
+                "add",
+                atomic_pattern(SymKind::Add),
+                LATENCY_COST_SCALE,
+                emit_add,
+            )
+        },
+        Rule {
+            operand_registers: vec![(0, whole), (1, whole)],
+            ..Rule::new(
+                "mulw",
+                atomic_pattern(SymKind::Mul),
+                LATENCY_COST_SCALE,
+                emit_mul,
+            )
+        },
+        Rule {
+            operand_registers: vec![(0, wide), (1, wide)],
+            ..Rule::new(
+                "mul",
+                atomic_pattern(SymKind::Mul),
+                2 * LATENCY_COST_SCALE,
+                emit_sub,
+            )
+        },
+    ];
+
+    select(&context, &module, rules);
+
+    assert_eq!(body_names(&context, region), vec!["addi", "subi"]);
+}
+
 #[test]
 fn introduced_rule_emits_prelude_before_instruction() {
     let slli_rule = Rule {
