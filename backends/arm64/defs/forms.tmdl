@@ -317,7 +317,7 @@ instruction UnsignedBitfieldMoveWord for [ARMv8A64] {
         };
     }
 }
-/// Cumulative invalid-operation flag. FCMPE signals on every NaN.
+/// [Cumulative invalid-operation flag](https://developer.arm.com/documentation/ddi0487/latest/). FCMPE signals on every NaN.
 register_class FPSR for [FP] {
     param ENCODING_LEN: Integer = 0;
     param WIDTH: Integer = 1;
