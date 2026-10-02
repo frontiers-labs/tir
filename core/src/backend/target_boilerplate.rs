@@ -92,6 +92,7 @@ macro_rules! impl_target_machine {
         pointer_bits: $pointer_bits:expr,
         regalloc: $regalloc:expr,
         abis: $abis:path,
+        $(asm_parser: $asm_parser:expr,)?
         sources: $sources:expr,
         $($extra:item)*
     ) => {
@@ -169,7 +170,9 @@ macro_rules! impl_target_machine {
 
             fn asm_parser(&self, _context: &$crate::Context) -> $crate::backend::AsmParser {
                 let (parsers, disabled) = get_instruction_parsers(self.config.features());
-                $crate::backend::AsmParser::new(parsers).with_disabled_mnemonics(disabled)
+                let parser = $crate::backend::AsmParser::new(parsers).with_disabled_mnemonics(disabled);
+                $(let parser = ($asm_parser)(parser);)?
+                parser
             }
 
             fn machine_model(&self, name: &str) -> Option<$crate::backend::sched::MachineModel> {

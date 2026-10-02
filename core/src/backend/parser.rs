@@ -11,7 +11,7 @@ use tir::{
 
 use crate::backend::{
     LiteralOpBuilder, MachineInstruction, SectionOpBuilder, SymbolEndOpBuilder, SymbolOpBuilder,
-    lex, lexer::Token,
+    lexer::{Token, lex_with_hash_immediates},
 };
 
 pub type AsmInstructionParser =
@@ -32,13 +32,19 @@ impl AsmCursor {
     }
 
     pub fn insert<T: Operation>(&mut self, op: T) -> T {
-        self.block.insert(self.position, op.id());
-        self.position += 1;
+        self.insert_id(op.id());
         op
+    }
+
+    /// Insert an operation already built through its registered identity.
+    pub fn insert_id(&mut self, id: crate::OpId) {
+        self.block.insert(self.position, id);
+        self.position += 1;
     }
 }
 
 pub struct AsmParser {
+    hash_immediates: bool,
     /// Candidate parsers per mnemonic. A single mnemonic (e.g. AArch64 `add`)
     /// can name several instruction forms (register vs. immediate), so each key
     /// maps to a list tried in turn with backtracking.
@@ -50,9 +56,16 @@ pub struct AsmParser {
 impl AsmParser {
     pub fn new(instruction_parsers: HashMap<String, Vec<AsmInstructionParser>>) -> Self {
         AsmParser {
+            hash_immediates: false,
             instruction_parsers,
             disabled_mnemonics: Default::default(),
         }
+    }
+
+    /// Treat numeric `#` prefixes as immediates instead of line comments.
+    pub fn with_hash_immediates(mut self) -> Self {
+        self.hash_immediates = true;
+        self
     }
 
     pub fn with_disabled_mnemonics(
@@ -67,7 +80,7 @@ impl AsmParser {
     pub fn parse_asm(&self, context: &tir::Context, src: &str) -> Result<ModuleOp, ()> {
         let module = ModuleOpBuilder::new(context).build();
 
-        let tokens = lex(src)?;
+        let tokens = lex_with_hash_immediates(src, self.hash_immediates)?;
 
         let mut parser = Parser::new(&tokens);
 
@@ -231,6 +244,7 @@ impl AsmParser {
                         return Err(());
                     }
                 }
+                Token::FloatNumber(_) => return Err(()),
                 _ => {
                     let _ = parser.bump();
                 }

@@ -22,6 +22,7 @@ fn asm_parse_steps(
     actions: &[AsmAction],
     ops_map: &HashMap<String, Type>,
     operand_constraints: &HashMap<String, OperandConstraint>,
+    ctx: &InstrEmitCtx<'_>,
 ) -> Vec<proc_macro2::TokenStream> {
     let plus_before_immediate: Vec<bool> = actions
         .iter()
@@ -97,13 +98,15 @@ fn asm_parse_steps(
                             .unwrap_or_default();
                         let align = proc_macro2::Literal::u32_unsuffixed(constraint.align);
                         let nonzero = constraint.nonzero;
-                        parse_steps.push(quote! {
-                            ParseStep::Immediate(#op_name_lit, #signed, ImmConstraint {
-                                range: #range,
-                                align: #align,
-                                nonzero: #nonzero,
-                            })
-                        });
+                        let constraint = quote! { ImmConstraint {
+                            range: #range, align: #align, nonzero: #nonzero,
+                        } };
+                        let step = if let Some(reader) = ctx.asm_hook("PARSE", op_name) {
+                            quote! { ParseStep::ParsedImmediate(#op_name_lit, #reader, #constraint) }
+                        } else {
+                            quote! { ParseStep::Immediate(#op_name_lit, #signed, #constraint) }
+                        };
+                        parse_steps.push(step);
                     }
                     // Strings in asm templates aren't currently used as
                     // operands, and consume no tokens.
@@ -151,6 +154,7 @@ fn asm_syntax_parts(
 fn asm_print_steps(
     print_parts: Vec<AsmPrintPart>,
     ops_map: &HashMap<String, Type>,
+    ctx: &InstrEmitCtx<'_>,
 ) -> Vec<proc_macro2::TokenStream> {
     // Adjacent literal text (the mnemonic and the space after it, an
     // operand separator and a sigil) prints as one string.
@@ -189,9 +193,12 @@ fn asm_print_steps(
                         });
                     }
                     Type::Integer | Type::Bits(_) => {
-                        print_steps.push(quote! {
-                            PrintPart::Immediate(#op_name_lit)
-                        });
+                        let part = if let Some(formatter) = ctx.asm_hook("FORMAT", &op_name) {
+                            quote! { PrintPart::FormattedImmediate(#op_name_lit, #formatter) }
+                        } else {
+                            quote! { PrintPart::Immediate(#op_name_lit) }
+                        };
+                        print_steps.push(part);
                     }
                     Type::String => {
                         print_steps.push(quote! {
@@ -250,6 +257,7 @@ struct TargetTables<'a> {
 
 struct InstrEmitCtx<'a> {
     inst: &'a ast::Instruction,
+    params: &'a HashMap<String, (Type, Option<ast::Expr>)>,
     name_ident: &'a proc_macro2::Ident,
     op_name: &'a str,
     dialect: &'a str,
@@ -261,6 +269,16 @@ struct InstrEmitCtx<'a> {
     defined_register_operands: &'a [String],
     read_register_operands: &'a HashSet<String>,
     implicit_reads: &'a [(String, u32)],
+}
+
+impl InstrEmitCtx<'_> {
+    fn asm_hook(&self, kind: &str, operand: &str) -> Option<proc_macro2::Ident> {
+        self.params
+            .get(&format!("ASM_{kind}_{operand}"))
+            .and_then(|(_, value)| value.as_ref())
+            .and_then(resolve_string)
+            .map(|name| format_ident!("{name}"))
+    }
 }
 
 fn fp_value_patterns(
@@ -296,14 +314,12 @@ fn fp_value_patterns(
     if widths[rounded_root.index()].is_none() {
         widths[rounded_root.index()] = pattern_widths[canon_root.index()];
     }
-    let needs_rounded_value =
-        !rounded.subgraph_eq(rounded_root, canon_pattern, canon_root);
+    let needs_rounded_value = !rounded.subgraph_eq(rounded_root, canon_pattern, canon_root);
     let (full_pattern, full_pattern_root, forced) =
         tir_symbolic::lang::canonicalize_for_selection(full, full_root, immediate_symbols);
-    let rounded_is_full =
-        rounded.subgraph_eq(rounded_root, &full_pattern, full_pattern_root);
-    let needs_full_value = !rounded_is_full
-        && !full_pattern.subgraph_eq(full_pattern_root, canon_pattern, canon_root);
+    let rounded_is_full = rounded.subgraph_eq(rounded_root, &full_pattern, full_pattern_root);
+    let needs_full_value =
+        !rounded_is_full && !full_pattern.subgraph_eq(full_pattern_root, canon_pattern, canon_root);
     let full_widths = selection_pattern_widths(&full_pattern, forced);
     let (effect_pattern, effect_root, _) = tir_symbolic::lang::canonicalize_for_selection(
         &semantics.pattern,
@@ -378,7 +394,6 @@ fn fp_value_patterns(
     patterns
 }
 
-
 // The narrow load pattern observes only the loaded bits. Keep the full
 // extension as well so a wider consumer can select the same instruction.
 fn extending_load_pattern(
@@ -408,7 +423,8 @@ fn extending_load_pattern(
     let SymPayload::Int(width_value) = semantics.pattern.get_leaf_data(*width)? else {
         return None;
     };
-    let load_width = tir_symbolic::lang::infer_widths(&semantics.pattern, |_| None)[loaded.index()]?;
+    let load_width =
+        tir_symbolic::lang::infer_widths(&semantics.pattern, |_| None)[loaded.index()]?;
     let extension_width = u32::try_from(width_value.to_u64()).ok()?;
     if extension_width <= load_width {
         return None;
@@ -1199,7 +1215,7 @@ fn emit_assembly_template(
             )
         })
         .count();
-    let parse_steps = asm_parse_steps(&actions, ctx.ops_map, ctx.operand_constraints);
+    let parse_steps = asm_parse_steps(&actions, ctx.ops_map, ctx.operand_constraints, ctx);
 
     let print_parts = compile_asm_printer_template(template, ctx.mnemonic_name);
 
@@ -1218,7 +1234,7 @@ fn emit_assembly_template(
         });
     }
 
-    let print_steps = asm_print_steps(print_parts, ctx.ops_map);
+    let print_steps = asm_print_steps(print_parts, ctx.ops_map, ctx);
 
     let suffix = if index == 0 {
         String::new()
@@ -1745,6 +1761,7 @@ fn emit_instruction(
     let read_register_operands = infer_read_register_operands(&inst.behavior, &ops);
     let instr_ctx = InstrEmitCtx {
         inst,
+        params: &resolved_params,
         name_ident: &name_ident,
         op_name,
         dialect: options.dialect,

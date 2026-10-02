@@ -498,6 +498,10 @@ asm { ("{self.MNEMONIC} {rd}, {rs}", "{self.MNEMONIC} {rd}, {rs}, dyn") }
 
 Every spelling parses to the same instruction. Printing uses the first string.
 
+`ASM_PARSE_<operand>` and `ASM_FORMAT_<operand>` parameters name target Rust functions
+for immediate spelling. Readers return `Result<i64, ()>`; formatters return `Option<String>`.
+Converted values must still satisfy the operand's constraints.
+
 ## Feature Scoping and Requirements
 
 - `for [A, B]` after `register_class`, `template`, or `instruction` limits applicability to those ISAs/features.

@@ -192,6 +192,7 @@ fn build_isa_reference(root: &std::path::Path) -> anyhow::Result<()> {
                 "backends/arm64/defs/float.tmdl",
                 "backends/arm64/defs/advsimd.tmdl",
                 "backends/arm64/defs/data_processing.tmdl",
+                "backends/arm64/defs/forms.tmdl",
                 "backends/arm64/defs/loads_stores.tmdl",
                 "backends/arm64/defs/atomics.tmdl",
                 "backends/arm64/defs/branches.tmdl",

@@ -1,0 +1,390 @@
+//! Scalar and fixed-width SIMD forms emitted by C compilers.
+
+fn formCondition(cond) {
+    ((if cond[3..1] == 0b000 { PSTATE::z }
+        else if cond[3..1] == 0b001 { PSTATE::c }
+        else if cond[3..1] == 0b010 { PSTATE::n }
+        else if cond[3..1] == 0b011 { PSTATE::v }
+        else if cond[3..1] == 0b100 { PSTATE::c & ~PSTATE::z }
+        else if cond[3..1] == 0b101 { ~(PSTATE::n ^ PSTATE::v) }
+        else if cond[3..1] == 0b110 { ~(PSTATE::n ^ PSTATE::v) & ~PSTATE::z }
+        else { 0b1 }) ^ (cond[0] & (cond[3..1] != 0b111))) & 0b1
+}
+
+macro form_addsub {
+    ($name:ident, $opname:literal, $mnemonic:literal, $cls:ident,
+     $sf:literal, $width:literal, $shiftwidth:literal, $op:literal, $flags:tt, $body:tt) => {
+        instruction $name for [ARMv8A64] {
+            param MNEMONIC: String = $mnemonic;
+            param OPNAME: String = $opname;
+            schedule { units = [WriteScalarIALU]; }
+            operands {
+                rd: $cls,
+                rn: $cls,
+                rm: $cls,
+                shift: bits<64>,
+            }
+            encoding {
+                if zext(shift as bits<$shiftwidth>, 64) == shift {
+                    ($sf, $op, $flags, 0b01011000, rm[4..0], shift[5..0], rn[4..0], rd[4..0])
+                } else { () },
+            }
+            asm { "{self.MNEMONIC} {rd}, {rn}, {rm}, lsl {shift}" }
+            behavior {
+                let rhs = rm << shift;
+                let result = if $op { rn - rhs } else { rn + rhs };
+                rd = result;
+                $body
+            }
+        }
+    };
+}
+form_addsub!(AddLsl, "add_lsl", "add", GPR, 0b1, 64, 6, 0b0, 0b0, {})
+form_addsub!(SubLsl, "sub_lsl", "sub", GPR, 0b1, 64, 6, 0b1, 0b0, {})
+form_addsub!(SubsLsl, "subs_lsl", "subs", GPR, 0b1, 64, 6, 0b1, 0b1, {
+    PSTATE::n = extract(result, 63, 63);
+    PSTATE::z = result == 0;
+    PSTATE::c = rn ~>= rhs;
+    PSTATE::v = extract((rn ^ rhs) & (rn ^ result), 63, 63);
+})
+
+macro form_movewide {
+    ($name:ident, $opname:literal, $mnemonic:literal, $cls:ident,
+     $sf:literal, $width:literal, $opc:literal) => {
+        instruction $name for [ARMv8A64] {
+            param MNEMONIC: String = $mnemonic;
+            param OPNAME: String = $opname;
+            schedule { units = [WriteScalarIALU]; }
+            operands {
+                rd: $cls,
+                imm: bits<16>,
+                #[align(16)] hw: bits<64>,
+            }
+            encoding {
+                if zext(hw as bits<5>, 64) == hw {
+                    ($sf, $opc, 0b100101, hw[5..4], imm, rd[4..0])
+                } else { () },
+            }
+            asm { "{self.MNEMONIC} {rd}, {imm}, lsl {hw}" }
+            behavior {
+                let value = zext(imm, $width) << hw;
+                rd = if $opc == 0b00 { ~value } else {
+                    (rd & ~(zext(0xffff, $width) << hw)) | value
+                };
+            }
+        }
+    };
+}
+form_movewide!(MovnWord, "movn_w", "movn", GPR32, 0b0, 32, 0b00)
+form_movewide!(MovkWord, "movk_w", "movk", GPR32, 0b0, 32, 0b11)
+
+instruction CsetWord for [ARMv8A64] {
+    param MNEMONIC: String = "cset";
+    param OPNAME: String = "cset_w";
+    param ASM_PARSE_cond: String = "parse_inverted_condition";
+    schedule { units = [WriteScalarIALU]; }
+    operands {
+        rd: GPR32,
+        cond: bits<4>,
+    }
+    encoding {
+        0b0,
+        0b001101010011111,
+        cond,
+        0b0111111,
+        rd[4..0],
+    }
+    asm { "{self.MNEMONIC} {rd}, {cond}" }
+    behavior { rd = if formCondition(cond ^ 0b0001) { zext(0b1, 32) } else { zext(0b0, 32) }; }
+}
+instruction CselWord for [ARMv8A64] {
+    param MNEMONIC: String = "csel";
+    param OPNAME: String = "csel_w";
+    param ASM_PARSE_cond: String = "parse_condition";
+    schedule { units = [WriteScalarIALU]; }
+    operands {
+        rd: GPR32,
+        rn: GPR32,
+        rm: GPR32,
+        cond: bits<4>,
+    }
+    encoding {
+        0b0,
+        0b0011010100,
+        rm[4..0],
+        cond,
+        0b00,
+        rn[4..0],
+        rd[4..0],
+    }
+    asm { "{self.MNEMONIC} {rd}, {rn}, {rm}, {cond}" }
+    behavior { rd = if formCondition(cond) { rn } else { rm }; }
+}
+instruction CcmpWord for [ARMv8A64] {
+    param MNEMONIC: String = "ccmp";
+    param OPNAME: String = "ccmp_w";
+    param ASM_PARSE_cond: String = "parse_condition";
+    schedule { units = [WriteScalarIALU]; }
+    operands {
+        rn: GPR32,
+        rm: GPR32,
+        nzcv: bits<4>,
+        cond: bits<4>,
+    }
+    encoding {
+        0b0,
+        0b1111010010,
+        rm[4..0],
+        cond,
+        0b00,
+        rn[4..0],
+        0b0,
+        nzcv,
+    }
+    asm { "{self.MNEMONIC} {rn}, {rm}, {nzcv}, {cond}" }
+    behavior {
+        let pass = formCondition(cond);
+        let result = rn - rm;
+        PSTATE::n = if pass { extract(result, 32 - 1, 32 - 1) } else { extract(nzcv, 3, 3) };
+        PSTATE::z = if pass { rn == rm } else { extract(nzcv, 2, 2) };
+        PSTATE::c = if pass { rn ~>= rm } else { extract(nzcv, 1, 1) };
+        PSTATE::v = if pass { extract((rn ^ rm) & (rn ^ result), 32 - 1, 32 - 1) } else { extract(nzcv, 0, 0) };
+    }
+}
+
+// DecodeBitMasks replicates a rotated run of ones across the register.
+fn formMaskLen(selector) {
+    if selector ~>= 64 { 6 } else if selector ~>= 32 { 5 }
+        else if selector ~>= 16 { 4 } else if selector ~>= 8 { 3 }
+        else if selector ~>= 4 { 2 } else { 1 }
+}
+fn formMaskRun(immr, imms, levels, bitwidth) {
+    concat(map(iota(bitwidth, 64), |i| ((i + zext(immr, 64)) & levels) ~<= (zext(imms, 64) & levels)))
+}
+fn formMask(n, immr, imms, bitwidth) {
+    formMaskRun(immr, imms,
+        (zext(0b1, 64) << formMaskLen((zext(n, 64) << 6) | (zext(imms, 64) ^ 63))) - zext(0b1, 64), bitwidth)
+}
+
+macro form_logical_rd {
+    (0b01, GPR32) => { rd: GPR32sp, };
+    (0b01, GPR) => { rd: GPRsp, };
+    (0b11, $cls:ident) => {};
+}
+macro form_logical_dst {
+    (0b01) => { rd[4..0] };
+    (0b11) => { 0b11111 };
+}
+macro form_logical_asm {
+    (0b01) => { asm { "{self.MNEMONIC} {rd}, {rn}, {n}, {immr}, {imms}" } };
+    (0b11) => { asm { "{self.MNEMONIC} {rn}, {n}, {immr}, {imms}" } };
+}
+macro form_logical_immediate {
+    ($name:ident, $opname:literal, $mnemonic:literal, $cls:ident,
+     $sf:literal, $width:literal, $opc:literal, $body:tt) => {
+        instruction $name for [ARMv8A64] {
+            param MNEMONIC: String = $mnemonic;
+            param OPNAME: String = $opname;
+            schedule { units = [WriteScalarIALU]; }
+            operands {
+                form_logical_rd!($opc, $cls)
+                rn: $cls,
+                n: bits<1>,
+                immr: bits<6>,
+                imms: bits<6>,
+            }
+            encoding {
+                if ((n == 0b1) & ($sf == 0b1) & (imms != 0b111111))
+                    | ((n == 0b0) & (imms != 0b011111) & (imms != 0b101111)
+                        & (imms != 0b110111) & (imms != 0b111011) & (imms ~< 0b111101)) {
+                    ($sf, $opc, 0b100100, n, immr, imms, rn[4..0], form_logical_dst!($opc))
+                } else { () },
+            }
+            form_logical_asm!($opc)
+            behavior {
+                let mask = formMask(n, immr, imms, $width);
+                $body
+            }
+        }
+    };
+}
+form_logical_immediate!(OrrImmediateWord, "orr_imm_w", "orr", GPR32, 0b0, 32, 0b01, { rd = rn | mask; })
+form_logical_immediate!(TstImmediate, "tst_imm", "tst", GPR, 0b1, 64, 0b11, {
+    let result = rn & mask;
+    PSTATE::n = extract(result, 63, 63);
+    PSTATE::z = result == 0;
+    PSTATE::c = 0b0;
+    PSTATE::v = 0b0;
+})
+
+macro form_vector_pair {
+    ($name:ident, $opname:literal, $mnemonic:literal, $l:literal, $sched:ident, $body:tt) => {
+        instruction $name for [FP] {
+            param MNEMONIC: String = $mnemonic;
+            param OPNAME: String = $opname;
+            schedule { units = [$sched]; }
+            operands {
+                rt: QPR,
+                rt2: QPR,
+                rn: GPRsp,
+                #[align(16)] imm: bits<64>,
+            }
+            encoding {
+                if sext(imm as bits<11>, 64) == imm {
+                    (0b101011010, $l, imm[10..4], rt2[4..0], rn[4..0], rt[4..0])
+                } else { () },
+            }
+            asm { "{self.MNEMONIC} {rt}, {rt2}, [{rn}, {imm}]" }
+            behavior { $body }
+        }
+    };
+}
+form_vector_pair!(LoadPairQ, "ldp_q", "ldp", 0b1, WriteFPVectorLoad, {
+    rt = load(rn + imm, 16, 0b0);
+    rt2 = load(rn + imm + zext(0b10000, 64), 16, 0b0);
+})
+form_vector_pair!(StorePairQ, "stp_q", "stp", 0b0, WriteStore, {
+    store(rn + imm, 16, rt);
+    store(rn + imm + zext(0b10000, 64), 16, rt2);
+})
+tmpl_loadstore_reg_offset!(LoadStoreQReg, QPR)
+instruction LoadQRegister for [FP] : LoadStoreQReg {
+    param MNEMONIC: String = "ldr";
+    param OPNAME: String = "ldr_q_reg";
+    param SIZE: bits<2> = 0b00;
+    param OPC: bits<2> = 0b11;
+    param V: bits<1> = 0b1;
+    param S: bits<1> = 0b0;
+    schedule { units = [WriteFPVectorLoad]; }
+    behavior { rt = load(rn + rm, 16, 0b0); }
+}
+instruction StoreQUnscaled for [FP] {
+    param MNEMONIC: String = "stur";
+    param OPNAME: String = "stur_q";
+    schedule { units = [WriteStore]; }
+    operands {
+        rt: QPR,
+        rn: GPRsp,
+        imm: bits<9>,
+    }
+    encoding {
+        0b00111100100, imm, 0b00, rn[4..0], rt[4..0],
+    }
+    asm { "{self.MNEMONIC} {rt}, [{rn}, {imm}]" }
+    behavior { store(rn + sext(imm, 64), 16, rt); }
+}
+instruction StoreExtendedWordIndex for [ARMv8A64] {
+    param MNEMONIC: String = "str";
+    param OPNAME: String = "str_uxtw3";
+    schedule { units = [WriteStore]; }
+    operands {
+        rt: GPR,
+        rn: GPRsp,
+        rm: GPR32,
+    }
+    encoding {
+        0b11111000001,
+        rm[4..0],
+        0b010110,
+        rn[4..0],
+        rt[4..0],
+    }
+    asm { "{self.MNEMONIC} {rt}, [{rn}, {rm}, uxtw 3]" }
+    behavior { store(rn + (zext(rm, 64) << 3), 8, rt); }
+}
+
+instruction UnsignedBitfieldMoveWord for [ARMv8A64] {
+    param MNEMONIC: String = "ubfm";
+    param OPNAME: String = "ubfm_w";
+    schedule { units = [WriteScalarIALU]; }
+    operands {
+        rd: GPR32,
+        rn: GPR32,
+        immr: bits<64>,
+        imms: bits<64>,
+    }
+    encoding {
+        if (zext(immr as bits<5>, 64) == immr) & (zext(imms as bits<5>, 64) == imms) {
+            (0b0101001100, immr[5..0], imms[5..0], rn[4..0], rd[4..0])
+        } else { () },
+    }
+    asm { "{self.MNEMONIC} {rd}, {rn}, {immr}, {imms}" }
+    behavior {
+        rd = if imms ~>= immr {
+            (rn << (31 - imms)) >> ((immr + 31) - imms)
+        } else {
+            (rn & ((zext(0b1, 32) << (imms + 1)) - zext(0b1, 32))) << (32 - immr)
+        };
+    }
+}
+/// Cumulative invalid-operation flag. FCMPE signals on every NaN.
+register_class FPSR for [FP] {
+    param ENCODING_LEN: Integer = 0;
+    param WIDTH: Integer = 1;
+    registers { ioc => { traits = [status_flag] }, }
+}
+instruction FcmpeSingle for [FP] {
+    param MNEMONIC: String = "fcmpe";
+    param OPNAME: String = "fcmpe_s";
+    schedule { units = [WriteFPCompare]; }
+    operands {
+        fa: FPR32,
+        fb: FPR32,
+    }
+    encoding {
+        0b00011110,
+        0b00,
+        0b1,
+        fb[4..0],
+        0b001000,
+        fa[4..0],
+        0b10000,
+    }
+    asm { "{self.MNEMONIC} {fa}, {fb}" }
+    behavior {
+        let unordered = (fa != fa) | (fb != fb);
+        PSTATE::n = fa < fb;
+        PSTATE::z = fa == fb;
+        PSTATE::c = unordered | (fa >= fb);
+        PSTATE::v = unordered;
+        FPSR::ioc = FPSR::ioc | unordered;
+    }
+}
+instruction FMovImmediateSingle for [FP] {
+    param MNEMONIC: String = "fmov";
+    param OPNAME: String = "fmov_imm_s";
+    param ASM_FORMAT_imm: String = "print_fmov_immediate";
+    param ASM_PARSE_imm: String = "parse_fmov_immediate";
+    schedule { units = [WriteFPMove]; }
+    operands {
+        fd: FPR32,
+        imm: bits<8>,
+    }
+    encoding {
+        0b00011110001,
+        imm,
+        0b10000000,
+        fd[4..0],
+    }
+    asm { "{self.MNEMONIC} {fd}, {imm}" }
+    behavior {
+        fd = (zext(extract(imm, 7, 7), 32) << 31)
+            | (zext(~extract(imm, 6, 6), 32) << 30)
+            | (((zext(0b0, 32) - zext(extract(imm, 6, 6), 32)) & zext(0b11111, 32)) << 25)
+            | (zext(extract(imm, 5, 4), 32) << 23)
+            | (zext(extract(imm, 3, 0), 32) << 19);
+    }
+}
+advsimd_modified_immediate!(
+    (MoveImmediate2D, "movi", "movi_v2d", VPR2D, 2, 64, 0b1, 0b1, 0b1110,
+        (concat(map(iota(8, 64), |j| zext(0b0, 8) - ((imm >> j) & 0b00000001)))),
+        ASM_PARSE_imm = "parse_movi_immediate", ASM_FORMAT_imm = "print_movi_immediate")
+)
+tmpl_data_proc_3src!(DataProc3SrcLong, GPR, GPR32, sf = 0b1)
+instruction UnsignedMultiplyAddLong for [ARMv8A64] : DataProc3SrcLong {
+    param MNEMONIC: String = "umaddl";
+    param OPNAME: String = "umaddl";
+    param OP31: bits<3> = 0b101;
+    param O0: bits<1> = 0b0;
+    behavior { rd = ra + (zext(rn, 64) * zext(rm, 64)); }
+}

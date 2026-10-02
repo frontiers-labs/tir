@@ -38,6 +38,9 @@ pub enum AsmSymbol {
 /// Parses one register of a fixed class, returning its encoding index.
 pub type RegisterTokenParser = for<'src> fn(&mut Parser<'src, Token<'src>>) -> Option<u16>;
 
+/// Converts an architectural immediate spelling to its encoded operand value.
+pub type ImmediateTokenParser = for<'src> fn(&mut Parser<'src, Token<'src>>) -> Result<i64, ()>;
+
 /// Renders a register of a fixed class by encoding index (`prefer_abi`).
 pub type RegisterNamePrinter = fn(u16, bool) -> Option<String>;
 
@@ -59,6 +62,8 @@ pub enum ParseStep {
     /// outside them fails the candidate so per-mnemonic dispatch can backtrack
     /// to a wider form.
     Immediate(&'static str, bool, ImmConstraint),
+    /// Target-provided literal reader; the converted value still obeys the constraint.
+    ParsedImmediate(&'static str, ImmediateTokenParser, ImmConstraint),
 }
 
 /// The values an immediate operand admits: the half-open interval its `bits<N>`
@@ -91,6 +96,8 @@ pub enum PrintPart {
     Register(&'static str, RegisterNamePrinter),
     /// An immediate operand, printed as a number, symbol or block label.
     Immediate(&'static str),
+    /// Convert an encoded immediate into its architectural spelling.
+    FormattedImmediate(&'static str, fn(i64) -> Option<String>),
     /// A string-valued operand.
     Str(&'static str),
 }
@@ -188,6 +195,13 @@ fn parse_operands<'src>(
                     }),
                 ));
             }
+            ParseStep::ParsedImmediate(name, parse, constraint) => {
+                let value = parse(parser)?;
+                if !constraint.admits(value) {
+                    return Err(());
+                }
+                attributes.push(context.named_attribute(name, AttributeValue::Int(value)));
+            }
             ParseStep::Immediate(name, signed, constraint) => {
                 if let Some(Token::Ident(symbol)) = parser.peek()
                     && desc.register_names.binary_search(symbol).is_ok()
@@ -268,6 +282,9 @@ pub fn print(
                 let slot = reg_slot(op, name)?;
                 let (_, index) = slot_register(slot, assignment)?;
                 out.push_str(&print(index, false)?)
+            }
+            PrintPart::FormattedImmediate(name, format) => {
+                out.push_str(&format(crate::backend::as_int_attr(op.attr(name))?)?);
             }
             PrintPart::Immediate(name) => match &find_attribute(context, attributes, name)?.value {
                 AttributeValue::Int(value) => out.push_str(&value.to_string()),

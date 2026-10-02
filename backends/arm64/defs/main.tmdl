@@ -768,6 +768,9 @@ template CondBranchImm for [ARMv8A64] {
 // Data Processing -- 3 source (multiply-add family)
 macro tmpl_data_proc_3src {
     ( $name:ident, $cls:ident, sf = $sf:literal ) => {
+        tmpl_data_proc_3src!($name, $cls, $cls, sf = $sf)
+    };
+    ( $name:ident, $cls:ident, $srccls:ident, sf = $sf:literal ) => {
         template $name for [ARMv8A64] {
             schedule { units = [WriteIMul]; }
             param MNEMONIC: String;
@@ -777,8 +780,8 @@ macro tmpl_data_proc_3src {
 
             operands {
                 rd: $cls,
-                rn: $cls,
-                rm: $cls,
+                rn: $srccls,
+                rm: $srccls,
                 ra: $cls,
             }
 

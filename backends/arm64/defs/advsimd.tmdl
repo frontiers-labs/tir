@@ -1074,13 +1074,14 @@ advsimd_dup_general!(
 macro advsimd_modified_immediate {
     ( $( ( $name:ident, $mnemonic:literal, $opname:literal, $cls:ident,
            $lanes:literal, $esize:literal, $q:literal, $op:literal,
-           $cmode:literal, $expand:tt ) ),* ) => {
+           $cmode:literal, $expand:tt $(, $property:ident = $value:literal)* ) ),* ) => {
         $( instruction $name for [AdvSIMD] {
             param MNEMONIC: String = $mnemonic;
             param OPNAME: String = $opname;
             param Q: bits<1> = $q;
             param OP: bits<1> = $op;
             param CMODE: bits<4> = $cmode;
+            $(param $property: String = $value;)*
             schedule { units = [WriteIALU]; }
 
             operands {

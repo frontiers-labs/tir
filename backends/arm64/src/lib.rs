@@ -1,12 +1,27 @@
 use tir::Operation;
 use tir::backend::{RegSlot, normalize_name, phys_attr};
-use tir::helpers::{dialect, operation};
+use tir::helpers::dialect;
 
 include!(concat!(env!("OUT_DIR"), "/model_check_sources.rs"));
 
+mod asm;
 mod obj;
 
-include!(concat!(env!("OUT_DIR"), "/arm64.rs"));
+mod generated {
+    use super::asm::*;
+    use tir::helpers::operation;
+    include!(concat!(env!("OUT_DIR"), "/arm64.rs"));
+    pub(super) fn parsers(
+        features: &[Feature],
+    ) -> (
+        std::collections::HashMap<String, Vec<tir::backend::AsmInstructionParser>>,
+        std::collections::HashSet<String>,
+    ) {
+        get_instruction_parsers(features)
+    }
+}
+use asm::get_instruction_parsers;
+pub use generated::*;
 
 /// Parsed AArch64 target selection from `--march`/`--mcpu`/`--mattr`.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -172,7 +187,7 @@ fn lower_func_and_return_to_asm_symbol(
 
 impl Arm64Dialect {
     pub fn get_asm_parser(&self) -> tir::backend::AsmParser {
-        tir::backend::AsmParser::new(get_instruction_parsers(Feature::ALL).0)
+        tir::backend::AsmParser::new(get_instruction_parsers(Feature::ALL).0).with_hash_immediates()
     }
 }
 
@@ -476,6 +491,7 @@ tir::impl_target_machine! {
     pointer_bits: |_| 64,
     regalloc: |_| Arm64RegAlloc,
     abis: arm64_abis,
+    asm_parser: |parser: tir::backend::AsmParser| parser.with_hash_immediates(),
     sources: MODEL_CHECK_SOURCES,
 
     fn unaligned_scalar_bytes(&self) -> &'static [u32] {

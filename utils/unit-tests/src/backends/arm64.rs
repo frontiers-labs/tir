@@ -64,6 +64,8 @@ fn decoder_round_trips_golden_words() {
     // fixed-opcode matching across the instruction classes the benchmark ELFs
     // execute, plus `svc`.
     let cases: &[(u32, &str)] = &[
+        (0x72A00020, "movk w0, #1, lsl #16"),
+        (0x3C9E03A0, "stur q0, [x29, #-32]"),
         (0x8B020020, "add x0, x1, x2"),
         (0x9AC22020, "lslv x0, x1, x2"),
         (0xEB02003F, "cmp x1, x2"),
