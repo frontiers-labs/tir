@@ -1,0 +1,60 @@
+{
+ "runs": [
+  {
+   "file": "runs/2026-09-25T03-46-19-000Z-5242cf876889.json",
+   "commit": "5242cf87688964d8e12908245cbafe8894e8c313",
+   "subject": "fix(nightly): rename dce region results from the root, not a stale region list (#503)",
+   "time": "2026-09-25T03:46:19.000Z",
+   "env_key": "rustc 1.98.1; valgrind-3.22.0"
+  },
+  {
+   "file": "runs/2026-09-26T03-52-17-000Z-92d2d0f78bd1.json",
+   "commit": "92d2d0f78bd19aaffc160931aef09ff89628dd15",
+   "subject": "chore(nightly): remove Benchboard publication",
+   "time": "2026-09-26T03:52:17.000Z",
+   "env_key": "rustc 1.98.1; valgrind-3.22.0"
+  },
+  {
+   "file": "runs/2026-09-27T04-01-52-000Z-8e60167d34ef.json",
+   "commit": "8e60167d34efe0854bcf0eac00588c7b1026949b",
+   "subject": "feat(isel): select narrow operations through shared axioms (#510)",
+   "time": "2026-09-27T04:01:52.000Z",
+   "env_key": "rustc 1.98.1; valgrind-3.22.0"
+  },
+  {
+   "file": "runs/2026-09-28T04-03-02-000Z-e57f985e4173.json",
+   "commit": "e57f985e4173aa6b56fb3774240cf7b48c787ac6",
+   "subject": "fix(core): decode narrow register fields to their class's registers (#516)",
+   "time": "2026-09-28T04:03:02.000Z",
+   "env_key": "rustc 1.98.1; valgrind-3.22.0"
+  },
+  {
+   "file": "runs/2026-09-29T04-36-18-000Z-0cd76dde26d4.json",
+   "commit": "0cd76dde26d4efe8b4c0e9d513874eb860dc5197",
+   "subject": "chore: strict testing rules (#518)",
+   "time": "2026-09-29T04:36:18.000Z",
+   "env_key": "rustc 1.98.1; valgrind-3.22.0"
+  },
+  {
+   "file": "runs/2026-09-30T04-20-03-000Z-fa113e8415bd.json",
+   "commit": "fa113e8415bd4da84e4281a0547690b9ac58c73f",
+   "subject": "fix(verify): build SMT queries as terms and compare all mapped state (#519)",
+   "time": "2026-09-30T04:20:03.000Z",
+   "env_key": "rustc 1.98.1; valgrind-3.22.0"
+  },
+  {
+   "file": "runs/2026-10-01T04-31-54-000Z-d46ad60a3a78.json",
+   "commit": "d46ad60a3a78b35e1eece1414a6d0160d1a73c2e",
+   "subject": "fix(adt): restore IndexMap for stable compiler traversal (#520)",
+   "time": "2026-10-01T04:31:54.000Z",
+   "env_key": "rustc 1.98.1; valgrind-3.22.0"
+  },
+  {
+   "file": "runs/2026-10-02T04-24-17-000Z-7d81a13b360a.json",
+   "commit": "7d81a13b360ae3e39750ecd9b87f491de3f94750",
+   "subject": "fix(arm64): refine Cortex-A720 scheduling costs (#523)",
+   "time": "2026-10-02T04:24:17.000Z",
+   "env_key": "rustc 1.99.0; valgrind-3.22.0"
+  }
+ ]
+}
