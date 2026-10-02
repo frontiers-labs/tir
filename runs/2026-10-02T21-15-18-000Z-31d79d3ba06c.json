@@ -1,0 +1,2125 @@
+{
+ "commit": "31d79d3ba06c3b8c035243c6b3a1806e9ab93923",
+ "subject": "feat(isel): select from a frozen problem with a validated incumbent (#529)",
+ "time": "2026-10-02T21:15:18.000Z",
+ "run_url": "https://github.com/frontiers-labs/tir/actions/runs/37056707628",
+ "env_key": "rustc 1.99.0 (b940084d7 2026-09-28); valgrind-3.22.0; ldd (Ubuntu GLIBC 2.39-0ubuntu8.9) 2.39",
+ "gate_metrics": [
+  "Ir"
+ ],
+ "threshold": 2,
+ "metrics": [
+  {
+   "description": "Instructions executed under Cachegrind. Repeats to about 0.2% on shared runners, so regressions are gated on it.",
+   "key": "Ir",
+   "label": "Instructions",
+   "unit": "count"
+  },
+  {
+   "description": "Memory reads executed under Cachegrind.",
+   "key": "Dr",
+   "label": "Data reads",
+   "unit": "count"
+  },
+  {
+   "description": "Memory writes executed under Cachegrind.",
+   "key": "Dw",
+   "label": "Data writes",
+   "unit": "count"
+  },
+  {
+   "description": "Instruction fetches that miss Cachegrind's simulated first-level cache.",
+   "key": "I1mr",
+   "label": "L1 instruction misses",
+   "unit": "count"
+  },
+  {
+   "description": "Instruction fetches that miss Cachegrind's simulated last-level cache.",
+   "key": "ILmr",
+   "label": "Last-level instruction misses",
+   "unit": "count"
+  },
+  {
+   "description": "Memory reads that miss Cachegrind's simulated first-level cache.",
+   "key": "D1mr",
+   "label": "L1 data read misses",
+   "unit": "count"
+  },
+  {
+   "description": "Memory writes that miss Cachegrind's simulated first-level cache.",
+   "key": "D1mw",
+   "label": "L1 data write misses",
+   "unit": "count"
+  },
+  {
+   "description": "Memory reads that miss Cachegrind's simulated last-level cache.",
+   "key": "DLmr",
+   "label": "Last-level data read misses",
+   "unit": "count"
+  },
+  {
+   "description": "Memory writes that miss Cachegrind's simulated last-level cache.",
+   "key": "DLmw",
+   "label": "Last-level data write misses",
+   "unit": "count"
+  },
+  {
+   "description": "Conditional branches executed under Cachegrind.",
+   "key": "Bc",
+   "label": "Conditional branches",
+   "unit": "count"
+  },
+  {
+   "description": "Conditional branches that Cachegrind's simulated predictor gets wrong.",
+   "key": "Bcm",
+   "label": "Conditional branch mispredictions",
+   "unit": "count"
+  },
+  {
+   "description": "Indirect branches executed under Cachegrind.",
+   "key": "Bi",
+   "label": "Indirect branches",
+   "unit": "count"
+  },
+  {
+   "description": "Indirect branches that Cachegrind's simulated predictor gets wrong.",
+   "key": "Bim",
+   "label": "Indirect branch mispredictions",
+   "unit": "count"
+  },
+  {
+   "description": "Elapsed time of one execution. Median of the samples, with their median absolute deviation as the spread.",
+   "key": "latency",
+   "label": "Wall time",
+   "unit": "ns"
+  },
+  {
+   "description": "Largest resident set size of the measured process. Maximum over the samples.",
+   "key": "peak_process_rss_bytes",
+   "label": "Peak memory",
+   "unit": "bytes"
+  }
+ ],
+ "variants": {
+  "clang/coremark/source/O2/compile/core_list_join": {
+   "benchmark": "coremark/O2/core_list_join",
+   "group": "Compile",
+   "subject": false,
+   "variant": "clang"
+  },
+  "clang/coremark/source/O2/compile/core_main": {
+   "benchmark": "coremark/O2/core_main",
+   "group": "Compile",
+   "subject": false,
+   "variant": "clang"
+  },
+  "clang/coremark/source/O2/compile/core_matrix": {
+   "benchmark": "coremark/O2/core_matrix",
+   "group": "Compile",
+   "subject": false,
+   "variant": "clang"
+  },
+  "clang/coremark/source/O2/compile/core_state": {
+   "benchmark": "coremark/O2/core_state",
+   "group": "Compile",
+   "subject": false,
+   "variant": "clang"
+  },
+  "clang/coremark/source/O2/compile/core_util": {
+   "benchmark": "coremark/O2/core_util",
+   "group": "Compile",
+   "subject": false,
+   "variant": "clang"
+  },
+  "clang/coremark/source/O2/compile/posix/core_portme": {
+   "benchmark": "coremark/O2/posix/core_portme",
+   "group": "Compile",
+   "subject": false,
+   "variant": "clang"
+  },
+  "clang/coremark/source/O2/run": {
+   "benchmark": "coremark/O2",
+   "group": "Run",
+   "subject": false,
+   "variant": "clang"
+  },
+  "fcc/coremark/source/O2/compile/core_list_join": {
+   "benchmark": "coremark/O2/core_list_join",
+   "group": "Compile",
+   "subject": true,
+   "variant": "fcc"
+  },
+  "fcc/coremark/source/O2/compile/core_main": {
+   "benchmark": "coremark/O2/core_main",
+   "group": "Compile",
+   "subject": true,
+   "variant": "fcc"
+  },
+  "fcc/coremark/source/O2/compile/core_matrix": {
+   "benchmark": "coremark/O2/core_matrix",
+   "group": "Compile",
+   "subject": true,
+   "variant": "fcc"
+  },
+  "fcc/coremark/source/O2/compile/core_state": {
+   "benchmark": "coremark/O2/core_state",
+   "group": "Compile",
+   "subject": true,
+   "variant": "fcc"
+  },
+  "fcc/coremark/source/O2/compile/core_util": {
+   "benchmark": "coremark/O2/core_util",
+   "group": "Compile",
+   "subject": true,
+   "variant": "fcc"
+  },
+  "fcc/coremark/source/O2/compile/posix/core_portme": {
+   "benchmark": "coremark/O2/posix/core_portme",
+   "group": "Compile",
+   "subject": true,
+   "variant": "fcc"
+  },
+  "fcc/coremark/source/O2/run": {
+   "benchmark": "coremark/O2",
+   "group": "Run",
+   "subject": true,
+   "variant": "fcc"
+  },
+  "gcc/coremark/source/O2/compile/core_list_join": {
+   "benchmark": "coremark/O2/core_list_join",
+   "group": "Compile",
+   "subject": false,
+   "variant": "gcc"
+  },
+  "gcc/coremark/source/O2/compile/core_main": {
+   "benchmark": "coremark/O2/core_main",
+   "group": "Compile",
+   "subject": false,
+   "variant": "gcc"
+  },
+  "gcc/coremark/source/O2/compile/core_matrix": {
+   "benchmark": "coremark/O2/core_matrix",
+   "group": "Compile",
+   "subject": false,
+   "variant": "gcc"
+  },
+  "gcc/coremark/source/O2/compile/core_state": {
+   "benchmark": "coremark/O2/core_state",
+   "group": "Compile",
+   "subject": false,
+   "variant": "gcc"
+  },
+  "gcc/coremark/source/O2/compile/core_util": {
+   "benchmark": "coremark/O2/core_util",
+   "group": "Compile",
+   "subject": false,
+   "variant": "gcc"
+  },
+  "gcc/coremark/source/O2/compile/posix/core_portme": {
+   "benchmark": "coremark/O2/posix/core_portme",
+   "group": "Compile",
+   "subject": false,
+   "variant": "gcc"
+  },
+  "gcc/coremark/source/O2/run": {
+   "benchmark": "coremark/O2",
+   "group": "Run",
+   "subject": false,
+   "variant": "gcc"
+  },
+  "clang/dhrystone/source/O2/compile/dhry_1": {
+   "benchmark": "dhrystone/O2/dhry_1",
+   "group": "Compile",
+   "subject": false,
+   "variant": "clang"
+  },
+  "clang/dhrystone/source/O2/compile/dhry_2": {
+   "benchmark": "dhrystone/O2/dhry_2",
+   "group": "Compile",
+   "subject": false,
+   "variant": "clang"
+  },
+  "clang/dhrystone/source/O2/run": {
+   "benchmark": "dhrystone/O2",
+   "group": "Run",
+   "subject": false,
+   "variant": "clang"
+  },
+  "fcc/dhrystone/source/O2/compile/dhry_1": {
+   "benchmark": "dhrystone/O2/dhry_1",
+   "group": "Compile",
+   "subject": true,
+   "variant": "fcc"
+  },
+  "fcc/dhrystone/source/O2/compile/dhry_2": {
+   "benchmark": "dhrystone/O2/dhry_2",
+   "group": "Compile",
+   "subject": true,
+   "variant": "fcc"
+  },
+  "fcc/dhrystone/source/O2/run": {
+   "benchmark": "dhrystone/O2",
+   "group": "Run",
+   "subject": true,
+   "variant": "fcc"
+  },
+  "gcc/dhrystone/source/O2/compile/dhry_1": {
+   "benchmark": "dhrystone/O2/dhry_1",
+   "group": "Compile",
+   "subject": false,
+   "variant": "gcc"
+  },
+  "gcc/dhrystone/source/O2/compile/dhry_2": {
+   "benchmark": "dhrystone/O2/dhry_2",
+   "group": "Compile",
+   "subject": false,
+   "variant": "gcc"
+  },
+  "gcc/dhrystone/source/O2/run": {
+   "benchmark": "dhrystone/O2",
+   "group": "Run",
+   "subject": false,
+   "variant": "gcc"
+  }
+ },
+ "results": {
+  "fcc/codegen/ast_to_ir": {
+   "Bc": {
+    "value": 20796451
+   },
+   "Bcm": {
+    "value": 560125
+   },
+   "Bi": {
+    "value": 1097853
+   },
+   "Bim": {
+    "value": 164703
+   },
+   "D1mr": {
+    "value": 224169
+   },
+   "D1mw": {
+    "value": 133341
+   },
+   "DLmr": {
+    "value": 65714
+   },
+   "DLmw": {
+    "value": 78371
+   },
+   "Dr": {
+    "value": 41385993
+   },
+   "Dw": {
+    "value": 25612797
+   },
+   "I1mr": {
+    "value": 1917453
+   },
+   "ILmr": {
+    "value": 2420
+   },
+   "Ir": {
+    "value": 149037672
+   }
+  },
+  "fcc/codegen_expr_heavy/ast_to_ir": {
+   "Bc": {
+    "value": 144074354
+   },
+   "Bcm": {
+    "value": 3713663
+   },
+   "Bi": {
+    "value": 7923244
+   },
+   "Bim": {
+    "value": 1082129
+   },
+   "D1mr": {
+    "value": 1892431
+   },
+   "D1mw": {
+    "value": 1233075
+   },
+   "DLmr": {
+    "value": 1083948
+   },
+   "DLmw": {
+    "value": 659044
+   },
+   "Dr": {
+    "value": 302108189
+   },
+   "Dw": {
+    "value": 179358825
+   },
+   "I1mr": {
+    "value": 12036865
+   },
+   "ILmr": {
+    "value": 4748
+   },
+   "Ir": {
+    "value": 1146883823
+   }
+  },
+  "fcc/gcc_20011219_1/backend_through_finalize": {
+   "Bc": {
+    "value": 19781135
+   },
+   "Bcm": {
+    "value": 978708
+   },
+   "Bi": {
+    "value": 1471214
+   },
+   "Bim": {
+    "value": 205878
+   },
+   "D1mr": {
+    "value": 427872
+   },
+   "D1mw": {
+    "value": 288542
+   },
+   "DLmr": {
+    "value": 11449
+   },
+   "DLmw": {
+    "value": 90968
+   },
+   "Dr": {
+    "value": 44793515
+   },
+   "Dw": {
+    "value": 27652742
+   },
+   "I1mr": {
+    "value": 710333
+   },
+   "ILmr": {
+    "value": 22418
+   },
+   "Ir": {
+    "value": 156822040
+   }
+  },
+  "fcc/gcc_20011219_1/instcombine": {
+   "Bc": {
+    "value": 711268
+   },
+   "Bcm": {
+    "value": 46172
+   },
+   "Bi": {
+    "value": 45153
+   },
+   "Bim": {
+    "value": 8327
+   },
+   "D1mr": {
+    "value": 26837
+   },
+   "D1mw": {
+    "value": 9998
+   },
+   "DLmr": {
+    "value": 1255
+   },
+   "DLmw": {
+    "value": 3336
+   },
+   "Dr": {
+    "value": 1348604
+   },
+   "Dw": {
+    "value": 828630
+   },
+   "I1mr": {
+    "value": 33922
+   },
+   "ILmr": {
+    "value": 6193
+   },
+   "Ir": {
+    "value": 4973258
+   }
+  },
+  "fcc/gcc_20011219_1/instruction_selection": {
+   "Bc": {
+    "value": 18211000
+   },
+   "Bcm": {
+    "value": 888213
+   },
+   "Bi": {
+    "value": 1387724
+   },
+   "Bim": {
+    "value": 193966
+   },
+   "D1mr": {
+    "value": 395192
+   },
+   "D1mw": {
+    "value": 271137
+   },
+   "DLmr": {
+    "value": 10200
+   },
+   "DLmw": {
+    "value": 90551
+   },
+   "Dr": {
+    "value": 41680776
+   },
+   "Dw": {
+    "value": 26130748
+   },
+   "I1mr": {
+    "value": 640751
+   },
+   "ILmr": {
+    "value": 18358
+   },
+   "Ir": {
+    "value": 145399668
+   }
+  },
+  "fcc/pipeline/source_to_ir": {
+   "Bc": {
+    "value": 104880200
+   },
+   "Bcm": {
+    "value": 2230484
+   },
+   "Bi": {
+    "value": 5753836
+   },
+   "Bim": {
+    "value": 1680901
+   },
+   "D1mr": {
+    "value": 3389297
+   },
+   "D1mw": {
+    "value": 2560257
+   },
+   "DLmr": {
+    "value": 259610
+   },
+   "DLmw": {
+    "value": 745419
+   },
+   "Dr": {
+    "value": 200850853
+   },
+   "Dw": {
+    "value": 147239260
+   },
+   "I1mr": {
+    "value": 4077802
+   },
+   "ILmr": {
+    "value": 5689
+   },
+   "Ir": {
+    "value": 712403459
+   }
+  },
+  "fcc/promote/promote": {
+   "Bc": {
+    "value": 1345589426
+   },
+   "Bcm": {
+    "value": 34024641
+   },
+   "Bi": {
+    "value": 44042710
+   },
+   "Bim": {
+    "value": 2325987
+   },
+   "D1mr": {
+    "value": 12426839
+   },
+   "D1mw": {
+    "value": 4868323
+   },
+   "DLmr": {
+    "value": 262297
+   },
+   "DLmw": {
+    "value": 316041
+   },
+   "Dr": {
+    "value": 2345757157
+   },
+   "Dw": {
+    "value": 1390510198
+   },
+   "I1mr": {
+    "value": 17171426
+   },
+   "ILmr": {
+    "value": 10504
+   },
+   "Ir": {
+    "value": 8913307069
+   }
+  },
+  "large_asm/lex": {
+   "Bc": {
+    "value": 33252
+   },
+   "Bcm": {
+    "value": 769
+   },
+   "Bi": {
+    "value": 3930
+   },
+   "Bim": {
+    "value": 2791
+   },
+   "D1mr": {
+    "value": 291
+   },
+   "D1mw": {
+    "value": 884
+   },
+   "DLmr": {
+    "value": 284
+   },
+   "DLmw": {
+    "value": 883
+   },
+   "Dr": {
+    "value": 62829
+   },
+   "Dw": {
+    "value": 34458
+   },
+   "I1mr": {
+    "value": 146
+   },
+   "ILmr": {
+    "value": 146
+   },
+   "Ir": {
+    "value": 171576
+   }
+  },
+  "pbqp/block_search/4096": {
+   "Bc": {
+    "value": 23720450
+   },
+   "Bcm": {
+    "value": 1109716
+   },
+   "Bi": {
+    "value": 148335
+   },
+   "Bim": {
+    "value": 99
+   },
+   "D1mr": {
+    "value": 258355
+   },
+   "D1mw": {
+    "value": 92559
+   },
+   "DLmr": {
+    "value": 12633
+   },
+   "DLmw": {
+    "value": 81575
+   },
+   "Dr": {
+    "value": 39393399
+   },
+   "Dw": {
+    "value": 8907252
+   },
+   "I1mr": {
+    "value": 741
+   },
+   "ILmr": {
+    "value": 642
+   },
+   "Ir": {
+    "value": 159362159
+   }
+  },
+  "pbqp/block_search/512": {
+   "Bc": {
+    "value": 2962009
+   },
+   "Bcm": {
+    "value": 139814
+   },
+   "Bi": {
+    "value": 18555
+   },
+   "Bim": {
+    "value": 88
+   },
+   "D1mr": {
+    "value": 33855
+   },
+   "D1mw": {
+    "value": 13036
+   },
+   "DLmr": {
+    "value": 1854
+   },
+   "DLmw": {
+    "value": 12204
+   },
+   "Dr": {
+    "value": 4904368
+   },
+   "Dw": {
+    "value": 1092807
+   },
+   "I1mr": {
+    "value": 632
+   },
+   "ILmr": {
+    "value": 602
+   },
+   "Ir": {
+    "value": 19990930
+   }
+  },
+  "pbqp/dense_search/16": {
+   "Bc": {
+    "value": 66460
+   },
+   "Bcm": {
+    "value": 3078
+   },
+   "Bi": {
+    "value": 937
+   },
+   "Bim": {
+    "value": 70
+   },
+   "D1mr": {
+    "value": 342
+   },
+   "D1mw": {
+    "value": 517
+   },
+   "DLmr": {
+    "value": 209
+   },
+   "DLmw": {
+    "value": 506
+   },
+   "Dr": {
+    "value": 128608
+   },
+   "Dw": {
+    "value": 41526
+   },
+   "I1mr": {
+    "value": 541
+   },
+   "ILmr": {
+    "value": 536
+   },
+   "Ir": {
+    "value": 434023
+   }
+  },
+  "pbqp/dense_search/32": {
+   "Bc": {
+    "value": 274706
+   },
+   "Bcm": {
+    "value": 8625
+   },
+   "Bi": {
+    "value": 3102
+   },
+   "Bim": {
+    "value": 69
+   },
+   "D1mr": {
+    "value": 1720
+   },
+   "D1mw": {
+    "value": 1589
+   },
+   "DLmr": {
+    "value": 426
+   },
+   "DLmw": {
+    "value": 1416
+   },
+   "Dr": {
+    "value": 521591
+   },
+   "Dw": {
+    "value": 168579
+   },
+   "I1mr": {
+    "value": 564
+   },
+   "ILmr": {
+    "value": 559
+   },
+   "Ir": {
+    "value": 1700589
+   }
+  },
+  "egg_math/ematch/all_rules": {
+   "Bc": {
+    "value": 313871
+   },
+   "Bcm": {
+    "value": 16665
+   },
+   "Bi": {
+    "value": 13393
+   },
+   "Bim": {
+    "value": 1674
+   },
+   "D1mr": {
+    "value": 5844
+   },
+   "D1mw": {
+    "value": 3090
+   },
+   "DLmr": {
+    "value": 800
+   },
+   "DLmw": {
+    "value": 1003
+   },
+   "Dr": {
+    "value": 707107
+   },
+   "Dw": {
+    "value": 472487
+   },
+   "I1mr": {
+    "value": 264
+   },
+   "ILmr": {
+    "value": 264
+   },
+   "Ir": {
+    "value": 2515884
+   }
+  },
+  "egg_math/extract/best": {
+   "Bc": {
+    "value": 86740
+   },
+   "Bcm": {
+    "value": 4743
+   },
+   "Bi": {
+    "value": 757
+   },
+   "Bim": {
+    "value": 168
+   },
+   "D1mr": {
+    "value": 2482
+   },
+   "D1mw": {
+    "value": 249
+   },
+   "DLmr": {
+    "value": 803
+   },
+   "DLmw": {
+    "value": 245
+   },
+   "Dr": {
+    "value": 157696
+   },
+   "Dw": {
+    "value": 64244
+   },
+   "I1mr": {
+    "value": 158
+   },
+   "ILmr": {
+    "value": 158
+   },
+   "Ir": {
+    "value": 733447
+   }
+  },
+  "egg_math/saturate/1": {
+   "Bc": {
+    "value": 55687
+   },
+   "Bcm": {
+    "value": 3921
+   },
+   "Bi": {
+    "value": 3967
+   },
+   "Bim": {
+    "value": 992
+   },
+   "D1mr": {
+    "value": 1316
+   },
+   "D1mw": {
+    "value": 840
+   },
+   "DLmr": {
+    "value": 569
+   },
+   "DLmw": {
+    "value": 678
+   },
+   "Dr": {
+    "value": 117307
+   },
+   "Dw": {
+    "value": 74643
+   },
+   "I1mr": {
+    "value": 867
+   },
+   "ILmr": {
+    "value": 684
+   },
+   "Ir": {
+    "value": 467108
+   }
+  },
+  "egg_math/saturate/2": {
+   "Bc": {
+    "value": 252605
+   },
+   "Bcm": {
+    "value": 14677
+   },
+   "Bi": {
+    "value": 17109
+   },
+   "Bim": {
+    "value": 3294
+   },
+   "D1mr": {
+    "value": 5359
+   },
+   "D1mw": {
+    "value": 3632
+   },
+   "DLmr": {
+    "value": 619
+   },
+   "DLmw": {
+    "value": 2384
+   },
+   "Dr": {
+    "value": 533417
+   },
+   "Dw": {
+    "value": 337086
+   },
+   "I1mr": {
+    "value": 1476
+   },
+   "ILmr": {
+    "value": 733
+   },
+   "Ir": {
+    "value": 2059076
+   }
+  },
+  "egg_math/saturate/3": {
+   "Bc": {
+    "value": 938518
+   },
+   "Bcm": {
+    "value": 49664
+   },
+   "Bi": {
+    "value": 66865
+   },
+   "Bim": {
+    "value": 10876
+   },
+   "D1mr": {
+    "value": 23121
+   },
+   "D1mw": {
+    "value": 12366
+   },
+   "DLmr": {
+    "value": 658
+   },
+   "DLmw": {
+    "value": 6605
+   },
+   "Dr": {
+    "value": 1963963
+   },
+   "Dw": {
+    "value": 1196039
+   },
+   "I1mr": {
+    "value": 2263
+   },
+   "ILmr": {
+    "value": 817
+   },
+   "Ir": {
+    "value": 7366052
+   }
+  },
+  "tir_math/ematch/all_rules": {
+   "Bc": {
+    "value": 875715
+   },
+   "Bcm": {
+    "value": 22612
+   },
+   "Bi": {
+    "value": 39708
+   },
+   "Bim": {
+    "value": 1574
+   },
+   "D1mr": {
+    "value": 14744
+   },
+   "D1mw": {
+    "value": 12070
+   },
+   "DLmr": {
+    "value": 917
+   },
+   "DLmw": {
+    "value": 3681
+   },
+   "Dr": {
+    "value": 1448675
+   },
+   "Dw": {
+    "value": 786356
+   },
+   "I1mr": {
+    "value": 522
+   },
+   "ILmr": {
+    "value": 347
+   },
+   "Ir": {
+    "value": 4093436
+   }
+  },
+  "tir_math/extract/best": {
+   "Bc": {
+    "value": 68360
+   },
+   "Bcm": {
+    "value": 2723
+   },
+   "Bi": {
+    "value": 702
+   },
+   "Bim": {
+    "value": 43
+   },
+   "D1mr": {
+    "value": 1975
+   },
+   "D1mw": {
+    "value": 2020
+   },
+   "DLmr": {
+    "value": 707
+   },
+   "DLmw": {
+    "value": 1117
+   },
+   "Dr": {
+    "value": 89393
+   },
+   "Dw": {
+    "value": 49957
+   },
+   "I1mr": {
+    "value": 271
+   },
+   "ILmr": {
+    "value": 271
+   },
+   "Ir": {
+    "value": 279145
+   }
+  },
+  "tir_math/saturate/1": {
+   "Bc": {
+    "value": 107060
+   },
+   "Bcm": {
+    "value": 6266
+   },
+   "Bi": {
+    "value": 5285
+   },
+   "Bim": {
+    "value": 551
+   },
+   "D1mr": {
+    "value": 1772
+   },
+   "D1mw": {
+    "value": 1173
+   },
+   "DLmr": {
+    "value": 613
+   },
+   "DLmw": {
+    "value": 1044
+   },
+   "Dr": {
+    "value": 209542
+   },
+   "Dw": {
+    "value": 109725
+   },
+   "I1mr": {
+    "value": 1046
+   },
+   "ILmr": {
+    "value": 957
+   },
+   "Ir": {
+    "value": 778467
+   }
+  },
+  "tir_math/saturate/2": {
+   "Bc": {
+    "value": 524512
+   },
+   "Bcm": {
+    "value": 22661
+   },
+   "Bi": {
+    "value": 26168
+   },
+   "Bim": {
+    "value": 2145
+   },
+   "D1mr": {
+    "value": 8253
+   },
+   "D1mw": {
+    "value": 4615
+   },
+   "DLmr": {
+    "value": 664
+   },
+   "DLmw": {
+    "value": 2998
+   },
+   "Dr": {
+    "value": 1023221
+   },
+   "Dw": {
+    "value": 497397
+   },
+   "I1mr": {
+    "value": 2217
+   },
+   "ILmr": {
+    "value": 1163
+   },
+   "Ir": {
+    "value": 3729537
+   }
+  },
+  "tir_math/saturate/3": {
+   "Bc": {
+    "value": 2319812
+   },
+   "Bcm": {
+    "value": 73640
+   },
+   "Bi": {
+    "value": 109557
+   },
+   "Bim": {
+    "value": 8372
+   },
+   "D1mr": {
+    "value": 45144
+   },
+   "D1mw": {
+    "value": 21342
+   },
+   "DLmr": {
+    "value": 708
+   },
+   "DLmw": {
+    "value": 10377
+   },
+   "Dr": {
+    "value": 4365506
+   },
+   "Dw": {
+    "value": 2047523
+   },
+   "I1mr": {
+    "value": 3682
+   },
+   "ILmr": {
+    "value": 1177
+   },
+   "Ir": {
+    "value": 15479298
+   }
+  },
+  "tir_math/saturate_naive/1": {
+   "Bc": {
+    "value": 102516
+   },
+   "Bcm": {
+    "value": 5702
+   },
+   "Bi": {
+    "value": 5103
+   },
+   "Bim": {
+    "value": 539
+   },
+   "D1mr": {
+    "value": 1675
+   },
+   "D1mw": {
+    "value": 1153
+   },
+   "DLmr": {
+    "value": 593
+   },
+   "DLmw": {
+    "value": 1036
+   },
+   "Dr": {
+    "value": 201644
+   },
+   "Dw": {
+    "value": 105302
+   },
+   "I1mr": {
+    "value": 1070
+   },
+   "ILmr": {
+    "value": 869
+   },
+   "Ir": {
+    "value": 747860
+   }
+  },
+  "tir_math/saturate_naive/2": {
+   "Bc": {
+    "value": 510051
+   },
+   "Bcm": {
+    "value": 20744
+   },
+   "Bi": {
+    "value": 26649
+   },
+   "Bim": {
+    "value": 2167
+   },
+   "D1mr": {
+    "value": 7701
+   },
+   "D1mw": {
+    "value": 4187
+   },
+   "DLmr": {
+    "value": 634
+   },
+   "DLmw": {
+    "value": 2848
+   },
+   "Dr": {
+    "value": 994264
+   },
+   "Dw": {
+    "value": 481800
+   },
+   "I1mr": {
+    "value": 1988
+   },
+   "ILmr": {
+    "value": 883
+   },
+   "Ir": {
+    "value": 3610827
+   }
+  },
+  "tir_math/saturate_naive/3": {
+   "Bc": {
+    "value": 2523126
+   },
+   "Bcm": {
+    "value": 71640
+   },
+   "Bi": {
+    "value": 117205
+   },
+   "Bim": {
+    "value": 8981
+   },
+   "D1mr": {
+    "value": 48570
+   },
+   "D1mw": {
+    "value": 24097
+   },
+   "DLmr": {
+    "value": 671
+   },
+   "DLmw": {
+    "value": 11689
+   },
+   "Dr": {
+    "value": 4591429
+   },
+   "Dw": {
+    "value": 2266324
+   },
+   "I1mr": {
+    "value": 3364
+   },
+   "ILmr": {
+    "value": 914
+   },
+   "Ir": {
+    "value": 15849509
+   }
+  },
+  "x86_defs/collect_and_expand": {
+   "Bc": {
+    "value": 26088044
+   },
+   "Bcm": {
+    "value": 1347370
+   },
+   "Bi": {
+    "value": 999520
+   },
+   "Bim": {
+    "value": 102723
+   },
+   "D1mr": {
+    "value": 1787198
+   },
+   "D1mw": {
+    "value": 939270
+   },
+   "DLmr": {
+    "value": 609970
+   },
+   "DLmw": {
+    "value": 581816
+   },
+   "Dr": {
+    "value": 45779778
+   },
+   "Dw": {
+    "value": 33261729
+   },
+   "I1mr": {
+    "value": 14830
+   },
+   "ILmr": {
+    "value": 960
+   },
+   "Ir": {
+    "value": 166501074
+   }
+  },
+  "large_instr_template/lex": {
+   "Bc": {
+    "value": 4769752
+   },
+   "Bcm": {
+    "value": 86065
+   },
+   "Bi": {
+    "value": 6621
+   },
+   "Bim": {
+    "value": 6007
+   },
+   "D1mr": {
+    "value": 2927
+   },
+   "D1mw": {
+    "value": 11488
+   },
+   "DLmr": {
+    "value": 1551
+   },
+   "DLmw": {
+    "value": 11472
+   },
+   "Dr": {
+    "value": 10112169
+   },
+   "Dw": {
+    "value": 6223233
+   },
+   "I1mr": {
+    "value": 404
+   },
+   "ILmr": {
+    "value": 404
+   },
+   "Ir": {
+    "value": 31024312
+   }
+  },
+  "large_instr_template/parse": {
+   "Bc": {
+    "value": 4826427
+   },
+   "Bcm": {
+    "value": 88175
+   },
+   "Bi": {
+    "value": 8402
+   },
+   "Bim": {
+    "value": 6465
+   },
+   "D1mr": {
+    "value": 4688
+   },
+   "D1mw": {
+    "value": 15078
+   },
+   "DLmr": {
+    "value": 1617
+   },
+   "DLmw": {
+    "value": 13290
+   },
+   "Dr": {
+    "value": 10200115
+   },
+   "Dw": {
+    "value": 6301226
+   },
+   "I1mr": {
+    "value": 1505
+   },
+   "ILmr": {
+    "value": 1412
+   },
+   "Ir": {
+    "value": 31277104
+   }
+  },
+  "clang/coremark/source/O2/compile/core_list_join": {
+   "latency": {
+    "lower_value": 106328219,
+    "upper_value": 106613631,
+    "value": 106470925
+   },
+   "peak_process_rss_bytes": {
+    "value": 97144832
+   }
+  },
+  "clang/coremark/source/O2/compile/core_main": {
+   "latency": {
+    "lower_value": 72308618,
+    "upper_value": 72414434,
+    "value": 72361526
+   },
+   "peak_process_rss_bytes": {
+    "value": 96952320
+   }
+  },
+  "clang/coremark/source/O2/compile/core_matrix": {
+   "latency": {
+    "lower_value": 167111858,
+    "upper_value": 168908760,
+    "value": 168010309
+   },
+   "peak_process_rss_bytes": {
+    "value": 98209792
+   }
+  },
+  "clang/coremark/source/O2/compile/core_state": {
+   "latency": {
+    "lower_value": 62943330,
+    "upper_value": 63293444,
+    "value": 63118387
+   },
+   "peak_process_rss_bytes": {
+    "value": 96055296
+   }
+  },
+  "clang/coremark/source/O2/compile/core_util": {
+   "latency": {
+    "lower_value": 61726423,
+    "upper_value": 62657465,
+    "value": 62191944
+   },
+   "peak_process_rss_bytes": {
+    "value": 95789056
+   }
+  },
+  "clang/coremark/source/O2/compile/posix/core_portme": {
+   "latency": {
+    "lower_value": 44965859,
+    "upper_value": 45316495,
+    "value": 45141177
+   },
+   "peak_process_rss_bytes": {
+    "value": 94883840
+   }
+  },
+  "clang/coremark/source/O2/run": {
+   "latency": {
+    "lower_value": 42683963070,
+    "upper_value": 42709811890,
+    "value": 42696887480
+   },
+   "peak_process_rss_bytes": {
+    "value": 1691648
+   }
+  },
+  "fcc/coremark/source/O2/compile/core_list_join": {
+   "latency": {
+    "lower_value": 484452171,
+    "upper_value": 485866355,
+    "value": 485159263
+   },
+   "peak_process_rss_bytes": {
+    "value": 38076416
+   },
+   "Bc": {
+    "value": 549185052
+   },
+   "Bcm": {
+    "value": 24251400
+   },
+   "Bi": {
+    "value": 29503524
+   },
+   "Bim": {
+    "value": 3032618
+   },
+   "D1mr": {
+    "value": 13671682
+   },
+   "D1mw": {
+    "value": 4725233
+   },
+   "DLmr": {
+    "value": 170241
+   },
+   "DLmw": {
+    "value": 267886
+   },
+   "Dr": {
+    "value": 1108720040
+   },
+   "Dw": {
+    "value": 559071377
+   },
+   "I1mr": {
+    "value": 11650170
+   },
+   "ILmr": {
+    "value": 57447
+   },
+   "Ir": {
+    "value": 3947830928
+   }
+  },
+  "fcc/coremark/source/O2/compile/core_main": {
+   "latency": {
+    "lower_value": 925145864,
+    "upper_value": 927406672,
+    "value": 926276268
+   },
+   "peak_process_rss_bytes": {
+    "value": 45469696
+   },
+   "Bc": {
+    "value": 1096622145
+   },
+   "Bcm": {
+    "value": 44966203
+   },
+   "Bi": {
+    "value": 47775766
+   },
+   "Bim": {
+    "value": 5022165
+   },
+   "D1mr": {
+    "value": 47736526
+   },
+   "D1mw": {
+    "value": 13266463
+   },
+   "DLmr": {
+    "value": 256605
+   },
+   "DLmw": {
+    "value": 424918
+   },
+   "Dr": {
+    "value": 2007937864
+   },
+   "Dw": {
+    "value": 1002173835
+   },
+   "I1mr": {
+    "value": 12252862
+   },
+   "ILmr": {
+    "value": 73681
+   },
+   "Ir": {
+    "value": 7274241520
+   }
+  },
+  "fcc/coremark/source/O2/compile/core_matrix": {
+   "latency": {
+    "lower_value": 387747635,
+    "upper_value": 388211043,
+    "value": 387979339
+   },
+   "peak_process_rss_bytes": {
+    "value": 39268352
+   },
+   "Bc": {
+    "value": 417148983
+   },
+   "Bcm": {
+    "value": 19875193
+   },
+   "Bi": {
+    "value": 27296631
+   },
+   "Bim": {
+    "value": 2814599
+   },
+   "D1mr": {
+    "value": 13182613
+   },
+   "D1mw": {
+    "value": 4245705
+   },
+   "DLmr": {
+    "value": 176427
+   },
+   "DLmw": {
+    "value": 282920
+   },
+   "Dr": {
+    "value": 863107739
+   },
+   "Dw": {
+    "value": 459635703
+   },
+   "I1mr": {
+    "value": 11538152
+   },
+   "ILmr": {
+    "value": 56094
+   },
+   "Ir": {
+    "value": 3069606751
+   }
+  },
+  "fcc/coremark/source/O2/compile/core_state": {
+   "latency": {
+    "lower_value": 453802234,
+    "upper_value": 454742314,
+    "value": 454272274
+   },
+   "peak_process_rss_bytes": {
+    "value": 40243200
+   },
+   "Bc": {
+    "value": 476356475
+   },
+   "Bcm": {
+    "value": 23928593
+   },
+   "Bi": {
+    "value": 33769373
+   },
+   "Bim": {
+    "value": 4147063
+   },
+   "D1mr": {
+    "value": 15019971
+   },
+   "D1mw": {
+    "value": 4589257
+   },
+   "DLmr": {
+    "value": 180613
+   },
+   "DLmw": {
+    "value": 297367
+   },
+   "Dr": {
+    "value": 1016906294
+   },
+   "Dw": {
+    "value": 537909710
+   },
+   "I1mr": {
+    "value": 15429458
+   },
+   "ILmr": {
+    "value": 61658
+   },
+   "Ir": {
+    "value": 3605455146
+   }
+  },
+  "fcc/coremark/source/O2/compile/core_util": {
+   "latency": {
+    "lower_value": 306128283,
+    "upper_value": 306631483,
+    "value": 306379883
+   },
+   "peak_process_rss_bytes": {
+    "value": 38043648
+   },
+   "Bc": {
+    "value": 307552764
+   },
+   "Bcm": {
+    "value": 14639470
+   },
+   "Bi": {
+    "value": 21666500
+   },
+   "Bim": {
+    "value": 2410523
+   },
+   "D1mr": {
+    "value": 10054950
+   },
+   "D1mw": {
+    "value": 3804659
+   },
+   "DLmr": {
+    "value": 170006
+   },
+   "DLmw": {
+    "value": 266451
+   },
+   "Dr": {
+    "value": 668996831
+   },
+   "Dw": {
+    "value": 362463442
+   },
+   "I1mr": {
+    "value": 8947070
+   },
+   "ILmr": {
+    "value": 54155
+   },
+   "Ir": {
+    "value": 2383641111
+   }
+  },
+  "fcc/coremark/source/O2/compile/posix/core_portme": {
+   "latency": {
+    "lower_value": 59793939,
+    "upper_value": 59905727,
+    "value": 59849833
+   },
+   "peak_process_rss_bytes": {
+    "value": 35266560
+   },
+   "Bc": {
+    "value": 45521869
+   },
+   "Bcm": {
+    "value": 2240494
+   },
+   "Bi": {
+    "value": 2982584
+   },
+   "Bim": {
+    "value": 598645
+   },
+   "D1mr": {
+    "value": 1198089
+   },
+   "D1mw": {
+    "value": 660870
+   },
+   "DLmr": {
+    "value": 139397
+   },
+   "DLmw": {
+    "value": 231553
+   },
+   "Dr": {
+    "value": 90442537
+   },
+   "Dw": {
+    "value": 57449856
+   },
+   "I1mr": {
+    "value": 1786394
+   },
+   "ILmr": {
+    "value": 45637
+   },
+   "Ir": {
+    "value": 328538519
+   }
+  },
+  "fcc/coremark/source/O2/run": {
+   "latency": {
+    "lower_value": 74799245609,
+    "upper_value": 74905453085,
+    "value": 74852349347
+   },
+   "peak_process_rss_bytes": {
+    "value": 1691648
+   },
+   "Bc": {
+    "value": 97116863833
+   },
+   "Bcm": {
+    "value": 9638732613
+   },
+   "Bi": {
+    "value": 319109741
+   },
+   "Bim": {
+    "value": 2000203
+   },
+   "D1mr": {
+    "value": 1267
+   },
+   "D1mw": {
+    "value": 473
+   },
+   "DLmr": {
+    "value": 1047
+   },
+   "DLmw": {
+    "value": 432
+   },
+   "Dr": {
+    "value": 88644768165
+   },
+   "Dw": {
+    "value": 35184089002
+   },
+   "I1mr": {
+    "value": 1707
+   },
+   "ILmr": {
+    "value": 1667
+   },
+   "Ir": {
+    "value": 715510808728
+   }
+  },
+  "gcc/coremark/source/O2/compile/core_list_join": {
+   "latency": {
+    "lower_value": 85849108,
+    "upper_value": 86483774,
+    "value": 86166441
+   },
+   "peak_process_rss_bytes": {
+    "value": 28327936
+   }
+  },
+  "gcc/coremark/source/O2/compile/core_main": {
+   "latency": {
+    "lower_value": 80448474,
+    "upper_value": 81275884,
+    "value": 80862179
+   },
+   "peak_process_rss_bytes": {
+    "value": 30236672
+   }
+  },
+  "gcc/coremark/source/O2/compile/core_matrix": {
+   "latency": {
+    "lower_value": 97619018,
+    "upper_value": 98926782,
+    "value": 98272900
+   },
+   "peak_process_rss_bytes": {
+    "value": 30478336
+   }
+  },
+  "gcc/coremark/source/O2/compile/core_state": {
+   "latency": {
+    "lower_value": 58614841,
+    "upper_value": 59051859,
+    "value": 58833350
+   },
+   "peak_process_rss_bytes": {
+    "value": 27918336
+   }
+  },
+  "gcc/coremark/source/O2/compile/core_util": {
+   "latency": {
+    "lower_value": 53249334,
+    "upper_value": 53992304,
+    "value": 53620819
+   },
+   "peak_process_rss_bytes": {
+    "value": 26972160
+   }
+  },
+  "gcc/coremark/source/O2/compile/posix/core_portme": {
+   "latency": {
+    "lower_value": 31090312,
+    "upper_value": 31122452,
+    "value": 31106382
+   },
+   "peak_process_rss_bytes": {
+    "value": 25546752
+   }
+  },
+  "gcc/coremark/source/O2/run": {
+   "latency": {
+    "lower_value": 36507888055,
+    "upper_value": 36534197619,
+    "value": 36521042837
+   },
+   "peak_process_rss_bytes": {
+    "value": 1687552
+   }
+  },
+  "clang/dhrystone/source/O2/compile/dhry_1": {
+   "latency": {
+    "lower_value": 67044143,
+    "upper_value": 68701845,
+    "value": 67872994
+   },
+   "peak_process_rss_bytes": {
+    "value": 96739328
+   }
+  },
+  "clang/dhrystone/source/O2/compile/dhry_2": {
+   "latency": {
+    "lower_value": 48925387,
+    "upper_value": 49507305,
+    "value": 49216346
+   },
+   "peak_process_rss_bytes": {
+    "value": 95600640
+   }
+  },
+  "clang/dhrystone/source/O2/run": {
+   "latency": {
+    "lower_value": 2031737417,
+    "upper_value": 2114513229,
+    "value": 2073125323
+   },
+   "peak_process_rss_bytes": {
+    "value": 1679360
+   }
+  },
+  "fcc/dhrystone/source/O2/compile/dhry_1": {
+   "latency": {
+    "lower_value": 300221110,
+    "upper_value": 302816344,
+    "value": 301518727
+   },
+   "peak_process_rss_bytes": {
+    "value": 41000960
+   },
+   "Bc": {
+    "value": 343808344
+   },
+   "Bcm": {
+    "value": 13367299
+   },
+   "Bi": {
+    "value": 18412880
+   },
+   "Bim": {
+    "value": 1943768
+   },
+   "D1mr": {
+    "value": 8005765
+   },
+   "D1mw": {
+    "value": 3062173
+   },
+   "DLmr": {
+    "value": 189385
+   },
+   "DLmw": {
+    "value": 331685
+   },
+   "Dr": {
+    "value": 680718446
+   },
+   "Dw": {
+    "value": 378330845
+   },
+   "I1mr": {
+    "value": 6635577
+   },
+   "ILmr": {
+    "value": 64219
+   },
+   "Ir": {
+    "value": 2503780965
+   }
+  },
+  "fcc/dhrystone/source/O2/compile/dhry_2": {
+   "latency": {
+    "lower_value": 125094107,
+    "upper_value": 125680785,
+    "value": 125387446
+   },
+   "peak_process_rss_bytes": {
+    "value": 36769792
+   },
+   "Bc": {
+    "value": 112892791
+   },
+   "Bcm": {
+    "value": 5598145
+   },
+   "Bi": {
+    "value": 7932925
+   },
+   "Bim": {
+    "value": 1155743
+   },
+   "D1mr": {
+    "value": 3377434
+   },
+   "D1mw": {
+    "value": 1523772
+   },
+   "DLmr": {
+    "value": 147139
+   },
+   "DLmw": {
+    "value": 256498
+   },
+   "Dr": {
+    "value": 237930045
+   },
+   "Dw": {
+    "value": 137234275
+   },
+   "I1mr": {
+    "value": 4053923
+   },
+   "ILmr": {
+    "value": 52125
+   },
+   "Ir": {
+    "value": 852636118
+   }
+  },
+  "fcc/dhrystone/source/O2/run": {
+   "latency": {
+    "lower_value": 3368812095,
+    "upper_value": 3382034571,
+    "value": 3375423333
+   },
+   "peak_process_rss_bytes": {
+    "value": 1679360
+   },
+   "Bc": {
+    "value": 3500030503
+   },
+   "Bcm": {
+    "value": 3891
+   },
+   "Bi": {
+    "value": 200000714
+   },
+   "Bim": {
+    "value": 194
+   },
+   "D1mr": {
+    "value": 1282
+   },
+   "D1mw": {
+    "value": 463
+   },
+   "DLmr": {
+    "value": 1058
+   },
+   "DLmw": {
+    "value": 422
+   },
+   "Dr": {
+    "value": 8000043049
+   },
+   "Dw": {
+    "value": 6700019213
+   },
+   "I1mr": {
+    "value": 1560
+   },
+   "ILmr": {
+    "value": 1531
+   },
+   "Ir": {
+    "value": 44000179420
+   }
+  },
+  "gcc/dhrystone/source/O2/compile/dhry_1": {
+   "latency": {
+    "lower_value": 64748448,
+    "upper_value": 65292484,
+    "value": 65020466
+   },
+   "peak_process_rss_bytes": {
+    "value": 29548544
+   }
+  },
+  "gcc/dhrystone/source/O2/compile/dhry_2": {
+   "latency": {
+    "lower_value": 37678339,
+    "upper_value": 38275735,
+    "value": 37977037
+   },
+   "peak_process_rss_bytes": {
+    "value": 26304512
+   }
+  },
+  "gcc/dhrystone/source/O2/run": {
+   "latency": {
+    "lower_value": 2164841191,
+    "upper_value": 2168948923,
+    "value": 2166895057
+   },
+   "peak_process_rss_bytes": {
+    "value": 1679360
+   }
+  }
+ }
+}
