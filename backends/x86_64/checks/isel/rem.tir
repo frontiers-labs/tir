@@ -18,6 +18,12 @@ module {
     %2 = remui %0, %1 : !i64
     func.return %2
   }
+  %fn_divrem64 = func.func @divrem64(%0: !i64, %1: !i64) -> !i64 {
+    %2 = divsi %0, %1 : !i64
+    %3 = remsi %0, %1 : !i64
+    %4 = addi %2, %3 : !i64
+    func.return %4
+  }
   module_end
 }
 
@@ -34,6 +40,14 @@ module {
 // ISEL-NEXT: unsigned_divide32
 // ISEL: zero_extend_dividend
 // ISEL-NEXT: unsigned_divide
+
+// A quotient and a remainder of the same operands are the two results of one
+// division.
+// ISEL-LABEL: name = "divrem64"
+// ISEL: sign_extend_dividend
+// ISEL-NEXT: signed_divide {{.*}}rax_def = %[[Q:[0-9]+]]:GPR, rdx_def = %[[R:[0-9]+]]:GPR
+// ISEL-NOT: signed_divide
+// ISEL: asm.vret
 
 // The remainder register (rdx) differs from the func.return register (rax), so a
 // move copies it into place before the func.return.

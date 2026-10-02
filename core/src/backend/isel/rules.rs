@@ -1,16 +1,16 @@
 //! Table-driven rule construction and emission.
 //!
 //! TMDL emits one [`RuleSpec`] per selection rule instead of a generated
-//! constructor call chain, and one [`EmitSpec`] per emitter instead of a
-//! function body of builder calls. [`build_rules`] and [`emit_with`] interpret
-//! the specs.
+//! constructor call chain, and one [`EmitSpec`] per emitted instruction
+//! instead of a function body of builder calls. [`build_rules`] and
+//! [`emit_with`] interpret the specs.
 
 use tir::attributes::{AttributeValue, RegisterAttr};
 use tir::sem::{ExtendSemBytes, ExtendSemBytesTyped, SymKind};
 use tir::{Context, NewOp, OpHandle, Operation, PassError};
 
 use crate::backend::isel::{
-    EmitRequest, FpFlags, ImmRange, RegisterCapability, RegisterRequirement, Rule, RuleEmitFn,
+    EmitRequest, Emitter, FpFlags, ImmRange, RegisterCapability, RegisterRequirement, Rule,
     RuleKind, RuleMatch,
 };
 use crate::backend::regalloc::RegClassId;
@@ -29,13 +29,15 @@ pub enum OperandConstraint {
 #[derive(Clone, Copy)]
 pub enum EmitAttr {
     /// The result port `attr`: a fresh value of the port's class, standing for
-    /// `req.results[result]`.
+    /// `req.results[result]`, which something has to read.
     Result {
         attr: &'static str,
         result: u16,
         class: RegClassId,
     },
-    /// [`EmitAttr::Result`] pinned to one required physical register.
+    /// [`EmitAttr::Result`] pinned to one required physical register. Where
+    /// nothing reads `req.results[result]` the instruction still writes the
+    /// register, and the slot names it as a clobber.
     ResultFixedDef {
         attr: &'static str,
         result: u16,
@@ -80,6 +82,10 @@ pub struct EmitSpec {
     pub info: &'static crate::backend::InstrInfo,
 }
 
+/// An emitted instruction and the value it defines for each of the request's
+/// results.
+pub(crate) type Emitted = (Box<dyn Operation>, Vec<(usize, tir::ValueId)>);
+
 /// Interprets an [`EmitSpec`]: bind each slot from the match and build the op.
 /// `RewriteFailed` when a required binding is absent.
 ///
@@ -88,15 +94,16 @@ pub struct EmitSpec {
 /// machine value a type read — unless it names a physical register, which stays
 /// an attribute literal. A slot the instruction must read or write in a fixed
 /// register records that in the op's [`PINS_ATTR`] constraint.
-pub fn emit_with(
+pub(crate) fn emit_with(
     context: &Context,
     req: &EmitRequest,
     m: &RuleMatch,
     spec: &EmitSpec,
-) -> Result<Box<dyn Operation>, PassError> {
+) -> Result<Emitted, PassError> {
     let mut attributes = Vec::new();
     let mut operands: Vec<(usize, tir::ValueId)> = Vec::new();
     let mut results: Vec<(usize, tir::ValueId)> = Vec::new();
+    let mut defined: Vec<(usize, tir::ValueId)> = Vec::new();
     let mut pins = std::collections::BTreeMap::new();
     let port = |name: &str| {
         spec.info
@@ -125,17 +132,23 @@ pub fn emit_with(
                 result,
                 class,
             } => {
-                results.push((port(attr)?, new_result(context, req, result, class)?));
+                let value = new_result(context, req, result, class)?.ok_or_else(fail)?;
+                defined.push((result as usize, value));
+                results.push((port(attr)?, value));
             }
             EmitAttr::ResultFixedDef {
                 attr,
                 result,
                 class,
                 index,
-            } => {
-                pins.insert(attr.to_string(), pin(class, index));
-                results.push((port(attr)?, new_result(context, req, result, class)?));
-            }
+            } => match new_result(context, req, result, class)? {
+                Some(value) => {
+                    pins.insert(attr.to_string(), pin(class, index));
+                    defined.push((result as usize, value));
+                    results.push((port(attr)?, value));
+                }
+                None => attributes.push(context.named_attribute(attr, pin(class, index))),
+            },
             EmitAttr::Value { attr, symbol } => {
                 operands.push(bind(attr, m.value_binding(symbol).ok_or_else(fail)?)?);
             }
@@ -200,22 +213,24 @@ pub fn emit_with(
         vec![],
         attributes,
     );
-    Ok((spec.wrap)(context.add_operation(instance)))
+    Ok(((spec.wrap)(context.add_operation(instance)), defined))
 }
 
 /// The value a result port defines: a fresh one of the port's class, standing
-/// for the mid-end result the rule covers.
+/// for the mid-end result the rule covers. `None` where nothing reads that
+/// result.
 fn new_result(
     context: &Context,
     req: &EmitRequest,
     result: u16,
     class: RegClassId,
-) -> Result<tir::ValueId, PassError> {
-    req.results
+) -> Result<Option<tir::ValueId>, PassError> {
+    let demanded = req
+        .results
         .get(result as usize)
         .ok_or_else(|| PassError::RewriteFailed(req.op_id()))?;
     let ty = crate::backend::RegClassType::new(context, class);
-    Ok(context.create_value(ty, None).id())
+    Ok(demanded.map(|_| context.create_value(ty, None).id()))
 }
 
 fn pin(class: RegClassId, index: u16) -> AttributeValue {
@@ -267,17 +282,16 @@ pub struct RuleSpec {
     /// enabled.
     pub features: &'static [u16],
     pub pattern: PatternRef,
-    /// The instructions this rule emits; its cost is the sum over them of
-    /// [`crate::backend::InstrInfo::cost`] times
-    /// [`crate::backend::isel::LATENCY_COST_SCALE`] plus the encoding size.
-    pub emits: &'static [&'static crate::backend::InstrInfo],
+    /// The semantics of each further result the plan's last instruction
+    /// defines, over the same operands: result one, two, and so on.
+    pub secondary: &'static [PatternRef],
     pub kind: RuleKind,
     pub fp_flags: FpFlags<PatternRef>,
-    /// Emitter for the prelude instruction, when the rule emits a flag-setting
-    /// companion first. Generated as a shim over [`emit_with`].
-    pub prelude_emit: Option<RuleEmitFn>,
-    /// Generated shim over [`emit_with`] with the rule's [`EmitSpec`].
-    pub emit_fn: RuleEmitFn,
+    /// The emission plan: the instructions this rule emits, in the order they
+    /// run. The rule's cost is the sum over them of
+    /// [`crate::backend::InstrInfo::cost`] times
+    /// [`crate::backend::isel::LATENCY_COST_SCALE`] plus the encoding size.
+    pub plan: &'static [&'static EmitSpec],
     pub constraints: &'static [(u32, OperandConstraint)],
     pub registers: &'static [RegOperandSpec],
     pub result: Option<ResultRegSpec>,
@@ -348,10 +362,11 @@ pub fn build_rules(
             continue;
         }
         let base_cost = spec
-            .emits
+            .plan
             .iter()
-            .map(|info| {
-                info.cost * crate::backend::isel::LATENCY_COST_SCALE + u32::from(info.width_bytes.0)
+            .map(|step| {
+                step.info.cost * crate::backend::isel::LATENCY_COST_SCALE
+                    + u32::from(step.info.width_bytes.0)
             })
             .sum();
         let operand_registers = spec
@@ -368,6 +383,11 @@ pub fn build_rules(
         rules.push(Rule {
             name: spec.name,
             pattern: build_pattern(context, kinds, blob, &spec.pattern),
+            secondary: spec
+                .secondary
+                .iter()
+                .map(|pattern| build_pattern(context, kinds, blob, pattern))
+                .collect(),
             base_cost,
             kind: spec.kind,
             fp_flags: match &spec.fp_flags {
@@ -377,7 +397,6 @@ pub fn build_rules(
                     FpFlags::Exact(build_pattern(context, kinds, blob, pattern))
                 }
             },
-            prelude_emit: spec.prelude_emit,
             operand_constraints: spec.constraints.to_vec(),
             operand_registers,
             result_register,
@@ -386,7 +405,7 @@ pub fn build_rules(
             guarded_semantics: spec
                 .guarded
                 .map(|g| build_pattern(context, kinds, blob, &g)),
-            emit_fn: spec.emit_fn,
+            emit: spec.plan.iter().map(|step| Emitter::Spec(step)).collect(),
         });
     }
     rules

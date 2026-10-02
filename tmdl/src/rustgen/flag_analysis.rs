@@ -924,7 +924,7 @@ fn emit_flag_definer_prelude(
         }
     }
 
-    let (emitter_ts, prelude_shim) = emit_emitter_spec(
+    let (emitter_ts, prelude_spec) = emit_emitter_spec(
         &prelude_key,
         dialect,
         &d.op_name,
@@ -938,5 +938,5 @@ fn emit_flag_definer_prelude(
         quote! {}
     };
 
-    (emitter_ts, prelude_shim, operand_constraint_entries)
+    (emitter_ts, prelude_spec, operand_constraint_entries)
 }

@@ -634,7 +634,7 @@ fn emit_value_rules(
         emit_attrs.push(emit_attr_int_or_value(name, *sym));
     }
 
-    let (emitter_ts, emit_shim) = emit_emitter_spec(
+    let (emitter_ts, emit_spec) = emit_emitter_spec(
         &rule_key,
         ctx.dialect,
         ctx.op_name,
@@ -692,10 +692,9 @@ fn emit_value_rules(
             &key,
             &ctx.inst.for_isas,
             &pattern_spec,
-            &[&ctx.inst.name],
+            &[],
             quote! { tir::backend::isel::RuleKind::Value },
-            None,
-            &emit_shim,
+            &[&emit_spec],
             &operand_constraint_entries,
             &operand_register_specs,
             result_register_spec.clone(),
@@ -804,7 +803,7 @@ fn emit_value_rules(
             emit_attr_physical(&zero_reg_name, &zero_class_id, zero_index),
             emit_attr_int(&imm_name, imm_sym),
         ];
-        let (zero_emitter_ts, zero_emit_shim) = emit_emitter_spec(
+        let (zero_emitter_ts, zero_emit_spec) = emit_emitter_spec(
             &zero_rule_key,
             ctx.dialect,
             ctx.op_name,
@@ -826,10 +825,9 @@ fn emit_value_rules(
             &zero_rule_key,
             &ctx.inst.for_isas,
             &zero_pattern_spec,
-            &[&ctx.inst.name],
+            &[],
             quote! { tir::backend::isel::RuleKind::Value },
-            None,
-            &zero_emit_shim,
+            &[&zero_emit_spec],
             &zero_constraints,
             &[],
             result_register_spec.clone(),

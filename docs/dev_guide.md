@@ -135,6 +135,26 @@ can change costs.
 The dump records the mathematical task before solver reductions. It does not
 contain a solution.
 
+### Searching for cheaper instruction covers
+
+Instruction selection keeps the cover its PBQP heuristic finds unless
+`TIR_ISEL_SEARCH` is set. With it, a bounded SAT search looks for a strictly
+cheaper assignment of each function's recorded problem and uses the one it
+finds. The search is slow, so use it to check a cover and leave it off
+otherwise. `TIR_MEM_STATS` reports what it found:
+
+```sh
+TIR_ISEL_SEARCH=1 TIR_MEM_STATS=1 tir mc --march=x86_64 --stage=isel input.tir 2>&1 | grep 'tir-mem: selection'
+```
+
+Each function prints one line, for example
+`tir-mem: selection instances=77 incumbent=150 best=59 status=optimal`.
+`instances` counts the candidate instructions, `incumbent` and `best` are model
+costs, and `status` is described in the instruction selection chapter. A
+`best` below `incumbent` is a cover the heuristic missed. The search also runs
+without the variable when the heuristic finds no cover, and then reports
+`feasible` or `infeasible`.
+
 ### Running benchmarks
 
 Benchmarks live in each package's `benches` directory and are declared in its

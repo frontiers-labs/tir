@@ -180,7 +180,7 @@ instruction SelectEq for [FlagIsa] {
 
 // Both branch rules are conditional branches emitting the definer first.
 // CHECK: RuleKind::CondBranch
-// CHECK: prelude_emit: Some(emit_isel_flag_definer_cmp)
+// CHECK: plan: &[&EMIT_FLAG_DEFINER_CMP, &EMIT_BRANCHLT_VIA_CMP],
 // CHECK-NOT: BRANCHOVERFLOW_VIA_CMP
 
 // The select rule retains both value arms and the destination tie.

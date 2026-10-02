@@ -1,0 +1,29 @@
+// RUN: env TIR_ISEL_SEARCH=1 tir mc --march=x86_64 --stage=isel %s | filecheck %s --implicit-check-not=x86_64.sar
+// RUN: env TIR_ISEL_SEARCH=1 TIR_MEM_STATS=1 tir mc --march=x86_64 --stage=isel %s 2>&1 | filecheck %s --check-prefix=STATS
+
+// The mask blend `(x & m) | (1 & ~m)` over `m = sext(x >= 1)` is also a
+// conditional move. The cover's heuristic settles on the blend. The search
+// finds the cheaper assignment in the same recorded problem, proves no
+// cheaper one exists, and selection emits it.
+
+module {
+  %fn = func.func @at_least_one(%x: !i32) -> !i32 {
+    %one = constant {value = 1} : !i32
+    %c = cmpi %x, %one {predicate = "uge"} : !i1
+    %m = extsi %c : !i32
+    %a = andi %x, %m : !i32
+    %ones = constant {value = -1} : !i32
+    %n = xori %m, %ones : !i32
+    %b = andi %one, %n : !i32
+    %r = ori %a, %b : !i32
+    func.return %r
+  }
+  module_end
+}
+
+// STATS: tir-mem: selection instances={{[0-9]+}} incumbent={{[0-9]+}} best={{[0-9]+}} status=optimal
+
+// CHECK: asm.symbol {name = "at_least_one"
+// CHECK: x86_64.cmp32
+// CHECK-NEXT: x86_64.cmovae
+// CHECK-NEXT: asm.vret

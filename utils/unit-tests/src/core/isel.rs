@@ -10,7 +10,7 @@ use tir::{
 };
 
 use tir::backend::isel::{
-    EmitRequest, ImmRange, InstructionSelectPass, OperandConstraint, RegisterCapability,
+    EmitRequest, Emitter, ImmRange, InstructionSelectPass, OperandConstraint, RegisterCapability,
     RegisterRequirement, Rule, RuleEmitFn, RuleMatch, LATENCY_COST_SCALE,
 };
 use tir::ptr::{LoadOpBuilder, StoreOpBuilder};
@@ -877,10 +877,13 @@ module_end
 }
 
 #[test]
-fn introduced_rule_emits_prelude_before_instruction() {
+fn introduced_rule_emits_its_plan_in_order() {
     let slli_rule = Rule {
         operand_constraints: vec![(1, OperandConstraint::Immediate)],
-        prelude_emit: Some(emit_shift_prelude),
+        emit: vec![
+            Emitter::Custom(emit_shift_prelude),
+            Emitter::Custom(emit_slli),
+        ],
         ..Rule::new(
             "slli",
             shift_imm_pattern(SymKind::ShiftLeft),
@@ -1098,6 +1101,83 @@ module_end
 
     let sub_op = &body[1];
     assert_eq!(sub_op.operands()[0], body[0].results()[0]);
+}
+
+/// A proof that `(m + z) - z == m` puts the subtraction in the product's class,
+/// so the product may be computed from the sum and the sum from the product.
+/// Each of the two is cheaper than the multiplication, and together they define
+/// nothing: the selected instances must admit an order.
+#[test]
+fn instances_reading_each_other_in_a_cycle_are_not_selected() {
+    use smallvec::smallvec;
+    use tir::backend::isel::Theory;
+    use tir_relational::{Atom, ClassId as Id, HeadOp, Plan, Query};
+
+    let (context, module, region) = function(
+        r#"module {
+func.func @demo(%x: !i32, %y: !i32, %z: !i32) -> !i32 {
+  %mul = muli %x, %y : !i32
+  %add = addi %mul, %z : !i32
+  %sub = subi %add, %z : !i32
+  func.return %sub
+}
+module_end
+}"#,
+    );
+
+    // Variables: 0 the difference, 1 the sum, 2 the product, 3 `z`.
+    let template = |kind, class, lhs: u32, rhs: u32| {
+        let mut node = template_node(kind, None, None);
+        node.children = vec![Id::from_raw(lhs), Id::from_raw(rhs)];
+        Atom::Node {
+            template: node,
+            args: smallvec![lhs, rhs],
+            class,
+            row: None,
+        }
+    };
+    let cancel = tir_relational::Rule {
+        name: "add-then-sub-cancels".to_string(),
+        plan: Plan::compile(Query::tree(
+            4,
+            0,
+            vec![
+                template(SymKind::Sub, 0, 1, 3),
+                template(SymKind::Add, 1, 2, 3),
+            ],
+        )),
+        head: vec![HeadOp::Union(0, 2)],
+        head_vars: 0,
+        post_saturation: false,
+    };
+
+    let rules = vec![
+        Rule::new(
+            "mul",
+            atomic_pattern(SymKind::Mul),
+            10 * LATENCY_COST_SCALE,
+            emit_mul,
+        ),
+        Rule::new(
+            "add",
+            atomic_pattern(SymKind::Add),
+            LATENCY_COST_SCALE,
+            emit_add,
+        ),
+        Rule::new(
+            "sub",
+            atomic_pattern(SymKind::Sub),
+            LATENCY_COST_SCALE,
+            emit_sub,
+        ),
+    ];
+
+    let mut theory = Theory::default();
+    theory.push_rule(cancel);
+    let pass = InstructionSelectPass::new(rules).with_theory(theory);
+    run_pass(&context, &module, pass).expect("the product has an acyclic cover");
+
+    assert_eq!(body_names(&context, region), vec!["muli"]);
 }
 
 /// At *equal* cost, the type-constrained rule must win the tie via dominance

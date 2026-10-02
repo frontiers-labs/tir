@@ -220,12 +220,12 @@ fn emit_flag_branch_rules(
             let target_symbol_lit = proc_macro2::Literal::u32_unsuffixed(target_symbol);
             let b_op_ty_ident = format_ident!("{}Op", &b.inst.name);
 
-            let (prelude_ts, prelude_shim, operand_constraint_entries) =
+            let (prelude_ts, prelude_spec, operand_constraint_entries) =
                 emit_flag_definer_prelude(d, d_sem, emitted_preludes, dialect);
             isel_rule_emitters.push(prelude_ts);
 
             let emit_attrs = [emit_attr_block(&b_sem.target_operand, target_symbol)];
-            let (emitter_ts, emit_shim) = emit_emitter_spec(
+            let (emitter_ts, emit_spec) = emit_emitter_spec(
                 &rule_key,
                 dialect,
                 &b.op_name,
@@ -238,14 +238,13 @@ fn emit_flag_branch_rules(
                 &rule_name,
                 &shared_isas,
                 &pattern_spec,
-                &[&d.inst.name, &b.inst.name],
+                &[],
                 quote! {
                     tir::backend::isel::RuleKind::CondBranch {
                         target_symbol: #target_symbol_lit,
                     }
                 },
-                Some(&prelude_shim),
-                &emit_shim,
+                &[&prelude_spec, &emit_spec],
                 &operand_constraint_entries,
                 &operand_register_specs,
                 None,
@@ -459,7 +458,7 @@ fn emit_aliased_zero_branch_rules(
             let d_op_ty_ident = format_ident!("{}Op", &d.inst.name);
             // Both operands read the same bound value (the aliased pair).
             let prelude_attrs = [emit_attr_value(name_a, 0), emit_attr_value(name_b, 0)];
-            let (prelude_ts, prelude_shim) = emit_emitter_spec(
+            let (prelude_ts, prelude_spec) = emit_emitter_spec(
                 &prelude_key,
                 dialect,
                 &d.op_name,
@@ -488,7 +487,7 @@ fn emit_aliased_zero_branch_rules(
             );
 
             let emit_attrs = [emit_attr_block(&b_sem.target_operand, target_symbol)];
-            let (emitter_ts, emit_shim) = emit_emitter_spec(
+            let (emitter_ts, emit_spec) = emit_emitter_spec(
                 &rule_key,
                 dialect,
                 &b.op_name,
@@ -505,14 +504,13 @@ fn emit_aliased_zero_branch_rules(
                 &rule_name,
                 &shared_isas,
                 &pattern_spec,
-                &[&d.inst.name, &b.inst.name],
+                &[],
                 quote! {
                     tir::backend::isel::RuleKind::CondBranch {
                         target_symbol: #target_symbol_lit,
                     }
                 },
-                Some(&prelude_shim),
-                &emit_shim,
+                &[&prelude_spec, &emit_spec],
                 &constraints,
                 &operand_register_specs,
                 None,
@@ -814,14 +812,14 @@ fn emit_flag_reader_rules(
             let rule_name = format!("{}+{}", d.mnemonic, r.mnemonic);
             let r_op_ty_ident = format_ident!("{}Op", &r.inst.name);
 
-            let (prelude_ts, prelude_shim, mut operand_constraint_entries) =
+            let (prelude_ts, prelude_spec, mut operand_constraint_entries) =
                 emit_flag_definer_prelude(d, d_sem, emitted_preludes, dialect);
             isel_rule_emitters.push(prelude_ts);
             operand_constraint_entries.extend(reader_constraint_entries);
 
             let mut emit_attrs = vec![emit_attr_result(&r_sem.dest_operand, 0, &dest_class_id)];
             emit_attrs.extend(reader_attrs);
-            let (emitter_ts, emit_shim) = emit_emitter_spec(
+            let (emitter_ts, emit_spec) = emit_emitter_spec(
                 &rule_key,
                 dialect,
                 &r.op_name,
@@ -834,10 +832,9 @@ fn emit_flag_reader_rules(
                 &rule_name,
                 &shared_isas,
                 &pattern_spec,
-                &[&d.inst.name, &r.inst.name],
+                &[],
                 quote! { tir::backend::isel::RuleKind::Value },
-                Some(&prelude_shim),
-                &emit_shim,
+                &[&prelude_spec, &emit_spec],
                 &operand_constraint_entries,
                 &operand_register_specs,
                 Some(result_spec),

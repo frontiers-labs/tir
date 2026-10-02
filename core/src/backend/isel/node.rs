@@ -124,3 +124,21 @@ pub(crate) fn class_register_type(
             .then(|| SemType::bits(width))
     })
 }
+
+/// The width of the register an e-class occupies, when its type fixes one.
+pub(crate) fn class_register_width(
+    ctx: &Context,
+    egraph: &SemEGraph,
+    class: Id,
+    pointer_width: Option<u32>,
+) -> Option<u32> {
+    use tir::sem::Width;
+    match class_register_type(ctx, egraph, class, pointer_width)? {
+        SemType::Bits(Width::Const(width)) | SemType::RawBits(Width::Const(width)) => Some(width),
+        SemType::Float(format) => match (format.exponent, format.mantissa) {
+            (Width::Const(exponent), Width::Const(mantissa)) => Some(1 + exponent + mantissa),
+            _ => None,
+        },
+        _ => None,
+    }
+}

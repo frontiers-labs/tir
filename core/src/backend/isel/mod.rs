@@ -2,12 +2,15 @@
 //!
 //! The whole function's operations are lowered into one shared e-graph of
 //! semantic expressions ([`builder`]), saturated with the proved algebraic
-//! rewrites the vocabulary owns ([`tir::sem::rewrites`]), and then covered *per
+//! rewrites the vocabulary owns ([`tir::sem::rewrites`]), and matched *per
 //! region* while traversing the entry-fact scopes the region nesting spells —
-//! by the target's instruction patterns
-//! ([`pattern`]), e-matched by the shared [`tir_relational`] engine, via a
-//! PBQP instance over e-classes ([`cover`]). The solved cover becomes an emission
-//! plan ([`emit`]) the pass commits through the context.
+//! by the target's instruction patterns ([`pattern`]), e-matched by the shared
+//! [`tir_relational`] engine. What each region offers is frozen into the
+//! function's selection problem ([`problem`]) before its scope closes. A PBQP
+//! cover over e-classes ([`cover`]) is the incumbent assignment; a bounded
+//! search ([`search`]) may replace it with a cheaper one or construct one where
+//! the cover found none. The chosen assignment becomes an emission plan
+//! ([`emit`]) the pass commits through the context.
 
 mod builder;
 mod cover;
@@ -19,8 +22,10 @@ mod fp_flags;
 mod matches;
 mod node;
 mod pattern;
+mod problem;
 mod rules;
 mod scopes;
+mod search;
 
 use std::collections::{HashMap, HashSet};
 
@@ -42,22 +47,27 @@ use crate::passes::destructure::{
 };
 
 pub use fp_environment::check_default_fp_environment;
+use rules::emit_with;
 pub use rules::{
     CapabilityKind, EmitAttr, EmitSpec, OperandConstraint, PatternRef, RegOperandSpec,
-    ResultRegSpec, RuleSpec, build_rules, emit_with,
+    ResultRegSpec, RuleSpec, build_rules,
 };
 pub use tir::sem::{SaturationLimits, SemEGraph, SemNode, SemPayload, Theory};
 pub use tir_relational::Match as IselMatch;
 
 use builder::{ControlSlot, SemDagBuilder};
 use cover::{
-    BoundaryDemand, CaptureBindings, FullMatchBindings, PatternNodeBinding, PbqpIselAlternative,
-    PbqpIselMatch, build_eclass_cover, completeness_error, prune_dominated_matches,
+    BoundaryDemand, CaptureBindings, CoverError, FullMatchBindings, PatternNodeBinding,
+    PbqpIselAlternative, PbqpIselMatch, completeness_error, prune_dominated_matches, solve_cover,
 };
 use emit::{AuxEmit, GuardBranch, RegionPlan, ScheduledEmit, order_tiles, resolve_match};
 use matches::{MatchRef, Matches};
 use node::{chase_low_extract, is_low_extract_view};
 use pattern::{CompiledIselPattern, PatternNode, compile_isel_pattern};
+use problem::{
+    Availability, ClassFacts, ControlCandidates, ControlChoice, GuardCandidate, GuardOperand,
+    HasRegister, Naming, RegionAssignment, RegionProblem,
+};
 use scopes::Scopes;
 use tir::sem::rewrites::{self, discover_rewrites};
 
@@ -157,8 +167,8 @@ impl RuleMatch {
 pub struct EmitRequest<'a> {
     /// The op being replaced; `None` for an introduced instruction.
     pub op: Option<&'a OperationRef>,
-    /// Destination values, in result order.
-    pub results: &'a [ValueId],
+    /// Destination values, in result order. `None` for a result nothing reads.
+    pub results: &'a [Option<ValueId>],
     /// The type of the first result, when known.
     pub result_ty: Option<TypeId>,
     /// Resource chains taken over from the covered operation.
@@ -405,16 +415,15 @@ pub enum FpFlags<T> {
 
 pub struct Rule {
     pub name: &'static str,
+    /// The semantics of the first value the rule's instructions define.
     pub pattern: SemGraph,
+    /// The semantics of each further value the same instructions define, over
+    /// the same operands. Each roots an instance of its own class; instances
+    /// binding the same operands are one emission, whose cost is paid once.
+    pub secondary: Vec<SemGraph>,
     pub base_cost: u32,
     pub kind: RuleKind,
     pub fp_flags: FpFlags<SemGraph>,
-    /// A companion instruction emitted immediately before the rule's own — a
-    /// flag-setting compare (`cmp`, x86 `cmp`/`test`) whose status-register
-    /// writes the branch instruction's condition reads. TMDL derives such rules
-    /// by composing the definer's flag semantics into the branch guard, so the
-    /// pair selects as one condition pattern but emits two real instructions.
-    pub prelude_emit: Option<RuleEmitFn>,
     /// Per-operand-symbol constraint (register vs immediate). Symbols absent here
     /// are unconstrained, so hand-written and synthesized rules keep matching any
     /// value.
@@ -434,7 +443,55 @@ pub struct Rule {
     /// proves that it refines [`Rule::pattern`] on the source's defined domain,
     /// including the permitted NaN results of floating-point arithmetic.
     pub guarded_semantics: Option<SemGraph>,
-    pub emit_fn: RuleEmitFn,
+    /// The emission plan: the machine instructions the rule emits, in the
+    /// order they run. Each but the last defines only machine state the next
+    /// one reads — the flags a compare sets for its branch, the register a
+    /// division's setup extends into. TMDL derives such rules by composing
+    /// the instructions' semantics, so the sequence selects as one pattern but
+    /// emits every real instruction. The last one defines the rule's results.
+    pub emit: Vec<Emitter>,
+}
+
+/// One machine instruction of an emission plan.
+#[derive(Clone, Copy)]
+pub enum Emitter {
+    /// Built from the instruction's own table, which says what it reads,
+    /// writes and costs.
+    Spec(&'static EmitSpec),
+    /// A hand-written emitter.
+    Custom(RuleEmitFn),
+}
+
+impl Emitter {
+    /// Emit the instruction, returning it with the value it defines for each
+    /// of the request's results.
+    pub(crate) fn emit(
+        &self,
+        context: &Context,
+        req: &EmitRequest,
+        m: &RuleMatch,
+    ) -> Result<(OpId, Vec<(usize, ValueId)>), PassError> {
+        match self {
+            Emitter::Spec(spec) => {
+                let (op, defined) = emit_with(context, req, m, spec)?;
+                Ok((op.id(), defined))
+            }
+            Emitter::Custom(emit) => {
+                let op = emit(context, req, m)?.id();
+                let results = context.get_op(op).results();
+                Ok((op, results.iter().copied().enumerate().collect()))
+            }
+        }
+    }
+
+    /// Whether the instruction reads or writes memory, and so has to take over
+    /// the state chain of an access the match covers.
+    fn accesses_memory(&self) -> bool {
+        match self {
+            Emitter::Spec(spec) => spec.info.effects.reads || spec.info.effects.writes,
+            Emitter::Custom(_) => false,
+        }
+    }
 }
 
 impl Rule {
@@ -442,17 +499,56 @@ impl Rule {
         Self {
             name,
             pattern,
+            secondary: Vec::new(),
             base_cost,
             kind: RuleKind::Value,
             fp_flags: FpFlags::None,
-            prelude_emit: None,
             operand_constraints: Vec::new(),
             operand_registers: Vec::new(),
             result_register: None,
             float_constant_width: None,
             operand_imm_ranges: Vec::new(),
             guarded_semantics: None,
-            emit_fn,
+            emit: vec![Emitter::Custom(emit_fn)],
+        }
+    }
+}
+
+/// Why the cover produced no assignment for a region.
+#[derive(Clone, Debug)]
+enum Unselected {
+    /// No rule roots a demanded class.
+    Missing(String),
+    NoCover,
+    /// The cover's heuristic search gave up.
+    Exhausted,
+    /// The cover's instances read each other's registers in a cycle.
+    Cyclic,
+}
+
+impl Unselected {
+    /// The diagnostic for a region no assignment was found for. `infeasible`
+    /// says the search proved the frozen problem has none.
+    fn message(&self, context: &Context, problem: &RegionProblem, infeasible: bool) -> String {
+        let region = problem.region;
+        let ops = || {
+            problem
+                .order
+                .iter()
+                .map(|op| context.get_op(*op).name().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        match self {
+            Unselected::Missing(message) => message.clone(),
+            Unselected::Cyclic => format!("cyclic instruction cover for {region:?}"),
+            Unselected::Exhausted if !infeasible => format!(
+                "instruction selection ran out of search budget for {region:?}: {}",
+                ops()
+            ),
+            Unselected::NoCover | Unselected::Exhausted => {
+                format!("no feasible instruction cover for {region:?}: {}", ops())
+            }
         }
     }
 }
@@ -529,15 +625,6 @@ struct FunctionSelection {
     control_inverses: HashMap<ControlSlot, Id>,
 }
 
-/// A boundary class resolved to concrete operands for a consumer: the proven
-/// constant it folds to as an immediate, and/or the register value legal under
-/// the dominance rule. A class can carry both (an assumption proves a value equal to
-/// its truth constant); a valueless (pure or rewrite-introduced) class neither.
-struct Binding {
-    int: Option<APInt>,
-    value: Option<ValueId>,
-}
-
 impl FunctionSelection {
     /// The base class ids a (scoped-canonical) class covers: the fact scope's
     /// partition members, or the class itself when no scope is open. The side
@@ -576,60 +663,123 @@ impl FunctionSelection {
             .map(|&(.., class)| self.egraph.find(class))
     }
 
-    fn demanded_at(&self, class: Id, region: RegionId, overlay: &HashSet<Id>) -> bool {
-        overlay.contains(&class) || self.placed_at(class, region)
-    }
-
-    fn placed_at(&self, class: Id, region: RegionId) -> bool {
-        self.base_members(class).any(|member| {
-            self.demand.registers.contains(&(member, region))
-                || self.demand.effects.contains(&(member, region))
-        })
-    }
-
-    /// Whether any base member of `class` computes an IR value (a candidate for a
-    /// register binding). A class with none is pure / rewrite-introduced.
-    fn has_values(&self, class: Id) -> bool {
+    /// Whether `class` computes an IR value under the open scope (a candidate
+    /// for a register binding). A class with none is pure / rewrite-introduced.
+    fn class_has_values(&self, class: Id) -> bool {
         self.base_members(class)
             .any(|m| self.class_values.contains_key(&m))
     }
 
-    /// Whether any IR value carried by a base member of `class` satisfies `pred`.
-    fn any_class_value(&self, class: Id, pred: impl Fn(&ValueId) -> bool) -> bool {
-        self.base_members(class).any(|m| {
-            self.class_values
-                .get(&m)
-                .is_some_and(|values| values.iter().any(&pred))
-        })
+    /// What the open scope says of `class` as `region` reads it: everything a
+    /// plan needs once the scope has closed.
+    fn class_facts(&self, context: &Context, class: Id, region: RegionId) -> ClassFacts {
+        let class = self.egraph.find(class);
+        let members: Vec<Id> = self.base_members(class).collect();
+        let source = chase_low_extract(&self.egraph, class);
+        // A low-bit truncation re-views its operand's register: bind the operand
+        // (chasing a chain of truncations), never the erased truncation itself.
+        // A rewrite-introduced operand holds no IR value, so a view of it keeps
+        // its own: selection either tiles the view or remaps its value.
+        let bound = if self.class_has_values(source) {
+            source
+        } else {
+            class
+        };
+        // A class a fact proves equal to a literal may read a register already
+        // holding that literal, and a literal may read the register of a value
+        // proven equal to it: the union used to make them one class, and this is
+        // the one place that congruence was worth a register.
+        let literal = self
+            .egraph
+            .assumed_const(bound)
+            .and_then(|node| self.egraph.const_class(node))
+            .map(|id| self.egraph.find(id));
+        let equal: Vec<Id> = self
+            .egraph
+            .nodes(bound)
+            .find(|node| node.sym() == Some(SymKind::Constant) && node.int().is_some())
+            .map(|node| self.egraph.classes_assumed_const(node).collect())
+            .unwrap_or_default();
+        let binding_members = self
+            .base_members(bound)
+            .chain(literal)
+            .chain(equal)
+            .collect();
+        let nodes = self.egraph.nodes(class);
+        let kind = nodes
+            .clone()
+            .filter_map(|n| n.sym())
+            .find(|kind| *kind != SymKind::If)
+            .or_else(|| nodes.clone().next().and_then(|n| n.sym()));
+        let placed = members.iter().any(|&member| {
+            self.demand.registers.contains(&(member, region))
+                || self.demand.effects.contains(&(member, region))
+        });
+        let register_demand = members
+            .iter()
+            .any(|&member| self.demand.registers.contains(&(member, region)));
+        ClassFacts {
+            binding_members,
+            int: class_int_binding(&self.egraph, class),
+            pure: node::class_is_pure(&self.egraph, class),
+            width: class_width(context, &self.egraph, class),
+            source,
+            kind,
+            has_values: self.has_values(&members),
+            placed,
+            register_demand,
+            availability: self.availability(context, &members, region),
+            hook_constant: false,
+            members,
+        }
     }
 
-    /// Whether `region` holds an operation selection must emit for `class` — a
-    /// definition of the class, as opposed to a name adopted from it.
-    fn defined_in(&self, class: Id, region: RegionId) -> bool {
-        self.any_class_value(class, |value| {
-            self.value_to_def.get(value).is_some_and(|def| {
+    /// Whether any of `members` computes an IR value.
+    fn has_values(&self, members: &[Id]) -> bool {
+        members.iter().any(|m| self.class_values.contains_key(m))
+    }
+
+    /// Every IR value `members` carry.
+    fn values<'a>(&'a self, members: &'a [Id]) -> impl Iterator<Item = ValueId> + 'a {
+        members
+            .iter()
+            .filter_map(|member| self.class_values.get(member))
+            .flatten()
+            .copied()
+    }
+
+    /// Whether `region` holds an operation selection must emit for the class —
+    /// a definition of it, as opposed to a name adopted from it.
+    fn defined_in(&self, members: &[Id], region: RegionId) -> bool {
+        self.values(members).any(|value| {
+            self.value_to_def.get(&value).is_some_and(|def| {
                 self.op_root.contains_key(def) && self.scopes.op_region.get(def) == Some(&region)
             })
         })
     }
 
-    fn available_at(&self, context: &Context, class: Id, region: RegionId) -> bool {
-        self.any_class_value(class, |value| {
-            let Some(&def) = self.value_to_def.get(value) else {
+    /// The registers holding a class in `region` without an instance of that
+    /// region computing it.
+    fn availability(&self, context: &Context, members: &[Id], region: RegionId) -> Availability {
+        let mut availability = Availability::default();
+        for value in self.values(members) {
+            let Some(&def) = self.value_to_def.get(&value) else {
                 // A port is written on the way into its own region, so it holds
                 // the class only inside that region — never in a sibling arm.
-                return self
+                availability.always |= self
                     .port_region
-                    .get(value)
+                    .get(&value)
                     .is_none_or(|&owner| self.scopes.encloses(owner, region));
+                continue;
             };
             let op = context.get_op(def);
             let Some(&def_region) = self.scopes.op_region.get(&def) else {
-                return true;
+                availability.always = true;
+                continue;
             };
             if !self.op_root.contains_key(&def) {
                 if op.is::<crate::builtin::ConstantOp>() || op.is::<crate::fp::ops::ConstantOp>() {
-                    return false;
+                    continue;
                 }
                 // A structured operation's result is a name adopted from the
                 // class when its arms all publish the same one. The class holds
@@ -638,31 +788,31 @@ impl FunctionSelection {
                 // be selected, and the adopted name witnesses nothing.
                 if def_region == region
                     && !op.regions().is_empty()
-                    && self.defined_in(class, region)
+                    && self.defined_in(members, region)
                 {
-                    return false;
+                    continue;
                 }
-                return def_region == region || self.has_run_at(def, def_region, region);
-            }
-            def_region != region
+                availability.always |=
+                    def_region == region || self.has_run_at(def, def_region, region);
+            } else if def_region != region
                 && self.has_run_at(def, def_region, region)
-                && self
-                    .base_members(class)
-                    .any(|member| self.demand.registers.contains(&(member, def_region)))
-        })
+                && !availability.ancestors.contains(&def_region)
+            {
+                availability.ancestors.push(def_region);
+            }
+        }
+        availability
     }
 
-    /// The point in `region` a spelling of `class` must reach: the earliest
+    /// The point in `region` a spelling of the class must reach: the earliest
     /// operation whose regions read a value the class holds here. A definition
     /// placed after that operation spells the class only for what follows the
     /// region, never for the region itself — the arms of a gate cannot read the
     /// name the gate publishes.
-    fn region_ask(&self, region: RegionId, class: Id) -> Option<OpId> {
-        self.base_members(class)
-            .filter_map(|member| self.class_values.get(&member))
-            .flatten()
-            .filter_map(|value| match self.value_region.get(value) {
-                Some(&Some(held)) if held == region => self.region_use.get(value).copied(),
+    fn region_ask(&self, region: RegionId, members: &[Id]) -> Option<OpId> {
+        self.values(members)
+            .filter_map(|value| match self.value_region.get(&value) {
+                Some(&Some(held)) if held == region => self.region_use.get(&value).copied(),
                 // A member of the class inside a region hanging off this one is
                 // read where the operation holding that region is: a name that
                 // operation publishes cannot answer it, so the ask goes ahead of it.
@@ -686,76 +836,68 @@ impl FunctionSelection {
         }
     }
 
-    /// Resolve `class` to operands for consumer op `consumer` in `region`: the
-    /// proven constant (folds to an immediate) and/or a register value legal under
-    /// the scope rule. The single resolver behind boundary filtering, guard
-    /// selection, and emission, so collect-time acceptance implies emit-time
-    /// success. A valueless class yields neither — resolvable only as an
-    /// introduced dest the caller expects the cover to materialize.
-    ///
-    /// `bind_pending_tiles` lets a caller that is about to demand the class in
-    /// this region (guard selection: fused-branch boundary operands join the
-    /// overlay) bind a same-region op-rooted value whose tile will define it.
-    /// Every other caller passes `false`: an op-rooted def with no tile is
-    /// erased by the extraction, so only surviving values may bind.
-    fn resolve_binding(
+    /// Whether a register holding a class can be named at `at`, a branch's
+    /// place in `region`: with the registers the demand policy places, or only
+    /// once an enclosing region's assignment leaves one.
+    fn naming(
         &self,
         context: &Context,
-        class: Id,
+        members: &[Id],
         region: RegionId,
-        consumer: Option<OpId>,
-        bind_pending_tiles: bool,
-    ) -> Binding {
-        Binding {
-            int: class_int_binding(&self.egraph, class),
-            value: self.register_value(context, class, region, consumer, bind_pending_tiles),
+        at: Option<OpId>,
+    ) -> Naming {
+        let placed = |member, region| self.demand.registers.contains(&(member, region));
+        let named = |has_register: HasRegister| {
+            self.register_value(context, members, region, at, true, has_register)
+                .is_some()
+        };
+        if named(&placed) {
+            return Naming {
+                always: true,
+                registers: Vec::new(),
+            };
+        }
+        let asked = std::cell::RefCell::new(Vec::new());
+        named(&|member, region| {
+            if !placed(member, region) && !asked.borrow().contains(&(member, region)) {
+                asked.borrow_mut().push((member, region));
+            }
+            true
+        });
+        Naming {
+            always: false,
+            registers: asked.into_inner(),
         }
     }
 
-    /// The register value to bind `class` as an operand of consumer op `consumer`
-    /// in `region`, under the scope rule: an entry input or a port of an
-    /// enclosing region; a same-region def preceding the consumer; or a value
-    /// defined in an enclosing region that the original IR already used across
-    /// regions (so it is guaranteed materialized). `None` when no such value
-    /// exists (the class may still bind as an immediate, or be materialized as
-    /// an introduced instruction). Preference order — same-region earliest, then
-    /// closest enclosing region — is deterministic. A consumer of `None` is the
-    /// region's end: every definition precedes it.
+    /// The register value to bind a class as an operand of consumer op
+    /// `consumer` in `region`, under the scope rule: an entry input or a port of
+    /// an enclosing region; a same-region def preceding the consumer; or a value
+    /// defined in an enclosing region that region leaves in a register. `None`
+    /// when no such value exists (the class may still bind as an immediate, or
+    /// be materialized as an introduced instruction). Preference order —
+    /// same-region earliest, then closest enclosing region — is deterministic.
+    /// A consumer of `None` is the region's end: every definition precedes it.
+    ///
+    /// `members` are the class's [`ClassFacts::binding_members`]. The single
+    /// resolver behind guard selection and emission.
+    ///
+    /// `bind_pending_tiles` lets a caller that demands the class in this
+    /// region (a fused branch's operands) bind a same-region op-rooted value
+    /// whose tile will define it. Every other caller passes `false`: an
+    /// op-rooted def with no tile is erased by the extraction, so only
+    /// surviving values may bind.
     fn register_value(
         &self,
         context: &Context,
-        class: Id,
+        members: &[Id],
         region: RegionId,
         consumer: Option<OpId>,
         bind_pending_tiles: bool,
+        has_register: HasRegister,
     ) -> Option<ValueId> {
-        // A low-bit truncation re-views its operand's register: bind the operand
-        // (chasing a chain of truncations), never the erased truncation itself.
-        // A rewrite-introduced operand holds no IR value, so a view of it keeps
-        // its own: selection either tiles the view or remaps its value.
-        let chased = chase_low_extract(&self.egraph, class);
-        let class = if self.has_values(chased) {
-            chased
-        } else {
-            self.egraph.find(class)
-        };
-        // A class a fact proves equal to a literal may read a register already
-        // holding that literal, and a literal may read the register of a value
-        // proven equal to it: the union used to make them one class, and this is
-        // the one place that congruence was worth a register.
-        let literal = self
-            .egraph
-            .assumed_const(class)
-            .and_then(|node| self.egraph.const_class(node))
-            .map(|id| self.egraph.find(id));
-        let equal: Vec<Id> = self
-            .egraph
-            .nodes(class)
-            .find(|node| node.sym() == Some(SymKind::Constant) && node.int().is_some())
-            .map(|node| self.egraph.classes_assumed_const(node).collect())
-            .unwrap_or_default();
         let mut best: Option<((u8, usize, u32), ValueId)> = None;
-        for member in self.base_members(class).chain(literal).chain(equal) {
+        for &member in members {
             let Some(candidates) = self.class_values.get(&member) else {
                 continue;
             };
@@ -795,12 +937,12 @@ impl FunctionSelection {
                         let survives = !self.op_root.contains_key(&def)
                             && !context.get_op(def).is::<crate::builtin::ConstantOp>()
                             && !context.get_op(def).is::<crate::fp::ops::ConstantOp>();
-                        // Demand is what says a tile was placed for the value —
-                        // and it is asked of the member the value belongs to,
+                        // A register is what says a tile was placed for the value
+                        // — and it is asked of the member the value belongs to,
                         // not of the whole class: a scope may merge a class the
                         // region materialized with one it folded into an
                         // encoding, and only the first leaves a register behind.
-                        if !survives && !self.demand.registers.contains(&(member, def_region)) {
+                        if !survives && !has_register(member, def_region) {
                             continue;
                         }
                         (2, self.scopes.distance(region, def_region), v.number())
@@ -823,24 +965,6 @@ struct ConditionExpr {
 }
 
 pub type OpLowering = Box<dyn Fn(&Context, &OperationRef) -> Result<bool, PassError> + Send + Sync>;
-
-/// The low-extract views of each demanded source a rewrite introduced. No IR
-/// operation computes such a source, so it need not be computed where every
-/// view reading it is tiled in its own right.
-fn deferrable_views(
-    fs: &FunctionSelection,
-    covered: &[Id],
-    demanded: &HashSet<Id>,
-) -> HashMap<Id, Vec<Id>> {
-    let mut views: HashMap<Id, Vec<Id>> = HashMap::new();
-    for &class in covered {
-        let source = chase_low_extract(&fs.egraph, class);
-        if source != class && demanded.contains(&source) && !fs.has_values(source) {
-            views.entry(source).or_default().push(class);
-        }
-    }
-    views
-}
 
 /// Validate a function before instruction selection changes its operations.
 pub type FunctionCheck = fn(&Context, &OperationRef) -> Result<(), PassError>;
@@ -880,7 +1004,7 @@ pub struct InstructionSelectPass {
     /// Semantic control provenance must survive replacement of the source
     /// computations by selected instructions.
     recovery: Option<RecoveryPlan>,
-    /// The demand domain inherited by each selected instruction and prelude.
+    /// The demand domain inherited by every instruction a selected rule emits.
     execution_domains: HashMap<OpId, DemandDomainId>,
     literal_ops: HashSet<OpId>,
     /// Control uses that PCF normalization represents as local tests of data.
@@ -888,11 +1012,13 @@ pub struct InstructionSelectPass {
     emitted_values: HashMap<ValueId, ValueId>,
     /// Selected recovery controls, filled as their regions commit.
     region_values: HashMap<(OpId, ControlSlot), AuxEmit>,
-    /// The instruction a rule put ahead of each tile it emitted, defining a
-    /// register the tile reads implicitly.
-    preludes: HashMap<OpId, OpId>,
+    /// The instruction a rule's plan put ahead of each one it emitted, defining
+    /// machine state that one reads implicitly.
+    preceding: HashMap<OpId, OpId>,
     /// Function roots already solved, so a re-visit does not rebuild the graph.
     solved: HashSet<OpId>,
+    /// What the target's branch-if-nonzero costs. Target data, read once.
+    nonzero_cost: std::cell::OnceCell<u64>,
 }
 
 /// A function selected, emitted and recovered in a private context. Its score
@@ -938,22 +1064,25 @@ impl PlanScore {
                 if !op.regions().is_empty() {
                     continue;
                 }
-                let info = op
-                    .as_interface::<dyn crate::backend::MachineInstruction>()
-                    .map(|instruction| instruction.info())
-                    .filter(|info| info.width_bytes.1 > 0);
-                match info {
-                    Some(info) => {
-                        score.cost += u64::from(
-                            info.cost * LATENCY_COST_SCALE + u32::from(info.width_bytes.0),
-                        );
-                    }
+                match instruction_cost(&op) {
+                    Some(cost) => score.cost += cost,
                     None => score.unpriced += 1,
                 }
             }
         }
         score
     }
+}
+
+/// What a machine instruction costs at [`LATENCY_COST_SCALE`] times its latency
+/// plus its encoding size. `None` for an operation with no encoding of its own:
+/// one later stages still lower or place.
+fn instruction_cost(op: &OpHandle) -> Option<u64> {
+    op.clone()
+        .as_interface::<dyn crate::backend::MachineInstruction>()
+        .map(|instruction| instruction.info())
+        .filter(|info| info.width_bytes.1 > 0)
+        .map(|info| u64::from(info.cost * LATENCY_COST_SCALE + u32::from(info.width_bytes.0)))
 }
 
 /// Results for guarded rules whose obligations were proved or could not be encoded.
@@ -1327,15 +1456,21 @@ impl InstructionSelectPass {
         let compiled_patterns: Vec<_> = rules
             .iter()
             .enumerate()
-            .filter_map(|(rule_index, rule)| {
-                compile_isel_pattern(
-                    rule_index,
-                    &rule.pattern,
-                    &rule.operand_constraints,
-                    &rule.operand_registers,
-                    &rule.operand_imm_ranges,
-                    rule.result_register,
-                )
+            .flat_map(|(rule_index, rule)| {
+                std::iter::once(&rule.pattern)
+                    .chain(&rule.secondary)
+                    .enumerate()
+                    .filter_map(move |(port, pattern)| {
+                        compile_isel_pattern(
+                            rule_index,
+                            port,
+                            pattern,
+                            &rule.operand_constraints,
+                            &rule.operand_registers,
+                            &rule.operand_imm_ranges,
+                            rule.result_register,
+                        )
+                    })
             })
             .collect();
 
@@ -1405,8 +1540,9 @@ impl InstructionSelectPass {
             materialized_tests: HashSet::new(),
             emitted_values: HashMap::new(),
             region_values: HashMap::new(),
-            preludes: HashMap::new(),
+            preceding: HashMap::new(),
             solved: HashSet::new(),
+            nonzero_cost: std::cell::OnceCell::new(),
         }
     }
 
@@ -1488,7 +1624,7 @@ impl InstructionSelectPass {
         self.execution_domains.clear();
         self.literal_ops.clear();
         self.materialized_tests.clear();
-        self.preludes.clear();
+        self.preceding.clear();
         self.emitted_values.clear();
         self.region_values.clear();
         if let Some(lowering) = &mut self.call_lowering {
@@ -1554,9 +1690,13 @@ impl InstructionSelectPass {
         // pattern's e-match is region-independent: search once here and reuse
         // for all such regions (fact-bearing regions re-search under their scope).
         let mut matches = self.base_value_matches(&fs, context);
+        let mut problems = Vec::new();
         if let Some(&body) = op.op().regions().first() {
-            self.solve_region_subtree(context, &mut fs, body, &mut matches);
+            self.collect_region_subtree(context, &mut fs, body, &mut matches, &mut problems);
         }
+        // Every scope has closed: the problem is frozen, and what is chosen and
+        // planned from here on reads only the records.
+        self.select_and_plan(context, &fs, &problems);
         // The regions were solved here, so the operations carrying them must not
         // solve graphs of their own when the walk reaches them.
         for op_id in fs.scopes.op_region.keys() {
@@ -1567,14 +1707,16 @@ impl InstructionSelectPass {
         Ok(true)
     }
 
-    /// Solve `region` under the fact it is entered on, then every region nested
-    /// in it under that same fact: scopes nest exactly as regions do.
-    fn solve_region_subtree(
-        &mut self,
+    /// Record `region` under the fact it is entered on, then every region
+    /// nested in it under that same fact: scopes nest exactly as regions do.
+    /// Regions are recorded ahead of the ones they enclose.
+    fn collect_region_subtree(
+        &self,
         context: &Context,
         fs: &mut FunctionSelection,
         region: RegionId,
         matches: &mut Matches,
+        problems: &mut Vec<RegionProblem>,
     ) {
         let own_fact = fs.region_facts.get(&region).copied();
         if let Some((condition, holds)) = own_fact {
@@ -1588,27 +1730,12 @@ impl InstructionSelectPass {
 
         let order = fs.scopes.order[&region].clone();
         if !order.is_empty() || fs.region_aux.contains_key(&region) {
-            let plan = self.solve_region(context, region, fs, matches);
-            if let Ok(plan) = &plan {
-                // Children may reuse registers the enclosing cover actually
-                // produces, including loads demanded only by a fused branch.
-                // An effect absorbed into another tile supplies no register.
-                // Pure values keep the demand policy's choice to recompute.
-                for scheduled in &plan.schedule {
-                    if !scheduled.results.is_empty()
-                        && let Some(class) = scheduled.source_op.and_then(|op| fs.op_root.get(&op))
-                        && !node::class_is_pure(&fs.egraph, *class)
-                    {
-                        fs.demand.registers.insert((*class, region));
-                    }
-                }
-            }
-            self.plans.insert(region, plan);
+            problems.push(self.collect_region(context, region, fs, matches));
         }
 
         for op_id in order {
             for nested in context.get_op(op_id).regions().to_vec() {
-                self.solve_region_subtree(context, fs, nested, matches);
+                self.collect_region_subtree(context, fs, nested, matches, problems);
             }
         }
         if own_fact.is_some() {
@@ -2019,8 +2146,8 @@ impl InstructionSelectPass {
             .as_ref()
             .map(|lowering| lowering.implicit_inputs(context))
             .unwrap_or_default();
-        for (&tile, &prelude) in &self.preludes {
-            implicit.entry(tile).or_default().push(prelude);
+        for (&instruction, &before) in &self.preceding {
+            implicit.entry(instruction).or_default().push(before);
         }
         let recovery = self.recovery.as_ref().ok_or_else(|| {
             PassError::InvalidRuleSet("selected function has no control recovery plan".into())
@@ -2123,42 +2250,34 @@ impl InstructionSelectPass {
                     .and_then(|op| position.get(&op).copied())
                     .unwrap_or(0),
             );
-            let prelude = match rule.prelude_emit {
-                Some(prelude) => {
-                    let op = prelude(context, &request, &m)?;
-                    context.add(region, op.id());
-                    if let Some(domain) = domain {
-                        self.execution_domains.insert(op.id(), domain);
-                    }
-                    emitted.push((op.id(), cursor));
-                    Some(op.id())
+            let mut last = None;
+            let mut defined = Vec::new();
+            for emitter in &rule.emit {
+                let (op, values) = emitter.emit(context, &request, &m)?;
+                defined = values;
+                context.add(region, op);
+                if let Some(domain) = domain {
+                    self.execution_domains.insert(op, domain);
                 }
-                None => None,
-            };
-            let op = (rule.emit_fn)(context, &request, &m)?;
+                emitted.push((op, cursor));
+                if let Some(before) = last.replace(op) {
+                    self.preceding.insert(op, before);
+                }
+            }
+            let op = last.expect("an emission plan holds an instruction");
             if self
                 .constant_materializer_rules
                 .contains(&scheduled.rule_index)
             {
-                self.literal_ops.insert(op.id());
-            }
-            context.add(region, op.id());
-            if let Some(domain) = domain {
-                self.execution_domains.insert(op.id(), domain);
-            }
-            emitted.push((op.id(), cursor));
-            if let Some(prelude) = prelude {
-                self.preludes.insert(op.id(), prelude);
+                self.literal_ops.insert(op);
             }
             // The tile's results are born register-class-typed; the mid-end
             // values they stand for are replaced by them.
-            for (&old, new) in scheduled
-                .results
-                .iter()
-                .zip(context.get_op(op.id()).results().iter())
-            {
-                self.emitted_values.insert(old, *new);
-                context.replace_value_uses(old, *new);
+            for (result, new) in defined {
+                if let Some(&Some(old)) = scheduled.results.get(result) {
+                    self.emitted_values.insert(old, new);
+                    context.replace_value_uses(old, new);
+                }
             }
         }
         for (old, new) in &plan.value_remaps {
@@ -2281,38 +2400,55 @@ impl InstructionSelectPass {
         at.filter(|op| fs.scopes.op_region.get(op) == Some(&region))
     }
 
-    /// Solve `region` against the (already scoped) shared graph, restricting
-    /// matching and the cover to what `region` computes.
-    fn solve_region(
+    /// Record what `region` offers the function's selection problem, read off
+    /// the (already scoped) shared graph: the instances rooted at what the
+    /// region computes, the facts of every class they name, and each control
+    /// outcome with every way to realize it.
+    fn collect_region(
         &self,
         context: &Context,
         region: RegionId,
         fs: &FunctionSelection,
         value_matches: &mut Matches,
-    ) -> Result<RegionPlan, String> {
-        let op_ids = fs.scopes.order[&region].clone();
+    ) -> RegionProblem {
+        let order = fs.scopes.order[&region].clone();
 
         // The earliest op of the region rooting each class (for costing / the
         // Emit anchor); its keys are the region's op-root classes. The order
         // visits earliest first, so the first insertion per class already wins.
+        let mut op_class = Vec::new();
         let mut region_op_by_root: HashMap<Id, OpId> = HashMap::new();
-        for &op_id in &op_ids {
+        for &op_id in &order {
             let Some(&root) = fs.op_root.get(&op_id) else {
                 continue;
             };
-            region_op_by_root
-                .entry(fs.egraph.find(root))
-                .or_insert(op_id);
+            let class = fs.egraph.find(root);
+            op_class.push((op_id, class));
+            region_op_by_root.entry(class).or_insert(op_id);
         }
         let guard_classes: HashSet<Id> = fs.aux_classes(region).collect();
 
-        let (matches, covered) = self.collect_region_matches(
+        let (mut matches, classes) = self.collect_region_matches(
             context,
             fs,
             &region_op_by_root,
             &guard_classes,
             value_matches,
         );
+        // Matches of one rule's result patterns over the same operands are the
+        // results of one instance.
+        let mut instances: HashMap<(usize, Vec<(u32, Id)>), usize> = HashMap::new();
+        for (index, matched) in matches.iter_mut().enumerate() {
+            matched.instance = if self.rules[matched.rule_index].secondary.is_empty() {
+                index
+            } else {
+                let mut operands = matched.bindings.captures.entries.clone();
+                operands.sort_unstable();
+                *instances
+                    .entry((matched.rule_index, operands))
+                    .or_insert(index)
+            };
+        }
 
         // Search the branch rules once for the whole region, indexed by
         // condition class, so each guard just looks up its hits.
@@ -2331,165 +2467,565 @@ impl InstructionSelectPass {
             self.guard_branch_hits(context, fs, &both)
         };
 
-        // A destruction branches on its tests: fuse each into a branch rule where
-        // one matches, and otherwise demand its register for the target's
-        // branch-if-nonzero (which needs the condition materialized).
-        let consumer = op_ids.last().copied();
-        // A continuation branch belongs to its predicate producer. Resolving
-        // operands at the old consumer could choose a later equal value that
-        // is unavailable where recovery places the branch.
-        let mut mm_overlay: HashSet<Id> = HashSet::new();
-        let mut aux_branches: Vec<(OpId, ControlSlot, Option<AuxEmit>)> = Vec::new();
+        // A destruction branches on its tests. Each may fuse into a branch rule
+        // that matches it, or read its materialized condition through the
+        // target's branch-if-nonzero; which one is the assignment's choice.
+        let mut controls = Vec::new();
         for &(op, slot, class) in fs.region_aux.get(&region).into_iter().flatten() {
-            let class = fs.egraph.find(class);
-            // The scope this region solves under may already decide the test —
-            // an enclosing region's entry fact proves a re-tested condition
-            // equal to its truth. Then no branch is selected and nothing is
-            // demanded: the destruction takes the edge the decision picks.
-            if let Some(known) = class_int_binding(&fs.egraph, class) {
-                aux_branches.push((op, slot, Some(AuxEmit::Decided(!known.is_zero()))));
-                continue;
-            }
-            let candidates = guard_branch_hits
-                .get(&class)
-                .map(Vec::as_slice)
-                .unwrap_or(&[]);
-            let materialized = self.materialized_tests.contains(&slot.id);
-            let fused = (!materialized)
-                .then(|| {
-                    self.best_guard_branch(
-                        context,
-                        fs,
-                        region,
-                        self.control_anchor(fs, region, op, slot),
-                        candidates,
-                    )
-                })
-                .flatten();
-            match fused {
-                Some(guard) => {
-                    let inverse =
-                        fs.control_inverses
-                            .get(&slot)
-                            .and_then(|class| guard_branch_hits.get(&fs.egraph.find(*class)))
-                            .and_then(|hits| {
-                                self.best_guard_branch(
-                                    context,
-                                    fs,
-                                    region,
-                                    self.control_anchor(fs, region, op, slot),
-                                    hits,
-                                )
-                            })
-                            .filter(|inverse| {
-                                inverse
-                                    .boundaries
-                                    .iter()
-                                    .all(|class| guard.boundaries.contains(class))
-                                    && inverse.m.values().all(|value| {
-                                        guard.m.values().any(|original| original == value)
-                                    })
-                            })
-                            .map(|inverse| (inverse.rule_index, inverse.m));
-                    for boundary in guard.boundaries {
-                        mm_overlay.insert(chase_low_extract(&fs.egraph, boundary));
-                    }
-                    aux_branches.push((
-                        op,
-                        slot,
-                        Some(AuxEmit::Branch(GuardBranch::Fused {
-                            rule_index: guard.rule_index,
-                            m: guard.m,
-                            inverse,
-                        })),
-                    ));
-                }
-                None => {
-                    mm_overlay.insert(chase_low_extract(&fs.egraph, class));
-                    aux_branches.push((op, slot, None));
+            let condition = fs.egraph.find(class);
+            // The scope this region is recorded under may already decide the
+            // test — an enclosing region's entry fact proves a re-tested
+            // condition equal to its truth. Then no branch is selected and
+            // nothing is demanded: the destruction takes the edge the decision
+            // picks.
+            let decided = class_int_binding(&fs.egraph, condition).map(|known| !known.is_zero());
+            let candidates = |class: Id| {
+                guard_branch_hits
+                    .get(&class)
+                    .map_or_else(Vec::new, |hits| self.guard_candidates(fs, hits))
+            };
+            let fusable = decided.is_none() && !self.materialized_tests.contains(&slot.id);
+            let definition = self
+                .recovery
+                .as_ref()
+                .and_then(|plan| plan.definition(slot.id));
+            // A direct control fused into its branch needs no separate value
+            // tile, for the condition or for the operation producing it.
+            let mut waives = Vec::new();
+            if let Some(definition) = definition
+                && matches!(definition.kind, ControlKind::Direct)
+            {
+                waives.push(chase_low_extract(&fs.egraph, condition));
+                if let Some(root) = definition.producer.and_then(|op| fs.op_root.get(&op)) {
+                    waives.push(chase_low_extract(&fs.egraph, fs.egraph.find(*root)));
                 }
             }
+            controls.push(ControlCandidates {
+                op,
+                slot,
+                condition,
+                decided,
+                fused: if fusable {
+                    candidates(condition)
+                } else {
+                    Vec::new()
+                },
+                inverses: fs
+                    .control_inverses
+                    .get(&slot)
+                    .filter(|_| fusable)
+                    .map_or_else(Vec::new, |class| candidates(fs.egraph.find(*class))),
+                waives,
+                // A continuation branch belongs to its predicate producer.
+                // Resolving operands at the old consumer could choose a later
+                // equal value that is unavailable where recovery places the
+                // branch.
+                anchor: self.control_anchor(fs, region, op, slot),
+                // A materialized condition is read after its definition. Gamma
+                // reads at its consumer; Theta reads at the end of its body,
+                // which may itself produce the condition.
+                at: (fs.scopes.op_region.get(&op) == Some(&region)).then_some(op),
+                nonzero_naming: Naming::default(),
+            });
         }
-        // A direct control fused into its branch needs no separate value tile.
-        let fused = fused_control_classes(fs, region, &aux_branches, self.recovery.as_ref());
-        let demanded: HashSet<Id> = covered
-            .iter()
-            .copied()
-            .filter(|class| {
-                (!fused.contains(class) || mm_overlay.contains(class))
-                    && fs.demanded_at(*class, region, &mm_overlay)
-            })
-            .collect();
-        let available = |class| {
-            // A low-extract view owns no register of its own: it re-views its
-            // source's. So it is available exactly when that source is — either
-            // already in a register, or extracted here (the source's tile
-            // defines the register the view reads). Treating the view itself as
-            // unconditionally available would leave a demanded class with no
-            // tile and its erased value dangling.
-            let source = chase_low_extract(&fs.egraph, class);
-            let source_available = fs.available_at(context, source, region)
-                || (self.constant_materializer_ranges.is_empty()
-                    && class_int_binding(&fs.egraph, source).is_some());
-            if source == class {
-                source_available
-            } else {
-                source_available || demanded.contains(&source)
+
+        let mut facts: HashMap<Id, ClassFacts> = HashMap::new();
+        let mut record = |mut class: Id| {
+            while !facts.contains_key(&class) {
+                let mut class_facts = fs.class_facts(context, class, region);
+                class_facts.hook_constant =
+                    self.constant_materializer_ranges.is_empty() && class_facts.int.is_some();
+                let source = class_facts.source;
+                facts.insert(class, class_facts);
+                class = source;
             }
         };
-        let views = deferrable_views(fs, &covered, &demanded);
-        let rooted: HashSet<Id> = matches.iter().map(|m| fs.egraph.find(m.root)).collect();
-        if let Some(message) = completeness_error(&fs.egraph, &demanded, &matches, &|class| {
-            available(class)
-                || views
-                    .get(&class)
-                    .is_some_and(|views| views.iter().all(|view| rooted.contains(view)))
-        }) {
-            return Err(message);
-        }
-
-        let cover = build_eclass_cover(
-            &fs.egraph,
-            &covered,
-            &cover::ClassPolicies {
-                demanded: &|class| demanded.contains(&fs.egraph.find(class)),
-                available: &available,
-                materialized: &|class| {
-                    mm_overlay.contains(&class)
-                        || fs
-                            .base_members(class)
-                            .any(|member| fs.demand.registers.contains(&(member, region)))
-                },
-                views: &views,
-            },
-            &matches,
-        )
-        .ok_or_else(|| {
-            let ops = op_ids
-                .iter()
-                .map(|op| context.get_op(*op).name().to_string())
-                .collect::<Vec<_>>()
-                .join(", ");
-            format!("no feasible instruction cover for {region:?}: {ops}")
-        })?;
-
-        let mut root_match: HashMap<Id, usize> = HashMap::new();
-        for (node, choice) in cover.choices.iter().enumerate() {
-            if let PbqpIselAlternative::Tile { match_id } = choice {
-                root_match.insert(cover.classes[node], *match_id);
+        classes.iter().copied().for_each(&mut record);
+        for matched in &matches {
+            for (_, class) in &matched.bindings.captures.entries {
+                record(*class);
             }
         }
+        for control in &controls {
+            record(control.condition);
+            for guard in control.fused.iter().chain(&control.inverses) {
+                for operand in &guard.captures {
+                    record(operand.class);
+                }
+            }
+        }
+        for control in &mut controls {
+            let naming = |class: Id, at: Option<OpId>| {
+                fs.naming(context, &facts[&class].binding_members, region, at)
+            };
+            control.nonzero_naming = naming(facts[&control.condition].source, control.at);
+            for guard in &mut control.fused {
+                for operand in &mut guard.captures {
+                    operand.naming = naming(operand.class, control.anchor);
+                }
+            }
+        }
+
+        // An effect instance whose operation defines a value leaves a register
+        // the regions it encloses may read, named by that operation's root.
+        let register_names = region_op_by_root
+            .iter()
+            .filter(|&(class, op)| {
+                !facts[class].pure && !context.get_op(*op).value_results().is_empty()
+            })
+            .map(|(&class, op)| (class, fs.op_root[op]))
+            .collect();
+        let identities = op_class
+            .iter()
+            .filter(|(_, class)| node::is_identity_effect(&fs.egraph, *class))
+            .map(|(op, _)| *op)
+            .collect();
+
+        RegionProblem {
+            region,
+            order,
+            op_class,
+            source_ops: region_op_by_root,
+            classes,
+            facts,
+            matches,
+            controls,
+            register_names,
+            identities,
+            nonzero_cost: self.nonzero_cost(context),
+        }
+    }
+
+    /// What the target's branch-if-nonzero costs, read off the instructions its
+    /// emitter builds.
+    fn nonzero_cost(&self, context: &Context) -> u64 {
+        *self.nonzero_cost.get_or_init(|| {
+            let Some(emitters) = &self.branch_emitters else {
+                return 0;
+            };
+            let scratch = context.fork();
+            let condition = scratch
+                .create_value(tir::builtin::IntegerType::new(&scratch, 1), None)
+                .id();
+            (emitters.cond_nonzero)(&scratch, condition, BlockId::PLACEHOLDER)
+                .iter()
+                .filter_map(|op| instruction_cost(&scratch.get_op(op.id())))
+                .sum()
+        })
+    }
+
+    /// The conditional-branch instances among a condition class's hits,
+    /// cheapest and most specific first.
+    fn guard_candidates(
+        &self,
+        fs: &FunctionSelection,
+        hits: &[(usize, IselMatch)],
+    ) -> Vec<GuardCandidate> {
+        let mut candidates = Vec::new();
+        for (pattern_index, m) in hits {
+            let compiled = &self.compiled_patterns[*pattern_index];
+            let RuleKind::CondBranch { target_symbol } = self.rules[compiled.rule_index].kind
+            else {
+                continue;
+            };
+            // Branch emission publishes no resource state. An effectful
+            // predicate operand must therefore be selected as ordinary data,
+            // not recomputed inside the branch pattern.
+            if compiled.node_meta.iter().enumerate().any(|(index, meta)| {
+                !meta.boundary_like()
+                    && !meta.duplicable
+                    && !meta.is_state
+                    && m.bindings[index]
+                        .is_some_and(|class| !node::class_is_pure(&fs.egraph, class))
+            }) {
+                continue;
+            }
+            let register_symbols = compiled.register_symbols();
+            let captures = compiled
+                .captures
+                .iter()
+                .filter_map(|&node| {
+                    let symbol = compiled.nodes[node as usize]
+                        .symbol()
+                        .expect("a capture names an operand");
+                    (!compiled.is_state_symbol(symbol)).then(|| GuardOperand {
+                        symbol,
+                        class: fs
+                            .egraph
+                            .find(CompiledIselPattern::binding(m, node as usize)),
+                        register: register_symbols.contains(&symbol),
+                        naming: Naming::default(),
+                    })
+                })
+                .collect();
+            let cost = self.rules[compiled.rule_index].base_cost as u64;
+            candidates.push((
+                (cost, std::cmp::Reverse(compiled.specificity)),
+                GuardCandidate {
+                    rule_index: compiled.rule_index,
+                    cost,
+                    target_symbol,
+                    captures,
+                },
+            ));
+        }
+        candidates.sort_by_key(|(key, _)| *key);
+        candidates.into_iter().map(|(_, guard)| guard).collect()
+    }
+
+    /// Name the operands of a fused branch among the registers that exist.
+    /// `None` when an operand is unresolvable in the branching region.
+    ///
+    /// The taken target is bound to a placeholder: the destruction mints the
+    /// block and rebinds it when it emits.
+    fn resolve_guard(
+        &self,
+        context: &Context,
+        fs: &FunctionSelection,
+        problem: &RegionProblem,
+        control: &ControlCandidates,
+        guard: &GuardCandidate,
+        has_register: HasRegister,
+    ) -> Option<FusedGuard> {
+        // Every operand must resolve in the region. An immediate binds a
+        // register value only when this pattern also reads that symbol as a
+        // register. An optional value spelling of an immediate may name a
+        // constant that selection never materializes. A class with only a
+        // register value binds under the scope rule and joins the
+        // materialization set. An unresolvable boundary disqualifies.
+        let mut boundaries = Vec::new();
+        let mut int_bindings = Vec::new();
+        let mut value_bindings = Vec::new();
+        for &GuardOperand {
+            symbol,
+            class,
+            register,
+            ..
+        } in &guard.captures
+        {
+            let facts = problem.facts(class);
+            let value = |pending| {
+                fs.register_value(
+                    context,
+                    &facts.binding_members,
+                    problem.region,
+                    control.anchor,
+                    pending,
+                    has_register,
+                )
+            };
+            // Prefer a surviving/available value; bind a same-region pending
+            // tile only when none exists — then the branch's demand forces
+            // that tile and the bound value is defined.
+            let value = value(false).or_else(|| value(true));
+            match &facts.int {
+                Some(constant) => {
+                    // A register operand may read a bare constant only when
+                    // another use already forces that constant to be
+                    // materialized, and only through the value naming the
+                    // register it lands in: the emitter binds values, and a
+                    // class the region materializes after the gate has none to
+                    // bind where the branch reads.
+                    if register
+                        && !(value.is_some() && (facts.has_register(has_register) || facts.placed))
+                    {
+                        return None;
+                    }
+                    int_bindings.push((symbol, constant.clone()));
+                    if register && let Some(value) = value {
+                        value_bindings.push((symbol, value));
+                    }
+                }
+                None => {
+                    value_bindings.push((symbol, value?));
+                    boundaries.push(class);
+                }
+            }
+        }
+        Some(FusedGuard {
+            rule_index: guard.rule_index,
+            m: RuleMatch::new(int_bindings, value_bindings)
+                .with_block_binding(guard.target_symbol, BlockId::PLACEHOLDER),
+            boundaries,
+        })
+    }
+
+    /// The assignment the current selector constructs for a region: each test
+    /// fused into its cheapest resolvable branch, then the PBQP cover under the
+    /// demand those branches place.
+    fn incumbent(
+        &self,
+        context: &Context,
+        fs: &FunctionSelection,
+        problem: &RegionProblem,
+        has_register: HasRegister,
+    ) -> Result<RegionAssignment, Unselected> {
+        let controls: Vec<ControlChoice> = problem
+            .controls
+            .iter()
+            .map(|control| match control.decided {
+                Some(holds) => ControlChoice::Decided(holds),
+                None => control
+                    .fused
+                    .iter()
+                    .position(|guard| {
+                        self.resolve_guard(context, fs, problem, control, guard, has_register)
+                            .is_some()
+                    })
+                    .map_or(ControlChoice::Nonzero, ControlChoice::Fused),
+            })
+            .collect();
+        let policy = problem.policy(&controls, has_register);
+        if let Some(message) = completeness_error(problem, &policy) {
+            return Err(Unselected::Missing(message));
+        }
+        let cover = solve_cover(problem, &policy).map_err(|error| match error {
+            CoverError::Infeasible => Unselected::NoCover,
+            CoverError::Exhausted => Unselected::Exhausted,
+        })?;
+        let tiles: HashMap<Id, usize> = problem
+            .classes
+            .iter()
+            .zip(&cover)
+            .filter_map(|(&class, choice)| match choice {
+                PbqpIselAlternative::Tile { match_id } => Some((class, *match_id)),
+                _ => None,
+            })
+            .collect();
+        if order_tiles(&problem.matches, &tiles, |_| None).is_none() {
+            return Err(Unselected::Cyclic);
+        }
+        Ok(RegionAssignment { tiles, controls })
+    }
+
+    /// Choose an assignment for the frozen problem and plan every region from
+    /// it. The current selector's cover is the incumbent; a bounded search may
+    /// replace it with a strictly cheaper assignment the problem's own records
+    /// accept, or construct one where the cover found none.
+    fn select_and_plan(
+        &mut self,
+        context: &Context,
+        fs: &FunctionSelection,
+        problems: &[RegionProblem],
+    ) {
+        let mut reasons: Vec<Option<Unselected>> = Vec::with_capacity(problems.len());
+        let incumbent: Vec<Result<RegionAssignment, String>> = Self::with_registers(
+            fs,
+            problems,
+            |problem, has_register| {
+                let cover = self.incumbent(context, fs, problem, has_register);
+                reasons.push(cover.as_ref().err().cloned());
+                cover.map_err(|_| String::new())
+            },
+            |assignment| assignment,
+        );
+        let complete: Option<Vec<RegionAssignment>> = incumbent
+            .iter()
+            .map(|assignment| assignment.as_ref().ok().cloned())
+            .collect();
+        let valid =
+            |assignment: &[RegionAssignment]| self.validate(context, fs, problems, assignment);
+        let cost = |assignment: &[RegionAssignment]| -> u64 {
+            problems
+                .iter()
+                .zip(assignment)
+                .map(|(problem, assignment)| problem.cost(assignment))
+                .sum()
+        };
+        let complete = complete.filter(|assignment| valid(assignment));
+        let known = complete.as_deref().map(cost);
+        let accept = |assignment: Vec<RegionAssignment>| {
+            let assignment = Self::drop_unreached(fs, problems, assignment);
+            valid(&assignment).then_some(assignment)
+        };
+        let outcome = search::search(
+            problems,
+            &fs.demand.registers,
+            known,
+            &accept,
+            search::Budget::current(),
+        );
+        crate::memstats::selection_census(
+            problems.iter().map(|problem| problem.matches.len()).sum(),
+            known,
+            outcome.assignment.as_deref().map(cost).or(known),
+            outcome.status.name(),
+        );
+
+        // Without a complete assignment each region reports what the cover
+        // made of it. A proof that none exists and a search that ran out of
+        // budget are different answers.
+        let chosen: Vec<Result<RegionAssignment, String>> = match outcome.assignment.or(complete) {
+            Some(assignment) => assignment.into_iter().map(Ok).collect(),
+            None => incumbent
+                .into_iter()
+                .zip(problems)
+                .zip(reasons)
+                .map(|((cover, problem), reason)| match reason {
+                    Some(reason) => Err(reason.message(
+                        context,
+                        problem,
+                        outcome.status == search::Status::Infeasible,
+                    )),
+                    None => cover,
+                })
+                .collect(),
+        };
+        let mut chosen = chosen.into_iter();
+        let plans = Self::with_registers(
+            fs,
+            problems,
+            |problem, has_register| {
+                let assignment = chosen.next().expect("one assignment per region")?;
+                let plan = self.plan_region(context, fs, problem, &assignment, has_register)?;
+                Ok((assignment, plan))
+            },
+            |(assignment, _)| assignment,
+        );
+        for (problem, plan) in problems.iter().zip(plans) {
+            self.plans
+                .insert(problem.region, plan.map(|(_, plan)| plan));
+        }
+    }
+
+    /// Visit the regions ahead of the ones they enclose, giving each the
+    /// registers the assignments of the regions before it leave behind.
+    fn with_registers<T>(
+        fs: &FunctionSelection,
+        problems: &[RegionProblem],
+        mut visit: impl FnMut(&RegionProblem, HasRegister) -> Result<T, String>,
+        assignment: impl Fn(&T) -> &RegionAssignment,
+    ) -> Vec<Result<T, String>> {
+        let mut produced: HashSet<(Id, RegionId)> = fs.demand.registers.clone();
+        problems
+            .iter()
+            .map(|problem| {
+                let result = visit(problem, &|member, region| {
+                    produced.contains(&(member, region))
+                });
+                if let Ok(result) = &result {
+                    produced.extend(problem.registers(assignment(result)));
+                }
+                result
+            })
+            .collect()
+    }
+
+    /// A search answer without the instances no obligation reaches.
+    fn drop_unreached(
+        fs: &FunctionSelection,
+        problems: &[RegionProblem],
+        assignment: Vec<RegionAssignment>,
+    ) -> Vec<RegionAssignment> {
+        let mut assignments = assignment.into_iter();
+        Self::with_registers(
+            fs,
+            problems,
+            |problem, has_register| {
+                let mut assignment = assignments.next().expect("one assignment per region");
+                problem.drop_unreached(&mut assignment, has_register);
+                Ok(assignment)
+            },
+            |assignment| assignment,
+        )
+        .into_iter()
+        .flatten()
+        .collect()
+    }
+
+    /// Check a whole assignment against the problem's records, independently of
+    /// how it was found.
+    fn validate(
+        &self,
+        context: &Context,
+        fs: &FunctionSelection,
+        problems: &[RegionProblem],
+        assignment: &[RegionAssignment],
+    ) -> bool {
+        let mut assignments = assignment.iter();
+        let check = |problem: &RegionProblem, has_register: HasRegister| {
+            let assignment = assignments.next().expect("one assignment per region");
+            problem.validate(
+                assignment,
+                has_register,
+                &|control, guard| {
+                    let control = &problem.controls[control];
+                    self.resolve_guard(
+                        context,
+                        fs,
+                        problem,
+                        control,
+                        &control.fused[guard],
+                        has_register,
+                    )
+                    .is_some()
+                },
+                &|control| {
+                    let control = &problem.controls[control];
+                    fs.register_value(
+                        context,
+                        &problem
+                            .facts(problem.facts(control.condition).source)
+                            .binding_members,
+                        problem.region,
+                        control.at,
+                        true,
+                        has_register,
+                    )
+                    .is_some()
+                },
+            )?;
+            Ok(assignment)
+        };
+        Self::with_registers(fs, problems, check, |assignment| assignment)
+            .iter()
+            .all(Result::is_ok)
+    }
+
+    /// Turn a region's assignment into its emission plan: the selected
+    /// instances in an order their registers admit, the operands each reads,
+    /// the operations they replace, and the branch each control outcome takes.
+    fn plan_region(
+        &self,
+        context: &Context,
+        fs: &FunctionSelection,
+        problem: &RegionProblem,
+        assignment: &RegionAssignment,
+        has_register: HasRegister,
+    ) -> Result<RegionPlan, String> {
+        let region = problem.region;
+        let op_ids = &problem.order;
+        let matches = &problem.matches;
+        let root_match = &assignment.tiles;
+        let consumer = op_ids.last().copied();
+        let policy = problem.policy(&assignment.controls, has_register);
+        let register_value = |class: Id, at: Option<OpId>, pending: bool| {
+            fs.register_value(
+                context,
+                &problem.facts(class).binding_members,
+                region,
+                at,
+                pending,
+                has_register,
+            )
+        };
+
         let required_available: HashSet<Id> = root_match
             .values()
             .flat_map(|match_id| &matches[*match_id].bindings.pattern_nodes)
             .filter(|binding| binding.is_boundary && binding.demand == BoundaryDemand::Register)
-            .map(|binding| fs.egraph.find(binding.class))
+            .map(|binding| binding.class)
             .filter(|class| !root_match.contains_key(class))
             .collect();
-        let tiles = order_tiles(&fs.egraph, &matches, &root_match, |class| {
-            region_op_by_root
-                .get(&class)
-                .and_then(|op| op_ids.iter().position(|candidate| candidate == op))
+        let position: HashMap<OpId, usize> = op_ids
+            .iter()
+            .enumerate()
+            .map(|(position, &op)| (op, position))
+            .collect();
+        let tiles = order_tiles(matches, root_match, |class| {
+            problem
+                .source_op(class)
+                .and_then(|op| position.get(&op).copied())
         })
         .ok_or_else(|| format!("cyclic instruction cover for {region:?}"))?;
 
@@ -2497,10 +3033,7 @@ impl InstructionSelectPass {
         // access is rooted at: what a tile covering it must read and publish.
         // The order visits the earliest op of a class first, as `source_op` does.
         let mut state_by_class: HashMap<Id, Vec<StatePorts>> = HashMap::new();
-        for &op_id in &op_ids {
-            let Some(&root) = fs.op_root.get(&op_id) else {
-                continue;
-            };
+        for &(op_id, class) in &problem.op_class {
             let op = context.get_op(op_id);
             let Some(effects) = op
                 .clone()
@@ -2516,14 +3049,14 @@ impl InstructionSelectPass {
                 })
             });
             state_by_class
-                .entry(fs.egraph.find(root))
+                .entry(class)
                 .or_insert_with(|| states.collect());
         }
 
         let mut destinations = HashMap::new();
         let mut tile_results = HashMap::new();
         for &(class, _) in &tiles {
-            let source_op = region_op_by_root.get(&class).copied();
+            let source_op = problem.source_op(class);
             // A state result is a port, not a destination: the emitted
             // instruction takes it over as its own, so it is not one of the
             // registers a tile defines.
@@ -2531,10 +3064,9 @@ impl InstructionSelectPass {
                 .map(|op| context.get_op(op).value_results().to_vec())
                 .unwrap_or_default();
             let mut result_ty = results.first().map(|value| context.get_value(*value).ty());
-            if results.is_empty() && node::class_is_pure(&fs.egraph, class) {
-                let ty = class_width(context, &fs.egraph, class)
-                    .map(|width| tir::builtin::IntegerType::new(context, width))
-                    .unwrap_or_else(|| tir::builtin::IntegerType::new(context, 64));
+            let facts = problem.facts(class);
+            if results.is_empty() && facts.pure {
+                let ty = tir::builtin::IntegerType::new(context, facts.width.unwrap_or(64));
                 results.push(context.create_value(ty, None).id());
                 result_ty = Some(ty);
             }
@@ -2544,110 +3076,101 @@ impl InstructionSelectPass {
             tile_results.insert(class, (source_op, results, result_ty));
         }
 
-        let schedule = tiles
-            .into_iter()
-            .map(|(class, match_id)| {
-                let (source_op, results, result_ty) = tile_results.remove(&class).unwrap();
-                // A tile covering an access — at its root, or fused into it —
-                // carries that access's chain: the instruction reads the memory
-                // the IR said it does and publishes the state the IR named.
-                let mut states: Vec<StatePorts> = state_by_class
+        let mut schedule: Vec<ScheduledEmit> = Vec::new();
+        // Where the emission of each instance with several results sits.
+        let mut emissions: HashMap<usize, usize> = HashMap::new();
+        for (class, match_id) in tiles {
+            let matched = &matches[match_id];
+            let (source_op, results, result_ty) = tile_results.remove(&class).unwrap();
+            // A tile covering an access — at its root, or fused into it —
+            // carries that access's chain: the instruction reads the memory
+            // the IR said it does and publishes the state the IR named.
+            let mut states: Vec<StatePorts> =
+                state_by_class
                     .get(&class)
                     .into_iter()
                     .flatten()
                     .copied()
-                    .chain(
-                        matches[match_id]
-                            .bindings
-                            .pattern_nodes
-                            .iter()
-                            .filter(|binding| {
-                                !binding.is_boundary
-                                    && !binding.is_state
-                                    && binding.pattern_node != matches[match_id].pattern_root
-                                    && !node::class_is_pure(&fs.egraph, binding.class)
-                            })
-                            .flat_map(|binding| {
-                                state_by_class
-                                    .get(&fs.egraph.find(binding.class))
-                                    .into_iter()
-                                    .flatten()
-                                    .copied()
-                            }),
-                    )
+                    .chain(matched.effects.iter().flat_map(|effect| {
+                        state_by_class.get(effect).into_iter().flatten().copied()
+                    }))
                     .collect();
-                states.dedup_by_key(|state| (state.observed, state.published));
-                // State edges internal to one instruction disappear with the
-                // covered accesses. Keep only the instruction's external ports.
-                loop {
-                    let internal = states.iter().enumerate().find_map(|(index, state)| {
-                        let published = state.published?;
-                        states
-                            .iter()
-                            .any(|other| other.observed == published)
-                            .then_some((index, state.observed, published))
-                    });
-                    let Some((index, observed, published)) = internal else {
-                        break;
-                    };
-                    states.remove(index);
-                    for state in &mut states {
-                        if state.observed == published {
-                            state.observed = observed;
-                        }
+            states.dedup_by_key(|state| (state.observed, state.published));
+            // State edges internal to one instruction disappear with the
+            // covered accesses. Keep only the instruction's external ports.
+            loop {
+                let internal = states.iter().enumerate().find_map(|(index, state)| {
+                    let published = state.published?;
+                    states
+                        .iter()
+                        .any(|other| other.observed == published)
+                        .then_some((index, state.observed, published))
+                });
+                let Some((index, observed, published)) = internal else {
+                    break;
+                };
+                states.remove(index);
+                for state in &mut states {
+                    if state.observed == published {
+                        state.observed = observed;
                     }
                 }
-                let mut unique_states = HashSet::new();
-                states.retain(|state| unique_states.insert((state.observed, state.published)));
-                ScheduledEmit {
-                    rule_index: matches[match_id].rule_index,
-                    m: resolve_match(
-                        fs,
-                        context,
-                        region,
-                        source_op.or(consumer),
-                        &matches[match_id],
-                        &destinations,
-                    ),
-                    source_op,
-                    states,
-                    results,
-                    result_ty,
+            }
+            let mut unique_states = HashSet::new();
+            states.retain(|state| unique_states.insert((state.observed, state.published)));
+
+            // The instances rooted at the results of one emission bind the same
+            // operands, so the first to be scheduled emits for all of them and
+            // each later one names the result it reads.
+            let ports = self.rules[matched.rule_index].secondary.len() + 1;
+            let results = if ports > 1 && states.is_empty() {
+                if let Some(&emission) = emissions.get(&matched.instance) {
+                    schedule[emission].results[matched.port] = results.first().copied();
+                    continue;
                 }
-            })
-            .collect();
+                emissions.insert(matched.instance, schedule.len());
+                let mut all = vec![None; ports];
+                all[matched.port] = results.first().copied();
+                all
+            } else {
+                results.into_iter().map(Some).collect()
+            };
+            schedule.push(ScheduledEmit {
+                rule_index: matched.rule_index,
+                m: resolve_match(
+                    fs,
+                    context,
+                    problem,
+                    source_op.or(consumer),
+                    matched,
+                    &destinations,
+                    has_register,
+                ),
+                source_op,
+                states,
+                results,
+                result_ty,
+            });
+        }
 
         let mut value_remaps = Vec::new();
-        for &op in &op_ids {
-            if fs
-                .op_root
-                .get(&op)
-                .is_some_and(|root| node::is_identity_effect(&fs.egraph, *root))
-            {
-                let effects = context
-                    .get_op(op)
-                    .as_interface::<dyn tir::ResourceEffects>()
-                    .expect("an effect root has resource ports");
-                for effect in effects.resource_effects() {
-                    value_remaps.extend(effect.produced.into_iter().zip(effect.observed));
-                }
+        for &op in &problem.identities {
+            let effects = context
+                .get_op(op)
+                .as_interface::<dyn tir::ResourceEffects>()
+                .expect("an effect root has resource ports");
+            for effect in effects.resource_effects() {
+                value_remaps.extend(effect.produced.into_iter().zip(effect.observed));
             }
         }
         let mut remap_class_values = |class: Id, destination: ValueId| {
-            for member in fs.base_members(class) {
-                if let Some(values) = fs.class_values.get(&member) {
-                    value_remaps.extend(
-                        values
-                            .iter()
-                            .copied()
-                            .filter(|value| {
-                                *value != destination
-                                    && fs.value_region.get(value) == Some(&Some(region))
-                            })
-                            .map(|value| (value, destination)),
-                    );
-                }
-            }
+            value_remaps.extend(
+                fs.values(&problem.facts(class).members)
+                    .filter(|value| {
+                        *value != destination && fs.value_region.get(value) == Some(&Some(region))
+                    })
+                    .map(|value| (value, destination)),
+            );
         };
         for (&class, &destination) in &destinations {
             remap_class_values(class, destination);
@@ -2658,30 +3181,29 @@ impl InstructionSelectPass {
         // register is asked for where the values are read — before the region
         // reading them, where one does, so a name published by that very region
         // cannot be the answer.
-        for &class in &demanded {
+        for &class in &policy.demanded {
             if destinations.contains_key(&class) {
                 continue;
             }
-            let ask = fs.region_ask(region, class).or(consumer);
-            if let Some(destination) = fs.resolve_binding(context, class, region, ask, false).value
-            {
+            let ask = fs
+                .region_ask(region, &problem.facts(class).members)
+                .or(consumer);
+            if let Some(destination) = register_value(class, ask, false) {
                 remap_class_values(class, destination);
             }
         }
-        for &op in &op_ids {
-            let Some(class) = fs.op_root.get(&op).map(|class| fs.egraph.find(*class)) else {
-                continue;
-            };
+        for &(op, class) in &problem.op_class {
             // A view the extraction tiled in its own right already defines the
             // op's result; only an untiled view forwards its source's register.
-            if !is_low_extract_view(&fs.egraph, class) || destinations.contains_key(&class) {
+            let source = problem.facts(class).source;
+            if source == class || destinations.contains_key(&class) {
                 continue;
             }
-            let class = chase_low_extract(&fs.egraph, class);
-            if let Some(source) = destinations.get(&class).copied().or_else(|| {
-                fs.resolve_binding(context, class, region, consumer, false)
-                    .value
-            }) {
+            if let Some(source) = destinations
+                .get(&source)
+                .copied()
+                .or_else(|| register_value(source, consumer, false))
+            {
                 value_remaps.extend(
                     context
                         .get_op(op)
@@ -2692,51 +3214,61 @@ impl InstructionSelectPass {
                 );
             }
         }
-        let erase_ops = op_ids
+        let erase_ops = problem
+            .op_class
             .iter()
-            .copied()
-            .filter(|op| fs.op_root.contains_key(op))
-            .filter(|op| {
-                fs.op_root.get(op).is_none_or(|class| {
-                    let class = fs.egraph.find(*class);
-                    !required_available.contains(&class)
-                })
-            })
+            .filter(|(_, class)| !required_available.contains(class))
+            .map(|(op, _)| *op)
             .collect();
 
-        let aux_class: HashMap<(OpId, ControlSlot), Id> = fs
-            .region_aux
-            .get(&region)
-            .into_iter()
-            .flatten()
-            .map(|&(op, slot, class)| ((op, slot), chase_low_extract(&fs.egraph, class)))
-            .collect();
-        let resolve_class = |class: Id, at: Option<OpId>| {
-            destinations
-                .get(&class)
-                .copied()
-                .or_else(|| fs.resolve_binding(context, class, region, at, true).value)
-        };
-        let aux = aux_branches
-            .into_iter()
-            .filter_map(|(op, slot, selected)| {
-                let branch = match selected {
-                    Some(emit) => emit,
-                    None => {
-                        // A materialized condition is read after its definition.
-                        // Gamma reads at its consumer; Theta reads at the end of
-                        // its body, which may itself produce the condition.
-                        let at = (fs.scopes.op_region.get(&op) == Some(&region)).then_some(op);
-                        let condition = resolve_class(*aux_class.get(&(op, slot))?, at)?;
-                        AuxEmit::Branch(GuardBranch::Nonzero { condition })
-                    }
-                };
-                Some((op, slot, branch))
-            })
-            .collect();
+        let mut aux = Vec::new();
+        for (control, choice) in problem.controls.iter().zip(&assignment.controls) {
+            let resolve =
+                |guard| self.resolve_guard(context, fs, problem, control, guard, has_register);
+            let emit = match *choice {
+                ControlChoice::Decided(holds) => AuxEmit::Decided(holds),
+                ControlChoice::Fused(index) => {
+                    let guard = resolve(&control.fused[index]).ok_or_else(|| {
+                        format!("{region:?}: a selected branch cannot read its operands")
+                    })?;
+                    let inverse = control
+                        .inverses
+                        .iter()
+                        .find_map(resolve)
+                        .filter(|inverse| {
+                            inverse
+                                .boundaries
+                                .iter()
+                                .all(|class| guard.boundaries.contains(class))
+                                && inverse
+                                    .m
+                                    .values()
+                                    .all(|value| guard.m.values().any(|original| original == value))
+                        })
+                        .map(|inverse| (inverse.rule_index, inverse.m));
+                    AuxEmit::Branch(GuardBranch::Fused {
+                        rule_index: guard.rule_index,
+                        m: guard.m,
+                        inverse,
+                    })
+                }
+                ControlChoice::Nonzero => {
+                    let class = problem.facts(control.condition).source;
+                    let Some(condition) = destinations
+                        .get(&class)
+                        .copied()
+                        .or_else(|| register_value(class, control.at, true))
+                    else {
+                        continue;
+                    };
+                    AuxEmit::Branch(GuardBranch::Nonzero { condition })
+                }
+            };
+            aux.push((control.op, control.slot, emit));
+        }
 
         Ok(RegionPlan {
-            order: op_ids,
+            order: op_ids.clone(),
             schedule,
             erase_ops,
             value_remaps,
@@ -2773,142 +3305,6 @@ impl InstructionSelectPass {
             }
         }
         hits
-    }
-
-    /// The best conditional-branch rule among a guard's condition-class hits.
-    /// `None` when none matches or an operand is unresolvable in the branching
-    /// region.
-    ///
-    /// `region` holds the branch and `consumer` is the operation its operands
-    /// resolve against — the region's end. The taken target is bound to a
-    /// placeholder: the destruction mints the block and rebinds it when it
-    /// emits.
-    fn best_guard_branch(
-        &self,
-        context: &Context,
-        fs: &FunctionSelection,
-        region: RegionId,
-        consumer: Option<OpId>,
-        candidates: &[(usize, IselMatch)],
-    ) -> Option<FusedGuard> {
-        let mut best: Option<(u64, usize, FusedGuard)> = None;
-        let mut register_symbols_by_pattern: HashMap<usize, HashSet<u32>> = HashMap::new();
-        for (pattern_index, m) in candidates {
-            let compiled = &self.compiled_patterns[*pattern_index];
-            let RuleKind::CondBranch { target_symbol } = self.rules[compiled.rule_index].kind
-            else {
-                continue;
-            };
-            // Branch emission publishes no resource state. An effectful
-            // predicate operand must therefore be selected as ordinary data,
-            // not recomputed inside the branch pattern.
-            if compiled.node_meta.iter().enumerate().any(|(index, meta)| {
-                !meta.boundary_like()
-                    && !meta.duplicable
-                    && !meta.is_state
-                    && m.bindings[index]
-                        .is_some_and(|class| !node::class_is_pure(&fs.egraph, class))
-            }) {
-                continue;
-            }
-
-            let register_symbols = register_symbols_by_pattern
-                .entry(*pattern_index)
-                .or_insert_with(|| compiled.register_symbols());
-
-            let mut captures = CaptureBindings::new();
-            for &node in &compiled.captures {
-                let symbol = compiled.nodes[node as usize]
-                    .symbol()
-                    .expect("a capture names an operand");
-                if compiled.is_state_symbol(symbol) {
-                    continue;
-                }
-                let class = CompiledIselPattern::binding(m, node as usize);
-                captures.bind(symbol, fs.egraph.find(class));
-            }
-
-            // Every operand must resolve in the region. An immediate binds a
-            // register value only when this pattern also reads that symbol as
-            // a register. An optional value spelling of an immediate may name
-            // a constant that selection never materializes. A class with only a register value binds
-            // under the scope rule and joins the materialization set. An
-            // unresolvable boundary disqualifies.
-            let mut boundary_classes = Vec::new();
-            let mut int_bindings = Vec::new();
-            let mut value_bindings = Vec::new();
-            let mut resolvable = true;
-            // A register operand may read a bare constant only when another use
-            // already forces that constant to be materialized, and only through
-            // the value naming the register it lands in: the emitter binds
-            // values, and a class the region materializes after the gate has
-            // none to bind where the branch reads.
-            for (symbol, class) in &captures.entries {
-                // Prefer a surviving/available value; bind a same-region pending
-                // tile only when none exists — then the overlay demand forces
-                // that tile (the class cannot be available, so NotDemanded is
-                // never offered) and the bound value is defined.
-                let mut binding = fs.resolve_binding(context, *class, region, consumer, false);
-                if binding.value.is_none() {
-                    binding = fs.resolve_binding(context, *class, region, consumer, true);
-                }
-                match binding.int {
-                    Some(v) => {
-                        if register_symbols.contains(symbol)
-                            && !(binding.value.is_some()
-                                && (fs.available_at(context, *class, region)
-                                    || fs.placed_at(*class, region)))
-                        {
-                            resolvable = false;
-                            break;
-                        }
-                        int_bindings.push((*symbol, v));
-                        if register_symbols.contains(symbol)
-                            && let Some(reg) = binding.value
-                        {
-                            value_bindings.push((*symbol, reg));
-                        }
-                    }
-                    None => match binding.value {
-                        Some(reg) => {
-                            value_bindings.push((*symbol, reg));
-                            boundary_classes.push(*class);
-                        }
-                        None => {
-                            resolvable = false;
-                            break;
-                        }
-                    },
-                }
-            }
-            if !resolvable {
-                continue;
-            }
-
-            let cost = self.rules[compiled.rule_index].base_cost as u64;
-            let specificity = compiled.specificity;
-            let better = match &best {
-                None => true,
-                Some((best_cost, best_specificity, ..)) => {
-                    (cost, std::cmp::Reverse(specificity))
-                        < (*best_cost, std::cmp::Reverse(*best_specificity))
-                }
-            };
-            if better {
-                let m = RuleMatch::new(int_bindings, value_bindings)
-                    .with_block_binding(target_symbol, BlockId::PLACEHOLDER);
-                best = Some((
-                    cost,
-                    specificity,
-                    FusedGuard {
-                        rule_index: compiled.rule_index,
-                        m,
-                        boundaries: boundary_classes,
-                    },
-                ));
-            }
-        }
-        best.map(|(_, _, guard)| guard)
     }
 
     /// Every value match the cover can reach from what the region computes, and
@@ -2948,7 +3344,8 @@ impl InstructionSelectPass {
                 value_matches,
                 class,
             );
-            prune_dominated_matches(&self.specificity, &mut at_class);
+            let width = node::class_register_width(context, &fs.egraph, class, fs.pointer_width);
+            prune_dominated_matches(&self.specificity, width, &mut at_class);
             for matched in &at_class {
                 for binding in &matched.bindings.pattern_nodes {
                     if binding.is_state {
@@ -2991,7 +3388,7 @@ impl InstructionSelectPass {
             let rule = &self.rules[compiled.rule_index];
             let pattern_root = Id::from_raw(compiled.root() as u32);
             let root = fs.egraph.find(m.root);
-            if compiled.is_copy() && fs.has_values(m.bindings[pattern_root.index()]) {
+            if compiled.is_copy() && fs.class_has_values(m.bindings[pattern_root.index()]) {
                 continue;
             }
             let region_op = region_op_by_root.get(&root).copied();
@@ -3103,6 +3500,18 @@ impl InstructionSelectPass {
                     }
                 })
                 .collect();
+            // An instruction that reads or writes memory takes over the chain
+            // of an access the match covers. A match covering none would
+            // perform an effect the program does not have.
+            if rule.emit.iter().any(Emitter::accesses_memory)
+                && pattern_nodes.iter().all(|binding| {
+                    binding.is_boundary
+                        || binding.is_state
+                        || node::class_is_pure(&fs.egraph, binding.class)
+                })
+            {
+                continue;
+            }
             // Contracting an effect into this tile must not also contract a
             // dependency of one of its register inputs. That would make the
             // instruction depend on its own state publication, for example a
@@ -3127,14 +3536,20 @@ impl InstructionSelectPass {
                             .get(&boundary.class)
                             .copied()
                             .or_else(|| {
-                                fs.resolve_binding(
+                                // An enclosing region's operation never depends
+                                // on one of this region's, so the registers the
+                                // demand policy places are all that matter here.
+                                fs.register_value(
                                     context,
-                                    boundary.class,
+                                    &fs.class_facts(context, boundary.class, region)
+                                        .binding_members,
                                     region,
                                     region_op,
                                     false,
+                                    &|member, region| {
+                                        fs.demand.registers.contains(&(member, region))
+                                    },
                                 )
-                                .value
                                 .and_then(|value| context.get_value(value).defining_op())
                             })
                             .is_some_and(|provider| fs.scopes.depends_on(provider, interior))
@@ -3164,7 +3579,7 @@ impl InstructionSelectPass {
                 .result_register
                 .map_or(0, |requirement| requirement.view_offset());
             let result_width = rule.result_register.map(|requirement| requirement.width());
-            if result_view_offset != 0 && fs.has_values(root) {
+            if result_view_offset != 0 && fs.class_has_values(root) {
                 continue;
             }
 
@@ -3174,56 +3589,27 @@ impl InstructionSelectPass {
             };
 
             let cost = rule.base_cost as u64;
-            matches.push(PbqpIselMatch {
-                pattern_index,
-                rule_index: compiled.rule_index,
-                root,
-                pattern_root,
-                bindings,
-                cost,
-                result_view_offset,
-                result_width,
-            });
+            matches.push(
+                PbqpIselMatch {
+                    pattern_index,
+                    rule_index: compiled.rule_index,
+                    port: compiled.port,
+                    instance: 0,
+                    root,
+                    pattern_root,
+                    bindings,
+                    cost,
+                    result_view_offset,
+                    result_width,
+                    uses: Vec::new(),
+                    covers: Vec::new(),
+                    effects: Vec::new(),
+                }
+                .with_demands(|class| node::class_is_pure(&fs.egraph, class)),
+            );
         }
         matches
     }
-}
-
-/// Direct recovery controls fused into a selected branch may remain untiled.
-fn fused_control_classes(
-    fs: &FunctionSelection,
-    region: RegionId,
-    aux_branches: &[(OpId, ControlSlot, Option<AuxEmit>)],
-    recovery: Option<&RecoveryPlan>,
-) -> HashSet<Id> {
-    let mut fused = HashSet::new();
-    for (op, slot, selected) in aux_branches {
-        if !matches!(selected, Some(AuxEmit::Branch(GuardBranch::Fused { .. }))) {
-            continue;
-        }
-        let ControlSlot { id, .. } = slot;
-        let Some(definition) = recovery.and_then(|plan| plan.definition(*id)) else {
-            continue;
-        };
-        if !matches!(definition.kind, ControlKind::Direct) {
-            continue;
-        }
-        if let Some(entry) = fs
-            .region_aux
-            .get(&region)
-            .into_iter()
-            .flatten()
-            .find(|(o, s, _)| o == op && s == slot)
-        {
-            fused.insert(chase_low_extract(&fs.egraph, entry.2));
-        }
-        if let Some(producer) = definition.producer
-            && let Some(root) = fs.op_root.get(&producer)
-        {
-            fused.insert(chase_low_extract(&fs.egraph, fs.egraph.find(*root)));
-        }
-    }
-    fused
 }
 
 /// The assumption each region of a structured operation is entered under:

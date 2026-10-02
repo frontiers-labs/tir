@@ -219,15 +219,15 @@ register here.
 The cheapest match for one result may make another result impossible to
 produce. Choosing each instruction independently would miss that conflict.
 
-TIR expresses these choices as a Partitioned Boolean Quadratic Programming
-problem, or PBQP. For instruction selection, the useful idea is a set of
-choices with costs and compatibility constraints. Each relevant e-class has
-alternatives that can produce its value. When no instruction is needed for an
-e-class, the problem can include a choice that emits nothing.
-
-A selected instruction can require another choice to supply a register input.
-An immediate operand can avoid that requirement because the instruction carries
-the value itself. Incompatible pairs receive a prohibitive cost.
+TIR records the choices of a whole function before it makes any of them. For
+every region the record holds the candidate instructions, called instances,
+and what each one demands of the values it binds: a register at a given width
+and view, a constant to encode, or an effect it performs itself. It also holds
+the registers that exist without an instance, the effects that must run, and
+every way each branch test can be realized. Matching runs under the facts of
+the region it visits, so each region is recorded before its facts are dropped.
+Nothing in the record changes once the last region is written, and nothing in
+it names a solver.
 
 ```mermaid
 flowchart TD
@@ -238,6 +238,45 @@ flowchart TD
 	R --> K["Require 5 in a register"]
 	K --> P["Select instructions that produce 5"]
 ```
+
+Two solvers read the record. A Partitioned Boolean Quadratic Programming
+heuristic, or PBQP, builds the first assignment. Each relevant e-class is a
+node whose alternatives produce its value, emit nothing, or leave the value to
+an instruction that performs it; incompatible pairs receive a prohibitive
+cost. The heuristic is exact on sparse problems and takes the first feasible
+choice on dense ones. It backs out of a bounded number of failed choices and
+then gives up.
+
+The second solver is a bounded search. The record becomes one Boolean and
+bit-vector formula: a variable per instance and per branch realization, the
+legality of every input, one owner per effect, a strictly increasing rank
+along every selected register dependency, and the summed cost. The in-tree
+bit-blaster and SAT solver answer whether an assignment cheaper than the best
+known one exists. The rank is what rejects instances that read each other's
+registers in a cycle, however long the cycle.
+
+A solver's answer is a proposal. Each assignment is checked against the record
+by code that knows nothing of how it was found, and one that fails is excluded
+from the next query. The PBQP assignment is the incumbent. The search replaces
+it only with a strictly cheaper assignment that passed the check, and it
+constructs an assignment where PBQP found none or gave up. Instances no
+obligation reaches are dropped from a search answer before it is used.
+
+Looking for a cheaper assignment costs far more than the cover, so it runs
+only when `TIR_ISEL_SEARCH` is set. Constructing a missing assignment always
+runs. With `TIR_MEM_STATS` set, each function reports the size of its problem,
+the cost of the incumbent and of the best assignment, and how the search ended:
+
+| Status | Meaning |
+|---|---|
+| `optimal` | No assignment of the recorded problem is cheaper. |
+| `feasible` | An assignment was constructed. A cheaper one may exist. |
+| `infeasible` | The recorded problem has no assignment. |
+| `exhausted` | The budget ended first. |
+| `skipped` | The incumbent was kept without a search. |
+
+A status speaks for the recorded instances and the additive cost only. A
+missing instance is a gap in the rules or axioms, and no status reports it.
 
 The chosen set is a cover of the demanded computations. A demanded computation
 is one whose result or effect the emitted program must preserve. Internal
@@ -274,6 +313,18 @@ x86-64 keeps its 8-bit `shr`, and RISC-V shifts the extended value with `srlw`.
 Several uses can share a computed value. Selection must account for those uses
 when it decides whether to keep the value in a register or compute it within a
 consumer's instruction.
+
+One emission can define several values. x86 division leaves the quotient in one
+register and the remainder in another. A rule lists the semantics of each
+result, and an instance is rooted at each result the program computes.
+Instances of one rule over the same operands are the results of one emission:
+the instructions are emitted once and their cost is counted once. A result
+nothing reads is a clobbered register.
+
+An instruction that reads or writes memory takes over the state chain of an
+access its match covers. A match that covers no access is not a candidate for
+such an instruction, because selecting it would perform an effect the program
+does not have.
 
 An effect can execute as its own tile or inside a selected tile that owns it.
 The latter choice requires that exact owner and does not provide a register for
@@ -331,6 +382,10 @@ Conditional branches also have their own selection step. A control-recovery
 plan identifies their predicates before source operations are replaced. When
 a predicate can directly own its continuation and a branch instruction can
 test its comparison, the selector can combine the comparison and branch.
+Every branch instruction matching a test is recorded, with a branch on the
+materialized condition as the remaining alternative. The cover fuses each test
+into the cheapest branch whose operands it can name. The search weighs each
+alternative together with the instructions that produce its operands.
 The plan assigns a stable identity and an outcome partition to each predicate
 definition. A predicate returned by a Gamma arm is selected in that arm, before
 its outcome crosses the region boundary. Structural consumers route these
@@ -413,6 +468,11 @@ not acquire that guarantee from the symbol-address hook.
 
 Selection planning and emission run in a fork of the current context. Emitters
 construct machine operations there and connect their results to consumers.
+A rule's emission plan lists its machine instructions in the order they run.
+Every instruction but the last defines only machine state the next one reads,
+such as the flags a compare sets for its branch. TMDL derives such rules by
+composing the instructions' semantics, and the plan names each instruction's
+own table.
 Covered computations give way to the selected instructions, with effect
 dependencies preserved. The source context remains available if the candidate
 is rejected.

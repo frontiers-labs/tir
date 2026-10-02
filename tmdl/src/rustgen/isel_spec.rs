@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
 // Table-driven isel rule emission: every rule site lowers to a static
-// `RuleSpec` plus a static `EmitSpec` with a shim, interpreted by
-// `tir::backend::isel::build_rules` / `emit_with`.
+// `RuleSpec` whose emission plan names one static `EmitSpec` per emitted
+// instruction, interpreted by `tir::backend::isel::build_rules`.
 
 /// `&[Feature::A as u16, ...]` for a rule's availability set.
 fn feature_id_slice(for_isas: &[String]) -> proc_macro2::TokenStream {
@@ -126,8 +126,8 @@ fn emit_attr_int_or_value(name: &str, symbol: u32) -> proc_macro2::TokenStream {
     }
 }
 
-/// The `static EMIT_*` table plus the `emit_isel_*` shim fn for one emitter.
-/// Returns `(tokens, shim_fn_ident)`.
+/// The `static EMIT_*` table for one emitted instruction. Returns
+/// `(tokens, spec_ident)`.
 fn emit_emitter_spec(
     rule_key: &str,
     dialect: &str,
@@ -137,7 +137,6 @@ fn emit_emitter_spec(
     inst_name: &str,
 ) -> (proc_macro2::TokenStream, proc_macro2::Ident) {
     let spec_ident = format_ident!("EMIT_{}", rule_key.to_uppercase());
-    let shim_ident = format_ident!("emit_isel_{}", rule_key);
     let dialect_lit = proc_macro2::Literal::string(dialect);
     let op_name_lit = proc_macro2::Literal::string(op_name);
     let info = info_ident(inst_name);
@@ -148,16 +147,8 @@ fn emit_emitter_spec(
             attrs: &[#(#attrs),*],
             info: &#info,
         };
-
-        fn #shim_ident(
-            context: &tir::Context,
-            req: &tir::backend::isel::EmitRequest,
-            m: &tir::backend::isel::RuleMatch,
-        ) -> Result<Box<dyn tir::Operation>, tir::PassError> {
-            tir::backend::isel::emit_with(context, req, m, &#spec_ident)
-        }
     };
-    (tokens, shim_ident)
+    (tokens, spec_ident)
 }
 
 /// One `RegOperandSpec` entry.
@@ -315,10 +306,9 @@ fn emit_rule_spec(
     rule_name: &str,
     for_isas: &[String],
     pattern: &SpecPattern,
-    emits: &[&str],
+    secondary: &[SpecPattern],
     kind: proc_macro2::TokenStream,
-    prelude_shim: Option<&proc_macro2::Ident>,
-    emit_shim: &proc_macro2::Ident,
+    plan: &[&proc_macro2::Ident],
     constraints: &[proc_macro2::TokenStream],
     registers: &[proc_macro2::TokenStream],
     result: Option<proc_macro2::TokenStream>,
@@ -330,11 +320,7 @@ fn emit_rule_spec(
     let rule_name_lit = proc_macro2::Literal::string(rule_name);
     let features = feature_id_slice(for_isas);
     let pattern_ts = pattern_ref_tokens(pattern);
-    let emit_infos: Vec<proc_macro2::Ident> = emits.iter().map(|inst| info_ident(inst)).collect();
-    let prelude_ts = match prelude_shim {
-        Some(ident) => quote! { Some(#ident) },
-        None => quote! { None },
-    };
+    let secondary_ts = secondary.iter().map(pattern_ref_tokens);
     let result_ts = match result {
         Some(r) => quote! { Some(#r) },
         None => quote! { None },
@@ -359,10 +345,9 @@ fn emit_rule_spec(
             name: #rule_name_lit,
             features: #features,
             pattern: #pattern_ts,
-            emits: &[#(&#emit_infos),*],
+            secondary: &[#(#secondary_ts),*],
             kind: #kind,
-            prelude_emit: #prelude_ts,
-            emit_fn: #emit_shim,
+            plan: &[#(&#plan),*],
             constraints: &[#(#constraints),*],
             registers: &[#(#registers),*],
             result: #result_ts,

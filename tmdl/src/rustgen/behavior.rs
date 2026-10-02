@@ -518,7 +518,7 @@ fn emit_cond_branch_rule(
         constraints,
     ));
 
-    let (emitter_ts, emit_shim) = emit_emitter_spec(
+    let (emitter_ts, emit_spec) = emit_emitter_spec(
         rule_name,
         dialect,
         op_name,
@@ -532,14 +532,13 @@ fn emit_cond_branch_rule(
         rule_name,
         for_isas,
         &pattern_spec,
-        &[inst_name],
+        &[],
         quote! {
             tir::backend::isel::RuleKind::CondBranch {
                 target_symbol: #target_symbol_lit,
             }
         },
-        None,
-        &emit_shim,
+        &[&emit_spec],
         &operand_constraint_entries,
         &operand_register_specs,
         None,

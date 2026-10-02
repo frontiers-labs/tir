@@ -367,7 +367,12 @@ pub struct PbqpSolution {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PbqpSolveError {
-    Infeasible { node: PbqpNodeId },
+    Infeasible {
+        node: PbqpNodeId,
+    },
+    /// A bounded solve backed out of its allowed number of heuristic choices.
+    /// The problem may still have a solution.
+    Exhausted,
     InvalidProblem(String),
 }
 
@@ -426,6 +431,18 @@ pub fn solve(problem: &PbqpProblem) -> Result<PbqpSolution, PbqpSolveError> {
     Solver::new(problem).solve()
 }
 
+/// [`solve`], giving up with [`PbqpSolveError::Exhausted`] once `backtracks`
+/// heuristic choices proved infeasible. The search behind those choices is
+/// exponential in the worst case; exact reductions are never bounded.
+pub fn solve_within(
+    problem: &PbqpProblem,
+    backtracks: u64,
+) -> Result<PbqpSolution, PbqpSolveError> {
+    let mut solver = Solver::new(problem);
+    solver.backtracks = Some(backtracks);
+    solver.solve()
+}
+
 /// A solve mutates node costs and edges, so it works on copies of those; the
 /// interned matrices are read straight out of the problem and the ones a
 /// reduction mints land in `scratch`, whose ids continue the problem's.
@@ -442,6 +459,8 @@ struct Solver<'a> {
     infeasible: BTreeSet<usize>,
     recording_undo: bool,
     undo: Vec<Undo>,
+    /// The infeasible heuristic choices a bounded solve may still back out of.
+    backtracks: Option<u64>,
 }
 
 impl<'a> Solver<'a> {
@@ -474,6 +493,7 @@ impl<'a> Solver<'a> {
             infeasible,
             recording_undo: false,
             undo: Vec::new(),
+            backtracks: None,
         }
     }
 
@@ -852,13 +872,16 @@ impl<'a> Solver<'a> {
         let checkpoint = self.checkpoint();
         for alternative in alternatives {
             self.rollback(checkpoint);
-            if let Err(PbqpSolveError::Infeasible { .. }) = self.reduce_rn(node, alternative) {
-                continue;
-            }
-            match self.solve_prepared() {
-                Ok(solution) => return Ok(solution),
-                Err(PbqpSolveError::Infeasible { .. }) => {}
-                Err(error) => return Err(error),
+            let infeasible = match self.reduce_rn(node, alternative) {
+                Err(PbqpSolveError::Infeasible { .. }) => true,
+                _ => match self.solve_prepared() {
+                    Ok(solution) => return Ok(solution),
+                    Err(PbqpSolveError::Infeasible { .. }) => true,
+                    Err(error) => return Err(error),
+                },
+            };
+            if infeasible && let Some(left) = &mut self.backtracks {
+                *left = left.checked_sub(1).ok_or(PbqpSolveError::Exhausted)?;
             }
         }
         self.rollback(checkpoint);

@@ -1,13 +1,13 @@
 use std::collections::{HashMap, HashSet};
 
-use tir::{Context, OpId, RegionId, TypeId, ValueId, sem::egraph::class_int_binding};
+use tir::{Context, OpId, TypeId, ValueId};
 use tir_relational::ClassId as Id;
 
 use super::{
     FunctionSelection, RuleMatch,
     builder::ControlSlot,
     cover::{BoundaryDemand, PbqpIselMatch},
-    node::chase_low_extract,
+    problem::{HasRegister, RegionProblem},
 };
 
 #[derive(Clone, Debug, Default)]
@@ -39,7 +39,8 @@ pub(crate) struct ScheduledEmit {
     pub(crate) source_op: Option<OpId>,
     /// The resource state ports of the operations this tile covers.
     pub(crate) states: Vec<super::StatePorts>,
-    pub(crate) results: Vec<ValueId>,
+    /// The value each result stands for; `None` for one nothing reads.
+    pub(crate) results: Vec<Option<ValueId>>,
     pub(crate) result_ty: Option<TypeId>,
 }
 
@@ -61,14 +62,14 @@ pub(crate) enum GuardBranch {
 /// The order the cover's tiles are emitted in: a topological order of the
 /// registers they pass each other, ties broken by `rank` — the place of the
 /// operation each tile is rooted at, and `None` for one this block roots at no
-/// operation of its own, which is a pure value and goes first.
+/// operation of its own, which is a pure value and goes first. `None` when the
+/// tiles read each other's registers in a cycle.
 ///
 /// This is a reference order, not the block's: commit merges the surviving
 /// operations into it and derives the block's own order from the whole
 /// dependence graph. What it has to be is an order the values admit, because
 /// anti- and output edges are read off it.
 pub(crate) fn order_tiles(
-    egraph: &super::SemEGraph,
     matches: &[PbqpIselMatch],
     selected: &HashMap<Id, usize>,
     rank: impl Fn(Id) -> Option<usize>,
@@ -76,7 +77,7 @@ pub(crate) fn order_tiles(
     let mut dependencies: HashMap<Id, HashSet<Id>> = HashMap::new();
     for (&class, &match_id) in selected {
         for binding in &matches[match_id].bindings.pattern_nodes {
-            let child = egraph.find(binding.class);
+            let child = binding.class;
             if child != class
                 && binding.is_boundary
                 && binding.demand == BoundaryDemand::Register
@@ -105,32 +106,41 @@ pub(crate) fn order_tiles(
     Some(order)
 }
 
+/// Bind a selected match's operands: the constant a class is proven to be,
+/// and the register holding it — one a tile of this region defines, or one
+/// that already exists where `consumer` reads it.
 pub(crate) fn resolve_match(
     fs: &FunctionSelection,
     context: &Context,
-    region: RegionId,
+    problem: &RegionProblem,
     consumer: Option<OpId>,
     matched: &PbqpIselMatch,
     destinations: &HashMap<Id, ValueId>,
+    has_register: HasRegister,
 ) -> RuleMatch {
     let mut ints = Vec::new();
     let mut values = Vec::new();
     for (symbol, class) in &matched.bindings.captures.entries {
-        let class = fs.egraph.find(*class);
-        if let Some(value) = class_int_binding(&fs.egraph, class) {
-            ints.push((*symbol, value));
+        let facts = problem.facts(*class);
+        if let Some(value) = &facts.int {
+            ints.push((*symbol, value.clone()));
         }
         // A low-extract capture reads its chased source's register, which may
         // be defined by a tile scheduled in this region, unless the view was
         // tiled in its own right.
-        let chased = chase_low_extract(&fs.egraph, class);
         if let Some(value) = destinations
-            .get(&class)
-            .or_else(|| destinations.get(&chased))
+            .get(class)
+            .or_else(|| destinations.get(&facts.source))
             .copied()
             .or_else(|| {
-                fs.resolve_binding(context, class, region, consumer, false)
-                    .value
+                fs.register_value(
+                    context,
+                    &facts.binding_members,
+                    problem.region,
+                    consumer,
+                    false,
+                    has_register,
+                )
             })
         {
             values.push((*symbol, value));

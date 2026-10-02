@@ -40,6 +40,8 @@ impl PatternNode {
 /// written as, and the per-node metadata the cover consults.
 pub(crate) struct CompiledIselPattern {
     pub(crate) rule_index: usize,
+    /// Which of the rule's results the pattern is the semantics of.
+    pub(crate) port: usize,
     /// One entry per pattern node; a match binds one class variable per entry.
     pub(crate) nodes: Vec<PatternNode>,
     root: u32,
@@ -316,6 +318,7 @@ enum Shared {
 
 pub(crate) fn compile_isel_pattern(
     rule_index: usize,
+    port: usize,
     expr: &SemGraph,
     operand_constraints: &[(u32, OperandConstraint)],
     operand_registers: &[(u32, RegisterRequirement)],
@@ -376,6 +379,7 @@ pub(crate) fn compile_isel_pattern(
 
     Some(CompiledIselPattern {
         rule_index,
+        port,
         nodes,
         root: pattern_root.0,
         plan,

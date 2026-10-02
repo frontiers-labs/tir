@@ -199,6 +199,21 @@ pub fn pbqp_census(label: &str, nodes: usize, edges: usize, matrix_bytes: usize)
     );
 }
 
+/// The size of a function's frozen selection problem and how the search over
+/// it ended: the incumbent's model cost, the best validated one, and whether
+/// that is optimal for the problem or only what the budget reached.
+pub fn selection_census(instances: usize, incumbent: Option<u64>, best: Option<u64>, status: &str) {
+    if !enabled() {
+        return;
+    }
+    let cost = |cost: Option<u64>| cost.map_or_else(|| "none".to_string(), |cost| cost.to_string());
+    eprintln!(
+        "tir-mem: selection instances={instances} incumbent={} best={} status={status}",
+        cost(incumbent),
+        cost(best)
+    );
+}
+
 /// Process peak and the per-pass peak deltas, worst first.
 pub fn summary() {
     if !enabled() {

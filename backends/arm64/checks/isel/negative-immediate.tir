@@ -1,0 +1,16 @@
+// RUN: tir mc --march=arm64 --stage=isel %s | filecheck %s --implicit-check-not=store
+
+// A post-indexed store also writes `base + offset` back to its base register.
+// That sum alone covers no access, so the arithmetic must not select the store.
+module {
+  %f = func.func @negative_offset(%a: !i64) -> !i64 {
+    %offset = constant {value = -8} : !i64
+    %result = addi %a, %offset : !i64
+    func.return %result
+  }
+  module_end
+}
+
+// CHECK: asm.symbol {name = "negative_offset"
+// CHECK: arm64.add
+// CHECK: asm.vret

@@ -73,7 +73,8 @@ pub(crate) struct MachineEdges<'a> {
     pub(crate) domains: &'a HashMap<OpId, DemandDomainId>,
     pub(crate) literals: &'a HashSet<OpId>,
     /// The operations each instruction runs after besides those defining its
-    /// operands: a rule's prelude, a call's tuple extractions.
+    /// operands: the instruction before it in a rule's plan, a call's tuple
+    /// extractions.
     pub(crate) implicit: &'a HashMap<OpId, Vec<OpId>>,
     pub(crate) rules: &'a [Rule],
 }
@@ -177,10 +178,9 @@ impl MachineEdges<'_> {
                     result_ty: None,
                     states: &[],
                 };
-                if let Some(prelude) = rule.prelude_emit {
-                    holder.append(prelude(self.context, &request, &m)?.id());
+                for emitter in &rule.emit {
+                    holder.append(emitter.emit(self.context, &request, &m)?.0);
                 }
-                holder.append((rule.emit_fn)(self.context, &request, &m)?.id());
             }
         }
         self.emit_jump(block, fallthrough.dest, &fallthrough_args);

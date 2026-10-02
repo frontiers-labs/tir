@@ -1,16 +1,13 @@
-//! PBQP cover construction over the saturated e-graph: match bindings, the
-//! alternative/compatibility model, and the solved cover.
+//! Match bindings, their pruning, and the PBQP cover that constructs the
+//! incumbent assignment of a region's frozen problem.
 
 use std::collections::{HashMap, HashSet};
 
-use tir::sem::{
-    SymKind,
-    egraph::{SemEGraph, class_int_binding},
-};
+use tir::sem::SymKind;
 use tir_pbqp::{self as pbqp, INF_COST, PbqpMatrix, PbqpProblem};
 use tir_relational::ClassId as Id;
 
-use super::node::{class_is_pure, is_low_extract_view};
+use super::problem::{Policy, RegionProblem};
 
 #[derive(Clone, Debug)]
 pub(crate) struct CaptureBindings {
@@ -71,7 +68,7 @@ pub(crate) struct FullMatchBindings {
     pub(crate) pattern_nodes: Vec<PatternNodeBinding>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum PbqpIselAlternative {
     NotDemanded,
     /// The effect executes inside this selected match, without a separate value.
@@ -86,10 +83,31 @@ pub(crate) enum PbqpIselAlternative {
     Deferred,
 }
 
+/// What a match asks of one class it binds besides its root.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ChildDemand {
+    /// A register read at these view offsets, whole at these widths (paired
+    /// with whether the read goes through a low-extract view).
+    Register {
+        offsets: Vec<u32>,
+        widths: Vec<(u32, bool)>,
+    },
+    /// Encoded inline: the class must be a constant.
+    Immediate,
+    /// An effect the match performs inside its own instruction.
+    Effect,
+    None,
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct PbqpIselMatch {
     pub(crate) pattern_index: usize,
     pub(crate) rule_index: usize,
+    /// Which of the rule's results the match roots.
+    pub(crate) port: usize,
+    /// The instance the match is a result of: the first match of the region
+    /// binding the same rule to the same operands. Its cost is paid once.
+    pub(crate) instance: usize,
     pub(crate) root: Id,
     pub(crate) pattern_root: Id,
     pub(crate) bindings: FullMatchBindings,
@@ -101,39 +119,127 @@ pub(crate) struct PbqpIselMatch {
     /// The width of the register the rule defines. A reader that reads its
     /// operand whole answers only at this width.
     pub(crate) result_width: Option<u32>,
-}
-/// A solved cover: the chosen alternative for every PBQP node and the e-class
-/// each PBQP node stands for (same index).
-pub(crate) struct ClassCover {
-    pub(crate) choices: Vec<PbqpIselAlternative>,
-    pub(crate) classes: Vec<Id>,
-}
-
-pub(crate) struct ClassPolicies<'a> {
-    pub(crate) demanded: &'a dyn Fn(Id) -> bool,
-    pub(crate) available: &'a dyn Fn(Id) -> bool,
-    pub(crate) materialized: &'a dyn Fn(Id) -> bool,
-    /// The low-extract views of each source that may be deferred.
-    pub(crate) views: &'a HashMap<Id, Vec<Id>>,
+    /// What the match demands of each class it binds besides its root, in the
+    /// order it binds them.
+    pub(crate) uses: Vec<(Id, ChildDemand)>,
+    /// The effect classes the match can stand for instead of an instance of
+    /// their own.
+    pub(crate) covers: Vec<Id>,
+    /// The effects the match performs inside its own instruction — the interior
+    /// classes it recomputes, in binding order. The chain a memory access reads
+    /// is not one of them: every access on a chain names it, and two reads of
+    /// one state are not two effects, so a state binding stays out.
+    pub(crate) effects: Vec<Id>,
 }
 
-pub(crate) fn build_eclass_cover(
-    egraph: &SemEGraph,
-    classes: &[Id],
-    policies: &ClassPolicies,
-    matches: &[PbqpIselMatch],
-) -> Option<ClassCover> {
-    let classes: Vec<Id> = classes.to_vec();
+impl PbqpIselMatch {
+    /// Derive what the match's bindings demand of the classes they name.
+    /// `pure` says whether a class holds only value expressions.
+    pub(crate) fn with_demands(mut self, pure: impl Fn(Id) -> bool) -> Self {
+        let nodes = &self.bindings.pattern_nodes;
+        for binding in nodes {
+            let child = binding.class;
+            if binding.is_state || child == self.root {
+                continue;
+            }
+            if !self.uses.iter().any(|(class, _)| *class == child) {
+                let demand = self.child_demand(child, &pure);
+                self.uses.push((child, demand));
+            }
+            if !binding.is_boundary && !pure(child) {
+                self.covers.push(child);
+            }
+        }
+        self.effects = nodes
+            .iter()
+            .filter(|binding| {
+                !binding.is_boundary
+                    && !binding.is_state
+                    && binding.pattern_node != self.pattern_root
+                    && !pure(binding.class)
+            })
+            .map(|binding| binding.class)
+            .collect();
+        self
+    }
+
+    fn child_demand(&self, child: Id, pure: &impl Fn(Id) -> bool) -> ChildDemand {
+        let mut register = false;
+        let mut immediate = false;
+        let mut effect = false;
+        let mut offsets: Vec<u32> = Vec::new();
+        let mut widths: Vec<(u32, bool)> = Vec::new();
+        for binding in &self.bindings.pattern_nodes {
+            if binding.class != child {
+                continue;
+            }
+            if binding.is_boundary {
+                register |= binding.demand == BoundaryDemand::Register;
+                immediate |= binding.demand == BoundaryDemand::Immediate;
+                if binding.demand == BoundaryDemand::Register {
+                    if !offsets.contains(&binding.view_offset) {
+                        offsets.push(binding.view_offset);
+                    }
+                    if let Some(width) = binding.whole_width
+                        && !widths.contains(&(width, binding.low_extract))
+                    {
+                        widths.push((width, binding.low_extract));
+                    }
+                }
+            } else if binding.pattern_node != self.pattern_root && !binding.is_state && !pure(child)
+            {
+                effect = true;
+            }
+        }
+        if register {
+            ChildDemand::Register { offsets, widths }
+        } else if immediate {
+            ChildDemand::Immediate
+        } else if effect {
+            ChildDemand::Effect
+        } else {
+            ChildDemand::None
+        }
+    }
+
+    fn demand_of(&self, child: Id) -> Option<&ChildDemand> {
+        self.uses
+            .iter()
+            .find(|(class, _)| *class == child)
+            .map(|(_, demand)| demand)
+    }
+}
+
+/// Why the PBQP cover produced no assignment.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CoverError {
+    Infeasible,
+    /// The heuristic search gave up; the problem may still have a cover.
+    Exhausted,
+}
+
+/// The failed heuristic choices a region's cover may back out of before the
+/// search gives up, per class it decides.
+const BACKTRACKS_PER_CLASS: u64 = 64;
+
+/// The cover the PBQP heuristic finds for a region under `policy`: the
+/// alternative chosen for every class of the problem, in class order.
+pub(crate) fn solve_cover(
+    problem: &RegionProblem,
+    policy: &Policy,
+) -> Result<Vec<PbqpIselAlternative>, CoverError> {
+    let classes = &problem.classes;
+    let matches = &problem.matches;
     let index: HashMap<Id, usize> = classes.iter().enumerate().map(|(i, &c)| (c, i)).collect();
-    let class_index = |c: Id| index.get(&egraph.find(c)).copied();
+    let class_index = |c: Id| index.get(&c).copied();
 
     let mut alternatives_by_node = vec![Vec::<PbqpIselAlternative>::new(); classes.len()];
     for (i, &c) in classes.iter().enumerate() {
-        if !(policies.demanded)(c) || (policies.available)(c) {
+        if !policy.demanded(c) || policy.available(c) {
             alternatives_by_node[i].push(PbqpIselAlternative::NotDemanded);
         }
         alternatives_by_node[i].extend(
-            policies
+            policy
                 .views
                 .contains_key(&c)
                 .then_some(PbqpIselAlternative::Deferred),
@@ -145,42 +251,31 @@ pub(crate) fn build_eclass_cover(
             continue;
         };
         alternatives_by_node[root_index].push(PbqpIselAlternative::Tile { match_id });
-        for binding in &m.bindings.pattern_nodes {
-            let class = egraph.find(binding.class);
-            if binding.is_boundary
-                || binding.is_state
-                || class == egraph.find(m.root)
-                || class_is_pure(egraph, class)
-                || (policies.materialized)(class)
-            {
+        for &class in &m.covers {
+            if problem.materialized(policy, class) {
                 continue;
             }
             if let Some(index) = class_index(class) {
                 let alternatives = &mut alternatives_by_node[index];
-                if !alternatives.iter().any(|alternative| {
-                    matches!(alternative,
-                    PbqpIselAlternative::CoveredBy { match_id: owner } if *owner == match_id)
-                }) {
-                    alternatives.push(PbqpIselAlternative::CoveredBy { match_id });
+                let covered = PbqpIselAlternative::CoveredBy { match_id };
+                if !alternatives.contains(&covered) {
+                    alternatives.push(covered);
                 }
             }
         }
     }
 
     if alternatives_by_node.iter().any(Vec::is_empty) {
-        return None;
+        return Err(CoverError::Infeasible);
     }
     if classes
         .iter()
-        .all(|&class| !(policies.demanded)(class) || (policies.available)(class))
+        .all(|&class| !policy.demanded(class) || policy.available(class))
     {
-        return Some(ClassCover {
-            choices: vec![PbqpIselAlternative::NotDemanded; classes.len()],
-            classes,
-        });
+        return Ok(vec![PbqpIselAlternative::NotDemanded; classes.len()]);
     }
 
-    let mut problem = PbqpProblem::new();
+    let mut pbqp = PbqpProblem::new();
     for alternatives in &alternatives_by_node {
         let costs = alternatives
             .iter()
@@ -191,45 +286,25 @@ pub(crate) fn build_eclass_cover(
                 | PbqpIselAlternative::Deferred => 0,
             })
             .collect();
-        problem.add_node(costs);
+        pbqp.add_node(costs);
     }
 
-    let mut edge_pairs = deferral_edges(policies, &class_index);
+    let mut edge_pairs = deferral_edges(policy, &class_index);
     for m in matches {
         let Some(ri) = class_index(m.root) else {
             continue;
         };
-        for binding in &m.bindings.pattern_nodes {
-            if binding.is_state {
-                continue;
-            }
-            if let Some(ci) = class_index(binding.class)
-                && ri != ci
-            {
+        for (class, _) in &m.uses {
+            if let Some(ci) = class_index(*class) {
                 edge_pairs.insert(ordered_pair(ri, ci));
             }
         }
     }
 
-    // A match's footprint is the effects it *performs* inside its own
-    // instruction — the interior classes it recomputes. The chain a memory
-    // access reads is not one of them: every access on a chain names it, and two
-    // reads of one state are not two effects, so a state binding stays out.
     let effect_footprints: Vec<Vec<Id>> = matches
         .iter()
         .map(|matched| {
-            let mut footprint: Vec<Id> = matched
-                .bindings
-                .pattern_nodes
-                .iter()
-                .filter(|binding| {
-                    !binding.is_boundary
-                        && !binding.is_state
-                        && binding.pattern_node != matched.pattern_root
-                        && !class_is_pure(egraph, binding.class)
-                })
-                .map(|binding| egraph.find(binding.class))
-                .collect();
+            let mut footprint = matched.effects.clone();
             footprint.sort();
             footprint.dedup();
             footprint
@@ -259,6 +334,16 @@ pub(crate) fn build_eclass_cover(
         }
     }
 
+    let compatible = |child: Id, parent_alt, child_alt| {
+        alternatives_compatible(
+            child,
+            parent_alt,
+            child_alt,
+            matches,
+            problem.facts(child).int.is_some(),
+            policy.available(child),
+        )
+    };
     let mut edge_pairs: Vec<(usize, usize)> = edge_pairs.into_iter().collect();
     edge_pairs.sort_unstable();
     for (li, ri) in edge_pairs {
@@ -270,42 +355,17 @@ pub(crate) fn build_eclass_cover(
 
         for (left_idx, left_alt) in left_alts.iter().enumerate() {
             for (right_idx, right_alt) in right_alts.iter().enumerate() {
-                let compatible =
-                    alternatives_compatible(
-                        egraph,
-                        right_class,
-                        left_alt,
-                        right_alt,
-                        matches,
-                        policies.available,
-                    ) && alternatives_compatible(
-                        egraph,
-                        left_class,
-                        right_alt,
-                        left_alt,
-                        matches,
-                        policies.available,
-                    ) && !effect_tiles_conflict(left_alt, right_alt, &effect_footprints)
-                        && deferral_compatible(
-                            left_class,
-                            left_alt,
-                            right_class,
-                            right_alt,
-                            policies,
-                        )
-                        && deferral_compatible(
-                            right_class,
-                            right_alt,
-                            left_class,
-                            left_alt,
-                            policies,
-                        );
+                let compatible = compatible(right_class, left_alt, right_alt)
+                    && compatible(left_class, right_alt, left_alt)
+                    && !effect_tiles_conflict(left_alt, right_alt, &effect_footprints)
+                    && deferral_compatible(left_class, left_alt, right_class, right_alt, policy)
+                    && deferral_compatible(right_class, right_alt, left_class, left_alt, policy);
                 if !compatible {
                     matrix.set(left_idx, right_idx, INF_COST);
                 }
             }
         }
-        problem.add_edge(
+        pbqp.add_edge(
             pbqp::PbqpNodeId::from_index(li),
             pbqp::PbqpNodeId::from_index(ri),
             matrix,
@@ -314,31 +374,34 @@ pub(crate) fn build_eclass_cover(
 
     crate::memstats::pbqp_census(
         "isel-cover",
-        problem.node_count(),
-        problem.edge_count(),
-        problem.matrix_bytes(),
+        pbqp.node_count(),
+        pbqp.edge_count(),
+        pbqp.matrix_bytes(),
     );
 
     crate::backend::pbqp_dump::dump(crate::backend::pbqp_dump::PbqpTaskKind::Isel, |w, kind| {
-        problem.write_json(w, kind)
+        pbqp.write_json(w, kind)
     });
-    let solution = pbqp::solve(&problem).ok()?;
-    let choices = solution
+    let budget = BACKTRACKS_PER_CLASS.saturating_mul(classes.len() as u64);
+    let solution = pbqp::solve_within(&pbqp, budget).map_err(|error| match error {
+        pbqp::PbqpSolveError::Exhausted => CoverError::Exhausted,
+        _ => CoverError::Infeasible,
+    })?;
+    Ok(solution
         .choices
         .iter()
         .copied()
         .enumerate()
         .map(|(node, choice)| alternatives_by_node[node][choice].clone())
-        .collect();
-    Some(ClassCover { choices, classes })
+        .collect())
 }
 
 /// The PBQP edges joining each deferrable source to its views.
 fn deferral_edges(
-    policies: &ClassPolicies,
+    policy: &Policy,
     class_index: &dyn Fn(Id) -> Option<usize>,
 ) -> HashSet<(usize, usize)> {
-    policies
+    policy
         .views
         .iter()
         .flat_map(|(&source, views)| views.iter().map(move |&view| (source, view)))
@@ -352,10 +415,10 @@ fn deferral_compatible(
     source_alt: &PbqpIselAlternative,
     view: Id,
     view_alt: &PbqpIselAlternative,
-    policies: &ClassPolicies,
+    policy: &Policy,
 ) -> bool {
     !matches!(source_alt, PbqpIselAlternative::Deferred)
-        || !policies
+        || !policy
             .views
             .get(&source)
             .is_some_and(|views| views.contains(&view))
@@ -381,16 +444,27 @@ fn effect_tiles_conflict(
 }
 
 /// Drop matches dominated by an interchangeable alternative: same root class,
-/// same internal-class coverage, same boundary operands, same width contracts
-/// (the width defined and the width each operand is read at), but no cheaper, no
-/// more specific, and no less demanding of its boundaries. Specificity (the
+/// same internal-class coverage, same boundary operands, but no cheaper, no
+/// more specific, no less demanding of its boundaries, and no better at
+/// answering the readers of its root. Specificity (the
 /// number of type-constrained pattern nodes) breaks ties between otherwise
 /// identical matches without ever touching the PBQP objective — an i32 `addw`
 /// beats the untyped `add` at equal cost — and at equal cost/specificity a
 /// match folding a class as an immediate beats one demanding it in a register
 /// (which may force a whole materializer chain), while a genuinely cheaper
 /// instruction still wins on cost alone.
-pub(crate) fn prune_dominated_matches(specificity: &[usize], matches: &mut Vec<PbqpIselMatch>) {
+///
+/// `width` is the width the matches' root class is known to have. A reader
+/// read whole reads a class at that width, so a match defining exactly it
+/// answers every reader; one defining another width answers only the readers
+/// that width admits, and stands in for nothing but its like.
+pub(crate) fn prune_dominated_matches(
+    specificity: &[usize],
+    width: Option<u32>,
+    matches: &mut Vec<PbqpIselMatch>,
+) {
+    // The width a match defines where that restricts who reads it.
+    let defined = |m: &PbqpIselMatch| m.result_width.filter(|defined| Some(*defined) != width);
     let footprint = |m: &PbqpIselMatch| {
         let mut boundaries = Vec::new();
         let mut internals = Vec::new();
@@ -413,20 +487,13 @@ pub(crate) fn prune_dominated_matches(specificity: &[usize], matches: &mut Vec<P
         boundaries.sort();
         internals.sort();
         let (classes, demands): (Vec<(Id, u32)>, Vec<_>) = boundaries.into_iter().unzip();
-        (
-            (m.root, m.result_view_offset, m.result_width),
-            classes,
-            demands,
-            internals,
-        )
+        ((m.root, m.result_view_offset), classes, demands, internals)
     };
     let footprints: Vec<_> = matches.iter().map(footprint).collect();
 
     // Matches reading or writing a different register view are not
     // interchangeable — a value at one bit offset is not the value at another —
-    // and a reader read whole meets only a producer of its width. The view
-    // offsets and the width defined join the grouping key rather than the
-    // comparison.
+    // so the view offsets join the grouping key rather than the comparison.
     let mut groups: HashMap<_, Vec<usize>> = HashMap::new();
     for (index, (result, classes, _, internals)) in footprints.iter().enumerate() {
         groups
@@ -440,6 +507,7 @@ pub(crate) fn prune_dominated_matches(specificity: &[usize], matches: &mut Vec<P
             matches[index].cost,
             specificity[matches[index].pattern_index],
             &footprints[index].2,
+            defined(&matches[index]),
         )
     };
     // An operand demands no more than another when it asks for no more of the
@@ -451,8 +519,8 @@ pub(crate) fn prune_dominated_matches(specificity: &[usize], matches: &mut Vec<P
         demand_a <= demand_b && (whole_a.is_none() || (whole_a == whole_b && (*view_a || !view_b)))
     };
     let dominates = |a: usize, b: usize| {
-        let (cost_a, spec_a, demands_a) = comparison_key(a);
-        let (cost_b, spec_b, demands_b) = comparison_key(b);
+        let (cost_a, spec_a, demands_a, defined_a) = comparison_key(a);
+        let (cost_b, spec_b, demands_b, defined_b) = comparison_key(b);
         let demands_le = demands_a
             .iter()
             .zip(demands_b)
@@ -460,6 +528,7 @@ pub(crate) fn prune_dominated_matches(specificity: &[usize], matches: &mut Vec<P
         cost_a <= cost_b
             && spec_a >= spec_b
             && demands_le
+            && (defined_a.is_none() || defined_a == defined_b)
             && (cost_a < cost_b || spec_a > spec_b || demands_a != demands_b)
     };
 
@@ -493,10 +562,9 @@ pub(crate) fn prune_dominated_matches(specificity: &[usize], matches: &mut Vec<P
 
     // A free tile constrains nothing: every binding is state, the root itself,
     // or a structural boundary, so its compatibility rows are all-true and its
-    // effect footprint empty. Any tile defining the same root at the same view
-    // offset and width that costs no less is dominated by it outright, whatever
-    // its boundaries — this
-    // is what keeps a constant class (into which assumptions merge every proven
+    // effect footprint empty. Any tile at the same root and view offset that
+    // costs no less and answers no reader it does not is dominated by it
+    // outright, whatever its boundaries — this is what keeps a constant class (into which assumptions merge every proven
     // condition) from carrying thousands of comparison-shaped alternatives.
     let is_free = |m: &PbqpIselMatch| {
         m.bindings.pattern_nodes.iter().all(|binding| {
@@ -511,14 +579,14 @@ pub(crate) fn prune_dominated_matches(specificity: &[usize], matches: &mut Vec<P
             std::cmp::Reverse(specificity[matches[index].pattern_index]),
         )
     };
-    let result = |m: &PbqpIselMatch| (m.root, m.result_view_offset, m.result_width);
+    let result = |m: &PbqpIselMatch, defined| (m.root, m.result_view_offset, defined);
     let mut best_free: HashMap<_, usize> = HashMap::new();
     for (index, m) in matches.iter().enumerate() {
         if !keep[index] || !is_free(m) {
             continue;
         }
         best_free
-            .entry(result(m))
+            .entry(result(m, defined(m)))
             .and_modify(|best| {
                 if free_key(index) < free_key(*best) {
                     *best = index;
@@ -528,17 +596,26 @@ pub(crate) fn prune_dominated_matches(specificity: &[usize], matches: &mut Vec<P
     }
     if !best_free.is_empty() {
         for (index, m) in matches.iter().enumerate() {
-            let Some(&free) = best_free.get(&result(m)) else {
-                continue;
-            };
-            if free == index || !keep[index] {
-                continue;
-            }
-            let (free_cost, std::cmp::Reverse(free_spec)) = free_key(free);
-            let cost = m.cost;
-            let spec = specificity[m.pattern_index];
-            if cost > free_cost || (cost == free_cost && spec <= free_spec) {
-                keep[index] = false;
+            // A free tile of the class's own width answers every reader; one
+            // of another width only the readers `m` at that width answers. A
+            // tie stands only between tiles defining the same width.
+            for like in [false, true] {
+                let width = if like { defined(m) } else { None };
+                let Some(&free) = best_free.get(&result(m, width)) else {
+                    continue;
+                };
+                if free == index || !keep[index] {
+                    continue;
+                }
+                let (free_cost, std::cmp::Reverse(free_spec)) = free_key(free);
+                let cost = m.cost;
+                let spec = specificity[m.pattern_index];
+                let tied = defined(m) == defined(&matches[free]);
+                if cost > free_cost
+                    || (cost == free_cost && (spec < free_spec || (tied && spec == free_spec)))
+                {
+                    keep[index] = false;
+                }
             }
         }
     }
@@ -551,29 +628,22 @@ pub(crate) fn prune_dominated_matches(specificity: &[usize], matches: &mut Vec<P
     matches.sort_by_key(|matched| std::cmp::Reverse(specificity[matched.pattern_index]));
 }
 
-pub(crate) fn completeness_error(
-    egraph: &SemEGraph,
-    demanded: &HashSet<Id>,
-    matches: &[PbqpIselMatch],
-    available: &dyn Fn(Id) -> bool,
-) -> Option<String> {
-    let rooted: HashSet<Id> = matches
-        .iter()
-        .map(|matched| egraph.find(matched.root))
-        .collect();
+/// The demanded classes no instance can root, as the diagnostic naming the
+/// semantic kinds a target rule is missing for.
+pub(crate) fn completeness_error(problem: &RegionProblem, policy: &Policy) -> Option<String> {
+    let rooted: HashSet<Id> = problem.matches.iter().map(|matched| matched.root).collect();
 
     let mut missing: Vec<SymKind> = Vec::new();
-    for &class in demanded {
-        let class = egraph.find(class);
-        if rooted.contains(&class) || available(class) || is_low_extract_view(egraph, class) {
+    for &class in &policy.demanded {
+        let deferred = policy
+            .views
+            .get(&class)
+            .is_some_and(|views| views.iter().all(|view| rooted.contains(view)));
+        let facts = problem.facts(class);
+        if rooted.contains(&class) || policy.available(class) || deferred || facts.source != class {
             continue;
         }
-        let nodes = egraph.nodes(class);
-        if let Some(kind) = nodes
-            .clone()
-            .filter_map(|n| n.sym())
-            .find(|kind| *kind != SymKind::If)
-            .or_else(|| nodes.clone().next().and_then(|n| n.sym()))
+        if let Some(kind) = facts.kind
             && !missing.contains(&kind)
         {
             missing.push(kind);
@@ -592,101 +662,25 @@ pub(crate) fn completeness_error(
             .join("; "),
     )
 }
-/// Where the value an alternative produces sits in its storage element: a tile's
-/// destination class carries the rule's view offset, while an already-available
-/// value lives in an ordinary offset-0 register.
-fn produced_view_offset(alternative: &PbqpIselAlternative, matches: &[PbqpIselMatch]) -> u32 {
-    match alternative {
-        PbqpIselAlternative::Tile { match_id } => matches[*match_id].result_view_offset,
-        PbqpIselAlternative::NotDemanded
-        | PbqpIselAlternative::CoveredBy { .. }
-        | PbqpIselAlternative::Deferred => 0,
-    }
-}
 
-/// The width a tile defines its destination at. An already-available value is
-/// not one this cover produces: its width is the one its own class carries, and
-/// the operand's [`super::RegisterRequirement::accepts`] is what checks it.
-fn produced_width(alternative: &PbqpIselAlternative, matches: &[PbqpIselMatch]) -> Option<u32> {
-    match alternative {
-        PbqpIselAlternative::Tile { match_id } => matches[*match_id].result_width,
-        PbqpIselAlternative::NotDemanded
-        | PbqpIselAlternative::CoveredBy { .. }
-        | PbqpIselAlternative::Deferred => None,
-    }
-}
-
-pub(crate) fn alternatives_compatible(
-    egraph: &SemEGraph,
+fn alternatives_compatible(
     child: Id,
     parent_alt: &PbqpIselAlternative,
     child_alt: &PbqpIselAlternative,
     matches: &[PbqpIselMatch],
-    available: &dyn Fn(Id) -> bool,
+    constant: bool,
+    available: bool,
 ) -> bool {
-    if let PbqpIselAlternative::CoveredBy { match_id } = parent_alt {
-        return egraph.find(matches[*match_id].root) != child
-            || matches!(child_alt, PbqpIselAlternative::Tile { match_id: owner } if owner == match_id);
-    }
-    let PbqpIselAlternative::Tile { match_id } = parent_alt else {
-        return true;
-    };
-    let matched = &matches[*match_id];
-    let mut register = false;
-    let mut immediate = false;
-    let mut owned_effect = false;
-    let mut demanded_offsets: Vec<u32> = Vec::new();
-    let mut demanded_widths: Vec<(u32, bool)> = Vec::new();
-    for binding in &matched.bindings.pattern_nodes {
-        if binding.class != child
-            || (binding.pattern_node == matched.pattern_root && binding.class == matched.root)
-        {
-            continue;
+    match parent_alt {
+        PbqpIselAlternative::CoveredBy { match_id } => {
+            matches[*match_id].root != child
+                || matches!(child_alt, PbqpIselAlternative::Tile { match_id: owner } if owner == match_id)
         }
-        if binding.is_boundary {
-            register |= binding.demand == BoundaryDemand::Register;
-            immediate |= binding.demand == BoundaryDemand::Immediate;
-            if binding.demand == BoundaryDemand::Register {
-                if !demanded_offsets.contains(&binding.view_offset) {
-                    demanded_offsets.push(binding.view_offset);
-                }
-                if let Some(width) = binding.whole_width
-                    && !demanded_widths.contains(&(width, binding.low_extract))
-                {
-                    demanded_widths.push((width, binding.low_extract));
-                }
-            }
-        } else if binding.pattern_node != matched.pattern_root
-            && !binding.is_state
-            && !class_is_pure(egraph, child)
-        {
-            owned_effect = true;
-        }
-    }
-    if register {
-        if demanded_offsets != [produced_view_offset(child_alt, matches)] {
-            return false;
-        }
-        // A direct operand read whole needs an exact-width definition. A
-        // low-extract view may read the low demanded bits of a wider definition.
-        if let Some(width) = produced_width(child_alt, matches)
-            && demanded_widths.iter().any(|(demanded, low_extract)| {
-                *demanded != width && !(*low_extract && *demanded < width)
+        PbqpIselAlternative::Tile { match_id } => {
+            matches[*match_id].demand_of(child).is_none_or(|demand| {
+                demand.accepts(*match_id, child_alt, matches, constant, available)
             })
-        {
-            return false;
         }
-        match child_alt {
-            PbqpIselAlternative::Tile { .. } => true,
-            PbqpIselAlternative::NotDemanded => available(child),
-            PbqpIselAlternative::CoveredBy { .. } | PbqpIselAlternative::Deferred => false,
-        }
-    } else if immediate {
-        class_int_binding(egraph, child).is_some()
-    } else if owned_effect {
-        matches!(child_alt, PbqpIselAlternative::NotDemanded)
-            || matches!(child_alt, PbqpIselAlternative::CoveredBy { match_id: owner } if owner == match_id)
-    } else {
-        true
+        PbqpIselAlternative::NotDemanded | PbqpIselAlternative::Deferred => true,
     }
 }

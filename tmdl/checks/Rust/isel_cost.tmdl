@@ -1,7 +1,7 @@
 // An isel rule costs what the instructions it emits cost: each one's latency
 // scaled by `LATENCY_COST_SCALE` plus its encoding size in bytes, so a shorter
 // encoding wins a latency tie. Both terms are fields of the emitted
-// instruction's record, so the rule names the record and nothing else.
+// instruction's record, which the rule reaches through its emission plan.
 
 // RUN: tmdlc --action=emit-rust --dialect=test --output=- %S/../Inputs/simple.tmdl | filecheck %s
 
@@ -9,4 +9,6 @@
 // CHECK: static INFO_ADD: tir::backend::InstrInfo = tir::backend::InstrInfo {
 // CHECK: width_bytes: 4,
 
-// CHECK: emits: &[&INFO_ADD]
+// CHECK: static EMIT_ADD: tir::backend::isel::EmitSpec
+// CHECK: info: &INFO_ADD,
+// CHECK: plan: &[&EMIT_ADD],

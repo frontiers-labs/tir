@@ -110,12 +110,13 @@ fn emit_fixed_register_rules<'a>(
     Ok(())
 }
 
-/// Emit both the quotient and remainder rules for a (definer, reader) pair. The
-/// reader's then-arm writes the quotient — a bare division — to the dividend
-/// register (`rax`) and the remainder — the Euclidean identity
+/// Emit the rule for a (definer, reader) pair. The reader's then-arm writes
+/// the quotient — a bare division — to the dividend register (`rax`) and the
+/// remainder — the Euclidean identity
 /// `dividend - (dividend / divisor) * divisor` — to the register the definer
-/// sets up (`rdx`). Each then-arm write becomes a value rule whose result lands
-/// in that register, with the sibling register clobbered.
+/// sets up (`rdx`). Both are results of the one instruction pair, so they are
+/// the results of one rule: the quotient first, the remainder second, each
+/// landing in its register. A result nothing reads is a clobber.
 #[allow(clippy::too_many_arguments)]
 fn emit_division_rules(
     definer: &Definer,
@@ -153,46 +154,200 @@ fn emit_division_rules(
     ) {
         return;
     }
-
-    emit_one_division_rule(
-        definer,
-        reader,
-        dividend_reg,
-        dividend_reg,
-        quotient_rhs,
-        "quotient",
-        register_index_map,
-        register_name_map,
-        float_classes,
-        polymorphic_classes,
-        dialect,
-        isel_rule_emitters,
-        rule_spec_idents,
-    );
-
     // The remainder is the then-arm write to the sibling register (`rdx`); its
     // value is the Euclidean identity, matching the `remsi`/`remui` semantics.
-    if let Some((_, remainder_rhs)) = reader
+    let remainder_rhs = reader
         .then_writes
         .iter()
         .find(|(reg, _)| reg == sibling_reg)
-    {
-        emit_one_division_rule(
-            definer,
-            reader,
-            dividend_reg,
-            sibling_reg,
-            remainder_rhs,
-            "remainder",
-            register_index_map,
-            register_name_map,
-            float_classes,
-            polymorphic_classes,
-            dialect,
-            isel_rule_emitters,
-            rule_spec_idents,
-        );
+        .map(|(_, rhs)| *rhs);
+    let (dividend_class, dividend_index) = dividend_reg.clone();
+
+    // Lower every result through one symbol table, so the patterns name the
+    // same operands.
+    let results: Vec<&ast::Expr> = std::iter::once(*quotient_rhs).chain(remainder_rhs).collect();
+    let mut graph = tir_symbolic::sem::SemGraph::<()>::new();
+    let Some((roots, lowering)) = ast::Expr::lower_all_to_sema_with_isa(
+        &results,
+        &mut graph,
+        &HashMap::new(),
+        &reader.isa_param_values,
+        register_index_map,
+    ) else {
+        return;
+    };
+    let Some(&lhs_symbol) = lowering
+        .register_symbols
+        .get(&(dividend_class.clone(), u32::from(dividend_index)))
+    else {
+        return;
+    };
+    // The single register operand is the divisor.
+    let Some((divisor_name, Type::Struct(divisor_class))) = reader
+        .ops
+        .iter()
+        .find(|(_, ty)| matches!(ty, Type::Struct(_)))
+    else {
+        return;
+    };
+    let Some(&divisor_symbol) = lowering.variable_symbols.get(divisor_name) else {
+        return;
+    };
+
+    let patterns: Vec<SpecPattern> = roots
+        .iter()
+        .map(|&root| {
+            let (canon_pattern, canon_root, forced_widths) =
+                tir_symbolic::lang::canonicalize_for_selection(&graph, root, &HashSet::new());
+            let pattern_widths = selection_pattern_widths(&canon_pattern, forced_widths);
+            let (offset, typed) = intern_dag(&canon_pattern, canon_root, &pattern_widths);
+            SpecPattern {
+                offset,
+                typed,
+                float_width: None,
+            }
+        })
+        .collect();
+
+    // Both operands of a division are width-sensitive: their full width reaches
+    // the result.
+    let sensitive: HashSet<u32> = [lhs_symbol, divisor_symbol].into_iter().collect();
+    let synthetic_ops = vec![
+        ("__lhs".to_string(), Type::Struct(dividend_class.clone())),
+        (divisor_name.clone(), Type::Struct(divisor_class.clone())),
+    ];
+    let synthetic_varsyms: HashMap<String, u32> = [
+        ("__lhs".to_string(), lhs_symbol),
+        (divisor_name.clone(), divisor_symbol),
+    ]
+    .into_iter()
+    .collect();
+    let operand_register_specs = operand_register_specs_for_ops(
+        &synthetic_ops,
+        &synthetic_varsyms,
+        &sensitive,
+        float_classes,
+        polymorphic_classes,
+    );
+
+    let dividend_name = register_name_map
+        .get(&(dividend_class.clone(), u32::from(dividend_index)))
+        .cloned()
+        .unwrap_or_else(|| dividend_class.clone());
+    let sibling_name = register_name_map
+        .get(&(sibling_reg.0.clone(), u32::from(sibling_reg.1)))
+        .cloned()
+        .unwrap_or_else(|| sibling_reg.0.clone());
+
+    let class_id = reg_class_id(&dividend_class);
+    let sibling_class_id = reg_class_id(&sibling_reg.0);
+    let sibling_index = sibling_reg.1;
+    let dividend_use_slot = fixed_read_slot_name(&dividend_name);
+    let dividend_def_slot = fixed_write_slot_name(&dividend_name);
+    let sibling_use_slot = fixed_read_slot_name(&sibling_name);
+    let sibling_def_slot = fixed_write_slot_name(&sibling_name);
+
+    let reader_op_ty = format_ident!("{}Op", &reader.inst.name);
+    let definer_op_ty = format_ident!("{}Op", &definer.inst.name);
+    let reader_lower = reader.inst.name.to_lowercase();
+    let definer_lower = definer.inst.name.to_lowercase();
+    let rule_key = format!("{}_via_{}", reader_lower, definer_lower);
+    let prelude_key = format!("prelude_{}_via_{}", definer_lower, reader_lower);
+    let rule_name = format!("{}+{}", definer.mnemonic, reader.mnemonic);
+
+    let shared_isas: Vec<String> = reader
+        .inst
+        .for_isas
+        .iter()
+        .filter(|isa| definer.inst.for_isas.contains(isa))
+        .cloned()
+        .collect();
+
+    // A definer that extends the dividend (`cdq`) reads its register and has a
+    // slot for it; one that only clears the sibling (`xor edx, edx`) has none.
+    let mut definer_reads = HashSet::new();
+    collect_register_path_reads(&definer.inst.behavior, &mut definer_reads);
+    let definer_reads_dividend = definer_reads.iter().any(|(class, regname)| {
+        *class == dividend_class
+            && register_index_map.get(&(class.clone(), regname.clone()))
+                == Some(&u32::from(dividend_index))
+    });
+    let mut prelude_attrs = Vec::new();
+    if definer_reads_dividend {
+        prelude_attrs.push(emit_attr_fixed_use(
+            &dividend_use_slot,
+            lhs_symbol,
+            &class_id,
+            dividend_index,
+        ));
     }
+    prelude_attrs.push(emit_attr_physical(
+        &sibling_def_slot,
+        &sibling_class_id,
+        sibling_index,
+    ));
+    let (prelude_ts, prelude_spec) = emit_emitter_spec(
+        &prelude_key,
+        dialect,
+        &definer.op_name,
+        &definer_op_ty,
+        &prelude_attrs,
+        &definer.inst.name,
+    );
+
+    // Each written register is defined as the result it holds; one holding no
+    // result of the rule is clobbered.
+    let sibling_def_attr = if remainder_rhs.is_some() {
+        emit_attr_result_fixed_def(&sibling_def_slot, 1, &sibling_class_id, sibling_index)
+    } else {
+        emit_attr_physical(&sibling_def_slot, &sibling_class_id, sibling_index)
+    };
+    let emit_attrs = [
+        emit_attr_value(divisor_name, divisor_symbol),
+        emit_attr_fixed_use(&dividend_use_slot, lhs_symbol, &class_id, dividend_index),
+        emit_attr_result_fixed_def(&dividend_def_slot, 0, &class_id, dividend_index),
+        emit_attr_physical(&sibling_use_slot, &sibling_class_id, sibling_index),
+        sibling_def_attr,
+    ];
+    let (emitter_ts, emit_spec) = emit_emitter_spec(
+        &rule_key,
+        dialect,
+        &reader.op_name,
+        &reader_op_ty,
+        &emit_attrs,
+        &reader.inst.name,
+    );
+    let constraints = [
+        constraint_entry(
+            lhs_symbol,
+            quote! { tir::backend::isel::OperandConstraint::Register },
+        ),
+        constraint_entry(
+            divisor_symbol,
+            quote! { tir::backend::isel::OperandConstraint::Register },
+        ),
+    ];
+    let (rule_ts, rule_ident) = emit_rule_spec(
+        &rule_key,
+        &rule_name,
+        &shared_isas,
+        &patterns[0],
+        &patterns[1..],
+        quote! { tir::backend::isel::RuleKind::Value },
+        &[&prelude_spec, &emit_spec],
+        &constraints,
+        &operand_register_specs,
+        None,
+        &[],
+        None,
+        FpFlags::None,
+    );
+    isel_rule_emitters.push(quote! {
+        #prelude_ts
+        #emitter_ts
+        #rule_ts
+    });
+    rule_spec_idents.push(rule_ident);
 }
 
 /// Whether an instruction is a fixed-register definer or reader — the shapes
@@ -396,219 +551,6 @@ fn substitute_symbol_with_subgraph(
             _ => CopyAction::Keep,
         },
     )
-}
-
-/// Emit one division value rule (quotient or remainder) for a (definer, reader)
-/// pair: lower `result_rhs` into a selection pattern, emit the definer as a
-/// prelude and the reader (`idiv`/`div`) as the main instruction, routing `lhs`
-/// into the dividend register (`rax`), the result out of `result_reg`, and
-/// clobbering the register that is not the result.
-#[allow(clippy::too_many_arguments)]
-fn emit_one_division_rule(
-    definer: &Definer,
-    reader: &Reader,
-    dividend_reg: &FixedReg,
-    result_reg: &FixedReg,
-    result_rhs: &ast::Expr,
-    kind: &str,
-    register_index_map: &HashMap<(String, String), u32>,
-    register_name_map: &HashMap<(String, u32), String>,
-    float_classes: &HashSet<String>,
-    polymorphic_classes: &HashSet<String>,
-    dialect: &str,
-    isel_rule_emitters: &mut Vec<proc_macro2::TokenStream>,
-    rule_spec_idents: &mut Vec<proc_macro2::Ident>,
-) {
-    let sibling_reg = &definer.written;
-    let (dividend_class, dividend_index) = dividend_reg.clone();
-    let result_is_dividend = result_reg == dividend_reg;
-
-    // Lower the result value into the selection pattern.
-    let mut pattern = tir_symbolic::sem::SemGraph::<()>::new();
-    let params = HashMap::new();
-    let Some(lowering) = result_rhs.lower_to_sema_with_isa(
-        &mut pattern,
-        &params,
-        &reader.isa_param_values,
-        register_index_map,
-    ) else {
-        return;
-    };
-    let Some(&lhs_symbol) = lowering
-        .register_symbols
-        .get(&(dividend_class.clone(), u32::from(dividend_index)))
-    else {
-        return;
-    };
-    // The single register operand is the divisor.
-    let Some((divisor_name, Type::Struct(divisor_class))) = reader
-        .ops
-        .iter()
-        .find(|(_, ty)| matches!(ty, Type::Struct(_)))
-    else {
-        return;
-    };
-    let Some(&divisor_symbol) = lowering.variable_symbols.get(divisor_name) else {
-        return;
-    };
-
-    let immediate_symbols = HashSet::new();
-    let (canon_pattern, canon_root, forced_widths) =
-        tir_symbolic::lang::canonicalize_for_selection(&pattern, lowering.root, &immediate_symbols);
-    let pattern_widths = selection_pattern_widths(&canon_pattern, forced_widths);
-    let (pattern_offset, pattern_typed) = intern_dag(&canon_pattern, canon_root, &pattern_widths);
-    let pattern_spec = SpecPattern {
-        offset: pattern_offset,
-        typed: pattern_typed,
-        float_width: None,
-    };
-
-    // Both operands of a division are width-sensitive: their full width reaches
-    // the result.
-    let sensitive: HashSet<u32> = [lhs_symbol, divisor_symbol].into_iter().collect();
-    let synthetic_ops = vec![
-        ("__lhs".to_string(), Type::Struct(dividend_class.clone())),
-        (divisor_name.clone(), Type::Struct(divisor_class.clone())),
-    ];
-    let synthetic_varsyms: HashMap<String, u32> = [
-        ("__lhs".to_string(), lhs_symbol),
-        (divisor_name.clone(), divisor_symbol),
-    ]
-    .into_iter()
-    .collect();
-    let operand_register_specs = operand_register_specs_for_ops(
-        &synthetic_ops,
-        &synthetic_varsyms,
-        &sensitive,
-        float_classes,
-        polymorphic_classes,
-    );
-
-    let dividend_name = register_name_map
-        .get(&(dividend_class.clone(), u32::from(dividend_index)))
-        .cloned()
-        .unwrap_or_else(|| dividend_class.clone());
-    let sibling_name = register_name_map
-        .get(&(sibling_reg.0.clone(), u32::from(sibling_reg.1)))
-        .cloned()
-        .unwrap_or_else(|| sibling_reg.0.clone());
-
-    let class_id = reg_class_id(&dividend_class);
-    let sibling_class_id = reg_class_id(&sibling_reg.0);
-    let sibling_index = sibling_reg.1;
-    let dividend_use_slot = fixed_read_slot_name(&dividend_name);
-    let dividend_def_slot = fixed_write_slot_name(&dividend_name);
-    let sibling_use_slot = fixed_read_slot_name(&sibling_name);
-    let sibling_def_slot = fixed_write_slot_name(&sibling_name);
-
-    let reader_op_ty = format_ident!("{}Op", &reader.inst.name);
-    let definer_op_ty = format_ident!("{}Op", &definer.inst.name);
-    let reader_lower = reader.inst.name.to_lowercase();
-    let definer_lower = definer.inst.name.to_lowercase();
-    let rule_key = format!("{}_{}_via_{}", reader_lower, kind, definer_lower);
-    let prelude_key = format!("prelude_{}_{}_via_{}", definer_lower, kind, reader_lower);
-    let rule_name = format!("{}+{} {}", definer.mnemonic, reader.mnemonic, kind);
-
-    let shared_isas: Vec<String> = reader
-        .inst
-        .for_isas
-        .iter()
-        .filter(|isa| definer.inst.for_isas.contains(isa))
-        .cloned()
-        .collect();
-
-    // Whichever register holds this rule's result is defined as the result
-    // virtual (`FixedDef`); the other written register is clobbered (`Physical`).
-    let dividend_def_attr = if result_is_dividend {
-        emit_attr_result_fixed_def(&dividend_def_slot, 0, &class_id, dividend_index)
-    } else {
-        emit_attr_physical(&dividend_def_slot, &class_id, dividend_index)
-    };
-    let sibling_def_attr = if result_is_dividend {
-        emit_attr_physical(&sibling_def_slot, &sibling_class_id, sibling_index)
-    } else {
-        emit_attr_result_fixed_def(&sibling_def_slot, 0, &sibling_class_id, sibling_index)
-    };
-
-    // A definer that extends the dividend (`cdq`) reads its register and has a
-    // slot for it; one that only clears the sibling (`xor edx, edx`) has none.
-    let mut definer_reads = HashSet::new();
-    collect_register_path_reads(&definer.inst.behavior, &mut definer_reads);
-    let definer_reads_dividend = definer_reads.iter().any(|(class, regname)| {
-        *class == dividend_class
-            && register_index_map.get(&(class.clone(), regname.clone()))
-                == Some(&u32::from(dividend_index))
-    });
-    let mut prelude_attrs = Vec::new();
-    if definer_reads_dividend {
-        prelude_attrs.push(emit_attr_fixed_use(
-            &dividend_use_slot,
-            lhs_symbol,
-            &class_id,
-            dividend_index,
-        ));
-    }
-    prelude_attrs.push(emit_attr_physical(
-        &sibling_def_slot,
-        &sibling_class_id,
-        sibling_index,
-    ));
-    let (prelude_ts, prelude_shim) = emit_emitter_spec(
-        &prelude_key,
-        dialect,
-        &definer.op_name,
-        &definer_op_ty,
-        &prelude_attrs,
-        &definer.inst.name,
-    );
-
-    let emit_attrs = [
-        emit_attr_value(divisor_name, divisor_symbol),
-        emit_attr_fixed_use(&dividend_use_slot, lhs_symbol, &class_id, dividend_index),
-        dividend_def_attr,
-        emit_attr_physical(&sibling_use_slot, &sibling_class_id, sibling_index),
-        sibling_def_attr,
-    ];
-    let (emitter_ts, emit_shim) = emit_emitter_spec(
-        &rule_key,
-        dialect,
-        &reader.op_name,
-        &reader_op_ty,
-        &emit_attrs,
-        &reader.inst.name,
-    );
-    let constraints = [
-        constraint_entry(
-            lhs_symbol,
-            quote! { tir::backend::isel::OperandConstraint::Register },
-        ),
-        constraint_entry(
-            divisor_symbol,
-            quote! { tir::backend::isel::OperandConstraint::Register },
-        ),
-    ];
-    let (rule_ts, rule_ident) = emit_rule_spec(
-        &rule_key,
-        &rule_name,
-        &shared_isas,
-        &pattern_spec,
-        &[&definer.inst.name, &reader.inst.name],
-        quote! { tir::backend::isel::RuleKind::Value },
-        Some(&prelude_shim),
-        &emit_shim,
-        &constraints,
-        &operand_register_specs,
-        None,
-        &[],
-        None,
-        FpFlags::None,
-    );
-    isel_rule_emitters.push(quote! {
-        #prelude_ts
-        #emitter_ts
-        #rule_ts
-    });
-    rule_spec_idents.push(rule_ident);
 }
 
 /// Pair each definer with every reader that reads the register the definer

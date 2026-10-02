@@ -109,14 +109,6 @@ fn symbol_blob() -> (Vec<u8>, Vec<SymKind>, u32) {
     (blob, kinds, offset)
 }
 
-fn nop_emit(
-    _context: &Context,
-    _req: &EmitRequest,
-    _m: &RuleMatch,
-) -> Result<Box<dyn Operation>, PassError> {
-    unreachable!()
-}
-
 /// A three-cycle, four-byte instruction the rule under test emits.
 static EMITTED: tir::backend::InstrInfo = tir::backend::InstrInfo {
     name: "add",
@@ -126,7 +118,12 @@ static EMITTED: tir::backend::InstrInfo = tir::backend::InstrInfo {
     ..tir::backend::InstrInfo::BASE
 };
 
-static EMITS: &[&tir::backend::InstrInfo] = &[&EMITTED];
+static PLAN: &[&tir::backend::isel::EmitSpec] = &[&tir::backend::isel::EmitSpec {
+    op: ("test", "add"),
+    wrap: |_| unreachable!(),
+    attrs: &[],
+    info: &EMITTED,
+}];
 fn rule_spec(offset: u32, features: &'static [u16]) -> RuleSpec {
     RuleSpec {
         name: "inst",
@@ -136,11 +133,10 @@ fn rule_spec(offset: u32, features: &'static [u16]) -> RuleSpec {
             typed: false,
             float_width: None,
         },
-        emits: EMITS,
+        secondary: &[],
         kind: RuleKind::Value,
         fp_flags: tir::backend::isel::FpFlags::None,
-        prelude_emit: None,
-        emit_fn: nop_emit,
+        plan: PLAN,
         constraints: &[],
         registers: &[],
         result: None,
