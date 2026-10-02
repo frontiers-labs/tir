@@ -7,10 +7,6 @@
 //! exactly as the TIR bench does. The `SimpleScheduler` applies every match each
 //! iteration, matching TIR's `saturate`.
 
-#[macro_use]
-#[path = "../../../benchmarks/functions.rs"]
-pub mod functions;
-
 use std::hint::black_box;
 use std::time::Duration;
 
@@ -18,6 +14,8 @@ use egg::{
     ConditionalApplier, CostFunction, EGraph, Extractor, Id, Language, Pattern, Rewrite, Runner,
     SimpleScheduler, Subst, Symbol, Var, define_language,
 };
+
+use tir_bench::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
 
 #[path = "math_shared.rs"]
 mod shared;
@@ -141,23 +139,35 @@ fn extract_all(egraph: &EGraph<Math, ()>, roots: &[Id]) -> usize {
     total
 }
 
-fn bench_saturate(b: &mut functions::Bencher<'_, '_>, iters: usize) {
+fn saturation(c: &mut Criterion) {
     let rules = build_rules();
-    b.iter_batched(|| seed_runner(iters), |runner| saturate(runner, &rules));
+    // egg calibrates its clock on first use, in a loop bounded by wall time.
+    // Run it before anything is measured so instruction counts stay repeatable.
+    saturate(seed_runner(1), &rules);
+    let mut group = c.benchmark_group("egg_math/saturate");
+    for &iters in SAT_ITERS {
+        group.bench_function(BenchmarkId::from_parameter(iters), |b| {
+            b.iter_batched(
+                || seed_runner(iters),
+                |runner| saturate(runner, &rules),
+                BatchSize::SmallInput,
+            );
+        });
+    }
+    group.finish();
 }
 
-benchmarks! {
-    compiler = "egg";
-    saturate_1("egg_math/saturate/1") |b| { bench_saturate(b, SAT_ITERS[0]); }
-    saturate_2("egg_math/saturate/2") |b| { bench_saturate(b, SAT_ITERS[1]); }
-    saturate_3("egg_math/saturate/3") |b| { bench_saturate(b, SAT_ITERS[2]); }
-    bench_ematch("egg_math/ematch/all_rules") |b| {
+fn queries(c: &mut Criterion) {
+    c.bench_function("egg_math/ematch/all_rules", |b| {
         let (rules, runner) = pre_saturated();
         b.iter(|| ematch_all(&rules, &runner.egraph));
-    }
-    bench_extract("egg_math/extract/best") |b| {
+    });
+    c.bench_function("egg_math/extract/best", |b| {
         let (_, runner) = pre_saturated();
         let roots = runner.roots.clone();
         b.iter(|| extract_all(&runner.egraph, &roots));
-    }
+    });
 }
+
+criterion_group!(benches, saturation, queries);
+criterion_main!(benches);

@@ -1,8 +1,6 @@
-#[macro_use]
-#[path = "../../../benchmarks/functions.rs"]
-pub mod functions;
-
 use std::hint::black_box;
+
+use tir_bench::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
 use tir_pbqp::{PbqpMatrix, PbqpNodeId, PbqpProblem, solve};
 
 fn dense_problem(node_count: usize, alternative_count: usize) -> PbqpProblem {
@@ -76,27 +74,44 @@ fn solve_problem(problem: &PbqpProblem) {
     black_box(solve(problem).expect("PBQP should be solvable"));
 }
 
-fn bench_dense(b: &mut functions::Bencher<'_, '_>, nodes: usize) {
-    let problem = dense_problem(nodes, 4);
-    b.iter_batched(|| problem.clone(), |problem| solve_problem(&problem));
-}
-
-fn bench_block(b: &mut functions::Bencher<'_, '_>, nodes: usize) {
-    let problem = block_problem(nodes, 8);
-    b.iter_batched(|| problem.clone(), |problem| solve_problem(&problem));
-}
-
-fn block_settings() -> functions::Settings {
-    functions::Settings {
-        samples: Some(20),
-        ..Default::default()
+fn dense_search(c: &mut Criterion) {
+    let mut group = c.benchmark_group("pbqp/dense_search");
+    for nodes in [16, 32] {
+        let problem = dense_problem(nodes, 4);
+        group.bench_with_input(
+            BenchmarkId::from_parameter(nodes),
+            &problem,
+            |b, problem| {
+                b.iter_batched(
+                    || problem.clone(),
+                    |problem| solve_problem(&problem),
+                    BatchSize::SmallInput,
+                );
+            },
+        );
     }
+    group.finish();
 }
 
-benchmarks! {
-    compiler = "tir";
-    dense_search_16("pbqp/dense_search/16") |b| { bench_dense(b, 16); }
-    dense_search_32("pbqp/dense_search/32") |b| { bench_dense(b, 32); }
-    block_search_512("pbqp/block_search/512", block_settings()) |b| { bench_block(b, 512); }
-    block_search_4096("pbqp/block_search/4096", block_settings()) |b| { bench_block(b, 4096); }
+fn block_search(c: &mut Criterion) {
+    let mut group = c.benchmark_group("pbqp/block_search");
+    group.sample_size(20);
+    for nodes in [512, 4096] {
+        let problem = block_problem(nodes, 8);
+        group.bench_with_input(
+            BenchmarkId::from_parameter(nodes),
+            &problem,
+            |b, problem| {
+                b.iter_batched(
+                    || problem.clone(),
+                    |problem| solve_problem(&problem),
+                    BatchSize::SmallInput,
+                );
+            },
+        );
+    }
+    group.finish();
 }
+
+criterion_group!(benches, dense_search, block_search);
+criterion_main!(benches);

@@ -1,7 +1,7 @@
-//! Source preparation and compile/run cases for external program benchmarks.
+//! External programs as benchmarks: pinned sources, compile cases and run cases.
 use std::cell::RefCell;
 use std::ffi::OsString;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::Arc;
 use std::time::Duration;
@@ -11,39 +11,7 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 
 use crate::sources::GitSource;
-use crate::{Command as BenchCommand, Phase, ProcessCase, Suite};
-
-/// Cargo entry point for a program definition also consumed by other tools.
-#[macro_export]
-macro_rules! program_main {
-    ($definition:path) => {
-        #[allow(dead_code)] // Tools can import the definition without running the benchmark.
-        fn main() -> $crate::Result<()> {
-            if std::env::args().any(|arg| arg == "--describe") {
-                println!("{{\"kind\":\"program\"}}");
-                return Ok(());
-            }
-            let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .parent()
-                .expect("benchmark package belongs to the workspace");
-            let (namespace, candidate, llvm) = match env!("CARGO_PKG_NAME") {
-                "fcc" => ("fcc", option_env!("CARGO_BIN_EXE_fcc"), false),
-                "tir-tools" => ("tir", option_env!("CARGO_BIN_EXE_tir"), true),
-                package => panic!("unsupported program benchmark package {package}"),
-            };
-            let candidate = candidate.expect("Cargo-built compiler is unavailable");
-            let compilers = if llvm {
-                $crate::program::CompilerSet::llvm(candidate)
-            } else {
-                $crate::program::CompilerSet::source(candidate)
-            };
-            let program = $definition(root);
-            let mut suite = $crate::Suite::from_args(&format!("{namespace}/{}", program.name))?;
-            $crate::program::register_program(&mut suite, &compilers, root, &program)?;
-            suite.finish()
-        }
-    };
-}
+use crate::{Command as BenchCommand, Harness, Phase, ProcessCase};
 
 /// Run preparation or verification, retaining the command and stderr on failure.
 pub fn checked(command: &mut Command, timeout: Duration) -> Result<Output> {
@@ -106,38 +74,115 @@ pub fn executable_identity(program: &Path) -> Result<(std::path::PathBuf, String
     Ok((path, hash))
 }
 
-#[derive(Default)]
-pub enum Source {
-    #[default]
-    Local,
-    Git(GitSource),
-}
-
-#[derive(Default)]
-pub struct Program {
-    pub name: &'static str,
-    pub resources: PathBuf,
-    pub definition: PathBuf,
-    pub source: Source,
-    pub sources: Vec<&'static str>,
-    pub flags: &'static [&'static str],
-    pub link_flags: &'static [&'static str],
-    pub args: &'static [&'static str],
-    pub validator: Option<&'static str>,
-    pub llvm: bool,
-    pub separate: bool,
-    pub prepare_sources: Option<PrepareSources>,
-}
-
+/// Replaces the declared source list after checkout. Receives the workspace root
+/// and the source directory, and returns the sources and extra workload dependencies.
 pub type PrepareSources = fn(&Path, &Path) -> Result<(Vec<PathBuf>, Vec<PathBuf>)>;
 
-pub struct Prepared {
-    pub directory: PathBuf,
-    pub sources: Vec<PathBuf>,
-    pub dependencies: Vec<PathBuf>,
+/// An external program, measured as one compile case per source and a run case.
+pub struct Program {
+    pub name: &'static str,
+    pub sources: Vec<&'static str>,
+    pub flags: Vec<&'static str>,
+    pub link_flags: Vec<&'static str>,
+    pub args: Vec<&'static str>,
+    /// Workspace-relative directory of local sources and the validator with its data.
+    resources: PathBuf,
+    /// The file that declares this program. Editing it invalidates recorded baselines.
+    definition: &'static str,
+    git: Option<GitSource>,
+    validator: Option<&'static str>,
+    llvm: bool,
+    separate: bool,
+    prepare_sources: Option<PrepareSources>,
 }
 
 impl Program {
+    /// Declare a program whose sources are in `resources`, a directory relative
+    /// to the workspace root.
+    #[track_caller]
+    pub fn new(name: &'static str, resources: impl Into<PathBuf>) -> Self {
+        Self {
+            name,
+            sources: Vec::new(),
+            flags: Vec::new(),
+            link_flags: Vec::new(),
+            args: Vec::new(),
+            resources: resources.into(),
+            definition: std::panic::Location::caller().file(),
+            git: None,
+            validator: None,
+            llvm: false,
+            separate: false,
+            prepare_sources: None,
+        }
+    }
+
+    /// Take sources from a pinned commit. `resources` then holds only the validator.
+    pub fn git(mut self, repository: &'static str, revision: &'static str) -> Self {
+        self.git = Some(GitSource {
+            repository,
+            revision,
+            subdir: "",
+        });
+        self
+    }
+
+    /// Check out one directory of the Git source and resolve sources inside it.
+    pub fn subdir(mut self, subdir: &'static str) -> Self {
+        self.git
+            .as_mut()
+            .expect("subdir narrows a Git source")
+            .subdir = subdir;
+        self
+    }
+
+    pub fn sources(mut self, sources: impl IntoIterator<Item = &'static str>) -> Self {
+        self.sources = sources.into_iter().collect();
+        self
+    }
+
+    /// Compiler flags for every source.
+    pub fn flags(mut self, flags: impl IntoIterator<Item = &'static str>) -> Self {
+        self.flags = flags.into_iter().collect();
+        self
+    }
+
+    pub fn link_flags(mut self, flags: impl IntoIterator<Item = &'static str>) -> Self {
+        self.link_flags = flags.into_iter().collect();
+        self
+    }
+
+    /// Arguments of the measured run. Filtering never changes them.
+    pub fn args(mut self, args: impl IntoIterator<Item = &'static str>) -> Self {
+        self.args = args.into_iter().collect();
+        self
+    }
+
+    /// Check the output of every run with this Python script from `resources`.
+    pub fn verify(mut self, script: &'static str) -> Self {
+        self.validator = Some(script);
+        self
+    }
+
+    /// Also measure the `tir` backend on the LLVM IR that Clang emits for this program.
+    pub fn llvm(mut self) -> Self {
+        self.llvm = true;
+        self
+    }
+
+    /// Link and run every source as a program of its own.
+    pub fn separate(mut self) -> Self {
+        self.separate = true;
+        self
+    }
+
+    pub fn prepare_sources(mut self, prepare: PrepareSources) -> Self {
+        self.prepare_sources = Some(prepare);
+        self
+    }
+
+    /// Resolve the source directory and the files this workload depends on,
+    /// fetching the pinned commit unless `offline`.
     pub fn prepare(
         &self,
         root: &Path,
@@ -145,10 +190,10 @@ impl Program {
         offline: bool,
         timeout: std::time::Duration,
     ) -> Result<Prepared> {
-        let local = self.resources.clone();
-        let directory = match &self.source {
-            Source::Local => local.clone(),
-            Source::Git(source) => source.prepare(cache, offline, timeout)?,
+        let local = root.join(&self.resources);
+        let directory = match &self.git {
+            None => local.clone(),
+            Some(source) => source.prepare(cache, offline, timeout)?,
         }
         .canonicalize()?;
         let mut sources = self
@@ -189,7 +234,7 @@ impl Program {
                 }
             }
         }
-        dependencies.push(self.definition.clone());
+        dependencies.push(normalized(&root.join(self.definition)));
         dependencies.sort();
         dependencies.dedup();
         Ok(Prepared {
@@ -198,6 +243,26 @@ impl Program {
             dependencies,
         })
     }
+}
+
+pub struct Prepared {
+    pub directory: PathBuf,
+    pub sources: Vec<PathBuf>,
+    pub dependencies: Vec<PathBuf>,
+}
+
+/// Resolve `..` lexically. A definition shared by another package arrives as
+/// `tools/../fcc/benches/x.rs` and must keep one workspace-relative identity.
+fn normalized(path: &Path) -> PathBuf {
+    let mut result = PathBuf::new();
+    for component in path.components() {
+        if component == Component::ParentDir {
+            result.pop();
+        } else {
+            result.push(component);
+        }
+    }
+    result
 }
 
 pub fn collect(directory: &Path, paths: &mut Vec<PathBuf>, extension: &str) -> Result<()> {
@@ -215,24 +280,122 @@ pub fn collect(directory: &Path, paths: &mut Vec<PathBuf>, extension: &str) -> R
     Ok(())
 }
 
-/// Select the Cargo-built compiler for one input mode and its reference controls.
-pub struct CompilerSet {
+/// A compiler that takes part in a program benchmark.
+#[derive(Clone, Copy)]
+struct Compiler {
+    name: &'static str,
+    /// Executable of a reference compiler. `None` is the candidate that Cargo
+    /// built from this checkout, the only compiler whose cases gate.
+    reference: Option<&'static str>,
+    flags: &'static [&'static str],
+    /// Measured only when `--compiler` names it.
+    opt_in: bool,
+}
+
+impl Compiler {
+    fn candidate(&self) -> bool {
+        self.reference.is_none()
+    }
+}
+
+const SOURCE_COMPILERS: [Compiler; 4] = [
+    Compiler {
+        name: "fcc",
+        reference: None,
+        flags: &[],
+        opt_in: false,
+    },
+    Compiler {
+        name: "gcc",
+        reference: Some("gcc"),
+        flags: &[],
+        opt_in: false,
+    },
+    Compiler {
+        name: "clang",
+        reference: Some("clang"),
+        flags: &[],
+        opt_in: false,
+    },
+    Compiler {
+        name: "clang-scalar",
+        reference: Some("clang"),
+        flags: &["-fno-vectorize", "-fno-slp-vectorize"],
+        opt_in: true,
+    },
+];
+
+const LLVM_COMPILERS: [Compiler; 3] = [
+    Compiler {
+        name: "tir",
+        reference: None,
+        flags: &[],
+        opt_in: false,
+    },
+    Compiler {
+        name: "clang-ir",
+        reference: Some("clang"),
+        flags: &[],
+        opt_in: false,
+    },
+    Compiler {
+        name: "clang-ir-backend",
+        reference: Some("clang"),
+        flags: &["-Xclang", "-disable-llvm-passes"],
+        opt_in: false,
+    },
+];
+
+/// Flags Clang uses to produce the shared LLVM IR input of every LLVM-mode compiler.
+const LLVM_PRODUCER_FLAGS: [&str; 6] = [
+    "-fno-vectorize",
+    "-fno-slp-vectorize",
+    "-S",
+    "-emit-llvm",
+    "-Xclang",
+    "-disable-O0-optnone",
+];
+
+/// The Cargo-built candidate and the form of input it compiles.
+#[derive(Clone)]
+pub(crate) struct CompilerSet {
     candidate: PathBuf,
+    /// The candidate is `tir`, compiling LLVM IR. Otherwise it is `fcc`, compiling C.
     llvm: bool,
 }
 
 impl CompilerSet {
-    pub fn source(candidate: impl Into<PathBuf>) -> Self {
+    pub(crate) fn source(candidate: impl Into<PathBuf>) -> Self {
         Self {
             candidate: candidate.into(),
             llvm: false,
         }
     }
-    pub fn llvm(candidate: impl Into<PathBuf>) -> Self {
+    pub(crate) fn llvm(candidate: impl Into<PathBuf>) -> Self {
         Self {
             candidate: candidate.into(),
             llvm: true,
         }
+    }
+
+    fn mode(&self) -> &'static str {
+        if self.llvm { "llvm" } else { "source" }
+    }
+
+    /// The candidate and its references, or the compilers named by `--compiler`.
+    fn compilers(&self, requested: Option<&str>) -> Vec<Compiler> {
+        let all: &[Compiler] = if self.llvm {
+            &LLVM_COMPILERS
+        } else {
+            &SOURCE_COMPILERS
+        };
+        all.iter()
+            .filter(|compiler| match requested {
+                None => !compiler.opt_in,
+                Some(requested) => requested.split(',').any(|name| name == compiler.name),
+            })
+            .copied()
+            .collect()
     }
 }
 
@@ -256,98 +419,11 @@ impl Recipe {
     }
 }
 
-fn compile(
-    set: &CompilerSet,
-    compiler: &str,
-    program: &Program,
-    cwd: &Path,
-    level: &str,
-    input: &Path,
-    output: &Path,
-) -> Recipe {
-    let executable = if matches!(compiler, "fcc" | "tir") {
-        set.candidate.clone()
-    } else if compiler == "gcc" {
-        "gcc".into()
-    } else {
-        "clang".into()
-    };
-    let mut args: Vec<OsString> = Vec::new();
-    if compiler == "tir" {
-        args.extend(["mc", "--march", host_arch(), "--filetype", "obj"].map(OsString::from));
-    } else {
-        if !set.llvm {
-            args.push("-std=gnu17".into());
-        }
-        args.push(level.into());
-        if !set.llvm {
-            args.extend(program.flags.iter().map(OsString::from));
-        }
-        if compiler == "clang-scalar" {
-            args.extend(["-fno-vectorize", "-fno-slp-vectorize"].map(OsString::from));
-        }
-        if compiler == "clang-ir-backend" {
-            args.extend(["-Xclang", "-disable-llvm-passes"].map(OsString::from));
-        }
-        args.push("-c".into());
-    }
-    args.extend([
-        input.as_os_str().to_owned(),
-        "-o".into(),
-        output.as_os_str().to_owned(),
-    ]);
-    Recipe {
-        executable,
-        args,
-        cwd: cwd.to_owned(),
-    }
-}
-
 fn host_arch() -> &'static str {
     match std::env::consts::ARCH {
         "aarch64" => "arm64",
         arch => arch,
     }
-}
-
-fn link(
-    set: &CompilerSet,
-    compiler: &str,
-    program: &Program,
-    cwd: &Path,
-    objects: &[PathBuf],
-    output: &Path,
-) -> Recipe {
-    let executable = if compiler == "fcc" {
-        set.candidate.clone()
-    } else if compiler == "gcc" {
-        "gcc".into()
-    } else {
-        "clang".into()
-    };
-    let mut args = Vec::new();
-    if set.llvm {
-        args.push("-no-pie".into());
-    }
-    args.extend(objects.iter().map(|path| path.as_os_str().to_owned()));
-    args.extend(program.link_flags.iter().map(OsString::from));
-    args.extend(["-o".into(), output.as_os_str().to_owned()]);
-    Recipe {
-        executable,
-        args,
-        cwd: cwd.to_owned(),
-    }
-}
-
-fn validator(program: &Program, root: &Path) -> Option<Recipe> {
-    program.validator.map(|name| {
-        let path = program.resources.join(name);
-        Recipe {
-            executable: "python3".into(),
-            args: vec![path.into_os_string()],
-            cwd: root.to_owned(),
-        }
-    })
 }
 
 fn verify_output(
@@ -365,128 +441,20 @@ fn verify_output(
     Ok(())
 }
 
-fn names(set: &CompilerSet, requested: Option<&str>) -> Vec<&'static str> {
-    let all = if set.llvm {
-        vec!["tir", "clang-ir", "clang-ir-backend"]
-    } else {
-        vec!["fcc", "gcc", "clang", "clang-scalar"]
-    };
-    all.into_iter()
-        .filter(|name| {
-            requested.map_or(*name != "clang-scalar", |requested| {
-                requested.split(',').any(|part| part == *name)
-            })
-        })
-        .collect()
-}
-
-pub fn register_program(
-    suite: &mut Suite,
-    set: &CompilerSet,
-    root: &Path,
-    program: &Program,
-) -> Result<()> {
-    if set.llvm && !program.llvm {
-        return Ok(());
-    }
-    let compilers = names(set, suite.options().compiler.as_deref());
-    let levels = ["-O0", "-O2"]
-        .into_iter()
-        .filter(|level| {
-            suite.options().level.as_ref().is_none_or(|wanted| {
-                wanted.trim_start_matches('-') == level.trim_start_matches('-')
-            })
-        })
-        .collect::<Vec<_>>();
-    let compile_enabled = !matches!(suite.options().phase, Phase::Run);
-    let run_enabled = !matches!(suite.options().phase, Phase::Compile);
-    let selected = select(suite, set, program, &compilers, &levels)?;
-    if suite.options().list || !selected || compilers.is_empty() || levels.is_empty() {
-        return Ok(());
-    }
-    let timeout = suite.timeout();
-    let cache = suite.source_cache();
-    let prepared = program.prepare(root, &cache, suite.options().offline, timeout)?;
-    let validator = validator(program, root);
-    let args = program.args.iter().map(OsString::from).collect::<Vec<_>>();
-    for level in levels {
-        let wanted = |compiler: &str, index: usize| {
-            let ids = CaseIds::new(set, program, compiler, level);
-            let source = prepared.sources[index]
-                .strip_prefix(&prepared.directory)
-                .expect("prepared source belongs to its directory");
-            (compile_enabled && suite.matches(&ids.compile(source)))
-                || (run_enabled && suite.matches(&ids.run(source)))
-        };
-        let selected_indices = compilers
-            .iter()
-            .map(|compiler| {
-                (0..prepared.sources.len())
-                    .filter(|index| wanted(compiler, *index))
-                    .collect::<Vec<_>>()
-            })
-            .collect::<Vec<_>>();
-        if selected_indices.iter().all(Vec::is_empty) {
-            continue;
-        }
-        let scratch = suite
-            .artifacts()
-            .join("programs")
-            .join(program.name)
-            .join(level.trim_start_matches('-'));
-        std::fs::create_dir_all(&scratch)?;
-        let inputs = prepare_inputs(set, program, &prepared, level, &scratch, timeout)?;
-        let mut groups = CaseGroups {
-            compile: (0..inputs.len()).map(|_| Vec::new()).collect(),
-            run: (0..if program.separate { inputs.len() } else { 1 })
-                .map(|_| Vec::new())
-                .collect(),
-        };
-        let context = PreparedLevel {
-            set,
-            program,
-            prepared: &prepared,
-            inputs: &inputs,
-            level,
-            validator: &validator,
-            args: &args,
-            timeout,
-        };
-        let metadata = context.metadata(root, &scratch)?;
-        for (compiler, selected_indices) in compilers.iter().zip(&selected_indices) {
-            if selected_indices.is_empty() {
-                continue;
-            }
-            context.prepare_compiler(
-                suite,
-                compiler,
-                selected_indices,
-                &scratch,
-                &metadata,
-                &mut groups,
-            )?;
-        }
-        for group in groups.compile.into_iter().chain(groups.run) {
-            if !group.is_empty() {
-                suite.process_group(group)?;
-            }
-        }
-    }
-    Ok(())
-}
-
+/// Identifiers of one compiler's cases at one optimization level.
 struct CaseIds {
     base: String,
     separate: bool,
 }
 
 impl CaseIds {
-    fn new(set: &CompilerSet, program: &Program, compiler: &str, level: &str) -> Self {
-        let mode = if set.llvm { "llvm" } else { "source" };
+    fn new(set: &CompilerSet, program: &Program, compiler: &Compiler, level: &str) -> Self {
         Self {
             base: format!(
-                "{compiler}/{}/{mode}/{}",
+                "{}/{}/{}/{}",
+                compiler.name,
                 program.name,
+                set.mode(),
                 level.trim_start_matches('-')
             ),
             separate: program.separate,
@@ -510,44 +478,150 @@ impl CaseIds {
     }
 }
 
+/// Which case kinds `--phase` leaves enabled, as (compile, run).
+fn phases(phase: Phase) -> (bool, bool) {
+    (phase != Phase::Run, phase != Phase::Compile)
+}
+
+/// Measure `program` with the target's compilers, or list its cases. Nothing is
+/// fetched or compiled unless a case passes the filter.
+pub(crate) fn measure(harness: &mut Harness, program: &Program) -> Result<()> {
+    if harness.skips_programs() {
+        return Ok(());
+    }
+    let set = harness
+        .compilers
+        .clone()
+        .context("program benchmarks need the package's Cargo-built fcc or tir binary")?;
+    if set.llvm && !program.llvm {
+        return Ok(());
+    }
+    let compilers = set.compilers(harness.options.compiler.as_deref());
+    let levels = ["-O0", "-O2"]
+        .into_iter()
+        .filter(|level| {
+            harness.options.level.as_ref().is_none_or(|wanted| {
+                wanted.trim_start_matches('-') == level.trim_start_matches('-')
+            })
+        })
+        .collect::<Vec<_>>();
+    let selected = select(harness, &set, program, &compilers, &levels)?;
+    if harness.listing() || !selected {
+        return Ok(());
+    }
+    let root = harness.workspace.clone();
+    let timeout = harness.timeout();
+    let prepared = program.prepare(
+        &root,
+        &harness.source_cache(),
+        harness.options.offline,
+        timeout,
+    )?;
+    let validator = program.validator.map(|name| Recipe {
+        executable: "python3".into(),
+        args: vec![root.join(&program.resources).join(name).into_os_string()],
+        cwd: root.clone(),
+    });
+    let (compile_enabled, run_enabled) = phases(harness.options.phase);
+    for level in levels {
+        // A compile case needs its own source. A run case needs every source
+        // of its program, which is one source when programs are separate.
+        let wanted = |compiler: &Compiler, index: usize| {
+            let ids = CaseIds::new(&set, program, compiler, level);
+            let source = prepared.sources[index]
+                .strip_prefix(&prepared.directory)
+                .expect("prepared source belongs to its directory");
+            (compile_enabled && harness.matches(&ids.compile(source)))
+                || (run_enabled && harness.matches(&ids.run(source)))
+        };
+        let selected_indices = compilers
+            .iter()
+            .map(|compiler| {
+                (0..prepared.sources.len())
+                    .filter(|index| wanted(compiler, *index))
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        if selected_indices.iter().all(Vec::is_empty) {
+            continue;
+        }
+        let scratch = harness
+            .bundle()?
+            .join("programs")
+            .join(program.name)
+            .join(level.trim_start_matches('-'));
+        std::fs::create_dir_all(&scratch)?;
+        let build = Build {
+            set: &set,
+            program,
+            prepared: &prepared,
+            inputs: &prepare_inputs(&set, program, &prepared, level, &scratch, timeout)?,
+            level,
+            validator: &validator,
+            timeout,
+        };
+        let metadata = build.metadata(&root, &scratch)?;
+        // Compilers are interleaved within a group: one group per source for
+        // compilation and one per linked program for its run.
+        let mut compile_groups: Vec<Vec<ProcessCase>> =
+            build.inputs.iter().map(|_| Vec::new()).collect();
+        let mut run_groups: Vec<Vec<ProcessCase>> =
+            (0..build.programs()).map(|_| Vec::new()).collect();
+        for (compiler, selected_indices) in compilers.iter().zip(&selected_indices) {
+            if selected_indices.is_empty() {
+                continue;
+            }
+            let cases = build.cases(compiler, selected_indices, &scratch, &metadata)?;
+            for (group, case) in cases.compile {
+                if compile_enabled && harness.matches(&case.id) {
+                    compile_groups[group].push(case);
+                }
+            }
+            for (group, case) in cases.run {
+                if run_enabled && harness.matches(&case.id) {
+                    run_groups[group].push(case);
+                }
+            }
+        }
+        for group in compile_groups.into_iter().chain(run_groups) {
+            if !group.is_empty() {
+                harness.process_group(group)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Report whether the filter selects any case of the program, listing the
+/// selected cases in list mode.
 fn select(
-    suite: &mut Suite,
+    harness: &mut Harness,
     set: &CompilerSet,
     program: &Program,
-    compilers: &[&str],
+    compilers: &[Compiler],
     levels: &[&str],
 ) -> Result<bool> {
-    let compile_enabled = !matches!(suite.options().phase, Phase::Run);
-    let run_enabled = !matches!(suite.options().phase, Phase::Compile);
+    let (compile_enabled, run_enabled) = phases(harness.options.phase);
     let mut selected = false;
     for compiler in compilers {
         for level in levels {
             let cases = CaseIds::new(set, program, compiler, level);
+            let sources = || program.sources.iter().map(Path::new);
             let mut ids = Vec::new();
             if compile_enabled {
-                ids.extend(
-                    program
-                        .sources
-                        .iter()
-                        .map(|source| cases.compile(Path::new(source))),
-                );
+                ids.extend(sources().map(|source| cases.compile(source)));
             }
-            if run_enabled {
-                if program.separate {
-                    ids.extend(
-                        program
-                            .sources
-                            .iter()
-                            .map(|source| cases.run(Path::new(source))),
-                    );
-                } else {
-                    ids.push(cases.run(Path::new("")));
-                }
+            if run_enabled && program.separate {
+                ids.extend(sources().map(|source| cases.run(source)));
+            } else if run_enabled {
+                ids.push(cases.run(Path::new("")));
             }
             for id in ids {
-                selected |= suite.matches(&id);
-                if suite.options().list {
-                    suite.list_case(&id)?;
+                if harness.matches(&id) {
+                    selected = true;
+                    if harness.listing() {
+                        harness.list_case(&id)?;
+                    }
                 }
             }
         }
@@ -555,23 +629,89 @@ fn select(
     Ok(selected)
 }
 
-struct CaseGroups {
-    compile: Vec<Vec<ProcessCase>>,
-    run: Vec<Vec<ProcessCase>>,
+/// Cases of one compiler, each tagged with the group it is interleaved in.
+struct Cases {
+    compile: Vec<(usize, ProcessCase)>,
+    run: Vec<(usize, ProcessCase)>,
 }
 
-struct PreparedLevel<'a> {
+/// One program at one optimization level, with its inputs ready to compile.
+struct Build<'a> {
     set: &'a CompilerSet,
     program: &'a Program,
     prepared: &'a Prepared,
+    /// What the compilers read: the C sources, or LLVM IR generated from them.
     inputs: &'a [PathBuf],
     level: &'a str,
     validator: &'a Option<Recipe>,
-    args: &'a [OsString],
     timeout: Duration,
 }
 
-impl PreparedLevel<'_> {
+impl Build<'_> {
+    /// Number of linked programs: one, or one per source when they are separate.
+    fn programs(&self) -> usize {
+        if self.program.separate {
+            self.inputs.len()
+        } else {
+            1
+        }
+    }
+
+    /// FCC links its own objects. Every other compiler's objects go through a C driver.
+    fn links_itself(&self, compiler: &Compiler) -> bool {
+        compiler.candidate() && !self.set.llvm
+    }
+
+    fn compile(&self, compiler: &Compiler, input: &Path, output: &Path) -> Recipe {
+        let mut args: Vec<OsString> = Vec::new();
+        if compiler.candidate() && self.set.llvm {
+            args.extend(["mc", "--march", host_arch(), "--filetype", "obj"].map(OsString::from));
+        } else {
+            if !self.set.llvm {
+                args.push("-std=gnu17".into());
+            }
+            args.push(self.level.into());
+            if !self.set.llvm {
+                args.extend(self.program.flags.iter().map(OsString::from));
+            }
+            args.extend(compiler.flags.iter().map(OsString::from));
+            args.push("-c".into());
+        }
+        args.extend([
+            input.as_os_str().to_owned(),
+            "-o".into(),
+            output.as_os_str().to_owned(),
+        ]);
+        Recipe {
+            executable: compiler
+                .reference
+                .map_or_else(|| self.set.candidate.clone(), PathBuf::from),
+            args,
+            cwd: self.prepared.directory.clone(),
+        }
+    }
+
+    fn link(&self, compiler: &Compiler, objects: &[PathBuf], output: &Path) -> Recipe {
+        let mut args = Vec::new();
+        if self.set.llvm {
+            args.push("-no-pie".into());
+        }
+        args.extend(objects.iter().map(|path| path.as_os_str().to_owned()));
+        args.extend(self.program.link_flags.iter().map(OsString::from));
+        args.extend(["-o".into(), output.as_os_str().to_owned()]);
+        Recipe {
+            executable: if self.links_itself(compiler) {
+                self.set.candidate.clone()
+            } else {
+                compiler.reference.unwrap_or("clang").into()
+            },
+            args,
+            cwd: self.prepared.directory.clone(),
+        }
+    }
+
+    /// Workload identity shared by every compiler. Baselines with a different
+    /// identity are rejected, so it covers everything that defines the work.
     fn metadata(&self, root: &Path, scratch: &Path) -> Result<serde_json::Value> {
         let Self {
             set,
@@ -582,10 +722,9 @@ impl PreparedLevel<'_> {
             timeout,
             ..
         } = *self;
-        let mode = if set.llvm { "llvm" } else { "source" };
         let mut parameters = vec![
             "program-contract-v1".into(),
-            mode.into(),
+            set.mode().into(),
             level.into(),
             format!("{}", program.separate),
         ];
@@ -593,11 +732,11 @@ impl PreparedLevel<'_> {
             program
                 .flags
                 .iter()
-                .chain(program.link_flags)
-                .chain(program.args)
+                .chain(&program.link_flags)
+                .chain(&program.args)
                 .map(|s| (*s).to_owned()),
         );
-        if let Source::Git(source) = &program.source {
+        if let Some(source) = &program.git {
             parameters.extend([source.repository.into(), source.revision.into()]);
         }
         let mut dependencies = prepared.dependencies.clone();
@@ -627,28 +766,29 @@ impl PreparedLevel<'_> {
         } else {
             None
         };
+        let mut producer_flags = vec!["-std=gnu17", level];
+        producer_flags.extend(LLVM_PRODUCER_FLAGS);
         Ok(json!({
             "workload_digest": workload_digest,
             "contract_version": 1,
-            "input": mode,
+            "input": set.mode(),
             "level": level,
             "args": program.args,
             "flags": program.flags,
             "link_flags": program.link_flags,
             "llvm_digest": llvm_digest,
             "llvm_producer_version": producer_version,
-            "llvm_producer_flags": [
-                "-std=gnu17", level, "-fno-vectorize", "-fno-slp-vectorize",
-                "-S", "-emit-llvm", "-Xclang", "-disable-O0-optnone"
-            ],
+            "llvm_producer_flags": producer_flags,
             "build": crate::build_configuration(),
             "validation": "outside measurement",
         }))
     }
 
+    /// Compile the selected objects once outside measurement, which also
+    /// records the candidate's phase timings, and describe the compiler.
     fn prepare_objects(
         &self,
-        compiler: &str,
+        compiler: &Compiler,
         recipes: &[Recipe],
         selected_indices: &[usize],
         directory: &Path,
@@ -657,12 +797,10 @@ impl PreparedLevel<'_> {
         let mut phase_timings = serde_json::Map::new();
         for (index, recipe) in recipes.iter().enumerate() {
             if !self.program.separate || selected_indices.contains(&index) {
-                let diagnostic = recipe.measured();
-                let diagnostic = if matches!(compiler, "fcc" | "tir") {
-                    diagnostic.env("TIR_TIME_PASSES", "1")
-                } else {
-                    diagnostic
-                };
+                let mut diagnostic = recipe.measured();
+                if compiler.candidate() {
+                    diagnostic = diagnostic.env("TIR_TIME_PASSES", "1");
+                }
                 let output =
                     diagnostic.run(&directory.join(format!("prepare-{index}")), self.timeout)?;
                 let phases = parse_phases(&std::fs::read_to_string(output.stderr)?);
@@ -672,7 +810,7 @@ impl PreparedLevel<'_> {
             }
         }
         let tool = &recipes[0].executable;
-        let version = if compiler == "fcc" {
+        let version = if self.links_itself(compiler) {
             format!("fcc package {}", env!("CARGO_PKG_VERSION"))
         } else {
             String::from_utf8_lossy(
@@ -681,7 +819,7 @@ impl PreparedLevel<'_> {
             .into_owned()
         };
         let (tool_path, tool_hash) = executable_identity(tool)?;
-        metadata["compiler"] = json!(compiler);
+        metadata["compiler"] = json!(compiler.name);
         metadata["provenance"] = json!({
             "compiler_path": tool_path,
             "compiler_hash": tool_hash,
@@ -689,30 +827,33 @@ impl PreparedLevel<'_> {
             "phase_timings_ms": phase_timings,
             "phase_scope": "separate instrumented preparation invocation",
         });
-        if !matches!(compiler, "fcc" | "tir") {
+        if !compiler.candidate() {
             metadata["reference_compiler_hash"] = json!(tool_hash);
             metadata["reference_compiler_version"] = json!(version);
         }
-        let linker = match compiler {
-            "fcc" => "cc",
-            "gcc" => "gcc",
-            _ => "clang",
-        };
         // FCC is the direct link driver and delegates system linking to cc.
-        metadata["link_driver"] = json!(if compiler == "fcc" { "fcc" } else { linker });
-        metadata["system_linker_driver"] = reference_tool(linker, self.timeout)?;
+        let system_linker = if self.links_itself(compiler) {
+            "cc"
+        } else {
+            compiler.reference.unwrap_or("clang")
+        };
+        metadata["link_driver"] = json!(if self.links_itself(compiler) {
+            "fcc"
+        } else {
+            system_linker
+        });
+        metadata["system_linker_driver"] = reference_tool(system_linker, self.timeout)?;
         Ok(metadata)
     }
 
-    fn prepare_compiler(
+    /// Build, link and validate with one compiler, then describe its measured cases.
+    fn cases(
         &self,
-        suite: &Suite,
-        compiler: &str,
+        compiler: &Compiler,
         selected_indices: &[usize],
         scratch: &Path,
         base_metadata: &serde_json::Value,
-        groups: &mut CaseGroups,
-    ) -> Result<()> {
+    ) -> Result<Cases> {
         let Self {
             set,
             program,
@@ -720,32 +861,17 @@ impl PreparedLevel<'_> {
             inputs,
             level,
             validator,
-            args,
             timeout,
         } = *self;
-        let compile_enabled = !matches!(suite.options().phase, Phase::Run);
-        let run_enabled = !matches!(suite.options().phase, Phase::Compile);
-        let directory = scratch.join(compiler);
+        let directory = scratch.join(compiler.name);
         std::fs::create_dir_all(&directory)?;
-        let objects = inputs
-            .iter()
-            .enumerate()
-            .map(|(index, _)| directory.join(format!("{index}.o")))
+        let objects = (0..inputs.len())
+            .map(|index| directory.join(format!("{index}.o")))
             .collect::<Vec<_>>();
         let recipes = inputs
             .iter()
             .zip(&objects)
-            .map(|(input, output)| {
-                compile(
-                    set,
-                    compiler,
-                    program,
-                    &prepared.directory,
-                    level,
-                    input,
-                    output,
-                )
-            })
+            .map(|(input, output)| self.compile(compiler, input, output))
             .collect::<Vec<_>>();
         let metadata = self.prepare_objects(
             compiler,
@@ -754,31 +880,29 @@ impl PreparedLevel<'_> {
             &directory,
             base_metadata.clone(),
         )?;
-        for (group, run_group) in groups.run.iter_mut().enumerate() {
+        let args = program.args.iter().map(OsString::from).collect::<Vec<_>>();
+        let ids = CaseIds::new(set, program, compiler, level);
+        let mut cases = Cases {
+            compile: Vec::new(),
+            run: Vec::new(),
+        };
+        for group in 0..self.programs() {
             if program.separate && !selected_indices.contains(&group) {
                 continue;
             }
             let members = if program.separate {
-                &objects[group..group + 1]
+                group..group + 1
             } else {
-                &objects[..]
+                0..inputs.len()
             };
             let executable = directory.join(format!("program-{group}"));
-            let linker = link(
-                set,
-                compiler,
-                program,
-                &prepared.directory,
-                members,
-                &executable,
-            );
             let runner = Recipe {
-                executable,
-                args: args.to_vec(),
+                executable: executable.clone(),
+                args: args.clone(),
                 cwd: prepared.directory.clone(),
             };
             let validation = Arc::new(Validation {
-                linker,
+                linker: self.link(compiler, &objects[members.clone()], &executable),
                 runner: runner.clone(),
                 validator: validator.clone(),
                 directory: directory.join(format!("verify-{group}")),
@@ -786,48 +910,42 @@ impl PreparedLevel<'_> {
             });
             // Run validation even for compile-only selections before sampling.
             validation.verify()?;
-            let cases = CaseIds::new(set, program, compiler, level);
-            let run_source = prepared.sources[group].strip_prefix(&prepared.directory)?;
-            let run_id = cases.run(run_source);
-            if run_enabled && suite.matches(&run_id) {
-                let verifier = (*validator).clone();
-                let runtime_args = args.to_vec();
-                run_group.push(ProcessCase {
-                    id: run_id,
+            let verifier = validator.clone();
+            let runtime_args = args.clone();
+            cases.run.push((
+                group,
+                ProcessCase {
+                    id: ids.run(prepared.sources[group].strip_prefix(&prepared.directory)?),
                     command: runner.measured(),
                     verify: Some(Box::new(move |stdout| {
                         verify_output(&verifier, &runtime_args, stdout, timeout)
                     })),
                     metadata: metadata.clone(),
-                    gate: matches!(compiler, "fcc" | "tir"),
-                });
-            }
-            let indices = if program.separate {
-                group..group + 1
-            } else {
-                0..inputs.len()
-            };
-            for index in indices {
-                let source = prepared.sources[index].strip_prefix(&prepared.directory)?;
-                let id = cases.compile(source);
-                if compile_enabled && suite.matches(&id) {
-                    let validation = Arc::clone(&validation);
-                    let object = objects[index].clone();
-                    let validated = MemoizedValidation::new(object_digest(&object)?);
-                    let trace_children = !matches!(compiler, "fcc" | "tir");
-                    groups.compile[index].push(ProcessCase {
-                        id,
-                        command: recipes[index].measured().trace_children(trace_children),
+                    gate: compiler.candidate(),
+                },
+            ));
+            for index in members {
+                let validation = Arc::clone(&validation);
+                let object = objects[index].clone();
+                let validated = MemoizedValidation::new(object_digest(&object)?);
+                cases.compile.push((
+                    index,
+                    ProcessCase {
+                        id: ids.compile(prepared.sources[index].strip_prefix(&prepared.directory)?),
+                        // A reference driver execs its real compiler, which must be counted too.
+                        command: recipes[index]
+                            .measured()
+                            .trace_children(!compiler.candidate()),
                         verify: Some(Box::new(move |_| {
                             validated.verify(&object_digest(&object)?, || validation.verify())
                         })),
                         metadata: metadata.clone(),
-                        gate: matches!(compiler, "fcc" | "tir"),
-                    });
-                }
+                        gate: compiler.candidate(),
+                    },
+                ));
             }
         }
-        Ok(())
+        Ok(cases)
     }
 }
 
@@ -897,6 +1015,7 @@ impl Validation {
     }
 }
 
+/// The compilers' inputs: the C sources, or LLVM IR that Clang emits from them.
 fn prepare_inputs(
     set: &CompilerSet,
     program: &Program,
@@ -918,14 +1037,7 @@ fn prepare_inputs(
                 .current_dir(&prepared.directory)
                 .args(["-std=gnu17", level])
                 .args(program.flags.iter().copied())
-                .args([
-                    "-fno-vectorize",
-                    "-fno-slp-vectorize",
-                    "-S",
-                    "-emit-llvm",
-                    "-Xclang",
-                    "-disable-O0-optnone",
-                ])
+                .args(LLVM_PRODUCER_FLAGS)
                 .arg(source.strip_prefix(&prepared.directory)?)
                 .arg("-o")
                 .arg(output.as_os_str())
@@ -959,27 +1071,29 @@ mod tests {
     fn listing_filters_cases_without_preparing_sources() -> Result<()> {
         use clap::Parser;
 
-        let program = Program {
-            name: "example",
-            sources: vec!["nested/a.c"],
-            separate: true,
-            ..Program::default()
-        };
+        let program = Program::new("example", "missing")
+            .sources(["nested/a.c"])
+            .separate();
         let set = CompilerSet::source("nonexistent-compiler");
-        for (filter, expected) in [
-            ("unrelated", false),
-            ("{*/compile/nested/a,*/run/nested/a}", true),
-        ] {
-            let options = crate::Options::try_parse_from(["bench", "--list", "--filter", filter])?;
-            let mut suite = Suite::new("fixture/programs", options)?;
+        for (filter, expected) in [("unrelated", false), ("/(compile|run)/nested/a$", true)] {
+            let options = crate::Options::try_parse_from(["bench", "--list", filter])?;
+            let mut harness = Harness::new("fixture/programs", options)?;
+            harness.compilers = Some(set.clone());
             assert_eq!(
-                select(&mut suite, &set, &program, &["fcc"], &["-O2"])?,
+                select(
+                    &mut harness,
+                    &set,
+                    &program,
+                    &SOURCE_COMPILERS[..1],
+                    &["-O2"]
+                )?,
                 expected
             );
-            let options = crate::Options::try_parse_from(["bench", "--list", "--filter", filter])?;
-            let mut suite = Suite::new("fixture/programs", options)?;
+            let options = crate::Options::try_parse_from(["bench", "--list", filter])?;
+            let mut harness = Harness::new("fixture/programs", options)?;
+            harness.compilers = Some(set.clone());
             // No valid source directory or compiler exists for this declaration.
-            register_program(&mut suite, &set, Path::new("missing"), &program)?;
+            measure(&mut harness, &program)?;
         }
         Ok(())
     }
@@ -1002,16 +1116,16 @@ mod tests {
         for source in ["z.c", "nested/a.c"] {
             std::fs::write(root.join(source), "int main(void) { return 0; }")?;
         }
-        let program = Program {
-            name: "example",
-            resources: root.to_owned(),
-            sources: vec!["z.c", "nested/a.c"],
-            definition: root.join("definition.rs"),
-            separate: true,
-            ..Program::default()
-        };
+        let program = Program::new("example", root)
+            .sources(["z.c", "nested/a.c"])
+            .separate();
         let prepared = program.prepare(root, root, true, Duration::from_secs(1))?;
-        let cases = CaseIds::new(&CompilerSet::source("fcc"), &program, "fcc", "-O2");
+        let cases = CaseIds::new(
+            &CompilerSet::source("fcc"),
+            &program,
+            &SOURCE_COMPILERS[0],
+            "-O2",
+        );
         let declared = program
             .sources
             .iter()

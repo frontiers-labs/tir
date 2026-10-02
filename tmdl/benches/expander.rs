@@ -1,7 +1,4 @@
-#[macro_use]
-#[path = "../../benchmarks/functions.rs"]
-pub mod functions;
-
+use tir_bench::{Criterion, Throughput, criterion_group, criterion_main};
 use tmdl::{MacroTable, StringArena, collect_macros, expand, lex};
 
 // The real macro-heavy x86_64 defs, concatenated in build.rs order so every
@@ -16,13 +13,11 @@ const DEFS: &[&str] = &[
     include_str!("../../backends/x86_64/defs/float.tmdl"),
 ];
 
-benchmarks! {
-    compiler = "tir", inputs = DEFS;
-    x86_defs_collect_and_expand("x86_defs/collect_and_expand", functions::Settings {
-        bytes: Some(DEFS.join("\n").len() as u64),
-        ..Default::default()
-    }) |b| {
-        let input = DEFS.join("\n");
+fn x86_defs(c: &mut Criterion) {
+    let input = DEFS.join("\n");
+    let mut group = c.benchmark_group("x86_defs");
+    group.throughput(Throughput::Bytes(input.len() as u64));
+    group.bench_function("collect_and_expand", |b| {
         let (tokens, errors) = lex(&input);
         assert!(errors.is_empty());
         let arena = StringArena::new();
@@ -34,5 +29,9 @@ benchmarks! {
             let (_output, diagnostics) = expand("<bench>", tokens, &table, &arena);
             assert!(diagnostics.is_empty());
         });
-    }
+    });
+    group.finish();
 }
+
+criterion_group!(benches, x86_defs);
+criterion_main!(benches);

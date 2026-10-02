@@ -114,10 +114,7 @@ pub(crate) fn built_fcc(sh: &Shell, root: &Path, fcc: Option<PathBuf>) -> anyhow
 /// units.
 pub(crate) fn cases(_sh: &Shell, root: &Path) -> anyhow::Result<Vec<Case>> {
     let mut cases = Vec::new();
-    for program in [
-        coremark_bench::definition(root),
-        torture_bench::definition(root),
-    ] {
+    for program in [coremark_bench::coremark(), torture_bench::torture()] {
         let prepared = program.prepare(
             root,
             &tir_bench::source_cache(&root.join("target")),

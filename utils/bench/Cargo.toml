@@ -6,8 +6,9 @@ edition = "2024"
 [dependencies]
 anyhow.workspace = true
 clap = { workspace = true, features = ["derive"] }
-globset.workspace = true
+criterion.workspace = true
 libc = "0.2"
+regex.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 sha2 = "0.8.2"

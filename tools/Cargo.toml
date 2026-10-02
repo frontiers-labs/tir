@@ -32,7 +32,6 @@ workspace = true
 [dev-dependencies]
 anyhow.workspace = true
 tir-bench.workspace = true
-serde_json.workspace = true
 
 [[bench]]
 name = "coremark"

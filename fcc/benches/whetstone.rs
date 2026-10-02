@@ -1,18 +1,16 @@
-use tir_bench::program::Program;
+use tir_bench::{Criterion, Program, criterion_group, criterion_main};
 
-pub fn definition(root: &std::path::Path) -> Program {
-    Program {
-        name: "whetstone",
-        resources: root.join("fcc/extbench/whetstone"),
-        definition: root.join("fcc/benches/whetstone.rs"),
-        sources: vec!["whetstone.c"],
-        flags: &["-DPRINTOUT"],
-        link_flags: &["-lm"],
-        args: &["1000000"],
-        validator: Some("verify.py"),
-        llvm: true,
-        ..Program::default()
-    }
+fn bench(c: &mut Criterion) {
+    c.bench_program(
+        &Program::new("whetstone", "fcc/extbench/whetstone")
+            .sources(["whetstone.c"])
+            .flags(["-DPRINTOUT"])
+            .link_flags(["-lm"])
+            .args(["1000000"])
+            .verify("verify.py")
+            .llvm(),
+    );
 }
 
-tir_bench::program_main!(definition);
+criterion_group!(benches, bench);
+criterion_main!(benches);

@@ -2,10 +2,6 @@
 //! on the same [`shared::RULES`]/[`shared::SEED_EXPRS`]. Names intern to `u32` (see [`intern`])
 //! so the comparison measures e-matching, not string handling — matching egg's `Copy` names.
 
-#[macro_use]
-#[path = "../../../benchmarks/functions.rs"]
-pub mod functions;
-
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::hint::black_box;
@@ -13,6 +9,7 @@ use std::sync::{Mutex, OnceLock};
 
 use smallvec::{SmallVec, smallvec};
 use tir_adt::{APInt, FxHasher};
+use tir_bench::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
 use tir_relational::{
     Atom, Extraction, Guard, HeadOp, LabelFill, Match, Nested, NoExterns, Plan, Query, Rule,
 };
@@ -454,30 +451,42 @@ fn extract_best(g: &Engine<Math>) -> Extraction<'static, Math> {
     g.extract_best(|_, node| extract_cost(node))
 }
 
-fn bench_saturate(b: &mut functions::Bencher<'_, '_>, iters: usize) {
+fn saturation(c: &mut Criterion) {
     let rules = build_rules();
-    b.iter_batched(seed_all, |g| saturate(g, &rules, iters));
+    let mut group = c.benchmark_group("tir_math/saturate");
+    for &iters in SAT_ITERS {
+        group.bench_function(BenchmarkId::from_parameter(iters), |b| {
+            b.iter_batched(
+                seed_all,
+                |g| saturate(g, &rules, iters),
+                BatchSize::SmallInput,
+            );
+        });
+    }
+    group.finish();
+    let mut group = c.benchmark_group("tir_math/saturate_naive");
+    for &iters in SAT_ITERS {
+        group.bench_function(BenchmarkId::from_parameter(iters), |b| {
+            b.iter_batched(
+                seed_all,
+                |g| run_saturate_naive(g, &rules, iters),
+                BatchSize::SmallInput,
+            );
+        });
+    }
+    group.finish();
 }
 
-fn bench_saturate_naive(b: &mut functions::Bencher<'_, '_>, iters: usize) {
-    let rules = build_rules();
-    b.iter_batched(seed_all, |g| run_saturate_naive(g, &rules, iters));
-}
-
-benchmarks! {
-    compiler = "tir";
-    saturate_1("tir_math/saturate/1") |b| { bench_saturate(b, SAT_ITERS[0]); }
-    saturate_2("tir_math/saturate/2") |b| { bench_saturate(b, SAT_ITERS[1]); }
-    saturate_3("tir_math/saturate/3") |b| { bench_saturate(b, SAT_ITERS[2]); }
-    saturate_naive_1("tir_math/saturate_naive/1") |b| { bench_saturate_naive(b, SAT_ITERS[0]); }
-    saturate_naive_2("tir_math/saturate_naive/2") |b| { bench_saturate_naive(b, SAT_ITERS[1]); }
-    saturate_naive_3("tir_math/saturate_naive/3") |b| { bench_saturate_naive(b, SAT_ITERS[2]); }
-    bench_ematch("tir_math/ematch/all_rules") |b| {
+fn queries(c: &mut Criterion) {
+    c.bench_function("tir_math/ematch/all_rules", |b| {
         let (rules, g) = pre_saturated();
         b.iter(|| ematch_all(&rules, &g));
-    }
-    bench_extract("tir_math/extract/best") |b| {
+    });
+    c.bench_function("tir_math/extract/best", |b| {
         let (_, g) = pre_saturated();
         b.iter(|| black_box(extract_best(&g)));
-    }
+    });
 }
+
+criterion_group!(benches, saturation, queries);
+criterion_main!(benches);

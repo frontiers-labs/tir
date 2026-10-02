@@ -3,10 +3,6 @@
 //! declarations over deep arithmetic) down to TIR. `codegen` measures the
 //! AST → IR step in isolation; `pipeline` includes tokenizing and parsing.
 
-#[macro_use]
-#[path = "../../benchmarks/functions.rs"]
-pub mod functions;
-
 use std::fmt::Write;
 use std::hint::black_box;
 use std::time::Duration;
@@ -29,6 +25,7 @@ use tir::passes::{
     VerifyDepsPass,
 };
 use tir::{Context, Operation, PassManager};
+use tir_bench::{BatchSize, Criterion, criterion_group, criterion_main};
 
 type IrInput = (Context, ModuleOp);
 type BackendInput = (Context, ModuleOp, Box<dyn TargetMachine>);
@@ -197,44 +194,55 @@ fn run_backend((context, module, target): BackendInput, stop_after: StopAfter) {
     pm.run(&context, context.get_op(module.id())).unwrap();
 }
 
-fn gcc_settings() -> functions::Settings {
-    functions::Settings {
-        samples: Some(10),
-        warmup: Some(Duration::from_secs(1)),
-        measurement: Some(Duration::from_secs(5)),
-        ..Default::default()
-    }
-}
-
-benchmarks! {
-    compiler = "fcc";
-    bench_codegen("fcc/codegen/ast_to_ir") |b| {
+fn synthetic(c: &mut Criterion) {
+    c.bench_function("fcc/codegen/ast_to_ir", |b| {
         let ast = parse_src(&gen_source(50, 40));
         b.iter(|| run_codegen(&ast));
-    }
-    bench_codegen_expr_heavy("fcc/codegen_expr_heavy/ast_to_ir") |b| {
+    });
+    c.bench_function("fcc/codegen_expr_heavy/ast_to_ir", |b| {
         let ast = parse_src(&gen_expr_heavy(20, 12));
         b.iter(|| run_codegen(&ast));
-    }
-    bench_promote("fcc/promote/promote") |b| {
+    });
+    c.bench_function("fcc/promote/promote", |b| {
         let ast = parse_src(&gen_source(50, 40));
         // Rebuild fresh IR because promotion replaces the locals' uses.
-        b.iter_batched(|| codegen_ir(&ast), run_promote);
-    }
-    bench_pipeline("fcc/pipeline/source_to_ir") |b| {
+        b.iter_batched(|| codegen_ir(&ast), run_promote, BatchSize::SmallInput);
+    });
+    c.bench_function("fcc/pipeline/source_to_ir", |b| {
         let src = gen_source(50, 40);
         b.iter(|| run_pipeline(&src));
-    }
-    bench_gcc_instcombine("fcc/gcc_20011219_1/instcombine", gcc_settings()) |b| {
-        let ast = parse_src(GCC_20011219_1);
-        b.iter_batched(|| lower_before_instcombine(&ast), run_instcombine);
-    }
-    bench_gcc_instruction_selection("fcc/gcc_20011219_1/instruction_selection", gcc_settings()) |b| {
-        let ast = parse_src(GCC_20011219_1);
-        b.iter_batched(|| lower_before_isel(&ast), |input| run_backend(input, StopAfter::ISel));
-    }
-    bench_gcc_backend_through_finalize("fcc/gcc_20011219_1/backend_through_finalize", gcc_settings()) |b| {
-        let ast = parse_src(GCC_20011219_1);
-        b.iter_batched(|| lower_before_isel(&ast), |input| run_backend(input, StopAfter::Finalize));
-    }
+    });
 }
+
+fn gcc_20011219_1(c: &mut Criterion) {
+    let mut group = c.benchmark_group("fcc/gcc_20011219_1");
+    group
+        .sample_size(10)
+        .warm_up_time(Duration::from_secs(1))
+        .measurement_time(Duration::from_secs(5));
+    group.bench_function("instcombine", |b| {
+        let ast = parse_src(GCC_20011219_1);
+        b.iter_batched(
+            || lower_before_instcombine(&ast),
+            run_instcombine,
+            BatchSize::SmallInput,
+        );
+    });
+    for (name, stop_after) in [
+        ("instruction_selection", StopAfter::ISel),
+        ("backend_through_finalize", StopAfter::Finalize),
+    ] {
+        group.bench_function(name, |b| {
+            let ast = parse_src(GCC_20011219_1);
+            b.iter_batched(
+                || lower_before_isel(&ast),
+                |input| run_backend(input, stop_after),
+                BatchSize::SmallInput,
+            );
+        });
+    }
+    group.finish();
+}
+
+criterion_group!(benches, synthetic, gcc_20011219_1);
+criterion_main!(benches);

@@ -138,43 +138,71 @@ contain a solution.
 ### Running benchmarks
 
 Benchmarks live in each package's `benches` directory and are declared in its
-`Cargo.toml`. Run a target with `cargo bench -p <package> --bench <target>`.
-Pass `-- --help` to see that target's options.
+`Cargo.toml` with `harness = false`. Run a target with
+`cargo bench -p <package> --bench <target>`. Pass `-- --help` to see its options.
 
-Rust function benchmarks use Criterion for native timing. The
-`nightly-cachegrind` feature selects Gungraun for instruction, cache, and branch
-counts. Profiling requires Valgrind, its build headers, and a matching
-`gungraun-runner`. Use the dependency versions recorded in `Cargo.lock`.
-Declare each function case once with `benchmarks!` from
-`benchmarks/functions.rs`. Use `b.iter` for the measured operation, or
-`b.iter_batched` to prepare fresh input outside measurement. The declaration
-supplies both runners and the result inventory. CI discovers Cargo benchmark
-targets automatically; adding a case needs no CI or importer edits. Declare
-fixture contents from outside the benchmark directory with `inputs` so changes
-invalidate the baseline.
+Every target uses `tir-bench` from `utils/bench`, which has Criterion's
+interface. A function benchmark is written as it would be for Criterion:
 
-External program benchmarks use `utils/bench`. Their Rust definitions declare
-sources, fixed arguments, reference compilers, and output validators. The
-harness prepares inputs and validates results outside measurement, then runs
-compiler variants in rotated order. `--list` lists cases without fetching
-sources or invoking benchmark compilers. Use `--filter` and `--phase` to limit
-work, and `--offline` to reject source-cache misses. Filtering must not change
-workload arguments.
+```rust
+use tir_bench::{Criterion, criterion_group, criterion_main};
 
-Program runs write samples, workload identities, command logs, and a Bencher
-Metric Format summary under `target/bench`. `--output` changes that location;
-relative paths resolve from the workspace root. Baseline comparisons reject
-incompatible workload identities. Change the declared inputs or contract when
-measurement boundaries change, so old results cannot silently pass a gate.
+fn lexer(c: &mut Criterion) {
+    let mut group = c.benchmark_group("large_asm");
+    group.bench_function("lex", |b| b.iter(|| lex(INPUT)));
+    group.finish();
+}
 
-Native program measurements require GNU `/usr/bin/time`. They report elapsed
-time and peak process RSS, not simultaneous process-tree memory. Cachegrind
-counts are useful in shared CI but do not replace native performance checks.
-For native regression gates, use a dedicated Linux runner, pin an allowed CPU,
-and control frequency policy, sibling-core activity, and background load.
-The harness records the environment; it does not configure the host.
+criterion_group!(benches, lexer);
+criterion_main!(benches);
+```
 
-The nightly workflow defines the scheduled targets and artifact publication.
+Use `b.iter` for the measured operation, or `b.iter_batched` to prepare fresh
+input outside measurement. Put expensive setup inside the `bench_function`
+closure, before `b.iter`, so it runs only when that benchmark is selected.
+
+An external program is declared with `Program` and registered with
+`c.bench_program`. The declaration names its sources, fixed arguments, and
+output validator. The harness expands it into one compile case per source and a
+run case, for the package's compiler and its reference compilers. It prepares
+inputs and validates results outside measurement, then runs the compilers in
+rotated order.
+
+The command line follows Criterion. A positional argument is a regular
+expression over benchmark identifiers, and `--exact` matches one identifier.
+`--list` lists cases without fetching sources or invoking compilers.
+`--sample-size`, `--warm-up-time`, `--measurement-time` and `--save-baseline`
+keep Criterion's meaning for function benchmarks. For programs use `--phase`,
+`--compiler` and `--level` to limit work, and `--offline` to reject source-cache
+misses. Filtering must not change workload arguments.
+
+The default engine measures natively. Criterion times functions and reports
+them itself. Programs are sampled as processes for elapsed time, CPU time and
+peak RSS, which requires GNU `/usr/bin/time`. `--engine cachegrind` reports
+instruction, cache and branch counts for both kinds and requires Valgrind 3.22
+or newer. Each function benchmark then runs once in its own child process, and
+only the region inside `b.iter` is counted.
+
+Program runs and Cachegrind runs write samples, workload identities, command
+logs, and a Bencher Metric Format summary under `target/bench`. `--output`
+changes that location; relative paths resolve from the workspace root.
+`--baseline` compares with an earlier bundle and rejects incompatible workload
+identities. Change the declared inputs or contract when measurement boundaries
+change, so old results cannot silently pass a gate.
+
+Native measurements report peak process RSS, not simultaneous process-tree
+memory. Cachegrind counts are useful in shared CI but do not replace native
+performance checks. For native regression gates, use a dedicated Linux runner,
+pin an allowed CPU, and control frequency policy, sibling-core activity, and
+background load. The harness records the environment; it does not configure
+the host.
+
+The Perf workflow counts CoreMark, Dhrystone and every function benchmark under
+Cachegrind on each merge to `master`. It records the counts on the `perf-data`
+branch through [benchboard](https://github.com/frontiers-labs/benchboard),
+which opens an issue when an instruction count rises by more than 2% and shows
+the history at <https://frontiers-labs.github.io/benchboard/>. A new function
+benchmark is picked up without any workflow change.
 
 Use `cargo xtask fp-check` to record pinned GCC floating-point observations,
 compare cumulative semantic requirements, and summarize saved reports.

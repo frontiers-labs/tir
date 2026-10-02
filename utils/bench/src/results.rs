@@ -67,6 +67,37 @@ pub fn summarize(samples: &[Metrics]) -> Result<Metrics> {
     Ok(result)
 }
 
+/// Print one case the way Criterion prints a benchmark: its name, then labelled values.
+pub fn report(id: &str, summary: &Metrics, samples: usize) {
+    println!("{id}");
+    if let Some(instructions) = summary.get("Ir") {
+        println!("{:24}instructions: {instructions}", "");
+    }
+    if let Some(latency) = summary.get("latency") {
+        println!(
+            "{:24}time:   {} (median of {samples}, MAD {})",
+            "",
+            duration(*latency),
+            duration(summary["latency_mad_ns"])
+        );
+    }
+    if let Some(rss) = summary.get("peak_process_rss_bytes") {
+        println!("{:24}rss:    {:.1} MiB peak", "", rss / (1024.0 * 1024.0));
+    }
+}
+
+fn duration(nanoseconds: f64) -> String {
+    let (value, unit) = match nanoseconds {
+        ns if ns < 1e3 => (ns, "ns"),
+        ns if ns < 1e6 => (ns / 1e3, "µs"),
+        ns if ns < 1e9 => (ns / 1e6, "ms"),
+        ns => (ns / 1e9, "s"),
+    };
+    // Four significant digits, as Criterion prints them.
+    let decimals = 3 - (value.max(1.0).log10().floor() as usize).min(3);
+    format!("{value:.decimals$} {unit}")
+}
+
 impl Results {
     pub fn save(&self, directory: &Path) -> Result<()> {
         let bmf: BTreeMap<_, BTreeMap<_, _>> = self

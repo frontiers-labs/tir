@@ -1,22 +1,17 @@
-use tir_bench::program::{Program, Source};
-use tir_bench::sources::GitSource;
+use tir_bench::{Criterion, Program};
 
-pub fn definition(root: &std::path::Path) -> Program {
-    Program {
-        name: "torture",
-        resources: root.join("fcc/extbench/torture"),
-        definition: root.join("fcc/benches/torture.rs"),
-        source: Source::Git(GitSource {
-            repository: "https://github.com/gcc-mirror/gcc.git",
-            revision: "9aab80ddc5b2fa0eef80008e718067ab45f42c50",
-            subdir: "gcc/testsuite/gcc.c-torture",
-        }),
-        sources: declared_sources(),
-        separate: true,
-        prepare_sources: Some(prepare_sources),
-        link_flags: &["-lm"],
-        ..Program::default()
-    }
+/// Every passing case of the GCC torture execute corpus, each a program of its own.
+pub fn torture() -> Program {
+    Program::new("torture", "fcc/extbench/torture")
+        .git(
+            "https://github.com/gcc-mirror/gcc.git",
+            "9aab80ddc5b2fa0eef80008e718067ab45f42c50",
+        )
+        .subdir("gcc/testsuite/gcc.c-torture")
+        .sources(declared_sources())
+        .separate()
+        .prepare_sources(prepare_sources)
+        .link_flags(["-lm"])
 }
 
 fn prepare_sources(
@@ -69,4 +64,11 @@ fn declared_sources() -> Vec<&'static str> {
         .collect()
 }
 
-tir_bench::program_main!(definition);
+fn bench(c: &mut Criterion) {
+    c.bench_program(&torture());
+}
+
+// xtask compiles this file too, under an edition that orders a mixed import
+// list of types and macros differently, so the macros are named by path.
+tir_bench::criterion_group!(benches, bench);
+tir_bench::criterion_main!(benches);

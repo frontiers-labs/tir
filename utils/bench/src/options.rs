@@ -23,13 +23,18 @@ pub enum Phase {
 
 /// Default per-process timeout, shared by Cargo harnesses and corpus tools.
 pub const DEFAULT_TIMEOUT_SECS: u64 = 300;
+/// Default number of measured executions of each process case.
+pub const DEFAULT_PROCESS_SAMPLES: u32 = 15;
 
-/// Shared arguments understood by every Cargo benchmark target.
+/// Arguments understood by every Cargo benchmark target. The filter and the
+/// sampling flags carry Criterion's names and meanings.
 #[derive(Clone, Debug, Parser)]
 pub struct Options {
-    /// Glob over benchmark identifiers.
-    #[arg(long, default_value = "*")]
-    pub filter: String,
+    /// Run only benchmarks whose identifier matches this regular expression.
+    pub filter: Option<String>,
+    /// Treat the filter as a complete identifier.
+    #[arg(long)]
+    pub exact: bool,
     #[arg(long)]
     pub list: bool,
     /// Compiler variant for compiled-program workloads.
@@ -40,12 +45,26 @@ pub struct Options {
     pub level: Option<String>,
     #[arg(long, value_enum, default_value_t)]
     pub phase: Phase,
+    /// Run function benchmarks only.
+    #[arg(long)]
+    pub skip_programs: bool,
     #[arg(long, value_enum, default_value_t)]
     pub engine: Engine,
-    #[arg(long, default_value_t = 15, value_parser = clap::value_parser!(u32).range(1..))]
-    pub samples: u32,
+    /// Samples per benchmark. Programs default to 15 and functions to Criterion's default.
+    #[arg(long, value_parser = clap::value_parser!(u32).range(1..))]
+    pub sample_size: Option<u32>,
+    /// Unmeasured executions of each process case before sampling.
     #[arg(long, default_value_t = 3)]
     pub warmups: u32,
+    /// Warm-up time in seconds for function benchmarks.
+    #[arg(long)]
+    pub warm_up_time: Option<f64>,
+    /// Measurement time in seconds for function benchmarks.
+    #[arg(long)]
+    pub measurement_time: Option<f64>,
+    /// Store native function measurements as a named Criterion baseline.
+    #[arg(long)]
+    pub save_baseline: Option<String>,
     /// Timeout in seconds for each subprocess, including preparation.
     #[arg(long, default_value_t = DEFAULT_TIMEOUT_SECS, value_parser = clap::value_parser!(u64).range(1..))]
     pub timeout: u64,
@@ -71,4 +90,7 @@ pub struct Options {
     pub min_cases: usize,
     #[arg(long, hide = true)]
     pub bench: bool,
+    /// Count this one function benchmark. The Cachegrind parent passes it to its child.
+    #[arg(long, hide = true)]
+    pub count_function: Option<String>,
 }

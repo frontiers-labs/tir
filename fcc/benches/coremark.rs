@@ -1,30 +1,30 @@
-use tir_bench::program::{Program, Source};
-use tir_bench::sources::GitSource;
+use tir_bench::{Criterion, Program};
 
-pub fn definition(root: &std::path::Path) -> Program {
-    Program {
-        name: "coremark",
-        resources: root.join("fcc/extbench/coremark"),
-        definition: root.join("fcc/benches/coremark.rs"),
-        source: Source::Git(GitSource {
-            repository: "https://github.com/eembc/coremark.git",
-            revision: "1f483d5b8316753a742cbf5590caf5bd0a4e4777",
-            subdir: "",
-        }),
-        sources: vec![
+pub fn coremark() -> Program {
+    Program::new("coremark", "fcc/extbench/coremark")
+        .git(
+            "https://github.com/eembc/coremark.git",
+            "1f483d5b8316753a742cbf5590caf5bd0a4e4777",
+        )
+        .sources([
             "core_list_join.c",
             "core_main.c",
             "core_matrix.c",
             "core_state.c",
             "core_util.c",
             "posix/core_portme.c",
-        ],
-        flags: &["-I.", "-Iposix", "-DFLAGS_STR=\"\"", "-DPERFORMANCE_RUN=1"],
-        args: &["0", "0", "0", "1000000"],
-        validator: Some("verify.py"),
-        llvm: true,
-        ..Program::default()
-    }
+        ])
+        .flags(["-I.", "-Iposix", "-DFLAGS_STR=\"\"", "-DPERFORMANCE_RUN=1"])
+        .args(["0", "0", "0", "1000000"])
+        .verify("verify.py")
+        .llvm()
 }
 
-tir_bench::program_main!(definition);
+fn bench(c: &mut Criterion) {
+    c.bench_program(&coremark());
+}
+
+// xtask compiles this file too, under an edition that orders a mixed import
+// list of types and macros differently, so the macros are named by path.
+tir_bench::criterion_group!(benches, bench);
+tir_bench::criterion_main!(benches);

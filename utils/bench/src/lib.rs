@@ -1,5 +1,11 @@
-//! Cargo benchmark harness for verified external programs.
+//! Cargo benchmark harness with Criterion's interface.
+//!
+//! Function benchmarks are timed by Criterion itself. External programs are
+//! compiled, verified and measured as processes. Under `--engine cachegrind`
+//! both kinds report instruction, cache and branch counts in one result bundle.
+mod cachegrind;
 pub mod environment;
+mod harness;
 mod options;
 pub mod process;
 pub mod program;
@@ -7,17 +13,72 @@ mod results;
 pub mod sources;
 
 pub use anyhow::Result;
+pub use criterion::{BatchSize, Throughput};
 pub use options::{DEFAULT_TIMEOUT_SECS, Engine, Options, Phase};
 pub use process::Command;
+pub use program::Program;
 
-use anyhow::{Context, ensure};
 use clap::Parser;
-use globset::{Glob, GlobMatcher};
-use results::{Metrics, Record, Results};
+use criterion::measurement::WallTime;
+use harness::{Harness, Mode};
 use serde_json::{Value, json};
-use std::collections::BTreeSet;
+use std::hint::black_box;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
+
+/// Define a function that runs the listed benchmark functions in order.
+#[macro_export]
+macro_rules! criterion_group {
+    ($name:ident, $($target:path),+ $(,)?) => {
+        pub fn $name(criterion: &mut $crate::Criterion) {
+            $($target(criterion);)+
+        }
+    };
+}
+
+/// Define `main` for a Cargo benchmark target with `harness = false`.
+#[macro_export]
+macro_rules! criterion_main {
+    ($($group:path),+ $(,)?) => {
+        #[allow(dead_code)] // Tools import benchmark definitions without running them.
+        fn main() -> $crate::Result<()> {
+            $crate::run(
+                $crate::Target {
+                    package: env!("CARGO_PKG_NAME"),
+                    name: env!("CARGO_CRATE_NAME"),
+                    fcc: option_env!("CARGO_BIN_EXE_fcc"),
+                    tir: option_env!("CARGO_BIN_EXE_tir"),
+                },
+                &[$($group),+],
+            )
+        }
+    };
+}
+
+/// The Cargo benchmark target being run and the compilers Cargo built for it.
+pub struct Target {
+    pub package: &'static str,
+    pub name: &'static str,
+    /// Path of the package's `fcc` binary, which compiles programs from source.
+    pub fcc: Option<&'static str>,
+    /// Path of the package's `tir` binary, which compiles programs from LLVM IR.
+    pub tir: Option<&'static str>,
+}
+
+/// Entry point behind [`criterion_main!`].
+pub fn run(target: Target, groups: &[fn(&mut Criterion)]) -> Result<()> {
+    let namespace = format!("{}/{}", target.package, target.name);
+    let mut criterion = Criterion::new(&namespace, Options::parse())?;
+    criterion.harness.compilers = match (target.fcc, target.tir) {
+        (Some(fcc), _) => Some(program::CompilerSet::source(fcc)),
+        (None, Some(tir)) => Some(program::CompilerSet::llvm(tir)),
+        (None, None) => None,
+    };
+    for group in groups {
+        group(&mut criterion);
+    }
+    criterion.finish()
+}
 
 /// A check of captured stdout, executed after the measured operation.
 pub type Validator = Box<dyn Fn(&Path) -> Result<()>>;
@@ -33,350 +94,247 @@ pub struct ProcessCase {
     pub gate: bool,
 }
 
+/// A benchmark name with a parameter, formatted as `name/parameter`.
+pub struct BenchmarkId(String);
+
+impl BenchmarkId {
+    pub fn new(name: impl Into<String>, parameter: impl std::fmt::Display) -> Self {
+        Self(format!("{}/{parameter}", name.into()))
+    }
+    pub fn from_parameter(parameter: impl std::fmt::Display) -> Self {
+        Self(parameter.to_string())
+    }
+}
+
+impl<S: Into<String>> From<S> for BenchmarkId {
+    fn from(name: S) -> Self {
+        Self(name.into())
+    }
+}
+
 /// One Cargo benchmark target. All measured work runs serially under a host lock.
-pub struct Suite {
-    options: Options,
-    filter: GlobMatcher,
-    directory: PathBuf,
-    target: PathBuf,
-    results: Results,
-    seen: BTreeSet<String>,
-    _environment: Option<environment::EnvironmentGuard>,
+pub struct Criterion {
+    harness: Harness,
+    /// Times functions natively. Built on first use, since listing and counting never need it.
+    native: Option<criterion::Criterion>,
 }
 
-impl Suite {
-    /// Parse the common Cargo harness arguments and open a result bundle.
-    pub fn from_args(namespace: &str) -> Result<Self> {
-        Self::new(namespace, Options::parse())
-    }
-
+impl Criterion {
     /// Create a harness with explicit options. Listing does not acquire a host lock.
-    pub fn new(namespace: &str, mut options: Options) -> Result<Self> {
-        ensure!(
-            options.threshold.is_finite()
-                && options.threshold >= 0.0
-                && options.rss_threshold.is_finite()
-                && options.rss_threshold >= 0.0,
-            "thresholds must be finite and nonnegative"
-        );
-        ensure!(
-            options.samples > 0 && options.timeout > 0,
-            "samples and timeout must be positive"
-        );
-        let filter = Glob::new(&options.filter)?.compile_matcher();
-        let (target, workspace) = cargo_directories(Duration::from_secs(options.timeout))?;
-        for path in [&mut options.output, &mut options.baseline]
-            .into_iter()
-            .flatten()
-        {
-            if path.is_relative() {
-                *path = workspace.join(&*path);
-            }
-        }
-        let active = !options.list;
-        let directory = if active {
-            let parent = options
-                .output
-                .clone()
-                .unwrap_or_else(|| target.join("bench"));
-            std::fs::create_dir_all(&parent)?;
-            let stamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
-            let path = parent.join(format!(
-                "{}-{stamp}-{}",
-                namespace.replace('/', "-"),
-                std::process::id()
-            ));
-            std::fs::create_dir(&path)?;
-            path.canonicalize()?
-        } else {
-            PathBuf::new()
-        };
-        let guard = if active {
-            Some(environment::EnvironmentGuard::acquire(
-                &std::env::temp_dir().join(format!("tir-bench-{}.lock", unsafe { libc::getuid() })),
-                options.cpu,
-            )?)
-        } else {
-            None
-        };
-        let mut environment = guard
-            .as_ref()
-            .map(|g| serde_json::to_value(&g.metadata))
-            .transpose()?
-            .unwrap_or(Value::Null);
-        if active && options.engine == Engine::Cachegrind {
-            let version = process::probe_cachegrind(
-                &directory.join("valgrind-version"),
-                Duration::from_secs(options.timeout),
-            )?;
-            environment["valgrind"] = json!(version);
-        }
-        if active {
-            environment["build"] = build_configuration();
-            let supervisor_version = process::capture(
-                std::process::Command::new("/usr/bin/time").arg("--version"),
-                Duration::from_secs(options.timeout),
-            )
-            .ok()
-            .filter(|output| output.status.success())
-            .map(|output| String::from_utf8_lossy(&output.stdout).into_owned());
-            environment["native_process_accounting"] = json!({
-                "wall_and_cpu_scope": "GNU time supervisor plus command",
-                "rss_scope": "command process high-water, GNU time %M in KiB normalized to bytes",
-                "supervisor_version": supervisor_version,
-            });
-        }
-        let results = Results {
-            schema: 3,
-            namespace: namespace.into(),
-            engine: options.engine,
-            environment,
-            provenance: if active {
-                provenance(Duration::from_secs(options.timeout))
-            } else {
-                Value::Null
-            },
-            status: "incomplete".into(),
-            cases: Vec::new(),
-        };
-        if active {
-            results.save(&directory)?;
-        }
+    pub fn new(namespace: &str, options: Options) -> Result<Self> {
         Ok(Self {
-            options,
-            filter,
-            directory,
-            target,
-            results,
-            seen: BTreeSet::new(),
-            _environment: guard,
+            harness: Harness::new(namespace, options)?,
+            native: None,
         })
     }
 
-    pub fn options(&self) -> &Options {
-        &self.options
-    }
-    /// Untimed preparation and measured output are retained under this directory.
-    pub fn artifacts(&self) -> &Path {
-        &self.directory
-    }
-    pub fn source_cache(&self) -> PathBuf {
-        source_cache(&self.target)
-    }
-    pub fn timeout(&self) -> Duration {
-        Duration::from_secs(self.options.timeout)
-    }
-
-    /// Match a full process ID relative to this target.
-    pub fn matches(&self, name: &str) -> bool {
-        let prefix = format!("{}/", self.results.namespace);
-        let relative = name.strip_prefix(&prefix).unwrap_or(name);
-        let qualified = format!("{prefix}{relative}");
-        self.filter.is_match(relative) || self.filter.is_match(qualified)
-    }
-
-    pub fn list_case(&mut self, name: &str) -> Result<()> {
-        if self.matches(name) && self.options.list {
-            ensure!(
-                self.seen.insert(name.into()),
-                "duplicate benchmark ID {name}"
-            );
-            println!("{name}");
-        }
-        Ok(())
-    }
-
-    /// Interleave variants in rotated order, validating every successful execution
-    /// after measurement. Preparation must have completed before calling this.
-    pub fn process_group(&mut self, cases: Vec<ProcessCase>) -> Result<()> {
-        let cases: Vec<_> = cases.into_iter().filter(|c| self.matches(&c.id)).collect();
-        if self.options.list {
-            for case in cases {
-                self.list_case(&case.id)?;
-            }
-            return Ok(());
-        }
-        let mut group_ids = BTreeSet::new();
-        for case in &cases {
-            ensure!(
-                !self.seen.contains(&case.id) && group_ids.insert(&case.id),
-                "duplicate benchmark ID {}",
-                case.id
-            );
-        }
-        let mut samples = vec![Vec::new(); cases.len()];
-        let rounds = if self.options.engine == Engine::Cachegrind {
-            1
-        } else {
-            self.options.samples
-        };
-        let warmups = if self.options.engine == Engine::Cachegrind {
-            0
-        } else {
-            self.options.warmups
-        };
-        for round in 0..u64::from(rounds) + u64::from(warmups) {
-            for offset in 0..cases.len() {
-                let index = (round as usize + offset) % cases.len();
-                let case = &cases[index];
-                let dir = self
-                    .directory
-                    .join("samples")
-                    .join(safe_id(&case.id))
-                    .join(round.to_string());
-                let sample = case
-                    .command
-                    .execute(&dir, self.timeout(), self.options.engine)
-                    .with_context(|| format!("benchmark {}", case.id))?;
-                if let Some(verify) = &case.verify {
-                    verify(&sample.stdout).with_context(|| format!("validator for {}", case.id))?;
-                }
-                if round < u64::from(warmups) {
-                    continue;
-                }
-                let metrics = if self.options.engine == Engine::Cachegrind {
-                    ensure!(
-                        sample.counters.get("Ir").is_some_and(|v| *v > 0.0),
-                        "Cachegrind did not observe instructions for {}",
-                        case.id
-                    );
-                    sample.counters
-                } else {
-                    Metrics::from([
-                        ("latency".into(), sample.wall_ns),
-                        ("user_cpu_ns".into(), sample.user_ns),
-                        ("system_cpu_ns".into(), sample.system_ns),
-                        (
-                            "peak_process_rss_bytes".into(),
-                            sample.peak_process_rss_bytes as f64,
-                        ),
-                    ])
-                };
-                samples[index].push(metrics);
-            }
-        }
-        for (case, samples) in cases.into_iter().zip(samples) {
-            let metadata =
-                json!({"workload":case.metadata,"trace_children":case.command.trace_children});
-            self.record(case.id, metadata, case.gate, samples)?;
-        }
-        Ok(())
-    }
-
-    fn record(
-        &mut self,
-        id: String,
-        metadata: Value,
-        gate: bool,
-        samples: Vec<Metrics>,
-    ) -> Result<()> {
-        ensure!(self.seen.insert(id.clone()), "duplicate benchmark ID {id}");
-        let summary = results::summarize(&samples)?;
-        eprintln!("{id}: {}", serde_json::to_string(&summary)?);
-        self.results.cases.push(Record {
-            id,
-            metadata,
-            gate,
-            samples,
-            summary,
+    pub fn benchmark_group(&mut self, name: impl Into<String>) -> BenchmarkGroup<'_> {
+        let name = name.into();
+        let native = (self.harness.mode == Mode::Time).then(|| {
+            let options = &self.harness.options;
+            self.native
+                .get_or_insert_with(|| native_criterion(options))
+                .benchmark_group(name.clone())
         });
-        self.results.save(&self.directory)
+        BenchmarkGroup {
+            harness: &mut self.harness,
+            name,
+            native,
+        }
     }
 
-    /// Check coverage, baseline compatibility and host policy before marking the
-    /// result complete. Earlier failures leave an unusable baseline with logs.
-    pub fn finish(mut self) -> Result<()> {
-        if self.options.list {
-            return Ok(());
-        }
-        ensure!(
-            self.results.cases.len() >= self.options.min_cases,
-            "expected at least {} cases, measured {}",
-            self.options.min_cases,
-            self.results.cases.len()
-        );
-        self.results.cases.sort_by(|a, b| a.id.cmp(&b.id));
-        if let Some(path) = &self.options.baseline {
-            let path = if path.is_dir() {
-                path.join("results.json")
-            } else {
-                path.clone()
-            };
-            let baseline = serde_json::from_slice(&std::fs::read(path)?)?;
-            self.results.compare(&baseline, &self.options)?;
-        }
-        if let Some(environment) = &self._environment {
-            environment.check_stable()?;
-        }
-        self.results.status = "complete".into();
-        self.results.save(&self.directory)?;
-        eprintln!("Benchmark artifacts: {}", self.directory.display());
-        Ok(())
-    }
-}
-
-fn safe_id(id: &str) -> String {
-    // Preserve readable names, with a digest to prevent collisions and traversal.
-    use sha2::{Digest, Sha256};
-    let clean: String = id
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '-' {
-                c
-            } else {
-                '_'
+    /// Benchmark a function outside any group. `id` is its whole identifier.
+    pub fn bench_function(
+        &mut self,
+        id: &str,
+        mut routine: impl FnMut(&mut Bencher<'_, '_>),
+    ) -> &mut Self {
+        match self.harness.function(id) {
+            Some(Measure::Count) => routine(&mut Bencher(Measure::Count)),
+            Some(Measure::Time(())) => {
+                let options = &self.harness.options;
+                self.native
+                    .get_or_insert_with(|| native_criterion(options))
+                    .bench_function(id, |bencher| {
+                        routine(&mut Bencher(Measure::Time(bencher)));
+                    });
             }
-        })
-        .take(100)
-        .collect();
-    format!("{clean}-{:x}", Sha256::digest(id.as_bytes()))
+            None => {}
+        }
+        self
+    }
+
+    /// Compile, verify and measure an external program with the package's compiler
+    /// and its reference compilers. A failure stops the target and is reported by `main`.
+    pub fn bench_program(&mut self, program: &Program) -> &mut Self {
+        self.harness
+            .attempt(|harness| program::measure(harness, program));
+        self
+    }
+
+    /// Measure prepared processes in rotated order, validating each execution.
+    pub fn bench_processes(&mut self, cases: Vec<ProcessCase>) -> &mut Self {
+        self.harness.attempt(|harness| harness.process_group(cases));
+        self
+    }
+
+    /// Directory of this run's result bundle, created on first use.
+    pub fn artifacts(&mut self) -> Result<PathBuf> {
+        self.harness.bundle()
+    }
+
+    /// Report the first failure, count pending functions, and complete the bundle.
+    pub fn finish(mut self) -> Result<()> {
+        if let Some(failure) = self.harness.failure.take() {
+            return Err(failure);
+        }
+        self.harness.count_functions()?;
+        if let Some(native) = &self.native {
+            native.final_summary();
+        }
+        self.harness.finish()
+    }
 }
 
-fn cargo_directories(timeout: Duration) -> Result<(PathBuf, PathBuf)> {
-    let output = process::capture(
-        std::process::Command::new("cargo").args([
-            "metadata",
-            "--no-deps",
-            "--format-version",
-            "1",
-            "--offline",
-        ]),
-        timeout,
-    )?;
-    ensure!(
-        output.status.success(),
-        "cargo metadata failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let metadata: Value = serde_json::from_slice(&output.stdout)?;
-    Ok((
-        PathBuf::from(
-            metadata["target_directory"]
-                .as_str()
-                .context("Cargo target directory missing")?,
-        ),
-        PathBuf::from(
-            metadata["workspace_root"]
-                .as_str()
-                .context("Cargo workspace root missing")?,
-        ),
-    ))
+fn native_criterion(options: &Options) -> criterion::Criterion {
+    let mut criterion = criterion::Criterion::default();
+    if let Some(samples) = options.sample_size {
+        // Criterion rejects fewer than 10 samples. Smaller values still apply to processes.
+        criterion = criterion.sample_size(samples.max(10) as usize);
+    }
+    if let Some(seconds) = options.warm_up_time {
+        criterion = criterion.warm_up_time(Duration::from_secs_f64(seconds));
+    }
+    if let Some(seconds) = options.measurement_time {
+        criterion = criterion.measurement_time(Duration::from_secs_f64(seconds));
+    }
+    if let Some(name) = &options.save_baseline {
+        criterion = criterion.save_baseline(name.clone());
+    }
+    criterion
 }
 
-fn provenance(timeout: Duration) -> Value {
-    let git = |args: &[&str]| {
-        process::capture(std::process::Command::new("git").args(args), timeout)
-            .ok()
-            .filter(|o| o.status.success())
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
-    };
-    json!({
-        "revision": git(&["rev-parse", "HEAD"]),
-        "dirty": git(&["status", "--porcelain"]),
-        "executable": std::env::current_exe().ok(),
-        "executable_sha256": executable_digest(),
-        "arguments": std::env::args().collect::<Vec<_>>(),
-    })
+/// Benchmarks that share a name prefix and sampling settings.
+pub struct BenchmarkGroup<'a> {
+    harness: &'a mut Harness,
+    name: String,
+    native: Option<criterion::BenchmarkGroup<'a, WallTime>>,
+}
+
+impl BenchmarkGroup<'_> {
+    // Sampling settings shape native timing only. A command-line value wins over
+    // the benchmark's own, so a quick local run needs no source edit.
+    pub fn sample_size(&mut self, samples: usize) -> &mut Self {
+        if let Some(native) = &mut self.native
+            && self.harness.options.sample_size.is_none()
+        {
+            native.sample_size(samples);
+        }
+        self
+    }
+
+    pub fn warm_up_time(&mut self, duration: Duration) -> &mut Self {
+        if let Some(native) = &mut self.native
+            && self.harness.options.warm_up_time.is_none()
+        {
+            native.warm_up_time(duration);
+        }
+        self
+    }
+
+    pub fn measurement_time(&mut self, duration: Duration) -> &mut Self {
+        if let Some(native) = &mut self.native
+            && self.harness.options.measurement_time.is_none()
+        {
+            native.measurement_time(duration);
+        }
+        self
+    }
+
+    pub fn throughput(&mut self, throughput: Throughput) -> &mut Self {
+        if let Some(native) = &mut self.native {
+            native.throughput(throughput);
+        }
+        self
+    }
+
+    pub fn bench_function(
+        &mut self,
+        id: impl Into<BenchmarkId>,
+        mut routine: impl FnMut(&mut Bencher<'_, '_>),
+    ) -> &mut Self {
+        let BenchmarkId(name) = id.into();
+        match self.harness.function(&format!("{}/{name}", self.name)) {
+            Some(Measure::Count) => routine(&mut Bencher(Measure::Count)),
+            Some(Measure::Time(())) => {
+                let native = self.native.as_mut().expect("timed groups wrap Criterion");
+                native.bench_function(name, |bencher| {
+                    routine(&mut Bencher(Measure::Time(bencher)));
+                });
+            }
+            None => {}
+        }
+        self
+    }
+
+    pub fn bench_with_input<I: ?Sized>(
+        &mut self,
+        id: impl Into<BenchmarkId>,
+        input: &I,
+        mut routine: impl FnMut(&mut Bencher<'_, '_>, &I),
+    ) -> &mut Self {
+        self.bench_function(id, |bencher| routine(bencher, input))
+    }
+
+    pub fn finish(self) {
+        if let Some(native) = self.native {
+            native.finish();
+        }
+    }
+}
+
+/// How a function benchmark's routine is measured.
+pub(crate) enum Measure<T> {
+    /// Criterion samples the routine and reports wall time.
+    Time(T),
+    /// The routine runs once with Cachegrind counting its region.
+    Count,
+}
+
+/// Runs the measured operation of one function benchmark.
+pub struct Bencher<'a, 'b>(Measure<&'a mut criterion::Bencher<'b, WallTime>>);
+
+impl Bencher<'_, '_> {
+    /// Measure the routine, including destruction of its return value.
+    pub fn iter<O>(&mut self, mut routine: impl FnMut() -> O) {
+        match &mut self.0 {
+            Measure::Time(bencher) => bencher.iter(routine),
+            Measure::Count => {
+                cachegrind::start();
+                black_box(routine());
+                cachegrind::stop();
+            }
+        }
+    }
+
+    /// Exclude input preparation and output destruction from measurement.
+    pub fn iter_batched<I, O>(
+        &mut self,
+        mut setup: impl FnMut() -> I,
+        mut routine: impl FnMut(I) -> O,
+        size: BatchSize,
+    ) {
+        match &mut self.0 {
+            Measure::Time(bencher) => bencher.iter_batched(setup, routine, size),
+            Measure::Count => {
+                let input = black_box(setup());
+                cachegrind::start();
+                let output = black_box(routine(input));
+                cachegrind::stop();
+                drop(output);
+            }
+        }
+    }
 }
 
 /// Build settings of the harness and its Cargo-built compiler dependencies.
@@ -389,22 +347,6 @@ pub fn build_configuration() -> Value {
         "rustflags": env!("TIR_BENCH_CARGO_ENCODED_RUSTFLAGS"),
         "rustc": env!("TIR_BENCH_RUSTC"),
     })
-}
-
-fn executable_digest() -> Option<String> {
-    use sha2::{Digest, Sha256};
-    use std::io::Read;
-    let mut file = std::fs::File::open(std::env::current_exe().ok()?).ok()?;
-    let mut hash = Sha256::new();
-    let mut buffer = [0u8; 65536];
-    loop {
-        let count = file.read(&mut buffer).ok()?;
-        if count == 0 {
-            break;
-        }
-        hash.input(&buffer[..count]);
-    }
-    Some(format!("{:x}", hash.result()))
 }
 
 /// Resolve the shared pinned-source cache, honouring an explicit environment override.

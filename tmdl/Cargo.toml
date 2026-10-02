@@ -5,7 +5,6 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-gungraun = { workspace = true, optional = true }
 ariadne.workspace = true
 clap = { workspace = true, features = ["derive"] }
 thiserror.workspace = true
@@ -26,7 +25,6 @@ typed-arena.workspace = true
 [features]
 default = ["json"]
 json = ["dep:schemars"]
-nightly-cachegrind = ["dep:gungraun"]
 
 [lib]
 bench = false
@@ -39,7 +37,7 @@ name = "tmdlc"
 path = "bin.rs"
 
 [dev-dependencies]
-criterion.workspace = true
+tir-bench.workspace = true
 
 [[bench]]
 name = "lexer"

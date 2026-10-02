@@ -1,17 +1,15 @@
-use tir_bench::program::Program;
+use tir_bench::{Criterion, Program, criterion_group, criterion_main};
 
-pub fn definition(root: &std::path::Path) -> Program {
-    Program {
-        name: "dhrystone",
-        resources: root.join("fcc/extbench/dhrystone"),
-        definition: root.join("fcc/benches/dhrystone.rs"),
-        sources: vec!["dhry_1.c", "dhry_2.c"],
-        flags: &["-DTIME"],
-        args: &["100000000"],
-        validator: Some("verify.py"),
-        llvm: true,
-        ..Program::default()
-    }
+fn bench(c: &mut Criterion) {
+    c.bench_program(
+        &Program::new("dhrystone", "fcc/extbench/dhrystone")
+            .sources(["dhry_1.c", "dhry_2.c"])
+            .flags(["-DTIME"])
+            .args(["100000000"])
+            .verify("verify.py")
+            .llvm(),
+    );
 }
 
-tir_bench::program_main!(definition);
+criterion_group!(benches, bench);
+criterion_main!(benches);

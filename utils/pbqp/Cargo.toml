@@ -5,15 +5,11 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-gungraun = { workspace = true, optional = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 
-[features]
-nightly-cachegrind = ["dep:gungraun"]
-
 [dev-dependencies]
-criterion.workspace = true
+tir-bench.workspace = true
 
 [[bench]]
 name = "pbqp"
