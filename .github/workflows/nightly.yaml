@@ -149,71 +149,6 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
-  # Cargo builds the measured compiler in the bench profile. Shared CI uses
-  # instruction counts; native wall-time gates require a dedicated runner.
-  benchmark-programs:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 360
-    env:
-      CARGO_INCREMENTAL: "0"
-    steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: rui314/setup-mold@v1
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: bench
-      - run: sudo apt-get update && sudo apt-get install -y clang libclang-dev valgrind time
-      - name: Identify the measurement environment
-        shell: bash
-        run: |
-          {
-            rustc -vV
-            clang --version
-            gcc --version
-            valgrind --version
-            ldd --version
-            uname -r
-            lscpu | sed -n '/Model name/p'
-          } > benchmark-environment.txt
-      - uses: actions/cache@v6
-        with:
-          path: target/bench-sources
-          key: coremark-source-1f483d5b8316753a742cbf5590caf5bd0a4e4777
-      # Output validation stays outside profiling. Full program execution uses
-      # the same fixed arguments as local runs and needs a longer timeout.
-      - name: Profile program compilation and runtime
-        run: bash .github/scripts/run-nightly-benchmarks.sh programs
-      - uses: actions/upload-artifact@v7
-        if: always()
-        with:
-          name: benchmark-programs
-          path: |
-            bench-results
-            benchmark-environment.txt
-
-  benchmark-micro:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 360
-    env:
-      CARGO_INCREMENTAL: "0"
-    steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: rui314/setup-mold@v1
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: bench-micro
-      - run: sudo apt-get update && sudo apt-get install -y clang libclang-dev valgrind
-      - run: cargo install --locked --version 0.19.4 gungraun-runner
-      - name: Profile Rust functions
-        run: bash .github/scripts/run-nightly-benchmarks.sh micro
-      - uses: actions/upload-artifact@v7
-        if: always()
-        with:
-          name: benchmark-micro
-          path: target/gungraun
-
   libfuzzer:
     # Only for the xtask binary, which reads the records embedded in open
     # issues. A broken workspace build must not stop the fuzzing, so the job
@@ -288,8 +223,6 @@ jobs:
         lints,
         corpus,
         differential-fuzz,
-        benchmark-programs,
-        benchmark-micro,
         libfuzzer,
       ]
     runs-on: ubuntu-latest

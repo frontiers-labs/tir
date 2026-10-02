@@ -30,8 +30,6 @@ issue_for() {
 reproduce() {
   case "$1" in
     corpus) echo 'cargo xtask fcc-fuzz --corpus' ;;
-    benchmark-programs) echo 'bash .github/scripts/run-nightly-benchmarks.sh programs' ;;
-    benchmark-micro) echo 'bash .github/scripts/run-nightly-benchmarks.sh micro' ;;
     differential-fuzz) echo 'cargo xtask fcc-fuzz --self-test' ;;
     libfuzzer) echo 'cargo +nightly fuzz run --fuzz-dir utils/fuzz <target>' ;;
     lints) echo 'cargo clippy --workspace --all-targets --no-deps -- -D warnings' ;;

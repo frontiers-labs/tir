@@ -13,11 +13,14 @@ case "${1:-}" in
       --engine cachegrind --phase all --compiler fcc --level O2 \
       --min-cases 3 --timeout 18000 --output "$PWD/bench-results/dhrystone"
     ;;
-  micro)
-    python3 .github/scripts/discover-nightly-benchmarks.py
+  functions)
+    # Every function benchmark in the workspace. A new one needs no edit here.
+    cargo bench --locked --workspace -- \
+      --engine cachegrind --skip-programs --output "$PWD/bench-results/functions"
+    ls bench-results/functions/*/summary.bmf.json >/dev/null
     ;;
   *)
-    echo "Usage: $0 programs|micro" >&2
+    echo "Usage: $0 programs|functions" >&2
     exit 2
     ;;
 esac

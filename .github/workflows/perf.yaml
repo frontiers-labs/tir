@@ -1,0 +1,122 @@
+name: Perf
+
+# Measures every merge under Cachegrind and records the counts on the perf-data
+# branch. Benchboard compares each run with the previous one and opens an issue
+# when instruction counts regress. History: https://frontiers-labs.github.io/benchboard/
+on:
+  workflow_dispatch:
+    inputs:
+      data-branch:
+        description: Branch to record results on
+        default: perf-data
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+# Runs go one at a time in merge order. GitHub keeps only the newest waiting
+# run, so after a burst of merges one comparison can span several commits.
+concurrency:
+  group: perf
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  # Cargo builds the measured compiler in the bench profile. Shared CI uses
+  # instruction counts; native wall-time gates require a dedicated runner.
+  programs:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    outputs:
+      environment: ${{ steps.environment.outputs.key }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: rui314/setup-mold@v1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: bench
+      - run: sudo apt-get update && sudo apt-get install -y clang valgrind time
+      # Counts shift when any of these change, with no change in TIR. Benchboard
+      # records a run under a new key without gating it.
+      - name: Identify the measurement environment
+        id: environment
+        run: echo "key=$(rustc --version); $(valgrind --version); $(ldd --version | head -1)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v6
+        with:
+          path: target/bench-sources
+          key: coremark-source-1f483d5b8316753a742cbf5590caf5bd0a4e4777
+      # Output validation stays outside profiling. Full program execution uses
+      # the same fixed arguments as local runs and needs a longer timeout.
+      - name: Count program compilation and runtime
+        run: bash .github/scripts/run-perf-benchmarks.sh programs
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: benchmark-programs
+          path: bench-results
+
+  functions:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: rui314/setup-mold@v1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: bench-functions
+      - run: sudo apt-get update && sudo apt-get install -y valgrind
+      - name: Count Rust functions
+        run: bash .github/scripts/run-perf-benchmarks.sh functions
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: benchmark-functions
+          path: bench-results
+
+  record:
+    needs: [programs, functions]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      issues: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: benchmark-*
+          path: results
+      - uses: frontiers-labs/benchboard@f0aa1e784def86a955112e1a9a86455c55f59b46
+        with:
+          results: results/**/summary.bmf.json
+          gate-metrics: Ir
+          threshold: 2
+          env-key: ${{ needs.programs.outputs.environment }}
+          data-branch: ${{ inputs.data-branch || 'perf-data' }}
+
+  # A benchmark that fails to build, run or validate is a defect of its own,
+  # and no comparison exists to report it.
+  report-failure:
+    needs: [programs, functions, record]
+    if: failure() && github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    permissions:
+      issues: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          title="perf: benchmark run failed"
+          number=$(gh issue list --state open --search "in:title \"$title\"" --json number --jq '.[0].number // empty')
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --body "Failed again at ${GITHUB_SHA} in $RUN_URL."
+          else
+            gh issue create --title "$title" --body "The Perf workflow failed at ${GITHUB_SHA} in $RUN_URL. Reproduce with \`bash .github/scripts/run-perf-benchmarks.sh programs\` or \`functions\`."
+          fi
