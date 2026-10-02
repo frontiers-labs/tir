@@ -428,6 +428,14 @@ per call, before placing arguments in their ABI registers or stack slots.
 Repeated arguments share that snapshot, so their copies do not create
 overlapping live ranges proportional to the argument count.
 
+A pass that compares semantic alternatives, such as floating-point contraction,
+prepares each candidate the same way and keeps its own IR. The score it reads
+counts every recovered machine instruction once, including branches, the
+instruction a rule emits ahead of its own, and conversions. A candidate that
+cannot be selected or recovered has no score, so it cannot win as a cheap
+alternative. Calls, returns, and virtual branches have no cost before register
+allocation and layout; the score reports how many such operations remain.
+
 Register allocation assigns physical registers afterward. It follows
 Buchwald, Zwinkau, and Bersch, "SSA-based Register Allocation with PBQP"
 (CC 2011). Spilling runs first, as its own step. Wherever an instruction needs

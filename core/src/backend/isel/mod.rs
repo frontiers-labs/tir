@@ -895,6 +895,67 @@ pub struct InstructionSelectPass {
     solved: HashSet<OpId>,
 }
 
+/// A function selected, emitted and recovered in a private context. Its score
+/// describes the machine function it holds, which is the one adoption
+/// publishes.
+pub(crate) struct PreparedSelection {
+    staged: Context,
+    score: PlanScore,
+}
+
+impl PreparedSelection {
+    pub(crate) fn score(&self) -> PlanScore {
+        self.score
+    }
+
+    /// Publish the prepared function into `context`, the one it was prepared
+    /// from.
+    fn adopt(self, context: &Context) {
+        context.adopt(self.staged);
+    }
+}
+
+/// What a prepared function costs before register allocation. Scores order by
+/// priced cost first; at equal cost the plan leaving fewer operations of
+/// unknown cost wins.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct PlanScore {
+    /// Every recovered machine instruction at [`LATENCY_COST_SCALE`] times its
+    /// latency plus its encoding size, counted once.
+    cost: u64,
+    /// Operations later stages still lower or place: calls, returns, constants
+    /// kept for the target's materializer and virtual branches. Spills, final
+    /// layout and branch relaxation are not known here either.
+    unpriced: u32,
+}
+
+impl PlanScore {
+    fn of(context: &Context, function: OpId) -> Self {
+        let mut score = Self::default();
+        for region in crate::passes::regions_under(context, function) {
+            for op in context.get_region(region).op_ids() {
+                let op = context.get_op(op);
+                if !op.regions().is_empty() {
+                    continue;
+                }
+                let info = op
+                    .as_interface::<dyn crate::backend::MachineInstruction>()
+                    .map(|instruction| instruction.info())
+                    .filter(|info| info.width_bytes.1 > 0);
+                match info {
+                    Some(info) => {
+                        score.cost += u64::from(
+                            info.cost * LATENCY_COST_SCALE + u32::from(info.width_bytes.0),
+                        );
+                    }
+                    None => score.unpriced += 1,
+                }
+            }
+        }
+        score
+    }
+}
+
 /// Results for guarded rules whose obligations were proved or could not be encoded.
 #[derive(Debug, Default)]
 pub struct GuardedRelaxationProofs {
@@ -1236,35 +1297,19 @@ fn symbol_ids(g: &SemGraph) -> Vec<u32> {
 }
 
 impl InstructionSelectPass {
-    /// Price one complete function with the same legality checks and PBQP cover
-    /// used by selection, without emitting or changing its IR.
-    pub(crate) fn estimate_function_cost(
+    /// Select, emit and recover one complete function in a private context,
+    /// leaving `function` as it is. A caller pricing a semantic alternative
+    /// reads the score; selection adopts the result.
+    pub(crate) fn prepare(
         &mut self,
         context: &Context,
         function: &OperationRef,
-    ) -> Result<u64, PassError> {
-        let pricing = context.fork();
-        let function = OperationRef::new(pricing.get_op(function.op().id));
-        let context = &pricing;
+    ) -> Result<PreparedSelection, PassError> {
         self.reset_function_scratch();
         if let Some(check) = self.function_check {
-            check(context, &function)?;
+            check(context, function)?;
         }
-        if let Some(lowering) = &mut self.call_lowering {
-            lowering.reset();
-            lowering.prepare_function(context, &function)?;
-        }
-        self.solve_function(context, &function, &HashSet::new())?;
-        let mut cost = 0u64;
-        for plan in self.plans.values() {
-            let plan = plan
-                .as_ref()
-                .map_err(|reason| PassError::InvalidRuleSet(reason.clone()))?;
-            for scheduled in &plan.schedule {
-                cost = cost.saturating_add(self.rules[scheduled.rule_index].base_cost as u64);
-            }
-        }
-        Ok(cost)
+        self.stage_function(context, function)
     }
 
     /// Build the pass. Guarded-rule relaxation proofs are not inputs to
@@ -1911,10 +1956,11 @@ impl InstructionSelectPass {
 
     /// Planning also mints values for rewrite-introduced computations, so the
     /// transaction starts before solving, not only before running emitters.
-    fn select_function(&mut self, context: &Context, op: &OperationRef) -> Result<(), PassError> {
-        if self.solved.contains(&op.op().id) {
-            return Ok(());
-        }
+    fn stage_function(
+        &mut self,
+        context: &Context,
+        op: &OperationRef,
+    ) -> Result<PreparedSelection, PassError> {
         let mut materialized = HashSet::new();
         loop {
             let staged = context.fork();
@@ -1925,8 +1971,8 @@ impl InstructionSelectPass {
             self.solve_function(&staged, &function, &materialized)?;
             match self.commit_function(&staged, &function) {
                 Ok(()) => {
-                    context.adopt(staged);
-                    return Ok(());
+                    let score = PlanScore::of(&staged, function.op().id);
+                    return Ok(PreparedSelection { staged, score });
                 }
                 Err(RecoveryError::Invalid(error)) => return Err(error),
                 Err(RecoveryError::Placement(conflicts)) => {
@@ -3301,7 +3347,9 @@ impl Pass for InstructionSelectPass {
                 check(context, op)?;
             }
             self.begin_function(context, op);
-            self.select_function(context, op)?;
+            if !self.solved.contains(&op.op().id) {
+                self.stage_function(context, op)?.adopt(context);
+            }
         }
 
         for lowering in &self.op_lowerings {

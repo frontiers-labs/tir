@@ -1,4 +1,7 @@
-use crate::backend::{isel::InstructionSelectPass, select_target};
+use crate::backend::{
+    isel::{InstructionSelectPass, PlanScore},
+    select_target,
+};
 use crate::builtin::FloatType;
 use crate::fp::ops::{FenceOp, FenceOpBuilder, FmaOpBuilder, NegOpBuilder, RoundOp};
 use crate::func::FuncOp;
@@ -107,7 +110,7 @@ impl ResolveFpPass {
             .expect("found fp.round");
         let candidates = contraction_candidates(context, &round)?;
 
-        let mut best: Option<(u64, Context)> = None;
+        let mut best: Option<(PlanScore, Context)> = None;
         let mut unsupported = Vec::new();
         let mut semantic_rejections = Vec::new();
         let mut unique_candidates = HashSet::new();
@@ -122,9 +125,9 @@ impl ResolveFpPass {
             lower_fences(&fork, function.op().id)?;
             match self
                 .selector()
-                .estimate_function_cost(&fork, &OperationRef::new(fork.get_op(function.op().id)))
+                .prepare(&fork, &OperationRef::new(fork.get_op(function.op().id)))
             {
-                Ok(cost) => best = Some((cost, fork)),
+                Ok(prepared) => best = Some((prepared.score(), fork)),
                 Err(error) => unsupported.push(format!("reference: {error}")),
             }
         }
@@ -163,14 +166,15 @@ impl ResolveFpPass {
             lower_fences(&fork, function.op().id)?;
             match self
                 .selector()
-                .estimate_function_cost(&fork, &OperationRef::new(fork.get_op(function.op().id)))
+                .prepare(&fork, &OperationRef::new(fork.get_op(function.op().id)))
+                .map(|prepared| prepared.score())
             {
-                Ok(cost)
+                Ok(score)
                     if best
                         .as_ref()
-                        .is_none_or(|(best_cost, ..)| cost < *best_cost) =>
+                        .is_none_or(|(best_score, ..)| score < *best_score) =>
                 {
-                    best = Some((cost, fork));
+                    best = Some((score, fork));
                 }
                 Ok(_) => {}
                 Err(error) => unsupported.push(error.to_string()),
