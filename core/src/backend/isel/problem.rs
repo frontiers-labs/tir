@@ -422,10 +422,13 @@ impl RegionProblem {
                 continue;
             }
             match assignment.tiles.get(&class) {
+                // Only a register input reads the instance of its class: an
+                // immediate is folded and an effect is performed inside.
                 Some(&match_id) => pending.extend(
                     self.matches[match_id]
                         .uses
                         .iter()
+                        .filter(|(_, demand)| matches!(demand, ChildDemand::Register { .. }))
                         .map(|(input, _)| *input)
                         .filter(|input| assignment.tiles.contains_key(input)),
                 ),
