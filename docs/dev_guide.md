@@ -184,8 +184,11 @@ or newer. Each function benchmark then runs once in its own child process, and
 only the region inside `b.iter` is counted.
 
 Program runs and Cachegrind runs write samples, workload identities, command
-logs, and a Bencher Metric Format summary under `target/bench`. `--output`
-changes that location; relative paths resolve from the workspace root.
+logs, and a `summary.json` under `target/bench`. `--output` changes that
+location; relative paths resolve from the workspace root. The summary is what
+benchboard records. It names each exported metric with a label, a unit and a
+description, and tags each program case with its compiler, so the tables in
+`utils/bench/src/results.rs` and `program.rs` decide what the board shows.
 `--baseline` compares with an earlier bundle and rejects incompatible workload
 identities. Change the declared inputs or contract when measurement boundaries
 change, so old results cannot silently pass a gate.
@@ -198,11 +201,15 @@ background load. The harness records the environment; it does not configure
 the host.
 
 The Perf workflow counts CoreMark, Dhrystone and every function benchmark under
-Cachegrind on each merge to `master`. It records the counts on the `perf-data`
-branch through [benchboard](https://github.com/frontiers-labs/benchboard),
-which opens an issue when an instruction count rises by more than 2% and shows
-the history at <https://frontiers-labs.github.io/benchboard/>. A new function
-benchmark is picked up without any workflow change.
+Cachegrind on each merge to `master`. A second job times the two programs
+natively with `fcc`, `gcc` and `clang` for wall time and peak memory. It
+records both on the `perf-data` branch through
+[benchboard](https://github.com/frontiers-labs/benchboard), which opens an
+issue when an instruction count rises by more than 2% and shows the history at
+<https://frontiers-labs.github.io/benchboard/>. The board's Versus view lists
+`fcc` against the reference compilers for compile time, compile memory and run
+time. Native values come from shared runners and never open an issue. A new
+function benchmark is picked up without any workflow change.
 
 Use `cargo xtask fp-check` to record pinned GCC floating-point observations,
 compare cumulative semantic requirements, and summarize saved reports.

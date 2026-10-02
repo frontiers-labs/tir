@@ -17,6 +17,7 @@ pub use criterion::{BatchSize, Throughput};
 pub use options::{DEFAULT_TIMEOUT_SECS, Engine, Options, Phase};
 pub use process::Command;
 pub use program::Program;
+pub use results::Variant;
 
 use clap::Parser;
 use criterion::measurement::WallTime;
@@ -92,6 +93,8 @@ pub struct ProcessCase {
     pub metadata: Value,
     /// Whether this case is subject to regression thresholds.
     pub gate: bool,
+    /// Set when other cases measure the same benchmark in another variant.
+    pub variant: Option<Variant>,
 }
 
 /// A benchmark name with a parameter, formatted as `name/parameter`.

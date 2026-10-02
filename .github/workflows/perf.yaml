@@ -1,8 +1,9 @@
 name: Perf
 
-# Measures every merge under Cachegrind and records the counts on the perf-data
-# branch. Benchboard compares each run with the previous one and opens an issue
-# when instruction counts regress. History: https://frontiers-labs.github.io/benchboard/
+# Measures every merge and records the results on the perf-data branch.
+# Benchboard compares each run with the previous one, opens an issue when
+# Cachegrind instruction counts regress, and shows fcc against gcc and clang.
+# History: https://frontiers-labs.github.io/benchboard/
 on:
   workflow_dispatch:
     inputs:
@@ -58,6 +59,30 @@ jobs:
           name: benchmark-programs
           path: bench-results
 
+  # The same programs compiled by fcc, gcc and clang, for time and memory.
+  native:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: rui314/setup-mold@v1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: bench
+      - run: sudo apt-get update && sudo apt-get install -y clang time
+      - uses: actions/cache@v6
+        with:
+          path: target/bench-sources
+          key: coremark-source-1f483d5b8316753a742cbf5590caf5bd0a4e4777
+      - name: Time compilation and runtime against gcc and clang
+        run: bash .github/scripts/run-perf-benchmarks.sh native
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: benchmark-native
+          path: bench-results
+
   functions:
     runs-on: ubuntu-24.04
     timeout-minutes: 120
@@ -83,7 +108,7 @@ jobs:
           path: bench-results
 
   record:
-    needs: [programs, functions]
+    needs: [programs, native, functions]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -94,9 +119,10 @@ jobs:
         with:
           pattern: benchmark-*
           path: results
-      - uses: frontiers-labs/benchboard@d31f2a116f595b148387875153d8c0d38eab9de1
+      - uses: frontiers-labs/benchboard@549cc7330a418e41bf18098f0abe5ef972068846
         with:
-          results: results/**/summary.bmf.json
+          results: results/**/summary.json
+          # Cachegrind's key for executed instructions.
           gate-metrics: Ir
           threshold: 2
           # Benchboard records a run under a new key without gating it. The two
@@ -110,7 +136,7 @@ jobs:
   # A benchmark that fails to build, run or validate is a defect of its own,
   # and no comparison exists to report it.
   report-failure:
-    needs: [programs, functions, record]
+    needs: [programs, native, functions, record]
     if: failure() && github.event_name == 'push'
     runs-on: ubuntu-24.04
     permissions:
@@ -126,5 +152,5 @@ jobs:
           if [ -n "$number" ]; then
             gh issue comment "$number" --body "Failed again at ${GITHUB_SHA} in $RUN_URL."
           else
-            gh issue create --title "$title" --body "The Perf workflow failed at ${GITHUB_SHA} in $RUN_URL. Reproduce with \`bash .github/scripts/run-perf-benchmarks.sh programs\` or \`functions\`."
+            gh issue create --title "$title" --body "The Perf workflow failed at ${GITHUB_SHA} in $RUN_URL. Reproduce with \`bash .github/scripts/run-perf-benchmarks.sh programs\`, \`native\` or \`functions\`."
           fi

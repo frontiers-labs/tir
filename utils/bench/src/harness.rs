@@ -7,7 +7,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result, ensure};
 use serde_json::{Value, json};
 
-use crate::results::{self, Metrics, Record, Results};
+use crate::results::{self, Metrics, Record, Results, Variant};
 use crate::{
     Command, Engine, Measure, Options, ProcessCase, build_configuration, environment, options,
     process, program, source_cache,
@@ -286,7 +286,7 @@ impl Harness {
         for (case, samples) in cases.into_iter().zip(samples) {
             let metadata =
                 json!({"workload":case.metadata,"trace_children":case.command.trace_children});
-            self.record(case.id, metadata, case.gate, samples)?;
+            self.record(case.id, metadata, case.gate, case.variant, samples)?;
         }
         Ok(())
     }
@@ -312,7 +312,7 @@ impl Harness {
                 )
                 .with_context(|| format!("benchmark {id}"))?;
             let counters = counted(&id, sample.counters)?;
-            self.record(id, json!({"scope": "function"}), true, vec![counters])?;
+            self.record(id, json!({"scope": "function"}), true, None, vec![counters])?;
         }
         Ok(())
     }
@@ -322,6 +322,7 @@ impl Harness {
         id: String,
         metadata: Value,
         gate: bool,
+        variant: Option<Variant>,
         samples: Vec<Metrics>,
     ) -> Result<()> {
         ensure!(self.seen.insert(id.clone()), "duplicate benchmark ID {id}");
@@ -331,6 +332,7 @@ impl Harness {
             id,
             metadata,
             gate,
+            variant,
             samples,
             summary,
         });

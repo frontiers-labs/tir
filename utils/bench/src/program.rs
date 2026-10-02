@@ -11,7 +11,7 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 
 use crate::sources::GitSource;
-use crate::{Command as BenchCommand, Harness, Phase, ProcessCase};
+use crate::{Command as BenchCommand, Harness, Phase, ProcessCase, Variant};
 
 /// Run preparation or verification, retaining the command and stderr on failure.
 pub fn checked(command: &mut Command, timeout: Duration) -> Result<Output> {
@@ -444,20 +444,37 @@ fn verify_output(
 /// Identifiers of one compiler's cases at one optimization level.
 struct CaseIds {
     base: String,
+    /// The program and level, which name a benchmark for every compiler.
+    shared: String,
+    compiler: Compiler,
+    llvm: bool,
     separate: bool,
 }
 
 impl CaseIds {
     fn new(set: &CompilerSet, program: &Program, compiler: &Compiler, level: &str) -> Self {
+        let level = level.trim_start_matches('-');
         Self {
-            base: format!(
-                "{}/{}/{}/{}",
-                compiler.name,
-                program.name,
-                set.mode(),
-                level.trim_start_matches('-')
-            ),
+            base: format!("{}/{}/{}/{level}", compiler.name, program.name, set.mode()),
+            shared: format!("{}/{level}", program.name),
+            compiler: *compiler,
+            llvm: set.llvm,
             separate: program.separate,
+        }
+    }
+
+    /// The comparison of this compiler's case with the same case of the others.
+    fn variant(&self, phase: &str, source: Option<&Path>) -> Variant {
+        let source = source.map(|source| format!("/{}", source.with_extension("").display()));
+        Variant {
+            benchmark: format!("{}{}", self.shared, source.unwrap_or_default()),
+            group: if self.llvm {
+                format!("{phase} from LLVM IR")
+            } else {
+                phase.into()
+            },
+            variant: self.compiler.name.into(),
+            subject: self.compiler.candidate(),
         }
     }
 
@@ -912,10 +929,12 @@ impl Build<'_> {
             validation.verify()?;
             let verifier = validator.clone();
             let runtime_args = args.clone();
+            let source = prepared.sources[group].strip_prefix(&prepared.directory)?;
             cases.run.push((
                 group,
                 ProcessCase {
-                    id: ids.run(prepared.sources[group].strip_prefix(&prepared.directory)?),
+                    id: ids.run(source),
+                    variant: Some(ids.variant("Run", program.separate.then_some(source))),
                     command: runner.measured(),
                     verify: Some(Box::new(move |stdout| {
                         verify_output(&verifier, &runtime_args, stdout, timeout)
@@ -928,10 +947,12 @@ impl Build<'_> {
                 let validation = Arc::clone(&validation);
                 let object = objects[index].clone();
                 let validated = MemoizedValidation::new(object_digest(&object)?);
+                let source = prepared.sources[index].strip_prefix(&prepared.directory)?;
                 cases.compile.push((
                     index,
                     ProcessCase {
-                        id: ids.compile(prepared.sources[index].strip_prefix(&prepared.directory)?),
+                        id: ids.compile(source),
+                        variant: Some(ids.variant("Compile", Some(source))),
                         // A reference driver execs its real compiler, which must be counted too.
                         command: recipes[index]
                             .measured()

@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use clap::Parser;
 use serde_json::{Value, json};
-use tir_bench::{BatchSize, Criterion, Options, ProcessCase, process::Command};
+use tir_bench::{BatchSize, Criterion, Options, ProcessCase, Variant, process::Command};
 
 const NAMESPACE: &str = "tir-bench/runner-test";
 
@@ -26,6 +26,12 @@ fn process_case(script: &str, metadata: Value) -> ProcessCase {
         })),
         metadata,
         gate: true,
+        variant: Some(Variant {
+            benchmark: "process".into(),
+            group: "Run".into(),
+            variant: "candidate".into(),
+            subject: true,
+        }),
     }
 }
 
@@ -85,14 +91,35 @@ fn native_suite_records_validates_and_compares() {
     latencies.sort_by(f64::total_cmp);
     let median = (latencies[0] + latencies[1]) / 2.0;
     assert_eq!(process["summary"]["latency"].as_f64().unwrap(), median);
-    let bmf: Value =
-        serde_json::from_slice(&std::fs::read(baseline_path.join("summary.bmf.json")).unwrap())
+    // Benchboard reads this file, so its shape is a contract with another repository.
+    let summary: Value =
+        serde_json::from_slice(&std::fs::read(baseline_path.join("summary.json")).unwrap())
             .unwrap();
+    let deviation = (latencies[1] - latencies[0]) / 2.0;
     assert_eq!(
-        bmf[format!("{NAMESPACE}/process")]["latency"]["value"],
-        json!(median)
+        summary["results"][format!("{NAMESPACE}/process")]["latency"],
+        json!({"value": median, "lower_value": median - deviation, "upper_value": median + deviation})
     );
-    assert!(bmf[format!("{NAMESPACE}/process")]["peak_process_rss_bytes"]["value"].is_number());
+    // CPU times and the deviation are sampled, and only defined metrics are exported.
+    let exported: Vec<_> = summary["metrics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|metric| {
+            (
+                metric["key"].as_str().unwrap(),
+                metric["unit"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        exported,
+        [("latency", "ns"), ("peak_process_rss_bytes", "bytes")]
+    );
+    assert_eq!(
+        summary["variants"][format!("{NAMESPACE}/process")],
+        json!({"benchmark": "process", "group": "Run", "variant": "candidate", "subject": true})
+    );
 
     let mut compatible = options(temp.path());
     compatible.baseline = Some(baseline_path.clone());
@@ -166,6 +193,7 @@ fn native_suite_records_validates_and_compares() {
         verify: None,
         metadata: json!({}),
         gate: true,
+        variant: None,
     }]);
     assert!(criterion.finish().is_err());
     assert!(!marker.exists());
