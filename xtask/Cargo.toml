@@ -12,7 +12,7 @@ serde_json.workspace = true
 toml.workspace = true
 regex.workspace = true
 sha2 = "0.8.2"
-tempfile = "3.27.0"
+tir-adt.workspace = true
 xshell = "0.2.7"
 tir-isa-test-suite = { path = "../utils/isa-test-suite" }
 tir-symbolic.workspace = true

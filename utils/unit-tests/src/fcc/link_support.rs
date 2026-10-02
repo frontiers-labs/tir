@@ -54,7 +54,7 @@ pub fn compile_host(dir: &Path, source: &str, output: &str) {
 }
 
 pub fn assert_fcc_matches_host(source: &str) {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tir_adt::TempDir::new().unwrap();
     compile_fcc(dir.path(), source, "fcc-program");
     compile_host(dir.path(), source, "host-program");
     let fcc = run_program(dir.path(), "fcc-program");
@@ -66,7 +66,7 @@ pub fn assert_fcc_matches_host(source: &str) {
 
 pub fn assert_fcc_matches_host_at_optimization_levels(source: &str) {
     for level in ["-O0", "-O2"] {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = tir_adt::TempDir::new().unwrap();
         fs::write(dir.path().join("test.c"), source).unwrap();
         run_fcc(dir.path(), &["cc", level, "test.c", "-o", "fcc-program"]);
         let status = Command::new("cc")
@@ -94,7 +94,7 @@ pub fn compile_host_object(dir: &Path, source: &str, output: &str) {
 }
 
 pub fn assert_fcc_object_executes_with_host(source: &str, host: &str) {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tir_adt::TempDir::new().unwrap();
     fs::write(dir.path().join("fcc.c"), source).unwrap();
     run_fcc(dir.path(), &["cc", "-c", "fcc.c", "-o", "fcc.o"]);
     compile_host_object(dir.path(), host, "host.o");

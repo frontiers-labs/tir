@@ -18,10 +18,9 @@ libtest-mimic = "0.8"
 regex.workspace = true
 serde = { workspace = true, features = ["derive"] }
 toml.workspace = true
-globset.workspace = true
 
 [dev-dependencies]
-tempfile = "3.27.0"
+tir-adt.workspace = true
 
 [[test]]
 name = "lit"

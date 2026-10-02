@@ -1,5 +1,6 @@
 mod apfloat;
 mod apint;
+mod arena;
 mod dag;
 mod float_env;
 mod hashmap;
@@ -7,9 +8,11 @@ mod hive;
 mod interner;
 mod predicate;
 mod raw_bits;
+mod tempdir;
 
 pub use apfloat::*;
 pub use apint::*;
+pub use arena::*;
 pub use dag::*;
 pub use float_env::*;
 pub use hashmap::*;
@@ -17,3 +20,4 @@ pub use hive::*;
 pub use interner::*;
 pub use predicate::*;
 pub use raw_bits::*;
+pub use tempdir::*;

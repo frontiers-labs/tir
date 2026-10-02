@@ -319,7 +319,7 @@ impl<'a> Builder<'a> {
                 &[(0, 1), (1, 0)]
             };
             for &(variable, literal) in sides {
-                let Some(factor) = self.integer(operands[literal]).and_then(&scale) else {
+                let Some(factor) = self.integer(operands[literal]).and_then(scale) else {
                     continue;
                 };
                 let (form, wraps) = self.form(operands[variable])?;

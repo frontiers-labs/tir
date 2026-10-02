@@ -1014,9 +1014,9 @@ fn relaxation_candidate(
         canonical.subgraph_eq(root, pattern, pattern_root)
     };
     let candidate = tir_symbolic::lang::selection_fallback_preserving_rounding(guarded, full_root)
-        .filter(&matches_pattern)
+        .filter(matches_pattern)
         .or_else(|| {
-            tir_symbolic::lang::selection_fallback(guarded, full_root).filter(&matches_pattern)
+            tir_symbolic::lang::selection_fallback(guarded, full_root).filter(matches_pattern)
         })
         .or_else(|| {
             if *guarded.get_node(full_root) != SymKind::If {

@@ -9,7 +9,7 @@ use tir_x86_64 as _;
 /// another; missing either copy costs its block's weight, so the cheapest
 /// register of each node is that weight.
 fn copy_weights(source: &str) -> Vec<u64> {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = tir_adt::TempDir::new().unwrap();
     let output = Command::new(std::env::current_exe().unwrap())
         .args(["--ignored", "--exact", "dump_fixture"])
         .env("TIR_LOOP_DEPTH_SOURCE", source)

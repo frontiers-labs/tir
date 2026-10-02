@@ -10,7 +10,6 @@ doctest = false
 
 [dependencies]
 tir.workspace = true
-thiserror.workspace = true
 logos.workspace = true
 chumsky.workspace = true
 

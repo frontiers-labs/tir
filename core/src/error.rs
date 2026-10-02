@@ -1,31 +1,44 @@
-use thiserror::Error;
+use std::fmt;
 
-#[derive(Debug, Error)]
+#[derive(Debug)]
 pub enum Error {
-    #[error("Unknown dialect '{0}'")]
     UnknownDialect(String),
-    #[error("Unknown operation '{1}' in dialect '{0}'")]
     UnknownOperation(String, String),
-    #[error("Unknown type '{1}' in dialect '{0}'")]
     UnknownType(String, String),
-    #[error("Expected '{0}'")]
     ExpectedToken(&'static str),
-    #[error("Expected operation name in format 'op_name' or 'dialect_name.op_name'")]
     ExpectedOpName,
-    #[error("Expected '{0}.{1}'")]
     ExpectedOperation(&'static str, &'static str),
-    #[error("Expected type")]
     ExpectedType,
-    #[error("Expected value reference")]
     ExpectedValueRef,
-    #[error("Expected symbol name")]
     ExpectedSymbolName,
-    #[error("Unknown value reference '%{0}'")]
     UnknownValueRef(String),
-    #[error("Unknown attribute alias '#{0}'")]
     UnknownAttributeAlias(String),
-    #[error("'{1}' is not a comparison predicate for '{0}'")]
     InvalidPredicate(String, String),
-    #[error("Operation verification failed: {0}")]
     VerificationError(String),
 }
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnknownDialect(d) => write!(f, "Unknown dialect '{d}'"),
+            Self::UnknownOperation(d, op) => write!(f, "Unknown operation '{op}' in dialect '{d}'"),
+            Self::UnknownType(d, ty) => write!(f, "Unknown type '{ty}' in dialect '{d}'"),
+            Self::ExpectedToken(t) => write!(f, "Expected '{t}'"),
+            Self::ExpectedOpName => {
+                f.write_str("Expected operation name in format 'op_name' or 'dialect_name.op_name'")
+            }
+            Self::ExpectedOperation(d, op) => write!(f, "Expected '{d}.{op}'"),
+            Self::ExpectedType => f.write_str("Expected type"),
+            Self::ExpectedValueRef => f.write_str("Expected value reference"),
+            Self::ExpectedSymbolName => f.write_str("Expected symbol name"),
+            Self::UnknownValueRef(v) => write!(f, "Unknown value reference '%{v}'"),
+            Self::UnknownAttributeAlias(a) => write!(f, "Unknown attribute alias '#{a}'"),
+            Self::InvalidPredicate(d, p) => {
+                write!(f, "'{p}' is not a comparison predicate for '{d}'")
+            }
+            Self::VerificationError(e) => write!(f, "Operation verification failed: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for Error {}

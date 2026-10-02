@@ -2,7 +2,7 @@ use std::fs::File;
 use std::io::{self, BufWriter, Write};
 use std::path::{Path, PathBuf};
 
-use tempfile::TempDir;
+use tir_adt::TempDir;
 
 use super::actions::{Action, DriverError, DriverOptions, InputFile, LinkInput, Output, StopPhase};
 use super::compile::{

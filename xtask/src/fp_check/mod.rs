@@ -559,7 +559,7 @@ fn run_reference_case(
         });
     }
 
-    let directory = tempfile::Builder::new().prefix("tir-fp-check-").tempdir()?;
+    let directory = tir_adt::TempDir::with_prefix("tir-fp-check-")?;
     let copied_source = directory.path().join("probe.c");
     fs::write(&copied_source, &source_contents)?;
     let output_path = match case.probe {
@@ -759,7 +759,7 @@ fn fail_case(
     source_digest: String,
     commands: Vec<Vec<String>>,
     exit_status: Option<i32>,
-    directory: tempfile::TempDir,
+    directory: tir_adt::TempDir,
     detail: String,
 ) -> CaseResult {
     CaseResult {

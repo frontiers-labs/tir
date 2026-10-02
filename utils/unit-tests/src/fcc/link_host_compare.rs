@@ -570,7 +570,7 @@ fn optimized_load_before_call_preserves_observed_value() {
     if !cc_available() {
         return;
     }
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tir_adt::TempDir::new().unwrap();
     // Keep the writer in another object so optimization cannot inline it.
     std::fs::write(
         dir.path().join("fcc.c"),
