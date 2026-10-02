@@ -1180,6 +1180,112 @@ module_end
     assert_eq!(body_names(&context, region), vec!["muli"]);
 }
 
+/// The function body's cheapest cover is cyclic, so the search constructs its
+/// assignment. The arm's cover is fine and stays: it holds the cheaper
+/// multiply, where a search deciding the arm afresh returns the other one.
+#[test]
+fn a_region_with_a_valid_cover_keeps_it_when_another_needs_the_search() {
+    use smallvec::smallvec;
+    use tir::backend::isel::Theory;
+    use tir_relational::{Atom, ClassId as Id, HeadOp, Plan, Query};
+
+    let (context, module, region) = function(
+        r#"module {
+func.func @demo(%x: !i32, %y: !i32, %z: !i32, %c: !i1) -> !i32 {
+  %mul = muli %x, %y : !i32
+  %add = addi %mul, %z : !i32
+  %sub = subi %add, %z : !i32
+  cfg.cond_br %c, ^bb1, ^bb2
+^bb1:
+  %arm = muli %x, %z : !i32
+  cfg.br ^bb3(%arm : !i32)
+^bb2:
+  cfg.br ^bb3(%sub : !i32)
+^bb3(%r: !i32):
+  func.return %r
+}
+module_end
+}"#,
+    );
+
+    // Variables: 0 the difference, 1 the sum, 2 the product, 3 `z`.
+    let template = |kind, class, lhs: u32, rhs: u32| {
+        let mut node = template_node(kind, None, None);
+        node.children = vec![Id::from_raw(lhs), Id::from_raw(rhs)];
+        Atom::Node {
+            template: node,
+            args: smallvec![lhs, rhs],
+            class,
+            row: None,
+        }
+    };
+    let cancel = tir_relational::Rule {
+        name: "add-then-sub-cancels".to_string(),
+        plan: Plan::compile(Query::tree(
+            4,
+            0,
+            vec![
+                template(SymKind::Sub, 0, 1, 3),
+                template(SymKind::Add, 1, 2, 3),
+            ],
+        )),
+        head: vec![HeadOp::Union(0, 2)],
+        head_vars: 0,
+        post_saturation: false,
+    };
+
+    let low = RegisterRequirement::low_bits(RegisterCapability::integer(64));
+    let whole = RegisterRequirement::whole(RegisterCapability::integer(32));
+    let rules = vec![
+        Rule {
+            operand_registers: vec![(0, whole), (1, whole)],
+            ..Rule::new(
+                "mulw",
+                atomic_pattern(SymKind::Mul),
+                5 * LATENCY_COST_SCALE,
+                emit_shift_prelude,
+            )
+        },
+        Rule {
+            operand_registers: vec![(0, low), (1, low)],
+            ..Rule::new(
+                "mul",
+                atomic_pattern(SymKind::Mul),
+                10 * LATENCY_COST_SCALE,
+                emit_mul,
+            )
+        },
+        Rule::new(
+            "add",
+            atomic_pattern(SymKind::Add),
+            LATENCY_COST_SCALE,
+            emit_add,
+        ),
+        Rule::new(
+            "sub",
+            atomic_pattern(SymKind::Sub),
+            LATENCY_COST_SCALE,
+            emit_sub,
+        ),
+    ];
+
+    let mut theory = Theory::default();
+    theory.push_rule(cancel);
+    let pass = InstructionSelectPass::new(rules).with_theory(theory);
+    run_pass(&context, &module, pass).expect("every region has an acyclic cover");
+
+    let gate = body_ops(&context, region)
+        .into_iter()
+        .find(|op| !op.regions().is_empty())
+        .expect("the branch is a structured gate");
+    let arms: Vec<Vec<&str>> = gate
+        .regions()
+        .iter()
+        .map(|&arm| body_names(&context, arm))
+        .collect();
+    assert!(arms.contains(&vec!["subi"]), "{arms:?}");
+}
+
 /// At *equal* cost, the type-constrained rule must win the tie via dominance
 /// pruning — specificity never reaches the PBQP objective.
 #[test]

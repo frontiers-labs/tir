@@ -737,13 +737,17 @@ fn at_most(bits: &[Lit], bound: u64) -> Vec<Vec<Lit>> {
 
 /// Look for an assignment of the frozen problem strictly cheaper than
 /// `incumbent`, or for any assignment when there is none. `fixed` holds the
-/// registers the demand policy places whatever is chosen. `accept` is the
-/// independent check a decoded assignment passes before it counts; it returns
-/// the assignment without the instances nothing reads.
+/// registers the demand policy places whatever is chosen. `kept` holds, per
+/// region, the cover the records already accept: constructing a missing
+/// assignment leaves those regions as they are and decides only the others,
+/// unless that turns out impossible. `accept` is the independent check a
+/// decoded assignment passes before it counts; it returns the assignment
+/// without the instances nothing reads.
 pub(crate) fn search(
     problems: &[RegionProblem],
     fixed: &HashSet<(Id, RegionId)>,
     incumbent: Option<u64>,
+    kept: &[Option<&RegionAssignment>],
     accept: &dyn Fn(Vec<RegionAssignment>) -> Option<Vec<RegionAssignment>>,
     budget: &Budget,
 ) -> Outcome {
@@ -761,6 +765,8 @@ pub(crate) fn search(
     let mut found = None;
     let mut rejected: Vec<Vec<(u32, bool)>> = Vec::new();
     let mut status = Status::Exhausted;
+    // The regions held to their cover while an assignment is constructed.
+    let mut pinned = incumbent.is_none() && kept.iter().any(Option::is_some);
     for _ in 0..budget.queries {
         // Halve the range the cheapest assignment lies in.
         let bound = match best {
@@ -780,6 +786,21 @@ pub(crate) fn search(
                 blasted.solver.add_clause(&clause);
             }
         }
+        if pinned {
+            let chosen = encoding
+                .regions
+                .iter()
+                .zip(problems)
+                .zip(kept)
+                .filter_map(|((vars, problem), cover)| Some((vars, problem, (*cover)?)))
+                .flat_map(|(vars, problem, cover)| pins(vars, problem, cover));
+            for (symbol, value) in chosen {
+                let bit = blasted.sym_bits[&symbol][0];
+                blasted
+                    .solver
+                    .add_clause(&[if value { bit } else { bit.negate() }]);
+            }
+        }
         for assignment in &rejected {
             let clause: Vec<Lit> = assignment
                 .iter()
@@ -795,6 +816,12 @@ pub(crate) fn search(
             SatResult::Unsat => match bound {
                 Some(bound) => {
                     floor = bound + 1;
+                    continue;
+                }
+                // The kept covers admit no assignment of the rest: decide
+                // every region.
+                None if pinned => {
+                    pinned = false;
                     continue;
                 }
                 None => {
@@ -814,6 +841,10 @@ pub(crate) fn search(
             .map(|(problem, vars)| decode(problem, vars, &holds))
             .collect();
         if let Some(assignment) = accept(assignment) {
+            // The assignment without its unreached instances is itself an
+            // assignment of the problem, at the cost counted here. A bound
+            // below that cost therefore skips no cheaper assignment.
+            pinned = false;
             best = Some(
                 problems
                     .iter()
@@ -846,6 +877,25 @@ pub(crate) fn search(
         assignment: found,
         status,
     }
+}
+
+/// The value every variable of a region takes under `cover`.
+fn pins(vars: &RegionVars, problem: &RegionProblem, cover: &RegionAssignment) -> Vec<(u32, bool)> {
+    let tiles = problem.matches.iter().zip(&vars.tiles).enumerate().map(
+        |(match_id, (matched, &(_, symbol)))| {
+            (symbol, cover.tiles.get(&matched.root) == Some(&match_id))
+        },
+    );
+    let controls = vars
+        .controls
+        .iter()
+        .zip(&cover.controls)
+        .flat_map(|(alternatives, chosen)| {
+            alternatives
+                .iter()
+                .map(move |&(choice, _, symbol)| (symbol, choice == *chosen))
+        });
+    tiles.chain(controls).collect()
 }
 
 fn decode(

@@ -2819,10 +2819,25 @@ impl InstructionSelectPass {
             },
             |assignment| assignment,
         );
-        let complete: Option<Vec<RegionAssignment>> = incumbent
-            .iter()
-            .map(|assignment| assignment.as_ref().ok().cloned())
-            .collect();
+        // The covers the records accept. A region whose cover is missing or
+        // rejected leaves no register for the regions it encloses.
+        let mut covers = incumbent.iter();
+        let kept: Vec<Option<&RegionAssignment>> = Self::with_registers(
+            fs,
+            problems,
+            |problem, has_register| {
+                let cover = covers.next().expect("one cover per region");
+                let cover = cover.as_ref().map_err(|_| String::new())?;
+                self.validate_region(context, fs, problem, cover, has_register)?;
+                Ok(cover)
+            },
+            |cover| *cover,
+        )
+        .into_iter()
+        .map(Result::ok)
+        .collect();
+        let complete: Option<Vec<RegionAssignment>> =
+            kept.iter().map(|cover| cover.cloned()).collect();
         let valid =
             |assignment: &[RegionAssignment]| self.validate(context, fs, problems, assignment);
         let cost = |assignment: &[RegionAssignment]| -> u64 {
@@ -2832,7 +2847,6 @@ impl InstructionSelectPass {
                 .map(|(problem, assignment)| problem.cost(assignment))
                 .sum()
         };
-        let complete = complete.filter(|assignment| valid(assignment));
         let known = complete.as_deref().map(cost);
         let accept = |assignment: Vec<RegionAssignment>| {
             let assignment = Self::drop_unreached(fs, problems, assignment);
@@ -2842,6 +2856,7 @@ impl InstructionSelectPass {
             problems,
             &fs.demand.registers,
             known,
+            &kept,
             &accept,
             search::Budget::current(),
         );
@@ -2945,41 +2960,54 @@ impl InstructionSelectPass {
         let mut assignments = assignment.iter();
         let check = |problem: &RegionProblem, has_register: HasRegister| {
             let assignment = assignments.next().expect("one assignment per region");
-            problem.validate(
-                assignment,
-                has_register,
-                &|control, guard| {
-                    let control = &problem.controls[control];
-                    self.resolve_guard(
-                        context,
-                        fs,
-                        problem,
-                        control,
-                        &control.fused[guard],
-                        has_register,
-                    )
-                    .is_some()
-                },
-                &|control| {
-                    let control = &problem.controls[control];
-                    fs.register_value(
-                        context,
-                        &problem
-                            .facts(problem.facts(control.condition).source)
-                            .binding_members,
-                        problem.region,
-                        control.at,
-                        true,
-                        has_register,
-                    )
-                    .is_some()
-                },
-            )?;
+            self.validate_region(context, fs, problem, assignment, has_register)?;
             Ok(assignment)
         };
         Self::with_registers(fs, problems, check, |assignment| assignment)
             .iter()
             .all(Result::is_ok)
+    }
+
+    /// Check one region's assignment against its record, given the registers
+    /// the regions before it leave.
+    fn validate_region(
+        &self,
+        context: &Context,
+        fs: &FunctionSelection,
+        problem: &RegionProblem,
+        assignment: &RegionAssignment,
+        has_register: HasRegister,
+    ) -> Result<(), String> {
+        problem.validate(
+            assignment,
+            has_register,
+            &|control, guard| {
+                let control = &problem.controls[control];
+                self.resolve_guard(
+                    context,
+                    fs,
+                    problem,
+                    control,
+                    &control.fused[guard],
+                    has_register,
+                )
+                .is_some()
+            },
+            &|control| {
+                let control = &problem.controls[control];
+                fs.register_value(
+                    context,
+                    &problem
+                        .facts(problem.facts(control.condition).source)
+                        .binding_members,
+                    problem.region,
+                    control.at,
+                    true,
+                    has_register,
+                )
+                .is_some()
+            },
+        )
     }
 
     /// Turn a region's assignment into its emission plan: the selected
@@ -3254,13 +3282,13 @@ impl InstructionSelectPass {
                 }
                 ControlChoice::Nonzero => {
                     let class = problem.facts(control.condition).source;
-                    let Some(condition) = destinations
+                    let condition = destinations
                         .get(&class)
                         .copied()
                         .or_else(|| register_value(class, control.at, true))
-                    else {
-                        continue;
-                    };
+                        .ok_or_else(|| {
+                            format!("{region:?}: a materialized test has no register to read")
+                        })?;
                     AuxEmit::Branch(GuardBranch::Nonzero { condition })
                 }
             };
