@@ -55,6 +55,13 @@
    "subject": "fix(arm64): refine Cortex-A720 scheduling costs (#523)",
    "time": "2026-10-02T04:24:17.000Z",
    "env_key": "rustc 1.99.0; valgrind-3.22.0"
+  },
+  {
+   "file": "runs/2026-10-02T20-34-39-000Z-4b5e2c7775e8.json",
+   "commit": "4b5e2c7775e893910ad915a14ca3ae4024245e2f",
+   "subject": "feat(bench): write benchmarks like Criterion and track them per merge (#526)",
+   "time": "2026-10-02T20:34:39.000Z",
+   "env_key": "rustc 1.99.0 (b940084d7 2026-09-28); valgrind-3.22.0; ldd (Ubuntu GLIBC 2.39-0ubuntu8.9) 2.39"
   }
  ]
 }
