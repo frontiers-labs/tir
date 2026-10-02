@@ -82,6 +82,14 @@ pub struct Solver {
     trail_lim: Vec<usize>,
     /// Set once an empty clause (or top-level conflict) makes the problem unsat.
     unsat: bool,
+    /// Variables that may be unassigned, as a binary max-heap on
+    /// `(activity, index)`: the order a linear scan for the most active
+    /// unassigned variable would visit them in.
+    order: Vec<u32>,
+    /// Each variable's slot in `order`, or `usize::MAX` when it is not queued.
+    order_slot: Vec<usize>,
+    /// Scratch marks of conflict analysis, all false between conflicts.
+    seen: Vec<bool>,
 }
 
 impl Default for Solver {
@@ -105,6 +113,9 @@ impl Solver {
             qhead: 0,
             trail_lim: Vec::new(),
             unsat: false,
+            order: Vec::new(),
+            order_slot: Vec::new(),
+            seen: Vec::new(),
         }
     }
 
@@ -122,6 +133,9 @@ impl Solver {
         self.activity.push(0.0);
         self.watches.push(Vec::new());
         self.watches.push(Vec::new());
+        self.order_slot.push(usize::MAX);
+        self.seen.push(false);
+        self.queue(v.0);
         v
     }
 
@@ -301,7 +315,8 @@ impl Solver {
 
     /// 1-UIP analysis: returns the learned clause (asserting literal at index 0) and backjump level.
     fn analyze(&mut self, conflict: usize) -> (Vec<Lit>, usize) {
-        let mut seen = vec![false; self.num_vars()];
+        let mut seen = std::mem::take(&mut self.seen);
+        let mut marked: Vec<usize> = Vec::new();
         let mut learnt: Vec<Lit> = vec![Lit(0)]; // slot 0: asserting literal
         let mut path_c = 0usize;
         let mut p: Option<Lit> = None;
@@ -317,6 +332,7 @@ impl Solver {
                 if !seen[v] && self.level[v] > 0 {
                     self.bump(q.var());
                     seen[v] = true;
+                    marked.push(v);
                     if self.level[v] >= self.decision_level() {
                         path_c += 1;
                     } else {
@@ -342,6 +358,10 @@ impl Solver {
             confl = self.reason[pl.var().index()].expect("implied literal has a reason");
         }
         learnt[0] = p.unwrap().negate();
+        for v in marked {
+            seen[v] = false;
+        }
+        self.seen = seen;
 
         // Backjump to the second-highest level; move that literal to slot 1 for watching.
         let bt_level = if learnt.len() == 1 {
@@ -390,22 +410,77 @@ impl Solver {
             self.phase[v] = self.assign[v].unwrap();
             self.assign[v] = None;
             self.reason[v] = None;
+            self.queue(v as u32);
         }
         self.trail_lim.truncate(level);
         self.qhead = self.trail.len();
     }
 
-    /// Pick the highest-activity unassigned variable, or `None` if all assigned.
-    fn pick_branch(&self) -> Option<Lit> {
-        let mut best: Option<Var> = None;
-        let mut best_act = f64::NEG_INFINITY;
-        for i in 0..self.num_vars() {
-            if self.assign[i].is_none() && self.activity[i] >= best_act {
-                best_act = self.activity[i];
-                best = Some(Var(i as u32));
+    /// Pick the highest-activity unassigned variable, the highest-numbered
+    /// among equals, or `None` if all are assigned.
+    fn pick_branch(&mut self) -> Option<Lit> {
+        while let Some(&top) = self.order.first() {
+            self.unqueue_top();
+            if self.assign[top as usize].is_none() {
+                return Some(Lit::new(Var(top), !self.phase[top as usize]));
             }
         }
-        best.map(|v| Lit::new(v, !self.phase[v.index()]))
+        None
+    }
+
+    /// Whether `a` is picked ahead of `b`.
+    fn ahead(&self, a: u32, b: u32) -> bool {
+        (self.activity[a as usize], a) > (self.activity[b as usize], b)
+    }
+
+    fn queue(&mut self, var: u32) {
+        if self.order_slot[var as usize] == usize::MAX {
+            self.order_slot[var as usize] = self.order.len();
+            self.order.push(var);
+            self.sift_up(self.order.len() - 1);
+        }
+    }
+
+    fn unqueue_top(&mut self) {
+        let top = self.order.swap_remove(0);
+        self.order_slot[top as usize] = usize::MAX;
+        if let Some(&moved) = self.order.first() {
+            self.order_slot[moved as usize] = 0;
+            self.sift_down(0);
+        }
+    }
+
+    fn sift_up(&mut self, mut slot: usize) {
+        while slot > 0 {
+            let parent = (slot - 1) / 2;
+            if !self.ahead(self.order[slot], self.order[parent]) {
+                break;
+            }
+            self.swap_slots(slot, parent);
+            slot = parent;
+        }
+    }
+
+    fn sift_down(&mut self, mut slot: usize) {
+        loop {
+            let mut first = slot;
+            for child in [2 * slot + 1, 2 * slot + 2] {
+                if child < self.order.len() && self.ahead(self.order[child], self.order[first]) {
+                    first = child;
+                }
+            }
+            if first == slot {
+                break;
+            }
+            self.swap_slots(slot, first);
+            slot = first;
+        }
+    }
+
+    fn swap_slots(&mut self, a: usize, b: usize) {
+        self.order.swap(a, b);
+        self.order_slot[self.order[a] as usize] = a;
+        self.order_slot[self.order[b] as usize] = b;
     }
 
     fn bump(&mut self, var: Var) {
@@ -416,6 +491,14 @@ impl Solver {
                 *act *= 1e-100;
             }
             self.var_inc *= 1e-100;
+            // Scaling can round distinct activities into a tie.
+            for slot in (0..self.order.len() / 2).rev() {
+                self.sift_down(slot);
+            }
+        }
+        let slot = self.order_slot[var.index()];
+        if slot != usize::MAX {
+            self.sift_up(slot);
         }
     }
 
