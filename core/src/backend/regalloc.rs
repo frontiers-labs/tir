@@ -12,7 +12,7 @@
 //! Register files come from [`RegisterInfo`]; allocation order and calling
 //! convention policy come from the selected [`crate::backend::abi::AbiInfo`].
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::rc::Rc;
 
 use tir::attributes::AttributeValue;
@@ -466,7 +466,9 @@ fn allocate_with_affinities(
 /// has: at each instruction, the values live across it, plus the larger of
 /// what it defines and what it reads for the last time, must fit in the file's
 /// allocatable registers, and the values live across must also avoid what it
-/// clobbers. Copy-related values that do not interfere hold one value and
+/// clobbers. A value keeps avoiding those registers for as long as it lives, so
+/// the values avoiding one set of registers must also fit in what that set
+/// leaves. Copy-related values that do not interfere hold one value and
 /// count once. A value spilled everywhere leaves every point it was live
 /// across. Each overfull instruction gives up the values cheapest to spill for
 /// the number of overfull instructions they relieve.
@@ -483,6 +485,21 @@ fn pressure_spills(
         let (file, _, width) = register.0.span(register.1);
         Some((file, u64::from(width)))
     };
+    // The allocatable units of its file each value avoids wherever it is live.
+    let avoided: HashMap<u32, BTreeSet<u16>> = liveness
+        .forbidden
+        .iter()
+        .filter_map(|(&vreg, registers)| {
+            let (file, _) = shape(vreg)?;
+            let units: BTreeSet<u16> = registers
+                .iter()
+                .flat_map(|register| units_of(*register))
+                .filter(|unit| unit.0 == file && files.units.contains(unit))
+                .map(|unit| unit.1)
+                .collect();
+            (!units.is_empty()).then_some((vreg, units))
+        })
+        .collect();
     let mut groups = CopyGroups::default();
     for &(src, dst) in &liveness.copies {
         if !liveness.interferes(src, dst) {
@@ -531,6 +548,65 @@ fn pressure_spills(
             let own = width_in(&point.defs, file).max(width_in(&point.dying, file));
             let demand = (live + own).max(live + files.blocked(file, &point.blocked));
             let excess = demand.saturating_sub(files.capacity[file]);
+
+            // A value live across a clobber avoids the clobbered registers
+            // over its whole range, not only at the clobber: the values
+            // avoiding one set must fit in the registers that set leaves.
+            let avoids: Vec<BTreeSet<u16>> = in_file
+                .iter()
+                .map(|group| {
+                    let members = group.members.iter();
+                    members
+                        .filter_map(|vreg| avoided.get(vreg))
+                        .flatten()
+                        .copied()
+                        .collect()
+                })
+                .collect();
+            let mut sets: Vec<&BTreeSet<u16>> =
+                avoids.iter().filter(|set| !set.is_empty()).collect();
+            sets.sort();
+            sets.dedup();
+            for set in sets {
+                let mut confined: Vec<LiveGroup> = in_file
+                    .iter()
+                    .zip(&avoids)
+                    .filter(|(_, avoids)| avoids.is_superset(set))
+                    .map(|(group, _)| group.clone())
+                    .collect();
+                let live: u64 = confined.iter().map(|group| group.width).sum();
+                // Spilled, a value the instruction defines or reads for the
+                // last time is a temporary that avoids nothing.
+                let mut own = [0, 0];
+                for (end, vregs) in [&point.defs, &point.dying].into_iter().enumerate() {
+                    for &vreg in vregs {
+                        let confines = |units: &BTreeSet<u16>| units.is_superset(set);
+                        match shape(vreg) {
+                            Some((f, width))
+                                if f == file && avoided.get(&vreg).is_some_and(confines) =>
+                            {
+                                own[end] += width;
+                                confined.push(LiveGroup {
+                                    root: groups.find(vreg),
+                                    file,
+                                    width,
+                                    members: vec![vreg],
+                                });
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                let demand = live + own[0].max(own[1]);
+                let left = files.capacity[file].saturating_sub(set.len() as u64);
+                let excess = demand.saturating_sub(left);
+                if excess > 0 {
+                    overfull.push(Overfull {
+                        excess,
+                        groups: confined,
+                    });
+                }
+            }
             if excess > 0 {
                 overfull.push(Overfull {
                     excess,

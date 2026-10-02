@@ -500,7 +500,10 @@ Register allocation assigns physical registers afterward. It follows
 Buchwald, Zwinkau, and Bersch, "SSA-based Register Allocation with PBQP"
 (CC 2011). Spilling runs first, as its own step. Wherever an instruction needs
 more registers of a file than the file has, the allocator spills the values
-cheapest for the pressure they relieve. Assignment and copy coalescing then share
+cheapest for the pressure they relieve. Live ranges are not split at calls. A
+value live across a clobber avoids the clobbered registers for its whole range,
+so the spiller applies the same limit to the values avoiding one set of
+registers, measured against the registers that set leaves. Assignment and copy coalescing then share
 one PBQP solve, where copies are affinity edges weighted by loop depth. The
 solver does not backtrack. It applies the optimal reductions and decides the
 remaining nodes in definition order, which for SSA interference is a reversed

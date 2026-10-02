@@ -5,7 +5,7 @@ use std::collections::{BTreeSet, HashMap};
 use tir::backend::abi::{
     AbiInfo, ClassifierKind, Overflow, PassSeq, SaveStyle, StackLayout, ValueKind,
 };
-use tir::backend::liveness::{Liveness, PhysReg};
+use tir::backend::liveness::{Liveness, PhysReg, PressurePoint};
 use tir::backend::regalloc::{
     allocate, AllocConfig, AllocResult, RegAllocError, RegClassId, RegClassInfo, RegisterInfo,
 };
@@ -180,6 +180,40 @@ fn clique_larger_than_register_file_spills_the_excess() {
     match result {
         AllocResult::Spill(s) => assert_eq!(s.len(), 6 - 3),
         other => panic!("expected spilling, got {other:?}"),
+    }
+}
+
+#[test]
+fn values_confined_to_one_register_spill_one_of_their_own() {
+    // Two values live across a clobber of registers 0 and 1 share register 2,
+    // while the file as a whole has room for all three live values. Spilling
+    // the unconfined third frees nothing for them.
+    let info = register_info();
+    let mut liveness = liveness_with(&[1, 2, 3], &[(1, 2), (1, 3), (2, 3)]);
+    for vreg in [1, 2] {
+        liveness
+            .forbidden
+            .entry(vreg)
+            .or_default()
+            .extend([(r(), 0u16), (r(), 1u16)]);
+    }
+    liveness.points.push(PressurePoint {
+        across: vec![1, 2, 3],
+        ..PressurePoint::default()
+    });
+    let precolor = HashMap::new();
+    let result = allocate(&AllocConfig {
+        info: &info,
+        abi: test_abi(&info, &[0, 1, 2]),
+        liveness: &liveness,
+        precolor: &precolor,
+        spill_cost: &|v| if v == 3 { 1 } else { 100 },
+    })
+    .unwrap();
+
+    match result {
+        AllocResult::Spill(spilled) => assert!(spilled == [1] || spilled == [2], "{spilled:?}"),
+        other => panic!("expected a spill of a confined value, got {other:?}"),
     }
 }
 
