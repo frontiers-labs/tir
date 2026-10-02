@@ -1113,7 +1113,6 @@ impl<'a> Solver<'a> {
                     old_matrix,
                 } => {
                     let edge = self
-                        .problem
                         .edges
                         .find(lhs, rhs)
                         .expect("a changed PBQP edge must exist during rollback");
@@ -1492,6 +1491,46 @@ mod tests {
         assert_eq!(solution.choices[center.index()], 1);
         assert_eq!(solution.choices[a.index()], 2);
         assert_eq!(solution.total_cost, 2);
+    }
+
+    #[test]
+    fn rollback_restores_a_changed_fill_in_absent_from_the_input() {
+        let mut problem = PbqpProblem::new();
+        let center = problem.add_node(vec![0, 1]);
+        let left = problem.add_node(vec![0, 0]);
+        let right = problem.add_node(vec![0, 0]);
+        let a = problem.add_node(vec![0, 0]);
+        let b = problem.add_node(vec![0, 0, 0]);
+        let c = problem.add_node(vec![0, 0]);
+        let agree = PbqpMatrix::new(2, 2, vec![0, 1, 1, 0]);
+        let same = PbqpMatrix::new(2, 2, vec![0, INF_COST, INF_COST, 0]);
+
+        for middle in [a, c] {
+            problem.add_edge(center, middle, agree.clone());
+            problem.add_edge(left, middle, same.clone());
+            problem.add_edge(right, middle, same.clone());
+        }
+        problem.add_edge(
+            center,
+            b,
+            PbqpMatrix::new(2, 3, vec![0, 0, INF_COST, INF_COST, INF_COST, 0]),
+        );
+        problem.add_edge(
+            left,
+            b,
+            PbqpMatrix::new(2, 3, vec![0, INF_COST, 0, INF_COST, 0, 0]),
+        );
+        problem.add_edge(
+            right,
+            b,
+            PbqpMatrix::new(2, 3, vec![INF_COST, 0, 0, 0, INF_COST, 0]),
+        );
+
+        // center=0 makes left=right through a but left!=right through b.
+        // center=1 permits b=2; both agreement edges then prefer a=c=1.
+        let solution = solve(&problem).expect("the second Rn alternative is solvable");
+        assert_eq!(solution.choices, vec![1, 1, 1, 1, 2, 1]);
+        assert_eq!(solution.total_cost, 1);
     }
 
     /// Interference matrices repeat: every pair of vregs in one register class
