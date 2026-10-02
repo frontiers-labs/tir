@@ -16,8 +16,8 @@ pub(super) fn get_instruction_parsers(
         ("lsl", Feature::ARMv8A64, lsl),
         ("orr", Feature::ARMv8A64, orr),
         ("tst", Feature::ARMv8A64, tst),
-        ("ldp", Feature::FP, ldp),
-        ("stp", Feature::FP, stp),
+        ("ldp", Feature::FP, pair::<true>),
+        ("stp", Feature::FP, pair::<false>),
         ("subs", Feature::ARMv8A64, subs),
     ] {
         if features.contains(&feature) {
@@ -246,7 +246,7 @@ pub(super) fn parse_movi_immediate(p: &mut Tokens<'_>) -> Result<i64, ()> {
     }
     Ok(imm)
 }
-fn pair(c: &Context, b: &mut AsmCursor, p: &mut Tokens<'_>, load: bool) -> Result<(), ()> {
+fn pair<const LOAD: bool>(c: &Context, b: &mut AsmCursor, p: &mut Tokens<'_>) -> Result<(), ()> {
     let rt = parse_qpr(p).ok_or(())?;
     comma(p)?;
     let rt2 = parse_qpr(p).ok_or(())?;
@@ -262,7 +262,7 @@ fn pair(c: &Context, b: &mut AsmCursor, p: &mut Tokens<'_>, load: bool) -> Resul
         c,
         b,
         p,
-        if load { "ldp_q" } else { "stp_q" },
+        if LOAD { "ldp_q" } else { "stp_q" },
         vec![
             ("rt", phys_attr((RegClass::QPR.id(), rt))),
             ("rt2", phys_attr((RegClass::QPR.id(), rt2))),
@@ -270,12 +270,6 @@ fn pair(c: &Context, b: &mut AsmCursor, p: &mut Tokens<'_>, load: bool) -> Resul
             ("imm", Attr::Int(0)),
         ],
     )
-}
-fn ldp(c: &Context, b: &mut AsmCursor, p: &mut Tokens<'_>) -> Result<(), ()> {
-    pair(c, b, p, true)
-}
-fn stp(c: &Context, b: &mut AsmCursor, p: &mut Tokens<'_>) -> Result<(), ()> {
-    pair(c, b, p, false)
 }
 pub(super) fn parse_condition(p: &mut Tokens<'_>) -> Result<i64, ()> {
     if !matches!(p.peek(), Some(Token::Ident(_))) {

@@ -36,6 +36,7 @@ _start:
   dup v2.4s, w15
   fcmpe s2, s31
   cset w14, vs
+  cset w15, 14
   fcmpe s31, s30
   dup v31.2d, x10
   dup v30.2d, x11
@@ -63,3 +64,4 @@ _start:
 # CHECK-DAG: VPR[31] = 0x70000000000000007
 # CHECK-DAG: GPR[14] = 0x1
 # CHECK-DAG: FPSR[0] = 0x1
+# CHECK-DAG: GPR[15] = 0x0

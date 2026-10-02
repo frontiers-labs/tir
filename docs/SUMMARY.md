@@ -45,6 +45,7 @@
   - [AArch64](./generated/isa/aarch64/index.md)
     - [Advsimd](./generated/isa/aarch64/advsimd.md)
     - [Data processing](./generated/isa/aarch64/data_processing.md)
+    - [Compiler forms](./generated/isa/aarch64/forms.md)
     - [Loads stores](./generated/isa/aarch64/loads_stores.md)
     - [Atomics](./generated/isa/aarch64/atomics.md)
     - [Branches](./generated/isa/aarch64/branches.md)

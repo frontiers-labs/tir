@@ -95,7 +95,7 @@ instruction CsetWord for [ARMv8A64] {
         rd[4..0],
     }
     asm { "{self.MNEMONIC} {rd}, {cond}" }
-    behavior { rd = if formCondition(cond ^ 0b0001) { zext(0b1, 32) } else { zext(0b0, 32) }; }
+    behavior { rd = if formCondition(cond) { zext(0b0, 32) } else { zext(0b1, 32) }; }
 }
 instruction CselWord for [ARMv8A64] {
     param MNEMONIC: String = "csel";

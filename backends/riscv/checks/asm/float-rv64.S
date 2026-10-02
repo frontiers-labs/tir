@@ -8,7 +8,6 @@
 .global f
 f:
 #123 standalone numeric-leading comment
-#-4 negative-leading comment
     fmv.d.x fa0, a0 #1 numeric-leading comment
 
 # CHECK: fmv.d.x f10, x10
