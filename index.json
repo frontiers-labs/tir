@@ -69,6 +69,13 @@
    "subject": "feat(isel): select from a frozen problem with a validated incumbent (#529)",
    "time": "2026-10-02T21:15:18.000Z",
    "env_key": "rustc 1.99.0 (b940084d7 2026-09-28); valgrind-3.22.0; ldd (Ubuntu GLIBC 2.39-0ubuntu8.9) 2.39"
+  },
+  {
+   "file": "runs/2026-10-03T17-26-41-000Z-eb5ad0fa3967.json",
+   "commit": "eb5ad0fa39673e615e1d28acd121009f4d3a73ba",
+   "subject": "feat(relational): run the e-graph on generic tables with SIMD kernels (#531)",
+   "time": "2026-10-03T17:26:41.000Z",
+   "env_key": "rustc 1.99.0 (b940084d7 2026-09-28); valgrind-3.22.0; ldd (Ubuntu GLIBC 2.39-0ubuntu8.9) 2.39"
   }
  ]
 }
