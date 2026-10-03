@@ -59,6 +59,7 @@ struct Driver<'a> {
 impl Driver<'_> {
     /// Saturate under whatever assumptions are open.
     fn saturate(&mut self) {
+        crate::sem::workload::dump("instcombine", &self.eg, &self.ruleset.rewrites);
         self.eg.saturate_rules(
             &self.ruleset.rewrites,
             &self.ruleset.interpretation,

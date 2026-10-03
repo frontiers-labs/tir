@@ -158,8 +158,7 @@ impl<'a, L: ENode> FlatGraph<'a, L> {
         let mut edges: Vec<(u32, u32)> = Vec::new();
         for (position, entry) in nodes.iter_mut().enumerate() {
             let start = children.len();
-            for &child in eg.children(rows[position]) {
-                let child = eg.find(child);
+            for child in eg.children(rows[position]) {
                 match index[child.index()] {
                     NONE => match outside.and_then(|base| base.cost(child)) {
                         Some(cost) => entry.base = entry.base.saturating_add(cost),

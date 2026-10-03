@@ -114,9 +114,9 @@ pub trait Label: Debug + Clone {
 /// scalar engine carried a term. Congruence then compares two `u32`s and a slice
 /// of child ids instead of calling [`Label::matches`].
 ///
-/// [`Label::label_hash`] sees the operand count, so one label at two arities
-/// interns twice. That makes label equality finer than [`Label::matches`], which
-/// costs nothing: congruent rows have equal children and so equal arity.
+/// One label at two arities interns twice: a label names a table, and a table
+/// has one arity. That makes label equality finer than [`Label::matches`],
+/// which costs nothing: congruent rows have equal children and so equal arity.
 #[derive(Debug)]
 pub(crate) struct Labels<L> {
     table: Vec<L>,
@@ -139,7 +139,8 @@ impl<L: Label> Labels<L> {
     pub(crate) fn intern(&mut self, node: &L) -> LabelId {
         let bucket = self.index.entry(node.label_hash()).or_default();
         for &id in bucket.iter() {
-            if self.table[id.index()].matches(node) {
+            let known = &self.table[id.index()];
+            if known.children().len() == node.children().len() && known.matches(node) {
                 return id;
             }
         }
@@ -155,7 +156,10 @@ impl<L: Label> Labels<L> {
             .get(&node.label_hash())?
             .iter()
             .copied()
-            .find(|&id| self.table[id.index()].matches(node))
+            .find(|&id| {
+                let known = &self.table[id.index()];
+                known.children().len() == node.children().len() && known.matches(node)
+            })
     }
 
     /// The node interned under `id`. Its children are whatever the first node

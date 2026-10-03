@@ -1,12 +1,13 @@
-use std::cell::RefCell;
-use std::hash::{Hash, Hasher};
+use std::cell::{Ref, RefCell};
 
-use tir_adt::FxHasher;
+use smallvec::SmallVec;
 
 use crate::column::{Column, Fact, Join};
 use crate::label::{FxHashMap, Labels};
+use crate::saturate::{RuleCache, RuleIndex};
+use crate::store::{Group, Repair, Table};
 use crate::unionfind::UnionFind;
-use crate::{ClassId, ColumnId, Label, LabelId, RowId};
+use crate::{ClassId, ColumnId, Csr, Label, LabelId, RowId};
 
 /// Empty link in an intrusive list.
 const NONE: u32 = u32::MAX;
@@ -18,90 +19,61 @@ struct Object {
     offset: i64,
 }
 
-/// The e-graph as a database.
+/// The e-graph: equivalence classes of terms, over the tables of
+/// [`crate::store`].
 ///
-/// One row per e-node, in columns: its label (interned, so congruence compares a
-/// `u32`), the class it belongs to, and its child classes in one flat array
-/// sliced by [`Self::children`]. No `Vec` per class, per node, or per parent
-/// list — class membership and parent back-edges are intrusive lists over the
-/// row arrays, spliced in `O(1)` by a union.
+/// Each label has a table keyed on the child classes and valued by the class
+/// the node belongs to, so hash-consing is a key lookup and congruence is the
+/// table's functional dependency: a rebuild rewrites every table through the
+/// union-find and merges the classes of the rows that come to share a key. A
+/// rule's atoms are joins over those tables.
 ///
-/// `node` is the reconstruction column: the term a row was interned as, kept
-/// verbatim. Its inline children are canonical *as of the insert* and drift
-/// afterwards, exactly as the scalar engine's class node lists did, so every
-/// reader passes them through [`Self::find`]. The `u32` columns are the graph;
-/// `node` is only what a caller reading e-nodes back gets handed.
+/// What the tables do not hold is the term itself. A row is tagged with the
+/// e-node it was interned as, and `node` keeps that term verbatim, provenance
+/// included. Its inline children are canonical *as of the insert* and drift
+/// afterwards, so every reader passes them through [`Self::find`]. A class
+/// lists its e-nodes in insertion order, a union appending the absorbed class's
+/// after the survivor's; an e-node a rebuild found congruent to an older one
+/// leaves its table but stays on that list, since it may carry provenance the
+/// older one does not.
 pub struct Engine<L: Label> {
     labels: Labels<L>,
-    uf: UnionFind,
+    graph: Graph,
 
-    row_label: Vec<LabelId>,
-    row_class: Vec<ClassId>,
-    /// `rows + 1` offsets into `children`.
-    row_start: Vec<u32>,
-    children: Vec<ClassId>,
+    /// The term each e-node was interned as, and its label.
     node: Vec<L>,
-    /// Next row of the same class, or [`NONE`].
-    row_next: Vec<u32>,
-    /// The [`Self::row_epoch`] a row was appended or re-canonicalized in.
-    row_stamp: Vec<u32>,
-    /// Bumped by every change-log drain, so `row_stamp == row_epoch - 1` reads as
-    /// "touched during the round that just ended".
-    row_epoch: u32,
+    node_label: Vec<LabelId>,
+    /// [`Label::op_key`] -> the labels under it, in the order they were first
+    /// seen.
+    op_labels: FxHashMap<u64, Vec<LabelId>>,
+    /// Per label, the table its rows live in and whether it is a commutative
+    /// binary operator.
+    label_slot: Vec<u32>,
+    label_commutes: Vec<bool>,
+    label_op: Vec<u64>,
 
-    class_head: Vec<u32>,
-    class_tail: Vec<u32>,
-    class_len: Vec<u32>,
-    /// Head/tail of the class's parent back-edge list.
-    parent_head: Vec<u32>,
-    parent_tail: Vec<u32>,
-
-    /// Parent back-edges: `edge_row[e]` has the owning class among its children.
-    edge_row: Vec<u32>,
-    edge_next: Vec<u32>,
-
-    /// Hash-cons: `(label, children)` bucket -> the rows in it. A collision only
-    /// shares a bucket; identity is the label id plus equal child slices.
-    memo: FxHashMap<u64, Vec<RowId>>,
-    /// One hash-cons layer per open scope, innermost last. A scope never writes
-    /// the base table, so a pop restores it by dropping the layer.
-    scope_memo: Vec<FxHashMap<u64, Vec<RowId>>>,
-    /// [`Label::op_key`] bucket -> the rows that minted a class under it, in
-    /// minting order. Over-approximates the classes holding the operator, never
-    /// misses one.
-    op_rows: FxHashMap<u64, Vec<RowId>>,
-
+    /// Bumped whenever the graph changes, so a derived index knows it is stale.
+    version: u64,
+    groups: RefCell<Groups>,
+    /// Class -> the classes of the rows naming it as a child, and the version
+    /// it was built at.
+    parents: RefCell<(u64, Csr)>,
     /// Reusable per-class "already seen" marks for the read-side sweeps, so a
     /// query that visits a handful of classes does not first zero an array the
     /// size of the graph.
     marks: RefCell<Marks>,
-    /// Scratch for walks that write back through `&mut self`.
-    edge_scratch: Vec<u32>,
-    /// Scratch for the back-edges one rebuild pass detaches and puts back.
-    taken_parents: Vec<(ClassId, Vec<u32>)>,
-    /// Rows a rebuild pass found to be duplicates of a lower row.
-    dead_rows: Marks,
-    /// Classes a union touched, awaiting congruence repair.
-    pending: Vec<ClassId>,
+    repair: Repair,
+    /// Per plan, what its searches keep: the labels its atoms read and the
+    /// labels its head builds. Labels only accumulate, so an entry stays
+    /// valid for the engine's life.
+    caches: RefCell<FxHashMap<u64, RuleCache>>,
+    /// Which rules a round visits, for the rule set last saturated with.
+    pub(crate) rule_index: Option<std::sync::Arc<RuleIndex>>,
+    /// Scratch for the variables a rule head binds.
+    pub(crate) head_bound: Vec<Option<ClassId>>,
     stats: Stats,
-    total_nodes: usize,
-    num_classes: usize,
 
-    /// Classes changed since the last [`Self::take_changed`], possibly
-    /// non-canonical — semi-naive saturation's frontier. A round touches the
-    /// same class many times, so entries are deduplicated as they are logged.
-    changed: Vec<ClassId>,
-    /// Per class, the [`Self::changed_epoch`] it was last logged in.
-    changed_at: Vec<u32>,
-    changed_epoch: u32,
-    changed_all: bool,
-
-    scopes: Vec<Frame>,
-    /// Per open scope, the classes it minted or merged: the seeds of
-    /// [`Self::scope_dirty`]. A popped scope's classes keep their ids but stop
-    /// being the scope's business, so this cannot be read off the id range.
-    scope_dirt: Vec<Vec<ClassId>>,
-    undo: Vec<Undo>,
+    scopes: Vec<Scope>,
     /// The constant a class is known to be: seeded by every literal row, raised
     /// by a scope's assumption, joined by a union.
     consts: Column<LabelId>,
@@ -115,16 +87,98 @@ pub struct Engine<L: Label> {
     /// which reads back as "derived from nothing known", the conservative
     /// answer.
     objects: Column<Object>,
-    /// Per open scope, the base reps grouped under their scoped rep; merged
-    /// groups only. Cloned on push, so a nested frame keeps naming base reps.
-    scope_members: Vec<FxHashMap<ClassId, Vec<ClassId>>>,
-    /// The read view of the innermost scope: [`Self::scope_members`] as of the
-    /// last refresh, which is a scope push, pop, or rebuild. Reading e-nodes
-    /// through a snapshot rather than the live partition is what makes a class
-    /// hold still while a round applies its matches — the order in which a
-    /// hypothesis's classes are then re-searched is observable, so the snapshot
-    /// is part of the contract, not an artifact of how it was aggregated.
-    view: FxHashMap<ClassId, Vec<ClassId>>,
+}
+
+/// The part of the engine a scope undoes: copied when one opens, put back when
+/// it closes.
+#[derive(Clone)]
+struct Graph {
+    uf: UnionFind,
+    /// `(label, children) -> class`, tagged with the e-node: one table per
+    /// arity, and beside it one for the labels of that arity that never
+    /// hash-cons. A table past the end has no rows.
+    tables: Vec<Table>,
+    /// Next e-node of the same class, or [`NONE`].
+    node_next: Vec<u32>,
+    class_head: Vec<u32>,
+    class_tail: Vec<u32>,
+    class_len: Vec<u32>,
+    /// Whether a union happened since the last rebuild.
+    dirty: bool,
+    total_nodes: usize,
+    num_classes: usize,
+    /// The stamp a row written now gets. Bumped by every change-log drain, so
+    /// `stamp == epoch - 1` reads as "written during the round that just ended".
+    epoch: u32,
+    /// Classes changed since the last [`Engine::take_changed`], possibly
+    /// non-canonical — semi-naive saturation's frontier. A round touches the
+    /// same class many times, so entries are deduplicated as they are logged.
+    changed: Vec<ClassId>,
+    /// Per class, the `changed_epoch` it was last logged in.
+    changed_at: Vec<u32>,
+    changed_epoch: u32,
+    changed_all: bool,
+    /// The facts that rose since the last [`Engine::take_changed`], as column
+    /// and class: on a class that already existed, and on a class minted with
+    /// the fact. The two are kept apart because a class minted with a fact has
+    /// only new rows around it, which a round searches from anyway.
+    rising: [Vec<(u8, ClassId)>; 2],
+    /// The same for the round that drain closed, canonical and ascending.
+    risen: [Vec<(u8, ClassId)>; 2],
+}
+
+/// An open assumption scope.
+struct Scope {
+    /// The graph as the scope found it.
+    saved: Graph,
+    /// E-nodes interned before the scope opened; the rest go with it.
+    nodes: usize,
+    /// The classes the scope found distinct, grouped under the class it merged
+    /// them into; merged groups only. Starts as the enclosing scope's, so a
+    /// nested scope keeps naming base classes.
+    members: FxHashMap<ClassId, Vec<ClassId>>,
+    /// The classes the scope minted or merged: the seeds of
+    /// [`Engine::scope_dirty`].
+    dirt: Vec<ClassId>,
+}
+
+/// The labels an atom reads, by the table they live in; ascending within one.
+pub(crate) type Candidates = SmallVec<[(u32, SmallVec<[LabelId; 4]>); 2]>;
+
+/// Per table and column, the rows grouped by that column and the table version
+/// the grouping was built at.
+#[derive(Default)]
+pub(crate) struct Groups {
+    built: Vec<Vec<(u64, Group)>>,
+    /// Per table, the rows the previous round wrote.
+    new_rows: Vec<NewRows>,
+    scratch: Vec<u32>,
+}
+
+/// The rows of one table the previous round wrote, as `(label, row)`,
+/// ascending.
+#[derive(Default)]
+struct NewRows {
+    /// The table version and epoch the list was made at.
+    made: (u64, u32),
+    rows: Vec<(u32, u32)>,
+}
+
+impl Groups {
+    pub(crate) fn get(&self, slot: u32, column: usize) -> &Group {
+        &self.built[slot as usize][column].1
+    }
+
+    /// The rows of `label`, in the table at `slot`, that the previous round
+    /// wrote, as `(label, row)`, ascending by row.
+    pub(crate) fn new_rows(&self, slot: u32, label: LabelId) -> &[(u32, u32)] {
+        let Some(NewRows { rows, .. }) = self.new_rows.get(slot as usize) else {
+            return &[];
+        };
+        let from = rows.partition_point(|&(other, _)| other < label.0);
+        let to = rows.partition_point(|&(other, _)| other <= label.0);
+        &rows[from..to]
+    }
 }
 
 /// Cumulative engine work, for the saturation counters.
@@ -132,33 +186,11 @@ pub struct Engine<L: Label> {
 pub struct Stats {
     pub merges: usize,
     pub adds: usize,
+    /// Rows a rebuild re-keyed.
     pub repairs: usize,
     /// Column entries that rose. A round that only raised a fact changed
     /// nothing the class and node counts see, and is not a fixpoint.
     pub raises: usize,
-}
-
-/// What a scope's state was when it opened; everything after it is truncated.
-struct Frame {
-    rows: usize,
-    classes: usize,
-    edges: usize,
-    undo: usize,
-    pending: Vec<ClassId>,
-    total_nodes: usize,
-    num_classes: usize,
-    /// A scope leaves the base graph structurally identical, so what changed
-    /// since the last drain is, at the pop, what it was at the push.
-    changed: Vec<ClassId>,
-    changed_all: bool,
-}
-
-/// A field a scope overwrote, with the value to put back. Only logged while a
-/// scope is open.
-enum Undo {
-    ParentList { class: u32, head: u32, tail: u32 },
-    EdgeNext { edge: u32, next: u32 },
-    OpBucket { op: u64 },
 }
 
 impl<L: Label> Default for Engine<L> {
@@ -171,52 +203,50 @@ impl<L: Label> Engine<L> {
     pub fn new() -> Self {
         Self {
             labels: Labels::default(),
-            uf: UnionFind::new(),
-            row_label: Vec::new(),
-            row_class: Vec::new(),
-            row_start: vec![0],
-            children: Vec::new(),
+            graph: Graph {
+                uf: UnionFind::new(),
+                tables: Vec::new(),
+                node_next: Vec::new(),
+                class_head: Vec::new(),
+                class_tail: Vec::new(),
+                class_len: Vec::new(),
+                dirty: false,
+                total_nodes: 0,
+                num_classes: 0,
+                epoch: 1,
+                changed: Vec::new(),
+                changed_at: Vec::new(),
+                changed_epoch: 1,
+                changed_all: true,
+                rising: Default::default(),
+                risen: Default::default(),
+            },
             node: Vec::new(),
-            row_next: Vec::new(),
-            row_stamp: Vec::new(),
-            row_epoch: 1,
-            class_head: Vec::new(),
-            class_tail: Vec::new(),
-            class_len: Vec::new(),
-            parent_head: Vec::new(),
-            parent_tail: Vec::new(),
-            edge_row: Vec::new(),
-            edge_next: Vec::new(),
-            memo: FxHashMap::default(),
-            scope_memo: Vec::new(),
-            op_rows: FxHashMap::default(),
+            node_label: Vec::new(),
+            op_labels: FxHashMap::default(),
+            label_slot: Vec::new(),
+            label_commutes: Vec::new(),
+            label_op: Vec::new(),
+            version: 1,
+            groups: RefCell::default(),
+            parents: RefCell::default(),
             marks: RefCell::default(),
-            edge_scratch: Vec::new(),
-            taken_parents: Vec::new(),
-            dead_rows: Marks::default(),
-            pending: Vec::new(),
+            repair: Repair::default(),
+            caches: RefCell::default(),
+            rule_index: None,
+            head_bound: Vec::new(),
             stats: Stats::default(),
-            total_nodes: 0,
-            num_classes: 0,
-            changed: Vec::new(),
-            changed_at: Vec::new(),
-            changed_epoch: 1,
-            changed_all: true,
             scopes: Vec::new(),
-            scope_dirt: Vec::new(),
-            undo: Vec::new(),
             consts: Column::new(Join::Agree),
             types: Column::new(Join::First),
             objects: Column::new(Join::Agree),
-            scope_members: Vec::new(),
-            view: FxHashMap::default(),
         }
     }
 
     // ---- reading ----------------------------------------------------------
 
     pub fn find(&self, id: ClassId) -> ClassId {
-        self.uf.find(id)
+        self.graph.uf.find(id)
     }
 
     pub fn connected(&self, a: ClassId, b: ClassId) -> bool {
@@ -224,37 +254,38 @@ impl<L: Label> Engine<L> {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.num_classes == 0
+        self.graph.num_classes == 0
     }
 
-    /// Total e-nodes across all classes. Congruent duplicates are never removed,
-    /// so this only ever grows within a context — the fixpoint test both
-    /// saturation drivers use reads it.
+    /// Total e-nodes across all classes. An e-node found congruent to another
+    /// still counts, so this only ever grows within a context — the fixpoint
+    /// test both saturation drivers use reads it.
     pub fn total_size(&self) -> usize {
-        self.total_nodes
+        self.graph.total_nodes
     }
 
     pub fn num_classes(&self) -> usize {
-        self.num_classes
+        self.graph.num_classes
     }
 
     /// One past the highest class id ever minted, live or not — the size a table
     /// indexed by class id needs.
     pub fn class_count(&self) -> usize {
-        self.uf.len()
+        self.graph.uf.len()
     }
 
-    /// Bytes the columns hold: the row arrays, the child array, the per-class
-    /// arrays and the interned labels. Excludes the hash-cons and the operator
-    /// index, which are rebuilt rather than owned. An estimate for ranking, not
-    /// an allocator total.
+    /// Bytes the e-nodes, the tables and the per-class arrays hold, without the
+    /// tables' key indexes. An estimate for ranking, not an allocator total.
     pub fn approx_bytes(&self) -> usize {
-        let rows = self.node.len();
-        let per_row = size_of::<L>() + 4 * size_of::<u32>();
-        rows * per_row
-            + self.children.len() * size_of::<u32>()
-            + self.uf.len() * 7 * size_of::<u32>()
-            + self.edge_row.len() * 2 * size_of::<u32>()
+        let cells: usize = self
+            .graph
+            .tables
+            .iter()
+            .map(|table| table.len() * (table.arity() + 3))
+            .sum();
+        self.node.len() * (size_of::<L>() + 2 * size_of::<u32>())
+            + cells * size_of::<u32>()
+            + self.graph.uf.len() * 5 * size_of::<u32>()
             + self.labels.len() * size_of::<L>()
     }
 
@@ -269,49 +300,30 @@ impl<L: Label> Engine<L> {
         !self.scopes.is_empty()
     }
 
-    /// Child classes of a row, canonical as of its insert.
-    pub fn children(&self, row: RowId) -> &[ClassId] {
-        let start = self.row_start[row.index()] as usize;
-        let end = self.row_start[row.index() + 1] as usize;
-        &self.children[start..end]
-    }
-
-    /// The class a row belongs to, possibly non-canonical.
-    pub(crate) fn owner(&self, row: RowId) -> ClassId {
-        self.row_class[row.index()]
+    /// Child classes of an e-node, canonical as of now.
+    pub fn children(&self, row: RowId) -> SmallVec<[ClassId; 4]> {
+        self.node[row.index()]
+            .children()
+            .iter()
+            .map(|&child| self.find(child))
+            .collect()
     }
 
     pub fn label(&self, row: RowId) -> LabelId {
-        self.row_label[row.index()]
+        self.node_label[row.index()]
     }
 
     pub fn node(&self, row: RowId) -> &L {
         &self.node[row.index()]
     }
 
-    /// The rows of `id`'s class, in the order the scalar engine held its nodes:
-    /// insertion order, a union appending the absorbed class's rows after the
-    /// survivor's. Extraction and the matcher break ties by this order, so it is
-    /// part of the contract — a rebuild must not re-sort it.
+    /// The e-nodes of `id`'s class in insertion order, a union appending the
+    /// absorbed class's after the survivor's. Extraction breaks ties by this
+    /// order, so it is part of the contract — a rebuild must not re-sort it.
     pub fn rows(&self, id: ClassId) -> Rows<'_, L> {
-        let root = self.find(id);
-        // A scope leaves the base class lists alone, so a scoped class is the
-        // concatenation of its members' lists, ascending.
-        self.rows_of(root, self.viewed_members(root))
-    }
-
-    /// The rows a class holds under the live partition, without canonicalizing
-    /// it first — what a class that is about to stop being a root still owns.
-    fn raw_rows(&self, class: ClassId) -> Rows<'_, L> {
-        self.rows_of(class, self.scope_members(class))
-    }
-
-    fn rows_of<'a>(&'a self, class: ClassId, members: &'a [ClassId]) -> Rows<'a, L> {
         Rows {
             engine: self,
-            cursor: self.class_head[members.first().copied().unwrap_or(class).index()],
-            members,
-            next_member: 1,
+            cursor: self.graph.class_head[self.find(id).index()],
         }
     }
 
@@ -322,31 +334,17 @@ impl<L: Label> Engine<L> {
     }
 
     fn class_len(&self, id: ClassId) -> usize {
-        let root = self.find(id);
-        match self.viewed_members(root) {
-            [] => self.class_len[root.index()] as usize,
-            members => members
-                .iter()
-                .map(|m| self.class_len[m.index()] as usize)
-                .sum(),
-        }
+        self.graph.class_len[self.find(id).index()] as usize
     }
 
-    /// Every live class, at the position of its lowest member: ascending id in
-    /// the base graph, and under a scope the position of the group's lowest base
-    /// rep. Extraction and bare-variable-rooted patterns walk classes in this
-    /// order and break ties by it, so it is part of the contract.
+    /// Every live class, ascending. A class is named by its lowest member, so
+    /// under a scope this is the position of the group's lowest base class.
+    /// Extraction and bare-variable-rooted patterns walk classes in this order
+    /// and break ties by it, so it is part of the contract.
     pub fn class_ids(&self) -> impl Iterator<Item = ClassId> + '_ {
-        (0..self.uf.len() as u32).map(ClassId).filter_map(|id| {
-            let root = self.find(id);
-            if self.class_len[root.index()] == 0 {
-                return None;
-            }
-            match self.viewed_members(root) {
-                [] => (root == id).then_some(id),
-                group => (Some(&id) == group.iter().min()).then_some(root),
-            }
-        })
+        (0..self.graph.uf.len() as u32)
+            .map(ClassId)
+            .filter(|&id| self.find(id) == id && self.graph.class_len[id.index()] != 0)
     }
 
     /// [`Self::class_ids`] as readable classes.
@@ -361,19 +359,244 @@ impl<L: Label> Engine<L> {
         }
     }
 
-    /// Canonical classes holding a node in the `op` bucket, each once, in
-    /// minting order. Over-approximates — callers confirm with the label.
-    pub fn classes_with_op(&self, op: u64) -> Vec<ClassId> {
-        let Some(rows) = self.op_rows.get(&op) else {
-            return Vec::new();
+    /// The table `label`'s rows live in, or `None` while that table has never
+    /// had a row. Labels of one arity share a table, keyed on the label and
+    /// then the children.
+    pub(crate) fn table(&self, label: LabelId) -> Option<&Table> {
+        self.slot_table(*self.label_slot.get(label.index())?)
+    }
+
+    pub(crate) fn slot_table(&self, slot: u32) -> Option<&Table> {
+        self.graph.tables.get(slot as usize)
+    }
+
+    /// Whether `label` is a commutative binary operator.
+    pub(crate) fn commutes(&self, label: LabelId) -> bool {
+        self.label_commutes[label.index()]
+    }
+
+    /// The labels whose operator bucket is `op`, in the order first seen.
+    pub(crate) fn labels_with_op(&self, op: u64) -> &[LabelId] {
+        self.op_labels.get(&op).map_or(&[], Vec::as_slice)
+    }
+
+    /// Add to `reads` the labels in the `op` bucket that `template` matches at
+    /// its arity, or every label in the bucket without one. With `since`, only
+    /// the labels met from that count on are looked at, and `reads` already
+    /// holds the rest.
+    pub(crate) fn labels_matching(
+        &self,
+        op: u64,
+        template: Option<(&L, usize)>,
+        since: Option<usize>,
+        reads: &mut Candidates,
+    ) {
+        let matches = |label: LabelId| {
+            let node = self.labels.node(label);
+            template.is_none_or(|(template, arity)| {
+                node.children().len() == arity && template.matches_template(node)
+            })
         };
+        let mut add = |label: LabelId| {
+            let slot = self.label_slot[label.index()];
+            // Labels arrive ascending, so each table's list stays sorted.
+            match reads.iter_mut().find(|(known, _)| *known == slot) {
+                Some((_, labels)) => labels.push(label),
+                None => reads.push((slot, SmallVec::from_slice(&[label]))),
+            }
+        };
+        match since {
+            None => {
+                for &label in self.labels_with_op(op) {
+                    if matches(label) {
+                        add(label);
+                    }
+                }
+            }
+            Some(since) => {
+                for index in since..self.label_op.len() {
+                    let label = LabelId(index as u32);
+                    if self.label_op[index] == op && matches(label) {
+                        add(label);
+                    }
+                }
+            }
+        }
+    }
+
+    /// How many labels the graph has met. What a plan's atoms read is fixed
+    /// between two readings that agree.
+    pub(crate) fn labels_len(&self) -> usize {
+        self.labels.len()
+    }
+
+    /// The columns, as a mask of [`column_bit`], in which a fact rose during
+    /// the round the last [`Self::take_changed`] closed: on a class that
+    /// already existed, or with `minted` on a class minted with it.
+    pub(crate) fn facts_rose(&self, minted: bool) -> u8 {
+        self.graph.risen[usize::from(minted)]
+            .iter()
+            .fold(0, |mask, &(column, _)| mask | 1 << column)
+    }
+
+    /// The classes whose fact in `column` rose during the round the last
+    /// [`Self::take_changed`] closed; `minted` as for [`Self::facts_rose`].
+    pub(crate) fn risen(&self, column: ColumnId, minted: bool) -> impl Iterator<Item = ClassId> {
+        let column = column_bit(column) as u8;
+        self.graph.risen[usize::from(minted)]
+            .iter()
+            .filter(move |&&(other, _)| other == column)
+            .map(|&(_, class)| class)
+    }
+
+    /// The stamp of the rows the round now running writes; a row stamped one
+    /// below it was written by the round before.
+    pub(crate) fn epoch(&self) -> u32 {
+        self.graph.epoch
+    }
+
+    /// Group the rows of the table at `slot` by `column`, unless that is
+    /// already done for the table as it is. A join looks rows up through
+    /// [`Self::groups`].
+    pub(crate) fn prepare_group(&self, slot: u32, column: usize) {
+        let Some(table) = self.slot_table(slot) else {
+            return;
+        };
+        let mut groups = self.groups.borrow_mut();
+        if groups.built.len() <= slot as usize {
+            groups.built.resize_with(slot as usize + 1, Vec::new);
+        }
+        let columns = &mut groups.built[slot as usize];
+        if columns.len() <= column {
+            columns.resize_with(column + 1, Default::default);
+        }
+        let version = table.version() + 1;
+        let (built, group) = &mut columns[column];
+        if *built != version {
+            *built = version;
+            // Column zero holds labels; every other one holds classes.
+            let cells = if column == 0 {
+                self.labels.len()
+            } else {
+                self.graph.uf.len()
+            };
+            group.build(table.column(column), cells);
+        }
+    }
+
+    /// List the rows of the table at `slot` the previous round wrote, by
+    /// label, unless that is already done for the table as it is; read through
+    /// [`Self::groups`].
+    pub(crate) fn prepare_new_rows(&self, slot: u32) {
+        let Some(table) = self.slot_table(slot) else {
+            return;
+        };
+        let mut groups = self.groups.borrow_mut();
+        let groups = &mut *groups;
+        if groups.new_rows.len() <= slot as usize {
+            groups
+                .new_rows
+                .resize_with(slot as usize + 1, Default::default);
+        }
+        let NewRows { made, rows } = &mut groups.new_rows[slot as usize];
+        let now = (table.version() + 1, self.graph.epoch);
+        if *made != now {
+            *made = now;
+            groups.scratch.clear();
+            tir_adt::simd::select_eq(table.stamps(), self.graph.epoch - 1, &mut groups.scratch);
+            rows.clear();
+            let labels = table.column(0);
+            rows.extend(
+                groups
+                    .scratch
+                    .iter()
+                    .map(|&row| (labels[row as usize], row)),
+            );
+            rows.sort_unstable();
+        }
+    }
+
+    /// A fresh set of per-class marks: `insert` reports whether a class was
+    /// unmarked.
+    pub(crate) fn marks(&self) -> std::cell::RefMut<'_, Marks> {
+        let mut marks = self.marks.borrow_mut();
+        marks.begin(self.graph.uf.len());
+        marks
+    }
+
+    /// Take the cache of plan `id` out for a search; [`Self::put_cache`] puts
+    /// it back. Plan zero has none.
+    pub(crate) fn take_cache(&self, id: u64) -> RuleCache {
+        self.caches.borrow_mut().remove(&id).unwrap_or_default()
+    }
+
+    pub(crate) fn put_cache(&self, id: u64, cache: RuleCache) {
+        if id != 0 {
+            self.caches.borrow_mut().insert(id, cache);
+        }
+    }
+
+    /// Every plan's cache, for a saturation to use and hand back.
+    pub(crate) fn take_caches(&mut self) -> FxHashMap<u64, RuleCache> {
+        std::mem::take(self.caches.get_mut())
+    }
+
+    pub(crate) fn put_caches(&mut self, caches: FxHashMap<u64, RuleCache>) {
+        *self.caches.get_mut() = caches;
+    }
+
+    /// The operator buckets of the rows the previous round wrote, each once.
+    pub(crate) fn new_ops(&self) -> Vec<u64> {
+        for slot in 0..self.graph.tables.len() as u32 {
+            self.prepare_new_rows(slot);
+        }
+        let groups = self.groups();
+        let mut ops = Vec::new();
+        for NewRows { rows, .. } in &groups.new_rows {
+            let mut last = None;
+            // The rows are sorted by label, so each label shows up as a run.
+            for &(label, _) in rows {
+                if last.replace(label) != Some(label) {
+                    ops.push(self.label_op[label as usize]);
+                }
+            }
+        }
+        ops.sort_unstable();
+        ops.dedup();
+        ops
+    }
+
+    /// Whether every table names every class by its representative: no union
+    /// is waiting for a rebuild.
+    pub(crate) fn rebuilt(&self) -> bool {
+        !self.graph.dirty
+    }
+
+    pub(crate) fn groups(&self) -> Ref<'_, Groups> {
+        self.groups.borrow()
+    }
+
+    /// Canonical classes holding a node in the `op` bucket, each once, in the
+    /// order their labels were first seen. Over-approximates — callers confirm
+    /// with the label.
+    pub fn classes_with_op(&self, op: u64) -> Vec<ClassId> {
+        let labels = self.labels_with_op(op);
+        for &label in labels {
+            self.prepare_group(self.label_slot[label.index()], 0);
+        }
+        let groups = self.groups();
         let mut seen = self.marks.borrow_mut();
-        seen.begin(self.uf.len());
+        seen.begin(self.graph.uf.len());
         let mut out = Vec::new();
-        for &row in rows {
-            let root = self.find(self.row_class[row.index()]);
-            if seen.insert(root.index()) {
-                out.push(root);
+        for &label in labels {
+            let Some(table) = self.table(label) else {
+                continue;
+            };
+            for &row in groups.get(self.label_slot[label.index()], 0).rows(label.0) {
+                let root = self.find(ClassId(table.values()[row as usize]));
+                if seen.insert(root.index()) {
+                    out.push(root);
+                }
             }
         }
         out
@@ -382,12 +605,18 @@ impl<L: Label> Engine<L> {
     /// Class of an already-interned `node`, or `None` (never inserts; always
     /// `None` for a unique node).
     pub fn lookup(&self, node: &L) -> Option<ClassId> {
-        if node.is_unique() {
-            return None;
-        }
         let label = self.labels.get(node)?;
-        let children: Vec<ClassId> = node.children().iter().map(|&c| self.find(c)).collect();
-        self.memo_find(label, &children)
+        let mut key: SmallVec<[u32; 8]> = SmallVec::from_slice(&[label.0]);
+        key.extend(node.children().iter().map(|&child| self.find(child).0));
+        self.memo_find(label, &key)
+    }
+
+    /// The class of the row with `key`, which is `label` and then the canonical
+    /// children.
+    fn memo_find(&self, label: LabelId, key: &[u32]) -> Option<ClassId> {
+        let table = self.table(label)?;
+        let row = table.get(key)?;
+        Some(self.find(ClassId(table.values()[row as usize])))
     }
 
     // ---- writing ----------------------------------------------------------
@@ -396,30 +625,62 @@ impl<L: Label> Engine<L> {
     /// existing one shares its class; otherwise a fresh class.
     pub fn add(&mut self, mut node: L) -> ClassId {
         for child in node.children_mut() {
-            *child = self.uf.find(*child);
+            *child = self.graph.uf.find(*child);
         }
-        if !node.is_unique() {
-            let label = self.labels.get(&node);
-            if let Some(label) = label
-                && let Some(class) = self.memo_find(label, node.children())
-            {
-                return class;
-            }
+        let label = self.intern(&node);
+        let mut key: SmallVec<[u32; 8]> = SmallVec::new();
+        key.push(label.0);
+        key.extend(node.children().iter().map(|child| child.0));
+        self.add_labelled(label, &key, || node)
+    }
+
+    /// Whether `label` is `node`'s label.
+    pub(crate) fn label_is(&self, label: LabelId, node: &L) -> bool {
+        let known = self.labels.node(label);
+        known.children().len() == node.children().len() && known.matches(node)
+    }
+
+    /// The id of `node`'s label, for [`Self::add_labelled`].
+    pub(crate) fn intern(&mut self, node: &L) -> LabelId {
+        let label = self.labels.intern(node);
+        // Whatever the label table grew by gets its table and operator bucket.
+        for index in self.label_slot.len()..self.labels.len() {
+            let node = self.labels.node(LabelId(index as u32));
+            let arity = node.children().len();
+            self.label_slot
+                .push(2 * arity as u32 + u32::from(node.is_unique()));
+            self.label_commutes.push(arity == 2 && node.commutative());
+            let op = node.op_key();
+            self.label_op.push(op);
+            self.op_labels
+                .entry(op)
+                .or_default()
+                .push(LabelId(index as u32));
         }
-        self.make_class(node)
+        label
+    }
+
+    /// [`Self::add`] for a caller that already has the key, which is the label
+    /// and then the canonical children: `node` is built only if the graph does
+    /// not hold the node yet.
+    pub(crate) fn add_labelled(
+        &mut self,
+        label: LabelId,
+        key: &[u32],
+        node: impl FnOnce() -> L,
+    ) -> ClassId {
+        match self.memo_find(label, key) {
+            Some(class) => class,
+            None => self.make_class(node(), label, key),
+        }
     }
 
     /// Merge the classes of `a` and `b`, returning the survivor. Congruence
-    /// repair is deferred to [`Self::rebuild`]; the merge itself is visible
-    /// immediately, so an applier that unions and then instantiates hash-conses
-    /// against the result.
-    ///
-    /// A union inside a scope must be followed by [`Self::rebuild`] before the
-    /// next [`Self::take_changed`]. Until that rebuild refreshes the read view,
-    /// the merge is invisible to every query, so a drain that ran in between
-    /// would retire the round that made those e-nodes readable and semi-naive
-    /// would skip the matches they enable. Every caller obeys this; nothing
-    /// enforces it.
+    /// repair is deferred to [`Self::rebuild`], and so is everything a query
+    /// reads: the tables keep naming the absorbed class until then. The merge
+    /// itself is visible immediately to [`Self::find`] and [`Self::nodes`], so
+    /// an applier that unions and then instantiates hash-conses against the
+    /// result.
     pub fn union(&mut self, a: ClassId, b: ClassId) -> ClassId {
         let ra = self.find(a);
         let rb = self.find(b);
@@ -427,507 +688,196 @@ impl<L: Label> Engine<L> {
             return ra;
         }
         self.stats.merges += 1;
-        let survivor = self.uf.union(ra, rb);
+        self.version += 1;
+        let survivor = self.graph.uf.union(ra, rb);
         if crate::trace_enabled() {
             eprintln!("U {} {} -> {}", ra.0, rb.0, survivor.0);
         }
         let absorbed = if survivor == ra { rb } else { ra };
-        // A merge makes two sets of rows readable where they were not before:
-        // the absorbed class's own rows, which a query reaching the survivor now
-        // enumerates, and every row naming the absorbed class as a child, which
-        // now names the survivor. Congruence repair rewrites the second set's
-        // columns later (never, inside a scope), but the matcher may run first,
-        // and semi-naive has to see both as new either way.
-        self.mark_merged_new(absorbed);
-        let moved = self.consts.merge(absorbed, survivor, self.row_epoch)
-            | self.types.merge(absorbed, survivor, self.row_epoch)
-            | self.merge_object(absorbed, survivor);
-        if moved {
+        let epoch = self.graph.epoch;
+        let moved = [
+            self.consts.merge(absorbed, survivor, epoch),
+            self.types.merge(absorbed, survivor, epoch),
+            !self.objects.is_empty() && self.merge_object(absorbed, survivor),
+        ];
+        for (column, moved) in moved.into_iter().enumerate() {
+            if moved {
+                self.graph.rising[0].push((column as u8, survivor));
+            }
+        }
+        if moved.contains(&true) {
             self.log_change(survivor);
         }
-        if !self.in_scope() {
-            self.splice_class(survivor, absorbed);
-            self.splice_parents(survivor, absorbed);
-        }
-        if let Some(frame) = self.scope_members.last_mut() {
-            let taken = frame.remove(&absorbed).unwrap_or_else(|| vec![absorbed]);
-            frame
+        self.splice_class(survivor, absorbed);
+        if let Some(scope) = self.scopes.last_mut() {
+            let taken = scope
+                .members
+                .remove(&absorbed)
+                .unwrap_or_else(|| vec![absorbed]);
+            scope
+                .members
                 .entry(survivor)
                 .or_insert_with(|| vec![survivor])
                 .extend(taken);
-            self.scope_dirt
-                .last_mut()
-                .expect("a scope frame is a scope")
-                .push(survivor);
+            scope.dirt.push(survivor);
         }
-        self.num_classes -= 1;
-        self.pending.push(survivor);
+        self.graph.num_classes -= 1;
+        self.graph.dirty = true;
         self.log_change(survivor);
         survivor
     }
 
-    /// Restore congruence to a fixpoint after a batch of unions. Each round
-    /// canonicalizes `pending` to reps and deduplicates first: without it a
-    /// survivor queued many times would re-repair its growing parent list once
-    /// per queueing, making rebuild quadratic.
+    /// Restore congruence to a fixpoint after a batch of unions.
+    ///
+    /// Each pass rewrites every table through the union-find and merges the
+    /// classes of the rows that came to share a key; those merges are what the
+    /// next pass rewrites. Nothing depends on the order the tables are visited
+    /// in or the rows within one: the class a merge leaves standing is the
+    /// smallest id in the set whichever way the merges are grouped.
     pub fn rebuild(&mut self) {
-        if self.in_scope() {
-            self.rebuild_scope();
-            return;
-        }
-        while !self.pending.is_empty() {
-            let todo = self.drain_pending();
-            self.repair(&todo);
-        }
-        self.uf.flatten();
-    }
-
-    fn drain_pending(&mut self) -> Vec<ClassId> {
-        let mut todo = std::mem::take(&mut self.pending);
-        for id in &mut todo {
-            *id = self.find(*id);
-        }
-        todo.sort_unstable();
-        todo.dedup();
-        todo
-    }
-
-    /// Congruence repair as bulk passes over the columns: canonicalize, sort,
-    /// group.
-    ///
-    /// The rows that name a repaired class as a child are gathered, their child
-    /// and class columns rewritten through the union-find in one loop, then
-    /// sorted by `(label, children)` so congruent rows land in a run. Each run
-    /// keeps its lowest row and merges the classes of the rest.
-    ///
-    /// Nothing here depends on the order the runs are visited in, or the order
-    /// within one: the class a merge leaves standing is the smallest id in the
-    /// set whichever way the merges are grouped, and the row a run keeps is its
-    /// smallest. That is what a worklist walking one class's parent list at a
-    /// time could not offer, and what a partitioned or parallel pass needs.
-    fn repair(&mut self, classes: &[ClassId]) {
-        let mut taken = std::mem::take(&mut self.taken_parents);
-        taken.clear();
-        for &class in classes {
-            self.stats.repairs += 1;
-            let edges = self.take_parents(class);
-            taken.push((class, edges));
-        }
-
-        // The hash-cons is keyed on the children a row was interned with, so the
-        // stale entries have to go before those children move.
-        // By row, not by back-edge: a row with two distinct child classes sits on
-        // both their lists, and a run that saw it twice would read it as
-        // congruent to itself and retire it.
-        let mut order: Vec<RowId> = taken
-            .iter()
-            .flat_map(|(_, edges)| edges)
-            .map(|&edge| self.row(edge))
-            .collect();
-        order.sort_unstable();
-        order.dedup();
-
-        for &row in &order {
-            if !self.node[row.index()].is_unique() {
-                self.memo_remove(row);
+        while std::mem::take(&mut self.graph.dirty) {
+            self.version += 1;
+            self.graph.uf.flatten();
+            let mut report = std::mem::take(&mut self.repair);
+            let epoch = self.graph.epoch;
+            for table in &mut self.graph.tables {
+                table.repair(self.graph.uf.parents(), epoch, &mut report);
             }
-        }
-        for &row in &order {
-            if self.canonicalize_row(row) {
-                self.log_change(self.row_class[row.index()]);
+            self.stats.repairs += report.rekeyed.len();
+            // A row with a re-keyed child reads differently, and semi-naive has
+            // to see its class as changed.
+            for class in report.rekeyed.drain(..) {
+                self.log_change(ClassId(class));
             }
-            self.row_class[row.index()] = self.find(self.row_class[row.index()]);
-        }
-        order.retain(|&row| !self.node[row.index()].is_unique());
-        order.sort_unstable_by(|&a, &b| {
-            self.row_label[a.index()]
-                .cmp(&self.row_label[b.index()])
-                .then_with(|| self.children(a).cmp(self.children(b)))
-                .then(a.cmp(&b))
-        });
-
-        self.dead_rows.begin(self.node.len());
-        let mut run = 0;
-        while run < order.len() {
-            let first = order[run];
-            let mut next = run + 1;
-            while next < order.len() && self.rows_congruent(first, order[next]) {
-                let other = order[next];
-                self.dead_rows.insert(other.index());
-                let (a, b) = (self.row_class[first.index()], self.row_class[other.index()]);
-                self.union(a, b);
-                next += 1;
+            for collision in report.collisions.drain(..) {
+                self.union(ClassId(collision.kept), ClassId(collision.removed));
             }
-            let key = self.row_hash(first);
-            self.memo_insert(key, first);
-            run = next;
+            self.repair = report;
         }
-
-        // Put each class's back-edges back, minus the rows a run absorbed, and
-        // onto whatever class it is part of now. Extend rather than assign: a
-        // union above may have spliced parents onto it already.
-        for (class, edges) in taken.iter_mut() {
-            edges.retain(|&edge| !self.dead_rows.contains(self.row(edge).index()));
-            let root = self.find(*class);
-            let edges = std::mem::take(edges);
-            self.append_parents(root, edges);
-        }
-        self.taken_parents = taken;
-    }
-
-    fn row(&self, edge: u32) -> RowId {
-        RowId(self.edge_row[edge as usize])
-    }
-
-    /// Congruence repair inside a scope. The base rows, hash-cons and columns
-    /// stay read-only: a scoped survivor is a base class id, so writing scoped
-    /// canonical ids into a base row would leave it naming a different class
-    /// once the scope pops. Canonicalization happens in a scratch buffer against
-    /// a hash-cons that lives only as long as the rebuild.
-    fn rebuild_scope(&mut self) {
-        let mut memo: FxHashMap<u64, Vec<(LabelId, Vec<ClassId>, ClassId)>> = FxHashMap::default();
-        let mut scratch: Vec<ClassId> = Vec::new();
-        while !self.pending.is_empty() {
-            for rep in self.drain_pending() {
-                let rep = self.find(rep);
-                let edges: Vec<u32> = self.parent_edges(rep).collect();
-                for edge in edges {
-                    let row = RowId(self.edge_row[edge as usize]);
-                    if self.node[row.index()].is_unique() {
-                        continue;
-                    }
-                    scratch.clear();
-                    scratch.extend(self.children(row).iter().map(|&c| self.uf.find(c)));
-                    let label = self.row_label[row.index()];
-                    let class = self.find(self.row_class[row.index()]);
-                    let key = hash_row(label, &scratch);
-                    let bucket = memo.entry(key).or_default();
-                    let congruent = bucket
-                        .iter()
-                        .find(|(l, c, _)| *l == label && c == &scratch)
-                        .map(|&(_, _, id)| id);
-                    match congruent {
-                        Some(other) => {
-                            let other = self.find(other);
-                            if other != class {
-                                self.union(other, class);
-                            }
-                        }
-                        None => bucket.push((label, scratch.clone(), class)),
-                    }
-                }
+        self.graph.uf.flatten();
+        if let Some(scope) = self.scopes.last_mut() {
+            for members in scope.members.values_mut() {
+                members.sort_unstable();
+                members.dedup();
             }
-        }
-        self.uf.flatten();
-        self.refresh_view();
-    }
-
-    /// Re-aggregate the read view from the innermost scope frame, whose groups
-    /// it sorts in place.
-    fn refresh_view(&mut self) {
-        self.view.clear();
-        let Some(frame) = self.scope_members.last_mut() else {
-            return;
-        };
-        for (&rep, members) in frame.iter_mut() {
-            members.sort_unstable();
-            members.dedup();
-            self.view.insert(rep, members.clone());
         }
     }
 
     // ---- rows -------------------------------------------------------------
 
-    fn make_class(&mut self, node: L) -> ClassId {
-        let op_key = node.op_key();
-        let unique = node.is_unique();
+    /// The table `label`'s rows live in, created with every table below it if
+    /// this is the first row it gets.
+    fn table_mut(&mut self, label: LabelId) -> &mut Table {
+        let slot = self.label_slot[label.index()] as usize;
+        while self.graph.tables.len() <= slot {
+            // The label is a key column the union-find has no say over.
+            let columns = 1 + self.graph.tables.len() / 2;
+            self.graph.tables.push(if self.graph.tables.len() % 2 == 1 {
+                Table::bag(columns).plain(1)
+            } else {
+                Table::new(columns).plain(1)
+            });
+        }
+        &mut self.graph.tables[slot]
+    }
+
+    fn make_class(&mut self, node: L, label: LabelId, key: &[u32]) -> ClassId {
         let constant = node.constant();
         let type_key = node.type_key();
-        let row = self.push_row(node);
-        let class = self.uf.push();
-        self.class_head.push(row.0);
-        self.class_tail.push(row.0);
-        self.class_len.push(1);
-        self.parent_head.push(NONE);
-        self.parent_tail.push(NONE);
-        self.row_class[row.index()] = class;
-
-        let mut seen: Vec<ClassId> = Vec::new();
-        for i in 0..self.children(row).len() {
-            let child = self.find(self.children(row)[i]);
-            if !seen.contains(&child) {
-                seen.push(child);
-                self.push_edge(child, row);
+        let row = RowId(self.node.len() as u32);
+        let class = self.graph.uf.push();
+        let epoch = self.graph.epoch;
+        self.table_mut(label).insert(key, class.0, row.0, epoch);
+        self.version += 1;
+        self.graph.node_next.push(NONE);
+        self.graph.class_head.push(row.0);
+        self.graph.class_tail.push(row.0);
+        self.graph.class_len.push(1);
+        if let Some(scope) = self.scopes.last_mut() {
+            scope.dirt.push(class);
+        }
+        if crate::trace_enabled() {
+            eprintln!("A {} {:?} {:?}", class.0, node, &key[1..]);
+        }
+        self.node.push(node);
+        self.node_label.push(label);
+        if let Some(constant) = constant {
+            let label = self.intern(&constant);
+            if self.consts.raise(class, label, epoch) {
+                self.stats.raises += 1;
+                self.graph.rising[1].push((column_bit(ColumnId::Const) as u8, class));
             }
         }
-        if !unique {
-            let key = self.row_hash(row);
-            self.memo_insert(key, row);
-        }
-        self.op_rows.entry(op_key).or_default().push(row);
-        if let Some(dirt) = self.scope_dirt.last_mut() {
-            dirt.push(class);
-            self.undo.push(Undo::OpBucket { op: op_key });
-        }
-        if let Some(constant) = constant {
-            let label = self.labels.intern(&constant);
-            self.raise_const(class, label);
-        }
         if let Some(key) = type_key {
-            self.types.raise(class, key, self.row_epoch);
+            self.types.raise(class, key, epoch);
+            self.graph.rising[1].push((column_bit(ColumnId::Type) as u8, class));
         }
-        self.total_nodes += 1;
-        self.num_classes += 1;
+        self.graph.total_nodes += 1;
+        self.graph.num_classes += 1;
         self.stats.adds += 1;
-        if crate::trace_enabled() {
-            eprintln!(
-                "A {} {:?} {:?}",
-                class.0,
-                self.node(row),
-                self.children(row).iter().map(|c| c.0).collect::<Vec<_>>()
-            );
-        }
         self.log_change(class);
         class
     }
 
-    /// Append a row for `node`, whose children are already canonical.
-    fn push_row(&mut self, node: L) -> RowId {
-        let row = RowId(self.row_label.len() as u32);
-        self.row_label.push(self.labels.intern(&node));
-        self.row_class.push(ClassId(0));
-        self.children.extend_from_slice(node.children());
-        self.row_start.push(self.children.len() as u32);
-        self.row_next.push(NONE);
-        self.row_stamp.push(self.row_epoch);
-        self.node.push(node);
-        row
-    }
-
-    /// Rewrite a row's child column to canonical ids; reports whether any moved.
-    fn canonicalize_row(&mut self, row: RowId) -> bool {
-        let start = self.row_start[row.index()] as usize;
-        let end = self.row_start[row.index() + 1] as usize;
-        let mut moved = false;
-        for i in start..end {
-            let root = self.uf.find(self.children[i]);
-            if root != self.children[i] {
-                self.children[i] = root;
-                moved = true;
-            }
-        }
-        if moved {
-            self.row_stamp[row.index()] = self.row_epoch;
-        }
-        moved
-    }
-
-    fn row_hash(&self, row: RowId) -> u64 {
-        hash_row(self.row_label[row.index()], self.children(row))
-    }
-
-    fn rows_congruent(&self, a: RowId, b: RowId) -> bool {
-        self.row_label[a.index()] == self.row_label[b.index()]
-            && self.children(a) == self.children(b)
-    }
-
-    // ---- hash-cons --------------------------------------------------------
-
-    fn memo_find(&self, label: LabelId, children: &[ClassId]) -> Option<ClassId> {
-        let key = hash_row(label, children);
-        let hit =
-            |table: &FxHashMap<u64, Vec<RowId>>| {
-                table.get(&key)?.iter().copied().find(|&row| {
-                    self.row_label[row.index()] == label && self.children(row) == children
-                })
-            };
-        for table in self.scope_memo.iter().rev() {
-            if let Some(row) = hit(table) {
-                return Some(self.find(self.row_class[row.index()]));
-            }
-        }
-        hit(&self.memo).map(|row| self.find(self.row_class[row.index()]))
-    }
-
-    fn memo_insert(&mut self, key: u64, row: RowId) {
-        let table = self.scope_memo.last_mut().unwrap_or(&mut self.memo);
-        let bucket = table.entry(key).or_default();
-        if !bucket.contains(&row) {
-            bucket.push(row);
-        }
-    }
-
-    /// Drop `row`'s (possibly stale) base hash-cons entry. Only ever called
-    /// outside a scope — a scoped rebuild never touches the base table.
-    fn memo_remove(&mut self, row: RowId) {
-        let key = self.row_hash(row);
-        let Some(bucket) = self.memo.get_mut(&key) else {
-            return;
-        };
-        if let Some(pos) = bucket.iter().position(|&r| r == row) {
-            bucket.swap_remove(pos);
-        }
-        if bucket.is_empty() {
-            self.memo.remove(&key);
-        }
-    }
-
-    // ---- intrusive lists --------------------------------------------------
-
-    /// Move the absorbed class's rows onto the end of the survivor's list, which
-    /// is where the scalar engine's `nodes.append` put them. Only outside a
-    /// scope: a scope leaves the base lists alone and aggregates over members.
+    /// Move the absorbed class's e-nodes onto the end of the survivor's list.
     fn splice_class(&mut self, survivor: ClassId, absorbed: ClassId) {
+        let graph = &mut self.graph;
         let (head, tail, len) = (
-            self.class_head[absorbed.index()],
-            self.class_tail[absorbed.index()],
-            self.class_len[absorbed.index()],
+            graph.class_head[absorbed.index()],
+            graph.class_tail[absorbed.index()],
+            graph.class_len[absorbed.index()],
         );
         if head != NONE {
-            let survivor_tail = self.class_tail[survivor.index()];
+            let survivor_tail = graph.class_tail[survivor.index()];
             if survivor_tail == NONE {
-                self.class_head[survivor.index()] = head;
+                graph.class_head[survivor.index()] = head;
             } else {
-                self.row_next[survivor_tail as usize] = head;
+                graph.node_next[survivor_tail as usize] = head;
             }
-            self.class_tail[survivor.index()] = tail;
-            self.class_len[survivor.index()] += len;
+            graph.class_tail[survivor.index()] = tail;
+            graph.class_len[survivor.index()] += len;
         }
-        self.class_head[absorbed.index()] = NONE;
-        self.class_tail[absorbed.index()] = NONE;
-        self.class_len[absorbed.index()] = 0;
-    }
-
-    fn splice_parents(&mut self, survivor: ClassId, absorbed: ClassId) {
-        let (head, tail) = (
-            self.parent_head[absorbed.index()],
-            self.parent_tail[absorbed.index()],
-        );
-        if head != NONE {
-            let survivor_tail = self.parent_tail[survivor.index()];
-            if survivor_tail == NONE {
-                self.parent_head[survivor.index()] = head;
-            } else {
-                self.edge_next[survivor_tail as usize] = head;
-            }
-            self.parent_tail[survivor.index()] = tail;
-        }
-        self.parent_head[absorbed.index()] = NONE;
-        self.parent_tail[absorbed.index()] = NONE;
-    }
-
-    fn push_edge(&mut self, class: ClassId, row: RowId) {
-        let edge = self.edge_row.len() as u32;
-        self.edge_row.push(row.0);
-        self.edge_next.push(NONE);
-        self.append_edge(class, edge, edge);
-    }
-
-    fn append_edge(&mut self, class: ClassId, head: u32, tail: u32) {
-        if self.in_scope() {
-            self.undo.push(Undo::ParentList {
-                class: class.0,
-                head: self.parent_head[class.index()],
-                tail: self.parent_tail[class.index()],
-            });
-        }
-        let old_tail = self.parent_tail[class.index()];
-        if old_tail == NONE {
-            self.parent_head[class.index()] = head;
-        } else {
-            if self.in_scope() {
-                self.undo.push(Undo::EdgeNext {
-                    edge: old_tail,
-                    next: self.edge_next[old_tail as usize],
-                });
-            }
-            self.edge_next[old_tail as usize] = head;
-        }
-        self.parent_tail[class.index()] = tail;
-    }
-
-    /// The rows naming `class` among their children, each once per edge, in the
-    /// order the back-edge list holds them. Exact under a scope: a scoped union
-    /// splices nothing, and the walk covers the scope's members instead.
-    pub fn parents(&self, class: ClassId) -> impl Iterator<Item = RowId> + '_ {
-        let class = self.find(class);
-        self.parent_edges(class)
-            .map(|edge| RowId(self.edge_row[edge as usize]))
-    }
-
-    fn parent_edges(&self, class: ClassId) -> Edges<'_, L> {
-        let members = self.scope_members(class);
-        Edges {
-            engine: self,
-            cursor: self.parent_head[members.first().copied().unwrap_or(class).index()],
-            members,
-            next_member: 1,
-        }
-    }
-
-    /// Detach and return `class`'s parent back-edges, so a repair can rebuild
-    /// the list while [`Self::union`] appends to it.
-    fn take_parents(&mut self, class: ClassId) -> Vec<u32> {
-        debug_assert!(!self.in_scope(), "repair never runs under a scope");
-        let edges: Vec<u32> = self.parent_edges(class).collect();
-        self.parent_head[class.index()] = NONE;
-        self.parent_tail[class.index()] = NONE;
-        edges
-    }
-
-    fn append_parents(&mut self, class: ClassId, edges: Vec<u32>) {
-        debug_assert!(!self.in_scope(), "repair never runs under a scope");
-        for edge in edges {
-            self.edge_next[edge as usize] = NONE;
-            self.append_edge(class, edge, edge);
-        }
+        graph.class_head[absorbed.index()] = NONE;
+        graph.class_tail[absorbed.index()] = NONE;
+        graph.class_len[absorbed.index()] = 0;
     }
 
     // ---- change log -------------------------------------------------------
 
     fn log_change(&mut self, id: ClassId) {
-        if self.changed_at.len() <= id.index() {
-            self.changed_at.resize(id.index() + 1, 0);
+        let graph = &mut self.graph;
+        if graph.changed_at.len() <= id.index() {
+            // Classes are minted one at a time; growing by one each time would
+            // make every mint a resize.
+            let len = (id.index() + 1).max(graph.changed_at.len() * 2);
+            graph.changed_at.resize(len, 0);
         }
-        if self.changed_at[id.index()] != self.changed_epoch {
-            self.changed_at[id.index()] = self.changed_epoch;
-            self.changed.push(id);
+        if graph.changed_at[id.index()] != graph.changed_epoch {
+            graph.changed_at[id.index()] = graph.changed_epoch;
+            graph.changed.push(id);
         }
-    }
-
-    /// Whether `row` was appended or re-canonicalized during the round the last
-    /// [`Self::take_changed`] closed. A match all of whose rows are older than
-    /// that already existed when the round before it ran, so a rule whose match
-    /// predicate reads nothing else has applied it already.
-    pub fn row_is_new(&self, row: RowId) -> bool {
-        self.row_stamp[row.index()] + 1 == self.row_epoch
-    }
-
-    fn mark_merged_new(&mut self, absorbed: ClassId) {
-        let mut scratch = std::mem::take(&mut self.edge_scratch);
-        scratch.clear();
-        scratch.extend(
-            self.parent_edges(absorbed)
-                .map(|e| self.edge_row[e as usize]),
-        );
-        scratch.extend(self.raw_rows(absorbed).map(|row| row.0));
-        for &row in &scratch {
-            self.row_stamp[row as usize] = self.row_epoch;
-        }
-        self.edge_scratch = scratch;
     }
 
     /// Drain the change log: the canonical classes changed since the previous
     /// call, ascending and deduplicated; `None` means "every class".
     pub fn take_changed(&mut self) -> Option<Vec<ClassId>> {
-        self.row_epoch = self.row_epoch.wrapping_add(1);
-        if self.row_epoch <= 1 {
-            self.row_stamp.fill(0);
-            self.row_epoch = 2;
+        self.graph.epoch += 1;
+        let all = std::mem::replace(&mut self.graph.changed_all, false);
+        let mut changed = std::mem::take(&mut self.graph.changed);
+        for list in 0..2 {
+            let mut risen = std::mem::take(&mut self.graph.rising[list]);
+            for (_, class) in &mut risen {
+                *class = self.find(*class);
+            }
+            risen.sort_unstable();
+            risen.dedup();
+            // The drained list's allocation becomes the next round's.
+            std::mem::swap(&mut self.graph.risen[list], &mut risen);
+            risen.clear();
+            self.graph.rising[list] = risen;
         }
-        let all = std::mem::replace(&mut self.changed_all, false);
-        let mut changed = std::mem::take(&mut self.changed);
-        self.bump_epoch();
+        // Every mark of the drained log goes stale at once.
+        self.graph.changed_epoch += 1;
         if all {
             return None;
         }
@@ -943,17 +893,7 @@ impl<L: Label> Engine<L> {
     /// stopped on a limit rather than at a fixpoint calls this: the matches it
     /// never reached are not named by the change log.
     pub fn mark_all_changed(&mut self) {
-        self.changed_all = true;
-    }
-
-    /// Every stamp of the current epoch becomes stale. Wrapping past an epoch a
-    /// stamp still holds would resurrect it, so the wrap clears them instead.
-    fn bump_epoch(&mut self) {
-        self.changed_epoch = self.changed_epoch.wrapping_add(1);
-        if self.changed_epoch == 0 {
-            self.changed_at.fill(0);
-            self.changed_epoch = 1;
-        }
+        self.graph.changed_all = true;
     }
 
     // ---- facts ------------------------------------------------------------
@@ -967,7 +907,7 @@ impl<L: Label> Engine<L> {
             self.in_scope(),
             "an assumption needs a scope to be undone by"
         );
-        let label = self.labels.intern(&node);
+        let label = self.intern(&node);
         self.raise_const(self.find(class), label);
     }
 
@@ -1049,8 +989,9 @@ impl<L: Label> Engine<L> {
         if stored == Some(joined) {
             return false;
         }
-        self.objects.put(class, joined, self.row_epoch);
+        self.objects.put(class, joined, self.graph.epoch);
         self.stats.raises += 1;
+        self.rose(ColumnId::Object, class);
         self.log_change(class);
         true
     }
@@ -1120,7 +1061,7 @@ impl<L: Label> Engine<L> {
         };
         match fact {
             Fact::Known(object) => self.raise_object(survivor, object.base, object.offset),
-            Fact::Conflict => self.objects.put(survivor, Fact::Conflict, self.row_epoch),
+            Fact::Conflict => self.objects.put(survivor, Fact::Conflict, self.graph.epoch),
         }
     }
 
@@ -1140,8 +1081,9 @@ impl<L: Label> Engine<L> {
     /// keeps outside the node.
     pub fn raise_type(&mut self, class: ClassId, key: u64) {
         let class = self.find(class);
-        if self.types.raise(class, key, self.row_epoch) {
+        if self.types.raise(class, key, self.graph.epoch) {
             self.stats.raises += 1;
+            self.rose(ColumnId::Type, class);
             self.log_change(class);
         }
     }
@@ -1151,15 +1093,21 @@ impl<L: Label> Engine<L> {
     pub fn fact_is_new(&self, column: ColumnId, class: ClassId) -> bool {
         let class = self.find(class);
         match column {
-            ColumnId::Const => self.consts.is_new(class, self.row_epoch),
-            ColumnId::Type => self.types.is_new(class, self.row_epoch),
-            ColumnId::Object => self.objects.is_new(class, self.row_epoch),
+            ColumnId::Const => self.consts.is_new(class, self.graph.epoch),
+            ColumnId::Type => self.types.is_new(class, self.graph.epoch),
+            ColumnId::Object => self.objects.is_new(class, self.graph.epoch),
         }
     }
 
+    /// Note that `class`, which already existed, gained a fact in `column`.
+    fn rose(&mut self, column: ColumnId, class: ClassId) {
+        self.graph.rising[0].push((column_bit(column) as u8, class));
+    }
+
     fn raise_const(&mut self, class: ClassId, label: LabelId) {
-        if self.consts.raise(class, label, self.row_epoch) {
+        if self.consts.raise(class, label, self.graph.epoch) {
             self.stats.raises += 1;
+            self.rose(ColumnId::Const, class);
             self.log_change(class);
         }
     }
@@ -1169,109 +1117,57 @@ impl<L: Label> Engine<L> {
     /// Enter an assumption scope: everything until the matching
     /// [`Self::pop_context`] is undone by it.
     pub fn push_context(&mut self) {
-        let members = self.scope_members.last().cloned().unwrap_or_default();
-        self.scopes.push(Frame {
-            rows: self.row_label.len(),
-            classes: self.uf.len(),
-            edges: self.edge_row.len(),
-            undo: self.undo.len(),
-            pending: self.pending.clone(),
-            total_nodes: self.total_nodes,
-            num_classes: self.num_classes,
-            changed: self.changed.clone(),
-            changed_all: self.changed_all,
+        let members = self
+            .scopes
+            .last()
+            .map(|scope| scope.members.clone())
+            .unwrap_or_default();
+        self.scopes.push(Scope {
+            saved: self.graph.clone(),
+            nodes: self.node.len(),
+            members,
+            dirt: Vec::new(),
         });
-        self.uf.push_scope();
-        self.scope_memo.push(FxHashMap::default());
         self.consts.push_scope();
         self.types.push_scope();
         self.objects.push_scope();
-        self.scope_members.push(members);
-        self.scope_dirt.push(Vec::new());
-        self.refresh_view();
     }
 
     /// Leave the scope, discarding its unions, its rows, and its assumptions;
     /// the enclosing scope (or the base graph) is restored without a rebuild.
     pub fn pop_context(&mut self) {
-        let frame = self.scopes.pop().expect("open scope");
+        let scope = self.scopes.pop().expect("open scope");
         self.consts.pop_scope();
         self.types.pop_scope();
         self.objects.pop_scope();
-        for entry in self.undo.drain(frame.undo..).rev() {
-            match entry {
-                Undo::ParentList { class, head, tail } => {
-                    self.parent_head[class as usize] = head;
-                    self.parent_tail[class as usize] = tail;
-                }
-                Undo::EdgeNext { edge, next } => self.edge_next[edge as usize] = next,
-                Undo::OpBucket { op } => {
-                    if let Some(bucket) = self.op_rows.get_mut(&op) {
-                        bucket.pop();
-                        if bucket.is_empty() {
-                            self.op_rows.remove(&op);
-                        }
-                    }
-                }
-            }
-        }
-        self.uf.pop_scope();
-        self.row_label.truncate(frame.rows);
-        self.row_class.truncate(frame.rows);
-        self.row_start.truncate(frame.rows + 1);
-        self.children.truncate(self.row_start[frame.rows] as usize);
-        self.node.truncate(frame.rows);
-        self.row_next.truncate(frame.rows);
-        self.row_stamp.truncate(frame.rows);
-        self.edge_row.truncate(frame.edges);
-        self.edge_next.truncate(frame.edges);
         // The classes the scope minted keep their ids, so a caller still holding
-        // one finds it, but they lose every row the scope gave them and stop
-        // being classes: `class_ids` skips a root with no rows.
-        for class in frame.classes..self.uf.len() {
-            self.class_head[class] = NONE;
-            self.class_tail[class] = NONE;
-            self.class_len[class] = 0;
-            self.parent_head[class] = NONE;
-            self.parent_tail[class] = NONE;
-        }
-        self.scope_memo.pop();
-        self.scope_members.pop();
-        self.scope_dirt.pop();
-        self.pending = frame.pending;
-        self.total_nodes = frame.total_nodes;
-        self.num_classes = frame.num_classes;
-        self.refresh_view();
-        self.restore_changed(frame.changed, frame.changed_all);
+        // one finds it, but they lose every e-node the scope gave them and stop
+        // being classes: `class_ids` skips a class with none.
+        let classes = self.graph.uf.len();
+        self.graph = scope.saved;
+        self.graph.uf.extend_to(classes);
+        self.graph.class_head.resize(classes, NONE);
+        self.graph.class_tail.resize(classes, NONE);
+        self.graph.class_len.resize(classes, 0);
+        self.node.truncate(scope.nodes);
+        self.node_label.truncate(scope.nodes);
+        self.version += 1;
+        // Table versions restart from the scope's copy, so a grouping built
+        // inside the scope could pass for one of a later table.
+        let groups = self.groups.get_mut();
+        groups.built.clear();
+        groups.new_rows.clear();
     }
 
-    /// Put the change log back the way the just-popped scope found it. A fresh
-    /// epoch invalidates the scope's stamps in one step; the restored ids are
-    /// then re-stamped, so log and stamps agree again.
-    fn restore_changed(&mut self, changed: Vec<ClassId>, all: bool) {
-        self.bump_epoch();
-        for id in &changed {
-            self.changed_at[id.index()] = self.changed_epoch;
-        }
-        self.changed = changed;
-        self.changed_all = all;
-    }
-
-    /// The groups of the read view: [`Self::scope_members`] as of the last
-    /// refresh. Empty for a class the view does not merge, which is then read
-    /// straight from its own row list.
-    fn viewed_members(&self, id: ClassId) -> &[ClassId] {
-        self.view.get(&id).map(Vec::as_slice).unwrap_or(&[])
-    }
-
-    /// The base class ids the open scope groups under the scoped-canonical `id`.
-    /// Empty when no scope is open or `id` is not a scoped representative — then
-    /// `id` is itself the base rep. Side tables built against the base graph are
-    /// keyed by base reps, so a query made under a scope aggregates over this.
+    /// The classes the open scope found distinct and grouped under `id`, as of
+    /// the last rebuild, ascending. Empty when no scope is open or the scope did
+    /// not merge `id` with anything. Side tables built against the graph the
+    /// scope opened on are keyed by those, so a query made under a scope
+    /// aggregates over this.
     pub fn scope_members(&self, id: ClassId) -> &[ClassId] {
-        self.scope_members
+        self.scopes
             .last()
-            .and_then(|frame| frame.get(&id))
+            .and_then(|scope| scope.members.get(&id))
             .map(Vec::as_slice)
             .unwrap_or(&[])
     }
@@ -1287,7 +1183,7 @@ impl<L: Label> Engine<L> {
     /// scope enclosing it, so a caller that already answered for that one has
     /// only this to redo. Ascending id. Empty with no scope open.
     pub fn innermost_dirty(&self) -> Vec<ClassId> {
-        self.dirty_since(self.scope_dirt.len().saturating_sub(1))
+        self.dirty_since(self.scopes.len().saturating_sub(1))
     }
 
     /// Everything the scopes from `depth` outward-in changed, closed upward.
@@ -1295,9 +1191,9 @@ impl<L: Label> Engine<L> {
         if !self.in_scope() {
             return Vec::new();
         }
-        let seeds: Vec<ClassId> = self.scope_dirt[depth..]
+        let seeds: Vec<ClassId> = self.scopes[depth..]
             .iter()
-            .flatten()
+            .flat_map(|scope| &scope.dirt)
             .copied()
             .chain(self.consts.scoped_keys_from(depth))
             .collect();
@@ -1312,11 +1208,37 @@ impl<L: Label> Engine<L> {
         self.close_upward(changed.to_vec(), Some(height))
     }
 
+    /// Class -> the classes of the rows naming it as a child, grouped once for
+    /// the graph as it is. The tables are keyed the other way, so an upward walk
+    /// reads this instead.
+    fn parents(&self) -> Ref<'_, (u64, Csr)> {
+        if self.parents.borrow().0 != self.version {
+            // A rebuilt table already names representatives.
+            let rebuilt = self.rebuilt();
+            let class = |cell: u32| match rebuilt {
+                true => cell,
+                false => self.find(ClassId(cell)).0,
+            };
+            let csr = Csr::build_with(self.graph.uf.len(), |edge| {
+                for table in &self.graph.tables {
+                    for column in 1..table.arity() {
+                        for (&child, &parent) in table.column(column).iter().zip(table.values()) {
+                            edge(class(child), class(parent));
+                        }
+                    }
+                }
+            });
+            *self.parents.borrow_mut() = (self.version, csr);
+        }
+        self.parents.borrow()
+    }
+
     /// `seeds` and everything reachable upward from them over parent edges in at
     /// most `levels` steps (unbounded when `None`), ascending.
     fn close_upward(&self, seeds: Vec<ClassId>, levels: Option<usize>) -> Vec<ClassId> {
+        let parents = self.parents();
         let mut seen = self.marks.borrow_mut();
-        seen.begin(self.uf.len());
+        seen.begin(self.graph.uf.len());
         let mut frontier: Vec<ClassId> = seeds
             .into_iter()
             .map(|id| self.find(id))
@@ -1327,12 +1249,10 @@ impl<L: Label> Engine<L> {
         while !frontier.is_empty() && levels.is_none_or(|max| level < max) {
             let mut next = Vec::new();
             for id in frontier.drain(..) {
-                for edge in self.parent_edges(id) {
-                    let row = RowId(self.edge_row[edge as usize]);
-                    let parent = self.find(self.row_class[row.index()]);
-                    if seen.insert(parent.index()) {
-                        closure.push(parent);
-                        next.push(parent);
+                for &parent in parents.1.get(id.0) {
+                    if seen.insert(parent as usize) {
+                        closure.push(ClassId(parent));
+                        next.push(ClassId(parent));
                     }
                 }
             }
@@ -1344,10 +1264,19 @@ impl<L: Label> Engine<L> {
     }
 }
 
+/// The position of `column` in a mask of columns.
+pub(crate) fn column_bit(column: ColumnId) -> usize {
+    match column {
+        ColumnId::Const => 0,
+        ColumnId::Type => 1,
+        ColumnId::Object => 2,
+    }
+}
+
 /// Epoch-stamped membership marks over the class ids: `begin` costs nothing per
 /// class, so a sweep pays only for what it visits.
 #[derive(Default)]
-struct Marks {
+pub(crate) struct Marks {
     stamp: Vec<u32>,
     epoch: u32,
 }
@@ -1365,25 +1294,14 @@ impl Marks {
     }
 
     /// Mark `id`, reporting whether this sweep had not seen it.
-    fn insert(&mut self, id: usize) -> bool {
+    pub(crate) fn insert(&mut self, id: usize) -> bool {
         let slot = &mut self.stamp[id];
         std::mem::replace(slot, self.epoch) != self.epoch
     }
-
-    fn contains(&self, id: usize) -> bool {
-        self.stamp[id] == self.epoch
-    }
 }
 
-fn hash_row(label: LabelId, children: &[ClassId]) -> u64 {
-    let mut h = FxHasher::default();
-    label.0.hash(&mut h);
-    children.hash(&mut h);
-    h.finish()
-}
-
-/// A class, read through the columns. Not a struct the engine owns: an e-class
-/// is a set of rows, and this is the cursor into it.
+/// A class, read through the engine. Not a struct the engine owns: an e-class
+/// is a set of e-nodes, and this is the cursor into it.
 pub struct ClassRef<'a, L: Label> {
     engine: &'a Engine<L>,
     id: ClassId,
@@ -1419,13 +1337,10 @@ impl<'a, L: Label> ClassRef<'a, L> {
     }
 }
 
-/// Walks a class's rows: its own intrusive membership list, or, under a scope
-/// that merged it, its members' lists back to back.
+/// Walks a class's e-nodes along its intrusive list.
 pub struct Rows<'a, L: Label> {
     engine: &'a Engine<L>,
     cursor: u32,
-    members: &'a [ClassId],
-    next_member: usize,
 }
 
 impl<L: Label> Clone for Rows<'_, L> {
@@ -1433,8 +1348,6 @@ impl<L: Label> Clone for Rows<'_, L> {
         Self {
             engine: self.engine,
             cursor: self.cursor,
-            members: self.members,
-            next_member: self.next_member,
         }
     }
 }
@@ -1443,37 +1356,12 @@ impl<L: Label> Iterator for Rows<'_, L> {
     type Item = RowId;
 
     fn next(&mut self) -> Option<RowId> {
-        while self.cursor == NONE {
-            let member = *self.members.get(self.next_member)?;
-            self.next_member += 1;
-            self.cursor = self.engine.class_head[member.index()];
+        if self.cursor == NONE {
+            return None;
         }
         let row = RowId(self.cursor);
-        self.cursor = self.engine.row_next[row.index()];
+        self.cursor = self.engine.graph.node_next[row.index()];
         Some(row)
-    }
-}
-
-/// The same walk over parent back-edges.
-struct Edges<'a, L: Label> {
-    engine: &'a Engine<L>,
-    cursor: u32,
-    members: &'a [ClassId],
-    next_member: usize,
-}
-
-impl<L: Label> Iterator for Edges<'_, L> {
-    type Item = u32;
-
-    fn next(&mut self) -> Option<u32> {
-        while self.cursor == NONE {
-            let member = *self.members.get(self.next_member)?;
-            self.next_member += 1;
-            self.cursor = self.engine.parent_head[member.index()];
-        }
-        let edge = self.cursor;
-        self.cursor = self.engine.edge_next[edge as usize];
-        Some(edge)
     }
 }
 
@@ -1505,26 +1393,22 @@ mod tests {
         assert!(eg.classes_with_op(Term::leaf("zzz").op_key()).is_empty());
     }
 
+    /// A scope is the same graph with more merges, so a lookup under it sees
+    /// what congruence over those merges proves, and the pop takes it back.
     #[test]
-    fn a_scoped_lookup_stays_as_incomplete_as_the_base_hash_cons() {
+    fn a_scoped_lookup_sees_the_scopes_congruence() {
         let mut eg = Engine::new();
-        // `b` first, so the merge canonicalizes `a` onto it and the probe for
-        // `f(a)` no longer spells the children `f(a)` was interned with.
         let b = eg.add(Term::leaf("b"));
         let a = eg.add(Term::leaf("a"));
         let fa = eg.add(Term::op("f", &[a]));
         eg.rebuild();
+        assert_eq!(eg.lookup(&Term::op("f", &[b])), None);
         eg.push_context();
         eg.union(a, b);
         eg.rebuild();
-        // Under the hypothesis `f(a)` and `f(b)` are the same term, but the
-        // base hash-cons is keyed by the children `f(a)` was interned with and
-        // a scope never rewrites it — so both probes, canonicalized through the
-        // scoped union-find, miss. That incompleteness is the scalar engine's,
-        // and consumers are written against it.
-        assert_eq!(eg.lookup(&Term::op("f", &[b])), None);
-        assert_eq!(eg.lookup(&Term::op("f", &[a])), None);
+        assert_eq!(eg.lookup(&Term::op("f", &[b])), Some(eg.find(fa)));
         eg.pop_context();
+        assert_eq!(eg.lookup(&Term::op("f", &[b])), None);
         assert_eq!(eg.lookup(&Term::op("f", &[a])), Some(eg.find(fa)));
     }
 }

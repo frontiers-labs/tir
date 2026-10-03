@@ -8,6 +8,7 @@ mod hive;
 mod interner;
 mod predicate;
 mod raw_bits;
+pub mod simd;
 mod tempdir;
 
 pub use apfloat::*;

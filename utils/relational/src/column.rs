@@ -175,10 +175,18 @@ impl<V: Copy + Eq + Hash> Column<V> {
     /// Move `absorbed`'s value onto `survivor`, joining with whatever is there.
     /// Reports whether the survivor's entry moved.
     pub fn merge(&mut self, absorbed: ClassId, survivor: ClassId, epoch: u32) -> bool {
+        if self.fact.is_empty() {
+            return false;
+        }
         match self.detach(absorbed) {
             Some(fact) => self.write(survivor, fact, epoch),
             None => false,
         }
+    }
+
+    /// Whether no class has an entry.
+    pub fn is_empty(&self) -> bool {
+        self.fact.is_empty()
     }
 
     /// The classes the open scopes have written. Duplicated across frames, and

@@ -11,6 +11,7 @@ tir-adt.workspace = true
 [dev-dependencies]
 tir-bench.workspace = true
 egg = "0.11"
+egglog = { version = "3.0.0", default-features = false }
 proptest.workspace = true
 smallvec = "1.15.2"
 
@@ -19,7 +20,11 @@ name = "egraph"
 harness = false
 
 [[bench]]
-name = "egg_math"
+name = "egg"
+harness = false
+
+[[bench]]
+name = "egglog"
 harness = false
 
 [lints]

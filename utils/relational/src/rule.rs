@@ -9,7 +9,7 @@
 use smallvec::SmallVec;
 
 use crate::query::{Expr, Field, Match, Plan, Scalar, Var};
-use crate::{ClassId, Engine, Label};
+use crate::{ClassId, Engine, Label, LabelId};
 
 /// A node a head builds: a template with scalars written into named fields.
 #[derive(Clone, Debug)]
@@ -72,15 +72,93 @@ impl<L: Label> Engine<L> {
     /// language has no term for — writes nothing; everything before it stands,
     /// which is sound because a head only ever adds.
     pub fn apply_head(&mut self, head: &[HeadOp<L>], head_vars: u32, matched: &Match) {
-        let mut bound: SmallVec<[Option<ClassId>; 8]> = matched.bindings.clone();
+        let (bindings, scalars) = (&matched.bindings, &matched.scalars);
+        self.apply_head_cached(head, head_vars, bindings, scalars, &mut Vec::new());
+    }
+
+    /// [`Self::apply_head`] for a head run many times: `labels` keeps the label
+    /// of each insert whose node is the template as written, so a node the
+    /// graph already holds costs a key lookup and no term is built for it.
+    pub(crate) fn apply_head_cached(
+        &mut self,
+        head: &[HeadOp<L>],
+        head_vars: u32,
+        bindings: &[Option<ClassId>],
+        scalars: &[u64],
+        labels: &mut Vec<Option<LabelId>>,
+    ) {
+        if labels.len() < head.len() {
+            labels.resize(head.len(), None);
+        }
+        // The match's bindings and the head's own, in one array the engine
+        // keeps between heads.
+        let mut bound = std::mem::take(&mut self.head_bound);
+        bound.clear();
+        bound.extend_from_slice(bindings);
         bound.resize(bound.len() + head_vars as usize, None);
-        for op in head {
+        self.run_head(head, scalars, &mut bound, labels);
+        self.head_bound = bound;
+    }
+
+    fn run_head(
+        &mut self,
+        head: &[HeadOp<L>],
+        scalars: &[u64],
+        bound: &mut [Option<ClassId>],
+        labels: &mut [Option<LabelId>],
+    ) {
+        for (index, op) in head.iter().enumerate() {
             match op {
+                HeadOp::Insert { label, args, into } if label.fills.is_empty() => {
+                    let template = &label.template;
+                    debug_assert_eq!(template.children().len(), args.len());
+                    // The cache is keyed by the rule's plan, and nothing stops two
+                    // rules from sharing one, so a remembered label is checked
+                    // against the template before it is trusted.
+                    let id = match labels[index] {
+                        Some(id) if self.label_is(id, template) => id,
+                        _ => {
+                            let id = self.intern(template);
+                            labels[index] = Some(id);
+                            id
+                        }
+                    };
+                    // The key is the label and then the children; all but the
+                    // widest operators fit on the stack.
+                    let mut inline = [0u32; 8];
+                    let mut spilled = Vec::new();
+                    let key = match inline.get_mut(..=args.len()) {
+                        Some(key) => key,
+                        None => {
+                            spilled.resize(args.len() + 1, 0);
+                            &mut spilled[..]
+                        }
+                    };
+                    key[0] = id.0;
+                    for (cell, &arg) in key[1..].iter_mut().zip(args.iter()) {
+                        let Some(class) = bound[arg as usize] else {
+                            return;
+                        };
+                        *cell = self.find(class).0;
+                    }
+                    if template.commutative() {
+                        key[1..].sort_unstable();
+                    }
+                    let key = &*key;
+                    let class = self.add_labelled(id, key, || {
+                        let mut node = template.clone();
+                        for (child, &class) in node.children_mut().iter_mut().zip(&key[1..]) {
+                            *child = ClassId(class);
+                        }
+                        node
+                    });
+                    bound[*into as usize] = Some(class);
+                }
                 HeadOp::Insert { label, args, into } => {
                     let fills: SmallVec<[(Field, u64); 2]> = label
                         .fills
                         .iter()
-                        .map(|&(field, slot)| (field, matched.scalars[slot as usize]))
+                        .map(|&(field, slot)| (field, scalars[slot as usize]))
                         .collect();
                     let Some(mut node) = L::fill(&label.template, &fills) else {
                         return;
@@ -108,7 +186,7 @@ impl<L: Label> Engine<L> {
                     let (Some(key), Some(base), Some(offset)) = (
                         bound[*key as usize],
                         bound[*base as usize],
-                        offset.eval(&matched.scalars),
+                        offset.eval(scalars),
                     ) else {
                         return;
                     };
@@ -119,7 +197,7 @@ impl<L: Label> Engine<L> {
                     offset,
                     index,
                 } => {
-                    let chosen = *offset as usize + matched.scalars[*index as usize] as usize;
+                    let chosen = *offset as usize + scalars[*index as usize] as usize;
                     let (Some(a), Some(Some(b))) = (bound[*class as usize], bound.get(chosen))
                     else {
                         return;

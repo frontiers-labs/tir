@@ -9,7 +9,9 @@
 
 use smallvec::SmallVec;
 
-use crate::{ClassId, Engine, Label};
+use crate::engine::{Candidates, Groups};
+use crate::store::Table;
+use crate::{ClassId, Engine, Label, LabelId};
 
 /// A class variable of a [`Query`], numbered from zero.
 pub type Var = u32;
@@ -310,6 +312,63 @@ pub struct Match {
     pub scalars: SmallVec<[u64; 8]>,
 }
 
+/// An evaluation order: the steps, the template levels below the root, and
+/// the plans of the negated conjunctions.
+type Ordered<L> = (Vec<Step>, usize, Vec<Plan<L>>);
+
+/// The matches of one search, stored flat: a search that finds thousands builds
+/// no vector per match.
+#[derive(Default)]
+pub(crate) struct Matches {
+    roots: Vec<ClassId>,
+    /// `roots.len()` rows of bindings back to back, and the same of scalars.
+    bindings: Vec<Option<ClassId>>,
+    scalars: Vec<u64>,
+}
+
+impl Matches {
+    pub(crate) fn len(&self) -> usize {
+        self.roots.len()
+    }
+
+    fn push(&mut self, root: ClassId, bindings: &[Option<ClassId>], scalars: &[u64]) {
+        self.roots.push(root);
+        self.bindings.extend_from_slice(bindings);
+        self.scalars.extend_from_slice(scalars);
+    }
+
+    /// The root, bindings and scalars of match `index`.
+    pub(crate) fn get(&self, index: usize) -> (ClassId, &[Option<ClassId>], &[u64]) {
+        let vars = self.bindings.len() / self.roots.len();
+        let scalars = self.scalars.len() / self.roots.len();
+        (
+            self.roots[index],
+            &self.bindings[index * vars..(index + 1) * vars],
+            &self.scalars[index * scalars..(index + 1) * scalars],
+        )
+    }
+
+    /// Append the matches of another search of the same plan.
+    pub(crate) fn extend(&mut self, other: Matches) {
+        self.roots.extend(other.roots);
+        self.bindings.extend(other.bindings);
+        self.scalars.extend(other.scalars);
+    }
+
+    fn into_vec(self) -> Vec<Match> {
+        (0..self.len())
+            .map(|index| {
+                let (root, bindings, scalars) = self.get(index);
+                Match {
+                    root,
+                    bindings: SmallVec::from_slice(bindings),
+                    scalars: SmallVec::from_slice(scalars),
+                }
+            })
+            .collect()
+    }
+}
+
 /// A query with its atoms ordered for evaluation: each step's class variable is
 /// bound by the root or by an earlier step, so evaluation is a loop nest with no
 /// search over orders. Guards run as soon as their inputs are bound.
@@ -320,6 +379,88 @@ pub struct Plan<L> {
     height: usize,
     /// One compiled plan per negated sub-conjunction, in the query's order.
     nots: Vec<Plan<L>>,
+    /// One evaluation order per row atom, starting at that atom rather than at
+    /// the root: what a round uses to search from the rows the round before
+    /// wrote. Empty for a plan that cannot be searched that way. Worked out on
+    /// first use: a plan compiled and never saturated with does not pay for it.
+    anchors: std::sync::OnceLock<Vec<Anchor>>,
+    /// One evaluation order per fact atom, starting at the class the fact is
+    /// of: what a round uses to search from the facts the round before raised.
+    /// Empty for a plan that cannot be searched that way.
+    fact_anchors: std::sync::OnceLock<Vec<FactAnchor>>,
+    /// Names the plan to an engine's caches. Zero for a plan that is part of
+    /// another.
+    id: u64,
+    /// Per atom, the operator bucket of the rows it reads, hashed once here
+    /// rather than once per search. Zero for an atom that reads no row.
+    ops: Vec<u64>,
+}
+
+/// An evaluation order that starts at one row atom. Its first step is that
+/// atom, which the search scans; the rest reach every other atom from what it
+/// bound, up through operands and down through classes.
+#[derive(Clone, Debug)]
+struct Anchor {
+    atom: usize,
+    steps: Vec<Step>,
+}
+
+/// An evaluation order that starts at the class a fact atom reads: its first
+/// step is that atom.
+#[derive(Clone, Debug)]
+struct FactAnchor {
+    column: ColumnId,
+    key: Var,
+    steps: Vec<Step>,
+    /// The fact atoms that come before this one, as a mask over atom indices.
+    /// A match with several new facts is found from the first of them, so
+    /// from this anchor those must be old.
+    earlier: u64,
+    /// Whether no earlier fact atom reads the same class. A class minted with
+    /// its facts has all of them new at once, so only such an anchor can find
+    /// a match there.
+    first_on_key: bool,
+}
+
+/// What a saturation keeps between rounds for one plan: the tables each atom
+/// reads, which only change when the graph meets a new label.
+#[derive(Default)]
+pub struct PlanCache {
+    labels: usize,
+    tables: Vec<Vec<Candidates>>,
+    /// Whether some atom of the plan reads nothing the graph holds, so the plan
+    /// has no match until the graph meets another label.
+    dead: bool,
+    /// The evaluator's working arrays, kept so a search allocates nothing.
+    scratch: Scratch,
+}
+
+#[derive(Default)]
+struct Scratch {
+    bound: Vec<Option<ClassId>>,
+    scalars: Vec<u64>,
+    trail: Vec<Var>,
+    pool: Vec<Vec<u32>>,
+}
+
+/// A search expecting at most this many starting points looks rows up by
+/// scanning the column instead of through a grouping: the scans cost less than
+/// building one.
+const SCAN_LIMIT: usize = 16;
+
+/// Run `$body` for each row of `$table` holding `$cell` in `$column`: read off
+/// the grouping, or found by a scan when the search is too small to pay for
+/// one.
+macro_rules! lookup {
+    ($eval:ident, $groups:ident, $slot:expr, $column:expr, $table:ident, $cell:expr, |$row:ident| $body:block) => {
+        if $eval.scan {
+            let rows = $eval.scan_rows($table.column($column), $cell);
+            for &$row in &rows $body
+            $eval.pool.push(rows);
+        } else {
+            for &$row in $groups.get($slot, $column).rows($cell) $body
+        }
+    };
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -348,23 +489,291 @@ impl<L: Label> Plan<L> {
         let mut bound = vec![false; query.vars as usize];
         bound[query.root as usize] = true;
         let known = vec![false; query.scalars as usize];
-        Self::compile_from(query, bound, known).expect("every atom is reached and every guard read")
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let mut plan = Self::compile_from(query, bound, known, None)
+            .expect("every atom is reached and every guard read");
+        plan.id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        plan
     }
 
-    /// Order what `bound` and `known` do not already give. `None` when an atom
-    /// is reachable neither down from a bound class nor sideways from a bound
-    /// operand, or a guard reads a scalar nothing binds.
-    fn compile_from(query: Query<L>, mut bound: Vec<bool>, mut known: Vec<bool>) -> Option<Self> {
+    pub(crate) fn id(&self) -> u64 {
+        self.id
+    }
+
+    fn anchors(&self) -> &[Anchor] {
+        self.anchors.get_or_init(|| self.anchor())
+    }
+
+    /// Whether a round can search this plan from the rows the round before
+    /// wrote, instead of from every class near a change.
+    pub fn anchorable(&self) -> bool {
+        !self.anchors().is_empty()
+    }
+
+    /// An evaluation order from each row atom. Empty for a plan a round cannot
+    /// search from its new rows: one that negates, whose root binds no row,
+    /// that asks only whether a class holds an operator — a reading a second
+    /// row of that operator does not make new — or some atom of which cannot
+    /// be reached from another.
+    fn anchor(&self) -> Vec<Anchor> {
+        let query = &self.query;
+        let rooted = query
+            .atoms
+            .iter()
+            .any(|atom| matches!(atom, Atom::Node { class, .. } if *class == query.root));
+        let holds = query
+            .atoms
+            .iter()
+            .any(|atom| matches!(atom, Atom::Holds { .. }));
+        if !rooted || holds || !self.nots.is_empty() {
+            return Vec::new();
+        }
+        let mut anchors = Vec::new();
+        for (index, atom) in query.atoms.iter().enumerate() {
+            let Atom::Node {
+                args, class, row, ..
+            } = atom
+            else {
+                continue;
+            };
+            let mut bound = vec![false; query.vars as usize];
+            bound[*class as usize] = true;
+            for &arg in args {
+                bound[arg as usize] = true;
+            }
+            let mut known = vec![false; query.scalars as usize];
+            if let Some(row) = row {
+                known[*row as usize] = true;
+            }
+            let Some((rest, _, _)) = Self::order(query, bound, known, Some(index)) else {
+                return Vec::new();
+            };
+            let mut steps = vec![Step::Atom(index)];
+            steps.extend(rest);
+            anchors.push(Anchor { atom: index, steps });
+        }
+        anchors
+    }
+
+    /// Whether the plan reads no row at all: every atom is a fact.
+    pub(crate) fn rowless(&self) -> bool {
+        !self
+            .query
+            .atoms
+            .iter()
+            .any(|atom| matches!(atom, Atom::Node { .. } | Atom::Holds { .. }))
+    }
+
+    /// Whether a round can search this plan from the facts the round before
+    /// raised.
+    pub(crate) fn fact_anchorable(&self) -> bool {
+        !self.fact_anchors().is_empty()
+    }
+
+    fn fact_anchors(&self) -> &[FactAnchor] {
+        self.fact_anchors.get_or_init(|| self.fact_anchor())
+    }
+
+    /// An evaluation order from each fact atom. Empty for a plan that negates,
+    /// reads no fact, or some atom of which cannot be reached from one.
+    fn fact_anchor(&self) -> Vec<FactAnchor> {
+        let query = &self.query;
+        if !self.nots.is_empty() {
+            return Vec::new();
+        }
+        // Facts are tried in order of how rarely their column rises: a
+        // constant before a derivation before a type, which nearly every new
+        // class is minted with.
+        let rank = |column: ColumnId| match column {
+            ColumnId::Const => 0,
+            ColumnId::Object => 1,
+            ColumnId::Type => 2,
+        };
+        let mut facts: Vec<(usize, ColumnId, Var)> = query
+            .atoms
+            .iter()
+            .enumerate()
+            .filter_map(|(index, atom)| match atom {
+                Atom::Literal { class, .. } => Some((index, ColumnId::Const, *class)),
+                Atom::Fact { column, key, .. } => Some((index, *column, *key)),
+                Atom::Object { key, .. } => Some((index, ColumnId::Object, *key)),
+                _ => None,
+            })
+            .collect();
+        if facts.iter().any(|&(index, _, _)| index >= 64) {
+            return Vec::new();
+        }
+        facts.sort_by_key(|&(index, column, _)| (rank(column), index));
+        let mut anchors = Vec::new();
+        let mut earlier = 0u64;
+        for (position, &(index, column, key)) in facts.iter().enumerate() {
+            let mut bound = vec![false; query.vars as usize];
+            bound[key as usize] = true;
+            let known = vec![false; query.scalars as usize];
+            // No atom is skipped, but the order is not from the root.
+            let Some((steps, _, _)) = Self::order(query, bound, known, Some(usize::MAX)) else {
+                return Vec::new();
+            };
+            let first_on_key = !facts[..position].iter().any(|&(_, _, other)| other == key);
+            anchors.push(FactAnchor {
+                column,
+                key,
+                steps,
+                earlier,
+                first_on_key,
+            });
+            earlier |= 1 << index;
+        }
+        anchors
+    }
+
+    /// Every match one of whose facts the previous round raised and whose rows
+    /// are all older than that, each once, found from those facts: what
+    /// [`Self::search_new`] leaves out. `minted` adds the facts classes were
+    /// minted with, which only a plan that reads no row needs. For a
+    /// [`Self::fact_anchorable`] plan.
+    pub(crate) fn search_risen(
+        &self,
+        eg: &Engine<L>,
+        minted: bool,
+        externs: &dyn Externs<L>,
+        cache: &mut PlanCache,
+    ) -> Matches {
+        self.refresh(eg, cache);
+        if cache.dead {
+            return Matches::default();
+        }
+        let lists = |anchor: &FactAnchor| match minted && anchor.first_on_key {
+            true => &[false, true][..],
+            false => &[false][..],
+        };
+        let starts = |anchor: &FactAnchor| {
+            lists(anchor)
+                .iter()
+                .map(|&minted| eg.risen(anchor.column, minted).count())
+                .sum::<usize>()
+        };
+        let total: usize = self.fact_anchors().iter().map(starts).sum();
+        if total == 0 {
+            return Matches::default();
+        }
+        let scan = total <= SCAN_LIMIT;
+        if !scan {
+            for anchor in self.fact_anchors() {
+                Self::group(eg, &cache.tables[0], &anchor.steps);
+            }
+        }
+        let groups = eg.groups();
+        let scratch = std::mem::take(&mut cache.scratch);
+        let mut eval = self.eval(eg, &groups, &cache.tables, None, externs, scratch);
+        eval.scan = scan;
+        eval.only_new = true;
+        eval.old_below = usize::MAX;
+        for (index, anchor) in self.fact_anchors().iter().enumerate() {
+            eval.fact_anchor = Some(index);
+            eval.facts_old = anchor.earlier;
+            for &minted in lists(anchor) {
+                for class in eg.risen(anchor.column, minted) {
+                    eval.bound[anchor.key as usize] = Some(class);
+                    self.step(&mut eval, class, 0);
+                    eval.bound[anchor.key as usize] = None;
+                }
+            }
+        }
+        let (out, scratch) = eval.finish();
+        cache.scratch = scratch;
+        out
+    }
+
+    /// The operator bucket of each row atom, with repeats.
+    pub(crate) fn row_ops(&self) -> impl Iterator<Item = u64> + '_ {
+        self.query
+            .atoms
+            .iter()
+            .zip(&self.ops)
+            .filter(|(atom, _)| matches!(atom, Atom::Node { .. }))
+            .map(|(_, &op)| op)
+    }
+
+    /// The columns this plan reads a fact of, as a mask of
+    /// [`crate::engine::column_bit`]. A match can be new without any of its
+    /// rows being new when a fact rises in one of them, on a class whose rows
+    /// stand still.
+    pub(crate) fn fact_columns(&self) -> u8 {
+        self.query.atoms.iter().fold(0, |mask, atom| {
+            let column = match atom {
+                Atom::Literal { .. } => ColumnId::Const,
+                Atom::Fact { column, .. } => *column,
+                Atom::Object { .. } => ColumnId::Object,
+                _ => return mask,
+            };
+            mask | 1 << crate::engine::column_bit(column)
+        })
+    }
+
+    fn compile_from(
+        query: Query<L>,
+        bound: Vec<bool>,
+        known: Vec<bool>,
+        skip: Option<usize>,
+    ) -> Option<Self> {
+        let (steps, height, nots) = Self::order(&query, bound, known, skip)?;
+        Some(Self {
+            ops: query
+                .atoms
+                .iter()
+                .map(|atom| match atom {
+                    Atom::Node { template, .. } => template.op_key(),
+                    Atom::Holds { op, .. } => *op,
+                    _ => 0,
+                })
+                .collect(),
+            query,
+            steps,
+            height,
+            nots,
+            anchors: std::sync::OnceLock::new(),
+            fact_anchors: std::sync::OnceLock::new(),
+            id: 0,
+        })
+    }
+
+    /// Order what `bound` and `known` do not already give: the steps, the
+    /// template levels below the root, and the negated conjunctions' plans.
+    /// `None` when an atom is reachable neither down from a bound class nor
+    /// sideways from a bound operand, or a guard reads a scalar nothing binds.
+    ///
+    /// `skip` says the order does not start at the root, and names the atom the
+    /// caller has matched already when there is one.
+    fn order(
+        query: &Query<L>,
+        mut bound: Vec<bool>,
+        mut known: Vec<bool>,
+        skip: Option<usize>,
+    ) -> Option<Ordered<L>> {
         let mut steps = Vec::with_capacity(query.atoms.len() + query.guards.len());
         let mut taken = vec![false; query.atoms.len()];
+        if let Some(taken) = skip.and_then(|atom| taken.get_mut(atom)) {
+            *taken = true;
+        }
         let mut checked = vec![false; query.guards.len()];
         let mut nots: Vec<Plan<L>> = Vec::new();
         let mut placed = vec![false; query.nots.len()];
         let mut depth = vec![0usize; query.vars as usize];
         let mut height = 0usize;
         loop {
+            // A host call that binds nothing may be an assertion about a whole
+            // match rather than a filter, and a rule's author sees to it that
+            // every filter runs first when the match is built from the root. An
+            // order that starts elsewhere keeps that promise by running such a
+            // call only once every atom is matched.
+            let all_taken = taken.iter().all(|&t| t);
             let guard = (0..query.guards.len()).find(|&i| {
+                let held_back = skip.is_some()
+                    && !all_taken
+                    && matches!(&query.guards[i], Guard::Extern { out, .. } if out.is_empty());
                 !checked[i]
+                    && !held_back
                     && query.guards[i].reads().iter().all(|&s| known[s as usize])
                     && query.guards[i].vars().iter().all(|&v| bound[v as usize])
             });
@@ -390,7 +799,7 @@ impl<L: Label> Plan<L> {
                     guards: query.nots[i].guards.clone(),
                     nots: Vec::new(),
                 };
-                Plan::compile_from(nested, bound.clone(), known.clone()).map(|plan| (i, plan))
+                Plan::compile_from(nested, bound.clone(), known.clone(), None).map(|plan| (i, plan))
             });
             if let Some((index, plan)) = not {
                 placed[index] = true;
@@ -443,12 +852,7 @@ impl<L: Label> Plan<L> {
                 known[slot as usize] = true;
             }
         }
-        (checked.iter().all(|&c| c) && placed.iter().all(|&p| p)).then_some(Self {
-            query,
-            steps,
-            height,
-            nots,
-        })
+        (checked.iter().all(|&c| c) && placed.iter().all(|&p| p)).then_some((steps, height, nots))
     }
 
     pub fn query(&self) -> &Query<L> {
@@ -522,96 +926,410 @@ impl<L: Label> Plan<L> {
         only_new: bool,
         externs: &dyn Externs<L>,
     ) -> Vec<Match> {
-        let mut eval = Eval {
-            eg,
-            externs,
-            allowed,
-            only_new: only_new
-                && self
-                    .query
-                    .atoms
-                    .iter()
-                    .any(|atom| matches!(atom, Atom::Node { .. })),
-            counting: false,
-            hits: 0,
-            bound: SmallVec::from_elem(None, self.query.vars as usize),
-            scalars: SmallVec::from_elem(0, self.query.scalars as usize),
-            trail: SmallVec::new(),
-            fresh: 0,
-            out: Vec::new(),
-        };
-        let mut seen = crate::label::FxHashMap::<ClassId, ()>::default();
+        // A plan none of whose rows the graph can hold is settled without
+        // touching a cache.
+        if self.row_ops().any(|op| eg.labels_with_op(op).is_empty()) {
+            return Vec::new();
+        }
+        let mut cache = eg.take_cache(self.id);
+        let fresh = (only_new, 0);
+        let found = self.search_roots(eg, roots, Some(allowed), fresh, externs, &mut cache.plan);
+        eg.put_cache(self.id, cache);
+        found.into_vec()
+    }
+
+    /// [`Self::search`], with every row atom below `fresh.1` held to rows the
+    /// previous round did not write; `fresh.0` is `only_new`.
+    pub(crate) fn search_roots(
+        &self,
+        eg: &Engine<L>,
+        roots: impl IntoIterator<Item = ClassId>,
+        allowed: Option<&dyn Fn(Var, ClassId) -> bool>,
+        fresh: (bool, usize),
+        externs: &dyn Externs<L>,
+        cache: &mut PlanCache,
+    ) -> Matches {
+        self.refresh(eg, cache);
+        if cache.dead {
+            return Matches::default();
+        }
+        // Each root canonical and once, in the order first given.
+        let mut roots: SmallVec<[ClassId; 16]> =
+            roots.into_iter().map(|root| eg.find(root)).collect();
+        let mut marks = eg.marks();
+        roots.retain(|root| marks.insert(root.index()));
+        drop(marks);
+        let scan = roots.len() <= SCAN_LIMIT;
+        if !scan {
+            self.prepare(eg, cache);
+        }
+        let groups = eg.groups();
+        let scratch = std::mem::take(&mut cache.scratch);
+        let mut eval = self.eval(eg, &groups, &cache.tables, allowed, externs, scratch);
+        eval.scan = scan;
+        eval.old_below = fresh.1;
+        eval.only_new = fresh.0
+            && self
+                .query
+                .atoms
+                .iter()
+                .any(|atom| matches!(atom, Atom::Node { .. }));
         for root in roots {
-            let root = eg.find(root);
-            if seen.insert(root, ()).is_some() || !allowed(self.query.root, root) {
+            if allowed.is_some_and(|allowed| !allowed(self.query.root, root)) {
                 continue;
             }
             eval.bound[self.query.root as usize] = Some(root);
             self.step(&mut eval, root, 0);
             eval.bound[self.query.root as usize] = None;
         }
-        eval.out
+        let (out, scratch) = eval.finish();
+        cache.scratch = scratch;
+        out
+    }
+
+    /// Every match, found by scanning the root atom's tables rather than by
+    /// walking classes. For an [`Self::anchorable`] plan.
+    pub(crate) fn search_all(
+        &self,
+        eg: &Engine<L>,
+        externs: &dyn Externs<L>,
+        cache: &mut PlanCache,
+    ) -> Matches {
+        self.refresh(eg, cache);
+        if cache.dead {
+            return Matches::default();
+        }
+        let root = self
+            .anchors()
+            .iter()
+            .position(|anchor| self.query.atoms[anchor.atom].class() == self.query.root)
+            .expect("an anchorable plan has a row at its root");
+        // The scan reads the root's rows by label; the rest are looked up.
+        for (slot, _) in &cache.tables[0][self.anchors()[root].atom] {
+            eg.prepare_group(*slot, 0);
+        }
+        Self::group(eg, &cache.tables[0], &self.anchors()[root].steps[1..]);
+        let groups = eg.groups();
+        let scratch = std::mem::take(&mut cache.scratch);
+        let mut eval = self.eval(eg, &groups, &cache.tables, None, externs, scratch);
+        self.scan(&mut eval, root, false);
+        let (out, scratch) = eval.finish();
+        cache.scratch = scratch;
+        out
+    }
+
+    /// Every match with a row the previous round wrote, each once, found from
+    /// those rows. For an [`Self::anchorable`] plan.
+    ///
+    /// A match with several new rows is found from the first of them in atom
+    /// order: the search from a later one holds the earlier atoms to old rows.
+    /// A match made new by a fact alone is not found here; see
+    /// [`Self::search_facts`].
+    pub(crate) fn search_new(
+        &self,
+        eg: &Engine<L>,
+        externs: &dyn Externs<L>,
+        cache: &mut PlanCache,
+    ) -> Matches {
+        self.refresh(eg, cache);
+        if cache.dead {
+            return Matches::default();
+        }
+        // Most rounds give most rules nothing to start from, so that is settled
+        // before any grouping is built.
+        for anchor in self.anchors() {
+            for (slot, _) in &cache.tables[0][anchor.atom] {
+                eg.prepare_new_rows(*slot);
+            }
+        }
+        let mut starts = 0;
+        let live: SmallVec<[usize; 4]> = {
+            let groups = eg.groups();
+            (0..self.anchors().len())
+                .filter(|&anchor| {
+                    let rows: usize = cache.tables[0][self.anchors()[anchor].atom]
+                        .iter()
+                        .flat_map(|(slot, wanted)| {
+                            wanted
+                                .iter()
+                                .map(|&label| groups.new_rows(*slot, label).len())
+                        })
+                        .sum();
+                    starts += rows;
+                    rows != 0
+                })
+                .collect()
+        };
+        if live.is_empty() {
+            return Matches::default();
+        }
+        let scan = starts <= SCAN_LIMIT;
+        if !scan {
+            for &anchor in &live {
+                Self::group(eg, &cache.tables[0], &self.anchors()[anchor].steps[1..]);
+            }
+        }
+        let groups = eg.groups();
+        let scratch = std::mem::take(&mut cache.scratch);
+        let mut eval = self.eval(eg, &groups, &cache.tables, None, externs, scratch);
+        eval.scan = scan;
+        for anchor in live {
+            self.scan(&mut eval, anchor, true);
+        }
+        let (out, scratch) = eval.finish();
+        cache.scratch = scratch;
+        out
+    }
+
+    /// Every match at `roots` whose rows are all older than the previous round
+    /// and one of whose facts is not: what [`Self::search_new`] leaves out.
+    pub(crate) fn search_facts(
+        &self,
+        eg: &Engine<L>,
+        roots: impl IntoIterator<Item = ClassId>,
+        externs: &dyn Externs<L>,
+        cache: &mut PlanCache,
+    ) -> Matches {
+        self.search_roots(eg, roots, None, (true, usize::MAX), externs, cache)
+    }
+
+    fn eval<'a>(
+        &self,
+        eg: &'a Engine<L>,
+        groups: &'a Groups,
+        labels: &'a [Vec<Candidates>],
+        allowed: Option<&'a dyn Fn(Var, ClassId) -> bool>,
+        externs: &'a dyn Externs<L>,
+        mut scratch: Scratch,
+    ) -> Eval<'a, L> {
+        scratch.bound.clear();
+        scratch.bound.resize(self.query.vars as usize, None);
+        scratch.scalars.clear();
+        scratch.scalars.resize(self.query.scalars as usize, 0);
+        scratch.trail.clear();
+        Eval {
+            eg,
+            groups,
+            labels,
+            plan: 0,
+            anchor: None,
+            fact_anchor: None,
+            facts_old: 0,
+            old_below: 0,
+            externs,
+            allowed,
+            rebuilt: eg.rebuilt(),
+            only_new: false,
+            counting: false,
+            hits: 0,
+            bound: scratch.bound,
+            scalars: scratch.scalars,
+            trail: scratch.trail,
+            scan: false,
+            pool: scratch.pool,
+            fresh: 0,
+            out: Matches::default(),
+        }
+    }
+
+    /// Search from the rows of one anchor's atom: the ones the previous round
+    /// wrote, or all of them.
+    fn scan(&self, eval: &mut Eval<'_, L>, anchor: usize, new: bool) {
+        let atom = self.anchors()[anchor].atom;
+        let Atom::Node {
+            args, class, row, ..
+        } = &self.query.atoms[atom]
+        else {
+            unreachable!("an anchor is a row atom")
+        };
+        let (eg, groups, labels) = (eval.eg, eval.groups, eval.labels);
+        eval.anchor = Some(anchor);
+        eval.old_below = if new { atom } else { 0 };
+        let bind = (*row, Some(*class));
+        for (slot, wanted) in &labels[0][atom] {
+            let Some(table) = eg.slot_table(*slot) else {
+                continue;
+            };
+            for &label in wanted {
+                if new {
+                    for &(_, found) in groups.new_rows(*slot, label) {
+                        self.row(eval, ClassId(0), 0, atom, table, found, args, bind, 2);
+                    }
+                    continue;
+                }
+                for &found in groups.get(*slot, 0).rows(label.0) {
+                    self.row(eval, ClassId(0), 0, atom, table, found, args, bind, 2);
+                }
+            }
+        }
+        eval.anchor = None;
+    }
+
+    /// Build the grouping each step of a search from the root looks rows up
+    /// in.
+    fn prepare(&self, eg: &Engine<L>, cache: &mut PlanCache) {
+        Self::group(eg, &cache.tables[0], &self.steps);
+        for (not, tables) in self.nots.iter().zip(&cache.tables[1..]) {
+            Self::group(eg, tables, &not.steps);
+        }
+    }
+
+    /// Bring `cache` up to the graph's labels: what each atom reads, from
+    /// scratch the first time and from the labels met since after that.
+    fn refresh(&self, eg: &Engine<L>, cache: &mut PlanCache) {
+        if cache.labels == eg.labels_len() && !cache.tables.is_empty() {
+            return;
+        }
+        let since = if cache.tables.is_empty() {
+            None
+        } else {
+            Some(cache.labels)
+        };
+        cache.labels = eg.labels_len();
+        cache.tables.resize_with(1 + self.nots.len(), Vec::new);
+        let plans = std::iter::once(self).chain(&self.nots);
+        for (plan, tables) in plans.zip(&mut cache.tables) {
+            tables.resize_with(plan.query.atoms.len(), Candidates::new);
+            for ((atom, &op), reads) in plan.query.atoms.iter().zip(&plan.ops).zip(tables) {
+                match atom {
+                    Atom::Node { template, args, .. } => {
+                        eg.labels_matching(op, Some((template, args.len())), since, reads);
+                    }
+                    Atom::Holds { .. } => eg.labels_matching(op, None, since, reads),
+                    _ => {}
+                }
+            }
+        }
+        cache.dead = self
+            .query
+            .atoms
+            .iter()
+            .zip(&cache.tables[0])
+            .any(|(atom, reads)| {
+                matches!(atom, Atom::Node { .. } | Atom::Holds { .. }) && reads.is_empty()
+            });
+    }
+
+    /// Build the grouping each of `steps` looks rows up in: by class for an
+    /// atom walked down to, by operand for one reached sideways.
+    fn group(eg: &Engine<L>, labels: &[Candidates], steps: &[Step]) {
+        for step in steps {
+            let (atom, operand) = match *step {
+                Step::Atom(atom) => (atom, None),
+                Step::Parents { atom, slot } => (atom, Some(slot as usize)),
+                _ => continue,
+            };
+            for (slot, _) in &labels[atom] {
+                let Some(table) = eg.slot_table(*slot) else {
+                    continue;
+                };
+                match operand {
+                    None => eg.prepare_group(*slot, table.arity()),
+                    Some(operand) => {
+                        eg.prepare_group(*slot, 1 + operand);
+                        if table.arity() == 3 {
+                            eg.prepare_group(*slot, 2 - operand);
+                        }
+                    }
+                }
+            }
+        }
     }
 
     fn step(&self, eval: &mut Eval<'_, L>, root: ClassId, index: usize) {
-        let Some(&step) = self.steps.get(index) else {
+        let steps = match (eval.anchor, eval.fact_anchor) {
+            (Some(anchor), _) => &self.anchors()[anchor].steps,
+            (None, Some(anchor)) => &self.fact_anchors()[anchor].steps,
+            (None, None) => &self.steps,
+        };
+        let Some(&step) = steps.get(index) else {
             // A negated conjunction asks only whether a solution exists.
             if eval.counting {
                 eval.hits += 1;
                 return;
             }
             if !eval.only_new || eval.fresh > 0 {
-                eval.out.push(Match {
-                    root,
-                    bindings: eval.bound.clone(),
-                    scalars: eval.scalars.clone(),
-                });
+                let root = eval.bound[self.query.root as usize].unwrap_or(root);
+                eval.out.push(root, &eval.bound, &eval.scalars);
             }
             return;
         };
         if eval.counting && eval.hits > 0 {
             return;
         }
-        let atom = match step {
+        let index_of_atom = match step {
             Step::Parents { atom, slot } => {
                 let Atom::Node {
-                    template,
-                    args,
-                    class,
-                    row,
+                    args, class, row, ..
                 } = &self.query.atoms[atom]
                 else {
                     unreachable!("only a row atom is reached sideways")
                 };
                 let child = eval.bound[args[slot as usize] as usize].expect("bound operand");
-                self.parents(eval, root, index, template, args, *class, *row, child);
+                self.parents(
+                    eval,
+                    root,
+                    index,
+                    atom,
+                    args,
+                    *class,
+                    *row,
+                    slot as usize,
+                    child,
+                );
                 return;
             }
             Step::Not(not) => {
                 let outer = std::mem::replace(&mut eval.counting, true);
                 let hits = std::mem::replace(&mut eval.hits, 0);
+                let plan = std::mem::replace(&mut eval.plan, 1 + not);
                 let mark = eval.trail.len();
                 self.nots[not].step(eval, root, 0);
                 eval.unbind(mark);
                 let blocked = eval.hits > 0;
                 eval.counting = outer;
                 eval.hits = hits;
+                eval.plan = plan;
                 if !blocked {
                     self.step(eval, root, index + 1);
                 }
                 return;
             }
             Step::Guard(guard) => {
-                // A guard writes at most one scalar and is placed once, so the
-                // branch that fails it cannot have clobbered a live value.
-                if eval.holds(&self.query.guards[guard]) {
+                // A rule may write a guard's result into the slot an earlier
+                // scalar lives in. From the root that is harmless: every match
+                // recomputes the earlier one first. An order that starts
+                // elsewhere can put a loop over rows between the two, so what
+                // the guard overwrote is put back for the next row.
+                let guard = &self.query.guards[guard];
+                let written = guard.writes();
+                let before: SmallVec<[u64; 2]> = written
+                    .iter()
+                    .map(|&slot| eval.scalars[slot as usize])
+                    .collect();
+                if eval.holds(guard) {
                     self.step(eval, root, index + 1);
+                }
+                for (&slot, value) in written.iter().zip(before) {
+                    eval.scalars[slot as usize] = value;
                 }
                 return;
             }
-            Step::Atom(atom) => &self.query.atoms[atom],
+            Step::Atom(atom) => atom,
         };
+        let atom = &self.query.atoms[index_of_atom];
         let class = eval.bound[atom.class() as usize].expect("class bound by an earlier step");
+        if eval.facts_old >> index_of_atom.min(63) & 1 == 1 {
+            let column = match atom {
+                Atom::Literal { .. } => Some(ColumnId::Const),
+                Atom::Fact { column, .. } => Some(*column),
+                Atom::Object { .. } => Some(ColumnId::Object),
+                _ => None,
+            };
+            if column.is_some_and(|column| eval.eg.fact_is_new(column, class)) {
+                return;
+            }
+        }
         match atom {
             Atom::Literal { value, .. } => self.literal(eval, root, index, value, class),
             Atom::Fact { column, value, .. } => {
@@ -632,104 +1350,147 @@ impl<L: Label> Plan<L> {
                     self.step(eval, root, index + 1);
                 }
             }
-            Atom::Holds { op, .. } => {
-                let eg = eval.eg;
-                let Some(row) = eg.rows(class).find(|&row| eg.node(row).op_key() == *op) else {
+            Atom::Holds { .. } => {
+                let (eg, groups, labels) = (eval.eg, eval.groups, eval.labels);
+                let mut held = None;
+                for (slot, wanted) in &labels[eval.plan][index_of_atom] {
+                    let Some(table) = eg.slot_table(*slot) else {
+                        continue;
+                    };
+                    lookup!(eval, groups, *slot, table.arity(), table, class.0, |row| {
+                        if held.is_none() && reads(wanted, table.column(0)[row as usize]) {
+                            held = Some(table.stamps()[row as usize] + 1 == eg.epoch());
+                        }
+                    });
+                }
+                let Some(fresh) = held.map(usize::from) else {
                     return;
                 };
-                let fresh = usize::from(eg.row_is_new(row));
                 eval.fresh += fresh;
                 self.step(eval, root, index + 1);
                 eval.fresh -= fresh;
             }
-            Atom::Node {
-                template,
-                args,
-                row,
-                ..
-            } => self.node(eval, root, index, template, args, *row, class),
+            Atom::Node { args, row, .. } => {
+                self.node(eval, root, index, index_of_atom, args, *row, class)
+            }
         }
     }
 
+    /// Every row of `class` the atom reads.
     #[allow(clippy::too_many_arguments)]
     fn node(
         &self,
         eval: &mut Eval<'_, L>,
         root: ClassId,
         index: usize,
-        template: &L,
+        atom: usize,
         args: &[Var],
         bind_row: Option<Scalar>,
         class: ClassId,
     ) {
-        let eg = eval.eg;
-        for row in eg.rows(class) {
-            let children = eg.children(row);
-            if children.len() != args.len() || !template.matches_template(eg.node(row)) {
+        let (eg, groups, labels) = (eval.eg, eval.groups, eval.labels);
+        for (slot, wanted) in &labels[eval.plan][atom] {
+            let Some(table) = eg.slot_table(*slot) else {
                 continue;
-            }
-            if let Some(slot) = bind_row {
-                eval.scalars[slot as usize] = row.0 as u64;
-            }
-            // A commutative binary operator matches in both operand orders.
-            let orders = if children.len() == 2 && eg.node(row).commutative() {
-                2
-            } else {
-                1
             };
-            let fresh = usize::from(eg.row_is_new(row));
-            eval.fresh += fresh;
-            for order in 0..orders {
-                let mark = eval.trail.len();
-                if eval.bind(args, children, order) {
-                    self.step(eval, root, index + 1);
+            lookup!(eval, groups, *slot, table.arity(), table, class.0, |row| {
+                if reads(wanted, table.column(0)[row as usize]) {
+                    self.row(
+                        eval,
+                        root,
+                        index,
+                        atom,
+                        table,
+                        row,
+                        args,
+                        (bind_row, None),
+                        2,
+                    );
                 }
-                eval.unbind(mark);
-            }
-            eval.fresh -= fresh;
+            });
         }
     }
 
-    /// Reach a row through a bound operand's back-edges. Everything already
-    /// bound is checked against the row; the rest, including the row's own
-    /// class, is bound from it.
+    /// Try one row of an atom's table. `bind` names the scalar that takes the
+    /// row and, when the atom was not reached through its class, the variable
+    /// that takes the class. `orders` picks the operand orders to try: zero or
+    /// one for that order alone, two for both where the row's operator
+    /// commutes.
+    #[allow(clippy::too_many_arguments)]
+    #[inline(always)]
+    fn row(
+        &self,
+        eval: &mut Eval<'_, L>,
+        root: ClassId,
+        index: usize,
+        atom: usize,
+        table: &Table,
+        row: u32,
+        args: &[Var],
+        bind: (Option<Scalar>, Option<Var>),
+        orders: usize,
+    ) {
+        let fresh = usize::from(table.stamps()[row as usize] + 1 == eval.eg.epoch());
+        if fresh == 1 && eval.plan == 0 && atom < eval.old_below {
+            return;
+        }
+        if let Some(slot) = bind.0 {
+            eval.scalars[slot as usize] = table.tags()[row as usize] as u64;
+        }
+        let orders = match orders {
+            // A commutative binary operator matches in both operand orders.
+            2 if eval.eg.commutes(LabelId(table.column(0)[row as usize])) => 0..2,
+            2 => 0..1,
+            order => order..order + 1,
+        };
+        eval.fresh += fresh;
+        for order in orders {
+            let mark = eval.trail.len();
+            let class = ClassId(table.values()[row as usize]);
+            if bind.1.is_none_or(|var| eval.bind_one(var, class))
+                && eval.bind_row(args, table, row, order)
+            {
+                self.step(eval, root, index + 1);
+            }
+            eval.unbind(mark);
+        }
+        eval.fresh -= fresh;
+    }
+
+    /// Reach a row through a bound operand: the rows the atom reads that hold
+    /// `child` at `slot`. Everything already bound is checked against the row;
+    /// the rest, including the row's own class, is bound from it.
     #[allow(clippy::too_many_arguments)]
     fn parents(
         &self,
         eval: &mut Eval<'_, L>,
         root: ClassId,
         index: usize,
-        template: &L,
+        atom: usize,
         args: &[Var],
         class: Var,
         bind_row: Option<Scalar>,
+        slot: usize,
         child: ClassId,
     ) {
-        let eg = eval.eg;
-        for row in eg.parents(child) {
-            let children = eg.children(row);
-            if children.len() != args.len() || !template.matches_template(eg.node(row)) {
+        let (eg, groups, labels) = (eval.eg, eval.groups, eval.labels);
+        for (table_slot, wanted) in &labels[eval.plan][atom] {
+            let Some(table) = eg.slot_table(*table_slot) else {
                 continue;
-            }
-            if let Some(slot) = bind_row {
-                eval.scalars[slot as usize] = row.0 as u64;
-            }
-            let orders = if children.len() == 2 && eg.node(row).commutative() {
-                2
-            } else {
-                1
             };
-            let fresh = usize::from(eg.row_is_new(row));
-            eval.fresh += fresh;
+            // In the swapped order of a commutative operator the bound operand
+            // sits in the other column.
+            let orders = if args.len() == 2 { 2 } else { 1 };
             for order in 0..orders {
-                let mark = eval.trail.len();
-                let owner = eg.find(eg.owner(row));
-                if eval.bind(&[class], &[owner], 0) && eval.bind(args, children, order) {
-                    self.step(eval, root, index + 1);
-                }
-                eval.unbind(mark);
+                let column = 1 + if order == 1 { 1 - slot } else { slot };
+                lookup!(eval, groups, *table_slot, column, table, child.0, |row| {
+                    let label = table.column(0)[row as usize];
+                    if reads(wanted, label) && (order == 0 || eg.commutes(LabelId(label))) {
+                        let bind = (bind_row, Some(class));
+                        self.row(eval, root, index, atom, table, row, args, bind, order);
+                    }
+                });
             }
-            eval.fresh -= fresh;
         }
     }
 
@@ -797,49 +1558,116 @@ impl<L: Label> Plan<L> {
     }
 }
 
+/// Whether `label` is one of `wanted`, which is ascending.
+fn reads(wanted: &[LabelId], label: u32) -> bool {
+    match wanted {
+        [only] => only.0 == label,
+        _ => wanted.binary_search(&LabelId(label)).is_ok(),
+    }
+}
+
 /// State one [`Plan::search`] threads through the loop nest.
 struct Eval<'a, L: Label> {
     eg: &'a Engine<L>,
+    groups: &'a Groups,
+    /// Per plan and atom, the tables the atom reads. Plan zero is the query;
+    /// the rest are its negated sub-conjunctions.
+    labels: &'a [Vec<Candidates>],
+    /// The plan being stepped.
+    plan: usize,
+    /// The anchor whose order is being stepped, when the search started at a
+    /// row atom rather than at the root.
+    anchor: Option<usize>,
+    /// The fact anchor whose order is being stepped, when the search started
+    /// at a risen fact.
+    fact_anchor: Option<usize>,
+    /// The fact atoms, as a mask over atom indices, that match only facts older
+    /// than the previous round.
+    facts_old: u64,
+    /// Row atoms below this index match only rows older than the previous
+    /// round.
+    old_below: usize,
     externs: &'a dyn Externs<L>,
-    allowed: &'a dyn Fn(Var, ClassId) -> bool,
+    /// `None` allows every binding.
+    allowed: Option<&'a dyn Fn(Var, ClassId) -> bool>,
+    /// Whether the tables are as a rebuild left them.
+    rebuilt: bool,
     only_new: bool,
     /// Inside a negated conjunction: count solutions and stop at the first,
     /// rather than emit them.
     counting: bool,
     hits: usize,
-    bound: SmallVec<[Option<ClassId>; 8]>,
-    scalars: SmallVec<[u64; 8]>,
+    bound: Vec<Option<ClassId>>,
+    scalars: Vec<u64>,
     /// Variables this branch bound, to undo on the way out.
-    trail: SmallVec<[Var; 8]>,
+    trail: Vec<Var>,
+    /// Whether rows are looked up by scanning, with no grouping built.
+    scan: bool,
+    /// Vectors a scan's hits go in, reused.
+    pool: Vec<Vec<u32>>,
     /// How many rows and facts of the partial match the previous round touched.
     fresh: usize,
-    out: Vec<Match>,
+    out: Matches,
 }
 
 impl<'a, L: Label> Eval<'a, L> {
+    /// The matches found, and the working arrays for the next search.
+    fn finish(self) -> (Matches, Scratch) {
+        let scratch = Scratch {
+            bound: self.bound,
+            scalars: self.scalars,
+            trail: self.trail,
+            pool: self.pool,
+        };
+        (self.out, scratch)
+    }
+
+    /// The rows of `column` holding `cell`, in a vector from the pool.
+    fn scan_rows(&mut self, column: &[u32], cell: u32) -> Vec<u32> {
+        let mut rows = self.pool.pop().unwrap_or_default();
+        rows.clear();
+        tir_adt::simd::select_eq(column, cell, &mut rows);
+        rows
+    }
+
     /// Bind `args` to a row's children, or report the row inconsistent with what
     /// is already bound. Whatever it bound before failing is on the trail.
     fn bind(&mut self, args: &[Var], children: &[ClassId], order: usize) -> bool {
-        for (slot, &var) in args.iter().enumerate() {
+        args.iter().enumerate().all(|(slot, &var)| {
             let child = children[if order == 1 { 1 - slot } else { slot }];
-            let child = self.eg.find(child);
-            match self.bound[var as usize] {
-                // A variable shared by two atoms must bind the same class.
-                Some(prior) => {
-                    if prior != child {
-                        return false;
-                    }
+            self.bind_one(var, self.eg.find(child))
+        })
+    }
+
+    /// Bind `args` to the cells of a table row, as [`Self::bind`] does for a
+    /// slice of children.
+    fn bind_row(&mut self, args: &[Var], table: &Table, row: u32, order: usize) -> bool {
+        args.iter().enumerate().all(|(slot, &var)| {
+            let column = 1 + if order == 1 { 1 - slot } else { slot };
+            let cell = ClassId(table.column(column)[row as usize]);
+            // A rebuilt table names every class by its representative.
+            let cell = if self.rebuilt {
+                cell
+            } else {
+                self.eg.find(cell)
+            };
+            self.bind_one(var, cell)
+        })
+    }
+
+    fn bind_one(&mut self, var: Var, class: ClassId) -> bool {
+        match self.bound[var as usize] {
+            // A variable shared by two atoms must bind the same class.
+            Some(prior) => prior == class,
+            None => {
+                if self.allowed.is_some_and(|allowed| !allowed(var, class)) {
+                    return false;
                 }
-                None => {
-                    if !(self.allowed)(var, child) {
-                        return false;
-                    }
-                    self.bound[var as usize] = Some(child);
-                    self.trail.push(var);
-                }
+                self.bound[var as usize] = Some(class);
+                self.trail.push(var);
+                true
             }
         }
-        true
     }
 
     /// The e-node a scalar names.

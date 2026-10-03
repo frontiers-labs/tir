@@ -1,12 +1,14 @@
-//! The relational engine behind TIR's e-graph: e-nodes as rows of columnar
-//! relations, congruence as a bulk group-by, e-matching as a join.
+//! The relational engine behind TIR's e-graph, in two layers.
 //!
-//! An e-graph is a database. Each operator family is a relation whose columns
-//! are the child classes plus the class the row belongs to, and congruence is
-//! the functional dependency `(label, children) -> class`. Rewrites are
-//! conjunctive queries; saturation is the least fixpoint of the rule set. The
-//! layout follows: every hot loop is a loop over `Vec<u32>` columns, not a walk
-//! over per-node allocations.
+//! [`store`] is the generic one: tables of `u32` cells whose key columns
+//! determine a value column, with the whole-column loops done by
+//! [`tir_adt::simd`]. It holds any graph and knows nothing about classes.
+//!
+//! [`Engine`] is the e-graph on top of it. Each label is a table from child
+//! classes to the class the node belongs to, so hash-consing is a key lookup,
+//! congruence is the table's functional dependency, and a rewrite's left-hand
+//! side is a join. Rewrites are conjunctive queries; saturation is the least
+//! fixpoint of the rule set.
 
 mod column;
 mod csr;
@@ -16,6 +18,7 @@ mod label;
 mod query;
 mod rule;
 mod saturate;
+pub mod store;
 mod telemetry;
 mod unionfind;
 

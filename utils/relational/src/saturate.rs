@@ -6,8 +6,118 @@ use std::collections::HashMap;
 
 use tir_adt::FxBuildHasher;
 
+use crate::query::{Matches, PlanCache};
 use crate::telemetry::{RoundStats, Timer, apply_rule, register_rules};
-use crate::{ClassId, Engine, Externs, Label, Match, Plan, Rule, trace_enabled};
+use crate::{ClassId, Engine, Externs, Label, LabelId, Match, Plan, Rule, trace_enabled};
+
+/// Which rules a round has to visit, by what the round before wrote.
+pub(crate) struct RuleIndex {
+    /// Identifies the rule set the index was built for: its rules' plan ids,
+    /// folded.
+    rules: u64,
+    /// Operator bucket -> the anchorable rules with a row atom in it.
+    by_op: HashMap<u64, Vec<u32>, FxBuildHasher>,
+    /// The anchorable rules a risen fact can make match, with the columns they
+    /// read.
+    factual: Vec<(u32, u8)>,
+    /// The rules that read no row, with the columns they read: a fact alone
+    /// makes them match, a class minted with it included.
+    rowless: Vec<(u32, u8)>,
+    /// The rules the change log cannot narrow: searched every round.
+    always: Vec<u32>,
+    /// Every rule of the saturation proper, for the round that searches all.
+    all: Vec<usize>,
+}
+
+impl RuleIndex {
+    /// The plan ids of `rules`, folded into one word. A plan id is never
+    /// reused, so two rule sets that agree here are the same plans in the
+    /// same order.
+    fn fingerprint<L: Label>(rules: &[Rule<L>]) -> u64 {
+        rules.iter().fold(rules.len() as u64, |hash, rule| {
+            let id = rule.plan.id() ^ u64::from(rule.post_saturation);
+            (hash.rotate_left(5) ^ id).wrapping_mul(0x9e37_79b9_7f4a_7c15)
+        })
+    }
+
+    fn new<L: Label>(rules: &[Rule<L>]) -> Self {
+        let mut index = Self {
+            rules: Self::fingerprint(rules),
+            by_op: HashMap::default(),
+            factual: Vec::new(),
+            rowless: Vec::new(),
+            always: Vec::new(),
+            all: Vec::new(),
+        };
+        for (at, rule) in rules.iter().enumerate() {
+            if rule.post_saturation {
+                continue;
+            }
+            index.all.push(at);
+            if !rule.plan.anchorable() {
+                // A plan of facts alone matches anew only where a fact rose.
+                if rule.plan.rowless() && rule.plan.fact_anchorable() {
+                    index.rowless.push((at as u32, rule.plan.fact_columns()));
+                } else {
+                    index.always.push(at as u32);
+                }
+                continue;
+            }
+            for op in rule.plan.row_ops() {
+                let rules = index.by_op.entry(op).or_default();
+                if rules.last() != Some(&(at as u32)) {
+                    rules.push(at as u32);
+                }
+            }
+            let columns = rule.plan.fact_columns();
+            if columns != 0 {
+                index.factual.push((at as u32, columns));
+            }
+        }
+        index
+    }
+
+    /// The rules this round visits, ascending, into `visit`.
+    fn round<L: Label>(&self, eg: &Engine<L>, narrowed: bool, visit: &mut Vec<usize>) {
+        visit.clear();
+        if !narrowed {
+            visit.extend_from_slice(&self.all);
+            return;
+        }
+        for op in eg.new_ops() {
+            if let Some(rules) = self.by_op.get(&op) {
+                visit.extend(rules.iter().map(|&rule| rule as usize));
+            }
+        }
+        let rose = eg.facts_rose(false);
+        if rose != 0 {
+            let reading = self
+                .factual
+                .iter()
+                .filter(|(_, columns)| columns & rose != 0);
+            visit.extend(reading.map(|&(rule, _)| rule as usize));
+        }
+        let rose = rose | eg.facts_rose(true);
+        if rose != 0 {
+            let reading = self
+                .rowless
+                .iter()
+                .filter(|(_, columns)| columns & rose != 0);
+            visit.extend(reading.map(|&(rule, _)| rule as usize));
+        }
+        visit.extend(self.always.iter().map(|&rule| rule as usize));
+        visit.sort_unstable();
+        visit.dedup();
+    }
+}
+
+/// What an engine keeps for one rule between searches and saturations.
+#[derive(Default)]
+pub(crate) struct RuleCache {
+    pub(crate) plan: PlanCache,
+    /// The label each insert of the head builds, once it has been interned.
+    heads: Vec<Option<LabelId>>,
+}
 
 /// Δ_h grouped by operator: for each, the classes holding it paired with the row
 /// each one enters that operator's bucket at, which is what orders the group.
@@ -110,6 +220,19 @@ pub fn round_roots<L: Label>(eg: &Engine<L>, plan: &Plan<L>, delta: &mut Delta) 
 }
 
 impl<L: Label> Engine<L> {
+    /// The index of `rules`, built once per rule set the engine saturates with.
+    fn rule_index(&mut self, rules: &[Rule<L>]) -> std::sync::Arc<RuleIndex> {
+        let wanted = RuleIndex::fingerprint(rules);
+        match &self.rule_index {
+            Some(index) if index.rules == wanted => index.clone(),
+            _ => {
+                let index = std::sync::Arc::new(RuleIndex::new(rules));
+                self.rule_index = Some(index.clone());
+                index
+            }
+        }
+    }
+
     /// Saturate in place with `rules`, and the host functions their guards call.
     /// Each iteration searches every rule against one snapshot, then applies and
     /// rebuilds — a node born this iteration is visible only to the next. Stops
@@ -138,6 +261,9 @@ impl<L: Label> Engine<L> {
         let mut log = self.take_changed();
         let mut touched = log.clone();
         let mut delta = log.take().map(Delta::new);
+        let mut caches = self.take_caches();
+        let index = self.rule_index(rules);
+        let mut visit: Vec<usize> = Vec::new();
         let mut iters = 0;
         let mut on_a_limit = true;
         loop {
@@ -148,8 +274,53 @@ impl<L: Label> Engine<L> {
             let before = (self.num_classes(), size, self.stats().raises);
 
             let mut stats = RoundStats::start(self, delta.as_ref());
-            let mut found: Vec<(&Rule<L>, Vec<Match>)> = Vec::new();
-            for rule in rules.iter().filter(|rule| !rule.post_saturation) {
+            let mut found: Vec<(usize, Matches)> = Vec::new();
+            // Most rounds write a handful of rows, and most rules read none of
+            // their operators: those rules are not visited at all.
+            index.round(self, delta.is_some(), &mut visit);
+            for &index in &visit {
+                let rule = &rules[index];
+                // A rule one of whose operators the graph does not hold has no
+                // match, and is settled before its cache is looked up.
+                if rule
+                    .plan
+                    .row_ops()
+                    .any(|op| self.labels_with_op(op).is_empty())
+                {
+                    continue;
+                }
+                let cache = &mut caches.entry(rule.plan.id()).or_default().plan;
+                if rule.plan.anchorable() {
+                    // The round's new matches are the ones holding a row the
+                    // round before wrote, found from those rows, plus the ones
+                    // a fact alone made new, found the way the change log names
+                    // them: at the roots near a change, among old rows.
+                    let matches = match delta.as_mut() {
+                        None => rule.plan.search_all(self, externs, cache),
+                        Some(delta) => {
+                            let mut matches = rule.plan.search_new(self, externs, cache);
+                            if rule.plan.fact_columns() & self.facts_rose(false) != 0 {
+                                if rule.plan.fact_anchorable() {
+                                    let risen = rule.plan.search_risen(self, false, externs, cache);
+                                    matches.extend(risen);
+                                } else {
+                                    let roots = round_roots(self, &rule.plan, delta);
+                                    stats.searched(roots.len(), Some(delta));
+                                    let found = rule.plan.search_facts(self, roots, externs, cache);
+                                    matches.extend(found);
+                                }
+                            }
+                            matches
+                        }
+                    };
+                    found.push((index, matches));
+                    continue;
+                }
+                if delta.is_some() && rule.plan.rowless() && rule.plan.fact_anchorable() {
+                    let matches = rule.plan.search_risen(self, true, externs, cache);
+                    found.push((index, matches));
+                    continue;
+                }
                 // Everything a rule reads is an atom or a guard over what an atom
                 // bound, so both narrowings come free of any hand-asserted
                 // licence — for a rule the change log can speak for. It cannot
@@ -164,23 +335,30 @@ impl<L: Label> Engine<L> {
                 if roots.is_empty() {
                     continue;
                 }
-                let matches = rule.plan.search(
-                    self,
-                    roots,
-                    &|_, _| true,
-                    delta.is_some() && bounded,
-                    externs,
-                );
-                found.push((rule, matches));
+                let fresh = (delta.is_some() && bounded, 0);
+                let matches = rule
+                    .plan
+                    .search_roots(self, roots, None, fresh, externs, cache);
+                found.push((index, matches));
             }
-            for (rule, matches) in &found {
-                for m in matches {
-                    if trace_enabled() {
-                        eprintln!("M {} {}", rule.name, self.find(m.root).index());
+            let tracing = trace_enabled();
+            for (index, matches) in found {
+                let rule = &rules[index];
+                let heads = &mut caches.entry(rule.plan.id()).or_default().heads;
+                for at in 0..matches.len() {
+                    let (root, bindings, scalars) = matches.get(at);
+                    if tracing {
+                        eprintln!("M {} {}", rule.name, self.find(root).index());
                     }
                     stats.apply(self, |eg| {
                         apply_rule(&rule.name, eg, |eg| {
-                            eg.apply_head(&rule.head, rule.head_vars, m)
+                            eg.apply_head_cached(
+                                &rule.head,
+                                rule.head_vars,
+                                bindings,
+                                scalars,
+                                heads,
+                            )
                         })
                     });
                 }
@@ -207,6 +385,7 @@ impl<L: Label> Engine<L> {
                 break;
             }
         }
+        self.put_caches(caches);
         if on_a_limit {
             self.mark_all_changed();
             touched = None;

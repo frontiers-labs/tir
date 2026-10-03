@@ -28,6 +28,25 @@ impl Csr {
         Self { offsets, data }
     }
 
+    /// [`Self::build`] for entries that are cheaper to produce by a loop than by
+    /// an iterator: `entries` is run twice, each time handing every
+    /// `(key, value)` to its argument in the same order.
+    pub fn build_with(keys: usize, entries: impl Fn(&mut dyn FnMut(u32, u32))) -> Self {
+        let mut offsets = vec![0u32; keys + 1];
+        entries(&mut |key, _| offsets[key as usize + 1] += 1);
+        for i in 0..keys {
+            offsets[i + 1] += offsets[i];
+        }
+        let mut cursor = offsets.clone();
+        let mut data = vec![0u32; offsets[keys] as usize];
+        entries(&mut |key, value| {
+            let slot = &mut cursor[key as usize];
+            data[*slot as usize] = value;
+            *slot += 1;
+        });
+        Self { offsets, data }
+    }
+
     pub fn get(&self, key: u32) -> &[u32] {
         let key = key as usize;
         if key + 1 >= self.offsets.len() {

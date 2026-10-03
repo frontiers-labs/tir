@@ -170,6 +170,7 @@ fn rule_has_shaped_float(rule: &tir_pdl::Rule) -> bool {
 pub(crate) mod egraph;
 pub mod node;
 pub(crate) mod rewrites;
+pub(crate) mod workload;
 pub use egraph::SemEGraph;
 pub use node::{IrOp, Kind, Prov, SemNode, SemPayload, template_node};
 pub use rewrites::{SaturationLimits, Theory};
