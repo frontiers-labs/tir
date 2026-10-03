@@ -1102,6 +1102,9 @@ impl<L: Label> Plan<L> {
         externs: &'a dyn Externs<L>,
         mut scratch: Scratch,
     ) -> Eval<'a, L> {
+        // A probe looks a representative up in the cells, which name the
+        // absorbed class until a rebuild.
+        debug_assert!(eg.rebuilt(), "search needs a rebuilt graph");
         scratch.bound.clear();
         scratch.bound.resize(self.query.vars as usize, None);
         scratch.scalars.clear();
@@ -1118,7 +1121,6 @@ impl<L: Label> Plan<L> {
             old_below: 0,
             externs,
             allowed,
-            rebuilt: eg.rebuilt(),
             only_new: false,
             counting: false,
             hits: 0,
@@ -1590,8 +1592,6 @@ struct Eval<'a, L: Label> {
     externs: &'a dyn Externs<L>,
     /// `None` allows every binding.
     allowed: Option<&'a dyn Fn(Var, ClassId) -> bool>,
-    /// Whether the tables are as a rebuild left them.
-    rebuilt: bool,
     only_new: bool,
     /// Inside a negated conjunction: count solutions and stop at the first,
     /// rather than emit them.
@@ -1646,11 +1646,6 @@ impl<'a, L: Label> Eval<'a, L> {
             let column = 1 + if order == 1 { 1 - slot } else { slot };
             let cell = ClassId(table.column(column)[row as usize]);
             // A rebuilt table names every class by its representative.
-            let cell = if self.rebuilt {
-                cell
-            } else {
-                self.eg.find(cell)
-            };
             self.bind_one(var, cell)
         })
     }

@@ -360,6 +360,42 @@ mod tests {
         assert_eq!(eg.object_of(p), None);
     }
 
+    /// A caller may union and saturate without a rebuild in between: the first
+    /// round still matches through the class the union absorbed.
+    #[test]
+    fn saturation_matches_through_a_union_nobody_rebuilt_for() {
+        let mut eg = Engine::new();
+        // The older class survives a union, so the `f` row names the absorbed one.
+        let older = eg.add(Term::leaf("older"));
+        let x = eg.add(Term::leaf("x"));
+        let y = eg.add(Term::leaf("y"));
+        let g = eg.add(Term::op("g", &[x]));
+        let f = eg.add(Term::op("f", &[g, y]));
+        eg.rebuild();
+        eg.union(older, g);
+
+        // `f(g(?3), ?2)` proves `f(g(?3), ?2) = ?2`.
+        let atom = |op: &str, children: usize, args: &[u32], class| Atom::Node {
+            template: Term::op(op, &vec![ClassId(0); children]),
+            args: SmallVec::from_slice(args),
+            class,
+            row: None,
+        };
+        let rule = Rule {
+            name: "f-of-g".into(),
+            plan: Plan::compile(Query::tree(
+                4,
+                0,
+                vec![atom("g", 1, &[3], 1), atom("f", 2, &[1, 2], 0)],
+            )),
+            head: vec![HeadOp::Union(0, 2)],
+            head_vars: 0,
+            post_saturation: false,
+        };
+        eg.saturate_rules(&[rule], &NoExterns, 1, usize::MAX);
+        assert!(eg.connected(f, y));
+    }
+
     #[test]
     fn a_head_inserts_and_unions() {
         let mut eg = Engine::new();

@@ -677,7 +677,8 @@ impl<L: Label> Engine<L> {
 
     /// Merge the classes of `a` and `b`, returning the survivor. Congruence
     /// repair is deferred to [`Self::rebuild`], and so is everything a query
-    /// reads: the tables keep naming the absorbed class until then. The merge
+    /// reads: the tables keep naming the absorbed class until then, so a search
+    /// needs a rebuild first. The merge
     /// itself is visible immediately to [`Self::find`] and [`Self::nodes`], so
     /// an applier that unions and then instantiates hash-conses against the
     /// result.

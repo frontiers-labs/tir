@@ -258,6 +258,8 @@ impl<L: Label> Engine<L> {
     ) {
         let timer = Timer::start();
         register_rules(rules);
+        // The first round searches before anything else rebuilds.
+        self.rebuild();
         let mut log = self.take_changed();
         let mut touched = log.clone();
         let mut delta = log.take().map(Delta::new);
