@@ -1388,7 +1388,7 @@ impl<'a> Lowering<'a> {
                 // result: `sub(x, c)` becomes `add(x, neg(c))`, and `neg(c)` is
                 // the negated immediate an `addi` reads. A `keep` node is exempt
                 // by construction — it is an instruction, not a value.
-                if let Some(folded) = self.fold_operands(*kind, &built) {
+                if let Some(folded) = self.fold_operands(axiom, *kind, &built) {
                     let (value, width) = folded;
                     return Some(Built {
                         var: self.literal(value, width, None, head),
@@ -1418,7 +1418,17 @@ impl<'a> Lowering<'a> {
     /// match dies. No axiom is written that way — every foldable node has at
     /// least one operand the graph supplies — and one that were would need the
     /// two readings the assumption gives it.
-    fn fold_operands(&mut self, kind: SymKind, children: &[Built]) -> Option<(u32, u32)> {
+    ///
+    /// The node is built at the register width, so the fold runs there: each
+    /// operand is its own bits read as a register of that width. Folding at an
+    /// operand's width instead made `sext(c, 32)` of an 8-bit `-3` the 8-bit
+    /// constant 253, and made zero the same class at every width.
+    fn fold_operands(
+        &mut self,
+        axiom: &Axiom,
+        kind: SymKind,
+        children: &[Built],
+    ) -> Option<(u32, u32)> {
         if !FOLDABLE.contains(&kind) {
             return None;
         }
@@ -1430,9 +1440,16 @@ impl<'a> Lowering<'a> {
                 None => None,
             })
             .collect::<Option<_>>()?;
+        let register = self.register_width(axiom);
         let operands: SmallVec<[Expr; 4]> = values
             .iter()
-            .flat_map(|&(value, width)| [Expr::Scalar(value), Expr::Scalar(width)])
+            .flat_map(|&(value, width)| {
+                let bits = Expr::And(
+                    Box::new(Expr::Scalar(value)),
+                    Box::new(Expr::Ones(Box::new(Expr::Scalar(width)))),
+                );
+                [bits, Expr::Scalar(register)]
+            })
             .collect();
         let slot = self.fold_slot(kind);
         let (value, width) = (self.slots.scalar(), self.slots.scalar());
