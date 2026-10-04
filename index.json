@@ -76,6 +76,13 @@
    "subject": "feat(relational): run the e-graph on generic tables with SIMD kernels (#531)",
    "time": "2026-10-03T17:26:41.000Z",
    "env_key": "rustc 1.99.0 (b940084d7 2026-09-28); valgrind-3.22.0; ldd (Ubuntu GLIBC 2.39-0ubuntu8.9) 2.39"
+  },
+  {
+   "file": "runs/2026-10-04T11-49-39-000Z-584df0e87da9.json",
+   "commit": "584df0e87da9153bd90c91d81664da84b3b00ecb",
+   "subject": "fix(isel): fold axiom constants at the register width (#533)",
+   "time": "2026-10-04T11:49:39.000Z",
+   "env_key": "rustc 1.99.0 (b940084d7 2026-09-28); valgrind-3.22.0; ldd (Ubuntu GLIBC 2.39-0ubuntu8.9) 2.39"
   }
  ]
 }
