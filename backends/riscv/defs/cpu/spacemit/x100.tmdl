@@ -97,6 +97,7 @@ machine SpacemitX100 ("spacemit-x100") for [RV64I] {
     unit Int1 { count = 1; }
     unit Branch { count = 1; }
     unit LSU { count = 2; }
+    unit Store { count = 1; }
     unit FP0 { count = 1; }
     unit FP1 { count = 1; }
     unit IntDivide { count = 1; }
@@ -121,10 +122,10 @@ machine SpacemitX100 ("spacemit-x100") for [RV64I] {
     bind WriteIDivWord { latency = 14; uop(Int0 & IntDivide<14>); }
     bind WriteFPDivSingle { latency = 15; uop(FP0 & FloatDivide<15>); }
     bind WriteFPDivDouble { latency = 23; uop(FP0 & FloatDivide<23>); }
-    // L1-hit priors. The compute corpus excludes memory instructions.
+    // L1-hit loads sustain two per cycle; stores sustain one per cycle.
     bind WriteLoad { latency = 3; uop(LSU); }
     bind WriteFPLoad { latency = 4; uop(LSU); }
-    bind WriteStore { latency = 1; uop(LSU); }
+    bind WriteStore { latency = 1; uop(LSU & Store); }
 
     // Repeated compressed same-register shift chains distinguish this order
     // and immediate relation; keep both instructions' front-end charges.
