@@ -113,6 +113,7 @@ impl Pass for LowerCirStructsPass {
         if layouts.is_empty() {
             return Ok(());
         }
+        let offset_ty = tir::ptr::offset_type(context, operation.op().id);
 
         for target in &descendants {
             // An earlier rewrite may have erased this descendant; the list was
@@ -128,8 +129,7 @@ impl Pass for LowerCirStructsPass {
             let field = member.field() as usize;
             let offset = layouts[&name].offsets[field];
             let result_type = context.get_value(member.result()).ty();
-            let offset_value =
-                b::constant(context, offset as i64, IntegerType::new(context, 64)).build();
+            let offset_value = b::constant(context, offset as i64, offset_ty).build();
             context.insert_op_before(&target, &offset_value)?;
             let pointer = p::ptradd(
                 context,

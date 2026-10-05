@@ -700,10 +700,13 @@ fn immediate_range_gates_immediate_rules() {
     // op is swept.
     assert_eq!(run_immediate_range(2047), vec!["subi"]);
     assert_eq!(run_immediate_range(-2048), vec!["subi"]);
-    // One past either boundary must not bind the immediate rule: the register
-    // form is selected and the constant stays materialized.
-    assert_eq!(run_immediate_range(2048), vec!["constant", "addi"]);
-    assert_eq!(run_immediate_range(-2049), vec!["constant", "addi"]);
+    // One past either boundary must not bind the immediate rule whole: the
+    // field's extreme and the one left over are two immediates that fit.
+    assert_eq!(run_immediate_range(2048), vec!["subi", "subi"]);
+    assert_eq!(run_immediate_range(-2049), vec!["subi", "subi"]);
+    // Twice the field's reach leaves more than it holds: the register form
+    // is selected and the constant stays materialized.
+    assert_eq!(run_immediate_range(8192), vec!["constant", "addi"]);
 }
 
 fn shift_imm_pattern(kind: SymKind) -> SemGraph {
@@ -983,9 +986,25 @@ module_end
     let source_ops = context.get_region(region).op_ids();
     let source_store = source_ops[1];
     let source_load = source_ops[2];
+    // The offset is an immediate: the address is the slot at offset zero,
+    // which no addition spells.
+    let offset = |rule: Rule| Rule {
+        operand_constraints: vec![(1, OperandConstraint::Immediate)],
+        ..rule
+    };
     let rules = vec![
-        Rule::new("load", load_pattern(), LATENCY_COST_SCALE, emit_load),
-        Rule::new("store", store_pattern(), LATENCY_COST_SCALE, emit_store),
+        offset(Rule::new(
+            "load",
+            load_pattern(),
+            LATENCY_COST_SCALE,
+            emit_load,
+        )),
+        offset(Rule::new(
+            "store",
+            store_pattern(),
+            LATENCY_COST_SCALE,
+            emit_store,
+        )),
     ];
 
     run_pass(&context, &module, InstructionSelectPass::new(rules))

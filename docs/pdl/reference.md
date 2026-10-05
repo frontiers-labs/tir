@@ -30,7 +30,7 @@ hyphens. A binder named `_` is an ordinary name; the special width wildcard is
 the `_` in `int<_>`.
 
 The reserved words are `group`, `rule`, `refinement`, `where`, `requires`,
-`proof`, `phase`, `root`, `keep`, `const`, `int`, `float`, and `shaped_float`.
+`proof`, `phase`, `root`, `const`, `int`, `float`, and `shaped_float`.
 
 Integer literals use decimal, hexadecimal with `0x`, or binary with `0b`.
 `0X` and `0B` prefixes are also accepted. Digits cannot contain separators.
@@ -225,7 +225,7 @@ consumer can represent or match it.
 An operation's result type follows its closing parenthesis:
 
 ```pdl
-rule semantic-add-zero: #add(x: int<W>, 0) : int<W> => x;
+rule semantic-mul-one: #mul(x: int<W>, 1) : int<W> => x;
 ```
 
 The result annotation constrains the operation result, while `x: int<W>`
@@ -236,8 +236,9 @@ lowering limitation on `int<32>` binders.
 
 ### Constant binders
 
-`c: const` binds a class with a known integer constant. `c: const<W>` also
-binds or constrains its width. `c: const<32>` requires a 32-bit constant.
+`c: const` binds an integer constant: a reference to its carrier's zero,
+whose offset is the value. `c: const<W>` also binds or constrains its width,
+the carrier's width. `c: const<32>` requires a 32-bit constant.
 `c: const<_>` leaves the width unconstrained.
 The angle brackets accept a literal or a name, not a compound expression.
 
@@ -251,7 +252,7 @@ A group gives a name to type alternatives:
 
 ```pdl
 group Word = i32 | i64;
-rule grouped-add-zero: builtin.addi(x: Word, 0) => x;
+rule grouped-mul-one: builtin.muli(x: Word, 1) => x;
 ```
 
 Group names must be unique in a compiled input. Group declarations describe
@@ -265,8 +266,8 @@ has the form `const<WIDTH>(EXPRESSION)`.
 
 ```pdl
 rule mul-zero: builtin.muli(x: int<W>, 0) => const<W>(0);
-rule add-constants:
-	builtin.addi(a: const<W>, b: const<W>) => const<W>(a + b);
+rule mul-constants:
+	builtin.muli(a: const<W>, b: const<W>) => const<W>(a * b);
 ```
 
 For generated instcombine rules, the right-hand constructor accepts widths
@@ -279,9 +280,21 @@ computed expressions, and `const<W>(...)` constructors can parse there but
 are not supported by Rust lowering. In an axiom, a left-hand `const<W>(...)`
 matches a constant by value, as a bare literal does; the width is not checked.
 
-The scalar expression `a + b` computes a constant while applying the rule.
-The term `builtin.addi(a, b)` describes a program operation. The distinction
-also applies to `#add(a, b)`, which is a semantic operation term.
+An operator with an offset law never holds a constant operand where the law
+applies: the e-graph keeps `x + 3` as the reference to `x` at offset 3, and
+`3 + 5` as the constant 8, never as an addition. What is left in the node is
+a zero, which an identity element dissolves as well: `x - 0` is `x`, but
+`0 - x` stays a subtraction. Where rules are compiled for an e-graph, the
+Rust generator and the build's check of `core/defs/isel.pdl`, a constant
+operand of `#add`, `#sub`, `#neg` or `#not` other than such a zero is an
+error; the prover reads the same rule as a statement and accepts it. The IR
+operations declaring those laws (`builtin.addi`, `builtin.subi`,
+`ptr.ptradd`, `ptr.ptrdiff`) are checked the same way where the generated rule
+is built, in a debug build.
+
+The scalar expression `a * b` computes a constant while applying the rule.
+The term `builtin.muli(a, b)` describes a program operation. The distinction
+also applies to `#mul(a, b)`, which is a semantic operation term.
 
 ### Operators and precedence
 
@@ -340,21 +353,16 @@ functions in a PDL file. A consumer determines which functions it supports.
 | `ctz(c)` | Number of trailing zero bits. For zero, the constant's width. | Instcombine Rust generation. |
 | `clz(c)` | Number of leading zero bits within the constant's width. For zero, that width. | Instcombine Rust generation. |
 | `ones(W)` | A mask with `W` low bits set. | Semantic axioms and their width expressions. |
-| `fits(c, N)` | Whether the constant fits in a signed `N`-bit field. | Semantic axiom guards. |
-| `ufits(c, N)` | Whether the constant fits in an unsigned `N`-bit field. | Semantic axiom guards. |
-| `materializable(c)` | Whether one of the target's instructions produces the constant alone. Without a target, every constant qualifies. | Semantic axiom guards. |
 
 The bit-count functions take one constant binder directly. Expressions such
 as `popcount(c + 1)` do not preserve a binder width and are rejected by the
-Rust generator. `fits` and `ufits` take a bound constant and a literal field
-width from 1 through 64. Their negations, such as `!fits(c, 12)`, are supported.
-`materializable` takes a bound constant and may also be negated.
+Rust generator.
 
-Semantic axiom guards support width comparisons with `<` and `==`, and the
-`fits` family. They do not support the whole generated-rule expression
-language. Comma-separated guards express conjunction in both consumers.
+Semantic axiom guards support width comparisons with `<` and `==`. They do not
+support the whole generated-rule expression language. Comma-separated guards
+express conjunction in both consumers.
 
-## Root references and constant materialization
+## Root references
 
 `root` refers to the equivalence class matched by the entire left-hand side.
 It is valid only on the right. A semantic rule can use it to describe an
@@ -363,29 +371,7 @@ in the e-graph; it does not recursively copy the original syntax tree.
 The semantic axiom loader permits RHS references to `root` or to bound
 values, but not both in the same replacement.
 
-A rule with a bare constant binder on the left is a materialization rule.
-It describes how to compute a constant using operations, such as when the
-constant does not fit a machine instruction's immediate field.
-
-```pdl
-rule wide-constant:
-	v: const<W>
-	=> keep #add(
-		keep #shl(#ashr(#sub(v, #ashr(#shl(v, W - 12), W - 12)), 12), 12),
-		#ashr(#shl(v, W - 12), W - 12)
-	)
-	where !fits(v, 12);
-```
-
-This semantic materialization example separates a wide constant into a high
-part and a signed low part. `keep` marks the outer addition and shift as
-operations to retain. Unmarked constant computations can fold into the
-smaller constants that those operations use.
-
-`keep` must wrap an operation and is valid only on the right of a
-materialization rule. It does not mean that an arbitrary IR operation must
-survive dead-code elimination. `root`, `keep`, and semantic operation emission
-are not supported by the instcombine Rust generator.
+`root` is not supported by the instcombine Rust generator.
 
 ## Proof modes
 
@@ -475,8 +461,8 @@ rounds. There are no other named phases.
 
 ```pdl
 rule reassociate-constants:
-	builtin.addi(builtin.addi(x: int<W>, a: const), b: const)
-	=> builtin.addi(x, const<W>(a + b))
+	builtin.muli(builtin.muli(x: int<W>, a: const), b: const)
+	=> builtin.muli(x, const<W>(a * b))
 	phase post-saturation;
 ```
 
@@ -495,7 +481,7 @@ be used by the intended engine.
 | --- | --- | --- |
 | PDL frontend | Parse declarations and check names, semantic operator arities, and structural restrictions. | Does not prove equalities or establish that dialect operations exist. |
 | Instcombine Rust generator | Forward equality rules with relational matching and typed IR construction. | Known concrete operations; at most one new RHS operation; no attributes, type groups, refinements, or bidirectional generation. |
-| Semantic axiom loader | Semantic expressions for selection and proof, including nested RHS terms, explicit widths, `root`, and materialization. | Its scalar expression and guard language is narrower; concrete dialect terms require an explicitly supported semantic binding. |
+| Semantic axiom loader | Semantic expressions for selection and proof, including nested RHS terms, explicit widths, and `root`. | Its scalar expression and guard language is narrower; concrete dialect terms require an explicitly supported semantic binding. |
 | Refinement consumer | Contract-governed directional candidates. | Separate admission and application; never automatic equality saturation. |
 
 For the Rust generator, a RHS is a bound value, `const<W>(...)`, or one

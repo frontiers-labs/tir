@@ -74,18 +74,18 @@ pub fn parse_module(
                 false,
             ))
         }
-        InputKind::Tir => Ok((parse_tir(context, &input)?, true)),
+        InputKind::Tir => {
+            let module = parse_tir(context, &input)?;
+            attach_data_layout(context, &module, target);
+            Ok((module, true))
+        }
         InputKind::Llvm => {
             let module = tir_llvm::import_str(context, &input)
                 .map_err(|e| format!("llvm import failed: {e}"))?;
+            attach_data_layout(context, &module, target);
             let mut attributes = context.get_op(module.id()).attributes().to_vec();
-            for (name, value) in [
-                (tir::DATA_LAYOUT, target.data_layout()),
-                (tir::TARGET_ENV, target.target_env()),
-            ] {
-                if let Some(value) = value {
-                    attributes.push(context.named_attribute(name, value));
-                }
+            if let Some(value) = target.target_env() {
+                attributes.push(context.named_attribute(tir::TARGET_ENV, value));
             }
             context.set_op_attributes(module.id(), attributes);
             Ok((
@@ -95,6 +95,42 @@ pub fn parse_module(
         }
         InputKind::Auto => unreachable!(),
     }
+}
+
+/// Give `module` the data layout of `target`, the one its code is lowered
+/// against, so the verifier and every pass read that layout from the IR. Entries
+/// the module declares itself override the target's key by key, which is how
+/// the backend already combines the two.
+pub fn attach_data_layout(context: &Context, module: &ModuleOp, target: &dyn TargetMachine) {
+    let Some(layout) =
+        tir::DataLayout::for_op_with_default(context, module.id(), target.data_layout().as_ref())
+    else {
+        return;
+    };
+    let name = context.intern(tir::DATA_LAYOUT);
+    let mut attributes = context.get_op(module.id()).attributes().to_vec();
+    match attributes
+        .iter_mut()
+        .find(|attribute| attribute.name == name)
+    {
+        Some(attribute) => attribute.value = layout.spec(),
+        None => attributes.push(context.named_attribute(tir::DATA_LAYOUT, layout.spec())),
+    }
+    context.set_op_attributes(module.id(), attributes);
+}
+
+/// Give a TIR `module` the data layout of the target its `target_env` `arch`
+/// names. A module that names no target keeps whatever layout it declares:
+/// nothing else says how wide its pointers are.
+pub fn attach_declared_data_layout(context: &Context, module: &ModuleOp) -> Result<(), String> {
+    let Some(arch) =
+        tir::TargetEnv::for_op(context, module.id()).and_then(|env| env.arch().map(str::to_string))
+    else {
+        return Ok(());
+    };
+    let target = tir::backend::select_target(&arch, None, None)?;
+    attach_data_layout(context, module, target.as_ref());
+    Ok(())
 }
 
 /// Whether the input holds TIR, LLVM IR or assembly, resolving [`InputKind::Auto`] by

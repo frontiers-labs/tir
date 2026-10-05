@@ -36,6 +36,7 @@ pub fn run(args: ToolArgs) -> Result<(), Box<dyn Error>> {
     let context = Context::with_default_dialects();
     let module = tir::parse::ir::parse_ir::<ModuleOp>(&context, &input)
         .map_err(|(span, err)| format!("failed to parse input at byte {}: {err:?}", span.0))?;
+    crate::common::attach_declared_data_layout(&context, &module)?;
 
     let function = find_function(&context, module.id(), &args.function)?;
     let body_region = context.get_op(function).regions().to_vec()[0];

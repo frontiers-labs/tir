@@ -40,6 +40,6 @@ module {
 // CHECK: ptr.alloca
 // CHECK: ptr.store
 // CHECK: scf.loop
-// CHECK: ptr.store
 // CHECK: scf.switch
+// CHECK: ptr.store
 // CHECK: ptr.load

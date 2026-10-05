@@ -1,0 +1,30 @@
+// RUN: tir mc --march=rv64i --stage=isel %s | filecheck %s
+
+// A load reads its displacement off the address's reference. One that fits the
+// signed 12-bit field, negative included, is the load's own immediate. One that
+// does not leaves the low 12 bits to the load and demands the rest of the
+// address in a register: `p + 5000` is `p + 4096` at displacement 904.
+
+module {
+  %fn_below = func.func @below(%p: !ptr.p<!i64>) -> !i64 {
+    %off = constant {value = -8} : !i64
+    %q = ptr.ptradd %p, %off : !ptr.p<!i64>
+    %v = ptr.load %q : !i64
+    func.return %v
+  }
+
+  %fn_far = func.func @far(%p: !ptr.p<!i64>) -> !i64 {
+    %off = constant {value = 5000} : !i64
+    %q = ptr.ptradd %p, %off : !ptr.p<!i64>
+    %v = ptr.load %q : !i64
+    func.return %v
+  }
+  module_end
+}
+
+// CHECK-LABEL: asm.symbol {name = "below", arg_regs = [%[[P:[0-9]+]]:GPR]}
+// CHECK: riscv.ld {rd = %{{[0-9]+}}:GPR, rs1 = %[[P]]:GPR, imm = -8}
+// CHECK-LABEL: asm.symbol {name = "far", arg_regs = [%[[P:[0-9]+]]:GPR]}
+// CHECK-NEXT: riscv.lui {rd = %[[K:[0-9]+]]:GPR, imm = 1}
+// CHECK-NEXT: riscv.add {rd = %[[A:[0-9]+]]:GPR, rs1 = %[[P]]:GPR, rs2 = %[[K]]:GPR}
+// CHECK: riscv.ld {rd = %{{[0-9]+}}:GPR, rs1 = %[[A]]:GPR, imm = 904}

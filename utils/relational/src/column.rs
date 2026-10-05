@@ -84,14 +84,6 @@ impl<V: Copy + Eq + Hash> Column<V> {
         self.write(class, Fact::Known(value), epoch)
     }
 
-    /// Replace `class`'s entry with `fact`, no join. For a column whose values
-    /// name classes: what is stored may be stale — a base that has since been
-    /// absorbed, or one whose own derivation deepened — so only the caller that
-    /// can read it back to what it means may combine two of them.
-    pub fn put(&mut self, class: ClassId, fact: Fact<V>, epoch: u32) -> bool {
-        self.set(class, fact, epoch)
-    }
-
     /// Join `fact` onto what `class` is known to be.
     pub fn write(&mut self, class: ClassId, fact: Fact<V>, epoch: u32) -> bool {
         let joined = match self.fact.get(&class) {
@@ -182,11 +174,6 @@ impl<V: Copy + Eq + Hash> Column<V> {
             Some(fact) => self.write(survivor, fact, epoch),
             None => false,
         }
-    }
-
-    /// Whether no class has an entry.
-    pub fn is_empty(&self) -> bool {
-        self.fact.is_empty()
     }
 
     /// The classes the open scopes have written. Duplicated across frames, and

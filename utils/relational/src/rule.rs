@@ -8,8 +8,8 @@
 
 use smallvec::SmallVec;
 
-use crate::query::{Expr, Field, Match, Plan, Scalar, Var};
-use crate::{ClassId, Engine, Label, LabelId};
+use crate::query::{Expr, Field, Match, Plan, Scalar, UNBOUND, Var};
+use crate::{ClassId, Engine, Label, LabelId, Ref};
 
 /// A node a head builds: a template with scalars written into named fields.
 #[derive(Clone, Debug)]
@@ -27,21 +27,21 @@ impl<L> LabelFill<L> {
     }
 }
 
-/// One write of a rule's right-hand side.
+/// One write of a rule's right-hand side. Variables hold references.
 #[derive(Clone, Debug)]
 pub enum HeadOp<L> {
-    /// Hash-cons `label(args)` and bind its class to `into`.
+    /// Hash-cons `label(args)` and bind its value to `into`.
     Insert {
         label: LabelFill<L>,
         args: SmallVec<[Var; 4]>,
         into: Var,
     },
     Union(Var, Var),
-    /// Record that `key` is `base` plus `offset`.
-    RaiseObject {
-        key: Var,
+    /// Bind `into` to `base` plus `offset`.
+    Offset {
         base: Var,
         offset: Expr,
+        into: Var,
     },
     /// Union `class` with the variable `offset + scalars[index]` — the one head
     /// that chooses among bound variables, for a rule that picks an operand by
@@ -51,6 +51,22 @@ pub enum HeadOp<L> {
         offset: Var,
         index: Scalar,
     },
+}
+
+/// What a head's variables hold: the match's, then the head's own.
+struct Bound<'a>(&'a mut [Ref]);
+
+impl Bound<'_> {
+    /// The reference `var` holds, if any.
+    #[inline]
+    fn get(&self, var: usize) -> Option<Ref> {
+        crate::query::bound(*self.0.get(var)?)
+    }
+
+    #[inline]
+    fn set(&mut self, var: Var, reference: Ref) {
+        self.0[var as usize] = reference;
+    }
 }
 
 /// A rule: what to look for, and what it proves.
@@ -83,7 +99,7 @@ impl<L: Label> Engine<L> {
         &mut self,
         head: &[HeadOp<L>],
         head_vars: u32,
-        bindings: &[Option<ClassId>],
+        bindings: &[Ref],
         scalars: &[u64],
         labels: &mut Vec<Option<LabelId>>,
     ) {
@@ -95,8 +111,8 @@ impl<L: Label> Engine<L> {
         let mut bound = std::mem::take(&mut self.head_bound);
         bound.clear();
         bound.extend_from_slice(bindings);
-        bound.resize(bound.len() + head_vars as usize, None);
-        self.run_head(head, scalars, &mut bound, labels);
+        bound.resize(bound.len() + head_vars as usize, UNBOUND);
+        self.run_head(head, scalars, &mut Bound(&mut bound), labels);
         self.head_bound = bound;
     }
 
@@ -104,7 +120,7 @@ impl<L: Label> Engine<L> {
         &mut self,
         head: &[HeadOp<L>],
         scalars: &[u64],
-        bound: &mut [Option<ClassId>],
+        bound: &mut Bound<'_>,
         labels: &mut [Option<LabelId>],
     ) {
         for (index, op) in head.iter().enumerate() {
@@ -112,9 +128,9 @@ impl<L: Label> Engine<L> {
                 HeadOp::Insert { label, args, into } if label.fills.is_empty() => {
                     let template = &label.template;
                     debug_assert_eq!(template.children().len(), args.len());
-                    // The cache is keyed by the rule's plan, and nothing stops two
-                    // rules from sharing one, so a remembered label is checked
-                    // against the template before it is trusted.
+                    // The cache is keyed by the rule's plan, and nothing stops
+                    // two rules from sharing one, so a remembered label is
+                    // checked against the template before it is trusted.
                     let id = match labels[index] {
                         Some(id) if self.label_is(id, template) => id,
                         _ => {
@@ -123,74 +139,101 @@ impl<L: Label> Engine<L> {
                             id
                         }
                     };
-                    // The key is the label and then the children; all but the
-                    // widest operators fit on the stack.
-                    let mut inline = [0u32; 8];
-                    let mut spilled = Vec::new();
-                    let key = match inline.get_mut(..=args.len()) {
-                        Some(key) => key,
-                        None => {
-                            spilled.resize(args.len() + 1, 0);
-                            &mut spilled[..]
-                        }
-                    };
-                    key[0] = id.0;
-                    for (cell, &arg) in key[1..].iter_mut().zip(args.iter()) {
-                        let Some(class) = bound[arg as usize] else {
-                            return;
-                        };
-                        *cell = self.find(class).0;
-                    }
-                    if template.commutative() {
-                        key[1..].sort_unstable();
-                    }
-                    let key = &*key;
-                    let class = self.add_labelled(id, key, || {
+                    let build = |cells: &[u32]| {
                         let mut node = template.clone();
-                        for (child, &class) in node.children_mut().iter_mut().zip(&key[1..]) {
-                            *child = ClassId(class);
+                        for (child, &cell) in node.children_mut().iter_mut().zip(cells) {
+                            *child = ClassId(cell);
                         }
                         node
-                    });
-                    bound[*into as usize] = Some(class);
+                    };
+                    if self.is_plain(id) {
+                        // The key is the label and then the operand classes;
+                        // all but the widest operators fit on the stack.
+                        let mut inline = [0u32; 8];
+                        let mut spilled = Vec::new();
+                        let key = match inline.get_mut(..=args.len()) {
+                            Some(key) => key,
+                            None => {
+                                spilled.resize(args.len() + 1, 0);
+                                &mut spilled[..]
+                            }
+                        };
+                        key[0] = id.0;
+                        let mut at_zero = true;
+                        for (cell, &arg) in key[1..].iter_mut().zip(args) {
+                            let Some(operand) = bound.get(arg as usize) else {
+                                return;
+                            };
+                            let operand = self.find(operand);
+                            at_zero &= operand.offset == 0;
+                            *cell = operand.class.0;
+                        }
+                        if at_zero {
+                            if self.commutes(id) && key[2] < key[1] {
+                                key.swap(1, 2);
+                            }
+                            let reference = self.insert_plain(id, key, build);
+                            bound.set(*into, reference);
+                            continue;
+                        }
+                    }
+                    let reference = if self.is_int_constant(id) {
+                        self.insert(template.clone(), &[])
+                    } else {
+                        let Some(mut operands) = args
+                            .iter()
+                            .map(|&arg| bound.get(arg as usize))
+                            .collect::<Option<SmallVec<[Ref; 4]>>>()
+                        else {
+                            return;
+                        };
+                        let sort = self.commutes(id);
+                        self.insert_labelled(id, &mut operands, sort, build)
+                    };
+                    bound.set(*into, reference);
                 }
                 HeadOp::Insert { label, args, into } => {
+                    let Some(mut operands) = args
+                        .iter()
+                        .map(|&arg| bound.get(arg as usize))
+                        .collect::<Option<SmallVec<[Ref; 4]>>>()
+                    else {
+                        return;
+                    };
                     let fills: SmallVec<[(Field, u64); 2]> = label
                         .fills
                         .iter()
                         .map(|&(field, slot)| (field, scalars[slot as usize]))
                         .collect();
-                    let Some(mut node) = L::fill(&label.template, &fills) else {
+                    let Some(node) = L::fill(&label.template, &fills) else {
                         return;
                     };
                     debug_assert_eq!(node.children().len(), args.len());
-                    for (slot, &arg) in node.children_mut().iter_mut().zip(args) {
-                        let Some(class) = bound[arg as usize] else {
-                            return;
-                        };
-                        *slot = class;
-                    }
                     if node.commutative() {
-                        node.children_mut().sort_by_key(|class| class.index());
+                        for operand in operands.iter_mut() {
+                            *operand = self.find(*operand);
+                        }
+                        operands.sort_unstable();
                     }
-                    let class = self.add(node);
-                    bound[*into as usize] = Some(class);
+                    let reference = self.insert(node, &operands);
+                    bound.set(*into, reference);
                 }
                 HeadOp::Union(a, b) => {
-                    let (Some(a), Some(b)) = (bound[*a as usize], bound[*b as usize]) else {
+                    let (Some(a), Some(b)) = (bound.get(*a as usize), bound.get(*b as usize))
+                    else {
                         return;
                     };
-                    self.union(a, b);
+                    // A contradiction is recorded by the engine.
+                    let _ = self.union(a, b);
                 }
-                HeadOp::RaiseObject { key, base, offset } => {
-                    let (Some(key), Some(base), Some(offset)) = (
-                        bound[*key as usize],
-                        bound[*base as usize],
-                        offset.eval(scalars),
-                    ) else {
+                HeadOp::Offset { base, offset, into } => {
+                    let (Some(base), Some(offset)) =
+                        (bound.get(*base as usize), offset.eval(scalars))
+                    else {
                         return;
                     };
-                    self.raise_object(key, base, offset);
+                    let shifted = Ref::new(base.class, base.offset.wrapping_add(offset as u64));
+                    bound.set(*into, self.find(shifted));
                 }
                 HeadOp::UnionIndexed {
                     class,
@@ -198,11 +241,10 @@ impl<L: Label> Engine<L> {
                     index,
                 } => {
                     let chosen = *offset as usize + scalars[*index as usize] as usize;
-                    let (Some(a), Some(Some(b))) = (bound[*class as usize], bound.get(chosen))
-                    else {
+                    let (Some(a), Some(b)) = (bound.get(*class as usize), bound.get(chosen)) else {
                         return;
                     };
-                    self.union(a, *b);
+                    let _ = self.union(a, b);
                 }
             }
         }
@@ -212,6 +254,7 @@ impl<L: Label> Engine<L> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ClassId;
     use crate::query::{Atom, NoExterns, Query};
     use crate::testing::Term;
 
@@ -242,137 +285,19 @@ mod tests {
         }
     }
 
-    /// `add(p, k)` with `k` a literal is `p` plus `k` — a rule whose head raises
-    /// the column its own atoms read, so a chain of them reaches a fixpoint.
-    fn derivation() -> Rule<Term> {
-        Rule {
-            name: "derivation".into(),
-            plan: Plan::compile(Query {
-                vars: 4,
-                scalars: 3,
-                root: 0,
-                atoms: vec![
-                    Atom::Node {
-                        template: Term::op("add", &[ClassId(0), ClassId(0)]),
-                        args: SmallVec::from_slice(&[1, 2]),
-                        class: 0,
-                        row: None,
-                    },
-                    Atom::Fact {
-                        column: crate::ColumnId::Const,
-                        key: 2,
-                        value: 0,
-                    },
-                    Atom::Object {
-                        key: 1,
-                        base: 3,
-                        offset: 1,
-                    },
-                ],
-                guards: vec![crate::Guard::Read {
-                    term: crate::Source::Label(0),
-                    field: 0,
-                    out: 2,
-                }],
-                nots: Vec::new(),
-            }),
-            head: vec![HeadOp::RaiseObject {
-                key: 0,
-                base: 3,
-                offset: crate::Expr::Add(
-                    Box::new(crate::Expr::Scalar(1)),
-                    Box::new(crate::Expr::Scalar(2)),
-                ),
-            }],
-            head_vars: 0,
-            post_saturation: false,
-        }
-    }
-
-    #[test]
-    fn a_chain_of_derivations_reaches_one_base_and_one_offset() {
-        let mut eg = Engine::new();
-        let p = eg.add(Term::leaf("p"));
-        let four = eg.add(Term::int(4));
-        let first = eg.add(Term::op("add", &[p, four]));
-        let second = eg.add(Term::op("add", &[first, four]));
-        eg.rebuild();
-
-        let rule = derivation();
-        for _ in 0..2 {
-            let found = rule.plan.search(
-                &eg,
-                eg.class_ids().collect::<Vec<_>>(),
-                &|_, _| true,
-                false,
-                &NoExterns,
-            );
-            for matched in &found {
-                eg.apply_head(&rule.head, rule.head_vars, matched);
-            }
-        }
-        assert_eq!(eg.object_of(p), Some((p, 0)));
-        assert_eq!(eg.object_of(first), Some((p, 4)));
-        assert_eq!(eg.object_of(second), Some((p, 8)));
-    }
-
-    /// A chain placed before its own base was placed says the same thing once
-    /// the base is: what the column joins is where the two land, not the step
-    /// each was written with.
-    #[test]
-    fn a_derivation_written_early_agrees_with_the_one_written_late() {
-        let mut eg = Engine::new();
-        let p = eg.add(Term::leaf("p"));
-        let first = eg.add(Term::leaf("q"));
-        let second = eg.add(Term::leaf("r"));
-        eg.rebuild();
-
-        eg.raise_object(second, first, 4);
-        eg.raise_object(first, p, 4);
-        eg.raise_object(second, p, 8);
-        assert_eq!(eg.object_of(second), Some((p, 8)));
-    }
-
-    /// The same fact raised again after its base was absorbed is the same fact.
-    #[test]
-    fn a_derivation_survives_its_base_being_merged_away() {
-        let mut eg = Engine::new();
-        let a = eg.add(Term::leaf("a"));
-        let b = eg.add(Term::leaf("b"));
-        let x = eg.add(Term::leaf("x"));
-        eg.rebuild();
-
-        eg.raise_object(x, b, 4);
-        let survivor = eg.union(a, b);
-        eg.rebuild();
-        eg.raise_object(x, survivor, 4);
-        assert_eq!(eg.object_of(x), Some((survivor, 4)));
-    }
-
-    #[test]
-    fn two_derivations_that_disagree_leave_the_class_unplaceable() {
-        let mut eg = Engine::new();
-        let p = eg.add(Term::leaf("p"));
-        let q = eg.add(Term::leaf("q"));
-        eg.rebuild();
-        assert!(eg.raise_object(p, q, 4));
-        assert!(eg.raise_object(p, q, 8));
-        assert_eq!(eg.object_of(p), None);
-    }
-
     /// A caller may union and saturate without a rebuild in between: the first
     /// round still matches through the class the union absorbed.
     #[test]
     fn saturation_matches_through_a_union_nobody_rebuilt_for() {
         let mut eg = Engine::new();
         // The older class survives a union, so the `f` row names the absorbed one.
-        let older = eg.add(Term::leaf("older"));
-        let x = eg.add(Term::leaf("x"));
-        let y = eg.add(Term::leaf("y"));
-        let g = eg.add(Term::op("g", &[x]));
-        let f = eg.add(Term::op("f", &[g, y]));
+        let older = eg.add(Term::leaf("older")).class;
+        let x = eg.add(Term::leaf("x")).class;
+        let y = eg.add(Term::leaf("y")).class;
+        let g = eg.add(Term::op("g", &[x])).class;
+        let f = eg.add(Term::op("f", &[g, y])).class;
         eg.rebuild();
-        eg.union(older, g);
+        eg.union(older, g).unwrap();
 
         // `f(g(?3), ?2)` proves `f(g(?3), ?2) = ?2`.
         let atom = |op: &str, children: usize, args: &[u32], class| Atom::Node {
@@ -399,9 +324,9 @@ mod tests {
     #[test]
     fn a_head_inserts_and_unions() {
         let mut eg = Engine::new();
-        let a = eg.add(Term::leaf("a"));
-        let b = eg.add(Term::leaf("b"));
-        let f = eg.add(Term::op("f", &[a, b]));
+        let a = eg.add(Term::leaf("a")).class;
+        let b = eg.add(Term::leaf("b")).class;
+        let f = eg.add(Term::op("f", &[a, b])).class;
         eg.rebuild();
 
         let rule = rule();
@@ -412,7 +337,7 @@ mod tests {
         }
         eg.rebuild();
 
-        let g = eg.add(Term::op("g", &[a]));
+        let g = eg.add(Term::op("g", &[a])).class;
         assert!(eg.connected(f, g));
     }
 }

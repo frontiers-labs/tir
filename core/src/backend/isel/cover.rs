@@ -5,26 +5,31 @@ use std::collections::{HashMap, HashSet};
 
 use tir::sem::SymKind;
 use tir_pbqp::{self as pbqp, INF_COST, PbqpMatrix, PbqpProblem};
-use tir_relational::ClassId as Id;
+use tir_relational::{ClassId as Id, Ref};
 
 use super::problem::{Policy, RegionProblem};
 
 #[derive(Clone, Debug)]
 pub(crate) struct CaptureBindings {
-    pub(crate) entries: Vec<(u32, Id)>,
+    pub(crate) entries: Vec<(u32, Ref)>,
+    /// The operands read as structural integers (an extension's width): the
+    /// emitter reads their constant unsigned, where an immediate reads two's
+    /// complement at its width.
+    pub(crate) structural: Vec<u32>,
 }
 
 impl CaptureBindings {
     pub(crate) fn new() -> Self {
         Self {
             entries: Vec::new(),
+            structural: Vec::new(),
         }
     }
 
-    /// Bind `symbol` to the class the match found for it. A pattern holds one
+    /// Bind `symbol` to the value the match found for it. A pattern holds one
     /// capture per operand, so a symbol is bound once and there is no second
     /// reading to disagree with.
-    pub(crate) fn bind(&mut self, symbol: u32, class: Id) {
+    pub(crate) fn bind(&mut self, symbol: u32, class: Ref) {
         self.entries.push((symbol, class));
     }
 }
@@ -32,7 +37,7 @@ impl CaptureBindings {
 #[derive(Clone, Debug)]
 pub(crate) struct PatternNodeBinding {
     pub(crate) pattern_node: Id,
-    pub(crate) class: Id,
+    pub(crate) class: Ref,
     pub(crate) is_boundary: bool,
     /// The chain the matched access reads ([`super::pattern::PatternNodeMeta`]).
     /// It names the access; the match neither computes it nor consumes it, so
@@ -46,6 +51,10 @@ pub(crate) struct PatternNodeBinding {
     /// (see [`super::RegisterRequirement::whole_width`]).
     pub(crate) whole_width: Option<u32>,
     pub(crate) low_extract: bool,
+    /// Whether duplicating the node's computation is sound: its class holds
+    /// only value expressions, or the node is an offset split of a value the
+    /// match reads.
+    pub(crate) pure: bool,
 }
 
 /// What a boundary binding requires of its class. A register operand needs the
@@ -108,7 +117,7 @@ pub(crate) struct PbqpIselMatch {
     /// The instance the match is a result of: the first match of the region
     /// binding the same rule to the same operands. Its cost is paid once.
     pub(crate) instance: usize,
-    pub(crate) root: Id,
+    pub(crate) root: Ref,
     pub(crate) pattern_root: Id,
     pub(crate) bindings: FullMatchBindings,
     pub(crate) cost: u64,
@@ -121,21 +130,20 @@ pub(crate) struct PbqpIselMatch {
     pub(crate) result_width: Option<u32>,
     /// What the match demands of each class it binds besides its root, in the
     /// order it binds them.
-    pub(crate) uses: Vec<(Id, ChildDemand)>,
+    pub(crate) uses: Vec<(Ref, ChildDemand)>,
     /// The effect classes the match can stand for instead of an instance of
     /// their own.
-    pub(crate) covers: Vec<Id>,
+    pub(crate) covers: Vec<Ref>,
     /// The effects the match performs inside its own instruction — the interior
     /// classes it recomputes, in binding order. The chain a memory access reads
     /// is not one of them: every access on a chain names it, and two reads of
     /// one state are not two effects, so a state binding stays out.
-    pub(crate) effects: Vec<Id>,
+    pub(crate) effects: Vec<Ref>,
 }
 
 impl PbqpIselMatch {
-    /// Derive what the match's bindings demand of the classes they name.
-    /// `pure` says whether a class holds only value expressions.
-    pub(crate) fn with_demands(mut self, pure: impl Fn(Id) -> bool) -> Self {
+    /// Derive what the match's bindings demand of the values they name.
+    pub(crate) fn with_demands(mut self) -> Self {
         let nodes = &self.bindings.pattern_nodes;
         for binding in nodes {
             let child = binding.class;
@@ -143,10 +151,10 @@ impl PbqpIselMatch {
                 continue;
             }
             if !self.uses.iter().any(|(class, _)| *class == child) {
-                let demand = self.child_demand(child, &pure);
+                let demand = self.child_demand(child);
                 self.uses.push((child, demand));
             }
-            if !binding.is_boundary && !pure(child) {
+            if !binding.is_boundary && !binding.pure {
                 self.covers.push(child);
             }
         }
@@ -156,14 +164,14 @@ impl PbqpIselMatch {
                 !binding.is_boundary
                     && !binding.is_state
                     && binding.pattern_node != self.pattern_root
-                    && !pure(binding.class)
+                    && !binding.pure
             })
             .map(|binding| binding.class)
             .collect();
         self
     }
 
-    fn child_demand(&self, child: Id, pure: &impl Fn(Id) -> bool) -> ChildDemand {
+    fn child_demand(&self, child: Ref) -> ChildDemand {
         let mut register = false;
         let mut immediate = false;
         let mut effect = false;
@@ -186,7 +194,9 @@ impl PbqpIselMatch {
                         widths.push((width, binding.low_extract));
                     }
                 }
-            } else if binding.pattern_node != self.pattern_root && !binding.is_state && !pure(child)
+            } else if binding.pattern_node != self.pattern_root
+                && !binding.is_state
+                && !binding.pure
             {
                 effect = true;
             }
@@ -202,7 +212,7 @@ impl PbqpIselMatch {
         }
     }
 
-    fn demand_of(&self, child: Id) -> Option<&ChildDemand> {
+    fn demand_of(&self, child: Ref) -> Option<&ChildDemand> {
         self.uses
             .iter()
             .find(|(class, _)| *class == child)
@@ -230,8 +240,8 @@ pub(crate) fn solve_cover(
 ) -> Result<Vec<PbqpIselAlternative>, CoverError> {
     let classes = &problem.classes;
     let matches = &problem.matches;
-    let index: HashMap<Id, usize> = classes.iter().enumerate().map(|(i, &c)| (c, i)).collect();
-    let class_index = |c: Id| index.get(&c).copied();
+    let index: HashMap<Ref, usize> = classes.iter().enumerate().map(|(i, &c)| (c, i)).collect();
+    let class_index = |c: Ref| index.get(&c).copied();
 
     let mut alternatives_by_node = vec![Vec::<PbqpIselAlternative>::new(); classes.len()];
     for (i, &c) in classes.iter().enumerate() {
@@ -301,7 +311,7 @@ pub(crate) fn solve_cover(
         }
     }
 
-    let effect_footprints: Vec<Vec<Id>> = matches
+    let effect_footprints: Vec<Vec<Ref>> = matches
         .iter()
         .map(|matched| {
             let mut footprint = matched.effects.clone();
@@ -312,7 +322,7 @@ pub(crate) fn solve_cover(
         .collect();
     // Only matches sharing an effect class can conflict, so index by class
     // instead of comparing every pair of matches.
-    let mut matches_by_effect: HashMap<Id, Vec<usize>> = HashMap::new();
+    let mut matches_by_effect: HashMap<Ref, Vec<usize>> = HashMap::new();
     for (index, footprint) in effect_footprints.iter().enumerate() {
         for &class in footprint {
             matches_by_effect.entry(class).or_default().push(index);
@@ -334,7 +344,7 @@ pub(crate) fn solve_cover(
         }
     }
 
-    let compatible = |child: Id, parent_alt, child_alt| {
+    let compatible = |child: Ref, parent_alt, child_alt| {
         alternatives_compatible(
             child,
             parent_alt,
@@ -399,7 +409,7 @@ pub(crate) fn solve_cover(
 /// The PBQP edges joining each deferrable source to its views.
 fn deferral_edges(
     policy: &Policy,
-    class_index: &dyn Fn(Id) -> Option<usize>,
+    class_index: &dyn Fn(Ref) -> Option<usize>,
 ) -> HashSet<(usize, usize)> {
     policy
         .views
@@ -411,9 +421,9 @@ fn deferral_edges(
 
 /// A deferred source leaves each of its views to a tile of its own.
 fn deferral_compatible(
-    source: Id,
+    source: Ref,
     source_alt: &PbqpIselAlternative,
-    view: Id,
+    view: Ref,
     view_alt: &PbqpIselAlternative,
     policy: &Policy,
 ) -> bool {
@@ -432,7 +442,7 @@ fn ordered_pair(lhs: usize, rhs: usize) -> (usize, usize) {
 fn effect_tiles_conflict(
     lhs: &PbqpIselAlternative,
     rhs: &PbqpIselAlternative,
-    footprints: &[Vec<Id>],
+    footprints: &[Vec<Ref>],
 ) -> bool {
     let (PbqpIselAlternative::Tile { match_id: lhs }, PbqpIselAlternative::Tile { match_id: rhs }) =
         (lhs, rhs)
@@ -486,7 +496,7 @@ pub(crate) fn prune_dominated_matches(
         // over aligned classes.
         boundaries.sort();
         internals.sort();
-        let (classes, demands): (Vec<(Id, u32)>, Vec<_>) = boundaries.into_iter().unzip();
+        let (classes, demands): (Vec<(Ref, u32)>, Vec<_>) = boundaries.into_iter().unzip();
         ((m.root, m.result_view_offset), classes, demands, internals)
     };
     let footprints: Vec<_> = matches.iter().map(footprint).collect();
@@ -631,7 +641,7 @@ pub(crate) fn prune_dominated_matches(
 /// The demanded classes no instance can root, as the diagnostic naming the
 /// semantic kinds a target rule is missing for.
 pub(crate) fn completeness_error(problem: &RegionProblem, policy: &Policy) -> Option<String> {
-    let rooted: HashSet<Id> = problem.matches.iter().map(|matched| matched.root).collect();
+    let rooted: HashSet<Ref> = problem.matches.iter().map(|matched| matched.root).collect();
 
     let mut missing: Vec<SymKind> = Vec::new();
     for &class in &policy.demanded {
@@ -664,7 +674,7 @@ pub(crate) fn completeness_error(problem: &RegionProblem, policy: &Policy) -> Op
 }
 
 fn alternatives_compatible(
-    child: Id,
+    child: Ref,
     parent_alt: &PbqpIselAlternative,
     child_alt: &PbqpIselAlternative,
     matches: &[PbqpIselMatch],

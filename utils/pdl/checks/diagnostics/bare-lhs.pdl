@@ -1,6 +1,6 @@
-// Only a materialize rule may match on a bare term, and then only a constant.
+// A left-hand side is an operation: a bare term would match every class.
 // RUN: not tir-pdl %s --emit ast 2>&1 | filecheck %s
 
 rule bare: x: int<W> => const<W>(0);
 
-// CHECK: left-hand side must be an operation or a constant binder
+// CHECK: left-hand side must be an operation

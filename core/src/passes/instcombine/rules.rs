@@ -24,6 +24,8 @@ mod call {
     pub(super) const INT_WIDTH_OF: u32 = 2;
     pub(super) const FLOAT_WIDTH_OF: u32 = 3;
     pub(super) const STATE_RESOURCE_OF: u32 = 4;
+    /// The carrier a value of a type lives in, as one word; zero for none.
+    pub(super) const CARRIER_OF: u32 = 5;
     /// Where the generated rules' own host functions start.
     pub(super) const PDL: u32 = 16;
 }
@@ -33,21 +35,22 @@ struct Scalars;
 
 impl Scalars {
     const ROW: u32 = 0;
-    const CONST: u32 = 1;
-    const VALUE: u32 = 2;
-    const WIDTH: u32 = 3;
-    const TY: u32 = 4;
+    const VALUE: u32 = 1;
+    const WIDTH: u32 = 2;
+    const TY: u32 = 3;
     const ARM: u32 = 2;
 }
 
 pub struct Interpretation {
     context: Context,
+    /// The data layout's pointer width, which a pointer's carrier is.
+    pointer_width: Option<u32>,
 }
 
 impl Externs<Node> for Interpretation {
     fn call(&self, id: u32, terms: &[&Node], args: &[u64], out: &mut [u64]) -> bool {
         match id {
-            call::FOLD => self.fold(terms, out),
+            call::FOLD => self.fold(terms, args, out),
             call::DECIDED_ARM => self.decided_arm(terms, args, out),
             call::INT_WIDTH_OF => match class_int_width_of(&self.context, args[0] as u32) {
                 Some(width) => {
@@ -71,6 +74,14 @@ impl Externs<Node> for Interpretation {
                 }
                 None => false,
             },
+            call::CARRIER_OF => {
+                out[0] = crate::sem::node::carrier_word(crate::sem::egraph::carrier_of(
+                    &self.context,
+                    self.pointer_width,
+                    TypeId::from_number(args[0] as u32),
+                ));
+                true
+            }
             generated if generated >= call::PDL => pdl_extern(generated - call::PDL, args, out),
             _ => false,
         }
@@ -78,10 +89,10 @@ impl Externs<Node> for Interpretation {
 }
 
 impl Interpretation {
-    /// The value the op `terms[0]` computes from the constants `terms[1..]`, as
-    /// value, width and result type.
-    fn fold(&self, terms: &[&Node], out: &mut [u64]) -> bool {
-        let [folded, operands @ ..] = terms else {
+    /// The value the op `terms[0]` computes from the constants `args`, each
+    /// read at its operand's width, as value, width and result type.
+    fn fold(&self, terms: &[&Node], args: &[u64], out: &mut [u64]) -> bool {
+        let [folded] = terms else {
             return false;
         };
         let (Prov::Op(op), Some(ty)) = (folded.prov, folded.op_type()) else {
@@ -93,14 +104,20 @@ impl Interpretation {
         if !self.context.has_operation(op) || !produces_integer(&self.context, op) {
             return false;
         }
-        let Some(values): Option<Vec<Value>> = operands
+        let instance = self.context.get_op(op);
+        let Some(values): Option<Vec<Value>> = instance
+            .operands()
             .iter()
-            .map(|node| node.int().cloned().map(Value::Int))
+            .zip(args)
+            .map(|(&operand, &value)| {
+                let ty = self.context.get_value(operand).ty();
+                crate::sem::egraph::type_width(&self.context, ty)
+                    .map(|width| Value::Int(APInt::new(width, value)))
+            })
             .collect()
         else {
             return false;
         };
-        let instance = self.context.get_op(op);
         let Some(Value::Int(value)) = instance
             .as_interface::<dyn ConstantFold>()
             .and_then(|folder| folder.fold(&values))
@@ -111,17 +128,18 @@ impl Interpretation {
         true
     }
 
-    /// Which arm of the gate `terms[0]` the decision `args[0]` at `args[1]` bits
-    /// selects: the arm whose case value it equals, or the default when none
-    /// does. `args[2]` is how many arms the rule's shape has.
+    /// Which arm of the gate `terms[0]` the decision `args[0]` selects: the arm
+    /// whose case value it equals at the decision's width, or the default when
+    /// none does. `args[1]` is how many arms the rule's shape has.
     fn decided_arm(&self, terms: &[&Node], args: &[u64], out: &mut [u64]) -> bool {
         let [gate] = terms else { return false };
-        let &[value, width, arms] = args else {
+        let &[value, arms] = args else {
             return false;
         };
-        let Some(cases) = gate_cases(&self.context, gate) else {
+        let Some((cases, width)) = gate_cases(&self.context, gate) else {
             return false;
         };
+        let width = u64::from(width);
         if cases.len() as u64 != arms {
             return false;
         }
@@ -153,12 +171,13 @@ pub struct Ruleset {
 }
 
 impl Ruleset {
-    fn new(context: &Context) -> Self {
+    fn new(context: &Context, pointer_width: Option<u32>) -> Self {
         Self {
             rewrites: Vec::new(),
             emits: Vec::new(),
             interpretation: Interpretation {
                 context: context.clone(),
+                pointer_width,
             },
         }
     }
@@ -171,7 +190,7 @@ impl Ruleset {
 
 pub fn builtin_ruleset(context: &Context, seeded: &Seeded) -> Ruleset {
     let eg = &seeded.eg;
-    let mut ruleset = generated_ruleset(context);
+    let mut ruleset = generated_ruleset(context, seeded.pointer_width);
     for template in fold_templates(eg) {
         ruleset.push_query(const_fold(&template), None);
     }
@@ -181,7 +200,6 @@ pub fn builtin_ruleset(context: &Context, seeded: &Seeded) -> Ruleset {
     for (predicate, complement) in COMPLEMENTS {
         ruleset.push_query(cmp_complement(context, predicate, complement), None);
     }
-    ruleset.push_query(state::pointer_derivation(), None);
     ruleset.push_query(state::forward_load(), None);
     ruleset
 }
@@ -271,11 +289,16 @@ fn emit_fp_copysign() -> EmitFn {
 /// One LHS template per distinct seeded-op signature in `eg`, so const folding
 /// searches the classes holding such an op instead of every class. Only a seeded
 /// op ever folds and rewrites introduce none, so the seeded graph fixes the set.
+/// An op with offset laws is left out: over constants it is a constant
+/// already, and stores no row.
 fn fold_templates(eg: &Engine<Node>) -> Vec<Node> {
     let mut templates: Vec<Node> = Vec::new();
     for class in eg.classes() {
         for node in class.nodes() {
-            if !matches!(node.prov, Prov::Op(_)) || node.op_type().is_none() {
+            if !matches!(node.prov, Prov::Op(_))
+                || node.op_type().is_none()
+                || node.kind.ir().is_some_and(|op| op.law.is_some())
+            {
                 continue;
             }
             let template = node
@@ -293,7 +316,7 @@ fn fold_templates(eg: &Engine<Node>) -> Vec<Node> {
 
 /// An op every operand of which is a known constant is that constant. What the
 /// value is comes from the op's own [`ConstantFold`]; what the rule reads is the
-/// matched row and its operands' constant facts, and nothing else.
+/// matched row and the constants its operands are, and nothing else.
 fn const_fold(template: &Node) -> tir_relational::Rule<Node> {
     let arity = template.children().len() as u32;
     // Variables: 0 the root, 1..=arity its operands, then the folded class.
@@ -310,21 +333,20 @@ fn const_fold(template: &Node) -> tir_relational::Rule<Node> {
         row: Some(Scalars::ROW),
     }];
     let mut guards = Vec::new();
-    let mut folded: SmallVec<[Source; 2]> = smallvec![Source::Row(Scalars::ROW)];
-    // One scalar pair per operand, above the fixed slots.
+    let mut values: SmallVec<[Expr; 4]> = SmallVec::new();
+    // One scalar per operand, above the fixed slots.
     for (index, &var) in operands.iter().enumerate() {
         let slot = Scalars::TY + 1 + index as u32;
-        atoms.push(Atom::Fact {
-            column: ColumnId::Const,
+        atoms.push(Atom::Const {
             key: var,
             value: slot,
         });
-        folded.push(Source::Label(slot));
+        values.push(Expr::Scalar(slot));
     }
     guards.push(Guard::Extern {
         call: call::FOLD,
-        terms: folded,
-        args: SmallVec::new(),
+        terms: smallvec![Source::Row(Scalars::ROW)],
+        args: values,
         out: smallvec![Scalars::VALUE, Scalars::WIDTH, Scalars::TY],
     });
     tir_relational::Rule {
@@ -385,7 +407,7 @@ fn decided_gamma(arity: usize) -> tir_relational::Rule<Node> {
         name: "gamma-decided".into(),
         plan: Plan::compile(Query {
             vars: arity + 1,
-            scalars: 4,
+            scalars: 3,
             root: 0,
             atoms: vec![
                 Atom::Node {
@@ -396,34 +418,17 @@ fn decided_gamma(arity: usize) -> tir_relational::Rule<Node> {
                     class: 0,
                     row: Some(Scalars::ROW),
                 },
-                Atom::Fact {
-                    column: ColumnId::Const,
+                Atom::Const {
                     key: 1,
-                    value: Scalars::CONST,
+                    value: Scalars::VALUE,
                 },
             ],
-            guards: vec![
-                Guard::Read {
-                    term: Source::Label(Scalars::CONST),
-                    field: field::INT_VALUE,
-                    out: Scalars::VALUE,
-                },
-                Guard::Read {
-                    term: Source::Label(Scalars::CONST),
-                    field: field::INT_WIDTH,
-                    out: Scalars::WIDTH,
-                },
-                Guard::Extern {
-                    call: call::DECIDED_ARM,
-                    terms: smallvec![Source::Row(Scalars::ROW)],
-                    args: smallvec![
-                        Expr::Scalar(Scalars::VALUE),
-                        Expr::Scalar(Scalars::WIDTH),
-                        Expr::Lit(arity as i64 - 1),
-                    ],
-                    out: smallvec![Scalars::ARM],
-                },
-            ],
+            guards: vec![Guard::Extern {
+                call: call::DECIDED_ARM,
+                terms: smallvec![Source::Row(Scalars::ROW)],
+                args: smallvec![Expr::Scalar(Scalars::VALUE), Expr::Lit(arity as i64 - 1),],
+                out: smallvec![Scalars::ARM],
+            }],
             nots: Vec::new(),
         }),
         head: vec![HeadOp::UnionIndexed {
@@ -436,8 +441,9 @@ fn decided_gamma(arity: usize) -> tir_relational::Rule<Node> {
     }
 }
 
-/// The case value selecting each arm of the gate `node` stands for, in arm order.
-fn gate_cases(context: &Context, node: &Node) -> Option<Vec<Option<i64>>> {
+/// The case value selecting each arm of the gate `node` stands for, in arm
+/// order, and the width of the decision they are compared at.
+fn gate_cases(context: &Context, node: &Node) -> Option<(Vec<Option<i64>>, u32)> {
     let gate = match node.prov {
         Prov::Op(gate) => gate,
         Prov::Value(value) => context.get_value(value).defining_op()?,
@@ -452,10 +458,8 @@ fn gate_cases(context: &Context, node: &Node) -> Option<Vec<Option<i64>>> {
     // `If(p, arm 1, arm 0)`, so its node lists the case-1 arm first.
     let gamma = instance.as_interface::<dyn crate::Gamma>()?;
     let arms = gamma.arms().len();
-    let boolean =
-        crate::sem::egraph::type_width(context, context.get_value(gamma.predicate()).ty())
-            == Some(1);
-    Some(if boolean && arms == 2 {
+    let width = crate::sem::egraph::type_width(context, context.get_value(gamma.predicate()).ty())?;
+    let cases = if width == 1 && arms == 2 {
         vec![Some(1), None]
     } else {
         gamma
@@ -464,7 +468,8 @@ fn gate_cases(context: &Context, node: &Node) -> Option<Vec<Option<i64>>> {
             .map(|case| Some(case as i64))
             .chain([None])
             .collect()
-    })
+    };
+    Some((cases, width))
 }
 
 /// Each comparison predicate paired with its negation at the same operand order:
@@ -502,7 +507,7 @@ fn cmp_complement(
         name: "cmp-complement".into(),
         plan: Plan::compile(Query {
             vars: 5,
-            scalars: 8,
+            scalars: 6,
             root: 0,
             atoms: vec![
                 Atom::Node {
@@ -511,10 +516,9 @@ fn cmp_complement(
                     class: 0,
                     row: Some(Complement::ROW),
                 },
-                Atom::Fact {
-                    column: ColumnId::Const,
+                Atom::Const {
                     key: 0,
-                    value: Complement::CONST,
+                    value: Complement::VALUE,
                 },
                 Atom::Node {
                     template: cmpi(context, complement, None, operands),
@@ -524,16 +528,6 @@ fn cmp_complement(
                 },
             ],
             guards: vec![
-                Guard::Read {
-                    term: Source::Label(Complement::CONST),
-                    field: field::INT_VALUE,
-                    out: Complement::VALUE,
-                },
-                Guard::Read {
-                    term: Source::Label(Complement::CONST),
-                    field: field::INT_WIDTH,
-                    out: Complement::WIDTH,
-                },
                 Guard::Let {
                     out: Complement::NEGATED,
                     value: Expr::IsZero(Box::new(Expr::Scalar(Complement::VALUE))),
@@ -562,10 +556,7 @@ fn cmp_complement(
             HeadOp::Insert {
                 label: LabelFill {
                     template: konst(APInt::new(1, 0)),
-                    fills: smallvec![
-                        (field::INT_VALUE, Complement::NEGATED),
-                        (field::INT_WIDTH, Complement::WIDTH),
-                    ],
+                    fills: smallvec![(field::INT_VALUE, Complement::NEGATED)],
                 },
                 args: SmallVec::new(),
                 into: 4,
@@ -582,30 +573,27 @@ struct Complement;
 
 impl Complement {
     const ROW: u32 = 0;
-    const CONST: u32 = 1;
-    const VALUE: u32 = 2;
-    const WIDTH: u32 = 3;
-    const NEGATED: u32 = 4;
-    const OTHER_ROW: u32 = 5;
-    const TY: u32 = 6;
-    const OTHER_TY: u32 = 7;
+    const VALUE: u32 = 1;
+    const NEGATED: u32 = 2;
+    const OTHER_ROW: u32 = 3;
+    const TY: u32 = 4;
+    const OTHER_TY: u32 = 5;
 }
 
 /// The `builtin.cmpi` node of `predicate` over `children`, at `ty` — `None` for a
 /// pattern template, which matches the comparison at any result type.
 fn cmpi(context: &Context, predicate: Predicate, ty: Option<TypeId>, children: Vec<Id>) -> Node {
     Node {
-        kind: Kind::Ir(IrOp {
-            dialect: ops::CmpIOp::dialect(),
-            name: ops::CmpIOp::name(),
-            attrs: vec![context.named_attribute("predicate", AttributeValue::Predicate(predicate))],
-            commutative: false,
-            cost: 0,
-        }),
+        kind: Kind::Ir(IrOp::template(
+            ops::CmpIOp::dialect(),
+            ops::CmpIOp::name(),
+            vec![context.named_attribute("predicate", AttributeValue::Predicate(predicate))],
+        )),
         payload: None,
         ty,
         children,
         prov: Prov::None,
+        carrier: None,
     }
 }
 
@@ -650,6 +638,17 @@ fn class_state_resource_of(context: &Context, ty: u32) -> Option<u64> {
 
 fn konst(value: APInt) -> Node {
     Node::constant(value, Prov::None)
+}
+
+/// Whether `O` keeps a constant at `operand` as a node, `zero` saying it is the
+/// literal zero: an offset law moves a constant into the reference the op is,
+/// leaving a zero an identity dissolves too, so a rule matching any other
+/// constant there never fires.
+fn constant_operand_kept<O: Operation>(context: &Context, operand: usize, zero: bool) -> bool {
+    let Some(law) = IrOp::declared(context, (O::dialect(), O::name()), Vec::new(), 0).law else {
+        return true;
+    };
+    law.offset_coefficient(operand).is_none() || (zero && law.identity(operand).is_none())
 }
 
 include!(concat!(env!("OUT_DIR"), "/instcombine_rules.rs"));

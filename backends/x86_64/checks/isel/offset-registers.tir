@@ -1,0 +1,18 @@
+// RUN: tir mc --march=x86_64 --stage=isel %s | filecheck %s
+
+// `p` and `p + 8` are one class at two offsets, and two values: storing the
+// second through the first keeps both in registers of their own.
+
+module {
+  %fn_store_next = func.func @store_next(%p: !ptr.p<!ptr.p<!i64>>) {
+    %eight = constant {value = 8} : !i64
+    %q = ptr.ptradd %p, %eight : !ptr.p<!ptr.p<!i64>>
+    ptr.store %q, %p
+    func.return
+  }
+  module_end
+}
+
+// CHECK-LABEL: asm.symbol {name = "store_next", arg_regs = [%[[P:[0-9]+]]:GPR]}
+// CHECK: x86_64.lea_base_disp {dst = %[[Q:[0-9]+]]:GPR, base = %[[P]]:GPR, imm = 8}
+// CHECK: x86_64.mov_store {base = %[[P]]:GPR, src = %[[Q]]:GPR}

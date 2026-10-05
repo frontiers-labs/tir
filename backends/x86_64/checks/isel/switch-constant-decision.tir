@@ -24,6 +24,6 @@ module {
 }
 
 // CHECK-LABEL: asm.symbol {name = "g"
-// CHECK: x86_64.mov_imm8 {dst = %[[D:[0-9]+]]{{.*}}, imm = 0}
-// CHECK: x86_64.cmp_imm8 {dst = %[[D]]{{.*}}, imm = 1}
+// CHECK: x86_64.mov_imm32 {dst = %[[D:[0-9]+]]{{.*}}, imm = 0}
+// CHECK: x86_64.cmp32 {dst = %[[D]]{{.*}}}
 // CHECK: x86_64.jne

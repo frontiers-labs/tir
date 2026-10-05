@@ -13,14 +13,14 @@
 use std::hash::{Hash, Hasher};
 
 use tir_adt::{APInt, FxHasher};
-use tir_relational::{ClassId as Id, Label as ENode};
+use tir_relational::{Carrier, ClassId as Id, Label as ENode};
 
 use crate::attributes::{AttributeValue, NamedAttribute};
 use crate::sem::{SymKind, SymPayload};
 use crate::{OpCost, OpHandle, OpId, Operation, TypeId, ValueId};
 
-/// An IR operation's identity: `(dialect, name, attributes)`. `commutative` and
-/// `cost` describe the operator but do not identify it.
+/// An IR operation's identity: `(dialect, name, attributes)`. `commutative`,
+/// `cost` and the offset laws describe the operator but do not identify it.
 #[derive(Clone, Debug)]
 pub struct IrOp {
     pub dialect: &'static str,
@@ -28,6 +28,66 @@ pub struct IrOp {
     pub attrs: Vec<NamedAttribute>,
     pub commutative: bool,
     pub cost: u32,
+    /// The semantic operator whose offset laws the op shares, from its
+    /// [`crate::Additive`] or [`crate::Subtractive`] declaration.
+    pub law: Option<SymKind>,
+    /// Bit `i` set when operand `i` has the result's type, so an identity
+    /// element at the other operand returns it.
+    pub result_typed: u8,
+}
+
+impl IrOp {
+    /// The operator `identity` names, as `context` registered it: whether it
+    /// commutes, and the laws it declares. Read off the name alone, so an op a
+    /// rewrite introduces has the laws of a seeded one.
+    pub fn declared(
+        context: &crate::Context,
+        identity: (&'static str, &'static str),
+        attrs: Vec<NamedAttribute>,
+        cost: u32,
+    ) -> Self {
+        let law = if context
+            .find_op_interface::<dyn crate::Additive>(identity)
+            .is_some()
+        {
+            Some(SymKind::Add)
+        } else if context
+            .find_op_interface::<dyn crate::Subtractive>(identity)
+            .is_some()
+        {
+            Some(SymKind::Sub)
+        } else {
+            None
+        };
+        let uniform = context
+            .find_op_interface::<dyn crate::SameOperandAndResultType>(identity)
+            .is_some();
+        Self {
+            dialect: identity.0,
+            name: identity.1,
+            attrs,
+            commutative: context
+                .find_op_interface::<dyn crate::Commutative>(identity)
+                .is_some(),
+            cost,
+            law,
+            result_typed: if uniform { u8::MAX } else { 0 },
+        }
+    }
+
+    /// A pattern over the operator alone, with no laws: a template only
+    /// matches.
+    pub fn template(dialect: &'static str, name: &'static str, attrs: Vec<NamedAttribute>) -> Self {
+        Self {
+            dialect,
+            name,
+            attrs,
+            commutative: false,
+            cost: 0,
+            law: None,
+            result_typed: 0,
+        }
+    }
 }
 
 impl PartialEq for IrOp {
@@ -143,6 +203,12 @@ pub struct SemNode {
     pub ty: Option<TypeId>,
     pub children: Vec<Id>,
     pub prov: Prov,
+    /// The integer or pointer carrier the value lives in, read off its type
+    /// where the node was built: a [`TypeId`] needs the context to read, and a
+    /// pointer's width the data layout. Part of the label, so two nodes alike
+    /// but for their carrier never share laws. An integer literal's carrier is
+    /// its own width whatever this says.
+    pub carrier: Option<Carrier>,
 }
 
 impl SemNode {
@@ -154,6 +220,7 @@ impl SemNode {
             ty: None,
             children: Vec::new(),
             prov: Prov::Value(value),
+            carrier: None,
         }
     }
 
@@ -165,6 +232,7 @@ impl SemNode {
             ty: None,
             children: Vec::new(),
             prov,
+            carrier: None,
         }
     }
 
@@ -208,46 +276,48 @@ impl SemNode {
             ty: None,
             children: args,
             prov: Prov::Value(value),
+            carrier: None,
         }
     }
 
     /// A seeded IR op: identity/`ty`/attrs from `instance`, `cost` from its
-    /// [`OpCost`] interface.
+    /// [`OpCost`] interface, laws from its declarations. `commutative` may
+    /// widen what the op declares, for a merge whose inputs are unordered.
     pub fn seeded(instance: &OpHandle, ty: TypeId, commutative: bool, args: Vec<Id>) -> Self {
         let cost = instance
             .clone()
             .as_interface::<dyn OpCost>()
             .map_or(1, |c| c.cost());
-        Self::ir(
-            IrOp {
-                dialect: instance.dialect().as_str(),
-                name: instance.name().as_str(),
-                attrs: instance.attributes().to_vec(),
-                commutative,
-                cost,
-            },
-            Some(ty),
-            args,
-            Prov::Op(instance.id),
-        )
+        let context = &instance.context;
+        let mut op = IrOp::declared(
+            context,
+            (instance.dialect().as_str(), instance.name().as_str()),
+            instance.attributes().to_vec(),
+            cost,
+        );
+        op.commutative |= commutative;
+        op.result_typed = instance
+            .operands()
+            .iter()
+            .enumerate()
+            .filter(|&(_, &operand)| context.get_value(operand).ty() == ty)
+            .fold(0, |bits, (index, _)| {
+                bits | 1u8.checked_shl(index as u32).unwrap_or(0)
+            });
+        Self::ir(op, Some(ty), args, Prov::Op(instance.id))
     }
 
     /// An op a rewrite introduced, built by the ruleset's `idx`-th emitter.
+    /// Its carrier is filled in with its type.
     pub fn introduced<O: Operation>(
+        context: &crate::Context,
         ty: TypeId,
-        commutative: bool,
         cost: u32,
         idx: usize,
         args: Vec<Id>,
     ) -> Self {
         Self::ir(
-            IrOp {
-                dialect: O::dialect(),
-                name: O::name(),
-                attrs: Vec::new(),
-                commutative,
-                cost,
-            },
+            IrOp::declared(context, (O::dialect(), O::name()), Vec::new(), cost),
             Some(ty),
             args,
             Prov::Introduced(idx),
@@ -257,13 +327,7 @@ impl SemNode {
     /// LHS template matching any op of `O`'s identity, at any result type.
     pub fn pattern<O: Operation>(args: Vec<Id>) -> Self {
         Self::ir(
-            IrOp {
-                dialect: O::dialect(),
-                name: O::name(),
-                attrs: Vec::new(),
-                commutative: false,
-                cost: 0,
-            },
+            IrOp::template(O::dialect(), O::name(), Vec::new()),
             None,
             args,
             Prov::None,
@@ -279,6 +343,7 @@ impl SemNode {
             ty: None,
             children: args,
             prov: Prov::None,
+            carrier: None,
         }
     }
 
@@ -294,6 +359,7 @@ impl SemNode {
             ty,
             children: args,
             prov,
+            carrier: None,
         }
     }
 
@@ -303,13 +369,7 @@ impl SemNode {
     pub fn op_template(&self, args: Vec<Id>) -> Option<Self> {
         let op = self.kind.ir()?;
         Some(Self::ir(
-            IrOp {
-                dialect: op.dialect,
-                name: op.name,
-                attrs: op.attrs.clone(),
-                commutative: false,
-                cost: 0,
-            },
+            IrOp::template(op.dialect, op.name, op.attrs.clone()),
             None,
             args,
             Prov::None,
@@ -341,6 +401,12 @@ impl SemNode {
         self
     }
 
+    /// The same term, its value living in `carrier`.
+    pub fn carried(mut self, carrier: Option<Carrier>) -> Self {
+        self.carrier = carrier;
+        self
+    }
+
     /// The IR value the node stands for at write-back.
     pub fn value(&self) -> Option<ValueId> {
         match self.prov {
@@ -361,6 +427,42 @@ pub mod field {
     /// An integer literal read as two's complement at its own width, so a
     /// negative step in a pointer chain is a negative distance.
     pub const INT_SIGNED: u32 = 3;
+    /// The carrier, as [`super::carrier_word`] spells it; zero for none.
+    pub const CARRIER: u32 = 4;
+}
+
+/// The carrier of an integer `width` bits wide. Every integer of one width
+/// shares it, typed or not, so a literal is one value however it is spelled.
+pub fn int_carrier(width: u32) -> Option<Carrier> {
+    (1..=64).contains(&width).then_some(Carrier {
+        width: width as u8,
+        key: u64::from(width),
+    })
+}
+
+/// The carrier of a pointer `width` bits wide, apart from the integers of that
+/// width.
+pub fn pointer_carrier(width: u32) -> Option<Carrier> {
+    int_carrier(width).map(|carrier| Carrier {
+        key: POINTER | carrier.key,
+        ..carrier
+    })
+}
+
+/// Marks a pointer carrier's key.
+const POINTER: u64 = 1 << 8;
+
+/// `carrier` as one word, for a rule that fills it in: its key, which holds
+/// its width in the low byte. Zero is no carrier.
+pub fn carrier_word(carrier: Option<Carrier>) -> u64 {
+    carrier.map_or(0, |carrier| carrier.key)
+}
+
+fn carrier_from_word(word: u64) -> Option<Carrier> {
+    (word != 0).then_some(Carrier {
+        width: (word & 0xff) as u8,
+        key: word,
+    })
 }
 
 pub fn template_node(
@@ -374,6 +476,7 @@ pub fn template_node(
         ty,
         children: Vec::new(),
         prov: Prov::None,
+        carrier: None,
     }
 }
 
@@ -395,7 +498,10 @@ pub fn cost(node: &SemNode) -> u64 {
 /// labels are equal and their canonical children are equal (the [`ENode`] model).
 impl PartialEq for SemNode {
     fn eq(&self, other: &Self) -> bool {
-        self.kind == other.kind && self.payload == other.payload && self.ty == other.ty
+        self.kind == other.kind
+            && self.payload == other.payload
+            && self.ty == other.ty
+            && self.carrier == other.carrier
     }
 }
 
@@ -489,6 +595,7 @@ impl ENode for SemNode {
                 field::TY => node.ty = Some(TypeId::from_number(word as u32)),
                 field::INT_VALUE => value = Some(word),
                 field::INT_WIDTH => width = Some(word as u32),
+                field::CARRIER => node.carrier = carrier_from_word(word),
                 _ => return None,
             }
         }
@@ -498,8 +605,61 @@ impl ENode for SemNode {
         Some(node)
     }
 
-    fn from_int(value: APInt) -> Option<Self> {
-        Some(SemNode::constant(value, Prov::None))
+    fn carrier(&self) -> Option<Carrier> {
+        match self.literal() {
+            Some(value) => int_carrier(value.width()),
+            None => self.carrier,
+        }
+    }
+
+    fn offset_coefficient(&self, operand: usize) -> Option<i64> {
+        self.law()?.offset_coefficient(operand)
+    }
+
+    /// An IR op's identity holds only where the operand it returns has the
+    /// result's type: a pointer plus a zero integer is the pointer, but a null
+    /// pointer plus an integer is no integer.
+    fn identity(&self, operand: usize) -> Option<u64> {
+        let law = self.law()?;
+        if let Kind::Ir(op) = &self.kind
+            && op.result_typed & (1 << (1 - operand.min(1))) == 0
+        {
+            return None;
+        }
+        law.identity(operand)
+    }
+
+    fn bias(&self) -> u64 {
+        self.law().map_or(0, |law| law.bias())
+    }
+
+    fn int_value(&self) -> Option<u64> {
+        self.literal().map(APInt::to_u64)
+    }
+
+    /// Only an integer carrier's constants are spelled: a pointer has no
+    /// literal, so no zero to be an offset of.
+    fn constant_of(&self, value: u64) -> Option<Self> {
+        let carrier = self.carrier()?;
+        (carrier.key & POINTER == 0)
+            .then(|| SemNode::constant(APInt::new(u32::from(carrier.width), value), Prov::None))
+    }
+}
+
+impl SemNode {
+    /// The integer literal this node is, as a constant of the vocabulary.
+    fn literal(&self) -> Option<&APInt> {
+        (self.kind == SymKind::Constant)
+            .then(|| self.int())
+            .flatten()
+    }
+
+    /// The semantic operator whose offset laws this node has.
+    fn law(&self) -> Option<SymKind> {
+        match &self.kind {
+            Kind::Sym(kind) => Some(*kind),
+            Kind::Ir(op) => op.law,
+        }
     }
 }
 
@@ -507,6 +667,7 @@ impl ENode for SemNode {
 fn hash_label(node: &SemNode, state: &mut impl Hasher) {
     node.kind.hash_into(state);
     node.ty.hash(state);
+    node.carrier.map(|carrier| carrier.key).hash(state);
     match &node.payload {
         None => 0u8.hash(state),
         Some(SemPayload::Expr(SymPayload::SymbolId(s))) => {

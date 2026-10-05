@@ -25,15 +25,22 @@ mod x86;
 /// (writable for a `*mut`), and the instruction set must be available.
 pub(crate) struct Kernels {
     name: &'static str,
-    /// First row holding `value`, or `len`.
-    find_eq: unsafe fn(column: *const u32, len: usize, value: u32) -> usize,
+    /// Write the rows holding `value` to `out`, ascending, and return how
+    /// many there are. `out` has room for `len`.
+    select_eq: unsafe fn(column: *const u32, len: usize, value: u32, out: *mut u32) -> usize,
     /// First row where the two columns agree, or `len`.
     find_same: unsafe fn(a: *const u32, b: *const u32, len: usize) -> usize,
-    /// Largest cell, or zero for no cells.
-    max: unsafe fn(column: *const u32, len: usize) -> u32,
-    /// `flags[row] |= (map[column[row]] != column[row])`. Every cell indexes
-    /// `map`.
-    mark_moved: unsafe fn(column: *const u32, map: *const u32, flags: *mut u32, len: usize),
+    /// Write the rows whose cell is `map_len` or more, or which `map` sends
+    /// somewhere else, to `out`, ascending, and return how many there are.
+    /// `map` is `map_len` cells long, at most [`MAX_GATHER`]; `out` has room
+    /// for `len`.
+    select_moved: unsafe fn(
+        column: *const u32,
+        map: *const u32,
+        map_len: usize,
+        len: usize,
+        out: *mut u32,
+    ) -> usize,
     /// `hash[row] = (hash[row] ^ column[row]) * HASH_MUL`.
     hash_mix: unsafe fn(hash: *mut u32, column: *const u32, len: usize),
     /// `hash[row] ^= hash[row] >> 15`.
@@ -83,16 +90,18 @@ pub fn backend() -> &'static str {
 const MAX_GATHER: usize = 1 << 29;
 
 fn select_eq_with(set: &Kernels, column: &[u32], value: u32, out: &mut Vec<u32>) {
-    let mut at = 0;
-    while at < column.len() {
-        // SAFETY: the pointer and length name the rest of `column`.
-        at += unsafe { (set.find_eq)(column.as_ptr().add(at), column.len() - at, value) };
-        // Hits come in runs where they are not rare, and a run is cheaper to
-        // walk than to find one vector scan at a time.
-        while column.get(at) == Some(&value) {
-            out.push(at as u32);
-            at += 1;
-        }
+    out.reserve(column.len());
+    let len = out.len();
+    // SAFETY: the pointer and length name `column`, and `out` has room for a
+    // row per cell past its end; the kernel initialized the rows it counted.
+    unsafe {
+        let found = (set.select_eq)(
+            column.as_ptr(),
+            column.len(),
+            value,
+            out.as_mut_ptr().add(len),
+        );
+        out.set_len(len + found);
     }
 }
 
@@ -119,33 +128,29 @@ pub fn select_same(a: &[u32], b: &[u32], out: &mut Vec<u32>) {
     select_same_with(kernels(), a, b, out);
 }
 
-fn mark_moved_with(set: &Kernels, column: &[u32], map: &[u32], flags: &mut [u32]) {
-    assert_eq!(column.len(), flags.len(), "a flag per row");
+fn select_moved_with(set: &Kernels, column: &[u32], map: &[u32], out: &mut Vec<u32>) {
     assert!(map.len() <= MAX_GATHER, "the map is within gather range");
-    // SAFETY: the pointer and length name `column`.
-    let max = unsafe { (set.max)(column.as_ptr(), column.len()) };
-    assert!(
-        column.is_empty() || (max as usize) < map.len(),
-        "every cell has an entry in the map"
-    );
-    // SAFETY: the three slices are as long as stated, and the check above put
-    // every cell inside `map`.
+    out.reserve(column.len());
+    let len = out.len();
+    // SAFETY: the pointers and lengths name `column` and `map`, the kernel
+    // reads `map` only below its length, and `out` has room for a row per
+    // cell past its end; the kernel initialized the rows it counted.
     unsafe {
-        (set.mark_moved)(
+        let found = (set.select_moved)(
             column.as_ptr(),
             map.as_ptr(),
-            flags.as_mut_ptr(),
+            map.len(),
             column.len(),
-        )
-    };
+            out.as_mut_ptr().add(len),
+        );
+        out.set_len(len + found);
+    }
 }
 
-/// Set `flags[row]` to one where `map` sends the cell of `column` at `row`
-/// somewhere else. Flags already set stay set, so several columns accumulate
-/// into one "this row moved", which [`select_eq`] then lists. Panics if a cell
-/// is outside `map`.
-pub fn mark_moved(column: &[u32], map: &[u32], flags: &mut [u32]) {
-    mark_moved_with(kernels(), column, map, flags);
+/// Append to `out` the rows of `column` whose cell `map` sends somewhere else,
+/// or which lie outside `map`, ascending.
+pub fn select_moved(column: &[u32], map: &[u32], out: &mut Vec<u32>) {
+    select_moved_with(kernels(), column, map, out);
 }
 
 const HASH_SEED: u32 = 0x811c_9dc5;
@@ -200,14 +205,18 @@ mod tests {
             let b: Vec<u32> = rows.iter().map(|row| row.1).collect();
             let wide: Vec<u32> = rows.iter().map(|row| row.2).collect();
             let all = 0..rows.len() as u32;
-            let equal: Vec<u32> = all.clone().filter(|&row| a[row as usize] == 3).collect();
+            // `select_eq` appends.
+            let equal: Vec<u32> = std::iter::once(7).chain(all.clone().filter(|&row| a[row as usize] == 3)).collect();
             let same: Vec<u32> = all.clone().filter(|&row| a[row as usize] == b[row as usize]).collect();
-            let moved: Vec<u32> = a.iter().zip(&b)
-                .map(|(&x, &y)| u32::from(map[x as usize] != x || map[y as usize] != y))
-                .collect();
+            // `wide` reaches past the map; `short` cuts the map below some cells.
+            let short = &map[..3];
+            let moved = |column: &[u32], map: &[u32]| (0..column.len() as u32)
+                .filter(|&row| map.get(column[row as usize] as usize) != Some(&column[row as usize]))
+                .collect::<Vec<u32>>();
+            let all_moved = [&a, &wide].map(|column| [&map[..], short].map(|map| moved(column, map)));
             let hashes: Vec<u32> = rows.iter().map(|&(x, y, z)| hash_row(&[x, y, z])).collect();
             for set in available() {
-                let mut found = Vec::new();
+                let mut found = vec![7];
                 select_eq_with(set, &a, 3, &mut found);
                 prop_assert_eq!(&found, &equal, "select_eq on {}", set.name);
 
@@ -215,25 +224,17 @@ mod tests {
                 select_same_with(set, &a, &b, &mut found);
                 prop_assert_eq!(&found, &same, "select_same on {}", set.name);
 
-                let mut flags = vec![0; rows.len()];
-                mark_moved_with(set, &a, &map, &mut flags);
-                mark_moved_with(set, &b, &map, &mut flags);
-                prop_assert_eq!(&flags, &moved, "mark_moved on {}", set.name);
+                let found = [&a, &wide].map(|column| [&map[..], short].map(|map| {
+                    let mut found = Vec::new();
+                    select_moved_with(set, column, map, &mut found);
+                    found
+                }));
+                prop_assert_eq!(found, all_moved.clone(), "select_moved on {}", set.name);
 
                 let mut out = vec![0; rows.len()];
                 hash_rows_with(set, &[&a, &b, &wide], &mut out);
                 prop_assert_eq!(&out, &hashes, "hash_rows on {}", set.name);
-
-                // SAFETY: the pointer and length name `wide`.
-                let max = unsafe { (set.max)(wide.as_ptr(), wide.len()) };
-                prop_assert_eq!(max, wide.iter().copied().max().unwrap_or(0), "max on {}", set.name);
             }
         }
-    }
-
-    #[test]
-    #[should_panic(expected = "every cell has an entry in the map")]
-    fn mark_moved_refuses_a_cell_outside_the_map() {
-        mark_moved(&[0, 5], &[0, 1], &mut [0, 0]);
     }
 }

@@ -8,7 +8,7 @@
 //! a semantic type is spelled as. What a *backend* makes of a class — a
 //! register's type, a low-bit view of one — stays with the backend.
 
-use tir_relational::{ClassId as Id, Engine};
+use tir_relational::{Carrier, ClassId as Id, Engine, Ref};
 
 use crate::builtin::{FloatType, IntegerType};
 use crate::sem::{FloatFormat, SemNode, SemPayload, SemType, SymKind, SymPayload};
@@ -19,17 +19,20 @@ use tir_adt::APInt;
 /// values a region or a function computes.
 pub type SemEGraph = Engine<SemNode>;
 
-/// The constant a class is proven to hold: an integer literal member, or the
-/// value the open assumption scope proves it evaluates to.
-pub(crate) fn class_int_binding(egraph: &SemEGraph, class: Id) -> Option<APInt> {
+/// The constant a value is proven to hold: an offset of its carrier's zero,
+/// the value an open assumption scope proves it evaluates to, or an integer
+/// literal too wide for a carrier among its class's rows.
+pub(crate) fn class_int_binding(egraph: &SemEGraph, value: Ref) -> Option<APInt> {
     let int = |n: &SemNode| match &n.payload {
         Some(SemPayload::Expr(SymPayload::Int(v))) => Some(v.clone()),
         _ => None,
     };
-    egraph
-        .const_of(class)
-        .and_then(int)
-        .or_else(|| egraph.nodes(class).find_map(int))
+    let value = egraph.find(value);
+    egraph.const_of(value).and_then(|n| int(&n)).or_else(|| {
+        (value.offset == 0)
+            .then(|| egraph.nodes(value.class).find_map(int))
+            .flatten()
+    })
 }
 
 /// An unsigned literal at its minimal width. Widths identify a constant class,
@@ -64,6 +67,27 @@ pub(crate) fn complement_comparison(kind: SymKind) -> Option<SymKind> {
 /// Whether the kind is a boolean comparison.
 pub(crate) fn is_comparison(kind: SymKind) -> bool {
     complement_comparison(kind).is_some()
+}
+
+/// The carrier a value of `ty` lives in: an integer of at most 64 bits, or a
+/// pointer where a data layout gives its width. Anything else keeps no
+/// offsets.
+pub(crate) fn carrier_of(
+    context: &Context,
+    pointer_width: Option<u32>,
+    ty: TypeId,
+) -> Option<Carrier> {
+    if context.is_state_type(ty) {
+        return None;
+    }
+    let data = context.get_type_data(ty);
+    let any = data.as_ref() as &dyn std::any::Any;
+    if let Some(int) = any.downcast_ref::<IntegerType>() {
+        return crate::sem::node::int_carrier(int.width());
+    }
+    any.downcast_ref::<crate::ptr::PtrType>()
+        .and(pointer_width)
+        .and_then(crate::sem::node::pointer_carrier)
 }
 
 /// The bit-width of an IR integer or float type, or `None` for any other type.
@@ -141,6 +165,15 @@ pub(crate) fn class_width(ctx: &Context, egraph: &SemEGraph, class: Id) -> Optio
     egraph
         .nodes(class)
         .find_map(|n| n.ty.and_then(|ty| type_width(ctx, ty)))
+        .or_else(|| class_type(egraph, class).and_then(|ty| type_width(ctx, ty)))
+}
+
+/// The type the engine's type column holds for `class`: what a carrier's zero,
+/// whose constants are references rather than typed rows, is known by.
+fn class_type(egraph: &SemEGraph, class: Id) -> Option<TypeId> {
+    egraph
+        .fact(tir_relational::ColumnId::Type, class)
+        .map(|number| TypeId::from_number(number as u32))
 }
 
 /// A ground semantic type carried by any typed member of an e-class.
@@ -148,4 +181,5 @@ pub(crate) fn class_semantic_type(ctx: &Context, egraph: &SemEGraph, class: Id) 
     egraph
         .nodes(class)
         .find_map(|node| node.ty.and_then(|ty| semantic_type(ctx, ty)))
+        .or_else(|| class_type(egraph, class).and_then(|ty| semantic_type(ctx, ty)))
 }

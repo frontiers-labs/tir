@@ -1,9 +1,10 @@
 // A `const<8>` binder generates a width check on the matched constant: the
-// constant column names the value, and a guard reads the width off it.
+// value is read off the reference as an offset of its carrier's zero, the
+// width off the carrier, and a guard compares it.
 // RUN: tir-pdl %s --emit rust | filecheck %s
 
 rule width: builtin.muli(x: int<W>, c: const<8>) => x;
 
-// CHECK: Atom::Fact { column : ColumnId::Const
-// CHECK: field::INT_WIDTH
-// CHECK: Expr::Lit(8i64)
+// CHECK: Atom::Const { key : 1u32, value : [[VALUE:[0-9]+u32]] }
+// CHECK: Atom::Width { key : 1u32, width : [[WIDTH:[0-9]+u32]] }
+// CHECK: Guard::Cmp(Cmp::Eq, Expr::Scalar([[WIDTH]]), Expr::Lit(8i64))

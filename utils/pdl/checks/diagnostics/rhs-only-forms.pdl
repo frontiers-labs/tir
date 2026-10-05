@@ -1,10 +1,6 @@
-// `root` and `keep` name right-hand-side positions.
+// `root` names a right-hand-side position.
 // RUN: not tir-pdl %s --emit ast 2>&1 | filecheck %s
 
 rule matched-class-on-lhs: #add(root, x) => x;
-rule kept-node-on-lhs: #add(keep #neg(x), x) => x;
-rule kept-without-materialize: #add(x: int<W>, 0) => keep #neg(x);
 
 // CHECK: `root` cannot appear on the left-hand side
-// CHECK: `keep` cannot appear on the left-hand side
-// CHECK: `keep` is only meaningful in a materialize rule

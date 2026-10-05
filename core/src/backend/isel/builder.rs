@@ -14,18 +14,18 @@ use tir::{
     },
 };
 use tir_adt::APInt;
-use tir_relational::ClassId as Id;
+use tir_relational::Ref;
 
-use super::node::class_is_pure;
+use super::node::rows_at;
 use crate::analysis::effects::{observed_state, produced_state};
 use crate::passes::destructure::{ControlDefinition, ControlId, ControlKind, ControlOutcome};
 
-/// What a walk records for the cover: the class each operation is rooted at, and
-/// the float constants a target materializer could build.
+/// What a walk records for the cover: the value each operation is rooted at,
+/// and the float constants a target materializer could build.
 #[derive(Default)]
 pub(crate) struct Seeds {
-    pub(crate) roots_by_op: HashMap<OpId, Id>,
-    pub(crate) constant_candidates: Vec<(OpId, Id)>,
+    pub(crate) roots_by_op: HashMap<OpId, Ref>,
+    pub(crate) constant_candidates: Vec<(OpId, Ref)>,
 }
 
 /// Which recovery control outcome a class stands for.
@@ -41,20 +41,21 @@ pub(crate) struct ControlSlot {
 /// materializes them.
 #[derive(Default)]
 pub(crate) struct RegionControl {
-    pub(crate) aux: HashMap<RegionId, Vec<(OpId, ControlSlot, Id)>>,
-    pub(crate) inverses: HashMap<ControlSlot, Id>,
+    pub(crate) aux: HashMap<RegionId, Vec<(OpId, ControlSlot, Ref)>>,
+    pub(crate) inverses: HashMap<ControlSlot, Ref>,
 }
 
 impl RegionControl {
-    fn record(&mut self, region: RegionId, op: OpId, slot: ControlSlot, class: Id) {
+    fn record(&mut self, region: RegionId, op: OpId, slot: ControlSlot, class: Ref) {
         self.aux.entry(region).or_default().push((op, slot, class));
     }
 }
 
 /// Builds a block's semantic expressions straight into the e-graph: every lowered
 /// node is hash-consed by [`SemEngine::add`], so the e-graph *is* the interned DAG
-/// (no separate arena). Returns e-class [`Id`]s and records, in `value_to_class`,
-/// the class built for each IR value so operands share and cross-block uses expand.
+/// (no separate arena). Returns the [`Ref`] each node is and records, in
+/// `value_to_class`, the value built for each IR value so operands share and
+/// cross-block uses expand.
 pub(crate) struct SemDagBuilder<'a> {
     context: &'a Context,
     value_to_def: &'a HashMap<ValueId, OpId>,
@@ -64,8 +65,8 @@ pub(crate) struct SemDagBuilder<'a> {
     order: &'a HashMap<RegionId, Vec<OpId>>,
     egraph: &'a mut SemEGraph,
     pointer_width: Option<u32>,
-    /// The e-class built for each already-lowered IR value (operand sharing / CSE).
-    pub(crate) value_to_class: HashMap<ValueId, Id>,
+    /// The value built for each already-lowered IR value (operand sharing / CSE).
+    pub(crate) value_to_class: HashMap<ValueId, Ref>,
     /// Serial of the next opaque leaf; each un-lowerable node gets its own.
     opaque_serial: u32,
 }
@@ -200,12 +201,12 @@ impl<'a> SemDagBuilder<'a> {
                         args.push(self.build_from_value(value));
                     }
                     let ty = self.context.get_value(result).ty();
-                    let gamma = self.egraph.add(SemNode::gamma(result, args).typed(ty));
+                    let gamma = self.insert(SemNode::gamma(result, Vec::new()).typed(ty), &args);
                     // The gate's own value joins the choice: the cover may read the
                     // gate as the register its regions leave it in, whatever it can
                     // do with the arms' terms.
                     let anchor = self.add_input_value(result, Some(ty));
-                    self.egraph.union(gamma, anchor)
+                    self.union(gamma, anchor)
                 }
             };
             self.value_to_class.insert(result, class);
@@ -243,8 +244,8 @@ impl<'a> SemDagBuilder<'a> {
             let init = self.build_from_value(init);
             let next = self.build_from_value(next);
             let head = self.build_from_value(port);
-            let theta = self.egraph.add(SemNode::theta(port, vec![init, next]));
-            self.egraph.union(theta, head);
+            let theta = self.insert(SemNode::theta(port, Vec::new()), &[init, next]);
+            self.union(theta, head);
         }
         self.egraph.rebuild();
     }
@@ -320,9 +321,9 @@ impl<'a> SemDagBuilder<'a> {
                 outcome,
                 inverted,
             };
-            let comparison = self.egraph.nodes(class).find_map(|node| {
-                tir::sem::egraph::complement_comparison(node.sym()?)
-                    .map(|kind| (kind, node.children.clone()))
+            let comparison = rows_at(self.egraph, class).find_map(|row| {
+                tir::sem::egraph::complement_comparison(self.egraph.node(row).sym()?)
+                    .map(|kind| (kind, self.egraph.children(row).to_vec()))
             });
             let inverse = if let Some((kind, operands)) = comparison {
                 self.add_op(kind, operands, Some(boolean))
@@ -340,8 +341,27 @@ impl<'a> SemDagBuilder<'a> {
         kind: SymKind,
         payload: Option<SymPayload<ValueId>>,
         ty: Option<TypeId>,
-    ) -> Id {
-        self.egraph.add(template_node(kind, payload, ty))
+    ) -> Ref {
+        let carrier = self.carrier(ty);
+        self.egraph
+            .add(template_node(kind, payload, ty).carried(carrier))
+    }
+
+    /// Intern `node` over `operands`, which stand for its children.
+    fn insert(&mut self, mut node: SemNode, operands: &[Ref]) -> Ref {
+        node.children = operands.iter().map(|operand| operand.class).collect();
+        self.egraph.insert(node, operands)
+    }
+
+    /// The carrier a node of type `ty` lives in.
+    fn carrier(&self, ty: Option<TypeId>) -> Option<tir_relational::Carrier> {
+        ty.and_then(|ty| tir::sem::egraph::carrier_of(self.context, self.pointer_width, ty))
+    }
+
+    /// Record `a == b`, a refused union leaving both where they were.
+    fn union(&mut self, a: Ref, b: Ref) -> Ref {
+        let _ = self.egraph.union(a, b);
+        self.egraph.find(a)
     }
 
     fn next_opaque_serial(&mut self) -> u32 {
@@ -350,43 +370,26 @@ impl<'a> SemDagBuilder<'a> {
         serial
     }
 
-    fn add_int(&mut self, value: APInt, ty: Option<TypeId>) -> Id {
+    fn add_int(&mut self, value: APInt, ty: Option<TypeId>) -> Ref {
         self.add_leaf(SymKind::Constant, Some(SymPayload::Int(value)), ty)
     }
 
-    fn add_u64_const(&mut self, value: u64) -> Id {
+    fn add_u64_const(&mut self, value: u64) -> Ref {
         self.add_int(minimal_unsigned_apint(value), None)
     }
 
-    /// Add the `addr + 0` form used by base+offset addressing patterns and record
-    /// its exact equality with the bare address used by direct-base patterns.
-    ///
-    /// The equality is recorded only for pure addresses: an effectful address
-    /// (e.g. a loaded pointer) must keep its effect node as the class's sole
-    /// materialization — unioning in an arithmetic view would let the cover pick
-    /// that view and leave the effect with no rule to materialize it.
-    fn zero_offset_address(&mut self, address: Id) -> Id {
-        let zero = self.add_u64_const(0);
-        let with_zero = self.add_op(SymKind::Add, vec![address, zero], None);
-        if class_is_pure(self.egraph, address) {
-            self.egraph.union(with_zero, address)
-        } else {
-            with_zero
-        }
-    }
-
-    fn add_input_value(&mut self, value: ValueId, ty: Option<TypeId>) -> Id {
+    fn add_input_value(&mut self, value: ValueId, ty: Option<TypeId>) -> Ref {
         self.add_leaf(SymKind::Symbol, Some(SymPayload::Value(value)), ty)
     }
 
-    fn add_unknown_symbol(&mut self, symbol: u32, ty: Option<TypeId>) -> Id {
+    fn add_unknown_symbol(&mut self, symbol: u32, ty: Option<TypeId>) -> Ref {
         self.add_leaf(SymKind::Symbol, Some(SymPayload::SymbolId(symbol)), ty)
     }
 
     /// A leaf that nothing materializes — the placeholder for an un-lowerable node,
     /// so a partial semantic expansion still yields a well-formed graph. Each call
     /// mints a distinct leaf: two unknown computations are never assumed equal.
-    pub(crate) fn add_opaque(&mut self) -> Id {
+    pub(crate) fn add_opaque(&mut self) -> Ref {
         let serial = self.next_opaque_serial();
         let mut node = template_node(SymKind::Symbol, None, None);
         node.payload = Some(SemPayload::Opaque(serial));
@@ -395,7 +398,7 @@ impl<'a> SemDagBuilder<'a> {
 
     /// Build an operator node, canonicalizing commutative operands so `a op b` and
     /// `b op a` hash-cons to the same e-node (mirroring the program's CSE).
-    fn add_op(&mut self, kind: SymKind, mut children: Vec<Id>, ty: Option<TypeId>) -> Id {
+    fn add_op(&mut self, kind: SymKind, mut children: Vec<Ref>, ty: Option<TypeId>) -> Ref {
         // An extension's width is a structural integer, not a bitvector value.
         // IR attributes and target patterns may encode it at different widths.
         if matches!(kind, SymKind::SExt | SymKind::ZExt)
@@ -404,14 +407,16 @@ impl<'a> SemDagBuilder<'a> {
             children[1] = self.add_u64_const(value.to_u64());
         }
         if kind.is_commutative() {
+            for child in &mut children {
+                *child = self.egraph.find(*child);
+            }
             children.sort();
         }
-        let mut node = template_node(kind, None, ty);
-        node.children = children;
-        self.egraph.add(node)
+        let node = template_node(kind, None, ty).carried(self.carrier(ty));
+        self.insert(node, &children)
     }
 
-    pub(crate) fn build_for_op(&mut self, op: &OpHandle) -> Option<Id> {
+    pub(crate) fn build_for_op(&mut self, op: &OpHandle) -> Option<Ref> {
         // A standalone `fp.constant` is left for the target's pre-RA hook, like a
         // bare integer `constant`; only as an operand (see `build_from_value`)
         // does it fold into a consumer via `float_constant_class`.
@@ -453,7 +458,7 @@ impl<'a> SemDagBuilder<'a> {
         &mut self,
         op: &OpHandle,
         semantics: &tir::ResourceSemantics,
-    ) -> Id {
+    ) -> Ref {
         let types = self.infer_local_types(&semantics.graph, &[]);
         let value = self.lower_graph_node(&semantics.graph, semantics.root, &[], types.as_deref());
         let effects = op
@@ -498,14 +503,14 @@ impl<'a> SemDagBuilder<'a> {
         root
     }
 
-    fn build_operands(&mut self, operands: &[ValueId]) -> Vec<Id> {
+    fn build_operands(&mut self, operands: &[ValueId]) -> Vec<Ref> {
         operands
             .iter()
             .map(|&operand| self.build_from_value(operand))
             .collect()
     }
 
-    fn lower_typed(&mut self, graph: &SemGraph, root: NodeId, operands: &[Id]) -> Id {
+    fn lower_typed(&mut self, graph: &SemGraph, root: NodeId, operands: &[Ref]) -> Ref {
         let types = self.infer_local_types(graph, operands);
         self.lower_graph_node(graph, root, operands, types.as_deref())
     }
@@ -516,14 +521,13 @@ impl<'a> SemDagBuilder<'a> {
     /// read. Nothing here invents an order — the mid-end's chains are the whole
     /// of memory identity, and the ports the term is built from are the ones
     /// emission threads through the machine instruction covering it.
-    fn build_memory_effect(&mut self, op: &OpHandle) -> Option<Id> {
+    fn build_memory_effect(&mut self, op: &OpHandle) -> Option<Ref> {
         if let Some(read) = op.clone().as_interface::<dyn MemoryRead>() {
             let result = read.read_value();
             let result_ty = self.context.get_value(result).ty();
             let bytes = self.type_width(result_ty)? / 8;
             let observed = observed_state(op)?;
             let address = self.build_from_value(read.read_location());
-            let address = self.zero_offset_address(address);
             let bytes = self.add_u64_const(u64::from(bytes));
             let metadata = self.add_u64_const(0);
             let state = self.build_from_value(observed);
@@ -548,7 +552,6 @@ impl<'a> SemDagBuilder<'a> {
             let observed = observed_state(op)?;
             let published = produced_state(op)?;
             let address = self.build_from_value(write.write_location());
-            let address = self.zero_offset_address(address);
             let bytes = self.add_u64_const(u64::from(bytes));
             let value = self.build_from_value(written);
             let address_space = self.add_u64_const(0);
@@ -582,7 +585,7 @@ impl<'a> SemDagBuilder<'a> {
     pub(crate) fn build_defining_compare(
         &mut self,
         value: ValueId,
-    ) -> Option<(Id, SymKind, Id, Id)> {
+    ) -> Option<(Ref, SymKind, Ref, Ref)> {
         let def_id = self.context.get_value(value).defining_op()?;
         if !self.context.has_operation(def_id) {
             return None;
@@ -598,22 +601,25 @@ impl<'a> SemDagBuilder<'a> {
         let root = def.clone().as_dyn_op().semantic_expr(&mut graph)?;
         let operands = self.build_operands(&def.operands());
         let class = self.lower_typed(&graph, root, &operands);
-        let comparison = self
-            .egraph
-            .nodes(class)
-            .find(|n| n.sym().is_some_and(tir::sem::egraph::is_comparison))?
-            .clone();
+        let comparison = rows_at(self.egraph, class).find(|&row| {
+            self.egraph
+                .node(row)
+                .sym()
+                .is_some_and(tir::sem::egraph::is_comparison)
+        })?;
+        let children = self.egraph.children(comparison);
         Some((
             class,
-            comparison
+            self.egraph
+                .node(comparison)
                 .sym()
                 .expect("a comparison node is a semantic operator"),
-            comparison.children[0],
-            comparison.children[1],
+            children[0],
+            children[1],
         ))
     }
 
-    pub(crate) fn build_from_value(&mut self, value: ValueId) -> Id {
+    pub(crate) fn build_from_value(&mut self, value: ValueId) -> Ref {
         if let Some(existing) = self.value_to_class.get(&value) {
             return *existing;
         }
@@ -647,7 +653,7 @@ impl<'a> SemDagBuilder<'a> {
 
     /// Lower a `constant` op to an integer-literal leaf, or to an input value when its
     /// payload is not an integer.
-    fn constant_class(&mut self, def: &OpHandle, value: ValueId, value_ty: Option<TypeId>) -> Id {
+    fn constant_class(&mut self, def: &OpHandle, value: ValueId, value_ty: Option<TypeId>) -> Ref {
         match def.attr("value") {
             Some(AttributeValue::Int(v)) => {
                 let width = value_ty
@@ -664,7 +670,7 @@ impl<'a> SemDagBuilder<'a> {
         }
     }
 
-    fn float_constant_class(&mut self, def: &OpHandle) -> Option<Id> {
+    fn float_constant_class(&mut self, def: &OpHandle) -> Option<Ref> {
         let &result = def.results().first()?;
         let result_ty = self.context.get_value(result).ty();
         let width = {
@@ -685,7 +691,7 @@ impl<'a> SemDagBuilder<'a> {
         Some(self.add_op(SymKind::Bitcast, vec![bits], Some(result_ty)))
     }
 
-    fn infer_local_types(&self, graph: &SemGraph, operands: &[Id]) -> Option<Vec<SemType>> {
+    fn infer_local_types(&self, graph: &SemGraph, operands: &[Ref]) -> Option<Vec<SemType>> {
         infer_types(graph, |node| {
             graph
                 .get_annotation(node)
@@ -705,18 +711,24 @@ impl<'a> SemDagBuilder<'a> {
         .ok()
     }
 
-    /// The IR type recorded on an operand class (taken from any member carrying one).
-    fn class_ty(&self, class: Id) -> Option<TypeId> {
-        self.egraph.nodes(class).find_map(|n| n.ty)
+    /// The IR type recorded on an operand's class (taken from any member
+    /// carrying one, or the class's type column).
+    fn class_ty(&self, value: Ref) -> Option<TypeId> {
+        let class = self.egraph.find(value).class;
+        self.egraph.nodes(class).find_map(|n| n.ty).or_else(|| {
+            self.egraph
+                .fact(tir_relational::ColumnId::Type, class)
+                .map(|number| TypeId::from_number(number as u32))
+        })
     }
 
     fn lower_graph_node(
         &mut self,
         graph: &SemGraph,
         node: NodeId,
-        operands: &[Id],
+        operands: &[Ref],
         types: Option<&[SemType]>,
-    ) -> Id {
+    ) -> Ref {
         let node_ty = graph
             .get_annotation(node)
             .and_then(|m| m.actual_type)
@@ -740,7 +752,7 @@ impl<'a> SemDagBuilder<'a> {
                 _ => self.add_opaque(),
             },
             kind => {
-                let children: Vec<Id> = graph
+                let children: Vec<Ref> = graph
                     .children(node)
                     .map(|child| self.lower_graph_node(graph, child, operands, types))
                     .collect();
@@ -752,4 +764,25 @@ impl<'a> SemDagBuilder<'a> {
             }
         }
     }
+}
+
+/// Mint the integer zero of every carrier width `egraph` holds values in. A
+/// value at an offset from its class reads that offset as an immediate, which
+/// is a constant of the integers that wide whether or not the program spells
+/// one.
+pub(crate) fn mint_zeros(egraph: &mut SemEGraph) {
+    let widths: std::collections::BTreeSet<u32> = egraph
+        .class_ids()
+        .filter_map(|class| egraph.width(class))
+        // A class without a carrier is at offset zero, read as a word.
+        .chain([64])
+        .collect();
+    for width in widths {
+        egraph.add(template_node(
+            SymKind::Constant,
+            Some(SymPayload::Int(APInt::new(width, 0))),
+            None,
+        ));
+    }
+    egraph.rebuild();
 }

@@ -7,12 +7,12 @@
 
 use tir_pdl::{
     AttributeValue, BinaryOp, BindingType, Expr, ExprKind, Operator, Proof, Term, TermKind, Type,
-    UnaryOp, Width,
+    Width,
 };
 
 use super::{
-    AxNode, Axiom, ConstWidth, Guard_, ProofObligation, Side, ValueGuard, ValueTest, WidthBinding,
-    WidthExpr, contains_kind, holes_of, intern, references,
+    AxNode, Axiom, ConstWidth, Guard_, ProofObligation, Side, WidthBinding, WidthExpr,
+    contains_kind, holes_of, intern, references,
 };
 use crate::sem::{SymKind, op_kind};
 
@@ -171,21 +171,18 @@ pub(crate) fn axiom_from_rule(rule: &tir_pdl::Rule) -> Result<Axiom, String> {
         ));
     }
     let mut scope = Scope::new(rule)?;
-    let root_width = match (&rule.lhs.ty, rule.materializes()) {
-        (Some(Type::Integer(width)), _) => width_binding(width, &mut scope)?,
-        (Some(Type::Float(format)), _) => WidthBinding::Lit(match format {
+    let root_width = match &rule.lhs.ty {
+        Some(Type::Integer(width)) => width_binding(width, &mut scope)?,
+        Some(Type::Float(format)) => WidthBinding::Lit(match format {
             tir_pdl::FloatFormat::Binary32 => 32,
             tir_pdl::FloatFormat::Binary64 => 64,
         }),
-        (Some(Type::State(resource)), _) => {
+        Some(Type::State(resource)) => {
             return Err(format!(
                 "state result for resource `{resource:?}` is not supported by the solver"
             ));
         }
-        // A materialize rule matches every constant class, so the constant's own
-        // width is the root's.
-        (None, true) => scope.vars[scope.const_vars[0]].1.clone(),
-        (None, false) if scope.symbol_types.iter().any(Option::is_some) => scope
+        None if scope.symbol_types.iter().any(Option::is_some) => scope
             .vars
             .first()
             .map(|(_, width)| width.clone())
@@ -197,9 +194,8 @@ pub(crate) fn axiom_from_rule(rule: &tir_pdl::Rule) -> Result<Axiom, String> {
     let rhs = node(&rule.rhs, Side::Rhs, &scope)?;
 
     let mut guards = Vec::new();
-    let mut value_guards = Vec::new();
     for guard in &rule.guards {
-        push_guard(guard, &scope, &mut guards, &mut value_guards)?;
+        push_guard(guard, &scope, &mut guards)?;
     }
 
     let mut uses_root = false;
@@ -251,21 +247,18 @@ pub(crate) fn axiom_from_rule(rule: &tir_pdl::Rule) -> Result<Axiom, String> {
         const_vars: scope.const_vars,
         root_width,
         guards,
-        value_guards,
         lhs,
         rhs,
         uses_root,
         obligation,
         floating_point: rule.is_floating_point(),
         post_saturation: rule.post_saturation,
-        materialize: rule.materializes(),
     })
 }
 
 fn node(term: &Term, side: Side, scope: &Scope) -> Result<AxNode, String> {
     match &term.kind {
         TermKind::Root => Ok(AxNode::Root),
-        TermKind::Keep(inner) => Ok(AxNode::Keep(Box::new(node(inner, side, scope)?))),
         TermKind::Binder { name, .. } => match (side, scope.var(name)) {
             (_, Some(index)) => Ok(AxNode::Hole(name.clone(), Some(index))),
             (Side::Lhs, None) => Ok(AxNode::Hole(name.clone(), None)),
@@ -374,7 +367,6 @@ fn is_root_loop(node: &AxNode) -> bool {
         AxNode::Node(SymKind::Loop, children) => !children
             .iter()
             .any(|child| contains_kind(child, SymKind::Loop)),
-        AxNode::Keep(inner) => is_root_loop(inner),
         _ => false,
     }
 }
@@ -420,57 +412,8 @@ fn width_expr(expr: &Expr, scope: &Scope) -> Result<WidthExpr, String> {
     }
 }
 
-fn push_guard(
-    guard: &Expr,
-    scope: &Scope,
-    guards: &mut Vec<Guard_>,
-    value_guards: &mut Vec<ValueGuard>,
-) -> Result<(), String> {
-    let (guard, negated) = match &guard.kind {
-        ExprKind::Unary {
-            op: UnaryOp::Not,
-            value,
-        } => (value.as_ref(), true),
-        _ => (guard, false),
-    };
+fn push_guard(guard: &Expr, scope: &Scope, guards: &mut Vec<Guard_>) -> Result<(), String> {
     match &guard.kind {
-        ExprKind::Call { name, args } if name == "fits" || name == "ufits" => {
-            let [ExprKind::Name(var), ExprKind::Integer(bits)] = [&args[0].kind, &args[1].kind]
-            else {
-                return Err(format!("`{name}` takes a constant binder and a bit count"));
-            };
-            let var = scope
-                .var(var)
-                .ok_or_else(|| format!("`{name}` names an undeclared binder `{var}`"))?;
-            let bits = u32::try_from(*bits).map_err(|_| "bit count is out of range")?;
-            if !(1..=64).contains(&bits) {
-                return Err("fits bit count must be in 1..=64".into());
-            }
-            value_guards.push(ValueGuard {
-                var,
-                test: ValueTest::Fits {
-                    bits,
-                    unsigned: name == "ufits",
-                },
-                negated,
-            });
-            Ok(())
-        }
-        ExprKind::Call { name, args } if name == "materializable" => {
-            let [ExprKind::Name(var)] = [&args[0].kind] else {
-                return Err("`materializable` takes a constant binder".into());
-            };
-            let var = scope
-                .var(var)
-                .ok_or_else(|| format!("`materializable` names an undeclared binder `{var}`"))?;
-            value_guards.push(ValueGuard {
-                var,
-                test: ValueTest::Materializable,
-                negated,
-            });
-            Ok(())
-        }
-        _ if negated => Err("only `fits`, `ufits`, and `materializable` may be negated".into()),
         ExprKind::Binary { op, lhs, rhs } => {
             let (lhs, rhs) = (width_expr(lhs, scope)?, width_expr(rhs, scope)?);
             guards.push(match op {
@@ -480,9 +423,6 @@ fn push_guard(
             });
             Ok(())
         }
-        _ => Err(
-            "guards are `a < b`, `a == b`, `[u]fits(v, n)`, `materializable(v)` or their negation"
-                .into(),
-        ),
+        _ => Err("guards are `a < b` or `a == b`".into()),
     }
 }

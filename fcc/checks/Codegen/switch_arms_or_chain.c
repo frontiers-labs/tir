@@ -28,7 +28,7 @@ int classify(int value, int flag)
 }
 
 // CHECK:     classify:
-// CHECK:     test edi, edi
+// CHECK:     cmp e{{[a-z0-9]+}}, edi
 // CHECK:     cmp e{{[a-z0-9]+}}, edi
 // CHECK:     cmp edi, 2
 // CHECK:     cmp edi, 3

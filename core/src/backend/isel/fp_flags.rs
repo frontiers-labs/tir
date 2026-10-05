@@ -27,8 +27,11 @@ pub(super) fn accepts(
     let FpFlags::Exact(pattern) = &rule.fp_flags else {
         return false;
     };
+    // The two terms are compared over symbols, one per value: two values of one
+    // class at different offsets are different operands.
+    let symbols = std::cell::RefCell::new(Vec::<tir_relational::Ref>::new());
     let bind = |payload: &SymPayload<tir::ValueId>| {
-        match payload {
+        let value = match payload {
             SymPayload::SymbolId(symbol) => captures
                 .entries
                 .iter()
@@ -39,8 +42,18 @@ pub(super) fn accepts(
                 .find_map(|(class, values)| values.contains(value).then_some(*class)),
             _ => None,
         }
-        .map(|class| fs.egraph.find(class).0)
+        .map(|value| fs.egraph.find(value))?;
+        let mut symbols = symbols.borrow_mut();
+        let symbol = symbols
+            .iter()
+            .position(|&known| known == value)
+            .unwrap_or_else(|| {
+                symbols.push(value);
+                symbols.len() - 1
+            });
+        Some(symbol as u32)
     };
+    let class_of = |symbol: u32| symbols.borrow()[symbol as usize].class;
     let normalize = |graph: &SemGraph, root| {
         let mut normalized = SemGraph::new();
         let root = normalize_node(graph, root, &mut normalized, &mut HashMap::new(), &bind)?;
@@ -50,11 +63,8 @@ pub(super) fn accepts(
                     .get_annotation(node)
                     .and_then(|m| m.actual_type)
                     .and_then(|ty| tir::sem::egraph::semantic_type(context, ty))
-                && let Some(bound) = tir::sem::egraph::class_semantic_type(
-                    context,
-                    &fs.egraph,
-                    tir_relational::ClassId::from_raw(*class),
-                )
+                && let Some(bound) =
+                    tir::sem::egraph::class_semantic_type(context, &fs.egraph, class_of(*class))
             {
                 tir::sem::TypeUnifier::default()
                     .unify(&declared, &bound)
@@ -67,11 +77,9 @@ pub(super) fn accepts(
                 .and_then(|m| m.actual_type)
                 .and_then(|ty| tir::sem::egraph::semantic_type(context, ty))
                 .or_else(|| match normalized.get_leaf_data(node) {
-                    Some(SymPayload::SymbolId(class)) => tir::sem::egraph::class_semantic_type(
-                        context,
-                        &fs.egraph,
-                        tir_relational::ClassId::from_raw(*class),
-                    ),
+                    Some(SymPayload::SymbolId(class)) => {
+                        tir::sem::egraph::class_semantic_type(context, &fs.egraph, class_of(*class))
+                    }
                     _ => None,
                 })
         })

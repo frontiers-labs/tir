@@ -41,6 +41,7 @@ pub fn run(args: ToolArgs) -> Result<(), Box<dyn Error>> {
     context.register_dialect::<tir_gpu::spirv::SpirvDialect>();
     let module = tir::parse::ir::parse_ir::<ModuleOp>(&context, &input)
         .map_err(|(span, err)| format!("failed to parse input at byte {}: {err:?}", span.0))?;
+    crate::common::attach_declared_data_layout(&context, &module)?;
 
     if !args.passes.is_empty() {
         let pipeline = args.passes.join(",");

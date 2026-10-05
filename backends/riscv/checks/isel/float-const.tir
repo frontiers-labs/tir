@@ -10,14 +10,12 @@ module {
   module_end
 }
 
-// RV64: riscv.addi {rd = %{{[0-9]+}}:GPR, rs1 = x0, imm = 64}
-// RV64: riscv.slliw
+// RV64: riscv.lui {rd = %{{[0-9]+}}:GPR, imm = 262656}
 // RV64: riscv.fmv.w.x {fd = %{{[0-9]+}}:FPR32, rs1 = %{{[0-9]+}}:GPR}
 // RV64: riscv.fmul.s
 // RV64-NOT: fp.constant
 
-// RV32: riscv.addi {rd = %{{[0-9]+}}:GPR, rs1 = x0, imm = 64}
-// RV32: riscv.slli
+// RV32: riscv.lui {rd = %{{[0-9]+}}:GPR, imm = 262656}
 // RV32: riscv.fmv.w.x {fd = %{{[0-9]+}}:FPR32, rs1 = %{{[0-9]+}}:GPR}
 // RV32: riscv.fmul.s
 // RV32-NOT: fp.constant

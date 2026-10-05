@@ -5,22 +5,33 @@ use std::arch::x86_64::*;
 
 use super::{HASH_MUL, Kernels, scalar};
 
+/// Write `row` plus the position of each bit set in `hits` to `out` from
+/// `found` on, and return the new count. Hits are rare, so a loop over bits
+/// beats packing them with a vector instruction.
+#[inline(always)]
+unsafe fn push_hits(mut hits: u64, row: usize, out: *mut u32, mut found: usize) -> usize {
+    while hits != 0 {
+        unsafe { *out.add(found) = (row + hits.trailing_zeros() as usize) as u32 };
+        found += 1;
+        hits &= hits - 1;
+    }
+    found
+}
+
 pub(super) static AVX2: Kernels = Kernels {
     name: "avx2",
-    find_eq: avx2::find_eq,
+    select_eq: avx2::select_eq,
     find_same: avx2::find_same,
-    max: avx2::max,
-    mark_moved: avx2::mark_moved,
+    select_moved: avx2::select_moved,
     hash_mix: avx2::hash_mix,
     hash_finish: avx2::hash_finish,
 };
 
 pub(super) static AVX512: Kernels = Kernels {
     name: "avx512",
-    find_eq: avx512::find_eq,
+    select_eq: avx512::select_eq,
     find_same: avx512::find_same,
-    max: avx512::max,
-    mark_moved: avx512::mark_moved,
+    select_moved: avx512::select_moved,
     hash_mix: avx512::hash_mix,
     hash_finish: avx512::hash_finish,
 };
@@ -42,17 +53,29 @@ mod avx2 {
     }
 
     #[target_feature(enable = "avx2")]
-    pub(super) unsafe fn find_eq(column: *const u32, len: usize, value: u32) -> usize {
+    pub(super) unsafe fn select_eq(
+        column: *const u32,
+        len: usize,
+        value: u32,
+        out: *mut u32,
+    ) -> usize {
         let wanted = _mm256_set1_epi32(value as i32);
-        let mut row = 0;
+        let (mut row, mut found) = (0, 0);
+        // Four vectors a step, with one test for the lot.
+        while row + 4 * LANES <= len {
+            let hits = (0..4).fold(0, |hits, at| {
+                let cells = unsafe { load(column.add(row + at * LANES)) };
+                hits | u64::from(equal(cells, wanted)) << (at * LANES)
+            });
+            found = unsafe { push_hits(hits, row, out, found) };
+            row += 4 * LANES;
+        }
         while row + LANES <= len {
             let hits = equal(unsafe { load(column.add(row)) }, wanted);
-            if hits != 0 {
-                return row + hits.trailing_zeros() as usize;
-            }
+            found = unsafe { push_hits(hits.into(), row, out, found) };
             row += LANES;
         }
-        row + unsafe { scalar::find_eq(column.add(row), len - row, value) }
+        unsafe { scalar::select_eq_in(column, row..len, value, out, found) }
     }
 
     #[target_feature(enable = "avx2")]
@@ -69,39 +92,30 @@ mod avx2 {
     }
 
     #[target_feature(enable = "avx2")]
-    pub(super) unsafe fn max(column: *const u32, len: usize) -> u32 {
-        let mut best = _mm256_setzero_si256();
-        let mut row = 0;
-        while row + LANES <= len {
-            best = _mm256_max_epu32(best, unsafe { load(column.add(row)) });
-            row += LANES;
-        }
-        let mut lanes = [0u32; LANES];
-        unsafe { _mm256_storeu_si256(lanes.as_mut_ptr().cast(), best) };
-        let tail = unsafe { scalar::max(column.add(row), len - row) };
-        lanes.into_iter().fold(tail, u32::max)
-    }
-
-    #[target_feature(enable = "avx2")]
-    pub(super) unsafe fn mark_moved(
+    pub(super) unsafe fn select_moved(
         column: *const u32,
         map: *const u32,
-        flags: *mut u32,
+        map_len: usize,
         len: usize,
-    ) {
-        let one = _mm256_set1_epi32(1);
-        let mut row = 0;
+        out: *mut u32,
+    ) -> usize {
+        if map_len == 0 {
+            return unsafe { scalar::select_moved(column, map, map_len, len, out) };
+        }
+        // `map_len` is within gather range, so the largest index fits a lane.
+        let last = _mm256_set1_epi32(map_len as i32 - 1);
+        let (mut row, mut found) = (0, 0);
         while row + LANES <= len {
-            unsafe {
-                let cells = load(column.add(row));
-                let now = _mm256_i32gather_epi32::<4>(map.cast(), cells);
-                let moved = _mm256_andnot_si256(_mm256_cmpeq_epi32(now, cells), one);
-                let merged = _mm256_or_si256(load(flags.add(row)), moved);
-                _mm256_storeu_si256(flags.add(row).cast(), merged);
-            }
+            let cells = unsafe { load(column.add(row)) };
+            let inside = _mm256_cmpeq_epi32(_mm256_min_epu32(cells, last), cells);
+            // A lane outside the map keeps its cell, and is reported below.
+            let now = unsafe { _mm256_mask_i32gather_epi32::<4>(cells, map.cast(), cells, inside) };
+            let stays = _mm256_and_si256(_mm256_cmpeq_epi32(now, cells), inside);
+            let moved = !_mm256_movemask_ps(_mm256_castsi256_ps(stays)) as u32 & 0xff;
+            found = unsafe { push_hits(moved.into(), row, out, found) };
             row += LANES;
         }
-        unsafe { scalar::mark_moved(column.add(row), map, flags.add(row), len - row) };
+        unsafe { scalar::select_moved_in(column, map, map_len, row..len, out, found) }
     }
 
     #[target_feature(enable = "avx2")]
@@ -156,19 +170,32 @@ mod avx512 {
     }
 
     #[target_feature(enable = "avx512f")]
-    pub(super) unsafe fn find_eq(column: *const u32, len: usize, value: u32) -> usize {
+    pub(super) unsafe fn select_eq(
+        column: *const u32,
+        len: usize,
+        value: u32,
+        out: *mut u32,
+    ) -> usize {
         let wanted = _mm512_set1_epi32(value as i32);
-        let mut row = 0;
+        let (mut row, mut found) = (0, 0);
+        // Four whole vectors a step, with one test for the lot: the masks the
+        // last vector needs would lengthen the loop by half.
+        while row + 4 * LANES <= len {
+            let hits = (0..4).fold(0, |hits, at| {
+                let cells = unsafe { _mm512_loadu_si512(column.add(row + at * LANES).cast()) };
+                hits | u64::from(_mm512_cmpeq_epi32_mask(cells, wanted)) << (at * LANES)
+            });
+            found = unsafe { push_hits(hits, row, out, found) };
+            row += 4 * LANES;
+        }
         while row < len {
             let mask = lanes(row, len);
             let cells = unsafe { load(mask, column.add(row)) };
             let hits = _mm512_mask_cmpeq_epi32_mask(mask, cells, wanted);
-            if hits != 0 {
-                return row + hits.trailing_zeros() as usize;
-            }
+            found = unsafe { push_hits(hits.into(), row, out, found) };
             row += LANES;
         }
-        len
+        found
     }
 
     #[target_feature(enable = "avx512f")]
@@ -187,36 +214,26 @@ mod avx512 {
     }
 
     #[target_feature(enable = "avx512f")]
-    pub(super) unsafe fn max(column: *const u32, len: usize) -> u32 {
-        let mut best = _mm512_setzero_si512();
-        let mut row = 0;
-        while row < len {
-            best = _mm512_max_epu32(best, unsafe { load(lanes(row, len), column.add(row)) });
-            row += LANES;
-        }
-        _mm512_reduce_max_epu32(best)
-    }
-
-    #[target_feature(enable = "avx512f")]
-    pub(super) unsafe fn mark_moved(
+    pub(super) unsafe fn select_moved(
         column: *const u32,
         map: *const u32,
-        flags: *mut u32,
+        map_len: usize,
         len: usize,
-    ) {
-        let one = _mm512_set1_epi32(1);
-        let mut row = 0;
+        out: *mut u32,
+    ) -> usize {
+        // `map_len` is within gather range, so it fits a lane.
+        let bound = _mm512_set1_epi32(map_len as i32);
+        let (mut row, mut found) = (0, 0);
         while row < len {
             let mask = lanes(row, len);
-            unsafe {
-                let cells = load(mask, column.add(row));
-                let now = _mm512_mask_i32gather_epi32::<4>(cells, mask, cells, map.cast());
-                let moved = _mm512_mask_cmpneq_epi32_mask(mask, now, cells);
-                let merged = _mm512_mask_or_epi32(cells, moved, load(mask, flags.add(row)), one);
-                _mm512_mask_storeu_epi32(flags.add(row).cast(), moved, merged);
-            }
+            let cells = unsafe { load(mask, column.add(row)) };
+            let inside = _mm512_mask_cmplt_epu32_mask(mask, cells, bound);
+            let now = unsafe { _mm512_mask_i32gather_epi32::<4>(cells, inside, cells, map.cast()) };
+            let moved = _mm512_mask_cmpneq_epi32_mask(mask, now, cells) | (mask & !inside);
+            found = unsafe { push_hits(moved.into(), row, out, found) };
             row += LANES;
         }
+        found
     }
 
     #[target_feature(enable = "avx512f")]

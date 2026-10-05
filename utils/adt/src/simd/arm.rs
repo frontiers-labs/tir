@@ -9,20 +9,18 @@ use super::{HASH_MUL, Kernels, scalar};
 
 pub(super) static NEON: Kernels = Kernels {
     name: "neon",
-    find_eq: neon::find_eq,
+    select_eq: neon::select_eq,
     find_same: neon::find_same,
-    max: neon::max,
-    mark_moved: neon::mark_moved,
+    select_moved: neon::select_moved,
     hash_mix: neon::hash_mix,
     hash_finish: neon::hash_finish,
 };
 
 pub(super) static SVE2: Kernels = Kernels {
     name: "sve2",
-    find_eq: sve2::find_eq,
+    select_eq: sve2::select_eq,
     find_same: sve2::find_same,
-    max: sve2::max,
-    mark_moved: sve2::mark_moved,
+    select_moved: sve2::select_moved,
     hash_mix: sve2::hash_mix,
     hash_finish: sve2::hash_finish,
 };
@@ -32,17 +30,28 @@ mod neon {
 
     const LANES: usize = 4;
 
-    pub(super) unsafe fn find_eq(column: *const u32, len: usize, value: u32) -> usize {
-        let mut row = 0;
+    pub(super) unsafe fn select_eq(
+        column: *const u32,
+        len: usize,
+        value: u32,
+        out: *mut u32,
+    ) -> usize {
+        let (mut row, mut found) = (0, 0);
         unsafe {
             let wanted = vdupq_n_u32(value);
-            while row + LANES <= len {
-                if vmaxvq_u32(vceqq_u32(vld1q_u32(column.add(row)), wanted)) != 0 {
-                    break;
+            // Four vectors a step, with one test for the lot; hits are rare,
+            // so a step that has one is walked cell by cell.
+            while row + 4 * LANES <= len {
+                let any = (0..4).fold(vdupq_n_u32(0), |any, at| {
+                    let cells = vld1q_u32(column.add(row + at * LANES));
+                    vorrq_u32(any, vceqq_u32(cells, wanted))
+                });
+                if vmaxvq_u32(any) != 0 {
+                    found = scalar::select_eq_in(column, row..row + 4 * LANES, value, out, found);
                 }
-                row += LANES;
+                row += 4 * LANES;
             }
-            row + scalar::find_eq(column.add(row), len - row, value)
+            scalar::select_eq_in(column, row..len, value, out, found)
         }
     }
 
@@ -60,41 +69,36 @@ mod neon {
         }
     }
 
-    pub(super) unsafe fn max(column: *const u32, len: usize) -> u32 {
-        let mut row = 0;
-        unsafe {
-            let mut best = vdupq_n_u32(0);
-            while row + LANES <= len {
-                best = vmaxq_u32(best, vld1q_u32(column.add(row)));
-                row += LANES;
-            }
-            vmaxvq_u32(best).max(scalar::max(column.add(row), len - row))
-        }
-    }
-
-    pub(super) unsafe fn mark_moved(
+    pub(super) unsafe fn select_moved(
         column: *const u32,
         map: *const u32,
-        flags: *mut u32,
+        map_len: usize,
         len: usize,
-    ) {
-        let mut row = 0;
+        out: *mut u32,
+    ) -> usize {
+        let (mut row, mut found) = (0, 0);
         unsafe {
-            let one = vdupq_n_u32(1);
             while row + LANES <= len {
                 let cells = vld1q_u32(column.add(row));
-                // NEON has no gather: four loads, one vector compare.
+                // NEON has no gather: four loads, one vector compare. A cell
+                // outside the map reads as its complement, which differs.
+                let read = |cell: u32| match (cell as usize) < map_len {
+                    true => *map.add(cell as usize),
+                    false => !cell,
+                };
                 let now = [
-                    *map.add(vgetq_lane_u32::<0>(cells) as usize),
-                    *map.add(vgetq_lane_u32::<1>(cells) as usize),
-                    *map.add(vgetq_lane_u32::<2>(cells) as usize),
-                    *map.add(vgetq_lane_u32::<3>(cells) as usize),
+                    read(vgetq_lane_u32::<0>(cells)),
+                    read(vgetq_lane_u32::<1>(cells)),
+                    read(vgetq_lane_u32::<2>(cells)),
+                    read(vgetq_lane_u32::<3>(cells)),
                 ];
-                let moved = vbicq_u32(one, vceqq_u32(vld1q_u32(now.as_ptr()), cells));
-                vst1q_u32(flags.add(row), vorrq_u32(vld1q_u32(flags.add(row)), moved));
+                if vminvq_u32(vceqq_u32(vld1q_u32(now.as_ptr()), cells)) == 0 {
+                    let rows = row..row + LANES;
+                    found = scalar::select_moved_in(column, map, map_len, rows, out, found);
+                }
                 row += LANES;
             }
-            scalar::mark_moved(column.add(row), map, flags.add(row), len - row);
+            scalar::select_moved_in(column, map, map_len, row..len, out, found)
         }
     }
 
@@ -132,38 +136,51 @@ mod sve2 {
     // `b.mi` when the first one is.
 
     #[target_feature(enable = "sve2")]
-    pub(super) unsafe fn find_eq(column: *const u32, len: usize, value: u32) -> usize {
-        let row: usize;
+    pub(super) unsafe fn select_eq(
+        column: *const u32,
+        len: usize,
+        value: u32,
+        out: *mut u32,
+    ) -> usize {
+        let found: usize;
         unsafe {
             asm!(
                 "mov {i}, #0",
+                "mov {k}, #0",
                 "dup z1.s, {v:w}",
+                // z3 holds each lane's row.
+                "index z3.s, #0, #1",
                 "whilelo p0.s, {i}, {n}",
                 "b.eq 3f",
                 "2:",
                 "ld1w z0.s, p0/z, [{p}, {i}, lsl #2]",
                 "cmpeq p1.s, p0/z, z0.s, z1.s",
-                "b.ne 4f",
+                "b.eq 4f",
+                // Pack the rows of the hits to the front and store that many.
+                "compact z2.s, p1, z3.s",
+                "cntp {t}, p0, p1.s",
+                "whilelo p2.s, xzr, {t}",
+                "st1w z2.s, p2, [{o}, {k}, lsl #2]",
+                "add {k}, {k}, {t}",
+                "4:",
                 "incw {i}",
+                "incw z3.s",
                 "whilelo p0.s, {i}, {n}",
                 "b.mi 2b",
                 "3:",
-                "mov {i}, {n}",
-                "b 5f",
-                // Count the active lanes before the first hit.
-                "4:",
-                "brkb p1.b, p0/z, p1.b",
-                "incp {i}, p1.s",
-                "5:",
                 p = in(reg) column,
                 n = in(reg) len,
                 v = in(reg) value,
-                i = out(reg) row,
-                out("v0") _, out("v1") _, out("p0") _, out("p1") _,
-                options(nostack, readonly),
+                o = in(reg) out,
+                i = out(reg) _,
+                k = out(reg) found,
+                t = out(reg) _,
+                out("v0") _, out("v1") _, out("v2") _, out("v3") _,
+                out("p0") _, out("p1") _, out("p2") _,
+                options(nostack),
             );
         }
-        row
+        found
     }
 
     #[target_feature(enable = "sve2")]
@@ -201,69 +218,58 @@ mod sve2 {
     }
 
     #[target_feature(enable = "sve2")]
-    pub(super) unsafe fn max(column: *const u32, len: usize) -> u32 {
-        let best: u32;
-        unsafe {
-            asm!(
-                "mov {i}, #0",
-                "dup z1.s, #0",
-                "whilelo p0.s, {i}, {n}",
-                "b.eq 3f",
-                "2:",
-                "ld1w z0.s, p0/z, [{p}, {i}, lsl #2]",
-                "umax z1.s, p0/m, z1.s, z0.s",
-                "incw {i}",
-                "whilelo p0.s, {i}, {n}",
-                "b.mi 2b",
-                "3:",
-                "ptrue p0.s",
-                "umaxv s1, p0, z1.s",
-                "fmov {r:w}, s1",
-                p = in(reg) column,
-                n = in(reg) len,
-                i = out(reg) _,
-                r = out(reg) best,
-                out("v0") _, out("v1") _, out("p0") _,
-                options(nostack, readonly),
-            );
-        }
-        best
-    }
-
-    #[target_feature(enable = "sve2")]
-    pub(super) unsafe fn mark_moved(
+    pub(super) unsafe fn select_moved(
         column: *const u32,
         map: *const u32,
-        flags: *mut u32,
+        map_len: usize,
         len: usize,
-    ) {
+        out: *mut u32,
+    ) -> usize {
+        let found: usize;
         unsafe {
             asm!(
                 "mov {i}, #0",
-                "dup z3.s, #1",
+                "mov {k}, #0",
+                "dup z2.s, {l:w}",
+                // z3 holds each lane's row.
+                "index z3.s, #0, #1",
                 "whilelo p0.s, {i}, {n}",
                 "b.eq 3f",
                 "2:",
                 "ld1w z0.s, p0/z, [{c}, {i}, lsl #2]",
-                // Gather `map[cell]` for every active lane.
-                "ld1w z1.s, p0/z, [{m}, z0.s, uxtw #2]",
-                "cmpne p1.s, p0/z, z1.s, z0.s",
-                "ld1w z2.s, p0/z, [{f}, {i}, lsl #2]",
-                "orr z2.s, p1/m, z2.s, z3.s",
-                "st1w z2.s, p0, [{f}, {i}, lsl #2]",
+                // p2: lanes outside the map; p3: lanes inside it, gathered.
+                "cmphs p2.s, p0/z, z0.s, z2.s",
+                "cmphi p3.s, p0/z, z2.s, z0.s",
+                "ld1w z1.s, p3/z, [{m}, z0.s, uxtw #2]",
+                "cmpne p1.s, p3/z, z1.s, z0.s",
+                "orrs p1.b, p0/z, p1.b, p2.b",
+                "b.eq 4f",
+                // Pack the rows of the hits to the front and store that many.
+                "compact z4.s, p1, z3.s",
+                "cntp {t}, p0, p1.s",
+                "whilelo p2.s, xzr, {t}",
+                "st1w z4.s, p2, [{o}, {k}, lsl #2]",
+                "add {k}, {k}, {t}",
+                "4:",
                 "incw {i}",
+                "incw z3.s",
                 "whilelo p0.s, {i}, {n}",
                 "b.mi 2b",
                 "3:",
                 c = in(reg) column,
                 m = in(reg) map,
-                f = in(reg) flags,
+                l = in(reg) map_len,
                 n = in(reg) len,
+                o = in(reg) out,
                 i = out(reg) _,
-                out("v0") _, out("v1") _, out("v2") _, out("v3") _, out("p0") _, out("p1") _,
+                k = out(reg) found,
+                t = out(reg) _,
+                out("v0") _, out("v1") _, out("v2") _, out("v3") _, out("v4") _,
+                out("p0") _, out("p1") _, out("p2") _, out("p3") _,
                 options(nostack),
             );
         }
+        found
     }
 
     #[target_feature(enable = "sve2")]

@@ -9,10 +9,7 @@ define i1 @below_minus_three(i8 %x) {
 }
 
 ; CHECK-LABEL: below_minus_three:
+; CHECK: movn x[[K:[0-9]+]], 2
 ; CHECK: asr x0, x0, 56
-; CHECK-NEXT: movz x[[K:[0-9]+]], 65533
-; CHECK-NEXT: movk x[[K]], 65535, 1
-; CHECK-NEXT: movk x[[K]], 65535, 2
-; CHECK-NEXT: movk x[[K]], 65535, 3
 ; CHECK-NEXT: cmp x0, x[[K]]
 ; CHECK-NEXT: cset x0, lt

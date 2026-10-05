@@ -1,8 +1,9 @@
 // RUN: tir mc --march=rv64i --filetype=asm %s | filecheck %s
 
 // A wide integer constant that does not fit addi's 12-bit signed immediate is
-// decomposed by an SMT-proved materialize axiom into a shift/add chain of real
-// RISC-V instructions, instead of surviving selection for the pre-RA hook.
+// split while matching: addi takes the low 12 bits it can hold, slli the
+// trailing zeros, and lui a sign-extended upper part, each demanding the rest
+// of the constant as its operand.
 
 module {
   %fn_bit31 = func.func @bit31() -> !i64 {
@@ -10,9 +11,8 @@ module {
     func.return %0
   }
   // CHECK-LABEL: bit31:
-  // CHECK-NEXT: addi x5, x0, 128
-  // CHECK-NEXT: slli x5, x5, 12
-  // CHECK-NEXT: slli x10, x5, 12
+  // CHECK-NEXT: addi x5, x0, 1
+  // CHECK-NEXT: slli x10, x5, 31
   // CHECK-NEXT: jalr x0, 0(x1)
 
   %fn_wide = func.func @wide() -> !i64 {
@@ -20,16 +20,13 @@ module {
     func.return %0
   }
   // CHECK-LABEL: wide:
-  // CHECK-NEXT: addi x5, x0, 1
+  // CHECK-NEXT: lui x5, 583
+  // CHECK-NEXT: addi x5, x5, -1875
+  // CHECK-NEXT: slli x5, x5, 14
+  // CHECK-NEXT: addi x5, x5, -947
   // CHECK-NEXT: slli x5, x5, 12
-  // CHECK-NEXT: addi x5, x5, 564
-  // CHECK-NEXT: slli x5, x5, 12
-  // CHECK-NEXT: addi x5, x5, 1384
-  // CHECK-NEXT: slli x5, x5, 12
-  // CHECK-NEXT: addi x5, x5, -1893
-  // CHECK-NEXT: slli x5, x5, 12
-  // CHECK-NEXT: addi x5, x5, -1074
-  // CHECK-NEXT: slli x5, x5, 12
+  // CHECK-NEXT: addi x5, x5, 1511
+  // CHECK-NEXT: slli x5, x5, 13
   // CHECK-NEXT: addi x10, x5, -272
   // CHECK-NEXT: jalr x0, 0(x1)
 
@@ -38,16 +35,13 @@ module {
     func.return %0
   }
   // CHECK-LABEL: negative:
-  // CHECK-NEXT: addi x5, x0, -1
+  // CHECK-NEXT: lui x5, -583
+  // CHECK-NEXT: addi x5, x5, 1875
+  // CHECK-NEXT: slli x5, x5, 14
+  // CHECK-NEXT: addi x5, x5, 947
   // CHECK-NEXT: slli x5, x5, 12
-  // CHECK-NEXT: addi x5, x5, -564
-  // CHECK-NEXT: slli x5, x5, 12
-  // CHECK-NEXT: addi x5, x5, -1384
-  // CHECK-NEXT: slli x5, x5, 12
-  // CHECK-NEXT: addi x5, x5, 1893
-  // CHECK-NEXT: slli x5, x5, 12
-  // CHECK-NEXT: addi x5, x5, 1074
-  // CHECK-NEXT: slli x5, x5, 12
+  // CHECK-NEXT: addi x5, x5, -1511
+  // CHECK-NEXT: slli x5, x5, 13
   // CHECK-NEXT: addi x10, x5, 272
   // CHECK-NEXT: jalr x0, 0(x1)
 
@@ -56,12 +50,8 @@ module {
     func.return %0
   }
   // CHECK-LABEL: min:
-  // CHECK-NEXT: addi x5, x0, -8
-  // CHECK-NEXT: slli x5, x5, 12
-  // CHECK-NEXT: slli x5, x5, 12
-  // CHECK-NEXT: slli x5, x5, 12
-  // CHECK-NEXT: slli x5, x5, 12
-  // CHECK-NEXT: slli x10, x5, 12
+  // CHECK-NEXT: addi x5, x0, -1
+  // CHECK-NEXT: slli x10, x5, 63
   // CHECK-NEXT: jalr x0, 0(x1)
 
   %fn_max = func.func @max() -> !i64 {
@@ -69,12 +59,8 @@ module {
     func.return %0
   }
   // CHECK-LABEL: max:
-  // CHECK-NEXT: addi x5, x0, -8
-  // CHECK-NEXT: slli x5, x5, 12
-  // CHECK-NEXT: slli x5, x5, 12
-  // CHECK-NEXT: slli x5, x5, 12
-  // CHECK-NEXT: slli x5, x5, 12
-  // CHECK-NEXT: slli x5, x5, 12
+  // CHECK-NEXT: addi x5, x0, -1
+  // CHECK-NEXT: slli x5, x5, 63
   // CHECK-NEXT: addi x10, x5, -1
   // CHECK-NEXT: jalr x0, 0(x1)
   module_end

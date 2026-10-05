@@ -1,11 +1,11 @@
 // RUN: tir opt --pass func.func(restructure-nodes,promote-nodes,instcombine-nodes) --verify %s | filecheck %s
 
-// The read between the two writes names an address the graph cannot yet read
+// The read after the first write names an address the graph cannot yet read
 // back to the slot: its offset is a term that only folds to zero once
-// store-to-load forwarding has answered the read that feeds it. Saturation is
-// monotone and a law that fired cannot be taken back, so an extent the terms
-// cannot place on the object being overwritten is one the law must assume names
-// it. The first write therefore stays, and the read still answers with 42.
+// store-to-load forwarding has answered the read that feeds it. Once it does,
+// the address is the slot itself and the read reads the slot. The write before
+// it lands at an offset nothing places, so it stays, and the read is left to
+// the memory rather than answered with 42.
 
 #data_layout = {types = {i32 = {abi = 32, size = 32}, i64 = {abi = 64, size = 64}, p = {abi = 64, size = 64}}}
 
@@ -36,5 +36,5 @@ module {data_layout = #data_layout} {
 
 // CHECK-LABEL: %{{[0-9]+}} = func.func @f
 // CHECK: ptr.store %8, %7
-// CHECK: %[[READ:[0-9]+]], %{{[0-9]+}} = ptr.load %6 state(%{{[0-9]+}}) : !i32
+// CHECK: %[[READ:[0-9]+]], %{{[0-9]+}} = ptr.load %2 state(%{{[0-9]+}}) : !i32
 // CHECK: muli %[[READ]]

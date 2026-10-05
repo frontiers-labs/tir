@@ -8,10 +8,10 @@
 
 use std::collections::{HashMap, HashSet};
 
-use tir_relational::{ClassId as Id, Engine};
+use tir_relational::{Carrier, Engine, Ref};
 
 use crate::analysis::effects::{observed_state, produced_state};
-use crate::sem::egraph::{minimal_unsigned_apint, type_width};
+use crate::sem::egraph::{carrier_of, minimal_unsigned_apint, type_width};
 use crate::sem::{Prov, SemNode as Node, SymKind};
 use crate::state::{JoinOp, SplitOp};
 use crate::{
@@ -23,13 +23,13 @@ use crate::{
 /// state it observes.
 const STORE_OPERANDS: usize = 3;
 
-/// The seeded e-graph plus the driver's maps: each value's class, each block
-/// argument's block, the state classes something outside the term graph
-/// observes, and the value ports each loop carries.
+/// The seeded e-graph plus the driver's maps: each value's reference, the value
+/// ports each loop carries, and the pointer width the carriers were read at.
 pub struct Seeded {
     pub eg: Engine<Node>,
-    pub value_class: HashMap<ValueId, Id>,
+    pub value_class: HashMap<ValueId, Ref>,
     pub loop_ports: Vec<LoopPorts>,
+    pub pointer_width: Option<u32>,
 }
 
 /// The value ports one loop carries, in the order it carries them.
@@ -38,17 +38,18 @@ pub struct LoopPorts {
     pub ports: Vec<Port>,
 }
 
-/// One carried value port: the class it is read as at the head of an iteration,
-/// the class the loop is entered on, the class each edge back into it carries,
-/// the class of the loop's result, and the class that result *is* — what the
+/// One carried value port: the value it is read as at the head of an
+/// iteration, the value the loop is entered on, the value each edge back into
+/// it carries, the loop's result, and the value that result *is* — what the
 /// loop publishes where it was left, which is the head itself unless a test
-/// forwards something else.
+/// forwards something else. A counter's next value is the head at offset one,
+/// which is not the head.
 pub struct Port {
-    pub head: Id,
-    pub init: Id,
-    pub edges: Vec<Id>,
-    pub result: Id,
-    pub published: Id,
+    pub head: Ref,
+    pub init: Ref,
+    pub edges: Vec<Ref>,
+    pub result: Ref,
+    pub published: Ref,
 }
 
 /// Build the e-graph for the regions of `root`.
@@ -69,13 +70,14 @@ pub fn seed(context: &Context, root: OpId) -> Seeded {
         eg: seeder.eg,
         value_class: seeder.value_class,
         loop_ports: seeder.loop_ports,
+        pointer_width: seeder.pointer_width,
     }
 }
 
 struct Seeder<'a> {
     context: &'a Context,
     eg: Engine<Node>,
-    value_class: HashMap<ValueId, Id>,
+    value_class: HashMap<ValueId, Ref>,
     seeded: HashSet<OpId>,
     pointer_width: Option<u32>,
     loop_ports: Vec<LoopPorts>,
@@ -92,9 +94,9 @@ impl Seeder<'_> {
         }
     }
 
-    /// The class of `value`: the one already seeded for it, the one its defining
-    /// op seeds, or an anchor leaf.
-    fn class_of(&mut self, value: ValueId) -> Id {
+    /// The reference of `value`: the one already seeded for it, the one its
+    /// defining op seeds, or an anchor leaf.
+    fn class_of(&mut self, value: ValueId) -> Ref {
         if let Some(&id) = self.value_class.get(&value) {
             return id;
         }
@@ -104,21 +106,30 @@ impl Seeder<'_> {
         self.anchor(value)
     }
 
-    /// Record that `id` is the class of `value`, and that its terms carry the
-    /// value's type — a term standing for an IR value keeps no type of its own,
-    /// and the value has one.
-    fn bind_value(&mut self, value: ValueId, id: Id) {
+    /// Record that `id` is the reference of `value`, and that its terms carry
+    /// the value's type — a term standing for an IR value keeps no type of its
+    /// own, and the value has one.
+    fn bind_value(&mut self, value: ValueId, id: Ref) {
         let ty = self.context.get_value(value).ty();
-        self.eg.raise_type(id, ty.number() as u64);
+        self.eg.raise_type(id.class, ty.number() as u64);
         self.value_class.insert(value, id);
     }
 
+    /// The carrier a value of `value`'s type lives in.
+    fn carrier(&self, value: ValueId) -> Option<Carrier> {
+        carrier_of(
+            self.context,
+            self.pointer_width,
+            self.context.get_value(value).ty(),
+        )
+    }
+
     /// The leaf standing for `value`, unless something already seeded a class for it.
-    fn anchor(&mut self, value: ValueId) -> Id {
+    fn anchor(&mut self, value: ValueId) -> Ref {
         if let Some(&id) = self.value_class.get(&value) {
             return id;
         }
-        let id = self.eg.add(Node::input(value));
+        let id = self.eg.add(Node::input(value).carried(self.carrier(value)));
         self.bind_value(value, id);
         id
     }
@@ -173,16 +184,18 @@ impl Seeder<'_> {
             let value = instance.results()[0];
             let ty = self.context.get_value(value).ty();
             let commutative = instance.has_interface::<dyn Commutative>();
-            let mut args: Vec<Id> = instance
+            let mut args: Vec<Ref> = instance
                 .operands()
                 .to_vec()
                 .iter()
                 .map(|&operand| self.class_of(operand))
                 .collect();
             if commutative {
-                args.sort_by_key(|id| id.index());
+                args.sort();
             }
-            let id = self.eg.add(Node::seeded(&instance, ty, commutative, args));
+            let node = Node::seeded(&instance, ty, commutative, classes(&args))
+                .carried(self.carrier(value));
+            let id = self.eg.insert(node, &args);
             self.bind_value(value, id);
             return;
         }
@@ -221,7 +234,7 @@ impl Seeder<'_> {
             {
                 continue;
             }
-            let produced: Vec<Id> = arms
+            let produced: Vec<Ref> = arms
                 .iter()
                 .map(|&arm| {
                     let value = self.context.get_region(arm).results()[binding.exit.start + index];
@@ -231,15 +244,14 @@ impl Seeder<'_> {
             let first = self.eg.find(produced[0]);
             let id = if produced.iter().all(|&arm| self.eg.find(arm) == first) {
                 produced[0]
-            } else if boolean && produced.len() == 2 {
-                self.eg.add(Node::gamma(
-                    result,
-                    vec![predicate, produced[1], produced[0]],
-                ))
             } else {
-                let mut args = vec![predicate];
-                args.extend(produced);
-                self.eg.add(Node::gamma(result, args))
+                let args = if boolean && produced.len() == 2 {
+                    vec![predicate, produced[1], produced[0]]
+                } else {
+                    std::iter::once(predicate).chain(produced).collect()
+                };
+                let node = Node::gamma(result, classes(&args)).carried(self.carrier(result));
+                self.eg.insert(node, &args)
             };
             self.bind_value(result, id);
         }
@@ -308,20 +320,23 @@ impl Seeder<'_> {
             let init = self.class_of(inits[index]);
             let next = self.class_of(body_results[binding.continue_.start + index]);
             let exit = self.class_of(body_results[binding.exit.start + index]);
-            let port = self.eg.add(Node::port(head_value, vec![head]));
-            self.eg.union(port, head);
+            let carrier = self.carrier(head_value);
+            let port = self.eg.insert(
+                Node::port(head_value, classes(&[head])).carried(carrier),
+                &[head],
+            );
+            let _ = self.eg.union(port, head);
             let result = self.anchor(finals[index]);
-            let node = self.eg.add(Node::loop_(
-                finals[index],
-                vec![init, next, exit, predicate],
-            ));
-            self.eg.union(node, result);
-            if self.eg.find(next) == self.eg.find(head) {
-                self.eg.union(head, init);
-                if self.eg.find(exit) == self.eg.find(head)
-                    || self.eg.nodes(exit).any(|node| node.int().is_some())
-                {
-                    self.eg.union(result, exit);
+            let args = [init, next, exit, predicate];
+            let node = self.eg.insert(
+                Node::loop_(finals[index], classes(&args)).carried(carrier),
+                &args,
+            );
+            let _ = self.eg.union(node, result);
+            if self.eg.connected(next, head) {
+                let _ = self.eg.union(head, init);
+                if self.eg.connected(exit, head) || self.eg.int_const(exit).is_some() {
+                    let _ = self.eg.union(result, exit);
                     continue;
                 }
             }
@@ -351,7 +366,7 @@ impl Seeder<'_> {
     /// reads a single write left, since a read publishes the state it took — the
     /// merge is that state.
     fn seed_join(&mut self, instance: &OpHandle) {
-        let args: Vec<Id> = instance
+        let args: Vec<Ref> = instance
             .operands()
             .to_vec()
             .iter()
@@ -361,7 +376,9 @@ impl Seeder<'_> {
         let ty = self.context.get_value(result).ty();
         let id = match args.split_first() {
             Some((&first, rest)) if rest.iter().all(|&other| other == first) => first,
-            _ => self.eg.add(Node::seeded(instance, ty, true, args)),
+            _ => self
+                .eg
+                .insert(Node::seeded(instance, ty, true, classes(&args)), &args),
         };
         self.bind_value(result, id);
     }
@@ -394,13 +411,12 @@ impl Seeder<'_> {
         let address = self.class_of(location);
         let bytes = self.int(bits / 8);
         let metadata = self.int(0);
-        let id = self.eg.add(
-            Node::access(
-                SymKind::LoadMemory,
-                value,
-                vec![address, bytes, metadata, state],
-            )
-            .typed(ty),
+        let args = [address, bytes, metadata, state];
+        let id = self.eg.insert(
+            Node::access(SymKind::LoadMemory, value, classes(&args))
+                .typed(ty)
+                .carried(self.carrier(value)),
+            &args,
         );
         self.bind_value(value, id);
         true
@@ -428,11 +444,11 @@ impl Seeder<'_> {
         let value = self.class_of(written);
         let address_space = self.int(0);
         let state = self.class_of(state);
-        let id = self.eg.add(Node::access(
-            SymKind::StoreMemory,
-            published,
-            vec![address, bytes, value, address_space, state],
-        ));
+        let args = [address, bytes, value, address_space, state];
+        let id = self.eg.insert(
+            Node::access(SymKind::StoreMemory, published, classes(&args)),
+            &args,
+        );
         self.bind_value(published, id);
         true
     }
@@ -450,12 +466,18 @@ impl Seeder<'_> {
     }
 
     /// A byte count or metadata literal, spelled the one way the vocabulary shares.
-    fn int(&mut self, value: u32) -> Id {
+    fn int(&mut self, value: u32) -> Ref {
         self.eg.add(Node::constant(
             minimal_unsigned_apint(u64::from(value)),
             Prov::None,
         ))
     }
+}
+
+/// The classes of `operands`, which a node built over them carries as its
+/// children while [`Engine::insert`] reads the references themselves.
+fn classes(operands: &[Ref]) -> Vec<tir_relational::ClassId> {
+    operands.iter().map(|operand| operand.class).collect()
 }
 
 /// Whether `state` names the memory `port` does: the reads between them left

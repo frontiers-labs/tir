@@ -8,7 +8,9 @@ use tir::backend::binary::{ObjectEmission, render_ascii, write_elf};
 use tir::backend::pipeline::{Oracles, StopAfter, build_pipeline, lower_and_emit};
 use tir::{Context, IRFormatter, Operation};
 
-use crate::common::{InputKind, TargetArgs, parse_module, parse_tir, read_input, resolve_kind};
+use crate::common::{
+    InputKind, TargetArgs, attach_data_layout, parse_module, parse_tir, read_input, resolve_kind,
+};
 
 #[derive(Args)]
 pub struct ToolArgs {
@@ -90,6 +92,7 @@ pub fn run(args: ToolArgs) -> Result<(), Box<dyn Error>> {
                 .ok_or("no --march given and the input declares no target_env 'arch'")?;
             let target = select(&arch)?;
             target.register_dialects(&context);
+            attach_data_layout(&context, &module, target.as_ref());
             (target, module, true)
         }
     };

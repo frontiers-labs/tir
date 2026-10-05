@@ -17,5 +17,7 @@ module {
   module_end
 }
 
-// CHECK: kind: Ir(IrOp { dialect: "builtin", name: "addi", attrs: [], commutative: true, cost: 1 }){{.*}}prov: Introduced{{.*}} [0, 2]
-// CHECK: kind: Ir(IrOp { dialect: "builtin", name: "muli", attrs: [], commutative: true, cost: 4 }){{.*}}prov: Introduced
+// An op a rule introduces has the laws its declarations give a seeded one, and
+// the carrier its type is.
+// CHECK: kind: Ir(IrOp { dialect: "builtin", name: "addi", attrs: [], commutative: true, cost: 1, law: Some(Add){{.*}}prov: Introduced{{.*}}carrier: Some(Carrier { width: 32, key: 32 }) } [0, 2]
+// CHECK: kind: Ir(IrOp { dialect: "builtin", name: "muli", attrs: [], commutative: true, cost: 4, law: None{{.*}}prov: Introduced

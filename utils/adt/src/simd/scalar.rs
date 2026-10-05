@@ -5,18 +5,33 @@ use super::{HASH_MUL, Kernels};
 
 pub(super) static SCALAR: Kernels = Kernels {
     name: "scalar",
-    find_eq,
+    select_eq,
     find_same,
-    max,
-    mark_moved,
+    select_moved,
     hash_mix,
     hash_finish,
 };
 
-pub(super) unsafe fn find_eq(column: *const u32, len: usize, value: u32) -> usize {
-    (0..len)
-        .find(|&row| unsafe { *column.add(row) } == value)
-        .unwrap_or(len)
+pub(super) unsafe fn select_eq(column: *const u32, len: usize, value: u32, out: *mut u32) -> usize {
+    unsafe { select_eq_in(column, 0..len, value, out, 0) }
+}
+
+/// [`select_eq`] over `rows` alone, writing from `out[found]` on; returns
+/// the new count.
+pub(super) unsafe fn select_eq_in(
+    column: *const u32,
+    rows: std::ops::Range<usize>,
+    value: u32,
+    out: *mut u32,
+    mut found: usize,
+) -> usize {
+    for row in rows {
+        if unsafe { *column.add(row) } == value {
+            unsafe { *out.add(found) = row as u32 };
+            found += 1;
+        }
+    }
+    found
 }
 
 pub(super) unsafe fn find_same(a: *const u32, b: *const u32, len: usize) -> usize {
@@ -25,20 +40,34 @@ pub(super) unsafe fn find_same(a: *const u32, b: *const u32, len: usize) -> usiz
         .unwrap_or(len)
 }
 
-pub(super) unsafe fn max(column: *const u32, len: usize) -> u32 {
-    (0..len)
-        .map(|row| unsafe { *column.add(row) })
-        .max()
-        .unwrap_or(0)
+pub(super) unsafe fn select_moved(
+    column: *const u32,
+    map: *const u32,
+    map_len: usize,
+    len: usize,
+    out: *mut u32,
+) -> usize {
+    unsafe { select_moved_in(column, map, map_len, 0..len, out, 0) }
 }
 
-pub(super) unsafe fn mark_moved(column: *const u32, map: *const u32, flags: *mut u32, len: usize) {
-    for row in 0..len {
-        unsafe {
-            let cell = *column.add(row);
-            *flags.add(row) |= u32::from(*map.add(cell as usize) != cell);
+/// [`select_moved`] over `rows` alone, writing from `out[found]` on; returns
+/// the new count.
+pub(super) unsafe fn select_moved_in(
+    column: *const u32,
+    map: *const u32,
+    map_len: usize,
+    rows: std::ops::Range<usize>,
+    out: *mut u32,
+    mut found: usize,
+) -> usize {
+    for row in rows {
+        let cell = unsafe { *column.add(row) };
+        if cell as usize >= map_len || unsafe { *map.add(cell as usize) } != cell {
+            unsafe { *out.add(found) = row as u32 };
+            found += 1;
         }
     }
+    found
 }
 
 pub(super) unsafe fn hash_mix(hash: *mut u32, column: *const u32, len: usize) {

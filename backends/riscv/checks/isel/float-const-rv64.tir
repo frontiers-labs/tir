@@ -10,8 +10,9 @@ module {
   module_end
 }
 
-// CHECK: riscv.addi {rd = %{{[0-9]+}}:GPR, rs1 = x0,
-// CHECK: riscv.slli
+// CHECK: riscv.lui {rd = %{{[0-9]+}}:GPR, imm = 1}
+// CHECK: riscv.addi {rd = %{{[0-9]+}}:GPR, rs1 = %{{[0-9]+}}:GPR, imm = 1}
+// CHECK: riscv.slli {rd = %{{[0-9]+}}:GPR, rs1 = %{{[0-9]+}}:GPR, imm = 50}
 // CHECK: riscv.fmv.d.x {fd = %{{[0-9]+}}:FPR64, rs1 = %{{[0-9]+}}:GPR}
 // CHECK: riscv.fmul.d.rne
 // CHECK-NOT: fp.constant

@@ -51,7 +51,6 @@ module {
 // CHECK: %[[BREAK:[0-9]+]] = constant {value = 0} : !i1
 // CHECK-NEXT: -> %[[BREAK]], %[[PORT]]
 // CHECK: %[[NEXT:[0-9]+]] = addi %[[PORT]], %[[PORT]] : !i32
-// CHECK: -> %{{[0-9]+}}, %[[PORT]]
 // CHECK: %[[CONTINUE:[0-9]+]] = constant {value = 1} : !i1
 // CHECK-NEXT: -> %[[CONTINUE]], %[[NEXT]]
 // CHECK: -> %[[RESULT]], %{{[0-9]+}}

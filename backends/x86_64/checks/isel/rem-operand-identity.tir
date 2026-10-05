@@ -30,7 +30,8 @@ module {
 // CHECK: sign_extend_dividend32
 // CHECK-NEXT: signed_divide32
 // CHECK: imul32
-// CHECK: sub32
+// CHECK: neg32
+// CHECK-NEXT: add_imm32 {{.*}} imm = 7}
 
 // CHECK-LABEL: name = "g"
 // CHECK: signed_divide32

@@ -1,9 +1,13 @@
 // RUN: tir opt --pass func.func(restructure-nodes,instcombine-nodes) --verify %s | filecheck %s
 // RUN: tir opt --pass func.func(restructure-nodes) --verify --shuffle-seed 7 %s | tir opt --pass func.func(instcombine-nodes) --verify - -o /dev/null
 
-// The surviving write must still depend on every disjoint read.
+// The surviving write must still depend on every disjoint read. Where the
+// reads are is pointer arithmetic, which is only modular at a width the data
+// layout gives.
 
-module {
+#data_layout = {types = {p = {abi = 64, size = 64}}}
+
+module {data_layout = #data_layout} {
   %fn_fork = func.func @fork(%p: !ptr.p<!i32>, %a: !i32, %b: !i32) -> !i32 {
     %c = constant {value = 4} : !i64
     %q = ptr.ptradd %p, %c : !ptr.p<!i32>

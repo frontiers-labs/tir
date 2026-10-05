@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use tir::{Context, OpId, TypeId, ValueId};
-use tir_relational::ClassId as Id;
+use tir_relational::Ref;
 
 use super::{
     FunctionSelection, RuleMatch,
@@ -71,10 +71,10 @@ pub(crate) enum GuardBranch {
 /// anti- and output edges are read off it.
 pub(crate) fn order_tiles(
     matches: &[PbqpIselMatch],
-    selected: &HashMap<Id, usize>,
-    rank: impl Fn(Id) -> Option<usize>,
-) -> Option<Vec<(Id, usize)>> {
-    let mut dependencies: HashMap<Id, HashSet<Id>> = HashMap::new();
+    selected: &HashMap<Ref, usize>,
+    rank: impl Fn(Ref) -> Option<usize>,
+) -> Option<Vec<(Ref, usize)>> {
+    let mut dependencies: HashMap<Ref, HashSet<Ref>> = HashMap::new();
     for (&class, &match_id) in selected {
         for binding in &matches[match_id].bindings.pattern_nodes {
             let child = binding.class;
@@ -115,7 +115,7 @@ pub(crate) fn resolve_match(
     problem: &RegionProblem,
     consumer: Option<OpId>,
     matched: &PbqpIselMatch,
-    destinations: &HashMap<Id, ValueId>,
+    destinations: &HashMap<Ref, ValueId>,
     has_register: HasRegister,
 ) -> RuleMatch {
     let mut ints = Vec::new();
@@ -123,7 +123,8 @@ pub(crate) fn resolve_match(
     for (symbol, class) in &matched.bindings.captures.entries {
         let facts = problem.facts(*class);
         if let Some(value) = &facts.int {
-            ints.push((*symbol, value.clone()));
+            let structural = matched.bindings.captures.structural.contains(symbol);
+            ints.push((*symbol, value.with_signed(!structural)));
         }
         // A low-extract capture reads its chased source's register, which may
         // be defined by a tile scheduled in this region, unless the view was

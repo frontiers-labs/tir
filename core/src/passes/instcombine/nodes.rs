@@ -2,12 +2,13 @@
 //! declared loops and gates, committed without an order to place into.
 //!
 //! A rewrite hands a value's readers the cheapest spelling of its class. What
-//! that spelling is in scope of is the region tree alone: a value defined in
-//! the reader's region or one enclosing it is read as it is; one defined in an
-//! arm the reader cannot see is rebuilt where the reader sits, if the operation
-//! computing it cannot trap, and left where it is otherwise. A rule-introduced
-//! op or a literal is built and placed where its operands say. Nothing here
-//! asks where an operation sits in its region or which came first.
+//! that spelling is in scope of is the region tree and the dependences between
+//! siblings: a value defined in the reader's region, or in one enclosing it and
+//! not downstream of the operation holding the reader, is read as it is; one
+//! defined in an arm the reader cannot see is rebuilt where the reader sits, if
+//! the operation computing it cannot trap, and left where it is otherwise. A
+//! rule-introduced op or a literal is built and placed where its operands say.
+//! Nothing here asks where an operation sits in its region or which came first.
 //!
 //! The commit erases nothing on the way. The sweep after it erases every
 //! operation the region's results do not demand. Demand runs through
@@ -17,12 +18,12 @@
 
 use std::collections::{HashMap, HashSet};
 
-/// The spelling a class already has, so a form rebuilt for one reader answers
-/// every reader that can see it. `add_auto` places a rebuilt form where its
-/// operands allow, which may be well outside the reader's own region.
-type Memo = HashMap<Id, ValueId>;
+/// The spelling a reference already has, so a form rebuilt for one reader
+/// answers every reader that can see it. `add_auto` places a rebuilt form where
+/// its operands allow, which may be well outside the reader's own region.
+type Memo = HashMap<Ref, ValueId>;
 
-use tir_relational::{ClassId as Id, Extraction};
+use tir_relational::{ClassId as Id, Engine, Extraction, Ref, RowId};
 
 use super::{Driver, Node, Prov, SymKind, cost, state};
 use crate::analysis::AnalysisManager;
@@ -30,6 +31,7 @@ use crate::analysis::effects::{observed_state, produced_state};
 use crate::binding::{StateChain, forwards_state, state_chains};
 use crate::func::FuncOp;
 use crate::sem::egraph::type_width;
+use crate::utils::APInt;
 use crate::{
     ConstantLike, Context, Gamma, MemoryRead, MemoryWrite, NewOp, OpHandle, OpId, OperationRef,
     Pass, PassError, PassTarget, PromotableAllocation, RegionId, RegionKind, Speculatable, Theta,
@@ -72,10 +74,15 @@ impl Pass for InstCombineNodesPass {
             value_class: seeded.value_class,
             ruleset,
             replacing: std::cell::Cell::new(None),
+            named: HashMap::new(),
+            carriers: HashMap::new(),
         };
         driver.saturate();
         driver.hypothesize(loop_ports);
-        let extraction = driver.eg.extract_best(|_, node| cost(node));
+        driver.index_values();
+        let extraction = driver
+            .eg
+            .extract_best(|_, node, operands, _| spelling_cost(&driver.eg, node, operands));
         let body = context.get_op(root).regions()[0];
         driver.commit_nodes(body, &extraction, &mut HashMap::new())?;
         forget_write_only_slots(context, body);
@@ -131,6 +138,7 @@ impl Driver<'_> {
         for &op in &ops {
             self.forward_dead_write(op, &scope);
         }
+        self.count_carriers(region)?;
         for &op in &ops {
             let instance = self.context.get_op(op);
             let Some(gamma) = instance.clone().as_interface::<dyn Gamma>() else {
@@ -160,13 +168,52 @@ impl Driver<'_> {
                 self.inject(predicate, width, case);
                 self.saturate();
                 let dirty = self.eg.innermost_dirty();
-                let scoped = extraction.refresh(&self.eg, &dirty, |_, node| cost(node));
+                let scoped = extraction.refresh(&self.eg, &dirty, |_, node, operands, _| {
+                    spelling_cost(&self.eg, node, operands)
+                });
                 // A spelling built under this arm's fact answers only here.
                 let mut scoped_memo = memo.clone();
                 self.commit_nodes(arm, &scoped, &mut scoped_memo)?;
                 self.eg.pop_context();
             }
         }
+        Ok(())
+    }
+
+    /// Count, for each operation of `region`, the operations with regions on
+    /// the dependence paths ending at it; see [`Driver::carriers`]. The
+    /// region's own values are rewired by now, and every read an edit under it
+    /// adds is one [`Self::readable`] allows, so the counts stay a bound for
+    /// the rest of the commit.
+    ///
+    /// TODO: this walks the region's dependence graph. Replace it with a join
+    /// over a dependence relation once the IR is stored relationally.
+    fn count_carriers(&mut self, region: RegionId) -> Result<(), PassError> {
+        let ops = self.context.get_region(region).op_ids();
+        if ops
+            .iter()
+            .all(|&op| self.context.get_op(op).regions().is_empty())
+        {
+            return Ok(());
+        }
+        let order = crate::region::topological_order(self.context, region).map_err(|error| {
+            PassError::InvalidIR {
+                pass: "instcombine-nodes",
+                error,
+            }
+        })?;
+        let mut counts: HashMap<OpId, usize> = HashMap::with_capacity(order.len());
+        for op in order {
+            let read = crate::region::values_read(self.context, op)
+                .into_iter()
+                .filter_map(|value| counts.get(&self.context.get_value(value).defining_op()?))
+                .copied()
+                .max()
+                .unwrap_or(0);
+            let own = usize::from(!self.context.get_op(op).regions().is_empty());
+            counts.insert(op, read + own);
+        }
+        self.carriers.extend(counts);
         Ok(())
     }
 
@@ -272,7 +319,6 @@ impl Driver<'_> {
         scope: &[RegionId],
     ) -> Option<ValueId> {
         let (object, offset, bytes) = self.extent(written)?;
-        let written_end = offset.checked_add(i64::try_from(bytes).ok()?);
         let mut outputs = Vec::new();
         let mut join = None;
         for &reader in readers {
@@ -293,12 +339,8 @@ impl Driver<'_> {
             }
             let read = instance.clone().as_interface::<dyn MemoryRead>()?;
             let (read_object, read_offset, read_bytes) = self.extent(read.read_value())?;
-            let read_end = read_offset.checked_add(i64::try_from(read_bytes).ok()?);
             if object != read_object
-                || bytes == 0
-                || read_bytes == 0
-                || !(read_end.is_some_and(|end| end <= offset)
-                    || written_end.is_some_and(|end| end <= read_offset))
+                || !self.disjoint(object, (offset, bytes), (read_offset, read_bytes))
             {
                 return None;
             }
@@ -332,28 +374,45 @@ impl Driver<'_> {
         join.state_results().first().copied()
     }
 
-    /// The extent a load value or a store's published state covers: the
-    /// address's object, offset into it, and byte count.
-    fn extent(&self, value: ValueId) -> Option<(Id, i64, u64)> {
-        let class = self.eg.find(*self.value_class.get(&value)?);
-        let node = self
+    /// The extent a load value or a store's published state covers: the class
+    /// its address is an offset of, that offset, and the byte count. An
+    /// address some union tried to place at an offset from itself is placed
+    /// nowhere, and covers no extent anyone can compare.
+    fn extent(&self, value: ValueId) -> Option<(Id, u64, u64)> {
+        let class = self.eg.find(*self.value_class.get(&value)?).class;
+        let row = self
             .eg
-            .nodes(class)
-            .find(|node| node.prov == Prov::Value(value))?;
-        let arity = match node.sym()? {
+            .rows(class)
+            .find(|&row| self.eg.node(row).prov == Prov::Value(value))?;
+        let arity = match self.eg.node(row).sym()? {
             SymKind::LoadMemory => state::LOAD_ARITY,
             SymKind::StoreMemory => state::STORE_ARITY,
             _ => return None,
         };
-        if node.children.len() != arity {
+        let children = self.eg.children(row);
+        if children.len() != arity {
             return None;
         }
-        let (object, offset) = self.eg.object_of(node.children[state::ADDRESS])?;
-        let bytes = self
+        let address = children[state::ADDRESS];
+        if self.eg.conflicted(address.class) {
+            return None;
+        }
+        let bytes = self.eg.int_const(children[state::BYTES])?;
+        Some((address.class, address.offset, bytes))
+    }
+
+    /// Whether two non-empty extents, each an offset from `base` and a byte
+    /// count, share no byte. Offsets wrap at the address's width, so each is
+    /// measured from the other's start the way the address arithmetic does.
+    fn disjoint(&self, base: Id, (a, a_bytes): (u64, u64), (b, b_bytes): (u64, u64)) -> bool {
+        let mask = self
             .eg
-            .nodes(self.eg.find(node.children[state::BYTES]))
-            .find_map(|node| node.int())?;
-        Some((self.eg.find(object), offset, bytes.to_u64()))
+            .width(base)
+            .map_or(u64::MAX, |width| u64::MAX >> (64 - width));
+        a_bytes != 0
+            && b_bytes != 0
+            && b.wrapping_sub(a) & mask >= a_bytes
+            && a.wrapping_sub(b) & mask >= b_bytes
     }
 
     /// A read whose value was rewritten leaves memory as it found it: the state
@@ -382,7 +441,7 @@ impl Driver<'_> {
         extraction: &Extraction<'_, Node>,
         memo: &mut Memo,
     ) -> Result<bool, PassError> {
-        let Some(&class) = self.value_class.get(&value) else {
+        let Some(&reference) = self.value_class.get(&value) else {
             return Ok(false);
         };
         if !self.context.is_used(value)
@@ -392,7 +451,7 @@ impl Driver<'_> {
         }
         let ty = self.context.get_value(value).ty();
         self.replacing.set(Some(value));
-        let spelled = self.materialize_nodes(extraction, class, ty, region, memo);
+        let spelled = self.materialize_nodes(extraction, reference, ty, region, memo);
         self.replacing.set(None);
         let Some(new_value) = spelled else {
             return Ok(false);
@@ -418,46 +477,107 @@ impl Driver<'_> {
         Ok(true)
     }
 
-    /// The value of `class`'s cheapest node where `region` can read it, or
-    /// `None` where that node has no spelling there: the value being rewritten
-    /// itself, or an op that may trap sitting in a region the reader cannot see.
+    /// The value of `reference` where `region` can read it, or `None` where
+    /// it has no spelling there: the value being rewritten itself, or an op
+    /// that may trap sitting in a region the reader cannot see.
+    ///
+    /// A constant is a literal. A reference the class's cheapest node sits
+    /// at is that node. One at another offset is an IR value already
+    /// computing exactly it, where the reader can see one, and otherwise one
+    /// add of the difference onto the cheapest node.
     fn materialize_nodes(
         &self,
         extraction: &Extraction<'_, Node>,
-        class: Id,
+        reference: Ref,
         expected_ty: TypeId,
         region: RegionId,
         memo: &mut Memo,
     ) -> Option<ValueId> {
-        let class = self.eg.find(class);
-        if let Some(&value) = memo.get(&class)
-            && visible(self.context, value, region)
+        let reference = self.eg.find(reference);
+        if let Some(&value) = memo.get(&reference)
+            && self.readable(value, region)
         {
             return Some(value);
         }
-        let node = extraction.node(class)?;
-        let value = match node.prov {
+        let value = if let Some(bits) = self.eg.int_const(reference) {
+            match self.named_at(reference, 0, expected_ty, region) {
+                Some(value) => value,
+                None => {
+                    let width = self.eg.width(reference.class)?;
+                    let literal = super::spell(&APInt::new_signed(width, bits as i64));
+                    let op =
+                        crate::builtin::ops::constant(self.context, literal, expected_ty).build();
+                    self.context.add(region, crate::Operation::id(&op));
+                    op.result()
+                }
+            }
+        } else {
+            let row = extraction.row(reference.class)?;
+            let at = self.eg.value(row).offset;
+            if at == reference.offset {
+                self.spell_row(extraction, row, expected_ty, region, memo)?
+            } else {
+                match self.named_at(reference, at, expected_ty, region) {
+                    Some(value) => value,
+                    None => {
+                        let base = self.materialize_nodes(
+                            extraction,
+                            Ref::new(reference.class, at),
+                            expected_ty,
+                            region,
+                            memo,
+                        )?;
+                        self.add_offset(base, reference, at, expected_ty, region)?
+                    }
+                }
+            }
+        };
+        memo.insert(reference, value);
+        Some(value)
+    }
+
+    /// The node `row` computes, where `region` can read it.
+    fn spell_row(
+        &self,
+        extraction: &Extraction<'_, Node>,
+        row: RowId,
+        expected_ty: TypeId,
+        region: RegionId,
+        memo: &mut Memo,
+    ) -> Option<ValueId> {
+        let node = self.eg.node(row);
+        match node.prov {
             Prov::Value(_) | Prov::Op(_) => {
                 let named = self.named_value(node)?;
+                // An op whose operands carried offsets its laws moved out is
+                // the row at the sum of them, not the row: the row is the op
+                // over the operands' classes, rebuilt.
+                if !self
+                    .value_class
+                    .get(&named)
+                    .is_some_and(|&value| self.eg.find(value) == self.eg.value(row))
+                {
+                    return self.rebuild(extraction, row, region, memo);
+                }
                 if Some(named) == self.replacing.get() {
                     return None;
                 }
-                if visible(self.context, named, region) {
-                    named
+                if self.readable(named, region) {
+                    Some(named)
                 } else {
-                    self.rebuild(extraction, node, region, memo)?
+                    self.rebuild(extraction, row, region, memo)
                 }
             }
             Prov::Introduced(idx) => {
                 let ty = node.ty.expect("an op node carries its result type");
                 let types = vec![ty; node.children.len()];
-                let operands = self.materialize_children(extraction, node, &types, region, memo)?;
+                let operands = self.materialize_children(extraction, row, &types, region, memo)?;
                 let emit = self.ruleset.emits[idx]
                     .as_ref()
                     .expect("an introduced op supplies an emit");
                 let (op, value) = emit(self.context, &operands, ty);
                 self.context.add_auto(op.id());
-                value
+                Some(value)
             }
             Prov::None => {
                 let literal = node.int()?;
@@ -465,10 +585,99 @@ impl Driver<'_> {
                     crate::builtin::ops::constant(self.context, super::spell(literal), expected_ty)
                         .build();
                 self.context.add(region, crate::Operation::id(&op));
-                op.result()
+                Some(op.result())
             }
+        }
+    }
+
+    /// An IR value of type `ty` that is exactly `reference` and is already
+    /// spelled the way [`Self::materialize_nodes`] would spell it, where
+    /// `region` can read one: a literal for a constant, and otherwise one add
+    /// of a literal to the value of the class's cheapest node, which sits at
+    /// `at`. A value computing it any other way is not reused, so a rewrite
+    /// never swaps one long spelling for another.
+    fn named_at(&self, reference: Ref, at: u64, ty: TypeId, region: RegionId) -> Option<ValueId> {
+        let members = self.eg.scope_members(reference.class);
+        let members = if members.is_empty() {
+            std::slice::from_ref(&reference.class)
+        } else {
+            members
         };
-        memo.insert(class, value);
+        members.iter().find_map(|member| {
+            self.named.get(member)?.iter().find_map(|&(offset, value)| {
+                (self.eg.find(Ref::new(*member, offset)) == reference
+                    && self.context.get_value(value).ty() == ty
+                    && self.readable(value, region)
+                    && self.spells(value, Ref::new(reference.class, at)))
+                .then_some(value)
+            })
+        })
+    }
+
+    /// Whether `value`'s operation is a literal, where `base` is a constant,
+    /// or one add of a literal to `base` otherwise.
+    fn spells(&self, value: ValueId, base: Ref) -> bool {
+        let Some(op) = self.context.get_value(value).defining_op() else {
+            return false;
+        };
+        let instance = self.context.get_op(op);
+        if self.eg.int_const(base).is_some() {
+            return instance.has_interface::<dyn ConstantLike>();
+        }
+        let add = instance.is::<crate::builtin::ops::AddIOp>();
+        if !add && !instance.is::<crate::ptr::PtrAddOp>() {
+            return false;
+        }
+        let operands: Option<Vec<Ref>> = instance
+            .operands()
+            .iter()
+            .map(|operand| Some(self.eg.find(*self.value_class.get(operand)?)))
+            .collect();
+        match operands.as_deref() {
+            Some(&[a, b]) => {
+                (a == base && self.eg.int_const(b).is_some())
+                    || (add && b == base && self.eg.int_const(a).is_some())
+            }
+            _ => false,
+        }
+    }
+
+    /// `base`, which is `reference`'s class at `at`, moved on to `reference`
+    /// by one add of a literal: `addi` for an integer, `ptradd` for a
+    /// pointer, placed where its operands say.
+    fn add_offset(
+        &self,
+        base: ValueId,
+        reference: Ref,
+        at: u64,
+        ty: TypeId,
+        region: RegionId,
+    ) -> Option<ValueId> {
+        let width = self.eg.width(reference.class)?;
+        let step = super::spell(&APInt::new_signed(
+            width,
+            reference.offset.wrapping_sub(at) as i64,
+        ));
+        let pointer = (self.context.get_type_data(ty).as_ref() as &dyn std::any::Any)
+            .downcast_ref::<crate::ptr::PtrType>()
+            .is_some();
+        let step_ty = if pointer {
+            crate::builtin::IntegerType::new(self.context, width)
+        } else {
+            ty
+        };
+        let literal = crate::builtin::ops::constant(self.context, step, step_ty).build();
+        self.context.add(region, crate::Operation::id(&literal));
+        let (op, value) = if pointer {
+            let op = crate::ptr::ptradd(self.context, base, literal.result(), ty).build();
+            let value = op.result();
+            (crate::Operation::id(&op), value)
+        } else {
+            let op = crate::builtin::ops::addi(self.context, base, literal.result(), ty).build();
+            let value = op.result();
+            (crate::Operation::id(&op), value)
+        };
+        self.context.add_auto(op);
         Some(value)
     }
 
@@ -479,10 +688,11 @@ impl Driver<'_> {
     fn rebuild(
         &self,
         extraction: &Extraction<'_, Node>,
-        node: &Node,
+        row: RowId,
         region: RegionId,
         memo: &mut Memo,
     ) -> Option<ValueId> {
+        let node = self.eg.node(row);
         let Prov::Op(op) = node.prov else {
             return None;
         };
@@ -509,7 +719,7 @@ impl Driver<'_> {
         if types.len() != node.children.len() {
             return None;
         }
-        let operands = self.materialize_children(extraction, node, &types, region, memo)?;
+        let operands = self.materialize_children(extraction, row, &types, region, memo)?;
         let result = self.context.create_value(ty, None).id();
         let copy = self.context.add_operation(NewOp::new_dynamic(
             (source.dialect().as_str(), source.name().as_str()),
@@ -526,17 +736,94 @@ impl Driver<'_> {
     fn materialize_children(
         &self,
         extraction: &Extraction<'_, Node>,
-        node: &Node,
+        row: RowId,
         types: &[TypeId],
         region: RegionId,
         memo: &mut Memo,
     ) -> Option<Vec<ValueId>> {
-        node.children
+        self.eg
+            .children(row)
             .iter()
             .zip(types)
             .map(|(&arg, &ty)| self.materialize_nodes(extraction, arg, ty, region, memo))
             .collect()
     }
+
+    /// Whether `region` can read `value`: it is defined in `region`, or in one
+    /// enclosing it and not downstream of the operation there whose regions
+    /// hold `region`. An arm's facts can make a value computed from its own
+    /// gamma's result equal to one the arm computes, and reading that value in
+    /// the arm would close a dependency cycle.
+    fn readable(&self, value: ValueId, region: RegionId) -> bool {
+        let Some(defined) = crate::region::defining_region(self.context, value) else {
+            return true;
+        };
+        let mut current = region;
+        let mut holder = None;
+        while current != defined {
+            let Some(op) = self.context.get_region(current).parent_op() else {
+                return false;
+            };
+            let Some(enclosing) = self.context.region_of_op(op) else {
+                return false;
+            };
+            holder = Some(op);
+            current = enclosing;
+        }
+        // A region the commit never entered, the module's, holds nothing the
+        // commit could make depend on the function.
+        let bound = holder.and_then(|holder| self.carriers.get(&holder));
+        match (bound, self.context.get_value(value).defining_op()) {
+            (Some(&bound), Some(op)) => self.carried(op) < bound,
+            _ => true,
+        }
+    }
+
+    /// [`Driver::carriers`] for `op`, or for one built since, the most any of
+    /// its operands in its own region counts: a built operation has no
+    /// regions.
+    fn carried(&self, op: OpId) -> usize {
+        if let Some(&count) = self.carriers.get(&op) {
+            return count;
+        }
+        let region = self.context.region_of_op(op);
+        self.context
+            .get_op(op)
+            .operands()
+            .iter()
+            .filter_map(|&operand| self.context.get_value(operand).defining_op())
+            .filter(|&producer| self.context.region_of_op(producer) == region)
+            .map(|producer| self.carried(producer))
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// Index every IR value by the reference it is, once the base graph is
+    /// final: a reference at an offset its class's cheapest node does not sit
+    /// at is spelled by a value already computing it before one is built.
+    fn index_values(&mut self) {
+        let mut named: HashMap<Id, Vec<(u64, ValueId)>> = HashMap::new();
+        let mut values: Vec<(&ValueId, &Ref)> = self.value_class.iter().collect();
+        values.sort_by_key(|(value, _)| value.number());
+        for (&value, &reference) in values {
+            let found = self.eg.find(reference);
+            named
+                .entry(found.class)
+                .or_default()
+                .push((found.offset, value));
+        }
+        self.named = named;
+    }
+}
+
+/// What spelling `node` over `operands` costs: the op, and one add for each
+/// operand at an offset that is not a literal.
+fn spelling_cost(eg: &Engine<Node>, node: &Node, operands: &[Ref]) -> u64 {
+    cost(node)
+        + operands
+            .iter()
+            .filter(|operand| operand.offset != 0 && eg.int_const(**operand).is_none())
+            .count() as u64
 }
 
 /// Whether anything changed the memory `state` names since its chain opened.
@@ -566,28 +853,6 @@ fn changed_chain(context: &Context, state: ValueId) -> bool {
         return true;
     }
     changed_chain(context, chain.entered)
-}
-
-/// Whether `region` can read `value`: it is defined in `region` or in one
-/// enclosing it, by an operation other than the one carrying `region`, whose
-/// results are what its regions produce.
-fn visible(context: &Context, value: ValueId, region: RegionId) -> bool {
-    let Some(defined) = crate::region::defining_region(context, value) else {
-        return true;
-    };
-    let defining_op = context.get_value(value).defining_op();
-    let mut current = Some(region);
-    while let Some(here) = current {
-        if here == defined {
-            return true;
-        }
-        let carrier = context.get_region(here).parent_op();
-        if carrier.is_some() && carrier == defining_op {
-            return false;
-        }
-        current = carrier.and_then(|op| context.region_of_op(op));
-    }
-    false
 }
 
 /// A loop or a gate carrying a chain its body never names carries nothing: the

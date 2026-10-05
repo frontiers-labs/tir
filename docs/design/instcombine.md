@@ -64,10 +64,41 @@ otherwise identical operations over those inputs become equivalent too.
 This property is called congruence. Rebuilding the graph restores it after
 rules merge classes.
 
+### Constant offsets are part of identity
+
+The graph refers to a value as a class plus a constant offset, taken modulo
+the width of the class's integer or pointer type. `x + 3` is the reference
+`(x, 3)` rather than a node of its own, and an integer constant `k` is
+`(zero, k)`, where `zero` is the one class for zero of that type. An
+operation declares how an offset on an operand reaches its result: addition
+passes the offsets of both operands through, subtraction negates the one on
+the right, and an operation that declares nothing keeps the operand's offset
+as part of its identity, so `f(x + 1)` and `f(x)` stay apart. As a result
+`(x + 3) + (y + 5)` and `(x + y) + 8` are one addition node at offset 8, and
+`x + 0` is `x` with no node at all.
+
+The union-find stores each class's offset from its representative. A rebuild
+carries those offsets into the stored nodes, so merging `y` with `x + 3` also
+merges each parent of `y` with the matching parent of `x`, shifted by 3. A
+node whose operand becomes a constant this way, such as `x + y` once `y` is
+known to be 5, leaves the graph and its class joins `x + 5`. Merging a class
+with itself at a different offset is a contradiction, which the engine
+records rather than applies.
+
+The offset laws are definitions, not rules. `builtin.addi` and `ptr.ptradd`
+declare the `Additive` interface and `builtin.subi` and `ptr.ptrdiff` the
+`Subtractive` one, next to `Commutative`; the semantic operators answer from
+their kind, with `#neg` and `#not` moving an operand's offset to the result
+negated (`not(x + k)` is `not(x) - k`). A node reads its laws once, from the
+declaration and from the integer or pointer carrier its type is, so a node a
+rule introduces has the same laws as a seeded one. A pointer's carrier is the
+data layout's pointer width; with no layout in scope a pointer has none, and
+its arithmetic keeps no offsets.
+
 The graph is not a syntax tree. Different expressions can share inputs, and
-equalities can introduce cycles. For example, equating `x + 0` with `x` can
-leave an addition whose child refers back to its own class. Extraction must
-find a finite representation rather than follow that cycle forever.
+equalities can introduce cycles. For example, a loop's carried value can be a
+node whose child is its own class. Extraction must find a finite
+representation rather than follow that cycle forever.
 
 ## From a function to a simplified function
 
@@ -89,9 +120,10 @@ flowchart TD
 
 ### Seeding preserves identity and dependencies
 
-Seeding gives each IR value an e-class. Constants become constant nodes.
-Representable operations become nodes over the classes of their inputs.
-Operation metadata supplies facts such as commutativity and modeled cost.
+Seeding gives each IR value a reference. A constant is its type's zero at the
+constant's value and stores no node. Representable operations become nodes
+over the references of their inputs. Operation metadata supplies facts such as
+commutativity, offset laws and modeled cost.
 
 The graph also records where a node came from. An existing IR value can often
 be reused directly. A rule-created expression needs a way to construct a new
@@ -115,15 +147,25 @@ The ruleset combines PDL equalities with rules supplied by the host engine.
 PDL is useful for local expression patterns:
 
 ```pdl
-rule add-zero: builtin.addi(x: int<W>, 0) => x;
+rule mul-one: builtin.muli(x: int<W>, 1) => x;
 rule mul-pow2-to-shl:
 	builtin.muli(x: int<W>, c: const) => builtin.shli(x, const<W>(ctz(c)))
 	where popcount(c) == 1, c != 1;
 ```
 
-The first rule equates an addition with its first operand. That operand can
-be any integer value, including zero. The second checks a constant
-and introduces a shift. Neither rule traverses the function or edits users.
+The first rule equates a multiplication by one with its other operand. The
+second checks a constant and introduces a shift. A literal or a `const`
+operand matches a reference to its carrier's zero and reads the value off its
+offset. Neither rule traverses the function or edits users.
+
+Identities the offset laws already give have no rule: `x + 0`, `x - 0`, and
+folding the constants of `(x + 3) + 5` into `x + 8`. A pattern naming a
+constant operand where an operator's law applies, such as `#add(x, 3)`, never
+matches, because no node holds that operand; the PDL compiler rejects it for
+a semantic operator, and a generated rule asserts it in a debug build for an
+IR one. The
+one constant a node keeps there is a zero no identity dissolves, as in
+`0 - x`.
 
 Host rules connect matching to behavior that an operation already provides.
 Constant folding, for example, asks an operation to compute its result from
@@ -151,9 +193,9 @@ is reached. Bounds on work and graph size keep compilation finite even when
 the rules can generate many alternatives. The result therefore contains the
 equivalences discovered within the search budget, not every possible identity.
 
-Some rules run in a terminal post-saturation phase. Constant reassociation is
-one use: a new constant should not repeatedly feed a cyclic class and generate
-more constants in the same saturation call. These rules have the same equality
+Some rules run in a terminal post-saturation phase. Reassociating a product
+of constants is one use: a new constant should not repeatedly feed a cyclic
+class and generate more constants in the same saturation call. These rules have the same equality
 obligation as ordinary rules; only their scheduling differs.
 
 ## Facts that hold only inside a region
@@ -193,7 +235,9 @@ initial constant, the candidate is removed. The engine repeats with the
 remaining candidates until none are refuted.
 
 This is an inductive argument: the value is constant on entry, and the body
-preserves that constant on every next iteration. Only surviving hypotheses
+preserves that constant on every next iteration. Backedges compare as
+references, so a counter's next value, the counter at offset one, refutes the
+hypothesis that the counter is its initial constant. Only surviving hypotheses
 become facts in the enclosing graph. Nested loops are considered in their
 enclosing assumption scope, so a proof that depends on an outer hypothesis
 does not escape it prematurely.
@@ -204,9 +248,17 @@ for arbitrary loop invariants or a license to unroll loops in rewrite rules.
 ## Cost guides extraction; scope constrains placement
 
 Extraction chooses finite expressions with low modeled cost. An operation's
-cost combines with the costs of its inputs. Constants have no computation
-cost in this model. Opaque or structural forms remain available when no
-better representation is known.
+cost combines with the costs of its inputs, plus one add for each input read
+at a non-zero offset. Constants have no computation cost in this model. Opaque
+or structural forms remain available when no better representation is known.
+
+A reference is written back in one of three ways. A constant is a literal, or
+an existing visible literal of the same value and type. A reference at the
+offset its class's cheapest node sits at is that node. Any other offset is an
+existing visible value already spelled as one add of a literal to that node,
+or else such an add, built: `addi` for an integer, `ptradd` for a pointer.
+An existing value computing the reference some other way is not reused, so a
+rewrite never trades one long spelling for another.
 
 These costs guide simplification. They do not model an entire processor,
 register allocation, or every consequence of sharing computations. The
@@ -216,6 +268,16 @@ An inexpensive graph expression is useful only if the IR can express it at
 the consumer. The update therefore checks region visibility. A value defined
 in the consumer's region or an enclosing region can be reused. A value from
 an unrelated arm cannot simply be referenced there.
+
+A value from an enclosing region must also not depend on the operation whose
+region holds the consumer. An arm's facts can make the gamma's own result plus
+one equal to a value the arm computes, and reading it in the arm would close a
+dependency cycle. Before entering nested regions, the update counts for each
+operation of the enclosing region the most region-carrying operations on any
+dependence path ending at it. A value is reused only where its count is below
+the holder's. The count never decreases along a dependence, so every dependent
+value is refused. An independent value is refused only when a longer chain of
+region-carrying operations leads to it.
 
 An existing operation can be recreated elsewhere only when its behavior allows
 that speculation and its inputs can be made available. Potential traps matter:
@@ -232,11 +294,14 @@ Uses and region results are redirected only after a usable replacement exists.
 Memory state makes ordering part of the expression being simplified. A load
 depends on the state it observes. A store contributes the state it produces.
 A load from the location just written can use the stored value when the
-memory rule establishes the same object, offset, access size, and required
+memory rule establishes the same base, offset, access size, and required
 access properties.
 
-Pointer facts help establish those relationships. Derived addresses retain
-their base object and offset when the graph can determine them consistently.
+An address is a reference, so a chain of `ptradd`s by constants is its base
+at the summed offset with no rule deriving it. Two accesses compare their
+bases and offsets. A base that some union tried to place at an offset from
+itself is a contradiction the engine flags as conflicted; it is placed
+nowhere, and the extent comparison below does not read it.
 Unknown or conflicting information does not establish that two accesses
 refer to the same location.
 
@@ -247,7 +312,8 @@ The IR update handles that cleanup after expression choices have been made.
 
 A disjoint read can observe the state before an overwritten store without
 changing its value. The commit compares the two access extents, requiring the
-same object and nonoverlapping ranges with positive byte counts. It accepts a
+same base and nonoverlapping ranges with positive byte counts, measured modulo
+the address width. It accepts a
 single read or a fork of reads that reconverges at one join, and requires the
 continuation to reach a write of the original extent. Only then does it bypass the old
 store. The reads keep their output states and join, so the surviving write

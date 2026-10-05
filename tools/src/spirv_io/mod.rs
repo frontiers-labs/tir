@@ -34,6 +34,7 @@ pub fn export(args: ExportArgs) -> Result<(), Box<dyn Error>> {
     context.register_dialect::<tir_gpu::spirv::SpirvDialect>();
     let module = tir::parse::ir::parse_ir::<ModuleOp>(&context, &input)
         .map_err(|(span, err)| format!("failed to parse input at byte {}: {err:?}", span.0))?;
+    crate::common::attach_declared_data_layout(&context, &module)?;
     let binary = tir_gpu::spirv::write_binary(&context, &module)
         .map_err(|error| format!("SPIR-V export failed: {error}"))?;
     write_bytes(args.output.as_os_str(), &binary)?;

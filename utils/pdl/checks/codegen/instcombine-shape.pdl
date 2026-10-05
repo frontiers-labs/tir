@@ -2,7 +2,7 @@
 // typed pattern and introduced nodes and no applier closure.
 // RUN: tir-pdl %s --emit rust | filecheck %s
 
-rule add-zero: builtin.addi(x: int<W>, 0) => x;
+rule mul-one: builtin.muli(x: int<W>, 1) => x;
 rule mul-pow2-to-shl:
   builtin.muli(x: int<W>, c: const) => builtin.shli(x, const<W>(ctz(c)))
   where popcount(c) == 1, c != 1;
@@ -10,7 +10,7 @@ rule mul-pow2-to-shl:
 // CHECK-NOT: Rhs::Apply
 // CHECK-NOT: Box::new(move
 // CHECK: fn generated_ruleset
-// CHECK: Node::pattern:: < crate ::builtin::AddIOp >
+// CHECK: Node::pattern:: < crate ::builtin::MulIOp >
 // CHECK: HeadOp::Union
 // CHECK: HeadOp::Insert
 // CHECK: Node::introduced:: < crate ::builtin::ShlIOp >

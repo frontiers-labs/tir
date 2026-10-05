@@ -195,7 +195,8 @@ fn address(
     if offset == 0 {
         return Ok(base);
     }
-    let index = b::constant(context, offset as i64, IntegerType::new(context, 64)).build();
+    let offset_ty = crate::ptr::offset_type(context, before.op().id);
+    let index = b::constant(context, offset as i64, offset_ty).build();
     context.insert_op_before(before, &index)?;
     let address = p::ptradd(context, base, index.result(), context.get_value(base).ty()).build();
     context.insert_op_before(before, &address)?;

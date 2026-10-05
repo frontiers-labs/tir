@@ -2,7 +2,7 @@
 // RUN: tir mc --march=arm64 --stage=isel %s | filecheck %s --check-prefix=ISEL
 
 // Values wider than 16 bits start from MOVZ and fill the remaining halfwords
-// with MOVK.
+// with MOVK; one whose complement fits 16 bits is a single MOVN.
 
 module {
   %fn_f = func.func @f() -> !i64 {
@@ -41,8 +41,6 @@ module {
 // ISEL: arm64.movk_lsl48
 // ISEL-NOT: constant
 // ISEL-LABEL: asm.symbol {name = "negative"
-// ISEL: arm64.movz
-// ISEL: arm64.movk_lsl16
-// ISEL: arm64.movk_lsl32
-// ISEL: arm64.movk_lsl48
+// ISEL: arm64.movn {{.*}} imm = 0}
+// ISEL-NOT: arm64.movk
 // ISEL-NOT: constant

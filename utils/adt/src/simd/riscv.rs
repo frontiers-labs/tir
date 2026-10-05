@@ -9,10 +9,9 @@ use super::{HASH_MUL, Kernels};
 
 pub(super) static RVV: Kernels = Kernels {
     name: "rvv",
-    find_eq,
+    select_eq,
     find_same,
-    max,
-    mark_moved,
+    select_moved,
     hash_mix,
     hash_finish,
 };
@@ -39,8 +38,8 @@ pub(super) fn has_vector() -> bool {
 // In every loop `{n}` counts the rows left and `{vl}` the rows this pass
 // takes. v0 is the mask register.
 
-unsafe fn find_eq(column: *const u32, len: usize, value: u32) -> usize {
-    let row: usize;
+unsafe fn select_eq(column: *const u32, len: usize, value: u32, out: *mut u32) -> usize {
+    let found: usize;
     unsafe {
         asm!(
             ".option push",
@@ -50,28 +49,38 @@ unsafe fn find_eq(column: *const u32, len: usize, value: u32) -> usize {
             "vsetvli {vl}, {n}, e32, m1, ta, ma",
             "vle32.v v8, ({p})",
             "vmseq.vx v0, v8, {v}",
-            "vfirst.m {t}, v0",
-            "bgez {t}, 3f",
+            "vcpop.m {t}, v0",
+            "beqz {t}, 3f",
+            // Pack the rows of the hits to the front and store that many.
+            "vid.v v9",
+            "vadd.vx v9, v9, {i}",
+            "vcompress.vm v10, v9, v0",
+            "vsetvli zero, {t}, e32, m1, ta, ma",
+            "vse32.v v10, ({o})",
+            "add {k}, {k}, {t}",
+            "slli {t}, {t}, 2",
+            "add {o}, {o}, {t}",
+            "3:",
             "add {i}, {i}, {vl}",
             "sub {n}, {n}, {vl}",
             "slli {t}, {vl}, 2",
             "add {p}, {p}, {t}",
             "j 2b",
-            "3:",
-            "add {i}, {i}, {t}",
             "4:",
             ".option pop",
             p = inout(reg) column => _,
             n = inout(reg) len => _,
             v = in(reg) value,
-            i = inout(reg) 0usize => row,
+            o = inout(reg) out => _,
+            i = inout(reg) 0usize => _,
+            k = inout(reg) 0usize => found,
             vl = out(reg) _,
             t = out(reg) _,
-            out("v0") _, out("v8") _,
-            options(nostack, readonly),
+            out("v0") _, out("v8") _, out("v9") _, out("v10") _,
+            options(nostack),
         );
     }
-    row
+    found
 }
 
 unsafe fn find_same(a: *const u32, b: *const u32, len: usize) -> usize {
@@ -111,72 +120,62 @@ unsafe fn find_same(a: *const u32, b: *const u32, len: usize) -> usize {
     row
 }
 
-unsafe fn max(column: *const u32, len: usize) -> u32 {
-    let best: usize;
+unsafe fn select_moved(
+    column: *const u32,
+    map: *const u32,
+    map_len: usize,
+    len: usize,
+    out: *mut u32,
+) -> usize {
+    let found: usize;
     unsafe {
         asm!(
             ".option push",
             ".option arch, +v",
             "2:",
-            "beqz {n}, 3f",
-            "vsetvli {vl}, {n}, e32, m1, ta, ma",
-            "vle32.v v8, ({p})",
-            // Fold this pass into the running maximum, kept in a register.
-            "vmv.s.x v9, {r}",
-            "vredmaxu.vs v9, v8, v9",
-            "vmv.x.s {r}, v9",
-            "sub {n}, {n}, {vl}",
-            "slli {t}, {vl}, 2",
-            "add {p}, {p}, {t}",
-            "j 2b",
-            "3:",
-            ".option pop",
-            p = inout(reg) column => _,
-            n = inout(reg) len => _,
-            r = inout(reg) 0usize => best,
-            vl = out(reg) _,
-            t = out(reg) _,
-            out("v8") _, out("v9") _,
-            options(nostack, readonly),
-        );
-    }
-    best as u32
-}
-
-unsafe fn mark_moved(column: *const u32, map: *const u32, flags: *mut u32, len: usize) {
-    unsafe {
-        asm!(
-            ".option push",
-            ".option arch, +v",
-            "2:",
-            "beqz {n}, 3f",
-            // Masked-off lanes of the `vor` below keep their flag.
+            "beqz {n}, 4f",
+            // Masked-off lanes of the gather keep what v10 held.
             "vsetvli {vl}, {n}, e32, m1, ta, mu",
             "vle32.v v8, ({c})",
-            // Gather `map[cell]`: the index is a byte offset.
+            // A cell outside the map reads as its complement, which differs.
+            "vnot.v v10, v8",
+            "vmsltu.vx v0, v8, {l}",
             "vsll.vi v9, v8, 2",
-            "vluxei32.v v10, ({m}), v9",
+            "vluxei32.v v10, ({m}), v9, v0.t",
             "vmsne.vv v0, v10, v8",
-            "vle32.v v11, ({f})",
-            "vor.vi v11, v11, 1, v0.t",
-            "vse32.v v11, ({f})",
+            "vcpop.m {t}, v0",
+            "beqz {t}, 3f",
+            // Pack the rows of the hits to the front and store that many.
+            "vid.v v9",
+            "vadd.vx v9, v9, {i}",
+            "vcompress.vm v11, v9, v0",
+            "vsetvli zero, {t}, e32, m1, ta, ma",
+            "vse32.v v11, ({o})",
+            "add {k}, {k}, {t}",
+            "slli {t}, {t}, 2",
+            "add {o}, {o}, {t}",
+            "3:",
+            "add {i}, {i}, {vl}",
             "sub {n}, {n}, {vl}",
             "slli {t}, {vl}, 2",
             "add {c}, {c}, {t}",
-            "add {f}, {f}, {t}",
             "j 2b",
-            "3:",
+            "4:",
             ".option pop",
             c = inout(reg) column => _,
             m = in(reg) map,
-            f = inout(reg) flags => _,
+            l = in(reg) map_len,
             n = inout(reg) len => _,
+            o = inout(reg) out => _,
+            i = inout(reg) 0usize => _,
+            k = inout(reg) 0usize => found,
             vl = out(reg) _,
             t = out(reg) _,
             out("v0") _, out("v8") _, out("v9") _, out("v10") _, out("v11") _,
             options(nostack),
         );
     }
+    found
 }
 
 unsafe fn hash_mix(hash: *mut u32, column: *const u32, len: usize) {

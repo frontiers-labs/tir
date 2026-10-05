@@ -40,7 +40,7 @@ use tir::{
     },
 };
 use tir_adt::APInt;
-use tir_relational::{ClassId as Id, Label as ENode};
+use tir_relational::{ClassId as Id, Label as ENode, Ref};
 
 use crate::passes::destructure::{
     ControlId, ControlKind, DemandDomainId, RecoveryError, RecoveryPlan,
@@ -62,8 +62,8 @@ use cover::{
 };
 use emit::{AuxEmit, GuardBranch, RegionPlan, ScheduledEmit, order_tiles, resolve_match};
 use matches::{MatchRef, Matches};
-use node::{chase_low_extract, is_low_extract_view};
-use pattern::{CompiledIselPattern, PatternNode, compile_isel_pattern};
+use node::{chase_low_extract, is_low_extract_view, rows_at};
+use pattern::{CompiledIselPattern, Found, PatternNode, Rooting, compile_isel_pattern};
 use problem::{
     Availability, ClassFacts, ControlCandidates, ControlChoice, GuardCandidate, GuardOperand,
     HasRegister, Naming, RegionAssignment, RegionProblem,
@@ -78,7 +78,7 @@ use tir::sem::rewrites::{self, discover_rewrites};
 struct FusedGuard {
     rule_index: usize,
     m: RuleMatch,
-    boundaries: Vec<Id>,
+    boundaries: Vec<Ref>,
 }
 
 #[derive(Debug, Clone)]
@@ -573,8 +573,8 @@ pub struct BranchEmitters {
 }
 #[derive(Default)]
 struct PlacementDemand {
-    registers: HashSet<(Id, RegionId)>,
-    effects: HashSet<(Id, RegionId)>,
+    registers: HashSet<(Ref, RegionId)>,
+    effects: HashSet<(Ref, RegionId)>,
 }
 
 /// The whole function lowered into one shared, base-saturated e-graph, with the
@@ -584,13 +584,17 @@ struct PlacementDemand {
 struct FunctionSelection {
     egraph: SemEGraph,
     pointer_width: Option<u32>,
-    /// Every class rooting a lowered op, across all regions.
-    op_roots: HashSet<Id>,
-    /// The canonical e-class of every lowered op's root (total over all ops).
-    op_root: HashMap<OpId, Id>,
-    /// Every IR value a (canonical) class computes, so a boundary can resolve to a
-    /// register value under the dominance rule at emit time.
-    class_values: HashMap<Id, Vec<ValueId>>,
+    /// The class of every value rooting a lowered op, across all regions: what
+    /// the search prunes an interior binding by before the region asks about
+    /// the value itself.
+    op_root_classes: HashSet<Id>,
+    /// The canonical value of every lowered op's root (total over all ops).
+    op_root: HashMap<OpId, Ref>,
+    /// Every IR value a (canonical) value computes, so a boundary can resolve
+    /// to a register value under the dominance rule at emit time. Two IR values
+    /// of one class at different offsets are two entries: each is its own
+    /// register.
+    class_values: HashMap<Ref, Vec<ValueId>>,
     /// The regions of the function, and the order each one's operations take.
     scopes: Scopes,
     /// The op defining each IR value (function-wide).
@@ -606,9 +610,9 @@ struct FunctionSelection {
     /// regions the value is read. What a region reads has to have run before the
     /// region does, so a spelling bound for the value's class must precede it.
     region_use: HashMap<ValueId, OpId>,
-    /// E-classes used as an operand by more than one consumer (function-wide). A
-    /// memory effect in such a class cannot be internalized into a match.
-    shared_classes: HashSet<Id>,
+    /// Values used as an operand by more than one consumer (function-wide). A
+    /// memory effect in such a value cannot be internalized into a match.
+    shared_classes: HashSet<Ref>,
     /// Classes selected at their defining region because a surviving reader needs
     /// their register value.
     demand: PlacementDemand,
@@ -621,18 +625,15 @@ struct FunctionSelection {
     /// operation's own binding (see [`entry_facts`]).
     region_facts: HashMap<RegionId, (ValueId, bool)>,
     /// What each region must materialize for a destruction to branch on it.
-    region_aux: HashMap<RegionId, Vec<(OpId, ControlSlot, Id)>>,
-    control_inverses: HashMap<ControlSlot, Id>,
+    region_aux: HashMap<RegionId, Vec<(OpId, ControlSlot, Ref)>>,
+    control_inverses: HashMap<ControlSlot, Ref>,
 }
 
 impl FunctionSelection {
-    /// The base class ids a (scoped-canonical) class covers: the fact scope's
-    /// partition members, or the class itself when no scope is open. The side
-    /// tables are keyed by base reps, so every per-region query aggregates over
-    /// these — an assumption may merge a scoped class over several base keys, and
-    /// a query through the scoped rep must see all of them.
-    fn base_members(&self, class: Id) -> impl Iterator<Item = Id> + '_ {
-        let canon = self.egraph.find(class);
+    /// The classes the open scope merged into `class`'s: the fact scope's
+    /// partition members, or the class itself when no scope is open.
+    fn member_classes(&self, class: Id) -> impl Iterator<Item = Id> + '_ {
+        let canon = self.egraph.root(class);
         let members = self.egraph.scope_members(canon);
         members
             .is_empty()
@@ -641,21 +642,36 @@ impl FunctionSelection {
             .chain(members.iter().copied())
     }
 
-    /// Whether any base member of `class` roots a lowered op (function-wide).
-    fn is_op_root(&self, class: Id) -> bool {
-        self.base_members(class).any(|m| self.op_roots.contains(&m))
+    /// The base values a (scoped-canonical) value covers: the same value read
+    /// through each class the fact scope merged into its class, or the value
+    /// itself when no scope is open. The side tables are keyed by base values,
+    /// so every per-region query aggregates over these — an assumption may
+    /// merge a scoped class over several base keys, at offsets from each
+    /// other, and a query through the scoped value must see all of them. An
+    /// assumption that a value is a constant is a merge into the constant's
+    /// zero like any other, so the value and the literal are both members.
+    fn base_members(&self, value: Ref) -> impl Iterator<Item = Ref> + '_ {
+        let canon = self.egraph.find(value);
+        let mask = self
+            .egraph
+            .width(canon.class)
+            .map_or(0, |width| u64::MAX >> (64 - width));
+        self.member_classes(canon.class).map(move |member| {
+            let placed = self.egraph.find(member).offset;
+            Ref::new(member, canon.offset.wrapping_sub(placed) & mask)
+        })
     }
 
-    /// Whether any base member of `class` is used as an operand by more than one
-    /// consumer (so a memory effect in it cannot be internalized).
-    fn is_shared(&self, class: Id) -> bool {
-        self.base_members(class)
+    /// Whether any base member of `value` is used as an operand by more than
+    /// one consumer (so a memory effect in it cannot be internalized).
+    fn is_shared(&self, value: Ref) -> bool {
+        self.base_members(value)
             .any(|m| self.shared_classes.contains(&m))
     }
 
-    /// The classes `region` must materialize for a destruction to read them, in
+    /// The values `region` must materialize for a destruction to read them, in
     /// the order the seeder recorded.
-    fn aux_classes(&self, region: RegionId) -> impl Iterator<Item = Id> + '_ {
+    fn aux_classes(&self, region: RegionId) -> impl Iterator<Item = Ref> + '_ {
         self.region_aux
             .get(&region)
             .into_iter()
@@ -663,19 +679,19 @@ impl FunctionSelection {
             .map(|&(.., class)| self.egraph.find(class))
     }
 
-    /// Whether `class` computes an IR value under the open scope (a candidate
-    /// for a register binding). A class with none is pure / rewrite-introduced.
-    fn class_has_values(&self, class: Id) -> bool {
-        self.base_members(class)
+    /// Whether `value` computes an IR value under the open scope (a candidate
+    /// for a register binding). A value with none is pure / rewrite-introduced.
+    fn class_has_values(&self, value: Ref) -> bool {
+        self.base_members(value)
             .any(|m| self.class_values.contains_key(&m))
     }
 
-    /// What the open scope says of `class` as `region` reads it: everything a
+    /// What the open scope says of `value` as `region` reads it: everything a
     /// plan needs once the scope has closed.
-    fn class_facts(&self, context: &Context, class: Id, region: RegionId) -> ClassFacts {
-        let class = self.egraph.find(class);
-        let members: Vec<Id> = self.base_members(class).collect();
-        let source = chase_low_extract(&self.egraph, class);
+    fn class_facts(&self, context: &Context, value: Ref, region: RegionId) -> ClassFacts {
+        let value = self.egraph.find(value);
+        let members: Vec<Ref> = self.base_members(value).collect();
+        let source = chase_low_extract(&self.egraph, value);
         // A low-bit truncation re-views its operand's register: bind the operand
         // (chasing a chain of truncations), never the erased truncation itself.
         // A rewrite-introduced operand holds no IR value, so a view of it keeps
@@ -683,34 +699,19 @@ impl FunctionSelection {
         let bound = if self.class_has_values(source) {
             source
         } else {
-            class
+            value
         };
-        // A class a fact proves equal to a literal may read a register already
-        // holding that literal, and a literal may read the register of a value
-        // proven equal to it: the union used to make them one class, and this is
-        // the one place that congruence was worth a register.
-        let literal = self
-            .egraph
-            .assumed_const(bound)
-            .and_then(|node| self.egraph.const_class(node))
-            .map(|id| self.egraph.find(id));
-        let equal: Vec<Id> = self
-            .egraph
-            .nodes(bound)
-            .find(|node| node.sym() == Some(SymKind::Constant) && node.int().is_some())
-            .map(|node| self.egraph.classes_assumed_const(node).collect())
-            .unwrap_or_default();
-        let binding_members = self
-            .base_members(bound)
-            .chain(literal)
-            .chain(equal)
+        let binding_members = self.base_members(bound).collect();
+        let rows: Vec<&SemNode> = rows_at(&self.egraph, value)
+            .map(|row| self.egraph.node(row))
             .collect();
-        let nodes = self.egraph.nodes(class);
-        let kind = nodes
-            .clone()
+        let kind = rows
+            .iter()
             .filter_map(|n| n.sym())
             .find(|kind| *kind != SymKind::If)
-            .or_else(|| nodes.clone().next().and_then(|n| n.sym()));
+            .or_else(|| rows.first().and_then(|n| n.sym()))
+            // A value no row is at is its class plus an offset.
+            .or((value.offset != 0).then_some(SymKind::Add));
         let placed = members.iter().any(|&member| {
             self.demand.registers.contains(&(member, region))
                 || self.demand.effects.contains(&(member, region))
@@ -720,9 +721,10 @@ impl FunctionSelection {
             .any(|&member| self.demand.registers.contains(&(member, region)));
         ClassFacts {
             binding_members,
-            int: class_int_binding(&self.egraph, class),
-            pure: node::class_is_pure(&self.egraph, class),
-            width: class_width(context, &self.egraph, class),
+            int: class_int_binding(&self.egraph, value),
+            pure: node::is_pure(&self.egraph, value),
+            width: class_width(context, &self.egraph, value.class)
+                .or_else(|| self.egraph.width(value.class)),
             source,
             kind,
             has_values: self.has_values(&members),
@@ -735,12 +737,12 @@ impl FunctionSelection {
     }
 
     /// Whether any of `members` computes an IR value.
-    fn has_values(&self, members: &[Id]) -> bool {
+    fn has_values(&self, members: &[Ref]) -> bool {
         members.iter().any(|m| self.class_values.contains_key(m))
     }
 
     /// Every IR value `members` carry.
-    fn values<'a>(&'a self, members: &'a [Id]) -> impl Iterator<Item = ValueId> + 'a {
+    fn values<'a>(&'a self, members: &'a [Ref]) -> impl Iterator<Item = ValueId> + 'a {
         members
             .iter()
             .filter_map(|member| self.class_values.get(member))
@@ -750,7 +752,7 @@ impl FunctionSelection {
 
     /// Whether `region` holds an operation selection must emit for the class —
     /// a definition of it, as opposed to a name adopted from it.
-    fn defined_in(&self, members: &[Id], region: RegionId) -> bool {
+    fn defined_in(&self, members: &[Ref], region: RegionId) -> bool {
         self.values(members).any(|value| {
             self.value_to_def.get(&value).is_some_and(|def| {
                 self.op_root.contains_key(def) && self.scopes.op_region.get(def) == Some(&region)
@@ -760,9 +762,16 @@ impl FunctionSelection {
 
     /// The registers holding a class in `region` without an instance of that
     /// region computing it.
-    fn availability(&self, context: &Context, members: &[Id], region: RegionId) -> Availability {
+    fn availability(&self, context: &Context, members: &[Ref], region: RegionId) -> Availability {
         let mut availability = Availability::default();
-        for value in self.values(members) {
+        let values = members.iter().flat_map(|&member| {
+            self.class_values
+                .get(&member)
+                .into_iter()
+                .flatten()
+                .map(move |&value| (member, value))
+        });
+        for (member, value) in values {
             let Some(&def) = self.value_to_def.get(&value) else {
                 // A port is written on the way into its own region, so it holds
                 // the class only inside that region — never in a sibling arm.
@@ -796,9 +805,9 @@ impl FunctionSelection {
                     def_region == region || self.has_run_at(def, def_region, region);
             } else if def_region != region
                 && self.has_run_at(def, def_region, region)
-                && !availability.ancestors.contains(&def_region)
+                && !availability.ancestors.contains(&(member, def_region))
             {
-                availability.ancestors.push(def_region);
+                availability.ancestors.push((member, def_region));
             }
         }
         availability
@@ -809,7 +818,7 @@ impl FunctionSelection {
     /// placed after that operation spells the class only for what follows the
     /// region, never for the region itself — the arms of a gate cannot read the
     /// name the gate publishes.
-    fn region_ask(&self, region: RegionId, members: &[Id]) -> Option<OpId> {
+    fn region_ask(&self, region: RegionId, members: &[Ref]) -> Option<OpId> {
         self.values(members)
             .filter_map(|value| match self.value_region.get(&value) {
                 Some(&Some(held)) if held == region => self.region_use.get(&value).copied(),
@@ -842,7 +851,7 @@ impl FunctionSelection {
     fn naming(
         &self,
         context: &Context,
-        members: &[Id],
+        members: &[Ref],
         region: RegionId,
         at: Option<OpId>,
     ) -> Naming {
@@ -890,7 +899,7 @@ impl FunctionSelection {
     fn register_value(
         &self,
         context: &Context,
-        members: &[Id],
+        members: &[Ref],
         region: RegionId,
         consumer: Option<OpId>,
         bind_pending_tiles: bool,
@@ -960,8 +969,8 @@ impl FunctionSelection {
 /// A region-entry condition prepared against the base graph (see
 /// [`FunctionSelection::prepared`]).
 struct ConditionExpr {
-    condition: Id,
-    compare: Option<(Id, SymKind, Id, Id)>,
+    condition: Ref,
+    compare: Option<(Ref, SymKind, Ref, Ref)>,
 }
 
 pub type OpLowering = Box<dyn Fn(&Context, &OperationRef) -> Result<bool, PassError> + Send + Sync>;
@@ -975,12 +984,15 @@ pub struct InstructionSelectPass {
     /// How type-constrained each compiled pattern is: the tie-break the cover
     /// prunes dominated matches by.
     specificity: Vec<usize>,
-    /// Value patterns rooted on a concrete operator, by that operator's key, and
-    /// those that root on anything (a bare symbol, or a copy rule). Rule data, so
-    /// it is built once rather than per function: a class is only ever searched
-    /// against the patterns that can root at it.
+    /// Value patterns rooted on a row of a concrete operator, by that
+    /// operator's key, and those that root on any row (a copy rule). Rule
+    /// data, so it is built once rather than per function: a class is only ever
+    /// searched against the patterns that can root at it.
     value_patterns_by_op: HashMap<u64, Vec<usize>>,
     value_patterns_anywhere: Vec<usize>,
+    /// Value patterns that match a value no row spells: an offset split, a
+    /// bare immediate, a register addend, or a constant evaluated.
+    value_patterns_at_values: Vec<usize>,
     /// Immediate ranges of every formal constant materializer
     /// (see [`pattern::constant_materializer_ranges`]). Empty means bare
     /// constants stay with the target's pre-RA materialization hook.
@@ -1480,8 +1492,18 @@ impl InstructionSelectPass {
             .collect();
         let mut value_patterns_by_op: HashMap<u64, Vec<usize>> = HashMap::new();
         let mut value_patterns_anywhere = Vec::new();
+        let mut value_patterns_at_values = Vec::new();
         for (index, compiled) in compiled_patterns.iter().enumerate() {
             if rules[compiled.rule_index].kind != RuleKind::Value {
+                continue;
+            }
+            if compiled.rooting() != Rooting::Row
+                || compiled.has_register_offset()
+                || compiled.solves_constants()
+            {
+                value_patterns_at_values.push(index);
+            }
+            if compiled.rooting() != Rooting::Row {
                 continue;
             }
             match &compiled.nodes[compiled.root()] {
@@ -1501,17 +1523,17 @@ impl InstructionSelectPass {
             .iter()
             .filter_map(CompiledIselPattern::constant_materializer_range)
             .collect();
-        // A target without formal materializers keeps bare constants for its
-        // pre-RA hook, so no constant is decomposed for it.
-        let theory = discover_rewrites().with_materializable({
-            let ranges = constant_materializer_ranges.clone();
-            move |value| ranges.is_empty() || ranges.iter().any(|range| range.contains(value))
-        });
-        // Decomposed constants reach any width, so floating-point bits do too.
+        let theory = discover_rewrites();
+        // A constant no materializer produces alone is split by the patterns
+        // that read the rest of it from a register, so where one exists the
+        // bits of a float of any width are reachable too.
+        let decomposes = compiled_patterns
+            .iter()
+            .any(CompiledIselPattern::reads_register_operand);
         let float_constant_materializer_widths = declared_float_constant_materializer_widths
             .into_iter()
             .filter(|width| {
-                (theory.materializes_constants() && !constant_materializer_ranges.is_empty())
+                (decomposes && !constant_materializer_ranges.is_empty())
                     || constant_materializer_ranges
                         .iter()
                         .any(|range| range.width >= *width)
@@ -1524,6 +1546,7 @@ impl InstructionSelectPass {
             specificity,
             value_patterns_by_op,
             value_patterns_anywhere,
+            value_patterns_at_values,
             constant_materializer_ranges,
             constant_materializer_rules,
             float_constant_materializer_widths,
@@ -1760,19 +1783,17 @@ impl InstructionSelectPass {
         Matches::base(fs.egraph.class_count(), found)
     }
 
-    /// The value matches rooted at one class, in the order the cover reads them:
-    /// ascending pattern index, then production order. Only the patterns whose
-    /// root can bind at the class are searched, including those rooted on the
-    /// constant an open assumption proved it to be, which adds no row of its own.
+    /// The value matches rooted at the rows of one class, in the order the
+    /// cover reads them: ascending pattern index, then production order. Only
+    /// the patterns whose root can bind at the class are searched.
     fn value_matches_at(
         &self,
         fs: &FunctionSelection,
         context: &Context,
         class: Id,
-    ) -> Vec<(usize, IselMatch)> {
+    ) -> Vec<(usize, Found)> {
         let mut indices = self.value_patterns_anywhere.clone();
-        let assumed = fs.egraph.const_of(class).into_iter();
-        for node in fs.egraph.nodes(class).chain(assumed) {
+        for node in fs.egraph.nodes(class) {
             indices.extend(
                 self.value_patterns_by_op
                     .get(&node.op_key())
@@ -1789,27 +1810,78 @@ impl InstructionSelectPass {
         found
     }
 
+    /// The value matches at `value` no row roots, in pattern order: offset
+    /// splits of it, a register addend, and, for a constant, the patterns that
+    /// evaluate to it. A constant a materializer produces alone is not
+    /// decomposed: a pattern needing a register for part of it is only tried
+    /// where no materializer covers it whole.
+    fn value_matches_off_rows(
+        &self,
+        fs: &FunctionSelection,
+        context: &Context,
+        value: Ref,
+    ) -> Vec<(usize, Found)> {
+        let mut found = Vec::new();
+        let mut decomposed = Vec::new();
+        let constant = fs.egraph.int_const(value).is_some();
+        // A value at its class's offset zero is what its rows are.
+        if !constant && fs.egraph.find(value).offset == 0 {
+            return found;
+        }
+        for &pattern_index in &self.value_patterns_at_values {
+            let compiled = &self.compiled_patterns[pattern_index];
+            let pattern_root = Id::from_raw(compiled.root() as u32);
+            found.extend(
+                compiled
+                    .search_value(
+                        &fs.egraph,
+                        context,
+                        value,
+                        fs.pointer_width,
+                        &|node, class| {
+                            value_match_allowed(fs, context, compiled, pattern_root, node, class)
+                        },
+                    )
+                    .into_iter()
+                    .map(|matched| (pattern_index, matched)),
+            );
+            if constant {
+                let solved = compiled
+                    .solve_constant(&fs.egraph, context, value, fs.pointer_width)
+                    .into_iter()
+                    .map(|matched| (pattern_index, matched));
+                if compiled.reads_register_operand() {
+                    decomposed.extend(solved);
+                } else {
+                    found.extend(solved);
+                }
+            }
+        }
+        if found.is_empty() {
+            found.append(&mut decomposed);
+            found.sort_by_key(|(pattern_index, _)| *pattern_index);
+        }
+        found
+    }
+
     fn search_pattern(
         &self,
         fs: &FunctionSelection,
         context: &Context,
         pattern_index: usize,
         roots: impl IntoIterator<Item = Id>,
-        found: &mut Vec<(usize, IselMatch)>,
+        found: &mut Vec<(usize, Found)>,
     ) {
         let compiled = &self.compiled_patterns[pattern_index];
         let pattern_root = Id::from_raw(compiled.root() as u32);
-        let matched = compiled.search_roots_with_legality(
+        let matched = compiled.search_rows(
             &fs.egraph,
             context,
             roots,
             fs.pointer_width,
             &|node, class| value_match_allowed(fs, context, compiled, pattern_root, node, class),
         );
-        found.extend(matched.into_iter().map(|mut m| {
-            m.root = fs.egraph.find(m.root);
-            (pattern_index, m)
-        }));
+        found.extend(matched.into_iter().map(|m| (pattern_index, m)));
     }
 
     /// Saturate the assumption just pushed and open a match frame over what it
@@ -1884,17 +1956,18 @@ impl InstructionSelectPass {
         }
 
         self.saturate_graph(context, &mut egraph);
+        builder::mint_zeros(&mut egraph);
 
         crate::memstats::egraph_census("isel", &egraph);
 
         // Saturation may merge classes, so every root recorded against the
         // pre-saturation graph is re-resolved here.
-        let op_root: HashMap<OpId, Id> = lowering
+        let op_root: HashMap<OpId, Ref> = lowering
             .roots_by_op
             .iter()
             .map(|(&op, &root)| (op, egraph.find(root)))
             .collect();
-        let op_roots: HashSet<Id> = op_root.values().copied().collect();
+        let op_root_classes = op_root.values().map(|root| root.class).collect();
         let (class_values, value_region) = class_value_tables(
             context,
             &egraph,
@@ -1917,7 +1990,14 @@ impl InstructionSelectPass {
             }
         }
 
-        let demand = self.placement_demand(context, &egraph, &lowering, &scopes, &operand_uses);
+        let demand = self.placement_demand(
+            context,
+            &egraph,
+            &lowering,
+            &scopes,
+            &operand_uses,
+            (&class_values, &value_to_def),
+        );
         for aux in lowering.region_control.aux.values_mut() {
             for (.., class) in aux.iter_mut() {
                 *class = egraph.find(*class);
@@ -1926,7 +2006,7 @@ impl InstructionSelectPass {
         FunctionSelection {
             egraph,
             pointer_width,
-            op_roots,
+            op_root_classes,
             op_root,
             class_values,
             scopes,
@@ -2010,13 +2090,20 @@ impl InstructionSelectPass {
         lowering: &RegionLowering,
         scopes: &Scopes,
         operand_uses: &HashMap<ValueId, usize>,
+        (class_values, value_to_def): (&HashMap<Ref, Vec<ValueId>>, &HashMap<ValueId, OpId>),
     ) -> PlacementDemand {
         let RegionLowering {
             roots_by_op,
             constant_candidates,
             ..
         } = lowering;
-        let needs_register = |result: ValueId, class: Id, def_region: RegionId| {
+        // An address at an offset from a class whose own value is in a
+        // register where its accesses run is folded into their displacement
+        // there, as a constant a materializer covers is materialized: it is
+        // demanded across regions only where that base is not, or where
+        // another reader needs it whole.
+        let mut offsets: Vec<(Ref, RegionId)> = Vec::new();
+        let mut needs_register = |result: ValueId, class: Ref, def_region: RegionId| {
             if self
                 .recovery
                 .as_ref()
@@ -2033,13 +2120,34 @@ impl InstructionSelectPass {
                 .iter()
                 .any(|user| scopes.op_region.get(user).copied() != Some(def_region));
             let cross_region_register = cross_region
-                && class_int_binding(egraph, class).is_some_and(|value| {
+                && pattern::immediate(egraph, class).is_some_and(|value| {
                     !self
                         .constant_materializer_ranges
                         .iter()
                         .any(|range| range.contains(&value))
                 })
                 || cross_region && class_int_binding(egraph, class).is_none();
+            let value = egraph.find(class);
+            let addresses_only = users.iter().all(|&user| {
+                scopes.op_region.get(&user).copied() == Some(def_region) || {
+                    let op = context.get_op(user);
+                    let read = op.clone().as_interface::<dyn tir::MemoryRead>();
+                    let write = op.clone().as_interface::<dyn tir::MemoryWrite>();
+                    read.is_some_and(|read| read.read_location() == result)
+                        || write.is_some_and(|write| {
+                            write.write_location() == result && write.written_value() != result
+                        })
+                }
+            });
+            if !unselected_use
+                && !result_use
+                && cross_region_register
+                && value.offset != 0
+                && addresses_only
+            {
+                offsets.push((value, def_region));
+                return false;
+            }
             unselected_use || result_use || cross_region_register
         };
         // A low-bit truncation re-views its source's register, so demand lands
@@ -2054,7 +2162,7 @@ impl InstructionSelectPass {
                     .value_results()
                     .iter()
                     .all(|value| operand_uses.get(value).copied().unwrap_or(0) == 0);
-            if !node::class_is_pure(egraph, root)
+            if !node::is_pure(egraph, root)
                 && !unused_read
                 && !node::is_identity_effect(egraph, root)
             {
@@ -2076,6 +2184,17 @@ impl InstructionSelectPass {
                         .registers
                         .insert((chase_low_extract(egraph, class), def_region));
                 }
+            }
+        }
+        for (value, def_region) in offsets {
+            let base = egraph.find(value.class);
+            let entry_input = class_values
+                .get(&base)
+                .into_iter()
+                .flatten()
+                .any(|value| !value_to_def.contains_key(value));
+            if !entry_input && !demand.registers.contains(&(base, def_region)) {
+                demand.registers.insert((value, def_region));
             }
         }
         demand
@@ -2417,7 +2536,7 @@ impl InstructionSelectPass {
         // Emit anchor); its keys are the region's op-root classes. The order
         // visits earliest first, so the first insertion per class already wins.
         let mut op_class = Vec::new();
-        let mut region_op_by_root: HashMap<Id, OpId> = HashMap::new();
+        let mut region_op_by_root: HashMap<Ref, OpId> = HashMap::new();
         for &op_id in &order {
             let Some(&root) = fs.op_root.get(&op_id) else {
                 continue;
@@ -2426,7 +2545,7 @@ impl InstructionSelectPass {
             op_class.push((op_id, class));
             region_op_by_root.entry(class).or_insert(op_id);
         }
-        let guard_classes: HashSet<Id> = fs.aux_classes(region).collect();
+        let guard_classes: HashSet<Ref> = fs.aux_classes(region).collect();
 
         let (mut matches, classes) = self.collect_region_matches(
             context,
@@ -2437,7 +2556,7 @@ impl InstructionSelectPass {
         );
         // Matches of one rule's result patterns over the same operands are the
         // results of one instance.
-        let mut instances: HashMap<(usize, Vec<(u32, Id)>), usize> = HashMap::new();
+        let mut instances: HashMap<(usize, Vec<(u32, Ref)>), usize> = HashMap::new();
         for (index, matched) in matches.iter_mut().enumerate() {
             matched.instance = if self.rules[matched.rule_index].secondary.is_empty() {
                 index
@@ -2479,7 +2598,7 @@ impl InstructionSelectPass {
             // nothing is demanded: the destruction takes the edge the decision
             // picks.
             let decided = class_int_binding(&fs.egraph, condition).map(|known| !known.is_zero());
-            let candidates = |class: Id| {
+            let candidates = |class: Ref| {
                 guard_branch_hits
                     .get(&class)
                     .map_or_else(Vec::new, |hits| self.guard_candidates(fs, hits))
@@ -2529,8 +2648,8 @@ impl InstructionSelectPass {
             });
         }
 
-        let mut facts: HashMap<Id, ClassFacts> = HashMap::new();
-        let mut record = |mut class: Id| {
+        let mut facts: HashMap<Ref, ClassFacts> = HashMap::new();
+        let mut record = |mut class: Ref| {
             while !facts.contains_key(&class) {
                 let mut class_facts = fs.class_facts(context, class, region);
                 class_facts.hook_constant =
@@ -2555,7 +2674,7 @@ impl InstructionSelectPass {
             }
         }
         for control in &mut controls {
-            let naming = |class: Id, at: Option<OpId>| {
+            let naming = |class: Ref, at: Option<OpId>| {
                 fs.naming(context, &facts[&class].binding_members, region, at)
             };
             control.nonzero_naming = naming(facts[&control.condition].source, control.at);
@@ -2619,7 +2738,7 @@ impl InstructionSelectPass {
     fn guard_candidates(
         &self,
         fs: &FunctionSelection,
-        hits: &[(usize, IselMatch)],
+        hits: &[(usize, Found)],
     ) -> Vec<GuardCandidate> {
         let mut candidates = Vec::new();
         for (pattern_index, m) in hits {
@@ -2635,8 +2754,7 @@ impl InstructionSelectPass {
                 !meta.boundary_like()
                     && !meta.duplicable
                     && !meta.is_state
-                    && m.bindings[index]
-                        .is_some_and(|class| !node::class_is_pure(&fs.egraph, class))
+                    && !node::is_pure(&fs.egraph, m.bindings[index])
             }) {
                 continue;
             }
@@ -2650,9 +2768,7 @@ impl InstructionSelectPass {
                         .expect("a capture names an operand");
                     (!compiled.is_state_symbol(symbol)).then(|| GuardOperand {
                         symbol,
-                        class: fs
-                            .egraph
-                            .find(CompiledIselPattern::binding(m, node as usize)),
+                        class: fs.egraph.find(m.bindings[node as usize]),
                         register: register_symbols.contains(&symbol),
                         naming: Naming::default(),
                     })
@@ -2731,7 +2847,7 @@ impl InstructionSelectPass {
                     {
                         return None;
                     }
-                    int_bindings.push((symbol, constant.clone()));
+                    int_bindings.push((symbol, constant.with_signed(true)));
                     if register && let Some(value) = value {
                         value_bindings.push((symbol, value));
                     }
@@ -2783,7 +2899,7 @@ impl InstructionSelectPass {
             CoverError::Infeasible => Unselected::NoCover,
             CoverError::Exhausted => Unselected::Exhausted,
         })?;
-        let tiles: HashMap<Id, usize> = problem
+        let tiles: HashMap<Ref, usize> = problem
             .classes
             .iter()
             .zip(&cover)
@@ -2911,7 +3027,7 @@ impl InstructionSelectPass {
         mut visit: impl FnMut(&RegionProblem, HasRegister) -> Result<T, String>,
         assignment: impl Fn(&T) -> &RegionAssignment,
     ) -> Vec<Result<T, String>> {
-        let mut produced: HashSet<(Id, RegionId)> = fs.demand.registers.clone();
+        let mut produced: HashSet<(Ref, RegionId)> = fs.demand.registers.clone();
         problems
             .iter()
             .map(|problem| {
@@ -3027,7 +3143,7 @@ impl InstructionSelectPass {
         let root_match = &assignment.tiles;
         let consumer = op_ids.last().copied();
         let policy = problem.policy(&assignment.controls, has_register);
-        let register_value = |class: Id, at: Option<OpId>, pending: bool| {
+        let register_value = |class: Ref, at: Option<OpId>, pending: bool| {
             fs.register_value(
                 context,
                 &problem.facts(class).binding_members,
@@ -3038,7 +3154,7 @@ impl InstructionSelectPass {
             )
         };
 
-        let required_available: HashSet<Id> = root_match
+        let required_available: HashSet<Ref> = root_match
             .values()
             .flat_map(|match_id| &matches[*match_id].bindings.pattern_nodes)
             .filter(|binding| binding.is_boundary && binding.demand == BoundaryDemand::Register)
@@ -3060,7 +3176,7 @@ impl InstructionSelectPass {
         // The state ports of every access this region holds, by the class the
         // access is rooted at: what a tile covering it must read and publish.
         // The order visits the earliest op of a class first, as `source_op` does.
-        let mut state_by_class: HashMap<Id, Vec<StatePorts>> = HashMap::new();
+        let mut state_by_class: HashMap<Ref, Vec<StatePorts>> = HashMap::new();
         for &(op_id, class) in &problem.op_class {
             let op = context.get_op(op_id);
             let Some(effects) = op
@@ -3191,7 +3307,7 @@ impl InstructionSelectPass {
                 value_remaps.extend(effect.produced.into_iter().zip(effect.observed));
             }
         }
-        let mut remap_class_values = |class: Id, destination: ValueId| {
+        let mut remap_class_values = |class: Ref, destination: ValueId| {
             value_remaps.extend(
                 fs.values(&problem.facts(class).members)
                     .filter(|value| {
@@ -3311,9 +3427,9 @@ impl InstructionSelectPass {
         &self,
         context: &Context,
         fs: &FunctionSelection,
-        guard_classes: &HashSet<Id>,
-    ) -> HashMap<Id, Vec<(usize, IselMatch)>> {
-        let mut hits: HashMap<Id, Vec<(usize, IselMatch)>> = HashMap::new();
+        guard_classes: &HashSet<Ref>,
+    ) -> HashMap<Ref, Vec<(usize, Found)>> {
+        let mut hits: HashMap<Ref, Vec<(usize, Found)>> = HashMap::new();
         for (pattern_index, compiled) in self.compiled_patterns.iter().enumerate() {
             if !matches!(
                 self.rules[compiled.rule_index].kind,
@@ -3321,15 +3437,19 @@ impl InstructionSelectPass {
             ) {
                 continue;
             }
-            for m in compiled.search_roots(
+            let found = compiled.search_rows(
                 &fs.egraph,
                 context,
-                guard_classes.iter().copied(),
+                guard_classes.iter().map(|guard| guard.class),
                 fs.pointer_width,
-            ) {
-                hits.entry(fs.egraph.find(m.root))
-                    .or_default()
-                    .push((pattern_index, m));
+                &|node, class| {
+                    compiled.boundary_ok(&fs.egraph, context, node, class, fs.pointer_width)
+                },
+            );
+            for m in found {
+                if guard_classes.contains(&m.root) {
+                    hits.entry(m.root).or_default().push((pattern_index, m));
+                }
             }
         }
         hits
@@ -3344,13 +3464,13 @@ impl InstructionSelectPass {
         &self,
         context: &Context,
         fs: &FunctionSelection,
-        region_op_by_root: &HashMap<Id, OpId>,
-        guard_classes: &HashSet<Id>,
+        region_op_by_root: &HashMap<Ref, OpId>,
+        guard_classes: &HashSet<Ref>,
         value_matches: &mut Matches,
-    ) -> (Vec<PbqpIselMatch>, Vec<Id>) {
-        let mut covered: HashSet<Id> = region_op_by_root.keys().copied().collect();
+    ) -> (Vec<PbqpIselMatch>, Vec<Ref>) {
+        let mut covered: HashSet<Ref> = region_op_by_root.keys().copied().collect();
         covered.extend(guard_classes.iter().copied());
-        let mut work: Vec<Id> = covered.iter().copied().collect();
+        let mut work: Vec<Ref> = covered.iter().copied().collect();
         work.sort_unstable();
         let mut matches: Vec<PbqpIselMatch> = Vec::new();
         while let Some(class) = work.pop() {
@@ -3372,11 +3492,16 @@ impl InstructionSelectPass {
                 value_matches,
                 class,
             );
-            let width = node::class_register_width(context, &fs.egraph, class, fs.pointer_width);
+            let width =
+                node::class_register_width(context, &fs.egraph, class.class, fs.pointer_width);
             prune_dominated_matches(&self.specificity, width, &mut at_class);
             for matched in &at_class {
                 for binding in &matched.bindings.pattern_nodes {
-                    if binding.is_state {
+                    // A folded operand needs no instance of its own; a reader
+                    // demanding it in a register reaches it on its own.
+                    if binding.is_state
+                        || (binding.is_boundary && binding.demand != BoundaryDemand::Register)
+                    {
                         continue;
                     }
                     let bound = fs.egraph.find(binding.class);
@@ -3387,29 +3512,79 @@ impl InstructionSelectPass {
             }
             matches.append(&mut at_class);
         }
-        let mut covered: Vec<Id> = covered.into_iter().collect();
+        let mut covered: Vec<Ref> = covered.into_iter().collect();
         covered.sort();
         (matches, covered)
     }
 
-    /// The value matches rooted at one class, narrowed to what this region may
-    /// select. The index answers from the function-wide search where the open
-    /// assumption left the class alone, and from a re-search under the assumption
-    /// where it did not.
+    /// The value matches rooted at one value, narrowed to what this region may
+    /// select. The index answers for its rows from the function-wide search
+    /// where the open assumption left the class alone, and from a re-search
+    /// under the assumption where it did not; what no row spells is matched at
+    /// the value itself.
     fn root_matches(
         &self,
         context: &Context,
         fs: &FunctionSelection,
-        region_op_by_root: &HashMap<Id, OpId>,
-        guard_classes: &HashSet<Id>,
+        region_op_by_root: &HashMap<Ref, OpId>,
+        guard_classes: &HashSet<Ref>,
         value_matches: &mut Matches,
-        class: Id,
+        value: Ref,
     ) -> Vec<PbqpIselMatch> {
-        value_matches.ensure(class, || self.value_matches_at(fs, context, class));
-        let at_class: Vec<MatchRef<'_>> = value_matches.at(class).collect();
+        let constant = fs.egraph.int_const(value).is_some();
+        if !constant {
+            value_matches.ensure(value.class, || {
+                self.value_matches_at(fs, context, value.class)
+            });
+        }
+        let mut off_rows = self.value_matches_off_rows(fs, context, value);
+        let shifted = match constant {
+            true => None,
+            false => Some(value_matches.in_class(value.class)),
+        };
+        for m in shifted.into_iter().flatten() {
+            if m.root == value || !self.compiled_patterns[m.pattern].shifts() {
+                continue;
+            }
+            let found = Found {
+                root: m.root,
+                bindings: m.bindings.iter().copied().collect(),
+            };
+            off_rows.extend(
+                self.compiled_patterns[m.pattern]
+                    .shifted(&fs.egraph, &found, value)
+                    .into_iter()
+                    .map(|shifted| (m.pattern, shifted)),
+            );
+        }
+        // A constant a materializer produces alone is not computed from other
+        // constants in registers, whatever row an assumption merged into it.
+        let materialized = constant
+            && off_rows
+                .iter()
+                .any(|&(pattern, _)| self.compiled_patterns[pattern].materializes_alone());
+        let from_constants = |m: &MatchRef<'_>| {
+            let compiled = &self.compiled_patterns[m.pattern];
+            compiled.node_meta.iter().enumerate().all(|(index, meta)| {
+                !(meta.is_boundary && meta.demand == BoundaryDemand::Register)
+                    || fs.egraph.int_const(m.bindings[index]).is_some()
+            })
+        };
+        let rows: Box<dyn Iterator<Item = MatchRef<'_>>> = match constant {
+            true => Box::new(value_matches.base_at(value)),
+            false => Box::new(value_matches.at(value)),
+        };
+        let at_value: Vec<MatchRef<'_>> = rows
+            .filter(|m| !(materialized && from_constants(m)))
+            .chain(off_rows.iter().map(|(pattern, found)| MatchRef {
+                pattern: *pattern,
+                root: found.root,
+                bindings: &found.bindings,
+            }))
+            .collect();
 
         let mut matches = Vec::new();
-        for m in at_class {
+        for m in at_value {
             let pattern_index = m.pattern;
 
             let compiled = &self.compiled_patterns[pattern_index];
@@ -3423,10 +3598,17 @@ impl InstructionSelectPass {
             let is_guard_class = guard_classes.contains(&root);
             // A match roots an instruction only if it produces a value the
             // region computes: an op of the region, a guard condition of it, a
-            // rewrite-introduced intermediate, or a terminal constant covered
-            // by a real target materializer instruction.
-            let is_computed = fs.egraph.nodes(root).any(|n| !n.children().is_empty());
-            let synthetic = is_computed || compiled.constant_materializer_range().is_some();
+            // rewrite-introduced intermediate, or a value no row is at — a
+            // constant, or a class plus an offset — that a real target
+            // instruction defines.
+            let is_computed =
+                node::rows_at_where(&fs.egraph, root, |node| !node.children().is_empty())
+                    .next()
+                    .is_some();
+            let synthetic = is_computed
+                || fs.egraph.int_const(root).is_some()
+                || root.offset != 0
+                || compiled.constant_materializer_range().is_some();
             if region_op.is_none() && !is_guard_class && !synthetic {
                 continue;
             }
@@ -3443,7 +3625,7 @@ impl InstructionSelectPass {
                     return true;
                 }
                 let class = fs.egraph.find(m.bindings[node.index()]);
-                node::class_is_pure(&fs.egraph, class)
+                node::is_pure(&fs.egraph, class)
                     || (region_op_by_root.get(&class).is_some_and(|interior| {
                         if let Some(root) = region_op {
                             let root = context.get_op(root);
@@ -3493,6 +3675,9 @@ impl InstructionSelectPass {
                 }
                 let class = m.bindings[node as usize];
                 captures.bind(symbol, fs.egraph.find(class));
+                if compiled.node_meta[node as usize].demand == BoundaryDemand::Structural {
+                    captures.structural.push(symbol);
+                }
             }
 
             if region_op.is_some_and(|op| !fp_flags::accepts(context, fs, op, rule, &captures)) {
@@ -3525,6 +3710,12 @@ impl InstructionSelectPass {
                         view_offset: meta.view_offset(),
                         whole_width: meta.whole_width(),
                         low_extract,
+                        // Only a node the match computes inside its own
+                        // instruction asks: a boundary is read, not done.
+                        pure: is_boundary
+                            || meta.is_state
+                            || meta.duplicable
+                            || node::is_pure(&fs.egraph, class),
                     }
                 })
                 .collect();
@@ -3532,11 +3723,9 @@ impl InstructionSelectPass {
             // of an access the match covers. A match covering none would
             // perform an effect the program does not have.
             if rule.emit.iter().any(Emitter::accesses_memory)
-                && pattern_nodes.iter().all(|binding| {
-                    binding.is_boundary
-                        || binding.is_state
-                        || node::class_is_pure(&fs.egraph, binding.class)
-                })
+                && pattern_nodes
+                    .iter()
+                    .all(|binding| binding.is_boundary || binding.is_state || binding.pure)
             {
                 continue;
             }
@@ -3549,7 +3738,7 @@ impl InstructionSelectPass {
                 if effect.is_boundary
                     || effect.is_state
                     || effect.pattern_node == pattern_root
-                    || node::class_is_pure(&fs.egraph, effect.class)
+                    || effect.pure
                 {
                     return false;
                 }
@@ -3633,7 +3822,7 @@ impl InstructionSelectPass {
                     covers: Vec::new(),
                     effects: Vec::new(),
                 }
-                .with_demands(|class| node::class_is_pure(&fs.egraph, class)),
+                .with_demands(),
             );
         }
         matches
@@ -3678,15 +3867,20 @@ fn value_match_allowed(
     if pattern_node == pattern_root || meta.duplicable || meta.is_state {
         return true;
     }
-    let class = fs.egraph.find(class);
-    node::class_is_pure(&fs.egraph, class) || (fs.is_op_root(class) && !fs.is_shared(class))
+    // Whether the value at an offset of the class is a root, and not shared,
+    // is the region's question once the match is whole.
+    node::class_is_pure(&fs.egraph, class)
+        || fs
+            .member_classes(class)
+            .any(|member| fs.op_root_classes.contains(&member))
 }
 
 /// Assert one entry fact in the current scope: the condition (and its defining
 /// comparison, when there is one) is assumed to equal its known truth value, the
 /// complement comparison the opposite, and an `eq`/`ne` guard makes its operands
-/// congruent. Facts, not unions into the constant class: the literal's own class
-/// and its users stay untouched, so the scope dirties only the condition's users.
+/// equal. Each is a union, a constant being its carrier's zero at an offset; the
+/// engine does not propagate a merge into a zero to every user of every
+/// constant, so the scope dirties the users of what it assumed.
 fn assert_fact(context: &Context, egraph: &mut SemEGraph, expr: &ConditionExpr, holds: bool) {
     let truth = |holds: bool| {
         template_node(
@@ -3703,34 +3897,16 @@ fn assert_fact(context: &Context, egraph: &mut SemEGraph, expr: &ConditionExpr, 
                 complement,
                 None,
                 Some(tir::builtin::IntegerType::new(context, 1)),
-            );
-            node.children = vec![lhs, rhs];
-            let complement_class = egraph.add(node);
+            )
+            .carried(tir::sem::node::int_carrier(1));
+            node.children = vec![lhs.class, rhs.class];
+            let complement_class = egraph.insert(node, &[lhs, rhs]);
             egraph.assume_const(complement_class, truth(!holds));
         }
         if (kind == SymKind::Eq && holds) || (kind == SymKind::Ne && !holds) {
-            assert_equal(egraph, lhs, rhs);
-        }
-    }
-}
-
-/// Assert `lhs ≡ rhs` in the current scope. A side that is a literal becomes a
-/// fact on the other side's class rather than a union with the literal's own
-/// class: that class is hash-consed function-wide, so merging into it would dirty
-/// every user of the literal instead of every user of the compared value.
-fn assert_equal(egraph: &mut SemEGraph, lhs: Id, rhs: Id) {
-    let literal = |class: Id| {
-        egraph
-            .nodes(egraph.find(class))
-            .find(|node| node.sym() == Some(SymKind::Constant) && node.int().is_some())
-            .cloned()
-    };
-    match (literal(lhs), literal(rhs)) {
-        (Some(_), Some(_)) => {}
-        (None, Some(node)) => egraph.assume_const(lhs, node),
-        (Some(node), None) => egraph.assume_const(rhs, node),
-        (None, None) => {
-            egraph.union(lhs, rhs);
+            // Equal operands at different offsets of one class contradict
+            // the scope, which then selects code that never runs.
+            let _ = egraph.union(lhs, rhs);
         }
     }
 }
@@ -3784,9 +3960,9 @@ impl Pass for InstructionSelectPass {
 
 /// What lowering every region of a function into one e-graph yields.
 struct RegionLowering {
-    value_to_class: HashMap<ValueId, Id>,
-    roots_by_op: HashMap<OpId, Id>,
-    constant_candidates: Vec<(OpId, Id)>,
+    value_to_class: HashMap<ValueId, Ref>,
+    roots_by_op: HashMap<OpId, Ref>,
+    constant_candidates: Vec<(OpId, Ref)>,
     prepared: HashMap<ValueId, ConditionExpr>,
     region_facts: HashMap<RegionId, (ValueId, bool)>,
     region_control: builder::RegionControl,
@@ -3804,14 +3980,14 @@ struct RegionLowering {
 fn class_value_tables(
     context: &Context,
     egraph: &SemEGraph,
-    value_to_class: &HashMap<ValueId, Id>,
+    value_to_class: &HashMap<ValueId, Ref>,
     value_to_def: &HashMap<ValueId, OpId>,
     op_region: &HashMap<OpId, RegionId>,
 ) -> (
-    HashMap<Id, Vec<ValueId>>,
+    HashMap<Ref, Vec<ValueId>>,
     HashMap<ValueId, Option<RegionId>>,
 ) {
-    let mut class_values: HashMap<Id, Vec<ValueId>> = HashMap::new();
+    let mut class_values: HashMap<Ref, Vec<ValueId>> = HashMap::new();
     for (&value, &class) in value_to_class {
         if context.is_state_type(context.get_value(value).ty()) {
             continue;

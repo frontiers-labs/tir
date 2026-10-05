@@ -7,6 +7,10 @@
 //! an e-graph (`children -> class`). What a client does when two rows come to
 //! share a key is the client's business; the table reports the pair.
 //!
+//! A cell may carry a weight next to its id: an element of the group the id's
+//! [`Shift::mask`] names, part of the key for a key cell. A table whose
+//! weights are all zero stores none.
+//!
 //! Each row also carries a tag, a word the table stores and never interprets,
 //! and a stamp, the epoch the row was last written in, which is what lets a
 //! fixpoint evaluation join only against what changed.
@@ -20,13 +24,32 @@ const EMPTY: u32 = 0;
 /// Slot whose row was removed; a probe walks past it.
 const TOMBSTONE: u32 = u32::MAX;
 
+/// How [`Table::repair`] moves weights along with ids: id `i` now stands at
+/// `delta[i]` from the id its map sends it to, and a weight on an id `i` names
+/// lives modulo `mask[i] + 1`. Both are indexed like the map.
+#[derive(Clone, Copy, Debug)]
+pub struct Shift<'a> {
+    pub delta: &'a [u64],
+    pub mask: &'a [u64],
+}
+
+/// A row [`Table::repair`] re-keyed, as its caller's `dissolve` sees it.
+#[derive(Clone, Copy, Debug)]
+pub struct RowView<'a> {
+    pub cells: &'a [u32],
+    /// One per key cell.
+    pub weights: &'a [u64],
+    pub value: (u32, u64),
+    pub tag: u32,
+}
+
 /// Two rows [`Table::repair`] found under one key.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Collision {
-    /// The value of the row that stays.
-    pub kept: u32,
-    /// The value and tag of the row that was removed.
-    pub removed: u32,
+    /// The value and its weight of the row that stays.
+    pub kept: (u32, u64),
+    /// The value and its weight, and the tag, of the row that was removed.
+    pub removed: (u32, u64),
     pub tag: u32,
 }
 
@@ -44,6 +67,15 @@ pub struct Table {
     arity: usize,
     /// `arity + 1` columns of equal length; the last is the value.
     columns: Vec<Vec<u32>>,
+    /// The weight beside each cell of the column of the same index, or empty
+    /// while every weight in the column is zero.
+    weights: Vec<Vec<u64>>,
+    /// Whether some column stores weights.
+    weighted: bool,
+    /// Per key column, how [`Self::repair`] carries the weight its cell picks
+    /// up: zero keeps it in the key; any other coefficient moves it to the
+    /// value, multiplied and negated, and the key cell keeps weight zero.
+    coefficients: Vec<i64>,
     /// How many leading key columns [`Self::repair`] leaves as they are: cells
     /// that name something other than what the map renames.
     plain: usize,
@@ -62,9 +94,29 @@ pub struct Table {
     /// Bumped by every change, so a reader can tell a derived index is stale.
     version: u64,
     key: Vec<u32>,
-    flags: Vec<u32>,
+    key_weights: Vec<u64>,
     moved: Vec<u32>,
     dead: Vec<u32>,
+}
+
+/// What a key cell's weight adds to the key's hash: nothing for weight zero,
+/// so an unweighted key hashes as [`hash_row`] alone.
+fn weight_hash(column: usize, weight: u64) -> u32 {
+    let mixed = weight
+        .wrapping_mul(0x9e37_79b9_7f4a_7c15)
+        .rotate_left(column as u32 * 7 + 17);
+    (mixed ^ mixed >> 32) as u32
+}
+
+/// The hash a key of `cells` and `weights` is indexed under. `weights` is
+/// empty or one per cell.
+fn key_hash(cells: &[u32], weights: &[u64]) -> u32 {
+    weights
+        .iter()
+        .enumerate()
+        .fold(hash_row(cells), |hash, (column, &weight)| {
+            hash ^ weight_hash(column, weight)
+        })
 }
 
 impl Table {
@@ -72,6 +124,9 @@ impl Table {
         Self {
             arity,
             columns: vec![Vec::new(); arity + 1],
+            weights: vec![Vec::new(); arity + 1],
+            weighted: false,
+            coefficients: vec![0; arity],
             plain: 0,
             tag: Vec::new(),
             stamp: Vec::new(),
@@ -80,7 +135,7 @@ impl Table {
             used: 0,
             version: 0,
             key: vec![0; arity],
-            flags: Vec::new(),
+            key_weights: vec![0; arity],
             moved: Vec::new(),
             dead: Vec::new(),
         }
@@ -98,6 +153,14 @@ impl Table {
     /// Leave the first `columns` key columns out of [`Self::repair`]'s rewrite.
     pub fn plain(mut self, columns: usize) -> Self {
         self.plain = columns;
+        self
+    }
+
+    /// Give the key columns the coefficients [`Self::repair`] moves their
+    /// weights to the value with; zero keeps a column's weight in the key.
+    pub fn coefficients(mut self, coefficients: &[i64]) -> Self {
+        debug_assert_eq!(coefficients.len(), self.arity);
+        self.coefficients = coefficients.to_vec();
         self
     }
 
@@ -126,6 +189,19 @@ impl Table {
         &self.columns[self.arity]
     }
 
+    /// The weight beside the cell of `column` at `row`.
+    #[inline]
+    pub fn weight(&self, column: usize, row: u32) -> u64 {
+        self.weights[column].get(row as usize).copied().unwrap_or(0)
+    }
+
+    /// Whether some cell carries a non-zero weight: a reader of a table
+    /// without any can take every weight to be zero.
+    #[inline]
+    pub fn weighted(&self) -> bool {
+        self.weighted
+    }
+
     pub fn tags(&self) -> &[u32] {
         &self.tag
     }
@@ -135,20 +211,37 @@ impl Table {
         &self.stamp
     }
 
-    fn row_matches(&self, row: usize, key: &[u32]) -> bool {
+    fn set_weight(&mut self, column: usize, row: usize, weight: u64) {
+        let weights = &mut self.weights[column];
+        if weights.is_empty() {
+            if weight == 0 {
+                return;
+            }
+            weights.resize(self.stamp.len(), 0);
+            self.weighted = true;
+        }
+        weights[row] = weight;
+    }
+
+    fn row_matches(&self, row: usize, key: &[u32], weights: &[u64]) -> bool {
         self.columns
             .iter()
             .zip(key)
             .all(|(column, &cell)| column[row] == cell)
+            && (!self.weighted && weights.is_empty()
+                || (0..self.arity).all(|column| {
+                    self.weight(column, row as u32) == weights.get(column).copied().unwrap_or(0)
+                }))
     }
 
-    /// The row holding `key`, if any. Always `None` for a bag.
-    pub fn get(&self, key: &[u32]) -> Option<u32> {
+    /// The row holding `key` at `weights`, which is empty for weight zero
+    /// throughout or one per key cell. Always `None` for a bag.
+    pub fn get(&self, key: &[u32], weights: &[u64]) -> Option<u32> {
         debug_assert_eq!(key.len(), self.arity);
         if !self.keyed {
             return None;
         }
-        let hash = hash_row(key);
+        let hash = key_hash(key, weights);
         let mask = self.slots.len() - 1;
         let mut at = hash as usize & mask;
         loop {
@@ -156,7 +249,9 @@ impl Table {
             match slot as u32 {
                 EMPTY => return None,
                 TOMBSTONE => {}
-                row if (slot >> 32) as u32 == hash && self.row_matches(row as usize - 1, key) => {
+                row if (slot >> 32) as u32 == hash
+                    && self.row_matches(row as usize - 1, key, weights) =>
+                {
                     return Some(row - 1);
                 }
                 _ => {}
@@ -165,9 +260,18 @@ impl Table {
         }
     }
 
-    /// Append `key -> value`. In a keyed table the key must not be present.
-    pub fn insert(&mut self, key: &[u32], value: u32, tag: u32, stamp: u32) -> u32 {
-        debug_assert!(self.get(key).is_none(), "the key is new");
+    /// Append `key -> value`, with `weights` as for [`Self::get`] and
+    /// `weight` beside the value. In a keyed table the key must not be
+    /// present.
+    pub fn insert(
+        &mut self,
+        key: &[u32],
+        weights: &[u64],
+        value: (u32, u64),
+        tag: u32,
+        stamp: u32,
+    ) -> u32 {
+        debug_assert!(self.get(key, weights).is_none(), "the key is new");
         if self.keyed {
             self.reserve(1);
         }
@@ -175,11 +279,24 @@ impl Table {
         for (column, &cell) in self.columns.iter_mut().zip(key) {
             column.push(cell);
         }
-        self.columns[self.arity].push(value);
+        self.columns[self.arity].push(value.0);
         self.tag.push(tag);
         self.stamp.push(stamp);
+        if self.weighted {
+            for weights in &mut self.weights {
+                if !weights.is_empty() {
+                    weights.push(0);
+                }
+            }
+        }
+        if !weights.is_empty() || value.1 != 0 {
+            for (column, &weight) in weights.iter().enumerate() {
+                self.set_weight(column, row as usize, weight);
+            }
+            self.set_weight(self.arity, row as usize, value.1);
+        }
         if self.keyed {
-            self.place(row, hash_row(key));
+            self.place(row, key_hash(key, weights));
         }
         self.version += 1;
         row
@@ -208,6 +325,11 @@ impl Table {
             .map(Vec::as_slice)
             .collect();
         simd::hash_rows(&keys, &mut hashes);
+        for (column, weights) in self.weights[..self.arity].iter().enumerate() {
+            for (hash, &weight) in hashes.iter_mut().zip(weights) {
+                *hash ^= weight_hash(column, weight);
+            }
+        }
         let size = ((self.len() + extra) * 4).next_power_of_two().max(8);
         self.slots.clear();
         self.slots.resize(size, EMPTY as u64);
@@ -224,10 +346,18 @@ impl Table {
         }
     }
 
+    /// The loaded key's weights: empty for a table that has none.
+    fn loaded_weights(&self) -> &[u64] {
+        match self.weighted {
+            true => &self.key_weights,
+            false => &[],
+        }
+    }
+
     /// The slot that holds `row`, whose key is loaded.
     fn slot_of(&self, row: u32) -> usize {
         let mask = self.slots.len() - 1;
-        let mut at = hash_row(&self.key) as usize & mask;
+        let mut at = key_hash(&self.key, self.loaded_weights()) as usize & mask;
         while self.slots[at] as u32 != row + 1 {
             at = (at + 1) & mask;
         }
@@ -238,38 +368,66 @@ impl Table {
         for (cell, column) in self.key.iter_mut().zip(&self.columns) {
             *cell = column[row as usize];
         }
+        if self.weighted {
+            for column in 0..self.arity {
+                self.key_weights[column] = self.weight(column, row);
+            }
+        }
     }
 
-    /// The rows of `column` that `map` moves, ascending, into `self.moved`.
+    /// The rows any of whose cells in `columns` `map` moves, ascending, into
+    /// `self.moved`.
     fn select_moved(&mut self, columns: std::ops::Range<usize>, map: &[u32]) {
-        self.flags.clear();
-        self.flags.resize(self.len(), 0);
-        for column in columns {
-            simd::mark_moved(&self.columns[column], map, &mut self.flags);
-        }
         self.moved.clear();
-        simd::select_eq(&self.flags, 1, &mut self.moved);
+        let several = columns.len() > 1;
+        for column in columns {
+            simd::select_moved(&self.columns[column], map, &mut self.moved);
+        }
+        if several {
+            self.moved.sort_unstable();
+            self.moved.dedup();
+        }
     }
 
     /// Rewrite every key cell past the plain ones, and every value cell, through
     /// `map`, and restore the functional dependency.
     ///
     /// `map` sends a cell to the cell that now stands for it, and a cell that
-    /// stands for itself to itself. A row any of whose cells moved is stamped
-    /// `stamp`. Where two rows end up with one key, the later one is removed
-    /// and the pair is reported for the caller to reconcile. Row numbers are
+    /// stands for itself to itself. With `shift`, a moved cell's weight is
+    /// carried along: added to its own for a value or a key column without a
+    /// coefficient, moved into the value's for one with. A row any of whose
+    /// cells moved is stamped `stamp`. Where two rows end up with one key, the
+    /// later one is removed and the pair is reported for the caller to
+    /// reconcile. A re-keyed row `dissolve` answers true for is removed
+    /// instead: the caller has taken its equation elsewhere. Row numbers are
     /// not stable across this call.
     ///
     /// Reports whether any cell moved.
-    pub fn repair(&mut self, map: &[u32], stamp: u32, report: &mut Repair) -> bool {
-        self.select_moved(self.arity..self.arity + 1, map);
+    pub fn repair(
+        &mut self,
+        map: &[u32],
+        shift: Option<Shift<'_>>,
+        mut dissolve: Option<&mut dyn FnMut(RowView<'_>) -> bool>,
+        stamp: u32,
+        report: &mut Repair,
+    ) -> bool {
+        let arity = self.arity;
+        self.select_moved(arity..arity + 1, map);
         let mut any = !self.moved.is_empty();
         for at in 0..self.moved.len() {
             let row = self.moved[at] as usize;
-            self.columns[self.arity][row] = map[self.columns[self.arity][row] as usize];
+            let from = self.columns[arity][row];
+            let to = map[from as usize];
+            self.columns[arity][row] = to;
+            if let Some(shift) = shift {
+                let weight = self.weight(arity, row as u32);
+                let weight =
+                    weight.wrapping_add(shift.delta[from as usize]) & shift.mask[to as usize];
+                self.set_weight(arity, row, weight);
+            }
             self.stamp[row] = stamp;
         }
-        self.select_moved(self.plain..self.arity, map);
+        self.select_moved(self.plain..arity, map);
         any |= !self.moved.is_empty();
         for at in 0..self.moved.len() {
             let row = self.moved[at];
@@ -280,34 +438,82 @@ impl Table {
                 let slot = self.slot_of(row);
                 self.slots[slot] = TOMBSTONE as u64;
             }
-            for column in &mut self.columns[self.plain..self.arity] {
-                column[row as usize] = map[column[row as usize] as usize];
+            for column in self.plain..arity {
+                let from = self.columns[column][row as usize];
+                let to = map[from as usize];
+                self.columns[column][row as usize] = to;
+                let Some(shift) = shift else {
+                    continue;
+                };
+                let delta = shift.delta[from as usize];
+                if delta == 0 {
+                    continue;
+                }
+                let mask = shift.mask[to as usize];
+                match self.coefficients[column] {
+                    0 => {
+                        let weight = self.weight(column, row).wrapping_add(delta) & mask;
+                        self.set_weight(column, row as usize, weight);
+                    }
+                    // op(.., to + delta, ..) == value, so op(.., to, ..) is
+                    // value minus coefficient times delta.
+                    coefficient => {
+                        let moved = (coefficient as u64).wrapping_mul(delta);
+                        let value = self.columns[arity][row as usize];
+                        let weight = self.weight(arity, row).wrapping_sub(moved)
+                            & shift.mask[value as usize];
+                        self.set_weight(arity, row as usize, weight);
+                    }
+                }
             }
             self.stamp[row as usize] = stamp;
-            report.rekeyed.push(self.columns[self.arity][row as usize]);
+            report.rekeyed.push(self.columns[arity][row as usize]);
+            if let Some(dissolve) = dissolve.as_mut() {
+                self.load_key(row);
+                let view = RowView {
+                    cells: &self.key,
+                    weights: &self.key_weights,
+                    value: (self.columns[arity][row as usize], self.weight(arity, row)),
+                    tag: self.tag[row as usize],
+                };
+                if dissolve(view) {
+                    // Out of the index already, and stays out.
+                    self.dead.push(row);
+                }
+            }
         }
         if self.keyed {
             self.reserve(self.moved.len());
+            // The dissolved rows, ascending like the moved ones.
+            let (dissolved, mut next) = (self.dead.len(), 0);
             for at in 0..self.moved.len() {
                 let row = self.moved[at];
+                if next < dissolved && self.dead[next] == row {
+                    next += 1;
+                    continue;
+                }
                 self.load_key(row);
                 let key = std::mem::take(&mut self.key);
-                match self.get(&key) {
+                let weights = std::mem::take(&mut self.key_weights);
+                let weights_or_none: &[u64] = if self.weighted { &weights } else { &[] };
+                match self.get(&key, weights_or_none) {
                     Some(kept) => {
                         report.collisions.push(Collision {
-                            kept: self.columns[self.arity][kept as usize],
-                            removed: self.columns[self.arity][row as usize],
+                            kept: (self.columns[arity][kept as usize], self.weight(arity, kept)),
+                            removed: (self.columns[arity][row as usize], self.weight(arity, row)),
                             tag: self.tag[row as usize],
                         });
                         self.dead.push(row);
                     }
-                    None => self.place(row, hash_row(&key)),
+                    None => self.place(row, key_hash(&key, weights_or_none)),
                 }
                 self.key = key;
+                self.key_weights = weights;
             }
         }
         self.moved.clear();
         // Highest first, so the row that fills a hole is never one still to go.
+        self.dead.sort_unstable();
         for at in (0..self.dead.len()).rev() {
             self.swap_remove(self.dead[at]);
         }
@@ -320,13 +526,18 @@ impl Table {
     /// its place.
     fn swap_remove(&mut self, row: u32) {
         let last = self.len() as u32 - 1;
-        if row != last {
+        if row != last && self.keyed {
             self.load_key(last);
             let slot = self.slot_of(last);
             self.slots[slot] = self.slots[slot] >> 32 << 32 | (row + 1) as u64;
         }
         for column in &mut self.columns {
             column.swap_remove(row as usize);
+        }
+        for weights in &mut self.weights {
+            if !weights.is_empty() {
+                weights.swap_remove(row as usize);
+            }
         }
         self.tag.swap_remove(row as usize);
         self.stamp.swap_remove(row as usize);
@@ -384,54 +595,95 @@ mod tests {
     fn a_key_is_found_after_the_index_grows() {
         let mut table = Table::new(2);
         for i in 0..100 {
-            table.insert(&[i, i + 1], i * 10, i, 1);
+            table.insert(&[i, i + 1], &[], (i * 10, 0), i, 1);
         }
-        assert_eq!(table.get(&[7, 8]), Some(7));
-        assert_eq!(table.get(&[7, 9]), None);
+        assert_eq!(table.get(&[7, 8], &[]), Some(7));
+        assert_eq!(table.get(&[7, 9], &[]), None);
         assert_eq!(table.values()[7], 70);
     }
 
     #[test]
     fn a_table_with_no_key_columns_holds_one_row() {
         let mut table = Table::new(0);
-        assert_eq!(table.get(&[]), None);
-        table.insert(&[], 5, 0, 1);
-        assert_eq!(table.get(&[]), Some(0));
+        assert_eq!(table.get(&[], &[]), None);
+        table.insert(&[], &[], (5, 0), 0, 1);
+        assert_eq!(table.get(&[], &[]), Some(0));
     }
 
     #[test]
     fn repair_reports_rows_that_come_to_share_a_key() {
         let mut table = Table::new(1);
-        table.insert(&[0], 10, 100, 1);
-        table.insert(&[1], 11, 101, 1);
-        table.insert(&[2], 12, 102, 1);
+        table.insert(&[0], &[], (10, 0), 100, 1);
+        table.insert(&[1], &[], (11, 0), 101, 1);
+        table.insert(&[2], &[], (12, 0), 102, 1);
         // Cell 1 now stands for cell 0, so the first two rows collide.
         let map: Vec<u32> = (0..13)
             .map(|cell| if cell == 1 { 0 } else { cell })
             .collect();
         let mut report = Repair::default();
-        assert!(table.repair(&map, 2, &mut report));
+        assert!(table.repair(&map, None, None, 2, &mut report));
         assert_eq!(
             report.collisions,
             vec![Collision {
-                kept: 10,
-                removed: 11,
+                kept: (10, 0),
+                removed: (11, 0),
                 tag: 101
             }]
         );
         assert_eq!(report.rekeyed, vec![11]);
         assert_eq!(table.len(), 2);
-        let value = |key: u32| table.get(&[key]).map(|row| table.values()[row as usize]);
+        let value = |key: u32| {
+            table
+                .get(&[key], &[])
+                .map(|row| table.values()[row as usize])
+        };
         assert_eq!((value(0), value(1), value(2)), (Some(10), None, Some(12)));
+    }
+
+    /// `f(a, b)` with a coefficient on `a` and none on `b`: a weight `a` picks
+    /// up moves into the value, one `b` picks up stays in the key.
+    #[test]
+    fn repair_moves_a_coefficient_columns_weight_into_the_value() {
+        let mut table = Table::new(2).coefficients(&[1, 0]);
+        table.insert(&[1, 2], &[], (5, 0), 0, 1);
+        table.insert(&[0, 3], &[0, 1], (6, 0), 1, 1);
+        // 1 is 0 + 3 and 2 is 3 + 1, modulo 2^8.
+        let map = [0, 0, 3, 3, 4, 5, 6];
+        let delta = [0, 3, 1, 0, 0, 0, 0];
+        let mask = [0xff; 7];
+        let shift = Shift {
+            delta: &delta,
+            mask: &mask,
+        };
+        let mut report = Repair::default();
+        table.repair(&map, Some(shift), None, 2, &mut report);
+        // f(0 + 3, 3 + 1) = 5, so f(0, 3 + 1) = 5 - 3, which the second row
+        // says is 6.
+        assert_eq!(
+            report.collisions,
+            vec![Collision {
+                kept: (6, 0),
+                removed: (5, 253),
+                tag: 0
+            }]
+        );
+        assert_eq!(table.get(&[0, 3], &[0, 1]), Some(0));
+        assert_eq!(table.get(&[0, 3], &[]), None);
     }
 
     #[test]
     fn a_bag_keeps_rows_that_come_to_share_a_key() {
         let mut table = Table::bag(1);
-        table.insert(&[0], 10, 0, 1);
-        table.insert(&[1], 11, 1, 1);
+        table.insert(&[0], &[], (10, 0), 0, 1);
+        table.insert(&[1], &[], (11, 0), 1, 1);
         let mut report = Repair::default();
-        assert!(table.repair(&[0, 0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11], 2, &mut report));
+        assert!(table.repair(
+            &[0, 0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+            None,
+            None,
+            2,
+            &mut report
+        ));
         assert!(report.collisions.is_empty());
         assert_eq!(table.column(0), &[0, 0]);
         assert_eq!(table.stamps(), &[1, 2]);
@@ -455,10 +707,10 @@ mod tests {
             prop_assume!(map.iter().all(|&cell| map[cell as usize] == cell));
             let mut table = Table::new(2);
             for (tag, &(a, b)) in keys.iter().enumerate() {
-                table.insert(&[a, b], 0, tag as u32, 1);
+                table.insert(&[a, b], &[], (0, 0), tag as u32, 1);
             }
             let mut report = Repair::default();
-            table.repair(&map, 2, &mut report);
+            table.repair(&map, None, None, 2, &mut report);
             let expected: std::collections::BTreeSet<(u32, u32)> =
                 keys.iter().map(|&(a, b)| (map[a as usize], map[b as usize])).collect();
             let found: std::collections::BTreeSet<(u32, u32)> =
@@ -466,7 +718,7 @@ mod tests {
             prop_assert_eq!(table.len(), expected.len());
             prop_assert_eq!(report.collisions.len(), keys.len() - expected.len());
             for &(a, b) in &expected {
-                let row = table.get(&[a, b]);
+                let row = table.get(&[a, b], &[]);
                 prop_assert!(row.is_some());
                 prop_assert_eq!((table.column(0)[row.unwrap() as usize], table.column(1)[row.unwrap() as usize]), (a, b));
             }

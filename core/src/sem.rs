@@ -160,7 +160,6 @@ fn rule_has_shaped_float(rule: &tir_pdl::Rule) -> bool {
                 .iter()
                 .chain(dependencies)
                 .any(term_has_shaped_float),
-            tir_pdl::TermKind::Keep(inner) => term_has_shaped_float(inner),
             _ => false,
         }
     }

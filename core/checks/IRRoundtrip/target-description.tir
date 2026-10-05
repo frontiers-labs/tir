@@ -14,7 +14,8 @@ module {data_layout = #dl, target_env = #env} {
   module_end
 }
 
-// CHECK: #data_layout = {endianness = "little", stack_alignment = 128, types = {i32 = {abi = 32}, p = {abi = 64, size = 64}}}
+// The target the environment names fills in what the declared layout leaves out.
+// CHECK: #data_layout = {cache_line = 64, endianness = "little", stack_alignment = 128, types = {f32 = {abi = 32, size = 32}, f64 = {abi = 64, size = 64}, i1 = {abi = 8, size = 8}, i16 = {abi = 16, size = 16}, i32 = {abi = 32, size = 32}, i64 = {abi = 64, size = 64}, i8 = {abi = 8, size = 8}, p = {abi = 64, size = 64}}}
 // CHECK: #target_env = {arch = "riscv64", cpu = "generic", features = ["m", "c"]}
 // CHECK: module {data_layout = #data_layout, target_env = #target_env} {
 // CHECK-NEXT: %{{[0-9]+}} = func.func @f() -> !i32 {

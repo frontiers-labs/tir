@@ -92,12 +92,12 @@ pub use diagnostics::{print_error_range, print_parse_error};
 pub use dialect::{Dialect, OperationParser};
 pub use error::Error;
 pub use interfaces::{
-    Apply, Binding, BranchGuard, BranchTerminator, Callable, CaseGuard, Commutative, ConstantFold,
-    ConstantLike, CountedLoop, ExitScope, ExitScopeKind, ExitTarget, Gamma, Global,
+    Additive, Apply, Binding, BranchGuard, BranchTerminator, Callable, CaseGuard, Commutative,
+    ConstantFold, ConstantLike, CountedLoop, ExitScope, ExitScopeKind, ExitTarget, Gamma, Global,
     HasResourceSemantics, IntegerArithmetic, MemoryRead, MemoryWrite, NonLocalExit, OpCost,
     PromotableAllocation, Pure, RegionBinding, ResourceAccess, ResourceEffect, ResourceEffects,
-    ResourceField, ResourceSemantics, SameOperandAndResultType, Speculatable, Symbol, Terminator,
-    Theta, Visibility,
+    ResourceField, ResourceSemantics, SameOperandAndResultType, Speculatable, Subtractive, Symbol,
+    Terminator, Theta, Visibility,
 };
 pub use interp::{
     ExecutionState, FloatEnvironment, Interp, InterpError, Memory as InterpMemory,

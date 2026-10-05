@@ -245,10 +245,14 @@ fn validate_initializer_size(name: &str, expected: u64, actual: usize) -> Result
     Ok(())
 }
 
+/// Every pointer is laid out at 64 bits, so an address and every offset added
+/// to one is that wide.
+const POINTER_WIDTH: u32 = 64;
+
 fn type_size(ty: &Type, named: &HashMap<String, Type>) -> Result<u64, Error> {
     Ok(match ty {
         Type::Int(width) | Type::Float(width) => u64::from(width.div_ceil(8)),
-        Type::Ptr(_) => 8,
+        Type::Ptr(_) => u64::from(POINTER_WIDTH / 8),
         Type::Array(count, elem) => count * type_size(elem, named)?,
         Type::Named(name) => type_size(
             named
@@ -1159,6 +1163,25 @@ fn lower_intrinsic(
     Err(Error::Unsupported(format!("intrinsic {name}")))
 }
 
+/// `value` zero-extended or truncated to the integer type `ty`.
+fn resize_unsigned(context: &Context, body: &BlockHandle, value: ValueId, ty: TypeId) -> ValueId {
+    let width = |ty| {
+        let data = context.get_type_data(ty);
+        (data.as_ref() as &dyn std::any::Any)
+            .downcast_ref::<IntegerType>()
+            .map(IntegerType::width)
+    };
+    match width(context.get_value(value).ty()).cmp(&width(ty)) {
+        std::cmp::Ordering::Less => body
+            .append_op(bops::extui(context, value, ty).build())
+            .result(),
+        std::cmp::Ordering::Greater => body
+            .append_op(bops::trunci(context, value, ty).build())
+            .result(),
+        std::cmp::Ordering::Equal => value,
+    }
+}
+
 fn constant(context: &Context, body: &BlockHandle, value: i64, ty: TypeId) -> ValueId {
     let op = bops::constant(context, value, ty).build();
     let result = op.result();
@@ -1201,7 +1224,7 @@ fn lower_select(
     let result_ty = lower_type(context, ty)?;
     let work_ty = match ty {
         Type::Ptr(_) => {
-            let int_ty = IntegerType::new(context, 64);
+            let int_ty = IntegerType::new(context, POINTER_WIDTH);
             let null = body.append_op(pops::null(context, PtrType::opaque(context)).build());
             if_true = body
                 .append_op(pops::ptrdiff(context, if_true, null.result(), int_ty).build())
@@ -1303,13 +1326,19 @@ fn lower_cast(
         CastOp::SExt => append!(bops::extsi(context, input, result_ty).build()),
         CastOp::ZExt => append!(bops::extui(context, input, result_ty).build()),
         CastOp::Trunc => append!(bops::trunci(context, input, result_ty).build()),
+        // Both casts zero-extend or truncate between the integer and the
+        // pointer-sized address, which `ptr.ptrdiff` and `ptr.ptradd` take.
         CastOp::PtrToInt => {
             let null = append!(pops::null(context, PtrType::opaque(context)).build());
-            append!(pops::ptrdiff(context, input, null, result_ty).build())
+            let address_ty = IntegerType::new(context, POINTER_WIDTH);
+            let address = append!(pops::ptrdiff(context, input, null, address_ty).build());
+            resize_unsigned(context, body, address, result_ty)
         }
         CastOp::IntToPtr => {
+            let address_ty = IntegerType::new(context, POINTER_WIDTH);
+            let address = resize_unsigned(context, body, input, address_ty);
             let null = append!(pops::null(context, PtrType::opaque(context)).build());
-            append!(pops::ptradd(context, null, input, result_ty).build())
+            append!(pops::ptradd(context, null, address, result_ty).build())
         }
         CastOp::SIToFP | CastOp::UIToFP => {
             let semantics = arithmetic_semantics(context);
@@ -1446,7 +1475,7 @@ fn lower_gep(
     named: &HashMap<String, Type>,
     definitions: &HashMap<&str, &Inst>,
 ) -> Result<ValueId, Error> {
-    let i64_ty = IntegerType::new(context, 64);
+    let offset_ty = IntegerType::new(context, POINTER_WIDTH);
     let mut offset = None;
     let mut literal_offset = 0i64;
     let mut current = source.clone();
@@ -1478,14 +1507,15 @@ fn lower_gep(
                 let value = *values
                     .get(name)
                     .ok_or_else(|| Error::UndefinedValue(name.clone()))?;
+                // An index is sign-extended or truncated to the pointer width.
                 match index_ty {
-                    Type::Int(64) => value,
-                    Type::Int(_) => {
-                        let op = bops::extsi(context, value, i64_ty).build();
-                        let result = op.result();
-                        body.append_op(op);
-                        result
-                    }
+                    Type::Int(POINTER_WIDTH) => value,
+                    Type::Int(width) if *width < POINTER_WIDTH => body
+                        .append_op(bops::extsi(context, value, offset_ty).build())
+                        .result(),
+                    Type::Int(_) => body
+                        .append_op(bops::trunci(context, value, offset_ty).build())
+                        .result(),
                     _ => return Err(Error::Unsupported("non-integer getelementptr index".into())),
                 }
             }
@@ -1498,15 +1528,15 @@ fn lower_gep(
         let term = if scale == 1 {
             index
         } else {
-            let scale = constant(context, body, scale as i64, i64_ty);
-            let product = bops::muli(context, index, scale, i64_ty).build();
+            let scale = constant(context, body, scale as i64, offset_ty);
+            let product = bops::muli(context, index, scale, offset_ty).build();
             let product_value = product.result();
             body.append_op(product);
             product_value
         };
         offset = Some(match offset {
             Some(offset) => {
-                let add = bops::addi(context, offset, term, i64_ty).build();
+                let add = bops::addi(context, offset, term, offset_ty).build();
                 let result = add.result();
                 body.append_op(add);
                 result
@@ -1520,7 +1550,7 @@ fn lower_gep(
     // Combine that displacement here so the next dynamic index precedes it.
     if let Some(definition) = context.get_value(base).defining_op()
         && let Some(add) = context.get_op(definition).as_op::<tir::ptr::PtrAddOp>()
-        && context.get_value(add.operands()[1]).ty() == i64_ty
+        && context.get_value(add.operands()[1]).ty() == offset_ty
         && let Some(definition) = context.get_value(add.operands()[1]).defining_op()
         && let Some(literal) = context.get_op(definition).as_op::<builtin::ConstantOp>()
         && let Some(AttributeValue::Int(value)) = literal.attr("value")
@@ -1534,7 +1564,7 @@ fn lower_gep(
             .result();
     }
     if literal_offset != 0 {
-        let literal = constant(context, body, literal_offset, i64_ty);
+        let literal = constant(context, body, literal_offset, offset_ty);
         address = body
             .append_op(pops::ptradd(context, address, literal, PtrType::opaque(context)).build())
             .result();
