@@ -83,6 +83,13 @@
    "subject": "fix(isel): fold axiom constants at the register width (#533)",
    "time": "2026-10-04T11:49:39.000Z",
    "env_key": "rustc 1.99.0 (b940084d7 2026-09-28); valgrind-3.22.0; ldd (Ubuntu GLIBC 2.39-0ubuntu8.9) 2.39"
+  },
+  {
+   "file": "runs/2026-10-05T07-00-55-000Z-543bd9db5f7b.json",
+   "commit": "543bd9db5f7b77ddc61404447d191d59ac6c803c",
+   "subject": "refactor(verify): take target facts out of the Sail equivalence checker (#534)",
+   "time": "2026-10-05T07:00:55.000Z",
+   "env_key": "rustc 1.99.0 (b940084d7 2026-09-28); valgrind-3.22.0; ldd (Ubuntu GLIBC 2.39-0ubuntu8.9) 2.39"
   }
  ]
 }
