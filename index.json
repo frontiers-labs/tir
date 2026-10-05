@@ -90,6 +90,13 @@
    "subject": "refactor(verify): take target facts out of the Sail equivalence checker (#534)",
    "time": "2026-10-05T07:00:55.000Z",
    "env_key": "rustc 1.99.0 (b940084d7 2026-09-28); valgrind-3.22.0; ldd (Ubuntu GLIBC 2.39-0ubuntu8.9) 2.39"
+  },
+  {
+   "file": "runs/2026-10-05T12-21-06-000Z-69a1cf521540.json",
+   "commit": "69a1cf521540f6ab070f7249cf8b83a2a2ec2b52",
+   "subject": "fix(riscv): limit X100 stores to one per cycle (#536)",
+   "time": "2026-10-05T12:21:06.000Z",
+   "env_key": "rustc 1.99.0 (b940084d7 2026-09-28); valgrind-3.22.0; ldd (Ubuntu GLIBC 2.39-0ubuntu8.9) 2.39"
   }
  ]
 }
