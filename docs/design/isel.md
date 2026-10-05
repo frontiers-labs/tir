@@ -463,6 +463,8 @@ demands the rest of the constant there: `addi` takes the low 12 bits and
 the constant's trailing zeros and demands it shifted back, as `slli` does. A
 candidate is kept only if evaluating the pattern over it gives the constant
 back, and a constant some materializer produces alone is not split at all.
+If an operand uses an operator the evaluator does not support, the candidate
+is rejected.
 The demanded rest is a constant like any other, so `2048` on RISC-V is `1`
 shifted by 11, and a 64-bit constant becomes a chain of `lui`, `addi` and
 `slli`. The exact sequence can change with available target features and

@@ -791,8 +791,14 @@ impl CompiledIselPattern {
             SymKind::Xor => a?.0 ^ b?.0,
             SymKind::Not => !a?.0,
             SymKind::Neg => a?.0.wrapping_neg(),
-            SymKind::ShiftLeft => shift(b?.0, &|amount| a.unwrap().0 << amount),
-            SymKind::ShiftRightLogic => shift(b?.0, &|amount| a.unwrap().0 >> amount),
+            SymKind::ShiftLeft => {
+                let a = a?.0;
+                shift(b?.0, &|amount| a << amount)
+            }
+            SymKind::ShiftRightLogic => {
+                let a = a?.0;
+                shift(b?.0, &|amount| a >> amount)
+            }
             SymKind::ShiftRightArithmetic => {
                 let amount = b?.0.min(63) as u32;
                 (sign(a?) >> amount) as u64

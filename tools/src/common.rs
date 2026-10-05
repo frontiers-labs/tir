@@ -80,9 +80,8 @@ pub fn parse_module(
             Ok((module, true))
         }
         InputKind::Llvm => {
-            let module = tir_llvm::import_str(context, &input)
+            let module = tir_llvm::import_str(context, &input, target.data_layout().as_ref())
                 .map_err(|e| format!("llvm import failed: {e}"))?;
-            attach_data_layout(context, &module, target);
             let mut attributes = context.get_op(module.id()).attributes().to_vec();
             if let Some(value) = target.target_env() {
                 attributes.push(context.named_attribute(tir::TARGET_ENV, value));

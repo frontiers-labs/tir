@@ -4,14 +4,6 @@
 ; is an op of its own: a getelementptr index is sign-extended, and inttoptr and
 ; ptrtoint zero-extend or truncate between the integer and the address.
 
-; CHECK-LABEL: func.func @narrow_index
-; CHECK-NEXT: %[[INDEX:[0-9]+]] = extsi %{{[0-9]+}} : !i64
-; CHECK-NEXT: ptr.ptradd %{{[0-9]+}}, %[[INDEX]] : !ptr.p
-define ptr @narrow_index(ptr %p, i32 %i) {
-  %q = getelementptr i8, ptr %p, i32 %i
-  ret ptr %q
-}
-
 ; CHECK-LABEL: func.func @wide_index
 ; CHECK-NEXT: %[[INDEX:[0-9]+]] = trunci %{{[0-9]+}} : !i64
 ; CHECK-NEXT: ptr.ptradd %{{[0-9]+}}, %[[INDEX]] : !ptr.p

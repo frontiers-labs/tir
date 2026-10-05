@@ -649,6 +649,37 @@ module_end
     assert_eq!(body_names(&context, region), vec!["muli", "subi"]);
 }
 
+#[test]
+fn constant_materialization_skips_unevaluated_shift_operands() {
+    for kind in [SymKind::ShiftLeft, SymKind::ShiftRightLogic] {
+        let (context, module, region) = function(
+            r#"module {
+func.func @demo() -> !i64 {
+  %value = constant {value = 7} : !i64
+  func.return %value
+}
+module_end
+}"#,
+        );
+        let mut pattern = SemGraph::new();
+        let value = symbol(&mut pattern, 0);
+        let divisor = fixtures::constant(&mut pattern, 2, 64);
+        let quotient = binary(&mut pattern, SymKind::UDiv, value, divisor);
+        let amount = symbol(&mut pattern, 1);
+        binary(&mut pattern, kind, quotient, amount);
+        let rules = vec![
+            Rule {
+                operand_constraints: vec![(1, OperandConstraint::Immediate)],
+                ..Rule::new("div-shift", pattern, 0, emit_materializer_marker)
+            },
+            materializer_rule(emit_materializer_marker),
+        ];
+
+        select(&context, &module, rules);
+        assert_eq!(body_names(&context, region), vec!["muli"]);
+    }
+}
+
 /// Select `add(a, constant)` with a cheap immediate rule bounded to a signed
 /// 12-bit field (`subi` marker) and an expensive register-form fallback.
 fn run_immediate_range(constant: i64) -> Vec<&'static str> {

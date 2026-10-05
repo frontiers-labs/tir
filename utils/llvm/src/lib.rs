@@ -18,7 +18,12 @@ pub use parser::parse_module;
 use tir::Context;
 use tir::builtin::ModuleOp;
 
-/// Parse LLVM textual IR and lower it to a TIR module in one step.
-pub fn import_str(context: &Context, src: &str) -> Result<ModuleOp, Error> {
-    import(context, &parse_module(src)?)
+/// Parse LLVM textual IR and lower it using the selected target's data layout.
+/// With no target layout, pointer sizes default to 64 bits.
+pub fn import_str(
+    context: &Context,
+    src: &str,
+    data_layout: Option<&tir::attributes::AttributeValue>,
+) -> Result<ModuleOp, Error> {
+    import(context, &parse_module(src)?, data_layout)
 }
