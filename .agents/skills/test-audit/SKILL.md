@@ -151,7 +151,7 @@ unit tests live in `utils/unit-tests`; light utilities keep tests in-crate.
 Never expose private APIs just to make tests reachable.
 
 1. Build compiler tools with `cargo build`, then run the smallest owner and
-   sibling tests. Use `LIT_FILTER='<path-regex>' cargo test -p tir-lit --test lit`,
+   sibling tests. Use `LIT_FILTER='<path-regex>' cargo xtask test -- -E 'binary(lit)'`,
    `cargo test -p tir-unit-tests <filter>`, or the owning utility package. Confirm
    that the intended cases actually ran.
 2. For removed source greps or plan assertions, run the executable script or
@@ -161,8 +161,8 @@ Never expose private APIs just to make tests reachable.
    in the developer guide, and inspect the resulting assertions.
 4. Run the required project gates: `cargo build`,
    `cargo clippy --workspace --all-targets --no-deps -- -D warnings`, and
-   `cargo nextest r` or `cargo test` when nextest is unavailable. Run
-   `cargo xtask fcc-torture` for applicable core IR or FCC changes and the
+   `cargo xtask test`. Run
+   `cargo xtask test --profile ci --torture` for applicable core IR or FCC changes and the
    required benchmark comparisons. For execution claims, run the compiled
    program and check its result. Missing infrastructure or skipped cases are
    gaps, not passes.

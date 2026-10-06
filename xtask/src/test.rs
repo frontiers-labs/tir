@@ -1,6 +1,5 @@
 use std::{
     collections::BTreeSet,
-    ffi::OsStr,
     fs,
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -22,7 +21,7 @@ pub struct Options {
     /// Run cargo test even when cargo-nextest is installed.
     #[arg(long, conflicts_with = "archive")]
     pub cargo_test: bool,
-    /// Run a prepared nextest archive without building.
+    /// Run a prepared nextest archive from a checkout of the packed commit.
     #[arg(long, conflicts_with_all = ["profile", "torture"])]
     pub archive: Option<PathBuf>,
     /// Arguments for the test runner, after `--`.
@@ -66,7 +65,7 @@ pub fn torture(root: &Path) -> Result<()> {
 
 pub fn run(root: &Path, options: Options) -> Result<()> {
     if let Some(archive) = &options.archive {
-        return run_archive(archive, &options.runner_args);
+        return run_archive(root, archive, &options.runner_args);
     }
     let built = build(root, options.profile.as_deref(), options.torture)?;
     let mut runner = Command::new("cargo");
@@ -91,19 +90,16 @@ pub fn run(root: &Path, options: Options) -> Result<()> {
     Ok(())
 }
 
-fn run_archive(archive: &Path, runner_args: &[String]) -> Result<()> {
+fn run_archive(root: &Path, archive: &Path, runner_args: &[String]) -> Result<()> {
     let extracted = tir_adt::TempDir::with_prefix("tir-tests-")?;
     let bundle = extracted.path().join("target").join(BUNDLE);
-    // Nextest resolves the remapped workspace before it extracts the archive.
-    let workspace = bundle.join("workspace");
-    fs::create_dir_all(&workspace)?;
     let status = Command::new("cargo")
-        .args(["nextest", "run", "--extract-overwrite", "--archive-file"])
+        .args(["nextest", "run", "--archive-file"])
         .arg(archive)
         .arg("--extract-to")
         .arg(extracted.path())
         .arg("--workspace-remap")
-        .arg(&workspace)
+        .arg(root)
         .args(runner_args)
         .env("TIR_TEST_BIN_DIR", bundle.join("bin"))
         .env("TIR_TEST_CORPUS_DIR", bundle.join("gcc-corpus"))
@@ -115,13 +111,12 @@ fn run_archive(archive: &Path, runner_args: &[String]) -> Result<()> {
 pub fn pack(root: &Path, options: PackOptions) -> Result<()> {
     ensure!(has_nextest(), "test-pack requires cargo-nextest");
     let built = build(root, options.profile.as_deref(), options.torture)?;
-    let target = target_directory(root)?;
-    let bundle = target.join(BUNDLE);
+    let bundle = target_directory(root)?.join(BUNDLE);
     if bundle.exists() {
         fs::remove_dir_all(&bundle)?;
     }
     // Nextest archives only the binaries of packages with integration tests,
-    // so the tools travel with the fixtures.
+    // so the tools travel with the torture corpus.
     fs::create_dir_all(bundle.join("bin"))?;
     for name in &built.binaries {
         let name = format!("{name}{}", std::env::consts::EXE_SUFFIX);
@@ -134,9 +129,8 @@ pub fn pack(root: &Path, options: PackOptions) -> Result<()> {
         }
     }
     if let Some(corpus) = &built.corpus {
-        copy_tree(corpus, &bundle.join("gcc-corpus"), &target)?;
+        copy_tree(corpus, &bundle.join("gcc-corpus"))?;
     }
-    copy_tree(root, &bundle.join("workspace"), &target)?;
     let output = std::env::current_dir()?.join(options.output);
     let status = Command::new("cargo")
         .current_dir(root)
@@ -225,18 +219,13 @@ fn build(root: &Path, profile: Option<&str>, torture: bool) -> Result<Built> {
     })
 }
 
-fn copy_tree(source: &Path, destination: &Path, excluded: &Path) -> Result<()> {
+fn copy_tree(source: &Path, destination: &Path) -> Result<()> {
     fs::create_dir_all(destination)?;
     for entry in fs::read_dir(source)? {
         let entry = entry?;
-        if [OsStr::new(".git"), OsStr::new("target")].contains(&entry.file_name().as_os_str())
-            || entry.path() == excluded
-        {
-            continue;
-        }
         let target = destination.join(entry.file_name());
         if entry.file_type()?.is_dir() {
-            copy_tree(&entry.path(), &target, excluded)?;
+            copy_tree(&entry.path(), &target)?;
         } else if entry.file_type()?.is_file() {
             fs::copy(entry.path(), target)?;
         }

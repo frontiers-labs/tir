@@ -105,8 +105,9 @@ cargo xtask test-pack --profile ci --torture --output target/ci-tests.tar.zst
 xtask test --archive target/ci-tests.tar.zst -- --partition hash:1/8
 ```
 
-The archive contains the test executables, CLI tools and fixtures. Archive
-execution extracts and remaps them without rebuilding. Packing and archive
+The archive contains the test executables, CLI tools and torture corpus.
+Archive execution extracts them without rebuilding and reads fixtures from the
+checkout it runs in, which must be the packed commit. Packing and archive
 execution require nextest. All shards must use the
 same archive; their union must cover the unsharded test inventory exactly once.
 

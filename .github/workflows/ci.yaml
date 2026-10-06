@@ -88,7 +88,7 @@ jobs:
             target/ci/xtask
           retention-days: 1
 
-  tests:
+  test-shard:
     needs: build
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -106,6 +106,14 @@ jobs:
           name: ci-tests
           path: target
       - run: target/ci/xtask test --archive target/ci-tests.tar.zst -- --partition hash:${{ matrix.shard }}/8
+
+  # One check for the ruleset to require in place of eight shard names.
+  tests:
+    if: always()
+    needs: test-shard
+    runs-on: ubuntu-24.04
+    steps:
+      - run: test "${{ needs.test-shard.result }}" = success
 
   # Tracks peak RSS of compiling the CoreMark corpus, the memory ratchet of the
   # "one IR" plan. Free runners give 4 vCPU / 16 GB, so the compile runs under a
