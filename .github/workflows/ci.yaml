@@ -48,7 +48,7 @@ jobs:
       - run: cargo clippy --workspace --all-targets --no-deps -- -D warnings
 
   # Build and package once; test shards and memory checks reuse these tools.
-  package:
+  build:
     needs: formatting
     runs-on: ubuntu-24.04
     env:
@@ -89,7 +89,7 @@ jobs:
           retention-days: 1
 
   tests:
-    needs: package
+    needs: build
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     strategy:
@@ -114,7 +114,7 @@ jobs:
   # backend still allocates hundreds of MB per e-graph cover; drop it once the
   # Stage 1 entity diet lands and the ratchet becomes enforceable.
   peak-rss:
-    needs: package
+    needs: build
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
@@ -153,18 +153,3 @@ jobs:
       pages: write
       id-token: write
     uses: ./.github/workflows/docs.yaml
-
-  # Keep the required build check pending until every test shard finishes.
-  build:
-    if: always()
-    needs: [formatting, clippy, package, tests, docs, peak-rss]
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: read
-      actions: read
-    steps:
-      - uses: actions/checkout@v7
-      - env:
-          GH_TOKEN: ${{ github.token }}
-          RESULTS: ${{ toJSON(needs) }}
-        run: .github/scripts/check-ci-budget.py

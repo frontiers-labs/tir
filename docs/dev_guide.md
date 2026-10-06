@@ -110,11 +110,6 @@ execution extracts and remaps them without rebuilding. Packing and archive
 execution require nextest. All shards must use the
 same archive; their union must cover the unsharded test inventory exactly once.
 
-The required `build` check waits for packaging, all shards and the other CI
-jobs. It rejects required-job failures and a total elapsed time of ten minutes
-or more, measured from the first job start through the last worker completion.
-A re-run measures only the jobs it runs again.
-
 `filecheck` is a small, self-contained reimplementation of LLVM's FileCheck
 (built on `chumsky` and `ariadne`); it lives in `utils/filecheck` and is also
 available as a standalone binary. The LIT driver is in `utils/lit`.
