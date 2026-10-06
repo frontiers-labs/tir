@@ -56,7 +56,7 @@ jobs:
   # rustfmt is single-threaded and clippy is never on the critical path.
   build:
     needs: formatting
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     env:
       CARGO_INCREMENTAL: "0"
       RUSTC_WRAPPER: sccache
