@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
+use libtest_mimic::{Arguments, Trial};
 use xshell::{cmd, Shell};
 
 use crate::utils::{collect_c_files, run_parallel, run_with_timeout};
@@ -14,6 +15,7 @@ const TORTURE_PATH: &str = "gcc/testsuite/gcc.c-torture";
 const CHECKOUT_PATH: &str = "target/test-suites/gcc";
 const ALLOWLIST_PATH: &str = "fcc/tests/gcc-torture-known-failures.txt";
 const EXECUTE_ALLOWLIST_PATH: &str = "fcc/tests/gcc-torture-execute-known-failures.txt";
+const KNOWN_FAILURES: &str = include_str!("../../fcc/tests/gcc-torture-known-failures.txt");
 /// The slowest case (`pr35800.c`, a 35-arm fall-through switch) spends ~45s in
 /// instruction selection on a fast desktop, so the budget has to leave room for
 /// a CI core several times slower before it reads as a regression. Raising it
@@ -30,11 +32,69 @@ const TIMEOUT_MARGINAL: &[&str] = &[
     "execute/pr48809.c",
 ];
 
-/// Compiles every torture case through codegen and compares the failures
-/// against the recorded baseline. `fcc` reuses an already built compiler
-/// instead of building one. The baseline is recorded against the `ci` profile,
-/// so building anything else here would report the difference as a regression.
-pub fn run(sh: &Shell, root: &Path, bless: bool, fcc: Option<&Path>) -> anyhow::Result<()> {
+/// Runs prepared GCC torture cases as individual Cargo tests. The caller supplies
+/// `TIR_TEST_BIN_DIR` and `TIR_TEST_CORPUS_DIR`; this entry point never builds or
+/// downloads tools or sources.
+pub fn harness_main() {
+    let args = Arguments::from_args();
+    let trials = harness_trials().unwrap_or_else(|error| {
+        vec![Trial::test("gcc-torture/baseline", move || {
+            Err(error.to_string().into())
+        })]
+    });
+    libtest_mimic::run(&args, trials).exit();
+}
+
+fn harness_trials() -> anyhow::Result<Vec<Trial>> {
+    let fcc = std::env::var_os("TIR_TEST_BIN_DIR").map(|directory| {
+        PathBuf::from(directory).join(format!("fcc{}", std::env::consts::EXE_SUFFIX))
+    });
+    let corpus = std::env::var_os("TIR_TEST_CORPUS_DIR").map(PathBuf::from);
+    let Some((fcc, corpus)) = fcc.zip(corpus).filter(|(fcc, corpus)| {
+        fcc.is_file() && corpus.join("compile").is_dir() && corpus.join("execute").is_dir()
+    }) else {
+        eprintln!("GCC torture skipped: supply built fcc in TIR_TEST_BIN_DIR and prepared gcc.c-torture in TIR_TEST_CORPUS_DIR");
+        return Ok(vec![Trial::test(
+            "gcc-torture/requires-tools-and-corpus",
+            || Ok(()),
+        )
+        .with_ignored_flag(true)]);
+    };
+    let expected = parse_allowlist(KNOWN_FAILURES)?;
+    let files = corpus_files(&corpus)?;
+    anyhow::ensure!(
+        !files.is_empty(),
+        "prepared GCC torture corpus has no cases"
+    );
+    let paths = files
+        .iter()
+        .map(|file| relative_path(&corpus, file))
+        .collect::<BTreeSet<_>>();
+    let mut trials = Vec::new();
+    for path in expected.difference(&paths) {
+        let path = path.clone();
+        trials.push(Trial::test(format!("gcc-torture/{path}"), move || {
+            Err(format!("missing allowlist entry: {path}").into())
+        }));
+    }
+    for file in files {
+        let path = relative_path(&corpus, &file);
+        let known_failure = expected.contains(&path);
+        let fcc = fcc.clone();
+        trials.push(Trial::test(format!("gcc-torture/{path}"), move || {
+            let passed = compile_case(&fcc, &file);
+            match case_failure(&path, passed, known_failure, TIMEOUT_MARGINAL) {
+                Some(label) => Err(format!("{label}: {path}").into()),
+                None => Ok(()),
+            }
+        }));
+    }
+    Ok(trials)
+}
+
+/// Rewrites the baseline from the pinned corpus using the supplied compiler,
+/// or a CI-profile build when none is supplied.
+pub fn bless(sh: &Shell, root: &Path, fcc: Option<&Path>) -> anyhow::Result<()> {
     let corpus = fetch_corpus(sh, root)?;
     let fcc = match fcc {
         Some(fcc) => fcc.to_path_buf(),
@@ -44,15 +104,21 @@ pub fn run(sh: &Shell, root: &Path, bless: bool, fcc: Option<&Path>) -> anyhow::
         }
     };
 
-    let mut files = Vec::new();
-    collect_c_files(&corpus.join("compile"), &mut files)?;
-    collect_c_files(&corpus.join("execute"), &mut files)?;
-    files.sort();
-
-    let results = run_compile(&fcc, &corpus, files)?;
-    if !check(&root.join(ALLOWLIST_PATH), results, bless)? {
-        anyhow::bail!("GCC torture baseline changed");
+    let results = run_parallel("GCC torture", corpus_files(&corpus)?, |_, file| {
+        (relative_path(&corpus, file), compile_case(&fcc, file))
+    });
+    let failures = results
+        .into_iter()
+        .filter_map(|(path, passed)| {
+            (!passed && !TIMEOUT_MARGINAL.contains(&path.as_str())).then_some(path)
+        })
+        .collect::<Vec<_>>();
+    let mut contents = failures.join("\n");
+    if !contents.is_empty() {
+        contents.push('\n');
     }
+    fs::write(root.join(ALLOWLIST_PATH), contents)?;
+    println!("recorded {} known GCC torture failures", failures.len());
     Ok(())
 }
 
@@ -72,7 +138,8 @@ pub fn execute_corpus(sh: &Shell, root: &Path) -> anyhow::Result<Vec<PathBuf>> {
     Ok(files)
 }
 
-fn fetch_corpus(sh: &Shell, root: &Path) -> anyhow::Result<PathBuf> {
+/// Fetches the pinned GCC sources for orchestration and returns gcc.c-torture.
+pub fn fetch_corpus(sh: &Shell, root: &Path) -> anyhow::Result<PathBuf> {
     let checkout = root.join(CHECKOUT_PATH);
     if !checkout.join(".git").is_dir() {
         fs::create_dir_all(&checkout)?;
@@ -89,76 +156,48 @@ fn fetch_corpus(sh: &Shell, root: &Path) -> anyhow::Result<PathBuf> {
     Ok(checkout.join(TORTURE_PATH))
 }
 
-/// Compares the run against its allowlist, or rewrites the allowlist when
-/// blessing. Returns whether the baseline still holds.
-fn check(allowlist_path: &Path, results: Vec<(String, bool)>, bless: bool) -> anyhow::Result<bool> {
-    let failures = results
-        .iter()
-        .filter_map(|(path, passed)| {
-            (!passed && !TIMEOUT_MARGINAL.contains(&path.as_str())).then_some(path.as_str())
-        })
-        .collect::<BTreeSet<_>>();
-    if bless {
-        let contents = if failures.is_empty() {
-            String::new()
-        } else {
-            format!(
-                "{}\n",
-                failures.iter().copied().collect::<Vec<_>>().join("\n")
-            )
-        };
-        fs::write(allowlist_path, contents)?;
-        println!("recorded {} known GCC torture failures", failures.len());
-        return Ok(true);
-    }
-
-    let expected = parse_allowlist(&fs::read_to_string(allowlist_path)?)?;
-    let classification = classify_results(&expected, TIMEOUT_MARGINAL, &results);
-    println!(
-        "GCC torture: {}/{} passed, {} expected failures",
-        results.len() - failures.len(),
-        results.len(),
-        expected.len()
-    );
-    print_paths("unexpected failures", &classification.unexpected_failures);
-    print_paths("stale failures", &classification.stale_failures);
-    print_paths("missing allowlist entries", &classification.missing_entries);
-    Ok(classification.unexpected_failures.is_empty()
-        && classification.stale_failures.is_empty()
-        && classification.missing_entries.is_empty())
+fn corpus_files(corpus: &Path) -> anyhow::Result<Vec<PathBuf>> {
+    let mut files = Vec::new();
+    collect_c_files(&corpus.join("compile"), &mut files)?;
+    collect_c_files(&corpus.join("execute"), &mut files)?;
+    files.sort();
+    Ok(files)
 }
 
-/// Runs each case all the way through codegen: a case passes only when fcc
-/// emits assembly for it, so an instruction selection failure is a test
-/// failure. CI builds fcc with debug assertions, which also runs the IR
-/// verifier after every pass, so invalid IR fails here too.
-fn run_compile(
-    fcc: &Path,
-    corpus: &Path,
-    files: Vec<PathBuf>,
-) -> anyhow::Result<Vec<(String, bool)>> {
-    Ok(run_parallel("GCC torture", files, |_, file| {
-        let mut command = Command::new(fcc);
-        command
-            .args([
-                "compile",
-                "-O2",
-                "-std=gnu17",
-                "--stage",
-                "asm",
-                "--march",
-                "x86_64",
-                "-o",
-                "-",
-            ])
-            .arg(file)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
-        (
-            relative_path(corpus, file),
-            run_with_timeout(&mut command, COMPILE_TIMEOUT),
-        )
-    }))
+fn compile_case(fcc: &Path, file: &Path) -> bool {
+    let mut command = Command::new(fcc);
+    command
+        .args([
+            "compile",
+            "-O2",
+            "-std=gnu17",
+            "--stage",
+            "asm",
+            "--march",
+            "x86_64",
+            "-o",
+            "-",
+        ])
+        .arg(file)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    run_with_timeout(&mut command, COMPILE_TIMEOUT)
+}
+
+fn case_failure(
+    path: &str,
+    passed: bool,
+    expected: bool,
+    marginal: &[&str],
+) -> Option<&'static str> {
+    if marginal.contains(&path) {
+        return None;
+    }
+    match (passed, expected) {
+        (false, false) => Some("unexpected failure"),
+        (true, true) => Some("stale failure"),
+        _ => None,
+    }
 }
 
 fn relative_path(corpus: &Path, file: &Path) -> String {
@@ -166,54 +205,6 @@ fn relative_path(corpus: &Path, file: &Path) -> String {
         .unwrap()
         .to_string_lossy()
         .replace('\\', "/")
-}
-
-fn print_paths(label: &str, paths: &[String]) {
-    if paths.is_empty() {
-        return;
-    }
-    eprintln!("{label}:");
-    for path in paths {
-        eprintln!("  {path}");
-    }
-}
-
-struct Classification {
-    unexpected_failures: Vec<String>,
-    stale_failures: Vec<String>,
-    missing_entries: Vec<String>,
-}
-
-fn classify_results(
-    expected: &BTreeSet<String>,
-    marginal: &[&str],
-    results: &[(String, bool)],
-) -> Classification {
-    let mut unexpected_failures = Vec::new();
-    let mut stale_failures = Vec::new();
-    let result_paths = results
-        .iter()
-        .map(|(path, _)| path.as_str())
-        .collect::<BTreeSet<_>>();
-    for (path, passed) in results {
-        if marginal.contains(&path.as_str()) {
-            continue;
-        }
-        match (*passed, expected.contains(path)) {
-            (false, false) => unexpected_failures.push(path.clone()),
-            (true, true) => stale_failures.push(path.clone()),
-            _ => {}
-        }
-    }
-    Classification {
-        unexpected_failures,
-        stale_failures,
-        missing_entries: expected
-            .iter()
-            .filter(|path| !result_paths.contains(path.as_str()))
-            .cloned()
-            .collect(),
-    }
 }
 
 fn parse_allowlist(contents: &str) -> anyhow::Result<BTreeSet<String>> {
@@ -232,56 +223,36 @@ fn parse_allowlist(contents: &str) -> anyhow::Result<BTreeSet<String>> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
-
-    use super::{classify_results, parse_allowlist};
+    use super::{case_failure, parse_allowlist};
 
     #[test]
     fn unlisted_failure_is_a_regression() {
-        let result = classify_results(
-            &BTreeSet::new(),
-            &[],
-            &[("compile/new.c".to_string(), false)],
+        assert_eq!(
+            case_failure("compile/new.c", false, false, &[]),
+            Some("unexpected failure")
         );
-        assert_eq!(result.unexpected_failures, ["compile/new.c"]);
-        assert!(result.stale_failures.is_empty());
     }
 
     #[test]
     fn listed_success_is_stale() {
-        let expected = BTreeSet::from(["execute/fixed.c".to_string()]);
-        let result = classify_results(&expected, &[], &[("execute/fixed.c".to_string(), true)]);
-        assert_eq!(result.stale_failures, ["execute/fixed.c"]);
-        assert!(result.unexpected_failures.is_empty());
+        assert_eq!(
+            case_failure("execute/fixed.c", true, true, &[]),
+            Some("stale failure")
+        );
     }
 
     #[test]
     fn marginal_case_is_neither_a_regression_nor_stale() {
         let marginal = ["execute/slow.c"];
-        let failed = classify_results(
-            &BTreeSet::new(),
-            &marginal,
-            &[("execute/slow.c".to_string(), false)],
+        assert_eq!(
+            case_failure("execute/slow.c", false, false, &marginal),
+            None
         );
-        assert!(failed.unexpected_failures.is_empty());
-        let expected = BTreeSet::from(["execute/slow.c".to_string()]);
-        let passed = classify_results(
-            &expected,
-            &marginal,
-            &[("execute/slow.c".to_string(), true)],
-        );
-        assert!(passed.stale_failures.is_empty());
+        assert_eq!(case_failure("execute/slow.c", true, true, &marginal), None);
     }
 
     #[test]
     fn duplicate_allowlist_entry_is_rejected() {
         assert!(parse_allowlist("compile/a.c\ncompile/a.c\n").is_err());
-    }
-
-    #[test]
-    fn missing_allowlist_path_is_reported() {
-        let expected = BTreeSet::from(["compile/removed.c".to_string()]);
-        let result = classify_results(&expected, &[], &[]);
-        assert_eq!(result.missing_entries, ["compile/removed.c"]);
     }
 }

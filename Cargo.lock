@@ -2646,6 +2646,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "libtest-mimic",
  "regex",
  "serde",
  "serde_json",
@@ -2653,6 +2654,7 @@ dependencies = [
  "tir-adt",
  "tir-bench",
  "tir-isa-test-suite",
+ "tir-lit",
  "tir-symbolic",
  "tir-verify",
  "tmdl",

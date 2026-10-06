@@ -10,7 +10,7 @@ use tmdl::{Action, Compiler, OutputKind};
 
 /// An absolute path to a fixture under `tmdl/`.
 pub fn fixture(rel: &str) -> String {
-    format!("{}/../../tmdl/{rel}", env!("CARGO_MANIFEST_DIR"))
+    format!("{}/../../tmdl/{rel}", crate::fixture_root().display())
 }
 
 /// The generated Rust, the kind table it passes to the decoder, and every

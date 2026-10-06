@@ -8,6 +8,9 @@
 //! [suite]
 //! name = "TIR RISC-V backend checks"
 //! glob = ["**/*.S", "**/*.tir", "!**/Inputs/**/*"]
+//!
+//! [suite.tools]
+//! tir = "tir"
 //! ```
 //!
 //! The `glob` patterns are relative to the suite directory and select its test
@@ -20,9 +23,7 @@
 //! ```ignore
 //! // tests/lit.rs
 //! fn main() {
-//!     tir_lit::workspace_harness_main(&[
-//!         ("tmdlc", tir_lit::Tool::cargo_test_bin("tmdl", "tmdlc")),
-//!     ]);
+//!     tir_lit::workspace_harness_main();
 //! }
 //! ```
 //!
@@ -48,11 +49,10 @@
 //!
 //! Both `//` and `#` comment styles are recognized for all directives.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::{Arc, OnceLock};
 
 use libtest_mimic::{Arguments, Failed, Trial};
 use regex::Regex;
@@ -133,105 +133,6 @@ fn gating_decision(features: &HashSet<String>, contents: &str) -> Gate {
     Gate::Run
 }
 
-/// The profile a target directory belongs to. Every profile builds into a
-/// directory of the same name except `dev`, whose name is reserved on the
-/// command line and whose directory is `debug`.
-fn profile_name(profile_dir_name: &str) -> &str {
-    match profile_dir_name {
-        "debug" => "dev",
-        other => other,
-    }
-}
-
-/// Build a workspace binary and snapshot it beside the current test executable
-/// under a stable name.
-///
-/// Lit tests must not execute `target/<profile>/<bin>` directly: concurrent
-/// test processes (e.g. under `cargo nextest run`, which re-enters `main` for
-/// every test) may run `cargo build` while another process execs the binary,
-/// and Cargo rewrites it in place. The snapshot is repointed with an atomic
-/// rename instead, so an exec always sees a complete binary — old or new,
-/// never partially written — and stale copies do not accumulate.
-pub fn cargo_test_bin(package: &str, bin: &str) -> PathBuf {
-    let test_exe = std::env::current_exe().expect("current test executable path");
-    let deps_dir = test_exe.parent().expect("test executable directory");
-    let profile_dir = deps_dir.parent().expect("test profile directory");
-    let profile = profile_name(
-        profile_dir
-            .file_name()
-            .and_then(|name| name.to_str())
-            .expect("test profile name"),
-    );
-
-    let mut cargo = Command::new("cargo");
-    cargo.args(["build", "-q", "-p", package, "--profile", profile]);
-    let status = cargo.status().expect("spawn cargo build");
-    assert!(
-        status.success(),
-        "cargo build -p {package} failed: {status}"
-    );
-
-    let suffix = std::env::consts::EXE_SUFFIX;
-    let source = profile_dir.join(bin.to_owned() + suffix);
-    let dest = deps_dir.join(format!("{bin}-lit{suffix}"));
-    let tmp = deps_dir.join(format!("{bin}-lit-{}{suffix}", std::process::id()));
-
-    let _ = std::fs::remove_file(&tmp);
-    if std::fs::hard_link(&source, &tmp).is_err() {
-        std::fs::copy(&source, &tmp).unwrap_or_else(|e| {
-            panic!(
-                "copy built binary from '{}' to '{}': {e}",
-                source.display(),
-                tmp.display()
-            )
-        });
-    }
-    match std::fs::rename(&tmp, &dest) {
-        Ok(()) => {
-            // POSIX defines rename between two hard links of the same inode
-            // as a no-op that succeeds and leaves `tmp` in place.
-            let _ = std::fs::remove_file(&tmp);
-            dest
-        }
-        // Windows cannot replace an executable that is currently running; the
-        // process-unique snapshot still works there.
-        Err(_) => tmp,
-    }
-}
-
-#[derive(Clone)]
-pub enum Tool {
-    Path(PathBuf),
-    CargoTestBin {
-        package: &'static str,
-        bin: &'static str,
-        path: Arc<OnceLock<PathBuf>>,
-    },
-}
-
-impl Tool {
-    pub fn path(path: impl Into<PathBuf>) -> Self {
-        Self::Path(path.into())
-    }
-
-    pub fn cargo_test_bin(package: &'static str, bin: &'static str) -> Self {
-        Self::CargoTestBin {
-            package,
-            bin,
-            path: Arc::new(OnceLock::new()),
-        }
-    }
-
-    fn resolve(&self) -> PathBuf {
-        match self {
-            Self::Path(path) => path.clone(),
-            Self::CargoTestBin { package, bin, path } => {
-                path.get_or_init(|| cargo_test_bin(package, bin)).clone()
-            }
-        }
-    }
-}
-
 /// Walk up from `start` to the first directory whose `Cargo.toml` contains a
 /// `[workspace]` section.
 fn find_workspace_root(start: &Path) -> Option<PathBuf> {
@@ -302,6 +203,7 @@ struct Suite {
     name: String,
     include: Vec<Glob>,
     exclude: Vec<Glob>,
+    tools: BTreeMap<String, String>,
 }
 
 #[derive(Deserialize)]
@@ -314,9 +216,18 @@ struct SuiteConfig {
     name: String,
     /// Glob patterns relative to the suite root; a leading `!` excludes.
     glob: Vec<String>,
+    #[serde(default)]
+    tools: BTreeMap<String, String>,
 }
 
 const SUITE_FILE: &str = "test_suite.toml";
+
+/// Locate a tool supplied by xtask, without building or searching `PATH`.
+pub fn test_bin(bin: &str) -> Option<PathBuf> {
+    let dir = std::env::var_os("TIR_TEST_BIN_DIR")?;
+    let path = PathBuf::from(dir).join(bin.to_owned() + std::env::consts::EXE_SUFFIX);
+    path.is_file().then_some(path)
+}
 
 /// Parse a `test_suite.toml`, splitting its globs into include and exclude sets.
 fn load_suite(manifest: &Path) -> Result<Suite, String> {
@@ -336,7 +247,27 @@ fn load_suite(manifest: &Path) -> Result<Suite, String> {
         name: parsed.suite.name,
         include,
         exclude,
+        tools: parsed.suite.tools,
     })
+}
+
+/// Discover the command aliases and Cargo binary names required by all suites.
+/// Conflicting binary names for the same alias are rejected.
+pub fn required_binaries(root: &Path) -> std::io::Result<BTreeMap<String, String>> {
+    let mut tools = BTreeMap::new();
+    for manifest in discover_suites(root)? {
+        let suite = load_suite(&manifest).map_err(std::io::Error::other)?;
+        for (alias, bin) in suite.tools {
+            if let Some(previous) = tools.insert(alias.clone(), bin.clone()) {
+                if previous != bin {
+                    return Err(std::io::Error::other(format!(
+                        "conflicting binary names for {alias}: {previous} and {bin}"
+                    )));
+                }
+            }
+        }
+    }
+    Ok(tools)
 }
 
 /// Recursively find every `test_suite.toml` below `root`, sorted by path.
@@ -387,10 +318,11 @@ fn env_regex(var: &str) -> Option<Regex> {
 ///
 /// The workspace root is found by walking up from `CARGO_MANIFEST_DIR`;
 /// every `checks` directory with a sibling `Cargo.toml` below it contributes
-/// tests named `<crate dir>/<path under checks>`. `tools` maps the tool names
-/// used in `RUN:` lines to executables. `LIT_FILTER` and `LIT_FILTER_OUT`
+/// tests named `<crate dir>/<path under checks>`. Suite manifests map command
+/// aliases to binary names in `TIR_TEST_BIN_DIR`. Suites with missing binaries
+/// are ignored. `LIT_FILTER` and `LIT_FILTER_OUT`
 /// restrict which tests run (see the crate docs).
-pub fn workspace_harness_main(tools: &[(&str, Tool)]) {
+pub fn workspace_harness_main() {
     let args = Arguments::from_args();
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR");
     let root = find_workspace_root(Path::new(&manifest_dir)).unwrap_or_else(|| {
@@ -405,11 +337,6 @@ pub fn workspace_harness_main(tools: &[(&str, Tool)]) {
     let filter = env_regex("LIT_FILTER");
     let filter_out = env_regex("LIT_FILTER_OUT");
 
-    let tool_map: HashMap<String, Tool> = tools
-        .iter()
-        .map(|(k, v)| (k.to_string(), v.clone()))
-        .collect();
-
     let features = host_features();
     let mut trials = Vec::new();
     for manifest in manifests {
@@ -417,6 +344,18 @@ pub fn workspace_harness_main(tools: &[(&str, Tool)]) {
             eprintln!("tir-lit: invalid {}: {e}", manifest.display());
             std::process::exit(2);
         });
+        let tool_map: HashMap<String, PathBuf> = suite
+            .tools
+            .iter()
+            .filter_map(|(alias, bin)| test_bin(bin).map(|path| (alias.clone(), path)))
+            .collect();
+        let missing_tools = tool_map.len() != suite.tools.len();
+        if missing_tools {
+            eprintln!(
+                "tir-lit: skipping {}: required tools are missing; run cargo xtask test",
+                suite.name
+            );
+        }
         let cases = match discover(&suite, &root, &features) {
             Ok(c) => c,
             Err(e) => {
@@ -429,10 +368,16 @@ pub fn workspace_harness_main(tools: &[(&str, Tool)]) {
                 continue;
             }
             let tool_map = tool_map.clone();
-            let ignored = case.ignored;
+            let ignored = case.ignored || missing_tools;
             trials.push(
-                Trial::test(case.name.clone(), move || run_case(&case, &tool_map))
-                    .with_ignored_flag(ignored),
+                Trial::test(case.name.clone(), move || {
+                    // Selecting ignored tests must not fall back to unrelated PATH tools.
+                    if missing_tools {
+                        return Err("required tool binaries were not supplied".into());
+                    }
+                    run_case(&case, &tool_map)
+                })
+                .with_ignored_flag(ignored),
             );
         }
     }
@@ -556,7 +501,7 @@ fn has_unconditional_xfail(contents: &str) -> bool {
     })
 }
 
-fn run_case(case: &TestCase, tools: &HashMap<String, Tool>) -> Result<(), Failed> {
+fn run_case(case: &TestCase, tools: &HashMap<String, PathBuf>) -> Result<(), Failed> {
     let result = run_case_commands(case, tools);
     if !case.xfail {
         return result;
@@ -568,7 +513,7 @@ fn run_case(case: &TestCase, tools: &HashMap<String, Tool>) -> Result<(), Failed
     }
 }
 
-fn run_case_commands(case: &TestCase, tools: &HashMap<String, Tool>) -> Result<(), Failed> {
+fn run_case_commands(case: &TestCase, tools: &HashMap<String, PathBuf>) -> Result<(), Failed> {
     for run in &case.run_lines {
         run_pipeline(run, &case.path, tools)?;
     }
@@ -576,7 +521,11 @@ fn run_case_commands(case: &TestCase, tools: &HashMap<String, Tool>) -> Result<(
 }
 
 /// Execute a single `RUN:` pipeline.
-fn run_pipeline(run: &str, test_path: &Path, tools: &HashMap<String, Tool>) -> Result<(), Failed> {
+fn run_pipeline(
+    run: &str,
+    test_path: &Path,
+    tools: &HashMap<String, PathBuf>,
+) -> Result<(), Failed> {
     let s = test_path.to_string_lossy().to_string();
     let dir = test_path
         .parent()
@@ -650,7 +599,7 @@ fn run_pipeline(run: &str, test_path: &Path, tools: &HashMap<String, Tool>) -> R
         } else {
             let resolved = tools
                 .get(&program)
-                .map(Tool::resolve)
+                .cloned()
                 .unwrap_or_else(|| PathBuf::from(&program));
             let output = run_subprocess(&resolved, &tokens, &envs, &piped_input).map_err(|e| {
                 Failed::from(format!("failed to spawn `{program}`: {e}\nRUN: {run}"))
@@ -770,15 +719,6 @@ fn split_csv(s: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::profile_name;
-
-    #[test]
-    fn dev_is_the_only_profile_whose_directory_differs_from_its_name() {
-        assert_eq!(profile_name("debug"), "dev");
-        assert_eq!(profile_name("release"), "release");
-        assert_eq!(profile_name("ci"), "ci");
-    }
-
     use super::*;
 
     fn re(pattern: &str) -> Regex {
@@ -947,7 +887,7 @@ mod tests {
     }
 
     #[cfg(unix)]
-    fn probe_case(run_line: &str) -> (TestCase, HashMap<String, Tool>) {
+    fn probe_case(run_line: &str) -> (TestCase, HashMap<String, PathBuf>) {
         let case = TestCase {
             name: "env.tir".to_string(),
             path: PathBuf::from("env.tir"),
@@ -955,7 +895,7 @@ mod tests {
             xfail: false,
             ignored: false,
         };
-        let tools = HashMap::from([("probe".to_string(), Tool::path("/usr/bin/printenv"))]);
+        let tools = HashMap::from([("probe".to_string(), PathBuf::from("/usr/bin/printenv"))]);
         (case, tools)
     }
 

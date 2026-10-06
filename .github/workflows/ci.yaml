@@ -47,16 +47,10 @@ jobs:
           save-if: "false"
       - run: cargo clippy --workspace --all-targets --no-deps -- -D warnings
 
-  # One build of the workspace, one test run over it, one artifact out of it.
-  # The `lit` FileCheck suites are ordinary integration tests, so nextest covers
-  # them too. Everything downstream runs the exact binary the tests ran.
-  #
-  # The only job here that wants 4 vCPU: compiling the workspace at opt-level 2
-  # is the longest thing in the pipeline and it scales with cores, whereas
-  # rustfmt is single-threaded and clippy is never on the critical path.
+  # Build and package once; test shards and memory checks reuse these tools.
   build:
     needs: formatting
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     env:
       CARGO_INCREMENTAL: "0"
       RUSTC_WRAPPER: sccache
@@ -76,9 +70,16 @@ jobs:
         with:
           shared-key: build
           save-if: "false"
-      - run: cargo nextest run --workspace --locked --cargo-profile ci
-      # Reuses everything nextest just compiled, so this only links two binaries.
-      - run: cargo build --locked --profile ci --bin fcc --bin xtask
+      - uses: actions/cache@v6
+        with:
+          path: target/test-suites/gcc
+          key: gcc-torture-9aab80ddc5b2fa0eef80008e718067ab45f42c50
+      - run: cargo run --locked --profile ci --package xtask -- test-pack --profile ci --torture --output target/ci-tests.tar.zst
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ci-tests
+          path: target/ci-tests.tar.zst
+          retention-days: 1
       - uses: actions/upload-artifact@v7
         with:
           name: fcc-package
@@ -87,42 +88,32 @@ jobs:
             target/ci/xtask
           retention-days: 1
 
-  changes:
-    runs-on: ubuntu-latest
-    outputs:
-      fcc: ${{ steps.filter.outputs.fcc }}
-    steps:
-      - uses: actions/checkout@v7
-      - id: filter
-        env:
-          BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
-        run: |
-          git fetch --depth 1 origin "$BASE"
-          if git diff --quiet "$BASE" HEAD -- fcc/ xtask/src/fcc_torture.rs; then
-            echo "fcc=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "fcc=true" >> "$GITHUB_OUTPUT"
-          fi
-
-  # Compiles the pinned GCC C torture corpus through codegen: an instruction
-  # selection failure is a test failure. The execute half of the suite is a
-  # nightly differential-fuzz corpus, not a gate.
-  torture:
-    needs: [build, changes]
-    if: needs.changes.outputs.fcc == 'true'
-    runs-on: ubuntu-latest
-    env:
-      # The packaged `xtask` was built elsewhere, so point it at this checkout
-      # instead of the path baked in at compile time.
-      CARGO_MANIFEST_DIR: ${{ github.workspace }}/xtask
+  test-shard:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/fcc-package
-      - uses: actions/cache@v6
+      - uses: taiki-e/install-action@nextest
+      - run: .github/scripts/install-spirv-tools.sh
+      - uses: actions/download-artifact@v8
         with:
-          path: target/test-suites/gcc
-          key: gcc-torture-9aab80ddc5b2fa0eef80008e718067ab45f42c50
-      - run: target/ci/xtask fcc-torture --fcc "$PWD/target/ci/fcc"
+          name: ci-tests
+          path: target
+      - run: target/ci/xtask test --archive target/ci-tests.tar.zst -- --partition hash:${{ matrix.shard }}/8
+
+  # One check for the ruleset to require in place of eight shard names.
+  tests:
+    if: always()
+    needs: test-shard
+    runs-on: ubuntu-24.04
+    steps:
+      - run: test "${{ needs.test-shard.result }}" = success
 
   # Tracks peak RSS of compiling the CoreMark corpus, the memory ratchet of the
   # "one IR" plan. Free runners give 4 vCPU / 16 GB, so the compile runs under a

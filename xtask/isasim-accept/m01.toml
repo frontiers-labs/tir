@@ -15,7 +15,7 @@ fixtures = [
 [[cases]]
 name = "existing-simulator-lit-suite"
 required = true
-command = ["cargo", "test", "-p", "tir-lit", "--test", "lit"]
+command = ["cargo", "xtask", "test", "--cargo-test", "--", "--test", "lit"]
 tool = "cargo"
 expected_cases = 82
 [cases.env]

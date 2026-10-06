@@ -1,3 +1,5 @@
+mod common;
+
 use std::fs;
 use std::process::{Command, Output};
 
@@ -111,7 +113,7 @@ reference = "fixture"
         ),
     )
     .unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
+    let output = Command::new(common::xtask())
         .args([
             "fp-check",
             "check",
@@ -225,7 +227,7 @@ fn report_rejects_a_wrong_result_bit() {
 }"#,
     )
     .unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
+    let output = Command::new(common::xtask())
         .args(["fp-check", "report", report.to_str().unwrap()])
         .output()
         .unwrap();
@@ -265,7 +267,7 @@ fn report_with_effects_observation(observation: &str) -> Output {
         ),
     )
     .unwrap();
-    Command::new(env!("CARGO_BIN_EXE_xtask"))
+    Command::new(common::xtask())
         .args(["fp-check", "report", report.to_str().unwrap()])
         .output()
         .unwrap()
@@ -534,7 +536,7 @@ reference = "fixture"
         ),
     )
     .unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
+    let output = Command::new(common::xtask())
         .args([
             "fp-check",
             "reference",
@@ -578,8 +580,7 @@ fn reference_detects_a_store_moved_before_a_trap() {
     let manifest = directory.path().join("cases.toml");
     let report = directory.path().join("reference.json");
     let original = fs::read_to_string(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../fcc/checks/Inputs/fp/reference/effects.c"),
+        common::manifest_dir().join("../fcc/checks/Inputs/fp/reference/effects.c"),
     )
     .unwrap();
     let moved = original.replace(
@@ -624,7 +625,7 @@ reference = "fixture"
         ),
     )
     .unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
+    let output = Command::new(common::xtask())
         .args([
             "fp-check",
             "reference",
@@ -694,8 +695,7 @@ fn check_accepts_the_fma_reference_bits_and_flags() {
 }"#,
     )
     .unwrap();
-    let manifest =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../fcc/checks/Inputs/fp/cases.toml");
+    let manifest = common::manifest_dir().join("../fcc/checks/Inputs/fp/cases.toml");
     let mut manifest_digest = Sha256::new();
     manifest_digest.input(fs::read(manifest).unwrap());
     let manifest_digest = format!("sha256:{:x}", manifest_digest.result());
@@ -708,8 +708,8 @@ fn check_accepts_the_fma_reference_bits_and_flags() {
     )
     .unwrap();
 
-    let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
+    let output = Command::new(common::xtask())
+        .current_dir(common::manifest_dir())
         .args([
             "fp-check",
             "check",
@@ -739,7 +739,7 @@ fn check_accepts_the_fma_reference_bits_and_flags() {
 fn reference_records_gcc_provenance() {
     let directory = tir_adt::TempDir::new().unwrap();
     let report = directory.path().join("reference.json");
-    let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
+    let output = Command::new(common::xtask())
         .args([
             "fp-check",
             "reference",
@@ -793,7 +793,7 @@ fn reference_records_gcc_provenance() {
 fn reference_rejects_a_missing_compiler() {
     let directory = tir_adt::TempDir::new().unwrap();
     let report = directory.path().join("reference.json");
-    let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
+    let output = Command::new(common::xtask())
         .args([
             "fp-check",
             "reference",
@@ -835,7 +835,7 @@ fn check_rejects_an_empty_case_selection() {
 }"#,
     )
     .unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
+    let output = Command::new(common::xtask())
         .args([
             "fp-check",
             "check",
@@ -859,7 +859,7 @@ fn check_rejects_an_empty_case_selection() {
 fn reference_case(case: &str) -> serde_json::Value {
     let directory = tir_adt::TempDir::new().unwrap();
     let report = directory.path().join("reference.json");
-    let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
+    let output = Command::new(common::xtask())
         .args([
             "fp-check",
             "reference",

@@ -1,3 +1,7 @@
 [suite]
 name = "fcc C compiler checks"
 glob = ["**/*.c", "!**/Inputs/**/*"]
+
+[suite.tools]
+fcc = "fcc"
+tir = "tir"
