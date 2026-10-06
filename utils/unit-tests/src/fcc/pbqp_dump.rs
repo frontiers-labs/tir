@@ -4,15 +4,15 @@ use std::sync::OnceLock;
 
 fn fcc_binary() -> &'static Path {
     static FCC: OnceLock<PathBuf> = OnceLock::new();
-    FCC.get_or_init(|| tir_lit::cargo_test_bin("fcc", "fcc"))
+    FCC.get_or_init(|| tir_lit::test_bin("fcc").expect("run cargo xtask test to prepare fcc"))
 }
 
 fn validator() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fcc/checks/Inputs/validate_pbqp_dumps.py")
+    crate::fixture_root().join("../../fcc/checks/Inputs/validate_pbqp_dumps.py")
 }
 
 fn source() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fcc/checks/Inputs/pbqp_dump.c")
+    crate::fixture_root().join("../../fcc/checks/Inputs/pbqp_dump.c")
 }
 
 fn run_validator(scenario: &str) {

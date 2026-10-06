@@ -1,3 +1,6 @@
 [suite]
 name = "TIR GPU dialect and backend checks"
 glob = ["**/*.ptx", "**/*.tir", "!**/Inputs/**/*"]
+
+[suite.tools]
+tir = "tir"

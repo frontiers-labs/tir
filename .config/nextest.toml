@@ -1,0 +1,4 @@
+[profile.default]
+archive.include = [
+    { path = "test-bundle", relative-to = "target", depth = "infinite", on-missing = "error" },
+]

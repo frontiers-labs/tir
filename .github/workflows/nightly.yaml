@@ -34,8 +34,16 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: build
-      - run: cargo nextest run --workspace --locked --cargo-profile ci
-      - run: cargo build --locked --profile ci --bin fcc --bin xtask
+      - uses: actions/cache@v6
+        with:
+          path: target/test-suites/gcc
+          key: gcc-torture-9aab80ddc5b2fa0eef80008e718067ab45f42c50
+      - run: cargo run --locked --profile ci --package xtask -- test-pack --profile ci --torture --output target/ci-tests.tar.zst
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ci-tests
+          path: target/ci-tests.tar.zst
+          retention-days: 1
       - uses: actions/upload-artifact@v7
         with:
           name: fcc-package
@@ -44,28 +52,45 @@ jobs:
             target/ci/xtask
           retention-days: 1
 
-  # The axiom proofs validate the target description rather than feed selection,
-  # so a compile does not run them and pre-commit cannot afford to. Nightly is
-  # where an unsound rewrite rule gets caught.
+  tests:
+    needs: build-and-package
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/fcc-package
+      - uses: taiki-e/install-action@nextest
+      - run: .github/scripts/install-spirv-tools.sh
+      - uses: actions/download-artifact@v8
+        with:
+          name: ci-tests
+          path: target
+      - run: target/ci/xtask test --archive target/ci-tests.tar.zst -- --partition hash:${{ matrix.shard }}/8
+
+  # Proofs use the same packaged binaries with runtime verification enabled.
   verify-axioms:
+    needs: build-and-package
     runs-on: ubuntu-latest
     timeout-minutes: 120
     env:
-      CARGO_INCREMENTAL: "0"
       TIR_VERIFY_AXIOMS: "1"
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: rui314/setup-mold@v1
+      - uses: ./.github/actions/fcc-package
       - uses: taiki-e/install-action@nextest
       - run: .github/scripts/install-spirv-tools.sh
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/download-artifact@v8
         with:
-          shared-key: build
-          # Restore only: `build-and-package` above is the writer of this key,
-          # and a second writer whose steps differ makes the cache churn.
-          save-if: "false"
-      - run: cargo nextest run --workspace --locked --cargo-profile ci
+          name: ci-tests
+          path: target
+      - run: target/ci/xtask test --archive target/ci-tests.tar.zst -- -E 'not binary(torture)' --partition hash:${{ matrix.shard }}/8
 
   lints:
     runs-on: ubuntu-latest
@@ -219,6 +244,7 @@ jobs:
     needs:
       [
         build-and-package,
+        tests,
         verify-axioms,
         lints,
         corpus,

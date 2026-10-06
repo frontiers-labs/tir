@@ -1,8 +1,6 @@
-use std::path::PathBuf;
-
 #[test]
 fn execute_accepts_an_opcode_wider_than_u64() {
-    let inputs = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/verify/inputs");
+    let inputs = crate::fixture_root().join("src/verify/inputs");
     let verifier = tir_verify::Verifier::load(
         &inputs.join("wide_opcode.ir"),
         &inputs.join("wide_opcode.toml"),

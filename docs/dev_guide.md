@@ -20,15 +20,18 @@ cargo build
 cargo build --release
 ```
 
-Tests can also be done with `cargo test` command, but a much better way is to
-use `nextest` tool. To install it, do `cargo install cargo-nextest`. Then run
-tests with the following command:
+Run workspace tests through xtask. It builds the tools required by the suite
+manifests and the test executables, then runs `cargo nextest`, or `cargo test`
+when nextest is not installed:
 
 ```sh
-cargo nextest r
+cargo xtask test
 ```
 
-`nextest` is much faster than the default test runner.
+`nextest` is much faster than the default test runner. To install it, do
+`cargo install cargo-nextest`. Arguments after `--` go to the test runner
+unchanged. Each local invocation builds changed tools before running checks. To
+include the pinned GCC torture corpus, use `cargo xtask test --profile ci --torture`.
 
 ### Working on the C frontend
 
@@ -69,23 +72,48 @@ globs its test files:
 [suite]
 name = "TIR core IR and pass checks"
 glob = ["**/*.tir", "!**/Inputs/**/*"]
+
+[suite.tools]
+tir = "tir"
 ```
 
 The globs are relative to the suite directory; a leading `!` excludes. Each
 selected check file shows up as its own test case named by its path relative to
-the workspace root (e.g. `core/checks/Restructure/while-loop.tir`). It runs as
-part of `cargo test`, or standalone:
+the workspace root (e.g. `core/checks/Restructure/while-loop.tir`). It runs
+through xtask:
 
 ```sh
-cargo test -p tir-lit --test lit
+cargo xtask test -- -E 'binary(lit)'
 ```
 
 Like LLVM LIT, the driver filters by environment variable: `LIT_FILTER` is a
 regex selecting the tests to run, `LIT_FILTER_OUT` excludes matching tests.
 
 ```sh
-LIT_FILTER='^fcc/checks/Codegen' cargo test -p tir-lit --test lit
+LIT_FILTER='^fcc/checks/Codegen' cargo xtask test -- -E 'binary(lit)'
 ```
+
+`[suite.tools]` maps commands in `RUN:` lines to Cargo binary names. Xtask
+discovers these requirements and supplies the freshly built tool directory.
+The LIT harness never builds tools itself. Running it directly without its
+required binaries reports the affected suites as ignored.
+
+CI packages a build once, then runs the tests in separate shards:
+
+```sh
+cargo xtask test-pack --profile ci --torture --output target/ci-tests.tar.zst
+xtask test --archive target/ci-tests.tar.zst -- --partition hash:1/8
+```
+
+The archive contains the test executables, CLI tools and fixtures. Archive
+execution extracts and remaps them without rebuilding. Packing and archive
+execution require nextest. All shards must use the
+same archive; their union must cover the unsharded test inventory exactly once.
+
+The required `build` check waits for packaging, all shards and the other CI
+jobs. It rejects required-job failures and a total elapsed time of ten minutes
+or more, measured from the first job start through the last worker completion.
+A re-run measures only the jobs it runs again.
 
 `filecheck` is a small, self-contained reimplementation of LLVM's FileCheck
 (built on `chumsky` and `ariadne`); it lives in `utils/filecheck` and is also

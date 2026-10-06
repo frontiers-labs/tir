@@ -1,3 +1,7 @@
 [suite]
 name = "TIR RISC-V backend checks"
 glob = ["**/*.S", "**/*.s", "**/*.tir", "!**/Inputs/**/*"]
+
+[suite.tools]
+isasim = "tir-isasim"
+tir = "tir"

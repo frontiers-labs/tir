@@ -5,10 +5,10 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::OnceLock;
 
-/// The `fcc` binary under test, built once per process.
+/// The `fcc` binary supplied by the test orchestrator.
 fn fcc_binary() -> &'static Path {
     static FCC: OnceLock<PathBuf> = OnceLock::new();
-    FCC.get_or_init(|| tir_lit::cargo_test_bin("fcc", "fcc"))
+    FCC.get_or_init(|| tir_lit::test_bin("fcc").expect("run cargo xtask test to prepare fcc"))
 }
 
 pub fn cc_available() -> bool {

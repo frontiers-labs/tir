@@ -43,9 +43,10 @@ the same amount of time (or less!) to do so.
 
 - `cargo clippy --workspace --all-targets --no-deps -- -D warnings` passes cleanly
 - `cargo build` compiles
-- `cargo nextest r` (or `cargo test` if nextest is unavailable) passes cleanly
+- `cargo xtask test` passes cleanly
 - `cargo fmt` has no additional format changes
-- `cargo xtask fcc-torture` finds no new failures (mostly for core IR changes or FCC)
+- `cargo xtask test --profile ci --torture` finds no new failures
+  when changing core IR or FCC
 - `cargo bench` is no worse than before change (unless explicitly approved regressions)
 
 ## Commit and PR rules

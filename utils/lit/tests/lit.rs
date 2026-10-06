@@ -7,22 +7,5 @@
 //! only matching tests, `LIT_FILTER_OUT` to exclude matching tests.
 
 fn main() {
-    tir_lit::workspace_harness_main(&[
-        ("xtask", tir_lit::Tool::cargo_test_bin("xtask", "xtask")),
-        ("tir", tir_lit::Tool::cargo_test_bin("tir-tools", "tir")),
-        ("fcc", tir_lit::Tool::cargo_test_bin("fcc", "fcc")),
-        ("tmdlc", tir_lit::Tool::cargo_test_bin("tmdl", "tmdlc")),
-        (
-            "isasim",
-            tir_lit::Tool::cargo_test_bin("tir-isasim", "tir-isasim"),
-        ),
-        (
-            "tir-smt",
-            tir_lit::Tool::cargo_test_bin("tir-symbolic", "tir-smt"),
-        ),
-        (
-            "tir-pdl",
-            tir_lit::Tool::cargo_test_bin("tir-pdl", "tir-pdl"),
-        ),
-    ]);
+    tir_lit::workspace_harness_main();
 }

@@ -1,13 +1,15 @@
 mod fcc_fuzz;
-mod fcc_torture;
 mod fp_check;
 mod gate;
 mod gate_bench;
 mod isasim_accept;
-pub mod utils;
+mod test;
 mod verify_smt;
 
 use std::path::PathBuf;
+
+use xtask::fcc_torture;
+pub use xtask::utils;
 
 use clap::Parser;
 use tmdl::{Action, Compiler, OutputKind};
@@ -17,15 +19,15 @@ use crate::utils::project_root;
 
 #[derive(Parser)]
 enum Task {
+    /// Build fresh tools and run the workspace tests with nextest or cargo test.
+    Test(test::Options),
+    /// Package tools, tests and fixtures for test workers.
+    TestPack(test::PackOptions),
     /// Record and compare floating-point reference behavior.
     #[command(subcommand)]
     FpCheck(fp_check::Task),
     /// Build the TIR project
     Build,
-    /// Build the project and run the check tests
-    Check,
-    /// Run the check tests without building first
-    CheckOnly,
     /// Build the project documentation
     Docs,
     /// Run formal ISA verification against the Sail model
@@ -45,7 +47,7 @@ enum Task {
     FccTorture {
         #[arg(long)]
         bless: bool,
-        #[arg(long)]
+        #[arg(long, requires = "bless")]
         fcc: Option<PathBuf>,
     },
     /// The pinned gate: compile measurements against the baseline at -j1, then every
@@ -68,19 +70,20 @@ enum Task {
 fn main() -> anyhow::Result<()> {
     let sh = Shell::new()?;
     match Task::parse() {
+        Task::Test(options) => test::run(&project_root(), options),
+        Task::TestPack(options) => test::pack(&project_root(), options),
         Task::FpCheck(task) => fp_check::run(&project_root(), task),
         Task::Build => build(&sh),
-        Task::Check => {
-            build(&sh)?;
-            check(&sh)
-        }
-        Task::CheckOnly => check(&sh),
         Task::Docs => build_docs(&sh),
         Task::Verify { isa, args } => verify_smt::verify_smt(&sh, &isa, args.into_iter()),
         Task::IsaTestSuite => isa_test_suite(&sh),
         Task::IsasimAccept(options) => isasim_accept::run(&project_root(), options),
         Task::FccTorture { bless, fcc } => {
-            fcc_torture::run(&sh, &project_root(), bless, fcc.as_deref())
+            if bless {
+                fcc_torture::bless(&sh, &project_root(), fcc.as_deref())
+            } else {
+                test::torture(&project_root())
+            }
         }
         Task::Gate(options) => gate::run(&sh, &project_root(), options),
         Task::FccFuzz(options) => fcc_fuzz::run(&sh, &project_root(), &options),
@@ -95,18 +98,6 @@ fn build(sh: &Shell) -> anyhow::Result<()> {
     sh.change_dir(root);
 
     cmd!(sh, "cargo build").run()?;
-
-    Ok(())
-}
-
-fn check(sh: &Shell) -> anyhow::Result<()> {
-    let root = project_root();
-    sh.change_dir(root);
-
-    // FileCheck-style tests now run as ordinary integration tests (the `lit`
-    // harnesses in each crate's `tests/` directory), so running the test suite
-    // exercises them alongside the unit tests.
-    cmd!(sh, "cargo test --workspace").run()?;
 
     Ok(())
 }

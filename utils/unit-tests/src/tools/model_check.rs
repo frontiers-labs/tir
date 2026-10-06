@@ -21,7 +21,7 @@ const CHECKER: &str = "\
 ";
 
 fn tir_bin() -> PathBuf {
-    tir_lit::cargo_test_bin("tir-tools", "tir")
+    tir_lit::test_bin("tir").expect("run cargo xtask test to prepare tir")
 }
 
 fn working_dir(name: &str) -> PathBuf {
