@@ -13,39 +13,40 @@ use std::collections::{HashMap, HashSet};
 
 use tir::{OpId, RegionId, sem::SymKind};
 use tir_adt::APInt;
-use tir_relational::ClassId as Id;
+use tir_relational::Ref;
 
 use super::builder::ControlSlot;
 use super::cover::{ChildDemand, PbqpIselAlternative, PbqpIselMatch};
 
 /// Whether a base member's value sits in a register an enclosing region
 /// produced.
-pub(crate) type HasRegister<'a> = &'a dyn Fn(Id, RegionId) -> bool;
+pub(crate) type HasRegister<'a> = &'a dyn Fn(Ref, RegionId) -> bool;
 
 /// The registers holding a class without an instance of its own region.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Availability {
     /// A port, a surviving operation or an entry input holds it.
     pub(crate) always: bool,
-    /// Enclosing regions that define it ahead of this one. Each supplies it
-    /// only where that region's assignment produces the register.
-    pub(crate) ancestors: Vec<RegionId>,
+    /// The base members enclosing regions define ahead of this one, with the
+    /// region defining each. Each supplies the value only where that region's
+    /// assignment produces that member's register.
+    pub(crate) ancestors: Vec<(Ref, RegionId)>,
 }
 
 /// What selection reads off one class of a region.
 #[derive(Clone, Debug)]
 pub(crate) struct ClassFacts {
     /// The base classes the scope merged into this one.
-    pub(crate) members: Vec<Id>,
+    pub(crate) members: Vec<Ref>,
     /// The base classes whose values may name a register holding the class.
-    pub(crate) binding_members: Vec<Id>,
+    pub(crate) binding_members: Vec<Ref>,
     /// The constant the class is proven to be.
     pub(crate) int: Option<APInt>,
     pub(crate) pure: bool,
     pub(crate) width: Option<u32>,
     /// The class whose register a low-bit view reads; the class itself when it
     /// is no view.
-    pub(crate) source: Id,
+    pub(crate) source: Ref,
     /// The semantic kind a missing-rule diagnostic names.
     pub(crate) kind: Option<SymKind>,
     pub(crate) has_values: bool,
@@ -61,11 +62,11 @@ pub(crate) struct ClassFacts {
 impl ClassFacts {
     pub(crate) fn has_register(&self, has_register: HasRegister) -> bool {
         self.availability.always
-            || self.availability.ancestors.iter().any(|&region| {
-                self.members
-                    .iter()
-                    .any(|&member| has_register(member, region))
-            })
+            || self
+                .availability
+                .ancestors
+                .iter()
+                .any(|&(member, region)| has_register(member, region))
     }
 }
 
@@ -74,14 +75,14 @@ impl ClassFacts {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Naming {
     pub(crate) always: bool,
-    pub(crate) registers: Vec<(Id, RegionId)>,
+    pub(crate) registers: Vec<(Ref, RegionId)>,
 }
 
 /// One operand of a fused branch.
 #[derive(Clone, Debug)]
 pub(crate) struct GuardOperand {
     pub(crate) symbol: u32,
-    pub(crate) class: Id,
+    pub(crate) class: Ref,
     /// The branch reads the operand as a register.
     pub(crate) register: bool,
     pub(crate) naming: Naming,
@@ -104,7 +105,7 @@ pub(crate) struct ControlCandidates {
     pub(crate) op: OpId,
     pub(crate) slot: ControlSlot,
     /// The class whose register a branch-if-nonzero reads.
-    pub(crate) condition: Id,
+    pub(crate) condition: Ref,
     /// The outcome the region's facts already prove.
     pub(crate) decided: Option<bool>,
     /// Fused branch instances, cheapest and most specific first.
@@ -112,7 +113,7 @@ pub(crate) struct ControlCandidates {
     /// Fused branches over the complement, in the same order.
     pub(crate) inverses: Vec<GuardCandidate>,
     /// Classes a fused branch leaves without a value instance.
-    pub(crate) waives: Vec<Id>,
+    pub(crate) waives: Vec<Ref>,
     /// Where a fused branch reads its operands.
     pub(crate) anchor: Option<OpId>,
     /// Where a branch-if-nonzero reads the condition.
@@ -137,18 +138,18 @@ pub(crate) struct RegionProblem {
     /// The region's operations in the order they were lowered in.
     pub(crate) order: Vec<OpId>,
     /// The class each rooted operation of the region computes, in that order.
-    pub(crate) op_class: Vec<(OpId, Id)>,
+    pub(crate) op_class: Vec<(OpId, Ref)>,
     /// The earliest operation of the region rooting each class.
-    pub(crate) source_ops: HashMap<Id, OpId>,
+    pub(crate) source_ops: HashMap<Ref, OpId>,
     /// The value sites the assignment decides, ascending.
-    pub(crate) classes: Vec<Id>,
-    pub(crate) facts: HashMap<Id, ClassFacts>,
+    pub(crate) classes: Vec<Ref>,
+    pub(crate) facts: HashMap<Ref, ClassFacts>,
     /// The implementation instances.
     pub(crate) matches: Vec<PbqpIselMatch>,
     pub(crate) controls: Vec<ControlCandidates>,
     /// The base member naming the register an effect instance at a class
     /// leaves for the regions this one encloses.
-    pub(crate) register_names: HashMap<Id, Id>,
+    pub(crate) register_names: HashMap<Ref, Ref>,
     /// Operations whose effect is the identity: readers take the state they
     /// observed.
     pub(crate) identities: Vec<OpId>,
@@ -160,37 +161,37 @@ pub(crate) struct RegionProblem {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct RegionAssignment {
     /// The instance producing each class it roots.
-    pub(crate) tiles: HashMap<Id, usize>,
+    pub(crate) tiles: HashMap<Ref, usize>,
     pub(crate) controls: Vec<ControlChoice>,
 }
 
 /// What a region's control choices demand of its classes.
 pub(crate) struct Policy {
     /// Classes a selected branch reads as registers.
-    pub(crate) overlay: HashSet<Id>,
-    pub(crate) demanded: HashSet<Id>,
-    pub(crate) available: HashSet<Id>,
+    pub(crate) overlay: HashSet<Ref>,
+    pub(crate) demanded: HashSet<Ref>,
+    pub(crate) available: HashSet<Ref>,
     /// The low-bit views of each demanded source no operation computes.
-    pub(crate) views: HashMap<Id, Vec<Id>>,
+    pub(crate) views: HashMap<Ref, Vec<Ref>>,
 }
 
 impl Policy {
-    pub(crate) fn demanded(&self, class: Id) -> bool {
+    pub(crate) fn demanded(&self, class: Ref) -> bool {
         self.demanded.contains(&class)
     }
 
-    pub(crate) fn available(&self, class: Id) -> bool {
+    pub(crate) fn available(&self, class: Ref) -> bool {
         self.available.contains(&class)
     }
 }
 
 impl RegionProblem {
-    pub(crate) fn facts(&self, class: Id) -> &ClassFacts {
+    pub(crate) fn facts(&self, class: Ref) -> &ClassFacts {
         &self.facts[&class]
     }
 
     /// The earliest operation of the region rooting `class`.
-    pub(crate) fn source_op(&self, class: Id) -> Option<OpId> {
+    pub(crate) fn source_op(&self, class: Ref) -> Option<OpId> {
         self.source_ops.get(&class).copied()
     }
 
@@ -199,7 +200,7 @@ impl RegionProblem {
     pub(crate) fn guard_demands<'a>(
         &'a self,
         guard: &'a GuardCandidate,
-    ) -> impl Iterator<Item = Id> + 'a {
+    ) -> impl Iterator<Item = Ref> + 'a {
         guard
             .captures
             .iter()
@@ -211,7 +212,7 @@ impl RegionProblem {
     pub(crate) fn registers<'a>(
         &'a self,
         assignment: &'a RegionAssignment,
-    ) -> impl Iterator<Item = (Id, RegionId)> + 'a {
+    ) -> impl Iterator<Item = (Ref, RegionId)> + 'a {
         assignment
             .tiles
             .keys()
@@ -219,7 +220,7 @@ impl RegionProblem {
             .map(|&member| (member, self.region))
     }
 
-    pub(crate) fn materialized(&self, policy: &Policy, class: Id) -> bool {
+    pub(crate) fn materialized(&self, policy: &Policy, class: Ref) -> bool {
         policy.overlay.contains(&class) || self.facts(class).register_demand
     }
 
@@ -241,7 +242,7 @@ impl RegionProblem {
                 }
             }
         }
-        let demanded: HashSet<Id> = self
+        let demanded: HashSet<Ref> = self
             .classes
             .iter()
             .copied()
@@ -265,7 +266,7 @@ impl RegionProblem {
                     || (source != class && demanded.contains(&source))
             })
             .collect();
-        let mut views: HashMap<Id, Vec<Id>> = HashMap::new();
+        let mut views: HashMap<Ref, Vec<Ref>> = HashMap::new();
         for &class in &self.classes {
             let source = self.facts(class).source;
             if source != class && demanded.contains(&source) && !self.facts(source).has_values {
@@ -286,7 +287,7 @@ impl RegionProblem {
         &self,
         assignment: &RegionAssignment,
         policy: &Policy,
-    ) -> Result<HashMap<Id, PbqpIselAlternative>, String> {
+    ) -> Result<HashMap<Ref, PbqpIselAlternative>, String> {
         let mut states = HashMap::new();
         for &class in &self.classes {
             let state = if let Some(&match_id) = assignment.tiles.get(&class) {
@@ -372,7 +373,7 @@ impl RegionProblem {
 
         // One instance performs each effect, and a deferred source leaves every
         // view to an instance of its own.
-        let mut owner: HashMap<Id, usize> = HashMap::new();
+        let mut owner: HashMap<Ref, usize> = HashMap::new();
         for &match_id in assignment.tiles.values() {
             for &effect in &self.matches[match_id].effects {
                 if owner.insert(effect, match_id).is_some_and(|other| {
@@ -408,8 +409,8 @@ impl RegionProblem {
         has_register: HasRegister,
     ) {
         let policy = self.policy(&assignment.controls, has_register);
-        let mut reached: HashSet<Id> = HashSet::new();
-        let mut pending: Vec<Id> = self
+        let mut reached: HashSet<Ref> = HashSet::new();
+        let mut pending: Vec<Ref> = self
             .classes
             .iter()
             .copied()

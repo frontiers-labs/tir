@@ -69,6 +69,19 @@ pub trait Commutative {
     }
 }
 
+/// An operation computing `lhs + rhs` modulo 2^W, W the result's width: a
+/// constant added to either operand moves to the result, and a zero operand
+/// returns the other wherever that one has the result's type. A definition the
+/// e-graph builds value identity from (`docs/design/instcombine.md`), declared
+/// rather than proved, and read off the operation's name alone.
+pub trait Additive {}
+
+/// An operation computing `lhs - rhs` modulo 2^W, W the result's width: a
+/// constant added to `lhs` moves to the result, one added to `rhs` moves to it
+/// negated, and a zero `rhs` returns `lhs` wherever `lhs` has the result's
+/// type. Read the way [`Additive`] is.
+pub trait Subtractive {}
+
 /// An arithmetic operation over integer values.
 pub trait IntegerArithmetic {}
 

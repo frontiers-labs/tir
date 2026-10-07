@@ -117,7 +117,7 @@ fn roots_canonicalize_after_saturation() {
     let ba = add(&mut g, b, a);
 
     g.saturate_rules(&[comm_rule()], &NoExterns, 30, 100_000);
-    assert_eq!(g.find(ab), g.find(ba));
+    assert_eq!(g.root(ab), g.root(ba));
 }
 
 /// A scope opened over a saturated graph starts its own saturation from the log
@@ -141,10 +141,10 @@ fn a_scope_over_a_fixpoint_starts_from_its_own_log() {
 
     g.push_context();
     let c = sym(&mut g, 2);
-    g.union(ab, c);
+    g.union(ab, c).unwrap();
     g.rebuild();
 
-    assert_eq!(g.take_changed(), Some(vec![g.find(ab)]));
+    assert_eq!(g.take_changed(), Some(vec![g.root(ab)]));
     g.pop_context();
 }
 
@@ -165,11 +165,11 @@ fn picks_cheaper_equivalent_form() {
     let a = sym(&mut g, 0);
     let inner = neg(&mut g, a);
     let nn = neg(&mut g, inner);
-    g.union(nn, a);
+    g.union(nn, a).unwrap();
     g.rebuild();
 
-    let extraction = g.extract_best(|_, node| unit(node));
-    assert!(matches!(extraction.node(g.find(a)).unwrap(), Math::Sym(0)));
+    let extraction = g.extract_best(|_, node, _, _| unit(node));
+    assert!(matches!(extraction.node(g.root(a)).unwrap(), Math::Sym(0)));
 }
 
 #[test]
@@ -177,9 +177,9 @@ fn sums_children_costs() {
     let mut g = Engine::new();
     let a = sym(&mut g, 0);
     let na = neg(&mut g, a);
-    let extraction = g.extract_best(|_, node| unit(node));
+    let extraction = g.extract_best(|_, node, _, _| unit(node));
     // neg(a) costs 1 (op) + 0 (leaf) = 1; the chosen node is the neg.
-    assert!(matches!(extraction.node(g.find(na)).unwrap(), Math::Neg(_)));
+    assert!(matches!(extraction.node(g.root(na)).unwrap(), Math::Neg(_)));
 }
 
 #[test]
@@ -191,11 +191,11 @@ fn ties_keep_the_first_node_to_reach_the_minimum() {
     let b = sym(&mut g, 1);
     let ab = add(&mut g, a, b);
     let ba = add(&mut g, b, a);
-    g.union(ab, ba);
+    g.union(ab, ba).unwrap();
     g.rebuild();
 
-    let extraction = g.extract_best(|_, node| unit(node));
-    let root = g.find(ab);
+    let extraction = g.extract_best(|_, node, _, _| unit(node));
+    let root = g.root(ab);
     let chosen = extraction.node(root).unwrap();
     assert_eq!(chosen.children(), g.nodes(root).next().unwrap().children());
 }
@@ -207,10 +207,10 @@ fn terminates_on_a_cycle() {
     let mut g = Engine::new();
     let a = sym(&mut g, 0);
     let na = neg(&mut g, a);
-    g.union(a, na);
+    g.union(a, na).unwrap();
     g.rebuild();
-    let extraction = g.extract_best(|_, node| unit(node));
-    assert!(extraction.node(g.find(a)).is_some());
+    let extraction = g.extract_best(|_, node, _, _| unit(node));
+    assert!(extraction.node(g.root(a)).is_some());
 }
 
 // ── Semi-naive saturation ──────────────────────────────────────────────────
@@ -348,7 +348,7 @@ fn extracted_cost(
     id: Id,
     seen: &mut Vec<Id>,
 ) -> Option<u64> {
-    let id = g.find(id);
+    let id = g.root(id);
     if seen.contains(&id) {
         return None;
     }
@@ -419,8 +419,8 @@ proptest::proptest! {
                 );
             }
         }
-        let naive_extraction = naive.extract_best(|_, node| unit(node));
-        let semi_extraction = semi.extract_best(|_, node| unit(node));
+        let naive_extraction = naive.extract_best(|_, node, _, _| unit(node));
+        let semi_extraction = semi.extract_best(|_, node, _, _| unit(node));
         for (i, &root) in naive_roots.iter().enumerate() {
             proptest::prop_assert_eq!(
                 extracted_cost(&naive, &naive_extraction, root, &mut Vec::new()),
@@ -497,7 +497,7 @@ fn a_sideways_rule_still_fires_on_a_row_a_later_round_minted() {
 
     g.saturate_rules(&[mint, relate], &tir_relational::NoExterns, 10, 1000);
 
-    let negated = g.add(Math::Neg([a]));
+    let negated = g.add(Math::Neg([a])).class;
     assert!(g.connected(sum, negated));
 }
 
@@ -522,26 +522,26 @@ proptest::proptest! {
         }
         g.rebuild();
         g.saturate_rules(&rules, &NoExterns, 30, 10_000);
-        let base = g.extract_best(|_, node| unit(node));
+        let base = g.extract_best(|_, node, _, _| unit(node));
 
         let classes: Vec<Id> = g.class_ids().collect();
         g.push_context();
         for &(a, b) in &outer {
-            g.union(classes[a % classes.len()], classes[b % classes.len()]);
+            g.union(classes[a % classes.len()], classes[b % classes.len()]).unwrap();
         }
         g.rebuild();
         g.saturate_rules(&rules, &NoExterns, 30, 10_000);
-        let outer_extraction = base.refresh(&g, &g.innermost_dirty(), |_, node| unit(node));
+        let outer_extraction = base.refresh(&g, &g.innermost_dirty(), |_, node, _, _| unit(node));
 
         g.push_context();
         for &(a, b) in &inner {
-            g.union(classes[a % classes.len()], classes[b % classes.len()]);
+            g.union(classes[a % classes.len()], classes[b % classes.len()]).unwrap();
         }
         g.rebuild();
         g.saturate_rules(&rules, &NoExterns, 30, 10_000);
-        let refreshed = outer_extraction.refresh(&g, &g.innermost_dirty(), |_, node| unit(node));
+        let refreshed = outer_extraction.refresh(&g, &g.innermost_dirty(), |_, node, _, _| unit(node));
 
-        let full = g.extract_best(|_, node| unit(node));
+        let full = g.extract_best(|_, node, _, _| unit(node));
         for id in g.class_ids() {
             proptest::prop_assert_eq!(
                 refreshed.node(id).map(|node| format!("{node:?}")),

@@ -1,0 +1,42 @@
+// RUN: tir opt --pass func.func(restructure-nodes,instcombine-nodes) --verify %s | filecheck %s
+
+// An address is a base and a constant offset, however many `ptradd`s spell
+// it. A read at the offset a write landed on takes the written value; a read
+// two bytes off it, overlapping but not the same extent, keeps reading memory.
+
+#data_layout = {types = {i32 = {abi = 32, size = 32}, i64 = {abi = 64, size = 64}, p = {abi = 64, size = 64}}}
+
+module {data_layout = #data_layout} {
+  %fn_same = func.func @same(%p: !ptr.p<!i32>, %a: !i32) -> !i32 {
+    %two = constant {value = 2} : !i64
+    %four = constant {value = 4} : !i64
+    %q = ptr.ptradd %p, %two : !ptr.p<!i32>
+    %r = ptr.ptradd %q, %two : !ptr.p<!i32>
+    %s = ptr.ptradd %p, %four : !ptr.p<!i32>
+    %entry = state.entry_state : !state<memory>
+    %s1 = ptr.store %a, %r state(%entry)
+    %x, %sx = ptr.load %s state(%s1) : !i32
+    func.return %x state(%sx)
+  }
+  %fn_apart = func.func @apart(%p: !ptr.p<!i32>, %a: !i32) -> !i32 {
+    %two = constant {value = 2} : !i64
+    %four = constant {value = 4} : !i64
+    %q = ptr.ptradd %p, %two : !ptr.p<!i32>
+    %r = ptr.ptradd %q, %two : !ptr.p<!i32>
+    %entry = state.entry_state : !state<memory>
+    %s1 = ptr.store %a, %r state(%entry)
+    %x, %sx = ptr.load %q state(%s1) : !i32
+    func.return %x state(%sx)
+  }
+  module_end
+}
+
+// CHECK-LABEL: func.func @same(%{{[0-9]+}}: !ptr.p<!i32>, %[[A:[0-9]+]]: !i32)
+// CHECK-NOT: ptr.load
+// CHECK: %[[S1:[0-9]+]] = ptr.store %[[A]]
+// CHECK-NEXT: -> %[[A]], %[[S1]]
+
+// CHECK-LABEL: func.func @apart(%{{[0-9]+}}: !ptr.p<!i32>, %[[A:[0-9]+]]: !i32)
+// CHECK: %[[S1:[0-9]+]] = ptr.store %[[A]]
+// CHECK-NEXT: %[[X:[0-9]+]], %[[SX:[0-9]+]] = ptr.load %{{[0-9]+}} state(%[[S1]]) : !i32
+// CHECK-NEXT: -> %[[X]], %[[SX]]

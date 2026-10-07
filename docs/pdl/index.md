@@ -5,14 +5,14 @@ to recognize, what expression can replace it, and which conditions justify
 that replacement. Shared compiler engines find matches and apply the rules.
 The author does not need to write a graph traversal for each identity.
 
-For example, adding zero leaves an integer unchanged:
+For example, multiplying by one leaves an integer unchanged:
 
 ```pdl
-rule add-zero: builtin.addi(x: int<W>, 0) => x;
+rule mul-one: builtin.muli(x: int<W>, 1) => x;
 ```
 
-`builtin.addi` names the IR operation. `x` names its first operand, and
-`int<W>` binds that operand's integer width to `W`. The literal `0` matches
+`builtin.muli` names the IR operation. `x` names its first operand, and
+`int<W>` binds that operand's integer width to `W`. The literal `1` matches
 the other operand. The right-hand `x` refers to the same value matched on
 the left.
 
@@ -73,12 +73,12 @@ rewrite will construct new IR operations.
 Semantic patterns use `#operator` names:
 
 ```pdl
-rule semantic-add-zero: #add(x: int<W>, 0) : int<W> => x;
+rule semantic-mul-one: #mul(x: int<W>, 1) : int<W> => x;
 ```
 
-`#add` describes addition in TIR's shared semantic vocabulary. Instruction
+`#mul` describes multiplication in TIR's shared semantic vocabulary. Instruction
 selection uses this vocabulary to relate program computations to the behavior
-of machine instructions. A semantic addition can arise from different IR
+of machine instructions. A semantic multiplication can arise from different IR
 operations whose behavior is expressed that way.
 
 The two spellings therefore carry different information. Concrete operation
@@ -162,8 +162,8 @@ The compiled pass uses those descriptions at runtime without reparsing PDL.
 
 Semantic consumers interpret the same checked syntax through their own
 operation and proof models. They can support constructs that the IR-emitting
-path does not, such as nested semantic replacements and constant
-materialization. Conversely, the scalar expressions accepted by one consumer
+path does not, such as nested semantic replacements and references to the
+matched class. Conversely, the scalar expressions accepted by one consumer
 need not be accepted by another.
 
 This is why a usable rule needs more than valid syntax. Its operations must

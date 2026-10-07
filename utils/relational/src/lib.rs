@@ -1,14 +1,18 @@
 //! The relational engine behind TIR's e-graph, in two layers.
 //!
-//! [`store`] is the generic one: tables of `u32` cells whose key columns
-//! determine a value column, with the whole-column loops done by
-//! [`tir_adt::simd`]. It holds any graph and knows nothing about classes.
+//! [`store`] is the generic one: tables of `u32` cells, each optionally
+//! weighted, whose key columns determine a value column, with the
+//! whole-column loops done by [`tir_adt::simd`]. It holds any graph and knows
+//! nothing about classes.
 //!
-//! [`Engine`] is the e-graph on top of it. Each label is a table from child
-//! classes to the class the node belongs to, so hash-consing is a key lookup,
-//! congruence is the table's functional dependency, and a rewrite's left-hand
-//! side is a join. Rewrites are conjunctive queries; saturation is the least
-//! fixpoint of the rule set.
+//! [`Engine`] is the e-graph on top of it. A value is a [`Ref`]: a class plus
+//! a constant offset, kept by a union-find that places each class at an offset
+//! from its representative. Each label is a table from operands to the
+//! reference the node is, with the offsets the label's laws move to the result
+//! factored out of the key, so hash-consing is a key lookup, congruence is the
+//! table's functional dependency, and a rewrite's left-hand side is a join.
+//! Rewrites are conjunctive queries; saturation is the least fixpoint of the
+//! rule set.
 
 mod column;
 mod csr;
@@ -27,9 +31,9 @@ mod testing;
 
 pub use column::Fact;
 pub use csr::Csr;
-pub use engine::{ClassRef, Engine, Rows, Stats};
+pub use engine::{ClassRef, Contradiction, Engine, Rows, Stats};
 pub use extract::Extraction;
-pub use label::Label;
+pub use label::{Carrier, Label};
 pub use query::{
     Atom, Cmp, ColumnId, Expr, Externs, Field, Guard, Match, Nested, NoExterns, Plan, Query,
     Scalar, Source, Step, Var,
@@ -52,7 +56,7 @@ pub fn trace_enabled() -> bool {
     *ON.get_or_init(|| std::env::var_os("TIR_SAT_TRACE").is_some_and(|value| value != "0"))
 }
 
-/// An e-class. Only [`UnionFind::find`] turns one into its canonical form.
+/// An e-class. Only [`Engine::root`] turns one into its canonical form.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ClassId(pub u32);
 
@@ -63,6 +67,39 @@ impl ClassId {
 
     pub fn from_raw(raw: u32) -> Self {
         ClassId(raw)
+    }
+}
+
+/// A value: a class plus a constant, read as "the class's value plus
+/// `offset`" modulo 2^W, W being the width of the class's carrier. A class
+/// whose label declares no carrier is only ever referred to at offset zero.
+/// Only [`Engine::find`] turns one into its canonical form.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Ref {
+    pub class: ClassId,
+    pub offset: u64,
+}
+
+/// Most references sit at offset zero, and those hash as their class alone:
+/// a hashed set of references costs what one of classes does.
+impl std::hash::Hash for Ref {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.class.hash(state);
+        if self.offset != 0 {
+            self.offset.hash(state);
+        }
+    }
+}
+
+impl Ref {
+    pub fn new(class: ClassId, offset: u64) -> Self {
+        Self { class, offset }
+    }
+}
+
+impl From<ClassId> for Ref {
+    fn from(class: ClassId) -> Self {
+        Self { class, offset: 0 }
     }
 }
 

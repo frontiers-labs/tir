@@ -327,13 +327,6 @@ where
             ty: None,
             span: extra.span(),
         });
-        let keep = just(Token::Keep)
-            .ignore_then(term.clone())
-            .map_with(|inner, extra| Term {
-                kind: TermKind::Keep(Box::new(inner)),
-                ty: None,
-                span: extra.span(),
-            });
         // A bare name is a binder; anything else an expression can be is an
         // integer over widths and literals.
         let value = operand_expression().try_map(|expr, span| match expr.kind {
@@ -357,7 +350,7 @@ where
                 span: extra.span(),
             });
 
-        choice((operation, constant, root, keep, string, value, binder)).labelled("term")
+        choice((operation, constant, root, string, value, binder)).labelled("term")
     })
     .boxed()
 }
@@ -650,7 +643,6 @@ where
         Token::Proof => "proof".to_string(),
         Token::Phase => "phase".to_string(),
         Token::Root => "root".to_string(),
-        Token::Keep => "keep".to_string(),
         Token::Const => "const".to_string(),
         Token::Int => "int".to_string(),
         Token::Float => "float".to_string(),

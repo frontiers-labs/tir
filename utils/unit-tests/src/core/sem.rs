@@ -7,7 +7,7 @@ use tir::sem::{
 use tir::{attributes::NamedAttribute, Context, TypeId};
 use tir_adt::APInt;
 use tir_relational::{Atom, ClassId, NoExterns, Plan, Query};
-use tir_relational::{ClassId as Id, Engine};
+use tir_relational::{ClassId as Id, Engine, Ref};
 
 /// A one-level query over `template`, binding its two operands.
 fn addi_plan(template: SemNode) -> Plan<SemNode> {
@@ -34,17 +34,21 @@ fn ty(n: u32) -> TypeId {
 fn op(name: &'static str, ty: TypeId, attrs: Vec<NamedAttribute>, args: Vec<Id>) -> SemNode {
     SemNode {
         kind: Kind::Ir(IrOp {
-            dialect: "builtin",
-            name,
-            attrs,
-            commutative: false,
             cost: 1,
+            ..IrOp::template("builtin", name, attrs)
         }),
         payload: None,
         ty: Some(ty),
         children: args,
         prov: Prov::Introduced(0),
+        carrier: None,
     }
+}
+
+/// `node` over the values `args`, its children standing in for them.
+fn over(g: &mut Engine<SemNode>, mut node: SemNode, args: &[Ref]) -> Ref {
+    node.children = args.iter().map(|arg| arg.class).collect();
+    g.insert(node, args)
 }
 
 fn op_pattern(name: &'static str, args: Vec<Id>) -> SemNode {
@@ -80,9 +84,9 @@ fn ops_differing_in_attributes_stay_distinct() {
         op("cmpi", ty(1), attrs, args)
     };
     use tir::attributes::Predicate;
-    let slt = g.add(cmpi(Predicate::Slt, vec![x]));
-    let sgt = g.add(cmpi(Predicate::Sgt, vec![x]));
-    let slt2 = g.add(cmpi(Predicate::Slt, vec![x]));
+    let slt = over(&mut g, cmpi(Predicate::Slt, Vec::new()), &[x]);
+    let sgt = over(&mut g, cmpi(Predicate::Sgt, Vec::new()), &[x]);
+    let slt2 = over(&mut g, cmpi(Predicate::Slt, Vec::new()), &[x]);
     assert_ne!(g.find(slt), g.find(sgt));
     assert_eq!(g.find(slt), g.find(slt2));
 }
@@ -94,8 +98,8 @@ fn wildcard_search_groups_result_types_without_merging_them() {
     let mut g: Engine<SemNode> = Engine::new();
     let x = g.add(konst(32, 0));
     let addi = |t: TypeId, args: Vec<Id>| op("addi", t, vec![], args);
-    let a32 = g.add(addi(ty(32), vec![x, x]));
-    let a64 = g.add(addi(ty(64), vec![x, x]));
+    let a32 = over(&mut g, addi(ty(32), Vec::new()), &[x, x]);
+    let a64 = over(&mut g, addi(ty(64), Vec::new()), &[x, x]);
 
     assert_ne!(g.find(a32), g.find(a64));
 
@@ -104,9 +108,9 @@ fn wildcard_search_groups_result_types_without_merging_them() {
         vec![ClassId::from_raw(1), ClassId::from_raw(2)],
     ));
     let found = plan.search(&g, plan.roots(&g), &|_, _| true, false, &NoExterns);
-    let roots: std::collections::HashSet<Id> = found.iter().map(|m| g.find(m.root)).collect();
+    let roots: std::collections::HashSet<Id> = found.iter().map(|m| g.root(m.root)).collect();
     assert_eq!(roots.len(), 2);
-    assert!(roots.contains(&g.find(a32)) && roots.contains(&g.find(a64)));
+    assert!(roots.contains(&a32.class) && roots.contains(&a64.class));
 
     // Searching is read-only: classes remain distinct.
     assert_ne!(g.find(a32), g.find(a64));
@@ -117,12 +121,12 @@ fn graph_operation_controls_commutative_matching() {
     let mut g: Engine<SemNode> = Engine::new();
     let zero = g.add(konst(32, 0));
     let x = g.add(konst(32, 1));
-    let mut addi = op("addi", ty(32), vec![], vec![zero, x]);
+    let mut addi = op("addi", ty(32), vec![], Vec::new());
     let Kind::Ir(ir) = &mut addi.kind else {
         unreachable!()
     };
     ir.commutative = true;
-    let root = g.add(addi);
+    let root = over(&mut g, addi, &[zero, x]);
 
     // `addi(?0, 0)`: the literal operand is what the class is known to be, and
     // the commutative flag is what lets it match on either side.
@@ -144,24 +148,21 @@ fn graph_operation_controls_commutative_matching() {
     ));
     let matches = plan.search(&g, plan.roots(&g), &|_, _| true, false, &NoExterns);
     assert_eq!(matches.len(), 1);
-    assert_eq!(g.find(matches[0].root), g.find(root));
-    assert_eq!(matches[0].bindings[1], Some(g.find(x)));
+    assert_eq!(g.root(matches[0].root), root.class);
+    assert_eq!(matches[0].binding(1), Some(g.find(x)));
 }
 
-/// A class proven one number twice — once typed, once not — is proven one thing.
-/// The constant column keys on the value, so the two spellings are one fact
-/// rather than two that would conflict and leave the class knowing nothing.
+/// A number spelled typed and untyped is one value: both are its carrier's
+/// zero at that offset, so a class proven it either way is proven one thing.
 #[test]
-fn two_spellings_of_one_constant_are_one_fact() {
+fn two_spellings_of_one_constant_are_one_value() {
     let mut g: Engine<SemNode> = Engine::new();
     let untyped = g.add(konst(32, 5));
     let typed = g.add(konst(32, 5).typed(ty(32)));
-    assert_ne!(g.find(untyped), g.find(typed));
-
-    g.union(untyped, typed);
-    g.rebuild();
+    assert_eq!(g.find(untyped), g.find(typed));
+    assert_eq!(g.int_const(typed), Some(5));
     assert_eq!(
-        g.const_of(typed).and_then(SemNode::int),
+        g.const_of(typed).as_ref().and_then(SemNode::int),
         Some(&APInt::new(32, 5))
     );
 }

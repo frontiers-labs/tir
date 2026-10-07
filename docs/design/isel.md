@@ -162,28 +162,25 @@ equivalence classes, usually called e-classes. Each e-class groups expressions
 known to compute the same result. Expressions refer to their inputs through
 other e-classes, so alternatives can share their inputs.
 
-For example, subtracting a constant can also be expressed as adding its
-negation. If the target has a suitable add-immediate instruction, the addition
-form exposes that choice.
+Some equivalences need no form of their own. A value is a reference: an
+e-class plus a constant offset, wrapping at the value's width. Integer
+constants are offsets of their width's zero class, and an operation whose
+offset law says how a constant operand moves to its result stores no node for
+it. Subtracting 5 from `x` and adding -5 to `x` are both the reference to `x`'s
+class at offset -5, and so is `(x + 3) - 8`. The e-graph applies these laws
+itself, so no rewrite rule rediscovers them.
 
 ```mermaid
 flowchart TD
-	subgraph E["One e-class: equivalent results"]
-		S["Subtract 5 from x"]
-		A["Add -5 to x"]
-	end
-	S --> X["Input x"]
-	A --> X
-	A -. "matches when the immediate fits" .-> I["Add-immediate instruction"]
+	R["x - 5, x + -5, (x + 3) - 8: the reference (X, -5)"] --> X["Class X: x"]
+	R -. "the offset fits the immediate" .-> I["Add-immediate instruction"]
 ```
 
 The selector expands this graph with semantic rewrite rules. The rules are
 shared by every target and live in `core/defs/isel.pdl`. They express
 identities, constant computations, and alternative forms of operations. A rule
 never names a target: the graph keeps every form, and the target's instruction
-patterns decide which forms selection can cover. The only target fact a rule
-reads is whether one of the target's instructions materializes a constant
-alone, which the patterns derived from its machine description answer.
+patterns decide which forms selection can cover.
 
 Repeated application of these rules is called saturation. Selection bounds the
 search to control compilation time and memory use. The graph therefore contains
@@ -194,6 +191,10 @@ floating-point rules matter. A familiar algebraic identity is not permission
 to ignore overflow or change floating-point rounding.
 
 ## A match covers a computation
+
+Selection covers references, not classes. Two IR values of one class at
+different offsets, such as `p` and `p + 8`, are two values: each needs its
+own register unless a consumer folds one into its encoding.
 
 A pattern match identifies a candidate instruction and the part of the semantic
 graph that the instruction computes. This is often called a tile. Its boundary
@@ -213,6 +214,35 @@ The selector checks those requirements before it accepts a match. It also
 checks target features and the availability of values at the proposed use.
 An expression elsewhere in the function does not automatically supply a usable
 register here.
+
+### Offsets in a match
+
+A pattern node adding an immediate to a value, such as the `rs1 + imm` of a
+RISC-V load or the displacement of an x86 address, matches no node: it reads
+the offset straight off the reference it meets. The node's base binds the
+class at offset zero and the immediate binds the offset, taken in the
+representative its encoding field reads (two's complement for a signed field,
+the raw bits for an unsigned one) and checked against the field's range and
+alignment. So `load((base + index * 4) + 5000)` and `load((base + 5000) +
+index * 4)`, which are one reference, select one x86 load with a scaled index
+and a displacement.
+
+When the offset does not fit and the base is a register operand, the match
+takes the part of the offset the field holds, its low bits rounded towards
+zero to the field's alignment, and demands the base at the rest. A RISC-V load
+from `p + 5000` reads `p + 4096` in a register at displacement 904. The base
+is a reference no IR value names; demanding it adds it to the values the
+region must cover, where it is matched like any other. A use of `(X, k)` is
+therefore met in one of three ways: folded into its consumer's encoding, as
+above; defined by an instruction adding to a base reference of `X`, an
+immediate or a register holding the constant; or, when `X` is a zero class, by
+the target's constant materialization. A node computed at another offset of
+the same class also answers: `sub(a, b) + k` is `sub(a + k, b)`, so a
+subtraction can take the offset into its minuend.
+
+A match adding at offset zero to its own root would compute the value from
+itself. The cover rejects such a match, while an addition at `(X, k)` reading
+`(X, 0)` is an ordinary dependency between two values.
 
 ## Compatible choices and their cost
 
@@ -418,17 +448,28 @@ add-immediate field represents values from `-2048` through `2047`. Encoding
 `2048` there would change its value, so that immediate match is illegal.
 
 The selector can instead produce `2048` in a register, then use a
-register-register addition. One valid materialization sequence starts with
-`1`, shifts left by 12 bits to obtain `4096`, and adds `-2048`. Both immediate
-additions fit their encoding fields.
+register-register addition: the addition's reference is `x`'s class at offset
+2048, which a register-register addition defines from the class at offset zero
+and the constant 2048 in a register.
 
-Shared rewrite rules expose such decompositions in the semantic graph. They fire
-only on constants that none of the target's materializing instructions
-produces alone. One rule splits off a signed 12-bit low part for an immediate
-addition. Others insert a 16-bit halfword into a narrower constant. Instruction
-matching and cover selection then choose instructions for the parts. The exact sequence can change with available target features and costs.
-The design requirement stays the same: every immediate must fit, and the
-sequence must compute the original value.
+A constant is matched where it is demanded, by evaluating patterns over it.
+A pattern with one immediate whose result scales with it, such as an addition,
+an inserted halfword or a shifted upper part, takes the bits of the constant
+its field holds at that scale. A pattern with no other operand matches when
+it reproduces the constant exactly: `lui`, `movz`, `movn` and `mov` produce
+the constants their fields reach. A pattern with a register operand as well
+demands the rest of the constant there: `addi` takes the low 12 bits and
+`movk` a halfword. Where the immediate is a shift amount, the pattern takes
+the constant's trailing zeros and demands it shifted back, as `slli` does. A
+candidate is kept only if evaluating the pattern over it gives the constant
+back, and a constant some materializer produces alone is not split at all.
+If an operand uses an operator the evaluator does not support, the candidate
+is rejected.
+The demanded rest is a constant like any other, so `2048` on RISC-V is `1`
+shifted by 11, and a 64-bit constant becomes a chain of `lui`, `addi` and
+`slli`. The exact sequence can change with available target features and
+costs. The design requirement stays the same: every immediate must fit, and
+the sequence must compute the original value.
 
 LLVM input conversion retains binary-operation no-wrap flags. A sign extension of an `add nsw`
 or `sub nsw` with a constant operand can be expressed as wider arithmetic on

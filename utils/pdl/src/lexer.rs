@@ -24,8 +24,6 @@ pub enum Token {
     Phase,
     #[token("root")]
     Root,
-    #[token("keep")]
-    Keep,
     #[token("const")]
     Const,
     #[token("int")]

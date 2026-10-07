@@ -1,0 +1,20 @@
+// RUN: tir mc --march=arm64 --stage=isel %s | filecheck %s
+
+// The scaled 64-bit load holds an unsigned offset that is a multiple of 8.
+// A displacement it cannot hold whole leaves it the aligned low part and
+// demands the rest of the address in a register: `p + 4100` is `p + 4`
+// loaded at 4096.
+
+module {
+  %fn_far = func.func @far(%p: !ptr.p<!i64>) -> !i64 {
+    %off = constant {value = 4100} : !i64
+    %q = ptr.ptradd %p, %off : !ptr.p<!i64>
+    %v = ptr.load %q : !i64
+    func.return %v
+  }
+  module_end
+}
+
+// CHECK-LABEL: asm.symbol {name = "far", arg_regs = [%[[P:[0-9]+]]:GPR]}
+// CHECK-NEXT: arm64.add_imm {rd = %[[A:[0-9]+]]:GPRsp, rn = %[[P]]:GPR, imm = 4}
+// CHECK: arm64.load_doubleword {rt = %{{[0-9]+}}:GPR, rn = %[[A]]:GPRsp, imm = 4096}

@@ -67,6 +67,8 @@ pub(super) fn lower_to_ir(
         d.eprint();
         std::process::exit(1);
     });
+    // The layout is in scope from here on, so pointer offsets take its width.
+    let module = describe_target(context, &module, machine.as_ref());
     // Restructuring accepts CFG form only, so no `cir` operation may survive
     // into it: struct ops become pointer arithmetic, loop ops become `scf.for`
     // where the counted shape is provable and blocks with branches otherwise.
@@ -92,7 +94,7 @@ pub(super) fn lower_to_ir(
         Some(jobs),
         tir::passes::RestructureNodesPass::new(),
     );
-    describe_target(context, &module, machine.as_ref())
+    module
 }
 
 /// Run one pass over `module`, nested under every function with `jobs`

@@ -439,21 +439,14 @@ impl FnCodegen<'_> {
         };
         let pointer_width = self.typed.target().pointer_width();
         let offset_ty = IntegerType::new(self.context, pointer_width);
-        let index_width = self.typed.integer_width(index_ty).unwrap();
-        let index = if index_width < pointer_width {
-            if self.typed.integer_is_signed(index_ty).unwrap() {
-                self.emit(b::extsi(self.context, index, offset_ty).build())
-                    .result()
-            } else {
-                self.emit(b::extui(self.context, index, offset_ty).build())
-                    .result()
-            }
-        } else if index_width > pointer_width {
-            self.emit(b::trunci(self.context, index, offset_ty).build())
-                .result()
-        } else {
-            index
-        };
+        // C adds the index's value, so it widens by the signedness of its type;
+        // the offset is then as wide as the pointer, as `ptr.ptradd` requires.
+        let index = self.resize(
+            index,
+            self.typed.integer_width(index_ty).unwrap(),
+            pointer_width,
+            self.typed.integer_is_signed(index_ty).unwrap(),
+        );
         let size = source_type_layout(self.typed, *pointee).0;
         let scale = self
             .emit(b::constant(self.context, size as i64, offset_ty).build())
@@ -492,19 +485,24 @@ impl FnCodegen<'_> {
         let TypeKind::Pointer(pointee) = self.typed.types().kind(pointer_ty) else {
             unreachable!("pointer difference operand has pointer type")
         };
-        let result_ty = lower_type(self.context, self.typed, result_ty);
-        let bytes = self
-            .emit(p::ptrdiff(self.context, lhs, rhs, result_ty).build())
+        // The byte distance is a pointer-sized integer; the element count is
+        // divided out at that width, then fitted to `ptrdiff_t`.
+        let pointer_width = self.typed.target().pointer_width();
+        let address_ty = IntegerType::new(self.context, pointer_width);
+        let mut count = self
+            .emit(p::ptrdiff(self.context, lhs, rhs, address_ty).build())
             .result();
         let size = source_type_layout(self.typed, *pointee).0;
-        if size == 1 {
-            return bytes;
+        if size != 1 {
+            let divisor = self
+                .emit(b::constant(self.context, size as i64, address_ty).build())
+                .result();
+            count = self
+                .emit(b::divsi(self.context, count, divisor, address_ty).build())
+                .result();
         }
-        let divisor = self
-            .emit(b::constant(self.context, size as i64, result_ty).build())
-            .result();
-        self.emit(b::divsi(self.context, bytes, divisor, result_ty).build())
-            .result()
+        let result_width = self.typed.integer_width(result_ty).unwrap();
+        self.resize(count, pointer_width, result_width, true)
     }
 
     pub(super) fn offset_address(&mut self, base: ValueId, offset: u64) -> ValueId {

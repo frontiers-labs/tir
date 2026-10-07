@@ -22,12 +22,30 @@ use tir::{Context, Operand, Operation, Symbol, TypeId, ValueId};
 use crate::ast::{self, BinOp, CastOp, Inst, Type};
 use crate::error::Error;
 
-pub fn import(context: &Context, module: &ast::Module) -> Result<builtin::ModuleOp, Error> {
+/// Lower an LLVM module using the selected target's data layout when supplied.
+/// Without a target layout, pointers retain the importer's 64-bit default.
+pub fn import(
+    context: &Context,
+    module: &ast::Module,
+    data_layout: Option<&AttributeValue>,
+) -> Result<builtin::ModuleOp, Error> {
     let m = bops::module(context, None).build();
     let builder = m.body();
     let mut callees = Callees::default();
-    let named_types: HashMap<_, _> = module.named_types.iter().cloned().collect();
-    let globals = lower_globals(context, module, &builder, &named_types)?;
+    let layout = Layout {
+        named: module.named_types.iter().cloned().collect(),
+        pointer_width: data_layout
+            .and_then(tir::DataLayout::from_value)
+            .and_then(|layout| layout.pointer_size())
+            .unwrap_or(64),
+    };
+    if let Some(spec) = data_layout {
+        context.set_op_attributes(
+            m.id(),
+            vec![context.named_attribute(tir::DATA_LAYOUT, spec.clone())],
+        );
+    }
+    let globals = lower_globals(context, module, &builder, &layout)?;
     let mut function_types: HashMap<_, _> = module
         .functions
         .iter()
@@ -62,7 +80,7 @@ pub fn import(context: &Context, module: &ast::Module) -> Result<builtin::Module
             func,
             &mut callees,
             &globals,
-            &named_types,
+            &layout,
             &function_types,
         )?);
     }
@@ -159,11 +177,11 @@ fn lower_globals(
     context: &Context,
     module: &ast::Module,
     body: &BlockHandle,
-    named: &HashMap<String, Type>,
+    layout: &Layout,
 ) -> Result<HashMap<String, ValueId>, Error> {
     let mut values = HashMap::new();
     for global in &module.globals {
-        let size = type_size(&global.ty, named)?;
+        let size = type_size(&global.ty, layout)?;
         let mut builder = match &global.initializer {
             ast::GlobalInitializer::External => bops::global_external(context, &global.name),
             ast::GlobalInitializer::Zero | ast::GlobalInitializer::Null => {
@@ -181,16 +199,20 @@ fn lower_globals(
                 bops::global_bytes(context, &global.name, bytes.clone(), global.align)
             }
             ast::GlobalInitializer::Symbols(symbols) => {
+                let pointer_bytes = u64::from(layout.pointer_width / 8);
                 let bytes = vec![0; size as usize];
                 let relocations = symbols
                     .iter()
                     .enumerate()
                     .map(|(index, symbol)| {
                         AttributeValue::Dict(Box::new(std::collections::BTreeMap::from([
-                            ("offset".into(), AttributeValue::UInt(index as u64 * 8)),
+                            (
+                                "offset".into(),
+                                AttributeValue::UInt(index as u64 * pointer_bytes),
+                            ),
                             ("symbol".into(), AttributeValue::Str(symbol.clone().into())),
                             ("addend".into(), AttributeValue::Int(0)),
-                            ("width".into(), AttributeValue::UInt(8)),
+                            ("width".into(), AttributeValue::UInt(pointer_bytes)),
                         ])))
                     })
                     .collect::<Vec<_>>();
@@ -245,43 +267,50 @@ fn validate_initializer_size(name: &str, expected: u64, actual: usize) -> Result
     Ok(())
 }
 
-fn type_size(ty: &Type, named: &HashMap<String, Type>) -> Result<u64, Error> {
+struct Layout {
+    named: HashMap<String, Type>,
+    pointer_width: u32,
+}
+
+fn type_size(ty: &Type, layout: &Layout) -> Result<u64, Error> {
     Ok(match ty {
         Type::Int(width) | Type::Float(width) => u64::from(width.div_ceil(8)),
-        Type::Ptr(_) => 8,
-        Type::Array(count, elem) => count * type_size(elem, named)?,
+        Type::Ptr(_) => u64::from(layout.pointer_width / 8),
+        Type::Array(count, elem) => count * type_size(elem, layout)?,
         Type::Named(name) => type_size(
-            named
+            layout
+                .named
                 .get(name)
                 .ok_or_else(|| Error::Parse(format!("undefined type %{name}")))?,
-            named,
+            layout,
         )?,
-        Type::Struct(fields) => struct_layout(fields, named)?.0,
+        Type::Struct(fields) => struct_layout(fields, layout)?.0,
         Type::Void => 0,
     })
 }
 
-fn type_align(ty: &Type, named: &HashMap<String, Type>) -> Result<u64, Error> {
+fn type_align(ty: &Type, layout: &Layout) -> Result<u64, Error> {
     Ok(match ty {
-        Type::Array(_, elem) => type_align(elem, named)?,
+        Type::Array(_, elem) => type_align(elem, layout)?,
         Type::Named(name) => type_align(
-            named
+            layout
+                .named
                 .get(name)
                 .ok_or_else(|| Error::Parse(format!("undefined type %{name}")))?,
-            named,
+            layout,
         )?,
-        Type::Struct(fields) => struct_layout(fields, named)?.1,
-        _ => type_size(ty, named)?.clamp(1, 8),
+        Type::Struct(fields) => struct_layout(fields, layout)?.1,
+        _ => type_size(ty, layout)?.clamp(1, 8),
     })
 }
 
-fn struct_layout(fields: &[Type], named: &HashMap<String, Type>) -> Result<(u64, u64), Error> {
+fn struct_layout(fields: &[Type], layout: &Layout) -> Result<(u64, u64), Error> {
     let mut size: u64 = 0;
     let mut max_align = 1;
     for field in fields {
-        let align = type_align(field, named)?;
+        let align = type_align(field, layout)?;
         size = size.div_ceil(align) * align;
-        size += type_size(field, named)?;
+        size += type_size(field, layout)?;
         max_align = max_align.max(align);
     }
     Ok((size.div_ceil(max_align) * max_align, max_align))
@@ -292,7 +321,7 @@ fn lower_function(
     func: &ast::Function,
     callees: &mut Callees,
     globals: &HashMap<String, ValueId>,
-    named: &HashMap<String, Type>,
+    layout: &Layout,
     function_types: &HashMap<String, (Vec<Type>, Type, bool)>,
 ) -> Result<tir::func::FuncOp, Error> {
     let region = context.create_region();
@@ -407,7 +436,7 @@ fn lower_function(
                 &by_label,
                 callees,
                 globals,
-                named,
+                layout,
                 function_types,
                 &current_label,
                 &phis,
@@ -531,7 +560,7 @@ fn lower_inst(
     by_label: &HashMap<String, BlockHandle>,
     callees: &mut Callees,
     globals: &HashMap<String, ValueId>,
-    named: &HashMap<String, Type>,
+    layout: &Layout,
     function_types: &HashMap<String, (Vec<Type>, Type, bool)>,
     current_label: &str,
     phis: &HashMap<String, &Vec<Inst>>,
@@ -639,7 +668,7 @@ fn lower_inst(
                         source,
                         indices,
                         values,
-                        named,
+                        layout,
                         definitions,
                     )?
                 }
@@ -741,18 +770,26 @@ fn lower_inst(
                 // spelling can denote a negative narrow bit pattern.
                 let lhs = val!(lhs, from);
                 let rhs = val!(rhs, from);
-                let lhs = lower_cast(context, body, CastOp::SExt, false, lhs, destination);
-                let rhs = lower_cast(context, body, CastOp::SExt, false, rhs, destination);
+                let lhs = lower_cast(context, body, CastOp::SExt, false, lhs, destination, layout);
+                let rhs = lower_cast(context, body, CastOp::SExt, false, rhs, destination, layout);
                 lower_binary(context, body, binary, lhs, rhs, destination)
             } else {
                 let input = val!(value, from);
-                lower_cast(context, body, *op, *non_negative, input, destination)
+                lower_cast(
+                    context,
+                    body,
+                    *op,
+                    *non_negative,
+                    input,
+                    destination,
+                    layout,
+                )
             };
             values.insert(result.clone(), id);
         }
         Inst::Alloca { result, ty, align } => {
-            let bytes = type_size(ty, named)?;
-            let align = align.unwrap_or(type_align(ty, named)?);
+            let bytes = type_size(ty, layout)?;
+            let align = align.unwrap_or(type_align(ty, layout)?);
             let o = pops::alloca(context, bytes, align, PtrType::opaque(context)).build();
             values.insert(result.clone(), o.result());
             body.append_op(o);
@@ -782,7 +819,7 @@ fn lower_inst(
                 source,
                 indices,
                 values,
-                named,
+                layout,
                 definitions,
             )?;
             values.insert(result.clone(), address);
@@ -798,7 +835,7 @@ fn lower_inst(
             let cond = val!(cond, &Type::Int(1));
             let t = val!(if_true, ty);
             let f = val!(if_false, ty);
-            let selected_value = lower_select(context, body, cond, t, f, ty)?;
+            let selected_value = lower_select(context, body, cond, t, f, ty, layout)?;
             values.insert(result.clone(), selected_value);
         }
         Inst::Br { dest } => {
@@ -875,7 +912,8 @@ fn lower_inst(
             let ret_ty = lower_type(context, ret)?;
             match callee {
                 ast::Operand::Global(name) if name.starts_with("llvm.") => {
-                    let value = lower_intrinsic(context, body, name, &arg_ids, ret, ret_ty)?;
+                    let value =
+                        lower_intrinsic(context, body, name, &arg_ids, ret, ret_ty, layout)?;
                     if let (Some(result), Some(value)) = (result, value) {
                         values.insert(result.clone(), value);
                     }
@@ -1121,6 +1159,7 @@ fn lower_intrinsic(
     args: &[ValueId],
     ret: &Type,
     ret_ty: TypeId,
+    layout: &Layout,
 ) -> Result<Option<ValueId>, Error> {
     if name.starts_with("llvm.lifetime.") || name == "llvm.assume" {
         return Ok(None);
@@ -1135,28 +1174,64 @@ fn lower_intrinsic(
     }
     if name.starts_with("llvm.umax.") {
         let cmp = lower_icmp(context, body, "uge", ret, args[0], args[1])?;
-        return lower_select(context, body, cmp, args[0], args[1], ret).map(Some);
+        return lower_select(context, body, cmp, args[0], args[1], ret, layout).map(Some);
     }
     if name.starts_with("llvm.smax.") {
         let cmp = lower_icmp(context, body, "sge", ret, args[0], args[1])?;
-        return lower_select(context, body, cmp, args[0], args[1], ret).map(Some);
+        return lower_select(context, body, cmp, args[0], args[1], ret, layout).map(Some);
     }
     if name == "llvm.load.relative.i64" {
+        let offset_ty = IntegerType::new(context, layout.pointer_width);
+        let offset = resize_signed(context, body, args[1], offset_ty);
         let address = body
-            .append_op(pops::ptradd(context, args[0], args[1], PtrType::opaque(context)).build())
+            .append_op(pops::ptradd(context, args[0], offset, PtrType::opaque(context)).build())
             .result();
         let relative = body
             .append_op(pops::load(context, address, IntegerType::new(context, 32)).build())
             .result();
-        let relative = body
-            .append_op(bops::extsi(context, relative, IntegerType::new(context, 64)).build())
-            .result();
+        let relative = resize_signed(context, body, relative, offset_ty);
         return Ok(Some(
             body.append_op(pops::ptradd(context, args[0], relative, ret_ty).build())
                 .result(),
         ));
     }
     Err(Error::Unsupported(format!("intrinsic {name}")))
+}
+
+/// `value` zero-extended or truncated to the integer type `ty`.
+fn resize_unsigned(context: &Context, body: &BlockHandle, value: ValueId, ty: TypeId) -> ValueId {
+    resize_integer(context, body, value, ty, false)
+}
+
+fn resize_signed(context: &Context, body: &BlockHandle, value: ValueId, ty: TypeId) -> ValueId {
+    resize_integer(context, body, value, ty, true)
+}
+
+fn resize_integer(
+    context: &Context,
+    body: &BlockHandle,
+    value: ValueId,
+    ty: TypeId,
+    signed: bool,
+) -> ValueId {
+    let width = |ty| {
+        let data = context.get_type_data(ty);
+        (data.as_ref() as &dyn std::any::Any)
+            .downcast_ref::<IntegerType>()
+            .map(IntegerType::width)
+    };
+    match width(context.get_value(value).ty()).cmp(&width(ty)) {
+        std::cmp::Ordering::Less if signed => body
+            .append_op(bops::extsi(context, value, ty).build())
+            .result(),
+        std::cmp::Ordering::Less => body
+            .append_op(bops::extui(context, value, ty).build())
+            .result(),
+        std::cmp::Ordering::Greater => body
+            .append_op(bops::trunci(context, value, ty).build())
+            .result(),
+        std::cmp::Ordering::Equal => value,
+    }
 }
 
 fn constant(context: &Context, body: &BlockHandle, value: i64, ty: TypeId) -> ValueId {
@@ -1197,11 +1272,12 @@ fn lower_select(
     mut if_true: ValueId,
     mut if_false: ValueId,
     ty: &Type,
+    layout: &Layout,
 ) -> Result<ValueId, Error> {
     let result_ty = lower_type(context, ty)?;
     let work_ty = match ty {
         Type::Ptr(_) => {
-            let int_ty = IntegerType::new(context, 64);
+            let int_ty = IntegerType::new(context, layout.pointer_width);
             let null = body.append_op(pops::null(context, PtrType::opaque(context)).build());
             if_true = body
                 .append_op(pops::ptrdiff(context, if_true, null.result(), int_ty).build())
@@ -1295,6 +1371,7 @@ fn lower_cast(
     non_negative: bool,
     input: ValueId,
     result_ty: TypeId,
+    layout: &Layout,
 ) -> ValueId {
     macro_rules! append {
         ($op:expr) => {{ body.append_op($op).result() }};
@@ -1303,13 +1380,19 @@ fn lower_cast(
         CastOp::SExt => append!(bops::extsi(context, input, result_ty).build()),
         CastOp::ZExt => append!(bops::extui(context, input, result_ty).build()),
         CastOp::Trunc => append!(bops::trunci(context, input, result_ty).build()),
+        // Both casts zero-extend or truncate between the integer and the
+        // pointer-sized address, which `ptr.ptrdiff` and `ptr.ptradd` take.
         CastOp::PtrToInt => {
             let null = append!(pops::null(context, PtrType::opaque(context)).build());
-            append!(pops::ptrdiff(context, input, null, result_ty).build())
+            let address_ty = IntegerType::new(context, layout.pointer_width);
+            let address = append!(pops::ptrdiff(context, input, null, address_ty).build());
+            resize_unsigned(context, body, address, result_ty)
         }
         CastOp::IntToPtr => {
+            let address_ty = IntegerType::new(context, layout.pointer_width);
+            let address = resize_unsigned(context, body, input, address_ty);
             let null = append!(pops::null(context, PtrType::opaque(context)).build());
-            append!(pops::ptradd(context, null, input, result_ty).build())
+            append!(pops::ptradd(context, null, address, result_ty).build())
         }
         CastOp::SIToFP | CastOp::UIToFP => {
             let semantics = arithmetic_semantics(context);
@@ -1443,15 +1526,15 @@ fn lower_gep(
     source: &Type,
     indices: &[(Type, ast::Operand)],
     values: &HashMap<String, ValueId>,
-    named: &HashMap<String, Type>,
+    layout: &Layout,
     definitions: &HashMap<&str, &Inst>,
 ) -> Result<ValueId, Error> {
-    let i64_ty = IntegerType::new(context, 64);
+    let offset_ty = IntegerType::new(context, layout.pointer_width);
     let mut offset = None;
     let mut literal_offset = 0i64;
     let mut current = source.clone();
     for (position, (index_ty, index)) in indices.iter().enumerate() {
-        let (scale, next, direct) = gep_step(&current, position, index, named)?;
+        let (scale, next, direct) = gep_step(&current, position, index, layout)?;
         let (index_ty, index) = if let Some((ty, variable, constant)) =
             affine_no_wrap_index(index_ty, index, definitions, values)
         {
@@ -1478,16 +1561,11 @@ fn lower_gep(
                 let value = *values
                     .get(name)
                     .ok_or_else(|| Error::UndefinedValue(name.clone()))?;
-                match index_ty {
-                    Type::Int(64) => value,
-                    Type::Int(_) => {
-                        let op = bops::extsi(context, value, i64_ty).build();
-                        let result = op.result();
-                        body.append_op(op);
-                        result
-                    }
-                    _ => return Err(Error::Unsupported("non-integer getelementptr index".into())),
+                // An index is sign-extended or truncated to the pointer width.
+                if !matches!(index_ty, Type::Int(_)) {
+                    return Err(Error::Unsupported("non-integer getelementptr index".into()));
                 }
+                resize_signed(context, body, value, offset_ty)
             }
             _ => return Err(Error::Unsupported("non-integer getelementptr index".into())),
         };
@@ -1498,15 +1576,15 @@ fn lower_gep(
         let term = if scale == 1 {
             index
         } else {
-            let scale = constant(context, body, scale as i64, i64_ty);
-            let product = bops::muli(context, index, scale, i64_ty).build();
+            let scale = constant(context, body, scale as i64, offset_ty);
+            let product = bops::muli(context, index, scale, offset_ty).build();
             let product_value = product.result();
             body.append_op(product);
             product_value
         };
         offset = Some(match offset {
             Some(offset) => {
-                let add = bops::addi(context, offset, term, i64_ty).build();
+                let add = bops::addi(context, offset, term, offset_ty).build();
                 let result = add.result();
                 body.append_op(add);
                 result
@@ -1520,7 +1598,7 @@ fn lower_gep(
     // Combine that displacement here so the next dynamic index precedes it.
     if let Some(definition) = context.get_value(base).defining_op()
         && let Some(add) = context.get_op(definition).as_op::<tir::ptr::PtrAddOp>()
-        && context.get_value(add.operands()[1]).ty() == i64_ty
+        && context.get_value(add.operands()[1]).ty() == offset_ty
         && let Some(definition) = context.get_value(add.operands()[1]).defining_op()
         && let Some(literal) = context.get_op(definition).as_op::<builtin::ConstantOp>()
         && let Some(AttributeValue::Int(value)) = literal.attr("value")
@@ -1534,7 +1612,7 @@ fn lower_gep(
             .result();
     }
     if literal_offset != 0 {
-        let literal = constant(context, body, literal_offset, i64_ty);
+        let literal = constant(context, body, literal_offset, offset_ty);
         address = body
             .append_op(pops::ptradd(context, address, literal, PtrType::opaque(context)).build())
             .result();
@@ -1554,19 +1632,20 @@ fn gep_step(
     current: &Type,
     position: usize,
     index: &ast::Operand,
-    named: &HashMap<String, Type>,
+    layout: &Layout,
 ) -> Result<(u64, Type, bool), Error> {
     if position == 0 {
-        return Ok((type_size(current, named)?, current.clone(), false));
+        return Ok((type_size(current, layout)?, current.clone(), false));
     }
     let current = match current {
-        Type::Named(name) => named
+        Type::Named(name) => layout
+            .named
             .get(name)
             .ok_or_else(|| Error::Parse(format!("undefined type %{name}")))?,
         other => other,
     };
     match current {
-        Type::Array(_, elem) => Ok((type_size(elem, named)?, (**elem).clone(), false)),
+        Type::Array(_, elem) => Ok((type_size(elem, layout)?, (**elem).clone(), false)),
         Type::Struct(fields) => {
             let ast::Operand::ConstInt(field) = index else {
                 return Err(Error::Unsupported(
@@ -1579,14 +1658,14 @@ fn gep_step(
                 .ok_or_else(|| Error::Parse("struct getelementptr index out of range".into()))?;
             let mut offset: u64 = 0;
             for ty in &fields[..field.0] {
-                let align = type_align(ty, named)?;
-                offset = offset.div_ceil(align) * align + type_size(ty, named)?;
+                let align = type_align(ty, layout)?;
+                offset = offset.div_ceil(align) * align + type_size(ty, layout)?;
             }
-            let align = type_align(field.1, named)?;
+            let align = type_align(field.1, layout)?;
             offset = offset.div_ceil(align) * align;
             Ok((offset, field.1.clone(), true))
         }
-        scalar => Ok((type_size(scalar, named)?, scalar.clone(), false)),
+        scalar => Ok((type_size(scalar, layout)?, scalar.clone(), false)),
     }
 }
 

@@ -119,9 +119,10 @@ pub(crate) struct RuleCache {
     heads: Vec<Option<LabelId>>,
 }
 
-/// Δ_h grouped by operator: for each, the classes holding it paired with the row
-/// each one enters that operator's bucket at, which is what orders the group.
-type OpGroups = HashMap<u64, Vec<(u32, ClassId)>, FxBuildHasher>;
+/// Δ_h grouped by operator, as `(op, row, class)` sorted: for each operator,
+/// the classes holding it paired with the row each one enters that
+/// operator's bucket at, which is what orders the group.
+type OpGroups = Vec<(u64, u32, ClassId)>;
 
 /// Per-round frontier of semi-naive saturation: the change log of the previous
 /// round closed upward, cached by the pattern heights a rule set asks for.
@@ -179,30 +180,32 @@ impl Delta {
     /// first row of that operator, so ordering each group by that row reproduces
     /// the bucket's order exactly — which is the root order a match's position in
     /// the round is defined by, and so the order class ids are assigned in.
-    pub fn roots<L: Label>(&mut self, eg: &Engine<L>, height: usize, op: u64) -> &[(u32, ClassId)] {
+    pub fn roots<L: Label>(
+        &mut self,
+        eg: &Engine<L>,
+        height: usize,
+        op: u64,
+    ) -> &[(u64, u32, ClassId)] {
         self.at(eg, height);
         while self.by_op.len() <= height {
-            let mut by_op: OpGroups = HashMap::default();
-            let mut ops: Vec<(u64, u32)> = Vec::new();
+            let mut by_op: OpGroups = Vec::new();
             for &class in &self.levels[self.by_op.len()] {
-                ops.clear();
+                let first = by_op.len();
                 for row in eg.rows(class) {
-                    let op = eg.node(row).op_key();
-                    match ops.iter_mut().find(|(seen, _)| *seen == op) {
-                        Some((_, first)) => *first = (*first).min(row.0),
-                        None => ops.push((op, row.0)),
+                    let op = eg.row_op(row);
+                    match by_op[first..].iter_mut().find(|(seen, _, _)| *seen == op) {
+                        Some((_, at, _)) => *at = (*at).min(row.0),
+                        None => by_op.push((op, row.0, class)),
                     }
                 }
-                for &(op, row) in &ops {
-                    by_op.entry(op).or_default().push((row, class));
-                }
             }
-            for group in by_op.values_mut() {
-                group.sort_unstable();
-            }
+            by_op.sort_unstable();
             self.by_op.push(by_op);
         }
-        self.by_op[height].get(&op).map_or(&[], Vec::as_slice)
+        let groups = &self.by_op[height];
+        let from = groups.partition_point(|&(other, _, _)| other < op);
+        let to = groups.partition_point(|&(other, _, _)| other <= op);
+        &groups[from..to]
     }
 }
 
@@ -213,7 +216,7 @@ pub fn round_roots<L: Label>(eg: &Engine<L>, plan: &Plan<L>, delta: &mut Delta) 
         Some(op) => delta
             .roots(eg, plan.height(), op)
             .iter()
-            .map(|&(_, class)| class)
+            .map(|&(_, _, class)| class)
             .collect(),
         None => delta.at(eg, plan.height()).to_vec(),
     }
@@ -346,11 +349,12 @@ impl<L: Label> Engine<L> {
             let tracing = trace_enabled();
             for (index, matches) in found {
                 let rule = &rules[index];
-                let heads = &mut caches.entry(rule.plan.id()).or_default().heads;
+                let cache = caches.entry(rule.plan.id()).or_default();
+                let heads = &mut cache.heads;
                 for at in 0..matches.len() {
                     let (root, bindings, scalars) = matches.get(at);
                     if tracing {
-                        eprintln!("M {} {}", rule.name, self.find(root).index());
+                        eprintln!("M {} {}", rule.name, self.root(root).index());
                     }
                     stats.apply(self, |eg| {
                         apply_rule(&rule.name, eg, |eg| {
@@ -364,6 +368,7 @@ impl<L: Label> Engine<L> {
                         })
                     });
                 }
+                cache.plan.recycle(matches);
             }
             self.rebuild();
             stats.finish(self);
@@ -410,7 +415,7 @@ impl<L: Label> Engine<L> {
     ) {
         let mut touched = touched.map(|mut all| {
             for id in &mut all {
-                *id = self.find(*id);
+                *id = self.root(*id);
             }
             all.sort_unstable();
             all.dedup();

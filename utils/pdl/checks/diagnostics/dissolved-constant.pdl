@@ -1,0 +1,15 @@
+// A constant added to an operand of an add is folded into the reference the
+// add is, so no node holds it there and a pattern naming one never matches.
+// The zero it leaves behind is held where no identity dissolves it.
+// RUN: not tir-pdl %s --emit rust 2>&1 | filecheck %s
+
+rule add-three: #add(x: int<W>, 3) : int<W> => x;
+rule sub-const: #sub(x: int<W>, c: const<W>) : int<W> => x;
+rule mul-three: #mul(x: int<W>, 3) : int<W> => x;
+rule negate: #sub(0, x: int<W>) : int<W> => #neg(x);
+
+// CHECK: a constant operand of an operator with an offset law never matches
+// CHECK: dissolved-constant.pdl:6:33
+// CHECK: a constant operand of an operator with an offset law never matches
+// CHECK: dissolved-constant.pdl:7:33
+// CHECK-NOT: offset law

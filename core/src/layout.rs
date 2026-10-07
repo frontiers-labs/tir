@@ -148,6 +148,11 @@ impl DataLayout {
         bits(entry.get("preferred")).or_else(|| bits(entry.get("abi")))
     }
 
+    /// The spec, in the form a [`DATA_LAYOUT`] attribute carries it.
+    pub fn spec(&self) -> AttributeValue {
+        AttributeValue::Dict(Box::new(self.entries.clone()))
+    }
+
     /// A spec entry outside the predefined set, for metadata a dialect defines
     /// itself (e.g. a GPU address-space mapping).
     pub fn get(&self, key: &str) -> Option<&AttributeValue> {

@@ -18,7 +18,7 @@ fn hash_consing_shares_identical_expressions() {
     let b = sym(&mut g, 1);
     let e1 = add(&mut g, a, b);
     let e2 = add(&mut g, a, b);
-    assert_eq!(g.find(e1), g.find(e2));
+    assert_eq!(g.root(e1), g.root(e2));
     assert_eq!(g.nodes(e1).count(), 1);
     assert_eq!(g.total_size(), 3);
     assert_eq!(g.num_classes(), 3);
@@ -42,7 +42,7 @@ fn union_merges_classes() {
     let b = num(&mut g, 7);
     let c = num(&mut g, 9);
     assert_eq!(g.num_classes(), 3);
-    g.union(a, b);
+    g.union(a, b).unwrap();
     assert!(g.connected(a, b));
     assert!(!g.connected(a, c));
     assert_eq!(g.num_classes(), 2);
@@ -52,7 +52,7 @@ fn union_merges_classes() {
     let a = sym(&mut g, 0);
     let b = num(&mut g, 7);
     g.push_context();
-    g.union(a, b);
+    g.union(a, b).unwrap();
     assert!(g.connected(a, b));
     g.pop_context();
     assert!(!g.connected(a, b));
@@ -68,15 +68,15 @@ fn congruence_merges_function_applications() {
     let fb = neg(&mut g, b);
     let fc = neg(&mut g, c);
 
-    assert_ne!(g.find(fa), g.find(fb));
-    g.union(a, b);
+    assert_ne!(g.root(fa), g.root(fb));
+    g.union(a, b).unwrap();
     g.rebuild();
-    assert_eq!(g.find(fa), g.find(fb));
-    assert_ne!(g.find(fb), g.find(fc));
+    assert_eq!(g.root(fa), g.root(fb));
+    assert_ne!(g.root(fb), g.root(fc));
 
-    g.union(a, c);
+    g.union(a, c).unwrap();
     g.rebuild();
-    assert_eq!(g.find(fc), g.find(fb));
+    assert_eq!(g.root(fc), g.root(fb));
 }
 
 #[test]
@@ -89,7 +89,7 @@ fn rebuild_propagates_congruence_to_fixpoint() {
     }
     let fa = neg(&mut g, a);
     assert_eq!(g.num_classes(), 6);
-    g.union(fa, a);
+    g.union(fa, a).unwrap();
     g.rebuild();
     assert_eq!(g.num_classes(), 1);
 }
@@ -101,8 +101,8 @@ fn hash_collision_keeps_distinct_nodes_separate() {
     let n1 = num(&mut g, 1);
     let n2 = num(&mut g, 2);
     let n1b = num(&mut g, 1);
-    assert_eq!(g.find(n1), g.find(n1b));
-    assert_ne!(g.find(n1), g.find(n2));
+    assert_eq!(g.root(n1), g.root(n1b));
+    assert_ne!(g.root(n1), g.root(n2));
     assert_eq!(g.num_classes(), 2);
 }
 
@@ -110,19 +110,19 @@ fn hash_collision_keeps_distinct_nodes_separate() {
 fn unique_nodes_never_share_or_merge() {
     let mut g = Engine::new();
     let a = sym(&mut g, 0);
-    let e1 = g.add(Math::Effect(0, [a]));
-    let e2 = g.add(Math::Effect(0, [a]));
-    assert_ne!(g.find(e1), g.find(e2));
+    let e1 = g.add(Math::Effect(0, [a])).class;
+    let e2 = g.add(Math::Effect(0, [a])).class;
+    assert_ne!(g.root(e1), g.root(e2));
     assert_eq!(g.num_classes(), 3);
 
     // Effects over operands that later merge still do not congruence-merge,
     // but their operand ids resolve through `find`.
     let b = sym(&mut g, 1);
-    let ua = g.add(Math::Effect(1, [a]));
-    let ub = g.add(Math::Effect(1, [b]));
-    g.union(a, b);
+    let ua = g.add(Math::Effect(1, [a])).class;
+    let ub = g.add(Math::Effect(1, [b])).class;
+    g.union(a, b).unwrap();
     g.rebuild();
-    assert_ne!(g.find(ua), g.find(ub));
+    assert_ne!(g.root(ua), g.root(ub));
     let child = g.nodes(ua).next().unwrap().children()[0];
     assert!(g.connected(child, a));
 }
@@ -140,7 +140,7 @@ fn scope_congruence_collapses_and_restores() {
     assert!(!g.connected(fa, fb));
 
     g.push_context();
-    g.union(a, b);
+    g.union(a, b).unwrap();
     g.rebuild();
     assert!(g.connected(a, b));
     assert!(g.connected(fa, fb));
@@ -156,12 +156,12 @@ fn scope_preserves_base_equalities() {
     let a = sym(&mut g, 0);
     let b = sym(&mut g, 1);
     let c = sym(&mut g, 2);
-    g.union(a, b);
+    g.union(a, b).unwrap();
     g.rebuild();
 
     g.push_context();
     assert!(g.connected(a, b));
-    g.union(b, c);
+    g.union(b, c).unwrap();
     g.rebuild();
     assert!(g.connected(a, c));
     g.pop_context();
@@ -185,7 +185,7 @@ fn scope_congruence_propagates_to_fixpoint() {
     let base_classes = g.num_classes();
 
     g.push_context();
-    g.union(fa, a);
+    g.union(fa, a).unwrap();
     g.rebuild();
     assert_eq!(g.num_classes(), 1);
     g.pop_context();
@@ -199,9 +199,9 @@ fn nested_scopes_isolate() {
     let b = sym(&mut g, 1);
     let c = sym(&mut g, 2);
     g.push_context();
-    g.union(a, b);
+    g.union(a, b).unwrap();
     g.push_context();
-    g.union(b, c);
+    g.union(b, c).unwrap();
     g.rebuild();
     assert!(g.connected(a, c));
     g.pop_context();
@@ -223,7 +223,7 @@ fn scope_add_then_congruence() {
     g.rebuild();
 
     g.push_context();
-    g.union(a, b);
+    g.union(a, b).unwrap();
     let fb = neg(&mut g, b);
     assert_ne!(fa, fb);
     g.rebuild();
@@ -244,15 +244,15 @@ fn nested_pop_restores_outer_scope_hash_cons() {
     let outer = add(&mut g, a, b); // interned in the outer scope's hash-cons
     g.push_context();
     let c = sym(&mut g, 2);
-    g.union(a, c);
+    g.union(a, c).unwrap();
     g.rebuild();
     g.pop_context();
 
     // Back in the outer scope: re-adding the node must hit the same class, so
     // the outer scope's hash-cons survived the nested pop.
     let again = add(&mut g, a, b);
-    assert_eq!(g.find(again), g.find(outer));
-    assert_eq!(g.nodes(g.find(outer)).count(), 1);
+    assert_eq!(g.root(again), g.root(outer));
+    assert_eq!(g.nodes(g.root(outer)).count(), 1);
 }
 
 #[test]
@@ -312,7 +312,7 @@ fn pop_restores_the_base_graph() {
         let e1 = add(&mut g, a, b);
         assert_eq!(g.num_classes(), base + 1);
         let e2 = add(&mut g, a, b);
-        assert_eq!(g.find(e1), g.find(e2));
+        assert_eq!(g.root(e1), g.root(e2));
         assert_eq!(g.num_classes(), base + 1);
     }
 
@@ -374,12 +374,12 @@ fn pop_restores_the_enclosing_counts_and_partition() {
         g.rebuild();
 
         g.push_context();
-        g.union(a, b);
+        g.union(a, b).unwrap();
         g.rebuild();
-        let outer = g.find(a);
+        let outer = g.root(a);
 
         g.push_context();
-        g.union(c, d);
+        g.union(c, d).unwrap();
         g.rebuild();
         assert_eq!(g.num_classes(), 2);
         g.pop_context();
@@ -401,7 +401,7 @@ fn pop_restores_the_enclosing_counts_and_partition() {
         g.rebuild();
 
         g.push_context();
-        g.union(a, b);
+        g.union(a, b).unwrap();
         // A merge counts the moment it happens; congruence repair is what waits for
         // the rebuild.
         assert_eq!(g.num_classes(), 1);
@@ -424,9 +424,9 @@ fn scope_merge_aggregates_nodes_in_base_order() {
     g.rebuild();
 
     g.push_context();
-    g.union(c, a);
+    g.union(c, a).unwrap();
     g.rebuild();
-    let root = g.find(a);
+    let root = g.root(a);
     assert_eq!(g.scope_members(root), &[a, c][..]);
     let nodes: Vec<&Math> = g.nodes(root).collect();
     assert!(matches!(nodes[0], Math::Sym(0)));
@@ -437,7 +437,7 @@ fn scope_merge_aggregates_nodes_in_base_order() {
     g.pop_context();
     assert_eq!(g.num_classes(), 3);
     assert!(g.scope_members(root).is_empty());
-    assert_eq!(g.nodes(g.find(a)).count(), 1);
+    assert_eq!(g.nodes(g.root(a)).count(), 1);
 }
 
 #[test]
@@ -449,10 +449,10 @@ fn classes_iterate_scope_roots_at_first_member_position() {
     g.rebuild();
 
     g.push_context();
-    g.union(a, c);
+    g.union(a, c).unwrap();
     g.rebuild();
     let seen: Vec<Id> = g.classes().map(|class| class.id()).collect();
-    assert_eq!(seen, vec![g.find(a), b]);
+    assert_eq!(seen, vec![g.root(a), b]);
     g.pop_context();
 }
 
@@ -464,7 +464,7 @@ fn scope_dirty_names_the_classes_the_scope_changed() {
         let mut g = Engine::new();
         let a = sym(&mut g, 0);
         let b = sym(&mut g, 1);
-        g.union(a, b);
+        g.union(a, b).unwrap();
         g.rebuild();
         assert!(g.scope_dirty().is_empty());
     }
@@ -478,9 +478,9 @@ fn scope_dirty_names_the_classes_the_scope_changed() {
         g.rebuild();
 
         g.push_context();
-        g.union(a, b);
+        g.union(a, b).unwrap();
         g.rebuild();
-        assert_eq!(g.scope_dirty(), vec![g.find(a)]);
+        assert_eq!(g.scope_dirty(), vec![g.root(a)]);
         g.pop_context();
     }
 
@@ -493,7 +493,7 @@ fn scope_dirty_names_the_classes_the_scope_changed() {
 
         g.push_context();
         let sum = add(&mut g, a, b);
-        assert_eq!(g.scope_dirty(), vec![g.find(sum)]);
+        assert_eq!(g.scope_dirty(), vec![g.root(sum)]);
         g.pop_context();
         assert!(g.scope_dirty().is_empty());
     }
@@ -508,15 +508,15 @@ fn scope_dirty_names_the_classes_the_scope_changed() {
         g.rebuild();
 
         g.push_context();
-        g.union(a, b);
+        g.union(a, b).unwrap();
         g.rebuild();
         g.push_context();
-        g.union(c, d);
+        g.union(c, d).unwrap();
         g.rebuild();
-        assert_eq!(g.scope_dirty(), vec![g.find(a), g.find(c)]);
+        assert_eq!(g.scope_dirty(), vec![g.root(a), g.root(c)]);
 
         g.pop_context();
-        assert_eq!(g.scope_dirty(), vec![g.find(a)]);
+        assert_eq!(g.scope_dirty(), vec![g.root(a)]);
         g.pop_context();
         assert!(g.scope_dirty().is_empty());
     }
@@ -531,18 +531,18 @@ fn scope_dirty_names_the_classes_the_scope_changed() {
         g.rebuild();
 
         g.push_context();
-        g.union(a, b);
+        g.union(a, b).unwrap();
         g.rebuild();
         g.push_context();
         let sum = add(&mut g, c, d);
-        g.union(c, d);
+        g.union(c, d).unwrap();
         g.rebuild();
-        let mut expected = vec![g.find(c), g.find(sum)];
+        let mut expected = vec![g.root(c), g.root(sum)];
         expected.sort();
         assert_eq!(g.innermost_dirty(), expected);
 
         g.pop_context();
-        assert_eq!(g.innermost_dirty(), vec![g.find(a)]);
+        assert_eq!(g.innermost_dirty(), vec![g.root(a)]);
         g.pop_context();
         assert!(g.innermost_dirty().is_empty());
     }
@@ -559,9 +559,9 @@ fn scope_dirty_names_the_classes_the_scope_changed() {
         g.rebuild();
 
         g.push_context();
-        g.union(a, b);
+        g.union(a, b).unwrap();
         g.rebuild();
-        let mut expected = vec![g.find(a), g.find(sum), g.find(outer)];
+        let mut expected = vec![g.root(a), g.root(sum), g.root(outer)];
         expected.sort();
         assert_eq!(g.scope_dirty(), expected);
         g.pop_context();
@@ -594,11 +594,11 @@ fn assumed_classes_names_every_class_assumed_to_be_the_constant() {
     g.assume_const(a, Math::Num(1));
     g.assume_const(b, Math::Num(1));
     g.assume_const(c, Math::Num(0));
-    let mut ones: Vec<Id> = g.classes_with_const(&Math::Num(1)).collect();
+    let mut ones: Vec<Id> = g.classes_with_const(&Math::Num(1));
     ones.sort();
-    assert_eq!(ones, vec![g.find(a), g.find(b)]);
+    assert_eq!(ones, vec![g.root(a), g.root(b)]);
     g.pop_context();
-    assert!(g.classes_with_const(&Math::Num(1)).next().is_none());
+    assert!(g.classes_with_const(&Math::Num(1)).is_empty());
 }
 
 /// A nested scope that assumes the opposite of its parent has assumed a
@@ -632,7 +632,7 @@ fn assumption_follows_the_class_through_a_scoped_union() {
 
     g.push_context();
     g.assume_const(a, Math::Num(1));
-    g.union(a, b);
+    g.union(a, b).unwrap();
     g.rebuild();
     assert!(matches!(g.const_of(b), Some(Math::Num(1))));
     g.pop_context();
@@ -650,7 +650,7 @@ fn inner_union_rekeys_an_outer_assumption_and_pop_restores_it() {
     g.push_context();
     g.assume_const(a, Math::Num(1));
     g.push_context();
-    g.union(a, b);
+    g.union(a, b).unwrap();
     g.rebuild();
     assert!(matches!(g.const_of(b), Some(Math::Num(1))));
     g.pop_context();
@@ -670,7 +670,7 @@ fn scope_dirty_holds_an_assumed_class_and_its_parents() {
 
     g.push_context();
     g.assume_const(a, Math::Num(0));
-    let mut expected = vec![g.find(a), g.find(sum)];
+    let mut expected = vec![g.root(a), g.root(sum)];
     expected.sort();
     assert_eq!(g.scope_dirty(), expected);
     g.pop_context();
@@ -711,7 +711,7 @@ fn union_survivor_is_changed() {
     let a = sym(&mut g, 0);
     let b = sym(&mut g, 1);
     g.take_changed();
-    let survivor = g.union(a, b);
+    let survivor = g.union(a, b).unwrap();
     assert_eq!(g.take_changed(), Some(vec![survivor]));
 }
 
@@ -725,7 +725,7 @@ fn repair_reports_re_canonicalized_parents() {
     g.rebuild();
     g.take_changed();
 
-    g.union(a, b);
+    g.union(a, b).unwrap();
     g.rebuild();
     // The merge itself, and the parents congruence then merged: one of them was
     // re-canonicalized onto the other.
@@ -739,7 +739,7 @@ fn assumed_constants_change_their_class() {
     g.take_changed();
     g.push_context();
     g.assume_const(a, Math::Num(1));
-    assert_eq!(g.take_changed(), Some(vec![g.find(a)]));
+    assert_eq!(g.take_changed(), Some(vec![g.root(a)]));
     g.pop_context();
     // The assumption went with the scope, so nothing is left to re-search.
     assert_eq!(g.take_changed(), Some(Vec::new()));
@@ -759,18 +759,18 @@ fn a_scope_leaves_the_change_log_as_it_found_it() {
 
     g.push_context();
     g.assume_const(a, Math::Num(1));
-    g.union(a, b);
+    g.union(a, b).unwrap();
     g.rebuild();
     // The scope's own rounds still see what the scope changed.
     let inside = g.take_changed().expect("scope changes are nameable");
-    assert!(inside.contains(&g.find(a)));
+    assert!(inside.contains(&g.root(a)));
     g.pop_context();
 
     // The base is structurally back where it was, so its pending change is too —
     // and the scope's merges, which no longer hold, are gone.
     assert_eq!(g.take_changed(), Some(vec![c]));
     assert!(!g.connected(a, b));
-    assert!(g.nodes(g.find(na)).count() == 1);
+    assert!(g.nodes(g.root(na)).count() == 1);
 }
 
 #[test]
@@ -782,13 +782,13 @@ fn nested_scopes_restore_one_layer_at_a_time() {
     g.take_changed();
 
     g.push_context();
-    let outer = g.union(a, b);
+    let outer = g.union(a, b).unwrap();
     g.push_context();
     let inner = sym(&mut g, 2);
     g.take_changed();
     g.pop_context();
     // Popping the inner scope restores the outer scope's log, not the base's.
-    assert_eq!(g.take_changed(), Some(vec![g.find(outer)]));
+    assert_eq!(g.take_changed(), Some(vec![g.root(outer)]));
     let _ = inner;
     g.pop_context();
     assert_eq!(g.take_changed(), Some(Vec::new()));
@@ -803,7 +803,7 @@ fn delta_closes_upward_by_height() {
     let fghx = neg(&mut g, ghx);
     g.rebuild();
 
-    let changed = vec![g.find(x)];
+    let changed = vec![g.root(x)];
     assert_eq!(g.delta(&changed, 0), sorted(&g, [x]));
     assert_eq!(g.delta(&changed, 1), sorted(&g, [x, hx]));
     assert_eq!(g.delta(&changed, 2), sorted(&g, [x, hx, ghx]));
@@ -820,7 +820,7 @@ fn delta_covers_a_merged_group_parents_under_a_scope() {
     g.rebuild();
 
     g.push_context();
-    let survivor = g.union(a, b);
+    let survivor = g.union(a, b).unwrap();
     let changed = vec![survivor];
     // Both members' parents are reachable from the merged group.
     assert_eq!(g.delta(&changed, 1), sorted(&g, [survivor, na, nb]));
@@ -828,7 +828,7 @@ fn delta_covers_a_merged_group_parents_under_a_scope() {
 }
 
 fn sorted(g: &Engine<Math>, ids: impl IntoIterator<Item = Id>) -> Vec<Id> {
-    let mut ids: Vec<Id> = ids.into_iter().map(|id| g.find(id)).collect();
+    let mut ids: Vec<Id> = ids.into_iter().map(|id| g.root(id)).collect();
     ids.sort();
     ids.dedup();
     ids
@@ -854,7 +854,7 @@ fn state(g: &Engine<Math>) -> Vec<(u32, Vec<String>, Vec<Vec<u32>>)> {
                 class.0,
                 g.nodes(class).map(op_name).collect(),
                 g.rows(class)
-                    .map(|row| g.children(row).iter().map(|c| g.find(*c).0).collect())
+                    .map(|row| g.children(row).iter().map(|c| g.find(*c).class.0).collect())
                     .collect(),
             )
         })
@@ -877,7 +877,7 @@ fn build(g: &mut Engine<Math>, program: &[(usize, Vec<usize>)]) -> Vec<Id> {
             2 => Math::Add([arg(0, &ids), arg(1, &ids)]),
             _ => Math::Effect(0, [arg(0, &ids)]),
         };
-        ids.push(g.add(made));
+        ids.push(g.add(made).class);
     }
     ids
 }
@@ -892,7 +892,7 @@ proptest! {
         let ids = build(&mut g, &program);
         g.rebuild();
         for (a, b) in merges {
-            g.union(ids[a % ids.len()], ids[b % ids.len()]);
+            g.union(ids[a % ids.len()], ids[b % ids.len()]).unwrap();
         }
         g.rebuild();
         // No two live rows share a label and canonical children in
@@ -905,7 +905,7 @@ proptest! {
                 }
                 let key = (
                     g.label(row).0,
-                    g.children(row).iter().map(|c| g.find(*c).0).collect(),
+                    g.children(row).iter().map(|c| g.find(*c).class.0).collect(),
                 );
                 prop_assert_eq!(*seen.entry(key).or_insert(class.0), class.0);
             }
@@ -935,7 +935,7 @@ proptest! {
         let before = state(&g);
         g.push_context();
         for (a, b) in merges {
-            g.union(ids[a % ids.len()], ids[b % ids.len()]);
+            g.union(ids[a % ids.len()], ids[b % ids.len()]).unwrap();
         }
         g.add(Math::Neg([ids[0]]));
         g.rebuild();

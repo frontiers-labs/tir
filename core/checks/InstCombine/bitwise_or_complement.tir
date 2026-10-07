@@ -23,10 +23,10 @@ module {
 }
 
 // CHECK-LABEL: func.func @or_complement_8(%[[X8:[0-9]+]]: !i8, %[[Y8:[0-9]+]]: !i8, %[[Z8:[0-9]+]]: !i8)
-// CHECK-NEXT: %[[R8:[0-9]+]] = constant {value = 255} : !i8
+// CHECK-NEXT: %[[R8:[0-9]+]] = constant {value = -1} : !i8
 // CHECK-NEXT: -> %[[R8]]
 // CHECK-LABEL: func.func @or_complement_32(%[[X32:[0-9]+]]: !i32, %[[Y32:[0-9]+]]: !i32, %[[Z32:[0-9]+]]: !i32)
-// CHECK-NEXT: %[[R32:[0-9]+]] = constant {value = 4294967295} : !i32
+// CHECK-NEXT: %[[R32:[0-9]+]] = constant {value = -1} : !i32
 // CHECK-NEXT: -> %[[R32]]
 // CHECK-LABEL: func.func @or_complement_64(%[[X64:[0-9]+]]: !i64, %[[Y64:[0-9]+]]: !i64, %[[Z64:[0-9]+]]: !i64)
 // CHECK-NEXT: %[[R64:[0-9]+]] = constant {value = -1} : !i64

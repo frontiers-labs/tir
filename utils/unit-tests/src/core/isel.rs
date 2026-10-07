@@ -649,6 +649,37 @@ module_end
     assert_eq!(body_names(&context, region), vec!["muli", "subi"]);
 }
 
+#[test]
+fn constant_materialization_skips_unevaluated_shift_operands() {
+    for kind in [SymKind::ShiftLeft, SymKind::ShiftRightLogic] {
+        let (context, module, region) = function(
+            r#"module {
+func.func @demo() -> !i64 {
+  %value = constant {value = 7} : !i64
+  func.return %value
+}
+module_end
+}"#,
+        );
+        let mut pattern = SemGraph::new();
+        let value = symbol(&mut pattern, 0);
+        let divisor = fixtures::constant(&mut pattern, 2, 64);
+        let quotient = binary(&mut pattern, SymKind::UDiv, value, divisor);
+        let amount = symbol(&mut pattern, 1);
+        binary(&mut pattern, kind, quotient, amount);
+        let rules = vec![
+            Rule {
+                operand_constraints: vec![(1, OperandConstraint::Immediate)],
+                ..Rule::new("div-shift", pattern, 0, emit_materializer_marker)
+            },
+            materializer_rule(emit_materializer_marker),
+        ];
+
+        select(&context, &module, rules);
+        assert_eq!(body_names(&context, region), vec!["muli"]);
+    }
+}
+
 /// Select `add(a, constant)` with a cheap immediate rule bounded to a signed
 /// 12-bit field (`subi` marker) and an expensive register-form fallback.
 fn run_immediate_range(constant: i64) -> Vec<&'static str> {
@@ -700,10 +731,13 @@ fn immediate_range_gates_immediate_rules() {
     // op is swept.
     assert_eq!(run_immediate_range(2047), vec!["subi"]);
     assert_eq!(run_immediate_range(-2048), vec!["subi"]);
-    // One past either boundary must not bind the immediate rule: the register
-    // form is selected and the constant stays materialized.
-    assert_eq!(run_immediate_range(2048), vec!["constant", "addi"]);
-    assert_eq!(run_immediate_range(-2049), vec!["constant", "addi"]);
+    // One past either boundary must not bind the immediate rule whole: the
+    // field's extreme and the one left over are two immediates that fit.
+    assert_eq!(run_immediate_range(2048), vec!["subi", "subi"]);
+    assert_eq!(run_immediate_range(-2049), vec!["subi", "subi"]);
+    // Twice the field's reach leaves more than it holds: the register form
+    // is selected and the constant stays materialized.
+    assert_eq!(run_immediate_range(8192), vec!["constant", "addi"]);
 }
 
 fn shift_imm_pattern(kind: SymKind) -> SemGraph {
@@ -983,9 +1017,25 @@ module_end
     let source_ops = context.get_region(region).op_ids();
     let source_store = source_ops[1];
     let source_load = source_ops[2];
+    // The offset is an immediate: the address is the slot at offset zero,
+    // which no addition spells.
+    let offset = |rule: Rule| Rule {
+        operand_constraints: vec![(1, OperandConstraint::Immediate)],
+        ..rule
+    };
     let rules = vec![
-        Rule::new("load", load_pattern(), LATENCY_COST_SCALE, emit_load),
-        Rule::new("store", store_pattern(), LATENCY_COST_SCALE, emit_store),
+        offset(Rule::new(
+            "load",
+            load_pattern(),
+            LATENCY_COST_SCALE,
+            emit_load,
+        )),
+        offset(Rule::new(
+            "store",
+            store_pattern(),
+            LATENCY_COST_SCALE,
+            emit_store,
+        )),
     ];
 
     run_pass(&context, &module, InstructionSelectPass::new(rules))

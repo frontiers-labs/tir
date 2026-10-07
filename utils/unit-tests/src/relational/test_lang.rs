@@ -1,6 +1,6 @@
 //! A tiny arithmetic language shared by the e-graph, pattern, and rewrite tests.
 
-use tir_adt::{APFloat, APInt};
+use tir_adt::APFloat;
 
 use tir_relational::{Atom, HeadOp, LabelFill, NoExterns, Plan, Query, Rule};
 use tir_relational::{ClassId as Id, Engine, Label as ENode};
@@ -72,30 +72,22 @@ impl ENode for Math {
     fn is_unique(&self) -> bool {
         matches!(self, Math::Effect(..))
     }
-
-    fn from_int(value: APInt) -> Option<Self> {
-        Some(Math::Num(value.to_i64()))
-    }
-
-    fn from_float(value: APFloat) -> Option<Self> {
-        Some(Math::FNum(value))
-    }
 }
 
 pub(crate) fn num(g: &mut Engine<Math>, n: i64) -> Id {
-    g.add(Math::Num(n))
+    g.add(Math::Num(n)).class
 }
 pub(crate) fn fnum(g: &mut Engine<Math>, v: f64) -> Id {
-    g.add(Math::FNum(APFloat::from_f64(v)))
+    g.add(Math::FNum(APFloat::from_f64(v))).class
 }
 pub(crate) fn sym(g: &mut Engine<Math>, s: u32) -> Id {
-    g.add(Math::Sym(s))
+    g.add(Math::Sym(s)).class
 }
 pub(crate) fn neg(g: &mut Engine<Math>, a: Id) -> Id {
-    g.add(Math::Neg([a]))
+    g.add(Math::Neg([a])).class
 }
 pub(crate) fn add(g: &mut Engine<Math>, a: Id, b: Id) -> Id {
-    g.add(Math::Add([a, b]))
+    g.add(Math::Add([a, b])).class
 }
 
 /// A rule over `Math`, spelled as the atoms of its left-hand side and the

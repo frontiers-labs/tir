@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use crate::Csr;
 use tir_adt::FxBuildHasher;
 
-use crate::{ClassId as Id, Engine, Label as ENode};
+use crate::{ClassId as Id, Engine, Label as ENode, Ref, RowId};
 
 type FxHashMap<K, V> = HashMap<K, V, FxBuildHasher>;
 
@@ -28,6 +28,7 @@ pub struct Extraction<'a, L: ENode> {
 #[derive(Clone)]
 struct Chosen<L> {
     node: L,
+    row: RowId,
     cost: u64,
 }
 
@@ -36,6 +37,13 @@ impl<'a, L: ENode> Extraction<'a, L> {
     /// be canonical ([`Engine::find`]).
     pub fn node(&self, id: Id) -> Option<&L> {
         self.chosen(id).map(|chosen| &chosen.node)
+    }
+
+    /// The e-node chosen for `id`'s class: [`Engine::children`] reads its
+    /// operands as references, and [`Engine::value`] the offset it sits at
+    /// from the class, which a spelling of the class subtracts.
+    pub fn row(&self, id: Id) -> Option<RowId> {
+        self.chosen(id).map(|chosen| chosen.row)
     }
 
     /// This extraction with the classes in `dirty`, and only those, recomputed
@@ -54,7 +62,7 @@ impl<'a, L: ENode> Extraction<'a, L> {
         &'b self,
         eg: &Engine<L>,
         dirty: &[Id],
-        cost_of: impl Fn(Id, &L) -> u64,
+        cost_of: impl Fn(Id, &L, &[Ref], u64) -> u64,
     ) -> Extraction<'b, L> {
         let started = super::telemetry::enabled().then(std::time::Instant::now);
         let extraction = FlatGraph::new(eg, dirty, Some(self), cost_of).solve(Some(self));
@@ -80,13 +88,20 @@ impl<'a, L: ENode> Extraction<'a, L> {
 
 impl<L: ENode> Engine<L> {
     /// Greedy bottom-up extraction: per class, the node minimizing
-    /// `cost_of(class, node)` plus each child's chosen cost. The class is the
-    /// canonical id the node would represent, so a cost model may reject a form
-    /// the class cannot be spelled in. Cycle-tolerant — a node with un-costed
+    /// `cost_of(class, node, operands, offset)` plus each operand class's
+    /// chosen cost. The class is the canonical id the node would represent,
+    /// so a cost model may reject a form the class cannot be spelled in. The
+    /// operands are the node's canonical references, and `offset` is where the
+    /// node sits from the class: a model charges an add-of-constant for each
+    /// non-zero one it has to spell, and nothing for an operand
+    /// [`Engine::int_const`] reads as a constant. Cycle-tolerant — a node with un-costed
     /// children is skipped and revisited to a fixpoint, so a cycle is costed
     /// through its non-cyclic input. Scope-aware via
     /// [`Engine::classes`]/[`Engine::find`].
-    pub fn extract_best(&self, cost_of: impl Fn(Id, &L) -> u64) -> Extraction<'static, L> {
+    pub fn extract_best(
+        &self,
+        cost_of: impl Fn(Id, &L, &[Ref], u64) -> u64,
+    ) -> Extraction<'static, L> {
         let started = super::telemetry::enabled().then(std::time::Instant::now);
         let classes: Vec<Id> = self.class_ids().collect();
         let extraction = FlatGraph::new(self, &classes, None, cost_of).solve(None);
@@ -117,6 +132,7 @@ struct FlatGraph<'a, L: ENode> {
 
 struct FlatNode<'a, L> {
     node: &'a L,
+    row: RowId,
     class: usize,
     /// Operator cost, plus the settled cost of every child outside the table.
     base: u64,
@@ -131,24 +147,28 @@ impl<'a, L: ENode> FlatGraph<'a, L> {
         eg: &'a Engine<L>,
         classes: &'a [Id],
         outside: Option<&Extraction<'_, L>>,
-        cost_of: impl Fn(Id, &L) -> u64,
+        cost_of: impl Fn(Id, &L, &[Ref], u64) -> u64,
     ) -> Self {
         // Class id -> slot, as a dense array: ids run to the graph's high-water
         // mark, absorbed and scope-minted ones included, but the table is a
         // fraction of what a probe per child costs.
         let mut index: Vec<u32> = vec![NONE; eg.class_count()];
         let mut nodes: Vec<FlatNode<'a, L>> = Vec::new();
-        let mut rows: Vec<crate::RowId> = Vec::new();
+        // Every node's operands back to back; a node's `children` range
+        // indexes this until its slots are resolved below.
+        let mut operands: Vec<Ref> = Vec::new();
         for (slot, &id) in classes.iter().enumerate() {
             index[id.index()] = slot as u32;
             for row in eg.rows(id) {
                 let node = eg.node(row);
-                rows.push(row);
+                let start = operands.len();
+                operands.extend(eg.children(row));
                 nodes.push(FlatNode {
                     node,
+                    row,
                     class: slot,
-                    base: cost_of(id, node),
-                    children: 0..0,
+                    base: cost_of(id, node, &operands[start..], eg.value(row).offset),
+                    children: start..operands.len(),
                     costable: true,
                 });
             }
@@ -158,7 +178,8 @@ impl<'a, L: ENode> FlatGraph<'a, L> {
         let mut edges: Vec<(u32, u32)> = Vec::new();
         for (position, entry) in nodes.iter_mut().enumerate() {
             let start = children.len();
-            for child in eg.children(rows[position]) {
+            for operand in &operands[entry.children.clone()] {
+                let child = operand.class;
                 match index[child.index()] {
                     NONE => match outside.and_then(|base| base.cost(child)) {
                         Some(cost) => entry.base = entry.base.saturating_add(cost),
@@ -211,6 +232,7 @@ impl<'a, L: ENode> FlatGraph<'a, L> {
                         id,
                         Some(Chosen {
                             node: self.nodes[position].node.clone(),
+                            row: self.nodes[position].row,
                             cost: cost[slot].expect("a chosen node is a costed one"),
                         }),
                     );
@@ -276,5 +298,52 @@ impl<'a, L: ENode> FlatGraph<'a, L> {
             total = total.saturating_add(cost[slot]?);
         }
         Some(total)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::testing::Term;
+    use crate::{ClassId, Engine, Label, Ref};
+
+    /// Charges one per node, a hundred for a leaf named `r`, and ten for each
+    /// add-of-constant a spelling needs: a non-zero operand offset that is not
+    /// a constant, and a node that sits at an offset from its class.
+    fn cost(eg: &Engine<Term>) -> impl Fn(ClassId, &Term, &[Ref], u64) -> u64 + '_ {
+        move |_, node, operands, offset| {
+            let adds = operands
+                .iter()
+                .filter(|operand| operand.offset != 0 && eg.int_const(**operand).is_none())
+                .count() as u64
+                + u64::from(offset != 0);
+            1 + 99 * u64::from(node.op == "r") + 10 * adds
+        }
+    }
+
+    #[test]
+    fn a_spelling_pays_for_the_offsets_it_has_to_add() {
+        let mut eg = Engine::new();
+        let r = eg.add(Term::typed("r", 8, &[]));
+        let s = eg.add(Term::typed("s", 8, &[]));
+        let p = eg.add(Term::typed("p", 8, &[]));
+        // r == s + 7, and one class holds h(p + 4) and k(p).
+        eg.union(r, Ref::new(s.class, 7)).unwrap();
+        let shifted = eg.insert(Term::typed("h", 8, &[ClassId(0)]), &[Ref::new(p.class, 4)]);
+        let plain = eg.insert(Term::typed("k", 8, &[ClassId(0)]), &[p]);
+        eg.union(shifted, plain).unwrap();
+        eg.rebuild();
+        let extraction = eg.extract_best(cost(&eg));
+
+        let class = eg.root(plain.class);
+        assert_eq!(
+            extraction.node(class).map(|node| node.op.as_str()),
+            Some("k")
+        );
+        // `r` names the class, but `s - 7` is the cheaper spelling of it.
+        let class = eg.root(r.class);
+        let row = extraction.row(class).expect("a costed class");
+        assert_eq!(eg.node(row).op, "s");
+        assert_eq!(eg.value(row), Ref::new(class, 249));
+        assert_eq!(eg.node(row).children().len(), 0);
     }
 }

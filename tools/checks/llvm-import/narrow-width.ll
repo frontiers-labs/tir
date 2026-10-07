@@ -42,9 +42,9 @@ define i32 @choose(i32 %a, i32 %b, i32 %if_true, i32 %if_false) {
 
 ; ARM64-LABEL: asm.symbol {name = "eq8", arg_regs = [%[[A:[0-9]+]]:GPR, %[[B:[0-9]+]]:GPR]}
 ; ARM64: arm64.movz {rd = %[[M:[0-9]+]]:GPR, imm = 255}
+; ARM64-NEXT: arm64.and {rd = %[[AX:[0-9]+]]:GPR, rn = %[[A]]:GPR, rm = %[[M]]:GPR}
 ; ARM64-NEXT: arm64.and {rd = %[[BX:[0-9]+]]:GPR, rn = %[[B]]:GPR, rm = %[[M]]:GPR}
-; ARM64: arm64.lslv {rd = %[[AH:[0-9]+]]:GPR, rn = %[[A]]:GPR
-; ARM64-NEXT: arm64.eor_lsr {rd = %[[D:[0-9]+]]:GPR, rn = %[[BX]]:GPR, rm = %[[AH]]:GPR, imm = 56}
+; ARM64-NEXT: arm64.eor {rd = %[[D:[0-9]+]]:GPR, rn = %[[AX]]:GPR, rm = %[[BX]]:GPR}
 ; ARM64-NEXT: arm64.cmp_imm {rn = %[[D]]:GPR, imm = 1}
 ; ARM64-LABEL: asm.symbol {name = "shr8"
 ; ARM64: arm64.lsrv_w

@@ -19,8 +19,8 @@ pub fn run(args: ToolArgs) -> Result<(), Box<dyn Error>> {
     let input = read_input(args.input.as_ref())?;
 
     let context = Context::with_default_dialects();
-    let module =
-        tir_llvm::import_str(&context, &input).map_err(|e| format!("llvm import failed: {e}"))?;
+    let module = tir_llvm::import_str(&context, &input, None)
+        .map_err(|e| format!("llvm import failed: {e}"))?;
 
     let mut rendered = String::new();
     let mut fmt = IRFormatter::new(&mut rendered);

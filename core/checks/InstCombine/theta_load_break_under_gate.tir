@@ -42,6 +42,6 @@ module {
 // CHECK: %[[RESULT:[0-9]+]] = scf.loop (%[[PORT:[0-9]+]] = %1) {
 // CHECK: -> %{{[0-9]+}}, %[[PORT]]
 // CHECK: %[[NEXT:[0-9]+]] = addi %[[PORT]], %[[PORT]] : !i32
-// CHECK: %[[REPEAT:[0-9]+]] = scf.switch %0 {
+// CHECK: %[[REPEAT:[0-9]+]] = constant {value = 1} : !i1
 // CHECK: -> %[[REPEAT]], %[[NEXT]]
 // CHECK: -> %[[RESULT]], %{{[0-9]+}}

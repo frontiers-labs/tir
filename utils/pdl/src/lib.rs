@@ -32,8 +32,22 @@ pub fn compile(source: &str) -> Result<File, Vec<Diagnostic>> {
     }
 }
 
-pub fn compile_to_rust(source: &str) -> Result<String, Vec<Diagnostic>> {
+pub use sema::dissolved_constants;
+
+/// [`compile`], and reject the patterns an e-graph cannot match: see
+/// [`dissolved_constants`].
+pub fn compile_patterns(source: &str) -> Result<File, Vec<Diagnostic>> {
     let file = compile(source)?;
+    let diagnostics = dissolved_constants(&file);
+    if diagnostics.is_empty() {
+        Ok(file)
+    } else {
+        Err(diagnostics)
+    }
+}
+
+pub fn compile_to_rust(source: &str) -> Result<String, Vec<Diagnostic>> {
+    let file = compile_patterns(source)?;
     codegen::generate(&file)
 }
 

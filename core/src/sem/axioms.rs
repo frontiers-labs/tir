@@ -39,7 +39,7 @@ use std::sync::{LazyLock, Mutex, OnceLock};
 use smallvec::{SmallVec, smallvec};
 use tir_adt::APInt;
 use tir_relational::ClassId as Id;
-use tir_relational::{Atom, Cmp, ColumnId, Expr, Guard, HeadOp, LabelFill, Plan, Query, Source};
+use tir_relational::{Atom, Cmp, ColumnId, Expr, Guard, HeadOp, LabelFill, Plan, Query};
 
 pub(crate) mod pdl;
 
@@ -118,43 +118,6 @@ enum Guard_ {
     Eq(WidthExpr, WidthExpr),
 }
 
-/// A predicate over a matched constant's *value* (not its width). A
-/// `materialize` decomposition axiom guards on a negated one so it fires only on
-/// constants no target instruction produces alone, bounding the saturation
-/// descent.
-#[derive(Clone)]
-struct ValueGuard {
-    var: usize,
-    test: ValueTest,
-    negated: bool,
-}
-
-#[derive(Clone, Copy)]
-enum ValueTest {
-    /// The constant fits a `bits`-bit immediate field.
-    Fits { bits: u32, unsigned: bool },
-    /// One of the target's constant materializers produces the constant.
-    Materializable,
-}
-
-/// `v`'s low `width` bits read as a two's-complement signed value.
-fn sign_extend(v: u64, width: u32) -> i64 {
-    let shift = 64 - width.min(64);
-    ((v << shift) as i64) >> shift
-}
-
-/// Whether `v`, read as two's-complement at its own width, is within the signed
-/// `bits`-bit range `[-2^(bits-1), 2^(bits-1))`.
-fn fits_signed(v: &APInt, bits: u32) -> bool {
-    let signed = sign_extend(v.to_u64(), v.width());
-    let bound = 1i128 << (bits - 1);
-    (-bound..bound).contains(&i128::from(signed))
-}
-
-fn fits_unsigned(v: &APInt, bits: u32) -> bool {
-    bits == 64 || v.to_u64() < (1u64 << bits)
-}
-
 /// The width a template constant materializes at.
 #[derive(Clone)]
 enum ConstWidth {
@@ -181,10 +144,6 @@ enum AxNode {
     /// to the expression, evaluated after widths resolve.
     ConstMatch(WidthExpr),
     Node(SymKind, Vec<AxNode>),
-    /// A materialize-axiom RHS node kept structural (an emitted instruction),
-    /// wrapping a [`AxNode::Node`]; unmarked RHS nodes fold to constants. Purely
-    /// an instantiation directive — semantically transparent to the proof.
-    Keep(Box<AxNode>),
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -266,9 +225,6 @@ pub struct Axiom {
     const_vars: Vec<usize>,
     root_width: WidthBinding,
     guards: Vec<Guard_>,
-    /// Value predicates gating on a matched constant's magnitude (see
-    /// [`ValueGuard`]); only meaningful for `materialize` axioms.
-    value_guards: Vec<ValueGuard>,
     lhs: AxNode,
     rhs: AxNode,
     /// The RHS references the matched root itself (excludes var references).
@@ -280,10 +236,6 @@ pub struct Axiom {
     /// Declared `(phase post-saturation)`: applied once after the iterative
     /// fixpoint instead of participating in it.
     post_saturation: bool,
-    /// A materialize axiom: its LHS root is a bare `consts` var, so it matches
-    /// every constant class, and its RHS structure is unioned *with* the folded
-    /// constant instead of collapsing to it (keeps the shift/add tiling live).
-    materialize: bool,
 }
 
 fn contains_kind(node: &AxNode, expected: SymKind) -> bool {
@@ -291,7 +243,6 @@ fn contains_kind(node: &AxNode, expected: SymKind) -> bool {
         AxNode::Node(kind, children) => {
             *kind == expected || children.iter().any(|child| contains_kind(child, expected))
         }
-        AxNode::Keep(inner) => contains_kind(inner, expected),
         _ => false,
     }
 }
@@ -316,7 +267,6 @@ fn references(node: &AxNode, uses_root: &mut bool, vars: &mut HashSet<usize>) {
                 references(c, uses_root, vars);
             }
         }
-        AxNode::Keep(inner) => references(inner, uses_root, vars),
     }
 }
 
@@ -328,7 +278,6 @@ fn holes_of(node: &AxNode, out: &mut Vec<(String, Option<usize>)>) {
                 holes_of(c, out);
             }
         }
-        AxNode::Keep(inner) => holes_of(inner, out),
         AxNode::Root | AxNode::Const(..) | AxNode::ConstMatch(..) => {}
     }
 }
@@ -360,10 +309,6 @@ impl Axiom {
             lhs_bits,
             rhs_bits,
         }
-    }
-
-    pub(crate) fn materializes_constants(&self) -> bool {
-        self.materialize
     }
 
     /// Compile into a rule: the left-hand side as atoms, the declared widths and
@@ -620,7 +565,6 @@ impl Axiom {
         match node {
             AxNode::Node(SymKind::Port, children) => children.first(),
             AxNode::Node(_, children) => children.iter().find_map(|child| self.port_binder(child)),
-            AxNode::Keep(inner) => self.port_binder(inner),
             _ => None,
         }
     }
@@ -682,7 +626,6 @@ impl Axiom {
                     .collect::<Option<Vec<_>>>()?;
                 Some(op(g, *kind, &children))
             }
-            AxNode::Keep(inner) => self.realize(inner, g, r),
         }
     }
 }
@@ -720,21 +663,6 @@ fn execute_fold(kind: SymKind, operands: &[(u64, u32)]) -> Option<APInt> {
     }
 }
 
-/// Evaluate a pure op over integer operands at bit-width `width`: operands are
-/// truncated to `width`, the op executed there, and the result returned
-/// sign-extended to i64 — the convention program constants are interned with,
-/// so a recursion constant compares and binds like an original one.
-fn fold_values_at(kind: SymKind, values: &[i64], width: u32) -> Option<i64> {
-    let mask = if width >= 64 {
-        u64::MAX
-    } else {
-        (1u64 << width) - 1
-    };
-    let operands: Vec<(u64, u32)> = values.iter().map(|&v| ((v as u64) & mask, width)).collect();
-    let result = execute_fold(kind, &operands)?;
-    Some(sign_extend(result.to_u64(), width))
-}
-
 /// Where the next class variable and the next scalar of a lowered axiom come
 /// from.
 #[derive(Default)]
@@ -765,12 +693,10 @@ pub(crate) mod call {
     pub(crate) const FLOAT_TYPE: u32 = 2;
     pub(crate) const EXTRACT_TYPE: u32 = 3;
     pub(crate) const MAX: u32 = 4;
-    pub(crate) const FITS: u32 = 5;
-    pub(crate) const MATERIALIZABLE: u32 = 6;
-    /// One per pure op a head folds over constants, so the id names the kind.
-    pub(crate) const FOLD: u32 = 8;
-    /// One per pure op the folding rules execute, by the same table as
-    /// [`FOLD`], but over `(value, width)` operands rather than a common width.
+    /// The carrier a value of a type lives in, as one word; zero for none.
+    pub(crate) const CARRIER_OF: u32 = 7;
+    /// One per pure op the folding rules execute over `(value, width)`
+    /// operands, so the id names the kind.
     pub(crate) const EXECUTE: u32 = 512;
     /// One per axiom, so a proof obligation names the axiom it belongs to.
     pub(crate) const VERIFY: u32 = 1024;
@@ -784,24 +710,14 @@ pub struct Interpretation<'a> {
     context: &'a Context,
     axioms: &'a [Axiom],
     folds: &'a [SymKind],
-    materializable: Option<&'a Materializable>,
 }
 
-/// Whether one of a target's instructions produces a constant alone.
-pub type Materializable = dyn Fn(&APInt) -> bool + Send + Sync;
-
 impl<'a> Interpretation<'a> {
-    pub fn new(
-        context: &'a Context,
-        axioms: &'a [Axiom],
-        folds: &'a [SymKind],
-        materializable: Option<&'a Materializable>,
-    ) -> Self {
+    pub fn new(context: &'a Context, axioms: &'a [Axiom], folds: &'a [SymKind]) -> Self {
         Self {
             context,
             axioms,
             folds,
-            materializable,
         }
     }
 }
@@ -847,29 +763,14 @@ impl tir_relational::Externs<SemNode> for Interpretation<'_> {
                 out[0] = args.iter().copied().max().unwrap_or(0);
                 true
             }
-            call::FITS => {
-                let value = APInt::new(args[1] as u32, args[0]);
-                let (bits, unsigned, negated) = (args[2] as u32, args[3] != 0, args[4] != 0);
-                let fits = if unsigned {
-                    fits_unsigned(&value, bits)
-                } else {
-                    fits_signed(&value, bits)
-                };
-                fits == !negated
-            }
-            // Without a target every constant counts as materialized, so no
-            // decomposition fires; neither does one wider than a machine word.
-            call::MATERIALIZABLE => {
-                let width = args[1] as u32;
-                let materializable = !(1..=64).contains(&width)
-                    || self
-                        .materializable
-                        // Read at its own width as two's complement, as the
-                        // matcher reads a signed literal: i32 `-1` fits `addi`.
-                        .is_none_or(|test| {
-                            test(&APInt::new_signed(width, sign_extend(args[0], width)))
-                        });
-                materializable == (args[2] == 0)
+            // A head builds integers and floats; no pointer reaches one.
+            call::CARRIER_OF => {
+                out[0] = crate::sem::node::carrier_word(crate::sem::egraph::carrier_of(
+                    self.context,
+                    None,
+                    TypeId::from_number(args[0] as u32),
+                ));
+                true
             }
             proof if proof >= call::VERIFY => {
                 let axiom = &self.axioms[(proof - call::VERIFY) as usize];
@@ -900,18 +801,7 @@ impl tir_relational::Externs<SemNode> for Interpretation<'_> {
                     None => false,
                 }
             }
-            fold => {
-                let kind = self.folds[(fold - call::FOLD) as usize];
-                let width = args[0] as u32;
-                let values: Vec<i64> = args[1..].iter().map(|&v| v as i64).collect();
-                match fold_values_at(kind, &values, width) {
-                    Some(value) => {
-                        out[0] = value as u64;
-                        true
-                    }
-                    None => false,
-                }
-            }
+            _ => false,
         }
     }
 }
@@ -1002,18 +892,7 @@ impl<'a> Lowering<'a> {
     /// the order the goal stack popped its nodes in and so the order the ids a
     /// saturation mints still depend on.
     fn left(&mut self, axiom: &Axiom) {
-        match &axiom.lhs {
-            // A materialize axiom's left-hand side is a bare constant var: it
-            // matches every constant class so a wide one can be decomposed where
-            // it stands.
-            AxNode::Hole(name, var) => {
-                self.holes.insert(name.clone(), 0);
-                if let Some(index) = var {
-                    self.declared[*index] = 0;
-                }
-            }
-            node => self.node(node, 0),
-        }
+        self.node(&axiom.lhs, 0);
     }
 
     fn node(&mut self, node: &AxNode, class: u32) {
@@ -1082,26 +961,13 @@ impl<'a> Lowering<'a> {
             .push(Guard::Cmp(Cmp::Eq, Expr::Scalar(value), Expr::Scalar(want)));
     }
 
-    /// Bind `class`'s constant, its value and its width.
+    /// Bind `class`'s integer constant, its value and its carrier's width: a
+    /// constant is an offset of its carrier's zero, read off the reference.
     fn constant(&mut self, class: u32) -> (u32, u32) {
-        let label = self.slots.scalar();
         let value = self.slots.scalar();
         let width = self.slots.scalar();
-        self.atoms.push(Atom::Fact {
-            column: ColumnId::Const,
-            key: class,
-            value: label,
-        });
-        self.guards.push(Guard::Read {
-            term: Source::Label(label),
-            field: field::INT_VALUE,
-            out: value,
-        });
-        self.guards.push(Guard::Read {
-            term: Source::Label(label),
-            field: field::INT_WIDTH,
-            out: width,
-        });
+        self.atoms.push(Atom::Const { key: class, value });
+        self.atoms.push(Atom::Width { key: class, width });
         (value, width)
     }
 
@@ -1199,61 +1065,18 @@ impl<'a> Lowering<'a> {
             let constant = self.constant(class);
             self.const_values.insert(var, constant);
         }
-        let mut gated_on: Vec<Expr> = Vec::new();
-        for predicate in &axiom.value_guards {
-            let class = self.declared[predicate.var];
-            let (value, _) = *self
-                .const_values
-                .get(&predicate.var)
-                .expect("a value predicate names a constant var");
-            let width = self.width_of(class);
-            gated_on.extend([Expr::Scalar(value), Expr::Scalar(width)]);
-            let negated = Expr::Lit(i64::from(predicate.negated));
-            let (call, args) = match predicate.test {
-                ValueTest::Fits { bits, unsigned } => (
-                    call::FITS,
-                    smallvec![
-                        Expr::Scalar(value),
-                        Expr::Scalar(width),
-                        Expr::Lit(bits as i64),
-                        Expr::Lit(i64::from(unsigned)),
-                        negated,
-                    ],
-                ),
-                ValueTest::Materializable => (
-                    call::MATERIALIZABLE,
-                    smallvec![Expr::Scalar(value), Expr::Scalar(width), negated],
-                ),
-            };
-            self.guards.push(Guard::Extern {
-                call,
-                terms: SmallVec::new(),
-                args,
-                out: SmallVec::new(),
-            });
-        }
         // The obligation is a debug-build check on the target description, not
         // an input to selection, so it is only in the rule when it is asked for.
         //
         // It is an assertion about a match that passed every filter, not a
-        // filter itself, so it has to be discharged after them. The planner
-        // schedules a guard as soon as everything it reads is bound, so the
-        // obligation reads every scalar the value predicates read as well as
-        // the widths: that makes it ready no earlier than they are, and they
-        // are pushed first, so they are the ones picked. Without this it is
-        // discharged at widths the axiom can never fire at. A materialize axiom
-        // guarded on a constant too wide for the target immediate was proved at
-        // every narrower width too, where its width arithmetic is undefined.
+        // filter itself, so it is pushed after them: the planner schedules a
+        // guard as soon as everything it reads is bound, and of two ready at
+        // once the first pushed goes first.
         if verify_axioms() || axiom.requires_mandatory_proof() {
             self.guards.push(Guard::Extern {
                 call: call::VERIFY + index as u32,
                 terms: SmallVec::new(),
-                args: self
-                    .widths
-                    .iter()
-                    .map(|&w| Expr::Scalar(w))
-                    .chain(gated_on)
-                    .collect(),
+                args: self.widths.iter().map(|&w| Expr::Scalar(w)).collect(),
                 out: SmallVec::new(),
             });
         }
@@ -1332,53 +1155,7 @@ impl<'a> Lowering<'a> {
                     ty: None,
                 }
             }
-            // A kept materialize node stays structural — an emitted instruction —
-            // typed at the root width so its shift and add tile the class.
-            AxNode::Keep(inner) => {
-                let AxNode::Node(kind, children) = &**inner else {
-                    unreachable!("keep wraps a node")
-                };
-                let args: Vec<u32> = children
-                    .iter()
-                    .map(|child| self.build(axiom, child, head).map(|built| built.var))
-                    .collect::<Option<_>>()?;
-                let widths = self.widths.clone();
-                let width = self.let_expr(binding_expr(&axiom.root_width, &widths));
-                let ty = self.int_type(width);
-                Built {
-                    var: self.insert(*kind, &args, Some(ty), head),
-                    value: None,
-                    assumable: false,
-                    ty: Some(ty),
-                }
-            }
             AxNode::Node(kind, children) => {
-                // An unmarked subtree of a materialize axiom is evaluated purely
-                // numerically at the root width — the width the identity was
-                // proved at — and becomes one typed constant class: a clean
-                // recursion target with no back-reference to the wide root and no
-                // junk classes for the deconstruction intermediates.
-                if axiom.materialize {
-                    let widths = self.widths.clone();
-                    let width = self.let_expr(binding_expr(&axiom.root_width, &widths));
-                    let values: SmallVec<[Expr; 4]> = children
-                        .iter()
-                        .map(|child| {
-                            self.build(axiom, child, &mut Vec::new())
-                                .and_then(|built| built.value)
-                                .map(|(value, _)| Expr::Scalar(value))
-                        })
-                        .collect::<Option<_>>()?;
-                    let value = self.fold(*kind, width, values);
-                    let ty = self.int_type(width);
-                    let sixty_four = self.let_expr(Expr::Lit(64));
-                    return Some(Built {
-                        var: self.literal(value, sixty_four, Some(ty), head),
-                        value: Some((value, sixty_four)),
-                        assumable: false,
-                        ty: Some(ty),
-                    });
-                }
                 let built: Vec<Built> = children
                     .iter()
                     .map(|child| self.build(axiom, child, head))
@@ -1386,8 +1163,7 @@ impl<'a> Lowering<'a> {
                 // A pure op the axiom's own text says is over constants folds
                 // where the head builds it, so an immediate consumer binds the
                 // result: `sub(x, c)` becomes `add(x, neg(c))`, and `neg(c)` is
-                // the negated immediate an `addi` reads. A `keep` node is exempt
-                // by construction — it is an instruction, not a value.
+                // the negated immediate an `addi` reads.
                 if let Some(folded) = self.fold_operands(axiom, *kind, &built) {
                     let (value, width) = folded;
                     return Some(Built {
@@ -1550,12 +1326,17 @@ impl<'a> Lowering<'a> {
     ) -> u32 {
         let mut template = template_node(kind, None, None);
         template.children = args.iter().map(|&var| Id::from_raw(var)).collect();
+        // A typed node lives in the carrier its type is, so its laws apply.
+        let fills = match ty {
+            Some(ty) => {
+                let carrier = self.extern_type(call::CARRIER_OF, smallvec![Expr::Scalar(ty)]);
+                smallvec![(field::TY, ty), (field::CARRIER, carrier)]
+            }
+            None => SmallVec::new(),
+        };
         let into = self.slots.var();
         head.push(HeadOp::Insert {
-            label: LabelFill {
-                template,
-                fills: ty.map(|ty| (field::TY, ty)).into_iter().collect(),
-            },
+            label: LabelFill { template, fills },
             args: args.iter().copied().collect(),
             into,
         });
@@ -1607,21 +1388,6 @@ impl<'a> Lowering<'a> {
         let out = self.slots.scalar();
         self.guards.push(Guard::Extern {
             call,
-            terms: SmallVec::new(),
-            args,
-            out: smallvec![out],
-        });
-        out
-    }
-
-    /// The value a pure op takes over constant operands, at `width`.
-    fn fold(&mut self, kind: SymKind, width: u32, values: SmallVec<[Expr; 4]>) -> u32 {
-        let out = self.slots.scalar();
-        let slot = self.fold_slot(kind);
-        let mut args: SmallVec<[Expr; 4]> = smallvec![Expr::Scalar(width)];
-        args.extend(values);
-        self.guards.push(Guard::Extern {
-            call: call::FOLD + slot,
             terms: SmallVec::new(),
             args,
             out: smallvec![out],

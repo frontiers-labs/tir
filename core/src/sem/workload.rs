@@ -10,6 +10,11 @@
 //! negates a conjunction is not. Commutative operators are listed so a loader can add
 //! the rule this engine's matcher applies implicitly.
 //!
+//! The format has no offsets. A class at a non-zero offset is written as a
+//! class of its own holding `Offset:<k>` over the class, and an integer
+//! constant as a class holding its `Constant:<k>` literal, so the graph says
+//! the same thing in plain terms.
+//!
 //! One file per saturation:
 //!
 //! ```text
@@ -26,7 +31,7 @@ use std::sync::OnceLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use tir_relational::{
-    Atom, Cmp, ColumnId, Expr, Guard, HeadOp, Label as _, Rule, Scalar, Source, Step, Var,
+    Atom, Cmp, ColumnId, Expr, Guard, HeadOp, Label as _, Ref, Rule, Scalar, Source, Step, Var,
 };
 
 use crate::sem::node::field;
@@ -105,9 +110,9 @@ fn reads_only(expr: &Expr, known: &BTreeSet<Scalar>) -> bool {
 }
 
 /// The literal `guard` pins a constant to, and the scalar holding that
-/// constant's label, when it is the comparison a rule spells "this operand is
-/// the constant `k`" with: the value read off the label against `k`, bare or
-/// masked to the constant's own width.
+/// constant's value, when it is the comparison a rule spells "this operand is
+/// the constant `k`" with: the value against `k`, bare or masked to the
+/// constant's own width.
 fn pinned(
     guard: &Guard,
     fields: &BTreeMap<Scalar, (Scalar, u32)>,
@@ -143,8 +148,10 @@ fn export(eg: &SemEGraph, rule: &Rule<SemNode>) -> Result<String, &'static str> 
     }
     // Scalars that hold a type or something computed from one.
     let mut typed: BTreeSet<Scalar> = BTreeSet::new();
-    // Constant label scalar -> the class it is the constant of.
+    // Constant value scalar -> the class it is the constant of.
     let mut constants: BTreeMap<Scalar, Var> = BTreeMap::new();
+    // Scalar read off a constant -> the constant's scalar and the field.
+    let mut fields: BTreeMap<Scalar, (Scalar, u32)> = BTreeMap::new();
     let mut atoms: BTreeMap<Var, &Atom<SemNode>> = BTreeMap::new();
     for atom in &query.atoms {
         match atom {
@@ -172,12 +179,14 @@ fn export(eg: &SemEGraph, rule: &Rule<SemNode>) -> Result<String, &'static str> 
                 typed.insert(*value);
                 continue;
             }
-            Atom::Fact {
-                column: ColumnId::Const,
-                key,
-                value,
-            } => {
+            Atom::Const { key, value } => {
                 constants.insert(*value, *key);
+                fields.insert(*value, (*value, field::INT_VALUE));
+                continue;
+            }
+            // A width is the type's, and goes with it.
+            Atom::Width { width, .. } => {
+                typed.insert(*width);
                 continue;
             }
             _ => return Err("fact atom"),
@@ -189,8 +198,6 @@ fn export(eg: &SemEGraph, rule: &Rule<SemNode>) -> Result<String, &'static str> 
     if !atoms.contains_key(&query.root) {
         return Err("bare root");
     }
-    // Scalar read off a constant's label -> that label and the field.
-    let mut fields: BTreeMap<Scalar, (Scalar, u32)> = BTreeMap::new();
     let mut literals: BTreeMap<Var, i64> = BTreeMap::new();
     let mut lets: BTreeMap<Scalar, i64> = BTreeMap::new();
     // The plan orders guards by what they read, so one pass in that order sees
@@ -278,11 +285,19 @@ pub(crate) fn dump(pass: &str, eg: &SemEGraph, rules: &[Rule<SemNode>]) {
     static SEQUENCE: AtomicUsize = AtomicUsize::new(0);
     let mut body = String::new();
     let mut commutative = BTreeSet::new();
+    let mut spelled = Spelled {
+        eg,
+        named: BTreeMap::new(),
+        next: eg.class_count(),
+        lines: String::new(),
+    };
     for class in eg.class_ids() {
-        for node in eg.nodes(class) {
-            write!(body, "n {} {}", class.index(), symbol(node)).unwrap();
-            for &child in node.children() {
-                write!(body, " {}", eg.find(child).index()).unwrap();
+        for row in eg.rows(class) {
+            let node = eg.node(row);
+            let at = spelled.name(eg.value(row));
+            write!(body, "n {at} {}", symbol(node)).unwrap();
+            for child in eg.children(row) {
+                write!(body, " {}", spelled.name(child)).unwrap();
             }
             body.push('\n');
             if node.commutative() && node.children().len() == 2 {
@@ -290,6 +305,7 @@ pub(crate) fn dump(pass: &str, eg: &SemEGraph, rules: &[Rule<SemNode>]) {
             }
         }
     }
+    body.push_str(&spelled.lines);
     for symbol in &commutative {
         writeln!(body, "c {symbol}").unwrap();
     }
@@ -318,4 +334,39 @@ pub(crate) fn dump(pass: &str, eg: &SemEGraph, rules: &[Rule<SemNode>]) {
     // A dump that cannot be written is a diagnostic lost, not a compile failed.
     let _ = std::fs::create_dir_all(directory);
     let _ = std::fs::write(directory.join(name), header + &body);
+}
+
+/// The plain classes a dump writes references as: a class at offset zero is
+/// itself, and anything else a class of its own the first time it is met.
+struct Spelled<'a> {
+    eg: &'a SemEGraph,
+    named: BTreeMap<Ref, usize>,
+    next: usize,
+    /// The nodes the minted classes hold.
+    lines: String,
+}
+
+impl Spelled<'_> {
+    fn name(&mut self, reference: Ref) -> usize {
+        if reference.offset == 0 {
+            return reference.class.index();
+        }
+        if let Some(&known) = self.named.get(&reference) {
+            return known;
+        }
+        let id = self.next;
+        self.next += 1;
+        self.named.insert(reference, id);
+        match self.eg.const_of(reference) {
+            Some(constant) => writeln!(self.lines, "n {id} {}", symbol(&constant)).unwrap(),
+            None => writeln!(
+                self.lines,
+                "n {id} Offset:{} {}",
+                reference.offset,
+                reference.class.index()
+            )
+            .unwrap(),
+        }
+        id
+    }
 }

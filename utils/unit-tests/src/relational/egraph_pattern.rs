@@ -63,8 +63,8 @@ impl ENode for Wild {
 #[test]
 fn the_operator_index_finds_a_wildcard_rooted_match() {
     let mut g: Engine<Wild> = Engine::new();
-    let leaf = g.add(Wild::Leaf(7));
-    let op = g.add(Wild::Op(5, [leaf]));
+    let leaf = g.add(Wild::Leaf(7)).class;
+    let op = g.add(Wild::Op(5, [leaf])).class;
 
     let plan = Plan::compile(Query::tree(
         2,
@@ -79,8 +79,8 @@ fn the_operator_index_finds_a_wildcard_rooted_match() {
     let roots = plan.roots(&g);
     let found = plan.search(&g, roots, &|_, _| true, false, &NoExterns);
     assert_eq!(found.len(), 1);
-    assert_eq!(g.find(found[0].root), g.find(op));
-    assert_eq!(found[0].bindings[1], Some(g.find(leaf)));
+    assert_eq!(g.root(found[0].root), g.root(op));
+    assert_eq!(found[0].binding(1), Some(g.find(leaf)));
 }
 
 /// The legality hook prunes a binding the caller rejects, wherever it sits.
@@ -107,7 +107,7 @@ fn the_legality_hook_prunes_a_binding() {
             .len(),
         1
     );
-    let rejected = g.find(b);
+    let rejected = g.root(b);
     assert!(plan
         .search(&g, roots, &|_, class| class != rejected, false, &NoExterns)
         .is_empty());

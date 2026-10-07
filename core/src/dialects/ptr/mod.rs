@@ -2,7 +2,9 @@
 //! through them. It is deliberately tiny — just enough to express the
 //! memory-based (non-SSA) lowering a simple C frontend produces, where every
 //! local lives in a stack slot. Pointer arithmetic is byte-based and loads/stores
-//! carry no offset.
+//! carry no offset. Every integer added to or taken from a pointer is exactly as
+//! wide as the pointer, the width the data layout gives `p`, so a constant added
+//! to an offset moves to the address unchanged and no width change is implicit.
 
 mod intrinsics;
 
@@ -240,10 +242,14 @@ fn predicate(op: &impl Operation) -> Option<Predicate> {
     }
 }
 
+// `base + offset` modulo 2^W, W the pointer width. The offset is exactly W bits
+// wide: a narrower or wider index is sign- or zero-extended or truncated by an
+// op of its own, so the IR spells which one the source language means.
 operation! {
     PtrAddOp {
         name: "ptradd",
         dialect: "ptr",
+        verifier: "true",
         operands: O {
             base: "crate::ptr::PtrType",
             offset: "crate::builtin::IntegerType",
@@ -251,14 +257,20 @@ operation! {
         results: R {
             result: "crate::ptr::PtrType",
         },
+        interfaces: [crate::Additive],
         sem: "(set result (add base offset))",
     }
 }
 
+impl crate::Additive for PtrAddOp {}
+
+// `lhs - rhs` modulo 2^W, as a W-bit integer, W the pointer width. A narrower
+// or wider result is a truncation or extension of its own.
 operation! {
     PtrDiffOp {
         name: "ptrdiff",
         dialect: "ptr",
+        verifier: "true",
         operands: O {
             lhs: "crate::ptr::PtrType",
             rhs: "crate::ptr::PtrType",
@@ -266,13 +278,68 @@ operation! {
         results: R {
             result: "crate::builtin::IntegerType",
         },
+        interfaces: [crate::Subtractive],
         sem: "(set result (sub lhs rhs))",
     }
 }
 
+impl crate::Subtractive for PtrDiffOp {}
+
+impl tir::Verifiable for PtrAddOp {
+    fn verify_impl(&self, context: &Context) -> Result<(), Error> {
+        pointer_sized(context, &self.0, &[self.operands()[1]], "offset")
+    }
+}
+
+impl tir::Verifiable for PtrDiffOp {
+    fn verify_impl(&self, context: &Context) -> Result<(), Error> {
+        pointer_sized(context, &self.0, &[self.result()], "result")
+    }
+}
+
+/// The integer type of a pointer offset at `op`: as wide as the pointer the
+/// layout in scope declares. With no layout nothing fixes the width or checks
+/// it, so it is 64 bits, the width every byte count in this dialect has.
+pub fn offset_type(context: &Context, op: crate::OpId) -> TypeId {
+    let width = crate::DataLayout::for_op(context, op)
+        .and_then(|layout| layout.pointer_size())
+        .unwrap_or(64);
+    crate::builtin::IntegerType::new(context, width)
+}
+
+/// Rejects an offset, a pointer difference or a byte count added to a pointer
+/// whose width is not the pointer width. That width is a data layout fact, so
+/// with no layout in scope there is nothing to check against.
+fn pointer_sized(
+    context: &Context,
+    op: &tir::OpHandle,
+    values: &[crate::ValueId],
+    what: &str,
+) -> Result<(), Error> {
+    let Some(width) =
+        crate::DataLayout::for_instance(context, op).and_then(|layout| layout.pointer_size())
+    else {
+        return Ok(());
+    };
+    for &value in values {
+        let ty = context.get_type_data(context.get_value(value).ty());
+        let actual = (ty.as_ref() as &dyn Any)
+            .downcast_ref::<crate::builtin::IntegerType>()
+            .map(crate::builtin::IntegerType::width);
+        if actual != Some(width) {
+            return Err(Error::VerificationError(format!(
+                "ptr.{} {what} must be {width} bits wide, the pointer width",
+                op.name()
+            )));
+        }
+    }
+    Ok(())
+}
+
 // `lhs + lhs_size <= rhs || rhs + rhs_size <= lhs`, the addresses unsigned: the
 // two ranges share no byte, provided neither wraps past the end of the address
-// space, which is what the producer of the op has to know. Where a range is
+// space, which is what the producer of the op has to know. The sizes are as
+// wide as a pointer, since they are added to one. Where a range is
 // empty the answer is the formula's, not emptiness's — an empty range inside
 // another is not reported disjoint.
 //
@@ -307,7 +374,7 @@ impl tir::Verifiable for DisjointOp {
                 "ptr.disjoint sizes must have one type".to_string(),
             ));
         }
-        Ok(())
+        pointer_sized(context, &self.0, &[lhs_size, rhs_size], "size")
     }
 }
 

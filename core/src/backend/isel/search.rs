@@ -21,7 +21,7 @@ use tir::{
     sem::{SymKind, SymPayload},
 };
 use tir_adt::{APInt, Dag};
-use tir_relational::ClassId as Id;
+use tir_relational::Ref;
 use tir_symbolic::bitblast::blast;
 use tir_symbolic::sat::{Lit, SatResult};
 
@@ -235,7 +235,7 @@ struct RegionVars {
     /// outcome the region's facts decide.
     controls: Vec<Vec<(ControlChoice, NodeId, u32)>>,
     /// Whether an instance leaves the register named by a base member.
-    registers: HashMap<Id, NodeId>,
+    registers: HashMap<Ref, NodeId>,
 }
 
 struct Encoding {
@@ -245,7 +245,7 @@ struct Encoding {
     cost: Option<NodeId>,
 }
 
-fn encode(problems: &[RegionProblem], fixed: &HashSet<(Id, RegionId)>) -> Encoding {
+fn encode(problems: &[RegionProblem], fixed: &HashSet<(Ref, RegionId)>) -> Encoding {
     let mut formula = Formula::new();
     let mut constraints = Vec::new();
     let mut costs = Vec::new();
@@ -254,7 +254,7 @@ fn encode(problems: &[RegionProblem], fixed: &HashSet<(Id, RegionId)>) -> Encodi
     for problem in problems {
         // The register an enclosing region leaves for a base member: one its
         // demand policy fixes, one an instance of it defines, or none.
-        let held = |member: Id, region: RegionId| {
+        let held = |member: Ref, region: RegionId| {
             if fixed.contains(&(member, region)) {
                 return Ok(true);
             }
@@ -298,19 +298,19 @@ struct RegionEncoder<'a> {
     problem: &'a RegionProblem,
     /// Whether an enclosing region leaves a base member in a register: a
     /// known answer, or the node deciding it.
-    held: &'a dyn Fn(Id, RegionId) -> Result<bool, NodeId>,
+    held: &'a dyn Fn(Ref, RegionId) -> Result<bool, NodeId>,
     tiles: Vec<(NodeId, u32)>,
     /// The instances rooted at each class.
-    at: HashMap<Id, Vec<usize>>,
+    at: HashMap<Ref, Vec<usize>>,
     /// Whether an instance is selected at each class.
-    selected: HashMap<Id, NodeId>,
+    selected: HashMap<Ref, NodeId>,
     /// The control realizations reading each class as a register.
-    overlay: HashMap<Id, Vec<NodeId>>,
+    overlay: HashMap<Ref, Vec<NodeId>>,
     /// The control realizations leaving each class without a value instance.
-    waived: HashMap<Id, Vec<NodeId>>,
-    demanded: HashMap<Id, NodeId>,
-    materialized: HashMap<Id, NodeId>,
-    available: HashMap<Id, NodeId>,
+    waived: HashMap<Ref, Vec<NodeId>>,
+    demanded: HashMap<Ref, NodeId>,
+    materialized: HashMap<Ref, NodeId>,
+    available: HashMap<Ref, NodeId>,
 }
 
 impl<'a> RegionEncoder<'a> {
@@ -319,10 +319,10 @@ impl<'a> RegionEncoder<'a> {
         constraints: &'a mut Vec<NodeId>,
         costs: &'a mut Vec<NodeId>,
         problem: &'a RegionProblem,
-        held: &'a dyn Fn(Id, RegionId) -> Result<bool, NodeId>,
+        held: &'a dyn Fn(Ref, RegionId) -> Result<bool, NodeId>,
     ) -> Self {
         let tiles: Vec<(NodeId, u32)> = problem.matches.iter().map(|_| f.variable(1)).collect();
-        let mut at: HashMap<Id, Vec<usize>> = HashMap::new();
+        let mut at: HashMap<Ref, Vec<usize>> = HashMap::new();
         for (match_id, matched) in problem.matches.iter().enumerate() {
             at.entry(matched.root).or_default().push(match_id);
         }
@@ -375,7 +375,7 @@ impl<'a> RegionEncoder<'a> {
         }
     }
 
-    fn rooted(&self, class: Id) -> &[usize] {
+    fn rooted(&self, class: Ref) -> &[usize] {
         self.at.get(&class).map_or(&[], Vec::as_slice)
     }
 
@@ -388,7 +388,7 @@ impl<'a> RegionEncoder<'a> {
         }
     }
 
-    fn register(&mut self, member: Id, region: RegionId) -> NodeId {
+    fn register(&mut self, member: Ref, region: RegionId) -> NodeId {
         match (self.held)(member, region) {
             Ok(holds) => self.f.truth_of(holds),
             Err(node) => node,
@@ -396,16 +396,14 @@ impl<'a> RegionEncoder<'a> {
     }
 
     /// Whether a register holds the class without an instance of this region.
-    fn external(&mut self, members: &[Id], availability: &Availability) -> NodeId {
+    fn external(&mut self, availability: &Availability) -> NodeId {
         if availability.always {
             return self.f.truth;
         }
         let mut result = self.f.falsity;
-        for &region in &availability.ancestors {
-            for &member in members {
-                let holds = self.register(member, region);
-                result = self.f.or(result, holds);
-            }
+        for &(member, region) in &availability.ancestors {
+            let holds = self.register(member, region);
+            result = self.f.or(result, holds);
         }
         result
     }
@@ -484,7 +482,7 @@ impl<'a> RegionEncoder<'a> {
                 // A register operand reads a constant only through a register
                 // some other use already forces.
                 (Some(_), true) => {
-                    let held = self.external(&facts.members, &facts.availability);
+                    let held = self.external(&facts.availability);
                     let forced = self.f.or(held, self.f.truth_of(facts.placed));
                     let nameable = self.named(&operand.naming);
                     self.f.and(nameable, forced)
@@ -517,7 +515,7 @@ impl<'a> RegionEncoder<'a> {
         for &class in &problem.classes {
             let source = problem.facts(class).source;
             let facts = problem.facts(source);
-            let held = self.external(&facts.members, &facts.availability);
+            let held = self.external(&facts.availability);
             let held = self.f.or(held, self.f.truth_of(facts.hook_constant));
             // A low-bit view re-reads its source's register, so it is there
             // once the source is produced.
@@ -544,13 +542,13 @@ impl<'a> RegionEncoder<'a> {
     /// instance performing it, or to its views.
     fn classes_resolve(&mut self) {
         let problem = self.problem;
-        let mut coverers: HashMap<Id, Vec<usize>> = HashMap::new();
+        let mut coverers: HashMap<Ref, Vec<usize>> = HashMap::new();
         for (match_id, matched) in problem.matches.iter().enumerate() {
             for &class in &matched.covers {
                 coverers.entry(class).or_default().push(match_id);
             }
         }
-        let mut views: HashMap<Id, Vec<Id>> = HashMap::new();
+        let mut views: HashMap<Ref, Vec<Ref>> = HashMap::new();
         for &class in &problem.classes {
             let source = problem.facts(class).source;
             if source != class && !problem.facts(source).has_values {
@@ -631,7 +629,7 @@ impl<'a> RegionEncoder<'a> {
 
     fn one_performer_per_effect(&mut self) {
         let problem = self.problem;
-        let mut performers: HashMap<Id, Vec<NodeId>> = HashMap::new();
+        let mut performers: HashMap<Ref, Vec<NodeId>> = HashMap::new();
         for (match_id, matched) in problem.matches.iter().enumerate() {
             for &class in &matched.effects {
                 let performing = performers.entry(class).or_default();
@@ -652,7 +650,7 @@ impl<'a> RegionEncoder<'a> {
     /// read nothing leaves exactly the ones a cycle can pass through.
     fn ranks(&mut self) {
         // `(reader instance, reader class, read class)`.
-        let mut edges: Vec<(usize, Id, Id)> = Vec::new();
+        let mut edges: Vec<(usize, Ref, Ref)> = Vec::new();
         for (match_id, matched) in self.problem.matches.iter().enumerate() {
             for binding in &matched.bindings.pattern_nodes {
                 if binding.class != matched.root
@@ -666,19 +664,19 @@ impl<'a> RegionEncoder<'a> {
             }
         }
         loop {
-            let readers: HashSet<Id> = edges.iter().map(|&(_, reader, _)| reader).collect();
-            let read: HashSet<Id> = edges.iter().map(|&(_, _, read)| read).collect();
+            let readers: HashSet<Ref> = edges.iter().map(|&(_, reader, _)| reader).collect();
+            let read: HashSet<Ref> = edges.iter().map(|&(_, _, read)| read).collect();
             let before = edges.len();
             edges.retain(|(_, reader, class)| read.contains(reader) && readers.contains(class));
             if edges.len() == before {
                 break;
             }
         }
-        let mut cyclic: Vec<Id> = edges.iter().map(|&(_, reader, _)| reader).collect();
+        let mut cyclic: Vec<Ref> = edges.iter().map(|&(_, reader, _)| reader).collect();
         cyclic.sort();
         cyclic.dedup();
         let width = (usize::BITS - cyclic.len().leading_zeros()).max(1);
-        let rank: HashMap<Id, NodeId> = cyclic
+        let rank: HashMap<Ref, NodeId> = cyclic
             .iter()
             .map(|&class| (class, self.f.variable(width).0))
             .collect();
@@ -745,7 +743,7 @@ fn at_most(bits: &[Lit], bound: u64) -> Vec<Vec<Lit>> {
 /// without the instances nothing reads.
 pub(crate) fn search(
     problems: &[RegionProblem],
-    fixed: &HashSet<(Id, RegionId)>,
+    fixed: &HashSet<(Ref, RegionId)>,
     incumbent: Option<u64>,
     kept: &[Option<&RegionAssignment>],
     accept: &dyn Fn(Vec<RegionAssignment>) -> Option<Vec<RegionAssignment>>,

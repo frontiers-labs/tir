@@ -12,5 +12,5 @@ module {
 }
 
 // CHECK: asm.symbol {name = "negative_offset"
-// CHECK: arm64.add
+// CHECK: arm64.sub_imm {{.*}} imm = 8}
 // CHECK: asm.vret

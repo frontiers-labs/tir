@@ -54,7 +54,6 @@ pub fn analyze(file: &File) -> Vec<Diagnostic> {
         validate_operators(&rule.rhs, &mut diagnostics);
         validate_lhs_shape(rule, &mut diagnostics);
         validate_rhs(&rule.rhs, &binders, &widths, &mut diagnostics);
-        validate_rhs_shape(&rule.rhs, rule, &mut diagnostics);
         for side in [&rule.lhs, &rule.rhs] {
             if let Some(span) = port_outside_loop(side, false) {
                 diagnostics.push(Diagnostic::new(
@@ -187,7 +186,6 @@ fn validate_rhs(
             validate_expr(value, binders, widths, diagnostics);
         }
         TermKind::Value(expr) => validate_expr(expr, binders, widths, diagnostics),
-        TermKind::Keep(inner) => validate_rhs(inner, binders, widths, diagnostics),
         TermKind::Root | TermKind::String(_) => {}
     }
 }
@@ -195,72 +193,112 @@ fn validate_rhs(
 /// Every `#name` names a semantic operator, at an operand count that operator
 /// takes.
 fn validate_operators(term: &Term, diagnostics: &mut Vec<Diagnostic>) {
-    match &term.kind {
-        TermKind::Operation {
-            operator,
-            operands,
-            dependencies,
-            ..
-        } => {
-            let arity = operands.len() + dependencies.len();
-            if let Operator::Semantic(name) = operator {
-                if !dependencies.is_empty() {
+    if let TermKind::Operation {
+        operator,
+        operands,
+        dependencies,
+        ..
+    } = &term.kind
+    {
+        let arity = operands.len() + dependencies.len();
+        if let Operator::Semantic(name) = operator {
+            if !dependencies.is_empty() {
+                diagnostics.push(Diagnostic::new(
+                    format!("'#{name}' takes no dependency operands"),
+                    "only an operation observes a dependency",
+                    term.span,
+                ));
+            }
+            match op_kind(name) {
+                None => diagnostics.push(Diagnostic::new(
+                    format!("unknown semantic operator '#{name}'"),
+                    "this name is not a semantic operator",
+                    term.span,
+                )),
+                Some(kind) if !kind.accepts_arity(arity) => {
                     diagnostics.push(Diagnostic::new(
-                        format!("'#{name}' takes no dependency operands"),
-                        "only an operation observes a dependency",
+                        format!("'#{name}' takes {} operands", kind.arity()),
+                        format!("this term has {arity}"),
                         term.span,
                     ));
                 }
-                match op_kind(name) {
-                    None => diagnostics.push(Diagnostic::new(
-                        format!("unknown semantic operator '#{name}'"),
-                        "this name is not a semantic operator",
+                Some(SymKind::Port)
+                    if !matches!(
+                        operands.as_slice(),
+                        [Term {
+                            kind: TermKind::Binder { .. },
+                            ..
+                        }]
+                    ) =>
+                {
+                    diagnostics.push(Diagnostic::new(
+                        "'#port' names its loop by a binder",
+                        "this operand is not a binder",
                         term.span,
-                    )),
-                    Some(kind) if !kind.accepts_arity(arity) => {
-                        diagnostics.push(Diagnostic::new(
-                            format!("'#{name}' takes {} operands", kind.arity()),
-                            format!("this term has {arity}"),
-                            term.span,
-                        ));
-                    }
-                    Some(SymKind::Port)
-                        if !matches!(
-                            operands.as_slice(),
-                            [Term {
-                                kind: TermKind::Binder { .. },
-                                ..
-                            }]
-                        ) =>
-                    {
-                        diagnostics.push(Diagnostic::new(
-                            "'#port' names its loop by a binder",
-                            "this operand is not a binder",
-                            term.span,
-                        ));
-                    }
-                    Some(_) => {}
+                    ));
                 }
-            }
-            for operand in operands.iter().chain(dependencies) {
-                validate_operators(operand, diagnostics);
+                Some(_) => {}
             }
         }
-        TermKind::Keep(inner) => validate_operators(inner, diagnostics),
-        _ => {}
+        for operand in operands.iter().chain(dependencies) {
+            validate_operators(operand, diagnostics);
+        }
     }
 }
 
-/// A left-hand side is an operation, or the bare constant binder of a
-/// materialize rule. `root` and `keep` are right-hand-side forms.
+/// A left-hand side is an operation. `root` is a right-hand-side form.
 fn validate_lhs_shape(rule: &Rule, diagnostics: &mut Vec<Diagnostic>) {
     forbid_rhs_forms(&rule.lhs, diagnostics);
-    if !matches!(rule.lhs.kind, TermKind::Operation { .. }) && !rule.materializes() {
+    if !matches!(rule.lhs.kind, TermKind::Operation { .. }) {
         diagnostics.push(Diagnostic::new(
-            "left-hand side must be an operation or a constant binder",
+            "left-hand side must be an operation",
             "a bare term matches every class",
             rule.lhs.span,
         ));
+    }
+}
+
+/// The left-hand-side patterns of `file` no e-graph node can match: an
+/// operator with an offset law never holds a constant operand where the law
+/// applies, since the e-graph keeps `x + c` as the reference `x` at offset `c`
+/// rather than as a node. A zero is held where no identity dissolves it, as in
+/// `0 - x`. A prover reads the same rules as statements, where they are fine,
+/// so this is a check for the consumers that match them.
+pub fn dissolved_constants(file: &File) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+    for item in &file.items {
+        if let Item::Rule(rule) = item {
+            forbid_dissolved_constants(&rule.lhs, &mut diagnostics);
+        }
+    }
+    diagnostics
+}
+
+fn forbid_dissolved_constants(term: &Term, diagnostics: &mut Vec<Diagnostic>) {
+    let TermKind::Operation {
+        operator,
+        operands,
+        dependencies,
+        ..
+    } = &term.kind
+    else {
+        return;
+    };
+    if let Operator::Semantic(name) = operator
+        && let Some(kind) = op_kind(name)
+    {
+        for (index, operand) in operands.iter().enumerate() {
+            if !operand.held_under(kind.offset_coefficient(index), kind.identity(index)) {
+                diagnostics.push(Diagnostic::new(
+                    "a constant operand of an operator with an offset law never matches",
+                    "the constant is folded into the value the operator is; match the other operand",
+                    operand.span,
+                ));
+            }
+        }
+    }
+    for operand in operands.iter().chain(dependencies) {
+        forbid_dissolved_constants(operand, diagnostics);
     }
 }
 
@@ -271,11 +309,6 @@ fn forbid_rhs_forms(term: &Term, diagnostics: &mut Vec<Diagnostic>) {
             "`root` names the class the rule matched",
             term.span,
         )),
-        TermKind::Keep(_) => diagnostics.push(Diagnostic::new(
-            "`keep` cannot appear on the left-hand side",
-            "`keep` marks a right-hand-side node as an instruction",
-            term.span,
-        )),
         TermKind::Operation {
             operands,
             dependencies,
@@ -283,39 +316,6 @@ fn forbid_rhs_forms(term: &Term, diagnostics: &mut Vec<Diagnostic>) {
         } => {
             for operand in operands.iter().chain(dependencies) {
                 forbid_rhs_forms(operand, diagnostics);
-            }
-        }
-        _ => {}
-    }
-}
-
-/// `keep` wraps an operation, and only a materialize rule has anything to keep.
-fn validate_rhs_shape(term: &Term, rule: &Rule, diagnostics: &mut Vec<Diagnostic>) {
-    match &term.kind {
-        TermKind::Keep(inner) => {
-            if !rule.materializes() {
-                diagnostics.push(Diagnostic::new(
-                    "`keep` is only meaningful in a materialize rule",
-                    "the left-hand side must be a bare constant binder",
-                    term.span,
-                ));
-            }
-            if !matches!(inner.kind, TermKind::Operation { .. }) {
-                diagnostics.push(Diagnostic::new(
-                    "`keep` wraps an operation",
-                    "there is no instruction to keep here",
-                    term.span,
-                ));
-            }
-            validate_rhs_shape(inner, rule, diagnostics);
-        }
-        TermKind::Operation {
-            operands,
-            dependencies,
-            ..
-        } => {
-            for operand in operands.iter().chain(dependencies) {
-                validate_rhs_shape(operand, rule, diagnostics);
             }
         }
         _ => {}
@@ -337,7 +337,6 @@ fn grows_theta_under_theta(term: &Term) -> bool {
             .iter()
             .chain(dependencies)
             .any(grows_theta_under_theta),
-        TermKind::Keep(inner) => grows_theta_under_theta(inner),
         _ => false,
     }
 }
@@ -350,7 +349,6 @@ fn contains_theta(term: &Term) -> bool {
             dependencies,
             ..
         } => is_theta(operator) || operands.iter().chain(dependencies).any(contains_theta),
-        TermKind::Keep(inner) => contains_theta(inner),
         _ => false,
     }
 }
@@ -382,7 +380,6 @@ fn port_outside_loop(term: &Term, inside: bool) -> Option<Span> {
                 .chain(dependencies)
                 .find_map(|operand| port_outside_loop(operand, inside || is_loop))
         }
-        TermKind::Keep(inner) => port_outside_loop(inner, inside),
         _ => None,
     }
 }

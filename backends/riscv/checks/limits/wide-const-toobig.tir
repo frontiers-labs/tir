@@ -1,8 +1,8 @@
 // RUN: tir mc --march=rv64i --filetype=asm %s | filecheck %s
 
 // 0x80000000 needs bit 31 set with a zero upper half, so RV64 must build it in
-// pieces rather than sign-extending a single LUI/ADDIW pair. The isel
-// decomposition selects (128 << 12) << 12 == 0x80000000.
+// pieces rather than sign-extending a single LUI/ADDIW pair. Matching takes the
+// constant's trailing zeros into a shift: 1 << 31 == 0x80000000.
 
 module {
   %fn_too_big = func.func @too_big() -> !i64 {
@@ -12,6 +12,5 @@ module {
   module_end
 }
 
-// CHECK: addi x5, x0, 128
-// CHECK-NEXT: slli x5, x5, 12
-// CHECK-NEXT: slli x10, x5, 12
+// CHECK: addi x5, x0, 1
+// CHECK-NEXT: slli x10, x5, 31

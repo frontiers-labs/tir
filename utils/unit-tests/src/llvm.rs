@@ -20,7 +20,7 @@ fn import_rejects_unsupported_float_width() {
             }],
         }],
     };
-    let error = match tir_llvm::import(&Context::default(), &module) {
+    let error = match tir_llvm::import(&Context::default(), &module, None) {
         Ok(_) => panic!("unsupported float width was accepted"),
         Err(error) => error,
     };

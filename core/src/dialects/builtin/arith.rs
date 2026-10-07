@@ -2,8 +2,8 @@ use crate::operation;
 
 use crate as tir;
 use crate::{
-    Any, Commutative, ConstantLike, Context, Error, IntegerArithmetic, OpCost, Operation,
-    SameOperandAndResultType, Speculatable,
+    Additive, Any, Commutative, ConstantLike, Context, Error, IntegerArithmetic, OpCost, Operation,
+    SameOperandAndResultType, Speculatable, Subtractive,
 };
 
 operation! {
@@ -67,6 +67,7 @@ int_binop!(
     AddIOp,
     "addi",
     [
+        Additive,
         Commutative,
         SameOperandAndResultType,
         IntegerArithmetic,
@@ -77,7 +78,12 @@ int_binop!(
 int_binop!(
     SubIOp,
     "subi",
-    [SameOperandAndResultType, IntegerArithmetic, Speculatable],
+    [
+        Subtractive,
+        SameOperandAndResultType,
+        IntegerArithmetic,
+        Speculatable
+    ],
     "(set result (sub lhs rhs))"
 );
 int_binop!(

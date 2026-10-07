@@ -80,6 +80,40 @@ pub enum Proof {
     Contract,
 }
 
+impl Term {
+    /// Whether the term matches only an integer constant: a number written
+    /// in place, bare or as `const<W>(...)`, or a binder declared `const`.
+    pub fn is_constant(&self) -> bool {
+        matches!(
+            self.kind,
+            TermKind::Value(_)
+                | TermKind::Constant { .. }
+                | TermKind::Binder {
+                    ty: Some(BindingType::Constant(_)),
+                    ..
+                }
+        )
+    }
+
+    /// Whether the term is the literal zero, bare or as `const<W>(0)`.
+    pub fn is_zero(&self) -> bool {
+        let zero = |value: &Expr| matches!(value.kind, ExprKind::Integer(0));
+        match &self.kind {
+            TermKind::Value(value) | TermKind::Constant { value, .. } => zero(value),
+            _ => false,
+        }
+    }
+
+    /// Whether this operand can match at position `operand` of an operator
+    /// with the given offset law. A constant with a coefficient is moved out
+    /// of the node into its value, leaving the zero behind, which an identity
+    /// at that position dissolves as well; so only a literal zero where there
+    /// is no identity is ever held.
+    pub fn held_under(&self, coefficient: Option<i64>, identity: Option<u64>) -> bool {
+        !self.is_constant() || coefficient.is_none() || (self.is_zero() && identity.is_none())
+    }
+}
+
 impl Rule {
     pub fn is_floating_point(&self) -> bool {
         names_fp_op(&self.lhs)
@@ -114,18 +148,6 @@ impl Rule {
             proof: self.proof,
         })
     }
-
-    /// Whether the left-hand side is a bare constant binder, which matches every
-    /// constant class so a wide constant can be decomposed in place.
-    pub fn materializes(&self) -> bool {
-        matches!(
-            &self.lhs.kind,
-            TermKind::Binder {
-                ty: Some(BindingType::Constant(_)),
-                ..
-            }
-        )
-    }
 }
 
 fn names_fp_op(term: &Term) -> bool {
@@ -139,7 +161,6 @@ fn names_fp_op(term: &Term) -> bool {
             matches!(operator, Operator::Dialect { dialect, .. } if dialect == "fp")
                 || operands.iter().chain(dependencies).any(names_fp_op)
         }
-        TermKind::Keep(inner) => names_fp_op(inner),
         _ => false,
     }
 }
@@ -149,7 +170,6 @@ fn names_dialect_op(term: &Term) -> bool {
         TermKind::Operation {
             operator, operands, ..
         } => matches!(operator, Operator::Dialect { .. }) || operands.iter().any(names_dialect_op),
-        TermKind::Keep(inner) => names_dialect_op(inner),
         _ => false,
     }
 }
@@ -205,7 +225,6 @@ fn names_fp_semantic_op(term: &Term) -> bool {
             .iter()
             .chain(dependencies)
             .any(names_fp_semantic_op),
-        TermKind::Keep(inner) => names_fp_semantic_op(inner),
         _ => false,
     }
 }
@@ -224,7 +243,6 @@ fn contains_float_type(term: &Term) -> bool {
             dependencies,
             ..
         } => operands.iter().chain(dependencies).any(contains_float_type),
-        TermKind::Keep(inner) => contains_float_type(inner),
         _ => false,
     }
 }
@@ -246,7 +264,6 @@ fn contains_fp_env_state(term: &Term) -> bool {
             .iter()
             .chain(dependencies)
             .any(contains_fp_env_state),
-        TermKind::Keep(inner) => contains_fp_env_state(inner),
         _ => false,
     }
 }
@@ -288,9 +305,6 @@ pub enum TermKind {
     },
     /// The matched root class. Right-hand side only.
     Root,
-    /// A right-hand-side node a materialize rule keeps as an instruction instead
-    /// of folding to the constant it computes.
-    Keep(Box<Term>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

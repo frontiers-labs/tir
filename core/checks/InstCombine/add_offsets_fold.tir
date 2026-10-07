@@ -1,0 +1,29 @@
+// RUN: tir opt --pass restructure-nodes,instcombine-nodes --verify %s | filecheck %s
+// RUN: tir interp %s -f f --args=10,20 | filecheck --check-prefix=VALUE %s
+// RUN: tir opt --pass restructure-nodes,instcombine-nodes %s | tir interp -f f --args=10,20 | filecheck --check-prefix=VALUE %s
+
+// A constant added to an operand of an add moves to the result: the value of
+// `(x + 3) + (y + 5)` is `x + y` at offset 8, with no rule reassociating it.
+// It is spelled as the one add the offset needs over the sum.
+
+module {
+  %fn_f = func.func @f(%x: !i32, %y: !i32) -> !i32 {
+    %c3 = constant {value = 3} : !i32
+    %c5 = constant {value = 5} : !i32
+    %a = addi %x, %c3 : !i32
+    %b = addi %y, %c5 : !i32
+    %r = addi %a, %b : !i32
+    func.return %r
+  }
+  module_end
+}
+
+// CHECK-LABEL: func.func @f(%[[X:[0-9]+]]: !i32, %[[Y:[0-9]+]]: !i32)
+// CHECK-NOT: constant {value = 3}
+// CHECK-NOT: constant {value = 5}
+// CHECK-DAG: %[[SUM:[0-9]+]] = addi %[[X]], %[[Y]] : !i32
+// CHECK-DAG: %[[EIGHT:[0-9]+]] = constant {value = 8} : !i32
+// CHECK: %[[R:[0-9]+]] = addi %[[SUM]], %[[EIGHT]] : !i32
+// CHECK-NEXT: -> %[[R]]
+
+// VALUE: i32 38

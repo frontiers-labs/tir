@@ -1,0 +1,38 @@
+// RUN: tir mc --march=x86_64 --stage=isel %s | filecheck %s
+
+// A displacement is the offset of the address's reference, so it is read off
+// the address rather than found by reassociating it. Adding the displacement
+// before or after the scaled index spells one reference, and both select one
+// load with a scaled index and the displacement.
+
+module {
+  %fn_scale_then_disp = func.func @scale_then_disp(%base: !ptr.p<!i32>, %index: !i64) -> !i32 {
+    %scale = constant {value = 4} : !i64
+    %scaled = muli %index, %scale : !i64
+    %p = ptr.ptradd %base, %scaled : !ptr.p<!i32>
+    %disp = constant {value = 5000} : !i64
+    %q = ptr.ptradd %p, %disp : !ptr.p<!i32>
+    %v = ptr.load %q : !i32
+    func.return %v
+  }
+
+  %fn_disp_then_scale = func.func @disp_then_scale(%base: !ptr.p<!i32>, %index: !i64) -> !i32 {
+    %disp = constant {value = 5000} : !i64
+    %p = ptr.ptradd %base, %disp : !ptr.p<!i32>
+    %scale = constant {value = 4} : !i64
+    %scaled = muli %index, %scale : !i64
+    %q = ptr.ptradd %p, %scaled : !ptr.p<!i32>
+    %v = ptr.load %q : !i32
+    func.return %v
+  }
+  module_end
+}
+
+// CHECK-LABEL: asm.symbol {name = "scale_then_disp", arg_regs = [%[[B:[0-9]+]]:GPR, %[[I:[0-9]+]]:GPR]}
+// CHECK-NOT: lea
+// CHECK: x86_64.mov_load32_index4_disp {dst = %{{[0-9]+}}:GPR32, base = %[[B]]:GPR, index = %[[I]]:GPR, imm = 5000}
+// CHECK-NEXT: asm.vret
+// CHECK-LABEL: asm.symbol {name = "disp_then_scale", arg_regs = [%[[B:[0-9]+]]:GPR, %[[I:[0-9]+]]:GPR]}
+// CHECK-NOT: lea
+// CHECK: x86_64.mov_load32_index4_disp {dst = %{{[0-9]+}}:GPR32, base = %[[B]]:GPR, index = %[[I]]:GPR, imm = 5000}
+// CHECK-NEXT: asm.vret

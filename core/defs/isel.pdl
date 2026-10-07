@@ -1,22 +1,8 @@
 // Target-independent instruction-selection invariants.
 
-rule add-constants:
-  #add(a: const<W>, b: const<W>) : int<W>
-  => #add(a, b);
-
-rule sub-constants:
-  #sub(a: const<W>, b: const<W>) : int<W>
-  => #sub(a, b);
-
 rule mul-constants:
   #mul(a: const<W>, b: const<W>) : int<W>
   => #mul(a, b);
-
-rule add-zero: #add(x: int<W>, 0) : int<W>
-  => x;
-
-rule sub-zero: #sub(x: int<W>, 0) : int<W>
-  => x;
 
 rule mul-one: #mul(x: int<W>, 1) : int<W>
   => x;
@@ -29,28 +15,6 @@ rule and-zero: #and(x: int<W>, 0) : int<W>
 
 rule or-zero: #or(x: int<W>, 0) : int<W>
   => x;
-
-// Fold only the nested constant arm after the saturation fixpoint. Running
-// these rules iteratively would feed the new constant into the same e-class.
-rule add-const-reassociate:
-  #add(#add(x: int<W>, a: const<W>), b: const<W>) : int<W>
-  => #add(x, #add(a, b))
-  phase post-saturation;
-
-rule sub-const-reassociate:
-  #sub(#sub(x: int<W>, a: const<W>), b: const<W>) : int<W>
-  => #sub(x, #add(a, b))
-  phase post-saturation;
-
-rule add-sub-const-reassociate:
-  #add(#sub(x: int<W>, a: const<W>), b: const<W>) : int<W>
-  => #add(x, #sub(b, a))
-  phase post-saturation;
-
-rule sub-add-const-reassociate:
-  #sub(#add(x: int<W>, a: const<W>), b: const<W>) : int<W>
-  => #add(x, #sub(a, b))
-  phase post-saturation;
 
 rule sext-bridge: #sext(x: int<N>, W) : int<W>
   => #ashr(#shl(x, W - N), W - N)
@@ -180,9 +144,6 @@ rule not-sub-one: #not(x: int<W>) : int<W>
 rule not-xor: #not(x: int<W>) : int<W>
   => #xor(ones(W), x);
 
-rule not-add-sub: #not(x: int<W>) : int<W>
-  => #sub(0, #add(1, x));
-
 rule eq-via-if: #eq(a, b) : int<1>
   => #if(root, #zext(const<1>(1), const<1>(1)), #zext(const<1>(0), const<1>(1)));
 
@@ -236,9 +197,6 @@ rule uge-via-cmp: #uge(a: int<W>, b: int<W>) : int<1>
 
 rule ule-via-cmp: #ule(a: int<W>, b: int<W>) : int<1>
   => #xor(#ult(b, a), const<1>(1));
-
-rule sub-via-add-neg: #sub(a: int<W>, c: const<W>) : int<W>
-  => #add(a, #neg(c));
 
 // Multiplication by a small power of two is a left shift. The shift count has
 // the value's width so the equality holds at every width the rule fires at.
@@ -359,63 +317,3 @@ rule low-byte-xor-ne:
   #ne(#and(#xor(a: int<W>, b: int<W>), const<W>(255)), const<W>(0)) : int<1>
   => #ne(#extract(a, const<3>(7), const<1>(0)), #extract(b, const<3>(7), const<1>(0)))
   where 8 < W;
-
-// Wide constants. Each rule decomposes a constant no single target instruction
-// materializes into operations over narrower constants. `keep` marks the
-// operations that survive as instructions; everything unmarked folds to a
-// constant, which the rules decompose again until the target materializes it.
-// Selection costs the alternatives, so a target uses the decomposition its
-// instructions cover.
-//
-// A signed 12-bit low part `lo = (v << (W - 12)) >> (W - 12)` splits off an
-// immediate addition, and `v - lo` is a multiple of 4096:
-//
-//   v == ((((v - lo) >> 12) << 12) + lo)
-//
-// The recovered high part `(v - lo) >> 12` is narrower by 12 bits, which bounds
-// the descent.
-rule wide-const-split: v: const<W>
-  => keep #add(
-       keep #shl(#ashr(#sub(v, #ashr(#shl(v, W - 12), W - 12)), 12), 12),
-       #ashr(#shl(v, W - 12), W - 12)
-     )
-  where !materializable(v);
-
-// A 16-bit halfword inserted at bit 16, 32, or 48 keeps the other bits and
-// replaces its own. Each partition covers the values whose highest nonzero
-// halfword it inserts; the kept tree is the halfword insertion itself.
-rule wide-const-u32: v: const<W>
-  => keep #or(
-       keep #and(
-         #and(v, #not(#mul(65535, 65536))),
-         keep #not(keep #mul(
-           keep #zext(const<16>(65535), W),
-           keep #zext(const<17>(65536), W)))
-       ),
-       keep #mul(#and(#lshr(v, 16), 65535), keep #zext(const<17>(65536), W))
-     )
-  where !materializable(v), ufits(v, 32);
-
-rule wide-const-u48: v: const<W>
-  => keep #or(
-       keep #and(
-         #and(v, #not(#mul(65535, 4294967296))),
-         keep #not(keep #mul(
-           keep #zext(const<16>(65535), W),
-           keep #zext(const<33>(4294967296), W)))
-       ),
-       keep #mul(#and(#lshr(v, 32), 65535), keep #zext(const<33>(4294967296), W))
-     )
-  where !materializable(v), !ufits(v, 32), ufits(v, 48);
-
-rule wide-const-u64: v: const<W>
-  => keep #or(
-       keep #and(
-         #and(v, #not(#mul(65535, 281474976710656))),
-         keep #not(keep #mul(
-           keep #zext(const<16>(65535), W),
-           keep #zext(const<49>(281474976710656), W)))
-       ),
-       keep #mul(#and(#lshr(v, 48), 65535), keep #zext(const<49>(281474976710656), W))
-     )
-  where !materializable(v), !ufits(v, 48);

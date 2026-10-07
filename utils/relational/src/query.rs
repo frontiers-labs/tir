@@ -11,7 +11,7 @@ use smallvec::SmallVec;
 
 use crate::engine::{Candidates, Groups};
 use crate::store::Table;
-use crate::{ClassId, Engine, Label, LabelId};
+use crate::{ClassId, Engine, Label, LabelId, Ref};
 
 /// A class variable of a [`Query`], numbered from zero.
 pub type Var = u32;
@@ -32,8 +32,6 @@ pub enum ColumnId {
     Const,
     /// The type its terms carry.
     Type,
-    /// The class it is derived from and the distance to it.
-    Object,
 }
 
 /// The host's primitive functions over what a match bound: labels an atom
@@ -90,15 +88,13 @@ impl Expr {
         })
     }
 
-    fn reads(&self, out: &mut Vec<Scalar>) {
+    /// Whether every scalar the expression reads is `known`.
+    fn ready(&self, known: &[bool]) -> bool {
         match self {
-            Expr::Lit(_) => {}
-            Expr::Scalar(slot) => out.push(*slot),
-            Expr::Sub(a, b) | Expr::Add(a, b) | Expr::And(a, b) => {
-                a.reads(out);
-                b.reads(out);
-            }
-            Expr::Ones(e) | Expr::IsZero(e) => e.reads(out),
+            Expr::Lit(_) => true,
+            Expr::Scalar(slot) => known[*slot as usize],
+            Expr::Sub(a, b) | Expr::Add(a, b) | Expr::And(a, b) => a.ready(known) && b.ready(known),
+            Expr::Ones(e) | Expr::IsZero(e) => e.ready(known),
         }
     }
 }
@@ -137,7 +133,7 @@ pub enum Guard {
         out: Scalar,
         value: Expr,
     },
-    /// The pairs are not all bound to the same class. One pair is plain
+    /// The pairs are not all bound to the same reference. One pair is plain
     /// disequality; several say "these two terms are not the same term".
     Distinct(SmallVec<[(Var, Var); 4]>),
     /// Read `field` off the label a fact column bound, so a constant's value and
@@ -159,56 +155,52 @@ pub enum Guard {
 }
 
 impl Guard {
-    fn reads(&self) -> Vec<Scalar> {
-        let mut out = Vec::new();
+    /// Whether every scalar the guard reads is `known` and every class
+    /// variable it reads (only a disequality has any) is `bound`.
+    fn ready(&self, known: &[bool], bound: &[bool]) -> bool {
         match self {
-            Guard::Cmp(_, a, b) => {
-                a.reads(&mut out);
-                b.reads(&mut out);
-            }
-            Guard::Let { value, .. } => value.reads(&mut out),
-            Guard::Distinct(..) => {}
-            Guard::Read { term, .. } => out.push(term.slot()),
+            Guard::Cmp(_, a, b) => a.ready(known) && b.ready(known),
+            Guard::Let { value, .. } => value.ready(known),
+            Guard::Distinct(pairs) => pairs
+                .iter()
+                .all(|&(a, b)| bound[a as usize] && bound[b as usize]),
+            Guard::Read { term, .. } => known[term.slot() as usize],
             Guard::Extern { terms, args, .. } => {
-                out.extend(terms.iter().map(|term| term.slot()));
-                for arg in args {
-                    arg.reads(&mut out);
-                }
+                terms.iter().all(|term| known[term.slot() as usize])
+                    && args.iter().all(|arg| arg.ready(known))
             }
         }
-        out
     }
 
-    /// The class variables the guard reads. Only a disequality has any: the
-    /// rest work on words.
-    fn vars(&self) -> SmallVec<[Var; 8]> {
+    #[inline]
+    fn writes(&self) -> &[Scalar] {
         match self {
-            Guard::Distinct(pairs) => pairs.iter().flat_map(|&(a, b)| [a, b]).collect(),
-            _ => SmallVec::new(),
-        }
-    }
-
-    fn writes(&self) -> SmallVec<[Scalar; 2]> {
-        match self {
-            Guard::Cmp(..) | Guard::Distinct(..) => SmallVec::new(),
-            Guard::Let { out, .. } | Guard::Read { out, .. } => SmallVec::from_slice(&[*out]),
-            Guard::Extern { out, .. } => out.clone(),
+            Guard::Cmp(..) | Guard::Distinct(..) => &[],
+            Guard::Let { out, .. } | Guard::Read { out, .. } => std::slice::from_ref(out),
+            Guard::Extern { out, .. } => out,
         }
     }
 }
 
+/// One conjunct of a [`Query`]. Variables bind references: a class and an
+/// offset. A variable bound twice must bind the same reference both times.
 #[derive(Clone, Debug)]
 pub enum Atom<L> {
-    /// A row of `class` whose label matches `template` and whose children bind
-    /// `args`, one per operand. `row` binds the matched row, whose e-node a
-    /// guard reads fields off or hands to a host function.
+    /// A row whose label matches `template`, whose value is `class` and whose
+    /// operands bind `args`, one per operand. `row` binds the matched row,
+    /// whose e-node a guard reads fields off or hands to a host function.
+    ///
+    /// The root variable, before an atom fixes its offset, stands for its
+    /// class at whatever offset the row it meets is at, so a search from a
+    /// class meets every e-node of it.
     Node {
         template: L,
         args: SmallVec<[Var; 4]>,
         class: Var,
         row: Option<Scalar>,
     },
-    /// `class` holds `value` as a childless row, or is assumed to evaluate to it.
+    /// `class` is the constant `value`: its carrier's zero at that offset,
+    /// or, outside a carrier, a class the constant column holds it for.
     Literal { value: L, class: Var },
     /// `key` has a value in `column`; bind it to `value`.
     Fact {
@@ -216,15 +208,16 @@ pub enum Atom<L> {
         key: Var,
         value: Scalar,
     },
-    /// What `key` is derived from: `base` and the distance `offset`. A class
-    /// nothing derived is its own base at zero — the reading that makes two
-    /// unrelated addresses overlap rather than not — and a class whose
-    /// derivations disagree satisfies nothing.
-    Object { key: Var, base: Var, offset: Scalar },
-    /// The terms derive `key` two ways at once, so it is placed nowhere. The
-    /// complement of [`Atom::Object`], which a negated conjunction needs: a law
-    /// that refuses an access it cannot place must be able to *match* one.
-    Unplaceable { key: Var },
+    /// `key` is `base`, its class at offset zero, plus the scalar `offset`.
+    Offset { key: Var, base: Var, offset: Scalar },
+    /// `key` is an integer constant of a carrier: bind its value to `value`.
+    Const { key: Var, value: Scalar },
+    /// `key`'s class has a carrier: bind its width to `width`.
+    Width { key: Var, width: Scalar },
+    /// A union tried to put `key`'s class at a non-zero offset from itself:
+    /// it is placed two ways at once, so nowhere. A law that refuses what it
+    /// cannot place matches this, in a negated conjunction as well.
+    Conflicted { key: Var },
     /// `key` holds a row of operator `op`, whatever its operands — the one
     /// reading that does not fix an arity.
     Holds { key: Var, op: u64 },
@@ -255,8 +248,10 @@ impl<L> Atom<L> {
         match self {
             Atom::Node { class, .. } | Atom::Literal { class, .. } => *class,
             Atom::Fact { key, .. }
-            | Atom::Object { key, .. }
-            | Atom::Unplaceable { key }
+            | Atom::Offset { key, .. }
+            | Atom::Const { key, .. }
+            | Atom::Width { key, .. }
+            | Atom::Conflicted { key }
             | Atom::Holds { key, .. }
             | Atom::Unknown { key, .. } => *key,
         }
@@ -268,8 +263,10 @@ impl<L> Atom<L> {
             Atom::Node { row, .. } => row.iter().copied().collect(),
             Atom::Literal { .. } => SmallVec::new(),
             Atom::Fact { value, .. } => SmallVec::from_slice(&[*value]),
-            Atom::Object { offset, .. } => SmallVec::from_slice(&[*offset]),
-            Atom::Unplaceable { .. } | Atom::Holds { .. } | Atom::Unknown { .. } => SmallVec::new(),
+            Atom::Offset { offset, .. } => SmallVec::from_slice(&[*offset]),
+            Atom::Const { value, .. } => SmallVec::from_slice(&[*value]),
+            Atom::Width { width, .. } => SmallVec::from_slice(&[*width]),
+            Atom::Conflicted { .. } | Atom::Holds { .. } | Atom::Unknown { .. } => SmallVec::new(),
         }
     }
 }
@@ -303,13 +300,22 @@ impl<L> Query<L> {
     }
 }
 
-/// One match: the class the root variable bound to, and the class every
-/// variable bound to. `None` for a variable no atom reached.
+/// One match: the class the root variable bound to, and the reference every
+/// variable bound to, read through [`Match::binding`].
 #[derive(Clone, Debug)]
 pub struct Match {
     pub root: ClassId,
-    pub bindings: SmallVec<[Option<ClassId>; 8]>,
+    /// Per variable, its reference, or a class no graph has for a variable
+    /// no atom reached.
+    pub bindings: SmallVec<[Ref; 8]>,
     pub scalars: SmallVec<[u64; 8]>,
+}
+
+impl Match {
+    /// What `var` bound to; `None` for a variable no atom reached.
+    pub fn binding(&self, var: Var) -> Option<Ref> {
+        bound(self.bindings[var as usize])
+    }
 }
 
 /// An evaluation order: the steps, the template levels below the root, and
@@ -321,8 +327,9 @@ type Ordered<L> = (Vec<Step>, usize, Vec<Plan<L>>);
 #[derive(Default)]
 pub(crate) struct Matches {
     roots: Vec<ClassId>,
-    /// `roots.len()` rows of bindings back to back, and the same of scalars.
-    bindings: Vec<Option<ClassId>>,
+    /// `roots.len()` rows of bindings back to back, [`UNBOUND`] for a
+    /// variable no atom reached, and the same of scalars.
+    bindings: Vec<Ref>,
     scalars: Vec<u64>,
 }
 
@@ -331,14 +338,15 @@ impl Matches {
         self.roots.len()
     }
 
-    fn push(&mut self, root: ClassId, bindings: &[Option<ClassId>], scalars: &[u64]) {
+    fn push(&mut self, root: ClassId, bindings: &[Ref], scalars: &[u64]) {
         self.roots.push(root);
         self.bindings.extend_from_slice(bindings);
         self.scalars.extend_from_slice(scalars);
     }
 
     /// The root, bindings and scalars of match `index`.
-    pub(crate) fn get(&self, index: usize) -> (ClassId, &[Option<ClassId>], &[u64]) {
+    #[inline]
+    pub(crate) fn get(&self, index: usize) -> (ClassId, &[Ref], &[u64]) {
         let vars = self.bindings.len() / self.roots.len();
         let scalars = self.scalars.len() / self.roots.len();
         (
@@ -355,7 +363,13 @@ impl Matches {
         self.scalars.extend(other.scalars);
     }
 
-    fn into_vec(self) -> Vec<Match> {
+    fn clear(&mut self) {
+        self.roots.clear();
+        self.bindings.clear();
+        self.scalars.clear();
+    }
+
+    fn to_vec(&self) -> Vec<Match> {
         (0..self.len())
             .map(|index| {
                 let (root, bindings, scalars) = self.get(index);
@@ -435,12 +449,21 @@ pub struct PlanCache {
     scratch: Scratch,
 }
 
+impl PlanCache {
+    /// Hand back the matches of a search once they are spent, so the next
+    /// search fills their arrays rather than growing new ones.
+    pub(crate) fn recycle(&mut self, matches: Matches) {
+        self.scratch.out = matches;
+    }
+}
+
 #[derive(Default)]
 struct Scratch {
-    bound: Vec<Option<ClassId>>,
+    bound: Vec<Ref>,
     scalars: Vec<u64>,
     trail: Vec<Var>,
     pool: Vec<Vec<u32>>,
+    out: Matches,
 }
 
 /// A search expecting at most this many starting points looks rows up by
@@ -582,12 +605,10 @@ impl<L: Label> Plan<L> {
             return Vec::new();
         }
         // Facts are tried in order of how rarely their column rises: a
-        // constant before a derivation before a type, which nearly every new
-        // class is minted with.
+        // constant before a type, which nearly every new class is minted with.
         let rank = |column: ColumnId| match column {
             ColumnId::Const => 0,
-            ColumnId::Object => 1,
-            ColumnId::Type => 2,
+            ColumnId::Type => 1,
         };
         let mut facts: Vec<(usize, ColumnId, Var)> = query
             .atoms
@@ -596,7 +617,6 @@ impl<L: Label> Plan<L> {
             .filter_map(|(index, atom)| match atom {
                 Atom::Literal { class, .. } => Some((index, ColumnId::Const, *class)),
                 Atom::Fact { column, key, .. } => Some((index, *column, *key)),
-                Atom::Object { key, .. } => Some((index, ColumnId::Object, *key)),
                 _ => None,
             })
             .collect();
@@ -674,9 +694,10 @@ impl<L: Label> Plan<L> {
             eval.facts_old = anchor.earlier;
             for &minted in lists(anchor) {
                 for class in eg.risen(anchor.column, minted) {
-                    eval.bound[anchor.key as usize] = Some(class);
+                    eval.loosen(anchor.key, class);
                     self.step(&mut eval, class, 0);
-                    eval.bound[anchor.key as usize] = None;
+                    eval.bound[anchor.key as usize] = UNBOUND;
+                    eval.loose = None;
                 }
             }
         }
@@ -704,7 +725,6 @@ impl<L: Label> Plan<L> {
             let column = match atom {
                 Atom::Literal { .. } => ColumnId::Const,
                 Atom::Fact { column, .. } => *column,
-                Atom::Object { .. } => ColumnId::Object,
                 _ => return mask,
             };
             mask | 1 << crate::engine::column_bit(column)
@@ -772,14 +792,11 @@ impl<L: Label> Plan<L> {
                 let held_back = skip.is_some()
                     && !all_taken
                     && matches!(&query.guards[i], Guard::Extern { out, .. } if out.is_empty());
-                !checked[i]
-                    && !held_back
-                    && query.guards[i].reads().iter().all(|&s| known[s as usize])
-                    && query.guards[i].vars().iter().all(|&v| bound[v as usize])
+                !checked[i] && !held_back && query.guards[i].ready(&known, &bound)
             });
             if let Some(guard) = guard {
                 checked[guard] = true;
-                for out in query.guards[guard].writes() {
+                for &out in query.guards[guard].writes() {
                     known[out as usize] = true;
                 }
                 steps.push(Step::Guard(guard));
@@ -845,7 +862,7 @@ impl<L: Label> Plan<L> {
                         }
                     }
                 }
-                Atom::Object { base, .. } => bound[*base as usize] = true,
+                Atom::Offset { base, .. } => bound[*base as usize] = true,
                 _ => {}
             }
             for slot in query.atoms[next].writes() {
@@ -880,8 +897,9 @@ impl<L: Label> Plan<L> {
     /// Two shapes do this. A sideways atom sits in a sibling class sharing a
     /// child, which no upward closure of the change log reaches from the root.
     /// And a negated conjunction is read against the whole relation: what
-    /// satisfies it can change — a class placed nowhere in one round is placed
-    /// in the next — without anything in the match moving at all.
+    /// satisfies it can change — a class placed consistently in one round is
+    /// [`Atom::Conflicted`] in the next — without anything in the match moving
+    /// at all.
     pub fn unbounded(&self) -> bool {
         self.steps
             .iter()
@@ -900,15 +918,12 @@ impl<L: Label> Plan<L> {
 
     /// The operator the root atom binds, or `None` when the root binds no row.
     pub fn root_op(&self) -> Option<u64> {
-        match self
+        let root = self
             .query
             .atoms
             .iter()
-            .find(|atom| atom.class() == self.query.root)
-        {
-            Some(Atom::Node { template, .. }) => Some(template.op_key()),
-            _ => None,
-        }
+            .position(|atom| atom.class() == self.query.root)?;
+        matches!(self.query.atoms[root], Atom::Node { .. }).then_some(self.ops[root])
     }
 
     /// Every match at `roots`, each root canonicalized and visited once.
@@ -934,8 +949,10 @@ impl<L: Label> Plan<L> {
         let mut cache = eg.take_cache(self.id);
         let fresh = (only_new, 0);
         let found = self.search_roots(eg, roots, Some(allowed), fresh, externs, &mut cache.plan);
+        let matches = found.to_vec();
+        cache.plan.recycle(found);
         eg.put_cache(self.id, cache);
-        found.into_vec()
+        matches
     }
 
     /// [`Self::search`], with every row atom below `fresh.1` held to rows the
@@ -955,7 +972,7 @@ impl<L: Label> Plan<L> {
         }
         // Each root canonical and once, in the order first given.
         let mut roots: SmallVec<[ClassId; 16]> =
-            roots.into_iter().map(|root| eg.find(root)).collect();
+            roots.into_iter().map(|root| eg.root(root)).collect();
         let mut marks = eg.marks();
         roots.retain(|root| marks.insert(root.index()));
         drop(marks);
@@ -978,9 +995,10 @@ impl<L: Label> Plan<L> {
             if allowed.is_some_and(|allowed| !allowed(self.query.root, root)) {
                 continue;
             }
-            eval.bound[self.query.root as usize] = Some(root);
+            eval.loosen(self.query.root, root);
             self.step(&mut eval, root, 0);
-            eval.bound[self.query.root as usize] = None;
+            eval.bound[self.query.root as usize] = UNBOUND;
+            eval.loose = None;
         }
         let (out, scratch) = eval.finish();
         cache.scratch = scratch;
@@ -1106,10 +1124,12 @@ impl<L: Label> Plan<L> {
         // absorbed class until a rebuild.
         debug_assert!(eg.rebuilt(), "search needs a rebuilt graph");
         scratch.bound.clear();
-        scratch.bound.resize(self.query.vars as usize, None);
+        scratch.bound.resize(self.query.vars as usize, UNBOUND);
         scratch.scalars.clear();
         scratch.scalars.resize(self.query.scalars as usize, 0);
         scratch.trail.clear();
+        let mut out = std::mem::take(&mut scratch.out);
+        out.clear();
         Eval {
             eg,
             groups,
@@ -1130,7 +1150,8 @@ impl<L: Label> Plan<L> {
             scan: false,
             pool: scratch.pool,
             fresh: 0,
-            out: Matches::default(),
+            loose: None,
+            out,
         }
     }
 
@@ -1147,7 +1168,7 @@ impl<L: Label> Plan<L> {
         let (eg, groups, labels) = (eval.eg, eval.groups, eval.labels);
         eval.anchor = Some(anchor);
         eval.old_below = if new { atom } else { 0 };
-        let bind = (*row, Some(*class));
+        let bind = (*row, *class);
         for (slot, wanted) in &labels[0][atom] {
             let Some(table) = eg.slot_table(*slot) else {
                 continue;
@@ -1251,7 +1272,8 @@ impl<L: Label> Plan<L> {
                 return;
             }
             if !eval.only_new || eval.fresh > 0 {
-                let root = eval.bound[self.query.root as usize].unwrap_or(root);
+                let root =
+                    bound(eval.bound[self.query.root as usize]).map_or(root, |root| root.class);
                 eval.out.push(root, &eval.bound, &eval.scalars);
             }
             return;
@@ -1267,7 +1289,8 @@ impl<L: Label> Plan<L> {
                 else {
                     unreachable!("only a row atom is reached sideways")
                 };
-                let child = eval.bound[args[slot as usize] as usize].expect("bound operand");
+                let child = eval.bound[args[slot as usize] as usize];
+                debug_assert_ne!(child, UNBOUND, "bound operand");
                 self.parents(
                     eval,
                     root,
@@ -1298,34 +1321,20 @@ impl<L: Label> Plan<L> {
                 return;
             }
             Step::Guard(guard) => {
-                // A rule may write a guard's result into the slot an earlier
-                // scalar lives in. From the root that is harmless: every match
-                // recomputes the earlier one first. An order that starts
-                // elsewhere can put a loop over rows between the two, so what
-                // the guard overwrote is put back for the next row.
-                let guard = &self.query.guards[guard];
-                let written = guard.writes();
-                let before: SmallVec<[u64; 2]> = written
-                    .iter()
-                    .map(|&slot| eval.scalars[slot as usize])
-                    .collect();
-                if eval.holds(guard) {
-                    self.step(eval, root, index + 1);
-                }
-                for (&slot, value) in written.iter().zip(before) {
-                    eval.scalars[slot as usize] = value;
-                }
+                self.guard(eval, root, index, &self.query.guards[guard]);
                 return;
             }
             Step::Atom(atom) => atom,
         };
         let atom = &self.query.atoms[index_of_atom];
-        let class = eval.bound[atom.class() as usize].expect("class bound by an earlier step");
+        let var = atom.class();
+        let reference = eval.bound[var as usize];
+        debug_assert_ne!(reference, UNBOUND, "class bound by an earlier step");
+        let class = reference.class;
         if eval.facts_old >> index_of_atom.min(63) & 1 == 1 {
             let column = match atom {
                 Atom::Literal { .. } => Some(ColumnId::Const),
                 Atom::Fact { column, .. } => Some(*column),
-                Atom::Object { .. } => Some(ColumnId::Object),
                 _ => None,
             };
             if column.is_some_and(|column| eval.eg.fact_is_new(column, class)) {
@@ -1333,17 +1342,41 @@ impl<L: Label> Plan<L> {
             }
         }
         match atom {
-            Atom::Literal { value, .. } => self.literal(eval, root, index, value, class),
+            Atom::Literal { value, .. } => self.literal(eval, root, index, value, var, reference),
             Atom::Fact { column, value, .. } => {
                 self.fact(eval, root, index, *column, *value, class)
             }
-            Atom::Object { base, offset, .. } => {
-                self.object(eval, root, index, *base, *offset, class)
+            Atom::Offset { base, offset, .. } => {
+                // The offset is read, so it is fixed from here on.
+                let mark = eval.trail.len();
+                eval.tighten(var);
+                eval.scalars[*offset as usize] = reference.offset;
+                if eval.bind_one(*base, class.into()) {
+                    self.step(eval, root, index + 1);
+                }
+                eval.unbind(mark);
             }
-            // The complement of `Object`: no reading of the chain, so no
-            // freshness either — a class stops being placed once and for all.
-            Atom::Unplaceable { .. } => {
-                if eval.eg.object_of(class).is_none() {
+            Atom::Const { value, .. } => {
+                if let Some(constant) = eval.eg.int_const(reference) {
+                    let mark = eval.trail.len();
+                    eval.tighten(var);
+                    eval.scalars[*value as usize] = constant;
+                    self.step(eval, root, index + 1);
+                    eval.unbind(mark);
+                }
+            }
+            // A class's carrier never changes, so there is no freshness to
+            // track either.
+            Atom::Width { width, .. } => {
+                if let Some(bits) = eval.eg.width(class) {
+                    eval.scalars[*width as usize] = u64::from(bits);
+                    self.step(eval, root, index + 1);
+                }
+            }
+            // A class stops being placed once and for all, so there is no
+            // freshness to track.
+            Atom::Conflicted { .. } => {
+                if eval.eg.conflicted(class) {
                     self.step(eval, root, index + 1);
                 }
             }
@@ -1373,7 +1406,38 @@ impl<L: Label> Plan<L> {
                 eval.fresh -= fresh;
             }
             Atom::Node { args, row, .. } => {
-                self.node(eval, root, index, index_of_atom, args, *row, class)
+                self.node(eval, root, index, index_of_atom, args, (*row, var), class)
+            }
+        }
+    }
+
+    /// Run `guard`, and the steps after it if it holds.
+    ///
+    /// A rule may write a guard's result into the slot an earlier scalar lives
+    /// in. From the root that is harmless: every match recomputes the earlier
+    /// one first. An order that starts elsewhere can put a loop over rows
+    /// between the two, so what the guard overwrote is put back for the next
+    /// row.
+    fn guard(&self, eval: &mut Eval<'_, L>, root: ClassId, index: usize, guard: &Guard) {
+        let written = guard.writes();
+        // Most guards write one scalar or none, which needs no list.
+        let before: SmallVec<[u64; 2]> = match written {
+            [] | [_] => SmallVec::new(),
+            _ => written
+                .iter()
+                .map(|&slot| eval.scalars[slot as usize])
+                .collect(),
+        };
+        let one = written.first().map(|&slot| eval.scalars[slot as usize]);
+        if eval.holds(guard) {
+            self.step(eval, root, index + 1);
+        }
+        match (written, one) {
+            ([slot], Some(value)) => eval.scalars[*slot as usize] = value,
+            _ => {
+                for (&slot, value) in written.iter().zip(before) {
+                    eval.scalars[slot as usize] = value;
+                }
             }
         }
     }
@@ -1387,7 +1451,7 @@ impl<L: Label> Plan<L> {
         index: usize,
         atom: usize,
         args: &[Var],
-        bind_row: Option<Scalar>,
+        bind: (Option<Scalar>, Var),
         class: ClassId,
     ) {
         let (eg, groups, labels) = (eval.eg, eval.groups, eval.labels);
@@ -1397,27 +1461,16 @@ impl<L: Label> Plan<L> {
             };
             lookup!(eval, groups, *slot, table.arity(), table, class.0, |row| {
                 if reads(wanted, table.column(0)[row as usize]) {
-                    self.row(
-                        eval,
-                        root,
-                        index,
-                        atom,
-                        table,
-                        row,
-                        args,
-                        (bind_row, None),
-                        2,
-                    );
+                    self.row(eval, root, index, atom, table, row, args, bind, 2);
                 }
             });
         }
     }
 
     /// Try one row of an atom's table. `bind` names the scalar that takes the
-    /// row and, when the atom was not reached through its class, the variable
-    /// that takes the class. `orders` picks the operand orders to try: zero or
-    /// one for that order alone, two for both where the row's operator
-    /// commutes.
+    /// row and the variable that takes the row's value, or is checked against
+    /// it when bound. `orders` picks the operand orders to try: zero or one
+    /// for that order alone, two for both where the row's operator commutes.
     #[allow(clippy::too_many_arguments)]
     #[inline(always)]
     fn row(
@@ -1429,7 +1482,7 @@ impl<L: Label> Plan<L> {
         table: &Table,
         row: u32,
         args: &[Var],
-        bind: (Option<Scalar>, Option<Var>),
+        bind: (Option<Scalar>, Var),
         orders: usize,
     ) {
         let fresh = usize::from(table.stamps()[row as usize] + 1 == eval.eg.epoch());
@@ -1448,9 +1501,21 @@ impl<L: Label> Plan<L> {
         eval.fresh += fresh;
         for order in orders {
             let mark = eval.trail.len();
+            let weighted = table.weighted();
             let class = ClassId(table.values()[row as usize]);
-            if bind.1.is_none_or(|var| eval.bind_one(var, class))
-                && eval.bind_row(args, table, row, order)
+            let prior = eval.bound[bind.1 as usize];
+            // A row looked up by its class, in a table without weights, has
+            // the value the variable already holds at offset zero.
+            let settled = !weighted
+                && prior.class == class
+                && prior.offset == 0
+                && eval.loose != Some(bind.1);
+            let value = || match weighted {
+                true => Ref::new(class, table.weight(table.arity(), row)),
+                false => class.into(),
+            };
+            if (settled || eval.bind_one(bind.1, value()))
+                && eval.bind_row(args, table, row, order, weighted)
             {
                 self.step(eval, root, index + 1);
             }
@@ -1473,7 +1538,7 @@ impl<L: Label> Plan<L> {
         class: Var,
         bind_row: Option<Scalar>,
         slot: usize,
-        child: ClassId,
+        child: Ref,
     ) {
         let (eg, groups, labels) = (eval.eg, eval.groups, eval.labels);
         for (table_slot, wanted) in &labels[eval.plan][atom] {
@@ -1485,59 +1550,55 @@ impl<L: Label> Plan<L> {
             let orders = if args.len() == 2 { 2 } else { 1 };
             for order in 0..orders {
                 let column = 1 + if order == 1 { 1 - slot } else { slot };
-                lookup!(eval, groups, *table_slot, column, table, child.0, |row| {
-                    let label = table.column(0)[row as usize];
-                    if reads(wanted, label) && (order == 0 || eg.commutes(LabelId(label))) {
-                        let bind = (bind_row, Some(class));
-                        self.row(eval, root, index, atom, table, row, args, bind, order);
+                lookup!(
+                    eval,
+                    groups,
+                    *table_slot,
+                    column,
+                    table,
+                    child.class.0,
+                    |row| {
+                        let label = table.column(0)[row as usize];
+                        if reads(wanted, label) && (order == 0 || eg.commutes(LabelId(label))) {
+                            let bind = (bind_row, class);
+                            self.row(eval, root, index, atom, table, row, args, bind, order);
+                        }
                     }
-                });
+                );
             }
         }
     }
 
-    fn object(
-        &self,
-        eval: &mut Eval<'_, L>,
-        root: ClassId,
-        index: usize,
-        base: Var,
-        offset: Scalar,
-        class: ClassId,
-    ) {
-        let Some((from, distance)) = eval.eg.object_of(class) else {
-            return;
-        };
-        eval.scalars[offset as usize] = distance as u64;
-        let mark = eval.trail.len();
-        if eval.bind(&[base], &[from], 0) {
-            let fresh = usize::from(eval.eg.fact_is_new(ColumnId::Object, class));
-            eval.fresh += fresh;
-            self.step(eval, root, index + 1);
-            eval.fresh -= fresh;
-        }
-        eval.unbind(mark);
-    }
-
-    /// A literal reads the constant column rather than the class's rows: what a
-    /// class is *known* to be covers both its own literal and what a scope
-    /// assumed of it, and the column's stamp says which round proved it.
+    /// A literal reads what a class is *known* to be rather than its rows:
+    /// for a carrier's constant, the reference itself; otherwise the constant
+    /// column, which covers both a class's own literal and what a scope
+    /// assumed of it, and whose stamp says which round proved it.
     fn literal(
         &self,
         eval: &mut Eval<'_, L>,
         root: ClassId,
         index: usize,
         value: &L,
-        class: ClassId,
+        var: Var,
+        reference: Ref,
     ) {
         let eg = eval.eg;
-        if !eg.const_of(class).is_some_and(|known| value.matches(known)) {
-            return;
+        let mark = eval.trail.len();
+        match eg.is_literal(reference, value) {
+            Some(true) => eval.tighten(var),
+            Some(false) => return,
+            None => {
+                let class = reference.class;
+                if !eg.const_label_matches(class, value) {
+                    return;
+                }
+            }
         }
-        let fresh = usize::from(eg.fact_is_new(ColumnId::Const, class));
+        let fresh = usize::from(eg.fact_is_new(ColumnId::Const, reference.class));
         eval.fresh += fresh;
         self.step(eval, root, index + 1);
         eval.fresh -= fresh;
+        eval.unbind(mark);
     }
 
     fn fact(
@@ -1560,7 +1621,23 @@ impl<L: Label> Plan<L> {
     }
 }
 
+/// What a variable no atom has reached holds.
+pub(crate) const UNBOUND: Ref = Ref {
+    class: ClassId(u32::MAX),
+    offset: 0,
+};
+
+/// `binding` unless it is [`UNBOUND`].
+#[inline]
+pub(crate) fn bound(binding: Ref) -> Option<Ref> {
+    (binding.class != UNBOUND.class).then_some(binding)
+}
+
+/// Marks a trail entry that put the loose variable back.
+const LOOSE: Var = 1 << 31;
+
 /// Whether `label` is one of `wanted`, which is ascending.
+#[inline]
 fn reads(wanted: &[LabelId], label: u32) -> bool {
     match wanted {
         [only] => only.0 == label,
@@ -1597,10 +1674,16 @@ struct Eval<'a, L: Label> {
     /// rather than emit them.
     counting: bool,
     hits: usize,
-    bound: Vec<Option<ClassId>>,
+    /// Per variable, its reference or [`UNBOUND`].
+    bound: Vec<Ref>,
     scalars: Vec<u64>,
-    /// Variables this branch bound, to undo on the way out.
+    /// Variables this branch bound, to undo on the way out. One with
+    /// [`LOOSE`] set was the loose variable and had its offset fixed.
     trail: Vec<Var>,
+    /// The variable the search started at, bound to its class at offset zero
+    /// until an atom fixes its offset: a row atom to the row's value, or one
+    /// that reads the offset to the offset it read.
+    loose: Option<Var>,
     /// Whether rows are looked up by scanning, with no grouping built.
     scan: bool,
     /// Vectors a scan's hits go in, reused.
@@ -1618,6 +1701,7 @@ impl<'a, L: Label> Eval<'a, L> {
             scalars: self.scalars,
             trail: self.trail,
             pool: self.pool,
+            out: Matches::default(),
         };
         (self.out, scratch)
     }
@@ -1630,39 +1714,72 @@ impl<'a, L: Label> Eval<'a, L> {
         rows
     }
 
-    /// Bind `args` to a row's children, or report the row inconsistent with what
-    /// is already bound. Whatever it bound before failing is on the trail.
-    fn bind(&mut self, args: &[Var], children: &[ClassId], order: usize) -> bool {
-        args.iter().enumerate().all(|(slot, &var)| {
-            let child = children[if order == 1 { 1 - slot } else { slot }];
-            self.bind_one(var, self.eg.find(child))
-        })
+    /// Start a search at `class`, with `var` bound to it and loose.
+    fn loosen(&mut self, var: Var, class: ClassId) {
+        self.bound[var as usize] = class.into();
+        self.loose = Some(var);
     }
 
-    /// Bind `args` to the cells of a table row, as [`Self::bind`] does for a
-    /// slice of children.
-    fn bind_row(&mut self, args: &[Var], table: &Table, row: u32, order: usize) -> bool {
-        args.iter().enumerate().all(|(slot, &var)| {
+    /// Fix the offset of `var` where it is, if it is the loose variable.
+    fn tighten(&mut self, var: Var) {
+        if self.loose == Some(var) {
+            self.loose = None;
+            self.trail.push(var | LOOSE);
+        }
+    }
+
+    /// Bind `args` to the cells of a table row, or report the row inconsistent
+    /// with what is already bound. Whatever it bound before failing is on the
+    /// trail.
+    #[inline(always)]
+    fn bind_row(
+        &mut self,
+        args: &[Var],
+        table: &Table,
+        row: u32,
+        order: usize,
+        weighted: bool,
+    ) -> bool {
+        for (slot, &var) in args.iter().enumerate() {
             let column = 1 + if order == 1 { 1 - slot } else { slot };
-            let cell = ClassId(table.column(column)[row as usize]);
             // A rebuilt table names every class by its representative.
-            self.bind_one(var, cell)
-        })
-    }
-
-    fn bind_one(&mut self, var: Var, class: ClassId) -> bool {
-        match self.bound[var as usize] {
-            // A variable shared by two atoms must bind the same class.
-            Some(prior) => prior == class,
-            None => {
-                if self.allowed.is_some_and(|allowed| !allowed(var, class)) {
-                    return false;
-                }
-                self.bound[var as usize] = Some(class);
-                self.trail.push(var);
-                true
+            let class = ClassId(table.column(column)[row as usize]);
+            let cell = match weighted {
+                true => Ref::new(class, table.weight(column, row)),
+                false => class.into(),
+            };
+            if !self.bind_one(var, cell) {
+                return false;
             }
         }
+        true
+    }
+
+    #[inline(always)]
+    fn bind_one(&mut self, var: Var, reference: Ref) -> bool {
+        let prior = self.bound[var as usize];
+        // A variable shared by two atoms must bind the same reference.
+        if prior == reference {
+            return true;
+        }
+        if prior.class != UNBOUND.class {
+            if self.loose != Some(var) || prior.class != reference.class {
+                return false;
+            }
+            self.bound[var as usize] = reference;
+            self.loose = None;
+            self.trail.push(var | LOOSE);
+            return true;
+        }
+        if self
+            .allowed
+            .is_some_and(|allowed| !allowed(var, reference.class))
+        {
+            return false;
+        }
+        self.bound[var as usize] = reference;
+        self.trail.push(var);
+        true
     }
 
     /// The e-node a scalar names.
@@ -1712,20 +1829,22 @@ impl<'a, L: Label> Eval<'a, L> {
                 args,
                 out,
             } => {
-                let Some(terms): Option<SmallVec<[&L; 2]>> =
-                    terms.iter().map(|&term| self.term(term)).collect()
-                else {
-                    return false;
-                };
-                let Some(args): Option<SmallVec<[u64; 4]>> = args
-                    .iter()
-                    .map(|arg| arg.eval(&self.scalars).map(|value| value as u64))
-                    .collect()
-                else {
-                    return false;
-                };
+                let mut nodes: SmallVec<[&L; 2]> = SmallVec::new();
+                for &term in terms {
+                    let Some(node) = self.term(term) else {
+                        return false;
+                    };
+                    nodes.push(node);
+                }
+                let mut words: SmallVec<[u64; 4]> = SmallVec::new();
+                for arg in args {
+                    let Some(value) = arg.eval(&self.scalars) else {
+                        return false;
+                    };
+                    words.push(value as u64);
+                }
                 let mut values: SmallVec<[u64; 2]> = SmallVec::from_elem(0, out.len());
-                if !self.externs.call(*call, &terms, &args, &mut values) {
+                if !self.externs.call(*call, &nodes, &words, &mut values) {
                     return false;
                 }
                 for (&slot, value) in out.iter().zip(values) {
@@ -1737,8 +1856,16 @@ impl<'a, L: Label> Eval<'a, L> {
     }
 
     fn unbind(&mut self, mark: usize) {
-        for var in self.trail.drain(mark..) {
-            self.bound[var as usize] = None;
+        while self.trail.len() > mark {
+            let var = self.trail.pop().expect("above the mark");
+            if var & LOOSE == 0 {
+                self.bound[var as usize] = UNBOUND;
+                continue;
+            }
+            let var = var & !LOOSE;
+            let class = self.bound[var as usize].class;
+            self.bound[var as usize] = class.into();
+            self.loose = Some(var);
         }
     }
 }
@@ -1788,16 +1915,13 @@ mod tests {
     #[test]
     fn search_binds_every_variable_of_the_pattern() {
         let mut eg = Engine::new();
-        let x = eg.add(Term::leaf("x"));
-        let y = eg.add(Term::leaf("y"));
-        let g = eg.add(Term::op("g", &[x]));
-        let f = eg.add(Term::op("f", &[g, y]));
+        let x = eg.add(Term::leaf("x")).class;
+        let y = eg.add(Term::leaf("y")).class;
+        let g = eg.add(Term::op("g", &[x])).class;
+        let f = eg.add(Term::op("f", &[g, y])).class;
         let found = Plan::compile(f_of_g()).search(&eg, [f], &|_, _| true, false, &NoExterns);
         assert_eq!(found.len(), 1);
-        assert_eq!(
-            found[0].bindings.as_slice(),
-            &[Some(f), Some(g), Some(y), Some(x)]
-        );
+        assert_eq!(found[0].bindings.as_slice(), &[f, g, y, x].map(Ref::from));
     }
 
     /// Every assignment of `query`'s variables to classes that satisfies every
@@ -1822,20 +1946,18 @@ mod tests {
     fn holds(eg: &Engine<Term>, atom: &Atom<Term>, assignment: &[ClassId]) -> bool {
         let class = assignment[atom.class() as usize];
         match atom {
-            Atom::Literal { value, .. } => {
-                eg.const_of(class).is_some_and(|known| value.matches(known))
-            }
+            Atom::Literal { value, .. } => eg
+                .const_of(class)
+                .is_some_and(|known| value.matches(&known)),
             Atom::Fact { column, .. } => eg.fact(*column, class).is_some(),
-            // The offset lands in a scalar the naive oracle cannot see, so only
-            // the object is checked here.
-            Atom::Object { base, .. } => {
-                eg.object_of(class).map(|(from, _)| from) == Some(assignment[*base as usize])
-            }
-            Atom::Unplaceable { .. } => eg.object_of(class).is_none(),
+            Atom::Offset { base, .. } => assignment[*base as usize] == class,
+            Atom::Const { .. } => eg.int_const(class).is_some(),
+            Atom::Width { .. } => eg.width(class).is_some(),
+            Atom::Conflicted { .. } => eg.conflicted(class),
             Atom::Holds { op, .. } => eg.rows(class).any(|row| eg.node(row).op_key() == *op),
             Atom::Unknown { column, .. } => eg.fact(*column, class).is_none(),
             Atom::Node { template, args, .. } => eg.rows(class).any(|row| {
-                let children: Vec<ClassId> = eg.children(row).iter().map(|&c| eg.find(c)).collect();
+                let children: Vec<ClassId> = eg.children(row).iter().map(|c| c.class).collect();
                 if children.len() != args.len() || !template.matches_template(eg.node(row)) {
                     return false;
                 }
@@ -1853,10 +1975,10 @@ mod tests {
     #[test]
     fn a_negated_atom_blocks_a_match_whatever_round_made_it() {
         let mut eg = Engine::new();
-        let a = eg.add(Term::leaf("a"));
-        let b = eg.add(Term::leaf("b"));
-        let blocked = eg.add(Term::op("f", &[a, b]));
-        let free = eg.add(Term::op("f", &[b, a]));
+        let a = eg.add(Term::leaf("a")).class;
+        let b = eg.add(Term::leaf("b")).class;
+        let blocked = eg.add(Term::op("f", &[a, b])).class;
+        let free = eg.add(Term::op("f", &[b, a])).class;
         eg.add(Term::op("g", &[a]));
         eg.rebuild();
 
@@ -1882,11 +2004,11 @@ mod tests {
     #[test]
     fn a_sideways_atom_is_reached_through_a_bound_operand() {
         let mut eg = Engine::new();
-        let a = eg.add(Term::leaf("a"));
-        let b = eg.add(Term::leaf("b"));
-        let c = eg.add(Term::leaf("c"));
-        let f = eg.add(Term::op("f", &[a, b]));
-        let g = eg.add(Term::op("g", &[a, b]));
+        let a = eg.add(Term::leaf("a")).class;
+        let b = eg.add(Term::leaf("b")).class;
+        let c = eg.add(Term::leaf("c")).class;
+        let f = eg.add(Term::op("f", &[a, b])).class;
+        let g = eg.add(Term::op("g", &[a, b])).class;
         eg.add(Term::op("g", &[a, c]));
         eg.rebuild();
 
@@ -1904,18 +2026,18 @@ mod tests {
         );
         let found = plan.search(&eg, [f], &|_, _| true, false, &NoExterns);
         assert_eq!(found.len(), 1);
-        assert_eq!(found[0].bindings[3], Some(g));
+        assert_eq!(found[0].binding(3), Some(g.into()));
     }
 
     /// `f(?1, ?2)` where `?1` is a literal below ten.
     #[test]
     fn a_guard_runs_as_soon_as_its_scalars_are_bound() {
         let mut eg = Engine::new();
-        let small = eg.add(Term::int(3));
-        let big = eg.add(Term::int(30));
-        let y = eg.add(Term::leaf("y"));
-        let hit = eg.add(Term::op("f", &[small, y]));
-        let miss = eg.add(Term::op("f", &[big, y]));
+        let small = eg.add(Term::int(3)).class;
+        let big = eg.add(Term::int(30)).class;
+        let y = eg.add(Term::leaf("y")).class;
+        let hit = eg.add(Term::op("f", &[small, y])).class;
+        let miss = eg.add(Term::op("f", &[big, y])).class;
         eg.rebuild();
 
         let query = Query {
@@ -1949,6 +2071,188 @@ mod tests {
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].root, hit);
         assert_eq!(found[0].scalars[1], 3);
+    }
+
+    /// `g(?a)` at a 32-bit carrier, with `?a` read as a base and an offset.
+    fn g_at_offset(
+        extra: Vec<Atom<Term>>,
+        guards: Vec<Guard>,
+        nots: Vec<Nested<Term>>,
+    ) -> Plan<Term> {
+        let mut atoms = vec![
+            node(Term::typed("g", 32, &[ClassId(0)]), &[1], 0),
+            Atom::Offset {
+                key: 1,
+                base: 2,
+                offset: 0,
+            },
+        ];
+        atoms.extend(extra);
+        Plan::compile(Query {
+            vars: 3,
+            scalars: 2,
+            root: 0,
+            atoms,
+            guards,
+            nots,
+        })
+    }
+
+    fn typed_graph() -> (Engine<Term>, Ref, Ref) {
+        let mut eg = Engine::new();
+        let x = eg.add(Term::typed("x", 32, &[]));
+        let y = eg.add(Term::typed("y", 32, &[]));
+        (eg, x, y)
+    }
+
+    fn g_of(eg: &mut Engine<Term>, operand: Ref) -> Ref {
+        eg.insert(Term::typed("g", 32, &[ClassId(0)]), &[operand])
+    }
+
+    #[test]
+    fn a_guard_filters_on_the_offset_an_operand_sits_at() {
+        let (mut eg, x, y) = typed_graph();
+        let near = g_of(&mut eg, Ref::new(x.class, 2));
+        let far = g_of(&mut eg, Ref::new(x.class, 9));
+        let plain = g_of(&mut eg, y);
+        eg.rebuild();
+        let plan = g_at_offset(
+            Vec::new(),
+            vec![Guard::Cmp(Cmp::Lt, Expr::Scalar(0), Expr::Lit(4))],
+            Vec::new(),
+        );
+        let found = plan.search(
+            &eg,
+            [near.class, far.class, plain.class],
+            &|_, _| true,
+            false,
+            &NoExterns,
+        );
+        let got: Vec<(ClassId, Option<Ref>, u64)> = found
+            .iter()
+            .map(|m| (m.root, m.binding(2), m.scalars[0]))
+            .collect();
+        assert_eq!(
+            got,
+            vec![(near.class, Some(x), 2), (plain.class, Some(y), 0)]
+        );
+    }
+
+    #[test]
+    fn a_constant_operand_binds_its_value_without_a_row() {
+        let (mut eg, x, _) = typed_graph();
+        let seven = eg.add(Term::num(32, 7));
+        let constant = g_of(&mut eg, seven);
+        let variable = g_of(&mut eg, x);
+        eg.rebuild();
+        let plan = g_at_offset(
+            vec![Atom::Const { key: 1, value: 1 }],
+            Vec::new(),
+            Vec::new(),
+        );
+        let found = plan.search(
+            &eg,
+            [constant.class, variable.class],
+            &|_, _| true,
+            false,
+            &NoExterns,
+        );
+        assert_eq!(found.len(), 1);
+        assert_eq!((found[0].root, found[0].scalars[1]), (constant.class, 7));
+    }
+
+    #[test]
+    fn a_width_atom_binds_the_carrier_of_any_class_that_has_one() {
+        let (mut eg, x, _) = typed_graph();
+        let seven = eg.add(Term::num(8, 7));
+        let wide = g_of(&mut eg, x);
+        let narrow = g_of(&mut eg, seven);
+        let plain = eg.add(Term::leaf("p"));
+        let untyped = g_of(&mut eg, plain);
+        eg.rebuild();
+        let plan = g_at_offset(
+            vec![Atom::Width { key: 1, width: 1 }],
+            Vec::new(),
+            Vec::new(),
+        );
+        let found = plan.search(
+            &eg,
+            [wide.class, narrow.class, untyped.class],
+            &|_, _| true,
+            false,
+            &NoExterns,
+        );
+        let got: Vec<(ClassId, u64)> = found.iter().map(|m| (m.root, m.scalars[1])).collect();
+        assert_eq!(got, vec![(wide.class, 32), (narrow.class, 8)]);
+    }
+
+    #[test]
+    fn a_conflicted_operand_matches_and_blocks() {
+        let (mut eg, x, y) = typed_graph();
+        let placed = g_of(&mut eg, x);
+        let unplaced = g_of(&mut eg, y);
+        eg.union(y, Ref::new(y.class, 1)).unwrap_err();
+        eg.rebuild();
+        let roots = [placed.class, unplaced.class];
+        let conflicted = || Atom::Conflicted { key: 1 };
+        let positive = g_at_offset(vec![conflicted()], Vec::new(), Vec::new());
+        let found = positive.search(&eg, roots, &|_, _| true, false, &NoExterns);
+        assert_eq!(
+            found.iter().map(|m| m.root).collect::<Vec<_>>(),
+            vec![unplaced.class]
+        );
+        let nots = vec![Nested {
+            atoms: vec![conflicted()],
+            guards: Vec::new(),
+        }];
+        let negative = g_at_offset(Vec::new(), Vec::new(), nots);
+        let found = negative.search(&eg, roots, &|_, _| true, false, &NoExterns);
+        assert_eq!(
+            found.iter().map(|m| m.root).collect::<Vec<_>>(),
+            vec![placed.class]
+        );
+    }
+
+    /// A class whose e-node sits at an offset from it is matched at that
+    /// offset, and a nested atom matches only the reference its parent names.
+    #[test]
+    fn the_root_binds_each_row_at_its_own_offset() {
+        let (mut eg, x, y) = typed_graph();
+        let g_y = g_of(&mut eg, y);
+        // g(y) == x + 3.
+        eg.union(g_y, Ref::new(x.class, 3)).unwrap();
+        let h = Term::typed("h", 32, &[ClassId(0)]);
+        let on_node = eg.insert(h.clone(), &[Ref::new(x.class, 3)]);
+        let off_node = eg.insert(h, &[x]);
+        eg.rebuild();
+        let root = eg.root(x.class);
+        let found = Plan::compile(Query::tree(
+            2,
+            0,
+            vec![node(Term::typed("g", 32, &[ClassId(0)]), &[1], 0)],
+        ))
+        .search(&eg, [root], &|_, _| true, false, &NoExterns);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].binding(0), Some(eg.find(g_y)));
+        let nested = Plan::compile(Query::tree(
+            3,
+            0,
+            vec![
+                node(Term::typed("h", 32, &[ClassId(0)]), &[1], 0),
+                node(Term::typed("g", 32, &[ClassId(0)]), &[2], 1),
+            ],
+        ));
+        let found = nested.search(
+            &eg,
+            [on_node.class, off_node.class],
+            &|_, _| true,
+            false,
+            &NoExterns,
+        );
+        assert_eq!(
+            found.iter().map(|m| m.root).collect::<Vec<_>>(),
+            vec![on_node.class]
+        );
     }
 
     /// A term over three leaves and three operators, one of them commutative.
@@ -1994,7 +2298,7 @@ mod tests {
             } else {
                 Term::op(op, &children)
             };
-            made.push(eg.add(term));
+            made.push(eg.add(term).class);
         }
         eg.rebuild();
         (eg, made)
@@ -2024,7 +2328,7 @@ mod tests {
             let found = Plan::compile(query.clone()).search(&eg, roots, &|_, _| true, false, &NoExterns);
             let mut got: Vec<Vec<ClassId>> = found
                 .iter()
-                .map(|m| m.bindings.iter().map(|b| b.expect("bound")).collect())
+                .map(|m| m.bindings.iter().map(|b| b.class).collect())
                 .collect();
             got.sort();
             got.dedup();

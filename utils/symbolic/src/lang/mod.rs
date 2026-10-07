@@ -220,6 +220,36 @@ impl SymKind {
         )
     }
 
+    /// How a constant added to operand `operand` moves to the result, modulo
+    /// 2^W: `op(.., x + c, ..) == op(.., x, ..) + coefficient * c`. Add is
+    /// `1, 1`, sub `1, -1`, negate and bitwise not `-1` (`not(x + c)` is
+    /// `not(x) - c`). A definition of the operator, not a rewrite.
+    pub fn offset_coefficient(&self, operand: usize) -> Option<i64> {
+        match (self, operand) {
+            (SymKind::Add, 0 | 1) | (SymKind::Sub, 0) => Some(1),
+            (SymKind::Sub, 1) | (SymKind::Neg | SymKind::Not, 0) => Some(-1),
+            _ => None,
+        }
+    }
+
+    /// The constant at `operand` that makes a binary operator its other
+    /// operand: zero on either side of an add, on the right of a sub.
+    pub fn identity(&self, operand: usize) -> Option<u64> {
+        match (self, operand) {
+            (SymKind::Add, 0 | 1) | (SymKind::Sub, 1) => Some(0),
+            _ => None,
+        }
+    }
+
+    /// The value of an operator with [`Self::offset_coefficient`]s over zero
+    /// operands: all ones for bitwise not, zero for the rest.
+    pub fn bias(&self) -> u64 {
+        match self {
+            SymKind::Not => u64::MAX,
+            _ => 0,
+        }
+    }
+
     /// Structural arity: number of operand children.
     pub fn arity(&self) -> usize {
         if let Some(op) = scalar_op(*self) {

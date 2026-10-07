@@ -156,17 +156,19 @@ fn seed(workload: &Workload) -> Engine<Sym> {
     let mut g = Engine::new();
     let mut classes: Vec<Option<Id>> = vec![None; workload.classes];
     for seed in &workload.seeds {
-        let id = g.add(Sym {
-            op: seed.symbol,
-            children: seed
-                .children
-                .iter()
-                .map(|&child| classes[child as usize].expect("child class is defined"))
-                .collect(),
-        });
+        let id = g
+            .add(Sym {
+                op: seed.symbol,
+                children: seed
+                    .children
+                    .iter()
+                    .map(|&child| classes[child as usize].expect("child class is defined"))
+                    .collect(),
+            })
+            .class;
         match classes[seed.class as usize] {
             Some(class) => {
-                g.union(class, id);
+                let _ = g.union(class, id);
             }
             None => classes[seed.class as usize] = Some(id),
         }
@@ -246,7 +248,7 @@ fn benches(c: &mut Criterion) {
         group.bench_function(BenchmarkId::from_parameter(workload.name), |b| {
             let rules = build_rules(workload);
             let g = saturate(seed(workload), &rules, workload.iters);
-            b.iter(|| black_box(g.extract_best(|_, _| 1)));
+            b.iter(|| black_box(g.extract_best(|_, _, _, _| 1)));
         });
     }
     group.finish();

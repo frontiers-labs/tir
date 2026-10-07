@@ -29,5 +29,5 @@ module {
 // CHECK: riscv.addiw {rd = %[[V2:[0-9]+]]:GPR, rs1 = %[[V8:[0-9]+]]:GPR, imm = 5}
 // CHECK-LABEL: asm.symbol {name = "add_wide"
 // CHECK-NOT: constant
-// CHECK: riscv.slliw
+// CHECK: riscv.lui {{.*}} imm = 18}
 // CHECK: riscv.addw
