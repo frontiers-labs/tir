@@ -17,12 +17,12 @@ case "${1:-}" in
     # Wall time and peak memory of fcc, gcc and clang, sampled in rotated order
     # on one runner. Shared runners are too noisy to gate on these, so they are
     # recorded for the comparison between compilers. One CoreMark round takes
-    # over a minute, which is why the sample count is below the default.
+    # over a minute; the variance experiment overrides the default five samples.
     cargo bench --locked -p fcc --bench coremark -- \
-      --level O2 --sample-size 5 --warmups 1 --min-cases 21 \
+      --level O2 --sample-size "${BENCH_SAMPLE_SIZE:-5}" --warmups 1 --min-cases 21 \
       --output "$PWD/bench-results/native/coremark"
     cargo bench --locked -p fcc --bench dhrystone -- \
-      --level O2 --sample-size 5 --warmups 1 --min-cases 9 \
+      --level O2 --sample-size "${BENCH_SAMPLE_SIZE:-5}" --warmups 1 --min-cases 9 \
       --output "$PWD/bench-results/native/dhrystone"
     ;;
   functions)

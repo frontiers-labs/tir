@@ -1,0 +1,109 @@
+name: Benchmark variance
+
+on:
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: benchmark-variance-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  BENCH_SAMPLE_SIZE: "15"
+
+jobs:
+  benchmark:
+    name: ${{ matrix.host.provider }} / ${{ matrix.host.arch }} / ${{ matrix.repeat }}
+    runs-on: ${{ matrix.host.runner }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        repeat: [1, 2, 3]
+        host:
+          - provider: github
+            arch: x86_64
+            runner: ubuntu-24.04
+          - provider: github
+            arch: aarch64
+            runner: ubuntu-24.04-arm
+          - provider: blacksmith
+            arch: x86_64
+            runner: blacksmith-4vcpu-ubuntu-2404
+          - provider: blacksmith
+            arch: aarch64
+            runner: blacksmith-4vcpu-ubuntu-2404-arm
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: rui314/setup-mold@v1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: benchmark-variance
+          save-if: ${{ matrix.repeat == 1 }}
+      - run: sudo apt-get update && sudo apt-get install -y clang time
+      - uses: actions/cache@v6
+        with:
+          path: target/bench-sources
+          key: coremark-source-1f483d5b8316753a742cbf5590caf5bd0a4e4777
+      - name: Record runner and toolchain
+        env:
+          PROVIDER: ${{ matrix.host.provider }}
+          ARCH: ${{ matrix.host.arch }}
+          RUNNER_LABEL: ${{ matrix.host.runner }}
+          REPEAT: ${{ matrix.repeat }}
+        run: |
+          mkdir -p bench-results
+          test "$(uname -m)" = "$ARCH"
+          python3 - <<'PY'
+          import json
+          import os
+          import subprocess
+          from pathlib import Path
+
+          def output(*command):
+              return subprocess.check_output(command, text=True).strip()
+
+          metadata = {key: os.environ.get(key) for key in (
+              "PROVIDER", "ARCH", "RUNNER_LABEL", "REPEAT", "ImageOS", "ImageVersion",
+              "GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT", "RUNNER_NAME", "RUNNER_ARCH",
+          )}
+          metadata.update(
+              revision=output("git", "rev-parse", "HEAD"),
+              cpu=json.loads(output("lscpu", "--json")),
+              kernel=output("uname", "-a"),
+              rust=output("rustc", "-vV"),
+              clang=output("clang", "--version"),
+              gcc=output("gcc", "--version"),
+          )
+          Path("bench-results/runner.json").write_text(json.dumps(metadata, indent=2))
+          PY
+      - name: Build benchmarks before measuring
+        id: build-benchmarks
+        run: cargo bench --locked --workspace --no-run
+      - name: Measure native compilation and runtime
+        run: bash .github/scripts/run-perf-benchmarks.sh native
+      - name: Measure native functions
+        if: ${{ !cancelled() && steps.build-benchmarks.outcome == 'success' }}
+        run: |
+          rm -rf target/criterion
+          cargo bench --locked --workspace -- \
+            --engine native --skip-programs \
+            --sample-size 30 --warm-up-time 1 --measurement-time 3
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: benchmark-variance-${{ matrix.host.provider }}-${{ matrix.host.arch }}-${{ matrix.repeat }}
+          path: |
+            bench-results/
+            target/criterion/**/new/*.json
+          retention-days: 14
+          if-no-files-found: error
