@@ -18,11 +18,15 @@ case "${1:-}" in
     # on one runner. Shared runners are too noisy to gate on these, so they are
     # recorded for the comparison between compilers. One CoreMark round takes
     # over a minute; the variance experiment overrides the default five samples.
+    compilers=${2:-fcc,gcc,clang}
+    IFS=',' read -r -a compiler_names <<< "$compilers"
     cargo bench --locked -p fcc --bench coremark -- \
-      --level O2 --sample-size "${BENCH_SAMPLE_SIZE:-5}" --warmups 1 --min-cases 21 \
+      --compiler "$compilers" --level O2 --sample-size "${BENCH_SAMPLE_SIZE:-5}" \
+      --warmups 1 --min-cases "$((7 * ${#compiler_names[@]}))" \
       --output "$PWD/bench-results/native/coremark"
     cargo bench --locked -p fcc --bench dhrystone -- \
-      --level O2 --sample-size "${BENCH_SAMPLE_SIZE:-5}" --warmups 1 --min-cases 9 \
+      --compiler "$compilers" --level O2 --sample-size "${BENCH_SAMPLE_SIZE:-5}" \
+      --warmups 1 --min-cases "$((3 * ${#compiler_names[@]}))" \
       --output "$PWD/bench-results/native/dhrystone"
     ;;
   functions)
@@ -47,7 +51,7 @@ case "${1:-}" in
     echo "$rust; $valgrind; $libc"
     ;;
   *)
-    echo "Usage: $0 programs|native|functions|environment" >&2
+    echo "Usage: $0 programs|native [compilers]|functions|environment" >&2
     exit 2
     ;;
 esac

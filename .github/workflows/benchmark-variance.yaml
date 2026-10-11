@@ -88,14 +88,17 @@ jobs:
           PY
       - name: Build benchmarks before measuring
         id: build-benchmarks
-        run: cargo bench --locked --workspace --no-run
+        run: cargo bench --locked --workspace --bench '*' --no-run
       - name: Measure native compilation and runtime
-        run: bash .github/scripts/run-perf-benchmarks.sh native
+        env:
+          # FCC currently cannot cover the ARM division in CoreMark's timing code.
+          COMPILERS: ${{ matrix.host.arch == 'aarch64' && 'gcc,clang' || 'fcc,gcc,clang' }}
+        run: bash .github/scripts/run-perf-benchmarks.sh native "$COMPILERS"
       - name: Measure native functions
         if: ${{ !cancelled() && steps.build-benchmarks.outcome == 'success' }}
         run: |
           rm -rf target/criterion
-          cargo bench --locked --workspace -- \
+          cargo bench --locked --workspace --bench '*' -- \
             --engine native --skip-programs \
             --sample-size 30 --warm-up-time 1 --measurement-time 3
       - uses: actions/upload-artifact@v7
