@@ -237,8 +237,11 @@ therefore met in one of three ways: folded into its consumer's encoding, as
 above; defined by an instruction adding to a base reference of `X`, an
 immediate or a register holding the constant; or, when `X` is a zero class, by
 the target's constant materialization. A node computed at another offset of
-the same class also answers: `sub(a, b) + k` is `sub(a + k, b)`, so a
-subtraction can take the offset into its minuend.
+the same class also answers when the operand taking the offset is read once
+in the pattern: `sub(a, b) + k` is `sub(a + k, b)`, so a subtraction can take
+the offset into its minuend. A remainder reads that dividend again inside the
+division, so `(a % d) + k` is an addition of the remainder, not the remainder
+of `a + k`.
 
 A match adding at offset zero to its own root would compute the value from
 itself. The cover rejects such a match, while an addition at `(X, k)` reading

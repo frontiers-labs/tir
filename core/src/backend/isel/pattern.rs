@@ -114,8 +114,10 @@ pub(crate) struct CompiledIselPattern {
     /// is its class plus the offset materialized in a register.
     register_offset: Option<(u32, u32)>,
     /// The register operands of a root operator with offset coefficient one,
-    /// each read once: a row at one offset of a class also matches the class
-    /// at another, the difference moving into that operand.
+    /// each read once in the whole pattern: a row at one offset of a class
+    /// also matches the class at another, the difference moving into that
+    /// operand. A second read — the dividend of a remainder, which is also
+    /// its minuend — stays put, since moving the offset would change it.
     shifts: SmallVec<[u32; 2]>,
     constant: Option<Constant>,
     /// The capture nodes in the order a match reaches them.
@@ -947,12 +949,7 @@ pub(crate) fn compile_isel_pattern(
                 template.sym().and_then(|kind| kind.offset_coefficient(at)) == Some(1)
                     && nodes[operand.index()].symbol().is_some()
                     && node_meta[operand.index()].demand == BoundaryDemand::Register
-                    && template
-                        .children
-                        .iter()
-                        .filter(|&&other| other == operand)
-                        .count()
-                        == 1
+                    && reads(&nodes, operand) == 1
             })
             .map(|(_, operand)| operand.0)
             .collect(),
@@ -1187,6 +1184,22 @@ fn lower(
     (Plan::compile(query), captures, offsets, absorbs)
 }
 
+/// How many times `operand` is read: each edge from a template node to it,
+/// the root included. One shared capture counts once per edge, so a remainder
+/// pattern's dividend, used as the minuend and again under the division, is
+/// read twice.
+fn reads(nodes: &[PatternNode], operand: Id) -> usize {
+    nodes
+        .iter()
+        .filter_map(|other| match other {
+            PatternNode::Template(other) => Some(&other.children),
+            PatternNode::Capture(_) | PatternNode::Wildcard => None,
+        })
+        .flatten()
+        .filter(|&&child| child == operand)
+        .count()
+}
+
 struct Lowering<'a> {
     nodes: &'a [PatternNode],
     node_meta: &'a [PatternNodeMeta],
@@ -1284,17 +1297,7 @@ impl Lowering<'_> {
                 kind.offset_coefficient(at) == Some(1)
                     && self.nodes[operand.index()].symbol().is_some()
                     && self.node_meta[operand.index()].demand == BoundaryDemand::Register
-                    && self
-                        .nodes
-                        .iter()
-                        .filter_map(|other| match other {
-                            PatternNode::Template(other) => Some(&other.children),
-                            _ => None,
-                        })
-                        .flatten()
-                        .filter(|&&child| child == operand)
-                        .count()
-                        == 1
+                    && reads(self.nodes, operand) == 1
             })
             .map(|(_, operand)| operand.0)
     }
@@ -1327,17 +1330,7 @@ impl Lowering<'_> {
             })
             .map(|(base, operand, _)| (base, operand))?;
         let at = usize::from(immediate == rhs);
-        let read_once = self
-            .nodes
-            .iter()
-            .filter_map(|other| match other {
-                PatternNode::Template(other) => Some(&other.children),
-                _ => None,
-            })
-            .flatten()
-            .filter(|&&child| child == base)
-            .count()
-            == 1;
+        let read_once = reads(self.nodes, base) == 1;
         Some(OffsetSite {
             key: node.0,
             base: base.0,
