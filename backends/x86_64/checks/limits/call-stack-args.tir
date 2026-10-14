@@ -3,6 +3,9 @@
 // SysV passes the seventh integer argument at rsp before the call. The stable
 // frame reserves its 16-byte outgoing area plus eight bytes for call-site
 // alignment. Coalescing keeps the shared argument in a caller-saved register.
+// The argument registers, al's vector count among them, are written after the
+// stack store, so nothing the store reads lives across a register the call
+// names.
 // The previous 16-byte frame plus an 8-byte callee-save push also consumed
 // 24 bytes. Keeping the full adjustment in the frame avoids that save/restore.
 
@@ -19,5 +22,6 @@ module {
 // CHECK-NOT: x86_64.push
 // CHECK: x86_64.add_imm {dst = rsp, dst_tied = rsp, imm = -24}
 // CHECK: x86_64.mov_store_disp {base = rsp, src = %{{[0-9]+}}:{{.*}}, imm = 0}
+// CHECK-NEXT: x86_64.mov_imm32 {dst = eax, imm = 0}
 // CHECK: asm.vcall state(%{{[0-9]+}}, %{{[0-9]+}}) {callee = "g"
 // CHECK: x86_64.add_imm {dst = rsp, dst_tied = rsp, imm = 24}

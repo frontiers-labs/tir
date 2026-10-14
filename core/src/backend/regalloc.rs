@@ -438,6 +438,33 @@ fn allocate_with_affinities(
         .collect())
 }
 
+// A copy left standing runs as often as its block does.
+fn block_weights(
+    blocks: &[BlockId],
+    dominance: &crate::backend::machine_cfg::Dominance,
+) -> Vec<u64> {
+    let depths = crate::backend::machine_cfg::loop_depths(blocks, dominance);
+    blocks
+        .iter()
+        .map(|block| 10u64.saturating_pow(depths.get(block).copied().unwrap_or(0)))
+        .collect()
+}
+
+// The control-flow successors of `block`: those of every branch it holds.
+fn block_successors(context: &Context, block: BlockId) -> Vec<BlockId> {
+    let mut successors: Vec<BlockId> = Vec::new();
+    for op_id in context.get_block(block).op_ids() {
+        if let Some(term) = context.get_op(op_id).as_interface::<dyn tir::Terminator>() {
+            for succ in term.successors() {
+                if !successors.contains(&succ) {
+                    successors.push(succ);
+                }
+            }
+        }
+    }
+    successors
+}
+
 // The values of `db` in coloring order, a reversed perfect elimination order
 // of the SSA interference graph (paper § 2.1, § 3.4): blocks in a pre-order
 // walk of the dominator tree, each block's parameters and then its
@@ -730,20 +757,16 @@ impl Pass for RegisterAllocationPass {
         _analyses: &AnalysisManager,
     ) -> Result<(), PassError> {
         let info = self.target.register_info();
-        let blocks = symbol_body_blocks(context, op.op());
+        let mut blocks = symbol_body_blocks(context, op.op());
         if blocks.is_empty() {
             return Ok(());
         }
+        let region = op.op().regions()[0];
 
         let mut precolor = self.lower_fixed_registers(context, op, &blocks)?;
         let mut scan = BodyScan::of(context, &blocks)?;
-        let dominance = crate::backend::machine_cfg::dominance(&blocks, &scan.successors);
-        // A copy left standing runs as often as its block does.
-        let depths = crate::backend::machine_cfg::loop_depths(&blocks, &dominance);
-        let weights: Vec<u64> = blocks
-            .iter()
-            .map(|block| 10u64.saturating_pow(depths.get(block).copied().unwrap_or(0)))
-            .collect();
+        let mut dominance = crate::backend::machine_cfg::dominance(&blocks, &scan.successors);
+        let mut weights = block_weights(&blocks, &dominance);
 
         let mut frame = FramePlan::new(self.abi);
         frame.reserve_outgoing(scan.outgoing_size);
@@ -769,16 +792,29 @@ impl Pass for RegisterAllocationPass {
         // Every live range is split before a constrained instruction (paper
         // § 4). After spilling: only what is in registers there is split.
         let mut constrained = self.hierarchy.constrained_ops(context, &db, &precolor);
-        scan.parallel = split::split(
-            self,
-            context,
-            &blocks,
-            &scan.successors,
-            &dominance,
-            &mut db,
-            &constrained,
-            &mut precolor,
-        )?;
+        scan.parallel = loop {
+            match split::split(
+                self,
+                context,
+                region,
+                &blocks,
+                &mut scan.successors,
+                &dominance,
+                &mut db,
+                &constrained,
+                &mut precolor,
+            )? {
+                split::Split::Copies(copies) => break copies,
+                split::Split::Edges => {
+                    blocks = symbol_body_blocks(context, op.op());
+                    dominance = crate::backend::machine_cfg::dominance(&blocks, &scan.successors);
+                    weights = block_weights(&blocks, &dominance);
+                    self.spare = Some(db.into_database());
+                    db = self.database(context, &blocks, &scan, &weights, &precolor)?;
+                    constrained = self.hierarchy.constrained_ops(context, &db, &precolor);
+                }
+            }
+        };
         if !scan.parallel.is_empty() {
             self.spare = Some(db.into_database());
             db = self.database(context, &blocks, &scan, &weights, &precolor)?;
@@ -1598,8 +1634,8 @@ struct ScannedAlloca {
 ///   conditional jump for the taken edge plus a trailing virtual branch for the
 ///   fallthrough — so a block's successors are the union of
 ///   `Terminator::successors` over every op it contains, not just its last op's.
-///   Spills insert ops within blocks but never add or remove edges, so this
-///   holds for every round.
+///   Spills insert ops within blocks but never add or remove edges; the
+///   split updates it where it gives an edge a block of its own.
 #[derive(Default)]
 struct BodyScan {
     copies: Vec<(OpId, BlockId)>,
@@ -1617,7 +1653,6 @@ impl BodyScan {
     fn of(context: &Context, blocks: &[BlockId]) -> Result<Self, PassError> {
         let mut scan = BodyScan::default();
         for &block_id in blocks {
-            let mut successors: Vec<BlockId> = Vec::new();
             for op_id in context.get_block(block_id).op_ids() {
                 let op = context.get_op(op_id);
                 if op.attr(prealloc::COALESCABLE_COPY_ATTR).is_some() {
@@ -1666,16 +1701,9 @@ impl BodyScan {
                         scan.slot_classes.entry(value).or_insert(slot.port.class);
                     }
                 }
-
-                if let Some(term) = op.as_interface::<dyn tir::Terminator>() {
-                    for succ in term.successors() {
-                        if !successors.contains(&succ) {
-                            successors.push(succ);
-                        }
-                    }
-                }
             }
-            scan.successors.insert(block_id, successors);
+            scan.successors
+                .insert(block_id, block_successors(context, block_id));
         }
         Ok(scan)
     }

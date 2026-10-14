@@ -937,7 +937,10 @@ not acquire that guarantee from the symbol-address hook.
 Call lowering snapshots each distinct argument value and register class once
 per call, before placing arguments in their ABI registers or stack slots.
 Repeated arguments share that snapshot, so their copies do not create
-overlapping live ranges proportional to the argument count.
+overlapping live ranges proportional to the argument count. The stack
+arguments are stored first and the registers the call reads, the x86-64
+vector-register count in `al` among them, are written last, so no value the
+stores read lives across a register the call names.
 
 Register allocation assigns physical registers afterward. It follows
 Buchwald, Zwinkau, and Bersch, "SSA-based Register Allocation with PBQP"
@@ -962,12 +965,16 @@ Spilling runs once, before assignment, as Belady per block after Hack and
 Braun & Hack: global next-use distances, loop headers taking the values their
 loop reads, reloads at uses, one store after the definition, and block
 parameters that do not fit become memory parameters. Constants are replayed
-instead of reloaded. Afterwards, one parallel copy before each constrained
-instruction splits the live range of every value live there, with three
-exceptions: a pinned value the instruction does not read, whose register is
-fixed anyway; a pinned block parameter the instruction reads; and a value whose
-names would meet at a block that a conditional branch enters, because a
-conditional branch carries no arguments. Section 4 of the paper then restricts
+instead of reloaded. At an instruction, a register it reads or writes by name
+or through a pin counts once beside the values live across it, as section 4
+pairs such a register only with an operand or result allowed to take it.
+Afterwards, one parallel copy before each constrained instruction splits the
+live range of every value live there, with two exceptions: a pinned value the
+instruction does not read, whose register is fixed anyway, and a pinned block
+parameter the instruction reads. Where the names of a split value meet at a
+block that a conditional branch enters, the branch carries no arguments, so
+that edge first gets a block of its own that enters through an `asm.vbr`.
+Section 4 of the paper then restricts
 and relaxes the constraints of the instruction's operands and results over the
 hierarchy of register classes. Assignment and copy coalescing share one PBQP
 solve, where copies are affinity edges weighted by loop depth. The solver does

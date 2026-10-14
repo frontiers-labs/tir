@@ -1863,7 +1863,6 @@ execute/pr15296.c
 execute/pr17133.c
 execute/pr17377.c
 execute/pr19449.c
-execute/pr20621-1.c
 execute/pr22061-1.c
 execute/pr22061-2.c
 execute/pr22061-3.c

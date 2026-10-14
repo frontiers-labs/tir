@@ -22,7 +22,7 @@ use super::{
     FramePlan, RegClassId, RegisterAllocationPass, SlotChain, allocation_order, op_ref_in,
 };
 use crate::backend::VirtualBranchOp;
-use crate::backend::liveness::{Classes, op_regs};
+use crate::backend::liveness::{Classes, PhysReg, op_regs};
 use crate::backend::machine_cfg::{Dominance, Loops};
 use crate::backend::registers::{fresh_reg, value_class};
 
@@ -142,21 +142,30 @@ struct Op {
     // those with its unread results.
     live: SmallVec<[u32; 2]>,
     written: SmallVec<[u32; 2]>,
+    // Per file, the width of the values in a register across the op, which
+    // it neither reads last nor writes.
+    through: SmallVec<[u32; 2]>,
     // For an `asm.vbr`: `(parameter, argument, operand position)`.
     args: SmallVec<[(u32, u32, usize); 4]>,
     // The allocatable `(file, unit)`s the op writes and reads by name.
     fixed_defs: SmallVec<[(usize, u16); 2]>,
     fixed_uses: SmallVec<[(usize, u16); 2]>,
+    // The units of the pinned values the op reads last or writes.
+    pinned_units: SmallVec<[(usize, u16); 2]>,
 }
 
 // Per file, the allocatable units registers named directly take at one op:
 // before it, after it, and from what lives across it, which also loses what
-// the op clobbers.
+// the op clobbers. At the op itself, a register it reads or writes by name
+// or through a pin pairs only with a result or operand allowed to take it
+// (paper § 4.1), so those registers count once each beside what lives
+// across.
 #[derive(Clone)]
 struct Fixed {
     before: SmallVec<[u32; 2]>,
     after: SmallVec<[u32; 2]>,
     across: SmallVec<[u32; 2]>,
+    at: SmallVec<[u32; 2]>,
 }
 
 fn fixed(ops: &[Op], files: usize) -> Vec<Fixed> {
@@ -172,6 +181,7 @@ fn fixed(ops: &[Op], files: usize) -> Vec<Fixed> {
             before: SmallVec::new(),
             after: SmallVec::new(),
             across: SmallVec::new(),
+            at: SmallVec::new(),
         };
         ops.len()
     ];
@@ -181,6 +191,13 @@ fn fixed(ops: &[Op], files: usize) -> Vec<Fixed> {
         let mut across = live.clone();
         across.extend(op.fixed_defs.iter().filter(|unit| !live.contains(unit)));
         out[index].across = count(&across);
+        let mut at = across;
+        for unit in op.fixed_uses.iter().chain(&op.pinned_units) {
+            if !at.contains(unit) {
+                at.push(*unit);
+            }
+        }
+        out[index].at = count(&at);
         live.retain(|unit| !op.fixed_defs.contains(unit));
         for unit in &op.fixed_uses {
             if !live.contains(unit) {
@@ -220,9 +237,11 @@ impl Function {
                     defs: SmallVec::new(),
                     live: SmallVec::new(),
                     written: SmallVec::new(),
+                    through: SmallVec::new(),
                     args: SmallVec::new(),
                     fixed_defs: SmallVec::new(),
                     fixed_uses: SmallVec::new(),
+                    pinned_units: SmallVec::new(),
                 });
             }
             out.push(Block {
@@ -300,29 +319,34 @@ impl Function {
         }
         let capacity: Vec<u32> = files.iter().map(|(_, units)| units.len() as u32).collect();
 
-        let clobbers = db.table(db::CLOBBER);
-        for (&op, &register) in clobbers.column(1).iter().zip(clobbers.tags()) {
-            let (class, index) = db.registers[register as usize];
+        let units = |(class, index): PhysReg| -> Vec<(usize, u16)> {
             let (name, start, width) = class.span(index);
             let Some(file) = files.iter().position(|(file, _)| *file == name) else {
-                continue;
+                return Vec::new();
             };
-            let units: Vec<u16> = (start..start + width)
+            (start..start + width)
                 .filter(|unit| files[file].1.contains(unit))
-                .collect();
+                .map(|unit| (file, unit))
+                .collect()
+        };
+        let clobbers = db.table(db::CLOBBER);
+        for (&op, &register) in clobbers.column(1).iter().zip(clobbers.tags()) {
             let (block, index) = position[&op];
-            let op = &mut out[block].ops[index];
-            op.fixed_defs.extend(units.iter().map(|&unit| (file, unit)));
+            let units = units(db.registers[register as usize]);
+            out[block].ops[index].fixed_defs.extend(units);
         }
         for op in out.iter_mut().flat_map(|block| &mut block.ops) {
-            for (class, index) in op_regs(&context.get_op(op.id)).phys_uses {
-                let (name, start, width) = class.span(index);
-                if let Some(file) = files.iter().position(|(file, _)| *file == name) {
-                    let units = (start..start + width).filter(|unit| files[file].1.contains(unit));
-                    op.fixed_uses.extend(units.map(|unit| (file, unit)));
-                }
+            for register in op_regs(&context.get_op(op.id)).phys_uses {
+                op.fixed_uses.extend(units(register));
             }
         }
+        let pins = db.table(db::PIN);
+        let pinned_units: HashMap<u32, Vec<(usize, u16)>> = pins
+            .column(1)
+            .iter()
+            .zip(pins.tags())
+            .map(|(&value, &register)| (value, units(db.registers[register as usize])))
+            .collect();
         // Per block and value, the ops its range holds the value after; per
         // block, how the widths held change from one op to the next.
         let file_count = capacity.len();
@@ -356,13 +380,24 @@ impl Function {
                 }
                 op.live = live.iter().map(|&width| width as u32).collect();
                 op.written = op.live.clone();
+                op.through = op.live.clone();
+                let held_after = |value: &u32| {
+                    held.get(&(b, *value))
+                        .is_some_and(|after| after.contains(&index))
+                };
                 for def in &op.defs {
-                    let after = held.get(&(b, *def));
-                    if let Some(shape) = shapes.get(def)
-                        && !after.is_some_and(|after| after.contains(&index))
-                    {
-                        op.written[shape.file] += shape.width;
+                    if let Some(shape) = shapes.get(def) {
+                        if held_after(def) {
+                            op.through[shape.file] -= shape.width;
+                        } else {
+                            op.written[shape.file] += shape.width;
+                        }
                     }
+                }
+                let read_last = op.uses.iter().filter(|value| !held_after(value));
+                for value in read_last.chain(&op.defs) {
+                    op.pinned_units
+                        .extend(pinned_units.get(value).into_iter().flatten().copied());
                 }
             }
         }
@@ -618,6 +653,7 @@ impl Function {
                     let cap = self.capacity[file];
                     if op.written[file] + fixed.after[file] > cap
                         || op.live[file] + fixed.across[file] > cap
+                        || op.through[file] + fixed.at[file] > cap
                     {
                         return false;
                     }
@@ -638,7 +674,11 @@ fn demands(blocks: &[Block], loops: &Loops, files: usize) -> (Vec<Vec<u32>>, Vec
             for (op, fixed) in block.ops.iter().zip(fixed(&block.ops, files)) {
                 for (file, peak) in peak.iter_mut().enumerate() {
                     let written = op.written[file] + fixed.after[file];
-                    *peak = (*peak).max(written.max(op.live[file] + fixed.across[file]));
+                    let at = op.through[file] + fixed.at[file];
+                    *peak = (*peak)
+                        .max(written)
+                        .max(at)
+                        .max(op.live[file] + fixed.across[file]);
                 }
             }
             peak
@@ -887,10 +927,11 @@ impl<'a> Spiller<'a> {
                 .collect()
         };
         for (index, op) in block.ops.iter().enumerate() {
-            let (before, after_op, across) = (
+            let (before, after_op, across, at) = (
                 left(&fixed[index].before),
                 left(&fixed[index].after),
                 left(&fixed[index].across),
+                left(&fixed[index].at),
             );
             let handle = self.context.get_op(op.id);
             let needs = function.needs(op);
@@ -1017,6 +1058,7 @@ impl<'a> Spiller<'a> {
             let kept = |value| later.contains(&value);
             self.fit(&mut registers, &after_op, &written, kept, after)?;
             self.fit(&mut registers, &across, &live, kept, after)?;
+            self.fit(&mut registers, &at, &vec![0; files], kept, after)?;
 
             for &def in &op.defs {
                 let original = self.db.value_of(def);

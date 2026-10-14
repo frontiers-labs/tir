@@ -325,13 +325,6 @@ impl CallLowering {
                     && value_kind(context, self.abi, *value) == ValueKind::Float
             })
             .count() as u8;
-        for prefix in
-            self.emitter
-                .call_prefix(context, self.abi, outgoing_size, vector_register_args)
-        {
-            context.insert_op_before(op, prefix.as_ref())?;
-        }
-
         let saved_ra = if let Some(ra) = self.abi.ra {
             let saved = fresh_reg(context, ra.0);
             let copy = self
@@ -361,6 +354,13 @@ impl CallLowering {
                     .map(|state| tir::backend::put_on_chain(context, store.as_ref(), state));
             }
         }
+        for prefix in
+            self.emitter
+                .call_prefix(context, self.abi, outgoing_size, vector_register_args)
+        {
+            context.insert_op_before(op, prefix.as_ref())?;
+        }
+
         for (&fresh, location) in fresh_args.iter().zip(&argument_locations) {
             if let ArgumentLocation::Register(register) = *location {
                 let copy =

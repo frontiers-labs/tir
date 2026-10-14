@@ -4,18 +4,18 @@
 //! name, and a block where two names of one value meet takes it as a
 //! parameter, so the function stays in strict SSA form.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use tir::attributes::AttributeValue;
-use tir::{BlockId, Context, OpId, PassError, Terminator, ValueId};
+use tir::{BlockId, Context, OpId, PassError, RegionId, Terminator, ValueId};
 
 use super::constraints;
 use super::db::{self, RegAllocDb};
-use super::{RegisterAllocationPass, op_ref_in};
+use super::{RegisterAllocationPass, block_successors, op_ref_in};
 use crate::backend::liveness::PhysReg;
 use crate::backend::machine_cfg::Dominance;
 use crate::backend::registers::value_class;
-use crate::backend::{ParallelCopyOpBuilder, VirtualBranchOp};
+use crate::backend::{ParallelCopyOpBuilder, VirtualBranchOp, emit_uncond_branch};
 
 // A constrained instruction and the values live before it, by database id.
 struct Site {
@@ -25,35 +25,44 @@ struct Site {
     values: Vec<u32>,
 }
 
-// Insert the parallel copies and rename every later read. Returns the
-// copies, for the database to seed their pairs; pins on operands move to
-// their copies.
+pub(super) enum Split {
+    // The parallel copies, for the database to seed their pairs.
+    Copies(Vec<(OpId, BlockId)>),
+    // The names of a split value would meet where a conditional branch
+    // enters, and such a branch carries no arguments: each of those edges
+    // now has a block of its own, so the function is read again first.
+    Edges,
+}
+
+// Insert the parallel copies and rename every later read; pins on operands
+// move to their copies.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn split(
     pass: &mut RegisterAllocationPass,
     context: &Context,
+    region: RegionId,
     blocks: &[BlockId],
-    successors: &HashMap<BlockId, Vec<BlockId>>,
+    successors: &mut HashMap<BlockId, Vec<BlockId>>,
     dominance: &Dominance,
     db: &mut RegAllocDb,
     constrained: &HashSet<u32>,
     precolor: &mut HashMap<u32, PhysReg>,
-) -> Result<Vec<(OpId, BlockId)>, PassError> {
+) -> Result<Split, PassError> {
     db.saturate(&pass.rules.spill, &mut pass.caches);
     if constrained.is_empty() {
-        return Ok(Vec::new());
+        return Ok(Split::Copies(Vec::new()));
     }
     let db = &*db;
-    let mut sites = sites(context, db, &constraints::slots(db, constrained), precolor);
+    let sites = sites(context, db, &constraints::slots(db, constrained), precolor);
+    if sites.is_empty() {
+        return Ok(Split::Copies(Vec::new()));
+    }
     let index: HashMap<BlockId, usize> = blocks.iter().enumerate().map(|(i, &b)| (b, i)).collect();
     let preds = predecessors(blocks, successors, &index);
-    let (meet, whole) = meeting_points(context, blocks, &preds, dominance, db, &sites);
-    for site in &mut sites {
-        site.values.retain(|value| !whole.contains(value));
-    }
-    sites.retain(|site| !site.values.is_empty());
-    if sites.is_empty() {
-        return Ok(Vec::new());
+    let (meet, entries) = meeting_points(context, blocks, &preds, dominance, db, &sites);
+    if !entries.is_empty() {
+        insert_edge_blocks(context, region, blocks, successors, &entries);
+        return Ok(Split::Edges);
     }
 
     let mut copies = Vec::new();
@@ -104,7 +113,7 @@ pub(super) fn split(
             context.insert_operand_at(branch, at, arg, end);
         }
     }
-    Ok(copies)
+    Ok(Split::Copies(copies))
 }
 
 // The constrained instructions and the register values live before each.
@@ -149,10 +158,13 @@ fn sites(
     sites
 }
 
+// A branch that cannot pass arguments, the block holding it and the index of
+// the block it enters.
+type Entry = (OpId, BlockId, usize);
+
 // Per split value, the blocks where its names meet: the iterated dominance
-// frontier of the blocks writing it, where it is live in. A conditional
-// branch carries no arguments, so names may not meet where one enters; a
-// value that would is left whole (the second set).
+// frontier of the blocks writing it, where it is live in. Second, the
+// branches entering a meeting block that cannot pass it arguments.
 fn meeting_points(
     context: &Context,
     blocks: &[BlockId],
@@ -160,7 +172,7 @@ fn meeting_points(
     dominance: &Dominance,
     db: &RegAllocDb,
     sites: &[Site],
-) -> (HashMap<u32, Vec<usize>>, HashSet<u32>) {
+) -> (HashMap<u32, Vec<usize>>, Vec<Entry>) {
     let mut writes: HashMap<u32, Vec<usize>> = HashMap::new();
     for site in sites {
         for &value in &site.values {
@@ -203,23 +215,26 @@ fn meeting_points(
         .map(|(block, value)| (block_of[&block], value))
         .collect();
     let frontier = frontiers(preds, dominance);
-    let branches: Vec<bool> = (0..blocks.len())
-        .map(|b| entered_by_branches(context, blocks, &preds[b], blocks[b]))
-        .collect();
     let mut meet = HashMap::new();
-    let mut whole = HashSet::new();
+    let mut met = BTreeSet::new();
     for (value, written) in writes {
         let at: Vec<usize> = iterated_frontier(&frontier, written)
             .into_iter()
             .filter(|&b| livein.contains(&(b, value)))
             .collect();
-        if at.iter().all(|&b| branches[b]) {
-            meet.insert(value, at);
-        } else {
-            whole.insert(value);
-        }
+        met.extend(at.iter().copied());
+        meet.insert(value, at);
     }
-    (meet, whole)
+    let entries = met
+        .into_iter()
+        .flat_map(|b| {
+            preds[b]
+                .iter()
+                .flat_map(move |&pred| conditional_entries(context, blocks[pred], blocks[b]))
+                .map(move |(branch, pred)| (branch, pred, b))
+        })
+        .collect();
+    (meet, entries)
 }
 
 fn insert_copy(context: &Context, db: &RegAllocDb, site: &Site) -> Result<OpId, PassError> {
@@ -373,28 +388,59 @@ fn iterated_frontier(frontier: &[Vec<usize>], mut work: Vec<usize>) -> Vec<usize
     meet
 }
 
-// Whether every predecessor enters `block` through an `asm.vbr`, which can
-// pass it arguments.
-fn entered_by_branches(
+// The branches of `pred` other than an `asm.vbr` that enter `block`: they
+// cannot pass it arguments.
+fn conditional_entries(
     context: &Context,
-    blocks: &[BlockId],
-    preds: &[usize],
+    pred: BlockId,
     block: BlockId,
-) -> bool {
-    preds.iter().all(|&pred| {
-        context
-            .get_block(blocks[pred])
-            .op_ids()
-            .into_iter()
-            .all(|op| {
-                let op = context.get_op(op);
-                let branch = op.is::<VirtualBranchOp>();
-                let enters = op
+) -> impl Iterator<Item = (OpId, BlockId)> {
+    context
+        .get_block(pred)
+        .op_ids()
+        .into_iter()
+        .filter(move |&op| {
+            let op = context.get_op(op);
+            !op.is::<VirtualBranchOp>()
+                && op
                     .as_interface::<dyn Terminator>()
-                    .is_some_and(|term| term.successors().contains(&block));
-                !enters || branch
+                    .is_some_and(|term| term.successors().contains(&block))
+        })
+        .map(move |op| (op, pred))
+}
+
+// Give each entry its own block, which goes on to the block it entered
+// through an `asm.vbr`.
+fn insert_edge_blocks(
+    context: &Context,
+    region: RegionId,
+    blocks: &[BlockId],
+    successors: &mut HashMap<BlockId, Vec<BlockId>>,
+    entries: &[Entry],
+) {
+    for &(branch, pred, b) in entries {
+        let target = blocks[b];
+        let edge = context.create_block(Vec::new()).id();
+        context.add_block_to_region(region, edge);
+        context
+            .get_block(edge)
+            .append(emit_uncond_branch(context, target, &[]).id());
+        let attributes = context
+            .get_op(branch)
+            .attributes()
+            .iter()
+            .map(|attribute| {
+                let mut attribute = attribute.clone();
+                if attribute.value == AttributeValue::Block(target) {
+                    attribute.value = AttributeValue::Block(edge);
+                }
+                attribute
             })
-    })
+            .collect();
+        context.set_op_attributes(branch, attributes);
+        successors.insert(pred, block_successors(context, pred));
+        successors.insert(edge, vec![target]);
+    }
 }
 
 fn branch_to(context: &Context, pred: BlockId, block: BlockId) -> Option<OpId> {
