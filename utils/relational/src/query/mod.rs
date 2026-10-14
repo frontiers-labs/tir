@@ -8,6 +8,11 @@
 //! a client applies heads in match order, so the ids a saturation mints depend
 //! on it.
 //!
+//! A row atom can hold its tag to an interval ([`Rows::tag_within`]): reached
+//! through its value, it reads that interval's rows alone from the table's
+//! [`TagOrder`](crate::store::TagOrder); reached any other way, guards the
+//! planner adds filter its rows.
+//!
 //! Where two consecutive row atoms read a variable neither has bound yet nor
 //! reaches its rows through, the evaluator joins them over tries of their
 //! tables, intersecting the cells each atom allows for that variable, and

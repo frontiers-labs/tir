@@ -34,6 +34,7 @@ module {
 // other by nothing.
 // CHECK: state.entry_state : !state<memory>
 // CHECK: %[[FILLED:[0-9]+]] = x86_64.mov_store_disp {{.*}}imm = 0} state(%{{[0-9]+}})
-// CHECK-NEXT: %{{[0-9]+}} = x86_64.mov_load_disp {{.*}}imm = 0} state(%[[FILLED]])
 // CHECK: %[[FILLED8:[0-9]+]] = x86_64.mov_store_disp {{.*}}imm = 8} state(%{{[0-9]+}})
+// CHECK: asm.vcall
+// CHECK: %{{[0-9]+}} = x86_64.mov_load_disp {{.*}}imm = 0} state(%[[FILLED]])
 // CHECK: %{{[0-9]+}} = x86_64.mov_load_disp {{.*}}imm = 8} state(%[[FILLED8]])

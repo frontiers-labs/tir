@@ -137,7 +137,7 @@ TIR_PBQP_DUMP_DIR=/tmp/pbqp fcc compile --stage asm --march riscv64 input.c -o o
 
 An unset or empty value disables dumping. The compiler creates the directory
 and writes one file per solve immediately before the solve. This includes
-register allocation retries and unsuccessful solves. Dump failures produce a
+unsuccessful solves. Dump failures produce a
 warning on stderr and do not stop compilation. Files use the name
 `<kind>-<pid>-<sequence>.json`. The compiler never replaces an existing file.
 

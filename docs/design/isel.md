@@ -40,7 +40,7 @@ constructor may also record its source and destination port names when fixed
 operands establish a full-register copy, such as adding zero on RISC-V.
 Allocation prefers placing their endpoints in the same physical register,
 including copies to or from fixed ABI registers. This preference never overrides
-interference or a fixed assignment. After spill insertion, copies whose current
+interference or a fixed assignment. After assignment, copies whose current
 endpoints occupy the same register are removed. Narrow register views are
 excluded because a self-move can still change the rest of the register.
 
@@ -941,22 +941,55 @@ overlapping live ranges proportional to the argument count.
 
 Register allocation assigns physical registers afterward. It follows
 Buchwald, Zwinkau, and Bersch, "SSA-based Register Allocation with PBQP"
-(CC 2011). Spilling runs first, as its own step. Wherever an instruction needs
-more registers of a file than the file has, the allocator spills the values
-cheapest for the pressure they relieve. Live ranges are not split at calls. A
-value live across a clobber avoids the clobbered registers for its whole range,
-so the spiller applies the same limit to the values avoiding one set of
-registers, measured against the registers that set leaves. Assignment and copy coalescing then share
-one PBQP solve, where copies are affinity edges weighted by loop depth. The
-solver does not backtrack. It applies the optimal reductions and decides the
-remaining nodes in definition order, which for SSA interference is a reversed
-perfect elimination order, so the solve is linear in the size of the graph.
-Block arguments become copies before allocation, so the interference is not
-strictly SSA; a value the solve leaves without a register is spilled, or the
-cheapest interfering value is, and allocation runs again. Later target passes
-can make choices that depend on those assignments. For example, RISC-V
-compression can replace an instruction with a shorter encoding when its actual
-registers and immediates meet the compressed form's restrictions.
+(CC 2011), on the relational engine. Each function gets one engine database:
+its blocks, operations, values and rows share one id space. Seeded tables hold
+which block holds each operation and at which program point, what each
+operation reads and defines, block parameters, edges, branch arguments, copies,
+clobbers and pins. Rules derive live-in and live-out sets, one range per block
+and value with its start and end as minimum and maximum lattices, the values
+in a register after each operation, interference, forbidden registers and
+affinities. A range lookup reads the operations of a block whose program point
+lies inside a range, so these rules cost what they produce.
+
+Block arguments stay SSA through allocation: a branch argument and its
+parameter are joined by an affinity edge, and after assignment each edge whose
+affinities were not met gets a parallel copy on the physical registers. The
+calling convention enters as pins: an incoming argument is pinned at function
+entry and copied into a body value, and each return value is copied into a
+value pinned to its return register.
+
+Spilling runs once, before assignment, as Belady per block after Hack and
+Braun & Hack: global next-use distances, loop headers taking the values their
+loop reads, reloads at uses, one store after the definition, and block
+parameters that do not fit become memory parameters. Constants are replayed
+instead of reloaded. Afterwards, one parallel copy before each constrained
+instruction splits the live range of every value live there, with three
+exceptions: a pinned value the instruction does not read, whose register is
+fixed anyway; a pinned block parameter the instruction reads; and a value whose
+names would meet at a block that a conditional branch enters, because a
+conditional branch carries no arguments. Section 4 of the paper then restricts
+and relaxes the constraints of the instruction's operands and results over the
+hierarchy of register classes. Assignment and copy coalescing share one PBQP
+solve, where copies are affinity edges weighted by loop depth. The solver does
+not backtrack. It applies the optimal reductions and decides the remaining
+nodes in a reversed perfect elimination order: blocks in a pre-order walk of
+the dominator tree, each block's parameters and then its definitions in
+program order. Where that order first reaches a value of a constrained
+instruction, it places all of that instruction's values, in the order section
+4 gives them.
+
+Two kinds of value are written twice: the destination of a tied operand, by
+its copy and again by the instruction, and an incoming stack argument, an
+entry-block parameter that its placeholder load writes again. Each second
+write falls inside the range the first one starts, so interference stays that
+of strict SSA. For a spilled function in that form whose ranges are split at
+every constrained instruction, the order finds a register for every value and
+the solve is linear in the size of the graph. The values left whole fall
+outside that guarantee; a value the solve leaves without a register fails
+allocation. Later target passes can make choices that depend on those
+assignments. For example, RISC-V compression can replace an instruction with a
+shorter encoding when its actual registers and immediates meet the compressed
+form's restrictions.
 
 ## Diagnostics
 

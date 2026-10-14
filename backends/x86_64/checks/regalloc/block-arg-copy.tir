@@ -14,17 +14,47 @@ module {
     %4 = addi %3, %3 : !i64
     func.return %4
   }
+  %fn_rot = func.func @rot(%n: !i64, %a: !i64, %b: !i64, %c: !i64, %d: !i64, %e: !i64, %f: !i64, %g: !i64, %h: !i64) -> !i64 {
+    cfg.br ^bb1(%n, %a, %b, %c, %d, %e, %f, %g, %h : !i64, !i64, !i64, !i64, !i64, !i64, !i64, !i64, !i64)
+  ^bb1(%0: !i64, %1: !i64, %2: !i64, %3: !i64, %4: !i64, %5: !i64, %6: !i64, %7: !i64, %8: !i64):
+    %one = constant {value = 1} : !i64
+    %m = subi %0, %one : !i64
+    %zero = constant {value = 0} : !i64
+    %k = cmpi %m, %zero {predicate = "ne"} : !i1
+    cfg.cond_br %k, ^bb1(%m, %2, %3, %4, %5, %6, %7, %8, %1 : !i64, !i64, !i64, !i64, !i64, !i64, !i64, !i64, !i64), ^bb2
+  ^bb2:
+    %s1 = addi %1, %2 : !i64
+    %s2 = addi %3, %4 : !i64
+    %s3 = addi %5, %6 : !i64
+    %s4 = addi %7, %8 : !i64
+    %s5 = addi %s1, %s2 : !i64
+    %s6 = addi %s3, %s4 : !i64
+    %s7 = addi %s5, %s6 : !i64
+    func.return %s7
+  }
   module_end
 }
 
-// The sum is computed straight into the register the join reads its parameter
-// from, so the edge carrying it needs no copy at all; the other edge keeps one.
+// The forwarded argument already sits in the register the join reads its
+// parameter from, so the edge carrying it needs no copy at all; the edge
+// carrying the sum keeps one.
 // CHECK:      x86_64.add {dst = %{{[0-9]+}}:[[V:r[a-z0-9]+]], dst_tied = %{{[0-9]+}}:[[V:r[a-z0-9]+]], src = %{{[0-9]+}}:rdx}
 // CHECK-NEXT: x86_64.test
 // CHECK-NEXT: x86_64.jne {imm = ^[[OTHER:bb[0-9]+]]}
+// CHECK-NEXT: x86_64.mov {dst = rdx, src = [[V]]}
 // CHECK-NEXT: asm.vbr ^[[JOIN:bb[0-9]+]]
 // CHECK:      ^[[OTHER]]:
-// CHECK-NEXT: x86_64.mov {dst = %{{[0-9]+}}:[[V]], src = %{{[0-9]+}}:rdx}
 // CHECK-NEXT: asm.vbr ^[[JOIN]]
 // CHECK:      ^[[JOIN]](%{{[0-9]+}}: !x86_64.GPR):
-// CHECK: x86_64.add {dst = %{{[0-9]+}}:{{r[a-z0-9]+}}, dst_tied = %{{[0-9]+}}:{{r[a-z0-9]+}}, src = %{{[0-9]+}}:[[V]]}
+// CHECK: x86_64.add {dst = %{{[0-9]+}}:{{r[a-z0-9]+}}, dst_tied = %{{[0-9]+}}:{{r[a-z0-9]+}}, src = %{{[0-9]+}}:rdx}
+
+// The back edge rotates eight values through every caller-saved register the
+// counter leaves. Breaking the cycle through a callee-saved register would
+// clobber the caller's, as no value took it and nothing saves it, so the cycle
+// goes through a stack slot.
+// CHECK-LABEL: asm.symbol {name = "rot"
+// CHECK-NOT:   rbx
+// CHECK:       x86_64.mov_store_disp {base = rsp, src = %{{[0-9]+}}:{{[a-z0-9]+}}, imm = [[SLOT:[0-9]+]]}
+// CHECK-NOT:   rbx
+// CHECK:       x86_64.mov_load_disp {dst = %{{[0-9]+}}:{{[a-z0-9]+}}, base = rsp, imm = [[SLOT]]}
+// CHECK-NEXT:  asm.vbr

@@ -15,15 +15,10 @@ use tir::attributes::AttributeValue;
 use tir::backend::{ControlFlow, MachineInstruction, MemoryEffects};
 use tir::{BlockId, Context, OpId};
 
-use crate::backend::liveness::Liveness;
+use crate::backend::liveness::Classes;
 use crate::backend::reg_slots;
 use crate::backend::regalloc::TargetRegAlloc;
 use crate::backend::registers::{RegSlot, value_class};
-
-/// The spill cost the allocator prices a rematerializable vreg at: at most one
-/// extra instruction per use and no memory chain, against the two accesses a
-/// real spill pays for its store and each reload.
-pub(crate) const REMAT_SPILL_USE_COST: u64 = 3;
 
 /// Which vregs stand for immediate constants, keyed to the definition that
 /// materializes them: the values the allocator may drop at spill time in
@@ -36,7 +31,7 @@ pub(crate) const REMAT_SPILL_USE_COST: u64 = 3;
 pub(crate) fn rematerializable(
     context: &Context,
     blocks: &[BlockId],
-    liveness: &Liveness,
+    classes: &Classes,
     target: &dyn TargetRegAlloc,
 ) -> HashMap<u32, OpId> {
     let mut def_counts: HashMap<u32, usize> = HashMap::new();
@@ -81,7 +76,7 @@ pub(crate) fn rematerializable(
             {
                 continue;
             }
-            if liveness.vreg_class.get(&result.number()).copied() != value_class(context, result) {
+            if classes.vreg_class.get(&result.number()).copied() != value_class(context, result) {
                 continue;
             }
             defs.entry(result.number()).or_insert(op_id);

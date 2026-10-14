@@ -89,6 +89,11 @@ impl<V> Column<V> {
             scopes: Vec::new(),
         }
     }
+
+    /// Forget every key, as a column just made.
+    pub fn clear(&mut self) {
+        *self = Self::new(self.how);
+    }
 }
 
 impl<V: Copy + Ord + Hash + std::ops::Add<Output = V>> Column<V> {

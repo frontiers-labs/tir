@@ -347,23 +347,26 @@ impl CallLowering {
         // stack is written into memory the callee reads, so those stores go on
         // this very chain: the call takes what the last of them left, and
         // nothing may put the call ahead of one.
+        // The stores go first: an argument register holds its value from its
+        // copy to the call, and a value the stores read in between would have
+        // to keep out of every one of them.
         let mut observed = crate::analysis::effects::observed_state(&context.get_op(call.id()));
         for (&fresh, location) in fresh_args.iter().zip(&argument_locations) {
-            match *location {
-                ArgumentLocation::Register(register) => {
-                    let copy =
-                        self.emitter
-                            .copy(context, RegSlot::Phys(register), RegSlot::Value(fresh));
-                    context.insert_op_before(op, copy.as_ref())?;
-                }
-                ArgumentLocation::Stack { class, offset } => {
-                    let store = self
-                        .emitter
-                        .stack_arg_store(context, self.abi, fresh, class, offset)?;
-                    context.insert_op_before(op, store.as_ref())?;
-                    observed = observed
-                        .map(|state| tir::backend::put_on_chain(context, store.as_ref(), state));
-                }
+            if let ArgumentLocation::Stack { class, offset } = *location {
+                let store = self
+                    .emitter
+                    .stack_arg_store(context, self.abi, fresh, class, offset)?;
+                context.insert_op_before(op, store.as_ref())?;
+                observed = observed
+                    .map(|state| tir::backend::put_on_chain(context, store.as_ref(), state));
+            }
+        }
+        for (&fresh, location) in fresh_args.iter().zip(&argument_locations) {
+            if let ArgumentLocation::Register(register) = *location {
+                let copy =
+                    self.emitter
+                        .copy(context, RegSlot::Phys(register), RegSlot::Value(fresh));
+                context.insert_op_before(op, copy.as_ref())?;
             }
         }
         if let Some((fresh, register)) = fresh_result_address {

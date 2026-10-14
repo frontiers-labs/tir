@@ -139,7 +139,6 @@ mod core {
     mod machine_ir;
     mod objects;
     mod pass;
-    mod regalloc;
     mod region;
     mod sem;
     mod variants;

@@ -2,17 +2,20 @@
 //!
 //! The allocator works on machine IR produced by instruction selection, where a
 //! register operand is an SSA operand or result whose type is its register
-//! class. It computes liveness, spills until register pressure fits, then
-//! assigns registers and coalesces copies in one PBQP solve
-//! ([`crate::backend::pbqp`]). Nothing else is
-//! rewritten: the chosen registers are written onto the function's `asm.symbol`
-//! as a [`crate::backend::RegAssignment`], which assembly printing and encoding
-//! read.
+//! class. It lowers fixed registers and the calling convention to pins and
+//! copies, spills once (Belady per block), splits live ranges before
+//! constrained instructions, then assigns registers and coalesces copies in one
+//! PBQP solve ([`crate::backend::pbqp`]). It then places the copies that edges
+//! and split points still need, erases copies whose ends share a register, and
+//! inserts the frame: callee-saved saves, stack-argument loads and the stack
+//! adjustment. Operands keep naming values: the chosen registers are written
+//! onto the function's `asm.symbol` as a [`crate::backend::RegAssignment`],
+//! which assembly printing and encoding read.
 //!
 //! Register files come from [`RegisterInfo`]; allocation order and calling
 //! convention policy come from the selected [`crate::backend::abi::AbiInfo`].
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use tir::attributes::AttributeValue;
@@ -21,8 +24,9 @@ use tir::{
     ValueId,
 };
 
-use crate::backend::constmat::{REMAT_SPILL_USE_COST, rematerializable};
-use crate::backend::liveness::{self, Liveness, PhysReg};
+use crate::backend::abi;
+use crate::backend::constmat::rematerializable;
+use crate::backend::liveness::{self, Classes, PhysReg};
 use crate::backend::pbqp::{self, INF_COST};
 use crate::backend::prealloc;
 use crate::backend::registers::fresh_reg;
@@ -30,6 +34,15 @@ use crate::backend::{
     RegSlot, SymbolOp, VirtualCallOp, VirtualIndirectCallOp, VirtualReturnOp, symbol_body_blocks,
 };
 use crate::ptr::AllocaOp;
+
+mod belady;
+mod constraints;
+mod copies;
+mod db;
+mod live;
+mod split;
+
+use db::RegAllocDb;
 
 /// Architectural metadata for one register class.
 #[derive(Debug, Clone)]
@@ -250,80 +263,71 @@ impl RegisterInfo {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RegAllocError {
-    /// A virtual register could not be colored or spilled (e.g. an over-constrained
+    /// A virtual register has no register left to take (e.g. an over-constrained
     /// pre-coloring). Carries the offending vreg id.
     Infeasible(u32),
     /// A virtual register is referenced through register classes that cannot both
-    /// be honored (see [`Liveness::class_conflicts`]). Carries the offending vreg.
+    /// be honored (see [`Classes::class_conflicts`]). Carries the offending vreg.
     ClassConflict(u32),
 }
 
-/// The outcome of one allocation round.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum AllocResult {
-    /// Every virtual register received a physical register.
-    Assigned(HashMap<u32, PhysReg>),
-    /// The allocator chose to spill these virtual registers; the caller must insert
-    /// spill code and re-run. Never empty.
-    Spill(Vec<u32>),
-}
-
-/// Cost added for choosing a callee-saved register, modeling its prologue/epilogue
-/// save/restore. Small, so it only breaks ties toward caller-saved scratch.
-const CALLEE_SAVED_COST: u64 = 1;
-
-/// Inputs that tune one allocation round.
-pub struct AllocConfig<'a> {
-    pub info: &'a RegisterInfo,
-    pub abi: &'a crate::backend::abi::AbiInfo,
-    pub liveness: &'a Liveness,
-    /// Virtual registers pinned to a physical register (ABI args/return, fixed regs).
-    pub precolor: &'a HashMap<u32, PhysReg>,
-    /// Estimated cost of spilling a vreg (higher = less likely to be the one spilled).
-    pub spill_cost: &'a dyn Fn(u32) -> u64,
-}
-
-/// Solve one register-allocation round over the analyzed function.
-///
-/// Spilling comes first and apart from assignment: wherever more values are
-/// live than their register file holds, the cheapest of them are spilled and
-/// returned for the caller to lower and retry. Once pressure fits, every
-/// virtual register becomes a PBQP node whose alternatives are the allocatable
-/// registers of its class; interference edges forbid two simultaneously-live
-/// vregs from sharing a register, and [`crate::backend::pbqp`] assigns them in
-/// definition order. Should that still leave a vreg without a register, the
-/// cheapest value in its way is spilled instead.
-pub fn allocate(config: &AllocConfig) -> Result<AllocResult, RegAllocError> {
-    allocate_with_affinities(config, &[], &[])
-}
-
-/// A copy the allocator would rather not emit: its two ends, and what it costs
-/// when they land in different registers.
-type Affinity<T> = (u32, T, u64);
-
+// Assign every value of `db` a register in one PBQP solve (paper § 3).
+//
+// Each value is a node whose alternatives are the allocatable registers of its
+// class. Its color vector forbids what it is live across a clobber of and
+// prefers a register a copy moves it to or from; interference rows forbid two
+// values one register, and affinity rows price the copy their ends would need
+// apart. A value at a constrained instruction keeps only the registers
+// `restricted` leaves it (paper § 4.3). Spilling ran before, so every point
+// fits its file, and the solve in `order`, a reversed perfect elimination
+// order with each constrained instruction's values grouped where the first of
+// them appears, finds a color for every node.
 fn allocate_with_affinities(
-    config: &AllocConfig,
-    affinities: &[Affinity<u32>],
-    physical_preferences: &[Affinity<PhysReg>],
-) -> Result<AllocResult, RegAllocError> {
-    let AllocConfig {
-        info,
-        abi,
-        liveness,
-        precolor,
-        spill_cost,
-    } = config;
+    info: &RegisterInfo,
+    abi: &crate::backend::abi::AbiInfo,
+    db: &RegAllocDb,
+    classes: &Classes,
+    precolor: &HashMap<u32, PhysReg>,
+    restricted: &HashMap<u32, constraints::Set>,
+    order: &[u32],
+) -> Result<HashMap<u32, PhysReg>, RegAllocError> {
+    let mut node_of: HashMap<u32, usize> = HashMap::with_capacity(order.len());
+    for &id in order {
+        let next = node_of.len();
+        node_of.entry(id).or_insert(next);
+    }
+    let mut nodes: Vec<u32> = vec![0; node_of.len()];
+    for (&id, &node) in &node_of {
+        nodes[node] = id;
+    }
+    let number = |id: u32| db.value_of(id).number();
 
-    let vregs: Vec<u32> = liveness.vregs.iter().copied().collect();
-    let node_of: HashMap<u32, usize> = vregs.iter().enumerate().map(|(i, &v)| (v, i)).collect();
-    // A pinned value is where its instruction needs it and cannot move.
-    let spill = |vreg: u32| {
-        if precolor.contains_key(&vreg) {
-            INF_COST
-        } else {
-            spill_cost(vreg)
+    let mut forbidden: HashMap<usize, Vec<PhysReg>> = HashMap::new();
+    let forbid = db.table(db::FORBID);
+    for (&register, &value) in forbid.column(1).iter().zip(forbid.column(2)) {
+        if let Some(&node) = node_of.get(&value) {
+            forbidden
+                .entry(node)
+                .or_default()
+                .push(db.registers[register as usize]);
         }
-    };
+    }
+    let mut preferences: HashMap<usize, Vec<(PhysReg, u64)>> = HashMap::new();
+    let prefer = db.table(db::PREFER);
+    for ((&weight, &value), &register) in prefer
+        .column(1)
+        .iter()
+        .zip(prefer.column(2))
+        .zip(prefer.tags())
+    {
+        if let Some(&node) = node_of.get(&value) {
+            let register = db.registers[register as usize];
+            preferences
+                .entry(node)
+                .or_default()
+                .push((register, u64::from(weight)));
+        }
+    }
 
     let default_class = info.default_integer_class(abi);
     // Each node's registers, resolved to physical registers. Nodes of one class
@@ -332,420 +336,126 @@ fn allocate_with_affinities(
     let mut orders: HashMap<RegClassId, Vec<PhysReg>> = HashMap::new();
     let mut lists: Vec<Vec<PhysReg>> = Vec::new();
     let mut list_ids: HashMap<Vec<PhysReg>, usize> = HashMap::new();
-    let mut node_list = Vec::with_capacity(vregs.len());
-    for &vreg in &vregs {
-        let class = resolve_class(liveness, precolor, default_class, vreg)?;
+    let mut node_list = Vec::with_capacity(nodes.len());
+    let mut problem = pbqp::Problem::default();
+    for (node, &id) in nodes.iter().enumerate() {
+        let vreg = number(id);
+        let class = resolve_class(classes, precolor, default_class, vreg)?;
         // A vreg referenced through several classes over one view (an x86 value
         // that is both a REX-free operand and a SIB index) is allocatable only
         // from the indices all of them encode.
-        let allowed = liveness.allowed_indices.get(&vreg);
+        let allowed = classes.allowed_indices.get(&vreg);
+        let restricted = restricted.get(&vreg);
         let registers: Vec<PhysReg> = orders
             .entry(class)
             .or_insert_with(|| allocation_order(abi, class))
             .iter()
             .copied()
             .filter(|(_, index)| allowed.is_none_or(|allowed| allowed.contains(index)))
+            .filter(|&(_, index)| restricted.is_none_or(|&set| set >> index & 1 == 1))
             .collect();
-        let id = *list_ids.entry(registers).or_insert_with_key(|registers| {
+        let list = *list_ids.entry(registers).or_insert_with_key(|registers| {
             lists.push(registers.clone());
             lists.len() - 1
         });
-        node_list.push(id);
-    }
-
-    let spilled = pressure_spills(liveness, &lists, &node_list, &node_of, &spill);
-    if !spilled.is_empty() {
-        return Ok(AllocResult::Spill(spilled));
-    }
-
-    let mut problem = pbqp::Problem::default();
-    for (i, &vreg) in vregs.iter().enumerate() {
-        let registers = &lists[node_list[i]];
-        let mut costs = node_costs(info, registers, vreg, liveness, precolor, abi);
-        for &(_, preferred, weight) in physical_preferences.iter().filter(|(v, ..)| *v == vreg) {
+        node_list.push(list);
+        let registers = &lists[list];
+        let forbidden = forbidden.get(&node).map_or(&[][..], Vec::as_slice);
+        let mut costs = node_costs(info, registers, precolor.get(&vreg), forbidden);
+        for &(preferred, weight) in preferences.get(&node).into_iter().flatten() {
             for (cost, actual) in costs.iter_mut().zip(registers) {
                 if *cost < INF_COST && actual.0.span(actual.1) != preferred.0.span(preferred.1) {
                     *cost = cost.saturating_add(weight).min(INF_COST);
                 }
             }
         }
-        // A node with no finite alternative is unallocatable.
         if costs.iter().all(|&c| c >= INF_COST) {
             return Err(RegAllocError::Infeasible(vreg));
         }
         problem.add_node(costs);
     }
 
-    // Interference edges: only between vregs whose classes share physical registers.
-    let mut neighbors = vec![Vec::new(); vregs.len()];
     let mut matrices: HashMap<(usize, usize), Option<Rc<pbqp::Matrix>>> = HashMap::new();
-    for &(u, v) in &liveness.interference {
-        let (Some(&iu), Some(&iv)) = (node_of.get(&u), node_of.get(&v)) else {
+    let interfere = db.table(db::INTERFERE);
+    for (&a, &b) in interfere.column(1).iter().zip(interfere.column(2)) {
+        let (Some(&u), Some(&v)) = (node_of.get(&a), node_of.get(&b)) else {
             continue;
         };
-        let (lu, lv) = (node_list[iu], node_list[iv]);
+        // The problem keeps an edge's rows on its lower node; ordering the ends
+        // here spares it a transposed copy of the shared matrix.
+        let (u, v) = (u.min(v), u.max(v));
+        let (lu, lv) = (node_list[u], node_list[v]);
         let matrix = matrices
             .entry((lu, lv))
             .or_insert_with(|| interference_matrix(info, &lists[lu], &lists[lv]).map(Rc::new));
         if let Some(matrix) = matrix {
-            problem.add_edge(iu, iv, matrix.clone());
-            neighbors[iu].push(iv);
-            neighbors[iv].push(iu);
+            problem.add_edge(u, v, matrix.clone());
         }
     }
-
-    // The relation is a hash set; the spill fallback breaks ties by this order.
-    for list in &mut neighbors {
-        list.sort_unstable();
-    }
-
-    for &(u, v, weight) in affinities {
-        let (Some(&iu), Some(&iv)) = (node_of.get(&u), node_of.get(&v)) else {
+    let affinity = db.table(db::AFFINITY);
+    for ((&weight, &a), &b) in affinity
+        .column(1)
+        .iter()
+        .zip(affinity.column(2))
+        .zip(affinity.column(3))
+    {
+        let (Some(&u), Some(&v)) = (node_of.get(&a), node_of.get(&b)) else {
             continue;
         };
-        if iu != iv {
-            let matrix = affinity_matrix(&lists[node_list[iu]], &lists[node_list[iv]], weight);
-            problem.add_edge(iu, iv, Rc::new(matrix));
+        if u != v {
+            let (u, v) = (u.min(v), u.max(v));
+            let matrix = affinity_matrix(
+                &lists[node_list[u]],
+                &lists[node_list[v]],
+                u64::from(weight),
+            );
+            problem.add_edge(u, v, Rc::new(matrix));
         }
     }
 
-    crate::memstats::pbqp_census(
-        "regalloc",
-        problem.node_count(),
-        problem.edge_count(),
-        problem.matrix_bytes(),
-    );
+    if crate::memstats::enabled() {
+        crate::memstats::pbqp_census(
+            "regalloc",
+            problem.node_count(),
+            problem.edge_count(),
+            problem.matrix_bytes(),
+        );
+    }
     crate::backend::pbqp_dump::dump(
         crate::backend::pbqp_dump::PbqpTaskKind::RegAlloc,
         |w, kind| problem.write_json(w, kind),
     );
 
-    let order: Vec<usize> = liveness
-        .definition_order
-        .iter()
-        .filter_map(|vreg| node_of.get(vreg).copied())
-        .collect();
-    let solution = problem.solve(&order);
-
-    if !solution.infeasible.is_empty() {
-        // The order promised a register to every node, but the program is not
-        // strictly SSA (lowered block arguments are defined once per edge) and
-        // constrained registers are not counted by pressure. Spill the
-        // cheapest value in each stuck node's way: the node itself or one of
-        // its interfering neighbors not already given up for another.
-        let mut chosen: Vec<usize> = Vec::new();
-        for &node in &solution.infeasible {
-            if chosen.contains(&node) {
-                continue;
-            }
-            let candidate = std::iter::once(node)
-                .chain(neighbors[node].iter().copied())
-                .filter(|&m| spill(vregs[m]) < INF_COST && !chosen.contains(&m))
-                .min_by_key(|&m| (spill(vregs[m]), m != node));
-            match candidate {
-                Some(m) => chosen.push(m),
-                // Spilling a neighbor for another stuck node frees room here too.
-                None if neighbors[node].iter().any(|m| chosen.contains(m)) => {}
-                None => return Err(RegAllocError::Infeasible(vregs[node])),
-            }
-        }
-        return Ok(AllocResult::Spill(
-            chosen.into_iter().map(|m| vregs[m]).collect(),
-        ));
+    let ranked: Vec<usize> = (0..nodes.len()).collect();
+    let solution = problem.solve(&ranked);
+    if let Some(&node) = solution.infeasible.first() {
+        return Err(RegAllocError::Infeasible(number(nodes[node])));
     }
-
-    let assignment = vregs
+    Ok(nodes
         .iter()
         .enumerate()
-        .map(|(i, &vreg)| (vreg, lists[node_list[i]][solution.choices[i]]))
-        .collect();
-    Ok(AllocResult::Assigned(assignment))
+        .map(|(node, &id)| (number(id), lists[node_list[node]][solution.choices[node]]))
+        .collect())
 }
 
-/// Spill until no instruction needs more registers of a file than the file
-/// has: at each instruction, the values live across it, plus the larger of
-/// what it defines and what it reads for the last time, must fit in the file's
-/// allocatable registers, and the values live across must also avoid what it
-/// clobbers. A value keeps avoiding those registers for as long as it lives, so
-/// the values avoiding one set of registers must also fit in what that set
-/// leaves. Copy-related values that do not interfere hold one value and
-/// count once. A value spilled everywhere leaves every point it was live
-/// across. Each overfull instruction gives up the values cheapest to spill for
-/// the number of overfull instructions they relieve.
-fn pressure_spills(
-    liveness: &Liveness,
-    lists: &[Vec<PhysReg>],
-    node_list: &[usize],
-    node_of: &HashMap<u32, usize>,
-    spill: &dyn Fn(u32) -> u64,
-) -> Vec<u32> {
-    let files = Files::of(lists);
-    let shape = |vreg: u32| {
-        let register = lists[node_list[*node_of.get(&vreg)?]].first()?;
-        let (file, _, width) = register.0.span(register.1);
-        Some((file, u64::from(width)))
-    };
-    // The allocatable units of its file each value avoids wherever it is live.
-    let avoided: HashMap<u32, BTreeSet<u16>> = liveness
-        .forbidden
-        .iter()
-        .filter_map(|(&vreg, registers)| {
-            let (file, _) = shape(vreg)?;
-            let units: BTreeSet<u16> = registers
-                .iter()
-                .flat_map(|register| units_of(*register))
-                .filter(|unit| unit.0 == file && files.units.contains(unit))
-                .map(|unit| unit.1)
-                .collect();
-            (!units.is_empty()).then_some((vreg, units))
-        })
-        .collect();
-    let mut groups = CopyGroups::default();
-    for &(src, dst) in &liveness.copies {
-        if !liveness.interferes(src, dst) {
-            groups.union(src, dst);
-        }
-    }
-
-    let mut overfull: Vec<Overfull> = Vec::new();
-    for point in &liveness.points {
-        let mut across: Vec<LiveGroup> = Vec::new();
-        for &vreg in &point.across {
-            let Some((file, width)) = shape(vreg) else {
-                continue;
-            };
-            let root = groups.find(vreg);
-            match across.iter_mut().find(|group| group.root == root) {
-                Some(group) => group.members.push(vreg),
-                None => across.push(LiveGroup {
-                    root,
-                    file,
-                    width,
-                    members: vec![vreg],
-                }),
-            }
-        }
-        let width_in = |vregs: &[u32], file: &str| -> u64 {
-            vregs
-                .iter()
-                .filter_map(|&vreg| shape(vreg))
-                .filter(|(f, _)| *f == file)
-                .map(|(_, width)| width)
-                .sum()
-        };
-        let mut seen: Vec<&'static str> = Vec::new();
-        for file in across.iter().map(|group| group.file) {
-            if seen.contains(&file) {
-                continue;
-            }
-            seen.push(file);
-            let in_file: Vec<LiveGroup> = across
-                .iter()
-                .filter(|group| group.file == file)
-                .cloned()
-                .collect();
-            let live: u64 = in_file.iter().map(|group| group.width).sum();
-            let own = width_in(&point.defs, file).max(width_in(&point.dying, file));
-            let demand = (live + own).max(live + files.blocked(file, &point.blocked));
-            let excess = demand.saturating_sub(files.capacity[file]);
-
-            // A value live across a clobber avoids the clobbered registers
-            // over its whole range, not only at the clobber: the values
-            // avoiding one set must fit in the registers that set leaves.
-            let avoids: Vec<BTreeSet<u16>> = in_file
-                .iter()
-                .map(|group| {
-                    let members = group.members.iter();
-                    members
-                        .filter_map(|vreg| avoided.get(vreg))
-                        .flatten()
-                        .copied()
-                        .collect()
-                })
-                .collect();
-            let mut sets: Vec<&BTreeSet<u16>> =
-                avoids.iter().filter(|set| !set.is_empty()).collect();
-            sets.sort();
-            sets.dedup();
-            for set in sets {
-                let mut confined: Vec<LiveGroup> = in_file
-                    .iter()
-                    .zip(&avoids)
-                    .filter(|(_, avoids)| avoids.is_superset(set))
-                    .map(|(group, _)| group.clone())
-                    .collect();
-                let live: u64 = confined.iter().map(|group| group.width).sum();
-                // Spilled, a value the instruction defines or reads for the
-                // last time is a temporary that avoids nothing.
-                let mut own = [0, 0];
-                for (end, vregs) in [&point.defs, &point.dying].into_iter().enumerate() {
-                    for &vreg in vregs {
-                        let confines = |units: &BTreeSet<u16>| units.is_superset(set);
-                        match shape(vreg) {
-                            Some((f, width))
-                                if f == file && avoided.get(&vreg).is_some_and(confines) =>
-                            {
-                                own[end] += width;
-                                confined.push(LiveGroup {
-                                    root: groups.find(vreg),
-                                    file,
-                                    width,
-                                    members: vec![vreg],
-                                });
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-                let demand = live + own[0].max(own[1]);
-                let left = files.capacity[file].saturating_sub(set.len() as u64);
-                let excess = demand.saturating_sub(left);
-                if excess > 0 {
-                    overfull.push(Overfull {
-                        excess,
-                        groups: confined,
-                    });
+// The values of `db` in coloring order, a reversed perfect elimination order
+// of the SSA interference graph (paper § 2.1, § 3.4): blocks in a pre-order
+// walk of the dominator tree, each block's parameters and then its
+// definitions in program order. A definition comes after every value live
+// at it.
+fn coloring_order(context: &Context, db: &RegAllocDb, walk: &[usize]) -> Vec<u32> {
+    let mut order = Vec::new();
+    for &block in walk {
+        order.extend_from_slice(&db.params[block]);
+        for &op in &db.ops[block] {
+            for value in liveness::op_regs(&context.get_op(op)).defs {
+                if let Some(id) = db.value_id(value) {
+                    order.push(id);
                 }
             }
-            if excess > 0 {
-                overfull.push(Overfull {
-                    excess,
-                    groups: in_file,
-                });
-            }
         }
     }
-    choose_spills(overfull, spill)
-}
-
-/// Values joined by coalescable copies, as live across one instruction.
-#[derive(Clone)]
-struct LiveGroup {
-    root: u32,
-    file: &'static str,
-    width: u64,
-    members: Vec<u32>,
-}
-
-/// An instruction that needs `excess` more registers than its file has.
-struct Overfull {
-    excess: u64,
-    groups: Vec<LiveGroup>,
-}
-
-/// The allocatable register units of each file: a group register covers
-/// several indices.
-struct Files {
-    units: HashSet<(&'static str, u16)>,
-    capacity: HashMap<&'static str, u64>,
-}
-
-impl Files {
-    fn of(lists: &[Vec<PhysReg>]) -> Self {
-        let units: HashSet<_> = lists.iter().flatten().flat_map(|r| units_of(*r)).collect();
-        let mut capacity = HashMap::new();
-        for (file, _) in &units {
-            *capacity.entry(*file).or_default() += 1;
-        }
-        Self { units, capacity }
-    }
-
-    /// How many of `file`'s allocatable units `registers` cover.
-    fn blocked(&self, file: &str, registers: &[PhysReg]) -> u64 {
-        let covered: HashSet<_> = registers
-            .iter()
-            .flat_map(|r| units_of(*r))
-            .filter(|unit| unit.0 == file && self.units.contains(unit))
-            .collect();
-        covered.len() as u64
-    }
-}
-
-fn units_of(register: PhysReg) -> impl Iterator<Item = (&'static str, u16)> {
-    let (file, start, width) = register.0.span(register.1);
-    (start..start + width).map(move |index| (file, index))
-}
-
-/// Relieve each overfull instruction in turn, spilling the groups cheapest
-/// for the number of overfull instructions they are live across; a group
-/// spilled for an earlier instruction relieves the later ones too.
-fn choose_spills(overfull: Vec<Overfull>, spill: &dyn Fn(u32) -> u64) -> Vec<u32> {
-    let mut coverage: HashMap<u32, u128> = HashMap::new();
-    for group in overfull.iter().flat_map(|point| &point.groups) {
-        *coverage.entry(group.root).or_default() += 1;
-    }
-    let mut chosen: Vec<u32> = Vec::new();
-    let mut spilled: HashSet<u32> = HashSet::new();
-    for point in overfull {
-        let relieved: u64 = point
-            .groups
-            .iter()
-            .filter(|group| group.members.iter().all(|vreg| spilled.contains(vreg)))
-            .map(|group| group.width)
-            .sum();
-        let mut remaining = point.excess.saturating_sub(relieved);
-        while remaining > 0 {
-            let cost = |group: &LiveGroup| -> u128 {
-                group
-                    .members
-                    .iter()
-                    .filter(|vreg| !spilled.contains(vreg))
-                    .map(|&vreg| u128::from(spill(vreg)))
-                    .sum()
-            };
-            // Cheapest per instruction relieved: cost(a) / cover(a) < cost(b) / cover(b).
-            let candidate = point
-                .groups
-                .iter()
-                .filter(|group| {
-                    group.members.iter().any(|vreg| !spilled.contains(vreg))
-                        && group.members.iter().all(|&vreg| spill(vreg) < INF_COST)
-                })
-                .min_by(|a, b| {
-                    (cost(a) * coverage[&b.root])
-                        .cmp(&(cost(b) * coverage[&a.root]))
-                        .then(a.root.cmp(&b.root))
-                });
-            let Some(group) = candidate else {
-                break;
-            };
-            for &vreg in &group.members {
-                if spilled.insert(vreg) {
-                    chosen.push(vreg);
-                }
-            }
-            remaining = remaining.saturating_sub(group.width);
-        }
-    }
-    chosen
-}
-
-/// Union-find over values joined by coalescable copies.
-#[derive(Default)]
-struct CopyGroups {
-    parent: HashMap<u32, u32>,
-}
-
-impl CopyGroups {
-    fn find(&mut self, vreg: u32) -> u32 {
-        let mut current = vreg;
-        while let Some(&parent) = self.parent.get(&current) {
-            if parent == current {
-                break;
-            }
-            let grandparent = self.parent.get(&parent).copied().unwrap_or(parent);
-            self.parent.insert(current, grandparent);
-            current = grandparent;
-        }
-        current
-    }
-
-    fn union(&mut self, a: u32, b: u32) {
-        let (a, b) = (self.find(a), self.find(b));
-        if a != b {
-            self.parent.insert(a.max(b), a.min(b));
-        }
-    }
+    order
 }
 
 fn affinity_matrix(left: &[PhysReg], right: &[PhysReg], weight: u64) -> pbqp::Matrix {
@@ -760,25 +470,25 @@ fn affinity_matrix(left: &[PhysReg], right: &[PhysReg], weight: u64) -> pbqp::Ma
     matrix
 }
 
-/// Determine the register class a virtual register must be allocated from: the
-/// intersection of the class its operands constrain it to and its pinned
-/// register's class, falling back to the target's default integer class.
-///
-/// A pin says *which* register the value lives in; the operand class says which
-/// registers the instruction that reads it can encode. Both hold, so the narrower
-/// wins — widening to the pin's class would hand out an index the encoding drops,
-/// silently naming a different register. A pin that the narrow class cannot encode
-/// leaves no legal color and fails allocation loudly.
+// Determine the register class a virtual register must be allocated from: the
+// intersection of the class its operands constrain it to and its pinned
+// register's class, falling back to the target's default integer class.
+//
+// A pin says *which* register the value lives in; the operand class says which
+// registers the instruction that reads it can encode. Both hold, so the narrower
+// wins — widening to the pin's class would hand out an index the encoding drops,
+// silently naming a different register. A pin that the narrow class cannot encode
+// leaves no legal color and fails allocation loudly.
 fn resolve_class(
-    liveness: &Liveness,
+    classes: &Classes,
     precolor: &HashMap<u32, PhysReg>,
     default_class: Option<RegClassId>,
     vreg: u32,
 ) -> Result<RegClassId, RegAllocError> {
-    if liveness.class_conflicts.contains_key(&vreg) {
+    if classes.class_conflicts.contains_key(&vreg) {
         return Err(RegAllocError::ClassConflict(vreg));
     }
-    let constraint = liveness.vreg_class.get(&vreg).copied();
+    let constraint = classes.vreg_class.get(&vreg).copied();
     let pinned = precolor.get(&vreg).map(|(class, _)| *class);
     match (constraint, pinned) {
         (Some(constraint), Some(pinned)) if constraint.is_subclass_of(pinned) => Ok(constraint),
@@ -788,19 +498,12 @@ fn resolve_class(
     }
 }
 
-/// Build the cost vector for one node's registers, honoring pre-coloring,
-/// forbidden physical registers, and the callee-saved bias.
 fn node_costs(
     info: &RegisterInfo,
     registers: &[PhysReg],
-    vreg: u32,
-    liveness: &Liveness,
-    precolor: &HashMap<u32, PhysReg>,
-    abi: &crate::backend::abi::AbiInfo,
+    pinned: Option<&PhysReg>,
+    forbidden: &[PhysReg],
 ) -> Vec<u64> {
-    let pinned = precolor.get(&vreg);
-    let forbidden = liveness.forbidden.get(&vreg);
-
     registers
         .iter()
         .map(|p| {
@@ -813,23 +516,15 @@ fn node_costs(
                 // a call) is unsatisfiable: every alternative goes infinite so
                 // allocation fails loudly instead of silently producing a
                 // clobbered value.
-                let conflict =
-                    forbidden.is_some_and(|set| set.iter().any(|f| info.phys_overlap(f, target)));
+                let conflict = forbidden.iter().any(|f| info.phys_overlap(f, target));
                 return if !conflict && p.0.span(p.1) == target.0.span(target.1) {
                     0
                 } else {
                     INF_COST
                 };
             }
-            if forbidden.is_some_and(|set| set.iter().any(|f| info.phys_overlap(f, p))) {
-                return INF_COST;
-            }
-            if abi
-                .callee_saved
-                .iter()
-                .any(|saved| info.phys_overlap(saved, p))
-            {
-                CALLEE_SAVED_COST
+            if forbidden.iter().any(|f| info.phys_overlap(f, p)) {
+                INF_COST
             } else {
                 0
             }
@@ -859,11 +554,11 @@ fn allocation_order(abi: &crate::backend::abi::AbiInfo, class: RegClassId) -> Ve
     result
 }
 
-/// Build the interference matrix between two register lists, or `None` if they
-/// share no physical register (so they can never conflict and no edge is
-/// needed). Two alternatives conflict when they overlap: the same register
-/// through aliasing classes (`GPR`/`GPRsp` index 7), or a group register
-/// covering another (`VRM2` v8..v9 vs `VR` v9).
+// Build the interference matrix between two register lists, or `None` if they
+// share no physical register (so they can never conflict and no edge is
+// needed). Two alternatives conflict when they overlap: the same register
+// through aliasing classes (`GPR`/`GPRsp` index 7), or a group register
+// covering another (`VRM2` v8..v9 vs `VR` v9).
 fn interference_matrix(
     info: &RegisterInfo,
     left: &[PhysReg],
@@ -986,16 +681,20 @@ pub trait TargetRegAlloc: Send + Sync {
 }
 
 /// A register allocation pass. Runs on each `asm.symbol` op produced by instruction
-/// selection: it computes liveness over the symbol's body, pre-colors the calling
-/// convention's argument and return registers, solves an optimal coloring with
-/// [`allocate`], spills and retries when the optimum demands it, and finally
-/// records where every value went in the symbol's
-/// [`crate::backend::RegAssignment`].
+/// selection, after Buchwald, Zwinkau and Bersch, "SSA-based Register
+/// Allocation with PBQP" (CC 2011): block arguments stay SSA, liveness and
+/// interference are relations of one engine database per function, spilling
+/// runs once before assignment, and one PBQP solve in a reversed perfect
+/// elimination order assigns every value and coalesces copies. Where every
+/// value went is recorded in the symbol's [`crate::backend::RegAssignment`].
 pub struct RegisterAllocationPass {
     target: Box<dyn TargetRegAlloc>,
     abi: &'static crate::backend::abi::AbiInfo,
-    /// Safety valve against a non-converging spill loop.
-    max_rounds: usize,
+    rules: live::Rules,
+    caches: tir_relational::saturate::Caches,
+    hierarchy: constraints::Hierarchy,
+    /// The database the last allocation read, for the next to fill again.
+    spare: Option<tir_relational::Database<(), 1>>,
 }
 
 impl RegisterAllocationPass {
@@ -1003,10 +702,14 @@ impl RegisterAllocationPass {
         target: Box<dyn TargetRegAlloc>,
         abi: &'static crate::backend::abi::AbiInfo,
     ) -> Self {
+        let hierarchy = constraints::Hierarchy::new(&target.register_info(), abi);
         Self {
             target,
             abi,
-            max_rounds: 16,
+            rules: live::Rules::new(),
+            caches: Default::default(),
+            hierarchy,
+            spare: None,
         }
     }
 }
@@ -1032,96 +735,102 @@ impl Pass for RegisterAllocationPass {
             return Ok(());
         }
 
-        let precolor = self.lower_fixed_registers(context, op, &blocks)?;
-        let scan = BodyScan::of(context, &blocks)?;
-        // The blocks' loop nesting is static: spills are priced per access,
-        // and a nested loop's iteration count is what the outer pays for
-        // every use it survives.
-        let depths = crate::backend::machine_cfg::loop_depths(&blocks, &scan.successors);
+        let mut precolor = self.lower_fixed_registers(context, op, &blocks)?;
+        let mut scan = BodyScan::of(context, &blocks)?;
+        let dominance = crate::backend::machine_cfg::dominance(&blocks, &scan.successors);
+        // A copy left standing runs as often as its block does.
+        let depths = crate::backend::machine_cfg::loop_depths(&blocks, &dominance);
+        let weights: Vec<u64> = blocks
+            .iter()
+            .map(|block| 10u64.saturating_pow(depths.get(block).copied().unwrap_or(0)))
+            .collect();
 
         let mut frame = FramePlan::new(self.abi);
         frame.reserve_outgoing(scan.outgoing_size);
         let stack_allocas = scan.stack_allocas(&mut frame);
-        self.rematerialize_stack_allocas(context, &blocks, &scan, &stack_allocas, &mut frame)?;
+        self.rematerialize_stack_allocas(context, &blocks, &scan, &stack_allocas)?;
         // Rematerializing left the allocations naming nothing, so they go now
         // rather than after allocation: a definition the function still holds is
         // a live range the allocator may pick to spill, and the spill code it
         // would write names a value this erasure is about to retire.
         erase_stack_allocas(context, &stack_allocas)?;
-        let assignment = loop {
-            let liveness = liveness::analyze(context, &blocks);
-            // Definitions that count nothing but an immediate are free to
-            // spill: spilling one costs a replay per use, not a frame slot,
-            // so the solver prices them the cheapest possible way out.
-            let rematerializable =
-                rematerializable(context, &blocks, &liveness, self.target.as_ref());
-            let use_counts = weighted_reference_counts(context, &blocks, &depths);
-            // Spill the least-used value first. Reload/store temps are unspillable:
-            // they have single-instruction ranges and must occupy a register, so
-            // forcing a longer-lived value to spill instead is what actually relieves
-            // pressure and lets the spill loop converge (spilling a temp would just
-            // reload it at the same congested point, cascading without progress).
-            let protected = frame.temps.clone();
-            let spill_cost = |v: u32| -> u64 {
-                if protected.contains(&v) {
-                    INF_COST
-                } else if rematerializable.contains_key(&v) {
-                    REMAT_SPILL_USE_COST * (*use_counts.get(&v).unwrap_or(&1))
-                } else {
-                    10 * (*use_counts.get(&v).unwrap_or(&1))
-                }
-            };
 
-            // A copy left standing runs as often as its block does.
-            let mut affinities = Vec::new();
-            let mut physical_preferences = Vec::new();
-            for &(copy, block) in &scan.copies {
-                let weight = 10u64.saturating_pow(depths.get(&block).copied().unwrap_or(0));
-                match allocation_copy_endpoints(context, copy) {
-                    Some((RegSlot::Value(src), RegSlot::Value(dst))) => {
-                        affinities.push((src.number(), dst.number(), weight));
-                    }
-                    Some((RegSlot::Value(value), RegSlot::Phys(phys)))
-                    | Some((RegSlot::Phys(phys), RegSlot::Value(value))) => {
-                        physical_preferences.push((value.number(), phys, weight));
-                    }
-                    _ => {}
-                }
-            }
-
-            let result = allocate_with_affinities(
-                &AllocConfig {
-                    info: &info,
-                    abi: self.abi,
-                    liveness: &liveness,
-                    precolor: &precolor,
-                    spill_cost: &spill_cost,
-                },
-                &affinities,
-                &physical_preferences,
-            )
-            .map_err(|e| PassError::InvalidRuleSet(format!("register allocation failed: {e:?}")))?;
-
-            match result {
-                AllocResult::Assigned(map) => break map,
-                AllocResult::Spill(vregs) => {
-                    if frame.rounds >= self.max_rounds {
-                        return Err(PassError::InvalidRuleSet(
-                            "register allocation did not converge while spilling".to_string(),
-                        ));
-                    }
-                    frame.rounds += 1;
-                    self.spill_all(
-                        context,
-                        &liveness,
-                        &blocks,
-                        &vregs,
-                        &mut frame,
-                        &rematerializable,
-                    )?;
-                }
-            }
-        };
+        let mut db = self.database(context, &blocks, &scan, &weights, &precolor)?;
+        let mut classes = Classes::of(context, &blocks);
+        let mut remat = rematerializable(context, &blocks, &classes, self.target.as_ref());
+        // One spill batch, then the function is read again (paper § 2.1).
+        let spilled = belady::spill(
+            self, context, &blocks, &dominance, &classes, &remat, &mut db, &mut frame,
+        )?;
+        if spilled {
+            self.spare = Some(db.into_database());
+            db = self.database(context, &blocks, &scan, &weights, &precolor)?;
+        }
+        // Every live range is split before a constrained instruction (paper
+        // § 4). After spilling: only what is in registers there is split.
+        let mut constrained = self.hierarchy.constrained_ops(context, &db, &precolor);
+        scan.parallel = split::split(
+            self,
+            context,
+            &blocks,
+            &scan.successors,
+            &dominance,
+            &mut db,
+            &constrained,
+            &mut precolor,
+        )?;
+        if !scan.parallel.is_empty() {
+            self.spare = Some(db.into_database());
+            db = self.database(context, &blocks, &scan, &weights, &precolor)?;
+            constrained = self.hierarchy.constrained_ops(context, &db, &precolor);
+        }
+        if spilled || !scan.parallel.is_empty() {
+            classes = Classes::of(context, &blocks);
+            remat = rematerializable(context, &blocks, &classes, self.target.as_ref());
+        }
+        let db = self.graph(db);
+        let walk = dominance.preorder();
+        let restricted = constraints::restrict(
+            &self.hierarchy,
+            context,
+            &db,
+            &constrained,
+            &walk,
+            &classes,
+            &precolor,
+            info.default_integer_class(self.abi),
+        )?;
+        let order = constraints::color_order(&restricted, &coloring_order(context, &db, &walk));
+        let mut assignment = allocate_with_affinities(
+            &info,
+            self.abi,
+            &db,
+            &classes,
+            &precolor,
+            &restricted.sets,
+            &order,
+        )
+        .map_err(|e| PassError::InvalidRuleSet(format!("register allocation failed: {e:?}")))?;
+        let constants = copies::constants(context, &blocks, remat);
+        copies::place_edge_copies(
+            context,
+            self.target.as_ref(),
+            self.abi,
+            &db,
+            &constants,
+            &mut assignment,
+            &mut frame,
+        )?;
+        copies::place_parallel_copies(
+            context,
+            self.target.as_ref(),
+            self.abi,
+            &db,
+            &constants,
+            &mut assignment,
+            &mut frame,
+        )?;
+        self.spare = Some(db.into_database());
 
         for &(copy, _) in &scan.copies {
             if !context.has_operation(copy) {
@@ -1139,7 +848,7 @@ impl Pass for RegisterAllocationPass {
                 // Keep the assigned destination value for its users and later
                 // two-address definitions, including spill stores.
                 context.erase_op_keeping_results(&op_ref_in(context, copy))?;
-            } else {
+            } else if !copies::replay_constant_copy(context, &constants, &assignment, copy)? {
                 strip_attr(context, copy, prealloc::COALESCABLE_COPY_ATTR);
                 strip_attr(context, copy, crate::backend::FULL_REGISTER_COPY_ATTR);
             }
@@ -1169,8 +878,6 @@ impl Pass for RegisterAllocationPass {
             .filter(|(value, _)| context.has_value(*value))
             .collect();
         let mut attrs = op.op().attributes().to_vec();
-        let pins = context.sym(crate::backend::ARG_PINS_ATTR);
-        attrs.retain(|attr| Some(attr.name) != pins);
         attrs.push(context.named_attribute(crate::backend::ASSIGNMENT_ATTR, map.to_attribute()));
         context.set_op_attributes(op.op().id, attrs);
         if frame_size > 0 || !saves.is_empty() {
@@ -1182,82 +889,116 @@ impl Pass for RegisterAllocationPass {
 }
 
 impl RegisterAllocationPass {
+    fn database(
+        &mut self,
+        context: &Context,
+        blocks: &[BlockId],
+        scan: &BodyScan,
+        weights: &[u64],
+        precolor: &HashMap<u32, PhysReg>,
+    ) -> Result<RegAllocDb, PassError> {
+        let index_of: HashMap<BlockId, usize> = blocks
+            .iter()
+            .enumerate()
+            .map(|(index, &block)| (block, index))
+            .collect();
+        let mut copies: Vec<db::SeededCopy> = scan
+            .copies
+            .iter()
+            .filter_map(|&(op, block)| {
+                let (src, dst) = allocation_copy_endpoints(context, op)?;
+                Some(db::SeededCopy {
+                    block: index_of[&block],
+                    src,
+                    dst,
+                })
+            })
+            .collect();
+        for &(op, block) in &scan.parallel {
+            let op = context.get_op(op);
+            for (&src, dst) in op.operands().iter().zip(op.results()) {
+                copies.push(db::SeededCopy {
+                    block: index_of[&block],
+                    src: RegSlot::Value(src),
+                    dst: RegSlot::Value(dst),
+                });
+            }
+        }
+        let pins: HashMap<ValueId, PhysReg> = precolor
+            .iter()
+            .map(|(&vreg, &register)| (ValueId::from_number(vreg), register))
+            .collect();
+        let allocatable: Vec<PhysReg> = self
+            .abi
+            .caller_saved
+            .iter()
+            .chain(self.abi.callee_saved)
+            .copied()
+            .collect();
+        let allocatable = |register: PhysReg| {
+            allocatable
+                .iter()
+                .any(|known| known.0.overlaps(known.1, register.0, register.1))
+        };
+        let mut db = RegAllocDb::seed(
+            context,
+            &db::Seed {
+                blocks,
+                weights,
+                copies: &copies,
+                pins: &pins,
+                allocatable: &allocatable,
+            },
+            self.spare.take(),
+        );
+        db.saturate(&self.rules.liveness, &mut self.caches);
+        Ok(db)
+    }
+
+    fn graph(&mut self, mut db: RegAllocDb) -> RegAllocDb {
+        db.saturate(&self.rules.graph, &mut self.caches);
+        db
+    }
+
     fn frame_register(&self) -> PhysReg {
         self.abi.sp
     }
 
-    /// Replay `def` — a definition whose single effect is defining `spilled`
-    /// with an immediate — ahead of every op naming `spilled`, and retire the
-    /// original. Each use gets a one-instruction live range through a fresh
-    /// register, and no stack slot is spent.
+    // A replay of `def_id` — a definition whose single effect is defining
+    // `spilled` with an immediate — not yet placed, and the fresh register it
+    // defines: a reload that spends no stack slot.
     fn rematerialize(
-        &self,
         context: &Context,
-        blocks: &[BlockId],
         def_id: OpId,
         spilled: ValueId,
-        frame: &mut FramePlan,
-    ) -> Result<(), PassError> {
-        let mut sites = Vec::new();
-        for &block_id in blocks {
-            for op_id in context.get_block(block_id).op_ids() {
-                if op_id == def_id || !context.has_operation(op_id) {
-                    continue;
-                }
-                let op = context.get_op(op_id);
-                let uses: Vec<usize> = op
-                    .operands()
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, operand)| **operand == spilled)
-                    .map(|(index, _)| index)
-                    .collect();
-                if !uses.is_empty() {
-                    sites.push((op_id, uses));
-                }
-            }
-        }
-        for (op_id, positions) in sites {
-            if !context.has_operation(op_id) {
-                continue;
-            }
-            let target = op_ref_in(context, op_id);
-            let replayed = crate::clone_op(context, def_id);
-            let fresh = context
-                .get_op(replayed)
-                .results()
-                .first()
-                .copied()
-                .ok_or_else(|| {
-                    PassError::InvalidRuleSet(format!(
-                        "rematerialized definition of %{} defines no value",
-                        spilled.number()
-                    ))
-                })?;
-            let replayed = context.get_op(replayed).as_dyn_op();
-            context.insert_op_before(&target, replayed.as_ref())?;
-            for position in positions {
-                context.set_op_operand(op_id, position, fresh);
-            }
-            frame.temps.insert(fresh.number());
-        }
-        context.erase_op(&op_ref_in(context, def_id))?;
-        Ok(())
+    ) -> Result<(OpId, ValueId), PassError> {
+        let replayed = crate::clone_op(context, def_id);
+        let fresh = context
+            .get_op(replayed)
+            .results()
+            .first()
+            .copied()
+            .ok_or_else(|| {
+                PassError::InvalidRuleSet(format!(
+                    "rematerialized definition of %{} defines no value",
+                    spilled.number()
+                ))
+            })?;
+        Ok((replayed, fresh))
     }
 
-    /// Replace every use of an `alloca` result with a frame address computed
-    /// immediately before that use. Rematerializing keeps each address live for a
-    /// single instruction instead of spanning the whole function, which is what
-    /// lets bodies with many address-taken locals allocate at all: an alloca
-    /// value cannot be spilled (nothing would write the slot), so a long-lived
-    /// one pins a register forever.
+    // Replace every use of an `alloca` result with a frame address computed
+    // immediately before that use. Rematerializing keeps each address live for a
+    // single instruction instead of spanning the whole function, which is what
+    // lets bodies with many address-taken locals allocate at all: an alloca
+    // value cannot be spilled (nothing would write the slot), so a long-lived
+    // one pins a register forever.
     fn rematerialize_stack_allocas(
         &self,
         context: &Context,
         blocks: &[BlockId],
         scan: &BodyScan,
         allocas: &[StackAlloca],
-        frame: &mut FramePlan,
     ) -> Result<(), PassError> {
         if allocas.is_empty() {
             return Ok(());
@@ -1288,7 +1029,6 @@ impl RegisterAllocationPass {
                         continue;
                     }
                     let fresh = fresh_reg(context, class);
-                    frame.temps.insert(fresh.number());
                     let target = op_ref_in(context, op_id);
                     for address in self.target.emit_frame_address(
                         context,
@@ -1310,11 +1050,12 @@ impl RegisterAllocationPass {
         Ok(())
     }
 
-    /// Turn each instruction's pre-coloring constraints into point constraints:
-    /// a value an instruction must read or write in a fixed register is copied
-    /// in or out right there, and the pin moves to the copy's own value. A
-    /// register is a constraint at one instruction, not a home for a whole live
-    /// range, so nothing else has to avoid it.
+    // Turn the calling convention and each instruction's pre-coloring
+    // constraints into point constraints: a value the function receives or
+    // returns, or an instruction must read or write, in a fixed register is
+    // copied in or out right there, and the pin moves to the copy's own value.
+    // A register is a constraint at one instruction, not a home for a whole
+    // live range, so nothing else has to avoid it.
     fn lower_fixed_registers(
         &self,
         context: &Context,
@@ -1322,6 +1063,8 @@ impl RegisterAllocationPass {
         blocks: &[BlockId],
     ) -> Result<HashMap<u32, PhysReg>, PassError> {
         let mut precolor = HashMap::new();
+        self.lower_arguments(context, op, blocks, &mut precolor)?;
+        self.lower_returns(context, blocks, &mut precolor)?;
         for &block_id in blocks {
             for op_id in context.get_block(block_id).op_ids() {
                 let op = context.get_op(op_id);
@@ -1372,112 +1115,125 @@ impl RegisterAllocationPass {
                 strip_attr(context, op_id, crate::backend::PINS_ATTR);
             }
         }
-        // The calling convention's argument pins name values the entry copies
-        // already made local, so they pin only the boundary itself.
-        let arg_pins = crate::backend::RegAssignment::of_op(op.op(), crate::backend::ARG_PINS_ATTR);
-        for (value, register) in arg_pins.iter() {
-            precolor.insert(value.number(), register);
-        }
         Ok(precolor)
     }
 
-    fn spill_all(
+    fn lower_arguments(
         &self,
         context: &Context,
-        liveness: &Liveness,
+        op: &OperationRef,
         blocks: &[BlockId],
-        vregs: &[u32],
-        frame: &mut FramePlan,
-        rematerializable: &HashMap<u32, OpId>,
+        precolor: &mut HashMap<u32, PhysReg>,
     ) -> Result<(), PassError> {
+        let Some(AttributeValue::Array(args)) = op.op().attr("arg_regs") else {
+            return Ok(());
+        };
+        let result_address = match op.op().attr("result_address") {
+            Some(AttributeValue::Value(value)) => Some(value),
+            _ => None,
+        };
         let info = self.target.register_info();
-        let default_class = info.default_integer_class(self.abi);
-        let frame_reg = self.frame_register();
-
-        for &vreg in vregs {
-            let class = liveness
-                .vreg_class
-                .get(&vreg)
-                .copied()
-                .or(default_class)
-                .ok_or_else(|| {
-                    PassError::InvalidRuleSet(format!("spilled vreg {vreg} has no register class"))
-                })?;
-            let spilled = ValueId::from_number(vreg);
-
-            // A definition that writes one immediate needs no stack slot: replay it
-            // at each use and retire the original, so the constant occupies no
-            // frame slot and no live range at all.
-            if let Some(&def_id) = rematerializable.get(&vreg) {
-                self.rematerialize(context, blocks, def_id, spilled, frame)?;
-                continue;
+        let plan = abi::plan_arguments(context, &info, self.abi, &args, result_address)?;
+        let entry = context
+            .get_block(blocks[0])
+            .op_ids()
+            .first()
+            .map(|&first| op_ref_in(context, first))
+            .ok_or_else(|| {
+                PassError::InvalidRuleSet(
+                    "function with arguments has no entry operation".to_string(),
+                )
+            })?;
+        for &(incoming, register) in &plan.pins {
+            let body = fresh_reg(context, register.0);
+            // Rename first: the copy is the one op that must keep reading the
+            // pinned value, so it is built after the rename is done.
+            context.replace_value_uses(incoming, body);
+            self.insert_coalescable_copy(context, &entry, register.0, body, incoming)?;
+            if let Some(previous) = precolor.insert(incoming.number(), register)
+                && previous != register
+            {
+                return Err(PassError::InvalidRuleSet(format!(
+                    "argument %{} is pinned to conflicting registers {previous:?} and {register:?}",
+                    incoming.number()
+                )));
             }
+        }
+        // A stack argument gets a real definition so spilling can split it like
+        // any value; the frame step patches its offset once the frame is known.
+        for &(value, class, stack_index) in &plan.stack_args {
+            let load = self
+                .target
+                .emit_spill_reload(context, value, class, &self.abi.sp, 0);
+            let load_id = load.id();
+            context.insert_op_before(&entry, load.as_ref())?;
+            prealloc::mark_op(
+                context,
+                load_id,
+                ABI_STACK_INDEX_ATTR,
+                AttributeValue::UInt(stack_index as u64),
+            );
+        }
+        Ok(())
+    }
 
-            let size = self.target.spill_slot_size(class, self.abi);
-            let offset = frame.alloc(size, self.abi.stack.slot_size);
-
-            for &block_id in blocks {
-                let mut chain = SlotChain::default();
-                // Re-read the op list each pass since we mutate the block.
-                let op_ids = context.get_block(block_id).op_ids();
-                for op_id in op_ids {
-                    if !context.has_operation(op_id) {
+    fn lower_returns(
+        &self,
+        context: &Context,
+        blocks: &[BlockId],
+        precolor: &mut HashMap<u32, PhysReg>,
+    ) -> Result<(), PassError> {
+        for &block_id in blocks {
+            for op_id in context.get_block(block_id).op_ids() {
+                let ret = context.get_op(op_id);
+                if !ret.is::<VirtualReturnOp>() {
+                    continue;
+                }
+                let ret_ref = op_ref_in(context, op_id);
+                let mut next_slot = HashMap::new();
+                for (operand_index, value) in ret.operands().iter().copied().enumerate() {
+                    let kind = abi::value_kind(context, self.abi, value);
+                    let Some((file_class, index)) =
+                        abi::next_return_register(self.abi, kind, &mut next_slot)
+                    else {
                         continue;
-                    }
-                    let op = context.get_op(op_id);
-                    let uses: Vec<usize> = op
-                        .operands()
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, operand)| **operand == spilled)
-                        .map(|(index, _)| index)
-                        .collect();
-                    let defines: Vec<usize> = op
-                        .results()
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, result)| **result == spilled)
-                        .map(|(index, _)| index)
-                        .collect();
-                    if uses.is_empty() && defines.is_empty() {
-                        continue;
-                    }
-
-                    // A read-modify-write occurrence (a two-address destination
-                    // lowered to a tie) must keep the read and the write in one
-                    // register: reload into a single fresh register, rename both
-                    // directions to it, and store it back after.
-                    let fresh = fresh_reg(context, class);
-                    frame.temps.insert(fresh.number());
-                    let op_ref = op_ref_in(context, op_id);
-                    if !uses.is_empty() {
-                        let reload = self
-                            .target
-                            .emit_spill_reload(context, fresh, class, &frame_reg, offset);
-                        chain.observe(context, &op_ref, reload.as_ref())?;
-                        context.insert_op_before(&op_ref, reload.as_ref())?;
-                    }
-                    for index in uses {
-                        context.set_op_operand(op_id, index, fresh);
-                    }
-                    for index in defines.iter().copied() {
-                        context.set_op_result(op_id, index, fresh);
-                    }
-                    if !defines.is_empty() {
-                        let store = self
-                            .target
-                            .emit_spill_store(context, fresh, class, &frame_reg, offset);
-                        chain.change(context, &op_ref, store.as_ref())?;
-                        insert_after(context, block_id, op_id, store.as_ref())?;
-                    }
+                    };
+                    let class = match crate::backend::value_class(context, value) {
+                        Some(class) if class.file() == file_class.file() => class,
+                        _ => file_class,
+                    };
+                    let outgoing = fresh_reg(context, class);
+                    self.insert_coalescable_copy(context, &ret_ref, class, outgoing, value)?;
+                    context.set_op_operand(op_id, operand_index, outgoing);
+                    precolor.insert(outgoing.number(), (class, index));
                 }
             }
         }
         Ok(())
     }
 
-    /// Insert the prologue at the entry block's top and an epilogue before every
-    /// terminator, once the frame size and callee-saved set are known.
+    fn insert_coalescable_copy(
+        &self,
+        context: &Context,
+        before: &OperationRef,
+        class: RegClassId,
+        dst: ValueId,
+        src: ValueId,
+    ) -> Result<(), PassError> {
+        let copy = self
+            .target
+            .emit_copy(context, class, RegSlot::Value(dst), RegSlot::Value(src));
+        let copy_id = copy.id();
+        context.insert_op_before(before, copy.as_ref())?;
+        prealloc::mark_op(
+            context,
+            copy_id,
+            prealloc::COALESCABLE_COPY_ATTR,
+            AttributeValue::Bool(true),
+        );
+        Ok(())
+    }
+
     fn insert_frame(
         &self,
         context: &Context,
@@ -1561,19 +1317,13 @@ impl RegisterAllocationPass {
     }
 }
 
-/// Tracks stack-slot assignment across spill rounds and owns the target-neutral
-/// ABI layout formulas for the stable frame area.
+/// Tracks stack-slot assignment and owns the target-neutral ABI layout
+/// formulas for the stable frame area.
 struct FramePlan {
     align: u32,
     slot_size: u32,
     save_style: crate::backend::abi::SaveStyle,
     next_offset: i64,
-    rounds: usize,
-    /// Fresh registers introduced by reload/store range-splitting. They have tiny
-    /// live ranges and must land in a register; protecting them from re-spilling
-    /// forces the allocator to spill a longer-lived value instead, so pressure
-    /// drops monotonically and the spill loop converges.
-    temps: HashSet<u32>,
 }
 
 impl FramePlan {
@@ -1583,8 +1333,6 @@ impl FramePlan {
             slot_size: abi.stack.slot_size,
             save_style: abi.stack.save_style,
             next_offset: 0,
-            rounds: 0,
-            temps: HashSet::new(),
         }
     }
 
@@ -1673,10 +1421,10 @@ struct StackAlloca {
     offset: i64,
 }
 
-/// Erase the allocations, keeping the chains they rooted. A slot's memory is its
-/// own — the allocation is what said so — so with the op gone the chain starts at
-/// a `state.entry_state : !state<memory>` of its own instead, and the accesses on it stay ordered
-/// against each other and against nothing else.
+// Erase the allocations, keeping the chains they rooted. A slot's memory is its
+// own — the allocation is what said so — so with the op gone the chain starts at
+// a `state.entry_state : !state<memory>` of its own instead, and the accesses on it stay ordered
+// against each other and against nothing else.
 fn erase_stack_allocas(context: &Context, allocas: &[StackAlloca]) -> Result<(), PassError> {
     for alloca in allocas {
         if !context.has_operation(alloca.op_id) {
@@ -1722,8 +1470,8 @@ struct SlotChain {
 }
 
 impl SlotChain {
-    /// Order `reload` after the store that filled the slot, and against nothing
-    /// else: it observes what that store left and publishes the same memory.
+    // Order `reload` after the store that filled the slot, and against nothing
+    // else: it observes what that store left and publishes the same memory.
     fn observe(
         &mut self,
         context: &Context,
@@ -1736,8 +1484,8 @@ impl SlotChain {
         Ok(())
     }
 
-    /// Order `store` after every reload since the last one, through the join of
-    /// what they published; the memory it leaves is what the slot holds next.
+    // Order `store` after every reload since the last one, through the join of
+    // what they published; the memory it leaves is what the slot holds next.
     fn change(
         &mut self,
         context: &Context,
@@ -1764,8 +1512,8 @@ impl SlotChain {
         Ok(())
     }
 
-    /// The memory the slot holds, opening the block's chain at a
-    /// `state.entry_state : !state<memory>` where this is its first access.
+    // The memory the slot holds, opening the block's chain at a
+    // `state.entry_state : !state<memory>` where this is its first access.
     fn root(&mut self, context: &Context, before: &OperationRef) -> Result<ValueId, PassError> {
         if let Some(written) = self.written {
             return Ok(written);
@@ -1780,8 +1528,8 @@ impl SlotChain {
     }
 }
 
-/// Insert `new_op` immediately after `op_id` in its block (before the following op,
-/// or appended if `op_id` is last — which spill stores never are).
+// Insert `new_op` immediately after `op_id` in its block (before the following op,
+// or appended if `op_id` is last — which spill stores never are).
 fn insert_after(
     context: &Context,
     block_id: BlockId,
@@ -1799,11 +1547,11 @@ fn insert_after(
     }
 }
 
-/// The callee-saved physical registers the allocation actually used, each paired
-/// with a freshly reserved frame slot. A callee-saved register belongs to the
-/// caller; if this function colors a value into one it must save and restore it
-/// around the body. Deterministic order (by class then index) keeps codegen
-/// stable.
+// The callee-saved physical registers the allocation actually used, each paired
+// with a freshly reserved frame slot. A callee-saved register belongs to the
+// caller; if this function colors a value into one it must save and restore it
+// around the body. Deterministic order (by class then index) keeps codegen
+// stable.
 fn callee_saved_slots(
     assignment: &HashMap<u32, PhysReg>,
     frame: &mut FramePlan,
@@ -1855,6 +1603,9 @@ struct ScannedAlloca {
 #[derive(Default)]
 struct BodyScan {
     copies: Vec<(OpId, BlockId)>,
+    /// The parallel copies splitting live ranges before constrained
+    /// instructions; each pair is a copy.
+    parallel: Vec<(OpId, BlockId)>,
     outgoing_size: u32,
     has_calls: bool,
     allocas: Vec<ScannedAlloca>,
@@ -1929,7 +1680,6 @@ impl BodyScan {
         Ok(scan)
     }
 
-    /// The stack allocations, placed in the frame in the order they were found.
     fn stack_allocas(&self, frame: &mut FramePlan) -> Vec<StackAlloca> {
         self.allocas
             .iter()
@@ -1941,8 +1691,8 @@ impl BodyScan {
             .collect()
     }
 
-    /// The register class `value` is read through: its own, or the class of the
-    /// first register slot naming it.
+    // The register class `value` is read through: its own, or the class of the
+    // first register slot naming it.
     fn class_of(&self, context: &Context, value: ValueId) -> Option<RegClassId> {
         crate::backend::value_class(context, value)
             .or_else(|| self.slot_classes.get(&value).copied().flatten())
@@ -1958,8 +1708,8 @@ pub(crate) fn copy_endpoints(context: &Context, op_id: OpId) -> Option<(u32, u32
     Some((src, dst))
 }
 
-/// Resolve the named ports after any spill splitting. Marked synthetic copies
-/// retain their existing virtual-register contract, including narrow views.
+// Resolve the named ports after any spill splitting. Marked synthetic copies
+// retain their existing virtual-register contract, including narrow views.
 fn allocation_copy_endpoints(context: &Context, op_id: OpId) -> Option<(RegSlot, RegSlot)> {
     if !context.has_operation(op_id) {
         return None;
@@ -1998,6 +1748,11 @@ fn strip_attr(context: &Context, op_id: OpId, name: &str) {
     context.set_op_attributes(op_id, attrs);
 }
 
+/// Marks the placeholder load of an incoming stack argument and carries its
+/// stack slot index. The frame step patches the real offset in once the frame
+/// layout is known.
+const ABI_STACK_INDEX_ATTR: &str = "abi_stack_index";
+
 struct IncomingStackArg {
     value: ValueId,
     class: RegClassId,
@@ -2005,8 +1760,8 @@ struct IncomingStackArg {
     load: OpId,
 }
 
-/// The placeholder loads the ABI precolor pass marked with
-/// [`prealloc::ABI_STACK_INDEX_ATTR`], one per incoming stack argument.
+// The placeholder loads `ABI_STACK_INDEX_ATTR` marks, one per incoming
+// stack argument.
 fn collect_stack_arg_loads(
     context: &Context,
     blocks: &[BlockId],
@@ -2015,13 +1770,10 @@ fn collect_stack_arg_loads(
     for &block_id in blocks {
         for op_id in context.get_block(block_id).op_ids() {
             let op = context.get_op(op_id);
-            let Some(stack_index) =
-                op.attr(prealloc::ABI_STACK_INDEX_ATTR)
-                    .and_then(|value| match value {
-                        AttributeValue::UInt(index) => Some(index as usize),
-                        _ => None,
-                    })
-            else {
+            let Some(stack_index) = op.attr(ABI_STACK_INDEX_ATTR).and_then(|value| match value {
+                AttributeValue::UInt(index) => Some(index as usize),
+                _ => None,
+            }) else {
                 continue;
             };
             let value = op.results().first().copied().ok_or_else(|| {
@@ -2043,28 +1795,4 @@ fn collect_stack_arg_loads(
         }
     }
     Ok(args)
-}
-
-/// Count how many times each virtual register is referenced (def or use)
-/// across the body, each reference priced by the loop nesting of the block
-/// that pays it: 10 to the depth. What the allocator approximates per loop
-/// iteration is a use in a nested loop costing an order of magnitude more
-/// than the same use one nesting up.
-fn weighted_reference_counts(
-    context: &Context,
-    blocks: &[BlockId],
-    depths: &HashMap<BlockId, u32>,
-) -> HashMap<u32, u64> {
-    let mut counts: HashMap<u32, u64> = HashMap::new();
-    for &block_id in blocks {
-        let weight = 10u64.saturating_pow(depths.get(&block_id).copied().unwrap_or(0));
-        for op_id in context.get_block(block_id).op_ids() {
-            let regs = liveness::op_regs(&context.get_op(op_id));
-            for value in regs.defs.iter().chain(regs.uses.iter()) {
-                let current = counts.get(&value.number()).copied().unwrap_or(0);
-                counts.insert(value.number(), current.saturating_add(weight));
-            }
-        }
-    }
-    counts
 }

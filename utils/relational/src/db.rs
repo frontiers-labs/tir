@@ -33,7 +33,7 @@ use smallvec::SmallVec;
 
 use crate::column::{Column, Fact, Join};
 use crate::query::trie::Trie;
-use crate::store::{Collision, Dense, Group, Rename, Repair, RowView, Table, Values};
+use crate::store::{Collision, Dense, Group, Rename, Repair, RowView, Table, TagOrder, Values};
 use crate::unionfind::{Merge, UnionFind};
 use crate::{Csr, FxHashMap, Ref, Words};
 
@@ -232,6 +232,23 @@ pub(crate) fn holder(slot: u32) -> u64 {
 }
 
 impl Space {
+    // What `Database::new` starts a space with.
+    fn clear(&mut self) {
+        self.uf.clear();
+        self.live = 0;
+        self.dirty = false;
+        self.contradicted = false;
+        self.holding.clear();
+        self.unclean = 0;
+        self.aged = false;
+        self.fresh = 0;
+        self.changed.clear();
+        self.changed_at.clear();
+        self.changed_epoch = 1;
+        // Nothing has been searched yet, so everything is new.
+        self.changed_all = true;
+    }
+
     // Note that a row of the base table at `slot` names each of `ids`. One
     // absorbed already is renamed by the next canonicalization, whatever
     // epoch that runs in.
@@ -372,6 +389,39 @@ impl<C: Default, const SPACES: usize> Default for Database<C, SPACES> {
 }
 
 impl<C: Default, const SPACES: usize> Database<C, SPACES> {
+    /// Remove every row, id and lattice value, keeping the schema (the
+    /// tables, the client tables and the lattice columns) and what the tables
+    /// allocated: the database reads as a new one given that schema. A client
+    /// that builds many small databases of one schema skips the allocations
+    /// of each.
+    pub fn clear(&mut self) {
+        assert!(self.layers.is_empty(), "cleared under a layer");
+        let core = &mut self.core;
+        let state = &mut core.state;
+        for table in &mut state.tables {
+            table.clear();
+        }
+        for space in &mut state.spaces {
+            space.clear();
+        }
+        state.client = C::default();
+        for rises in &mut state.rises {
+            *rises = Rises::default();
+        }
+        state.epoch = 1;
+        for lattice in &mut core.lattices {
+            lattice.column.clear();
+        }
+        core.version = 1;
+        core.based = 1;
+        core.stats = Stats::default();
+        core.probed.clear();
+        *self.groups.get_mut() = Groups::default();
+        self.reverse.get_mut().clear();
+        self.holders.get_mut().clear();
+        *self.marks.get_mut() = Marks::default();
+    }
+
     pub fn new() -> Self {
         let core = Core {
             state: State {
@@ -1698,6 +1748,23 @@ impl<C, const SPACES: usize> Database<C, SPACES> {
         columns[column].refresh(table, column, ids);
     }
 
+    /// Order the rows of the base's table at `slot` by `column` and then by
+    /// tag, or bring the order up to date. Read through [`Self::groups`].
+    pub fn prepare_tag_order(&self, slot: u32, column: usize) {
+        let Some(table) = self.table(slot) else {
+            return;
+        };
+        let mut groups = self.groups.borrow_mut();
+        if groups.tag_orders.len() <= slot as usize {
+            groups.tag_orders.resize_with(slot as usize + 1, Vec::new);
+        }
+        let columns = &mut groups.tag_orders[slot as usize];
+        if columns.len() <= column {
+            columns.resize_with(column + 1, Default::default);
+        }
+        columns[column].refresh(table, column);
+    }
+
     /// List the rows of the base's table at `slot` the epoch before wrote, by
     /// their cell in `column`, unless that is already done for the table as
     /// it is. Read through [`Self::groups`].
@@ -2008,12 +2075,13 @@ impl<C, const SPACES: usize> Rename for Composed<'_, C, SPACES> {
     }
 }
 
-/// Per table and column, the rows grouped by that column; per table, the rows
-/// the epoch before wrote; and per table and column order, the trie a join
-/// reads. All over the base's rows.
+/// Per table and column, the rows grouped by that column, and ordered by it
+/// and their tag; per table, the rows the epoch before wrote; and per table
+/// and column order, the trie a join reads. All over the base's rows.
 #[derive(Default)]
 pub struct Groups {
     built: Vec<Vec<Group>>,
+    tag_orders: Vec<Vec<TagOrder>>,
     new_rows: Vec<Vec<NewRows>>,
     tries: Vec<Vec<Trie>>,
     scratch: Vec<u32>,
@@ -2032,6 +2100,11 @@ impl Groups {
     /// The grouping [`Database::prepare_group`] built.
     pub fn get(&self, slot: u32, column: usize) -> &Group {
         &self.built[slot as usize][column]
+    }
+
+    /// The order [`Database::prepare_tag_order`] built.
+    pub fn tag_order(&self, slot: u32, column: usize) -> &TagOrder {
+        &self.tag_orders[slot as usize][column]
     }
 
     /// How many rows of the table at `slot` hold one of `cells` in `column`,
@@ -2175,6 +2248,39 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn a_cleared_database_answers_like_a_new_one() {
+        fn schema() -> (Database<(), 1>, LatticeId) {
+            let mut db = Database::new();
+            for _ in 0..2 {
+                db.add_table(Table::new(1), IDS);
+            }
+            let lattice = db.add_lattice(IDS, Join::Agree);
+            (db, lattice)
+        }
+        let session = |db: &mut Database<(), 1>, lattice: LatticeId| {
+            let changed_before = db.take_changed(IDS);
+            let ids = [(); 3].map(|()| db.mint(IDS, 0, false));
+            db.insert(0, &[ids[0]], &[], (ids[1], 0), 0);
+            db.raise(lattice, ids[2], 5);
+            db.advance();
+            (
+                changed_before,
+                ids,
+                [db.lookup(0, &[ids[0]], &[]), db.lookup(1, &[ids[0]], &[])],
+                db.read(lattice, ids[2]),
+                db.risen(lattice, false).to_vec(),
+                db.take_changed(IDS),
+                db.epoch(),
+            )
+        };
+        let (mut new, lattice) = schema();
+        let (mut cleared, _) = schema();
+        session(&mut cleared, lattice);
+        cleared.clear();
+        assert_eq!(session(&mut cleared, lattice), session(&mut new, lattice));
     }
 
     #[test]

@@ -1283,6 +1283,16 @@ impl Context {
         }
     }
 
+    /// Drop the `index`th argument of `block`. Nothing is renamed: the value
+    /// it named stays, so the caller retires its readers and the branches
+    /// that pass it first.
+    pub fn remove_block_argument(&self, block: BlockId, index: usize) {
+        let mut db = self.db_mut();
+        if db.remove_block_argument(block, index).is_some() {
+            db.edit_block(block);
+        }
+    }
+
     fn place_block_argument(&self, block: BlockId, argument: ValueId) -> bool {
         let mut db = self.db_mut();
         if !db.push_block_argument(block, argument) {

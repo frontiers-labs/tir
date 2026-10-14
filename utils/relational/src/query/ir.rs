@@ -187,6 +187,12 @@ pub struct Rows {
     /// scalar held before is not compared with it.
     pub cell: Option<Scalar>,
     pub swap: Option<Swap>,
+    /// Holds the tag [`Self::tag`] binds to `[lo, hi)`, two expressions over
+    /// scalars other atoms and guards bind. The atom is reached through its
+    /// value only once those are bound, and then reads the rows of the
+    /// interval alone instead of every row with that value; reached any
+    /// other way, it reads its rows and the interval filters them.
+    pub tag_within: Option<(Expr, Expr)>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

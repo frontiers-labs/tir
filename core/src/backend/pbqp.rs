@@ -22,15 +22,26 @@
 //! Every reduction touches a node or edge a bounded number of times, so for a
 //! fixed register count the solve is linear in the size of the graph.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::io::{self, Write};
 use std::rc::Rc;
+
+use tir_adt::FxBuildHasher;
 
 /// The cost of an alternative that must not be chosen.
 pub const INF_COST: u64 = u64::MAX / 4;
 
 fn add(lhs: u64, rhs: u64) -> u64 {
     lhs.saturating_add(rhs).min(INF_COST)
+}
+
+fn min_sum(lhs: &[u64], rhs: &[u64]) -> u64 {
+    lhs.iter()
+        .zip(rhs)
+        .map(|(&lhs, &rhs)| lhs.saturating_add(rhs))
+        .min()
+        .map_or(INF_COST, |cost| cost.min(INF_COST))
 }
 
 /// A dense cost matrix; rows index the alternatives of an edge's first node.
@@ -58,6 +69,14 @@ impl Matrix {
         self.costs[row * self.cols + col] = cost;
     }
 
+    fn row(&self, row: usize) -> &[u64] {
+        &self.costs[row * self.cols..][..self.cols]
+    }
+
+    fn row_mut(&mut self, row: usize) -> &mut [u64] {
+        &mut self.costs[row * self.cols..][..self.cols]
+    }
+
     fn transposed(&self) -> Self {
         let mut result = Self::zero(self.cols, self.rows);
         for row in 0..self.rows {
@@ -75,7 +94,7 @@ impl Matrix {
 #[derive(Default)]
 pub struct Problem {
     costs: Vec<Vec<u64>>,
-    edges: HashMap<(usize, usize), Rc<Matrix>>,
+    edges: HashMap<(usize, usize), Rc<Matrix>, FxBuildHasher>,
 }
 
 impl Problem {
@@ -260,7 +279,7 @@ struct Solver {
     edges: Vec<Edge>,
     /// Live edges of each live node.
     adjacency: Vec<Vec<usize>>,
-    between: HashMap<(usize, usize), usize>,
+    between: HashMap<(usize, usize), usize, FxBuildHasher>,
     alive: Vec<bool>,
     /// Live nodes whose degree fell to two or less since they were last looked at.
     pending: Vec<usize>,
@@ -275,7 +294,10 @@ impl Solver {
             costs: problem.costs,
             edges: Vec::with_capacity(problem.edges.len()),
             adjacency: vec![Vec::new(); count],
-            between: HashMap::with_capacity(problem.edges.len()),
+            between: HashMap::with_capacity_and_hasher(
+                problem.edges.len(),
+                FxBuildHasher::default(),
+            ),
             alive: vec![true; count],
             pending: (0..count).rev().collect(),
             reduced: Vec::new(),
@@ -396,112 +418,65 @@ impl Solver {
     /// RE: move each row's minimum into the edge's first node and each
     /// column's into its second, then drop the edge if nothing is left in it.
     /// Rows and columns of alternatives already infinite constrain nothing and
-    /// are cleared.
+    /// are cleared. A shared matrix is copied only once it changes.
     fn normalize(&mut self, edge: usize) {
-        let Edge { lhs, rhs, .. } = self.edges[edge];
-        let (rows, cols) = (self.costs[lhs].len(), self.costs[rhs].len());
-        let matrix = &self.edges[edge].matrix;
-        let live_row = |row: usize| self.costs[lhs][row] < INF_COST;
-        let live_col = |col: usize| self.costs[rhs][col] < INF_COST;
-        let row_min = |row: usize| {
-            (0..cols)
-                .filter(|&col| live_col(col))
-                .map(|col| matrix.get(row, col))
-                .min()
-                .unwrap_or(0)
-        };
-        let col_min = |col: usize| {
-            (0..rows)
-                .filter(|&row| live_row(row))
-                .map(|row| matrix.get(row, col))
-                .min()
-                .unwrap_or(0)
-        };
-        let settled = (0..rows).all(|row| {
-            if live_row(row) {
-                row_min(row) == 0
+        let Self { costs, edges, .. } = self;
+        let Edge {
+            lhs, rhs, matrix, ..
+        } = &mut edges[edge];
+        let (lhs, rhs) = (*lhs, *rhs);
+        let (rows, cols) = (costs[lhs].len(), costs[rhs].len());
+        let reduced = |cost: u64, min: u64| {
+            if cost >= INF_COST {
+                INF_COST
             } else {
-                (0..cols).all(|col| matrix.get(row, col) == 0)
+                cost.saturating_sub(min)
             }
-        }) && (0..cols).all(|col| {
-            if live_col(col) {
-                col_min(col) == 0
-            } else {
-                (0..rows).all(|row| matrix.get(row, col) == 0)
-            }
-        });
-        if settled {
-            if matrix.costs.iter().all(|&cost| cost == 0) {
-                self.unlink(edge);
-            }
-            return;
-        }
-
-        let mut matrix = Rc::unwrap_or_clone(std::mem::replace(
-            &mut self.edges[edge].matrix,
-            Rc::new(Matrix::zero(0, 0)),
-        ));
+        };
         for row in 0..rows {
-            if self.costs[lhs][row] < INF_COST {
-                let min = (0..cols)
-                    .filter(|&col| self.costs[rhs][col] < INF_COST)
-                    .map(|col| matrix.get(row, col))
+            if costs[lhs][row] < INF_COST {
+                let min = matrix
+                    .row(row)
+                    .iter()
+                    .zip(&costs[rhs])
+                    .filter(|&(_, &other)| other < INF_COST)
+                    .map(|(&cost, _)| cost)
                     .min()
                     .unwrap_or(0);
                 if min != 0 {
-                    for col in 0..cols {
-                        let cost = matrix.get(row, col);
-                        matrix.set(
-                            row,
-                            col,
-                            if cost >= INF_COST {
-                                INF_COST
-                            } else {
-                                cost.saturating_sub(min)
-                            },
-                        );
+                    for cost in Rc::make_mut(matrix).row_mut(row) {
+                        *cost = reduced(*cost, min);
                     }
-                    self.costs[lhs][row] = add(self.costs[lhs][row], min);
+                    costs[lhs][row] = add(costs[lhs][row], min);
                 }
             }
-            if self.costs[lhs][row] >= INF_COST {
-                for col in 0..cols {
-                    matrix.set(row, col, 0);
-                }
+            if costs[lhs][row] >= INF_COST && matrix.row(row).iter().any(|&cost| cost != 0) {
+                Rc::make_mut(matrix).row_mut(row).fill(0);
             }
         }
         for col in 0..cols {
-            if self.costs[rhs][col] < INF_COST {
+            if costs[rhs][col] < INF_COST {
                 let min = (0..rows)
-                    .filter(|&row| self.costs[lhs][row] < INF_COST)
+                    .filter(|&row| costs[lhs][row] < INF_COST)
                     .map(|row| matrix.get(row, col))
                     .min()
                     .unwrap_or(0);
                 if min != 0 {
+                    let matrix = Rc::make_mut(matrix);
                     for row in 0..rows {
-                        let cost = matrix.get(row, col);
-                        matrix.set(
-                            row,
-                            col,
-                            if cost >= INF_COST {
-                                INF_COST
-                            } else {
-                                cost.saturating_sub(min)
-                            },
-                        );
+                        matrix.set(row, col, reduced(matrix.get(row, col), min));
                     }
-                    self.costs[rhs][col] = add(self.costs[rhs][col], min);
+                    costs[rhs][col] = add(costs[rhs][col], min);
                 }
             }
-            if self.costs[rhs][col] >= INF_COST {
+            if costs[rhs][col] >= INF_COST && (0..rows).any(|row| matrix.get(row, col) != 0) {
+                let matrix = Rc::make_mut(matrix);
                 for row in 0..rows {
                     matrix.set(row, col, 0);
                 }
             }
         }
-        let empty = matrix.costs.iter().all(|&cost| cost == 0);
-        self.edges[edge].matrix = Rc::new(matrix);
-        if empty {
+        if matrix.costs.iter().all(|&cost| cost == 0) {
             self.unlink(edge);
         }
     }
@@ -529,8 +504,11 @@ impl Solver {
     fn reduce_one(&mut self, node: usize) {
         let edge = self.adjacency[node][0];
         let neighbor = self.other(edge, node);
-        let delta: Vec<u64> = (0..self.costs[neighbor].len())
-            .map(|other| self.best_response(node, &[(edge, other)]).1)
+        let own = &self.costs[node];
+        let delta: Vec<u64> = self
+            .laid_out(edge, neighbor)
+            .chunks_exact(own.len())
+            .map(|costs| min_sum(own, costs))
             .collect();
         self.alive[node] = false;
         self.unlink(edge);
@@ -543,10 +521,17 @@ impl Solver {
     fn reduce_two(&mut self, node: usize) {
         let (first, second) = (self.adjacency[node][0], self.adjacency[node][1]);
         let (left, right) = (self.other(first, node), self.other(second, node));
+        let own = &self.costs[node];
+        let through_left: Vec<u64> = self
+            .laid_out(first, left)
+            .chunks_exact(own.len())
+            .flat_map(|costs| costs.iter().zip(own).map(|(&cost, &own)| add(cost, own)))
+            .collect();
+        let through_right = self.laid_out(second, right);
         let mut delta = Matrix::zero(self.costs[left].len(), self.costs[right].len());
-        for l in 0..delta.rows {
-            for r in 0..delta.cols {
-                delta.set(l, r, self.best_response(node, &[(first, l), (second, r)]).1);
+        for (l, through_left) in through_left.chunks_exact(own.len()).enumerate() {
+            for (r, through_right) in through_right.chunks_exact(own.len()).enumerate() {
+                delta.set(l, r, min_sum(through_left, through_right));
             }
         }
         self.alive[node] = false;
@@ -554,6 +539,15 @@ impl Solver {
         self.unlink(second);
         self.reduced.push(Reduced::R2(node, first, second));
         self.charge(left, right, delta);
+    }
+
+    fn laid_out(&self, edge: usize, outer: usize) -> Cow<'_, [u64]> {
+        let edge = &self.edges[edge];
+        if edge.lhs == outer {
+            Cow::Borrowed(&edge.matrix.costs)
+        } else {
+            Cow::Owned(edge.matrix.transposed().costs)
+        }
     }
 
     /// The cheapest alternative of `node` and its cost, given the alternative
@@ -642,23 +636,17 @@ impl Solver {
     /// each neighbor's best response, then charge that choice to the neighbors.
     fn decide(&mut self, node: usize) {
         let edges = self.adjacency[node].clone();
-        let (choice, _) = (0..self.costs[node].len())
-            .map(|own| {
-                let cost = edges.iter().fold(self.costs[node][own], |total, &edge| {
-                    let neighbor = self.other(edge, node);
-                    let best = (0..self.costs[neighbor].len())
-                        .map(|other| {
-                            add(
-                                self.cost(edge, node, own, other),
-                                self.costs[neighbor][other],
-                            )
-                        })
-                        .min()
-                        .unwrap_or(INF_COST);
-                    add(total, best)
-                });
-                (own, cost)
-            })
+        let mut totals = self.costs[node].clone();
+        for &edge in &edges {
+            let theirs = &self.costs[self.other(edge, node)];
+            let costs = self.laid_out(edge, node);
+            for (total, costs) in totals.iter_mut().zip(costs.chunks_exact(theirs.len())) {
+                *total = add(*total, min_sum(costs, theirs));
+            }
+        }
+        let (choice, _) = totals
+            .into_iter()
+            .enumerate()
             .min_by_key(|&(_, cost)| cost)
             .unwrap_or((0, INF_COST));
         self.choices[node] = choice;

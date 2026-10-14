@@ -52,7 +52,9 @@ module {
 // source branches so layout can give the inner backedge a fallthrough.
 // The inner body and its backedge copies must remain free of spill traffic.
 // CHECK: x86_64.mov_store_disp
-// CHECK: ^[[INNER:bb[0-9]+]]({{(%[0-9]+: !x86_64.GPR, ){13}%[0-9]+: !x86_64.GPR}}):
+// One passive accumulator stays in memory as a parameter of no register, so
+// the header takes the other thirteen.
+// CHECK: ^[[INNER:bb[0-9]+]]({{(%[0-9]+: !x86_64.GPR, ){12}%[0-9]+: !x86_64.GPR}}):
 // CHECK-NOT: mov_load_disp
 // CHECK-NOT: mov_store_disp
 // CHECK: x86_64.imul
@@ -60,10 +62,13 @@ module {
 // CHECK-NOT: mov_store_disp
 // CHECK: x86_64.jl {imm = ^[[BACK:bb[0-9]+]]}
 // CHECK-NEXT: asm.vbr
+// The two accumulators trade registers on the backedge, so their swap takes
+// three copies and the counter one more.
 // CHECK-NEXT: ^[[BACK]]:
-// CHECK-NEXT: x86_64.mov
-// CHECK-NEXT: x86_64.mov
-// CHECK-NEXT: x86_64.mov
+// CHECK-NEXT: x86_64.mov {
+// CHECK-NEXT: x86_64.mov {
+// CHECK-NEXT: x86_64.mov {
+// CHECK-NEXT: x86_64.mov {
 // CHECK-NEXT: asm.vbr ^[[INNER]]
 // CHECK: x86_64.mov_load_disp
 
@@ -72,9 +77,10 @@ module {
 // ASM-LABEL: pressure:
 // ASM: jmp .L[[INNER:[0-9]+]]
 // ASM-NEXT: .L[[BACK:[0-9]+]]:
-// ASM-NEXT: mov
-// ASM-NEXT: mov
-// ASM-NEXT: mov
+// ASM-NEXT: mov {{r[a-z0-9]+, r[a-z0-9]+$}}
+// ASM-NEXT: mov {{r[a-z0-9]+, r[a-z0-9]+$}}
+// ASM-NEXT: mov {{r[a-z0-9]+, r[a-z0-9]+$}}
+// ASM-NEXT: mov {{r[a-z0-9]+, r[a-z0-9]+$}}
 // ASM-NEXT: .L[[INNER]]:
 // ASM-NOT: jmp
 // ASM-NOT: [rsp

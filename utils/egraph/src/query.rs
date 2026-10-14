@@ -347,6 +347,7 @@ impl<L: Label> Lower<L> {
             tag: row,
             cell: label,
             swap,
+            tag_within: None,
         })
     }
 

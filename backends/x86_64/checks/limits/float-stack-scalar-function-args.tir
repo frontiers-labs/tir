@@ -10,5 +10,6 @@ module {
   module_end
 }
 
-// CHECK: x86_64.movsd_load_disp {dst = %{{[0-9]+}}:xmm{{[0-9]+}}, base = rsp, imm = 8}
-// CHECK: x86_64.movsd {dst = %{{[0-9]+}}:xmm0, src = %{{[0-9]+}}:xmm{{[0-9]+}}}
+// The load fills the return register itself.
+// CHECK: x86_64.movsd_load_disp {dst = %{{[0-9]+}}:xmm0, base = rsp, imm = 8}
+// CHECK-NOT: x86_64.movsd {

@@ -27,7 +27,7 @@ use tir::{Context, Error, OpHandle, OpId, ValueId};
 use crate::backend::regalloc::RegClassId;
 use crate::backend::registers::{PINS_ATTR, slot_pin};
 use crate::backend::registers::{RegAssignment, RegSlot, reg_slots, value_class};
-use crate::backend::{ARG_PINS_ATTR, ASSIGNMENT_ATTR, SymbolOp};
+use crate::backend::{ASSIGNMENT_ATTR, SymbolOp};
 
 /// Verify the machine IR under `root`.
 pub fn verify_machine_ir(context: &Context, root: OpId) -> Result<(), Error> {
@@ -43,7 +43,6 @@ pub fn verify_machine_ir(context: &Context, root: OpId) -> Result<(), Error> {
         let op = context.get_op(op_id);
         verify_reg_slots(context, &op)?;
         verify_state_operands(context, &op)?;
-        verify_views(context, &RegAssignment::of_op(&op, ARG_PINS_ATTR))?;
         verify_slot_pins(context, &op)?;
         let symbol = op.is::<SymbolOp>();
         if symbol {

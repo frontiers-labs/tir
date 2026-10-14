@@ -297,11 +297,6 @@ pub const ASSIGNMENT_ATTR: &str = "assignment";
 /// instruction's requirement where it was.
 pub const PINS_ATTR: &str = "pins";
 
-/// The attribute an `asm.symbol` carries the calling convention's placement of
-/// its arguments in: value → register, since an argument is placed by what it
-/// is rather than by where an instruction reads it.
-pub const ARG_PINS_ATTR: &str = "arg_pins";
-
 /// The register the slot named `name` of `op` is pinned to.
 pub fn slot_pin(op: &OpHandle, name: &str) -> Option<PhysReg> {
     let AttributeValue::Dict(pins) = op.attr(PINS_ATTR)? else {
@@ -343,8 +338,8 @@ impl RegAssignment {
         self.0.iter().map(|(value, register)| (*value, *register))
     }
 
-    /// The map `op` carries under `attr` ([`ASSIGNMENT_ATTR`] or
-    /// [`ARG_PINS_ATTR`]), empty when it carries none.
+    /// The map `op` carries under `attr` ([`ASSIGNMENT_ATTR`]), empty when it
+    /// carries none.
     pub fn of_op(op: &OpHandle, attr: &str) -> Self {
         let Some(AttributeValue::Array(entries)) = op.attr(attr) else {
             return Self::default();

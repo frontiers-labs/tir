@@ -15,13 +15,14 @@ module {
   module_end
 }
 
-// Each arm places its forwarded value in the return register.
-// CHECK: x86_64.mov {dst = %{{[0-9]+}}:rax, src = %{{[0-9]+}}:rdi}
+// Each arm gets its forwarded value in the return register: the fallthrough
+// arm before the branch, the taken arm on its own edge.
+// CHECK: x86_64.mov {dst = %{{[0-9]+}}:rax, src = %{{[0-9]+}}:rsi}
 // CHECK-NEXT: x86_64.test
 // CHECK-NEXT: x86_64.jne {imm = ^[[TAKEN:bb[0-9]+]]}
 // CHECK-NEXT: asm.vbr ^[[OTHER:bb[0-9]+]]
 // CHECK: ^[[OTHER]]:
-// CHECK-NEXT: x86_64.mov {dst = %{{[0-9]+}}:rax, src = %{{[0-9]+}}:rsi}
 // CHECK-NEXT: asm.vret
 // CHECK: ^[[TAKEN]]:
+// CHECK-NEXT: x86_64.mov {dst = %{{[0-9]+}}:rax, src = %{{[0-9]+}}:rdi}
 // CHECK-NEXT: asm.vret

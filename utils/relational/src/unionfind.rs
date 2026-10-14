@@ -72,6 +72,17 @@ impl UnionFind {
         Self::default()
     }
 
+    /// Forget every id, keeping what the vectors allocated.
+    pub fn clear(&mut self) {
+        self.parent.clear();
+        self.delta.clear();
+        self.mask.clear();
+        self.pinned.clear();
+        self.conflict.clear();
+        self.shifted = false;
+        self.flat_below = u32::MAX;
+    }
+
     /// Mint an id in a set of its own, its offsets reduced by `mask`.
     pub fn push(&mut self, mask: u64, pinned: bool) -> u32 {
         let id = self.parent.len() as u32;

@@ -2,11 +2,22 @@ use std::collections::HashMap;
 
 use tir::BlockId;
 
-/// Count natural loops by header, ignoring blocks unreachable from entry.
-pub(super) fn loop_depths(
+/// The dominator tree of a machine function's blocks, by index into the
+/// block list; the first block is the entry.
+pub(crate) struct Dominance {
+    /// The reachable blocks in reverse postorder.
+    order: Vec<usize>,
+    rank: Vec<usize>,
+    idom: Vec<Option<usize>>,
+    predecessors: Vec<Vec<usize>>,
+    seen: Vec<bool>,
+}
+
+/// Immediate dominators in reverse postorder keep storage linear in the CFG.
+pub(super) fn dominance(
     blocks: &[BlockId],
     successors: &HashMap<BlockId, Vec<BlockId>>,
-) -> HashMap<BlockId, u32> {
+) -> Dominance {
     let indices: HashMap<_, _> = blocks.iter().enumerate().map(|(i, &b)| (b, i)).collect();
     let mut edges = vec![Vec::new(); blocks.len()];
     let mut predecessors = vec![Vec::new(); blocks.len()];
@@ -36,7 +47,6 @@ pub(super) fn loop_depths(
         rank[block] = i;
     }
 
-    // Immediate dominators in reverse postorder keep storage linear in the CFG.
     let mut idom = vec![None; blocks.len()];
     idom[0] = Some(0);
     let mut changed = true;
@@ -64,10 +74,130 @@ pub(super) fn loop_depths(
         }
     }
 
+    Dominance {
+        order,
+        rank,
+        idom,
+        predecessors,
+        seen,
+    }
+}
+
+impl Dominance {
+    /// The immediate dominator of `block`; none for the entry and the
+    /// unreachable blocks.
+    pub(super) fn idom(&self, block: usize) -> Option<usize> {
+        self.idom[block].filter(|&parent| parent != block)
+    }
+
+    /// The blocks in a pre-order walk of the dominator tree, children in
+    /// reverse postorder, then the unreachable ones in layout order: a block
+    /// comes after every block dominating it.
+    pub(super) fn preorder(&self) -> Vec<usize> {
+        let mut children = vec![Vec::new(); self.idom.len()];
+        for &block in self.order.iter().skip(1) {
+            if let Some(parent) = self.idom[block] {
+                children[parent].push(block);
+            }
+        }
+        let mut walk = Vec::with_capacity(self.idom.len());
+        let mut stack: Vec<usize> = self.order.first().copied().into_iter().collect();
+        while let Some(block) = stack.pop() {
+            walk.push(block);
+            stack.extend(children[block].iter().rev());
+        }
+        walk.extend((0..self.idom.len()).filter(|&block| !self.seen[block]));
+        walk
+    }
+}
+
+/// The natural loops of a function, nested by header.
+pub(crate) struct Loops {
+    /// Per block, the header of the innermost loop holding it; a header
+    /// names itself.
+    innermost: Vec<Option<usize>>,
+    /// Per header, the header of the loop around its own.
+    enclosing: Vec<Option<usize>>,
+}
+
+impl Loops {
+    pub(super) fn header(&self, block: usize) -> Option<usize> {
+        self.innermost[block]
+    }
+
+    pub(super) fn is_header(&self, block: usize) -> bool {
+        self.innermost[block] == Some(block)
+    }
+
+    /// The headers of the loops holding `block`, innermost first.
+    pub(super) fn headers(&self, block: usize) -> impl Iterator<Item = usize> + '_ {
+        std::iter::successors(self.innermost[block], |&header| self.enclosing[header])
+    }
+
+    pub(super) fn contains(&self, header: usize, block: usize) -> bool {
+        self.headers(block).any(|outer| outer == header)
+    }
+}
+
+impl Dominance {
+    /// The reachable blocks in reverse postorder, then the unreachable ones
+    /// in layout order.
+    pub(super) fn reverse_postorder(&self) -> Vec<usize> {
+        let unreachable = (0..self.idom.len()).filter(|&block| !self.seen[block]);
+        self.order.iter().copied().chain(unreachable).collect()
+    }
+
+    pub(super) fn loops(&self) -> Loops {
+        let mut innermost = vec![None; self.idom.len()];
+        let mut enclosing = vec![None; self.idom.len()];
+        // Outer headers come first in reverse postorder, so an inner loop
+        // marks its blocks last.
+        for &header in &self.order {
+            let mut work: Vec<usize> = self.predecessors[header]
+                .iter()
+                .copied()
+                .filter(|&latch| self.seen[latch] && self.dominates(header, latch))
+                .collect();
+            if work.is_empty() {
+                continue;
+            }
+            enclosing[header] = innermost[header];
+            innermost[header] = Some(header);
+            while let Some(block) = work.pop() {
+                if innermost[block] == Some(header) {
+                    continue;
+                }
+                innermost[block] = Some(header);
+                work.extend(self.predecessors[block].iter().filter(|&&p| self.seen[p]));
+            }
+        }
+        Loops {
+            innermost,
+            enclosing,
+        }
+    }
+
+    fn dominates(&self, parent: usize, mut block: usize) -> bool {
+        while self.rank[block] > self.rank[parent] {
+            block = self.idom[block].expect("reachable block has a dominator");
+        }
+        block == parent
+    }
+}
+
+/// Count natural loops by header, ignoring blocks unreachable from entry.
+pub(super) fn loop_depths(blocks: &[BlockId], dominance: &Dominance) -> HashMap<BlockId, u32> {
+    let Dominance {
+        order,
+        rank,
+        idom,
+        predecessors,
+        seen,
+    } = dominance;
     let mut depths = vec![0; blocks.len()];
     let mut visited = vec![usize::MAX; blocks.len()];
     let mut work = Vec::new();
-    for &header in &order {
+    for &header in order {
         for &latch in &predecessors[header] {
             if !seen[latch] {
                 continue;

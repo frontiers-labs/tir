@@ -9,7 +9,7 @@ use smallvec::SmallVec;
 
 use super::ghd::{Bag, decompose};
 use super::ir::{
-    Atom, Expr, Lattice, Param, Place, Query, Read, Rows, Scalar, Select, Tuples, Var,
+    Atom, Cmp, Expr, Guard, Lattice, Param, Place, Query, Read, Rows, Scalar, Select, Tuples, Var,
 };
 use crate::db::LatticeId;
 
@@ -116,6 +116,7 @@ pub(super) struct RowShape {
     pub(super) key: Var,
     pub(super) value: u8,
     pub(super) args: SmallVec<[Arg; 4]>,
+    pub(super) within: Option<(Expr, Expr)>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -143,6 +144,7 @@ impl Shape {
                         var,
                     })
                     .collect(),
+                within: rows.tag_within.clone(),
             }),
             Atom::Lattice(lattice) => Shape::Lattice(lattice.clone()),
             Atom::Place(place) => Shape::Place(*place),
@@ -532,11 +534,27 @@ impl Plan {
     }
 
     fn plan(
-        query: Query,
+        mut query: Query,
         bound: Vec<bool>,
         known: Vec<bool>,
         skip: Option<usize>,
     ) -> Option<Planned> {
+        // An order that reaches an interval's atom some other way than
+        // through its value reads every row, so the interval is also a filter.
+        for atom in &query.atoms {
+            if let Atom::Rows(Rows {
+                tag,
+                tag_within: Some((lo, hi)),
+                ..
+            }) = atom
+            {
+                let tag = Expr::Scalar(tag.expect("an interval holds the tag the atom binds"));
+                query
+                    .guards
+                    .push(Guard::Cmp(Cmp::Le, lo.clone(), tag.clone()));
+                query.guards.push(Guard::Cmp(Cmp::Lt, tag, hi.clone()));
+            }
+        }
         let (steps, height, nots) = Self::order(&query, bound, known, skip)?;
         let shapes = query.atoms.iter().map(Shape::of).collect();
         Some(Planned {
@@ -578,6 +596,18 @@ impl Plan {
         let mut depth = vec![0usize; query.vars as usize];
         let mut height = 0usize;
         let writes: Vec<SmallVec<[Scalar; 4]>> = query.atoms.iter().map(Atom::writes).collect();
+        // The variables each negated conjunction shares with the query: it
+        // asks about what they are bound to, so it waits for all of them.
+        let outer: Vec<Var> = query.atoms.iter().flat_map(atom_vars).collect();
+        let named: Vec<Vec<Var>> = query
+            .nots
+            .iter()
+            .map(|not| {
+                let mut vars: Vec<Var> = not.atoms.iter().flat_map(atom_vars).collect();
+                vars.retain(|var| *var == query.root || outer.contains(var));
+                vars
+            })
+            .collect();
         loop {
             // A host call that binds nothing may be an assertion about a whole
             // match rather than a filter, and a rule's author sees to it that
@@ -602,7 +632,7 @@ impl Plan {
             // A negated conjunction reads and never writes, so it goes as soon
             // as everything it names is bound — the earliest it can prune.
             let not = (0..query.nots.len()).find_map(|i| {
-                if placed[i] {
+                if placed[i] || !named[i].iter().all(|&var| bound[var as usize]) {
                     return None;
                 }
                 let nested = Query {
@@ -656,9 +686,18 @@ impl Plan {
                     .rev()
                     .max_by_key(bound)
             };
+            let interval = |i: usize| match &query.atoms[i] {
+                Atom::Rows(Rows {
+                    tag_within: Some((lo, hi)),
+                    ..
+                }) => lo.ready(&known) && hi.ready(&known),
+                _ => true,
+            };
             let downward = || {
                 (0..query.atoms.len()).find(|&i| {
-                    !taken[i] && query.atoms[i].key().is_some_and(|key| bound[key as usize])
+                    !taken[i]
+                        && query.atoms[i].key().is_some_and(|key| bound[key as usize])
+                        && interval(i)
                 })
             };
             // Nothing left to reach through a bound key: reach a row atom
@@ -1064,5 +1103,25 @@ impl JoinPlan {
             atoms,
         };
         (len, Some(join))
+    }
+}
+
+/// The variables `atom` names.
+fn atom_vars(atom: &Atom) -> SmallVec<[Var; 6]> {
+    match atom {
+        Atom::Rows(rows) => rows
+            .terms
+            .iter()
+            .filter_map(|term| match term {
+                super::ir::Term::Var(var) => Some(*var),
+                super::ir::Term::Any => None,
+            })
+            .collect(),
+        Atom::Lattice(lattice) => SmallVec::from_slice(&[lattice.key]),
+        Atom::Place(place) => match place.read {
+            Read::Offset { base, .. } => SmallVec::from_slice(&[place.key, base]),
+            _ => SmallVec::from_slice(&[place.key]),
+        },
+        Atom::Words(_) => SmallVec::new(),
     }
 }

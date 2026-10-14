@@ -41,10 +41,10 @@ pub use target_boilerplate::{apply_mattr, normalize_name};
 pub use linkme;
 
 pub use registers::{
-    ARG_PINS_ATTR, ASSIGNMENT_ATTR, PINS_ATTR, RegAssignment, RegClassType, RegPort, RegSlot,
-    SlotRef, assigned_register, fresh_reg, op_slot_register, phys_attr, pin_slot,
-    reg_class_type_parser, reg_ports, reg_slot, reg_slots, retype_untyped, slot_class, slot_pin,
-    slot_register, type_class, value_class,
+    ASSIGNMENT_ATTR, PINS_ATTR, RegAssignment, RegClassType, RegPort, RegSlot, SlotRef,
+    assigned_register, fresh_reg, op_slot_register, phys_attr, pin_slot, reg_class_type_parser,
+    reg_ports, reg_slot, reg_slots, retype_untyped, slot_class, slot_pin, slot_register,
+    type_class, value_class,
 };
 
 pub use block_layout::MachineBlockLayoutPass;
@@ -788,6 +788,7 @@ dialect! {
             BlockEndOp,
             VirtualReturnOp,
             VirtualBranchOp,
+            ParallelCopyOp,
             VirtualCallOp,
             VirtualIndirectCallOp,
         ],

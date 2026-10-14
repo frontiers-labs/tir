@@ -20,16 +20,16 @@ module {
 }
 
 // The call keeps a shared continuation and forces the forwarded float to
-// survive its clobbers. Both incoming copies and the reload use XMM storage.
+// survive its clobbers. The parameter is stored once, where the join defines
+// it, and the edge copy, the store and the reload use XMM storage.
 // CHECK: asm.symbol
 // CHECK-NOT: x86_64.mov {
 // CHECK: x86_64.jne {imm = ^[[OTHER:bb[0-9]+]]}
-// CHECK: x86_64.movsd_store_disp {base = rsp, src = %{{[0-9]+}}:xmm1, imm = [[SLOT:[0-9]+]]}
+// CHECK: x86_64.movsd {dst = xmm0, src = xmm1}
 // CHECK-NEXT: asm.vbr ^[[JOIN:bb[0-9]+]]
 // CHECK: ^[[OTHER]]:
-// CHECK-NOT: x86_64.mov {
-// CHECK: x86_64.movsd_store_disp {base = rsp, src = %{{[0-9]+}}:xmm0, imm = [[SLOT]]}
 // CHECK-NEXT: asm.vbr ^[[JOIN]]
-// CHECK: ^[[JOIN]](%{{[0-9]+}}: !x86_64.XMM,
+// CHECK: ^[[JOIN]](%[[PARAM:[0-9]+]]: !x86_64.XMM,
+// CHECK: x86_64.movsd_store_disp {base = rsp, src = %[[PARAM]]:xmm0, imm = [[SLOT:[0-9]+]]}
 // CHECK: asm.vcall
 // CHECK: x86_64.movsd_load_disp {dst = %{{[0-9]+}}:xmm0, base = rsp, imm = [[SLOT]]}

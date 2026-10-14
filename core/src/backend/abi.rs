@@ -2,7 +2,8 @@ use std::collections::{HashMap, HashSet};
 
 use crate::attributes::AttributeValue;
 use crate::backend::liveness::PhysReg;
-use crate::backend::regalloc::RegClassId;
+use crate::backend::regalloc::{RegClassId, RegisterInfo};
+use crate::backend::registers::value_class;
 use crate::{Context, PassError, TypeId, ValueId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -236,6 +237,89 @@ pub(crate) fn place_arguments(
         }
     }
     (slots, stack_slots)
+}
+
+/// Where each function argument goes, computed by [`plan_arguments`]: pinned to
+/// a calling-convention register, or passed on the stack at its slot index.
+#[derive(Default)]
+pub(crate) struct ArgumentPlan {
+    pub pins: Vec<(ValueId, PhysReg)>,
+    pub stack_args: Vec<(ValueId, RegClassId, usize)>,
+}
+
+/// Place the arguments a symbol's `arg_regs` names, the indirect result
+/// address first, each in the class its function lowering gave it.
+pub(crate) fn plan_arguments(
+    context: &Context,
+    info: &RegisterInfo,
+    abi: &AbiInfo,
+    args: &[AttributeValue],
+    result_address: Option<ValueId>,
+) -> Result<ArgumentPlan, PassError> {
+    let mut plan = ArgumentPlan::default();
+    if let Some(value) = result_address {
+        let register = abi.indirect_result.ok_or_else(|| {
+            PassError::InvalidRuleSet("ABI has no result-address register".to_string())
+        })?;
+        plan.pins.push((value, register));
+    }
+
+    let mut groups = Vec::new();
+    let mut placed: Vec<(ValueId, RegClassId)> = Vec::new();
+    for attribute in args {
+        let group = decode_argument_group(attribute)?;
+        let members = match group {
+            Some((members, _)) => members
+                .iter()
+                .map(|member| {
+                    let AttributeValue::Value(value) = member else {
+                        return Err(PassError::InvalidRuleSet(
+                            "ABI argument group contains a non-register".to_string(),
+                        ));
+                    };
+                    let class = value_class(context, *value)
+                        .or_else(|| info.default_integer_class(abi))
+                        .ok_or_else(|| {
+                            PassError::InvalidRuleSet(
+                                "ABI argument group has no register class".to_string(),
+                            )
+                        })?;
+                    Ok((*value, class))
+                })
+                .collect::<Result<Vec<_>, PassError>>()?,
+            None => {
+                let AttributeValue::Value(value) = attribute else {
+                    continue;
+                };
+                let Some(class) =
+                    value_class(context, *value).or_else(|| info.default_integer_class(abi))
+                else {
+                    continue;
+                };
+                vec![(*value, class)]
+            }
+        };
+        groups.push(ArgumentGroup {
+            members: members
+                .iter()
+                .map(|&(value, class)| ArgumentMember {
+                    kind: value_kind(context, abi, value),
+                    class: Some(class),
+                })
+                .collect(),
+            alignment: group.map_or(1, |(_, alignment)| alignment),
+        });
+        placed.extend(members);
+    }
+
+    let (slots, _) = place_arguments(abi, &groups, result_address.is_some());
+    for ((value, class), slot) in placed.into_iter().zip(slots) {
+        match slot {
+            ArgumentSlot::Register(register) => plan.pins.push((value, register)),
+            ArgumentSlot::Stack(index) => plan.stack_args.push((value, class, index)),
+        }
+    }
+    Ok(plan)
 }
 
 /// The attribute an argument group is carried in: a bare member list, or a

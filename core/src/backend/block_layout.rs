@@ -85,7 +85,8 @@ impl Pass for MachineBlockLayoutPass {
             return Ok(());
         }
         let reachable = reachable_blocks(blocks[0], &successors);
-        let depths = super::machine_cfg::loop_depths(&blocks, &successors);
+        let dominance = super::machine_cfg::dominance(&blocks, &successors);
+        let depths = super::machine_cfg::loop_depths(&blocks, &dominance);
         let ordinal: HashMap<_, _> = blocks
             .iter()
             .enumerate()

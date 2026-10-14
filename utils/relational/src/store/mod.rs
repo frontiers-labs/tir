@@ -158,6 +158,8 @@ pub struct Table {
     touched: Vec<u32>,
     repairs: Vec<(u64, u32, u32)>,
     floor: u64,
+    /// Bumped by every [`Self::set_tag`], which no other index reads.
+    retagged: u64,
     key: Vec<u32>,
     key_weights: Vec<u64>,
     moved: Vec<u32>,
@@ -205,6 +207,7 @@ impl Table {
             touched: Vec::new(),
             repairs: Vec::new(),
             floor: 0,
+            retagged: 0,
             key: vec![0; arity],
             key_weights: vec![0; arity],
             moved: Vec::new(),
@@ -371,6 +374,7 @@ impl Table {
     /// Replace the tag of `row`.
     pub fn set_tag(&mut self, row: u32, tag: u32) {
         self.tag[row as usize] = tag;
+        self.retagged += 1;
     }
 
     /// The epoch each row was last written in.
@@ -1185,6 +1189,48 @@ impl Group {
 
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+}
+
+/// The rows of a table ordered by the cell of one column and then by tag, so
+/// the rows holding one cell with a tag in an interval are one slice. Built
+/// again whenever the table's rows or tags change.
+#[derive(Clone, Debug, Default)]
+pub struct TagOrder {
+    /// The table's version and retag count the order was built at.
+    made: Option<(u64, u64)>,
+    /// Per row in order, its cell in the high half and its tag in the low.
+    keys: Vec<u64>,
+    rows: Vec<u32>,
+}
+
+impl TagOrder {
+    /// Bring the order of `table` by `column` up to date.
+    pub fn refresh(&mut self, table: &Table, column: usize) {
+        let made = (table.version(), table.retagged);
+        if self.made == Some(made) {
+            return;
+        }
+        self.made = Some(made);
+        let (cells, tags) = (table.column(column), table.tags());
+        let mut order: Vec<(u64, u32)> = (0..table.len())
+            .map(|row| ((cells[row] as u64) << 32 | tags[row] as u64, row as u32))
+            .collect();
+        order.sort_unstable();
+        self.keys.clear();
+        self.rows.clear();
+        self.keys.extend(order.iter().map(|entry| entry.0));
+        self.rows.extend(order.iter().map(|entry| entry.1));
+    }
+
+    /// The rows holding `cell` whose tag is in `[lo, hi)`, ascending by tag
+    /// and then by row. Neither bound is above `2^32`.
+    #[inline]
+    pub fn within(&self, cell: u32, lo: u64, hi: u64) -> &[u32] {
+        let base = (cell as u64) << 32;
+        let from = self.keys.partition_point(|&key| key < base + lo);
+        let to = self.keys.partition_point(|&key| key < base + hi);
+        &self.rows[from..to.max(from)]
     }
 }
 

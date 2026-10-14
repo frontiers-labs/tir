@@ -1076,6 +1076,7 @@ mod tests {
                 columns: [1, 2],
                 when: SWAP,
             }),
+            tag_within: None,
         })
     }
 

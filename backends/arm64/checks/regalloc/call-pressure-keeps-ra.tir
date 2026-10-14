@@ -42,9 +42,11 @@ module {
   module_end
 }
 
-// CHECK: arm64.orr {rd = %[[SAVE:[0-9]+]]:x0, rn = x31, rm = x30}
-// CHECK: arm64.store_doubleword {rt = %[[SAVE]]:x0, rn = sp, imm = [[SLOT:[0-9]+]]}
-// CHECK: arm64.orr {rd = x0, rn = x31, rm = %{{[0-9]+}}:x1}
+// Twelve values outlive the call: eleven sums and the saved return address,
+// against eleven callee-saved registers. The return address is read right
+// after the call, so the sum read farthest ahead goes to the stack instead.
+// CHECK: arm64.store_doubleword {rt = %{{[0-9]+}}:x0, rn = sp, imm = [[SLOT:[0-9]+]]}
+// CHECK: arm64.orr {rd = %{{[0-9]+}}:x29, rn = x31, rm = x30}
 // CHECK: asm.vcall state(%{{[0-9]+}}, %{{[0-9]+}}) {callee = "ext"
-// CHECK: arm64.load_doubleword {rt = %[[RESTORE:[0-9]+]]:x1, rn = sp, imm = [[SLOT]]}
-// CHECK: arm64.orr {rd = x30, rn = x31, rm = %[[RESTORE]]:x1}
+// CHECK: arm64.orr {rd = x30, rn = x31, rm = %{{[0-9]+}}:x29}
+// CHECK: arm64.load_doubleword {rt = %{{[0-9]+}}:x1, rn = sp, imm = [[SLOT]]}

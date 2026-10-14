@@ -224,6 +224,34 @@ impl VirtualBranchOp {
     }
 }
 
+// A parallel copy: every result takes its source at once, as one point. The
+// register allocator splits the live ranges at a constrained instruction with
+// one (Hack's thesis, paper § 4) and sequences it on the assigned registers.
+operation! {
+    ParallelCopyOp {
+        name: "pcopy",
+        dialect: "asm",
+        operands: O {
+            sources: "*Any",
+        },
+        results: R {
+            copies: "*Any",
+        },
+        interfaces: [tir::backend::MachineInstruction],
+    }
+}
+
+impl MachineInstruction for ParallelCopyOp {
+    fn info(&self) -> &'static InstrInfo {
+        static INFO: InstrInfo = virtual_info("pcopy", ControlFlow::None);
+        &INFO
+    }
+
+    fn instance(&self) -> &tir::OpHandle {
+        &self.0
+    }
+}
+
 operation! {
     VirtualCallOp {
         name: "vcall",

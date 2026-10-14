@@ -1530,6 +1530,22 @@ impl Db {
         true
     }
 
+    /// Drop the `index`th argument of `block`, returning the value it named,
+    /// which is left with no site.
+    pub(crate) fn remove_block_argument(
+        &mut self,
+        block: BlockId,
+        index: usize,
+    ) -> Option<ValueId> {
+        let argument = self.block_argument(block, index)?;
+        self.bump_block(block);
+        let (chunk, row) = self.block_row(block);
+        chunk.seg_mut(block::ARG).splice(row, index, 1, &[]);
+        chunk.seg_mut(block::ARG_TYPE).splice(row, index, 1, &[]);
+        self.set_value_site(argument, None);
+        Some(argument)
+    }
+
     /// Give the `index`th argument of `block` the type `ty`, in the block's
     /// declaration and on the value.
     pub(crate) fn retype_block_argument(&mut self, block: BlockId, index: usize, ty: TypeId) {

@@ -1,7 +1,7 @@
 //! Fixtures shared by the core test modules.
 
 use tir::attributes::AttributeValue;
-use tir::backend::regalloc::{RegClassId, RegClassInfo, RegisterInfo, RegisterView};
+use tir::backend::regalloc::{RegClassId, RegClassInfo, RegisterView};
 use tir::backend::{RegPort, SymbolOp, SymbolOpBuilder};
 use tir::builtin::ModuleOp;
 use tir::func::FuncOp;
@@ -116,12 +116,6 @@ pub fn asm_symbol(context: &Context, ops: &[OpId]) -> (SymbolOp, BlockHandle) {
         .attr("name", AttributeValue::Str("f".into()))
         .build();
     (symbol, block)
-}
-
-pub fn register_info() -> RegisterInfo {
-    RegisterInfo {
-        classes: &R_CLASSES,
-    }
 }
 
 /// Isel pattern-graph builders: symbols, constants and operator nodes.

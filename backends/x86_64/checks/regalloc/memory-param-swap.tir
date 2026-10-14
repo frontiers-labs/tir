@@ -1,0 +1,47 @@
+// RUN: tir mc --march=x86_64 --stage=regalloc %s | filecheck %s
+
+// Sixteen loop-carried values leave the last three parameters of the loop in
+// stack slots, and the back edge swaps two of them. An edge fills those slots
+// as one parallel copy: it reads a slot before storing over it, and breaks
+// the swap through a third slot.
+
+module {
+  %fn_swap = func.func @swap(%n: !i64, %a: !i64) -> !i64 {
+    cfg.br ^bb1(%n, %a, %a, %a, %a, %a, %a, %a, %a, %a, %a, %a, %a, %a, %a, %a, %a : !i64, !i64, !i64, !i64, !i64, !i64, !i64, !i64, !i64, !i64, !i64, !i64, !i64, !i64, !i64, !i64, !i64)
+  ^bb1(%0: !i64, %p0: !i64, %p1: !i64, %p2: !i64, %p3: !i64, %p4: !i64, %p5: !i64, %p6: !i64, %p7: !i64, %p8: !i64, %p9: !i64, %p10: !i64, %p11: !i64, %p12: !i64, %p13: !i64, %p14: !i64, %p15: !i64):
+    %s0 = addi %0, %p0 : !i64
+    %s1 = addi %s0, %p1 : !i64
+    %s2 = addi %s1, %p2 : !i64
+    %s3 = addi %s2, %p3 : !i64
+    %s4 = addi %s3, %p4 : !i64
+    %s5 = addi %s4, %p5 : !i64
+    %s6 = addi %s5, %p6 : !i64
+    %s7 = addi %s6, %p7 : !i64
+    %s8 = addi %s7, %p8 : !i64
+    %s9 = addi %s8, %p9 : !i64
+    %s10 = addi %s9, %p10 : !i64
+    %s11 = addi %s10, %p11 : !i64
+    %s12 = addi %s11, %p12 : !i64
+    %s13 = addi %s12, %p13 : !i64
+    %s14 = addi %s13, %p14 : !i64
+    %s15 = addi %s14, %p15 : !i64
+    %one = constant {value = 1} : !i64
+    %m = subi %0, %one : !i64
+    %zero = constant {value = 0} : !i64
+    %k = cmpi %m, %zero {predicate = "ne"} : !i1
+    cfg.cond_br %k, ^bb1(%m, %s15, %p0, %p1, %p2, %p3, %p4, %p5, %p6, %p7, %p8, %p9, %p10, %p11, %p12, %p15, %p14 : !i64, !i64, !i64, !i64, !i64, !i64, !i64, !i64, !i64, !i64, !i64, !i64, !i64, !i64, !i64, !i64, !i64), ^bb2
+  ^bb2:
+    func.return %s15
+  }
+  module_end
+}
+
+// CHECK:      x86_64.jne {imm = ^[[LATCH:bb[0-9]+]]}
+// CHECK:      ^[[LATCH]]:
+// CHECK:      x86_64.mov_load_disp {{.*}}imm = [[P:[0-9]+]]}
+// CHECK:      x86_64.mov_store_disp {{.*}}imm = [[ASIDE:[0-9]+]]}
+// CHECK:      x86_64.mov_load_disp {{.*}}imm = [[Q:[0-9]+]]}
+// CHECK:      x86_64.mov_store_disp {{.*}}imm = [[P]]}
+// CHECK:      x86_64.mov_load_disp {{.*}}imm = [[ASIDE]]}
+// CHECK:      x86_64.mov_store_disp {{.*}}imm = [[Q]]}
+// CHECK:      asm.vbr

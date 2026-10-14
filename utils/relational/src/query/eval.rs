@@ -1002,6 +1002,9 @@ impl Plan {
                     continue;
                 };
                 match slot {
+                    None if rows.within.is_some() => {
+                        db.prepare_tag_order(*table_slot, table.arity())
+                    }
                     None => db.prepare_group(*table_slot, table.arity()),
                     Some(slot) => {
                         let arg = rows.args[slot as usize];
@@ -1305,6 +1308,24 @@ impl Plan {
                         }
                     }
                     eval.pool.push(rows_found);
+                    continue;
+                }
+                if let (Some((lo, hi)), false) = (&rows.within, eval.scan) {
+                    // The plan placed the atom once both bounds were bound.
+                    let bound = |expr: &Expr| {
+                        expr.eval(&eval.scalars)
+                            .map(|at| at.clamp(0, 1 << 32) as u64)
+                    };
+                    let (Some(lo), Some(hi)) = (bound(lo), bound(hi)) else {
+                        return;
+                    };
+                    for &row in groups.tag_order(*slot, table.arity()).within(value, lo, hi) {
+                        if reads(cells, table.column(select)[row as usize]) {
+                            self.row(
+                                eval, root, index, atom, rows, at, table, row, bind, None, when,
+                            );
+                        }
+                    }
                     continue;
                 }
                 lookup!(eval, groups, *slot, table.arity(), table, value, |row| {
@@ -1797,5 +1818,183 @@ impl<C, const S: usize, A: Allow + ?Sized> Eval<'_, C, S, A> {
             self.bound[var as usize] = self.bound[var as usize].id.into();
             self.loose = Some(var);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use smallvec::{SmallVec, smallvec};
+
+    use super::super::ir::{
+        Calls, Cmp, Expr, Guard, Host, Nested, Param, Query, Rows, Select, Term,
+    };
+    use super::*;
+    use crate::db::SpaceId;
+
+    struct Tables;
+
+    impl Calls for Tables {
+        fn call(&self, _: u32, _: &[u64], _: &mut [u64]) -> bool {
+            false
+        }
+    }
+
+    impl Host for Tables {
+        fn version(&self) -> u64 {
+            1
+        }
+
+        fn resolve(&self, param: Param, since: Option<u64>, out: &mut Resolution) {
+            if since.is_none() {
+                out.tables.push((param, SmallVec::from_slice(&[0])));
+            }
+        }
+    }
+
+    fn rows(param: Param, vars: &[Var], tag: u32, within: Option<(Expr, Expr)>) -> Atom {
+        let mut terms: SmallVec<[Term; 6]> = smallvec![Term::Any];
+        terms.extend(vars.iter().map(|&var| Term::Var(var)));
+        Atom::Rows(Rows {
+            select: Select { column: 0, param },
+            terms,
+            tag: Some(tag),
+            cell: None,
+            swap: None,
+            tag_within: within,
+        })
+    }
+
+    // `span(b) -> r` tag lo, `end(e) -> r` tag hi, `at(op) -> b` tag p with
+    // lo <= p < hi + 1: as an interval of the last atom, or as two guards.
+    fn query(interval: bool) -> Query {
+        let (r, b, e, op) = (0, 1, 2, 3);
+        let (lo, hi) = (
+            Expr::Scalar(0),
+            Expr::Add(Box::new(Expr::Scalar(1)), Box::new(Expr::Lit(1))),
+        );
+        let at = Expr::Scalar(2);
+        let (within, guards) = match interval {
+            true => (Some((lo, hi)), Vec::new()),
+            false => (
+                None,
+                vec![
+                    Guard::Cmp(Cmp::Le, lo, at.clone()),
+                    Guard::Cmp(Cmp::Lt, at, hi),
+                ],
+            ),
+        };
+        Query {
+            space: SpaceId::nth(0),
+            vars: 4,
+            scalars: 3,
+            params: 3,
+            root: r,
+            atoms: vec![
+                rows(2, &[op, b], 2, within),
+                rows(0, &[b, r], 0, None),
+                rows(1, &[e, r], 1, None),
+            ],
+            guards,
+            nots: Vec::new(),
+        }
+    }
+
+    fn listed(matches: &Matches) -> Vec<(u32, Vec<Ref>, Vec<u64>)> {
+        let mut listed: Vec<_> = (0..matches.len())
+            .map(|at| {
+                let (root, bindings, scalars) = matches.get(at);
+                (root, bindings.to_vec(), scalars.to_vec())
+            })
+            .collect();
+        listed.sort();
+        listed
+    }
+
+    // Three blocks of ops at scattered points, and ranges over them with
+    // bounds before, inside and past the ops, empty ones among them.
+    #[test]
+    fn an_interval_reads_the_rows_its_guards_would_keep() {
+        let space = SpaceId::nth(0);
+        let mut db: Database<(), 1> = Database::new();
+        for _ in 0..3 {
+            db.add_table(Table::bag(2).plain(1), space);
+        }
+        let ids: Vec<u32> = (0..103).map(|_| db.mint(space, 0, false)).collect();
+        let (blocks, ops, ranges) = (&ids[..3], &ids[3..63], &ids[63..]);
+        let mut seed = 7u32;
+        let mut next = |bound: u32| {
+            seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+            (seed >> 8) % bound
+        };
+        for &op in ops {
+            let block = blocks[next(3) as usize];
+            db.insert(2, &[0, op], &[], (block, 0), next(50));
+        }
+        for &range in ranges {
+            let (block, lo) = (blocks[next(3) as usize], next(60));
+            db.insert(0, &[0, block], &[], (range, 0), lo);
+            db.insert(1, &[0, range], &[], (range, 0), lo + next(20));
+        }
+        db.advance();
+        let (interval, guarded) = (Plan::compile(query(true)), Plan::compile(query(false)));
+        let (mut interval_cache, mut guarded_cache) = (PlanCache::default(), PlanCache::default());
+        let within = listed(&interval.search_all(&db, &Tables, &mut interval_cache));
+        let filtered = listed(&guarded.search_all(&db, &Tables, &mut guarded_cache));
+        assert!(!within.is_empty());
+        assert_eq!(within, filtered);
+        let roots = 0..db.ids(space) as u32;
+        let rooted = listed(&interval.search_roots(
+            &db,
+            &Tables,
+            roots,
+            None::<&Unchecked>,
+            (false, 0),
+            &mut interval_cache,
+        ));
+        assert_eq!(rooted, filtered);
+    }
+
+    // `x -> r`, `y -> x`, not `y -> x` in a third table: the negation names
+    // `y`, which the query binds after `x`, so it asks about that `y` alone.
+    #[test]
+    fn a_negation_waits_for_every_variable_it_shares() {
+        let space = SpaceId::nth(0);
+        let mut db: Database<(), 1> = Database::new();
+        for _ in 0..3 {
+            db.add_table(Table::bag(2).plain(1), space);
+        }
+        let [r, x, y1, y2] = [(); 4].map(|_| db.mint(space, 0, false));
+        db.insert(0, &[0, x], &[], (r, 0), 0);
+        db.insert(1, &[0, y1], &[], (x, 0), 0);
+        db.insert(1, &[0, y2], &[], (x, 0), 0);
+        db.insert(2, &[0, y1], &[], (x, 0), 0);
+        db.advance();
+        let (vr, vx, vy) = (0, 1, 2);
+        let plan = Plan::compile(Query {
+            space,
+            vars: 3,
+            scalars: 1,
+            params: 3,
+            root: vr,
+            atoms: vec![rows(0, &[vx, vr], 0, None), rows(1, &[vy, vx], 0, None)],
+            guards: Vec::new(),
+            nots: vec![Nested {
+                atoms: vec![rows(2, &[vy, vx], 0, None)],
+                guards: Vec::new(),
+            }],
+        });
+        let matches = plan.search_roots(
+            &db,
+            &Tables,
+            0..db.ids(space) as u32,
+            None::<&Unchecked>,
+            (false, 0),
+            &mut PlanCache::default(),
+        );
+        let ys: Vec<u32> = listed(&matches)
+            .iter()
+            .map(|(_, bindings, _)| bindings[vy as usize].id)
+            .collect();
+        assert_eq!(ys, [y2]);
     }
 }

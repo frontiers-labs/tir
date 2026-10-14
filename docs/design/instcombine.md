@@ -292,7 +292,17 @@ labels in the order it meets them. The planner places a table atom once
 its computed terms can be evaluated and no other atom or guard is left to
 bind a scalar it reads, so its rows are looked up under as many columns as
 the match can give; atoms that wait for each other go after the row atoms,
-the one with most columns bound first. The query evaluator, rule actions,
+the one with most columns bound first. A row atom can hold the tag it binds
+to an interval `[lo, hi)` of expressions over scalars (`Rows::tag_within`).
+The planner reaches such an atom through its value only once both bounds are
+bound, and the atom then reads one slice of a `TagOrder`, the table's rows
+sorted by the value's cell and then by tag, instead of every row with that
+value. The planner also adds the two comparisons as guards, so an order that
+reaches the atom another way reads its rows and the guards filter them. A
+negated conjunction goes into the order once every variable it shares with
+the query is bound. Placed earlier, it would treat a shared variable the query
+binds later as existential and reject a match over a row that names some
+other value. The query evaluator, rule actions,
 saturation rounds and extraction see only tables, id spaces and lattice
 columns; the e-graph compiles its patterns and actions onto them, and keeps
 the offset laws to itself: it tells an insert which key a node is stored under
