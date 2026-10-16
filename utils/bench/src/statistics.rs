@@ -71,14 +71,19 @@ pub fn relative_error(samples: &[f64]) -> f64 {
     deviations.sort_by(f64::total_cmp);
     // 1.4826 scales the MAD to a standard deviation and 1.2533 is the median's
     // efficiency loss against the mean, both for normal data. When half the
-    // samples tie at the median the MAD is 0 however far the rest are, so the
-    // standard deviation stands in.
+    // samples tie at the median the MAD is 0 however far the rest are; the mean
+    // absolute deviation, also scaled by 1.2533, sees them without letting a
+    // single outlier dominate.
     let deviation = match quantile(&deviations, 0.5) {
-        0.0 => standard_deviation(&sorted),
+        0.0 => 1.2533 * deviations.iter().sum::<f64>() / deviations.len() as f64,
         mad => 1.4826 * mad,
     };
     let error = 1.2533 * deviation / (sorted.len() as f64).sqrt();
-    if median == 0.0 { 0.0 } else { error / median }
+    match (error, median) {
+        (0.0, _) => 0.0,
+        (_, 0.0) => f64::INFINITY,
+        _ => error / median,
+    }
 }
 
 fn standard_deviation(values: &[f64]) -> f64 {
@@ -207,5 +212,8 @@ mod tests {
         assert!((error - 0.276_99).abs() < 1e-4, "{error}");
         let tied = [[10.0; 6].as_slice(), &[100.0; 3]].concat();
         assert!(relative_error(&tied) > 0.1);
+        let hitch = [[10.0; 8].as_slice(), &[11.0]].concat();
+        assert!(relative_error(&hitch) < 0.01);
+        assert!(relative_error(&[0.0, 0.0, 0.0, 1e9, 1e9]) > 0.01);
     }
 }
