@@ -2,8 +2,11 @@ name: Nightly
 
 on:
   workflow_dispatch:
+  # Builds and tests at 21:00 UTC, fuzzers at 22:00 UTC; a manual run does both.
+  # Runs scheduled on the hour start hours late, so these sit just before it.
   schedule:
-    - cron: "0 0 * * *"
+    - cron: "47 20 * * *"
+    - cron: "47 21 * * *"
 
 permissions:
   contents: read
@@ -12,17 +15,15 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # Post-commit only deploys docs, so these two jobs are the only writers of the
-  # caches every pull request restores from: they run on master, which is the one
-  # scope GitHub shares with all branches. Keep their steps in step with the
-  # ci.yaml jobs holding the same `shared-key`, or the caches diverge.
+  # Restores what the ci.yaml push run saved; keep its steps in step with the
+  # ci.yaml job holding the same `shared-key`.
   build-and-package:
     runs-on: ubuntu-latest
     env:
       CARGO_INCREMENTAL: "0"
       RUSTC_WRAPPER: sccache
       SCCACHE_GHA_ENABLED: "true"
-      SCCACHE_GHA_RW_MODE: READ_WRITE
+      SCCACHE_GHA_RW_MODE: READ_ONLY
       SCCACHE_GHA_VERSION: precommit-v1
     steps:
       - uses: actions/checkout@v7
@@ -34,6 +35,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: build
+          save-if: "false"
       - uses: actions/cache@v6
         with:
           path: target/test-suites/gcc
@@ -54,6 +56,7 @@ jobs:
 
   tests:
     needs: build-and-package
+    if: github.event.schedule != '47 21 * * *'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -73,6 +76,7 @@ jobs:
   # Proofs use the same packaged binaries with runtime verification enabled.
   verify-axioms:
     needs: build-and-package
+    if: github.event.schedule != '47 21 * * *'
     runs-on: ubuntu-latest
     timeout-minutes: 120
     env:
@@ -92,28 +96,13 @@ jobs:
           path: target
       - run: target/ci/xtask test --archive target/ci-tests.tar.zst -- -E 'not binary(torture)' --partition hash:${{ matrix.shard }}/8
 
-  lints:
-    runs-on: ubuntu-latest
-    env:
-      CARGO_INCREMENTAL: "0"
-    steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-      - uses: rui314/setup-mold@v1
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: clippy
-      - run: cargo clippy --workspace --all-targets --no-deps -- -D warnings
-
   # The GCC torture execute suite is corpus, not a gate: pre-commit already
   # proves fcc compiles it, so what is left to check is that the programs
   # behave identically under every pipeline and against gcc and clang.
   corpus:
     needs: build-and-package
+    if: github.event.schedule != '47 20 * * *'
     runs-on: ubuntu-latest
-    timeout-minutes: 300
     env:
       CARGO_MANIFEST_DIR: ${{ github.workspace }}/xtask
     steps:
@@ -123,7 +112,10 @@ jobs:
         with:
           path: target/test-suites/gcc
           key: gcc-torture-9aab80ddc5b2fa0eef80008e718067ab45f42c50
+      # Step timeouts rather than job ones: a timed-out step still uploads the
+      # defects it recorded, and the report files it as a failure.
       - run: target/ci/xtask fcc-fuzz --corpus --fcc "$PWD/target/ci/fcc"
+        timeout-minutes: 60
       - uses: actions/upload-artifact@v7
         if: always()
         with:
@@ -134,6 +126,7 @@ jobs:
 
   differential-fuzz:
     needs: build-and-package
+    if: github.event.schedule != '47 20 * * *'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -151,6 +144,7 @@ jobs:
       # it happens to go green. Every C-program defect is replayed here, whether
       # the fuzzer or the corpus found it.
       - name: Replay tracked defects
+        timeout-minutes: 30
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -163,6 +157,7 @@ jobs:
       # chosen by the same per-program seed, which is what makes the
       # single-seed reproduce command in an issue land on the failure.
       - name: Fuzz
+        timeout-minutes: 90
         run: |
           target/ci/xtask fcc-fuzz --fcc "$PWD/target/ci/fcc" \
             --seed "$SEED" --iterations 500
@@ -179,7 +174,7 @@ jobs:
     # issues. A broken workspace build must not stop the fuzzing, so the job
     # runs regardless and simply skips replay when the binary never arrived.
     needs: build-and-package
-    if: ${{ !cancelled() }}
+    if: ${{ !cancelled() && github.event.schedule != '47 20 * * *' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -246,7 +241,6 @@ jobs:
         build-and-package,
         tests,
         verify-axioms,
-        lints,
         corpus,
         differential-fuzz,
         libfuzzer,

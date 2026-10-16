@@ -3,7 +3,7 @@ name: SMT equivalence (TMDL vs Sail)
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 2 * * *"
+    - cron: "47 0 * * *"
 
 permissions:
   contents: read
@@ -22,6 +22,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
+      - uses: rui314/setup-mold@v1
       - uses: Swatinem/rust-cache@v2
       - name: Install solver build dependencies and binutils stubs
         run: |

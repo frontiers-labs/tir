@@ -32,7 +32,6 @@ reproduce() {
     corpus) echo 'cargo xtask fcc-fuzz --corpus' ;;
     differential-fuzz) echo 'cargo xtask fcc-fuzz --self-test' ;;
     libfuzzer) echo 'cargo +nightly fuzz run --fuzz-dir utils/fuzz <target>' ;;
-    lints) echo 'cargo clippy --workspace --all-targets --no-deps -- -D warnings' ;;
     build-and-package) echo 'cargo xtask test-pack --profile ci --torture --output target/ci-tests.tar.zst' ;;
     verify-axioms) echo "TIR_VERIFY_AXIOMS=1 cargo xtask test --profile ci -- -E 'not binary(torture)'" ;;
     *) echo 'cargo xtask test --profile ci --torture' ;;

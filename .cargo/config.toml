@@ -1,2 +1,6 @@
 [alias]
 xtask = "run --package xtask --"
+
+# rustc links with its bundled LLD unless told otherwise.
+[target.'cfg(target_os = "linux")']
+rustflags = ["-C", "link-arg=-fuse-ld=mold"]

@@ -11,6 +11,7 @@ doctest = false
 
 [[bin]]
 bench = false
+test = false
 name = "tir"
 path = "src/main.rs"
 

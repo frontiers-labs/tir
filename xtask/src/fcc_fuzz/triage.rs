@@ -4,16 +4,18 @@
 //! lets one issue track one defect.
 
 use std::path::Path;
+use std::time::{Duration, Instant};
 
 use super::harness::{self, Behavior, FccVariant, Outcome, Variant};
 use super::reduce::{self, STRUCTURAL_PASSES};
 use super::report::Failure;
 use super::ub;
 
-/// Ceiling on harness runs spent shrinking one failure. Reduction is worth
-/// minutes, not hours: past the budget the predicate reports failure, deletions
-/// stop, and what has been shrunk so far is still filed.
-const BUDGET: usize = 400;
+/// Ceiling on time spent shrinking one failure. Reduction is worth minutes, not
+/// hours: past the budget the predicate reports failure, deletions stop, and
+/// what has been shrunk so far is still filed. A run count would not bound it,
+/// since one run can be several compiles that each take up to a minute.
+const BUDGET: Duration = Duration::from_secs(10 * 60);
 
 pub struct Reduced {
     /// What the issue shows a human: the minimal program, or — for a curated
@@ -97,13 +99,9 @@ pub fn triage(
     work_dir: &Path,
 ) -> Reduced {
     let original_lines = source.lines().count();
-    let mut spent = 0;
-    let mut still_fails = |source: &str, variant: &FccVariant| {
-        if spent >= BUDGET {
-            return false;
-        }
-        spent += 1;
-        diverges(fcc, source, variant, references, work_dir)
+    let deadline = Instant::now() + BUDGET;
+    let still_fails = |source: &str, variant: &FccVariant| {
+        Instant::now() < deadline && diverges(fcc, source, variant, references, work_dir)
     };
 
     // Shrink the pipeline first: it costs a handful of runs, and every pass it
@@ -146,13 +144,9 @@ pub fn bisect(
 /// behavior is beside the point: no input entitles the compiler to die.
 pub fn crash(fcc: &Path, source: &str, variant: &FccVariant, work_dir: &Path) -> Reduced {
     let original_lines = source.lines().count();
-    let mut spent = 0;
+    let deadline = Instant::now() + BUDGET;
     let source = reduce::reduce(source, &mut |candidate| {
-        if spent >= BUDGET {
-            return false;
-        }
-        spent += 1;
-        crashes(fcc, candidate, variant, work_dir)
+        Instant::now() < deadline && crashes(fcc, candidate, variant, work_dir)
     });
     Reduced {
         shrunk_from: Some(original_lines),

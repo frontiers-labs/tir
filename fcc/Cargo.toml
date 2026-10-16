@@ -27,6 +27,7 @@ tir-bench.workspace = true
 
 [[bin]]
 bench = false
+test = false
 name = "fcc"
 path = "bin.rs"
 
