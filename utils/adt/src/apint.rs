@@ -143,6 +143,11 @@ impl APInt {
         self.value
     }
 
+    /// The limbs above the lowest; none up to 64 bits.
+    pub fn high_limbs(&self) -> &[u64] {
+        self.high.as_deref().unwrap_or(&[])
+    }
+
     /// Convert to i64, interpreting as signed
     pub fn to_i64(&self) -> i64 {
         if self.signed && self.is_negative() {

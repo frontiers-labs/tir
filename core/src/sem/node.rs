@@ -318,7 +318,9 @@ impl PartialEq for SemPayload {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (SemPayload::Expr(SymPayload::Int(a)), SemPayload::Expr(SymPayload::Int(b))) => {
-                a.width() == b.width() && a.to_u64() == b.to_u64()
+                a.width() == b.width()
+                    && a.to_u64() == b.to_u64()
+                    && a.high_limbs() == b.high_limbs()
             }
             (SemPayload::Expr(a), SemPayload::Expr(b)) => a == b,
             (SemPayload::Opaque(a), SemPayload::Opaque(b)) => a == b,
@@ -886,6 +888,9 @@ impl ENode for SemNode {
                 key.push(3);
                 key.extend_from_slice(&value.width().to_be_bytes());
                 key.extend_from_slice(&value.to_u64().to_be_bytes());
+                for limb in value.high_limbs() {
+                    key.extend_from_slice(&limb.to_be_bytes());
+                }
             }
             Some(SemPayload::Expr(SymPayload::Float(value))) => {
                 key.push(4);
@@ -1196,6 +1201,7 @@ fn hash_label(node: &SemNode, state: &mut impl Hasher) {
             3u8.hash(state);
             i.width().hash(state);
             i.to_u64().hash(state);
+            i.high_limbs().hash(state);
         }
         Some(SemPayload::Expr(SymPayload::Float(f))) => {
             4u8.hash(state);
