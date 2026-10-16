@@ -375,6 +375,11 @@ impl tir::backend::regalloc::TargetRegAlloc for Arm64RegAlloc {
                 let builder = tir::reg_use!(builder, fa, src);
                 Box::new(tir::reg_def!(builder, fd, dst).build())
             }
+            "FPR32" => {
+                let builder = FMoveRegisterSingleOpBuilder::new(context);
+                let builder = tir::reg_use!(builder, fa, src);
+                Box::new(tir::reg_def!(builder, fd, dst).build())
+            }
             other => unimplemented!("arm64 register copy for class {other} is not implemented"),
         }
     }

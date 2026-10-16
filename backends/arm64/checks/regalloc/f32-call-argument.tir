@@ -1,0 +1,18 @@
+// RUN: tir mc --march=arm64 --filetype=asm %s | filecheck %s
+
+// An f32 argument reaches its register on an f32 copy, which coalesces with
+// the load, so the value is loaded straight into s0.
+
+module {
+  %fn_sink = func.declare @sink(!f32) -> !unit
+  %fn_pass = func.func @pass(%0: !ptr.p) -> !unit {
+    %1 = ptr.load %0 : !f32
+    func.call %fn_sink(%1 : !f32) -> !unit
+    func.return
+  }
+  module_end
+}
+
+// CHECK-LABEL: pass:
+// CHECK: ldr s0, [x0, 0]
+// CHECK: bl sink
