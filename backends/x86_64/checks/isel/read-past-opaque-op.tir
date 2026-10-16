@@ -85,7 +85,7 @@ module {
 
 // CHECK-LABEL: name = "past_call"
 // CHECK: %[[READ:[0-9]+]] = x86_64.mov_load32 {{.*}} state(%{{[0-9]+}})
-// CHECK: %[[CALLED:[0-9]+]], %{{[0-9]+}} = asm.vcall state(%[[READ]],
+// CHECK: %[[CALLED:[0-9]+]], %{{[0-9]+}} = asm.vcall {{.*}}state(%[[READ]],
 // CHECK: x86_64.add32_mem {{.*}} state(%[[CALLED]])
 
 // With no call between them the two reads observe one state, and the reader

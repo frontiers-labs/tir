@@ -256,7 +256,9 @@ operation! {
     VirtualCallOp {
         name: "vcall",
         dialect: "asm",
-        scheme: "() -> ()",
+        scheme: "(_*) -> _*",
+        operands: O { args },
+        results: R { results },
         attributes: A {
             callee: "Str",
             outgoing_stack_size: "UInt",
@@ -281,8 +283,9 @@ operation! {
     VirtualIndirectCallOp {
         name: "vcall_indirect",
         dialect: "asm",
-        scheme: "(backend.reg<_, _>) -> ()",
-        operands: O { callee },
+        scheme: "(backend.reg<_, _>, _*) -> _*",
+        operands: O { callee, args },
+        results: R { results },
         attributes: A {
             outgoing_stack_size: "UInt",
         },

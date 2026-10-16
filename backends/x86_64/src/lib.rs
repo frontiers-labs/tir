@@ -213,12 +213,16 @@ mod isa {
             _abi: &tir::backend::abi::AbiInfo,
             _outgoing_size: u32,
             vector_register_args: u8,
-        ) -> Vec<Box<dyn Operation>> {
-            vec![Box::new(
-                MovImm32OpBuilder::new(context)
-                    .attr("dst", phys_attr((RegClass::GPR32.id(), 0)))
-                    .attr("imm", AttributeValue::Int(i64::from(vector_register_args)))
-                    .build(),
+        ) -> Vec<(Box<dyn Operation>, tir::backend::liveness::PhysReg)> {
+            let count = tir::backend::fresh_reg(context, RegClass::GPR32.id());
+            vec![(
+                Box::new(
+                    MovImm32OpBuilder::new(context)
+                        .result_values(vec![count])
+                        .attr("imm", AttributeValue::Int(i64::from(vector_register_args)))
+                        .build(),
+                ),
+                (RegClass::GPR32.id(), 0),
             )]
         }
 
@@ -264,7 +268,7 @@ mod isa {
                 .attr("imm", AttributeValue::Str(call.callee().into()))
                 .build();
             tir::backend::forward_state(context, op.op(), &real);
-            context.replace_op(op, &real)?;
+            context.replace_op_keeping_results(op, &real)?;
             return Ok(true);
         }
 
@@ -277,7 +281,7 @@ mod isa {
             let real: Box<dyn Operation> =
                 Box::new(CallIndirectOpBuilder::new(context).target(target).build());
             tir::backend::forward_state(context, op.op(), real.as_ref());
-            context.replace_op(op, real.as_ref())?;
+            context.replace_op_keeping_results(op, real.as_ref())?;
             return Ok(true);
         }
 

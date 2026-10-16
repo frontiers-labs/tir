@@ -18,6 +18,14 @@ use crate::backend::regalloc::RegClassId;
 use crate::backend::registers::RegSlot;
 use crate::backend::registers::fresh_reg;
 
+/// The attribute a call lists, in operand order, the register each argument
+/// operand (all but an indirect call's callee) is passed in.
+pub const PASSED_IN_ATTR: &str = "passed_in";
+
+/// The attribute a call lists, in result order, the register each result is
+/// returned in.
+pub const RETURNED_IN_ATTR: &str = "returned_in";
+
 pub trait CallEmitter: Send + Sync {
     /// A register-to-register move. Either end is a value the copy defines or
     /// reads, or a physical register the calling convention names.
@@ -36,13 +44,15 @@ pub trait CallEmitter: Send + Sync {
         ))
     }
 
+    /// Operations that each define one more value the call reads, with the
+    /// register the call reads it in (x86 `al`, the count of vector arguments).
     fn call_prefix(
         &self,
         _context: &Context,
         _abi: &AbiInfo,
         _outgoing_size: u32,
         _vector_register_args: u8,
-    ) -> Vec<Box<dyn Operation>> {
+    ) -> Vec<(Box<dyn Operation>, PhysReg)> {
         Vec::new()
     }
 
@@ -266,50 +276,24 @@ impl CallLowering {
                 PassError::InvalidRuleSet("ABI has no integer argument registers".to_string())
             })?;
 
-        // An argument value must not be pinned for its whole live range, so the
-        // call reads a copy of it made right here.
-        let detach = |value: ValueId, class| {
-            crate::backend::retype_untyped(context, value, class);
-            let fresh = fresh_reg(context, class);
-            let copy = self
-                .emitter
-                .copy(context, RegSlot::Value(fresh), RegSlot::Value(value));
-            super::prealloc::mark_op(
-                context,
-                copy.id(),
-                super::prealloc::COALESCABLE_COPY_ATTR,
-                AttributeValue::Bool(true),
-            );
-            context.insert_op_before(op, copy.as_ref()).map(|()| fresh)
-        };
-
-        let fresh_callee = match callee {
+        let callee_value = match callee {
             Callee::Direct(_) => None,
-            Callee::Indirect(value) => Some(detach(value, indirect_class)?),
+            Callee::Indirect(value) => {
+                crate::backend::retype_untyped(context, value, indirect_class);
+                Some(value)
+            }
         };
-        let fresh_result_address = result_address
+        let result_address = result_address
             .map(|value| {
                 let register = self.abi.indirect_result.ok_or_else(|| {
                     PassError::InvalidRuleSet("ABI has no result-address register".to_string())
                 })?;
-                detach(value, register.0).map(|fresh| (fresh, register))
+                crate::backend::retype_untyped(context, value, register.0);
+                Ok::<_, PassError>((value, register))
             })
             .transpose()?;
-        let mut fresh_args = Vec::with_capacity(argument_values.len());
-        // Repeated arguments read one snapshot; separate copies would all stay
-        // live until placement and create interference between equal values.
-        let mut snapshots = HashMap::new();
         for (&arg, location) in argument_values.iter().zip(&argument_locations) {
-            let key = (arg, location.class());
-            let fresh = match snapshots.get(&key) {
-                Some(&fresh) => fresh,
-                None => {
-                    let fresh = detach(arg, location.class())?;
-                    snapshots.insert(key, fresh);
-                    fresh
-                }
-            };
-            fresh_args.push(fresh);
+            crate::backend::retype_untyped(context, arg, location.class());
         }
 
         let vector_register_args = argument_values
@@ -335,70 +319,91 @@ impl CallLowering {
         // stack is written into memory the callee reads, so those stores go on
         // this very chain: the call takes what the last of them left, and
         // nothing may put the call ahead of one.
-        // The stores go first: an argument register holds its value from its
-        // copy to the call, and a value the stores read in between would have
-        // to keep out of every one of them.
         let mut observed = crate::analysis::effects::observed_state(&context.get_op(call.id()));
-        for (&fresh, location) in fresh_args.iter().zip(&argument_locations) {
+        for (&arg, location) in argument_values.iter().zip(&argument_locations) {
             if let ArgumentLocation::Stack { class, offset } = *location {
                 let store = self
                     .emitter
-                    .stack_arg_store(context, self.abi, fresh, class, offset)?;
+                    .stack_arg_store(context, self.abi, arg, class, offset)?;
                 context.insert_op_before(op, store.as_ref())?;
                 observed = observed
                     .map(|state| tir::backend::put_on_chain(context, store.as_ref(), state));
             }
         }
-        for prefix in
+        let mut placed = Vec::new();
+        for (&arg, location) in argument_values.iter().zip(&argument_locations) {
+            if let ArgumentLocation::Register(register) = *location {
+                placed.push((arg, register));
+            }
+        }
+        placed.extend(result_address);
+        for (prefix, register) in
             self.emitter
                 .call_prefix(context, self.abi, outgoing_size, vector_register_args)
         {
             context.insert_op_before(op, prefix.as_ref())?;
+            placed.push((context.get_op(prefix.id()).value_results()[0], register));
         }
 
-        for (&fresh, location) in fresh_args.iter().zip(&argument_locations) {
-            if let ArgumentLocation::Register(register) = *location {
-                let copy =
-                    self.emitter
-                        .copy(context, RegSlot::Phys(register), RegSlot::Value(fresh));
-                context.insert_op_before(op, copy.as_ref())?;
+        let extracted = if context.get_value(result).ty() == UnitType::new(context) {
+            Vec::new()
+        } else if let Some(tuple) = TupleType::view(context, context.get_value(result).ty()) {
+            self.tuple_results(context, result, &tuple)?
+        } else {
+            let kind = value_kind(context, self.abi, result);
+            let register =
+                next_return_register(self.abi, kind, &mut HashMap::new()).ok_or_else(|| {
+                    PassError::InvalidRuleSet("ABI has no return register".to_string())
+                })?;
+            let value = fresh_reg(context, register.0);
+            context.replace_value_uses(result, value);
+            vec![(value, register)]
+        };
+        // The call defines one value per register; a repeated extraction of an
+        // element copies it.
+        let mut returned: Vec<(ValueId, PhysReg)> = Vec::new();
+        let mut repeated = Vec::new();
+        for (value, register) in extracted {
+            match returned.iter().find(|&&(_, other)| other == register) {
+                Some(&(first, _)) => repeated.push((value, first)),
+                None => returned.push((value, register)),
             }
         }
-        if let Some((fresh, register)) = fresh_result_address {
-            let copy = self
-                .emitter
-                .copy(context, RegSlot::Phys(register), RegSlot::Value(fresh));
-            context.insert_op_before(op, copy.as_ref())?;
-        }
 
-        // What the call reads: the registers the convention placed the arguments
-        // in, the result address where there is one, and the stack pointer it
-        // pushes the return address on. None of them is an operand — a
-        // placement is not a value — so without saying so nothing keeps the copy
-        // that made it alive to the call, and nothing keeps the frame's own
-        // adjustment on the right side of it.
-        let uses = AttributeValue::Array(
-            argument_locations
-                .iter()
-                .filter_map(|location| match location {
-                    ArgumentLocation::Register(register) => Some(*register),
-                    ArgumentLocation::Stack { .. } => None,
-                })
-                .chain(fresh_result_address.map(|(_, register)| register))
-                .chain(std::iter::once(self.abi.sp))
-                .map(crate::backend::phys_attr)
-                .collect::<Vec<_>>()
-                .into(),
-        );
+        // The call reads its arguments and writes its results as values, each
+        // in the register the convention names (see `PASSED_IN_ATTR`), so
+        // whatever runs between their definitions and the call interferes with
+        // them like with any value. The stack pointer it pushes the return
+        // address on is no value, so it is named as a use.
+        let registers = |values: &[(ValueId, PhysReg)]| {
+            AttributeValue::Array(
+                values
+                    .iter()
+                    .map(|&(_, register)| crate::backend::phys_attr(register))
+                    .collect::<Vec<_>>()
+                    .into(),
+            )
+        };
+        let passed_in = registers(&placed);
+        let returned_in = registers(&returned);
+        let uses = AttributeValue::Array(vec![crate::backend::phys_attr(self.abi.sp)].into());
+        // A result register is written by the call, not lost across it.
         let clobbers = AttributeValue::Array(
             self.abi
                 .caller_saved
                 .iter()
                 .copied()
+                .filter(|&clobbered| {
+                    !returned.iter().any(|&(_, register)| {
+                        clobbered.0.overlaps(clobbered.1, register.0, register.1)
+                    })
+                })
                 .map(crate::backend::phys_attr)
                 .collect::<Vec<_>>()
                 .into(),
         );
+        let args = placed.iter().map(|&(value, _)| value).collect::<Vec<_>>();
+        let results = returned.iter().map(|&(value, _)| value).collect::<Vec<_>>();
         let source = context.get_op(call.id());
         let published = source.state_results().to_vec();
         let mut dependencies = source.state_operands().to_vec();
@@ -415,28 +420,34 @@ impl CallLowering {
             .map(|state| context.get_value(*state).ty())
             .collect::<Vec<_>>();
         let call: Box<dyn Operation> = match callee {
-            Callee::Direct(name) => {
-                let mut builder = super::VirtualCallOpBuilder::new(context)
+            Callee::Direct(name) => Box::new(
+                super::VirtualCallOpBuilder::new(context)
                     .callee(name)
+                    .args(args)
+                    .result_values(results)
                     .outgoing_stack_size(u64::from(outgoing_size))
                     .attr("clobbers", clobbers)
-                    .attr("uses", uses);
-                builder = builder
-                    .state_operands(dependencies.clone())
-                    .state_results(dependency_types.clone());
-                Box::new(builder.build())
-            }
-            Callee::Indirect(_) => {
-                let mut builder = super::VirtualIndirectCallOpBuilder::new(context)
-                    .callee(fresh_callee.expect("indirect callee was detached"))
-                    .outgoing_stack_size(u64::from(outgoing_size))
-                    .attr("clobbers", clobbers)
-                    .attr("uses", uses);
-                builder = builder
+                    .attr("uses", uses)
+                    .attr(PASSED_IN_ATTR, passed_in)
+                    .attr(RETURNED_IN_ATTR, returned_in)
                     .state_operands(dependencies)
-                    .state_results(dependency_types);
-                Box::new(builder.build())
-            }
+                    .state_results(dependency_types)
+                    .build(),
+            ),
+            Callee::Indirect(_) => Box::new(
+                super::VirtualIndirectCallOpBuilder::new(context)
+                    .callee(callee_value.expect("indirect callee"))
+                    .args(args)
+                    .result_values(results)
+                    .outgoing_stack_size(u64::from(outgoing_size))
+                    .attr("clobbers", clobbers)
+                    .attr("uses", uses)
+                    .attr(PASSED_IN_ATTR, passed_in)
+                    .attr(RETURNED_IN_ATTR, returned_in)
+                    .state_operands(dependencies)
+                    .state_results(dependency_types)
+                    .build(),
+            ),
         };
         for (published, new) in published
             .into_iter()
@@ -445,6 +456,12 @@ impl CallLowering {
             context.replace_value_uses(published, new);
         }
         context.insert_op_before(op, call.as_ref())?;
+        for (copy, first) in repeated {
+            let copy = self
+                .emitter
+                .copy(context, RegSlot::Value(copy), RegSlot::Value(first));
+            context.insert_op_before(op, copy.as_ref())?;
+        }
         for suffix in self.emitter.call_suffix(context, self.abi, outgoing_size) {
             context.insert_op_before(op, suffix.as_ref())?;
         }
@@ -457,30 +474,7 @@ impl CallLowering {
             context.insert_op_before(op, restore.as_ref())?;
         }
 
-        if context.get_value(result).ty() == UnitType::new(context) {
-            context.erase_op(op)?;
-            erase_dead_tuple_arguments(context, &tuple_arguments)?;
-            return Ok(true);
-        }
-
-        if let Some(tuple) = TupleType::view(context, context.get_value(result).ty()) {
-            self.lower_tuple_result(context, op, result, &tuple, &tuple_arguments)?;
-            return Ok(true);
-        }
-
-        let kind = value_kind(context, self.abi, result);
-        let return_reg = next_return_register(self.abi, kind, &mut HashMap::new())
-            .ok_or_else(|| PassError::InvalidRuleSet("ABI has no return register".to_string()))?;
-        // The call op is erased below and takes its result with it, so the copy
-        // defines a register value of its own. The rewiring is explicit: the
-        // call publishes a state as well as a value, so the shapes of the two
-        // ops do not line up for [`Context::replace_op`] to do it.
-        let returned = fresh_reg(context, return_reg.0);
-        let copy = self
-            .emitter
-            .copy(context, RegSlot::Value(returned), RegSlot::Phys(return_reg));
-        context.replace_value_uses(result, returned);
-        context.replace_op(op, copy.as_ref())?;
+        context.erase_op(op)?;
         erase_dead_tuple_arguments(context, &tuple_arguments)?;
         Ok(true)
     }
@@ -584,16 +578,16 @@ impl CallLowering {
         Ok((argument_values, argument_locations, outgoing_size))
     }
 
-    /// Rewrite every extraction of a tuple result into a copy out of the
-    /// register the convention returned that element in.
-    fn lower_tuple_result(
+    // The values the call returns a tuple's elements in, each with the
+    // register the convention returns it in: the extraction of that element,
+    // which the rest of the function — and this pass's own record of the
+    // tuple's elements — already names.
+    fn tuple_results(
         &self,
         context: &Context,
-        op: &OperationRef,
         result: ValueId,
         tuple: &TupleType,
-        tuple_arguments: &[(OpId, ValueId)],
-    ) -> Result<(), PassError> {
+    ) -> Result<Vec<(ValueId, PhysReg)>, PassError> {
         let registers = tuple_return_registers(context, self.abi, tuple)?;
         let mut extracts = Vec::new();
         for user in context.users_of(result) {
@@ -628,25 +622,16 @@ impl CallLowering {
         }
         extracts.sort_by_key(|(index, result, ..)| (*index, result.number()));
 
-        for &(_, extracted, register, _) in &extracts {
-            // The copy takes over the extraction's value: it is the one the
-            // rest of the function — and this pass's own record of the
-            // tuple's elements — already names.
+        let mut returned = Vec::with_capacity(extracts.len());
+        for (_, extracted, register, extract) in extracts {
             context.retype_value(
                 extracted,
                 crate::backend::RegClassType::new(context, register.0),
             );
-            let copy =
-                self.emitter
-                    .copy(context, RegSlot::Value(extracted), RegSlot::Phys(register));
-            context.insert_op_before(op, copy.as_ref())?;
-        }
-        for (_, _, _, extract) in extracts {
             context.erase_op_keeping_results(&extract)?;
+            returned.push((extracted, register));
         }
-        context.erase_op(op)?;
-        erase_dead_tuple_arguments(context, tuple_arguments)?;
-        Ok(())
+        Ok(returned)
     }
 }
 

@@ -123,7 +123,7 @@ fn source(
 // A replay must find its definition standing and write the whole register: a
 // view that merges into the rest of its register would depend on what the
 // register held, where a move writes it whole.
-fn replayable(context: &Context, def: OpId, register: PhysReg) -> bool {
+pub(super) fn replayable(context: &Context, def: OpId, register: PhysReg) -> bool {
     context.has_operation(def)
         && context
             .get_op(def)

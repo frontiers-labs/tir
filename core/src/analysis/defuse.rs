@@ -28,9 +28,9 @@ pub type PhysReg = (RegClassId, u16);
 pub const CLOBBERS_ATTR: &str = "clobbers";
 
 /// The attribute an operation carries the physical registers it reads without
-/// naming them in an operand: a call's argument registers and the stack pointer
-/// it pushes the return address on. A placement is not a value, so nothing else
-/// would keep the copy that made it alive to the operation that reads it.
+/// naming them in an operand: the stack pointer a call pushes the return
+/// address on. Naming it keeps the frame's own adjustment of the stack pointer
+/// on the right side of the call.
 pub const USES_ATTR: &str = "uses";
 
 /// The registers of a single operation, split by direction. Values are SSA

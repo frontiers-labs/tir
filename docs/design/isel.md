@@ -936,13 +936,13 @@ not acquire that guarantee from the symbol-address hook.
 
 ## After selection
 
-Call lowering snapshots each distinct argument value and register class once
-per call, before placing arguments in their ABI registers or stack slots.
-Repeated arguments share that snapshot, so their copies do not create
-overlapping live ranges proportional to the argument count. The stack
-arguments are stored first and the registers the call reads, the x86-64
-vector-register count in `al` among them, are written last, so no value the
-stores read lives across a register the call names.
+Call lowering stores the stack arguments and hands the call its register
+arguments, the x86-64 vector-register count in `al` among them, as operands,
+and its results as results. The call names the ABI register of each in
+`passed_in` and `returned_in`. Register allocation pins each of them on a copy of
+its own placed against the call, so a pin covers the call alone, and whatever
+an earlier pass schedules between an argument's definition and the call
+interferes with that argument like with any value.
 
 Register allocation assigns physical registers afterward. It follows
 Buchwald, Zwinkau, and Bersch, "SSA-based Register Allocation with PBQP"

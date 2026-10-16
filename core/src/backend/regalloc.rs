@@ -25,7 +25,8 @@ use tir::{
 };
 
 use crate::backend::abi;
-use crate::backend::constmat::rematerializable;
+use crate::backend::call_lowering::{PASSED_IN_ATTR, RETURNED_IN_ATTR};
+use crate::backend::constmat::{constant_result, rematerializable};
 use crate::backend::liveness::{self, Classes, PhysReg};
 use crate::backend::pbqp::{self, INF_COST};
 use crate::backend::prealloc;
@@ -1104,6 +1105,10 @@ impl RegisterAllocationPass {
         for &block_id in blocks {
             for op_id in context.get_block(block_id).op_ids() {
                 let op = context.get_op(op_id);
+                if op.is::<VirtualCallOp>() || op.is::<VirtualIndirectCallOp>() {
+                    self.lower_call(context, block_id, op_id, &mut precolor)?;
+                    continue;
+                }
                 if op.attr(crate::backend::PINS_ATTR).is_none() {
                     continue;
                 }
@@ -1234,16 +1239,105 @@ impl RegisterAllocationPass {
                     else {
                         continue;
                     };
-                    let class = match crate::backend::value_class(context, value) {
-                        Some(class) if class.file() == file_class.file() => class,
-                        _ => file_class,
-                    };
+                    let (class, register) = pinned_class(context, value, (file_class, index));
                     let outgoing = fresh_reg(context, class);
                     self.insert_coalescable_copy(context, &ret_ref, class, outgoing, value)?;
                     context.set_op_operand(op_id, operand_index, outgoing);
-                    precolor.insert(outgoing.number(), (class, index));
+                    precolor.insert(outgoing.number(), register);
                 }
             }
+        }
+        Ok(())
+    }
+
+    // Each argument a call reads and result it writes is pinned to its
+    // register on a copy of its own right at the call, so the pin covers
+    // nothing but the call itself. A constant the parallel copy at the call
+    // could replay is replayed there instead, so that copy has nothing to move.
+    fn lower_call(
+        &self,
+        context: &Context,
+        block_id: BlockId,
+        op_id: OpId,
+        precolor: &mut HashMap<u32, PhysReg>,
+    ) -> Result<(), PassError> {
+        let call = context.get_op(op_id);
+        let first_argument = usize::from(call.is::<VirtualIndirectCallOp>());
+        let call_ref = op_ref_in(context, op_id);
+        let operands = call.value_operands();
+        // The callee address is read on a copy at the call too, free
+        // to take whichever register the arguments leave there.
+        if let Some(class) = operands
+            .first()
+            .filter(|_| first_argument == 1)
+            .and_then(|&callee| crate::backend::value_class(context, callee))
+        {
+            let callee = fresh_reg(context, class);
+            self.insert_coalescable_copy(context, &call_ref, class, callee, operands[0])?;
+            context.set_op_operand(op_id, 0, callee);
+        }
+        let mut replayed = Vec::new();
+        for (index, register) in call_registers(&call, PASSED_IN_ATTR)
+            .into_iter()
+            .enumerate()
+        {
+            let position = first_argument + index;
+            let value = operands[position];
+            let (class, register) = pinned_class(context, value, register);
+            let constant = context.get_value(value).defining_op().filter(|&def| {
+                constant_result(&context.get_op(def), self.target.as_ref()) == Some(value)
+                    && copies::replayable(context, def, register)
+            });
+            let incoming = match constant {
+                Some(def) => {
+                    let (replay, fresh) = Self::rematerialize(context, def, value)?;
+                    context
+                        .insert_op_before(&call_ref, context.get_op(replay).as_dyn_op().as_ref())?;
+                    replayed.push(def);
+                    fresh
+                }
+                None => {
+                    let incoming = fresh_reg(context, class);
+                    self.insert_coalescable_copy(context, &call_ref, class, incoming, value)?;
+                    incoming
+                }
+            };
+            context.set_op_operand(op_id, position, incoming);
+            precolor.insert(incoming.number(), register);
+        }
+        for def in replayed {
+            if context.has_operation(def)
+                && context
+                    .get_op(def)
+                    .results()
+                    .iter()
+                    .all(|&result| !context.is_used(result))
+            {
+                context.erase_op(&op_ref_in(context, def))?;
+            }
+        }
+        let results = call.value_results();
+        for (position, register) in call_registers(&call, RETURNED_IN_ATTR)
+            .into_iter()
+            .enumerate()
+        {
+            let (class, register) = pinned_class(context, results[position], register);
+            let outgoing = fresh_reg(context, class);
+            let copy = self.target.emit_copy(
+                context,
+                class,
+                RegSlot::Value(results[position]),
+                RegSlot::Value(outgoing),
+            );
+            insert_after(context, block_id, op_id, copy.as_ref())?;
+            context.set_op_result(op_id, position, outgoing);
+            prealloc::mark_op(
+                context,
+                copy.id(),
+                prealloc::COALESCABLE_COPY_ATTR,
+                AttributeValue::Bool(true),
+            );
+            precolor.insert(outgoing.number(), register);
         }
         Ok(())
     }
@@ -1562,6 +1656,32 @@ impl SlotChain {
         self.written = Some(state);
         Ok(state)
     }
+}
+
+fn call_registers(call: &tir::OpHandle, attr: &str) -> Vec<PhysReg> {
+    let Some(AttributeValue::Array(registers)) = call.attr(attr) else {
+        return Vec::new();
+    };
+    registers
+        .iter()
+        .filter_map(|register| match register {
+            AttributeValue::Register(tir::attributes::RegisterAttr::Physical { class, index }) => {
+                Some((*class, *index))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+// The view of `register` a pin of `value` takes: the value's own class when it
+// draws from the same file, so a 32-bit value placed in `rdi` is pinned to
+// `edi`.
+fn pinned_class(context: &Context, value: ValueId, register: PhysReg) -> (RegClassId, PhysReg) {
+    let class = match crate::backend::value_class(context, value) {
+        Some(class) if class.file() == register.0.file() => class,
+        _ => register.0,
+    };
+    (class, (class, register.1))
 }
 
 // Insert `new_op` immediately after `op_id` in its block (before the following op,

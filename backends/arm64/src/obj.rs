@@ -122,7 +122,7 @@ pub(crate) fn finalize_virtual_ops(
             .attr("imm", AttributeValue::Str(call.callee().into()))
             .build();
         tir::backend::forward_state(context, op.op(), &bl);
-        context.replace_op(op, &bl)?;
+        context.replace_op_keeping_results(op, &bl)?;
         return Ok(true);
     }
 
@@ -134,7 +134,7 @@ pub(crate) fn finalize_virtual_ops(
         })?;
         let blr = BranchLinkRegOpBuilder::new(context).rn(target).build();
         tir::backend::forward_state(context, op.op(), &blr);
-        context.replace_op(op, &blr)?;
+        context.replace_op_keeping_results(op, &blr)?;
         return Ok(true);
     }
 

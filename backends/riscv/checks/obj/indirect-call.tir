@@ -1,7 +1,7 @@
 // RUN: tir mc --march=rv64im --stage=regalloc %s | filecheck %s
 // RUN: tir mc --march=rv64im --filetype=obj-ascii %s | filecheck %s --check-prefix=OBJ
 
-// An indirect call detaches the callee address into a scratch register
+// An indirect call holds the callee address in a scratch register
 // distinct from the a0 argument, and finalizes to a linking `jalr ra`.
 
 module {
@@ -15,7 +15,7 @@ module {
 
 // CHECK: asm.symbol {name = "caller"
 // CHECK: riscv.addi {rd = %{{[0-9]+}}:x5, rs1 = %{{[0-9]+}}:x10, imm = 0}
-// CHECK: asm.vcall_indirect %{{[0-9]+}} state(%{{[0-9]+}}, %{{[0-9]+}}) {
+// CHECK: asm.vcall_indirect %{{[0-9]+}}{{.*}} state(%{{[0-9]+}}, %{{[0-9]+}}) {
 
 // jalr x1, 0(x5): the call goes through the scratch register and links ra.
 // OBJ: caller:

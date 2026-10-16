@@ -21,6 +21,5 @@ module {
 // CHECK: arm64.add {rd = %{{[0-9]+}}:x0, rn = %{{[0-9]+}}:x0, rm = %{{[0-9]+}}:x2}
 // CHECK: arm64.add {rd = %{{[0-9]+}}:x0, rn = %{{[0-9]+}}:x3, rm = %{{[0-9]+}}:x0}
 // CHECK-LABEL: asm.symbol {name = "forward"
-// CHECK: arm64.orr {rd = x2, rn = x31, rm = %{{[0-9]+}}:{{x[0-9]+}}}
-// CHECK: arm64.orr {rd = x3, rn = x31, rm = %{{[0-9]+}}:{{x[0-9]+}}}
-// CHECK: asm.vcall state(%{{[0-9]+}}, %{{[0-9]+}}) {callee = "consume"
+// CHECK: asm.vcall {{.*}}state(%{{[0-9]+}}, %{{[0-9]+}}) {callee = "consume"
+// CHECK-SAME: passed_in = [GPR[0], GPR[2], GPR[3]]

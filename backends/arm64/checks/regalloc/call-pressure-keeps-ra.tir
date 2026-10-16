@@ -47,6 +47,6 @@ module {
 // after the call, so the sum read farthest ahead goes to the stack instead.
 // CHECK: arm64.store_doubleword {rt = %{{[0-9]+}}:x0, rn = sp, imm = [[SLOT:[0-9]+]]}
 // CHECK: arm64.orr {rd = %{{[0-9]+}}:x29, rn = x31, rm = x30}
-// CHECK: asm.vcall state(%{{[0-9]+}}, %{{[0-9]+}}) {callee = "ext"
+// CHECK: asm.vcall {{.*}}state(%{{[0-9]+}}, %{{[0-9]+}}) {callee = "ext"
 // CHECK: arm64.orr {rd = x30, rn = x31, rm = %{{[0-9]+}}:x29}
 // CHECK: arm64.load_doubleword {rt = %{{[0-9]+}}:x1, rn = sp, imm = [[SLOT]]}

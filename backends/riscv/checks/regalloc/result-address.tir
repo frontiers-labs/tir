@@ -17,5 +17,5 @@ module {
 // CHECK-LABEL: asm.symbol {name = "caller"
 // CHECK-NOT: riscv.addi {rd = x10
 // CHECK-NOT: riscv.addi {rd = x11
-// CHECK: asm.vcall state(%{{[0-9]+}}, %{{[0-9]+}}) {callee = "make_large"
-// CHECK-SAME: uses = [GPR[11], GPR[10], GPR[2]]
+// CHECK: asm.vcall {{.*}}state(%{{[0-9]+}}, %{{[0-9]+}}) {callee = "make_large"
+// CHECK-SAME: uses = [GPR[2]], passed_in = [GPR[11], GPR[10]]

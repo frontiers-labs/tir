@@ -10,6 +10,6 @@ module {
   module_end
 }
 
-// CHECK: asm.vcall state(%{{[0-9]+}}, %{{[0-9]+}}) {callee = "make_pair"
-// CHECK: arm64.orr {rd = %{{[0-9]+}}:x0, rn = x31, rm = x1}
+// CHECK: asm.vcall {{.*}}state(%{{[0-9]+}}, %{{[0-9]+}}) {callee = "make_pair"
+// CHECK: arm64.orr {rd = %{{[0-9]+}}:x0, rn = x31, rm = %{{[0-9]+}}:x1}
 // CHECK: asm.vret

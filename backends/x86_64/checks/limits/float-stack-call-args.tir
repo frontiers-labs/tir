@@ -1,7 +1,7 @@
 // RUN: tir mc --march=x86_64 --stage=regalloc %s | filecheck %s
 
 // The ninth SysV f64 argument is stored to the outgoing stack area from its
-// XMM value, before the register arguments are placed.
+// XMM value, ahead of the call.
 
 module {
   %fn_consume = func.declare @consume(!f64, !f64, !f64, !f64, !f64, !f64, !f64, !f64, !f64) -> !f64
@@ -14,5 +14,5 @@ module {
 
 // CHECK: x86_64.add_imm {dst = rsp, dst_tied = rsp, imm = -24}
 // CHECK: x86_64.movsd_store_disp {base = rsp, src = %{{[0-9]+}}:xmm0, imm = 0}
-// CHECK: asm.vcall state(%{{[0-9]+}}, %{{[0-9]+}}) {callee = "consume"
+// CHECK: asm.vcall {{.*}}state(%{{[0-9]+}}, %{{[0-9]+}}) {callee = "consume"
 // CHECK: x86_64.add_imm {dst = rsp, dst_tied = rsp, imm = 24}

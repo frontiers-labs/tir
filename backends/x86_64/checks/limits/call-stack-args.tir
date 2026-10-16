@@ -22,6 +22,6 @@ module {
 // CHECK-NOT: x86_64.push
 // CHECK: x86_64.add_imm {dst = rsp, dst_tied = rsp, imm = -24}
 // CHECK: x86_64.mov_store_disp {base = rsp, src = %{{[0-9]+}}:{{.*}}, imm = 0}
-// CHECK-NEXT: x86_64.mov_imm32 {dst = eax, imm = 0}
-// CHECK: asm.vcall state(%{{[0-9]+}}, %{{[0-9]+}}) {callee = "g"
+// CHECK: x86_64.mov_imm32 {dst = %{{[0-9]+}}:eax, imm = 0}
+// CHECK-NEXT: asm.vcall {{.*}}state(%{{[0-9]+}}, %{{[0-9]+}}) {callee = "g"
 // CHECK: x86_64.add_imm {dst = rsp, dst_tied = rsp, imm = 24}

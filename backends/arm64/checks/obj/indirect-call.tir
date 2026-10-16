@@ -1,7 +1,7 @@
 // RUN: tir mc --march=arm64 --stage=regalloc %s | filecheck %s
 // RUN: tir mc --march=arm64 --filetype=obj-ascii %s | filecheck %s --check-prefix=OBJ
 
-// An indirect call detaches the callee address into a register distinct from
+// An indirect call holds the callee address in a register distinct from
 // the x0 argument and finalizes to `blr`.
 
 module {
@@ -14,10 +14,10 @@ module {
 }
 
 // CHECK: asm.symbol {name = "caller"
-// CHECK: arm64.orr {rd = x2, rn = x31, rm = x0}
-// CHECK-NEXT: arm64.orr {rd = x0, rn = x31, rm = %{{[0-9]+}}:x1}
-// CHECK-NEXT: asm.vcall_indirect %{{[0-9]+}} state(%{{[0-9]+}}, %{{[0-9]+}}) {
+// CHECK: arm64.orr {rd = %{{[0-9]+}}:x2, rn = x31, rm = %{{[0-9]+}}:x0}
+// CHECK-NEXT: arm64.orr {rd = %{{[0-9]+}}:x0, rn = x31, rm = %{{[0-9]+}}:x1}
+// CHECK: asm.vcall_indirect %{{[0-9]+}}{{.*}} state(%{{[0-9]+}}, %{{[0-9]+}}) {
 
-// blr x2: the call goes through the detached callee register.
+// blr x2: the call goes through the callee register.
 // OBJ: caller:
 // OBJ: [0x40, 0x00, 0x3F, 0xD6]

@@ -25,6 +25,6 @@ long call_aligned(long head, struct Aligned *value) {
 // ASM: str x2
 // ASM: stur x3
 // ASM-LABEL: call_aligned:
-// ASM: orr x2,
-// ASM: orr x3,
+// ASM: ldr x2,
+// ASM: ldur x3,
 // ASM: bl consume_aligned

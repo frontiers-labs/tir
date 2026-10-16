@@ -13,7 +13,7 @@ use std::collections::HashMap;
 
 use tir::attributes::AttributeValue;
 use tir::backend::{ControlFlow, MachineInstruction, MemoryEffects};
-use tir::{BlockId, Context, OpId};
+use tir::{BlockId, Context, OpHandle, OpId, ValueId};
 
 use crate::backend::liveness::Classes;
 use crate::backend::reg_slots;
@@ -46,34 +46,10 @@ pub(crate) fn rematerializable(
     for &block_id in blocks {
         for op_id in context.get_block(block_id).op_ids() {
             let op = context.get_op(op_id);
-            let Some(mi) = op.clone().as_interface::<dyn MachineInstruction>() else {
+            let Some(result) = constant_result(&op, target) else {
                 continue;
             };
-            let info = mi.info();
-            if info.control_flow != ControlFlow::None
-                || !info.implicit_regs.is_empty()
-                || info.effects != MemoryEffects::NONE
-            {
-                continue;
-            }
-            let slots = reg_slots(&op);
-            let [slot] = slots.as_slice() else {
-                continue;
-            };
-            let RegSlot::Value(result) = slot.slot else {
-                continue;
-            };
-            if !slot.port.def
-                || !op.value_operands().is_empty()
-                || !op.state_operands().is_empty()
-                || !op.state_results().is_empty()
-                || def_counts.get(&result.number()).copied().unwrap_or(0) != 1
-            {
-                continue;
-            }
-            if !matches!(op.attr("imm"), Some(AttributeValue::Int(_)))
-                && !target.is_symbol_materialization(&op)
-            {
+            if def_counts.get(&result.number()).copied().unwrap_or(0) != 1 {
                 continue;
             }
             if classes.vreg_class.get(&result.number()).copied() != value_class(context, result) {
@@ -83,4 +59,37 @@ pub(crate) fn rematerializable(
         }
     }
     defs
+}
+
+/// The value `op` defines, when all `op` does is write an immediate, or a
+/// symbol address the target computes the same anywhere, into it.
+pub(crate) fn constant_result(op: &OpHandle, target: &dyn TargetRegAlloc) -> Option<ValueId> {
+    let mi = op.clone().as_interface::<dyn MachineInstruction>()?;
+    let info = mi.info();
+    if info.control_flow != ControlFlow::None
+        || !info.implicit_regs.is_empty()
+        || info.effects != MemoryEffects::NONE
+    {
+        return None;
+    }
+    let slots = reg_slots(op);
+    let [slot] = slots.as_slice() else {
+        return None;
+    };
+    let RegSlot::Value(result) = slot.slot else {
+        return None;
+    };
+    if !slot.port.def
+        || !op.value_operands().is_empty()
+        || !op.state_operands().is_empty()
+        || !op.state_results().is_empty()
+    {
+        return None;
+    }
+    if !matches!(op.attr("imm"), Some(AttributeValue::Int(_)))
+        && !target.is_symbol_materialization(op)
+    {
+        return None;
+    }
+    Some(result)
 }

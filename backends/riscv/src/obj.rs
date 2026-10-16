@@ -212,7 +212,7 @@ pub(crate) fn finalize_virtual_ops(
             .attr("imm", AttributeValue::Str(call.callee().into()))
             .build();
         tir::backend::forward_state(context, op.op(), &jal);
-        context.replace_op(op, &jal)?;
+        context.replace_op_keeping_results(op, &jal)?;
         return Ok(true);
     }
 
@@ -231,7 +231,7 @@ pub(crate) fn finalize_virtual_ops(
             .attr("imm", AttributeValue::Int(0))
             .build();
         tir::backend::forward_state(context, op.op(), &jalr);
-        context.replace_op(op, &jalr)?;
+        context.replace_op_keeping_results(op, &jalr)?;
         return Ok(true);
     }
 
