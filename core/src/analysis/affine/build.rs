@@ -60,9 +60,6 @@ impl<'a> Builder<'a> {
         }
     }
 
-    /// The bounds of every loop, outermost first. A bound is read where the loop
-    /// stands, so it names only counters outside it — which are already read by
-    /// the time it is.
     fn domain(&mut self) {
         for depth in 0..self.nest.len() {
             let op = self.context.get_op(self.nest[depth]);
@@ -94,9 +91,6 @@ impl<'a> Builder<'a> {
         }
     }
 
-    /// A bound reads as an affine form or as a parameter of its own: a loop whose
-    /// upper bound is an expression the walk cannot follow still counts, it just
-    /// counts to something the view can only name.
     fn bound(&mut self, value: ValueId) -> AffineForm {
         match self.form(value) {
             Some((form, false)) => form,
@@ -104,8 +98,6 @@ impl<'a> Builder<'a> {
         }
     }
 
-    /// Every access of the innermost body, and whatever there stops the view from
-    /// describing it.
     fn body(&mut self) {
         let Some(ops) = body_ops(self.context, *self.nest.last().expect("a rooted nest")) else {
             self.opaque = true;
@@ -146,9 +138,6 @@ impl<'a> Builder<'a> {
         }
     }
 
-    /// The chains an effect names: the one state it observes, or every chain
-    /// merged into the state a change takes, which is exactly the set of
-    /// objects it may alias.
     fn chains_of(&self, state: ValueId) -> BTreeSet<ValueId> {
         let merged = self
             .context
@@ -204,9 +193,6 @@ impl<'a> Builder<'a> {
         }
     }
 
-    /// The object an address is derived from and how far into it the access
-    /// lands: `ptradd` walks back to the object, and every step it added is a
-    /// form of its own.
     fn address(&mut self, address: ValueId) -> (ValueId, Option<(AffineForm, bool)>) {
         let mut steps = Vec::new();
         let mut base = address;
@@ -229,8 +215,6 @@ impl<'a> Builder<'a> {
         (base, Some((offset, wrapping)))
     }
 
-    /// `value` as an affine form, and whether the arithmetic reaching it could
-    /// leave the region its source width holds.
     fn form(&mut self, value: ValueId) -> Option<(AffineForm, bool)> {
         if let Some(&depth) = self.counters.get(&value) {
             return self.iteration(depth).map(|form| (form, false));
@@ -249,10 +233,6 @@ impl<'a> Builder<'a> {
         Some((form, wrapping))
     }
 
-    /// Depth `depth`'s counter on iteration `i`: `lower + step·i`. The recurrence
-    /// holds only while the counter stays in its width, so a loop whose last
-    /// value leaves it — or whose step is not a positive literal, so that value
-    /// cannot be told — has no form for its counter.
     fn iteration(&self, depth: usize) -> Option<AffineForm> {
         let level = &self.loops[depth];
         let step = level.step.as_constant().filter(|&step| step > 0)?;
@@ -267,9 +247,6 @@ impl<'a> Builder<'a> {
         Some(level.lower.add(&AffineForm::counter(depth).scale(step)))
     }
 
-    /// The last iteration of depth `depth`, as a form: a literal where the trip
-    /// count is one, and `upper - lower - 1` where a unit step makes the count
-    /// the span itself.
     pub(super) fn last_iteration(&self, depth: usize) -> Option<AffineForm> {
         let level = &self.loops[depth];
         match level.trip {
@@ -281,7 +258,6 @@ impl<'a> Builder<'a> {
         }
     }
 
-    /// The form an operation builds out of its operands'.
     fn combine(&mut self, op: &OpHandle) -> Option<(AffineForm, bool)> {
         if let Some(literal) = op.clone().as_interface::<dyn ConstantLike>() {
             return Some((
@@ -329,15 +305,12 @@ impl<'a> Builder<'a> {
         None
     }
 
-    /// Whether a form can name something the width it is computed in cannot hold.
     fn escapes_width(&self, form: &AffineForm, value: ValueId) -> bool {
         let width = self.width_of(value);
         let (low, high) = form.range(&self.iteration_ranges, &self.symbol_ranges);
         !AffineForm::fits(width, low, high)
     }
 
-    /// The index of a value the nest was entered with, registering it the first
-    /// time it is met.
     fn symbol(&mut self, value: ValueId) -> usize {
         if let Some(index) = self.symbols.iter().position(|&other| other == value) {
             return index;
@@ -348,8 +321,6 @@ impl<'a> Builder<'a> {
         self.symbols.len() - 1
     }
 
-    /// The width a value was computed in before it was sign-extended, which is
-    /// the range it can actually take.
     fn source_width(&self, mut value: ValueId) -> u32 {
         while let Some(op) = self.definition(value).filter(|op| op.is::<ExtSIOp>()) {
             value = op.operands()[0];
@@ -357,7 +328,6 @@ impl<'a> Builder<'a> {
         self.width_of(value)
     }
 
-    /// What the innermost loop's carried ports do across iterations.
     fn ports(&mut self) {
         let op = self
             .context
@@ -405,8 +375,6 @@ impl<'a> Builder<'a> {
         }
     }
 
-    /// Whether `value` is computed from `port`, counting what the regions of an
-    /// operation on the way read: a gate threads nothing through its operands.
     fn reaches(&self, value: ValueId, port: ValueId) -> bool {
         let mut pending = vec![value];
         let mut seen = HashSet::new();
@@ -446,8 +414,6 @@ impl<'a> Builder<'a> {
     }
 }
 
-/// Every carried port counting with the loop: the declared induction first,
-/// then each port entered on the lower bound and stepped by the step.
 pub(crate) fn counter_ports(context: &Context, op: &OpHandle) -> Vec<ValueId> {
     let (Some(counted), Some(carried)) = (
         op.clone().as_interface::<dyn CountedLoop>(),
@@ -472,7 +438,6 @@ pub(crate) fn counter_ports(context: &Context, op: &OpHandle) -> Vec<ValueId> {
     ports
 }
 
-/// Whether `latched` is `carried + step`, either way round.
 fn gains(context: &Context, latched: ValueId, carried: ValueId, step: ValueId) -> bool {
     let Some(op) = definition(context, latched).filter(|op| op.is::<AddIOp>()) else {
         return false;
@@ -499,7 +464,6 @@ fn definition(context: &Context, value: ValueId) -> Option<OpHandle> {
         .map(|op| context.get_op(op))
 }
 
-/// The width of an integer type, or `None` for anything else.
 fn integer_width(context: &Context, ty: TypeId) -> Option<u32> {
     IntegerType::view(context, ty).and_then(|int| u32::try_from(int.width()).ok())
 }
@@ -512,8 +476,6 @@ fn width_range(width: u32) -> (i128, i128) {
     (-bound, bound - 1)
 }
 
-/// The iterations a depth runs: the trip count where the bounds spell one, and
-/// otherwise as many as a counter of that width can be stepped through.
 fn iteration_range(trip: Option<i128>, width: u32) -> (i128, i128) {
     match trip {
         Some(trip) => (0, (trip - 1).max(0)),
@@ -537,8 +499,6 @@ fn trip_count(lower: &AffineForm, upper: &AffineForm, step: &AffineForm) -> Opti
     Some((upper - lower).div_euclid(step) + i128::from((upper - lower).rem_euclid(step) != 0))
 }
 
-/// The operator a carried port accumulates under, of those the vocabulary
-/// spells: `min` and `max` are not operations here, so no port reduces by them.
 fn reduction_of(op: &OpHandle) -> Option<Reduction> {
     [
         (op.is::<AddIOp>(), Reduction::Add),
@@ -551,7 +511,6 @@ fn reduction_of(op: &OpHandle) -> Option<Reduction> {
     .find_map(|(matched, reduction)| matched.then_some(reduction))
 }
 
-/// Every value defined inside the nest.
 fn interior_values(context: &Context, root: OpId) -> HashSet<ValueId> {
     let mut values = HashSet::new();
     let mut pending = vec![root];
@@ -568,16 +527,10 @@ fn interior_values(context: &Context, root: OpId) -> HashSet<ValueId> {
     values
 }
 
-/// The state a chain starts at: the memory the function was entered with, or the
-/// allocation that opened it. Two accesses are of one memory exactly when the
-/// walk back through the ports, forks and merges reaches the same state.
 pub(crate) fn chain_root(context: &Context, state: ValueId) -> Option<ValueId> {
     chain_root_memo(context, state, &mut HashMap::new())
 }
 
-/// [`chain_root`] remembering every state's root: a chain forks and merges
-/// again at every gate, so the walk without memory is exponential in the
-/// gates it crosses.
 fn chain_root_memo(
     context: &Context,
     state: ValueId,

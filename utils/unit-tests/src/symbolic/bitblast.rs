@@ -360,8 +360,6 @@ mod fp {
 
     use crate::symbolic::support::{con, op, sym, Graph as G};
 
-    /// Whether `kind(value:vwidth, 11, 52)` provably equals the f64 bit pattern
-    /// `expected`: the `Ne` root is unsatisfiable exactly when the two agree.
     fn converts_to(kind: SymKind, value: u64, vwidth: u32, expected: u64) -> bool {
         let mut g = G::new();
         let v = con(&mut g, vwidth, value);
@@ -422,8 +420,6 @@ mod fp {
         }
     }
 
-    /// Whether `uitofp(x:32)` and `sitofp(x zero-extended to `ext`)` are provably
-    /// equal over all 32-bit `x` — the x86 selection bridge, `false` if refutable.
     fn bridge_holds(ext: u64) -> bool {
         let mut g = G::new();
         let x = sym(&mut g, 0);

@@ -117,7 +117,6 @@ impl AffineView {
         )
     }
 
-    /// A form as `2*d0 + 4*s1 + 3`, or `0` where every term is zero.
     fn render_form(&self, form: &AffineForm) -> String {
         let mut terms = Vec::new();
         for depth in 0..self.loops.len() {
@@ -182,8 +181,6 @@ fn render_recurrence(port: &Port) -> String {
     }
 }
 
-/// A loop is named by the value it produces where it produces one, so a check
-/// can point at the same `%n` the IR prints.
 fn number(context: &Context, op: OpId) -> String {
     match context.get_op(op).results().first() {
         Some(value) => value.number().to_string(),

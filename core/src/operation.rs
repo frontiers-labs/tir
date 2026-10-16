@@ -291,7 +291,6 @@ fn verify_op_tree_ops(context: &Context, op_id: OpId, ops: &mut Vec<OpId>) -> Re
     Ok(())
 }
 
-/// Checks the metadata specs this op contributes to its nested scopes.
 fn verify_scoped_metadata(instance: &OpHandle) -> Result<(), Error> {
     if let Some(value) = instance.attr(crate::LAYOUT_SPEC) {
         crate::layout::verify_spec(&value)?;
@@ -506,7 +505,6 @@ pub fn verify_opdef_operands(
     Ok(())
 }
 
-/// Checks each region an op holds against the kind its declaration allows.
 fn verify_region_kinds(
     context: &Context,
     instance: &OpHandle,
@@ -662,7 +660,6 @@ impl NewOp {
         )
     }
 
-    /// [`NewOp::new`] off an identity, so the one body serves every op type.
     fn assemble(
         identity: (&'static str, &'static str),
         context: Context,
@@ -724,7 +721,6 @@ impl std::fmt::Debug for OpHandle {
 }
 
 impl OpHandle {
-    /// The owning context, after checking this handle still names its own op.
     fn context(&self) -> crate::Context {
         let context = self.context.clone();
         debug_assert!(

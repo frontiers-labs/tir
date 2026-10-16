@@ -402,8 +402,6 @@ impl Executor {
         }
     }
 
-    /// Resize `value` to a class's architectural width: truncate wider values,
-    /// zero-extend narrower ones. Identity for unconfigured classes.
     fn resize_to_class_width(&self, class: &str, value: tir::utils::APInt) -> tir::utils::APInt {
         match self
             .register_widths
@@ -416,7 +414,6 @@ impl Executor {
         }
     }
 
-    /// Canonicalize a register class to the physical file it draws from.
     fn register_file<'a>(&'a self, class: &'a str) -> &'a str {
         self.register_files
             .get(class)
@@ -424,21 +421,14 @@ impl Executor {
             .unwrap_or(class)
     }
 
-    /// A register class's architectural width in bits (64 if unregistered).
     fn class_bit_width(&self, class: &str) -> u32 {
         self.register_widths.get(class).copied().unwrap_or(64)
     }
 
-    /// The class width rounded up to a whole number of bytes (the byte-lane size
-    /// its stored value occupies; a 1-bit flag still uses one byte).
     fn class_byte_bits(&self, class: &str) -> usize {
         (self.class_bit_width(class).div_ceil(8) * 8) as usize
     }
 
-    /// The physical slot width of a register file in bits: the widest view any
-    /// class takes of it. The file-defining class can be the narrow view (the
-    /// RISC-V f file is FPR64-wide although its file class FPR32 is 32 bits),
-    /// so sizing the slot by the file class alone would truncate wide writes.
     fn file_slot_bits(&self, file: &str) -> usize {
         self.register_files
             .iter()
@@ -449,8 +439,6 @@ impl Executor {
             .unwrap_or(64)
     }
 
-    /// The class-width byte lanes of a register, honoring the special reads
-    /// (PC, hardwired-zero, performance counters). Absent registers read zero.
     fn read_register_raw(&self, class: &str, index: u16) -> Result<tir::utils::RawBits, SimTrap> {
         let byte_bits = self.class_byte_bits(class);
         if class == "PC" {
@@ -487,10 +475,6 @@ impl Executor {
         }
     }
 
-    /// Store `bytes` into a register's file slot at the storage file's width. A
-    /// narrow class with a merge policy or nonzero bit offset splices its value
-    /// into the slot, preserving the untouched bits; otherwise the value is
-    /// zero-extended across the whole element.
     fn store_register_raw(&mut self, class: &str, index: u16, bytes: tir::utils::RawBits) {
         let file = self.register_file(class).to_string();
         let file_byte_bits = self.file_slot_bits(&file);
@@ -541,9 +525,6 @@ impl Executor {
         &self.mem_trace
     }
 
-    /// Bounds-checked little-endian read of `size` bytes, without trace recording.
-    /// The recording wrapper lives in the [`MachineContext`] impl so the atomic
-    /// methods can reuse the raw read while tagging their own access kind.
     fn read_memory_raw(&self, address: u64, size: usize) -> Result<u64, SimTrap> {
         if size == 0 || size > 8 {
             return Err(SimTrap::BadAddress { address, size });
@@ -580,16 +561,12 @@ impl Executor {
         Ok(u32::from_le_bytes(bytes))
     }
 
-    /// Record a memory-trace access, gated exactly like the plain read/write paths
-    /// (only while capturing a machine instruction's execute with recording on).
     fn record_mem_access(&self, access: MemAccess) {
         if self.capturing_mem {
             self.mem_stage.borrow_mut().push(access);
         }
     }
 
-    /// Run `execute`, capturing its data-memory accesses, then drain them into
-    /// `mem_trace` (in lockstep with the `trace` push) when recording.
     fn execute_capturing(&mut self, machine_inst: &dyn MachineInstruction) -> Result<(), SimTrap> {
         self.last_fault = None;
         let instruction_pc = self.pc;
@@ -850,10 +827,6 @@ impl Executor {
         result
     }
 
-    /// Decode-on-fetch fetch loop: read the 4-byte word at PC, decode it into an
-    /// op (cached by address), execute it, and advance. Runs raw machine code
-    /// loaded into `memory` (an ELF), stopping on `until_pc`, an exception
-    /// handler's halt (e.g. an exit syscall), or the `max_cycles` fuse.
     fn run_decoded_inner(
         &mut self,
         until_pc: u64,
@@ -932,9 +905,6 @@ impl Executor {
         .into())
     }
 
-    /// The fetch loop: resolve PC to a block, execute it, repeat. `max_cycles`
-    /// bounds the number of executed *blocks* — a runaway-loop fuse, not a
-    /// timing statement.
     fn run_inner(
         &mut self,
         until_pc: u64,
@@ -962,9 +932,6 @@ impl Executor {
         .into())
     }
 
-    /// Execute one block straight-line, stopping early on `until_pc` or an
-    /// explicit PC write (control transfer). On normal exit, PC advances to the
-    /// fallthrough block.
     fn exec_block(
         &mut self,
         context: &Context,

@@ -53,9 +53,6 @@ impl Pass for DeadCodeEliminationPass {
     }
 }
 
-/// A gate or a loop goes with the rest once nothing under it can be told to
-/// have happened. The results of the regions under `root` sit in no use list,
-/// so what they name is read here and renamed here.
 fn erase_dead_with(context: &Context, defuse: &DefUse, root: OpId) -> Result<(), PassError> {
     // Renames walk from the root's own regions: those outlive every erase here,
     // while a region nested under an erased gate is gone by the time a later
@@ -150,18 +147,6 @@ fn erase_dead_with(context: &Context, defuse: &DefUse, root: OpId) -> Result<(),
     Ok(())
 }
 
-/// An op whose every virtual def is unused and whose absence nothing else can
-/// tell. Nested regions, a terminator, or an observable register write keep it; a
-/// mid-end op with SSA results must additionally declare pure semantics, so
-/// effectful ops like calls survive even when their result is unread.
-///
-/// Memory accesses are the exception the state chains buy. What a write
-/// publishes is the whole of what anything can observe about it, so a write no
-/// state reads is a write nobody can tell happened; a read leaves memory as it
-/// found it, so one whose value nothing takes is a read nobody can tell happened
-/// either, and its readers are handed the state it observed. Where no chain is
-/// threaded a write publishes nothing, defines nothing, and the last test below
-/// leaves it alone.
 fn is_erasable(
     context: &Context,
     instance: &OpHandle,
@@ -257,9 +242,6 @@ fn is_erasable(
     defines
 }
 
-/// Whether nothing under `instance`'s regions can be told to have happened: no
-/// access, no call, nothing holding a physical register. A nested region op is
-/// read through, since everything it holds is in the same walk.
 fn pure_subtree(context: &Context, instance: &OpHandle) -> bool {
     instance.regions().iter().all(|&region| {
         crate::analysis::regions::region_ops(context, region)

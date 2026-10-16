@@ -60,10 +60,6 @@ pub fn verify_machine_ir(context: &Context, root: OpId) -> Result<(), Error> {
     Ok(())
 }
 
-/// Every memory state an operation observes is one something still names: an
-/// operation that is still here, or a block parameter standing for the chain the
-/// block is entered on. A port naming a definition selection took away is an
-/// edge to nothing, and these edges are the memory order from here to encoding.
 fn verify_state_operands(context: &Context, op: &OpHandle) -> Result<(), Error> {
     for value in op.state_operands().iter().copied() {
         if !context.has_value(value) {
@@ -180,8 +176,6 @@ fn verify_assignment(context: &Context, symbol: &OpHandle) -> Result<(), Error> 
     Ok(())
 }
 
-/// A slot may only be pinned to a register of a class sharing the view of the
-/// value it holds.
 fn verify_slot_pins(context: &Context, op: &OpHandle) -> Result<(), Error> {
     if op.attr(PINS_ATTR).is_none() {
         return Ok(());
@@ -210,8 +204,6 @@ fn verify_slot_pins(context: &Context, op: &OpHandle) -> Result<(), Error> {
     Ok(())
 }
 
-/// A value may only be pinned to, or assigned, a register of a class sharing
-/// its own architectural view.
 fn verify_views(context: &Context, assignment: &RegAssignment) -> Result<(), Error> {
     for (value, (class, index)) in assignment.iter() {
         let Some(value_class) = value_class(context, value) else {
@@ -230,17 +222,10 @@ fn verify_views(context: &Context, assignment: &RegAssignment) -> Result<(), Err
     Ok(())
 }
 
-/// Whether two classes view the same register file at the same bit offset. A
-/// register group read through a single-register slot — an RVV LMUL group in a
-/// `VR` operand — is the same file at the same offset, and is the allocation
-/// unit rather than a different view, so group width does not enter.
 fn same_view(a: RegClassId, b: RegClassId) -> bool {
     a.file() == b.file() && a.view.bit_offset == b.view.bit_offset
 }
 
-/// Every register-typed value the symbol's instructions name. A block parameter
-/// no instruction names needs no register: its predecessors' copies were
-/// rewritten away with it.
 fn register_values(context: &Context, symbol: &OpHandle) -> Vec<ValueId> {
     let mut seen = HashSet::new();
     let mut values = Vec::new();

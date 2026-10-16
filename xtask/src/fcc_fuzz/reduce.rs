@@ -41,18 +41,11 @@ pub fn reduce(source: &str, still_fails: &mut dyn FnMut(&str) -> bool) -> String
 /// How many times to sweep the program before settling for what is left.
 const MAX_SWEEPS: usize = 4;
 
-/// Whether a line may be dropped on its own. A closing brace belongs to the
-/// block that opened it and deleting one would unbalance the program. A
-/// `return` is worse than unbalanced: the program still builds, but its caller
-/// now reads an indeterminate value, and the divergence that survives is
-/// undefined behavior rather than a miscompile.
 fn deletable(line: &str) -> bool {
     let line = line.trim_start();
     !line.starts_with('}') && !line.starts_with("return")
 }
 
-/// The last line of the block `start` opens, or `start` itself when it opens
-/// none.
 fn chunk_end(lines: &[&str], start: usize) -> usize {
     if !lines[start].trim_end().ends_with('{') {
         return start;
@@ -101,10 +94,6 @@ pub fn bisect_pipeline(pipeline: &str, still_diverges: &mut dyn FnMut(&str) -> b
 /// makes the reproduction weaker rather than smaller.
 pub const STRUCTURAL_PASSES: [&str; 1] = ["verify-deps"];
 
-/// The spans of everything a pipeline is a comma-separated list of, at every
-/// nesting depth: a pass, and the nested pipeline that holds it. Inner items
-/// come first, so a body is reduced before the pipeline wrapping it is dropped
-/// whole.
 fn pipeline_items(pipeline: &str) -> Vec<(usize, usize)> {
     let mut items = Vec::new();
     let mut enclosing = Vec::new();
@@ -135,8 +124,6 @@ fn pipeline_items(pipeline: &str) -> Vec<(usize, usize)> {
     items
 }
 
-/// `pipeline` without the item spanning `start..end`, and without the comma
-/// that separated it from its neighbor.
 fn without_item(pipeline: &str, start: usize, end: usize) -> String {
     let (from, to) = if pipeline[..start].ends_with(',') {
         (start - 1, end)

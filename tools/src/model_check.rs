@@ -44,11 +44,6 @@ fn run_model_check(args: ToolArgs) -> Result<()> {
     )
 }
 
-/// Node-reference token positions for the BTOR2 opcodes the checker emits.
-/// Position 0 is the node id (always renumbered); a `Some(())` sort flag marks
-/// opcodes carrying a sort id at position 2. Remaining entries are operand
-/// node positions. Literal fields (slice bounds, extend amounts, constants,
-/// names) are left untouched.
 fn ref_positions(op: &str) -> (bool, &'static [usize]) {
     match op {
         "sort" => (false, &[]),
@@ -157,9 +152,6 @@ pub fn stitch(implementation: &str, checker: &str, signals: &[&str]) -> Result<S
     Ok(out)
 }
 
-/// Emit the miter properties. When the implementation has a `reset` input, drive
-/// a one-cycle reset pulse and gate each mismatch until reset has deasserted, so
-/// uninitialized pipeline state at step 0 cannot raise a spurious counterexample.
 fn emit_property(out: &mut String, last: u32, bads: &[(u32, String)], reset_node: Option<u32>) {
     out.push_str("; --- reset-gated properties ---\n");
     let mut nid = last;
@@ -197,8 +189,6 @@ fn non_blank(s: &str) -> impl Iterator<Item = &str> {
         .filter(|l| !l.is_empty() && !l.starts_with(';'))
 }
 
-/// Driver: emit the checker, stitch against a pre-built implementation BTOR2,
-/// and run btormc when available.
 fn verify_btor2(
     target: &str,
     tmdl_isa: &str,

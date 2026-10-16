@@ -124,7 +124,6 @@ impl MatrixInterner {
             .sum()
     }
 
-    /// The slot `matrix` hashes to, and the id already sitting there.
     fn probe(&self, matrix: &PbqpMatrix) -> (usize, Option<MatrixId>) {
         let mask = self.slots.len() - 1;
         let mut slot = hash_matrix(matrix) as usize & mask;
@@ -146,9 +145,6 @@ impl MatrixInterner {
     }
 }
 
-/// FNV-1a over the cost words. A cost matrix is hashed on every intern, so this
-/// stays a multiply per word; equal hashes are settled by comparing the
-/// matrices, and the ids do not depend on the hash at all.
 fn hash_matrix(matrix: &PbqpMatrix) -> u64 {
     const PRIME: u64 = 0x100000001b3;
     let mut hash = 0xcbf29ce484222325;
@@ -240,7 +236,6 @@ impl EdgeStore {
             .ok()
     }
 
-    /// Store an edge already oriented as `lhs < rhs`; the pair must be absent.
     fn insert(&mut self, lhs: usize, rhs: usize, matrix: MatrixId) -> u32 {
         let edge = PbqpEdge {
             lhs: lhs as u32,
@@ -497,7 +492,6 @@ impl<'a> Solver<'a> {
         }
     }
 
-    /// A matrix the problem owns, or one a reduction minted on top of it.
     fn matrix(&self, id: MatrixId) -> &PbqpMatrix {
         match id
             .0
@@ -753,8 +747,6 @@ impl<'a> Solver<'a> {
         self.edges.degree(node)
     }
 
-    /// The node's neighborhood, in ascending neighbor order, copied out so the
-    /// caller may mutate the solver while walking it.
     fn neighbors(&self, node: usize) -> Vec<Adjacent> {
         self.edges.neighbors(node).to_vec()
     }
@@ -861,11 +853,6 @@ impl<'a> Solver<'a> {
         self.propagate_new_infinities(impossible)
     }
 
-    /// Decide a degree ≥ 3 node, where exact reductions no longer apply: force
-    /// its alternatives in [`Self::rn_order`] and backtrack out of any choice
-    /// that proves globally infeasible, so the ordering trades search time and
-    /// solution quality but never correctness — infeasibility is reported only
-    /// after every finite alternative failed.
     fn solve_rn(&mut self, node: usize) -> Result<PbqpSolution, PbqpSolveError> {
         let alternatives = self.rn_order(node);
         self.recording_undo = true;
@@ -890,8 +877,6 @@ impl<'a> Solver<'a> {
         })
     }
 
-    /// The node's still-possible alternatives, ordered by local cost: own cost
-    /// plus the best achievable neighbor cost over each incident edge.
     fn rn_order(&self, node: usize) -> Vec<usize> {
         let neighbors = self.neighbors(node);
         let mut alternatives: Vec<(usize, u64)> = self.node_costs[node]
@@ -956,9 +941,6 @@ impl<'a> Solver<'a> {
             })
     }
 
-    /// The cost `edge` charges, read from the endpoint `node`'s side. Every
-    /// reduction reaches its edges through the adjacency lists, so the matrix is
-    /// indexed directly instead of being searched for by node pair.
     #[inline]
     fn edge_cost_at(&self, edge: u32, node: usize, node_alt: usize, other_alt: usize) -> u64 {
         let edge = self.edges.edge(edge);
@@ -970,10 +952,6 @@ impl<'a> Solver<'a> {
         }
     }
 
-    /// Merge `matrix` into the edge between `lhs` and `rhs`, creating it if the
-    /// pair is not yet connected, and answer the edge it landed on. Merging
-    /// accumulates into the stored matrix in place, so R2 fill-in costs a single
-    /// pass over the fill-in matrix and no reallocation.
     fn add_or_accumulate_edge(&mut self, lhs: usize, rhs: usize, matrix: PbqpMatrix) -> u32 {
         let (a, b, matrix) = orient_matrix(
             PbqpNodeId::from_index(lhs),
@@ -1227,11 +1205,6 @@ enum Axis {
     Cols,
 }
 
-/// Subtract each line's minimum from the matrix and charge it to the owning
-/// node's alternative instead — the standard PBQP normalization, which is what
-/// makes an all-zero edge removable. Answers whether it charged an alternative;
-/// `written` says whether the matrix itself moved, which is the narrower
-/// question of whether the edge needs a fresh interned matrix.
 fn normalize_axis(
     matrix: &mut PbqpMatrix,
     costs: &mut [u64],
@@ -1460,9 +1433,6 @@ mod tests {
         assert_eq!(solution.total_cost, 3);
     }
 
-    /// Equal-cost optima must not be decided by hash iteration order: the same
-    /// problem built with its edges added in a different order must solve the
-    /// same way, or the compiler's output depends on the process's hash seed.
     #[test]
     fn solution_is_independent_of_edge_insertion_order() {
         let ring = |reversed: bool| {
@@ -1484,11 +1454,6 @@ mod tests {
         assert_eq!(ring(false), ring(true));
     }
 
-    /// An R2 fill-in that lands on an existing edge rewrites that edge's costs,
-    /// and the search may have to take them back. The odd cycle below is
-    /// arc-consistent, so only the fill-in exposes it: `center = 0` colors
-    /// `a`-`b`-`c` with two colors and fails, and `center = 1` can only be
-    /// solved if the rollback gave `b`-`c` its own matrix back.
     #[test]
     fn rollback_restores_a_matrix_an_r2_fill_in_rewrote() {
         let mut problem = PbqpProblem::new();
@@ -1556,10 +1521,6 @@ mod tests {
         assert_eq!(solution.total_cost, 1);
     }
 
-    /// Interference matrices repeat: every pair of vregs in one register class
-    /// charges the same costs. Storing that matrix once per edge is what makes a
-    /// large function's problem run out of memory, so equal matrices must share
-    /// their storage however many edges name them.
     #[test]
     fn equal_edge_matrices_share_their_storage() {
         let interference = PbqpMatrix::new(2, 2, vec![INF_COST, 0, 0, INF_COST]);
@@ -1575,8 +1536,6 @@ mod tests {
         assert_eq!(bytes(2), bytes(64));
     }
 
-    /// Sharing one matrix between edges must not let a merge into one of them
-    /// reach the other: `a-b` is charged twice, `c-d` only once.
     #[test]
     fn merging_an_edge_leaves_the_matrix_its_neighbors_share() {
         let mut problem = PbqpProblem::new();
@@ -1594,8 +1553,6 @@ mod tests {
         assert_eq!(solution.total_cost, 3);
     }
 
-    /// Two edges over the same pair are one edge charging both costs, and the
-    /// second one's orientation is the caller's, not the store's.
     #[test]
     fn repeated_edges_accumulate_in_the_stored_orientation() {
         let mut problem = PbqpProblem::new();

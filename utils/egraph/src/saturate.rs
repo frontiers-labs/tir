@@ -16,17 +16,6 @@ use crate::{ClassId, Engine, Label};
 /// grown with the frontier.
 type OpGroups = Vec<Vec<(u64, u32, u32)>>;
 
-/// The classes of Δ_height holding `op`, in the order the operator's row
-/// bucket holds them: where a rule of that height rooted on that operator can
-/// match anew.
-///
-/// Scanning the frontier once per depth beats materializing each rule's whole
-/// bucket and filtering it, because a settled round's frontier is a handful of
-/// classes while the bucket holds every term of that shape in the function.
-/// The bucket is appended to as rows are minted, and a class enters it at its
-/// first row of that operator, so ordering each group by that row reproduces
-/// the bucket's order exactly — which is the root order a match's position in
-/// the round is defined by, and so the order class ids are assigned in.
 fn op_roots<'d, L: Label>(
     eg: &Engine<L>,
     delta: &'d mut Delta<OpGroups>,
@@ -57,8 +46,6 @@ fn op_roots<'d, L: Label>(
     &groups[from..to]
 }
 
-/// The classes a semi-naive round searches `plan` at: the change frontier at the
-/// plan's height, restricted to the operator its root binds.
 fn round_roots<L: Label>(eg: &Engine<L>, plan: &Plan<L>, delta: &mut Delta<OpGroups>) -> Vec<u32> {
     match plan.root_op() {
         Some(op) => op_roots(eg, delta, plan.generic().height(), op)

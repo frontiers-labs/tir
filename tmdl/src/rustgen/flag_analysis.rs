@@ -36,15 +36,6 @@ struct BranchSemantics {
     target_symbol: u32,
 }
 
-/// Recognize the guarded-PC-write shape `if COND { PC::pc = PC::pc + …imm… }`
-/// and derive a conditional-branch rule from it: the pattern is `COND` over the
-/// instruction's register operands, and `imm` becomes the taken-target block
-/// operand. Anything else (fallthrough writes, extra state, PC in the
-/// condition) is rejected.
-/// Recognize the guarded-PC-write shape `if COND { PC::pc = …imm… }` and return
-/// the guard condition together with the single immediate operand the PC write
-/// references (the taken target). Anything else (an `else` arm, fallthrough
-/// writes, a non-immediate target) is rejected.
 fn guarded_pc_write_shape<'a>(
     inst: &'a ast::Instruction,
     operands: &[(String, Type)],
@@ -176,7 +167,6 @@ struct FlagReaderSemantics {
     dest_operand: String,
 }
 
-/// The statement list of a behavior body (peeling wrapper blocks).
 fn behavior_statements(behavior: &ast::Expr) -> Vec<&ast::Expr> {
     let mut body = behavior;
     while let ast::Expr::Block(block) = body {
@@ -189,11 +179,6 @@ fn behavior_statements(behavior: &ast::Expr) -> Vec<&ast::Expr> {
     vec![body]
 }
 
-/// Recognize a flag definer: every behavior statement assigns a distinct
-/// status-flag register of one class, each flag's value a pure function of the
-/// encoded register operands. ISA parameters (`self.XLEN`) resolve to their
-/// concrete values here — the composed condition is proved against a canonical
-/// comparison, so no width expression survives into the emitted pattern.
 fn analyze_flag_definer_semantics(
     inst: &ast::Instruction,
     operands: &[(String, Type)],
@@ -293,9 +278,6 @@ fn analyze_flag_definer_semantics(
     })
 }
 
-/// Recognize a flag-guarded branch: the guarded-PC-write shape whose condition
-/// reads only status-flag registers of one class and whose sole encodable
-/// operand is the taken target.
 fn analyze_flag_branch_semantics(
     inst: &ast::Instruction,
     operands: &[(String, Type)],
@@ -351,13 +333,6 @@ fn analyze_flag_branch_semantics(
     })
 }
 
-/// Recognize a flag-reading value instruction: one register defined as `if
-/// <cond> { then } else { else }` whose condition reads only status-flag
-/// registers of one class. The arms may read encoded value operands.
-///
-/// The value is lowered exactly as a plain value rule would be — `self.XLEN`
-/// kept as a width symbol rather than const-folded — so the emitted arms are
-/// the width-polymorphic `slt`-style form the bool-materialize bridge matches.
 fn analyze_flag_reader_semantics(
     inst: &ast::Instruction,
     operands: &[(String, Type)],
@@ -457,10 +432,6 @@ fn analyze_flag_reader_semantics(
     })
 }
 
-/// Copy `node`'s subgraph, renumbering each distinct symbol id through `remap`
-/// to a fresh id from `next`. Used to lift a reader's arm symbols (its `XLEN`
-/// width var) above the two comparison-operand symbols they are spliced beside,
-/// so the two symbol spaces do not collide.
 fn copy_subgraph_remap_symbols(
     dst: &mut tir_symbolic::sem::SemGraph,
     src: &tir_symbolic::sem::SemGraph,
@@ -478,8 +449,6 @@ fn copy_subgraph_remap_symbols(
     })
 }
 
-/// Copy `node`'s subgraph into `dst`, rewriting each symbol id through `remap`.
-/// A symbol `remap` answers `None` for is copied unchanged.
 fn copy_subgraph_remapping(
     dst: &mut tir_symbolic::sem::SemGraph,
     src: &tir_symbolic::sem::SemGraph,
@@ -504,12 +473,6 @@ fn copy_subgraph_remapping(
     )
 }
 
-/// Copy a flag reader's arm. For a boolean materializer (`zext(0/1, W)`), replace the
-/// widen-to width with a fresh capture symbol so the pattern matches the boolean
-/// regardless of the destination register width. Without this an 8-bit `setcc`
-/// arm (`zext(1, 8)`) fails to match the width-1 boolean the bridge produces,
-/// while an `XLEN`-symbol arm (arm64 `cset`) already generalizes — the value is a
-/// boolean 0/1, the register width is not part of what selects it.
 fn copy_reader_arm(
     dst: &mut tir_symbolic::sem::SemGraph,
     src: &tir_symbolic::sem::SemGraph,
@@ -544,10 +507,6 @@ fn copy_reader_arm(
     copy_subgraph_remap_symbols(dst, src, arm_root, &mut HashMap::new(), remap, next)
 }
 
-/// Copy the branch guard from `guard` into `dst`, replacing each status-flag
-/// read (a symbol in `substitute`) with a copy of the definer's expression for
-/// that flag. The definer's operand symbols survive verbatim, so the composed
-/// condition is a function of the definer's encoded operands alone.
 fn compose_guard_with_definer(
     dst: &mut tir_symbolic::sem::SemGraph,
     guard: &tir_symbolic::sem::SemGraph,
@@ -574,8 +533,6 @@ fn compose_guard_with_definer(
     })
 }
 
-/// Operator kinds the constant folder may evaluate: pure scalar computations
-/// with a defined interpreter semantics.
 fn foldable_kind(kind: &tir_symbolic::lang::SymKind) -> bool {
     use tir_symbolic::lang::SymKind as K;
     matches!(
@@ -599,10 +556,6 @@ fn foldable_kind(kind: &tir_symbolic::lang::SymKind) -> bool {
     )
 }
 
-/// Fold maximal constant subtrees into constant leaves. Width expressions like
-/// `self.XLEN - 1` lower (with the concrete ISA parameter) to `Sub(64, 1)`;
-/// the SMT oracle's bit-blaster needs them as literal extract bounds and
-/// extension widths, so they are evaluated here with the reference interpreter.
 fn fold_constant_subtrees(
     src: &tir_symbolic::sem::SemGraph,
     root: tir_adt::NodeId,
@@ -683,8 +636,6 @@ fn fold_constant_subtrees(
     (dst, folded_root)
 }
 
-/// `kind(s0, s1)` (or swapped) — a candidate canonical comparison over the
-/// definer's two operand symbols.
 fn comparison_candidate(
     kind: tir_symbolic::lang::SymKind,
     swap: bool,
@@ -790,8 +741,6 @@ fn masked_widths(
         .collect()
 }
 
-/// The `cmpf` graph for an equality predicate: floating equality is compound,
-/// so it has no single-kind candidate.
 fn floating_equality_candidate(
     predicate: tir_adt::Predicate,
 ) -> (tir_symbolic::sem::SemGraph, tir_adt::NodeId) {
@@ -801,12 +750,6 @@ fn floating_equality_candidate(
     (g, root)
 }
 
-/// The comparison the composed flag condition is provably equivalent to, if
-/// any: the canonical predicates `cmpi` lowers to, in both operand orders.
-/// Integer candidates pass a fuzz filter before the SMT proof. Float candidates
-/// go directly through the type-aware SMT proof so IEEE comparison semantics are
-/// retained, and use the compound `cmpf` graphs for equality. A wrong flag
-/// formula derives no rule instead of a miscompiling one.
 fn find_equivalent_comparison(
     composed: &tir_symbolic::sem::SemGraph,
     symbols: &ComparisonSymbols,
@@ -851,8 +794,6 @@ fn find_equivalent_comparison(
         })
 }
 
-/// A register class's architectural width: a literal `WIDTH`, or `WIDTH =
-/// self.PARAM` resolved through the instruction's ISA parameter view.
 fn register_class_width_with_isa(
     files: &[ast::File],
     class_name: &str,
@@ -892,8 +833,6 @@ impl ComparisonSymbols {
     }
 }
 
-/// The IEEE binary format of a float register class of `width` bits, or the
-/// plain bit-vector type for an integer class.
 fn operand_type(
     terms: &tir_symbolic::term::Terms,
     files: &[ast::File],
@@ -956,8 +895,6 @@ fn definer_comparison_symbols(
     })
 }
 
-/// The pattern symbols bound to a definer's immediate operands (there is at most
-/// one), for canonicalization and immediate-range enforcement.
 fn definer_immediate_symbols(d: &FlagInst<'_>, d_sem: &FlagDefinerSemantics) -> HashSet<u32> {
     d.ops
         .iter()
@@ -978,10 +915,6 @@ struct FlagInst<'a> {
     isa_param_values: HashMap<String, i64>,
 }
 
-/// Build an flag-definer prelude spec (materializing the flag-setting
-/// instruction ahead of its consumer) once per definer, and return its tokens,
-/// shim ident, and the definer's operand register constraints. Shared by branch
-/// and reader pair emission, deduping through `emitted_preludes`.
 fn emit_flag_definer_prelude(
     d: &FlagInst<'_>,
     d_sem: &FlagDefinerSemantics,

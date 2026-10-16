@@ -72,7 +72,6 @@ pub fn distances(
     )
 }
 
-/// Every lexicographically positive direction vector of `depth` components.
 fn enumerate(depth: usize) -> Vec<Vec<Direction>> {
     let mut all = vec![Vec::new()];
     for _ in 0..depth {
@@ -98,7 +97,6 @@ fn enumerate(depth: usize) -> Vec<Vec<Direction>> {
     all
 }
 
-/// The distances one direction admits at one depth.
 fn span(extents: &[i128], directions: &[Direction], depth: usize) -> (i128, i128) {
     match directions[depth] {
         Direction::Zero => (0, 0),
@@ -107,7 +105,6 @@ fn span(extents: &[i128], directions: &[Direction], depth: usize) -> (i128, i128
     }
 }
 
-/// Whether the equation can hold anywhere in the box a direction vector fixes.
 fn admits(
     coefficients: &[i128],
     extents: &[i128],
@@ -126,7 +123,6 @@ fn admits(
     })
 }
 
-/// The values `Σ coefficients[d]·δ_d` reaches over the box, leaving `skip` out.
 fn sum_range(
     coefficients: &[i128],
     extents: &[i128],
@@ -146,8 +142,6 @@ fn sum_range(
     (low, high)
 }
 
-/// Whether some multiple of `divisor` lies in `[low, high]`. A divisor of zero
-/// leaves the sum pinned at zero.
 fn divides_something(divisor: i128, low: i128, high: i128) -> bool {
     if divisor == 0 {
         return low <= 0 && 0 <= high;
@@ -163,7 +157,6 @@ fn gcd(a: i128, b: i128) -> i128 {
     a
 }
 
-/// What the admitted directions leave provable about depth `d`.
 fn summarize(
     coefficients: &[i128],
     extents: &[i128],
@@ -186,8 +179,6 @@ fn summarize(
     }
 }
 
-/// The distances depth `d` can take inside one direction's box, once the
-/// equation has narrowed them.
 fn reachable(
     coefficients: &[i128],
     extents: &[i128],

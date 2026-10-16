@@ -10,8 +10,6 @@ use tir::{RegionId, TypeId, ValueId};
 
 use crate::{TIR_INVALID_ID, into_cstring, op_instance, set_error, with_context};
 
-/// Discriminant codes returned by [`tir_op_attribute_kind`]; kept in sync with
-/// the `TIR_ATTR_*` macros injected into the generated header.
 fn attr_kind_code(value: &AttributeValue) -> i32 {
     match value {
         // A predicate is a string to a C consumer: it reads and prints as one.
@@ -34,8 +32,6 @@ fn attr_kind_code(value: &AttributeValue) -> i32 {
     }
 }
 
-/// The `i`-th attribute value of op `op`, or `None` (with an error set) if the
-/// op or index is invalid.
 fn attr_value(ctx: &tir::Context, op: u32, i: usize) -> Option<AttributeValue> {
     let op = op_instance(ctx, op)?;
     match op.attributes().get(i) {

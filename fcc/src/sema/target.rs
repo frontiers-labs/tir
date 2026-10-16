@@ -125,8 +125,6 @@ impl TargetProfile {
         Some(tir::attributes::AttributeValue::LayoutSpec(spec.into()))
     }
 
-    /// The C integer kind of a pointer difference, and of an object size. A
-    /// 32-bit layout ranks them as `int`, every wider one as `long`.
     pub(super) fn pointer_sized_integer(self) -> IntegerKind {
         if self.pointer_width() == 32 {
             IntegerKind::Int

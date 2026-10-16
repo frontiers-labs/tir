@@ -53,8 +53,6 @@ struct NameScope {
 }
 
 impl ParseState {
-    /// Append a node, spanning it at the byte position of token index `tok`
-    /// (the first token of the construct being reduced).
     fn add(&mut self, kind: AstKind, tok: usize) -> NodeId {
         let span = self
             .spans
@@ -173,9 +171,6 @@ pub fn parse(
     }
 }
 
-/// Convert a chumsky [`Rich`] error (spanned over token indices) into a
-/// [`Diagnostic`] spanned at the offending token's source position. An error
-/// past the final token (`found` is `None`) is reported at the last token.
 fn rich_to_diagnostic(
     err: &Rich<'_, Token, Span>,
     byte_spans: &[crate::diagnostics::Span],

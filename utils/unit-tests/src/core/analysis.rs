@@ -34,7 +34,6 @@ fn test_op(context: &Context) -> OpId {
     ops::module(context, None).build().id()
 }
 
-/// Appends an op to `module`'s body, bumping its version.
 fn edit(context: &Context, module: OpId) {
     let body = context.get_op(module).regions()[0];
     let block = context

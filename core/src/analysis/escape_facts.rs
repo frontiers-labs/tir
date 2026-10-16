@@ -104,7 +104,6 @@ impl FactDomain for Uses<'_> {
     }
 }
 
-/// What `instance`'s use of `operand` does with the address it holds.
 fn use_of(instance: &OpHandle, operand: ValueId) -> Escape {
     if instance.is::<PtrAddOp>() || instance.is::<CmpOp>() {
         return Escape::Local;

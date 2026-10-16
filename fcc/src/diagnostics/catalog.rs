@@ -509,8 +509,6 @@ impl Code {
     }
 }
 
-/// Message for a `#error`/`#warning`: the directive's own text, or the code's
-/// title when the directive carried none.
 fn directive_message(code: Code, text: String) -> String {
     if text.is_empty() {
         code.title().to_string()

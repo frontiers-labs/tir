@@ -199,8 +199,6 @@ fn native_suite_records_validates_and_compares() {
     assert!(!marker.exists());
 }
 
-/// The Cachegrind parent starts this binary once per function with
-/// `--count-function`. The child must run that routine's counted region once.
 #[test]
 fn a_counting_child_runs_only_the_requested_function_once() {
     let child = |function: &str| {

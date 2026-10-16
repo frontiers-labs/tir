@@ -25,8 +25,6 @@ pub fn enabled() -> bool {
             .get_or_init(|| std::env::var_os("TIR_MEM_STATS").is_some_and(|value| value != "0"))
 }
 
-/// Peak and current resident set in kB, as reported by the kernel. Zero on
-/// platforms without `/proc`.
 fn sample() -> (u64, u64) {
     let Ok(status) = std::fs::read_to_string("/proc/self/status") else {
         return (0, 0);

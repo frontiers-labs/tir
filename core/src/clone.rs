@@ -82,8 +82,6 @@ pub fn clone_nodes_ops_into(
     (ops, results)
 }
 
-/// Blocks are created before any operation is copied, so a branch to a block
-/// later in the region already has its copy to name.
 fn clone_region_into(context: &Context, region: RegionId, mapping: &mut Mapping) -> RegionId {
     if context.get_region(region).is_nodes() {
         return clone_nodes_region_into(context, region, mapping);
@@ -120,9 +118,6 @@ fn clone_region_into(context: &Context, region: RegionId, mapping: &mut Mapping)
     clone.id()
 }
 
-/// An unordered region has no blocks to create first: its ports are declared up
-/// front and its operations are copied in evaluation order, so every reference a
-/// copy makes already names the copy it should.
 fn clone_nodes_region_into(context: &Context, region: RegionId, mapping: &mut Mapping) -> RegionId {
     let source = context.get_region(region);
     let ports: Vec<crate::Value> = source

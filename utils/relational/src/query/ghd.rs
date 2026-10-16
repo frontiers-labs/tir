@@ -21,17 +21,6 @@ pub(super) struct Bag {
 /// for a decomposition.
 const EXHAUSTIVE: usize = 8;
 
-/// The decomposition of a run whose atoms read the variables `edges`, root
-/// first and each bag after its parent; the root holds the run's first atom.
-///
-/// An atom whose variables another atom reads too goes in that atom's bag,
-/// where it is intersected instead of passed a separator. Over the rest, an
-/// acyclic run is its join tree, one atom per bag. A cyclic one takes the
-/// partition into bags of fewest atoms in the largest bag, then of fewest
-/// bags, then the first in atom order, among those whose bags form a tree,
-/// none of whose variables lie within another's, and each of whose bags of
-/// several atoms is itself cyclic: atoms that are not are better joined
-/// across bags.
 pub(super) fn decompose(edges: &[u64]) -> Vec<Bag> {
     let n = edges.len();
     let covers =
@@ -197,8 +186,6 @@ mod tests {
         assert!(join_tree(&chain).is_some());
     }
 
-    /// Two triangles joined by a bridge: each triangle a bag, the bridge a
-    /// bag between them, separated by the variable it shares with each.
     #[test]
     fn two_triangles_and_a_bridge_are_three_bags() {
         let (a, b, x, c, d, e) = (0, 1, 2, 3, 4, 5);

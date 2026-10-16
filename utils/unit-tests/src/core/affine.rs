@@ -36,7 +36,6 @@ fn a_form_ranges_over_what_its_variables_do() {
     assert_eq!(form.range(&[(0, 3), (-2, 2)], &[]), (-1, 15));
 }
 
-/// Every value an `i8` form can take, against what the width actually holds.
 #[test]
 fn the_wrap_check_is_exact_at_width_eight() {
     for low in -200i128..200 {
@@ -58,8 +57,6 @@ fn the_gcd_test_refuses_what_no_multiple_reaches() {
     );
 }
 
-/// `8·δ ∈ [37, 43]` holds for `δ = 5` alone: the ends round inward, whichever
-/// way the coefficient points.
 #[test]
 fn the_distance_interval_rounds_inward() {
     assert_eq!(
@@ -125,7 +122,6 @@ fn extents_widen_the_target_to_the_bytes_an_access_covers() {
     );
 }
 
-/// §7.1: a red view is read off the IR and allocates nothing into it.
 #[test]
 fn building_a_view_allocates_nothing() {
     let (context, module) = fixtures::parse(
@@ -179,9 +175,6 @@ fn a_loop_that_does_not_count_has_no_view() {
     assert!(AffineView::build(&context, module.id()).is_none());
 }
 
-/// Strip-mining an unordered counted loop: the whole tiles run as a counted
-/// loop over a graph holding the inner loop, the remainder as a copy entered
-/// where the tiles stopped, and the program computes what it did.
 #[test]
 fn strip_mining_an_unordered_loop_keeps_its_sum() {
     use tir::interp::{self, Value};
@@ -261,8 +254,6 @@ fn strip_mining_an_unordered_loop_keeps_its_sum() {
     assert_eq!(before, after);
 }
 
-/// Compare the rewritten loop to bit-vector arithmetic at entry, one step,
-/// and after wraparound, for every possible invariant i8 coefficient.
 #[test]
 fn modular_recurrence_preserves_base_step_and_wrapped_exits() {
     use tir::interp::{self, Value};

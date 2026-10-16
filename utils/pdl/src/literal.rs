@@ -28,7 +28,6 @@ fn span() -> TokenStream {
     quote!(tir_pdl::Span::from(0..0))
 }
 
-/// A variant of a fieldless enum, by the name `Debug` prints it under.
 fn variant(ty: &str, value: &impl std::fmt::Debug) -> TokenStream {
     let (ty, value) = (format_ident!("{ty}"), format_ident!("{value:?}"));
     quote!(tir_pdl::#ty::#value)

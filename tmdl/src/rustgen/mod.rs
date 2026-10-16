@@ -182,9 +182,6 @@ pub fn generate_rust_modules<'a>(
     })
 }
 
-/// Generated instruction tables are data spelled as code, so the size and
-/// branching lints have no maintainer to serve here; the .tmdl source is what
-/// gets reviewed.
 pub(crate) fn generated_lint_allow() -> proc_macro2::TokenStream {
     quote! { #[allow(clippy::cognitive_complexity, clippy::too_many_lines)] }
 }

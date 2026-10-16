@@ -273,11 +273,6 @@ impl CmpIOp {
     }
 }
 
-/// The comparison in canonical form: `sgt`/`sle`/`ugt`/`ule` become the
-/// swapped-operand `Lt`/`Ge`/`ULt`/`UGe`, matching how TMDL lowers target
-/// behaviors, so only six comparison kinds ever appear in patterns.
-/// `unsigned_only` offers no semantics for a signed comparison, which an
-/// address ordering has no meaning for.
 pub(crate) fn compare_expr(
     g: &mut tir::sem::SemGraph,
     predicate: tir::attributes::Predicate,

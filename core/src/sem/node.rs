@@ -1160,14 +1160,12 @@ impl SemNode {
         self.ty.filter(|_| !pointer)
     }
 
-    /// The integer literal this node is, as a constant of the vocabulary.
     fn literal(&self) -> Option<&APInt> {
         (self.kind == SymKind::Constant)
             .then(|| self.int())
             .flatten()
     }
 
-    /// The semantic operator whose offset laws this node has.
     fn law(&self) -> Option<SymKind> {
         match &self.kind {
             Kind::Sym(kind) => Some(*kind),
@@ -1177,7 +1175,6 @@ impl SemNode {
     }
 }
 
-/// Hashes exactly the fields compared by [`SemNode`]'s label equality.
 fn hash_label(node: &SemNode, state: &mut impl Hasher) {
     node.kind.hash_into(state);
     match node.kind {

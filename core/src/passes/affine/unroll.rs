@@ -29,7 +29,6 @@ pub(super) fn run(context: &Context, root: OpId) -> Result<(), PassError> {
     Ok(())
 }
 
-/// The innermost loop of a nest, where it is short and small enough to copy.
 fn worth_unrolling<'a>(context: &Context, view: &'a AffineView) -> Option<&'a Loop> {
     let level = view.loops.last()?;
     let trip = level.trip?;
@@ -44,8 +43,6 @@ fn worth_unrolling<'a>(context: &Context, view: &'a AffineView) -> Option<&'a Lo
         .then_some(level)
 }
 
-/// Replace the loop with one copy of its body per iteration, threading the
-/// carried ports from each copy into the next.
 fn unroll(context: &Context, level: &Loop) -> Result<(), PassError> {
     let (lower, step, trip) = (
         level.lower.as_constant().expect("a constant lower bound"),
@@ -90,8 +87,6 @@ fn unroll(context: &Context, level: &Loop) -> Result<(), PassError> {
     erase_unread(context, &copies)
 }
 
-/// One copy of the body, joining the region the loop stands in; the values its
-/// next iteration would take are what the copy hands on.
 fn copy_body_nodes(
     context: &Context,
     destination: crate::RegionId,

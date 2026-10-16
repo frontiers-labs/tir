@@ -568,7 +568,6 @@ macro_rules! cmp_op {
     };
 }
 
-/// Widen `v` to `width` (sign- or zero-extend per its signedness); no-op if already wide enough.
 fn widen(v: APInt, width: u64) -> APInt {
     if v.width() >= width {
         v
@@ -579,8 +578,6 @@ fn widen(v: APInt, width: u64) -> APInt {
     }
 }
 
-/// Widen the narrower of two operands to a common width; behavior expressions mix
-/// wide values with bare narrow literals rather than matching widths exactly.
 fn coerce_ints(a: APInt, b: APInt) -> (APInt, APInt) {
     let width = a.width().max(b.width());
     (widen(a, width), widen(b, width))
@@ -607,12 +604,6 @@ fn scalar_equal(lhs: Value, rhs: Value) -> bool {
     }
 }
 
-/// Evaluate an integer division/remainder kind with SMT-LIB div-by-zero rules,
-/// matching the bitblaster: `bvudiv x 0 = ~0`, `bvsdiv x 0` is `-1` for a
-/// non-negative dividend and `1` otherwise, and both remainders return the
-/// dividend. A nonzero divisor defers to APInt, whose signed ops already wrap
-/// `MIN / -1`. `None` for any other kind, or for `Div` over floats (handled by
-/// the float path).
 fn eval_divrem(kind: SymKind, c: &impl Fn(usize) -> Value) -> Option<Value> {
     let (signed, quotient) = match kind {
         SymKind::Div => (true, true),
@@ -644,8 +635,6 @@ fn eval_divrem(kind: SymKind, c: &impl Fn(usize) -> Value) -> Option<Value> {
     Some(Value::Int(result))
 }
 
-/// The IEEE binary format of a `width`-bit register value, for the float kinds'
-/// bit-reinterpreting integer path. Only binary32/binary64 registers exist.
 fn float_format(width: u64, op: &str) -> (u32, u32) {
     match width {
         16 => (5, 10),
@@ -655,9 +644,6 @@ fn float_format(width: u64, op: &str) -> (u32, u32) {
     }
 }
 
-/// Binary IEEE arithmetic: over `Float` operands directly (constant folding);
-/// over `Int` operands the register bits are reinterpreted in the binary format
-/// of the operand width and the result is returned as bits of the same width.
 fn float_binop(lhs: Value, rhs: Value, f: fn(&APFloat, &APFloat) -> APFloat, op: &str) -> Value {
     match (lhs, rhs) {
         (Value::Float(a), Value::Float(b)) => Value::Float(f(&a, &b)),
@@ -672,9 +658,6 @@ fn float_binop(lhs: Value, rhs: Value, f: fn(&APFloat, &APFloat) -> APFloat, op:
     }
 }
 
-/// Evaluate a `Split` node: cut raw bits into `n` integer lanes, lane 0 from the low bits.
-/// Reinterpret a value as raw bits: integers (e.g. a register file entry) are
-/// their two's-complement bit pattern.
 fn as_raw_bits(value: Value) -> RawBits {
     match value {
         Value::RawBits(bits) => bits,
@@ -725,7 +708,6 @@ fn split_bits_lanes(value: Value, n: usize, width: usize) -> Value {
     Value::Iterator(lanes)
 }
 
-/// Evaluate an `IterConcat` node: join lanes into one raw-bits value, lane 0 low. Inverse of `Split`.
 fn concat_lanes(value: Value) -> Value {
     let Value::Iterator(lanes) = value else {
         panic!("concat requires an iterator operand");

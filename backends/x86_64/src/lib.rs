@@ -40,8 +40,6 @@ mod isa {
         })
     }
 
-    /// Pre-RA: materialize an `fp.constant` that survived instruction selection
-    /// into `movabs r64, bits` + `movq xmm, r64`.
     fn lower_float_constant(
         context: &tir::Context,
         op: &tir::OperationRef,
@@ -71,10 +69,6 @@ mod isa {
         Ok(true)
     }
 
-    /// Emit the branch-if-nonzero fallback for a condition no branch rule
-    /// fused: `test cond, 1` + `jne dest`. The condition is a width-1 value, so
-    /// only bit 0 of its register is defined — a whole-register `test` would
-    /// branch on undefined bits.
     fn emit_branch_nonzero(
         context: &tir::Context,
         condition: tir::ValueId,
@@ -95,8 +89,6 @@ mod isa {
         ]
     }
 
-    /// Pre-RA: materialize a `constant` that survived instruction selection
-    /// (one no instruction folded as an immediate) into `mov rd, imm32`.
     fn lower_constant(
         context: &tir::Context,
         op: &tir::OperationRef,
@@ -127,8 +119,6 @@ mod isa {
         Ok(true)
     }
 
-    /// Pre-RA: materialize an `asm.symbol_address` as `lea rd, [rip + sym]`.
-    /// The encoder leaves the disp32 as a fixup emitted with R_X86_64_PC32.
     fn lower_symbol_address(
         context: &tir::Context,
         op: &tir::OperationRef,
@@ -149,7 +139,6 @@ mod isa {
         Ok(true)
     }
 
-    /// A register-to-register `mov dst, src`.
     fn mv(context: &tir::Context, dst: RegSlot, src: RegSlot) -> Box<dyn Operation> {
         let builder = MovOpBuilder::new(context);
         let builder = tir::reg_use!(builder, src, src);
@@ -236,7 +225,6 @@ mod isa {
         }
     }
 
-    /// Post-RA: `vret` becomes `ret`; `vbr` becomes `jmp dest`.
     fn finalize_virtual_ops(
         context: &tir::Context,
         op: &tir::OperationRef,
@@ -553,9 +541,6 @@ mod isa {
     const R_X86_64_64: u32 = 1;
     const R_X86_64_PC8: u32 = 15;
 
-    /// The mnemonic an op name encodes. The base-ISA (`_legacy`) forms of the
-    /// pc-relative branches share their 64-bit counterpart's encoding, so they
-    /// relocate and measure their displacement identically.
     fn branch_mnemonic(op: &str) -> &str {
         op.strip_suffix("_legacy").unwrap_or(op)
     }
@@ -678,8 +663,6 @@ mod isa {
         }
     }
 
-    /// Resolve `--mcpu` to the machine model the compiler and the instrument
-    /// both schedule against. `generic` selects no machine.
     fn resolve_machine(mcpu: &str, features: &[Feature]) -> Result<Option<String>, String> {
         let name = mcpu.trim().to_ascii_lowercase();
         if name == "generic" {

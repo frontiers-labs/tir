@@ -8,7 +8,6 @@ use tir::{
 
 use super::fixtures::{self, module_ops};
 
-/// The first function of `source` and the locations its stores write, in order.
 fn stores(source: &str) -> (Context, OpId, Vec<ValueId>) {
     let (context, module) = fixtures::parse(source);
     let func = *module_ops(&context, module.id())
@@ -63,8 +62,6 @@ fn escape_through_call_argument_and_store_to_memory() {
     assert_eq!(escapes.escape(z), Escape::Local);
 }
 
-/// The object a pointer names is read off the IR the converter sees: an
-/// ordered function whose parameters are its entry block's arguments.
 #[test]
 fn object_base_reads_ordered_parameters_and_allocations() {
     let (context, _, locations) = stores(
@@ -102,8 +99,6 @@ fn object_base_reads_ordered_parameters_and_allocations() {
     assert!(matches!(base(3), Some(Base::Alloca(_))));
 }
 
-/// A slot whose address only ever names its own accesses is one nothing else
-/// in the function can reach; one handed to a call is not.
 #[test]
 fn accessed_only_sees_the_address_leave() {
     let (context, _, locations) = stores(

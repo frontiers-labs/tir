@@ -124,8 +124,6 @@ impl Rewrite for InstCombine {
     }
 }
 
-/// What spelling `node` over `operands` costs: the op, and one add for each
-/// operand at an offset that is not a literal.
 fn spelling_cost(eg: &Engine<Node>, node: &Node, operands: &[Ref]) -> u64 {
     cost(node)
         + operands
@@ -134,10 +132,6 @@ fn spelling_cost(eg: &Engine<Node>, node: &Node, operands: &[Ref]) -> u64 {
             .count() as u64
 }
 
-/// A loop or a gate carrying a chain its body never names carries nothing: the
-/// port hands back the memory the operation was entered on, so it goes with the
-/// chain. What leaves such a port behind is promotion, whose slot values move
-/// onto the value ports and leave the chain empty.
 fn drop_untouched_chains(context: &Context, region: RegionId) {
     for op in context.get_region(region).op_ids() {
         for sub in context.get_op(op).regions() {
@@ -174,8 +168,6 @@ fn drop_untouched_chains(context: &Context, region: RegionId) {
     }
 }
 
-/// The `ordinal`-th chain `op` carries, if nothing under the op names it:
-/// every region hands the port straight back, and nothing else reads it.
 fn carries_nothing(context: &Context, op: OpId, ordinal: usize) -> Option<StateChain> {
     let handle = context.get_op(op);
     let chain = state_chains(context, &handle).swap_remove(ordinal);
@@ -202,9 +194,6 @@ fn carries_nothing(context: &Context, op: OpId, ordinal: usize) -> Option<StateC
     unnamed.then_some(chain)
 }
 
-/// A slot whose address reaches only writes is a memory nothing observes: each
-/// write leaves the state it was handed, and the sweep takes the writes and
-/// the allocation with nothing left demanding them.
 fn forget_write_only_slots(context: &Context, body: RegionId) {
     let mut renames: IdMap<ValueId, ValueId> = IdMap::new();
     for op in context.get_region(body).op_ids() {
@@ -233,8 +222,6 @@ fn forget_write_only_slots(context: &Context, body: RegionId) {
     context.rename_region_results_batch(body, &renames);
 }
 
-/// Whether every use of `address`, through pointer arithmetic, is as the
-/// location of a write or of a read nothing demands; the writes are collected.
 fn only_written(
     context: &Context,
     scope: RegionId,
@@ -273,10 +260,6 @@ fn only_written(
     }) && !published(context, scope, address)
 }
 
-/// Erase every operation under `body` its region's results do not demand.
-/// Demand runs from the callable's results through operands and nested
-/// regions' results, dependencies included: what an effect leaves behind is
-/// what demands it.
 pub(crate) fn sweep(context: &Context, body: RegionId) -> Result<(), PassError> {
     let demanded = crate::passes::demanded_ops(context, &[body]);
     sweep_demanded(context, body, &demanded)

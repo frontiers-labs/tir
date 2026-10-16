@@ -528,7 +528,6 @@ impl<L: Label> Plan<L> {
         &self.query
     }
 
-    /// The compiled plan.
     pub(crate) fn generic(&self) -> &rel::Plan {
         &self.plan
     }
@@ -553,8 +552,6 @@ impl<L: Label> Plan<L> {
         }
     }
 
-    /// The operator the root atom binds, or `None` when the root binds no row
-    /// or a template of no one bucket.
     pub(crate) fn root_op(&self) -> Option<u64> {
         self.root_op
     }
@@ -603,8 +600,6 @@ impl<L: Label> Plan<L> {
         matches
     }
 
-    /// Extend `out` by what parameter `param` resolves to in `eg`, among the
-    /// labels met since `since` labels.
     pub(crate) fn resolve(
         &self,
         eg: &Engine<L>,
@@ -637,7 +632,6 @@ impl<L: Label> Plan<L> {
         }
     }
 
-    /// Run host call `id` over `args`, decoding the words that name terms.
     pub(crate) fn call(
         &self,
         eg: &Terms<'_, L>,
@@ -746,8 +740,6 @@ mod tests {
         }
     }
 
-    /// `f(g(?1), ?2)` with the atoms written parent-last, so ordering has to do
-    /// something.
     fn f_of_g() -> Query<Term> {
         Query::tree(
             4,
@@ -865,8 +857,6 @@ mod tests {
         assert_eq!(any_unary(&[2], &[3, 1, 0]), found);
     }
 
-    /// Every assignment of `query`'s variables to classes that satisfies every
-    /// atom, found by trying all of them.
     fn brute_force(eg: &Engine<Term>, query: &Query<Term>) -> Vec<Vec<ClassId>> {
         let classes: Vec<ClassId> = eg.class_ids().collect();
         let mut out = Vec::new();
@@ -913,8 +903,6 @@ mod tests {
         }
     }
 
-    /// A negated conjunction blocks a match whose blocker no round created —
-    /// it is read against the whole relation, never a delta.
     #[test]
     fn a_negated_atom_blocks_a_match_whatever_round_made_it() {
         let mut eg = Engine::new();
@@ -943,7 +931,6 @@ mod tests {
         assert_eq!(found[0].root, free);
     }
 
-    /// A second root reached from an operand the first bound.
     #[test]
     fn a_sideways_atom_is_reached_through_a_bound_operand() {
         let mut eg = Engine::new();
@@ -972,7 +959,6 @@ mod tests {
         assert_eq!(found[0].binding(3), Some(g.into()));
     }
 
-    /// `f(?1, ?2)` where `?1` is a literal below ten.
     #[test]
     fn a_guard_runs_as_soon_as_its_scalars_are_bound() {
         let mut eg = Engine::new();
@@ -1064,7 +1050,6 @@ mod tests {
         assert_eq!(values, [7, 9]);
     }
 
-    /// `g(?a)` at a 32-bit carrier, with `?a` read as a base and an offset.
     fn g_at_offset(
         extra: Vec<Atom<Term>>,
         guards: Vec<Guard>,
@@ -1204,8 +1189,6 @@ mod tests {
         );
     }
 
-    /// A class whose e-node sits at an offset from it is matched at that
-    /// offset, and a nested atom matches only the reference its parent names.
     #[test]
     fn the_root_binds_each_row_at_its_own_offset() {
         let (mut eg, x, y) = typed_graph();
@@ -1354,7 +1337,6 @@ mod tests {
         );
     }
 
-    /// A term over three leaves and three operators, one of them commutative.
     fn term_strategy() -> impl Strategy<Value = Vec<(String, Vec<usize>)>> {
         prop::collection::vec(
             (
@@ -1371,8 +1353,6 @@ mod tests {
         )
     }
 
-    /// Build an engine from `recipe`: each entry names an operator and the
-    /// earlier entries its operands, wrapped into range.
     fn build(recipe: &[(String, Vec<usize>)]) -> (Engine<Term>, Vec<ClassId>) {
         let mut eg = Engine::new();
         let mut made: Vec<ClassId> = Vec::new();

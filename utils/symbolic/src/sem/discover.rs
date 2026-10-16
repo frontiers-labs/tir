@@ -293,11 +293,6 @@ fn check_counterexample<A>(
     })
 }
 
-/// Search a bounded set of typed scalar inputs for a concrete refutation.
-///
-/// This can disprove an obligation, but absence of a counterexample is not a
-/// proof. The search only evaluates total operations in the interpreter's
-/// checked floating-point subset.
 fn find_typed_counterexample<A>(
     terms: &Terms,
     lhs: &SemGraph<A>,
@@ -471,8 +466,6 @@ fn proof_outcome(outcome: SolveOutcome) -> ProofOutcome {
     }
 }
 
-/// The `lhs != rhs` graph both sides share, with the copied roots. `None` if
-/// either side is empty.
 fn disequality<A>(lhs: &SemGraph<A>, rhs: &SemGraph<A>) -> Option<(OracleGraph, NodeId, NodeId)> {
     let (lhs_root, rhs_root) = (lhs.root()?, rhs.root()?);
     let mut g = OracleGraph::new();
@@ -497,10 +490,6 @@ fn semantic_width(terms: &Terms, ty: TypeId) -> Option<u32> {
     terms.bit_width(ty).map(|width| width as u32)
 }
 
-/// Copy the subgraph under `node` into `dst`. Symbol leaves are shared through
-/// `symbols` across *both* sides of the equivalence — the bit-blaster allocates
-/// fresh literals per node, so a symbol duplicated per side would leave the two
-/// occurrences unconstrained against each other.
 fn copy_reachable<A>(
     src: &SemGraph<A>,
     node: NodeId,
@@ -535,7 +524,6 @@ fn copy_reachable<A>(
     copied
 }
 
-/// Mixed-radix odometer over the per-symbol value sets; returns false when wrapped.
 fn advance(assignment: &mut [usize], value_sets: &[Vec<APInt>]) -> bool {
     for (slot, set) in assignment.iter_mut().zip(value_sets.iter()) {
         *slot += 1;
@@ -567,8 +555,6 @@ fn values_bit_eq(a: &Value, b: &Value) -> bool {
     }
 }
 
-/// Boundary values (0, 1, all-ones, sign bit, alternating patterns) plus a small
-/// deterministic LCG spread, all masked to `width` bits.
 fn sample_values(width: u32, extra: usize) -> Vec<APInt> {
     let mask = if width >= 64 {
         u64::MAX
@@ -623,8 +609,6 @@ pub fn op<A>(g: &mut SemGraph<A>, kind: SymKind, children: &[NodeId]) -> NodeId 
     node
 }
 
-/// The candidate realization of an extension as a shift pair, parameterized by the
-/// source width `n` and register width `w`: `ext_kind(extract(x, n-1, 0), w)`.
 fn ext_of_low_bits(ext_kind: SymKind, n: u32, w: u32) -> SemGraph {
     let mut g = SemGraph::new();
     let x = sym(&mut g, 0);
@@ -636,7 +620,6 @@ fn ext_of_low_bits(ext_kind: SymKind, n: u32, w: u32) -> SemGraph {
     g
 }
 
-/// `shr_kind(shl(x, k), k)` over `w`-bit values.
 fn shift_pair(shr_kind: SymKind, k: u32, w: u32) -> SemGraph {
     let mut g = SemGraph::new();
     let x = sym(&mut g, 0);

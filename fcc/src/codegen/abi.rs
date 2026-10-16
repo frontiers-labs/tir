@@ -165,8 +165,6 @@ impl Signature {
         args
     }
 
-    /// The indices of the arguments a `restrict` parameter became, matching
-    /// [`Signature::argument_types`] slot for slot.
     pub(super) fn noalias_arguments(&self) -> Vec<usize> {
         let mut arguments = Vec::new();
         let mut index = usize::from(self.ret.indirect);
@@ -199,7 +197,6 @@ impl Signature {
     }
 }
 
-/// Lower a translation unit into a `builtin.module` in `context`.
 pub(super) fn lower_signature(
     context: &Context,
     typed: &TypedAst,

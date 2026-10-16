@@ -244,9 +244,6 @@ fn execute(args: &Cli, executor: &mut Executor, until_pc: u64) {
     }
 }
 
-/// Select and validate the `--timing` machine model (defaulting from `--mcpu`),
-/// enabling trace recording on the executor. Returns `None` when `--timing` is
-/// off; exits on an unknown model.
 fn select_timing_model(
     args: &Cli,
     target: &dyn tir::backend::TargetMachine,
@@ -280,8 +277,6 @@ fn select_timing_model(
     Some(model)
 }
 
-/// Replay the recorded trace through `model` and print a cycle-approximate
-/// timing summary (plus an optional Konata pipeline log).
 fn report_timing(
     args: &Cli,
     context: &tir::Context,
@@ -373,8 +368,6 @@ fn report_timing(
     }
 }
 
-/// Print one line per cache level plus DRAM and writeback totals, in a stable
-/// FileCheck-friendly format.
 fn print_mem_stats(stats: &MemStats, prefetching: bool) {
     let line = |name: &str, s: &tir_sim::memsys::LevelStats| {
         println!(
@@ -397,10 +390,6 @@ fn print_mem_stats(stats: &MemStats, prefetching: bool) {
     }
 }
 
-/// Build the memory hierarchy for `--mem-model`, or `None` for the default
-/// fixed-latency model. Presets approximate measured Cortex-A720/A520 caches
-/// (64-byte lines throughout); `test` is a tiny hierarchy so lit tests can force
-/// misses with small footprints. Exits on an unknown name.
 fn mem_model(name: &str) -> Option<MemorySystem> {
     let c = |size, ways, latency, banks, mshrs| CacheParams {
         size,
@@ -444,14 +433,6 @@ fn mem_model(name: &str) -> Option<MemorySystem> {
     Some(MemorySystem::new(params))
 }
 
-/// Recover the wrong-path (speculative) instruction stream under each
-/// mispredicted branch and hand it to the Konata view. A trace replay only holds
-/// the committed path, so we re-derive what the front end *would* have fetched:
-/// starting from the predicted (wrong) direction, we decode straight down the
-/// instruction stream, following taken branches/jumps through the learned target
-/// table (a backward conditional is assumed taken, i.e. a loop continuing). These
-/// instructions are squashed when the branch resolves, so their values never
-/// matter — only their shape and cost, which is all the timeline needs.
 fn build_speculation(
     view: &mut konata::KonataView,
     executor: &Executor,
@@ -531,10 +512,6 @@ fn build_speculation(
     }
 }
 
-/// Load a statically-linked ELF64 executable into guest memory and run it by
-/// decode-on-fetch, servicing the handful of Linux AArch64 syscalls the
-/// freestanding benchmark runner uses. Stops at the exit syscall (or `--until-pc`
-/// / `--max-cycles`), then reports the exit status.
 fn run_elf(
     args: &Cli,
     target: &dyn tir::backend::TargetMachine,
@@ -635,8 +612,6 @@ fn run_elf(
     }
 }
 
-/// Service a Linux AArch64 syscall raised by `svc` (syscall number in x8, args
-/// in x0-x5). Implements only what the freestanding benchmark runner uses.
 fn syscall(
     ex: &mut Executor,
     exit_code: &std::rc::Rc<std::cell::Cell<i32>>,
@@ -673,8 +648,6 @@ fn syscall(
     }
 }
 
-/// Resolve a `--until-pc` argument to an address. The argument may be a `0x`
-/// hex literal, a decimal address, or the name of a symbol in the program.
 fn resolve_pc(arg: &str, symbols: &std::collections::BTreeMap<String, u64>) -> u64 {
     if let Some(hex) = arg.strip_prefix("0x").or_else(|| arg.strip_prefix("0X")) {
         return u64::from_str_radix(hex, 16).expect("invalid hex address");
@@ -688,7 +661,6 @@ fn resolve_pc(arg: &str, symbols: &std::collections::BTreeMap<String, u64>) -> u
     })
 }
 
-/// Parse a `0x`-hex or decimal address.
 pub(crate) fn parse_addr(addr: &str) -> u64 {
     if let Some(hex) = addr.strip_prefix("0x").or_else(|| addr.strip_prefix("0X")) {
         u64::from_str_radix(hex, 16).expect("invalid hex address")

@@ -51,8 +51,6 @@ instruction HSum for [Test] {
 }
 "#;
 
-/// split a 32-bit raw value into four bytes and horizontally sum them:
-/// bytes [1, 2, 3, 4] -> 10.
 #[test]
 fn functional_pipeline_lowers_and_executes() {
     let generated = generate_source("hsum.tmdl", HSUM, "test");

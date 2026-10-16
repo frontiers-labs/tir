@@ -141,8 +141,6 @@ impl Memory {
         aligned
     }
 
-    /// The offset the `size` bytes at `address` start at, where the whole range
-    /// is memory this interpreter handed out.
     fn check(&self, address: u64, size: u64) -> Result<usize> {
         let offset = address
             .checked_sub(MEMORY_BASE)
@@ -343,8 +341,6 @@ impl Interpreter<'_, '_> {
         }
     }
 
-    /// An unordered region has nothing to run in order: the values it produces
-    /// are asked for, and each operation runs once, after the ones it reads.
     fn exec_nodes_region(&mut self, region: RegionId) -> Result<Flow> {
         let results = self.context.get_region(region).results();
         let mut evaluated = std::collections::HashSet::new();
@@ -360,10 +356,6 @@ impl Interpreter<'_, '_> {
             .map(Flow::Values)
     }
 
-    /// Bind `value`, running the operation defining it — and, first, everything
-    /// that operation reads, its nested regions included. A value some
-    /// enclosing region defines is already bound; an operation already run
-    /// stays run, once per region invocation.
     fn demand(
         &mut self,
         value: ValueId,
@@ -405,9 +397,6 @@ impl Interpreter<'_, '_> {
         }
     }
 
-    /// One operation. Returns the `Flow` leaving the block, or `None` when
-    /// execution continues with the next op: value-producing structured ops
-    /// bind their own results here, and leaves are evaluated here too.
     fn exec_control(&mut self, op_id: OpId) -> Result<Option<Flow>> {
         if let Some(left) = &mut self.steps_left {
             if *left == 0 {
@@ -464,9 +453,6 @@ impl Interpreter<'_, '_> {
         Ok(None)
     }
 
-    /// A γ gate, loop, or call: run its regions, bind the op's results, and
-    /// let the block continue — unless an exit flow leaves through a nested
-    /// region, which ends this block too.
     fn exec_value_flow(&mut self, op_id: OpId, flow: Flow) -> Result<Option<Flow>> {
         match flow {
             Flow::Values(values) => {
@@ -510,9 +496,6 @@ impl Interpreter<'_, '_> {
         Ok(Flow::Goto(dest, args))
     }
 
-    /// A counted loop's bound, read at the width the bounds' own type gives it and
-    /// read as signed: `scf.for` counts while the counter is signed-less-than the
-    /// upper bound, and it wraps where that width wraps.
     fn counter_bound(&mut self, value: ValueId) -> Result<APInt> {
         match self.value_of(value)? {
             Value::Int(bound) => Ok(bound.with_signed(true)),
@@ -522,10 +505,6 @@ impl Interpreter<'_, '_> {
         }
     }
 
-    /// An `scf.ordered_for`: the counter enters as port 0,
-    /// the carried values follow, and the body's `scf.yield` says what the next
-    /// iteration takes. The loop leaves with the counter that failed the test,
-    /// which is the lower bound when the body never runs.
     fn exec_ordered_for(&mut self, op_id: OpId) -> Result<Flow> {
         let op = OrderedForOp::from_op_instance(self.context.get_op(op_id));
         let lower = self.counter_bound(op.lower_bound())?;
@@ -565,12 +544,6 @@ impl Interpreter<'_, '_> {
         Ok(Flow::Values(results))
     }
 
-    /// A θ by its definitional semantics: each iteration is a fresh invocation
-    /// of the body that binds the ports, evaluates the predicate's cone, and
-    /// then only the cone the predicate selects: the continue values, which the
-    /// next iteration carries, or the exit values, which the op produces. An
-    /// operation demanded by several cones runs once per iteration; one in no
-    /// cone never runs.
     fn exec_theta(&mut self, instance: &crate::OpHandle, theta: &dyn Theta) -> Result<Flow> {
         let body = theta.body();
         let sides = crate::binding::carried(self.context, instance);
@@ -618,9 +591,6 @@ impl Interpreter<'_, '_> {
         }
     }
 
-    /// A γ: the arm whose case the predicate equals runs, the last arm when
-    /// none does; the chosen arm reads the forwarded operands through its
-    /// ports and its results are the op's.
     fn exec_gamma(&mut self, instance: &crate::OpHandle, gamma: &dyn Gamma) -> Result<Flow> {
         let arms = gamma.arms();
         let binding = gamma.binding();
@@ -734,8 +704,6 @@ impl Interpreter<'_, '_> {
         }
     }
 
-    /// A λ of the module is a constant of the program: it needs no binding, so
-    /// a value the environment does not hold may still be one.
     fn value_of(&self, value: ValueId) -> Result<Value> {
         if let Some(bound) = self.env.get(&value) {
             return Ok(bound.clone());
@@ -751,8 +719,6 @@ impl Interpreter<'_, '_> {
             .then_some(Value::Function(definition))
     }
 
-    /// Evaluate a leaf op: through its [`Interp`] impl when it has one, else
-    /// through its declared semantic expression.
     fn eval_leaf(&mut self, op_id: OpId) -> Result<Vec<Value>> {
         let instance = self.context.get_op(op_id);
         let operands = self.operand_values(&instance)?;
@@ -863,8 +829,6 @@ fn pointer_width(context: &Context, instance: &crate::OpHandle) -> u32 {
         .unwrap_or(64)
 }
 
-/// The value as the semantics vocabulary spells it, for evaluating an op
-/// through its `semantic_expr`.
 fn to_sem_value(value: &Value, pointer_width: u32) -> Result<sem::Value> {
     Ok(match value {
         Value::Int(int) => sem::Value::Int(int.clone()),
@@ -933,8 +897,6 @@ fn from_sem_value(
     Ok(widen_int_to_type(context, int, ty, pointer_width))
 }
 
-/// Semantic evaluation coerces widths freely; pin the result back to the width
-/// the IR declares.
 fn widen_int_to_type(
     context: &Context,
     int: APInt,

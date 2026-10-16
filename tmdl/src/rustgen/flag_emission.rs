@@ -1,6 +1,3 @@
-/// Derive the flag-mediated selection rules for an ISA (x86 EFLAGS, AArch64
-/// PSTATE): flag definers compose with flag-guarded branches into conditional
-/// branch rules and with flag-reading instructions into `If`-rooted value rules.
 #[allow(clippy::too_many_arguments)]
 fn emit_flag_rules<'a>(
     files: &'a [ast::File],
@@ -113,11 +110,6 @@ fn emit_flag_rules<'a>(
     Ok(())
 }
 
-/// Compose each flag definer with each flag-guarded branch: the definer's
-/// per-flag semantics substitute into the branch's condition, and when the
-/// composition is provably one canonical comparison over the definer's operands
-/// the pair registers a [`RuleKind::CondBranch`] rule whose emission is the
-/// definer followed by the branch — two real instructions from TMDL alone.
 fn emit_flag_branch_rules(
     files: &[ast::File],
     definers: &[(FlagInst<'_>, FlagDefinerSemantics)],
@@ -312,9 +304,6 @@ fn emit_flag_branch_rules(
     }
 }
 
-/// Copy `node`'s subgraph into `dst`, rewriting every symbol id found in `map`
-/// to its mapped id. Unlike `copy_subgraph_remap_symbols` the mapping is fixed
-/// (not fresh-per-symbol), so two operand symbols can be aliased onto one.
 fn copy_subgraph_alias(
     dst: &mut tir_symbolic::sem::SemGraph,
     src: &tir_symbolic::sem::SemGraph,
@@ -325,8 +314,6 @@ fn copy_subgraph_alias(
     copy_subgraph_remapping(dst, src, node, memo, &mut |id| map.get(&id).copied())
 }
 
-/// A single-symbol comparison against a literal zero (`Ne(s0, 0)`/`Eq(s0, 0)`),
-/// the SMT candidate an aliased flag definer's condition proves against.
 fn zero_vs_candidate(
     kind: tir_symbolic::lang::SymKind,
     width: u32,
@@ -342,8 +329,6 @@ fn zero_vs_candidate(
     (g, root)
 }
 
-/// The `Eq`/`Ne`-vs-zero comparison the composed aliased condition is provably
-/// equivalent to, proven at the operand's architectural width.
 fn zero_equivalent(
     composed: &tir_symbolic::sem::SemGraph,
     symbol_widths: &[u32],
@@ -362,9 +347,6 @@ fn zero_equivalent(
     None
 }
 
-/// The emitted zero-branch pattern in the `zext(0b0, W)` shape the bare-i1
-/// bridge injects: `Ne(s0, zext(0, Wsym))` / `Eq(s0, zext(0, Wsym))`, so the
-/// derived `test c, c` + `jne`/`je` rule covers a bare boolean guard.
 fn zero_branch_pattern(
     kind: tir_symbolic::lang::SymKind,
     width_symbol: u32,
@@ -385,13 +367,6 @@ fn zero_branch_pattern(
     (g, root)
 }
 
-/// Compose each flag-guarded branch with a two-register flag definer whose
-/// operands are aliased to one symbol: `test c, c` sets the flags of `c & c`,
-/// so with `jne`/`je` the condition is provably `Ne(c, 0)`/`Eq(c, 0)`. Emitted
-/// in the bare-i1 bridge's `zext(0b0, W)` zero shape, the pair covers a bare
-/// boolean guard with a real derived rule — retiring the hand-written
-/// branch-if-nonzero fallback on targets (x86) with no direct zero-branch. The
-/// definer's two operand slots both bind from the single matched value.
 fn emit_aliased_zero_branch_rules(
     files: &[ast::File],
     definers: &[(FlagInst<'_>, FlagDefinerSemantics)],
@@ -578,14 +553,6 @@ fn emit_aliased_zero_branch_rules(
     }
 }
 
-/// Compose each flag definer with each flag-reading value instruction: the
-/// definer's per-flag semantics substitute into the reader's condition, and when
-/// the composition is provably one canonical comparison the pair registers an
-/// `If`-rooted rule whose prelude emits the definer and whose emitter is the
-/// reader (`cset`/`setcc` or `csel`/`cmov`).
-/// Each ISA's transitive `requires` set. An instruction tagged with ISA `a`
-/// where `requires[a]` contains `b` can co-occur with an instruction tagged
-/// `b`, even when the two instructions have no shared tag.
 fn isa_requires_closure(files: &[ast::File]) -> HashMap<String, HashSet<String>> {
     let mut closure: HashMap<String, HashSet<String>> = HashMap::new();
     for isa in files.iter().flat_map(|f| f.isas()) {
@@ -621,9 +588,6 @@ fn isa_requires_closure(files: &[ast::File]) -> HashMap<String, HashSet<String>>
     closure
 }
 
-/// The ISAs a rule composing `reader`- and `definer`-tagged instructions is valid
-/// for: a shared tag, or the more-restrictive tag when one ISA requires the other
-/// (so both are available). Empty when the two can never co-occur.
 fn flag_rule_isas(
     reader: &[String],
     definer: &[String],

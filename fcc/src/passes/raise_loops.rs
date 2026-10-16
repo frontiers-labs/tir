@@ -72,7 +72,6 @@ impl Pass for RaiseLoopsPass {
     }
 }
 
-/// Every `cir` loop op under `region`, innermost first.
 fn loops_in(context: &Context, region: RegionId) -> Vec<OpId> {
     let mut found = Vec::new();
     for block in context.get_region(region).block_ids() {
@@ -127,8 +126,6 @@ fn shape_of(context: &Context, op_id: OpId) -> Option<Shape> {
     }
 }
 
-/// Spill a loop's regions into the region holding it, turning each terminator
-/// that used to leave a region into the branch it stood for.
 fn flatten(context: &Context, op_id: OpId) -> Result<(), PassError> {
     let shape = shape_of(context, op_id).expect("only loop ops are flattened");
     let block = context
@@ -171,12 +168,6 @@ fn flatten(context: &Context, op_id: OpId) -> Result<(), PassError> {
     Ok(())
 }
 
-/// Replace the terminators that leave `source` with the branches they stand for —
-/// a `cir.condition` picks between `enter` and `exit`, a `cir.break` leaving this
-/// loop goes to `exit`, and a fallthrough or a `cir.continue` of this loop goes
-/// on to `enter` — then move its blocks into `destination`. An exit naming an
-/// outer loop stays for that loop's turn; blocks leaving through an ordinary
-/// branch are already right.
 fn spill(
     context: &Context,
     loop_op: OpId,
@@ -210,7 +201,6 @@ fn spill(
     Ok(())
 }
 
-/// The entry block of a loop region: where control arrives when the region runs.
 fn entry_of(context: &Context, region: RegionId) -> BlockId {
     context.get_region(region).block_ids()[0]
 }
@@ -239,12 +229,6 @@ enum Bound {
     Load(ValueId),
 }
 
-/// Read a `cir.for` as a counted loop, or refuse it.
-///
-/// What has to hold is what `scf.ordered_for` means: a counter private to the loop,
-/// stepping by a constant, tested against a bound the loop cannot change. Every
-/// condition below is one of those three, and anything the analysis cannot see
-/// through is refused — the loop still runs, as blocks and branches.
 fn recognise(
     context: &Context,
     escapes: &EscapeFacts,
@@ -302,7 +286,6 @@ fn recognise(
     })
 }
 
-/// The one block of a single-block region, or `None` for a region holding a CFG.
 fn only_block(context: &Context, region: RegionId) -> Option<BlockId> {
     match context.get_region(region).block_ids()[..] {
         [block] => Some(block),
@@ -310,9 +293,6 @@ fn only_block(context: &Context, region: RegionId) -> Option<BlockId> {
     }
 }
 
-/// Read `%a = ptr.load S; %b = ...; %p = cmpi %a, %b {slt}; cir.condition %p`,
-/// the only test v1 counts through. The block must hold nothing else: what it
-/// holds runs once per iteration, and `scf.ordered_for`'s latch would not run it.
 fn counted_test(context: &Context, block: &BlockHandle) -> Option<(ValueId, Bound, TypeId)> {
     let ops = block.op_ids();
     let (&last, rest) = ops.split_last()?;
@@ -396,12 +376,6 @@ fn counted_step(context: &Context, block: &BlockHandle, slot: ValueId) -> Option
     })
 }
 
-/// Whether the only reach the loop has into `slot` is reading it, plus `writes`.
-///
-/// The rule is on the *uses of the address*, not on the write locations: escape
-/// facts follow `ptradd`, so a store through a pointer derived from the slot
-/// leaves the slot `Local` while still changing what it holds. Anything naming
-/// the address that is not a direct read, and not one of `writes`, refuses.
 fn reached_only_by_reading(context: &Context, op_id: OpId, slot: ValueId, writes: &[OpId]) -> bool {
     ops_under(context, op_id).into_iter().all(|other| {
         let op = context.get_op(other);
@@ -416,15 +390,12 @@ fn reached_only_by_reading(context: &Context, op_id: OpId, slot: ValueId, writes
     })
 }
 
-/// Whether `slot` reads the same on every iteration: the loop only reads it, and
-/// no call inside can write it, because nothing outside holds its address.
 fn invariant_slot(context: &Context, escapes: &EscapeFacts, op_id: OpId, slot: ValueId) -> bool {
     definition(context, slot).is_some_and(|def| def.is::<AllocaOp>())
         && escapes.escape(slot) == Escape::Local
         && reached_only_by_reading(context, op_id, slot, &[])
 }
 
-/// Every operation under `op`, at any depth.
 fn ops_under(context: &Context, op: OpId) -> Vec<OpId> {
     let mut found = Vec::new();
     for region in context.get_op(op).regions().to_vec() {
@@ -438,14 +409,12 @@ fn ops_under(context: &Context, op: OpId) -> Vec<OpId> {
     found
 }
 
-/// The operation among `ops` that defines `value`.
 fn definer(context: &Context, ops: &[OpId], value: ValueId) -> Option<OpHandle> {
     ops.iter()
         .map(|&op| context.get_op(op))
         .find(|op| op.results().contains(&value))
 }
 
-/// The operation defining `value`, wherever it sits.
 fn definition(context: &Context, value: ValueId) -> Option<OpHandle> {
     context
         .get_value(value)
@@ -460,13 +429,6 @@ fn int_attr(op: &OpHandle, name: &str) -> Option<i64> {
     }
 }
 
-/// Emit the `scf.ordered_for` a recognised loop stands for.
-///
-/// The counter leaves its slot for a carried port, but the slot stays: the body
-/// still loads it, so the port is written back at the top of every iteration and
-/// the value the loop ends on is written back after it. That traffic is what
-/// promotion, folding and state erasure exist to remove — the same division of
-/// labour `restructure` already relies on.
 fn raise(context: &Context, op_id: OpId, shape: &Shape, counted: Counted) -> Result<(), PassError> {
     let target = OperationRef::new(context.get_op(op_id));
 

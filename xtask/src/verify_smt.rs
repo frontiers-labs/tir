@@ -259,9 +259,6 @@ impl IsaSpec {
         Ok(spec)
     }
 
-    /// TMDL register classes the driver can relate to Sail state: those
-    /// sharing storage with a mapped class (the x86 `gpr8`/`gpr16`/`gpr32`
-    /// views alias the GPR file).
     fn class_is_mapped(&self, model: &FlatModel, class: &str) -> bool {
         let storage = |class: &str| model.classes.get(class).map(|info| &info.storage);
         storage(class).is_some_and(|mapped| {
@@ -273,8 +270,6 @@ impl IsaSpec {
 }
 
 impl MapRow {
-    /// This row's part of a register access, before `bits`: `Ok(None)` when
-    /// the access names another field.
     fn select(&self, fields: &[String], value: &TraceValue) -> Result<Option<Term>, String> {
         let value = match &self.field {
             Some(field) if fields.first() != Some(field) => return Ok(None),
@@ -304,8 +299,6 @@ impl MapRow {
     }
 }
 
-/// Why `instr` cannot be verified against the model, as the report names it,
-/// or `None` when it can.
 fn unsupported_reason(spec: &IsaSpec, model: &FlatModel, instr: &Instruction) -> Option<String> {
     if !instr.supported {
         return Some(instr.name.clone());
@@ -510,8 +503,6 @@ struct Tools {
 }
 
 impl Tools {
-    /// Resolve the external tools, fetching anything that is not overridden
-    /// by an environment variable.
     fn ensure(sh: &Shell, spec: &IsaSpec) -> anyhow::Result<Self> {
         let snapshot = match std::env::var("TIR_ISLA_SNAPSHOT") {
             Ok(path) => path.into(),
@@ -609,8 +600,6 @@ struct ImmConstraint {
 }
 
 impl ImmConstraint {
-    /// `value` moved into the admitted set: rounded down to the alignment, and
-    /// `None` when nothing is left (zero under `#[nonzero]`).
     fn admitted(&self, value: u64) -> Option<u64> {
         let value = value & !(self.align - 1);
         (!(self.nonzero && value == 0)).then_some(value)
@@ -664,9 +653,6 @@ struct EncodingField {
 }
 
 impl Instruction {
-    /// The shape an operand tuple encodes to: the first whose guard holds, as
-    /// the encoder picks it. The guards partition the operand domain, so
-    /// "first" only decides which of two equal answers is taken.
     fn shape_for(&self, case: &[u64]) -> Option<&Shape> {
         let value = |name: &str| {
             self.operands
@@ -681,8 +667,6 @@ impl Instruction {
             .or(self.shapes.first())
     }
 
-    /// The bytes one operand tuple encodes to. Shapes differ in width, and the
-    /// program counter moves by the one the encoder picked, not by the widest.
     fn width_bytes(&self, case: &[u64]) -> u32 {
         self.shape_for(case)
             .map_or(self.width_bits, |shape| shape.width_bits)
@@ -840,10 +824,6 @@ fn parse_inventory(json: &str) -> anyhow::Result<Inventory> {
 // Operand assignments
 // ---------------------------------------------------------------------------
 
-/// Concrete operand tuples for one instruction. Registers cover zero-register
-/// corner cases and aliasing; immediates cover boundary patterns. PC-writing
-/// instructions get 4-byte aligned immediates so that, together with the
-/// aligned-PC assumption, Sail's misaligned-fetch trap paths are vacuous.
 fn operand_cases(spec: &IsaSpec, instr: &Instruction) -> Vec<Vec<u64>> {
     let fixed_values = |class: &str| spec.operand_values.get(class).map(Vec::as_slice);
     // Operands with a fixed value list (CSR addresses) sit outside the GPR
@@ -952,8 +932,6 @@ fn operand_cases(spec: &IsaSpec, instr: &Instruction) -> Vec<Vec<u64>> {
     cases
 }
 
-/// Whether `case` names registers their classes hold and operands some shape
-/// encodes: a tuple no guard admits is one the instruction does not have.
 fn operand_case_is_valid(model: &FlatModel, instr: &Instruction, case: &[u64]) -> bool {
     let registers = instr
         .operands
@@ -971,7 +949,6 @@ fn operand_case_is_valid(model: &FlatModel, instr: &Instruction, case: &[u64]) -
         && (instr.shapes.is_empty() || instr.shapes.iter().any(|shape| shape.guard.holds(&read)))
 }
 
-/// `body` with the instruction's operands bound to one case's values.
 fn with_operands(spec: &IsaSpec, instr: &Instruction, case: &[u64], body: Term) -> Term {
     if instr.operands.is_empty() {
         return body;
@@ -1035,10 +1012,6 @@ fn encode_words(instr: &Instruction, cases: &[Vec<u64>]) -> Vec<u128> {
         .collect()
 }
 
-/// Operand values recovered by decoding the instruction words back, so the
-/// equivalence check uses what the encoding can express: lossy immediate
-/// fields drop bits (branch immediates force bit 0, ARM unsigned-offset
-/// loads/stores store the byte offset scaled down by the access size).
 fn decode_operands(instr: &Instruction, cases: &[Vec<u64>], words: &[u128]) -> Vec<Vec<u64>> {
     cases
         .iter()
@@ -1103,8 +1076,6 @@ fn decode_operands(instr: &Instruction, cases: &[Vec<u64>], words: &[u128]) -> V
         .collect()
 }
 
-/// The `x[hi..lo] == k` tests the guard makes of `operand`, which fix those
-/// bits for every operand tuple the shape covers.
 fn slice_constraints(guard: &tmdl::shapes::Predicate, operand: &str) -> Vec<(u32, u32, u128)> {
     use tmdl::shapes::Predicate;
     match guard {
@@ -1120,12 +1091,6 @@ fn slice_constraints(guard: &tmdl::shapes::Predicate, operand: &str) -> Vec<(u32
     }
 }
 
-/// An operand tuple the guard of `shape` accepts, built from `base` by making
-/// each test the guard makes come out the way that shape needs. Breaking a
-/// disjunction means choosing which arm to break, and an arm a sibling test
-/// needs back is a dead end, so every combination of those choices is tried.
-/// `None` when a test is one this cannot arrange, or when no combination lands
-/// in `shape`.
 fn case_reaching(instr: &Instruction, shape: &Shape, base: &[u64]) -> Option<Vec<u64>> {
     (0..CHOICE_LIMIT).find_map(|choices| {
         let mut case = base.to_vec();
@@ -1143,7 +1108,6 @@ fn case_reaching(instr: &Instruction, shape: &Shape, base: &[u64]) -> Option<Vec
     })
 }
 
-/// Reads an operand out of `case` by name, the way a guard asks for it.
 fn reader<'a>(instr: &'a Instruction, case: &'a [u64]) -> impl Fn(&str) -> u64 + 'a {
     move |name: &str| {
         instr
@@ -1155,9 +1119,6 @@ fn reader<'a>(instr: &'a Instruction, case: &'a [u64]) -> impl Fn(&str) -> u64 +
     }
 }
 
-/// Whether every operand of `case` holds a value its declaration admits. The
-/// sampled cases go through the same test, so a synthesized one that skipped it
-/// would put the instruction through an operand it does not have.
 fn case_admitted(instr: &Instruction, case: &[u64]) -> bool {
     instr
         .operands
@@ -1194,7 +1155,6 @@ impl Choices {
     }
 }
 
-/// Move `case` to where `predicate` takes the value `want`.
 fn satisfy(
     predicate: &tmdl::shapes::Predicate,
     instr: &Instruction,
@@ -1299,8 +1259,6 @@ fn satisfy(
     }
 }
 
-/// Whether the guard asks that `operand` survives `bits` bits as a signed
-/// value, which is what makes the bits the shape drops recoverable.
 fn signed_fit(guard: &tmdl::shapes::Predicate, operand: &str, bits: u32) -> bool {
     use tmdl::shapes::Predicate;
     match guard {
@@ -1367,11 +1325,6 @@ fn sail_traces(
 // Structured Isla trace analysis
 // ---------------------------------------------------------------------------
 
-/// Whether a memory event's kind is a plain data access. Old-interface
-/// models (RISC-V) use enum atoms (`Read_plain`); new-interface models
-/// (ARM) embed the whole request struct, whose `access_kind` must be an
-/// explicit access of plain variety. Acquire/release strength changes ordering,
-/// which a single-instruction state comparison does not model.
 fn is_plain_access(kind: &TraceValue) -> bool {
     let is_symbol = |value: Option<&TraceValue>, test: &dyn Fn(&str) -> bool| matches!(value.and_then(TraceValue::term), Some(Term::Ident(id)) if test(&id.identifier().symbol.0));
     match kind.field("access_kind") {
@@ -1383,8 +1336,6 @@ fn is_plain_access(kind: &TraceValue) -> bool {
     }
 }
 
-/// The payload of a single-field `bits` struct, as written for Sail bitfield
-/// registers; anything else is returned as is.
 fn unwrap_bits_struct(value: &TraceValue) -> &TraceValue {
     match value {
         TraceValue::Struct(fields) if fields.len() == 1 => fields.get("bits").unwrap_or(value),
@@ -1427,9 +1378,6 @@ fn exclude(info: &mut TraceInfo, reason: String) {
     }
 }
 
-/// Relate a register read to TMDL's initial state. A read returning a
-/// `define-const` variable, or following a write, reads back a value the
-/// model computed rather than initial state.
 fn analyze_register_read(
     spec: &IsaSpec,
     info: &mut TraceInfo,
@@ -1691,8 +1639,6 @@ fn assert(term: Term) -> SmtCommand {
     SmtCommand::Assert(term)
 }
 
-/// The query text: `commands` under `logic`, with models enabled for the
-/// counterexample probes.
 fn script(logic: &str, commands: Vec<SmtCommand>) -> String {
     let mut script = vec![
         SmtCommand::SetLogic(Symbol(logic.into())),
@@ -1741,8 +1687,6 @@ fn flat_read_memory(xlen: u32, bytes: u32, state: &str, address: &Term) -> Term 
         .expect("memory access has at least one byte")
 }
 
-/// Replay only the Sail definitions reached from `body`. Also returns every
-/// symbol the result mentions.
 fn with_trace_defines(trace: &TraceInfo, mut body: Term) -> (Term, HashSet<String>) {
     let mut mentioned: HashSet<String> =
         body.free_symbols().into_iter().map(str::to_owned).collect();
@@ -1794,7 +1738,6 @@ fn emit_state_transition(
     commands
 }
 
-/// TMDL's state after the instruction: `st1_<field>` for every flat field.
 fn final_state(
     spec: &IsaSpec,
     model: &FlatModel,
@@ -1815,8 +1758,6 @@ fn final_state(
         .collect()
 }
 
-/// Assumptions on the addresses this instance may form: PC alignment on a
-/// fixed-width ISA, canonical (low-half) addresses on x86-64.
 fn emit_address_assumptions(
     spec: &IsaSpec,
     model: &FlatModel,
@@ -1880,7 +1821,6 @@ fn read_slot(model: &FlatModel, class: &str, index: u64, state: &str) -> Term {
     flat_read_register(model, class, state, bv(index, width))
 }
 
-/// Pin the symbolic initial values the model read back to TMDL's initial state.
 fn emit_trace_read_constraints(
     spec: &IsaSpec,
     model: &FlatModel,
@@ -1921,7 +1861,6 @@ fn query_prelude(
     commands
 }
 
-/// `address + offset`, the address of a later byte of an access.
 fn byte_address(address: &Term, offset: u64, xlen: u32) -> Term {
     match offset {
         0 => address.clone(),
@@ -1929,11 +1868,6 @@ fn byte_address(address: &Term, offset: u64, xlen: u32) -> Term {
     }
 }
 
-/// Prove that each Sail access starts at the address TMDL gives the same
-/// byte, then use TMDL's address terms. Address arithmetic (a scaled index, a
-/// masked linear address) stays out of the equivalence query that way.
-/// Accesses whose bytes do not line up with TMDL's, or whose proof does not go
-/// through, keep Sail's addresses, which the equivalence query still checks.
 fn align_trace_addresses(
     tools: &Tools,
     spec: &IsaSpec,
@@ -2246,9 +2180,6 @@ impl Report {
         self.failures.append(&mut other.failures);
     }
 
-    /// The shapes no operand tuple verified. Each is an encoding of a real
-    /// instruction that nothing here checked, so the job does not pass with one
-    /// outstanding.
     fn uncovered_shapes(&self) -> Vec<&str> {
         self.instructions
             .iter()
@@ -2583,9 +2514,6 @@ fn run_z3(tools: &Tools, path: &Path) -> anyhow::Result<std::process::Output> {
     Ok(second)
 }
 
-/// Ask the solver whether `roundtrip_<instr>` holds for every operand tuple.
-/// The obligation is emitted by the SMT backend next to the model; a `sat`
-/// answer is an operand tuple whose word decodes to something else.
 fn prove_roundtrip(
     tools: &Tools,
     spec: &IsaSpec,
@@ -2711,8 +2639,6 @@ mod tests {
         assert!(parse_shard(["--shard".into(), "4/4".into()].into_iter()).is_err());
     }
 
-    /// Metadata for one 32-bit `load rd, imm`, with the operand declarations
-    /// spliced in so a test can vary the constraints they carry.
     fn load_metadata(operands: &str) -> String {
         METADATA_TEMPLATE.replace("OPERANDS", operands)
     }

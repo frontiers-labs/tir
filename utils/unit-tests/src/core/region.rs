@@ -8,7 +8,6 @@ use tir::{
     Context, OpId, Operation,
 };
 
-/// `module { %f = func.func @quad(%p: !i32) { %a = addi %p, %p; %b = addi %a, %a; -> %b } }`
 fn quad(context: &Context) -> (OpId, OpId) {
     let i32_ty = builtin::IntegerType::new(context, 32);
     let port = context.create_value(i32_ty, None);

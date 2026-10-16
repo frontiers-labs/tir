@@ -250,9 +250,6 @@ fn build_isa_reference(root: &std::path::Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Run the differential ISA test suite: build the `tir-isasim` binary (the
-/// simulator under test), then compare each snippet's architectural state
-/// against a golden reference model (Spike for RISC-V).
 fn isa_test_suite(sh: &Shell) -> anyhow::Result<()> {
     let root = project_root();
     sh.change_dir(&root);
@@ -267,8 +264,6 @@ fn isa_test_suite(sh: &Shell) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Build the C ABI (whose build script regenerates `tir.h`), then compile and
-/// run the C smoke test against the cdylib.
 fn capi_smoke(sh: &Shell) -> anyhow::Result<()> {
     let root = project_root();
     sh.change_dir(&root);
@@ -289,9 +284,6 @@ fn capi_smoke(sh: &Shell) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Build the C ABI cdylib, then run the Python test suite against it. The
-/// Python bindings build their typed op constructors from the schema at import,
-/// so there is nothing to regenerate.
 fn python_smoke(sh: &Shell) -> anyhow::Result<()> {
     let root = project_root();
     sh.change_dir(&root);
@@ -301,8 +293,6 @@ fn python_smoke(sh: &Shell) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Build the C ABI cdylib, then compile and run the Haskell bindings smoke test
-/// against it. Requires `ghc` on PATH.
 fn haskell_smoke(sh: &Shell) -> anyhow::Result<()> {
     let root = project_root();
     sh.change_dir(&root);

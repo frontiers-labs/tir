@@ -166,8 +166,6 @@ pub struct Table {
     dead: Vec<u32>,
 }
 
-/// What a key cell's weight adds to the key's hash: nothing for weight zero,
-/// so an unweighted key hashes as [`hash_row`] alone.
 fn weight_hash(column: usize, weight: u64) -> u32 {
     let mixed = weight
         .wrapping_mul(0x9e37_79b9_7f4a_7c15)
@@ -175,8 +173,6 @@ fn weight_hash(column: usize, weight: u64) -> u32 {
     (mixed ^ mixed >> 32) as u32
 }
 
-/// The hash a key of `cells` and `weights` is indexed under. `weights` is
-/// empty or one per cell.
 fn key_hash(cells: &[u32], weights: &[u64]) -> u32 {
     weights
         .iter()
@@ -624,7 +620,6 @@ impl Table {
         self.stamp.reserve(more);
     }
 
-    /// Put `row` in the first free slot of its probe sequence.
     fn place(&mut self, row: u32, hash: u32) {
         let mask = self.slots.len() - 1;
         let mut at = hash as usize & mask;
@@ -635,8 +630,6 @@ impl Table {
         self.slots[at] = (hash as u64) << 32 | (row + 1) as u64;
     }
 
-    /// Make room for `extra` more entries with the index at most half full,
-    /// which is what keeps a probe finite.
     fn reserve(&mut self, extra: usize) {
         if (self.used + extra) * 2 <= self.slots.len() {
             return;
@@ -668,7 +661,6 @@ impl Table {
         }
     }
 
-    /// The loaded key's weights: empty for a table that has none.
     fn loaded_weights(&self) -> &[u64] {
         match self.weighted {
             true => &self.key_weights,
@@ -676,7 +668,6 @@ impl Table {
         }
     }
 
-    /// The slot that holds `row`, whose key is loaded.
     fn slot_of(&self, row: u32) -> usize {
         let mask = self.slots.len() - 1;
         let mut at = key_hash(&self.key, self.loaded_weights()) as usize & mask;
@@ -697,8 +688,6 @@ impl Table {
         }
     }
 
-    /// The rows from `from` on any of whose cells in `columns` `map` moves,
-    /// ascending, into `self.moved`.
     fn select_moved(&mut self, columns: std::ops::Range<usize>, from: usize, map: &impl Rename) {
         self.moved.clear();
         let several = columns.len() > 1;
@@ -879,8 +868,6 @@ impl Table {
         any
     }
 
-    /// Log `row` as touched unless the value phase did, whose rows `logged`
-    /// walks: both ascend.
     fn touch(&mut self, row: u32, logged: &mut std::ops::Range<usize>) {
         while logged.start < logged.end && self.touched[logged.start] < row {
             logged.start += 1;
@@ -890,8 +877,6 @@ impl Table {
         }
     }
 
-    /// Remove `row`, which the index does not hold, moving the last row into
-    /// its place.
     fn swap_remove(&mut self, row: u32) {
         let last = self.len() as u32 - 1;
         // The row that fills the hole may be one written since the mark.
@@ -951,7 +936,6 @@ pub(crate) const ABSENT: u32 = u32::MAX;
 pub(crate) const TAIL: u32 = u32::MAX - 1;
 
 impl Delta {
-    /// Bring the delta up to date with `table`.
     pub(crate) fn refresh(&mut self, table: &Table) -> Refresh {
         let len = table.len();
         if self.built && self.version == table.version() {
@@ -981,7 +965,6 @@ impl Delta {
         Refresh::Rebuild
     }
 
-    /// Note the base built over `base` rows.
     pub(crate) fn rebuilt(&mut self, base: usize) {
         self.built = true;
         self.base = base;
@@ -990,14 +973,11 @@ impl Delta {
         self.dropped = 0..0;
     }
 
-    /// The rows that leave where they sit: the changed and the dropped.
     pub(crate) fn leaving(&self) -> impl Iterator<Item = u32> + '_ {
         self.changed.iter().copied().chain(self.dropped.clone())
     }
 }
 
-/// Take `row` out of a base whose entries lie in the ascending runs
-/// `rows[from..to]` of `runs`, `pos` saying where each row sits.
 pub(crate) fn drop_row(rows: &mut [u32], pos: &mut [u32], runs: &mut [(u32, u32)], row: u32) {
     let at = pos[row as usize];
     let run = runs.partition_point(|&(from, _)| from <= at) - 1;
@@ -1113,8 +1093,6 @@ impl Group {
         }
     }
 
-    /// Place the changed rows again; `false` when a run is full, which has
-    /// the base rebuilt.
     fn place(&mut self, cells: &[u32]) -> bool {
         if self.pos.len() < cells.len() {
             self.pos.resize(cells.len(), ABSENT);
@@ -1330,8 +1308,6 @@ mod tests {
         assert_eq!((value(0), value(1), value(2)), (Some(10), None, Some(12)));
     }
 
-    /// `f(a, b)` with a coefficient on `a` and none on `b`: a weight `a` picks
-    /// up moves into the value, one `b` picks up stays in the key.
     #[test]
     fn repair_moves_a_coefficient_columns_weight_into_the_value() {
         let mut table = Table::new(2).coefficients(&[1, 0]);

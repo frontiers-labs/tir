@@ -44,7 +44,6 @@ fn clear_error() {
     LAST_ERROR.with(|e| *e.borrow_mut() = None);
 }
 
-/// Run `f`, converting any panic into a last-error and returning `default`.
 pub(crate) fn guard<T>(default: T, f: impl FnOnce() -> T) -> T {
     match catch_unwind(AssertUnwindSafe(f)) {
         Ok(v) => v,
@@ -55,7 +54,6 @@ pub(crate) fn guard<T>(default: T, f: impl FnOnce() -> T) -> T {
     }
 }
 
-/// Borrow a context handle, or set an error and return `default` if null.
 pub(crate) unsafe fn ctx_ref<'a, T>(
     ctx: *const Context,
     default: T,
@@ -68,8 +66,6 @@ pub(crate) unsafe fn ctx_ref<'a, T>(
     f(ctx)
 }
 
-/// Common entry wrapper for context-bound calls: catches panics, clears the
-/// last error, and borrows the context, returning `default` on any failure.
 pub(crate) fn with_context<T: Copy>(
     ctx: *const Context,
     default: T,
@@ -81,8 +77,6 @@ pub(crate) fn with_context<T: Copy>(
     })
 }
 
-/// Look up an operation by raw id, setting an error and returning `None` if the
-/// id is unknown (e.g. erased). Avoids panicking on a dangling id.
 pub(crate) fn op_instance(ctx: &Context, id: u32) -> Option<OpHandle> {
     let op_id = OpId::from_number(id);
     if ctx.has_operation(op_id) {
@@ -93,8 +87,6 @@ pub(crate) fn op_instance(ctx: &Context, id: u32) -> Option<OpHandle> {
     }
 }
 
-/// Convert an owned string into a heap C string for the caller to free, or null
-/// (with an error set) if it contains an interior NUL.
 pub(crate) fn into_cstring(s: String) -> *mut c_char {
     match CString::new(s) {
         Ok(c) => c.into_raw(),
@@ -105,7 +97,6 @@ pub(crate) fn into_cstring(s: String) -> *mut c_char {
     }
 }
 
-/// Read a `(ptr, len)` pair as `&str`, or set an error and return `None`.
 pub(crate) unsafe fn str_from_raw<'a>(ptr: *const c_char, len: usize) -> Option<&'a str> {
     if ptr.is_null() {
         set_error("null string passed to TIR FFI");

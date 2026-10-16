@@ -42,7 +42,6 @@ fn directory() -> Option<&'static PathBuf> {
         .as_ref()
 }
 
-/// The operator and payload of `node` as one token.
 fn symbol(node: &SemNode) -> String {
     let mut out = match &node.kind {
         Kind::Sym(kind) => format!("{kind:?}"),
@@ -87,8 +86,6 @@ fn symbol(node: &SemNode) -> String {
         .collect()
 }
 
-/// The pattern `var` stands for on the left-hand side: the atom rooted at it,
-/// the literal it is pinned to, or a hole.
 fn pattern(
     var: Var,
     atoms: &BTreeMap<Var, &Atom<SemNode>>,
@@ -112,7 +109,6 @@ fn pattern(
     }
 }
 
-/// Whether `expr` reads only scalars in `known`.
 fn reads_only(expr: &Expr, known: &BTreeSet<Scalar>) -> bool {
     match expr {
         Expr::Lit(_) => true,
@@ -124,10 +120,6 @@ fn reads_only(expr: &Expr, known: &BTreeSet<Scalar>) -> bool {
     }
 }
 
-/// The literal `guard` pins a constant to, and the scalar holding that
-/// constant's value, when it is the comparison a rule spells "this operand is
-/// the constant `k`" with: the value against `k`, bare or masked to the
-/// constant's own width.
 fn pinned(
     guard: &Guard,
     fields: &BTreeMap<Scalar, (Scalar, u32)>,
@@ -151,11 +143,6 @@ fn pinned(
     Some((label, literal))
 }
 
-/// `rule` as `lhs => rhs`, or why it has no neutral spelling.
-///
-/// Types are erased, so everything a rule computes from a type is dropped: the
-/// type facts, the guards over them, and the fills they feed. A constant
-/// operand survives only as a literal the rule pins by value.
 fn export(eg: &SemEGraph, rule: &Rule<SemNode>) -> Result<String, &'static str> {
     let query = rule.plan.query();
     if !query.nots.is_empty() {
@@ -295,7 +282,6 @@ fn export(eg: &SemEGraph, rule: &Rule<SemNode>) -> Result<String, &'static str> 
     Ok(format!("{} => {rhs}", lhs(query.root)))
 }
 
-/// Write `eg` and the neutral subset of `rules` to the dump directory.
 pub(crate) fn dump<R: std::borrow::Borrow<Rule<SemNode>>>(pass: &str, eg: &SemEGraph, rules: &[R]) {
     let Some(directory) = directory() else {
         return;

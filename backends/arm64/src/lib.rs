@@ -111,9 +111,6 @@ fn armv9_features(revision: usize) -> Vec<Feature> {
     features
 }
 
-/// Resolve `--mcpu` to an optional default machine model. Generic CPU names map
-/// onto the generic cores; any other name must be a TMDL machine (by name or
-/// alias) compatible with the enabled features.
 fn parse_mcpu(mcpu: &str, config: &TargetConfig) -> Result<Option<String>, String> {
     let name = normalize_name(mcpu);
     let generic = match name.as_str() {
@@ -171,12 +168,6 @@ impl Arm64Dialect {
     }
 }
 
-/// Emit the deferred unconditional branch (`vbr`, finalized to `b` after
-/// register allocation), forwarding any block arguments.
-/// Emit the branch-if-nonzero fallback for a condition no branch rule fused:
-/// `and bit, cond, #1` + `cbnz bit, dest`. The condition is a width-1 value,
-/// so only bit 0 of its register is defined — comparing the whole register
-/// would branch on undefined bits. `immr = imms = 0` encodes the mask `#1`.
 fn emit_branch_nonzero(
     context: &tir::Context,
     condition: tir::ValueId,
@@ -204,14 +195,12 @@ fn emit_branch_nonzero(
 /// The AArch64 zero register (`xzr` = slot 31).
 const XZR: u16 = 31;
 
-/// Build a register-register move (`orr rd, xzr, rm`).
 fn mv(context: &tir::Context, rd: RegSlot, rm: RegSlot) -> Box<dyn Operation> {
     let builder = OrOpBuilder::new(context).attr("rn", phys_attr((RegClass::GPR.id(), XZR)));
     let builder = tir::reg_use!(builder, rm, rm);
     Box::new(tir::reg_def!(builder, rd, rd).build())
 }
 
-/// The type of a value living in a `GPR`.
 fn gpr_ty(context: &tir::Context) -> tir::TypeId {
     tir::backend::RegClassType::new(context, RegClass::GPR.id())
 }

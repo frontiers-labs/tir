@@ -122,9 +122,6 @@ impl<N, L, A> Dag<N, L, A> {
         low == to.index() && reached[0]
     }
 
-    /// Marks the nodes at or above index `floor` that `start` reaches, sweeping
-    /// down from `start` until no marked node is left unexpanded. Returns the
-    /// lowest marked index and the marks from it up to `start`.
     fn reachable(&self, start: NodeId, floor: usize) -> (usize, Vec<bool>) {
         let mut reached = vec![false; start.index() + 1 - floor];
         reached[start.index() - floor] = true;
@@ -245,8 +242,6 @@ fn set_slot<T>(slots: &mut [u32], values: &mut Vec<T>, id: NodeId, value: T) {
 mod tests {
     use super::*;
 
-    /// `unrelated` precedes a diamond whose `shared` leaf both `lhs` and `rhs`
-    /// read: node 0 unrelated, 1 shared, 2 lhs, 3 rhs, 4 root.
     fn diamond() -> Dag<&'static str, ()> {
         let mut dag = Dag::new();
         dag.add_node("unrelated");

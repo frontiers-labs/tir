@@ -24,8 +24,6 @@ impl Liveness {
     }
 }
 
-/// The variables live where `edge` leaves its node: what its target needs,
-/// minus what the edge assigns, plus what those assignments read.
 fn through(cfg: &Cfg, live_in: &[BTreeSet<VarId>], edge: &Edge) -> BTreeSet<VarId> {
     let mut live = live_in[edge.target].clone();
     for (var, _) in &edge.assigns {

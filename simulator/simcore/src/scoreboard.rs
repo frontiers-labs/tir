@@ -502,10 +502,6 @@ impl TimingResult {
     }
 }
 
-/// Whether this instance is a dependency-breaking idiom: its class marks it
-/// eligible and its data sources are all among its destinations (`xor eax,
-/// eax`). Such an instance produces a constant, so the rename stage can satisfy
-/// it without reading its sources.
 fn is_zero_idiom(slot: &ScoreboardInstr) -> bool {
     slot.class.zero_idiom
         && !slot.uses.is_empty()
@@ -518,7 +514,6 @@ pub fn is_eliminated(slot: &ScoreboardInstr) -> bool {
     slot.class.eliminated || is_zero_idiom(slot)
 }
 
-/// The latency of this instance: zero when the rename stage completes it.
 fn instr_latency(slot: &ScoreboardInstr) -> u64 {
     if is_eliminated(slot) {
         0
@@ -527,8 +522,6 @@ fn instr_latency(slot: &ScoreboardInstr) -> u64 {
     }
 }
 
-/// The producer→consumer latency between two dependent instructions, honoring
-/// the machine's forwarding network and falling back to the producer's latency.
 fn edge_latency(
     model: &MachineModel,
     producer: &ScoreboardInstr,
@@ -612,14 +605,6 @@ fn forward_destinations(model: &MachineModel) -> Vec<&'static str> {
     destinations
 }
 
-/// The cycle an instruction's result becomes available, given the cycle it
-/// issued. Without a memory system, a fixed per-class latency (the closed-form
-/// path the differential test guards). With one, each data access is charged
-/// against the hierarchy: a load extends completion to its fill cycle, but never
-/// *below* the static latency (a hit must not make an instruction faster than
-/// scheduled); a store's access is charged for its bank/MSHR/writeback effects
-/// but the instruction still retires at its static latency (a post-retirement
-/// store buffer approximation).
 fn completion_cycle(
     slot: &ScoreboardInstr,
     issue_cycle: u64,
@@ -645,9 +630,6 @@ fn completion_cycle(
 /// entry is the oldest in flight and frees first.
 type Rob = VecDeque<u64>;
 
-/// Register-file pressure gate: raise the dispatch cycle `d` until enough
-/// physical registers are free for `slot`'s definitions, mutating the per-file
-/// in-flight FIFOs. A no-op on a core that does not rename (`prf` is `None`).
 fn prf_gate(
     d: &mut u64,
     slot: &ScoreboardInstr,
@@ -906,8 +888,6 @@ pub fn run(
     }
 }
 
-/// Advance `d` past the ROB window: reclaim slots retired by `d`, and if the
-/// ROB is still full, wait for its oldest in-flight instruction to retire.
 fn reclaim_rob(rob: &mut Rob, window: usize, mut d: u64) -> u64 {
     while rob.front().is_some_and(|&r| r <= d) {
         rob.pop_front();
@@ -921,8 +901,6 @@ fn reclaim_rob(rob: &mut Rob, window: usize, mut d: u64) -> u64 {
     d
 }
 
-/// The cycle this instance's operands are ready: the latest forwarding-aware
-/// producer result. A dependency-breaking idiom reads none of its sources.
 fn operands_ready_cycle(
     model: &MachineModel,
     base: &[ScoreboardInstr],
@@ -1017,8 +995,6 @@ fn record_or_contribution(
     }
 }
 
-/// Compare the predicted direction to the recorded outcome, stalling the front
-/// end past `redirect` on a mispredict. Returns the mispredict count to add.
 fn score_branch(
     predictor: &mut dyn BranchPredictor,
     branch: &BranchOutcome,
@@ -1220,9 +1196,6 @@ struct FrontierNode {
     readiness: Option<ReadinessSummary>,
 }
 
-/// Program-order dependencies and shared OR-update prefix nodes over the
-/// unrolled trace. Each contribution adds one node; every reader points at the
-/// current prefix instead of copying all preceding contributors.
 fn build_dependencies(
     base: &[ScoreboardInstr],
     n: usize,
@@ -1310,8 +1283,6 @@ fn resolve_frontier(
     }
 }
 
-/// Retire the in-order prefix of `active` that has completed by `cycle`,
-/// releasing its physical registers. Returns how many retired.
 fn retire_completed(
     base: &[ScoreboardInstr],
     active: &mut VecDeque<usize>,
@@ -1371,8 +1342,6 @@ struct ComputeReadiness<'a> {
     forward_destinations: &'a [&'static str],
 }
 
-/// Reserve this instance's functional-unit lanes at exactly `cycle`, or `None`
-/// when no route is free then; a renamed instance reserves nothing.
 fn reserve_lanes_at(
     slot: &ScoreboardInstr,
     lanes: &mut HashMap<&'static str, Vec<u64>>,

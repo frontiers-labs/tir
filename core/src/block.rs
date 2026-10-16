@@ -30,7 +30,6 @@ impl std::fmt::Debug for BlockHandle {
 }
 
 impl BlockHandle {
-    /// The owning context, after checking this handle still names its own block.
     fn context(&self) -> Context {
         let context = self.context.clone();
         debug_assert!(

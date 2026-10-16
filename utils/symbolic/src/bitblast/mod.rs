@@ -423,9 +423,6 @@ impl<'g, V> Blaster<'g, V> {
         Ok(self.mux_bits(cond, &then, &els))
     }
 
-    /// `Switch(p, a0, a1, ...)`: the arm `p` indexes, the last arm for any `p`
-    /// past it. A chain of muxes from the last arm down, each selecting arm
-    /// `i` where `p == i`.
     fn encode_switch(&mut self, id: NodeId) -> Result<Vec<Lit>, BitblastError> {
         let index = self.child_bits(id, 0);
         let arms = self.graph.children(id).count() - 1;
@@ -471,7 +468,6 @@ impl<'g, V> Blaster<'g, V> {
         y
     }
 
-    /// `y = s ? a : b`.
     fn gate_mux(&mut self, s: Lit, a: Lit, b: Lit) -> Lit {
         let y = self.fresh();
         self.solver.add_clause(&[s.negate(), a.negate(), y]);
@@ -488,7 +484,6 @@ impl<'g, V> Blaster<'g, V> {
             .collect()
     }
 
-    /// One bit equal to whether the two equal-width vectors are bitwise equal.
     fn eq_bits(&mut self, a: &[Lit], b: &[Lit]) -> Lit {
         let mut acc = self.one;
         for (&x, &y) in a.iter().zip(b) {

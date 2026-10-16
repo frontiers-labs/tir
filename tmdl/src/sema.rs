@@ -428,9 +428,6 @@ fn check_abis(files: &[ast::File], item_cache: &HashMap<&str, &ast::Item>) -> Ve
     diags
 }
 
-/// Validate sub-register-view params: `WRITE_POLICY` must be one of the two known
-/// policies, a nonzero `BIT_OFFSET` requires the merge policy, and the view
-/// (`BIT_OFFSET + WIDTH`) must fit within its storage class's `WIDTH`.
 fn check_register_classes(
     files: &[ast::File],
     item_cache: &HashMap<&str, &ast::Item>,
@@ -534,10 +531,6 @@ fn check_register_classes(
     diags
 }
 
-/// Validate the performance model: instruction `schedule` blocks, `unit`
-/// declarations, and `machine` resource/bind references must all resolve. This is
-/// the payoff of declaring units up front — a mistyped class name is an error
-/// here rather than a silent fall-through to the default cost at runtime.
 fn check_performance_model(
     files: &[ast::File],
     item_cache: &HashMap<&str, &ast::Item>,
@@ -2169,8 +2162,6 @@ fn resource_group_is_cyclic<'a>(
     cyclic
 }
 
-/// An `eliminated` instruction completes in the rename stage, so it can neither
-/// occupy an execution resource nor carry latency.
 fn eliminated_conflict(
     eliminated: Option<bool>,
     latency: Option<i64>,
@@ -2680,8 +2671,6 @@ fn check_asm(
     }
 }
 
-/// Validate register paths and exception kinds in a behavior or trap-handler
-/// body; `owner` names it in diagnostics.
 fn check_behavior(
     owner: &str,
     behavior: &ast::Expr,
@@ -2886,9 +2875,6 @@ fn check_behavior(
     diags
 }
 
-/// `let` scoping: a binding is visible only to the statements that follow it in
-/// its own block, and its name must be fresh — an operand, parameter, register
-/// class or another binding of that name is a redefinition.
 fn check_let_bindings(
     owner: &str,
     behavior: &ast::Expr,
@@ -2947,8 +2933,6 @@ fn check_let_bindings(
             diags.push((self.file_name.to_string(), Rich::custom(span, message)));
         }
 
-        /// Walk `expr` in source order; `scope` holds the bindings visible at
-        /// this point, and is truncated back on leaving a nested scope.
         fn walk(
             &self,
             expr: &ast::Expr,
@@ -3073,7 +3057,6 @@ fn check_let_bindings(
     walker.walk(behavior, &mut Vec::new(), diags);
 }
 
-/// A `load_reserved`/`store_conditional`/`atomic_rmw` call.
 fn is_atomic_call(e: &ast::Expr) -> bool {
     matches!(e, ast::Expr::Call(c) if matches!(
         &*c.callee,
@@ -3085,7 +3068,6 @@ fn is_atomic_call(e: &ast::Expr) -> bool {
     ))
 }
 
-/// An atomic operation whose result may be discarded in statement position.
 fn is_discardable_atomic_call(e: &ast::Expr) -> bool {
     matches!(e, ast::Expr::Call(c) if matches!(
         &*c.callee,
@@ -3095,7 +3077,6 @@ fn is_discardable_atomic_call(e: &ast::Expr) -> bool {
     ))
 }
 
-/// A `fence`/`fence_i` call.
 fn is_fence_call(e: &ast::Expr) -> bool {
     matches!(e, ast::Expr::Call(c) if matches!(
         &*c.callee,
@@ -3113,9 +3094,6 @@ fn count_matching(e: &ast::Expr, pred: fn(&ast::Expr) -> bool) -> usize {
     n
 }
 
-/// Enforce the atomics/fence structural rules: at most one atomic per statement,
-/// atomics only within an assignment RHS (or a bare `store_conditional`), and
-/// `fence`/`fence_i` only in statement position.
 fn check_atomic_structure(
     owner: &str,
     stmt: &ast::Expr,
@@ -3213,7 +3191,6 @@ fn check_atomic_structure(
     }
 }
 
-/// Best-effort span of an arbitrary expression, for diagnostics.
 pub(crate) fn expr_span(e: &ast::Expr) -> Span {
     match e {
         ast::Expr::Assign(a) => a.span,
@@ -3238,9 +3215,6 @@ pub(crate) fn expr_span(e: &ast::Expr) -> Span {
     }
 }
 
-/// Check an instruction's encoding expression and every shape it expands to.
-/// Bit ranges are checked once on the expression, since no condition moves
-/// them; each shape is then checked as the fixed bit map it is.
 fn check_encoding(
     instruction: &ast::Instruction,
     encoding: &ast::Expr,
@@ -3343,8 +3317,6 @@ fn check_encoding(
     diags
 }
 
-/// Bit-level checks of one fixed bit map: which operand bits it drops, and
-/// whether it fills whole encoding units.
 fn check_shape(
     instruction: &ast::Instruction,
     shape: &crate::shapes::Shape,
@@ -3463,8 +3435,6 @@ fn check_shape(
     diags
 }
 
-/// Decoding stays a function of the instruction word: two shapes of one
-/// instruction must differ in width or in some bit both of them fix.
 fn check_shapes_distinguishable(
     instruction: &ast::Instruction,
     shapes: &[crate::shapes::Shape],
@@ -3509,7 +3479,6 @@ fn check_shapes_distinguishable(
     diags
 }
 
-/// The literal bits a shape pins, by absolute bit position.
 fn fixed_bits(
     arms: &[ast::EncodingArm],
     params_cache: &HashMap<&str, (Type, Option<ast::Expr>)>,
@@ -3532,9 +3501,6 @@ fn fixed_bits(
     bits
 }
 
-/// An instruction whose behavior reads the program counter cannot have its
-/// length decided by a guard: the behavior would need to know which shape was
-/// chosen. No branch relaxation exists, so one shape is the rule.
 fn check_pc_single_shape(
     instruction: &ast::Instruction,
     shapes: &[crate::shapes::Shape],
@@ -3589,11 +3555,6 @@ fn check_pc_single_shape(
     )]
 }
 
-/// Which bits of `name` the encoding spells, low bit first, or `None` when the
-/// encoding does not carry the operand at all.
-/// Whether every way of reaching this shape asks that `operand` survives the
-/// `spelled` bits it spells of it. Each clause of the guard is one way, so each
-/// has to make the test itself.
 fn guard_proves_fit(
     guard: &crate::shapes::Guard,
     ctx: &crate::shapes::Context,
@@ -3648,8 +3609,6 @@ fn covered_bits(encoding: &[ast::EncodingField], name: &str, width: u16) -> Opti
     carried.then_some(covered)
 }
 
-/// `#[align(N)]` is a power of two and constrains an immediate: a register
-/// operand takes whatever values its class holds, not a multiple of anything.
 fn check_operand_constraints(
     instruction: &ast::Instruction,
     operands: &[&ast::Operand],

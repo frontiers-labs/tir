@@ -275,9 +275,6 @@ impl FuncOp {
 }
 
 impl FuncOp {
-    /// An unordered body names the values it produces, so what it names is what
-    /// the signature says the function returns. An ordered body says the same
-    /// thing through its [`RegionExit`] operations.
     fn verify_nodes_results(&self, context: &Context) -> Result<(), Error> {
         let body = self.body_region();
         if !body.is_nodes() {

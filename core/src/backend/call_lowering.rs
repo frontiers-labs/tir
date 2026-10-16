@@ -181,9 +181,6 @@ impl CallLowering {
         Ok(())
     }
 
-    /// An unordered body handing back a tuple it did not assemble assembles
-    /// it: the elements are extracted and put back together, so the return
-    /// lowering finds the `make_tuple` it takes apart.
     fn assemble_tuple_result(
         &self,
         context: &Context,
@@ -479,8 +476,6 @@ impl CallLowering {
         Ok(true)
     }
 
-    /// Expand every tuple argument into the scalars the convention passes,
-    /// and name the constructions that lowering may leave dead.
     fn flatten_arguments(
         &self,
         context: &Context,
@@ -526,8 +521,6 @@ impl CallLowering {
         Ok((lowered_arguments, tuple_arguments))
     }
 
-    /// Place every argument group in registers where the convention has room
-    /// for the whole group, and on the outgoing stack otherwise.
     fn assign_argument_locations(
         &self,
         context: &Context,
@@ -720,9 +713,6 @@ fn stack_class(abi: &AbiInfo, kind: ValueKind) -> Option<crate::backend::regallo
         .map(|register| register.0)
 }
 
-/// A fresh value of `class`, the type a machine instruction reads it through.
-/// Where a call's target comes from: a named symbol when the callee traces back
-/// to a λ node, otherwise the machine value the address was recovered from.
 fn resolve_callee(context: &Context, call: &CallOp) -> Callee {
     if let Some(symbol) = call.callee_symbol() {
         return Callee::Direct(symbol);

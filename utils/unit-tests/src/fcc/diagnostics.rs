@@ -33,9 +33,6 @@ fn span_packs_file_and_offset() {
     assert_eq!(span.offset(), 0);
 }
 
-/// Codegen no longer raises `E0901` through the driver, so the compact header
-/// (a spanless diagnostic without a source frame) is only reachable through
-/// the rendering API.
 #[test]
 fn spanless_diagnostic_renders_compact_header() {
     let diagnostic: Diagnostic = EmptyTranslationUnit::new().into();

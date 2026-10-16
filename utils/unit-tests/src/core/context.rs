@@ -155,7 +155,6 @@ module_end
     }
 }
 
-/// What the interner answers about a name.
 #[test]
 fn a_name_is_an_id_once_something_uses_it() {
     let first = Context::with_default_dialects();
@@ -188,8 +187,6 @@ fn a_name_is_an_id_once_something_uses_it() {
     assert_eq!(first.sym("value"), second.sym("value"));
 }
 
-/// `module { func demo { ^entry: } }` — the func body sits two regions deep,
-/// so an edit there must reach the module to prove root-ward propagation.
 fn module_with_function(context: &Context) -> (OpId, OpId, BlockHandle) {
     let module = fixtures::parse_in(
         context,
@@ -204,8 +201,6 @@ fn module_with_function(context: &Context) -> (OpId, OpId, BlockHandle) {
     (module.id(), func, body)
 }
 
-/// Every kind of IR edit dirties the edited op's owner and propagates the
-/// version bump root-ward to the module.
 #[test]
 fn every_edit_bumps_the_spine() {
     type Edit = fn(&Context, &BlockHandle);
@@ -465,7 +460,6 @@ fn uses_of_lists_each_operand_slot() {
     assert!(!context.is_used(add.result()));
 }
 
-/// A function body holding `%c = 1` and `%add = addi %c, %c`.
 fn add_fixture(context: &Context) -> (ValueId, ValueId, OpId) {
     let (_, _, body) = module_with_function(context);
     let i32_ty = builtin::IntegerType::new(context, 32);
@@ -532,7 +526,6 @@ fn replacing_value_uses_reaches_a_detached_op() {
     assert_eq!(context.use_count(d), 4);
 }
 
-/// An attribute is thirty-two bytes; a field added without a plan breaks this.
 #[test]
 fn stored_entities_keep_their_size_budget() {
     // An attribute is its interned name plus an `AttributeValue`, whose widest
@@ -540,8 +533,6 @@ fn stored_entities_keep_their_size_budget() {
     assert_eq!(std::mem::size_of::<tir::attributes::NamedAttribute>(), 32);
 }
 
-/// Growing an op past its run's size class moves the run to the next class,
-/// hands the old cell back, and leaves every use list resolving to the op.
 #[test]
 fn growing_an_op_promotes_its_run_and_keeps_its_uses() {
     let context = Context::with_default_dialects();

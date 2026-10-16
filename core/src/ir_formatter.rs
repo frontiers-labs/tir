@@ -58,7 +58,6 @@ impl<'a> IRFormatter<'a> {
         self.attribute_aliases = aliases;
     }
 
-    /// The alias standing in for `value`, if the file defines one.
     pub(crate) fn attribute_alias(&self, value: &AttributeValue) -> Option<&str> {
         self.attribute_aliases
             .iter()

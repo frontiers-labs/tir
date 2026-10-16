@@ -248,7 +248,6 @@ impl AsmPrinter {
     }
 }
 
-/// Escape a literal for a quoted assembler string directive.
 fn escape_asm_string(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     for c in value.chars() {

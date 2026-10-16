@@ -127,8 +127,6 @@ pub fn strip_mine(context: &Context, op: OpId, tile: i128) -> Result<(OpId, OpId
     Ok((main.id(), remainder.id()))
 }
 
-/// Point a copied counted body's predicate at the bound its new loop counts
-/// to: the copy compares the counter with the bound the original had.
 fn retarget_predicate(context: &Context, body: RegionId, upper: ValueId) {
     let predicate = context.get_region(body).value_results()[0];
     if let Some(compare) = context.get_value(predicate).defining_op() {

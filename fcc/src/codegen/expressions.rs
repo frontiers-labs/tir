@@ -220,7 +220,6 @@ impl FnCodegen<'_> {
         }
     }
 
-    /// The integer constant `value`, typed as the C type `node` carries.
     fn const_of_node(&mut self, node: NodeId, value: i64) -> LoweredExpr {
         let ty = lower_type(self.context, self.typed, node_type(self.typed, node));
         LoweredExpr::Value(
@@ -533,10 +532,6 @@ impl FnCodegen<'_> {
         Ok(LoweredExpr::Value(value))
     }
 
-    /// A lowered value with the width its own C type asks for. A relational
-    /// operator is one bit wide where the machine decides a branch on it, and
-    /// `int` everywhere it is read as a value, so a reader of the second kind
-    /// asks here rather than trusting the two to agree.
     pub(super) fn as_value_of_node_type(&mut self, value: ValueId, node: NodeId) -> ValueId {
         let target = lower_type(
             self.context,

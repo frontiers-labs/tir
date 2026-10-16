@@ -145,8 +145,6 @@ impl Emitter<'_> {
         }
     }
 
-    /// Move a node's operations into `region`, retargeting the operands whose
-    /// definitions the structure has since closed away.
     fn node(&self, node: NodeId, region: RegionId, env: &mut Env) -> Result<(), PassError> {
         let assigns = self.cfg.nodes[node].assigns.clone();
         self.assign(&assigns, region, env)?;
@@ -172,10 +170,6 @@ impl Emitter<'_> {
         Ok(())
     }
 
-    /// The exit leaves nothing behind but the values it carried: they are the
-    /// region's results, with the memory it hands back trailing. Every chain
-    /// the caller can reach is handed back as one state, so the callable
-    /// exports one state however many chains the body ran on.
     fn exit(
         &self,
         op: OpId,
@@ -232,8 +226,6 @@ impl Emitter<'_> {
         Ok(())
     }
 
-    /// Assignments happen at once: every right-hand side is read before any
-    /// variable takes its new value.
     fn assign(
         &self,
         assigns: &[(VarId, Rhs)],
@@ -252,11 +244,6 @@ impl Emitter<'_> {
         Ok(())
     }
 
-    /// A γ: a conditional's arms go false first, and a dispatch's arms carry
-    /// its cases, the default last. The arms read values
-    /// from the enclosing scope, but a chain they consume enters each arm as a
-    /// state port of its own: two arms changing one state would read as a
-    /// fork the order forbids, when they are alternatives.
     fn conditional(
         &self,
         decision: Decision,
@@ -352,9 +339,6 @@ impl Emitter<'_> {
         Ok(inverted.result())
     }
 
-    /// One arm of a gamma: its own region, entered on a port per chain and
-    /// producing a value for every port, taken from the arm where it assigned
-    /// one and from the enclosing scope where it did not.
     fn arm(
         &self,
         arm: &[Stmt],
@@ -380,10 +364,6 @@ impl Emitter<'_> {
         Ok(region)
     }
 
-    /// A θ: the body runs once per iteration and names the repeat predicate,
-    /// then the values the next iteration carries, then the values the loop
-    /// leaves with. Backedge assignments update the carried values separately:
-    /// an exit must observe the tail's values before those assignments.
     fn loop_op(
         &self,
         id: LoopId,
@@ -450,10 +430,6 @@ impl Emitter<'_> {
         Ok(())
     }
 
-    /// Give an `scf.ordered_for` the `scf.for` it stands for:
-    /// the ports are what the block carried, the comparison and increment the
-    /// shape pins are put back, and the yield says what the next iteration
-    /// takes. The old operation stays in its block, to go with it.
     fn counted_loop(&self, op: OpId) -> Result<OpId, PassError> {
         let context = self.context;
         let for_op = scf::OrderedForOp::from_op_instance(context.get_op(op));
@@ -537,8 +513,6 @@ impl Emitter<'_> {
         }
     }
 
-    /// One value per port, read from `env` or invented where nothing reaching
-    /// this point ever assigned the variable.
     fn port_values(
         &self,
         ports: &[VarId],
@@ -551,9 +525,6 @@ impl Emitter<'_> {
             .collect()
     }
 
-    /// A variable read where nothing assigned it belongs to code no path
-    /// reaches: the value it named is gone with the blocks that held it, so
-    /// the read is bound to an invented one.
     fn bind_undefined_reads(
         &self,
         op: OpId,
@@ -587,9 +558,6 @@ impl Emitter<'_> {
         }
     }
 
-    /// What `value` is called where it is being read: the variable's current
-    /// value where the structure routed it through a port, the value itself
-    /// where it is still in scope.
     fn resolve(&self, env: &Env, value: ValueId) -> ValueId {
         match self.cfg.value_var.get(&value) {
             Some(var) => env.get(var).copied().unwrap_or(value),

@@ -129,8 +129,6 @@ impl<'a> Matcher<'a> {
             })
     }
 
-    /// Search for `pattern`'s regex in `buf[from..to]`, returning the absolute
-    /// match range and any captured variables.
     fn search(
         &self,
         compiled: &crate::pattern::CompiledPattern,
@@ -307,8 +305,6 @@ impl<'a> Matcher<'a> {
         Ok(())
     }
 
-    /// Verify that no pending (or implicit) `CHECK-NOT` pattern matches within
-    /// `buf[from..to]`.
     fn check_nots(&mut self, from: usize, to: usize) -> Result<(), Failure> {
         if from > to {
             self.pending_nots.clear();
@@ -363,7 +359,6 @@ impl<'a> Matcher<'a> {
         }
     }
 
-    /// Index of the `\n` ending the line containing `off`, or `buf.len()`.
     fn line_end(&self, off: usize) -> usize {
         let off = off.min(self.buf.len());
         match self.buf[off..].find('\n') {

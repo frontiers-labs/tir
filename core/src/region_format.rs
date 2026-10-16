@@ -82,10 +82,6 @@ pub fn print_region(
     Ok(())
 }
 
-/// An unordered region prints in the evaluation order its dependencies impose,
-/// then names the values it produces on one trailing `->` line. A cycle has no
-/// such order; the verifier reports it, and printing falls back to insertion
-/// order so a broken region can still be read.
 fn print_nodes_region(
     fmt: &mut IRFormatter,
     context: &Context,
@@ -128,8 +124,6 @@ pub fn print_nodes_region_with(
     Ok(())
 }
 
-/// A region opening at the start of a line (a gamma's second arm) takes no
-/// leading space; one continuing an op line does.
 fn open_brace(fmt: &IRFormatter) -> &'static str {
     if fmt.at_line_start() { "{" } else { " {" }
 }

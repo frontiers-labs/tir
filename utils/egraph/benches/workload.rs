@@ -154,8 +154,6 @@ fn parse_pattern(tokens: &[&str], pos: &mut usize, names: &mut Interner) -> Patt
     Pattern::Node(symbol, children)
 }
 
-/// Renumber holes densely in first-use order, so a rule's variable count is the
-/// number of holes it has.
 fn renumber(pattern: &mut Pattern, map: &mut Vec<u32>) {
     match pattern {
         Pattern::Var(var) => {
@@ -227,8 +225,6 @@ fn parse(name: &'static str, iters: usize, text: &str) -> Workload {
     }
 }
 
-/// Order the nodes so each one's children are classes an earlier node defined.
-/// A class on a cycle gets an anchor leaf of its own to break it.
 fn order(nodes: Vec<(u32, u32, Vec<u32>)>, classes: usize, names: &mut Interner) -> Vec<Seed> {
     let mut defined = vec![false; classes];
     let mut placed = vec![false; nodes.len()];

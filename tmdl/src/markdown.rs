@@ -642,7 +642,6 @@ fn format_type(ty: &Type) -> String {
     }
 }
 
-/// The condition under which a shape is the encoding, as the source spelled it.
 fn format_guard(guard: &crate::shapes::Guard) -> String {
     guard
         .0

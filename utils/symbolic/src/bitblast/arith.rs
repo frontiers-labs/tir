@@ -7,7 +7,6 @@ use crate::lang::SymKind;
 use crate::sat::Lit;
 
 impl<V> Blaster<'_, V> {
-    /// Ripple-carry adder: returns the width-`n` sum and the carry-out.
     pub(super) fn adder(&mut self, a: &[Lit], b: &[Lit], carry_in: Lit) -> (Vec<Lit>, Lit) {
         let mut carry = carry_in;
         let mut sum = Vec::with_capacity(a.len());
@@ -26,20 +25,16 @@ impl<V> Blaster<'_, V> {
         bits.iter().map(|l| l.negate()).collect()
     }
 
-    /// `a - b` two's complement: returns the difference and the carry-out, where
-    /// the carry-out is the unsigned `a >= b` predicate.
     fn sub_carry(&mut self, a: &[Lit], b: &[Lit]) -> (Vec<Lit>, Lit) {
         let nb = Self::invert(b);
         let one = self.one;
         self.adder(a, &nb, one)
     }
 
-    /// `a - b` (two's complement, width preserved).
     pub(super) fn subtract(&mut self, a: &[Lit], b: &[Lit]) -> Vec<Lit> {
         self.sub_carry(a, b).0
     }
 
-    /// `-a` (two's complement negation).
     pub(super) fn negate(&mut self, a: &[Lit]) -> Vec<Lit> {
         let na = Self::invert(a);
         let zeros = vec![self.zero(); a.len()];
@@ -47,7 +42,6 @@ impl<V> Blaster<'_, V> {
         self.adder(&na, &zeros, one).0
     }
 
-    /// Shift-and-add multiplier, result truncated to the operand width.
     pub(super) fn multiply(&mut self, a: &[Lit], b: &[Lit]) -> Vec<Lit> {
         let w = a.len();
         let mut acc = vec![self.zero(); w];
@@ -63,12 +57,10 @@ impl<V> Blaster<'_, V> {
         acc
     }
 
-    /// `a >= b` for equal-width unsigned vectors: the carry-out of `a - b`.
     pub(super) fn uge(&mut self, a: &[Lit], b: &[Lit]) -> Lit {
         self.sub_carry(a, b).1
     }
 
-    /// Encode a comparison node into its one-bit result.
     pub(super) fn compare(&mut self, id: NodeId, kind: SymKind) -> Result<Vec<Lit>, BitblastError> {
         let (a, b) = self.binop_bits(id);
         // Signed comparisons reduce to unsigned ones with the sign bit flipped.
@@ -92,9 +84,6 @@ impl<V> Blaster<'_, V> {
         Ok(vec![bit])
     }
 
-    /// Encode bvudiv/bvurem/bvsdiv/bvsrem; `want_quotient` picks the quotient,
-    /// `signed` applies the two's-complement sign rules. SMT-LIB div-by-zero
-    /// (`bvudiv x 0 = ~0`, `bvurem x 0 = x`) falls out of the unsigned core.
     pub(super) fn divrem(
         &mut self,
         id: NodeId,
@@ -127,8 +116,6 @@ impl<V> Blaster<'_, V> {
         }
     }
 
-    /// Restoring division on unsigned width-`w` vectors, returning
-    /// `(quotient, remainder)` each `w` bits.
     fn udivrem(&mut self, a: &[Lit], b: &[Lit]) -> (Vec<Lit>, Vec<Lit>) {
         let w = a.len();
         let zero = self.zero();
@@ -153,7 +140,6 @@ impl<V> Blaster<'_, V> {
         (quot, rem)
     }
 
-    /// Barrel shifter for `bvshl`/`bvlshr`/`bvashr`.
     pub(super) fn shift(&mut self, id: NodeId, kind: Shift) -> Result<Vec<Lit>, BitblastError> {
         let (a, amount) = self.binop_bits(id);
         let w = a.len();
@@ -184,7 +170,6 @@ impl<V> Blaster<'_, V> {
         Ok(self.mux_bits(overflow, &saturated, &cur))
     }
 
-    /// Shift `bits` by constant `by`, filling vacated positions with `fill`.
     fn shift_const(&self, bits: &[Lit], by: usize, kind: Shift, fill: Lit) -> Vec<Lit> {
         let w = bits.len();
         (0..w)

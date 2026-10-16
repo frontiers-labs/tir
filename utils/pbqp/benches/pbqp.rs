@@ -28,9 +28,6 @@ fn dense_problem(node_count: usize, alternative_count: usize) -> PbqpProblem {
     problem
 }
 
-/// The shape a large basic block produces: many sparse nodes, a tree of
-/// expression classes plus sibling constraints, so exact reductions cascade and
-/// R2 introduces fill-in edges between the surviving neighbors.
 fn block_problem(node_count: usize, alternative_count: usize) -> PbqpProblem {
     let mut problem = PbqpProblem::new();
     for node in 0..node_count {

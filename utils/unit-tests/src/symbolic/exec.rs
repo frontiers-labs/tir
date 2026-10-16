@@ -34,7 +34,6 @@ fn as_u64(v: Value) -> u64 {
         _ => panic!(),
     }
 }
-/// Numeric view of a scalar result: float ops yield floats, comparisons 0 or 1.
 fn as_num(v: Value) -> f64 {
     match v {
         Value::Float(f) => f.to_f64(),
@@ -55,7 +54,6 @@ fn int_lanes(v: Value) -> Vec<i64> {
     }
 }
 
-/// Build a graph applying `kind` to one symbol per input, then execute it.
 fn exec_op(kind: SymKind, inputs: &[Value]) -> Value {
     let mut g = Graph::new();
     let args: Vec<NodeId> = (0..inputs.len() as u32).map(|i| sym(&mut g, i)).collect();

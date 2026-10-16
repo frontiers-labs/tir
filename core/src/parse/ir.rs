@@ -60,7 +60,6 @@ pub fn parse_op(context: &Context, src: &str) -> Result<Box<dyn Operation>, (Spa
     Ok(op)
 }
 
-/// Point every use of a placeholder at the value its name turned out to name.
 fn bind_forward_references(parser: &mut TextParser<'_>, context: &Context) -> ParseResult<()> {
     let bindings = parser
         .forward_bindings()
@@ -74,9 +73,6 @@ fn bind_forward_references(parser: &mut TextParser<'_>, context: &Context) -> Pa
     Ok(())
 }
 
-/// Consume the file preamble of `#name = value` attribute aliases, binding each
-/// for the rest of the parse. Aliases are file-scoped: they are defined before
-/// the top-level operation and referenced from any attribute inside it.
 fn parse_attribute_aliases<'src>(
     parser: &mut TextParser<'src>,
     context: &Context,
@@ -208,8 +204,6 @@ fn parse_located_op<'src>(
     }
 }
 
-/// The names a `%a, %b =` prefix binds; empty where the line binds nothing,
-/// with the cursor left where it was.
 fn parse_result_prefix(parser: &mut TextParser<'_>) -> ParseResult<Vec<String>> {
     let mark = parser.pos();
     let mut result_names = Vec::new();
@@ -226,9 +220,6 @@ fn parse_result_prefix(parser: &mut TextParser<'_>) -> ParseResult<Vec<String>> 
     Ok(result_names)
 }
 
-/// Retype the `Str` attributes an op declares as `Predicate`: the attribute
-/// parser has no op in scope, so it produces a string and the op's schema
-/// decides what it means.
 fn coerce_predicates(
     parser: &TextParser<'_>,
     context: &Context,
@@ -332,8 +323,6 @@ impl<'src> TextParser<'src> {
         Ok(region)
     }
 
-    /// The statements between the braces. Answers with the operations and
-    /// results of an unordered body, or `None` when the body was ordered.
     fn parse_region_body(
         &mut self,
         context: &Context,
@@ -392,8 +381,6 @@ impl<'src> TextParser<'src> {
         }
     }
 
-    /// Give the operations parsed before any block label to the entry block,
-    /// which an ordered body turns out to have after all.
     fn flush_loose(
         &mut self,
         context: &Context,
@@ -412,8 +399,6 @@ impl<'src> TextParser<'src> {
         *current = Some(block);
     }
 
-    /// The region's entry block, creating it — with the region's arguments, and
-    /// under the name `bb0` — the first time it is asked for.
     fn entry_block(&mut self, context: &Context, region: &RegionHandle) -> BlockId {
         let state = self
             .region_parse
@@ -431,8 +416,6 @@ impl<'src> TextParser<'src> {
         block.id()
     }
 
-    /// The `-> %a, %b` line closing an unordered region, if that is what
-    /// comes next. An empty result list is written as a bare `->`.
     fn try_parse_region_results(&mut self, context: &Context) -> ParseResult<Option<Vec<ValueId>>> {
         if !self.parse_token("->") {
             return Ok(None);
@@ -525,8 +508,6 @@ impl<'src> TextParser<'src> {
         Ok(Some((label, block_args, attrs)))
     }
 
-    /// Parse the block-attribute entries of `{name = value, ...}` after the
-    /// opening brace: string, float, integer or boolean values.
     fn parse_block_attribute_list(
         &mut self,
         context: &Context,
@@ -569,7 +550,6 @@ impl<'src> TextParser<'src> {
         }
     }
 
-    /// The `%a: !ty, %b: !ty)` list after a label's opening paren.
     fn parse_block_argument_list(
         &mut self,
         context: &Context,

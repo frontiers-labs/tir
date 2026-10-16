@@ -44,7 +44,6 @@ impl Enc<'_> {
     fn u64(&mut self, v: u64) {
         self.buf.extend_from_slice(&v.to_le_bytes());
     }
-    /// An `Elf_Addr`/`Elf_Off`/`Elf_Xword`-sized field: 4 or 8 bytes.
     fn addr(&mut self, v: u64) {
         match self.class {
             ElfClass::Elf32 => self.u32(v as u32),

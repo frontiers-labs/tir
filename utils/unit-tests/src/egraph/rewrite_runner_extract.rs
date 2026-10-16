@@ -120,11 +120,6 @@ fn roots_canonicalize_after_saturation() {
     assert_eq!(g.root(ab), g.root(ba));
 }
 
-/// A scope opened over a saturated graph starts its own saturation from the log
-/// its assumption left, not from a full search. The driver reads that log
-/// through `take_changed`, so what it reports there is the whole contract:
-/// `Some` of the assumption's own classes, rather than the `None` that asks for
-/// a full search.
 #[test]
 fn a_scope_over_a_fixpoint_starts_from_its_own_log() {
     let mut g = Engine::new();
@@ -150,7 +145,6 @@ fn a_scope_over_a_fixpoint_starts_from_its_own_log() {
 
 // ── Extraction ─────────────────────────────────────────────────────────────
 
-/// Unit cost for operators, zero for leaves.
 fn unit(node: &Math) -> u64 {
     match node {
         Math::Num(_) | Math::FNum(_) | Math::Sym(_) => 0,
@@ -215,8 +209,6 @@ fn terminates_on_a_cycle() {
 
 // ── Semi-naive saturation ──────────────────────────────────────────────────
 
-/// The rules the property test draws subsets from: heights 1 and 2, growing and
-/// shrinking, so a round's delta is neither always empty nor always everything.
 fn math_rules() -> Vec<Rule<Math>> {
     vec![
         comm_rule(),
@@ -293,9 +285,6 @@ fn math_rules() -> Vec<Rule<Math>> {
     ]
 }
 
-/// The pre-semi-naive driver: every round searches every rule over the whole
-/// graph and applies the matches one at a time, with one rebuild at its end.
-/// The reference the delta rounds and the batched heads must agree with.
 fn saturate_naive(
     g: &mut Engine<Math>,
     rules: &[&Rule<Math>],
@@ -355,9 +344,6 @@ fn build(g: &mut Engine<Math>, e: &Expr) -> Id {
     }
 }
 
-/// Cost of the expression extraction chose at `id` — the number it minimized.
-/// Not the shape: two saturations reaching the same partition hold different sets
-/// of equivalent spellings, so they break a cost tie differently.
 fn extracted_cost(
     g: &Engine<Math>,
     e: &tir_egraph::Extraction<'_, Math>,
@@ -459,9 +445,6 @@ proptest::proptest! {
     }
 }
 
-/// A rule reaching an atom sideways cannot have its roots narrowed to the change
-/// frontier: the row it reaches sits in a sibling class of the root, so nothing
-/// the log closes upward names the root when that row is minted.
 #[test]
 fn a_sideways_rule_still_fires_on_a_row_a_later_round_minted() {
     use smallvec::smallvec;

@@ -35,7 +35,6 @@ pub use verify_deps::{VerifyDepsPass, verify_deps};
 
 use crate::{ConstantLike, Context, OpHandle, OpId, Pure, RegionId, ValueId};
 
-/// Every region under `root`, each one ahead of the regions nested inside it.
 pub(crate) fn regions_under(context: &Context, root: OpId) -> Vec<RegionId> {
     context
         .get_op(root)
@@ -45,10 +44,6 @@ pub(crate) fn regions_under(context: &Context, root: OpId) -> Vec<RegionId> {
         .collect()
 }
 
-/// The operations the results of `roots` demand: an operation is demanded
-/// through an operand of a demanded one, or through the results of a region of
-/// one. An operation in a region nobody demands is demanded by nothing, however
-/// its own region reads it.
 pub(crate) fn demanded_ops(context: &Context, roots: &[RegionId]) -> crate::IdSet<OpId> {
     demanded_ops_with(context, roots, &[], &|_| &[])
 }
@@ -87,8 +82,6 @@ pub(crate) fn demanded_ops_with<'a>(
     demanded
 }
 
-/// A value op the transforms may reason about as an expression: one that
-/// declares purity, a literal, or one whose semantics the vocabulary spells.
 pub(crate) fn is_pure_value(instance: &OpHandle) -> bool {
     instance.clone().as_interface::<dyn Pure>().is_some()
         || instance

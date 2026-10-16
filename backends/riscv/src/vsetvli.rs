@@ -26,10 +26,6 @@ const SIMM12_MAX: i64 = 2047;
 /// (zvl128b); LMUL legalization sizes register groups against it.
 const VLEN_MIN: i64 = 128;
 
-/// The register-group multiplier a demand implies: the smallest LMUL whose
-/// group holds `vl` elements of `sew` bits at the guaranteed minimum VLEN. A
-/// register AVL (EVL-style, granted at run time) fits a single register by
-/// construction.
 fn lmul_for(avl: &Demand, sew: i64) -> Result<i64, PassError> {
     let Demand::Imm(vl) = avl else {
         return Ok(1);
@@ -45,8 +41,6 @@ fn lmul_for(avl: &Demand, sew: i64) -> Result<i64, PassError> {
     )))
 }
 
-/// The register class holding one value of `total_bits` at the guaranteed
-/// minimum VLEN: `VR` for a single register, else the LMUL group class.
 pub(crate) fn vr_class_for_bits(
     total_bits: i64,
 ) -> Result<tir::backend::regalloc::RegClassId, PassError> {
@@ -58,8 +52,6 @@ pub(crate) fn vr_class_for_bits(
     }
 }
 
-/// Pack a `vtypei` immediate: tail-agnostic, mask-agnostic, the given element
-/// width and group multiplier (`vma | vta | vsew << 3 | vlmul`).
 pub(crate) fn vtypei_for(sew: i64, lmul: i64) -> Result<i64, PassError> {
     let vsew = match sew {
         8 => 0,
@@ -95,8 +87,6 @@ enum Demand {
     Value(ValueId),
 }
 
-/// The demand a register slot of `op` carries: an integer the slot was
-/// materialized to, or the value it reads.
 fn demand(op: &OpHandle, name: &str) -> Option<Demand> {
     match op.attr(name) {
         Some(AttributeValue::Int(v)) => Some(Demand::Imm(v)),
@@ -119,9 +109,6 @@ struct ConfigState {
 pub struct InsertVsetvliPass;
 
 impl InsertVsetvliPass {
-    /// Insert the configuration instruction(s) satisfying `demand` before
-    /// `anchor`: `vsetivli` when the AVL is a 5-bit immediate, `vsetvli` when
-    /// it is a register (materializing larger immediates through `addi`).
     fn insert_config(
         &self,
         context: &Context,

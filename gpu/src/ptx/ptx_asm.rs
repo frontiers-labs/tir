@@ -51,7 +51,6 @@ enum Tok {
     Bang,
 }
 
-/// Remove `//` line comments and `/* */` block comments, preserving newlines.
 fn strip_comments(src: &str) -> String {
     let bytes = src.as_bytes();
     let mut out = String::with_capacity(src.len());
@@ -85,7 +84,6 @@ fn is_ident_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || c == '_' || c == '$' || c == '.'
 }
 
-/// Tokenize a fragment of PTX (a statement, or a literal template part).
 fn lex(src: &str) -> Vec<Tok> {
     let chars: Vec<char> = src.chars().collect();
     let mut toks = Vec::new();
@@ -158,7 +156,6 @@ struct Kernel {
     body: String,
 }
 
-/// Split a cleaned module into its leading directives (preamble) and kernels.
 fn split_kernels(src: &str) -> (String, Vec<Kernel>) {
     let chars: Vec<char> = src.chars().collect();
     let n = chars.len();
@@ -228,8 +225,6 @@ fn match_brace(chars: &[char], open: usize) -> Option<usize> {
     None
 }
 
-/// Index of the kernel header within `region` — the last linkage/entry directive
-/// run before the body. Anything before it is module-level (preamble).
 fn header_start(region: &str) -> usize {
     for kw in [".visible", ".weak", ".extern", ".entry", ".func"] {
         if let Some(pos) = region.find(kw) {
@@ -240,8 +235,6 @@ fn header_start(region: &str) -> usize {
     0
 }
 
-/// Extract the kernel name from its header (`.entry NAME (...)` or
-/// `.func (retparam) NAME (...)`).
 fn kernel_name(header: &str) -> String {
     let toks = lex(header);
     let mut i = 0;
@@ -276,8 +269,6 @@ fn kernel_name(header: &str) -> String {
     "unknown".to_string()
 }
 
-/// Separate leading `.`-directive declarations (`.reg`, `.local`, `.shared`, ...)
-/// from the instruction statements of a kernel body.
 fn split_regs(body: &str) -> (String, String) {
     let mut regs = String::new();
     let mut rest = String::new();
@@ -306,8 +297,6 @@ enum Statement {
     Instruction(String),
 }
 
-/// Split a body into statements: `;`-terminated directives/instructions and
-/// `ident:` labels.
 fn split_statements(body: &str) -> Vec<Statement> {
     let mut out = Vec::new();
     let mut cur = String::new();
@@ -361,11 +350,6 @@ fn body_items(rest: &str) -> Vec<BodyItem> {
         .collect()
 }
 
-/// Split a register token into its bank letters and index (`rd10` -> `("rd", 10)`).
-/// The class is derived from the bank so one operand-shape covers every type:
-/// `%rd`→RD, `%r`→R, `%f`→F, `%fd`→FD, `%p`→P, `%rs`→RS. Returns `None` for a
-/// non-register token (a symbol/special register), so the caller can fall through
-/// to another form.
 fn split_reg(reg: &str) -> Option<(String, u16)> {
     let split = reg.find(|c: char| c.is_ascii_digit())?;
     let (bank, num) = reg.split_at(split);
@@ -378,7 +362,6 @@ fn split_reg(reg: &str) -> Option<(String, u16)> {
     Some((bank.to_string(), num.parse().ok()?))
 }
 
-/// Canonical text of a single token (for reconstructing a captured group).
 fn tok_text(t: &Tok) -> &'static str {
     match t {
         Tok::Percent => "%",
@@ -397,10 +380,6 @@ fn tok_text(t: &Tok) -> &'static str {
     }
 }
 
-/// Capture a balanced `{...}` or `[...]` group starting at `start`, reconstructing
-/// its text (register vectors and complex addresses used by tensor/texture ops are
-/// preserved verbatim rather than modeled per element). Returns the rendered text
-/// and the position after the group.
 fn capture_group(toks: &[Tok], start: usize) -> Option<(String, usize)> {
     let (open, close) = match toks.get(start)? {
         Tok::LBrace => (Tok::LBrace, Tok::RBrace),
@@ -426,8 +405,6 @@ fn capture_group(toks: &[Tok], start: usize) -> Option<(String, usize)> {
     None
 }
 
-/// Try to match one instruction's tokens against a syntax entry, capturing
-/// operand attributes. Returns `None` if the form does not match.
 fn match_syntax(
     context: &Context,
     syntax: &InstrSyntax,
@@ -498,7 +475,6 @@ fn match_syntax(
     (pos == toks.len()).then_some(attrs)
 }
 
-/// Index of syntax entries by their leading mnemonic token.
 fn syntax_index() -> HashMap<String, Vec<&'static InstrSyntax>> {
     let mut map: HashMap<String, Vec<&'static InstrSyntax>> = HashMap::new();
     for entry in crate::ptx::asm_syntax() {
@@ -516,8 +492,6 @@ fn lex_first(entry: &InstrSyntax) -> Option<Tok> {
     }
 }
 
-/// Parse a full instruction statement (already stripped of any trailing newline),
-/// returning `(op_name, attributes)`.
 fn parse_instruction(
     context: &Context,
     index: &HashMap<String, Vec<&'static InstrSyntax>>,
@@ -632,9 +606,6 @@ fn attr_bool(op: &OpHandle, name: &str) -> bool {
     matches!(op.attr(name), Some(AttributeValue::Bool(true)))
 }
 
-/// A PTX operand as text: an allocated register by bank and index, an
-/// unallocated one by its value (ptxas allocates the rest), or the literal the
-/// slot holds.
 fn render_operand(op: &OpHandle, name: &str) -> Result<String, String> {
     if let Some(slot) = tir::backend::reg_slot(op, name) {
         let context = op.context.clone();
@@ -740,7 +711,6 @@ pub fn print(context: &Context, module: &ModuleOp) -> Result<String, String> {
     Ok(out)
 }
 
-/// Op ids of the first block of an op's single region.
 fn region_ops(context: &Context, op: &OpHandle) -> Vec<OpId> {
     let Some(region) = op.regions().first().copied() else {
         return Vec::new();

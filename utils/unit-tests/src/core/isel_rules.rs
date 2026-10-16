@@ -47,9 +47,6 @@ fn emit_unreachable(
     unreachable!("the relaxation gate never emits")
 }
 
-/// `If(Eq(b, guard_rhs), ones, Div(lhs, rhs))` — the riscv-div shape, with the
-/// guard constant and the else-arm operand order made configurable so the tests
-/// can build both the sound rule and the two unsound variants.
 fn guarded_div(guard_rhs: u64, else_swapped: bool) -> SemGraph {
     let mut g = SemGraph::new();
     let a = symbol(&mut g, 0);

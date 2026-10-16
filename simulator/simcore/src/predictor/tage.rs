@@ -77,7 +77,6 @@ impl Tage {
         ((pc >> 2) & ((1u64 << self.params.log_base) - 1)) as usize
     }
 
-    /// A counter is "weak" (looks newly allocated) in its two central states.
     fn weak(&self, ctr: i8) -> bool {
         ctr == 0 || ctr == -1
     }

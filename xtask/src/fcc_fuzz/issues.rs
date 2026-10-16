@@ -84,8 +84,6 @@ pub fn replay(
     Ok(())
 }
 
-/// The variant a record was filed against, recovered from its identity, whose
-/// first line is the variant's tag or `fcc-default`.
 fn variant_of(failure: &Failure) -> FccVariant {
     match failure.identity.lines().next() {
         Some(first) if first != "fcc-default" => FccVariant::from_tag(first),

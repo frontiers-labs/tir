@@ -17,7 +17,6 @@ pub fn parse<'src>(
         .into_output_errors()
 }
 
-/// Parse single translation unit
 fn file<'src, I>(
     file_name: &str,
 ) -> impl Parser<'src, I, File, extra::Err<Rich<'src, Token<'src>, Span>>>
@@ -348,14 +347,6 @@ where
         .then_ignore(just(Token::Semicolon))
 }
 
-/// Parse isa definition.
-/// Example:
-///
-/// ```tmdl
-/// isa RV32I {
-///   XLEN = 32,
-/// }
-/// ```
 fn isa_def<'src, I>() -> impl Parser<'src, I, Isa, extra::Err<Rich<'src, Token<'src>, Span>>>
 where
     I: ValueInput<'src, Token = Token<'src>, Span = Span>,
@@ -414,22 +405,6 @@ where
         .labelled("ISA definition")
 }
 
-/// Register class definition
-///
-/// Example:
-/// ```tmdl
-/// register_class GPR for TestIsa {
-///   parameters {
-///     width = self.XLEN,
-///     encoding_len = 5,
-///   }
-///   registers {
-///     x0("zero") => { traits = [hardwired_zero] },
-///     x1("ra") => {},
-///     x2..x31("r{}") => {},
-///   }
-/// }
-/// ```
 fn register_class_def<'src, I>()
 -> impl Parser<'src, I, RegisterClass, extra::Err<Rich<'src, Token<'src>, Span>>>
 where
@@ -730,7 +705,6 @@ where
     just(Token::KwBehavior).ignore_then(expr())
 }
 
-/// Parse an integer literal token (`42`, `0x10`, `0b101`) into an `i64`.
 fn int_lit<'src, I>() -> impl Parser<'src, I, i64, extra::Err<Rich<'src, Token<'src>, Span>>>
 where
     I: ValueInput<'src, Token = Token<'src>, Span = Span>,
@@ -740,7 +714,6 @@ where
     })
 }
 
-/// Digits of a numeric token without its grouping underscores.
 fn digits(n: &str) -> std::borrow::Cow<'_, str> {
     if n.contains('_') {
         std::borrow::Cow::Owned(n.replace('_', ""))
@@ -760,7 +733,6 @@ fn parse_int_lit(n: &str) -> Option<i64> {
     }
 }
 
-/// Parse a bracketed, comma-separated list of identifiers: `[a, b, c]`.
 fn ident_list<'src, I>()
 -> impl Parser<'src, I, Vec<String>, extra::Err<Rich<'src, Token<'src>, Span>>>
 where
@@ -774,7 +746,6 @@ where
         .delimited_by(just(Token::LBracket), just(Token::RBracket))
 }
 
-/// Instruction `schedule { units = [..]; }` block.
 fn schedule<'src, I>() -> impl Parser<'src, I, Schedule, extra::Err<Rich<'src, Token<'src>, Span>>>
 where
     I: ValueInput<'src, Token = Token<'src>, Span = Span>,
@@ -800,7 +771,6 @@ enum UnitField {
     Throughput(i64),
 }
 
-/// A `name = N;` integer pair, used inside `buffers` and `resource` bodies.
 fn kv_int_pair<'src, I>()
 -> impl Parser<'src, I, (String, i64), extra::Err<Rich<'src, Token<'src>, Span>>>
 where
@@ -813,7 +783,6 @@ where
         .then_ignore(just(Token::Semicolon))
 }
 
-/// Top-level `unit Name;` or `unit Name { latency = N; throughput = N; }`.
 fn unit_def<'src, I>()
 -> impl Parser<'src, I, SchedClassDecl, extra::Err<Rich<'src, Token<'src>, Span>>>
 where
@@ -939,8 +908,6 @@ where
         })
 }
 
-/// One `latency`/`throughput`/`uses`/`reads`/`writes` field of a `bind` or
-/// `override` body.
 fn bind_field<'src, I>()
 -> impl Parser<'src, I, BindField, extra::Err<Rich<'src, Token<'src>, Span>>>
 where
@@ -1006,8 +973,6 @@ where
     ))
 }
 
-/// A machine resource expression. `&` binds more tightly than `|`; `<N>` is a
-/// postfix reservation duration on one resource or parenthesized expression.
 fn resource_expr<'src, I>()
 -> impl Parser<'src, I, ResourceExpr, extra::Err<Rich<'src, Token<'src>, Span>>>
 where
@@ -1054,7 +1019,6 @@ where
     })
 }
 
-/// A braced `bind`/`override` body: zero or more timing fields.
 fn bind_body<'src, I>()
 -> impl Parser<'src, I, Vec<BindField>, extra::Err<Rich<'src, Token<'src>, Span>>>
 where
@@ -1544,7 +1508,6 @@ fn int_field(fields: &[(String, i64)], name: &str) -> i64 {
         .map_or(0, |(_, value)| *value)
 }
 
-/// Parse a pipeline-stage protection mode identifier into [`Protection`].
 fn protection_mode<'src, I>()
 -> impl Parser<'src, I, Protection, extra::Err<Rich<'src, Token<'src>, Span>>>
 where
@@ -1561,7 +1524,6 @@ where
     })
 }
 
-/// Parse one pipeline phase: `NAME;` or `NAME: <protection>;`.
 fn pipeline_phase<'src, I>()
 -> impl Parser<'src, I, PipelinePhase, extra::Err<Rich<'src, Token<'src>, Span>>>
 where
@@ -1578,7 +1540,6 @@ where
         })
 }
 
-/// Top-level `machine Name for [..] { issue_width=..; buffers{..} resource X{..} bind Y{..} }`.
 fn machine_def<'src, I>() -> impl Parser<'src, I, Machine, extra::Err<Rich<'src, Token<'src>, Span>>>
 where
     I: ValueInput<'src, Token = Token<'src>, Span = Span>,
@@ -1815,11 +1776,6 @@ where
         .labelled("machine definition")
 }
 
-/// `encoding { a, b, c }`: the instruction word as an expression. The braces
-/// are sugar for the concatenation `(a, b, c)` — elements high bit first
-/// within an encoding unit, units in emission order. An element may itself be
-/// a concatenation, a call to a `fn` helper, or an `if` whose arms differ in
-/// width; [`crate::shapes`] expands the result into fixed bit maps.
 fn encoding<'src, I>() -> impl Parser<'src, I, Expr, extra::Err<Rich<'src, Token<'src>, Span>>>
 where
     I: ValueInput<'src, Token = Token<'src>, Span = Span>,
@@ -1899,7 +1855,6 @@ enum OperandAttribute {
     Nonzero,
 }
 
-/// The `#[align(N), nonzero]` group preceding an operand.
 fn operand_attributes<'src, I>()
 -> impl Parser<'src, I, OperandAttributes, extra::Err<Rich<'src, Token<'src>, Span>>>
 where
@@ -2056,8 +2011,6 @@ where
     any().filter(is_ident).map(|t| t.as_ident().to_string())
 }
 
-/// `fn name(p1, p2) { body }` — a pure expression-level helper, inlined at
-/// call sites before semantic analysis (see `fninline`).
 fn fn_def<'src, I>() -> impl Parser<'src, I, FnDef, extra::Err<Rich<'src, Token<'src>, Span>>>
 where
     I: ValueInput<'src, Token = Token<'src>, Span = Span>,
@@ -2635,9 +2588,6 @@ where
     })
 }
 
-/// `bits<W>`: the width a cast or a `let` annotation names. `expr` parses a
-/// width computed from parameters; a plain literal is tried first so the
-/// closing `>` is never read as a comparison.
 fn bits_width_of<'src, I, P>(
     expr: P,
 ) -> impl Parser<'src, I, Expr, extra::Err<Rich<'src, Token<'src>, Span>>>

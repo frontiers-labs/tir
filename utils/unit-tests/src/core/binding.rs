@@ -46,8 +46,6 @@ tir::helpers::operation! {
     }
 }
 
-/// An unordered region over `port_types`, producing one constant per entry of
-/// `result_values` (a `(value, width)` pair each).
 fn nodes_region(context: &Context, port_types: &[TypeId], results: &[(i64, u32)]) -> RegionId {
     let ports = port_types
         .iter()
@@ -148,9 +146,6 @@ fn a_gamma_binding_forwards_inputs_and_joins_arm_results() {
     op.verify(&context).expect("an aligned gamma verifies");
 }
 
-/// `scf.r#for %i = %lb to %ub step %s (%a = %init)` built by hand, with the body
-/// results `shape` chooses from the counter, its comparison, its increment,
-/// the carried port and its doubled value.
 fn counted(
     context: &Context,
     predicate: tir::attributes::Predicate,

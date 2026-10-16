@@ -58,8 +58,6 @@ pub(crate) struct Node {
 }
 
 impl Node {
-    /// How many columns lie above the node: the index of the column its cells
-    /// are of.
     pub(crate) fn depth(self) -> usize {
         self.level as usize
     }
@@ -84,7 +82,6 @@ impl Trie {
         trie
     }
 
-    /// Bring the trie up to date with `table`.
     pub(crate) fn refresh(&mut self, table: &Table) {
         let columns: SmallVec<[&[u32]; 6]> = self
             .columns
@@ -150,7 +147,6 @@ impl Trie {
         }
     }
 
-    /// The root of the delta, unless it is empty.
     pub(crate) fn delta_root(&self) -> Option<Node> {
         (!self.delta.rows.is_empty()).then_some(Node {
             delta: true,
@@ -166,7 +162,6 @@ impl Trie {
         }
     }
 
-    /// The cells of a node above the leaves.
     pub(crate) fn set(&self, node: Node) -> Set<'_> {
         let part = self.part(node);
         let level = &part.levels[node.level as usize];
@@ -182,7 +177,6 @@ impl Trie {
         }
     }
 
-    /// The node under `cell` of a node above the leaves.
     #[inline]
     pub(crate) fn child(&self, node: Node, cell: u32) -> Option<Node> {
         let level = &self.part(node).levels[node.level as usize];
@@ -197,7 +191,6 @@ impl Trie {
         })
     }
 
-    /// The rows of a leaf, ascending.
     pub(crate) fn rows(&self, leaf: Node) -> &[u32] {
         let part = self.part(leaf);
         debug_assert_eq!(leaf.level as usize, part.levels.len(), "a leaf");
@@ -207,7 +200,6 @@ impl Trie {
 }
 
 impl Part {
-    /// Index `rows`, sorted by `columns` already, as a trie.
     fn build(&mut self, columns: &[&[u32]]) {
         self.levels.resize_with(columns.len(), Level::default);
         for level in &mut self.levels {
@@ -279,8 +271,6 @@ mod tests {
 
     use super::*;
 
-    /// Walk every path of the trie below `node`, checking each node's cells
-    /// are ascending and distinct, and collect `(path, row)` per leaf row.
     fn leaves(trie: &Trie, node: Node, path: &mut Vec<u32>, out: &mut Vec<(Vec<u32>, u32)>) {
         if node.depth() == trie.columns().len() {
             let rows = trie.rows(node);

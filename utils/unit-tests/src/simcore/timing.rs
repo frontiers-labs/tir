@@ -9,10 +9,6 @@ use tir_sim::{Executor, TraceOptions};
 
 use super::support::{riscv_program, run_sim};
 
-/// Control flow is derived from the behavior's `PC::pc` writes at
-/// TMDL-compile time: a guarded write is a conditional branch, an
-/// unguarded one an unconditional transfer, none a sequential instruction.
-/// PC *reads* (auipc) must not count.
 #[test]
 fn control_flow_derived_from_pc_writes() {
     use tir::attributes::{AttributeValue, RegisterAttr};
@@ -84,8 +80,6 @@ fn control_flow_derived_from_pc_writes() {
     assert_eq!(cf(&bl), ControlFlow::Unconditional);
 }
 
-/// Run `asm` functionally from `first` to the `done` sentinel, recording the
-/// dynamic trace.
 fn record_trace(context: &tir::Context, asm: &str) -> Executor {
     let program = riscv_program(context, asm, "first");
     let until_pc = *program.symbols.get("done").unwrap();
@@ -103,15 +97,12 @@ fn record_trace(context: &tir::Context, asm: &str) -> Executor {
     exec
 }
 
-/// Run `asm` functionally, recording the dynamic trace, then time it.
 fn time_asm(asm: &str, model: &MachineModel, config: &TimingConfig) -> TimingResult {
     let context = tir::Context::with_default_dialects();
     let exec = record_trace(&context, asm);
     run_sim(model, &context, exec.trace(), config, &mut AlwaysNotTaken)
 }
 
-/// Five independent ALU ops: an out-of-order core overlaps them (wide issue),
-/// an in-order core retires them one per cycle. The engine must reflect that.
 #[test]
 fn ooo_overlaps_independent_work() {
     // The asm parser emits symbols in reverse source order, so the `done`
@@ -153,9 +144,6 @@ fn ooo_overlaps_independent_work() {
     assert!(oo.ipc() > io.ipc());
 }
 
-/// End-to-end: a real backward-branch loop runs functionally (3 iterations),
-/// and the recorded trace shows the loop predictor's advantage — always-not-taken
-/// mispredicts every taken back-edge, BTFN only the loop exit.
 #[test]
 fn loop_branch_prediction_end_to_end() {
     use tir::backend::MachineContext;
@@ -211,7 +199,6 @@ fn loop_branch_prediction_end_to_end() {
     );
 }
 
-/// A dependent chain serializes on both cores regardless of issue width.
 #[test]
 fn dependent_chain_serializes() {
     let asm = "
@@ -233,10 +220,6 @@ fn dependent_chain_serializes() {
     assert!(oo.cycles >= 8, "dependent chain too short: {}", oo.cycles);
 }
 
-/// End-to-end through `simulate`: a single static branch driven by a
-/// period-8 pattern is unlearnable by a static predictor but memorized by
-/// the history-based TAGE and BATAGE, which drive steady-state
-/// mispredictions to zero.
 #[test]
 fn tage_and_batage_learn_periodic_branch() {
     use tir::OpId;

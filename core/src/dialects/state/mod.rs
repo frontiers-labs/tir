@@ -160,7 +160,6 @@ impl tir::Verifiable for SplitOp {
     }
 }
 
-/// These ops leave `results` states behind and nothing else.
 fn expect_states(op: &tir::OpHandle, results: usize) -> Result<(), Error> {
     let (dialect, name) = (op.dialect(), op.name());
     if op.state_results().len() != results || !op.value_results().is_empty() {

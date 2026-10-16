@@ -27,18 +27,12 @@ struct Entry {
     n0: u8,
 }
 
-/// Bayesian confidence of a dual counter: 0 = high, 1 = medium, 2 = low.
-/// `medium = (n1 == 2*n0+1) || (n0 == 2*n1+1)`,
-/// `low = (n1 < 2*n0+1) && (n0 < 2*n1+1)` (Michaud, §4.2).
 fn confidence(n1: u32, n0: u32) -> u8 {
     let medium = n1 == 2 * n0 + 1 || n0 == 2 * n1 + 1;
     let low = n1 < 2 * n0 + 1 && n0 < 2 * n1 + 1;
     2 * u8::from(low) + u8::from(medium)
 }
 
-/// The Bayesian misprediction-probability estimate `m̂ = (1+min(n1,n0))/(2+n1+n0)`
-/// (Laplace's rule of succession, Michaud eq. 1). Used to identify moderately-
-/// high-confidence entries during controlled allocation throttling.
 fn mhat(n1: u32, n0: u32) -> f64 {
     (1.0 + n1.min(n0) as f64) / (2.0 + (n1 + n0) as f64)
 }
@@ -99,8 +93,6 @@ impl Batage {
         ((pc >> 2) & ((1u64 << self.params.log_base) - 1)) as usize
     }
 
-    /// The tagless up/down counter `x` behaves like a dual counter; map it to
-    /// an equivalent `(n1, n0)` (Michaud §5.2) to reuse `confidence`/`mhat`.
     fn base_dual(x: i8) -> (u32, u32) {
         if x >= 0 {
             ((x as u32) + 2, 1)
@@ -123,9 +115,6 @@ impl Batage {
         }
     }
 
-    /// Decay: decrement the larger counter, leaving the ratio's numerator
-    /// unchanged but shrinking the denominator, so confidence drops toward
-    /// medium (Michaud §5.3).
     fn dc_decay(e: &mut Entry) {
         if e.n1 > e.n0 {
             e.n1 -= 1;
@@ -256,10 +245,6 @@ impl BranchPredictor for Batage {
 }
 
 impl Batage {
-    /// Controlled Allocation Throttling (Michaud §5.5–5.6, Fig. 6): allocate at
-    /// most one tagged entry on a misprediction, skipping and probabilistically
-    /// decaying protected high-confidence entries, and steering the allocation
-    /// probability via the `cat` counter.
     fn allocate(&mut self, taken: bool, p: &Prediction) {
         let g = self.params.num_tables;
         // Allocation-probability gate: `1` when `cat` is small, `1/minap` when

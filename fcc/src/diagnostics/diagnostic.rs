@@ -17,7 +17,6 @@ pub struct Diagnostic {
 }
 
 impl Diagnostic {
-    /// Start a diagnostic for `code`, defaulting the message to its title.
     pub(super) fn of(code: Code) -> Self {
         Diagnostic {
             code,
@@ -125,8 +124,6 @@ impl Diagnostic {
         report.finish().write(cache, w)
     }
 
-    /// Spanless rendering: `kind[CODE]: message` plus help/note lines, matching
-    /// ariadne's header style without a source frame.
     fn write_compact(&self, w: &mut dyn Write, color: bool) -> io::Result<()> {
         let (word, accent) = match self.code.severity() {
             Severity::Error => ("error", "\x1b[31m"),

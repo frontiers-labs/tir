@@ -20,14 +20,6 @@ use crate::backend::reg_slots;
 use crate::backend::regalloc::TargetRegAlloc;
 use crate::backend::registers::{RegSlot, value_class};
 
-/// Which vregs stand for immediate constants, keyed to the definition that
-/// materializes them: the values the allocator may drop at spill time in
-/// favor of re-issuing the definition at each use. A vreg referenced through
-/// any class other than the one its definition writes does not qualify: the
-/// replay would produce a value the instructions reading it cannot honor. A
-/// vreg defined more than once does not qualify either: the replay retires
-/// the constant definition, and a second definition — a two-address op
-/// rewriting the value — would read a register nothing stands behind anymore.
 pub(crate) fn rematerializable(
     context: &Context,
     blocks: &[BlockId],
@@ -61,8 +53,6 @@ pub(crate) fn rematerializable(
     defs
 }
 
-/// The value `op` defines, when all `op` does is write an immediate, or a
-/// symbol address the target computes the same anywhere, into it.
 pub(crate) fn constant_result(op: &OpHandle, target: &dyn TargetRegAlloc) -> Option<ValueId> {
     let mi = op.clone().as_interface::<dyn MachineInstruction>()?;
     let info = mi.info();

@@ -477,8 +477,6 @@ fn emit_global(
     Ok(())
 }
 
-/// Append a data directive's bytes to the current section. String directives
-/// emit their raw bytes; numeric directives emit little-endian values.
 fn emit_literal(op: &tir::OpHandle, state: &mut ObjectEmission) -> Result<(), BinaryEmitError> {
     let unsupported = || BinaryEmitError::UnsupportedOp {
         op: LiteralOp::name().to_string(),

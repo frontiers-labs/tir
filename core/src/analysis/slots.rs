@@ -74,8 +74,6 @@ pub fn collect_slots(
     slots
 }
 
-/// The allocation a pointer names: arithmetic on a pointer points into the
-/// object it started from, so the chain of `ptradd`s reads back to it.
 fn slot_base(context: &Context, pointer: ValueId) -> ValueId {
     let mut base = pointer;
     while let Some(defining) = context.get_value(base).defining_op() {

@@ -291,7 +291,6 @@ fn idx(index: &Idx) -> TokenStream {
     }
 }
 
-/// The range `slice` names in a list of `len` entries, in terms of `n`.
 fn slice(slice: &Slice) -> TokenStream {
     match slice {
         Slice::All => quote! { 0..len },
@@ -307,8 +306,6 @@ fn slice(slice: &Slice) -> TokenStream {
     }
 }
 
-/// The range a term denotes, evaluated against the op held in `self.0` with
-/// `__segments`, `__context` and `n` in scope.
 fn range(shape: &OpShape, term: &Term) -> TokenStream {
     match term {
         Term::Operands(groups) => {

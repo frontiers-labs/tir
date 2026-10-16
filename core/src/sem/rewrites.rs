@@ -49,7 +49,6 @@ impl Theory {
         self.rules.push(rule);
     }
 
-    /// Add the read-zero and ignored-write laws declared by target register traits.
     pub(crate) fn with_hardwired_zero_fields(
         mut self,
         fields: &[(super::StateResourceKind, super::StateFieldKind)],

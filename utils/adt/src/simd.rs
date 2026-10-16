@@ -56,8 +56,6 @@ pub(crate) struct Kernels {
     and_words: unsafe fn(a: *mut u64, b: *const u64, len: usize),
 }
 
-/// The instruction sets this CPU has kernels for, widest first; the plain Rust
-/// ones are last and always present.
 fn available() -> Vec<&'static Kernels> {
     let mut sets: Vec<&'static Kernels> = Vec::new();
     #[cfg(target_arch = "x86_64")]

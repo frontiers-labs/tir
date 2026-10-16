@@ -163,10 +163,6 @@ impl APInt {
         }
     }
 
-    /// Interpret the bit pattern as two's-complement at this width, regardless
-    /// of the `signed` flag. Signed division/remainder are defined on the bits,
-    /// so a value produced without the flag set (e.g. an `extract`) must still
-    /// divide with its high bit as the sign.
     fn signed_at_width(&self) -> i64 {
         if self.width >= 64 {
             self.value as i64
@@ -644,7 +640,6 @@ impl APInt {
         widen(self).scmp(&widen(other))
     }
 
-    /// Primary ordering key: magnitude as i128 (signed sign-extended, unsigned zero-extended).
     fn numeric_key(&self) -> i128 {
         if self.signed {
             self.to_i64() as i128
@@ -737,7 +732,6 @@ impl APInt {
         u64::from((self.value & mask).count_ones())
     }
 
-    /// Value sign-extended to a full 128-bit pattern (negatives fill the high bits).
     fn sext_u128(&self) -> u128 {
         if self.is_negative() {
             (self.value as u128) | (u128::MAX << self.width)
@@ -746,7 +740,6 @@ impl APInt {
         }
     }
 
-    /// Low-`width`-bits mask.
     fn mask_for_width(width: u64) -> u64 {
         if width >= 64 {
             u64::MAX

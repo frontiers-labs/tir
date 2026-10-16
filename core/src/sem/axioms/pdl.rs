@@ -21,9 +21,6 @@ mod isel {
     include!(concat!(env!("OUT_DIR"), "/isel_axioms.rs"));
 }
 
-/// Every rule of the shared rule set the prover reads: the `smt` and
-/// `trusted` ones. `definitional` rules are laws of an algebra it has no model
-/// for, and are skipped.
 pub(crate) fn isel_axioms() -> Result<Vec<Axiom>, String> {
     isel::file()
         .items
@@ -377,7 +374,6 @@ fn node(term: &Term, side: Side, scope: &Scope) -> Result<AxNode, String> {
     }
 }
 
-/// Whether `node` is a `#loop` holding no other.
 fn is_root_loop(node: &AxNode) -> bool {
     match node {
         AxNode::Node(SymKind::Loop, children) => !children

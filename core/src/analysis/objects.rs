@@ -41,7 +41,6 @@ impl Base {
                 || matches!((self, other), (Base::Global(_), Base::Global(_))))
     }
 
-    /// Whether the object is nothing else the function names.
     fn unshared(self) -> bool {
         matches!(self, Base::Alloca(_) | Base::Param { noalias: true, .. })
     }
@@ -96,12 +95,6 @@ pub fn object_base(context: &Context, address: ValueId) -> Option<Base> {
     }
 }
 
-/// The one pointer a slot ever holds, where reading it back can only give that
-/// pointer: a fresh allocation whose address never leaves its own accesses and
-/// which exactly one write, of the whole slot, ever names. That is what a
-/// frontend spilling a pointer parameter it never assigns again leaves behind,
-/// and reading through the spill is how the object the parameter names reaches
-/// the accesses derived from it.
 fn only_pointer_held(context: &Context, slot: ValueId) -> Option<ValueId> {
     let allocation = context.get_value(slot).defining_op()?;
     if !context
@@ -137,8 +130,6 @@ fn only_pointer_held(context: &Context, slot: ValueId) -> Option<ValueId> {
     held.filter(|_| accessed_only(context, slot))
 }
 
-/// The region `value` is a parameter of: its own port, or an argument of the
-/// entry block a region is entered on, which is the same list either way.
 fn parameter_region(context: &Context, value: ValueId) -> Option<RegionId> {
     if let Some(region) = context.region_of_port(value) {
         return Some(region);

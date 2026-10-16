@@ -11,7 +11,6 @@ fn cache(size: u64, ways: u32, line: u64, latency: u64) -> CacheParams {
     }
 }
 
-/// A two-level system with `l1d` mirrored into L1I, no L3 and DRAM 100.
 fn system(l1d: CacheParams, l2: CacheParams) -> MemorySystem {
     MemorySystem::new(MemParams {
         l1i: l1d,
@@ -23,7 +22,6 @@ fn system(l1d: CacheParams, l2: CacheParams) -> MemorySystem {
     })
 }
 
-/// 1 KiB/2-way/lat 2 L1D over a 4 KiB/lat 10 "L2".
 fn small() -> MemorySystem {
     system(cache(1024, 2, 64, 2), cache(4096, 4, 64, 10))
 }

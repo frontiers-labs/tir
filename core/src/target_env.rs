@@ -101,8 +101,6 @@ pub fn target_env_spec(arch: &str, features: &[String]) -> AttributeValue {
     ))
 }
 
-/// Checks the shape of a [`TARGET_ENV`] spec. Entries outside the predefined
-/// set are an extension point and pass unexamined.
 pub(crate) fn verify_spec(value: &AttributeValue) -> Result<(), crate::Error> {
     let AttributeValue::Dict(entries) = value else {
         return Err(invalid_spec("target_env must be a dictionary"));

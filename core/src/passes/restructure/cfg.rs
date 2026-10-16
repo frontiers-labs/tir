@@ -271,9 +271,6 @@ impl Builder<'_> {
         }
     }
 
-    /// Every block argument becomes a variable, the entry block's parameters
-    /// included: a branch back to the entry block gives them a second value,
-    /// and the preheader binds them to the parameters themselves.
     fn create_argument_vars(&mut self, blocks: &[BlockId]) {
         for &block in blocks {
             for argument in self.context.get_block(block).arguments() {
@@ -344,9 +341,6 @@ impl Builder<'_> {
         }
     }
 
-    /// A branch choosing its edge by the selector's value: one decision over all
-    /// of them. A one-bit selector has two values to tell apart, which is a
-    /// conditional.
     fn case_terminator(
         &self,
         guard: &dyn CaseGuard,
@@ -396,9 +390,6 @@ impl Builder<'_> {
         }
     }
 
-    /// Give the entry block a predecessor-free node in front of it, so that a
-    /// loop closing back onto the entry has somewhere to put its head. It binds
-    /// the entry block's argument variables to the region's own arguments.
     fn add_preheader(&mut self, entry: BlockId) {
         let assigns = self
             .context
@@ -416,13 +407,6 @@ impl Builder<'_> {
         });
     }
 
-    /// One dependency chain per object, each as a variable of its own: every
-    /// block is entered on a dependency argument standing for each chain,
-    /// threads its effects off those, and the memory a chain leaves the block
-    /// with is the variable's next value, the way any result read past its
-    /// node is. The exit exports every chain to the caller; where several
-    /// exits were merged, the merged one reads the variables as they stand
-    /// there.
     fn thread_resources(&mut self, region: RegionId) -> Result<(), PassError> {
         let plan = super::deps::plan(self.context, region);
         let chains: Vec<VarId> = (0..plan.chains())
@@ -517,8 +501,6 @@ impl Builder<'_> {
         Ok(())
     }
 
-    /// Leave the region through one node: the extra exits keep their values by
-    /// assigning them to variables the surviving exit reads.
     fn unify_sinks(&mut self) -> Result<(), PassError> {
         let sinks = (0..self.cfg.nodes.len())
             .filter(|&node| matches!(self.cfg.nodes[node].term, Term::Sink { .. }))
@@ -571,8 +553,6 @@ impl Builder<'_> {
         Ok(())
     }
 
-    /// A value read outside the node defining it cannot stay a plain value: the
-    /// structure may close the region it is defined in before the read happens.
     fn create_value_vars(&mut self) {
         let mut definition = BTreeMap::new();
         let mut reads: BTreeMap<ValueId, BTreeSet<NodeId>> = BTreeMap::new();

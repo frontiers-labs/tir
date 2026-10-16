@@ -157,7 +157,6 @@ fn is_pointer(context: &Context, value: ValueId) -> bool {
     crate::ptr::PtrType::view(context, context.get_value(value).ty()).is_some()
 }
 
-/// The symbol `value` is the definition of, when it is one.
 fn symbol_of(context: &Context, value: ValueId) -> Option<String> {
     let definition: OpId = context.get_value(value).defining_op()?;
     if !context.has_operation(definition) {

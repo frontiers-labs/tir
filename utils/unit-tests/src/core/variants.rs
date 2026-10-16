@@ -6,7 +6,6 @@ use tir::{variants, Context, Operation, PassError};
 
 use super::fixtures;
 
-/// A committed function with one op, and the number of ops the base holds.
 fn function() -> (Context, tir::BlockHandle, usize) {
     let (context, _, func, _) = fixtures::parse_function(
         r#"module {
@@ -22,7 +21,6 @@ module_end
     (context, body, ops_live)
 }
 
-/// Builds `count` constants into the body: a candidate whose size is its name.
 fn build(context: &Context, count: &usize, body: &tir::BlockHandle) -> Result<bool, PassError> {
     let i32_ty = IntegerType::new(context, 32);
     let body = context.get_block(body.id());

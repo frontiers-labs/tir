@@ -58,8 +58,6 @@ use libtest_mimic::{Arguments, Failed, Trial};
 use regex::Regex;
 use serde::Deserialize;
 
-/// Whether a test with the given display name should run under the
-/// `LIT_FILTER`/`LIT_FILTER_OUT` regexes.
 fn filter_decision(name: &str, filter: Option<&Regex>, filter_out: Option<&Regex>) -> bool {
     filter.is_none_or(|re| re.is_match(name)) && !filter_out.is_some_and(|re| re.is_match(name))
 }
@@ -81,7 +79,6 @@ enum Gate {
     Ignore,
 }
 
-/// Compute the set of platform feature tokens available on this host.
 fn host_features() -> HashSet<String> {
     let mut features = HashSet::new();
     features.insert(std::env::consts::OS.to_string());
@@ -97,7 +94,6 @@ fn host_features() -> HashSet<String> {
     features
 }
 
-/// Whether a (possibly `!`-negated) feature token is satisfied by `features`.
 fn token_satisfied(features: &HashSet<String>, token: &str) -> bool {
     match token.strip_prefix('!') {
         Some(negated) => !features.contains(negated),
@@ -105,8 +101,6 @@ fn token_satisfied(features: &HashSet<String>, token: &str) -> bool {
     }
 }
 
-/// Collect the comma-separated feature tokens of every line containing
-/// `directive` (e.g. `"REQUIRES:"`), regardless of comment prefix.
 fn collect_directive_tokens(contents: &str, directive: &str) -> Vec<String> {
     contents
         .lines()
@@ -118,7 +112,6 @@ fn collect_directive_tokens(contents: &str, directive: &str) -> Vec<String> {
         .collect()
 }
 
-/// Decide whether a test file should run on a host with the given features.
 fn gating_decision(features: &HashSet<String>, contents: &str) -> Gate {
     let requires = collect_directive_tokens(contents, "REQUIRES:");
     if !requires.iter().all(|t| token_satisfied(features, t)) {
@@ -133,8 +126,6 @@ fn gating_decision(features: &HashSet<String>, contents: &str) -> Gate {
     Gate::Run
 }
 
-/// Walk up from `start` to the first directory whose `Cargo.toml` contains a
-/// `[workspace]` section.
 fn find_workspace_root(start: &Path) -> Option<PathBuf> {
     start.ancestors().find_map(|dir| {
         let manifest = std::fs::read_to_string(dir.join("Cargo.toml")).ok()?;
@@ -229,7 +220,6 @@ pub fn test_bin(bin: &str) -> Option<PathBuf> {
     path.is_file().then_some(path)
 }
 
-/// Parse a `test_suite.toml`, splitting its globs into include and exclude sets.
 fn load_suite(manifest: &Path) -> Result<Suite, String> {
     let contents = std::fs::read_to_string(manifest).map_err(|e| e.to_string())?;
     let parsed: SuiteFile = toml::from_str(&contents).map_err(|e| e.to_string())?;
@@ -270,8 +260,6 @@ pub fn required_binaries(root: &Path) -> std::io::Result<BTreeMap<String, String
     Ok(tools)
 }
 
-/// Recursively find every `test_suite.toml` below `root`, sorted by path.
-/// Skips `target`, `node_modules` and hidden directories.
 fn discover_suites(root: &Path) -> std::io::Result<Vec<PathBuf>> {
     let mut manifests = Vec::new();
     visit_suites(root, &mut manifests)?;
@@ -300,8 +288,6 @@ fn visit_suites(dir: &Path, manifests: &mut Vec<PathBuf>) -> std::io::Result<()>
     Ok(())
 }
 
-/// Read an environment variable as a regex, exiting with status 2 on an
-/// invalid pattern.
 fn env_regex(var: &str) -> Option<Regex> {
     let pattern = std::env::var(var).ok()?;
     match Regex::new(&pattern) {
@@ -386,7 +372,6 @@ pub fn workspace_harness_main() {
 }
 
 impl Suite {
-    /// Whether a path relative to the suite root is one of its tests.
     fn matches(&self, relative: &Path) -> bool {
         let path = relative
             .to_string_lossy()
@@ -396,8 +381,6 @@ impl Suite {
     }
 }
 
-/// Collect the suite's test files: those matching its globs that hold at least
-/// one `RUN:` line. Test names are relative to `workspace_root`.
 fn discover(
     suite: &Suite,
     workspace_root: &Path,
@@ -457,8 +440,6 @@ fn load_case(
     }))
 }
 
-/// Extract `RUN:` command text from a test file, joining lines continued with a
-/// trailing backslash.
 fn extract_run_lines(contents: &str) -> Vec<String> {
     let mut lines = Vec::new();
     let mut continued: Option<String> = None;
@@ -520,7 +501,6 @@ fn run_case_commands(case: &TestCase, tools: &HashMap<String, PathBuf>) -> Resul
     Ok(())
 }
 
-/// Execute a single `RUN:` pipeline.
 fn run_pipeline(
     run: &str,
     test_path: &Path,
@@ -648,7 +628,6 @@ fn run_subprocess(
     child.wait_with_output()
 }
 
-/// Run the in-process FileCheck stage.
 fn run_filecheck(args: &[String], input: &[u8]) -> Result<(), String> {
     let (check_path, config) = parse_filecheck_args(args)?;
     let check_text = std::fs::read_to_string(&check_path)
@@ -660,8 +639,6 @@ fn run_filecheck(args: &[String], input: &[u8]) -> Result<(), String> {
     filecheck::verify(&check, &input, &config)
 }
 
-/// Parse the arguments of a `filecheck` stage into a check-file path and a
-/// [`filecheck::Config`].
 fn parse_filecheck_args(args: &[String]) -> Result<(PathBuf, filecheck::Config), String> {
     let mut config = filecheck::Config::default();
     let mut check_path: Option<PathBuf> = None;

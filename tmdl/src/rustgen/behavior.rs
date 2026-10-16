@@ -32,8 +32,6 @@ fn is_store_call(expr: &ast::Expr) -> bool {
     )
 }
 
-/// Whether the behavior contains any atomic/fence builtin. Such behaviors are
-/// excluded from instruction selection and op-sem pattern generation.
 fn behavior_has_atomic_ops(expr: &ast::Expr) -> bool {
     let is_atomic = |e: &ast::Expr| {
         matches!(e, ast::Expr::Call(ast::Call { callee, .. }) if matches!(
@@ -91,13 +89,6 @@ struct ConstSizeParams<'a> {
     isa: &'a HashMap<String, i64>,
 }
 
-/// Whether the behavior loads or stores with a non-constant size (e.g. RVV
-/// unit-stride forms sized by `vl`). A static selection pattern cannot
-/// express a dynamic access size, and leaving such rules in would let plain
-/// scalar loads/stores match them by binding the size, so they are excluded
-/// from instruction selection and op-sem pattern generation. A size that
-/// const-evaluates under the ISA parameters (`self.XLEN / 8`) is concrete for
-/// this ISA instantiation and stays in.
 fn behavior_has_dynamic_sized_memory_access(
     expr: &ast::Expr,
     params: &ConstSizeParams<'_>,
@@ -292,10 +283,6 @@ fn lowered_value_offset(
     proc_macro2::Literal::u32_unsuffixed(offset)
 }
 
-/// Emit the [`tir::backend::exec::SymSource`] table entries binding an
-/// instruction's entry symbols: register operands and fixed/status registers
-/// are read from the machine; integer operands and ISA parameters are bound to
-/// constants. Returns the highest symbol id (to size the table) and the entries.
 #[allow(clippy::too_many_arguments)]
 fn emit_sym_inits(
     variable_symbols: &HashMap<String, u32>,
@@ -429,11 +416,6 @@ fn emit_graph_destination(
     None
 }
 
-/// Emit the pattern function, emit function, and rule registration for one
-/// conditional-branch rule. Operands named in `zero_slots` are wired to a fixed
-/// physical register (a class's hardwired-zero register) instead of bound from
-/// the match — the mechanism behind the zero-form branch variants; every other
-/// register/immediate operand binds from the match as usual.
 #[allow(clippy::too_many_arguments)]
 fn emit_cond_branch_rule(
     rule_name: &str,
@@ -555,9 +537,6 @@ fn emit_cond_branch_rule(
     )
 }
 
-/// Clone `pattern` with the register-operand symbol `reg_symbol` replaced by the
-/// `zext(0b0, W)` zero shape. `width_symbol` is the fresh wildcard the extension
-/// width binds to — matched but never read by the emitter.
 fn branch_pattern_with_zero(
     pattern: &tir_symbolic::sem::SemGraph,
     root: tir_adt::NodeId,
@@ -621,8 +600,6 @@ fn clone_pattern_with_zero(
     new_node
 }
 
-/// Serializes `dag` into the sem blob, returning its offset and whether any
-/// node carries a type annotation (requiring the typed loader at use site).
 fn intern_dag(
     dag: &tir_symbolic::sem::SemGraph,
     root: tir_adt::NodeId,

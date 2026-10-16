@@ -82,8 +82,6 @@ impl<'a, V, A> Lifter<'a, V, A> {
         self.graph.children(id).collect()
     }
 
-    /// Whether `id` *definitely* denotes a boolean; a neutral 1-bit constant
-    /// adapts to context and so returns `false`.
     fn is_bool(&mut self, id: NodeId) -> bool {
         if let Some(&b) = self.bool_cache.get(&id) {
             return b;
@@ -200,8 +198,6 @@ impl<'a, V, A> Lifter<'a, V, A> {
         }
     }
 
-    /// Lift every child in non-boolean context and apply `op`; `result_bool`
-    /// is the sort of the result (boolean for comparisons, else bit-vector).
     fn nary(
         &mut self,
         op: &str,
@@ -247,7 +243,6 @@ impl<'a, V, A> Lifter<'a, V, A> {
         Ok((Term::app(op, vec![term]), node_bool))
     }
 
-    /// `=` / `(not (= ..))`; operand context is boolean iff any operand is.
     fn equality(&mut self, id: NodeId, negate: bool) -> Result<(Term, bool), ConvertError> {
         let children = self.children(id);
         let operand_ctx = children.iter().any(|&c| self.is_bool(c));
@@ -264,7 +259,6 @@ impl<'a, V, A> Lifter<'a, V, A> {
         Ok((term, true))
     }
 
-    /// Signed/unsigned ordered comparisons take bit-vector operands.
     fn ordered(&mut self, op: &str, id: NodeId) -> Result<(Term, bool), ConvertError> {
         self.nary(op, id, true)
     }

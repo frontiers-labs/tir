@@ -130,8 +130,6 @@ mod tage {
         })
     }
 
-    /// Drive `p` over `iters` repetitions of `pattern` and return the
-    /// misprediction count of the final repetition (steady state).
     fn steady_mispredicts(p: &mut Tage, pattern: &[bool], iters: usize) -> usize {
         let pc = 0x4000u64;
         let mut last = 0;

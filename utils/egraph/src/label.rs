@@ -211,9 +211,6 @@ pub(crate) struct Laws {
 }
 
 impl Laws {
-    /// The laws `node` declares. A unique node keeps its carrier and nothing
-    /// else: it never hash-conses, so there is no key to factor offsets out
-    /// of.
     pub(crate) fn of<L: Label>(node: &L) -> Self {
         let Some(carrier) = node.carrier() else {
             return Self::default();
@@ -251,13 +248,10 @@ impl Laws {
         }
     }
 
-    /// Operand `operand`'s coefficient, zero for none.
     pub(crate) fn coefficient(&self, operand: usize) -> i64 {
         self.coefficients.get(operand).copied().unwrap_or(0)
     }
 
-    /// Whether every operand has a coefficient, so a node over constants is a
-    /// constant.
     pub(crate) fn linear(&self) -> bool {
         !self.coefficients.is_empty()
             && self
@@ -291,9 +285,6 @@ impl<L> Default for Labels<L> {
 }
 
 impl<L: Label> Labels<L> {
-    /// The id of `node`'s label, interning it on first sight. The stored copy
-    /// is [`Label::bare`], with whatever children `node` had; nothing reads
-    /// them.
     pub(crate) fn intern(&mut self, node: &L) -> LabelId {
         let bucket = self.index.entry(node.label_hash()).or_default();
         for &id in bucket.iter() {
@@ -308,7 +299,6 @@ impl<L: Label> Labels<L> {
         id
     }
 
-    /// The id of `node`'s label if it has been seen, without interning it.
     pub(crate) fn get(&self, node: &L) -> Option<LabelId> {
         self.index
             .get(&node.label_hash())?
@@ -320,8 +310,6 @@ impl<L: Label> Labels<L> {
             })
     }
 
-    /// The node interned under `id`. Its children are whatever the first node
-    /// with this label carried; nothing reads them.
     pub(crate) fn node(&self, id: LabelId) -> &L {
         &self.table[id.index()]
     }

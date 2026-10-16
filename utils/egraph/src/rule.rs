@@ -79,9 +79,6 @@ pub struct Rule<L> {
     pub post_saturation: bool,
 }
 
-/// `head` as generic writes, appended to `out`. The operands of a commutative
-/// operator are sorted once canonical: both of a binary one as written, all
-/// of a filled one.
 pub(crate) fn compile<L: Label>(head: &[HeadOp<L>], out: &mut Vec<Head>) {
     out.extend(head.iter().map(|op| match op {
         HeadOp::Insert { label, args, into } => {
@@ -118,7 +115,6 @@ pub(crate) fn compile<L: Label>(head: &[HeadOp<L>], out: &mut Vec<Head>) {
 
 pub(crate) type Cached = Option<(SmallVec<[(Field, u64); 2]>, LabelId)>;
 
-/// The fills of `label` with the words a match bound.
 fn fills<L>(label: &LabelFill<L>, scalars: &[u64]) -> SmallVec<[(Field, u64); 2]> {
     let fills = label.fills.iter();
     fills
@@ -161,13 +157,6 @@ impl<L: Label> Engine<L> {
         );
     }
 
-    /// What insert `op` over `operands`, which are canonical, comes to before
-    /// a table is probed. A label as written is remembered in `cached`, so a
-    /// node the graph already holds costs a key lookup and no term is built
-    /// for it; a filled one is spelled from the match's scalars and remembered
-    /// until a match fills it differently, `None` when the language cannot
-    /// spell it. A carrier's integer constant is a reference and interns
-    /// nothing.
     #[inline]
     pub(crate) fn head_key(
         &mut self,
@@ -216,9 +205,6 @@ impl<L: Label> Engine<L> {
         })
     }
 
-    /// Mint the class of insert `op`, whose row is stored under `key`: its
-    /// label and then its operands. The node is the head's own spelling with
-    /// those children, not the label's stored node, which is bare.
     pub(crate) fn head_mint(&mut self, op: &HeadOp<L>, key: &Key, scalars: &[u64]) -> u32 {
         let label = label_fill(op);
         let mut node = match label.fills.is_empty() {
@@ -290,7 +276,6 @@ mod tests {
     use crate::testing::Term;
     use crate::{Atom, NoExterns, Query};
 
-    /// `f(?1, ?2)` proves `f(?1, ?2) = g(?1)`.
     fn rule() -> Rule<Term> {
         Rule {
             name: "f-to-g".into(),
@@ -317,8 +302,6 @@ mod tests {
         }
     }
 
-    /// A caller may union and saturate without a rebuild in between: the first
-    /// round still matches through the class the union absorbed.
     #[test]
     fn saturation_matches_through_a_union_nobody_rebuilt_for() {
         let mut eg = Engine::new();

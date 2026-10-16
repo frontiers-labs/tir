@@ -197,8 +197,6 @@ fn validate_rhs(
     }
 }
 
-/// Every `#name` names a semantic operator, at an operand count that operator
-/// takes.
 fn validate_operators(term: &Term, diagnostics: &mut Vec<Diagnostic>) {
     if let TermKind::Operation {
         operator,
@@ -253,7 +251,6 @@ fn validate_operators(term: &Term, diagnostics: &mut Vec<Diagnostic>) {
     }
 }
 
-/// A left-hand side is an operation. `root` is a right-hand-side form.
 fn validate_lhs_shape(rule: &Rule, diagnostics: &mut Vec<Diagnostic>) {
     forbid_rhs_forms(&rule.lhs, diagnostics);
     if !matches!(rule.lhs.kind, TermKind::Operation { .. }) {
@@ -329,8 +326,6 @@ fn forbid_rhs_forms(term: &Term, diagnostics: &mut Vec<Diagnostic>) {
     }
 }
 
-/// Whether a loop term (`#theta` or `#loop`) on the right-hand side has another
-/// below it, which re-grows the shape it matched and never saturates.
 fn grows_theta_under_theta(term: &Term) -> bool {
     match &term.kind {
         TermKind::Operation {
@@ -367,8 +362,6 @@ fn is_theta(operator: &Operator) -> bool {
     )
 }
 
-/// A `#port` reads the carried value of the `#loop` it sits in, so one outside
-/// any `#loop` reads nothing.
 fn port_outside_loop(term: &Term, inside: bool) -> Option<Span> {
     match &term.kind {
         TermKind::Operation {

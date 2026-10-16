@@ -85,9 +85,6 @@ struct Chunk {
     bytes: u32,
 }
 
-/// No access may read or write beyond the copied range.
-/// Declared widths are legal even at byte alignment. Missing facts permit only
-/// byte accesses; in particular, native register width does not prove legality.
 fn inline_chunks(
     context: &Context,
     size: ValueId,
@@ -219,7 +216,6 @@ fn store(
     Ok(produced_state(&context.get_op(store.id())))
 }
 
-/// Forward the outgoing state even when a zero-sized intrinsic emits no ops.
 fn finish(
     context: &Context,
     operation: &OperationRef,
@@ -279,9 +275,6 @@ fn library_call(
     )
 }
 
-/// The call an intrinsic becomes, on the chain the intrinsic was on: the library
-/// routine touches the same memory the intrinsic did, so it takes the state the
-/// intrinsic observed and publishes the one it left.
 fn threaded_call(
     context: &Context,
     callee: ValueId,
@@ -302,8 +295,6 @@ fn threaded_call(
     builder.build()
 }
 
-/// The λ value of `name`, declaring it at the top of the module when nothing in
-/// it names that function yet.
 fn ensure_lambda(
     context: &Context,
     module: &ModuleOp,

@@ -315,7 +315,6 @@ impl Results {
     }
 }
 
-/// One summary value. Wall time carries its deviation as a range.
 fn measure<'a>(case: &Record, key: &'a str) -> Option<(&'a str, Value)> {
     let value = *case.summary.get(key)?;
     let mut measure = json!({"value": value});

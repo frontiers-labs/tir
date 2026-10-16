@@ -108,8 +108,6 @@ impl<'s> TokenTree<'s> {
     }
 }
 
-/// Build a token-tree forest from a flat token stream. `<`/`>` are ordinary
-/// leaves, never delimiters (needed for `bits<8>`).
 fn build_trees<'s>(
     file: &str,
     tokens: Vec<Spanned<Token<'s>>>,
@@ -447,9 +445,6 @@ fn parse_matcher<'s>(
     Some(out)
 }
 
-/// Parse an optional single-token separator followed by `*` or `+` after a
-/// `$( ... )` repetition group. Returns (separator, is_plus, tokens consumed
-/// starting at `start`, including the group at `start - 1`... caller adds 2).
 fn parse_rep_tail<'s>(
     file: &str,
     trees: &[TokenTree<'s>],
@@ -639,8 +634,6 @@ fn leaf_tok<'a, 's>(t: &'a TokenTree<'s>) -> Option<&'a Token<'s>> {
     }
 }
 
-/// Match `nodes` against `input[pos..]`; return the position after the match, or
-/// `None`. Bindings accumulate into `out` (cloned on backtracking branches).
 fn match_nodes<'s>(
     nodes: &[MatcherNode<'s>],
     input: &[TokenTree<'s>],
@@ -956,7 +949,6 @@ enum ConcatKind {
     Str,
 }
 
-/// Narrow every sequence binding to its `i`-th element for one repetition step.
 fn narrow<'s>(bindings: &Bindings<'s>, i: usize) -> Bindings<'s> {
     bindings
         .iter()
@@ -1029,8 +1021,6 @@ struct ExpandCtx<'a> {
     had_error: bool,
 }
 
-/// One expansion pass: replace every invocation whose name is known, recursing
-/// into non-invocation groups.
 fn expand_trees<'s>(
     file: &str,
     trees: &[TokenTree<'s>],

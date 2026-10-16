@@ -75,8 +75,6 @@ fn check_binary_sem(g: &SemGraph, root: tir::NodeId, expected_kind: SymKind) {
     );
 }
 
-/// Every binary integer op converts to a two-symbol sem expression rooted at
-/// its own kind, carrying the originating op and its result type.
 #[test]
 fn binary_ops_convert_to_their_sem_kind() {
     type Convert = fn(
@@ -132,9 +130,6 @@ fn binary_ops_convert_to_their_sem_kind() {
     }
 }
 
-/// The width-changing ops take their width from the result type via the unary
-/// sem-DSL forms: `extsi -> SExt(x, W)`, `extui -> ZExt(x, W)`,
-/// `trunci -> Extract(x, W-1, 0)`.
 fn const_value(g: &SemGraph, node: tir::NodeId) -> u64 {
     match g.get_leaf_data(node) {
         Some(SymPayload::Int(v)) => v.to_u64(),
@@ -210,7 +205,6 @@ mod predicate {
         verify_op_tree(&context, module.id()).map_err(|error| error.to_string())
     }
 
-    /// The first operation of the function the fixture defines.
     fn compare(context: &Context, module: &ModuleOp) -> tir::OpHandle {
         let body = |op| {
             context

@@ -39,7 +39,6 @@ impl Set<'_> {
         }
     }
 
-    /// Append the cells, ascending.
     pub(crate) fn list(&self, out: &mut Vec<u32>) {
         match *self {
             Set::Uint(cells) => out.extend_from_slice(cells),
@@ -47,8 +46,6 @@ impl Set<'_> {
         }
     }
 
-    /// Write the cells every one of `sets` holds to `out`, ascending. The sets
-    /// are reordered smallest first; `words` and `spare` are working space.
     pub(crate) fn intersect(
         sets: &mut [Set<'_>],
         out: &mut Vec<u32>,
@@ -101,7 +98,6 @@ impl Set<'_> {
     }
 }
 
-/// Intersect two sets, at least one of them a list, the first no larger.
 fn pair(a: Set<'_>, b: Set<'_>, out: &mut Vec<u32>) {
     match (a, b) {
         (Set::Uint(a), Set::Uint(b)) if b.len() > a.len().saturating_mul(GALLOP) => {
@@ -115,8 +111,6 @@ fn pair(a: Set<'_>, b: Set<'_>, out: &mut Vec<u32>) {
     }
 }
 
-/// The cells of the short list `small` that `large` holds: each found by an
-/// exponential then a binary search from where the last one was.
 fn gallop(small: &[u32], large: &[u32], out: &mut Vec<u32>) {
     let mut from = 0;
     for &cell in small {
@@ -153,7 +147,6 @@ mod tests {
 
     use super::*;
 
-    /// `cells` as a bitset from the multiple of 64 below its least cell.
     fn bits(cells: &BTreeSet<u32>) -> (u32, Vec<u64>) {
         let base = cells.first().map_or(0, |&min| min / 64 * 64);
         let mut words = vec![

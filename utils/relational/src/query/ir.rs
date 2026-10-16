@@ -65,7 +65,6 @@ impl Expr {
         }
     }
 
-    /// Whether every scalar the expression reads is `known`.
     pub(super) fn ready(&self, known: &[bool]) -> bool {
         match self {
             Expr::Lit(_) => true,
@@ -122,7 +121,6 @@ impl Atom {
         }
     }
 
-    /// The scalars this atom binds.
     pub(crate) fn writes(&self) -> SmallVec<[Scalar; 4]> {
         match self {
             Atom::Rows(rows) => rows.tag.into_iter().chain(rows.cell).collect(),
@@ -225,8 +223,6 @@ impl Rows {
         }
     }
 
-    /// The key columns holding a variable, in column order: the atom's
-    /// arguments, which a sideways step numbers.
     pub(crate) fn args(&self) -> impl Iterator<Item = (usize, Var)> + '_ {
         let keys = &self.terms[..self.terms.len() - 1];
         keys.iter()
@@ -237,7 +233,6 @@ impl Rows {
             })
     }
 
-    /// The column whose cell sits in `column` when the row is read swapped.
     pub(crate) fn swapped(&self, column: usize) -> usize {
         match self.swap {
             Some(Swap {
@@ -314,8 +309,6 @@ pub enum Guard {
 }
 
 impl Guard {
-    /// Whether every scalar the guard reads is `known` and every variable it
-    /// reads (only a disequality has any) is `bound`.
     pub(crate) fn ready(&self, known: &[bool], bound: &[bool]) -> bool {
         match self {
             Guard::Cmp(_, a, b) => a.ready(known) && b.ready(known),
@@ -374,7 +367,6 @@ impl Resolution {
         }
     }
 
-    /// The cells listed for `table`.
     pub(crate) fn cells_of(&self, table: u32) -> &[u32] {
         let found = self.tables.iter().find(|(known, _)| *known == table);
         found.map_or(&[], |(_, cells)| cells.as_slice())

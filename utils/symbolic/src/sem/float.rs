@@ -26,8 +26,6 @@ pub fn cmpf_semantics<A>(g: &mut SemGraph<A>, predicate: Predicate) -> Option<No
     })
 }
 
-/// Ordered equality without an atomic float `eq`: both `>=` directions hold,
-/// which is false whenever either operand is NaN.
 fn ordered_equal<A>(g: &mut SemGraph<A>, lhs: NodeId, rhs: NodeId) -> NodeId {
     let left_ge = binary(g, SymKind::Ge, lhs, rhs);
     let right_ge = binary(g, SymKind::Ge, rhs, lhs);

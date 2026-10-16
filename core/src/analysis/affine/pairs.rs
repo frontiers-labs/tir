@@ -4,9 +4,6 @@ use super::build::Builder;
 use super::*;
 
 impl Builder<'_> {
-    /// Every pair of accesses of one memory with at least one write among them.
-    /// Two accesses sharing no chain are of different memories — a change names
-    /// every chain it may alias — so they are not a pair at all.
     pub(super) fn pairs(&self) -> Vec<Pair> {
         let mut pairs = Vec::new();
         for left in 0..self.accesses.len() {
@@ -60,9 +57,6 @@ impl Builder<'_> {
         }
     }
 
-    /// The bytes an access can touch, as forms over the nest's symbols: every
-    /// iteration index is replaced by the end of its range that the coefficient's
-    /// sign asks for — the first iteration is zero, the last a form of its own.
     fn extremes(&self, access: &Access, offset: &AffineForm) -> Option<Extremes> {
         let (mut low, mut high) = (offset.clone(), offset.clone());
         for depth in 0..self.loops.len() {

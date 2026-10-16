@@ -104,8 +104,6 @@ pub(crate) fn add(g: &mut Engine<Math>, a: Id, b: Id) -> Id {
     g.add(Math::Add([a, b])).class
 }
 
-/// A rule over `Math`, spelled as the atoms of its left-hand side and the
-/// writes of its right.
 pub(crate) fn rule(
     name: &str,
     vars: u32,
@@ -121,7 +119,6 @@ pub(crate) fn rule(
     }
 }
 
-/// A row atom over `template`, binding `args` and owned by `class`.
 pub(crate) fn node(template: Math, args: &[u32], class: u32) -> Atom<Math> {
     Atom::Node {
         template,
@@ -131,7 +128,6 @@ pub(crate) fn node(template: Math, args: &[u32], class: u32) -> Atom<Math> {
     }
 }
 
-/// A head that hash-conses `template` over `args` into `into`.
 pub(crate) fn insert(template: Math, args: &[u32], into: u32) -> HeadOp<Math> {
     HeadOp::Insert {
         label: LabelFill::plain(template),
@@ -140,7 +136,6 @@ pub(crate) fn insert(template: Math, args: &[u32], into: u32) -> HeadOp<Math> {
     }
 }
 
-/// Apply every match of `rules` once, then restore congruence.
 pub(crate) fn apply_all(g: &mut Engine<Math>, rules: &[Rule<Math>]) {
     for rule in rules {
         let roots = rule.plan.roots(g);
@@ -151,7 +146,6 @@ pub(crate) fn apply_all(g: &mut Engine<Math>, rules: &[Rule<Math>]) {
     g.rebuild();
 }
 
-/// `add(x, y) => add(y, x)`.
 pub(crate) fn comm_rule() -> Rule<Math> {
     rule(
         "add-comm",
@@ -168,7 +162,6 @@ pub(crate) fn comm_rule() -> Rule<Math> {
     )
 }
 
-/// `add(x, 0) => x`.
 pub(crate) fn add_zero_rule() -> Rule<Math> {
     rule(
         "add-zero",

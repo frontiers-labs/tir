@@ -12,9 +12,6 @@ fn reprint(ir: &str) -> String {
     print_ir(&module)
 }
 
-/// The emitted IR parses back, and printing what parsed is a fixpoint. Value
-/// numbers are not compared against the emitted text: codegen and the parser
-/// allocate a function's λ value at different points in its body.
 #[test]
 fn ir_roundtrips_through_parser() {
     for source in [

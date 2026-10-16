@@ -330,7 +330,6 @@ impl Solver {
         self.choices
     }
 
-    /// The cost of `edge` when `node` takes `own` and the other end `other`.
     fn cost(&self, edge: usize, node: usize, own: usize, other: usize) -> u64 {
         let edge = &self.edges[edge];
         if edge.lhs == node {
@@ -380,7 +379,6 @@ impl Solver {
         self.between.remove(&(lhs.min(rhs), lhs.max(rhs)));
     }
 
-    /// Add `delta` (rows indexing `lhs`) to the edge between `lhs` and `rhs`.
     fn charge(&mut self, lhs: usize, rhs: usize, delta: Matrix) {
         match self.between.get(&(lhs.min(rhs), lhs.max(rhs))).copied() {
             Some(edge) => {
@@ -399,8 +397,6 @@ impl Solver {
         }
     }
 
-    /// Add `costs` to `node`'s vector. A node left with one finite alternative
-    /// is decided, so every edge it has turns independent and goes.
     fn charge_node(&mut self, node: usize, costs: impl IntoIterator<Item = u64>) {
         for (cost, added) in self.costs[node].iter_mut().zip(costs) {
             *cost = add(*cost, added);
@@ -415,10 +411,6 @@ impl Solver {
         self.pending.push(node);
     }
 
-    /// RE: move each row's minimum into the edge's first node and each
-    /// column's into its second, then drop the edge if nothing is left in it.
-    /// Rows and columns of alternatives already infinite constrain nothing and
-    /// are cleared. A shared matrix is copied only once it changes.
     fn normalize(&mut self, edge: usize) {
         let Self { costs, edges, .. } = self;
         let Edge {
@@ -481,7 +473,6 @@ impl Solver {
         }
     }
 
-    /// Apply R0, R1 and R2 until every live node has degree three or more.
     fn reduce_optimally(&mut self) {
         while let Some(node) = self.pending.pop() {
             if !self.alive[node] {
@@ -499,8 +490,6 @@ impl Solver {
         }
     }
 
-    /// R1: fold a degree-one node's cheapest response to each alternative of
-    /// its neighbor into the neighbor.
     fn reduce_one(&mut self, node: usize) {
         let edge = self.adjacency[node][0];
         let neighbor = self.other(edge, node);
@@ -516,8 +505,6 @@ impl Solver {
         self.charge_node(neighbor, delta);
     }
 
-    /// R2: replace a degree-two node by an edge between its neighbors that
-    /// prices its cheapest response to each pair of their alternatives.
     fn reduce_two(&mut self, node: usize) {
         let (first, second) = (self.adjacency[node][0], self.adjacency[node][1]);
         let (left, right) = (self.other(first, node), self.other(second, node));
@@ -550,8 +537,6 @@ impl Solver {
         }
     }
 
-    /// The cheapest alternative of `node` and its cost, given the alternative
-    /// chosen across each of `fixed`'s edges.
     fn best_response(&self, node: usize, fixed: &[(usize, usize)]) -> (usize, u64) {
         (0..self.costs[node].len())
             .map(|own| {
@@ -566,9 +551,6 @@ impl Solver {
             .unwrap_or((0, INF_COST))
     }
 
-    /// For each finite alternative of `node`, the one alternative of the
-    /// neighbor across `edge` it leaves finite — or `None` if some alternative
-    /// leaves several, so a choice at `node` does not decide the neighbor.
     fn implied(&self, node: usize, edge: usize) -> Option<Vec<usize>> {
         let neighbor = self.other(edge, node);
         let mut implied = Vec::with_capacity(self.costs[node].len());
@@ -592,9 +574,6 @@ impl Solver {
         Some(implied)
     }
 
-    /// RM: merge into `node` every neighbor its own choice decides. The
-    /// neighbor's other edges move onto `node`, priced through the implied
-    /// choice, which leaves the neighbor of degree one for R1.
     fn merge_implied(&mut self, node: usize) {
         let mut index = 0;
         while self.alive[node] && index < self.adjacency[node].len() {
@@ -632,8 +611,6 @@ impl Solver {
         }
     }
 
-    /// RN with early decision: take the alternative that is cheapest counting
-    /// each neighbor's best response, then charge that choice to the neighbors.
     fn decide(&mut self, node: usize) {
         let edges = self.adjacency[node].clone();
         let mut totals = self.costs[node].clone();
@@ -661,8 +638,6 @@ impl Solver {
         }
     }
 
-    /// Solve the reduced nodes last-reduced first: each one's neighbors are
-    /// decided by then.
     fn back_propagate(&mut self) {
         for reduction in std::mem::take(&mut self.reduced).into_iter().rev() {
             let (node, fixed) = match reduction {

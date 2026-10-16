@@ -509,9 +509,6 @@ impl Analyzer<'_> {
         }
     }
 
-    /// Declarators nest as deeply as the source spells them, so the
-    /// pointer/array/qualifier spine is unwound iteratively; recursing once per
-    /// level overflows the stack on inputs with thousands of `*`.
     pub(super) fn canonical_type(&mut self, parsed: &CType) -> QualType {
         let mut spine = Vec::new();
         let mut leaf = parsed;

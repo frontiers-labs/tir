@@ -328,10 +328,6 @@ where
     (expr, assignment, conditional)
 }
 
-/// A left-associative binary-operator level: a `child` operand followed by any
-/// number of `op child` tails, folded into nested operator nodes. Operands are
-/// already in the DAG by the time the fold runs, so each operator node is
-/// appended after them.
 fn binop<'src, I, C, O>(child: C, op: O) -> impl Parser<'src, I, NodeId, Extra<'src>> + Clone
 where
     I: ValueInput<'src, Token = Token, Span = Span>,

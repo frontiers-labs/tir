@@ -291,10 +291,6 @@ impl Prepare<'_> {
         Ok(order)
     }
 
-    /// Pick the PCF evaluation order promised by normalization. Contract each
-    /// direct predicate producer, its transparent aliases, and its consumer
-    /// before choosing a stable dependency order. A contraction cycle means
-    /// the saved direct request is stale and recovery must reject it.
     fn abut_direct_controls(
         &self,
         region: RegionId,
@@ -1052,10 +1048,6 @@ pub enum ControlOutcome {
     Rest,
 }
 
-/// What entering arm `index` of a gate selecting its arms on `cases` says of
-/// its predicate. A default arm past arm indices has every value from its own
-/// index up; one past named cases has every value but those, which no outcome
-/// states, so it says nothing.
 fn arm_fact(cases: &[u64], index: usize, boolean: bool) -> Option<ControlOutcome> {
     if let Some(&case) = cases.get(index) {
         return Some(ControlOutcome::Exact(case));
@@ -1511,9 +1503,6 @@ impl RecoveryPlan {
         }
     }
 
-    /// Recover one already-selected candidate without retrying. Machine
-    /// selection must discard its staged context, demote the returned controls,
-    /// and reselect before calling this again.
     pub(crate) fn emit_selected(
         &self,
         context: &Context,

@@ -83,8 +83,6 @@ impl Pass for RestructureNodesPass {
     }
 }
 
-/// Whether `op` is the counted loop a frontend raised, whose unordered body
-/// the converter has yet to build.
 fn is_ordered_counted_loop(op: &crate::OpHandle) -> bool {
     op.is::<crate::scf::OrderedForOp>()
 }

@@ -70,9 +70,6 @@ impl Pass for AffineSchedulePass {
     }
 }
 
-/// Build the cheapest schedules of `view`'s nest and keep the one that
-/// costs least once built, or leave the nest alone where the identity is
-/// what the model wants or nothing built beats it.
 fn schedule_nest(
     context: &Context,
     root: OpId,
@@ -107,7 +104,6 @@ fn schedule_nest(
     .map(drop)
 }
 
-/// The cache line the cost model measures locality against.
 fn line_bytes(context: &Context, op: &OperationRef) -> i64 {
     DataLayout::for_op(context, op.op().id)
         .and_then(|layout| layout.cache_line())

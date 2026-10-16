@@ -755,9 +755,6 @@ enum Item {
     Inst(Box<Inst>),
 }
 
-/// Fold the flat statement list into blocks. An unlabelled entry block is
-/// implicit; the first label seen names it if it is still empty, otherwise it
-/// opens a new block.
 fn build_function(
     name: String,
     ret: Type,

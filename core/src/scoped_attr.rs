@@ -49,13 +49,10 @@ fn parent_op(context: &Context, op: OpId) -> Option<OpId> {
     context.parent_op(op)
 }
 
-/// Rejects a malformed metadata spec.
 pub(crate) fn invalid_spec(message: impl Into<String>) -> crate::Error {
     crate::Error::VerificationError(message.into())
 }
 
-/// Applies `overlay` over `base`: nested dicts merge key by key, every other
-/// value is replaced.
 pub(crate) fn merge_into(base: &mut AttributeDict, overlay: AttributeDict) {
     for (key, value) in overlay {
         match (base.get_mut(&key), value) {

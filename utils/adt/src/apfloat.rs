@@ -302,11 +302,6 @@ impl APFloat {
         )
     }
 
-    /// The magnitude as an integer significand and a power of two, so that the
-    /// value is `significand * 2^exp2`. A subnormal's exponent field reads as
-    /// zero but its true exponent is the format's minimum, and it carries no
-    /// implicit leading one -- conflating the two is what makes a subnormal
-    /// come out scaled by the whole exponent range.
     fn decompose(&self) -> (u128, i32) {
         let mantissa = self.mantissa();
         let fraction_bits = self.fraction_bits() as i32;
@@ -324,10 +319,6 @@ impl APFloat {
         }
     }
 
-    /// Encode `significand * 2^exp2` into the given format, rounding to nearest
-    /// with ties to even. A value below the format's smallest normal keeps that
-    /// exponent and denormalizes the significand instead, which is what makes
-    /// the subnormal range representable rather than a hole at zero.
     fn compose(
         exp_width: u32,
         mant_width: u32,
@@ -386,13 +377,10 @@ impl APFloat {
         }
     }
 
-    /// The mantissa field as a single integer.
     fn mantissa(&self) -> u128 {
         ((self.mantissa_high as u128) << 64) | (self.mantissa_low as u128)
     }
 
-    /// Bits of the mantissa field that sit below the leading one, which the
-    /// explicit-leading-bit formats store rather than imply.
     fn fraction_bits(&self) -> u32 {
         if self.explicit_leading_bit {
             self.mant_width - 1
@@ -589,7 +577,6 @@ impl APFloat {
     }
 }
 
-/// Shift right by `shift`, rounding to nearest with ties to even.
 fn shift_right_round(value: u128, shift: u32) -> u128 {
     if shift == 0 {
         return value;
@@ -612,7 +599,6 @@ fn shift_right_round(value: u128, shift: u32) -> u128 {
 }
 
 impl APFloat {
-    /// Assert two values share exponent and mantissa widths.
     fn assert_same_format(&self, other: &APFloat) {
         assert_eq!(
             self.exp_width, other.exp_width,
@@ -624,19 +610,14 @@ impl APFloat {
         );
     }
 
-    /// The IEEE binary32 interchange format. Arithmetic on it has to be done in
-    /// `f32`: computing in `f64` and narrowing the result afterwards rounds
-    /// twice, which lands one ulp off for about one product in two thousand.
     fn is_binary32(&self) -> bool {
         self.exp_width == 8 && self.mant_width == 23 && !self.explicit_leading_bit
     }
 
-    /// Wrap a native-f64 result back into this value's format.
     fn with_native(&self, value: f64) -> Self {
         Self::from_f64(value).convert(self.exp_width, self.mant_width, self.explicit_leading_bit)
     }
 
-    /// IEEE total-order key (à la `f64::total_cmp`); only comparable within one format.
     fn total_key(&self) -> i128 {
         let magnitude = (self.to_bits() & ((1u128 << (self.bit_width() - 1)) - 1)) as i128;
         if self.sign { -magnitude - 1 } else { magnitude }
@@ -827,7 +808,6 @@ mod tests {
         assert_eq!(huge.to_bits() as u32, f32::INFINITY.to_bits());
     }
 
-    /// Equality that treats any two NaNs as equal (f64 NaN != NaN otherwise).
     fn f64_eq(a: f64, b: f64) -> bool {
         a == b || (a.is_nan() && b.is_nan())
     }

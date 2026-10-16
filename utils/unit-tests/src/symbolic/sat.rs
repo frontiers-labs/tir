@@ -2,8 +2,6 @@ use tir_symbolic::sat::{Lit, SatResult, Solver, Var};
 
 use super::support::Rng;
 
-/// Mint `n` fresh variables; `Var`s are plain indices, so they are valid in any
-/// solver that has allocated at least as many.
 fn vars(n: usize) -> Vec<Var> {
     let mut s = Solver::new();
     (0..n).map(|_| s.new_var()).collect()
@@ -19,7 +17,6 @@ fn satisfies(clauses: &[Vec<Lit>], model: &[bool]) -> bool {
         .all(|c| c.iter().any(|&l| lit_true(l, model)))
 }
 
-/// Exhaustively decide satisfiability — the oracle for the random tests.
 fn brute(n: usize, clauses: &[Vec<Lit>]) -> bool {
     (0..(1u64 << n)).any(|mask| {
         let model: Vec<bool> = (0..n).map(|i| (mask >> i) & 1 == 1).collect();

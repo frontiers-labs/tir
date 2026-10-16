@@ -18,8 +18,6 @@ pub(super) unsafe fn select_eq(column: *const u32, len: usize, value: u32, out: 
     unsafe { select_eq_in(column, 0..len, value, out, 0) }
 }
 
-/// [`select_eq`] over `rows` alone, writing from `out[found]` on; returns
-/// the new count.
 pub(super) unsafe fn select_eq_in(
     column: *const u32,
     rows: std::ops::Range<usize>,
@@ -52,8 +50,6 @@ pub(super) unsafe fn select_moved(
     unsafe { select_moved_in(column, map, map_len, 0..len, out, 0) }
 }
 
-/// [`select_moved`] over `rows` alone, writing from `out[found]` on; returns
-/// the new count.
 pub(super) unsafe fn select_moved_in(
     column: *const u32,
     map: *const u32,

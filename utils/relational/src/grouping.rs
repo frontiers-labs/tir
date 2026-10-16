@@ -182,7 +182,6 @@ impl Grouping {
     }
 }
 
-/// The owners a stretch of a write log names, ascending, each once.
 fn news(log: &[u32]) -> Vec<u32> {
     let mut news = log.to_vec();
     news.sort_unstable();
@@ -239,7 +238,6 @@ impl Lists {
         self.cursor = 0;
     }
 
-    /// The cell and position `owner` holds now.
     fn place<R: Rows>(rows: &R, owner: u32) -> (u32, u32) {
         let mut place = (NOWHERE, 0);
         rows.entries(owner, &mut |cell, position| place = (cell, position));

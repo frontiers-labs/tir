@@ -25,7 +25,6 @@ pub enum Commands {
     Compile(CompileArgs),
 }
 
-/// Whether `name` is a subcommand of the native clap CLI.
 pub(super) fn is_known_subcommand(name: &str) -> bool {
     use clap::CommandFactory;
     Cli::command()

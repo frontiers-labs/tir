@@ -46,15 +46,10 @@ pub(crate) fn compress_rv64(
     compress(context, op, 64)
 }
 
-/// A register slot of an instruction, carried through to the compressed form
-/// unchanged: the same value stays in the same register, so the function's
-/// assignment still describes it.
 fn slot(op: &dyn Operation, name: &str) -> Option<RegSlot> {
     reg_slot(op.handle(), name)
 }
 
-/// An integer immediate operand. Symbol/block operands (fixups) return None,
-/// keeping their instruction uncompressed.
 fn imm(op: &dyn Operation, name: &str) -> Option<i64> {
     match op.attr(name)? {
         AttributeValue::Int(value) => Some(value),
@@ -62,13 +57,10 @@ fn imm(op: &dyn Operation, name: &str) -> Option<i64> {
     }
 }
 
-/// x8..x15 (f8..f15): the registers a 3-bit field reaches.
 fn is_c_reg(index: u16) -> bool {
     (8..=15).contains(&index)
 }
 
-/// A load/store offset that fits a zero-extended immediate of `bits` bits
-/// scaled by `scale`.
 fn fits_uimm(value: i64, bits: u32, scale: i64) -> bool {
     value >= 0 && value % scale == 0 && value < (1 << bits)
 }
@@ -77,8 +69,6 @@ fn fits_simm6(value: i64) -> bool {
     (-32..32).contains(&value)
 }
 
-/// The register an operand resolves to. Compression runs after allocation, so
-/// every register slot names the register it was given.
 fn reg(context: &tir::Context, inner: &dyn Operation, name: &str) -> Option<u16> {
     tir::backend::op_slot_register(context, inner.handle(), name).map(|(_, index)| index)
 }
@@ -104,7 +94,6 @@ fn compress(
     }
 }
 
-/// The 16-bit form of `op`, or None when no compressed encoding covers it.
 fn compressed_form(
     context: &tir::Context,
     op: &tir::OperationRef,

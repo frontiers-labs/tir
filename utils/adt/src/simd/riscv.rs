@@ -20,9 +20,6 @@ pub(super) static RVV: Kernels = Kernels {
     and_words,
 };
 
-/// Whether the kernel reports the V extension. The standard library's
-/// detection macro is unstable on this architecture, so this reads the
-/// hardware capability word the kernel hands every process.
 pub(super) fn has_vector() -> bool {
     const AT_HWCAP: usize = 16;
     const HWCAP_V: usize = 1 << (b'v' - b'a');

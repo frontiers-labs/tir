@@ -83,8 +83,6 @@ pub fn build_program(body: &str) -> Program {
     }
 }
 
-/// Drop `#` comments (full-line and inline) from a snippet body, preserving line
-/// structure so addresses stay easy to reason about.
 fn strip_comments(body: &str) -> String {
     body.lines()
         .map(|line| line.split('#').next().unwrap_or("").trim_end())
@@ -179,7 +177,6 @@ fn linker_script(base: u64) -> String {
     )
 }
 
-/// Look up a symbol's address in the linked ELF via `nm`.
 fn resolve_symbol(elf: &Path, name: &str) -> Result<u64> {
     let out = run_tool(Command::new("riscv64-unknown-elf-nm").arg(elf))
         .context("reading symbols with riscv64-unknown-elf-nm")?;
@@ -198,9 +195,6 @@ fn resolve_symbol(elf: &Path, name: &str) -> Result<u64> {
     bail!("symbol '{name}' not found in linked image")
 }
 
-/// Parse the interleaved Spike debug output into an `ArchState`. The command
-/// script emits, in order: one bare-hex `pc`, the `reg 0` dump (named registers),
-/// then one bare-hex doubleword per memory address requested.
 fn parse_spike_output(stdout: &str, windows: &[(u64, usize)]) -> Result<ArchState> {
     let mut pc: Option<u64> = None;
     let mut gprs = [0u64; GPR_COUNT];
@@ -248,8 +242,6 @@ fn parse_spike_output(stdout: &str, windows: &[(u64, usize)]) -> Result<ArchStat
     Ok(ArchState { gprs, pc, mem })
 }
 
-/// Extract `name -> value` pairs from a Spike `reg 0` dump line, keeping only
-/// known ABI register names (this also filters lines like `warning: ...`).
 fn parse_reg_pairs(line: &str) -> Vec<(&str, u64)> {
     let tokens: Vec<&str> = line.split_whitespace().collect();
     let mut pairs = Vec::new();
@@ -268,7 +260,6 @@ fn parse_reg_pairs(line: &str) -> Vec<(&str, u64)> {
     pairs
 }
 
-/// Parse a token that is exactly a `0x`-prefixed hex number, else `None`.
 fn parse_bare_hex(token: &str) -> Option<u64> {
     let token = token.trim();
     let hex = token
@@ -280,7 +271,6 @@ fn parse_bare_hex(token: &str) -> Option<u64> {
     u64::from_str_radix(hex, 16).ok()
 }
 
-/// Run a command, returning its stdout on success or an error containing stderr.
 fn run_tool(cmd: &mut Command) -> Result<String> {
     let output = cmd
         .output()

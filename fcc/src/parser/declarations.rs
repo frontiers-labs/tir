@@ -982,8 +982,6 @@ impl SpecCounts {
         counts
     }
 
-    /// The type these specifiers name, or `None` for a combination C does not allow
-    /// (`long short`, `unsigned float`, a repeated keyword, ...).
     fn ctype(&self) -> Option<CType> {
         if self.other > 0 || self.int > 1 {
             return None;

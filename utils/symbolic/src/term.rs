@@ -447,7 +447,6 @@ impl<T> Segmented<T> {
         (segment, (u64::from(index) - first) as usize)
     }
 
-    /// Slot `index`, its segment allocated if it is not yet.
     fn slot(&self, index: u32) -> &OnceLock<T> {
         let (segment, slot) = Self::locate(index);
         let slots = self.segments[segment].get_or_init(|| {

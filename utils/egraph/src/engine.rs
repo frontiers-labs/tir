@@ -58,7 +58,6 @@ pub(crate) enum Shaped {
     Key { shift: u64, exchanged: bool },
 }
 
-/// `node`'s carrier and value, when it is an integer constant of one.
 pub(crate) fn leaf_constant<L: Label>(node: &L) -> Option<(Carrier, u64)> {
     let carrier = node.carrier()?;
     let value = node.int_value()?;
@@ -68,12 +67,6 @@ pub(crate) fn leaf_constant<L: Label>(node: &L) -> Option<(Carrier, u64)> {
     ))
 }
 
-/// What a node with `laws` over `operands` is without a row, if its laws
-/// settle it: an identity element at one operand makes it the other, and a
-/// linear node over constants is the constant the coefficients sum them to.
-/// `operands` are canonical; one with a coefficient may carry its offset or
-/// have had it moved out, as long as the caller applies the same convention to
-/// the answer.
 fn fold<P: Placement + ?Sized>(
     placed: &P,
     zeros: &[(u64, ClassId)],
@@ -603,7 +596,6 @@ impl<L: Label> Engine<L> {
         self.find(self.node_class[row.index()])
     }
 
-    /// The operator bucket of an e-node: its label's [`Label::op_key`].
     pub(crate) fn row_op(&self, row: RowId) -> u64 {
         self.vocabulary.label_op[self.node_label[row.index()].index()]
     }
@@ -677,12 +669,10 @@ impl<L: Label> Engine<L> {
         }
     }
 
-    /// Whether `label` is a commutative binary operator.
     pub(crate) fn commutes(&self, label: LabelId) -> bool {
         self.vocabulary.label_flags[label.index()] & COMMUTES != 0
     }
 
-    /// The labels whose operator bucket is `op`, by rank.
     pub(crate) fn labels_with_op(&self, op: u64) -> &[LabelId] {
         self.vocabulary
             .op_labels
@@ -694,8 +684,6 @@ impl<L: Label> Engine<L> {
         self.held_ops.contains(&op)
     }
 
-    /// The labels of the `op` bucket, or with `None` of every bucket: all of
-    /// them, or with `since` those met from that count on. In no one order.
     fn labels_in(&self, op: Option<u64>, since: Option<usize>, keep: impl FnMut(LabelId)) {
         let since = since.unwrap_or(0);
         let met = since..self.vocabulary.labels.len();
@@ -722,13 +710,6 @@ impl<L: Label> Engine<L> {
         cells.insert(at, label.0);
     }
 
-    /// Add to `out` the labels in the `op` bucket, or with `None` in any,
-    /// that `matches` holds of at `arity`, by the table their rows live in;
-    /// with `commuting`, only the commutative binary ones. Tables come in the
-    /// order of what they hold, and a scan reads a table's labels by rank,
-    /// so neither order is one the labels were met in. With `since`, only
-    /// the labels met from that count on are looked at, and `out` already
-    /// holds the rest.
     pub(crate) fn labels_matching(
         &self,
         op: Option<u64>,
@@ -780,8 +761,6 @@ impl<L: Label> Engine<L> {
         }
     }
 
-    /// Add to `out` the labels in the `op` bucket that `value` matches, by
-    /// rank; `since` as for [`Self::labels_matching`].
     pub(crate) fn labels_equal(
         &self,
         op: u64,
@@ -796,13 +775,10 @@ impl<L: Label> Engine<L> {
         });
     }
 
-    /// The table `label`'s rows live in.
     pub(crate) fn label_slot(&self, label: LabelId) -> u32 {
         self.vocabulary.label_slot[label.index()]
     }
 
-    /// How many labels the graph has met. What a plan's atoms read is fixed
-    /// between two readings that agree.
     pub(crate) fn labels_len(&self) -> usize {
         self.vocabulary.labels.len()
     }
@@ -852,7 +828,6 @@ impl<L: Label> Engine<L> {
         }
     }
 
-    /// The row holding `key` in `label`'s table, as the value it stores.
     fn probe(&self, label: LabelId, key: &Key) -> Option<Ref> {
         let slot = *self.vocabulary.label_slot.get(label.index())?;
         self.db
@@ -860,11 +835,6 @@ impl<L: Label> Engine<L> {
             .map(Ref::from)
     }
 
-    /// What `label` over `operands`, which are canonical, comes to before a
-    /// table is probed: a reference its laws settle without a row, or the
-    /// key it is stored under, written into `key`, and the offset to add to
-    /// that row's value. A commutative label's key holds the lesser operand
-    /// first, by class and then by the offset the key keeps.
     #[inline]
     pub(crate) fn shape(&self, label: LabelId, operands: &[Ref], key: &mut Key) -> Shaped {
         let laws = &self.vocabulary.label_laws[label.index()];
@@ -907,15 +877,12 @@ impl<L: Label> Engine<L> {
         }
     }
 
-    /// The zero class of the carrier `key`, if the graph has one.
     fn zero(&self, key: u64) -> Option<ClassId> {
         let zeros = &self.db.client().zeros;
         let found = zeros.iter().find(|&&(known, _)| known == key);
         found.map(|&(_, class)| class)
     }
 
-    /// The zero class of `carrier`, minted from `node`'s
-    /// [`Label::constant_of`] if the graph has none yet.
     fn zero_or_mint(&mut self, node: &L, carrier: Carrier) -> Option<ClassId> {
         if let Some(zero) = self.zero(carrier.key) {
             return Some(zero);
@@ -979,8 +946,6 @@ impl<L: Label> Engine<L> {
         self.insert_canonical(label, node, &operands)
     }
 
-    /// [`Self::insert`] of `node`, whose label is `label` and whose children
-    /// are the classes of `operands`, which are canonical.
     fn insert_canonical(&mut self, label: LabelId, node: L, operands: &[Ref]) -> Ref {
         let mut key = Key::default();
         let (shift, exchanged) = match self.shape(label, operands, &mut key) {
@@ -1134,9 +1099,6 @@ impl<L: Label> Engine<L> {
         }
     }
 
-    /// `node` as a reference when it is a leaf integer constant of a carrier
-    /// that can spell its zero. A typed constant's type is what its zero's
-    /// terms carry, as a row's would be its class's.
     #[inline]
     pub(crate) fn int_constant_ref(&mut self, node: &L) -> Option<Ref> {
         if !node.children().is_empty() {
@@ -1150,13 +1112,10 @@ impl<L: Label> Engine<L> {
         Some(Ref::new(zero, value))
     }
 
-    /// Whether `label` is a leaf integer constant of a carrier: a reference,
-    /// never a row.
     pub(crate) fn is_int_constant(&self, label: LabelId) -> bool {
         self.vocabulary.label_flags[label.index()] & CONSTANT != 0
     }
 
-    /// The id of `node`'s label.
     pub(crate) fn intern(&mut self, node: &L) -> LabelId {
         self.vocabulary.intern(node)
     }
@@ -1343,8 +1302,6 @@ impl<L: Label> Engine<L> {
 
     // ---- rows -------------------------------------------------------------
 
-    /// Store `node` as the first row of a fresh class. `weights` is empty or
-    /// one per cell of `key`; a `pinned` class is its carrier's zero.
     pub(crate) fn make_class(
         &mut self,
         node: L,
@@ -1479,7 +1436,6 @@ impl<L: Label> Engine<L> {
         }
     }
 
-    /// Move the absorbed class's e-nodes onto the end of the survivor's list.
     fn splice_class(&mut self, survivor: usize, absorbed: usize) {
         let lists = self.db.client_mut();
         let head = std::mem::replace(&mut lists.head[absorbed], NONE);
@@ -1583,7 +1539,6 @@ impl<L: Label> Engine<L> {
         self.node.get(head as usize)?.constant_of(found.offset)
     }
 
-    /// Whether the outermost open layer found `id` a carrier's zero already.
     fn zero_before_scopes(&self, id: ClassId) -> bool {
         // A layer places the base's representatives, so the base partition is
         // the one every open layer found; a zero minted under a layer is past
@@ -1690,8 +1645,6 @@ impl<L: Label> Engine<L> {
             .collect()
     }
 
-    /// Whether `reference` is the carrier constant `value`; `None` when
-    /// `value` is not an integer constant of a carrier.
     pub(crate) fn is_literal(&self, reference: Ref, value: &L) -> Option<bool> {
         self.terms().is_literal(reference, value)
     }
@@ -1830,7 +1783,6 @@ impl<L: Label> Engine<L> {
         self.dirty_since(self.db.depth().saturating_sub(1))
     }
 
-    /// Everything the scopes from `depth` outward-in changed, closed upward.
     fn dirty_since(&self, depth: usize) -> Vec<ClassId> {
         if !self.in_scope() {
             return Vec::new();
@@ -1856,7 +1808,6 @@ fn class_ids(ids: Vec<u32>) -> Vec<ClassId> {
     ids.into_iter().map(ClassId).collect()
 }
 
-/// The lattice column of `column`.
 pub(crate) fn lattice(column: ColumnId) -> LatticeId {
     match column {
         ColumnId::Const => CONSTS,
@@ -2224,8 +2175,6 @@ mod tests {
         assert!(eg.classes_with_op(Term::leaf("zzz").op_key()).is_empty());
     }
 
-    /// A scope is the same graph with more merges, so a lookup under it sees
-    /// what congruence over those merges proves, and the pop takes it back.
     #[test]
     fn a_scoped_lookup_sees_the_scopes_congruence() {
         let mut eg = Engine::new();
@@ -2544,8 +2493,6 @@ mod tests {
         assert_eq!(eg.label(eg.rows(after.class).next().unwrap()), label);
     }
 
-    /// A row a constant made an identity, or made all constants, leaves its
-    /// table and its value joins what it now is.
     #[test]
     fn a_rebuild_dissolves_rows_their_laws_now_settle() {
         let mut eg = Engine::new();
@@ -2564,8 +2511,6 @@ mod tests {
         assert!(eg.classes_with_op(add).is_empty());
     }
 
-    /// Assuming a constant re-keys the rows that named the class, not every
-    /// row naming a constant of its carrier.
     #[test]
     fn assuming_a_constant_dirties_the_users_of_the_class_alone() {
         let mut eg = Engine::new();

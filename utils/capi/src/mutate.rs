@@ -10,7 +10,6 @@ use tir::{BlockId, OpId, RegionId, TypeId};
 
 use crate::{TIR_INVALID_ID, set_error, str_from_raw, with_context};
 
-/// Fetch a block by raw id, or set an error and return `None`.
 fn block_checked(ctx: &tir::Context, block: u32) -> Option<BlockHandle> {
     let bid = BlockId::from_number(block);
     if ctx.has_block(bid) {
@@ -21,7 +20,6 @@ fn block_checked(ctx: &tir::Context, block: u32) -> Option<BlockHandle> {
     }
 }
 
-/// Require that op `op` exists, setting an error otherwise.
 fn op_exists(ctx: &tir::Context, op: u32) -> bool {
     if ctx.has_operation(OpId::from_number(op)) {
         true

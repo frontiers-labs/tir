@@ -185,8 +185,6 @@ impl ForOp {
     }
 }
 
-/// The op line and body of a r#for that lacks the shape its own syntax
-/// elides, printed as the generic theta so nothing is lost.
 fn generic_print(
     fmt: &mut tir::IRFormatter,
     context: &Context,
@@ -197,9 +195,6 @@ fn generic_print(
     tir::region_format::print_region(fmt, context, &context.get_region(Theta::body(op)))
 }
 
-/// Put back what the text leaves out: the comparison and increment the shape
-/// pins, unless the body already spells them, and the exit values, which are
-/// the ports.
 fn materialize_counted_shape(
     context: &Context,
     body: tir::RegionId,

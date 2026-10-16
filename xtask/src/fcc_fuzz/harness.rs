@@ -249,7 +249,6 @@ pub struct Failed {
 }
 
 impl Failed {
-    /// The same failure, but not the compiler under test dying.
     fn reported(self) -> Self {
         Self {
             crashed: false,
@@ -267,9 +266,6 @@ impl From<String> for Failed {
     }
 }
 
-/// Whether a finished process died rather than reported: killed by a signal,
-/// which leaves no exit code, or panicking, which says so on stderr. An exit
-/// code with a diagnostic behind it is the compiler declining the program.
 fn is_crash(code: Option<i32>, stderr: &str) -> bool {
     code.is_none() || stderr.contains("panicked at")
 }
@@ -288,7 +284,6 @@ fn run_command(command: &mut Command, what: &str) -> Result<(), Failed> {
     })
 }
 
-/// Run a command to completion, or `None` if it exceeded `timeout`.
 pub(super) fn timed_output(
     command: &mut Command,
     timeout: Duration,

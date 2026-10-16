@@ -20,7 +20,6 @@ fn name(ctx: Ctx, op: u32) -> String {
     owned(unsafe { tir_op_name(ctx, op) }).unwrap()
 }
 
-/// Depth-first collection of every op id reachable from `op`.
 fn collect(ctx: Ctx, op: u32, out: &mut Vec<u32>) {
     out.push(op);
     for r in 0..unsafe { tir_op_num_regions(ctx, op) } {

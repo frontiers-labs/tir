@@ -184,7 +184,6 @@ pub fn resolve_template_chain<'a>(
     chain
 }
 
-/// `own`, or else the nearest `pick` of the instruction's template chain.
 fn effective<'a, T>(
     inst: &'a ast::Instruction,
     item_cache: &HashMap<&'a str, &'a ast::Item>,
@@ -521,11 +520,6 @@ pub fn behavior_memory_effects(expr: &ast::Expr) -> (bool, bool) {
     effects
 }
 
-/// Apply `f` to each statement of `expr`: `expr` itself for a leaf, and the
-/// statements nested in the arms of the control-flow forms. A `Block` splits
-/// into its statements, an `If` into its arms — its condition is a value, not
-/// a statement — and a `Try` into its body, since a handler writes trap state
-/// rather than values.
 pub(crate) fn visit_statements<'a>(expr: &'a ast::Expr, f: &mut dyn FnMut(&'a ast::Expr)) {
     match expr {
         ast::Expr::Block(b) => b.stmts.iter().for_each(|stmt| visit_statements(stmt, f)),
@@ -540,7 +534,6 @@ pub(crate) fn visit_statements<'a>(expr: &'a ast::Expr, f: &mut dyn FnMut(&'a as
     }
 }
 
-/// Apply `f` to `expr` and every sub-expression of it, outermost first.
 pub(crate) fn visit_exprs<'a>(expr: &'a ast::Expr, f: &mut dyn FnMut(&'a ast::Expr)) {
     f(expr);
     match expr {
@@ -633,8 +626,6 @@ pub fn inline_let_bindings(expr: &ast::Expr) -> ast::Expr {
     inline(expr, &mut HashMap::new())
 }
 
-/// Rebuild `expr` with `f` applied to each immediate child. Leaves are
-/// returned unchanged.
 pub(crate) fn map_child_exprs(
     expr: &ast::Expr,
     f: &mut dyn FnMut(&ast::Expr) -> ast::Expr,

@@ -9,9 +9,6 @@
 // physical defs and uses. Target-agnostic: it keys off register paths, never
 // off register names.
 
-/// A register assigned only inside a conditional statement retains its old
-/// value when that statement does not execute. Track it as a read as well as a
-/// write in the machine dependence graph.
 fn conditional_register_writes(
     expr: &ast::Expr,
     out: &mut HashSet<(String, String)>,
@@ -39,11 +36,6 @@ fn conditional_register_writes(
     }
 }
 
-/// The `implicit: [...]` entries for one instruction: an [`ImplicitReg`] per
-/// register path its behavior reads or writes, sorted for stable output.
-/// Program-counter classes are excluded — control flow is modeled by the
-/// branch/terminator machinery, and threading `PC::pc` through the register
-/// dependence graph would serialize every branch behind the previous one.
 fn implicit_register_items(
     inst: &ast::Instruction,
     register_index_map: &HashMap<(String, String), u32>,
@@ -91,9 +83,6 @@ fn implicit_register_items(
     items
 }
 
-/// The physical registers whose values are ORed into an existing `fp_flags`
-/// register. This is scheduling metadata only. The architectural implicit
-/// register remains a read/write register through `implicit_regs`.
 fn implicit_or_update_items(
     inst: &ast::Instruction,
     operands: &[(String, Type)],

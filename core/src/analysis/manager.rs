@@ -79,8 +79,6 @@ impl AnalysisManager {
         self.lookup::<A>(op, context.op_version(op))
     }
 
-    /// The cached result for `op` at `version`, dropping it if it describes an
-    /// older version.
     fn lookup<A: Analysis>(&self, op: OpId, version: u32) -> Option<Rc<A>> {
         let key = (op, TypeId::of::<A>());
         let mut cache = self.cache.borrow_mut();

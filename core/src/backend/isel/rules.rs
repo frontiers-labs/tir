@@ -86,14 +86,6 @@ pub struct EmitSpec {
 /// results.
 pub(crate) type Emitted = (Box<dyn Operation>, Vec<(usize, tir::ValueId)>);
 
-/// Interprets an [`EmitSpec`]: bind each slot from the match and build the op.
-/// `RewriteFailed` when a required binding is absent.
-///
-/// A register slot becomes an SSA operand or result — a result is born typed
-/// with its port's register class, which is what makes the class of every
-/// machine value a type read — unless it names a physical register, which stays
-/// an attribute literal. A slot the instruction must read or write in a fixed
-/// register records that in the op's [`PINS_ATTR`] constraint.
 pub(crate) fn emit_with(
     context: &Context,
     req: &EmitRequest,
@@ -216,9 +208,6 @@ pub(crate) fn emit_with(
     Ok(((spec.wrap)(context.add_operation(instance)), defined))
 }
 
-/// The value a result port defines: a fresh one of the port's class, standing
-/// for the mid-end result the rule covers. `None` where nothing reads that
-/// result.
 fn new_result(
     context: &Context,
     req: &EmitRequest,

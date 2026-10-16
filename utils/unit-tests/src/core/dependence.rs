@@ -71,7 +71,6 @@ fn result_of(context: &Context, op: OpId) -> ValueId {
     context.get_op(op).results()[0]
 }
 
-/// `def -> %v`: a fresh register out of nothing.
 fn def_reg(context: &Context) -> (OpId, ValueId) {
     let op = DefOpBuilder::new(context)
         .result_types(vec![RegClassType::new(context, r())])
@@ -80,7 +79,6 @@ fn def_reg(context: &Context) -> (OpId, ValueId) {
     (op, result_of(context, op))
 }
 
-/// `set_flags %rs -> %rd`: reads a register, writes one, writes the flags.
 fn flag_def(context: &Context, source: ValueId) -> OpId {
     SetFlagsOpBuilder::new(context)
         .rs(source)
@@ -89,7 +87,6 @@ fn flag_def(context: &Context, source: ValueId) -> OpId {
         .id()
 }
 
-/// `read_flags %rs -> %rd`: reads a register and the flags.
 fn flag_use(context: &Context, source: ValueId) -> OpId {
     ReadFlagsOpBuilder::new(context)
         .rs(source)
@@ -129,10 +126,6 @@ fn definition_and_read(context: &Context, definition_first: bool) -> DefinitionA
     }
 }
 
-/// A register operand read before the operation defining it is a silent
-/// miscompile everywhere downstream; the machine verifier is what turns it
-/// into an error. The same two operations the other way round are what it
-/// accepts.
 #[test]
 fn a_register_read_must_follow_its_definition() {
     let context = context();
@@ -151,8 +144,6 @@ fn a_register_read_must_follow_its_definition() {
     verify_machine_ir(&context, ordered.symbol.id()).expect("definition precedes its use");
 }
 
-/// A flag register no operand names still orders the operations that share it:
-/// the reader follows its definer, and a second definer follows the reader.
 #[test]
 fn implicit_flag_registers_are_edges() {
     let context = context();
@@ -175,9 +166,6 @@ fn implicit_flag_registers_are_edges() {
     );
 }
 
-/// A value edge is a fact, not a preserved order: it holds whichever way round
-/// the reference reads, so the order that comes back puts the definition first
-/// even where the one handed in did not.
 #[test]
 fn linearize_pulls_a_definition_before_its_use() {
     let context = context();
@@ -190,7 +178,6 @@ fn linearize_pulls_a_definition_before_its_use() {
     );
 }
 
-/// Every order the shuffle picks is one the edges admit.
 #[test]
 fn every_shuffled_order_respects_the_edges() {
     let context = context();
@@ -211,8 +198,6 @@ fn every_shuffled_order_respects_the_edges() {
     }
 }
 
-/// After allocation a value is a register, so two values the map places in one
-/// register order each other even where no SSA edge does.
 #[test]
 fn an_assignment_makes_values_register_resources() {
     let context = context();
@@ -234,8 +219,6 @@ fn an_assignment_makes_values_register_resources() {
     );
 }
 
-/// The registers an operation destroys are edges too: nothing reading one may
-/// move across it.
 #[test]
 fn clobbers_are_edges() {
     let context = context();

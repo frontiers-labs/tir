@@ -93,8 +93,6 @@ pub fn lower_data(context: &Context, module: &ModuleOp) -> Result<(), tir::PassE
     Ok(())
 }
 
-/// One object per δ definition, its initializer spelled out byte by byte with a
-/// relocation wherever it holds an address.
 fn emit_data_section(
     context: &Context,
     module_body: &tir::BlockHandle,
@@ -169,8 +167,6 @@ fn emit_data_section(
     module_body.insert(end, section.id());
 }
 
-/// The text of an initializer that is exactly one NUL-terminated string, which
-/// the assembler spells `.asciz` rather than byte by byte.
 fn c_string(bytes: &[u8]) -> Option<String> {
     let (&0, text) = bytes.split_last()? else {
         return None;

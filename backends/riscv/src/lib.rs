@@ -133,7 +133,6 @@ impl TargetConfig {
         }
     }
 
-    /// The generic profile for an XLEN: every extension modeled in TMDL.
     fn generic(xlen: u32) -> Self {
         let mut config = TargetConfig {
             xlen,
@@ -172,10 +171,6 @@ fn parse_march(march: &str) -> Result<TargetConfig, String> {
     }
 }
 
-/// Resolve `--mcpu` to an optional default machine model. Generic CPU names
-/// map onto the generic cores when one exists for the configured XLEN; any
-/// other name must be a TMDL machine (by name or alias) compatible with the
-/// enabled features.
 fn parse_mcpu(mcpu: &str, config: &TargetConfig) -> Result<Option<String>, String> {
     let mcpu = normalize_name(mcpu);
     let name = match (
@@ -221,8 +216,6 @@ fn parse_mcpu(mcpu: &str, config: &TargetConfig) -> Result<Option<String>, Strin
     ))
 }
 
-/// Features named by a `--mattr` entry: the march extension letter spellings
-/// plus the TMDL feature names.
 fn attr_features(name: &str) -> Option<Vec<Feature>> {
     let name = normalize_name(name);
     match name.as_str() {
@@ -408,9 +401,6 @@ fn lower_func_and_return_to_asm_symbol(
     })
 }
 
-/// The register class an argument of `ty` is passed in. The ABI decides, not
-/// the type: `lp64` declares no float sequence, so an `!f64` argument travels
-/// in an integer register and must be classed as one.
 fn argument_register_class(
     context: &tir::Context,
     abi: &tir::backend::abi::AbiInfo,
@@ -448,10 +438,6 @@ fn argument_register_class(
     Ok(RegClass::GPR.id())
 }
 
-/// Lower `vector.vector_len` to `vsetvli rd, avl`: the one instruction that both
-/// produces a value (the granted element count) and configures the vector unit.
-/// The vsetvli-insertion pass recognizes it as establishing the configuration,
-/// so ops demanding the granted count need no further vset{i}vli.
 fn lower_vector_len(
     context: &tir::Context,
     op: &tir::OperationRef,
@@ -484,10 +470,6 @@ fn lower_vector_len(
     Ok(true)
 }
 
-/// Emit the branch-if-nonzero fallback for a condition no branch rule fused:
-/// `andi tmp, cond, 1` + `bne tmp, x0, dest`. The condition is a width-1
-/// value, so only bit 0 of its register is defined — branching on the whole
-/// register would read undefined bits.
 fn emit_branch_nonzero(
     context: &tir::Context,
     condition: tir::ValueId,
@@ -512,7 +494,6 @@ fn emit_branch_nonzero(
     ]
 }
 
-/// Build a register-register move (`addi rd, rs, 0`).
 fn mv(context: &tir::Context, rd: RegSlot, rs: RegSlot) -> Box<dyn Operation> {
     // Adding zero copies the whole GPR. Record its named ports for allocation,
     // since the general add-immediate opcode is not unconditionally a copy.
@@ -526,7 +507,6 @@ fn mv(context: &tir::Context, rd: RegSlot, rs: RegSlot) -> Box<dyn Operation> {
     Box::new(tir::reg_def!(builder, rd, rd).build())
 }
 
-/// The type of a value living in a `GPR`.
 fn gpr_ty(context: &tir::Context) -> tir::TypeId {
     tir::backend::RegClassType::new(context, RegClass::GPR.id())
 }
@@ -636,9 +616,6 @@ impl tir::backend::call_lowering::CallEmitter for RiscvCallEmitter {
     }
 }
 
-/// Store a physical register to `[frame + offset]`, dispatching on its file
-/// (`fsw`/`fsd` for the float files, `sd` otherwise). Used to preserve
-/// callee-saved registers in the prologue.
 fn reg_store(
     context: &tir::Context,
     reg: &tir::backend::liveness::PhysReg,
@@ -671,8 +648,6 @@ fn reg_store(
     }
 }
 
-/// Reload a physical register from `[frame + offset]`, the inverse of
-/// [`reg_store`].
 fn reg_reload(
     context: &tir::Context,
     reg: &tir::backend::liveness::PhysReg,

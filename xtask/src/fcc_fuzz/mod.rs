@@ -192,8 +192,6 @@ pub fn run(sh: &Shell, root: &Path, options: &Options) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Both ways back to this one failure: the seed that generated it, and the
-/// minimal case on its own for when the generator has moved on.
 fn reproduce_command(seed: u64, reduced: &triage::Reduced) -> String {
     let flags = fcc_flags(&reduced.variant);
     format!(
@@ -203,13 +201,10 @@ fn reproduce_command(seed: u64, reduced: &triage::Reduced) -> String {
     )
 }
 
-/// Whether a variant name is one of fcc's own, rather than a reference
-/// compiler's.
 fn is_fcc(variant: &str) -> bool {
     variant == "fcc-default" || variant.starts_with("fcc:")
 }
 
-/// The fcc variant a divergence names, recovered from the variant's own name.
 fn blamed(variant: &str) -> FccVariant {
     variant
         .strip_prefix("fcc:")
@@ -217,7 +212,6 @@ fn blamed(variant: &str) -> FccVariant {
         .unwrap_or_default()
 }
 
-/// The variant as it is typed on a command line.
 fn fcc_flags(variant: &FccVariant) -> String {
     let mut flags = String::new();
     if let Some(pipeline) = &variant.pipeline {
@@ -229,9 +223,6 @@ fn fcc_flags(variant: &FccVariant) -> String {
     flags
 }
 
-/// Hand one defect to the reporter. Signatures repeat within a run whenever two
-/// seeds hit the same bug, and one file per signature is what keeps that from
-/// becoming two issues.
 fn record(
     dir: &Path,
     failure: &report::Failure,
@@ -261,15 +252,10 @@ fn variants(seed: u64) -> Vec<harness::Variant> {
     variants
 }
 
-/// The extra pipeline a program is compiled under, chosen by the program's own
-/// seed so that the seed alone identifies both the program and what miscompiled
-/// it. Deriving it from the run's base seed instead would make a single-seed
-/// reproduce command select a different pipeline than the one that failed.
 fn extra_pipeline(seed: u64) -> &'static str {
     EXTRA_PIPELINES[(seed % EXTRA_PIPELINES.len() as u64) as usize]
 }
 
-/// Ground truth, where the machine has it.
 fn reference_variants() -> Vec<harness::Variant> {
     let mut references = Vec::new();
     if which("gcc") {
@@ -281,9 +267,6 @@ fn reference_variants() -> Vec<harness::Variant> {
     references
 }
 
-/// Cross-checks the checked-in C corpus and the GCC torture execute suite:
-/// every program that all variants can build must behave identically. Programs
-/// fcc cannot build yet are reported by the torture baseline, not here.
 fn run_corpus(
     sh: &Shell,
     root: &Path,
@@ -378,8 +361,6 @@ fn corpus_reproduce_command(path: &str, reduced: &triage::Reduced) -> String {
     format!("fcc compile -O2 --stage obj --march x86_64{flags} -o case.o {path}")
 }
 
-/// Corpus paths are reported relative to the checkout so they are clickable;
-/// the torture suite lives outside it and keeps its full path.
 fn relative(root: &Path, file: &Path) -> String {
     file.strip_prefix(root)
         .unwrap_or(file)
@@ -387,9 +368,6 @@ fn relative(root: &Path, file: &Path) -> String {
         .to_string()
 }
 
-/// Resolves the compiler under test. Builds the `ci` profile when none was
-/// given: the corpus spends its time running fcc, not compiling it, and this is
-/// the profile CI hands over.
 fn build_fcc(sh: &Shell, root: &Path, fcc: Option<&Path>) -> anyhow::Result<PathBuf> {
     if let Some(fcc) = fcc {
         return Ok(fcc.to_path_buf());
@@ -398,9 +376,6 @@ fn build_fcc(sh: &Shell, root: &Path, fcc: Option<&Path>) -> anyhow::Result<Path
     Ok(root.join("target/ci/fcc"))
 }
 
-/// Prove the harness catches divergences: run it against a stubbed `gcc` whose
-/// "binaries" always print a wrong value, and require the divergence to be
-/// detected.
 fn self_test(sh: &Shell, root: &Path, fcc: Option<&Path>) -> anyhow::Result<()> {
     let fcc = build_fcc(sh, root, fcc)?;
     let work_dir = root.join("target/fuzz/self-test");

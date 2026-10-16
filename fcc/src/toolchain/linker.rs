@@ -8,7 +8,6 @@ pub(crate) struct LinkCommand {
     args: Vec<OsString>,
 }
 
-/// Build `cc -o <output> <objects...> -L<dir>... -l<lib>...` (objects before libs).
 pub(crate) fn link_command(
     objects: &[PathBuf],
     output: &Path,
@@ -30,15 +29,12 @@ pub(crate) fn link_command(
 }
 
 impl LinkCommand {
-    /// The command as an argv (program first), for `-###` display.
     pub(crate) fn display_argv(&self) -> Vec<String> {
         let mut argv = vec![self.program.display().to_string()];
         argv.extend(self.args.iter().map(|a| a.to_string_lossy().into_owned()));
         argv
     }
 
-    /// Run the linker, propagating a spawn failure or nonzero exit (with the
-    /// linker's stderr) as an error string.
     pub(crate) fn run(&self) -> Result<(), String> {
         let output = Command::new(&self.program)
             .args(&self.args)

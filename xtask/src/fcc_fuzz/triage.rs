@@ -69,9 +69,6 @@ impl Reduced {
     }
 }
 
-/// The passes a pipeline runs, in the order it names them. A token opening a
-/// nest of its own — `func.func`, `fixpoint<3>` — schedules passes rather than
-/// being one, so a reader looking for what to go and fix is not sent after it.
 fn leaf_passes(pipeline: &str) -> Vec<&str> {
     let mut passes = Vec::new();
     let mut start = 0;
@@ -165,7 +162,6 @@ pub fn crash(fcc: &Path, source: &str, variant: &FccVariant, work_dir: &Path) ->
     }
 }
 
-/// Whether `source` still makes fcc die under `variant`.
 fn crashes(fcc: &Path, source: &str, variant: &FccVariant, work_dir: &Path) -> bool {
     let path = work_dir.join("crash.c");
     if std::fs::write(&path, source).is_err() {
@@ -230,9 +226,6 @@ pub fn diverges(
     diverged && ub::well_defined(&path, work_dir)
 }
 
-/// Whether two reference compilers produced different behavior. Both are
-/// compared against fcc's default, so agreeing with it — or diverging from it
-/// identically — means they agree with each other.
 fn references_disagree(outcomes: &[(String, Outcome)]) -> bool {
     let observed: Vec<Option<&Behavior>> = outcomes
         .iter()
@@ -274,7 +267,6 @@ pub fn failure(
     record(job, summary, reproduce, reduced, details)
 }
 
-/// How much the reducer took off, where it ran.
 fn shrink_note(reduced: &Reduced) -> String {
     match reduced.shrunk_from {
         Some(before) => format!(
@@ -285,7 +277,6 @@ fn shrink_note(reduced: &Reduced) -> String {
     }
 }
 
-/// The record every filed defect is, whatever found it.
 fn record(
     job: &str,
     summary: String,

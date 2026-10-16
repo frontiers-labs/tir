@@ -186,8 +186,6 @@ fn inline_expr(
     inlined
 }
 
-/// Clone `expr`, replacing bare identifiers bound in `bindings` with their
-/// expression. Lambda parameters shadow bindings within their bodies.
 fn substitute(expr: &ast::Expr, bindings: &HashMap<&str, &ast::Expr>) -> ast::Expr {
     if let ast::Expr::Ident(id) = expr
         && let Some(replacement) = bindings.get(id.name.as_str())

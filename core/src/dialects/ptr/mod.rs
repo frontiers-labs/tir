@@ -165,9 +165,6 @@ impl crate::ConstantLike for NullOp {
 }
 
 impl NullOp {
-    /// The null pointer: the all-zero address, at the pointer width the data
-    /// layout in scope declares. Without a layout the address width is unknown,
-    /// so the op offers no semantics rather than guessing one.
     fn null_address(&self, g: &mut tir::sem::SemGraph) -> Option<tir::NodeId> {
         let context = self.0.context.clone();
         let width = crate::DataLayout::for_instance(&context, &self.0)?.pointer_size()?;
@@ -195,10 +192,6 @@ operation! {
 }
 
 impl CmpOp {
-    /// The comparison of the two addresses, as unsigned integers at the width
-    /// the data layout in scope declares for a pointer. Without a layout the
-    /// address width is unknown, so the op offers no semantics rather than
-    /// guessing one.
     fn cmp_expr(&self, g: &mut tir::sem::SemGraph) -> Option<tir::NodeId> {
         let context = self.0.context.clone();
         crate::DataLayout::for_instance(&context, &self.0)?.pointer_size()?;
@@ -271,9 +264,6 @@ pub fn offset_type(context: &Context, op: crate::OpId) -> TypeId {
     crate::builtin::IntegerType::new(context, u64::from(width))
 }
 
-/// Rejects an offset, a pointer difference or a byte count added to a pointer
-/// whose width is not the pointer width. That width is a data layout fact, so
-/// with no layout in scope there is nothing to check against.
 fn pointer_sized(
     context: &Context,
     op: &tir::OpHandle,
@@ -371,9 +361,6 @@ impl tir::Verifiable for StoreOp {
     }
 }
 
-/// A λ value names a function, not a machine word: it never lives in memory.
-/// A language that stores function pointers converts to and from `!ptr.p`
-/// around the store.
 fn reject_function_value(context: &Context, value: crate::ValueId, op: &str) -> Result<(), Error> {
     match crate::builtin::FnType::view(context, context.get_value(value).ty()) {
         Some(_) => Err(Error::VerificationError(format!(

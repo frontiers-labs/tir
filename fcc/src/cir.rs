@@ -362,7 +362,6 @@ impl NonLocalExit for ContinueOp {
     }
 }
 
-/// The `label` attribute an exit or a loop carries, if any.
 fn loop_label(op: &impl Operation) -> Option<String> {
     match op.attr("label")? {
         tir::attributes::AttributeValue::Str(label) => Some(label.to_string()),
@@ -408,9 +407,6 @@ impl RegionRole {
     }
 }
 
-/// A loop region holds ordinary CFG: a C condition or step spelling `&&` or `?:`
-/// branches within the region, so only the blocks that leave it are constrained, and
-/// each must leave the way its role says.
 fn verify_loop_region(
     context: &Context,
     op: &impl Operation,
@@ -451,9 +447,6 @@ fn verify_loop_region(
     Ok(())
 }
 
-/// Print `cir.for {label = "l"} cond { .. } step { .. } body { .. }`: the
-/// label when the loop carries one, then one keyword per region, in the order
-/// the op declares them.
 fn print_loop_regions(
     fmt: &mut IRFormatter,
     op: &impl Operation,
@@ -472,7 +465,6 @@ fn print_loop_regions(
     Ok(())
 }
 
-/// Parse an optional `{label = "l"}` clause into the builder's attribute.
 fn parse_loop_label(
     parser: &mut tir::parse::text::Parser,
 ) -> Result<Option<String>, (Span, Error)> {
@@ -496,7 +488,6 @@ fn label_attribute(label: Option<String>) -> Option<tir::attributes::AttributeVa
     label.map(|label| tir::attributes::AttributeValue::Str(label.into()))
 }
 
-/// Parse one `<keyword> { .. }` region clause.
 fn parse_loop_region(
     parser: &mut tir::parse::text::Parser,
     context: &Context,

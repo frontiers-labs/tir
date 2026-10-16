@@ -324,7 +324,6 @@ fn verify_result_address(
     Ok(())
 }
 
-/// Parse `(%a, %b : t1, t2)` (types are informational; values resolve by number).
 fn parse_arg_list(
     parser: &mut tir::parse::text::Parser,
     context: &Context,

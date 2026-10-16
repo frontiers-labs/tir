@@ -401,11 +401,6 @@ impl Seeder<'_> {
         }
     }
 
-    /// The reference of `value`: the one already seeded for it, the one its
-    /// defining op seeds, or an anchor leaf. An op outside the function is
-    /// not read, not even for which of its results the value is, and the
-    /// value reads nothing of the function: a call names its callee, which
-    /// the module defines and a pass may have replaced since.
     fn class_of(&mut self, value: ValueId) -> Ref {
         if let Some(&id) = self.value_class.get(&value) {
             return id;
@@ -422,16 +417,12 @@ impl Seeder<'_> {
         self.anchor(value)
     }
 
-    /// Record that `id` is the reference of `value`, and that its terms carry
-    /// the value's type — a term standing for an IR value keeps no type of its
-    /// own, and the value has one.
     fn bind_value(&mut self, value: ValueId, id: Ref) {
         let ty = self.context.get_value(value).ty();
         self.eg.raise_type(id.class, ty.number() as u64);
         self.value_class.insert(value, id);
     }
 
-    /// The carrier a value of `value`'s type lives in.
     fn carrier(&self, value: ValueId) -> Option<Carrier> {
         carrier_of(
             self.context,
@@ -440,7 +431,6 @@ impl Seeder<'_> {
         )
     }
 
-    /// The leaf standing for `value`, unless something already seeded a class for it.
     fn anchor(&mut self, value: ValueId) -> Ref {
         if let Some(&id) = self.value_class.get(&value) {
             return id;
@@ -570,8 +560,6 @@ impl Seeder<'_> {
         Some((operator?, values))
     }
 
-    /// Seed every result of `op`. Memoized: an operand whose definition the walk
-    /// has not reached yet pulls it in, and the memo breaks any cycle it meets.
     fn seed_op(&mut self, op: OpId) {
         if self.seeded.insert(op) {
             self.seed_by_handle(op);
@@ -691,11 +679,6 @@ impl Seeder<'_> {
         self.opaque_results(&instance, &instance.results(), changes, read.as_deref());
     }
 
-    /// A declared γ over unordered arms: every arm reads the forwarded inputs
-    /// and the op's dependencies through its ports, and result `index` is the
-    /// choice among the arms' `index`-th results by the predicate. Two arms
-    /// picked by a boolean are the `If` the rules know, the true arm first;
-    /// arms that agree need no choice at all.
     fn seed_switch(&mut self, instance: &OpHandle, gamma: &dyn Gamma) {
         let predicate = self.class_of(gamma.predicate());
         let binding = gamma.binding();
@@ -760,11 +743,6 @@ impl Seeder<'_> {
         );
     }
 
-    /// A chain a loop body hands back untouched — the port itself is what it
-    /// names in both its continue and its exit group — is the memory the loop
-    /// was entered on: nothing under the loop changes an object on that chain,
-    /// on any iteration. So a read of it inside the body has observed what the
-    /// state before the loop stands for, and so has one after the loop.
     fn bind_unchanged_chains(&mut self, instance: &OpHandle) {
         for chain in crate::binding::state_chains(self.context, instance) {
             let port = chain.ports[0];
@@ -780,12 +758,6 @@ impl Seeder<'_> {
         }
     }
 
-    /// A declared θ over an unordered body: each carried port is read inside
-    /// the body as a `Port` of its own identity, and the value the loop produces
-    /// for it is `Loop(init, next, exit, pred)`. A port every iteration carries
-    /// unchanged is the value the loop was entered on, and the loop leaves with
-    /// its exit value; any other value port is recorded for the hypothesis
-    /// rounds. Dependencies anchor.
     fn seed_loop(&mut self, instance: &OpHandle, theta: &dyn Theta) {
         let binding = theta.binding();
         let body = theta.body();
@@ -880,11 +852,6 @@ impl Seeder<'_> {
         self.eg.rebuild();
     }
 
-    /// A join names the memory its inputs merge into, so its identity is the tuple
-    /// of them: a read after a join has observed the writes before every input and
-    /// is the read of no single one. Where the inputs are one state — the fork of
-    /// reads a single write left, since a read publishes the state it took — the
-    /// merge is that state.
     fn seed_join(&mut self, instance: &OpHandle) {
         let args: Vec<Ref> = instance
             .operands()
@@ -917,7 +884,6 @@ impl Seeder<'_> {
         args.iter().all(|&other| self.eg.find(other) == first)
     }
 
-    /// Seed a memory access over the state it reads, if it is one that names a state.
     fn seed_memory(&mut self, instance: &OpHandle) -> bool {
         if let Some(read) = instance.clone().as_interface::<dyn MemoryRead>() {
             return self.seed_read(instance, read.as_ref());
@@ -928,9 +894,6 @@ impl Seeder<'_> {
         false
     }
 
-    /// A read leaves memory as it found it, so the state it publishes is the one
-    /// it read: both name the same class, and two reads of one address in one
-    /// state are one term.
     fn seed_read(&mut self, instance: &OpHandle, read: &dyn MemoryRead) -> bool {
         let value = read.read_value();
         let ty = self.context.get_value(value).ty();
@@ -959,10 +922,6 @@ impl Seeder<'_> {
         true
     }
 
-    /// A write's term *is* the state the accesses after it read. The term names
-    /// the location, the value and the state, so a write carrying any other
-    /// operand — a size, say — covers an extent the term cannot spell and is no
-    /// store term at all.
     fn seed_write(&mut self, instance: &OpHandle, write: &dyn MemoryWrite) -> bool {
         if instance.operands().len() != STORE_OPERANDS {
             return false;
@@ -985,9 +944,6 @@ impl Seeder<'_> {
         true
     }
 
-    /// The extent an access of `ty` covers, in bits. A pointer's width is a data
-    /// layout fact, so where no layout is in scope the access covers an extent
-    /// the term cannot spell and stays unseeded.
     fn access_width(&self, ty: TypeId) -> Option<u32> {
         self.context
             .terms()
@@ -1008,7 +964,6 @@ impl Seeder<'_> {
         spelled.collect()
     }
 
-    /// A byte count or metadata literal, spelled the one way the vocabulary shares.
     fn int(&mut self, value: u32) -> Ref {
         self.eg.add(Node::constant(
             minimal_unsigned_apint(u64::from(value)),
@@ -1047,8 +1002,6 @@ pub(crate) fn children(context: &Context, instance: &OpHandle) -> SmallVec<[Opti
     )
 }
 
-/// The classes of `operands`, which a node built over them carries as its
-/// children while [`Engine::insert`] reads the references themselves.
 fn classes(operands: &[Ref]) -> Vec<tir_egraph::ClassId> {
     operands.iter().map(|operand| operand.class).collect()
 }
@@ -1071,13 +1024,6 @@ fn reread(context: &Context, state: ValueId, seen: &mut IdSet<ValueId>) -> bool 
     })
 }
 
-/// Whether `state` names the memory `port` does: the reads between them left
-/// it as they found it, and a merge of one chain's fork of them names the state
-/// they all observed.
-///
-/// A fork's join reaches every read of it, so the walk is over a DAG and has to
-/// remember what it has answered; without that a run of forks costs one path
-/// per read of each.
 fn names_same_memory(context: &Context, state: ValueId, port: ValueId) -> bool {
     names_same_memory_seen(context, state, port, &mut IdSet::new())
 }

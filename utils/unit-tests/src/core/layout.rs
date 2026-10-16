@@ -11,15 +11,12 @@ use tir::{
 
 use super::fixtures;
 
-/// The layout of a module declaring `spec`.
 fn layout(context: &Context, spec: &str) -> DataLayout {
     let src = format!("module {{layout.spec = {spec}}} {{\n  module_end\n}}");
     let module = parse_ir::<ModuleOp>(context, &src).expect("parse module");
     DataLayout::for_op(context, module.id()).expect("layout in scope")
 }
 
-/// Every data-layout accessor reads its entry out of the spec the module
-/// declares, and answers "absent" for what the spec leaves out.
 #[test]
 fn layout_accessors_read_the_declared_spec() {
     type Probe = fn(&Context, &DataLayout);
@@ -142,15 +139,12 @@ fn a_target_default_needs_no_enclosing_scope() {
     assert!(DataLayout::from_value(&context, &AttributeValue::UInt(64)).is_none());
 }
 
-/// The environment of a module declaring `spec`.
 fn target_env(context: &Context, spec: &str) -> TargetEnv {
     let src = format!("module {{target_env = {spec}}} {{\n  module_end\n}}");
     let module = parse_ir::<ModuleOp>(context, &src).expect("parse module");
     TargetEnv::for_op(context, module.id()).expect("environment in scope")
 }
 
-/// Every target-environment accessor reads its entry out of the spec the
-/// module declares, and answers "absent" for what the spec leaves out.
 #[test]
 fn target_env_accessors_read_the_declared_spec() {
     type Probe = fn(&TargetEnv);

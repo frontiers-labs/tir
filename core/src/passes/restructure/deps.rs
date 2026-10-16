@@ -191,11 +191,6 @@ pub fn plan(context: &Context, region: RegionId) -> Plan {
     }
 }
 
-/// Two chains no effect ever tells apart are one chain. Every effect that
-/// names either names both, so their accesses are already ordered against each
-/// other and merging them states nothing new — it just spares the merge and the
-/// split that crossing them would otherwise cost at every effect. An escaped
-/// allocation and the world are the pair this is usually about.
 fn merge_indistinguishable(
     keys: Vec<ChainKey>,
     touched: EffectChains,
@@ -243,10 +238,6 @@ fn merge_indistinguishable(
     (keys, touched)
 }
 
-/// Whether nothing but the object's own accesses can reach it: a fresh
-/// allocation or a parameter the λ declares free of aliases, whose address
-/// never leaves those accesses. No pointer of unknown origin and no callee
-/// names it, so its chain carries the world's effects on no account.
 fn is_private(context: &Context, base: Base) -> bool {
     match base {
         Base::Alloca(pointer)
@@ -258,10 +249,6 @@ fn is_private(context: &Context, base: Base) -> bool {
     }
 }
 
-/// The chains an effect on `base` touches, its own first: every chain whose
-/// object it may alias. An effect naming no object reaches the world and every
-/// object the world can reach; an effect on a private object reaches nothing
-/// else, and nothing else reaches it.
 fn touched_chains(
     keys: &[ChainKey],
     private: &[bool],
@@ -422,8 +409,6 @@ pub fn thread_block(
         .collect()
 }
 
-/// Whether two effects cross the same chains, however each orders them: a
-/// state standing for a set of chains answers either.
 fn same_chains(held: &[usize], wanted: &[usize]) -> bool {
     held.len() == wanted.len() && wanted.iter().all(|chain| held.contains(chain))
 }
@@ -435,8 +420,6 @@ fn resource_effects(op: &OpHandle) -> Vec<crate::ResourceEffect> {
         .unwrap_or_default()
 }
 
-/// What `op` does to execution resources, refusing an effect nested where the conversion
-/// has no port to carry it through.
 fn effects(
     context: &Context,
     op: &OpHandle,
@@ -505,9 +488,6 @@ impl Chains<'_> {
             .ok_or_else(|| unsupported("an effect on a chain its region does not carry"))
     }
 
-    /// Name each chain a shared state stands for again, which is what a
-    /// `state.split` is for. Called where a chain is wanted on its own, so a
-    /// state no effect ever takes apart is never split.
     fn name_shared(&mut self) -> Result<(), PassError> {
         let Some(shared) = self.shared.take() else {
             return Ok(());
@@ -524,17 +504,6 @@ impl Chains<'_> {
         Ok(())
     }
 
-    /// The memory each of `chains` stands at once the reads forked off it are
-    /// closed, joined into one state where the effect crosses several.
-    ///
-    /// A state left by a change that crossed exactly these chains already
-    /// stands for their memory: splitting it into names this effect would only
-    /// join back says nothing, so the effect takes it as it is.
-    ///
-    /// Two changes cross the same chains only where their objects reach each
-    /// other — the same object, two parameters, or two effects on memory of
-    /// unknown provenance — so a reader that follows the state back to one
-    /// chain of the pair still meets every access that may alias either.
     fn settle(&mut self, chains: &[usize], before: OpId) -> Result<ValueId, PassError> {
         if let Some(shared) = &self.shared
             && same_chains(&shared.chains, chains)
@@ -551,9 +520,6 @@ impl Chains<'_> {
         })
     }
 
-    /// The memory after every read of one chain's open fork: the last change
-    /// where none forked off it, the one read's state where one did, their
-    /// join otherwise.
     fn close_fork(&mut self, chain: usize, before: OpId) -> Result<ValueId, PassError> {
         let state = self.state(chain)?;
         let reads = std::mem::take(&mut state.reads);
@@ -567,7 +533,6 @@ impl Chains<'_> {
         Ok(settled)
     }
 
-    /// A `state.join` of `states`, placed where the operation taking it is.
     fn merge(&self, states: &[ValueId], before: OpId) -> ValueId {
         let join = JoinOpBuilder::new(self.context)
             .states(states.to_vec())
@@ -577,9 +542,6 @@ impl Chains<'_> {
         join.result()
     }
 
-    /// The memory the change that left `published` stands for: its own chain
-    /// where it crossed one, all the chains it crossed otherwise, held until
-    /// something names one of them on its own ([`Self::name_shared`]).
     fn split(
         &mut self,
         chains: &[usize],
@@ -598,7 +560,6 @@ impl Chains<'_> {
         Ok(())
     }
 
-    /// Place `op` `offset` operations past `anchor` in the block holding it.
     fn insert(&self, op: OpId, anchor: OpId, offset: usize) {
         let block = self
             .context

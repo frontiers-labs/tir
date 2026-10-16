@@ -29,7 +29,6 @@ impl std::fmt::Debug for RegionHandle {
 }
 
 impl RegionHandle {
-    /// The owning context, after checking this handle still names its own region.
     fn context(&self) -> Context {
         let context = self.context.clone();
         debug_assert!(
@@ -168,8 +167,6 @@ impl RegionHandle {
         Ok(())
     }
 
-    /// An unordered region evaluates by demand, so nothing may transfer control
-    /// inside it and its dependencies must admit an evaluation order.
     fn verify_nodes(&self, context: &Context) -> Result<(), crate::Error> {
         let ops = self.op_ids();
         for op in &ops {
@@ -202,9 +199,6 @@ impl RegionHandle {
         topological_order(context, self.id).map(|_| ())
     }
 
-    /// An unordered region reads only what it or an enclosing region defines:
-    /// nothing puts it in sequence with a sibling, so naming a sibling's value
-    /// would be naming something that need never have run.
     fn verify_in_scope(&self, context: &Context, value: ValueId) -> Result<(), crate::Error> {
         if !context.has_value(value) {
             return Err(crate::Error::VerificationError(format!(
@@ -232,8 +226,6 @@ impl RegionHandle {
     }
 }
 
-/// The region a value belongs to: the one whose port it is, the one holding the
-/// block whose argument it is, or the one holding the operation defining it.
 pub(crate) fn defining_region(context: &Context, value: ValueId) -> Option<RegionId> {
     if let Some(region) = context.region_of_port(value) {
         return Some(region);
@@ -244,13 +236,6 @@ pub(crate) fn defining_region(context: &Context, value: ValueId) -> Option<Regio
     context.region_of_op(context.get_value(value).defining_op()?)
 }
 
-/// The order an unordered region's operations evaluate in: every operation
-/// after the ones it reads, and among those the one with the smallest id first.
-///
-/// The tie-break makes the order a function of the graph alone, so printing a
-/// parsed region and parsing the result again is a fixed point. Operations left
-/// over at the end sit on a dependency cycle, which has no evaluation order at
-/// all; the error names one of the operations closing it.
 pub(crate) fn topological_order(
     context: &Context,
     region: RegionId,
@@ -259,8 +244,6 @@ pub(crate) fn topological_order(
     topological_order_picking(context, region, &reads, |ready| ready.pop_first())
 }
 
-/// [`topological_order`] with the tie among ready operations broken by `rng`
-/// instead of by id: one random linearization of the same graph.
 pub(crate) fn shuffled_topological_order(
     context: &Context,
     region: RegionId,
@@ -322,13 +305,6 @@ fn topological_order_picking(
     )))
 }
 
-/// Every value an operation reads from the scope holding it, its nested
-/// regions included: what a region holds is one node of its dependence graph,
-/// whatever it holds inside. A value a nested region names as its result is
-/// read only when the region forwards it from outside; one the region produces
-/// is a definition, and naming it here would let a caller entering a block on
-/// what it reads mint an argument for a value defined inside the loop, cutting
-/// the chain that produced it.
 pub(crate) fn values_read(context: &Context, op: OpId) -> Vec<ValueId> {
     let instance = context.get_op(op);
     let mut values = instance.operands().to_vec();
@@ -387,7 +363,6 @@ impl SiblingReads {
     }
 }
 
-/// What `region` and everything under it reads, and what the same span defines.
 fn collect_region_reads(
     context: &Context,
     region: RegionId,
@@ -407,9 +382,6 @@ fn collect_region_reads(
     }
 }
 
-/// One operation actually on a cycle, rather than merely downstream of one:
-/// walk back through the operations Kahn left pending until the walk repeats
-/// itself, and answer with the smallest id it went round.
 fn cycle_member(reads: &SiblingReads, pending: &IdMap<OpId, usize>) -> OpId {
     let blocked = |op: &OpId| pending.get(op).is_some_and(|count| *count > 0);
     let start = pending

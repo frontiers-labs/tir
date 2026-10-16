@@ -79,10 +79,6 @@ struct Source<'a> {
     old: Option<&'a [u32]>,
 }
 
-/// A row's rank in the loop nest's order of an atom's rows: the table's
-/// position in the selection first, then the row and the reading, or for a
-/// sideways step, which looks each reading up in its own column, the reading
-/// and the row.
 fn rank(table: usize, reading: usize, sideways: bool) -> (u64, u32) {
     let table = (table as u64) << 33;
     match sideways {
@@ -91,7 +87,6 @@ fn rank(table: usize, reading: usize, sideways: bool) -> (u64, u32) {
     }
 }
 
-/// The table position, row and reading of a rank.
 fn unrank(rank: u64, sideways: bool) -> (usize, u32, bool) {
     let table = (rank >> 33) as usize;
     match sideways {
@@ -101,9 +96,6 @@ fn unrank(rank: u64, sideways: bool) -> (usize, u32, bool) {
 }
 
 impl Plan {
-    /// What `atom`, the first of a join, reaches through its step: `count`
-    /// summed over the groupings it looks rows up in, both readings included,
-    /// or every row of a client table.
     pub(super) fn reach<C, const S: usize>(
         &self,
         db: &Core<C, S>,
@@ -137,9 +129,6 @@ impl Plan {
             .sum()
     }
 
-    /// Build the tries a join reads, unless the tables its first atom looks
-    /// rows up in hold too few rows per cell for a join to pay. Reports
-    /// whether it built them.
     pub(super) fn prepare_join<C, const S: usize>(
         &self,
         db: &Database<C, S>,
@@ -178,8 +167,6 @@ impl Plan {
         true
     }
 
-    /// Whether the join, its tries built, is worth running rather than its
-    /// run's steps: whether its first atom reaches enough rows.
     #[inline(never)]
     pub(super) fn pays<C, const S: usize, A: Allow + ?Sized>(
         &self,
@@ -204,8 +191,6 @@ impl Plan {
         self.reach(eval.db, eval.groups, eval.resolutions, first, count) >= eval.join_min_rows
     }
 
-    /// Run the join at step `index`, then the steps after its run, once per
-    /// match of the run, in the loop nest's order.
     // Out of line, so the loop nest's step stays as small as it was.
     #[inline(never)]
     pub(super) fn join<C, const S: usize, A: Allow + ?Sized>(
@@ -276,8 +261,6 @@ impl Plan {
             .push((tuples, order));
     }
 
-    /// Append the rank tuple of every match of the join's run to `out`, in no
-    /// particular order.
     fn enumerate<C, const S: usize, A: Allow + ?Sized>(
         &self,
         eval: &mut Eval<'_, C, S, A>,
@@ -424,7 +407,6 @@ struct Run<'r, 'a> {
     cells: bool,
 }
 
-/// Where the separator's cells sit in a tuple of a bag with variables `vars`.
 fn positions(vars: u64, separator: u64) -> SmallVec<[usize; 8]> {
     bits(separator)
         .map(|var| (vars & ((1 << var) - 1)).count_ones() as usize)
@@ -435,7 +417,6 @@ fn bits(mask: u64) -> impl Iterator<Item = u32> {
     (0..64).filter(move |bit| mask >> bit & 1 == 1)
 }
 
-/// The cells of tuple `at` at `positions`: its separator key.
 fn key<'t>(
     tuples: &'t [u64],
     width: usize,
@@ -447,8 +428,6 @@ fn key<'t>(
 }
 
 impl Run<'_, '_> {
-    /// Join `bag` next, its separator held to its parent's cells unless it
-    /// is the root.
     fn enter(&mut self, bag: &Bag, root: bool) {
         self.atoms = bits(bag.atoms).map(|atom| atom as usize).collect();
         self.vars = bits(bag.vars).collect();
@@ -461,10 +440,6 @@ impl Run<'_, '_> {
         self.cells = self.join.bags.len() > 1;
     }
 
-    /// Join a decomposed run's bags root first, each child holding its
-    /// separator to the cells its parent's tuples have; drop, leaves first,
-    /// each parent tuple no child tuple agrees with; then combine one tuple
-    /// of every bag, each child's looked up by its parent's separator cells.
     fn decomposed<A: Allow + ?Sized>(
         &mut self,
         scratch: &mut JoinScratch,
@@ -574,10 +549,6 @@ impl Run<'_, '_> {
         combine(&scratch.bags, bags, &links, &place, &mut chosen, 0, out);
     }
 
-    /// Bind the bag's variable at `depth` to each cell every atom reading it
-    /// allows, descend the atoms' cursors under it, and go on to the next;
-    /// past the last, collect the leaves. `held` is the rows of the parent's
-    /// separator cells that agree with the cells bound so far.
     fn descend<A: Allow + ?Sized>(
         &self,
         scratch: &mut JoinScratch,
@@ -849,8 +820,6 @@ impl Run<'_, '_> {
         scratch.unions.extend([extras, listed, part, spare]);
     }
 
-    /// Every atom is at its leaves: the product of the rows they hold, each
-    /// as a tuple of ranks, after the bag's cells if it keeps them.
     fn leaves(&self, scratch: &mut JoinScratch, frame: usize, out: &mut Vec<u64>) {
         let width = self.atoms.len();
         for atom in 0..width {
@@ -920,9 +889,6 @@ struct Link {
     up_at: SmallVec<[usize; 8]>,
 }
 
-/// One tuple per bag from bag `index` on, each child's agreeing with its
-/// parent's on their separator: the rank tuple of each such match of the
-/// run.
 fn combine(
     tuples: &[(Vec<u64>, Vec<u32>)],
     bags: &[Bag],
@@ -1025,11 +991,6 @@ mod tests {
 
     type Db = Database<(), 1>;
 
-    /// A bag and a keyed table of binary rows and a bag of unary ones, each
-    /// row `(kind, args..) -> value` with a few kinds and few argument cells,
-    /// filled over two epochs, with `between` run on the first. Every cell
-    /// that names an id carries one of `spread` weights, so with more than
-    /// one two rows can name an id and disagree on the reference.
     fn database(
         rows: &[(u32, u32, u32, u32, u32)],
         spread: u64,
@@ -1080,10 +1041,6 @@ mod tests {
         })
     }
 
-    /// Queries with a variable two atoms share and neither has bound when
-    /// they are reached: a chain, a triangle, a triangle whose second atom
-    /// reads one variable twice, a triangle reached sideways, and two
-    /// triangles joined by a bridge reached sideways.
     fn query(shape: usize, swap: bool, guard: bool) -> Query {
         let (r, a, b, x, y, c, d, e) = (0, 1, 2, 3, 4, 5, 6, 7);
         let atoms = match shape {
@@ -1143,8 +1100,6 @@ mod tests {
             .collect()
     }
 
-    /// A chain whose every variable is looked up by the atom after the one
-    /// that binds it has nothing to intersect, so it is not joined.
     #[test]
     fn a_chain_of_lookups_is_not_joined() {
         let (r, a, x, y) = (0, 1, 2, 3);

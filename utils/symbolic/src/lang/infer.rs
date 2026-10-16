@@ -523,9 +523,6 @@ fn is_shift(kind: SymKind) -> bool {
     )
 }
 
-/// The shift-amount operand's source with its implicit encoding mask stripped:
-/// `Extract(amt, k, 0)` / `Clamp(amt, _, _)` -> `amt` (the shift encoding masks
-/// the amount, so the mask is redundant for matching).
 fn shift_amount_src<V, A>(graph: &Dag<SymKind, SymPayload<V>, A>, src: NodeId) -> NodeId {
     match *graph.get_node(src) {
         SymKind::Extract => {
@@ -555,8 +552,6 @@ fn extract_from_zero_hi<V, A>(
     const_u64(graph, children[1]).map(|hi| (children[0], hi))
 }
 
-/// Whether `node` is a low slice `Extract(x, hi, 0)` (lo == 0), a re-view of the
-/// low bits of `x`. The hi bound may be constant or symbolic (`XLEN - 1`).
 fn is_low_extract<V, A>(graph: &Dag<SymKind, SymPayload<V>, A>, node: NodeId) -> bool {
     *graph.get_node(node) == SymKind::Extract && {
         let children: Vec<NodeId> = graph.children(node).collect();

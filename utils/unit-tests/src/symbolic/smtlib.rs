@@ -117,8 +117,6 @@ fn lower(src: &str) -> Lowered<()> {
     lower_script::<()>(&parse_script(src).unwrap()).unwrap()
 }
 
-/// Structural isomorphism ignoring sharing and `SymbolId` numbering (symbols
-/// compared by name).
 fn iso(
     g1: &Graph,
     n1: NodeId,
@@ -148,7 +146,6 @@ fn iso(
     }
 }
 
-/// SMT -> graph -> SMT -> graph must produce isomorphic graphs.
 fn roundtrips(src: &str) {
     let a = lower(src);
     let script = lift_script(&a.graph, a.root, &a.symbols).unwrap();

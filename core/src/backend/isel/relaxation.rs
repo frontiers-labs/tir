@@ -47,7 +47,6 @@ fn relaxation_error(rule: &Rule, why: &str) -> String {
     format!("rule `{}`: {why}", rule.name)
 }
 
-/// Prove result refinement on the selection pattern's defined domain.
 fn prove_relaxation(rule: &Rule, guarded: &SemGraph) -> Result<GuardedRelaxationProof, String> {
     let (pattern, guarded) = peel_relaxation_effect(rule, guarded)?;
     let pattern = &pattern;
@@ -277,8 +276,6 @@ fn prove_float_relaxation(
     None
 }
 
-/// The conjunction of definedness conditions of every partial-kind node reachable
-/// from `root`, appended to `g`; `None` when the subgraph holds no partial op.
 fn definedness_of(g: &mut SemGraph, root: NodeId, widths: &[Option<u32>]) -> Option<NodeId> {
     let mut conditions = Vec::new();
     let mut seen = HashSet::new();
@@ -300,19 +297,6 @@ fn definedness_of(g: &mut SemGraph, root: NodeId, widths: &[Option<u32>]) -> Opt
     })
 }
 
-/// Whether relaxing `guarded` to its (guard-dropped) else arm is sound: the guard
-/// region must lie inside the region where the pure op is undefined. Concretely,
-/// prove `D(else) AND guard_cond` is unsatisfiable — the guard fires only where the
-/// IR op is undefined, so outside the guard the instruction already computes the
-/// pure op (the shared else arm) and the drop loses nothing.
-///
-/// This is the tractable form of `D(pattern) => guarded == pattern`: since the else
-/// arm *is* the pattern, that obligation is `(D AND guard_cond) => (then == else)`,
-/// discharged here by refuting its antecedent. `D`'s divisor-nonzero test and the
-/// guard's divisor-zero test share the divisor symbol, so the conflict closes by
-/// unit propagation without the SAT solver ever entering the divider circuit (the
-/// full-equality form forces it through a divider miter — seconds, not
-/// milliseconds).
 fn relaxation_holds(
     guarded: &SemGraph,
     if_root: NodeId,

@@ -226,10 +226,6 @@ fn assignment_like_contexts_record_the_destination_conversion() {
     );
 }
 
-/// In C17 an empty parameter list is not a prototype, so extra arguments are
-/// accepted. The rejecting C23 half lives in `fcc/checks/Sema`; the accepting
-/// half cannot be a LIT check because `--stage ir` also runs codegen, which
-/// does not lower calls through unprototyped functions yet.
 #[test]
 fn c17_accepts_a_call_through_an_empty_parameter_list() {
     let options: LangOptions = "c17".parse().unwrap();

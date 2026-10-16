@@ -18,10 +18,6 @@ use crate::sem::{SemNode as Node, SymKind, node::field};
 const LOAD_STATE: usize = 3;
 const STORE_VALUE: usize = 2;
 
-/// S1: a load whose state a matching store left reads that store's value. The
-/// store is a node of the state class the load names, and the two extents are
-/// one base, one offset and one byte count — the base through the shared
-/// variable, the rest through the guards.
 pub(crate) fn forward_load() -> tir_egraph::Rule<Node> {
     // Variables: 0 the load, 1..4 its operands, 5 the base both address, 6..10
     // the store's operands.

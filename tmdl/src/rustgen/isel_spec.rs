@@ -3,7 +3,6 @@
 // `RuleSpec` whose emission plan names one static `EmitSpec` per emitted
 // instruction, interpreted by `tir::backend::isel::build_rules`.
 
-/// `&[Feature::A as u16, ...]` for a rule's availability set.
 fn feature_id_slice(for_isas: &[String]) -> proc_macro2::TokenStream {
     let ids = for_isas.iter().map(|name| {
         let ident = format_ident!("{}", name);
@@ -126,8 +125,6 @@ fn emit_attr_int_or_value(name: &str, symbol: u32) -> proc_macro2::TokenStream {
     }
 }
 
-/// The `static EMIT_*` table for one emitted instruction. Returns
-/// `(tokens, spec_ident)`.
 fn emit_emitter_spec(
     rule_key: &str,
     dialect: &str,
@@ -151,7 +148,6 @@ fn emit_emitter_spec(
     (tokens, spec_ident)
 }
 
-/// One `RegOperandSpec` entry.
 fn reg_operand_spec(
     symbol: u32,
     class_name: &str,
@@ -184,7 +180,6 @@ fn reg_operand_spec(
     }
 }
 
-/// The `RegOperandSpec` entries for `(symbol, class)` pairs.
 fn operand_register_specs(
     operands: &[(u32, String)],
     sensitive_symbols: &HashSet<u32>,
@@ -206,7 +201,6 @@ fn operand_register_specs(
         .collect()
 }
 
-/// The register operands of an instruction's own ops that bind pattern symbols.
 fn operand_register_specs_for_ops(
     ops: &[(String, Type)],
     variable_symbols: &HashMap<String, u32>,
@@ -306,7 +300,6 @@ fn pattern_ref_tokens(pattern: &SpecPattern) -> proc_macro2::TokenStream {
     }
 }
 
-/// The `static RULE_*` table for one rule. Returns `(tokens, spec_ident)`.
 #[allow(clippy::too_many_arguments)]
 fn emit_rule_spec(
     rule_key: &str,

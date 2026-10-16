@@ -16,8 +16,6 @@ fn phys(index: u16) -> AttributeValue {
     AttributeValue::Register(RegisterAttr::Physical { class: r(), index })
 }
 
-/// `width` bits of the operand starting at `op_lo`, landing at `word_lo` in
-/// the instruction word.
 const fn run(op_lo: u16, word_lo: u16, width: u16) -> FieldRun {
     FieldRun {
         op_lo,
@@ -26,8 +24,6 @@ const fn run(op_lo: u16, word_lo: u16, width: u16) -> FieldRun {
     }
 }
 
-/// A field the operand always fits: a register, or an immediate as wide as its
-/// operand.
 const fn field(attr: &'static str, runs: &'static [FieldRun]) -> EncodeField {
     EncodeField {
         attr,
@@ -38,7 +34,6 @@ const fn field(attr: &'static str, runs: &'static [FieldRun]) -> EncodeField {
     }
 }
 
-/// An immediate field the operand must fall inside: `(min, max, umax)`.
 const fn imm(
     attr: &'static str,
     int_range: (i64, i64, u64),
@@ -51,7 +46,6 @@ const fn imm(
     }
 }
 
-/// The re-scatter of a resolved fixup into an immediate field spanning `range`.
 const fn patch(attr: &'static str, range: (i64, i64), runs: &'static [FieldRun]) -> PatchField {
     PatchField {
         attr,
@@ -61,7 +55,6 @@ const fn patch(attr: &'static str, range: (i64, i64), runs: &'static [FieldRun])
     }
 }
 
-/// A decoded field gathering `runs` into `attr`.
 const fn decoded(
     attr: &'static str,
     kind: DecodeFieldKind,
@@ -70,14 +63,12 @@ const fn decoded(
     DecodeField { attr, kind, runs }
 }
 
-/// Encode `op` under `spec`, with every register named directly.
 fn enc(op: &OpHandle, spec: &EncodeSpec) -> Option<EncodedInst> {
     encode_with(op, spec, &RegAssignment::default())
 }
 
 machine_op!(TestInstOp, "test", "inst", &RD_RS_PORTS, &[]);
 
-/// The op with its `rd` slot naming a physical register directly.
 fn op_with(attrs: Vec<(&str, AttributeValue)>) -> (Context, tir::OpHandle) {
     let context = Context::with_default_dialects();
     let handle = build(&context, attrs, Vec::new());
@@ -401,7 +392,6 @@ const BEQ_PATCH: PatchField = PatchField {
     )
 };
 
-/// Reassembles the operand value scattered by `runs` across `word`.
 fn gather(word: u32, runs: &[FieldRun]) -> u64 {
     let mut value = 0u64;
     for run in runs {

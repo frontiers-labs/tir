@@ -124,10 +124,6 @@ pub fn scan(
     Ok(directives)
 }
 
-/// Find `prefix` followed by an optional `-SUFFIX` and a colon in `line`.
-///
-/// Returns `(prefix_start, suffix, colon_end_byte)` where `suffix` is the text
-/// between the prefix and the colon (e.g. `-NEXT`).
 fn find_directive<'a>(line: &'a str, prefix: &str) -> Option<(usize, &'a str, usize)> {
     let mut search_from = 0;
     while let Some(rel) = line[search_from..].find(prefix) {

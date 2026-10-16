@@ -798,7 +798,6 @@ fn attribute_literal(value: &AttributeValue) -> Option<TokenStream> {
     }
 }
 
-/// The `SymKind` path a `#name` term patterns on.
 fn sym_kind_path(name: &str) -> Option<TokenStream> {
     let kind = format_ident!("{}", format!("{:?}", tir_symbolic::lang::op_kind(name)?));
     Some(quote! { SymKind::#kind })
@@ -839,9 +838,6 @@ impl RuleBuilder {
         self.vars - 1
     }
 
-    /// Require `binder` to be an integer constant, binding its value and the
-    /// width of its carrier. A constant is a reference to its carrier's zero,
-    /// so both are read off the reference rather than off a row.
     fn constant(&mut self, binder: u32) -> (u32, u32) {
         if let Some(&known) = self.values.get(&binder) {
             return known;
@@ -857,7 +853,6 @@ impl RuleBuilder {
         (value, width)
     }
 
-    /// Bind a width name to `actual`, or require the two to agree.
     fn bind_width(&mut self, name: &str, actual: u32) {
         match self.widths.get(name) {
             Some(&bound) => self.guards.push(quote! {
@@ -869,15 +864,12 @@ impl RuleBuilder {
         }
     }
 
-    /// Read a binder's constant inside a host function's body, adding the two
-    /// scalars it takes to that function's arguments.
     fn read(&mut self, value: u32, width: u32) -> TokenStream {
         let value = self.word(value);
         let width = self.word(width);
         quote! { APInt::new(#width, #value) }
     }
 
-    /// The `args` slot a scalar arrives in.
     fn word(&mut self, slot: u32) -> TokenStream {
         let position = match self.inputs.iter().position(|&seen| seen == slot) {
             Some(position) => position,
@@ -889,8 +881,6 @@ impl RuleBuilder {
         quote! { args[#position] }
     }
 
-    /// An expression over bound scalars, as a host function: PDL's arithmetic is
-    /// its own, and the engine only moves the words in and the answer out.
     fn call(&mut self, body: TokenStream, out: Option<u32>) -> u32 {
         let id = self.base + self.externs.len() as u32;
         self.externs.push(body);
@@ -914,8 +904,6 @@ impl RuleBuilder {
     }
 }
 
-/// A binder's declared type: a constant at a width, or an integer whose width a
-/// name binds.
 fn generate_constraint(constraint: &Constraint, build: &mut RuleBuilder) -> Option<()> {
     let binder = constraint.binder;
     match &constraint.ty {
@@ -1024,7 +1012,6 @@ fn generate_constraint(constraint: &Constraint, build: &mut RuleBuilder) -> Opti
     }
 }
 
-/// The class the head unions the matched root with.
 fn generate_rhs(
     term: &Term,
     root: u32,
@@ -1188,8 +1175,6 @@ fn rhs_type(ty: &Type, build: &mut RuleBuilder) -> Option<u32> {
     Some(out)
 }
 
-/// An operand of the right-hand side: a bound class, or a constant the rule
-/// spells out.
 fn rhs_operand(
     term: &Term,
     binders: &BTreeMap<String, u32>,
@@ -1242,7 +1227,6 @@ fn rhs_operand(
     }
 }
 
-/// A PDL boolean over bound scalars, as the body of a host function.
 fn bool_expr(
     expr: &Expr,
     binders: &BTreeMap<String, u32>,
@@ -1297,8 +1281,6 @@ fn comparison(
     Some(quote! { (#lhs) #op (#rhs) })
 }
 
-/// A PDL number over bound scalars. Reading a binder or a width name adds it to
-/// the host function's arguments; the arithmetic stays PDL's own.
 fn number_expr(
     expr: &Expr,
     binders: &BTreeMap<String, u32>,
@@ -1430,9 +1412,6 @@ fn number_expr(
     }
 }
 
-/// Lowers the polynomial parts of a RHS `const<W>` through `APInt`, so `+`,
-/// `-`, and `*` wrap at `W`. Other operators retain checked host arithmetic;
-/// an expression rooted at one of them does not make nested arithmetic modular.
 fn modular_number_expr(
     expr: &Expr,
     width: TokenStream,

@@ -137,8 +137,6 @@ pub fn build_pipeline(
     pm
 }
 
-/// The passes that must see the whole module: they run once, ahead of any
-/// function's lowering.
 fn module_prologue(target: &dyn TargetMachine) -> PassManager {
     let mut pm = PassManager::new();
     {
@@ -166,8 +164,6 @@ fn module_prologue(target: &dyn TargetMachine) -> PassManager {
     pm
 }
 
-/// Everything in [`build_pipeline`] that only ever looks at one function, so it
-/// can be rooted at a single one.
 fn add_function_passes(
     pm: &mut PassManager,
     target: &dyn TargetMachine,

@@ -5,9 +5,6 @@ use tir::backend::{fresh_reg, RegSlot};
 use tir::{AnalysisManager, Context, Operation, OperationRef, Pass};
 use tir_x86_64 as _;
 
-/// Each block's value is copied in from one fixed register and out to
-/// another; missing either copy costs its block's weight, so the cheapest
-/// register of each node is that weight.
 fn copy_weights(source: &str) -> Vec<u64> {
     let directory = tir_adt::TempDir::new().unwrap();
     let output = Command::new(std::env::current_exe().unwrap())

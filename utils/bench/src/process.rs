@@ -363,7 +363,6 @@ fn execute_accounted(
     bail!("native process accounting is supported only on Linux")
 }
 
-/// Read event names rather than depending on Cachegrind's column ordering.
 fn parse_cachegrind(text: &str) -> Result<BTreeMap<String, f64>> {
     let events = text
         .lines()

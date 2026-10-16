@@ -227,8 +227,6 @@ enum Item {
 }
 
 impl Item {
-    /// `fn` items are inlined at call sites before this point, so they have no
-    /// JSON representation of their own.
     fn from_ast(item: &ast::Item, item_cache: &HashMap<&str, &ast::Item>) -> Option<Self> {
         Some(match item {
             ast::Item::Isa(isa) => Self::Isa {

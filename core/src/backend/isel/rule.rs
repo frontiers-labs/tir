@@ -412,8 +412,6 @@ impl Emitter {
         }
     }
 
-    /// Whether the instruction reads or writes memory, and so has to take over
-    /// the state chain of an access the match covers.
     pub(super) fn accesses_memory(&self) -> bool {
         match self {
             Emitter::Spec(spec) => spec.info.effects.reads || spec.info.effects.writes,

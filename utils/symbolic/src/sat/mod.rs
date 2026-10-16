@@ -228,7 +228,6 @@ impl Solver {
         self.assign[l.var().index()].map(|b| b ^ l.is_negated())
     }
 
-    /// Record that `l` is true, returning `false` on an immediate contradiction.
     fn enqueue(&mut self, l: Lit, reason: Option<usize>) -> bool {
         match self.value_lit(l) {
             Some(true) => true,
@@ -244,7 +243,6 @@ impl Solver {
         }
     }
 
-    /// Propagate unit consequences, returning a conflicting clause if one arises.
     fn propagate(&mut self) -> Option<usize> {
         while self.qhead < self.trail.len() {
             let p = self.trail[self.qhead];
@@ -313,7 +311,6 @@ impl Solver {
         None
     }
 
-    /// 1-UIP analysis: returns the learned clause (asserting literal at index 0) and backjump level.
     fn analyze(&mut self, conflict: usize) -> (Vec<Lit>, usize) {
         let mut seen = std::mem::take(&mut self.seen);
         let mut marked: Vec<usize> = Vec::new();
@@ -379,7 +376,6 @@ impl Solver {
         (learnt, bt_level)
     }
 
-    /// Add a just-learned clause and assert its unit literal.
     fn learn(&mut self, learnt: &[Lit]) {
         if learnt.len() == 1 {
             self.enqueue(learnt[0], None);
@@ -389,7 +385,6 @@ impl Solver {
         self.enqueue(learnt[0], Some(cref));
     }
 
-    /// Store a clause with two or more literals, watching `lits[0]` and `lits[1]`.
     fn add_watched_clause(&mut self, lits: Vec<Lit>) -> usize {
         let cref = self.clauses.len();
         self.watches[lits[0].index()].push(cref);
@@ -398,7 +393,6 @@ impl Solver {
         cref
     }
 
-    /// Undo assignments made above decision level `level`.
     fn cancel_until(&mut self, level: usize) {
         if self.decision_level() <= level {
             return;
@@ -416,8 +410,6 @@ impl Solver {
         self.qhead = self.trail.len();
     }
 
-    /// Pick the highest-activity unassigned variable, the highest-numbered
-    /// among equals, or `None` if all are assigned.
     fn pick_branch(&mut self) -> Option<Lit> {
         while let Some(&top) = self.order.first() {
             self.unqueue_top();
@@ -428,7 +420,6 @@ impl Solver {
         None
     }
 
-    /// Whether `a` is picked ahead of `b`.
     fn ahead(&self, a: u32, b: u32) -> bool {
         (self.activity[a as usize], a) > (self.activity[b as usize], b)
     }
@@ -507,7 +498,6 @@ impl Solver {
     }
 }
 
-/// The Luby restart sequence (0-based): 1,1,2,1,1,2,4,1,1,2,1,1,2,4,8,...
 fn luby(x: u64) -> u64 {
     let mut size = 1u64;
     let mut seq = 0u32;

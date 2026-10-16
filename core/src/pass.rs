@@ -317,8 +317,6 @@ impl PassTarget {
         }
     }
 
-    /// The body kind the target asks for when `op` holds a region of the other
-    /// kind.
     fn kind_mismatch(&self, context: &Context, op: &OpHandle) -> Option<RegionKind> {
         let PassTarget::Operation(OperationTarget {
             kind: Some(kind), ..
@@ -392,13 +390,10 @@ pub trait Pass: Send {
 }
 
 impl Context {
-    /// Record that `target` became `new`, so [`refreshed`] can follow a
-    /// pipeline root across the replacement.
     fn record_replacement(&self, target: &OperationRef, new: OpId) {
         self.record_replaced_op(target.op.id, new);
     }
 
-    /// The block holding `target`, read live from the context.
     fn block_of(&self, target: &OperationRef) -> Result<BlockHandle, PassError> {
         self.parent_block(target.op.id)
             .map(|block| self.get_block(block))
@@ -564,8 +559,6 @@ impl Context {
     }
 }
 
-/// Match an op against a nesting spec that is either a bare op name (`func`)
-/// or a dialect-qualified name (`func.func`).
 fn matches_op_name(op: &OpHandle, spec: &str) -> bool {
     match spec.split_once('.') {
         Some((dialect, name)) => op.is_name(dialect, name),
@@ -573,11 +566,6 @@ fn matches_op_name(op: &OpHandle, spec: &str) -> bool {
     }
 }
 
-/// `root` as it stands now: a pipeline holds its root across passes that erase
-/// and replace it, and an [`OpHandle`] to an erased op reads as a panic. An
-/// erased root is followed through the replacements the context recorded;
-/// that is how selection's machine symbol takes over from the function it was
-/// made of.
 fn refreshed(context: &Context, root: &OperationRef) -> Option<OperationRef> {
     if root.op.is_live() {
         return Some(root.clone());
@@ -589,12 +577,6 @@ fn refreshed(context: &Context, root: &OperationRef) -> Option<OperationRef> {
     Some(OperationRef::new(context.get_op(id)))
 }
 
-/// Whether `op`'s tree has entered the machine layer — it holds a target
-/// instruction, or one of the `asm` dialect's containers and pseudos. Machine
-/// IR is not SSA (block-parameter destruction leaves a parameter defined once
-/// per predecessor), so the contract [`crate::verify_op_tree`] checks does not
-/// describe such a tree; [`crate::backend::verify_machine_ir`] states the one
-/// that does.
 fn is_machine_ir(context: &Context, op_id: OpId) -> bool {
     if !context.has_operation(op_id) {
         return false;
@@ -618,9 +600,6 @@ fn is_machine_ir(context: &Context, op_id: OpId) -> bool {
     })
 }
 
-/// Verify each edited subtree under `root`, instead of the whole tree: an op an
-/// edit never reached still satisfies whatever it satisfied before. Subtrees the
-/// edit later erased, and those outside `root`, are skipped.
 fn verify_dirty_subtrees(
     context: &Context,
     root: OpId,
@@ -634,7 +613,6 @@ fn verify_dirty_subtrees(
     crate::operation::verify_op_trees(context, &edited)
 }
 
-/// Whether `op` is `root` or sits somewhere under it.
 fn encloses(context: &Context, root: OpId, op: OpId) -> bool {
     let mut current = Some(op);
     while let Some(id) = current {
@@ -646,8 +624,6 @@ fn encloses(context: &Context, root: OpId, op: OpId) -> bool {
     false
 }
 
-/// Whether the pass manager re-verifies the IR after every pass that changed it.
-/// On in debug builds; `TIR_VERIFY_IR` overrides either way.
 fn ir_verification_enabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ENABLED.get_or_init(|| match std::env::var("TIR_VERIFY_IR").as_deref() {
@@ -736,8 +712,6 @@ impl PassManager {
         self
     }
 
-    /// Another instance of this pipeline, or `None` when a pass in it has no
-    /// copy.
     fn replica(&self) -> Option<PassManager> {
         let passes = self
             .passes
@@ -797,7 +771,6 @@ impl PassManager {
         }
     }
 
-    /// An empty pipeline nested in this one, running with its workers.
     fn child(&self) -> PassManager {
         PassManager {
             passes: vec![],
@@ -826,8 +799,6 @@ impl PassManager {
         self.run_with(context, root, analyses, Mode::Exclusive)
     }
 
-    /// [`PassManager::run_on_op_ref`] inside a task's context when `mode` is
-    /// shared: a nested pipeline's edits stay pending with the enclosing one's.
     fn run_with(
         &mut self,
         context: &Context,
@@ -995,7 +966,6 @@ impl PassManager {
     }
 }
 
-/// `dialect.name`, followed by the symbol an op defines: what an error names.
 fn describe_op(op: &OpHandle) -> String {
     let mut text = format!("{}.{}", op.dialect().as_str(), op.name().as_str());
     if let Some(symbol) = op.clone().as_interface::<dyn crate::Symbol>() {
@@ -1126,9 +1096,6 @@ mod tasks {
         })
     }
 
-    /// The epoch's memory, at the moment every task is done and nothing is
-    /// committed: the base, the most any task wrote, and what the
-    /// batches hold while they wait.
     pub(super) fn report(op_name: &str, context: &Context, done: &[Done]) {
         if !crate::memstats::enabled() {
             return;

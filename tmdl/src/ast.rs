@@ -1072,10 +1072,6 @@ impl<'a> SemaExprLoweringCtx<'a> {
         )
     }
 
-    /// Lower a memory access size. A size written over ISA parameters
-    /// (`self.XLEN / 8`) is folded to the concrete byte count of this ISA
-    /// instantiation instead of staying symbolic like other `self.PARAM` uses:
-    /// a selection pattern can only match a concrete access size.
     fn lower_memory_size(&mut self, expr: &Expr) -> tir_adt::NodeId {
         let folded = const_eval_params(expr, self.params, &self.isa_consts);
         match folded {
@@ -1128,9 +1124,6 @@ impl<'a> SemaExprLoweringCtx<'a> {
         id
     }
 
-    /// Lower a `map`/`reduce` lambda's body, binding its parameters so that
-    /// references to them become `Arg` nodes. Non-lambda arguments are an error
-    /// (caught by the type checker); lowering them directly keeps the graph valid.
     fn lower_lambda_body(&mut self, arg: &Expr) -> tir_adt::NodeId {
         let Expr::Lambda(lambda) = arg else {
             self.had_error = true;
@@ -1704,10 +1697,6 @@ impl IndexAccess {
     }
 }
 
-/// Evaluate an expression built from integer literals, compile-time parameters
-/// (instruction/template params in `params`, ISA params in `isa_consts`) and
-/// arithmetic. `None` when the expression depends on a runtime value, such as a
-/// register read or an operand.
 pub(crate) fn const_eval_params(
     expr: &Expr,
     params: &HashMap<String, i64>,
@@ -1736,8 +1725,6 @@ pub(crate) fn const_eval_params(
     }
 }
 
-/// A constant `Ordering::<member>` or integer literal, or `None` for anything
-/// else (e.g. a decoded aq/rl operand feeding a future dynamic ordering).
 fn const_eval_u64(expr: &Expr) -> Option<u64> {
     match expr {
         Expr::Lit(Lit::Int(li)) => Some(li.parse_u64()),
@@ -1748,11 +1735,6 @@ fn const_eval_u64(expr: &Expr) -> Option<u64> {
     }
 }
 
-/// Pack a `load`/`store` inert metadata operand: bit 0 keeps its old meaning
-/// (load signedness hint / store address space), bits 3:1 carry the ordering
-/// code. `base_meta` is the load's metadata arg (`None` for store, whose bit 0
-/// is always 0); `ordering` is the optional trailing ordering arg. A missing
-/// ordering reproduces the pre-atomics IR exactly (relaxed = 0).
 fn pack_ordering_meta(
     ctx: &mut SemaExprLoweringCtx<'_>,
     base_meta: Option<&Expr>,

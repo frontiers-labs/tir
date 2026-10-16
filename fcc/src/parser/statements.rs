@@ -9,8 +9,6 @@ use chumsky::input::{MapExtra, ValueInput};
 use chumsky::prelude::*;
 use tir::NodeId;
 
-/// Build an `int x = init` declaration node (without the trailing `;`, so the
-/// same body serves both a declaration statement and a `for` init clause).
 fn decl_body<'src, I>() -> impl Parser<'src, I, NodeId, Extra<'src>> + Clone
 where
     I: ValueInput<'src, Token = Token, Span = Span>,
@@ -45,7 +43,6 @@ where
         )
 }
 
-/// Build an `x = value` assignment node (without the trailing `;`).
 fn assign_body<'src, I>() -> impl Parser<'src, I, NodeId, Extra<'src>> + Clone
 where
     I: ValueInput<'src, Token = Token, Span = Span>,

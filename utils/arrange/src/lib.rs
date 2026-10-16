@@ -119,9 +119,6 @@ pub fn solve_ranked(problem: &Problem, count: usize) -> Vec<Placement> {
     best.into_iter().map(|(_, placement)| placement).collect()
 }
 
-/// Extend `placement` by one item, in domain order, keeping the `count`
-/// placements of least cost, the first reached ahead on a tie. The prefix
-/// checks prune a branch as soon as an edge it already violates is decided.
 fn search(
     problem: &Problem,
     domains: &[&[SlotId]],
@@ -148,7 +145,6 @@ fn search(
     }
 }
 
-/// Whether every constraint both of whose ends are decided holds.
 fn admissible(problem: &Problem, placement: &Placement) -> bool {
     let placed = |item: ItemId| placement.get(item).copied();
     let precedence =
@@ -206,9 +202,6 @@ mod tests {
         assert_eq!(solved, Some(vec![2]));
     }
 
-    /// Every item's domain is enumerated in the order it was given, and a tie is
-    /// broken by the first placement reached — so the answer never depends on
-    /// iteration order elsewhere.
     #[test]
     fn ties_break_by_enumeration_order() {
         let flat: CostFn = Box::new(|_| 0);

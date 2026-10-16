@@ -80,7 +80,6 @@ impl<K: RowId, V> IdMap<K, V> {
         rows.get(row)?.as_ref()
     }
 
-    /// The slot of `key`, made if its chunk or row was never written.
     fn slot_mut(&mut self, key: K) -> &mut Option<(K, V)> {
         let (chunk, row) = (chunk_of(key.row()), row_of(key.row()));
         let at = match self.chunks.iter().position(|held| held.0 == chunk) {
@@ -136,7 +135,6 @@ impl<K: RowId, V> IdMap<K, V> {
         Entry { map: self, key }
     }
 
-    /// The chunks in ascending order, so iteration is by ascending id.
     fn ordered(&self) -> impl Iterator<Item = &Slots<K, V>> {
         let mut order: Vec<usize> = (0..self.chunks.len()).collect();
         order.sort_unstable_by_key(|at| self.chunks[*at].0);

@@ -214,8 +214,6 @@ fn text_instruction_layout(object: &ObjectFile, expected: usize) -> Option<Instr
     (layout.len() == expected).then_some(layout)
 }
 
-/// Recursively gather the ids of every machine instruction reachable from `block`,
-/// in program order, descending through `section`/`symbol` containers.
 fn collect_instructions(
     context: &Context,
     block: tir::BlockHandle,

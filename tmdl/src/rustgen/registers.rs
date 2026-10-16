@@ -134,19 +134,11 @@ fn emit_register_parsers_and_printers(
     })
 }
 
-/// Emit a `register_info()` constructor returning the target-independent
-/// `tir::backend::regalloc::RegisterInfo` the allocator consumes: per class, the
-/// The `RegClassId` expression for a statically-known register class, referencing
-/// the generated per-dialect `RegClass` enum emitted alongside `register_info()`.
 fn reg_class_id(class_name: &str) -> proc_macro2::TokenStream {
     let variant = format_ident!("{}", class_name);
     quote! { RegClass::#variant.id() }
 }
 
-/// The storage-element view of a register class: where the architectural view
-/// starts (`BIT_OFFSET`, x86 `ah` at bit 8) and whether a write preserves the
-/// element's untouched bits (`WRITE_POLICY = "merge"`, x86 8/16-bit writes)
-/// instead of zero-extending across it.
 fn register_view(rc: &ast::RegisterClass) -> proc_macro2::TokenStream {
     let bit_offset = match rc.parameters.get("BIT_OFFSET") {
         Some((_ty, Some(ast::Expr::Lit(ast::Lit::Int(li))))) => parse_literal_value(li) as u32,

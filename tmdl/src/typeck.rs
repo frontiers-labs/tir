@@ -239,8 +239,6 @@ fn build_instr_env<'a>(
 // Type inference
 // ---------------------------------------------------------------------------
 
-/// The concrete width of a resolved bit type, or `None` while it is still a
-/// variable (a register class whose `WIDTH` is an ISA parameter, say).
 fn bit_width(ty: &Type) -> Option<u16> {
     match ty {
         Type::Bits(n) => Some(*n),
@@ -249,16 +247,11 @@ fn bit_width(ty: &Type) -> Option<u16> {
     }
 }
 
-/// Whether `ty` is a bitvector, whatever its width. A register operand whose
-/// class takes its `WIDTH` from an ISA parameter is one of these: known to be
-/// bits, not known to be any particular number of them.
 fn is_bits(ty: &Type) -> bool {
     matches!(ty, Type::Bits(_))
         || matches!(ty, Type::Con(name, args) if name == "bits" && args.len() == 1)
 }
 
-/// Constrain `from` to be usable where `to` is expected. Widening is implicit
-/// (zero-extension); narrowing has to be written `as bits<N>`.
 fn coerce(
     from: &Type,
     to: &Type,
@@ -286,8 +279,6 @@ fn coerce(
     diags.push((file_name.to_string(), Rich::custom(span, message)));
 }
 
-/// The type of two operands used together: the wider of the two, since the
-/// narrower zero-extends. Widths still unresolved unify instead.
 fn join(
     lhs: &Type,
     rhs: &Type,
@@ -1110,8 +1101,6 @@ fn infer<'a>(
     ty
 }
 
-/// Infer a `let` binding's type: its annotation when it carries one, and then
-/// the bound value must fit in it.
 #[allow(clippy::too_many_arguments)]
 fn infer_let<'a>(
     binding: &'a ast::Let,
@@ -1150,10 +1139,6 @@ fn infer_let<'a>(
     ty
 }
 
-/// The number of bits a `bits<W>` annotation names. `W` has to be a literal:
-/// a cast keeps the low bits and an annotation is checked against them, so a
-/// width the spec never pins down would say nothing. `fn` parameters are
-/// substituted before type checking, so `bits<n>` in a helper is a literal here.
 fn declared_width(width: &ast::Expr) -> Result<u16, String> {
     let ast::Expr::Lit(ast::Lit::Int(lit)) = width else {
         return Err("width must be a literal number of bits".to_string());
@@ -1162,15 +1147,10 @@ fn declared_width(width: &ast::Expr) -> Result<u16, String> {
     u16::try_from(value).map_err(|_| format!("width bits<{value}> is out of range"))
 }
 
-/// An iterator (vector) type carrying elements of `elem`.
 fn vec_ty(elem: Type) -> Type {
     Type::Con("vec".into(), vec![elem])
 }
 
-/// Parameter types for a `map` lambda over elements of type `elem`. A unary
-/// lambda takes the element; a lambda with two or more parameters destructures
-/// a zipped `pair` element into its components (best-effort, leaving them free
-/// if `elem` is not yet known to be a pair).
 fn map_param_tys(
     elem: &Type,
     lambda_arg: &ast::Expr,
@@ -1195,8 +1175,6 @@ fn map_param_tys(
     }
 }
 
-/// Infer a `map`/`reduce` lambda's body with its parameters bound to `param_tys`,
-/// returning the body's (result) type and recording the lambda's `fn` type.
 #[allow(clippy::too_many_arguments)]
 fn infer_lambda<'a>(
     lambda_arg: &'a ast::Expr,

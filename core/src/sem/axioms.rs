@@ -53,12 +53,6 @@ use crate::{Context, NodeId, TypeId};
 use super::egraph::is_comparison;
 use super::node::{SemNode, field, template_node};
 
-/// Whether the SMT obligations behind the semantic invariants and the guarded
-/// relaxations are discharged. They validate the target description, they are not
-/// inputs to selection, so running hundreds of SAT queries on every compile buys
-/// nothing: `TIR_VERIFY_AXIOMS` turns them on for the CI run that checks the
-/// rules. A floating-point rule is no exception: it applies unproved by
-/// default, and that run is where an instance that does not hold is caught.
 pub(crate) fn verify_axioms() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| std::env::var_os("TIR_VERIFY_AXIOMS").is_some())
@@ -255,7 +249,6 @@ fn intern(names: &mut Vec<String>, name: &str) -> usize {
     })
 }
 
-/// What the RHS reads: the matched root and/or declared vars.
 fn references(node: &AxNode, uses_root: &mut bool, vars: &mut HashSet<usize>) {
     match node {
         AxNode::Root => *uses_root = true,
@@ -336,10 +329,6 @@ impl Axiom {
         }
     }
 
-    /// Compile into a rule: the left-hand side as atoms, the declared widths and
-    /// value predicates as guards, the right-hand side as a head. Debug builds
-    /// prove each width instantiation before asserting the invariant, through
-    /// the [`call::VERIFY`] guard.
     pub(crate) fn compile(
         &self,
         index: usize,
@@ -374,9 +363,6 @@ impl Axiom {
         ))
     }
 
-    /// Discharge this instantiation's proof obligation, panicking on an unsound
-    /// axiom. Results are memoized process-wide: the same axiom recurs at the same
-    /// widths across every block, function and freshly built pass.
     fn verify(&self, widths: &[u64]) {
         type ProofCache = Mutex<HashMap<(String, Vec<u64>), bool>>;
         static PROOFS: LazyLock<ProofCache> = LazyLock::new(Mutex::default);
@@ -394,8 +380,6 @@ impl Axiom {
         );
     }
 
-    /// Prove one width instantiation with the [`SmtOracle`]; `widths` follows
-    /// the width names' declaration order (`vars` first, then `root`).
     pub(crate) fn prove(&self, widths: &[u64]) -> bool {
         self.prove_outcome(widths).is_proven()
     }
@@ -470,8 +454,6 @@ impl Axiom {
         ProofOutcome::Proven
     }
 
-    /// One equivalence instance of this axiom's obligation, with every `theta`
-    /// realized as `theta_port` and every `#loop` as `loop_phase` says.
     fn prove_instance_outcome(
         &self,
         widths: &[u64],
@@ -547,13 +529,6 @@ impl Axiom {
             .unwrap_or_else(|| self.root_width.value(widths)) as u32
     }
 
-    /// A `#loop(init, next, exit, pred)` in the phase this instance proves.
-    /// Against a loop-free right-hand side `h`, the transition and the exit are
-    /// conditioned on the port binder equalling `h`: `next` becomes `h` where
-    /// the port differs from it, and `exit` becomes `h` where the port differs
-    /// or `pred` still holds, so the instance states exactly the implication the
-    /// induction needs. With loops on both sides the exit is read under `pred`
-    /// false alone, and the predicate itself is a phase of its own.
     fn realize_loop(
         &self,
         children: &[AxNode],
@@ -613,8 +588,6 @@ impl Axiom {
         }
     }
 
-    /// The identity a loop's `#port(l)` binder names, wherever the body reads
-    /// it; a loop reading no port has no binder to assume anything about.
     fn port_binder<'n>(&self, node: &'n AxNode) -> Option<&'n AxNode> {
         match node {
             AxNode::Node(SymKind::Port, children) => children.first(),
@@ -623,10 +596,6 @@ impl Axiom {
         }
     }
 
-    /// Build one side of the proof. A declared var is a register-wide symbol —
-    /// narrowed to its class width through an extract on the LHS, read whole on
-    /// the RHS; a width-name hole is the constant carrying that width. A `theta`
-    /// realizes as the port this instance proves.
     fn realize(&self, node: &AxNode, g: &mut SemGraph, r: &Realization) -> Option<NodeId> {
         let widths = r.widths;
         match node {
@@ -707,8 +676,6 @@ fn format_bits(bits: &[bool]) -> String {
     value
 }
 
-/// Execute a pure op over `(value, width)` constant operands via a throwaway
-/// [`SemGraph`]; `None` when the result is not an integer.
 fn execute_fold(kind: SymKind, operands: &[(u64, u32)]) -> Option<APInt> {
     // A constant wider than a machine word has no `APInt`; its axiom fails to
     // match rather than fold.
@@ -951,9 +918,6 @@ impl<'a> Lowering<'a> {
         }
     }
 
-    /// The left-hand side, root atom first and then a depth-first walk, which is
-    /// the order the goal stack popped its nodes in and so the order the ids a
-    /// saturation mints still depend on.
     fn left(&mut self, axiom: &Axiom) {
         self.node(&axiom.lhs, 0);
     }
@@ -980,7 +944,6 @@ impl<'a> Lowering<'a> {
         }
     }
 
-    /// The variable a child binds, reusing the one a capture name already has.
     fn child(&mut self, node: &AxNode) -> u32 {
         match node {
             AxNode::Hole(name, var) => {
@@ -998,7 +961,6 @@ impl<'a> Lowering<'a> {
         }
     }
 
-    /// An operand that must be the constant `expr` evaluates to.
     fn const_match(&mut self, class: u32, expr: &WidthExpr) {
         let (value, _) = self.constant(class);
         if expr.references_width() {
@@ -1024,8 +986,6 @@ impl<'a> Lowering<'a> {
             .push(Guard::Cmp(Cmp::Eq, Expr::Scalar(value), Expr::Scalar(want)));
     }
 
-    /// Bind `class`'s integer constant, its value and its carrier's width: a
-    /// constant is an offset of its carrier's zero, read off the reference.
     fn constant(&mut self, class: u32) -> (u32, u32) {
         let value = self.slots.scalar();
         let width = self.slots.scalar();
@@ -1034,8 +994,6 @@ impl<'a> Lowering<'a> {
         (value, width)
     }
 
-    /// Resolve every width name from the matched classes, root first and then the
-    /// declared vars in order — a name met twice is a comparison, not a rebinding.
     fn widths(&mut self, axiom: &Axiom) {
         self.widths = vec![u32::MAX; axiom.width_names.len()];
         let root = self.width_of(0);
@@ -1046,7 +1004,6 @@ impl<'a> Lowering<'a> {
         }
     }
 
-    /// The width of the type `class`'s terms carry.
     fn width_of(&mut self, class: u32) -> u32 {
         let ty = self.type_of(class);
         let width = self.slots.scalar();
@@ -1087,8 +1044,6 @@ impl<'a> Lowering<'a> {
         }
     }
 
-    /// The declared guards, the constant-operand requirement, the value
-    /// predicates, and the proof obligation.
     fn predicates(&mut self, axiom: &Axiom, index: usize) {
         for (symbol, format) in axiom.symbol_formats.iter().enumerate() {
             let Some((exponent, mantissa)) = *format else {
@@ -1140,8 +1095,6 @@ impl<'a> Lowering<'a> {
         }
     }
 
-    /// The width the identity was proved at: the widest of the declared vars and
-    /// the root.
     fn register_width(&mut self, axiom: &Axiom) -> u32 {
         if let Some(width) = self.register {
             return width;
@@ -1243,20 +1196,6 @@ impl<'a> Lowering<'a> {
         })
     }
 
-    /// The value and width a pure op takes over operands the axiom's text
-    /// already says are constants; `None` when it is not such an op, or an
-    /// operand is not one.
-    ///
-    /// The fold is a guard, so a right-hand side all of whose operands the text
-    /// fixes has no structural reading to fall back on: if the fold fails the
-    /// match dies. No axiom is written that way — every foldable node has at
-    /// least one operand the graph supplies — and one that were would need the
-    /// two readings the assumption gives it.
-    ///
-    /// The node is built at the register width, so the fold runs there: each
-    /// operand is its own bits read as a register of that width. Folding at an
-    /// operand's width instead made `sext(c, 32)` of an 8-bit `-3` the 8-bit
-    /// constant 253, and made zero the same class at every width.
     fn fold_operands(
         &mut self,
         axiom: &Axiom,
@@ -1296,8 +1235,6 @@ impl<'a> Lowering<'a> {
         Some((value, width))
     }
 
-    /// The value of a class the axiom does not declare constant, under the
-    /// reading that assumes it is — which the atom this adds then requires.
     fn assumed_constant(&mut self, class: u32) -> Option<(u32, u32)> {
         if self.assume == Folding::Never {
             return None;
@@ -1321,10 +1258,6 @@ impl<'a> Lowering<'a> {
         }
     }
 
-    /// The type a right-hand side node carries. A conversion names it through
-    /// its own format or width operands; a comparison is one bit; an operation
-    /// whose result has its operand's width takes the type of an operand the
-    /// head built, such as an extension; everything else is register-wide.
     fn result_type(&mut self, axiom: &Axiom, kind: SymKind, children: &[Built]) -> u32 {
         let operand = |slot: usize| {
             children
@@ -1401,7 +1334,6 @@ impl<'a> Lowering<'a> {
         into
     }
 
-    /// A constant of `value` at `width`, optionally typed.
     fn literal(
         &mut self,
         value: u32,
@@ -1492,7 +1424,6 @@ const SAME_WIDTH: [SymKind; 15] = [
     SymKind::Not,
 ];
 
-/// A width expression over the scalars the width names bound.
 fn width_expr(expr: &WidthExpr, widths: &[u32]) -> Expr {
     match expr {
         WidthExpr::Lit(value) => Expr::Lit(*value as i64),

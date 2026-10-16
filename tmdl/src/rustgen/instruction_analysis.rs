@@ -1,5 +1,3 @@
-/// The register classes holding floating-point registers, and those holding
-/// polymorphic ones, by name.
 fn register_class_kinds(files: &[ast::File]) -> (HashSet<String>, HashSet<String>) {
     let names = |keep: fn(&ast::RegisterClass) -> bool| {
         files
@@ -15,8 +13,6 @@ fn register_class_kinds(files: &[ast::File]) -> (HashSet<String>, HashSet<String
     )
 }
 
-/// The `MNEMONIC` an instruction resolves to and its `OPNAME`, which defaults
-/// to the mnemonic.
 fn instruction_names(
     params: &HashMap<String, (Type, Option<ast::Expr>)>,
 ) -> Option<(String, String)> {
@@ -172,11 +168,6 @@ fn analyze_instruction_semantics(
     })
 }
 
-/// The destination's full guarded semantics `If(cond, then, else)` when the
-/// behavior is a statement-level `if cond { dst = t } else { dst = e }`. The else
-/// arm is lowered first, so its operand symbol ids match the guard-relaxed
-/// selection pattern (which lowers the else arm alone) — a prerequisite for the
-/// pass-construction relaxation proof to share the pattern's op node.
 fn analyze_guarded_semantics(
     behavior: &ast::Expr,
     dst: &str,
@@ -211,9 +202,6 @@ fn analyze_guarded_semantics(
     Some((graph, if_node))
 }
 
-/// Match `if cond { dst = then } else { dst = else }`, returning the condition and
-/// the two arm values. `None` for any other shape (including a single `dst = if …`
-/// assignment, whose value is an `If` expression, not a statement guard).
 fn guarded_assignment_shape<'a>(
     behavior: &'a ast::Expr,
     dst: &str,
@@ -227,8 +215,6 @@ fn guarded_assignment_shape<'a>(
     Some((&if_expr.cond, then_value, else_value))
 }
 
-/// Unwrap a block holding a single statement to that statement; otherwise the
-/// expression itself.
 fn unwrap_single_stmt(expr: &ast::Expr) -> &ast::Expr {
     match expr {
         ast::Expr::Block(b) if b.stmts.len() == 1 => &b.stmts[0],
@@ -236,8 +222,6 @@ fn unwrap_single_stmt(expr: &ast::Expr) -> &ast::Expr {
     }
 }
 
-/// The value of a lone `dst = value` assignment inside `expr` (a block arm or a
-/// bare assignment).
 fn single_assignment_value<'a>(expr: &'a ast::Expr, dst: &str) -> Option<&'a ast::Expr> {
     match unwrap_single_stmt(expr) {
         ast::Expr::Assign(a) if assignment_dest_name(&a.dest).as_deref() == Some(dst) => {
@@ -284,8 +268,6 @@ fn assignment_dest_name(dest: &ast::Expr) -> Option<String> {
     }
 }
 
-/// `(class, register-name)` when an assignment destination is a register path
-/// (e.g. `VCSR::vl`), or `None` for a plain identifier (an encoded operand).
 fn assignment_dest_register_path(dest: &ast::Expr) -> Option<(String, String)> {
     match dest {
         ast::Expr::Path(path) if path.remainder.len() == 1 => {
@@ -295,8 +277,6 @@ fn assignment_dest_register_path(dest: &ast::Expr) -> Option<(String, String)> {
     }
 }
 
-/// The operand names referenced anywhere in `expr`, in first-seen order. Used to
-/// find which operand feeds a register a definer instruction writes.
 fn referenced_operands(expr: &ast::Expr, operands: &HashSet<&str>) -> Vec<String> {
     let mut out = Vec::new();
     collect_referenced_idents(expr, operands, &mut out);
@@ -369,14 +349,6 @@ fn collect_referenced_idents(expr: &ast::Expr, operands: &HashSet<&str>, out: &m
     }
 }
 
-/// The operands of a value rule's zero-form constant materializer, when one can
-/// be derived: the canonical pattern must be `Add(reg, imm)` over two bare
-/// operand symbols, with the source register in a class `zeroable_class`
-/// accepts (an integer class with a hardwired-zero register) and every other
-/// operand accounted for as the `rd_name` destination or the folded immediate.
-/// The caller guarantees `rd_name` is the sole defined register operand, unread
-/// and untied, with no implicit register reads.
-/// Returns `(source register operand name, its class, immediate symbol)`.
 fn value_zero_form_operands(
     canon_pattern: &tir_symbolic::sem::SemGraph,
     canon_root: tir_adt::NodeId,
@@ -432,24 +404,6 @@ fn value_zero_form_operands(
     accounted.then_some((source_name, source_class, imm_sym))
 }
 
-/// The boundary symbols an instruction is width-sensitive in: the operands'
-/// upper register bits reach the result, so a value of a different width must
-/// not bind (its bits above the value width are undefined). Comparison
-/// operands always qualify — the comparison node's own type is its i1 result
-/// and says nothing about operand widths. Extension operands always qualify —
-/// `sext`/`zext` read the operand up to its *own* width (the sign bit moves
-/// with it), so the result type never pins the operand. Right-shift values and
-/// division/remainder operands qualify only under an *untyped* node: a typed
-/// node (a word form like `sraw`) already pins its operands through width
-/// inference.
-///
-/// Sensitivity reaches *through* low-bits-preserving operators rather than
-/// stopping at them: `and`'s own result keeps a narrow operand's garbage out of
-/// its low bits, but `(dst & src) == 0` (x86 `test` + `jcc`) still compares
-/// every bit of that garbage, so both operands are sensitive. It stops at
-/// operators that cap which operand bits the consumer can see: an `extract`
-/// reads a fixed bit range regardless of the bound value's width, and a
-/// memory read yields fresh bits unrelated to its address operands.
 fn width_sensitive_symbols(
     dag: &tir_symbolic::sem::SemGraph,
     node_widths: &[Option<u32>],
@@ -486,10 +440,6 @@ fn width_sensitive_symbols(
     out
 }
 
-/// Every operand symbol whose upper bits reach `node`'s value. Stops at
-/// operators that cap the visible bit range (`extract`) or yield fresh bits
-/// (memory reads) — symbols below them are not width-sensitive through this
-/// path (see [`width_sensitive_symbols`]).
 fn collect_symbols(
     dag: &tir_symbolic::sem::SemGraph,
     node: tir_adt::NodeId,
@@ -523,11 +473,6 @@ struct ImmediateRange {
     constraint: OperandConstraint,
 }
 
-/// The encoding range of each immediate operand: the field's bit width from the
-/// operand type, signedness from how the behavior consumes the symbol —
-/// `sext(imm, _)` sign-extends, everything else is unsigned — and an
-/// `extract(imm, hi, 0)` wrapper (a shift-amount mask) narrows the usable bits.
-/// Selection uses these to refuse constants the field cannot represent.
 fn immediate_operand_ranges(
     dag: &tir_symbolic::sem::SemGraph,
     ops: &[(String, Type)],
@@ -588,10 +533,6 @@ fn immediate_operand_ranges(
     out
 }
 
-/// The literal architectural width of a register class, when its `WIDTH` param
-/// is a compile-time literal (x86 `GPR32`/`GPR16`/`GPR8`). A class sized by an
-/// ISA parameter (`self.XLEN`) resolves only under the enabled features and
-/// yields `None`.
 fn literal_register_class_width(files: &[ast::File], class_name: &str) -> Option<u32> {
     files
         .iter()
@@ -605,9 +546,6 @@ fn literal_register_class_width(files: &[ast::File], class_name: &str) -> Option
         })
 }
 
-/// Operator kinds whose result is meaningfully sized by the destination register
-/// width — scalar integer and float computations. Vector, memory, and control
-/// kinds carry no scalar width and are never typed from a register class.
 fn scalar_root_kind(kind: &tir_symbolic::lang::SymKind) -> bool {
     use tir_symbolic::lang::SymKind as K;
     matches!(
@@ -640,7 +578,6 @@ fn scalar_root_kind(kind: &tir_symbolic::lang::SymKind) -> bool {
     )
 }
 
-/// Whether `expr` reads or writes a program-counter register (`PC::pc`).
 fn behavior_references_pc(expr: &ast::Expr, pc_classes: &HashSet<String>) -> bool {
     let mut found = false;
     crate::utils::visit_exprs(expr, &mut |e| {
@@ -651,14 +588,6 @@ fn behavior_references_pc(expr: &ast::Expr, pc_classes: &HashSet<String>) -> boo
     found
 }
 
-/// Whether a behavior *reads* a status-flag register (a `flag_classes` register
-/// path in a value position). Such readers (`cset`, `csel`) compute from
-/// condition-code bits a plain value rule cannot see: lifting the flag reads
-/// into free symbolic operands yields a pattern structurally identical to an
-/// integer comparison, so it would match `cmpi` and drop the operand bindings.
-/// They instead materialize through composed definer+reader rules (see
-/// `emit_flag_reader_rules`). A flag-path assignment *destination* is a write,
-/// not a read, so definers (`cmp`) are not caught.
 fn behavior_reads_flag_register(expr: &ast::Expr, flag_classes: &HashSet<String>) -> bool {
     let is_flag = |e: &ast::Expr| matches!(e, ast::Expr::Path(p) if flag_classes.contains(&p.base));
     let (mut mentions, mut writes) = (0usize, 0usize);
@@ -670,13 +599,6 @@ fn behavior_reads_flag_register(expr: &ast::Expr, flag_classes: &HashSet<String>
     mentions > writes
 }
 
-/// Whether the *value* a behavior defines reads a status-flag register. Only
-/// this portion may veto a value rule: the right-hand sides feeding non-flag
-/// destinations, plus any statement-level guard around such an assignment. A
-/// flag read confined to a flag output's own right-hand side (x86 rotate's
-/// count-zero carry preservation) leaves the value expression flag-free, so the
-/// rule still roots. Call with the let-inlined behavior, so a binding shared
-/// between the value and a flag output is seen on the value side too.
 fn value_reads_flag_register(expr: &ast::Expr, flag_classes: &HashSet<String>) -> bool {
     match expr {
         ast::Expr::Assign(a) => {
@@ -704,8 +626,6 @@ fn value_reads_flag_register(expr: &ast::Expr, flag_classes: &HashSet<String>) -
     }
 }
 
-/// Whether a statement defines anything but a status flag — the guarded arms
-/// whose condition therefore feeds the value (see [`value_reads_flag_register`]).
 fn defines_value(expr: &ast::Expr, flag_classes: &HashSet<String>) -> bool {
     let mut defines = false;
     crate::utils::visit_statements(expr, &mut |stmt| {
@@ -719,11 +639,6 @@ fn defines_value(expr: &ast::Expr, flag_classes: &HashSet<String>) -> bool {
     defines
 }
 
-/// Whether the behavior assigns a fixed register path (`GPR::rsp = …`) outside
-/// the flag classes. A single-value tile claims only its operand write; a
-/// sibling fixed-register write would be dropped from the claim while the
-/// fixed read binds as a free pattern variable — a `pop` rule matching any
-/// load. Flag-path writes stay legal: the flag machinery composes them.
 fn behavior_writes_fixed_register(expr: &ast::Expr, flag_classes: &HashSet<String>) -> bool {
     let mut writes = false;
     crate::utils::visit_statements(expr, &mut |stmt| {
@@ -745,9 +660,6 @@ fn collect_behavior_assignments<'a>(expr: &'a ast::Expr, out: &mut Vec<(String, 
     });
 }
 
-/// Register operands the behavior *reads*: referenced anywhere outside an
-/// assignment-destination position. An operand that is also defined is a tied
-/// (two-address) operand, e.g. the x86 `dst = dst + src`.
 pub(crate) fn infer_read_register_operands(
     behavior: &ast::Expr,
     operands: &[(String, Type)],

@@ -101,12 +101,10 @@ struct Symbols {
 }
 
 impl Symbols {
-    /// The address of the data object named `name`.
     fn data(&mut self, context: &Context, name: &str) -> ValueId {
         self.value(context, name, PtrType::opaque(context))
     }
 
-    /// The λ value of the function named `name`.
     fn function(&mut self, context: &Context, name: &str, signature: &Signature) -> ValueId {
         let ty = FnType::new(
             context,
@@ -126,8 +124,6 @@ impl Symbols {
         value
     }
 
-    /// Point every placeholder at the definition it names, declaring whatever
-    /// this unit only references.
     fn bind(self, context: &Context, module: &ModuleOp) {
         let mut defined = HashMap::new();
         for op in module.body().iter(context.clone()) {
@@ -435,7 +431,6 @@ pub fn codegen(context: &Context, typed: &TypedAst) -> Result<ModuleOp, Diagnost
     Ok(module)
 }
 
-/// A construct the parser accepts but codegen does not lower yet.
 fn unsupported(ast: &Ast, node: NodeId, what: String) -> Diagnostic {
     UnsupportedConstruct::new(ast.get_node(node).span, what).into()
 }
@@ -487,10 +482,6 @@ fn node_entity(typed: &TypedAst, node: NodeId) -> EntityId {
         .expect("semantic analysis resolves codegen names")
 }
 
-/// Whether `statement` holds an edge a `cir` loop region cannot carry: a label or
-/// a `goto`, which name blocks anywhere in the function, or a `return` under a
-/// loop, which leaves for the function's one exit block. One of them anywhere in a
-/// function lowers all of its loops flat.
 fn crosses_loop_boundary(ast: &Ast, statement: NodeId, in_loop: bool) -> bool {
     let kind = ast.get_node(statement).kind;
     match kind {

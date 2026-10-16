@@ -156,8 +156,6 @@ where
     })
 }
 
-/// Match `flag` in attached (`-oFILE`) or separate (`-o FILE`) form, advancing
-/// `i` past a consumed separate value. Returns the value when `flag` matched.
 fn separated(args: &[String], i: &mut usize, flag: &str) -> Result<Option<String>, GccError> {
     let arg = args[*i].as_str();
     if arg == flag {
@@ -187,8 +185,6 @@ fn is_value_taking_warn(arg: &str) -> bool {
     arg.starts_with("-MF") || arg.starts_with("-MT") || arg.starts_with("-MQ")
 }
 
-/// Whether `arg` is a `-O` spelling and not a flag that merely starts that way
-/// (`-ObjC`).
 fn is_opt_flag(arg: &str) -> bool {
     match arg.strip_prefix("-O") {
         Some("") | Some("s") | Some("z") | Some("fast") => true,
@@ -197,9 +193,6 @@ fn is_opt_flag(arg: &str) -> bool {
     }
 }
 
-/// The level a `-O` spelling selects. `-Os`, `-Oz` and a bare `-O` are `-O2`
-/// until code size is a KPI of its own; `-Ofast` is `-O3` without its
-/// arithmetic licences, which TIR does not take.
 fn opt_level_of(arg: &str, warned: &mut HashSet<String>) -> OptLevel {
     match arg {
         "-O0" => OptLevel::O0,

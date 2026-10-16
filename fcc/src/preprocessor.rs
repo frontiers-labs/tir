@@ -142,8 +142,6 @@ enum PreprocToken {
 // #if / #elif expression evaluator
 // ---------------------------------------------------------------------------
 
-/// Evaluate a C preprocessor constant expression; returns the integer value.
-/// Undefined identifiers and non-integer macros evaluate to 0.
 fn eval_if_expr(expr: &str, defines: &HashMap<String, MacroDefinition>, span: Span) -> i64 {
     let expanded = expand_if_expr(expr, defines, span);
     let toks: Vec<PreprocToken> = PreprocToken::lexer(&expanded)
@@ -195,9 +193,6 @@ impl<'a> IfExpr<'a> {
         }
     }
 
-    /// Precedence climbing over the binary operators: every one is
-    /// left-associative, and an operand binds to the tightest operator on
-    /// either side of it.
     fn binary(&mut self, min_prec: u8) -> i64 {
         let mut val = self.unary();
         while let Some((prec, apply)) = self.peek().and_then(binary_op) {
@@ -407,11 +402,6 @@ pub struct TokenStream {
 }
 
 impl TokenStream {
-    /// Set the top frame's offset to right after the next `\n` in `remainder`.
-    ///
-    /// `remainder` must be a suffix of the top frame's source.  The formula
-    /// `source_len - remainder.len()` recovers the absolute position even
-    /// though `remainder` was originally sliced from `source[offset..]`.
     fn skip_line(&mut self, source_len: usize, remainder: &str) {
         let mut consumed = 0;
         loop {
@@ -442,14 +432,10 @@ impl TokenStream {
         }
     }
 
-    /// The currently active file, for spanning directives.
     fn current_file(&self) -> FileId {
         self.frames.last().unwrap().file
     }
 
-    /// Resolve an `#include` to its `(path, contents)`, or `None` if not found.
-    /// Quoted includes search the including file's directory first; both forms
-    /// then search `user` (`-I` order) and `system` directories.
     fn resolve_include(
         &self,
         path: &str,

@@ -125,8 +125,6 @@ impl Cache {
         addr / self.line
     }
 
-    /// Serialize on the addressed bank: an access starts when the bank frees,
-    /// which then stays busy for `occupancy`.
     fn bank_wait(&mut self, addr: u64, arrive: u64) -> u64 {
         let bank = (self.line_of(addr) as usize) % self.banks.len();
         let start = arrive.max(self.banks[bank]);
@@ -134,8 +132,6 @@ impl Cache {
         start
     }
 
-    /// Probe tags. On a hit, promote the line to MRU (and mark it dirty on a
-    /// write). Returns whether it hit.
     fn probe(&mut self, addr: u64, is_write: bool) -> bool {
         let line = self.line_of(addr);
         let set = &mut self.tags[(line as usize) % self.sets];
@@ -149,10 +145,6 @@ impl Cache {
         }
     }
 
-    /// Install `line` (write-allocate: dirty when the demand was a store),
-    /// evicting the LRU way if the set is full. `prefetched` tags the line as
-    /// speculatively fetched. Returns the evicted line's address when it was
-    /// dirty (a writeback the caller must account for).
     fn install(&mut self, addr: u64, is_write: bool, prefetched: bool) -> Option<u64> {
         let line = self.line_of(addr);
         let set = &mut self.tags[(line as usize) % self.sets];
@@ -177,8 +169,6 @@ impl Cache {
         evicted
     }
 
-    /// If `addr`'s line is resident and prefetched-but-undemanded, clear the flag
-    /// and report it (the demand that consumes a prefetch). Assumes a prior hit.
     fn take_prefetched(&mut self, addr: u64) -> bool {
         let line = self.line_of(addr);
         let set = &mut self.tags[(line as usize) % self.sets];
@@ -188,13 +178,10 @@ impl Cache {
             .unwrap_or(false)
     }
 
-    /// Drop MSHR entries whose fill has completed by `now`.
     fn reclaim(&mut self, now: u64) {
         self.mshrs.retain(|&(_, c)| c > now);
     }
 
-    /// The completion of an in-flight miss to the same line, if any (a merge:
-    /// the second miss rides the first's fill, generating no new traffic).
     fn inflight(&self, addr: u64) -> Option<u64> {
         let line = self.line_of(addr);
         self.mshrs
@@ -203,8 +190,6 @@ impl Cache {
             .map(|&(_, c)| c)
     }
 
-    /// Reserve an MSHR slot for a new miss, stalling the start until the
-    /// earliest in-flight fill completes when the table is full.
     fn reserve(&mut self, start: u64) -> u64 {
         if self.mshrs.len() < self.mshr_cap {
             return start;
@@ -350,19 +335,6 @@ impl MemorySystem {
         completion.saturating_sub(cycle + hit_latency)
     }
 
-    /// Descend `path` (top-down) for `addr`, returning the completion cycle at
-    /// the top level. Lookups are speculative (as on ARM cores): each level
-    /// forwards the request downward at probe start, before its own tag check
-    /// resolves, and cancels it on a hit — so the level that answers determines
-    /// the completion outright, and a level's `latency` is its *absolute*
-    /// load-to-use latency, not an increment over the levels above. Levels that
-    /// missed install the line on the way back up at no extra cost.
-    ///
-    /// A `prefetch` walk is a speculative fill: it consumes banks, MSHRs and DRAM
-    /// streams like a demand miss but is excluded from the demand hit/miss/DRAM
-    /// counters, marks its installed L1D line prefetched, and is *dropped*
-    /// (returns `None`) rather than stalling when the line is already resident,
-    /// already in flight, or the MSHR table is full. Demand walks never drop.
     fn walk(&mut self, path: &[usize], addr: u64, is_write: bool, prefetch: bool) -> Option<u64> {
         // Levels that truly missed (and so must be installed on the ascent),
         // paired with the cycle their downward request departed.
@@ -442,10 +414,6 @@ impl MemorySystem {
         Some(fill_ready)
     }
 
-    /// A dirty eviction from `idx` writes back into the immediately lower level
-    /// (or DRAM). Modeled as a hit access there — under an inclusive hierarchy
-    /// the line is resident — occupying a bank but not delaying any demand fill.
-    /// Simplification: writeback contention beyond one bank cycle is ignored.
     fn writeback(&mut self, path: &[usize], idx: usize, evicted_addr: u64, prefetch: bool) {
         let pos = path.iter().position(|&p| p == idx).unwrap();
         // A writeback off the last cache drains to DRAM, counted only in
@@ -460,8 +428,6 @@ impl MemorySystem {
         }
     }
 
-    /// A DRAM request for `addr`'s line, bounded to `dram_streams` outstanding.
-    /// A prefetch consumes a stream slot but is not counted as demand traffic.
     fn dram_access(&mut self, addr: u64, arrive: u64, prefetch: bool) -> u64 {
         let line = addr / self.dram_line;
         self.dram.retain(|&(_, c)| c > self.now);
@@ -497,8 +463,6 @@ impl MemorySystem {
     }
 }
 
-/// The cycle a fill request departs for the next level down: the start of the
-/// deepest miss so far, or the original arrival at the top.
 fn arrive_of(missed: &[(usize, u64)], arrive: u64) -> u64 {
     missed.last().map(|&(_, s)| s).unwrap_or(arrive)
 }

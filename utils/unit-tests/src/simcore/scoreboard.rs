@@ -11,8 +11,6 @@ use tir_sim::predictor::{AlwaysNotTaken, BranchPredictor};
 use tir_sim::scoreboard::*;
 use tir_sim::{MemAccess, MemAccessKind};
 
-/// Verbatim copies of the engine's tiny latency/pressure helpers, so the
-/// closed-form oracle below stays a fully independent reimplementation.
 fn is_zero_idiom(slot: &ScoreboardInstr) -> bool {
     slot.class.zero_idiom
         && !slot.uses.is_empty()
@@ -137,12 +135,6 @@ fn reference_score_branch(
     mispredicts
 }
 
-/// The pre-refactor closed-form engine, kept verbatim as the oracle for the
-/// differential test below: the cycle-stepped [`run`] must reproduce it
-/// bit-for-bit (cycle count, mispredicts, and the full event trace) on every
-/// core configuration. It earns its keep as a permanent guard because Stage C
-/// will make load/store latency state-dependent through [`completion_cycle`],
-/// and the default (fixed-latency) path must stay identical.
 fn run_reference(
     model: &MachineModel,
     base: &[ScoreboardInstr],
@@ -420,10 +412,6 @@ fn prf() -> Prf {
     }
 }
 
-/// The cycle-stepped engine must reproduce the closed-form oracle exactly —
-/// same cycles, mispredicts, and event trace — across in-order/out-of-order,
-/// bounded/unbounded window, and with/without register-file pressure, over
-/// many random instruction mixes.
 #[test]
 fn cycle_stepped_matches_closed_form() {
     let mut rng = Lcg(0x1234_5678);
@@ -956,9 +944,6 @@ fn frontend_test_model(slots: &'static [&'static str], uops_per_cycle: u16) -> M
     model
 }
 
-/// A fused pair (`cmp` + `jne` by op name) decodes and executes as
-/// one micro-op: on a single-unit, single-issue core the pair sustains one
-/// iteration per cycle where the unfused pair needs two.
 #[test]
 fn macro_fused_pair_costs_one_micro_op() {
     const ROUTE_P0: ResourceRoute = ResourceRoute {
@@ -1007,10 +992,6 @@ fn macro_fused_pair_costs_one_micro_op() {
     );
 }
 
-/// A producer that owns P0 every cycle feeds a consumer that may use P0 or
-/// P1. The consumer must settle on the idle P1, sustaining one iteration
-/// per cycle; packing it onto P0 (which route tie-breaking once preferred)
-/// halves throughput.
 #[test]
 fn micro_op_avoids_a_saturated_resource_when_an_idle_one_exists() {
     const ROUTE_P0: ResourceRoute = ResourceRoute {
@@ -1576,7 +1557,6 @@ fn rename_test_model() -> MachineModel {
     model
 }
 
-/// A recurrent chain `r1 <- r0, r2 <- r1, r3 <- r2, r0 <- r3`.
 fn move_chain(class: InstrSchedClass) -> Vec<ScoreboardInstr> {
     (0..4)
         .map(|i| {

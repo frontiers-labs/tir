@@ -104,7 +104,6 @@ impl<V> Lowerer<V> {
         id
     }
 
-    /// Width follows kind: `concat` sums operands, else takes the left operand.
     fn bin(&mut self, kind: SymKind, a: NodeId, b: NodeId) -> NodeId {
         let width = match kind {
             SymKind::Concat => match (self.w(a), self.w(b)) {
@@ -498,7 +497,6 @@ impl<V> Lowerer<V> {
 /// The widest bit-vector the `u64`-backed `APInt` can represent.
 const MAX_WIDTH: u32 = 64;
 
-/// Returns `(width, is_bool)`: `Bool` -> `(1, true)`, `(_ BitVec n)` -> `(n, false)`.
 fn sort_width(sort: &Sort) -> Result<(u32, bool), ConvertError> {
     if !sort.params.is_empty() {
         return Err(ConvertError::Unsupported(format!(
@@ -515,7 +513,6 @@ fn sort_width(sort: &Sort) -> Result<(u32, bool), ConvertError> {
     }
 }
 
-/// Recognise a `(_ bvN m)` bit-vector literal, returning `(value, width)`.
 fn bv_literal(name: &str, indices: &[Index]) -> Option<(u64, u128)> {
     let digits = name.strip_prefix("bv")?;
     if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
@@ -527,7 +524,6 @@ fn bv_literal(name: &str, indices: &[Index]) -> Option<(u64, u128)> {
     }
 }
 
-/// Reject widths outside `1..=MAX_WIDTH` before they reach `APInt::new` (panic).
 fn checked_width(width: u128, what: &str) -> Result<u32, ConvertError> {
     if width == 0 || width > MAX_WIDTH as u128 {
         Err(ConvertError::BadLiteral(format!(

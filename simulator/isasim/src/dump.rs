@@ -65,8 +65,6 @@ pub fn write_state_dump(executor: &Executor, path: &str, mem_windows: &[String])
     std::fs::write(path, json).expect("failed to write state dump");
 }
 
-/// Parse a `--dump-mem` spec of the form `addr:len`, where `addr` is a hex/decimal
-/// address and `len` is a byte count.
 fn parse_mem_window(spec: &str) -> (u64, usize) {
     let (addr, len) = spec
         .split_once(':')

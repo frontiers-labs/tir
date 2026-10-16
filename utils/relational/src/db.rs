@@ -363,8 +363,6 @@ impl Overlay {
         self.pending.push(id);
     }
 
-    /// `reference`, a representative of what lies below, as this layer places
-    /// it. `mask` answers for the destination.
     #[inline]
     fn find(&self, reference: Ref, mask: impl Fn(u32) -> u64) -> Ref {
         if !self.absorbed(reference.id) {
@@ -1401,7 +1399,6 @@ impl<C, const SPACES: usize> Core<C, SPACES> {
         self.write(lattice, key, Fact::Known(value), true, true)
     }
 
-    /// Join `fact` onto `key`'s entry.
     fn write(
         &mut self,
         lattice: LatticeId,
@@ -1421,7 +1418,6 @@ impl<C, const SPACES: usize> Core<C, SPACES> {
         moved
     }
 
-    /// Join `absorbed`'s entry onto `survivor`'s, for ids just equated.
     fn merge(&mut self, lattice: LatticeId, absorbed: u32, survivor: u32) {
         let entry = &mut self.lattices[lattice.0 as usize];
         if let Some(fact) = entry.column.detach(absorbed) {
@@ -1462,7 +1458,6 @@ impl<C, const SPACES: usize> Core<C, SPACES> {
             .fold(0, |mask, (at, _)| mask | 1 << at)
     }
 
-    /// Log that `key`'s value in `lattice` moved.
     fn log_rise(&mut self, lattice: LatticeId, key: u32, minted: bool) {
         self.state.rises[lattice.0 as usize].rising[usize::from(minted)].push(key);
         self.log_change(self.lattices[lattice.0 as usize].space, key);
@@ -1918,9 +1913,6 @@ impl<C, const SPACES: usize> Database<C, SPACES> {
         closure
     }
 
-    /// Id -> the values of the rows of the base holding it in a key column,
-    /// canonical in the base, built once per base version. The tables are
-    /// keyed the other way, so an upward walk reads this instead.
     fn reverse(&self, space: SpaceId) -> cell::Ref<'_, Csr> {
         let at = space.0 as usize;
         let stale = self
@@ -2128,7 +2120,6 @@ impl Groups {
             .map_or(&[], |new| new.rows.as_slice())
     }
 
-    /// The trie [`Database::prepare_trie`] built over `columns`.
     pub(crate) fn trie(&self, slot: u32, columns: &[u8]) -> &Trie {
         let tries = &self.tries[slot as usize];
         let found = tries.iter().find(|trie| trie.columns() == columns);

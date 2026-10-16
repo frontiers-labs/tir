@@ -53,7 +53,6 @@ pub fn run(isasim_bin: &Path) -> Result<bool> {
     Ok(all_passed)
 }
 
-/// Run all `*.S` snippets in `dir`, comparing `simulator` against `golden`.
 fn run_suite(
     name: &str,
     dir: &Path,
@@ -100,7 +99,6 @@ fn run_suite(
     Ok(failed == 0)
 }
 
-/// Run a single snippet on both oracles and return the state differences.
 fn run_one(
     path: &Path,
     simulator: &dyn Oracle,
@@ -138,7 +136,6 @@ fn suites_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("suites")
 }
 
-/// True if `name` is an executable file on `PATH`.
 fn tool_in_path(name: &str) -> bool {
     let Some(paths) = std::env::var_os("PATH") else {
         return false;

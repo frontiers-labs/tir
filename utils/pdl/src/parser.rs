@@ -481,8 +481,6 @@ where
     expression_with(true)
 }
 
-/// An expression in operand position: `|` there separates the dependency
-/// operands, so bitwise or is spelled in parentheses.
 fn operand_expression<'src, I>() -> impl Parser<'src, I, Expr, Error<'src>> + Clone
 where
     I: ValueInput<'src, Token = Token, Span = Span>,
@@ -645,8 +643,6 @@ where
         .boxed()
 }
 
-/// A hyphenated rule name's parts. Keywords are legal here: a rule called
-/// `wide-const-split` names an axiom, not a `const` term.
 fn name_part<'src, I>() -> impl Parser<'src, I, String, Error<'src>> + Clone
 where
     I: ValueInput<'src, Token = Token, Span = Span>,

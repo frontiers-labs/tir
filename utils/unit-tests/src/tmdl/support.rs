@@ -96,7 +96,6 @@ fn generate_with(input: &str, source: Option<&str>, dialect: &str, text_only: bo
     }
 }
 
-/// The kind table the generated Rust passes to the decoder.
 fn kind_table(rust: &str) -> Vec<SymKind> {
     let (_, rest) = rust
         .split_once("static SEM_KINDS: &[tir::sem::SymKind] = &[")
@@ -110,8 +109,6 @@ fn kind_table(rust: &str) -> Vec<SymKind> {
         .collect()
 }
 
-/// Codegen names scalar-op kinds by their Rust variant and the rest by their
-/// debug name; this inverts both.
 fn named_kind(name: &str) -> SymKind {
     if let Some(op) = SCALAR_OPS.iter().find(|op| op.rust == name) {
         return op.kind;
@@ -150,8 +147,6 @@ fn named_kind(name: &str) -> SymKind {
     }
 }
 
-/// Every program in the blob, rendered one line each: node kinds in post order
-/// with their payloads, then each node's operand indices.
 fn programs(blob: &[u8], kinds: &[SymKind]) -> Vec<String> {
     let mut offset = 5;
     let mut rendered = Vec::new();

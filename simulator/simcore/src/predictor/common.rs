@@ -173,9 +173,6 @@ impl GlobalHistory {
         }
     }
 
-    /// XOR-fold the most recent `len` history bits into a `width`-bit value.
-    /// This is the standard TAGE compression of a long history into a table
-    /// index or tag.
     fn fold(&self, len: usize, width: u32) -> u64 {
         let mut acc = 0u64;
         let mut pos = 0u32;

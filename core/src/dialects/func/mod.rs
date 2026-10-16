@@ -39,8 +39,6 @@ fn argument_alignments(op: &impl Operation) -> Vec<u64> {
     }
 }
 
-/// The arguments a function's caller guarantees name memory nothing else in the
-/// function reaches: `restrict` in C, `noalias` in LLVM.
 fn noalias_arguments(op: &impl Operation) -> Vec<usize> {
     match op.attr("noalias") {
         Some(AttributeValue::Array(values)) => values
@@ -55,8 +53,6 @@ fn noalias_arguments(op: &impl Operation) -> Vec<usize> {
     }
 }
 
-/// The `keyword [a, b, ...]` an argument list is spelled as, absent when the
-/// keyword is not there. `what` names the list in the error.
 fn parse_keyed_array(
     parser: &mut tir::parse::text::Parser,
     context: &Context,

@@ -127,7 +127,6 @@ impl Scope {
         });
     }
 
-    /// Truncate back to a snapshot taken before entering a nested block.
     fn restore(&mut self, mark: usize) {
         self.variables.truncate(mark);
     }
@@ -137,10 +136,6 @@ impl Scope {
             .get(rng.below(self.variables.len() as u64) as usize)
     }
 
-    /// A variable narrow enough to stand in for an expression bounded by
-    /// `bound`. Wider ones are not masked down to fit: that would silently
-    /// change the value the program computes, and the point of the bound is to
-    /// describe what the program does, not to constrain it after the fact.
     fn pick_within(&self, rng: &mut Rng, bound: i64) -> Option<&Variable> {
         let candidates: Vec<&Variable> =
             self.variables.iter().filter(|v| v.bound <= bound).collect();
@@ -205,9 +200,6 @@ impl Generator {
         out
     }
 
-    /// A function of two pointers and two integers returning a bounded value.
-    /// It owns an array of its own and may call earlier functions, handing them
-    /// any array in scope.
     fn function_body(&mut self) -> String {
         let mut scope = Scope::new();
         scope.push("a".into(), VALUE_BOUND);
@@ -243,8 +235,6 @@ impl Generator {
         )
     }
 
-    /// A call to `callee`, passing two of the arrays in scope and two bounded
-    /// integers.
     fn call(&mut self, scope: &Scope, callee: &str) -> String {
         let first = self.pointer_argument(scope);
         let second = self.pointer_argument(scope);
@@ -254,10 +244,6 @@ impl Generator {
         format!("{callee}({first}, {second}, {})", args.join(", "))
     }
 
-    /// One pointer argument: an array in scope, shifted along where it is the
-    /// function's own. An array the caller was handed is passed as it stands —
-    /// shifting it further would take the callee past the end of the array it
-    /// came from.
     fn pointer_argument(&mut self, scope: &Scope) -> String {
         match scope.pick_array(&mut self.rng) {
             Some(array) if array.mask == POINTER_MASK => array.name.clone(),
@@ -312,15 +298,6 @@ impl Generator {
         format!("int main(void) {{\n{body}    return 0;\n}}\n")
     }
 
-    /// Counted nests over a local matrix, which is what the affine view is
-    /// defined on and what nothing else here generates.
-    ///
-    /// Three nests, each a different answer from the dependence test: a
-    /// transposed update the scheduler may reorder, an update carrying the
-    /// distance `(1, -1)` — which no swap keeps lexicographically positive, so
-    /// reordering it would be a miscompile the printed matrix reports — and the
-    /// print itself. Every stored value is masked back into `[0, 255]`, so no
-    /// accumulation can overflow whatever the trip counts do.
     fn matrix_nests(&mut self, scope: &mut Scope) -> String {
         const SIDE: usize = 8;
         let name = self.fresh("mat");
@@ -443,8 +420,6 @@ impl Generator {
         }
     }
 
-    /// An element of an array in scope, spelled by indexing or by pointer
-    /// arithmetic; every scope has at least one array.
     fn element(&mut self, scope: &Scope) -> String {
         let index = self.index_expr(scope);
         let array = scope.pick_array(&mut self.rng).expect("an array in scope");
@@ -465,7 +440,6 @@ impl Generator {
         }
     }
 
-    /// An expression whose value is provably within `bound`.
     fn expr(&mut self, scope: &Scope, bound: i64, depth: u32) -> Expr {
         let expr = self.build(scope, bound, depth);
         debug_assert!(

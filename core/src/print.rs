@@ -33,8 +33,6 @@ pub fn print_ir(
     op.print(fmt)
 }
 
-/// Names for the specs carried anywhere in `op`'s tree, in the order they are
-/// first met. Specs that repeat share one definition.
 fn collect_aliases(context: &Context, op: OpId, aliases: &mut Vec<(String, AttributeValue)>) {
     let instance = context.get_op(op);
     for attribute in instance.attributes() {
@@ -59,8 +57,6 @@ fn collect_aliases(context: &Context, op: OpId, aliases: &mut Vec<(String, Attri
     }
 }
 
-/// The attribute's own name, suffixed where an op deeper in the tree overrides
-/// the spec with a different one.
 fn unique_name(base: &str, aliases: &[(String, AttributeValue)]) -> String {
     let taken = |candidate: &str| aliases.iter().any(|(name, _)| name == candidate);
     if !taken(base) {

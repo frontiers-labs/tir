@@ -12,8 +12,6 @@ fn verify(module: &str) -> Result<(), tir::Error> {
     verify_op_tree(&context, module.id())
 }
 
-/// Parse `module`, print it, and parse the printed form again: the two printings
-/// agree exactly when the op's syntax carries everything its structure holds.
 fn roundtrip(module: &str) -> String {
     let context = fcc_context();
     let parsed = parse_ir::<ModuleOp>(&context, module).expect("parse module");
@@ -226,7 +224,6 @@ fn a_loop_label_round_trips() {
     );
 }
 
-/// Every op under `op`, outermost first.
 fn subtree(context: &Context, op: tir::OpId) -> Vec<tir::OpId> {
     let mut found = vec![op];
     let mut index = 0;

@@ -185,8 +185,6 @@ fn directive_label(d: &directive::Directive) -> String {
     format!("{}{}", d.prefix, suffix)
 }
 
-/// A zero-or-one-character span at `offset`, clamped to the input length, used
-/// to anchor a label without highlighting a whole region.
 fn point(input: &Source, offset: usize) -> std::ops::Range<usize> {
     let len = input.text.len();
     let start = offset.min(len);

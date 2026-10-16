@@ -20,7 +20,6 @@ fn constructor(symbol: u32, arity: usize) -> String {
     format!("S{symbol}a{arity}")
 }
 
-/// The pattern as an egglog expression; a hole is a bare variable.
 fn expr(pattern: &Pattern) -> String {
     match pattern {
         Pattern::Var(var) => format!("v{var}"),
@@ -43,8 +42,6 @@ fn constructors(pattern: &Pattern, out: &mut BTreeSet<(u32, usize)>) {
     }
 }
 
-/// The names of the workload's constructors, and an e-graph holding its seed
-/// graph and rules.
 fn seed(workload: &Workload) -> (Vec<String>, EGraph) {
     let mut used = BTreeSet::new();
     for seed in &workload.seeds {
@@ -105,8 +102,6 @@ fn saturate(mut egraph: EGraph, iters: usize) -> EGraph {
     egraph
 }
 
-/// The same table the `egraph` benchmark prints under `TIR_WORKLOAD_STATS`.
-/// egglog does not count classes; its node count is egg's.
 fn print_stats(workloads: &[Workload]) {
     if std::env::var_os("TIR_WORKLOAD_STATS").is_none() {
         return;

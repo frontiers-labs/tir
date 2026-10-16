@@ -65,8 +65,6 @@ fn restructure(context: &Context, module: &ModuleOp) -> Result<(), tir::PassErro
     passes.run(context, context.get_op(module.id()))
 }
 
-/// Restructuring must leave every body an unordered region: a function still
-/// made of blocks is control flow it left behind.
 fn has_branches(context: &Context, module: &ModuleOp) -> bool {
     module.body().iter(context.clone()).any(|op| {
         op.clone()
@@ -82,10 +80,6 @@ fn render(context: &Context, module: &ModuleOp) -> String {
     rendered
 }
 
-/// Build the program twice — the pipeline consumes the module it compiles —
-/// and check that restructuring left what it computes alone. The program is
-/// pruned first: the backend does not take a CFG with unreachable blocks, which
-/// the restructured form no longer has.
 #[cfg(all(
     target_os = "linux",
     any(target_arch = "x86_64", target_arch = "aarch64")
@@ -193,8 +187,6 @@ impl Program {
         Some(Program { blocks })
     }
 
-    /// What the program computes, as a reference the compiled forms are
-    /// checked against: the same walk the generated blocks perform.
     fn evaluate(&self, left: i64, right: i64) -> i64 {
         let seed = left.wrapping_add(right);
         let (mut index, mut value, mut fuel) = (0usize, seed, FUEL);
@@ -220,8 +212,6 @@ impl Program {
         }
     }
 
-    /// The program without the blocks no path reaches, which the backend
-    /// declines to compile in its CFG form.
     fn pruned(&self) -> Program {
         let mut reachable = vec![false; self.blocks.len()];
         let mut pending = vec![0];
@@ -257,8 +247,6 @@ impl Program {
         Program { blocks }
     }
 
-    /// The generated function, built through the IR API: the text form cannot
-    /// express a forward branch to a block that later declares arguments.
     fn build(&self, context: &Context) -> ModuleOp {
         let integer = IntegerType::new(context, 64);
         let boolean = IntegerType::new(context, 1);

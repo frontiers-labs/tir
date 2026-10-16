@@ -286,9 +286,6 @@ impl Plan {
         !self.anchors().is_empty()
     }
 
-    /// An evaluation order from each row atom. Empty for a plan a round cannot
-    /// search from its new rows: one that negates, whose root binds no row, or
-    /// some atom of which cannot be reached from another.
     fn anchor(&self) -> Vec<Anchor> {
         let query = &self.query;
         let rooted = query
@@ -379,9 +376,6 @@ impl Plan {
         self.fact_anchors.get_or_init(|| self.fact_anchor())
     }
 
-    /// An evaluation order from each lattice atom. Empty for a plan that
-    /// negates, reads no lattice column, or some atom of which cannot be
-    /// reached from one.
     fn fact_anchor(&self) -> Vec<FactAnchor> {
         let query = &self.query;
         if !self.nots.is_empty() {
@@ -572,13 +566,6 @@ impl Plan {
         })
     }
 
-    /// Order what `bound` and `known` do not already give: the steps, the row
-    /// levels below the root, and the negated conjunctions' plans. `None` when
-    /// an atom is reachable neither through its bound key nor sideways from a
-    /// bound argument, or a guard reads a scalar nothing binds.
-    ///
-    /// `skip` says the order does not start at the root, and names the atom the
-    /// caller has matched already when there is one.
     fn order(
         query: &Query,
         mut bound: Vec<bool>,
@@ -1106,7 +1093,6 @@ impl JoinPlan {
     }
 }
 
-/// The variables `atom` names.
 fn atom_vars(atom: &Atom) -> SmallVec<[Var; 6]> {
     match atom {
         Atom::Rows(rows) => rows

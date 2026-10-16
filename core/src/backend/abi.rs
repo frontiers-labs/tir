@@ -24,9 +24,6 @@ pub fn type_kind(context: &Context, ty: TypeId) -> ValueKind {
     }
 }
 
-/// Classifies a value for ABI register assignment. A value already living in a
-/// register is classified by the file it lives in — what the register holds is
-/// what the calling convention places — and everything else by its type.
 pub(crate) fn value_kind(context: &Context, abi: &AbiInfo, value: ValueId) -> ValueKind {
     let ty = context.get_value(value).ty();
     match crate::backend::type_class(context, ty) {
@@ -35,8 +32,6 @@ pub(crate) fn value_kind(context: &Context, abi: &AbiInfo, value: ValueId) -> Va
     }
 }
 
-/// The ABI class a register class belongs to: the argument or return sequence
-/// drawing from the same register file.
 fn class_kind(abi: &AbiInfo, class: crate::backend::regalloc::RegClassId) -> ValueKind {
     abi.args
         .iter()
@@ -185,11 +180,6 @@ pub(crate) enum ArgumentSlot {
     Stack(usize),
 }
 
-/// Place every argument group in registers where the convention has room for
-/// the whole group, and on the stack otherwise. Groups are atomic — all members
-/// land in registers or all on the stack — and the ABI's rollback policy decides
-/// whether a spilled group also exhausts the remaining argument registers.
-/// Returns one slot per member, in order, and the number of stack slots used.
 pub(crate) fn place_arguments(
     abi: &AbiInfo,
     groups: &[ArgumentGroup],
@@ -245,8 +235,6 @@ pub(crate) struct ArgumentPlan {
     pub stack_args: Vec<(ValueId, RegClassId, usize)>,
 }
 
-/// Place the arguments a symbol's `arg_regs` names, the indirect result
-/// address first, each in the class its function lowering gave it.
 pub(crate) fn plan_arguments(
     context: &Context,
     info: &RegisterInfo,
@@ -320,8 +308,6 @@ pub(crate) fn plan_arguments(
     Ok(plan)
 }
 
-/// The attribute an argument group is carried in: a bare member list, or a
-/// dictionary naming the alignment its source type demanded.
 pub(crate) fn encode_argument_group(
     members: Vec<AttributeValue>,
     alignment: u64,
@@ -335,8 +321,6 @@ pub(crate) fn encode_argument_group(
     ])))
 }
 
-/// The members and alignment of an argument group attribute, or `None` for an
-/// attribute that does not carry a group.
 pub(crate) fn decode_argument_group(
     attribute: &AttributeValue,
 ) -> Result<Option<(&[AttributeValue], u64)>, PassError> {
@@ -390,9 +374,6 @@ pub(crate) fn reserve_indirect_result_argument(
     *next = (*next).max(slot);
 }
 
-/// The argument sequences a value of `kind` may draw from, in overflow order:
-/// the sequence for its own kind — the integer one where the ABI does not
-/// sequence that kind — followed by every sequence that one chains to.
 pub(crate) fn argument_sequences(
     abi: &AbiInfo,
     kind: ValueKind,
@@ -433,10 +414,6 @@ pub(crate) fn exhaust_argument_registers(
     }
 }
 
-/// The next argument register for a value of `kind`, following the ABI's
-/// overflow chain and falling back to the integer sequence for a kind the ABI
-/// does not sequence. A `class` with a group width strides the sequence by
-/// that width and names the register in its own class.
 pub(crate) fn next_argument_register(
     abi: &AbiInfo,
     class: Option<crate::backend::regalloc::RegClassId>,
@@ -474,8 +451,6 @@ pub(crate) fn next_argument_register(
     None
 }
 
-/// The next return register for a value of `kind`, falling back to the
-/// integer sequence for a kind the ABI does not sequence.
 pub(crate) fn next_return_register(
     abi: &AbiInfo,
     kind: ValueKind,

@@ -36,9 +36,6 @@ fn params(context: &Context) -> [Vec<Param>; 4] {
     ]
 }
 
-/// Each definition's default for its omitted last parameter, by name: what
-/// every term of its constructor interns under, known before the
-/// definitions are built.
 pub(crate) fn defaults(context: &Context) -> Vec<(&'static str, AttributeValue)> {
     let last = |params: Vec<Param>| params.last()?.2.clone();
     NAMES

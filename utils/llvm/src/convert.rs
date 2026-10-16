@@ -113,8 +113,6 @@ impl Callees {
         value
     }
 
-    /// Pair every placeholder with the λ it names, declaring the functions this
-    /// module only calls whose declarations have not appeared in the input.
     fn bind(
         self,
         context: &Context,
@@ -467,10 +465,6 @@ fn inst_result_name(inst: &Inst) -> Option<&str> {
     }
 }
 
-/// On defined `nsw` executions the signed result fits the original width, so
-/// extending it equals computing with extended operands. Overflow is poison in
-/// LLVM and permits this concrete result. Inspect only the direct definition;
-/// in particular, no fact is carried through a freeze or another instruction.
 fn widening_no_wrap<'a>(
     cast: &Inst,
     definitions: &HashMap<&str, &'a Inst>,
@@ -511,8 +505,6 @@ fn widening_no_wrap<'a>(
     values.contains_key(variable).then_some((*op, lhs, rhs))
 }
 
-/// Split a proven signed affine index before applying the GEP element scale.
-/// The returned constant is interpreted at the binary operation's width.
 fn affine_no_wrap_index<'a>(
     index_type: &Type,
     index: &ast::Operand,
@@ -1194,7 +1186,6 @@ fn lower_intrinsic(
     Err(Error::Unsupported(format!("intrinsic {name}")))
 }
 
-/// `value` zero-extended or truncated to the integer type `ty`.
 fn resize_unsigned(context: &Context, body: &BlockHandle, value: ValueId, ty: TypeId) -> ValueId {
     resize_integer(context, body, value, ty, false)
 }

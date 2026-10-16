@@ -34,14 +34,12 @@ fn run_mask(width: u16) -> u128 {
     }
 }
 
-/// Encode-side scatter: place `value`'s runs into `word`.
 fn scatter(word: &mut u128, value: u128, runs: &[FieldRun]) {
     for run in runs {
         *word |= ((value >> run.op_lo as u32) & run_mask(run.width)) << run.word_lo as u32;
     }
 }
 
-/// Decode-side gather: rebuild an operand value from its runs in `word`.
 fn gather(word: u32, runs: &[FieldRun]) -> u64 {
     let mut value: u64 = 0;
     for run in runs {
@@ -180,8 +178,6 @@ impl<'a> Operands<'a> {
         }
     }
 
-    /// The operand named `name`: a register slot's allocated index, or the
-    /// attribute of that name.
     fn get(&mut self, name: &'static str) -> &Operand {
         if let Some(index) = self.resolved.iter().position(|(held, _)| *held == name) {
             return &self.resolved[index].1;
@@ -212,7 +208,6 @@ impl<'a> Operands<'a> {
         &self.resolved.last().expect("just pushed").1
     }
 
-    /// The operand's value as the `width`-bit pattern the encoding holds.
     fn pattern(&mut self, name: &'static str, width: u16) -> Option<u128> {
         match self.get(name) {
             Operand::Known { bits, .. } => Some(bits & run_mask(width)),
@@ -220,15 +215,11 @@ impl<'a> Operands<'a> {
         }
     }
 
-    /// Whether the operand is a fixup, whose value layout has yet to resolve.
     fn is_fixup(&mut self, name: &'static str) -> bool {
         matches!(self.get(name), Operand::Fixup(_))
     }
 }
 
-/// What a fit test says about an operand with no value. A fixup does not fit:
-/// it takes the widest immediate the instruction spells, and layout checks the
-/// resolved value against that field. Anything else is undecided.
 fn fixup_fits(operands: &mut Operands, op: &'static str) -> Truth {
     match operands.is_fixup(op) {
         true => Truth::No,
@@ -236,7 +227,6 @@ fn fixup_fits(operands: &mut Operands, op: &'static str) -> Truth {
     }
 }
 
-/// A `width`-bit pattern read as a two's-complement integer.
 fn signed(pattern: u128, width: u16) -> i128 {
     match width > 0 && width < 128 && pattern >> (width - 1) & 1 == 1 {
         true => pattern as i128 | !(run_mask(width) as i128),
@@ -245,7 +235,6 @@ fn signed(pattern: u128, width: u16) -> i128 {
 }
 
 impl Guard {
-    /// Whether `operands` select the shape this guard belongs to.
     fn holds(&self, operands: &mut Operands) -> Truth {
         match self {
             Guard::True => Truth::Yes,
@@ -368,7 +357,6 @@ pub struct EncodeSpec {
     pub width_bytes: (u8, u8),
 }
 
-/// The shape `op`'s operands select, or `None` when no guard holds.
 fn select<'a>(operands: &mut Operands, spec: &'a EncodeSpec) -> Option<&'a EncodeShape> {
     spec.shapes
         .iter()
@@ -500,10 +488,6 @@ pub struct DecodeSpec {
     pub attrs: &'static [&'static str],
 }
 
-/// The register of `class` a field holding `value` names. A field narrower
-/// than the class's indices supplies only their low bits (RVC `GPRC` is
-/// `x8..x15` through three bits); when every member shares the bits above
-/// the field, those bits complete the index, otherwise the field is the index.
 fn register_index(class: RegClassId, value: u64, runs: &[FieldRun]) -> u16 {
     let bits = runs.iter().map(|r| r.op_lo + r.width).max().unwrap_or(0);
     let low = if bits >= 16 {

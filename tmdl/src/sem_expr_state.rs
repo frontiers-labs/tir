@@ -101,10 +101,6 @@ impl Binding {
 
 type Bindings = HashMap<Binding, ast::Expr>;
 
-/// Rewrite a behavior block into SSA-like expressions. Operand names and fixed
-/// register paths are entry snapshots; an assignment updates only its named
-/// binding, so later statements see that value without corrupting a different
-/// operand that aliases the same physical register.
 fn sequence_behavior(expr: &ast::Expr, bindings: &mut Bindings) -> ast::Expr {
     match expr {
         ast::Expr::Ident(ident) => bindings

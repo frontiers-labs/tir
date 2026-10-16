@@ -68,8 +68,6 @@ impl ENode for Wild {
     }
 }
 
-/// A template that matches any tag must still find the classes holding the
-/// operator, which is what [`ENode::op_key`]'s contract buys.
 #[test]
 fn the_operator_index_finds_a_wildcard_rooted_match() {
     let mut g: Engine<Wild> = Engine::new();
@@ -93,7 +91,6 @@ fn the_operator_index_finds_a_wildcard_rooted_match() {
     assert_eq!(found[0].binding(1), Some(g.find(leaf)));
 }
 
-/// The legality hook prunes a binding the caller rejects, wherever it sits.
 #[test]
 fn the_legality_hook_prunes_a_binding() {
     let mut g = Engine::new();
@@ -124,8 +121,6 @@ fn the_legality_hook_prunes_a_binding() {
     let _ = ab;
 }
 
-/// A literal operand reads what the class is *known* to be, which under a scope
-/// is what the scope assumed of it rather than a row it holds.
 #[test]
 fn a_literal_matches_the_constant_a_scope_assumed() {
     let mut g = Engine::new();
@@ -160,7 +155,6 @@ fn a_literal_matches_the_constant_a_scope_assumed() {
         .is_empty());
 }
 
-/// A float literal reads the same column an integer one does.
 #[test]
 fn a_float_literal_matches_its_constant() {
     let mut g = Engine::new();

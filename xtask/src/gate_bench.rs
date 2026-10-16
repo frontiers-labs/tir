@@ -96,7 +96,6 @@ pub struct Results {
     pub many_functions_o2_peak_kb: Option<u64>,
 }
 
-/// The compiler to time: `fcc` as given, or a release build of this tree.
 pub(crate) fn built_fcc(sh: &Shell, root: &Path, fcc: Option<PathBuf>) -> anyhow::Result<PathBuf> {
     let fcc = match fcc {
         Some(fcc) => fcc,
@@ -110,8 +109,6 @@ pub(crate) fn built_fcc(sh: &Shell, root: &Path, fcc: Option<PathBuf>) -> anyhow
     Ok(fcc.canonicalize()?)
 }
 
-/// Every pinned case: the passing torture execute cases, then the coremark
-/// units.
 pub(crate) fn cases(_sh: &Shell, root: &Path) -> anyhow::Result<Vec<Case>> {
     let mut cases = Vec::new();
     for program in [coremark_bench::coremark(), torture_bench::torture()] {
@@ -143,7 +140,6 @@ pub(crate) fn cases(_sh: &Shell, root: &Path) -> anyhow::Result<Vec<Case>> {
     Ok(cases)
 }
 
-/// Time every case at both levels with one worker.
 pub(crate) fn measure(fcc: &Path, cases: &[Case]) -> anyhow::Result<Results> {
     let mut results = Results::default();
     let mut failed = Vec::new();
@@ -181,8 +177,6 @@ pub(crate) fn measure(fcc: &Path, cases: &[Case]) -> anyhow::Result<Results> {
     Ok(results)
 }
 
-/// Print the report, compare against `baseline` when given, and write the
-/// samples to `output` when asked.
 pub(crate) fn judge(
     results: &Results,
     baseline: Option<&Path>,
@@ -233,7 +227,6 @@ impl Case {
     }
 }
 
-/// `compiler -c` on `case` with `extra` flags, writing the object to `output`.
 pub(crate) fn compile_command(
     compiler: &Path,
     extra: &[&str],
@@ -263,18 +256,11 @@ fn time_compile(compiler: &Path, extra: &[&str], case: &Case) -> Option<f64> {
     success.then(|| started.elapsed().as_secs_f64() * 1e3)
 }
 
-/// Times fcc and reads its peak RSS from the same process. Memory reporting
-/// costs one `/proc` read per pass, which is noise against the time threshold
-/// and is paid identically by the baseline and the candidate. It is switched on
-/// through the environment because `--mem-report` is a flag of fcc's own CLI,
-/// and the bench drives the gcc-compatible one.
 fn time_fcc(fcc: &Path, level: &str, case: &Case) -> Option<(f64, u64)> {
     let (ms, peak_kb, _) = time_fcc_to(fcc, &[level], case, Path::new("/dev/null"))?;
     Some((ms, peak_kb))
 }
 
-/// [`time_fcc`] with the object written to `output`, handing back fcc's
-/// stderr too, which carries the memory report.
 pub(crate) fn time_fcc_to(
     fcc: &Path,
     flags: &[&str],
@@ -294,7 +280,6 @@ pub(crate) fn time_fcc_to(
     Some((ms, peak_kb, stderr))
 }
 
-/// The per-case peaks at `level`, by label.
 pub(crate) fn peaks_by_label(level: Level, results: &Results) -> HashMap<&str, u64> {
     results
         .samples
@@ -303,8 +288,6 @@ pub(crate) fn peaks_by_label(level: Level, results: &Results) -> HashMap<&str, u
         .collect()
 }
 
-/// A run prints one summary per pass manager it drives, and `VmHWM` only ever
-/// grows, so the largest is the process peak.
 fn parse_peak_kb(stderr: &str) -> Option<u64> {
     stderr
         .lines()
@@ -335,9 +318,6 @@ fn median_ratio(level: Level, results: &Results) -> f64 {
     }
 }
 
-/// What both runs measured for the cases they share, as
-/// `(path, baseline, current)`. A baseline that measured nothing for a case
-/// says nothing about it, so that case is dropped.
 fn shared_cases<'a, T: Copy + Default + PartialOrd>(
     baseline: &Results,
     current: &'a Results,

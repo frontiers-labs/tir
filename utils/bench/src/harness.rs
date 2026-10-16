@@ -135,7 +135,6 @@ impl Harness {
         Ok(harness)
     }
 
-    /// Untimed preparation and measured output are retained under this directory.
     pub(crate) fn bundle(&mut self) -> Result<PathBuf> {
         if let Some(directory) = &self.directory {
             return Ok(directory.clone());
@@ -167,7 +166,6 @@ impl Harness {
     pub(crate) fn listing(&self) -> bool {
         self.mode == Mode::List
     }
-    /// Programs are skipped on request and inside a function-counting child.
     pub(crate) fn skips_programs(&self) -> bool {
         self.options.skip_programs || self.mode == Mode::CountChild
     }
@@ -187,8 +185,6 @@ impl Harness {
         }
     }
 
-    /// Decide what a function benchmark does in this mode. `None` means its
-    /// routine does not run now: it was filtered out, listed, or queued for a child.
     pub(crate) fn function(&mut self, id: &str) -> Option<Measure<()>> {
         if self.failure.is_some() || !self.matches(id) {
             return None;
@@ -211,7 +207,6 @@ impl Harness {
         Ok(())
     }
 
-    /// Run `work` unless an earlier benchmark failed, and keep its failure for `finish`.
     pub(crate) fn attempt(&mut self, work: impl FnOnce(&mut Self) -> Result<()>) {
         if self.failure.is_none()
             && let Err(failure) = work(self)
@@ -220,8 +215,6 @@ impl Harness {
         }
     }
 
-    /// Interleave variants in rotated order, validating every successful execution
-    /// after measurement. Preparation must have completed before calling this.
     pub(crate) fn process_group(&mut self, cases: Vec<ProcessCase>) -> Result<()> {
         let cases: Vec<_> = cases.into_iter().filter(|c| self.matches(&c.id)).collect();
         if self.listing() {
@@ -291,8 +284,6 @@ impl Harness {
         Ok(())
     }
 
-    /// Run each queued function benchmark once in its own Cachegrind child. The
-    /// child counts only the region its `Bencher` marks.
     pub(crate) fn count_functions(&mut self) -> Result<()> {
         let functions = std::mem::take(&mut self.functions);
         if functions.is_empty() {
@@ -340,8 +331,6 @@ impl Harness {
         self.results.save(&directory)
     }
 
-    /// Check coverage, baseline compatibility and host policy before marking the
-    /// result complete. Earlier failures leave an unusable baseline with logs.
     pub(crate) fn finish(mut self) -> Result<()> {
         match self.mode {
             Mode::List => return Ok(()),

@@ -37,9 +37,6 @@ impl PlanScore {
     }
 }
 
-/// What a machine instruction costs at [`LATENCY_COST_SCALE`] times its latency
-/// plus its encoding size. `None` for an operation with no encoding of its own:
-/// one later stages still lower or place.
 fn instruction_cost(op: &OpHandle) -> Option<u64> {
     op.clone()
         .as_interface::<dyn crate::backend::MachineInstruction>()

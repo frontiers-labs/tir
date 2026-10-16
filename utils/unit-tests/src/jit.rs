@@ -9,15 +9,12 @@ extern "C" fn host_triple(x: i64) -> i64 {
     x * 3
 }
 
-/// Compile `ir` for the host, with `host_triple` available as an external
-/// symbol. The module is leaked so its mapped code outlives the test.
 fn compile(ir: &str) -> &'static Module {
     let mut jit = Jit::host().expect("host target");
     jit.define_symbol("host_triple", host_triple as *const c_void);
     Box::leak(Box::new(jit.compile(ir).expect("compile")))
 }
 
-/// Typed `extern "C"` pointer to a compiled function.
 fn get<F: Copy>(module: &Module, name: &str) -> F {
     unsafe { module.get(name) }.unwrap_or_else(|| panic!("no symbol `{name}`"))
 }

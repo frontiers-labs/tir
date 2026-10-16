@@ -55,10 +55,6 @@ pub struct Caches {
 }
 
 impl Caches {
-    /// The cache of `plan`, brought up to `host`'s version, or `None` when the
-    /// plan has no match. A plan the host can tell has none gets no cache;
-    /// `blocked` remembers the selection that told, to ask about first next
-    /// time.
     fn refreshed<C, const S: usize, H: Host + ?Sized>(
         &mut self,
         plan: &Plan,
@@ -131,8 +127,6 @@ struct Selection {
     seen: SmallVec<[(u32, usize); 2]>,
 }
 
-/// The plan ids of `rules`, folded into one word. A plan id is never reused,
-/// so two rule sets that agree here are the same plans in the same order.
 fn fingerprint(rules: &[Rule<'_>]) -> u64 {
     rules.iter().fold(rules.len() as u64, |hash, rule| {
         let id = rule.plan.id() ^ u64::from(rule.post_saturation);
@@ -189,9 +183,6 @@ impl RuleIndex {
         index
     }
 
-    /// The rules this round visits, ascending, into `visit`. A rule is
-    /// visited when a row the round before wrote holds a cell one of its row
-    /// atoms selects, or a value it reads rose.
     fn round<C, const S: usize, X: Saturate<C, S>>(
         &mut self,
         client: &X,
@@ -608,8 +599,6 @@ pub fn saturate<C: Sync, const S: usize, X: Saturate<C, S>>(
     timer.finish();
 }
 
-/// Close the epoch and drain `space`'s change log; see
-/// [`crate::Database::take_changed`].
 fn take_changed<C, const S: usize>(
     client: &mut impl Client<C, S>,
     space: SpaceId,
@@ -619,8 +608,6 @@ fn take_changed<C, const S: usize>(
     db.take_changed(space)
 }
 
-/// Fire every [`Rule::post_saturation`] rule once over `touched`, or over
-/// everything where the saturation could not name what it changed.
 fn post_saturate<C, const S: usize, X: Saturate<C, S>>(
     client: &mut X,
     caches: &mut Caches,

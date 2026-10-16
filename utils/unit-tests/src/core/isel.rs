@@ -46,15 +46,12 @@ macro_rules! marker {
     }};
 }
 
-/// The parsed module of `source`, its function's body region, and the dialect
-/// the test rules emit into registered.
 fn function(source: &str) -> (Context, ModuleOp, RegionId) {
     let (context, module, _, region) = fixtures::parse_function(source);
     context.register_dialect::<TestDialect>();
     (context, module, region)
 }
 
-/// Runs `pass` nested on the module's functions.
 fn run_pass(
     context: &Context,
     module: &ModuleOp,
@@ -84,8 +81,6 @@ fn select(context: &Context, module: &ModuleOp, rules: Vec<Rule>) {
         .expect("pass pipeline should succeed");
 }
 
-/// The op names of the selected body, in the order selection left them.
-/// Returns are left to the target's op lowerings, which these tests lack.
 fn body_names(context: &Context, region: RegionId) -> Vec<&'static str> {
     body_ops(context, region)
         .iter()
@@ -227,10 +222,6 @@ module_end
     assert_eq!(body_names(&context, region), vec!["addi"]);
 }
 
-/// A rule whose register class views its storage element at a nonzero bit
-/// offset (x86 `ah`) is only compatible with values living at that same offset:
-/// no instruction moves bits across views. Ordinary IR values live at offset 0,
-/// so such a rule may neither read them as operands nor define them.
 #[test]
 fn shifted_register_view_rule_does_not_select_for_offset_zero_values() {
     let run = |operand_offset: u32, result_offset: u32| {
@@ -304,9 +295,6 @@ module_end
     assert!(err.to_string().contains("builtin.muli has no instruction"));
 }
 
-/// A pure subexpression shared by two fused matches is *duplicated*: each
-/// add-mul instruction recomputes the mul internally, and the mul op — no
-/// longer needed as a register value — is consumed.
 #[test]
 fn fused_rule_duplicates_shared_pure_internal_nodes() {
     let (context, module, region) = function(
@@ -326,7 +314,6 @@ module_end
     assert_eq!(body_names(&context, region), vec!["addi", "addi"]);
 }
 
-/// An unused consumer does not demand its result or operands.
 #[test]
 fn unused_consumer_does_not_create_demand() {
     let (context, module, region) = function(
@@ -400,8 +387,6 @@ module_end
     assert_eq!(body_names(&context, region), vec!["addi", "muli", "addi"]);
 }
 
-/// A binary pattern constrained to a specific result type via the pattern
-/// graph's actual-type annotation (the channel a typed rule would use).
 fn typed_binary_pattern(kind: SymKind, ty: TypeId) -> SemGraph {
     let mut g = SemGraph::new();
     let lhs = symbol(&mut g, 0);
@@ -445,11 +430,6 @@ module_end
     assert_eq!(body_names(&context, region), vec!["addi"]);
 }
 
-/// Build `add(add(a,b), c)` over i32 values and select it with a fused
-/// `Add(Add(_,_),_)` rule whose *internal* node carries `inner_width` as a type
-/// constraint (plus an untyped atomic `add` fallback). Returns the lowered op
-/// names. Fusion (the `subi` marker) only happens when the inner constraint
-/// agrees with the inferred i32 type of the inner add.
 fn run_inner_typed_fusion(inner_width: Option<u32>) -> Vec<&'static str> {
     let (context, module, region) = function(
         r#"module {
@@ -651,8 +631,6 @@ module_end
     }
 }
 
-/// Select `add(a, constant)` with a cheap immediate rule bounded to a signed
-/// 12-bit field (`subi` marker) and an expensive register-form fallback.
 fn run_immediate_range(constant: i64) -> Vec<&'static str> {
     let (context, module, region) = function(&format!(
         r#"module {{
@@ -716,9 +694,6 @@ fn shift_imm_pattern(kind: SymKind) -> SemGraph {
     g
 }
 
-/// Emit the marker instruction standing for `kind` over the match's register
-/// operand. The shift amount is an immediate (`m.int_binding(1)`); operands
-/// beyond the mnemonic don't matter here, so the source register is reused.
 fn emit_marker(
     kind: SymKind,
     context: &Context,
@@ -820,10 +795,6 @@ module_end
     body_names(&context, region)
 }
 
-/// End-to-end square: `extsi(addi(a, b) : i16) : i64` lowers to `add, slli, srai`.
-/// The `add` covers the addi; saturation bridges the un-selectable sign extension
-/// into a `slli`/`srai` pair, and multi-instruction emission materializes the
-/// introduced `slli` (an e-class with no original op) before the `srai`.
 #[test]
 fn square_sign_extension_lowers_to_shift_pair() {
     let slli_rule = Rule {
@@ -861,7 +832,6 @@ fn introduced_rule_emits_its_plan_in_order() {
     assert_eq!(body_ops, vec!["addi", "subi", "shli", "shrsi"]);
 }
 
-/// At *equal* cost, the type-constrained rule must win the tie.
 #[test]
 fn equal_cost_tie_breaks_to_more_specific_rule() {
     let (context, module, region) = function(ADD_OF_TWO_ARGUMENTS);
@@ -889,9 +859,6 @@ fn equal_cost_tie_breaks_to_more_specific_rule() {
     assert_eq!(body_names(&context, region), vec!["subi"]);
 }
 
-/// A value recomputed in another block of the CFG is one class once the body
-/// is unordered: the add binds the single selected definition, and the
-/// recomputation nothing reads is swept.
 #[test]
 fn recomputation_across_blocks_binds_to_its_selected_definition() {
     // %d = a - b is used only within the entry block, so it never escapes;

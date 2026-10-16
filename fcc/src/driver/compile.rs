@@ -9,8 +9,6 @@ use crate::lexer::Token;
 use crate::preprocessor::{IncludePaths, preprocessed};
 use crate::toolchain::system_include_dirs;
 
-/// Build the predefined-macro map from `-D` arguments. Each value is lexed to a
-/// single token, mirroring how `#define NAME VALUE` is stored.
 pub(super) fn build_defines(defines: &[String]) -> HashMap<String, String> {
     defines
         .iter()
@@ -21,7 +19,6 @@ pub(super) fn build_defines(defines: &[String]) -> HashMap<String, String> {
         .collect()
 }
 
-/// Read an input into its `(display name, source text)` pair. `-` reads stdin.
 pub(super) fn read_input(input: &OsString) -> (String, String) {
     if input == "-" {
         let mut source = String::new();
@@ -102,8 +99,6 @@ pub(super) fn lower_to_ir(
     module
 }
 
-/// Run one pass over `module`, nested under every function with `jobs`
-/// running at once when given, and exit with `label` on failure.
 fn run_pass(
     context: &tir::Context,
     module: &tir::builtin::ModuleOp,
@@ -130,9 +125,6 @@ fn run_pass(
         });
 }
 
-/// Record the target's data layout and hardware description on the module, so
-/// the emitted IR carries the ABI it was compiled for instead of depending on
-/// the driver flags to be lowered correctly.
 fn describe_target(
     context: &tir::Context,
     module: &tir::builtin::ModuleOp,
@@ -164,8 +156,6 @@ pub(super) fn fcc_context() -> tir::Context {
     context
 }
 
-/// Run the backend pipeline (promotion, instruction selection, register
-/// allocation, finalization) and render assembly or an ELF object.
 pub(super) fn emit_machine_code(
     opts: &DriverOptions,
     name: &str,
@@ -298,8 +288,6 @@ fn report_phases(
     }
 }
 
-/// Preprocess `source`, reporting any `#error`/`#warning` diagnostics. Exits if
-/// any of them is an error.
 fn add_default_defines(
     defines: &mut HashMap<String, String>,
     options: LangOptions,
@@ -431,7 +419,6 @@ pub(super) fn parse_source(
     })
 }
 
-/// [`preprocess`] driven by the options the driver was invoked with.
 pub(super) fn preprocess_opts(
     opts: &DriverOptions,
     name: &str,
@@ -448,7 +435,6 @@ pub(super) fn preprocess_opts(
     )
 }
 
-/// [`parse_source`] driven by the options the driver was invoked with.
 pub(super) fn parse_source_opts(opts: &DriverOptions, name: &str, source: &str) -> crate::ast::Ast {
     parse_source(
         name,
@@ -467,7 +453,6 @@ fn add_instcombine(pm: &mut tir::PassManager) {
     pm.add_pass(tir::passes::InstCombineNodesPass::trusting());
 }
 
-/// The mid-end pipeline the driver options ask for.
 pub(super) fn mid_end(opts: &DriverOptions) -> tir::PassManager {
     let mut pm = tir::PassManager::new();
     if let Some(spec) = &opts.pipeline {

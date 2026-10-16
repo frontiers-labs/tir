@@ -1,20 +1,5 @@
 use crate::{Context, Error, OpHandle, OpId, RegionId};
 
-/// Checks the fork/join discipline resource state follows.
-///
-/// Memory permits unordered reads because each leaves memory as it found it, but
-/// at most one unordered operation may change it. Other resources, including the
-/// floating-point environment, describe one executed continuation and do not
-/// permit unordered reads. Mutually exclusive branch arms may consume the same
-/// state. An operation naming a state twice consumes it once, except for
-/// exports through region results or return and yield terminators.
-///
-/// Theta consumers are exclusive when their demand paths are disjoint. This
-/// check does not prove that every access is in the cone of the state its next
-/// write takes; insertion-order shuffling and `--shuffle-seed` check that.
-///
-/// State crossing a region boundary does so as a carried argument, which is a
-/// fresh value, so a single walk of the whole tree suffices.
 pub(crate) fn verify_state_forks(context: &Context, op_id: OpId) -> Result<(), Error> {
     let mut consumers: tir_adt::IndexMap<crate::ValueId, Vec<(StateConsumer, bool)>> =
         tir_adt::IndexMap::new();

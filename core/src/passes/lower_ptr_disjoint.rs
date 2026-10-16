@@ -55,8 +55,6 @@ impl Pass for LowerPtrDisjointPass {
     }
 }
 
-/// `[start, start + size)` ends at or before `other` starts, addresses being
-/// unsigned.
 fn precedes(
     context: &Context,
     before: &OperationRef,
@@ -76,7 +74,6 @@ fn precedes(
     Ok(compare.result())
 }
 
-/// Every `ptr.disjoint` under `op`, outermost region first.
 fn facts(context: &Context, op: &OperationRef) -> Vec<OperationRef> {
     let mut found = Vec::new();
     for region in crate::passes::regions_under(context, op.op().id) {

@@ -1250,10 +1250,6 @@ impl Finish<'_> {
         Ok(())
     }
 
-    /// Literal definitions do not stop continuation tracing. Place a used
-    /// literal down a single-entry path while only one successor needs it.
-    /// Stop at a join, including every loop header, to avoid rematerializing
-    /// an invariant on each iteration.
     fn place_literals(&mut self, ssa: &Ssa, root: Node) -> Result<(), PassError> {
         let mut local_reads = Vec::new();
         for (index, fragment) in self.fragments.iter().enumerate() {
@@ -1615,8 +1611,6 @@ impl Finish<'_> {
         Ok(())
     }
 
-    /// Retire control aliases replaced by routing, and their dead literals.
-    /// Other computations remain: an unused demanded load can still trap.
     fn discard_unused_controls(&self) -> Result<(), PassError> {
         let mut candidates = self.literals.clone();
         for alias in &self.recovery.control_aliases {

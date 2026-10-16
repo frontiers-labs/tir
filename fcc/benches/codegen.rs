@@ -78,8 +78,6 @@ int main ()
 }
 "#;
 
-/// Build a translation unit with `funcs` functions, each declaring `stmts`
-/// locals over progressively deeper expressions before returning one.
 fn gen_source(funcs: usize, stmts: usize) -> String {
     let mut src = String::new();
     for f in 0..funcs {
@@ -93,8 +91,6 @@ fn gen_source(funcs: usize, stmts: usize) -> String {
     src
 }
 
-/// A fully-parenthesized balanced expression of the given depth (`2^depth`
-/// leaves), rotating through the parameters and operators.
 fn build_expr(depth: usize, n: &mut usize) -> String {
     if depth == 0 {
         let v = ["a", "b", "c"][*n % 3];
@@ -107,9 +103,6 @@ fn build_expr(depth: usize, n: &mut usize) -> String {
     format!("({lhs} {op} {rhs})")
 }
 
-/// Expression-dominated translation unit: a handful of functions, each a single
-/// `return` over one huge arithmetic tree, so codegen time is almost entirely
-/// expression lowering.
 fn gen_expr_heavy(funcs: usize, depth: usize) -> String {
     let mut src = String::new();
     for f in 0..funcs {

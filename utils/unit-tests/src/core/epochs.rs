@@ -9,7 +9,6 @@ use tir::{
 
 use super::fixtures;
 
-/// `module { func demo() -> i32 {} }`, committed.
 fn committed_function(context: &Context) -> (OpId, BlockHandle) {
     let module = fixtures::parse_in(
         context,
@@ -24,7 +23,6 @@ fn committed_function(context: &Context) -> (OpId, BlockHandle) {
     (func, body)
 }
 
-/// A committed body holding `%c = 1`, `%d = 2` and `%add = addi %c, %c`.
 fn add_fixture(context: &Context) -> (ValueId, ValueId, OpId) {
     let (_, body) = committed_function(context);
     let i32_ty = IntegerType::new(context, 32);

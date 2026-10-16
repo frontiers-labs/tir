@@ -471,15 +471,6 @@ impl Db {
 
     // Minting.
 
-    /// The chunk of `space` the next row goes to, if the target partition's
-    /// newest chunk may still take it.
-    ///
-    /// Ids ascend with creation inside a partition, and against the module
-    /// partition: a function's chunk closes once the module mints a row,
-    /// and the module's once anything does. A function's values are then
-    /// ordered by age among themselves and against every module-level value
-    /// they can be compared with. A task keeps to the chunks of its lane,
-    /// unless its partition is its alone.
     fn open_chunk(&self, space: usize, full: impl Fn(u32) -> bool) -> Option<u32> {
         let target = self.mint.target;
         let part = self.parts.get(target as usize)?;
@@ -495,7 +486,6 @@ impl Db {
         (part.seen[space] == current && own).then_some(index)
     }
 
-    /// Count a row minted into `index`, the target partition's newest chunk.
     fn minted(&mut self, space: usize, index: u32) {
         let target = self.mint.target;
         self.mint.minted[space] = self.mint.minted[space].wrapping_add(1);
@@ -511,8 +501,6 @@ impl Db {
         part.seen[space] = seen;
     }
 
-    /// The index of a fresh chunk of `space`, past every chunk this context
-    /// has minted into.
     fn fresh(&mut self, space: usize, chunks: u32) -> u32 {
         let index = match &mut self.mint.lane {
             None => chunks,
@@ -608,8 +596,6 @@ impl Db {
         BlockId::new(id)
     }
 
-    /// Open a partition and mint into it; answers the partition minted into
-    /// before. A task of a parallel epoch opens none: its lane is its own.
     pub(crate) fn enter_partition(&mut self) -> u32 {
         let previous = self.mint.target;
         if self.mint.lane.is_none() {
@@ -620,28 +606,20 @@ impl Db {
         previous
     }
 
-    /// Mint into `part` from here on.
     pub(crate) fn mint_into(&mut self, part: u32) {
         self.mint.target = part;
     }
 
-    /// Mint into the partition owning `op` from here on, when it has one of
-    /// its own; answers the partition minted into before. A pass walking a
-    /// module puts what it builds for a function into that function's chunks.
     pub(crate) fn mint_under(&mut self, op: OpId) -> Option<u32> {
         let part = self.partition_of(op);
         (part != 0 && part != self.mint.target && self.mint.lane.is_none())
             .then(|| std::mem::replace(&mut self.mint.target, part))
     }
 
-    /// The partition owning `op`'s row.
     pub(crate) fn partition_of(&self, op: OpId) -> u32 {
         self.ops.chunk(chunk_of(op.raw())).owner
     }
 
-    /// The ops named one of `names` under `root`, by id: a scan of the name
-    /// column of `root`'s partition and the module's, where whatever is under
-    /// an op of a partition of its own sits.
     pub(crate) fn ops_named(&self, root: OpId, names: &[OpNameId]) -> Vec<OpId> {
         let part = self.partition_of(root);
         let parts = if part == 0 { &[0][..] } else { &[part, 0][..] };
@@ -719,8 +697,6 @@ impl Db {
         (self.blocks.chunk_mut(index), row)
     }
 
-    /// Record that a row of partition `part` names `value`, so a use-list
-    /// read of it looks in that partition too.
     fn note_value(&mut self, value: u32, part: u32) {
         let index = chunk_of(value);
         if self
@@ -783,7 +759,6 @@ impl Db {
         self.regions.is_live(id.raw())
     }
 
-    /// The chunk and row of a live op.
     #[inline]
     fn op(&self, id: OpId) -> Option<(&Chunk<4, 3, Attrs>, usize)> {
         let chunk = self.ops.find(chunk_of(id.raw()))?;
@@ -822,14 +797,11 @@ impl Db {
         Some(chunk.cell(op::LOCATION, row)).filter(|&location| location != NONE)
     }
 
-    /// Locate the ops added from now on at `location`; returns the location
-    /// they had.
     pub(crate) fn set_origin(&mut self, location: Option<u32>) -> Option<u32> {
         let previous = std::mem::replace(&mut self.origin, location.unwrap_or(NONE));
         Some(previous).filter(|&previous| previous != NONE)
     }
 
-    /// The stamp of `id`'s row: it moves whenever the op is written.
     pub(crate) fn op_stamp(&self, id: OpId) -> u32 {
         let (chunk, row) = self.op(id).expect("live operation");
         chunk.stamp(row)
@@ -928,8 +900,6 @@ impl Db {
         }
     }
 
-    /// The arguments `ids` as their holder declared them, typed by `types`.
-    /// No operation defines an argument.
     fn values_of(ids: &[u32], types: &[u32]) -> Vec<Value> {
         ids.iter()
             .zip(types)
@@ -968,7 +938,6 @@ impl Db {
         chunk.cell(region::NODES, row) != 0
     }
 
-    /// The ports an unordered region owns itself; none for an ordered one.
     pub(crate) fn region_ports(&self, id: RegionId) -> Vec<Value> {
         let (chunk, row) = self.region(id);
         Self::values_of(
@@ -987,7 +956,6 @@ impl Db {
             .collect()
     }
 
-    /// The op enclosing `op`, walking out through whatever holds it.
     pub(crate) fn enclosing_op_of(&self, op: OpId) -> Option<OpId> {
         match self.op_parent(op)? {
             Parent::Block(block) => self.enclosing_op(block),
@@ -1004,10 +972,6 @@ impl Db {
             .then(|| self.region_parent(region))?
     }
 
-    /// A counter that moves with every edit under `op`: the edits to its
-    /// partition and the module's, or every edit for an op of the module's
-    /// own partition. Everything under an op of a partition of its own sits
-    /// in that partition or in the module's.
     pub(crate) fn version(&self, op: OpId) -> u32 {
         let Some(chunk) = self.ops.find(chunk_of(op.raw())) else {
             return 0;
@@ -1034,9 +998,6 @@ impl Db {
         part.edits = part.edits.wrapping_add(1);
     }
 
-    /// Whether `pass` already ran on `op` as it stands and edited nothing.
-    /// Only an op with a partition of its own is tracked: its version counts
-    /// the edits under it and no other function's.
     pub(crate) fn is_settled(&self, pass: &'static str, op: OpId) -> bool {
         let (part, version) = (self.partition_of(op), self.version(op));
         part != 0
@@ -1046,7 +1007,6 @@ impl Db {
                 .is_some_and(|part| part.settled.contains(&(pass, op.raw(), version)))
     }
 
-    /// Record that `pass` ran on `op` as it stands and edited nothing.
     pub(crate) fn settle(&mut self, pass: &'static str, op: OpId) {
         let (part, version) = (self.partition_of(op), self.version(op));
         if part == 0 {
@@ -1062,9 +1022,6 @@ impl Db {
         }
     }
 
-    /// Count an edit of `op`. An op the module's partition minted counts
-    /// for the partition holding it: a module pass builds an op and puts it
-    /// into a function, which is the one function that changed.
     fn bump_op(&mut self, id: OpId) {
         let Some((chunk, row)) = self.op(id) else {
             return;
@@ -1103,8 +1060,6 @@ impl Db {
 
     // Groupings.
 
-    /// The partitions whose rows may name an id of a chunk owned by `owner`
-    /// with `foreign` readers.
     fn readers(owner: u32, foreign: &[u32]) -> smallvec::SmallVec<[u32; 4]> {
         std::iter::once(owner)
             .chain(foreign.iter().copied())
@@ -1174,8 +1129,6 @@ impl Db {
         self.tick += 1;
     }
 
-    /// Every operand slot naming `value`: ascending by op, with the ops
-    /// written since their partition's base was built last.
     pub(crate) fn uses(&mut self, value: ValueId) -> Vec<Use> {
         let Some(chunk) = self.values.find(chunk_of(value.number())) else {
             return Vec::new();
@@ -1220,7 +1173,6 @@ impl Db {
         self.ops.chunk(chunk_of(op)).cell(op::POSITION, row_of(op))
     }
 
-    /// The ops `holder` holds, in position order.
     fn held(&mut self, holder: Parent) -> Vec<u32> {
         let key = holder_key(holder);
         let (owner, foreign) = match holder {
@@ -1263,7 +1215,6 @@ impl Db {
         held.into_iter().map(OpId::new).collect()
     }
 
-    /// The ops an unordered region holds, in the order they joined it.
     pub(crate) fn region_ops(&mut self, region: RegionId) -> Vec<OpId> {
         let held = self.held(Parent::Region(region));
         held.into_iter().map(OpId::new).collect()
@@ -1294,14 +1245,11 @@ impl Db {
         found.into_iter().map(BlockId::new).collect()
     }
 
-    /// The regions `op` owns, or nothing for an erased op.
     fn regions_raw(&self, op: u32) -> &[u32] {
         self.op(OpId::new(op))
             .map_or(&[], |(chunk, row)| chunk.seg(op::REGION).of(row))
     }
 
-    /// Every op `region` holds: its own for an unordered region, its blocks'
-    /// in block order for an ordered one.
     fn region_op_ids(&mut self, region: RegionId, out: &mut Vec<u32>) {
         if self.region_is_nodes(region) {
             let held = self.held(Parent::Region(region));
@@ -1314,8 +1262,6 @@ impl Db {
         }
     }
 
-    /// Every op under `roots`, the roots included, each ahead of the ops
-    /// its regions hold.
     fn subtree(&mut self, mut found: Vec<u32>) -> Vec<u32> {
         let mut index = 0;
         while index < found.len() {
@@ -1335,8 +1281,6 @@ impl Db {
         found.into_iter().map(OpId::new).collect()
     }
 
-    /// `region` and every region nested in it, each ahead of the regions
-    /// inside it.
     pub(crate) fn nested_regions(&mut self, region: RegionId) -> Vec<RegionId> {
         let mut ops = Vec::new();
         self.region_op_ids(region, &mut ops);
@@ -1452,7 +1396,6 @@ impl Db {
         true
     }
 
-    /// Replace `remove` operands of `id` from `at` with `insert`.
     pub(crate) fn splice_operands(
         &mut self,
         id: OpId,
@@ -1474,8 +1417,6 @@ impl Db {
         true
     }
 
-    /// Replace `remove` results of `id` from `at` with `insert`, which `id`
-    /// defines from here on.
     pub(crate) fn splice_results(
         &mut self,
         id: OpId,
@@ -1526,8 +1467,6 @@ impl Db {
         Value::new(id, ty, def)
     }
 
-    /// Point `op`'s segment sizes at the operand list an edit left: `edit`
-    /// rewrites the sizes of an op that tracks them.
     pub(crate) fn edit_segment_sizes(
         &mut self,
         id: OpId,
@@ -1549,8 +1488,6 @@ impl Db {
         }
     }
 
-    /// Every slot naming `old` names `new` from here on. Answers the ops
-    /// whose operands changed.
     pub(crate) fn replace_value_uses(&mut self, old: ValueId, new: ValueId) -> Vec<OpId> {
         self.retargets.push((old.number(), new.number()));
         let uses = self.uses(old);
@@ -1580,7 +1517,6 @@ impl Db {
         id
     }
 
-    /// Append `value` to `block`'s arguments, which it is one of from here on.
     pub(crate) fn push_block_argument(&mut self, block: BlockId, value: ValueId) -> bool {
         if !self.block_live(block) {
             return false;
@@ -1599,8 +1535,6 @@ impl Db {
         true
     }
 
-    /// Drop the `index`th argument of `block`, returning the value it named,
-    /// which is left with no site.
     pub(crate) fn remove_block_argument(
         &mut self,
         block: BlockId,
@@ -1615,8 +1549,6 @@ impl Db {
         Some(argument)
     }
 
-    /// Give the `index`th argument of `block` the type `ty`, in the block's
-    /// declaration and on the value.
     pub(crate) fn retype_block_argument(&mut self, block: BlockId, index: usize, ty: TypeId) {
         let Some(argument) = self.block_argument(block, index) else {
             return;
@@ -1642,7 +1574,6 @@ impl Db {
         chunk.extra.set(row, attributes);
     }
 
-    /// Put `op` into `holder` at `position`.
     fn hold(&mut self, id: OpId, holder: Parent, position: u32) {
         assert!(self.op_live(id), "live op");
         // An op joining from nowhere changed nothing where it was.
@@ -1659,7 +1590,6 @@ impl Db {
         self.bump_op(id);
     }
 
-    /// Take `op` out of whatever holds it.
     fn release(&mut self, id: OpId) {
         if self.op_live(id) {
             self.bump_op(id);
@@ -1670,7 +1600,6 @@ impl Db {
         }
     }
 
-    /// The position after everything `holder` holds, which is taken.
     fn next_position(&mut self, holder: Parent) -> u32 {
         let next = match holder {
             Parent::Block(block) => {
@@ -1695,7 +1624,6 @@ impl Db {
         self.next_position(holder)
     }
 
-    /// Give `holder` exactly `ops`, in that order.
     pub(crate) fn set_held(&mut self, holder: Parent, ops: &[OpId]) {
         for (index, op) in ops.iter().enumerate() {
             self.hold(*op, holder, (index as u32 + 1) * STRIDE);
@@ -1713,13 +1641,11 @@ impl Db {
         }
     }
 
-    /// Put `op` after everything `holder` holds.
     pub(crate) fn append_held(&mut self, holder: Parent, id: OpId) {
         let position = self.next_position(holder);
         self.hold(id, holder, position);
     }
 
-    /// Put `op` before the `index`th op `block` holds.
     pub(crate) fn insert_held(&mut self, block: BlockId, index: usize, id: OpId) {
         let holder = Parent::Block(block);
         let held = self.held(holder);
@@ -1736,7 +1662,6 @@ impl Db {
         self.hold(id, holder, low + (self.position(held[index]) - low) / 2);
     }
 
-    /// Put `new` where `block` holds `old`, which leaves it.
     pub(crate) fn replace_held(&mut self, block: BlockId, old: OpId, new: OpId) -> bool {
         if self.op_parent(old) != Some(Parent::Block(block)) {
             return false;
@@ -1748,7 +1673,6 @@ impl Db {
         true
     }
 
-    /// Take `op` out of `holder`, if that is what holds it.
     pub(crate) fn remove_held(&mut self, holder: Parent, id: OpId) -> bool {
         if self.op_parent(id) != Some(holder) {
             return false;
@@ -1757,7 +1681,6 @@ impl Db {
         true
     }
 
-    /// Make an empty ordered region unordered, with `ports` its own.
     pub(crate) fn make_nodes(&mut self, id: RegionId, ports: &[Value], results: &[ValueId]) {
         assert!(
             !self.region_is_nodes(id) && self.region_blocks(id).is_empty(),
@@ -1814,7 +1737,6 @@ impl Db {
         self.tick += 1;
     }
 
-    /// Every region result slot naming `value`, as `(region, index)`.
     pub(crate) fn result_uses(&mut self, value: ValueId) -> Vec<(RegionId, usize)> {
         let Some(chunk) = self.values.find(chunk_of(value.number())) else {
             return Vec::new();
@@ -1838,7 +1760,6 @@ impl Db {
             .collect()
     }
 
-    /// Whether `region` is `root` or nested in it, at any depth.
     pub(crate) fn region_under(&self, region: RegionId, root: RegionId) -> bool {
         let mut current = Some(region);
         while let Some(here) = current {
@@ -1885,8 +1806,6 @@ impl Db {
         }
     }
 
-    /// Give `region` the ports, operations and results of the unordered
-    /// `staged`, which is gone afterwards.
     pub(crate) fn take_nodes(&mut self, id: RegionId, staged: RegionId) {
         assert!(
             self.region_is_nodes(staged),
@@ -1902,7 +1821,6 @@ impl Db {
         self.kill_region(staged);
     }
 
-    /// Make the unordered `region` ordered, holding `blocks`.
     pub(crate) fn make_blocks(&mut self, id: RegionId, blocks: &[BlockId]) {
         self.bump_region(id);
         assert!(
@@ -1937,7 +1855,6 @@ impl Db {
         }
     }
 
-    /// Give `region` exactly `blocks`, in that order.
     pub(crate) fn set_region_blocks(&mut self, id: RegionId, blocks: &[BlockId]) {
         for (index, block) in blocks.iter().enumerate() {
             self.place_block(*block, Some(id), (index as u32 + 1) * STRIDE);
@@ -2006,8 +1923,6 @@ impl Db {
         }
     }
 
-    /// `op` itself changed. The dirtied subtree is its owner's, so
-    /// verification also sees the siblings the edit may have broken.
     pub(crate) fn edit_op(&mut self, op: OpId) {
         let dirtied = self.enclosing_op_of(op).unwrap_or(op);
         self.mark_dirty(dirtied);
@@ -2035,8 +1950,6 @@ impl Db {
 
     // Epochs.
 
-    /// Close the epoch: every row written so far is committed, and the
-    /// chunks it wrote give back the cells of rows it erased.
     pub(crate) fn commit(&mut self) {
         for index in std::mem::take(&mut self.touched[OPS]) {
             if self.ops.chunk(index).wants_compaction() {
@@ -2052,9 +1965,6 @@ impl Db {
         self.tick += 1;
     }
 
-    /// This database as a task of a parallel epoch sees it: it mints into
-    /// partition `target` through lane `index` of `count`. `exclusive` says
-    /// no other task of the epoch has that target.
     pub(crate) fn lane(&self, index: u32, count: u32, target: u32, exclusive: bool) -> Db {
         let mut db = self.clone();
         db.retargets.clear();
@@ -2075,15 +1985,10 @@ impl Db {
         db
     }
 
-    /// Whether anything was written since the last commit.
     pub(crate) fn is_clean(&self) -> bool {
         self.touched.iter().all(Vec::is_empty)
     }
 
-    /// Apply `batches`, each a task's database over this one as committed, in
-    /// the order given. A chunk one batch wrote is taken whole; a chunk
-    /// several wrote is merged row by row, and a row two of them wrote is
-    /// refused, naming it, before anything changes.
     pub(crate) fn merge(&mut self, batches: Vec<Db>) -> Result<(), String> {
         assert!(self.is_clean(), "batches commit over a committed base");
         let committed = self.committed;
@@ -2226,7 +2131,6 @@ impl Db {
         Ok(())
     }
 
-    /// What each value replaced since the last commit stands for now.
     fn retarget_map(&self) -> HashMap<u32, u32> {
         let mut map: HashMap<u32, u32> = HashMap::new();
         for &(old, new) in &self.retargets {
@@ -2303,9 +2207,6 @@ type Unedited<'a, const P: usize, const S: usize, X> =
 
 type Merged<const P: usize, const S: usize, X> = Vec<(u32, Arc<Chunk<P, S, X>>, Writers)>;
 
-/// The chunks of one space `batches` wrote, as a commit leaves them.
-/// `unedited` says a batch's copy of a row differs from the base only by that
-/// batch's own use replacements, which leaves the row to whoever else wrote it.
 fn merge_space<const P: usize, const S: usize, X: Payload>(
     base: &Space<P, S, X>,
     batches: &[Db],
@@ -2371,8 +2272,6 @@ fn merge_space<const P: usize, const S: usize, X: Payload>(
     Ok(merged)
 }
 
-/// Whether `theirs` holds `row` as `base` does but for the operands `map`
-/// replaced.
 fn only_retargeted(
     map: &HashMap<u32, u32>,
     base: &Chunk<4, 3, Attrs>,
@@ -2398,9 +2297,6 @@ fn only_retargeted(
             .all(|(old, new)| map.get(old).unwrap_or(old) == new)
 }
 
-/// Replay every batch's use replacements over the rows of `chunk` another
-/// batch wrote: an op one task made or edited may name a value another task
-/// replaced.
 fn retarget_rows(
     chunk: &mut Chunk<4, 3, Attrs>,
     writers: &Writers,

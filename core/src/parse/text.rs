@@ -75,7 +75,6 @@ impl<'src> Parser<'src> {
         }
     }
 
-    /// Bind `#name` to an attribute value for the rest of this parse.
     pub(crate) fn define_alias(&mut self, name: &str, value: AttributeValue) {
         self.aliases.insert(name.to_string(), value);
     }
@@ -103,8 +102,6 @@ impl<'src> Parser<'src> {
         self.placeholder(context, name)
     }
 
-    /// Bar a name from naming anything defined later: a detached parse resolves
-    /// unbound numeric names to the ids the caller already owns.
     pub(crate) fn forbid_forward_references(&mut self) {
         self.forward_references = false;
     }
@@ -117,9 +114,6 @@ impl<'src> Parser<'src> {
         placeholder
     }
 
-    /// Every placeholder this parse created, paired with the value its name
-    /// names. A name never bound falls back to its literal id when it is purely
-    /// numeric, so single-op parses still wire operands to existing values.
     pub(crate) fn forward_bindings(&mut self) -> Result<Vec<(ValueId, ValueId)>, crate::Error> {
         std::mem::take(&mut self.forward)
             .into_iter()
@@ -306,9 +300,6 @@ impl<'src> Parser<'src> {
         Some(AttributeValue::Wide(value.limbs().into()))
     }
 
-    /// A register-valued attribute: `%3` (a value the op names but does not
-    /// read), `%3:GPR[5]` (an assignment entry) or `GPR[5]` (a physical
-    /// register the op names directly).
     fn parse_register_attribute(
         &mut self,
         context: &crate::Context,
@@ -349,7 +340,6 @@ impl<'src> Parser<'src> {
         }
     }
 
-    /// `GPR[5]`: a register class name and an encoding index.
     fn parse_physical_register(
         &mut self,
         context: &crate::Context,

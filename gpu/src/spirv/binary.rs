@@ -203,9 +203,6 @@ impl<'a> Writer<'a> {
         Ok(())
     }
 
-    /// A function with an unordered body is written from a destructured copy:
-    /// the copy's blocks carry the structure the copy was made from, which is
-    /// what the merge instructions state.
     fn write_function(
         &mut self,
         func: &FuncOp,

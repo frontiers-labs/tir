@@ -78,8 +78,6 @@ pub fn back(context: &Context, state: ValueId) -> Step {
     Step::Root
 }
 
-/// The binding index at which `list`, one of the lists a loop's or a gate's
-/// binding ranges over, names `value`.
 fn binding_index(
     op: &OpHandle,
     list: &[ValueId],
@@ -90,10 +88,6 @@ fn binding_index(
     list.get(range)?.iter().position(|&item| item == value)
 }
 
-/// The state one chain stood at before the effect whose result `split` names
-/// again: the effect took the merge of the chains it crosses, in the order the
-/// split hands them back, so chain `state` came in on the merge's operand at
-/// the same index.
 fn split_source(context: &Context, split: &OpHandle, state: ValueId) -> Option<ValueId> {
     let index = split.state_results().iter().position(|&r| r == state)?;
     let changed = *split.state_operands().first()?;
@@ -111,7 +105,6 @@ fn split_source(context: &Context, split: &OpHandle, state: ValueId) -> Option<V
         .flatten()
 }
 
-/// The value a region port or a block argument stands for outside the region.
 pub(crate) fn port_incoming(context: &Context, argument: ValueId) -> Option<ValueId> {
     if let Some(region) = context.region_of_port(argument) {
         let handle = context.get_region(region);

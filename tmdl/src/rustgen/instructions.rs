@@ -1,10 +1,7 @@
-/// The `static INFO_*` holding one instruction's [`tir::backend::InstrInfo`],
-/// named after its TMDL declaration (unique by construction, unlike a mnemonic).
 fn info_ident(inst_name: &str) -> proc_macro2::Ident {
     format_ident!("INFO_{}", inst_name.to_uppercase())
 }
 
-/// A parse step matching one punctuation token of an instruction's syntax.
 fn asm_symbol_step(symbol: &str) -> proc_macro2::TokenStream {
     let symbol_ident = format_ident!("{}", symbol);
     quote! { ParseStep::Symbol(AsmSymbol::#symbol_ident) }

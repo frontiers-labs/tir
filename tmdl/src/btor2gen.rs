@@ -502,12 +502,6 @@ impl sem_expr_state::BehaviorEmitter for Checker<'_> {
 // Decode: reconstruct operands and the match guard from the instruction word
 // ---------------------------------------------------------------------------
 
-/// Reconstruct one operand from its word pieces, zero-filling gaps, then fit to
-/// `target_width`. When the encoding field is wider than the operand (e.g. the
-/// RV32 shift-immediate `shamt` occupies a 6-bit field but is 5 bits), the
-/// spare high bits are reserved-zero in the architecture; the returned guard
-/// (1-bit, true when they are zero) constrains decode to reject the otherwise
-/// illegal encodings the hardware rejects.
 fn decode_operand(
     b: &mut Btor2,
     insn: Bv,

@@ -105,8 +105,6 @@ pub(super) enum Level {
     TileInner(usize),
 }
 
-/// The loops a candidate names, outermost first: everything above the tiled band
-/// as it was, then the band's tile loops, then everything below it.
 pub(super) fn levels(candidate: &Candidate) -> Vec<Level> {
     let depth = candidate.permutation.len();
     let (first, last) = candidate.band().unwrap_or((depth, depth));
@@ -127,8 +125,6 @@ struct Constraints {
     undecided: bool,
 }
 
-/// Read the pairs. `Conditional` is not this pass's input — a versioned nest's
-/// then-copy has no such pair — so it refuses here like `Unknown` does.
 fn constraints(view: &AffineView) -> Constraints {
     let mut vectors = Vec::new();
     let mut undecided = view.opaque
@@ -147,9 +143,6 @@ fn constraints(view: &AffineView) -> Constraints {
     Constraints { vectors, undecided }
 }
 
-/// Every lexicographically positive sign vector a distance vector stands for.
-/// The zero vector orders nothing, and a negative one is the same dependence
-/// read backwards, so neither is kept.
 fn expand(components: &[Component]) -> Vec<Vec<i8>> {
     let mut all = vec![Vec::new()];
     for component in components {
@@ -186,8 +179,6 @@ fn lexicographically_positive(vector: &[i8]) -> bool {
 }
 
 impl Constraints {
-    /// Whether a candidate keeps every dependence pointing forwards, and tiles
-    /// only a band no dependence runs backwards inside.
     fn admits(&self, candidate: &Candidate) -> bool {
         if self.undecided {
             return candidate.is_identity();
@@ -302,11 +293,6 @@ impl Locality {
             .collect()
     }
 
-    /// Distinct lines the accesses touch over one run of `walks`: per access,
-    /// the product of what each loop contributes — nothing where the access does
-    /// not move, one line per iteration where it moves by a line or more, and
-    /// the fraction of a line it covers otherwise. That is exact for the
-    /// row-major subscripts C spells.
     fn lines(&self, walks: &[Walk]) -> i128 {
         self.strides
             .iter()
@@ -333,8 +319,6 @@ impl Locality {
     }
 }
 
-/// Every candidate the nest admits, in a deterministic order: permutations
-/// lexicographically, and tilings lexicographically inside each.
 fn candidates(view: &AffineView, constraints: &Constraints) -> Vec<Candidate> {
     let depth = view.depth();
     let tilings: Vec<Vec<usize>> = if depth <= MAX_TILED_DEPTH {
@@ -354,9 +338,6 @@ fn candidates(view: &AffineView, constraints: &Constraints) -> Vec<Candidate> {
         .collect()
 }
 
-/// A tiled dimension the tiles do not cover whole leaves a remainder, and the
-/// remainder is built by strip-mining that dimension's loop once the nest
-/// stands — which is one loop, so only a lone tiled dimension may have one.
 fn remainder_admitted(view: &AffineView, candidate: &Candidate) -> bool {
     let remainders = (0..view.depth())
         .filter(|&d| candidate.tiles[d] > 1 && !divides_evenly(view, d, candidate.tiles[d]))
@@ -364,15 +345,12 @@ fn remainder_admitted(view: &AffineView, candidate: &Candidate) -> bool {
     remainders == 0 || candidate.sole_tiled().is_some()
 }
 
-/// Whether dimension `d` runs a whole number of tiles.
 pub(super) fn divides_evenly(view: &AffineView, dimension: usize, tile: usize) -> bool {
     view.loops[dimension]
         .trip
         .is_some_and(|trip| trip % tile as i128 == 0)
 }
 
-/// Tiles worth trying: a size a dimension does not even reach is the whole loop
-/// wrapped in one that runs once, which is overhead and no reuse.
 fn tilings(view: &AffineView, depth: usize) -> Vec<Vec<usize>> {
     let mut all = vec![Vec::new()];
     for dimension in 0..depth {
@@ -414,8 +392,6 @@ fn permutations(depth: usize) -> Vec<Vec<usize>> {
     all
 }
 
-/// Up to `count` schedules of least modelled cost, cheapest first, or the
-/// identity alone where the arranger cannot decide.
 pub(super) fn schedule(view: &AffineView, line: i64, count: usize) -> Vec<Candidate> {
     let constraints = constraints(view);
     let locality = locality(view, line);
@@ -445,8 +421,6 @@ pub(super) fn schedule(view: &AffineView, line: i64, count: usize) -> Vec<Candid
         .collect()
 }
 
-/// What the model charges a nest as it stands: the cost of running it in
-/// the order it is written. What a rebuilt nest is scored by.
 pub(super) fn standing_cost(view: &AffineView, line: i64) -> i64 {
     locality(view, line).cost(&Candidate::identity(view.depth()))
 }

@@ -13,7 +13,6 @@ pub(crate) struct Dominance {
     seen: Vec<bool>,
 }
 
-/// Immediate dominators in reverse postorder keep storage linear in the CFG.
 pub(super) fn dominance(
     blocks: &[BlockId],
     successors: &HashMap<BlockId, Vec<BlockId>>,
@@ -84,15 +83,10 @@ pub(super) fn dominance(
 }
 
 impl Dominance {
-    /// The immediate dominator of `block`; none for the entry and the
-    /// unreachable blocks.
     pub(super) fn idom(&self, block: usize) -> Option<usize> {
         self.idom[block].filter(|&parent| parent != block)
     }
 
-    /// The blocks in a pre-order walk of the dominator tree, children in
-    /// reverse postorder, then the unreachable ones in layout order: a block
-    /// comes after every block dominating it.
     pub(super) fn preorder(&self) -> Vec<usize> {
         let mut children = vec![Vec::new(); self.idom.len()];
         for &block in self.order.iter().skip(1) {
@@ -129,7 +123,6 @@ impl Loops {
         self.innermost[block] == Some(block)
     }
 
-    /// The headers of the loops holding `block`, innermost first.
     pub(super) fn headers(&self, block: usize) -> impl Iterator<Item = usize> + '_ {
         std::iter::successors(self.innermost[block], |&header| self.enclosing[header])
     }
@@ -140,8 +133,6 @@ impl Loops {
 }
 
 impl Dominance {
-    /// The reachable blocks in reverse postorder, then the unreachable ones
-    /// in layout order.
     pub(super) fn reverse_postorder(&self) -> Vec<usize> {
         let unreachable = (0..self.idom.len()).filter(|&block| !self.seen[block]);
         self.order.iter().copied().chain(unreachable).collect()
@@ -185,7 +176,6 @@ impl Dominance {
     }
 }
 
-/// Count natural loops by header, ignoring blocks unreachable from entry.
 pub(super) fn loop_depths(blocks: &[BlockId], dominance: &Dominance) -> HashMap<BlockId, u32> {
     let Dominance {
         order,

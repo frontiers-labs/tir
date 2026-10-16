@@ -696,8 +696,6 @@ impl InstructionSelectPass {
         }
     }
 
-    /// Select `function` in a fork of `context`, recover its blocks there and
-    /// score the result.
     pub(crate) fn prepare(
         &mut self,
         context: &Context,

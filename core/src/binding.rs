@@ -124,9 +124,6 @@ pub fn signed_bits(bits: u64, width: u32) -> i64 {
     ((bits << shift) as i64) >> shift
 }
 
-/// The cases a gamma names, checked against its arms and predicate: one per
-/// arm but the last, distinct, and within the predicate's width. A one-bit
-/// predicate has nothing to name: its gamma indexes its arms.
 fn verify_gamma_cases(
     context: &Context,
     op: &OpHandle,
@@ -169,8 +166,6 @@ fn verify_gamma_cases(
     Ok(())
 }
 
-/// How many entries of a list `range` reaches: the range's length when it
-/// fits, else what is left after its start.
 fn reach(range: &Range<usize>, len: usize) -> usize {
     if range.end <= len {
         range.len()
@@ -201,10 +196,6 @@ fn slice(values: &[ValueId], range: &Range<usize>) -> Vec<ValueId> {
     values[range.start.min(values.len())..range.end.min(values.len())].to_vec()
 }
 
-/// Whether `found` and `declared` name the same value. A bound or a step is a
-/// value, not a spelling: the simplifier merges congruent constants, so a body
-/// that computes the counter's advance over its own `1` states the recurrence
-/// the op declares over an outer `1` just as well.
 fn names_same(context: &Context, found: ValueId, declared: ValueId) -> bool {
     if found == declared {
         return true;
@@ -678,7 +669,6 @@ pub(crate) fn value(parser: &mut Parser, context: &Context) -> ParseResult<Value
     Ok(parser.resolve_value(context, name))
 }
 
-/// Mint a port named `name` with the type `init` has and bind the name to it.
 fn bind_port(parser: &mut Parser, context: &Context, name: &str, ty: TypeId) -> crate::Value {
     let port = context.create_value(ty, None);
     parser.define_value(name, port.id());

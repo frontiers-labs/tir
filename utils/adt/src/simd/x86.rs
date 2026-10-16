@@ -5,9 +5,6 @@ use std::arch::x86_64::*;
 
 use super::{HASH_MUL, Kernels, scalar};
 
-/// Write `row` plus the position of each bit set in `hits` to `out` from
-/// `found` on, and return the new count. Hits are rare, so a loop over bits
-/// beats packing them with a vector instruction.
 #[inline(always)]
 unsafe fn push_hits(mut hits: u64, row: usize, out: *mut u32, mut found: usize) -> usize {
     while hits != 0 {
@@ -50,7 +47,6 @@ mod avx2 {
         unsafe { _mm256_loadu_si256(p.cast()) }
     }
 
-    /// One bit per lane, set where the lanes are equal.
     #[target_feature(enable = "avx2")]
     fn equal(a: __m256i, b: __m256i) -> u32 {
         _mm256_movemask_ps(_mm256_castsi256_ps(_mm256_cmpeq_epi32(a, b))) as u32
@@ -218,9 +214,6 @@ mod avx512 {
 
     const LANES: usize = 16;
 
-    /// The mask selecting the lanes of the vector at `row` that lie below
-    /// `len`. A masked load does not touch memory behind a clear lane, so the
-    /// last, partial vector goes through the same code as the others.
     fn lanes(row: usize, len: usize) -> __mmask16 {
         let left = len - row;
         if left >= LANES {

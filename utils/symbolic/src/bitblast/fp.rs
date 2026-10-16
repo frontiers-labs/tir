@@ -83,7 +83,6 @@ impl<V> Blaster<'_, V> {
         self.gate_and(fraction_zero, exponent_zero)
     }
 
-    /// `SIToFP`/`UIToFP`: children are `[value, exponent_width, mantissa_width]`.
     pub(super) fn encode_int_to_float(
         &mut self,
         id: NodeId,
@@ -96,7 +95,6 @@ impl<V> Blaster<'_, V> {
         Ok(self.int_to_float(&value, signed, exp, mant))
     }
 
-    /// `FPToSI`/`FPToUI`: children are `[value, destination_width]`.
     fn float_to_int_operand(&mut self, id: NodeId) -> Result<FloatToInt, BitblastError> {
         let bits = self.child_bits(id, 0);
         let children: Vec<NodeId> = self.graph.children(id).collect();
@@ -111,9 +109,6 @@ impl<V> Blaster<'_, V> {
         })
     }
 
-    /// The conversion's value bits: the significand shifted by the unbiased
-    /// exponent, rounded per `mode` (IEEE 0..4, toward-zero when absent), then
-    /// negated for a signed destination when the sign bit is set.
     pub(super) fn encode_float_to_int(
         &mut self,
         id: NodeId,
@@ -178,7 +173,6 @@ impl<V> Blaster<'_, V> {
         Ok(self.mux_bits(operand.sign(), &negative, &magnitude))
     }
 
-    /// Guard/round/sticky of a variable right shift, then the IEEE increment.
     fn float_to_int_increment(
         &mut self,
         significand: &[Lit],
@@ -228,8 +222,6 @@ impl<V> Blaster<'_, V> {
         (inexact, half_bit, below)
     }
 
-    /// The conversion is defined on finite values whose rounded result fits the
-    /// destination and whose rounding mode is valid.
     pub(super) fn float_to_int_defined(
         &mut self,
         id: NodeId,
@@ -288,10 +280,6 @@ impl<V> Blaster<'_, V> {
         Ok(defined)
     }
 
-    /// Convert the integer `value` to the IEEE binary format with `e` exponent
-    /// and `m` mantissa bits. The leading one is barrel-normalized to the top of
-    /// a power-of-two working register; the mantissa is the `m` bits below it,
-    /// rounded with the remaining guard and sticky bits.
     fn int_to_float(&mut self, value: &[Lit], signed: bool, e: usize, m: usize) -> Vec<Lit> {
         let zero = self.zero();
         let (sign, magnitude) = if signed {
@@ -361,12 +349,10 @@ impl<V> Blaster<'_, V> {
         self.mux_bits(is_zero, &zeros, &out)
     }
 
-    /// One bit: whether every bit of `bits` is zero.
     fn nor(&mut self, bits: &[Lit]) -> Lit {
         self.or_reduce(bits).negate()
     }
 
-    /// One bit: the OR of every bit of `bits` (false for an empty slice).
     fn or_reduce(&mut self, bits: &[Lit]) -> Lit {
         let mut acc = self.zero();
         for &b in bits {
@@ -375,7 +361,6 @@ impl<V> Blaster<'_, V> {
         acc
     }
 
-    /// The width-`w` constant `value` as fixed literals.
     fn const_bits(&self, value: u64, w: usize) -> Vec<Lit> {
         let (one, zero) = (self.one, self.zero());
         (0..w)
@@ -447,7 +432,6 @@ fn float_format(width: usize) -> Option<(usize, usize)> {
     }
 }
 
-/// Shift `bits` left by the constant `by`, filling vacated low positions with `fill`.
 fn shift_left(bits: &[Lit], by: usize, fill: Lit) -> Vec<Lit> {
     (0..bits.len())
         .map(|p| if p >= by { bits[p - by] } else { fill })

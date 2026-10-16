@@ -131,8 +131,6 @@ struct WidthContext<'a> {
 }
 
 impl WidthContext<'_> {
-    /// `lets` carries the annotated bindings in scope, innermost last: a
-    /// `let x: bits<8>` declares a width like an operand's type does.
     fn resolve(
         &self,
         expr: &ast::Expr,
@@ -185,7 +183,6 @@ impl WidthContext<'_> {
         })
     }
 
-    /// The width `value` declares, as a spec-time expression.
     fn width_of(
         &self,
         value: &ast::Expr,

@@ -275,8 +275,6 @@ fn rewrite_under_scope_is_discarded_on_pop() {
     assert!(!g.connected(ab, ba));
 }
 
-/// A scope is a hypothesis: the classes, the nodes and the partition it
-/// changed are back where they started once it is popped.
 #[test]
 fn pop_restores_the_base_graph() {
     // Nodes minted under the scope leave no class behind.
@@ -338,8 +336,6 @@ fn pop_restores_the_base_graph() {
     }
 }
 
-/// The counts and the partition a pop restores are the enclosing scope's, not
-/// always the base's.
 #[test]
 fn pop_restores_the_enclosing_counts_and_partition() {
     // Each pop reverts one layer of adds.
@@ -456,7 +452,6 @@ fn classes_iterate_scope_roots_at_first_member_position() {
     g.pop_context();
 }
 
-/// The dirty set names every class a scope changed, and no more.
 #[test]
 fn scope_dirty_names_the_classes_the_scope_changed() {
     // Without a scope nothing is a hypothesis, so nothing is dirty.
@@ -601,10 +596,6 @@ fn assumed_classes_names_every_class_assumed_to_be_the_constant() {
     assert!(g.classes_with_const(&Math::Num(1)).is_empty());
 }
 
-/// A nested scope that assumes the opposite of its parent has assumed a
-/// contradiction, and the column says so: facts join, they do not shadow. A
-/// conflicted class reads as nothing known, which is the conservative answer a
-/// block proven unreachable needs.
 #[test]
 fn a_nested_assumption_conflicts_with_the_outer_one_and_the_pop_restores_it() {
     let mut g = Engine::new();
@@ -834,7 +825,6 @@ fn sorted(g: &Engine<Math>, ids: impl IntoIterator<Item = Id>) -> Vec<Id> {
     ids
 }
 
-/// The operator of a node, without its operands.
 fn op_name(node: &Math) -> String {
     match node {
         Math::Num(n) => format!("num{n}"),
@@ -846,7 +836,6 @@ fn op_name(node: &Math) -> String {
     }
 }
 
-/// Everything a caller can observe, for the scope round-trip test.
 fn state(g: &Engine<Math>) -> Vec<(u32, Vec<String>, Vec<Vec<u32>>)> {
     g.class_ids()
         .map(|class| {
@@ -861,7 +850,6 @@ fn state(g: &Engine<Math>) -> Vec<(u32, Vec<String>, Vec<Vec<u32>>)> {
         .collect()
 }
 
-/// A random program: entry `i` applies an operator to ids built by earlier entries.
 fn programs() -> impl Strategy<Value = Vec<(usize, Vec<usize>)>> {
     prop::collection::vec((0usize..4, prop::collection::vec(0usize..12, 0..2)), 1..24)
 }

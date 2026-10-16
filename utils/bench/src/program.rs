@@ -251,8 +251,6 @@ pub struct Prepared {
     pub dependencies: Vec<PathBuf>,
 }
 
-/// Resolve `..` lexically. A definition shared by another package arrives as
-/// `tools/../fcc/benches/x.rs` and must keep one workspace-relative identity.
 fn normalized(path: &Path) -> PathBuf {
     let mut result = PathBuf::new();
     for component in path.components() {
@@ -382,7 +380,6 @@ impl CompilerSet {
         if self.llvm { "llvm" } else { "source" }
     }
 
-    /// The candidate and its references, or the compilers named by `--compiler`.
     fn compilers(&self, requested: Option<&str>) -> Vec<Compiler> {
         let all: &[Compiler] = if self.llvm {
             &LLVM_COMPILERS
@@ -463,7 +460,6 @@ impl CaseIds {
         }
     }
 
-    /// The comparison of this compiler's case with the same case of the others.
     fn variant(&self, phase: &str, source: Option<&Path>) -> Variant {
         let source = source.map(|source| format!("/{}", source.with_extension("").display()));
         Variant {
@@ -495,13 +491,10 @@ impl CaseIds {
     }
 }
 
-/// Which case kinds `--phase` leaves enabled, as (compile, run).
 fn phases(phase: Phase) -> (bool, bool) {
     (phase != Phase::Run, phase != Phase::Compile)
 }
 
-/// Measure `program` with the target's compilers, or list its cases. Nothing is
-/// fetched or compiled unless a case passes the filter.
 pub(crate) fn measure(harness: &mut Harness, program: &Program) -> Result<()> {
     if harness.skips_programs() {
         return Ok(());
@@ -609,8 +602,6 @@ pub(crate) fn measure(harness: &mut Harness, program: &Program) -> Result<()> {
     Ok(())
 }
 
-/// Report whether the filter selects any case of the program, listing the
-/// selected cases in list mode.
 fn select(
     harness: &mut Harness,
     set: &CompilerSet,
@@ -665,7 +656,6 @@ struct Build<'a> {
 }
 
 impl Build<'_> {
-    /// Number of linked programs: one, or one per source when they are separate.
     fn programs(&self) -> usize {
         if self.program.separate {
             self.inputs.len()
@@ -674,7 +664,6 @@ impl Build<'_> {
         }
     }
 
-    /// FCC links its own objects. Every other compiler's objects go through a C driver.
     fn links_itself(&self, compiler: &Compiler) -> bool {
         compiler.candidate() && !self.set.llvm
     }
@@ -727,8 +716,6 @@ impl Build<'_> {
         }
     }
 
-    /// Workload identity shared by every compiler. Baselines with a different
-    /// identity are rejected, so it covers everything that defines the work.
     fn metadata(&self, root: &Path, scratch: &Path) -> Result<serde_json::Value> {
         let Self {
             set,
@@ -801,8 +788,6 @@ impl Build<'_> {
         }))
     }
 
-    /// Compile the selected objects once outside measurement, which also
-    /// records the candidate's phase timings, and describe the compiler.
     fn prepare_objects(
         &self,
         compiler: &Compiler,
@@ -863,7 +848,6 @@ impl Build<'_> {
         Ok(metadata)
     }
 
-    /// Build, link and validate with one compiler, then describe its measured cases.
     fn cases(
         &self,
         compiler: &Compiler,
@@ -1036,7 +1020,6 @@ impl Validation {
     }
 }
 
-/// The compilers' inputs: the C sources, or LLVM IR that Clang emits from them.
 fn prepare_inputs(
     set: &CompilerSet,
     program: &Program,

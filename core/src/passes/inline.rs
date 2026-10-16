@@ -332,11 +332,6 @@ impl Tarjan {
     }
 }
 
-/// [`splice`] for an unordered callee body: its operations join the region
-/// holding the call, reading the call's arguments through the ports they were
-/// declared on. The callee's memory order is wired into the caller's: the
-/// state its body was entered on is the one the call observed, and the state
-/// the body leaves behind is what the call left. Nothing is unthreaded.
 fn splice_nodes(
     context: &Context,
     graph: &CallGraph,
@@ -485,20 +480,11 @@ fn splice_nodes(
     Ok(copied)
 }
 
-/// Hand every reader of `old` under `region` the value `new`, the result
-/// lists of the regions there included.
 fn rename(context: &Context, region: RegionId, old: ValueId, new: ValueId) {
     context.replace_value_uses(old, new);
     context.rename_region_results(region, old, new, &[]);
 }
 
-/// Resolve `tuple_get(make_tuple(..), i)` in `ops` to the element it selects.
-///
-/// Substituting an argument for a parameter is what creates the pattern: a
-/// struct passed by value is a `make_tuple` in the caller and a `tuple_get` in
-/// the callee, and only inlining ever puts the two in one function. Nothing
-/// downstream knows the shape, and a `make_tuple` reaching the backend in any
-/// position but a call argument or a returned value cannot be encoded.
 fn fold_tuple_gets(
     context: &Context,
     body: RegionId,

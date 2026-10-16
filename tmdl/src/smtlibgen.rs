@@ -157,7 +157,6 @@ struct SmtCtx<'a> {
     trap_handler: Option<&'a ast::TrapHandler>,
 }
 
-/// The trap handler of `isa` or the nearest one in its requires closure.
 fn find_trap_handler<'a>(
     isa: &str,
     item_cache: &HashMap<&'a str, &'a ast::Item>,
@@ -201,13 +200,6 @@ impl SmtCtx<'_> {
     }
 }
 
-/// Whether a class's `WRITE_POLICY` is `"merge"` (preserve untouched storage
-/// bits on write); absent or `"zero_extend"` is the default zero-extend.
-/// Whether a register class is part of the model of `isa`: declared for that
-/// ISA, for an extension of it, or for one it requires. The last case is what
-/// makes x86-64's flags register — declared for 32-bit x86 and inherited — part
-/// of the 64-bit model, and an instruction cannot write a register the model
-/// does not hold.
 fn class_in_model<'a>(
     for_isas: &[String],
     isa: &str,
@@ -426,9 +418,6 @@ fn register_class_metadata(ctx: &SmtCtx<'_>) -> Vec<RegisterClassMetadata> {
         .collect()
 }
 
-/// Render a `(mk-TMDLState ...)` over `st`, defaulting each field to
-/// `(<field> st)` and replacing named fields from `overrides`. Field order
-/// matches the datatype: register arrays, mem, resv, resa, pc.
 fn mk_state(arrays: &[&String], overrides: &[(&str, &str)]) -> String {
     let field = |name: &str| {
         overrides
@@ -889,8 +878,6 @@ fn smt_ty_of(ctx: &SmtCtx<'_>, ty: &Type) -> String {
     }
 }
 
-/// Total bit width of an instruction's widest encoding shape. A word of this
-/// width holds every shape, the narrower ones zero-extended into it.
 fn encoding_width<'a>(
     instruction: &'a ast::Instruction,
     item_cache: &HashMap<&'a str, &'a ast::Item>,
@@ -902,9 +889,6 @@ fn encoding_width<'a>(
         .unwrap_or(32)
 }
 
-/// The shapes of an instruction as verification metadata: what selects each
-/// one, how wide it is, and the bit map it spells. A verifier that only knew
-/// the first shape would send words no encoder produces.
 fn build_shape_metadata<'a>(
     ctx: &SmtCtx<'_>,
     item_cache: &HashMap<&'a str, &'a ast::Item>,
@@ -1003,7 +987,6 @@ fn build_encoding_metadata<'a>(
         .collect()
 }
 
-/// A shape's guard as an SMT predicate over the operand variables.
 fn render_predicate(
     ctx: &SmtCtx<'_>,
     predicate: &crate::shapes::Predicate,
@@ -1116,9 +1099,6 @@ fn bit_mask(width: u16) -> u128 {
     }
 }
 
-/// The word an instruction encodes to and how wide it is: one expression per
-/// shape, zero-extended to the widest and selected by the shape's guard, so an
-/// encoding that spells two bit maps is one function of its operands.
 fn build_smt_encoding<'a>(
     ctx: &SmtCtx<'_>,
     item_cache: &HashMap<&'a str, &'a ast::Item>,
@@ -1164,7 +1144,6 @@ fn build_smt_encoding<'a>(
     Ok((encoding, length, width))
 }
 
-/// One shape's word: the concatenation of its fields, and its bit width.
 fn build_shape_encoding<'a>(
     ctx: &SmtCtx<'_>,
     item_cache: &HashMap<&'a str, &'a ast::Item>,
@@ -1329,9 +1308,6 @@ impl SmtVal {
     }
 }
 
-/// Coerce an expression to exactly `target` bits: widen when narrower,
-/// truncate when wider. Register writes use it so a value computed at a wider
-/// width still fits a narrow destination (e.g. a 1-bit PSTATE flag).
 fn fit_smt(expr: &str, width: u32, signed: bool, target: u32) -> String {
     if width > target {
         format!("((_ extract {} 0) {})", target - 1, expr)
@@ -1340,8 +1316,6 @@ fn fit_smt(expr: &str, width: u32, signed: bool, target: u32) -> String {
     }
 }
 
-/// Mirror of `exec::widen`: sign-extend signed values, zero-extend unsigned
-/// ones, no-op when already at least `target` wide.
 fn widen_smt(expr: &str, width: u32, signed: bool, target: u32) -> String {
     if width >= target {
         expr.to_string()
@@ -1352,7 +1326,6 @@ fn widen_smt(expr: &str, width: u32, signed: bool, target: u32) -> String {
     }
 }
 
-/// Widen both operands to a common width, mirroring `exec::coerce_ints`.
 fn coerce_smt(a: &SmtVal, b: &SmtVal) -> (String, String, u32, bool, bool) {
     let (ea, wa, sa) = a.as_bv();
     let (eb, wb, sb) = b.as_bv();
@@ -1721,15 +1694,10 @@ impl SmtSymbolResolver<'_> {
     }
 }
 
-/// Store-conditional success: a valid reservation covering exactly `addr`.
-/// Shared by the `bits<1>` value facet and the memory-write effect, so both
-/// gate on the identical predicate.
 fn sc_success(state: &str, addr: &str) -> String {
     format!("(and (resv {state}) (= (resa {state}) {addr}))")
 }
 
-/// The AMO result word for op code 0..8 (per the design document) at the
-/// access width, over the old memory value and the operand.
 fn amo_combine(op: u8, old: &str, val: &str) -> Option<String> {
     Some(match op {
         0 => format!("(bvadd {old} {val})"),
@@ -2121,7 +2089,6 @@ fn smt_fcvt(input: SmtVal, exponent: u32, mantissa: u32) -> Option<SmtVal> {
     })
 }
 
-/// The SMT-LIB operator a scalar op is spelled with.
 fn smt_name(kind: tir_symbolic::lang::SymKind) -> &'static str {
     match tir_symbolic::lang::scalar_op(kind).map(|op| op.smt) {
         Some(
@@ -2191,8 +2158,6 @@ fn is_atomic_kind(kind: tir_symbolic::lang::SymKind) -> bool {
     )
 }
 
-/// The atomic call within `e`, descending through pure wrappers
-/// (`sext`/`zext`/`extract`/`if`/...) as sema permits.
 fn find_atomic(graph: &crate::sem_expr_state::ValueGraph, node: NodeId) -> Option<AtomicOp> {
     if let Some(op) = atomic_of_node(graph, node) {
         return Some(op);
@@ -2263,9 +2228,6 @@ impl<S: SmtState> BehaviorEmitter<'_, S> {
         })
     }
 
-    /// Whether `node`'s term holds an atomic whose memory/reservation effect no
-    /// statement has committed yet. A `let` commits the atomic it binds, so the
-    /// statements that use the binding must not thread the effect a second time.
     fn has_uncommitted_atomic(&self, node: NodeId) -> bool {
         if self.behavior.let_symbols.contains_key(&node) {
             return false;
@@ -2281,10 +2243,6 @@ impl<S: SmtState> BehaviorEmitter<'_, S> {
 }
 
 impl BehaviorEmitter<'_, String> {
-    /// Wrap the register-write state `w` (or the bare entry state for a
-    /// discarded `store_conditional`) with an atomic's memory/reservation
-    /// effect. Symbol reads use the sequenced expression graph over entry
-    /// snapshots, so the success predicate matches the value facet of the RHS.
     fn atomic_effect(&self, op: &AtomicOp, w: &str) -> Option<String> {
         let xlen = self.ctx.xlen as u32;
         let addr = |a: NodeId| -> Option<String> {
@@ -3042,7 +3000,6 @@ fn zero_bv(width: u16) -> String {
     format!("(_ bv0 {})", width)
 }
 
-/// SMT-lib needs the full u128 range for large bitvector literals.
 fn parse_literal_value_u128(lit: &ast::LitInt) -> u128 {
     let v = lit.value();
     if let Some(hex) = v.strip_prefix("0x").or_else(|| v.strip_prefix("0X")) {
@@ -3058,11 +3015,6 @@ fn cast_bv(name: &str, from_width: u16, to_width: u16) -> String {
     cast_bv_smt(name, from_width, to_width)
 }
 
-/// Like `cast_bv` but accepts an arbitrary SMT-LIB expression instead of a
-/// plain identifier.  When `from_width == to_width` the expression is returned
-/// as-is; otherwise it is wrapped in `zero_extend` or `extract`.
-/// The operands a guard asks to survive a narrow signed field, and the width
-/// of that field.
 fn signed_fit_widths(predicate: &crate::shapes::Predicate) -> HashMap<String, u16> {
     use crate::shapes::Predicate;
     match predicate {

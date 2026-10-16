@@ -2,8 +2,6 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 
-/// The toolchain's default system include directories, in search order. Only
-/// directories that exist are returned, deduplicated.
 pub(crate) fn system_include_dirs() -> Vec<PathBuf> {
     let candidates = if cfg!(target_os = "macos") {
         macos_dirs()

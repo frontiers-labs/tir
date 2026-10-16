@@ -144,11 +144,6 @@ fn compile_asm_printer_template(template: &str, mnemonic: &str) -> Vec<AsmPrintP
 // AsSemExpr code generation
 // ---------------------------------------------------------------------------
 
-/// If the behavior is a conditional control transfer `if COND { PC::pc = TARGET }`
-/// (no else), synthesize the value written to PC every cycle: `if COND { TARGET }
-/// else { PC::pc + width }`. The fall-through arm keeps PC advancing when the branch
-/// is not taken, so the result can be written unconditionally. Returns `None` for
-/// behaviors that are not a bare conditional PC write.
 fn synthesize_branch_value(behavior: &ast::Expr, width_bytes: u64) -> Option<ast::Expr> {
     let ast::Expr::If(if_) = unwrap_single_stmt_block(behavior) else {
         return None;
@@ -189,7 +184,6 @@ fn synthesize_branch_value(behavior: &ast::Expr, width_bytes: u64) -> Option<ast
     }))
 }
 
-/// Peel `{ stmt }` blocks down to their single inner statement.
 fn unwrap_single_stmt_block(e: &ast::Expr) -> &ast::Expr {
     match e {
         ast::Expr::Block(b) if b.stmts.len() == 1 => unwrap_single_stmt_block(&b.stmts[0]),
@@ -197,8 +191,6 @@ fn unwrap_single_stmt_block(e: &ast::Expr) -> &ast::Expr {
     }
 }
 
-/// The RHS expression of a single `PC::pc = TARGET` assignment inside a branch's
-/// `then` arm.
 fn extract_pc_assignment_target(then: &ast::Expr) -> Option<&ast::Expr> {
     let assign = match unwrap_single_stmt_block(then) {
         ast::Expr::Block(b) if b.stmts.len() == 1 => match &b.stmts[0] {
@@ -219,8 +211,6 @@ fn is_pc_dest(dest: &ast::Expr) -> bool {
     matches!(dest, ast::Expr::Path(p) if p.base == "PC" && p.remainder == ["pc"])
 }
 
-/// Whether `(every, any)` path through `e` assigns `PC::pc`. Reads of PC (e.g.
-/// `auipc`'s `rd = PC::pc + …`) do not count — only assignment destinations.
 fn pc_writes(e: &ast::Expr) -> (bool, bool) {
     match e {
         ast::Expr::Assign(a) => {

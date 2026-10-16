@@ -229,9 +229,6 @@ fn exception_handler_controls_run_outcome() {
     assert_eq!(reg(2), 0, "the halt stopped execution at the ebreak");
 }
 
-/// `bl` writes two destinations: the link register (x30 = pc + 4) and PC. Both
-/// used to be silently dropped, because the multi-assignment behaviors only
-/// ever emitted one write.
 #[test]
 fn arm64_branch_link_writes_the_link_register_and_pc() {
     use tir::attributes::AttributeValue;

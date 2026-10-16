@@ -184,7 +184,6 @@ impl FnCodegen<'_> {
         destination
     }
 
-    /// Load the ABI return value of an aggregate held at `ptr`.
     pub(super) fn abi_return_value(&mut self, ptr: ValueId, source_ty: QualType) -> ValueId {
         let pieces = self.return_abi.aggregate.clone().unwrap();
         let ptr = self.prepare_abi_source(ptr, source_ty, &pieces);
@@ -208,8 +207,6 @@ impl FnCodegen<'_> {
         .result()
     }
 
-    /// Write what a `return` returns to the slot the function's one exit reads
-    /// it back from.
     pub(super) fn store_return_value(&mut self, value: Option<NodeId>) -> Result<(), Diagnostic> {
         match value {
             Some(node) if self.return_abi.indirect => self.lower_indirect_return(node)?,

@@ -96,7 +96,6 @@ impl Oracle for IsasimOracle {
     }
 }
 
-/// Parse a `0x`-prefixed or decimal integer string into a `u64`.
 fn parse_u64(s: &str) -> Result<u64> {
     let s = s.trim();
     let value = if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {

@@ -92,7 +92,6 @@ impl<'a> Build<'a> {
         }
     }
 
-    /// The left-hand side: one atom per operator.
     fn left(&mut self, pattern: &'a Pattern) -> u32 {
         match pattern {
             Pattern::Var(var) => *var,
@@ -111,9 +110,6 @@ impl<'a> Build<'a> {
         }
     }
 
-    /// The right-hand side: an insert per operator. A sub-pattern the left-hand
-    /// side already matched is the class it bound, as a rule of the compiler
-    /// names it, rather than a second copy to look up.
     fn right(&mut self, pattern: &Pattern) -> u32 {
         if let Some(&(_, class)) = self.matched.iter().find(|(seen, _)| *seen == pattern) {
             return class;
@@ -198,9 +194,6 @@ fn ematch_all(rules: &[Rule<Sym>], g: &Engine<Sym>) -> usize {
     total
 }
 
-/// Print how each workload grows, one line per iteration, under
-/// `TIR_WORKLOAD_STATS`. The three benchmarks print the same table, which is
-/// how the engines are checked to be doing the same work.
 fn print_stats(workloads: &[Workload]) {
     if std::env::var_os("TIR_WORKLOAD_STATS").is_none() {
         return;

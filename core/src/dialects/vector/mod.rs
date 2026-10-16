@@ -225,11 +225,6 @@ operation! {
     }
 }
 
-/// The active lane count for `$get_vlen`, the `n` each `split` cuts the operand
-/// bits into: a scalable vector takes it from the dynamic `vl` operand (index 2);
-/// a fixed vector takes it from the result type's static length (a constant).
-/// With neither, the count is the `vl` operand the operation goes without: the
-/// lane count of whatever type the operation is used at.
 fn vlen_node(op: &tir::OpHandle, g: &mut tir::sem::SemGraph) -> tir::NodeId {
     let context = op.context.clone();
     let ty = context.get_value(op.results()[0]).ty();
@@ -247,9 +242,6 @@ fn vlen_node(op: &tir::OpHandle, g: &mut tir::sem::SemGraph) -> tir::NodeId {
     n
 }
 
-/// The lane width for `$get_sew`: the result type's element width, a constant
-/// for fixed and scalable vectors alike (scalability varies the lane count, not
-/// the element width). On RVV this is the demanded SEW.
 fn sew_node(op: &tir::OpHandle, g: &mut tir::sem::SemGraph) -> tir::NodeId {
     let context = op.context.clone();
     let ty = context.get_value(op.results()[0]).ty();

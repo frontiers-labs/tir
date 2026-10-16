@@ -35,7 +35,6 @@ impl Context {
         chosen
     }
 
-    /// `region` and every region enclosing it, innermost first.
     fn region_ancestors(&self, region: RegionId) -> Vec<RegionId> {
         let mut chain = vec![region];
         let mut current = region;
@@ -50,7 +49,6 @@ impl Context {
         chain
     }
 
-    /// Whether `op` is one of `roots` or sits under one, at any depth.
     fn op_under(&self, op: OpId, roots: &[OpId]) -> bool {
         let mut current = Some(op);
         while let Some(op) = current {
@@ -62,9 +60,6 @@ impl Context {
         false
     }
 
-    /// Region results sit in no use list; rename `old` to `new` in the result
-    /// list of `region` and every region nested in it, except regions under
-    /// `except`, which keep naming the value they define.
     pub(crate) fn rename_region_results(
         &self,
         region: RegionId,
@@ -97,8 +92,6 @@ impl Context {
         }
     }
 
-    /// [`Context::rename_region_results`] for a set of renames. A result
-    /// named by `renames` follows the chain to the value nothing renames.
     pub(crate) fn rename_region_results_batch(
         &self,
         region: RegionId,
@@ -123,7 +116,6 @@ impl Context {
         }
     }
 
-    /// The non-local exits under `roots` that leave `target`.
     fn exits_leaving(&self, roots: &[OpId], target: OpId) -> Vec<OpId> {
         self.subtree_ops(roots)
             .into_iter()
@@ -134,12 +126,6 @@ impl Context {
             .collect()
     }
 
-    /// [`Context::grow_port`] for an op with a declared binding: one more
-    /// carried value in every aligned range, after the values it carries and
-    /// ahead of its states, or last when the port is a state itself. A loop's
-    /// exit value defaults to the port; a gamma's arms must each name what
-    /// they produce for it. Every non-local exit that leaves `op` gains the
-    /// port of the region it sits in.
     pub(crate) fn grow_declared_port(
         &self,
         op: OpId,

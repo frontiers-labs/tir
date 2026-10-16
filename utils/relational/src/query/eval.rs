@@ -222,7 +222,6 @@ impl Matches {
 }
 
 impl PlanCache {
-    /// What parameter `param` resolved to at the last refresh.
     pub(crate) fn resolution(&self, param: u32) -> &Resolution {
         &self.resolutions[param as usize]
     }
@@ -865,7 +864,6 @@ impl Plan {
         reduced_by
     }
 
-    /// The row atom at `atom`.
     pub(super) fn rows(&self, atom: usize) -> &RowShape {
         match &self.shapes[atom] {
             Shape::Rows(rows) => rows,
@@ -880,7 +878,6 @@ impl Plan {
         }
     }
 
-    /// The cells of `table` whose rows also match swapped.
     pub(super) fn when<'r>(
         rows: &RowShape,
         resolutions: &'r [Resolution],
@@ -892,8 +889,6 @@ impl Plan {
         }
     }
 
-    /// Search from the rows of one anchor's atom: the ones the previous epoch
-    /// wrote, or all of them.
     fn scan<C, const S: usize, A: Allow + ?Sized>(
         &self,
         eval: &mut Eval<'_, C, S, A>,
@@ -967,10 +962,6 @@ impl Plan {
         eval.anchor = None;
     }
 
-    /// Build the grouping each of `steps` looks rows up in: by value for an
-    /// atom reached through it, by argument for one reached sideways; then
-    /// the tries the joins among them read. Reports the joins whose tries it
-    /// built, as a mask over their indices.
     fn group<C, const S: usize>(
         &self,
         db: &Database<C, S>,
@@ -1186,13 +1177,6 @@ impl Plan {
         }
     }
 
-    /// Run `guard`, and the steps after it if it holds.
-    ///
-    /// A rule may write a guard's result into the slot an earlier scalar lives
-    /// in. From the root that is harmless: every match recomputes the earlier
-    /// one first. An order that starts elsewhere can put a loop over rows
-    /// between the two, so what the guard overwrote is put back for the next
-    /// row.
     fn guard<C, const S: usize, A: Allow + ?Sized>(
         &self,
         eval: &mut Eval<'_, C, S, A>,
@@ -1223,7 +1207,6 @@ impl Plan {
         }
     }
 
-    /// A place atom reads what the id space knows of the reference.
     fn place<C, const S: usize, A: Allow + ?Sized>(
         &self,
         eval: &mut Eval<'_, C, S, A>,
@@ -1273,7 +1256,6 @@ impl Plan {
         }
     }
 
-    /// Every row the atom reads whose value is `value`.
     fn value<C, const S: usize, A: Allow + ?Sized>(
         &self,
         eval: &mut Eval<'_, C, S, A>,
@@ -1339,12 +1321,6 @@ impl Plan {
         }
     }
 
-    /// Try one row of an atom's table, the one of side `side` at `slot`.
-    /// `bind` names the scalar that takes the row's tag and the variable that
-    /// takes the row's value, or is checked against it when bound. `swapped`
-    /// picks the reading to try: as
-    /// written or swapped alone, or with `None` both where `when` holds the
-    /// row's selected cell.
     #[allow(clippy::too_many_arguments)]
     #[inline(always)]
     fn row<C, const S: usize, A: Allow + ?Sized>(
@@ -1401,9 +1377,6 @@ impl Plan {
         eval.fresh -= fresh;
     }
 
-    /// Reach a row through a bound argument: the rows the atom reads that hold
-    /// `child` in `arg`'s column. Everything already bound is checked against
-    /// the row; the rest, including the row's value, is bound from it.
     fn parents<C, const S: usize, A: Allow + ?Sized>(
         &self,
         eval: &mut Eval<'_, C, S, A>,
@@ -1470,8 +1443,6 @@ impl Plan {
         }
     }
 
-    /// A lattice atom reads the value of `key`'s id: the column's stamp says
-    /// which epoch proved it.
     fn lattice<C, const S: usize, A: Allow + ?Sized>(
         &self,
         eval: &mut Eval<'_, C, S, A>,
@@ -1560,7 +1531,6 @@ pub(super) fn keyed<'w>(
     leaf.map_or(&[], |leaf| trie.rows(leaf))
 }
 
-/// Whether `cell` is one of `cells`, which is ascending.
 pub(super) fn reads(cells: &[u32], cell: u32) -> bool {
     match cells {
         [only] => *only == cell,
@@ -1633,7 +1603,6 @@ pub(super) struct Eval<'a, C, const S: usize, A: ?Sized> {
 }
 
 impl<C, const S: usize, A: Allow + ?Sized> Eval<'_, C, S, A> {
-    /// The matches found, and the working arrays for the next search.
     fn finish(self) -> (Matches, Scratch) {
         let scratch = Scratch {
             bound: self.bound,
@@ -1646,7 +1615,6 @@ impl<C, const S: usize, A: Allow + ?Sized> Eval<'_, C, S, A> {
         (self.out, scratch)
     }
 
-    /// The rows of `column` holding `cell`, in a vector from the pool.
     #[inline]
     fn scan_rows(&mut self, column: &[u32], cell: u32) -> Vec<u32> {
         let mut rows = self.pool.pop().unwrap_or_default();
@@ -1655,13 +1623,11 @@ impl<C, const S: usize, A: Allow + ?Sized> Eval<'_, C, S, A> {
         rows
     }
 
-    /// Start a search at `id`, with `var` bound to it and loose.
     fn loosen(&mut self, var: Var, id: u32) {
         self.bound[var as usize] = id.into();
         self.loose = Some(var);
     }
 
-    /// Fix the offset of `var` where it is, if it is the loose variable.
     fn tighten(&mut self, var: Var) {
         if self.loose == Some(var) {
             self.loose = None;
@@ -1669,8 +1635,6 @@ impl<C, const S: usize, A: Allow + ?Sized> Eval<'_, C, S, A> {
         }
     }
 
-    /// Bind `var` to the value of a table row, or check it against the value
-    /// when bound.
     #[inline(always)]
     pub(super) fn bind_value(&mut self, var: Var, table: &Table, row: u32) -> bool {
         let id = table.values()[row as usize];
@@ -1684,9 +1648,6 @@ impl<C, const S: usize, A: Allow + ?Sized> Eval<'_, C, S, A> {
         self.bind_one(var, Ref::new(id, table.weight(table.arity(), row)))
     }
 
-    /// Bind a row atom's arguments to the cells of a table row, read swapped
-    /// or not, or report the row inconsistent with what is already bound.
-    /// Whatever it bound before failing is on the trail.
     #[inline(always)]
     pub(super) fn bind_row(
         &mut self,
@@ -1762,8 +1723,6 @@ impl<C, const S: usize, A: Allow + ?Sized> Eval<'_, C, S, A> {
         true
     }
 
-    /// Whether `guard` holds of the scalars bound so far, binding its own
-    /// output if it does.
     fn holds(&mut self, guard: &Guard) -> bool {
         match guard {
             Guard::Cmp(cmp, a, b) => {

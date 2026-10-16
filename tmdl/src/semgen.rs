@@ -81,9 +81,6 @@ pub(crate) trait TermBackend {
     }
 }
 
-/// Fold a symbol-free subtree to a constant at the interpreter's widths.
-/// Width expressions such as `log2Ceil(self.XLEN) - 1` reach the emitters
-/// unfolded, so structural `Constant` matching is not enough.
 pub(crate) fn eval_const(graph: &ValueGraph, node: NodeId) -> Option<(u64, u32)> {
     let child = |index: usize| eval_const(graph, graph.children(node).nth(index)?);
     let arith = |f: fn(u64, u64) -> u64| -> Option<(u64, u32)> {
@@ -114,10 +111,6 @@ pub(crate) fn eval_const(graph: &ValueGraph, node: NodeId) -> Option<(u64, u32)>
     }
 }
 
-/// Spell `node` in the backend's vocabulary, or `None` where the term has no
-/// model there. Operands are emitted left to right, before the operator, so a
-/// backend numbering its nodes in emission order numbers them the same way
-/// whatever the format.
 pub(crate) fn emit<B: TermBackend>(graph: &ValueGraph, node: NodeId, b: &mut B) -> Option<B::Val> {
     let kind = *graph.get_node(node);
     if !b.supports(kind) {
@@ -262,8 +255,6 @@ fn emit_extract<B: TermBackend>(graph: &ValueGraph, node: NodeId, b: &mut B) -> 
     }
 }
 
-/// Resolve a register-class parameter (`ENCODING_LEN`, `WIDTH`) to a number:
-/// either a literal or a `self.PARAM` reference into the target ISA.
 pub(crate) fn eval_class_param(
     rc: &ast::RegisterClass,
     name: &str,
@@ -278,9 +269,6 @@ pub(crate) fn eval_class_param(
     }
 }
 
-/// Instruction operands with `bits<expr>` widths resolved for the target ISA:
-/// the ISA's own parameter values win over the cross-ISA maximum, so an
-/// instruction shared by RV32I and RV64I sees XLEN=32 on RV32I.
 pub(crate) fn resolved_operands<'a>(
     isa_params: &HashMap<String, i64>,
     inst: &'a ast::Instruction,
@@ -291,9 +279,6 @@ pub(crate) fn resolved_operands<'a>(
     resolve_operand_widths(resolve_operands_for_instruction(inst, item_cache), &params)
 }
 
-/// The numeric parameters a behavior is lowered under: the instruction's ISA
-/// parameters, overridden by the target ISA's own values, then its literal
-/// template parameters.
 pub(crate) fn numeric_params<'a>(
     isa_params: &HashMap<String, i64>,
     inst: &'a ast::Instruction,
@@ -318,8 +303,6 @@ pub(crate) fn numeric_params<'a>(
 /// encoding spells it in.
 pub(crate) type Pieces = HashMap<String, Vec<(u16, u16, u16, u16)>>;
 
-/// The fixed fields a shape's decoder tests, as `(word_hi, word_lo, value)`,
-/// and the pieces each operand is reassembled from.
 pub(crate) fn decode_layout(
     shape: &EncodingShape,
     instruction: &ast::Instruction,

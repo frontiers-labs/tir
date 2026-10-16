@@ -301,7 +301,6 @@ fn lower_cond(cond: &ast::Expr, ctx: &Context) -> Result<Predicate, String> {
     }
 }
 
-/// A comparison of an operand, or a slice of one, against a constant.
 fn lower_comparison(
     op: &ast::BinOp,
     operand: &ast::Expr,
@@ -372,13 +371,6 @@ fn lower_comparison(
     })
 }
 
-/// The round-trip test an encoding makes before spelling a narrow field:
-/// `sext(x as bits<n>, width(x)) == x` for a signed field, `x as bits<n> == x`
-/// or the `zext` spelling for an unsigned one. `x[n-1..0]` stands for the cast.
-///
-/// The test is written in the model rather than built into the compiler, so
-/// this reads the shape of it back out. An equivalent spelling it does not
-/// match fails loudly at code generation, never silently.
 pub(crate) fn fit_test(cond: &ast::Expr, ctx: &Context) -> Option<Predicate> {
     let ast::Expr::Binary(binary) = cond else {
         return None;
@@ -434,8 +426,6 @@ pub(crate) fn fit_test(cond: &ast::Expr, ctx: &Context) -> Option<Predicate> {
     })
 }
 
-/// The operand, bit and polarity a condition tests, for `x[bit]` and
-/// `x[bit] == 0` / `x[bit] == 1`.
 fn operand_bit<'a>(cond: &'a ast::Expr, ctx: &Context) -> Option<(&'a str, u16, bool)> {
     let (base, index, set) = match cond {
         ast::Expr::IndexAccess(idx) => (&idx.base, idx.index, true),
@@ -580,10 +570,6 @@ pub fn expand(encoding: &ast::Expr, ctx: &Context) -> (Vec<Shape>, Vec<(Span, St
     (shapes, errors)
 }
 
-/// An encoding expression in the form the shapes are computed over: `let`
-/// bindings substituted into their uses, the block an inlined `fn` body leaves
-/// behind collapsed to the value it produces, and every condition the
-/// instruction's parameters already answer taken.
 fn normalize(expr: &ast::Expr, ctx: &Context) -> ast::Expr {
     fn collapse(expr: &ast::Expr) -> ast::Expr {
         let expr = crate::utils::map_child_exprs(expr, &mut collapse);
@@ -598,10 +584,6 @@ fn normalize(expr: &ast::Expr, ctx: &Context) -> ast::Expr {
     decide(&resolve_widths(&expr, ctx), ctx)
 }
 
-/// Replace `width(x)` with the width `x` spells in an encoding, which for a
-/// register operand is its class's `ENCODING_LEN` rather than the value width a
-/// behavior would read. `fn signed_fits(x, n)` is written over it, so this has
-/// to happen before the conditions are evaluated.
 fn resolve_widths(expr: &ast::Expr, ctx: &Context) -> ast::Expr {
     let expr = crate::utils::map_child_exprs(expr, &mut |child| resolve_widths(child, ctx));
     let ast::Expr::Call(call) = &expr else {
@@ -628,11 +610,6 @@ fn resolve_widths(expr: &ast::Expr, ctx: &Context) -> ast::Expr {
     }
 }
 
-/// Take every branch the parameters decide. One template writes the encoding of
-/// every width it serves, so a condition an instruction's parameters answer
-/// (`REXW | reg[3] | rm[3]`, with `REXW` set) is not a test the encoder repeats
-/// at run time: the branch it selects replaces the `if`, and only the tests the
-/// operands answer are left to guard a shape.
 fn decide(expr: &ast::Expr, ctx: &Context) -> ast::Expr {
     let expr = crate::utils::map_child_exprs(expr, &mut |child| decide(child, ctx));
     let ast::Expr::If(if_) = &expr else {
@@ -658,9 +635,6 @@ fn decide(expr: &ast::Expr, ctx: &Context) -> ast::Expr {
     }
 }
 
-/// A condition with everything the operands do not decide replaced by its
-/// value, and the identities that leaves behind (`0 | x`, `1 & x`) applied, so
-/// what remains reads operands only.
 fn fold(cond: &ast::Expr, ctx: &Context) -> ast::Expr {
     let folded = crate::utils::map_child_exprs(cond, &mut |child| fold(child, ctx));
     if !matches!(folded, ast::Expr::Lit(_))
@@ -675,9 +649,6 @@ fn fold(cond: &ast::Expr, ctx: &Context) -> ast::Expr {
     simplify(folded, ctx)
 }
 
-/// `x | 0`, `x | 1`, `x & 0` and `x & 1`, where the constant side is what a
-/// decided parameter left behind. Both sides are the width of the result, so
-/// dropping one keeps the condition's width.
 fn simplify(expr: ast::Expr, ctx: &Context) -> ast::Expr {
     let ast::Expr::Binary(binary) = &expr else {
         return expr;
@@ -709,7 +680,6 @@ fn simplify(expr: ast::Expr, ctx: &Context) -> ast::Expr {
     expr
 }
 
-/// The width an encoding condition has whatever its operands hold.
 fn static_width(expr: &ast::Expr, ctx: &Context) -> Option<u16> {
     let env: HashMap<&str, (u64, u16)> = ctx
         .operands
@@ -726,9 +696,6 @@ fn int_value(expr: &ast::Expr) -> Option<u64> {
     }
 }
 
-/// The distinct `if` conditions of an encoding, keyed by identity and in source
-/// order. The same test spelled in two places is one condition, so the shapes
-/// it selects agree.
 fn collect_conditions(expr: &ast::Expr) -> Vec<(String, &ast::Expr)> {
     fn walk<'a>(expr: &'a ast::Expr, out: &mut Vec<(String, &'a ast::Expr)>) {
         match expr {
@@ -751,7 +718,6 @@ fn collect_conditions(expr: &ast::Expr) -> Vec<(String, &ast::Expr)> {
     out
 }
 
-/// The bits a shape spells, independent of where they were written.
 fn field_key(fields: &[ast::EncodingField]) -> Vec<(u16, String)> {
     fields
         .iter()
@@ -759,8 +725,6 @@ fn field_key(fields: &[ast::EncodingField]) -> Vec<(u16, String)> {
         .collect()
 }
 
-/// An expression's identity, independent of where it was written. A form no
-/// encoder can decide keys on its span, so nothing merges by accident.
 fn expr_key(expr: &ast::Expr) -> String {
     match expr {
         ast::Expr::Ident(id) => id.name.clone(),
@@ -798,11 +762,6 @@ fn expr_key(expr: &ast::Expr) -> String {
     }
 }
 
-/// Flatten `expr` under one truth assignment into the fields it spells,
-/// returning their total width. A nested concatenation is a group the ISA's
-/// manual draws as whole encoding units, so it must fill them. A group that
-/// is the whole encoding is not nested: it is the field list itself, written
-/// under the condition that the encoding exists.
 fn flatten(
     expr: &ast::Expr,
     assignment: &Assignment<'_>,
@@ -865,9 +824,6 @@ fn flatten(
 }
 
 impl Context {
-    /// The width a leaf of an encoding expression contributes. A register
-    /// operand contributes its class's `ENCODING_LEN`; anything whose width is
-    /// an ISA-parameter expression has no single width and must be sliced.
     fn leaf_width(&self, value: &ast::Expr) -> Result<u16, String> {
         match value {
             ast::Expr::Lit(ast::Lit::Int(li)) => literal_width(li.value()),
@@ -889,9 +845,6 @@ impl Context {
         }
     }
 
-    /// A field may take bits out of an operand, whose value the encoder reads
-    /// at encode time. Taking them out of a parameter instead spells a constant
-    /// no consumer reads back as one, so the parameter is spelled whole.
     fn sliced(&self, base: &ast::Expr) -> Result<(), String> {
         match base {
             ast::Expr::Ident(id) if self.operand(&id.name).is_none() => Err(format!(
@@ -955,11 +908,6 @@ impl Context {
             .map(|(_, ty, constraint)| (ty, *constraint))
     }
 
-    /// The width and the values an operand may take: its bit domain, minus what
-    /// its `#[align]` and `#[nonzero]` constraints exclude and, for a register,
-    /// minus the patterns its class does not name. A wide operand is sampled
-    /// rather than enumerated (see the module docs). `None` when the operand has
-    /// no domain the expansion can enumerate.
     fn domain(&self, name: &str, probes: &Probes) -> Option<(u16, Vec<u64>)> {
         let (ty, constraint) = self.operand(name)?;
         let mut held: Option<&[u64]> = None;
@@ -1084,8 +1032,6 @@ impl Probes {
     }
 }
 
-/// The truth assignments of `conditions` some operand value produces. Operands
-/// no condition reads are irrelevant, so only the rest are enumerated.
 fn reachable_assignments(
     conditions: &[(String, &ast::Expr)],
     ctx: &Context,
@@ -1196,7 +1142,6 @@ fn reachable_assignments(
     }
 }
 
-/// Shifts that saturate to zero instead of overflowing at 64 bits.
 fn shift_left(value: u64, by: u64) -> u64 {
     u32::try_from(by)
         .ok()
@@ -1211,7 +1156,6 @@ fn shift_right(value: u64, by: u64) -> u64 {
         .unwrap_or(0)
 }
 
-/// The low `width` bits set.
 fn mask(width: u16) -> u64 {
     match width >= 64 {
         true => u64::MAX,
@@ -1219,8 +1163,6 @@ fn mask(width: u16) -> u64 {
     }
 }
 
-/// Evaluate an encoding condition to a value and its width, or say why the
-/// operands do not determine it.
 fn eval(
     expr: &ast::Expr,
     ctx: &Context,
@@ -1316,7 +1258,6 @@ fn eval(
     }
 }
 
-/// A width an encoding names: a constant between 1 and 64.
 fn eval_width(
     expr: &ast::Expr,
     ctx: &Context,
@@ -1329,7 +1270,6 @@ fn eval_width(
         .ok_or_else(|| format!("names the width {value}, which no encoder can spell"))
 }
 
-/// `value`, read as a signed number of `width` bits, in 64.
 fn sign_extend(value: u64, width: u16) -> u64 {
     match width > 0 && width < 64 && value & (1 << (width - 1)) != 0 {
         true => value | !mask(width),

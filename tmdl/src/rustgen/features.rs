@@ -1,5 +1,3 @@
-/// `(isa name, value)` for every ISA defining `param` with a literal integer
-/// default, in declaration order.
 fn isa_param_definers(files: &[ast::File], param: &str) -> Vec<(String, i64)> {
     let mut definers = vec![];
     for isa in files.iter().flat_map(|f| f.isas()) {
@@ -159,7 +157,6 @@ fn emit_features(files: &[ast::File]) -> Result<proc_macro2::TokenStream, TMDLEr
     })
 }
 
-/// `&[Feature::A, Feature::B]` for an item's `for [A, B]` clause.
 fn feature_slice(for_isas: &[String]) -> proc_macro2::TokenStream {
     let idents = for_isas.iter().map(|name| {
         let ident = format_ident!("{}", name);

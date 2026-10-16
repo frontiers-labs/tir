@@ -143,10 +143,6 @@ impl Compiler {
         }
     }
 
-    /// Read all inputs, lex them, collect every `macro` definition into one
-    /// shared table (cross-file visibility), then macro-expand each file.
-    /// Sources are read up front so their `String`s outlive the borrowed tokens.
-    /// Returns `None` after printing diagnostics.
     fn lex_collect_expand<'s>(
         &self,
         sources: &'s [String],
@@ -187,9 +183,6 @@ impl Compiler {
         Some(expanded)
     }
 
-    /// Full front end shared by AST-emitting and whole-program actions: read,
-    /// lex, expand, parse, resolve inheritance, then run semantic + type
-    /// analysis. Prints diagnostics and returns `Ok(None)` on any failure.
     fn parse_and_check(&self) -> Result<Option<Vec<crate::ast::File>>, TMDLError> {
         let sources = self.read_sources()?;
         let arena = StringArena::new();
@@ -620,9 +613,6 @@ fn print_report(
         .unwrap()
 }
 
-/// Print grouped-by-file diagnostics using the already-in-memory sources
-/// (`inputs[i]` names the file whose text is `sources[i]`). Diagnostics may
-/// reference any input file; unknown files are skipped.
 fn print_diags(diags: Vec<Diag>, inputs: &[String], sources: &[String]) {
     use std::collections::BTreeMap;
     let mut by_file: BTreeMap<String, Vec<Rich<'static, String, Span>>> = BTreeMap::new();

@@ -504,13 +504,6 @@ fn fusion_schedule_ts(
     })
 }
 
-/// Emit one `static <MACHINE>_MODEL` (plus the `fn <machine>_model()` accessor that
-/// returns it) per TMDL `machine` block, and resolve every instruction's `unit`
-/// membership against each machine's `bind`s into a concrete scheduling class.
-/// Machines are numbered, so an instruction reaches its class by indexing rather
-/// than by looking its own name up in a per-machine table. These classes
-/// feed static scheduling and provide the simulator fallback; captured
-/// conditional latencies override that fallback during timing replay.
 fn emit_machine_models<'a>(
     files: &'a [ast::File],
     item_cache: &HashMap<&'a str, &'a ast::Item>,
@@ -772,8 +765,6 @@ fn emit_uops(uops: &[ResolvedMicroOp]) -> Vec<proc_macro2::TokenStream> {
         .collect()
 }
 
-/// Resource-agnostic `unit` defaults, keyed by name. Used both when a machine
-/// does not bind a unit and to drive the machine-independent [`instruction_costs`].
 fn collect_unit_defaults(files: &[ast::File]) -> HashMap<&str, &ast::SchedClassDecl> {
     files
         .iter()
@@ -782,10 +773,6 @@ fn collect_unit_defaults(files: &[ast::File]) -> HashMap<&str, &ast::SchedClassD
         .collect()
 }
 
-/// `(instruction name, operation identity, mnemonic, units)` for every
-/// instruction carrying a `schedule` block. The declaration name keys
-/// per-instruction machine `override`s; operation identity keys the runtime
-/// scheduling table; mnemonic remains the machine-independent cost key.
 fn collect_all_instruction_ops<'a>(
     files: &'a [ast::File],
     item_cache: &HashMap<&'a str, &'a ast::Item>,
@@ -889,18 +876,12 @@ impl SchedTables {
         self.costs.get(inst).copied().unwrap_or(1)
     }
 
-    /// The `InstrInfo::sched` initializer for one instruction: its class on every
-    /// machine. `None` when no machine describes it, leaving the empty table
-    /// `InstrInfo::BASE` carries.
     fn sched(&self, inst: &str) -> Option<proc_macro2::TokenStream> {
         let classes = self.classes.get(inst)?;
         Some(quote! { &[#(#classes),*] })
     }
 }
 
-/// Machine-independent cost per instruction declaration, derived from its `unit`
-/// defaults (latency, falling back to 1). Instruction selection uses this cost
-/// independently of machine overrides and conditional simulator latencies.
 fn instruction_costs<'a>(
     files: &'a [ast::File],
     item_cache: &HashMap<&'a str, &'a ast::Item>,
@@ -967,9 +948,6 @@ struct ExplicitTimingSpec<'a> {
     zero_idiom: Option<bool>,
 }
 
-/// Resolve one explicit timing spec (a `bind` or an `override`) to a class. Timing
-/// is phase-based when it names `reads`/`writes` phases (cycles from the machine's
-/// pipeline), else scalar (`latency = N` ≡ read at cycle 0, write at cycle N).
 fn resolve_spec(
     spec: ExplicitTimingSpec<'_>,
     resource_groups: &HashMap<&str, &ast::ResourceExpr>,
@@ -1015,11 +993,6 @@ fn resolve_spec(
     }
 }
 
-/// Resolve an instruction's `unit` membership to a concrete class on one machine.
-/// Precedence per unit: the machine's `bind` → the unit's resource-agnostic default
-/// → the built-in `(latency 1, read 0)`. Across multiple units the result aggregates
-/// conservatively: the highest-latency unit sets the latency/read-cycle, throughput
-/// is the max, resources are unioned.
 fn resolve_sched_class(
     units: &[String],
     binds: &HashMap<&str, &ast::UnitBind>,
@@ -1228,7 +1201,6 @@ fn resolve_resource_expr(
     }
 }
 
-/// The `tir::backend::sched::Protection` variant for an AST protection mode.
 fn protection_ts(p: ast::Protection) -> proc_macro2::TokenStream {
     match p {
         ast::Protection::Protected => quote! { tir::backend::sched::Protection::Protected },

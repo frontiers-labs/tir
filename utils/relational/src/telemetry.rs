@@ -71,8 +71,6 @@ pub(super) fn count_rule(name: &str, applications: usize, idle: usize) {
     });
 }
 
-/// Record one extraction: it costs a pass over every id, and instcombine runs
-/// one per region, so the count is as interesting as the time.
 pub(super) fn count_extract(elapsed: Duration) {
     if enabled() {
         EXTRACTED.with(|total| {

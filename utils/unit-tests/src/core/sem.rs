@@ -11,7 +11,6 @@ use tir_egraph::{Atom, ClassId, Guard, HeadOp, LabelFill, NoExterns, Plan, Query
 use tir_egraph::{ClassId as Id, Engine, Ref, Vocabulary};
 use tir_relational::{Expr, Words};
 
-/// A one-level query over `template`, binding its two operands.
 fn addi_plan(template: SemNode) -> Plan<SemNode> {
     Plan::compile(Query::tree(
         3,
@@ -55,7 +54,6 @@ fn op(name: &'static str, ty: TypeId, attrs: Vec<NamedAttribute>, args: Vec<Id>)
     }
 }
 
-/// `node` over the values `args`, its children standing in for them.
 fn over(g: &mut Engine<SemNode>, mut node: SemNode, args: &[Ref]) -> Ref {
     node.children = args.iter().map(|arg| arg.class).collect();
     g.insert(node, args)
@@ -161,8 +159,6 @@ fn graph_operation_controls_commutative_matching() {
     assert_eq!(matches[0].binding(1), Some(g.find(x)));
 }
 
-/// A number spelled typed and untyped is one value: both are its carrier's
-/// zero at that offset, so a class proven it either way is proven one thing.
 #[test]
 fn two_spellings_of_one_constant_are_one_value() {
     let (context, mut g) = graph();

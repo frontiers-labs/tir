@@ -45,8 +45,6 @@ fn emit_field_runs(fields: &[IntField]) -> proc_macro2::TokenStream {
     quote! { &[#(#runs),*] }
 }
 
-/// Lower one shape's arms into its bit map. Errors on a value no bit map can
-/// hold; the decoder treats that as "not invertible" rather than a failure.
 fn lower_shape(
     inst: &ast::Instruction,
     shape: &EncodingShape,
@@ -140,11 +138,6 @@ fn lower_shape(
     Ok(lowered)
 }
 
-/// The runtime guard that selects `shape`, as a `tir::backend::binary::Guard`.
-///
-/// The tests themselves are read out of the encoding by `shapes::lower_guard`;
-/// this renders them. Only tests the operands answer are left by then: the
-/// shape expansion has already taken every branch the parameters decide.
 fn emit_guard(
     inst: &ast::Instruction,
     shape: &EncodingShape,
@@ -231,12 +224,6 @@ fn emit_predicate(predicate: &crate::shapes::Predicate) -> proc_macro2::TokenStr
     }
 }
 
-/// Compile an instruction's encoding shapes into an `ENCODE_*` spec: one fixed
-/// bit map per shape, the guard that selects it, and the patch fields that
-/// re-scatter a resolved fixup into it. The spec is interpreted by
-/// `tir::backend::binary::encode_with`; the instruction-specific part is a
-/// static data table.
-/// Returns `None` when the instruction has no encoding.
 fn emit_instruction_encoder(
     inst: &ast::Instruction,
     shapes: &[EncodingShape],
@@ -373,7 +360,6 @@ fn emit_instruction_encoder(
     }))
 }
 
-/// The narrowest and widest encoding of an instruction, in bytes.
 fn width_range(shapes: &[EncodingShape]) -> (u8, u8) {
     let widths = shapes
         .iter()
@@ -384,17 +370,6 @@ fn width_range(shapes: &[EncodingShape]) -> (u8, u8) {
     )
 }
 
-/// Compile an instruction's encoding shapes into a `DECODE_*` spec — the
-/// inverse of [`emit_instruction_encoder`]. Given a 32-bit little-endian
-/// instruction word the shared interpreter matches a shape's fixed opcode bits,
-/// reconstructs each operand from its (possibly split) bit-fields, builds the
-/// corresponding op in the `Context`, and returns its id.
-///
-/// Best-effort: returns `None` (no decoder emitted) for instructions without an
-/// encoding, wider than the 32-bit fetch window, or using an encoding form this
-/// generator cannot invert — so enabling decoding never breaks a backend's
-/// build. The specificity the dispatcher orders by is the count of bits the
-/// least specific shape fixes.
 fn emit_instruction_decoder(
     inst: &ast::Instruction,
     shapes: &[EncodingShape],

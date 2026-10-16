@@ -228,7 +228,6 @@ impl SwitchOp {
         }
     }
 
-    /// Every successor edge, the cases' first and the default last.
     fn edges(&self) -> Vec<Successor> {
         let dests = match self.attr(DESTS) {
             Some(AttributeValue::Array(items)) => items
@@ -383,8 +382,6 @@ impl CaseGuard for SwitchOp {
     }
 }
 
-/// Print a successor as `^bbN` followed by an optional MLIR-style argument list
-/// `(%a, %b : t1, t2)` when the branch forwards block arguments.
 fn print_successor(
     fmt: &mut tir::IRFormatter,
     context: &Context,

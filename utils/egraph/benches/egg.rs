@@ -22,8 +22,6 @@ use tir_bench::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_ma
 mod shared;
 use shared::Workload;
 
-/// Operator name -> index, for the patterns egg parses from text. The index is
-/// private to this table: a seed node is built from its name too.
 fn intern(name: &str) -> u32 {
     static TABLE: OnceLock<Mutex<HashMap<String, u32>>> = OnceLock::new();
     let mut table = TABLE.get_or_init(Default::default).lock().unwrap();
@@ -139,7 +137,6 @@ fn extract_all(egraph: &EGraph<Sym, ()>) -> usize {
     total
 }
 
-/// The same table the `egraph` benchmark prints under `TIR_WORKLOAD_STATS`.
 fn print_stats(workloads: &[Workload]) {
     if std::env::var_os("TIR_WORKLOAD_STATS").is_none() {
         return;

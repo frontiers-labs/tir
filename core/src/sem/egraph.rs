@@ -20,9 +20,6 @@ use tir_adt::APInt;
 /// values a region or a function computes.
 pub type SemEGraph = Engine<SemNode>;
 
-/// The constant a value is proven to hold: an offset of its carrier's zero,
-/// the value an open assumption scope proves it evaluates to, or an integer
-/// literal too wide for a carrier among its class's rows.
 pub(crate) fn class_int_binding(egraph: &SemEGraph, value: Ref) -> Option<APInt> {
     let int = |n: &SemNode| match &n.payload {
         Some(SemPayload::Expr(SymPayload::Int(v))) => Some(v.clone()),
@@ -36,9 +33,6 @@ pub(crate) fn class_int_binding(egraph: &SemEGraph, value: Ref) -> Option<APInt>
     })
 }
 
-/// An unsigned literal at its minimal width. Widths identify a constant class,
-/// so the byte counts and metadata the memory vocabulary carries must be spelled
-/// this one way wherever they are seeded.
 pub(crate) fn minimal_unsigned_apint(value: u64) -> APInt {
     let width = if value == 0 {
         1
@@ -48,7 +42,6 @@ pub(crate) fn minimal_unsigned_apint(value: u64) -> APInt {
     APInt::new(u64::from(width), value)
 }
 
-/// The negated comparison at the same operand order (`!(a < b)` is `a >= b`).
 pub(crate) fn complement_comparison(kind: SymKind) -> Option<SymKind> {
     Some(match kind {
         SymKind::Eq => SymKind::Ne,
@@ -65,14 +58,10 @@ pub(crate) fn complement_comparison(kind: SymKind) -> Option<SymKind> {
     })
 }
 
-/// Whether the kind is a boolean comparison.
 pub(crate) fn is_comparison(kind: SymKind) -> bool {
     complement_comparison(kind).is_some()
 }
 
-/// The carrier a value of `ty` lives in: an integer of at most 64 bits, or a
-/// pointer where a data layout gives its width. Anything else keeps no
-/// offsets.
 pub(crate) fn carrier_of(
     context: &Context,
     pointer_width: Option<u32>,

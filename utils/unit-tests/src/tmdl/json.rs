@@ -48,9 +48,6 @@ fn validate_output(name: &str, input: &str, text_only: bool) {
     assert!(errors.is_empty(), "{}", errors.join("\n"));
 }
 
-/// Checks `instance` against `schema`, covering the JSON Schema keywords the
-/// committed schema uses. An unknown keyword panics, so a schema that grows a
-/// new one cannot pass unchecked.
 fn validate(root: &Value, schema: &Value, instance: &Value, path: &str, errors: &mut Vec<String>) {
     let mut fail = |what: String| errors.push(format!("{path}: {what}"));
     let matches = |schema: &Value| {

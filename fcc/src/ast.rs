@@ -76,9 +76,6 @@ pub enum CType {
 }
 
 impl CType {
-    /// The operand of a type built from another type, or `None` for a leaf.
-    /// Walking this chain iteratively keeps deeply nested declarators (`int
-    /// **...*x` with thousands of `*`) off the stack.
     pub(crate) fn derived_inner(&self) -> Option<&CType> {
         match self {
             CType::Const(inner)
@@ -434,9 +431,6 @@ fn render_node(ast: &Ast, id: NodeId, depth: usize, out: &mut String) {
     writeln!(out, "{:indent$}{label}", "", indent = depth * 2).unwrap();
 }
 
-/// Label for the nodes that carry an [`AstLeaf`]; the rest are named by their
-/// kind. A leaf names one kind, except the three shared by two kinds, which
-/// take their name from the node.
 fn payload_label(ast: &Ast, id: NodeId) -> Option<String> {
     let kind = ast.get_node(id).kind;
     let label = match ast.get_leaf_data(id)? {
@@ -498,7 +492,6 @@ fn payload_label(ast: &Ast, id: NodeId) -> Option<String> {
     Some(label)
 }
 
-/// An unnamed field or parameter renders as `_`.
 fn declarator_name(name: &str) -> String {
     if name.is_empty() {
         "_".to_string()

@@ -19,8 +19,6 @@ pub fn restructure(cfg: &mut Cfg) {
     cfg.entry = entry;
 }
 
-/// The nodes reachable from `from`, a loop tail's edges excluded: they leave
-/// the body they terminate.
 fn reachable(cfg: &Cfg, from: NodeId) -> BTreeSet<NodeId> {
     let mut seen = BTreeSet::from([from]);
     let mut pending = vec![from];
@@ -41,8 +39,6 @@ fn restructure_region(cfg: &mut Cfg, nodes: BTreeSet<NodeId>, entry: &mut NodeId
     }
 }
 
-/// The successors of `node` inside `nodes`. A loop tail closes the body it
-/// belongs to: its edges lead out of the region being restructured.
 fn inner_successors(cfg: &Cfg, node: NodeId, nodes: &BTreeSet<NodeId>) -> Vec<NodeId> {
     if matches!(cfg.nodes[node].term, Term::LoopTail { .. }) {
         return vec![];
@@ -53,8 +49,6 @@ fn inner_successors(cfg: &Cfg, node: NodeId, nodes: &BTreeSet<NodeId>) -> Vec<No
         .collect()
 }
 
-/// The cyclic strongly connected components of the subgraph on `nodes`, in
-/// ascending order of their smallest node.
 fn components(cfg: &Cfg, nodes: &BTreeSet<NodeId>) -> Vec<Vec<NodeId>> {
     let mut state = Tarjan {
         index: BTreeMap::new(),
@@ -95,8 +89,6 @@ struct Tarjan {
 }
 
 impl Tarjan {
-    /// Iterative Tarjan: `work` holds each open node with the index of the
-    /// successor to visit next.
     fn run(&mut self, cfg: &Cfg, nodes: &BTreeSet<NodeId>, root: NodeId) {
         let mut work = vec![(root, 0usize)];
         self.open(root);
@@ -141,8 +133,6 @@ impl Tarjan {
     }
 }
 
-/// Rewire one strongly connected component into a single-entry, single-exit
-/// tail-controlled loop, then restructure its body.
 fn restructure_loop(
     cfg: &mut Cfg,
     nodes: &mut BTreeSet<NodeId>,
@@ -257,8 +247,6 @@ fn restructure_loop(
     }
 }
 
-/// An existing tail decision already expresses theta's repetition predicate.
-/// Keeping it avoids a gamma that merely selects true or false for that predicate.
 fn preserve_tail_loop(
     cfg: &mut Cfg,
     nodes: &mut BTreeSet<NodeId>,
@@ -346,7 +334,6 @@ fn preserve_tail_loop(
     true
 }
 
-/// The members of `component` an edge from outside it lands on.
 fn entry_vertices(
     cfg: &Cfg,
     nodes: &BTreeSet<NodeId>,
@@ -370,7 +357,6 @@ fn entry_vertices(
     entries.into_iter().collect()
 }
 
-/// The nodes outside `members` that an edge from inside lands on.
 fn exit_targets(cfg: &Cfg, members: &BTreeSet<NodeId>) -> Vec<NodeId> {
     let mut exits = BTreeSet::new();
     for &node in members {
@@ -383,8 +369,6 @@ fn exit_targets(cfg: &Cfg, members: &BTreeSet<NodeId>) -> Vec<NodeId> {
     exits.into_iter().collect()
 }
 
-/// One node selecting between `targets` on `var`, or the target itself when
-/// there is only one.
 fn dispatch_node(cfg: &mut Cfg, var: Option<VarId>, targets: &[NodeId]) -> NodeId {
     let Some(var) = var else {
         return targets[0];

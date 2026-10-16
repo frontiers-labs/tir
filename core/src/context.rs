@@ -181,7 +181,6 @@ pub(crate) struct Snapshot {
 }
 
 impl Snapshot {
-    /// The partition each of `targets` mints into.
     pub(crate) fn partitions(&self, targets: &[OpId]) -> Vec<u32> {
         targets
             .iter()
@@ -195,7 +194,6 @@ impl Snapshot {
 pub(crate) struct EditBatch(Db);
 
 impl EditBatch {
-    /// Bytes of the chunks the batch wrote.
     pub(crate) fn bytes(&self) -> usize {
         self.0.census().touched_bytes
     }
@@ -229,10 +227,6 @@ impl Drop for FunctionScope {
     }
 }
 
-/// The attribute names every registered operation declares, interned ahead of
-/// any IR so schema names get dense low ids in registration order and the hot
-/// path never copies a string: the names are `'static`, contributed by the
-/// `operation!` macro.
 fn schema_vocabulary() -> Interner {
     let mut names = Interner::new();
     for schema in crate::schema::OP_SCHEMAS {
@@ -243,7 +237,6 @@ fn schema_vocabulary() -> Interner {
     names
 }
 
-/// Every op an `operation!` declared, with its schema, ahead of any IR.
 fn declared_op_names() -> (Vec<OpName>, HashMap<(&'static str, &'static str), OpNameId>) {
     let mut names = Vec::new();
     let mut ids = HashMap::new();
@@ -368,8 +361,6 @@ impl Context {
         }))
     }
 
-    /// The rules of kind `T` compiled for this context, `compile`d the first
-    /// time any pass instance asks.
     pub(crate) fn compiled_rules<T: std::any::Any + Send + Sync>(
         &self,
         compile: impl FnOnce() -> T,
@@ -514,7 +505,6 @@ impl Context {
             .clone()
     }
 
-    /// The dense id of an op identity, minted on first sight.
     pub(crate) fn intern_op_name(&self, dialect: &'static str, name: &'static str) -> OpNameId {
         let mut registry = self.registry_mut();
         if let Some(id) = registry.op_name_ids.get(&(dialect, name)) {
@@ -550,8 +540,6 @@ impl Context {
         self.0.epoch.load(Ordering::Relaxed)
     }
 
-    /// What this context wrote since it was opened, for the context it was
-    /// opened from to merge.
     pub(crate) fn finish(&self) -> EditBatch {
         EditBatch(self.db().clone())
     }
@@ -562,9 +550,6 @@ impl Context {
         self.0.epoch.store(self.epoch() + 1, Ordering::Relaxed);
     }
 
-    /// Merge `batches`, each finished by a context opened over this one as
-    /// committed, in the order given. Two batches writing one row are refused
-    /// before anything changes, naming the row.
     pub(crate) fn commit_batches(&self, batches: Vec<EditBatch>) -> Result<(), String> {
         self.db_mut()
             .merge(batches.into_iter().map(|batch| batch.0).collect())?;
@@ -572,9 +557,6 @@ impl Context {
         Ok(())
     }
 
-    /// What another context over the IR this one reads needs. `Send`, so the
-    /// context can be opened on another thread. Every edit must be committed
-    /// first.
     pub(crate) fn snapshot(&self) -> Snapshot {
         let db = self.db();
         assert!(db.is_clean(), "a snapshot is taken of a committed base");
@@ -586,10 +568,6 @@ impl Context {
         }
     }
 
-    /// A context over `snapshot` for task `index` of the `count` an epoch
-    /// runs on `target`s of their own. It mints into `target`'s partition
-    /// through chunk indices no other task takes; `exclusive` says no other
-    /// task of the epoch mints into that partition.
     pub(crate) fn open(
         snapshot: &Snapshot,
         index: usize,
@@ -634,9 +612,6 @@ impl Context {
         }))
     }
 
-    /// A copy of this context to try an edit in. Ids minted in the fork
-    /// continue from this context's, so [`Context::adopt`] hands them back
-    /// unchanged.
     pub(crate) fn fork(&self) -> Self {
         Context(std::rc::Rc::new(Inner {
             registry: self.0.registry.clone(),
@@ -648,9 +623,6 @@ impl Context {
         }))
     }
 
-    /// Take the IR of `fork`, a [`Context::fork`] of this context, as this
-    /// context's own. Handles into `fork` die with it; its ids stay valid
-    /// here.
     pub(crate) fn adopt(&self, fork: Context) {
         let db = fork.db().clone();
         drop(fork);
@@ -679,13 +651,10 @@ impl Context {
         })
     }
 
-    /// Record that `old` was replaced by `new` in place, so a pipeline can
-    /// follow its root across the swap.
     pub(crate) fn record_replaced_op(&self, old: OpId, new: OpId) {
         self.db_mut().replaced_ops.insert(old, new);
     }
 
-    /// The op that took `id`'s place, if a rewrite replaced it.
     pub(crate) fn replaced_op(&self, id: OpId) -> Option<OpId> {
         self.db().replaced_ops.get(&id).copied()
     }
@@ -714,7 +683,6 @@ impl Context {
         Some(Ok(rows))
     }
 
-    /// The schema `operation!` declared for `dialect.name`.
     pub(crate) fn op_schema(&self, dialect: &str, name: &str) -> Option<&'static crate::OpSchema> {
         let registry = self.registry();
         let id = registry.op_name_ids.get(&(dialect, name))?;
@@ -1001,18 +969,14 @@ impl Context {
         self.db().version(op)
     }
 
-    /// Whether `pass` already ran on `op` as it stands now and edited nothing.
     pub(crate) fn is_settled(&self, pass: &'static str, op: OpId) -> bool {
         self.db().is_settled(pass, op)
     }
 
-    /// Record that `pass` ran on `op` as it stands now and edited nothing.
     pub(crate) fn settle(&self, pass: &'static str, op: OpId) {
         self.db_mut().settle(pass, op);
     }
 
-    /// The subtrees edited since the last call, innermost-dirtied op per edit and
-    /// deduplicated. The pass manager drains this to scope post-pass verification.
     pub(crate) fn take_dirty_ops(&self) -> Vec<OpId> {
         self.db_mut().take_dirty()
     }
@@ -1075,7 +1039,6 @@ impl Context {
         self.db_mut().result_uses(value)
     }
 
-    /// Whether `region` or a region nested in it names `value` as a result.
     pub(crate) fn published_under(&self, region: RegionId, value: ValueId) -> bool {
         let mut db = self.db_mut();
         let uses = db.result_uses(value);
@@ -1083,7 +1046,6 @@ impl Context {
             .any(|(naming, _)| db.region_under(naming, region))
     }
 
-    /// Whether `region` is `root` or nested in it, at any depth.
     pub(crate) fn region_under(&self, region: RegionId, root: RegionId) -> bool {
         self.db().region_under(region, root)
     }
@@ -1198,7 +1160,6 @@ impl Context {
         self.db().op_attrs(id).to_vec()
     }
 
-    /// [`OpHandle::attr_sym`]: the lookup is a `u32` compare per attribute.
     pub(crate) fn op_attr_sym(&self, id: OpId, name: Sym) -> Option<AttributeValue> {
         self.db()
             .op_attrs(id)
@@ -1207,18 +1168,14 @@ impl Context {
             .map(|attribute| attribute.value.clone())
     }
 
-    /// The ops named one of `names` under `root`, read off the name column of
-    /// the partitions holding what is under it rather than by a walk.
     pub(crate) fn ops_named(&self, root: OpId, names: &[OpNameId]) -> Vec<OpId> {
         self.db().ops_named(root, names)
     }
 
-    /// The interned name of `id`.
     pub(crate) fn op_name_id(&self, id: OpId) -> OpNameId {
         self.db().op_name(id)
     }
 
-    /// The `(dialect, name)` pair `id` is spelled by.
     pub(crate) fn op_identity(&self, id: OpId) -> (&'static str, &'static str) {
         let name = self.db().op_name(id);
         self.registry().op_names[name.index()].identity
@@ -1232,7 +1189,6 @@ impl Context {
         self.db().block_attrs(id).to_vec()
     }
 
-    /// [`BlockHandle::attr`].
     pub(crate) fn block_attr(&self, block: BlockId, name: &str) -> Option<AttributeValue> {
         let name = self.sym(name)?;
         self.db()
@@ -1242,7 +1198,6 @@ impl Context {
             .map(|attribute| attribute.value.clone())
     }
 
-    /// The operations `block` holds, in order.
     pub(crate) fn block_ops(&self, id: BlockId) -> Vec<OpId> {
         self.db_mut().block_ops(id)
     }
@@ -1255,23 +1210,18 @@ impl Context {
         self.db().region_is_nodes(id)
     }
 
-    /// The blocks an ordered region holds, in order; none for an unordered one.
     pub(crate) fn region_blocks(&self, id: RegionId) -> Vec<BlockId> {
         self.db_mut().region_blocks(id)
     }
 
-    /// The operations an unordered region holds directly, in the order they
-    /// joined it; none for an ordered one.
     pub(crate) fn region_ops(&self, id: RegionId) -> Vec<OpId> {
         self.db_mut().region_ops(id)
     }
 
-    /// Every op under `roots`, the roots included.
     pub(crate) fn subtree_ops(&self, roots: &[OpId]) -> Vec<OpId> {
         self.db_mut().subtree_ops(roots)
     }
 
-    /// `region` and every region nested in it.
     pub(crate) fn nested_regions(&self, region: RegionId) -> Vec<RegionId> {
         self.db_mut().nested_regions(region)
     }
@@ -1284,7 +1234,6 @@ impl Context {
         self.db().sibling_read(reader, value, None)
     }
 
-    /// The ports an unordered region owns itself; none for an ordered one.
     pub(crate) fn region_ports(&self, id: RegionId) -> Vec<Value> {
         self.db().region_ports(id)
     }
@@ -1314,20 +1263,17 @@ impl Context {
         previous.map(crate::parse::Span)
     }
 
-    /// Whether `refine`'s obligation was proved for the op as it stands.
     pub(crate) fn refine_proved(&self, refine: OpId) -> bool {
         let db = self.db();
         db.proved_refines.get(&refine) == Some(&db.op_stamp(refine))
     }
 
-    /// Record that `refine`'s obligation holds for the op as it stands.
     pub(crate) fn note_refine_proved(&self, refine: OpId) {
         let mut db = self.db_mut();
         let stamp = db.op_stamp(refine);
         db.proved_refines.insert(refine, stamp);
     }
 
-    /// Forget the proofs of the refines that are gone.
     pub(crate) fn forget_erased_refines(&self) {
         let mut db = self.db_mut();
         let mut proved = std::mem::take(&mut db.proved_refines);
@@ -1348,10 +1294,6 @@ impl Context {
         self.remove_operation_except(id, &[]);
     }
 
-    /// [`Context::remove_operation`] for a replacement that adopted some of the
-    /// erased op's result values: a post-allocation re-encoding keeps the values
-    /// the register assignment already placed, so they outlive the op that used
-    /// to define them.
     pub(crate) fn remove_operation_except(&self, id: OpId, keep: &[ValueId]) {
         let mut owned = self.owned_entities(vec![id]);
         owned.values.retain(|value| !keep.contains(value));
@@ -1501,7 +1443,6 @@ impl Context {
         db.edit_region(region);
     }
 
-    /// Make an empty region unordered; see [`Context::create_nodes_region`].
     pub(crate) fn set_region_nodes(
         &self,
         region: RegionId,
@@ -1583,7 +1524,6 @@ impl Context {
         self.insert_result_at(op, index, value);
     }
 
-    /// Drop the operand at `index`, and with it the use it made.
     pub(crate) fn remove_operand(&self, op: OpId, index: usize) {
         let segment_sizes = self.registry().segment_sizes;
         let mut db = self.db_mut();
@@ -1608,8 +1548,6 @@ impl Context {
         db.edit_op(op);
     }
 
-    /// Drop the result at `index`. The value it named is left with no
-    /// definition, so a caller drops one nothing reads.
     pub(crate) fn remove_result(&self, op: OpId, index: usize) {
         let mut db = self.db_mut();
         if db.splice_results(op, index, 1, &[]) {
@@ -1617,7 +1555,6 @@ impl Context {
         }
     }
 
-    /// Drop the port at `index` of an unordered region.
     pub(crate) fn remove_region_port(&self, region: RegionId, index: usize) {
         let mut db = self.db_mut();
         db.splice_region_ports(region, index, 1, &[]);
@@ -1640,9 +1577,6 @@ impl Context {
         self.grow_declared_port(op, ty, init, latch)
     }
 
-    /// Put `value` at position `index` of `op`'s operands, inside the declared
-    /// operand group that ends at `group_end`, so the segment sizes stay in
-    /// step.
     pub(crate) fn insert_operand_at(
         &self,
         op: OpId,
@@ -1678,14 +1612,12 @@ impl Context {
         db.edit_op(op);
     }
 
-    /// Put `port` at position `index` of the unordered `region`'s ports.
     pub(crate) fn insert_region_port(&self, region: RegionId, index: usize, port: Value) {
         let mut db = self.db_mut();
         db.splice_region_ports(region, index, 0, &[port]);
         db.edit_region(region);
     }
 
-    /// Name `value` at position `index` of the unordered `region`'s results.
     pub(crate) fn insert_region_result(&self, region: RegionId, index: usize, value: ValueId) {
         let mut db = self.db_mut();
         db.splice_region_results(region, index, 0, &[value]);
@@ -1704,8 +1636,6 @@ impl Context {
         db.edit_region(region);
     }
 
-    /// Put `value` at position `index` of `op`'s results, moving its
-    /// definition onto `op`.
     pub(crate) fn insert_result_at(&self, op: OpId, index: usize, value: ValueId) {
         let mut db = self.db_mut();
         if db.splice_results(op, index, 0, &[value]) {
@@ -1752,21 +1682,14 @@ impl Context {
         }
     }
 
-    /// Take the subtree under `blocks` out of the live IR.
     fn detach_subtree(&self, blocks: &[BlockId]) {
         self.free(self.collect_owned(Vec::new(), blocks.to_vec()));
     }
 
-    /// Everything `ops` own: the ops themselves, their result values, their
-    /// regions, and those regions' blocks, block arguments and nested ops.
     fn owned_entities(&self, ops: Vec<OpId>) -> Owned {
         self.collect_owned(ops, Vec::new())
     }
 
-    /// Walks ops and blocks alternately, reading through handles.
-    ///
-    /// A region is reclaimed only while its parent link still points at the
-    /// op being erased: a replacement that took the region over owns it now.
     fn collect_owned(&self, mut ops: Vec<OpId>, mut blocks: Vec<BlockId>) -> Owned {
         let mut owned = Owned::default();
         loop {
@@ -1818,7 +1741,6 @@ impl Context {
         }
     }
 
-    /// Take entities that have left the IR out of the visible graph.
     fn free(&self, owned: Owned) {
         let mut db = self.db_mut();
         for op in owned.ops {
@@ -1835,14 +1757,12 @@ impl Context {
         }
     }
 
-    /// Insert `op` into `block` at `index`, recording the new parent.
     pub(crate) fn insert_op(&self, block: BlockId, index: usize, op: OpId) {
         let mut db = self.db_mut();
         db.insert_held(block, index, op);
         db.edit_block(block);
     }
 
-    /// Insert `op` after everything `block` currently holds.
     pub(crate) fn append_op(&self, block: BlockId, op: OpId) {
         let mut db = self.db_mut();
         db.append_held(Parent::Block(block), op);
@@ -1867,7 +1787,6 @@ impl Context {
         true
     }
 
-    /// [`BlockHandle::set_ops`].
     pub(crate) fn set_block_ops(&self, block: BlockId, ops: Vec<OpId>) {
         let mut db = self.db_mut();
         debug_assert_eq!(

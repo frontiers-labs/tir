@@ -150,10 +150,6 @@ struct Entry {
 }
 
 impl Table {
-    /// Least cost per slot, or `None` where no member has a finite one.
-    ///
-    /// Only the parents of a slot improved in the previous sweep can improve in
-    /// the next, so `dirty` shrinks to the propagation frontier.
     fn costs(&self, slots: usize) -> Vec<Option<u64>> {
         let mut cost: Vec<Option<u64>> = vec![None; slots];
         let mut dirty = vec![true; self.entries.len()];
@@ -189,8 +185,6 @@ impl Table {
         cost
     }
 
-    /// The member's base plus each child slot's best cost, or `None` if any
-    /// child is un-costed.
     fn cost_of(&self, member: &Entry, cost: &[Option<u64>]) -> Option<u64> {
         if !member.costable {
             return None;

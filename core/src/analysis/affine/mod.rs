@@ -224,9 +224,6 @@ pub fn counted_nest(context: &Context, root: OpId) -> Option<Vec<OpId>> {
     Some(nest)
 }
 
-/// The loop a body holds where the body is nothing but that loop and the
-/// bookkeeping around it: the constants its bounds are spelled with, the latch
-/// that steps the counter, and the joins state threading left behind.
 fn counted_level(context: &Context, outer: OpId) -> Option<OpId> {
     let mut inner = None;
     for op_id in body_ops(context, outer)? {
@@ -243,7 +240,6 @@ fn counted_level(context: &Context, outer: OpId) -> Option<OpId> {
     inner
 }
 
-/// The single block of a loop's ordered body region.
 fn body_block(context: &Context, op: OpId) -> Option<BlockId> {
     let region = *context.get_op(op).regions().last()?;
     match context.get_region(region).block_ids()[..] {
@@ -252,9 +248,6 @@ fn body_block(context: &Context, op: OpId) -> Option<BlockId> {
     }
 }
 
-/// The operations a loop's body computes, whichever kind of region holds it:
-/// an unordered body's operations, or an ordered single block's short of its
-/// terminator.
 pub(crate) fn body_ops(context: &Context, op: OpId) -> Option<Vec<OpId>> {
     let region = context.get_region(*context.get_op(op).regions().last()?);
     if region.is_nodes() {

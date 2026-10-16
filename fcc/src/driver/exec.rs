@@ -90,8 +90,6 @@ fn temp_object_path(dir: &TempDir, input: &InputFile, index: usize) -> PathBuf {
         .join(format!("{}-{index}.o", Path::new(stem).display()))
 }
 
-/// `-###`: print each planned action as a quoted pseudo command line to stdout
-/// (so LIT `filecheck` can read it) and return without executing anything.
 fn dry_run(actions: &[Action], opts: &DriverOptions) {
     let mut resolved: Vec<String> = Vec::with_capacity(actions.len());
     for action in actions {

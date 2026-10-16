@@ -122,7 +122,6 @@ pub(crate) struct Driver<'a, R: Rewrite> {
     lowered: Vec<Node>,
 }
 
-/// The node each rule's root matches.
 pub(crate) fn rule_roots(rules: &[Arc<Rule<Node>>]) -> Vec<Node> {
     let root = |rule: &Arc<Rule<Node>>| {
         let query = rule.plan.query();
@@ -136,7 +135,6 @@ pub(crate) fn rule_roots(rules: &[Arc<Rule<Node>>]) -> Vec<Node> {
     rules.iter().filter_map(root).collect()
 }
 
-/// The IR ops among `roots`, by name.
 pub(crate) fn root_ops(context: &Context, roots: &[Node]) -> Vec<OpNameId> {
     let op = |root: &Node| match &root.kind {
         Kind::Ir(op) => Some(context.intern_op_name(op.dialect, op.name)),
@@ -174,7 +172,6 @@ impl<'a, R: Rewrite> Driver<'a, R> {
         }
     }
 
-    /// Saturate under whatever assumptions are open.
     pub(crate) fn saturate(&mut self) {
         let set = self.pass.rules();
         crate::sem::workload::dump(self.name, &self.eg, &set.rules);
@@ -206,25 +203,12 @@ impl<'a, R: Rewrite> Driver<'a, R> {
         self.pass.cost(&self.eg, class, node, operands, offset)
     }
 
-    /// Prove the loop-carried values a loop never changes, optimistically:
-    /// hypothesise that a port holds the value the loop was entered on, run the
-    /// body under that hypothesis, and union into the base graph the ports no
-    /// edge back into them refutes. What does not survive is dropped and the
-    /// round runs again; `hypotheses` only shrinks, so it ends.
-    ///
-    /// A nest is done under its own enclosing scope: an inner port entered on
-    /// what an outer one carries is only constant while the outer hypothesis is
-    /// open, and an outer port latched from an inner loop's result is only
-    /// unrefuted once the inner one is proved. So the inner loops are resolved
-    /// inside the outer scope before the outer round reads its own edges, and
-    /// again in the base graph once the outer hypothesis is promoted there.
     pub(crate) fn hypothesize(&mut self, loops: Vec<LoopPorts>) {
         let mut order: Vec<usize> = (0..loops.len()).collect();
         order.sort_by_key(|&index| self.nesting(loops[index].op));
         self.hypothesize_within(&loops, &order, None);
     }
 
-    /// The loops `parent` holds directly, resolved in whatever scope is open.
     fn hypothesize_within(&mut self, loops: &[LoopPorts], order: &[usize], parent: Option<OpId>) {
         for &index in order {
             let holder = &loops[index];
@@ -291,7 +275,6 @@ impl<'a, R: Rewrite> Driver<'a, R> {
         }
     }
 
-    /// The innermost loop of `loops` holding `op`'s own regions.
     fn enclosing_loop(&self, loops: &[LoopPorts], op: OpId) -> Option<OpId> {
         let mut current = self.context.parent_op(op);
         while let Some(holder) = current {
@@ -307,7 +290,6 @@ impl<'a, R: Rewrite> Driver<'a, R> {
         self.eg.int_const(value).is_some()
     }
 
-    /// How deep in the region tree `op` sits, so the loops are read outermost first.
     fn nesting(&self, op: OpId) -> usize {
         let mut depth = 0;
         let mut current = self.context.parent_op(op);
@@ -318,11 +300,6 @@ impl<'a, R: Rewrite> Driver<'a, R> {
         depth
     }
 
-    /// Assume the `width`-bit `value` is `bits` in the current context by unioning
-    /// it with that constant, its carrier's zero at `bits`. An equality a boolean assumption settles says
-    /// more than the truth of the condition: the two operands name one value
-    /// there, so their classes are merged as well and every term over either is a
-    /// term over the cheapest form of both — the literal, where one side is one.
     fn inject(&mut self, value: ValueId, width: u32, bits: u64) {
         let class = self.class_of(value);
         let constant = self.eg.add(Node::constant(
@@ -338,8 +315,6 @@ impl<'a, R: Rewrite> Driver<'a, R> {
         self.eg.rebuild();
     }
 
-    /// The operand classes a guard proves congruent: an `eq` that holds, or a
-    /// `ne` that does not.
     fn settled_equality(&mut self, value: ValueId, holds: bool) -> Option<(Ref, Ref)> {
         let op = self.context.get_value(value).defining_op()?;
         let instance = self.context.get_op(op);
@@ -360,8 +335,6 @@ impl<'a, R: Rewrite> Driver<'a, R> {
         equal.then(|| (self.class_of(lhs), self.class_of(rhs)))
     }
 
-    /// The reference standing for `value`, anchoring it as an opaque leaf if
-    /// the seeding named none.
     fn class_of(&mut self, value: ValueId) -> Ref {
         if let Some(&known) = self.value_class.get(&value) {
             return known;
@@ -462,9 +435,6 @@ impl<'a, R: Rewrite> Driver<'a, R> {
         Ok(())
     }
 
-    /// Commit a lowering: rewire the readers of each of `ops`, the ops its
-    /// rules' roots matched, and erase each it leaves unread. Nothing else
-    /// of the function is rewritten.
     pub(crate) fn lower(
         &mut self,
         ops: &[OpId],
@@ -512,17 +482,6 @@ impl<'a, R: Rewrite> Driver<'a, R> {
         self.context.set_region_ops(region, ops);
     }
 
-    /// Count, for each operation of `region`, the operations with regions on
-    /// the dependence paths ending at it; see [`Driver::carriers`]. The
-    /// region's own values are rewired by now, and every read an edit under it
-    /// adds is one [`Commit::readable`] allows, so the counts stay a bound for
-    /// the rest of the commit.
-    ///
-    /// The dependences are read off the use lists: a value an operation of
-    /// the region defines is read by the operation of the region holding each
-    /// of its readers, and by the one holding each nested region publishing
-    /// it. The counts are the least fixpoint of that relation, which a cycle
-    /// through an operation with regions has none of.
     fn count_carriers(&mut self, region: RegionId) -> Result<(), PassError> {
         let context = self.context;
         let ops = context.get_region(region).op_ids();
@@ -603,9 +562,6 @@ impl<'a, R: Rewrite> Driver<'a, R> {
         }
     }
 
-    /// Index every IR value by the reference it is, once the base graph is
-    /// final: a reference at an offset its class's cheapest node does not sit
-    /// at is spelled by a value already computing it before one is built.
     pub(crate) fn index_values(&mut self) {
         let mut named: HashMap<Id, Vec<(u64, ValueId)>> = HashMap::default();
         let mut values: Vec<(&ValueId, &Ref)> = self.value_class.iter().collect();
@@ -649,7 +605,6 @@ impl Commit<'_> {
         self.eg.int_const(reference).is_none() && self.eg.value(row) == reference
     }
 
-    /// The value a node names outright, building nothing.
     fn named_value(&self, node: &Node) -> Option<ValueId> {
         match (node.sym(), node.prov) {
             (_, Prov::Value(value)) => self.context.has_value(value).then_some(value),
@@ -675,12 +630,6 @@ impl Commit<'_> {
         self.rewire_read(value, region)
     }
 
-    /// Rewire the readers of an op a lowering's rule matched. The rules build
-    /// its replacement over the values the op read: another value of an
-    /// operand's class may sit where the replacement cannot read it, or have
-    /// readers of its own, as a state does. A result is spelled anew, never
-    /// answered by what an earlier lowering spelled for its class, whose base
-    /// came from other reads.
     fn lower(&mut self, instance: &OpHandle, region: RegionId) -> Result<(), PassError> {
         let class = |out: &Self, value: &ValueId| Some(out.eg.find(*out.value_class.get(value)?));
         let read: Vec<_> = (instance.operands().iter())
@@ -977,12 +926,6 @@ impl Commit<'_> {
         constant.then(|| crate::builtin::IntegerType::new(self.context, u64::from(width)))
     }
 
-    /// An IR value of type `ty` that is exactly `reference` and is already
-    /// spelled the way [`Self::builtin`] would spell it, where `region` can
-    /// read one: a literal for a constant, and otherwise one add
-    /// of a literal to the value of the class's cheapest node, which sits at
-    /// `at`. A value computing it any other way is not reused, so a rewrite
-    /// never swaps one long spelling for another.
     fn named_at(&self, reference: Ref, at: u64, ty: TypeId, region: RegionId) -> Option<ValueId> {
         let mut members: SmallVec<[Id; 4]> =
             SmallVec::from_slice(self.eg.scope_members(reference.class));
@@ -1001,8 +944,6 @@ impl Commit<'_> {
         })
     }
 
-    /// Whether `value`'s operation is a literal, where `base` is a constant,
-    /// or one add of a literal to `base`.
     fn spells(&self, value: ValueId, base: Ref) -> bool {
         let Some(op) = self.context.get_value(value).defining_op() else {
             return false;
@@ -1030,9 +971,6 @@ impl Commit<'_> {
         }
     }
 
-    /// `base`, which is `reference`'s class at `at`, moved on to `reference`
-    /// by one add of a literal: `addi` for an integer, `ptradd` for a
-    /// pointer, placed where its operands say.
     fn add_offset(
         &self,
         base: ValueId,
@@ -1065,10 +1003,6 @@ impl Commit<'_> {
         Some(value)
     }
 
-    /// Spell a seeded op's value where `region` can read it: a copy of the op
-    /// over its operands' spellings, placed where they say. Only an operation
-    /// that cannot trap may run where the original would not have, and one
-    /// without operands names no region to join.
     fn rebuild(&mut self, row: RowId, region: RegionId) -> Option<ValueId> {
         let node = self.eg.node(row);
         let Prov::Op(op) = node.prov else {
@@ -1124,11 +1058,6 @@ impl Commit<'_> {
             .collect()
     }
 
-    /// Whether `region` can read `value`: it is defined in `region`, or in one
-    /// enclosing it and not downstream of the operation there whose regions
-    /// hold `region`. An arm's facts can make a value computed from its own
-    /// gamma's result equal to one the arm computes, and reading that value in
-    /// the arm would close a dependency cycle.
     pub(crate) fn readable(&self, value: ValueId, region: RegionId) -> bool {
         let Some(defined) = crate::region::defining_region(self.context, value) else {
             return true;
@@ -1154,9 +1083,6 @@ impl Commit<'_> {
         }
     }
 
-    /// [`Driver::carriers`] for `op`, or for one built since, the most any of
-    /// its operands in its own region counts: a built operation has no
-    /// regions.
     fn carried(&self, op: OpId) -> usize {
         if let Some(&count) = self.carriers.get(&op) {
             return count;
@@ -1173,12 +1099,6 @@ impl Commit<'_> {
             .unwrap_or(0)
     }
 }
-/// The one state a join names, where it names one: the state its inputs all
-/// are, or the one chain among them something changed.
-///
-/// Dropping an input is only the join's to do where the join is that
-/// input's one reader: another reader would be left sharing the state with
-/// whatever reads the join, which is a fork the discipline may forbid.
 fn merged_state(context: &Context, join: &OpHandle) -> Option<ValueId> {
     let operands = join.state_operands();
     let (first, rest) = operands.split_first()?;
@@ -1199,10 +1119,6 @@ fn merged_state(context: &Context, join: &OpHandle) -> Option<ValueId> {
     changed.next().is_none().then(|| kept.unwrap_or(*first))
 }
 
-/// A write nothing observes before the next write of its own extent is
-/// overwritten unread: its readers take the state it was handed, and the
-/// sweep takes it. Disjoint reads may remain on that chain: their state
-/// outputs still order the overwriting write after them.
 fn forward_dead_write(out: &Commit<'_>, op: OpId, scope: RegionId) {
     let instance = out.context.get_op(op);
     if !instance.has_interface::<dyn MemoryWrite>() {
@@ -1263,9 +1179,6 @@ fn forward_dead_write(out: &Commit<'_>, op: OpId, scope: RegionId) {
     out.context.replace_value_uses(leaves, taken);
 }
 
-/// Accept a single disjoint read, or a fork of disjoint reads that meets at
-/// one join. A join may also name `state` after CSE bypasses a duplicate
-/// read. Other fork shapes remain unchanged.
 fn disjoint_read_continuation(
     out: &Commit<'_>,
     state: ValueId,
@@ -1327,10 +1240,6 @@ fn disjoint_read_continuation(
     join.state_results().first().copied()
 }
 
-/// The extent a load value or a store's published state covers: the class
-/// its address is an offset of, that offset, and the byte count. An
-/// address some union tried to place at an offset from itself is placed
-/// nowhere, and covers no extent anyone can compare.
 fn extent(out: &Commit<'_>, value: ValueId) -> Option<(Id, u64, u64)> {
     let class = out.eg.find(*out.value_class.get(&value)?).class;
     let row = out
@@ -1354,9 +1263,6 @@ fn extent(out: &Commit<'_>, value: ValueId) -> Option<(Id, u64, u64)> {
     Some((address.class, address.offset, bytes))
 }
 
-/// Whether two non-empty extents, each an offset from `base` and a byte
-/// count, share no byte. Offsets wrap at the address's width, so each is
-/// measured from the other's start the way the address arithmetic does.
 fn disjoint(
     out: &Commit<'_>,
     base: Id,
@@ -1373,9 +1279,6 @@ fn disjoint(
         && a.wrapping_sub(b) & mask >= b_bytes
 }
 
-/// A read whose value was rewritten leaves memory as it found it: the state
-/// it published is the state it observed, so its readers take that, and the
-/// read is demanded by nothing.
 fn forward_read_state(context: &Context, instance: &OpHandle, region: RegionId) {
     if !instance.has_interface::<dyn MemoryRead>() {
         return;
@@ -1387,10 +1290,6 @@ fn forward_read_state(context: &Context, instance: &OpHandle, region: RegionId) 
     }
 }
 
-/// Whether anything changed the memory `state` names since its chain opened.
-/// An entry state names the memory the region was entered with; a loop or a
-/// gate hands back what it was entered on wherever its regions leave that
-/// chain's port alone.
 fn changed_chain(context: &Context, state: ValueId) -> bool {
     let Some(def) = context.get_value(state).defining_op() else {
         return true;
@@ -1416,8 +1315,6 @@ fn changed_chain(context: &Context, state: ValueId) -> bool {
     changed_chain(context, chain.entered)
 }
 
-/// A read nothing demands: its value and state are read by nothing, so the
-/// sweep takes it and the state it observed has one reader fewer.
 pub(crate) fn is_dead_read(context: &Context, scope: RegionId, op: OpId) -> bool {
     let instance = context.get_op(op);
     instance.has_interface::<dyn MemoryRead>()
@@ -1427,10 +1324,6 @@ pub(crate) fn is_dead_read(context: &Context, scope: RegionId, op: OpId) -> bool
         })
 }
 
-/// How a literal is written down. A class holds one node per bit pattern however
-/// each spelling read it back, so the sign flag on whichever node the class
-/// happens to hold says nothing about the value — and a one-bit literal is a
-/// truth value, which is `1`, not the `-1` a signed reading of that bit gives.
 fn spell(literal: &APInt) -> i64 {
     match literal.width() {
         1 => literal.to_u64() as i64,
@@ -1438,9 +1331,6 @@ fn spell(literal: &APInt) -> i64 {
     }
 }
 
-/// Whether `scope` or a region nested in it publishes `value` as a result,
-/// which no use list says. Only a region that can see `value` names it, so a `scope` wider
-/// than the one it is defined in answers the same.
 pub(crate) fn published(context: &Context, scope: RegionId, value: ValueId) -> bool {
     context.published_under(scope, value)
 }

@@ -72,8 +72,6 @@ pub fn register_classes_from_cache(
         .collect()
 }
 
-/// Bits a literal spells: one per binary digit, four per hex digit. A decimal
-/// literal spells no width, so it cannot stand in an encoding.
 pub(crate) fn literal_width(spelling: &str) -> Result<u16, String> {
     if let Some(digits) = spelling.strip_prefix("0b").or(spelling.strip_prefix("0B")) {
         Ok(digits.len() as u16)
@@ -125,9 +123,6 @@ pub fn encoding_arms(
     Some(arms)
 }
 
-/// The unit `total` bits are actually divided into: an encoding shorter than
-/// one unit is a single short unit, which is how a 16-bit compressed
-/// instruction sits in a 32-bit-word ISA.
 fn effective_unit(total: u16, unit: Option<u16>) -> Option<u16> {
     match unit {
         _ if total == 0 => None,

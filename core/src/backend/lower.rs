@@ -11,9 +11,6 @@ use crate::backend::isel::OpLowering;
 use crate::backend::regalloc::RegClassId;
 use crate::backend::{RegClassType, type_class};
 
-/// Give `value` the type of the register class it lives in. Selection is done
-/// by the time this runs, so nothing reads the mid-end type any more and the
-/// class becomes the one thing machine IR says about the value.
 fn retype(context: &Context, value: tir::ValueId, class: RegClassId) {
     context.retype_value(value, RegClassType::new(context, class));
 }

@@ -633,9 +633,6 @@ fn build_work<'a>(
     (work, arch_to_work)
 }
 
-/// For each architectural input, capture the preceding normal writer and all
-/// still-live OR contributors. These edges are stable even if younger groups
-/// issue before older groups on an out-of-order machine.
 fn build_input_dependencies(
     base: &[ScoreboardInstr],
     iterations: usize,

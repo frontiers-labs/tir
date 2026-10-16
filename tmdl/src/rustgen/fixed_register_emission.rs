@@ -110,13 +110,6 @@ fn emit_fixed_register_rules<'a>(
     Ok(())
 }
 
-/// Emit the rule for a (definer, reader) pair. The reader's then-arm writes
-/// the quotient — a bare division — to the dividend register (`rax`) and the
-/// remainder — the Euclidean identity
-/// `dividend - (dividend / divisor) * divisor` — to the register the definer
-/// sets up (`rdx`). Both are results of the one instruction pair, so they are
-/// the results of one rule: the quotient first, the remainder second, each
-/// landing in its register. A result nothing reads is a clobber.
 #[allow(clippy::too_many_arguments)]
 fn emit_division_rules(
     definer: &Definer,
@@ -350,10 +343,6 @@ fn emit_division_rules(
     rule_spec_idents.push(rule_ident);
 }
 
-/// Whether an instruction is a fixed-register definer or reader — the shapes
-/// `emit_fixed_register_rules` composes. A definer takes no register operand and
-/// writes exactly one non-flag register path; a reader takes a register operand
-/// and its behavior is `if COND { <register-path writes> } else { … }`.
 fn is_fixed_register_shape(
     inst: &ast::Instruction,
     ops: &[(String, Type)],
@@ -380,7 +369,6 @@ fn is_fixed_register_shape(
     referenced_operands(rhs, &register_operand_names(ops)).is_empty()
 }
 
-/// The register-path writes a definer is judged by: all but status flags.
 fn definer_writes<'a>(
     inst: &'a ast::Instruction,
     flag_classes: &HashSet<String>,
@@ -391,12 +379,6 @@ fn definer_writes<'a>(
     writes
 }
 
-/// The register ports of a fixed-register definer/reader op: a use slot for
-/// every register path it reads and a def slot for every register path it
-/// writes, so register allocation and liveness see the fixed-register data flow
-/// the composed rules wire up. Empty for every other instruction. Returned as
-/// `(slot, class, is_def)`, reads before writes and each group sorted — the
-/// order the composed emitters bind them in.
 fn fixed_register_role_items(
     inst: &ast::Instruction,
     ops: &[(String, Type)],
@@ -454,23 +436,14 @@ fn fixed_register_role_items(
     items
 }
 
-/// The attribute name a fixed register's incoming value binds through (`rax`).
 fn fixed_read_slot_name(reg_name: &str) -> String {
     reg_name.to_string()
 }
 
-/// The attribute name a fixed register's result binds through (`rax_def`).
 fn fixed_write_slot_name(reg_name: &str) -> String {
     format!("{reg_name}_def")
 }
 
-/// Substitute the definer's write into the reader's guard, then fold: prove the
-/// composed condition is `Eq(x, x)` (structurally), i.e. the definer establishes
-/// exactly the region the reader's single-width arm is valid in. The definer's
-/// write and the reader's guard right-hand side share the same expression by
-/// construction (the honest model writes the guard as the definer's value), so
-/// after aliasing the written register's read to the write the two sides of the
-/// comparison are structurally identical. Returns `true` only on that proof.
 fn guard_folds_to_true(
     definer: &Definer,
     reader: &Reader,
@@ -525,8 +498,6 @@ fn guard_folds_to_true(
     composed.subgraph_eq(*lhs, &composed, *rhs)
 }
 
-/// Copy `node`'s subgraph from `src` into `dst`, replacing every `Symbol` leaf
-/// carrying `symbol` with a copy of `src`'s `replacement` subgraph.
 fn substitute_symbol_with_subgraph(
     dst: &mut tir_symbolic::sem::SemGraph,
     src: &tir_symbolic::sem::SemGraph,
@@ -553,8 +524,6 @@ fn substitute_symbol_with_subgraph(
     )
 }
 
-/// Pair each definer with every reader that reads the register the definer
-/// writes and shares an ISA — the candidate (definer, reader) compositions.
 fn pair_definers_with_readers<'a, 'b>(
     definers: &'b [Definer<'a>],
     readers: &'b [Reader<'a>],
@@ -578,8 +547,6 @@ fn pair_definers_with_readers<'a, 'b>(
     pairs
 }
 
-/// The register paths an expression assigns, as `((class, register name), rhs)`,
-/// walking blocks, both arms of an `if`, and the no-trap body of a `try`.
 pub(crate) fn collect_register_path_writes<'a>(
     expr: &'a ast::Expr,
     out: &mut Vec<((String, String), &'a ast::Expr)>,
@@ -606,8 +573,6 @@ pub(crate) fn collect_register_path_writes<'a>(
     }
 }
 
-/// The register paths an expression reads (register paths in value position),
-/// as `(class, register name)`.
 pub(crate) fn collect_register_path_reads(expr: &ast::Expr, out: &mut HashSet<(String, String)>) {
     match expr {
         ast::Expr::Path(path) if path.remainder.len() == 1 => {
@@ -667,7 +632,6 @@ pub(crate) fn collect_register_path_reads(expr: &ast::Expr, out: &mut HashSet<(S
     }
 }
 
-/// Resolve a `(class, register name)` pair to `(class, encoding index)`.
 fn resolve_fixed_reg(
     (class, name): &(String, String),
     register_index_map: &HashMap<(String, String), u32>,
@@ -676,9 +640,6 @@ fn resolve_fixed_reg(
     u16::try_from(*index).ok().map(|idx| (class.clone(), idx))
 }
 
-/// Recognize a definer: no register operands and a behavior that writes exactly
-/// one fixed register whose right-hand side references no operands (a pure
-/// function of fixed-register reads and constants).
 fn classify_definer<'a>(
     inst: &'a ast::Instruction,
     op_name: &str,
@@ -710,8 +671,6 @@ fn classify_definer<'a>(
     })
 }
 
-/// Recognize a reader: the behavior is `if COND { <writes> } else { … }`, it
-/// reads at least one fixed register, and it has at least one register operand.
 fn classify_reader<'a>(
     inst: &'a ast::Instruction,
     op_name: &str,

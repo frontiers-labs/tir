@@ -5,9 +5,6 @@ use tir::{
 
 use super::{ControlFlow, InstrInfo, MachineInstruction};
 
-/// The `InstrInfo` of a virtual op: it names itself and how it transfers
-/// control, and nothing else. A virtual op has no encoding, no assembly syntax
-/// and no schedule — it is replaced before any of those are consulted.
 const fn virtual_info(name: &'static str, control_flow: ControlFlow) -> InstrInfo {
     InstrInfo {
         name,
@@ -18,8 +15,6 @@ const fn virtual_info(name: &'static str, control_flow: ControlFlow) -> InstrInf
     }
 }
 
-/// [`virtual_info`] for a call: it runs a function, so it touches every object
-/// the outside can reach and carries the chain of them.
 const fn virtual_call_info(name: &'static str) -> InstrInfo {
     InstrInfo {
         effects: tir::backend::MemoryEffects {

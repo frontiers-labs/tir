@@ -18,9 +18,6 @@ use tir::ptr::{PtrType, ops as p};
 use tir::{Operand, Operation, TypeId, ValueId};
 
 impl FnCodegen<'_> {
-    /// Lower a function: spill parameters into stack slots, then lower each body
-    /// statement in source order (statement order is a side-effect ordering, so it
-    /// stays top-down; only the expressions within use the post-order iterator).
     pub(super) fn lower_body(
         &mut self,
         func: NodeId,
@@ -101,10 +98,6 @@ impl FnCodegen<'_> {
         self.lower_statements(&statements, result, returns_void)
     }
 
-    /// Lower a function body, structured loops apart, as a flat graph of blocks
-    /// and branches: a `goto` is an edge like any other, and the `restructure`
-    /// pass raises the whole body back to structured control flow. Every `return`
-    /// stores its value and leaves through the one exit block.
     fn lower_statements(
         &mut self,
         statements: &[NodeId],
@@ -164,29 +157,21 @@ impl FnCodegen<'_> {
         self.alloca(elem, size, align)
     }
 
-    /// A fresh block of the function body, appended after the ones emitted so
-    /// far.
     pub(super) fn new_block(&mut self) -> tir::BlockHandle {
         let block = self.context.create_block(vec![]);
         self.context.get_region(self.region).add_block(block.id());
         block
     }
 
-    /// Continue emitting into `block`, which the branch that reaches it has
-    /// already been emitted for.
     pub(super) fn enter_block(&mut self, block: tir::BlockHandle) {
         self.builder = block;
         self.terminated = false;
     }
 
-    /// End the current block by falling through to `block`, unless it already
-    /// left through a branch of its own.
     fn leave_block(&mut self, block: &tir::BlockHandle) {
         self.branch_to(block, vec![]);
     }
 
-    /// End the current block by branching to `block` with `arguments`, unless
-    /// it already left through a branch of its own.
     pub(super) fn branch_to(&mut self, block: &tir::BlockHandle, arguments: Vec<ValueId>) {
         if self.terminated {
             return;
@@ -215,8 +200,6 @@ impl FnCodegen<'_> {
         self.terminated = true;
     }
 
-    /// The block a label names, shared by the label itself and every `goto`
-    /// that reaches it, whichever comes first in the source.
     fn label_block(&mut self, statement: NodeId) -> tir::BlockHandle {
         let Some(AstLeaf::Label(name)) = self.ast.get_leaf_data(statement) else {
             unreachable!("label and goto nodes carry a label payload");
@@ -230,9 +213,6 @@ impl FnCodegen<'_> {
         block
     }
 
-    /// Lower one statement of a function that holds a label. Control flow
-    /// becomes branches between blocks; everything else lowers exactly as it
-    /// does in a structured function.
     fn lower_stmt(&mut self, stmt: NodeId) -> Result<(), Diagnostic> {
         let ast = self.ast;
         if self.terminated {
@@ -449,8 +429,6 @@ impl FnCodegen<'_> {
         lowered
     }
 
-    /// Lower a loop's condition into a region of its own, leaving through
-    /// `cir.condition`. An omitted `for` condition is the constant true C gives it.
     fn lower_condition_region(
         &mut self,
         condition: NodeId,
@@ -467,8 +445,6 @@ impl FnCodegen<'_> {
         })
     }
 
-    /// Lower a loop body into a region of its own, where `break` and `continue`
-    /// name the loop op rather than a block.
     fn lower_body_region(&mut self, body: NodeId) -> Result<tir::RegionId, Diagnostic> {
         self.lower_region(|cg| {
             cg.break_targets.push(ExitTarget::Loop);
@@ -482,7 +458,6 @@ impl FnCodegen<'_> {
         })
     }
 
-    /// Emit `lower` into a fresh region, restoring the enclosing one afterwards.
     fn lower_region(
         &mut self,
         lower: impl FnOnce(&mut Self) -> Result<(), Diagnostic>,
@@ -500,7 +475,6 @@ impl FnCodegen<'_> {
         lowered.map(|()| region.id())
     }
 
-    /// End the block being emitted with `terminator`, unless it already left.
     fn terminate_with(&mut self, terminator: impl Operation) {
         if self.terminated {
             return;
@@ -509,9 +483,6 @@ impl FnCodegen<'_> {
         self.terminated = true;
     }
 
-    /// Lower a `switch` as one branch on the controlling value: each case takes
-    /// its arm, the arms fall through to one another in source order, and an
-    /// unmatched value reaches the default arm or leaves.
     fn lower_switch(&mut self, stmt: NodeId) -> Result<(), Diagnostic> {
         let mut children = self.ast.children(stmt);
         let value = self.lower_expr(children.next().unwrap())?;
@@ -563,8 +534,6 @@ impl FnCodegen<'_> {
         Ok(())
     }
 
-    /// Lower the arms of a `switch` in source order, each one falling through to
-    /// the next as C requires of an arm that does not `break`.
     fn lower_switch_arms(
         &mut self,
         items: &[SwitchItem],
@@ -583,9 +552,6 @@ impl FnCodegen<'_> {
         Ok(())
     }
 
-    /// The slot a `return` leaves its value in, for a function whose returns are
-    /// not block terminators. An indirect result is written through the pointer
-    /// the caller passed instead.
     fn open_return_value_slot(&mut self, result: QualType) {
         if self.return_abi.indirect {
             return;
@@ -602,8 +568,6 @@ impl FnCodegen<'_> {
         self.return_slot = Some(self.alloca(elem, size, align));
     }
 
-    /// Stores the zero that C hands back when control reaches the closing brace
-    /// of `main` without a `return`.
     fn store_main_exit_status(&mut self, result: QualType) {
         if self.terminated
             || !self.is_main
@@ -660,7 +624,6 @@ impl FnCodegen<'_> {
         }
         Ok(())
     }
-    /// Lower a statement that carries no control flow of its own.
     fn lower_plain_stmt(&mut self, stmt: NodeId) -> Result<(), Diagnostic> {
         let ast = self.ast;
         match ast.get_node(stmt).kind {
@@ -787,7 +750,6 @@ impl FnCodegen<'_> {
         value
     }
 
-    /// Compare a scalar with zero using the source domain's equality rules.
     pub(super) fn compare_against_zero(&mut self, value: ValueId, predicate: Predicate) -> ValueId {
         let ty = self.context.get_value(value).ty();
         if FloatType::view(&self.context, ty).is_some() {

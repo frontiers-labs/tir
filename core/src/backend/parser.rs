@@ -245,9 +245,6 @@ impl AsmParser {
     }
 }
 
-/// Rewrite branch immediates that name a local label into a block reference, so
-/// the encoder emits a pc-relative fixup instead of a symbol relocation.
-/// Unknown identifiers stay as `Str` and become external symbol references.
 fn resolve_labels(context: &tir::Context, block: &BlockHandle, labels: &HashMap<String, BlockId>) {
     for op_id in block.op_ids() {
         let op = context.get_op(op_id);

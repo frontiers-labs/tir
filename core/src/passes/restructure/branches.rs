@@ -61,7 +61,6 @@ impl Structurer<'_> {
         Err(unsupported("a graph that would need a node twice"))
     }
 
-    /// The statements running from `start` until control reaches `stop`.
     fn region(&mut self, start: NodeId, stop: NodeId) -> Result<Vec<Stmt>, PassError> {
         let mut statements = Vec::new();
         let mut node = start;
@@ -98,7 +97,6 @@ impl Structurer<'_> {
         }
     }
 
-    /// The body of a loop and the edge leaving it.
     fn loop_region(&mut self, id: LoopId) -> Result<(Vec<Stmt>, Edge), PassError> {
         let entry = self.cfg.loops[id].body_entry;
         let tail = self.cfg.loops[id].tail;
@@ -146,8 +144,6 @@ impl Structurer<'_> {
         Ok(arm)
     }
 
-    /// Where the arms of the branch at `node` come back together, inserting a
-    /// dispatch node when they come back together in more than one place.
     fn continuation(&mut self, node: NodeId, stop: NodeId) -> NodeId {
         let arms = self.cfg.structural_successors(node);
         let reach = arms
@@ -189,7 +185,6 @@ impl Structurer<'_> {
         }
     }
 
-    /// One dispatch node standing for every place the arms rejoin at.
     fn join(&mut self, node: NodeId, joins: &[NodeId], exclusive: &BTreeSet<NodeId>) -> NodeId {
         let width = if joins.len() == 2 { 1 } else { 32 };
         let var = self.cfg.add_var(self.cfg.int_type(width));
@@ -220,8 +215,6 @@ impl Structurer<'_> {
         dispatch
     }
 
-    /// The nodes control can reach from `from` without passing `stop`, which is
-    /// included but not left.
     fn reachable(&self, from: NodeId, stop: NodeId) -> BTreeSet<NodeId> {
         let mut seen = BTreeSet::from([from]);
         let mut pending = vec![from];

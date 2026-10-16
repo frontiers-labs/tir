@@ -224,8 +224,6 @@ impl CfgEdges<'_> {
         self.context.get_block(block).append(op.id());
     }
 
-    /// Branch on `predicate` equalling `case`, or, without one, on a loop's
-    /// repeat predicate holding.
     fn branch_value(
         &self,
         block: BlockId,
@@ -359,8 +357,6 @@ fn theta(op: &OpHandle) -> Result<Box<dyn Theta>, PassError> {
         .ok_or_else(|| decline(op, "not a loop"))
 }
 
-/// The comparison a negated loop predicate tests: restructure spells a
-/// head-tested loop's repeat as `xori(cmp, 1)`.
 pub(crate) fn unnegate(context: &Context, predicate: ValueId) -> Option<ValueId> {
     if context.get_value(predicate).ty() != IntegerType::new(context, 1) {
         return None;
@@ -485,10 +481,6 @@ fn restructure_ordered_root(context: &Context, region: RegionId) -> Result<(), P
     Ok(())
 }
 
-/// Convert the common ordered compatibility form, one block containing
-/// semantic structured operations and a return, into the unordered form PCFR
-/// analyzes. The block order is already represented by SSA and state chains;
-/// this only changes ownership and the return boundary.
 fn linear_ordered_to_nodes(
     context: &Context,
     region: RegionId,
@@ -584,8 +576,6 @@ struct Lowering<'a> {
     record: Destructured,
 }
 
-/// Operations in `region` needed by `roots`, following the dependencies each
-/// caller uses for its form of recovery.
 pub(super) fn cone(
     context: &Context,
     region: RegionId,
@@ -606,7 +596,6 @@ pub(super) fn cone(
     cone
 }
 
-/// Stable Kahn order for a node region. Ties retain insertion order.
 pub(super) fn stable_order(
     context: &Context,
     region: RegionId,
@@ -653,7 +642,6 @@ pub(super) fn stable_order(
     Ok(order)
 }
 
-/// Stable Kahn order for contracted groups and the operations inside them.
 pub(super) fn stable_group_order(
     outgoing: &[HashSet<usize>],
     pending: &mut [usize],
@@ -700,9 +688,6 @@ impl Lowering<'_> {
         block
     }
 
-    /// A block adopting `values` as its arguments, the states last. Not
-    /// listed yet: a merge block is listed after the blocks it joins, so that
-    /// every block follows the ones dominating it.
     fn entered_on(&mut self, values: &[crate::Value]) -> BlockId {
         let block = self.context.create_block(vec![]).id();
         let ids: Vec<ValueId> = values.iter().map(crate::Value::id).collect();
@@ -712,8 +697,6 @@ impl Lowering<'_> {
         block
     }
 
-    /// Place everything `region`'s results demand from `block` on; the block
-    /// the results are available in.
     fn region(&mut self, region: RegionId, block: BlockId) -> Result<BlockId, PassError> {
         let results = self.context.get_region(region).results();
         let demanded = cone(self.context, region, &results, |op| self.inputs(op));
@@ -722,9 +705,6 @@ impl Lowering<'_> {
         self.ops(region, &order, &demanded, block)
     }
 
-    /// Every operation `op` runs after: those defining what it reads, what
-    /// its tests and the tests of everything nested in it read, and its
-    /// implicit inputs.
     fn inputs(&self, op: OpId) -> Vec<OpId> {
         let mut read = values_read(self.context, op);
         self.test_reads_under(op, &mut read);
@@ -736,9 +716,6 @@ impl Lowering<'_> {
         inputs
     }
 
-    /// What the tests of `op` and of every structured operation nested in it
-    /// read: a nested gate's branch reads registers defined wherever its
-    /// region's enclosing regions define them.
     fn test_reads_under(&self, op: OpId, read: &mut Vec<ValueId>) {
         let instance = self.context.get_op(op);
         if let Some(gamma) = instance.clone().as_interface::<dyn Gamma>() {
@@ -755,9 +732,6 @@ impl Lowering<'_> {
         }
     }
 
-    /// The region's operations in a topological order, ties broken by
-    /// insertion order: the order a machine region was emitted in keeps an
-    /// instruction's implicit inputs ahead of it.
     fn order(&self, region: RegionId) -> Result<Vec<OpId>, PassError> {
         let mut order = stable_order(self.context, region, |op| self.inputs(op))?;
         self.sink_leaves(&mut order);
@@ -765,11 +739,6 @@ impl Lowering<'_> {
         Ok(order)
     }
 
-    /// Refuse a region whose cones leave an effect out. [`Self::ops`] moves
-    /// only what a cone holds, so an operation in none of them is not deferred,
-    /// it is dropped, and the blocks come out running a body the source never
-    /// wrote. An operation leaving no dependency behind computes a value and is
-    /// free to go when nothing reads it.
     fn require_effects_demanded(
         &self,
         order: &[OpId],
@@ -792,8 +761,6 @@ impl Lowering<'_> {
         Ok(())
     }
 
-    /// Move the operations of `region` that are in `placed`, in `order`, into
-    /// `block` and whatever blocks a structured one among them opens.
     fn ops(
         &mut self,
         region: RegionId,
@@ -816,8 +783,6 @@ impl Lowering<'_> {
         Ok(block)
     }
 
-    /// Replace each structured operation of the ordered `block` by its blocks,
-    /// the rest of the block continuing after them on the operation's results.
     fn ordered(&mut self, block: BlockId) -> Result<(), PassError> {
         let mut block = block;
         loop {
@@ -856,11 +821,6 @@ impl Lowering<'_> {
         ids.iter().map(|&id| self.context.get_value(id)).collect()
     }
 
-    /// The block a loop's cone runs in, entered on every memory state the cone
-    /// reads from the header: the states are renamed on the way in, so that
-    /// what a block consumes is defined in that block, as in any threaded CFG.
-    /// Answers the block and what the edge into it carries; `leaving` is
-    /// renamed along with the cone's operations.
     fn cone_block(
         &mut self,
         cone: &HashSet<OpId>,
@@ -1045,13 +1005,6 @@ impl Lowering<'_> {
 }
 
 impl Lowering<'_> {
-    /// Move every operation that reads nothing — a literal, an address — to
-    /// just ahead of its first reader, or to the end when only what leaves the
-    /// block reads it, so a value is not held in a register from the region's
-    /// start to its use. A reader is anything [`Self::inputs`] says runs after
-    /// the leaf, the tests of nested gates included. Order inside a block is a
-    /// scheduling matter the backend derives later; this is the one choice the
-    /// derivation keeps.
     fn sink_leaves(&self, order: &mut Vec<OpId>) {
         let edges = self.edges;
         // What an instruction implicitly reads is placed by that instruction.
@@ -1107,9 +1060,6 @@ impl Lowering<'_> {
     }
 }
 
-/// Put what an instruction implicitly reads right ahead of it: a rule's
-/// prelude defines a register nothing names, and the order the block ends up
-/// with pairs a register's reader with the latest writer ahead of it.
 fn abut_implicit_inputs(edges: &dyn Edges, order: &mut Vec<OpId>) {
     let mut index = 0;
     while index < order.len() {
@@ -1139,7 +1089,6 @@ fn mint(context: &Context, blocks: &mut Vec<BlockId>) -> BlockId {
     block
 }
 
-/// Rename the reads of `op` and of everything nested in it.
 fn rename_within(context: &Context, op: OpId, renames: &[(ValueId, ValueId)]) {
     let instance = context.get_op(op);
     for (index, operand) in instance.operands().iter().enumerate() {
@@ -1209,8 +1158,6 @@ impl Pass for DestructurePass {
     }
 }
 
-/// `ids` with the states moved last: the order every block keeps its
-/// arguments in, whatever order the op that produced them grew them in.
 fn values_then_states(context: &Context, ids: &[ValueId]) -> Vec<ValueId> {
     let mut ordered = context.values_among(ids).to_vec();
     ordered.extend(context.states_among(ids));

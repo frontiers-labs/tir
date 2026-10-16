@@ -95,10 +95,6 @@ pub(crate) fn object_format(xlen: u32, features: &[crate::Feature]) -> ObjectFor
     }
 }
 
-/// Pre-RA: integer constants are selected by the e-graph materialize axioms,
-/// so a live `constant` op reaching this hook is a selection bug — fail loudly,
-/// never miscompile. rv32 keeps its specific diagnostic for values a 32-bit
-/// target cannot represent (no rule could ever cover them).
 pub(crate) fn lower_constant_rv32(
     context: &tir::Context,
     op: &tir::OperationRef,
@@ -138,11 +134,6 @@ fn lower_constant(
     )))
 }
 
-/// Pre-RA: materialize an `asm.symbol_address` as the absolute
-/// `lui rd, %hi(sym)` + `addi rd, rd, %lo(sym)` pair. Both instructions carry
-/// the symbol as their immediate; the encoder turns that into R_RISCV_HI20 and
-/// R_RISCV_LO12_I relocations (absolute addressing, so executables must link
-/// non-PIE).
 pub(crate) fn lower_symbol_address(
     context: &tir::Context,
     op: &tir::OperationRef,
@@ -171,7 +162,6 @@ pub(crate) fn lower_symbol_address(
     Ok(true)
 }
 
-/// Post-RA: `vret` becomes `jalr x0, x1, 0`; `vbr` becomes `jal x0, dest`.
 pub(crate) fn finalize_virtual_ops(
     context: &tir::Context,
     op: &tir::OperationRef,

@@ -72,9 +72,6 @@ impl AddTestOp {
     }
 }
 
-/// Def-use over machine IR reads the SSA ports; the physical registers an
-/// instruction names directly, and the ones its behavior touches implicitly,
-/// are not values and stay out of the value chains.
 #[test]
 fn def_use_reads_ports_and_leaves_physical_registers_out() {
     let f = function(|context, builder| {
@@ -105,9 +102,6 @@ fn def_use_reads_ports_and_leaves_physical_registers_out() {
     assert_eq!(execution.phys_defs, vec![(r(), 7)]);
 }
 
-/// A slot may only read a value whose class views the same register file at the
-/// same offset. A high-byte slot reading an offset-0 value is a type error, not
-/// an allocation constraint.
 #[test]
 fn cross_view_operand_is_rejected() {
     let f = function(|context, builder| {
@@ -123,8 +117,6 @@ fn cross_view_operand_is_rejected() {
     );
 }
 
-/// A register slot holds a register-typed value: a mid-end value that reached
-/// an instruction unretyped has no class for allocation to place it by.
 #[test]
 fn operand_without_a_register_class_is_rejected() {
     let f = function(|context, builder| {
@@ -139,8 +131,6 @@ fn operand_without_a_register_class_is_rejected() {
     assert!(format!("{error:?}").contains("not a register"), "{error:?}");
 }
 
-/// Every SSA position is some port's: a second result on a one-def opcode
-/// would be defined by nothing.
 #[test]
 fn a_result_without_a_port_is_rejected() {
     let f = function(|context, builder| {
@@ -154,8 +144,6 @@ fn a_result_without_a_port_is_rejected() {
     assert!(format!("{error:?}").contains("register slots"), "{error:?}");
 }
 
-/// Once a function carries an assignment it is total: a value an instruction
-/// names with no register is an unfinished allocation, not a free choice.
 #[test]
 fn assignment_missing_a_value_is_rejected() {
     let f = function(|context, builder| {
@@ -190,8 +178,6 @@ fn assignment_missing_a_value_is_rejected() {
     );
 }
 
-/// A pin belongs to a slot, and may only name a register of the view the value
-/// in that slot lives in.
 #[test]
 fn cross_view_pin_is_rejected() {
     let f = function(|context, builder| {
@@ -216,8 +202,6 @@ fn cross_view_pin_is_rejected() {
     );
 }
 
-/// Slots are read off in port order, so a port holding neither a value nor a
-/// register would be read as the next port's.
 #[test]
 fn a_slot_holding_nothing_is_rejected() {
     let f = function(|_, builder| builder);
@@ -228,8 +212,6 @@ fn a_slot_holding_nothing_is_rejected() {
     );
 }
 
-/// The assignment is written into the IR and read back out of it: the map is
-/// data, not a rewrite, so it has to survive a round trip through the text.
 #[test]
 fn the_assignment_round_trips_through_the_text_form() {
     let context = Context::with_default_dialects();

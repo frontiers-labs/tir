@@ -233,7 +233,6 @@ impl FnCodegen<'_> {
         self.resize(value, source_width, target_width, signed)
     }
 
-    /// `value`, an integer `from` bits wide, as one of `to` bits.
     fn resize(&mut self, value: ValueId, from: u32, to: u32, signed: bool) -> ValueId {
         let ty = IntegerType::new(self.context, u64::from(to));
         match to.cmp(&from) {
@@ -325,8 +324,6 @@ impl FnCodegen<'_> {
         .result()
     }
 
-    /// A pointer's address as an integer: the distance from the null pointer,
-    /// which is the address zero.
     fn pointer_as_address(&mut self, pointer: ValueId) -> ValueId {
         let address_ty =
             IntegerType::new(self.context, u64::from(self.typed.target().pointer_width()));
@@ -335,7 +332,6 @@ impl FnCodegen<'_> {
             .result()
     }
 
-    /// The pointer an address names: the offset from the null pointer.
     fn address_as_pointer(&mut self, address: ValueId) -> ValueId {
         let null = self.null_pointer();
         self.emit(p::ptradd(self.context, null, address, PtrType::opaque(self.context)).build())
@@ -347,8 +343,6 @@ impl FnCodegen<'_> {
             .result()
     }
 
-    /// Pointers compare as unsigned addresses, so a relational C comparison of
-    /// two of them maps onto the unsigned predicates alone.
     pub(super) fn lower_pointer_compare(
         &mut self,
         predicate: Predicate,
@@ -366,8 +360,6 @@ impl FnCodegen<'_> {
         .result()
     }
 
-    /// C comparisons are ordered (false when either operand is NaN), except
-    /// `!=`, which is the unordered-inclusive negation of `==`.
     pub(super) fn lower_floating_compare(
         &mut self,
         kind: AstKind,

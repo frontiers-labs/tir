@@ -456,8 +456,6 @@ struct AttrAccessor {
     write: proc_macro2::TokenStream,
 }
 
-/// `None` for an aggregate or untyped kind — `Array`, `Dict`, `any` — which
-/// has no single Rust type to hand back.
 fn attr_accessor(ty: &str) -> Option<AttrAccessor> {
     let scalar = |rust: proc_macro2::TokenStream, variant: &str| AttrAccessor {
         getter_ty: rust.clone(),
@@ -501,8 +499,6 @@ fn attr_accessor(ty: &str) -> Option<AttrAccessor> {
     })
 }
 
-/// The builder setters and operation getters a declared attribute list earns,
-/// so an op spells `op.dest()` rather than unwrapping `attr("dest")` by hand.
 fn make_attr_accessors(
     attributes: &[AttrSpec],
     spelled: &str,
@@ -983,10 +979,6 @@ fn make_operand_pieces(operands: &[ValueSpec]) -> OperandPieces {
     }
 }
 
-/// The `sem = "..."` declaration is lowered at run time by tir-symbolic's graph
-/// builder. The op provides the operand-symbol map plus the hooks the builder
-/// needs: `$splice` atoms call op methods, and width-changing ops read the op's
-/// result width.
 fn make_sem_impls(
     sem: &Option<Sem>,
     struct_name: &Ident,
@@ -1419,8 +1411,6 @@ struct Region {
 }
 
 impl Region {
-    /// Whether the region's body is a block list, so the op's accessor hands
-    /// back the entry block rather than the region.
     fn blocked(&self) -> bool {
         self.kind != "Nodes"
     }
@@ -1437,7 +1427,6 @@ struct ValueSpec {
 }
 
 impl ValueSpec {
-    /// The trailing resource-state group `state:` declares.
     fn state() -> Self {
         Self {
             name: "state".to_string(),
@@ -1450,8 +1439,6 @@ impl ValueSpec {
         SchemeSyntax::slot(STATE_PATTERN, Arity::Many).expect("a state pattern")
     }
 
-    /// Whether the port carries a memory state: the text groups those apart
-    /// from the values.
     fn is_state(&self) -> bool {
         self.ty == format!("*{STATE_PATTERN}")
     }
@@ -1577,9 +1564,6 @@ impl Parse for Operation {
     }
 }
 
-/// Parse a `sem = "..."` field into its raw source and the `$splice` names it
-/// references. Validation (and splice discovery) reuses tir-symbolic's parser so
-/// the macro and the runtime builder agree on the grammar.
 fn parse_sem(expr: &Expr) -> Option<Sem> {
     let src = match expr {
         Expr::Lit(lit) => match &lit.lit {
@@ -1624,7 +1608,6 @@ fn get_regions(expr: &Expr) -> Option<Vec<Region>> {
     }
 }
 
-/// The `kind:` a `Region { .. }` declares, defaulting to `Blocks`.
 fn region_kind(expr: &Expr) -> String {
     let Expr::Struct(s) = expr else {
         return "Blocks".to_string();
@@ -1639,7 +1622,6 @@ fn region_kind(expr: &Expr) -> String {
         .unwrap_or_else(|| "Blocks".to_string())
 }
 
-/// Whether a `Region { .. }` declaration sets `flag: true`.
 fn has_true_flag(expr: &Expr, flag: &str) -> bool {
     let Expr::Struct(s) = expr else {
         return false;
@@ -1745,8 +1727,6 @@ fn make_region_accessor(region: &Region, index: usize) -> proc_macro2::TokenStre
     }
 }
 
-/// A `variadic` region group holds every region from its declaration position on, so it
-/// must be declared last.
 fn make_variadic_region_accessor(region: &Region, index: usize) -> proc_macro2::TokenStream {
     let func_name = format_ident!("{}", region.name);
     quote! {

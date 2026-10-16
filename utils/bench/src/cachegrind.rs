@@ -16,9 +16,6 @@ pub fn stop() {
     request(STOP_INSTRUMENTATION);
 }
 
-/// Valgrind recognizes the rotate sequence, which leaves every register intact,
-/// followed by a self-exchange. The argument block address and the default
-/// result travel in the registers that valgrind.h assigns for each platform.
 #[inline(always)]
 fn request(code: usize) {
     let arguments = [code, 0, 0, 0, 0, 0];

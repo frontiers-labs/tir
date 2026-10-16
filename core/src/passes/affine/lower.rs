@@ -73,7 +73,6 @@ struct Bounds {
     counter_width: u32,
 }
 
-/// A bound as the rebuild can spell it again, or nothing.
 fn bound_of(view: &AffineView, form: &AffineForm) -> Option<Bound> {
     if let Some(literal) = form.as_constant() {
         return Some(Bound::Literal(literal));
@@ -90,9 +89,6 @@ fn bound_of(view: &AffineView, form: &AffineForm) -> Option<Bound> {
 }
 
 impl Nest {
-    /// Whether the tiles a candidate asks for can be counted in the widths the
-    /// nest counts in: a tiled dimension's outer loop steps by a whole tile, and
-    /// a step the counter's own width cannot hold is a step it would wrap on.
     pub(super) fn admits(&self, candidate: &Candidate) -> bool {
         self.bounds.iter().enumerate().all(|(dimension, bounds)| {
             let tile = candidate.tiles[dimension] as i128;
@@ -101,7 +97,6 @@ impl Nest {
         })
     }
 
-    /// Read the nest, or refuse it.
     pub(super) fn read(context: &Context, view: &AffineView) -> Option<Self> {
         let mut bounds = Vec::new();
         let mut states: Option<usize> = None;
@@ -213,9 +208,6 @@ fn ports(context: &Context, op: OpId, counter: Option<ValueId>) -> Option<Ports>
     })
 }
 
-/// Whether the level's chains cross the loop inside it untouched, in one order:
-/// the argument each chain enters on is the inner loop's initial value for it,
-/// and what the level yields for it is the inner loop's result.
 fn chains_through(context: &Context, view: &AffineView, depth: usize, outer: &Ports) -> bool {
     let level = &view.loops[depth];
     let inner = view.loops[depth + 1].op;
@@ -284,7 +276,6 @@ impl<'a> Lowering<'a> {
         }
     }
 
-    /// Replace the nest with the one the candidate names.
     pub(super) fn run(&mut self, view: &AffineView) -> Result<(), PassError> {
         let target = OperationRef::new(self.context.get_op(self.nest.root));
         let remainder = self
@@ -318,8 +309,6 @@ impl<'a> Lowering<'a> {
         Ok(())
     }
 
-    /// Move the levels' loop-invariant operations out ahead of the nest, so what
-    /// the copied body names is still defined once the nest is gone.
     fn hoist(&self, site: RegionId) {
         for op in self.nest.hoist.clone() {
             if let Some(block) = self.context.parent_block(op) {
@@ -331,9 +320,6 @@ impl<'a> Lowering<'a> {
         }
     }
 
-    /// Name every bound where the rebuilt nest will stand, so no loop counts
-    /// between values the erased nest defined, and the step each tile loop
-    /// takes: a whole tile of the dimension's own steps.
     fn spell_bounds(&mut self, site: RegionId, shape: &Candidate) {
         for dimension in 0..self.nest.bounds.len() {
             let bounds = &self.nest.bounds[dimension];
@@ -362,8 +348,6 @@ impl<'a> Lowering<'a> {
         }
     }
 
-    /// Build level `index` and everything under it, and hand back the chains it
-    /// leaves behind.
     fn emit(
         &mut self,
         levels: &[Level],
@@ -391,7 +375,6 @@ impl<'a> Lowering<'a> {
         }
     }
 
-    /// The dimension as it was: from its own lower bound to its own upper one.
     fn plain(&self, dimension: usize) -> Counted {
         let (lower, upper, step) = self.spelled[dimension];
         Counted {
@@ -403,7 +386,6 @@ impl<'a> Lowering<'a> {
         }
     }
 
-    /// The tiles of a tiled dimension: one iteration per tile.
     fn whole_tiles(&self, dimension: usize) -> Counted {
         let (lower, upper, _) = self.spelled[dimension];
         Counted {
@@ -415,8 +397,6 @@ impl<'a> Lowering<'a> {
         }
     }
 
-    /// One tile of a tiled dimension: from where its outer loop stands to one
-    /// tile further.
     fn one_tile(
         &self,
         dimension: usize,
@@ -437,10 +417,7 @@ impl<'a> Lowering<'a> {
         }
     }
 
-    /// Build one loop and fill it with the levels below.
     #[allow(clippy::too_many_arguments)]
-    /// One counted loop: a `scf.for` whose body is a fresh graph holding the
-    /// counter, the chains, and the levels below.
     #[allow(clippy::too_many_arguments)]
     fn emit_loop(
         &mut self,
@@ -510,9 +487,6 @@ impl<'a> Lowering<'a> {
         Ok(context.get_op(loop_op.id()).state_results().to_vec())
     }
 
-    /// The bindings a copy of the innermost body reads its ports through: every
-    /// counter the body reads is the loop that now counts its dimension, and
-    /// each chain the body enters on is the port handed down to it.
     fn body_bindings(
         &self,
         bound: &HashMap<usize, ValueId>,
@@ -548,7 +522,6 @@ impl<'a> Lowering<'a> {
         bindings
     }
 
-    /// Copy the innermost body under the counters the rebuilt nest gives it.
     fn emit_body(
         &mut self,
         bound: &HashMap<usize, ValueId>,
@@ -578,8 +551,6 @@ impl<'a> Lowering<'a> {
     }
 }
 
-/// Erase the pure copies nothing reads: the comparison and the latch a copied
-/// body computed for the loop it used to sit in.
 pub(super) fn erase_unread(context: &Context, ops: &[OpId]) -> Result<(), PassError> {
     // A region's results sit in no use list, so a value one names is read
     // without a user: an unordered region's results, and those of every
@@ -613,24 +584,16 @@ pub(super) fn erase_unread(context: &Context, ops: &[OpId]) -> Result<(), PassEr
     Ok(())
 }
 
-/// A literal spelled in `site`.
 pub(super) fn literal_at(context: &Context, site: RegionId, value: i128, ty: TypeId) -> ValueId {
     let op = b::constant(context, value as i64, ty).build();
     context.add(site, op.id());
     op.result()
 }
 
-/// The key a tiled dimension's outer counter is kept under, apart from the
-/// counter the body reads.
 fn tile_base_key(dimension: usize) -> usize {
     usize::MAX - dimension
 }
 
-/// The operations the levels above the innermost body hold, in the order they
-/// run. They are pure — `chains_through` admitted the level only if they were —
-/// so moving them out of the nest is what makes the copied body's references to
-/// them survive the rebuild. An operation naming something the nest defines is
-/// not loop-invariant, and refuses the whole rebuild.
 fn hoistable(context: &Context, view: &AffineView) -> Option<Vec<OpId>> {
     let mut hoist: Vec<OpId> = Vec::new();
     let mut spelled: Vec<ValueId> = Vec::new();
@@ -660,7 +623,6 @@ fn hoistable(context: &Context, view: &AffineView) -> Option<Vec<OpId>> {
     Some(hoist)
 }
 
-/// The latch values that step `op`'s counter, which an inner body may read.
 fn latches_of(context: &Context, op: OpId) -> Vec<ValueId> {
     let handle = context.get_op(op);
     let Some(shape) = carried(context, &handle) else {
@@ -675,8 +637,6 @@ fn latches_of(context: &Context, op: OpId) -> Vec<ValueId> {
         .collect()
 }
 
-/// The operations a loop's shape pins: the latch of every port counting with
-/// it, and the predicate a declared counted loop states.
 fn counted_shape(context: &Context, op: OpId) -> Vec<OpId> {
     let handle = context.get_op(op);
     let mut ops = Vec::new();
@@ -694,7 +654,6 @@ fn counted_shape(context: &Context, op: OpId) -> Vec<OpId> {
     ops
 }
 
-/// Whether `value` is defined outside the nest rooted at `root`.
 fn outside(context: &Context, root: OpId, value: ValueId) -> bool {
     let mut op = match (
         context.block_of_argument(value),
@@ -715,8 +674,6 @@ fn outside(context: &Context, root: OpId, value: ValueId) -> bool {
     true
 }
 
-/// Whether anything beside the nest itself names `value`: an operation, or
-/// the result list of the region holding the nest, which no use list records.
 fn is_used(context: &Context, root: OpId, value: ValueId) -> bool {
     context.users_of(value).into_iter().any(|user| user != root)
         || context

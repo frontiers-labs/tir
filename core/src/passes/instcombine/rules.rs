@@ -72,7 +72,6 @@ impl Interpretation {
         }
     }
 
-    /// These host functions answering layout queries under `layout`.
     pub(crate) fn with_layout(self, layout: Option<crate::DataLayout>) -> Self {
         Self { layout, ..self }
     }
@@ -199,9 +198,6 @@ pub(crate) fn fold_constant(
 }
 
 impl Interpretation {
-    /// Which arm of the gate `terms[0]` the decision `args[0]` selects: the arm
-    /// whose case value it equals at the decision's width, or the default when
-    /// none does. `args[1]` is how many arms the rule's shape has.
     fn decided_arm(&self, terms: &[&Node], args: &[u64], out: &mut [u64]) -> bool {
         let [gate] = terms else { return false };
         let &[value, arms] = args else {
@@ -320,11 +316,6 @@ pub fn builtin_ruleset(
     }
 }
 
-/// One LHS template per distinct seeded-op signature in `eg`, so const folding
-/// searches the classes holding such an op instead of every class. Only a seeded
-/// op ever folds and rewrites introduce none, so the seeded graph fixes the set.
-/// An op with offset laws is left out: over constants it is a constant
-/// already, and stores no row.
 fn fold_templates(eg: &Engine<Node>) -> Vec<Node> {
     let mut templates: Vec<Node> = Vec::new();
     for class in eg.classes() {
@@ -348,9 +339,6 @@ fn fold_templates(eg: &Engine<Node>) -> Vec<Node> {
     templates
 }
 
-/// An op every operand of which is a known constant is that constant. What the
-/// value is comes from the op's own [`ConstantFold`]; what the rule reads is the
-/// matched row and the constants its operands are, and nothing else.
 pub(crate) fn const_fold(template: &Node) -> tir_egraph::Rule<Node> {
     let arity = template.children().len() as u32;
     // Variables: 0 the root, 1..=arity its operands, then the folded class.
@@ -413,9 +401,6 @@ pub(crate) fn const_fold(template: &Node) -> tir_egraph::Rule<Node> {
     }
 }
 
-/// The γ arities the seeded graph holds, so a decided gate is searched at the
-/// widths it actually occurs at. Only a gate the seeding built is ever decided and
-/// rewrites introduce no new arity, so the seeded graph fixes the set.
 fn gamma_arities(eg: &Engine<Node>) -> Vec<usize> {
     let mut arities: Vec<usize> = Vec::new();
     for class in eg.classes() {
@@ -428,11 +413,6 @@ fn gamma_arities(eg: &Engine<Node>) -> Vec<usize> {
     arities
 }
 
-/// A gate whose decision is a known constant publishes what the arm that constant
-/// selects yields: the arm whose *case value* the decision equals, or the default
-/// when none does. Reading the decision as a boolean holds only for a two-armed
-/// `if`, whose case values are exactly `1` and the default; a switch names its own,
-/// and `case 0` is its first arm rather than the one no case matched.
 fn decided_gamma(arity: usize) -> tir_egraph::Rule<Node> {
     let arity = arity as u32;
     // Variables: 0 the root, 1 the decision, 2.. the arms.
@@ -475,8 +455,6 @@ fn decided_gamma(arity: usize) -> tir_egraph::Rule<Node> {
     }
 }
 
-/// The case value selecting each arm of the gate `node` stands for, in arm
-/// order, and the width of the decision they are compared at.
 fn gate_cases(context: &Context, node: &Node) -> Option<(Vec<Option<i64>>, u32)> {
     let gate = match node.prov {
         Prov::Op(gate) => gate,
@@ -523,14 +501,6 @@ pub(crate) const COMPLEMENTS: [(Predicate, Predicate); 10] = [
     (Predicate::Ugt, Predicate::Ule),
 ];
 
-/// A comparison and its complement over the same operands are one fact: whichever
-/// of the two a scope or a constant settles, the other is its negation. A
-/// comparison's identity is its predicate attribute, and the PDL backend generates
-/// neither attribute matching nor attribute emission, so this family is written
-/// here instead of in `rules.pdl`.
-/// A settled comparison decides its complement. The complement is reached
-/// sideways — through the back-edges of an operand this match already bound —
-/// rather than by a scan of every class holding that predicate.
 fn cmp_complement(
     context: &Context,
     predicate: Predicate,
@@ -616,8 +586,6 @@ impl Complement {
     const OTHER_TY: u32 = 5;
 }
 
-/// The `builtin.cmpi` node of `predicate` over `children`, at `ty` — `None` for a
-/// pattern template, which matches the comparison at any result type.
 fn cmpi(context: &Context, predicate: Predicate, ty: Option<TypeId>, children: Vec<Id>) -> Node {
     Node {
         kind: Kind::Ir(IrOp::template(
@@ -641,7 +609,6 @@ fn produces_integer(context: &Context, op: crate::OpId) -> bool {
         .is_some_and(|&result| IntegerType::view(context, context.get_value(result).ty()).is_some())
 }
 
-/// The width of an integer type, by number; `None` for anything else.
 fn class_int_width_of(context: &Context, ty: u32) -> Option<u32> {
     let ty = TypeId::from_number(ty);
     if context.is_state_type(ty) {
@@ -670,10 +637,6 @@ pub(crate) fn konst(value: APInt) -> Node {
     Node::constant(value, Prov::None)
 }
 
-/// Whether `O` keeps a constant at `operand` as a node, `zero` saying it is the
-/// literal zero: an offset law moves a constant into the reference the op is,
-/// leaving a zero an identity dissolves too, so a rule matching any other
-/// constant there never fires.
 pub(crate) fn constant_operand_kept<O: Operation>(
     context: &Context,
     operand: usize,

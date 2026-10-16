@@ -18,8 +18,6 @@ impl PbqpTaskKind {
     }
 }
 
-/// Write one task through `write`, which receives the output and the kind's
-/// name, when `TIR_PBQP_DUMP_DIR` asks for dumps.
 pub(super) fn dump(
     kind: PbqpTaskKind,
     write: impl FnOnce(&mut dyn Write, &str) -> std::io::Result<()>,

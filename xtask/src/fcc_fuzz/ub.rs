@@ -60,9 +60,6 @@ fn depends_on_uninitialized(source: &Path, work_dir: &Path) -> bool {
     observed[0] != observed[1]
 }
 
-/// Build `source` with gcc plus `flags` and run what comes out, or `None` where
-/// gcc or the program itself did not get that far. Unoptimized on purpose:
-/// what folds away at compile time is what the sanitizers never get to see.
 fn build_and_run(source: &Path, binary: &Path, flags: &[&str]) -> Option<std::process::Output> {
     let mut compile = Command::new("gcc");
     compile

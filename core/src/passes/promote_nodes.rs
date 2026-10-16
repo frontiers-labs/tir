@@ -71,11 +71,6 @@ impl Pass for PromoteNodesPass {
     }
 }
 
-/// The type a slot's value takes once promoted, or `None` where it stays
-/// memory: allocated in the body itself, never escaping, named whole by every
-/// access, agreed on one type, ordered by the chain at every access, and
-/// crossed only by ops whose ports can be grown. Whether the values those
-/// ports would carry exist is the probe's question, not this one.
 fn promotable(
     context: &Context,
     slot: ValueId,
@@ -99,9 +94,6 @@ fn promotable(
         .then_some(ty)
 }
 
-/// Whether every use of the slot's `address`, through pointer arithmetic, is
-/// as the location of one of its collected accesses: a comparison or an
-/// address kept as a value would go on naming a slot that is a value now.
 fn address_only_accessed(context: &Context, address: ValueId, state: &SlotState) -> bool {
     context.users_of(address).into_iter().all(|user| {
         let instance = context.get_op(user);
@@ -115,16 +107,12 @@ fn address_only_accessed(context: &Context, address: ValueId, state: &SlotState)
     })
 }
 
-/// Whether `op` accesses `slot` at the slot's own address and observes a
-/// dependency: the chain is what orders it against the writes it may see.
 fn names_whole_slot(context: &Context, op: OpId, slot: ValueId) -> bool {
     let instance = context.get_op(op);
     crate::analysis::access_of(&instance).is_some_and(|access| access.location == slot)
         && !instance.state_operands().is_empty()
 }
 
-/// Whether every op between `op` and `body` is a loop or a gate with a declared
-/// binding, so a port can be grown where the slot's value crosses it.
 fn crosses_declared_bindings(context: &Context, op: OpId, body: RegionId) -> bool {
     let mut region = context.parent_nodes_region(op);
     while let Some(current) = region {
@@ -159,9 +147,6 @@ enum Reach {
 }
 
 impl Reach {
-    /// The slot's value in the memory two states merge into: a chain saying
-    /// nothing about the slot leaves it as the other found it, and two chains
-    /// with different values for it merge into no value at all.
     fn merge(self, other: Reach) -> Reach {
         match (self, other) {
             (Reach::Undefined, found) | (found, Reach::Undefined) => found,
@@ -207,9 +192,6 @@ impl<'a> Promoter<'a> {
         }
     }
 
-    /// Whether the chain answers every state the growth would read. The walk is
-    /// the growth's own, with the ports it would grow recorded rather than
-    /// grown, so what it proves is what the growth then does.
     fn refuses(&mut self, state: &SlotState) -> bool {
         for &load in &state.loads {
             let Some(&observed) = self.context.get_op(load).state_operands().first() else {
@@ -267,11 +249,6 @@ impl<'a> Promoter<'a> {
         Ok(())
     }
 
-    /// What `value` stands for once this sweep is done with it. The walk reads
-    /// the chain as it was found, so a load can reach a value another load of
-    /// the same slot defines; that load is erased here too, and handing its
-    /// result on would leave a live operand naming a value that no longer
-    /// exists.
     fn retired(&self, value: ValueId) -> ValueId {
         let mut current = value;
         while let Some(&next) = self.substituted.get(&current) {
@@ -283,8 +260,6 @@ impl<'a> Promoter<'a> {
         current
     }
 
-    /// Hand every reader of `old`, a value `op` defines, `new` instead —
-    /// region result lists included, which no use list reaches.
     fn replace(&self, op: OpId, old: ValueId, new: ValueId) {
         let context = self.context;
         context.replace_value_uses(old, new);
@@ -293,9 +268,6 @@ impl<'a> Promoter<'a> {
         }
     }
 
-    /// The slot's value where the chain stands at `dep`: walk back to the write
-    /// that put it there, growing a port wherever the walk crosses a loop or a
-    /// gate that writes the slot.
     fn reach(&mut self, dep: ValueId) -> Reach {
         if let Some(&known) = self.reach.get(&dep) {
             return known;
@@ -330,10 +302,6 @@ impl<'a> Promoter<'a> {
         found
     }
 
-    /// The slot's value where the chain crosses a loop or a gate: the port a
-    /// region is entered on, or the state the operation left. A gate's arms are
-    /// entered on the state the gate took; only a loop's port carries a value of
-    /// its own, since an iteration may write the slot the next one reads.
     fn crossing(&mut self, dep: ValueId) -> Reach {
         let chain::Step::Port {
             op,
@@ -356,11 +324,6 @@ impl<'a> Promoter<'a> {
         self.reach[&dep]
     }
 
-    /// A loop's port for the slot: entered on the value before the loop, the
-    /// body reads the port and the value it leaves the slot holding along the
-    /// continue dependency is what the next iteration carries; the value along
-    /// the exit dependency is what the loop produces. Both are recorded on the
-    /// loop's dependency port and result for the chain.
     fn grow_theta(&mut self, op: &OpHandle, chain: &StateChain) {
         if self.grown.contains(&chain.left) {
             return;
@@ -421,9 +384,6 @@ impl<'a> Promoter<'a> {
         self.reach.insert(left, Reach::Value(result));
     }
 
-    /// A gate's port for the slot: every arm produces the value it leaves the
-    /// slot holding along its dependency result, and the gate's result is the
-    /// value after it.
     fn grow_gamma(&mut self, op: &OpHandle, chain: &StateChain) {
         if self.grown.contains(&chain.left) {
             return;
@@ -454,8 +414,6 @@ impl<'a> Promoter<'a> {
         self.reach.insert(left, Reach::Value(result));
     }
 
-    /// The value the slot holds at `dep`, which the probing walk proved a write
-    /// put there.
     fn held(&mut self, dep: ValueId) -> ValueId {
         let found = self.reach(dep);
         self.value_of(found)
@@ -468,21 +426,17 @@ impl<'a> Promoter<'a> {
         }
     }
 
-    /// Read a state the growth would enter a port on, which has to hold one
-    /// value for the slot; where it does not, the slot stays memory.
     fn demand(&mut self, state: ValueId) {
         if !matches!(self.reach(state), Reach::Value(_) | Reach::Written(..)) {
             self.refused = true;
         }
     }
 
-    /// The value a write to the slot leaves it holding.
     fn writes(&self, op: &OpHandle) -> Option<ValueId> {
         let write = op.clone().as_interface::<dyn MemoryWrite>()?;
         (write.write_location() == self.slot).then(|| write.written_value())
     }
 
-    /// Whether anything in `op`'s region tree writes the slot.
     fn writes_under(&self, op: &OpHandle) -> bool {
         regions::subtree_ops(self.context, op)
             .into_iter()

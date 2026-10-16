@@ -157,7 +157,6 @@ impl Solver {
         Some(format!("({})", parts.join(" ")))
     }
 
-    /// Push `declare-const`/`define-fun` commands for the current environment.
     fn push_env(&self, cmds: &mut Vec<Command>) {
         for (name, sort) in &self.decls {
             cmds.push(Command::DeclareConst(Symbol(name.clone()), sort.clone()));
@@ -199,8 +198,6 @@ impl Solver {
         model
     }
 
-    /// Evaluate a term by pinning every symbol to its model value and re-reading the term's bits
-    /// from the bit-blaster, keeping `get-value` identical to `check-sat`.
     fn eval_term(&self, t: &Term) -> Option<(APInt, bool)> {
         let model = self.model.as_ref()?;
 
@@ -252,7 +249,6 @@ impl Solver {
         }
     }
 
-    /// `Some(is_bool)` when `name` is a defined function, else `None`.
     fn defined_is_bool(&self, name: &str) -> Option<bool> {
         self.defines
             .iter()
@@ -292,7 +288,6 @@ impl Solver {
     }
 }
 
-/// `(width, is_bool)` for the supported sorts, `None` otherwise.
 fn sort_bits(sort: &Sort) -> Option<(u32, bool)> {
     if !sort.params.is_empty() {
         return None;
@@ -323,7 +318,6 @@ fn bits_to_apint(width: u32, bits: &[bool]) -> APInt {
     APInt::new(u64::from(width), value)
 }
 
-/// Format a value as an SMT-LIB constant: `true`/`false`, `#x..` for nibble widths, else `#b..`.
 fn format_value(value: &APInt, is_bool: bool) -> String {
     if is_bool {
         return if value.to_u64() & 1 == 1 {

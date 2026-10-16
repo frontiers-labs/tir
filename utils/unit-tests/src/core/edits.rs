@@ -188,8 +188,6 @@ impl NonLocalExit for ExitOp {
     }
 }
 
-/// `LOOP` with a conditional in the body whose taken arm leaves through
-/// `test.exit`.
 fn loop_with_exit() -> (Context, OpId, OpId) {
     let (context, module) = fixtures::parse(LOOP);
     ExitOp::register_interfaces(&context);

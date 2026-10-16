@@ -7,7 +7,6 @@ use super::ast::*;
 
 type Extra<'a> = extra::Err<Rich<'a, char>>;
 
-/// Whitespace and `;`-to-end-of-line comments, discarded.
 fn ws<'a>() -> impl Parser<'a, &'a str, (), Extra<'a>> + Clone {
     let comment = just(';')
         .then(none_of("\n").repeated().collect::<String>())
@@ -26,7 +25,6 @@ fn rparen<'a>() -> impl Parser<'a, &'a str, (), Extra<'a>> + Clone {
     just(')').then_ignore(ws()).ignored()
 }
 
-/// A simple (unquoted) symbol's character run: a non-digit initial char then alnum/symbol chars.
 fn simple_symbol_p<'a>() -> impl Parser<'a, &'a str, String, Extra<'a>> + Clone {
     any()
         .filter(|c: &char| c.is_ascii_alphabetic() || SYMBOL_CHARS.contains(*c))
@@ -53,7 +51,6 @@ fn symbol_p<'a>() -> impl Parser<'a, &'a str, Symbol, Extra<'a>> + Clone {
         .then_ignore(ws())
 }
 
-/// Match one reserved word, tokenised as a whole symbol to avoid prefix clashes.
 fn kw<'a>(word: &'static str) -> impl Parser<'a, &'a str, (), Extra<'a>> + Clone {
     symbol_p().try_map(move |s, span| {
         if s.0 == word {
@@ -64,7 +61,6 @@ fn kw<'a>(word: &'static str) -> impl Parser<'a, &'a str, (), Extra<'a>> + Clone
     })
 }
 
-/// A `<numeral>` digit run (`0 | [1-9][0-9]*`, no leading zero), returned unparsed.
 fn numeral_digits<'a>() -> impl Parser<'a, &'a str, String, Extra<'a>> + Clone {
     any()
         .filter(|c: &char| c.is_ascii_digit())
@@ -80,7 +76,6 @@ fn numeral_digits<'a>() -> impl Parser<'a, &'a str, String, Extra<'a>> + Clone {
         })
 }
 
-/// `numeral_digits` parsed into a `u128`, without trailing whitespace.
 fn numeral_value<'a>() -> impl Parser<'a, &'a str, u128, Extra<'a>> + Clone {
     numeral_digits().try_map(|s: String, span| {
         s.parse::<u128>()
@@ -92,7 +87,6 @@ fn numeral_p<'a>() -> impl Parser<'a, &'a str, u128, Extra<'a>> + Clone {
     numeral_value().then_ignore(ws())
 }
 
-/// A `"..."` string literal body with doubled-`""` escaping, without trailing whitespace.
 fn string_lit_body<'a>() -> impl Parser<'a, &'a str, String, Extra<'a>> + Clone {
     just('"')
         .ignore_then(
@@ -265,7 +259,6 @@ fn term_p<'a>() -> impl Parser<'a, &'a str, Term, Extra<'a>> + Clone {
     })
 }
 
-/// The `symbol (sorted_var*) sort` signature shared by function definitions and declarations.
 fn function_sig_p<'a>()
 -> impl Parser<'a, &'a str, (Symbol, Vec<SortedVar>, Sort), Extra<'a>> + Clone {
     symbol_p()
