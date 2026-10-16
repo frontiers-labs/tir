@@ -24,7 +24,7 @@ operation! {
 }
 
 /// The PTX target, selected via `--march=ptx`. PTX is a text pseudo-ISA: the
-/// front-end in [`ptx_asm`] parses `.ptx` kernels into a module and prints them
+/// front-end in `ptx_asm` parses `.ptx` kernels into a module and prints them
 /// back, so this target implements the `parse_asm_text`/`print_asm_text` hooks
 /// rather than the shared flat assembler.
 pub struct PtxTarget;

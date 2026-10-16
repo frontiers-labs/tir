@@ -807,7 +807,7 @@ pub fn template_node(
 /// only when nothing else exists.
 const GATE_COST: u64 = 1 << 20;
 
-/// Extraction cost for the IR-op vocabulary: an op's modeled cost, [`GATE_COST`]
+/// Extraction cost for the IR-op vocabulary: an op's modeled cost, `GATE_COST`
 /// for a gate or a leaf, zero for a constant.
 pub fn cost(node: &SemNode) -> u64 {
     match &node.kind {

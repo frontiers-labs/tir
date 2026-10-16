@@ -86,7 +86,7 @@ impl<'src> Parser<'src> {
     }
 
     /// Resolve a textual SSA name to its value id, creating a placeholder for a
-    /// name this parse has not bound yet. [`Parser::forward_bindings`] pairs
+    /// name this parse has not bound yet. `Parser::forward_bindings` pairs
     /// each placeholder with the value its name ends up naming.
     pub fn resolve_value(&mut self, context: &crate::Context, name: &str) -> ValueId {
         if let Some(id) = self.value_names.get(name) {

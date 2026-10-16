@@ -1,6 +1,6 @@
 //! Instruction selection.
 //!
-//! Creating the pass synthesizes its selection rules ([`synth`], [`pool`])
+//! Creating the pass synthesizes its selection rules (`synth`, `pool`)
 //! from the dialects the context holds and the target's instructions, on a
 //! thread the first function selected joins.
 

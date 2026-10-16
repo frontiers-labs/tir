@@ -205,7 +205,7 @@ pub trait TargetMachine {
 
     /// Print a module as target-specific assembly text, the counterpart of
     /// [`parse_asm_text`](Self::parse_asm_text). `None` (the default) means the
-    /// target uses the shared [`AsmPrinter`], whose syntax comes from each
+    /// target uses the shared [`crate::backend::AsmPrinter`], whose syntax comes from each
     /// instruction's `InstrInfo`.
     fn print_asm_text(
         &self,
@@ -219,7 +219,7 @@ pub trait TargetMachine {
 
 /// A target made selectable by `--march`/`--mcpu`.
 ///
-/// Backends contribute entries with [`register_target!`]; tools resolve targets
+/// Backends contribute entries with [`crate::register_target!`]; tools resolve targets
 /// purely through this registry, so adding a backend never requires touching
 /// `tir-mc` or `isasim`.
 pub struct TargetInfo {

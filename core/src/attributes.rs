@@ -93,8 +93,8 @@ impl NamedAttribute {
 }
 
 /// The value of the attribute called `name`, resolving the name through
-/// `context`'s interner. For a list not reached through an [`crate::OpInstance`],
-/// which answers the same question with [`crate::OpInstance::attr`].
+/// `context`'s interner. For a list not reached through an [`crate::OpHandle`],
+/// which answers the same question with [`crate::OpHandle::attr`].
 pub fn find_attribute<'a>(
     context: &Context,
     attributes: &'a [NamedAttribute],

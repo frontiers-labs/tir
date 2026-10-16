@@ -143,7 +143,7 @@ impl Atom {
 }
 
 /// Rows of the client tables `table` resolves to (see
-/// [`Database::add_words`](crate::Database::add_words)), one term per
+/// [`Database::add_words`](crate::Core::add_words)), one term per
 /// column, at most 32. A term that is a lone scalar nothing has bound when
 /// the atom is reached is bound to the row's cell. Any other term is
 /// evaluated, and the row must hold its value in that column: a value no
@@ -265,7 +265,7 @@ pub enum Out {
     Word(Scalar),
     /// The value must be one of the parameter's cells.
     In(Param),
-    /// The value is not read, and need not exist: [`Host::accepts`] decides
+    /// The value is not read, and need not exist: [`Calls::accepts`] decides
     /// from `key`'s reference. The column still says which epoch the atom is
     /// from.
     Host(ExternId),

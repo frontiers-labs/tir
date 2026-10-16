@@ -76,7 +76,7 @@ pub fn trace_enabled() -> bool {
 /// A reference to an id of a space: the id plus a constant, read as "the id's
 /// value plus `offset`" modulo 2^W, W being the width of the id's carrier. An
 /// id without a carrier is only ever referred to at offset zero. Only
-/// [`Database::find`] turns one into its canonical form.
+/// [`Core::find`] turns one into its canonical form.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Ref {
     pub id: u32,

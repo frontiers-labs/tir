@@ -83,7 +83,7 @@ impl<L: ENode> Engine<L> {
     /// operands are the node's canonical references, and `offset` is where the
     /// node sits from the class: a model charges an add-of-constant for each
     /// non-zero one it has to spell, and nothing for an operand
-    /// [`Engine::int_const`] reads as a constant. A [`Label::is_unique`] node
+    /// [`Engine::int_const`] reads as a constant. A [`ENode::is_unique`] node
     /// costs its own price alone: it stands for what it names, which no
     /// spelling of its operands is. Cycle-tolerant — a node with un-costed
     /// children is skipped and revisited to a fixpoint, so a cycle is costed

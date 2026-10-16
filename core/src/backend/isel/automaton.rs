@@ -74,7 +74,7 @@ pub struct Described {
     /// operation has in a function's graph.
     pub label: u32,
     /// The carrier a row of the operation has, as
-    /// [`carrier_word`](tir::sem::node::carrier_word) spells it.
+    /// [`tir::sem::node::carrier_word`] spells it.
     pub carrier: u32,
     pub children: SmallVec<[Child; 5]>,
     /// The memory access the operation is, if it is one.

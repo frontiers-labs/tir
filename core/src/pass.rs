@@ -6,7 +6,7 @@ use crate::{Context, OpHandle, OpId, Operation, RegionKind, analysis::AnalysisMa
 
 /// A pass made available to the pipeline parser by name.
 ///
-/// Backends and libraries contribute entries with [`register_pass!`]; the opt
+/// Backends and libraries contribute entries with [`crate::register_pass!`]; the opt
 /// tool builds pipelines purely from this registry, so adding a pass never
 /// requires touching the tool.
 pub struct PassInfo {

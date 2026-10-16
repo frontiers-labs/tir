@@ -232,7 +232,7 @@ impl Plan {
     /// Bring `cache` up to the host's version: what each parameter resolves
     /// to, from scratch the first time and from what appeared since after
     /// that, a row atom's cells less the ones no row of a client table of
-    /// `db` that the atom is held to has (see [`Reduction`]). Reports
+    /// `db` that the atom is held to has (see `Reduction`). Reports
     /// whether the plan can match at all.
     pub fn refresh<C, const S: usize, H: Host + ?Sized>(
         &self,

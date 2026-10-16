@@ -734,8 +734,9 @@ impl Context {
     }
 
     /// Register a target's register classes so the attribute parser can resolve a
-    /// `CLASS[n]` register's class name back to its [`RegClassId`]. Backends call
-    /// this from `register_dialects` with their generated `register_info().classes`.
+    /// `CLASS[n]` register's class name back to its
+    /// [`crate::backend::regalloc::RegClassId`]. Backends call this from
+    /// `register_dialects` with their generated `register_info().classes`.
     pub fn register_reg_classes(&self, classes: &'static [crate::backend::regalloc::RegClassInfo]) {
         for class in classes {
             self.note_reg_class(crate::backend::regalloc::RegClassId::new(class));
@@ -751,8 +752,9 @@ impl Context {
         }
     }
 
-    /// Resolve a register-class name to its [`RegClassId`], if a target that defines
-    /// it has been registered (see [`Context::register_reg_classes`]).
+    /// Resolve a register-class name to its
+    /// [`crate::backend::regalloc::RegClassId`], if a target that defines it
+    /// has been registered (see [`Context::register_reg_classes`]).
     pub fn resolve_reg_class(&self, name: &str) -> Option<crate::backend::regalloc::RegClassId> {
         let registry = self.registry();
         let named = registry

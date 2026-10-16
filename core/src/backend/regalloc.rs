@@ -221,7 +221,7 @@ pub struct RegisterView {
 }
 
 /// The register file of a target: every allocatable (and reserved) register class,
-/// keyed by the class name used in [`RegisterAttr`] operands.
+/// keyed by the class name used in [`crate::attributes::RegisterAttr`] operands.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RegisterInfo {
     pub classes: &'static [RegClassInfo],

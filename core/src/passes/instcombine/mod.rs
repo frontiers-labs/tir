@@ -1,5 +1,5 @@
 //! InstCombine: an equality-saturation simplifier on the shared
-//! [`crate::rewrite`] driver. It seeds the function's regions
+//! `crate::rewrite` driver. It seeds the function's regions
 //! (`seed`, which reads gates off the ops' own interfaces)
 //! into a [`tir_egraph`] e-graph of real IR values, saturates, extracts the
 //! cheapest form per value by [`crate::OpCost`], and rewrites what improved.

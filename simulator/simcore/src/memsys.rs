@@ -296,7 +296,7 @@ impl MemorySystem {
         self.caches[L1D].line
     }
 
-    /// Attach a data prefetcher, trained on demand accesses in [`access_data`].
+    /// Attach a data prefetcher, trained on demand accesses in [`Self::access_data`].
     pub fn set_prefetcher(&mut self, prefetcher: Box<dyn Prefetcher>) {
         self.prefetcher = Some(prefetcher);
     }

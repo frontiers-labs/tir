@@ -28,7 +28,7 @@ pub fn regalloc_stage_for(
 /// through the same register. Insert `copy %r <- %x` ahead of the op and point
 /// the tied slot at `%r`, leaving a plain read-modify-write of `%r` that
 /// liveness and coloring already model. The copy carries
-/// [`COALESCABLE_COPY_ATTR`]: the tie is a request for one register at both
+/// `COALESCABLE_COPY_ATTR`: the tie is a request for one register at both
 /// ends, so allocation reads it as an affinity and erases the copy where it is
 /// granted.
 pub struct TiedOperandLoweringPass {

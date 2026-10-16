@@ -170,7 +170,7 @@ pub struct InstrSchedClass {
     /// Reciprocal throughput, in cycles (the issue interval). `1` means the
     /// instruction can issue every cycle.
     pub rthroughput: u16,
-    /// Resources (by [`ProcResource::name`]) this instruction occupies.
+    /// Resources (by `ProcResource::name`) this instruction occupies.
     pub resources: &'static [&'static str],
     /// Micro-op resource routes. Empty for the legacy `uses = [...]` form.
     pub uops: &'static [MicroOp],

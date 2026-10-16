@@ -649,7 +649,7 @@ impl<C, const SPACES: usize> Core<C, SPACES> {
 
     /// Record `a == b`. Unless they were equal already, the lattice columns
     /// over the space join the absorbed id's value onto the survivor's; the
-    /// tables keep naming the absorbed id until [`Self::canonicalize`].
+    /// tables keep naming the absorbed id until [`Database::canonicalize`].
     ///
     /// Two references naming one id at different offsets, or two pinned ids,
     /// are a [`Merge::Contradiction`]: nothing merges, the sets are marked
@@ -1477,7 +1477,7 @@ impl<C, const SPACES: usize> Core<C, SPACES> {
         self.state.epoch
     }
 
-    /// Close the epoch: what it wrote becomes what [`Self::prepare_new_rows`]
+    /// Close the epoch: what it wrote becomes what [`Database::prepare_new_rows`]
     /// and [`Self::risen`] read.
     pub fn advance(&mut self) {
         self.state.epoch += 1;
