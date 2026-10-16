@@ -106,8 +106,10 @@ jobs:
             target/ci/xtask
           retention-days: 1
 
+  # A master push only refreshes caches; the merge queue already tested it.
   test-shard:
     needs: build
+    if: github.event_name != 'push'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     strategy:
@@ -127,7 +129,7 @@ jobs:
 
   # One check for the ruleset to require in place of eight shard names.
   tests:
-    if: always()
+    if: always() && github.event_name != 'push'
     needs: test-shard
     runs-on: ubuntu-24.04
     steps:
@@ -141,6 +143,7 @@ jobs:
   # Stage 1 entity diet lands and the ratchet becomes enforceable.
   peak-rss:
     needs: build
+    if: github.event_name != 'push'
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:

@@ -10,6 +10,9 @@ also requires nightly toolchain:
 rustup install nightly
 ```
 
+On Linux, builds link with [mold](https://github.com/rui314/mold), so install
+it from your distribution's packages.
+
 ## Building and testing
 
 Build is done with `cargo` tool, just like any other Rust project.

@@ -2,8 +2,8 @@ name: Nightly
 
 on:
   workflow_dispatch:
-  # Builds and tests at 21:00 UTC, fuzzers at 22:00 UTC; a manual run does both.
-  # Runs scheduled on the hour start hours late, so these sit just before it.
+  # Builds and tests at 20:47 UTC, fuzzers at 21:47 UTC; a manual run does both.
+  # Runs scheduled on the hour start hours late, so these avoid it.
   schedule:
     - cron: "47 20 * * *"
     - cron: "47 21 * * *"

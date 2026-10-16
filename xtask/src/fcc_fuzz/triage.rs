@@ -12,9 +12,10 @@ use super::report::Failure;
 use super::ub;
 
 /// Ceiling on time spent shrinking one failure. Reduction is worth minutes, not
-/// hours: past the budget the predicate reports failure, deletions stop, and
-/// what has been shrunk so far is still filed. A run count would not bound it,
-/// since one run can be several compiles that each take up to a minute.
+/// hours: past the budget the predicate reports that a candidate no longer
+/// fails, deletions stop, and what has been shrunk so far is still filed. A run
+/// count would not bound it, since one run can be several compiles that each
+/// take up to a minute.
 const BUDGET: Duration = Duration::from_secs(10 * 60);
 
 pub struct Reduced {
