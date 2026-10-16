@@ -30,8 +30,8 @@ the same amount of time (or less!) to do so.
    Prefer LIT-style checks over hand-rolled IR builder for snapshot tests.
    See `docs/dev_guide.md` for more information on testing.
 3. A good patch is the one that removes more code than it adds.
-4. When changing core structures or algorithms, always update docs with
-   relevant info. Do not write new docs unless explicitly asked to.
+4. Do not touch docs unless the task asks for it. Docs must not restate
+   what the code says.
 5. Do not propose or introduce bespoke graph traversal passes. Every change
    must be driven through existing mechanisms: isel axioms, PDL rules,
    affine transformations, etc. Only deviate from these paths if explicitly
