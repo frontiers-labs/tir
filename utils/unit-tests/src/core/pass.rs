@@ -206,8 +206,7 @@ fn a_pass_that_changes_nothing_is_not_verified() {
         .expect("a pass that left no version behind skips verification");
 }
 
-#[test]
-fn an_analysis_survives_a_pass_that_changes_nothing() {
+fn analysis_survives<P: Pass + Clone + 'static>(pass: P) -> bool {
     use super::analysis::Simple;
 
     let (context, func) = parse_func(ADD_ITS_ARGUMENT);
@@ -215,15 +214,17 @@ fn an_analysis_survives_a_pass_that_changes_nothing() {
     let before = analyses.get::<Simple>(&context, func.id());
 
     let mut pm = PassManager::new();
-    pm.add_pass(ReadOnlyPass);
+    pm.add_pass(pass);
     let root = OperationRef::new(context.get_op(func.id()));
     pm.run_on_op_ref(&context, root, &analyses)
-        .expect("the pass changes nothing");
+        .expect("the pass keeps the IR valid");
 
-    assert!(std::rc::Rc::ptr_eq(
-        &before,
-        &analyses.get::<Simple>(&context, func.id())
-    ));
+    std::rc::Rc::ptr_eq(&before, &analyses.get::<Simple>(&context, func.id()))
+}
+
+#[test]
+fn an_analysis_survives_a_pass_that_changes_nothing() {
+    assert!(analysis_survives(ReadOnlyPass));
 }
 
 #[test]
@@ -252,22 +253,7 @@ fn repeated_pass_runs_do_not_grow_the_analysis_cache() {
 
 #[test]
 fn an_analysis_is_rebuilt_after_a_pass_mutates() {
-    use super::analysis::Simple;
-
-    let (context, func) = parse_func(ADD_ITS_ARGUMENT);
-    let analyses = AnalysisManager::new();
-    let before = analyses.get::<Simple>(&context, func.id());
-
-    let mut pm = PassManager::new();
-    pm.add_pass(AddToSubPass);
-    let root = OperationRef::new(context.get_op(func.id()));
-    pm.run_on_op_ref(&context, root, &analyses)
-        .expect("rewriting addi to subi keeps the IR valid");
-
-    assert!(!std::rc::Rc::ptr_eq(
-        &before,
-        &analyses.get::<Simple>(&context, func.id())
-    ));
+    assert!(!analysis_survives(AddToSubPass));
 }
 
 #[test]

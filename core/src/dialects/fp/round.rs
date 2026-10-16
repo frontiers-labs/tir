@@ -75,8 +75,8 @@ impl ResourceEffects for RoundOp {
         .map(|(resource, access)| ResourceEffect {
             resource,
             access,
-            observed: states_for(context, &self.operands(), resource),
-            produced: states_for(context, &self.0.results(), resource),
+            observed: context.states_of(self.operands(), resource),
+            produced: context.states_of(self.0.results(), resource),
         })
         .collect()
     }
@@ -205,8 +205,8 @@ impl tir::Verifiable for RoundOp {
         verify_body_effects(context, self.reference_region().id(), &expected)?;
         for resource in [StateResource::Memory, StateResource::FpEnv] {
             let count = usize::from(expected.iter().any(|(candidate, _)| *candidate == resource));
-            if states_for(context, &self.operands(), resource).len() != count
-                || states_for(context, &results, resource).len() != count
+            if context.states_of(self.operands(), resource).len() != count
+                || context.states_of(results.iter().copied(), resource).len() != count
             {
                 return Err(invalid("fp.round state ports do not match its contract"));
             }
@@ -274,14 +274,6 @@ fn print_types(
 
 fn invalid(message: &str) -> Error {
     Error::VerificationError(message.into())
-}
-
-fn states_for(context: &Context, values: &[ValueId], resource: StateResource) -> Vec<ValueId> {
-    values
-        .iter()
-        .copied()
-        .filter(|value| context.state_resource(context.get_value(*value).ty()) == Some(resource))
-        .collect()
 }
 
 fn verify_explicit_captures(context: &Context, region: tir::RegionId) -> Result<(), Error> {
@@ -386,7 +378,7 @@ fn verify_changed_state_is_yielded(
     let mut changed = std::collections::HashSet::new();
     collect_state_effects(context, region, resource, &mut predecessors, &mut changed);
 
-    let mut reachable = states_for(context, yielded, resource);
+    let mut reachable = context.states_of(yielded.iter().copied(), resource);
     let mut visited = std::collections::HashSet::new();
     while let Some(state) = reachable.pop() {
         if visited.insert(state)

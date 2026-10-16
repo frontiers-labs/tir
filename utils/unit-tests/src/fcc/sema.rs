@@ -5,36 +5,36 @@ use fcc::lang_options::LangOptions;
 
 use super::support::{lex, typed_for};
 
+fn record_layout(source: &str, name: &str) -> (Option<(u64, u64)>, Option<Vec<u64>>) {
+    let typed = typed_for(source, "riscv64");
+    let record = typed.records().find(|record| record.name == name).unwrap();
+    let ty = tir::builtin::NamedType::get(typed.layouts().context(), name, vec![]).unwrap();
+    (
+        typed.layouts().size_align(ty),
+        typed.field_offsets(record.id),
+    )
+}
+
 #[test]
 fn computes_named_struct_layout() {
-    let typed = typed_for(
-        "struct Pair { char tag; int value; }; int main(void) { return 0; }",
-        "riscv64",
+    assert_eq!(
+        record_layout(
+            "struct Pair { char tag; int value; }; int main(void) { return 0; }",
+            "Pair"
+        ),
+        (Some((8, 4)), Some(vec![0, 4]))
     );
-    let pair = typed
-        .records()
-        .find(|record| record.name == "Pair")
-        .unwrap();
-
-    let ty = tir::builtin::NamedType::get(typed.layouts().context(), "Pair", vec![]).unwrap();
-    assert_eq!(typed.layouts().size_align(ty), Some((8, 4)));
-    assert_eq!(typed.field_offsets(pair.id), Some(vec![0, 4]));
 }
 
 #[test]
 fn computes_named_union_layout() {
-    let typed = typed_for(
-        "union Value { int integer; long wide; }; int main(void) { return 0; }",
-        "riscv64",
+    assert_eq!(
+        record_layout(
+            "union Value { int integer; long wide; }; int main(void) { return 0; }",
+            "Value"
+        ),
+        (Some((8, 8)), Some(vec![0, 0]))
     );
-    let value = typed
-        .records()
-        .find(|record| record.name == "Value")
-        .unwrap();
-
-    let ty = tir::builtin::NamedType::get(typed.layouts().context(), "Value", vec![]).unwrap();
-    assert_eq!(typed.layouts().size_align(ty), Some((8, 8)));
-    assert_eq!(typed.field_offsets(value.id), Some(vec![0, 0]));
 }
 
 #[test]
@@ -53,43 +53,38 @@ fn gives_anonymous_structs_distinct_compiler_names() {
     assert!(names.iter().all(|name| name.starts_with("anon.")));
 }
 
-#[test]
-fn resolves_struct_member_type() {
-    let typed = typed_for(
-        "struct Pair { int value; }; int read(void) { struct Pair pair; return pair.value; }",
-        "riscv64",
-    );
+// Whether the first member access in `source` reads an `int`, and its index.
+fn first_member(source: &str) -> (bool, Option<usize>) {
+    let typed = typed_for(source, "riscv64");
     let ast = typed.ast();
     let member = ast
         .postorder(ast.root().unwrap())
         .find(|node| ast.get_node(*node).kind == fcc::ast::AstKind::Member)
         .unwrap();
     let semantics = ast.get_annotation(member).unwrap();
-
-    assert!(matches!(
+    let is_int = matches!(
         typed.types().kind(semantics.ty.unwrap()),
         fcc::sema::TypeKind::Integer(fcc::sema::IntegerKind::Int)
-    ));
-    assert_eq!(semantics.member_index, Some(0));
+    );
+    (is_int, semantics.member_index)
+}
+
+#[test]
+fn resolves_struct_member_type() {
+    assert_eq!(
+        first_member(
+            "struct Pair { int value; }; int read(void) { struct Pair pair; return pair.value; }"
+        ),
+        (true, Some(0))
+    );
 }
 
 #[test]
 fn resolves_pointer_member_against_the_tag_identity() {
-    let typed = typed_for(
+    let (is_int, _) = first_member(
         "struct Other { char byte; }; struct Pair { int value; }; int read(struct Pair *pair) { return pair->value; }",
-        "riscv64",
     );
-    let ast = typed.ast();
-    let member = ast
-        .postorder(ast.root().unwrap())
-        .find(|node| ast.get_node(*node).kind == fcc::ast::AstKind::Member)
-        .unwrap();
-    let semantics = ast.get_annotation(member).unwrap();
-
-    assert!(matches!(
-        typed.types().kind(semantics.ty.unwrap()),
-        fcc::sema::TypeKind::Integer(fcc::sema::IntegerKind::Int)
-    ));
+    assert!(is_int);
 }
 
 #[test]

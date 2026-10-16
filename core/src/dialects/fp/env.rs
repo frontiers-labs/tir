@@ -446,6 +446,32 @@ fn trap_state(op: &tir::OpHandle, graph: &mut SemGraph, raised: NodeId, traps: N
     trapped
 }
 
+// Write `flags` to the environment and, when `trapping`, trap on the enabled
+// bits of `raised`.
+fn store_flags(
+    op: &tir::OpHandle,
+    mut graph: SemGraph,
+    environment: NodeId,
+    flags: NodeId,
+    raised: NodeId,
+    trapping: bool,
+) -> ResourceSemantics {
+    let environment_ty = op.context.get_value(environment_state(op)).ty();
+    let environment = assign_field(
+        &mut graph,
+        environment,
+        ResourceField::FpFlags,
+        flags,
+        environment_ty,
+    );
+    let memory = trapping.then(|| {
+        let flags_ty = crate::builtin::IntegerType::new(&op.context, 5);
+        let traps = read_field(&mut graph, environment, ResourceField::FpTraps, flags_ty);
+        trap_state(op, &mut graph, raised, traps)
+    });
+    transition_semantics(op, None, environment, memory, graph)
+}
+
 impl HasResourceSemantics for RaiseFlagsOp {
     fn resource_semantics(&self) -> ResourceSemantics {
         let context = &self.0.context;
@@ -457,18 +483,7 @@ impl HasResourceSemantics for RaiseFlagsOp {
         let raised = resource::value(&mut graph, &self.0, self.0.value_operands()[0]);
         let flags = resource::operation(&mut graph, SymKind::Or, &[old, raised]);
         graph.annotation_mut(flags).actual_type = Some(flags_ty);
-        let environment = assign_field(
-            &mut graph,
-            environment,
-            ResourceField::FpFlags,
-            flags,
-            context.get_value(environment_value).ty(),
-        );
-        let memory = self.trapping().then(|| {
-            let traps = read_field(&mut graph, environment, ResourceField::FpTraps, flags_ty);
-            trap_state(&self.0, &mut graph, raised, traps)
-        });
-        transition_semantics(&self.0, None, environment, memory, graph)
+        store_flags(&self.0, graph, environment, flags, raised, self.trapping())
     }
 }
 
@@ -519,18 +534,7 @@ impl HasResourceSemantics for UpdateOp {
             snapshot,
             context.get_value(environment_value).ty(),
         );
-        let environment = assign_field(
-            &mut graph,
-            environment,
-            ResourceField::FpFlags,
-            flags,
-            context.get_value(environment_value).ty(),
-        );
-        let memory = self.trapping().then(|| {
-            let traps = read_field(&mut graph, environment, ResourceField::FpTraps, flags_ty);
-            trap_state(&self.0, &mut graph, raised, traps)
-        });
-        transition_semantics(&self.0, None, environment, memory, graph)
+        store_flags(&self.0, graph, environment, flags, raised, self.trapping())
     }
 }
 

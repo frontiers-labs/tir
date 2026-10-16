@@ -144,45 +144,47 @@ fn staged_stores_publish_together_at_commit() {
     assert_eq!(bytes, [4, 5]);
 }
 
-#[test]
-fn faulted_instruction_accepts_only_abort() {
+fn ram_service(address: u64, size: u64, permissions: Permissions) -> MemoryService {
     let mut service = MemoryService::new();
     let (memory, address_space) = service.memory_and_space_mut();
-    let backing = memory.create_backing(4).unwrap();
+    let backing = memory.create_backing(size).unwrap();
     memory
-        .map(address_space, 0x3000, 4, backing, 0, Permissions::READ)
+        .map(address_space, address, size, backing, 0, permissions)
         .unwrap();
+    service
+}
+
+fn request(instruction: u64, sequence: u64, pc: u64, effect: MemoryEffect) -> EffectRequest {
+    EffectRequest {
+        id: RequestId {
+            instruction,
+            sequence,
+        },
+        pc,
+        effect,
+    }
+}
+
+fn write_effect(address: u64) -> MemoryEffect {
+    MemoryEffect::Write {
+        address,
+        bytes: vec![1],
+    }
+}
+
+fn read_effect(address: u64) -> MemoryEffect {
+    MemoryEffect::Read { address, size: 1 }
+}
+
+#[test]
+fn faulted_instruction_accepts_only_abort() {
+    let mut service = ram_service(0x3000, 4, Permissions::READ);
     service.begin_instruction(9).unwrap();
-    let fault = service
-        .service(
-            &EffectRequest {
-                id: RequestId {
-                    instruction: 9,
-                    sequence: 0,
-                },
-                pc: 0x84,
-                effect: MemoryEffect::Write {
-                    address: 0x3000,
-                    bytes: vec![1],
-                },
-            },
-            true,
-        )
-        .unwrap()
-        .unwrap();
+    let write = request(9, 0, 0x84, write_effect(0x3000));
+    let fault = service.service(&write, true).unwrap().unwrap();
     assert!(fault.result.is_err());
 
-    let next = EffectRequest {
-        id: RequestId {
-            instruction: 9,
-            sequence: 1,
-        },
-        pc: 0x84,
-        effect: MemoryEffect::Read {
-            address: 0x3000,
-            size: 1,
-        },
-    };
+    let next = request(9, 1, 0x84, read_effect(0x3000));
     assert!(service.service(&next, true).is_err());
     assert!(service.commit_instruction(9).is_err());
     service.abort_instruction(9).unwrap();
@@ -602,48 +604,13 @@ fn remapping_reserved_address_makes_store_conditional_fail() {
 
 #[test]
 fn staged_store_rejects_a_later_observing_effect() {
-    let mut service = MemoryService::new();
-    let (memory, address_space) = service.memory_and_space_mut();
-    let backing = memory.create_backing(2).unwrap();
-    memory
-        .map(
-            address_space,
-            0x8000,
-            2,
-            backing,
-            0,
-            Permissions::READ_WRITE,
-        )
-        .unwrap();
+    let mut service = ram_service(0x8000, 2, Permissions::READ_WRITE);
     service.begin_instruction(1).unwrap();
     service
-        .service(
-            &EffectRequest {
-                id: RequestId {
-                    instruction: 1,
-                    sequence: 0,
-                },
-                pc: 0xb0,
-                effect: MemoryEffect::Write {
-                    address: 0x8000,
-                    bytes: vec![1],
-                },
-            },
-            true,
-        )
+        .service(&request(1, 0, 0xb0, write_effect(0x8000)), true)
         .unwrap();
 
-    let later_read = EffectRequest {
-        id: RequestId {
-            instruction: 1,
-            sequence: 1,
-        },
-        pc: 0xb0,
-        effect: MemoryEffect::Read {
-            address: 0x8000,
-            size: 1,
-        },
-    };
+    let later_read = request(1, 1, 0xb0, read_effect(0x8000));
     assert!(service.service(&later_read, true).is_err());
     assert_eq!(service.effect_order(later_read.id), None);
     service.abort_instruction(1).unwrap();
@@ -651,35 +618,10 @@ fn staged_store_rejects_a_later_observing_effect() {
 
 #[test]
 fn mapping_change_invalidates_active_instruction() {
-    let mut service = MemoryService::new();
-    let (memory, address_space) = service.memory_and_space_mut();
-    let backing = memory.create_backing(2).unwrap();
-    memory
-        .map(
-            address_space,
-            0x9000,
-            2,
-            backing,
-            0,
-            Permissions::READ_WRITE,
-        )
-        .unwrap();
+    let mut service = ram_service(0x9000, 2, Permissions::READ_WRITE);
     service.begin_instruction(1).unwrap();
     service
-        .service(
-            &EffectRequest {
-                id: RequestId {
-                    instruction: 1,
-                    sequence: 0,
-                },
-                pc: 0xb4,
-                effect: MemoryEffect::Write {
-                    address: 0x9000,
-                    bytes: vec![1],
-                },
-            },
-            true,
-        )
+        .service(&request(1, 0, 0xb4, write_effect(0x9000)), true)
         .unwrap();
     let (memory, address_space) = service.memory_and_space_mut();
     memory
@@ -693,17 +635,7 @@ fn mapping_change_invalidates_active_instruction() {
     memory
         .protect(address_space, 0x9000, 2, Permissions::READ_WRITE)
         .unwrap();
-    let request = EffectRequest {
-        id: RequestId {
-            instruction: 2,
-            sequence: 0,
-        },
-        pc: 0xb8,
-        effect: MemoryEffect::Read {
-            address: 0x9000,
-            size: 1,
-        },
-    };
+    let request = request(2, 0, 0xb8, read_effect(0x9000));
     assert!(service.service(&request, false).is_err());
     service.abort_instruction(2).unwrap();
 }

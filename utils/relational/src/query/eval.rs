@@ -474,7 +474,17 @@ impl Plan {
         host: &dyn Host,
         cache: &mut PlanCache,
     ) -> Matches {
-        match self.prepare_all(db, host, cache) {
+        self.search(db, host, cache, Self::prepare_all)
+    }
+
+    fn search<C, const S: usize>(
+        &self,
+        db: &Database<C, S>,
+        host: &dyn Host,
+        cache: &mut PlanCache,
+        prepare: impl FnOnce(&Self, &Database<C, S>, &dyn Host, &mut PlanCache) -> Option<Prepared>,
+    ) -> Matches {
+        match prepare(self, db, host, cache) {
             Some(prepared) => self.run(db, &db.groups(), host, &prepared, cache),
             None => Matches::default(),
         }
@@ -536,10 +546,7 @@ impl Plan {
         host: &dyn Host,
         cache: &mut PlanCache,
     ) -> Matches {
-        match self.prepare_new(db, host, cache) {
-            Some(prepared) => self.run(db, &db.groups(), host, &prepared, cache),
-            None => Matches::default(),
-        }
+        self.search(db, host, cache, Self::prepare_new)
     }
 
     /// [`Self::prepare_all`] for [`Self::search_new`].

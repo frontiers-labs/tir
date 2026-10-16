@@ -829,39 +829,18 @@ impl<'a> GraphBuilder<'a> {
         }
     }
 
-    fn capture(mut self, outputs: &[ValueId]) -> Result<GraphSnapshot, RefinementError> {
-        let captures = self
-            .captures
-            .iter()
-            .map(|value| canonical_type(self.context, self.context.get_value(*value).ty()))
-            .collect::<Result<_, _>>()?;
-        let outputs = outputs
-            .iter()
-            .map(|output| self.value(*output))
-            .collect::<Result<_, _>>()?;
-        Ok(GraphSnapshot {
-            captures,
-            operations: self.operations,
-            outputs,
-        })
+    fn capture(self, outputs: &[ValueId]) -> Result<GraphSnapshot, RefinementError> {
+        self.capture_indexed(outputs).map(|(snapshot, _)| snapshot)
     }
 
     fn capture_with_operations<const N: usize>(
-        mut self,
+        self,
         outputs: &[ValueId],
         selected: [OpId; N],
     ) -> Result<(GraphSnapshot, [usize; N]), RefinementError> {
-        let captures = self
-            .captures
-            .iter()
-            .map(|value| canonical_type(self.context, self.context.get_value(*value).ty()))
-            .collect::<Result<_, _>>()?;
-        let outputs = outputs
-            .iter()
-            .map(|output| self.value(*output))
-            .collect::<Result<_, _>>()?;
+        let (snapshot, indices) = self.capture_indexed(outputs)?;
         let selected = selected.map(|operation| {
-            self.operation_indices
+            indices
                 .get(&operation)
                 .copied()
                 .ok_or(RefinementError::DisconnectedGroup)
@@ -871,14 +850,7 @@ impl<'a> GraphBuilder<'a> {
             .collect::<Result<Vec<_>, _>>()?
             .try_into()
             .map_err(|_| RefinementError::UnsupportedForm)?;
-        Ok((
-            GraphSnapshot {
-                captures,
-                operations: self.operations,
-                outputs,
-            },
-            selected,
-        ))
+        Ok((snapshot, selected))
     }
 
     fn capture_indexed(

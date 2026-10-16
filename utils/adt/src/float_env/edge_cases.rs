@@ -1,3 +1,4 @@
+use super::tests::assert_nearest;
 use super::*;
 
 #[test]
@@ -135,18 +136,13 @@ fn tininess_is_detected_after_rounding() {
 
 #[test]
 fn tiny_unbounded_result_raises_underflow_when_encoded_as_normal() {
-    assert_eq!(
-        eval_float(
-            FloatOp::Mul,
-            FloatWidth::W32,
-            FloatWidth::W32,
-            [0x0080_0000, 0x3f7f_ffff, 0],
-            RoundingMode::TiesToEven
-        ),
-        FloatResult {
-            bits: 0x0080_0000,
-            flags: 3
-        }
+    assert_nearest(
+        FloatOp::Mul,
+        FloatWidth::W32,
+        FloatWidth::W32,
+        [0x0080_0000, 0x3f7f_ffff, 0],
+        0x0080_0000,
+        3,
     );
 }
 

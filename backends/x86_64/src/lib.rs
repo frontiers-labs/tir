@@ -326,6 +326,50 @@ mod isa {
                 _ => None,
             }
         }
+
+        fn spill_access(
+            &self,
+            context: &tir::Context,
+            value: tir::ValueId,
+            class: tir::backend::regalloc::RegClassId,
+            frame: &tir::backend::liveness::PhysReg,
+            offset: i64,
+            store: bool,
+        ) -> Box<dyn Operation> {
+            macro_rules! access {
+                ($Store:ident, $Load:ident) => {
+                    if store {
+                        Box::new(
+                            $Store::new(context)
+                                .attr("base", phys_attr(*frame))
+                                .attr("imm", AttributeValue::Int(offset))
+                                .src(value)
+                                .build(),
+                        )
+                    } else {
+                        Box::new(
+                            $Load::new(context)
+                                .result_values(vec![value])
+                                .attr("base", phys_attr(*frame))
+                                .attr("imm", AttributeValue::Int(offset))
+                                .build(),
+                        )
+                    }
+                };
+            }
+            match self.move_kind(class) {
+                Some(MoveKind::Gpr64) => access!(MovStoreDispOpBuilder, MovLoadDispOpBuilder),
+                Some(MoveKind::Gpr32) => access!(Mov32StoreDispOpBuilder, Mov32LoadDispOpBuilder),
+                Some(MoveKind::Gpr16) => access!(Mov16StoreDispOpBuilder, Mov16LoadDispOpBuilder),
+                Some(MoveKind::Gpr8) => access!(Mov8StoreDispOpBuilder, Mov8LoadDispOpBuilder),
+                Some(MoveKind::Xmm128) => {
+                    access!(MovupsStoreDispOpBuilder, MovupsLoadDispOpBuilder)
+                }
+                Some(MoveKind::Xmm64) => access!(MovsdStoreDispOpBuilder, MovsdLoadDispOpBuilder),
+                Some(MoveKind::Xmm32) => access!(MovssStoreDispOpBuilder, MovssLoadDispOpBuilder),
+                _ => unimplemented!("x86-64 spilling for {} is not implemented", class.name()),
+            }
+        }
     }
 
     impl tir::backend::regalloc::TargetRegAlloc for X86RegAlloc {
@@ -361,27 +405,7 @@ mod isa {
             frame: &tir::backend::liveness::PhysReg,
             offset: i64,
         ) -> Box<dyn Operation> {
-            macro_rules! store {
-                ($Builder:ident) => {
-                    Box::new(
-                        $Builder::new(context)
-                            .attr("base", phys_attr(*frame))
-                            .attr("imm", AttributeValue::Int(offset))
-                            .src(value)
-                            .build(),
-                    )
-                };
-            }
-            match self.move_kind(class) {
-                Some(MoveKind::Gpr64) => store!(MovStoreDispOpBuilder),
-                Some(MoveKind::Gpr32) => store!(Mov32StoreDispOpBuilder),
-                Some(MoveKind::Gpr16) => store!(Mov16StoreDispOpBuilder),
-                Some(MoveKind::Gpr8) => store!(Mov8StoreDispOpBuilder),
-                Some(MoveKind::Xmm128) => store!(MovupsStoreDispOpBuilder),
-                Some(MoveKind::Xmm64) => store!(MovsdStoreDispOpBuilder),
-                Some(MoveKind::Xmm32) => store!(MovssStoreDispOpBuilder),
-                _ => unimplemented!("x86-64 spilling for {} is not implemented", class.name()),
-            }
+            self.spill_access(context, value, class, frame, offset, true)
         }
 
         fn emit_spill_reload(
@@ -392,27 +416,7 @@ mod isa {
             frame: &tir::backend::liveness::PhysReg,
             offset: i64,
         ) -> Box<dyn Operation> {
-            macro_rules! load {
-                ($Builder:ident) => {
-                    Box::new(
-                        $Builder::new(context)
-                            .result_values(vec![value])
-                            .attr("base", phys_attr(*frame))
-                            .attr("imm", AttributeValue::Int(offset))
-                            .build(),
-                    )
-                };
-            }
-            match self.move_kind(class) {
-                Some(MoveKind::Gpr64) => load!(MovLoadDispOpBuilder),
-                Some(MoveKind::Gpr32) => load!(Mov32LoadDispOpBuilder),
-                Some(MoveKind::Gpr16) => load!(Mov16LoadDispOpBuilder),
-                Some(MoveKind::Gpr8) => load!(Mov8LoadDispOpBuilder),
-                Some(MoveKind::Xmm128) => load!(MovupsLoadDispOpBuilder),
-                Some(MoveKind::Xmm64) => load!(MovsdLoadDispOpBuilder),
-                Some(MoveKind::Xmm32) => load!(MovssLoadDispOpBuilder),
-                _ => unimplemented!("x86-64 spilling for {} is not implemented", class.name()),
-            }
+            self.spill_access(context, value, class, frame, offset, false)
         }
 
         fn emit_copy(

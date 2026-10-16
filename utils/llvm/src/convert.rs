@@ -718,7 +718,11 @@ fn lower_inst(
         } => {
             let lhs = val!(lhs, ty);
             let rhs = val!(rhs, ty);
-            let predicate = parse_predicate(if pred == "ult" { "oge" } else { pred })?;
+            let predicate = parse_predicate(
+                if pred == "ult" { "oge" } else { pred },
+                Predicate::FLOAT,
+                "fcmp",
+            )?;
             let op = fp::CmpOpBuilder::new(context)
                 .lhs(lhs)
                 .rhs(rhs)
@@ -1322,7 +1326,7 @@ fn lower_icmp(
     rhs: ValueId,
 ) -> Result<ValueId, Error> {
     let result_ty = IntegerType::new(context, 1);
-    let predicate = parse_integer_predicate(predicate)?;
+    let predicate = parse_predicate(predicate, Predicate::INTEGER, "pointer icmp")?;
     Ok(if matches!(ty, Type::Ptr(_)) {
         body.append_op(
             pops::CmpOpBuilder::new(context)
@@ -1674,30 +1678,12 @@ fn integer_conversion_semantics(context: &Context) -> Arc<tir::fp::Semantics> {
     ))
 }
 
-fn parse_predicate(predicate: &str) -> Result<Predicate, Error> {
-    Ok(match predicate {
-        "oeq" => Predicate::Oeq,
-        "ogt" => Predicate::Ogt,
-        "oge" => Predicate::Oge,
-        "olt" => Predicate::Olt,
-        "ole" => Predicate::Ole,
-        "une" => Predicate::Une,
-        _ => return Err(Error::Unsupported(format!("fcmp {predicate}"))),
-    })
-}
-
-fn parse_integer_predicate(predicate: &str) -> Result<Predicate, Error> {
-    Ok(match predicate {
-        "eq" => Predicate::Eq,
-        "ne" => Predicate::Ne,
-        "slt" => Predicate::Slt,
-        "sgt" => Predicate::Sgt,
-        "sle" => Predicate::Sle,
-        "sge" => Predicate::Sge,
-        "ult" => Predicate::Ult,
-        "ugt" => Predicate::Ugt,
-        "ule" => Predicate::Ule,
-        "uge" => Predicate::Uge,
-        _ => return Err(Error::Unsupported(format!("pointer icmp {predicate}"))),
-    })
+fn parse_predicate(
+    predicate: &str,
+    vocabulary: &[Predicate],
+    op: &str,
+) -> Result<Predicate, Error> {
+    Predicate::parse(predicate)
+        .filter(|parsed| vocabulary.contains(parsed))
+        .ok_or_else(|| Error::Unsupported(format!("{op} {predicate}")))
 }

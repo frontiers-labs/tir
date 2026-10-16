@@ -152,16 +152,23 @@ fn unit(node: &Math) -> u64 {
     }
 }
 
+// An engine where symbol `a` is unioned with `depth` negations of itself.
+fn sym_equal_to_negations(depth: usize) -> (Engine<Math>, Id) {
+    let mut g = Engine::new();
+    let a = sym(&mut g, 0);
+    let mut negated = a;
+    for _ in 0..depth {
+        negated = neg(&mut g, negated);
+    }
+    g.union(negated, a).unwrap();
+    g.rebuild();
+    (g, a)
+}
+
 #[test]
 fn picks_cheaper_equivalent_form() {
     // neg(neg(a)) unioned with a: extraction prefers the bare a (cost 0).
-    let mut g = Engine::new();
-    let a = sym(&mut g, 0);
-    let inner = neg(&mut g, a);
-    let nn = neg(&mut g, inner);
-    g.union(nn, a).unwrap();
-    g.rebuild();
-
+    let (g, a) = sym_equal_to_negations(2);
     let extraction = g.extract_best(|_, node, _, _| unit(node));
     assert!(matches!(extraction.node(g.root(a)).unwrap(), Math::Sym(0)));
 }
@@ -198,11 +205,7 @@ fn ties_keep_the_first_node_to_reach_the_minimum() {
 fn terminates_on_a_cycle() {
     // a ≡ neg(a): the class is a self-cycle, but extraction still terminates and
     // costs it through the symbol leaf.
-    let mut g = Engine::new();
-    let a = sym(&mut g, 0);
-    let na = neg(&mut g, a);
-    g.union(a, na).unwrap();
-    g.rebuild();
+    let (g, a) = sym_equal_to_negations(1);
     let extraction = g.extract_best(|_, node, _, _| unit(node));
     assert!(extraction.node(g.root(a)).is_some());
 }

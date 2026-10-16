@@ -483,70 +483,51 @@ impl APInt {
 
     /// Unsigned division
     pub fn udiv(&self, other: &APInt) -> Self {
-        assert_eq!(self.width, other.width, "Widths must match");
-        assert!(!other.is_zero(), "Division by zero");
-        if self.width > 64 {
-            let (quotient, _) = divrem_words(&self.limbs(), &other.limbs(), self.width);
-            return Self::from_words(self.width, false, quotient);
-        }
-        APInt {
-            width: self.width,
-            signed: false,
-            value: self.value / other.value,
-            high: None,
-        }
+        self.divrem(other, false).0
     }
 
     /// Signed division
     pub fn sdiv(&self, other: &APInt) -> Self {
-        assert_eq!(self.width, other.width, "Widths must match");
-        assert!(!other.is_zero(), "Division by zero");
-        if self.width > 64 {
-            let (quotient, _) = self.signed_divrem(other);
-            return quotient;
-        }
-        let mask = Self::mask_for_width(self.width);
-        let result = self.signed_at_width().wrapping_div(other.signed_at_width());
-        APInt {
-            width: self.width,
-            signed: true,
-            value: (result as u64) & mask,
-            high: None,
-        }
+        self.divrem(other, true).0
     }
 
     /// Unsigned remainder
     pub fn urem(&self, other: &APInt) -> Self {
-        assert_eq!(self.width, other.width, "Widths must match");
-        assert!(!other.is_zero(), "Division by zero");
-        if self.width > 64 {
-            let (_, remainder) = divrem_words(&self.limbs(), &other.limbs(), self.width);
-            return Self::from_words(self.width, false, remainder);
-        }
-        APInt {
-            width: self.width,
-            signed: false,
-            value: self.value % other.value,
-            high: None,
-        }
+        self.divrem(other, false).1
     }
 
     /// Signed remainder
     pub fn srem(&self, other: &APInt) -> Self {
+        self.divrem(other, true).1
+    }
+
+    fn divrem(&self, other: &APInt, signed: bool) -> (Self, Self) {
         assert_eq!(self.width, other.width, "Widths must match");
         assert!(!other.is_zero(), "Division by zero");
+        if self.width > 64 && signed {
+            return self.signed_divrem(other);
+        }
         if self.width > 64 {
-            let (_, remainder) = self.signed_divrem(other);
-            return remainder;
+            let (quotient, remainder) = divrem_words(&self.limbs(), &other.limbs(), self.width);
+            return (
+                Self::from_words(self.width, false, quotient),
+                Self::from_words(self.width, false, remainder),
+            );
         }
+        let (quotient, remainder) = if signed {
+            let (lhs, rhs) = (self.signed_at_width(), other.signed_at_width());
+            (lhs.wrapping_div(rhs) as u64, lhs.wrapping_rem(rhs) as u64)
+        } else {
+            (self.value / other.value, self.value % other.value)
+        };
         let mask = Self::mask_for_width(self.width);
-        let result = self.signed_at_width().wrapping_rem(other.signed_at_width());
-        APInt {
+        let word = |value: u64| APInt {
             width: self.width,
-            signed: true,
-            value: (result as u64) & mask,
+            signed,
+            value: value & mask,
             high: None,
-        }
+        };
+        (word(quotient), word(remainder))
     }
 
     // Truncating division on the bits, the high bit the sign whatever the

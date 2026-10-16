@@ -216,7 +216,7 @@ fn expand_map<'de, D: serde::Deserializer<'de>>(de: D) -> Result<Vec<MapRow>, D:
                 _ => {
                     return Err(D::Error::custom(format!(
                         "{sail}: need class and index, or bits alone"
-                    )))
+                    )));
                 }
             };
             rows.push(MapRow {

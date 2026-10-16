@@ -1,20 +1,29 @@
 use super::*;
 use crate::Predicate;
 
+pub(super) fn assert_nearest(
+    op: FloatOp,
+    source: FloatWidth,
+    destination: FloatWidth,
+    operands: [u64; 3],
+    bits: u64,
+    flags: u8,
+) {
+    assert_eq!(
+        eval_float(op, source, destination, operands, RoundingMode::TiesToEven),
+        FloatResult { bits, flags }
+    );
+}
+
 #[test]
 fn unsigned_conversion_avoids_double_rounding() {
-    assert_eq!(
-        eval_float(
-            FloatOp::UnsignedToFloat,
-            FloatWidth::W64,
-            FloatWidth::W32,
-            [0x8000_0080_0000_0001, 0, 0],
-            RoundingMode::TiesToEven
-        ),
-        FloatResult {
-            bits: 0x5f00_0001,
-            flags: 1
-        }
+    assert_nearest(
+        FloatOp::UnsignedToFloat,
+        FloatWidth::W64,
+        FloatWidth::W32,
+        [0x8000_0080_0000_0001, 0, 0],
+        0x5f00_0001,
+        1,
     );
 }
 
@@ -39,29 +48,16 @@ fn signaling_comparison_raises_invalid_for_quiet_nan() {
 
 #[test]
 fn quiet_comparison_only_raises_invalid_for_signaling_nan() {
-    let quiet = compare_float(
-        FloatWidth::W64,
-        0x7ff8_0000_0000_0000,
-        0x3ff0_0000_0000_0000,
-        Predicate::Une,
-        ComparisonKind::Quiet,
-    );
-    let signaling = compare_float(
-        FloatWidth::W64,
-        0x7ff0_0000_0000_0001,
-        0x3ff0_0000_0000_0000,
-        Predicate::Une,
-        ComparisonKind::Quiet,
-    );
-
-    assert_eq!(quiet, FloatResult { bits: 1, flags: 0 });
-    assert_eq!(
-        signaling,
-        FloatResult {
-            bits: 1,
-            flags: 0x10
-        }
-    );
+    for (lhs, flags) in [(0x7ff8_0000_0000_0000, 0), (0x7ff0_0000_0000_0001, 0x10)] {
+        let result = compare_float(
+            FloatWidth::W64,
+            lhs,
+            0x3ff0_0000_0000_0000,
+            Predicate::Une,
+            ComparisonKind::Quiet,
+        );
+        assert_eq!(result, FloatResult { bits: 1, flags });
+    }
 }
 
 #[test]
@@ -86,18 +82,13 @@ fn classification_distinguishes_all_binary_classes() {
 
 #[test]
 fn fused_invalid_product_raises_invalid_with_nan_addend() {
-    assert_eq!(
-        eval_float(
-            FloatOp::Fma,
-            FloatWidth::W64,
-            FloatWidth::W64,
-            [0x7ff0_0000_0000_0000, 0, 0x7ff8_1234_5678_9abc],
-            RoundingMode::TiesToEven
-        ),
-        FloatResult {
-            bits: 0x7ff8_1234_5678_9abc,
-            flags: 16
-        }
+    assert_nearest(
+        FloatOp::Fma,
+        FloatWidth::W64,
+        FloatWidth::W64,
+        [0x7ff0_0000_0000_0000, 0, 0x7ff8_1234_5678_9abc],
+        0x7ff8_1234_5678_9abc,
+        16,
     );
 }
 
@@ -232,18 +223,13 @@ fn invalid_integer_conversions_report_invalid() {
 
 #[test]
 fn fused_multiply_add_rounds_once() {
-    assert_eq!(
-        eval_float(
-            FloatOp::Fma,
-            FloatWidth::W32,
-            FloatWidth::W32,
-            [0x3f80_0001, 0x3f7f_fffe, 0xbf80_0000],
-            RoundingMode::TiesToEven,
-        ),
-        FloatResult {
-            bits: 0xa880_0000,
-            flags: 0
-        }
+    assert_nearest(
+        FloatOp::Fma,
+        FloatWidth::W32,
+        FloatWidth::W32,
+        [0x3f80_0001, 0x3f7f_fffe, 0xbf80_0000],
+        0xa880_0000,
+        0,
     );
 }
 

@@ -397,19 +397,14 @@ impl Memory {
         address_space.replace_range(address, end, None, MemoryAccess::Unmap)
     }
 
-    pub fn read(
+    fn copy_out(
         &self,
         address_space: &AddressSpace,
         address: u64,
         destination: &mut [u8],
+        access: MemoryAccess,
     ) -> Result<(), MemoryError> {
-        let spans = self.resolve(
-            address_space,
-            address,
-            destination.len(),
-            Permissions::READ,
-            MemoryAccess::Read,
-        )?;
+        let spans = self.resolve(address_space, address, destination.len(), access)?;
         let mut destination_offset = 0;
         for span in spans {
             let backing = &self.backings[&span.backing];
@@ -421,6 +416,15 @@ impl Memory {
             destination_offset += span.len;
         }
         Ok(())
+    }
+
+    pub fn read(
+        &self,
+        address_space: &AddressSpace,
+        address: u64,
+        destination: &mut [u8],
+    ) -> Result<(), MemoryError> {
+        self.copy_out(address_space, address, destination, MemoryAccess::Read)
     }
 
     pub fn fetch(
@@ -429,24 +433,7 @@ impl Memory {
         address: u64,
         destination: &mut [u8],
     ) -> Result<(), MemoryError> {
-        let spans = self.resolve(
-            address_space,
-            address,
-            destination.len(),
-            Permissions::EXECUTE,
-            MemoryAccess::Fetch,
-        )?;
-        let mut destination_offset = 0;
-        for span in spans {
-            let backing = &self.backings[&span.backing];
-            read_backing(
-                backing,
-                span.offset,
-                &mut destination[destination_offset..destination_offset + span.len],
-            );
-            destination_offset += span.len;
-        }
-        Ok(())
+        self.copy_out(address_space, address, destination, MemoryAccess::Fetch)
     }
 
     pub fn write(
@@ -455,13 +442,7 @@ impl Memory {
         address: u64,
         source: &[u8],
     ) -> Result<(), MemoryError> {
-        let spans = self.resolve(
-            address_space,
-            address,
-            source.len(),
-            Permissions::WRITE,
-            MemoryAccess::Write,
-        )?;
+        let spans = self.resolve(address_space, address, source.len(), MemoryAccess::Write)?;
         let mut source_offset = 0;
         for span in spans {
             let backing = self.backings.get_mut(&span.backing).unwrap();
@@ -483,6 +464,17 @@ impl Memory {
         size: usize,
         access: MemoryAccess,
     ) -> Result<(), MemoryError> {
+        self.resolve(address_space, address, size, access)?;
+        Ok(())
+    }
+
+    fn resolve(
+        &self,
+        address_space: &AddressSpace,
+        address: u64,
+        size: usize,
+        access: MemoryAccess,
+    ) -> Result<Vec<Span>, MemoryError> {
         let permission = match access {
             MemoryAccess::Read => Permissions::READ,
             MemoryAccess::Write => Permissions::WRITE,
@@ -495,18 +487,6 @@ impl Memory {
                 ));
             }
         };
-        self.resolve(address_space, address, size, permission, access)?;
-        Ok(())
-    }
-
-    fn resolve(
-        &self,
-        address_space: &AddressSpace,
-        address: u64,
-        size: usize,
-        permission: Permissions,
-        access: MemoryAccess,
-    ) -> Result<Vec<Span>, MemoryError> {
         if size == 0 {
             return Ok(Vec::new());
         }

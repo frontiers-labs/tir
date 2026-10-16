@@ -139,12 +139,16 @@ fn parallel_pass(
         );
     }
     if peak_sum.1 as f64 > peak_sum.0 as f64 * PARALLEL_RSS_THRESHOLD {
-        anyhow::bail!("fcc gate: -j{jobs} peak RSS sum passed {PARALLEL_RSS_THRESHOLD}x the pinned sequential sum");
+        anyhow::bail!(
+            "fcc gate: -j{jobs} peak RSS sum passed {PARALLEL_RSS_THRESHOLD}x the pinned sequential sum"
+        );
     }
     if let Some((ratio, label, before, after)) =
         worst.filter(|(ratio, ..)| *ratio > PARALLEL_RSS_THRESHOLD)
     {
-        anyhow::bail!("fcc gate: -j{jobs} peak RSS on {label} is {ratio:.2}x the pinned {before} kB ({after} kB)");
+        anyhow::bail!(
+            "fcc gate: -j{jobs} peak RSS on {label} is {ratio:.2}x the pinned {before} kB ({after} kB)"
+        );
     }
     Ok(())
 }
@@ -193,7 +197,9 @@ fn many_functions(
         peak_many as f64 / reference as f64
     );
     if peak_many as f64 > reference as f64 * PARALLEL_RSS_THRESHOLD {
-        anyhow::bail!("fcc gate: many-function peak RSS at -j{jobs} passed {PARALLEL_RSS_THRESHOLD}x the pinned reference");
+        anyhow::bail!(
+            "fcc gate: many-function peak RSS at -j{jobs} passed {PARALLEL_RSS_THRESHOLD}x the pinned reference"
+        );
     }
     Ok(reference)
 }

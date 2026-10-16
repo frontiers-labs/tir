@@ -10,7 +10,7 @@
 //! bit, which is periodically reset.
 
 use super::BranchPredictor;
-use super::common::{GlobalHistory, TageParams, sat_update};
+use super::common::{TageParams, TaggedTables, sat_update};
 
 #[derive(Clone, Copy, Default)]
 struct Entry {
@@ -36,14 +36,9 @@ struct Prediction {
 
 pub struct Tage {
     params: TageParams,
-    hist_lengths: Vec<usize>,
-    base: Vec<i8>,
-    tables: Vec<Vec<Entry>>,
-    history: GlobalHistory,
+    geo: TaggedTables<Entry>,
     /// 4-bit-style meta-counter selecting altpred on newly-allocated providers.
     use_alt_on_na: i8,
-    ctr_lo: i8,
-    ctr_hi: i8,
     u_max: u8,
     reset_tick: u64,
     pending: Option<Prediction>,
@@ -51,22 +46,11 @@ pub struct Tage {
 
 impl Tage {
     pub fn new(params: TageParams) -> Self {
-        let hist_lengths = params.history_lengths();
-        let base = vec![0i8; 1usize << params.log_base];
-        let tables = vec![vec![Entry::default(); 1usize << params.log_table]; params.num_tables];
-        let history = GlobalHistory::new(params.max_hist);
-        let ctr_hi = (1i8 << (params.ctr_bits - 1)) - 1;
-        let ctr_lo = -(1i8 << (params.ctr_bits - 1));
         let u_max = ((1u16 << params.u_bits) - 1) as u8;
         Tage {
+            geo: TaggedTables::new(&params),
             params,
-            hist_lengths,
-            base,
-            tables,
-            history,
             use_alt_on_na: 0,
-            ctr_lo,
-            ctr_hi,
             u_max,
             reset_tick: 0,
             pending: None,
@@ -85,17 +69,17 @@ impl Tage {
 impl BranchPredictor for Tage {
     fn predict(&mut self, pc: u64, _target: u64) -> bool {
         let base_index = self.base_index(pc);
-        let base_pred = self.base[base_index] >= 0;
+        let base_pred = self.geo.base[base_index] >= 0;
 
         let mut indices = Vec::with_capacity(self.params.num_tables);
         let mut tags = Vec::with_capacity(self.params.num_tables);
         let mut provider = None;
         let mut alt = None;
         for i in 0..self.params.num_tables {
-            let len = self.hist_lengths[i];
-            let idx = self.history.index(pc, len, self.params.log_table);
-            let tag = self.history.tag(pc, len, self.params.tag_bits);
-            if self.tables[i][idx].tag == tag {
+            let len = self.geo.hist_lengths[i];
+            let idx = self.geo.history.index(pc, len, self.params.log_table);
+            let tag = self.geo.history.tag(pc, len, self.params.tag_bits);
+            if self.geo.tables[i][idx].tag == tag {
                 alt = provider;
                 provider = Some(i);
             }
@@ -103,9 +87,9 @@ impl BranchPredictor for Tage {
             tags.push(tag);
         }
 
-        let provider_pred = provider.map_or(base_pred, |i| self.tables[i][indices[i]].ctr >= 0);
-        let alt_pred = alt.map_or(base_pred, |i| self.tables[i][indices[i]].ctr >= 0);
-        let provider_weak = provider.is_some_and(|i| self.weak(self.tables[i][indices[i]].ctr));
+        let provider_pred = provider.map_or(base_pred, |i| self.geo.tables[i][indices[i]].ctr >= 0);
+        let alt_pred = alt.map_or(base_pred, |i| self.geo.tables[i][indices[i]].ctr >= 0);
+        let provider_weak = provider.is_some_and(|i| self.weak(self.geo.tables[i][indices[i]].ctr));
 
         let final_pred = match provider {
             Some(_) if provider_weak && self.use_alt_on_na >= 0 => alt_pred,
@@ -144,19 +128,19 @@ impl BranchPredictor for Tage {
                     };
                 }
                 if p.provider_pred != p.alt_pred {
-                    let e = &mut self.tables[i][idx];
+                    let e = &mut self.geo.tables[i][idx];
                     e.u = if p.provider_pred == taken {
                         (e.u + 1).min(self.u_max)
                     } else {
                         e.u.saturating_sub(1)
                     };
                 }
-                let e = &mut self.tables[i][idx];
-                e.ctr = sat_update(e.ctr, taken, self.ctr_lo, self.ctr_hi);
+                let e = &mut self.geo.tables[i][idx];
+                e.ctr = sat_update(e.ctr, taken, self.geo.ctr_lo, self.geo.ctr_hi);
             }
             None => {
-                let e = &mut self.base[p.base_index];
-                *e = sat_update(*e, taken, self.ctr_lo, self.ctr_hi);
+                let e = &mut self.geo.base[p.base_index];
+                *e = sat_update(*e, taken, self.geo.ctr_lo, self.geo.ctr_hi);
             }
         }
 
@@ -168,8 +152,8 @@ impl BranchPredictor for Tage {
                 let mut allocated = false;
                 for i in start..self.params.num_tables {
                     let idx = p.indices[i];
-                    if self.tables[i][idx].u == 0 {
-                        self.tables[i][idx] = Entry {
+                    if self.geo.tables[i][idx].u == 0 {
+                        self.geo.tables[i][idx] = Entry {
                             tag: p.tags[i],
                             ctr: if taken { 0 } else { -1 },
                             u: 0,
@@ -182,7 +166,7 @@ impl BranchPredictor for Tage {
                     // No room: age the candidates so an allocation succeeds soon.
                     for i in start..self.params.num_tables {
                         let idx = p.indices[i];
-                        self.tables[i][idx].u = self.tables[i][idx].u.saturating_sub(1);
+                        self.geo.tables[i][idx].u = self.geo.tables[i][idx].u.saturating_sub(1);
                     }
                 }
             }
@@ -193,14 +177,14 @@ impl BranchPredictor for Tage {
         self.reset_tick += 1;
         if self.reset_tick >= self.params.u_reset_period {
             self.reset_tick = 0;
-            for table in &mut self.tables {
+            for table in &mut self.geo.tables {
                 for e in table {
                     e.u >>= 1;
                 }
             }
         }
 
-        self.history.push(taken);
+        self.geo.history.push(taken);
     }
 
     fn name(&self) -> &'static str {

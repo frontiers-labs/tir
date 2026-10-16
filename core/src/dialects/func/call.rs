@@ -29,24 +29,11 @@ impl ResourceEffects for CallOp {
             .map(|resource| ResourceEffect {
                 resource,
                 access: ResourceAccess::Change,
-                observed: resource_states(&self.0, self.0.state_operands(), resource),
-                produced: resource_states(&self.0, self.0.state_results(), resource),
+                observed: self.0.context.states_of(self.0.state_operands(), resource),
+                produced: self.0.context.states_of(self.0.state_results(), resource),
             })
             .collect()
     }
-}
-
-fn resource_states(
-    op: &tir::OpHandle,
-    values: impl IntoIterator<Item = ValueId>,
-    resource: StateResource,
-) -> Vec<ValueId> {
-    values
-        .into_iter()
-        .filter(|value| {
-            op.context.state_resource(op.context.get_value(*value).ty()) == Some(resource)
-        })
-        .collect()
 }
 
 impl Apply for CallOp {

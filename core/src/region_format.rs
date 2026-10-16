@@ -161,12 +161,7 @@ pub fn print_result_prefix(
     fmt: &mut IRFormatter<'_>,
     op: &crate::OpHandle,
 ) -> Result<(), std::fmt::Error> {
-    let results = op.results();
-    if results.is_empty() {
-        return Ok(());
-    }
-    print_value_list(fmt, &results)?;
-    fmt.write(" = ")
+    print_wrapped_values(fmt, &op.results(), "", " = ")
 }
 
 /// Print ` state(%c, %d)` for an op observing any state, and nothing otherwise.
@@ -174,13 +169,21 @@ pub fn print_state_operands(
     fmt: &mut IRFormatter<'_>,
     op: &crate::OpHandle,
 ) -> Result<(), std::fmt::Error> {
-    let states = op.state_operands();
-    if states.is_empty() {
+    print_wrapped_values(fmt, &op.state_operands(), " state(", ")")
+}
+
+fn print_wrapped_values(
+    fmt: &mut IRFormatter<'_>,
+    values: &[crate::ValueId],
+    open: &str,
+    close: &str,
+) -> Result<(), std::fmt::Error> {
+    if values.is_empty() {
         return Ok(());
     }
-    fmt.write(" state(")?;
-    print_value_list(fmt, &states)?;
-    fmt.write(")")
+    fmt.write(open)?;
+    print_value_list(fmt, values)?;
+    fmt.write(close)
 }
 
 /// Print an op in the generic form — `%r, %s = dialect.op %a, %b state(%c) {attrs} : ty`

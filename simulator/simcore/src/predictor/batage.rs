@@ -11,7 +11,7 @@
 //! decay plus Controlled Allocation Throttling (CAT) manage entry lifetime.
 
 use super::BranchPredictor;
-use super::common::{GlobalHistory, Rng, TageParams, sat_update};
+use super::common::{Rng, TageParams, TaggedTables, sat_update};
 
 const RNG_SEED: u64 = 0x9e37_79b9_7f4a_7c15;
 
@@ -53,13 +53,8 @@ struct Prediction {
 
 pub struct Batage {
     params: TageParams,
-    hist_lengths: Vec<usize>,
-    base: Vec<i8>,
-    tables: Vec<Vec<Entry>>,
-    history: GlobalHistory,
+    geo: TaggedTables<Entry>,
     nmax: u8,
-    base_lo: i8,
-    base_hi: i8,
     cat: i32,
     rng: Rng,
     pending: Option<Prediction>,
@@ -67,22 +62,11 @@ pub struct Batage {
 
 impl Batage {
     pub fn new(params: TageParams) -> Self {
-        let hist_lengths = params.history_lengths();
-        let base = vec![0i8; 1usize << params.log_base];
-        let tables = vec![vec![Entry::default(); 1usize << params.log_table]; params.num_tables];
-        let history = GlobalHistory::new(params.max_hist);
         let nmax = ((1u16 << params.ctr_bits) - 1) as u8;
-        let base_hi = (1i8 << (params.ctr_bits - 1)) - 1;
-        let base_lo = -(1i8 << (params.ctr_bits - 1));
         Batage {
+            geo: TaggedTables::new(&params),
             params,
-            hist_lengths,
-            base,
-            tables,
-            history,
             nmax,
-            base_lo,
-            base_hi,
             cat: 0,
             rng: Rng::new(RNG_SEED),
             pending: None,
@@ -129,7 +113,7 @@ impl BranchPredictor for Batage {
     fn predict(&mut self, pc: u64, _target: u64) -> bool {
         let g = self.params.num_tables;
         let base_index = self.base_index(pc);
-        let x = self.base[base_index];
+        let x = self.geo.base[base_index];
         let (bn1, bn0) = Self::base_dual(x);
 
         let mut indices = Vec::with_capacity(g);
@@ -141,10 +125,10 @@ impl BranchPredictor for Batage {
         preds[0] = x >= 0;
 
         for i in 0..g {
-            let len = self.hist_lengths[i];
-            let idx = self.history.index(pc, len, self.params.log_table);
-            let tag = self.history.tag(pc, len, self.params.tag_bits);
-            let e = self.tables[i][idx];
+            let len = self.geo.hist_lengths[i];
+            let idx = self.geo.history.index(pc, len, self.params.log_table);
+            let tag = self.geo.history.tag(pc, len, self.params.tag_bits);
+            let e = self.geo.tables[i][idx];
             let hit = e.tag == tag;
             hits[i] = hit;
             confs[i + 1] = if hit {
@@ -194,13 +178,13 @@ impl BranchPredictor for Batage {
 
         let update_slot = |this: &mut Self, slot: usize| {
             if slot == 0 {
-                let e = &mut this.base[p.base_index];
-                *e = sat_update(*e, taken, this.base_lo, this.base_hi);
+                let e = &mut this.geo.base[p.base_index];
+                *e = sat_update(*e, taken, this.geo.ctr_lo, this.geo.ctr_hi);
             } else {
                 let idx = p.indices[slot - 1];
-                let mut e = this.tables[slot - 1][idx];
+                let mut e = this.geo.tables[slot - 1][idx];
                 this.dc_update(&mut e, taken);
-                this.tables[slot - 1][idx] = e;
+                this.geo.tables[slot - 1][idx] = e;
             }
         };
 
@@ -221,9 +205,9 @@ impl BranchPredictor for Batage {
             // Provider is a confidently-correct entry backed by a confident
             // shorter entry: it is redundant, so decay it toward reclaimable.
             let idx = p.indices[j - 1];
-            let mut e = self.tables[j - 1][idx];
+            let mut e = self.geo.tables[j - 1][idx];
             Self::dc_decay(&mut e);
-            self.tables[j - 1][idx] = e;
+            self.geo.tables[j - 1][idx] = e;
         }
 
         // Rule 3: the next-shorter hitting entry, when the provider is a weak
@@ -236,7 +220,7 @@ impl BranchPredictor for Batage {
             self.allocate(taken, &p);
         }
 
-        self.history.push(taken);
+        self.geo.history.push(taken);
     }
 
     fn name(&self) -> &'static str {
@@ -269,12 +253,12 @@ impl Batage {
         for slot in start..=g {
             let ti = slot - 1;
             let idx = p.indices[ti];
-            let mut e = self.tables[ti][idx];
+            let mut e = self.geo.tables[ti][idx];
             if confidence(u32::from(e.n1), u32::from(e.n0)) == CONF_HIGH {
                 // Protected: decay with probability 1/pdec_recip.
                 if self.rng.below(self.params.pdec_recip) == 0 {
                     Self::dc_decay(&mut e);
-                    self.tables[ti][idx] = e;
+                    self.geo.tables[ti][idx] = e;
                 }
                 if mhat(u32::from(e.n1), u32::from(e.n0)) > 0.17 {
                     mhc += 1;
@@ -289,7 +273,7 @@ impl Batage {
                     e.n1 = 0;
                     e.n0 = 1;
                 }
-                self.tables[ti][idx] = e;
+                self.geo.tables[ti][idx] = e;
                 // CATR = 3/4: cat += 3 - 4*mhc, then saturate to [0, cat_max].
                 self.cat = (self.cat + 3 - 4 * mhc).clamp(0, self.params.cat_max);
                 break;

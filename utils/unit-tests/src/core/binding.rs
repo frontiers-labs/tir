@@ -231,46 +231,39 @@ fn a_counted_loop_pins_its_comparison_increment_and_exits() {
     assert_eq!(tir::CountedLoop::induction(&op), Some(0));
 }
 
+fn counted_error(
+    predicate: tir::attributes::Predicate,
+    shape: impl Fn(&[ValueId; 5]) -> Vec<ValueId>,
+) -> String {
+    let context = Context::with_default_dialects();
+    let op = counted(&context, predicate, shape);
+    op.verify(&context)
+        .expect_err("the loop is not counted")
+        .to_string()
+}
+
 #[test]
 fn a_counted_loop_compares_signed_less_than() {
-    let context = Context::with_default_dialects();
-    let op = counted(
-        &context,
+    let error = counted_error(
         tir::attributes::Predicate::Sgt,
         |[i, cmp, next, a, doubled]| vec![*cmp, *next, *doubled, *i, *a],
     );
-
-    let error = op.verify(&context).expect_err("the comparison is not slt");
-    assert!(error.to_string().contains("cmpi slt"), "{error}");
+    assert!(error.contains("cmpi slt"), "{error}");
 }
 
 #[test]
 fn a_counted_loop_advances_its_counter_by_the_step() {
-    let context = Context::with_default_dialects();
-    let op = counted(
-        &context,
-        tir::attributes::Predicate::Slt,
-        |[i, cmp, _, a, doubled]| vec![*cmp, *doubled, *doubled, *i, *a],
-    );
-
-    let error = op
-        .verify(&context)
-        .expect_err("the counter does not advance");
-    assert!(error.to_string().contains("advance"), "{error}");
+    let error = counted_error(tir::attributes::Predicate::Slt, |[i, cmp, _, a, doubled]| {
+        vec![*cmp, *doubled, *doubled, *i, *a]
+    });
+    assert!(error.contains("advance"), "{error}");
 }
 
 #[test]
 fn a_counted_loop_leaves_every_port_unchanged() {
-    let context = Context::with_default_dialects();
-    let op = counted(
-        &context,
+    let error = counted_error(
         tir::attributes::Predicate::Slt,
         |[i, cmp, next, _, doubled]| vec![*cmp, *next, *doubled, *i, *doubled],
     );
-
-    let error = op.verify(&context).expect_err("port 1 leaves changed");
-    assert!(
-        error.to_string().contains("exit value 1 must be port 1"),
-        "{error}"
-    );
+    assert!(error.contains("exit value 1 must be port 1"), "{error}");
 }

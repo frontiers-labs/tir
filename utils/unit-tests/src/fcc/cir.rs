@@ -25,48 +25,34 @@ fn roundtrip(module: &str) -> String {
 }
 
 #[test]
-fn variadic_call_accepts_arguments_beyond_the_fixed_prefix() {
-    verify(
-        r#"module {
+fn variadic_call_checks_only_the_fixed_prefix() {
+    for (case, params, args, verifies) in [
+        (
+            "an extra argument",
+            "%0: !ptr.p, %1: !i32",
+            "%0, %1 : !ptr.p, !i32",
+            true,
+        ),
+        ("an empty tail", "%0: !ptr.p", "%0 : !ptr.p", true),
+        (
+            "a mismatched fixed prefix",
+            "%0: !i64, %1: !i32",
+            "%0, %1 : !i64, !i32",
+            false,
+        ),
+    ] {
+        let result = verify(&format!(
+            r#"module {{
   %fn_printf = func.declare @printf(!ptr.p, !cir.varargs) -> !i32
-  %fn_caller = func.func @caller(%0: !ptr.p, %1: !i32) -> !i32 {
-    %2 = func.call %fn_printf(%0, %1 : !ptr.p, !i32) -> !i32
-    func.return %2
-  }
+  %fn_caller = func.func @caller({params}) -> !i32 {{
+    %r = func.call %fn_printf({args}) -> !i32
+    func.return %r
+  }}
   module_end
-}"#,
-    )
-    .expect("a variadic call verifies");
-}
-
-#[test]
-fn variadic_call_accepts_an_empty_tail() {
-    verify(
-        r#"module {
-  %fn_printf = func.declare @printf(!ptr.p, !cir.varargs) -> !i32
-  %fn_caller = func.func @caller(%0: !ptr.p) -> !i32 {
-    %1 = func.call %fn_printf(%0 : !ptr.p) -> !i32
-    func.return %1
-  }
-  module_end
-}"#,
-    )
-    .expect("a variadic call with no variadic argument verifies");
-}
-
-#[test]
-fn variadic_call_rejects_a_mismatched_fixed_prefix() {
-    verify(
-        r#"module {
-  %fn_printf = func.declare @printf(!ptr.p, !cir.varargs) -> !i32
-  %fn_caller = func.func @caller(%0: !i64, %1: !i32) -> !i32 {
-    %2 = func.call %fn_printf(%0, %1 : !i64, !i32) -> !i32
-    func.return %2
-  }
-  module_end
-}"#,
-    )
-    .expect_err("the fixed prefix must still match");
+}}"#
+        ));
+        assert_eq!(result.is_ok(), verifies, "{case}: {result:?}");
+    }
 }
 
 #[test]
@@ -135,59 +121,32 @@ fn loop_regions_admit_multiple_blocks() {
 }
 
 #[test]
-fn condition_region_must_end_in_a_condition() {
-    verify(
-        r#"module {
-  %fn_spin = func.func @spin(%0: !i1) {
-    cir.while cond {
-      cir.yield
-    } body {
-      cir.yield
-    }
+fn loop_regions_reject_a_misplaced_terminator() {
+    for (case, loop_op) in [
+        (
+            "a cir.while condition region ends in cir.condition",
+            "cir.while cond { cir.yield } body { cir.yield }",
+        ),
+        (
+            "a cir.while body region ends in cir.yield, cir.break or cir.continue",
+            "cir.while cond { cir.condition %0 } body { cir.condition %0 }",
+        ),
+        (
+            "a for step region only falls through",
+            "cir.for cond { cir.condition %0 } step { cir.break } body { cir.yield }",
+        ),
+    ] {
+        let result = verify(&format!(
+            r#"module {{
+  %fn_spin = func.func @spin(%0: !i1) {{
+    {loop_op}
     func.return
-  }
+  }}
   module_end
-}"#,
-    )
-    .expect_err("a cir.while condition region ends in cir.condition");
-}
-
-#[test]
-fn body_region_must_not_end_in_a_condition() {
-    verify(
-        r#"module {
-  %fn_spin = func.func @spin(%0: !i1) {
-    cir.while cond {
-      cir.condition %0
-    } body {
-      cir.condition %0
+}}"#
+        ));
+        assert!(result.is_err(), "{case}");
     }
-    func.return
-  }
-  module_end
-}"#,
-    )
-    .expect_err("a cir.while body region ends in cir.yield, cir.break or cir.continue");
-}
-
-#[test]
-fn step_region_admits_no_break() {
-    verify(
-        r#"module {
-  %fn_spin = func.func @spin(%0: !i1) {
-    cir.for cond {
-      cir.condition %0
-    } step {
-      cir.break
-    } body {
-      cir.yield
-    }
-    func.return
-  }
-  module_end
-}"#,
-    )
-    .expect_err("a for step region only falls through");
 }
 
 const LABELED_LOOPS: &str = r#"module {

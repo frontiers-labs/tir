@@ -5,7 +5,7 @@ use tir::{
     builtin::{IntegerType, ModuleOp},
     func::FuncOp,
     sem::{SemGraph, SymKind},
-    Context, Operation, PassError, PassManager, RegionId, TypeId,
+    Context, Operation, PassError, PassManager, RegionId, TypeId, ValueId,
 };
 
 use tir::backend::isel::{
@@ -81,6 +81,14 @@ fn select(context: &Context, module: &ModuleOp, rules: Vec<Rule>) {
         .expect("pass pipeline should succeed");
 }
 
+fn assert_add_mul_cover(body: &str, expected: &[&str]) {
+    let (context, module, region) = function(&format!(
+        "module {{\nfunc.func @demo(%x: !i32, %y: !i32, %z: !i32) -> !i32 {{\n{body}}}\nmodule_end\n}}"
+    ));
+    select(&context, &module, add_mul_rules());
+    assert_eq!(body_names(&context, region), expected);
+}
+
 fn body_names(context: &Context, region: RegionId) -> Vec<&'static str> {
     body_ops(context, region)
         .iter()
@@ -117,27 +125,73 @@ fn add_mul_pattern() -> SemGraph {
     g
 }
 
+fn bound(req: &EmitRequest, m: &RuleMatch, symbol: u32) -> Result<ValueId, PassError> {
+    m.value_binding(symbol)
+        .ok_or(PassError::RewriteFailed(req.op_id()))
+}
+
+fn emit_binary(
+    kind: SymKind,
+    context: &Context,
+    req: &EmitRequest,
+    lhs: ValueId,
+    rhs: ValueId,
+) -> Result<Box<dyn Operation>, PassError> {
+    let result_ty = req.result_ty.expect("typed result");
+    Ok(match kind {
+        SymKind::Add => marker!(
+            AddMarkerOp,
+            AddMarkerOpBuilder,
+            context,
+            lhs,
+            rhs,
+            result_ty
+        ),
+        SymKind::Sub => marker!(
+            SubMarkerOp,
+            SubMarkerOpBuilder,
+            context,
+            lhs,
+            rhs,
+            result_ty
+        ),
+        SymKind::Mul => marker!(
+            MulMarkerOp,
+            MulMarkerOpBuilder,
+            context,
+            lhs,
+            rhs,
+            result_ty
+        ),
+        SymKind::ShiftLeft => marker!(
+            ShlMarkerOp,
+            ShlMarkerOpBuilder,
+            context,
+            lhs,
+            rhs,
+            result_ty
+        ),
+        _ => marker!(
+            ShrsMarkerOp,
+            ShrsMarkerOpBuilder,
+            context,
+            lhs,
+            rhs,
+            result_ty
+        ),
+    })
+}
+
 fn emit_add(
     context: &Context,
     req: &EmitRequest,
     m: &RuleMatch,
 ) -> Result<Box<dyn Operation>, PassError> {
-    let lhs = m
-        .value_binding(0)
-        .ok_or(PassError::RewriteFailed(req.op_id()))?;
-    let rhs = m
-        .value_binding(2)
-        .or_else(|| m.value_binding(1))
-        .ok_or(PassError::RewriteFailed(req.op_id()))?;
-    let result_ty = req.result_ty.expect("typed result");
-    Ok(marker!(
-        AddMarkerOp,
-        AddMarkerOpBuilder,
-        context,
-        lhs,
-        rhs,
-        result_ty
-    ))
+    let rhs = match m.value_binding(2) {
+        Some(rhs) => rhs,
+        None => bound(req, m, 1)?,
+    };
+    emit_binary(SymKind::Add, context, req, bound(req, m, 0)?, rhs)
 }
 
 fn emit_mul(
@@ -145,21 +199,8 @@ fn emit_mul(
     req: &EmitRequest,
     m: &RuleMatch,
 ) -> Result<Box<dyn Operation>, PassError> {
-    let lhs = m
-        .value_binding(0)
-        .ok_or(PassError::RewriteFailed(req.op_id()))?;
-    let rhs = m
-        .value_binding(1)
-        .ok_or(PassError::RewriteFailed(req.op_id()))?;
-    let result_ty = req.result_ty.expect("typed result");
-    Ok(marker!(
-        MulMarkerOp,
-        MulMarkerOpBuilder,
-        context,
-        lhs,
-        rhs,
-        result_ty
-    ))
+    let (lhs, rhs) = (bound(req, m, 0)?, bound(req, m, 1)?);
+    emit_binary(SymKind::Mul, context, req, lhs, rhs)
 }
 
 // A rule reads its operands from the match, not from the op it covers: a fused
@@ -169,21 +210,8 @@ fn emit_sub(
     req: &EmitRequest,
     m: &RuleMatch,
 ) -> Result<Box<dyn Operation>, PassError> {
-    let lhs = m
-        .value_binding(0)
-        .ok_or(PassError::RewriteFailed(req.op_id()))?;
-    let rhs = m
-        .value_binding(1)
-        .ok_or(PassError::RewriteFailed(req.op_id()))?;
-    let result_ty = req.result_ty.expect("typed result");
-    Ok(marker!(
-        SubMarkerOp,
-        SubMarkerOpBuilder,
-        context,
-        lhs,
-        rhs,
-        result_ty
-    ))
+    let (lhs, rhs) = (bound(req, m, 0)?, bound(req, m, 1)?);
+    emit_binary(SymKind::Sub, context, req, lhs, rhs)
 }
 
 fn add_mul_rules() -> Vec<Rule> {
@@ -206,20 +234,13 @@ fn add_mul_rules() -> Vec<Rule> {
 
 #[test]
 fn fused_rule_consumes_internal_nodes_of_selected_pattern() {
-    let (context, module, region) = function(
-        r#"module {
-func.func @demo(%x: !i32, %y: !i32, %z: !i32) -> !i32 {
-  %mul = muli %x, %y : !i32
+    assert_add_mul_cover(
+        "  %mul = muli %x, %y : !i32
   %add = addi %mul, %z : !i32
   func.return %add
-}
-module_end
-}"#,
+",
+        &["addi"],
     );
-
-    select(&context, &module, add_mul_rules());
-
-    assert_eq!(body_names(&context, region), vec!["addi"]);
 }
 
 #[test]
@@ -297,39 +318,25 @@ module_end
 
 #[test]
 fn fused_rule_duplicates_shared_pure_internal_nodes() {
-    let (context, module, region) = function(
-        r#"module {
-func.func @demo(%x: !i32, %y: !i32, %z: !i32) -> !i32 {
-  %mul = muli %x, %y : !i32
+    assert_add_mul_cover(
+        "  %mul = muli %x, %y : !i32
   %add0 = addi %mul, %z : !i32
   %add1 = addi %mul, %add0 : !i32
   func.return %add1
-}
-module_end
-}"#,
+",
+        &["addi", "addi"],
     );
-
-    select(&context, &module, add_mul_rules());
-
-    assert_eq!(body_names(&context, region), vec!["addi", "addi"]);
 }
 
 #[test]
 fn unused_consumer_does_not_create_demand() {
-    let (context, module, region) = function(
-        r#"module {
-func.func @demo(%x: !i32, %y: !i32, %z: !i32) -> !i32 {
-  %mul = muli %x, %y : !i32
+    assert_add_mul_cover(
+        "  %mul = muli %x, %y : !i32
   %dead = addi %mul, %z : !i32
   func.return %mul
-}
-module_end
-}"#,
+",
+        &["muli"],
     );
-
-    select(&context, &module, add_mul_rules());
-
-    assert_eq!(body_names(&context, region), vec!["muli"]);
 }
 
 fn add_mul_add_pattern() -> SemGraph {
@@ -490,17 +497,9 @@ fn emit_add_imm_marker(
     m.int_binding(1)
         .or_else(|| m.int_binding(0))
         .ok_or(PassError::RewriteFailed(req.op_id()))?;
-    let result_ty = req.result_ty.expect("typed result");
     // The immediate folds into the instruction (`subi` is only a marker), so
     // the constant op loses its last use and is swept.
-    Ok(marker!(
-        SubMarkerOp,
-        SubMarkerOpBuilder,
-        context,
-        lhs,
-        lhs,
-        result_ty
-    ))
+    emit_binary(SymKind::Sub, context, req, lhs, lhs)
 }
 
 fn zero_materializer_pattern() -> SemGraph {
@@ -694,42 +693,13 @@ fn shift_imm_pattern(kind: SymKind) -> SemGraph {
     g
 }
 
-fn emit_marker(
-    kind: SymKind,
-    context: &Context,
-    req: &EmitRequest,
-    m: &RuleMatch,
-) -> Result<Box<dyn Operation>, PassError> {
-    let rs1 = m
-        .value_binding(0)
-        .ok_or(PassError::RewriteFailed(req.op_id()))?;
-    let result_ty = req.result_ty.expect("typed result");
-    Ok(match kind {
-        SymKind::ShiftLeft => marker!(
-            ShlMarkerOp,
-            ShlMarkerOpBuilder,
-            context,
-            rs1,
-            rs1,
-            result_ty
-        ),
-        _ => marker!(
-            ShrsMarkerOp,
-            ShrsMarkerOpBuilder,
-            context,
-            rs1,
-            rs1,
-            result_ty
-        ),
-    })
-}
-
 fn emit_slli(
     context: &Context,
     req: &EmitRequest,
     m: &RuleMatch,
 ) -> Result<Box<dyn Operation>, PassError> {
-    emit_marker(SymKind::ShiftLeft, context, req, m)
+    let rs1 = bound(req, m, 0)?;
+    emit_binary(SymKind::ShiftLeft, context, req, rs1, rs1)
 }
 
 fn emit_shift_prelude(
@@ -737,18 +707,8 @@ fn emit_shift_prelude(
     req: &EmitRequest,
     m: &RuleMatch,
 ) -> Result<Box<dyn Operation>, PassError> {
-    let value = m
-        .value_binding(0)
-        .ok_or(PassError::RewriteFailed(req.op_id()))?;
-    let result_ty = req.result_ty.expect("typed result");
-    Ok(marker!(
-        SubMarkerOp,
-        SubMarkerOpBuilder,
-        context,
-        value,
-        value,
-        result_ty
-    ))
+    let value = bound(req, m, 0)?;
+    emit_binary(SymKind::Sub, context, req, value, value)
 }
 
 fn emit_srai(
@@ -756,7 +716,8 @@ fn emit_srai(
     req: &EmitRequest,
     m: &RuleMatch,
 ) -> Result<Box<dyn Operation>, PassError> {
-    emit_marker(SymKind::ShiftRightArithmetic, context, req, m)
+    let rs1 = bound(req, m, 0)?;
+    emit_binary(SymKind::ShiftRightArithmetic, context, req, rs1, rs1)
 }
 
 fn select_sign_extension(slli_rule: Rule) -> Vec<&'static str> {

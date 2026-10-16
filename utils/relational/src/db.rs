@@ -933,14 +933,7 @@ impl<C, const SPACES: usize> Core<C, SPACES> {
 
     fn mark_stale(&mut self, slot: u32, side: usize, row: u32) {
         let layer = self.layers.last_mut().expect("an open layer");
-        if layer.stale.len() <= side {
-            layer.stale.resize_with(side + 1, Vec::new);
-        }
-        let slots = &mut layer.stale[side];
-        if slots.len() <= slot as usize {
-            slots.resize_with(slot as usize + 1, Vec::new);
-        }
-        let bits = &mut slots[slot as usize];
+        let bits = grown(&mut layer.stale, side, slot as usize);
         let word = row as usize / 64;
         if bits.len() <= word {
             bits.resize(word + 1, 0);
@@ -1732,15 +1725,8 @@ impl<C, const SPACES: usize> Database<C, SPACES> {
             return;
         };
         let mut groups = self.groups.borrow_mut();
-        if groups.built.len() <= slot as usize {
-            groups.built.resize_with(slot as usize + 1, Vec::new);
-        }
-        let columns = &mut groups.built[slot as usize];
-        if columns.len() <= column {
-            columns.resize_with(column + 1, Default::default);
-        }
         let ids = self.ids(self.state.table_space[slot as usize]);
-        columns[column].refresh(table, column, ids);
+        grown(&mut groups.built, slot as usize, column).refresh(table, column, ids);
     }
 
     /// Order the rows of the base's table at `slot` by `column` and then by
@@ -1750,14 +1736,7 @@ impl<C, const SPACES: usize> Database<C, SPACES> {
             return;
         };
         let mut groups = self.groups.borrow_mut();
-        if groups.tag_orders.len() <= slot as usize {
-            groups.tag_orders.resize_with(slot as usize + 1, Vec::new);
-        }
-        let columns = &mut groups.tag_orders[slot as usize];
-        if columns.len() <= column {
-            columns.resize_with(column + 1, Default::default);
-        }
-        columns[column].refresh(table, column);
+        grown(&mut groups.tag_orders, slot as usize, column).refresh(table, column);
     }
 
     /// List the rows of the base's table at `slot` the epoch before wrote, by
@@ -1769,14 +1748,7 @@ impl<C, const SPACES: usize> Database<C, SPACES> {
         };
         let mut groups = self.groups.borrow_mut();
         let groups = &mut *groups;
-        if groups.new_rows.len() <= slot as usize {
-            groups.new_rows.resize_with(slot as usize + 1, Vec::new);
-        }
-        let columns = &mut groups.new_rows[slot as usize];
-        if columns.len() <= column {
-            columns.resize_with(column + 1, Default::default);
-        }
-        let NewRows { made, rows } = &mut columns[column];
+        let NewRows { made, rows } = grown(&mut groups.new_rows, slot as usize, column);
         let now = (table.version() + 1, self.state.epoch);
         if *made == now {
             return;
@@ -2160,6 +2132,18 @@ impl Marks {
         let slot = &mut self.stamp[id];
         std::mem::replace(slot, self.epoch) != self.epoch
     }
+}
+
+#[inline]
+fn grown<T: Default>(lists: &mut Vec<Vec<T>>, outer: usize, inner: usize) -> &mut T {
+    if lists.len() <= outer {
+        lists.resize_with(outer + 1, Vec::new);
+    }
+    let list = &mut lists[outer];
+    if list.len() <= inner {
+        list.resize_with(inner + 1, Default::default);
+    }
+    &mut list[inner]
 }
 
 #[cfg(test)]

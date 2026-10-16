@@ -203,6 +203,46 @@ impl Part {
         self.held_log.clear();
         self.block_log.clear();
     }
+
+    fn refresh_uses(&mut self, ops: &Ops, tick: u32) {
+        let rows = UseRows {
+            ops,
+            chunks: &self.op_chunks,
+        };
+        self.uses.refresh(&rows, &self.op_log, tick);
+        self.op_log.clear();
+        self.uses.rewind();
+    }
+
+    fn refresh_held(&mut self, ops: &Ops) {
+        let rows = HeldRows {
+            ops,
+            chunks: &self.op_chunks,
+        };
+        self.held.refresh(&rows, &self.held_log);
+        self.held_log.clear();
+        self.held.rewind();
+    }
+
+    fn refresh_blocks(&mut self, blocks: &Blocks) {
+        let rows = BlockRows {
+            blocks,
+            chunks: &self.block_chunks,
+        };
+        self.blocks.refresh(&rows, &self.block_log);
+        self.block_log.clear();
+        self.blocks.rewind();
+    }
+
+    fn refresh_results(&mut self, regions: &Regions, tick: u32) {
+        let rows = ResultRows {
+            regions,
+            chunks: &self.region_chunks,
+        };
+        self.results.refresh(&rows, &self.region_log, tick);
+        self.region_log.clear();
+        self.results.rewind();
+    }
 }
 
 struct UseRows<'a> {
@@ -445,6 +485,41 @@ macro_rules! touch {
     }};
 }
 
+// Mint a row in the target partition's open chunk of a space, or in a fresh
+// chunk when none is open; yields the row's id and whether its chunk is fresh.
+macro_rules! mint {
+    ($db:expr, $space:ident, $kind:expr, $cells:expr) => {{
+        let open = $db.open_chunk($kind, |index| $db.$space.chunk(index).is_full());
+        let index = match open {
+            Some(index) => index,
+            None => {
+                let index = $db.fresh($kind, $db.$space.chunks());
+                let mut chunk = Chunk::new($db.mint.target);
+                chunk.touched = $db.tick;
+                $db.$space.put(index, Arc::new(chunk));
+                index
+            }
+        };
+        let tick = $db.tick;
+        let row = touch!($db, $space, $kind, index).push($cells, tick);
+        $db.minted($kind, index);
+        (id_at(index, row), open.is_none())
+    }};
+}
+
+// The partition `part` for refreshing, unless `current` says its grouping is up
+// to date; checked first so a current partition is not copied on write.
+fn stale_part(
+    parts: &mut Paged<Part>,
+    part: u32,
+    current: impl Fn(&Part) -> bool,
+) -> Option<&mut Part> {
+    if parts.get(part as usize).is_some_and(current) {
+        return None;
+    }
+    parts.get_mut(part as usize)
+}
+
 impl Db {
     pub(crate) fn new() -> Self {
         let mut parts = Paged::default();
@@ -520,79 +595,36 @@ impl Db {
     }
 
     fn mint_op(&mut self, cells: [u32; 4]) -> OpId {
-        let index = match self.open_chunk(OPS, |index| self.ops.chunk(index).is_full()) {
-            Some(index) => index,
-            None => {
-                let index = self.fresh(OPS, self.ops.chunks());
-                let mut chunk = Chunk::new(self.mint.target);
-                chunk.touched = self.tick;
-                self.ops.put(index, Arc::new(chunk));
-                self.part_mut(self.mint.target).op_chunks.push(index);
-                index
-            }
-        };
-        let tick = self.tick;
-        let row = touch!(self, ops, OPS, index).push(cells, tick);
-        self.minted(OPS, index);
-        let id = id_at(index, row);
-        self.part_mut(self.mint.target).op_log.push(id);
+        let (id, fresh) = mint!(self, ops, OPS, cells);
+        let part = self.part_mut(self.mint.target);
+        if fresh {
+            part.op_chunks.push(chunk_of(id));
+        }
+        part.op_log.push(id);
         OpId::new(id)
     }
 
     fn mint_value(&mut self, cells: [u32; 3]) -> ValueId {
-        let index = match self.open_chunk(VALUES, |index| self.values.chunk(index).is_full()) {
-            Some(index) => index,
-            None => {
-                let index = self.fresh(VALUES, self.values.chunks());
-                let mut chunk = Chunk::new(self.mint.target);
-                chunk.touched = self.tick;
-                self.values.put(index, Arc::new(chunk));
-                index
-            }
-        };
-        let tick = self.tick;
-        let row = touch!(self, values, VALUES, index).push(cells, tick);
-        self.minted(VALUES, index);
-        ValueId::from_number(id_at(index, row))
+        ValueId::from_number(mint!(self, values, VALUES, cells).0)
     }
 
     fn mint_region(&mut self, cells: [u32; 3]) -> RegionId {
-        let index = match self.open_chunk(REGIONS, |index| self.regions.chunk(index).is_full()) {
-            Some(index) => index,
-            None => {
-                let index = self.fresh(REGIONS, self.regions.chunks());
-                let mut chunk = Chunk::new(self.mint.target);
-                chunk.touched = self.tick;
-                self.regions.put(index, Arc::new(chunk));
-                self.part_mut(self.mint.target).region_chunks.push(index);
-                index
-            }
-        };
-        let tick = self.tick;
-        let row = touch!(self, regions, REGIONS, index).push(cells, tick);
-        self.minted(REGIONS, index);
-        let id = id_at(index, row);
-        self.part_mut(self.mint.target).region_log.push(id);
+        let (id, fresh) = mint!(self, regions, REGIONS, cells);
+        let part = self.part_mut(self.mint.target);
+        if fresh {
+            part.region_chunks.push(chunk_of(id));
+        }
+        part.region_log.push(id);
         RegionId::new(id)
     }
 
     fn mint_block(&mut self, cells: [u32; 3]) -> BlockId {
-        let index = match self.open_chunk(BLOCKS, |index| self.blocks.chunk(index).is_full()) {
-            Some(index) => index,
-            None => {
-                let index = self.fresh(BLOCKS, self.blocks.chunks());
-                let mut chunk = Chunk::new(self.mint.target);
-                chunk.touched = self.tick;
-                self.blocks.put(index, Arc::new(chunk));
-                self.part_mut(self.mint.target).block_chunks.push(index);
-                index
-            }
-        };
-        let tick = self.tick;
-        let row = touch!(self, blocks, BLOCKS, index).push(cells, tick);
-        self.minted(BLOCKS, index);
-        let id = id_at(index, row);
-        self.part_mut(self.mint.target).block_log.push(id);
+        let (id, fresh) = mint!(self, blocks, BLOCKS, cells);
+        let part = self.part_mut(self.mint.target);
+        if fresh {
+            part.block_chunks.push(chunk_of(id));
+        }
+        part.block_log.push(id);
         BlockId::new(id)
     }
 
@@ -1067,84 +1099,56 @@ impl Db {
     }
 
     fn refresh_uses(&mut self, part: u32) {
-        let current = self
-            .parts
-            .get(part as usize)
-            .is_some_and(|part| part.uses.cursor() == Some(part.op_log.len()));
-        if current {
-            return;
+        let current = |part: &Part| part.uses.cursor() == Some(part.op_log.len());
+        if let Some(held) = stale_part(&mut self.parts, part, current) {
+            held.refresh_uses(&self.ops, self.tick);
+            self.tick += 1;
         }
-        let tick = self.tick;
-        let Some(held) = self.parts.get_mut(part as usize) else {
-            return;
-        };
+    }
+
+    fn refresh_held(&mut self, part: u32) {
+        let current = |part: &Part| part.held.cursor() == Some(part.held_log.len());
+        if let Some(held) = stale_part(&mut self.parts, part, current) {
+            held.refresh_held(&self.ops);
+        }
+    }
+
+    fn refresh_blocks(&mut self, part: u32) {
+        let current = |part: &Part| part.blocks.cursor() == Some(part.block_log.len());
+        if let Some(held) = stale_part(&mut self.parts, part, current) {
+            held.refresh_blocks(&self.blocks);
+            self.tick += 1;
+        }
+    }
+
+    fn value_readers(&self, value: ValueId) -> smallvec::SmallVec<[u32; 4]> {
+        self.values
+            .find(chunk_of(value.number()))
+            .map_or_else(Default::default, |chunk| {
+                Self::readers(chunk.owner, &chunk.foreign)
+            })
+    }
+
+    fn read_uses<T>(
+        &mut self,
+        part: u32,
+        read: impl FnOnce(&Grouping, &UseRows<'_>) -> T,
+    ) -> Option<T> {
+        self.refresh_uses(part);
+        let held = self.parts.get(part as usize)?;
         let rows = UseRows {
             ops: &self.ops,
             chunks: &held.op_chunks,
         };
-        held.uses.refresh(&rows, &held.op_log, tick);
-        held.op_log.clear();
-        held.uses.rewind();
-        self.tick += 1;
-    }
-
-    fn refresh_held(&mut self, part: u32) {
-        let current = self
-            .parts
-            .get(part as usize)
-            .is_some_and(|part| part.held.cursor() == Some(part.held_log.len()));
-        if current {
-            return;
-        }
-        let Some(held) = self.parts.get_mut(part as usize) else {
-            return;
-        };
-        let rows = HeldRows {
-            ops: &self.ops,
-            chunks: &held.op_chunks,
-        };
-        held.held.refresh(&rows, &held.held_log);
-        held.held_log.clear();
-        held.held.rewind();
-    }
-
-    fn refresh_blocks(&mut self, part: u32) {
-        let current = self
-            .parts
-            .get(part as usize)
-            .is_some_and(|part| part.blocks.cursor() == Some(part.block_log.len()));
-        if current {
-            return;
-        }
-        let Some(held) = self.parts.get_mut(part as usize) else {
-            return;
-        };
-        let rows = BlockRows {
-            blocks: &self.blocks,
-            chunks: &held.block_chunks,
-        };
-        held.blocks.refresh(&rows, &held.block_log);
-        held.block_log.clear();
-        held.blocks.rewind();
-        self.tick += 1;
+        Some(read(&held.uses, &rows))
     }
 
     pub(crate) fn uses(&mut self, value: ValueId) -> Vec<Use> {
-        let Some(chunk) = self.values.find(chunk_of(value.number())) else {
-            return Vec::new();
-        };
-        let readers = Self::readers(chunk.owner, &chunk.foreign);
         let mut found = Vec::new();
-        for part in readers {
-            self.refresh_uses(part);
-            let Some(held) = self.parts.get(part as usize) else {
-                continue;
-            };
-            let rows = UseRows {
-                ops: &self.ops,
-                chunks: &held.op_chunks,
-            };
-            held.uses.read(&rows, value.number(), &mut found);
+        for part in self.value_readers(value) {
+            self.read_uses(part, |uses, rows| {
+                uses.read(rows, value.number(), &mut found)
+            });
         }
         found
             .into_iter()
@@ -1153,19 +1157,8 @@ impl Db {
     }
 
     pub(crate) fn is_used(&mut self, value: ValueId) -> bool {
-        let Some(chunk) = self.values.find(chunk_of(value.number())) else {
-            return false;
-        };
-        let readers = Self::readers(chunk.owner, &chunk.foreign);
-        readers.into_iter().any(|part| {
-            self.refresh_uses(part);
-            self.parts.get(part as usize).is_some_and(|held| {
-                let rows = UseRows {
-                    ops: &self.ops,
-                    chunks: &held.op_chunks,
-                };
-                held.uses.any(&rows, value.number())
-            })
+        self.value_readers(value).into_iter().any(|part| {
+            self.read_uses(part, |uses, rows| uses.any(rows, value.number())) == Some(true)
         })
     }
 
@@ -1716,34 +1709,16 @@ impl Db {
     }
 
     fn refresh_results(&mut self, part: u32) {
-        let current = self
-            .parts
-            .get(part as usize)
-            .is_some_and(|part| part.results.cursor() == Some(part.region_log.len()));
-        if current {
-            return;
+        let current = |part: &Part| part.results.cursor() == Some(part.region_log.len());
+        if let Some(held) = stale_part(&mut self.parts, part, current) {
+            held.refresh_results(&self.regions, self.tick);
+            self.tick += 1;
         }
-        let tick = self.tick;
-        let Some(held) = self.parts.get_mut(part as usize) else {
-            return;
-        };
-        let rows = ResultRows {
-            regions: &self.regions,
-            chunks: &held.region_chunks,
-        };
-        held.results.refresh(&rows, &held.region_log, tick);
-        held.region_log.clear();
-        held.results.rewind();
-        self.tick += 1;
     }
 
     pub(crate) fn result_uses(&mut self, value: ValueId) -> Vec<(RegionId, usize)> {
-        let Some(chunk) = self.values.find(chunk_of(value.number())) else {
-            return Vec::new();
-        };
-        let readers = Self::readers(chunk.owner, &chunk.foreign);
         let mut found = Vec::new();
-        for part in readers {
+        for part in self.value_readers(value) {
             self.refresh_results(part);
             let Some(held) = self.parts.get(part as usize) else {
                 continue;

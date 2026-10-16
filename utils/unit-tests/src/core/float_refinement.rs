@@ -3,7 +3,7 @@ use tir::backend::isel::{
     RuleMatch, LATENCY_COST_SCALE,
 };
 use tir::sem::{SemGraph, SymKind};
-use tir::{Context, Operation, PassError};
+use tir::{Context, NodeId, Operation, PassError};
 
 use super::fixtures::{binary, constant, nary, symbol};
 
@@ -52,16 +52,23 @@ fn ieee_arithmetic_accepts_quiet_nan_payload_choice() {
     }
 }
 
-#[test]
-fn ieee_arithmetic_rejects_finite_result_corruption() {
+// The f32 add rule whose guarded semantics return +0.0 instead of the sum when
+// `condition(sum, +0.0)` holds.
+fn fadd_zeroed_when(condition: impl FnOnce(&mut SemGraph, NodeId, NodeId) -> NodeId) -> Rule {
     let mut rule = rule(SymKind::FAdd, SymKind::FAddRound, 32, 0x7fc00000, 0);
     let full = rule.guarded_semantics.as_mut().unwrap();
     let original = full.root().unwrap();
     let result = full.children(original).nth(1).unwrap();
-    let ordered = binary(full, SymKind::Ge, result, result);
     let zero = constant(full, 0, 32);
     let zero_float = nary(full, SymKind::AsFloat, &[zero]);
-    nary(full, SymKind::If, &[ordered, zero_float, original]);
+    let condition = condition(full, result, zero_float);
+    nary(full, SymKind::If, &[condition, zero_float, original]);
+    rule
+}
+
+#[test]
+fn ieee_arithmetic_rejects_finite_result_corruption() {
+    let rule = fadd_zeroed_when(|full, result, _| binary(full, SymKind::Ge, result, result));
     assert!(prove_guarded_relaxations(&[rule]).is_err());
 }
 
@@ -120,14 +127,7 @@ fn float_copy_keeps_nan_payload_bits() {
 
 #[test]
 fn ieee_arithmetic_preserves_signed_zero() {
-    let mut rule = rule(SymKind::FAdd, SymKind::FAddRound, 32, 0x7fc00000, 0);
-    let full = rule.guarded_semantics.as_mut().unwrap();
-    let original = full.root().unwrap();
-    let result = full.children(original).nth(1).unwrap();
-    let zero = constant(full, 0, 32);
-    let zero_float = nary(full, SymKind::AsFloat, &[zero]);
-    let is_zero = binary(full, SymKind::Eq, result, zero_float);
-    nary(full, SymKind::If, &[is_zero, zero_float, original]);
+    let rule = fadd_zeroed_when(|full, result, zero| binary(full, SymKind::Eq, result, zero));
     assert!(prove_guarded_relaxations(&[rule]).is_err());
 }
 

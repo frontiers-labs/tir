@@ -26,7 +26,7 @@ use chumsky::prelude::*;
 pub type Span = SimpleSpan;
 pub type Spanned<T> = (T, Span);
 
-pub use compiler::{Action, Compiler, OutputKind, compiler_main, emit_model_check_sources};
+pub use compiler::{Action, Compiler, OutputKind, build_backend, compiler_main};
 pub use smtlibgen::{
     EncodingFieldMetadata, EncodingShapeMetadata, FlatStateFieldMetadata, InstructionMetadata,
     MemoryAccessMetadata, OperandMetadata, RegisterClassMetadata, SmtMetadata,

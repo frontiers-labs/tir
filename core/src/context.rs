@@ -862,6 +862,17 @@ impl Context {
         crate::builtin::StateType::view(ty).map(|state| state.resource())
     }
 
+    pub(crate) fn states_of(
+        &self,
+        values: impl IntoIterator<Item = ValueId>,
+        resource: crate::builtin::StateResource,
+    ) -> Vec<ValueId> {
+        values
+            .into_iter()
+            .filter(|value| self.state_resource(self.get_value(*value).ty()) == Some(resource))
+            .collect()
+    }
+
     pub fn is_state_type(&self, ty: TypeId) -> bool {
         self.state_resource(ty).is_some()
     }

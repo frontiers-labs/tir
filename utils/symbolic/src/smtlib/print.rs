@@ -14,6 +14,12 @@ fn join<T: Display>(f: &mut Formatter<'_>, items: &[T]) -> fmt::Result {
     Ok(())
 }
 
+fn list<T: Display>(f: &mut Formatter<'_>, items: &[T]) -> fmt::Result {
+    f.write_str("(")?;
+    join(f, items)?;
+    f.write_str(")")
+}
+
 impl Display for SpecConstant {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
@@ -90,11 +96,7 @@ impl Display for SExpr {
             SExpr::Constant(c) => write!(f, "{c}"),
             SExpr::Symbol(s) => write!(f, "{s}"),
             SExpr::Keyword(k) => write!(f, "{k}"),
-            SExpr::List(items) => {
-                f.write_str("(")?;
-                join(f, items)?;
-                f.write_str(")")
-            }
+            SExpr::List(items) => list(f, items),
         }
     }
 }
@@ -104,11 +106,7 @@ impl Display for AttributeValue {
         match self {
             AttributeValue::Constant(c) => write!(f, "{c}"),
             AttributeValue::Symbol(s) => write!(f, "{s}"),
-            AttributeValue::List(items) => {
-                f.write_str("(")?;
-                join(f, items)?;
-                f.write_str(")")
-            }
+            AttributeValue::List(items) => list(f, items),
         }
     }
 }

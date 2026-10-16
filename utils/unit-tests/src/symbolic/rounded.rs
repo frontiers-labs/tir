@@ -120,19 +120,22 @@ fn selection_fallback_preserves_conversion_width_wrapper() {
     );
 }
 
-#[test]
-fn selection_fallback_proposes_arithmetic_inside_nan_wrapper() {
-    use tir_symbolic::lang::selection_fallback;
-    use tir_symbolic::sem::SemGraph;
-    let mut graph = SemGraph::<()>::new();
+fn rounded_self_add(graph: &mut tir_symbolic::sem::SemGraph<()>, rounding: u64) -> tir_adt::NodeId {
     let input = graph.add_node(SymKind::Symbol);
     graph.set_leaf_data(input, SymPayload::SymbolId(0));
     let rm = graph.add_node(SymKind::Constant);
-    graph.set_leaf_data(rm, SymPayload::Int(APInt::new(3, 0)));
+    graph.set_leaf_data(rm, SymPayload::Int(APInt::new(3, rounding)));
     let add = graph.add_node(SymKind::FAddRound);
     for child in [input, input, rm] {
         graph.add_edge(add, child);
     }
+    add
+}
+
+fn nan_wrapped_add_fallback_root(rounding: u64) -> SymKind {
+    use tir_symbolic::lang::selection_fallback;
+    let mut graph = tir_symbolic::sem::SemGraph::<()>::new();
+    let add = rounded_self_add(&mut graph, rounding);
     let ordered = graph.add_node(SymKind::Ge);
     graph.add_edge(ordered, add);
     graph.add_edge(ordered, add);
@@ -148,44 +151,17 @@ fn selection_fallback_proposes_arithmetic_inside_nan_wrapper() {
         graph.add_edge(full, child);
     }
     let candidate = selection_fallback(&graph, full).unwrap();
-    assert_eq!(
-        *candidate.get_node(candidate.root().unwrap()),
-        SymKind::FAdd
-    );
+    *candidate.get_node(candidate.root().unwrap())
+}
+
+#[test]
+fn selection_fallback_proposes_arithmetic_inside_nan_wrapper() {
+    assert_eq!(nan_wrapped_add_fallback_root(0), SymKind::FAdd);
 }
 
 #[test]
 fn selection_fallback_preserves_nondefault_rounding_inside_nan_wrapper() {
-    use tir_symbolic::lang::selection_fallback;
-    use tir_symbolic::sem::SemGraph;
-    let mut graph = SemGraph::<()>::new();
-    let input = graph.add_node(SymKind::Symbol);
-    graph.set_leaf_data(input, SymPayload::SymbolId(0));
-    let rm = graph.add_node(SymKind::Constant);
-    graph.set_leaf_data(rm, SymPayload::Int(APInt::new(3, 3)));
-    let add = graph.add_node(SymKind::FAddRound);
-    for child in [input, input, rm] {
-        graph.add_edge(add, child);
-    }
-    let ordered = graph.add_node(SymKind::Ge);
-    graph.add_edge(ordered, add);
-    graph.add_edge(ordered, add);
-    let nan_bits = graph.add_node(SymKind::Constant);
-    graph.set_leaf_data(
-        nan_bits,
-        SymPayload::Int(APInt::new(64, 0x7ff8000000000000)),
-    );
-    let nan = graph.add_node(SymKind::AsFloat);
-    graph.add_edge(nan, nan_bits);
-    let full = graph.add_node(SymKind::If);
-    for child in [ordered, add, nan] {
-        graph.add_edge(full, child);
-    }
-    let candidate = selection_fallback(&graph, full).unwrap();
-    assert_eq!(
-        *candidate.get_node(candidate.root().unwrap()),
-        SymKind::FAddRound
-    );
+    assert_eq!(nan_wrapped_add_fallback_root(3), SymKind::FAddRound);
 }
 
 #[test]
@@ -243,16 +219,8 @@ fn float_bit_extraction_preserves_nan_payload() {
 #[test]
 fn selection_fallback_preserves_flag_projection() {
     use tir_symbolic::lang::selection_fallback;
-    use tir_symbolic::sem::SemGraph;
-    let mut graph = SemGraph::<()>::new();
-    let input = graph.add_node(SymKind::Symbol);
-    graph.set_leaf_data(input, SymPayload::SymbolId(0));
-    let rm = graph.add_node(SymKind::Constant);
-    graph.set_leaf_data(rm, SymPayload::Int(APInt::new(3, 0)));
-    let add = graph.add_node(SymKind::FAddRound);
-    for child in [input, input, rm] {
-        graph.add_edge(add, child);
-    }
+    let mut graph = tir_symbolic::sem::SemGraph::<()>::new();
+    let add = rounded_self_add(&mut graph, 0);
     let flags = graph.add_node(SymKind::FPFlags);
     graph.add_edge(flags, add);
     assert!(selection_fallback(&graph, flags).is_none());

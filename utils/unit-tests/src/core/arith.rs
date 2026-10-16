@@ -130,49 +130,68 @@ fn binary_ops_convert_to_their_sem_kind() {
     }
 }
 
-fn const_value(g: &SemGraph, node: tir::NodeId) -> u64 {
-    match g.get_leaf_data(node) {
-        Some(SymPayload::Int(v)) => v.to_u64(),
-        other => panic!("expected an integer constant, got {other:?}"),
-    }
+// The cast's sem root and each child's kind with its constant value, if any.
+fn cast_sem<O: AsSemExpr>(
+    from: u64,
+    cast: impl FnOnce(&Context, tir::ValueId) -> O,
+) -> (SymKind, Vec<(SymKind, Option<u64>)>) {
+    let context = Context::with_default_dialects();
+    let input = context.create_value(IntegerType::new(&context, from), None);
+    let mut g = SemGraph::new();
+    let root = cast(&context, input.id()).convert(&mut g);
+    let children = g
+        .children(root)
+        .map(|child| match g.get_leaf_data(child) {
+            Some(SymPayload::Int(v)) => (*g.get_node(child), Some(v.to_u64())),
+            _ => (*g.get_node(child), None),
+        })
+        .collect();
+    (*g.get_node(root), children)
 }
 
 #[test]
 fn extsi_sem_expr_uses_result_width() {
-    let context = Context::with_default_dialects();
-    let input = context.create_value(IntegerType::new(&context, 16), None);
-    let op = ops::extsi(&context, input.id(), IntegerType::new(&context, 64)).build();
-    let mut g = SemGraph::new();
-    let root = op.convert(&mut g);
-    assert_eq!(g.get_node(root), &SymKind::SExt);
-    let children: Vec<_> = g.children(root).collect();
-    assert_eq!(g.get_node(children[0]), &SymKind::Symbol);
-    assert_eq!(const_value(&g, children[1]), 64);
+    assert_eq!(
+        cast_sem(16, |c, input| ops::extsi(c, input, IntegerType::new(c, 64))
+            .build()),
+        (
+            SymKind::SExt,
+            vec![(SymKind::Symbol, None), (SymKind::Constant, Some(64))]
+        )
+    );
 }
 
 #[test]
 fn extui_sem_expr_uses_result_width() {
-    let context = Context::with_default_dialects();
-    let input = context.create_value(IntegerType::new(&context, 8), None);
-    let op = ops::extui(&context, input.id(), IntegerType::new(&context, 32)).build();
-    let mut g = SemGraph::new();
-    let root = op.convert(&mut g);
-    assert_eq!(g.get_node(root), &SymKind::ZExt);
-    assert_eq!(const_value(&g, g.children(root).nth(1).unwrap()), 32);
+    assert_eq!(
+        cast_sem(8, |c, input| ops::extui(c, input, IntegerType::new(c, 32))
+            .build()),
+        (
+            SymKind::ZExt,
+            vec![(SymKind::Symbol, None), (SymKind::Constant, Some(32))]
+        )
+    );
 }
 
 #[test]
 fn trunci_sem_expr_is_low_bit_extract() {
-    let context = Context::with_default_dialects();
-    let input = context.create_value(IntegerType::new(&context, 64), None);
-    let op = ops::trunci(&context, input.id(), IntegerType::new(&context, 16)).build();
-    let mut g = SemGraph::new();
-    let root = op.convert(&mut g);
-    assert_eq!(g.get_node(root), &SymKind::Extract);
-    let children: Vec<_> = g.children(root).collect();
-    assert_eq!(g.get_node(children[0]), &SymKind::Symbol);
-    assert_eq!(const_value(&g, children[1]), 15); // high = W - 1
-    assert_eq!(const_value(&g, children[2]), 0); // low
+    // Extract(x, high = W - 1, low = 0).
+    assert_eq!(
+        cast_sem(64, |c, input| ops::trunci(
+            c,
+            input,
+            IntegerType::new(c, 16)
+        )
+        .build()),
+        (
+            SymKind::Extract,
+            vec![
+                (SymKind::Symbol, None),
+                (SymKind::Constant, Some(15)),
+                (SymKind::Constant, Some(0))
+            ]
+        )
+    );
 }
 
 /// A compare's predicate is a typed attribute: the text parser hands the

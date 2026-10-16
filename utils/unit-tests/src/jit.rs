@@ -49,6 +49,98 @@ const EXTERNAL_CALL: &str = r#"
     }
 "#;
 
+// A diamond whose two arms forward different values (%a, %b) into the merge
+// block's parameter %r on unconditional edges. Register allocation lowers each
+// forwarded value to an explicit copy into %r's register, so the merge sees a
+// single consistently-colored parameter regardless of the path taken.
+const SELECT_DIAMOND: &str = r#"
+    module {
+      func.func @sel(%c: !i64, %d: !i64, %a: !i64, %b: !i64) -> !i64 {
+        %cond = cmpi %c, %d {predicate = "slt"} : !i1
+        cfg.cond_br %cond, ^bb1, ^bb2
+      ^bb1:
+        cfg.br ^bb3(%a : !i64)
+      ^bb2:
+        cfg.br ^bb3(%b : !i64)
+      ^bb3(%r: !i64):
+        func.return %r
+      }
+      module_end
+    }
+"#;
+
+const COUNT_LOOP: &str = r#"
+    module {
+      func.func @count(%limit: !i64) -> !i64 {
+        %zero = constant {value = 0} : !i64
+        cfg.br ^bb1(%zero : !i64)
+      ^bb1(%iv: !i64):
+        %keep_going = cmpi %iv, %limit {predicate = "slt"} : !i1
+        cfg.cond_br %keep_going, ^bb2, ^bb3
+      ^bb2:
+        %one = constant {value = 1} : !i64
+        %next = addi %iv, %one : !i64
+        cfg.br ^bb1(%next : !i64)
+      ^bb3:
+        func.return %iv
+      }
+      module_end
+    }
+"#;
+
+// The accumulator lives in memory and is mutated every iteration, so the
+// result pins what the mid-end does to a slot a loop carries.
+const SUM_LOOP_IN_SLOT: &str = r#"
+    module {
+      func.func @sum(%limit: !i64) -> !i64 {
+        %acc = ptr.alloca {size = 8, align = 8} : !ptr.p<!i64>
+        %zero = constant {value = 0} : !i64
+        ptr.store %zero, %acc
+        cfg.br ^bb1(%zero : !i64)
+      ^bb1(%iv: !i64):
+        %keep_going = cmpi %iv, %limit {predicate = "slt"} : !i1
+        cfg.cond_br %keep_going, ^bb2, ^bb3
+      ^bb2:
+        %current = ptr.load %acc : !i64
+        %grown = addi %current, %iv : !i64
+        ptr.store %grown, %acc
+        %one = constant {value = 1} : !i64
+        %next = addi %iv, %one : !i64
+        cfg.br ^bb1(%next : !i64)
+      ^bb3:
+        %total = ptr.load %acc : !i64
+        func.return %total
+      }
+      module_end
+    }
+"#;
+
+// The arms' forwarded values ride the conditional branch's own edges. The
+// true edge is split into a trampoline block during selection; the false
+// edge's value rides the fallthrough branch. Register allocation lowers each
+// to a copy into the merge parameter's register.
+const SELECT_ON_EDGES: &str = r#"
+    module {
+      func.func @sel(%c: !i64, %d: !i64, %a: !i64, %b: !i64) -> !i64 {
+        %cond = cmpi %c, %d {predicate = "slt"} : !i1
+        cfg.cond_br %cond, ^bb1(%a : !i64), ^bb2(%b : !i64)
+      ^bb1(%x: !i64):
+        func.return %x
+      ^bb2(%y: !i64):
+        func.return %y
+      }
+      module_end
+    }
+"#;
+
+fn assert_selects(ir: &str) {
+    let sel: extern "C" fn(i64, i64, i64, i64) -> i64 = get(compile(ir), "sel");
+    // sel(c, d, a, b) = if c < d { a } else { b }
+    assert_eq!(sel(1, 2, 42, 7), 42);
+    assert_eq!(sel(5, 2, 42, 7), 7);
+    assert_eq!(sel(-9, 0, 100, 200), 100);
+}
+
 #[test]
 fn integer_arithmetic() {
     // One module, four entry points: register-register add and multiply, a
@@ -167,55 +259,12 @@ fn returns_first_argument_directly() {
 
 #[test]
 fn block_argument_diamond() {
-    // A diamond whose two arms forward different values (%a, %b) into the merge
-    // block's parameter %r on unconditional edges. Register allocation lowers each
-    // forwarded value to an explicit copy into %r's register, so the merge sees a
-    // single consistently-colored parameter regardless of the path taken.
-    let ir = r#"
-        module {
-          func.func @sel(%c: !i64, %d: !i64, %a: !i64, %b: !i64) -> !i64 {
-            %cond = cmpi %c, %d {predicate = "slt"} : !i1
-            cfg.cond_br %cond, ^bb1, ^bb2
-          ^bb1:
-            cfg.br ^bb3(%a : !i64)
-          ^bb2:
-            cfg.br ^bb3(%b : !i64)
-          ^bb3(%r: !i64):
-            func.return %r
-          }
-          module_end
-        }
-    "#;
-
-    let sel: extern "C" fn(i64, i64, i64, i64) -> i64 = get(compile(ir), "sel");
-    // sel(c, d, a, b) = if c < d { a } else { b }
-    assert_eq!(sel(1, 2, 42, 7), 42);
-    assert_eq!(sel(5, 2, 42, 7), 7);
-    assert_eq!(sel(-9, 0, 100, 200), 100);
+    assert_selects(SELECT_DIAMOND);
 }
 
 #[test]
 fn loop_carried_block_argument() {
-    let ir = r#"
-        module {
-          func.func @count(%limit: !i64) -> !i64 {
-            %zero = constant {value = 0} : !i64
-            cfg.br ^bb1(%zero : !i64)
-          ^bb1(%iv: !i64):
-            %keep_going = cmpi %iv, %limit {predicate = "slt"} : !i1
-            cfg.cond_br %keep_going, ^bb2, ^bb3
-          ^bb2:
-            %one = constant {value = 1} : !i64
-            %next = addi %iv, %one : !i64
-            cfg.br ^bb1(%next : !i64)
-          ^bb3:
-            func.return %iv
-          }
-          module_end
-        }
-    "#;
-
-    let count: extern "C" fn(i64) -> i64 = get(compile(ir), "count");
+    let count: extern "C" fn(i64) -> i64 = get(compile(COUNT_LOOP), "count");
     assert_eq!(count(0), 0);
     assert_eq!(count(5), 5);
     assert_eq!(count(23), 23);
@@ -223,34 +272,7 @@ fn loop_carried_block_argument() {
 
 #[test]
 fn loop_accumulator_in_a_slot() {
-    // The accumulator lives in memory and is mutated every iteration, so the
-    // result pins what the mid-end does to a slot a loop carries.
-    let ir = r#"
-        module {
-          func.func @sum(%limit: !i64) -> !i64 {
-            %acc = ptr.alloca {size = 8, align = 8} : !ptr.p<!i64>
-            %zero = constant {value = 0} : !i64
-            ptr.store %zero, %acc
-            cfg.br ^bb1(%zero : !i64)
-          ^bb1(%iv: !i64):
-            %keep_going = cmpi %iv, %limit {predicate = "slt"} : !i1
-            cfg.cond_br %keep_going, ^bb2, ^bb3
-          ^bb2:
-            %current = ptr.load %acc : !i64
-            %grown = addi %current, %iv : !i64
-            ptr.store %grown, %acc
-            %one = constant {value = 1} : !i64
-            %next = addi %iv, %one : !i64
-            cfg.br ^bb1(%next : !i64)
-          ^bb3:
-            %total = ptr.load %acc : !i64
-            func.return %total
-          }
-          module_end
-        }
-    "#;
-
-    let sum: extern "C" fn(i64) -> i64 = get(compile(ir), "sum");
+    let sum: extern "C" fn(i64) -> i64 = get(compile(SUM_LOOP_IN_SLOT), "sum");
     // sum(n) = 0 + 1 + ... + (n - 1)
     assert_eq!(sum(0), 0);
     assert_eq!(sum(5), 10);
@@ -259,29 +281,7 @@ fn loop_accumulator_in_a_slot() {
 
 #[test]
 fn conditional_edge_arguments() {
-    // The arms' forwarded values ride the conditional branch's own edges. The
-    // true edge is split into a trampoline block during selection; the false
-    // edge's value rides the fallthrough branch. Register allocation lowers each
-    // to a copy into the merge parameter's register.
-    let ir = r#"
-        module {
-          func.func @sel(%c: !i64, %d: !i64, %a: !i64, %b: !i64) -> !i64 {
-            %cond = cmpi %c, %d {predicate = "slt"} : !i1
-            cfg.cond_br %cond, ^bb1(%a : !i64), ^bb2(%b : !i64)
-          ^bb1(%x: !i64):
-            func.return %x
-          ^bb2(%y: !i64):
-            func.return %y
-          }
-          module_end
-        }
-    "#;
-
-    let sel: extern "C" fn(i64, i64, i64, i64) -> i64 = get(compile(ir), "sel");
-    // sel(c, d, a, b) = if c < d { a } else { b }
-    assert_eq!(sel(1, 2, 42, 7), 42);
-    assert_eq!(sel(5, 2, 42, 7), 7);
-    assert_eq!(sel(-9, 0, 100, 200), 100);
+    assert_selects(SELECT_ON_EDGES);
 }
 
 #[test]

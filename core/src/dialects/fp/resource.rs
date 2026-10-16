@@ -58,19 +58,6 @@ pub(super) fn state_for(op: &OpHandle, resource: StateResource) -> ValueId {
         .expect("verified floating operation has its required resource state")
 }
 
-fn states_for(
-    op: &OpHandle,
-    values: impl IntoIterator<Item = ValueId>,
-    resource: StateResource,
-) -> Vec<ValueId> {
-    values
-        .into_iter()
-        .filter(|value| {
-            op.context.state_resource(op.context.get_value(*value).ty()) == Some(resource)
-        })
-        .collect()
-}
-
 pub(super) fn verify_ports(
     op: &OpHandle,
     effects: &[(StateResource, ResourceAccess)],
@@ -83,7 +70,7 @@ pub(super) fn verify_ports(
     for &(resource, _) in effects {
         if [op.state_operands(), op.state_results()]
             .into_iter()
-            .any(|values| states_for(op, values, resource).len() != 1)
+            .any(|values| op.context.states_of(values, resource).len() != 1)
         {
             return Err(Error::VerificationError(
                 "floating operation has a mismatched state resource".into(),
@@ -102,8 +89,8 @@ pub(super) fn effect_records(
         .map(|(resource, access)| ResourceEffect {
             resource,
             access,
-            observed: states_for(op, op.state_operands(), resource),
-            produced: states_for(op, op.state_results(), resource),
+            observed: op.context.states_of(op.state_operands(), resource),
+            produced: op.context.states_of(op.state_results(), resource),
         })
         .collect()
 }

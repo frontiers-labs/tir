@@ -264,13 +264,16 @@ fn isa_test_suite(sh: &Shell) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn capi_smoke(sh: &Shell) -> anyhow::Result<()> {
+fn build_capi(sh: &Shell) -> anyhow::Result<PathBuf> {
     let root = project_root();
     sh.change_dir(&root);
-
     cmd!(sh, "cargo build -p tir-capi").run()?;
+    Ok(root.join("target/debug"))
+}
 
-    let lib_dir = root.join("target/debug");
+fn capi_smoke(sh: &Shell) -> anyhow::Result<()> {
+    let root = project_root();
+    let lib_dir = build_capi(sh)?;
     let smoke = root.join("utils/capi/tests/smoke.c");
     let bin = lib_dir.join("tir_capi_smoke");
     let rpath = format!("-Wl,-rpath,{}", lib_dir.display());
@@ -285,21 +288,14 @@ fn capi_smoke(sh: &Shell) -> anyhow::Result<()> {
 }
 
 fn python_smoke(sh: &Shell) -> anyhow::Result<()> {
-    let root = project_root();
-    sh.change_dir(&root);
-
-    cmd!(sh, "cargo build -p tir-capi").run()?;
+    build_capi(sh)?;
     cmd!(sh, "python3 -m unittest discover -s utils/python/tests").run()?;
     Ok(())
 }
 
 fn haskell_smoke(sh: &Shell) -> anyhow::Result<()> {
     let root = project_root();
-    sh.change_dir(&root);
-
-    cmd!(sh, "cargo build -p tir-capi").run()?;
-
-    let lib_dir = root.join("target/debug");
+    let lib_dir = build_capi(sh)?;
     let out = root.join("target/haskell");
     std::fs::create_dir_all(&out)?;
     let bin = out.join("tir_hs_smoke");

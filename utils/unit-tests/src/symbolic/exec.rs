@@ -168,55 +168,28 @@ fn continuation_resumes_the_pending_load_without_repeating_completed_loads() {
     assert_eq!(memory.reads, [0, 8, 8]);
 }
 
-#[test]
-fn continuation_evaluates_only_the_selected_branch() {
-    let mut g = Graph::new();
-    let condition = int_con(&mut g, 1);
-    let selected_address = int_con(&mut g, 0);
-    let skipped_address = int_con(&mut g, 8);
-    let bytes = int_con(&mut g, 4);
-    let metadata = int_con(&mut g, 0);
-    let selected = op(
-        &mut g,
-        SymKind::LoadMemory,
-        &[selected_address, bytes, metadata],
-    );
-    let skipped = op(
-        &mut g,
-        SymKind::LoadMemory,
-        &[skipped_address, bytes, metadata],
-    );
-    op(&mut g, SymKind::If, &[condition, selected, skipped]);
+struct RecordingMemory(Vec<u64>);
 
-    struct RecordingMemory(Vec<u64>);
-    impl Memory for RecordingMemory {
-        type Error = ();
+impl Memory for RecordingMemory {
+    type Error = ();
 
-        fn read_memory(&mut self, address: u64, _size: usize) -> Result<u64, Self::Error> {
-            self.0.push(address);
-            Ok(42)
-        }
-
-        fn write_memory(
-            &mut self,
-            _address: u64,
-            _size: usize,
-            _value: u64,
-        ) -> Result<(), Self::Error> {
-            unreachable!()
-        }
+    fn read_memory(&mut self, address: u64, _size: usize) -> Result<u64, Self::Error> {
+        self.0.push(address);
+        Ok(address + 1)
     }
 
-    let mut memory = RecordingMemory(vec![]);
-    assert_eq!(
-        as_u64(execute_with_memory(&g, &[], &mut memory).unwrap()),
-        42
-    );
-    assert_eq!(memory.0, [0]);
+    fn write_memory(
+        &mut self,
+        _address: u64,
+        _size: usize,
+        _value: u64,
+    ) -> Result<(), Self::Error> {
+        unreachable!()
+    }
 }
 
-#[test]
-fn continuation_evaluates_only_the_selected_switch_arm() {
+// Runs `selector(1, load(0), load(8))` and returns its value and the addresses read.
+fn select_between_loads(selector: SymKind) -> (u64, Vec<u64>) {
     let mut g = Graph::new();
     let predicate = int_con(&mut g, 1);
     let first_address = int_con(&mut g, 0);
@@ -233,33 +206,21 @@ fn continuation_evaluates_only_the_selected_switch_arm() {
         SymKind::LoadMemory,
         &[second_address, bytes, metadata],
     );
-    op(&mut g, SymKind::Switch, &[predicate, first, second]);
-
-    struct RecordingMemory(Vec<u64>);
-    impl Memory for RecordingMemory {
-        type Error = ();
-
-        fn read_memory(&mut self, address: u64, _size: usize) -> Result<u64, Self::Error> {
-            self.0.push(address);
-            Ok(address + 1)
-        }
-
-        fn write_memory(
-            &mut self,
-            _address: u64,
-            _size: usize,
-            _value: u64,
-        ) -> Result<(), Self::Error> {
-            unreachable!()
-        }
-    }
+    op(&mut g, selector, &[predicate, first, second]);
 
     let mut memory = RecordingMemory(vec![]);
-    assert_eq!(
-        as_u64(execute_with_memory(&g, &[], &mut memory).unwrap()),
-        9
-    );
-    assert_eq!(memory.0, [8]);
+    let value = as_u64(execute_with_memory(&g, &[], &mut memory).unwrap());
+    (value, memory.0)
+}
+
+#[test]
+fn continuation_evaluates_only_the_selected_branch() {
+    assert_eq!(select_between_loads(SymKind::If), (1, vec![0]));
+}
+
+#[test]
+fn continuation_evaluates_only_the_selected_switch_arm() {
+    assert_eq!(select_between_loads(SymKind::Switch), (9, vec![8]));
 }
 
 #[test]
@@ -599,6 +560,15 @@ fn fcvt_converts_between_float_formats() {
 
 // ── Iterator nodes ─────────────────────────────────────────────────────────
 
+fn zip_map_concat(g: &mut Graph, lanes: &[NodeId], body: SymKind) -> NodeId {
+    let zip = op(g, SymKind::Zip, lanes);
+    let x = arg(g, 0);
+    let y = arg(g, 1);
+    let body = op(g, body, &[x, y]);
+    let map = op(g, SymKind::Map, &[zip, body]);
+    op(g, SymKind::IterConcat, &[map])
+}
+
 #[test]
 fn split_then_concat_roundtrips_raw_bits() {
     // split a 16-bit raw value 0xBA21 into two bytes, then concat them back.
@@ -659,25 +629,25 @@ fn map_applies_unary_lambda_per_lane() {
     assert_eq!(int_lanes(execute(&g, &[rb(&[0x01, 0x02])])), vec![2, 3]);
 }
 
+fn zip_two_lanes(body: SymKind, a: &[u8], b: &[u8]) -> Vec<u8> {
+    let mut g = Graph::new();
+    let a_bits = sym(&mut g, 0);
+    let b_bits = sym(&mut g, 1);
+    let n = int_con(&mut g, 2);
+    let split_a = op(&mut g, SymKind::Split, &[a_bits, n]);
+    let split_b = op(&mut g, SymKind::Split, &[b_bits, n]);
+    zip_map_concat(&mut g, &[split_a, split_b], body);
+    raw_bytes(execute(&g, &[rb(a), rb(b)]))
+}
+
 #[test]
 fn zip_then_map_lane_wise_add_concats() {
     // concat(map(zip(split(a, 2), split(b, 2)), |x, y| x + y)) for
     // a=[1,2], b=[3,4] -> lanes [4, 6] -> raw bytes [0x04, 0x06].
-    let mut g = Graph::new();
-    let a = sym(&mut g, 0);
-    let b = sym(&mut g, 1);
-    let n = int_con(&mut g, 2);
-    let split_a = op(&mut g, SymKind::Split, &[a, n]);
-    let split_b = op(&mut g, SymKind::Split, &[b, n]);
-    let zip = op(&mut g, SymKind::Zip, &[split_a, split_b]);
-    let x = arg(&mut g, 0);
-    let y = arg(&mut g, 1);
-    let body = op(&mut g, SymKind::Add, &[x, y]);
-    let map = op(&mut g, SymKind::Map, &[zip, body]);
-    op(&mut g, SymKind::IterConcat, &[map]);
-
-    let out = execute(&g, &[rb(&[0x01, 0x02]), rb(&[0x03, 0x04])]);
-    assert_eq!(raw_bytes(out), vec![0x04, 0x06]);
+    assert_eq!(
+        zip_two_lanes(SymKind::Add, &[0x01, 0x02], &[0x03, 0x04]),
+        vec![0x04, 0x06]
+    );
 }
 
 #[test]
@@ -703,12 +673,7 @@ fn iota_zipped_with_split_exposes_index_and_lane() {
     let w = int_con(&mut g, 8);
     let iota = op(&mut g, SymKind::Iota, &[n, w]);
     let split = op(&mut g, SymKind::Split, &[bits, n]);
-    let zip = op(&mut g, SymKind::Zip, &[iota, split]);
-    let i = arg(&mut g, 0);
-    let x = arg(&mut g, 1);
-    let body = op(&mut g, SymKind::Add, &[i, x]);
-    let map = op(&mut g, SymKind::Map, &[zip, body]);
-    op(&mut g, SymKind::IterConcat, &[map]);
+    zip_map_concat(&mut g, &[iota, split], SymKind::Add);
 
     assert_eq!(raw_bytes(execute(&g, &[rb(&[0x01, 0x02])])), vec![1, 3]);
 }
@@ -773,21 +738,7 @@ fn masked_select_via_zip_and_if() {
 fn compare_lanes_concat_into_packed_mask_bits() {
     // The RVV compare shape: concat(map(zip(a, b), |x, y| x == y)) packs
     // 1-bit result lanes. a=[1,2], b=[1,3] -> mask bits [1, 0] -> 0b01.
-    let mut g = Graph::new();
-    let a = sym(&mut g, 0);
-    let b = sym(&mut g, 1);
-    let n = int_con(&mut g, 2);
-    let split_a = op(&mut g, SymKind::Split, &[a, n]);
-    let split_b = op(&mut g, SymKind::Split, &[b, n]);
-    let zip = op(&mut g, SymKind::Zip, &[split_a, split_b]);
-    let x = arg(&mut g, 0);
-    let y = arg(&mut g, 1);
-    let body = op(&mut g, SymKind::Eq, &[x, y]);
-    let map = op(&mut g, SymKind::Map, &[zip, body]);
-    op(&mut g, SymKind::IterConcat, &[map]);
-
-    let out = execute(&g, &[rb(&[1, 2]), rb(&[1, 3])]);
-    assert_eq!(raw_bytes(out), vec![0b01]);
+    assert_eq!(zip_two_lanes(SymKind::Eq, &[1, 2], &[1, 3]), vec![0b01]);
 }
 
 // ── Atomics ────────────────────────────────────────────────────────────────

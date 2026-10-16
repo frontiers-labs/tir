@@ -146,24 +146,37 @@ impl Analyzer<'_> {
     }
 
     pub(super) fn validate_initializer(&mut self, target: QualType, initializer: NodeId) {
-        if self.ast.get_node(initializer).kind == AstKind::InitializerList {
-            self.validate_initializer_list(target, initializer);
+        self.validate_undesignated_initializer(target, initializer, false);
+    }
+
+    fn validate_undesignated_initializer(
+        &mut self,
+        target: QualType,
+        value: NodeId,
+        element: bool,
+    ) {
+        if self.ast.get_node(value).kind == AstKind::InitializerList {
+            self.validate_initializer_list(target, value);
             return;
         }
         let source = self
             .ast
-            .get_annotation(initializer)
+            .get_annotation(value)
             .and_then(|info| info.ty)
             .unwrap_or(target);
-        let source = self.assignment_source(target, source, initializer);
-        if !self.assignment_compatible(target, source, initializer) {
+        let source = self.assignment_source(target, source, value);
+        if !self.assignment_compatible(target, source, value) {
+            let target_name = if element {
+                format!("array element of {} type", self.type_category(target))
+            } else {
+                self.type_category(target).to_string()
+            };
             self.diagnostics.push(
                 IncompatibleConversion::new(
-                    self.ast.get_node(initializer).span,
+                    self.ast.get_node(value).span,
                     None,
                     format!(
-                        "cannot initialize {} with {} value",
-                        self.type_category(target),
+                        "cannot initialize {target_name} with {} value",
                         self.type_category(source)
                     ),
                     initializer_reference(self.options),
@@ -171,7 +184,7 @@ impl Analyzer<'_> {
                 .into(),
             );
         } else {
-            self.record_conversion(initializer, target);
+            self.record_conversion(value, target);
         }
     }
 
@@ -400,32 +413,6 @@ impl Analyzer<'_> {
             self.validate_designated_initializer(target, value);
             return;
         }
-        if self.ast.get_node(value).kind == AstKind::InitializerList {
-            self.validate_initializer_list(target, value);
-            return;
-        }
-        let source = self
-            .ast
-            .get_annotation(value)
-            .and_then(|info| info.ty)
-            .unwrap_or(target);
-        let source = self.assignment_source(target, source, value);
-        if !self.assignment_compatible(target, source, value) {
-            self.diagnostics.push(
-                IncompatibleConversion::new(
-                    self.ast.get_node(value).span,
-                    None,
-                    format!(
-                        "cannot initialize array element of {} type with {} value",
-                        self.type_category(target),
-                        self.type_category(source)
-                    ),
-                    initializer_reference(self.options),
-                )
-                .into(),
-            );
-        } else {
-            self.record_conversion(value, target);
-        }
+        self.validate_undesignated_initializer(target, value, true);
     }
 }

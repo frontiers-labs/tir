@@ -630,7 +630,9 @@ fn completion_cycle(
 /// entry is the oldest in flight and frees first.
 type Rob = VecDeque<u64>;
 
-fn prf_gate(
+/// Delay dispatch cycle `d` until every register file `slot` defines into has
+/// a free physical register, retiring entries of `inflight` freed by then.
+pub fn prf_gate(
     d: &mut u64,
     slot: &ScoreboardInstr,
     prf: &Prf,
@@ -995,7 +997,9 @@ fn record_or_contribution(
     }
 }
 
-fn score_branch(
+/// Score `branch` against `predictor` and push `redirect` past the resolve
+/// cycle on a misprediction. Returns the number of mispredictions (0 or 1).
+pub fn score_branch(
     predictor: &mut dyn BranchPredictor,
     branch: &BranchOutcome,
     index: usize,
@@ -1017,7 +1021,8 @@ fn score_branch(
     mispredicts
 }
 
-fn record_prf_allocation(
+/// Hold one physical register per tracked definition until `retire`.
+pub fn record_prf_allocation(
     prf: &Prf,
     defs: &[(String, u16)],
     retire: u64,
