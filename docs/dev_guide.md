@@ -228,12 +228,12 @@ The Perf workflow counts CoreMark, Dhrystone and every function benchmark under
 Cachegrind on each merge to `master`. A second job times the two programs
 natively with `fcc`, `gcc` and `clang` for wall time and peak memory. It
 records both on the `perf-data` branch through
-[benchboard](https://github.com/frontiers-labs/benchboard), which opens an
-issue when an instruction count rises by more than 2% and shows the history at
-<https://frontiers-labs.github.io/benchboard/>. The board's Versus view lists
-`fcc` against the reference compilers for compile time, compile memory and run
-time. Native values come from shared runners and never open an issue. A new
-function benchmark is picked up without any workflow change.
+[benchboard](https://github.com/frontiers-labs/benchboard), which shows the
+history at <https://frontiers-labs.github.io/benchboard/>. Changes are not
+reported as issues; only a benchmark that fails to build, run or validate is.
+The board's Versus view lists `fcc` against the reference compilers for compile
+time, compile memory and run time. A new function benchmark is picked up
+without any workflow change.
 
 Use `cargo xtask fp-check` to record pinned GCC floating-point observations,
 compare cumulative semantic requirements, and summarize saved reports.

@@ -1,8 +1,9 @@
 name: Perf
 
 # Measures every merge and records the results on the perf-data branch.
-# Benchboard compares each run with the previous one, opens an issue when
-# Cachegrind instruction counts regress, and shows fcc against gcc and clang.
+# Benchboard compares each run with the previous one and shows fcc against
+# gcc and clang. Regressions are not reported: a run fails only when a
+# benchmark does.
 # History: https://frontiers-labs.github.io/benchboard/
 on:
   workflow_dispatch:
@@ -112,7 +113,6 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: write
-      issues: write
     steps:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
@@ -122,11 +122,8 @@ jobs:
       - uses: frontiers-labs/benchboard@549cc7330a418e41bf18098f0abe5ef972068846
         with:
           results: results/**/summary.json
-          # Cachegrind's key for executed instructions.
-          gate-metrics: Ir
-          threshold: 2
-          # Benchboard records a run under a new key without gating it. The two
-          # jobs can land on different runner images, so both keys count.
+          issue-label: ''
+          # The two jobs can land on different runner images, so both keys count.
           env-key: >-
             ${{ needs.programs.outputs.environment == needs.functions.outputs.environment
             && needs.programs.outputs.environment

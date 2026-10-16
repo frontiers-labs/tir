@@ -24,6 +24,11 @@ tmdl.workspace = true
 [lints]
 workspace = true
 
+# `cargo bench --workspace` passes tir-bench arguments to every target, which
+# libtest rejects.
+[lib]
+bench = false
+
 [[bin]]
 name = "xtask"
 path = "src/main.rs"
