@@ -64,6 +64,54 @@ pub fn assert_fcc_matches_host(source: &str) {
     assert_eq!(fcc.stderr, host.stderr);
 }
 
+/// `fcc -O2 --shuffle-machine-order` must match the host compiler. Several
+/// seeds, because each seed is one linearization of the machine block.
+pub fn assert_shuffled_matches_host(source: &str) {
+    let dir = tir_adt::TempDir::new().unwrap();
+    fs::write(dir.path().join("test.c"), source).unwrap();
+    let status = Command::new("cc")
+        .args(["-O2", "test.c", "-o", "host-program"])
+        .current_dir(dir.path())
+        .status()
+        .expect("spawn host cc");
+    assert!(status.success(), "host cc failed");
+    let host = run_program(dir.path(), "host-program");
+    for seed in ["0", "1", "2", "7", "42"] {
+        let status = Command::new(fcc_binary())
+            .args([
+                "compile",
+                "-O2",
+                "--stage",
+                "obj",
+                "--march",
+                "x86_64",
+                "--shuffle-machine-order",
+                "-o",
+                "shuffle.o",
+                "test.c",
+            ])
+            .env("TIR_SHUFFLE_SEED", seed)
+            .current_dir(dir.path())
+            .status()
+            .expect("spawn fcc");
+        assert!(status.success(), "fcc shuffle seed {seed} failed");
+        let status = Command::new("cc")
+            .args(["shuffle.o", "-o", "shuffle-program"])
+            .current_dir(dir.path())
+            .status()
+            .expect("link shuffled object");
+        assert!(status.success(), "link failed for seed {seed}");
+        let shuffled = run_program(dir.path(), "shuffle-program");
+        assert_eq!(
+            exit_code(&shuffled),
+            exit_code(&host),
+            "seed {seed}: stderr {}",
+            String::from_utf8_lossy(&shuffled.stderr)
+        );
+        assert_eq!(shuffled.stdout, host.stdout, "seed {seed}");
+    }
+}
+
 pub fn assert_fcc_matches_host_at_optimization_levels(source: &str) {
     for level in ["-O0", "-O2"] {
         let dir = tir_adt::TempDir::new().unwrap();

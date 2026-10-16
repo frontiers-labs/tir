@@ -13,7 +13,7 @@ use crate::backend::abi::{
     AbiInfo, ArgumentGroup, ArgumentMember, ArgumentSlot, ValueKind, argument_sequences,
     next_return_register, place_arguments, type_kind, value_kind,
 };
-use crate::backend::liveness::PhysReg;
+use crate::backend::liveness::{PhysReg, op_regs};
 use crate::backend::regalloc::RegClassId;
 use crate::backend::registers::RegSlot;
 use crate::backend::registers::fresh_reg;
@@ -354,11 +354,17 @@ impl CallLowering {
                     .map(|state| tir::backend::put_on_chain(context, store.as_ref(), state));
             }
         }
+        let mut prefix_reads = Vec::new();
         for prefix in
             self.emitter
                 .call_prefix(context, self.abi, outgoing_size, vector_register_args)
         {
+            let id = prefix.id();
             context.insert_op_before(op, prefix.as_ref())?;
+            // The prefix writes a register the call reads and no operand names
+            // (x86 `al` counting the vector arguments). Recorded below as a use,
+            // so the write stays live up to the call instead of dying at once.
+            prefix_reads.extend(op_regs(&context.get_op(id)).phys_defs);
         }
 
         for (&fresh, location) in fresh_args.iter().zip(&argument_locations) {
@@ -377,11 +383,11 @@ impl CallLowering {
         }
 
         // What the call reads: the registers the convention placed the arguments
-        // in, the result address where there is one, and the stack pointer it
-        // pushes the return address on. None of them is an operand — a
-        // placement is not a value — so without saying so nothing keeps the copy
-        // that made it alive to the call, and nothing keeps the frame's own
-        // adjustment on the right side of it.
+        // in, the result address where there is one, the stack pointer it
+        // pushes the return address on, and whatever the prefix left for it.
+        // None of them is an operand — a placement is not a value — so without
+        // saying so nothing keeps the copy that made it alive to the call, and
+        // nothing keeps the frame's own adjustment on the right side of it.
         let uses = AttributeValue::Array(
             argument_locations
                 .iter()
@@ -391,6 +397,7 @@ impl CallLowering {
                 })
                 .chain(fresh_result_address.map(|(_, register)| register))
                 .chain(std::iter::once(self.abi.sp))
+                .chain(prefix_reads)
                 .map(crate::backend::phys_attr)
                 .collect::<Vec<_>>()
                 .into(),

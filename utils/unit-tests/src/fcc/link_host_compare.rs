@@ -590,3 +590,27 @@ fn optimized_load_before_call_preserves_observed_value() {
     run_fcc(dir.path(), &["cc", "fcc.o", "host.o", "-o", "program"]);
     assert_eq!(exit_code(&run_program(dir.path(), "program")), 0);
 }
+
+/// A call's argument registers and the `al` vector count are physical
+/// registers, not values. Shuffling the block puts other instructions between
+/// the copy and the call; those instructions must not be given the register.
+#[test]
+#[cfg(target_arch = "x86_64")]
+fn shuffled_call_arguments_match_host_compiler() {
+    use super::link_support::assert_shuffled_matches_host;
+    if !cc_available() {
+        return;
+    }
+    assert_shuffled_matches_host(
+        r#"int printf(const char *format, ...);
+int id(int *p, int *q, int a, int b) { return b; }
+int main(void) {
+    int arr[8] = {1, 2, 3, 4, 5, 6, 7, 8};
+    int r = id(arr + 3, arr + 1, 40 / 3 + 1, 7);
+    printf("%d\n", r);
+    for (int i = 0; i < 8; i++) printf("%d\n", arr[i]);
+    return 0;
+}
+"#,
+    );
+}

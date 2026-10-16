@@ -18,7 +18,7 @@ use tir_relational::store::Table;
 use tir_relational::{Database, Join, LatticeId, Ref, SpaceId};
 
 use super::live::Rule;
-use crate::backend::liveness::{PhysReg, op_regs};
+use crate::backend::liveness::{OpRegs, PhysReg, op_regs};
 use crate::backend::{RegSlot, VirtualBranchOp};
 
 pub(super) const SPACE: SpaceId = SpaceId::nth(0);
@@ -143,6 +143,15 @@ pub(super) struct Seed<'a> {
     pub(super) copies: &'a [SeededCopy],
     pub(super) pins: &'a HashMap<ValueId, PhysReg>,
     pub(super) allocatable: &'a dyn Fn(PhysReg) -> bool,
+}
+
+// A physical register defined in a block and not yet closed by a later
+// write: `from` is the defining op, or the block's entry when the read is of
+// a register live in, and `used` is the last read of that write.
+struct Open {
+    reg: PhysReg,
+    from: Option<usize>,
+    used: Option<usize>,
 }
 
 pub(super) struct RegAllocDb {
@@ -386,6 +395,123 @@ impl RegAllocDb {
 
     pub(super) fn table(&self, slot: u32) -> &Table {
         self.db.table(slot).expect("a table of the schema")
+    }
+
+    /// Forbid `reg` to every value live between a physical write of it and the
+    /// read that consumes that write. The write and the read are instructions,
+    /// not values, so the interference rules never pair them with the values
+    /// shuffled in between; a value colored there would overwrite the register
+    /// the later read still needs. A write nothing reads is dead at once and
+    /// occupies nothing.
+    pub(super) fn forbid_fixed(
+        &mut self,
+        context: &Context,
+        allocatable: &dyn Fn(PhysReg) -> bool,
+    ) {
+        let mut live_after: HashMap<u32, Vec<u32>> = HashMap::new();
+        let live = self.table(LIVE_AT);
+        for (&op, &value) in live.column(1).iter().zip(live.column(2)) {
+            live_after.entry(op).or_default().push(value);
+        }
+        let mut defined_at: HashMap<u32, Vec<u32>> = HashMap::new();
+        let defs = self.table(DEFS);
+        for (&op, &value) in defs.column(1).iter().zip(defs.column(2)) {
+            defined_at.entry(op).or_default().push(value);
+        }
+        let overlaps = |a: PhysReg, b: PhysReg| a.0.overlaps(a.1, b.0, b.1);
+        for (ops, ids) in self.ops.clone().iter().zip(self.op_ids.clone()) {
+            let events: Vec<OpRegs> = ops.iter().map(|op| op_regs(&context.get_op(*op))).collect();
+            let mut open: Vec<Open> = Vec::new();
+            for (index, regs) in events.iter().enumerate() {
+                for &reg in &regs.phys_uses {
+                    if !allocatable(reg) {
+                        continue;
+                    }
+                    if let Some(slot) = open.iter_mut().find(|slot| overlaps(slot.reg, reg)) {
+                        slot.used = Some(index);
+                    } else {
+                        open.push(Open {
+                            reg,
+                            from: None,
+                            used: Some(index),
+                        });
+                    }
+                }
+                let mut kept = Vec::new();
+                for slot in open {
+                    let ended = regs.phys_defs.iter().any(|&def| overlaps(def, slot.reg));
+                    if ended {
+                        if let Some(used) = slot.used {
+                            self.forbid_between(
+                                &ids,
+                                slot.from,
+                                used,
+                                slot.reg,
+                                &live_after,
+                                &defined_at,
+                            );
+                        }
+                    } else {
+                        kept.push(slot);
+                    }
+                }
+                open = kept;
+                for &reg in &regs.phys_defs {
+                    if !allocatable(reg) {
+                        continue;
+                    }
+                    open.retain(|slot| !overlaps(slot.reg, reg));
+                    open.push(Open {
+                        reg,
+                        from: Some(index),
+                        used: None,
+                    });
+                }
+            }
+            for slot in open {
+                if let Some(used) = slot.used {
+                    self.forbid_between(&ids, slot.from, used, slot.reg, &live_after, &defined_at);
+                }
+            }
+        }
+    }
+
+    // Values live after an op strictly between the write at `from` and the
+    // read at `used` cannot take `reg`. `from` is `None` when the read is of
+    // a register live into the block.
+    fn forbid_between(
+        &mut self,
+        ops: &[u32],
+        from: Option<usize>,
+        used: usize,
+        reg: PhysReg,
+        live_after: &HashMap<u32, Vec<u32>>,
+        defined_at: &HashMap<u32, Vec<u32>>,
+    ) {
+        let start = from.map(|index| index + 1).unwrap_or(0);
+        if start >= used {
+            return;
+        }
+        let register = self.register(reg);
+        for &op in &ops[start..used] {
+            let mut values = Vec::new();
+            if let Some(live) = live_after.get(&op) {
+                values.extend(live);
+            }
+            if let Some(defined) = defined_at.get(&op) {
+                values.extend(defined);
+            }
+            values.sort_unstable();
+            values.dedup();
+            for value in values {
+                let key = [0, register, value];
+                if self.db.lookup(FORBID, &key, &[]).is_some() {
+                    continue;
+                }
+                let row = self.mint(Named::Row);
+                self.db.insert(FORBID, &key, &[], (row, 0), 0);
+            }
+        }
     }
 
     pub(super) fn saturate(&mut self, rules: &[Rule], caches: &mut Caches) {

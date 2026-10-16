@@ -724,6 +724,90 @@ pub struct RegisterAllocationPass {
     spare: Option<tir_relational::Database<(), 1>>,
 }
 
+// Move each instruction that only exists to fill a register the call reads
+// (the argument copies, the `al` count) to immediately before that call.
+// Coloring then sees an empty gap, and the post-allocation shuffle cannot
+// reopen one: the setup and the call already name the register.
+fn sink_fixed_setup(context: &Context, blocks: &[BlockId], abi: &crate::backend::abi::AbiInfo) {
+    let allocatable = |register: PhysReg| {
+        abi.caller_saved
+            .iter()
+            .chain(abi.callee_saved)
+            .any(|known| known.0.overlaps(known.1, register.0, register.1))
+    };
+    let overlaps = |a: PhysReg, b: PhysReg| a.0.overlaps(a.1, b.0, b.1);
+    for &block_id in blocks {
+        let block = context.get_block(block_id);
+        let ops = block.op_ids();
+        if ops.len() < 2 {
+            continue;
+        }
+        let regs: Vec<liveness::OpRegs> = ops
+            .iter()
+            .map(|op| liveness::op_regs(&context.get_op(*op)))
+            .collect();
+        let mut pulled = vec![false; ops.len()];
+        let mut place: Vec<Vec<usize>> = vec![Vec::new(); ops.len()];
+        for call_at in 0..ops.len() {
+            let call = context.get_op(ops[call_at]);
+            if !call.is::<VirtualCallOp>() && !call.is::<VirtualIndirectCallOp>() {
+                continue;
+            }
+            for &reg in &regs[call_at].phys_uses {
+                if !allocatable(reg) {
+                    continue;
+                }
+                let Some(def_at) = (0..call_at)
+                    .rev()
+                    .find(|&index| regs[index].phys_defs.iter().any(|def| overlaps(*def, reg)))
+                else {
+                    continue;
+                };
+                let def = context.get_op(ops[def_at]);
+                if def.is::<VirtualCallOp>() || def.is::<VirtualIndirectCallOp>() || pulled[def_at]
+                {
+                    continue;
+                }
+                let busy = (def_at + 1..call_at).any(|index| {
+                    regs[index]
+                        .phys_uses
+                        .iter()
+                        .any(|used| overlaps(*used, reg))
+                });
+                if busy {
+                    continue;
+                }
+                let results = def.results();
+                let used_between = (def_at + 1..call_at).any(|index| {
+                    context
+                        .get_op(ops[index])
+                        .operands()
+                        .iter()
+                        .any(|operand| results.contains(operand))
+                });
+                if used_between || place[call_at].contains(&def_at) {
+                    continue;
+                }
+                place[call_at].push(def_at);
+                pulled[def_at] = true;
+            }
+            place[call_at].sort_unstable();
+        }
+        if pulled.iter().all(|kept| !kept) {
+            continue;
+        }
+        let mut order = Vec::with_capacity(ops.len());
+        for index in 0..ops.len() {
+            if pulled[index] {
+                continue;
+            }
+            order.extend(place[index].iter().map(|&def| ops[def]));
+            order.push(ops[index]);
+        }
+        block.set_ops(order);
+    }
+}
+
 impl RegisterAllocationPass {
     pub fn with_abi(
         target: Box<dyn TargetRegAlloc>,
@@ -761,6 +845,10 @@ impl Pass for RegisterAllocationPass {
         if blocks.is_empty() {
             return Ok(());
         }
+        // Pre-RA shuffling can park a call's fixed-register setup anywhere the
+        // value edges allow. Put that setup back against the call before the
+        // ranges are built, so nothing is colored into the register it holds.
+        sink_fixed_setup(context, &blocks, self.abi);
         let region = op.op().regions()[0];
 
         let mut precolor = self.lower_fixed_registers(context, op, &blocks)?;
@@ -824,7 +912,18 @@ impl Pass for RegisterAllocationPass {
             classes = Classes::of(context, &blocks);
             remat = rematerializable(context, &blocks, &classes, self.target.as_ref());
         }
-        let db = self.graph(db);
+        let mut db = self.graph(db);
+        // A physical register written for the call (an argument, `al`) is not a
+        // value, so interference does not see it. Anything live between that
+        // write and the call's read must not take the register.
+        let allocatable = |register: PhysReg| {
+            self.abi
+                .caller_saved
+                .iter()
+                .chain(self.abi.callee_saved)
+                .any(|known| known.0.overlaps(known.1, register.0, register.1))
+        };
+        db.forbid_fixed(context, &allocatable);
         let walk = dominance.preorder();
         let restricted = constraints::restrict(
             &self.hierarchy,
