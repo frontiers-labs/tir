@@ -96,6 +96,11 @@ jobs:
         with:
           pattern: benchmark-*
           path: results
+      # A failed job uploads the cases it finished; only complete bundles count.
+      - run: |
+          find results -name results.json | while read -r file; do
+            jq -e '.status == "complete"' "$file" > /dev/null || rm -r "$(dirname "$file")"
+          done
       # Benchboard marks history where the toolchains change.
       - id: environment
         run: echo "key=$(sort -u results/*/environment | paste -sd '|')" >> "$GITHUB_OUTPUT"
