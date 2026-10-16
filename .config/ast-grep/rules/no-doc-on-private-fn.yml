@@ -1,0 +1,23 @@
+id: no-doc-on-private-fn
+language: rust
+severity: error
+message: Doc comment on a function that is not `pub`
+note: Docs belong to public API. Keep a plain `//` comment only for a reason the code cannot show.
+rule:
+  any:
+    - { kind: line_comment, regex: '^///([^/]|$)' }
+    - { kind: block_comment, regex: '^/\*\*([^*/]|$)' }
+  precedes:
+    stopBy:
+      not:
+        any:
+          - kind: attribute_item
+          - kind: line_comment
+          - kind: block_comment
+    kind: function_item
+    not:
+      any:
+        - has: { kind: visibility_modifier, regex: '^pub$' }
+        - inside: { kind: declaration_list, inside: { kind: trait_item } }
+        - inside: { kind: declaration_list, inside: { kind: impl_item, has: { field: trait, regex: '.' } } }
+fix: ''

@@ -1,0 +1,583 @@
+pass-private-collection	core/src/backend/abi.rs	AttributeValue::Dict(Box::new(std::collections::BTreeMap::from([
+pass-private-collection	core/src/backend/abi.rs	let mut next_slot = HashMap::new();
+pass-private-collection	core/src/backend/abi.rs	let mut visited = HashSet::new();
+pass-private-collection	core/src/backend/abi.rs	next_slot: &mut HashMap<ValueKind, usize>,
+pass-private-collection	core/src/backend/abi.rs	next_slot: &mut HashMap<ValueKind, usize>,
+pass-private-collection	core/src/backend/abi.rs	next_slot: &mut HashMap<ValueKind, usize>,
+pass-private-collection	core/src/backend/abi.rs	next_slot: &mut HashMap<ValueKind, usize>,
+pass-private-collection	core/src/backend/abi.rs	next_slot: &mut HashMap<ValueKind, usize>,
+pass-private-collection	core/src/backend/binary/elf.rs	let mut sym_index: HashMap<&str, u32> = HashMap::new();
+pass-private-collection	core/src/backend/binary/elf.rs	let mut sym_index: HashMap<&str, u32> = HashMap::new();
+pass-private-collection	core/src/backend/binary/elf.rs	offsets: HashMap::new(),
+pass-private-collection	core/src/backend/binary/elf.rs	offsets: HashMap<String, u32>,
+pass-private-collection	core/src/backend/binary/writer.rs	block_starts: HashMap<BlockId, u64>,
+pass-private-collection	core/src/backend/binary/writer.rs	let symbols: HashMap<_, _> = state
+pass-private-collection	core/src/backend/block_layout.rs	) -> HashSet<BlockId> {
+pass-private-collection	core/src/backend/block_layout.rs	fn successors(context: &Context, blocks: &[BlockId]) -> HashMap<BlockId, Vec<BlockId>> {
+pass-private-collection	core/src/backend/block_layout.rs	let members: HashSet<_> = blocks.iter().copied().collect();
+pass-private-collection	core/src/backend/block_layout.rs	let mut reachable = HashSet::new();
+pass-private-collection	core/src/backend/block_layout.rs	let ordinal: HashMap<_, _> = blocks
+pass-private-collection	core/src/backend/block_layout.rs	let positions: HashMap<_, _> = order
+pass-private-collection	core/src/backend/block_layout.rs	successors: &HashMap<BlockId, Vec<BlockId>>,
+pass-private-collection	core/src/backend/call_lowering.rs	let mut inputs: HashMap<OpId, Vec<OpId>> = HashMap::new();
+pass-private-collection	core/src/backend/call_lowering.rs	let mut inputs: HashMap<OpId, Vec<OpId>> = HashMap::new();
+pass-private-collection	core/src/backend/call_lowering.rs	let mut next_slot = HashMap::new();
+pass-private-collection	core/src/backend/call_lowering.rs	next_return_register(self.abi, kind, &mut HashMap::new()).ok_or_else(|| {
+pass-private-collection	core/src/backend/call_lowering.rs	prepared_functions: HashSet::new(),
+pass-private-collection	core/src/backend/call_lowering.rs	prepared_functions: HashSet<OpId>,
+pass-private-collection	core/src/backend/call_lowering.rs	pub fn implicit_inputs(&self, context: &Context) -> HashMap<OpId, Vec<OpId>> {
+pass-private-collection	core/src/backend/call_lowering.rs	tuple_argument_elements: HashMap::new(),
+pass-private-collection	core/src/backend/call_lowering.rs	tuple_argument_elements: HashMap<(OpId, usize), Vec<ValueId>>,
+pass-private-collection	core/src/backend/constmat.rs	) -> HashMap<u32, OpId> {
+pass-private-collection	core/src/backend/constmat.rs	let mut def_counts: HashMap<u32, usize> = HashMap::new();
+pass-private-collection	core/src/backend/constmat.rs	let mut def_counts: HashMap<u32, usize> = HashMap::new();
+pass-private-collection	core/src/backend/constmat.rs	let mut defs: HashMap<u32, OpId> = HashMap::new();
+pass-private-collection	core/src/backend/constmat.rs	let mut defs: HashMap<u32, OpId> = HashMap::new();
+pass-private-collection	core/src/backend/exec/footprint.rs	&mut HashSet::new(),
+pass-private-collection	core/src/backend/exec/footprint.rs	let mut seen = HashSet::new();
+pass-private-collection	core/src/backend/exec/footprint.rs	seen: &mut HashSet<NodeId>,
+pass-private-collection	core/src/backend/exec/footprint.rs	tir_symbolic::sem::copy_subgraph(&mut copy, graph, root, &mut HashMap::new());
+pass-private-collection	core/src/backend/isel/automaton.rs	known: HashMap::new(),
+pass-private-collection	core/src/backend/isel/automaton.rs	known: HashMap<Shape, Pattern>,
+pass-private-collection	core/src/backend/isel/automaton.rs	let accessing: HashSet<u32> = accesses.iter().map(|&(label, ..)| label).collect();
+pass-private-collection	core/src/backend/isel/automaton.rs	let class = |classes: &BTreeSet<Offset>, offset: Offset| {
+pass-private-collection	core/src/backend/isel/automaton.rs	let mut classes: HashMap<(&Key, usize), BTreeSet<Offset>> = HashMap::new();
+pass-private-collection	core/src/backend/isel/automaton.rs	let mut classes: HashMap<(&Key, usize), BTreeSet<Offset>> = HashMap::new();
+pass-private-collection	core/src/backend/isel/automaton.rs	let mut classes: HashMap<(&Key, usize), BTreeSet<Offset>> = HashMap::new();
+pass-private-collection	core/src/backend/isel/automaton.rs	let mut listed: HashSet<(&Key, usize)> = HashSet::new();
+pass-private-collection	core/src/backend/isel/automaton.rs	let mut listed: HashSet<(&Key, usize)> = HashSet::new();
+pass-private-collection	core/src/backend/isel/automaton.rs	let mut stepped = HashSet::new();
+pass-private-collection	core/src/backend/isel/flags.rs	let root = normalize_node(graph, root, &mut normalized, &mut HashMap::new(), &bind)?;
+pass-private-collection	core/src/backend/isel/flags.rs	memo: &mut HashMap<NodeId, NodeId>,
+pass-private-collection	core/src/backend/isel/float_refinement.rs	let mut memo: HashMap<_, _> = shared.into_iter().map(|node| (node, source)).collect();
+pass-private-collection	core/src/backend/isel/float_refinement.rs	let shared: HashSet<_> = full
+pass-private-collection	core/src/backend/isel/float_refinement.rs	memo: &mut HashMap<NodeId, NodeId>,
+pass-private-collection	core/src/backend/isel/mod.rs	let mut keys = std::collections::HashMap::new();
+pass-private-collection	core/src/backend/isel/mod.rs	let mut kinds = std::collections::BTreeMap::new();
+pass-private-collection	core/src/backend/isel/mod.rs	let mut reasons = std::collections::BTreeMap::new();
+pass-private-collection	core/src/backend/isel/mod.rs	let mut sizes = std::collections::BTreeMap::new();
+pass-private-collection	core/src/backend/isel/pool.rs	(graph, headed): (&SemEGraph, &HashMap<SymKind, Vec<usize>>),
+pass-private-collection	core/src/backend/isel/pool.rs	captures: BTreeMap::new(),
+pass-private-collection	core/src/backend/isel/pool.rs	captures: BTreeMap<u32, u32>,
+pass-private-collection	core/src/backend/isel/pool.rs	fn named(shape: &Shape, spelled: &mut std::collections::BTreeSet<(SymKind, u64)>) {
+pass-private-collection	core/src/backend/isel/pool.rs	fn singles(tiles: &[Tile], spelled: &std::collections::BTreeSet<(SymKind, u64)>) -> Vec<Rows> {
+pass-private-collection	core/src/backend/isel/pool.rs	fn spelled(rules: &[Rule], theory: &Theory) -> std::collections::BTreeSet<(SymKind, u64)> {
+pass-private-collection	core/src/backend/isel/pool.rs	let general: HashMap<u32, &Candidate> = alone
+pass-private-collection	core/src/backend/isel/pool.rs	let mut classes: HashMap<Ref, SmallVec<[usize; 4]>> = HashMap::new();
+pass-private-collection	core/src/backend/isel/pool.rs	let mut classes: HashMap<Ref, SmallVec<[usize; 4]>> = HashMap::new();
+pass-private-collection	core/src/backend/isel/pool.rs	let mut distinct = std::collections::HashSet::new();
+pass-private-collection	core/src/backend/isel/pool.rs	let mut distinct: std::collections::HashSet<Rows> = sides.iter().cloned().collect();
+pass-private-collection	core/src/backend/isel/pool.rs	let mut headed: HashMap<SymKind, Vec<usize>> = HashMap::new();
+pass-private-collection	core/src/backend/isel/pool.rs	let mut headed: HashMap<SymKind, Vec<usize>> = HashMap::new();
+pass-private-collection	core/src/backend/isel/pool.rs	let mut known: HashMap<(u32, usize, Operand), Ref> = HashMap::new();
+pass-private-collection	core/src/backend/isel/pool.rs	let mut known: HashMap<(u32, usize, Operand), Ref> = HashMap::new();
+pass-private-collection	core/src/backend/isel/pool.rs	let mut sized: HashMap<_, SmallVec<[usize; 4]>> = HashMap::new();
+pass-private-collection	core/src/backend/isel/pool.rs	let mut sized: HashMap<_, SmallVec<[usize; 4]>> = HashMap::new();
+pass-private-collection	core/src/backend/isel/pool.rs	let mut spelled = std::collections::BTreeSet::new();
+pass-private-collection	core/src/backend/isel/pool.rs	let mut spelled = std::collections::HashSet::new();
+pass-private-collection	core/src/backend/isel/pool.rs	plain: std::collections::BTreeSet<u32>,
+pass-private-collection	core/src/backend/isel/pool.rs	type Admitted = std::cell::RefCell<HashMap<(usize, u32, SmallVec<[Arg; 4]>), bool>>;
+pass-private-collection	core/src/backend/isel/pool.rs	type Rooted = HashMap<u32, SmallVec<[u32; 4]>>;
+pass-private-collection	core/src/backend/isel/relaxation.rs	&mut HashMap::new(),
+pass-private-collection	core/src/backend/isel/relaxation.rs	&mut HashMap::new(),
+pass-private-collection	core/src/backend/isel/relaxation.rs	&mut HashMap::new(),
+pass-private-collection	core/src/backend/isel/relaxation.rs	immediate_symbols: &HashSet<u32>,
+pass-private-collection	core/src/backend/isel/relaxation.rs	let immediate_symbols: HashSet<u32> = rule
+pass-private-collection	core/src/backend/isel/relaxation.rs	let mut memo = HashMap::new();
+pass-private-collection	core/src/backend/isel/relaxation.rs	let mut seen = HashSet::new();
+pass-private-collection	core/src/backend/isel/relaxation.rs	tir_symbolic::sem::copy_subgraph(&mut observed, guarded, observed_root, &mut HashMap::new());
+pass-private-collection	core/src/backend/isel/relaxation.rs	tir_symbolic::sem::copy_subgraph(&mut value_pattern, &rule.pattern, root, &mut HashMap::new());
+pass-private-collection	core/src/backend/isel/rules.rs	let mut pins = std::collections::BTreeMap::new();
+pass-private-collection	core/src/backend/isel/select.rs	fn shapes(automaton: &Automaton) -> HashMap<Pattern, SmallVec<[Pattern; 5]>> {
+pass-private-collection	core/src/backend/isel/select.rs	let classes: HashMap<ValueId, ClassId> = values
+pass-private-collection	core/src/backend/isel/select.rs	let mut held: HashMap<ClassId, Vec<ValueId>> = HashMap::new();
+pass-private-collection	core/src/backend/isel/select.rs	let mut held: HashMap<ClassId, Vec<ValueId>> = HashMap::new();
+pass-private-collection	core/src/backend/isel/select.rs	let mut keeping = std::collections::BTreeMap::new();
+pass-private-collection	core/src/backend/isel/select.rs	let mut shapes = HashMap::new();
+pass-private-collection	core/src/backend/isel/select.rs	let mut uncovered = std::collections::BTreeMap::new();
+pass-private-collection	core/src/backend/isel/select.rs	let readers: std::collections::BTreeSet<_> = values.iter().map(reader).collect();
+pass-private-collection	core/src/backend/isel/select.rs	let regions: std::collections::BTreeSet<_> =
+pass-private-collection	core/src/backend/isel/select.rs	let states: HashMap<u32, Pattern> = automaton.chains.iter().copied().zip(0..).collect();
+pass-private-collection	core/src/backend/isel/select.rs	several: HashMap<(usize, SmallVec<[u64; 4]>), Defined>,
+pass-private-collection	core/src/backend/isel/synth.rs	copied: &mut std::collections::HashMap<NodeId, NodeId>,
+pass-private-collection	core/src/backend/isel/synth.rs	let mut copied = std::collections::HashMap::new();
+pass-private-collection	core/src/backend/isel/synth.rs	let mut named = std::collections::BTreeSet::new();
+pass-private-collection	core/src/backend/liveness.rs	let mut seen: HashMap<ValueId, Option<RegClassId>> = HashMap::new();
+pass-private-collection	core/src/backend/liveness.rs	let mut seen: HashMap<ValueId, Option<RegClassId>> = HashMap::new();
+pass-private-collection	core/src/backend/liveness.rs	pub allowed_indices: HashMap<u32, BTreeSet<u16>>,
+pass-private-collection	core/src/backend/liveness.rs	pub allowed_indices: HashMap<u32, BTreeSet<u16>>,
+pass-private-collection	core/src/backend/liveness.rs	pub class_conflicts: HashMap<u32, (RegClassId, RegClassId)>,
+pass-private-collection	core/src/backend/liveness.rs	pub vreg_class: HashMap<u32, RegClassId>,
+pass-private-collection	core/src/backend/liveness.rs	seen: &mut HashMap<ValueId, Option<RegClassId>>,
+pass-private-collection	core/src/backend/machine_cfg.rs	let indices: HashMap<_, _> = blocks.iter().enumerate().map(|(i, &b)| (b, i)).collect();
+pass-private-collection	core/src/backend/machine_cfg.rs	pub(super) fn loop_depths(blocks: &[BlockId], dominance: &Dominance) -> HashMap<BlockId, u32> {
+pass-private-collection	core/src/backend/machine_cfg.rs	successors: &HashMap<BlockId, Vec<BlockId>>,
+pass-private-collection	core/src/backend/parser.rs	disabled_mnemonics: std::collections::HashSet<String>,
+pass-private-collection	core/src/backend/parser.rs	disabled_mnemonics: std::collections::HashSet<String>,
+pass-private-collection	core/src/backend/parser.rs	fn resolve_labels(context: &tir::Context, block: &BlockHandle, labels: &HashMap<String, BlockId>) {
+pass-private-collection	core/src/backend/parser.rs	instruction_parsers: HashMap<String, Vec<AsmInstructionParser>>,
+pass-private-collection	core/src/backend/parser.rs	let mut labels: HashMap<String, BlockId> = HashMap::new();
+pass-private-collection	core/src/backend/parser.rs	let mut labels: HashMap<String, BlockId> = HashMap::new();
+pass-private-collection	core/src/backend/parser.rs	pub fn new(instruction_parsers: HashMap<String, Vec<AsmInstructionParser>>) -> Self {
+pass-private-collection	core/src/backend/pbqp.rs	between: HashMap::with_capacity_and_hasher(
+pass-private-collection	core/src/backend/pbqp.rs	between: HashMap<(usize, usize), usize, FxBuildHasher>,
+pass-private-collection	core/src/backend/pbqp.rs	edges: HashMap<(usize, usize), Rc<Matrix>, FxBuildHasher>,
+pass-private-collection	core/src/backend/pbqp.rs	let mut ids = HashMap::new();
+pass-private-collection	core/src/backend/pbqp.rs	let mut seen = std::collections::HashSet::new();
+pass-private-collection	core/src/backend/regalloc.rs	) -> Result<HashMap<u32, PhysReg>, PassError> {
+pass-private-collection	core/src/backend/regalloc.rs	) -> Result<HashMap<u32, PhysReg>, RegAllocError> {
+pass-private-collection	core/src/backend/regalloc.rs	assignment: &HashMap<u32, PhysReg>,
+pass-private-collection	core/src/backend/regalloc.rs	assignment: &HashMap<u32, PhysReg>,
+pass-private-collection	core/src/backend/regalloc.rs	let index_of: HashMap<BlockId, usize> = blocks
+pass-private-collection	core/src/backend/regalloc.rs	let mut forbidden: HashMap<usize, Vec<PhysReg>> = HashMap::new();
+pass-private-collection	core/src/backend/regalloc.rs	let mut forbidden: HashMap<usize, Vec<PhysReg>> = HashMap::new();
+pass-private-collection	core/src/backend/regalloc.rs	let mut list_ids: HashMap<Vec<PhysReg>, usize> = HashMap::new();
+pass-private-collection	core/src/backend/regalloc.rs	let mut list_ids: HashMap<Vec<PhysReg>, usize> = HashMap::new();
+pass-private-collection	core/src/backend/regalloc.rs	let mut matrices: HashMap<(usize, usize), Option<Rc<pbqp::Matrix>>> = HashMap::new();
+pass-private-collection	core/src/backend/regalloc.rs	let mut matrices: HashMap<(usize, usize), Option<Rc<pbqp::Matrix>>> = HashMap::new();
+pass-private-collection	core/src/backend/regalloc.rs	let mut next_slot = HashMap::new();
+pass-private-collection	core/src/backend/regalloc.rs	let mut node_of: HashMap<u32, usize> = HashMap::with_capacity(order.len());
+pass-private-collection	core/src/backend/regalloc.rs	let mut node_of: HashMap<u32, usize> = HashMap::with_capacity(order.len());
+pass-private-collection	core/src/backend/regalloc.rs	let mut orders: HashMap<RegClassId, Vec<PhysReg>> = HashMap::new();
+pass-private-collection	core/src/backend/regalloc.rs	let mut orders: HashMap<RegClassId, Vec<PhysReg>> = HashMap::new();
+pass-private-collection	core/src/backend/regalloc.rs	let mut precolor = HashMap::new();
+pass-private-collection	core/src/backend/regalloc.rs	let mut preferences: HashMap<usize, Vec<(PhysReg, u64)>> = HashMap::new();
+pass-private-collection	core/src/backend/regalloc.rs	let mut preferences: HashMap<usize, Vec<(PhysReg, u64)>> = HashMap::new();
+pass-private-collection	core/src/backend/regalloc.rs	let pins: HashMap<ValueId, PhysReg> = precolor
+pass-private-collection	core/src/backend/regalloc.rs	precolor: &HashMap<u32, PhysReg>,
+pass-private-collection	core/src/backend/regalloc.rs	precolor: &HashMap<u32, PhysReg>,
+pass-private-collection	core/src/backend/regalloc.rs	precolor: &HashMap<u32, PhysReg>,
+pass-private-collection	core/src/backend/regalloc.rs	precolor: &mut HashMap<u32, PhysReg>,
+pass-private-collection	core/src/backend/regalloc.rs	precolor: &mut HashMap<u32, PhysReg>,
+pass-private-collection	core/src/backend/regalloc.rs	precolor: &mut HashMap<u32, PhysReg>,
+pass-private-collection	core/src/backend/regalloc.rs	restricted: &HashMap<u32, constraints::Set>,
+pass-private-collection	core/src/backend/regalloc.rs	slot_classes: HashMap<ValueId, Option<RegClassId>>,
+pass-private-collection	core/src/backend/regalloc.rs	successors: HashMap<BlockId, Vec<BlockId>>,
+pass-private-collection	core/src/backend/regalloc/belady.rs	dead: HashSet::new(),
+pass-private-collection	core/src/backend/regalloc/belady.rs	dead: HashSet<u32>,
+pass-private-collection	core/src/backend/regalloc/belady.rs	defs: HashMap::new(),
+pass-private-collection	core/src/backend/regalloc/belady.rs	defs: HashMap<u32, (usize, usize, Name)>,
+pass-private-collection	core/src/backend/regalloc/belady.rs	files.push((class.file(), HashSet::new()));
+pass-private-collection	core/src/backend/regalloc/belady.rs	fn retain(&mut self, shapes: &HashMap<u32, Shape>, keep: impl Fn(u32) -> bool) {
+pass-private-collection	core/src/backend/regalloc/belady.rs	fn timed<'a>(&'a self, remat: &'a HashMap<u32, OpId>) -> impl Iterator<Item = u32> + 'a {
+pass-private-collection	core/src/backend/regalloc/belady.rs	let block_index: HashMap<u32, usize> = db
+pass-private-collection	core/src/backend/regalloc/belady.rs	let index_of: HashMap<BlockId, usize> = blocks
+pass-private-collection	core/src/backend/regalloc/belady.rs	let livein: Vec<HashSet<u32>> = blocks
+pass-private-collection	core/src/backend/regalloc/belady.rs	let mut at = HashMap::new();
+pass-private-collection	core/src/backend/regalloc/belady.rs	let mut chains: HashMap<Slot, SlotChain> = HashMap::new();
+pass-private-collection	core/src/backend/regalloc/belady.rs	let mut chains: HashMap<Slot, SlotChain> = HashMap::new();
+pass-private-collection	core/src/backend/regalloc/belady.rs	let mut files: Vec<(&'static str, HashSet<u16>)> = Vec::new();
+pass-private-collection	core/src/backend/regalloc/belady.rs	let mut first: HashMap<u32, u64> = HashMap::new();
+pass-private-collection	core/src/backend/regalloc/belady.rs	let mut first: HashMap<u32, u64> = HashMap::new();
+pass-private-collection	core/src/backend/regalloc/belady.rs	let mut first: Vec<HashMap<u32, u64>> = Vec::with_capacity(blocks.len());
+pass-private-collection	core/src/backend/regalloc/belady.rs	let mut held: HashMap<(usize, u32), Range<usize>> = HashMap::new();
+pass-private-collection	core/src/backend/regalloc/belady.rs	let mut held: HashMap<(usize, u32), Range<usize>> = HashMap::new();
+pass-private-collection	core/src/backend/regalloc/belady.rs	let mut position: HashMap<u32, (usize, usize)> = HashMap::new();
+pass-private-collection	core/src/backend/regalloc/belady.rs	let mut position: HashMap<u32, (usize, usize)> = HashMap::new();
+pass-private-collection	core/src/backend/regalloc/belady.rs	let mut reads: HashMap<u32, Vec<usize>> = HashMap::new();
+pass-private-collection	core/src/backend/regalloc/belady.rs	let mut reads: HashMap<u32, Vec<usize>> = HashMap::new();
+pass-private-collection	core/src/backend/regalloc/belady.rs	let mut reads: Vec<HashSet<u32>> = vec![HashSet::new(); blocks.len()];
+pass-private-collection	core/src/backend/regalloc/belady.rs	let mut reads: Vec<HashSet<u32>> = vec![HashSet::new(); blocks.len()];
+pass-private-collection	core/src/backend/regalloc/belady.rs	let mut seen: HashSet<RegClassId> = HashSet::new();
+pass-private-collection	core/src/backend/regalloc/belady.rs	let mut seen: HashSet<RegClassId> = HashSet::new();
+pass-private-collection	core/src/backend/regalloc/belady.rs	let mut shapes = HashMap::new();
+pass-private-collection	core/src/backend/regalloc/belady.rs	let mut slots: HashMap<Slot, i64> = HashMap::new();
+pass-private-collection	core/src/backend/regalloc/belady.rs	let mut slots: HashMap<Slot, i64> = HashMap::new();
+pass-private-collection	core/src/backend/regalloc/belady.rs	let pinned: HashSet<u32> = db.table(db::PIN).column(1).iter().copied().collect();
+pass-private-collection	core/src/backend/regalloc/belady.rs	let pinned_units: HashMap<u32, Vec<(usize, u16)>> = pins
+pass-private-collection	core/src/backend/regalloc/belady.rs	liveout: HashSet<u32>,
+pass-private-collection	core/src/backend/regalloc/belady.rs	memory: HashSet::new(),
+pass-private-collection	core/src/backend/regalloc/belady.rs	memory: HashSet<u32>,
+pass-private-collection	core/src/backend/regalloc/belady.rs	next_out: HashMap<u32, u64>,
+pass-private-collection	core/src/backend/regalloc/belady.rs	pinned: HashSet<u32>,
+pass-private-collection	core/src/backend/regalloc/belady.rs	reads: HashSet<u32>,
+pass-private-collection	core/src/backend/regalloc/belady.rs	remat: &HashMap<u32, OpId>,
+pass-private-collection	core/src/backend/regalloc/belady.rs	remat: &HashMap<u32, OpId>,
+pass-private-collection	core/src/backend/regalloc/belady.rs	remat: HashMap<u32, OpId>,
+pass-private-collection	core/src/backend/regalloc/belady.rs	shapes: HashMap<u32, Shape>,
+pass-private-collection	core/src/backend/regalloc/constraints.rs	) -> HashSet<u32> {
+pass-private-collection	core/src/backend/regalloc/constraints.rs	.filter(|(_, set): &(_, BTreeSet<u16>)| !set.is_empty())
+pass-private-collection	core/src/backend/regalloc/constraints.rs	constrained: &HashSet<u32>,
+pass-private-collection	core/src/backend/regalloc/constraints.rs	let mut constrained = HashSet::new();
+pass-private-collection	core/src/backend/regalloc/constraints.rs	let mut constraints: HashMap<u32, Option<(Set, Set)>> = HashMap::new();
+pass-private-collection	core/src/backend/regalloc/constraints.rs	let mut constraints: HashMap<u32, Option<(Set, Set)>> = HashMap::new();
+pass-private-collection	core/src/backend/regalloc/constraints.rs	let mut group_of: HashMap<u32, usize> = HashMap::new();
+pass-private-collection	core/src/backend/regalloc/constraints.rs	let mut group_of: HashMap<u32, usize> = HashMap::new();
+pass-private-collection	core/src/backend/regalloc/constraints.rs	let mut local: HashSet<u32> = results.iter().copied().collect();
+pass-private-collection	core/src/backend/regalloc/constraints.rs	let mut placed: HashSet<u32> = HashSet::with_capacity(peo.len());
+pass-private-collection	core/src/backend/regalloc/constraints.rs	let mut placed: HashSet<u32> = HashSet::with_capacity(peo.len());
+pass-private-collection	core/src/backend/regalloc/constraints.rs	let mut slots: HashMap<u32, Slots> = HashMap::new();
+pass-private-collection	core/src/backend/regalloc/constraints.rs	let mut slots: HashMap<u32, Slots> = HashMap::new();
+pass-private-collection	core/src/backend/regalloc/constraints.rs	let mut taken: HashMap<u32, Set> = HashMap::new();
+pass-private-collection	core/src/backend/regalloc/constraints.rs	let mut taken: HashMap<u32, Set> = HashMap::new();
+pass-private-collection	core/src/backend/regalloc/constraints.rs	let sets: Vec<(RegClassId, BTreeSet<u16>)> = info
+pass-private-collection	core/src/backend/regalloc/constraints.rs	let wide: BTreeSet<&str> = sets
+pass-private-collection	core/src/backend/regalloc/constraints.rs	precolor: &HashMap<u32, PhysReg>,
+pass-private-collection	core/src/backend/regalloc/constraints.rs	precolor: &HashMap<u32, PhysReg>,
+pass-private-collection	core/src/backend/regalloc/constraints.rs	precolor: &HashMap<u32, PhysReg>,
+pass-private-collection	core/src/backend/regalloc/constraints.rs	precolor: &HashMap<u32, PhysReg>,
+pass-private-collection	core/src/backend/regalloc/constraints.rs	pub(super) fn slots(db: &RegAllocDb, ops: &HashSet<u32>) -> HashMap<u32, Slots> {
+pass-private-collection	core/src/backend/regalloc/constraints.rs	pub(super) fn slots(db: &RegAllocDb, ops: &HashSet<u32>) -> HashMap<u32, Slots> {
+pass-private-collection	core/src/backend/regalloc/constraints.rs	pub(super) sets: HashMap<u32, Set>,
+pass-private-collection	core/src/backend/regalloc/copies.rs	) -> HashMap<u32, OpId> {
+pass-private-collection	core/src/backend/regalloc/copies.rs	assignment: &HashMap<u32, PhysReg>,
+pass-private-collection	core/src/backend/regalloc/copies.rs	assignment: &mut HashMap<u32, PhysReg>,
+pass-private-collection	core/src/backend/regalloc/copies.rs	assignment: &mut HashMap<u32, PhysReg>,
+pass-private-collection	core/src/backend/regalloc/copies.rs	assignment: &mut HashMap<u32, PhysReg>,
+pass-private-collection	core/src/backend/regalloc/copies.rs	constants: &HashMap<u32, OpId>,
+pass-private-collection	core/src/backend/regalloc/copies.rs	constants: &HashMap<u32, OpId>,
+pass-private-collection	core/src/backend/regalloc/copies.rs	constants: &HashMap<u32, OpId>,
+pass-private-collection	core/src/backend/regalloc/copies.rs	constants: &HashMap<u32, OpId>,
+pass-private-collection	core/src/backend/regalloc/copies.rs	fn named_live(context: &Context, op: OpId, assignment: &HashMap<u32, PhysReg>) -> Vec<PhysReg> {
+pass-private-collection	core/src/backend/regalloc/copies.rs	fn pinned(context: &Context, assignment: &mut HashMap<u32, PhysReg>, register: PhysReg) -> ValueId {
+pass-private-collection	core/src/backend/regalloc/copies.rs	fn scratch(abi: &AbiInfo, assignment: &HashMap<u32, PhysReg>, class: RegClassId) -> Vec<PhysReg> {
+pass-private-collection	core/src/backend/regalloc/copies.rs	let derived: HashSet<ValueId> = pairs
+pass-private-collection	core/src/backend/regalloc/copies.rs	let mut copies: HashMap<u32, OpId> = HashMap::new();
+pass-private-collection	core/src/backend/regalloc/copies.rs	let mut copies: HashMap<u32, OpId> = HashMap::new();
+pass-private-collection	core/src/backend/regalloc/copies.rs	let mut incoming: HashMap<ValueId, Vec<ValueId>> = HashMap::new();
+pass-private-collection	core/src/backend/regalloc/copies.rs	let mut incoming: HashMap<ValueId, Vec<ValueId>> = HashMap::new();
+pass-private-collection	core/src/backend/regalloc/copies.rs	let mut known: HashMap<ValueId, Option<OpId>> = HashMap::new();
+pass-private-collection	core/src/backend/regalloc/copies.rs	let mut known: HashMap<ValueId, Option<OpId>> = HashMap::new();
+pass-private-collection	core/src/backend/regalloc/copies.rs	let mut live: HashMap<u32, Vec<PhysReg>> = HashMap::new();
+pass-private-collection	core/src/backend/regalloc/copies.rs	let mut live: HashMap<u32, Vec<PhysReg>> = HashMap::new();
+pass-private-collection	core/src/backend/regalloc/copies.rs	let mut livein: HashMap<u32, Vec<u32>> = HashMap::new();
+pass-private-collection	core/src/backend/regalloc/copies.rs	let mut livein: HashMap<u32, Vec<u32>> = HashMap::new();
+pass-private-collection	core/src/backend/regalloc/copies.rs	let mut update = |known: &mut HashMap<ValueId, Option<OpId>>, value, next| {
+pass-private-collection	core/src/backend/regalloc/copies.rs	let state = |known: &HashMap<ValueId, Option<OpId>>, value: ValueId| -> Option<Option<OpId>> {
+pass-private-collection	core/src/backend/regalloc/copies.rs	mut constants: HashMap<u32, OpId>,
+pass-private-collection	core/src/backend/regalloc/db.rs	.map_or_else(HashSet::new, |&entry| stack_arguments(context, entry));
+pass-private-collection	core/src/backend/regalloc/db.rs	block_index: HashMap::new(),
+pass-private-collection	core/src/backend/regalloc/db.rs	block_index: HashMap<BlockId, usize>,
+pass-private-collection	core/src/backend/regalloc/db.rs	fn stack_arguments(context: &Context, entry: BlockId) -> HashSet<ValueId> {
+pass-private-collection	core/src/backend/regalloc/db.rs	let defined: HashSet<ValueId> = block
+pass-private-collection	core/src/backend/regalloc/db.rs	let mut defs: HashMap<u32, u32> = HashMap::new();
+pass-private-collection	core/src/backend/regalloc/db.rs	let mut defs: HashMap<u32, u32> = HashMap::new();
+pass-private-collection	core/src/backend/regalloc/db.rs	pub(super) pins: &'a HashMap<ValueId, PhysReg>,
+pass-private-collection	core/src/backend/regalloc/db.rs	values: HashMap::default(),
+pass-private-collection	core/src/backend/regalloc/db.rs	values: HashMap<ValueId, u32, tir_adt::FxBuildHasher>,
+pass-private-collection	core/src/backend/regalloc/split.rs	) -> (HashMap<u32, Vec<usize>>, Vec<Entry>) {
+pass-private-collection	core/src/backend/regalloc/split.rs	constrained: &HashSet<u32>,
+pass-private-collection	core/src/backend/regalloc/split.rs	end: HashMap::new(),
+pass-private-collection	core/src/backend/regalloc/split.rs	end: HashMap<(usize, u32), ValueId>,
+pass-private-collection	core/src/backend/regalloc/split.rs	index: &HashMap<BlockId, usize>,
+pass-private-collection	core/src/backend/regalloc/split.rs	let block_of: HashMap<u32, usize> = db
+pass-private-collection	core/src/backend/regalloc/split.rs	let index: HashMap<BlockId, usize> = blocks.iter().enumerate().map(|(i, &b)| (b, i)).collect();
+pass-private-collection	core/src/backend/regalloc/split.rs	let livein: HashSet<(usize, u32)> = rows(db::LIVEIN)
+pass-private-collection	core/src/backend/regalloc/split.rs	let mut meet = HashMap::new();
+pass-private-collection	core/src/backend/regalloc/split.rs	let mut met = BTreeSet::new();
+pass-private-collection	core/src/backend/regalloc/split.rs	let mut names: HashMap<u32, Vec<(usize, u32, ValueId)>> = HashMap::new();
+pass-private-collection	core/src/backend/regalloc/split.rs	let mut names: HashMap<u32, Vec<(usize, u32, ValueId)>> = HashMap::new();
+pass-private-collection	core/src/backend/regalloc/split.rs	let mut op_block: HashMap<u32, usize> = HashMap::new();
+pass-private-collection	core/src/backend/regalloc/split.rs	let mut op_block: HashMap<u32, usize> = HashMap::new();
+pass-private-collection	core/src/backend/regalloc/split.rs	let mut params: HashMap<(usize, u32), ValueId> = HashMap::new();
+pass-private-collection	core/src/backend/regalloc/split.rs	let mut params: HashMap<(usize, u32), ValueId> = HashMap::new();
+pass-private-collection	core/src/backend/regalloc/split.rs	let mut seen = HashSet::new();
+pass-private-collection	core/src/backend/regalloc/split.rs	let mut writes: HashMap<u32, Vec<usize>> = HashMap::new();
+pass-private-collection	core/src/backend/regalloc/split.rs	let mut writes: HashMap<u32, Vec<usize>> = HashMap::new();
+pass-private-collection	core/src/backend/regalloc/split.rs	let params: HashSet<u32> = db.table(db::PARAM).column(2).iter().copied().collect();
+pass-private-collection	core/src/backend/regalloc/split.rs	names: &'a HashMap<u32, Vec<(usize, u32, ValueId)>>,
+pass-private-collection	core/src/backend/regalloc/split.rs	params: &'a HashMap<(usize, u32), ValueId>,
+pass-private-collection	core/src/backend/regalloc/split.rs	precolor: &HashMap<u32, PhysReg>,
+pass-private-collection	core/src/backend/regalloc/split.rs	precolor: &mut HashMap<u32, PhysReg>,
+pass-private-collection	core/src/backend/regalloc/split.rs	slots: &HashMap<u32, constraints::Slots>,
+pass-private-collection	core/src/backend/regalloc/split.rs	successors: &HashMap<BlockId, Vec<BlockId>>,
+pass-private-collection	core/src/backend/regalloc/split.rs	successors: &mut HashMap<BlockId, Vec<BlockId>>,
+pass-private-collection	core/src/backend/regalloc/split.rs	successors: &mut HashMap<BlockId, Vec<BlockId>>,
+pass-private-collection	core/src/backend/registers.rs	_ => std::collections::BTreeMap::new(),
+pass-private-collection	core/src/backend/registers.rs	pub struct RegAssignment(HashMap<ValueId, PhysReg>);
+pass-private-collection	core/src/backend/verify.rs	let mut seen = HashSet::new();
+pass-private-collection	core/src/backend/verify.rs	let record = |value: ValueId, seen: &mut HashSet<ValueId>, values: &mut Vec<ValueId>| {
+pass-private-collection	core/src/passes/affine/lower.rs	) -> HashMap<ValueId, ValueId> {
+pass-private-collection	core/src/passes/affine/lower.rs	bound: &HashMap<usize, ValueId>,
+pass-private-collection	core/src/passes/affine/lower.rs	bound: &HashMap<usize, ValueId>,
+pass-private-collection	core/src/passes/affine/lower.rs	bound: &HashMap<usize, ValueId>,
+pass-private-collection	core/src/passes/affine/lower.rs	bound: &mut HashMap<usize, ValueId>,
+pass-private-collection	core/src/passes/affine/lower.rs	bound: &mut HashMap<usize, ValueId>,
+pass-private-collection	core/src/passes/affine/lower.rs	built: HashMap::new(),
+pass-private-collection	core/src/passes/affine/lower.rs	built: HashMap<usize, OpId>,
+pass-private-collection	core/src/passes/affine/lower.rs	latch_map: HashMap::new(),
+pass-private-collection	core/src/passes/affine/lower.rs	latch_map: HashMap<ValueId, ValueId>,
+pass-private-collection	core/src/passes/affine/lower.rs	let left = self.emit(&levels, 0, &mut HashMap::new(), states, site)?;
+pass-private-collection	core/src/passes/affine/lower.rs	let mut bindings: HashMap<ValueId, ValueId> = self
+pass-private-collection	core/src/passes/affine/lower.rs	let mut named: std::collections::HashSet<ValueId> = std::collections::HashSet::new();
+pass-private-collection	core/src/passes/affine/lower.rs	let mut named: std::collections::HashSet<ValueId> = std::collections::HashSet::new();
+pass-private-collection	core/src/passes/affine/lower.rs	let mut seen: std::collections::HashSet<crate::RegionId> = std::collections::HashSet::new();
+pass-private-collection	core/src/passes/affine/lower.rs	let mut seen: std::collections::HashSet<crate::RegionId> = std::collections::HashSet::new();
+pass-private-collection	core/src/passes/affine/lower.rs	tile_steps: HashMap::new(),
+pass-private-collection	core/src/passes/affine/lower.rs	tile_steps: HashMap<usize, ValueId>,
+pass-private-collection	core/src/passes/affine/recurrence.rs	interior: HashSet<ValueId>,
+pass-private-collection	core/src/passes/affine/recurrence.rs	known: HashMap::new(),
+pass-private-collection	core/src/passes/affine/recurrence.rs	known: HashMap<ValueId, Option<Recurrence>>,
+pass-private-collection	core/src/passes/affine/recurrence.rs	let inputs: HashSet<_> = candidates
+pass-private-collection	core/src/passes/affine/recurrence.rs	let mut interior = HashSet::new();
+pass-private-collection	core/src/passes/affine/recurrence.rs	terms: BTreeMap::from([(value, 1)]),
+pass-private-collection	core/src/passes/affine/recurrence.rs	terms: BTreeMap::new(),
+pass-private-collection	core/src/passes/affine/recurrence.rs	terms: BTreeMap<ValueId, u64>,
+pass-private-collection	core/src/passes/affine/unroll.rs	bindings: &HashMap<ValueId, ValueId>,
+pass-private-collection	core/src/passes/affine/unroll.rs	let mut bindings: HashMap<ValueId, ValueId> = arguments
+pass-private-collection	core/src/passes/dce.rs	let mut named: HashSet<ValueId> = regions
+pass-private-collection	core/src/passes/dce.rs	let mut register_producers: HashMap<OpId, Vec<OpId>> = HashMap::new();
+pass-private-collection	core/src/passes/dce.rs	let mut register_producers: HashMap<OpId, Vec<OpId>> = HashMap::new();
+pass-private-collection	core/src/passes/dce.rs	let mut register_users = HashMap::new();
+pass-private-collection	core/src/passes/dce.rs	named: &HashSet<ValueId>,
+pass-private-collection	core/src/passes/destructure.rs	) -> HashSet<OpId> {
+pass-private-collection	core/src/passes/destructure.rs	cone: &HashSet<OpId>,
+pass-private-collection	core/src/passes/destructure.rs	let continue_only: HashSet<OpId> = continue_cone.difference(&header_ops).copied().collect();
+pass-private-collection	core/src/passes/destructure.rs	let exit_only: HashSet<OpId> = exit_cone.difference(&header_ops).copied().collect();
+pass-private-collection	core/src/passes/destructure.rs	let header_ops: HashSet<OpId> = predicate
+pass-private-collection	core/src/passes/destructure.rs	let implicit: HashSet<OpId> = order
+pass-private-collection	core/src/passes/destructure.rs	let inputs: Vec<HashSet<OpId>> = order
+pass-private-collection	core/src/passes/destructure.rs	let mut arms: HashMap<usize, Edge> = HashMap::default();
+pass-private-collection	core/src/passes/destructure.rs	let mut arms: HashMap<usize, Edge> = HashMap::default();
+pass-private-collection	core/src/passes/destructure.rs	let mut cone = HashSet::default();
+pass-private-collection	core/src/passes/destructure.rs	let mut ready: BinaryHeap<Reverse<usize>> = unread.map(Reverse).collect();
+pass-private-collection	core/src/passes/destructure.rs	let mut ready: std::collections::BTreeSet<_> = pending
+pass-private-collection	core/src/passes/destructure.rs	let placed: HashSet<OpId> = header_ops
+pass-private-collection	core/src/passes/destructure.rs	outgoing: &[HashSet<usize>],
+pass-private-collection	core/src/passes/destructure.rs	placed: &HashSet<OpId>,
+pass-private-collection	core/src/passes/destructure.rs	placed: &HashSet<OpId>,
+pass-private-collection	core/src/passes/destructure.rs	type HashMap<K, V> = std::collections::HashMap<K, V, tir_adt::FxBuildHasher>;
+pass-private-collection	core/src/passes/destructure.rs	type HashMap<K, V> = std::collections::HashMap<K, V, tir_adt::FxBuildHasher>;
+pass-private-collection	core/src/passes/destructure.rs	type HashSet<K> = std::collections::HashSet<K, tir_adt::FxBuildHasher>;
+pass-private-collection	core/src/passes/destructure.rs	type HashSet<K> = std::collections::HashSet<K, tir_adt::FxBuildHasher>;
+pass-private-collection	core/src/passes/destructure/recovery.rs	) -> HashSet<OpId> {
+pass-private-collection	core/src/passes/destructure/recovery.rs	active_controls: HashSet::default(),
+pass-private-collection	core/src/passes/destructure/recovery.rs	active_controls: HashSet<ControlId>,
+pass-private-collection	core/src/passes/destructure/recovery.rs	boundaries: HashMap::default(),
+pass-private-collection	core/src/passes/destructure/recovery.rs	boundaries: HashMap<OpId, BoundarySnapshot>,
+pass-private-collection	core/src/passes/destructure/recovery.rs	constants: HashMap::default(),
+pass-private-collection	core/src/passes/destructure/recovery.rs	constants: HashMap<ValueId, u64>,
+pass-private-collection	core/src/passes/destructure/recovery.rs	control_at: HashMap::default(),
+pass-private-collection	core/src/passes/destructure/recovery.rs	control_at: HashMap<Point, ControlId>,
+pass-private-collection	core/src/passes/destructure/recovery.rs	control_by_test: HashMap::default(),
+pass-private-collection	core/src/passes/destructure/recovery.rs	control_by_test: HashMap<(OpId, Test), ControlRouting>,
+pass-private-collection	core/src/passes/destructure/recovery.rs	control_only: HashSet<ValueId>,
+pass-private-collection	core/src/passes/destructure/recovery.rs	control_only_values: HashSet<ValueId>,
+pass-private-collection	core/src/passes/destructure/recovery.rs	control_roots: HashMap<ValueId, Vec<ValueId>>,
+pass-private-collection	core/src/passes/destructure/recovery.rs	entry_facts: HashMap::default(),
+pass-private-collection	core/src/passes/destructure/recovery.rs	external_values: HashSet<ValueId>,
+pass-private-collection	core/src/passes/destructure/recovery.rs	fn require_effects(&self, order: &[OpId], placed: &HashSet<OpId>) -> Result<(), PassError> {
+pass-private-collection	core/src/passes/destructure/recovery.rs	fragment_at: HashMap::default(),
+pass-private-collection	core/src/passes/destructure/recovery.rs	fragment_at: HashMap<Point, usize>,
+pass-private-collection	core/src/passes/destructure/recovery.rs	gammas: HashMap::default(),
+pass-private-collection	core/src/passes/destructure/recovery.rs	gammas: HashMap<OpId, GammaPlan>,
+pass-private-collection	core/src/passes/destructure/recovery.rs	let continue_only: HashSet<OpId> = continue_cone.difference(&head_ops).copied().collect();
+pass-private-collection	core/src/passes/destructure/recovery.rs	let controls: BTreeSet<_> = pending
+pass-private-collection	core/src/passes/destructure/recovery.rs	let exit_only: HashSet<OpId> = exit_cone.difference(&head_ops).copied().collect();
+pass-private-collection	core/src/passes/destructure/recovery.rs	let filter = |held: &HashSet<OpId>, domain| {
+pass-private-collection	core/src/passes/destructure/recovery.rs	let head_ops: HashSet<OpId> = predicate
+pass-private-collection	core/src/passes/destructure/recovery.rs	let indices: HashMap<OpId, usize> = original
+pass-private-collection	core/src/passes/destructure/recovery.rs	let local_indices: HashMap<usize, usize> = members
+pass-private-collection	core/src/passes/destructure/recovery.rs	let mut component_controls = vec![BTreeSet::new(); components.len()];
+pass-private-collection	core/src/passes/destructure/recovery.rs	let mut conflicts = BTreeSet::new();
+pass-private-collection	core/src/passes/destructure/recovery.rs	let mut controls: BTreeSet<_> = constraints
+pass-private-collection	core/src/passes/destructure/recovery.rs	let mut group = HashSet::from_iter([id]);
+pass-private-collection	core/src/passes/destructure/recovery.rs	let mut group = HashSet::from_iter([producer]);
+pass-private-collection	core/src/passes/destructure/recovery.rs	let mut local_outgoing = vec![HashSet::default(); members.len()];
+pass-private-collection	core/src/passes/destructure/recovery.rs	let mut local_values = HashSet::default();
+pass-private-collection	core/src/passes/destructure/recovery.rs	let mut locals = HashSet::default();
+pass-private-collection	core/src/passes/destructure/recovery.rs	let mut materialized: HashSet<_> = self
+pass-private-collection	core/src/passes/destructure/recovery.rs	let mut moved = HashSet::default();
+pass-private-collection	core/src/passes/destructure/recovery.rs	let mut outgoing = vec![HashSet::default(); components.len()];
+pass-private-collection	core/src/passes/destructure/recovery.rs	let mut predecessors: HashMap<ValueId, Vec<ValueId>> = HashMap::default();
+pass-private-collection	core/src/passes/destructure/recovery.rs	let mut predecessors: HashMap<ValueId, Vec<ValueId>> = HashMap::default();
+pass-private-collection	core/src/passes/destructure/recovery.rs	let mut roles = HashSet::default();
+pass-private-collection	core/src/passes/destructure/recovery.rs	let mut root_to_component = HashMap::default();
+pass-private-collection	core/src/passes/destructure/recovery.rs	let mut values: HashSet<ValueId> = self.context.op_results(producer).into_iter().collect();
+pass-private-collection	core/src/passes/destructure/recovery.rs	let placed: HashSet<OpId> = head_ops
+pass-private-collection	core/src/passes/destructure/recovery.rs	let positions: HashMap<_, _> = sequence
+pass-private-collection	core/src/passes/destructure/recovery.rs	let shared: HashSet<OpId> = predicate
+pass-private-collection	core/src/passes/destructure/recovery.rs	op_domains: HashMap::default(),
+pass-private-collection	core/src/passes/destructure/recovery.rs	op_domains: HashMap<OpId, DemandDomainId>,
+pass-private-collection	core/src/passes/destructure/recovery.rs	outgoing: &mut [HashSet<usize>],
+pass-private-collection	core/src/passes/destructure/recovery.rs	placement_conflicts: BTreeSet::new(),
+pass-private-collection	core/src/passes/destructure/recovery.rs	placement_conflicts: BTreeSet<ControlId>,
+pass-private-collection	core/src/passes/destructure/recovery.rs	predecessors: &HashMap<ValueId, Vec<ValueId>>,
+pass-private-collection	core/src/passes/destructure/recovery.rs	pub(super) control_types: HashMap<ValueId, TypeId>,
+pass-private-collection	core/src/passes/destructure/recovery.rs	pub(super) entry_facts: HashMap<SequenceId, Vec<EntryFact>>,
+pass-private-collection	core/src/passes/destructure/recovery.rs	region_domains: HashMap::default(),
+pass-private-collection	core/src/passes/destructure/recovery.rs	region_domains: HashMap<RegionId, DemandDomainId>,
+pass-private-collection	core/src/passes/destructure/recovery.rs	repeated_controls: HashMap::default(),
+pass-private-collection	core/src/passes/destructure/recovery.rs	repeated_controls: HashMap<OpId, RepeatedControl>,
+pass-private-collection	core/src/passes/destructure/recovery.rs	return HashSet::default();
+pass-private-collection	core/src/passes/destructure/recovery.rs	roles: &HashSet<ValueId>,
+pass-private-collection	core/src/passes/destructure/recovery.rs	roots(value, &predecessors, &mut HashSet::default(), &mut found);
+pass-private-collection	core/src/passes/destructure/recovery.rs	roots: HashMap<ValueId, Vec<ValueId>>,
+pass-private-collection	core/src/passes/destructure/recovery.rs	seen: &mut HashSet<ValueId>,
+pass-private-collection	core/src/passes/destructure/recovery.rs	theta_domains: HashMap::default(),
+pass-private-collection	core/src/passes/destructure/recovery.rs	theta_domains: HashMap<(OpId, DemandDomainKind), DemandDomainId>,
+pass-private-collection	core/src/passes/destructure/recovery.rs	thetas: HashMap::default(),
+pass-private-collection	core/src/passes/destructure/recovery.rs	thetas: HashMap<OpId, ThetaPlan>,
+pass-private-collection	core/src/passes/destructure/recovery.rs	values: HashSet<ValueId>,
+pass-private-collection	core/src/passes/destructure/recovery/finish.rs	.collect::<Result<HashSet<_>, _>>()?;
+pass-private-collection	core/src/passes/destructure/recovery/finish.rs	HashSet::default()
+pass-private-collection	core/src/passes/destructure/recovery/finish.rs	aliases: HashMap::default(),
+pass-private-collection	core/src/passes/destructure/recovery/finish.rs	aliases: HashMap<SsaValue, SsaValue>,
+pass-private-collection	core/src/passes/destructure/recovery/finish.rs	ambiguous_facts: HashSet<ValueId>,
+pass-private-collection	core/src/passes/destructure/recovery/finish.rs	available: HashSet<ValueId>,
+pass-private-collection	core/src/passes/destructure/recovery/finish.rs	computations: HashMap::default(),
+pass-private-collection	core/src/passes/destructure/recovery/finish.rs	computations: HashMap<usize, Node>,
+pass-private-collection	core/src/passes/destructure/recovery/finish.rs	constants: &HashMap<ValueId, ControlOutcome>,
+pass-private-collection	core/src/passes/destructure/recovery/finish.rs	constants: HashMap<ValueId, ControlOutcome>,
+pass-private-collection	core/src/passes/destructure/recovery/finish.rs	control_facts: HashMap::default(),
+pass-private-collection	core/src/passes/destructure/recovery/finish.rs	control_facts: HashMap<ControlPortId, ControlOutcome>,
+pass-private-collection	core/src/passes/destructure/recovery/finish.rs	controls: HashMap::default(),
+pass-private-collection	core/src/passes/destructure/recovery/finish.rs	controls: HashMap<OpId, Node>,
+pass-private-collection	core/src/passes/destructure/recovery/finish.rs	cycles: HashMap::default(),
+pass-private-collection	core/src/passes/destructure/recovery/finish.rs	cycles: HashMap<CycleKey, Node>,
+pass-private-collection	core/src/passes/destructure/recovery/finish.rs	definitions: HashMap::default(),
+pass-private-collection	core/src/passes/destructure/recovery/finish.rs	definitions: HashMap<ControlId, Node>,
+pass-private-collection	core/src/passes/destructure/recovery/finish.rs	defs: Vec<HashSet<ValueId>>,
+pass-private-collection	core/src/passes/destructure/recovery/finish.rs	demands: Vec<BTreeSet<ValueId>>,
+pass-private-collection	core/src/passes/destructure/recovery/finish.rs	facts: HashMap<ValueId, ControlOutcome>,
+pass-private-collection	core/src/passes/destructure/recovery/finish.rs	let all_ops: HashSet<_> = self
+pass-private-collection	core/src/passes/destructure/recovery/finish.rs	let assigned: HashSet<_> = self
+pass-private-collection	core/src/passes/destructure/recovery/finish.rs	let mut ambiguous_facts = HashSet::default();
+pass-private-collection	core/src/passes/destructure/recovery/finish.rs	let mut constants = HashMap::default();
+pass-private-collection	core/src/passes/destructure/recovery/finish.rs	let mut defined: HashSet<ValueId> = if index == root.0 {
+pass-private-collection	core/src/passes/destructure/recovery/finish.rs	let mut facts = HashMap::default();
+pass-private-collection	core/src/passes/destructure/recovery/finish.rs	let mut globals: HashSet<_> = self
+pass-private-collection	core/src/passes/destructure/recovery/finish.rs	let mut projected_types = HashMap::default();
+pass-private-collection	core/src/passes/destructure/recovery/finish.rs	let mut read = BTreeSet::new();
+pass-private-collection	core/src/passes/destructure/recovery/finish.rs	let mut seen = HashSet::default();
+pass-private-collection	core/src/passes/destructure/recovery/finish.rs	let mut seen = HashSet::default();
+pass-private-collection	core/src/passes/destructure/recovery/finish.rs	let mut used = HashSet::default();
+pass-private-collection	core/src/passes/destructure/recovery/finish.rs	let proven: HashSet<_> = constants
+pass-private-collection	core/src/passes/destructure/recovery/finish.rs	let unprojected: HashSet<_> = recovery
+pass-private-collection	core/src/passes/destructure/recovery/finish.rs	literals: HashSet<OpId>,
+pass-private-collection	core/src/passes/destructure/recovery/finish.rs	live: Vec<BTreeSet<ValueId>>,
+pass-private-collection	core/src/passes/destructure/recovery/finish.rs	lost_direct: HashSet::default(),
+pass-private-collection	core/src/passes/destructure/recovery/finish.rs	lost_direct: HashSet<ControlId>,
+pass-private-collection	core/src/passes/destructure/recovery/finish.rs	parameters: HashMap::default(),
+pass-private-collection	core/src/passes/destructure/recovery/finish.rs	parameters: HashMap<SsaValue, ValueId>,
+pass-private-collection	core/src/passes/destructure/recovery/finish.rs	seen: &mut HashSet<ValueId>,
+pass-private-collection	core/src/passes/destructure/recovery/finish.rs	self.fact_with(route, value, &mut HashSet::default())
+pass-private-collection	core/src/passes/destructure/recovery/finish.rs	theta_regions: HashMap<RegionId, HashSet<RegionId>>,
+pass-private-collection	core/src/passes/destructure/recovery/finish.rs	theta_regions: HashMap<RegionId, HashSet<RegionId>>,
+pass-private-collection	core/src/passes/inline.rs	by_op: &HashMap<OpId, usize>,
+pass-private-collection	core/src/passes/inline.rs	by_op: HashMap<OpId, usize>,
+pass-private-collection	core/src/passes/inline.rs	let bindings: HashMap<ValueId, ValueId> = source
+pass-private-collection	core/src/passes/inline.rs	let by_op: HashMap<OpId, usize> = functions
+pass-private-collection	core/src/passes/inline.rs	let entered: HashMap<crate::builtin::StateResource, ValueId> = call
+pass-private-collection	core/src/passes/inline.rs	let mut replacements = HashMap::new();
+pass-private-collection	core/src/passes/inline.rs	let mut roots_by_resource: HashMap<crate::builtin::StateResource, Vec<OpId>> = HashMap::new();
+pass-private-collection	core/src/passes/inline.rs	let mut roots_by_resource: HashMap<crate::builtin::StateResource, Vec<OpId>> = HashMap::new();
+pass-private-collection	core/src/passes/inline.rs	let produced_by_resource: HashMap<crate::builtin::StateResource, ValueId> = produced_states
+pass-private-collection	core/src/passes/promote_nodes.rs	grown: HashSet::new(),
+pass-private-collection	core/src/passes/promote_nodes.rs	grown: HashSet<ValueId>,
+pass-private-collection	core/src/passes/promote_nodes.rs	reach: HashMap::new(),
+pass-private-collection	core/src/passes/promote_nodes.rs	reach: HashMap<ValueId, Reach>,
+pass-private-collection	core/src/passes/promote_nodes.rs	substituted: HashMap::new(),
+pass-private-collection	core/src/passes/promote_nodes.rs	substituted: HashMap<ValueId, ValueId>,
+pass-private-collection	core/src/passes/resolve_fp.rs	let bindings: HashMap<_, _> = reference
+pass-private-collection	core/src/passes/resolve_fp.rs	let bindings: HashMap<_, _> = reference
+pass-private-collection	core/src/passes/resolve_fp.rs	let mut unique_candidates = HashSet::new();
+pass-private-collection	core/src/passes/resolve_fp.rs	let op_copies: HashMap<_, _> = source_ops
+pass-private-collection	core/src/passes/restructure/branches.rs	.collect::<BTreeSet<_>>();
+pass-private-collection	core/src/passes/restructure/branches.rs	.collect::<BTreeSet<_>>();
+pass-private-collection	core/src/passes/restructure/branches.rs	emitted: BTreeSet::new(),
+pass-private-collection	core/src/passes/restructure/branches.rs	emitted: BTreeSet<NodeId>,
+pass-private-collection	core/src/passes/restructure/branches.rs	fn join(&mut self, node: NodeId, joins: &[NodeId], exclusive: &BTreeSet<NodeId>) -> NodeId {
+pass-private-collection	core/src/passes/restructure/branches.rs	fn reachable(&self, from: NodeId, stop: NodeId) -> BTreeSet<NodeId> {
+pass-private-collection	core/src/passes/restructure/branches.rs	let mut count: BTreeMap<NodeId, usize> = BTreeMap::new();
+pass-private-collection	core/src/passes/restructure/branches.rs	let mut count: BTreeMap<NodeId, usize> = BTreeMap::new();
+pass-private-collection	core/src/passes/restructure/branches.rs	let mut seen = BTreeSet::from([from]);
+pass-private-collection	core/src/passes/restructure/cfg.rs	.fold(BTreeMap::new(), |mut slots, (resource, position)| {
+pass-private-collection	core/src/passes/restructure/cfg.rs	_ => BTreeMap::new(),
+pass-private-collection	core/src/passes/restructure/cfg.rs	arg_var: BTreeMap::new(),
+pass-private-collection	core/src/passes/restructure/cfg.rs	arg_var: BTreeMap<ValueId, VarId>,
+pass-private-collection	core/src/passes/restructure/cfg.rs	let entries: BTreeMap<usize, ValueId> = carried
+pass-private-collection	core/src/passes/restructure/cfg.rs	let mut definition = BTreeMap::new();
+pass-private-collection	core/src/passes/restructure/cfg.rs	let mut reads: BTreeMap<ValueId, BTreeSet<NodeId>> = BTreeMap::new();
+pass-private-collection	core/src/passes/restructure/cfg.rs	let mut reads: BTreeMap<ValueId, BTreeSet<NodeId>> = BTreeMap::new();
+pass-private-collection	core/src/passes/restructure/cfg.rs	let mut reads: BTreeMap<ValueId, BTreeSet<NodeId>> = BTreeMap::new();
+pass-private-collection	core/src/passes/restructure/cfg.rs	let mut used_slots = BTreeMap::new();
+pass-private-collection	core/src/passes/restructure/cfg.rs	let sink_slots: BTreeMap<_, Vec<usize>> = match &self.cfg.nodes[node].term {
+pass-private-collection	core/src/passes/restructure/cfg.rs	node_of_block: BTreeMap::new(),
+pass-private-collection	core/src/passes/restructure/cfg.rs	node_of_block: BTreeMap<BlockId, NodeId>,
+pass-private-collection	core/src/passes/restructure/cfg.rs	pub value_var: BTreeMap<ValueId, VarId>,
+pass-private-collection	core/src/passes/restructure/cfg.rs	value_var: BTreeMap::new(),
+pass-private-collection	core/src/passes/restructure/deps.rs	) -> Result<BTreeMap<usize, ValueId>, PassError> {
+pass-private-collection	core/src/passes/restructure/deps.rs	BTreeMap::new(),
+pass-private-collection	core/src/passes/restructure/deps.rs	entries: &BTreeMap<usize, ValueId>,
+pass-private-collection	core/src/passes/restructure/deps.rs	let carried: BTreeSet<usize> = crate::analysis::regions::subtree_ops(context, &handle)
+pass-private-collection	core/src/passes/restructure/deps.rs	let declared: BTreeMap<OpId, Vec<(StateResource, ResourceAccess)>> = effects.into_iter().fold(
+pass-private-collection	core/src/passes/restructure/deps.rs	let incomplete: BTreeSet<StateResource> = declared
+pass-private-collection	core/src/passes/restructure/deps.rs	let mut loop_touched: BTreeMap<OpId, Vec<usize>> = declared
+pass-private-collection	core/src/passes/restructure/deps.rs	let objects: BTreeSet<Base> = effects.iter().filter_map(|&(_, _, _, base)| base).collect();
+pass-private-collection	core/src/passes/restructure/deps.rs	let ports: BTreeMap<usize, ValueId> = touched
+pass-private-collection	core/src/passes/restructure/deps.rs	let worlds: BTreeSet<StateResource> = effects
+pass-private-collection	core/src/passes/restructure/deps.rs	loop_touched: BTreeMap<OpId, Vec<usize>>,
+pass-private-collection	core/src/passes/restructure/deps.rs	pub fn carried(&self, ops: &[OpId]) -> BTreeSet<usize> {
+pass-private-collection	core/src/passes/restructure/deps.rs	roots: BTreeMap<usize, ValueId>,
+pass-private-collection	core/src/passes/restructure/deps.rs	states: BTreeMap<usize, ChainState>,
+pass-private-collection	core/src/passes/restructure/deps.rs	type EffectChains = BTreeMap<(OpId, StateResource), Vec<usize>>;
+pass-private-collection	core/src/passes/restructure/emit_nodes.rs	BTreeMap::new();
+pass-private-collection	core/src/passes/restructure/emit_nodes.rs	let mut by_resource: BTreeMap<crate::builtin::StateResource, Vec<ValueId>> =
+pass-private-collection	core/src/passes/restructure/emit_nodes.rs	let mut reads = std::collections::BTreeSet::from([predicate]);
+pass-private-collection	core/src/passes/restructure/emit_nodes.rs	let mut resource_chains: BTreeMap<crate::builtin::StateResource, Vec<VarId>> = BTreeMap::new();
+pass-private-collection	core/src/passes/restructure/emit_nodes.rs	let mut resource_chains: BTreeMap<crate::builtin::StateResource, Vec<VarId>> = BTreeMap::new();
+pass-private-collection	core/src/passes/restructure/emit_nodes.rs	type Env = BTreeMap<VarId, ValueId>;
+pass-private-collection	core/src/passes/restructure/liveness.rs	fn out(cfg: &Cfg, live_in: &[BTreeSet<VarId>], node: NodeId) -> BTreeSet<VarId> {
+pass-private-collection	core/src/passes/restructure/liveness.rs	fn out(cfg: &Cfg, live_in: &[BTreeSet<VarId>], node: NodeId) -> BTreeSet<VarId> {
+pass-private-collection	core/src/passes/restructure/liveness.rs	fn through(cfg: &Cfg, live_in: &[BTreeSet<VarId>], edge: &Edge) -> BTreeSet<VarId> {
+pass-private-collection	core/src/passes/restructure/liveness.rs	fn through(cfg: &Cfg, live_in: &[BTreeSet<VarId>], edge: &Edge) -> BTreeSet<VarId> {
+pass-private-collection	core/src/passes/restructure/liveness.rs	fn transfer(cfg: &Cfg, live_in: &[BTreeSet<VarId>], node: NodeId) -> BTreeSet<VarId> {
+pass-private-collection	core/src/passes/restructure/liveness.rs	fn transfer(cfg: &Cfg, live_in: &[BTreeSet<VarId>], node: NodeId) -> BTreeSet<VarId> {
+pass-private-collection	core/src/passes/restructure/liveness.rs	let mut live = BTreeSet::new();
+pass-private-collection	core/src/passes/restructure/liveness.rs	let mut live_in = vec![BTreeSet::new(); cfg.nodes.len()];
+pass-private-collection	core/src/passes/restructure/liveness.rs	live_in: Vec<BTreeSet<VarId>>,
+pass-private-collection	core/src/passes/restructure/liveness.rs	pub fn along(&self, cfg: &Cfg, edge: &Edge) -> BTreeSet<VarId> {
+pass-private-collection	core/src/passes/restructure/liveness.rs	pub fn at(&self, node: NodeId) -> &BTreeSet<VarId> {
+pass-private-collection	core/src/passes/restructure/loops.rs	fn components(cfg: &Cfg, nodes: &BTreeSet<NodeId>) -> Vec<Vec<NodeId>> {
+pass-private-collection	core/src/passes/restructure/loops.rs	fn exit_targets(cfg: &Cfg, members: &BTreeSet<NodeId>) -> Vec<NodeId> {
+pass-private-collection	core/src/passes/restructure/loops.rs	fn inner_successors(cfg: &Cfg, node: NodeId, nodes: &BTreeSet<NodeId>) -> Vec<NodeId> {
+pass-private-collection	core/src/passes/restructure/loops.rs	fn reachable(cfg: &Cfg, from: NodeId) -> BTreeSet<NodeId> {
+pass-private-collection	core/src/passes/restructure/loops.rs	fn restructure_region(cfg: &mut Cfg, nodes: BTreeSet<NodeId>, entry: &mut NodeId, exit: NodeId) {
+pass-private-collection	core/src/passes/restructure/loops.rs	fn run(&mut self, cfg: &Cfg, nodes: &BTreeSet<NodeId>, root: NodeId) {
+pass-private-collection	core/src/passes/restructure/loops.rs	index: BTreeMap::new(),
+pass-private-collection	core/src/passes/restructure/loops.rs	index: BTreeMap<NodeId, usize>,
+pass-private-collection	core/src/passes/restructure/loops.rs	let members = component.iter().copied().collect::<BTreeSet<_>>();
+pass-private-collection	core/src/passes/restructure/loops.rs	let mut entries = BTreeSet::new();
+pass-private-collection	core/src/passes/restructure/loops.rs	let mut exits = BTreeSet::new();
+pass-private-collection	core/src/passes/restructure/loops.rs	let mut seen = BTreeSet::from([from]);
+pass-private-collection	core/src/passes/restructure/loops.rs	low: BTreeMap::new(),
+pass-private-collection	core/src/passes/restructure/loops.rs	low: BTreeMap<NodeId, usize>,
+pass-private-collection	core/src/passes/restructure/loops.rs	members: &BTreeSet<NodeId>,
+pass-private-collection	core/src/passes/restructure/loops.rs	members: &BTreeSet<NodeId>,
+pass-private-collection	core/src/passes/restructure/loops.rs	nodes: &BTreeSet<NodeId>,
+pass-private-collection	core/src/passes/restructure/loops.rs	nodes: &mut BTreeSet<NodeId>,
+pass-private-collection	core/src/passes/restructure/loops.rs	nodes: &mut BTreeSet<NodeId>,
+pass-private-collection	core/src/passes/restructure/loops.rs	on_stack: BTreeSet::new(),
+pass-private-collection	core/src/passes/restructure/loops.rs	on_stack: BTreeSet<NodeId>,
+pass-private-collection	core/src/passes/restructure/ports.rs	let mut assigned = BTreeSet::new();
+pass-private-collection	core/src/passes/restructure/ports.rs	let mut assigned = BTreeSet::new();
+pass-private-collection	core/src/passes/restructure/ports.rs	pub(super) fn assigned(&self, statements: &[Stmt]) -> BTreeSet<VarId> {
+pass-private-collection	core/src/passes/restructure/ports.rs	pub(super) fn ports(&self, arms: &[&[Stmt]], needed: BTreeSet<VarId>) -> Vec<VarId> {
+pass-worklist	core/src/backend/block_layout.rs	while let Some(block) = pending.pop() {
+pass-worklist	core/src/backend/isel/fp_environment.rs	while let Some(region) = pending.pop() {
+pass-worklist	core/src/backend/isel/relaxation.rs	while let Some(node) = stack.pop() {
+pass-worklist	core/src/backend/machine_cfg.rs	while let Some((block, finish)) = dfs.pop() {
+pass-worklist	core/src/backend/machine_cfg.rs	while let Some(block) = stack.pop() {
+pass-worklist	core/src/backend/machine_cfg.rs	while let Some(block) = work.pop() {
+pass-worklist	core/src/backend/machine_cfg.rs	while let Some(block) = work.pop() {
+pass-worklist	core/src/backend/pbqp.rs	while let Some(node) = self.pending.pop() {
+pass-worklist	core/src/backend/regalloc/belady.rs	while let Some(phi) = needed.pop() {
+pass-worklist	core/src/backend/regalloc/constraints.rs	while let Some((node, done)) = stack.pop() {
+pass-worklist	core/src/backend/regalloc/split.rs	while let Some(b) = work.pop() {
+pass-worklist	core/src/backend/verify.rs	while let Some(op_id) = stack.pop() {
+pass-worklist	core/src/passes/affine/recurrence.rs	while let Some(id) = pending.pop() {
+pass-worklist	core/src/passes/dce.rs	while let Some(op_id) = queue.pop() {
+pass-worklist	core/src/passes/destructure.rs	while let Some(Reverse(node)) = ready.pop() {
+pass-worklist	core/src/passes/destructure.rs	while let Some(op) = pending.pop() {
+pass-worklist	core/src/passes/destructure/recovery.rs	while let Some(value) = pending.pop() {
+pass-worklist	core/src/passes/destructure/recovery/finish.rs	while let Some((index, value)) = news.pop() {
+pass-worklist	core/src/passes/destructure/recovery/finish.rs	while let Some(op) = pending.pop() {
+pass-worklist	core/src/passes/mod.rs	while let Some(op) = worklist.pop() {
+pass-worklist	core/src/passes/restructure/branches.rs	while let Some(node) = pending.pop() {
+pass-worklist	core/src/passes/restructure/cfg.rs	while let Some(op) = pending.pop() {
+pass-worklist	core/src/passes/restructure/emit_nodes.rs	while let Some(op) = pending.pop() {
+pass-worklist	core/src/passes/restructure/emit_nodes.rs	while let Some(region) = pending.pop() {
+pass-worklist	core/src/passes/restructure/loops.rs	while let Some((node, step)) = work.pop() {
+pass-worklist	core/src/passes/restructure/loops.rs	while let Some(member) = self.stack.pop() {
+pass-worklist	core/src/passes/restructure/loops.rs	while let Some(node) = pending.pop() {

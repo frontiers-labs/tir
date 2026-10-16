@@ -1,0 +1,16 @@
+id: pass-worklist
+language: rust
+severity: error
+message: Worklist loop in a pass
+note: Express the walk as engine rules, PDL rules or isel axioms instead of popping a hand-kept stack (AGENTS.md, coding guideline 5).
+files:
+  - core/src/passes/**
+  - core/src/backend/**
+  - fcc/src/passes/**
+rule:
+  any:
+    - pattern: while let Some($ITEM) = $LIST.$POP() { $$$BODY }
+    - pattern: let Some($ITEM) = $LIST.$POP() else { $$$ELSE };
+      inside: { kind: loop_expression, stopBy: end }
+constraints:
+  POP: { regex: '^pop(_front|_back)?$' }

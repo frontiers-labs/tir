@@ -29,6 +29,12 @@ jobs:
       - run: cargo fmt --all --check
       # Reads manifests only, so it is as cheap as rustfmt.
       - run: .github/scripts/check-dependencies.py
+      - uses: astral-sh/setup-uv@v6
+      # The accepted-findings lists may only shrink against master.
+      - run: git fetch --no-tags --depth=1 origin master:refs/remotes/origin/master
+      - run: .github/scripts/check-ast-grep.py
+        env:
+          LINT_BASE: origin/master
 
   clippy:
     needs: formatting
@@ -46,6 +52,14 @@ jobs:
           shared-key: clippy
           save-if: "false"
       - run: cargo clippy --workspace --all-targets --no-deps -- -D warnings
+      - run: cargo doc --workspace --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
+      - uses: astral-sh/setup-uv@v6
+      - run: git fetch --no-tags --depth=1 origin master:refs/remotes/origin/master
+      - run: .github/scripts/check-duplicates.py
+        env:
+          LINT_BASE: origin/master
 
   # Build and package once; test shards and memory checks reuse these tools.
   build:

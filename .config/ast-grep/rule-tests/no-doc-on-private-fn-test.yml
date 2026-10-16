@@ -1,0 +1,34 @@
+id: no-doc-on-private-fn
+valid:
+  - |
+    /// Public entry point.
+    pub fn run() {}
+  - |
+    // A plain comment says why.
+    fn helper() {}
+  - |
+    impl Display for Op {
+        /// Trait methods follow the trait's visibility.
+        fn fmt(&self, f: &mut Formatter) -> Result { Ok(()) }
+    }
+  - |
+    pub trait Pass {
+        /// Default methods are part of the trait.
+        fn name(&self) -> &str { "" }
+    }
+invalid:
+  - |
+    /// Not a public interface.
+    fn helper() {}
+  - |
+    /// Crate-visible is still not public.
+    #[inline]
+    pub(crate) fn helper() {}
+  - |
+    impl Op {
+        /// Inherent private method.
+        fn arity(&self) -> usize { 0 }
+    }
+  - |
+    /** Block doc on a private function. */
+    fn helper() {}

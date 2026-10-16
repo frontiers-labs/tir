@@ -41,7 +41,8 @@ the same amount of time (or less!) to do so.
 
 ## Minimal quality gates
 
-- `cargo clippy --workspace --all-targets --no-deps -- -D warnings` passes cleanly
+- `cargo xtask lint` passes cleanly (clippy, rustdoc, ast-grep rules in
+  `.config/ast-grep/`, duplicate code; needs `uv`)
 - `cargo build` compiles
 - `cargo xtask test` passes cleanly
 - `cargo fmt` has no additional format changes

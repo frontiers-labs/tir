@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "^apply_patch$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$(git rev-parse --show-toplevel)\"/.agents/hooks/lint-edit.py",
+            "timeout": 60,
+            "statusMessage": "Running ast-grep on edited files"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,16 @@
+id: pass-private-collection
+language: rust
+severity: error
+message: Pass keeps its own hash table or queue beside the IR
+note: Pass state lives in relations the engine owns; a private map or worklist is a hand-rolled traversal (AGENTS.md, coding guideline 5).
+files:
+  - core/src/passes/**
+  - core/src/backend/**
+  - fcc/src/passes/**
+rule:
+  any:
+    - kind: type_identifier
+    - kind: identifier
+  regex: '^(Fx)?(HashMap|HashSet)$|^BTree(Map|Set)$|^VecDeque$|^Index(Map|Set)$|^BinaryHeap$'
+  not:
+    inside: { kind: use_declaration, stopBy: end }

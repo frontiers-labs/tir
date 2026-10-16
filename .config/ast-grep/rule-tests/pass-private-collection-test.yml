@@ -1,0 +1,7 @@
+id: pass-private-collection
+valid:
+  - 'let rows: Vec<Row> = Vec::new();'
+invalid:
+  - 'let seen: HashSet<OpId> = HashSet::new();'
+  - 'let order = VecDeque::new();'
+  - 'fn f(map: &FxHashMap<u32, u32>) {}'

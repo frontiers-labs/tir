@@ -3,6 +3,7 @@ mod fp_check;
 mod gate;
 mod gate_bench;
 mod isasim_accept;
+mod lint;
 mod test;
 mod verify_smt;
 
@@ -26,6 +27,8 @@ enum Task {
     /// Record and compare floating-point reference behavior.
     #[command(subcommand)]
     FpCheck(fp_check::Task),
+    /// Run the lints: ast-grep rules, duplicate code, clippy and rustdoc.
+    Lint,
     /// Build the TIR project
     Build,
     /// Build the project documentation
@@ -73,6 +76,7 @@ fn main() -> anyhow::Result<()> {
         Task::Test(options) => test::run(&project_root(), options),
         Task::TestPack(options) => test::pack(&project_root(), options),
         Task::FpCheck(task) => fp_check::run(&project_root(), task),
+        Task::Lint => lint::run(&sh, &project_root()),
         Task::Build => build(&sh),
         Task::Docs => build_docs(&sh),
         Task::Verify { isa, args } => verify_smt::verify_smt(&sh, &isa, args.into_iter()),

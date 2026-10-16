@@ -1,0 +1,8 @@
+id: pass-worklist
+valid:
+  - 'while i < n { i += 1; }'
+  - 'let Some(last) = items.pop() else { return };'
+invalid:
+  - 'while let Some(op) = stack.pop() { visit(op); }'
+  - 'while let Some(op) = queue.pop_front() { visit(op); }'
+  - 'loop { let Some(op) = stack.pop() else { break }; visit(op); }'

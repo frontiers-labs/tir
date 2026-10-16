@@ -1,0 +1,25 @@
+# Accepted near copies for .github/scripts/check-duplicates.py: two functions per
+# line, then `#` and why the pair stays. Never add a pair whose merge is only
+# inconvenient.
+
+# Default methods of two traits with different error types; any shared helper
+# still leaves both rustfmt'd signatures over ten lines.
+core/src/backend/mod.rs::atomic_rmw utils/symbolic/src/lang/exec.rs::atomic_rmw
+
+# Same builder chain, differing in ISA name and call emitter. Sharing it needs
+# a new isel parameter on `impl_target_machine!`, which riscv does not fit.
+backends/arm64/src/lib.rs::create_isel_pass_for backends/x86_64/src/lib.rs::create_isel_pass_for
+
+# Distinct scope scenarios built from the same few push/union/rebuild/pop calls.
+utils/unit-tests/src/egraph/engine.rs::scope_congruence_collapses_and_restores utils/unit-tests/src/egraph/engine.rs::scope_add_then_congruence
+utils/unit-tests/src/egraph/engine.rs::scope_congruence_collapses_and_restores utils/unit-tests/src/egraph/engine.rs::scope_preserves_base_equalities
+utils/unit-tests/src/egraph/engine.rs::scope_congruence_collapses_and_restores utils/unit-tests/src/egraph/engine.rs::nested_scopes_isolate
+utils/unit-tests/src/egraph/engine.rs::scope_preserves_base_equalities utils/unit-tests/src/egraph/engine.rs::nested_scopes_isolate
+utils/unit-tests/src/egraph/engine.rs::scope_preserves_base_equalities utils/unit-tests/src/egraph/engine.rs::scope_add_then_congruence
+utils/unit-tests/src/egraph/engine.rs::nested_scopes_isolate utils/unit-tests/src/egraph/engine.rs::scope_add_then_congruence
+utils/unit-tests/src/egraph/engine.rs::assumption_follows_the_class_through_a_scoped_union utils/unit-tests/src/egraph/engine.rs::inner_union_rekeys_an_outer_assumption_and_pop_restores_it
+utils/unit-tests/src/egraph/engine.rs::assume_const_is_read_under_the_scope_and_gone_after_pop utils/unit-tests/src/egraph/engine.rs::a_nested_assumption_conflicts_with_the_outer_one_and_the_pop_restores_it
+
+# `while` tests before the body and `do`/`while` after it; one flag would
+# interleave the two block graphs.
+fcc/src/codegen/control.rs::lower_flat_while fcc/src/codegen/control.rs::lower_flat_do_while
