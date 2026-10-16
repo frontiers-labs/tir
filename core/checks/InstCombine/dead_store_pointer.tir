@@ -3,9 +3,9 @@
 // The second pointer store overwrites the extent the first one wrote and
 // nothing reads the state between them, so the first store is dead.
 
-#data_layout = {types = {p = {abi = 64, size = 64}}}
+#layout_spec = #layout.spec<!ptr.p = {size = 64, abi = 64}>
 
-module {data_layout = #data_layout} {
+module {layout.spec = #layout_spec} {
   %fn_f = func.func @f(%0: !ptr.p<!ptr.p<!i32>>, %1: !ptr.p<!i32>, %2: !ptr.p<!i32>) {
     %3 = state.entry_state : !state<memory>
     %4 = ptr.store %1, %0 state(%3)

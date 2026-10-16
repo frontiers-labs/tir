@@ -1,46 +1,48 @@
-use std::any::Any;
-use std::sync::Arc;
+use tir_symbolic::term::valid;
 
-use crate::ty::TypeConstraint;
-use crate::{Context, Error, IRFormatter, Type, TypeId, parse::Span};
+use crate::ty::{Ctor, Kind, Terms, TypeArg, TypeCtor, TypeSpelling};
+use crate::{Context, TypeId};
 
 macro_rules! scalar_type {
-    ($name:ident, $mnemonic:literal) => {
+    ($name:ident, $ctor:ident, $mnemonic:literal, $bits:literal) => {
+        static $ctor: Ctor = Ctor::new(TypeCtor {
+            dialect: "fp",
+            name: $mnemonic,
+            params: &[],
+            kind: Kind::Data,
+            validate: valid,
+            carrier: |_: &Terms, _: &[TypeArg]| Some(TypeArg::Nat($bits)),
+        });
+
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
         pub struct $name;
 
         impl $name {
             #[allow(clippy::new_ret_no_self)]
             pub fn new(context: &Context) -> TypeId {
-                context.get_type_id(Arc::new(Self))
+                context
+                    .terms()
+                    .intern($ctor.id(context), vec![])
+                    .expect($mnemonic)
             }
-        }
 
-        impl TypeConstraint for $name {}
+            pub fn view(terms: &impl AsRef<Terms>, ty: TypeId) -> Option<Self> {
+                let terms = terms.as_ref();
+                $ctor.is(terms, ty).then_some(Self)
+            }
 
-        impl Type for $name {
-            fn dialect(&self) -> &'static str {
-                "fp"
+            pub fn spelling(context: &Context) -> TypeSpelling {
+                TypeSpelling {
+                    ctor: $ctor.id(context),
+                    keys: &[$mnemonic],
+                    parse: |_, _, context| Ok(Self::new(context)),
+                    print: |_, _, fmt| fmt.write(concat!("fp.", $mnemonic)),
+                    variadic_tail: false,
+                }
             }
-            fn parse_key() -> &'static str {
-                $mnemonic
-            }
-            fn parse<'src>(
-                _mnemonic: &str,
-                _parser: &mut crate::parse::text::Parser<'src>,
-                context: &Context,
-            ) -> Result<TypeId, (Span, Error)> {
-                Ok(Self::new(context))
-            }
-            fn print(&self, fmt: &mut IRFormatter<'_>) -> Result<(), std::fmt::Error> {
-                fmt.write($mnemonic)
-            }
-            fn eq(&self, other: &dyn Type) -> bool {
-                (other as &dyn Any).downcast_ref::<Self>().is_some()
-            }
-            fn hash(&self, _state: &mut dyn std::hash::Hasher) {}
         }
     };
 }
 
-scalar_type!(EnvironmentType, "env");
-scalar_type!(RoundingType, "rounding");
+scalar_type!(EnvironmentType, ENV, "env", 13);
+scalar_type!(RoundingType, ROUNDING, "rounding", 3);

@@ -5,6 +5,6 @@
 
 int id(int value) { return value; }
 
-// CHECK: #data_layout = {cache_line = 64, endianness =
+// CHECK: #layout_spec = #layout.spec<endianness =
 // CHECK: #target_env = {arch =
-// CHECK: module {data_layout = #data_layout, target_env = #target_env} {
+// CHECK: module {layout.spec = #layout_spec, target_env = #target_env} {

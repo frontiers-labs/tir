@@ -1,8 +1,8 @@
 //! Unit tests for the `tir-riscv` backend's public API.
 
 use tir::backend::TargetMachine;
-use tir::sem::{FloatFormat, SemType, SymKind, SymPayload};
-use tir::Context;
+use tir::sem::{SymKind, SymPayload};
+use tir::{Context, TypeArg};
 use tir_riscv::{Feature, RegClass, TargetConfig};
 
 fn target(march: &str) -> Box<dyn TargetMachine> {
@@ -295,7 +295,7 @@ fn float_comparison_rule_infers_contextual_literal_widths() {
     );
     let rule = rules.iter().find(|rule| rule.name == "feqd").unwrap();
 
-    let result = tir::sem::infer_types(&rule.pattern, |_| None);
+    let result = tir::sem::infer_types(context.terms(), &rule.pattern, |_| None);
     assert!(
         result.is_ok(),
         "feqd pattern type inference failed: {result:?}"
@@ -309,11 +309,11 @@ fn double_comparison_rules_accept_float_register_operands() {
         &context,
         &[Feature::RV64I, Feature::F, Feature::F64, Feature::D],
     );
-    let f64 = SemType::Float(FloatFormat::new(11, 52));
+    let f64 = context.terms().float(11, 52);
 
     for name in ["feqd", "fltd", "fled"] {
         let rule = rules.iter().find(|rule| rule.name == name).unwrap();
-        let result = tir::sem::infer_types(&rule.pattern, |node| {
+        let result = tir::sem::infer_types(context.terms(), &rule.pattern, |node| {
             let Some(SymPayload::SymbolId(symbol)) = rule.pattern.get_leaf_data(node) else {
                 return None;
             };
@@ -321,10 +321,12 @@ fn double_comparison_rules_accept_float_register_operands() {
                 .operand_registers
                 .iter()
                 .find_map(|(operand, requirement)| (operand == symbol).then_some(requirement))?;
-            if requirement.accepts(&f64) && !requirement.accepts(&SemType::bits(64)) {
-                Some(f64.clone())
+            if requirement.accepts(context.terms(), &TypeArg::Type(f64))
+                && !requirement.accepts(context.terms(), &TypeArg::Type(context.terms().int(64)))
+            {
+                Some(f64)
             } else {
-                Some(SemType::bits(requirement.width()))
+                Some(context.terms().int(u64::from(requirement.width())))
             }
         });
         assert!(

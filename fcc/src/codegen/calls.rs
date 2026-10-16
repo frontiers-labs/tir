@@ -5,13 +5,12 @@ use super::{
     converted_node_type, lower_type, node_entity, node_type, source_type_layout, unsupported,
 };
 use crate::ast::{AstKind, AstLeaf};
-use crate::cir;
 use crate::diagnostics::Diagnostic;
 use crate::sema::{QualType, TypeKind};
 use tir::NodeId;
 use tir::ValueId;
 use tir::backend::abi::{ValueKind, type_kind};
-use tir::builtin::{FnType, IntegerType, TupleType, ops as b};
+use tir::builtin::{FnType, IntegerType, NamedType, TupleType, ops as b};
 use tir::func::ops as func_ops;
 use tir::ptr::{PtrType, ops as p};
 
@@ -53,7 +52,8 @@ impl FnCodegen<'_> {
             self.emit(p::memcpy(self.context, destination, source, size).build());
             return Ok(());
         }
-        self.emit(cir::ops::copy_struct(self.context, destination, source, record).build());
+        let record = NamedType::new(self.context, record);
+        self.emit(p::copy(self.context, destination, source, record).build());
         Ok(())
     }
 

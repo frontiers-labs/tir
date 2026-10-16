@@ -3,7 +3,6 @@ use std::sync::Arc;
 
 use crate::parse::Span;
 use crate::parse::text::Parser as IRParser;
-use crate::ty::TypeParser;
 use crate::{Context, Error, OpHandle, Operation};
 
 pub type OperationParser = fn(&mut IRParser, &Context) -> Result<Box<dyn Operation>, (Span, Error)>;
@@ -24,6 +23,4 @@ pub trait Dialect: 'static + Send + Sync + Any {
     fn get_dyn_op(&self, op: OpHandle) -> Box<dyn Operation>;
 
     fn get_parser(&self, name: &str) -> Result<OperationParser, Error>;
-
-    fn get_type_parser(&self, name: &str) -> Result<TypeParser, Error>;
 }

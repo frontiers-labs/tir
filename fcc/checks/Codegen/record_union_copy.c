@@ -46,9 +46,10 @@ int main(void) {
     return 0;
 }
 
+// CHECK: global @source size 56 align 8
 // CHECK-LABEL: func.func @copy
-// CHECK: %[[SIZE:[0-9]+]] = constant {value = 56} : !i64
-// CHECK: ptr.memcpy {{.*}}, %[[SIZE]]
+// CHECK: %[[BYTES:[0-9]+]] = constant {value = 56} : !i64
+// CHECK: ptr.memcpy {{.*}}, %[[BYTES]]
 // CHECK-NOT: ptr.memcpy
 // CHECK-NOT: cir.
 // CHECK-LABEL: func.func @main

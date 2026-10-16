@@ -17,6 +17,7 @@ pub struct IRFormatter<'a> {
     /// dependence graph instead of the canonical one; see
     /// [`IRFormatter::shuffle_nodes`].
     shuffle: Option<Rng>,
+    type_params: Vec<String>,
 }
 
 impl<'a> IRFormatter<'a> {
@@ -28,6 +29,7 @@ impl<'a> IRFormatter<'a> {
             region_block_numbers: vec![],
             attribute_aliases: vec![],
             shuffle: None,
+            type_params: vec![],
         }
     }
 
@@ -41,6 +43,15 @@ impl<'a> IRFormatter<'a> {
 
     pub(crate) fn shuffle(&mut self) -> Option<&mut Rng> {
         self.shuffle.as_mut()
+    }
+
+    /// Name the bound variables of the type terms printed next.
+    pub fn set_type_params(&mut self, names: Vec<String>) {
+        self.type_params = names;
+    }
+
+    pub(crate) fn type_param(&self, index: u32) -> Option<&str> {
+        self.type_params.get(index as usize).map(String::as_str)
     }
 
     pub fn set_attribute_aliases(&mut self, aliases: Vec<(String, AttributeValue)>) {

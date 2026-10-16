@@ -19,7 +19,7 @@ impl Intrinsic for MemcpyOp {
         if let Some(chunks) = inline_chunks(context, size, env, true)? {
             let mut state = observed_state(operation.op());
             for Chunk { offset, bytes } in chunks {
-                let ty = IntegerType::new(context, bytes * 8);
+                let ty = IntegerType::new(context, u64::from(bytes) * 8);
                 let src = address(context, &operation, source, offset)?;
                 let dst = address(context, &operation, destination, offset)?;
                 let mut load = LoadOpBuilder::new(context).ptr(src).result_type(ty);
@@ -55,7 +55,7 @@ impl Intrinsic for MemsetOp {
                 let dst = address(context, &operation, destination, offset)?;
                 let mut fill = value;
                 if bytes > 1 {
-                    let ty = IntegerType::new(context, bytes * 8);
+                    let ty = IntegerType::new(context, u64::from(bytes) * 8);
                     let extended = b::extui(context, value, ty).build();
                     context.insert_op_before(&operation, &extended)?;
                     let pattern = (0..bytes).fold(0u64, |bits, byte| bits | (1 << (byte * 8)));

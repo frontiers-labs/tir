@@ -162,7 +162,9 @@ rules. A function then pays only for looking its rows up in that table.
 Synthesis starts from the dialects the context holds. Every operation with
 semantics is instantiated at each integer width the target computes in, at
 each floating-point format, and with a pointer where it takes an address; a
-memory access is instantiated at each width it moves. Each instance is an
+memory access is instantiated at each width it moves. The types a port takes
+are read off the operation's signature scheme: `int<_>` at every width,
+`int<1>` at one, a free variable at every scalar. Each instance is an
 operation whose operands are placeholders, and each variant of an instance
 holds one operand constant.
 

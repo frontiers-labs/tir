@@ -32,17 +32,11 @@ mod isa {
         op: &tir::OperationRef,
     ) -> Result<bool, tir::PassError> {
         tir::backend::lower::lower_function_and_return(context, op, |ty| {
-            let ty = context.get_type_data(ty);
-            Ok(
-                if (ty.as_ref() as &dyn std::any::Any)
-                    .downcast_ref::<tir::builtin::FloatType>()
-                    .is_some()
-                {
-                    RegClass::XMM.id()
-                } else {
-                    RegClass::GPR.id()
-                },
-            )
+            Ok(if tir::builtin::FloatType::view(context, ty).is_some() {
+                RegClass::XMM.id()
+            } else {
+                RegClass::GPR.id()
+            })
         })
     }
 

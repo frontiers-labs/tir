@@ -80,8 +80,9 @@ pub fn parse_module(
             Ok((module, true))
         }
         InputKind::Llvm => {
-            let module = tir_llvm::import_str(context, &input, target.data_layout().as_ref())
-                .map_err(|e| format!("llvm import failed: {e}"))?;
+            let module =
+                tir_llvm::import_str(context, &input, target.data_layout(context).as_ref())
+                    .map_err(|e| format!("llvm import failed: {e}"))?;
             let mut attributes = context.get_op(module.id()).attributes().to_vec();
             if let Some(value) = target.target_env() {
                 attributes.push(context.named_attribute(tir::TARGET_ENV, value));
@@ -101,19 +102,21 @@ pub fn parse_module(
 /// the module declares itself override the target's key by key, which is how
 /// the backend already combines the two.
 pub fn attach_data_layout(context: &Context, module: &ModuleOp, target: &dyn TargetMachine) {
-    let Some(layout) =
-        tir::DataLayout::for_op_with_default(context, module.id(), target.data_layout().as_ref())
-    else {
+    let Some(layout) = tir::DataLayout::for_op_with_default(
+        context,
+        module.id(),
+        target.data_layout(context).as_ref(),
+    ) else {
         return;
     };
-    let name = context.intern(tir::DATA_LAYOUT);
+    let name = context.intern(tir::LAYOUT_SPEC);
     let mut attributes = context.get_op(module.id()).attributes().to_vec();
     match attributes
         .iter_mut()
         .find(|attribute| attribute.name == name)
     {
         Some(attribute) => attribute.value = layout.spec(),
-        None => attributes.push(context.named_attribute(tir::DATA_LAYOUT, layout.spec())),
+        None => attributes.push(context.named_attribute(tir::LAYOUT_SPEC, layout.spec())),
     }
     context.set_op_attributes(module.id(), attributes);
 }

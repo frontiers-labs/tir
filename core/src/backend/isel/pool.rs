@@ -10,14 +10,11 @@ use std::collections::{BTreeMap, HashMap};
 
 use smallvec::{SmallVec, smallvec};
 use tir::{
-    Context, NodeId, TypeId,
+    Context, NodeId, Terms, TypeArg, TypeId,
     sem::{
-        IrOp, Kind, SemEGraph, SemGraph, SemNode, SemPayload, SemType, SymKind, SymPayload, Theory,
+        IrOp, Kind, SemEGraph, SemGraph, SemNode, SemPayload, SymKind, SymPayload, Theory,
         axioms::Shape,
-        egraph::{
-            carrier_of, class_int_binding, complement_comparison, ir_type, minimal_unsigned_apint,
-            semantic_type, type_width,
-        },
+        egraph::{carrier_of, class_int_binding, complement_comparison, minimal_unsigned_apint},
         infer_types,
         node::{carrier_word, field},
         rewrites, template_node,
@@ -29,10 +26,12 @@ use tir_egraph::{
     Rule as EngineRule,
 };
 use tir_relational::{Expr, Scalar};
+use tir_symbolic::term::ctor;
 
 use super::rule::{Emitter, ImmRange, RegisterRequirement, Rule};
 use super::rules::OperandConstraint;
 use super::synth::Instance;
+use super::{held_type, value_type};
 
 const UNCOVERED: u64 = 1 << 40;
 // What a cost is scaled by to leave room below it for the preference of a
@@ -276,7 +275,7 @@ impl Builder {
     /// Whether the form builds constants `width` bits wide. The price of a
     /// constant and the instructions emitted for it both ask this.
     pub fn builds(&self, width: u32) -> bool {
-        let held = |register: &super::RegisterRequirement| register.accepts(&SemType::bits(width));
+        let held = |register: &super::RegisterRequirement| register.accepts_int(u64::from(width));
         self.width.is_none_or(|own| own == width) && self.result.as_ref().is_none_or(held)
     }
 }
@@ -297,7 +296,10 @@ pub(super) fn plan(
     value: &APInt,
     usable: impl Fn(&Builder) -> bool,
 ) -> Option<Built> {
-    let signed = tir::binding::signed_bits(value.to_u64(), value.width());
+    let width = u32::try_from(value.width())
+        .ok()
+        .filter(|&width| width <= 64)?;
+    let signed = tir::binding::signed_bits(value.to_u64(), width);
     let mut steps = SmallVec::new();
     built(builders, value, signed, &usable, STEPS, &mut steps).then_some(Built { steps })
 }
@@ -315,8 +317,9 @@ fn built(
     if budget == 0 {
         return false;
     }
-    let width = value.width().max(1);
-    let whole = wanted == tir::binding::signed_bits(value.to_u64(), value.width());
+    // `plan` builds no value wider than 64 bits.
+    let width = value.width() as u32;
+    let whole = wanted == tir::binding::signed_bits(value.to_u64(), width);
     // The immediate a rule builds `wanted` from alone.
     let alone = |builder: &Builder| {
         let wanted = match builder.masks {
@@ -331,7 +334,7 @@ fn built(
         let narrow = tir::binding::signed_bits(immediate as u64, width) == immediate;
         let immediate = match (builder.shift, whole, builder.masks) {
             (0, true, false) => value.clone(),
-            _ if narrow => APInt::new_signed(width, immediate),
+            _ if narrow => APInt::new_signed(u64::from(width), immediate),
             _ => APInt::new_signed(64, immediate),
         };
         (fits && builder.range.contains(&immediate)).then_some(immediate)
@@ -362,7 +365,10 @@ fn built(
         });
         let replacing = replacing.max_by_key(|builder| builder.shift)?;
         let field = field(replacing);
-        let by = APInt::new_signed(width, ((wanted & field) as u64 >> replacing.shift) as i64);
+        let by = APInt::new_signed(
+            u64::from(width),
+            ((wanted & field) as u64 >> replacing.shift) as i64,
+        );
         let rest = (wanted & !field) | (fill & field);
         let rest = tir::binding::signed_bits(rest as u64, width);
         let mut chain = SmallVec::new();
@@ -389,7 +395,7 @@ fn built(
             true => tir::binding::signed_bits(low as u64, field),
             false => low,
         };
-        let by = APInt::new_signed(width, low);
+        let by = APInt::new_signed(u64::from(width), low);
         // The rule adds at its own width: the rest is what its sum with
         // the low bits wraps to the wanted bits at.
         let rest = tir::binding::signed_bits(wanted.wrapping_sub(low) as u64, adding.bits);
@@ -403,7 +409,7 @@ fn built(
     }
     for shifting in reading(true) {
         let zeros = wanted.trailing_zeros();
-        let by = APInt::new_signed(width, i64::from(zeros));
+        let by = APInt::new_signed(u64::from(width), i64::from(zeros));
         if zeros != 0
             && wanted != 0
             && shifting.range.contains(&by)
@@ -663,11 +669,11 @@ fn ones(width: u32) -> u64 {
 }
 
 // How wide a literal operand of type `ty` is: an integer a register holds.
-fn literal_width(context: &Context, ty: TypeId) -> Option<u32> {
-    let data = context.get_type_data(ty);
-    let integer =
-        (data.as_ref() as &dyn std::any::Any).downcast_ref::<tir::builtin::IntegerType>()?;
-    Some(integer.width()).filter(|width| (1..=64).contains(width))
+fn literal_width(terms: &Terms, ty: TypeId) -> Option<u32> {
+    let integer = tir::builtin::IntegerType::view(terms, ty)?;
+    u32::try_from(integer.width())
+        .ok()
+        .filter(|width| (1..=64).contains(width))
 }
 
 // The operand of a row that is a constant, if one is: its position in the
@@ -784,11 +790,11 @@ fn tile<'a>(
 // One target pattern as tiling reads it, and whether its `zero` form is
 // spelled: a sum with a displacement is then its other operand.
 struct Tiled<'a> {
-    context: &'a Context,
+    terms: &'a Terms,
     tiles: &'a [Tile],
     covered: &'a [u8],
     pattern: &'a SemGraph,
-    types: &'a [SemType],
+    types: &'a [TypeArg],
     immediates: &'a [u32],
     zero: bool,
     spelled: &'a [Spelled],
@@ -1001,7 +1007,7 @@ impl Tiled<'_> {
                 }
                 (SymKind::Symbol | SymKind::Constant, _) => {
                     let (value, width) = literal.zip(width)?;
-                    let all = value.to_u64() == ones(value.width());
+                    let all = value.to_u64() == ones(value.width().min(64) as u32);
                     Operand::Literal(if all {
                         ones(width)
                     } else {
@@ -1011,7 +1017,7 @@ impl Tiled<'_> {
                 _ => {
                     let spelled = self.types.get(child.index());
                     let wanted = spelled
-                        .and_then(|ty| ir_type(self.context, ty))
+                        .and_then(|ty| held_type(self.terms, ty))
                         .unwrap_or(tile.reads[index]);
                     if wanted != tile.reads[index] {
                         return None;
@@ -1075,12 +1081,14 @@ pub(super) struct Pool {
 }
 
 struct Host<'a> {
+    terms: &'a Terms,
     requirements: &'a [RegisterRequirement],
     ranges: &'a [super::rule::ImmRange],
     // Per type, by its number, what it means to an instruction and the
     // carrier of its values: read off the context once, so that a guard
-    // asks no context and the searches of a round may run on any thread.
-    meanings: Vec<Option<SemType>>,
+    // asks no context and the searches of a round may run on any thread. A
+    // type interned after has neither.
+    meanings: Vec<Option<TypeArg>>,
     carriers: Vec<u64>,
 }
 
@@ -1088,22 +1096,21 @@ impl<'a> Host<'a> {
     // `pointer` is how wide the target's pointers are: a pointer is the
     // bits of an address.
     fn new(
-        context: &Context,
+        context: &'a Context,
         pointer: u32,
         requirements: &'a [RegisterRequirement],
         ranges: &'a [super::rule::ImmRange],
     ) -> Self {
+        let terms = context.terms();
+        let address = terms.int(u64::from(pointer));
         let types = context.types_where(|_| true);
         let meaning = |&ty: &TypeId| {
-            semantic_type(context, ty).or_else(|| {
-                let data = context.get_type_data(ty);
-                (data.as_ref() as &dyn std::any::Any)
-                    .downcast_ref::<tir::ptr::PtrType>()
-                    .map(|_| SemType::bits(pointer))
-            })
+            let pointer = || tir::ptr::PtrType::view(terms, ty).map(|_| address);
+            value_type(terms, ty).or_else(pointer).map(TypeArg::Type)
         };
         let carrier = |&ty: &TypeId| carrier_word(carrier_of(context, Some(pointer), ty));
         Self {
+            terms,
             requirements,
             ranges,
             meanings: types.iter().map(meaning).collect(),
@@ -1111,8 +1118,8 @@ impl<'a> Host<'a> {
         }
     }
 
-    fn meaning(&self, ty: u64) -> Option<&SemType> {
-        self.meanings[ty as usize].as_ref()
+    fn meaning(&self, ty: u64) -> Option<&TypeArg> {
+        self.meanings.get(ty as usize)?.as_ref()
     }
 }
 
@@ -1121,7 +1128,7 @@ impl Externs<SemNode> for Host<'_> {
         match id {
             call::ACCEPTS => {
                 let ty = self.meaning(args[1]);
-                ty.is_some_and(|ty| self.requirements[args[0] as usize].accepts(ty))
+                ty.is_some_and(|ty| self.requirements[args[0] as usize].accepts(self.terms, ty))
             }
             call::TYPED => {
                 let named = self.meaning(args[0]);
@@ -1131,13 +1138,17 @@ impl Externs<SemNode> for Host<'_> {
                 let width = args[2] as u32;
                 (1..=64).contains(&width) && {
                     let bits = crate::binding::signed_bits(args[1], width);
-                    self.ranges[args[0] as usize].contains(&APInt::new_signed(width, bits))
+                    self.ranges[args[0] as usize]
+                        .contains(&APInt::new_signed(u64::from(width), bits))
                 }
             }
-            call::CARRIER => {
-                out[0] = self.carriers[args[0] as usize];
-                true
-            }
+            call::CARRIER => match self.carriers.get(args[0] as usize) {
+                Some(&carrier) => {
+                    out[0] = carrier;
+                    true
+                }
+                None => false,
+            },
             _ => false,
         }
     }
@@ -1237,11 +1248,11 @@ impl Lowering<'_> {
 
     // The constant `value` of type `ty`, a literal of a row.
     fn literal(&mut self, value: u64, ty: TypeId) -> Ref {
-        let width = literal_width(self.context, ty).unwrap_or(64);
+        let width = literal_width(self.context.terms(), ty).unwrap_or(64);
         let bits = value & ones(width);
         let node = template_node(
             SymKind::Constant,
-            Some(SymPayload::Int(APInt::new(width, bits))),
+            Some(SymPayload::Int(APInt::new(u64::from(width), bits))),
             Some(ty),
         );
         let leaf = self.leaf(node, Some(ty));
@@ -1345,19 +1356,20 @@ impl Lowering<'_> {
         graph: &SemGraph,
         node: NodeId,
         operands: &[Ref],
-        types: Option<&[SemType]>,
+        types: Option<&[TypeArg]>,
     ) -> Option<Ref> {
         // A type that is bits under another name, an environment snapshot,
         // labels its term as the integer the patterns name.
-        let bits = |ty: TypeId| match semantic_type(self.context, ty) {
-            Some(meaning @ SemType::Bits(_)) => ir_type(self.context, &meaning).unwrap_or(ty),
+        let terms = self.context.terms();
+        let bits = |ty: TypeId| match value_type(terms, ty) {
+            Some(meaning) if terms.ctor(meaning) == ctor::INT => meaning,
             _ => ty,
         };
         let ty = graph
             .get_annotation(node)
             .and_then(|meta| meta.actual_type)
             .map(bits)
-            .or_else(|| types.and_then(|types| ir_type(self.context, &types[node.index()])));
+            .or_else(|| types.and_then(|types| held_type(terms, &types[node.index()])));
         match graph.get_node(node) {
             SymKind::Symbol => match graph.get_leaf_data(node) {
                 Some(SymPayload::SymbolId(id)) => operands.get(*id as usize).copied(),
@@ -1388,9 +1400,10 @@ impl Lowering<'_> {
 }
 
 struct Compiler<'a> {
+    terms: &'a Terms,
     rule: &'a Rule,
     pattern: &'a SemGraph,
-    types: Vec<SemType>,
+    types: Vec<TypeArg>,
     vars: u32,
     scalars: u32,
     atoms: Vec<Atom<SemNode>>,
@@ -1407,6 +1420,10 @@ struct Compiler<'a> {
 }
 
 impl Compiler<'_> {
+    fn int_width(&self, node: NodeId) -> Option<u64> {
+        self.terms.int_width(self.types[node.index()].as_type()?)
+    }
+
     // The immediate operand `node` is, bare or extended, and its width.
     fn displacement(&self, node: NodeId) -> Option<(u32, u32)> {
         let inner = match self.pattern.get_node(node) {
@@ -1430,8 +1447,8 @@ impl Compiler<'_> {
         }
         // Zero is zero at any width: an immediate whose own width is not
         // spelled is taken as a 32-bit field.
-        let width = match &self.types[inner.index()] {
-            SemType::Bits(tir::sem::Width::Const(width)) if (1..=64).contains(width) => *width,
+        let width = match self.int_width(inner) {
+            Some(width @ 1..=64) => width as u32,
             _ => 32,
         };
         Some((*symbol, width))
@@ -1499,7 +1516,8 @@ impl Compiler<'_> {
             .any(|(candidate, kind)| {
                 *candidate == symbol && matches!(kind, OperandConstraint::Immediate)
             });
-        if self.types[node.index()] == SemType::State {
+        let state = self.types[node.index()].as_type();
+        if state.is_some_and(|ty| self.terms.ctor(ty) == ctor::SEM_STATE) {
             return None;
         }
         let var = self.var();
@@ -1584,12 +1602,10 @@ impl Compiler<'_> {
                 let Some(SymPayload::Int(value)) = self.pattern.get_leaf_data(node) else {
                     return None;
                 };
-                let value = match &self.types[node.index()] {
+                let value = match self.int_width(node) {
                     _ if structural => minimal_unsigned_apint(value.to_u64()),
-                    SemType::Bits(tir::sem::Width::Const(width)) => {
-                        APInt::new(*width, value.to_u64())
-                    }
-                    _ => value.clone(),
+                    Some(width) => APInt::new(width, value.to_u64()),
+                    None => value.clone(),
                 };
                 let var = self.var();
                 self.atoms.push(Atom::Literal {
@@ -1633,10 +1649,8 @@ impl Compiler<'_> {
                     }
                     _ => None,
                 };
-                let width = match &self.types[node.index()] {
-                    SemType::Bits(tir::sem::Width::Const(width)) if (1..=64).contains(width) => {
-                        Some(u64::MAX >> (64 - width))
-                    }
+                let width = match self.int_width(node) {
+                    Some(width @ 1..=64) => Some(u64::MAX >> (64 - width)),
                     _ => None,
                 };
                 let summed = match (kind, children.as_slice()) {
@@ -1739,22 +1753,24 @@ fn width_or_size(kind: SymKind, index: usize) -> bool {
     )
 }
 
-pub(super) fn pattern_types(rule: &Rule, pattern: &SemGraph) -> Option<Vec<SemType>> {
-    infer_types(pattern, |node| {
+fn pattern_types(terms: &Terms, rule: &Rule, pattern: &SemGraph) -> Option<Vec<TypeArg>> {
+    infer_types(terms, pattern, |node| {
         let Some(SymPayload::SymbolId(symbol)) = pattern.get_leaf_data(node) else {
             return None;
         };
         rule.operand_registers
             .iter()
             .find(|(candidate, _)| candidate == symbol)
-            .and_then(|(_, requirement)| requirement.exclusive_float_type().ok().flatten())
+            .and_then(|(_, requirement)| requirement.exclusive_float_type(terms).ok().flatten())
     })
     .ok()
 }
 
 // `None` for a pattern this step does not match yet: one with an immediate
 // operand, a memory access, or a bare operand at the root.
+#[allow(clippy::too_many_arguments)]
 fn compile(
+    terms: &Terms,
     rule: &Rule,
     pattern: &SemGraph,
     form: usize,
@@ -1780,8 +1796,9 @@ fn compile(
     {
         return None;
     }
-    let types = pattern_types(rule, pattern)?;
+    let types = pattern_types(terms, rule, pattern)?;
     let mut compiler = Compiler {
+        terms,
         rule,
         pattern,
         types,
@@ -1868,7 +1885,7 @@ fn compile(
     let mut head = Vec::new();
     let mut into = compiler.vars;
     for &(symbol, width) in &compiler.zeros {
-        let zero = SemNode::constant(APInt::new(width, 0), tir::sem::Prov::None);
+        let zero = SemNode::constant(APInt::new(u64::from(width), 0), tir::sem::Prov::None);
         head.push(HeadOp::Insert {
             label: LabelFill::plain(zero),
             args: SmallVec::new(),
@@ -2249,7 +2266,8 @@ impl Compiled {
                 .root()
                 .and_then(|root| pattern.get_annotation(root))
                 .and_then(|meta| meta.actual_type)
-                .and_then(|ty| type_width(context, ty));
+                .and_then(|ty| context.terms().bit_width(ty))
+                .map(|width| width as u32);
             let held = rule.result_register.map(|register| register.width());
             self.materializers.push(Builder {
                 form: self.forms.len() as u32,
@@ -2296,9 +2314,16 @@ impl Compiled {
             }
             let (requirements, fields) = (&mut self.requirements, &mut self.fields);
             let at = self.forms.len();
-            if let Some((engine, symbols, registers)) =
-                compile(rule, pattern, at, requirements, fields, literal, zero)
-            {
+            if let Some((engine, symbols, registers)) = compile(
+                context.terms(),
+                rule,
+                pattern,
+                at,
+                requirements,
+                fields,
+                literal,
+                zero,
+            ) {
                 self.forms.push(form(symbols, registers));
                 queries.push(engine);
             }
@@ -2307,8 +2332,9 @@ impl Compiled {
 
     // What building the constant `bits` of `width` bits costs.
     fn built(&self, bits: u64, width: u32) -> u64 {
-        let value = APInt::new(width.clamp(1, 64), bits);
-        let usable = |builder: &Builder| builder.builds(value.width());
+        let width = width.clamp(1, 64);
+        let value = APInt::new(u64::from(width), bits);
+        let usable = |builder: &Builder| builder.builds(width);
         plan(&self.materializers, &value, usable).map_or(UNCOVERED, |built| {
             let steps = built.steps.iter();
             steps
@@ -2418,7 +2444,7 @@ fn settle(
                 let width = graph.width(operand.class).unwrap_or(64).clamp(1, 64);
                 let built = plan(
                     &compiled.materializers,
-                    &APInt::new(width, value),
+                    &APInt::new(u64::from(width), value),
                     |builder| builder.builds(width),
                 );
                 Some(built.map_or(UNCOVERED, |built| {
@@ -2461,13 +2487,11 @@ struct Candidate {
 // What the instances are to tiling.
 fn tiles(context: &Context, scratch: &Context, instances: &[Instance], pointer: u32) -> Vec<Tile> {
     // An address is the bits of a word: a pattern computes it as one.
-    let word = tir::builtin::IntegerType::new(context, pointer);
+    let word = tir::builtin::IntegerType::new(context, u64::from(pointer));
     let is = |ty: TypeId| {
-        let data = scratch.get_type_data(ty);
-        let data = data.as_ref() as &dyn std::any::Any;
         (
-            data.is::<tir::builtin::IntegerType>(),
-            data.is::<tir::ptr::PtrType>(),
+            tir::builtin::IntegerType::view(context, ty).is_some(),
+            tir::ptr::PtrType::view(context, ty).is_some(),
         )
     };
     let types = |values: &[tir::ValueId]| {
@@ -2501,7 +2525,7 @@ fn tiles(context: &Context, scratch: &Context, instances: &[Instance], pointer: 
             reads: types(&read),
             widths: read
                 .iter()
-                .map(|&operand| literal_width(scratch, scratch.get_value(operand).ty()))
+                .map(|&operand| literal_width(scratch.terms(), scratch.get_value(operand).ty()))
                 .collect(),
             // A write computes nothing: its term is of the unit type.
             result: types(&op.value_results())
@@ -2798,14 +2822,13 @@ impl Covering<'_> {
 // tiled with rows, top-down from its root, and the rows spelling each
 // axiom's left side.
 struct Backward<'a> {
-    context: &'a Context,
+    terms: &'a Terms,
     tiles: &'a [Tile],
     covered: &'a [u8],
 }
 
 impl Backward<'_> {
     fn patterns(&self, rules: &[Rule], spelled: &[Spelled], out: &mut Vec<Rows>) {
-        let context = self.context;
         for rule in rules {
             for pattern in std::iter::once(&rule.pattern).chain(&rule.secondary) {
                 let operator = |node: &NodeId| {
@@ -2816,7 +2839,7 @@ impl Backward<'_> {
                 let Some(root) = pattern.root().filter(|_| operators > 1) else {
                     continue;
                 };
-                let Some(types) = pattern_types(rule, pattern) else {
+                let Some(types) = pattern_types(self.terms, rule, pattern) else {
                     continue;
                 };
                 // A rule whose result lives in a float register computes a
@@ -2824,10 +2847,11 @@ impl Backward<'_> {
                 let float = rule
                     .result_register
                     .filter(|_| std::ptr::eq(pattern, &rule.pattern));
-                let float =
-                    float.and_then(|register| register.exclusive_float_type().ok().flatten());
-                let wanted = float.as_ref().or(types.get(root.index()));
-                let wanted = wanted.and_then(|ty| ir_type(context, ty));
+                let float = float
+                    .and_then(|register| register.exclusive_float_type(self.terms).ok().flatten());
+                let wanted = float.map(TypeArg::Type);
+                let wanted = wanted.or_else(|| types.get(root.index()).cloned());
+                let wanted = wanted.and_then(|ty| held_type(self.terms, &ty));
                 let immediates: Vec<u32> = rule
                     .operand_constraints
                     .iter()
@@ -2842,7 +2866,7 @@ impl Backward<'_> {
                         continue;
                     }
                     let tiled = Tiled {
-                        context,
+                        terms: self.terms,
                         tiles: self.tiles,
                         covered: self.covered,
                         pattern,
@@ -3207,7 +3231,10 @@ impl Kept<'_> {
                     wide.holds(&narrow).then_some(0)?
                 }
                 (Operand::Immediate(operand), Operand::Literal(value)) => {
-                    let value = APInt::new_signed(width, tir::binding::signed_bits(value, width));
+                    let value = APInt::new_signed(
+                        u64::from(width),
+                        tir::binding::signed_bits(value, width),
+                    );
                     field(rule, operand).contains(&value).then_some(0)?
                 }
                 (Operand::Literal(own), Operand::Literal(other)) => (own == other).then_some(0)?,
@@ -3415,7 +3442,7 @@ impl Pool {
         // term, and covered by the cheapest machine tree of its class.
         let started = std::time::Instant::now();
         let backward = Backward {
-            context,
+            terms: context.terms(),
             tiles: &tiles,
             covered: &covered,
         };

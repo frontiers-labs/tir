@@ -16,10 +16,9 @@ fn computes_named_struct_layout() {
         .find(|record| record.name == "Pair")
         .unwrap();
 
-    assert_eq!(pair.size, 8);
-    assert_eq!(pair.align, 4);
-    assert_eq!(pair.fields[0].offset, 0);
-    assert_eq!(pair.fields[1].offset, 4);
+    let ty = tir::builtin::NamedType::get(typed.layouts().context(), "Pair", vec![]).unwrap();
+    assert_eq!(typed.layouts().size_align(ty), Some((8, 4)));
+    assert_eq!(typed.field_offsets(pair.id), Some(vec![0, 4]));
 }
 
 #[test]
@@ -33,10 +32,9 @@ fn computes_named_union_layout() {
         .find(|record| record.name == "Value")
         .unwrap();
 
-    assert_eq!(value.size, 8);
-    assert_eq!(value.align, 8);
-    assert_eq!(value.fields[0].offset, 0);
-    assert_eq!(value.fields[1].offset, 0);
+    let ty = tir::builtin::NamedType::get(typed.layouts().context(), "Value", vec![]).unwrap();
+    assert_eq!(typed.layouts().size_align(ty), Some((8, 8)));
+    assert_eq!(typed.field_offsets(value.id), Some(vec![0, 0]));
 }
 
 #[test]
@@ -52,9 +50,7 @@ fn gives_anonymous_structs_distinct_compiler_names() {
 
     assert_eq!(names.len(), 2);
     assert_ne!(names[0], names[1]);
-    assert!(names
-        .iter()
-        .all(|name| name.starts_with("__fcc_anon_struct.")));
+    assert!(names.iter().all(|name| name.starts_with("anon.")));
 }
 
 #[test]
@@ -239,5 +235,6 @@ fn c17_accepts_a_call_through_an_empty_parameter_list() {
     let options: LangOptions = "c17".parse().unwrap();
     let source = "int legacy(); int main(void) { return legacy(1); }";
     let ast = fcc::parser::parse(&lex("<c17-test>", source), options).expect("parse");
-    assert!(fcc::sema::analyze(ast, options).is_ok());
+    let context = tir::Context::with_default_dialects();
+    assert!(fcc::sema::analyze(&context, ast, options).is_ok());
 }

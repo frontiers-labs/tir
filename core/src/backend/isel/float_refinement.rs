@@ -1,15 +1,14 @@
 use std::collections::{HashMap, HashSet};
 
-use tir::NodeId;
-use tir::sem::{
-    FloatFormat, SemGraph, SemType, SmtOracle, SymKind, SymPayload, Width, infer_types,
-};
+use tir::sem::{SemGraph, SmtOracle, SymKind, SymPayload, infer_types};
+use tir::{NodeId, Terms, TypeId};
 use tir_adt::APInt;
 
 pub(super) fn ieee_arithmetic_refines(
+    terms: &Terms,
     full: &SemGraph,
     candidate: &SemGraph,
-    symbol_types: &[SemType],
+    symbol_types: &[TypeId],
 ) -> bool {
     let (Some(full_root), Some(candidate_root)) = (full.root(), candidate.root()) else {
         return false;
@@ -17,16 +16,18 @@ pub(super) fn ieee_arithmetic_refines(
     let Some(rounded) = rounded_kind(*candidate.get_node(candidate_root)) else {
         return false;
     };
-    let Ok(types) = infer_types(candidate, |node| match candidate.get_leaf_data(node) {
-        Some(SymPayload::SymbolId(id)) => symbol_types.get(*id as usize).cloned(),
-        _ => None,
+    let Ok(types) = infer_types(terms, candidate, |node| {
+        match candidate.get_leaf_data(node) {
+            Some(SymPayload::SymbolId(id)) => symbol_types.get(*id as usize).copied(),
+            _ => None,
+        }
     }) else {
         return false;
     };
-    let SemType::Float(format) = &types[candidate_root.index()] else {
+    let Some(float) = types[candidate_root.index()].as_type() else {
         return false;
     };
-    let Some((width, nan_mask)) = quiet_nan_mask(format) else {
+    let Some((width, nan_mask)) = quiet_nan_mask(terms, float) else {
         return false;
     };
     let operands: Vec<_> = candidate.children(candidate_root).collect();
@@ -69,9 +70,9 @@ pub(super) fn ieee_arithmetic_refines(
 
     let mut always = SemGraph::new();
     constant(&mut always, 1, 1);
-    let mut proof_types = vec![SemType::Float(format.clone())];
+    let mut proof_types = vec![float];
     proof_types.extend_from_slice(symbol_types);
-    SmtOracle.equivalent_typed(&proof, &always, &proof_types)
+    SmtOracle.equivalent_typed(terms, &proof, &always, &proof_types)
 }
 
 fn rounded_kind(kind: SymKind) -> Option<SymKind> {
@@ -98,10 +99,10 @@ fn rounded_kind(kind: SymKind) -> Option<SymKind> {
     })
 }
 
-fn quiet_nan_mask(format: &FloatFormat) -> Option<(u32, u64)> {
-    match (&format.exponent, &format.mantissa) {
-        (Width::Const(8), Width::Const(23)) => Some((32, 0x7fc00000)),
-        (Width::Const(11), Width::Const(52)) => Some((64, 0x7ff8000000000000)),
+fn quiet_nan_mask(terms: &Terms, float: TypeId) -> Option<(u32, u64)> {
+    match terms.float_format(float)? {
+        (8, 23) => Some((32, 0x7fc00000)),
+        (11, 52) => Some((64, 0x7ff8000000000000)),
         _ => None,
     }
 }
@@ -141,6 +142,6 @@ fn node(graph: &mut SemGraph, kind: SymKind, children: &[NodeId]) -> NodeId {
 
 fn constant(graph: &mut SemGraph, width: u32, value: u64) -> NodeId {
     let node = graph.add_node(SymKind::Constant);
-    graph.set_leaf_data(node, SymPayload::Int(APInt::new(width, value)));
+    graph.set_leaf_data(node, SymPayload::Int(APInt::new(u64::from(width), value)));
     node
 }

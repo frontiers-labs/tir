@@ -5,9 +5,9 @@
 // one equation, `32·δi + 4·δj = 0`, which the
 // iteration space admits only at `δi = δj = 0`, with `k` free.
 
-#data_layout = {types = {i32 = {abi = 32, size = 32}, i64 = {abi = 64, size = 64}, p = {abi = 64, size = 64}}}
+#layout_spec = #layout.spec<!i32 = {size = 32, abi = 32}, !i64 = {size = 64, abi = 64}, !ptr.p = {size = 64, abi = 64}>
 
-module {data_layout = #data_layout} {
+module {layout.spec = #layout_spec} {
   %0 = func.func @matmul() {
     %1 = ptr.alloca {size = 256, align = 4} : !ptr.p
     %2 = ptr.alloca {size = 256, align = 4} : !ptr.p

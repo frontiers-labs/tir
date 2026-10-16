@@ -95,8 +95,8 @@ fn print_keyed_list<T: std::fmt::Display>(
 }
 
 fn verify_noalias_arguments(
-    op: &impl Operation,
     context: &Context,
+    op: &impl Operation,
     arguments: &[tir::TypeId],
 ) -> Result<(), Error> {
     let reject = |what: &str| {
@@ -119,10 +119,7 @@ fn verify_noalias_arguments(
         let Some(&ty) = index.and_then(|index| arguments.get(index)) else {
             return reject("name the function's arguments");
         };
-        if (context.get_type_data(ty).as_ref() as &dyn std::any::Any)
-            .downcast_ref::<crate::ptr::PtrType>()
-            .is_none()
-        {
+        if crate::ptr::PtrType::view(context, ty).is_none() {
             return reject("have pointer type");
         }
     }

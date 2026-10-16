@@ -4,9 +4,9 @@
 // parameter of the form, and the range predicate a caller could be asked
 // starts where the loop does.
 
-#data_layout = {types = {i32 = {abi = 32, size = 32}, i64 = {abi = 64, size = 64}, p = {abi = 64, size = 64}}}
+#layout_spec = #layout.spec<!i32 = {size = 32, abi = 32}, !i64 = {size = 64, abi = 64}, !ptr.p = {size = 64, abi = 64}>
 
-module {data_layout = #data_layout} {
+module {layout.spec = #layout_spec} {
   %0 = func.func @tail(%1: !ptr.p, %2: !ptr.p, %3: !i32) {
     %4 = constant {value = 64} : !i32
     %5 = constant {value = 1} : !i32

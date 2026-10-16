@@ -129,7 +129,7 @@ fn extents_widen_the_target_to_the_bytes_an_access_covers() {
 #[test]
 fn building_a_view_allocates_nothing() {
     let (context, module) = fixtures::parse(
-        r#"module {data_layout = {types = {i32 = {abi = 32, size = 32}, i64 = {abi = 64, size = 64}, p = {abi = 64, size = 64}}}} {
+        r#"module {layout.spec = #layout.spec<!i32 = {size = 32, abi = 32}, !i64 = {size = 64, abi = 64}, !ptr.p = {size = 64, abi = 64}>} {
   %0 = func.func @f() {
     %1 = ptr.alloca {size = 1024, align = 4} : !ptr.p
     %2 = constant {value = 0} : !i32
@@ -188,7 +188,7 @@ fn strip_mining_an_unordered_loop_keeps_its_sum() {
     use tir::{Operation, Symbol};
 
     let (context, module) = fixtures::parse(
-        r#"module {data_layout = {types = {i32 = {abi = 32, size = 32}, i64 = {abi = 64, size = 64}, p = {abi = 64, size = 64}}}} {
+        r#"module {layout.spec = #layout.spec<!i32 = {size = 32, abi = 32}, !i64 = {size = 64, abi = 64}, !ptr.p = {size = 64, abi = 64}>} {
   %0 = func.func @f(%n: !i32) -> !i32 {
     %1 = ptr.alloca {size = 64, align = 4} : !ptr.p
     %2 = constant {value = 0} : !i32

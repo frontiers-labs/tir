@@ -405,9 +405,13 @@ impl Executor {
     /// Resize `value` to a class's architectural width: truncate wider values,
     /// zero-extend narrower ones. Identity for unconfigured classes.
     fn resize_to_class_width(&self, class: &str, value: tir::utils::APInt) -> tir::utils::APInt {
-        match self.register_widths.get(class) {
-            Some(&width) if value.width() > width => value.truncate(width),
-            Some(&width) if value.width() < width => value.zero_extend(width),
+        match self
+            .register_widths
+            .get(class)
+            .map(|&width| u64::from(width))
+        {
+            Some(width) if value.width() > width => value.truncate(width),
+            Some(width) if value.width() < width => value.zero_extend(width),
             _ => value,
         }
     }
@@ -478,7 +482,7 @@ impl Executor {
         if off == 0 {
             Ok(slot.resized(byte_bits))
         } else {
-            let shifted = slot.to_apint().lshr(off);
+            let shifted = slot.to_apint().lshr(u64::from(off));
             Ok(tir::utils::RawBits::from_apint(&shifted).resized(byte_bits))
         }
     }
@@ -493,8 +497,8 @@ impl Executor {
         let key = (file.clone(), index);
         let view = self.register_views.get(class).copied().unwrap_or_default();
         let stored = if view.merge || view.bit_offset != 0 {
-            let w = self.class_bit_width(class);
-            let off = view.bit_offset;
+            let w = u64::from(self.class_bit_width(class));
+            let off = u64::from(view.bit_offset);
             let slot = self
                 .registers
                 .get(&key)

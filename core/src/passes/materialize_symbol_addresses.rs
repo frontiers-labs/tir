@@ -154,10 +154,7 @@ fn collect(context: &Context, root: &OpHandle, uses: &mut Vec<Use>) {
 }
 
 fn is_pointer(context: &Context, value: ValueId) -> bool {
-    let ty = context.get_type_data(context.get_value(value).ty());
-    (ty.as_ref() as &dyn std::any::Any)
-        .downcast_ref::<crate::ptr::PtrType>()
-        .is_some()
+    crate::ptr::PtrType::view(context, context.get_value(value).ty()).is_some()
 }
 
 /// The symbol `value` is the definition of, when it is one.

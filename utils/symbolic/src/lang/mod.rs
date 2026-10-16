@@ -14,7 +14,7 @@ pub use infer::{
 };
 pub use ops::{SCALAR_OPS, ScalarOp, SmtTemplate, WidthRule, scalar_op, scalar_op_named};
 pub use sexpr::{BuildError, SemBuilderHooks, SemExpr, build, op_kind, op_name, parse};
-pub use types::{FloatFormat, SemType, TypeError, TypeUnifier, TypeVar, Width, WidthVar};
+pub use types::{TypeError, TypeUnifier};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(u16)]
@@ -200,6 +200,13 @@ pub enum SymKind {
     /// undefined. `id` tells occurrences apart, so two undefined values are
     /// never the same term; nothing may be concluded from one.
     Undef,
+    /// `[condition, value]`: `value`, or poison where `condition` holds.
+    /// Poison is deferred undefined behavior: an operation reading it is
+    /// poison, and only [`SymKind::Freeze`] makes a value of it again.
+    Poison,
+    /// `[value]`: `value` where it is not poison, an arbitrary value where it
+    /// is.
+    Freeze,
 }
 
 impl SymKind {
@@ -264,6 +271,7 @@ impl SymKind {
             | SymKind::Sqrt
             | SymKind::AsFloat
             | SymKind::Port
+            | SymKind::Freeze
             | SymKind::FPFlags => 1,
             SymKind::IterConcat => 1,
             SymKind::If

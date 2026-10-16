@@ -4,9 +4,9 @@
 // port inside the gate, which threads nothing through its operands. What a
 // region reads counts as read.
 
-#data_layout = {types = {i1 = {abi = 8, size = 8}, i32 = {abi = 32, size = 32}, i64 = {abi = 64, size = 64}, p = {abi = 64, size = 64}}}
+#layout_spec = #layout.spec<!i1 = {size = 8, abi = 8}, !i32 = {size = 32, abi = 32}, !i64 = {size = 64, abi = 64}, !ptr.p = {size = 64, abi = 64}>
 
-module {data_layout = #data_layout} {
+module {layout.spec = #layout_spec} {
   %0 = func.func @sum(%1: !i32, %2: !i1) -> !i32 {
     %3 = constant {value = 0} : !i32
     %4 = constant {value = 64} : !i32

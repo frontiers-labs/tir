@@ -915,7 +915,7 @@ fn fp_state_term(
                 .unwrap()
                 .bit_width
                 .unwrap();
-            constant(width, 0)
+            constant(u64::from(width), 0)
         };
     }
     let resource = constant(2, StateResourceKind::FpEnvironment as u64);

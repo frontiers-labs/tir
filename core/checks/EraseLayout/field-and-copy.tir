@@ -1,0 +1,36 @@
+// RUN: tir opt --pass restructure-nodes,erase-layout %s | filecheck %s
+// RUN: tir opt --pass restructure-nodes,erase-layout,instcombine-nodes %s | filecheck %s --check-prefix=FOLDED
+
+// A field's address is its base plus the field's offset, and a struct copy is
+// a memcpy of the struct's size: both asked of the layout in scope while the
+// rules rewrite, in bits, and written as byte constants.
+
+#layout_spec = #layout.spec<!i<W> = {size = !nat.align_to<W, 8>, abi = !nat.min<!nat.pow2_ceil<W>, 64>}, !ptr.p = {size = 64, abi = 64}>
+
+module {layout.spec = #layout_spec} {
+  type.def !Node = !struct<{next: !ptr.p<!Node>, value: !i32}>
+  %fn_f = func.func @f(%a: !ptr.p, %b: !ptr.p) -> !i32 {
+    %s0 = state.entry_state : !state<memory>
+    %s1 = ptr.copy %a, %b state(%s0) {ty = !Node}
+    %field = ptr.field %a {ty = !Node, field = "value"} : !ptr.p
+    %r = ptr.load %field state(%s1) : !i32
+    func.return %r state(%s1)
+  }
+  module_end
+}
+
+// CHECK-LABEL: func.func @f(%[[A:[0-9]+]]: !ptr.p, %[[B:[0-9]+]]: !ptr.p)
+// CHECK-NOT: ptr.copy
+// CHECK-NOT: ptr.field
+// CHECK-NOT: layout.
+// CHECK-NOT: divui
+// CHECK-DAG: %[[SIXTEEN:[0-9]+]] = constant {value = 16} : !i64
+// CHECK-DAG: ptr.memcpy %[[A]], %[[B]], %[[SIXTEEN]] state(
+// CHECK-DAG: %[[EIGHT:[0-9]+]] = constant {value = 8} : !i64
+// CHECK-DAG: ptr.ptradd %{{[0-9]+}}, %[[EIGHT]] : !ptr.p
+
+// FOLDED-LABEL: func.func @f(%[[A:[0-9]+]]: !ptr.p, %[[B:[0-9]+]]: !ptr.p)
+// FOLDED-DAG: %[[EIGHT:[0-9]+]] = constant {value = 8} : !i64
+// FOLDED-DAG: ptr.ptradd %[[A]], %[[EIGHT]] : !ptr.p
+// FOLDED-DAG: %[[SIXTEEN:[0-9]+]] = constant {value = 16} : !i64
+// FOLDED-DAG: ptr.memcpy %[[A]], %[[B]], %[[SIXTEEN]] state(

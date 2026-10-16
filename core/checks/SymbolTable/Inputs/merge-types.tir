@@ -1,0 +1,12 @@
+module {
+  type.def !Pair = !struct<{a: !i32, b: !i32}>
+  type.def !B = !struct<{x: !i64}>
+  type.def !A = !struct<{p: !ptr.p<!B>}>
+  type.def !Node = !struct<{v: !i32}>
+  type.def !Leaf
+  type.def !Env = !struct<{v: !i32}>
+  %fn_g = func.func @g(%0: !ptr.p<!A>, %1: !ptr.p<!Pair>, %2: !ptr.p<!Env>) {
+    func.return
+  }
+  module_end
+}

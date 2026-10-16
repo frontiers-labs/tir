@@ -6,7 +6,7 @@ use super::arithmetic::{
 };
 use super::resource::{apply_flags, effect_records, effects_for, verify_ports};
 use super::{ArithmeticSemantics, IntegerConversionSemantics, Rounding, SubnormalMode};
-use crate::builtin::{FloatType, IntegerType};
+use crate::builtin::IntegerType;
 use crate::{
     Context, Error, HasResourceSemantics, ResourceEffect, ResourceEffects, ResourceSemantics,
     TypeId, operation,
@@ -16,9 +16,7 @@ use super::semantics::{interp_error, speculatable_if_ignore};
 use crate as tir;
 
 fn int_width(context: &Context, ty: TypeId) -> Result<FloatWidth, Error> {
-    let data = context.get_type_data(ty);
-    let integer = (data.as_ref() as &dyn std::any::Any)
-        .downcast_ref::<IntegerType>()
+    let integer = IntegerType::view(context, ty)
         .ok_or_else(|| Error::VerificationError("expected integer type".into()))?;
     match integer.width() {
         32 => Ok(FloatWidth::W32),
@@ -29,13 +27,10 @@ fn int_width(context: &Context, ty: TypeId) -> Result<FloatWidth, Error> {
     }
 }
 
-fn width_node(graph: &mut tir::sem::SemGraph, value: u32) -> tir::NodeId {
-    let width = (u32::BITS - value.leading_zeros()).max(1);
+fn width_node(graph: &mut tir::sem::SemGraph, value: u64) -> tir::NodeId {
+    let width = u64::from(u64::BITS - value.leading_zeros()).max(1);
     let node = graph.add_node(tir::sem::SymKind::Constant);
-    graph.set_leaf_data(
-        node,
-        tir::sem::SymPayload::Int(APInt::new(width, value as u64)),
-    );
+    graph.set_leaf_data(node, tir::sem::SymPayload::Int(APInt::new(width, value)));
     node
 }
 
@@ -78,8 +73,8 @@ fn arithmetic_conversion_semantics(
     let result_type = op.context.get_value(op.value_results()[0]).ty();
     let result_width = float_width(&op.context, result_type).ok()?;
     let (exponent_width, mantissa_width) = float_parts(result_width);
-    let exponent = width_node(graph, exponent_width);
-    let mantissa = width_node(graph, mantissa_width);
+    let exponent = width_node(graph, u64::from(exponent_width));
+    let mantissa = width_node(graph, u64::from(mantissa_width));
     let rounding = if nearest_any_quiet {
         None
     } else {
@@ -111,10 +106,8 @@ fn integer_conversion_semantics(
 ) -> Option<tir::NodeId> {
     let toward_zero = semantics.rounding == Rounding::Fixed(tir_adt::RoundingMode::TowardZero);
     let result_type = op.context.get_value(op.value_results()[0]).ty();
-    let data = op.context.get_type_data(result_type);
-    let integer = (data.as_ref() as &dyn std::any::Any)
-        .downcast_ref::<IntegerType>()
-        .expect("verified integer conversion result");
+    let integer =
+        IntegerType::view(&op.context, result_type).expect("verified integer conversion result");
     let input = input_node(graph);
     let width = width_node(graph, integer.width());
     let rounding = if toward_zero {
@@ -132,17 +125,17 @@ fn integer_conversion_semantics(
 
 macro_rules! arithmetic_conversion {
     (float, $op:ident, $name:tt, $kind:expr, $generic:expr, $rounded:expr) => {
-        arithmetic_conversion!(@impl $op, $name, "FloatType", float_width, $kind, $generic, $rounded);
+        arithmetic_conversion!(@impl $op, $name, "(float<_, _>) -> float<_, _>", float_width, $kind, $generic, $rounded);
     };
     (integer, $op:ident, $name:tt, $kind:expr, $generic:expr, $rounded:expr) => {
-        arithmetic_conversion!(@impl $op, $name, "IntegerType", int_width, $kind, $generic, $rounded);
+        arithmetic_conversion!(@impl $op, $name, "(int<_>) -> float<_, _>", int_width, $kind, $generic, $rounded);
     };
-    (@impl $op:ident, $name:tt, $input_type:tt, $source_width:ident, $kind:expr, $generic:expr, $rounded:expr) => {
+    (@impl $op:ident, $name:tt, $scheme:tt, $source_width:ident, $kind:expr, $generic:expr, $rounded:expr) => {
         operation! {
             $op {
-                name: $name, dialect: "fp",
-                operands: O { input: $input_type }, attributes: A { semantics: "FpSemantics" },
-                results: R { result: "FloatType" }, interfaces: [ResourceEffects, HasResourceSemantics, crate::Speculatable, crate::interp::Interp],
+                name: $name, dialect: "fp", scheme: $scheme,
+                operands: O { input }, attributes: A { semantics: "FpSemantics" },
+                results: R { result }, interfaces: [ResourceEffects, HasResourceSemantics, crate::Speculatable, crate::interp::Interp],
                 sem: "(set result $value_semantics)",
                 state: "in_out", verifier: "true",
             }
@@ -189,10 +182,8 @@ macro_rules! arithmetic_conversion {
             fn resource_semantics(&self) -> ResourceSemantics {
                 let semantics = self.semantics();
                 let result_type = self.0.context.get_value(self.0.value_results()[0]).ty();
-                let format = float_parts(
-                    float_width(&self.0.context, result_type)
-                        .expect("verified floating conversion result"),
-                );
+                let width = float_width(&self.0.context, result_type).expect("verified floating conversion result");
+                let format = float_parts(width);
                 super::resource::arithmetic(
                     &self.0,
                     $generic,
@@ -217,8 +208,7 @@ macro_rules! arithmetic_conversion {
                 let source_type = self.0.context.get_value(self.0.value_operands()[0]).ty();
                 let destination_type = self.0.context.get_value(self.0.value_results()[0]).ty();
                 let source = $source_width(&self.0.context, source_type).map_err(interp_error)?;
-                let destination = float_width(&self.0.context, destination_type)
-                    .map_err(interp_error)?;
+                let destination = float_width(&self.0.context, destination_type).map_err(interp_error)?;
                 let bits = match &operands[0] {
                     crate::interp::Value::Float(value) => value.to_bits() as u64,
                     crate::interp::Value::Int(value) => value.to_u64(),
@@ -284,9 +274,9 @@ macro_rules! to_integer {
     ($op:ident, $name:tt, $kind:expr, $generic:expr, $rounded:expr) => {
         operation! {
             $op {
-                name: $name, dialect: "fp",
-                operands: O { input: "FloatType" }, attributes: A { semantics: "FpSemantics" },
-                results: R { result: "IntegerType" }, interfaces: [ResourceEffects, HasResourceSemantics, crate::Speculatable, crate::interp::Interp],
+                name: $name, dialect: "fp", scheme: "(float<_, _>) -> int<_>",
+                operands: O { input }, attributes: A { semantics: "FpSemantics" },
+                results: R { result }, interfaces: [ResourceEffects, HasResourceSemantics, crate::Speculatable, crate::interp::Interp],
                 sem: "(set result $value_semantics)",
                 state: "in_out", verifier: "true",
             }
@@ -363,11 +353,8 @@ macro_rules! to_integer {
                     .integer_conversion()
                     .map_err(interp_error)?;
                 let source = width_of_float(value)?;
-                let destination = int_width(
-                    &self.0.context,
-                    self.0.context.get_value(self.result()).ty(),
-                )
-                .map_err(interp_error)?;
+                let destination = int_width(&self.0.context, self.0.context.get_value(self.result()).ty())
+                    .map_err(interp_error)?;
                 let result = apply_flags(
                     eval_float(
                         $kind,
@@ -379,7 +366,7 @@ macro_rules! to_integer {
                     semantics.exceptions,
                     state,
                 )?;
-                let width = destination.bit_width();
+                let width = u64::from(destination.bit_width());
                 Ok(vec![crate::interp::Value::Int(APInt::new(
                     width,
                     result.bits,

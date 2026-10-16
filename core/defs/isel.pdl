@@ -54,6 +54,11 @@ rule if-else-condition: #if(c: int<1>, x: int<1>, c) : int<1>
 rule theta-same: #theta(x: int<W>, x) : int<W>
   => x;
 
+// A freeze is a value: selected as a copy of its operand's register, which
+// never holds poison.
+rule freeze-copy: #freeze(x: int<W>) : int<W>
+  => x;
+
 // Zero-register comparison shapes: applied once after the saturation fixpoint,
 // so the synthetic zero cannot feed back through the boolean `*-via-if`
 // identities and multiply equivalent comparison forms.

@@ -13,8 +13,8 @@ pub(super) use tir::sem::egraph::canonical_type;
 use tir::{
     Context, TypeId,
     sem::{
-        IrOp, Kind, Prov, SemNode, SemType, SymKind, SymPayload, Width,
-        egraph::{LANES_WIDTH, carrier_of, semantic_type, type_width},
+        IrOp, Kind, Prov, SemNode, SymKind, SymPayload,
+        egraph::{LANES_WIDTH, carrier_of},
         node::{carrier_word, field},
     },
 };
@@ -162,13 +162,13 @@ impl Describing {
             // A constant of a type the semantics read as bits is an integer
             // as wide, as the seeder spells the constant of any type but a
             // float.
-            let carried = carrier.map(|carrier| u32::from(carrier.width)).or_else(|| {
-                match semantic_type(context, ty)? {
-                    SemType::Bits(Width::Const(width)) => Some(width),
-                    _ => None,
-                }
+            let carried = carrier.map(|carrier| u64::from(carrier.width)).or_else(|| {
+                super::value_type(context.terms(), ty).and_then(|ty| context.terms().int_width(ty))
             });
-            let width = carried.or(type_width(context, ty)).unwrap_or(64).min(64);
+            let width = carried
+                .or(context.terms().bit_width(ty))
+                .unwrap_or(64)
+                .min(64) as u32;
             Child::Operand {
                 operand: operand as u8,
                 width,
@@ -193,8 +193,8 @@ impl Describing {
                     }
                     SymPayload::Int(value) => Child::Fixed {
                         value: value.to_u64(),
-                        width: value.width(),
-                        constant: self.seed(Seed::Constant(value.width())),
+                        width: u32::try_from(value.width()).ok()?,
+                        constant: self.seed(Seed::Constant(u32::try_from(value.width()).ok()?)),
                     },
                     _ => return None,
                 });
@@ -824,7 +824,8 @@ impl Building<'_> {
                 (field::FORM, u64::from(pattern)),
                 (field::CARRIER, u64::from(shape.carrier)),
             ];
-            let spelled = SemNode::fill(&form(pattern, shape.operands.len()), &fills);
+            let form = form(pattern, shape.operands.len());
+            let spelled = SemNode::fill(&form, vocabulary.names(), &fills);
             vocabulary.intern(&spelled.expect("a form of a carrier"));
         }
         let arity = self.shapes.iter().map(|shape| shape.operands.len()).max();

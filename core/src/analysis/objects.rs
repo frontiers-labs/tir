@@ -1,8 +1,8 @@
 //! Which object every pointer names.
 //!
 //! A pointer reads back to the object it was derived from — a stack
-//! allocation, a global, a parameter — through the `ptradd` chains and the
-//! spill slots a frontend leaves behind. Distinct objects never name the same
+//! allocation, a global, a parameter — through the `ptradd` and `ptr.field`
+//! chains and the spill slots a frontend leaves behind. Distinct objects never name the same
 //! memory, and neither does an allocation whose address never leaves its own
 //! accesses.
 //!
@@ -13,7 +13,7 @@ use std::collections::HashSet;
 
 use crate::builtin::GlobalOp;
 use crate::func::FuncOp;
-use crate::ptr::PtrAddOp;
+use crate::ptr::{FieldOp, PtrAddOp};
 use crate::{Context, MemoryRead, MemoryWrite, PromotableAllocation, RegionId, Value, ValueId};
 
 /// The object a pointer was derived from.
@@ -79,7 +79,7 @@ pub fn object_base(context: &Context, address: ValueId) -> Option<Base> {
             return None;
         }
         let instance = context.get_op(op);
-        if instance.is::<PtrAddOp>() {
+        if instance.is::<PtrAddOp>() || instance.is::<FieldOp>() {
             current = instance.operands()[0];
         } else if instance.has_interface::<dyn PromotableAllocation>() {
             return Some(Base::Alloca(current));
@@ -180,7 +180,7 @@ fn accessed_only_seen(
     }
     context.users_of(address).into_iter().all(|user| {
         let instance = context.get_op(user);
-        if instance.is::<PtrAddOp>() {
+        if instance.is::<PtrAddOp>() || instance.is::<FieldOp>() {
             return instance.operands()[0] == address
                 && instance
                     .results()

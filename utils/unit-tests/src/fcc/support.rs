@@ -18,8 +18,11 @@ pub fn lex(name: &str, source: &str) -> Vec<(Token, Span)> {
 pub fn typed_for(source: &str, march: &str) -> fcc::sema::TypedAst {
     let options: LangOptions = "c23".parse().unwrap();
     let ast = fcc::parser::parse(&lex("<sema-test>", source), options).expect("parse");
-    let target = fcc::sema::TargetProfile::for_march(march).unwrap();
-    fcc::sema::analyze_with_target(ast, options, target).expect("sema")
+    let machine = tir::backend::select_target(march, None, None).unwrap();
+    let context = fcc_context();
+    let target = fcc::sema::TargetProfile::for_target(&context, march, machine.as_ref()).unwrap();
+    let layout = target.layout_spec(&context, machine.as_ref()).unwrap();
+    fcc::sema::analyze_with_target(&context, ast, options, target, layout).expect("sema")
 }
 
 pub fn fcc_context() -> tir::Context {
@@ -32,8 +35,8 @@ pub fn fcc_context() -> tir::Context {
 pub fn lower(source: &str) -> (tir::Context, tir::builtin::ModuleOp) {
     let options = Default::default();
     let unit = fcc::parser::parse(&lex("<test>", source), options).expect("parse");
-    let unit = fcc::sema::analyze(unit, options).expect("sema");
     let context = fcc_context();
+    let unit = fcc::sema::analyze(&context, unit, options).expect("sema");
     let module = fcc::codegen::codegen(&context, &unit).expect("codegen");
     (context, module)
 }

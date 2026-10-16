@@ -2,6 +2,7 @@ pub mod builtin;
 pub mod cfg;
 pub mod fp;
 pub mod func;
+pub mod layout;
 pub mod ptr;
 pub mod scf;
 pub mod state;

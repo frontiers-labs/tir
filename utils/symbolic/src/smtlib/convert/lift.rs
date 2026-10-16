@@ -183,7 +183,14 @@ impl<'a, V, A> Lifter<'a, V, A> {
 
     fn lift_constant(&self, id: NodeId, bool_ctx: bool) -> Result<(Term, bool), ConvertError> {
         let (value, width) = match self.graph.get_leaf_data(id) {
-            Some(SymPayload::Int(v)) => (v.to_u64(), v.width()),
+            Some(SymPayload::Int(v)) => match u32::try_from(v.width()) {
+                Ok(width) => (v.to_u64(), width),
+                Err(_) => {
+                    return Err(ConvertError::Unsupported(
+                        "a constant wider than 2^32 bits".into(),
+                    ));
+                }
+            },
             _ => return Err(ConvertError::Unsupported("non-integer constant".into())),
         };
         if bool_ctx && width == 1 {

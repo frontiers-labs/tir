@@ -17,7 +17,11 @@ mod score;
 pub mod select;
 mod synth;
 
-use tir::{AnalysisManager, Context, OperationRef, Pass, PassError, PassTarget};
+use tir::{
+    AnalysisManager, Context, OperationRef, Pass, PassError, PassTarget, Terms, TypeArg, TypeId,
+    builtin::TupleType,
+};
+use tir_symbolic::term::ctor;
 
 use automaton::Automaton;
 pub use fp_environment::check_default_fp_environment;
@@ -107,7 +111,7 @@ impl InstructionSelectPass {
             selection: None,
             cases: edges::Cases::default(),
             vocabulary: tir_egraph::Vocabulary::new(context.names()),
-            seeded: crate::rewrite::Kinds::default(),
+            seeded: crate::rewrite::Kinds::unflagged(),
             pending: None,
             kinds: Vec::new(),
             pointer: 64,
@@ -230,20 +234,10 @@ impl InstructionSelectPass {
         let mut instances = synth::instances(&scratch, types, layout, &mut skipped);
         // A target that declares no layout holds a pointer in 64 bits.
         let pointer = layout
-            .and_then(tir::DataLayout::from_value)
+            .and_then(|layout| tir::DataLayout::from_value(&scratch, layout))
             .and_then(|layout| layout.pointer_size())
             .unwrap_or(64);
         synth::accesses(&scratch, pointer, &mut skipped, &mut instances);
-        // The pool spells the type of each node of a pattern as an IR type.
-        // Interned here, like the instances' own, they leave the synthesis
-        // thread none to intern.
-        for rule in &self.rules {
-            for pattern in std::iter::once(&rule.pattern).chain(&rule.secondary) {
-                for ty in pool::pattern_types(rule, pattern).iter().flatten() {
-                    tir::sem::egraph::ir_type(&scratch, ty);
-                }
-            }
-        }
         if std::env::var_os("TIR_ISEL_SYNTH").is_some() {
             eprintln!(
                 "isel-synth: {} schemas, {} instances, {} skipped, {} us",
@@ -273,7 +267,7 @@ impl InstructionSelectPass {
         // its row is the compare a control with no compare of its own
         // branches on.
         let tested = |&width: &u32| {
-            let ty = tir::sem::egraph::ir_type(&scratch, &tir::sem::SemType::bits(width))?;
+            let ty = context.terms().int(u64::from(width));
             let operand = || scratch.create_value(ty, None).id();
             let test = crate::passes::destructure::case_test(&scratch, operand(), operand());
             let test = scratch.get_op(tir::Operation::id(&test));
@@ -574,7 +568,7 @@ impl InstructionSelectPass {
             .filter_map(|&(ty, instance)| {
                 let seed = automaton::Seed::Register(automaton::canonical_type(scratch, ty));
                 let seed = seeds.iter().position(|known| *known == seed)?;
-                let width = tir::sem::egraph::type_width(scratch, ty)?;
+                let width = u32::try_from(scratch.terms().bit_width(ty)?).ok()?;
                 Some((seed as u32, described[instance].as_ref()?.label, width))
             })
             .collect();
@@ -868,4 +862,55 @@ impl Pass for InstructionSelectPass {
         }
         Ok(())
     }
+}
+
+// What selection reads a value of IR type `ty` as. A rounding mode or a
+// floating-point environment is read as the integer of its carrier, which is
+// what the semantics of the operations taking one name. Types selection does
+// not read (states, pointers, vectors) have none.
+fn value_type(terms: &Terms, ty: TypeId) -> Option<TypeId> {
+    match terms.ctor(ty) {
+        ctor::INT | ctor::FLOAT => Some(ty),
+        ctor::TUPLE => match TupleType::view(terms, ty)?.elements()[..] {
+            [first, second] => Some(pair(
+                terms,
+                value_type(terms, first)?,
+                value_type(terms, second)?,
+            )),
+            _ => None,
+        },
+        _ if tir::fp::RoundingType::view(terms, ty).is_some()
+            || tir::fp::EnvironmentType::view(terms, ty).is_some() =>
+        {
+            terms.bit_width(ty).map(|width| terms.int(width))
+        }
+        _ => None,
+    }
+}
+
+// The IR type a value of semantic type `ty` is held in: raw bits are held as
+// an integer, and a type with a width still unknown has none.
+fn held_type(terms: &Terms, ty: &TypeArg) -> Option<TypeId> {
+    let ty = ty.as_type()?;
+    match terms.ctor(ty) {
+        ctor::INT | ctor::RAW => terms.nat(ty, 0).map(|width| terms.int(width)),
+        ctor::FLOAT => terms.float_format(ty).map(|_| ty),
+        ctor::UNIT => Some(ty),
+        ctor::TUPLE => match TupleType::view(terms, ty)?.elements()[..] {
+            [first, second] => Some(pair(
+                terms,
+                held_type(terms, &TypeArg::Type(first))?,
+                held_type(terms, &TypeArg::Type(second))?,
+            )),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn pair(terms: &Terms, first: TypeId, second: TypeId) -> TypeId {
+    let elements = TypeArg::List([TypeArg::Type(first), TypeArg::Type(second)].into());
+    terms
+        .intern(ctor::TUPLE, vec![elements])
+        .expect("a pair of data types")
 }

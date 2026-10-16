@@ -395,9 +395,9 @@ impl<A> ExtendSemBytes for SemGraph<A> {
 /// constructor); used by TMDL codegen in place of a raw `APInt`.
 pub fn int_payload(width: u32, value: u64, signed: bool) -> SymPayload<ValueId> {
     let v = if signed {
-        tir_adt::APInt::new_signed(width, value as i64)
+        tir_adt::APInt::new_signed(u64::from(width), value as i64)
     } else {
-        tir_adt::APInt::new(width, value)
+        tir_adt::APInt::new(u64::from(width), value)
     };
     SymPayload::Int(v)
 }

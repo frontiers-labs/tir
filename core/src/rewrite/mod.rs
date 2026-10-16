@@ -27,13 +27,15 @@ use std::cell::RefCell;
 use std::sync::Arc;
 
 use smallvec::SmallVec;
-use tir_egraph::{ClassId as Id, Engine, Externs, Extraction, Ref, RowId, Rule};
+use tir_egraph::{
+    Atom, ClassId as Id, ColumnId, Engine, Externs, Extraction, Label, Ref, RowId, Rule,
+};
 use tir_relational::Words;
 
 use crate::analysis::effects::{observed_state, produced_state};
 use crate::binding::{forwards_state, state_chains};
-use crate::sem::egraph::type_width;
-use crate::sem::{Prov, SemNode as Node, SymKind};
+use crate::operation::OpNameId;
+use crate::sem::{Kind, Prov, SemNode as Node, SymKind};
 use crate::utils::APInt;
 use crate::{
     ConstantLike, Context, Gamma, IdMap, MemoryRead, MemoryWrite, NewOp, OpHandle, OpId, PassError,
@@ -44,7 +46,7 @@ use crate::{
 
 mod seed;
 
-pub(crate) use seed::{Kinds, LoopPorts, Port, Seeded, children, seed};
+pub(crate) use seed::{Kinds, LoopPorts, Port, Seeded, children, seed, seed_ops};
 
 /// `Load(address, bytes, metadata, state)`.
 pub(crate) const LOAD_ARITY: usize = 4;
@@ -82,11 +84,19 @@ pub(crate) trait Rewrite {
     fn cost(&self, eg: &Engine<Node>, class: Id, node: &Node, operands: &[Ref], offset: u64)
     -> u64;
 
-    fn spell(&self, out: &mut Commit<'_>, row: RowId, region: RegionId) -> Option<ValueId>;
+    fn spell(&self, out: &mut Commit<'_>, row: RowId, region: RegionId) -> Option<ValueId> {
+        out.builtin(row, region)
+    }
 
     fn arm_facts(&self) -> bool;
 
     fn rewire_op(&self, _out: &mut Commit<'_>, _instance: &OpHandle, _region: RegionId) -> bool {
+        false
+    }
+
+    // Whether the rules lower what they match: no node a rule's root matches
+    // is written back; see `Driver::lower`.
+    fn lowers(&self) -> bool {
         false
     }
 }
@@ -108,6 +118,31 @@ pub(crate) struct Driver<'a, R: Rewrite> {
     /// dependence, so what depends on an operation counts at least as many.
     carriers: IdMap<OpId, usize>,
     written: RefCell<Written>,
+    // The roots of a lowering's rules; see `Rewrite::lowers`.
+    lowered: Vec<Node>,
+}
+
+/// The node each rule's root matches.
+pub(crate) fn rule_roots(rules: &[Arc<Rule<Node>>]) -> Vec<Node> {
+    let root = |rule: &Arc<Rule<Node>>| {
+        let query = rule.plan.query();
+        query.atoms.iter().find_map(|atom| match atom {
+            Atom::Node {
+                template, class, ..
+            } if *class == query.root => Some(template.clone()),
+            _ => None,
+        })
+    };
+    rules.iter().filter_map(root).collect()
+}
+
+/// The IR ops among `roots`, by name.
+pub(crate) fn root_ops(context: &Context, roots: &[Node]) -> Vec<OpNameId> {
+    let op = |root: &Node| match &root.kind {
+        Kind::Ir(op) => Some(context.intern_op_name(op.dialect, op.name)),
+        _ => None,
+    };
+    roots.iter().filter_map(op).collect()
 }
 
 impl<'a, R: Rewrite> Driver<'a, R> {
@@ -121,6 +156,11 @@ impl<'a, R: Rewrite> Driver<'a, R> {
         for table in &pass.rules().tables {
             eg.add_words(table.clone());
         }
+        let lowered = match pass.lowers() {
+            true => rule_roots(&pass.rules().rules),
+            false => Vec::new(),
+        };
+
         Self {
             context,
             eg,
@@ -130,6 +170,7 @@ impl<'a, R: Rewrite> Driver<'a, R> {
             named: HashMap::default(),
             carriers: IdMap::new(),
             written: RefCell::default(),
+            lowered,
         }
     }
 
@@ -144,10 +185,8 @@ impl<'a, R: Rewrite> Driver<'a, R> {
     }
 
     pub(crate) fn extract(&self) -> Extraction<'static, Node> {
-        let (eg, pass) = (&self.eg, self.pass);
-        eg.extract_best(|class, node, operands, offset| {
-            pass.cost(eg, class, node, operands, offset)
-        })
+        self.eg
+            .extract_best(|class, node, operands, offset| self.price(class, node, operands, offset))
     }
 
     fn refresh<'b>(
@@ -155,10 +194,16 @@ impl<'a, R: Rewrite> Driver<'a, R> {
         extraction: &'b Extraction<'b, Node>,
         dirty: &[Id],
     ) -> Extraction<'b, Node> {
-        let (eg, pass) = (&self.eg, self.pass);
-        extraction.refresh(eg, dirty, |class, node, operands, offset| {
-            pass.cost(eg, class, node, operands, offset)
+        extraction.refresh(&self.eg, dirty, |class, node, operands, offset| {
+            self.price(class, node, operands, offset)
         })
+    }
+
+    fn price(&self, class: Id, node: &Node, operands: &[Ref], offset: u64) -> u64 {
+        if self.lowered.iter().any(|root| root.matches_template(node)) {
+            return u64::MAX;
+        }
+        self.pass.cost(&self.eg, class, node, operands, offset)
     }
 
     /// Prove the loop-carried values a loop never changes, optimistically:
@@ -280,9 +325,10 @@ impl<'a, R: Rewrite> Driver<'a, R> {
     /// term over the cheapest form of both — the literal, where one side is one.
     fn inject(&mut self, value: ValueId, width: u32, bits: u64) {
         let class = self.class_of(value);
-        let constant = self
-            .eg
-            .add(Node::constant(APInt::new(width, bits), Prov::None));
+        let constant = self.eg.add(Node::constant(
+            APInt::new(u64::from(width), bits),
+            Prov::None,
+        ));
         let _ = self.eg.union(class, constant);
         if width == 1
             && let Some((lhs, rhs)) = self.settled_equality(value, bits == 1)
@@ -379,7 +425,11 @@ impl<'a, R: Rewrite> Driver<'a, R> {
             // An arm runs where the predicate equals its case; a boolean's
             // second arm, its default, runs where the predicate is 1.
             let predicate = gamma.predicate();
-            let width = type_width(self.context, self.context.get_value(predicate).ty());
+            let width = self
+                .context
+                .terms()
+                .bit_width(self.context.get_value(predicate).ty())
+                .map(|width| width as u32);
             let arms = gamma.arms();
             let boolean = width == Some(1) && arms.len() == 2;
             let cases = gamma.cases();
@@ -409,6 +459,42 @@ impl<'a, R: Rewrite> Driver<'a, R> {
             }
         }
         self.place(region);
+        Ok(())
+    }
+
+    /// Commit a lowering: rewire the readers of each of `ops`, the ops its
+    /// rules' roots matched, and erase each it leaves unread. Nothing else
+    /// of the function is rewritten.
+    pub(crate) fn lower(
+        &mut self,
+        ops: &[OpId],
+        extraction: &Extraction<'_, Node>,
+    ) -> Result<(), PassError> {
+        let context = self.context;
+        let mut memo = Memo::default();
+        let mut regions = Vec::new();
+        {
+            let mut out = self.out(extraction, &mut memo);
+            for &op in ops {
+                let region = context.region_of_op(op).expect("an op of the function");
+                out.lower(&context.get_op(op), region)?;
+                if !regions.contains(&region) {
+                    regions.push(region);
+                }
+            }
+        }
+        for &region in &regions {
+            self.place(region);
+        }
+        for &op in ops {
+            let instance = context.get_op(op);
+            let region = context.region_of_op(op).expect("an op of the function");
+            let unread =
+                |&value: &ValueId| !context.is_used(value) && !published(context, region, value);
+            if instance.results().iter().all(unread) {
+                context.erase_op(&crate::OperationRef::new(instance))?;
+            }
+        }
         Ok(())
     }
 
@@ -589,6 +675,35 @@ impl Commit<'_> {
         self.rewire_read(value, region)
     }
 
+    /// Rewire the readers of an op a lowering's rule matched. The rules build
+    /// its replacement over the values the op read: another value of an
+    /// operand's class may sit where the replacement cannot read it, or have
+    /// readers of its own, as a state does. A result is spelled anew, never
+    /// answered by what an earlier lowering spelled for its class, whose base
+    /// came from other reads.
+    fn lower(&mut self, instance: &OpHandle, region: RegionId) -> Result<(), PassError> {
+        let class = |out: &Self, value: &ValueId| Some(out.eg.find(*out.value_class.get(value)?));
+        let read: Vec<_> = (instance.operands().iter())
+            .filter_map(|value| Some((class(self, value)?, *value)))
+            .collect();
+        let outer: Vec<_> = (read.into_iter())
+            .map(|(class, value)| (class, self.memo.insert(class, value)))
+            .collect();
+        for result in instance.results() {
+            if let Some(class) = class(self, &result) {
+                self.memo.remove(&class);
+            }
+            self.rewire(result, region)?;
+        }
+        for (class, value) in outer.into_iter().rev() {
+            match value {
+                Some(value) => self.memo.insert(class, value),
+                None => self.memo.remove(&class),
+            };
+        }
+        Ok(())
+    }
+
     pub(crate) fn rewire_read(
         &mut self,
         value: ValueId,
@@ -642,7 +757,13 @@ impl Commit<'_> {
     ) -> Option<ValueId> {
         let defining = self.context.get_value(named).defining_op();
         self.spelled.extend(defining);
+        // What spells `named` is located where its defining op is.
+        let origin = defining.and_then(|op| self.context.op_location(op));
+        let outer = origin.map(|origin| self.context.set_origin(Some(origin)));
         let value = self.materialize(reference, ty, region);
+        if let Some(outer) = outer {
+            self.context.set_origin(outer);
+        }
         self.spelled
             .truncate(self.spelled.len() - defining.iter().len());
         value
@@ -703,7 +824,7 @@ impl Commit<'_> {
             }
             if !self.is_pointer(ty) {
                 let width = self.eg.width(reference.class)?;
-                let value = APInt::new_signed(width, bits as i64);
+                let value = APInt::new_signed(u64::from(width), bits as i64);
                 return Some(self.literal(&value, ty, region));
             }
             if bits == 0 {
@@ -722,7 +843,7 @@ impl Commit<'_> {
     }
 
     fn literal(&self, value: &APInt, ty: TypeId, region: RegionId) -> ValueId {
-        let op = crate::builtin::ops::constant(self.context, spell(value), ty).build();
+        let op = crate::builtin::ops::literal(self.context, value, ty).build();
         self.add(region, crate::Operation::id(&op));
         op.result()
     }
@@ -754,9 +875,7 @@ impl Commit<'_> {
     }
 
     fn is_pointer(&self, ty: TypeId) -> bool {
-        (self.context.get_type_data(ty).as_ref() as &dyn std::any::Any)
-            .downcast_ref::<crate::ptr::PtrType>()
-            .is_some()
+        crate::ptr::PtrType::view(&self.context, ty).is_some()
     }
 
     fn node(&mut self, row: RowId, region: RegionId) -> Option<ValueId> {
@@ -786,10 +905,76 @@ impl Commit<'_> {
                 }
                 self.rebuild(row, region)
             }
-            // A rule-introduced op is the pass's to write.
-            Prov::Introduced(_) => None,
+            Prov::Introduced => self.introduce(row, region),
             Prov::None => Some(self.literal(node.int()?, self.wanted().1, region)),
         }
+    }
+
+    // The op a rule introduced over its operands' spellings, each read at the
+    // type its class holds, placed where they say. An operand whose class
+    // holds no type leaves the op unwritten.
+    fn introduce(&mut self, row: RowId, region: RegionId) -> Option<ValueId> {
+        let node = self.eg.node(row);
+        let (Kind::Ir(op), Some(ty)) = (&node.kind, node.ty) else {
+            return None;
+        };
+        let types: Vec<TypeId> = self
+            .eg
+            .children(row)
+            .iter()
+            .map(|&child| self.class_type(child))
+            .collect::<Option<_>>()?;
+        let operands = self.operands(row, &types, region)?;
+        let mut attributes = op.attrs.clone();
+        // A variadic op names how many operands each of its ports takes: its
+        // variadic port, the states, takes what the others leave.
+        let schema = self.context.op_schema(op.dialect, op.name);
+        let ports = schema.map_or(&[][..], |schema| schema.operands);
+        if ports.iter().any(|port| port.variadic) {
+            let fixed = ports.iter().filter(|port| !port.variadic).count();
+            let rest = operands.len().checked_sub(fixed)?;
+            let sizes = ports
+                .iter()
+                .map(|port| AttributeValue::UInt(if port.variadic { rest as u64 } else { 1 }));
+            let sizes = AttributeValue::Array(sizes.collect());
+            attributes.push(self.context.named_attribute("operand_segment_sizes", sizes));
+        }
+        let result = self.context.create_value(ty, None).id();
+        let written = self.context.add_operation(NewOp::new_dynamic(
+            (op.dialect, op.name),
+            self.context.clone(),
+            operands,
+            vec![result],
+            vec![],
+            attributes,
+        ));
+        // An introduced op joins its region after everything the region
+        // holds, not at the op it replaces: that position is the tie-break
+        // selection orders by, and moving it there cost instructions.
+        match self.eg.children(row).is_empty() {
+            true => self.context.add(region, written.id),
+            false => {
+                self.context.add_auto(written.id);
+            }
+        }
+        Some(result)
+    }
+
+    // The type `reference`'s class holds. An integer constant's class is the
+    // zero of its carrier, whose type is the integer of the carrier's width.
+    fn class_type(&self, reference: Ref) -> Option<TypeId> {
+        if let Some(key) = self.eg.fact(ColumnId::Type, reference.class) {
+            return Some(TypeId::from_number(key as u32));
+        }
+        let found = self.eg.find(reference);
+        let width = self.eg.width(found.class)?;
+        let integer = crate::sem::node::int_carrier(width);
+        let constant = self.eg.int_const(found).is_some()
+            && self
+                .eg
+                .nodes(found.class)
+                .all(|node| tir_egraph::Label::carrier(node) == integer);
+        constant.then(|| crate::builtin::IntegerType::new(self.context, u64::from(width)))
     }
 
     /// An IR value of type `ty` that is exactly `reference` and is already
@@ -858,10 +1043,10 @@ impl Commit<'_> {
     ) -> Option<ValueId> {
         let width = self.eg.width(reference.class)?;
         let delta = reference.offset.wrapping_sub(at);
-        let step = spell(&APInt::new_signed(width, delta as i64));
+        let step = spell(&APInt::new_signed(u64::from(width), delta as i64));
         let pointer = self.is_pointer(ty);
         let step_ty = if pointer {
-            crate::builtin::IntegerType::new(self.context, width)
+            crate::builtin::IntegerType::new(self.context, u64::from(width))
         } else {
             ty
         };

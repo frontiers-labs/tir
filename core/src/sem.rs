@@ -9,12 +9,11 @@
 use crate::{NodeId, OpId, Operation, TypeId};
 
 pub use tir_symbolic::lang::{
-    AtomicRmwOp, BuildError, Continuation, FloatFormat, MemOrdering, Memory, SCALAR_OPS, ScalarOp,
-    SemBuilderHooks, SemExpr, SemType, SmtTemplate, StateAccessKind, StateFieldKind,
-    StateFieldSchema, StateResourceKind, SymKind, SymPayload, TypeError, TypeUnifier, TypeVar,
-    Value, Width, WidthRule, WidthVar, build, canonicalize_for_selection, execute, execute_pure,
-    execute_with_memory, infer_types, infer_widths, op_kind, op_name, parse, scalar_op,
-    scalar_op_named,
+    AtomicRmwOp, BuildError, Continuation, MemOrdering, Memory, SCALAR_OPS, ScalarOp,
+    SemBuilderHooks, SemExpr, SmtTemplate, StateAccessKind, StateFieldKind, StateFieldSchema,
+    StateResourceKind, SymKind, SymPayload, TypeError, TypeUnifier, Value, WidthRule, build,
+    canonicalize_for_selection, execute, execute_pure, execute_with_memory, infer_types,
+    infer_widths, op_kind, op_name, parse, scalar_op, scalar_op_named,
 };
 
 pub use tir_symbolic::sem::{
@@ -59,8 +58,11 @@ impl RuleProofResult {
 }
 
 /// Report the proof outcome of every PDL rule at `width` bits for each of its
-/// width names. Equality rules with SMT proofs use the solver. Refinements with
-/// contract proofs use their structural checker and report admission.
+/// width names, or at the widths its guards ask for. Rules with SMT proofs,
+/// equalities and refinements alike, use the solver to prove a refinement:
+/// each value carries a poison bit, and wherever the left side is not poison
+/// the right side is not poison and equals it. Refinements with contract
+/// proofs use their structural checker and report admission.
 pub fn prove_rules(source: &str, width: u64) -> Result<Vec<(String, RuleProofResult)>, String> {
     let file = tir_pdl::compile(source).map_err(|diagnostics| {
         diagnostics
@@ -95,18 +97,7 @@ pub fn prove_rules(source: &str, width: u64) -> Result<Vec<(String, RuleProofRes
                         }
                     }
                 }
-                (tir_pdl::RuleKind::Refinement, tir_pdl::Proof::Smt) => {
-                    RuleProofResult::Unsupported {
-                        reason: UnsupportedReason::UnsupportedObligation(
-                            "SMT proofs for refinements are not supported; use `proof contract` for checked admission".into(),
-                        ),
-                    }
-                }
-                (_, tir_pdl::Proof::Trusted) => RuleProofResult::Unsupported {
-                    reason: UnsupportedReason::UnsupportedObligation(
-                        "trusted rules have no checked proof".into(),
-                    ),
-                },
+                (_, tir_pdl::Proof::Trusted) => RuleProofResult::Admitted,
                 (_, tir_pdl::Proof::Definitional) => RuleProofResult::Unsupported {
                     reason: UnsupportedReason::UnsupportedObligation(
                         "definitional rules have no solver model".into(),
@@ -119,7 +110,7 @@ pub fn prove_rules(source: &str, width: u64) -> Result<Vec<(String, RuleProofRes
                 },
                 (_, tir_pdl::Proof::Smt) => match axioms::pdl::axiom_from_rule(rule) {
                     Ok(axiom) => {
-                        let widths = vec![width; axiom.width_names.len()];
+                        let widths = axiom.proof_widths(width);
                         match axiom.prove_outcome(&widths) {
                             ProofOutcome::Proven => RuleProofResult::Proven,
                             ProofOutcome::Disproven { model, values } => {
@@ -168,10 +159,12 @@ fn rule_has_shaped_float(rule: &tir_pdl::Rule) -> bool {
 }
 pub(crate) mod egraph;
 pub mod node;
+pub(crate) mod refine;
 pub(crate) mod rewrites;
 pub(crate) mod workload;
 pub use egraph::SemEGraph;
 pub use node::{ANY_FORM, ANY_STATE, IrOp, Kind, Prov, SemNode, SemPayload, template_node};
+pub use refine::prove_refinement;
 pub use rewrites::{SaturationLimits, Theory};
 
 /// Provenance a [`SemGraph`] node may carry; kept out of the node label/leaf payload so it never affects e-node identity.
@@ -208,7 +201,7 @@ impl ExtendSemBytesTyped for SemGraph {
     ) -> NodeId {
         self.extend_sem_bytes_with(kinds, blob, offset, |g, node, width| {
             g.annotation_mut(node).actual_type =
-                Some(crate::builtin::IntegerType::new(context, width));
+                Some(crate::builtin::IntegerType::new(context, u64::from(width)));
         })
     }
 }
@@ -285,12 +278,12 @@ pub fn fold_with_sem(op: &dyn Operation, values: &[Value]) -> Option<Value> {
 
 /// A signed integer interpreter value of the given width.
 pub fn int_value_signed(width: u32, value: i64) -> Value {
-    Value::Int(tir_adt::APInt::new_signed(width, value))
+    Value::Int(tir_adt::APInt::new_signed(u64::from(width), value))
 }
 
 /// An unsigned integer interpreter value of the given width.
 pub fn int_value(width: u32, value: u64) -> Value {
-    Value::Int(tir_adt::APInt::new(width, value))
+    Value::Int(tir_adt::APInt::new(u64::from(width), value))
 }
 
 /// Wrap a machine-register `APInt` (e.g. from `MachineContext::read_register`) as

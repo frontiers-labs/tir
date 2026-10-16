@@ -594,7 +594,7 @@ fn run_elf(
         .write_register(
             abi.sp.0.name(),
             abi.sp.1,
-            tir::utils::APInt::new(sp_width, sp),
+            tir::utils::APInt::new(u64::from(sp_width), sp),
         )
         .expect("failed to initialize stack pointer");
 

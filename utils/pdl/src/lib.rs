@@ -34,7 +34,7 @@ pub fn compile(source: &str) -> Result<File, Vec<Diagnostic>> {
     }
 }
 
-pub use sema::dissolved_constants;
+pub use sema::{NATIVE, dissolved_constants};
 
 /// [`compile`], and reject the patterns an e-graph cannot match: see
 /// [`dissolved_constants`].

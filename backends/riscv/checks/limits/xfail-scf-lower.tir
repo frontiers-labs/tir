@@ -16,4 +16,4 @@ module {
 }
 
 // CHECK: pass 'restructure-nodes' produced invalid IR
-// CHECK-SAME: cmpi operand 'lhs' expected constraint crate::builtin::IntegerType, got !index
+// CHECK-SAME: cmpi at byte 374: operand 1 is !index, expected !builtin.i<W>

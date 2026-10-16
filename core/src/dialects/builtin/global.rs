@@ -23,15 +23,14 @@ operation! {
     GlobalOp {
         name: "global",
         dialect: "builtin",
+        scheme: "() -> ptr.p<_>",
         format: "custom",
         verifier: "true",
         interfaces: [Symbol, Global],
         attributes: A {
             sym_name: "Str",
         },
-        results: R {
-            result: "crate::ptr::PtrType",
-        },
+        results: R { result },
     }
 }
 

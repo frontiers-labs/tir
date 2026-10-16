@@ -409,11 +409,7 @@ fn preserve_nested_round_boundary(
     while let Some(op) = parent {
         if context.get_op(op).is::<RoundOp>() {
             let ty = context.get_value(value).ty();
-            let ty_data = context.get_type_data(ty);
-            if (ty_data.as_ref() as &dyn std::any::Any)
-                .downcast_ref::<FloatType>()
-                .is_some()
-            {
+            if FloatType::view(context, ty).is_some() {
                 let fence = FenceOpBuilder::new(context)
                     .input(value)
                     .result_type(ty)

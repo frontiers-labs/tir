@@ -1,0 +1,64 @@
+// RUN: tir interp %s -f wrap | filecheck %s --check-prefix=WRAP
+// RUN: tir interp %s -f overflow | filecheck %s --check-prefix=OVERFLOW
+// RUN: tir interp %s -f frozen | filecheck %s --check-prefix=FROZEN
+// RUN: not tir interp %s -f branch 2>&1 | filecheck %s --check-prefix=BRANCH
+// RUN: not tir interp %s -f divide 2>&1 | filecheck %s --check-prefix=DIVIDE
+// RUN: not tir interp %s -f assumed 2>&1 | filecheck %s --check-prefix=ASSUMED
+
+// An op decides how it is undefined. A flagged add yields poison where its
+// flag fails, which only a use makes undefined; a branch on poison is such a
+// use, and a freeze gives some value instead. A division by zero must not run
+// at all, nor may an assumption that fails.
+
+module {
+  %fn_wrap = func.func @wrap() -> !i8 {
+    %0 = constant {value = 127} : !i8
+    %1 = constant {value = 1} : !i8
+    %2 = addi %0, %1 : !i8
+    func.return %2
+  }
+  %fn_overflow = func.func @overflow() -> !i8 {
+    %0 = constant {value = 127} : !i8
+    %1 = constant {value = 1} : !i8
+    %2 = addi %0, %1 {nsw = true} : !i8
+    func.return %2
+  }
+  %fn_frozen = func.func @frozen() -> !i8 {
+    %0 = constant {value = 127} : !i8
+    %1 = constant {value = 1} : !i8
+    %2 = addi %0, %1 {nsw = true} : !i8
+    %3 = freeze %2 : !i8
+    func.return %3
+  }
+  %fn_branch = func.func @branch() -> !i8 {
+    %0 = constant {value = 127} : !i8
+    %1 = constant {value = 1} : !i8
+    %2 = addi %0, %1 {nsw = true} : !i8
+    %3 = cmpi %2, %0 {predicate = "slt"} : !i1
+    cfg.cond_br %3, ^bb1, ^bb2
+  ^bb1:
+    func.return %0
+  ^bb2:
+    func.return %1
+  }
+  %fn_divide = func.func @divide() -> !i8 {
+    %0 = constant {value = 7} : !i8
+    %1 = constant {value = 0} : !i8
+    %2 = divsi %0, %1 : !i8
+    func.return %0
+  }
+  %fn_assumed = func.func @assumed() -> !i8 {
+    %0 = constant {value = 0} : !i1
+    assume %0
+    %1 = constant {value = 7} : !i8
+    func.return %1
+  }
+  module_end
+}
+
+// WRAP: i8 -128
+// OVERFLOW: i8 poison
+// FROZEN: i8 0
+// BRANCH: undefined behavior: control flow depends on poison
+// DIVIDE: undefined behavior: builtin.divsi runs where its requires fails
+// ASSUMED: undefined behavior: builtin.assume runs where its requires fails

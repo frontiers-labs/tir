@@ -75,8 +75,12 @@ fn prove_relaxation(rule: &Rule, guarded: &SemGraph) -> Result<GuardedRelaxation
             return Ok(GuardedRelaxationProof::Proven);
         }
     }
-    let symbol_types = relaxation_symbol_types(rule, guarded, &candidate, register_width)?;
-    if let Some(proof) = prove_float_relaxation(guarded, &candidate, &symbol_types, floating) {
+    // The proof names no IR, so its types live in a store of its own.
+    let terms = tir::Terms::new();
+    let symbol_types = relaxation_symbol_types(&terms, rule, guarded, &candidate, register_width)?;
+    if let Some(proof) =
+        prove_float_relaxation(&terms, guarded, &candidate, &symbol_types, floating)
+    {
         return Ok(proof);
     }
     Err(relaxation_error(
@@ -195,24 +199,23 @@ fn relaxation_uses_float(candidate: &SemGraph) -> bool {
 }
 
 fn relaxation_symbol_types(
+    terms: &tir::Terms,
     rule: &Rule,
     guarded: &SemGraph,
     candidate: &SemGraph,
     register_width: u32,
-) -> Result<Vec<tir::sem::SemType>, String> {
-    use tir::sem::SemType;
-
+) -> Result<Vec<tir::TypeId>, String> {
     let symbol_count = symbol_ids(guarded)
         .into_iter()
         .chain(symbol_ids(candidate))
         .max()
         .map_or(0, |id| id + 1) as usize;
-    let mut symbol_types = vec![SemType::bits(register_width); symbol_count];
+    let mut symbol_types = vec![terms.int(u64::from(register_width)); symbol_count];
     for (symbol, requirement) in &rule.operand_registers {
         let ty = requirement
-            .exclusive_float_type()
+            .exclusive_float_type(terms)
             .map_err(|()| relaxation_error(rule, "unsupported float register format"))?
-            .unwrap_or_else(|| SemType::bits(requirement.width()));
+            .unwrap_or_else(|| terms.int(u64::from(requirement.width())));
         if let Some(slot) = symbol_types.get_mut(*symbol as usize) {
             *slot = ty;
         }
@@ -221,9 +224,10 @@ fn relaxation_symbol_types(
 }
 
 fn prove_float_relaxation(
+    terms: &tir::Terms,
     guarded: &SemGraph,
     candidate: &SemGraph,
-    symbol_types: &[tir::sem::SemType],
+    symbol_types: &[tir::TypeId],
     floating: bool,
 ) -> Option<GuardedRelaxationProof> {
     let candidate_root = candidate.root().unwrap();
@@ -257,11 +261,14 @@ fn prove_float_relaxation(
         proof_guarded_root,
         &mut HashMap::new(),
     );
-    if floating && float_refinement::ieee_arithmetic_refines(guarded, candidate, symbol_types) {
+    if floating
+        && float_refinement::ieee_arithmetic_refines(terms, guarded, candidate, symbol_types)
+    {
         return Some(GuardedRelaxationProof::Proven);
     }
     if floating {
-        match SmtOracle.refines_typed_outcome(&proof_candidate, &proof_guarded, symbol_types) {
+        match SmtOracle.refines_typed_outcome(terms, &proof_candidate, &proof_guarded, symbol_types)
+        {
             tir::sem::ProofOutcome::Proven => return Some(GuardedRelaxationProof::Proven),
             tir::sem::ProofOutcome::Unsupported(_) => {}
             tir::sem::ProofOutcome::Disproven { .. } => {}

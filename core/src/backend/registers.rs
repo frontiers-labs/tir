@@ -11,85 +11,89 @@
 //! [`RegAssignment`] onto the function's `asm.symbol`, and assembly printing and
 //! encoding resolve a slot holding a value through that map.
 
-use std::any::Any;
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use tir::attributes::{AttributeValue, RegisterAttr};
-use tir::ty::TypeConstraint;
-use tir::{Context, Error, IRFormatter, OpHandle, Type, TypeId, ValueId, parse::Span};
+use tir::ty::{Ctor, Kind, Param, TypeArg, TypeCtor, TypeSpelling};
+use tir::{Context, Error, OpHandle, TypeId, ValueId, parse::Span};
+use tir_symbolic::term::{no_carrier, valid};
 
 use crate::backend::liveness::PhysReg;
 use crate::backend::regalloc::RegClassId;
 
-/// The type of a virtual register: its register class, written
-/// `!<dialect>.<class>` (`!x86_64.GPR`).
+static REG: Ctor = Ctor::new(TypeCtor {
+    dialect: "backend",
+    name: "reg",
+    params: &[
+        ("target", Param::One(Kind::Sym)),
+        ("class", Param::One(Kind::Sym)),
+    ],
+    kind: Kind::Data,
+    validate: valid,
+    carrier: no_carrier,
+});
+
+/// The type of a virtual register: its register class, the term
+/// `backend.reg<target, class>` written `!<dialect>.<class>` (`!x86_64.GPR`).
 ///
 /// Every value a machine instruction reads or writes carries one, so a value's
 /// class is a type read rather than a search for an attribute naming it. Targets
 /// register one parse key per class through [`reg_class_type_parser`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RegClassType(RegClassId);
 
 impl RegClassType {
     #[allow(clippy::new_ret_no_self)]
     pub fn new(context: &Context, class: RegClassId) -> TypeId {
-        context.get_type_id(Arc::new(Self(class)))
+        let terms = context.terms();
+        let args = vec![
+            TypeArg::Sym(terms.name(class.dialect())),
+            TypeArg::Sym(terms.name(class.name())),
+        ];
+        // A term holds the class's names; its register table is reachable
+        // only through the context's registry.
+        context.note_reg_class(class);
+        terms.intern(REG.id(terms), args).expect("a register class")
+    }
+
+    /// The class `ty` is, when it was made through [`RegClassType::new`].
+    pub fn view(context: &Context, ty: TypeId) -> Option<Self> {
+        let terms = context.terms();
+        if !REG.is(terms, ty) {
+            return None;
+        }
+        let name = |index| match terms.arg(ty, index) {
+            Some(TypeArg::Sym(name)) => Some(name),
+            _ => None,
+        };
+        context.reg_class(name(0)?, name(1)?).map(Self)
     }
 
     pub fn class(&self) -> RegClassId {
         self.0
     }
-}
 
-impl TypeConstraint for RegClassType {}
-
-impl Type for RegClassType {
-    fn dialect(&self) -> &'static str {
-        self.0.dialect()
-    }
-
-    /// Unused: a target registers this type once per register class it declares,
-    /// under the class's own name, through [`reg_class_type_parser`].
-    fn parse_key() -> &'static str {
-        "reg_class"
-    }
-
-    fn parse<'src>(
-        mnemonic: &str,
-        parser: &mut tir::parse::text::Parser<'src>,
-        _context: &Context,
-    ) -> Result<TypeId, (Span, Error)> {
-        Err((
-            Span(parser.pos()),
-            Error::UnknownType(String::new(), mnemonic.to_string()),
-        ))
-    }
-
-    fn print(&self, fmt: &mut IRFormatter<'_>) -> Result<(), std::fmt::Error> {
-        fmt.write(self.0.name())
-    }
-
-    fn eq(&self, other: &dyn Type) -> bool {
-        (other as &dyn Any)
-            .downcast_ref::<RegClassType>()
-            .is_some_and(|other| other.0 == self.0)
-    }
-
-    fn hash(&self, state: &mut dyn std::hash::Hasher) {
-        std::ptr::hash(self.0.info(), &mut StdHasher(state));
-    }
-}
-
-/// `std::ptr::hash` needs a sized `Hasher`; the type interner hands out a
-/// `&mut dyn Hasher`.
-struct StdHasher<'a>(&'a mut dyn std::hash::Hasher);
-
-impl std::hash::Hasher for StdHasher<'_> {
-    fn finish(&self) -> u64 {
-        self.0.finish()
-    }
-    fn write(&mut self, bytes: &[u8]) {
-        self.0.write(bytes)
+    /// Prints `target.class`; a target parses its classes through
+    /// [`reg_class_type_parser`], so the spelling lists no keys.
+    pub fn spelling(context: &Context) -> TypeSpelling {
+        TypeSpelling {
+            ctor: REG.id(context),
+            keys: &[],
+            parse: |mnemonic, parser, _| {
+                Err((
+                    Span(parser.pos()),
+                    Error::UnknownType(String::new(), mnemonic.to_string()),
+                ))
+            },
+            print: |spellings, ty, fmt| {
+                let name = |index| match spellings.terms().arg(ty, index) {
+                    Some(TypeArg::Sym(name)) => spellings.terms().name_text(name),
+                    _ => unreachable!("a register class names its target and class"),
+                };
+                fmt.write(format!("{}.{}", name(0), name(1)))
+            },
+            variadic_tail: false,
+        }
     }
 }
 
@@ -158,10 +162,7 @@ pub fn type_class(context: &Context, ty: TypeId) -> Option<RegClassId> {
     if context.is_state_type(ty) {
         return None;
     }
-    let data = context.get_type_data(ty);
-    (data.as_ref() as &dyn Any)
-        .downcast_ref::<RegClassType>()
-        .map(RegClassType::class)
+    RegClassType::view(context, ty).map(|reg| reg.class())
 }
 
 /// One register slot of a machine opcode, in the order the opcode declares them.

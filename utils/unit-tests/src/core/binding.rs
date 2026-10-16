@@ -10,12 +10,9 @@ tir::helpers::operation! {
     ThetaOp {
         name: "theta",
         dialect: "test",
-        operands: O {
-            inits: "*tir::Any",
-        },
-        results: R {
-            results: "*tir::Any",
-        },
+        scheme: "(_*) -> _*",
+        operands: O { inits },
+        results: R { results },
         regions: R {
             body: Region {
                 kind: Nodes,
@@ -32,13 +29,9 @@ tir::helpers::operation! {
     GammaOp {
         name: "gamma",
         dialect: "test",
-        operands: O {
-            predicate: "tir::builtin::IntegerType",
-            inputs: "*tir::Any",
-        },
-        results: R {
-            results: "*tir::Any",
-        },
+        scheme: "(int<_>, _*) -> _*",
+        operands: O { predicate, inputs },
+        results: R { results },
         regions: R {
             arms: Region {
                 kind: Nodes,
@@ -63,7 +56,12 @@ fn nodes_region(context: &Context, port_types: &[TypeId], results: &[(i64, u32)]
     let constants: Vec<_> = results
         .iter()
         .map(|&(value, width)| {
-            ops::constant(context, value, builtin::IntegerType::new(context, width)).build()
+            ops::constant(
+                context,
+                value,
+                builtin::IntegerType::new(context, u64::from(width)),
+            )
+            .build()
         })
         .collect();
     let values: Vec<ValueId> = constants.iter().map(|c| c.result()).collect();

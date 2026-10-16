@@ -1,0 +1,42 @@
+// RUN: not tir prove --width 8 %S/../../defs/legalize.pdl | filecheck %s
+// RUN: not tir prove --width 16 %S/../../defs/legalize.pdl | filecheck %s
+// RUN: not tir prove --width 32 %S/../../defs/legalize.pdl | filecheck %s
+// RUN: not tir prove --width 64 %S/../../defs/legalize.pdl | filecheck %s
+
+// The limb rules at native widths of 8 to 64 bits, each against a value
+// two limbs wide. The multiply is beyond the solver and admitted as trusted.
+
+// CHECK: add-limbs: proven
+// CHECK-NEXT: sub-limbs: proven
+// CHECK-NEXT: neg-limbs: proven
+// CHECK-NEXT: mul-limbs: admitted
+// CHECK-NEXT: and-limbs: proven
+// CHECK-NEXT: or-limbs: proven
+// CHECK-NEXT: xor-limbs: proven
+// CHECK-NEXT: not-limbs: proven
+// CHECK-NEXT: if-limbs: proven
+// CHECK-NEXT: shl-limbs: proven
+// CHECK-NEXT: lshr-limbs: proven
+// CHECK-NEXT: ashr-limbs: proven
+// CHECK-NEXT: eq-limbs: proven
+// CHECK-NEXT: ne-limbs: proven
+// CHECK-NEXT: ult-limbs: proven
+// CHECK-NEXT: ule-limbs: proven
+// CHECK-NEXT: ugt-limbs: proven
+// CHECK-NEXT: uge-limbs: proven
+// CHECK-NEXT: lt-limbs: proven
+// CHECK-NEXT: le-limbs: proven
+// CHECK-NEXT: gt-limbs: proven
+// CHECK-NEXT: ge-limbs: proven
+// CHECK-NEXT: zext-limbs: proven
+// CHECK-NEXT: zext-wide-limbs: proven
+// CHECK-NEXT: sext-limbs: proven
+// CHECK-NEXT: sext-wide-limbs: proven
+// CHECK-NEXT: extract-concat-low: proven
+// CHECK-NEXT: extract-concat-high: proven
+// CHECK-NEXT: extract-zext-cut: proven
+// CHECK-NEXT: extract-zext-same: proven
+// CHECK-NEXT: extract-zext-widen: proven
+// CHECK-NEXT: extract-sext-cut: proven
+// CHECK-NEXT: extract-sext-same: proven
+// CHECK-NEXT: extract-sext-widen: proven

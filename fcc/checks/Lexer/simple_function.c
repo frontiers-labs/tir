@@ -29,6 +29,7 @@
 // CHECK-NEXT:                 width: 1,
 // CHECK-NEXT:                 signed: false,
 // CHECK-NEXT:                 value: 0,
+// CHECK-NEXT:                 high: None,
 // CHECK-NEXT:             },
 // CHECK-NEXT:             spelling: "0",
 // CHECK-NEXT:         },

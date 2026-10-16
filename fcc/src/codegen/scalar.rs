@@ -2,7 +2,7 @@
 
 use super::{FnCodegen, LoweredExpr, Slot, lower_type, source_type_layout};
 use crate::ast::AstKind;
-use crate::sema::{QualType, TypeKind};
+use crate::sema::{IntegerKind, QualType, TypeKind};
 use std::{cmp::Ordering, sync::Arc};
 use tir::NodeId;
 use tir::attributes::Predicate;
@@ -64,10 +64,7 @@ impl FnCodegen<'_> {
     }
 
     pub(super) fn float_one(&self, ty: TypeId) -> ValueId {
-        let data = self.context.get_type_data(ty);
-        let float = (data.as_ref() as &dyn std::any::Any)
-            .downcast_ref::<FloatType>()
-            .expect("floating constant type");
+        let float = FloatType::view(&self.context, ty).expect("floating constant type");
         self.float_constant(
             match float.bit_width() {
                 32 => 0x3f80_0000,
@@ -238,7 +235,7 @@ impl FnCodegen<'_> {
 
     /// `value`, an integer `from` bits wide, as one of `to` bits.
     fn resize(&mut self, value: ValueId, from: u32, to: u32, signed: bool) -> ValueId {
-        let ty = IntegerType::new(self.context, to);
+        let ty = IntegerType::new(self.context, u64::from(to));
         match to.cmp(&from) {
             Ordering::Greater if signed => self
                 .emit(b::extsi(self.context, value, ty).build())
@@ -267,7 +264,18 @@ impl FnCodegen<'_> {
                 self.emit($op(self.context, lhs, rhs, ty).build()).result()
             };
         }
+        // A signed `int` or wider overflows only in undefined behavior: the
+        // op says so with `nsw`, and an overflow is poison. A narrower type
+        // was promoted and does not reach here as itself.
+        let int = self.typed.target().integer_width(IntegerKind::Int);
+        let nsw = signed() && self.typed.integer_width(source_ty).unwrap_or(0) >= int;
         match kind {
+            AstKind::Add | AstKind::AddAssign if nsw => self
+                .emit(b::addi(self.context, lhs, rhs, ty).nsw(true).build())
+                .result(),
+            AstKind::Sub | AstKind::SubAssign if nsw => self
+                .emit(b::subi(self.context, lhs, rhs, ty).nsw(true).build())
+                .result(),
             AstKind::Add | AstKind::AddAssign => bin!(b::addi),
             AstKind::Sub | AstKind::SubAssign => bin!(b::subi),
             AstKind::Mul | AstKind::MulAssign => bin!(b::muli),
@@ -320,7 +328,8 @@ impl FnCodegen<'_> {
     /// A pointer's address as an integer: the distance from the null pointer,
     /// which is the address zero.
     fn pointer_as_address(&mut self, pointer: ValueId) -> ValueId {
-        let address_ty = IntegerType::new(self.context, self.typed.target().pointer_width());
+        let address_ty =
+            IntegerType::new(self.context, u64::from(self.typed.target().pointer_width()));
         let null = self.null_pointer();
         self.emit(p::ptrdiff(self.context, pointer, null, address_ty).build())
             .result()
@@ -438,7 +447,7 @@ impl FnCodegen<'_> {
             unreachable!("pointer arithmetic result has pointer type")
         };
         let pointer_width = self.typed.target().pointer_width();
-        let offset_ty = IntegerType::new(self.context, pointer_width);
+        let offset_ty = IntegerType::new(self.context, u64::from(pointer_width));
         // C adds the index's value, so it widens by the signedness of its type;
         // the offset is then as wide as the pointer, as `ptr.ptradd` requires.
         let index = self.resize(
@@ -488,7 +497,7 @@ impl FnCodegen<'_> {
         // The byte distance is a pointer-sized integer; the element count is
         // divided out at that width, then fitted to `ptrdiff_t`.
         let pointer_width = self.typed.target().pointer_width();
-        let address_ty = IntegerType::new(self.context, pointer_width);
+        let address_ty = IntegerType::new(self.context, u64::from(pointer_width));
         let mut count = self
             .emit(p::ptrdiff(self.context, lhs, rhs, address_ty).build())
             .result();
@@ -509,7 +518,8 @@ impl FnCodegen<'_> {
         if offset == 0 {
             return base;
         }
-        let offset_ty = IntegerType::new(self.context, self.typed.target().pointer_width());
+        let offset_ty =
+            IntegerType::new(self.context, u64::from(self.typed.target().pointer_width()));
         let offset = self
             .emit(b::constant(self.context, offset as i64, offset_ty).build())
             .result();

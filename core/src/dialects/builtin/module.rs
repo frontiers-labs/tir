@@ -9,6 +9,7 @@ operation! {
     ModuleOp {
         name: "module",
         dialect: "builtin",
+        scheme: "() -> ()",
         verifier: "true",
         regions: R {
             body: Region {
@@ -28,6 +29,7 @@ operation! {
     ModuleEndOp {
         name: "module_end",
         dialect: "builtin",
+        scheme: "() -> ()",
         interfaces: [Terminator],
     }
 }

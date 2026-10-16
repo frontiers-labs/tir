@@ -1,5 +1,6 @@
 //! C type identities, interning, and annotations attached to analyzed syntax.
 
+use super::layout::Layouts;
 use super::{TargetProfile, is_signed_integer};
 use crate::ast::{Ast, RecordId, RecordKind};
 use std::collections::HashMap;
@@ -51,6 +52,11 @@ pub enum IntegerKind {
     UnsignedLong,
     LongLong,
     UnsignedLongLong,
+    /// `_BitInt(width)`: a bit-precise integer, never promoted.
+    BitInt {
+        width: u32,
+        signed: bool,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -125,23 +131,22 @@ pub struct TypedAst {
     pub(super) types: TypeInterner,
     pub(super) target: TargetProfile,
     pub(super) records: Vec<RecordDefinition>,
+    pub(super) layouts: Layouts,
 }
 
 #[derive(Clone, Debug)]
 pub struct RecordField {
     pub name: String,
     pub ty: QualType,
-    pub offset: u64,
 }
 
 #[derive(Clone, Debug)]
 pub struct RecordDefinition {
     pub id: RecordId,
     pub kind: RecordKind,
+    /// The name of the record's `type.def`.
     pub name: String,
     pub fields: Vec<RecordField>,
-    pub size: u64,
-    pub align: u64,
 }
 
 impl TypedAst {
@@ -163,6 +168,26 @@ impl TypedAst {
 
     pub fn record(&self, id: RecordId) -> Option<&RecordDefinition> {
         self.records.iter().find(|record| record.id == id)
+    }
+
+    pub fn layouts(&self) -> &Layouts {
+        &self.layouts
+    }
+
+    fn layout_type(&self, ty: QualType) -> Option<tir::TypeId> {
+        let record = |id| Some(self.layouts.record_type(&self.record(id)?.name));
+        self.layouts.type_of(&self.types, self.target, &record, ty)
+    }
+
+    /// Size and alignment of `ty`, in bytes; `None` for an incomplete type.
+    pub fn type_layout(&self, ty: QualType) -> Option<(u64, u64)> {
+        self.layouts.size_align(self.layout_type(ty)?)
+    }
+
+    /// The offset of each field of the record `id`, in bytes.
+    pub fn field_offsets(&self, id: RecordId) -> Option<Vec<u64>> {
+        self.layouts
+            .field_offsets(self.layouts.record_type(&self.record(id)?.name))
     }
 
     pub fn integer_width(&self, ty: QualType) -> Option<u32> {

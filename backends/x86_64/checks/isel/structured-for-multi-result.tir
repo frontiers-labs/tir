@@ -5,9 +5,9 @@
 // port with the advanced counter, and the continuation reads them all as
 // parameters.
 
-#data_layout = {types = {p = {abi = 64, size = 64}}}
+#layout_spec = #layout.spec<!ptr.p = {size = 64, abi = 64}>
 
-module {data_layout = #data_layout} {
+module {layout.spec = #layout_spec} {
   %fn_two = func.func @two(%lb: !i64, %ub: !i64, %st: !i64, %a: !i64, %b: !i64) -> !i64 {
     cfg.br ^bb1(%lb, %a, %b : !i64, !i64, !i64)
   ^bb1(%i: !i64, %x: !i64, %y: !i64):

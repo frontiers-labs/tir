@@ -112,8 +112,20 @@ fn parse_hexadecimal_floating_literal(digits: &str, kind: FloatingLiteralKind) -
     ))
 }
 
+pub(crate) fn bit_precise_suffix(spelling: &str) -> Option<(usize, bool)> {
+    let lower = spelling.to_ascii_lowercase();
+    ["uwb", "wbu", "wb"]
+        .into_iter()
+        .find(|suffix| lower.ends_with(suffix))
+        .map(|suffix| (suffix.len(), suffix.contains('u')))
+}
+
 fn parse_integer_literal(spelling: &str) -> Option<IntegerLiteral> {
-    let suffix_start = spelling.trim_end_matches(['u', 'U', 'l', 'L']).len();
+    let bit_precise = bit_precise_suffix(spelling);
+    let suffix_start = match bit_precise {
+        Some((length, _)) => spelling.len() - length,
+        None => spelling.trim_end_matches(['u', 'U', 'l', 'L']).len(),
+    };
     let digits = spelling[..suffix_start].replace('\'', "");
     let normalized = if digits.len() > 1
         && digits.starts_with('0')
@@ -126,7 +138,12 @@ fn parse_integer_literal(spelling: &str) -> Option<IntegerLiteral> {
     } else {
         digits
     };
-    normalized.parse().ok().map(|value| IntegerLiteral {
+    let value: APInt = normalized.parse().ok()?;
+    // Only a bit-precise literal is wider than the widest standard type.
+    if bit_precise.is_none() && value.width() > 64 {
+        return None;
+    }
+    Some(IntegerLiteral {
         value,
         spelling: spelling.to_string(),
     })
@@ -150,6 +167,8 @@ pub enum Token {
     KwBool,
     #[token("_Bool")]
     KwUnderscoreBool,
+    #[token("_BitInt")]
+    KwBitInt,
     #[token("break")]
     KwBreak,
     #[token("case")]
@@ -247,7 +266,7 @@ pub enum Token {
     #[regex(r"0[xX](([0-9a-fA-F][0-9a-fA-F']*(\.[0-9a-fA-F']*)?)|(\.[0-9a-fA-F][0-9a-fA-F']*))[pP][+-]?[0-9][0-9']*[fFlL]?", |lex| parse_floating_literal(lex.slice()))]
     #[regex(r"(([0-9][0-9']*\.[0-9']*|\.[0-9][0-9']*)([eE][+-]?[0-9][0-9']*)?|[0-9][0-9']*[eE][+-]?[0-9][0-9']*)[fFlL]?", |lex| parse_floating_literal(lex.slice()))]
     FloatingLiteral(FloatingLiteral),
-    #[regex("0[xX][0-9a-fA-F'][0-9a-fA-F']*[uUlL]*|0[bB][01'][01']*[uUlL]*|[0-9][0-9']*[uUlL]*", |lex| parse_integer_literal(lex.slice()))]
+    #[regex("(0[xX][0-9a-fA-F'][0-9a-fA-F']*|0[bB][01'][01']*|[0-9][0-9']*)([uUlL]*|[uU]?(wb|WB)[uU]?)", |lex| parse_integer_literal(lex.slice()))]
     IntegerLiteral(IntegerLiteral),
     #[regex(r#"(u8|u|U|L)?'([^'\\]|\\.)+'"#, |lex| lex.slice().to_string())]
     CharacterLiteral(String),
@@ -361,6 +380,7 @@ impl fmt::Display for Token {
             Token::KwAuto => f.write_str("auto"),
             Token::KwBool => f.write_str("bool"),
             Token::KwUnderscoreBool => f.write_str("_Bool"),
+            Token::KwBitInt => f.write_str("_BitInt"),
             Token::KwBreak => f.write_str("break"),
             Token::KwCase => f.write_str("case"),
             Token::KwChar => f.write_str("char"),

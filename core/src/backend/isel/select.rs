@@ -11,12 +11,11 @@ use std::sync::Arc;
 
 use smallvec::SmallVec;
 use tir::binding::signed_bits;
-use tir::sem::egraph::{ir_type, semantic_type};
 use tir::sem::node::{WIDEST_RESULT, field};
-use tir::sem::{ANY_FORM, ANY_STATE, Kind, Prov, SemNode, SemType, SymKind};
+use tir::sem::{ANY_FORM, ANY_STATE, Kind, Prov, SemNode, SymKind};
 use tir::{
     BlockId, ConstantLike, Context, Gamma, IdMap, IdSet, OpHandle, OpId, PassError, RegionId,
-    ResourceAccess, ResourceEffects, Theta, TypeId, Use, ValueId,
+    ResourceAccess, ResourceEffects, Theta, TypeArg, TypeId, Use, ValueId,
 };
 use tir_adt::APInt;
 use tir_egraph::{
@@ -902,7 +901,8 @@ impl Select<'_> {
     // The builders that put the bits of `value` in a register: the one plan
     // the price and the commit both read.
     fn plan(&self, value: &APInt) -> Option<super::pool::Built> {
-        let usable = |builder: &Builder| builder.builds(value.width());
+        let width = u32::try_from(value.width()).ok()?;
+        let usable = |builder: &Builder| builder.builds(width);
         super::pool::plan(&self.automaton.builders, value, usable)
     }
 
@@ -925,7 +925,7 @@ impl Select<'_> {
             return u64::MAX;
         };
         let mut moves = self.automaton.floats.iter();
-        let moved = moves.find(|&&(_, _, width)| width == value.width());
+        let moved = moves.find(|&&(_, _, width)| u64::from(width) == value.width());
         let moved = moved.map_or(u64::MAX, |&(form, ..)| self.form_cost(form));
         self.built(&value).saturating_add(moved)
     }
@@ -953,7 +953,7 @@ impl Select<'_> {
             let built = admitting()
                 .filter(|adder| adder.built && held.is_none_or(|(_, cost)| bare(adder) < cost));
             let built = built.map(|adder| {
-                let offset = APInt::new_signed(width, signed_bits(delta, width));
+                let offset = APInt::new_signed(u64::from(width), signed_bits(delta, width));
                 (adder, bare(adder).saturating_add(self.built(&offset)))
             });
             held.into_iter().chain(built).min_by_key(|&(_, cost)| cost)
@@ -1020,7 +1020,8 @@ impl Rewrite for Commit<'_> {
         if !out.sits(row) {
             let written = match eg.int_const(reference) {
                 Some(bits) => {
-                    let value = APInt::new_signed(eg.width(reference.class)?, bits as i64);
+                    let value =
+                        APInt::new_signed(u64::from(eg.width(reference.class)?), bits as i64);
                     let mut place = self.place(out, region);
                     let built = self.built(context, &value, ty, &mut place);
                     built.unwrap_or_else(|error| self.fail(error))
@@ -1174,7 +1175,9 @@ impl Select<'_> {
                         (true, Some(field)) => rest(&field, operand.offset, width),
                         (true, None) => return 0,
                         (false, _) => match eg.int_const(*operand) {
-                            Some(value) => return self.built(&tir_adt::APInt::new(width, value)),
+                            Some(value) => {
+                                return self.built(&tir_adt::APInt::new(u64::from(width), value));
+                            }
                             None => operand.offset,
                         },
                     };
@@ -1733,7 +1736,7 @@ impl Commit<'_> {
         let mut place = self.place(out, region);
         let mut moved = base;
         for (adder, by) in sum {
-            let field = |by: u64| APInt::new_signed(width, signed_bits(by, width));
+            let field = |by: u64| APInt::new_signed(u64::from(width), signed_bits(by, width));
             let bound = adder.accept.operands.iter().map(|bind| match bind.held {
                 Held::Offset | Held::Constant => Some(Bound::Immediate(field(by))),
                 Held::Negated => Some(Bound::Immediate(field(by.wrapping_neg()))),
@@ -1775,7 +1778,7 @@ impl Commit<'_> {
         ty: TypeId,
         place: &mut dyn FnMut(OpId, Option<OpId>),
     ) -> Result<Option<ValueId>, PassError> {
-        if let Some(SemType::Float(_)) = semantic_type(context, ty) {
+        if tir::builtin::FloatType::view(context, ty).is_some() {
             return self.float(context, value, ty, place);
         }
         let Some(built) = self.select.plan(value) else {
@@ -1801,20 +1804,20 @@ impl Commit<'_> {
         ty: TypeId,
         place: &mut dyn FnMut(OpId, Option<OpId>),
     ) -> Result<Option<ValueId>, PassError> {
-        let integer = SemType::bits(bits.width());
+        let integer = context.terms().int(bits.width());
         let moves = |&&(form, symbol, width): &&(u32, u32, u32)| {
             let rule = &self.target[self.select.automaton.forms[form as usize].rule];
             let mut registers = rule.operand_registers.iter();
             let read = registers.find(|(known, _)| *known == symbol);
-            width == bits.width() && read.is_none_or(|(_, register)| register.accepts(&integer))
+            u64::from(width) == bits.width()
+                && read.is_none_or(|(_, register)| {
+                    register.accepts(context.terms(), &TypeArg::Type(integer))
+                })
         };
         let Some(&(form, symbol, _)) = self.select.automaton.floats.iter().find(moves) else {
             return Ok(None);
         };
-        let Some(held) = ir_type(context, &integer) else {
-            return Ok(None);
-        };
-        let Some(held) = self.built(context, bits, held, place)? else {
+        let Some(held) = self.built(context, bits, integer, place)? else {
             return Ok(None);
         };
         let matched = RuleMatch::new(Vec::new(), vec![(symbol, held)]);
@@ -1904,8 +1907,7 @@ impl Commit<'_> {
                         }
                         // A constant the instruction reads from a register.
                         (Some(Some(Bound::Immediate(value))), false) => {
-                            let held = ir_type(context, &SemType::bits(value.width()));
-                            let held = held.ok_or_else(|| missing("a constant"))?;
+                            let held = context.terms().int(value.width());
                             let built = self.built(context, value, held, emit.place)?;
                             values.push((symbol, built.ok_or_else(|| missing("a constant"))?));
                         }
@@ -1917,12 +1919,11 @@ impl Commit<'_> {
                         // literal is two's complement, and one an
                         // instruction reads from a register is built.
                         let literal = match encoded && range.is_none() {
-                            true => APInt::new(width, bits & (u64::MAX >> (64 - width))),
-                            false => APInt::new_signed(width, signed_bits(bits, width)),
+                            true => APInt::new(u64::from(width), bits & (u64::MAX >> (64 - width))),
+                            false => APInt::new_signed(u64::from(width), signed_bits(bits, width)),
                         };
                         if !encoded {
-                            let held = ir_type(context, &SemType::bits(width));
-                            let held = held.ok_or_else(|| missing("a literal"))?;
+                            let held = context.terms().int(u64::from(width));
                             let built = self.built(context, &literal, held, emit.place)?;
                             values.push((symbol, built.ok_or_else(|| missing("a literal"))?));
                         }
@@ -1942,7 +1943,7 @@ impl Commit<'_> {
                 // register's worth of bits, whatever the row is.
                 let held = match last {
                     true => (!stateful).then_some(emit.ty),
-                    false => ir_type(context, &SemType::bits(64)),
+                    false => Some(context.terms().int(64)),
                 };
                 let slot = held.map(|ty| context.create_value(ty, None).id());
                 match last {
@@ -1993,7 +1994,7 @@ impl Commit<'_> {
                 _ => Ok(None),
             },
             Arg::Literal(bits, width) => {
-                let literal = APInt::new_signed(width, signed_bits(bits, width));
+                let literal = APInt::new_signed(u64::from(width), signed_bits(bits, width));
                 self.built(context, &literal, ty, emit.place)
             }
             Arg::Lanes => Ok(None),
@@ -2237,7 +2238,8 @@ impl Commit<'_> {
             let child = self.child(eg, form, &bind.path);
             let (child, field) = child.ok_or("an operand under no form")?;
             let width = eg.width(child.class).unwrap_or(64);
-            let constant = |bits: u64| APInt::new_signed(width, signed_bits(bits, width));
+            let constant =
+                |bits: u64| APInt::new_signed(u64::from(width), signed_bits(bits, width));
             // A field holds the offset, or the part of it that it can: the
             // base is then the register at the rest.
             let rest = field.map_or(0, |field| rest(&field, child.offset, width));
@@ -2256,21 +2258,20 @@ impl Commit<'_> {
     }
 
     // The register of `read` where `home` can read it, as the spelling of
-    // the IR value `named`; the reference is typed by its class, or as
-    // `otherwise` where the class has no type.
+    // the IR value `named`; the reference is typed by its class, or as an
+    // integer of its width where the class has no type.
     fn register(
         &self,
         out: &mut rewrite::Commit<'_>,
-        (read, otherwise): (Ref, TypeId),
+        read: Ref,
         named: Option<ValueId>,
         home: RegionId,
     ) -> Option<ValueId> {
-        let (context, eg) = (out.context, out.eg);
+        let eg = out.eg;
         let typed = eg.fact(ColumnId::Type, read.class);
         let typed = typed.map(|ty| TypeId::from_number(ty as u32));
         let width = eg.width(read.class).unwrap_or(64);
-        let ty = typed.or_else(|| ir_type(context, &SemType::bits(width)));
-        let ty = ty.unwrap_or(otherwise);
+        let ty = typed.unwrap_or_else(|| out.context.terms().int(u64::from(width)));
         let value = self.spelling(named, || match named {
             Some(named) => out.materialize_as(named, read, ty, home),
             None => out.materialize(read, ty, home),
@@ -2337,7 +2338,7 @@ impl Commit<'_> {
         (form, pattern): (RowId, Pattern),
         region: RegionId,
     ) -> Option<Vec<ValueId>> {
-        let (context, eg, automaton) = (out.context, out.eg, self.select.automaton);
+        let (eg, automaton) = (out.eg, self.select.automaton);
         let accept = automaton.accept[pattern as usize].as_ref()?;
         let branch = automaton.branch(pattern)?;
         let mut sources: SmallVec<[(Path, OpId); 2]> = SmallVec::new();
@@ -2346,7 +2347,6 @@ impl Commit<'_> {
         self.sources(out, value, root, &mut sources, &mut operands);
         let trees = std::iter::once(&branch.taken).chain(&branch.inverse);
         let slots = self.slots(eg, form, accept, trees, false).ok()?;
-        let boolean = context.get_value(value).ty();
         let mut registers = Vec::new();
         for (operand, slot) in slots {
             let Slot::Register(read) = slot else {
@@ -2355,7 +2355,6 @@ impl Commit<'_> {
             let path = &accept.operands[usize::from(operand)].path;
             let named = operands.iter().find(|(known, _)| known == path);
             let named = named.map(|&(_, operand)| operand);
-            let read = (read, boolean);
             registers.push(self.register(out, read, named, region)?);
         }
         Some(registers)
@@ -2485,13 +2484,12 @@ impl Commit<'_> {
                     let path = &accept.operands[usize::from(operand)].path;
                     let named = operands.iter().find(|(known, _)| known == path);
                     let named = named.map(|&(_, operand)| operand);
-                    let read = (read, expected_ty);
                     let Some(value) = self.register(out, read, named, home) else {
-                        let chosen = out.extraction.row(eg.find(read.0).class);
+                        let chosen = out.extraction.row(eg.find(read).class);
                         let chosen = chosen.map(|row| (&eg.node(row).kind, eg.node(row).prov));
                         return refused(&format!(
                             "operand {operand} at {:?} has no spelling in {home:?}: {chosen:?}",
-                            read.0
+                            read
                         ));
                     };
                     Bound::Register(value)

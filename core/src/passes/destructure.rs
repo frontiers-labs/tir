@@ -250,7 +250,11 @@ impl CfgEdges<'_> {
                 if ty == IntegerType::new(self.context, 1) {
                     (predicate, case == 1)
                 } else {
-                    let width = crate::sem::egraph::type_width(self.context, ty).unwrap_or(64);
+                    let width = self
+                        .context
+                        .terms()
+                        .bit_width(ty)
+                        .map_or(64, |width| width as u32);
                     let holder = self.context.get_block(block);
                     let case = holder.append_op(
                         ConstantOpBuilder::new(self.context)

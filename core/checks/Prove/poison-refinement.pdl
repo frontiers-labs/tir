@@ -1,0 +1,24 @@
+// RUN: not tir prove --width 8 %s | filecheck %s
+
+// A solver proof is a refinement: wherever the left side is not poison, the
+// right side is not poison and equals it.
+
+// The right side may replace poison by a value, or by an arbitrary one.
+refinement drop-poison: #poison(c: int<1>, x: int<8>) : int<8> ~> x proof smt;
+refinement freeze-poison:
+  #poison(c: int<1>, x: int<8>) : int<8> ~> #freeze(#poison(c, x)) proof smt;
+
+// It may not make a defined value poison.
+refinement add-poison:
+  #xor(x: int<8>, y: int<8>) : int<8> ~> #poison(#eq(x, y), #xor(x, y)) proof smt;
+
+// A select is defined where the arm it takes is, whatever the other arm holds,
+// so the right side may not be poison there.
+refinement select-other-arm:
+  #if(c: int<1>, x: int<8>, #poison(d: int<1>, y: int<8>)) : int<8>
+  ~> #if(c, #poison(d, x), y) proof smt;
+
+// CHECK: drop-poison: proven
+// CHECK: freeze-poison: proven
+// CHECK: add-poison: disproven
+// CHECK: select-other-arm: disproven

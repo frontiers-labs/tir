@@ -5,23 +5,23 @@
 //! assignment of types its ports admit and its semantic term read off it.
 
 use tir::{
-    Context, NewOp, NodeId, OpId, TypeId,
+    Context, NewOp, NodeId, OpId, TypeArg, TypeId,
     attributes::AttributeValue,
     builtin::{FloatType, IntegerType},
     schema::{OP_SCHEMAS, OpSchema},
-    sem::{
-        SemGraph, SemType, SymKind, SymPayload,
-        egraph::{ir_type, minimal_unsigned_apint, semantic_type, type_width},
-        infer_types,
-    },
+    sem::{SemGraph, SymKind, SymPayload, egraph::minimal_unsigned_apint, infer_types},
 };
+
+use tir_symbolic::scheme::{Arity, Slot};
+
+use super::value_type;
 
 pub(super) struct Instance {
     pub(super) schema: &'static OpSchema,
     pub(super) op: OpId,
     pub(super) semantics: SemGraph,
     pub(super) root: NodeId,
-    pub(super) types: Option<Vec<SemType>>,
+    pub(super) types: Option<Vec<TypeArg>>,
     pub(super) plain: bool,
     pub(super) lanes: bool,
 }
@@ -148,60 +148,84 @@ pub(super) fn vectors(context: &Context, rules: &[super::Rule], widths: &[u32]) 
         false => named.contains(&u64::from(width)),
     });
     elements
-        .map(|&width| tir::vector::VectorType::dynamic(context, IntegerType::new(context, width)))
+        .map(|&width| {
+            tir::vector::VectorType::dynamic(context, IntegerType::new(context, u64::from(width)))
+        })
         .collect()
 }
 
-// The types a port constrained to `name` is instantiated at: `types` holds
-// the integer widths and the vector types the rules compute in.
-fn candidates(context: &Context, types: (&[u32], &[TypeId]), name: &str) -> Option<Vec<TypeId>> {
-    let (widths, vectors) = types;
+// The types a port of `slot` is instantiated at: `types` holds the integer
+// widths and the vector types the rules compute in.
+fn candidates(context: &Context, types: (&[u32], &[TypeId]), slot: &Slot) -> Option<Vec<TypeId>> {
+    let mut found = pattern_candidates(context, types, &slot.pattern)?;
     // A port an operation may go without is also instantiated without it.
-    if let Some(present) = name.trim().strip_prefix('?') {
-        let mut found = candidates(context, types, present)?;
+    if slot.arity == Arity::Opt {
         found.push(absent());
-        return Some(found);
     }
-    let name: String = name.chars().filter(|c| !c.is_whitespace()).collect();
-    if let Some(width) = name
-        .rsplit("Integer<")
-        .next()
-        .filter(|_| name.contains("Integer<"))
-        .and_then(|rest| rest.trim_end_matches('>').parse::<u32>().ok())
-    {
-        Some(vec![IntegerType::new(context, width)])
-    } else if name.ends_with("IntegerType") {
-        Some(
+    Some(found)
+}
+
+fn pattern_candidates(
+    context: &Context,
+    types: (&[u32], &[TypeId]),
+    pattern: &TypeArg,
+) -> Option<Vec<TypeId>> {
+    let (widths, vectors) = types;
+    let ty = match pattern {
+        // A port that takes any value: every scalar an instance is built of.
+        TypeArg::Var(_) => {
+            let ints = widths
+                .iter()
+                .map(|&width| IntegerType::new(context, u64::from(width)));
+            let floats = [FloatType::f32(context), FloatType::f64(context)];
+            let pointer = tir::ptr::PtrType::opaque(context);
+            return Some(ints.chain(floats).chain([pointer]).collect());
+        }
+        TypeArg::Type(ty) => *ty,
+        _ => return None,
+    };
+    if let Some(width) = context.terms().int_width(ty) {
+        return Some(vec![IntegerType::new(context, width)]);
+    }
+    if context.terms().ctor(ty) == tir_symbolic::term::ctor::INT {
+        return Some(
             widths
                 .iter()
-                .map(|&width| IntegerType::new(context, width))
+                .map(|&width| IntegerType::new(context, u64::from(width)))
                 .collect(),
-        )
-    } else if name.ends_with("FloatType") {
-        Some(vec![
-            FloatType::new(context, 8, 23),
-            FloatType::new(context, 11, 52),
-        ])
-    } else if name.ends_with("VectorType") {
+        );
+    }
+    if context.terms().ctor(ty) == tir_symbolic::term::ctor::FLOAT {
+        return Some(vec![FloatType::f32(context), FloatType::f64(context)]);
+    }
+    let is =
+        |dialect, name| context.terms().ctor_named(dialect, name) == Some(context.terms().ctor(ty));
+    if is("vector", "v") {
         // No instance where the target has no vector.
-        (!vectors.is_empty()).then(|| vectors.to_vec())
-    } else if name.ends_with("EnvironmentType") {
-        Some(vec![tir::fp::EnvironmentType::new(context)])
-    } else if name.ends_with("RoundingType") {
-        Some(vec![tir::fp::RoundingType::new(context)])
-    } else if name.ends_with("IndexType") {
-        Some(vec![tir::builtin::IndexType::new(context)])
-    } else if name.ends_with("PtrType") {
-        Some(vec![tir::ptr::PtrType::opaque(context)])
-    } else if name == "Any" {
-        // A port that takes any value: every scalar an instance is built of.
-        let kinds = ["IntegerType", "FloatType", "PtrType"];
-        let all = kinds
+        return (!vectors.is_empty()).then(|| vectors.to_vec());
+    }
+    if is("ptr", "p") {
+        return Some(vec![tir::ptr::PtrType::opaque(context)]);
+    }
+    let ground = matches!(pattern, TypeArg::Type(_)) && !has_vars(context.terms(), pattern);
+    let scalar = |ty| {
+        tir::fp::EnvironmentType::view(context, ty).is_some()
+            || tir::fp::RoundingType::view(context, ty).is_some()
+            || tir::builtin::IndexType::view(context, ty).is_some()
+    };
+    (ground && scalar(ty)).then(|| vec![ty])
+}
+
+fn has_vars(terms: &tir::Terms, arg: &TypeArg) -> bool {
+    match arg {
+        TypeArg::Var(_) => true,
+        TypeArg::Type(ty) => terms
+            .term(*ty)
+            .args()
             .iter()
-            .filter_map(|kind| candidates(context, types, kind));
-        Some(all.flatten().collect())
-    } else {
-        None
+            .any(|arg| has_vars(terms, arg)),
+        TypeArg::List(items) => items.iter().any(|arg| has_vars(terms, arg)),
+        _ => false,
     }
 }
 
@@ -252,9 +276,20 @@ pub(super) fn instances(
             skip("no result");
             continue;
         }
-        let Some(choices) = ports
-            .iter()
-            .map(|port| candidates(scratch, types, port.ty))
+        // Instantiating an op of no semantics builds nothing to select by,
+        // and its wildcard ports would be built at every type.
+        if !schema.semantics && !schema.interfaces.contains(&"HasResourceSemantics") {
+            skip("no semantics");
+            continue;
+        }
+        let Ok(scheme) = tir::scheme_of(scratch, schema) else {
+            skip("scheme");
+            continue;
+        };
+        let Some(choices) = scheme
+            .slots()
+            .filter(|slot| slot.arity != Arity::Many)
+            .map(|slot| candidates(scratch, types, slot))
             .collect::<Option<Vec<_>>>()
         else {
             skip("port type");
@@ -266,6 +301,9 @@ pub(super) fn instances(
             .attributes
             .iter()
             .filter(|attribute| attribute.ty != "FpSemantics")
+            // A flag only makes the result poison where it fails: selection
+            // forgets it, so the instance has none.
+            .filter(|attribute| attribute.ty != "?Flag")
             .collect();
         let predicates: Vec<Option<(&'static str, tir::attributes::Predicate)>> =
             match attributes.as_slice() {
@@ -376,7 +414,7 @@ fn instantiate(
         })
         .into_iter()
         // A detached op reads the data layout it carries itself.
-        .chain(layout.map(|spec| scratch.named_attribute(tir::DATA_LAYOUT, spec.clone())))
+        .chain(layout.map(|spec| scratch.named_attribute(tir::LAYOUT_SPEC, spec.clone())))
         // Floating-point semantics are the operation's default ones unless
         // the instance is of another meaning.
         .chain(
@@ -477,32 +515,27 @@ fn instantiate(
         types: Some(types),
         plain: meaning.is_none() && states.is_empty(),
         lanes: op.results().first().is_some_and(|&result| {
-            let data = scratch.get_type_data(scratch.get_value(result).ty());
-            (data.as_ref() as &dyn std::any::Any).is::<tir::vector::VectorType>()
+            tir::vector::VectorType::view(scratch, scratch.get_value(result).ty()).is_some()
         }),
     })
 }
 
-fn typed(scratch: &Context, op: &tir::OpHandle, semantics: &SemGraph) -> Option<Vec<SemType>> {
-    let types = infer_types(semantics, |node| {
+fn typed(scratch: &Context, op: &tir::OpHandle, semantics: &SemGraph) -> Option<Vec<TypeArg>> {
+    let terms = scratch.terms();
+    let types = infer_types(terms, semantics, |node| {
         semantics
             .get_annotation(node)
             .and_then(|meta| meta.actual_type)
-            .and_then(|ty| semantic_type(scratch, ty))
+            .and_then(|ty| value_type(terms, ty))
             .or_else(|| match semantics.get_leaf_data(node) {
                 Some(SymPayload::SymbolId(id)) => op
                     .operands()
                     .get(*id as usize)
-                    .and_then(|&operand| semantic_type(scratch, scratch.get_value(operand).ty())),
+                    .and_then(|&operand| value_type(terms, scratch.get_value(operand).ty())),
                 _ => None,
             })
     })
     .ok()?;
-    // The pool spells the type of each node as an IR type. Interned here,
-    // they leave the synthesis thread none to intern.
-    for ty in &types {
-        ir_type(scratch, ty);
-    }
     Some(types)
 }
 
@@ -572,7 +605,7 @@ pub(super) fn accesses(
     let mut moved: Vec<(TypeId, u32)> = INTEGER_WIDTHS
         .iter()
         .filter(|&&width| width % 8 == 0)
-        .map(|&width| (IntegerType::new(scratch, width), width))
+        .map(|&width| (IntegerType::new(scratch, u64::from(width)), width))
         .collect();
     moved.push((FloatType::new(scratch, 8, 23), 32));
     moved.push((FloatType::new(scratch, 11, 52), 64));
@@ -646,7 +679,12 @@ pub(super) fn accesses(
                 semantics.add_edge(root, child);
             }
             semantics.annotation_mut(root).actual_type = Some(if reads { ty } else { state });
-            debug_assert!(type_width(scratch, ty).is_none_or(|bits| bits == width));
+            debug_assert!(
+                scratch
+                    .terms()
+                    .bit_width(ty)
+                    .is_none_or(|bits| bits == u64::from(width))
+            );
             found.push(Instance {
                 schema,
                 op: op.id,

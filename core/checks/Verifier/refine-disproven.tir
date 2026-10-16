@@ -1,0 +1,16 @@
+// RUN: not tir opt --verify %s 2>&1 | filecheck %s
+
+// An argument is any value: below 10 does not follow, and the solver's
+// counterexample is in the error.
+
+module {
+  %fn_f = func.func @f(%x: !i64) -> !i64 {
+    %0 = constant {value = 10} : !i64
+    %1 = cmpi %x, %0 {predicate = "ult"} : !i1
+    %2 = refine %x, %1 : !i64
+    func.return %2
+  }
+  module_end
+}
+
+// CHECK: refine %{{[0-9]+}} at byte {{[0-9]+}}: predicate %{{[0-9]+}} fails for %{{[0-9]+}} = 0x

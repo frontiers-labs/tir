@@ -626,12 +626,12 @@ fn verify_dirty_subtrees(
     root: OpId,
     dirty: &[OpId],
 ) -> Result<(), crate::Error> {
-    for op in dirty {
-        if context.has_operation(*op) && encloses(context, root, *op) {
-            crate::verify_op_tree(context, *op)?;
-        }
-    }
-    Ok(())
+    let edited: Vec<OpId> = dirty
+        .iter()
+        .copied()
+        .filter(|&op| context.has_operation(op) && encloses(context, root, op))
+        .collect();
+    crate::operation::verify_op_trees(context, &edited)
 }
 
 /// Whether `op` is `root` or sits somewhere under it.
@@ -873,16 +873,21 @@ impl PassManager {
                             expected,
                         });
                     }
-                    if !pass.settles() {
-                        return pass.run(&op_ref, context, analyses);
-                    }
                     let id = op_ref.op().id;
-                    if context.is_settled(pass.name(), id) {
+                    if pass.settles() && context.is_settled(pass.name(), id) {
                         return Ok(());
                     }
                     let version = context.op_version(id);
-                    pass.run(&op_ref, context, analyses)?;
-                    if context.has_operation(id) && context.op_version(id) == version {
+                    // What the pass builds is located at the op it runs on,
+                    // unless the pass locates it more closely.
+                    let origin = context.set_origin(context.op_location(id));
+                    let ran = pass.run(&op_ref, context, analyses);
+                    context.set_origin(origin);
+                    ran?;
+                    if pass.settles()
+                        && context.has_operation(id)
+                        && context.op_version(id) == version
+                    {
                         context.settle(pass.name(), id);
                     }
                     Ok(())

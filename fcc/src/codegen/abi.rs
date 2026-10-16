@@ -507,9 +507,10 @@ fn classify_sysv_fields(
     match typed.types().kind(ty) {
         TypeKind::Record(id) => {
             let record = typed.record(*id)?;
-            for field in &record.fields {
+            let offsets = typed.field_offsets(*id)?;
+            for (field, field_offset) in record.fields.iter().zip(offsets) {
                 let (_, align) = source_type_layout(typed, field.ty);
-                let field_offset = offset + field.offset;
+                let field_offset = offset + field_offset;
                 if !field_offset.is_multiple_of(align) {
                     return None;
                 }
@@ -651,19 +652,24 @@ fn flatten_aggregate_fields(
             true
         }
         TypeKind::Record(id) => {
-            let Some(record) = typed.record(*id) else {
+            let (Some(record), Some(offsets)) = (typed.record(*id), typed.field_offsets(*id))
+            else {
                 return false;
             };
             record.kind == RecordKind::Struct
-                && record.fields.iter().all(|field| {
-                    flatten_aggregate_fields(
-                        context,
-                        typed,
-                        field.ty,
-                        offset + field.offset,
-                        pieces,
-                    )
-                })
+                && record
+                    .fields
+                    .iter()
+                    .zip(offsets)
+                    .all(|(field, field_offset)| {
+                        flatten_aggregate_fields(
+                            context,
+                            typed,
+                            field.ty,
+                            offset + field_offset,
+                            pieces,
+                        )
+                    })
         }
         TypeKind::Array(element, Some(length)) => {
             let stride = source_type_layout(typed, *element).0;
@@ -699,11 +705,11 @@ fn classify_integer_carriers(
     if size <= scalar_width && size.is_power_of_two() {
         return Some(vec![AbiPiece {
             offset: 0,
-            ty: IntegerType::new(context, (size * 8) as u32),
+            ty: IntegerType::new(context, size * 8),
         }]);
     }
     if size == scalar_width * 2 {
-        let carrier = IntegerType::new(context, typed.target().pointer_width());
+        let carrier = IntegerType::new(context, u64::from(typed.target().pointer_width()));
         return Some(vec![
             AbiPiece {
                 offset: 0,
@@ -719,12 +725,10 @@ fn classify_integer_carriers(
 }
 
 fn abi_piece_size(context: &Context, ty: TypeId) -> Option<u64> {
-    let ty = context.get_type_data(ty);
-    let ty = ty.as_ref() as &dyn std::any::Any;
-    if let Some(integer) = ty.downcast_ref::<IntegerType>() {
-        return Some(u64::from(integer.width().div_ceil(8)));
+    if let Some(integer) = IntegerType::view(context, ty) {
+        return Some(integer.width().div_ceil(8));
     }
-    if let Some(float) = ty.downcast_ref::<FloatType>() {
+    if let Some(float) = FloatType::view(context, ty) {
         return Some(u64::from(float.bit_width() / 8));
     }
     None

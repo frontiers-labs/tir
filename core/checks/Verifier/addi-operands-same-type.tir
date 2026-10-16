@@ -1,6 +1,8 @@
-// RUN: not tir opt --verify %s
+// RUN: not tir opt --verify %s 2>&1 | filecheck %s
 
-// addi requires both operands to share a type; mixing i32 and i64 fails.
+// addi's scheme gives both operands one width; mixing i32 and i64 fails, and
+// the error names where the op is written and the binding the first operand
+// made.
 
 module {
   %fn_f = func.func @f() -> !i32 {
@@ -11,3 +13,5 @@ module {
   }
   module_end
 }
+
+// CHECK: addi at byte 340: operand 2 is !i64, expected !i32; W := 32 from operand 1

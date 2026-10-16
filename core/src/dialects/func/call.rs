@@ -1,4 +1,3 @@
-use crate::Any;
 use crate::attributes::AttributeValue;
 use crate::builtin::{FnType, StateResource, UnitType};
 use crate::{
@@ -12,15 +11,11 @@ operation! {
     CallOp {
         name: "call",
         dialect: "func",
+        scheme: "(fn<_, _>, _*) -> _",
         format: "custom",
         verifier: "true",
-        operands: O {
-            callee: "crate::builtin::FnType",
-            args: "*Any",
-        },
-        results: R {
-            result: "Any",
-        },
+        operands: O { callee, args },
+        results: R { result },
         state: "in_out",
         interfaces: [Apply, ResourceEffects],
     }
@@ -321,11 +316,7 @@ fn verify_result_address(
             "result-address call requires a destination argument".to_string(),
         ));
     };
-    let ty = context.get_type_data(context.get_value(destination).ty());
-    if (ty.as_ref() as &dyn std::any::Any)
-        .downcast_ref::<crate::ptr::PtrType>()
-        .is_none()
-    {
+    if crate::ptr::PtrType::view(context, context.get_value(destination).ty()).is_none() {
         return Err(Error::VerificationError(
             "result-address call destination must have pointer type".to_string(),
         ));

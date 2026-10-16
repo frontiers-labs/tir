@@ -25,6 +25,19 @@ pub fn parse_ir<T: Operation>(context: &Context, src: &str) -> Result<T, (Span, 
     parse_attribute_aliases(&mut parser, context)?;
     let op = parse_single_op(&mut parser, context)?;
     bind_forward_references(&mut parser, context)?;
+    // The core type definitions declare their types, `!array` among them, for
+    // every module.
+    if let Some(core) = context.core_type_names() {
+        parser
+            .type_defs
+            .extend(core.iter().map(|name| name.to_string()));
+    }
+    if let Some((span, name)) = parser.undeclared_type() {
+        return Err((
+            span,
+            Error::VerificationError(format!("type `!{name}` has no type.def in this module")),
+        ));
+    }
     let any: Box<dyn Any> = op.into_any();
     let op = any
         .downcast::<T>()
@@ -91,7 +104,17 @@ pub(crate) fn parse_single_op<'src>(
     context: &Context,
 ) -> Result<Box<dyn Operation>, (Span, Error)> {
     parser.skip_trivia();
+    // Every op the op's parser adds, nested ones aside, is located at its text.
+    let origin = context.set_origin(Some(parser.span()));
+    let op = parse_located_op(parser, context);
+    context.set_origin(origin);
+    op
+}
 
+fn parse_located_op<'src>(
+    parser: &mut TextParser<'src>,
+    context: &Context,
+) -> Result<Box<dyn Operation>, (Span, Error)> {
     // Optional result binding prefix: `%2 =` or `%2, %3 =`. The builder
     // allocates the concrete ValueIds; the names are bound once the op exists
     // so later operands resolve by name rather than by a literal id.

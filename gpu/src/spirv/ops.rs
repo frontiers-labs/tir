@@ -1,5 +1,5 @@
 use tir::helpers::operation;
-use tir::{Any, Context, Error, Operation, Terminator, ValueId};
+use tir::{Context, Error, Operation, Terminator, ValueId};
 
 use tir;
 
@@ -7,6 +7,7 @@ operation! {
     ModuleOp {
         name: "module",
         dialect: "spirv",
+        scheme: "() -> ()",
         attributes: A {
             version: "Str",
             addressing_model: "Str",
@@ -20,6 +21,7 @@ operation! {
     ModuleEndOp {
         name: "module_end",
         dialect: "spirv",
+        scheme: "() -> ()",
         interfaces: [Terminator],
     }
 }
@@ -30,6 +32,7 @@ operation! {
     CapabilityOp {
         name: "Capability",
         dialect: "spirv",
+        scheme: "() -> ()",
         attributes: A { name: "Str", }
     }
 }
@@ -38,12 +41,13 @@ operation! {
     GlobalVariableOp {
         name: "GlobalVariable",
         dialect: "spirv",
+        scheme: "() -> _",
         attributes: A {
             sym_name: "Str",
             storage_class: "Str",
             decorations: "Dict",
         },
-        results: R { result: "Any", }
+        results: R { result }
     }
 }
 
@@ -51,6 +55,7 @@ operation! {
     EntryPointOp {
         name: "EntryPoint",
         dialect: "spirv",
+        scheme: "() -> ()",
         attributes: A {
             execution_model: "Str",
             function: "Str",
@@ -63,6 +68,7 @@ operation! {
     ExecutionModeOp {
         name: "ExecutionMode",
         dialect: "spirv",
+        scheme: "() -> ()",
         attributes: A {
             function: "Str",
             mode: "Str",
@@ -75,8 +81,9 @@ operation! {
     ConstantOp {
         name: "Constant",
         dialect: "spirv",
+        scheme: "() -> _",
         attributes: A { value: "any", },
-        results: R { result: "Any", }
+        results: R { result }
     }
 }
 
@@ -84,8 +91,9 @@ operation! {
     LoadOp {
         name: "Load",
         dialect: "spirv",
-        operands: O { pointer: "Any", },
-        results: R { result: "Any", }
+        scheme: "(_) -> _",
+        operands: O { pointer },
+        results: R { result }
     }
 }
 
@@ -93,7 +101,8 @@ operation! {
     StoreOp {
         name: "Store",
         dialect: "spirv",
-        operands: O { pointer: "Any", value: "Any", }
+        scheme: "(_, _) -> ()",
+        operands: O { pointer, value }
     }
 }
 
@@ -101,7 +110,8 @@ operation! {
     ControlBarrierOp {
         name: "ControlBarrier",
         dialect: "spirv",
-        operands: O { execution_scope: "Any", memory_scope: "Any", memory_semantics: "Any", }
+        scheme: "(_, _, _) -> ()",
+        operands: O { execution_scope, memory_scope, memory_semantics }
     }
 }
 
@@ -109,7 +119,8 @@ operation! {
     MemoryBarrierOp {
         name: "MemoryBarrier",
         dialect: "spirv",
-        operands: O { memory_scope: "Any", memory_semantics: "Any", }
+        scheme: "(_, _) -> ()",
+        operands: O { memory_scope, memory_semantics }
     }
 }
 
@@ -117,9 +128,10 @@ operation! {
     CompositeExtractOp {
         name: "CompositeExtract",
         dialect: "spirv",
+        scheme: "(_) -> _",
         attributes: A { indices: "Array", },
-        operands: O { composite: "Any", },
-        results: R { result: "Any", }
+        operands: O { composite },
+        results: R { result }
     }
 }
 
@@ -127,9 +139,10 @@ operation! {
     AccessChainOp {
         name: "AccessChain",
         dialect: "spirv",
+        scheme: "(_, _*) -> _",
         format: "custom",
-        operands: O { base: "Any", indices: "*Any", },
-        results: R { result: "Any", }
+        operands: O { base, indices },
+        results: R { result }
     }
 }
 
@@ -187,7 +200,8 @@ operation! {
     ReturnOp {
         name: "Return",
         dialect: "spirv",
-        operands: O { value: "?Any", },
+        scheme: "(_?) -> ()",
+        operands: O { value },
         interfaces: [Terminator],
     }
 }

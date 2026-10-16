@@ -1,7 +1,6 @@
 use crate::{Terminator, dialect, operation};
 
 use crate as tir;
-use crate::Any as AnyConstraint;
 
 pub mod nodes;
 pub mod ordered;
@@ -34,9 +33,8 @@ operation! {
     YieldOp {
         name: "yield",
         dialect: "scf",
-        operands: O {
-            values: "*AnyConstraint",
-        },
+        scheme: "(_*) -> ()",
+        operands: O { values },
         interfaces: [Terminator],
     }
 }

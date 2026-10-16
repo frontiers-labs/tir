@@ -1081,7 +1081,10 @@ impl<'a> SemaExprLoweringCtx<'a> {
         match folded {
             Some(bytes) if bytes > 0 => {
                 let value = bytes as u64;
-                self.add_int_const(tir_adt::APInt::new(64 - value.leading_zeros(), value))
+                self.add_int_const(tir_adt::APInt::new(
+                    u64::from(64 - value.leading_zeros()),
+                    value,
+                ))
             }
             _ => expr.lower_with_ctx(self),
         }
@@ -1435,7 +1438,7 @@ impl Lit {
                     64 - value.leading_zeros()
                 };
 
-                ctx.add_int_const(tir_adt::APInt::new(width, value))
+                ctx.add_int_const(tir_adt::APInt::new(u64::from(width), value))
             }
             Lit::Str(_) => panic!("string literals are not supported in semantic expressions"),
         }
@@ -1463,9 +1466,9 @@ impl Ident {
             };
 
             if value < 0 {
-                ctx.add_int_const(tir_adt::APInt::new_signed(width, value))
+                ctx.add_int_const(tir_adt::APInt::new_signed(u64::from(width), value))
             } else {
-                ctx.add_int_const(tir_adt::APInt::new(width, abs_value))
+                ctx.add_int_const(tir_adt::APInt::new(u64::from(width), abs_value))
             }
         } else {
             let id = ctx.get_or_create_variable_symbol(self.name.clone());
@@ -1617,11 +1620,11 @@ impl Unary {
                     let value = !(lit.parse_u64()) as i64;
                     return if value < 0 {
                         let width = 64 - value.unsigned_abs().leading_zeros() + 1;
-                        ctx.add_int_const(tir_adt::APInt::new_signed(width, value))
+                        ctx.add_int_const(tir_adt::APInt::new_signed(u64::from(width), value))
                     } else {
                         let v = value as u64;
                         let width = if v == 0 { 1 } else { 64 - v.leading_zeros() };
-                        ctx.add_int_const(tir_adt::APInt::new(width, v))
+                        ctx.add_int_const(tir_adt::APInt::new(u64::from(width), v))
                     };
                 }
 

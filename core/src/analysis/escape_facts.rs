@@ -122,8 +122,5 @@ fn use_of(instance: &OpHandle, operand: ValueId) -> Escape {
 }
 
 pub(crate) fn is_pointer(context: &Context, value: ValueId) -> bool {
-    let ty = context.get_type_data(context.get_value(value).ty());
-    (ty.as_ref() as &dyn std::any::Any)
-        .downcast_ref::<PtrType>()
-        .is_some()
+    PtrType::view(context, context.get_value(value).ty()).is_some()
 }

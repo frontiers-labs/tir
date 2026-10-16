@@ -452,10 +452,19 @@ where
                 .then_ignore(just(Token::Greater)),
         )
         .map(Type::State);
+    let pointer = identifier()
+        .filter(|name| name == "ptr")
+        .ignore_then(
+            identifier()
+                .map(Width::Named)
+                .delimited_by(just(Token::Less), just(Token::Greater)),
+        )
+        .map(Type::Pointer);
     generic
         .or(float)
         .or(shaped_float)
         .or(state)
+        .or(pointer)
         .or(identifier().map(|name| {
             name.strip_prefix('i')
                 .and_then(|width| width.parse().ok())
@@ -508,6 +517,13 @@ where
                 kind: ExprKind::Name(name),
                 span: extra.span(),
             }),
+            // An attribute binder, read as the word its attribute is.
+            just(Token::Dollar)
+                .ignore_then(identifier())
+                .map_with(|name, extra| Expr {
+                    kind: ExprKind::Name(name),
+                    span: extra.span(),
+                }),
             expression
                 .clone()
                 .delimited_by(just(Token::LeftParen), just(Token::RightParen)),

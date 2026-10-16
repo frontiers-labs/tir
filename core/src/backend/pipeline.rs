@@ -17,9 +17,9 @@ use crate::backend::isel::InstructionSelectPass;
 use crate::backend::lower::OpLoweringPass;
 use crate::backend::{MachineBlockLayoutPass, ShuffleMachineOrderPass, TargetMachine};
 use crate::passes::{
-    AffineSchedulePass, CheckUniqueSymbolsPass, DeadCodeEliminationPass, LowerIntrinsicsPass,
-    LowerPtrDisjointPass, MaterializeSymbolAddressesPass, ResolveFpPass, RestructureNodesPass,
-    VerifyDepsPass,
+    AffineSchedulePass, CheckUniqueSymbolsPass, DeadCodeEliminationPass, EraseLayoutPass,
+    LowerIntrinsicsPass, LowerPtrDisjointPass, MaterializeSymbolAddressesPass, ResolveFpPass,
+    RestructureNodesPass, VerifyDepsPass,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -68,10 +68,8 @@ impl TargetIntegerLegalizer {
 
     fn check_value(&self, context: &Context, value: tir::ValueId) -> Result<(), PassError> {
         let ty = context.get_value(value).ty();
-        let data = context.get_type_data(ty);
-        let any = data.as_ref() as &dyn std::any::Any;
-        if let Some(int) = any.downcast_ref::<IntegerType>()
-            && int.width() > self.max_width
+        if let Some(int) = IntegerType::view(context, ty)
+            && int.width() > u64::from(self.max_width)
         {
             return Err(PassError::InvalidRuleSet(format!(
                 "integer type i{} exceeds target register width i{}",
@@ -145,13 +143,17 @@ fn module_prologue(target: &dyn TargetMachine) -> PassManager {
     let mut pm = PassManager::new();
     {
         let functions = pm.nest::<FuncOp>();
+        // Selection has no instruction for a field address, a record copy or
+        // a proved fact, whoever built the module. A function a front end
+        // already erased holds none of them, and the pass reads no more of it.
+        functions.add_pass(EraseLayoutPass::new());
+        functions.add_pass(DeadCodeEliminationPass::new());
         // Selection takes an unordered body, and whoever hands the module over
         // builds one: a front end restructures its own control flow, and a
         // caller with a raw graph runs [`structure`] first. The chains are
         // checked here, while the module is whole: the check reads
         // a function's calls, and by the time it is lowered one at a time the
         // λ those name may already be a machine symbol.
-        functions.add_pass(DeadCodeEliminationPass::new());
         functions.add_pass(VerifyDepsPass::new());
     }
     // Object symbols are unique by name, so overloads must already be mangled.

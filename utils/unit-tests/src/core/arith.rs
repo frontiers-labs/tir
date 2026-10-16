@@ -192,8 +192,8 @@ mod predicate {
 
     fn module(body: &str) -> String {
         format!(
-            "#data_layout = {{types = {{p = {{abi = 64, size = 64}}}}}}\n\
-             module {{data_layout = #data_layout}} {{\n\
+            "#layout_spec = #layout.spec<!ptr.p = {{size = 64, abi = 64}}>\n\
+             module {{layout.spec = #layout_spec}} {{\n\
              %fn = func.func @f(%0: !i32, %1: !f32, %2: !ptr.p) -> !i1 {{\n\
              {body}\n\
              func.return %3\n}}\nmodule_end\n}}"

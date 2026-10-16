@@ -586,8 +586,10 @@ impl Selecting {
     }
 
     fn constant(&mut self, width: u32, value: u64) -> Ref {
-        self.g
-            .add(SemNode::constant(APInt::new(width, value), Prov::None))
+        self.g.add(SemNode::constant(
+            APInt::new(u64::from(width), value),
+            Prov::None,
+        ))
     }
 
     fn row(&mut self, label: u32, operands: &[Ref]) -> Ref {

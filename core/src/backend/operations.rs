@@ -1,7 +1,6 @@
 use tir::helpers::operation;
 use tir::{
-    Any, Operation, ResourceAccess, ResourceEffect, ResourceEffects, Terminator,
-    builtin::StateResource,
+    Operation, ResourceAccess, ResourceEffect, ResourceEffects, Terminator, builtin::StateResource,
 };
 
 use super::{ControlFlow, InstrInfo, MachineInstruction};
@@ -35,6 +34,7 @@ operation! {
     SectionOp {
         name: "section",
         dialect: "asm",
+        scheme: "() -> ()",
         regions: R {
             body: Region {}
         }
@@ -45,6 +45,7 @@ operation! {
     SectionEndOp {
         name: "section_end",
         dialect: "asm",
+        scheme: "() -> ()",
         interfaces: [Terminator],
     }
 }
@@ -55,6 +56,7 @@ operation! {
     SymbolOp {
         name: "symbol",
         dialect: "asm",
+        scheme: "() -> ()",
         regions: R {
             body: Region {}
         }
@@ -65,6 +67,7 @@ operation! {
     SymbolEndOp {
         name: "symbol_end",
         dialect: "asm",
+        scheme: "() -> ()",
         interfaces: [Terminator],
     }
 }
@@ -77,6 +80,7 @@ operation! {
     LiteralOp {
         name: "literal",
         dialect: "asm",
+        scheme: "() -> ()",
         attributes: A {
             kind: "Str",
         }
@@ -91,12 +95,11 @@ operation! {
     SymbolAddressOp {
         name: "symbol_address",
         dialect: "asm",
+        scheme: "() -> ptr.p<_>",
         attributes: A {
             sym_name: "Str",
         },
-        results: R {
-            result: "tir::ptr::PtrType",
-        },
+        results: R { result },
         interfaces: [tir::Pure, tir::Speculatable],
     }
 }
@@ -117,6 +120,7 @@ operation! {
     DataRelocOp {
         name: "data_reloc",
         dialect: "asm",
+        scheme: "() -> ()",
         attributes: A {
             symbol: "Str",
             width: "UInt",
@@ -129,6 +133,7 @@ operation! {
     BlockEndOp {
         name: "block_end",
         dialect: "asm",
+        scheme: "() -> ()",
         interfaces: [Terminator],
     }
 }
@@ -139,10 +144,9 @@ operation! {
     VirtualReturnOp {
         name: "vret",
         dialect: "asm",
+        scheme: "(_*) -> ()",
         format: "custom",
-        operands: O {
-            values: "*Any",
-        },
+        operands: O { values },
         interfaces: [Terminator, tir::backend::MachineInstruction],
     }
 }
@@ -183,10 +187,9 @@ operation! {
     VirtualBranchOp {
         name: "vbr",
         dialect: "asm",
+        scheme: "(_*) -> ()",
         format: "custom",
-        operands: O {
-            dest_args: "*Any",
-        },
+        operands: O { dest_args },
         attributes: A {
             dest: "Block",
         },
@@ -231,12 +234,9 @@ operation! {
     ParallelCopyOp {
         name: "pcopy",
         dialect: "asm",
-        operands: O {
-            sources: "*Any",
-        },
-        results: R {
-            copies: "*Any",
-        },
+        scheme: "(_*) -> _*",
+        operands: O { sources },
+        results: R { copies },
         interfaces: [tir::backend::MachineInstruction],
     }
 }
@@ -256,6 +256,7 @@ operation! {
     VirtualCallOp {
         name: "vcall",
         dialect: "asm",
+        scheme: "() -> ()",
         attributes: A {
             callee: "Str",
             outgoing_stack_size: "UInt",
@@ -280,9 +281,8 @@ operation! {
     VirtualIndirectCallOp {
         name: "vcall_indirect",
         dialect: "asm",
-        operands: O {
-            callee: "tir::backend::RegClassType",
-        },
+        scheme: "(backend.reg<_, _>) -> ()",
+        operands: O { callee },
         attributes: A {
             outgoing_stack_size: "UInt",
         },

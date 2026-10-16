@@ -92,6 +92,7 @@ tir::helpers::operation! {
     NestOp {
         name: "nest",
         dialect: "nest_test",
+        scheme: "() -> ()",
         regions: R {
             body: Region {
                 kind: Blocks,

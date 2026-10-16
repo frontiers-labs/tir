@@ -7,26 +7,28 @@ use tir::backend::isel::{
     RuleMatch, RuleSpec, LATENCY_COST_SCALE,
 };
 use tir::backend::regalloc::{RegClassId, RegClassInfo, RegisterView};
-use tir::sem::{FloatFormat, SemBlobBuilder, SemGraph, SemOp, SemPayloadDesc, SemType, SymKind};
-use tir::{Context, Operation, PassError};
+use tir::sem::{SemBlobBuilder, SemGraph, SemOp, SemPayloadDesc, SymKind};
+use tir::{Context, Operation, PassError, TypeArg};
 
 use super::fixtures::{binary, constant, nary, r, symbol};
 
 #[test]
 fn overlapping_register_capability_accepts_integer_and_float_values() {
+    let terms = tir::Terms::new();
     let capability = RegisterCapability::any(64);
 
-    assert!(capability.accepts(&SemType::bits(32)));
-    assert!(capability.accepts(&SemType::bits(64)));
-    assert!(capability.accepts(&SemType::Float(FloatFormat::new(11, 52))));
+    assert!(capability.accepts(&terms, &TypeArg::Type(terms.int(32))));
+    assert!(capability.accepts(&terms, &TypeArg::Type(terms.int(64))));
+    assert!(capability.accepts(&terms, &TypeArg::Type(terms.float(11, 52))));
 }
 
 #[test]
 fn whole_register_requirement_rejects_narrow_integer_values() {
+    let terms = tir::Terms::new();
     let requirement = RegisterRequirement::whole(RegisterCapability::integer(64));
 
-    assert!(!requirement.accepts(&SemType::bits(32)));
-    assert!(requirement.accepts(&SemType::bits(64)));
+    assert!(!requirement.accepts(&terms, &TypeArg::Type(terms.int(32))));
+    assert!(requirement.accepts(&terms, &TypeArg::Type(terms.int(64))));
 }
 
 fn div_pattern() -> SemGraph {

@@ -46,21 +46,24 @@ pub(crate) fn isel_axioms() -> Result<Vec<Axiom>, String> {
 struct Scope {
     width_names: Vec<String>,
     vars: Vec<(String, WidthBinding)>,
-    symbol_types: Vec<Option<crate::sem::SemType>>,
+    symbol_formats: Vec<Option<(u64, u64)>>,
     const_vars: Vec<usize>,
 }
 
 impl Scope {
-    /// Width names are interned in the order the left-hand side declares them,
-    /// then the root's: that order is the proof memo key.
+    // The interning order (the left-hand side's widths, then `NATIVE` where
+    // the rule reads it, then the root's) is the proof memo key.
     fn new(rule: &tir_pdl::Rule) -> Result<Self, String> {
         let mut scope = Scope {
             width_names: Vec::new(),
             vars: Vec::new(),
-            symbol_types: Vec::new(),
+            symbol_formats: Vec::new(),
             const_vars: Vec::new(),
         };
         scope.declare(&rule.lhs)?;
+        if rule.guards.iter().any(names_native) || term_names_native(&rule.rhs) {
+            intern(&mut scope.width_names, tir_pdl::NATIVE);
+        }
         Ok(scope)
     }
 
@@ -88,14 +91,17 @@ impl Scope {
                         (
                             WidthBinding::Lit(u64::from(1 + exponent + mantissa)),
                             false,
-                            Some(crate::sem::SemType::Float(crate::sem::FloatFormat::new(
-                                exponent, mantissa,
-                            ))),
+                            Some((exponent.into(), mantissa.into())),
                         )
                     }
                     BindingType::Type(Type::ShapedFloat { .. }) => {
                         return Err(format!(
                             "shaped float binder `{name}` is not supported by the scalar prover"
+                        ));
+                    }
+                    BindingType::Type(Type::Pointer(_)) => {
+                        return Err(format!(
+                            "pointer binder `{name}` is not supported by the solver"
                         ));
                     }
                     BindingType::Type(Type::State(resource)) => {
@@ -110,7 +116,7 @@ impl Scope {
                         return Err(format!("constant binder `{name}` needs a width"));
                     }
                     BindingType::Type(Type::Named(name)) if name == "f32" || name == "f64" => {
-                        let (exponent, mantissa, width) = if name == "f32" {
+                        let (exponent, mantissa, width): (u32, u32, u64) = if name == "f32" {
                             (8, 23, 32)
                         } else {
                             (11, 52, 64)
@@ -118,9 +124,7 @@ impl Scope {
                         (
                             WidthBinding::Lit(width),
                             false,
-                            Some(crate::sem::SemType::Float(crate::sem::FloatFormat::new(
-                                exponent, mantissa,
-                            ))),
+                            Some((exponent.into(), mantissa.into())),
                         )
                     }
                     BindingType::Type(Type::Named(name)) => {
@@ -131,7 +135,7 @@ impl Scope {
                     self.const_vars.push(self.vars.len());
                 }
                 self.vars.push((name.clone(), width));
-                self.symbol_types.push(symbol_type);
+                self.symbol_formats.push(symbol_type);
             }
             _ => {}
         }
@@ -154,6 +158,26 @@ impl Scope {
     }
 }
 
+fn names_native(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::Name(name) => name == tir_pdl::NATIVE,
+        ExprKind::Integer(_) => false,
+        ExprKind::Call { args, .. } => args.iter().any(names_native),
+        ExprKind::Unary { value, .. } => names_native(value),
+        ExprKind::Binary { lhs, rhs, .. } => names_native(lhs) || names_native(rhs),
+    }
+}
+
+fn term_names_native(term: &Term) -> bool {
+    match &term.kind {
+        TermKind::Operation { operands, .. } => operands.iter().any(term_names_native),
+        TermKind::Binder { name, .. } => name == tir_pdl::NATIVE,
+        TermKind::Value(expr) => names_native(expr),
+        TermKind::Constant { width, value } => names_native(width) || names_native(value),
+        TermKind::String(_) | TermKind::Root => false,
+    }
+}
+
 fn width_binding(width: &Width, scope: &mut Scope) -> Result<WidthBinding, String> {
     match width {
         Width::Concrete(value) => Ok(WidthBinding::Lit(u64::from(*value))),
@@ -163,12 +187,6 @@ fn width_binding(width: &Width, scope: &mut Scope) -> Result<WidthBinding, Strin
 }
 
 pub(crate) fn axiom_from_rule(rule: &tir_pdl::Rule) -> Result<Axiom, String> {
-    if !matches!(rule.kind, tir_pdl::RuleKind::Equality(_)) {
-        return Err(format!(
-            "refinement rule `{}` cannot become an equality axiom",
-            rule.name
-        ));
-    }
     let mut scope = Scope::new(rule)?;
     let root_width = match &rule.lhs.ty {
         Some(Type::Integer(width)) => width_binding(width, &mut scope)?,
@@ -181,7 +199,7 @@ pub(crate) fn axiom_from_rule(rule: &tir_pdl::Rule) -> Result<Axiom, String> {
                 "state result for resource `{resource:?}` is not supported by the solver"
             ));
         }
-        None if scope.symbol_types.iter().any(Option::is_some) => scope
+        None if scope.symbol_formats.iter().any(Option::is_some) => scope
             .vars
             .first()
             .map(|(_, width)| width.clone())
@@ -242,7 +260,7 @@ pub(crate) fn axiom_from_rule(rule: &tir_pdl::Rule) -> Result<Axiom, String> {
         name: rule.name.clone(),
         width_names: scope.width_names,
         vars: scope.vars,
-        symbol_types: scope.symbol_types,
+        symbol_formats: scope.symbol_formats,
         const_vars: scope.const_vars,
         root_width,
         guards,
@@ -383,8 +401,6 @@ fn name_expr(name: &str) -> Expr {
     }
 }
 
-/// An integer expression over bound widths: names, literals, subtraction and
-/// `ones(e)`.
 fn width_expr(expr: &Expr, scope: &Scope) -> Result<WidthExpr, String> {
     match &expr.kind {
         ExprKind::Integer(value) => Ok(WidthExpr::Lit(*value as u64)),
@@ -394,6 +410,14 @@ fn width_expr(expr: &Expr, scope: &Scope) -> Result<WidthExpr, String> {
             .position(|n| n == name)
             .map(WidthExpr::Name)
             .ok_or_else(|| format!("unknown width `{name}`")),
+        ExprKind::Binary {
+            op: BinaryOp::Add,
+            lhs,
+            rhs,
+        } => Ok(WidthExpr::Add(
+            Box::new(width_expr(lhs, scope)?),
+            Box::new(width_expr(rhs, scope)?),
+        )),
         ExprKind::Binary {
             op: BinaryOp::Subtract,
             lhs,
@@ -406,7 +430,7 @@ fn width_expr(expr: &Expr, scope: &Scope) -> Result<WidthExpr, String> {
             [arg] => Ok(WidthExpr::Ones(Box::new(width_expr(arg, scope)?))),
             _ => Err("`ones` takes one argument".into()),
         },
-        _ => Err("width expressions are names, integers, `a - b`, or `ones(e)`".into()),
+        _ => Err("width expressions are names, integers, `a + b`, `a - b`, or `ones(e)`".into()),
     }
 }
 

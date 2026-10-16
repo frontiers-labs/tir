@@ -11,7 +11,6 @@ use crate::{Diagnostic, Span};
 /// declarations when the rule is built, so they live in one place.
 struct RustOperation {
     path: TokenStream,
-    emitter: Option<Ident>,
     cost: u32,
 }
 
@@ -22,82 +21,94 @@ fn rust_operation(operator: &Operator) -> Option<RustOperation> {
     match (dialect.as_str(), name.as_str()) {
         ("builtin", "addi") => Some(RustOperation {
             path: quote! { crate::builtin::AddIOp },
-            emitter: Some(format_ident!("emit_add")),
             cost: 1,
         }),
         ("builtin", "muli") => Some(RustOperation {
             path: quote! { crate::builtin::MulIOp },
-            emitter: Some(format_ident!("emit_mul")),
             cost: 4,
         }),
         ("builtin", "subi") => Some(RustOperation {
             path: quote! { crate::builtin::SubIOp },
-            emitter: Some(format_ident!("emit_sub")),
             cost: 1,
         }),
         ("builtin", "divui") => Some(RustOperation {
             path: quote! { crate::builtin::DivUIOp },
-            emitter: None,
             cost: 1,
         }),
         ("builtin", "divsi") => Some(RustOperation {
             path: quote! { crate::builtin::DivSIOp },
-            emitter: None,
             cost: 1,
         }),
         ("builtin", "remui") => Some(RustOperation {
             path: quote! { crate::builtin::RemUIOp },
-            emitter: None,
             cost: 1,
         }),
         ("builtin", "remsi") => Some(RustOperation {
             path: quote! { crate::builtin::RemSIOp },
-            emitter: None,
             cost: 1,
         }),
         ("builtin", "shli") => Some(RustOperation {
             path: quote! { crate::builtin::ShlIOp },
-            emitter: Some(format_ident!("emit_shl")),
             cost: 1,
         }),
         ("builtin", "andi") => Some(RustOperation {
             path: quote! { crate::builtin::AndIOp },
-            emitter: None,
             cost: 1,
         }),
         ("builtin", "ori") => Some(RustOperation {
             path: quote! { crate::builtin::OrIOp },
-            emitter: Some(format_ident!("emit_or")),
             cost: 1,
         }),
         ("builtin", "xori") => Some(RustOperation {
             path: quote! { crate::builtin::XOrIOp },
-            emitter: Some(format_ident!("emit_xor")),
             cost: 1,
         }),
         ("builtin", "shrui") => Some(RustOperation {
             path: quote! { crate::builtin::ShrUIOp },
-            emitter: None,
             cost: 1,
         }),
         ("builtin", "shrsi") => Some(RustOperation {
             path: quote! { crate::builtin::ShrSIOp },
-            emitter: None,
+            cost: 1,
+        }),
+        ("ptr", "field") => Some(RustOperation {
+            path: quote! { crate::ptr::FieldOp },
+            cost: 1,
+        }),
+        ("ptr", "ptradd") => Some(RustOperation {
+            path: quote! { crate::ptr::PtrAddOp },
+            cost: 1,
+        }),
+        ("ptr", "copy") => Some(RustOperation {
+            path: quote! { crate::ptr::CopyOp },
+            cost: 1,
+        }),
+        ("ptr", "memcpy") => Some(RustOperation {
+            path: quote! { crate::ptr::MemcpyOp },
+            cost: 1,
+        }),
+        ("builtin", "refine") => Some(RustOperation {
+            path: quote! { crate::builtin::RefineOp },
+            cost: 1,
+        }),
+        ("layout", "sizeof") => Some(RustOperation {
+            path: quote! { crate::layout::SizeOfOp },
+            cost: 1,
+        }),
+        ("layout", "offsetof") => Some(RustOperation {
+            path: quote! { crate::layout::OffsetOfOp },
             cost: 1,
         }),
         ("fp", "neg") => Some(RustOperation {
             path: quote! { crate::fp::ops::NegOp },
-            emitter: Some(format_ident!("emit_fp_neg")),
             cost: 1,
         }),
         ("fp", "abs") => Some(RustOperation {
             path: quote! { crate::fp::ops::AbsOp },
-            emitter: Some(format_ident!("emit_fp_abs")),
             cost: 1,
         }),
         ("fp", "copysign") => Some(RustOperation {
             path: quote! { crate::fp::ops::CopySignOp },
-            emitter: Some(format_ident!("emit_fp_copysign")),
             cost: 1,
         }),
         _ => None,
@@ -130,13 +141,14 @@ pub fn generate(file: &File) -> Result<String, Vec<Diagnostic>> {
         .enumerate()
     {
         let function = function_name(rule_index);
-        let emit = root_operator(&rule.rhs)
-            .and_then(rust_operation)
-            .and_then(|operation| operation.emitter)
-            .map_or_else(|| quote! { None }, |emitter| quote! { Some(#emitter()) });
+        // A rule stated `proof trusted` is applied only where the pipeline
+        // trusts such rules.
+        let push = match rule.proof {
+            Some(Proof::Trusted) => quote! { push_trusted },
+            _ => quote! { push_query },
+        };
         initializers.push(quote! {
-            let index = ruleset.rewrites.len();
-            ruleset.push_query(#function(context, index), #emit);
+            ruleset.#push(#function(context));
         });
         let base = rule_index as u32 * PDL_EXTERN_STRIDE;
         let Some(generated_rule) = generate_rule(rule, function, base) else {
@@ -229,13 +241,6 @@ fn validate_codegen_rule(rule: &Rule, diagnostics: &mut Vec<Diagnostic>) {
     for guard in &rule.guards {
         validate_codegen_expr(guard, &binders, diagnostics);
     }
-    if contains_nested_rhs_operation(&rule.rhs, true) {
-        diagnostics.push(Diagnostic::new(
-            "nested RHS operation emission is not implemented",
-            "materialize only one operation per rule",
-            rule.rhs.span,
-        ));
-    }
 }
 
 fn validate_typed_binders(term: &Term, diagnostics: &mut Vec<Diagnostic>) {
@@ -293,9 +298,9 @@ fn collect_binder_types<'a>(
 fn validate_lhs(term: &Term, diagnostics: &mut Vec<Diagnostic>) {
     if let TermKind::Operation {
         operator,
-        attributes,
         operands,
         dependencies,
+        ..
     } = &term.kind
     {
         if let Operator::Dialect { dialect, name } = operator
@@ -304,13 +309,6 @@ fn validate_lhs(term: &Term, diagnostics: &mut Vec<Diagnostic>) {
             diagnostics.push(Diagnostic::new(
                 format!("unknown operation '{dialect}.{name}'"),
                 "this operation has no typed Rust lowering",
-                term.span,
-            ));
-        }
-        if !attributes.is_empty() {
-            diagnostics.push(Diagnostic::new(
-                "attribute code generation is not implemented",
-                "remove attributes from this initial ruleset",
                 term.span,
             ));
         }
@@ -350,42 +348,38 @@ fn validate_rhs(
     match &term.kind {
         TermKind::Operation {
             operator,
-            attributes,
             operands,
             dependencies,
+            ..
         } => {
-            if !root {
-                return;
-            }
-            if !dependencies.is_empty() {
-                diagnostics.push(unsupported("dependency operands on the RHS", term.span));
-            }
             if matches!(operator, Operator::Semantic(_)) {
                 diagnostics.push(unsupported("semantic operator emission", term.span));
             }
-            if let Operator::Dialect { dialect, name } = operator {
-                match rust_operation(operator) {
-                    None => diagnostics.push(Diagnostic::new(
-                        format!("unknown operation '{dialect}.{name}'"),
-                        "this operation has no typed Rust lowering",
-                        term.span,
-                    )),
-                    Some(operation) if operation.emitter.is_none() => {
-                        diagnostics.push(Diagnostic::new(
-                            format!("cannot emit operation '{dialect}.{name}'"),
-                            "this operation has no typed Rust emitter",
-                            term.span,
-                        ))
-                    }
-                    Some(_) => {}
-                }
+            if let Operator::Dialect { dialect, name } = operator
+                && rust_operation(operator).is_none()
+            {
+                diagnostics.push(Diagnostic::new(
+                    format!("unknown operation '{dialect}.{name}'"),
+                    "this operation has no typed Rust lowering",
+                    term.span,
+                ));
             }
-            if !attributes.is_empty() {
-                diagnostics.push(unsupported("attribute emission", term.span));
+            // A nested operation has no class to take its type from.
+            let typed = matches!(
+                term.ty,
+                Some(Type::Integer(Width::Concrete(_) | Width::Named(_)))
+            );
+            if !root && !typed {
+                diagnostics.push(Diagnostic::new(
+                    "a nested operation needs its result type",
+                    "write `: int<W>` after it",
+                    term.span,
+                ));
             }
-            for operand in operands {
+            for operand in operands.iter().chain(dependencies) {
                 validate_rhs(operand, false, binders, diagnostics);
             }
+            return;
         }
         TermKind::Constant { width, value } => {
             validate_constant_width(width, diagnostics);
@@ -427,6 +421,19 @@ fn validate_codegen_expr(
                 diagnostics.push(Diagnostic::new(
                     format!("binder '{name}' is not a constant"),
                     "only constant binders can be used in expressions",
+                    expr.span,
+                ));
+            }
+        }
+        ExprKind::Call { name, args } if matches!(name.as_str(), "offsetof" | "sizeof") => {
+            let arity = if name == "offsetof" { 2 } else { 1 };
+            let attributes = args.iter().all(
+                |arg| matches!(&arg.kind, ExprKind::Name(name) if !binders.contains_key(name.as_str())),
+            );
+            if args.len() != arity || !attributes {
+                diagnostics.push(Diagnostic::new(
+                    format!("'{name}' takes {arity} attribute binders"),
+                    "pass the type (and field) an operation's attributes bind",
                     expr.span,
                 ));
             }
@@ -518,23 +525,6 @@ fn unsupported(feature: &str, span: Span) -> Diagnostic {
     )
 }
 
-fn contains_nested_rhs_operation(term: &Term, root: bool) -> bool {
-    let TermKind::Operation { operands, .. } = &term.kind else {
-        return false;
-    };
-    (!root)
-        || operands
-            .iter()
-            .any(|operand| contains_nested_rhs_operation(operand, false))
-}
-
-fn root_operator(term: &Term) -> Option<&Operator> {
-    match &term.kind {
-        TermKind::Operation { operator, .. } => Some(operator),
-        _ => None,
-    }
-}
-
 fn generate_rule(rule: &Rule, function: Ident, base: u32) -> Option<TokenStream> {
     let rule_name = &rule.name;
     let mut pattern = PatternGenerator::default();
@@ -542,10 +532,29 @@ fn generate_rule(rule: &Rule, function: Ident, base: u32) -> Option<TokenStream>
 
     let mut build = RuleBuilder {
         vars: pattern.vars,
+        scalars: pattern.scalars,
         atoms: std::mem::take(&mut pattern.atoms),
         base,
         ..RuleBuilder::default()
     };
+    for (row, name, binder) in &pattern.attribute_reads {
+        let out = build.scalar();
+        build.guards.push(quote! {
+            Guard::Read {
+                term: Source::Row(#row),
+                field: crate::sem::node::attribute_field(context.intern(#name)),
+                out: #out,
+            }
+        });
+        match build.attributes.get(binder) {
+            Some(&bound) => build.guards.push(quote! {
+                Guard::Cmp(Cmp::Eq, Expr::Scalar(#out), Expr::Scalar(#bound))
+            }),
+            None => {
+                build.attributes.insert(binder.clone(), out);
+            }
+        }
+    }
     // An operand written as a number is that number, at whatever width the class
     // spells it — the reading `class_is_literal` took.
     for literal in &pattern.literals {
@@ -597,8 +606,8 @@ fn generate_rule(rule: &Rule, function: Ident, base: u32) -> Option<TokenStream>
             }
         });
     Some(quote! {
-        fn #function(context: &Context, index: usize) -> tir_egraph::Rule<Node> {
-            let _ = (context, index);
+        fn #function(context: &Context) -> tir_egraph::Rule<Node> {
+            let _ = context;
             #(#law_checks)*
             tir_egraph::Rule {
                 name: #rule_name.to_string(),
@@ -637,6 +646,8 @@ struct PatternGenerator {
     literals: Vec<Literal>,
     atoms: Vec<TokenStream>,
     vars: u32,
+    scalars: u32,
+    attribute_reads: Vec<(u32, String, String)>,
     /// Each IR op holding a constant operand, which, and whether it is the
     /// literal zero. Whether the op's laws dissolve that operand is a question
     /// for its core declaration, so it is asked where the rule is built.
@@ -685,9 +696,9 @@ impl PatternGenerator {
             }
             TermKind::Operation {
                 operator,
+                attributes,
                 operands: term_operands,
                 dependencies,
-                ..
             } => {
                 let operands: Vec<u32> = term_operands
                     .iter()
@@ -705,25 +716,85 @@ impl PatternGenerator {
                                 self.constant_operands.push((path.clone(), index, zero));
                             }
                         }
-                        quote! { Node::pattern::<#path>(vec![#(#children),*]) }
+                        pattern_template(&path, attributes, children)
                     }
                     Operator::Semantic(name) => {
                         let kind = sym_kind_path(name)?;
                         quote! { Node::sym_pattern(#kind, vec![#(#children),*]) }
                     }
                 };
+                let row = self.attribute_row(attributes);
                 self.atoms.push(quote! {
                     Atom::Node {
                         template: #constructor,
                         args: smallvec![#(#operands),*],
                         class: #class,
-                        row: None,
+                        row: #row,
                     }
                 });
                 Some(class)
             }
             _ => None,
         }
+    }
+}
+
+impl PatternGenerator {
+    // The scalar a pattern op's row binds when it reads attributes by name.
+    fn attribute_row(&mut self, attributes: &[Attribute]) -> TokenStream {
+        let mut row = None;
+        for attribute in attributes {
+            let AttributeValue::Binder(binder) = &attribute.value else {
+                continue;
+            };
+            let slot = *row.get_or_insert_with(|| {
+                self.scalars += 1;
+                self.scalars - 1
+            });
+            self.attribute_reads
+                .push((slot, attribute.name.clone(), binder.clone()));
+        }
+        match row {
+            Some(row) => quote! { Some(#row) },
+            None => quote! { None },
+        }
+    }
+}
+
+// The template of a pattern op: its literal attributes fixed, the bound ones
+// any value.
+fn pattern_template(
+    path: &TokenStream,
+    attributes: &[Attribute],
+    children: impl Iterator<Item = TokenStream>,
+) -> TokenStream {
+    if attributes.is_empty() {
+        return quote! { Node::pattern::<#path>(vec![#(#children),*]) };
+    }
+    let mut fixed = Vec::new();
+    let mut bound = Vec::new();
+    for attribute in attributes {
+        let name = &attribute.name;
+        match attribute_literal(&attribute.value) {
+            Some(value) => fixed.push(quote! { (#name, #value) }),
+            None => bound.push(name.clone()),
+        }
+    }
+    quote! {
+        Node::pattern_binding::<#path>(context, vec![#(#fixed),*], &[#(#bound),*], vec![#(#children),*])
+    }
+}
+
+// An attribute written as a literal, as the IR attribute it is.
+fn attribute_literal(value: &AttributeValue) -> Option<TokenStream> {
+    match value {
+        AttributeValue::Integer(value) => {
+            Some(quote! { crate::attributes::AttributeValue::Int(#value) })
+        }
+        AttributeValue::String(value) => {
+            Some(quote! { crate::attributes::AttributeValue::from(#value) })
+        }
+        AttributeValue::Binder(_) => None,
     }
 }
 
@@ -748,6 +819,9 @@ struct RuleBuilder {
     values: BTreeMap<u32, (u32, u32)>,
     /// Scalars holding each named width.
     widths: BTreeMap<String, u32>,
+    /// Scalars holding the type of each binder declared with one.
+    types: BTreeMap<u32, u32>,
+    attributes: BTreeMap<String, u32>,
     /// The scalars an extern body reads, as `args`, in order.
     inputs: Vec<u32>,
     /// Where this rule's host-function ids start.
@@ -800,7 +874,7 @@ impl RuleBuilder {
     fn read(&mut self, value: u32, width: u32) -> TokenStream {
         let value = self.word(value);
         let width = self.word(width);
-        quote! { APInt::new(#width as u32, #value) }
+        quote! { APInt::new(#width, #value) }
     }
 
     /// The `args` slot a scalar arrives in.
@@ -823,9 +897,14 @@ impl RuleBuilder {
         let inputs = std::mem::take(&mut self.inputs);
         let args = inputs.iter().map(|&slot| quote! { Expr::Scalar(#slot) });
         let outs: Vec<TokenStream> = out.iter().map(|&slot| quote! { #slot }).collect();
+        // The first host function is the base itself.
+        let call = match id {
+            0 => quote! { call::PDL },
+            id => quote! { call::PDL + #id },
+        };
         self.guards.push(quote! {
             Guard::Extern {
-                call: call::PDL + #id,
+                call: #call,
                 terms: SmallVec::new(),
                 args: smallvec![#(#args),*],
                 out: smallvec![#(#outs),*],
@@ -860,11 +939,30 @@ fn generate_constraint(constraint: &Constraint, build: &mut RuleBuilder) -> Opti
             let ty = build.scalar();
             let width = build.scalar();
             build.atoms.push(quote! {
-                Atom::Fact { column: ColumnId::Type, key: #binder, value: #ty }
+                                Atom::Fact { column: ColumnId::Type, key: #binder, value: #ty }
             });
+            build.types.insert(binder, ty);
             build.guards.push(quote! {
                 Guard::Extern {
                     call: call::INT_WIDTH_OF,
+                    terms: SmallVec::new(),
+                    args: smallvec![Expr::Scalar(#ty)],
+                    out: smallvec![#width],
+                }
+            });
+            build.bind_width(name, width);
+            Some(())
+        }
+        BindingType::Type(Type::Pointer(Width::Named(name))) => {
+            let ty = build.scalar();
+            let width = build.scalar();
+            build.atoms.push(quote! {
+                                Atom::Fact { column: ColumnId::Type, key: #binder, value: #ty }
+            });
+            build.types.insert(binder, ty);
+            build.guards.push(quote! {
+                Guard::Extern {
+                    call: call::POINTER_WIDTH_OF,
                     terms: SmallVec::new(),
                     args: smallvec![Expr::Scalar(#ty)],
                     out: smallvec![#width],
@@ -881,8 +979,9 @@ fn generate_constraint(constraint: &Constraint, build: &mut RuleBuilder) -> Opti
                 FloatFormat::Binary64 => 64i64,
             };
             build.atoms.push(quote! {
-                Atom::Fact { column: ColumnId::Type, key: #binder, value: #ty }
+                                Atom::Fact { column: ColumnId::Type, key: #binder, value: #ty }
             });
+            build.types.insert(binder, ty);
             build.guards.push(quote! {
                 Guard::Extern {
                     call: call::FLOAT_WIDTH_OF,
@@ -905,8 +1004,9 @@ fn generate_constraint(constraint: &Constraint, build: &mut RuleBuilder) -> Opti
                 Resource::Named(_) => return None,
             };
             build.atoms.push(quote! {
-                Atom::Fact { column: ColumnId::Type, key: #binder, value: #ty }
+                                Atom::Fact { column: ColumnId::Type, key: #binder, value: #ty }
             });
+            build.types.insert(binder, ty);
             build.guards.push(quote! {
                 Guard::Extern {
                     call: call::STATE_RESOURCE_OF,
@@ -934,53 +1034,158 @@ fn generate_rhs(
     match &term.kind {
         TermKind::Binder { name, .. } => binders.get(name).copied(),
         TermKind::Constant { .. } => rhs_operand(term, binders, build),
-        TermKind::Operation {
-            operator, operands, ..
-        } => {
-            let operation = rust_operation(operator)?;
-            let path = operation.path;
-            let cost = operation.cost;
-            let operands: Vec<u32> = operands
-                .iter()
-                .map(|operand| rhs_operand(operand, binders, build))
-                .collect::<Option<_>>()?;
-            // An introduced op answers at the type the class already has, and
-            // lives in the carrier that type is.
+        TermKind::Operation { .. } => {
+            // The replacement answers at the type the class already has.
             let ty = build.scalar();
             build.atoms.push(quote! {
                 Atom::Fact { column: ColumnId::Type, key: #root, value: #ty }
             });
-            let carrier = build.scalar();
-            build.guards.push(quote! {
-                Guard::Extern {
-                    call: call::CARRIER_OF,
-                    terms: SmallVec::new(),
-                    args: smallvec![Expr::Scalar(#ty)],
-                    out: smallvec![#carrier],
-                }
-            });
-            let into = build.var();
-            let children = operands.iter().map(|&var| quote! { Id::from_raw(#var) });
-            build.head.push(quote! {
-                HeadOp::Insert {
-                    label: LabelFill {
-                        template: Node::introduced::<#path>(
-                            context,
-                            TypeId::from_number(0),
-                            #cost,
-                            index,
-                            vec![#(#children),*],
-                        ),
-                        fills: smallvec![(field::TY, #ty), (field::CARRIER, #carrier)],
-                    },
-                    args: smallvec![#(#operands),*],
-                    into: #into,
-                }
-            });
-            Some(into)
+            rhs_operation(term, ty, binders, build)
         }
         _ => None,
     }
+}
+
+// Insert the operation `term` at the type in scalar `ty`, its operands and
+// dependencies first.
+fn rhs_operation(
+    term: &Term,
+    ty: u32,
+    binders: &BTreeMap<String, u32>,
+    build: &mut RuleBuilder,
+) -> Option<u32> {
+    let TermKind::Operation {
+        operator,
+        attributes,
+        operands,
+        dependencies,
+    } = &term.kind
+    else {
+        return None;
+    };
+    let operation = rust_operation(operator)?;
+    let path = operation.path;
+    let cost = operation.cost;
+    let operands: Vec<u32> = operands
+        .iter()
+        .chain(dependencies)
+        .map(|operand| rhs_operand(operand, binders, build))
+        .collect::<Option<_>>()?;
+    // An introduced op lives in the carrier its type is.
+    let carrier = build.scalar();
+    build.guards.push(quote! {
+        Guard::Extern {
+            call: call::CARRIER_OF,
+            terms: SmallVec::new(),
+            args: smallvec![Expr::Scalar(#ty)],
+            out: smallvec![#carrier],
+        }
+    });
+    let mut names = Vec::new();
+    let mut fills = vec![
+        quote! { (field::TY, #ty) },
+        quote! { (field::CARRIER, #carrier) },
+    ];
+    for attribute in attributes {
+        let name = &attribute.name;
+        let value = match (&attribute.value, attribute_literal(&attribute.value)) {
+            (AttributeValue::Binder(binder), _) => *build.attributes.get(binder)?,
+            (_, Some(literal)) => {
+                let word = build.scalar();
+                build.guards.push(quote! {
+                    Guard::Let {
+                        out: #word,
+                        value: Expr::Lit(
+                            crate::sem::node::attribute_word(&context.names(), &#literal)
+                                .expect("a literal attribute is a word") as i64,
+                        ),
+                    }
+                });
+                word
+            }
+            _ => return None,
+        };
+        names.push(name.clone());
+        fills.push(quote! {
+            (crate::sem::node::attribute_field(context.intern(#name)), #value)
+        });
+    }
+    // An operand of a declared type that is the result's returns from an
+    // identity element at the other, as a seeded op's does.
+    let typed = operands.iter().enumerate().filter_map(|(at, var)| {
+        let operand = *build.types.get(var)?;
+        let mut bit = quote! {
+            Expr::IsZero(Box::new(Expr::Sub(
+                Box::new(Expr::Scalar(#operand)),
+                Box::new(Expr::Scalar(#ty)),
+            )))
+        };
+        for _ in 0..at {
+            bit = quote! { Expr::Add(Box::new(#bit), Box::new(#bit)) };
+        }
+        Some(bit)
+    });
+    let typed: Vec<TokenStream> = typed.collect();
+    if let Some(bits) = typed
+        .into_iter()
+        .reduce(|sum, bit| quote! { Expr::Add(Box::new(#sum), Box::new(#bit)) })
+    {
+        let word = build.scalar();
+        build
+            .guards
+            .push(quote! { Guard::Let { out: #word, value: #bits } });
+        fills.push(quote! { (field::RESULT_TYPED, #word) });
+    }
+    let into = build.var();
+    let children = operands.iter().map(|&var| quote! { Id::from_raw(#var) });
+    let template = match names.is_empty() {
+        true => quote! {
+            Node::introduced::<#path>(context, #cost, vec![#(#children),*])
+        },
+        false => quote! {
+            Node::introduced_with::<#path>(context, #cost, &[#(#names),*], vec![#(#children),*])
+        },
+    };
+    build.head.push(quote! {
+        HeadOp::Insert {
+            label: LabelFill {
+                template: #template,
+                fills: smallvec![#(#fills),*],
+            },
+            args: smallvec![#(#operands),*],
+            into: #into,
+        }
+    });
+    Some(into)
+}
+
+// The type a nested operation declares, in a scalar.
+fn rhs_type(ty: &Type, build: &mut RuleBuilder) -> Option<u32> {
+    let out = build.scalar();
+    match ty {
+        Type::Integer(Width::Concrete(bits)) => {
+            let bits = u64::from(*bits);
+            build.guards.push(quote! {
+                Guard::Let {
+                    out: #out,
+                    value: Expr::Lit(context.terms().int(#bits).number() as i64),
+                }
+            });
+        }
+        Type::Integer(Width::Named(name)) => {
+            let width = *build.widths.get(name)?;
+            build.guards.push(quote! {
+                Guard::Extern {
+                    call: call::INT_TYPE,
+                    terms: SmallVec::new(),
+                    args: smallvec![Expr::Scalar(#width)],
+                    out: smallvec![#out],
+                }
+            });
+        }
+        _ => return None,
+    }
+    Some(out)
 }
 
 /// An operand of the right-hand side: a bound class, or a constant the rule
@@ -992,6 +1197,10 @@ fn rhs_operand(
 ) -> Option<u32> {
     match &term.kind {
         TermKind::Binder { name, .. } => binders.get(name).copied(),
+        TermKind::Operation { .. } => {
+            let ty = rhs_type(term.ty.as_ref()?, build)?;
+            rhs_operation(term, ty, binders, build)
+        }
         TermKind::Constant { width, value } => {
             let width_body = number_expr(width, binders, build)?;
             let bits = build.scalar();
@@ -1107,6 +1316,33 @@ fn number_expr(
             let read = build.word(width);
             Some(quote! { #read as i64 })
         }
+        // A layout query is the host's: the layout in scope answers it in bits.
+        ExprKind::Call { name, args } if matches!(name.as_str(), "offsetof" | "sizeof") => {
+            let attributes: Option<Vec<u32>> = (args.iter())
+                .map(|arg| match &arg.kind {
+                    ExprKind::Name(name) => build.attributes.get(name).copied(),
+                    _ => None,
+                })
+                .collect();
+            let terms = attributes?
+                .into_iter()
+                .map(|slot| quote! { Expr::Scalar(#slot) });
+            let call = match name.as_str() {
+                "offsetof" => quote! { call::OFFSET_OF },
+                _ => quote! { call::SIZE_OF },
+            };
+            let out = build.scalar();
+            build.guards.push(quote! {
+                Guard::Extern {
+                    call: #call,
+                    terms: SmallVec::new(),
+                    args: smallvec![#(#terms),*],
+                    out: smallvec![#out],
+                }
+            });
+            let read = build.word(out);
+            Some(quote! { #read as i64 })
+        }
         ExprKind::Call { name, args } => {
             let ExprKind::Name(argument) = &args.first()?.kind else {
                 return None;
@@ -1205,7 +1441,7 @@ fn modular_number_expr(
 ) -> Option<TokenStream> {
     let ExprKind::Binary { op, lhs, rhs } = &expr.kind else {
         let value = number_expr(expr, binders, build)?;
-        return Some(quote! { APInt::new((#width) as u32, (#value) as u64) });
+        return Some(quote! { APInt::new(#width, (#value) as u64) });
     };
     let operation = match op {
         BinaryOp::Add => Ident::new("add", proc_macro2::Span::call_site()),
@@ -1213,7 +1449,7 @@ fn modular_number_expr(
         BinaryOp::Multiply => Ident::new("mul", proc_macro2::Span::call_site()),
         _ => {
             let value = number_expr(expr, binders, build)?;
-            return Some(quote! { APInt::new((#width) as u32, (#value) as u64) });
+            return Some(quote! { APInt::new(#width, (#value) as u64) });
         }
     };
     let lhs = modular_number_expr(lhs, width.clone(), binders, build)?;

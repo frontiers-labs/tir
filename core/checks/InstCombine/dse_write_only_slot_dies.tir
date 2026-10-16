@@ -8,9 +8,9 @@
 // promote-nodes takes on its own, and this is the rule that answers for the
 // ones it cannot.
 
-#data_layout = {types = {i32 = {abi = 32, size = 32}, i64 = {abi = 64, size = 64}, p = {abi = 64, size = 64}}}
+#layout_spec = #layout.spec<!i32 = {size = 32, abi = 32}, !i64 = {size = 64, abi = 64}, !ptr.p = {size = 64, abi = 64}>
 
-module {data_layout = #data_layout} {
+module {layout.spec = #layout_spec} {
   %fn_f = func.func @f(%0: !i32, %1: !i32) {
     %2 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
     %3 = constant {value = 1} : !i32

@@ -45,6 +45,18 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     };
     fs::write(out.join("instcombine_rules.rs"), rust)?;
+
+    let input = "defs/layout.pdl";
+    println!("cargo:rerun-if-changed={input}");
+    let contents = fs::read_to_string(input)?;
+    let rust = tir_pdl::compile_to_rust(&contents).or_else(|diagnostics| {
+        let mut stderr = io::stderr().lock();
+        for diagnostic in diagnostics {
+            diagnostic.write(input, &contents, &mut stderr)?;
+        }
+        Err::<String, Box<dyn Error>>("failed to compile layout PDL rules".into())
+    })?;
+    fs::write(out.join("layout_rules.rs"), rust)?;
     Ok(())
 }
 

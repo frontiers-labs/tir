@@ -1,7 +1,7 @@
-// RUN: env TIR_RULE_STATS=1 TIR_TIME_PASSES=0 tir opt --pass restructure-nodes,instcombine-nodes %s 2>&1 | filecheck %s
-// RUN: env TIR_TIME_PASSES=1 TIR_RULE_STATS=0 tir opt --pass restructure-nodes,instcombine-nodes %s 2>&1 | filecheck %s --check-prefix TIME
-// RUN: env TIR_RULE_STATS=1 TIR_TIME_PASSES=1 tir opt --pass restructure-nodes,instcombine-nodes,instcombine-nodes %s 2>&1 | filecheck %s --check-prefix RESET
-// RUN: env TIR_RULE_STATS=0 TIR_TIME_PASSES=0 tir opt --pass restructure-nodes,instcombine-nodes %s 2>&1 | filecheck %s --check-prefix OFF
+// RUN: env TIR_RULE_STATS=1 TIR_TIME_PASSES=0 tir opt --pass restructure-nodes,instcombine-nodes<trusted> %s 2>&1 | filecheck %s
+// RUN: env TIR_TIME_PASSES=1 TIR_RULE_STATS=0 tir opt --pass restructure-nodes,instcombine-nodes<trusted> %s 2>&1 | filecheck %s --check-prefix TIME
+// RUN: env TIR_RULE_STATS=1 TIR_TIME_PASSES=1 tir opt --pass restructure-nodes,instcombine-nodes<trusted>,instcombine-nodes<trusted> %s 2>&1 | filecheck %s --check-prefix RESET
+// RUN: env TIR_RULE_STATS=0 TIR_TIME_PASSES=0 tir opt --pass restructure-nodes,instcombine-nodes<trusted> %s 2>&1 | filecheck %s --check-prefix OFF
 
 module {
   %f = func.func @identity(%x: !i32) -> !i32 {

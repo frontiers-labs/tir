@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::collections::{BTreeMap, HashMap};
 
 use tir::attributes::AttributeValue;
@@ -474,31 +473,32 @@ impl<'a> Writer<'a> {
         if let Some(id) = self.type_ids.get(&ty) {
             return Ok(*id);
         }
-        let data = self.context.get_type_data(ty);
         let id = self.id();
-        if let Some(integer) = (data.as_ref() as &dyn Any).downcast_ref::<IntegerType>() {
+        if let Some(integer) = IntegerType::view(self.context, ty) {
             if integer.width() == 1 {
                 instruction(&mut self.type_words, 20, &[id]);
             } else {
-                instruction(&mut self.type_words, 21, &[id, integer.width(), 0]);
+                let width = u32::try_from(integer.width())
+                    .map_err(|_| "SPIR-V integers are narrower than 2^32 bits".to_string())?;
+                instruction(&mut self.type_words, 21, &[id, width, 0]);
             }
-        } else if let Some(float) = (data.as_ref() as &dyn Any).downcast_ref::<FloatType>() {
+        } else if let Some(float) = FloatType::view(self.context, ty) {
             let width = float.exp_width() + float.mant_width() + 1;
             instruction(&mut self.type_words, 22, &[id, width]);
-        } else if (data.as_ref() as &dyn Any).is::<UnitType>() {
+        } else if UnitType::view(self.context, ty).is_some() {
             instruction(&mut self.type_words, 19, &[id]);
-        } else if let Some(vector) = (data.as_ref() as &dyn Any).downcast_ref::<VectorType>() {
-            let element = self.type_id(vector.element(self.context))?;
+        } else if let Some(vector) = VectorType::view(self.context, ty) {
+            let element = self.type_id(vector.element())?;
             let count = vector
                 .length()
                 .ok_or("SPIR-V vectors must be statically sized")?;
             instruction(&mut self.type_words, 23, &[id, element, count]);
-        } else if let Some(array) = (data.as_ref() as &dyn Any).downcast_ref::<RuntimeArrayType>() {
-            let element = self.type_id(array.element(self.context))?;
+        } else if let Some(array) = RuntimeArrayType::view(self.context, ty) {
+            let element = self.type_id(array.element())?;
             instruction(&mut self.type_words, 29, &[id, element]);
             instruction(&mut self.annotation_words, 71, &[id, 6, array.stride()]);
-        } else if let Some(pointer) = (data.as_ref() as &dyn Any).downcast_ref::<PointerType>() {
-            let pointee = self.type_id(pointer.pointee(self.context))?;
+        } else if let Some(pointer) = PointerType::view(self.context, ty) {
+            let pointee = self.type_id(pointer.pointee())?;
             instruction(
                 &mut self.type_words,
                 32,
@@ -634,7 +634,7 @@ impl<'a> Reader<'a> {
             let ty = match inst.opcode {
                 19 => Some(UnitType::new(self.context)),
                 20 => Some(IntegerType::new(self.context, 1)),
-                21 => Some(IntegerType::new(self.context, o[1])),
+                21 => Some(IntegerType::new(self.context, u64::from(o[1]))),
                 22 => Some(match o[1] {
                     16 => FloatType::f16(self.context),
                     32 => FloatType::f32(self.context),
@@ -1164,8 +1164,8 @@ fn attr_u32(value: &AttributeValue) -> Result<u32> {
 }
 
 fn constant_words(context: &Context, result: ValueId, value: &AttributeValue) -> Result<Vec<u32>> {
-    let ty = context.get_type_data(context.get_value(result).ty());
-    if let Some(i) = (ty.as_ref() as &dyn Any).downcast_ref::<IntegerType>() {
+    let ty = context.get_value(result).ty();
+    if let Some(i) = IntegerType::view(context, ty) {
         let bits = match value {
             AttributeValue::Int(v) => *v as u64,
             AttributeValue::UInt(v) => *v,
@@ -1178,7 +1178,7 @@ fn constant_words(context: &Context, result: ValueId, value: &AttributeValue) ->
             vec![bits as u32]
         });
     }
-    if let Some(f) = (ty.as_ref() as &dyn Any).downcast_ref::<FloatType>() {
+    if let Some(f) = FloatType::view(context, ty) {
         let value = match value {
             AttributeValue::F32(v) => f64::from(*v),
             AttributeValue::F64(v) => *v,
@@ -1194,8 +1194,7 @@ fn constant_words(context: &Context, result: ValueId, value: &AttributeValue) ->
     Err("unsupported constant type".into())
 }
 fn decode_constant(context: &Context, ty: TypeId, words: &[u32]) -> Result<AttributeValue> {
-    let data = context.get_type_data(ty);
-    if let Some(i) = (data.as_ref() as &dyn Any).downcast_ref::<IntegerType>() {
+    if let Some(i) = IntegerType::view(context, ty) {
         let bits = u64::from(words[0]) | words.get(1).map(|v| u64::from(*v) << 32).unwrap_or(0);
         return Ok(if i.width() == 1 {
             AttributeValue::Bool(bits != 0)
@@ -1203,7 +1202,7 @@ fn decode_constant(context: &Context, ty: TypeId, words: &[u32]) -> Result<Attri
             AttributeValue::UInt(bits)
         });
     }
-    if let Some(f) = (data.as_ref() as &dyn Any).downcast_ref::<FloatType>() {
+    if let Some(f) = FloatType::view(context, ty) {
         return Ok(if f.exp_width() == 8 {
             AttributeValue::F32(f32::from_bits(words[0]))
         } else {

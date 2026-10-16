@@ -1,7 +1,7 @@
 //! Structured type construction. Types are built by dialect-qualified name from
-//! typed arguments (no textual form), driven by the `TYPE_SCHEMAS` registry that
-//! `#[derive(TirType)]` populates. The schema is also exposed as JSON so
-//! language bindings can generate typed constructors.
+//! typed arguments (no textual form), as terms of the constructors the term
+//! store holds. The constructors are also exposed as JSON so language bindings
+//! can generate typed constructors.
 
 use std::ffi::{CStr, c_char};
 
@@ -10,8 +10,8 @@ use tir::{TypeArg, TypeId};
 use crate::{TIR_INVALID_ID, guard, into_cstring, set_error, with_context};
 
 /// A single argument to [`tir_type_build`]. `kind` selects how `value` is read:
-/// `TIR_TYPEARG_U32/U64/I64/BOOL` read it as that scalar; `TIR_TYPEARG_TYPE`
-/// reads it as a type id.
+/// `TIR_TYPEARG_U32/U64/I64/BOOL` read it as a number (a non-negative one for
+/// `I64`); `TIR_TYPEARG_TYPE` reads it as a type id.
 #[repr(C)]
 pub struct TirTypeArg {
     pub kind: i32,
@@ -20,10 +20,10 @@ pub struct TirTypeArg {
 
 fn decode(arg: &TirTypeArg) -> Option<TypeArg> {
     Some(match arg.kind {
-        0 => TypeArg::U32(arg.value as u32),
-        1 => TypeArg::U64(arg.value),
-        2 => TypeArg::I64(arg.value as i64),
-        3 => TypeArg::Bool(arg.value != 0),
+        0 => TypeArg::Nat(u64::from(arg.value as u32)),
+        1 => TypeArg::Nat(arg.value),
+        2 => TypeArg::Nat(u64::try_from(arg.value as i64).ok()?),
+        3 => TypeArg::Nat(u64::from(arg.value != 0)),
         4 => TypeArg::Type(TypeId::from_number(arg.value as u32)),
         _ => return None,
     })
@@ -37,8 +37,8 @@ unsafe fn cstr<'a>(p: *const c_char) -> Option<&'a str> {
     }
 }
 
-/// The schema of every registered type (dialect, name, typed params) as a JSON
-/// array. Free with [`crate::tir_string_free`].
+/// The schema of every type constructor a binding can build (dialect, name,
+/// typed params) as a JSON array. Free with [`crate::tir_string_free`].
 #[unsafe(no_mangle)]
 pub extern "C" fn tir_type_schema_json() -> *mut c_char {
     guard(std::ptr::null_mut(), || {

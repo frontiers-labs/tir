@@ -34,10 +34,17 @@ pub trait Label: Debug + Clone + Send + Sync {
     fn sort_key(&self, names: &Self::Names) -> Self::SortKey;
 
     /// Operator-index bucket for pattern search. Contract: `a.matches(b)` implies
-    /// `a.op_key() == b.op_key()`, even when `a` is a loosely-matching template —
-    /// so the key must use only fields `matches` compares strictly, never
-    /// children or a wildcardable field.
+    /// `a.op_key() == b.op_key()`; never children.
     fn op_key(&self) -> u64;
+
+    /// The [`Self::op_key`] bucket a search for `self` as a template reads, or
+    /// `None` when it matches labels of more than one bucket and the search
+    /// reads every label. Contract: `a.matches_template(b)` implies
+    /// `a.template_key()` is `None` or `Some(b.op_key())`, so the key uses
+    /// only fields the template compares strictly.
+    fn template_key(&self) -> Option<u64> {
+        Some(self.op_key())
+    }
 
     /// Operator/label equality, ignoring children. Two nodes share a class iff
     /// this holds and their canonical children are equal.
@@ -65,9 +72,8 @@ pub trait Label: Debug + Clone + Send + Sync {
     /// Whether `self`, used as a pattern *template*, matches graph node `target`.
     /// Unlike [`matches`](Label::matches) — which is node identity and must stay
     /// strict for hash-consing — a template may treat missing fields as wildcards
-    /// (e.g. an untyped template matching any type). The [`op_key`](Label::op_key)
-    /// contract extends to this relation: `a.matches_template(b)` implies
-    /// `a.op_key() == b.op_key()`.
+    /// (e.g. an untyped template matching any type). Its search reads the
+    /// bucket [`template_key`](Label::template_key) names.
     fn matches_template(&self, target: &Self) -> bool {
         self.matches(target)
     }
@@ -99,16 +105,17 @@ pub trait Label: Debug + Clone + Send + Sync {
     }
 
     /// A field of the label read as one word: an integer payload, a type, an
-    /// attribute. The language numbers its own fields; the engine only moves
-    /// the word between an atom's read and a guard's argument.
-    fn scalar(&self, _field: u32) -> Option<u64> {
+    /// attribute. The language numbers its own fields, and may spell a word
+    /// through `names`; the engine only moves the word between an atom's
+    /// read and a guard's argument.
+    fn scalar(&self, _names: &Self::Names, _field: u32) -> Option<u64> {
         None
     }
 
     /// `template` with `fills` written into the named fields — how a head spells
     /// a node whose payload a guard computed. `None` if the language cannot
     /// spell it.
-    fn fill(template: &Self, fills: &[(u32, u64)]) -> Option<Self> {
+    fn fill(template: &Self, _names: &Self::Names, fills: &[(u32, u64)]) -> Option<Self> {
         fills.is_empty().then(|| template.clone())
     }
 

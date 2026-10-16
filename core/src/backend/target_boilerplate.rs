@@ -114,9 +114,13 @@ macro_rules! impl_target_machine {
                 context.register_reg_classes(register_info().classes);
             }
 
-            fn data_layout(&self) -> Option<$crate::attributes::AttributeValue> {
+            fn data_layout(
+                &self,
+                context: &$crate::Context,
+            ) -> Option<$crate::attributes::AttributeValue> {
                 let pointer = ($pointer_bits)(&self.config);
                 Some($crate::data_layout_spec(
+                    context,
                     $crate::Endianness::Little,
                     self.abi().stack.align * 8,
                     &[
@@ -147,7 +151,7 @@ macro_rules! impl_target_machine {
                 context: &$crate::Context,
             ) -> $crate::backend::isel::InstructionSelectPass {
                 create_isel_pass_for(context, self.config.features(), self.abi())
-                    .with_data_layout(self.data_layout())
+                    .with_data_layout(self.data_layout(context))
                     .synthesized(context)
             }
 

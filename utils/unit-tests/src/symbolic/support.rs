@@ -30,13 +30,16 @@ pub fn sym(g: &mut Graph, id: u32) -> NodeId {
 
 pub fn con(g: &mut Graph, width: u32, value: u64) -> NodeId {
     let node = g.add_node(SymKind::Constant);
-    g.set_leaf_data(node, SymPayload::Int(APInt::new(width, value)));
+    g.set_leaf_data(node, SymPayload::Int(APInt::new(u64::from(width), value)));
     node
 }
 
 pub fn signed_con(g: &mut Graph, width: u32, value: i64) -> NodeId {
     let node = g.add_node(SymKind::Constant);
-    g.set_leaf_data(node, SymPayload::Int(APInt::new_signed(width, value)));
+    g.set_leaf_data(
+        node,
+        SymPayload::Int(APInt::new_signed(u64::from(width), value)),
+    );
     node
 }
 

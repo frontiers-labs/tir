@@ -4,9 +4,9 @@
 // counter and carried value as parameters. The body advances both values into a
 // merge, whose repeated condition chooses the back edge or continuation.
 
-#data_layout = {types = {p = {abi = 64, size = 64}}}
+#layout_spec = #layout.spec<!ptr.p = {size = 64, abi = 64}>
 
-module {data_layout = #data_layout} {
+module {layout.spec = #layout_spec} {
   %fn_count = func.func @count(%lb: !i64, %ub: !i64, %st: !i64, %init: !i64) -> !i64 {
     %c = constant {value = 5} : !i64
     cfg.br ^bb1(%lb, %init : !i64, !i64)

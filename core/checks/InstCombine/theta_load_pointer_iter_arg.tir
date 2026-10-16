@@ -4,9 +4,9 @@
 // grows the port carrying it, spelled at the pointer type the accesses agree on,
 // and the slot leaves memory.
 
-#data_layout = {types = {p = {abi = 64, size = 64}}}
+#layout_spec = #layout.spec<!ptr.p = {size = 64, abi = 64}>
 
-module {data_layout = #data_layout} {
+module {layout.spec = #layout_spec} {
   %fn_advance = func.func @advance(%0: !i64, %1: !i64, %2: !i64, %3: !ptr.p, %4: !i64) -> !ptr.p {
     %5 = ptr.alloca {size = 8, align = 8} : !ptr.p
     ptr.store %3, %5

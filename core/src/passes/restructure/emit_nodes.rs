@@ -614,14 +614,13 @@ impl Emitter<'_> {
     }
 
     fn unassigned_value(&self, region: RegionId, ty: TypeId) -> Result<ValueId, PassError> {
-        let data = self.context.get_type_data(ty);
-        if (data.as_ref() as &dyn std::any::Any).is::<crate::ptr::PtrType>() {
+        if crate::ptr::PtrType::view(self.context, ty).is_some() {
             let op = crate::ptr::NullOpBuilder::new(self.context)
                 .result_type(ty)
                 .build();
             self.context.add(region, op.id());
             Ok(op.result())
-        } else if (data.as_ref() as &dyn std::any::Any).is::<crate::builtin::FloatType>() {
+        } else if crate::builtin::FloatType::view(self.context, ty).is_some() {
             let op = crate::fp::ops::ConstantOpBuilder::new(self.context)
                 .bits(0)
                 .result_type(ty)
@@ -655,8 +654,5 @@ enum Decision {
 }
 
 fn is_integer(context: &Context, ty: TypeId) -> bool {
-    let data = context.get_type_data(ty);
-    (data.as_ref() as &dyn std::any::Any)
-        .downcast_ref::<crate::builtin::IntegerType>()
-        .is_some()
+    crate::builtin::IntegerType::view(context, ty).is_some()
 }

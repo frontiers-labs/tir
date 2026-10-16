@@ -16,7 +16,7 @@ fn build(ctx: *const tir::Context, dialect: &str, name: &str, args: &[TirTypeArg
 fn builds_scalar_and_parametric_types() {
     let ctx = tir_context_create();
 
-    // builtin.i with a u32 width.
+    // builtin.i with a nat width.
     let i32 = build(ctx, "builtin", "i", &[TirTypeArg { kind: 0, value: 32 }]);
     assert_ne!(i32, TIR_INVALID_ID);
     assert_eq!(
@@ -60,6 +60,6 @@ fn schema_lists_types() {
     let json = owned(tir_type_schema_json()).unwrap();
     assert!(json.contains("\"name\":\"i\""), "{json}");
     assert!(json.contains("\"name\":\"p\""), "{json}");
-    assert!(json.contains("\"kind\":\"u32\""), "{json}");
+    assert!(json.contains("\"kind\":\"u64\""), "{json}");
     assert!(json.contains("\"kind\":\"type\""), "{json}");
 }

@@ -589,7 +589,8 @@ moving a division out of a condition can execute it on a path where it never
 ran before. If the chosen expression cannot be materialized safely, the
 engine preserves the existing computation.
 
-For new expressions, typed emitters construct the actual IR operations.
+An operation a rule introduced is written from its node: its name,
+attributes and type, over its operands' materialized values.
 Memoization shares a materialized value among readers that can see it.
 Uses and region results are redirected only after a usable replacement exists.
 
@@ -632,9 +633,8 @@ state even when none of its ordinary value results are read.
 ## PDL's boundary with the engine
 
 Instcombine's PDL rules compile into Rust during the build. The generated
-code constructs match queries, guards, and graph actions. Rules that introduce
-operations also connect to typed IR emitters. No PDL parser runs for each
-function being optimized.
+code constructs match queries, guards, and graph actions. No PDL parser runs
+for each function being optimized.
 
 The engine owns equivalence classes, search, scoped assumptions, extraction,
 and IR updates. PDL owns the expression relationships written as rules.

@@ -10,7 +10,6 @@
 
 use smallvec::SmallVec;
 use tir::sem::SemNode;
-use tir::sem::egraph::type_width;
 use tir::{BlockId, Context, IdMap, OpId, PassError, TypeId, ValueId};
 use tir_adt::APInt;
 use tir_egraph::{Engine, Extraction, Ref, RowId};
@@ -182,7 +181,7 @@ impl Machine<'_> {
         let automaton = select.automaton;
         let source = control.source_predicate;
         let ty = self.source_type(source);
-        let width = type_width(context, ty);
+        let width = context.terms().bit_width(ty);
         let boolean = width == Some(1);
         let unstated =
             || PassError::InvalidRuleSet("a control outcome states nothing to branch on".into());
@@ -232,8 +231,8 @@ impl Machine<'_> {
         let seed = seed.ok_or_else(unruled)? as Pattern;
         let (pattern, constant) = select.cases.test(seed, case).ok_or_else(unruled)?;
         let accept = automaton.accept[pattern as usize].as_ref();
-        let width = width.ok_or_else(unruled)?;
-        let case = APInt::new_signed(width, tir::binding::signed_bits(case, width));
+        let width = width.ok_or_else(unruled)? as u32;
+        let case = APInt::new_signed(u64::from(width), tir::binding::signed_bits(case, width));
         let binds = accept.ok_or_else(unruled)?.operands.iter();
         let operands = binds.map(|bind| match bind.path.first() == Some(&constant) {
             true => Some(Bound::Immediate(case.clone())),
@@ -342,7 +341,7 @@ impl Edges for Machine<'_> {
     // reading, not its value.
     fn control_reads(&self, control: &ControlDefinition, _outcome: usize) -> Vec<ValueId> {
         let source = control.source_predicate;
-        let boolean = type_width(self.context, self.source_type(source)) == Some(1);
+        let boolean = self.context.terms().bit_width(self.source_type(source)) == Some(1);
         match self.left(source).filter(|_| boolean) {
             Some((registers, ..)) => registers,
             None => vec![source],
@@ -366,8 +365,7 @@ impl Edges for Machine<'_> {
     fn compatible_type(&self, source: TypeId, selected: TypeId) -> bool {
         source == selected
             || (!self.context.is_state_type(source)
-                && (self.context.get_type_data(selected).as_ref() as &dyn std::any::Any)
-                    .is::<crate::backend::registers::RegClassType>())
+                && crate::backend::registers::RegClassType::view(self.context, selected).is_some())
     }
 
     fn leave(&self, block: BlockId, values: &[ValueId], deps: &[ValueId]) -> Result<(), PassError> {

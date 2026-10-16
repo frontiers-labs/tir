@@ -429,18 +429,14 @@ fn argument_register_class(
                 ))
             });
     }
-    let ty = context.get_type_data(ty);
-    let ty = ty.as_ref() as &dyn std::any::Any;
-    if let Some(vector) = ty.downcast_ref::<tir::vector::VectorType>() {
-        let element = context.get_type_data(vector.element(context));
-        let bits = (element.as_ref() as &dyn std::any::Any)
-            .downcast_ref::<tir::builtin::IntegerType>()
-            .map_or(0, tir::builtin::IntegerType::width) as i64;
+    if let Some(vector) = tir::vector::VectorType::view(context, ty) {
+        let bits = tir::builtin::IntegerType::view(context, vector.element())
+            .map_or(0, |integer| integer.width()) as i64;
         return vector.length().map_or(Ok(RegClass::VR.id()), |lanes| {
             vsetvli::vr_class_for_bits(lanes as i64 * bits)
         });
     }
-    if let Some(float) = ty.downcast_ref::<tir::builtin::FloatType>() {
+    if let Some(float) = tir::builtin::FloatType::view(context, ty) {
         return match float.bit_width() {
             32 => Ok(RegClass::FPR32.id()),
             64 => Ok(RegClass::FPR64.id()),

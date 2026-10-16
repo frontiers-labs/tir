@@ -9,7 +9,7 @@ use super::state;
 use crate::rewrite::{RuleSet, Seeded};
 use crate::utils::APInt;
 use crate::{
-    ConstantFold, Context, Operation, TypeId, ValueId,
+    ConstantFold, Context, Operation, TypeId,
     attributes::{AttributeValue, Predicate},
     builtin::{IntegerType, ops},
     sem::{IrOp, Kind, Prov, SemNode as Node, SymKind, Value, node::field},
@@ -18,17 +18,24 @@ use crate::{
 /// The host functions instcombine's guards call. Both read the IR — an op's
 /// constant folding, a gate's case values — which saturation never changes, so
 /// a guard reading one filters the match rather than looking at the graph.
-mod call {
-    pub(super) const FOLD: u32 = 0;
-    pub(super) const DECIDED_ARM: u32 = 1;
+pub(crate) mod call {
+    pub(crate) const FOLD: u32 = 0;
+    pub(crate) const DECIDED_ARM: u32 = 1;
     /// The width of an integer type, for a rule that binds one by name.
-    pub(super) const INT_WIDTH_OF: u32 = 2;
-    pub(super) const FLOAT_WIDTH_OF: u32 = 3;
-    pub(super) const STATE_RESOURCE_OF: u32 = 4;
+    pub(crate) const INT_WIDTH_OF: u32 = 2;
+    pub(crate) const FLOAT_WIDTH_OF: u32 = 3;
+    pub(crate) const STATE_RESOURCE_OF: u32 = 4;
     /// The carrier a value of a type lives in, as one word; zero for none.
-    pub(super) const CARRIER_OF: u32 = 5;
+    pub(crate) const CARRIER_OF: u32 = 5;
+    pub(crate) const INT_TYPE: u32 = 6;
+    pub(crate) const POINTER_WIDTH_OF: u32 = 7;
+    /// The offset in bits of a field, by type and field name, under the layout
+    /// in scope.
+    pub(crate) const OFFSET_OF: u32 = 8;
+    /// The size in bits of a type under the layout in scope.
+    pub(crate) const SIZE_OF: u32 = 9;
     /// Where the generated rules' own host functions start.
-    pub(super) const PDL: u32 = 16;
+    pub(crate) const PDL: u32 = 16;
 }
 
 /// Fields of the scalars the two rules below pass around.
@@ -46,6 +53,29 @@ pub struct Interpretation {
     context: Context,
     /// The data layout's pointer width, which a pointer's carrier is.
     pointer_width: Option<u32>,
+    pdl: fn(u32, &[u64], &mut [u64]) -> bool,
+    /// The layout in scope, for a rule that asks one.
+    layout: Option<crate::DataLayout>,
+}
+
+impl Interpretation {
+    pub(crate) fn new(
+        context: &Context,
+        pointer_width: Option<u32>,
+        pdl: fn(u32, &[u64], &mut [u64]) -> bool,
+    ) -> Self {
+        Self {
+            context: context.clone(),
+            pointer_width,
+            pdl,
+            layout: None,
+        }
+    }
+
+    /// These host functions answering layout queries under `layout`.
+    pub(crate) fn with_layout(self, layout: Option<crate::DataLayout>) -> Self {
+        Self { layout, ..self }
+    }
 }
 
 impl Externs<Node> for Interpretation {
@@ -67,8 +97,7 @@ impl Externs<Node> for Interpretation {
                 }
                 None => false,
             },
-            call::STATE_RESOURCE_OF => match class_state_resource_of(&self.context, args[0] as u32)
-            {
+            call::STATE_RESOURCE_OF => match class_state_resource_of(args[0] as u32) {
                 Some(resource) => {
                     out[0] = resource;
                     true
@@ -83,7 +112,39 @@ impl Externs<Node> for Interpretation {
                 ));
                 true
             }
-            generated if generated >= call::PDL => pdl_extern(generated - call::PDL, args, out),
+            call::INT_TYPE => {
+                out[0] = u64::from(self.context.terms().int(args[0]).number());
+                true
+            }
+            call::POINTER_WIDTH_OF => {
+                let ty = TypeId::from_number(args[0] as u32);
+                match (
+                    crate::ptr::PtrType::view(&self.context, ty),
+                    self.pointer_width,
+                ) {
+                    (Some(_), Some(width)) => {
+                        out[0] = u64::from(width);
+                        true
+                    }
+                    _ => false,
+                }
+            }
+            call::OFFSET_OF | call::SIZE_OF => {
+                let Some(layout) = &self.layout else {
+                    return false;
+                };
+                let ty = TypeId::from_number(args[0] as u32);
+                let bits = match id {
+                    call::OFFSET_OF => self
+                        .context
+                        .names()
+                        .name_at(args[1] as usize)
+                        .and_then(|field| layout.offset_in_bits(ty, &field)),
+                    _ => layout.layout_of(ty).map(|layout| layout.size),
+                };
+                bits.map(|bits| out[0] = bits).is_some()
+            }
+            generated if generated >= call::PDL => (self.pdl)(generated - call::PDL, args, out),
             _ => false,
         }
     }
@@ -114,7 +175,9 @@ pub(crate) fn fold_constant(
         .zip(args)
         .map(|(&operand, &value)| {
             let ty = context.get_value(operand).ty();
-            crate::sem::egraph::type_width(context, ty)
+            context
+                .terms()
+                .bit_width(ty)
                 .map(|width| Value::Int(APInt::new(width, value)))
         })
         .collect()
@@ -127,7 +190,11 @@ pub(crate) fn fold_constant(
     else {
         return false;
     };
-    out.copy_from_slice(&[value.to_u64(), value.width() as u64, ty.number() as u64]);
+    // The value travels as one word: a wider result past it stays unfolded.
+    if value.limbs()[1..].iter().any(|&limb| limb != 0) {
+        return false;
+    }
+    out.copy_from_slice(&[value.to_u64(), value.width(), ty.number() as u64]);
     true
 }
 
@@ -164,27 +231,28 @@ impl Interpretation {
     }
 }
 
-pub type EmitFn =
-    Box<dyn Fn(&Context, &[ValueId], TypeId) -> (Box<dyn crate::Operation>, ValueId) + Send + Sync>;
-
-/// The generated rules and their emitters, compiled once per pass and
-/// shared by every function the pass runs on.
+/// The generated rules, compiled once per pass and shared by every function
+/// the pass runs on.
 pub struct Ruleset {
-    rewrites: Vec<Arc<tir_egraph::Rule<Node>>>,
-    emits: Vec<Option<EmitFn>>,
+    pub(crate) rewrites: Vec<Arc<tir_egraph::Rule<Node>>>,
+    // The rules stated `proof trusted`, which no solver checked.
+    pub(crate) trusted: Vec<Arc<tir_egraph::Rule<Node>>>,
 }
 
 impl Ruleset {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             rewrites: Vec::new(),
-            emits: Vec::new(),
+            trusted: Vec::new(),
         }
     }
 
-    fn push_query(&mut self, rule: tir_egraph::Rule<Node>, emit: Option<EmitFn>) {
+    pub(crate) fn push_query(&mut self, rule: tir_egraph::Rule<Node>) {
         self.rewrites.push(Arc::new(rule));
-        self.emits.push(emit);
+    }
+
+    pub(crate) fn push_trusted(&mut self, rule: tir_egraph::Rule<Node>) {
+        self.trusted.push(Arc::new(rule));
     }
 }
 
@@ -200,28 +268,23 @@ pub struct Shared {
 }
 
 /// The rules one function saturates with: the shared generated ones first,
-/// then the ones its own graph calls for.
-pub struct Rules {
-    generated: Arc<Ruleset>,
-    /// Every rule, in the order their heads apply, and what the rules'
-    /// guards ask the IR.
-    pub set: RuleSet,
-}
-
-impl Rules {
-    /// The emitter of the `index`-th rule, which only a generated rule has.
-    pub fn emit(&self, index: usize) -> Option<&EmitFn> {
-        self.generated.emits.get(index)?.as_ref()
-    }
-}
-
-pub fn builtin_ruleset(context: &Context, seeded: &Seeded, shared: &mut Shared) -> Rules {
+/// the trusted ones among them only when `trusted`, then the ones its own
+/// graph calls for.
+pub fn builtin_ruleset(
+    context: &Context,
+    seeded: &Seeded,
+    shared: &mut Shared,
+    trusted: bool,
+) -> RuleSet {
     let eg = &seeded.eg;
     let generated = shared
         .generated
-        .get_or_insert_with(|| Arc::new(generated_ruleset(context)))
+        .get_or_insert_with(|| context.compiled_rules(|| generated_ruleset(context)))
         .clone();
     let mut rules = generated.rewrites.clone();
+    if trusted {
+        rules.extend(generated.trusted.iter().cloned());
+    }
     for template in fold_templates(eg) {
         let known = shared.folds.iter().position(|(seen, _)| {
             seen.matches(&template) && seen.children().len() == template.children().len()
@@ -249,100 +312,12 @@ pub fn builtin_ruleset(context: &Context, seeded: &Seeded, shared: &mut Shared) 
         shared.fixed.push(Arc::new(state::forward_load()));
     }
     rules.extend(shared.fixed.iter().cloned());
-    let interpretation = Interpretation {
-        context: context.clone(),
-        pointer_width: seeded.pointer_width,
-    };
-    Rules {
-        generated,
-        set: RuleSet {
-            rules,
-            tables: Vec::new(),
-            externs: Box::new(interpretation),
-        },
+    let interpretation = Interpretation::new(context, seeded.pointer_width, pdl_extern);
+    RuleSet {
+        rules,
+        tables: Vec::new(),
+        externs: Box::new(interpretation),
     }
-}
-
-fn emit_sub() -> EmitFn {
-    Box::new(|context, operands, ty| {
-        let op = ops::subi(context, operands[0], operands[1], ty).build();
-        let result = op.result();
-        (Box::new(op), result)
-    })
-}
-
-fn emit_add() -> EmitFn {
-    Box::new(|context, operands, ty| {
-        let op = ops::addi(context, operands[0], operands[1], ty).build();
-        let result = op.result();
-        (Box::new(op), result)
-    })
-}
-
-fn emit_mul() -> EmitFn {
-    Box::new(|context, operands, ty| {
-        let op = ops::muli(context, operands[0], operands[1], ty).build();
-        let result = op.result();
-        (Box::new(op), result)
-    })
-}
-
-fn emit_shl() -> EmitFn {
-    Box::new(|context, operands, ty| {
-        let op = ops::shli(context, operands[0], operands[1], ty).build();
-        let result = op.result();
-        (Box::new(op), result)
-    })
-}
-
-fn emit_or() -> EmitFn {
-    Box::new(|context, operands, ty| {
-        let op = ops::ori(context, operands[0], operands[1], ty).build();
-        let result = op.result();
-        (Box::new(op), result)
-    })
-}
-
-fn emit_xor() -> EmitFn {
-    Box::new(|context, operands, ty| {
-        let op = ops::xori(context, operands[0], operands[1], ty).build();
-        let result = op.result();
-        (Box::new(op), result)
-    })
-}
-
-fn emit_fp_neg() -> EmitFn {
-    Box::new(|context, operands, ty| {
-        let op = crate::fp::ops::NegOpBuilder::new(context)
-            .input(operands[0])
-            .result_type(ty)
-            .build();
-        let result = op.result();
-        (Box::new(op), result)
-    })
-}
-
-fn emit_fp_abs() -> EmitFn {
-    Box::new(|context, operands, ty| {
-        let op = crate::fp::ops::AbsOpBuilder::new(context)
-            .input(operands[0])
-            .result_type(ty)
-            .build();
-        let result = op.result();
-        (Box::new(op), result)
-    })
-}
-
-fn emit_fp_copysign() -> EmitFn {
-    Box::new(|context, operands, ty| {
-        let op = crate::fp::ops::CopySignOpBuilder::new(context)
-            .magnitude(operands[0])
-            .sign(operands[1])
-            .result_type(ty)
-            .build();
-        let result = op.result();
-        (Box::new(op), result)
-    })
 }
 
 /// One LHS template per distinct seeded-op signature in `eg`, so const folding
@@ -506,7 +481,7 @@ fn gate_cases(context: &Context, node: &Node) -> Option<(Vec<Option<i64>>, u32)>
     let gate = match node.prov {
         Prov::Op(gate) => gate,
         Prov::Value(value) => context.get_value(value).defining_op()?,
-        Prov::None | Prov::Introduced(_) => return None,
+        Prov::None | Prov::Introduced => return None,
     };
     if !context.has_operation(gate) {
         return None;
@@ -517,7 +492,9 @@ fn gate_cases(context: &Context, node: &Node) -> Option<(Vec<Option<i64>>, u32)>
     // `If(p, arm 1, arm 0)`, so its node lists the case-1 arm first.
     let gamma = instance.as_interface::<dyn crate::Gamma>()?;
     let arms = gamma.arms().len();
-    let width = crate::sem::egraph::type_width(context, context.get_value(gamma.predicate()).ty())?;
+    let width = context
+        .terms()
+        .bit_width(context.get_value(gamma.predicate()).ty())? as u32;
     let cases = if width == 1 && arms == 2 {
         vec![Some(1), None]
     } else {
@@ -658,12 +635,10 @@ fn cmpi(context: &Context, predicate: Predicate, ty: Option<TypeId>, children: V
 
 fn produces_integer(context: &Context, op: crate::OpId) -> bool {
     let instance = context.get_op(op);
-    instance.value_results().first().is_some_and(|&result| {
-        let ty = context.get_type_data(context.get_value(result).ty());
-        (ty.as_ref() as &dyn std::any::Any)
-            .downcast_ref::<IntegerType>()
-            .is_some()
-    })
+    instance
+        .value_results()
+        .first()
+        .is_some_and(|&result| IntegerType::view(context, context.get_value(result).ty()).is_some())
 }
 
 /// The width of an integer type, by number; `None` for anything else.
@@ -672,30 +647,26 @@ fn class_int_width_of(context: &Context, ty: u32) -> Option<u32> {
     if context.is_state_type(ty) {
         return None;
     }
-    (context.get_type_data(ty).as_ref() as &dyn std::any::Any)
-        .downcast_ref::<IntegerType>()
-        .map(IntegerType::width)
+    IntegerType::view(context, ty).and_then(|int| u32::try_from(int.width()).ok())
 }
 
 fn class_float_width_of(context: &Context, ty: u32) -> Option<u32> {
     let ty = TypeId::from_number(ty);
-    (context.get_type_data(ty).as_ref() as &dyn std::any::Any)
-        .downcast_ref::<crate::builtin::FloatType>()
-        .and_then(|float| match (float.exp_width(), float.mant_width()) {
+    crate::builtin::FloatType::view(context, ty).and_then(|float| {
+        match (float.exp_width(), float.mant_width()) {
             (8, 23) => Some(32),
             (11, 52) => Some(64),
             _ => None,
-        })
+        }
+    })
 }
 
-fn class_state_resource_of(context: &Context, ty: u32) -> Option<u64> {
+fn class_state_resource_of(ty: u32) -> Option<u64> {
     let ty = TypeId::from_number(ty);
-    (context.get_type_data(ty).as_ref() as &dyn std::any::Any)
-        .downcast_ref::<crate::builtin::StateType>()
-        .map(|state| state.resource().semantic_code())
+    crate::builtin::StateType::view(ty).map(|state| state.resource().semantic_code())
 }
 
-fn konst(value: APInt) -> Node {
+pub(crate) fn konst(value: APInt) -> Node {
     Node::constant(value, Prov::None)
 }
 
@@ -703,7 +674,11 @@ fn konst(value: APInt) -> Node {
 /// literal zero: an offset law moves a constant into the reference the op is,
 /// leaving a zero an identity dissolves too, so a rule matching any other
 /// constant there never fires.
-fn constant_operand_kept<O: Operation>(context: &Context, operand: usize, zero: bool) -> bool {
+pub(crate) fn constant_operand_kept<O: Operation>(
+    context: &Context,
+    operand: usize,
+    zero: bool,
+) -> bool {
     let Some(law) = IrOp::declared(context, (O::dialect(), O::name()), Vec::new(), 0).law else {
         return true;
     };

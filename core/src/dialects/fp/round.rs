@@ -12,11 +12,12 @@ operation! {
     RoundOp {
         name: "round",
         dialect: "fp",
+        scheme: "(_*) -> _*",
         format: "custom",
         verifier: "true",
-        operands: O { captures: "*tir::Any" },
+        operands: O { captures },
         attributes: A { contract: "EvaluationContract" },
-        results: R { results: "*tir::Any" },
+        results: R { results },
         regions: R { reference: Region { kind: Nodes } },
         interfaces: [RegionBinding, ResourceEffects],
     }
@@ -26,8 +27,9 @@ operation! {
     FenceOp {
         name: "fence",
         dialect: "fp",
-        operands: O { input: "FloatType" },
-        results: R { result: "FloatType" },
+        scheme: "forall E: nat, M: nat. (float<E, M>) -> float<E, M>",
+        operands: O { input },
+        results: R { result },
         interfaces: [crate::interp::Interp, crate::SameOperandAndResultType],
     }
 }
@@ -185,11 +187,8 @@ impl tir::Verifiable for RoundOp {
             ));
         }
         if results.iter().any(|result| {
-            let ty = context.get_type_data(context.get_value(*result).ty());
-            !context.is_state_type(context.get_value(*result).ty())
-                && (ty.as_ref() as &dyn std::any::Any)
-                    .downcast_ref::<FloatType>()
-                    .is_none()
+            let ty = context.get_value(*result).ty();
+            !context.is_state_type(ty) && FloatType::view(context, ty).is_none()
         }) {
             return Err(invalid("fp.round numeric results must have floating types"));
         }

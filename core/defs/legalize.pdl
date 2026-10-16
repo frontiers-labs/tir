@@ -1,0 +1,257 @@
+// Limb legalization: an integer wider than the target's native width as
+// limbs of that width.
+//
+// `NATIVE` is the target's native integer width. Every limb rule fires only
+// on a width `W` above it, and peels the low limb off: `x` is the
+// concatenation of its high `W - NATIVE` bits and its low `NATIVE` bits, and
+// the operation is spelled over those two parts. The high part is again a
+// width that may be above `NATIVE`, which the same rule takes next, so a
+// `W`-bit add becomes a chain of `NATIVE`-bit adds joined by carries, a
+// multiply the schoolbook sum of limb products, and so on for any number of
+// limbs.
+//
+// `#extract(#zext(v, W), K - 1, 0)` is `v` cut or zero-extended to `K` bits,
+// whichever its width asks for; the rules at the end of the file take the
+// detour through `W` away again. As in `isel.pdl`, a right-hand side reads a
+// binder narrower than the rule's widest through `#extract(x, M - 1, 0)`.
+
+rule add-limbs: #add(a: int<W>, b: int<W>) : int<W>
+  => #concat(
+       #add(#add(#extract(a, W - 1, NATIVE), #extract(b, W - 1, NATIVE)),
+            #zext(#ult(#add(#extract(a, NATIVE - 1, 0), #extract(b, NATIVE - 1, 0)),
+                       #extract(a, NATIVE - 1, 0)),
+                  W - NATIVE)),
+       #add(#extract(a, NATIVE - 1, 0), #extract(b, NATIVE - 1, 0)))
+  where NATIVE < W;
+
+rule sub-limbs: #sub(a: int<W>, b: int<W>) : int<W>
+  => #concat(
+       #sub(#sub(#extract(a, W - 1, NATIVE), #extract(b, W - 1, NATIVE)),
+            #zext(#ult(#extract(a, NATIVE - 1, 0), #extract(b, NATIVE - 1, 0)), W - NATIVE)),
+       #sub(#extract(a, NATIVE - 1, 0), #extract(b, NATIVE - 1, 0)))
+  where NATIVE < W;
+
+rule neg-limbs: #neg(a: int<W>) : int<W>
+  => #concat(
+       #sub(#neg(#extract(a, W - 1, NATIVE)),
+            #zext(#ne(#extract(a, NATIVE - 1, 0), const<NATIVE>(0)), W - NATIVE)),
+       #neg(#extract(a, NATIVE - 1, 0)))
+  where NATIVE < W;
+
+// The low limb of the product is the low half of the full product of the low
+// limbs; the high part adds that product's high half to the two cross
+// products, each cut to the high part's width. The solver does not finish
+// comparing two multipliers even at 16 bits, so the rule is trusted.
+rule mul-limbs: #mul(a: int<W>, b: int<W>) : int<W>
+  => #concat(
+       #add(
+         #add(
+           #extract(#zext(#extract(#mul(#zext(#extract(a, NATIVE - 1, 0), NATIVE + NATIVE),
+                                        #zext(#extract(b, NATIVE - 1, 0), NATIVE + NATIVE)),
+                                   NATIVE + NATIVE - 1, NATIVE),
+                          W),
+                    W - NATIVE - 1, 0),
+           #mul(#extract(#zext(#extract(a, NATIVE - 1, 0), W), W - NATIVE - 1, 0),
+                #extract(b, W - 1, NATIVE))),
+         #mul(#extract(a, W - 1, NATIVE), #extract(b, W - NATIVE - 1, 0))),
+       #extract(#mul(#zext(#extract(a, NATIVE - 1, 0), NATIVE + NATIVE),
+                     #zext(#extract(b, NATIVE - 1, 0), NATIVE + NATIVE)),
+                NATIVE - 1, 0))
+  where NATIVE < W
+  proof trusted;
+
+rule and-limbs: #and(a: int<W>, b: int<W>) : int<W>
+  => #concat(#and(#extract(a, W - 1, NATIVE), #extract(b, W - 1, NATIVE)),
+             #and(#extract(a, NATIVE - 1, 0), #extract(b, NATIVE - 1, 0)))
+  where NATIVE < W;
+
+rule or-limbs: #or(a: int<W>, b: int<W>) : int<W>
+  => #concat(#or(#extract(a, W - 1, NATIVE), #extract(b, W - 1, NATIVE)),
+             #or(#extract(a, NATIVE - 1, 0), #extract(b, NATIVE - 1, 0)))
+  where NATIVE < W;
+
+rule xor-limbs: #xor(a: int<W>, b: int<W>) : int<W>
+  => #concat(#xor(#extract(a, W - 1, NATIVE), #extract(b, W - 1, NATIVE)),
+             #xor(#extract(a, NATIVE - 1, 0), #extract(b, NATIVE - 1, 0)))
+  where NATIVE < W;
+
+rule not-limbs: #not(a: int<W>) : int<W>
+  => #concat(#not(#extract(a, W - 1, NATIVE)), #not(#extract(a, NATIVE - 1, 0)))
+  where NATIVE < W;
+
+rule if-limbs: #if(c: int<1>, a: int<W>, b: int<W>) : int<W>
+  => #concat(#if(c, #extract(a, W - 1, NATIVE), #extract(b, W - 1, NATIVE)),
+             #if(c, #extract(a, NATIVE - 1, 0), #extract(b, NATIVE - 1, 0)))
+  where NATIVE < W;
+
+// Shifts by a `W`-bit amount `s`. Below `NATIVE` the bits that cross the limb
+// boundary move between the parts; from `NATIVE` on the low limb is empty
+// (left) or comes from the high part alone (right). An amount the high part
+// cannot hold is clamped to its width, which shifts every bit out.
+
+rule shl-limbs: #shl(x: int<W>, s: int<W>) : int<W>
+  => #concat(
+       #if(#ult(s, const<W>(NATIVE)),
+           #or(#shl(#extract(x, W - 1, NATIVE),
+                    #if(#ult(s, const<W>(W - NATIVE)),
+                        #extract(s, W - NATIVE - 1, 0),
+                        #extract(const<W>(W - NATIVE), W - NATIVE - 1, 0))),
+               #extract(#zext(#lshr(#extract(x, NATIVE - 1, 0),
+                                    #sub(const<NATIVE>(NATIVE), #extract(s, NATIVE - 1, 0))),
+                              W),
+                        W - NATIVE - 1, 0)),
+           #shl(#extract(x, W - NATIVE - 1, 0),
+                #if(#ult(#sub(s, const<W>(NATIVE)), const<W>(W - NATIVE)),
+                    #extract(#sub(s, const<W>(NATIVE)), W - NATIVE - 1, 0),
+                    #extract(const<W>(W - NATIVE), W - NATIVE - 1, 0)))),
+       #if(#ult(s, const<W>(NATIVE)),
+           #shl(#extract(x, NATIVE - 1, 0), #extract(s, NATIVE - 1, 0)),
+           const<NATIVE>(0)))
+  where NATIVE < W;
+
+rule lshr-limbs: #lshr(x: int<W>, s: int<W>) : int<W>
+  => #concat(
+       #lshr(#extract(x, W - 1, NATIVE),
+             #if(#ult(s, const<W>(W - NATIVE)),
+                 #extract(s, W - NATIVE - 1, 0),
+                 #extract(const<W>(W - NATIVE), W - NATIVE - 1, 0))),
+       #if(#ult(s, const<W>(NATIVE)),
+           #or(#lshr(#extract(x, NATIVE - 1, 0), #extract(s, NATIVE - 1, 0)),
+               #shl(#extract(#zext(#extract(x, W - 1, NATIVE), W), NATIVE - 1, 0),
+                    #sub(const<NATIVE>(NATIVE), #extract(s, NATIVE - 1, 0)))),
+           #extract(#zext(#lshr(#extract(x, W - 1, NATIVE),
+                                #if(#ult(#sub(s, const<W>(NATIVE)), const<W>(W - NATIVE)),
+                                    #extract(#sub(s, const<W>(NATIVE)), W - NATIVE - 1, 0),
+                                    #extract(const<W>(W - NATIVE), W - NATIVE - 1, 0))),
+                          W),
+                    NATIVE - 1, 0)))
+  where NATIVE < W;
+
+rule ashr-limbs: #ashr(x: int<W>, s: int<W>) : int<W>
+  => #concat(
+       #ashr(#extract(x, W - 1, NATIVE),
+             #if(#ult(s, const<W>(W - NATIVE)),
+                 #extract(s, W - NATIVE - 1, 0),
+                 #extract(const<W>(W - NATIVE), W - NATIVE - 1, 0))),
+       #if(#ult(s, const<W>(NATIVE)),
+           #or(#lshr(#extract(x, NATIVE - 1, 0), #extract(s, NATIVE - 1, 0)),
+               #shl(#extract(#sext(#extract(x, W - 1, NATIVE), W), NATIVE - 1, 0),
+                    #sub(const<NATIVE>(NATIVE), #extract(s, NATIVE - 1, 0)))),
+           #extract(#sext(#ashr(#extract(x, W - 1, NATIVE),
+                                #if(#ult(#sub(s, const<W>(NATIVE)), const<W>(W - NATIVE)),
+                                    #extract(#sub(s, const<W>(NATIVE)), W - NATIVE - 1, 0),
+                                    #extract(const<W>(W - NATIVE), W - NATIVE - 1, 0))),
+                          W),
+                    NATIVE - 1, 0)))
+  where NATIVE < W;
+
+// Comparisons read the limbs lexicographically: the high parts decide unless
+// they are equal. Only the high part carries a sign.
+
+rule eq-limbs: #eq(a: int<W>, b: int<W>) : int<1>
+  => #and(#eq(#extract(a, W - 1, NATIVE), #extract(b, W - 1, NATIVE)),
+          #eq(#extract(a, NATIVE - 1, 0), #extract(b, NATIVE - 1, 0)))
+  where NATIVE < W;
+
+rule ne-limbs: #ne(a: int<W>, b: int<W>) : int<1>
+  => #or(#ne(#extract(a, W - 1, NATIVE), #extract(b, W - 1, NATIVE)),
+         #ne(#extract(a, NATIVE - 1, 0), #extract(b, NATIVE - 1, 0)))
+  where NATIVE < W;
+
+rule ult-limbs: #ult(a: int<W>, b: int<W>) : int<1>
+  => #or(#ult(#extract(a, W - 1, NATIVE), #extract(b, W - 1, NATIVE)),
+         #and(#eq(#extract(a, W - 1, NATIVE), #extract(b, W - 1, NATIVE)),
+              #ult(#extract(a, NATIVE - 1, 0), #extract(b, NATIVE - 1, 0))))
+  where NATIVE < W;
+
+rule ule-limbs: #ule(a: int<W>, b: int<W>) : int<1>
+  => #or(#ult(#extract(a, W - 1, NATIVE), #extract(b, W - 1, NATIVE)),
+         #and(#eq(#extract(a, W - 1, NATIVE), #extract(b, W - 1, NATIVE)),
+              #ule(#extract(a, NATIVE - 1, 0), #extract(b, NATIVE - 1, 0))))
+  where NATIVE < W;
+
+rule ugt-limbs: #ugt(a: int<W>, b: int<W>) : int<1>
+  => #or(#ugt(#extract(a, W - 1, NATIVE), #extract(b, W - 1, NATIVE)),
+         #and(#eq(#extract(a, W - 1, NATIVE), #extract(b, W - 1, NATIVE)),
+              #ugt(#extract(a, NATIVE - 1, 0), #extract(b, NATIVE - 1, 0))))
+  where NATIVE < W;
+
+rule uge-limbs: #uge(a: int<W>, b: int<W>) : int<1>
+  => #or(#ugt(#extract(a, W - 1, NATIVE), #extract(b, W - 1, NATIVE)),
+         #and(#eq(#extract(a, W - 1, NATIVE), #extract(b, W - 1, NATIVE)),
+              #uge(#extract(a, NATIVE - 1, 0), #extract(b, NATIVE - 1, 0))))
+  where NATIVE < W;
+
+rule lt-limbs: #lt(a: int<W>, b: int<W>) : int<1>
+  => #or(#lt(#extract(a, W - 1, NATIVE), #extract(b, W - 1, NATIVE)),
+         #and(#eq(#extract(a, W - 1, NATIVE), #extract(b, W - 1, NATIVE)),
+              #ult(#extract(a, NATIVE - 1, 0), #extract(b, NATIVE - 1, 0))))
+  where NATIVE < W;
+
+rule le-limbs: #le(a: int<W>, b: int<W>) : int<1>
+  => #or(#lt(#extract(a, W - 1, NATIVE), #extract(b, W - 1, NATIVE)),
+         #and(#eq(#extract(a, W - 1, NATIVE), #extract(b, W - 1, NATIVE)),
+              #ule(#extract(a, NATIVE - 1, 0), #extract(b, NATIVE - 1, 0))))
+  where NATIVE < W;
+
+rule gt-limbs: #gt(a: int<W>, b: int<W>) : int<1>
+  => #or(#gt(#extract(a, W - 1, NATIVE), #extract(b, W - 1, NATIVE)),
+         #and(#eq(#extract(a, W - 1, NATIVE), #extract(b, W - 1, NATIVE)),
+              #ugt(#extract(a, NATIVE - 1, 0), #extract(b, NATIVE - 1, 0))))
+  where NATIVE < W;
+
+rule ge-limbs: #ge(a: int<W>, b: int<W>) : int<1>
+  => #or(#gt(#extract(a, W - 1, NATIVE), #extract(b, W - 1, NATIVE)),
+         #and(#eq(#extract(a, W - 1, NATIVE), #extract(b, W - 1, NATIVE)),
+              #uge(#extract(a, NATIVE - 1, 0), #extract(b, NATIVE - 1, 0))))
+  where NATIVE < W;
+
+// Widening a value to more than `NATIVE` bits: from a width that fits one
+// limb, or from one that is limbs already.
+
+rule zext-limbs: #zext(x: int<M>, W) : int<W>
+  => #concat(#zext(const<1>(0), W - NATIVE), #zext(#extract(x, M - 1, 0), NATIVE))
+  where NATIVE < W, M - 1 < NATIVE;
+
+rule zext-wide-limbs: #zext(x: int<M>, W) : int<W>
+  => #concat(#zext(#extract(x, M - 1, NATIVE), W - NATIVE), #extract(x, NATIVE - 1, 0))
+  where NATIVE < M, M < W;
+
+rule sext-limbs: #sext(x: int<M>, W) : int<W>
+  => #concat(#sext(#extract(x, M - 1, M - 1), W - NATIVE), #sext(#extract(x, M - 1, 0), NATIVE))
+  where NATIVE < W, M - 1 < NATIVE;
+
+rule sext-wide-limbs: #sext(x: int<M>, W) : int<W>
+  => #concat(#sext(#extract(x, M - 1, NATIVE), W - NATIVE), #extract(x, NATIVE - 1, 0))
+  where NATIVE < M, M < W;
+
+// The parts of a concatenation, and the low bits of an extension, are the
+// operands they came from: these take the detours above away again.
+
+rule extract-concat-low: #extract(#concat(h: int<H>, l: int<L>), L - 1, 0) : int<L>
+  => l;
+
+rule extract-concat-high: #extract(#concat(h: int<H>, l: int<L>), H + L - 1, L) : int<H>
+  => h;
+
+rule extract-zext-cut: #extract(#zext(x: int<M>, W) : int<W>, K - 1, 0) : int<K>
+  => #extract(x, K - 1, 0)
+  where K < M;
+
+rule extract-zext-same: #extract(#zext(x: int<M>, W) : int<W>, M - 1, 0) : int<M>
+  => x;
+
+rule extract-zext-widen: #extract(#zext(x: int<M>, W) : int<W>, K - 1, 0) : int<K>
+  => #zext(#extract(x, M - 1, 0), K)
+  where M < K, K - 1 < W;
+
+rule extract-sext-cut: #extract(#sext(x: int<M>, W) : int<W>, K - 1, 0) : int<K>
+  => #extract(x, K - 1, 0)
+  where K < M;
+
+rule extract-sext-same: #extract(#sext(x: int<M>, W) : int<W>, M - 1, 0) : int<M>
+  => x;
+
+rule extract-sext-widen: #extract(#sext(x: int<M>, W) : int<W>, K - 1, 0) : int<K>
+  => #sext(#extract(x, M - 1, 0), K)
+  where M < K, K - 1 < W;

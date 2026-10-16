@@ -32,9 +32,9 @@ impl Default for FloatEnvironment {
 
 operation! {
     RoundingConstantOp {
-        name: "rounding_constant", dialect: "fp",
+        name: "rounding_constant", dialect: "fp", scheme: "() -> fp.rounding",
         attributes: A { mode: "Str" },
-        results: R { result: "RoundingType" },
+        results: R { result },
         interfaces: [crate::ConstantLike, crate::interp::Interp, crate::Speculatable],
         sem: "(set result $value_semantics)",
         verifier: "true",
@@ -55,13 +55,13 @@ impl RoundingConstantOp {
 macro_rules! env_op {
     (
         $op:ident, $name:tt, $access:expr,
-        $ports:ident: $group:ident { $port:ident: $ty:tt },
+        $ports:ident: $group:ident { $port:ident }, $scheme:tt,
         evaluate($operands:ident, $state:ident) $evaluate:block
     ) => {
         operation! {
             $op {
-                name: $name, dialect: "fp",
-                $ports: $group { $port: $ty },
+                name: $name, dialect: "fp", scheme: $scheme,
+                $ports: $group { $port },
                 interfaces: [ResourceEffects, HasResourceSemantics, crate::interp::Interp],
                 state: "in_out", verifier: "true",
             }
@@ -87,13 +87,13 @@ macro_rules! env_op {
 }
 
 env_op!(GetRoundOp, "get_round", ResourceAccess::Read,
-    results: R { result: "RoundingType" },
+    results: R { result }, "() -> fp.rounding",
     evaluate(_operands, state) {
         Ok(vec![crate::interp::Value::Rounding(state.fp_environment.rounding)])
     }
 );
 env_op!(SetRoundOp, "set_round", ResourceAccess::Change,
-    operands: O { mode: "RoundingType" },
+    operands: O { mode }, "(fp.rounding) -> ()",
     evaluate(operands, state) {
         let [crate::interp::Value::Rounding(mode)] = operands else {
             return Err(crate::interp::InterpError::Message(
@@ -105,7 +105,7 @@ env_op!(SetRoundOp, "set_round", ResourceAccess::Change,
     }
 );
 env_op!(GetFlagsOp, "get_flags", ResourceAccess::Read,
-    results: R { flags: "crate::Integer<5>" },
+    results: R { flags }, "() -> int<5>",
     evaluate(_operands, state) {
         Ok(vec![crate::interp::Value::Int(APInt::new(
             5,
@@ -114,7 +114,7 @@ env_op!(GetFlagsOp, "get_flags", ResourceAccess::Read,
     }
 );
 env_op!(ClearFlagsOp, "clear_flags", ResourceAccess::Change,
-    operands: O { flags: "crate::Integer<5>" },
+    operands: O { flags }, "(int<5>) -> ()",
     evaluate(operands, state) {
         state.fp_environment.flags &= !mask(&operands[0])?;
         Ok(Vec::new())
@@ -123,8 +123,8 @@ env_op!(ClearFlagsOp, "clear_flags", ResourceAccess::Change,
 
 operation! {
     RaiseFlagsOp {
-        name: "raise_flags", dialect: "fp",
-        operands: O { flags: "crate::Integer<5>" },
+        name: "raise_flags", dialect: "fp", scheme: "(int<5>) -> ()",
+        operands: O { flags },
         attributes: A { trapping: "Bool" },
         interfaces: [ResourceEffects, HasResourceSemantics, crate::interp::Interp],
         state: "in_out", verifier: "true",
@@ -132,7 +132,7 @@ operation! {
 }
 
 env_op!(GetTrapsOp, "get_traps", ResourceAccess::Read,
-    results: R { traps: "crate::Integer<5>" },
+    results: R { traps }, "() -> int<5>",
     evaluate(_operands, state) {
         Ok(vec![crate::interp::Value::Int(APInt::new(
             5,
@@ -141,20 +141,20 @@ env_op!(GetTrapsOp, "get_traps", ResourceAccess::Read,
     }
 );
 env_op!(SetTrapsOp, "set_traps", ResourceAccess::Change,
-    operands: O { traps: "crate::Integer<5>" },
+    operands: O { traps }, "(int<5>) -> ()",
     evaluate(operands, state) {
         state.fp_environment.traps = mask(&operands[0])?;
         Ok(Vec::new())
     }
 );
 env_op!(SaveOp, "save", ResourceAccess::Read,
-    results: R { snapshot: "EnvironmentType" },
+    results: R { snapshot }, "() -> fp.env",
     evaluate(_operands, state) {
         Ok(vec![crate::interp::Value::FpEnvironment(state.fp_environment)])
     }
 );
 env_op!(RestoreOp, "restore", ResourceAccess::Change,
-    operands: O { snapshot: "EnvironmentType" },
+    operands: O { snapshot }, "(fp.env) -> ()",
     evaluate(operands, state) {
         let [crate::interp::Value::FpEnvironment(snapshot)] = operands else {
             return Err(crate::interp::InterpError::Message(
@@ -166,7 +166,7 @@ env_op!(RestoreOp, "restore", ResourceAccess::Change,
     }
 );
 env_op!(HoldOp, "hold", ResourceAccess::Change,
-    results: R { snapshot: "EnvironmentType" },
+    results: R { snapshot }, "() -> fp.env",
     evaluate(_operands, state) {
         let snapshot = state.fp_environment;
         state.fp_environment.flags = 0;
@@ -177,8 +177,8 @@ env_op!(HoldOp, "hold", ResourceAccess::Change,
 
 operation! {
     UpdateOp {
-        name: "update", dialect: "fp",
-        operands: O { snapshot: "EnvironmentType" },
+        name: "update", dialect: "fp", scheme: "(fp.env) -> ()",
+        operands: O { snapshot },
         attributes: A { trapping: "Bool" },
         interfaces: [ResourceEffects, HasResourceSemantics, crate::interp::Interp],
         state: "in_out", verifier: "true",

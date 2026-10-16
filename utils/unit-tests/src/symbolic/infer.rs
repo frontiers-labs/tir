@@ -2,9 +2,10 @@ use std::collections::HashSet;
 
 use tir_adt::{APInt, NodeId};
 use tir_symbolic::lang::{
-    canonicalize_for_selection, execute, infer_types, FloatFormat, SemType, StateAccessKind,
-    StateFieldKind, StateResourceKind, SymKind, SymPayload, TypeUnifier, Value, Width,
+    canonicalize_for_selection, execute, infer_types, StateAccessKind, StateFieldKind,
+    StateResourceKind, SymKind, SymPayload, TypeUnifier, Value,
 };
+use tir_symbolic::term::{ctor, Terms, TypeArg, TypeId};
 
 use super::support::{con, op, sym, Graph};
 
@@ -16,25 +17,35 @@ fn binary(kind: SymKind) -> (Graph, NodeId, NodeId, NodeId) {
     (graph, lhs, rhs, root)
 }
 
+fn raw_bits(terms: &Terms, width: u64) -> TypeArg {
+    TypeArg::Type(terms.intern(ctor::RAW, vec![TypeArg::Nat(width)]).unwrap())
+}
+
+fn sem_state(terms: &Terms) -> TypeId {
+    terms.intern(ctor::SEM_STATE, vec![]).unwrap()
+}
+
 #[test]
 fn integer_binary_operation_is_width_polymorphic() {
+    let terms = Terms::new();
     let (graph, lhs, rhs, root) = binary(SymKind::Add);
-    let types = infer_types(&graph, |node| {
-        (node == lhs || node == rhs).then(|| SemType::bits(32))
+    let types = infer_types(&terms, &graph, |node| {
+        (node == lhs || node == rhs).then(|| terms.int(32))
     })
     .unwrap();
 
-    assert_eq!(types[root.index()], SemType::bits(32));
+    assert_eq!(types[root.index()], TypeArg::Type(terms.int(32)));
 }
 
 #[test]
 fn integer_binary_operation_rejects_mixed_widths() {
+    let terms = Terms::new();
     let (graph, lhs, rhs, _) = binary(SymKind::Add);
-    let error = infer_types(&graph, |node| {
+    let error = infer_types(&terms, &graph, |node| {
         if node == lhs {
-            Some(SemType::bits(32))
+            Some(terms.int(32))
         } else if node == rhs {
-            Some(SemType::bits(64))
+            Some(terms.int(64))
         } else {
             None
         }
@@ -46,52 +57,53 @@ fn integer_binary_operation_rejects_mixed_widths() {
 
 #[test]
 fn float_operation_preserves_the_operand_format() {
+    let terms = Terms::new();
     let (graph, lhs, rhs, root) = binary(SymKind::FAdd);
-    let f32 = SemType::Float(FloatFormat::new(8, 23));
-    let types = infer_types(&graph, |node| {
-        (node == lhs || node == rhs).then(|| f32.clone())
+    let f32 = terms.float(8, 23);
+    let types = infer_types(&terms, &graph, |node| {
+        (node == lhs || node == rhs).then_some(f32)
     })
     .unwrap();
 
-    assert_eq!(types[root.index()], f32);
+    assert_eq!(types[root.index()], TypeArg::Type(f32));
 }
 
 #[test]
 fn bitcast_accepts_a_float_and_preserves_its_bit_width() {
+    let terms = Terms::new();
     let mut graph = Graph::new();
     let input = sym(&mut graph, 0);
     let root = op(&mut graph, SymKind::Bitcast, &[input]);
 
-    let types = infer_types(&graph, |node| {
-        (node == input).then(|| SemType::Float(FloatFormat::new(8, 23)))
+    let types = infer_types(&terms, &graph, |node| {
+        (node == input).then(|| terms.float(8, 23))
     })
     .unwrap();
 
-    assert_eq!(types[root.index()], SemType::raw_bits(32));
+    assert_eq!(types[root.index()], raw_bits(&terms, 32));
 }
 
 #[test]
 fn raw_memory_bits_admit_a_float_interpretation() {
+    let terms = Terms::new();
     let mut graph = Graph::new();
     let address = sym(&mut graph, 0);
     let bytes = con(&mut graph, 8, 4);
     let metadata = con(&mut graph, 1, 0);
     let load = op(&mut graph, SymKind::LoadMemory, &[address, bytes, metadata]);
 
-    let types = infer_types(&graph, |_| None).unwrap();
-    assert_eq!(types[load.index()], SemType::RawBits(Width::Const(32)));
+    let types = infer_types(&terms, &graph, |_| None).unwrap();
+    assert_eq!(types[load.index()], raw_bits(&terms, 32));
 
-    let mut unifier = TypeUnifier::default();
+    let mut unifier = TypeUnifier::new(&terms);
     unifier
-        .unify(
-            &types[load.index()],
-            &SemType::Float(FloatFormat::new(8, 23)),
-        )
+        .unify(&types[load.index()], &TypeArg::Type(terms.float(8, 23)))
         .unwrap();
 }
 
 #[test]
 fn fp_state_field_reads_have_intrinsic_types() {
+    let terms = Terms::new();
     let mut graph = Graph::new();
     let state = sym(&mut graph, 0);
     let resource = con(&mut graph, 2, StateResourceKind::FpEnvironment as u64);
@@ -108,14 +120,18 @@ fn fp_state_field_reads_have_intrinsic_types() {
         &[state, resource, flags_field],
     );
 
-    let types = infer_types(&graph, |node| (node == state).then_some(SemType::State)).unwrap();
+    let types = infer_types(&terms, &graph, |node| {
+        (node == state).then(|| sem_state(&terms))
+    })
+    .unwrap();
 
-    assert_eq!(types[rounding.index()], SemType::bits(3));
-    assert_eq!(types[flags.index()], SemType::bits(5));
+    assert_eq!(types[rounding.index()], TypeArg::Type(terms.int(3)));
+    assert_eq!(types[flags.index()], TypeArg::Type(terms.int(5)));
 }
 
 #[test]
 fn fp_state_assignment_rejects_the_wrong_field_type() {
+    let terms = Terms::new();
     let mut graph = Graph::new();
     let state = sym(&mut graph, 0);
     let resource = con(&mut graph, 2, StateResourceKind::FpEnvironment as u64);
@@ -128,11 +144,11 @@ fn fp_state_assignment_rejects_the_wrong_field_type() {
         &[state, resource, field, access, flags],
     );
 
-    assert!(infer_types(&graph, |node| {
+    assert!(infer_types(&terms, &graph, |node| {
         if node == state {
-            Some(SemType::State)
+            Some(sem_state(&terms))
         } else if node == flags {
-            Some(SemType::bits(5))
+            Some(terms.int(5))
         } else {
             None
         }

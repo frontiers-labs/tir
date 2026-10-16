@@ -5,7 +5,6 @@
 //! the body's `scf.yield` names the next value of each port past the counter.
 
 use crate as tir;
-use crate::Any as AnyConstraint;
 use crate::binding;
 use crate::parse::common::Cursor;
 use crate::{Context, CountedLoop, Error, ExitScope, ExitScopeKind, Operation, ValueId, operation};
@@ -14,17 +13,11 @@ operation! {
     OrderedForOp {
         name: "ordered_for",
         dialect: "scf",
+        scheme: "forall C: index | int<_>. (C, _*, C, C) -> _*",
         format: "custom",
         verifier: "true",
-        operands: O {
-            lb: "crate::builtin::Counter",
-            inits: "*AnyConstraint",
-            ub: "crate::builtin::Counter",
-            step: "crate::builtin::Counter",
-        },
-        results: R {
-            results: "*AnyConstraint",
-        },
+        operands: O { lb, inits, ub, step },
+        results: R { results },
         regions: R {
             body: Region {
                 kind: Blocks,
@@ -120,7 +113,6 @@ impl OrderedForOp {
 
 impl tir::Verifiable for OrderedForOp {
     fn verify_impl(&self, context: &Context) -> Result<(), Error> {
-        super::nodes::verify_counter_type(context, "scf.ordered_for", self)?;
         verify_body(context, self)
     }
 }

@@ -1,10 +1,8 @@
-use std::any::Any;
-use std::sync::Arc;
+use tir_symbolic::term::ctor;
 
-use crate::ty::TypeConstraint;
-use crate::{Context, Error, IRFormatter, Type, TypeId, parse::Span};
-
-use crate as tir;
+use crate::parse::common::Cursor;
+use crate::ty::TypeSpelling;
+use crate::{Context, Error, TypeId};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum StateResource {
@@ -29,18 +27,18 @@ impl StateResource {
 }
 
 /// An execution dependency for one resource, written `!state<resource>`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct StateType {
     resource: StateResource,
 }
 
 impl StateType {
     #[allow(clippy::new_ret_no_self)]
-    pub fn new(context: &Context, resource: StateResource) -> TypeId {
-        let id = context.get_type_id(Arc::new(Self { resource }));
-        if resource == StateResource::Memory {
-            debug_assert_eq!(id, TypeId::STATE);
+    pub fn new(_context: &Context, resource: StateResource) -> TypeId {
+        match resource {
+            StateResource::Memory => TypeId::STATE,
+            StateResource::FpEnv => TypeId::FP_ENV,
         }
-        id
     }
 
     pub fn memory(context: &Context) -> TypeId {
@@ -51,53 +49,45 @@ impl StateType {
         Self::new(context, StateResource::FpEnv)
     }
 
+    /// The state `ty` is. Every store interns the two resources above first,
+    /// so telling a state from a value compares ids and reads no term.
+    pub fn view(ty: TypeId) -> Option<Self> {
+        let resource = if ty == TypeId::STATE {
+            StateResource::Memory
+        } else if ty == TypeId::FP_ENV {
+            StateResource::FpEnv
+        } else {
+            return None;
+        };
+        Some(Self { resource })
+    }
+
     pub fn resource(&self) -> StateResource {
         self.resource
     }
-}
 
-impl TypeConstraint for StateType {}
-
-impl Type for StateType {
-    fn dialect(&self) -> &'static str {
-        "builtin"
-    }
-
-    fn parse_key() -> &'static str {
-        "state"
-    }
-
-    fn parse<'src>(
-        _mnemonic: &str,
-        parser: &mut tir::parse::text::Parser<'src>,
-        context: &Context,
-    ) -> Result<TypeId, (Span, Error)> {
-        use tir::parse::common::Cursor;
-
-        if !parser.parse_token("<") {
-            return Err((parser.span(), Error::ExpectedToken("<")));
+    pub fn spelling(_context: &Context) -> TypeSpelling {
+        TypeSpelling {
+            ctor: ctor::STATE,
+            keys: &["state"],
+            parse: |_, parser, context| {
+                if !parser.parse_token("<") {
+                    return Err((parser.span(), Error::ExpectedToken("<")));
+                }
+                let resource = [StateResource::Memory, StateResource::FpEnv]
+                    .into_iter()
+                    .find(|resource| parser.parse_token(resource.name()))
+                    .ok_or_else(|| (parser.span(), Error::ExpectedToken("state resource")))?;
+                if !parser.parse_token(">") {
+                    return Err((parser.span(), Error::ExpectedToken(">")));
+                }
+                Ok(Self::new(context, resource))
+            },
+            print: |spellings, ty, fmt| match Self::view(ty) {
+                Some(state) => fmt.write(format!("state<{}>", state.resource.name())),
+                None => spellings.print_generic(ty, fmt),
+            },
+            variadic_tail: false,
         }
-        let resource = [StateResource::Memory, StateResource::FpEnv]
-            .into_iter()
-            .find(|resource| parser.parse_token(resource.name()))
-            .ok_or_else(|| (parser.span(), Error::ExpectedToken("state resource")))?;
-        if !parser.parse_token(">") {
-            return Err((parser.span(), Error::ExpectedToken(">")));
-        }
-        Ok(Self::new(context, resource))
-    }
-
-    fn print(&self, fmt: &mut IRFormatter<'_>) -> Result<(), std::fmt::Error> {
-        fmt.write(format!("state<{}>", self.resource.name()))
-    }
-
-    fn eq(&self, other: &dyn Type) -> bool {
-        (other as &dyn Any)
-            .downcast_ref::<StateType>()
-            .is_some_and(|other| other.resource == self.resource)
-    }
-
-    fn hash(&self, state: &mut dyn std::hash::Hasher) {
-        state.write_u8(self.resource as u8);
     }
 }

@@ -15,7 +15,8 @@ use tir_adt::{APInt, Dag, NodeId};
 
 use super::{SemGraph, ValueId};
 use crate::bitblast::{SolveOutcome, blast, blast_with_types};
-use crate::lang::{SemType, SymKind, SymPayload, Value, Width, execute, infer_types, infer_widths};
+use crate::lang::{SymKind, SymPayload, Value, execute, infer_types, infer_widths};
+use crate::term::{Terms, TypeArg, TypeId};
 
 /// Decides whether two single-output expression graphs (over the same symbols)
 /// compute the same value for every input of the given symbol widths.
@@ -137,11 +138,12 @@ impl SmtOracle {
     /// Prove equivalence while preserving the semantic domains of shared symbols.
     pub fn equivalent_typed<A>(
         &self,
+        terms: &Terms,
         lhs: &SemGraph<A>,
         rhs: &SemGraph<A>,
-        symbol_types: &[SemType],
+        symbol_types: &[TypeId],
     ) -> bool {
-        self.equivalent_typed_outcome(lhs, rhs, symbol_types)
+        self.equivalent_typed_outcome(terms, lhs, rhs, symbol_types)
             .is_proven()
     }
 
@@ -149,37 +151,41 @@ impl SmtOracle {
     /// semantic domains and widths of the shared symbols.
     pub fn refines_typed<A>(
         &self,
+        terms: &Terms,
         lhs: &SemGraph<A>,
         rhs: &SemGraph<A>,
-        symbol_types: &[SemType],
+        symbol_types: &[TypeId],
     ) -> bool {
-        self.refines_typed_outcome(lhs, rhs, symbol_types)
+        self.refines_typed_outcome(terms, lhs, rhs, symbol_types)
             .is_proven()
     }
 
     pub fn equivalent_typed_outcome<A>(
         &self,
+        terms: &Terms,
         lhs: &SemGraph<A>,
         rhs: &SemGraph<A>,
-        symbol_types: &[SemType],
+        symbol_types: &[TypeId],
     ) -> ProofOutcome {
-        self.prove_typed_outcome(lhs, rhs, symbol_types, false)
+        self.prove_typed_outcome(terms, lhs, rhs, symbol_types, false)
     }
 
     pub fn refines_typed_outcome<A>(
         &self,
+        terms: &Terms,
         lhs: &SemGraph<A>,
         rhs: &SemGraph<A>,
-        symbol_types: &[SemType],
+        symbol_types: &[TypeId],
     ) -> ProofOutcome {
-        self.prove_typed_outcome(lhs, rhs, symbol_types, true)
+        self.prove_typed_outcome(terms, lhs, rhs, symbol_types, true)
     }
 
     fn prove_typed_outcome<A>(
         &self,
+        terms: &Terms,
         lhs: &SemGraph<A>,
         rhs: &SemGraph<A>,
-        symbol_types: &[SemType],
+        symbol_types: &[TypeId],
         defined_refinement: bool,
     ) -> ProofOutcome {
         let Some((g, l, r)) = disequality(lhs, rhs) else {
@@ -191,12 +197,14 @@ impl SmtOracle {
             Some(SymPayload::SymbolId(id)) => symbol_types.get(*id as usize).cloned(),
             _ => None,
         };
-        let Ok(types) = infer_types(&g, symbol_type) else {
+        let Ok(types) = infer_types(terms, &g, symbol_type) else {
             return ProofOutcome::Unsupported(UnsupportedReason::InvalidTypes(
                 "semantic type inference failed".into(),
             ));
         };
-        let widths = infer_widths(&g, |id| symbol_type(id).and_then(semantic_width));
+        let widths = infer_widths(&g, |id| {
+            symbol_type(id).and_then(|ty| semantic_width(terms, ty))
+        });
         if !same_root_widths(&widths, l, r) {
             return ProofOutcome::Unsupported(UnsupportedReason::InvalidTypes(
                 "equivalence roots have different widths".into(),
@@ -205,14 +213,16 @@ impl SmtOracle {
         if structurally_equal(lhs, rhs) {
             return ProofOutcome::Proven;
         }
-        match blast_with_types(&g, &widths, &types) {
+        match blast_with_types(terms, &g, &widths, &types) {
             Ok(blasted) if defined_refinement => {
                 proof_outcome(blasted.solve_defined_equivalence(l, r))
             }
             Ok(blasted) => proof_outcome(blasted.solve()),
-            Err(error) => find_typed_counterexample(lhs, rhs, symbol_types).unwrap_or_else(|| {
-                ProofOutcome::Unsupported(UnsupportedReason::MissingTheory(error.to_string()))
-            }),
+            Err(error) => {
+                find_typed_counterexample(terms, lhs, rhs, symbol_types).unwrap_or_else(|| {
+                    ProofOutcome::Unsupported(UnsupportedReason::MissingTheory(error.to_string()))
+                })
+            }
         }
     }
 
@@ -289,16 +299,19 @@ fn check_counterexample<A>(
 /// proof. The search only evaluates total operations in the interpreter's
 /// checked floating-point subset.
 fn find_typed_counterexample<A>(
+    terms: &Terms,
     lhs: &SemGraph<A>,
     rhs: &SemGraph<A>,
-    symbol_types: &[SemType],
+    symbol_types: &[TypeId],
 ) -> Option<ProofOutcome> {
-    if !concretely_evaluable(lhs, symbol_types) || !concretely_evaluable(rhs, symbol_types) {
+    if !concretely_evaluable(terms, lhs, symbol_types)
+        || !concretely_evaluable(terms, rhs, symbol_types)
+    {
         return None;
     }
     let value_sets = symbol_types
         .iter()
-        .map(concrete_samples)
+        .map(|ty| concrete_samples(terms, ty))
         .collect::<Option<Vec<_>>>()?;
     if value_sets.len() >= 3 {
         let mut cancellation = value_sets
@@ -330,11 +343,11 @@ fn find_typed_counterexample<A>(
     }
 }
 
-fn concretely_evaluable<A>(graph: &SemGraph<A>, symbol_types: &[SemType]) -> bool {
+fn concretely_evaluable<A>(terms: &Terms, graph: &SemGraph<A>, symbol_types: &[TypeId]) -> bool {
     if graph.root().is_none() {
         return false;
     }
-    let Ok(types) = infer_types(graph, |id| match graph.get_leaf_data(id) {
+    let Ok(types) = infer_types(terms, graph, |id| match graph.get_leaf_data(id) {
         Some(SymPayload::SymbolId(id)) => symbol_types.get(*id as usize).cloned(),
         _ => None,
     }) else {
@@ -375,7 +388,7 @@ fn concretely_evaluable<A>(graph: &SemGraph<A>, symbol_types: &[SemType]) -> boo
                 _ => false,
             },
             SymKind::FAdd | SymKind::FSub | SymKind::FMul | SymKind::FDiv | SymKind::Fma => {
-                supported_float_type(&types[node.index()])
+                supported_float_type(terms, &types[node.index()])
             }
             SymKind::FAddRound
             | SymKind::FSubRound
@@ -383,7 +396,7 @@ fn concretely_evaluable<A>(graph: &SemGraph<A>, symbol_types: &[SemType]) -> boo
             | SymKind::FDivRound
             | SymKind::FmaRound => {
                 let rounding = graph.children(node).last().unwrap();
-                supported_float_type(&types[node.index()])
+                supported_float_type(terms, &types[node.index()])
                     && matches!(graph.get_leaf_data(rounding), Some(SymPayload::Int(value)) if value.to_u64() <= 4)
             }
             _ => true,
@@ -391,31 +404,19 @@ fn concretely_evaluable<A>(graph: &SemGraph<A>, symbol_types: &[SemType]) -> boo
     })
 }
 
-fn supported_float_type(ty: &SemType) -> bool {
-    matches!(
-        ty,
-        SemType::Float(crate::lang::FloatFormat {
-            exponent: Width::Const(8),
-            mantissa: Width::Const(23),
-        }) | SemType::Float(crate::lang::FloatFormat {
-            exponent: Width::Const(11),
-            mantissa: Width::Const(52),
-        })
-    )
+fn supported_float_type(terms: &Terms, ty: &TypeArg) -> bool {
+    ty.as_type()
+        .and_then(|ty| terms.float_format(ty))
+        .is_some_and(|format| matches!(format, (8, 23) | (11, 52)))
 }
 
-fn concrete_samples(ty: &SemType) -> Option<Vec<Value>> {
-    let SemType::Float(format) = ty else {
-        return None;
-    };
-    let (Width::Const(exponent), Width::Const(mantissa)) = (&format.exponent, &format.mantissa)
-    else {
-        return None;
-    };
-    let width = 1 + exponent + mantissa;
-    if !matches!((*exponent, *mantissa), (8, 23) | (11, 52)) {
+fn concrete_samples(terms: &Terms, &ty: &TypeId) -> Option<Vec<Value>> {
+    let (exponent, mantissa) = terms.float_format(ty)?;
+    if !matches!((exponent, mantissa), (8, 23) | (11, 52)) {
         return None;
     }
+    let (exponent, mantissa) = (exponent as u32, mantissa as u32);
+    let width = 1 + exponent + mantissa;
     let bias = (1u128 << (exponent - 1)) - 1;
     let sign = 1u128 << (width - 1);
     let one = bias << mantissa;
@@ -426,11 +427,7 @@ fn concrete_samples(ty: &SemType) -> Option<Vec<Value>> {
     Some(
         [0, sign, one, sign | one, above_one, below_one]
             .into_iter()
-            .map(|bits| {
-                Value::Float(tir_adt::APFloat::from_bits(
-                    *exponent, *mantissa, false, bits,
-                ))
-            })
+            .map(|bits| Value::Float(tir_adt::APFloat::from_bits(exponent, mantissa, false, bits)))
             .collect(),
     )
 }
@@ -449,7 +446,7 @@ fn advance_values(assignment: &mut [usize], value_sets: &[Vec<Value>]) -> bool {
 fn value_bits(value: &Value) -> Option<Vec<bool>> {
     let (bits, width) = match value {
         Value::Int(value) => (u128::from(value.to_u64()), value.width()),
-        Value::Float(value) => (value.to_bits(), value.bit_width()),
+        Value::Float(value) => (value.to_bits(), u64::from(value.bit_width())),
         _ => return None,
     };
     Some((0..width).map(|bit| bits & (1 << bit) != 0).collect())
@@ -496,15 +493,8 @@ fn same_root_widths(widths: &[Option<u32>], l: NodeId, r: NodeId) -> bool {
     matches!((widths[l.index()], widths[r.index()]), (Some(l), Some(r)) if l == r)
 }
 
-fn semantic_width(ty: SemType) -> Option<u32> {
-    match ty {
-        SemType::Bits(Width::Const(width)) | SemType::RawBits(Width::Const(width)) => Some(width),
-        SemType::Float(format) => match (format.exponent, format.mantissa) {
-            (Width::Const(exponent), Width::Const(mantissa)) => Some(1 + exponent + mantissa),
-            _ => None,
-        },
-        _ => None,
-    }
+fn semantic_width(terms: &Terms, ty: TypeId) -> Option<u32> {
+    terms.bit_width(ty).map(|width| width as u32)
 }
 
 /// Copy the subgraph under `node` into `dst`. Symbol leaves are shared through
@@ -606,7 +596,7 @@ fn sample_values(width: u32, extra: usize) -> Vec<APInt> {
     // true (sign-extending) shift, matching hardware `sra`; the logical shifts
     // (`srl`) and the masked bit-pattern comparison are unaffected by the flag.
     raw.into_iter()
-        .map(|v| APInt::new(width, v).with_signed(true))
+        .map(|v| APInt::new(u64::from(width), v).with_signed(true))
         .collect()
 }
 
@@ -620,7 +610,7 @@ pub fn sym<A>(g: &mut SemGraph<A>, id: u32) -> NodeId {
 /// A `width`-bit constant leaf.
 pub fn con<A>(g: &mut SemGraph<A>, value: u64, width: u32) -> NodeId {
     let node = g.add_node(SymKind::Constant);
-    g.set_leaf_data(node, SymPayload::Int(APInt::new(width, value)));
+    g.set_leaf_data(node, SymPayload::Int(APInt::new(u64::from(width), value)));
     node
 }
 
@@ -701,7 +691,6 @@ pub fn confirm_bool_via_if(oracle: &dyn EquivalenceOracle) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lang::FloatFormat;
 
     fn strict_fma_graphs() -> (SemGraph, SemGraph) {
         let mut lhs: SemGraph = SemGraph::new();
@@ -722,9 +711,10 @@ mod tests {
     #[test]
     fn typed_search_finds_strict_fma_counterexample() {
         let (lhs, rhs) = strict_fma_graphs();
-        let f64 = SemType::Float(FloatFormat::new(11, 52));
+        let terms = Terms::new();
+        let f64 = terms.float(11, 52);
 
-        let outcome = find_typed_counterexample(&lhs, &rhs, &[f64.clone(), f64.clone(), f64]);
+        let outcome = find_typed_counterexample(&terms, &lhs, &rhs, &[f64, f64, f64]);
 
         assert!(matches!(outcome, Some(ProofOutcome::Disproven { .. })));
     }
@@ -736,9 +726,10 @@ mod tests {
         op(&mut lhs, SymKind::Loop, &[value, value, value, value]);
         let mut rhs: SemGraph = SemGraph::new();
         sym(&mut rhs, 0);
+        let terms = Terms::new();
 
         assert_eq!(
-            find_typed_counterexample(&lhs, &rhs, &[SemType::bits(1)]),
+            find_typed_counterexample(&terms, &lhs, &rhs, &[terms.int(1)]),
             None
         );
     }
@@ -746,10 +737,11 @@ mod tests {
     #[test]
     fn typed_search_skips_unsupported_float_format() {
         let (lhs, rhs) = strict_fma_graphs();
-        let f16 = SemType::Float(FloatFormat::new(5, 10));
+        let terms = Terms::new();
+        let f16 = terms.float(5, 10);
 
         assert_eq!(
-            find_typed_counterexample(&lhs, &rhs, &[f16.clone(), f16.clone(), f16]),
+            find_typed_counterexample(&terms, &lhs, &rhs, &[f16, f16, f16]),
             None
         );
     }
@@ -766,10 +758,11 @@ mod tests {
         let b = sym(&mut rhs, 1);
         let mode = con(&mut rhs, 5, 3);
         op(&mut rhs, SymKind::FSubRound, &[a, b, mode]);
-        let f64 = SemType::Float(FloatFormat::new(11, 52));
+        let terms = Terms::new();
+        let f64 = terms.float(11, 52);
 
         assert_eq!(
-            find_typed_counterexample(&lhs, &rhs, &[f64.clone(), f64]),
+            find_typed_counterexample(&terms, &lhs, &rhs, &[f64, f64]),
             None
         );
     }
@@ -809,6 +802,6 @@ mod tests {
         let mode = con(&mut rhs, 0, 3);
         op(&mut rhs, SymKind::FSubRound, &[a, b, mode]);
 
-        assert_eq!(find_typed_counterexample(&lhs, &rhs, &[]), None);
+        assert_eq!(find_typed_counterexample(&terms, &lhs, &rhs, &[]), None);
     }
 }

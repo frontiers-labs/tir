@@ -15,11 +15,9 @@ pub enum ValueKind {
 
 /// Classifies an IR type for ABI register assignment.
 pub fn type_kind(context: &Context, ty: TypeId) -> ValueKind {
-    let data = context.get_type_data(ty);
-    let data = data.as_ref() as &dyn std::any::Any;
-    if data.downcast_ref::<crate::builtin::FloatType>().is_some() {
+    if crate::builtin::FloatType::view(context, ty).is_some() {
         ValueKind::Float
-    } else if data.downcast_ref::<crate::vector::VectorType>().is_some() {
+    } else if crate::vector::VectorType::view(context, ty).is_some() {
         ValueKind::Vector
     } else {
         ValueKind::Int

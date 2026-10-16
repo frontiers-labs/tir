@@ -67,11 +67,11 @@ pub trait TargetMachine {
     /// visible through the other.
     fn register_info(&self) -> RegisterInfo;
 
-    /// How this target lays data out, as a [`tir::DATA_LAYOUT`] spec. It applies
+    /// How this target lays data out, as a [`tir::LAYOUT_SPEC`] spec. It applies
     /// where the IR itself declares no layout, so a module carrying its own
-    /// [`data_layout`](tir::DATA_LAYOUT) always wins. `None` for a target that
+    /// [`layout.spec`](tir::LAYOUT_SPEC) always wins. `None` for a target that
     /// does not describe its layout yet.
-    fn data_layout(&self) -> Option<tir::attributes::AttributeValue> {
+    fn data_layout(&self, _context: &tir::Context) -> Option<tir::attributes::AttributeValue> {
         None
     }
 

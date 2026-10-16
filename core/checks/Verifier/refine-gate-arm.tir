@@ -1,0 +1,23 @@
+// RUN: tir opt --verify %s | filecheck %s
+
+// A refine in a gate's arm holds where the gate runs that arm: the default
+// arm runs where %small is true, so the value its port reads is below 10.
+
+module {
+  %fn_f = func.func @f(%x: !i64) -> !i64 {
+    %ten = constant {value = 10} : !i64
+    %small = cmpi %x, %ten {predicate = "ult"} : !i1
+    %r = scf.switch %small args(%x) (%big) {
+      -> %big
+    }
+    (%v) {
+      %c = cmpi %v, %ten {predicate = "ult"} : !i1
+      %s = refine %v, %c : !i64
+      -> %s
+    }
+    func.return %r
+  }
+  module_end
+}
+
+// CHECK: refine %{{[0-9]+}}, %{{[0-9]+}} : !i64

@@ -1,0 +1,56 @@
+// RUN: tir interp %s -f deep | filecheck %s
+
+// A chain of definitions, each holding the one before by value, as deep
+// as a program nests them.
+
+#layout_spec = #layout.spec<!i32 = {size = 32, abi = 32}>
+
+module {layout.spec = #layout_spec} {
+  type.def !S0 = !struct<{x: !i32}>
+  type.def !S1 = !struct<{a: !S0}>
+  type.def !S2 = !struct<{a: !S1}>
+  type.def !S3 = !struct<{a: !S2}>
+  type.def !S4 = !struct<{a: !S3}>
+  type.def !S5 = !struct<{a: !S4}>
+  type.def !S6 = !struct<{a: !S5}>
+  type.def !S7 = !struct<{a: !S6}>
+  type.def !S8 = !struct<{a: !S7}>
+  type.def !S9 = !struct<{a: !S8}>
+  type.def !S10 = !struct<{a: !S9}>
+  type.def !S11 = !struct<{a: !S10}>
+  type.def !S12 = !struct<{a: !S11}>
+  type.def !S13 = !struct<{a: !S12}>
+  type.def !S14 = !struct<{a: !S13}>
+  type.def !S15 = !struct<{a: !S14}>
+  type.def !S16 = !struct<{a: !S15}>
+  type.def !S17 = !struct<{a: !S16}>
+  type.def !S18 = !struct<{a: !S17}>
+  type.def !S19 = !struct<{a: !S18}>
+  type.def !S20 = !struct<{a: !S19}>
+  type.def !S21 = !struct<{a: !S20}>
+  type.def !S22 = !struct<{a: !S21}>
+  type.def !S23 = !struct<{a: !S22}>
+  type.def !S24 = !struct<{a: !S23}>
+  type.def !S25 = !struct<{a: !S24}>
+  type.def !S26 = !struct<{a: !S25}>
+  type.def !S27 = !struct<{a: !S26}>
+  type.def !S28 = !struct<{a: !S27}>
+  type.def !S29 = !struct<{a: !S28}>
+  type.def !S30 = !struct<{a: !S29}>
+  type.def !S31 = !struct<{a: !S30}>
+  type.def !S32 = !struct<{a: !S31}>
+  type.def !S33 = !struct<{a: !S32}>
+  type.def !S34 = !struct<{a: !S33}>
+  type.def !S35 = !struct<{a: !S34}>
+  type.def !S36 = !struct<{a: !S35}>
+  type.def !S37 = !struct<{a: !S36}>
+  type.def !S38 = !struct<{a: !S37}>
+  type.def !S39 = !struct<{a: !S38}>
+  %fn_deep = func.func @deep() -> !i64 {
+    %0 = layout.sizeof {ty = !S39} : !i64
+    func.return %0
+  }
+  module_end
+}
+
+// CHECK: i64 32

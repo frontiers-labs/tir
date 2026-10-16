@@ -35,14 +35,14 @@ pub fn import(
     let layout = Layout {
         named: module.named_types.iter().cloned().collect(),
         pointer_width: data_layout
-            .and_then(tir::DataLayout::from_value)
+            .and_then(|layout| tir::DataLayout::from_value(context, layout))
             .and_then(|layout| layout.pointer_size())
             .unwrap_or(64),
     };
     if let Some(spec) = data_layout {
         context.set_op_attributes(
             m.id(),
-            vec![context.named_attribute(tir::DATA_LAYOUT, spec.clone())],
+            vec![context.named_attribute(tir::LAYOUT_SPEC, spec.clone())],
         );
     }
     let globals = lower_globals(context, module, &builder, &layout)?;
@@ -133,16 +133,10 @@ impl Callees {
                 if let Some(value) = defined.get(&name) {
                     return (placeholder, *value);
                 }
-                let signature = context.get_type_data(context.get_value(placeholder).ty());
-                let signature = (signature.as_ref() as &dyn std::any::Any)
-                    .downcast_ref::<FnType>()
+                let signature = FnType::view(context, context.get_value(placeholder).ty())
                     .expect("a callee placeholder has a function type");
-                let declaration = tir::func::declare_op(
-                    context,
-                    &name,
-                    signature.ret(context),
-                    &signature.params(context),
-                );
+                let declaration =
+                    tir::func::declare_op(context, &name, signature.ret(), &signature.params());
                 let value = declaration.fn_value();
                 body.append_op(declaration);
                 (placeholder, value)
@@ -153,7 +147,7 @@ impl Callees {
 
 fn lower_type(context: &Context, ty: &Type) -> Result<TypeId, Error> {
     Ok(match ty {
-        Type::Int(width) => IntegerType::new(context, *width),
+        Type::Int(width) => IntegerType::new(context, u64::from(*width)),
         Type::Void => UnitType::new(context),
         Type::Ptr(None) => PtrType::opaque(context),
         Type::Ptr(Some(pointee)) => PtrType::typed(context, lower_type(context, pointee)?),
@@ -698,7 +692,7 @@ fn lower_inst(
                 Type::Float(width @ (32 | 64)) => *width,
                 _ => return Err(Error::Unsupported("fneg type".into())),
             };
-            let bits_ty = IntegerType::new(context, width);
+            let bits_ty = IntegerType::new(context, u64::from(width));
             // LLVM fneg flips the sign bit, including for zero and NaN.
             let bits = body
                 .append_op(bops::bitcast(context, input, bits_ty).build())
@@ -1183,7 +1177,7 @@ fn lower_intrinsic(
         return lower_select(context, body, cmp, args[0], args[1], ret, layout).map(Some);
     }
     if name == "llvm.load.relative.i64" {
-        let offset_ty = IntegerType::new(context, layout.pointer_width);
+        let offset_ty = IntegerType::new(context, u64::from(layout.pointer_width));
         let offset = resize_signed(context, body, args[1], offset_ty);
         let address = body
             .append_op(pops::ptradd(context, args[0], offset, PtrType::opaque(context)).build())
@@ -1216,12 +1210,7 @@ fn resize_integer(
     ty: TypeId,
     signed: bool,
 ) -> ValueId {
-    let width = |ty| {
-        let data = context.get_type_data(ty);
-        (data.as_ref() as &dyn std::any::Any)
-            .downcast_ref::<IntegerType>()
-            .map(IntegerType::width)
-    };
+    let width = |ty| IntegerType::view(context, ty).map(|integer| integer.width());
     match width(context.get_value(value).ty()).cmp(&width(ty)) {
         std::cmp::Ordering::Less if signed => body
             .append_op(bops::extsi(context, value, ty).build())
@@ -1279,7 +1268,7 @@ fn lower_select(
     let result_ty = lower_type(context, ty)?;
     let work_ty = match ty {
         Type::Ptr(_) => {
-            let int_ty = IntegerType::new(context, layout.pointer_width);
+            let int_ty = IntegerType::new(context, u64::from(layout.pointer_width));
             let null = body.append_op(pops::null(context, PtrType::opaque(context)).build());
             if_true = body
                 .append_op(pops::ptrdiff(context, if_true, null.result(), int_ty).build())
@@ -1290,7 +1279,7 @@ fn lower_select(
             int_ty
         }
         Type::Float(width) => {
-            let int_ty = IntegerType::new(context, *width);
+            let int_ty = IntegerType::new(context, u64::from(*width));
             if_true = body
                 .append_op(bops::bitcast(context, if_true, int_ty).build())
                 .result();
@@ -1386,12 +1375,12 @@ fn lower_cast(
         // pointer-sized address, which `ptr.ptrdiff` and `ptr.ptradd` take.
         CastOp::PtrToInt => {
             let null = append!(pops::null(context, PtrType::opaque(context)).build());
-            let address_ty = IntegerType::new(context, layout.pointer_width);
+            let address_ty = IntegerType::new(context, u64::from(layout.pointer_width));
             let address = append!(pops::ptrdiff(context, input, null, address_ty).build());
             resize_unsigned(context, body, address, result_ty)
         }
         CastOp::IntToPtr => {
-            let address_ty = IntegerType::new(context, layout.pointer_width);
+            let address_ty = IntegerType::new(context, u64::from(layout.pointer_width));
             let address = resize_unsigned(context, body, input, address_ty);
             let null = append!(pops::null(context, PtrType::opaque(context)).build());
             append!(pops::ptradd(context, null, address, result_ty).build())
@@ -1421,10 +1410,7 @@ fn lower_cast(
         }
         CastOp::FPToSI | CastOp::FPToUI => {
             let semantics = integer_conversion_semantics(context);
-            let result_data = context.get_type_data(result_ty);
-            let result_width = (result_data.as_ref() as &dyn std::any::Any)
-                .downcast_ref::<IntegerType>()
-                .map(IntegerType::width);
+            let result_width = IntegerType::view(context, result_ty).map(|integer| integer.width());
             if cast == CastOp::FPToUI && result_width.is_some_and(|width| width < 64) {
                 let wide_ty = IntegerType::new(context, 64);
                 let wide = body
@@ -1531,7 +1517,7 @@ fn lower_gep(
     layout: &Layout,
     definitions: &HashMap<&str, &Inst>,
 ) -> Result<ValueId, Error> {
-    let offset_ty = IntegerType::new(context, layout.pointer_width);
+    let offset_ty = IntegerType::new(context, u64::from(layout.pointer_width));
     let mut offset = None;
     let mut literal_offset = 0i64;
     let mut current = source.clone();

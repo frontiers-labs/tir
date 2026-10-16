@@ -51,25 +51,28 @@ impl RawBits {
 
     /// Reinterpret an integer as raw bits, widened to a whole number of bytes.
     pub fn from_apint(value: &APInt) -> Self {
-        let num_bytes = value.width().div_ceil(BYTE_SIZE as u32) as usize;
-        let raw = value.to_u64();
-        let storage = (0..num_bytes)
-            .map(|i| (raw >> (i * BYTE_SIZE)) as u8)
+        let num_bytes = value.width().div_ceil(BYTE_SIZE as u64) as usize;
+        let storage = value
+            .limbs()
+            .iter()
+            .flat_map(|limb| limb.to_le_bytes())
+            .take(num_bytes)
             .collect();
         RawBits { storage }
     }
 
-    /// Reinterpret these bits as an unsigned integer of the same width (must fit a word).
+    /// Reinterpret these bits as an unsigned integer of the same width.
     pub fn to_apint(&self) -> APInt {
-        assert!(
-            self.width() <= 64,
-            "RawBits wider than 64 bits cannot be read as a single integer"
-        );
-        let mut value = 0u64;
-        for (i, byte) in self.storage.iter().enumerate() {
-            value |= u64::from(*byte) << (i * BYTE_SIZE);
-        }
-        APInt::new(self.width() as u32, value)
+        let limbs: Vec<u64> = self
+            .storage
+            .chunks(8)
+            .map(|chunk| {
+                let mut word = [0u8; 8];
+                word[..chunk.len()].copy_from_slice(chunk);
+                u64::from_le_bytes(word)
+            })
+            .collect();
+        APInt::from_limbs(self.width() as u64, &limbs)
     }
 
     /// Reinterpret a float as raw bits.

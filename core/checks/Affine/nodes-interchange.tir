@@ -8,9 +8,9 @@
 // The rebuilt nest is two counted loops over graphs, the chain threaded
 // through both, and the checksum after it reads what the nest wrote.
 
-#data_layout = {types = {i32 = {abi = 32, size = 32}, i64 = {abi = 64, size = 64}, p = {abi = 64, size = 64}}}
+#layout_spec = #layout.spec<!i32 = {size = 32, abi = 32}, !i64 = {size = 64, abi = 64}, !ptr.p = {size = 64, abi = 64}>
 
-module {data_layout = #data_layout} {
+module {layout.spec = #layout_spec} {
   %0 = func.func @main() -> !i32 {
     %1 = ptr.alloca {size = 1024, align = 4} : !ptr.p
     %2 = constant {value = 0} : !i32

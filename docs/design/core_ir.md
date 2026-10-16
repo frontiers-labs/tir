@@ -21,15 +21,107 @@ by another dialect. Function operations, for example, can accept and return
 builtin integer types.
 
 Each operation definition gives the operation a name and describes its operands,
-results, attributes, and nested regions. The definition can also declare type
-constraints, interfaces, and formal semantics. Generated builders and accessors
-give these parts names, such as the left and right operands of an addition.
-Custom verification checks rules that the declaration cannot express.
+results, attributes, and nested regions. The definition types its operands and
+results with a signature scheme, and can also declare interfaces and formal
+semantics. Generated builders and accessors give these parts names, such as the
+left and right operands of an addition. Custom verification checks rules that
+the declaration cannot express.
+
+A scheme is one polymorphic type for the whole operation, written in the
+constructors of the term store:
+
+```rust
+operation! {
+    AddIOp {
+        name: "addi",
+        dialect: "builtin",
+        scheme: "forall W: nat. (int<W>, int<W>) -> int<W>",
+        operands: O { lhs, rhs },
+        results: R { result },
+    }
+}
+```
+
+The operand and result blocks only name the ports; the scheme types them in
+order. `_` is a fresh variable at each position, `T*` a variadic group and `T?`
+an optional port. A variable in the last, optional argument of a constructor
+also stands for its absence, so `ptr.p<_>` takes an opaque pointer too; a
+binder that stands for an absent argument in one value and for a present one
+in another does not match. A binder bounded by patterns takes a type of one of
+those shapes: `scf.for` counts through `forall C: index | int<_>.`, an index
+or an integer. There is no subtyping and no implicit conversion: an `index` is
+no integer, and a cast says so.
+
+Verification checks types at commit, a batch at a time: the pass manager
+checks the operations a pass edited, and `verify_op_tree` the whole tree. The
+check is one join on the relational engine (`core/src/typecheck.rs`). The
+batch is loaded as rows: an id per operation, per type its values have and
+per other constructor argument, a row per value naming its scheme slot, and a
+row per type naming its constructor and argument ids. The op-name table holds
+every declared operation's schema from the context's creation, and each
+name's scheme compiles once into queries kept there: per slot, the values
+whose type has none of the pattern's shapes; per slot reading a bounded
+binder, the values binding it to a type of none of its shapes; and per binder
+two slots read, the pairs of values that bind it to different ids. A binder
+is one query variable wherever it occurs, so the join does the unification.
+A failure names the operation and where it came from, the value, both types
+after substitution, and the values that bound the variables in it; what the
+fitting values bound is asked of the engine only then:
+
+```text
+addi at byte 120: operand 2 is !i64, expected !i32; W := 32 from operand 1
+```
+
+An operation is located at the byte offset of its text in the source the
+parser read. An operation a pass builds is located at its origin: the
+rewrite driver locates what it writes for a value at that value's defining
+operation, a clone at its source, and anything else at the operation the pass
+runs on (`Context::set_origin`).
+
+### Undefined behavior
+
+An operation decides how it is undefined. A `poison:` condition makes its
+result poison, deferred undefined behavior: only a use is undefined. `addi`
+and `subi` with an `nsw` or `nuw` flag are poison on signed or unsigned
+overflow, and shifts by at least the width are poison. A `requires:`
+condition is immediate: `divsi` must not run with a zero divisor or on
+`MIN / -1`. Both are s-expressions over the operands in the vocabulary of
+`sem:`. A pure operation reading poison is poison; a select is poison where
+its condition or the arm it takes is, and a branch on poison is undefined, as
+in Alive2. `builtin.freeze` gives some value for poison, `builtin.assume`
+requires its condition, and a load of memory nothing wrote is poison.
+
+A flag is a fact the result relies on, so forgetting one is always a
+refinement. fcc flags its signed `int` and wider additions and subtractions
+`nsw`. A rewrite rule that names no flag matches a flagged operation too, and
+what it introduces carries none; a flagged and an unflagged operation stay
+apart in the e-graph. Selection forgets flags: a flagged operation selects
+as the unflagged one does.
+
+`%r = builtin.refine %x, %p` is `%x`, and claims `%p` wherever `%x` is
+defined. Verification proves the claim with the solver: wherever `%x` is
+defined, `%p` is defined and true. Both are read through the semantics of
+the operations computing them, each undefined where its own conditions say,
+and only where every gate arm the refinement sits in is the
+arm its predicate selects, the arm's ports read as the operands the gate
+forwards. A pointer is as wide as the layout in scope says; with no layout
+the claim is undecided. A disproven or undecided claim fails verification;
+nothing is assumed. A refinement is proved when its operation is written:
+made, or its operands, attributes or place changed. The IR store keeps the
+row stamp each live refinement was proved at, so verification after a pass
+that left it alone asks the solver nothing; a rewrite of the operations
+computing the predicate is itself a proved refinement and keeps the predicate
+true. The obligation is built from a stack, an operation's operands before
+it, not by recursion.
+`erase-layout` replaces a refinement by the value it refines; the backend
+pipeline runs it ahead of selection, whatever ran before. Selection reads a
+`builtin.freeze` as its operand's register (`freeze-copy` in
+`core/defs/isel.pdl`): machine values hold no poison.
 
 The `dialect!` declaration lists a dialect's operations and types. An
-`operation!` declaration defines an operation. Concrete types implement the
-`Type` contract, including equality, hashing, parsing, and printing. The context
-interns equal types so values can refer to them by a shared type ID.
+`operation!` declaration defines an operation. A dialect type is a constructor
+of the context's term store with a spelling that parses and prints it; equal
+types are one term, so values refer to them by a shared type ID.
 
 Registering a dialect makes its parsers and operation interfaces available in a
 context. Text such as `func.call` selects an operation through its dialect and
@@ -147,6 +239,14 @@ Handles read the current state of an entity. Copying a handle does not copy an
 operation or preserve an old version of it. An ID from one context is not a
 portable reference into an unrelated context.
 
+Types are terms of a store the context owns, `Context::terms()`. A type ID is
+the row of its term there, so two equal types have one ID and comparing types
+compares IDs. There is no process-wide store: two unrelated contexts number
+their types independently. The base constructors and the two state types, `state<memory>` and
+`state<fp.env>`, come first in every store, so their IDs are constants. A
+dialect's constructor gets its ID in a store when it is first registered there.
+Type views take the context: `IntegerType::view(&context, ty)`.
+
 ### Operations and values
 
 An operation contains operands, results, attributes, and nested regions. Operands
@@ -171,6 +271,92 @@ flowchart LR
 Types describe values, while attributes describe operations and other IR
 entities. A constant, for example, has a literal attribute and produces a typed
 result value. Another operation consumes the result through an operand.
+
+An integer type `!i<W>` has any width: the term holds `W` as a 64-bit number,
+and `IntegerType` and `APInt` read it whole. 64 bits is the fast path. A `builtin.constant` holds an `Int` when its value is an `i64`
+sign-extended to its type, and a `Wide` attribute, the value's 64-bit limbs
+least significant first, otherwise; the text prints a `Wide` as its unsigned
+decimal value.
+`APInt` keeps a value of at most 64 bits in one word and the limbs of a wider
+one beside it. The e-graph keeps constants as offsets of a 64-bit carrier, so
+a wider constant is a literal node there, and a fold whose result needs more
+than one word is not made.
+
+A vector `vector.v<N, T>`, spelled `!vector.vec<8xi32>`, holds `N` lanes of
+`T`. A dynamic vector, `!vector.vec<i32>`, has the length `vector.vl`: a
+nat term for the lane count the target picks at run time, so the parameters
+keep their order whether the length is known or not.
+
+### Named types and layout
+
+A module names a type with `type.def !Name = !body`. The use `!Name` is the
+term `type.named<Name, []>`, so two uses are equal by id and the body is never
+expanded to compare them. A definition with no body is incomplete and can only
+be reached through a pointer. A generic definition binds parameters,
+`type.def !List<T: data> = ...`, and `!List<!i32>` keeps its arguments in the
+term. The body with the arguments substituted is computed only when a layout
+needs it. A type definition is a symbol of the module, spelled with its `!`,
+so it never collides with a function or a global. The verifier rejects a
+definition outside module scope and a type that holds itself or an incomplete
+type by value. `!Name` has the kind of its definition's body: the store
+records it when the definition is built. A name with no definition yet is an
+incomplete data type. Merging
+two modules keeps one definition of a name when both bodies are equal, keeps
+the complete one when the other is incomplete (C's compatible types), and
+renames the incoming one to `!Name.1` when the bodies differ. Bodies are
+compared with the renames already made, so a definition that names a renamed
+type is renamed too. The rename rewrites every type the moved ops hold, in
+their results, ports, block arguments and attributes, dictionaries and layout
+specs included.
+
+A layout is a property of a scope, not of a type. The `layout.spec` attribute
+of a scope op holds a `#layout.spec<..>`: options such as `endianness` and
+`stack_align`, and entries that give a type, or a pattern such as
+`!i<W> = {size = !nat.align_to<W, 8>, abi = !nat.min<!nat.pow2_ceil<W>, 64>}`,
+its size and alignments in bits as width terms. A key is a type in the
+generic codec, and a name it leaves unbound is a variable of the pattern. A
+nested scope's spec overrides its enclosing one entry by entry, and the most
+specific matching entry wins. A type with no entry takes its layout from a
+definition. A named type uses its definition's own layout region or else its
+body's, `layout {packed}` passing the struct constructor's `packed` argument,
+and is raised to the definition's `align` either way. The core type
+definitions define the rest. Every context builds them once, with the same
+`type.def` and op builders a frontend uses (`core/src/dialects/layout/types.rs`):
+the constructors `!struct<F, packed: bool = false>`, `!union<F>` and
+`!variant<F, tag: data = !i32>` by their names, and `!array<N, T>`, `N`
+elements of `T` in a row, each at `T`'s alignment, as a named type no module
+needs to define. Each has
+a layout region or a body (a union is a variant whose tag takes no room). A
+struct or variant region walks its fields with an `scf.ordered_for` over
+`0..layout.count`, reading each with `layout.at` and carrying the running
+offset and alignment. A constructor argument equal to the default its core
+definition gives is left out of the term, so `!struct<F>` and
+`!struct<F, false>` are one id. Only the core definitions may use a name
+spelled like a constructor or one of their own types. The interpreter runs a
+layout region with the spec and the type's arguments. The region places each
+field with `layout.field` and ends with `layout.result`. A type that none of
+these cover has no layout. The context keeps the layouts under each op carrying a
+spec until the module's own partition is next edited, so a fold finds them by
+that op and asks the region once per type. A query first lays out, from a
+stack, what the type holds by value, innermost first, so the regions it runs
+find their parts known however deeply types nest. A type asked for again
+while its own layout is computed holds itself by value and has no layout.
+
+`layout.sizeof`, `layout.alignof` and `layout.offsetof` ask for a layout in
+the IR. Each folds to a constant under the spec in scope through its
+`ConstantFold`. `DataLayout` answers the same questions for Rust code.
+`ptr.field` names a field's address and `ptr.copy` a copy of one value of a
+type. The `erase-layout` pass applies the PDL rules of `core/defs/layout.pdl`,
+which rewrite them into `ptr.ptradd` of the field's offset and `ptr.memcpy` of
+the type's size. The rules ask the offset and size of the layout in scope
+while they rewrite (`offsetof` and `sizeof` in PDL, host calls like a pointer's
+width), so what they write is byte constants. Its rules lower what they
+match: the shared driver never extracts a node a rule's root matches, and its
+commit rewires only the ops a root names, each over the values it read, and
+erases each it leaves unread. A function whose partitions' name column holds
+no such op is not seeded at all. A frontend runs it right after
+`restructure-nodes`; FCC emits one definition per C record and reads every
+size and field offset back from `DataLayout`.
 
 ### Regions and blocks
 
@@ -333,10 +519,14 @@ to a chunk that another context still reads copies that chunk first. A fork is
 therefore an independent trial that its origin can adopt or drop. Each context
 belongs to one thread.
 
-Interned types and their state classifications never change. Each context caches
-the state classifications it has read, extending that cache when the shared type
-registry grows. Operand and e-graph queries can then classify existing types
-without locking the registry.
+A fork, a snapshot, and every task of a parallel epoch share their origin's
+type store, so a type interned by any of them has one ID in all of them. The
+store takes concurrent interning and never moves a row: a row is written once,
+before its ID is handed out, into segments that are never reallocated, so a
+reader takes no lock. Interning locks only the lookup shard of the term's
+constructor. Telling a state type from a value type compares the ID with the two
+state constants and reads no term, and the integers up to 128 bits have IDs
+fixed in every store.
 
 Parallel passes run each function in a context of its own over the committed
 chunks. A task mints IDs from chunk indices reserved for its place in the epoch,

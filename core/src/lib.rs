@@ -53,7 +53,7 @@ mod interfaces;
 pub mod interp;
 mod intrinsic;
 mod ir_formatter;
-mod layout;
+pub mod layout;
 pub mod memstats;
 mod operand;
 mod operation;
@@ -71,12 +71,13 @@ mod store;
 pub mod symbol_table;
 mod target_env;
 mod ty;
+mod typecheck;
 pub mod utils;
 mod value;
 pub mod variants;
 
 pub mod helpers {
-    pub use tir_macros::{TirType, dialect, operation};
+    pub use tir_macros::{dialect, operation};
 }
 pub mod parse;
 
@@ -89,11 +90,11 @@ pub use error::Error;
 pub use idmap::{IdMap, IdSet, RowId};
 pub use interfaces::{
     Additive, Apply, Binding, BranchGuard, BranchTerminator, Callable, CaseGuard, Commutative,
-    ConstantFold, ConstantLike, CountedLoop, ExitScope, ExitScopeKind, ExitTarget, Gamma, Global,
-    HasResourceSemantics, IntegerArithmetic, MemoryRead, MemoryWrite, NonLocalExit, OpCost,
-    PromotableAllocation, Pure, RegionBinding, ResourceAccess, ResourceEffect, ResourceEffects,
-    ResourceField, ResourceSemantics, SameOperandAndResultType, Speculatable, Subtractive, Symbol,
-    Terminator, Theta, Visibility,
+    Congruent, ConstantFold, ConstantLike, CountedLoop, ExitScope, ExitScopeKind, ExitTarget,
+    Gamma, Global, HasResourceSemantics, IntegerArithmetic, MemoryRead, MemoryWrite, NonLocalExit,
+    OpCost, PromotableAllocation, Pure, RegionBinding, ResourceAccess, ResourceEffect,
+    ResourceEffects, ResourceField, ResourceSemantics, SameOperandAndResultType, Speculatable,
+    Subtractive, Symbol, Terminator, Theta, Visibility,
 };
 pub use interp::{
     ExecutionState, FloatEnvironment, Interp, InterpError, Memory as InterpMemory,
@@ -101,7 +102,7 @@ pub use interp::{
 };
 pub use intrinsic::Intrinsic;
 pub use ir_formatter::IRFormatter;
-pub use layout::{DATA_LAYOUT, DataLayout, Endianness, data_layout_spec};
+pub use layout::{DataLayout, Endianness, LAYOUT_SPEC, data_layout_spec};
 pub use operand::Operand;
 pub use operation::{
     DialectName, ErasedOpInterface, ImplementsOpInterface, NewOp, NewOpParts, OpDefSpec,
@@ -116,19 +117,21 @@ pub use pass::{
 pub use print::print_ir;
 pub use region::{RegionHandle, RegionId, RegionKind};
 pub use schema::{
-    AttrSchema, FieldSchema, OP_SCHEMAS, OpSchema, TYPE_SCHEMAS, TypeArg, TypeParam, TypeParamKind,
-    TypeSchema, build_type, schema_json, type_schema_json,
+    AttrSchema, FieldSchema, OP_SCHEMAS, OpSchema, build_type, schema_json, type_schema_json,
 };
 pub use scoped_attr::{AttributeDict, scoped_dict};
 pub use symbol_table::{SymbolEntry, SymbolTable};
 pub use target_env::{TARGET_ENV, TargetEnv, target_env_spec};
 pub use tir_adt::Sym;
 pub use tir_adt::{Dag, NodeId};
-pub use ty::{Any, Type, TypeConstraint, TypeId, TypeParser};
+pub use ty::{
+    Ctor, CtorId, Kind, Name, Param, Spellings, Terms, TypeArg, TypeCtor, TypeId, TypeParser,
+    TypePrinter, TypeSpelling, TypeTerm,
+};
+pub use typecheck::{check_types, scheme_of};
 pub use value::{Use, Value, ValueId};
 
 pub use dialects::builtin;
-pub use dialects::builtin::Integer;
 pub use dialects::cfg;
 pub use dialects::fp;
 pub use dialects::func;
@@ -137,4 +140,4 @@ pub use dialects::scf;
 pub use dialects::state;
 pub use dialects::vector;
 
-pub use tir_macros::{TirType, dialect, operation};
+pub use tir_macros::{dialect, operation};

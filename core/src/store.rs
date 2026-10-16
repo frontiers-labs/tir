@@ -59,6 +59,9 @@ mod op {
     /// The block or region holding the op, a block marked by the high bit.
     pub const HOLDER: usize = 1;
     pub const POSITION: usize = 2;
+    /// The byte offset of the text the op was parsed from, or of the op it
+    /// was built for.
+    pub const LOCATION: usize = 3;
     pub const OPERAND: usize = 0;
     pub const RESULT: usize = 1;
     pub const REGION: usize = 2;
@@ -130,7 +133,7 @@ impl Attrs {
     }
 }
 
-type Ops = Space<3, 3, Attrs>;
+type Ops = Space<4, 3, Attrs>;
 type Values = Space<3, 0>;
 type Regions = Space<3, 3>;
 type Blocks = Space<3, 2, Attrs>;
@@ -367,7 +370,7 @@ impl Census {
 
 #[derive(Clone, Copy)]
 pub(crate) struct OpRow<'a> {
-    chunk: &'a Chunk<3, 3, Attrs>,
+    chunk: &'a Chunk<4, 3, Attrs>,
     row: usize,
 }
 
@@ -424,6 +427,10 @@ pub(crate) struct Db {
     /// commit, in order. A commit of several batches replays one batch's
     /// replacements over the rows the others wrote.
     retargets: Vec<(u32, u32)>,
+    /// The location an op added now gets.
+    origin: u32,
+    /// The stamp each `builtin.refine` had when its obligation was proved.
+    pub proved_refines: HashMap<OpId, u32>,
 }
 
 /// Mark `chunk` as written since the last commit.
@@ -457,6 +464,8 @@ impl Db {
             dirty: Vec::new(),
             replaced_ops: HashMap::new(),
             retargets: Vec::new(),
+            origin: NONE,
+            proved_refines: HashMap::new(),
         }
     }
 
@@ -522,7 +531,7 @@ impl Db {
         self.parts.get_mut(part as usize).expect("a partition")
     }
 
-    fn mint_op(&mut self, cells: [u32; 3]) -> OpId {
+    fn mint_op(&mut self, cells: [u32; 4]) -> OpId {
         let index = match self.open_chunk(OPS, |index| self.ops.chunk(index).is_full()) {
             Some(index) => index,
             None => {
@@ -630,10 +639,46 @@ impl Db {
         self.ops.chunk(chunk_of(op.raw())).owner
     }
 
+    /// The ops named one of `names` under `root`, by id: a scan of the name
+    /// column of `root`'s partition and the module's, where whatever is under
+    /// an op of a partition of its own sits.
+    pub(crate) fn ops_named(&self, root: OpId, names: &[OpNameId]) -> Vec<OpId> {
+        let part = self.partition_of(root);
+        let parts = if part == 0 { &[0][..] } else { &[part, 0][..] };
+        let mut found = Vec::new();
+        for &part in parts {
+            let Some(held) = self.parts.get(part as usize) else {
+                continue;
+            };
+            for &index in &held.op_chunks {
+                let chunk = self.ops.chunk(index);
+                let named = chunk
+                    .col(op::NAME)
+                    .iter()
+                    .enumerate()
+                    .filter(|&(row, &name)| {
+                        names.contains(&OpNameId::new(name))
+                            && chunk.is_live(row)
+                            && chunk.cell(op::HOLDER, row) != NONE
+                    });
+                found.extend(named.map(|(row, _)| OpId::new(id_at(index, row))));
+            }
+        }
+        let under = |&op: &OpId| {
+            std::iter::successors(self.enclosing_op_of(op), |&holder| {
+                self.enclosing_op_of(holder)
+            })
+            .any(|holder| holder == root)
+        };
+        found.retain(under);
+        found.sort_unstable_by_key(|op| op.raw());
+        found
+    }
+
     // Row writers: each marks the chunk, stamps the row, logs it for the
     // partition's groupings and bumps the partition's edit count.
 
-    fn op_row(&mut self, id: OpId) -> (&mut Chunk<3, 3, Attrs>, usize) {
+    fn op_row(&mut self, id: OpId) -> (&mut Chunk<4, 3, Attrs>, usize) {
         let (index, row) = (chunk_of(id.raw()), row_of(id.raw()));
         let tick = self.tick;
         let chunk = touch!(self, ops, OPS, index);
@@ -740,7 +785,7 @@ impl Db {
 
     /// The chunk and row of a live op.
     #[inline]
-    fn op(&self, id: OpId) -> Option<(&Chunk<3, 3, Attrs>, usize)> {
+    fn op(&self, id: OpId) -> Option<(&Chunk<4, 3, Attrs>, usize)> {
         let chunk = self.ops.find(chunk_of(id.raw()))?;
         let row = row_of(id.raw());
         chunk.is_live(row).then_some((chunk, row))
@@ -770,6 +815,24 @@ impl Db {
 
     pub(crate) fn op_name(&self, id: OpId) -> OpNameId {
         self.op_cells(id).name()
+    }
+
+    pub(crate) fn op_location(&self, id: OpId) -> Option<u32> {
+        let (chunk, row) = self.op(id)?;
+        Some(chunk.cell(op::LOCATION, row)).filter(|&location| location != NONE)
+    }
+
+    /// Locate the ops added from now on at `location`; returns the location
+    /// they had.
+    pub(crate) fn set_origin(&mut self, location: Option<u32>) -> Option<u32> {
+        let previous = std::mem::replace(&mut self.origin, location.unwrap_or(NONE));
+        Some(previous).filter(|&previous| previous != NONE)
+    }
+
+    /// The stamp of `id`'s row: it moves whenever the op is written.
+    pub(crate) fn op_stamp(&self, id: OpId) -> u32 {
+        let (chunk, row) = self.op(id).expect("live operation");
+        chunk.stamp(row)
     }
 
     pub(crate) fn op_cells(&self, id: OpId) -> OpRow<'_> {
@@ -954,6 +1017,12 @@ impl Db {
             0 => self.edits,
             owner => edits(owner).wrapping_add(edits(0)),
         }
+    }
+
+    // Moves with every edit to the module's own partition: its symbols and
+    // type definitions.
+    pub(crate) fn module_version(&self) -> u32 {
+        self.parts.get(0).map_or(0, |part| part.edits)
     }
 
     fn bump(&mut self, part: u32) {
@@ -1333,7 +1402,7 @@ impl Db {
     // Edits.
 
     pub(crate) fn add_operation(&mut self, new: NewOp) -> OpId {
-        let id = self.mint_op([new.name.index() as u32, NONE, 0]);
+        let id = self.mint_op([new.name.index() as u32, NONE, 0, self.origin]);
         let part = self.mint.target;
         let operands: Vec<u32> = new.operands.iter().map(|value| value.number()).collect();
         let results: Vec<u32> = new.results.iter().map(|value| value.number()).collect();
@@ -2021,7 +2090,7 @@ impl Db {
         let maps: Vec<HashMap<u32, u32>> = batches.iter().map(Db::retarget_map).collect();
         let retargeted = maps.iter().any(|map| !map.is_empty());
         let unedited =
-            |batch: usize, base: &Chunk<3, 3, Attrs>, theirs: &Chunk<3, 3, Attrs>, row: usize| {
+            |batch: usize, base: &Chunk<4, 3, Attrs>, theirs: &Chunk<4, 3, Attrs>, row: usize| {
                 retargeted && only_retargeted(&maps[batch], base, theirs, row)
             };
         let mut ops = merge_space(
@@ -2306,8 +2375,8 @@ fn merge_space<const P: usize, const S: usize, X: Payload>(
 /// replaced.
 fn only_retargeted(
     map: &HashMap<u32, u32>,
-    base: &Chunk<3, 3, Attrs>,
-    theirs: &Chunk<3, 3, Attrs>,
+    base: &Chunk<4, 3, Attrs>,
+    theirs: &Chunk<4, 3, Attrs>,
     row: usize,
 ) -> bool {
     let same = |column: usize| base.cell(column, row) == theirs.cell(column, row);
@@ -2333,7 +2402,7 @@ fn only_retargeted(
 /// batch wrote: an op one task made or edited may name a value another task
 /// replaced.
 fn retarget_rows(
-    chunk: &mut Chunk<3, 3, Attrs>,
+    chunk: &mut Chunk<4, 3, Attrs>,
     writers: &Writers,
     maps: &[HashMap<u32, u32>],
     committed: u32,

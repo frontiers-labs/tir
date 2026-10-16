@@ -6,15 +6,16 @@ use super::references::{
 };
 use super::{
     Analyzer, EntityId, IntegerKind, NodeSemantics, QualType, RecordDefinition, RecordField,
-    Symbol, TypeKind, ValueCategory, align_to,
+    Symbol, TypeKind, ValueCategory,
 };
-use crate::ast::{AstKind, AstLeaf, CType, RecordKind};
+use crate::ast::{AstKind, AstLeaf, CType, RecordId};
 use crate::diagnostics::{
     CompleteObjectTypeRequired, ConflictingDeclaration, IntegerConstantRequired, Redefinition,
 };
 use crate::lang_options::StdVersion;
 use std::collections::HashMap;
-use tir::NodeId;
+use tir::builtin::NamedType;
+use tir::{NodeId, TypeArg};
 
 impl Analyzer<'_> {
     pub(super) fn new_entity(&mut self) -> EntityId {
@@ -66,34 +67,36 @@ impl Analyzer<'_> {
     }
 
     pub(super) fn record_declaration(&mut self, node: NodeId) {
-        let Some(AstLeaf::Record { id, kind, name }) = self.ast.get_leaf_data(node).cloned() else {
+        let Some(AstLeaf::Record {
+            id,
+            kind,
+            name,
+            defined,
+        }) = self.ast.get_leaf_data(node).cloned()
+        else {
             return;
         };
-        let name = name.unwrap_or_else(|| format!("__fcc_anon_struct.{}", id.number()));
         let index = if let Some(&index) = self.record_indices.get(&id) {
             index
         } else {
             let index = self.records.len();
+            let name = self.record_symbol(name.as_deref(), id);
             self.record_indices.insert(id, index);
             self.records.push(RecordDefinition {
                 id,
                 kind,
                 name,
                 fields: Vec::new(),
-                size: 0,
-                align: 1,
             });
             index
         };
 
-        let children = self.ast.children(node).collect::<Vec<_>>();
-        if children.is_empty() {
+        if !defined {
             return;
         }
+        let children = self.ast.children(node).collect::<Vec<_>>();
         let mut fields = Vec::with_capacity(children.len());
         let mut field_spans = HashMap::new();
-        let mut offset = 0;
-        let mut record_align = 1;
         for field in children {
             if self.ast.get_node(field).kind == AstKind::RecordDecl {
                 self.record_declaration(field);
@@ -111,25 +114,44 @@ impl Analyzer<'_> {
                 continue;
             }
             let ty = self.canonical_type(&ty);
-            let (size, align) = self.type_layout(ty).unwrap_or((0, 1));
-            let field_offset = match kind {
-                RecordKind::Struct => align_to(offset, align),
-                RecordKind::Union => 0,
-            };
-            fields.push(RecordField {
-                name,
-                ty,
-                offset: field_offset,
-            });
-            offset = match kind {
-                RecordKind::Struct => field_offset + size,
-                RecordKind::Union => offset.max(size),
-            };
-            record_align = record_align.max(align);
+            fields.push(RecordField { name, ty });
         }
-        self.records[index].size = align_to(offset, record_align);
-        self.records[index].align = record_align;
+        // A flexible array member takes no room of its own.
+        let layout_type = |ty| match self.types.kind(ty) {
+            TypeKind::Array(element, None) => {
+                let element = self.layout_type(*element)?;
+                let array = vec![TypeArg::Nat(0), TypeArg::Type(element)];
+                NamedType::get(self.layouts.context(), "array", array).ok()
+            }
+            _ => self.layout_type(ty),
+        };
+        // A record with a member the core cannot lay out stays incomplete.
+        let body = fields
+            .iter()
+            .map(|field| Some((field.name.as_str(), TypeArg::Type(layout_type(field.ty)?))))
+            .collect::<Option<Vec<_>>>();
+        if let Some(body) = body {
+            let name = self.records[index].name.clone();
+            self.layouts.define(&name, kind, &body);
+        }
         self.records[index].fields = fields;
+    }
+
+    // A record's `type.def` name: its tag where the IR can spell it and no
+    // earlier record took it, else `tag_<tag>` (or `anon`) and the record's
+    // number.
+    fn record_symbol(&self, tag: Option<&str>, id: RecordId) -> String {
+        if let Some(tag) = tag
+            && self.layouts.is_free_name(tag)
+            && !self.records.iter().any(|record| record.name == tag)
+        {
+            return tag.to_string();
+        }
+        let base = tag
+            .map(|tag| format!("tag_{}", tag.trim_start_matches('_')))
+            .filter(|base| self.layouts.is_free_name(base))
+            .unwrap_or_else(|| "anon".to_string());
+        format!("{base}.{}", id.number())
     }
 
     pub(super) fn declare_file_item(&mut self, node: NodeId) {

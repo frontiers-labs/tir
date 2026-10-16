@@ -128,7 +128,7 @@ impl Cfg {
     }
 
     pub fn int_type(&self, width: u32) -> TypeId {
-        crate::builtin::IntegerType::new(&self.context, width)
+        crate::builtin::IntegerType::new(&self.context, u64::from(width))
     }
 
     /// The edges leaving `node`, in a fixed order.

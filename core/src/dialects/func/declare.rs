@@ -13,14 +13,13 @@ operation! {
     DeclareOp {
         name: "declare",
         dialect: "func",
+        scheme: "() -> fn<_, _>",
         format: "custom",
         interfaces: [Symbol, Callable],
         attributes: A {
             sym_name: "Str",
         },
-        results: R {
-            result: "crate::builtin::FnType",
-        },
+        results: R { result },
     }
 }
 

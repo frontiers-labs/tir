@@ -150,6 +150,7 @@ enum CanonicalAttribute {
     String(String),
     Integer(i64),
     Unsigned(u64),
+    Wide(Vec<u64>),
     F32(u32),
     F64(u64),
     Bool(bool),
@@ -390,7 +391,7 @@ fn pdl_type(ty: &tir_pdl::Type) -> Result<CanonicalType, RefinementError> {
         }
         Type::State(Resource::FpEnv) => CanonicalType::State(StateResource::FpEnv),
         Type::State(Resource::Memory) => CanonicalType::State(StateResource::Memory),
-        Type::State(Resource::Named(_)) | Type::Integer(_) | Type::Named(_) => {
+        Type::State(Resource::Named(_)) | Type::Integer(_) | Type::Pointer(_) | Type::Named(_) => {
             return Err(RefinementError::UnsupportedForm);
         }
     })
@@ -1007,6 +1008,7 @@ fn canonical_attribute(
         AttributeValue::Str(value) => CanonicalAttribute::String(value.to_string()),
         AttributeValue::Int(value) => CanonicalAttribute::Integer(*value),
         AttributeValue::UInt(value) => CanonicalAttribute::Unsigned(*value),
+        AttributeValue::Wide(limbs) => CanonicalAttribute::Wide(limbs.to_vec()),
         AttributeValue::F32(value) => CanonicalAttribute::F32(value.to_bits()),
         AttributeValue::F64(value) => CanonicalAttribute::F64(value.to_bits()),
         AttributeValue::Bool(value) => CanonicalAttribute::Bool(*value),
@@ -1030,7 +1032,10 @@ fn canonical_attribute(
             CanonicalAttribute::Predicate(predicate.name().to_owned())
         }
         AttributeValue::Type(ty) => CanonicalAttribute::Type(canonical_type(context, *ty)?),
-        AttributeValue::Register(_) | AttributeValue::Value(_) | AttributeValue::Block(_) => {
+        AttributeValue::Register(_)
+        | AttributeValue::Value(_)
+        | AttributeValue::Block(_)
+        | AttributeValue::LayoutSpec(_) => {
             return Err(RefinementError::UnsupportedForm);
         }
     })
@@ -1040,8 +1045,7 @@ fn canonical_type(context: &Context, ty: crate::TypeId) -> Result<CanonicalType,
     if let Some(resource) = context.state_resource(ty) {
         return Ok(CanonicalType::State(resource));
     }
-    let data = context.get_type_data(ty);
-    let Some(float) = (data.as_ref() as &dyn std::any::Any).downcast_ref::<FloatType>() else {
+    let Some(float) = FloatType::view(context, ty) else {
         return Err(RefinementError::UnsupportedForm);
     };
     Ok(CanonicalType::Float {

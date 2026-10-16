@@ -258,19 +258,20 @@ pub struct Plan<L> {
     calls: Vec<Call>,
     /// The carrier constants its literal atoms test a reference against.
     literals: Vec<L>,
-    /// The operator the root atom binds, or `None` when the root binds no row.
+    /// The operator the root atom binds, or `None` when the root binds no row
+    /// or a template of no one bucket.
     root_op: Option<u64>,
 }
 
 /// What a parameter of the compiled query resolves to.
 #[derive(Clone, Debug)]
 enum ParamSpec<L> {
-    /// The labels in the `op` bucket that `template` matches at its arity, by
-    /// the table their rows live in.
+    /// The labels in the `op` bucket, or of any bucket for `None`, that
+    /// `template` matches at its arity, by the table their rows live in.
     Template {
         template: L,
         arity: usize,
-        op: u64,
+        op: Option<u64>,
     },
     Any {
         arity: usize,
@@ -362,7 +363,7 @@ impl<L: Label> Lower<L> {
                 let labels = self.param(ParamSpec::Template {
                     template: template.clone(),
                     arity: args.len(),
-                    op: template.op_key(),
+                    op: template.template_key(),
                 });
                 self.rows(labels, args, *class, *row, None)
             }
@@ -499,7 +500,7 @@ impl<L: Label> Plan<L> {
             .iter()
             .find(|atom| atom.class() == Some(query.root))
         {
-            Some(Atom::Node { template, .. }) => Some(template.op_key()),
+            Some(Atom::Node { template, .. }) => template.template_key(),
             _ => None,
         };
         let plan = rel::Plan::compile(rel::Query {
@@ -552,7 +553,8 @@ impl<L: Label> Plan<L> {
         }
     }
 
-    /// The operator the root atom binds, or `None` when the root binds no row.
+    /// The operator the root atom binds, or `None` when the root binds no row
+    /// or a template of no one bucket.
     pub(crate) fn root_op(&self) -> Option<u64> {
         self.root_op
     }
@@ -619,7 +621,7 @@ impl<L: Label> Plan<L> {
                     op,
                 } => {
                     let matches = |node: &L| template.matches_template(node);
-                    eg.labels_matching(Some(*op), *arity, matches, commuting, since, out)
+                    eg.labels_matching(*op, *arity, matches, commuting, since, out)
                 }
                 ParamSpec::Any { arity, accept } => {
                     eg.labels_matching(None, *arity, accept, commuting, since, out)
@@ -650,7 +652,8 @@ impl<L: Label> Plan<L> {
         };
         match &self.calls[id as usize] {
             Call::Read { kind, field } => {
-                let Some(value) = term(*kind, args[0]).and_then(|node| node.scalar(*field)) else {
+                let read = |node: &L| node.scalar(eg.names, *field);
+                let Some(value) = term(*kind, args[0]).and_then(read) else {
                     return false;
                 };
                 out[0] = value;
@@ -704,7 +707,7 @@ impl<L: Label> Host for Lookup<'_, L> {
     /// A template whose operator the graph has never met matches nothing.
     fn empty(&self, param: Param) -> bool {
         match &self.plan.params[param as usize] {
-            ParamSpec::Template { op, .. } => !self.eg.holds_op(*op),
+            ParamSpec::Template { op: Some(op), .. } => !self.eg.holds_op(*op),
             _ => false,
         }
     }

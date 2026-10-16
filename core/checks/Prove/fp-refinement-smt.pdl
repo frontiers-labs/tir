@@ -10,4 +10,6 @@ refinement contract-mul-add:
     satisfies_domain_and_effect_contract
   proof smt;
 
-// CHECK: contract-mul-add: unsupported: SMT proofs for refinements are not supported; use `proof contract` for checked admission
+// A contraction rounds once where the source rounds twice: as a value, the
+// fused result is no refinement of the source, and the solver shows it.
+// CHECK: contract-mul-add: disproven

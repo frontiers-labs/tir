@@ -26,7 +26,7 @@ fn addi_plan(template: SemNode) -> Plan<SemNode> {
 }
 
 fn konst(width: u32, value: u64) -> SemNode {
-    SemNode::constant(APInt::new(width, value), Prov::None)
+    SemNode::constant(APInt::new(u64::from(width), value), Prov::None)
 }
 
 // A graph whose labels are ordered through a context's names, and the
@@ -38,7 +38,7 @@ fn graph() -> (Context, Engine<SemNode>) {
 }
 
 fn ty(context: &Context, bits: u32) -> TypeId {
-    tir::builtin::IntegerType::new(context, bits)
+    tir::builtin::IntegerType::new(context, u64::from(bits))
 }
 
 fn op(name: &'static str, ty: TypeId, attrs: Vec<NamedAttribute>, args: Vec<Id>) -> SemNode {
@@ -50,7 +50,7 @@ fn op(name: &'static str, ty: TypeId, attrs: Vec<NamedAttribute>, args: Vec<Id>)
         payload: None,
         ty: Some(ty),
         children: args,
-        prov: Prov::Introduced(0),
+        prov: Prov::Introduced,
         carrier: None,
     }
 }

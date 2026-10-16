@@ -50,11 +50,8 @@ struct Recurrence {
 }
 
 fn width(context: &Context, value: ValueId) -> Option<u32> {
-    let ty = context.get_type_data(context.get_value(value).ty());
-    let width = (ty.as_ref() as &dyn std::any::Any)
-        .downcast_ref::<IntegerType>()?
-        .width();
-    (1..=64).contains(&width).then_some(width)
+    let width = IntegerType::view(context, context.get_value(value).ty())?.width();
+    (1..=64).contains(&width).then_some(width as u32)
 }
 
 fn mask(width: u32) -> u64 {

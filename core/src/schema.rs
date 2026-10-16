@@ -7,9 +7,11 @@ use std::fmt::Write;
 
 use linkme::distributed_slice;
 
+use crate::ty::{Kind, Param, TypeArg};
 use crate::{Context, TypeId};
 
-/// An operand or result: its name, type-constraint name, and whether it is a
+/// An operand or result: its name, its type in the op's scheme (`?` first
+/// for an optional one, `*` for a variadic segment), and whether it is a
 /// variadic segment.
 pub struct FieldSchema {
     pub name: &'static str,
@@ -34,6 +36,11 @@ pub struct OpSchema {
     pub results: &'static [FieldSchema],
     pub attributes: &'static [AttrSchema],
     pub interfaces: &'static [&'static str],
+    /// The signature scheme the operands and results are checked against;
+    /// see [`tir_symbolic::scheme`].
+    pub scheme: &'static str,
+    /// The op declares a `sem:`.
+    pub semantics: bool,
 }
 
 /// Link-time registry of every operation schema reachable in the final binary.
@@ -114,91 +121,63 @@ pub fn schema_json() -> String {
     out
 }
 
-/// Kind of a type-constructor parameter, as captured by `#[derive(TirType)]`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TypeParamKind {
-    U32,
-    U64,
-    I64,
-    Bool,
-    Type,
-}
-
-/// A named parameter of a type constructor.
-pub struct TypeParam {
-    pub name: &'static str,
-    pub kind: TypeParamKind,
-}
-
-/// A concrete argument passed to a type constructor through [`build_type`].
-#[derive(Debug, Clone, Copy)]
-pub enum TypeArg {
-    U32(u32),
-    U64(u64),
-    I64(i64),
-    Bool(bool),
-    Type(TypeId),
-}
-
-/// The declarative shape of one type, plus a builder that constructs it from
-/// arguments. Contributed by `#[derive(TirType)]`.
-pub struct TypeSchema {
-    pub dialect: &'static str,
-    pub name: &'static str,
-    pub params: &'static [TypeParam],
-    pub build: fn(&Context, &[TypeArg]) -> Result<TypeId, String>,
-}
-
-/// Link-time registry of every type schema reachable in the final binary.
-#[distributed_slice]
-pub static TYPE_SCHEMAS: [TypeSchema];
-
-/// Build a type by dialect-qualified name from structured arguments, without any
-/// textual form. Returns an error if no such type is registered or the
-/// arguments do not match.
+/// Build the type `dialect.name` from structured arguments, without any
+/// textual form. Returns an error if no such constructor is registered or the
+/// arguments do not fit it.
 pub fn build_type(
     context: &Context,
     dialect: &str,
     name: &str,
     args: &[TypeArg],
 ) -> Result<TypeId, String> {
-    let schema = TYPE_SCHEMAS
-        .iter()
-        .find(|s| s.dialect == dialect && s.name == name)
+    let ctor = context
+        .terms()
+        .ctor_named(dialect, name)
         .ok_or_else(|| format!("unknown type '{dialect}.{name}'"))?;
-    (schema.build)(context, args)
+    context.terms().try_intern(ctor, args.into())
 }
 
-fn param_kind_str(kind: TypeParamKind) -> &'static str {
-    match kind {
-        TypeParamKind::U32 => "u32",
-        TypeParamKind::U64 => "u64",
-        TypeParamKind::I64 => "i64",
-        TypeParamKind::Bool => "bool",
-        TypeParamKind::Type => "type",
+fn param_kind_str(param: Param) -> Option<&'static str> {
+    match param {
+        Param::One(Kind::Nat) | Param::Opt(Kind::Nat) => Some("u64"),
+        Param::One(Kind::Data | Kind::Ghost) | Param::Opt(Kind::Data | Kind::Ghost) => Some("type"),
+        _ => None,
     }
 }
 
-/// Serialize all registered type schemas as a JSON array.
+/// Serialize the constructors of the default dialects as a JSON array. A
+/// constructor with a parameter a binding cannot pass is left out.
 pub fn type_schema_json() -> String {
+    let context = Context::with_default_dialects();
     let mut out = String::from("[");
-    for (i, ty) in TYPE_SCHEMAS.iter().enumerate() {
-        if i > 0 {
+    let mut first = true;
+    for ctor in context.terms().ctors() {
+        let info = context.terms().ctor_info(ctor);
+        let Some(kinds) = info
+            .params
+            .iter()
+            .map(|(_, param)| param_kind_str(*param))
+            .collect::<Option<Vec<_>>>()
+        else {
+            continue;
+        };
+        if !first {
             out.push(',');
         }
+        first = false;
         out.push_str("{\"dialect\":");
-        escape(ty.dialect, &mut out);
+        escape(info.dialect, &mut out);
         out.push_str(",\"name\":");
-        escape(ty.name, &mut out);
+        escape(info.name, &mut out);
         out.push_str(",\"params\":[");
-        for (j, p) in ty.params.iter().enumerate() {
+        for (j, ((name, _), kind)) in info.params.iter().zip(kinds).enumerate() {
             if j > 0 {
                 out.push(',');
             }
             out.push_str("{\"name\":");
-            escape(p.name, &mut out);
+            escape(name, &mut out);
             out.push_str(",\"kind\":");
-            escape(param_kind_str(p.kind), &mut out);
+            escape(kind, &mut out);
             out.push('}');
         }
         out.push_str("]}");

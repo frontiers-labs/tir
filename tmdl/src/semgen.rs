@@ -95,7 +95,7 @@ pub(crate) fn eval_const(graph: &ValueGraph, node: NodeId) -> Option<(u64, u32)>
     };
     match graph.get_node(node) {
         SymKind::Constant => match graph.get_leaf_data(node)? {
-            SymPayload::Int(i) => Some((i.to_u64(), i.width())),
+            SymPayload::Int(i) => Some((i.to_u64(), u32::try_from(i.width()).ok()?)),
             _ => None,
         },
         SymKind::Add => arith(u64::wrapping_add),
@@ -138,7 +138,7 @@ pub(crate) fn emit<B: TermBackend>(graph: &ValueGraph, node: NodeId, b: &mut B) 
         },
         SymKind::Constant => match graph.get_leaf_data(node)? {
             SymPayload::Int(i) => {
-                let w = i.width();
+                let w = u32::try_from(i.width()).ok()?;
                 let mask = if w >= 64 { u64::MAX } else { (1u64 << w) - 1 };
                 Some(b.constant(w, i.to_u64() & mask, i.is_signed()))
             }

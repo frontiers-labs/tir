@@ -1,8 +1,8 @@
 // RUN: tir opt --pass func.func(restructure-nodes,promote-nodes,instcombine-nodes) --verify %s | filecheck %s
 
-#data_layout = {types = {i32 = {abi = 32, size = 32}, i64 = {abi = 64, size = 64}, p = {abi = 64, size = 64}}}
+#layout_spec = #layout.spec<!i32 = {size = 32, abi = 32}, !i64 = {size = 64, abi = 64}, !ptr.p = {size = 64, abi = 64}>
 
-module {data_layout = #data_layout} {
+module {layout.spec = #layout_spec} {
   %f = func.func @f(%first: !i32, %last: !i32, %a: !f64, %b: !f64) -> !i32 {
     %slot = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
     ptr.store %first, %slot

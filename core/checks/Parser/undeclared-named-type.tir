@@ -1,0 +1,11 @@
+// RUN: not tir opt %s 2>&1 | filecheck %s
+
+// `!Name` resolves to a `type.def` of the module, so a name none declares is
+// an error.
+
+module {
+  type.def !A = !struct<{b: !ptr.p<!Missing>}>
+  module_end
+}
+
+// CHECK: type `!Missing` has no type.def in this module

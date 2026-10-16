@@ -21,8 +21,8 @@ void matmul_dynamic_parameters(int *a, int *b, int *c, int n)
 // AFFINE: scf.for %[[J:[0-9]+]] =
 // AFFINE: scf.for %[[K:[0-9]+]] = {{.*}} (%[[INDEX:[0-9]+]] = %[[J]],
 // AFFINE: %[[ROW:[0-9]+]] = muli %[[I]], %[[N]] : !i32
-// AFFINE: addi %[[ROW]], %[[J]] : !i32
-// AFFINE: addi %[[ROW]], %[[K]] : !i32
+// AFFINE: addi %[[ROW]], %[[J]] {nsw = true} : !i32
+// AFFINE: addi %[[ROW]], %[[K]] {nsw = true} : !i32
 // AFFINE: extsi %[[INDEX]] : !i64
 // AFFINE: %[[NEXT:[0-9]+]] = addi %[[INDEX]], %[[N]] : !i32
 // AFFINE-NEXT: -> %[[NEXT]],

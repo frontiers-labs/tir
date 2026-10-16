@@ -90,14 +90,15 @@ fn evaluate(
 }
 
 macro_rules! arithmetic_op {
-    ($op:ident, $name:tt, [$($operand:ident),+], $kind:expr, $generic:expr, $rounded:expr, $arity:expr) => {
+    ($op:ident, $name:tt, [$($operand:ident),+], $scheme:tt, $kind:expr, $generic:expr, $rounded:expr, $arity:expr) => {
         operation! {
             $op {
                 name: $name,
                 dialect: "fp",
-                operands: O { $($operand: "crate::builtin::FloatType",)+ },
+                scheme: $scheme,
+                operands: O { $($operand),+ },
                 attributes: A { semantics: "FpSemantics" },
-                results: R { result: "FloatType" },
+                results: R { result },
                 interfaces: [ResourceEffects, HasResourceSemantics, crate::Speculatable, crate::interp::Interp],
                 sem: "(set result $value_semantics)",
                 state: "in_out",
@@ -116,9 +117,7 @@ macro_rules! arithmetic_op {
                     $generic,
                     $rounded,
                     $arity,
-                    float_width(
-                        &self.0.context,
-                        self.0.context.get_value(self.0.value_results()[0]).ty(),
+                    float_width(&self.0.context, self.0.context.get_value(self.0.value_results()[0]).ty(),
                     ).ok()?,
                     semantics.arithmetic().ok()?,
                 )
@@ -197,6 +196,7 @@ arithmetic_op!(
     AddOp,
     "add",
     [lhs, rhs],
+    "forall E: nat, M: nat. (float<E, M>, float<E, M>) -> float<E, M>",
     FloatOp::Add,
     tir::sem::SymKind::FAdd,
     tir::sem::SymKind::FAddRound,
@@ -206,6 +206,7 @@ arithmetic_op!(
     SubOp,
     "sub",
     [lhs, rhs],
+    "forall E: nat, M: nat. (float<E, M>, float<E, M>) -> float<E, M>",
     FloatOp::Sub,
     tir::sem::SymKind::FSub,
     tir::sem::SymKind::FSubRound,
@@ -215,6 +216,7 @@ arithmetic_op!(
     MulOp,
     "mul",
     [lhs, rhs],
+    "forall E: nat, M: nat. (float<E, M>, float<E, M>) -> float<E, M>",
     FloatOp::Mul,
     tir::sem::SymKind::FMul,
     tir::sem::SymKind::FMulRound,
@@ -224,6 +226,7 @@ arithmetic_op!(
     DivOp,
     "div",
     [lhs, rhs],
+    "forall E: nat, M: nat. (float<E, M>, float<E, M>) -> float<E, M>",
     FloatOp::Div,
     tir::sem::SymKind::FDiv,
     tir::sem::SymKind::FDivRound,
@@ -233,6 +236,7 @@ arithmetic_op!(
     FmaOp,
     "fma",
     [a, b, c],
+    "forall E: nat, M: nat. (float<E, M>, float<E, M>, float<E, M>) -> float<E, M>",
     FloatOp::Fma,
     tir::sem::SymKind::Fma,
     tir::sem::SymKind::FmaRound,
@@ -242,6 +246,7 @@ arithmetic_op!(
     SqrtOp,
     "sqrt",
     [input],
+    "forall E: nat, M: nat. (float<E, M>) -> float<E, M>",
     FloatOp::Sqrt,
     tir::sem::SymKind::Sqrt,
     tir::sem::SymKind::SqrtRound,
@@ -352,9 +357,7 @@ pub(crate) fn float_width(context: &Context, ty: TypeId) -> Result<FloatWidth, E
 }
 
 pub(super) fn float_type_parts(context: &Context, ty: TypeId) -> Result<(u32, u32), Error> {
-    let data = context.get_type_data(ty);
-    let float = (data.as_ref() as &dyn std::any::Any)
-        .downcast_ref::<FloatType>()
+    let float = FloatType::view(context, ty)
         .ok_or_else(|| Error::VerificationError("expected floating type".into()))?;
     Ok((float.exp_width(), float.mant_width()))
 }

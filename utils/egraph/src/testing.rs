@@ -112,14 +112,14 @@ impl Label for Term {
     }
 
     /// Field 0 is the literal's value.
-    fn scalar(&self, field: u32) -> Option<u64> {
+    fn scalar(&self, _names: &(), field: u32) -> Option<u64> {
         (field == 0)
             .then(|| self.op.parse::<i64>().ok())
             .flatten()
             .map(|v| v as u64)
     }
 
-    fn fill(template: &Self, fills: &[(u32, u64)]) -> Option<Self> {
+    fn fill(template: &Self, _names: &(), fills: &[(u32, u64)]) -> Option<Self> {
         match fills {
             [] => Some(template.clone()),
             [(0, value)] if template.width != 0 => Some(Term::num(template.width, *value)),

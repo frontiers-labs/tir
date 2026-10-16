@@ -2,7 +2,7 @@ use tir_adt::APFloat;
 
 use super::arithmetic::float_type_parts;
 use super::semantics::interp_error;
-use crate::builtin::FloatType;
+
 use crate::{Context, Error, Operation, operation};
 
 use crate as tir;
@@ -11,12 +11,11 @@ operation! {
     ConstantOp {
         name: "constant",
         dialect: "fp",
+        scheme: "() -> float<_, _>",
         attributes: A {
             bits: "UInt",
         },
-        results: R {
-            result: "FloatType",
-        },
+        results: R { result },
         interfaces: [crate::ConstantLike, crate::interp::Interp, crate::Speculatable],
         verifier: "true",
     }
@@ -28,7 +27,7 @@ impl crate::ConstantLike for ConstantOp {
     fn constant_value(&self) -> tir_adt::APInt {
         let context = self.handle().context.clone();
         let width = float_format(&context, self.result()).map_or(64, |(.., width)| width);
-        tir_adt::APInt::new(width, self.bits())
+        tir_adt::APInt::new(u64::from(width), self.bits())
     }
 }
 

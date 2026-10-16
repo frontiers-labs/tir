@@ -16,10 +16,10 @@ use crate as tir;
 
 operation! {
     CmpOp {
-        name: "cmp", dialect: "fp",
-        operands: O { lhs: "crate::builtin::FloatType", rhs: "crate::builtin::FloatType" },
+        name: "cmp", dialect: "fp", scheme: "forall E: nat, M: nat. (float<E, M>, float<E, M>) -> int<1>",
+        operands: O { lhs, rhs },
         attributes: A { predicate: "Predicate in FLOAT", semantics: "FpSemantics" },
-        results: R { result: "crate::Integer<1>" },
+        results: R { result },
         interfaces: [ResourceEffects, HasResourceSemantics, crate::Speculatable, crate::interp::Interp],
         sem: "(set result $cmp_expr)",
         state: "in_out", verifier: "true",
@@ -98,7 +98,7 @@ fn nan_test(
     signaling_only: bool,
 ) -> NodeId {
     let bits = super::resource::operation(graph, SymKind::Bitcast, &[input]);
-    graph.annotation_mut(bits).actual_type = Some(IntegerType::new(context, width));
+    graph.annotation_mut(bits).actual_type = Some(IntegerType::new(context, u64::from(width)));
     let (signless, infinity, quiet) = match width {
         32 => (0x7fff_ffff, 0x7f80_0000, 0x0040_0000),
         64 => (

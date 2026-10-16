@@ -4,11 +4,10 @@
 //! a vector-length (`vl`) operand bounding the active lanes, while a static one
 //! reads its lane count straight from the type.
 
-use std::any::Any;
-use std::sync::Arc;
+use tir_symbolic::term::{no_carrier, valid};
 
-use crate::ty::TypeConstraint;
-use crate::{Context, Error, IRFormatter, Type, TypeId, dialect, operation, parse::Span};
+use crate::ty::{Ctor, Kind, Param, Terms, TypeArg, TypeCtor, TypeSpelling};
+use crate::{Context, Error, TypeId, dialect, operation};
 
 use crate as tir;
 
@@ -29,18 +28,50 @@ dialect! {
     }
 }
 
+// `vector.v<N, T>`: `N` lanes of `T`.
+static VEC: Ctor = Ctor::new(TypeCtor {
+    dialect: "vector",
+    name: "v",
+    params: &[
+        ("length", Param::One(Kind::Nat)),
+        ("element", Param::One(Kind::Data)),
+    ],
+    kind: Kind::Data,
+    validate: valid,
+    carrier: no_carrier,
+});
+
+// The lane count of a dynamic vector: a number the target picks at run time,
+// as RVV's VLMAX or SVE's vector length. A dynamic vector is `vector.v<vl, T>`.
+static VL: Ctor = Ctor::new(TypeCtor {
+    dialect: "vector",
+    name: "vl",
+    params: &[],
+    kind: Kind::Nat,
+    validate: valid,
+    carrier: no_carrier,
+});
+
 /// A vector type, written `vec<8xi32>` (static) or `vec<i32>` (dynamic). A static
-/// vector fixes its lane count; a dynamic one leaves it unknown until run time.
+/// vector fixes its lane count; a dynamic one leaves it unknown until run time:
+/// its length is the term `vector.vl`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct VectorType {
-    element: Arc<dyn Type>,
+    element: TypeId,
     length: Option<u32>,
 }
 
 impl VectorType {
     #[allow(clippy::new_ret_no_self)]
     pub fn new(context: &Context, element: TypeId, length: Option<u32>) -> TypeId {
-        let element = context.get_type_data(element);
-        context.get_type_id(Arc::new(Self { element, length }))
+        let terms = context.terms();
+        let length = match length {
+            Some(length) => TypeArg::Nat(u64::from(length)),
+            None => TypeArg::Type(terms.intern(VL.id(terms), vec![]).expect("the lane count")),
+        };
+        terms
+            .intern(VEC.id(terms), vec![length, TypeArg::Type(element)])
+            .expect("a vector of a data type")
     }
 
     /// A statically sized vector of `length` lanes.
@@ -53,75 +84,67 @@ impl VectorType {
         Self::new(context, element, None)
     }
 
-    pub fn element(&self, context: &Context) -> TypeId {
-        context.get_type_id(self.element.clone())
+    pub fn view(terms: &impl AsRef<Terms>, ty: TypeId) -> Option<Self> {
+        let terms = terms.as_ref();
+        if !VEC.is(terms, ty) {
+            return None;
+        }
+        Some(Self {
+            element: terms.child(ty, 1)?,
+            length: terms
+                .nat(ty, 0)
+                .map(|length| u32::try_from(length).expect("a 32-bit lane count")),
+        })
+    }
+
+    pub fn element(&self) -> TypeId {
+        self.element
     }
 
     pub fn length(&self) -> Option<u32> {
         self.length
     }
-}
 
-impl TypeConstraint for VectorType {}
-
-impl Type for VectorType {
-    fn dialect(&self) -> &'static str {
-        "vector"
-    }
-
-    fn parse_key() -> &'static str {
-        "vec"
-    }
-
-    fn parse<'src>(
-        _mnemonic: &str,
-        parser: &mut tir::parse::text::Parser<'src>,
-        context: &Context,
-    ) -> Result<TypeId, (Span, Error)> {
-        use tir::parse::common::Cursor;
-        if !parser.parse_token("<") {
-            return Err((parser.span(), Error::ExpectedToken("<")));
+    pub fn spelling(context: &Context) -> TypeSpelling {
+        TypeSpelling {
+            ctor: VEC.id(context),
+            keys: &["vec"],
+            parse: |_, parser, context| {
+                use tir::parse::common::Cursor;
+                if !parser.parse_token("<") {
+                    return Err((parser.span(), Error::ExpectedToken("<")));
+                }
+                // A leading `N x` gives a static length; its absence means dynamic.
+                let length = if let Some(n) = parser.parse_number() {
+                    if n < 0 || !parser.parse_token("x") {
+                        return Err((parser.span(), Error::ExpectedToken("x")));
+                    }
+                    Some(n as u32)
+                } else {
+                    None
+                };
+                let name = parser
+                    .parse_ident()
+                    .ok_or_else(|| (parser.span(), Error::ExpectedType))?;
+                let element = context
+                    .parse_type_mnemonic("builtin", name)
+                    .map_err(|err| (parser.span(), err))?;
+                if !parser.parse_token(">") {
+                    return Err((parser.span(), Error::ExpectedToken(">")));
+                }
+                Ok(Self::new(context, element, length))
+            },
+            print: |spellings, ty, fmt| {
+                let vector = Self::view(spellings, ty).expect("a vector");
+                fmt.write("vector.vec<")?;
+                if let Some(length) = vector.length {
+                    fmt.write(format!("{length}x"))?;
+                }
+                spellings.print_body(vector.element, fmt)?;
+                fmt.write(">")
+            },
+            variadic_tail: false,
         }
-        // A leading `N x` gives a static length; its absence means dynamic.
-        let length = if let Some(n) = parser.parse_number() {
-            if n < 0 || !parser.parse_token("x") {
-                return Err((parser.span(), Error::ExpectedToken("x")));
-            }
-            Some(n as u32)
-        } else {
-            None
-        };
-        let name = parser
-            .parse_ident()
-            .ok_or_else(|| (parser.span(), Error::ExpectedType))?;
-        let element = context
-            .parse_type_mnemonic("builtin", name)
-            .map_err(|err| (parser.span(), err))?;
-        if !parser.parse_token(">") {
-            return Err((parser.span(), Error::ExpectedToken(">")));
-        }
-        Ok(Self::new(context, element, length))
-    }
-
-    fn print(&self, fmt: &mut IRFormatter<'_>) -> Result<(), std::fmt::Error> {
-        fmt.write("vec<")?;
-        if let Some(length) = self.length {
-            fmt.write(format!("{length}x"))?;
-        }
-        self.element.print(fmt)?;
-        fmt.write(">")
-    }
-
-    fn eq(&self, other: &dyn Type) -> bool {
-        let Some(other) = (other as &dyn Any).downcast_ref::<VectorType>() else {
-            return false;
-        };
-        self.length == other.length && Arc::ptr_eq(&self.element, &other.element)
-    }
-
-    fn hash(&self, state: &mut dyn std::hash::Hasher) {
-        state.write_usize(Arc::as_ptr(&self.element) as *const () as usize);
-        state.write_u32(self.length.unwrap_or(0));
     }
 }
 
@@ -131,15 +154,10 @@ macro_rules! vector_binop {
             $op {
                 name: $name,
                 dialect: "vector",
+                scheme: "forall N: nat, T. (vector.v<N, T>, vector.v<N, T>, index?) -> vector.v<N, T>",
                 verifier: "true",
-                operands: O {
-                    lhs: "crate::vector::VectorType",
-                    rhs: "crate::vector::VectorType",
-                    vl: "?crate::builtin::IndexType",
-                },
-                results: R {
-                    result: "crate::vector::VectorType",
-                },
+                operands: O { lhs, rhs, vl },
+                results: R { result },
                 sem: $sem,
             }
         }
@@ -198,12 +216,9 @@ operation! {
     VectorLenOp {
         name: "vector_len",
         dialect: "vector",
-        operands: O {
-            avl: "crate::builtin::IndexType",
-        },
-        results: R {
-            result: "crate::builtin::IndexType",
-        },
+        scheme: "(index) -> index",
+        operands: O { avl },
+        results: R { result },
         attributes: A {
             sew: "Int",
         },
@@ -218,9 +233,7 @@ operation! {
 fn vlen_node(op: &tir::OpHandle, g: &mut tir::sem::SemGraph) -> tir::NodeId {
     let context = op.context.clone();
     let ty = context.get_value(op.results()[0]).ty();
-    let length = (context.get_type_data(ty).as_ref() as &dyn Any)
-        .downcast_ref::<VectorType>()
-        .and_then(|t| t.length());
+    let length = VectorType::view(&context, ty).and_then(|t| t.length());
     let Some(length) = length.filter(|_| op.operands().len() <= 2) else {
         let n = g.add_node(tir::sem::SymKind::Symbol);
         g.set_leaf_data(n, tir::sem::SymPayload::SymbolId(2));
@@ -240,16 +253,9 @@ fn vlen_node(op: &tir::OpHandle, g: &mut tir::sem::SemGraph) -> tir::NodeId {
 fn sew_node(op: &tir::OpHandle, g: &mut tir::sem::SemGraph) -> tir::NodeId {
     let context = op.context.clone();
     let ty = context.get_value(op.results()[0]).ty();
-    let width = (context.get_type_data(ty).as_ref() as &dyn Any)
-        .downcast_ref::<VectorType>()
-        .map(|t| t.element(&context))
-        .map(|elem| {
-            (context.get_type_data(elem).as_ref() as &dyn Any)
-                .downcast_ref::<crate::builtin::IntegerType>()
-                .map(|i| i.width())
-                .unwrap_or(0)
-        })
-        .unwrap_or(0) as u64;
+    let width = VectorType::view(&context, ty)
+        .and_then(|t| crate::builtin::IntegerType::view(&context, t.element()))
+        .map_or(0, |i| i.width());
     let n = g.add_node(tir::sem::SymKind::Constant);
     g.set_leaf_data(n, tir::sem::SymPayload::Int(tir_adt::APInt::new(32, width)));
     n

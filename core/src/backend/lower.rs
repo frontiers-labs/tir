@@ -83,16 +83,14 @@ pub fn lower_function_and_return(
             None
         };
         for ((argument, ty), alignment) in function_arguments.zip(argument_alignments) {
-            let ty = context.get_type_data(ty);
-            let Some(tuple) = (ty.as_ref() as &dyn std::any::Any).downcast_ref::<TupleType>()
-            else {
-                let class = argument_class(context.get_type_id(ty))?;
+            let Some(tuple) = TupleType::view(context, ty) else {
+                let class = argument_class(ty)?;
                 retype(context, argument.id(), class);
                 arguments.push(AttributeValue::Value(argument.id()));
                 continue;
             };
 
-            let element_types = tuple.elements(context);
+            let element_types = tuple.elements();
             let mut elements = vec![None; element_types.len()];
             for user in context.users_of(argument.id()) {
                 let extract_instance = context.get_op(user);
@@ -146,11 +144,7 @@ pub fn lower_function_and_return(
                 if type_class(context, argument.ty()).is_some() {
                     continue;
                 }
-                let ty = context.get_type_data(argument.ty());
-                if (ty.as_ref() as &dyn std::any::Any)
-                    .downcast_ref::<TupleType>()
-                    .is_some()
-                {
+                if TupleType::view(context, argument.ty()).is_some() {
                     continue;
                 }
                 let class = argument_class(argument.ty())?;
@@ -182,11 +176,7 @@ pub fn lower_function_and_return(
         let values = match ret.returned_value() {
             None => Vec::new(),
             Some(value) => {
-                let ty = context.get_type_data(context.get_value(value).ty());
-                if (ty.as_ref() as &dyn std::any::Any)
-                    .downcast_ref::<TupleType>()
-                    .is_none()
-                {
+                if TupleType::view(context, context.get_value(value).ty()).is_none() {
                     vec![value]
                 } else {
                     let defining_op = context.get_value(value).defining_op().ok_or_else(|| {

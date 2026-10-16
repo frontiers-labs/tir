@@ -127,8 +127,10 @@ example.op<mode = 1, label = "fast", tag = $t>(x)
 Each attribute has the form `name = value`. Values are integer literals,
 strings, or attribute binders prefixed with `$`. Attributes are comma-separated
 and may have a trailing comma. A left-hand `$t` binds an attribute; a right-hand
-`$t` refers to that binding. The Rust generator does not currently lower
-attribute patterns or attribute emission.
+`$t` refers to that binding. For the Rust generator, a left-hand pattern
+matches an operation whose attributes are its literal ones plus any values for
+the bound ones, and a right-hand operation carries the bound values and the
+literals it names.
 
 ### Dependencies and structured control
 
@@ -183,6 +185,7 @@ Common semantic forms include:
 | Bit concatenation | `#concat` | Two bit vectors joined into one. |
 | Conditional values | `#if`, `#switch` | A predicate followed by alternatives. |
 | Carried values | `#theta`, `#loop`, `#port` | Loop values and references to them. |
+| Poison | `#poison`, `#freeze` | `#poison(c, x)` is `x`, or poison where `c` holds; `#freeze(x)` is `x`, or an arbitrary value where `x` is poison. |
 
 Floating-point operators such as `#fadd`, `#fmul`, and `#fadd_round` also belong
 to the PDL semantic vocabulary. Their formats and rounding behavior are part
@@ -215,6 +218,7 @@ The language accepts the following type forms:
 | `state<memory>` | A memory state dependency. |
 | `state<fp.env>` | A floating-point environment state dependency. |
 | `state<name>` or `state<name.field>` | A named resource, subject to consumer support. |
+| `ptr<W>` | A pointer; `W` binds the pointer width the data layout gives. |
 | A named type | A consumer-defined name or a declared type group. |
 
 `int<...>` accepts a literal width, a name, or `_`, not a width expression such
@@ -229,8 +233,10 @@ rule semantic-mul-one: #mul(x: int<W>, 1) : int<W> => x;
 ```
 
 The result annotation constrains the operation result, while `x: int<W>`
-constrains the operand. The Rust generator currently accepts named integer
-width binders, but not operation result type annotations. For a concrete width
+constrains the operand. The Rust generator accepts named integer width
+binders. On a left-hand side it does not accept result type annotations; a
+nested right-hand operation must carry one, `int<64>` or `int<W>`, since no
+matched class gives it a type. For a concrete width
 in an instcombine rule, a named width with `where W == 32` avoids the current
 lowering limitation on `int<32>` binders.
 
@@ -353,14 +359,23 @@ functions in a PDL file. A consumer determines which functions it supports.
 | `ctz(c)` | Number of trailing zero bits. For zero, the constant's width. | Instcombine Rust generation. |
 | `clz(c)` | Number of leading zero bits within the constant's width. For zero, that width. | Instcombine Rust generation. |
 | `ones(W)` | A mask with `W` low bits set. | Semantic axioms and their width expressions. |
+| `offsetof($t, $f)` | The offset in bits of field `$f` of type `$t`, both attribute binders, under the layout in scope. | Instcombine Rust generation (`erase-layout`). |
+| `sizeof($t)` | The size in bits of type `$t`, an attribute binder, under the layout in scope. | Instcombine Rust generation (`erase-layout`). |
 
+An attribute binder reads as `$name` in an expression. A layout query the
+host cannot answer, for a type with no layout in scope, fails the match.
 The bit-count functions take one constant binder directly. Expressions such
 as `popcount(c + 1)` do not preserve a binder width and are rejected by the
 Rust generator.
 
 Semantic axiom guards support width comparisons with `<` and `==`. They do not
 support the whole generated-rule expression language. Comma-separated guards
-express conjunction in both consumers.
+express conjunction in both consumers. The widths an axiom computes with are
+names, literals, `a + b`, `a - b` and `ones(e)`.
+
+`NATIVE` is a width name every rule may read without binding it: the native
+integer width of the target the rules are for. The limb rules of
+`core/defs/legalize.pdl` fire only `where NATIVE < W`.
 
 ## Root references
 
@@ -385,6 +400,15 @@ Parsing a clause does not perform a proof.
 | `proof definitional` | A law supplied by the modeled algebra, such as a state law outside the scalar solver's model. |
 | `proof contract` | A directional refinement checked against an explicit contract. Not valid for an equality rule. |
 
+Every solver proof is a refinement proof. Each value of the proof carries a
+poison bit, and the obligation is that wherever the left side is not poison,
+the right side is not poison and equals it. The right side may replace poison
+by any value; it may not introduce poison or undefined behavior where the left
+side has none. A select (`#if`) is poison where its condition or the arm it
+takes is, as in Alive2; every other operator is poison where an operand is.
+An arbitrary value on the left side (a `#freeze` of poison) is read as one the
+solver may choose, so such a rule can fail to prove although it holds.
+
 Floating-point rules default to `smt`. Other rules naming concrete dialect
 operations default to `trusted`. Rules using only the semantic vocabulary
 default to `smt`. Floating-point detection includes floating-point types,
@@ -393,7 +417,9 @@ operations, and floating-point environment state.
 The Rust generator does not prove rules. In particular, it rejects
 floating-point equalities that require SMT proof because it has no checked
 proof binding. An explicit trusted declaration is an assertion of correctness,
-not a substitute for establishing that correctness.
+not a substitute for establishing that correctness: instcombine applies a rule
+stated `proof trusted` only when its pipeline enables trusted rules
+(`instcombine-nodes<trusted>`), and the proof tool reports it admitted.
 
 The proof tool distinguishes proven, admitted, disproven, and unsupported
 obligations. A proof at one integer width is not a proof for every width.
@@ -417,6 +443,13 @@ refinement contract-mul-add:
 Fusing a multiplication and addition changes rounding. The contract determines
 whether that directional change is permitted. It does not license merging both
 forms into an unconditional equivalence class.
+
+A refinement with `proof smt` is proved by the solver as described under
+[proof modes](#proof-modes):
+
+```pdl
+refinement drop-poison: #poison(c: int<1>, x: int<8>) : int<8> ~> x proof smt;
+```
 
 The declaration form is:
 
@@ -480,16 +513,15 @@ be used by the intended engine.
 | Consumer | Supported role | Main boundaries |
 | --- | --- | --- |
 | PDL frontend | Parse declarations and check names, semantic operator arities, and structural restrictions. | Does not prove equalities or establish that dialect operations exist. |
-| Instcombine Rust generator | Forward equality rules with relational matching and typed IR construction. | Known concrete operations; at most one new RHS operation; no attributes, type groups, refinements, or bidirectional generation. |
+| Instcombine Rust generator | Forward equality rules with relational matching and typed IR construction. It also builds `core/defs/layout.pdl` for `erase-layout`. | Known concrete operations; no type groups, refinements, or bidirectional generation. |
 | Semantic axiom loader | Semantic expressions for selection and proof, including nested RHS terms, explicit widths, and `root`. | Its scalar expression and guard language is narrower; concrete dialect terms require an explicitly supported semantic binding. |
 | Refinement consumer | Contract-governed directional candidates. | Separate admission and application; never automatic equality saturation. |
 
-For the Rust generator, a RHS is a bound value, `const<W>(...)`, or one
-supported concrete operation over bound values and constant constructors.
-The new operation inherits the matched root's result type. It cannot emit
-nested operations, explicit RHS result types, attributes, or dependency
-operands. A matched operation need not have an emitter if the rule only
-returns an existing value.
+For the Rust generator, a RHS is a bound value, `const<W>(...)`, or a
+supported concrete operation over bound values, constants and nested
+operations, with attributes and dependency operands. The outermost new
+operation inherits the matched root's result type; a nested one declares its
+own. The shared rewrite driver writes every operation a rule introduces.
 
 Integer binder lowering currently uses `int<W>`. Concrete and wildcard
 integer binder annotations are accepted by the frontend but do not lower
@@ -523,8 +555,8 @@ subset and emits Rust; it is the default mode. `tokens` only lexes the input.
 Without `-o`, output goes to standard output. Errors include source locations
 and produce a failing exit status.
 
-Generated Rust expects the host ruleset's types, operation mappings, and
-emitters. It is not a standalone Rust program. Compiling a separate file also
+Generated Rust expects the host ruleset's types and operation mappings. It
+is not a standalone Rust program. Compiling a separate file also
 does not register its rules with an optimization pass.
 
 The proof command checks supported obligations at a selected width:
@@ -533,8 +565,12 @@ The proof command checks supported obligations at a selected width:
 cargo run -p tir-tools -- prove rules.pdl --width 32
 ```
 
-Its default width is 8. `--allow-admitted` permits admitted obligations in the
-command's success status; admission is distinct from solver proof.
+Its default width is 8. Every width name takes that width, then each guard
+that bounds a name alone is made true in turn: `A == e` sets `A`, `e < A`
+raises `A` to `e` plus the width, and `A < e` lowers `A` to `e - 1`. A limb
+rule `where NATIVE < W` is proven with `NATIVE` at the width and `W` at twice
+that. `--allow-admitted` permits admitted obligations in the command's
+success status; admission is distinct from solver proof.
 
 Common diagnostics have the following meanings:
 

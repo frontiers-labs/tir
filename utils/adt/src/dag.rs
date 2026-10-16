@@ -21,6 +21,7 @@ impl NodeId {
 
 const NO_SLOT: u32 = u32::MAX;
 
+#[derive(Clone)]
 pub struct Dag<N, L, A = ()> {
     nodes: Vec<N>,
     /// Children of node `n` are `edges[edge_bounds[n]..edge_bounds[n + 1]]`.

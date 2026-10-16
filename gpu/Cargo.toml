@@ -10,6 +10,7 @@ doctest = false
 
 [dependencies]
 tir.workspace = true
+tir-symbolic.workspace = true
 
 [build-dependencies]
 tmdl.workspace = true

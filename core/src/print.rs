@@ -7,7 +7,7 @@
 //! itself carrying nothing but references.
 
 use crate::attributes::AttributeValue;
-use crate::{Context, DATA_LAYOUT, IRFormatter, OpId, Operation, TARGET_ENV};
+use crate::{Context, IRFormatter, LAYOUT_SPEC, OpId, Operation, TARGET_ENV};
 
 /// Print `op` and the alias definitions of the metadata specs it carries.
 pub fn print_ir(
@@ -39,12 +39,16 @@ fn collect_aliases(context: &Context, op: OpId, aliases: &mut Vec<(String, Attri
     let instance = context.get_op(op);
     for attribute in instance.attributes() {
         let name = context.resolve(attribute.name);
-        let aliased = matches!(name.as_str(), DATA_LAYOUT | TARGET_ENV)
-            && matches!(attribute.value, AttributeValue::Dict(_));
+        let aliased = matches!(name.as_str(), LAYOUT_SPEC | TARGET_ENV)
+            && matches!(
+                attribute.value,
+                AttributeValue::Dict(_) | AttributeValue::LayoutSpec(_)
+            );
         if !aliased || aliases.iter().any(|(_, value)| *value == attribute.value) {
             continue;
         }
-        let name = unique_name(&name, aliases);
+        // An alias is one identifier: `layout.spec` is written `#layout_spec`.
+        let name = unique_name(&name.replace('.', "_"), aliases);
         aliases.push((name, attribute.value.clone()));
     }
 

@@ -60,15 +60,19 @@ fn global_and_function_cannot_share_a_name() {
 
 #[test]
 fn emits_struct_definition_and_type() {
-    // A nested record is what still names a struct *type* in the IR: every
-    // pointer is spelled opaquely, so only a field of struct type keeps the
-    // `!cir.struct` spelling.
+    // Every record is a type definition, and a field of record type names it.
     let ir = compile_ir(
         "struct Pair { char tag; int value; }; struct Boxed { struct Pair pair; }; int main(void) { struct Boxed boxed; return 0; }",
     );
 
-    assert!(ir.contains("cir.define_struct"), "{ir}");
-    assert!(ir.contains("!cir.struct<\"Pair\">"), "{ir}");
+    assert!(
+        ir.contains("type.def !Pair = !struct<{tag: !i8, value: !i32}>"),
+        "{ir}"
+    );
+    assert!(
+        ir.contains("type.def !Boxed = !struct<{pair: !Pair}>"),
+        "{ir}"
+    );
 }
 
 #[test]
@@ -77,7 +81,7 @@ fn emits_member_address_and_scalar_load() {
         "struct Pair { char tag; int value; }; int read(void) { struct Pair pair; return pair.value; }",
     );
 
-    assert!(ir.contains("cir.get_member"), "{ir}");
+    assert!(ir.contains("ptr.field"), "{ir}");
     assert!(ir.contains("ptr.load"), "{ir}");
 }
 
@@ -87,7 +91,7 @@ fn emits_scalar_member_store() {
         "struct Pair { int value; }; int write(void) { struct Pair pair; pair.value = 7; return pair.value; }",
     );
 
-    assert!(ir.matches("cir.get_member").count() >= 2, "{ir}");
+    assert!(ir.matches("ptr.field").count() >= 2, "{ir}");
     assert!(ir.contains("ptr.store"), "{ir}");
 }
 
@@ -97,5 +101,5 @@ fn emits_whole_struct_copy() {
         "struct Pair { int value; }; int copy(void) { struct Pair source; struct Pair destination; destination = source; return 0; }",
     );
 
-    assert!(ir.contains("cir.copy_struct"), "{ir}");
+    assert!(ir.contains("ptr.copy"), "{ir}");
 }

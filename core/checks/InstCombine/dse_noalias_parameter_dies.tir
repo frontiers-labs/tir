@@ -6,9 +6,9 @@
 // the entry state. The first write is overwritten by the third with nothing
 // observing it in between, and the exit joins the two chains.
 
-#data_layout = {types = {i32 = {abi = 32, size = 32}, i64 = {abi = 64, size = 64}, p = {abi = 64, size = 64}}}
+#layout_spec = #layout.spec<!i32 = {size = 32, abi = 32}, !i64 = {size = 64, abi = 64}, !ptr.p = {size = 64, abi = 64}>
 
-module {data_layout = #data_layout} {
+module {layout.spec = #layout_spec} {
   %fn_f = func.func @f(%0: !ptr.p<!i32>, %1: !ptr.p<!i32>, %2: !i32, %3: !i32) noalias [0, 1] {
     ptr.store %2, %0
     ptr.store %2, %1

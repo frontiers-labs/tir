@@ -1,0 +1,13 @@
+// RUN: not tir opt --verify %s 2>&1 | filecheck %s
+
+// Types belong to the module: a function cannot define one.
+
+module {
+  %fn_f = func.func @f() {
+    type.def !Node = !struct<{value: !i32}>
+    func.return
+  }
+  module_end
+}
+
+// CHECK: type definition `!Node` inside function `@f`; move it to module scope

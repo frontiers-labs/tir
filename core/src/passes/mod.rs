@@ -3,6 +3,7 @@
 pub mod affine;
 pub mod dce;
 pub mod destructure;
+pub mod erase_layout;
 pub mod inline;
 pub mod instcombine;
 pub mod lower_intrinsics;
@@ -20,6 +21,7 @@ pub use destructure::{
     CfgEdges, DestructurePass, Destructured, Edges, GateBlocks, LoopBlocks, Test, recover_cfg,
     recover_structured,
 };
+pub use erase_layout::EraseLayoutPass;
 pub use inline::{InlineBudget, InlinePass};
 pub use instcombine::InstCombineNodesPass;
 pub use lower_intrinsics::LowerIntrinsicsPass;

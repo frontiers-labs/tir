@@ -1,0 +1,17 @@
+// RUN: tir mc --march=x86_64 --stage=isel %s | filecheck %s
+
+// A freeze is a value: selection reads it as its operand's register, which
+// never holds poison.
+
+module {
+  %fn_f = func.func @f(%0: !i32, %1: !i32) -> !i32 {
+    %2 = addi %0, %1 {nsw = true} : !i32
+    %3 = freeze %2 : !i32
+    func.return %3
+  }
+  module_end
+}
+
+// CHECK: asm.symbol {name = "f"
+// CHECK: x86_64.add32 {dst = [[SUM:%[0-9]+]]
+// CHECK-NEXT: asm.vret [[SUM]]

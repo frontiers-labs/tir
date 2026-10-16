@@ -100,7 +100,10 @@ pub fn gamma_cases_attribute(cases: &[u64]) -> Option<AttributeValue> {
 }
 
 fn predicate_width(context: &Context, predicate: ValueId) -> u32 {
-    crate::sem::egraph::type_width(context, context.get_value(predicate).ty()).unwrap_or(64)
+    context
+        .terms()
+        .bit_width(context.get_value(predicate).ty())
+        .map_or(64, |width| width as u32)
 }
 
 /// `value` truncated to `width` bits.

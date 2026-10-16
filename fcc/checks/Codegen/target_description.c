@@ -7,13 +7,13 @@
 
 int id(int value) { return value; }
 
-// CHECK: #data_layout = {cache_line = 64, endianness = "little", stack_alignment = 128
-// CHECK-SAME: p = {abi = 64, size = 64}
+// CHECK: #layout_spec = #layout.spec<endianness = "little", stack_align = 128, cache_line = 64
+// CHECK-SAME: !ptr.p = {size = 64, abi = 64}
 // CHECK: #target_env = {arch = "riscv64"
-// CHECK: module {data_layout = #data_layout, target_env = #target_env} {
+// CHECK: module {layout.spec = #layout_spec, target_env = #target_env} {
 
 // ARM64: #target_env = {arch = "arm64"
-// ARM64: module {data_layout = #data_layout, target_env = #target_env} {
+// ARM64: module {layout.spec = #layout_spec, target_env = #target_env} {
 
 // The environment names the extensions the ISA string enabled, and only those.
 // FEATURES: #target_env = {arch = "riscv64", features = [

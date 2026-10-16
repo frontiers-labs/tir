@@ -1,8 +1,6 @@
-use std::any::Any;
-use std::sync::Arc;
-
 use tir::parse::Span;
-use tir::{Context, Error, IRFormatter, Type, TypeConstraint, TypeId};
+use tir::{Context, Ctor, Error, Kind, Param, Terms, TypeArg, TypeCtor, TypeId, TypeSpelling};
+use tir_symbolic::term::{no_carrier, valid};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StorageClass {
@@ -57,161 +55,173 @@ impl StorageClass {
     }
 }
 
+static POINTER: Ctor = Ctor::new(TypeCtor {
+    dialect: "spirv",
+    name: "ptr",
+    params: &[
+        ("pointee", Param::One(Kind::Data)),
+        ("storage_class", Param::One(Kind::Sym)),
+    ],
+    kind: Kind::Data,
+    validate: valid,
+    carrier: no_carrier,
+});
+
+/// A pointer into one storage class, written `!spirv.ptr<!pointee, Class>`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PointerType {
-    pointee: Arc<dyn Type>,
+    pointee: TypeId,
     storage_class: StorageClass,
 }
 
 impl PointerType {
     #[allow(clippy::new_ret_no_self)]
     pub fn new(context: &Context, pointee: TypeId, storage_class: StorageClass) -> TypeId {
-        context.get_type_id(Arc::new(Self {
-            pointee: context.get_type_data(pointee),
-            storage_class,
-        }))
+        context
+            .terms()
+            .intern(
+                POINTER.id(context),
+                vec![
+                    TypeArg::Type(pointee),
+                    TypeArg::Sym(context.terms().name(storage_class.name())),
+                ],
+            )
+            .expect("a pointer to a data type")
     }
 
-    pub fn pointee(&self, context: &Context) -> TypeId {
-        context.get_type_id(self.pointee.clone())
+    pub fn view(terms: &impl AsRef<Terms>, ty: TypeId) -> Option<Self> {
+        let terms = terms.as_ref();
+        if !POINTER.is(terms, ty) {
+            return None;
+        }
+        let Some(TypeArg::Sym(class)) = terms.arg(ty, 1) else {
+            return None;
+        };
+        Some(Self {
+            pointee: terms.child(ty, 0)?,
+            storage_class: StorageClass::parse(&terms.name_text(class))?,
+        })
+    }
+
+    pub fn pointee(&self) -> TypeId {
+        self.pointee
     }
 
     pub fn storage_class(&self) -> StorageClass {
         self.storage_class
     }
-}
 
-impl TypeConstraint for PointerType {}
-
-impl Type for PointerType {
-    fn dialect(&self) -> &'static str {
-        "spirv"
-    }
-
-    fn parse_key() -> &'static str {
-        "ptr"
-    }
-
-    fn parse<'src>(
-        _mnemonic: &str,
-        parser: &mut tir::parse::text::Parser<'src>,
-        context: &Context,
-    ) -> Result<TypeId, (Span, Error)> {
-        use tir::parse::common::Cursor;
-        expect(parser, "<")?;
-        let pointee = parser
-            .parse_type(context)?
-            .ok_or_else(|| (parser.span(), Error::ExpectedType))?;
-        expect(parser, ",")?;
-        let storage_name = parser
-            .parse_ident()
-            .ok_or_else(|| (parser.span(), Error::ExpectedToken("storage class")))?;
-        let storage_class = StorageClass::parse(storage_name)
-            .ok_or_else(|| (parser.span(), Error::ExpectedToken("storage class")))?;
-        expect(parser, ">")?;
-        Ok(Self::new(context, pointee, storage_class))
-    }
-
-    fn print(&self, fmt: &mut IRFormatter<'_>) -> Result<(), std::fmt::Error> {
-        fmt.write("ptr<")?;
-        print_nested_type(fmt, self.pointee.as_ref())?;
-        fmt.write(format!(", {}>", self.storage_class.name()))
-    }
-
-    fn eq(&self, other: &dyn Type) -> bool {
-        let Some(other) = (other as &dyn Any).downcast_ref::<Self>() else {
-            return false;
-        };
-        self.storage_class == other.storage_class && Arc::ptr_eq(&self.pointee, &other.pointee)
-    }
-
-    fn hash(&self, state: &mut dyn std::hash::Hasher) {
-        state.write_usize(Arc::as_ptr(&self.pointee) as *const () as usize);
-        state.write_u32(self.storage_class as u32);
+    pub fn spelling(context: &Context) -> TypeSpelling {
+        TypeSpelling {
+            ctor: POINTER.id(context),
+            keys: &["ptr"],
+            parse: |_, parser, context| {
+                use tir::parse::common::Cursor;
+                expect(parser, "<")?;
+                let pointee = parser
+                    .parse_type(context)?
+                    .ok_or_else(|| (parser.span(), Error::ExpectedType))?;
+                expect(parser, ",")?;
+                let storage_name = parser
+                    .parse_ident()
+                    .ok_or_else(|| (parser.span(), Error::ExpectedToken("storage class")))?;
+                let storage_class = StorageClass::parse(storage_name)
+                    .ok_or_else(|| (parser.span(), Error::ExpectedToken("storage class")))?;
+                expect(parser, ">")?;
+                Ok(Self::new(context, pointee, storage_class))
+            },
+            print: |spellings, ty, fmt| {
+                let pointer = Self::view(spellings, ty).expect("a SPIR-V pointer");
+                fmt.write("spirv.ptr<")?;
+                spellings.print(pointer.pointee, fmt)?;
+                fmt.write(format!(", {}>", pointer.storage_class.name()))
+            },
+            variadic_tail: false,
+        }
     }
 }
 
+static RUNTIME_ARRAY: Ctor = Ctor::new(TypeCtor {
+    dialect: "spirv",
+    name: "rtarray",
+    params: &[
+        ("element", Param::One(Kind::Data)),
+        ("stride", Param::One(Kind::Nat)),
+    ],
+    kind: Kind::Data,
+    validate: valid,
+    carrier: no_carrier,
+});
+
+/// An array of unknown length, written `!spirv.rtarray<!element, stride=N>`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RuntimeArrayType {
-    element: Arc<dyn Type>,
+    element: TypeId,
     stride: u32,
 }
 
 impl RuntimeArrayType {
     #[allow(clippy::new_ret_no_self)]
     pub fn new(context: &Context, element: TypeId, stride: u32) -> TypeId {
-        context.get_type_id(Arc::new(Self {
-            element: context.get_type_data(element),
-            stride,
-        }))
+        context
+            .terms()
+            .intern(
+                RUNTIME_ARRAY.id(context),
+                vec![TypeArg::Type(element), TypeArg::Nat(u64::from(stride))],
+            )
+            .expect("an array of a data type")
     }
 
-    pub fn element(&self, context: &Context) -> TypeId {
-        context.get_type_id(self.element.clone())
+    pub fn view(terms: &impl AsRef<Terms>, ty: TypeId) -> Option<Self> {
+        let terms = terms.as_ref();
+        if !RUNTIME_ARRAY.is(terms, ty) {
+            return None;
+        }
+        Some(Self {
+            element: terms.child(ty, 0)?,
+            stride: u32::try_from(terms.nat(ty, 1)?).ok()?,
+        })
+    }
+
+    pub fn element(&self) -> TypeId {
+        self.element
     }
 
     pub fn stride(&self) -> u32 {
         self.stride
     }
-}
 
-impl TypeConstraint for RuntimeArrayType {}
-
-impl Type for RuntimeArrayType {
-    fn dialect(&self) -> &'static str {
-        "spirv"
-    }
-
-    fn parse_key() -> &'static str {
-        "rtarray"
-    }
-
-    fn parse<'src>(
-        _mnemonic: &str,
-        parser: &mut tir::parse::text::Parser<'src>,
-        context: &Context,
-    ) -> Result<TypeId, (Span, Error)> {
-        use tir::parse::common::Cursor;
-        expect(parser, "<")?;
-        let element = parser
-            .parse_type(context)?
-            .ok_or_else(|| (parser.span(), Error::ExpectedType))?;
-        expect(parser, ",")?;
-        if parser.parse_ident() != Some("stride") {
-            return Err((parser.span(), Error::ExpectedToken("stride")));
+    pub fn spelling(context: &Context) -> TypeSpelling {
+        TypeSpelling {
+            ctor: RUNTIME_ARRAY.id(context),
+            keys: &["rtarray"],
+            parse: |_, parser, context| {
+                use tir::parse::common::Cursor;
+                expect(parser, "<")?;
+                let element = parser
+                    .parse_type(context)?
+                    .ok_or_else(|| (parser.span(), Error::ExpectedType))?;
+                expect(parser, ",")?;
+                if parser.parse_ident() != Some("stride") {
+                    return Err((parser.span(), Error::ExpectedToken("stride")));
+                }
+                expect(parser, "=")?;
+                let stride = parser
+                    .parse_number()
+                    .and_then(|value| u32::try_from(value).ok())
+                    .ok_or_else(|| (parser.span(), Error::ExpectedToken("array stride")))?;
+                expect(parser, ">")?;
+                Ok(Self::new(context, element, stride))
+            },
+            print: |spellings, ty, fmt| {
+                let array = Self::view(spellings, ty).expect("a SPIR-V runtime array");
+                fmt.write("spirv.rtarray<")?;
+                spellings.print(array.element, fmt)?;
+                fmt.write(format!(", stride={}>", array.stride))
+            },
+            variadic_tail: false,
         }
-        expect(parser, "=")?;
-        let stride = parser
-            .parse_number()
-            .and_then(|value| u32::try_from(value).ok())
-            .ok_or_else(|| (parser.span(), Error::ExpectedToken("array stride")))?;
-        expect(parser, ">")?;
-        Ok(Self::new(context, element, stride))
     }
-
-    fn print(&self, fmt: &mut IRFormatter<'_>) -> Result<(), std::fmt::Error> {
-        fmt.write("rtarray<")?;
-        print_nested_type(fmt, self.element.as_ref())?;
-        fmt.write(format!(", stride={}>", self.stride))
-    }
-
-    fn eq(&self, other: &dyn Type) -> bool {
-        let Some(other) = (other as &dyn Any).downcast_ref::<Self>() else {
-            return false;
-        };
-        self.stride == other.stride && Arc::ptr_eq(&self.element, &other.element)
-    }
-
-    fn hash(&self, state: &mut dyn std::hash::Hasher) {
-        state.write_usize(Arc::as_ptr(&self.element) as *const () as usize);
-        state.write_u32(self.stride);
-    }
-}
-
-fn print_nested_type(fmt: &mut IRFormatter<'_>, ty: &dyn Type) -> Result<(), std::fmt::Error> {
-    fmt.write("!")?;
-    if ty.dialect() != "builtin" {
-        fmt.write(format!("{}.", ty.dialect()))?;
-    }
-    ty.print(fmt)
 }
 
 fn expect(

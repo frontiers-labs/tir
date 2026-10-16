@@ -90,7 +90,7 @@ pub trait Memory {
         _ord: MemOrdering,
     ) -> Result<u64, Self::Error> {
         let old = self.read_memory(address, size)?;
-        let width = (size as u32) * 8;
+        let width = (size as u64) * 8;
         let result = op.apply(APInt::new(width, old), APInt::new(width, value));
         self.write_memory(address, size, result.to_u64())?;
         Ok(old)
@@ -569,7 +569,7 @@ macro_rules! cmp_op {
 }
 
 /// Widen `v` to `width` (sign- or zero-extend per its signedness); no-op if already wide enough.
-fn widen(v: APInt, width: u32) -> APInt {
+fn widen(v: APInt, width: u64) -> APInt {
     if v.width() >= width {
         v
     } else if v.is_signed() {
@@ -646,7 +646,7 @@ fn eval_divrem(kind: SymKind, c: &impl Fn(usize) -> Value) -> Option<Value> {
 
 /// The IEEE binary format of a `width`-bit register value, for the float kinds'
 /// bit-reinterpreting integer path. Only binary32/binary64 registers exist.
-fn float_format(width: u32, op: &str) -> (u32, u32) {
+fn float_format(width: u64, op: &str) -> (u32, u32) {
     match width {
         16 => (5, 10),
         32 => (8, 23),
@@ -712,7 +712,7 @@ fn split_bits_lanes(value: Value, n: usize, width: usize) -> Value {
                     let byte = bits.bytes().get(at / 8).copied().unwrap_or(0);
                     lane_value |= (u64::from(byte >> (at % 8)) & 1) << bit;
                 }
-                Value::Int(APInt::new(width as u32, lane_value))
+                Value::Int(APInt::new(width as u64, lane_value))
             })
             .collect();
         return Value::Iterator(lanes);
@@ -848,7 +848,11 @@ fn eval_ready<V, M: Memory, A>(
         | SymKind::AtomicRmw
         | SymKind::Fence) => eval_atomic(kind, &c, memory)?,
         // Any value is allowed; this evaluator picks zero.
-        SymKind::Undef => Value::Int(APInt::new(as_int!(c(0), "undef").to_u64() as u32, 0)),
+        SymKind::Undef => Value::Int(APInt::new(as_int!(c(0), "undef").to_u64(), 0)),
+        // A concrete evaluation has no poison: it computes the value, and a
+        // freeze of poison may pick it.
+        SymKind::Poison => c(1),
+        SymKind::Freeze => c(0),
         _ => unreachable!("operator has no concrete evaluator"),
     };
 
@@ -942,7 +946,7 @@ fn eval_iterator<V, A>(
         }
         _ => {
             let count = as_int!(c(0), "iota").to_u64();
-            let width = as_int!(c(1), "iota").to_u64() as u32;
+            let width = as_int!(c(1), "iota").to_u64();
             Value::Iterator(
                 (0..count)
                     .map(|index| Value::Int(APInt::new(width, index)))
@@ -997,7 +1001,7 @@ fn eval_float(kind: SymKind, c: &impl Fn(usize) -> Value) -> Value {
                     let converted = APFloat::from_bits(exp, mant, false, value.to_u64() as u128)
                         .convert(exponent, mantissa, false);
                     Value::Int(APInt::new(
-                        converted.bit_width(),
+                        u64::from(converted.bit_width()),
                         converted.to_bits() as u64,
                     ))
                 }
@@ -1050,12 +1054,12 @@ fn eval_float(kind: SymKind, c: &impl Fn(usize) -> Value) -> Value {
         }
         SymKind::FPToSI => {
             let value = as_float!(c(0), "fptosi").to_f64() as i64;
-            let width = as_int!(c(1), "fptosi").to_u64() as u32;
+            let width = as_int!(c(1), "fptosi").to_u64();
             Value::Int(APInt::new_signed(width, value))
         }
         _ => {
             let value = as_float!(c(0), "fptoui").to_f64() as u64;
-            let width = as_int!(c(1), "fptoui").to_u64() as u32;
+            let width = as_int!(c(1), "fptoui").to_u64();
             Value::Int(APInt::new(width, value))
         }
     }
@@ -1147,12 +1151,12 @@ fn eval_math<V, A>(
         SymKind::Extract => eval_extract(graph, node, cache, c),
         SymKind::ZExt => {
             let value = as_int!(c(0), "zext");
-            let width = as_int!(c(1), "zext").to_u64() as u32;
+            let width = as_int!(c(1), "zext").to_u64();
             Value::Int(value.zero_extend(width))
         }
         _ => {
             let value = as_int!(c(0), "sext");
-            let width = as_int!(c(1), "sext").to_u64() as u32;
+            let width = as_int!(c(1), "sext").to_u64();
             // Force signed: `extract` yields unsigned, but sext must use the current MSB.
             Value::Int(value.with_signed(true).sign_extend(width))
         }
@@ -1166,8 +1170,8 @@ fn eval_extract<V, A>(
     c: &impl Fn(usize) -> Value,
 ) -> Value {
     let value = as_raw_bits(c(0)).to_apint();
-    let high = as_int!(c(1), "extract").to_u64() as u32;
-    let low = as_int!(c(2), "extract").to_u64() as u32;
+    let high = as_int!(c(1), "extract").to_u64();
+    let low = as_int!(c(2), "extract").to_u64();
     // `extract(a*b, 2N-1, N)` is the TMDL idiom for a full-multiply high half
     // (e.g. `mulh`); `Mul` keeps only the low N bits, so when the slice lies
     // wholly past the product width, recompute it as a signed full-width product.
@@ -1198,7 +1202,7 @@ fn eval_memory<M: Memory>(
                 Value::RawBits(memory.read_memory_bytes(address, size)?)
             } else {
                 let value = memory.read_memory(address, size)?;
-                Value::Int(APInt::new((size as u32) * 8, value))
+                Value::Int(APInt::new((size as u64) * 8, value))
             }
         }
         _ => {
@@ -1230,7 +1234,7 @@ fn eval_atomic<M: Memory>(
             );
             let ord = MemOrdering::from_code(as_int!(c(2), "load_reserved").to_u64());
             let value = memory.load_reserved(address, size, ord)?;
-            Value::Int(APInt::new((size as u32) * 8, value))
+            Value::Int(APInt::new((size as u64) * 8, value))
         }
         SymKind::StoreConditional => {
             let address = as_int!(c(0), "store_conditional").to_u64();
@@ -1256,7 +1260,7 @@ fn eval_atomic<M: Memory>(
             let value = as_int!(c(3), "atomic_rmw").to_u64();
             let ord = MemOrdering::from_code(as_int!(c(4), "atomic_rmw").to_u64());
             let old = memory.atomic_rmw(op, address, size, value, ord)?;
-            Value::Int(APInt::new((size as u32) * 8, old))
+            Value::Int(APInt::new((size as u64) * 8, old))
         }
         _ => {
             let pred = as_int!(c(0), "fence").to_u64() as u32;

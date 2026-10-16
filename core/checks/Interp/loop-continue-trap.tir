@@ -2,8 +2,9 @@
 // RUN: not tir interp %s -f trapped 2>&1 | filecheck --check-prefix=TRAP %s
 
 // The continue cone is not evaluated when the predicate is false: the load
-// from a cell nothing wrote sits there and never runs. With the predicate
-// true it runs and the interpreter refuses the read.
+// from a cell nothing wrote sits there and never runs. Where the predicate
+// reads it, it runs, and what it reads is poison: the loop's decision on it
+// is undefined.
 
 module {
   %fn_main = func.func @main() -> !i32 {
@@ -18,11 +19,11 @@ module {
   }
   %fn_trapped = func.func @trapped() -> !i32 {
     %0 = constant {value = 7} : !i32
-    %1 = constant {value = 1} : !i1
     %2, %3 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
     %4, %5 = scf.loop (%6 = %0, %7 = %3) {
       %8 = ptr.load %2 state(%7) : !i32
-      -> %1, %8, %6, %7, %7
+      %9 = cmpi %8, %0 {predicate = "eq"} : !i1
+      -> %9, %8, %6, %7, %7
     }
     func.return %4
   }
@@ -30,4 +31,4 @@ module {
 }
 
 // CHECK: i32 7
-// TRAP: uninitialized
+// TRAP: undefined behavior: control flow depends on poison

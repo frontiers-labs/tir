@@ -1,0 +1,19 @@
+// RUN: tir opt --pass restructure-nodes,instcombine-nodes %s | filecheck %s
+
+// A layout query is a constant under the spec in scope: instcombine folds it
+// through the op's own ConstantFold, which runs the struct's layout region.
+
+#layout_spec = #layout.spec<!i32 = {size = 32, abi = 32}, !ptr.p = {size = 64, abi = 64}>
+
+module {layout.spec = #layout_spec} {
+  type.def !Node = !struct<{next: !ptr.p<!Node>, value: !i32}>
+  %fn_f = func.func @f() -> !i64 {
+    %0 = layout.sizeof {ty = !Node} : !i64
+    func.return %0
+  }
+  module_end
+}
+
+// CHECK-LABEL: func.func @f
+// CHECK-NOT: layout.sizeof
+// CHECK: constant {value = 128} : !i64

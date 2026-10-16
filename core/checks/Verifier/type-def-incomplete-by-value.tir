@@ -1,0 +1,11 @@
+// RUN: not tir opt --verify %s 2>&1 | filecheck %s
+
+// A definition with no body is incomplete: only a pointer can reach it.
+
+module {
+  type.def !Opaque
+  type.def !Holder = !struct<{o: !Opaque}>
+  module_end
+}
+
+// CHECK: type `!Holder` holds the incomplete type `!Opaque` by value

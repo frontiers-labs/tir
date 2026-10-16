@@ -1,0 +1,29 @@
+// RUN: tir opt %s --merge %S/Inputs/merge-types.tir | filecheck %s
+
+// A merge keeps one definition of a type both modules define alike and renames
+// the other's when they differ. `!A` is spelled alike in both, but the merged
+// module's names its own `!B`, which differs: it is renamed too. An incomplete
+// `!N` and a complete one are one type: the complete definition stays. `!Env`
+// is ghost here and data there, a different body: it is renamed as well.
+
+module {
+  type.def !Pair = !struct<{a: !i32, b: !i32}>
+  type.def !B = !struct<{x: !i32}>
+  type.def !A = !struct<{p: !ptr.p<!B>}>
+  type.def !Node
+  type.def !Leaf = !struct<{v: !i8}>
+  type.def !Env = !fp.rounding
+  module_end
+}
+
+// CHECK: type.def !Pair = !struct<{a: !i32, b: !i32}>
+// CHECK-NEXT: type.def !B = !struct<{x: !i32}>
+// CHECK-NEXT: type.def !A = !struct<{p: !ptr.p<!B>}>
+// CHECK-NEXT: type.def !Leaf = !struct<{v: !i8}>
+// CHECK-NEXT: type.def !Env = !fp.rounding
+// CHECK-NEXT: type.def !B.1 = !struct<{x: !i64}>
+// CHECK-NEXT: type.def !A.1 = !struct<{p: !ptr.p<!B.1>}>
+// CHECK-NEXT: type.def !Node = !struct<{v: !i32}>
+// CHECK-NEXT: type.def !Env.1 = !struct<{v: !i32}>
+// CHECK-NEXT: func.func @g(%{{[0-9]+}}: !ptr.p<!A.1>, %{{[0-9]+}}: !ptr.p<!Pair>, %{{[0-9]+}}: !ptr.p<!Env.1>)
+// CHECK-NOT: type.def

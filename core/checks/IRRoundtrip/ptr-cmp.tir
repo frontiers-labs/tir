@@ -1,8 +1,8 @@
 // RUN: tir opt --verify %s | filecheck %s
 
-#data_layout = {types = {p = {abi = 64, size = 64}}}
+#layout_spec = #layout.spec<!ptr.p = {size = 64, abi = 64}>
 
-module {data_layout = #data_layout} {
+module {layout.spec = #layout_spec} {
   %fn_equal = func.func @equal(%0: !ptr.p, %1: !ptr.p) -> !i1 {
     %2 = ptr.cmp %0, %1 {predicate = "eq"} : !i1
     func.return %2

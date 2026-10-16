@@ -1,4 +1,4 @@
-// RUN: tir opt --pass func.func(restructure-nodes,instcombine-nodes) --verify %s | filecheck %s
+// RUN: tir opt --pass func.func(restructure-nodes,instcombine-nodes<trusted>) --verify %s | filecheck %s
 
 module {
   %double_neg_f32 = func.func @double_neg_f32(%x: !f32) -> !f32 {

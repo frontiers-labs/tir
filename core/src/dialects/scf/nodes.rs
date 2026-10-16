@@ -2,14 +2,11 @@
 //! and a counted loop that pins a loop's shape.
 
 use crate as tir;
-use crate::Any as AnyConstraint;
 use crate::attributes::Predicate;
 use crate::binding::{self, PortBindings};
 use crate::builtin::{AddIOpBuilder, CmpIOpBuilder, IntegerType};
 use crate::parse::common::Cursor;
-use crate::{
-    Context, CountedLoop, Error, ExitScope, ExitScopeKind, Operation, Theta, ValueId, operation,
-};
+use crate::{Context, Error, ExitScope, ExitScopeKind, Operation, Theta, ValueId, operation};
 
 // A θ: every carried value enters as a port, and the body names the predicate,
 // the values the next iteration carries, then the values the loop produces
@@ -18,12 +15,9 @@ operation! {
     LoopOp {
         name: "loop",
         dialect: "scf",
-        operands: O {
-            inits: "*AnyConstraint",
-        },
-        results: R {
-            results: "*AnyConstraint",
-        },
+        scheme: "(_*) -> _*",
+        operands: O { inits },
+        results: R { results },
         regions: R {
             body: Region {
                 kind: Nodes,
@@ -50,13 +44,9 @@ operation! {
     SwitchOp {
         name: "switch",
         dialect: "scf",
-        operands: O {
-            predicate: "crate::builtin::IntegerType",
-            inputs: "*AnyConstraint",
-        },
-        results: R {
-            results: "*AnyConstraint",
-        },
+        scheme: "(int<_>, _*) -> _*",
+        operands: O { predicate, inputs },
+        results: R { results },
         regions: R {
             arms: Region {
                 kind: Nodes,
@@ -101,17 +91,10 @@ operation! {
     ForOp {
         name: "for",
         dialect: "scf",
+        scheme: "forall C: index | int<_>. (C, _*, C, C) -> _*",
         format: "custom",
-        verifier: "true",
-        operands: O {
-            lb: "crate::builtin::Counter",
-            inits: "*AnyConstraint",
-            ub: "crate::builtin::Counter",
-            step: "crate::builtin::Counter",
-        },
-        results: R {
-            results: "*AnyConstraint",
-        },
+        operands: O { lb, inits, ub, step },
+        results: R { results },
         regions: R {
             body: Region {
                 kind: Nodes,
@@ -129,12 +112,6 @@ operation! {
 impl ExitScope for ForOp {
     fn exit_scope(&self) -> ExitScopeKind {
         ExitScopeKind::Loop
-    }
-}
-
-impl tir::Verifiable for ForOp {
-    fn verify_impl(&self, context: &Context) -> Result<(), Error> {
-        verify_counter_type(context, "scf.for", self)
     }
 }
 
@@ -282,24 +259,5 @@ fn materialize_counted_shape(
     results.push(counter);
     results.extend(bound.ports.iter().map(tir::Value::id));
     context.set_region_results(body, results);
-    Ok(())
-}
-
-/// A counted loop counts through one type: whatever `!index` or integer width
-/// the lower bound names, the upper bound and step name too. Mixing widths
-/// would leave the counter's arithmetic — and so its trip count — undefined.
-pub(super) fn verify_counter_type(
-    context: &Context,
-    spelled: &str,
-    op: &dyn CountedLoop,
-) -> Result<(), Error> {
-    let expected = context.get_value(op.lower_bound()).ty();
-    for (bound, name) in [(op.upper_bound(), "upper bound"), (op.step(), "step")] {
-        if context.get_value(bound).ty() != expected {
-            return Err(Error::VerificationError(format!(
-                "{spelled} {name} counts through a different type than its lower bound"
-            )));
-        }
-    }
     Ok(())
 }

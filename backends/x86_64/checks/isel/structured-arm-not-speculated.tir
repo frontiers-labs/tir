@@ -5,9 +5,9 @@
 // run only where the gate reached them — the memory state rides the edge, the
 // gate stays control flow.
 
-#data_layout = {types = {p = {abi = 64, size = 64}}}
+#layout_spec = #layout.spec<!ptr.p = {size = 64, abi = 64}>
 
-module {data_layout = #data_layout} {
+module {layout.spec = #layout_spec} {
   %fn_maybe_store = func.func @maybe_store(%c: !i1, %p: !ptr.p<!i64>, %v: !i64) {
     cfg.cond_br %c, ^bb1, ^bb2
   ^bb1:

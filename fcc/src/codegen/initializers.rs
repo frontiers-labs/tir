@@ -24,10 +24,16 @@ pub(super) fn constant_initializer_data(
     let ast = typed.ast();
     match typed.types().kind(target) {
         TypeKind::Integer(_) | TypeKind::Enum(_) => {
-            let value = ast.get_annotation(initializer)?.constant?;
-            let size = source_type_layout(typed, target).0 as usize;
+            let info = ast.get_annotation(initializer)?;
+            let value = info.constant?;
+            // A wider object, a `_BitInt` past 64 bits, takes the constant
+            // extended as the initializer's own type extends.
+            let unsigned = info.ty.and_then(|ty| typed.integer_is_signed(ty)) == Some(false);
+            let fill = if value < 0 && !unsigned { 0xff } else { 0 };
+            let mut bytes = value.to_le_bytes().to_vec();
+            bytes.resize(source_type_layout(typed, target).0 as usize, fill);
             Some(ConstantData {
-                bytes: value.to_le_bytes()[..size].to_vec(),
+                bytes,
                 relocations: Vec::new(),
             })
         }
@@ -251,9 +257,8 @@ fn initializer_subobject(
     for &index in path {
         match typed.types().kind(selected) {
             TypeKind::Record(id) => {
-                let field = typed.record(*id)?.fields.get(index)?;
-                selected = field.ty;
-                offset += field.offset;
+                selected = typed.record(*id)?.fields.get(index)?.ty;
+                offset += typed.field_offsets(*id)?.get(index)?;
             }
             TypeKind::Array(element, Some(length)) if index < *length as usize => {
                 let element_size = source_type_layout(typed, *element).0;
@@ -300,12 +305,14 @@ impl FnCodegen<'_> {
         let (kind, members) = match self.typed.types().kind(target) {
             TypeKind::Record(id) => {
                 let record = self.typed.record(*id).unwrap();
+                let offsets = self.typed.field_offsets(*id).unwrap();
                 (
                     Some(record.kind),
                     record
                         .fields
                         .iter()
-                        .map(|field| (field.ty, field.offset))
+                        .map(|field| field.ty)
+                        .zip(offsets)
                         .collect::<Vec<_>>(),
                 )
             }
@@ -377,10 +384,12 @@ impl FnCodegen<'_> {
         if let TypeKind::Record(id) = self.typed.types().kind(target) {
             let record = self.typed.record(*id).unwrap();
             let kind = record.kind;
+            let offsets = self.typed.field_offsets(*id).unwrap();
             let mut fields = record
                 .fields
                 .iter()
-                .map(|field| (field.ty, field.offset))
+                .map(|field| field.ty)
+                .zip(offsets)
                 .collect::<Vec<_>>();
             if kind == RecordKind::Union {
                 fields = fields

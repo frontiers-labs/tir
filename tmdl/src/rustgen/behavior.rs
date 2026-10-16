@@ -631,7 +631,8 @@ fn intern_dag(
     let mut ops: Vec<tir_symbolic::sem::SemOp> = Vec::new();
     let mut node_indices: HashMap<usize, u32> = HashMap::new();
     let mut has_typed_node = false;
-    let inferred_types = tir_symbolic::lang::infer_types(dag, |_| None).ok();
+    let terms = tir_symbolic::term::Terms::new();
+    let inferred_types = tir_symbolic::lang::infer_types(&terms, dag, |_| None).ok();
     for (counter, node_id) in dag.postorder(root).enumerate() {
         ops.push(tir_symbolic::sem::SemOp::Node(*dag.get_node(node_id)));
 
@@ -642,8 +643,10 @@ fn intern_dag(
         if !matches!(
             inferred_types
                 .as_ref()
-                .and_then(|types| types.get(node_id.index())),
-            Some(tir_symbolic::lang::SemType::Float(_))
+                .and_then(|types| types.get(node_id.index()))
+                .and_then(tir_symbolic::term::TypeArg::as_type)
+                .map(|ty| terms.ctor(ty)),
+            Some(tir_symbolic::term::ctor::FLOAT)
         ) && !matches!(
             dag.get_node(node_id),
             tir_symbolic::lang::SymKind::FAdd
@@ -711,7 +714,7 @@ fn payload_desc(
         SymPayload::SymbolId(id) => SemPayloadDesc::SymbolId(*id),
         SymPayload::Value(value) => SemPayloadDesc::Value(value.number()),
         SymPayload::Int(v) => SemPayloadDesc::Int {
-            width: v.width(),
+            width: u32::try_from(v.width()).expect("a TMDL constant fits a 32-bit width"),
             value: if v.is_signed() {
                 v.to_i64() as u64
             } else {

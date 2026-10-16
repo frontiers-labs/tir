@@ -1,6 +1,7 @@
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
-use syn::{Expr, Ident, Path, Token, TypePath, braced, parse::Parse, parse_macro_input};
+use syn::{Expr, Ident, Path, Token, braced, parse::Parse, parse_macro_input};
+use tir_symbolic::scheme::{Arity, SchemeSyntax, SlotSyntax};
 
 use crate::binds::{Binds, BindsCode, Counted, OpShape};
 use crate::utils::{expr_as_path_vec, expr_as_string, field_name, op_fn_ident};
@@ -17,10 +18,13 @@ pub fn construct_operation(item: TokenStream) -> TokenStream {
         interfaces,
         custom_format,
         sem,
+        poison,
+        requires,
         custom_verifier,
         state,
         binds,
         counted,
+        mut scheme,
     } = parse_macro_input!(item as Operation);
 
     let builder_name = format_ident!("{}Builder", struct_name.to_string());
@@ -31,9 +35,11 @@ pub fn construct_operation(item: TokenStream) -> TokenStream {
     let mut results = results;
     if state.input {
         operands.push(ValueSpec::state());
+        scheme.operands.push(ValueSpec::state_slot());
     }
     if state.output {
         results.push(ValueSpec::state());
+        scheme.results.push(ValueSpec::state_slot());
     }
     let mut interfaces = interfaces;
     let binds_code = binds.as_ref().map(|binds| {
@@ -70,11 +76,6 @@ pub fn construct_operation(item: TokenStream) -> TokenStream {
         counted.is_none() || binds.is_some(),
         "counted: needs the Theta binding it pins"
     );
-    let same_type = interfaces.iter().any(|path| {
-        path.segments
-            .last()
-            .is_some_and(|segment| segment.ident == "SameOperandAndResultType")
-    });
     // A state result is minted by the builder, not typed by its caller, so
     // the result pieces see only the results that carry a value.
     let (state_results, value_results): (Vec<ValueSpec>, Vec<ValueSpec>) =
@@ -155,8 +156,25 @@ pub fn construct_operation(item: TokenStream) -> TokenStream {
     }
     interfaces.extend(binds_interfaces);
 
-    let (sem_hooks_impl, semantic_expr_method, as_sem_expr_impl) =
+    let (semantic_expr_method, as_sem_expr_impl) =
         make_sem_impls(&sem, &struct_name, &operands, has_results);
+    let undefined_methods = make_undefined_methods(&poison, &requires, &operands);
+    let splices: Vec<String> = [&sem, &poison, &requires]
+        .into_iter()
+        .flatten()
+        .flat_map(|sem| sem.splices.iter().cloned())
+        .fold(Vec::new(), |mut all, splice| {
+            if !all.contains(&splice) {
+                all.push(splice);
+            }
+            all
+        });
+    let any_sem = sem.is_some() || poison.is_some() || requires.is_some();
+    let sem_hooks_impl = if any_sem {
+        make_sem_hooks(&splices, &struct_name, has_results)
+    } else {
+        quote! {}
+    };
 
     let interface_registration_method = if interfaces.is_empty() {
         quote! {}
@@ -184,16 +202,17 @@ pub fn construct_operation(item: TokenStream) -> TokenStream {
     });
 
     let result_pieces = make_result_pieces(has_results, result_variadic);
-    let attr_fn_params: Vec<_> = attributes
-        .iter()
+    // An optional attribute is set on the builder, not passed to the
+    // constructor function.
+    let required = || attributes.iter().filter(|attr| !attr.ty.starts_with('?'));
+    let attr_fn_params: Vec<_> = required()
         .map(|attr| {
             let name = op_fn_ident(&attr.name);
             quote! { #name: impl Into<tir::attributes::AttributeValue> }
         })
         .collect();
 
-    let attr_fn_builders: Vec<_> = attributes
-        .iter()
+    let attr_fn_builders: Vec<_> = required()
         .map(|attr| {
             let name_ident = op_fn_ident(&attr.name);
             let name_str = attr.name.clone();
@@ -214,20 +233,12 @@ pub fn construct_operation(item: TokenStream) -> TokenStream {
         &struct_name,
         &dialect,
         &name,
-        &operands,
-        &results,
+        (&operands, &results),
         &attributes,
         &interfaces,
+        (&scheme.to_string(), has_sem),
     );
-    let opdef_verifier = emit_opdef_verifier(
-        &struct_name,
-        &schema_ident,
-        &operands,
-        &results,
-        &regions,
-        same_type,
-        &binds_verify,
-    );
+    let opdef_verifier = emit_opdef_verifier(&struct_name, &schema_ident, &regions, &binds_verify);
 
     let (attr_setters, attr_getters) =
         make_attr_accessors(&attributes, &format!("{dialect}.{name}"));
@@ -318,6 +329,7 @@ pub fn construct_operation(item: TokenStream) -> TokenStream {
             #parser
 
             #semantic_expr_method
+            #undefined_methods
             #interface_registration_method
         }
 
@@ -345,10 +357,10 @@ fn emit_schema(
     struct_name: &Ident,
     dialect: &str,
     name: &str,
-    operands: &[ValueSpec],
-    results: &[ValueSpec],
+    (operands, results): (&[ValueSpec], &[ValueSpec]),
     attributes: &[AttrSpec],
     interfaces: &[Path],
+    (scheme, semantics): (&str, bool),
 ) -> proc_macro2::TokenStream {
     let operand_schema_entries = operands.iter().map(|o| {
         let (n, t, v) = (&o.name, &o.ty, o.variadic);
@@ -385,6 +397,8 @@ fn emit_schema(
             results: &[#(#result_schema_entries),*],
             attributes: &[#(#attr_schema_entries),*],
             interfaces: &[#(#interface_schema_entries),*],
+            scheme: #scheme,
+            semantics: #semantics,
         };
     }
 }
@@ -392,40 +406,20 @@ fn emit_schema(
 fn emit_opdef_verifier(
     struct_name: &Ident,
     schema_ident: &Ident,
-    operands: &[ValueSpec],
-    results: &[ValueSpec],
     regions: &[Region],
-    same_type: bool,
     binds_verify: &proc_macro2::TokenStream,
 ) -> proc_macro2::TokenStream {
     let region_kinds: Vec<_> = regions
         .iter()
         .map(|region| format_ident!("{}", region.kind))
         .collect();
-    let operand_constraint_checkers: Vec<_> = operands
-        .iter()
-        .map(|operand| normalize_constraint_name(&operand.ty))
-        .map(|name| parse_constraint_tokens(&name))
-        .collect();
-
-    let result_constraint_checkers: Vec<_> = results
-        .iter()
-        .map(|result| normalize_constraint_name(&result.ty))
-        .map(|name| parse_constraint_tokens(&name))
-        .collect();
 
     quote! {
         impl tir::OpDefVerifiable for #struct_name {
             fn verify_operands(&self, context: &tir::Context) -> Result<(), tir::Error> {
-                fn __satisfies_constraint<C: tir::TypeConstraint + 'static>(ty: &dyn tir::Type) -> bool {
-                    C::satisfies(ty)
-                }
                 static SPEC: tir::OpDefSpec = tir::OpDefSpec {
                     schema: &#schema_ident,
-                    operand_checkers: &[#(__satisfies_constraint::<#operand_constraint_checkers>),*],
-                    result_checkers: &[#(__satisfies_constraint::<#result_constraint_checkers>),*],
                     region_kinds: &[#(tir::RegionKind::#region_kinds),*],
-                    same_type: #same_type,
                 };
                 tir::verify_opdef_operands(context, &self.0, <Self as tir::Operation>::name(), &SPEC)?;
                 #binds_verify
@@ -484,7 +478,7 @@ fn attr_accessor(ty: &str) -> Option<AttrAccessor> {
         "UInt" => scalar(quote! { u64 }, "UInt"),
         "F32" => scalar(quote! { f32 }, "F32"),
         "F64" => scalar(quote! { f64 }, "F64"),
-        "Bool" => scalar(quote! { bool }, "Bool"),
+        "Bool" | "Flag" => scalar(quote! { bool }, "Bool"),
         "Type" => scalar(quote! { tir::TypeId }, "Type"),
         "Block" => scalar(quote! { tir::BlockId }, "Block"),
         "Value" => scalar(quote! { tir::ValueId }, "Value"),
@@ -516,13 +510,14 @@ fn make_attr_accessors(
     let mut setters = vec![];
     let mut getters = vec![];
     for attr in attributes {
+        let optional = attr.ty.strip_prefix('?');
         let Some(AttrAccessor {
             getter_ty,
             setter_ty,
             variant,
             read,
             write,
-        }) = attr_accessor(&attr.ty)
+        }) = attr_accessor(optional.unwrap_or(&attr.ty))
         else {
             continue;
         };
@@ -537,6 +532,17 @@ fn make_attr_accessors(
                 self.attr(#name, tir::attributes::AttributeValue::#variant(#write))
             }
         });
+        if optional.is_some() {
+            getters.push(quote! {
+                pub fn #method(&self) -> Option<#getter_ty> {
+                    match tir::Operation::attr(self, #name) {
+                        Some(tir::attributes::AttributeValue::#variant(value)) => Some(#read),
+                        _ => None,
+                    }
+                }
+            });
+            continue;
+        }
         getters.push(quote! {
             pub fn #method(&self) -> #getter_ty {
                 match tir::Operation::attr(self, #name) {
@@ -986,91 +992,124 @@ fn make_sem_impls(
     struct_name: &Ident,
     operands: &[ValueSpec],
     has_results: bool,
-) -> (
-    proc_macro2::TokenStream,
-    proc_macro2::TokenStream,
-    proc_macro2::TokenStream,
-) {
-    if let Some(sem) = sem {
-        let src = &sem.src;
-        let sym_pairs: Vec<proc_macro2::TokenStream> = operands
-            .iter()
-            .enumerate()
-            .map(|(i, o)| {
-                let name = &o.name;
-                let idx = i as u32;
-                quote! { (#name, #idx) }
-            })
-            .collect();
-        let splice_arms: Vec<proc_macro2::TokenStream> = sem
-            .splices
-            .iter()
-            .map(|name| {
-                let method = format_ident!("{}", name);
-                // `.into()` accepts both `NodeId` and `Option<NodeId>` splice
-                // methods, so a splice can signal "un-lowerable" with `None`.
-                quote! { #name => self.#method(g).into(), }
-            })
-            .collect();
-        let result_width_body = if has_results {
-            quote! {
-                let __ctx = self.0.context.clone();
-                let __ty = __ctx.get_value(self.0.results()[0]).ty();
-                Some(
-                    (__ctx.get_type_data(__ty).as_ref() as &dyn std::any::Any)
-                        .downcast_ref::<tir::builtin::IntegerType>()
-                        .map(|t| t.width() as u64)
-                        .unwrap_or(0),
-                )
-            }
-        } else {
-            quote! { None }
-        };
-        let actual_type_setter = if has_results {
-            quote! {
-                let __tir_ctx = self.0.context.clone();
-                let __tir_ty = __tir_ctx.get_value(self.result()).ty();
-                g.annotation_mut(__tir_sem_root).actual_type = Some(__tir_ty);
-            }
-        } else {
-            quote! {}
-        };
-
-        let hooks = quote! {
-            impl tir_symbolic::lang::SemBuilderHooks<tir::sem::SemGraph> for #struct_name {
-                fn splice(&self, __name: &str, g: &mut tir::sem::SemGraph) -> Option<tir::NodeId> {
-                    match __name {
-                        #(#splice_arms)*
-                        _ => None,
-                    }
-                }
-                fn result_width(&self) -> Option<u64> {
-                    #result_width_body
-                }
-            }
-        };
-        let sem_method = quote! {
-            fn semantic_expr(&self, g: &mut tir::sem::SemGraph) -> Option<tir::NodeId> {
-                let __tir_sem_root = tir_symbolic::lang::build(g, #src, &[#(#sym_pairs),*], self).ok()?;
+) -> (proc_macro2::TokenStream, proc_macro2::TokenStream) {
+    let Some(sem) = sem else {
+        return (quote! {}, quote! {});
+    };
+    let src = &sem.src;
+    let sym_pairs: Vec<proc_macro2::TokenStream> = operands
+        .iter()
+        .enumerate()
+        .map(|(i, o)| {
+            let name = &o.name;
+            let idx = i as u32;
+            quote! { (#name, #idx) }
+        })
+        .collect();
+    let actual_type_setter = if has_results {
+        quote! {
+            let __tir_ctx = self.0.context.clone();
+            let __tir_ty = __tir_ctx.get_value(self.result()).ty();
+            g.annotation_mut(__tir_sem_root).actual_type = Some(__tir_ty);
+        }
+    } else {
+        quote! {}
+    };
+    let sem_method = quote! {
+        fn semantic_expr(&self, g: &mut tir::sem::SemGraph) -> Option<tir::NodeId> {
+            let __tir_sem_root = tir_symbolic::lang::build(g, #src, &[#(#sym_pairs),*], self).ok()?;
+            g.annotation_mut(__tir_sem_root).original_op = Some(<Self as tir::Operation>::id(self));
+            #actual_type_setter
+            Some(__tir_sem_root)
+        }
+    };
+    let as_impl = quote! {
+        impl tir::sem::AsSemExpr for #struct_name {
+            fn convert(&self, g: &mut tir::sem::SemGraph) -> tir::NodeId {
+                let __tir_sem_root = tir_symbolic::lang::build(g, #src, &[#(#sym_pairs),*], self)
+                    .expect("semantic expression should build");
                 g.annotation_mut(__tir_sem_root).original_op = Some(<Self as tir::Operation>::id(self));
                 #actual_type_setter
-                Some(__tir_sem_root)
+                __tir_sem_root
             }
-        };
-        let as_impl = quote! {
-            impl tir::sem::AsSemExpr for #struct_name {
-                fn convert(&self, g: &mut tir::sem::SemGraph) -> tir::NodeId {
-                    let __tir_sem_root = tir_symbolic::lang::build(g, #src, &[#(#sym_pairs),*], self)
-                        .expect("semantic expression should build");
-                    g.annotation_mut(__tir_sem_root).original_op = Some(<Self as tir::Operation>::id(self));
-                    #actual_type_setter
-                    __tir_sem_root
+        }
+    };
+    (sem_method, as_impl)
+}
+
+fn make_sem_hooks(
+    splices: &[String],
+    struct_name: &Ident,
+    has_results: bool,
+) -> proc_macro2::TokenStream {
+    let splice_arms: Vec<proc_macro2::TokenStream> = splices
+        .iter()
+        .map(|name| {
+            let method = format_ident!("{}", name);
+            // `.into()` accepts both `NodeId` and `Option<NodeId>` splice
+            // methods, so a splice can signal "un-lowerable" with `None`.
+            quote! { #name => self.#method(g).into(), }
+        })
+        .collect();
+    let result_width_body = if has_results {
+        quote! {
+            let __ctx = self.0.context.clone();
+            let __ty = __ctx.get_value(self.0.results()[0]).ty();
+            Some(
+                tir::builtin::IntegerType::view(&__ctx, __ty)
+                    .map(|t| t.width() as u64)
+                    .unwrap_or(0),
+            )
+        }
+    } else {
+        quote! { None }
+    };
+    quote! {
+        impl tir_symbolic::lang::SemBuilderHooks<tir::sem::SemGraph> for #struct_name {
+            fn splice(&self, __name: &str, g: &mut tir::sem::SemGraph) -> Option<tir::NodeId> {
+                match __name {
+                    #(#splice_arms)*
+                    _ => None,
                 }
             }
+            fn result_width(&self) -> Option<u64> {
+                #result_width_body
+            }
+        }
+    }
+}
+
+fn make_undefined_methods(
+    poison: &Option<Sem>,
+    requires: &Option<Sem>,
+    operands: &[ValueSpec],
+) -> proc_macro2::TokenStream {
+    let sym_pairs: Vec<proc_macro2::TokenStream> = operands
+        .iter()
+        .enumerate()
+        .map(|(i, o)| {
+            let name = &o.name;
+            let idx = i as u32;
+            quote! { (#name, #idx) }
+        })
+        .collect();
+    let method = |name: &str, condition: &Option<Sem>| {
+        let Some(condition) = condition else {
+            return quote! {};
         };
-        (hooks, sem_method, as_impl)
-    } else {
-        (quote! {}, quote! {}, quote! {})
+        let name = format_ident!("{}", name);
+        let src = &condition.src;
+        quote! {
+            fn #name(&self, g: &mut tir::sem::SemGraph) -> Option<tir::NodeId> {
+                tir_symbolic::lang::build(g, #src, &[#(#sym_pairs),*], self).ok()
+            }
+        }
+    };
+    let poison_method = method("poison_expr", poison);
+    let requires_method = method("requires_expr", requires);
+    quote! {
+        #poison_method
+        #requires_method
     }
 }
 
@@ -1302,10 +1341,13 @@ struct Operation {
     interfaces: Vec<Path>,
     custom_format: bool,
     sem: Option<Sem>,
+    poison: Option<Sem>,
+    requires: Option<Sem>,
     custom_verifier: bool,
     state: StatePorts,
     binds: Option<Binds>,
     counted: Option<Counted>,
+    scheme: SchemeSyntax,
 }
 
 /// One `key: value` of the declaration. `binds:` and `counted:` are read as
@@ -1399,17 +1441,49 @@ impl ValueSpec {
     fn state() -> Self {
         Self {
             name: "state".to_string(),
-            ty: "*tir::builtin::StateType".to_string(),
+            ty: format!("*{STATE_PATTERN}"),
             variadic: true,
         }
+    }
+
+    fn state_slot() -> SlotSyntax {
+        SchemeSyntax::slot(STATE_PATTERN, Arity::Many).expect("a state pattern")
     }
 
     /// Whether the port carries a memory state: the text groups those apart
     /// from the values.
     fn is_state(&self) -> bool {
-        self.ty.contains("StateType")
+        self.ty == format!("*{STATE_PATTERN}")
+    }
+
+    fn typed(names: Vec<String>, slots: &[SlotSyntax], what: &str) -> Vec<Self> {
+        assert_eq!(
+            names.len(),
+            slots.len(),
+            "the scheme types {} {what}, the op declares {}",
+            slots.len(),
+            names.len()
+        );
+        names
+            .into_iter()
+            .zip(slots)
+            .map(|(name, slot)| {
+                let marker = match slot.arity {
+                    Arity::One => "",
+                    Arity::Opt => "?",
+                    Arity::Many => "*",
+                };
+                ValueSpec {
+                    name,
+                    ty: format!("{marker}{}", slot.pattern()),
+                    variadic: slot.arity == Arity::Many,
+                }
+            })
+            .collect()
     }
 }
+
+const STATE_PATTERN: &str = "state<_>";
 
 impl Parse for Operation {
     fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
@@ -1429,14 +1503,28 @@ impl Parse for Operation {
             .expr("attributes")
             .and_then(get_attributes)
             .unwrap_or_default();
-        let operands = declared
-            .expr("operands")
-            .and_then(get_value_specs)
-            .unwrap_or_default();
-        let results = declared
-            .expr("results")
-            .and_then(get_value_specs)
-            .unwrap_or_default();
+        let scheme = declared
+            .expr("scheme")
+            .map(expr_as_string)
+            .unwrap_or_else(|| panic!("operation `{dialect}.{name}` declares no `scheme:`"));
+        let scheme = SchemeSyntax::parse(&scheme)
+            .unwrap_or_else(|error| panic!("operation `{dialect}.{name}`: {error}"));
+        let operands = ValueSpec::typed(
+            declared
+                .expr("operands")
+                .map(get_value_names)
+                .unwrap_or_default(),
+            &scheme.operands,
+            "operands",
+        );
+        let results = ValueSpec::typed(
+            declared
+                .expr("results")
+                .map(get_value_names)
+                .unwrap_or_default(),
+            &scheme.results,
+            "results",
+        );
         let interfaces = declared
             .expr("interfaces")
             .map(expr_as_path_vec)
@@ -1452,6 +1540,12 @@ impl Parse for Operation {
             .map(|expr| StatePorts::parse(&expr_as_string(expr)))
             .unwrap_or_default();
         let sem = declared.expr("sem").and_then(parse_sem);
+        let poison = declared
+            .expr("poison")
+            .map(|expr| parse_condition("poison", expr));
+        let requires = declared
+            .expr("requires")
+            .map(|expr| parse_condition("requires", expr));
         let (mut binds, mut counted) = (None, None);
         for (_, field) in declared.fields.drain(..) {
             match field {
@@ -1472,10 +1566,13 @@ impl Parse for Operation {
             interfaces,
             custom_format,
             sem,
+            poison,
+            requires,
             custom_verifier,
             state,
             binds,
             counted,
+            scheme,
         })
     }
 }
@@ -1494,6 +1591,17 @@ fn parse_sem(expr: &Expr) -> Option<Sem> {
     let ast = tir_symbolic::lang::parse(&src)?;
     let splices = ast.splice_names();
     Some(Sem { src, splices })
+}
+
+fn parse_condition(field: &str, expr: &Expr) -> Sem {
+    let condition = expr_as_string(expr);
+    let src = format!("(set {field} {condition})");
+    let ast = tir_symbolic::lang::parse(&src)
+        .unwrap_or_else(|| panic!("`{field}:` is no s-expression: {condition}"));
+    Sem {
+        splices: ast.splice_names(),
+        src,
+    }
 }
 
 fn get_regions(expr: &Expr) -> Option<Vec<Region>> {
@@ -1577,44 +1685,28 @@ fn get_attributes(expr: &Expr) -> Option<Vec<AttrSpec>> {
     }
 }
 
-fn get_value_specs(expr: &Expr) -> Option<Vec<ValueSpec>> {
-    match expr {
-        Expr::Struct(s) => Some(
-            s.fields
-                .iter()
-                .map(|f| {
-                    let ty = expr_as_string(&f.expr);
-                    ValueSpec {
-                        name: field_name(f),
-                        variadic: ty.starts_with('*'),
-                        ty,
-                    }
-                })
-                .collect(),
-        ),
-        _ => None,
-    }
-}
-
-fn normalize_constraint_name(spec: &str) -> String {
-    spec.strip_prefix('?')
-        .or_else(|| spec.strip_prefix('*'))
-        .unwrap_or(spec)
-        .to_string()
-}
-
-fn parse_constraint_tokens(spec: &str) -> proc_macro2::TokenStream {
-    let path: TypePath =
-        syn::parse_str(spec).unwrap_or_else(|_| panic!("Invalid type constraint '{}'", spec));
-    let path = path.path;
-    quote! { #path }
+fn get_value_names(expr: &Expr) -> Vec<String> {
+    let Expr::Struct(s) = expr else {
+        panic!("operands and results are listed as `O {{ name, .. }}`");
+    };
+    s.fields
+        .iter()
+        .map(|f| {
+            let name = field_name(f);
+            assert!(
+                f.colon_token.is_none(),
+                "`{name}` declares a type: an op's types go in its `scheme:`"
+            );
+            name
+        })
+        .collect()
 }
 
 fn make_attribute_verifier(specs: &[AttrSpec]) -> proc_macro2::TokenStream {
     if specs.is_empty() {
         return quote! {};
     }
-    let checks = specs.iter().map(|s| {
+    let checks = specs.iter().filter(|s| !s.ty.starts_with('?')).map(|s| {
         let n = s.name.clone();
         quote! {
             if !self.parts.attributes.iter().any(|a| Some(a.name) == self.context.sym(#n)) {
@@ -1841,7 +1933,7 @@ fn make_parser(
                let mut ok = true;
                if !parser.parse_token("}") {
                    loop {
-                       if let Some(name) = parser.parse_ident() {
+                       if let Some(name) = parser.parse_attribute_name() {
                            if !parser.parse_token("=") { ok = false; break; }
                            let mut val = if let Some(value) = parser.parse_attribute_value(context)? {
                                value

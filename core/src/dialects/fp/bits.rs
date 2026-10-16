@@ -7,46 +7,46 @@ use crate as tir;
 
 operation! {
     NegOp {
-        name: "neg", dialect: "fp",
-        operands: O { input: "crate::builtin::FloatType" },
-        results: R { result: "crate::builtin::FloatType" },
+        name: "neg", dialect: "fp", scheme: "forall E: nat, M: nat. (float<E, M>) -> float<E, M>",
+        operands: O { input },
+        results: R { result },
         interfaces: [SameOperandAndResultType, Speculatable, crate::interp::Interp],
     }
 }
 
 operation! {
     AbsOp {
-        name: "abs", dialect: "fp",
-        operands: O { input: "crate::builtin::FloatType" },
-        results: R { result: "crate::builtin::FloatType" },
+        name: "abs", dialect: "fp", scheme: "forall E: nat, M: nat. (float<E, M>) -> float<E, M>",
+        operands: O { input },
+        results: R { result },
         interfaces: [SameOperandAndResultType, Speculatable, crate::interp::Interp],
     }
 }
 
 operation! {
     CopySignOp {
-        name: "copysign", dialect: "fp",
-        operands: O { magnitude: "crate::builtin::FloatType", sign: "crate::builtin::FloatType" },
-        results: R { result: "crate::builtin::FloatType" },
+        name: "copysign", dialect: "fp", scheme: "forall E: nat, M: nat. (float<E, M>, float<E, M>) -> float<E, M>",
+        operands: O { magnitude, sign },
+        results: R { result },
         interfaces: [SameOperandAndResultType, Speculatable, crate::interp::Interp],
     }
 }
 
 operation! {
     SignBitOp {
-        name: "signbit", dialect: "fp",
-        operands: O { input: "crate::builtin::FloatType" },
-        results: R { result: "crate::Integer<1>" },
+        name: "signbit", dialect: "fp", scheme: "(float<_, _>) -> int<1>",
+        operands: O { input },
+        results: R { result },
         interfaces: [Speculatable, crate::interp::Interp],
     }
 }
 
 operation! {
     ClassifyOp {
-        name: "classify", dialect: "fp",
-        operands: O { input: "crate::builtin::FloatType" },
+        name: "classify", dialect: "fp", scheme: "(float<_, _>) -> int<1>",
+        operands: O { input },
         attributes: A { class: "Str" },
-        results: R { result: "crate::Integer<1>" },
+        results: R { result },
         interfaces: [Speculatable, crate::interp::Interp],
         verifier: "true",
     }

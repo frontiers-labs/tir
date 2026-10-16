@@ -4,12 +4,13 @@ mod global;
 mod module;
 mod state;
 mod tuple;
+mod type_def;
+mod ub;
 
-use std::any::Any;
-use std::sync::Arc;
+use tir_symbolic::term::{ctor, no_carrier, valid};
 
-use crate::ty::TypeConstraint;
-use crate::{Context, Error, IRFormatter, TirType, Type, TypeId, dialect, parse::Span};
+use crate::ty::{Ctor, Kind, Terms, TypeArg, TypeCtor, TypeSpelling};
+use crate::{Context, Error, TypeId, dialect};
 
 use crate as tir;
 
@@ -19,6 +20,8 @@ pub use global::*;
 pub use module::*;
 pub use state::*;
 pub use tuple::*;
+pub use type_def::*;
+pub use ub::*;
 
 pub mod ops {
     pub use super::arith::*;
@@ -26,6 +29,8 @@ pub mod ops {
     pub use super::global::*;
     pub use super::module::*;
     pub use super::tuple::*;
+    pub use super::type_def::{TypeDefOp, TypeDefOpBuilder, type_def};
+    pub use super::ub::*;
 }
 
 dialect! {
@@ -58,64 +63,57 @@ dialect! {
             GlobalOp,
             FnToPtrOp,
             PtrToFnOp,
+            AssumeOp,
+            FreezeOp,
+            RefineOp,
         ],
-        types: [IntegerType, FloatType, IndexType, UnitType, TupleType, FnType, VarArgsType, StateType],
+        types: [
+            IntegerType, FloatType, IndexType, UnitType, TupleType, FnType, VarArgsType, StateType,
+            NamedType, AggregateType(AggregateKind::Struct), AggregateType(AggregateKind::Union),
+            AggregateType(AggregateKind::Variant),
+        ],
     }
 }
 
-#[derive(TirType)]
-#[tir_type(dialect = "builtin", name = "i")]
+/// `builtin.i<W>`, written `!iW`: a bit vector of `W` bits.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct IntegerType {
-    width: u32,
+    width: u64,
 }
 
 impl IntegerType {
     #[allow(clippy::new_ret_no_self)]
-    pub fn new(context: &Context, width: u32) -> TypeId {
-        context.get_type_id(Arc::new(Self { width }))
+    pub fn new(context: &Context, width: u64) -> TypeId {
+        context.terms().int(width)
     }
-    pub fn width(&self) -> u32 {
+
+    pub fn view(terms: &impl AsRef<Terms>, ty: TypeId) -> Option<Self> {
+        let width = terms.as_ref().int_width(ty)?;
+        Some(Self { width })
+    }
+
+    pub fn width(&self) -> u64 {
         self.width
     }
-}
 
-impl TypeConstraint for IntegerType {}
-
-impl Type for IntegerType {
-    fn dialect(&self) -> &'static str {
-        "builtin"
-    }
-
-    fn parse_key() -> &'static str {
-        "i"
-    }
-
-    fn parse<'src>(
-        mnemonic: &str,
-        parser: &mut tir::parse::text::Parser<'src>,
-        context: &Context,
-    ) -> Result<TypeId, (Span, Error)> {
-        use tir::parse::common::Cursor;
-        if let Some(rest) = mnemonic.strip_prefix('i')
-            && let Ok(width) = rest.parse::<u32>()
-        {
-            Ok(Self::new(context, width))
-        } else {
-            Err((parser.span(), Error::ExpectedType))
+    pub fn spelling(_context: &Context) -> TypeSpelling {
+        TypeSpelling {
+            ctor: ctor::INT,
+            keys: &["i"],
+            parse: |mnemonic, parser, context| {
+                use tir::parse::common::Cursor;
+                mnemonic
+                    .strip_prefix('i')
+                    .and_then(|rest| rest.parse::<u64>().ok())
+                    .map(|width| Self::new(context, width))
+                    .ok_or((parser.span(), Error::ExpectedType))
+            },
+            print: |spellings, ty, fmt| match Self::view(spellings, ty) {
+                Some(int) => fmt.write(format!("i{}", int.width)),
+                None => spellings.print_generic(ty, fmt),
+            },
+            variadic_tail: false,
         }
-    }
-
-    fn print(&self, fmt: &mut IRFormatter<'_>) -> Result<(), std::fmt::Error> {
-        fmt.write(format!("i{}", self.width))
-    }
-
-    fn eq(&self, other: &dyn Type) -> bool {
-        let int = (other as &dyn Any).downcast_ref::<IntegerType>();
-        int.map(|item| item.width == self.width).unwrap_or(false)
-    }
-
-    fn hash(&self, state: &mut dyn std::hash::Hasher) {
-        state.write_u32(self.width);
     }
 }
 
@@ -124,8 +122,7 @@ impl Type for IntegerType {
 /// [`tir_adt::APFloat`]. The named formats are the IEEE 754 binary8-binary64
 /// interchange formats (with both OCP FP8 encodings) plus bfloat16; any of them
 /// is a valid operand of the shared `*f` arithmetic ops.
-#[derive(TirType)]
-#[tir_type(dialect = "builtin", name = "f")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FloatType {
     exp_width: u32,
     mant_width: u32,
@@ -144,10 +141,14 @@ const FLOAT_FORMATS: [(u32, u32, &str); 6] = [
 impl FloatType {
     #[allow(clippy::new_ret_no_self)]
     pub fn new(context: &Context, exp_width: u32, mant_width: u32) -> TypeId {
-        context.get_type_id(Arc::new(Self {
-            exp_width,
-            mant_width,
-        }))
+        let args = vec![
+            TypeArg::Nat(u64::from(exp_width)),
+            TypeArg::Nat(u64::from(mant_width)),
+        ];
+        context
+            .terms()
+            .intern(ctor::FLOAT, args)
+            .expect("a float type")
     }
 
     pub fn f8e4m3(context: &Context) -> TypeId {
@@ -174,6 +175,29 @@ impl FloatType {
         Self::new(context, 11, 52)
     }
 
+    /// The format a mnemonic (`f32`, `bf16`) names.
+    pub fn named(context: &Context, mnemonic: &str) -> Option<TypeId> {
+        let (exponent, mantissa, _) = FLOAT_FORMATS
+            .iter()
+            .find(|(_, _, name)| *name == mnemonic)?;
+        Some(
+            context
+                .terms()
+                .float(u64::from(*exponent), u64::from(*mantissa)),
+        )
+    }
+
+    pub fn view(terms: &impl AsRef<Terms>, ty: TypeId) -> Option<Self> {
+        let terms = terms.as_ref();
+        if terms.ctor(ty) != ctor::FLOAT {
+            return None;
+        }
+        Some(Self {
+            exp_width: u32::try_from(terms.nat(ty, 0)?).ok()?,
+            mant_width: u32::try_from(terms.nat(ty, 1)?).ok()?,
+        })
+    }
+
     pub fn exp_width(&self) -> u32 {
         self.exp_width
     }
@@ -186,167 +210,101 @@ impl FloatType {
     pub fn bit_width(&self) -> u32 {
         1 + self.exp_width + self.mant_width
     }
-}
 
-impl TypeConstraint for FloatType {}
-
-impl Type for FloatType {
-    fn dialect(&self) -> &'static str {
-        "builtin"
-    }
-
-    fn parse_key() -> &'static str {
-        "f"
-    }
-
-    fn extra_parse_keys() -> &'static [&'static str] {
-        &["bf"]
-    }
-
-    fn parse<'src>(
-        mnemonic: &str,
-        parser: &mut tir::parse::text::Parser<'src>,
-        context: &Context,
-    ) -> Result<TypeId, (Span, Error)> {
-        use tir::parse::common::Cursor;
-        FLOAT_FORMATS
-            .iter()
-            .find(|(_, _, name)| *name == mnemonic)
-            .map(|&(exp, mant, _)| Self::new(context, exp, mant))
-            .ok_or((parser.span(), Error::ExpectedType))
-    }
-
-    fn print(&self, fmt: &mut IRFormatter<'_>) -> Result<(), std::fmt::Error> {
-        let name = FLOAT_FORMATS
-            .iter()
-            .find(|&&(exp, mant, _)| exp == self.exp_width && mant == self.mant_width)
-            .map(|(_, _, name)| *name)
-            .expect("only named float formats are printable");
-        fmt.write(name)
-    }
-
-    fn eq(&self, other: &dyn Type) -> bool {
-        (other as &dyn Any)
-            .downcast_ref::<FloatType>()
-            .map(|f| f.exp_width == self.exp_width && f.mant_width == self.mant_width)
-            .unwrap_or(false)
-    }
-
-    fn hash(&self, state: &mut dyn std::hash::Hasher) {
-        state.write_u32(self.exp_width);
-        state.write_u32(self.mant_width);
+    pub fn spelling(_context: &Context) -> TypeSpelling {
+        TypeSpelling {
+            ctor: ctor::FLOAT,
+            keys: &["f", "bf"],
+            parse: |mnemonic, parser, context| {
+                use tir::parse::common::Cursor;
+                // A format with no name of its own prints as `builtin.f<E, M>`.
+                if mnemonic == "f" {
+                    return crate::ty::parse_generic(ctor::FLOAT, parser, context);
+                }
+                FLOAT_FORMATS
+                    .iter()
+                    .find(|(_, _, name)| *name == mnemonic)
+                    .map(|&(exp, mant, _)| Self::new(context, exp, mant))
+                    .ok_or((parser.span(), Error::ExpectedType))
+            },
+            print: |spellings, ty, fmt| {
+                let named = Self::view(spellings, ty).and_then(|float| {
+                    FLOAT_FORMATS
+                        .iter()
+                        .find(|&&(exp, mant, _)| exp == float.exp_width && mant == float.mant_width)
+                });
+                match named {
+                    Some((_, _, name)) => fmt.write(name),
+                    None => spellings.print_generic(ty, fmt),
+                }
+            },
+            variadic_tail: false,
+        }
     }
 }
 
-#[derive(TirType)]
-#[tir_type(dialect = "builtin", name = "index")]
+static INDEX: Ctor = Ctor::new(TypeCtor {
+    dialect: "builtin",
+    name: "index",
+    params: &[],
+    kind: Kind::Data,
+    validate: valid,
+    carrier: no_carrier,
+});
+
+/// `builtin.index`: an address-sized count whose width the target picks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct IndexType;
 
 impl IndexType {
     #[allow(clippy::new_ret_no_self)]
     pub fn new(context: &Context) -> TypeId {
-        context.get_type_id(Arc::new(Self))
+        let terms = context.terms();
+        terms
+            .intern(INDEX.id(terms), vec![])
+            .expect("the index type")
+    }
+
+    pub fn view(terms: &impl AsRef<Terms>, ty: TypeId) -> Option<Self> {
+        let terms = terms.as_ref();
+        INDEX.is(terms, ty).then_some(Self)
+    }
+
+    pub fn spelling(context: &Context) -> TypeSpelling {
+        TypeSpelling {
+            ctor: INDEX.id(context),
+            keys: &["index"],
+            parse: |_, _, context| Ok(Self::new(context)),
+            print: |_, _, fmt| fmt.write("index"),
+            variadic_tail: false,
+        }
     }
 }
 
-impl TypeConstraint for IndexType {}
-
-impl Type for IndexType {
-    fn dialect(&self) -> &'static str {
-        "builtin"
-    }
-
-    fn parse_key() -> &'static str {
-        "index"
-    }
-
-    fn parse<'src>(
-        _mnemonic: &str,
-        _parser: &mut tir::parse::text::Parser<'src>,
-        context: &Context,
-    ) -> Result<TypeId, (Span, Error)> {
-        Ok(Self::new(context))
-    }
-
-    fn print(&self, fmt: &mut IRFormatter<'_>) -> Result<(), std::fmt::Error> {
-        fmt.write("index")
-    }
-
-    fn eq(&self, other: &dyn Type) -> bool {
-        (other as &dyn Any).downcast_ref::<IndexType>().is_some()
-    }
-
-    fn hash(&self, _state: &mut dyn std::hash::Hasher) {}
-}
-
-#[derive(TirType)]
-#[tir_type(dialect = "builtin", name = "unit")]
+/// `builtin.unit`: the type with one value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct UnitType;
 
 impl UnitType {
     #[allow(clippy::new_ret_no_self)]
     pub fn new(context: &Context) -> TypeId {
-        context.get_type_id(Arc::new(Self))
-    }
-}
-
-impl TypeConstraint for UnitType {}
-
-impl Type for UnitType {
-    fn dialect(&self) -> &'static str {
-        "builtin"
+        context
+            .terms()
+            .intern(ctor::UNIT, vec![])
+            .expect("the unit type")
     }
 
-    fn parse_key() -> &'static str {
-        "unit"
+    pub fn view(terms: &impl AsRef<Terms>, ty: TypeId) -> Option<Self> {
+        (terms.as_ref().ctor(ty) == ctor::UNIT).then_some(Self)
     }
 
-    fn parse<'src>(
-        _mnemonic: &str,
-        _parser: &mut tir::parse::text::Parser<'src>,
-        context: &Context,
-    ) -> Result<TypeId, (Span, Error)> {
-        Ok(Self::new(context))
-    }
-
-    fn print(&self, fmt: &mut IRFormatter<'_>) -> Result<(), std::fmt::Error> {
-        fmt.write("unit")
-    }
-
-    fn eq(&self, other: &dyn Type) -> bool {
-        (other as &dyn Any).downcast_ref::<UnitType>().is_some()
-    }
-
-    fn hash(&self, _state: &mut dyn std::hash::Hasher) {}
-}
-
-/// The type a counted loop counts through: the abstract [`IndexType`], or a
-/// concrete [`IntegerType`] when the counter has to reproduce a source type's
-/// wrapping rather than an address computation's width.
-pub struct Counter;
-
-impl TypeConstraint for Counter {
-    fn satisfies(ty: &dyn Type) -> bool
-    where
-        Self: Sized + 'static,
-    {
-        let ty = ty as &dyn Any;
-        ty.downcast_ref::<IndexType>().is_some() || ty.downcast_ref::<IntegerType>().is_some()
-    }
-}
-
-pub struct Integer<const N: usize>;
-
-impl<const N: usize> TypeConstraint for Integer<N> {
-    fn satisfies(ty: &dyn Type) -> bool
-    where
-        Self: Sized + 'static,
-    {
-        let int = (ty as &dyn Any).downcast_ref::<IntegerType>();
-        if let Some(int) = int {
-            int.width == N as u32
-        } else {
-            false
+    pub fn spelling(_context: &Context) -> TypeSpelling {
+        TypeSpelling {
+            ctor: ctor::UNIT,
+            keys: &["unit"],
+            parse: |_, _, context| Ok(Self::new(context)),
+            print: |_, _, fmt| fmt.write("unit"),
+            variadic_tail: false,
         }
     }
 }

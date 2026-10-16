@@ -4,4 +4,4 @@
 
 rule count: builtin.muli(x: int<W>, c: const) => x where clz(c) == 7;
 
-// CHECK: APInt::new(args[1usize] as u32, args[0usize]).count_leading_zeros()
+// CHECK: APInt::new(args[1usize], args[0usize]).count_leading_zeros()

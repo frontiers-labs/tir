@@ -18,6 +18,7 @@ operation! {
     EntryStateOp {
         name: "entry_state",
         dialect: "state",
+        scheme: "() -> ()",
         format: "custom",
         interfaces: [crate::interp::Interp],
         state: "out",
@@ -68,10 +69,9 @@ operation! {
     JoinOp {
         name: "join",
         dialect: "state",
+        scheme: "(state<_>*) -> ()",
         verifier: "true",
-        operands: O {
-            states: "*crate::builtin::StateType",
-        },
+        operands: O { states },
         interfaces: [crate::interp::Interp],
         state: "out",
     }
@@ -116,10 +116,9 @@ operation! {
     SplitOp {
         name: "split",
         dialect: "state",
+        scheme: "() -> state<_>*",
         verifier: "true",
-        results: R {
-            states: "*crate::builtin::StateType",
-        },
+        results: R { states },
         interfaces: [crate::interp::Interp],
         state: "in",
     }

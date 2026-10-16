@@ -4,9 +4,9 @@
 // commit writes null as a copy of the literal the function has, and a constant
 // past null as null moved on.
 
-#data_layout = {types = {p = {abi = 64, size = 64}}}
+#layout_spec = #layout.spec<!ptr.p = {size = 64, abi = 64}>
 
-module {data_layout = #data_layout} {
+module {layout.spec = #layout_spec} {
   %f = func.func @same(%c: !i1) -> !ptr.p {
     %r = scf.switch %c {
       %a = ptr.null : !ptr.p

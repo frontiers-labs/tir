@@ -50,7 +50,7 @@ use crate::sem::{
 };
 use crate::{Context, NodeId, TypeId};
 
-use super::egraph::{is_comparison, type_width};
+use super::egraph::is_comparison;
 use super::node::{SemNode, field, template_node};
 
 /// Whether the SMT obligations behind the semantic invariants and the guarded
@@ -85,6 +85,7 @@ impl WidthBinding {
 enum WidthExpr {
     Lit(u64),
     Name(usize),
+    Add(Box<WidthExpr>, Box<WidthExpr>),
     Sub(Box<WidthExpr>, Box<WidthExpr>),
     /// `(ones e)`: the all-ones value of `e` bits, `2^e - 1`.
     Ones(Box<WidthExpr>),
@@ -95,7 +96,7 @@ impl WidthExpr {
         match self {
             Self::Lit(_) => false,
             Self::Name(_) => true,
-            Self::Sub(a, b) => a.references_width() || b.references_width(),
+            Self::Add(a, b) | Self::Sub(a, b) => a.references_width() || b.references_width(),
             Self::Ones(value) => value.references_width(),
         }
     }
@@ -104,6 +105,7 @@ impl WidthExpr {
         match self {
             WidthExpr::Lit(v) => Some(*v),
             WidthExpr::Name(i) => Some(widths[*i]),
+            WidthExpr::Add(a, b) => a.eval(widths)?.checked_add(b.eval(widths)?),
             WidthExpr::Sub(a, b) => a.eval(widths)?.checked_sub(b.eval(widths)?),
             WidthExpr::Ones(e) => match e.eval(widths)? {
                 64 => Some(u64::MAX),
@@ -220,7 +222,7 @@ pub struct Axiom {
     /// Declared pattern vars (name, class-width binding); a var's `SymbolId` in
     /// proof graphs is its index here.
     vars: Vec<(String, WidthBinding)>,
-    symbol_types: Vec<Option<crate::sem::SemType>>,
+    symbol_formats: Vec<Option<(u64, u64)>>,
     /// Indices into `vars` of operands that must match a `Constant` class — so a
     /// rule fires only on the immediate form. The proof treats them as ordinary
     /// symbols (the identity holds for any value); the applier checks constness.
@@ -398,6 +400,35 @@ impl Axiom {
         self.prove_outcome(widths).is_proven()
     }
 
+    pub(crate) fn proof_widths(&self, width: u64) -> Vec<u64> {
+        let mut widths = vec![width; self.width_names.len()];
+        for guard in &self.guards {
+            match guard {
+                Guard_::Eq(WidthExpr::Name(name), value) => {
+                    if let Some(value) = value.eval(&widths) {
+                        widths[*name] = value;
+                    }
+                }
+                Guard_::Lt(low, WidthExpr::Name(name)) => {
+                    if let Some(low) = low.eval(&widths)
+                        && widths[*name] <= low
+                    {
+                        widths[*name] = low + width;
+                    }
+                }
+                Guard_::Lt(WidthExpr::Name(name), high) => {
+                    if let Some(high) = high.eval(&widths)
+                        && widths[*name] >= high
+                    {
+                        widths[*name] = high.saturating_sub(1).max(1);
+                    }
+                }
+                _ => {}
+            }
+        }
+        widths
+    }
+
     pub(crate) fn prove_outcome(&self, widths: &[u64]) -> ProofOutcome {
         match self.obligation {
             ProofObligation::Equivalence => self.prove_instance_outcome(widths, None, None),
@@ -488,19 +519,19 @@ impl Axiom {
                 "the proof expression could not be realized".into(),
             ));
         }
-        if self.symbol_types.iter().any(Option::is_some) {
+        if self.symbol_formats.iter().any(Option::is_some) {
+            // The obligation names no IR, so its types live in a store of its own.
+            let terms = crate::Terms::new();
             let symbol_types = self
-                .symbol_types
+                .symbol_formats
                 .iter()
                 .take(symbol_count)
-                .cloned()
-                .map(|ty| {
-                    ty.unwrap_or(crate::sem::SemType::Bits(crate::sem::Width::Const(
-                        register_width,
-                    )))
+                .map(|format| match format {
+                    Some((exponent, mantissa)) => terms.float(*exponent, *mantissa),
+                    None => terms.int(register_width.into()),
                 })
                 .collect::<Vec<_>>();
-            SmtOracle.refines_typed_outcome(&lhs, &rhs, &symbol_types)
+            SmtOracle.refines_typed_outcome(&terms, &lhs, &rhs, &symbol_types)
         } else {
             let symbol_widths = vec![register_width; symbol_count];
             SmtOracle.prove_refinement_outcome(&lhs, &rhs, &symbol_widths)
@@ -758,9 +789,13 @@ impl<'a> Interpretation<'a> {
 impl tir_egraph::Externs<SemNode> for Interpretation<'_> {
     fn call(&self, id: u32, _terms: &[&SemNode], args: &[u64], out: &mut [u64]) -> bool {
         match id {
-            call::WIDTH_OF => match type_width(self.context, TypeId::from_number(args[0] as u32)) {
+            call::WIDTH_OF => match self
+                .context
+                .terms()
+                .bit_width(TypeId::from_number(args[0] as u32))
+            {
                 Some(width) => {
-                    out[0] = width as u64;
+                    out[0] = width;
                     true
                 }
                 None => false,
@@ -770,7 +805,7 @@ impl tir_egraph::Externs<SemNode> for Interpretation<'_> {
                 if !(1..=64).contains(&width) {
                     return false;
                 }
-                out[0] = IntegerType::new(self.context, width).number() as u64;
+                out[0] = IntegerType::new(self.context, u64::from(width)).number() as u64;
                 true
             }
             call::FLOAT_TYPE => {
@@ -789,7 +824,7 @@ impl tir_egraph::Externs<SemNode> for Interpretation<'_> {
                 if !(1..=64).contains(&width) {
                     return false;
                 }
-                out[0] = IntegerType::new(self.context, width).number() as u64;
+                out[0] = IntegerType::new(self.context, u64::from(width)).number() as u64;
                 true
             }
             call::MAX => {
@@ -823,7 +858,7 @@ impl tir_egraph::Externs<SemNode> for Interpretation<'_> {
                 match execute_fold(kind, &operands) {
                     Some(value) => {
                         out[0] = value.to_u64();
-                        out[1] = value.width() as u64;
+                        out[1] = value.width();
                         true
                     }
                     None => false,
@@ -1055,19 +1090,14 @@ impl<'a> Lowering<'a> {
     /// The declared guards, the constant-operand requirement, the value
     /// predicates, and the proof obligation.
     fn predicates(&mut self, axiom: &Axiom, index: usize) {
-        for (symbol, ty) in axiom.symbol_types.iter().enumerate() {
-            let Some(crate::sem::SemType::Float(format)) = ty else {
-                continue;
-            };
-            let (crate::sem::Width::Const(exponent), crate::sem::Width::Const(mantissa)) =
-                (&format.exponent, &format.mantissa)
-            else {
+        for (symbol, format) in axiom.symbol_formats.iter().enumerate() {
+            let Some((exponent, mantissa)) = *format else {
                 continue;
             };
             let actual = self.type_of(self.declared[symbol]);
             let expected = self.extern_type(
                 call::FLOAT_TYPE,
-                smallvec![Expr::Lit(*exponent as i64), Expr::Lit(*mantissa as i64)],
+                smallvec![Expr::Lit(exponent as i64), Expr::Lit(mantissa as i64)],
             );
             self.guards.push(Guard::Cmp(
                 Cmp::Eq,
@@ -1467,6 +1497,10 @@ fn width_expr(expr: &WidthExpr, widths: &[u32]) -> Expr {
     match expr {
         WidthExpr::Lit(value) => Expr::Lit(*value as i64),
         WidthExpr::Name(index) => Expr::Scalar(widths[*index]),
+        WidthExpr::Add(a, b) => Expr::Add(
+            Box::new(width_expr(a, widths)),
+            Box::new(width_expr(b, widths)),
+        ),
         WidthExpr::Sub(a, b) => Expr::Sub(
             Box::new(width_expr(a, widths)),
             Box::new(width_expr(b, widths)),

@@ -1073,22 +1073,32 @@ fn reg_port_entries(
     port_entries
 }
 
-fn operands_schema_ts(
+fn ports_schema_ts(
     ports: &[(String, Option<String>, bool, Option<String>)],
 ) -> proc_macro2::TokenStream {
-    let items = ports
+    let uses: Vec<_> = ports
         .iter()
         .filter(|(_, _, is_def, _)| !is_def)
-        .map(|(name, _, _, _)| {
-            let field = format_ident!("{}", name);
-            quote! { #field: "?tir::backend::RegClassType" }
-        });
-    let items: Vec<_> = items.collect();
-    if items.is_empty() {
+        .map(|(name, _, _, _)| format_ident!("{}", name))
+        .collect();
+    let defines = ports.iter().any(|(_, _, is_def, _)| *is_def);
+    let slots = vec!["backend.reg<_, _>?"; uses.len()].join(", ");
+    let results = if defines { "backend.reg<_, _>*" } else { "()" };
+    let scheme = format!("({slots}) -> {results}");
+    let operands = if uses.is_empty() {
         quote! {}
     } else {
-        quote! { operands: O { #(#items,)* }, }
-    }
+        quote! { operands: O { #(#uses,)* }, }
+    };
+    // Results are variadic: an instruction defining several registers (x86
+    // `div`, writing both halves of the quotient/remainder pair) has one
+    // result per def port, and one that defines none has no results.
+    let results = if defines {
+        quote! { results: R { regs }, }
+    } else {
+        quote! {}
+    };
+    quote! { scheme: #scheme, #operands #results }
 }
 fn instruction_program_ts(
     inst: &ast::Instruction,
@@ -1764,15 +1774,7 @@ fn emit_instruction(
         static #ports_ident: [tir::backend::RegPort; #port_count] = [#(#port_entries),*];
     });
 
-    let operands_schema = operands_schema_ts(&ports);
-    // Results are variadic: an instruction defining several registers (x86
-    // `div`, writing both halves of the quotient/remainder pair) has one
-    // result per def port, and one that defines none has no results.
-    let results_schema = if ports.iter().any(|(_, _, is_def, _)| *is_def) {
-        quote! { results: R { regs: "*tir::backend::RegClassType" }, }
-    } else {
-        quote! {}
-    };
+    let ports_schema = ports_schema_ts(&ports);
 
     // An instruction that writes `PC::pc` transfers control, so it is a
     // terminator: its successors are the blocks its attributes reference
@@ -1825,8 +1827,7 @@ fn emit_instruction(
             #name_ident {
                 name: #op_name_lit,
                 dialect: #dialect,
-                #operands_schema
-                #results_schema
+                #ports_schema
                 #state_schema
                 attributes: A { #attrs_schema },
                 interfaces: #interfaces_list,

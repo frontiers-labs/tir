@@ -216,7 +216,7 @@ pub trait MachineContext {
         _ord: MemOrdering,
     ) -> Result<u64, SimTrap> {
         let old = self.read_memory(address, size)?;
-        let width = (size as u32) * 8;
+        let width = (size as u64) * 8;
         let result = op.apply(APInt::new(width, old), APInt::new(width, value));
         self.write_memory(address, size, result.to_u64())?;
         Ok(old)
@@ -688,9 +688,8 @@ pub(crate) fn fallthrough_branch(
 /// The IEEE-754 bit pattern of an `fp.constant` f64.
 pub fn f64_constant_bits(context: &tir::Context, op: &crate::fp::ops::ConstantOp) -> Option<i64> {
     let ty = context.get_value(op.result()).ty();
-    let is_f64 = (context.get_type_data(ty).as_ref() as &dyn std::any::Any)
-        .downcast_ref::<crate::builtin::FloatType>()
-        .is_some_and(|float| float.bit_width() == 64);
+    let is_f64 =
+        crate::builtin::FloatType::view(context, ty).is_some_and(|float| float.bit_width() == 64);
     if !is_f64 {
         return None;
     }
@@ -719,8 +718,8 @@ pub fn as_string_attr(attribute: Option<AttributeValue>) -> Option<String> {
 /// assembly printer and the object writer emit the same items, in their own
 /// notations, and classify them here.
 pub enum AsmItem {
-    /// Notation, not code: a terminator, a memory-state name, or a declaration
-    /// resolved at link time.
+    /// Notation, not code: a terminator, a memory-state name, a type
+    /// definition, or a declaration resolved at link time.
     Skip,
     Section(SectionOp),
     Symbol,
@@ -736,6 +735,7 @@ pub fn asm_item(op: &tir::OpHandle) -> AsmItem {
         || op.is::<BlockEndOp>()
         || names_memory_state(op)
         || op.is::<crate::func::DeclareOp>()
+        || op.is::<crate::builtin::TypeDefOp>()
         || op
             .clone()
             .as_op::<crate::builtin::GlobalOp>()

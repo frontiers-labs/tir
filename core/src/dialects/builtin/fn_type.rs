@@ -1,178 +1,150 @@
-use std::any::Any;
-use std::sync::Arc;
+use tir_symbolic::term::{no_carrier, valid};
 
-use crate::ty::TypeConstraint;
-use crate::{Context, Error, IRFormatter, Type, TypeId, parse::Span};
+use crate::parse::common::Cursor;
+use crate::ty::{Ctor, Kind, Param, Terms, TypeArg, TypeCtor, TypeSpelling};
+use crate::{Context, Error, TypeId};
 
 use crate as tir;
 
+static VARARGS: Ctor = Ctor::new(TypeCtor {
+    dialect: "builtin",
+    name: "varargs",
+    params: &[],
+    kind: Kind::Data,
+    validate: valid,
+    carrier: no_carrier,
+});
+
 /// The open tail of a function's parameter list, independent of its source language.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct VarArgsType;
 
 impl VarArgsType {
     #[allow(clippy::new_ret_no_self)]
     pub fn new(context: &Context) -> TypeId {
-        context.get_type_id(Arc::new(Self))
+        let terms = context.terms();
+        terms
+            .intern(VARARGS.id(terms), vec![])
+            .expect("the varargs type")
+    }
+
+    pub fn view(terms: &impl AsRef<Terms>, ty: TypeId) -> Option<Self> {
+        let terms = terms.as_ref();
+        VARARGS.is(terms, ty).then_some(Self)
+    }
+
+    pub fn spelling(context: &Context) -> TypeSpelling {
+        TypeSpelling {
+            ctor: VARARGS.id(context),
+            keys: &["varargs"],
+            parse: |_, _, context| Ok(Self::new(context)),
+            print: |_, _, fmt| fmt.write("varargs"),
+            variadic_tail: true,
+        }
     }
 }
 
-impl TypeConstraint for VarArgsType {}
-
-impl Type for VarArgsType {
-    fn dialect(&self) -> &'static str {
-        "builtin"
-    }
-
-    fn parse_key() -> &'static str {
-        "varargs"
-    }
-
-    fn parse<'src>(
-        _mnemonic: &str,
-        _parser: &mut crate::parse::text::Parser<'src>,
-        context: &Context,
-    ) -> Result<TypeId, (Span, Error)> {
-        Ok(Self::new(context))
-    }
-
-    fn print(&self, fmt: &mut IRFormatter<'_>) -> Result<(), std::fmt::Error> {
-        fmt.write("varargs")
-    }
-
-    fn is_variadic_tail(&self) -> bool {
-        true
-    }
-
-    fn eq(&self, other: &dyn Type) -> bool {
-        (other as &dyn Any).is::<Self>()
-    }
-
-    fn hash(&self, _state: &mut dyn std::hash::Hasher) {}
-}
+static FN: Ctor = Ctor::new(TypeCtor {
+    dialect: "builtin",
+    name: "fn",
+    params: &[
+        ("params", Param::List(Kind::Data)),
+        ("ret", Param::One(Kind::Data)),
+    ],
+    kind: Kind::Data,
+    validate: valid,
+    carrier: no_carrier,
+});
 
 /// The type of a function value, written `!fn<(!i32, !i32) -> !i32>`.
 ///
 /// A λ node produces one of these, and a call consumes it, so "which function
 /// runs here" is a def-use question. A variadic signature ends in a
-/// variadic-tail parameter type (see [`Type::is_variadic_tail`]) rather than
-/// carrying a separate flag.
+/// variadic-tail parameter type (see [`Context::is_variadic_tail`]) rather
+/// than carrying a separate flag.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FnType {
-    params: Vec<Arc<dyn Type>>,
-    ret: Arc<dyn Type>,
+    params: Vec<TypeId>,
+    ret: TypeId,
 }
 
 impl FnType {
     #[allow(clippy::new_ret_no_self)]
     pub fn new(context: &Context, params: &[TypeId], ret: TypeId) -> TypeId {
-        let params = params
-            .iter()
-            .map(|param| context.get_type_data(*param))
-            .collect();
-        context.get_type_id(Arc::new(Self {
-            params,
-            ret: context.get_type_data(ret),
-        }))
+        let terms = context.terms();
+        let params = params.iter().copied().map(TypeArg::Type).collect();
+        terms
+            .intern(
+                FN.id(terms),
+                vec![TypeArg::List(params), TypeArg::Type(ret)],
+            )
+            .expect("a signature of data types")
     }
 
-    pub fn params(&self, context: &Context) -> Vec<TypeId> {
-        self.params
-            .iter()
-            .map(|param| context.get_type_id(param.clone()))
-            .collect()
+    pub fn view(terms: &impl AsRef<Terms>, ty: TypeId) -> Option<Self> {
+        let terms = terms.as_ref();
+        FN.is(terms, ty).then(|| Self {
+            params: super::tuple::type_list(terms.arg(ty, 0)),
+            ret: terms.child(ty, 1).expect("a return type"),
+        })
     }
 
-    pub fn ret(&self, context: &Context) -> TypeId {
-        context.get_type_id(self.ret.clone())
+    pub fn params(&self) -> Vec<TypeId> {
+        self.params.clone()
+    }
+
+    pub fn ret(&self) -> TypeId {
+        self.ret
     }
 
     /// The parameter and return types of `value`, when it is a function value.
     pub fn signature_of(context: &Context, value: crate::ValueId) -> Option<(Vec<TypeId>, TypeId)> {
-        let data = context.get_type_data(context.get_value(value).ty());
-        let signature = (data.as_ref() as &dyn Any).downcast_ref::<FnType>()?;
-        Some((signature.params(context), signature.ret(context)))
-    }
-}
-
-impl TypeConstraint for FnType {}
-
-impl Type for FnType {
-    fn dialect(&self) -> &'static str {
-        "builtin"
+        let signature = Self::view(context, context.get_value(value).ty())?;
+        Some((signature.params, signature.ret))
     }
 
-    fn parse_key() -> &'static str {
-        "fn"
-    }
-
-    fn parse<'src>(
-        _mnemonic: &str,
-        parser: &mut tir::parse::text::Parser<'src>,
-        context: &Context,
-    ) -> Result<TypeId, (Span, Error)> {
-        use tir::parse::common::Cursor;
-        if !parser.parse_token("<") {
-            return Err((parser.span(), Error::ExpectedToken("<")));
-        }
-        let params = parser
-            .parse_delimited("(", ")", |parser| {
-                parser
+    pub fn spelling(context: &Context) -> TypeSpelling {
+        TypeSpelling {
+            ctor: FN.id(context),
+            keys: &["fn"],
+            parse: |_, parser, context| {
+                if !parser.parse_token("<") {
+                    return Err((parser.span(), Error::ExpectedToken("<")));
+                }
+                let params = parser
+                    .parse_delimited("(", ")", |parser| {
+                        parser
+                            .parse_type(context)?
+                            .ok_or_else(|| (parser.span(), Error::ExpectedType))
+                    })?
+                    .ok_or_else(|| (parser.span(), Error::ExpectedToken("(")))?;
+                if !parser.parse_token("->") {
+                    return Err((parser.span(), Error::ExpectedToken("->")));
+                }
+                let ret = parser
                     .parse_type(context)?
-                    .ok_or_else(|| (parser.span(), Error::ExpectedType))
-            })?
-            .ok_or_else(|| (parser.span(), Error::ExpectedToken("(")))?;
-        if !parser.parse_token("->") {
-            return Err((parser.span(), Error::ExpectedToken("->")));
+                    .ok_or_else(|| (parser.span(), Error::ExpectedType))?;
+                if !parser.parse_token(">") {
+                    return Err((parser.span(), Error::ExpectedToken(">")));
+                }
+                Ok(Self::new(context, &params, ret))
+            },
+            print: |spellings, ty, fmt| {
+                let signature = Self::view(spellings, ty).expect("a function type");
+                fmt.write("fn<(")?;
+                for (index, param) in signature.params().into_iter().enumerate() {
+                    if index > 0 {
+                        fmt.write(", ")?;
+                    }
+                    spellings.print(param, fmt)?;
+                }
+                fmt.write(") -> ")?;
+                spellings.print(signature.ret(), fmt)?;
+                fmt.write(">")
+            },
+            variadic_tail: false,
         }
-        let ret = parser
-            .parse_type(context)?
-            .ok_or_else(|| (parser.span(), Error::ExpectedType))?;
-        if !parser.parse_token(">") {
-            return Err((parser.span(), Error::ExpectedToken(">")));
-        }
-        Ok(Self::new(context, &params, ret))
     }
-
-    fn print(&self, fmt: &mut IRFormatter<'_>) -> Result<(), std::fmt::Error> {
-        fmt.write("fn<(")?;
-        for (index, param) in self.params.iter().enumerate() {
-            if index > 0 {
-                fmt.write(", ")?;
-            }
-            print_nested(fmt, param)?;
-        }
-        fmt.write(") -> ")?;
-        print_nested(fmt, &self.ret)?;
-        fmt.write(">")
-    }
-
-    fn eq(&self, other: &dyn Type) -> bool {
-        let Some(other) = (other as &dyn Any).downcast_ref::<FnType>() else {
-            return false;
-        };
-        self.ret.eq(other.ret.as_ref())
-            && self.params.len() == other.params.len()
-            && self
-                .params
-                .iter()
-                .zip(&other.params)
-                .all(|(left, right)| left.eq(right.as_ref()))
-    }
-
-    fn hash(&self, state: &mut dyn std::hash::Hasher) {
-        for param in &self.params {
-            state.write_usize(Arc::as_ptr(param) as *const () as usize);
-        }
-        state.write_usize(self.params.len());
-        state.write_usize(Arc::as_ptr(&self.ret) as *const () as usize);
-    }
-}
-
-fn print_nested(fmt: &mut IRFormatter<'_>, ty: &Arc<dyn Type>) -> Result<(), std::fmt::Error> {
-    fmt.write("!")?;
-    if ty.dialect() != "builtin" {
-        fmt.write(format!("{}.", ty.dialect()))?;
-    }
-    ty.print(fmt)
 }
 
 // Takes a function's address as data, for a language that stores function
@@ -181,12 +153,9 @@ tir::operation! {
     FnToPtrOp {
         name: "fn_to_ptr",
         dialect: "builtin",
-        operands: O {
-            callee: "crate::builtin::FnType",
-        },
-        results: R {
-            result: "crate::ptr::PtrType",
-        },
+        scheme: "(fn<_, _>) -> ptr.p<_>",
+        operands: O { callee },
+        results: R { result },
         interfaces: [crate::Pure, crate::Speculatable],
     }
 }
@@ -201,12 +170,9 @@ tir::operation! {
     PtrToFnOp {
         name: "ptr_to_fn",
         dialect: "builtin",
-        operands: O {
-            address: "crate::ptr::PtrType",
-        },
-        results: R {
-            result: "crate::builtin::FnType",
-        },
+        scheme: "(ptr.p<_>) -> fn<_, _>",
+        operands: O { address },
+        results: R { result },
         interfaces: [crate::Pure, crate::Speculatable],
     }
 }

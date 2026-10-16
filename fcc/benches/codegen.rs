@@ -14,7 +14,6 @@ use fcc::codegen::codegen;
 use fcc::diagnostics::{Span, intern_file};
 use fcc::lexer::Token;
 use fcc::parser::parse;
-use fcc::passes::LowerCirStructsPass;
 use fcc::sema::{TypedAst, analyze};
 use tir::backend::TargetMachine;
 use tir::backend::pipeline::{Oracles, StopAfter, build_pipeline};
@@ -27,6 +26,9 @@ use tir::passes::{
 use tir::{Context, Operation, PassManager};
 use tir_bench::{BatchSize, Criterion, criterion_group, criterion_main};
 
+// The analyzed unit and the context its types are interned in, which the unit
+// is generated into.
+type AstInput = (Context, TypedAst);
 type IrInput = (Context, ModuleOp);
 type BackendInput = (Context, ModuleOp, Box<dyn TargetMachine>);
 
@@ -118,7 +120,7 @@ fn gen_expr_heavy(funcs: usize, depth: usize) -> String {
     src
 }
 
-fn parse_src(src: &str) -> TypedAst {
+fn parse_src(src: &str) -> AstInput {
     let file = intern_file("<bench>", src);
     let tokens: Vec<_> = Token::lexer(src)
         .spanned()
@@ -126,47 +128,47 @@ fn parse_src(src: &str) -> TypedAst {
         .collect();
     let options = Default::default();
     let ast = parse(&tokens, options).expect("parse");
-    analyze(ast, options).expect("sema")
+    let context = Context::with_default_dialects();
+    let ast = analyze(&context, ast, options).expect("sema");
+    (context, ast)
 }
 
-fn lower_before_instcombine(ast: &TypedAst) -> IrInput {
-    let context = Context::with_default_dialects();
+fn lower_before_instcombine((context, ast): AstInput) -> IrInput {
     context.register_dialect::<CirDialect>();
-    let module = codegen(&context, ast).unwrap();
+    let module = codegen(&context, &ast).unwrap();
 
     let mut pm = PassManager::new();
-    pm.add_pass(LowerCirStructsPass::new());
     let function_pipeline = pm.nest::<FuncOp>();
     function_pipeline.add_pass(RestructureNodesPass::new());
+    function_pipeline.add_pass(tir::passes::EraseLayoutPass::new());
     function_pipeline.add_pass(PromoteNodesPass::new());
     function_pipeline.add_pass(VerifyDepsPass::new());
     pm.run(&context, context.get_op(module.id())).unwrap();
     (context, module)
 }
 
-fn lower_before_isel(ast: &TypedAst) -> BackendInput {
-    let (context, module) = lower_before_instcombine(ast);
+fn lower_before_isel(input: AstInput) -> BackendInput {
+    let (context, module) = lower_before_instcombine(input);
     let target =
         tir::backend::select_target_with_abi("x86_64", None, None, None).expect("x86_64 target");
     target.register_dialects(&context);
 
     let mut pm = PassManager::new();
     let function_pipeline = pm.nest::<FuncOp>();
-    function_pipeline.add_pass(InstCombineNodesPass::new());
+    function_pipeline.add_pass(InstCombineNodesPass::trusting());
     pm.add_pass(MaterializeSymbolAddressesPass::new());
     pm.run(&context, context.get_op(module.id())).unwrap();
     fcc::codegen::lower_data(&context, &module).unwrap();
     (context, module, target)
 }
 
-fn codegen_ir(ast: &TypedAst) -> IrInput {
-    let ctx = Context::with_default_dialects();
-    let module = codegen(&ctx, ast).unwrap();
+fn codegen_ir((ctx, ast): AstInput) -> IrInput {
+    let module = codegen(&ctx, &ast).unwrap();
     (ctx, module)
 }
 
-fn run_codegen(ast: &TypedAst) {
-    let (_ctx, module) = codegen_ir(ast);
+fn run_codegen(input: AstInput) {
+    let (_ctx, module) = codegen_ir(input);
     black_box(module);
 }
 
@@ -179,13 +181,13 @@ fn run_promote((ctx, module): IrInput) {
 }
 
 fn run_pipeline(src: &str) {
-    let ast = parse_src(src);
-    run_codegen(&ast);
+    run_codegen(parse_src(src));
 }
 
 fn run_instcombine((context, module): IrInput) {
     let mut pm = PassManager::new();
-    pm.nest::<FuncOp>().add_pass(InstCombineNodesPass::new());
+    pm.nest::<FuncOp>()
+        .add_pass(InstCombineNodesPass::trusting());
     pm.run(&context, context.get_op(module.id())).unwrap();
 }
 
@@ -195,18 +197,24 @@ fn run_backend((context, module, target): BackendInput, stop_after: StopAfter) {
 }
 
 fn synthetic(c: &mut Criterion) {
+    // A unit is generated into the context its analysis interned its types
+    // in, so each run analyzes it again, untimed.
     c.bench_function("fcc/codegen/ast_to_ir", |b| {
-        let ast = parse_src(&gen_source(50, 40));
-        b.iter(|| run_codegen(&ast));
+        let src = gen_source(50, 40);
+        b.iter_batched(|| parse_src(&src), run_codegen, BatchSize::SmallInput);
     });
     c.bench_function("fcc/codegen_expr_heavy/ast_to_ir", |b| {
-        let ast = parse_src(&gen_expr_heavy(20, 12));
-        b.iter(|| run_codegen(&ast));
+        let src = gen_expr_heavy(20, 12);
+        b.iter_batched(|| parse_src(&src), run_codegen, BatchSize::SmallInput);
     });
     c.bench_function("fcc/promote/promote", |b| {
-        let ast = parse_src(&gen_source(50, 40));
+        let src = gen_source(50, 40);
         // Rebuild fresh IR because promotion replaces the locals' uses.
-        b.iter_batched(|| codegen_ir(&ast), run_promote, BatchSize::SmallInput);
+        b.iter_batched(
+            || codegen_ir(parse_src(&src)),
+            run_promote,
+            BatchSize::SmallInput,
+        );
     });
     c.bench_function("fcc/pipeline/source_to_ir", |b| {
         let src = gen_source(50, 40);
@@ -221,9 +229,8 @@ fn gcc_20011219_1(c: &mut Criterion) {
         .warm_up_time(Duration::from_secs(1))
         .measurement_time(Duration::from_secs(5));
     group.bench_function("instcombine", |b| {
-        let ast = parse_src(GCC_20011219_1);
         b.iter_batched(
-            || lower_before_instcombine(&ast),
+            || lower_before_instcombine(parse_src(GCC_20011219_1)),
             run_instcombine,
             BatchSize::SmallInput,
         );
@@ -233,9 +240,8 @@ fn gcc_20011219_1(c: &mut Criterion) {
         ("backend_through_finalize", StopAfter::Finalize),
     ] {
         group.bench_function(name, |b| {
-            let ast = parse_src(GCC_20011219_1);
             b.iter_batched(
-                || lower_before_isel(&ast),
+                || lower_before_isel(parse_src(GCC_20011219_1)),
                 |input| run_backend(input, stop_after),
                 BatchSize::SmallInput,
             );

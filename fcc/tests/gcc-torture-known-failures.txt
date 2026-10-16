@@ -663,7 +663,6 @@ compile/pr17397.c
 compile/pr17408.c
 compile/pr17529.c
 compile/pr17558.c
-compile/pr17906.c
 compile/pr17913.c
 compile/pr18903.c
 compile/pr19121.c
@@ -1103,9 +1102,7 @@ compile/xs.c
 compile/xsh.c
 compile/xzz.c
 compile/zero-strct-1.c
-compile/zero-strct-3.c
 compile/zero-strct-4.c
-compile/zero-strct-5.c
 execute/20000112-1.c
 execute/20000223-1.c
 execute/20000227-1.c

@@ -1,0 +1,20 @@
+// RUN: tir mc --march=x86_64 --stage=isel %s | filecheck %s
+
+// A refinement is a proved fact with no instruction: the backend pipeline
+// erases it whatever pipeline ran before, so the masked value is returned.
+
+module {
+  %fn_f = func.func @f(%x: !i64) -> !i64 {
+    %0 = constant {value = 7} : !i64
+    %1 = andi %x, %0 : !i64
+    %2 = constant {value = 10} : !i64
+    %3 = cmpi %1, %2 {predicate = "ult"} : !i1
+    %4 = refine %1, %3 : !i64
+    func.return %4
+  }
+  module_end
+}
+
+// CHECK: asm.symbol {name = "f"
+// CHECK: x86_64.and
+// CHECK-NOT: refine

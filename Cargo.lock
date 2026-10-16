@@ -792,6 +792,7 @@ dependencies = [
  "tir-arm64",
  "tir-bench",
  "tir-riscv",
+ "tir-symbolic",
  "tir-x86_64",
 ]
 
@@ -2129,6 +2130,7 @@ name = "tir-gpu"
 version = "0.1.0"
 dependencies = [
  "tir",
+ "tir-symbolic",
  "tmdl",
 ]
 
@@ -2250,8 +2252,11 @@ dependencies = [
 name = "tir-symbolic"
 version = "0.1.0"
 dependencies = [
+ "arc-swap",
  "chumsky",
+ "smallvec",
  "tir-adt",
+ "tir-relational",
 ]
 
 [[package]]

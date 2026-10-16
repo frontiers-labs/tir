@@ -46,6 +46,8 @@ const OP_VOCABULARY: &[(&str, SymKind)] = &[
     ("loop", SymKind::Loop),
     ("port", SymKind::Port),
     ("switch", SymKind::Switch),
+    ("poison", SymKind::Poison),
+    ("freeze", SymKind::Freeze),
 ];
 
 /// The [`SymKind`] an operator atom names, if any.
@@ -309,7 +311,7 @@ where
         return Ok(match kind {
             Some(kind) => {
                 let width_bits = if matches!(kind, SymKind::FPToSI | SymKind::FPToUI) {
-                    (u64::BITS - width.leading_zeros()).max(1)
+                    u64::from(u64::BITS - width.leading_zeros()).max(1)
                 } else {
                     16
                 };

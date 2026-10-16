@@ -952,8 +952,8 @@ fn fence_is_a_noop_that_records() {
 #[test]
 fn atomic_rmw_op_apply_edge_cases() {
     let w = 32u32;
-    let neg = |v: i32| APInt::new(w, v as u32 as u64);
-    let pos = |v: u32| APInt::new(w, v as u64);
+    let neg = |v: i32| APInt::new(u64::from(w), v as u32 as u64);
+    let pos = |v: u32| APInt::new(u64::from(w), v as u64);
 
     // Wrap-around add at 32-bit width.
     assert_eq!(AtomicRmwOp::Add.apply(pos(0xffff_ffff), pos(1)).to_u64(), 0);

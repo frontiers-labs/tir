@@ -342,6 +342,8 @@ pub enum Type {
         shape: Vec<Expr>,
     },
     State(Resource),
+    /// A pointer, binding the width the data layout gives it.
+    Pointer(Width),
     Named(String),
 }
 

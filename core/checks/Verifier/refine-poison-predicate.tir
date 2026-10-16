@@ -1,0 +1,16 @@
+// RUN: not tir opt --verify %s 2>&1 | filecheck %s
+
+// The argument is defined, so the predicate must hold; a division by zero
+// is poison and holds nowhere.
+
+module {
+  %fn_f = func.func @f(%x: !i64) -> !i64 {
+    %0 = constant {value = 0} : !i1
+    %1 = divui %0, %0 : !i1
+    %2 = refine %x, %1 : !i64
+    func.return %2
+  }
+  module_end
+}
+
+// CHECK: refine %{{[0-9]+}} at byte {{[0-9]+}}: predicate %{{[0-9]+}} fails for

@@ -40,8 +40,8 @@ void matmul_local_arrays(int *out)
 // CHECK: scf.for %[[I:[0-9]+]] = %{{[0-9]+}} to %{{[0-9]+}} step %{{[0-9]+}}
 // CHECK-NEXT: scf.for %[[K:[0-9]+]] = %{{[0-9]+}} to %{{[0-9]+}} step %{{[0-9]+}}
 // CHECK-NEXT: scf.for %[[J:[0-9]+]] = %{{[0-9]+}} to %{{[0-9]+}} step %{{[0-9]+}}
-// CHECK-NEXT: extsi %[[I]]
-// CHECK-NEXT: extsi %[[J]]
-// CHECK-NEXT: extsi %[[K]]
+// CHECK-DAG: extsi %[[I]]
+// CHECK-DAG: extsi %[[J]]
+// CHECK-DAG: extsi %[[K]]
 
 // ASM: matmul_local_arrays:

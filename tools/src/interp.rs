@@ -109,17 +109,13 @@ fn return_types(context: &Context, function: tir::OpId) -> Vec<tir::TypeId> {
 }
 
 fn parse_argument(context: &Context, ty: tir::TypeId, text: &str) -> Result<Value, String> {
-    let ty_data = context.get_type_data(ty);
-    if let Some(integer) = (ty_data.as_ref() as &dyn std::any::Any).downcast_ref::<IntegerType>() {
+    if let Some(integer) = IntegerType::view(context, ty) {
         let parsed: i64 = text
             .parse()
             .map_err(|_| format!("'{text}' is not an integer"))?;
         return Ok(Value::Int(APInt::new_signed(integer.width(), parsed)));
     }
-    if (ty_data.as_ref() as &dyn std::any::Any)
-        .downcast_ref::<tir::builtin::FloatType>()
-        .is_some()
-    {
+    if tir::builtin::FloatType::view(context, ty).is_some() {
         let parsed: f64 = text
             .parse()
             .map_err(|_| format!("'{text}' is not a float"))?;
@@ -133,6 +129,7 @@ fn format_value(context: &Context, value: &Value, ty: Option<tir::TypeId>) -> St
         .map(|ty| context.type_to_string(ty))
         .unwrap_or_else(|| "unit".into());
     let rendered = match value {
+        Value::Int(int) if int.width() > 64 => int.with_signed(true).to_string(),
         Value::Int(int) => format!("{}", int.to_i64()),
         Value::Float(float) => format!("{}", float.to_f64()),
         Value::Ptr(address) => format!("{address:#x}"),
@@ -148,7 +145,9 @@ fn format_value(context: &Context, value: &Value, ty: Option<tir::TypeId>) -> St
             environment.rounding, environment.flags, environment.traps
         ),
         Value::Rounding(mode) => format!("{spelled} {mode:?}"),
-        Value::Function(_) | Value::Unit => spelled.clone(),
+        Value::Type(ty) => context.type_to_string(*ty),
+        Value::Function(_) | Value::Layout(_) | Value::Unit => spelled.clone(),
+        Value::Poison => "poison".into(),
     };
     format!("{spelled} {rendered}")
 }

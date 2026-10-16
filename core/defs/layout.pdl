@@ -1,0 +1,16 @@
+// Layout erasure. A field is its base pointer plus the field's offset, and a
+// struct copy is a memcpy of the struct's size. `offsetof` and `sizeof` ask
+// the layout in scope while the rule rewrites and answer in bits; addresses
+// count bytes.
+
+rule field-address:
+  ptr.field<ty = $t, field = $f>(p: ptr<W>)
+  => ptr.ptradd(p, const<W>(offsetof($t, $f) / 8));
+
+rule struct-copy:
+  ptr.copy<ty = $t>(destination, source | memory)
+  => ptr.memcpy(destination, source, const<64>(sizeof($t) / 8) | memory);
+
+// A refinement is a fact the verifier proved; past it the value is the one
+// refined, and selection has no instruction for the fact.
+rule erase-refine: builtin.refine(x, p) => x;

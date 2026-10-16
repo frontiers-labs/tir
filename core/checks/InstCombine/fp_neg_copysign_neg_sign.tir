@@ -1,8 +1,8 @@
-// RUN: tir opt --pass restructure-nodes,instcombine-nodes --verify %s | filecheck %s
+// RUN: tir opt --pass restructure-nodes,instcombine-nodes<trusted> --verify %s | filecheck %s
 // RUN: tir interp %s -f bits32 | filecheck %s --check-prefix=BITS32
-// RUN: tir opt --pass restructure-nodes,instcombine-nodes --verify %s | tir interp - -f bits32 | filecheck %s --check-prefix=BITS32
+// RUN: tir opt --pass restructure-nodes,instcombine-nodes<trusted> --verify %s | tir interp - -f bits32 | filecheck %s --check-prefix=BITS32
 // RUN: tir interp %s -f bits64 | filecheck %s --check-prefix=BITS64
-// RUN: tir opt --pass restructure-nodes,instcombine-nodes --verify %s | tir interp - -f bits64 | filecheck %s --check-prefix=BITS64
+// RUN: tir opt --pass restructure-nodes,instcombine-nodes<trusted> --verify %s | tir interp - -f bits64 | filecheck %s --check-prefix=BITS64
 
 module {
   %f32 = func.func @f32(%x: !f32, %y: !f32) -> !f32 {

@@ -7,9 +7,9 @@
 // afterwards and the result is one nest. The point loops run `i, k, j` — the
 // order the read of `B` walks a row in.
 
-#data_layout = {types = {i32 = {abi = 32, size = 32}, i64 = {abi = 64, size = 64}, p = {abi = 64, size = 64}}}
+#layout_spec = #layout.spec<!i32 = {size = 32, abi = 32}, !i64 = {size = 64, abi = 64}, !ptr.p = {size = 64, abi = 64}>
 
-module {data_layout = #data_layout} {
+module {layout.spec = #layout_spec} {
   %0 = func.func @matmul() {
     %1 = ptr.alloca {size = 4194304, align = 4} : !ptr.p
     %2 = ptr.alloca {size = 4194304, align = 4} : !ptr.p

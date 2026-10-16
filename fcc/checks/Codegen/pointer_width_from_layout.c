@@ -5,5 +5,5 @@
 
 unsigned long pointer_size(void) { return sizeof(void *); }
 
-// CHECK: p = {abi = 64, size = 64}
+// CHECK: !ptr.p = {size = 64, abi = 64}
 // CHECK: constant {value = 8}

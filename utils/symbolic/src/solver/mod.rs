@@ -136,7 +136,7 @@ impl Solver {
             let value = model
                 .get(name)
                 .cloned()
-                .unwrap_or_else(|| APInt::new(sort_width(sort), 0));
+                .unwrap_or_else(|| APInt::new(u64::from(sort_width(sort)), 0));
             out.push_str(&format!(
                 "\n  (define-fun {name} () {sort} {})",
                 format_value(&value, sort_is_bool(sort))
@@ -193,7 +193,7 @@ impl Solver {
         // Declared but unconstrained symbols default to zero.
         for (name, sort) in &self.decls {
             if !model.contains_key(name) {
-                model.insert(name.clone(), APInt::new(sort_width(sort), 0));
+                model.insert(name.clone(), APInt::new(u64::from(sort_width(sort)), 0));
             }
         }
         model
@@ -238,7 +238,7 @@ impl Solver {
         let value = lits.iter().enumerate().fold(0u64, |acc, (i, &l)| {
             acc | ((blasted.lit_value(l) as u64) << i)
         });
-        Some((APInt::new(width, value), self.term_is_bool(t)))
+        Some((APInt::new(u64::from(width), value), self.term_is_bool(t)))
     }
 
     fn term_is_bool(&self, t: &Term) -> bool {
@@ -320,7 +320,7 @@ fn bits_to_apint(width: u32, bits: &[bool]) -> APInt {
         .iter()
         .enumerate()
         .fold(0u64, |acc, (i, &b)| acc | ((b as u64) << i));
-    APInt::new(width, value)
+    APInt::new(u64::from(width), value)
 }
 
 /// Format a value as an SMT-LIB constant: `true`/`false`, `#x..` for nibble widths, else `#b..`.

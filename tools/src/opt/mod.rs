@@ -26,6 +26,11 @@ pub struct ToolArgs {
     #[arg(long = "shuffle-seed")]
     shuffle_seed: Option<u64>,
 
+    /// A module whose symbols are merged into the input's before the passes
+    /// run, type definitions by C's compatible-type rule.
+    #[arg(long)]
+    merge: Option<OsString>,
+
     /// Output file, or `-` for stdout.
     #[arg(short = 'o', default_value = "-")]
     output: OsString,
@@ -42,6 +47,13 @@ pub fn run(args: ToolArgs) -> Result<(), Box<dyn Error>> {
     let module = tir::parse::ir::parse_ir::<ModuleOp>(&context, &input)
         .map_err(|(span, err)| format!("failed to parse input at byte {}: {err:?}", span.0))?;
     crate::common::attach_declared_data_layout(&context, &module)?;
+    if let Some(path) = &args.merge {
+        let other = tir::parse::ir::parse_ir::<ModuleOp>(&context, &read_input(Some(path))?)
+            .map_err(|(span, err)| {
+                format!("failed to parse {path:?} at byte {}: {err:?}", span.0)
+            })?;
+        tir::symbol_table::merge_modules(&context, module.id(), other.id())?;
+    }
 
     if !args.passes.is_empty() {
         let pipeline = args.passes.join(",");

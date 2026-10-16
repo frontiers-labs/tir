@@ -53,6 +53,7 @@ fn integer_to_float_avoids_double_rounding() {
 
 #[test]
 fn rounded_rtz_conversion_refines_partial_conversion() {
+    let terms = tir_symbolic::term::Terms::new();
     use tir_symbolic::sem::{EquivalenceOracle, SemGraph, SmtOracle};
     let graph = |kind: SymKind| {
         let mut graph = SemGraph::<()>::new();
@@ -77,11 +78,10 @@ fn rounded_rtz_conversion_refines_partial_conversion() {
         assert!(SmtOracle.refines(&graph(generic), &graph(rounded), &[64]));
         assert!(SmtOracle.refines(&graph(rounded), &graph(generic), &[64]));
         assert!(SmtOracle.refines_typed(
+            &terms,
             &graph(generic),
             &graph(rounded),
-            &[tir_symbolic::lang::SemType::Float(
-                tir_symbolic::lang::FloatFormat::new(11, 52)
-            )]
+            &[terms.float(11, 52)]
         ));
     }
 }
@@ -190,6 +190,7 @@ fn selection_fallback_preserves_nondefault_rounding_inside_nan_wrapper() {
 
 #[test]
 fn typed_refinement_observes_float_result_bits() {
+    let terms = tir_symbolic::term::Terms::new();
     use tir_symbolic::sem::{SemGraph, SmtOracle};
     let graph = |bits| {
         let mut graph = SemGraph::<()>::new();
@@ -199,12 +200,18 @@ fn typed_refinement_observes_float_result_bits() {
         graph.add_edge(value, bits_node);
         graph
     };
-    assert!(!SmtOracle.refines_typed(&graph(0), &graph(0x8000000000000000), &[]));
-    assert!(SmtOracle.refines_typed(&graph(0x7ff8123456789abc), &graph(0x7ff8123456789abc), &[]));
+    assert!(!SmtOracle.refines_typed(&terms, &graph(0), &graph(0x8000000000000000), &[]));
+    assert!(SmtOracle.refines_typed(
+        &terms,
+        &graph(0x7ff8123456789abc),
+        &graph(0x7ff8123456789abc),
+        &[]
+    ));
 }
 
 #[test]
 fn float_bit_extraction_preserves_nan_payload() {
+    let terms = tir_symbolic::term::Terms::new();
     let mut graph = Dag::<SymKind, SymPayload<()>>::new();
     let value = graph.add_node(SymKind::Symbol);
     graph.set_leaf_data(value, SymPayload::SymbolId(0));
@@ -216,15 +223,13 @@ fn float_bit_extraction_preserves_nan_payload() {
     for child in [value, high, low] {
         graph.add_edge(extract, child);
     }
-    let types = tir_symbolic::lang::infer_types(&graph, |node| {
-        (node == value).then_some(tir_symbolic::lang::SemType::Float(
-            tir_symbolic::lang::FloatFormat::new(8, 23),
-        ))
+    let types = tir_symbolic::lang::infer_types(&terms, &graph, |node| {
+        (node == value).then(|| terms.float(8, 23))
     })
     .unwrap();
     assert_eq!(
         types[extract.index()],
-        tir_symbolic::lang::SemType::bits(32)
+        tir_symbolic::term::TypeArg::Type(terms.int(32))
     );
     assert_eq!(
         execute(

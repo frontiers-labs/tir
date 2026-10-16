@@ -34,6 +34,27 @@ pub struct IrOp {
     /// Bit `i` set when operand `i` has the result's type, so an identity
     /// element at the other operand returns it.
     pub result_typed: u8,
+    /// In a template, the attributes a rule binds: any value matches them.
+    pub bound: Vec<tir_adt::Sym>,
+    /// The op's flags (`nsw`, `nuw`): facts its result relies on, poison
+    /// where they fail. They keep a flagged op apart from an unflagged one,
+    /// but a template that names none matches either: forgetting a flag only
+    /// makes the op more defined.
+    pub flags: Vec<NamedAttribute>,
+    /// In a template a rule head fills, the attributes the head gives values,
+    /// each with the kind of value its word stands for.
+    pub unfilled: Vec<(tir_adt::Sym, AttributeWord)>,
+}
+
+/// What the word a rule head fills an attribute with stands for; see
+/// [`attribute_word`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AttributeWord {
+    Int,
+    UInt,
+    Bool,
+    Type,
+    Str,
 }
 
 impl IrOp {
@@ -73,6 +94,9 @@ impl IrOp {
             cost,
             law,
             result_typed: if uniform { u8::MAX } else { 0 },
+            bound: Vec::new(),
+            flags: Vec::new(),
+            unfilled: Vec::new(),
         }
     }
 
@@ -94,10 +118,7 @@ impl IrOp {
         // one the op does not declare and floating-point semantics equal to
         // the operation's defaults add nothing, and a builder's order is not
         // an identity.
-        let declared = crate::OP_SCHEMAS
-            .iter()
-            .find(|schema| schema.dialect == op.dialect && schema.name == op.name)
-            .map_or(&[][..], |schema| schema.attributes);
+        let declared = declared_attributes(context, op.dialect, op.name);
         op.attrs.retain(|attribute| {
             declared
                 .iter()
@@ -108,8 +129,27 @@ impl IrOp {
                         if **semantics == crate::fp::Semantics::default_for_operation(instance.name().as_str())
                 )
         });
-        op.attrs.sort_by_key(|attribute| attribute.name);
+        op.split_flags(context, declared);
         op
+    }
+
+    fn split_flags(&mut self, context: &crate::Context, declared: &[crate::AttrSchema]) {
+        self.attrs.sort_by_key(|attribute| attribute.name);
+        let is_flag = |attribute: &NamedAttribute| {
+            declared.iter().any(|declared| {
+                declared.ty == "?Flag" && context.sym(declared.name) == Some(attribute.name)
+            })
+        };
+        (self.flags, self.attrs) = self.attrs.drain(..).partition(is_flag);
+        self.flags
+            .retain(|flag| matches!(flag.value, AttributeValue::Bool(true)));
+    }
+
+    /// This operator without its flags: what selection, which has no
+    /// poison to keep, reads it as.
+    pub fn without_flags(mut self) -> Self {
+        self.flags.clear();
+        self
     }
 
     /// The bit of [`Self::result_typed`] operand `index` has; none past the
@@ -129,13 +169,31 @@ impl IrOp {
             cost: 0,
             law: None,
             result_typed: 0,
+            bound: Vec::new(),
+            flags: Vec::new(),
+            unfilled: Vec::new(),
         }
+    }
+
+    // Whether this template's attributes admit `target`'s: the fixed ones are
+    // there with the same value, and every other one is bound.
+    fn admits(&self, target: &IrOp) -> bool {
+        self.dialect == target.dialect
+            && self.name == target.name
+            && self.flags.iter().all(|flag| target.flags.contains(flag))
+            && self.attrs.iter().all(|fixed| target.attrs.contains(fixed))
+            && target.attrs.iter().all(|attribute| {
+                self.attrs.contains(attribute) || self.bound.contains(&attribute.name)
+            })
     }
 }
 
 impl PartialEq for IrOp {
     fn eq(&self, other: &Self) -> bool {
-        self.dialect == other.dialect && self.name == other.name && self.attrs == other.attrs
+        self.dialect == other.dialect
+            && self.name == other.name
+            && self.attrs == other.attrs
+            && self.flags == other.flags
     }
 }
 
@@ -221,6 +279,9 @@ impl Kind {
                 op.dialect.hash(h);
                 op.name.hash(h);
                 hash_attrs(&op.attrs, h);
+                if !op.flags.is_empty() {
+                    hash_attrs(&op.flags, h);
+                }
             }
             Kind::State(_) => 2u8.hash(h),
             Kind::Form(_) => 3u8.hash(h),
@@ -278,8 +339,9 @@ pub enum Prov {
     Value(ValueId),
     /// An IR operation that already computes it.
     Op(OpId),
-    /// A rewrite's emitter, by index into the ruleset that introduced it.
-    Introduced(usize),
+    /// An operation a rewrite introduced, which the commit writes from the
+    /// node's own label.
+    Introduced,
 }
 
 /// An e-graph node label: the operator identity (kind/payload) plus the IR type of
@@ -451,21 +513,58 @@ impl SemNode {
         Self::ir(op, Some(ty), args, Prov::Op(id))
     }
 
-    /// An op a rewrite introduced, built by the ruleset's `idx`-th emitter.
-    /// Its carrier is filled in with its type.
-    pub fn introduced<O: Operation>(
-        context: &crate::Context,
-        ty: TypeId,
-        cost: u32,
-        idx: usize,
-        args: Vec<Id>,
-    ) -> Self {
+    /// An op a rewrite introduces, before its head fills in its type and
+    /// carrier.
+    pub fn introduced<O: Operation>(context: &crate::Context, cost: u32, args: Vec<Id>) -> Self {
         Self::ir(
             IrOp::declared(context, (O::dialect(), O::name()), Vec::new(), cost),
-            Some(ty),
+            None,
             args,
-            Prov::Introduced(idx),
+            Prov::Introduced,
         )
+    }
+
+    /// [`Self::introduced`] carrying the attributes `names`, whose values a
+    /// head fills in through [`attribute_field`]. One of a kind no word
+    /// holds is left out, so a head filling it spells nothing.
+    pub fn introduced_with<O: Operation>(
+        context: &crate::Context,
+        cost: u32,
+        names: &[&str],
+        args: Vec<Id>,
+    ) -> Self {
+        let declared = declared_attributes(context, O::dialect(), O::name());
+        let unfilled = names
+            .iter()
+            .filter_map(|&name| {
+                let ty = declared.iter().find(|declared| declared.name == name)?.ty;
+                Some((context.intern(name), word_kind(ty)?))
+            })
+            .collect();
+        let mut node = Self::introduced::<O>(context, cost, args);
+        if let Kind::Ir(op) = &mut node.kind {
+            op.unfilled = unfilled;
+        }
+        node
+    }
+
+    /// [`Self::pattern`] that binds the attributes `bound` and requires
+    /// `fixed`.
+    pub fn pattern_binding<O: Operation>(
+        context: &crate::Context,
+        fixed: Vec<(&str, AttributeValue)>,
+        bound: &[&str],
+        args: Vec<Id>,
+    ) -> Self {
+        let fixed = fixed
+            .into_iter()
+            .map(|(name, value)| NamedAttribute::new(context.intern(name), value))
+            .collect();
+        let mut op = IrOp::template(O::dialect(), O::name(), fixed);
+        let declared = declared_attributes(context, O::dialect(), O::name());
+        op.split_flags(context, declared);
+        op.bound = bound.iter().map(|name| context.intern(name)).collect();
+        Self::ir(op, None, args, Prov::None)
     }
 
     /// LHS template matching any op of `O`'s identity, at any result type.
@@ -543,9 +642,9 @@ impl SemNode {
     pub fn bits(&self) -> Option<APInt> {
         match &self.payload {
             Some(SemPayload::Expr(SymPayload::Int(value))) => Some(value.clone()),
-            Some(SemPayload::Expr(SymPayload::Float(value))) if value.bit_width() <= 64 => {
-                Some(APInt::new(value.bit_width(), value.to_bits() as u64))
-            }
+            Some(SemPayload::Expr(SymPayload::Float(value))) if value.bit_width() <= 64 => Some(
+                APInt::new(u64::from(value.bit_width()), value.to_bits() as u64),
+            ),
             _ => None,
         }
     }
@@ -592,6 +691,65 @@ pub mod field {
     /// One for a [`super::Kind::Result`] of an operation that changes a
     /// state, zero for any other node.
     pub const CHANGES: u32 = 7;
+    /// Bits of the operands of an introduced op that have its result's type,
+    /// joined to the ones it declares: where an identity element returns
+    /// the other operand.
+    pub const RESULT_TYPED: u32 = 8;
+    /// The first attribute field: an op's attribute named `sym` is field
+    /// `ATTRIBUTE + sym`, its value the word [`super::attribute_word`] gives.
+    /// An attribute no word holds is never read or filled.
+    pub const ATTRIBUTE: u32 = 1 << 16;
+}
+
+/// The field an op's attribute named `name` is read and written through.
+pub fn attribute_field(name: tir_adt::Sym) -> u32 {
+    field::ATTRIBUTE + name.index() as u32
+}
+
+/// The word standing for attribute `value` in the context `names` serves,
+/// so a rule moves an attribute from the op it matched to an op it builds: a
+/// number is itself, a type its id, a string its interned name. `None` for a
+/// value of another kind.
+pub fn attribute_word(names: &crate::Names, value: &AttributeValue) -> Option<u64> {
+    Some(match value {
+        AttributeValue::Int(value) => *value as u64,
+        AttributeValue::UInt(value) => *value,
+        AttributeValue::Bool(value) => u64::from(*value),
+        AttributeValue::Type(ty) => u64::from(ty.number()),
+        AttributeValue::Str(name) => names.intern(name).index() as u64,
+        _ => return None,
+    })
+}
+
+fn word_attribute(names: &crate::Names, kind: AttributeWord, word: u64) -> Option<AttributeValue> {
+    Some(match kind {
+        AttributeWord::Int => AttributeValue::Int(word as i64),
+        AttributeWord::UInt => AttributeValue::UInt(word),
+        AttributeWord::Bool => AttributeValue::Bool(word != 0),
+        AttributeWord::Type => AttributeValue::Type(TypeId::from_number(word.try_into().ok()?)),
+        AttributeWord::Str => AttributeValue::Str(names.name_at(word as usize)?.into()),
+    })
+}
+
+fn word_kind(ty: &str) -> Option<AttributeWord> {
+    Some(match ty.trim_start_matches('?') {
+        "Int" => AttributeWord::Int,
+        "UInt" => AttributeWord::UInt,
+        "Bool" | "Flag" => AttributeWord::Bool,
+        "Type" => AttributeWord::Type,
+        "Str" => AttributeWord::Str,
+        _ => return None,
+    })
+}
+
+fn declared_attributes(
+    context: &crate::Context,
+    dialect: &str,
+    name: &str,
+) -> &'static [crate::AttrSchema] {
+    context
+        .op_schema(dialect, name)
+        .map_or(&[], |schema| schema.attributes)
 }
 
 /// The carrier of an integer `width` bits wide. Every integer of one width
@@ -694,6 +852,9 @@ impl ENode for SemNode {
                 spell_text(op.dialect, &mut key);
                 spell_text(op.name, &mut key);
                 spell_attrs(&op.attrs, names, &mut key);
+                if !op.flags.is_empty() {
+                    spell_attrs(&op.flags, names, &mut key);
+                }
             }
             Kind::State(id) => {
                 key.push(2);
@@ -771,13 +932,30 @@ impl ENode for SemNode {
         h.finish()
     }
 
-    /// The operator index buckets by operator alone: a pattern template with a
-    /// wildcard type/payload must find every class holding its operator (the
-    /// [`ENode::op_key`] contract for [`ENode::matches_template`]).
+    /// The operator index buckets by operator and attributes, never type or
+    /// payload, which a template may leave open. Nor flags: a template that
+    /// names none matches a flagged op.
     fn op_key(&self) -> u64 {
         let mut h = FxHasher::default();
-        self.kind.hash_into(&mut h);
+        match &self.kind {
+            Kind::Ir(op) => {
+                1u8.hash(&mut h);
+                op.dialect.hash(&mut h);
+                op.name.hash(&mut h);
+                hash_attrs(&op.attrs, &mut h);
+            }
+            kind => kind.hash_into(&mut h),
+        }
         h.finish()
+    }
+
+    /// A template that binds attributes matches the ops of every bucket its
+    /// attribute values key.
+    fn template_key(&self) -> Option<u64> {
+        match &self.kind {
+            Kind::Ir(op) if !op.bound.is_empty() => None,
+            _ => Some(self.op_key()),
+        }
     }
 
     /// Operator/label equality, ignoring children: the kind, result type, and
@@ -803,7 +981,11 @@ impl ENode for SemNode {
             (&self.kind, &target.kind),
             (Kind::State(ANY_STATE), Kind::State(_)) | (Kind::Form(ANY_FORM), Kind::Form(_))
         );
-        if !any && self.kind != target.kind {
+        let admitted = match (&self.kind, &target.kind) {
+            (Kind::Ir(template), Kind::Ir(op)) => template.admits(op),
+            _ => self.kind == target.kind,
+        };
+        if !any && !admitted {
             return false;
         }
         if self.ty.is_some() && target.label_type() != self.label_type() {
@@ -837,11 +1019,11 @@ impl ENode for SemNode {
         self.ty.map(|ty| ty.number() as u64)
     }
 
-    fn scalar(&self, field: u32) -> Option<u64> {
+    fn scalar(&self, names: &crate::Names, field: u32) -> Option<u64> {
         match field {
             field::TY => self.type_key(),
             field::INT_VALUE => self.int().map(APInt::to_u64),
-            field::INT_WIDTH => self.int().map(|value| value.width() as u64),
+            field::INT_WIDTH => self.int().map(|value| value.width()),
             field::INT_SIGNED => self.int().map(|value| value.to_i64() as u64),
             field::STATE => match self.kind {
                 Kind::State(state) => Some(u64::from(state)),
@@ -855,11 +1037,21 @@ impl ENode for SemNode {
                 let changes = matches!(self.kind, Kind::Result { changes: true, .. });
                 Some(u64::from(changes))
             }
+            field if field >= field::ATTRIBUTE => {
+                let Kind::Ir(op) = &self.kind else {
+                    return None;
+                };
+                let attribute = op
+                    .attrs
+                    .iter()
+                    .find(|attribute| attribute_field(attribute.name) == field)?;
+                attribute_word(names, &attribute.value)
+            }
             _ => None,
         }
     }
 
-    fn fill(template: &Self, fills: &[(u32, u64)]) -> Option<Self> {
+    fn fill(template: &Self, names: &crate::Names, fills: &[(u32, u64)]) -> Option<Self> {
         let mut node = template.clone();
         let mut value = node.int().map(APInt::to_u64);
         let mut width = node.int().map(APInt::width);
@@ -867,12 +1059,37 @@ impl ENode for SemNode {
             match field {
                 field::TY => node.ty = Some(TypeId::from_number(word as u32)),
                 field::INT_VALUE => value = Some(word),
-                field::INT_WIDTH => width = Some(word as u32),
+                field::INT_WIDTH => width = Some(word),
                 field::CARRIER => node.carrier = carrier_from_word(word),
                 field::STATE => node.kind = Kind::State(word as u32),
                 field::FORM => node.kind = Kind::Form(word as u32),
+                field::RESULT_TYPED => {
+                    let Kind::Ir(op) = &mut node.kind else {
+                        return None;
+                    };
+                    op.result_typed |= word as u8;
+                }
+                field if field >= field::ATTRIBUTE => {
+                    let Kind::Ir(op) = &mut node.kind else {
+                        return None;
+                    };
+                    let &(name, kind) = op
+                        .unfilled
+                        .iter()
+                        .find(|(name, _)| attribute_field(*name) == field)?;
+                    op.attrs.push(NamedAttribute::new(
+                        name,
+                        word_attribute(names, kind, word)?,
+                    ));
+                }
                 _ => return None,
             }
+        }
+        if let Kind::Ir(op) = &mut node.kind
+            && !op.unfilled.is_empty()
+        {
+            op.unfilled.clear();
+            op.attrs.sort_by_key(|attribute| attribute.name);
         }
         if let (Some(value), Some(width)) = (value, width) {
             node.payload = Some(SemPayload::Expr(SymPayload::Int(APInt::new(width, value))));
@@ -886,7 +1103,9 @@ impl ENode for SemNode {
 
     fn carrier(&self) -> Option<Carrier> {
         match self.literal() {
-            Some(value) => self.carrier.or_else(|| int_carrier(value.width())),
+            Some(value) => self
+                .carrier
+                .or_else(|| int_carrier(u32::try_from(value.width()).ok()?)),
             None => self.carrier,
         }
     }
@@ -921,7 +1140,7 @@ impl ENode for SemNode {
     fn constant_of(&self, value: u64) -> Option<Self> {
         let carrier = self.carrier()?;
         let pointer = carrier.key & POINTER != 0;
-        let constant = SemNode::constant(APInt::new(u32::from(carrier.width), value), Prov::None);
+        let constant = SemNode::constant(APInt::new(u64::from(carrier.width), value), Prov::None);
         Some(constant.carried(pointer.then_some(carrier)))
     }
 }
@@ -1022,6 +1241,13 @@ fn spell_attr_value(value: &AttributeValue, names: &crate::Names, key: &mut Vec<
             key.push(2);
             key.extend_from_slice(&value.to_be_bytes());
         }
+        AttributeValue::Wide(limbs) => {
+            key.push(16);
+            key.extend_from_slice(&(limbs.len() as u32).to_be_bytes());
+            limbs
+                .iter()
+                .for_each(|limb| key.extend_from_slice(&limb.to_be_bytes()));
+        }
         AttributeValue::F32(value) => {
             key.push(3);
             key.extend_from_slice(&value.to_bits().to_be_bytes());
@@ -1062,6 +1288,10 @@ fn spell_attr_value(value: &AttributeValue, names: &crate::Names, key: &mut Vec<
                 spell_text(&names.type_spelling(format), key);
             }
         }
+        AttributeValue::LayoutSpec(spec) => {
+            key.push(15);
+            spell_text(&format!("{spec:?}"), key);
+        }
         AttributeValue::Register(register) => {
             key.push(10);
             spell_text(&format!("{register:?}"), key);
@@ -1097,6 +1327,7 @@ fn hash_attr_value(value: &AttributeValue, h: &mut impl Hasher) {
         AttributeValue::Predicate(p) => (*p as u8).hash(h),
         AttributeValue::Int(i) => i.hash(h),
         AttributeValue::UInt(u) => u.hash(h),
+        AttributeValue::Wide(limbs) => limbs.hash(h),
         AttributeValue::F32(f) => f.to_bits().hash(h),
         AttributeValue::F64(f) => f.to_bits().hash(h),
         AttributeValue::Bool(b) => b.hash(h),
@@ -1112,7 +1343,9 @@ fn hash_attr_value(value: &AttributeValue, h: &mut impl Hasher) {
         }
         // Register and value attributes are machine IR; the value vocabulary
         // never sees them.
-        AttributeValue::Register(_) | AttributeValue::Value(_) | AttributeValue::FpSemantics(_) => {
-        }
+        AttributeValue::Register(_)
+        | AttributeValue::Value(_)
+        | AttributeValue::FpSemantics(_)
+        | AttributeValue::LayoutSpec(_) => {}
     }
 }

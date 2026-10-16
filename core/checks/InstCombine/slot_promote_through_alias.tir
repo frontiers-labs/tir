@@ -6,9 +6,9 @@
 // is a write of the slot itself, and the read after it takes the value written.
 // A name the graph can prove equal is not an escape.
 
-#data_layout = {types = {p = {abi = 64, size = 64}}}
+#layout_spec = #layout.spec<!ptr.p = {size = 64, abi = 64}>
 
-module {data_layout = #data_layout} {
+module {layout.spec = #layout_spec} {
   %fn_stored_pointer = func.func @stored_pointer(%0: !i32, %1: !i32) -> !i32 {
     %2 = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
     ptr.store %0, %2

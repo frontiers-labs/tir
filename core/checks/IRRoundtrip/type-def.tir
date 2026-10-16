@@ -1,0 +1,24 @@
+// RUN: tir opt %s | filecheck %s
+
+// A module names its types with `type.def`. A use names the definition, never
+// its body; a definition with no body is incomplete, and a generic one binds
+// its parameters in the body.
+
+module {
+  type.def !Node = !struct<{next: !ptr.p<!Node>, value: !i32}>
+  type.def !Flags layout {packed, align = 64} = !struct<{a: !i8, b: !i32}>
+  type.def !Opaque
+  type.def !List<T: data> = !variant<{nil: !unit, cons: !struct<{head: T, tail: !ptr.p<!List<T>>}>}>
+  type.def !Node.1 = !union<{a: !i64, b: !f64}>
+  %fn_f = func.func @f(%0: !ptr.p<!Node>, %1: !ptr.p<!Opaque>, %2: !ptr.p<!List<!i32>>, %3: !ptr.p<!Node.1>) {
+    func.return
+  }
+  module_end
+}
+
+// CHECK: type.def !Node = !struct<{next: !ptr.p<!Node>, value: !i32}>
+// CHECK-NEXT: type.def !Flags layout {align = 64, packed} = !struct<{a: !i8, b: !i32}>
+// CHECK-NEXT: type.def !Opaque{{$}}
+// CHECK-NEXT: type.def !List<T: data> = !variant<{nil: !unit, cons: !struct<{head: T, tail: !ptr.p<!List<T>>}>}>
+// CHECK-NEXT: type.def !Node.1 = !union<{a: !i64, b: !f64}>
+// CHECK-NEXT: func.func @f(%{{[0-9]+}}: !ptr.p<!Node>, %{{[0-9]+}}: !ptr.p<!Opaque>, %{{[0-9]+}}: !ptr.p<!List<!i32>>, %{{[0-9]+}}: !ptr.p<!Node.1>)

@@ -4,9 +4,9 @@
 // index width already matches: the counter is the bounds' own `!i32`, and the
 // header's test is a signed compare against the bound fused into the branch.
 
-#data_layout = {types = {p = {abi = 32, size = 32}}}
+#layout_spec = #layout.spec<!ptr.p = {size = 32, abi = 32}>
 
-module {data_layout = #data_layout} {
+module {layout.spec = #layout_spec} {
   %fn_count = func.func @count(%lb: !i32, %ub: !i32, %st: !i32, %init: !i32) -> !i32 {
     %c = constant {value = 5} : !i32
     %i1_end, %r = scf.ordered_for %i1 = %lb to %ub step %st (%acc = %init) {

@@ -4,9 +4,9 @@
 // rv64 target loads eight bytes (`ld`), but the layout this module declares
 // makes its pointers 32 bits wide, so the same load becomes an `lw`.
 
-#data_layout = {endianness = "little", stack_alignment = 128, types = {p = {size = 32, abi = 32}}}
+#layout_spec = #layout.spec<endianness = "little", stack_align = 128, !ptr.p = {size = 32, abi = 32}>
 
-module {data_layout = #data_layout} {
+module {layout.spec = #layout_spec} {
   %fn_deref = func.func @deref(%0: !ptr.p<!ptr.p>) -> !ptr.p {
     %1 = ptr.load %0 : !ptr.p
     func.return %1

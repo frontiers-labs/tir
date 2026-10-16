@@ -10,23 +10,24 @@ void copy(struct record *destination, struct record *source) {
     *destination = *source;
 }
 
-// CHECK: #data_layout = {cache_line = 64, endianness = "little", stack_alignment = 128, types = {f32 = {abi = 32, size = 32}, f64 = {abi = 64, size = 64}, i1 = {abi = 8, size = 8}, i16 = {abi = 16, size = 16}, i32 = {abi = 32, size = 32}, i64 = {abi = 64, size = 64}, i8 = {abi = 8, size = 8}, p = {abi = 64, size = 64}}}
+// CHECK: #layout_spec = #layout.spec<endianness = "little", stack_align = 128, cache_line = 64, !i1 = {size = 8, abi = 8}, !i8 = {size = 8, abi = 8}, !i16 = {size = 16, abi = 16}, !i32 = {size = 32, abi = 32}, !i64 = {size = 64, abi = 64}, !f32 = {size = 32, abi = 32}, !f64 = {size = 64, abi = 64}, !ptr.p = {size = 64, abi = 64}, !builtin.i<W> = {size = !nat.align_to<W, !nat.min<!nat.max<!nat.pow2_ceil<W>, 8>, 64>>, abi = !nat.min<!nat.max<!nat.pow2_ceil<W>, 8>, 64>}, !builtin.f<15, 64> = {size = 128, abi = 128}>
 // CHECK-NEXT: #target_env = {arch = "x86_64", features = ["x86", "x86_64", "sse", "sse2"]}
 // CHECK-EMPTY:
-// CHECK: module {data_layout = #data_layout, target_env = #target_env} {
-// CHECK-NEXT:   %2 = func.func @copy(%8203: !ptr.p, %8204: !ptr.p) {
+// CHECK: module {layout.spec = #layout_spec, target_env = #target_env} {
+// CHECK-NEXT:   type.def !record = !struct<{text: !array<31, !i8>}>
+// CHECK-NEXT:   %2 = func.func @copy(%18: !ptr.p, %19: !ptr.p) {
 // CHECK-NEXT:     %3 = ptr.alloca {size = 8, align = 8} : !ptr.p
 // CHECK-NEXT:     %4 = ptr.alloca {size = 8, align = 8} : !ptr.p
-// CHECK-NEXT:     %4096 = constant {value = 31} : !i64
-// CHECK-NEXT:     %8205 = state.entry_state : !state<memory>
-// CHECK-NEXT:     %8206, %8207, %8208 = state.split state(%8205)
-// CHECK-NEXT:     %8195 = ptr.store %8203, %3 state(%8206)
-// CHECK-NEXT:     %8196 = ptr.store %8204, %4 state(%8207)
-// CHECK-NEXT:     %5, %8197 = ptr.load %3 state(%8195) : !ptr.p
-// CHECK-NEXT:     %6, %8198 = ptr.load %4 state(%8196) : !ptr.p
-// CHECK-NEXT:     %8199 = ptr.memcpy %5, %6, %4096 state(%8208)
-// CHECK-NEXT:     %8209 = state.join state(%8197, %8198, %8199)
-// CHECK-NEXT:     -> %8209
+// CHECK-NEXT:     %20 = state.entry_state : !state<memory>
+// CHECK-NEXT:     %21, %22, %23 = state.split state(%20)
+// CHECK-NEXT:     %10 = ptr.store %18, %3 state(%21)
+// CHECK-NEXT:     %11 = ptr.store %19, %4 state(%22)
+// CHECK-NEXT:     %5, %12 = ptr.load %3 state(%10) : !ptr.p
+// CHECK-NEXT:     %6, %13 = ptr.load %4 state(%11) : !ptr.p
+// CHECK-NEXT:     %25 = constant {value = 31} : !i64
+// CHECK-NEXT:     %26 = ptr.memcpy %5, %6, %25 state(%23)
+// CHECK-NEXT:     %24 = state.join state(%12, %13, %26)
+// CHECK-NEXT:     -> %24
 // CHECK-NEXT:   }
 // CHECK-NEXT:   module_end
 // CHECK-NEXT: }

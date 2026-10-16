@@ -350,7 +350,7 @@ pub fn scalar_op_named(name: &str) -> Option<&'static ScalarOp> {
     SCALAR_OPS.iter().find(|op| op.name == name)
 }
 
-fn widen(value: APInt, width: u32) -> APInt {
+fn widen(value: APInt, width: u64) -> APInt {
     if value.width() >= width {
         value
     } else if value.is_signed() {
@@ -365,8 +365,11 @@ fn coerce(lhs: APInt, rhs: APInt) -> (APInt, APInt) {
     (widen(lhs, width), widen(rhs, width))
 }
 
-fn shift_amount(value: &APInt, width: u32) -> u32 {
-    value.to_u64().min(u64::from(width)) as u32
+fn shift_amount(value: &APInt, width: u64) -> u64 {
+    if value.width() - value.count_leading_zeros() > 64 {
+        return width;
+    }
+    value.to_u64().min(width)
 }
 
 impl ScalarOp {

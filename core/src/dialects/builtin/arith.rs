@@ -2,7 +2,7 @@ use crate::operation;
 
 use crate as tir;
 use crate::{
-    Additive, Any, Commutative, ConstantLike, Context, Error, IntegerArithmetic, OpCost, Operation,
+    Additive, Commutative, ConstantLike, Context, Error, IntegerArithmetic, OpCost, Operation,
     SameOperandAndResultType, Speculatable, Subtractive,
 };
 
@@ -10,12 +10,11 @@ operation! {
     ConstantOp {
         name: "constant",
         dialect: "builtin",
+        scheme: "() -> int<_>",
         attributes: A {
             value: "Int",
         },
-        results: R {
-            result: "crate::builtin::IntegerType",
-        },
+        results: R { result },
         interfaces: [ConstantLike, crate::interp::Interp, crate::Speculatable],
     }
 }
@@ -25,43 +24,89 @@ impl crate::Speculatable for ConstantOp {}
 impl crate::ConstantLike for ConstantOp {
     fn constant_value(&self) -> tir::utils::APInt {
         let context = self.0.context.clone();
-        let value = match self.0.attr("value") {
-            Some(tir::attributes::AttributeValue::Int(v)) => v,
-            _ => 0,
-        };
         let ty = context.get_value(self.result()).ty();
-        let width = (context.get_type_data(ty).as_ref() as &dyn std::any::Any)
-            .downcast_ref::<crate::builtin::IntegerType>()
-            .map(crate::builtin::IntegerType::width)
-            .unwrap_or(64);
-        tir::utils::APInt::new_signed(width, value)
+        let width = crate::builtin::IntegerType::view(&context, ty).map_or(64, |int| int.width());
+        self.0
+            .attr("value")
+            .and_then(|value| value.int_at(width))
+            .unwrap_or_else(|| tir::utils::APInt::zero(width).with_signed(true))
     }
 }
 
+/// A `builtin.constant` of `ty` holding `value`, wider than 64 bits or not.
+pub fn literal(context: &Context, value: &tir::utils::APInt, ty: tir::TypeId) -> ConstantOpBuilder {
+    ConstantOpBuilder::new(context)
+        .attr("value", tir::attributes::AttributeValue::from_int(value))
+        .result_type(ty)
+}
+
+// The rest of an invocation is more fields of the op: its flags, and where
+// it is poison or must not run.
 macro_rules! int_binop {
-    ($op:ident, $name:tt, [$($iface:ident),*], $sem:tt) => {
-        int_binop!($op, $name, [$($iface),*], [], $sem);
-    };
-    ($op:ident, $name:tt, [$($iface:ident),*], [$($extra:ident),*], $sem:tt) => {
+    ($op:ident, $name:tt, [$($iface:ident),*], [$($extra:ident),*], $sem:tt $(, $($rest:tt)*)?) => {
         operation! {
             $op {
                 name: $name,
                 dialect: "builtin",
-                operands: O {
-                    lhs: "crate::builtin::IntegerType",
-                    rhs: "crate::builtin::IntegerType",
-                },
-                results: R {
-                    result: "crate::builtin::IntegerType",
-                },
+                scheme: "forall W: nat. (int<W>, int<W>) -> int<W>",
+                operands: O { lhs, rhs },
+                results: R { result },
                 interfaces: [$($iface,)* $($extra),*],
                 sem: $sem,
+                $($($rest)*)?
             }
         }
 
         $(impl $iface for $op {})*
     };
+    ($op:ident, $name:tt, [$($iface:ident),*], $sem:tt $(, $($rest:tt)*)?) => {
+        int_binop!($op, $name, [$($iface),*], [], $sem $(, $($rest)*)?);
+    };
 }
+
+trait IntegerConditions: Operation {
+    fn at_width(&self, g: &mut tir::sem::SemGraph, value: fn(u32) -> u64) -> Option<tir::NodeId> {
+        let context = &self.handle().context;
+        let ty = context.get_value(self.handle().operands()[0]).ty();
+        let width = crate::builtin::IntegerType::view(context, ty)?.width();
+        let width = u32::try_from(width).ok().filter(|&width| width <= 64)?;
+        Some(crate::sem::con(g, value(width), width))
+    }
+
+    fn zero(&self, g: &mut tir::sem::SemGraph) -> Option<tir::NodeId> {
+        self.at_width(g, |_| 0)
+    }
+
+    fn width(&self, g: &mut tir::sem::SemGraph) -> Option<tir::NodeId> {
+        self.at_width(g, u64::from)
+    }
+
+    fn smin(&self, g: &mut tir::sem::SemGraph) -> Option<tir::NodeId> {
+        self.at_width(g, |width| 1 << (width - 1))
+    }
+
+    fn ones(&self, g: &mut tir::sem::SemGraph) -> Option<tir::NodeId> {
+        self.at_width(g, |width| u64::MAX >> (64 - width))
+    }
+
+    fn flag(&self, g: &mut tir::sem::SemGraph, name: &str) -> tir::NodeId {
+        let set = matches!(
+            self.handle().attr(name),
+            Some(tir::attributes::AttributeValue::Bool(true))
+        );
+        crate::sem::con(g, u64::from(set), 1)
+    }
+
+    fn nsw_flag(&self, g: &mut tir::sem::SemGraph) -> tir::NodeId {
+        self.flag(g, "nsw")
+    }
+
+    fn nuw_flag(&self, g: &mut tir::sem::SemGraph) -> tir::NodeId {
+        self.flag(g, "nuw")
+    }
+}
+
+impl<T: Operation> IntegerConditions for T {}
 
 int_binop!(
     AddIOp,
@@ -73,7 +118,10 @@ int_binop!(
         IntegerArithmetic,
         Speculatable
     ],
-    "(set result (add lhs rhs))"
+    "(set result (add lhs rhs))",
+    attributes: A { nsw: "?Flag", nuw: "?Flag" },
+    poison: "(or (and $nsw_flag (lt (and (xor (add lhs rhs) lhs) (xor (add lhs rhs) rhs)) $zero))
+                 (and $nuw_flag (ult (add lhs rhs) lhs)))"
 );
 int_binop!(
     SubIOp,
@@ -84,7 +132,10 @@ int_binop!(
         IntegerArithmetic,
         Speculatable
     ],
-    "(set result (sub lhs rhs))"
+    "(set result (sub lhs rhs))",
+    attributes: A { nsw: "?Flag", nuw: "?Flag" },
+    poison: "(or (and $nsw_flag (lt (and (xor lhs rhs) (xor lhs (sub lhs rhs))) $zero))
+                 (and $nuw_flag (ult lhs rhs)))"
 );
 int_binop!(
     MulIOp,
@@ -102,13 +153,15 @@ int_binop!(
     DivSIOp,
     "divsi",
     [SameOperandAndResultType, IntegerArithmetic],
-    "(set result (div lhs rhs))"
+    "(set result (div lhs rhs))",
+    requires: "(and (ne rhs $zero) (not (and (eq lhs $smin) (eq rhs $ones))))"
 );
 int_binop!(
     DivUIOp,
     "divui",
     [SameOperandAndResultType, IntegerArithmetic],
-    "(set result (udiv lhs rhs))"
+    "(set result (udiv lhs rhs))",
+    requires: "(ne rhs $zero)"
 );
 // Remainder is defined by the Euclidean identity rather than a primitive
 // srem/urem, so the semantic form matches the canonical sub-mul-div target
@@ -120,13 +173,15 @@ int_binop!(
     RemSIOp,
     "remsi",
     [SameOperandAndResultType, IntegerArithmetic],
-    "(set result (sub lhs (mul (div lhs rhs) rhs)))"
+    "(set result (sub lhs (mul (div lhs rhs) rhs)))",
+    requires: "(and (ne rhs $zero) (not (and (eq lhs $smin) (eq rhs $ones))))"
 );
 int_binop!(
     RemUIOp,
     "remui",
     [SameOperandAndResultType, IntegerArithmetic],
-    "(set result (sub lhs (mul (udiv lhs rhs) rhs)))"
+    "(set result (sub lhs (mul (udiv lhs rhs) rhs)))",
+    requires: "(ne rhs $zero)"
 );
 int_binop!(
     AndIOp,
@@ -165,19 +220,22 @@ int_binop!(
     ShlIOp,
     "shli",
     [SameOperandAndResultType, IntegerArithmetic, Speculatable],
-    "(set result (shl lhs rhs))"
+    "(set result (shl lhs rhs))",
+    poison: "(uge rhs $width)"
 );
 int_binop!(
     ShrUIOp,
     "shrui",
     [SameOperandAndResultType, IntegerArithmetic, Speculatable],
-    "(set result (lshr lhs rhs))"
+    "(set result (lshr lhs rhs))",
+    poison: "(uge rhs $width)"
 );
 int_binop!(
     ShrSIOp,
     "shrsi",
     [SameOperandAndResultType, IntegerArithmetic, Speculatable],
-    "(set result (ashr lhs rhs))"
+    "(set result (ashr lhs rhs))",
+    poison: "(uge rhs $width)"
 );
 
 impl crate::OpCost for MulIOp {
@@ -190,16 +248,12 @@ operation! {
     CmpIOp {
         name: "cmpi",
         dialect: "builtin",
+        scheme: "forall W: nat. (int<W>, int<W>) -> int<1>",
         attributes: A {
             predicate: "Predicate in INTEGER",
         },
-        operands: O {
-            lhs: "crate::builtin::IntegerType",
-            rhs: "crate::builtin::IntegerType",
-        },
-        results: R {
-            result: "crate::Integer<1>",
-        },
+        operands: O { lhs, rhs },
+        results: R { result },
         sem: "(set result $cmp_expr)",
         interfaces: [crate::Speculatable],
     }
@@ -264,12 +318,9 @@ operation! {
     ExtSIOp {
         name: "extsi",
         dialect: "builtin",
-        operands: O {
-            input: "crate::builtin::IntegerType",
-        },
-        results: R {
-            result: "crate::builtin::IntegerType",
-        },
+        scheme: "(int<_>) -> int<_>",
+        operands: O { input },
+        results: R { result },
         sem: "(set result (sext input))",
         interfaces: [crate::Speculatable],
     }
@@ -281,12 +332,9 @@ operation! {
     ExtUIOp {
         name: "extui",
         dialect: "builtin",
-        operands: O {
-            input: "crate::builtin::IntegerType",
-        },
-        results: R {
-            result: "crate::builtin::IntegerType",
-        },
+        scheme: "(int<_>) -> int<_>",
+        operands: O { input },
+        results: R { result },
         sem: "(set result (zext input))",
         interfaces: [crate::Speculatable],
     }
@@ -298,12 +346,9 @@ operation! {
     TruncIOp {
         name: "trunci",
         dialect: "builtin",
-        operands: O {
-            input: "crate::builtin::IntegerType",
-        },
-        results: R {
-            result: "crate::builtin::IntegerType",
-        },
+        scheme: "(int<_>) -> int<_>",
+        operands: O { input },
+        results: R { result },
         sem: "(set result (trunc input))",
         interfaces: [crate::Speculatable],
     }
@@ -315,13 +360,10 @@ operation! {
     BitcastOp {
         name: "bitcast",
         dialect: "builtin",
+        scheme: "(_) -> _",
         verifier: "true",
-        operands: O {
-            input: "Any",
-        },
-        results: R {
-            result: "Any",
-        },
+        operands: O { input },
+        results: R { result },
         sem: "(set result (bitcast input))",
         interfaces: [crate::Speculatable],
     }
@@ -335,17 +377,15 @@ impl tir::Verifiable for BitcastOp {
         let layout = crate::DataLayout::for_op(context, self.0.id);
         let width = |value| {
             let ty = context.get_value(value).ty();
-            let ty = context.get_type_data(ty);
-            let ty = ty.as_ref() as &dyn std::any::Any;
-            ty.downcast_ref::<crate::builtin::IntegerType>()
-                .map(crate::builtin::IntegerType::width)
+            crate::builtin::IntegerType::view(context, ty)
+                .map(|int| int.width())
                 .or_else(|| {
-                    ty.downcast_ref::<crate::builtin::FloatType>()
-                        .map(crate::builtin::FloatType::bit_width)
+                    crate::builtin::FloatType::view(context, ty)
+                        .map(|float| u64::from(float.bit_width()))
                 })
                 .or_else(|| {
-                    ty.downcast_ref::<crate::builtin::IndexType>()
-                        .and_then(|_| layout.as_ref()?.index_width())
+                    crate::builtin::IndexType::view(context, ty)
+                        .and_then(|_| layout.as_ref()?.index_width().map(u64::from))
                 })
         };
         let input_width = width(self.operands()[0]);

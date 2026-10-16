@@ -533,9 +533,8 @@ impl FnCodegen<'_> {
             _ => None,
         });
 
-        let width = (self.context.get_type_data(value_ty).as_ref() as &dyn std::any::Any)
-            .downcast_ref::<IntegerType>()
-            .map_or(64, IntegerType::width);
+        let width = IntegerType::view(&self.context, value_ty)
+            .map_or(64, |integer| integer.width().min(64) as u32);
         let cases = items
             .iter()
             .zip(&arms)
@@ -791,13 +790,7 @@ impl FnCodegen<'_> {
     /// Compare a scalar with zero using the source domain's equality rules.
     pub(super) fn compare_against_zero(&mut self, value: ValueId, predicate: Predicate) -> ValueId {
         let ty = self.context.get_value(value).ty();
-        let is_float = {
-            let data = self.context.get_type_data(ty);
-            (data.as_ref() as &dyn std::any::Any)
-                .downcast_ref::<FloatType>()
-                .is_some()
-        };
-        if is_float {
+        if FloatType::view(&self.context, ty).is_some() {
             let zero = self.float_zero(ty);
             let predicate = match predicate {
                 Predicate::Eq => Predicate::Oeq,
@@ -816,12 +809,8 @@ impl FnCodegen<'_> {
                 )
                 .result();
         }
-        let narrow = {
-            let data = self.context.get_type_data(ty);
-            (data.as_ref() as &dyn std::any::Any)
-                .downcast_ref::<IntegerType>()
-                .is_some_and(|integer| integer.width() < 32)
-        };
+        let narrow =
+            IntegerType::view(&self.context, ty).is_some_and(|integer| integer.width() < 32);
         let (value, ty) = if narrow {
             let i32_ty = IntegerType::new(self.context, 32);
             (
@@ -832,13 +821,7 @@ impl FnCodegen<'_> {
         } else {
             (value, ty)
         };
-        let is_pointer = {
-            let data = self.context.get_type_data(ty);
-            (data.as_ref() as &dyn std::any::Any)
-                .downcast_ref::<PtrType>()
-                .is_some()
-        };
-        if is_pointer {
+        if PtrType::view(&self.context, ty).is_some() {
             let null = self.null_pointer();
             return self.lower_pointer_compare(predicate, value, null);
         }

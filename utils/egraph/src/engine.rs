@@ -134,10 +134,11 @@ struct Shape {
     commutes: bool,
 }
 
-pub(crate) struct Terms<'a, L> {
+pub(crate) struct Terms<'a, L: Label> {
     db: &'a tir_relational::Core<Lists, 1>,
     nodes: &'a [L],
     labels: &'a Labels<L>,
+    pub(crate) names: &'a L::Names,
 }
 
 impl<L: Label> Terms<'_, L> {
@@ -249,6 +250,11 @@ impl<L: Label> Vocabulary<L> {
     /// The node interned under `label`, bare of children it was met with.
     pub fn node(&self, label: LabelId) -> &L {
         self.labels.node(label)
+    }
+
+    /// What labels spell their interned fields through.
+    pub fn names(&self) -> &L::Names {
+        &self.names
     }
 
     /// The id of `node`'s label, the same in every engine over this
@@ -1695,7 +1701,12 @@ impl<L: Label> Engine<L> {
             db: &self.db,
             nodes: &self.node,
             labels: &self.vocabulary.labels,
+            names: &self.vocabulary.names,
         }
+    }
+
+    pub(crate) fn names(&self) -> &L::Names {
+        self.vocabulary.names()
     }
 
     /// The node interned under `label`.

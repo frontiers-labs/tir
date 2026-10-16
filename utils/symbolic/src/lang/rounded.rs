@@ -20,7 +20,7 @@ pub(super) fn operation(kind: SymKind) -> Option<FloatOp> {
     })
 }
 
-fn width(bits: u32) -> FloatWidth {
+fn width(bits: u64) -> FloatWidth {
     match bits {
         32 => FloatWidth::W32,
         64 => FloatWidth::W64,
@@ -28,10 +28,10 @@ fn width(bits: u32) -> FloatWidth {
     }
 }
 
-fn bits(value: Value) -> (u64, u32) {
+fn bits(value: Value) -> (u64, u64) {
     match value {
         Value::Int(value) => (value.to_u64(), value.width()),
-        Value::Float(value) => (value.to_bits() as u64, value.bit_width()),
+        Value::Float(value) => (value.to_bits() as u64, u64::from(value.bit_width())),
         _ => panic!("rounded floating-point operations require scalar operands"),
     }
 }
@@ -50,9 +50,9 @@ pub(super) fn evaluate(kind: SymKind, child: &impl Fn(usize) -> Value) -> (Value
     let mut operands = [first, 0, 0];
     let destination_bits = match op {
         FloatOp::Convert | FloatOp::SignedToFloat | FloatOp::UnsignedToFloat => {
-            1 + bits(child(1)).0 as u32 + bits(child(2)).0 as u32
+            1 + bits(child(1)).0 + bits(child(2)).0
         }
-        FloatOp::FloatToSigned | FloatOp::FloatToUnsigned => bits(child(1)).0 as u32,
+        FloatOp::FloatToSigned | FloatOp::FloatToUnsigned => bits(child(1)).0,
         FloatOp::Sqrt => source_bits,
         FloatOp::Add | FloatOp::Sub | FloatOp::Mul | FloatOp::Div | FloatOp::Fma => {
             operands[1] = bits(child(1)).0;

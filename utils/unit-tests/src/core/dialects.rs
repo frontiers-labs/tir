@@ -12,18 +12,13 @@ fn opaque_and_typed_pointers_are_distinct_and_interned() {
     let typed = PtrType::typed(&context, i32_ty);
 
     // Typed pointer remembers its pointee.
-    let data = context.get_type_data(typed);
-    let ptr = (data.as_ref() as &dyn std::any::Any)
-        .downcast_ref::<PtrType>()
-        .unwrap();
-    assert_eq!(ptr.pointee(&context), Some(i32_ty));
+    assert_eq!(
+        PtrType::view(&context, typed).unwrap().pointee(),
+        Some(i32_ty)
+    );
 
     // An opaque pointer carries no pointee.
-    let opaque_data = context.get_type_data(opaque);
-    let opaque_ptr = (opaque_data.as_ref() as &dyn std::any::Any)
-        .downcast_ref::<PtrType>()
-        .unwrap();
-    assert_eq!(opaque_ptr.pointee(&context), None);
+    assert_eq!(PtrType::view(&context, opaque).unwrap().pointee(), None);
 
     // Typed and opaque pointers are distinct, identical ones are interned.
     assert_ne!(opaque, typed);

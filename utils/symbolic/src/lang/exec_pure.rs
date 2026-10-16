@@ -82,10 +82,10 @@ fn valid_operands(kind: SymKind, operands: &[APInt]) -> bool {
         }
         (SymKind::SExt | SymKind::ZExt, [value, width]) => {
             let width = width.to_u64();
-            width >= u64::from(value.width()) && u32::try_from(width).is_ok()
+            width >= value.width() && u32::try_from(width).is_ok()
         }
         (SymKind::Extract, [value, high, low]) => {
-            low.to_u64() <= high.to_u64() && high.to_u64() < u64::from(value.width())
+            low.to_u64() <= high.to_u64() && high.to_u64() < value.width()
         }
         _ => false,
     }

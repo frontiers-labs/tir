@@ -113,10 +113,7 @@ impl CallLowering {
                         && let Some(value) = ret.returned_value()
                     {
                         let ty = context.get_value(value).ty();
-                        let data = context.get_type_data(ty);
-                        if let Some(tuple) =
-                            (data.as_ref() as &dyn std::any::Any).downcast_ref::<TupleType>()
-                        {
+                        if let Some(tuple) = TupleType::view(context, ty) {
                             let assembled =
                                 context
                                     .get_value(value)
@@ -127,7 +124,7 @@ impl CallLowering {
                             if !assembled {
                                 let return_ref = OperationRef::new(instance.clone());
                                 let elements =
-                                    insert_tuple_extractions(context, &return_ref, value, tuple)?;
+                                    insert_tuple_extractions(context, &return_ref, value, &tuple)?;
                                 let make_tuple = MakeTupleOpBuilder::new(context)
                                     .elements(elements)
                                     .result_type(ty)
@@ -148,9 +145,8 @@ impl CallLowering {
                     let args = call.args();
                     let call_ref = OperationRef::new(instance);
                     for (argument_index, argument) in args.into_iter().enumerate() {
-                        let ty = context.get_type_data(context.get_value(argument).ty());
                         let Some(tuple) =
-                            (ty.as_ref() as &dyn std::any::Any).downcast_ref::<TupleType>()
+                            TupleType::view(context, context.get_value(argument).ty())
                         else {
                             continue;
                         };
@@ -165,7 +161,7 @@ impl CallLowering {
                             continue;
                         }
                         let elements =
-                            insert_tuple_extractions(context, &call_ref, argument, tuple)?;
+                            insert_tuple_extractions(context, &call_ref, argument, &tuple)?;
                         self.tuple_argument_elements
                             .insert((op_id, argument_index), elements);
                     }
@@ -191,8 +187,7 @@ impl CallLowering {
             return Ok(());
         };
         let ty = context.get_value(value).ty();
-        let data = context.get_type_data(ty);
-        let Some(tuple) = (data.as_ref() as &dyn std::any::Any).downcast_ref::<TupleType>() else {
+        let Some(tuple) = TupleType::view(context, ty) else {
             return Ok(());
         };
         let assembled = context
@@ -203,7 +198,7 @@ impl CallLowering {
             return Ok(());
         }
         let mut elements = Vec::new();
-        for (index, element_ty) in tuple.elements(context).into_iter().enumerate() {
+        for (index, element_ty) in tuple.elements().into_iter().enumerate() {
             let extract = TupleGetOpBuilder::new(context)
                 .tuple(value)
                 .index(index as u64)
@@ -468,11 +463,8 @@ impl CallLowering {
             return Ok(true);
         }
 
-        let result_type = context.get_type_data(context.get_value(result).ty());
-        if let Some(tuple) =
-            (result_type.as_ref() as &dyn std::any::Any).downcast_ref::<TupleType>()
-        {
-            self.lower_tuple_result(context, op, result, tuple, &tuple_arguments)?;
+        if let Some(tuple) = TupleType::view(context, context.get_value(result).ty()) {
+            self.lower_tuple_result(context, op, result, &tuple, &tuple_arguments)?;
             return Ok(true);
         }
 
@@ -518,11 +510,7 @@ impl CallLowering {
                 lowered_arguments.push((elements.clone(), alignment));
                 continue;
             }
-            let ty = context.get_type_data(context.get_value(arg).ty());
-            if (ty.as_ref() as &dyn std::any::Any)
-                .downcast_ref::<TupleType>()
-                .is_none()
-            {
+            if TupleType::view(context, context.get_value(arg).ty()).is_none() {
                 lowered_arguments.push((vec![arg], alignment));
                 continue;
             }
@@ -673,7 +661,7 @@ fn insert_tuple_extractions(
     tuple: &TupleType,
 ) -> Result<Vec<ValueId>, PassError> {
     let mut elements = Vec::new();
-    for (index, element_ty) in tuple.elements(context).into_iter().enumerate() {
+    for (index, element_ty) in tuple.elements().into_iter().enumerate() {
         let extract = TupleGetOpBuilder::new(context)
             .tuple(tuple_value)
             .index(index as u64)
@@ -705,7 +693,7 @@ fn tuple_return_registers(
 ) -> Result<Vec<PhysReg>, PassError> {
     let mut next_slot = HashMap::new();
     tuple
-        .elements(context)
+        .elements()
         .into_iter()
         .enumerate()
         .map(|(index, ty)| {

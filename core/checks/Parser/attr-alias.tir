@@ -2,11 +2,11 @@
 
 // An alias defined up front stands in for an attribute value.
 
-#dl = {endianness = "little"}
+#dl = #layout.spec<endianness = "little">
 
-module {data_layout = #dl} {
+module {layout.spec = #dl} {
   module_end
 }
 
-// CHECK: #data_layout = {endianness = "little"}
-// CHECK: module {data_layout = #data_layout} {
+// CHECK: #layout_spec = #layout.spec<endianness = "little">
+// CHECK: module {layout.spec = #layout_spec} {

@@ -16,13 +16,15 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use tir::NodeId;
 use tir::attributes::AttributeValue;
-use tir::builtin::{FloatType, FnType, IntegerType, ModuleOp, TupleType, UnitType, ops as b};
+use tir::builtin::{
+    FloatType, FnType, IntegerType, ModuleOp, NamedType, TupleType, UnitType, ops as b,
+};
 use tir::func::ops as func_ops;
 use tir::ptr::PtrType;
 use tir::{Context, Operation, TypeId, ValueId};
 
 use crate::ast::*;
-use crate::cir::{self, StructType, VarArgsType};
+use crate::cir::VarArgsType;
 use crate::diagnostics::{Diagnostic, EmptyTranslationUnit, UnsupportedConstruct};
 use crate::lexer::decode_c_escapes;
 use crate::sema::{EntityId, QualType, TypeKind, TypedAst};
@@ -194,7 +196,10 @@ struct FnCodegen<'a> {
 
 pub fn codegen(context: &Context, typed: &TypedAst) -> Result<ModuleOp, Diagnostic> {
     let ast = typed.ast();
-    let module = b::module(context, None).build();
+    let module = context
+        .get_op(typed.layouts().module().id())
+        .as_op::<ModuleOp>()
+        .expect("sema's module is a module");
 
     let root = ast.root().ok_or_else(EmptyTranslationUnit::new)?;
     let mut items = Vec::new();
@@ -277,35 +282,6 @@ pub fn codegen(context: &Context, typed: &TypedAst) -> Result<ModuleOp, Diagnost
             AstKind::RecordDecl | AstKind::EnumDecl | AstKind::Typedef | AstKind::Attribute => {}
             _ => return Err(unsupported(ast, item, "top-level item".to_string())),
         }
-    }
-
-    for record in typed.records() {
-        let fields = record
-            .fields
-            .iter()
-            .map(|field| {
-                let attributes = BTreeMap::from([
-                    (
-                        "name".to_string(),
-                        AttributeValue::Str(field.name.clone().into()),
-                    ),
-                    (
-                        "type".to_string(),
-                        AttributeValue::Type(lower_type(context, typed, field.ty)),
-                    ),
-                    ("offset".to_string(), AttributeValue::UInt(field.offset)),
-                ]);
-                AttributeValue::Dict(Box::new(attributes))
-            })
-            .collect();
-        module.body().append_op(
-            cir::DefineStructOpBuilder::new(context)
-                .sym_name(record.name.clone())
-                .attr("fields", AttributeValue::Array(fields))
-                .size(record.size)
-                .align(record.align)
-                .build(),
-        );
     }
 
     for (value, name) in &global_strings {
@@ -467,7 +443,9 @@ fn unsupported(ast: &Ast, node: NodeId, what: String) -> Diagnostic {
 fn lower_type(context: &Context, typed: &TypedAst, ty: QualType) -> TypeId {
     match typed.types().kind(ty) {
         TypeKind::Void => UnitType::new(context),
-        TypeKind::Integer(_) => IntegerType::new(context, typed.integer_width(ty).unwrap()),
+        TypeKind::Integer(_) => {
+            IntegerType::new(context, u64::from(typed.integer_width(ty).unwrap()))
+        }
         TypeKind::Pointer(_) | TypeKind::Array(_, _) => PtrType::opaque(context),
         TypeKind::Enum(_) => IntegerType::new(context, 32),
         TypeKind::Float => FloatType::f32(context),
@@ -475,22 +453,12 @@ fn lower_type(context: &Context, typed: &TypedAst, ty: QualType) -> TypeId {
         TypeKind::Error | TypeKind::LongDouble | TypeKind::Function { .. } => {
             IntegerType::new(context, 64)
         }
-        TypeKind::Record(id) => StructType::new(context, &typed.record(*id).unwrap().name),
+        TypeKind::Record(id) => NamedType::new(context, &typed.record(*id).unwrap().name),
     }
 }
 
 fn source_type_layout(typed: &TypedAst, ty: QualType) -> (u64, u64) {
-    match typed.types().kind(ty) {
-        TypeKind::Array(element, Some(length)) => {
-            let (size, align) = source_type_layout(typed, *element);
-            (size * length, align)
-        }
-        TypeKind::Record(id) => {
-            let record = typed.record(*id).unwrap();
-            (record.size, record.align)
-        }
-        kind => typed.target().scalar_layout(kind).unwrap_or((1, 1)),
-    }
+    typed.type_layout(ty).unwrap_or((1, 1))
 }
 
 fn node_type(typed: &TypedAst, node: NodeId) -> QualType {

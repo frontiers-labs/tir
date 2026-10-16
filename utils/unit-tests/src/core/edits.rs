@@ -155,10 +155,9 @@ tir::helpers::operation! {
     ExitOp {
         name: "exit",
         dialect: "test",
+        scheme: "(_*) -> ()",
         format: "custom",
-        operands: O {
-            values: "*tir::Any",
-        },
+        operands: O { values },
         interfaces: [Terminator, NonLocalExit],
     }
 }

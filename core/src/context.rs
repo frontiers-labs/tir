@@ -2,7 +2,6 @@ use std::{
     any::Any,
     cell::{Ref, RefCell, RefMut},
     collections::{HashMap, HashSet},
-    hash::{DefaultHasher, Hasher},
     sync::{
         Arc, RwLock, RwLockReadGuard, RwLockWriteGuard,
         atomic::{AtomicU32, Ordering},
@@ -32,7 +31,7 @@ use crate::{
     parse::text::Parser as IRParser,
     ptr::PtrDialect,
     region::{RegionHandle, RegionId},
-    ty::{Type, TypeParser},
+    ty::{Spellings, Terms, TypeParser, TypeSpelling},
     value::{Use, Value, ValueId},
     vector::VectorDialect,
 };
@@ -60,6 +59,12 @@ use crate::{
 #[derive(Clone)]
 pub struct Context(std::rc::Rc<Inner>);
 
+impl AsRef<Terms> for Context {
+    fn as_ref(&self) -> &Terms {
+        self.terms()
+    }
+}
+
 pub struct ContextIterator<I: GetFromContext> {
     context: Context,
     elements: Vec<I>,
@@ -85,30 +90,42 @@ struct Owned {
 /// What a context holds beside the IR.
 struct Registry {
     dialects: HashMap<&'static str, Arc<dyn Dialect>>,
-    /// Register-class names of registered targets, for resolving a parsed
-    /// `CLASS[n]` register attribute back to a [`RegClassId`].
-    reg_classes: HashMap<&'static str, crate::backend::regalloc::RegClassId>,
+    reg_classes: HashMap<(crate::ty::Name, crate::ty::Name), crate::backend::regalloc::RegClassId>,
     /// The interfaces each op name implements, by [`OpNameId`]: an op's name
     /// is a column, so a lookup indexes by it and compares a few type ids.
     interfaces: Vec<Vec<(std::any::TypeId, OpInterfaceConverter)>>,
-    type_cache: Vec<Arc<dyn Type>>,
-    /// The resource each interned type is a state of, by type id: asked of
-    /// every operand and result when values are told from states.
-    state_types: Vec<Option<crate::builtin::StateResource>>,
-    /// Interned type ids bucketed by [`Type::hash`], so [`Context::get_type_id`]
-    /// only runs [`Type::eq`] against colliding candidates.
-    type_lookup: HashMap<u64, Vec<TypeId>>,
+    spellings: Spellings,
     fp_semantics: HashMap<crate::fp::Semantics, Arc<crate::fp::Semantics>>,
     evaluation_contracts:
         HashMap<crate::fp::EvaluationContract, Arc<crate::fp::EvaluationContract>>,
     /// The names attributes are keyed by, so an op carries four bytes per
     /// attribute name instead of a heap `String` per instance.
     names: Interner,
-    /// The `(dialect, name)` pairs ops are identified by. Ids are dense and
-    /// handed out in construction order.
-    op_names: Vec<(&'static str, &'static str)>,
+    /// The op identities, by [`OpNameId`]. Ids are dense and handed out in
+    /// construction order.
+    op_names: Vec<OpName>,
     op_name_ids: HashMap<(&'static str, &'static str), OpNameId>,
     segment_sizes: Sym,
+    // The core type definitions (`dialects/layout/types.rs`), and their
+    // definitions by name: the layout regions of the aggregate constructors.
+    constructors: Option<(Db, Arc<HashMap<String, OpId>>)>,
+    // Whether this context has the core type definitions, built on first
+    // need.
+    core_types: bool,
+    // The layouts under each op carrying a spec, and each module's
+    // `type.def`s by name, at the version of the module partition they were
+    // read at.
+    layouts: HashMap<OpId, (u32, Arc<crate::layout::ModuleLayouts>)>,
+    // Rule sets compiled against this context's names and types, by kind:
+    // every pass instance of the context shares one.
+    rules: HashMap<std::any::TypeId, Arc<dyn std::any::Any + Send + Sync>>,
+    type_definitions: HashMap<OpId, (u32, Arc<HashMap<String, OpId>>)>,
+}
+
+struct OpName {
+    identity: (&'static str, &'static str),
+    schema: Option<&'static crate::OpSchema>,
+    scheme: Option<Arc<crate::typecheck::SchemeRows>>,
 }
 
 /// The names and types a context interned, readable from any thread. An id
@@ -124,13 +141,30 @@ impl Names {
         registry.names.resolve(sym).to_string()
     }
 
-    /// `ty` as the IR spells it, its dialect first.
+    /// The name whose [`Sym::index`] is `index`, if one is.
+    pub fn name_at(&self, index: usize) -> Option<String> {
+        let registry = self.0.read().unwrap_or_else(|e| e.into_inner());
+        registry.names.at(index).map(str::to_string)
+    }
+
+    /// Intern `name`, as [`Context::intern`] does.
+    pub fn intern(&self, name: &str) -> Sym {
+        let known = self.0.read().unwrap_or_else(|e| e.into_inner());
+        if let Some(sym) = known.names.lookup(name) {
+            return sym;
+        }
+        drop(known);
+        let mut registry = self.0.write().unwrap_or_else(|e| e.into_inner());
+        registry.names.intern(name)
+    }
+
+    /// `ty` as the IR spells it.
     pub fn type_spelling(&self, ty: TypeId) -> String {
         let registry = self.0.read().unwrap_or_else(|e| e.into_inner());
-        let data = registry.type_cache[ty.as_index()].clone();
-        drop(registry);
-        let mut out = format!("{}.", data.dialect());
-        data.print(&mut IRFormatter::new(&mut out))
+        let mut out = String::new();
+        registry
+            .spellings
+            .print(ty, &mut IRFormatter::new(&mut out))
             .expect("type print must succeed");
         out
     }
@@ -141,6 +175,7 @@ impl Names {
 #[derive(Clone)]
 pub(crate) struct Snapshot {
     registry: Arc<RwLock<Registry>>,
+    terms: Arc<Terms>,
     db: Db,
     epoch: u32,
 }
@@ -170,13 +205,15 @@ struct Inner {
     /// Shared by every context over one module: a worker interns into the
     /// same tables the module was built with.
     registry: Arc<RwLock<Registry>>,
-    /// Type metadata never changes. Cache the append-only registry's state
-    /// classification locally so operand and e-graph reads take no lock.
-    state_types: RefCell<Vec<Option<crate::builtin::StateResource>>>,
+    // Shared like the registry so an id names one type in every fork and task.
+    terms: Arc<Terms>,
     db: RefCell<Db>,
     /// Advances at every commit.
     epoch: AtomicU32,
     frozen: bool,
+    // Whether this is the IR of the core type definitions, which are
+    // the type constructors themselves.
+    defines_types: bool,
 }
 
 /// Mints into a partition of its own until dropped; see
@@ -206,17 +243,27 @@ fn schema_vocabulary() -> Interner {
     names
 }
 
+/// Every op an `operation!` declared, with its schema, ahead of any IR.
+fn declared_op_names() -> (Vec<OpName>, HashMap<(&'static str, &'static str), OpNameId>) {
+    let mut names = Vec::new();
+    let mut ids = HashMap::new();
+    for schema in crate::schema::OP_SCHEMAS {
+        ids.entry((schema.dialect, schema.name)).or_insert_with(|| {
+            names.push(OpName {
+                identity: (schema.dialect, schema.name),
+                schema: Some(schema),
+                scheme: None,
+            });
+            OpNameId::new(names.len() as u32 - 1)
+        });
+    }
+    (names, ids)
+}
+
 pub(crate) struct Refused(pub(crate) String);
 
 fn refuse(what: String) -> ! {
     std::panic::resume_unwind(Box::new(Refused(what)))
-}
-
-fn type_hash(ty: &dyn Type) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    hasher.write(ty.dialect().as_bytes());
-    ty.hash(&mut hasher);
-    hasher.finish()
 }
 
 impl Context {
@@ -224,27 +271,33 @@ impl Context {
     pub fn new() -> Self {
         let mut names = schema_vocabulary();
         let segment_sizes = names.intern("operand_segment_sizes");
+        let (op_names, op_name_ids) = declared_op_names();
+        let terms = Arc::new(Terms::new());
         let context = Context(std::rc::Rc::new(Inner {
             registry: Arc::new(RwLock::new(Registry {
                 dialects: HashMap::new(),
                 reg_classes: HashMap::new(),
                 interfaces: Vec::new(),
-                type_cache: vec![],
-                state_types: vec![],
-                type_lookup: HashMap::new(),
+                spellings: Spellings::new(terms.clone()),
                 fp_semantics: HashMap::new(),
                 evaluation_contracts: HashMap::new(),
                 names,
-                op_names: Vec::new(),
-                op_name_ids: HashMap::new(),
+                op_names,
+                op_name_ids,
                 segment_sizes,
+                constructors: None,
+                core_types: false,
+                layouts: HashMap::new(),
+                rules: HashMap::new(),
+                type_definitions: HashMap::new(),
             })),
+            terms,
             db: RefCell::new(Db::new()),
-            state_types: RefCell::default(),
             epoch: AtomicU32::new(0),
             frozen: false,
+            defines_types: false,
         }));
-        crate::builtin::StateType::memory(&context);
+        context.register_type("backend", &crate::backend::RegClassType::spelling(&context));
         context
     }
 
@@ -253,6 +306,8 @@ impl Context {
         let context = Context::new();
 
         context.register_dialect::<BuiltinDialect>();
+        context.register_dialect::<crate::builtin::TypeDialect>();
+        context.register_dialect::<crate::layout::LayoutDialect>();
         context.register_dialect::<CfgDialect>();
         context.register_dialect::<FuncDialect>();
         context.register_dialect::<crate::fp::FpDialect>();
@@ -260,8 +315,131 @@ impl Context {
         context.register_dialect::<ScfDialect>();
         context.register_dialect::<StateDialect>();
         context.register_dialect::<VectorDialect>();
+        context.declare_core_types();
 
         context
+    }
+
+    // The core type definitions are built on first need, in `constructors`;
+    // the defaults every term of their constructors interns under hold now.
+    fn declare_core_types(&self) {
+        for (name, default) in crate::dialects::layout::types::defaults(self) {
+            let Some(ctor) = self.terms().ctor_named("type", name) else {
+                continue;
+            };
+            let default = crate::builtin::type_arg_of(&default)
+                .expect("a constructor's default is a type or a flag");
+            self.terms()
+                .set_default(ctor, default)
+                .expect("the core type definitions give each constructor one default");
+        }
+        self.registry_mut().core_types = true;
+    }
+
+    fn define_core_types(&self) -> (Db, Arc<HashMap<String, OpId>>) {
+        let definitions = self.over(Db::new());
+        let module = crate::dialects::layout::types::define(&definitions);
+        definitions.commit();
+        if cfg!(debug_assertions)
+            && let Err(error) = crate::operation::verify_op_tree(&definitions, module.id())
+        {
+            panic!("the core type definitions must verify: {error}");
+        }
+        let names = crate::layout::definitions_in(&definitions, module.id());
+        (definitions.db().clone(), Arc::new(names))
+    }
+
+    // Whether this context holds the core type definitions, which define the
+    // type constructors.
+    pub(crate) fn defines_types(&self) -> bool {
+        self.0.defines_types
+    }
+
+    // The IR of the core type definitions over `db`, sharing this context's
+    // registry and types.
+    fn over(&self, db: Db) -> Self {
+        Context(std::rc::Rc::new(Inner {
+            registry: self.0.registry.clone(),
+            terms: self.0.terms.clone(),
+            db: RefCell::new(db),
+            epoch: AtomicU32::new(0),
+            frozen: self.0.frozen,
+            defines_types: true,
+        }))
+    }
+
+    /// The rules of kind `T` compiled for this context, `compile`d the first
+    /// time any pass instance asks.
+    pub(crate) fn compiled_rules<T: std::any::Any + Send + Sync>(
+        &self,
+        compile: impl FnOnce() -> T,
+    ) -> Arc<T> {
+        let kind = std::any::TypeId::of::<T>();
+        let known = self.registry().rules.get(&kind).cloned();
+        let rules = known.unwrap_or_else(|| {
+            let compiled: Arc<dyn std::any::Any + Send + Sync> = Arc::new(compile());
+            let mut registry = self.registry_mut();
+            registry.rules.entry(kind).or_insert(compiled).clone()
+        });
+        rules
+            .downcast()
+            .expect("rules of the kind they are filed under")
+    }
+
+    // The names the core type definitions define.
+    pub(crate) fn core_type_names(&self) -> Option<&'static [&'static str]> {
+        self.registry()
+            .core_types
+            .then_some(&crate::dialects::layout::types::NAMES[..])
+    }
+
+    // The IR of the core type definitions and its definitions by name, built
+    // the first time anything asks.
+    pub(crate) fn constructors(&self) -> Option<(Context, Arc<HashMap<String, OpId>>)> {
+        let built = self.registry().constructors.clone();
+        let (db, names) = match built {
+            Some(built) => built,
+            None if self.registry().core_types => {
+                let built = self.define_core_types();
+                let mut registry = self.registry_mut();
+                registry.constructors.get_or_insert(built).clone()
+            }
+            None => return None,
+        };
+        Some((self.over(db), names))
+    }
+
+    // The layouts under `scope`, an op carrying a spec, kept until the
+    // module partition is next edited.
+    pub(crate) fn scope_layouts(
+        &self,
+        scope: OpId,
+        build: impl FnOnce() -> crate::layout::ModuleLayouts,
+    ) -> Arc<crate::layout::ModuleLayouts> {
+        let version = self.db().module_version();
+        if let Some((at, laid)) = self.registry().layouts.get(&scope)
+            && *at == version
+        {
+            return laid.clone();
+        }
+        let laid = Arc::new(build());
+        let entry = (version, laid.clone());
+        self.registry_mut().layouts.insert(scope, entry);
+        laid
+    }
+
+    // The `type.def`s of `module` by name, kept like its layouts.
+    pub(crate) fn module_type_definitions(&self, module: OpId) -> Arc<HashMap<String, OpId>> {
+        let version = self.db().module_version();
+        if let Some((at, names)) = self.registry().type_definitions.get(&module)
+            && *at == version
+        {
+            return names.clone();
+        }
+        let names = Arc::new(crate::layout::definitions_in(self, module));
+        let entry = (version, names.clone());
+        self.registry_mut().type_definitions.insert(module, entry);
+        names
     }
 
     fn registry(&self) -> RwLockReadGuard<'_, Registry> {
@@ -270,6 +448,11 @@ impl Context {
 
     fn registry_mut(&self) -> RwLockWriteGuard<'_, Registry> {
         self.0.registry.write().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// The store the types of this context's IR are interned in.
+    pub fn terms(&self) -> &Terms {
+        &self.0.terms
     }
 
     fn db(&self) -> Ref<'_, Db> {
@@ -342,7 +525,11 @@ impl Context {
             refuse(format!("the operation `{dialect}.{name}`"));
         }
         let id = OpNameId::new(registry.op_names.len() as u32);
-        registry.op_names.push((dialect, name));
+        registry.op_names.push(OpName {
+            identity: (dialect, name),
+            schema: None,
+            scheme: None,
+        });
         registry.op_name_ids.insert((dialect, name), id);
         id
     }
@@ -393,6 +580,7 @@ impl Context {
         assert!(db.is_clean(), "a snapshot is taken of a committed base");
         Snapshot {
             registry: self.0.registry.clone(),
+            terms: self.0.terms.clone(),
             db: db.clone(),
             epoch: self.epoch(),
         }
@@ -412,7 +600,7 @@ impl Context {
         let part = snapshot.db.partition_of(target);
         Context(std::rc::Rc::new(Inner {
             registry: snapshot.registry.clone(),
-            state_types: RefCell::default(),
+            terms: snapshot.terms.clone(),
             db: RefCell::new(
                 snapshot
                     .db
@@ -420,12 +608,14 @@ impl Context {
             ),
             epoch: AtomicU32::new(snapshot.epoch),
             frozen: false,
+            defines_types: false,
         }))
     }
 
     pub(crate) fn detach(self) -> Snapshot {
         Snapshot {
             registry: self.0.registry.clone(),
+            terms: self.0.terms.clone(),
             db: self.db().clone(),
             epoch: self.epoch(),
         }
@@ -436,10 +626,11 @@ impl Context {
     pub(crate) fn open_frozen(snapshot: Snapshot) -> Self {
         Context(std::rc::Rc::new(Inner {
             registry: snapshot.registry,
-            state_types: RefCell::default(),
+            terms: snapshot.terms,
             db: RefCell::new(snapshot.db),
             epoch: AtomicU32::new(snapshot.epoch),
             frozen: true,
+            defines_types: false,
         }))
     }
 
@@ -449,10 +640,11 @@ impl Context {
     pub(crate) fn fork(&self) -> Self {
         Context(std::rc::Rc::new(Inner {
             registry: self.0.registry.clone(),
-            state_types: RefCell::default(),
+            terms: self.0.terms.clone(),
             db: RefCell::new(self.db().clone()),
             epoch: AtomicU32::new(self.epoch()),
             frozen: self.0.frozen,
+            defines_types: self.0.defines_types,
         }))
     }
 
@@ -500,7 +692,34 @@ impl Context {
 
     // Dialects, interfaces and types.
 
-    // Dialects, interfaces and types.
+    // A scheme naming a constructor no dialect has registered yet fails, and
+    // is built again next time.
+    pub(crate) fn scheme_rows(
+        &self,
+        name: OpNameId,
+    ) -> Option<Result<Arc<crate::typecheck::SchemeRows>, String>> {
+        let schema = {
+            let registry = self.registry();
+            let entry = &registry.op_names[name.index()];
+            if let Some(rows) = &entry.scheme {
+                return Some(Ok(rows.clone()));
+            }
+            entry.schema?
+        };
+        let rows = match crate::typecheck::SchemeRows::new(self.terms(), schema) {
+            Ok(rows) => Arc::new(rows),
+            Err(error) => return Some(Err(error)),
+        };
+        self.registry_mut().op_names[name.index()].scheme = Some(rows.clone());
+        Some(Ok(rows))
+    }
+
+    /// The schema `operation!` declared for `dialect.name`.
+    pub(crate) fn op_schema(&self, dialect: &str, name: &str) -> Option<&'static crate::OpSchema> {
+        let registry = self.registry();
+        let id = registry.op_name_ids.get(&(dialect, name))?;
+        registry.op_names[id.index()].schema
+    }
 
     /// Register a dialect with context.
     pub fn register_dialect<D: Dialect>(&self) {
@@ -518,18 +737,37 @@ impl Context {
     /// `CLASS[n]` register's class name back to its [`RegClassId`]. Backends call
     /// this from `register_dialects` with their generated `register_info().classes`.
     pub fn register_reg_classes(&self, classes: &'static [crate::backend::regalloc::RegClassInfo]) {
-        let mut registry = self.registry_mut();
         for class in classes {
-            registry
-                .reg_classes
-                .insert(class.name, crate::backend::regalloc::RegClassId::new(class));
+            self.note_reg_class(crate::backend::regalloc::RegClassId::new(class));
+        }
+    }
+
+    pub(crate) fn note_reg_class(&self, class: crate::backend::regalloc::RegClassId) {
+        let terms = self.terms();
+        let key = (terms.name(class.dialect()), terms.name(class.name()));
+        let known = self.registry().reg_classes.contains_key(&key);
+        if !known {
+            self.registry_mut().reg_classes.insert(key, class);
         }
     }
 
     /// Resolve a register-class name to its [`RegClassId`], if a target that defines
     /// it has been registered (see [`Context::register_reg_classes`]).
     pub fn resolve_reg_class(&self, name: &str) -> Option<crate::backend::regalloc::RegClassId> {
-        self.registry().reg_classes.get(name).copied()
+        let registry = self.registry();
+        let named = registry
+            .reg_classes
+            .values()
+            .filter(|class| class.name() == name);
+        named.min_by_key(|class| class.dialect()).copied()
+    }
+
+    pub(crate) fn reg_class(
+        &self,
+        target: crate::ty::Name,
+        class: crate::ty::Name,
+    ) -> Option<crate::backend::regalloc::RegClassId> {
+        self.registry().reg_classes.get(&(target, class)).copied()
     }
 
     pub fn find_dialect<D: Dialect>(&self) -> Option<Arc<D>> {
@@ -604,27 +842,35 @@ impl Context {
         dialect.get_parser(name)
     }
 
+    /// Spell the terms of `spelling.ctor` the short way, parsed under
+    /// `dialect`.
+    pub fn register_type(&self, dialect: &'static str, spelling: &TypeSpelling) {
+        self.registry_mut().spellings.register(dialect, spelling);
+    }
+
+    /// Parse `!dialect.key` with `parser`, for a mnemonic no constructor's
+    /// spelling lists, such as a register class of a target.
+    pub fn register_type_parser(
+        &self,
+        dialect: &'static str,
+        key: &'static str,
+        parser: TypeParser,
+    ) {
+        self.registry_mut()
+            .spellings
+            .register_parser(dialect, key, parser);
+    }
+
     pub fn get_type_parser(&self, dialect: &str, name: &str) -> Result<TypeParser, Error> {
         let registry = self.registry();
-        let dialect_impl = registry
-            .dialects
-            .get(dialect)
-            .ok_or(Error::UnknownDialect(dialect.to_string()))?;
-
-        if let Ok(parser) = dialect_impl.get_type_parser(name) {
+        if let Some(parser) = registry.spellings.parser(dialect, name) {
             return Ok(parser);
         }
-
-        let prefix: String = name
-            .chars()
-            .take_while(|c| c.is_ascii_alphabetic() || *c == '_')
-            .collect();
-
-        if prefix.is_empty() || prefix == name {
-            return Err(Error::UnknownType(dialect.to_string(), name.to_string()));
+        if registry.dialects.contains_key(dialect) {
+            Err(Error::UnknownType(dialect.to_string(), name.to_string()))
+        } else {
+            Err(Error::UnknownDialect(dialect.to_string()))
         }
-
-        dialect_impl.get_type_parser(&prefix)
     }
 
     pub fn parse_type_mnemonic(&self, dialect: &str, name: &str) -> Result<TypeId, Error> {
@@ -633,66 +879,28 @@ impl Context {
         parser(name, &mut p, self).map_err(|(_, err)| err)
     }
 
-    pub fn get_type_id(&self, ty: Arc<dyn Type>) -> TypeId {
-        let hash = type_hash(&*ty);
-        let mut registry = self.registry_mut();
-        if let Some(candidates) = registry.type_lookup.get(&hash) {
-            for &id in candidates {
-                if registry.type_cache[id.as_index()].eq(&*ty) {
-                    return id;
-                }
-            }
-        }
-        if self.0.frozen {
-            drop(registry);
-            let mut spelled = String::new();
-            let _ = ty.print(&mut IRFormatter::new(&mut spelled));
-            refuse(format!("the type `{spelled}`"));
-        }
-        let id = TypeId::from_number(registry.type_cache.len() as u32);
-        let state = (ty.as_ref() as &dyn Any)
-            .downcast_ref::<crate::builtin::StateType>()
-            .map(crate::builtin::StateType::resource);
-        registry.state_types.push(state);
-        registry.type_cache.push(ty);
-        registry.type_lookup.entry(hash).or_default().push(id);
-        id
-    }
-
     /// The ids of the interned types `keep` holds of, in the order they were
     /// interned.
-    pub fn types_where(&self, keep: impl Fn(&dyn Type) -> bool) -> Vec<TypeId> {
-        let registry = self.registry();
-        let types = registry.type_cache.iter().enumerate();
-        types
-            .filter(|(_, ty)| keep(ty.as_ref()))
-            .map(|(index, _)| TypeId::from_number(index as u32))
+    pub fn types_where(&self, keep: impl Fn(TypeId) -> bool) -> Vec<TypeId> {
+        (0..self.terms().len())
+            .map(TypeId::from_number)
+            .filter(|&ty| keep(ty))
             .collect()
     }
 
-    pub fn get_type_data(&self, ty: TypeId) -> Arc<dyn Type> {
-        self.registry()
-            .type_cache
-            .get(ty.as_index())
-            .cloned()
-            .expect("unknown type id")
-    }
-
     pub fn state_resource(&self, ty: TypeId) -> Option<crate::builtin::StateResource> {
-        let states = self.0.state_types.borrow();
-        if let Some(&state) = states.get(ty.as_index()) {
-            return state;
-        }
-        drop(states);
-        let registry = self.registry();
-        let mut states = self.0.state_types.borrow_mut();
-        let from = states.len();
-        states.extend_from_slice(&registry.state_types[from..]);
-        states[ty.as_index()]
+        crate::builtin::StateType::view(ty).map(|state| state.resource())
     }
 
     pub fn is_state_type(&self, ty: TypeId) -> bool {
         self.state_resource(ty).is_some()
+    }
+
+    /// Whether `ty` stands for "any number of further arguments" when it ends
+    /// a function signature: overload resolution then matches the fixed
+    /// prefix and accepts any tail, including an empty one.
+    pub fn is_variadic_tail(&self, ty: TypeId) -> bool {
+        self.registry().spellings.is_variadic_tail(ty)
     }
 
     pub fn type_to_string(&self, ty: TypeId) -> String {
@@ -705,13 +913,22 @@ impl Context {
         out
     }
 
-    pub fn print_type(&self, ty: TypeId, fmt: &mut IRFormatter<'_>) -> Result<(), std::fmt::Error> {
-        let ty_data = self.get_type_data(ty);
-        fmt.write("!")?;
-        if ty_data.dialect() != "builtin" {
-            fmt.write(format!("{}.", ty_data.dialect()))?;
+    /// A term argument as the IR spells it, its variables named by `names`.
+    pub fn type_arg_to_string(&self, arg: &crate::TypeArg, names: &[String]) -> String {
+        let mut out = String::new();
+        {
+            let mut fmt = IRFormatter::new(&mut out);
+            fmt.set_type_params(names.to_vec());
+            self.registry()
+                .spellings
+                .print_arg(arg, &mut fmt)
+                .expect("type print must succeed");
         }
-        ty_data.print(fmt)
+        out
+    }
+
+    pub fn print_type(&self, ty: TypeId, fmt: &mut IRFormatter<'_>) -> Result<(), std::fmt::Error> {
+        self.registry().spellings.print(ty, fmt)
     }
 
     // Handles.
@@ -814,12 +1031,11 @@ impl Context {
 
     fn filter_states(&self, ids: &[ValueId], states: bool) -> crate::operation::ValueIds {
         let db = self.db();
-        let registry = self.registry();
         ids.iter()
             .copied()
             .filter(|&id| {
                 db.value(id)
-                    .is_some_and(|value| registry.state_types[value.ty().as_index()].is_some())
+                    .is_some_and(|value| self.is_state_type(value.ty()))
                     == states
             })
             .collect()
@@ -989,6 +1205,12 @@ impl Context {
             .map(|attribute| attribute.value.clone())
     }
 
+    /// The ops named one of `names` under `root`, read off the name column of
+    /// the partitions holding what is under it rather than by a walk.
+    pub(crate) fn ops_named(&self, root: OpId, names: &[OpNameId]) -> Vec<OpId> {
+        self.db().ops_named(root, names)
+    }
+
     /// The interned name of `id`.
     pub(crate) fn op_name_id(&self, id: OpId) -> OpNameId {
         self.db().op_name(id)
@@ -997,7 +1219,7 @@ impl Context {
     /// The `(dialect, name)` pair `id` is spelled by.
     pub(crate) fn op_identity(&self, id: OpId) -> (&'static str, &'static str) {
         let name = self.db().op_name(id);
-        self.registry().op_names[name.index()]
+        self.registry().op_names[name.index()].identity
     }
 
     pub(crate) fn block_arguments(&self, id: BlockId) -> Vec<Value> {
@@ -1075,6 +1297,40 @@ impl Context {
     pub fn add_operation(&self, op: crate::operation::NewOp) -> OpHandle {
         let id = self.db_mut().add_operation(op);
         self.get_op(id)
+    }
+
+    /// Where `op` came from: the byte offset of its text in the source the
+    /// parser read, or of the op a pass built it for.
+    pub fn op_location(&self, op: OpId) -> Option<crate::parse::Span> {
+        self.db().op_location(op).map(crate::parse::Span)
+    }
+
+    /// Locate every op added until the next call at `location`; returns the
+    /// location ops were added at so far.
+    pub fn set_origin(&self, location: Option<crate::parse::Span>) -> Option<crate::parse::Span> {
+        let previous = self.db_mut().set_origin(location.map(|span| span.0));
+        previous.map(crate::parse::Span)
+    }
+
+    /// Whether `refine`'s obligation was proved for the op as it stands.
+    pub(crate) fn refine_proved(&self, refine: OpId) -> bool {
+        let db = self.db();
+        db.proved_refines.get(&refine) == Some(&db.op_stamp(refine))
+    }
+
+    /// Record that `refine`'s obligation holds for the op as it stands.
+    pub(crate) fn note_refine_proved(&self, refine: OpId) {
+        let mut db = self.db_mut();
+        let stamp = db.op_stamp(refine);
+        db.proved_refines.insert(refine, stamp);
+    }
+
+    /// Forget the proofs of the refines that are gone.
+    pub(crate) fn forget_erased_refines(&self) {
+        let mut db = self.db_mut();
+        let mut proved = std::mem::take(&mut db.proved_refines);
+        proved.retain(|&op, _| db.op_live(op));
+        db.proved_refines = proved;
     }
 
     /// Replace an operation's attributes in place, keeping its id, position, and

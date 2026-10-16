@@ -18,6 +18,12 @@ impl Analyzer<'_> {
         kind: AstKind,
         result_ty: QualType,
     ) -> Option<i64> {
+        // A constant is tracked as an `i64`, which a wider `_BitInt` outgrows.
+        if let TypeKind::Integer(kind) = self.types.kind(result_ty)
+            && self.target.integer_width(*kind) > 64
+        {
+            return None;
+        }
         match kind {
             AstKind::Int => {
                 let AstLeaf::Int(value) = self.ast.get_leaf_data(node)? else {
@@ -120,7 +126,7 @@ impl Analyzer<'_> {
             return i64::from(value != 0);
         }
         let width = self.target.integer_width(kind);
-        if width == 64 {
+        if width >= 64 {
             return value;
         }
         let mask = (1_u64 << width) - 1;
@@ -297,27 +303,58 @@ impl Analyzer<'_> {
     }
 
     pub(super) fn type_layout(&self, ty: QualType) -> Option<(u64, u64)> {
-        match self.types.kind(ty) {
-            TypeKind::Array(element, Some(length)) => {
-                let (size, align) = self.type_layout(*element)?;
-                Some((size.checked_mul(*length)?, align))
-            }
-            TypeKind::Record(id) => self
-                .record_indices
-                .get(id)
-                .map(|&index| &self.records[index])
-                .filter(|record| record.size != 0)
-                .map(|record| (record.size, record.align)),
-            kind => self.target.scalar_layout(kind),
-        }
+        self.layouts.size_align(self.layout_type(ty)?)
+    }
+
+    pub(super) fn layout_type(&self, ty: QualType) -> Option<tir::TypeId> {
+        let record = |id| {
+            let index = *self.record_indices.get(&id)?;
+            Some(self.layouts.record_type(&self.records[index].name))
+        };
+        self.layouts.type_of(&self.types, self.target, &record, ty)
     }
 
     pub(super) fn integer_promotion(&mut self, ty: QualType) -> QualType {
-        if self.integer_rank(ty) < 3 {
+        if self.integer_rank(ty) < 3
+            && !matches!(
+                self.types.kind(ty),
+                TypeKind::Integer(IntegerKind::BitInt { .. })
+            )
+        {
             self.types.intern(TypeKind::Integer(IntegerKind::Int))
         } else {
             ty
         }
+    }
+
+    pub(super) fn bit_precise_literal_type(
+        &mut self,
+        node: NodeId,
+        spelling: &str,
+        value: &tir::utils::APInt,
+        unsigned: bool,
+    ) -> QualType {
+        let bits = value.width() - value.count_leading_zeros();
+        let width = if unsigned {
+            bits.max(1)
+        } else {
+            (bits + 1).max(2)
+        };
+        if width > crate::ast::BITINT_MAXWIDTH {
+            self.diagnostics.push(
+                InvalidIntegerLiteral::new(
+                    self.ast.get_node(node).span,
+                    format!("integer literal '{spelling}' is wider than BITINT_MAXWIDTH"),
+                    integer_literal_reference(self.options),
+                )
+                .into(),
+            );
+            return self.types.intern(TypeKind::Error);
+        }
+        self.types.intern(TypeKind::Integer(IntegerKind::BitInt {
+            width: width as u32,
+            signed: !unsigned,
+        }))
     }
 
     pub(super) fn integer_literal_type(
@@ -421,7 +458,7 @@ impl Analyzer<'_> {
         let left_signed = is_signed_integer(left_kind, self.target);
         let right_signed = is_signed_integer(right_kind, self.target);
         if left_signed == right_signed {
-            return if self.integer_rank(left) >= self.integer_rank(right) {
+            return if self.conversion_rank(left_kind) >= self.conversion_rank(right_kind) {
                 left
             } else {
                 right
@@ -432,7 +469,7 @@ impl Analyzer<'_> {
         } else {
             (left, left_kind, right, right_kind)
         };
-        if self.integer_rank(unsigned) >= self.integer_rank(signed) {
+        if self.conversion_rank(unsigned_kind) >= self.conversion_rank(signed_kind) {
             return unsigned;
         }
         if self.target.integer_width(signed_kind) > self.target.integer_width(unsigned_kind) {
@@ -440,6 +477,19 @@ impl Analyzer<'_> {
         }
         self.types
             .intern(TypeKind::Integer(unsigned_corresponding(signed_kind)))
+    }
+
+    // The integer conversion rank: wider ranks higher, and of one width a
+    // standard type above a bit-precise one, `long long` above `long` above
+    // the rest.
+    fn conversion_rank(&self, kind: IntegerKind) -> (u32, u8) {
+        let tier = match kind {
+            IntegerKind::Bool | IntegerKind::BitInt { .. } => 0,
+            IntegerKind::Long | IntegerKind::UnsignedLong => 2,
+            IntegerKind::LongLong | IntegerKind::UnsignedLongLong => 3,
+            _ => 1,
+        };
+        (self.target.integer_width(kind), tier)
     }
 
     pub(super) fn integer_rank(&self, ty: QualType) -> u8 {
@@ -533,6 +583,13 @@ impl Analyzer<'_> {
             CType::UnsignedLongLong => self
                 .types
                 .intern(TypeKind::Integer(IntegerKind::UnsignedLongLong)),
+            CType::BitInt { width, unsigned } => {
+                self.types.intern(TypeKind::Integer(IntegerKind::BitInt {
+                    // The parser bounds the width by `BITINT_MAXWIDTH`.
+                    width: *width as u32,
+                    signed: !unsigned,
+                }))
+            }
             CType::Float => self.types.intern(TypeKind::Float),
             CType::Double => self.types.intern(TypeKind::Double),
             CType::LongDouble => self.types.intern(TypeKind::LongDouble),

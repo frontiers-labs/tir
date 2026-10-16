@@ -4,11 +4,11 @@
 use std::collections::HashMap;
 
 use tir::{
-    Context, HasResourceSemantics, NodeId, OpHandle,
-    sem::{SemGraph, SemType, SymKind, SymPayload, Width, canonicalize_for_selection},
+    Context, HasResourceSemantics, NodeId, OpHandle, TypeArg,
+    sem::{SemGraph, SymKind, SymPayload, canonicalize_for_selection},
 };
 
-use super::{FpFlags, Rule};
+use super::{FpFlags, Rule, rule::bits_width, value_type};
 
 pub(super) fn raises(
     context: &Context,
@@ -44,7 +44,7 @@ pub(super) fn raises(
     };
     let ty = |operand: u32| {
         let value = *operands.get(operand as usize)?;
-        tir::sem::egraph::semantic_type(context, context.get_value(value).ty())
+        value_type(context.terms(), context.get_value(value).ty())
     };
     let normalize =
         |graph: &SemGraph, root, bind: &dyn Fn(&SymPayload<tir::ValueId>) -> Option<usize>| {
@@ -57,19 +57,19 @@ pub(super) fn raises(
                     && let Some(declared) = normalized
                         .get_annotation(node)
                         .and_then(|m| m.actual_type)
-                        .and_then(|ty| tir::sem::egraph::semantic_type(context, ty))
+                        .and_then(|declared| value_type(context.terms(), declared))
                     && let Some(held) = ty(*operand)
                 {
-                    tir::sem::TypeUnifier::default()
-                        .unify(&declared, &held)
+                    tir::sem::TypeUnifier::new(context.terms())
+                        .unify(&TypeArg::Type(declared), &TypeArg::Type(held))
                         .ok()?;
                 }
             }
-            let types = tir::sem::infer_types(&normalized, |node| {
+            let types = tir::sem::infer_types(context.terms(), &normalized, |node| {
                 normalized
                     .get_annotation(node)
                     .and_then(|m| m.actual_type)
-                    .and_then(|ty| tir::sem::egraph::semantic_type(context, ty))
+                    .and_then(|declared| value_type(context.terms(), declared))
                     .or_else(|| match normalized.get_leaf_data(node) {
                         Some(SymPayload::SymbolId(operand)) => ty(*operand),
                         _ => None,
@@ -79,7 +79,8 @@ pub(super) fn raises(
             for (index, ty) in types.iter().enumerate() {
                 let node = NodeId::from_index(index);
                 if let Some(SymPayload::Int(value)) = normalized.get_leaf_data(node) {
-                    normalized.set_leaf_data(node, SymPayload::Int(widened(value, ty)));
+                    normalized
+                        .set_leaf_data(node, SymPayload::Int(widened(context.terms(), value, ty)));
                 }
             }
             Some(canonicalize_for_selection(
@@ -101,10 +102,9 @@ pub(super) fn raises(
 }
 
 // A literal of a pattern at the width its place in the term has.
-fn widened(value: &tir::utils::APInt, ty: &SemType) -> tir::utils::APInt {
-    let width = match ty {
-        SemType::Bits(Width::Const(width)) | SemType::RawBits(Width::Const(width)) => *width,
-        _ => return value.clone(),
+fn widened(terms: &tir::Terms, value: &tir::utils::APInt, ty: &TypeArg) -> tir::utils::APInt {
+    let Some(width) = bits_width(terms, ty) else {
+        return value.clone();
     };
     if width <= value.width() || width > 64 {
         return value.clone();

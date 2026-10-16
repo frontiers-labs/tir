@@ -1,7 +1,7 @@
 #![allow(clippy::too_many_arguments)]
 
 use tir::helpers::operation;
-use tir::{Any as TirAny, OpId, TypeId, ValueId};
+use tir::{OpId, TypeId, ValueId};
 
 use tir;
 
@@ -9,8 +9,9 @@ operation! {
     ImageTexelPointerOp {
         name: "ImageTexelPointer",
         dialect: "spirv",
-        operands: O { image: "TirAny", coordinate: "TirAny", sample: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _, _) -> _",
+        operands: O { image, coordinate, sample },
+        results: R { result }
     }
 }
 
@@ -18,8 +19,9 @@ operation! {
     GenericPtrMemSemanticsOp {
         name: "GenericPtrMemSemantics",
         dialect: "spirv",
-        operands: O { pointer: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_) -> _",
+        operands: O { pointer },
+        results: R { result }
     }
 }
 
@@ -27,8 +29,9 @@ operation! {
     VectorExtractDynamicOp {
         name: "VectorExtractDynamic",
         dialect: "spirv",
-        operands: O { vector: "TirAny", index: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _) -> _",
+        operands: O { vector, index },
+        results: R { result }
     }
 }
 
@@ -36,8 +39,9 @@ operation! {
     VectorInsertDynamicOp {
         name: "VectorInsertDynamic",
         dialect: "spirv",
-        operands: O { vector: "TirAny", component: "TirAny", index: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _, _) -> _",
+        operands: O { vector, component, index },
+        results: R { result }
     }
 }
 
@@ -45,8 +49,9 @@ operation! {
     CopyObjectOp {
         name: "CopyObject",
         dialect: "spirv",
-        operands: O { operand: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_) -> _",
+        operands: O { operand },
+        results: R { result }
     }
 }
 
@@ -54,8 +59,9 @@ operation! {
     TransposeOp {
         name: "Transpose",
         dialect: "spirv",
-        operands: O { matrix: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_) -> _",
+        operands: O { matrix },
+        results: R { result }
     }
 }
 
@@ -63,8 +69,9 @@ operation! {
     ConvertFToUOp {
         name: "ConvertFToU",
         dialect: "spirv",
-        operands: O { float_value: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_) -> _",
+        operands: O { float_value },
+        results: R { result }
     }
 }
 
@@ -72,8 +79,9 @@ operation! {
     ConvertFToSOp {
         name: "ConvertFToS",
         dialect: "spirv",
-        operands: O { float_value: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_) -> _",
+        operands: O { float_value },
+        results: R { result }
     }
 }
 
@@ -81,8 +89,9 @@ operation! {
     ConvertSToFOp {
         name: "ConvertSToF",
         dialect: "spirv",
-        operands: O { signed_value: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_) -> _",
+        operands: O { signed_value },
+        results: R { result }
     }
 }
 
@@ -90,8 +99,9 @@ operation! {
     ConvertUToFOp {
         name: "ConvertUToF",
         dialect: "spirv",
-        operands: O { unsigned_value: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_) -> _",
+        operands: O { unsigned_value },
+        results: R { result }
     }
 }
 
@@ -99,8 +109,9 @@ operation! {
     UConvertOp {
         name: "UConvert",
         dialect: "spirv",
-        operands: O { unsigned_value: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_) -> _",
+        operands: O { unsigned_value },
+        results: R { result }
     }
 }
 
@@ -108,8 +119,9 @@ operation! {
     SConvertOp {
         name: "SConvert",
         dialect: "spirv",
-        operands: O { signed_value: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_) -> _",
+        operands: O { signed_value },
+        results: R { result }
     }
 }
 
@@ -117,8 +129,9 @@ operation! {
     FConvertOp {
         name: "FConvert",
         dialect: "spirv",
-        operands: O { float_value: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_) -> _",
+        operands: O { float_value },
+        results: R { result }
     }
 }
 
@@ -126,8 +139,9 @@ operation! {
     QuantizeToF16Op {
         name: "QuantizeToF16",
         dialect: "spirv",
-        operands: O { value: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_) -> _",
+        operands: O { value },
+        results: R { result }
     }
 }
 
@@ -135,8 +149,9 @@ operation! {
     ConvertPtrToUOp {
         name: "ConvertPtrToU",
         dialect: "spirv",
-        operands: O { pointer: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_) -> _",
+        operands: O { pointer },
+        results: R { result }
     }
 }
 
@@ -144,8 +159,9 @@ operation! {
     SatConvertSToUOp {
         name: "SatConvertSToU",
         dialect: "spirv",
-        operands: O { signed_value: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_) -> _",
+        operands: O { signed_value },
+        results: R { result }
     }
 }
 
@@ -153,8 +169,9 @@ operation! {
     SatConvertUToSOp {
         name: "SatConvertUToS",
         dialect: "spirv",
-        operands: O { unsigned_value: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_) -> _",
+        operands: O { unsigned_value },
+        results: R { result }
     }
 }
 
@@ -162,8 +179,9 @@ operation! {
     ConvertUToPtrOp {
         name: "ConvertUToPtr",
         dialect: "spirv",
-        operands: O { integer_value: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_) -> _",
+        operands: O { integer_value },
+        results: R { result }
     }
 }
 
@@ -171,8 +189,9 @@ operation! {
     PtrCastToGenericOp {
         name: "PtrCastToGeneric",
         dialect: "spirv",
-        operands: O { pointer: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_) -> _",
+        operands: O { pointer },
+        results: R { result }
     }
 }
 
@@ -180,8 +199,9 @@ operation! {
     GenericCastToPtrOp {
         name: "GenericCastToPtr",
         dialect: "spirv",
-        operands: O { pointer: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_) -> _",
+        operands: O { pointer },
+        results: R { result }
     }
 }
 
@@ -189,8 +209,9 @@ operation! {
     BitcastOp {
         name: "Bitcast",
         dialect: "spirv",
-        operands: O { operand: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_) -> _",
+        operands: O { operand },
+        results: R { result }
     }
 }
 
@@ -198,8 +219,9 @@ operation! {
     SNegateOp {
         name: "SNegate",
         dialect: "spirv",
-        operands: O { operand: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_) -> _",
+        operands: O { operand },
+        results: R { result }
     }
 }
 
@@ -207,8 +229,9 @@ operation! {
     FNegateOp {
         name: "FNegate",
         dialect: "spirv",
-        operands: O { operand: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_) -> _",
+        operands: O { operand },
+        results: R { result }
     }
 }
 
@@ -216,8 +239,9 @@ operation! {
     IAddOp {
         name: "IAdd",
         dialect: "spirv",
-        operands: O { operand_1: "TirAny", operand_2: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _) -> _",
+        operands: O { operand_1, operand_2 },
+        results: R { result }
     }
 }
 
@@ -225,8 +249,9 @@ operation! {
     FAddOp {
         name: "FAdd",
         dialect: "spirv",
-        operands: O { operand_1: "TirAny", operand_2: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _) -> _",
+        operands: O { operand_1, operand_2 },
+        results: R { result }
     }
 }
 
@@ -234,8 +259,9 @@ operation! {
     ISubOp {
         name: "ISub",
         dialect: "spirv",
-        operands: O { operand_1: "TirAny", operand_2: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _) -> _",
+        operands: O { operand_1, operand_2 },
+        results: R { result }
     }
 }
 
@@ -243,8 +269,9 @@ operation! {
     FSubOp {
         name: "FSub",
         dialect: "spirv",
-        operands: O { operand_1: "TirAny", operand_2: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _) -> _",
+        operands: O { operand_1, operand_2 },
+        results: R { result }
     }
 }
 
@@ -252,8 +279,9 @@ operation! {
     IMulOp {
         name: "IMul",
         dialect: "spirv",
-        operands: O { operand_1: "TirAny", operand_2: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _) -> _",
+        operands: O { operand_1, operand_2 },
+        results: R { result }
     }
 }
 
@@ -261,8 +289,9 @@ operation! {
     FMulOp {
         name: "FMul",
         dialect: "spirv",
-        operands: O { operand_1: "TirAny", operand_2: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _) -> _",
+        operands: O { operand_1, operand_2 },
+        results: R { result }
     }
 }
 
@@ -270,8 +299,9 @@ operation! {
     UDivOp {
         name: "UDiv",
         dialect: "spirv",
-        operands: O { operand_1: "TirAny", operand_2: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _) -> _",
+        operands: O { operand_1, operand_2 },
+        results: R { result }
     }
 }
 
@@ -279,8 +309,9 @@ operation! {
     SDivOp {
         name: "SDiv",
         dialect: "spirv",
-        operands: O { operand_1: "TirAny", operand_2: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _) -> _",
+        operands: O { operand_1, operand_2 },
+        results: R { result }
     }
 }
 
@@ -288,8 +319,9 @@ operation! {
     FDivOp {
         name: "FDiv",
         dialect: "spirv",
-        operands: O { operand_1: "TirAny", operand_2: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _) -> _",
+        operands: O { operand_1, operand_2 },
+        results: R { result }
     }
 }
 
@@ -297,8 +329,9 @@ operation! {
     UModOp {
         name: "UMod",
         dialect: "spirv",
-        operands: O { operand_1: "TirAny", operand_2: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _) -> _",
+        operands: O { operand_1, operand_2 },
+        results: R { result }
     }
 }
 
@@ -306,8 +339,9 @@ operation! {
     SRemOp {
         name: "SRem",
         dialect: "spirv",
-        operands: O { operand_1: "TirAny", operand_2: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _) -> _",
+        operands: O { operand_1, operand_2 },
+        results: R { result }
     }
 }
 
@@ -315,8 +349,9 @@ operation! {
     SModOp {
         name: "SMod",
         dialect: "spirv",
-        operands: O { operand_1: "TirAny", operand_2: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _) -> _",
+        operands: O { operand_1, operand_2 },
+        results: R { result }
     }
 }
 
@@ -324,8 +359,9 @@ operation! {
     FRemOp {
         name: "FRem",
         dialect: "spirv",
-        operands: O { operand_1: "TirAny", operand_2: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _) -> _",
+        operands: O { operand_1, operand_2 },
+        results: R { result }
     }
 }
 
@@ -333,8 +369,9 @@ operation! {
     FModOp {
         name: "FMod",
         dialect: "spirv",
-        operands: O { operand_1: "TirAny", operand_2: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _) -> _",
+        operands: O { operand_1, operand_2 },
+        results: R { result }
     }
 }
 
@@ -342,8 +379,9 @@ operation! {
     VectorTimesScalarOp {
         name: "VectorTimesScalar",
         dialect: "spirv",
-        operands: O { vector: "TirAny", scalar: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _) -> _",
+        operands: O { vector, scalar },
+        results: R { result }
     }
 }
 
@@ -351,8 +389,9 @@ operation! {
     MatrixTimesScalarOp {
         name: "MatrixTimesScalar",
         dialect: "spirv",
-        operands: O { matrix: "TirAny", scalar: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _) -> _",
+        operands: O { matrix, scalar },
+        results: R { result }
     }
 }
 
@@ -360,8 +399,9 @@ operation! {
     VectorTimesMatrixOp {
         name: "VectorTimesMatrix",
         dialect: "spirv",
-        operands: O { vector: "TirAny", matrix: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _) -> _",
+        operands: O { vector, matrix },
+        results: R { result }
     }
 }
 
@@ -369,8 +409,9 @@ operation! {
     MatrixTimesVectorOp {
         name: "MatrixTimesVector",
         dialect: "spirv",
-        operands: O { matrix: "TirAny", vector: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _) -> _",
+        operands: O { matrix, vector },
+        results: R { result }
     }
 }
 
@@ -378,8 +419,9 @@ operation! {
     MatrixTimesMatrixOp {
         name: "MatrixTimesMatrix",
         dialect: "spirv",
-        operands: O { leftmatrix: "TirAny", rightmatrix: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _) -> _",
+        operands: O { leftmatrix, rightmatrix },
+        results: R { result }
     }
 }
 
@@ -387,8 +429,9 @@ operation! {
     OuterProductOp {
         name: "OuterProduct",
         dialect: "spirv",
-        operands: O { vector_1: "TirAny", vector_2: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _) -> _",
+        operands: O { vector_1, vector_2 },
+        results: R { result }
     }
 }
 
@@ -396,8 +439,9 @@ operation! {
     DotOp {
         name: "Dot",
         dialect: "spirv",
-        operands: O { vector_1: "TirAny", vector_2: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _) -> _",
+        operands: O { vector_1, vector_2 },
+        results: R { result }
     }
 }
 
@@ -405,8 +449,9 @@ operation! {
     IAddCarryOp {
         name: "IAddCarry",
         dialect: "spirv",
-        operands: O { operand_1: "TirAny", operand_2: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _) -> _",
+        operands: O { operand_1, operand_2 },
+        results: R { result }
     }
 }
 
@@ -414,8 +459,9 @@ operation! {
     ISubBorrowOp {
         name: "ISubBorrow",
         dialect: "spirv",
-        operands: O { operand_1: "TirAny", operand_2: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _) -> _",
+        operands: O { operand_1, operand_2 },
+        results: R { result }
     }
 }
 
@@ -423,8 +469,9 @@ operation! {
     UMulExtendedOp {
         name: "UMulExtended",
         dialect: "spirv",
-        operands: O { operand_1: "TirAny", operand_2: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _) -> _",
+        operands: O { operand_1, operand_2 },
+        results: R { result }
     }
 }
 
@@ -432,8 +479,9 @@ operation! {
     SMulExtendedOp {
         name: "SMulExtended",
         dialect: "spirv",
-        operands: O { operand_1: "TirAny", operand_2: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _) -> _",
+        operands: O { operand_1, operand_2 },
+        results: R { result }
     }
 }
 
@@ -441,8 +489,9 @@ operation! {
     AnyOp {
         name: "Any",
         dialect: "spirv",
-        operands: O { vector: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_) -> _",
+        operands: O { vector },
+        results: R { result }
     }
 }
 
@@ -450,8 +499,9 @@ operation! {
     AllOp {
         name: "All",
         dialect: "spirv",
-        operands: O { vector: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_) -> _",
+        operands: O { vector },
+        results: R { result }
     }
 }
 
@@ -459,8 +509,9 @@ operation! {
     IsNanOp {
         name: "IsNan",
         dialect: "spirv",
-        operands: O { x: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_) -> _",
+        operands: O { x },
+        results: R { result }
     }
 }
 
@@ -468,8 +519,9 @@ operation! {
     IsInfOp {
         name: "IsInf",
         dialect: "spirv",
-        operands: O { x: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_) -> _",
+        operands: O { x },
+        results: R { result }
     }
 }
 
@@ -477,8 +529,9 @@ operation! {
     IsFiniteOp {
         name: "IsFinite",
         dialect: "spirv",
-        operands: O { x: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_) -> _",
+        operands: O { x },
+        results: R { result }
     }
 }
 
@@ -486,8 +539,9 @@ operation! {
     IsNormalOp {
         name: "IsNormal",
         dialect: "spirv",
-        operands: O { x: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_) -> _",
+        operands: O { x },
+        results: R { result }
     }
 }
 
@@ -495,8 +549,9 @@ operation! {
     SignBitSetOp {
         name: "SignBitSet",
         dialect: "spirv",
-        operands: O { x: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_) -> _",
+        operands: O { x },
+        results: R { result }
     }
 }
 
@@ -504,8 +559,9 @@ operation! {
     LessOrGreaterOp {
         name: "LessOrGreater",
         dialect: "spirv",
-        operands: O { x: "TirAny", y: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _) -> _",
+        operands: O { x, y },
+        results: R { result }
     }
 }
 
@@ -513,8 +569,9 @@ operation! {
     OrderedOp {
         name: "Ordered",
         dialect: "spirv",
-        operands: O { x: "TirAny", y: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _) -> _",
+        operands: O { x, y },
+        results: R { result }
     }
 }
 
@@ -522,8 +579,9 @@ operation! {
     UnorderedOp {
         name: "Unordered",
         dialect: "spirv",
-        operands: O { x: "TirAny", y: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _) -> _",
+        operands: O { x, y },
+        results: R { result }
     }
 }
 
@@ -531,8 +589,9 @@ operation! {
     LogicalEqualOp {
         name: "LogicalEqual",
         dialect: "spirv",
-        operands: O { operand_1: "TirAny", operand_2: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _) -> _",
+        operands: O { operand_1, operand_2 },
+        results: R { result }
     }
 }
 
@@ -540,8 +599,9 @@ operation! {
     LogicalNotEqualOp {
         name: "LogicalNotEqual",
         dialect: "spirv",
-        operands: O { operand_1: "TirAny", operand_2: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _) -> _",
+        operands: O { operand_1, operand_2 },
+        results: R { result }
     }
 }
 
@@ -549,8 +609,9 @@ operation! {
     LogicalOrOp {
         name: "LogicalOr",
         dialect: "spirv",
-        operands: O { operand_1: "TirAny", operand_2: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _) -> _",
+        operands: O { operand_1, operand_2 },
+        results: R { result }
     }
 }
 
@@ -558,8 +619,9 @@ operation! {
     LogicalAndOp {
         name: "LogicalAnd",
         dialect: "spirv",
-        operands: O { operand_1: "TirAny", operand_2: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _) -> _",
+        operands: O { operand_1, operand_2 },
+        results: R { result }
     }
 }
 
@@ -567,8 +629,9 @@ operation! {
     LogicalNotOp {
         name: "LogicalNot",
         dialect: "spirv",
-        operands: O { operand: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_) -> _",
+        operands: O { operand },
+        results: R { result }
     }
 }
 
@@ -576,8 +639,9 @@ operation! {
     SelectOp {
         name: "Select",
         dialect: "spirv",
-        operands: O { condition: "TirAny", object_1: "TirAny", object_2: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _, _) -> _",
+        operands: O { condition, object_1, object_2 },
+        results: R { result }
     }
 }
 
@@ -585,8 +649,9 @@ operation! {
     IEqualOp {
         name: "IEqual",
         dialect: "spirv",
-        operands: O { operand_1: "TirAny", operand_2: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _) -> _",
+        operands: O { operand_1, operand_2 },
+        results: R { result }
     }
 }
 
@@ -594,8 +659,9 @@ operation! {
     INotEqualOp {
         name: "INotEqual",
         dialect: "spirv",
-        operands: O { operand_1: "TirAny", operand_2: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _) -> _",
+        operands: O { operand_1, operand_2 },
+        results: R { result }
     }
 }
 
@@ -603,8 +669,9 @@ operation! {
     UGreaterThanOp {
         name: "UGreaterThan",
         dialect: "spirv",
-        operands: O { operand_1: "TirAny", operand_2: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _) -> _",
+        operands: O { operand_1, operand_2 },
+        results: R { result }
     }
 }
 
@@ -612,8 +679,9 @@ operation! {
     SGreaterThanOp {
         name: "SGreaterThan",
         dialect: "spirv",
-        operands: O { operand_1: "TirAny", operand_2: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _) -> _",
+        operands: O { operand_1, operand_2 },
+        results: R { result }
     }
 }
 
@@ -621,8 +689,9 @@ operation! {
     UGreaterThanEqualOp {
         name: "UGreaterThanEqual",
         dialect: "spirv",
-        operands: O { operand_1: "TirAny", operand_2: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _) -> _",
+        operands: O { operand_1, operand_2 },
+        results: R { result }
     }
 }
 
@@ -630,8 +699,9 @@ operation! {
     SGreaterThanEqualOp {
         name: "SGreaterThanEqual",
         dialect: "spirv",
-        operands: O { operand_1: "TirAny", operand_2: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _) -> _",
+        operands: O { operand_1, operand_2 },
+        results: R { result }
     }
 }
 
@@ -639,8 +709,9 @@ operation! {
     ULessThanOp {
         name: "ULessThan",
         dialect: "spirv",
-        operands: O { operand_1: "TirAny", operand_2: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _) -> _",
+        operands: O { operand_1, operand_2 },
+        results: R { result }
     }
 }
 
@@ -648,8 +719,9 @@ operation! {
     SLessThanOp {
         name: "SLessThan",
         dialect: "spirv",
-        operands: O { operand_1: "TirAny", operand_2: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _) -> _",
+        operands: O { operand_1, operand_2 },
+        results: R { result }
     }
 }
 
@@ -657,8 +729,9 @@ operation! {
     ULessThanEqualOp {
         name: "ULessThanEqual",
         dialect: "spirv",
-        operands: O { operand_1: "TirAny", operand_2: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _) -> _",
+        operands: O { operand_1, operand_2 },
+        results: R { result }
     }
 }
 
@@ -666,8 +739,9 @@ operation! {
     SLessThanEqualOp {
         name: "SLessThanEqual",
         dialect: "spirv",
-        operands: O { operand_1: "TirAny", operand_2: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _) -> _",
+        operands: O { operand_1, operand_2 },
+        results: R { result }
     }
 }
 
@@ -675,8 +749,9 @@ operation! {
     FOrdEqualOp {
         name: "FOrdEqual",
         dialect: "spirv",
-        operands: O { operand_1: "TirAny", operand_2: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _) -> _",
+        operands: O { operand_1, operand_2 },
+        results: R { result }
     }
 }
 
@@ -684,8 +759,9 @@ operation! {
     FUnordEqualOp {
         name: "FUnordEqual",
         dialect: "spirv",
-        operands: O { operand_1: "TirAny", operand_2: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _) -> _",
+        operands: O { operand_1, operand_2 },
+        results: R { result }
     }
 }
 
@@ -693,8 +769,9 @@ operation! {
     FOrdNotEqualOp {
         name: "FOrdNotEqual",
         dialect: "spirv",
-        operands: O { operand_1: "TirAny", operand_2: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _) -> _",
+        operands: O { operand_1, operand_2 },
+        results: R { result }
     }
 }
 
@@ -702,8 +779,9 @@ operation! {
     FUnordNotEqualOp {
         name: "FUnordNotEqual",
         dialect: "spirv",
-        operands: O { operand_1: "TirAny", operand_2: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _) -> _",
+        operands: O { operand_1, operand_2 },
+        results: R { result }
     }
 }
 
@@ -711,8 +789,9 @@ operation! {
     FOrdLessThanOp {
         name: "FOrdLessThan",
         dialect: "spirv",
-        operands: O { operand_1: "TirAny", operand_2: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _) -> _",
+        operands: O { operand_1, operand_2 },
+        results: R { result }
     }
 }
 
@@ -720,8 +799,9 @@ operation! {
     FUnordLessThanOp {
         name: "FUnordLessThan",
         dialect: "spirv",
-        operands: O { operand_1: "TirAny", operand_2: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _) -> _",
+        operands: O { operand_1, operand_2 },
+        results: R { result }
     }
 }
 
@@ -729,8 +809,9 @@ operation! {
     FOrdGreaterThanOp {
         name: "FOrdGreaterThan",
         dialect: "spirv",
-        operands: O { operand_1: "TirAny", operand_2: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _) -> _",
+        operands: O { operand_1, operand_2 },
+        results: R { result }
     }
 }
 
@@ -738,8 +819,9 @@ operation! {
     FUnordGreaterThanOp {
         name: "FUnordGreaterThan",
         dialect: "spirv",
-        operands: O { operand_1: "TirAny", operand_2: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _) -> _",
+        operands: O { operand_1, operand_2 },
+        results: R { result }
     }
 }
 
@@ -747,8 +829,9 @@ operation! {
     FOrdLessThanEqualOp {
         name: "FOrdLessThanEqual",
         dialect: "spirv",
-        operands: O { operand_1: "TirAny", operand_2: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _) -> _",
+        operands: O { operand_1, operand_2 },
+        results: R { result }
     }
 }
 
@@ -756,8 +839,9 @@ operation! {
     FUnordLessThanEqualOp {
         name: "FUnordLessThanEqual",
         dialect: "spirv",
-        operands: O { operand_1: "TirAny", operand_2: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _) -> _",
+        operands: O { operand_1, operand_2 },
+        results: R { result }
     }
 }
 
@@ -765,8 +849,9 @@ operation! {
     FOrdGreaterThanEqualOp {
         name: "FOrdGreaterThanEqual",
         dialect: "spirv",
-        operands: O { operand_1: "TirAny", operand_2: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _) -> _",
+        operands: O { operand_1, operand_2 },
+        results: R { result }
     }
 }
 
@@ -774,8 +859,9 @@ operation! {
     FUnordGreaterThanEqualOp {
         name: "FUnordGreaterThanEqual",
         dialect: "spirv",
-        operands: O { operand_1: "TirAny", operand_2: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _) -> _",
+        operands: O { operand_1, operand_2 },
+        results: R { result }
     }
 }
 
@@ -783,8 +869,9 @@ operation! {
     ShiftRightLogicalOp {
         name: "ShiftRightLogical",
         dialect: "spirv",
-        operands: O { base: "TirAny", shift: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _) -> _",
+        operands: O { base, shift },
+        results: R { result }
     }
 }
 
@@ -792,8 +879,9 @@ operation! {
     ShiftRightArithmeticOp {
         name: "ShiftRightArithmetic",
         dialect: "spirv",
-        operands: O { base: "TirAny", shift: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _) -> _",
+        operands: O { base, shift },
+        results: R { result }
     }
 }
 
@@ -801,8 +889,9 @@ operation! {
     ShiftLeftLogicalOp {
         name: "ShiftLeftLogical",
         dialect: "spirv",
-        operands: O { base: "TirAny", shift: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _) -> _",
+        operands: O { base, shift },
+        results: R { result }
     }
 }
 
@@ -810,8 +899,9 @@ operation! {
     BitwiseOrOp {
         name: "BitwiseOr",
         dialect: "spirv",
-        operands: O { operand_1: "TirAny", operand_2: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _) -> _",
+        operands: O { operand_1, operand_2 },
+        results: R { result }
     }
 }
 
@@ -819,8 +909,9 @@ operation! {
     BitwiseXorOp {
         name: "BitwiseXor",
         dialect: "spirv",
-        operands: O { operand_1: "TirAny", operand_2: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _) -> _",
+        operands: O { operand_1, operand_2 },
+        results: R { result }
     }
 }
 
@@ -828,8 +919,9 @@ operation! {
     BitwiseAndOp {
         name: "BitwiseAnd",
         dialect: "spirv",
-        operands: O { operand_1: "TirAny", operand_2: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _) -> _",
+        operands: O { operand_1, operand_2 },
+        results: R { result }
     }
 }
 
@@ -837,8 +929,9 @@ operation! {
     NotOp {
         name: "Not",
         dialect: "spirv",
-        operands: O { operand: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_) -> _",
+        operands: O { operand },
+        results: R { result }
     }
 }
 
@@ -846,8 +939,9 @@ operation! {
     BitFieldInsertOp {
         name: "BitFieldInsert",
         dialect: "spirv",
-        operands: O { base: "TirAny", insert: "TirAny", offset: "TirAny", count: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _, _, _) -> _",
+        operands: O { base, insert, offset, count },
+        results: R { result }
     }
 }
 
@@ -855,8 +949,9 @@ operation! {
     BitFieldSExtractOp {
         name: "BitFieldSExtract",
         dialect: "spirv",
-        operands: O { base: "TirAny", offset: "TirAny", count: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _, _) -> _",
+        operands: O { base, offset, count },
+        results: R { result }
     }
 }
 
@@ -864,8 +959,9 @@ operation! {
     BitFieldUExtractOp {
         name: "BitFieldUExtract",
         dialect: "spirv",
-        operands: O { base: "TirAny", offset: "TirAny", count: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _, _) -> _",
+        operands: O { base, offset, count },
+        results: R { result }
     }
 }
 
@@ -873,8 +969,9 @@ operation! {
     BitReverseOp {
         name: "BitReverse",
         dialect: "spirv",
-        operands: O { base: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_) -> _",
+        operands: O { base },
+        results: R { result }
     }
 }
 
@@ -882,8 +979,9 @@ operation! {
     BitCountOp {
         name: "BitCount",
         dialect: "spirv",
-        operands: O { base: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_) -> _",
+        operands: O { base },
+        results: R { result }
     }
 }
 
@@ -891,8 +989,9 @@ operation! {
     AtomicLoadOp {
         name: "AtomicLoad",
         dialect: "spirv",
-        operands: O { pointer: "TirAny", memory: "TirAny", semantics: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _, _) -> _",
+        operands: O { pointer, memory, semantics },
+        results: R { result }
     }
 }
 
@@ -900,8 +999,9 @@ operation! {
     AtomicExchangeOp {
         name: "AtomicExchange",
         dialect: "spirv",
-        operands: O { pointer: "TirAny", memory: "TirAny", semantics: "TirAny", value: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _, _, _) -> _",
+        operands: O { pointer, memory, semantics, value },
+        results: R { result }
     }
 }
 
@@ -909,8 +1009,9 @@ operation! {
     AtomicCompareExchangeOp {
         name: "AtomicCompareExchange",
         dialect: "spirv",
-        operands: O { pointer: "TirAny", memory: "TirAny", equal: "TirAny", unequal: "TirAny", value: "TirAny", comparator: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _, _, _, _, _) -> _",
+        operands: O { pointer, memory, equal, unequal, value, comparator },
+        results: R { result }
     }
 }
 
@@ -918,8 +1019,9 @@ operation! {
     AtomicCompareExchangeWeakOp {
         name: "AtomicCompareExchangeWeak",
         dialect: "spirv",
-        operands: O { pointer: "TirAny", memory: "TirAny", equal: "TirAny", unequal: "TirAny", value: "TirAny", comparator: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _, _, _, _, _) -> _",
+        operands: O { pointer, memory, equal, unequal, value, comparator },
+        results: R { result }
     }
 }
 
@@ -927,8 +1029,9 @@ operation! {
     AtomicIIncrementOp {
         name: "AtomicIIncrement",
         dialect: "spirv",
-        operands: O { pointer: "TirAny", memory: "TirAny", semantics: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _, _) -> _",
+        operands: O { pointer, memory, semantics },
+        results: R { result }
     }
 }
 
@@ -936,8 +1039,9 @@ operation! {
     AtomicIDecrementOp {
         name: "AtomicIDecrement",
         dialect: "spirv",
-        operands: O { pointer: "TirAny", memory: "TirAny", semantics: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _, _) -> _",
+        operands: O { pointer, memory, semantics },
+        results: R { result }
     }
 }
 
@@ -945,8 +1049,9 @@ operation! {
     AtomicIAddOp {
         name: "AtomicIAdd",
         dialect: "spirv",
-        operands: O { pointer: "TirAny", memory: "TirAny", semantics: "TirAny", value: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _, _, _) -> _",
+        operands: O { pointer, memory, semantics, value },
+        results: R { result }
     }
 }
 
@@ -954,8 +1059,9 @@ operation! {
     AtomicISubOp {
         name: "AtomicISub",
         dialect: "spirv",
-        operands: O { pointer: "TirAny", memory: "TirAny", semantics: "TirAny", value: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _, _, _) -> _",
+        operands: O { pointer, memory, semantics, value },
+        results: R { result }
     }
 }
 
@@ -963,8 +1069,9 @@ operation! {
     AtomicSMinOp {
         name: "AtomicSMin",
         dialect: "spirv",
-        operands: O { pointer: "TirAny", memory: "TirAny", semantics: "TirAny", value: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _, _, _) -> _",
+        operands: O { pointer, memory, semantics, value },
+        results: R { result }
     }
 }
 
@@ -972,8 +1079,9 @@ operation! {
     AtomicUMinOp {
         name: "AtomicUMin",
         dialect: "spirv",
-        operands: O { pointer: "TirAny", memory: "TirAny", semantics: "TirAny", value: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _, _, _) -> _",
+        operands: O { pointer, memory, semantics, value },
+        results: R { result }
     }
 }
 
@@ -981,8 +1089,9 @@ operation! {
     AtomicSMaxOp {
         name: "AtomicSMax",
         dialect: "spirv",
-        operands: O { pointer: "TirAny", memory: "TirAny", semantics: "TirAny", value: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _, _, _) -> _",
+        operands: O { pointer, memory, semantics, value },
+        results: R { result }
     }
 }
 
@@ -990,8 +1099,9 @@ operation! {
     AtomicUMaxOp {
         name: "AtomicUMax",
         dialect: "spirv",
-        operands: O { pointer: "TirAny", memory: "TirAny", semantics: "TirAny", value: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _, _, _) -> _",
+        operands: O { pointer, memory, semantics, value },
+        results: R { result }
     }
 }
 
@@ -999,8 +1109,9 @@ operation! {
     AtomicAndOp {
         name: "AtomicAnd",
         dialect: "spirv",
-        operands: O { pointer: "TirAny", memory: "TirAny", semantics: "TirAny", value: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _, _, _) -> _",
+        operands: O { pointer, memory, semantics, value },
+        results: R { result }
     }
 }
 
@@ -1008,8 +1119,9 @@ operation! {
     AtomicOrOp {
         name: "AtomicOr",
         dialect: "spirv",
-        operands: O { pointer: "TirAny", memory: "TirAny", semantics: "TirAny", value: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _, _, _) -> _",
+        operands: O { pointer, memory, semantics, value },
+        results: R { result }
     }
 }
 
@@ -1017,8 +1129,9 @@ operation! {
     AtomicXorOp {
         name: "AtomicXor",
         dialect: "spirv",
-        operands: O { pointer: "TirAny", memory: "TirAny", semantics: "TirAny", value: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _, _, _) -> _",
+        operands: O { pointer, memory, semantics, value },
+        results: R { result }
     }
 }
 
@@ -1026,8 +1139,9 @@ operation! {
     AtomicFlagTestAndSetOp {
         name: "AtomicFlagTestAndSet",
         dialect: "spirv",
-        operands: O { pointer: "TirAny", memory: "TirAny", semantics: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _, _) -> _",
+        operands: O { pointer, memory, semantics },
+        results: R { result }
     }
 }
 
@@ -1035,8 +1149,9 @@ operation! {
     CopyLogicalOp {
         name: "CopyLogical",
         dialect: "spirv",
-        operands: O { operand: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_) -> _",
+        operands: O { operand },
+        results: R { result }
     }
 }
 
@@ -1044,8 +1159,9 @@ operation! {
     PtrEqualOp {
         name: "PtrEqual",
         dialect: "spirv",
-        operands: O { operand_1: "TirAny", operand_2: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _) -> _",
+        operands: O { operand_1, operand_2 },
+        results: R { result }
     }
 }
 
@@ -1053,8 +1169,9 @@ operation! {
     PtrNotEqualOp {
         name: "PtrNotEqual",
         dialect: "spirv",
-        operands: O { operand_1: "TirAny", operand_2: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _) -> _",
+        operands: O { operand_1, operand_2 },
+        results: R { result }
     }
 }
 
@@ -1062,8 +1179,9 @@ operation! {
     PtrDiffOp {
         name: "PtrDiff",
         dialect: "spirv",
-        operands: O { operand_1: "TirAny", operand_2: "TirAny", },
-        results: R { result: "TirAny", }
+        scheme: "(_, _) -> _",
+        operands: O { operand_1, operand_2 },
+        results: R { result }
     }
 }
 

@@ -9,10 +9,12 @@ mod conversions;
 mod declarations;
 mod expressions;
 mod initialization;
+mod layout;
 mod references;
 mod statements;
 mod target;
 mod types;
+pub use layout::Layouts;
 pub use target::TargetProfile;
 pub use types::{
     EntityId, IntegerKind, NodeSemantics, QualType, Qualifiers, RecordDefinition, RecordField,
@@ -29,21 +31,35 @@ struct Symbol {
     constant: Option<i64>,
 }
 
-pub fn analyze(ast: Ast, options: LangOptions) -> Result<TypedAst, Vec<Diagnostic>> {
+pub fn analyze(
+    context: &tir::Context,
+    ast: Ast,
+    options: LangOptions,
+) -> Result<TypedAst, Vec<Diagnostic>> {
     // Where the host has no backend, fall back to a modeled target rather than
     // a hand-written profile, so the layout still comes from a description.
-    let target = TargetProfile::host()
-        .or_else(|_| TargetProfile::for_march("x86_64"))
+    let (march, machine) = [std::env::consts::ARCH, "x86_64"]
+        .into_iter()
+        .find_map(|march| Some((march, tir::backend::select_target(march, None, None).ok()?)))
         .expect("x86_64 is always modeled");
-    analyze_with_target(ast, options, target)
+    let target =
+        TargetProfile::for_target(context, march, machine.as_ref()).expect("a modeled target");
+    let layout = target
+        .layout_spec(context, machine.as_ref())
+        .expect("a modeled target declares its layout");
+    analyze_with_target(context, ast, options, target, layout)
 }
 
+/// Analyze `ast` for `target`, whose types `layout` lays out. The types are
+/// interned in `context`, the one the unit is generated into.
 pub fn analyze_with_target(
+    context: &tir::Context,
     mut ast: Ast,
     options: LangOptions,
     target: TargetProfile,
+    layout: tir::attributes::AttributeValue,
 ) -> Result<TypedAst, Vec<Diagnostic>> {
-    let (types, records, diagnostics) = {
+    let (types, records, layouts, diagnostics) = {
         let mut analyzer = Analyzer {
             ast: &mut ast,
             options,
@@ -59,9 +75,17 @@ pub fn analyze_with_target(
             next_entity: 0,
             records: Vec::new(),
             record_indices: HashMap::new(),
+            layouts: Layouts::new(context, layout),
         };
         analyzer.translation_unit();
-        (analyzer.types, analyzer.records, analyzer.diagnostics)
+        let names = analyzer.records.iter().map(|record| record.name.as_str());
+        analyzer.layouts.declare_incomplete(names);
+        (
+            analyzer.types,
+            analyzer.records,
+            analyzer.layouts,
+            analyzer.diagnostics,
+        )
     };
     if diagnostics.is_empty() {
         Ok(TypedAst {
@@ -69,6 +93,7 @@ pub fn analyze_with_target(
             types,
             target,
             records,
+            layouts,
         })
     } else {
         Err(diagnostics)
@@ -90,6 +115,7 @@ struct Analyzer<'a> {
     next_entity: u32,
     records: Vec<RecordDefinition>,
     record_indices: HashMap<RecordId, usize>,
+    layouts: Layouts,
 }
 
 #[derive(Default)]
@@ -101,10 +127,6 @@ struct SwitchContext {
 fn with_qualifier(mut ty: QualType, qualifier: u8) -> QualType {
     ty.qualifiers = ty.qualifiers.with(qualifier);
     ty
-}
-
-fn align_to(value: u64, align: u64) -> u64 {
-    value.div_ceil(align) * align
 }
 
 fn operator_text(kind: AstKind) -> &'static str {
@@ -145,6 +167,7 @@ fn is_signed_integer(kind: IntegerKind, target: TargetProfile) -> bool {
         | IntegerKind::UnsignedLong
         | IntegerKind::UnsignedLongLong => false,
         IntegerKind::Char => target.plain_char_signed,
+        IntegerKind::BitInt { signed, .. } => signed,
         _ => true,
     }
 }
@@ -156,6 +179,10 @@ fn unsigned_corresponding(kind: IntegerKind) -> IntegerKind {
         IntegerKind::Int => IntegerKind::UnsignedInt,
         IntegerKind::Long => IntegerKind::UnsignedLong,
         IntegerKind::LongLong => IntegerKind::UnsignedLongLong,
+        IntegerKind::BitInt { width, .. } => IntegerKind::BitInt {
+            width,
+            signed: false,
+        },
         _ => kind,
     }
 }

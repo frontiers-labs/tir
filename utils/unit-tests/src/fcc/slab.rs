@@ -82,14 +82,14 @@ fn passes_do_not_leak_entities() {
         assert_within_budget(&context, root, name);
     };
 
-    let mut pm = PassManager::new();
-    pm.add_pass(fcc::passes::LowerCirStructsPass::new());
-    run("lower-cir-structs", pm);
-
     for (name, pass) in [
         (
             "restructure-nodes",
             Box::new(tir::passes::RestructureNodesPass::new()) as Box<dyn tir::Pass>,
+        ),
+        (
+            "erase-layout",
+            Box::new(tir::passes::EraseLayoutPass::new()),
         ),
         (
             "promote-nodes",

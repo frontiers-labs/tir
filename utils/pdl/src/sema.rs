@@ -6,6 +6,10 @@ use crate::Diagnostic;
 use crate::Span;
 use crate::ast::*;
 
+/// The width name every rule reads without binding it: the native integer
+/// width of the target the rules are applied for.
+pub const NATIVE: &str = "NATIVE";
+
 pub fn analyze(file: &File) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
     let mut groups = HashSet::new();
@@ -48,7 +52,7 @@ pub fn analyze(file: &File) -> Vec<Diagnostic> {
             ));
         }
         let mut binders = HashSet::new();
-        let mut widths = HashSet::new();
+        let mut widths = HashSet::from([NATIVE]);
         collect_lhs_bindings(&rule.lhs, &mut binders, &mut widths, &mut diagnostics);
         validate_operators(&rule.lhs, &mut diagnostics);
         validate_operators(&rule.rhs, &mut diagnostics);
@@ -110,7 +114,10 @@ fn collect_lhs_bindings<'a>(
                     term.span,
                 ));
             }
-            if let Some(BindingType::Type(Type::Integer(Width::Named(width)))) = ty {
+            if let Some(BindingType::Type(
+                Type::Integer(Width::Named(width)) | Type::Pointer(Width::Named(width)),
+            )) = ty
+            {
                 widths.insert(width);
             }
             if let Some(BindingType::Constant(Some(width))) = ty {

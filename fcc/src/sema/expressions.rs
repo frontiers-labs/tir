@@ -75,10 +75,18 @@ impl Analyzer<'_> {
                 let Some(AstLeaf::Int(literal)) = self.ast.get_leaf_data(node).cloned() else {
                     return;
                 };
-                (
-                    self.integer_literal_type(node, &literal.spelling, literal.value.to_u64()),
-                    ValueCategory::Value,
-                )
+                let ty = match crate::lexer::bit_precise_suffix(&literal.spelling) {
+                    Some((_, unsigned)) => self.bit_precise_literal_type(
+                        node,
+                        &literal.spelling,
+                        &literal.value,
+                        unsigned,
+                    ),
+                    None => {
+                        self.integer_literal_type(node, &literal.spelling, literal.value.to_u64())
+                    }
+                };
+                (ty, ValueCategory::Value)
             }
             AstKind::FloatLiteral => {
                 let Some(AstLeaf::Float(literal)) = self.ast.get_leaf_data(node) else {

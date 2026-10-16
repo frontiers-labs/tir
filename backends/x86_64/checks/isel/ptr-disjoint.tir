@@ -3,9 +3,9 @@
 // The no-alias fact is mid-end vocabulary: structuring the input turns it into
 // the range check it stands for, and that selects like any other compare.
 
-#data_layout = {types = {i1 = {abi = 8, size = 1}, i64 = {abi = 64, size = 64}, p = {abi = 64, size = 64}}}
+#layout_spec = #layout.spec<!i1 = {size = 1, abi = 8}, !i64 = {size = 64, abi = 64}, !ptr.p = {size = 64, abi = 64}>
 
-module {data_layout = #data_layout} {
+module {layout.spec = #layout_spec} {
   %f = func.func @f(%0: !ptr.p, %1: !ptr.p, %2: !i64) -> !i64 {
     %3 = ptr.disjoint %0, %2, %1, %2 : !i1
     %4 = extui %3 : !i64

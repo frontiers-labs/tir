@@ -116,7 +116,7 @@ impl Theory {
                     } else {
                         vec![
                             HeadOp::Insert {
-                                label: LabelFill::plain(constant(width, 0)),
+                                label: LabelFill::plain(constant(u64::from(width), 0)),
                                 args: smallvec![],
                                 into: 4,
                             },

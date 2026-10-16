@@ -7,9 +7,9 @@
 // store's operand could be spelled as the read that comes after the store,
 // closing the chain on itself.
 
-#data_layout = {types = {i8 = {abi = 8, size = 8}, p = {abi = 64, size = 64}}}
+#layout_spec = #layout.spec<!i8 = {size = 8, abi = 8}, !ptr.p = {size = 64, abi = 64}>
 
-module {data_layout = #data_layout} {
+module {layout.spec = #layout_spec} {
   %fn_f = func.declare @f(!i8) -> !unit
   %fn_g = func.declare @g() -> !unit
   %fn_scale = func.func @scale(%p: !ptr.p) {

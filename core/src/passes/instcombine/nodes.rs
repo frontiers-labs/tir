@@ -10,16 +10,16 @@
 
 use crate::{IdMap, IdSet};
 
-use tir_egraph::{ClassId as Id, Engine, Ref, RowId, Vocabulary};
+use tir_egraph::{ClassId as Id, Engine, Ref, Vocabulary};
 
-use super::rules::{Rules, Shared, builtin_ruleset};
+use super::rules::{Shared, builtin_ruleset};
 use crate::analysis::AnalysisManager;
 use crate::analysis::effects::{observed_state, produced_state};
 use crate::binding::{StateChain, forwards_state, state_chains};
 use crate::func::FuncOp;
-use crate::rewrite::{Commit, Driver, Kinds, Rewrite, RuleSet, is_dead_read, published, seed};
+use crate::rewrite::{Driver, Kinds, Rewrite, RuleSet, is_dead_read, published, seed};
+use crate::sem::SemNode as Node;
 use crate::sem::node::cost;
-use crate::sem::{Prov, SemNode as Node};
 use crate::{
     Context, MemoryRead, MemoryWrite, OpId, OperationRef, Pass, PassError, PassTarget,
     PromotableAllocation, RegionId, RegionKind, Theta, ValueId,
@@ -30,15 +30,37 @@ pub struct InstCombineNodesPass {
     shared: Shared,
     vocabulary: Option<Vocabulary<Node>>,
     kinds: Kinds,
+    trusted: bool,
 }
 
 impl InstCombineNodesPass {
     pub fn new() -> Self {
         Self::default()
     }
+
+    /// The pass applying the rules stated `proof trusted` too, which no
+    /// solver checked: a pipeline opts into them, as `instcombine-nodes<trusted>`.
+    pub fn trusting() -> Self {
+        Self {
+            trusted: true,
+            ..Self::default()
+        }
+    }
+
+    fn parse(args: &str) -> Result<Self, String> {
+        match args {
+            "" => Ok(Self::new()),
+            "trusted" => Ok(Self::trusting()),
+            other => Err(format!("instcombine-nodes takes `trusted`, not `{other}`")),
+        }
+    }
 }
 
-crate::register_pass!(InstCombineNodesPass, "instcombine-nodes");
+crate::register_pass!(
+    InstCombineNodesPass,
+    "instcombine-nodes",
+    InstCombineNodesPass::parse
+);
 
 impl Pass for InstCombineNodesPass {
     fn name(&self) -> &'static str {
@@ -65,7 +87,7 @@ impl Pass for InstCombineNodesPass {
         let mut seeded = seed(context, root, vocabulary, &mut self.kinds, false);
         let loop_ports = std::mem::take(&mut seeded.loop_ports);
         let rewrite = InstCombine {
-            ruleset: builtin_ruleset(context, &seeded, &mut self.shared),
+            ruleset: builtin_ruleset(context, &seeded, &mut self.shared, self.trusted),
         };
         let mut driver = Driver::new(context, seeded, &rewrite, self.name());
         driver.saturate();
@@ -85,34 +107,16 @@ impl Pass for InstCombineNodesPass {
 }
 
 struct InstCombine {
-    ruleset: Rules,
+    ruleset: RuleSet,
 }
 
 impl Rewrite for InstCombine {
     fn rules(&self) -> &RuleSet {
-        &self.ruleset.set
+        &self.ruleset
     }
 
     fn cost(&self, eg: &Engine<Node>, _: Id, node: &Node, operands: &[Ref], _: u64) -> u64 {
         spelling_cost(eg, node, operands)
-    }
-
-    fn spell(&self, out: &mut Commit<'_>, row: RowId, region: RegionId) -> Option<ValueId> {
-        let node = out.eg.node(row);
-        let Prov::Introduced(index) = node.prov else {
-            return out.builtin(row, region);
-        };
-        if !out.sits(row) {
-            return out.builtin(row, region);
-        }
-        let ty = node.ty.expect("an op node carries its result type");
-        let types = vec![ty; node.children.len()];
-        let operands = out.operands(row, &types, region)?;
-        let emit = self.ruleset.emit(index);
-        let emit = emit.expect("an introduced op supplies an emit");
-        let (op, value) = emit(out.context, &operands, ty);
-        out.context.add_auto(op.id());
-        Some(value)
     }
 
     fn arm_facts(&self) -> bool {

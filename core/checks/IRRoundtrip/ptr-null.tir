@@ -1,8 +1,8 @@
 // RUN: tir opt --verify %s | filecheck %s
 
-#data_layout = {types = {p = {abi = 64, size = 64}}}
+#layout_spec = #layout.spec<!ptr.p = {size = 64, abi = 64}>
 
-module {data_layout = #data_layout} {
+module {layout.spec = #layout_spec} {
   %fn_null = func.func @null() -> !ptr.p {
     %0 = ptr.null : !ptr.p
     func.return %0

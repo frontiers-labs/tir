@@ -32,11 +32,18 @@ where
         tok @ Token::KwFloat => tok,
         tok @ Token::KwDouble => tok,
     };
-    let builtin = builtin_atom
-        .repeated()
-        .at_least(1)
-        .collect::<Vec<_>>()
-        .map(|atoms| builtin_type(&atoms));
+    let bit_int_width = select! { tok @ Token::IntegerLiteral(_) => tok }
+        .delimited_by(just(Token::LParen), just(Token::RParen));
+    let builtin = choice((
+        builtin_atom.map(|tok| vec![tok]),
+        just(Token::KwBitInt)
+            .then(bit_int_width)
+            .map(|(keyword, width)| vec![keyword, width]),
+    ))
+    .repeated()
+    .at_least(1)
+    .collect::<Vec<_>>()
+    .map(|atoms| builtin_type(&atoms.concat()));
     let named = select! { Token::Identifier(name) => name }.try_map_with(
         |name, e: &mut MapExtra<'src, '_, I, Extra<'src>>| {
             if e.state().0.is_typedef(&name) {
@@ -451,6 +458,15 @@ impl<'a> DeclParser<'a> {
                     | Token::KwFloat
                     | Token::KwDouble,
                 ) => spec_tokens.push(self.next().unwrap()),
+                Some(Token::KwBitInt) => {
+                    spec_tokens.push(self.next().unwrap());
+                    self.expect(&Token::LParen)?;
+                    match self.next() {
+                        Some(width @ Token::IntegerLiteral(_)) => spec_tokens.push(width),
+                        _ => return Err("expected an integer literal width in _BitInt".into()),
+                    }
+                    self.expect(&Token::RParen)?;
+                }
                 Some(Token::Identifier(name)) if is_decl_attr_name(name) => {
                     let attr = self.parse_attr()?;
                     attrs.push(attr);
@@ -897,6 +913,7 @@ fn finish_record(
             id: frame.id,
             kind: frame.kind,
             name: frame.name.clone(),
+            defined: true,
         },
     );
     // Nested definitions come before the fields: sema lays a record out in child
@@ -929,6 +946,8 @@ struct SpecCounts {
     int: usize,
     signed: usize,
     unsigned: usize,
+    bit_int: usize,
+    bit_int_width: u64,
     other: usize,
 }
 
@@ -947,6 +966,15 @@ impl SpecCounts {
                 Token::KwInt => &mut counts.int,
                 Token::KwSigned => &mut counts.signed,
                 Token::KwUnsigned => &mut counts.unsigned,
+                Token::KwBitInt => &mut counts.bit_int,
+                // The width of `_BitInt`, which follows its keyword.
+                Token::IntegerLiteral(width) => {
+                    counts.bit_int_width = match width.value.width() {
+                        ..=64 => width.value.to_u64(),
+                        _ => u64::MAX,
+                    };
+                    continue;
+                }
                 _ => &mut counts.other,
             };
             *slot += 1;
@@ -961,6 +989,28 @@ impl SpecCounts {
             return None;
         }
         let sign = (self.signed, self.unsigned);
+        if self.bit_int > 0 {
+            let alone = self.void
+                + self.boolean
+                + self.float
+                + self.double
+                + self.char_
+                + self.short
+                + self.long
+                + self.int
+                == 0;
+            // A signed `_BitInt` holds its sign bit and at least one more.
+            let narrowest = if self.unsigned == 1 { 1 } else { 2 };
+            let width = self.bit_int_width;
+            return (alone
+                && self.bit_int == 1
+                && self.signed + self.unsigned <= 1
+                && (narrowest..=BITINT_MAXWIDTH).contains(&width))
+            .then_some(CType::BitInt {
+                width,
+                unsigned: self.unsigned == 1,
+            });
+        }
         Some(
             match (
                 self.void,
@@ -1174,6 +1224,7 @@ fn parse_external_tokens(
                     id: record_id,
                     kind,
                     name,
+                    defined: false,
                 },
             );
             return Ok(id);

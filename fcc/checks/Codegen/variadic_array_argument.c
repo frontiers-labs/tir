@@ -9,10 +9,10 @@ void pass_array(void) {
     consume(0, text);
 }
 
-// CHECK: #data_layout = {cache_line = 64, endianness = "little", stack_alignment = 128, types = {f32 = {abi = 32, size = 32}, f64 = {abi = 64, size = 64}, i1 = {abi = 8, size = 8}, i16 = {abi = 16, size = 16}, i32 = {abi = 32, size = 32}, i64 = {abi = 64, size = 64}, i8 = {abi = 8, size = 8}, p = {abi = 64, size = 64}}}
+// CHECK: #layout_spec = #layout.spec<endianness = "little", stack_align = 128, cache_line = 64, !i1 = {size = 8, abi = 8}, !i8 = {size = 8, abi = 8}, !i16 = {size = 16, abi = 16}, !i32 = {size = 32, abi = 32}, !i64 = {size = 64, abi = 64}, !f32 = {size = 32, abi = 32}, !f64 = {size = 64, abi = 64}, !ptr.p = {size = 64, abi = 64}, !builtin.i<W> = {size = !nat.align_to<W, !nat.min<!nat.max<!nat.pow2_ceil<W>, 8>, 64>>, abi = !nat.min<!nat.max<!nat.pow2_ceil<W>, 8>, 64>}
 // CHECK-NEXT: #target_env = {arch = "x86_64", features = ["x86", "x86_64", "sse", "sse2"]}
 // CHECK-EMPTY:
-// CHECK: module {data_layout = #data_layout, target_env = #target_env} {
+// CHECK: module {layout.spec = #layout_spec, target_env = #target_env} {
 // CHECK-NEXT:   %0 = global @text size 2 align 1
 // CHECK-NEXT:   %1 = func.declare @consume(!i32, !cir.varargs) -> !unit
 // CHECK-NEXT:   %4096 = func.func @pass_array() {

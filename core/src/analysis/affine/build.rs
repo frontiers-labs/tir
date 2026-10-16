@@ -182,7 +182,7 @@ impl<'a> Builder<'a> {
         let extent = self
             .layout
             .as_ref()
-            .and_then(|layout| layout.size_in_bits(self.context, ty))
+            .and_then(|layout| layout.size_in_bits(ty))
             .filter(|bits| bits % 8 == 0)
             .map(|bits| u64::from(bits / 8));
         if extent.is_none() {
@@ -501,9 +501,7 @@ fn definition(context: &Context, value: ValueId) -> Option<OpHandle> {
 
 /// The width of an integer type, or `None` for anything else.
 fn integer_width(context: &Context, ty: TypeId) -> Option<u32> {
-    (context.get_type_data(ty).as_ref() as &dyn std::any::Any)
-        .downcast_ref::<IntegerType>()
-        .map(IntegerType::width)
+    IntegerType::view(context, ty).and_then(|int| u32::try_from(int.width()).ok())
 }
 
 fn width_range(width: u32) -> (i128, i128) {

@@ -470,7 +470,8 @@ module_end
     let s2 = symbol(&mut pattern, 2);
     binary(&mut pattern, SymKind::Add, inner, s2);
     if let Some(width) = inner_width {
-        pattern.annotation_mut(inner).actual_type = Some(IntegerType::new(&context, width));
+        pattern.annotation_mut(inner).actual_type =
+            Some(IntegerType::new(&context, u64::from(width)));
     }
 
     let rules = vec![
@@ -574,11 +575,7 @@ fn emit_integer_materializer_marker(
     m: &RuleMatch,
 ) -> Result<Box<dyn Operation>, PassError> {
     let ty = req.result_ty.ok_or(PassError::RewriteFailed(req.op_id()))?;
-    let data = context.get_type_data(ty);
-    if (data.as_ref() as &dyn std::any::Any)
-        .downcast_ref::<IntegerType>()
-        .is_none()
-    {
+    if IntegerType::view(context, ty).is_none() {
         return Err(PassError::InvalidRuleSet(
             "integer materializer received a non-integer result type".into(),
         ));

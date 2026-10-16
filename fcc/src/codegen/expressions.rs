@@ -5,14 +5,13 @@ use super::{
     source_type_layout, unsupported,
 };
 use crate::ast::{AstKind, AstLeaf};
-use crate::cir;
 use crate::diagnostics::Diagnostic;
 use crate::lexer::decode_character_constant;
 use crate::sema::{TypeKind, ValueCategory};
 use tir::NodeId;
 use tir::ValueId;
 use tir::attributes::Predicate;
-use tir::builtin::{IntegerType, ops as b};
+use tir::builtin::{IntegerType, NamedType, ops as b};
 use tir::cfg::ops as cb;
 use tir::ptr::{PtrType, ops as p};
 
@@ -89,7 +88,18 @@ impl FnCodegen<'_> {
                     let AstLeaf::Int(n) = ast.get_leaf_data(node).unwrap() else {
                         unreachable!("int node carries an int payload");
                     };
-                    self.const_of_node(node, n.value.to_i64())
+                    match self.typed.integer_width(node_type(self.typed, node)) {
+                        Some(width) if width > 64 => {
+                            let ty =
+                                lower_type(self.context, self.typed, node_type(self.typed, node));
+                            let value = n.value.zero_extend(u64::from(width));
+                            LoweredExpr::Value(
+                                self.emit(b::literal(self.context, &value, ty).build())
+                                    .result(),
+                            )
+                        }
+                        _ => self.const_of_node(node, n.value.to_i64()),
+                    }
                 }
                 AstKind::FloatLiteral => {
                     let AstLeaf::Float(n) = ast.get_leaf_data(node).unwrap() else {
@@ -275,7 +285,7 @@ impl FnCodegen<'_> {
         };
         let elem = lower_type(self.context, self.typed, node_type(self.typed, node));
         let ptr_ty = PtrType::opaque(self.context);
-        let field = ast.get_annotation(node).unwrap().member_index.unwrap() as u64;
+        let field = ast.get_annotation(node).unwrap().member_index.unwrap();
         let base_ty = node_type(self.typed, base_node);
         let record = match self.typed.types().kind(base_ty) {
             TypeKind::Record(id) => self.typed.record(*id).unwrap(),
@@ -287,10 +297,9 @@ impl FnCodegen<'_> {
             }
             _ => unreachable!("member base has a record type"),
         };
-        let member = self.emit(
-            cir::ops::get_member(self.context, base_ptr, field, record.name.as_str(), ptr_ty)
-                .build(),
-        );
+        let record_ty = NamedType::new(self.context, &record.name);
+        let field = record.fields[field].name.as_str();
+        let member = self.emit(p::field(self.context, base_ptr, record_ty, field, ptr_ty).build());
         Ok(LoweredExpr::Address {
             ptr: member.result(),
             elem,
@@ -372,7 +381,7 @@ impl FnCodegen<'_> {
             {
                 let width =
                     (source_type_layout(self.typed, node_type(self.typed, node)).0 * 8) as u32;
-                let integer_ty = IntegerType::new(self.context, width);
+                let integer_ty = IntegerType::new(self.context, u64::from(width));
                 let bits = self
                     .emit(
                         b::BitcastOpBuilder::new(self.context)
@@ -444,7 +453,8 @@ impl FnCodegen<'_> {
         let operand_ty = node_type(self.typed, child);
         let increment = matches!(kind, AstKind::PreInc | AstKind::PostInc);
         let new = if let TypeKind::Pointer(pointee) = self.typed.types().kind(operand_ty) {
-            let offset_ty = IntegerType::new(self.context, self.typed.target().pointer_width());
+            let offset_ty =
+                IntegerType::new(self.context, u64::from(self.typed.target().pointer_width()));
             let size = source_type_layout(self.typed, *pointee).0 as i64;
             let offset = self
                 .emit(
@@ -624,15 +634,8 @@ impl FnCodegen<'_> {
                     "non-addressable struct source".to_string(),
                 ));
             };
-            self.emit(
-                cir::ops::copy_struct(
-                    self.context,
-                    ptr,
-                    source,
-                    self.typed.record(*id).unwrap().name.as_str(),
-                )
-                .build(),
-            );
+            let record = NamedType::new(self.context, &self.typed.record(*id).unwrap().name);
+            self.emit(p::copy(self.context, ptr, source, record).build());
             return Ok(LoweredExpr::Address { ptr, elem });
         }
         let value = self.materialize(rhs);

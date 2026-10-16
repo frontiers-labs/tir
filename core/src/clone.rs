@@ -185,7 +185,14 @@ fn clone_op_into(context: &Context, op: OpId, mapping: &mut Mapping) -> OpId {
         regions,
         attributes,
     );
-    context.add_operation(instance).id
+    // A copy is located where its source is.
+    let origin = context.op_location(op);
+    let outer = origin.map(|origin| context.set_origin(Some(origin)));
+    let copy = context.add_operation(instance).id;
+    if let Some(outer) = outer {
+        context.set_origin(outer);
+    }
+    copy
 }
 
 fn remap_value(value: ValueId, mapping: &Mapping) -> ValueId {

@@ -16,6 +16,7 @@ operation! {
     LabelOp {
         name: "label",
         dialect: "ptx",
+        scheme: "() -> ()",
         attributes: A {
             name: "Str",
         }
@@ -43,12 +44,13 @@ impl tir::backend::TargetMachine for PtxTarget {
             context,
             get_isel_rules(context, Feature::ALL),
         )
-        .with_data_layout(self.data_layout())
+        .with_data_layout(self.data_layout(context))
         .synthesized(context)
     }
 
-    fn data_layout(&self) -> Option<tir::attributes::AttributeValue> {
+    fn data_layout(&self, context: &tir::Context) -> Option<tir::attributes::AttributeValue> {
         Some(tir::data_layout_spec(
+            context,
             tir::Endianness::Little,
             // PTX has no ABI stack: locals live in `.local` space, and `.param`
             // space is 8-byte aligned.

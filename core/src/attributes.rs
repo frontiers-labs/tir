@@ -11,6 +11,9 @@ pub enum AttributeValue {
     Str(Box<str>),
     Int(i64),
     UInt(u64),
+    /// An integer constant of a type wider than 64 bits whose value is no
+    /// `Int`: its 64-bit limbs, least significant first.
+    Wide(Arc<[u64]>),
     F32(f32),
     F64(f64),
     Bool(bool),
@@ -18,6 +21,8 @@ pub enum AttributeValue {
     Dict(Box<BTreeMap<String, AttributeValue>>),
     FpSemantics(Arc<crate::fp::Semantics>),
     EvaluationContract(Arc<crate::fp::EvaluationContract>),
+    /// A `#layout.spec<..>`: what a scope says types are laid out as.
+    LayoutSpec(Arc<crate::layout::LayoutSpec>),
     Register(RegisterAttr),
     /// The comparison a `cmpi`, `fp.cmp` or `ptr.cmp` performs.
     Predicate(Predicate),
@@ -100,6 +105,31 @@ pub fn find_attribute<'a>(
 }
 
 impl AttributeValue {
+    /// This value with `f` applied to every type it holds, in arrays,
+    /// dictionaries and layout specs too.
+    pub fn map_types(self, f: &mut dyn FnMut(TypeId) -> TypeId) -> Self {
+        match self {
+            AttributeValue::Type(ty) => AttributeValue::Type(f(ty)),
+            AttributeValue::Array(items) => AttributeValue::Array(
+                items
+                    .into_vec()
+                    .into_iter()
+                    .map(|item| item.map_types(f))
+                    .collect(),
+            ),
+            AttributeValue::Dict(entries) => AttributeValue::Dict(Box::new(
+                entries
+                    .into_iter()
+                    .map(|(key, value)| (key, value.map_types(f)))
+                    .collect(),
+            )),
+            AttributeValue::LayoutSpec(spec) => {
+                AttributeValue::LayoutSpec(Arc::new(spec.map_types(f)))
+            }
+            other => other,
+        }
+    }
+
     /// The integer this value holds, whichever signedness it was written with.
     pub fn as_int(&self) -> Option<i64> {
         match self {
@@ -107,6 +137,31 @@ impl AttributeValue {
             AttributeValue::UInt(value) => i64::try_from(*value).ok(),
             _ => None,
         }
+    }
+
+    /// The value of an integer constant `width` bits wide, from either
+    /// spelling.
+    pub fn int_at(&self, width: u64) -> Option<tir_adt::APInt> {
+        match self {
+            AttributeValue::Int(value) => Some(tir_adt::APInt::new_signed(width, *value)),
+            AttributeValue::Wide(limbs) => Some(tir_adt::APInt::from_limbs(width, limbs)),
+            _ => None,
+        }
+    }
+
+    /// The spelling of the integer constant `value`: `Int` where its bits are
+    /// an `i64` sign-extended to its width, `Wide` otherwise.
+    pub fn from_int(value: &tir_adt::APInt) -> Self {
+        let short = match value.width() {
+            1 => value.to_u64() as i64,
+            _ => value.to_i64(),
+        };
+        if value.width() <= 64
+            || tir_adt::APInt::new_signed(value.width(), short).limbs() == value.limbs()
+        {
+            return AttributeValue::Int(short);
+        }
+        AttributeValue::Wide(value.limbs().into())
     }
 
     pub fn as_str(&self) -> Option<&str> {
@@ -126,6 +181,9 @@ impl AttributeValue {
             AttributeValue::Predicate(p) => fmt.write(format!("\"{}\"", p.name())),
             AttributeValue::Int(i) => fmt.write(i.to_string()),
             AttributeValue::UInt(u) => fmt.write(u.to_string()),
+            AttributeValue::Wide(limbs) => {
+                fmt.write(tir_adt::APInt::from_limbs(64 * limbs.len() as u64, limbs).to_string())
+            }
             // `{:?}` keeps the decimal point (`3.0`, not `3`) so a float
             // attribute never reparses as an integer.
             AttributeValue::F32(fv) => fmt.write(format!("{:?}", fv)),
@@ -162,6 +220,12 @@ impl AttributeValue {
             }
             AttributeValue::FpSemantics(semantics) => semantics.print(fmt),
             AttributeValue::EvaluationContract(contract) => contract.print(fmt, context),
+            AttributeValue::LayoutSpec(spec) => {
+                if let Some(alias) = fmt.attribute_alias(self).map(str::to_string) {
+                    return fmt.write(format!("#{alias}"));
+                }
+                spec.print(fmt, context)
+            }
             AttributeValue::Register(r) => match r {
                 RegisterAttr::Physical { class, index } => {
                     fmt.write(format!("{}[{}]", class.name(), index))

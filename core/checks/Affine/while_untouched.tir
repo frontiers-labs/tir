@@ -3,9 +3,9 @@
 // A loop that does not count is no nest, so the pass has nothing to place and
 // nothing to build.
 
-#data_layout = {types = {i1 = {abi = 8, size = 8}, i32 = {abi = 32, size = 32}, i64 = {abi = 64, size = 64}, p = {abi = 64, size = 64}}}
+#layout_spec = #layout.spec<!i1 = {size = 8, abi = 8}, !i32 = {size = 32, abi = 32}, !i64 = {size = 64, abi = 64}, !ptr.p = {size = 64, abi = 64}>
 
-module {data_layout = #data_layout} {
+module {layout.spec = #layout_spec} {
   %0 = func.func @spin(%1: !i1, %2: !i32) -> !i32 {
     %3 = ptr.alloca {size = 1024, align = 4} : !ptr.p
     %4 = constant {value = 1} : !i32

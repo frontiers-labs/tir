@@ -1,0 +1,11 @@
+// RUN: not tir opt --verify %s 2>&1 | filecheck %s
+
+// A type cannot hold itself by value; through a pointer it can.
+
+module {
+  type.def !Fine = !struct<{next: !ptr.p<!Fine>}>
+  type.def !Bad = !struct<{inner: !struct<{again: !Bad}>}>
+  module_end
+}
+
+// CHECK: type `!Bad` contains itself by value

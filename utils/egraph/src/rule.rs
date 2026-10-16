@@ -197,7 +197,7 @@ impl<L: Label> Engine<L> {
             match cached {
                 Some((filled, id)) if *filled == words => *id,
                 _ => {
-                    let node = L::fill(template, &words)?;
+                    let node = L::fill(template, self.names(), &words)?;
                     debug_assert_eq!(node.commutative(), template.commutative());
                     if let Some(found) = self.int_constant_ref(&node) {
                         return Some(Keyed::Is(found.into()));
@@ -224,7 +224,8 @@ impl<L: Label> Engine<L> {
         let mut node = match label.fills.is_empty() {
             true => label.template.clone(),
             false => {
-                L::fill(&label.template, &fills(label, scalars)).expect("spelled for its label")
+                let fills = fills(label, scalars);
+                L::fill(&label.template, self.names(), &fills).expect("spelled for its label")
             }
         };
         for (child, &class) in node.children_mut().iter_mut().zip(&key.cells[1..]) {

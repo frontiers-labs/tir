@@ -1,4 +1,6 @@
-// RUN: not tir interp %s 2>&1 | filecheck %s
+// RUN: tir interp %s | filecheck %s
+
+// A load of memory nothing wrote is poison: only a use of it is undefined.
 
 module {
   %fn_main = func.func @main() -> !i32 {
@@ -9,4 +11,4 @@ module {
   module_end
 }
 
-// CHECK: interpretation failed: access of [{{0x[0-9a-f]+}}..{{0x[0-9a-f]+}}) hits uninitialized bytes
+// CHECK: i32 poison

@@ -4,9 +4,9 @@
 // it. A read at the offset a write landed on takes the written value; a read
 // two bytes off it, overlapping but not the same extent, keeps reading memory.
 
-#data_layout = {types = {i32 = {abi = 32, size = 32}, i64 = {abi = 64, size = 64}, p = {abi = 64, size = 64}}}
+#layout_spec = #layout.spec<!i32 = {size = 32, abi = 32}, !i64 = {size = 64, abi = 64}, !ptr.p = {size = 64, abi = 64}>
 
-module {data_layout = #data_layout} {
+module {layout.spec = #layout_spec} {
   %fn_same = func.func @same(%p: !ptr.p<!i32>, %a: !i32) -> !i32 {
     %two = constant {value = 2} : !i64
     %four = constant {value = 4} : !i64

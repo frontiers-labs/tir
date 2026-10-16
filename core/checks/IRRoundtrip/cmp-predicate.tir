@@ -1,8 +1,8 @@
 // RUN: tir opt --verify %s | filecheck %s
 
-#data_layout = {types = {p = {abi = 64, size = 64}}}
+#layout_spec = #layout.spec<!ptr.p = {size = 64, abi = 64}>
 
-module {data_layout = #data_layout} {
+module {layout.spec = #layout_spec} {
   %fn_compare = func.func @compare(%0: !i32, %1: !f32, %2: !ptr.p) -> !i1 {
     %3 = cmpi %0, %0 {predicate = "slt"} : !i1
     %4 = fp.cmp %1, %1 {predicate = "olt", semantics = {behavior = "quiet", exceptions = "ignore", kind = "comparison", subnormals = "gradual"}} : !i1

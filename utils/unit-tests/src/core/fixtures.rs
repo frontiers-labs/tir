@@ -127,7 +127,7 @@ pub fn symbol(g: &mut SemGraph, id: u32) -> NodeId {
 
 pub fn constant(g: &mut SemGraph, value: u64, width: u32) -> NodeId {
     let node = g.add_node(SymKind::Constant);
-    g.set_leaf_data(node, SymPayload::Int(APInt::new(width, value)));
+    g.set_leaf_data(node, SymPayload::Int(APInt::new(u64::from(width), value)));
     node
 }
 
@@ -161,8 +161,9 @@ macro_rules! machine_op {
             $op {
                 name: $name,
                 dialect: $dialect,
-                operands: O { $operand: "?tir::backend::RegClassType", },
-                results: R { regs: "*tir::backend::RegClassType" },
+                scheme: "(backend.reg<_, _>?) -> backend.reg<_, _>*",
+                operands: O { $operand },
+                results: R { regs },
                 interfaces: [tir::backend::MachineInstruction],
             }
         }
@@ -173,7 +174,8 @@ macro_rules! machine_op {
             $op {
                 name: $name,
                 dialect: $dialect,
-                results: R { regs: "*tir::backend::RegClassType" },
+                scheme: "() -> backend.reg<_, _>*",
+                results: R { regs },
                 interfaces: [tir::backend::MachineInstruction],
             }
         }
@@ -190,8 +192,9 @@ macro_rules! marker_op {
             $op {
                 name: $name,
                 dialect: "test",
-                operands: O { a: "?tir::Any", b: "?tir::Any", },
-                results: R { regs: "*tir::Any" },
+                scheme: "(_?, _?) -> _*",
+                operands: O { a, b },
+                results: R { regs },
                 interfaces: [tir::backend::MachineInstruction],
             }
         }

@@ -339,7 +339,10 @@ impl MemoryService {
                     .filter(|width| *width <= 64)
                     .ok_or_else(|| bad_address(*address, *size))?;
                 let new = op
-                    .apply(APInt::new(width, old), APInt::new(width, *value))
+                    .apply(
+                        APInt::new(u64::from(width), old),
+                        APInt::new(u64::from(width), *value),
+                    )
                     .to_u64();
                 self.write_word(*address, *size, new)?;
                 Ok(ResponseValue::Word(old))

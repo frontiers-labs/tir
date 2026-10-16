@@ -31,6 +31,9 @@ impl AstNode {
     }
 }
 
+/// The widest `_BitInt` fcc accepts, GCC's value. The IR sets no limit.
+pub const BITINT_MAXWIDTH: u64 = 65535;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CType {
     Invalid(String),
@@ -46,6 +49,11 @@ pub enum CType {
     UnsignedLong,
     LongLong,
     UnsignedLongLong,
+    /// `_BitInt(width)`, or `unsigned _BitInt(width)`.
+    BitInt {
+        width: u64,
+        unsigned: bool,
+    },
     Bool,
     Float,
     Double,
@@ -251,6 +259,8 @@ pub enum AstLeaf {
         id: RecordId,
         kind: RecordKind,
         name: Option<String>,
+        /// Whether the declaration has a member list, if an empty one.
+        defined: bool,
     },
     Enum {
         name: Option<String>,
@@ -355,6 +365,9 @@ fn render_leaf_ctype(ty: &CType) -> String {
         CType::UnsignedLong => "UnsignedLong".to_string(),
         CType::LongLong => "LongLong".to_string(),
         CType::UnsignedLongLong => "UnsignedLongLong".to_string(),
+        CType::BitInt { width, unsigned } => {
+            format!("{}BitInt({width})", if *unsigned { "Unsigned" } else { "" })
+        }
         CType::Bool => "Bool".to_string(),
         CType::Float => "Float".to_string(),
         CType::Double => "Double".to_string(),

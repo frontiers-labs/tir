@@ -1,0 +1,20 @@
+// RUN: tir opt --pass restructure-nodes,erase-layout --verify %s | filecheck %s
+
+// A refinement is a proved fact, not an operation selection can lower: past
+// erasure the value is the one refined.
+
+module {
+  %fn_f = func.func @f(%x: !i64) -> !i64 {
+    %0 = constant {value = 7} : !i64
+    %1 = andi %x, %0 : !i64
+    %2 = constant {value = 10} : !i64
+    %3 = cmpi %1, %2 {predicate = "ult"} : !i1
+    %4 = refine %1, %3 : !i64
+    func.return %4
+  }
+  module_end
+}
+
+// CHECK: %[[MASKED:[0-9]+]] = andi
+// CHECK-NOT: refine
+// CHECK: -> %[[MASKED]]

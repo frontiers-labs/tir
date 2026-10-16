@@ -2,9 +2,11 @@
 //! pattern, its operand and result requirements, and how it is emitted.
 
 use tir::{
-    BlockId, Context, OpId, Operation, OperationRef, PassError, TypeId, ValueId, sem::SemGraph,
+    BlockId, Context, OpId, Operation, OperationRef, PassError, Terms, TypeArg, TypeId, ValueId,
+    sem::SemGraph,
 };
 use tir_adt::APInt;
+use tir_symbolic::term::ctor;
 
 use super::rules::{EmitSpec, OperandConstraint, emit_with};
 
@@ -134,9 +136,7 @@ pub struct RegisterRequirement {
 }
 
 impl RegisterRequirement {
-    pub(super) fn exclusive_float_type(&self) -> Result<Option<tir::sem::SemType>, ()> {
-        use tir::sem::{FloatFormat, SemType};
-
+    pub(super) fn exclusive_float_type(&self, terms: &Terms) -> Result<Option<TypeId>, ()> {
         if !self.capability.float || self.capability.integer {
             return Ok(None);
         }
@@ -147,7 +147,7 @@ impl RegisterRequirement {
             128 => (15, 112),
             _ => return Err(()),
         };
-        Ok(Some(SemType::Float(FloatFormat::new(exponent, mantissa))))
+        Ok(Some(terms.float(exponent, mantissa)))
     }
 
     pub fn low_bits(capability: RegisterCapability) -> Self {
@@ -204,17 +204,19 @@ impl RegisterRequirement {
             .then_some(self.defined.unwrap_or(self.capability.width))
     }
 
-    pub fn accepts(&self, ty: &tir::sem::SemType) -> bool {
-        use tir::sem::{SemType, Width};
-        if !self.capability.accepts(ty) {
-            return false;
-        }
+    pub fn accepts(&self, terms: &Terms, ty: &TypeArg) -> bool {
+        self.capability.accepts(terms, ty) && self.reads_whole(bits_width(terms, ty))
+    }
+
+    pub(super) fn accepts_int(&self, width: u64) -> bool {
+        self.capability.holds_int(Some(width)) && self.reads_whole(Some(width))
+    }
+
+    fn reads_whole(&self, width: Option<u64>) -> bool {
         !self.whole
-            || !matches!(
-                ty,
-                SemType::Bits(Width::Const(width)) | SemType::RawBits(Width::Const(width))
-                    if *width != self.defined.unwrap_or(self.capability.width)
-            )
+            || width.is_none_or(|width| {
+                width == u64::from(self.defined.unwrap_or(self.capability.width))
+            })
     }
 }
 
@@ -243,25 +245,36 @@ impl RegisterCapability {
         }
     }
 
-    pub fn accepts(&self, ty: &tir::sem::SemType) -> bool {
-        use tir::sem::{SemType, Width};
-        match ty {
-            SemType::Bits(Width::Const(width)) | SemType::RawBits(Width::Const(width)) => {
-                self.integer && *width <= self.width
-            }
-            SemType::Float(format) => {
-                let (Width::Const(exponent), Width::Const(mantissa)) =
-                    (&format.exponent, &format.mantissa)
-                else {
-                    return self.float;
-                };
-                self.float && 1 + exponent + mantissa == self.width
-            }
-            SemType::Var(_) => true,
-            SemType::Iterator(_) | SemType::Pair(_, _) | SemType::State | SemType::Unit => false,
-            SemType::Bits(_) | SemType::RawBits(_) => self.integer,
+    pub fn accepts(&self, terms: &Terms, ty: &TypeArg) -> bool {
+        let TypeArg::Type(ty) = *ty else {
+            return matches!(ty, TypeArg::Var(_));
+        };
+        let width = u64::from(self.width);
+        match terms.ctor(ty) {
+            ctor::INT | ctor::RAW => self.holds_int(terms.nat(ty, 0)),
+            ctor::FLOAT => match terms.float_format(ty) {
+                Some((exponent, mantissa)) => self.float && 1 + exponent + mantissa == width,
+                None => self.float,
+            },
+            _ => false,
         }
     }
+
+    fn holds_int(&self, bits: Option<u64>) -> bool {
+        match bits {
+            Some(bits) => self.integer && bits <= u64::from(self.width),
+            None => self.integer,
+        }
+    }
+}
+
+pub(super) fn bits_width(terms: &Terms, ty: &TypeArg) -> Option<u64> {
+    let TypeArg::Type(ty) = *ty else {
+        return None;
+    };
+    matches!(terms.ctor(ty), ctor::INT | ctor::RAW)
+        .then(|| terms.nat(ty, 0))
+        .flatten()
 }
 
 impl ImmRange {

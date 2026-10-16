@@ -8,26 +8,23 @@
 
 mod intrinsics;
 
-use std::any::Any;
-use std::sync::Arc;
+use tir_symbolic::term::{no_carrier, valid};
 
-use crate::ty::TypeConstraint;
+use crate::ty::{Ctor, Kind, Param, Terms, TypeArg, TypeCtor, TypeSpelling};
 use crate::{
-    Context, Error, IRFormatter, MemoryRead, MemoryWrite, Operation, PromotableAllocation,
-    ResourceAccess, ResourceEffect, ResourceEffects, Type, TypeId,
+    Context, Error, MemoryRead, MemoryWrite, Operation, PromotableAllocation, ResourceAccess,
+    ResourceEffect, ResourceEffects, TypeId,
     attributes::{AttributeValue, Predicate},
     dialect, operation,
-    parse::Span,
 };
 
 use crate as tir;
-use crate::Any as AnyConstraint;
 
 pub mod ops {
     pub use super::{
-        AllocaOp, CmpOp, CmpOpBuilder, DisjointOp, LoadOp, MemcpyOp, MemsetOp, NullOp, PtrAddOp,
-        PtrDiffOp, StoreOp, alloca, cmp, disjoint, load, memcpy, memset, null, ptradd, ptrdiff,
-        store,
+        AllocaOp, CmpOp, CmpOpBuilder, CopyOp, DisjointOp, FieldOp, LoadOp, MemcpyOp, MemsetOp,
+        NullOp, PtrAddOp, PtrDiffOp, StoreOp, alloca, cmp, copy, disjoint, field, load, memcpy,
+        memset, null, ptradd, ptrdiff, store,
     };
 }
 
@@ -45,133 +42,103 @@ dialect! {
             StoreOp,
             MemcpyOp,
             MemsetOp,
+            FieldOp,
+            CopyOp,
         ],
         types: [PtrType],
     }
 }
 
+static PTR: Ctor = Ctor::new(TypeCtor {
+    dialect: "ptr",
+    name: "p",
+    params: &[("pointee", Param::Opt(Kind::Data))],
+    kind: Kind::Data,
+    validate: valid,
+    carrier: no_carrier,
+});
+
 /// A pointer type, written `!ptr.p` (opaque) or `!ptr.p<!i32>` (typed). A typed
 /// pointer remembers its pointee so loads can recover their result type; an
 /// opaque pointer carries no pointee.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PtrType {
-    pointee: Option<Arc<dyn Type>>,
+    pointee: Option<TypeId>,
+}
+
+pub(crate) fn opaque_pointer(terms: &Terms) -> TypeId {
+    terms
+        .intern(PTR.id(terms), vec![])
+        .expect("the opaque pointer")
 }
 
 impl PtrType {
     /// An opaque pointer: `!ptr.p`.
     pub fn opaque(context: &Context) -> TypeId {
-        context.get_type_id(Arc::new(Self { pointee: None }))
+        opaque_pointer(context.terms())
     }
 
     /// A typed pointer to `pointee`: `!ptr.p<!pointee>`.
     pub fn typed(context: &Context, pointee: TypeId) -> TypeId {
-        let pointee = context.get_type_data(pointee);
-        context.get_type_id(Arc::new(Self {
-            pointee: Some(pointee),
-        }))
+        context
+            .terms()
+            .intern(PTR.id(context), vec![TypeArg::Type(pointee)])
+            .expect("a pointer to a data type")
+    }
+
+    pub fn view(terms: &impl AsRef<Terms>, ty: TypeId) -> Option<Self> {
+        let terms = terms.as_ref();
+        PTR.is(terms, ty).then(|| Self {
+            pointee: terms.child(ty, 0),
+        })
     }
 
     /// The pointee type id, or `None` for an opaque pointer.
-    pub fn pointee(&self, context: &Context) -> Option<TypeId> {
+    pub fn pointee(&self) -> Option<TypeId> {
         self.pointee
-            .as_ref()
-            .map(|p| context.get_type_id(p.clone()))
-    }
-}
-
-// PtrType stores its pointee as an `Arc<dyn Type>`, which `#[derive(TirType)]`
-// cannot map, so its schema is registered by hand. The builder accepts zero
-// arguments (opaque) or one pointee type (typed).
-#[crate::linkme::distributed_slice(crate::TYPE_SCHEMAS)]
-#[linkme(crate = crate::linkme)]
-static PTR_TYPE_SCHEMA: crate::TypeSchema = crate::TypeSchema {
-    dialect: "ptr",
-    name: "p",
-    params: &[crate::TypeParam {
-        name: "pointee",
-        kind: crate::TypeParamKind::Type,
-    }],
-    build: |context, args| match args {
-        [] => Ok(PtrType::opaque(context)),
-        [crate::TypeArg::Type(pointee)] => Ok(PtrType::typed(context, *pointee)),
-        _ => Err("type 'ptr.p' expects an optional pointee type".to_string()),
-    },
-};
-
-impl TypeConstraint for PtrType {}
-
-impl Type for PtrType {
-    fn dialect(&self) -> &'static str {
-        "ptr"
     }
 
-    fn parse_key() -> &'static str {
-        "p"
-    }
-
-    fn parse<'src>(
-        _mnemonic: &str,
-        parser: &mut tir::parse::text::Parser<'src>,
-        context: &Context,
-    ) -> Result<TypeId, (Span, Error)> {
-        use tir::parse::common::Cursor;
-        if parser.parse_token("<") {
-            let pointee = parser
-                .parse_type(context)?
-                .ok_or_else(|| (parser.span(), Error::ExpectedType))?;
-            if !parser.parse_token(">") {
-                return Err((parser.span(), Error::ExpectedToken(">")));
-            }
-            Ok(Self::typed(context, pointee))
-        } else {
-            Ok(Self::opaque(context))
+    pub fn spelling(context: &Context) -> TypeSpelling {
+        TypeSpelling {
+            ctor: PTR.id(context),
+            keys: &["p"],
+            parse: |_, parser, context| {
+                use tir::parse::common::Cursor;
+                if !parser.parse_token("<") {
+                    return Ok(Self::opaque(context));
+                }
+                let pointee = parser
+                    .parse_type(context)?
+                    .ok_or_else(|| (parser.span(), Error::ExpectedType))?;
+                if !parser.parse_token(">") {
+                    return Err((parser.span(), Error::ExpectedToken(">")));
+                }
+                Ok(Self::typed(context, pointee))
+            },
+            print: |spellings, ty, fmt| {
+                fmt.write("ptr.p")?;
+                if let Some(pointee) = spellings.terms().child(ty, 0) {
+                    fmt.write("<")?;
+                    spellings.print(pointee, fmt)?;
+                    fmt.write(">")?;
+                }
+                Ok(())
+            },
+            variadic_tail: false,
         }
     }
-
-    fn print(&self, fmt: &mut IRFormatter<'_>) -> Result<(), std::fmt::Error> {
-        fmt.write("p")?;
-        if let Some(pointee) = &self.pointee {
-            fmt.write("<!")?;
-            if pointee.dialect() != "builtin" {
-                fmt.write(format!("{}.", pointee.dialect()))?;
-            }
-            pointee.print(fmt)?;
-            fmt.write(">")?;
-        }
-        Ok(())
-    }
-
-    fn eq(&self, other: &dyn Type) -> bool {
-        let Some(other) = (other as &dyn Any).downcast_ref::<PtrType>() else {
-            return false;
-        };
-        match (&self.pointee, &other.pointee) {
-            (None, None) => true,
-            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
-            _ => false,
-        }
-    }
-
-    fn hash(&self, state: &mut dyn std::hash::Hasher) {
-        state.write_usize(pointee_key(self.pointee.as_ref()));
-    }
-}
-
-fn pointee_key(pointee: Option<&Arc<dyn Type>>) -> usize {
-    pointee.map_or(0, |p| Arc::as_ptr(p) as *const () as usize)
 }
 
 operation! {
     AllocaOp {
         name: "alloca",
         dialect: "ptr",
+        scheme: "() -> ptr.p<_>",
         attributes: A {
             size: "UInt",
             align: "UInt",
         },
-        results: R {
-            result: "crate::ptr::PtrType",
-        },
+        results: R { result },
         interfaces: [PromotableAllocation, crate::interp::Interp],
         state: "out",
     }
@@ -181,9 +148,8 @@ operation! {
     NullOp {
         name: "null",
         dialect: "ptr",
-        results: R {
-            result: "crate::ptr::PtrType",
-        },
+        scheme: "() -> ptr.p<_>",
+        results: R { result },
         interfaces: [crate::ConstantLike],
         sem: "(set result $null_address)",
     }
@@ -194,7 +160,7 @@ impl crate::ConstantLike for NullOp {
         let context = self.0.context.clone();
         let layout = crate::DataLayout::for_instance(&context, &self.0);
         let width = layout.and_then(|layout| layout.pointer_size());
-        tir::utils::APInt::new(width.unwrap_or(64), 0)
+        tir::utils::APInt::new(u64::from(width.unwrap_or(64)), 0)
     }
 }
 
@@ -208,7 +174,7 @@ impl NullOp {
         let node = g.add_node(tir::sem::SymKind::Constant);
         g.set_leaf_data(
             node,
-            tir::sem::SymPayload::Int(tir::utils::APInt::new(width, 0)),
+            tir::sem::SymPayload::Int(tir::utils::APInt::new(u64::from(width), 0)),
         );
         Some(node)
     }
@@ -218,16 +184,12 @@ operation! {
     CmpOp {
         name: "cmp",
         dialect: "ptr",
+        scheme: "(ptr.p<_>, ptr.p<_>) -> int<1>",
         attributes: A {
             predicate: "Predicate in POINTER",
         },
-        operands: O {
-            lhs: "crate::ptr::PtrType",
-            rhs: "crate::ptr::PtrType",
-        },
-        results: R {
-            result: "crate::Integer<1>",
-        },
+        operands: O { lhs, rhs },
+        results: R { result },
         sem: "(set result $cmp_expr)",
     }
 }
@@ -259,14 +221,10 @@ operation! {
     PtrAddOp {
         name: "ptradd",
         dialect: "ptr",
+        scheme: "(ptr.p<_>, int<_>) -> ptr.p<_>",
         verifier: "true",
-        operands: O {
-            base: "crate::ptr::PtrType",
-            offset: "crate::builtin::IntegerType",
-        },
-        results: R {
-            result: "crate::ptr::PtrType",
-        },
+        operands: O { base, offset },
+        results: R { result },
         interfaces: [crate::Additive],
         sem: "(set result (add base offset))",
     }
@@ -280,14 +238,10 @@ operation! {
     PtrDiffOp {
         name: "ptrdiff",
         dialect: "ptr",
+        scheme: "(ptr.p<_>, ptr.p<_>) -> int<_>",
         verifier: "true",
-        operands: O {
-            lhs: "crate::ptr::PtrType",
-            rhs: "crate::ptr::PtrType",
-        },
-        results: R {
-            result: "crate::builtin::IntegerType",
-        },
+        operands: O { lhs, rhs },
+        results: R { result },
         interfaces: [crate::Subtractive],
         sem: "(set result (sub lhs rhs))",
     }
@@ -314,7 +268,7 @@ pub fn offset_type(context: &Context, op: crate::OpId) -> TypeId {
     let width = crate::DataLayout::for_op(context, op)
         .and_then(|layout| layout.pointer_size())
         .unwrap_or(64);
-    crate::builtin::IntegerType::new(context, width)
+    crate::builtin::IntegerType::new(context, u64::from(width))
 }
 
 /// Rejects an offset, a pointer difference or a byte count added to a pointer
@@ -332,11 +286,9 @@ fn pointer_sized(
         return Ok(());
     };
     for &value in values {
-        let ty = context.get_type_data(context.get_value(value).ty());
-        let actual = (ty.as_ref() as &dyn Any)
-            .downcast_ref::<crate::builtin::IntegerType>()
-            .map(crate::builtin::IntegerType::width);
-        if actual != Some(width) {
+        let actual = crate::builtin::IntegerType::view(context, context.get_value(value).ty())
+            .map(|int| int.width());
+        if actual != Some(u64::from(width)) {
             return Err(Error::VerificationError(format!(
                 "ptr.{} {what} must be {width} bits wide, the pointer width",
                 op.name()
@@ -361,16 +313,10 @@ operation! {
     DisjointOp {
         name: "disjoint",
         dialect: "ptr",
+        scheme: "(ptr.p<_>, int<_>, ptr.p<_>, int<_>) -> int<1>",
         verifier: "true",
-        operands: O {
-            lhs: "crate::ptr::PtrType",
-            lhs_size: "crate::builtin::IntegerType",
-            rhs: "crate::ptr::PtrType",
-            rhs_size: "crate::builtin::IntegerType",
-        },
-        results: R {
-            result: "crate::Integer<1>",
-        },
+        operands: O { lhs, lhs_size, rhs, rhs_size },
+        results: R { result },
         sem: "(set result (or (ule (add lhs lhs_size) rhs) (ule (add rhs rhs_size) lhs)))",
     }
 }
@@ -392,13 +338,10 @@ operation! {
     LoadOp {
         name: "load",
         dialect: "ptr",
+        scheme: "(ptr.p<_>) -> _",
         verifier: "true",
-        operands: O {
-            ptr: "crate::ptr::PtrType",
-        },
-        results: R {
-            result: "AnyConstraint",
-        },
+        operands: O { ptr },
+        results: R { result },
         interfaces: [MemoryRead, ResourceEffects, crate::interp::Interp],
         state: "in_out",
     }
@@ -408,11 +351,9 @@ operation! {
     StoreOp {
         name: "store",
         dialect: "ptr",
+        scheme: "(_, ptr.p<_>) -> ()",
         verifier: "true",
-        operands: O {
-            value: "AnyConstraint",
-            ptr: "crate::ptr::PtrType",
-        },
+        operands: O { value, ptr },
         interfaces: [MemoryWrite, ResourceEffects, crate::interp::Interp],
         state: "in_out",
     }
@@ -434,8 +375,7 @@ impl tir::Verifiable for StoreOp {
 /// A language that stores function pointers converts to and from `!ptr.p`
 /// around the store.
 fn reject_function_value(context: &Context, value: crate::ValueId, op: &str) -> Result<(), Error> {
-    let ty = context.get_type_data(context.get_value(value).ty());
-    match (ty.as_ref() as &dyn Any).downcast_ref::<crate::builtin::FnType>() {
+    match crate::builtin::FnType::view(context, context.get_value(value).ty()) {
         Some(_) => Err(Error::VerificationError(format!(
             "{op} moves a function value through memory"
         ))),
@@ -449,11 +389,8 @@ operation! {
     MemcpyOp {
         name: "memcpy",
         dialect: "ptr",
-        operands: O {
-            destination: "crate::ptr::PtrType",
-            source: "crate::ptr::PtrType",
-            size: "crate::Integer<64>",
-        },
+        scheme: "(ptr.p<_>, ptr.p<_>, int<64>) -> ()",
+        operands: O { destination, source, size },
         interfaces: [ResourceEffects, crate::interp::Interp, crate::Intrinsic],
         state: "in_out",
     }
@@ -463,13 +400,53 @@ operation! {
     MemsetOp {
         name: "memset",
         dialect: "ptr",
-        operands: O {
-            destination: "crate::ptr::PtrType",
-            value: "crate::Integer<8>",
-            size: "crate::Integer<64>",
-        },
+        scheme: "(ptr.p<_>, int<8>, int<64>) -> ()",
+        operands: O { destination, value, size },
         interfaces: [MemoryWrite, ResourceEffects, crate::interp::Interp, crate::Intrinsic],
         state: "in_out",
+    }
+}
+
+// The address of field `field` of the `ty` that `base` points at: a field by
+// name, never a byte offset, which the layout in scope gives.
+operation! {
+    FieldOp {
+        name: "field",
+        dialect: "ptr",
+        scheme: "(ptr.p<_>) -> ptr.p<_>",
+        attributes: A {
+            ty: "Type",
+            field: "Str",
+        },
+        operands: O { base },
+        results: R { result },
+        interfaces: [crate::interp::Interp, crate::Speculatable],
+    }
+}
+
+impl crate::Speculatable for FieldOp {}
+
+// Copy one `ty` from `source` to `destination`: a struct assignment, as many
+// bytes as the layout in scope gives `ty`.
+operation! {
+    CopyOp {
+        name: "copy",
+        dialect: "ptr",
+        scheme: "(ptr.p<_>, ptr.p<_>) -> ()",
+        attributes: A {
+            ty: "Type",
+        },
+        operands: O { destination, source },
+        interfaces: [ResourceEffects, crate::Congruent, crate::interp::Interp],
+        state: "in_out",
+    }
+}
+
+impl crate::Congruent for CopyOp {}
+
+impl ResourceEffects for CopyOp {
+    fn resource_effects(&self) -> Vec<ResourceEffect> {
+        memory_effect(&self.0, ResourceAccess::Change)
     }
 }
 

@@ -833,7 +833,7 @@ fn find_equivalent_comparison(
                 [tir_adt::Predicate::Oeq, tir_adt::Predicate::Une].map(floating_equality_candidate),
             )
             .find(|(candidate, _)| {
-                SmtOracle.equivalent_typed(composed, candidate, &symbols.types)
+                SmtOracle.equivalent_typed(&symbols.terms, composed, candidate, &symbols.types)
             });
     }
     let fuzz = FuzzOracle::default();
@@ -880,38 +880,36 @@ fn register_class_width_with_isa(
 /// is unresolved, a float format is unsupported, or a symbol is untyped.
 struct ComparisonSymbols {
     widths: Vec<u32>,
-    types: Vec<tir_symbolic::lang::SemType>,
+    terms: tir_symbolic::term::Terms,
+    types: Vec<tir_symbolic::term::TypeId>,
 }
 
 impl ComparisonSymbols {
     fn floating(&self) -> bool {
         self.types
             .iter()
-            .any(|ty| matches!(ty, tir_symbolic::lang::SemType::Float(_)))
+            .any(|&ty| self.terms.ctor(ty) == tir_symbolic::term::ctor::FLOAT)
     }
 }
 
 /// The IEEE binary format of a float register class of `width` bits, or the
 /// plain bit-vector type for an integer class.
 fn operand_type(
+    terms: &tir_symbolic::term::Terms,
     files: &[ast::File],
     class_name: &str,
     width: u32,
-) -> Option<tir_symbolic::lang::SemType> {
+) -> Option<tir_symbolic::term::TypeId> {
     let class = files
         .iter()
         .flat_map(|file| file.register_classes())
         .find(|class| class.name == class_name)?;
     if !class.has_float_registers() {
-        return Some(tir_symbolic::lang::SemType::bits(width));
+        return Some(terms.int(u64::from(width)));
     }
     match width {
-        32 => Some(tir_symbolic::lang::SemType::Float(
-            tir_symbolic::lang::FloatFormat::new(8, 23),
-        )),
-        64 => Some(tir_symbolic::lang::SemType::Float(
-            tir_symbolic::lang::FloatFormat::new(11, 52),
-        )),
+        32 => Some(terms.float(8, 23)),
+        64 => Some(terms.float(11, 52)),
         _ => None,
     }
 }
@@ -921,11 +919,12 @@ fn definer_comparison_symbols(
     d: &FlagInst<'_>,
     d_sem: &FlagDefinerSemantics,
 ) -> Option<ComparisonSymbols> {
+    let terms = tir_symbolic::term::Terms::new();
     let mut widths = vec![0u32; d_sem.variable_symbols.len()];
-    let mut types = vec![tir_symbolic::lang::SemType::bits(1); d_sem.variable_symbols.len()];
+    let mut types = vec![terms.int(1); d_sem.variable_symbols.len()];
     let mut imm_symbol: Option<u32> = None;
     let mut register_width: Option<u32> = None;
-    let mut register_type: Option<tir_symbolic::lang::SemType> = None;
+    let mut register_type: Option<tir_symbolic::term::TypeId> = None;
     for (op_name, op_ty) in &d.ops {
         let Some(&symbol) = d_sem.variable_symbols.get(op_name) else {
             continue;
@@ -933,9 +932,9 @@ fn definer_comparison_symbols(
         match op_ty {
             Type::Struct(class_name) => {
                 let width = register_class_width_with_isa(files, class_name, &d.isa_param_values)?;
-                let ty = operand_type(files, class_name, width)?;
+                let ty = operand_type(&terms, files, class_name, width)?;
                 widths[symbol as usize] = width;
-                types[symbol as usize] = ty.clone();
+                types[symbol as usize] = ty;
                 register_width = Some(width);
                 register_type = Some(ty);
             }
@@ -950,7 +949,11 @@ fn definer_comparison_symbols(
     if widths.contains(&0) {
         return None;
     }
-    Some(ComparisonSymbols { widths, types })
+    Some(ComparisonSymbols {
+        widths,
+        terms,
+        types,
+    })
 }
 
 /// The pattern symbols bound to a definer's immediate operands (there is at most

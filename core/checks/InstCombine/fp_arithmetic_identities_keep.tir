@@ -1,4 +1,4 @@
-// RUN: tir opt --pass restructure-nodes,instcombine-nodes,verify-deps --verify %s | filecheck %s
+// RUN: tir opt --pass restructure-nodes,instcombine-nodes<trusted>,verify-deps --verify %s | filecheck %s
 
 module {
   %cancel = func.func @cancel(%x: !f32, %y: !f32) -> !f32 {

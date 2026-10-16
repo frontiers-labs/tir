@@ -37,7 +37,7 @@ pub(super) fn value(graph: &mut SemGraph, op: &OpHandle, value: ValueId) -> Node
 
 pub(super) fn constant(graph: &mut SemGraph, width: u32, value: u64) -> NodeId {
     let node = graph.add_node(SymKind::Constant);
-    graph.set_leaf_data(node, SymPayload::Int(APInt::new(width, value)));
+    graph.set_leaf_data(node, SymPayload::Int(APInt::new(u64::from(width), value)));
     node
 }
 
@@ -235,7 +235,7 @@ fn arithmetic_value(
             super::arithmetic::canonical_nan(width),
         );
         graph.annotation_mut(bits).actual_type =
-            Some(IntegerType::new(&op.context, width.bit_width()));
+            Some(IntegerType::new(&op.context, u64::from(width.bit_width())));
         bits
     });
     let (result, evaluation) = super::arithmetic::build_arithmetic_value(
@@ -427,15 +427,13 @@ pub(super) fn integer_conversion(
     .then(|| value(&mut graph, op, state_for(op, StateResource::FpEnv)));
     let input = value(&mut graph, op, op.value_operands()[0]);
     let result_ty = op.context.get_value(op.value_results()[0]).ty();
-    let data = op.context.get_type_data(result_ty);
-    let width = (data.as_ref() as &dyn std::any::Any)
-        .downcast_ref::<IntegerType>()
+    let width = IntegerType::view(&op.context, result_ty)
         .expect("verified integer conversion result")
         .width();
     let width_node = constant(
         &mut graph,
-        (u32::BITS - width.leading_zeros()).max(1),
-        width as u64,
+        (u64::BITS - width.leading_zeros()).max(1),
+        width,
     );
     let rounding = match semantics.rounding {
         Rounding::Fixed(mode) => constant(&mut graph, 3, super::semantics::rounding_code(mode)),

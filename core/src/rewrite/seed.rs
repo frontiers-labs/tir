@@ -16,16 +16,15 @@ use crate::analysis::effects::{Effect, effect_of, observed_state, produced_state
 use crate::attributes::{AttributeValue, NamedAttribute};
 use crate::builtin::FloatType;
 use crate::operation::ValueIds;
-use crate::sem::egraph::{
-    LANES_WIDTH, carrier_of, counted_vector, minimal_unsigned_apint, type_width,
-};
+use crate::sem::egraph::{LANES_WIDTH, carrier_of, counted_vector, minimal_unsigned_apint};
 use crate::sem::node::WIDEST_RESULT;
 use crate::sem::{IrOp, Prov, SemNode as Node, SymKind};
 use crate::state::{JoinOp, SplitOp};
 use crate::store::Db;
 use crate::{
-    ConstantLike, Context, Gamma, HasResourceSemantics, MemoryRead, MemoryWrite, OpHandle, OpId,
-    RegionId, ResourceAccess, ResourceEffects, Theta, TypeId, ValueId,
+    Congruent, ConstantLike, Context, Gamma, HasResourceSemantics, MemoryRead, MemoryWrite,
+    OpHandle, OpId, RegionId, ResourceAccess, ResourceEffects, Speculatable, Theta, TypeId,
+    ValueId,
 };
 use tir_adt::{APFloat, APInt};
 
@@ -53,9 +52,19 @@ struct Kind {
 pub struct Kinds {
     layout: Option<AttributeValue>,
     kinds: Vec<Kind>,
+    unflagged: bool,
 }
 
 impl Kinds {
+    /// Kinds whose operators carry no flags: selection has no poison to
+    /// keep, so a flagged op selects as the unflagged one does.
+    pub fn unflagged() -> Self {
+        Self {
+            unflagged: true,
+            ..Self::default()
+        }
+    }
+
     // What holds of the kinds under `layout`: every interface, and the
     // operators of the pure ops. An op that is not pure may name what only
     // its function has, a symbol say, so those are met again.
@@ -64,6 +73,7 @@ impl Kinds {
             *self = Self {
                 layout,
                 kinds: Vec::new(),
+                unflagged: self.unflagged,
             };
         }
         for kind in &mut self.kinds {
@@ -126,8 +136,44 @@ pub fn seed(
     kinds: &mut Kinds,
     dependencies: bool,
 ) -> Seeded {
+    seed_with(context, root, vocabulary, kinds, dependencies, |seeder| {
+        for region in context.get_op(root).regions().to_vec() {
+            seeder.seed_region(region);
+        }
+    })
+}
+
+/// Build the e-graph of only `ops`, ops under `root`, each over leaves for
+/// the values it reads: all a lowering whose rules each match one op over
+/// its operands asks of a function.
+pub fn seed_ops(
+    context: &Context,
+    root: OpId,
+    ops: &[OpId],
+    vocabulary: Vocabulary<Node>,
+    kinds: &mut Kinds,
+) -> Seeded {
+    seed_with(context, root, vocabulary, kinds, false, |seeder| {
+        for &op in ops {
+            for operand in context.get_op(op).operands() {
+                seeder.anchor(operand);
+            }
+            seeder.seed_op(op);
+        }
+    })
+}
+
+fn seed_with(
+    context: &Context,
+    root: OpId,
+    vocabulary: Vocabulary<Node>,
+    kinds: &mut Kinds,
+    dependencies: bool,
+    walk: impl FnOnce(&mut Seeder<'_>),
+) -> Seeded {
     let layout = crate::DataLayout::for_op(context, root);
     let pointer_width = layout.as_ref().and_then(crate::DataLayout::pointer_size);
+    let unflagged = kinds.unflagged;
     let mut seeder = Seeder {
         context,
         root,
@@ -137,14 +183,13 @@ pub fn seed(
         seeded: IdSet::new(),
         kinds: kinds.under(layout.map(crate::DataLayout::into_value)),
         pointer_width,
+        unflagged,
         loop_ports: Vec::new(),
         pending: Vec::new(),
         queued: Vec::new(),
         unsettled: false,
     };
-    for region in context.get_op(root).regions().to_vec() {
-        seeder.seed_region(region);
-    }
+    walk(&mut seeder);
     seeder.settle();
     Seeded {
         eg: seeder.eg,
@@ -162,6 +207,7 @@ struct Seeder<'a> {
     value_class: IdMap<ValueId, Ref>,
     seeded: IdSet<OpId>,
     pointer_width: Option<u32>,
+    unflagged: bool,
     loop_ports: Vec<LoopPorts>,
     kinds: &'a mut Vec<Kind>,
     // The pure ops walked and not yet stored, a batch per label met, and the
@@ -253,7 +299,7 @@ impl Seeder<'_> {
             Some(_) => None,
         };
         let lanes = counted.map(|(_, lanes)| {
-            let lanes = APInt::new(LANES_WIDTH, u64::from(lanes));
+            let lanes = APInt::new(u64::from(LANES_WIDTH), u64::from(lanes));
             self.eg.add(Node::constant(lanes, Prov::None))
         });
         let args = row_children(args, lanes, states);
@@ -504,6 +550,7 @@ impl Seeder<'_> {
             return None;
         }
         let context = self.context;
+        let unflagged = self.unflagged;
         let kind = self.kind(instance);
         let known = context.with_attributes(instance.id, |attributes| {
             let mut operators = kind.operators.iter();
@@ -512,7 +559,10 @@ impl Seeder<'_> {
                 .map(|(_, operator)| operator.clone())
         });
         let operator = known.unwrap_or_else(|| {
-            let operator = is_pure_value(instance).then(|| IrOp::of(instance));
+            let operator = is_pure_value(instance).then(|| match unflagged {
+                true => IrOp::of(instance).without_flags(),
+                false => IrOp::of(instance),
+            });
             kind.operators
                 .push((instance.attributes(), operator.clone()));
             operator
@@ -555,9 +605,7 @@ impl Seeder<'_> {
                 .expect("the kind is constant-like");
             let ty = self.context.get_value(*result).ty();
             let value = constant.constant_value();
-            let data = self.context.get_type_data(ty);
-            let float = (data.as_ref() as &dyn std::any::Any).downcast_ref::<FloatType>();
-            let node = match float {
+            let node = match FloatType::view(&self.context, ty) {
                 Some(float) => {
                     let (exponent, mantissa) = (float.exp_width(), float.mant_width());
                     let bits = u128::from(value.to_u64());
@@ -663,8 +711,11 @@ impl Seeder<'_> {
             self.seed_region(arm);
         }
         let results = instance.results()[binding.results.clone()].to_vec();
-        let boolean =
-            type_width(self.context, self.context.get_value(gamma.predicate()).ty()) == Some(1);
+        let boolean = self
+            .context
+            .terms()
+            .bit_width(self.context.get_value(gamma.predicate()).ty())
+            == Some(1);
         let mut chosen = Vec::new();
         for (index, &result) in results.iter().enumerate() {
             if self
@@ -938,12 +989,11 @@ impl Seeder<'_> {
     /// layout fact, so where no layout is in scope the access covers an extent
     /// the term cannot spell and stays unseeded.
     fn access_width(&self, ty: TypeId) -> Option<u32> {
-        type_width(self.context, ty).or_else(|| {
-            let data = self.context.get_type_data(ty);
-            (data.as_ref() as &dyn std::any::Any)
-                .downcast_ref::<crate::ptr::PtrType>()
-                .and(self.pointer_width)
-        })
+        self.context
+            .terms()
+            .bit_width(ty)
+            .map(|width| width as u32)
+            .or_else(|| crate::ptr::PtrType::view(&self.context, ty).and(self.pointer_width))
     }
 
     // The children of the access `instance` is seeded as: the class of each
@@ -1078,22 +1128,25 @@ fn changes(instance: &OpHandle) -> bool {
 }
 
 fn is_pure_value(instance: &OpHandle) -> bool {
+    let congruent = instance.has_interface::<dyn Congruent>();
     let effect = !instance.state_results().is_empty()
-        && instance
-            .clone()
-            .as_interface::<dyn HasResourceSemantics>()
-            .is_some();
+        && (congruent || instance.has_interface::<dyn HasResourceSemantics>());
     if instance.value_results().len() != 1 {
         return effect;
     }
+    // A speculatable op over no operand, a symbol's address, stays a leaf of
+    // its own: the commit cannot rebuild it where another region reads it.
+    let speculatable = !instance.operands().is_empty()
+        && instance
+            .clone()
+            .as_interface::<dyn Speculatable>()
+            .is_some_and(|op| op.is_speculatable());
     effect
+        || congruent
+        || speculatable
         || instance
             .clone()
             .as_dyn_op()
             .semantic_expr(&mut crate::sem::SemGraph::new())
             .is_some()
-        // These operations only transform sign bits and cannot trap.
-        || instance.is::<crate::fp::ops::NegOp>()
-        || instance.is::<crate::fp::ops::AbsOp>()
-        || instance.is::<crate::fp::ops::CopySignOp>()
 }

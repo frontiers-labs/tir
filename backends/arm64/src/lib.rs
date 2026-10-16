@@ -157,12 +157,7 @@ fn lower_func_and_return_to_asm_symbol(
     op: &tir::OperationRef,
 ) -> Result<bool, tir::PassError> {
     tir::backend::lower::lower_function_and_return(context, op, |ty| {
-        let data = context.get_type_data(ty);
-        let data = data.as_ref() as &dyn std::any::Any;
-        if data
-            .downcast_ref::<tir::builtin::FloatType>()
-            .is_some_and(|float| float.bit_width() == 64)
-        {
+        if tir::builtin::FloatType::view(context, ty).is_some_and(|float| float.bit_width() == 64) {
             Ok(RegClass::FPR64.id())
         } else {
             Ok(RegClass::GPR.id())

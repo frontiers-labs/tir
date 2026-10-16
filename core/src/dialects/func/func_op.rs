@@ -1,4 +1,3 @@
-use crate::Any;
 use crate::builtin::UnitType;
 use crate::operation;
 use crate::symbol_table::{symbol_name_of, visibility_of};
@@ -10,6 +9,7 @@ operation! {
     FuncOp {
         name: "func",
         dialect: "func",
+        scheme: "() -> fn<_, _>",
         format: "custom",
         verifier: "true",
         interfaces: [Symbol, Callable],
@@ -17,9 +17,7 @@ operation! {
             sym_name: "Str",
             ret_type: "Type",
         },
-        results: R {
-            result: "crate::builtin::FnType",
-        },
+        results: R { result },
         regions: R {
             body: Region {
                 kind: Any,
@@ -320,7 +318,7 @@ impl tir::Verifiable for FuncOp {
     fn verify_impl(&self, context: &Context) -> Result<(), Error> {
         super::verify_argument_alignments(self, self.parameters().len(), "function")?;
         let parameters: Vec<_> = self.parameters().iter().map(tir::Value::ty).collect();
-        super::verify_noalias_arguments(self, context, &parameters)?;
+        super::verify_noalias_arguments(context, self, &parameters)?;
         let expected = tir::builtin::FnType::new(context, &parameters, self.ret_type());
         if context.get_value(self.fn_value()).ty() != expected {
             return Err(Error::VerificationError(format!(
@@ -339,11 +337,7 @@ impl tir::Verifiable for FuncOp {
                 "result-address function requires a destination argument".to_string(),
             ));
         };
-        let ty = context.get_type_data(argument.ty());
-        if (ty.as_ref() as &dyn std::any::Any)
-            .downcast_ref::<crate::ptr::PtrType>()
-            .is_none()
-        {
+        if crate::ptr::PtrType::view(context, argument.ty()).is_none() {
             return Err(Error::VerificationError(
                 "result-address function destination must have pointer type".to_string(),
             ));
@@ -356,9 +350,8 @@ operation! {
     ReturnOp {
         name: "return",
         dialect: "func",
-        operands: O {
-            value: "?Any",
-        },
+        scheme: "(_?) -> ()",
+        operands: O { value },
         interfaces: [Terminator],
         state: "in",
     }

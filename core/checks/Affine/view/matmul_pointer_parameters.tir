@@ -6,9 +6,9 @@
 // the predicate a caller could be asked, and versioning could materialize. The
 // same-object pair is unchanged: it never goes through the ranges.
 
-#data_layout = {types = {i32 = {abi = 32, size = 32}, i64 = {abi = 64, size = 64}, p = {abi = 64, size = 64}}}
+#layout_spec = #layout.spec<!i32 = {size = 32, abi = 32}, !i64 = {size = 64, abi = 64}, !ptr.p = {size = 64, abi = 64}>
 
-module {data_layout = #data_layout} {
+module {layout.spec = #layout_spec} {
   %0 = func.func @matmul(%1: !ptr.p, %2: !ptr.p, %3: !ptr.p) {
     %4 = constant {value = 0} : !i32
     %5 = constant {value = 8} : !i32

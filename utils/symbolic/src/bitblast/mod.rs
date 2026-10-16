@@ -9,8 +9,9 @@ use std::fmt::{self, Display, Formatter};
 
 use tir_adt::{Dag, NodeId};
 
-use crate::lang::{SemType, SymKind, SymPayload};
+use crate::lang::{SymKind, SymPayload};
 use crate::sat::{Lit, SatResult, Solver};
+use crate::term::{Terms, TypeArg, ctor};
 
 #[derive(Clone, Copy)]
 pub(crate) enum Shift {
@@ -103,17 +104,30 @@ pub fn blast<V>(
     graph: &Dag<SymKind, SymPayload<V>>,
     widths: &[Option<u32>],
 ) -> Result<Blasted, BitblastError> {
-    blast_with_types(graph, widths, &[])
+    blast_into(graph, widths, Vec::new())
 }
 
 /// Bit-blast a graph with semantic types for overloaded scalar operations. An
 /// empty `types` leaves every node in the bit-vector domain.
 pub fn blast_with_types<V>(
+    terms: &Terms,
     graph: &Dag<SymKind, SymPayload<V>>,
     widths: &[Option<u32>],
-    types: &[SemType],
+    types: &[TypeArg],
 ) -> Result<Blasted, BitblastError> {
-    let mut b = Blaster::new(graph, widths, types);
+    let floats = types
+        .iter()
+        .map(|ty| ty.as_type().is_some_and(|ty| terms.ctor(ty) == ctor::FLOAT))
+        .collect();
+    blast_into(graph, widths, floats)
+}
+
+fn blast_into<V>(
+    graph: &Dag<SymKind, SymPayload<V>>,
+    widths: &[Option<u32>],
+    floats: Vec<bool>,
+) -> Result<Blasted, BitblastError> {
+    let mut b = Blaster::new(graph, widths, floats);
     for i in 0..graph.len() {
         let id = NodeId::from_index(i);
         let bits = b.encode(id)?;
@@ -143,14 +157,14 @@ pub(crate) struct Blaster<'g, V> {
     conversion_defined: HashMap<usize, Lit>,
     graph: &'g Dag<SymKind, SymPayload<V>>,
     widths: &'g [Option<u32>],
-    types: &'g [SemType],
+    floats: Vec<bool>,
 }
 
 impl<'g, V> Blaster<'g, V> {
     fn new(
         graph: &'g Dag<SymKind, SymPayload<V>>,
         widths: &'g [Option<u32>],
-        types: &'g [SemType],
+        floats: Vec<bool>,
     ) -> Self {
         let mut solver = Solver::new();
         let one = Lit::positive(solver.new_var());
@@ -165,7 +179,7 @@ impl<'g, V> Blaster<'g, V> {
             conversion_defined: HashMap::new(),
             graph,
             widths,
-            types,
+            floats,
         }
     }
 
@@ -262,6 +276,13 @@ impl<'g, V> Blaster<'g, V> {
             ZExt => self.encode_extend(id, false),
             SExt => self.encode_extend(id, true),
             If => self.encode_ite(id),
+            Poison => Ok(self.child_bits(id, 1)),
+            Freeze => {
+                let child = self.graph.children(id).next().expect("a frozen value");
+                let value = self.bits[child.index()].clone();
+                let arbitrary: Vec<Lit> = value.iter().map(|_| self.fresh()).collect();
+                Ok(self.mux_bits(self.defined[child.index()], &value, &arbitrary))
+            }
             Switch => self.encode_switch(id),
             SIToFPRound | UIToFPRound
                 if self.const_u64(self.graph.children(id).nth(3).unwrap())? == 0 =>
@@ -279,17 +300,34 @@ impl<'g, V> Blaster<'g, V> {
         }
     }
 
+    // Poison passes through every operation but a select, which is poison where
+    // its condition or the arm it takes is (as in Alive2), and a freeze, which
+    // never is.
     fn encode_defined(&mut self, id: NodeId) -> Result<Lit, BitblastError> {
-        if *self.graph.get_node(id) == SymKind::FPFlags {
-            return Ok(self.one);
+        let children: Vec<NodeId> = self.graph.children(id).collect();
+        match self.graph.get_node(id) {
+            SymKind::FPFlags | SymKind::Freeze => return Ok(self.one),
+            SymKind::If => {
+                let [condition, then, els] = children[..] else {
+                    return Err(BitblastError::Unsupported(SymKind::If));
+                };
+                let taken = self.bits[condition.index()][0];
+                let arm =
+                    self.gate_mux(taken, self.defined[then.index()], self.defined[els.index()]);
+                return Ok(self.gate_and(self.defined[condition.index()], arm));
+            }
+            _ => {}
         }
         let mut defined = self.one;
-        let children: Vec<NodeId> = self.graph.children(id).collect();
-        for child in children {
+        for &child in &children {
             defined = self.gate_and(defined, self.defined[child.index()]);
         }
 
         match self.graph.get_node(id) {
+            SymKind::Poison => {
+                let condition = self.bits[children[0].index()][0];
+                Ok(self.gate_and(defined, condition.negate()))
+            }
             SymKind::FPToSI | SymKind::FPToSIRound => {
                 let in_range = self.float_to_int_defined(id, true)?;
                 Ok(self.gate_and(defined, in_range))
@@ -306,7 +344,7 @@ impl<'g, V> Blaster<'g, V> {
         self.graph
             .children(id)
             .next()
-            .is_some_and(|child| matches!(self.types.get(child.index()), Some(SemType::Float(_))))
+            .is_some_and(|child| self.floats.get(child.index()) == Some(&true))
     }
 
     fn encode_symbol(&mut self, id: NodeId) -> Result<Vec<Lit>, BitblastError> {
@@ -335,11 +373,17 @@ impl<'g, V> Blaster<'g, V> {
 
     fn encode_constant(&mut self, id: NodeId) -> Result<Vec<Lit>, BitblastError> {
         let w = self.width(id)?;
-        let value = self.const_u64(id)?;
+        let limbs = match self.graph.get_leaf_data(id) {
+            Some(SymPayload::Int(v)) => v.limbs(),
+            _ => return Err(BitblastError::BadConstant(id.index())),
+        };
         let (one, zero) = (self.one, self.zero());
-        Ok((0..w)
-            .map(|i| if (value >> i) & 1 == 1 { one } else { zero })
-            .collect())
+        let bit = |i: usize| {
+            limbs
+                .get(i / 64)
+                .is_some_and(|limb| limb >> (i % 64) & 1 == 1)
+        };
+        Ok((0..w).map(|i| if bit(i) { one } else { zero }).collect())
     }
 
     fn bitwise(

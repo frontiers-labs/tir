@@ -59,6 +59,11 @@ impl Interner {
         self.vec[sym.0 as usize]
     }
 
+    /// The string whose [`Sym::index`] is `index`, if one is.
+    pub fn at(&self, index: usize) -> Option<&str> {
+        self.vec.get(index).copied()
+    }
+
     fn insert(&mut self, name: &'static str) -> Sym {
         let sym = Sym(self.vec.len() as u32);
         self.map.insert(name, sym);

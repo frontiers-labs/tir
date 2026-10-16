@@ -1,108 +1,85 @@
-use std::any::Any;
-use std::sync::Arc;
+use tir_symbolic::term::ctor;
 
 use crate::parse::common::Cursor;
-use crate::ty::TypeConstraint;
-use crate::{Context, Error, IRFormatter, Operation, Type, TypeId, operation, parse::Span};
+use crate::ty::{Terms, TypeArg, TypeSpelling};
+use crate::{Context, Error, Operation, TypeId, operation};
 
 use crate as tir;
-use crate::Any as AnyConstraint;
 
-pub struct TupleType {
-    elements: Vec<Arc<dyn Type>>,
-}
+/// `builtin.tuple<[T]>`, written `!tuple<!a, !b>`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TupleType(Vec<TypeId>);
 
 impl TupleType {
     #[allow(clippy::new_ret_no_self)]
     pub fn new(context: &Context, elements: Vec<TypeId>) -> TypeId {
-        let elements = elements
-            .into_iter()
-            .map(|element| context.get_type_data(element))
-            .collect();
-        context.get_type_id(Arc::new(Self { elements }))
+        let elements = elements.into_iter().map(TypeArg::Type).collect();
+        context
+            .terms()
+            .intern(ctor::TUPLE, vec![TypeArg::List(elements)])
+            .expect("a tuple of data types")
     }
 
-    pub fn elements(&self, context: &Context) -> Vec<TypeId> {
-        self.elements
-            .iter()
-            .map(|element| context.get_type_id(element.clone()))
-            .collect()
+    pub fn view(terms: &impl AsRef<Terms>, ty: TypeId) -> Option<Self> {
+        let terms = terms.as_ref();
+        (terms.ctor(ty) == ctor::TUPLE).then(|| Self(type_list(terms.arg(ty, 0))))
+    }
+
+    pub fn elements(&self) -> Vec<TypeId> {
+        self.0.clone()
+    }
+
+    pub fn spelling(_context: &Context) -> TypeSpelling {
+        TypeSpelling {
+            ctor: ctor::TUPLE,
+            keys: &["tuple"],
+            parse: |_, parser, context| {
+                let elements = parser
+                    .parse_delimited("<", ">", |parser| {
+                        parser
+                            .parse_type(context)?
+                            .ok_or_else(|| (parser.span(), Error::ExpectedType))
+                    })?
+                    .ok_or_else(|| (parser.span(), Error::ExpectedToken("<")))?;
+                Ok(Self::new(context, elements))
+            },
+            print: |spellings, ty, fmt| {
+                fmt.write("tuple<")?;
+                let tuple = Self::view(spellings, ty).expect("a tuple type");
+                for (index, element) in tuple.0.into_iter().enumerate() {
+                    if index > 0 {
+                        fmt.write(", ")?;
+                    }
+                    spellings.print(element, fmt)?;
+                }
+                fmt.write(">")
+            },
+            variadic_tail: false,
+        }
     }
 }
 
-impl TypeConstraint for TupleType {}
-
-impl Type for TupleType {
-    fn dialect(&self) -> &'static str {
-        "builtin"
-    }
-
-    fn parse_key() -> &'static str {
-        "tuple"
-    }
-
-    fn parse<'src>(
-        _mnemonic: &str,
-        parser: &mut crate::parse::text::Parser<'src>,
-        context: &Context,
-    ) -> Result<TypeId, (Span, Error)> {
-        let elements = parser
-            .parse_delimited("<", ">", |parser| {
-                parser
-                    .parse_type(context)?
-                    .ok_or_else(|| (parser.span(), Error::ExpectedType))
-            })?
-            .ok_or_else(|| (parser.span(), Error::ExpectedToken("<")))?;
-
-        Ok(Self::new(context, elements))
-    }
-
-    fn print(&self, fmt: &mut IRFormatter<'_>) -> Result<(), std::fmt::Error> {
-        fmt.write("tuple<")?;
-        for (index, element) in self.elements.iter().enumerate() {
-            if index > 0 {
-                fmt.write(", ")?;
-            }
-            fmt.write("!")?;
-            if element.dialect() != "builtin" {
-                fmt.write(format!("{}.", element.dialect()))?;
-            }
-            element.print(fmt)?;
-        }
-        fmt.write(">")
-    }
-
-    fn eq(&self, other: &dyn Type) -> bool {
-        let Some(other) = (other as &dyn Any).downcast_ref::<TupleType>() else {
-            return false;
-        };
-        self.elements.len() == other.elements.len()
-            && self
-                .elements
-                .iter()
-                .zip(&other.elements)
-                .all(|(left, right)| left.eq(right.as_ref()))
-    }
-
-    fn hash(&self, state: &mut dyn std::hash::Hasher) {
-        for element in &self.elements {
-            state.write_usize(Arc::as_ptr(element) as *const () as usize);
-        }
-        state.write_usize(self.elements.len());
-    }
+pub(crate) fn type_list(arg: Option<TypeArg>) -> Vec<TypeId> {
+    let Some(TypeArg::List(items)) = arg else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .filter_map(|item| match item {
+            TypeArg::Type(ty) => Some(*ty),
+            _ => None,
+        })
+        .collect()
 }
 
 operation! {
     MakeTupleOp {
         name: "make_tuple",
         dialect: "builtin",
+        scheme: "(_*) -> tuple<_>",
         verifier: "true",
-        operands: O {
-            elements: "*AnyConstraint",
-        },
-        results: R {
-            result: "crate::builtin::TupleType",
-        },
+        operands: O { elements },
+        results: R { result },
         interfaces: [crate::interp::Interp, crate::Speculatable],
     }
 }
@@ -111,13 +88,12 @@ impl crate::Speculatable for MakeTupleOp {}
 
 impl tir::Verifiable for MakeTupleOp {
     fn verify_impl(&self, context: &Context) -> Result<(), Error> {
-        let result_type = context.get_type_data(context.get_value(self.result()).ty());
-        let Some(tuple) = (result_type.as_ref() as &dyn Any).downcast_ref::<TupleType>() else {
+        let Some(tuple) = TupleType::view(context, context.get_value(self.result()).ty()) else {
             return Err(Error::VerificationError(
                 "make_tuple result must have tuple type".to_string(),
             ));
         };
-        let expected = tuple.elements(context);
+        let expected = tuple.elements();
         if expected.len() != self.operands().len() {
             return Err(Error::VerificationError(format!(
                 "make_tuple expected {} elements, got {}",
@@ -140,16 +116,13 @@ operation! {
     TupleGetOp {
         name: "tuple_get",
         dialect: "builtin",
+        scheme: "(tuple<_>) -> _",
         verifier: "true",
-        operands: O {
-            tuple: "crate::builtin::TupleType",
-        },
+        operands: O { tuple },
         attributes: A {
             index: "UInt",
         },
-        results: R {
-            result: "AnyConstraint",
-        },
+        results: R { result },
         interfaces: [crate::interp::Interp, crate::Speculatable],
     }
 }
@@ -164,13 +137,12 @@ impl TupleGetOp {
 
 impl tir::Verifiable for TupleGetOp {
     fn verify_impl(&self, context: &Context) -> Result<(), Error> {
-        let tuple_type = context.get_type_data(context.get_value(self.tuple()).ty());
-        let Some(tuple) = (tuple_type.as_ref() as &dyn Any).downcast_ref::<TupleType>() else {
+        let Some(tuple) = TupleType::view(context, context.get_value(self.tuple()).ty()) else {
             return Err(Error::VerificationError(
                 "tuple_get operand must have tuple type".to_string(),
             ));
         };
-        let elements = tuple.elements(context);
+        let elements = tuple.elements();
         let Some(&expected) = elements.get(self.index() as usize) else {
             return Err(Error::VerificationError(format!(
                 "tuple_get index {} is out of bounds for {} elements",

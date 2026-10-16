@@ -54,10 +54,13 @@ pub(super) fn lower_to_ir(
     let march = march.unwrap_or(std::env::consts::ARCH);
     let machine =
         tir::backend::select_target_with_abi(march, None, None, mabi).unwrap_or_else(|e| fail(e));
-    let target =
-        crate::sema::TargetProfile::for_target(march, machine.as_ref()).unwrap_or_else(|e| fail(e));
-    let typed =
-        crate::sema::analyze_with_target(unit, options, target).unwrap_or_else(|diagnostics| {
+    let target = crate::sema::TargetProfile::for_target(context, march, machine.as_ref())
+        .unwrap_or_else(|e| fail(e));
+    let layout = target
+        .layout_spec(context, machine.as_ref())
+        .unwrap_or_else(|| fail(format!("target '{march}' declares no data layout")));
+    let typed = crate::sema::analyze_with_target(context, unit, options, target, layout.clone())
+        .unwrap_or_else(|diagnostics| {
             for diagnostic in diagnostics {
                 diagnostic.eprint();
             }
@@ -68,18 +71,11 @@ pub(super) fn lower_to_ir(
         std::process::exit(1);
     });
     // The layout is in scope from here on, so pointer offsets take its width.
-    let module = describe_target(context, &module, machine.as_ref());
+    let module = describe_target(context, &module, machine.as_ref(), layout);
     // Restructuring accepts CFG form only, so no `cir` operation may survive
-    // into it: struct ops become pointer arithmetic, loop ops become `scf.for`
-    // where the counted shape is provable and blocks with branches otherwise.
-    // The conversion turns a raised `scf.for` into `scf.r#for` on the way.
-    run_pass(
-        context,
-        &module,
-        "struct lowering",
-        None,
-        crate::passes::LowerCirStructsPass::new(),
-    );
+    // into it: loop ops become `scf.for` where the counted shape is provable
+    // and blocks with branches otherwise. The conversion turns a raised
+    // `scf.for` into `scf.r#for` on the way.
     run_pass(
         context,
         &module,
@@ -93,6 +89,15 @@ pub(super) fn lower_to_ir(
         "restructuring",
         Some(jobs),
         tir::passes::RestructureNodesPass::new(),
+    );
+    // Field addresses and record copies become byte arithmetic the layout in
+    // scope gives the numbers of.
+    run_pass(
+        context,
+        &module,
+        "layout erasure",
+        Some(jobs),
+        tir::passes::EraseLayoutPass::new(),
     );
     module
 }
@@ -132,12 +137,13 @@ fn describe_target(
     context: &tir::Context,
     module: &tir::builtin::ModuleOp,
     machine: &dyn tir::backend::TargetMachine,
+    layout: tir::attributes::AttributeValue,
 ) -> tir::builtin::ModuleOp {
     use tir::Operation;
 
     let mut attributes = context.get_op(module.id()).attributes().to_vec();
     let specs = [
-        (tir::DATA_LAYOUT, machine.data_layout()),
+        (tir::LAYOUT_SPEC, Some(layout)),
         (tir::TARGET_ENV, machine.target_env()),
     ];
     for (name, spec) in specs {
@@ -327,6 +333,10 @@ fn add_default_defines(
     defines
         .entry("__VERSION__".to_string())
         .or_insert_with(|| format!("\"fcc {}\"", env!("CARGO_PKG_VERSION")));
+    // The compiler's `<limits.h>` defines `BITINT_MAXWIDTH` from this.
+    defines
+        .entry("__BITINT_MAXWIDTH__".to_string())
+        .or_insert_with(|| crate::ast::BITINT_MAXWIDTH.to_string());
     let stdc_version = match options.std_version {
         crate::lang_options::StdVersion::C89 => None,
         crate::lang_options::StdVersion::C99 => Some("199901L"),
@@ -451,8 +461,10 @@ pub(super) fn parse_source_opts(opts: &DriverOptions, name: &str, source: &str) 
     )
 }
 
+// C's floating-point sign identities are rules no solver checks; the
+// compiler trusts them.
 fn add_instcombine(pm: &mut tir::PassManager) {
-    pm.add_pass(tir::passes::InstCombineNodesPass::new());
+    pm.add_pass(tir::passes::InstCombineNodesPass::trusting());
 }
 
 /// The mid-end pipeline the driver options ask for.
@@ -478,7 +490,7 @@ pub(super) fn mid_end(opts: &DriverOptions) -> tir::PassManager {
         // simplifier's own sweep takes what nothing demands.
         round.add_pass(tir::passes::PromoteNodesPass::new());
         round.add_pass(tir::passes::VerifyDepsPass::new());
-        round.add_pass(tir::passes::InstCombineNodesPass::new());
+        add_instcombine(round);
         if rounds.affine {
             // Loop scheduling reads the chains too, and what it leaves behind — a
             // rebuilt nest, an unrolled body — is address arithmetic nobody has

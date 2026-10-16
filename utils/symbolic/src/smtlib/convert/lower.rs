@@ -99,7 +99,7 @@ impl<V> Lowerer<V> {
     fn leaf_const(&mut self, width: u32, value: u64) -> NodeId {
         let id = self.graph.add_node(SymKind::Constant);
         self.graph
-            .set_leaf_data(id, SymPayload::Int(APInt::new(width, value)));
+            .set_leaf_data(id, SymPayload::Int(APInt::new(u64::from(width), value)));
         self.width.push(Some(width));
         id
     }

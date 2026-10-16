@@ -4,9 +4,9 @@
 // the eight the first wrote: the other four are still readable, so the wider
 // write is not dead.
 
-#data_layout = {types = {i32 = {abi = 32, size = 32}, i64 = {abi = 64, size = 64}, p = {abi = 64, size = 64}}}
+#layout_spec = #layout.spec<!i32 = {size = 32, abi = 32}, !i64 = {size = 64, abi = 64}, !ptr.p = {size = 64, abi = 64}>
 
-module {data_layout = #data_layout} {
+module {layout.spec = #layout_spec} {
   %fn_f = func.func @f(%0: !i64, %1: !i32) -> !i64 {
     %2 = ptr.alloca {size = 8, align = 8} : !ptr.p<!i64>
     ptr.store %0, %2

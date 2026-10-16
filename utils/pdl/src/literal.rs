@@ -207,6 +207,11 @@ fn ty(ty: &Type) -> TokenStream {
             };
             quote!(tir_pdl::Type::State(#resource))
         }
+        Type::Pointer(Width::Named(name)) => {
+            let name = string(name);
+            quote!(tir_pdl::Type::Pointer(tir_pdl::Width::Named(#name)))
+        }
+        Type::Pointer(_) => unreachable!("a pointer type binds its width by name"),
         Type::Named(name) => {
             let name = string(name);
             quote!(tir_pdl::Type::Named(#name))

@@ -324,6 +324,12 @@ pub trait Global {
     fn initializer(&self) -> Option<Vec<u8>>;
 }
 
+/// An operation whose results, the states it publishes among them, are a
+/// function of its operands, attributes and the states it takes, though no
+/// semantics says which: two over equal inputs are one, so a rewrite may match
+/// it and replace it as a term.
+pub trait Congruent {}
+
 /// An operation that cannot trap, so it may run whether or not control would
 /// have reached it: a loop cone may hoist it, and a lowering may evaluate it on
 /// a path the source did not take.

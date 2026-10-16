@@ -1,4 +1,3 @@
-use crate::Any;
 use crate::attributes::AttributeValue;
 use crate::{
     BlockId, BranchGuard, BranchTerminator, CaseGuard, Context, Error, Operation, Terminator,
@@ -23,10 +22,9 @@ operation! {
     BranchOp {
         name: "br",
         dialect: "cfg",
+        scheme: "(_*) -> ()",
         format: "custom",
-        operands: O {
-            dest_args: "*Any",
-        },
+        operands: O { dest_args },
         attributes: A {
             dest: "Block",
         },
@@ -76,12 +74,9 @@ operation! {
     CondBranchOp {
         name: "cond_br",
         dialect: "cfg",
+        scheme: "(int<1>, _*, _*) -> ()",
         format: "custom",
-        operands: O {
-            condition: "crate::Integer<1>",
-            true_args: "*Any",
-            false_args: "*Any",
-        },
+        operands: O { condition, true_args, false_args },
         attributes: A {
             true_dest: "Block",
             false_dest: "Block",
@@ -171,12 +166,10 @@ operation! {
     SwitchOp {
         name: "switch",
         dialect: "cfg",
+        scheme: "(int<_>, _*) -> ()",
         format: "custom",
         verifier: "true",
-        operands: O {
-            selector: "crate::builtin::IntegerType",
-            args: "*Any",
-        },
+        operands: O { selector, args },
         interfaces: [Terminator, BranchTerminator, CaseGuard],
     }
 }
@@ -274,8 +267,10 @@ impl SwitchOp {
             fmt.write("default: ")?;
             print_successor(fmt, &context, dest, &args)?;
         }
-        let width = crate::sem::egraph::type_width(&context, context.get_value(selector).ty())
-            .unwrap_or(64);
+        let width = context
+            .terms()
+            .bit_width(context.get_value(selector).ty())
+            .map_or(64, |width| width as u32);
         for (case, (dest, args)) in self.cases().into_iter().zip(edges) {
             fmt.write(",\n")?;
             fmt.write(format!("{}: ", crate::binding::signed_bits(case, width)))?;
@@ -294,7 +289,10 @@ impl SwitchOp {
         let selector = parse_value_id(parser, context)?;
         expect_token(parser, ":")?;
         let ty = parse_arg_type(parser, context)?;
-        let width = crate::sem::egraph::type_width(context, ty).unwrap_or(64);
+        let width = context
+            .terms()
+            .bit_width(ty)
+            .map_or(64, |width| width as u32);
         expect_token(parser, ",")?;
         expect_token(parser, "[")?;
         expect_token(parser, "default")?;
@@ -344,9 +342,10 @@ impl tir::Verifiable for SwitchOp {
         if counts.iter().sum::<u64>() as usize + 1 != self.operands().len() {
             return fail("forwards values its successors do not take".to_string());
         }
-        let width =
-            crate::sem::egraph::type_width(context, context.get_value(self.selector()).ty())
-                .unwrap_or(64);
+        let width = context
+            .terms()
+            .bit_width(context.get_value(self.selector()).ty())
+            .map_or(64, |width| width as u32);
         let mut seen = std::collections::HashSet::new();
         for &case in &cases {
             if crate::binding::truncate_bits(case as i64, width) != case {

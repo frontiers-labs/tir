@@ -46,6 +46,16 @@ pub struct Parser<'src> {
     /// Attribute values bound to `#name` in the file preamble, so a long spec
     /// (a data layout, say) is written once and referenced where it applies.
     aliases: HashMap<String, AttributeValue>,
+    // The parameters of the generic `type.def` whose body is being parsed: a
+    // bare name among them is a bound variable.
+    pub(crate) type_params: Vec<String>,
+    // Set while a layout spec key is read: a bare name not yet among
+    // `type_params` joins them, so `!i<W>` is a pattern over `W`.
+    pub(crate) open_type_params: bool,
+    pub(crate) type_defs: HashSet<String>,
+    // Each `!Name` this parse read, at its first use, so a name no
+    // `type.def` declares is reported once the module is in.
+    pub(crate) type_refs: IndexMap<String, Span>,
 }
 
 impl<'src> Parser<'src> {
@@ -58,6 +68,10 @@ impl<'src> Parser<'src> {
             forward: IndexMap::new(),
             forward_references: true,
             aliases: HashMap::new(),
+            type_params: Vec::new(),
+            open_type_params: false,
+            type_defs: HashSet::new(),
+            type_refs: IndexMap::new(),
         }
     }
 
@@ -142,6 +156,22 @@ impl<'src> Parser<'src> {
         Some(&self.src[start..start + len])
     }
 
+    /// An attribute name: identifiers joined by `.`, as in `layout.spec`.
+    pub fn parse_attribute_name(&mut self) -> Option<String> {
+        let mut name = self.parse_ident()?.to_string();
+        while self
+            .src
+            .get(self.position as usize..)
+            .and_then(|rest| rest.strip_prefix('.'))
+            .is_some_and(|rest| rest.starts_with(char::is_alphabetic))
+        {
+            self.position += 1;
+            name.push('.');
+            name.push_str(self.parse_ident()?);
+        }
+        Some(name)
+    }
+
     pub fn parse_token(&mut self, token: &str) -> bool {
         if self
             .src
@@ -203,6 +233,10 @@ impl<'src> Parser<'src> {
             let name = self
                 .parse_ident()
                 .ok_or_else(|| (self.span(), crate::Error::ExpectedToken("alias name")))?;
+            if name == "layout" && self.parse_token(".spec") {
+                let spec = crate::layout::LayoutSpec::parse(self, context)?;
+                return Ok(Some(spec.into()));
+            }
             return self.aliases.get(name).cloned().map(Some).ok_or_else(|| {
                 (
                     self.span(),
@@ -252,7 +286,24 @@ impl<'src> Parser<'src> {
         if let Some(value) = self.parse_float() {
             return Ok(Some(AttributeValue::F64(value)));
         }
-        Ok(self.parse_number().map(AttributeValue::Int))
+        if let Some(value) = self.parse_number() {
+            return Ok(Some(AttributeValue::Int(value)));
+        }
+        Ok(self.parse_wide_number())
+    }
+
+    // A decimal too large for an `i64`: the limbs of a constant wider than 64
+    // bits, which print as their unsigned value.
+    fn parse_wide_number(&mut self) -> Option<AttributeValue> {
+        let start = self.position as usize;
+        let digits = self.src[start..]
+            .bytes()
+            .take_while(u8::is_ascii_digit)
+            .count();
+        let value: tir_adt::APInt = self.src[start..start + digits].parse().ok()?;
+        self.position = (start + digits) as u32;
+        self.skip_trivia();
+        Some(AttributeValue::Wide(value.limbs().into()))
     }
 
     /// A register-valued attribute: `%3` (a value the op names but does not
@@ -473,6 +524,9 @@ impl<'src> Parser<'src> {
             .parse_ident()
             .ok_or_else(|| (self.span(), crate::Error::ExpectedType))?;
 
+        if let Some(renamed) = self.parse_renamed(dialect_or_name) {
+            return self.parse_named_type(&renamed, mark, context).map(Some);
+        }
         let (dialect, name) = if self.parse_token(".") {
             let Some(name) = self.parse_ident() else {
                 return Err((self.span(), crate::Error::ExpectedType));
@@ -482,17 +536,110 @@ impl<'src> Parser<'src> {
             ("builtin", dialect_or_name)
         };
 
-        let type_parser = context
-            .get_type_parser(dialect, name)
-            .map_err(|err| (self.span(), err))?;
-
-        match type_parser(name, self, context) {
+        let parsed = match context.get_type_parser(dialect, name) {
+            // A spelling's own form failing on `<`, as `!i<W>`, is the
+            // constructor's generic form.
+            Ok(type_parser) => {
+                let after_name = self.position;
+                let parsed = type_parser(name, self, context);
+                let generic = context.terms().ctor_named(dialect, name);
+                match generic {
+                    Some(ctor)
+                        if parsed.is_err() && self.src[after_name as usize..].starts_with('<') =>
+                    {
+                        self.position = after_name;
+                        crate::ty::parse_generic(ctor, self, context)
+                    }
+                    _ => parsed,
+                }
+            }
+            Err(err) => match context.terms().ctor_named(dialect, name) {
+                Some(ctor) => crate::ty::parse_generic(ctor, self, context),
+                None if dialect == "builtin" => self.parse_named_type(name, mark, context),
+                None => return Err((self.span(), err)),
+            },
+        };
+        match parsed {
             Ok(ty) => Ok(Some(ty)),
             Err(err) => {
                 self.position = mark;
                 Err(err)
             }
         }
+    }
+
+    // `name.N`, the name a module merge gives a second definition of `name`,
+    // when the text continues `name` with `.` and digits.
+    pub(crate) fn parse_renamed(&mut self, name: &str) -> Option<String> {
+        let rest = self.src.get(self.position as usize..)?.strip_prefix('.')?;
+        let digits = rest
+            .find(|c: char| !c.is_ascii_digit())
+            .unwrap_or(rest.len());
+        if digits == 0 {
+            return None;
+        }
+        let renamed = format!("{name}.{}", &rest[..digits]);
+        self.position += 1 + digits as u32;
+        self.skip_trivia();
+        Some(renamed)
+    }
+
+    fn parse_named_type(
+        &mut self,
+        name: &str,
+        mark: u32,
+        context: &crate::Context,
+    ) -> Result<crate::TypeId, (Span, crate::Error)> {
+        let args = self
+            .parse_delimited("<", ">", |parser| {
+                parser
+                    .parse_type_arg(context)?
+                    .ok_or_else(|| (parser.span(), crate::Error::ExpectedType))
+            })?
+            .unwrap_or_default();
+        if !self.type_refs.contains_key(name) {
+            self.type_refs.insert(name.to_string(), Span(mark));
+        }
+        crate::builtin::NamedType::get(context, name, args)
+            .map_err(|message| (Span(mark), crate::Error::VerificationError(message)))
+    }
+
+    /// A type, a bound parameter of the enclosing generic `type.def`, or a
+    /// number: what a type argument can be.
+    pub fn parse_type_arg(
+        &mut self,
+        context: &crate::Context,
+    ) -> Result<Option<crate::TypeArg>, (Span, crate::Error)> {
+        if let Some(ty) = self.parse_type(context)? {
+            return Ok(Some(crate::TypeArg::Type(ty)));
+        }
+        if let Some(n) = self.parse_number() {
+            return u64::try_from(n)
+                .map(|n| Some(crate::TypeArg::Nat(n)))
+                .map_err(|_| (self.span(), crate::Error::ExpectedType));
+        }
+        let mark = self.position;
+        let Some(name) = self.parse_ident() else {
+            return Ok(None);
+        };
+        match self.type_params.iter().position(|param| param == name) {
+            Some(index) => Ok(Some(crate::TypeArg::Var(index as u32))),
+            None if self.open_type_params => {
+                self.type_params.push(name.to_string());
+                Ok(Some(crate::TypeArg::Var(self.type_params.len() as u32 - 1)))
+            }
+            None => {
+                self.position = mark;
+                Ok(None)
+            }
+        }
+    }
+
+    pub(crate) fn undeclared_type(&self) -> Option<(Span, String)> {
+        self.type_refs
+            .iter()
+            .find(|(name, _)| !self.type_defs.contains(*name))
+            .map(|(name, span)| (*span, name.clone()))
     }
 
     /// Parse the label name in a `^name` block reference.

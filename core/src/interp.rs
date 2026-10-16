@@ -34,7 +34,15 @@ pub enum Value {
     Function(OpId),
     Rounding(RoundingMode),
     FpEnvironment(FloatEnvironment),
+    /// A type a layout region measures.
+    Type(crate::TypeId),
+    /// The spec a layout region reads.
+    Layout(std::sync::Arc<crate::layout::LayoutSpec>),
     Unit,
+    /// Deferred undefined behavior: what a flagged op yields where its flag
+    /// fails, and a load of memory nothing wrote. A pure op reading it yields
+    /// it; a branch on it, or an access through it, is undefined.
+    Poison,
 }
 
 impl Value {
@@ -61,6 +69,9 @@ pub enum InterpError {
     },
     /// The run executed the operations it was allowed and stopped.
     StepLimit,
+    /// An op ran where its `requires:` fails, or control or an access
+    /// depends on poison.
+    Undefined(String),
     Message(String),
 }
 
@@ -81,6 +92,7 @@ impl std::fmt::Display for InterpError {
                 address + size
             ),
             InterpError::StepLimit => write!(f, "step limit exceeded"),
+            InterpError::Undefined(what) => write!(f, "undefined behavior: {what}"),
             InterpError::Message(text) => write!(f, "{text}"),
         }
     }
@@ -103,6 +115,7 @@ pub use crate::fp::FloatEnvironment;
 pub struct ExecutionState {
     pub memory: Memory,
     pub fp_environment: FloatEnvironment,
+    pub(crate) layout: Option<crate::layout::LayoutRun>,
 }
 
 const MEMORY_BASE: u64 = 1 << 20;
@@ -149,6 +162,28 @@ impl Memory {
         Ok(self.bytes[offset..end].to_vec())
     }
 
+    fn is_written(&self, address: u64, size: u64) -> Result<bool> {
+        let offset = self.check(address, size)?;
+        Ok(self.written[offset..offset + size as usize]
+            .iter()
+            .all(|&written| written))
+    }
+
+    fn forget(&mut self, address: u64, size: u64) -> Result<()> {
+        let offset = self.check(address, size)?;
+        self.written[offset..offset + size as usize].fill(false);
+        Ok(())
+    }
+
+    fn copy(&mut self, destination: u64, source: u64, size: u64) -> Result<()> {
+        let from = self.check(source, size)?;
+        let to = self.check(destination, size)?;
+        let size = size as usize;
+        self.bytes.copy_within(from..from + size, to);
+        self.written.copy_within(from..from + size, to);
+        Ok(())
+    }
+
     pub fn write(&mut self, address: u64, bytes: &[u8]) -> Result<()> {
         let offset = self.check(address, bytes.len() as u64)?;
         self.bytes[offset..offset + bytes.len()].copy_from_slice(bytes);
@@ -158,8 +193,8 @@ impl Memory {
         Ok(())
     }
 
-    fn read_int(&self, address: u64, width_bits: u32) -> Result<APInt> {
-        let bytes = self.read(address, width_bits as u64 / 8)?;
+    fn read_int(&self, address: u64, width_bits: u64) -> Result<APInt> {
+        let bytes = self.read(address, width_bits / 8)?;
         let mut raw = 0u64;
         for (index, byte) in bytes.iter().enumerate() {
             raw |= u64::from(*byte) << (index * 8);
@@ -225,6 +260,31 @@ pub fn run_function_in_state(
         steps_left: steps,
     }
     .call_function(function, arguments)
+}
+
+/// Run `region` with `arguments` bound to its entry, to the values a
+/// terminator hands back: a `layout.result`, or an unordered body's results.
+pub fn run_region(
+    context: &Context,
+    region: RegionId,
+    arguments: Vec<Value>,
+    state: &mut ExecutionState,
+) -> Result<Vec<Value>> {
+    let mut interpreter = Interpreter {
+        context,
+        state,
+        env: HashMap::new(),
+        steps_left: None,
+    };
+    for (argument, value) in region_arguments(context, region).into_iter().zip(arguments) {
+        interpreter.env.insert(argument, value);
+    }
+    match interpreter.exec_region(region)? {
+        Flow::Return(values) | Flow::Values(values) => Ok(values),
+        flow => Err(InterpError::Message(format!(
+            "a region ended without a result ({flow:?})"
+        ))),
+    }
 }
 
 fn function_region(context: &Context, function: OpId, index: usize) -> RegionId {
@@ -368,7 +428,7 @@ impl Interpreter<'_, '_> {
             // A loop's back edge yields what the next iteration carries.
             return Ok(Some(Flow::Values(self.operand_values(&instance)?)));
         }
-        if instance.is::<ReturnOp>() {
+        if instance.is::<ReturnOp>() || instance.is::<crate::layout::ResultOp>() {
             return Ok(Some(Flow::Return(self.operand_values(&instance)?)));
         }
         // A counted loop whose body is still a block list has no declared
@@ -424,11 +484,11 @@ impl Interpreter<'_, '_> {
             .expect("checked by exec_control");
         let edges = terminator.successor_operands();
         let (dest, arg_ids) = if instance.is::<crate::cfg::CondBranchOp>() {
-            let condition = self.value_of(instance.operands()[0])?;
+            let condition = self.decided_by(instance.operands()[0])?;
             let taken = condition.to_i64().unwrap_or_default() != 0;
             edges[if taken { 0 } else { 1 }].clone()
         } else if let Some(switch) = instance.clone().as_interface::<dyn crate::CaseGuard>() {
-            let selector = match self.value_of(switch.selector())? {
+            let selector = match self.decided_by(switch.selector())? {
                 Value::Int(bits) => bits.to_u64(),
                 _ => 0,
             };
@@ -540,7 +600,7 @@ impl Interpreter<'_, '_> {
             }
             let mut evaluated = std::collections::HashSet::new();
             self.demand(predicate, body, &mut evaluated)?;
-            let again = self.value_of(predicate)?.to_i64().unwrap_or_default() != 0;
+            let again = self.decided_by(predicate)?.to_i64().unwrap_or_default() != 0;
             let cone = if again { &continue_cone } else { &exit_cone };
             for &value in cone {
                 self.demand(value, body, &mut evaluated)?;
@@ -566,7 +626,7 @@ impl Interpreter<'_, '_> {
         let binding = gamma.binding();
         // A case is bits, not a number: an `i1` predicate that is true is
         // case 1, whatever a signed reading of its one bit says.
-        let chosen = match self.value_of(gamma.predicate())? {
+        let chosen = match self.decided_by(gamma.predicate())? {
             Value::Int(bits) => bits.to_u64(),
             _ => 0,
         };
@@ -663,6 +723,17 @@ impl Interpreter<'_, '_> {
             .collect()
     }
 
+    // A branch on poison is undefined, as in Alive2.
+    fn decided_by(&self, value: ValueId) -> Result<Value> {
+        match self.value_of(value)? {
+            Value::Poison => Err(InterpError::Undefined(format!(
+                "control flow depends on poison %{}",
+                value.number()
+            ))),
+            decided => Ok(decided),
+        }
+    }
+
     /// A λ of the module is a constant of the program: it needs no binding, so
     /// a value the environment does not hold may still be one.
     fn value_of(&self, value: ValueId) -> Result<Value> {
@@ -685,10 +756,65 @@ impl Interpreter<'_, '_> {
     fn eval_leaf(&mut self, op_id: OpId) -> Result<Vec<Value>> {
         let instance = self.context.get_op(op_id);
         let operands = self.operand_values(&instance)?;
-        if let Some(interp) = instance.clone().as_interface::<dyn Interp>() {
-            return interp.evaluate(&operands, self.state);
+        let spelled = || format!("{}.{}", instance.dialect(), instance.name());
+        let poisoned = operands.iter().any(|value| matches!(value, Value::Poison));
+        if let Some(holds) = self.condition(&instance, &operands, |op, g| op.requires_expr(g))?
+            && (poisoned || !holds)
+        {
+            return Err(InterpError::Undefined(format!(
+                "{} runs where its requires fails",
+                spelled()
+            )));
         }
-        self.eval_semantic(&instance, &operands)
+        // A freeze reads poison, and so does a store of it: its address may not be.
+        let reads_poison = instance.is::<crate::builtin::FreezeOp>()
+            || (instance.is::<StoreOp>() && !matches!(operands.get(1), Some(Value::Poison)));
+        if poisoned && !reads_poison {
+            let accesses = instance.has_interface::<dyn crate::MemoryRead>()
+                || instance.has_interface::<dyn crate::MemoryWrite>()
+                || instance.has_interface::<dyn crate::Intrinsic>();
+            if accesses {
+                return Err(InterpError::Undefined(format!(
+                    "{} accesses memory through poison",
+                    spelled()
+                )));
+            }
+            return Ok(vec![Value::Poison; instance.value_results().len()]);
+        }
+        let values = match instance.clone().as_interface::<dyn Interp>() {
+            Some(interp) => interp.evaluate(&operands, self.state)?,
+            None => self.eval_semantic(&instance, &operands)?,
+        };
+        if self.condition(&instance, &operands, |op, g| op.poison_expr(g))? == Some(true) {
+            return Ok(vec![Value::Poison; values.len()]);
+        }
+        Ok(values)
+    }
+
+    fn condition(
+        &self,
+        instance: &crate::OpHandle,
+        operands: &[Value],
+        condition: fn(&dyn Operation, &mut sem::SemGraph) -> Option<crate::NodeId>,
+    ) -> Result<Option<bool>> {
+        let mut graph = sem::SemGraph::new();
+        if condition(instance.clone().as_dyn_op().as_ref(), &mut graph).is_none() {
+            return Ok(None);
+        }
+        if operands.iter().any(|value| matches!(value, Value::Poison)) {
+            return Ok(Some(true));
+        }
+        let pointer_width = pointer_width(self.context, instance);
+        let symbols: Vec<sem::Value> = operands
+            .iter()
+            .map(|value| to_sem_value(value, pointer_width))
+            .collect::<Result<_>>()?;
+        match sem::execute(&graph, &symbols) {
+            sem::Value::Int(bit) => Ok(Some(bit.to_u64() != 0)),
+            other => Err(InterpError::Message(format!(
+                "a condition evaluated to {other:?}"
+            ))),
+        }
     }
 
     fn eval_semantic(&self, instance: &crate::OpHandle, operands: &[Value]) -> Result<Vec<Value>> {
@@ -743,12 +869,15 @@ fn to_sem_value(value: &Value, pointer_width: u32) -> Result<sem::Value> {
     Ok(match value {
         Value::Int(int) => sem::Value::Int(int.clone()),
         Value::Float(float) => sem::Value::Float(float.clone()),
-        Value::Ptr(address) => sem::Value::Int(APInt::new(pointer_width, *address)),
+        Value::Ptr(address) => sem::Value::Int(APInt::new(u64::from(pointer_width), *address)),
         Value::Tuple(_)
         | Value::Function(_)
         | Value::Rounding(_)
         | Value::FpEnvironment(_)
-        | Value::Unit => {
+        | Value::Type(_)
+        | Value::Layout(_)
+        | Value::Unit
+        | Value::Poison => {
             return Err(InterpError::Message(
                 "value kind has no semantic-expression form".into(),
             ));
@@ -762,11 +891,7 @@ fn from_sem_value(
     ty: crate::TypeId,
     pointer_width: u32,
 ) -> Result<Value> {
-    let ty_data = context.get_type_data(ty);
-    if (ty_data.as_ref() as &dyn std::any::Any)
-        .downcast_ref::<PtrType>()
-        .is_some()
-    {
+    if PtrType::view(context, ty).is_some() {
         let sem::Value::Int(int) = value else {
             return Err(InterpError::Message(
                 "pointer result must be integral".into(),
@@ -774,7 +899,7 @@ fn from_sem_value(
         };
         return Ok(Value::Ptr(int.to_u64()));
     }
-    if let Some(float) = (ty_data.as_ref() as &dyn std::any::Any).downcast_ref::<FloatType>() {
+    if let Some(float) = FloatType::view(context, ty) {
         let float_value = match value {
             sem::Value::Float(float_value) => {
                 float_value.convert(float.exp_width(), float.mant_width(), false)
@@ -793,10 +918,7 @@ fn from_sem_value(
         };
         return Ok(Value::Float(float_value));
     }
-    if (ty_data.as_ref() as &dyn std::any::Any)
-        .downcast_ref::<UnitType>()
-        .is_some()
-    {
+    if UnitType::view(context, ty).is_some() {
         return Ok(Value::Unit);
     }
     let int = match value {
@@ -819,15 +941,9 @@ fn widen_int_to_type(
     ty: crate::TypeId,
     pointer_width: u32,
 ) -> Value {
-    let ty_data = context.get_type_data(ty);
-    let width = if (ty_data.as_ref() as &dyn std::any::Any)
-        .downcast_ref::<PtrType>()
-        .is_some()
-    {
-        pointer_width
-    } else if let Some(integer) =
-        (ty_data.as_ref() as &dyn std::any::Any).downcast_ref::<IntegerType>()
-    {
+    let width = if PtrType::view(context, ty).is_some() {
+        u64::from(pointer_width)
+    } else if let Some(integer) = IntegerType::view(context, ty) {
         integer.width()
     } else {
         return Value::Int(int);
@@ -905,7 +1021,7 @@ impl Interp for LoadOp {
             ));
         };
         let ty = context.get_value(self.result()).ty();
-        let value = read_typed(&state.memory, context.get_type_data(ty).as_ref(), *address)?;
+        let value = read_typed(&context, &state.memory, ty, *address)?;
         Ok(vec![value])
     }
 }
@@ -919,12 +1035,7 @@ impl Interp for StoreOp {
             ));
         };
         let ty = context.get_value(self.operands()[0]).ty();
-        write_typed(
-            &mut state.memory,
-            context.get_type_data(ty).as_ref(),
-            *address,
-            &operands[0],
-        )?;
+        write_typed(&context, &mut state.memory, ty, *address, &operands[0])?;
         Ok(Vec::new())
     }
 }
@@ -942,8 +1053,40 @@ impl Interp for MemcpyOp {
             ));
         };
         let size = operands[2].to_i64().unwrap_or_default() as u64;
-        let bytes = state.memory.read(*source, size)?;
-        state.memory.write(*destination, &bytes)?;
+        state.memory.copy(*destination, *source, size)?;
+        Ok(Vec::new())
+    }
+}
+
+impl Interp for crate::ptr::FieldOp {
+    fn evaluate(&self, operands: &[Value], _: &mut ExecutionState) -> Result<Vec<Value>> {
+        let Value::Ptr(base) = &operands[0] else {
+            return Err(InterpError::Message(
+                "ptr.field base must be a pointer".into(),
+            ));
+        };
+        let offset = DataLayout::for_op(&self.handle().context, self.id())
+            .and_then(|layout| layout.offset_in_bits(self.ty(), &self.field()))
+            .ok_or_else(|| {
+                InterpError::Message(format!("no offset for field '{}'", self.field()))
+            })?;
+        Ok(vec![Value::Ptr(base.wrapping_add(offset / 8))])
+    }
+}
+
+impl Interp for crate::ptr::CopyOp {
+    fn evaluate(&self, operands: &[Value], state: &mut ExecutionState) -> Result<Vec<Value>> {
+        let (Value::Ptr(destination), Value::Ptr(source)) = (&operands[0], &operands[1]) else {
+            return Err(InterpError::Message(
+                "ptr.copy operands must be pointers".into(),
+            ));
+        };
+        let bits = DataLayout::for_op(&self.handle().context, self.id())
+            .and_then(|layout| layout.size_in_bits(self.ty()))
+            .ok_or_else(|| InterpError::Message("ptr.copy of a type with no layout".into()))?;
+        state
+            .memory
+            .copy(*destination, *source, u64::from(bits) / 8)?;
         Ok(Vec::new())
     }
 }
@@ -964,17 +1107,26 @@ impl Interp for MemsetOp {
     }
 }
 
-fn int_width(ty: &dyn crate::Type) -> Option<u32> {
-    let integer = (ty as &dyn std::any::Any).downcast_ref::<IntegerType>()?;
-    Some(integer.width())
-}
-
-fn read_typed(memory: &Memory, ty: &dyn crate::Type, address: u64) -> Result<Value> {
-    if let Some(width) = int_width(ty) {
-        return memory.read_int(address, width).map(Value::Int);
+fn read_typed(
+    context: &Context,
+    memory: &Memory,
+    ty: crate::TypeId,
+    address: u64,
+) -> Result<Value> {
+    let bits = IntegerType::view(context, ty)
+        .map(|integer| integer.width())
+        .or_else(|| FloatType::view(context, ty).map(|float| u64::from(float.bit_width())))
+        .or_else(|| PtrType::view(context, ty).map(|_| 64));
+    if let Some(bits) = bits
+        && !memory.is_written(address, bits / 8)?
+    {
+        return Ok(Value::Poison);
     }
-    if let Some(float) = (ty as &dyn std::any::Any).downcast_ref::<FloatType>() {
-        let bits = memory.read_int(address, float.bit_width())?;
+    if let Some(integer) = IntegerType::view(context, ty) {
+        return memory.read_int(address, integer.width()).map(Value::Int);
+    }
+    if let Some(float) = FloatType::view(context, ty) {
+        let bits = memory.read_int(address, u64::from(float.bit_width()))?;
         return Ok(Value::Float(APFloat::from_bits(
             float.exp_width(),
             float.mant_width(),
@@ -982,10 +1134,7 @@ fn read_typed(memory: &Memory, ty: &dyn crate::Type, address: u64) -> Result<Val
             bits.to_u64() as u128,
         )));
     }
-    if (ty as &dyn std::any::Any)
-        .downcast_ref::<PtrType>()
-        .is_some()
-    {
+    if PtrType::view(context, ty).is_some() {
         return memory
             .read_int(address, 64)
             .map(|bits| Value::Ptr(bits.to_u64()));
@@ -996,29 +1145,35 @@ fn read_typed(memory: &Memory, ty: &dyn crate::Type, address: u64) -> Result<Val
 }
 
 fn write_typed(
+    context: &Context,
     memory: &mut Memory,
-    ty: &dyn crate::Type,
+    ty: crate::TypeId,
     address: u64,
     value: &Value,
 ) -> Result<()> {
+    if matches!(value, Value::Poison) {
+        let bits = IntegerType::view(context, ty)
+            .map(|integer| integer.width())
+            .or_else(|| FloatType::view(context, ty).map(|float| u64::from(float.bit_width())))
+            .or_else(|| PtrType::view(context, ty).map(|_| 64))
+            .ok_or_else(|| InterpError::Message("a store of poison of no size".into()))?;
+        return memory.forget(address, bits / 8);
+    }
     let mismatch = || InterpError::Message("store value must match the pointee".into());
-    if int_width(ty).is_some() {
+    if IntegerType::view(context, ty).is_some() {
         let Value::Int(int) = value else {
             return Err(mismatch());
         };
         return memory.write_int(address, int);
     }
-    if let Some(float) = (ty as &dyn std::any::Any).downcast_ref::<FloatType>() {
+    if let Some(float) = FloatType::view(context, ty) {
         let Value::Float(float_value) = value else {
             return Err(mismatch());
         };
-        let bits = APInt::new(float.bit_width(), float_value.to_bits() as u64);
+        let bits = APInt::new(u64::from(float.bit_width()), float_value.to_bits() as u64);
         return memory.write_int(address, &bits);
     }
-    if (ty as &dyn std::any::Any)
-        .downcast_ref::<PtrType>()
-        .is_some()
-    {
+    if PtrType::view(context, ty).is_some() {
         let Value::Ptr(target) = value else {
             return Err(mismatch());
         };

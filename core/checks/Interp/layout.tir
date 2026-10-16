@@ -1,0 +1,127 @@
+// RUN: tir interp %s -f node | filecheck %s --check-prefix=NODE
+// RUN: tir interp %s -f value | filecheck %s --check-prefix=VALUE
+// RUN: tir interp %s -f vec3 | filecheck %s --check-prefix=VEC3
+// RUN: tir interp %s -f flags | filecheck %s --check-prefix=FLAGS
+// RUN: tir interp %s -f union | filecheck %s --check-prefix=UNION
+// RUN: tir interp %s -f list | filecheck %s --check-prefix=LIST
+// RUN: tir interp %s -f cons | filecheck %s --check-prefix=CONS
+// RUN: tir interp %s -f wide | filecheck %s --check-prefix=WIDE
+// RUN: tir interp %s -f copy | filecheck %s --check-prefix=COPY
+// RUN: tir interp %s -f custom | filecheck %s --check-prefix=CUSTOM
+// RUN: tir interp %s -f aligned | filecheck %s --check-prefix=ALIGNED
+// RUN: tir interp %s -f generic | filecheck %s --check-prefix=GENERIC
+// RUN: tir interp %s -f padded | filecheck %s --check-prefix=PADDED
+
+// Sizes, alignments and offsets in bits, from the spec in scope and the
+// layout regions of the aggregate constructors: fields in order at their
+// alignment, a packed struct at byte alignment, a union at offset zero, a
+// variant's tag first, an integer of any width by its pattern entry, array
+// elements each at their alignment past a size that is no multiple of it, and
+// a definition with a layout region of its own by that region, handed its
+// parameters and raised to its `align` like any other.
+
+#layout_spec = #layout.spec<!i<W> = {size = !nat.align_to<W, 8>, abi = !nat.min<!nat.pow2_ceil<W>, 64>}, !f32 = {size = 32, abi = 32}, !ptr.p = {size = 64, abi = 64}, !unit = {size = 0, abi = 8}>
+
+module {layout.spec = #layout_spec} {
+  type.def !Node = !struct<{next: !ptr.p<!Node>, value: !i32}>
+  type.def !Vec3 layout {align = 128} = !struct<{x: !f32, y: !f32, z: !f32}>
+  type.def !Flags layout {packed} = !struct<{a: !i8, b: !i32}>
+  type.def !U = !union<{a: !i8, b: !i64, c: !i32}>
+  type.def !List<T: data> = !variant<{nil: !unit, cons: !struct<{head: T, tail: !ptr.p<!List<T>>}>}>
+  type.def !Custom = !struct<{x: !i32, y: !i32}> layout (%spec: !layout.spec) {
+    %zero = constant {value = 0} : !i64
+    %one = constant {value = 1} : !i64
+    %far = constant {value = 64} : !i64
+    %size = constant {value = 128} : !i64
+    layout.field %zero, %zero
+    layout.field %one, %far
+    layout.result %size, %far
+  }
+  type.def !Aligned layout {align = 256} = !struct<{x: !i32}> layout (%spec: !layout.spec) {
+    %size = constant {value = 32} : !i64
+    layout.result %size, %size
+  }
+  type.def !Slots<N: nat> = !struct<{x: !i32}> layout (%spec: !layout.spec, %n: !i64) {
+    %width = constant {value = 32} : !i64
+    %size = muli %n, %width : !i64
+    layout.result %size, %width
+  }
+  %fn_node = func.func @node() -> !i64 {
+    %0 = layout.sizeof {ty = !Node} : !i64
+    func.return %0
+  }
+  %fn_value = func.func @value() -> !i64 {
+    %0 = layout.offsetof {ty = !Node, field = "value"} : !i64
+    func.return %0
+  }
+  %fn_vec3 = func.func @vec3() -> !i64 {
+    %0 = layout.sizeof {ty = !Vec3} : !i64
+    func.return %0
+  }
+  %fn_flags = func.func @flags() -> !i64 {
+    %0 = layout.sizeof {ty = !Flags} : !i64
+    func.return %0
+  }
+  %fn_union = func.func @union() -> !i64 {
+    %0 = layout.sizeof {ty = !U} : !i64
+    func.return %0
+  }
+  %fn_list = func.func @list() -> !i64 {
+    %0 = layout.sizeof {ty = !List<!i32>} : !i64
+    func.return %0
+  }
+  %fn_cons = func.func @cons() -> !i64 {
+    %0 = layout.offsetof {ty = !List<!i32>, field = "cons"} : !i64
+    func.return %0
+  }
+  %fn_wide = func.func @wide() -> !i64 {
+    %0 = layout.alignof {ty = !i37} : !i64
+    func.return %0
+  }
+  %fn_copy = func.func @copy() -> !i32 {
+    %a = ptr.alloca {size = 16, align = 8} : !ptr.p
+    %b = ptr.alloca {size = 16, align = 8} : !ptr.p
+    %null = ptr.null : !ptr.p
+    ptr.store %null, %a
+    %zero = constant {value = 0} : !i64
+    %tail = ptr.field %a {ty = !Node, field = "value"} : !ptr.p
+    ptr.store %zero, %tail
+    %v = constant {value = 42} : !i32
+    ptr.store %v, %tail
+    ptr.copy %b, %a {ty = !Node}
+    %field = ptr.field %b {ty = !Node, field = "value"} : !ptr.p
+    %r = ptr.load %field : !i32
+    func.return %r
+  }
+  %fn_custom = func.func @custom() -> !i64 {
+    %0 = layout.offsetof {ty = !Custom, field = "y"} : !i64
+    func.return %0
+  }
+  %fn_aligned = func.func @aligned() -> !i64 {
+    %0 = layout.sizeof {ty = !Aligned} : !i64
+    func.return %0
+  }
+  %fn_padded = func.func @padded() -> !i64 {
+    %0 = layout.sizeof {ty = !array<2, !i37>} : !i64
+    func.return %0
+  }
+  %fn_generic = func.func @generic() -> !i64 {
+    %0 = layout.sizeof {ty = !Slots<3>} : !i64
+    func.return %0
+  }
+  module_end
+}
+
+// NODE: i64 128
+// VALUE: i64 64
+// VEC3: i64 128
+// FLAGS: i64 40
+// UNION: i64 64
+// LIST: i64 192
+// CONS: i64 64
+// WIDE: i64 64
+// COPY: i32 42
+// CUSTOM: i64 64
+// ALIGNED: i64 256
+// GENERIC: i64 96
+// PADDED: i64 128
