@@ -70,9 +70,25 @@ pub fn relative_error(samples: &[f64]) -> f64 {
     let mut deviations: Vec<f64> = sorted.iter().map(|value| (value - median).abs()).collect();
     deviations.sort_by(f64::total_cmp);
     // 1.4826 scales the MAD to a standard deviation and 1.2533 is the median's
-    // efficiency loss against the mean, both for normal data.
-    let error = 1.2533 * 1.4826 * quantile(&deviations, 0.5) / (sorted.len() as f64).sqrt();
+    // efficiency loss against the mean, both for normal data. When half the
+    // samples tie at the median the MAD is 0 however far the rest are, so the
+    // standard deviation stands in.
+    let deviation = match quantile(&deviations, 0.5) {
+        0.0 => standard_deviation(&sorted),
+        mad => 1.4826 * mad,
+    };
+    let error = 1.2533 * deviation / (sorted.len() as f64).sqrt();
     if median == 0.0 { 0.0 } else { error / median }
+}
+
+fn standard_deviation(values: &[f64]) -> f64 {
+    let count = values.len() as f64;
+    let mean = values.iter().sum::<f64>() / count;
+    let variance = values
+        .iter()
+        .map(|value| (value - mean).powi(2))
+        .sum::<f64>();
+    (variance / (count - 1.0).max(1.0)).sqrt()
 }
 
 // Hyndman and Fan type 7.
@@ -89,13 +105,7 @@ fn quantile(sorted: &[f64], probability: f64) -> f64 {
 fn mvalue(sorted: &[f64]) -> f64 {
     const OFFSETS: usize = 4;
     let count = sorted.len() as f64;
-    let mean = sorted.iter().sum::<f64>() / count;
-    let variance = sorted
-        .iter()
-        .map(|value| (value - mean).powi(2))
-        .sum::<f64>()
-        / (count - 1.0).max(1.0);
-    let width = 3.5 * variance.sqrt() / (2.0 * count.cbrt());
+    let width = 3.5 * standard_deviation(sorted) / (2.0 * count.cbrt());
     if width <= 0.0 {
         return 2.0;
     }
@@ -188,5 +198,14 @@ mod tests {
         let distribution = Distribution::of(&[5.0; 30]);
         assert_eq!(distribution.mvalue, 2.0);
         assert_eq!(relative_error(&[5.0; 30]), 0.0);
+    }
+
+    #[test]
+    fn the_error_of_the_median_sees_every_sample() {
+        // MAD 1 of median 3: 1.2533 * 1.4826 / sqrt(5) / 3.
+        let error = relative_error(&[1.0, 2.0, 3.0, 4.0, 5.0]);
+        assert!((error - 0.276_99).abs() < 1e-4, "{error}");
+        let tied = [[10.0; 6].as_slice(), &[100.0; 3]].concat();
+        assert!(relative_error(&tied) > 0.1);
     }
 }
