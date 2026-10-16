@@ -103,6 +103,7 @@ jobs:
     needs: build-and-package
     if: github.event.schedule != '47 20 * * *'
     runs-on: ubuntu-latest
+    timeout-minutes: 300
     env:
       CARGO_MANIFEST_DIR: ${{ github.workspace }}/xtask
     steps:
@@ -112,10 +113,7 @@ jobs:
         with:
           path: target/test-suites/gcc
           key: gcc-torture-9aab80ddc5b2fa0eef80008e718067ab45f42c50
-      # Step timeouts rather than job ones: a timed-out step still uploads the
-      # defects it recorded, and the report files it as a failure.
       - run: target/ci/xtask fcc-fuzz --corpus --fcc "$PWD/target/ci/fcc"
-        timeout-minutes: 60
       - uses: actions/upload-artifact@v7
         if: always()
         with:
@@ -156,6 +154,9 @@ jobs:
       # generated from that seed plus its index and compiled under a pipeline
       # chosen by the same per-program seed, which is what makes the
       # single-seed reproduce command in an issue land on the failure.
+      # Step timeouts rather than job ones: defects are recorded as they are
+      # found, so a timed-out step still uploads them and the report files it
+      # as a failure.
       - name: Fuzz
         timeout-minutes: 90
         run: |

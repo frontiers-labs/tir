@@ -43,7 +43,7 @@ the same amount of time (or less!) to do so.
 
 - `cargo xtask lint` passes cleanly (clippy, rustdoc, ast-grep rules in
   `.config/ast-grep/`, duplicate code; needs `uv`)
-- `cargo build` compiles
+- `cargo build` compiles (needs `mold` on Linux)
 - `cargo xtask test` passes cleanly
 - `cargo fmt` has no additional format changes
 - `cargo xtask test --profile ci --torture` finds no new failures
