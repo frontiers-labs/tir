@@ -1,4 +1,5 @@
 use crate::operation;
+use crate::utils::APInt;
 
 use crate as tir;
 use crate::{
@@ -65,28 +66,29 @@ macro_rules! int_binop {
 }
 
 trait IntegerConditions: Operation {
-    fn at_width(&self, g: &mut tir::sem::SemGraph, value: fn(u32) -> u64) -> Option<tir::NodeId> {
+    fn at_width(&self, g: &mut tir::sem::SemGraph, value: fn(u64) -> APInt) -> Option<tir::NodeId> {
         let context = &self.handle().context;
         let ty = context.get_value(self.handle().operands()[0]).ty();
         let width = crate::builtin::IntegerType::view(context, ty)?.width();
-        let width = u32::try_from(width).ok().filter(|&width| width <= 64)?;
-        Some(crate::sem::con(g, value(width), width))
+        let node = g.add_node(crate::sem::SymKind::Constant);
+        g.set_leaf_data(node, crate::sem::SymPayload::Int(value(width)));
+        Some(node)
     }
 
     fn zero(&self, g: &mut tir::sem::SemGraph) -> Option<tir::NodeId> {
-        self.at_width(g, |_| 0)
+        self.at_width(g, APInt::zero)
     }
 
     fn width(&self, g: &mut tir::sem::SemGraph) -> Option<tir::NodeId> {
-        self.at_width(g, u64::from)
+        self.at_width(g, |width| APInt::new(width, width))
     }
 
     fn smin(&self, g: &mut tir::sem::SemGraph) -> Option<tir::NodeId> {
-        self.at_width(g, |width| 1 << (width - 1))
+        self.at_width(g, |width| APInt::new(width, 1).shl(width - 1))
     }
 
     fn ones(&self, g: &mut tir::sem::SemGraph) -> Option<tir::NodeId> {
-        self.at_width(g, |width| u64::MAX >> (64 - width))
+        self.at_width(g, |width| APInt::zero(width).not())
     }
 
     fn flag(&self, g: &mut tir::sem::SemGraph, name: &str) -> tir::NodeId {

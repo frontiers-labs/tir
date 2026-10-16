@@ -244,9 +244,10 @@ impl Obligation<'_> {
             return None;
         }
         if let Some(constant) = instance.clone().as_interface::<dyn ConstantLike>() {
-            let constant = constant.constant_value();
-            return (constant.width() <= 64)
-                .then(|| con(&mut self.graph, constant.to_u64(), constant.width() as u32));
+            let node = self.graph.add_node(SymKind::Constant);
+            let bits = constant.constant_value().with_signed(false);
+            self.graph.set_leaf_data(node, SymPayload::Int(bits));
+            return Some(node);
         }
         let definition = instance.clone().as_dyn_op();
         let mut scratch = SemGraph::new();

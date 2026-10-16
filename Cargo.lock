@@ -2252,7 +2252,6 @@ dependencies = [
 name = "tir-symbolic"
 version = "0.1.0"
 dependencies = [
- "arc-swap",
  "chumsky",
  "smallvec",
  "tir-adt",

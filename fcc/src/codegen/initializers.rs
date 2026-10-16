@@ -25,12 +25,25 @@ pub(super) fn constant_initializer_data(
     match typed.types().kind(target) {
         TypeKind::Integer(_) | TypeKind::Enum(_) => {
             let info = ast.get_annotation(initializer)?;
-            let value = info.constant?;
-            // A wider object, a `_BitInt` past 64 bits, takes the constant
-            // extended as the initializer's own type extends.
-            let unsigned = info.ty.and_then(|ty| typed.integer_is_signed(ty)) == Some(false);
-            let fill = if value < 0 && !unsigned { 0xff } else { 0 };
-            let mut bytes = value.to_le_bytes().to_vec();
+            let (mut bytes, fill) = match (info.constant, ast.get_leaf_data(initializer)) {
+                // A wider object, a `_BitInt` past 64 bits, takes the constant
+                // extended as the initializer's own type extends.
+                (Some(value), _) => {
+                    let unsigned =
+                        info.ty.and_then(|ty| typed.integer_is_signed(ty)) == Some(false);
+                    let fill = if value < 0 && !unsigned { 0xff } else { 0 };
+                    (value.to_le_bytes().to_vec(), fill)
+                }
+                // A literal too wide for the constant is its own bits.
+                (None, Some(AstLeaf::Int(literal))) => {
+                    let limbs = literal.value.limbs();
+                    (
+                        limbs.iter().flat_map(|limb| limb.to_le_bytes()).collect(),
+                        0,
+                    )
+                }
+                (None, _) => return None,
+            };
             bytes.resize(source_type_layout(typed, target).0 as usize, fill);
             Some(ConstantData {
                 bytes,

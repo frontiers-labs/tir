@@ -10,13 +10,16 @@
 // CHECK: !builtin.i<W> = {size = !nat.align_to<W, !nat.min<!nat.max<!nat.pow2_ceil<W>, 8>, 64>>, abi = !nat.min<!nat.max<!nat.pow2_ceil<W>, 8>, 64>}
 // ARM64: !builtin.i<W> = {size = !nat.align_to<W, !nat.min<!nat.max<!nat.pow2_ceil<W>, 8>, 128>>, abi = !nat.min<!nat.max<!nat.pow2_ceil<W>, 8>, 128>}
 
-// A constant initializer wider than 64 bits extends as its own type does.
+// A constant initializer extends as its own type does, and a literal wider
+// than 64 bits keeps every limb.
 unsigned _BitInt(65) one = 1;
 _BitInt(100) minus_three = -3;
 unsigned _BitInt(70) max_ull = 18446744073709551615ull;
+unsigned _BitInt(128) two_to_64 = 18446744073709551616uwb;
 // CHECK: global @one align 8 bytes [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
 // CHECK: global @minus_three align 8 bytes [253, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255]
 // CHECK: global @max_ull align 8 bytes [255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 0, 0, 0, 0, 0]
+// CHECK: global @two_to_64 align 8 bytes [0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0]
 
 int max_width(void) { return __BITINT_MAXWIDTH__; }
 // CHECK-LABEL: func.func @max_width

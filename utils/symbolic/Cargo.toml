@@ -12,7 +12,6 @@ doctest = false
 tir-adt.workspace = true
 tir-relational.workspace = true
 smallvec = "1.15.2"
-arc-swap = "1.9.2"
 chumsky.workspace = true
 
 [[bin]]

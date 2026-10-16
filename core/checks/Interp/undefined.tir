@@ -4,11 +4,14 @@
 // RUN: not tir interp %s -f branch 2>&1 | filecheck %s --check-prefix=BRANCH
 // RUN: not tir interp %s -f divide 2>&1 | filecheck %s --check-prefix=DIVIDE
 // RUN: not tir interp %s -f assumed 2>&1 | filecheck %s --check-prefix=ASSUMED
+// RUN: tir interp %s -f wide_overflow | filecheck %s --check-prefix=OVERFLOW128
+// RUN: not tir interp %s -f wide_divide 2>&1 | filecheck %s --check-prefix=DIVIDE128
 
 // An op decides how it is undefined. A flagged add yields poison where its
 // flag fails, which only a use makes undefined; a branch on poison is such a
 // use, and a freeze gives some value instead. A division by zero must not run
-// at all, nor may an assumption that fails.
+// at all, nor may an assumption that fails. An integer wider than 64 bits
+// is undefined where a narrow one is.
 
 module {
   %fn_wrap = func.func @wrap() -> !i8 {
@@ -53,6 +56,18 @@ module {
     %1 = constant {value = 7} : !i8
     func.return %1
   }
+  %fn_wide_overflow = func.func @wide_overflow() -> !i128 {
+    %0 = constant {value = 170141183460469231731687303715884105727} : !i128
+    %1 = constant {value = 1} : !i128
+    %2 = addi %0, %1 {nsw = true} : !i128
+    func.return %2
+  }
+  %fn_wide_divide = func.func @wide_divide() -> !i128 {
+    %0 = constant {value = 7} : !i128
+    %1 = constant {value = 0} : !i128
+    %2 = divsi %0, %1 : !i128
+    func.return %0
+  }
   module_end
 }
 
@@ -62,3 +77,5 @@ module {
 // BRANCH: undefined behavior: control flow depends on poison
 // DIVIDE: undefined behavior: builtin.divsi runs where its requires fails
 // ASSUMED: undefined behavior: builtin.assume runs where its requires fails
+// OVERFLOW128: i128 poison
+// DIVIDE128: undefined behavior: builtin.divsi runs where its requires fails

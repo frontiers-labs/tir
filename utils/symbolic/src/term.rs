@@ -6,8 +6,9 @@
 //! never reused, so two equal terms have one id and equality is id equality.
 //! The rows are a chunked relation: a column of constructors and a clustered
 //! table of argument cells. A writer appends under a lock and publishes the
-//! rows; a reader loads the rows last published, which takes no lock. An id means a type only in the store that
-//! minted it; whoever interns owns the store and hands it to every reader.
+//! rows; a reader reads the rows last published under a shared lock. An id
+//! means a type only in the store that minted it; whoever interns owns the
+//! store and hands it to every reader.
 //!
 //! A term interns in normal form. A sum of widths is kept as one sorted
 //! [`ctor::NAT_ADD`] term with its constants folded, so equal sums have one id
@@ -16,9 +17,7 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Arc, Mutex, OnceLock, RwLock};
-
-use arc_swap::ArcSwap;
+use std::sync::{Mutex, OnceLock, RwLock};
 
 use smallvec::SmallVec;
 use tir_relational::chunk::{CHUNK_ROWS, Chunk, Space, chunk_of, id_at, row_of};
@@ -471,8 +470,8 @@ impl<T> Segmented<T> {
 pub struct Terms {
     /// The rows a writer appends to.
     rows: Mutex<Rows>,
-    /// The rows as the last append left them, which a reader loads.
-    published: ArcSwap<Rows>,
+    /// The rows as the last append left them, which a reader reads.
+    published: RwLock<Rows>,
     /// Ids published so far.
     minted: AtomicU32,
     // Sharded by constructor so parallel interning of different constructors
@@ -511,7 +510,7 @@ impl Terms {
     pub fn new() -> Self {
         let terms = Terms {
             rows: Mutex::default(),
-            published: ArcSwap::from_pointee(Rows::default()),
+            published: RwLock::default(),
             minted: AtomicU32::new(0),
             lookup: std::array::from_fn(|_| RwLock::default()),
             ctors: Segmented::new(),
@@ -546,7 +545,7 @@ impl Terms {
     // Publish `rows` for readers: a clone copies a pointer per page, and the
     // next append copies only the chunk it writes.
     fn publish(&self, rows: &Rows) {
-        self.published.store(Arc::new(rows.clone()));
+        *self.published.write().unwrap_or_else(|e| e.into_inner()) = rows.clone();
         // Counted once readable: an id below `len` is in what a reader loads.
         let minted = match rows.chunks() {
             0 => 0,
@@ -581,12 +580,8 @@ impl Terms {
             let chunk = rows.find(index).filter(|chunk| row < chunk.len())?;
             Some((CtorId(chunk.cell(0, row)), chunk.seg(0).of(row)))
         }
-        let rows = self.published.load();
-        if let Some((ctor, found)) = cells(&rows, index, row) {
-            return read(ctor, found);
-        }
-        // Another thread's intern may have published past an older load.
-        let rows = self.published.load();
+        // `read` takes no lock, so holding this one cannot deadlock.
+        let rows = self.published.read().unwrap_or_else(|e| e.into_inner());
         let (ctor, found) = cells(&rows, index, row).expect("an id this store minted");
         read(ctor, found)
     }

@@ -1,7 +1,8 @@
 // RUN: tir opt --verify %s | filecheck %s
 
 // A refinement is no type: the checker proves its predicate with the solver.
-// Masked with 7, any value is below 10.
+// Masked with 7, any value is below 10. A constant wider than 64 bits is
+// read as its value too.
 
 module {
   %fn_f = func.func @f(%x: !i64) -> !i64 {
@@ -12,7 +13,15 @@ module {
     %4 = refine %1, %3 : !i64
     func.return %4
   }
+  %fn_wide = func.func @wide(%x: !i200) -> !i200 {
+    %0 = constant {value = 100} : !i200
+    %1 = constant {value = 200} : !i200
+    %2 = cmpi %0, %1 {predicate = "ult"} : !i1
+    %3 = refine %x, %2 : !i200
+    func.return %3
+  }
   module_end
 }
 
 // CHECK: refine %{{[0-9]+}}, %{{[0-9]+}} : !i64
+// CHECK: refine %{{[0-9]+}}, %{{[0-9]+}} : !i200
