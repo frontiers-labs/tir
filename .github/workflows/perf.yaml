@@ -82,8 +82,11 @@ jobs:
           name: benchmark-functions-${{ matrix.runner }}
           path: bench-results
 
+  # A job that fails on one runner must not discard what the others measured.
+  # The failure still opens an issue below.
   record:
     needs: [programs, functions]
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     permissions:
       contents: write
