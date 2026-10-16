@@ -97,6 +97,13 @@
    "subject": "fix(riscv): limit X100 stores to one per cycle (#536)",
    "time": "2026-10-05T12:21:06.000Z",
    "env_key": "rustc 1.99.0 (b940084d7 2026-09-28); valgrind-3.22.0; ldd (Ubuntu GLIBC 2.39-0ubuntu8.9) 2.39"
+  },
+  {
+   "file": "runs/2026-10-16T20-31-04-000Z-5c7bcc959d1a.json",
+   "commit": "5c7bcc959d1a9b54cf5712390fb8c6d4fd7349f6",
+   "subject": "ci(perf): stop benching the xtask library and stop reporting regressions (#724)",
+   "time": "2026-10-16T20:31:04.000Z",
+   "env_key": "rustc 1.99.1 (58cf8f9c3 2026-10-13); valgrind-3.22.0; ldd (Ubuntu GLIBC 2.39-0ubuntu8.9) 2.39"
   }
  ]
 }
