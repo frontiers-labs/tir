@@ -1,7 +1,7 @@
 //! State shared by every benchmark of a target: options, the host lock, the
-//! result bundle, and the measurement of processes and counted functions.
-use std::collections::BTreeSet;
-use std::path::PathBuf;
+//! result bundle, and the measurement of processes and timed functions.
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, ensure};
@@ -9,20 +9,9 @@ use serde_json::{Value, json};
 
 use crate::results::{self, Metrics, Record, Results, Variant};
 use crate::{
-    Command, Engine, Measure, Options, ProcessCase, build_configuration, environment, options,
-    process, program, source_cache,
+    Options, ProcessCase, build_configuration, environment, options, process, program,
+    source_cache, statistics,
 };
-
-#[derive(Clone, Copy, PartialEq)]
-pub(crate) enum Mode {
-    List,
-    /// Native engine: Criterion times functions and processes are sampled.
-    Time,
-    /// Cachegrind engine: processes run once and functions are queued for children.
-    Count,
-    /// A child of the Cachegrind engine that executes one function benchmark.
-    CountChild,
-}
 
 enum Filter {
     All,
@@ -32,18 +21,16 @@ enum Filter {
 
 pub(crate) struct Harness {
     pub(crate) options: Options,
-    pub(crate) mode: Mode,
     filter: Filter,
-    /// The result bundle. Created on first use so native function runs leave none.
+    /// The result bundle, created on first use.
     directory: Option<PathBuf>,
-    target: PathBuf,
+    pub(crate) target: PathBuf,
     pub(crate) workspace: PathBuf,
     pub(crate) compilers: Option<program::CompilerSet>,
     results: Results,
     seen: BTreeSet<String>,
-    /// Function benchmarks awaiting their Cachegrind child.
-    pub(crate) functions: Vec<String>,
-    pub(crate) counted: bool,
+    /// Function benchmarks Criterion timed, recorded from its samples at the end.
+    timed: Vec<String>,
     pub(crate) failure: Option<anyhow::Error>,
     environment: Option<environment::EnvironmentGuard>,
 }
@@ -62,42 +49,26 @@ impl Harness {
             Some(filter) if options.exact => Filter::Exact(filter.clone()),
             Some(filter) => Filter::Regex(regex::Regex::new(filter)?),
         };
-        let mode = if options.count_function.is_some() {
-            Mode::CountChild
-        } else if options.list {
-            Mode::List
-        } else if options.engine == Engine::Cachegrind {
-            Mode::Count
-        } else {
-            Mode::Time
-        };
         let mut harness = Self {
-            mode,
             filter,
             directory: None,
             target: PathBuf::new(),
             workspace: PathBuf::new(),
             compilers: None,
             results: Results {
-                schema: 3,
+                schema: 4,
                 namespace: namespace.into(),
-                engine: options.engine,
                 environment: Value::Null,
                 provenance: Value::Null,
                 status: "incomplete".into(),
                 cases: Vec::new(),
             },
             seen: BTreeSet::new(),
-            functions: Vec::new(),
-            counted: false,
+            timed: Vec::new(),
             failure: None,
             environment: None,
             options,
         };
-        // The parent holds the host lock and owns the bundle.
-        if harness.mode == Mode::CountChild {
-            return Ok(harness);
-        }
         let timeout = harness.timeout();
         (harness.target, harness.workspace) = cargo_directories(timeout)?;
         for path in [&mut harness.options.output, &mut harness.options.baseline]
@@ -108,7 +79,7 @@ impl Harness {
                 *path = harness.workspace.join(&*path);
             }
         }
-        if harness.mode == Mode::List {
+        if harness.listing() {
             return Ok(harness);
         }
         let guard = environment::EnvironmentGuard::acquire(
@@ -153,21 +124,16 @@ impl Harness {
         ));
         std::fs::create_dir(&path)?;
         let directory = path.canonicalize()?;
-        if self.options.engine == Engine::Cachegrind {
-            let version =
-                process::probe_cachegrind(&directory.join("valgrind-version"), self.timeout())?;
-            self.results.environment["valgrind"] = json!(version);
-        }
         self.results.save(&directory)?;
         self.directory = Some(directory.clone());
         Ok(directory)
     }
 
     pub(crate) fn listing(&self) -> bool {
-        self.mode == Mode::List
+        self.options.list
     }
     pub(crate) fn skips_programs(&self) -> bool {
-        self.options.skip_programs || self.mode == Mode::CountChild
+        self.options.skip_programs
     }
     pub(crate) fn source_cache(&self) -> PathBuf {
         source_cache(&self.target)
@@ -177,28 +143,23 @@ impl Harness {
     }
 
     pub(crate) fn matches(&self, id: &str) -> bool {
-        match (&self.options.count_function, &self.filter) {
-            (Some(function), _) => function == id,
-            (None, Filter::All) => true,
-            (None, Filter::Regex(regex)) => regex.is_match(id),
-            (None, Filter::Exact(exact)) => exact == id,
+        match &self.filter {
+            Filter::All => true,
+            Filter::Regex(regex) => regex.is_match(id),
+            Filter::Exact(exact) => exact == id,
         }
     }
 
-    pub(crate) fn function(&mut self, id: &str) -> Option<Measure<()>> {
+    pub(crate) fn times(&mut self, id: &str) -> bool {
         if self.failure.is_some() || !self.matches(id) {
-            return None;
+            return false;
         }
-        match self.mode {
-            Mode::List => self.attempt(|harness| harness.list_case(id)),
-            Mode::Count => self.functions.push(id.into()),
-            Mode::Time => return Some(Measure::Time(())),
-            Mode::CountChild => {
-                self.counted = true;
-                return Some(Measure::Count);
-            }
+        if self.listing() {
+            self.attempt(|harness| harness.list_case(id));
+            return false;
         }
-        None
+        self.timed.push(id.into());
+        true
     }
 
     pub(crate) fn list_case(&mut self, id: &str) -> Result<()> {
@@ -231,19 +192,14 @@ impl Harness {
                 case.id
             );
         }
-        let counting = self.options.engine == Engine::Cachegrind;
-        let (rounds, warmups) = if counting {
-            (1, 0)
-        } else {
-            let samples = self
-                .options
-                .sample_size
-                .unwrap_or(options::DEFAULT_PROCESS_SAMPLES);
-            (u64::from(samples), u64::from(self.options.warmups))
+        let (least, most) = match self.options.sample_size {
+            Some(samples) => (samples, samples),
+            None => (options::MIN_PROCESS_SAMPLES, options::MAX_PROCESS_SAMPLES),
         };
+        let warmups = self.options.warmups;
         let directory = self.bundle()?;
         let mut samples = vec![Vec::new(); cases.len()];
-        for round in 0..rounds + warmups {
+        for round in 0..warmups + most {
             for offset in 0..cases.len() {
                 let index = (round as usize + offset) % cases.len();
                 let case = &cases[index];
@@ -253,7 +209,7 @@ impl Harness {
                     .join(round.to_string());
                 let sample = case
                     .command
-                    .execute(&dir, self.timeout(), self.options.engine)
+                    .run(&dir, self.timeout())
                     .with_context(|| format!("benchmark {}", case.id))?;
                 if let Some(verify) = &case.verify {
                     verify(&sample.stdout).with_context(|| format!("validator for {}", case.id))?;
@@ -261,49 +217,47 @@ impl Harness {
                 if round < warmups {
                     continue;
                 }
-                samples[index].push(if counting {
-                    counted(&case.id, sample.counters)?
-                } else {
-                    Metrics::from([
-                        ("latency".into(), sample.wall_ns),
-                        ("user_cpu_ns".into(), sample.user_ns),
-                        ("system_cpu_ns".into(), sample.system_ns),
-                        (
-                            "peak_process_rss_bytes".into(),
-                            sample.peak_process_rss_bytes as f64,
-                        ),
-                    ])
-                });
+                samples[index].push(Metrics::from([
+                    ("latency".into(), sample.wall_ns),
+                    ("user_cpu_ns".into(), sample.user_ns),
+                    ("system_cpu_ns".into(), sample.system_ns),
+                    (
+                        "peak_process_rss_bytes".into(),
+                        sample.peak_process_rss_bytes as f64,
+                    ),
+                ]));
+            }
+            let stable = |samples: &Vec<Metrics>| {
+                let latencies: Vec<f64> = samples.iter().map(|sample| sample["latency"]).collect();
+                statistics::relative_error(&latencies) <= options::TARGET_RELATIVE_ERROR
+            };
+            if round + 1 >= warmups + least && samples.iter().all(stable) {
+                break;
             }
         }
         for (case, samples) in cases.into_iter().zip(samples) {
-            let metadata =
-                json!({"workload":case.metadata,"trace_children":case.command.trace_children});
+            let metadata = json!({"workload": case.metadata});
             self.record(case.id, metadata, case.gate, case.variant, samples)?;
         }
         Ok(())
     }
 
-    pub(crate) fn count_functions(&mut self) -> Result<()> {
-        let functions = std::mem::take(&mut self.functions);
-        if functions.is_empty() {
+    // One sample per Criterion sample, as the time of one iteration.
+    pub(crate) fn record_functions(&mut self) -> Result<()> {
+        let timed = std::mem::take(&mut self.timed);
+        if timed.is_empty() {
             return Ok(());
         }
-        let executable = std::env::current_exe()?;
-        let directory = self.bundle()?;
-        for id in functions {
-            let sample = Command::new(&executable)
-                .args(["--bench", "--count-function", &id])
-                .current_dir(std::env::current_dir()?)
-                .instrument_at_start(false)
-                .execute(
-                    &directory.join("samples").join(safe_id(&id)),
-                    self.timeout(),
-                    Engine::Cachegrind,
-                )
-                .with_context(|| format!("benchmark {id}"))?;
-            let counters = counted(&id, sample.counters)?;
-            self.record(id, json!({"scope": "function"}), true, None, vec![counters])?;
+        let mut sampled = criterion_samples(&self.target.join("criterion"))?;
+        for id in timed {
+            let latencies = sampled
+                .remove(&id)
+                .with_context(|| format!("Criterion stored no samples for {id}"))?;
+            let samples = latencies
+                .into_iter()
+                .map(|latency| Metrics::from([("latency".into(), latency)]))
+                .collect();
+            self.record(id, json!({"scope": "function"}), true, None, samples)?;
         }
         Ok(())
     }
@@ -332,17 +286,8 @@ impl Harness {
     }
 
     pub(crate) fn finish(mut self) -> Result<()> {
-        match self.mode {
-            Mode::List => return Ok(()),
-            Mode::CountChild => {
-                ensure!(
-                    self.counted,
-                    "function benchmark {} is not registered",
-                    self.options.count_function.as_deref().unwrap_or_default()
-                );
-                return Ok(());
-            }
-            Mode::Time | Mode::Count => {}
+        if self.listing() {
+            return Ok(());
         }
         ensure!(
             self.results.cases.len() >= self.options.min_cases,
@@ -350,7 +295,6 @@ impl Harness {
             self.options.min_cases,
             self.results.cases.len()
         );
-        // Natively timed functions are reported and stored by Criterion alone.
         let Some(directory) = self.directory.clone() else {
             return Ok(());
         };
@@ -374,12 +318,45 @@ impl Harness {
     }
 }
 
-fn counted(id: &str, counters: Metrics) -> Result<Metrics> {
-    ensure!(
-        counters.get("Ir").is_some_and(|v| *v > 0.0),
-        "Cachegrind did not observe instructions for {id}"
-    );
-    Ok(counters)
+// Criterion keeps the latest samples of a benchmark in a `new` directory, next
+// to a description that names the benchmark.
+fn criterion_samples(directory: &Path) -> Result<BTreeMap<String, Vec<f64>>> {
+    #[derive(serde::Deserialize)]
+    struct Benchmark {
+        full_id: String,
+    }
+    #[derive(serde::Deserialize)]
+    struct Sample {
+        iters: Vec<f64>,
+        times: Vec<f64>,
+    }
+    let read = |path: PathBuf| -> Result<Vec<u8>> {
+        std::fs::read(&path).with_context(|| format!("reading {}", path.display()))
+    };
+    let mut samples = BTreeMap::new();
+    let mut pending = vec![directory.to_owned()];
+    while let Some(directory) = pending.pop() {
+        for entry in std::fs::read_dir(&directory)? {
+            let path = entry?.path();
+            if !path.is_dir() {
+                continue;
+            }
+            if path.ends_with("new") && path.join("benchmark.json").is_file() {
+                let benchmark: Benchmark =
+                    serde_json::from_slice(&read(path.join("benchmark.json"))?)?;
+                let sample: Sample = serde_json::from_slice(&read(path.join("sample.json"))?)?;
+                let latencies = sample
+                    .times
+                    .iter()
+                    .zip(&sample.iters)
+                    .map(|(time, iters)| time / iters);
+                samples.insert(benchmark.full_id, latencies.collect());
+            } else {
+                pending.push(path);
+            }
+        }
+    }
+    Ok(samples)
 }
 
 fn safe_id(id: &str) -> String {

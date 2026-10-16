@@ -5,102 +5,25 @@ use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::{Engine, Options};
+use crate::Options;
+use crate::statistics::{Distribution, Modality};
 
 pub type Metrics = BTreeMap<String, f64>;
 
 /// Metrics the summary exports, as key, label, unit and description, in the
 /// order benchboard lists them. Other sampled values stay in `results.json`.
-const METRICS: [(&str, &str, &str, &str); 15] = [
+const METRICS: [(&str, &str, &str, &str); 2] = [
     (
         "latency",
         "Wall time",
         "ns",
-        "Elapsed time of one execution. Median of the samples, with their median absolute deviation as the spread.",
+        "Elapsed time of one execution. Median of the samples, with the quartiles as the spread. Lower is better.",
     ),
     (
         "peak_process_rss_bytes",
         "Peak memory",
         "bytes",
-        "Largest resident set size of the measured process. Maximum over the samples.",
-    ),
-    (
-        "Ir",
-        "Instructions",
-        "count",
-        "Instructions executed under Cachegrind. Repeats to about 0.2% on shared runners, so regressions are gated on it.",
-    ),
-    (
-        "Dr",
-        "Data reads",
-        "count",
-        "Memory reads executed under Cachegrind.",
-    ),
-    (
-        "Dw",
-        "Data writes",
-        "count",
-        "Memory writes executed under Cachegrind.",
-    ),
-    (
-        "I1mr",
-        "L1 instruction misses",
-        "count",
-        "Instruction fetches that miss Cachegrind's simulated first-level cache.",
-    ),
-    (
-        "ILmr",
-        "Last-level instruction misses",
-        "count",
-        "Instruction fetches that miss Cachegrind's simulated last-level cache.",
-    ),
-    (
-        "D1mr",
-        "L1 data read misses",
-        "count",
-        "Memory reads that miss Cachegrind's simulated first-level cache.",
-    ),
-    (
-        "D1mw",
-        "L1 data write misses",
-        "count",
-        "Memory writes that miss Cachegrind's simulated first-level cache.",
-    ),
-    (
-        "DLmr",
-        "Last-level data read misses",
-        "count",
-        "Memory reads that miss Cachegrind's simulated last-level cache.",
-    ),
-    (
-        "DLmw",
-        "Last-level data write misses",
-        "count",
-        "Memory writes that miss Cachegrind's simulated last-level cache.",
-    ),
-    (
-        "Bc",
-        "Conditional branches",
-        "count",
-        "Conditional branches executed under Cachegrind.",
-    ),
-    (
-        "Bcm",
-        "Conditional branch mispredictions",
-        "count",
-        "Conditional branches that Cachegrind's simulated predictor gets wrong.",
-    ),
-    (
-        "Bi",
-        "Indirect branches",
-        "count",
-        "Indirect branches executed under Cachegrind.",
-    ),
-    (
-        "Bim",
-        "Indirect branch mispredictions",
-        "count",
-        "Indirect branches that Cachegrind's simulated predictor gets wrong.",
+        "Largest resident set size of the measured process. Maximum over the samples. Lower is better.",
     ),
 ];
 
@@ -132,14 +55,13 @@ pub struct Record {
 pub struct Results {
     pub schema: u32,
     pub namespace: String,
-    pub engine: Engine,
     pub environment: Value,
     pub provenance: Value,
     pub status: String,
     pub cases: Vec<Record>,
 }
 
-pub fn median(values: &mut [f64]) -> f64 {
+fn median(values: &mut [f64]) -> f64 {
     values.sort_by(f64::total_cmp);
     let n = values.len();
     if n.is_multiple_of(2) {
@@ -163,15 +85,23 @@ pub fn summarize(samples: &[Metrics]) -> Result<Metrics> {
             values.iter().all(|v| v.is_finite() && *v >= 0.0),
             "invalid metric {key}"
         );
-        let value = if key == "peak_process_rss_bytes" {
-            values.iter().copied().fold(0.0, f64::max)
-        } else {
-            median(&mut values)
-        };
-        result.insert(key.clone(), value);
-        if key == "latency" {
-            let mut deviations = values.iter().map(|v| (v - value).abs()).collect::<Vec<_>>();
-            result.insert("latency_mad_ns".into(), median(&mut deviations));
+        match key.as_str() {
+            "peak_process_rss_bytes" => {
+                result.insert(key.clone(), values.iter().copied().fold(0.0, f64::max));
+            }
+            "latency" => {
+                let distribution = Distribution::of(&values);
+                result.extend([
+                    ("latency".into(), distribution.median),
+                    ("latency_lower_quartile".into(), distribution.lower_quartile),
+                    ("latency_upper_quartile".into(), distribution.upper_quartile),
+                    ("latency_outliers".into(), distribution.outliers as f64),
+                    ("latency_mvalue".into(), distribution.mvalue),
+                ]);
+            }
+            _ => {
+                result.insert(key.clone(), median(&mut values));
+            }
         }
     }
     Ok(result)
@@ -180,16 +110,19 @@ pub fn summarize(samples: &[Metrics]) -> Result<Metrics> {
 /// Print one case the way Criterion prints a benchmark: its name, then labelled values.
 pub fn report(id: &str, summary: &Metrics, samples: usize) {
     println!("{id}");
-    if let Some(instructions) = summary.get("Ir") {
-        println!("{:24}instructions: {instructions}", "");
-    }
     if let Some(latency) = summary.get("latency") {
         println!(
-            "{:24}time:   {} (median of {samples}, MAD {})",
+            "{:24}time:   {} (median of {samples}, quartiles {} to {})",
             "",
             duration(*latency),
-            duration(summary["latency_mad_ns"])
+            duration(summary["latency_lower_quartile"]),
+            duration(summary["latency_upper_quartile"]),
         );
+        let modality = Modality::of(summary["latency_mvalue"]);
+        let outliers = summary["latency_outliers"];
+        if modality != Modality::Unimodal || outliers > 0.0 {
+            println!("{:24}shape:  {}, {outliers} outliers", "", modality.name());
+        }
     }
     if let Some(rss) = summary.get("peak_process_rss_bytes") {
         println!("{:24}rss:    {:.1} MiB peak", "", rss / (1024.0 * 1024.0));
@@ -218,12 +151,19 @@ impl Results {
                 json!({"key": key, "label": label, "unit": unit, "description": description})
             })
             .collect();
+        // One record on benchboard holds every architecture, so ids and groups
+        // name theirs. The CPU model tells runners of one architecture apart.
+        let architecture = self.environment["architecture"]
+            .as_str()
+            .unwrap_or("unknown");
+        let cpu = self.environment["cpu_model"].as_str().unwrap_or("unknown");
+        let id = |case: &Record| format!("{architecture}/{}", case.id);
         let results: BTreeMap<_, BTreeMap<_, _>> = self
             .cases
             .iter()
             .map(|case| {
                 (
-                    &case.id,
+                    id(case),
                     METRICS
                         .iter()
                         .filter_map(|(key, ..)| measure(case, key))
@@ -234,9 +174,24 @@ impl Results {
         let variants: BTreeMap<_, _> = self
             .cases
             .iter()
-            .filter_map(|case| Some((&case.id, case.variant.as_ref()?)))
+            .filter_map(|case| {
+                let variant = case.variant.as_ref()?;
+                let group = format!("{} on {architecture}", variant.group);
+                Some((
+                    id(case),
+                    Variant {
+                        group,
+                        ..variant.clone()
+                    },
+                ))
+            })
             .collect();
-        let summary = json!({"metrics": metrics, "results": results, "variants": variants});
+        let summary = json!({
+            "metrics": metrics,
+            "environment": format!("{architecture} {cpu}"),
+            "results": results,
+            "variants": variants,
+        });
         std::fs::write(
             directory.join("results.json"),
             serde_json::to_vec_pretty(self)?,
@@ -251,14 +206,11 @@ impl Results {
     pub fn compare(&self, old: &Self, options: &Options) -> Result<()> {
         ensure!(old.status == "complete", "baseline is incomplete");
         ensure!(
-            self.schema == old.schema
-                && self.namespace == old.namespace
-                && self.engine == old.engine,
+            self.schema == old.schema && self.namespace == old.namespace,
             "baseline measurement contract differs"
         );
         ensure!(
-            environment_contract(&self.environment, self.engine)
-                == environment_contract(&old.environment, old.engine),
+            self.environment == old.environment,
             "baseline environment differs"
         );
         let before: BTreeMap<_, _> = old.cases.iter().map(|c| (&c.id, c)).collect();
@@ -289,7 +241,7 @@ impl Results {
             if !case.gate {
                 continue;
             }
-            for metric in ["latency", "Ir", "peak_process_rss_bytes"] {
+            for metric in ["latency", "peak_process_rss_bytes"] {
                 let Some(&value) = case.summary.get(metric) else {
                     continue;
                 };
@@ -319,9 +271,10 @@ fn measure<'a>(case: &Record, key: &'a str) -> Option<(&'a str, Value)> {
     let value = *case.summary.get(key)?;
     let mut measure = json!({"value": value});
     if key == "latency" {
-        let deviation = case.summary["latency_mad_ns"];
-        measure["lower_value"] = json!(value - deviation);
-        measure["upper_value"] = json!(value + deviation);
+        measure["lower_value"] = json!(case.summary["latency_lower_quartile"]);
+        measure["upper_value"] = json!(case.summary["latency_upper_quartile"]);
+        measure["samples"] = case.samples.iter().map(|sample| sample[key]).collect();
+        measure["modality"] = json!(Modality::of(case.summary["latency_mvalue"]).name());
     }
     Some((key, measure))
 }
@@ -332,19 +285,6 @@ fn workload_contract(metadata: &Value) -> Value {
         object.remove("provenance");
         if let Some(workload) = object.get_mut("workload").and_then(Value::as_object_mut) {
             workload.remove("provenance");
-        }
-    }
-    contract
-}
-
-fn environment_contract(environment: &Value, engine: Engine) -> Value {
-    let mut contract = environment.clone();
-    if engine == Engine::Cachegrind
-        && let Some(object) = contract.as_object_mut()
-    {
-        // Counts use a fixed simulated cache; physical scheduling is not the model.
-        for key in ["hostname", "cpu", "allowed_cpus", "applied_cpus"] {
-            object.remove(key);
         }
     }
     contract
@@ -362,7 +302,7 @@ mod tests {
         .map(|v| serde_json::from_value(v).unwrap());
         let summary = summarize(&samples).unwrap();
         assert_eq!(summary["latency"], 3.);
-        assert_eq!(summary["latency_mad_ns"], 1.);
+        assert_eq!(summary["latency_lower_quartile"], 2.5);
         assert_eq!(summary["peak_process_rss_bytes"], 10.);
     }
 }

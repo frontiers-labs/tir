@@ -28,42 +28,18 @@ env:
   CARGO_INCREMENTAL: "0"
 
 jobs:
-  # Cargo builds the measured compiler in the bench profile. Shared CI uses
-  # instruction counts; native wall-time gates require a dedicated runner.
+  # Wall time on shared runners, one program per job so the programs run in
+  # parallel. Each runner's CPU model goes with its results, so benchboard keeps
+  # one history line per machine. fcc, gcc and clang are sampled in rotated
+  # order on one runner, so their ratios stay comparable.
   programs:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 360
-    outputs:
-      environment: ${{ steps.environment.outputs.key }}
-    steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: rui314/setup-mold@v1
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: bench
-      - run: sudo apt-get update && sudo apt-get install -y clang valgrind time
-      - name: Identify the measurement environment
-        id: environment
-        run: echo "key=$(bash .github/scripts/run-perf-benchmarks.sh environment)" >> "$GITHUB_OUTPUT"
-      - uses: actions/cache@v6
-        with:
-          path: target/bench-sources
-          key: coremark-source-1f483d5b8316753a742cbf5590caf5bd0a4e4777
-      # Output validation stays outside profiling. Full program execution uses
-      # the same fixed arguments as local runs and needs a longer timeout.
-      - name: Count program compilation and runtime
-        run: bash .github/scripts/run-perf-benchmarks.sh programs
-      - uses: actions/upload-artifact@v7
-        if: always()
-        with:
-          name: benchmark-programs
-          path: bench-results
-
-  # The same programs compiled by fcc, gcc and clang, for time and memory.
-  native:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+        program: [coremark, dhrystone]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -77,18 +53,20 @@ jobs:
           path: target/bench-sources
           key: coremark-source-1f483d5b8316753a742cbf5590caf5bd0a4e4777
       - name: Time compilation and runtime against gcc and clang
-        run: bash .github/scripts/run-perf-benchmarks.sh native
+        run: bash .github/scripts/run-perf-benchmarks.sh ${{ matrix.program }}
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: benchmark-native
+          name: benchmark-${{ matrix.program }}-${{ matrix.runner }}
           path: bench-results
 
   functions:
-    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
-    outputs:
-      environment: ${{ steps.environment.outputs.key }}
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -96,20 +74,16 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: bench-functions
-      - run: sudo apt-get update && sudo apt-get install -y valgrind
-      - name: Identify the measurement environment
-        id: environment
-        run: echo "key=$(bash .github/scripts/run-perf-benchmarks.sh environment)" >> "$GITHUB_OUTPUT"
-      - name: Count Rust functions
+      - name: Time Rust functions
         run: bash .github/scripts/run-perf-benchmarks.sh functions
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: benchmark-functions
+          name: benchmark-functions-${{ matrix.runner }}
           path: bench-results
 
   record:
-    needs: [programs, native, functions]
+    needs: [programs, functions]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -119,21 +93,20 @@ jobs:
         with:
           pattern: benchmark-*
           path: results
-      - uses: frontiers-labs/benchboard@549cc7330a418e41bf18098f0abe5ef972068846
+      # Benchboard marks history where the toolchains change.
+      - id: environment
+        run: echo "key=$(sort -u results/*/environment | paste -sd '|')" >> "$GITHUB_OUTPUT"
+      - uses: frontiers-labs/benchboard@ed901678d4edc1219aacbd4c94479c6e4d5fb779
         with:
           results: results/**/summary.json
           issue-label: ''
-          # The two jobs can land on different runner images, so both keys count.
-          env-key: >-
-            ${{ needs.programs.outputs.environment == needs.functions.outputs.environment
-            && needs.programs.outputs.environment
-            || format('programs: {0} | functions: {1}', needs.programs.outputs.environment, needs.functions.outputs.environment) }}
+          env-key: ${{ steps.environment.outputs.key }}
           data-branch: ${{ inputs.data-branch || 'perf-data' }}
 
   # A benchmark that fails to build, run or validate is a defect of its own,
   # and no comparison exists to report it.
   report-failure:
-    needs: [programs, native, functions, record]
+    needs: [programs, functions, record]
     if: failure() && github.event_name == 'push'
     runs-on: ubuntu-24.04
     permissions:
@@ -149,5 +122,5 @@ jobs:
           if [ -n "$number" ]; then
             gh issue comment "$number" --body "Failed again at ${GITHUB_SHA} in $RUN_URL."
           else
-            gh issue create --title "$title" --body "The Perf workflow failed at ${GITHUB_SHA} in $RUN_URL. Reproduce with \`bash .github/scripts/run-perf-benchmarks.sh programs\`, \`native\` or \`functions\`."
+            gh issue create --title "$title" --body "The Perf workflow failed at ${GITHUB_SHA} in $RUN_URL. Reproduce with \`bash .github/scripts/run-perf-benchmarks.sh\` and the failed job's program or \`functions\`."
           fi

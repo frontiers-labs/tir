@@ -1,9 +1,8 @@
 //! Cargo benchmark harness with Criterion's interface.
 //!
 //! Function benchmarks are timed by Criterion itself. External programs are
-//! compiled, verified and measured as processes. Under `--engine cachegrind`
-//! both kinds report instruction, cache and branch counts in one result bundle.
-mod cachegrind;
+//! compiled, verified and measured as processes. Both kinds land in one result
+//! bundle with their samples and the shape of their distribution.
 pub mod environment;
 mod harness;
 mod options;
@@ -11,19 +10,19 @@ pub mod process;
 pub mod program;
 mod results;
 pub mod sources;
+mod statistics;
 
 pub use anyhow::Result;
 pub use criterion::{BatchSize, Throughput};
-pub use options::{DEFAULT_TIMEOUT_SECS, Engine, Options, Phase};
+pub use options::{DEFAULT_TIMEOUT_SECS, Options, Phase};
 pub use process::Command;
 pub use program::Program;
 pub use results::Variant;
 
 use clap::Parser;
 use criterion::measurement::WallTime;
-use harness::{Harness, Mode};
+use harness::Harness;
 use serde_json::{Value, json};
-use std::hint::black_box;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -118,7 +117,7 @@ impl<S: Into<String>> From<S> for BenchmarkId {
 /// One Cargo benchmark target. All measured work runs serially under a host lock.
 pub struct Criterion {
     harness: Harness,
-    /// Times functions natively. Built on first use, since listing and counting never need it.
+    /// Times functions. Built on first use, since listing never needs it.
     native: Option<criterion::Criterion>,
 }
 
@@ -133,10 +132,10 @@ impl Criterion {
 
     pub fn benchmark_group(&mut self, name: impl Into<String>) -> BenchmarkGroup<'_> {
         let name = name.into();
-        let native = (self.harness.mode == Mode::Time).then(|| {
-            let options = &self.harness.options;
+        let native = (!self.harness.listing()).then(|| {
+            let harness = &self.harness;
             self.native
-                .get_or_insert_with(|| native_criterion(options))
+                .get_or_insert_with(|| native_criterion(harness))
                 .benchmark_group(name.clone())
         });
         BenchmarkGroup {
@@ -152,17 +151,11 @@ impl Criterion {
         id: &str,
         mut routine: impl FnMut(&mut Bencher<'_, '_>),
     ) -> &mut Self {
-        match self.harness.function(id) {
-            Some(Measure::Count) => routine(&mut Bencher(Measure::Count)),
-            Some(Measure::Time(())) => {
-                let options = &self.harness.options;
-                self.native
-                    .get_or_insert_with(|| native_criterion(options))
-                    .bench_function(id, |bencher| {
-                        routine(&mut Bencher(Measure::Time(bencher)));
-                    });
-            }
-            None => {}
+        if self.harness.times(id) {
+            let harness = &self.harness;
+            self.native
+                .get_or_insert_with(|| native_criterion(harness))
+                .bench_function(id, |bencher| routine(&mut Bencher(bencher)));
         }
         self
     }
@@ -186,21 +179,24 @@ impl Criterion {
         self.harness.bundle()
     }
 
-    /// Report the first failure, count pending functions, and complete the bundle.
+    /// Report the first failure, record timed functions, and complete the bundle.
     pub fn finish(mut self) -> Result<()> {
         if let Some(failure) = self.harness.failure.take() {
             return Err(failure);
         }
-        self.harness.count_functions()?;
         if let Some(native) = &self.native {
             native.final_summary();
         }
+        self.harness.record_functions()?;
         self.harness.finish()
     }
 }
 
-fn native_criterion(options: &Options) -> criterion::Criterion {
-    let mut criterion = criterion::Criterion::default();
+fn native_criterion(harness: &Harness) -> criterion::Criterion {
+    let options = &harness.options;
+    // The harness reads Criterion's samples back from this directory.
+    let mut criterion =
+        criterion::Criterion::default().output_directory(&harness.target.join("criterion"));
     if let Some(samples) = options.sample_size {
         // Criterion rejects fewer than 10 samples. Smaller values still apply to processes.
         if samples < 10 {
@@ -270,15 +266,9 @@ impl BenchmarkGroup<'_> {
         mut routine: impl FnMut(&mut Bencher<'_, '_>),
     ) -> &mut Self {
         let BenchmarkId(name) = id.into();
-        match self.harness.function(&format!("{}/{name}", self.name)) {
-            Some(Measure::Count) => routine(&mut Bencher(Measure::Count)),
-            Some(Measure::Time(())) => {
-                let native = self.native.as_mut().expect("timed groups wrap Criterion");
-                native.bench_function(name, |bencher| {
-                    routine(&mut Bencher(Measure::Time(bencher)));
-                });
-            }
-            None => {}
+        if self.harness.times(&format!("{}/{name}", self.name)) {
+            let native = self.native.as_mut().expect("timed groups wrap Criterion");
+            native.bench_function(name, |bencher| routine(&mut Bencher(bencher)));
         }
         self
     }
@@ -299,47 +289,23 @@ impl BenchmarkGroup<'_> {
     }
 }
 
-/// How a function benchmark's routine is measured.
-pub(crate) enum Measure<T> {
-    /// Criterion samples the routine and reports wall time.
-    Time(T),
-    /// The routine runs once with Cachegrind counting its region.
-    Count,
-}
-
 /// Runs the measured operation of one function benchmark.
-pub struct Bencher<'a, 'b>(Measure<&'a mut criterion::Bencher<'b, WallTime>>);
+pub struct Bencher<'a, 'b>(&'a mut criterion::Bencher<'b, WallTime>);
 
 impl Bencher<'_, '_> {
     /// Measure the routine, including destruction of its return value.
-    pub fn iter<O>(&mut self, mut routine: impl FnMut() -> O) {
-        match &mut self.0 {
-            Measure::Time(bencher) => bencher.iter(routine),
-            Measure::Count => {
-                cachegrind::start();
-                black_box(routine());
-                cachegrind::stop();
-            }
-        }
+    pub fn iter<O>(&mut self, routine: impl FnMut() -> O) {
+        self.0.iter(routine);
     }
 
     /// Exclude input preparation and output destruction from measurement.
     pub fn iter_batched<I, O>(
         &mut self,
-        mut setup: impl FnMut() -> I,
-        mut routine: impl FnMut(I) -> O,
+        setup: impl FnMut() -> I,
+        routine: impl FnMut(I) -> O,
         size: BatchSize,
     ) {
-        match &mut self.0 {
-            Measure::Time(bencher) => bencher.iter_batched(setup, routine, size),
-            Measure::Count => {
-                let input = black_box(setup());
-                cachegrind::start();
-                let output = black_box(routine(input));
-                cachegrind::stop();
-                drop(output);
-            }
-        }
+        self.0.iter_batched(setup, routine, size);
     }
 }
 

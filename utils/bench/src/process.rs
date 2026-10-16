@@ -1,6 +1,5 @@
 //! Bounded subprocess execution with retained output and per-process accounting.
-use crate::Engine;
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
@@ -16,8 +15,6 @@ pub struct Command {
     pub args: Vec<OsString>,
     pub directory: PathBuf,
     pub env: BTreeMap<OsString, OsString>,
-    pub trace_children: bool,
-    pub instrument_at_start: bool,
 }
 
 /// Measurements of one command. Native RSS comes from a fresh GNU time supervisor.
@@ -28,7 +25,6 @@ pub struct ProcessSample {
     pub user_ns: f64,
     pub system_ns: f64,
     pub peak_process_rss_bytes: u64,
-    pub counters: BTreeMap<String, f64>,
     pub stdout: PathBuf,
     pub stderr: PathBuf,
 }
@@ -40,8 +36,6 @@ impl Command {
             args: Vec::new(),
             directory: PathBuf::from("."),
             env: BTreeMap::new(),
-            trace_children: false,
-            instrument_at_start: true,
         }
     }
     pub fn arg(mut self, arg: impl Into<OsString>) -> Self {
@@ -60,119 +54,37 @@ impl Command {
         self.env.insert(key.into(), value.into());
         self
     }
-    /// Include exec'd child processes in Cachegrind measurements when requested.
-    pub fn trace_children(mut self, enabled: bool) -> Self {
-        self.trace_children = enabled;
-        self
-    }
-    /// Start Cachegrind with counting off, for a process that marks its own counted region.
-    pub fn instrument_at_start(mut self, enabled: bool) -> Self {
-        self.instrument_at_start = enabled;
-        self
-    }
     pub fn run(&self, output_dir: &Path, timeout: Duration) -> Result<ProcessSample> {
-        self.execute(output_dir, timeout, Engine::Native)
-    }
-
-    pub fn execute(
-        &self,
-        output_dir: &Path,
-        timeout: Duration,
-        engine: Engine,
-    ) -> Result<ProcessSample> {
         ensure!(!timeout.is_zero(), "process timeout must be positive");
         std::fs::create_dir_all(output_dir)?;
         let output_dir = output_dir.canonicalize()?;
         let rss_path = output_dir.join("peak-rss-kib");
-        let mut command = std::process::Command::new(if matches!(engine, Engine::Cachegrind) {
-            Path::new("valgrind")
-        } else {
-            ensure!(
-                Path::new("/usr/bin/time").is_file(),
-                "native process RSS accounting requires GNU time at /usr/bin/time; install the time package"
-            );
-            Path::new("/usr/bin/time")
-        });
-        if matches!(engine, Engine::Native) {
-            // A direct fork/exec inherits the harness's resident size into ru_maxrss.
-            // GNU time execs into a small supervisor before spawning the actual target.
-            command
-                .args(["--quiet", "--format=%M", "--output"])
-                .arg(&rss_path)
-                .arg("--")
-                .arg(&self.program);
-        }
-        if matches!(engine, Engine::Cachegrind) {
-            ensure!(
-                !std::fs::read_dir(&output_dir)?.any(|entry| entry.is_ok_and(|entry| entry
-                    .file_name()
-                    .to_string_lossy()
-                    .starts_with("cachegrind."))),
-                "cachegrind output directory already contains profiles: {}",
-                output_dir.display()
-            );
-            command
-                .args([
-                    "--tool=cachegrind",
-                    if self.trace_children {
-                        "--trace-children=yes"
-                    } else {
-                        "--trace-children=no"
-                    },
-                    if self.instrument_at_start {
-                        "--instr-at-start=yes"
-                    } else {
-                        "--instr-at-start=no"
-                    },
-                    "--cache-sim=yes",
-                    "--branch-sim=yes",
-                    "--error-exitcode=125",
-                    "--I1=32768,8,64",
-                    "--D1=32768,8,64",
-                    "--LL=8388608,16,64",
-                ])
-                .arg(format!(
-                    "--cachegrind-out-file={}/cachegrind.%p",
-                    output_dir.display()
-                ))
-                .arg("--")
-                .arg(&self.program);
-        }
+        ensure!(
+            Path::new("/usr/bin/time").is_file(),
+            "native process RSS accounting requires GNU time at /usr/bin/time; install the time package"
+        );
+        let mut command = std::process::Command::new("/usr/bin/time");
+        // A direct fork/exec inherits the harness's resident size into ru_maxrss.
+        // GNU time execs into a small supervisor before spawning the actual target.
         command
+            .args(["--quiet", "--format=%M", "--output"])
+            .arg(&rss_path)
+            .arg("--")
+            .arg(&self.program)
             .args(&self.args)
             .current_dir(&self.directory)
             .env_clear()
             .envs(default_environment())
             .envs(&self.env);
         let mut sample = execute_native(&mut command, &output_dir, timeout)?;
-        if matches!(engine, Engine::Native) {
-            let kib = std::fs::read_to_string(&rss_path)
-                .context("reading GNU time peak RSS")?
-                .trim()
-                .parse::<u64>()
-                .context("invalid GNU time peak RSS; /usr/bin/time must be GNU time")?;
-            sample.peak_process_rss_bytes = kib
-                .checked_mul(1024)
-                .context("GNU time peak RSS overflow")?;
-        }
-        if matches!(engine, Engine::Cachegrind) {
-            for entry in std::fs::read_dir(&output_dir)? {
-                let path = entry?.path();
-                if path
-                    .file_name()
-                    .is_some_and(|name| name.to_string_lossy().starts_with("cachegrind."))
-                {
-                    for (event, count) in parse_cachegrind(&std::fs::read_to_string(&path)?)? {
-                        *sample.counters.entry(event).or_default() += count;
-                    }
-                }
-            }
-            ensure!(
-                !sample.counters.is_empty(),
-                "cachegrind produced no event summaries in {}",
-                output_dir.display()
-            );
-        }
+        let kib = std::fs::read_to_string(&rss_path)
+            .context("reading GNU time peak RSS")?
+            .trim()
+            .parse::<u64>()
+            .context("invalid GNU time peak RSS; /usr/bin/time must be GNU time")?;
+        sample.peak_process_rss_bytes = kib
+            .checked_mul(1024)
+            .context("GNU time peak RSS overflow")?;
         Ok(sample)
     }
 }
@@ -189,7 +101,6 @@ pub fn default_environment() -> BTreeMap<OsString, OsString> {
         "TEMP",
         "LD_LIBRARY_PATH",
         "LD_PRELOAD",
-        "VALGRIND_LIB",
     ] {
         if let Some(value) = std::env::var_os(name) {
             environment.insert(name.into(), value);
@@ -209,15 +120,6 @@ pub fn default_environment() -> BTreeMap<OsString, OsString> {
         environment.insert(name.into(), value.into());
     }
     environment
-}
-
-/// Check that Valgrind is installed and record its version without instrumentation.
-pub fn probe_cachegrind(output_dir: &Path, timeout: Duration) -> Result<String> {
-    let sample = Command::new("valgrind")
-        .arg("--version")
-        .run(output_dir, timeout)
-        .context("Cachegrind requires valgrind on PATH")?;
-    Ok(std::fs::read_to_string(sample.stdout)?.trim().to_owned())
 }
 
 /// Capture an untimed command under the same process-group deadline as measurements.
@@ -346,7 +248,6 @@ fn execute_accounted(
             user_ns: ns(usage.ru_utime),
             system_ns: ns(usage.ru_stime),
             peak_process_rss_bytes: (usage.ru_maxrss.max(0) as u64) * 1024,
-            counters: BTreeMap::new(),
             stdout,
             stderr,
         },
@@ -360,48 +261,12 @@ fn execute_accounted(
     _: &Path,
     _: Duration,
 ) -> Result<(ProcessSample, std::process::ExitStatus)> {
-    bail!("native process accounting is supported only on Linux")
-}
-
-fn parse_cachegrind(text: &str) -> Result<BTreeMap<String, f64>> {
-    let events = text
-        .lines()
-        .find_map(|line| line.strip_prefix("events:"))
-        .context("cachegrind output has no events")?
-        .split_whitespace()
-        .collect::<Vec<_>>();
-    let values = text
-        .lines()
-        .filter_map(|line| line.strip_prefix("summary:"))
-        .next_back()
-        .context("cachegrind output has no summary")?
-        .split_whitespace()
-        .map(str::parse::<u64>)
-        .collect::<std::result::Result<Vec<_>, _>>()?;
-    ensure!(
-        !events.is_empty() && events.len() == values.len(),
-        "cachegrind event/summary length mismatch"
-    );
-    let mut counters = BTreeMap::new();
-    for (name, value) in events.into_iter().zip(values) {
-        if counters.insert(name.to_owned(), value as f64).is_some() {
-            bail!("duplicate cachegrind event {name}");
-        }
-    }
-    Ok(counters)
+    anyhow::bail!("native process accounting is supported only on Linux")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn cachegrind_named_events() {
-        let counters = parse_cachegrind("events: Dr Ir Dw\nsummary: 20 100 8\n").unwrap();
-        assert_eq!(counters["Ir"], 100.0);
-        assert!(parse_cachegrind("events: Ir Dr\nsummary: 10").is_err());
-        assert!(parse_cachegrind("events: Ir Ir\nsummary: 10 10").is_err());
-    }
-    #[cfg(target_os = "linux")]
     #[test]
     fn deterministic_environment_allows_explicit_overrides() {
         let dir = tir_adt::TempDir::new().unwrap();

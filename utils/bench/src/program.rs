@@ -937,10 +937,7 @@ impl Build<'_> {
                     ProcessCase {
                         id: ids.compile(source),
                         variant: Some(ids.variant("Compile", Some(source))),
-                        // A reference driver execs its real compiler, which must be counted too.
-                        command: recipes[index]
-                            .measured()
-                            .trace_children(!compiler.candidate()),
+                        command: recipes[index].measured(),
                         verify: Some(Box::new(move |_| {
                             validated.verify(&object_digest(&object)?, || validation.verify())
                         })),

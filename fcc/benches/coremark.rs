@@ -15,7 +15,7 @@ pub fn coremark() -> Program {
             "posix/core_portme.c",
         ])
         .flags(["-I.", "-Iposix", "-DFLAGS_STR=\"\"", "-DPERFORMANCE_RUN=1"])
-        .args(["0", "0", "0", "1000000"])
+        .args(["0", "0", "0", "600000"])
         .verify("verify.py")
         .llvm()
 }

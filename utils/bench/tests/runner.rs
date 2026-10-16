@@ -53,6 +53,50 @@ fn result(path: &Path) -> Value {
     serde_json::from_slice(&std::fs::read(path.join("results.json")).unwrap()).unwrap()
 }
 
+// Benchboard reads this file, so its shape is a contract with another repository.
+fn summary_exports_samples_and_shape(path: &Path, latencies: &[f64]) {
+    let summary: Value =
+        serde_json::from_slice(&std::fs::read(path.join("summary.json")).unwrap()).unwrap();
+    let architecture = std::env::consts::ARCH;
+    let id = format!("{architecture}/{NAMESPACE}/process");
+    let latency = &summary["results"][&id]["latency"];
+    let spread = latencies[1] - latencies[0];
+    assert_eq!(latency["value"], (latencies[0] + latencies[1]) / 2.0);
+    assert_eq!(latency["lower_value"], latencies[0] + spread / 4.0);
+    assert_eq!(latency["upper_value"], latencies[0] + spread * 3.0 / 4.0);
+    let mut exported_samples: Vec<f64> =
+        serde_json::from_value(latency["samples"].clone()).unwrap();
+    exported_samples.sort_by(f64::total_cmp);
+    assert_eq!(exported_samples, latencies);
+    assert!(latency["modality"].is_string());
+    assert!(
+        summary["environment"]
+            .as_str()
+            .unwrap()
+            .starts_with(architecture)
+    );
+    // CPU times and the deviation are sampled, and only defined metrics are exported.
+    let exported: Vec<_> = summary["metrics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|metric| {
+            (
+                metric["key"].as_str().unwrap(),
+                metric["unit"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        exported,
+        [("latency", "ns"), ("peak_process_rss_bytes", "bytes")]
+    );
+    assert_eq!(
+        summary["variants"][&id],
+        json!({"benchmark": "process", "group": format!("Run on {architecture}"), "variant": "candidate", "subject": true})
+    );
+}
+
 #[test]
 fn native_suite_records_validates_and_compares() {
     let temp = tir_adt::TempDir::new().unwrap();
@@ -91,35 +135,7 @@ fn native_suite_records_validates_and_compares() {
     latencies.sort_by(f64::total_cmp);
     let median = (latencies[0] + latencies[1]) / 2.0;
     assert_eq!(process["summary"]["latency"].as_f64().unwrap(), median);
-    // Benchboard reads this file, so its shape is a contract with another repository.
-    let summary: Value =
-        serde_json::from_slice(&std::fs::read(baseline_path.join("summary.json")).unwrap())
-            .unwrap();
-    let deviation = (latencies[1] - latencies[0]) / 2.0;
-    assert_eq!(
-        summary["results"][format!("{NAMESPACE}/process")]["latency"],
-        json!({"value": median, "lower_value": median - deviation, "upper_value": median + deviation})
-    );
-    // CPU times and the deviation are sampled, and only defined metrics are exported.
-    let exported: Vec<_> = summary["metrics"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|metric| {
-            (
-                metric["key"].as_str().unwrap(),
-                metric["unit"].as_str().unwrap(),
-            )
-        })
-        .collect();
-    assert_eq!(
-        exported,
-        [("latency", "ns"), ("peak_process_rss_bytes", "bytes")]
-    );
-    assert_eq!(
-        summary["variants"][format!("{NAMESPACE}/process")],
-        json!({"benchmark": "process", "group": "Run", "variant": "candidate", "subject": true})
-    );
+    summary_exports_samples_and_shape(&baseline_path, &latencies);
 
     let mut compatible = options(temp.path());
     compatible.baseline = Some(baseline_path.clone());
@@ -197,38 +213,33 @@ fn native_suite_records_validates_and_compares() {
     }]);
     assert!(criterion.finish().is_err());
     assert!(!marker.exists());
+
+    timed_functions_are_recorded_with_their_samples(&temp);
 }
 
-#[test]
-fn a_counting_child_runs_only_the_requested_function_once() {
-    let child = |function: &str| {
-        Criterion::new(
-            NAMESPACE,
-            Options::try_parse_from(["runner", "--count-function", function]).unwrap(),
-        )
-        .unwrap()
-    };
-    let calls = std::cell::RefCell::new(Vec::new());
-    let call = |name| calls.borrow_mut().push(name);
-    let mut criterion = child("group/batched");
+// The host lock allows one active harness, so the suite test calls this.
+fn timed_functions_are_recorded_with_their_samples(temp: &tir_adt::TempDir) {
+    let mut options = Options::try_parse_from([
+        "runner",
+        "--sample-size",
+        "10",
+        "--warm-up-time",
+        "0.01",
+        "--measurement-time",
+        "0.05",
+    ])
+    .unwrap();
+    options.output = Some(temp.path().to_owned());
+    let mut criterion = Criterion::new(NAMESPACE, options).unwrap();
     let mut group = criterion.benchmark_group("group");
-    group.bench_function("plain", |b| b.iter(|| call("plain")));
     group.bench_function("batched", |b| {
-        b.iter_batched(
-            || call("setup"),
-            |()| call("routine"),
-            BatchSize::SmallInput,
-        );
+        b.iter_batched(|| 7, |input| input * 2, BatchSize::SmallInput);
     });
-    group.bench_with_input("input", &7, |b, _| b.iter(|| call("input")));
     group.finish();
+    let path = criterion.artifacts().unwrap();
     criterion.finish().unwrap();
-    assert_eq!(*calls.borrow(), ["setup", "routine"]);
-
-    let mut criterion = child("group/missing");
-    criterion
-        .benchmark_group("group")
-        .bench_function("plain", |b| b.iter(|| ()));
-    let error = criterion.finish().unwrap_err().to_string();
-    assert!(error.contains("group/missing is not registered"), "{error}");
+    let results = result(&path);
+    let case = &results["cases"][0];
+    assert_eq!(case["id"], "group/batched");
+    assert_eq!(case["samples"].as_array().unwrap().len(), 10);
 }

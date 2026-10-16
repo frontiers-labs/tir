@@ -69,12 +69,19 @@ impl EnvironmentGuard {
             );
         }
         let cpuinfo = std::fs::read_to_string("/proc/cpuinfo").unwrap_or_default();
-        let cpu_model = cpuinfo
-            .lines()
-            .find_map(|line| {
+        let field = |name: &str| {
+            cpuinfo.lines().find_map(|line| {
                 let (key, value) = line.split_once(':')?;
-                matches!(key.trim(), "model name" | "Hardware" | "uarch")
-                    .then(|| value.trim().to_owned())
+                (key.trim() == name).then(|| value.trim().to_owned())
+            })
+        };
+        let cpu_model = ["model name", "Hardware", "uarch"]
+            .into_iter()
+            .find_map(field)
+            // Arm kernels name the core only by its implementer and part numbers.
+            .or_else(|| {
+                let implementer = field("CPU implementer")?;
+                Some(format!("CPU {implementer}:{}", field("CPU part")?))
             })
             .unwrap_or_else(|| "unknown".to_owned());
         let allowed_cpus = cpu_list(&original_affinity);

@@ -15,7 +15,7 @@ EXPECTED_CRC = {
     "crcmatrix": "1fd7",
     "crcstate": "8e3a",
 }
-EXPECTED_FINAL_CRC = {(0, 0, 0, 1_000_000): "988c"}
+EXPECTED_FINAL_CRC = {(0, 0, 0, 600_000): "a14c", (0, 0, 0, 1_000_000): "988c"}
 SHORT_RUN_ERROR = "ERROR! Must execute for at least 10 secs for a valid result!"
 
 
@@ -71,14 +71,14 @@ def main() -> None:
         if not parsed.values:
             parser.error("an executable or --stdout is required")
         executable = Path(parsed.values[0]).resolve()
-        args = parsed.values[1:] or ["0", "0", "0", "1000000"]
+        args = parsed.values[1:] or ["0", "0", "0", "600000"]
         result = subprocess.run([str(executable), *args], capture_output=True, text=True, check=False)
         if result.returncode != 0:
             raise RuntimeError(f"{executable} failed with status {result.returncode}")
         output = result.stdout
     else:
         output = parsed.stdout.read_text()
-        args = parsed.values or ["0", "0", "0", "1000000"]
+        args = parsed.values or ["0", "0", "0", "600000"]
     validate(output, args)
     print("coremark: output is valid")
 

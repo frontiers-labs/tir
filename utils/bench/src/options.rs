@@ -1,16 +1,6 @@
 use std::path::PathBuf;
 
 use clap::{Parser, ValueEnum};
-use serde::{Deserialize, Serialize};
-
-/// Measurement engine. Profiling results never include native time or RSS.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Engine {
-    #[default]
-    Native,
-    Cachegrind,
-}
 
 /// Which parts of a compiled program to measure.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum)]
@@ -23,8 +13,12 @@ pub enum Phase {
 
 /// Default per-process timeout, shared by Cargo harnesses and corpus tools.
 pub const DEFAULT_TIMEOUT_SECS: u64 = 300;
-/// Default number of measured executions of each process case.
-pub const DEFAULT_PROCESS_SAMPLES: u32 = 15;
+/// Process cases are sampled until the median's standard error falls to this
+/// share of it. Program runs are long and stable, so few samples suffice;
+/// the minimum is what benchboard's rank-sum test needs.
+pub const TARGET_RELATIVE_ERROR: f64 = 0.01;
+pub const MIN_PROCESS_SAMPLES: u32 = 9;
+pub const MAX_PROCESS_SAMPLES: u32 = 30;
 
 /// Arguments understood by every Cargo benchmark target. The filter and the
 /// sampling flags carry Criterion's names and meanings.
@@ -48,9 +42,8 @@ pub struct Options {
     /// Run function benchmarks only.
     #[arg(long)]
     pub skip_programs: bool,
-    #[arg(long, value_enum, default_value_t)]
-    pub engine: Engine,
-    /// Samples per benchmark. Programs default to 15 and functions to Criterion's default.
+    /// Samples per benchmark. Programs otherwise sample until the median is
+    /// stable, and functions take Criterion's default.
     #[arg(long, value_parser = clap::value_parser!(u32).range(1..))]
     pub sample_size: Option<u32>,
     /// Unmeasured executions of each process case before sampling.
@@ -76,7 +69,7 @@ pub struct Options {
     /// results.json or bundle directory from an equivalent run.
     #[arg(long)]
     pub baseline: Option<PathBuf>,
-    /// Maximum allowed time/count increase for gated cases, in percent.
+    /// Maximum allowed time increase for gated cases, in percent.
     #[arg(long, default_value_t = 10.0)]
     pub threshold: f64,
     /// Maximum allowed per-case peak RSS increase, in percent.
@@ -90,7 +83,4 @@ pub struct Options {
     pub min_cases: usize,
     #[arg(long, hide = true)]
     pub bench: bool,
-    /// Count this one function benchmark. The Cachegrind parent passes it to its child.
-    #[arg(long, hide = true)]
-    pub count_function: Option<String>,
 }

@@ -196,19 +196,25 @@ The command line follows Criterion. A positional argument is a regular
 expression over benchmark identifiers, and `--exact` matches one identifier.
 `--list` lists cases without fetching sources or invoking compilers.
 `--sample-size`, `--warm-up-time`, `--measurement-time` and `--save-baseline`
-keep Criterion's meaning for function benchmarks. For programs use `--phase`,
+keep Criterion's meaning for function benchmarks, and `--sample-size` fixes the
+sample count of programs too. For programs use `--phase`,
 `--compiler` and `--level` to limit work, and `--offline` to reject source-cache
 misses. Filtering must not change workload arguments.
 
-The default engine measures natively. Criterion times functions and reports
-them itself. Programs are sampled as processes for elapsed time, CPU time and
-peak RSS, which requires GNU `/usr/bin/time`. `--engine cachegrind` reports
-instruction, cache and branch counts for both kinds and requires Valgrind 3.22
-or newer. Each function benchmark then runs once in its own child process, and
-only the region inside `b.iter` is counted.
+Criterion times functions, and the harness records its samples as the time of
+one iteration. Programs are sampled as processes for elapsed time, CPU time and
+peak RSS, which requires GNU `/usr/bin/time`. Without `--sample-size`, the
+compilers of one case take turns until the standard error of every median is
+under 1%, with at least 9 and at most 30 samples. Each wall time is reported
+as the median with its quartiles, the number of samples outside Tukey's fences,
+and whether the samples form one mode or several, judged by Gregg's modal value
+over a histogram (see Akinshin, "Pro .NET Benchmarking", chapter 4). Modes
+show reliably from about 30 samples, which function benchmarks get from
+Criterion. A multimodal benchmark has no single typical time, so compare its
+samples, not its median.
 
-Program runs and Cachegrind runs write samples, workload identities, command
-logs, and a `summary.json` under `target/bench`. `--output` changes that
+Runs write samples, workload identities, command logs, and a `summary.json`
+under `target/bench`. `--output` changes that
 location; relative paths resolve from the workspace root. The summary is what
 benchboard records. It names each exported metric with a label, a unit and a
 description, and tags each program case with its compiler, so the tables in
@@ -217,17 +223,14 @@ description, and tags each program case with its compiler, so the tables in
 identities. Change the declared inputs or contract when measurement boundaries
 change, so old results cannot silently pass a gate.
 
-Native measurements report peak process RSS, not simultaneous process-tree
-memory. Cachegrind counts are useful in shared CI but do not replace native
-performance checks. For native regression gates, use a dedicated Linux runner,
-pin an allowed CPU, and control frequency policy, sibling-core activity, and
-background load. The harness records the environment; it does not configure
+Measurements report peak process RSS, not simultaneous process-tree memory.
+For regression gates, use a dedicated Linux runner, pin an allowed CPU, and
+control frequency policy, sibling-core activity, and background load. The harness records the environment; it does not configure
 the host.
 
-The Perf workflow counts CoreMark, Dhrystone and every function benchmark under
-Cachegrind on each merge to `master`. A second job times the two programs
-natively with `fcc`, `gcc` and `clang` for wall time and peak memory. It
-records both on the `perf-data` branch through
+The Perf workflow times CoreMark and Dhrystone with `fcc`, `gcc` and `clang`,
+and every function benchmark, on x86_64 and aarch64 runners on each merge to
+`master`. It records the results on the `perf-data` branch through
 [benchboard](https://github.com/frontiers-labs/benchboard), which shows the
 history at <https://frontiers-labs.github.io/benchboard/>. The board's Versus
 view lists `fcc` against the reference compilers for compile time, compile
