@@ -1438,131 +1438,163 @@ macro instr_fcmp {
 instr_fcmp!(FCmpDouble, FPR64, "fcmp_d", ptype = 0b01)
 instr_fcmp!(FCmpSingle, FPR32, "fcmp_s", ptype = 0b00)
 
-// Convert the low signed 32-bit integer in a general register to binary64.
-instruction SCvtfDoubleWord for [FP] {
+// SCVTF and UCVTF (scalar, integer). OPCODE picks signed (0b010) or unsigned
+// (0b011) conversion.
+macro tmpl_int_to_fp {
+    ( $name:ident, $fcls:ident, $gcls:ident, sf = $sf:literal, ptype = $ptype:literal ) => {
+        template $name for [FP] {
+            param MNEMONIC: String;
+            param OPCODE: bits<3>;
+            schedule { units = [WriteFPConvert]; }
+
+            operands {
+                fd: $fcls,
+                rn: $gcls,
+            }
+
+            encoding {
+                $sf,
+                0b00,
+                0b11110,
+                $ptype,
+                0b1,
+                0b00,
+                OPCODE,
+                0b000000,
+                rn,
+                fd,
+            }
+
+            asm {
+                "{self.MNEMONIC} {fd}, {rn}"
+            }
+        }
+    };
+}
+
+tmpl_int_to_fp!(WordToDouble, FPR64, GPR32, sf = 0b0, ptype = 0b01)
+tmpl_int_to_fp!(WordToSingle, FPR32, GPR32, sf = 0b0, ptype = 0b00)
+tmpl_int_to_fp!(DoubleWordToDouble, FPR64, GPR, sf = 0b1, ptype = 0b01)
+tmpl_int_to_fp!(DoubleWordToSingle, FPR32, GPR, sf = 0b1, ptype = 0b00)
+
+instruction SCvtfDoubleWord for [FP] : WordToDouble {
     param MNEMONIC: String = "scvtf";
     param OPNAME: String = "scvtf_d_w";
-    schedule { units = [WriteFPConvert]; }
-
-    operands {
-        fd: FPR64,
-        rn: GPR,
-    }
-
-    encoding {
-        0b000,
-        0b11110,
-        0b01,
-        0b1,
-        0b00,
-        0b010,
-        0b000000,
-        rn,
-        fd,
-    }
-
-    asm {
-        "{self.MNEMONIC} {fd}, {rn}"
-    }
+    param OPCODE: bits<3> = 0b010;
 
     behavior {
-        fd = sitofp(sext(extract(rn, 31, 0), self.XLEN), 11, 52);
+        fd = sitofp(rn, 11, 52);
     }
 }
 
-// Convert the low unsigned 32-bit integer in a general register to binary64.
-instruction UCvtfDoubleWord for [FP] {
+instruction UCvtfDoubleWord for [FP] : WordToDouble {
     param MNEMONIC: String = "ucvtf";
     param OPNAME: String = "ucvtf_d_w";
-    schedule { units = [WriteFPConvert]; }
-
-    operands {
-        fd: FPR64,
-        rn: GPR,
-    }
-
-    encoding {
-        0b000,
-        0b11110,
-        0b01,
-        0b1,
-        0b00,
-        0b011,
-        0b000000,
-        rn,
-        fd,
-    }
-
-    asm {
-        "{self.MNEMONIC} {fd}, {rn}"
-    }
+    param OPCODE: bits<3> = 0b011;
 
     behavior {
-        fd = uitofp(extract(rn, 31, 0), 11, 52);
+        fd = uitofp(rn, 11, 52);
     }
 }
 
-instruction SCvtfSingleWord for [FP] {
+instruction SCvtfSingleWord for [FP] : WordToSingle {
     param MNEMONIC: String = "scvtf";
     param OPNAME: String = "scvtf_s_w";
-    schedule { units = [WriteFPConvert]; }
-
-    operands {
-        fd: FPR32,
-        rn: GPR32,
-    }
-
-    encoding {
-        0b000,
-        0b11110,
-        0b00,
-        0b1,
-        0b00,
-        0b010,
-        0b000000,
-        rn,
-        fd,
-    }
-
-    asm {
-        "{self.MNEMONIC} {fd}, {rn}"
-    }
+    param OPCODE: bits<3> = 0b010;
 
     behavior {
         fd = sitofp(rn, 8, 23);
     }
 }
 
-instruction UCvtfSingleWord for [FP] {
+instruction UCvtfSingleWord for [FP] : WordToSingle {
     param MNEMONIC: String = "ucvtf";
     param OPNAME: String = "ucvtf_s_w";
-    schedule { units = [WriteFPConvert]; }
-
-    operands {
-        fd: FPR32,
-        rn: GPR32,
-    }
-
-    encoding {
-        0b000,
-        0b11110,
-        0b00,
-        0b1,
-        0b00,
-        0b011,
-        0b000000,
-        rn,
-        fd,
-    }
-
-    asm {
-        "{self.MNEMONIC} {fd}, {rn}"
-    }
+    param OPCODE: bits<3> = 0b011;
 
     behavior {
         fd = uitofp(rn, 8, 23);
     }
 }
+
+instruction SCvtfDouble for [FP] : DoubleWordToDouble {
+    param MNEMONIC: String = "scvtf";
+    param OPNAME: String = "scvtf_d_x";
+    param OPCODE: bits<3> = 0b010;
+
+    behavior {
+        fd = sitofp(rn, 11, 52);
+    }
+}
+
+instruction UCvtfDouble for [FP] : DoubleWordToDouble {
+    param MNEMONIC: String = "ucvtf";
+    param OPNAME: String = "ucvtf_d_x";
+    param OPCODE: bits<3> = 0b011;
+
+    behavior {
+        fd = uitofp(rn, 11, 52);
+    }
+}
+
+instruction SCvtfSingle for [FP] : DoubleWordToSingle {
+    param MNEMONIC: String = "scvtf";
+    param OPNAME: String = "scvtf_s_x";
+    param OPCODE: bits<3> = 0b010;
+
+    behavior {
+        fd = sitofp(rn, 8, 23);
+    }
+}
+
+instruction UCvtfSingle for [FP] : DoubleWordToSingle {
+    param MNEMONIC: String = "ucvtf";
+    param OPNAME: String = "ucvtf_s_x";
+    param OPCODE: bits<3> = 0b011;
+
+    behavior {
+        fd = uitofp(rn, 8, 23);
+    }
+}
+
+// FCVT between precisions. ptype names the source format and opc the result.
+macro instr_fcvt {
+    ( $name:ident, $dcls:ident, $scls:ident, $opname:literal, ptype = $ptype:literal, opc = $opc:literal, exponent = $e:literal, mantissa = $m:literal ) => {
+        instruction $name for [FP] {
+            param MNEMONIC: String = "fcvt";
+            param OPNAME: String = $opname;
+            schedule { units = [WriteFPConvert]; }
+
+            operands {
+                fd: $dcls,
+                fa: $scls,
+            }
+
+            encoding {
+                0b000,
+                0b11110,
+                $ptype,
+                0b1,
+                0b0001,
+                $opc,
+                0b10000,
+                fa[4..0],
+                fd[4..0],
+            }
+
+            asm {
+                "{self.MNEMONIC} {fd}, {fa}"
+            }
+
+            behavior {
+                fd = fcvt(fa, $e, $m);
+            }
+        }
+    };
+}
+
+instr_fcvt!(FCvtDoubleSingle, FPR64, FPR32, "fcvt_d_s", ptype = 0b00, opc = 0b01, exponent = 11, mantissa = 52)
+instr_fcvt!(FCvtSingleDouble, FPR32, FPR64, "fcvt_s_d", ptype = 0b01, opc = 0b00, exponent = 8, mantissa = 23)
 
 // Convert binary64 to a signed 32-bit integer, truncating toward zero.
 instruction FCvtzsWordDouble for [FP] {

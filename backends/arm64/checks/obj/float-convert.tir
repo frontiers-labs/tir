@@ -9,6 +9,31 @@ module {
     %1 = fp.from_ui %0 {semantics = {exceptions = "ignore", kind = "arithmetic", nan = "any_quiet", rounding = "nearest_even", subnormals = "gradual", tininess = "after_rounding"}} : !f64
     func.return %1
   }
+  %fn_convert_long = func.func @convert_long(%0: !i64) -> !f64 {
+    %1 = fp.from_si %0 {semantics = {exceptions = "ignore", kind = "arithmetic", nan = "any_quiet", rounding = "nearest_even", subnormals = "gradual", tininess = "after_rounding"}} : !f64
+    func.return %1
+  }
+  %fn_convert_long_unsigned = func.func @convert_long_unsigned(%0: !i64) -> !f64 {
+    %1 = fp.from_ui %0 {semantics = {exceptions = "ignore", kind = "arithmetic", nan = "any_quiet", rounding = "nearest_even", subnormals = "gradual", tininess = "after_rounding"}} : !f64
+    func.return %1
+  }
+  %fn_convert_long_single = func.func @convert_long_single(%0: !i64) -> !f32 {
+    %1 = fp.from_si %0 {semantics = {exceptions = "ignore", kind = "arithmetic", nan = "any_quiet", rounding = "nearest_even", subnormals = "gradual", tininess = "after_rounding"}} : !f32
+    func.return %1
+  }
+  %fn_convert_long_single_unsigned = func.func @convert_long_single_unsigned(%0: !i64) -> !f32 {
+    %1 = fp.from_ui %0 {semantics = {exceptions = "ignore", kind = "arithmetic", nan = "any_quiet", rounding = "nearest_even", subnormals = "gradual", tininess = "after_rounding"}} : !f32
+    func.return %1
+  }
+  %fn_widen = func.func @widen(%0: !i32) -> !f64 {
+    %1 = fp.from_si %0 {semantics = {exceptions = "ignore", kind = "arithmetic", nan = "any_quiet", rounding = "nearest_even", subnormals = "gradual", tininess = "after_rounding"}} : !f32
+    %2 = fp.convert %1 {semantics = {exceptions = "ignore", kind = "arithmetic", nan = "any_quiet", rounding = "nearest_even", subnormals = "gradual", tininess = "after_rounding"}} : !f64
+    func.return %2
+  }
+  %fn_narrow = func.func @narrow(%0: !f64) -> !f32 {
+    %1 = fp.convert %0 {semantics = {exceptions = "ignore", kind = "arithmetic", nan = "any_quiet", rounding = "nearest_even", subnormals = "gradual", tininess = "after_rounding"}} : !f32
+    func.return %1
+  }
   %fn_convert_to_signed = func.func @convert_to_signed(%0: !f64) -> !i32 {
     %1 = fp.to_si %0 {semantics = {exceptions = "ignore", invalid = "indeterminate", kind = "to_integer", rounding = "toward_zero", subnormals = "gradual"}} : !i32
     func.return %1
@@ -58,6 +83,25 @@ module {
 // CHECK-NEXT: [0xC0, 0x03, 0x5F, 0xD6]
 // CHECK: convert_unsigned:
 // CHECK-NEXT: [0x00, 0x00, 0x63, 0x1E]
+// CHECK-NEXT: [0xC0, 0x03, 0x5F, 0xD6]
+// CHECK: convert_long:
+// CHECK-NEXT: [0x00, 0x00, 0x62, 0x9E]
+// CHECK-NEXT: [0xC0, 0x03, 0x5F, 0xD6]
+// CHECK: convert_long_unsigned:
+// CHECK-NEXT: [0x00, 0x00, 0x63, 0x9E]
+// CHECK-NEXT: [0xC0, 0x03, 0x5F, 0xD6]
+// CHECK: convert_long_single:
+// CHECK-NEXT: [0x00, 0x00, 0x22, 0x9E]
+// CHECK-NEXT: [0xC0, 0x03, 0x5F, 0xD6]
+// CHECK: convert_long_single_unsigned:
+// CHECK-NEXT: [0x00, 0x00, 0x23, 0x9E]
+// CHECK-NEXT: [0xC0, 0x03, 0x5F, 0xD6]
+// CHECK: widen:
+// CHECK-NEXT: [0x00, 0x00, 0x22, 0x1E]
+// CHECK-NEXT: [0x00, 0xC0, 0x22, 0x1E]
+// CHECK-NEXT: [0xC0, 0x03, 0x5F, 0xD6]
+// CHECK: narrow:
+// CHECK-NEXT: [0x00, 0x40, 0x62, 0x1E]
 // CHECK-NEXT: [0xC0, 0x03, 0x5F, 0xD6]
 // CHECK: convert_to_signed:
 // CHECK-NEXT: [0x00, 0x00, 0x78, 0x1E]
