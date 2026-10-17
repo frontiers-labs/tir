@@ -104,6 +104,13 @@
    "subject": "ci(perf): stop benching the xtask library and stop reporting regressions (#724)",
    "time": "2026-10-16T20:31:04.000Z",
    "env_key": "rustc 1.99.1 (58cf8f9c3 2026-10-13); valgrind-3.22.0; ldd (Ubuntu GLIBC 2.39-0ubuntu8.9) 2.39"
+  },
+  {
+   "file": "runs/2026-10-17T00-06-34-000Z-11d95b7ad858.json",
+   "commit": "11d95b7ad85803d03b88084f1488f2b1ff876d8f",
+   "subject": "ci(perf): record what the other runners measured when one job fails (#727)",
+   "time": "2026-10-17T00:06:34.000Z",
+   "env_key": "aarch64: rustc 1.99.1 (58cf8f9c3 2026-10-13); ldd (Ubuntu GLIBC 2.39-0ubuntu8.9) 2.39|x86_64: rustc 1.99.1 (58cf8f9c3 2026-10-13); ldd (Ubuntu GLIBC 2.39-0ubuntu8.9) 2.39"
   }
  ]
 }
