@@ -111,6 +111,13 @@
    "subject": "ci(perf): record what the other runners measured when one job fails (#727)",
    "time": "2026-10-17T00:06:34.000Z",
    "env_key": "aarch64: rustc 1.99.1 (58cf8f9c3 2026-10-13); ldd (Ubuntu GLIBC 2.39-0ubuntu8.9) 2.39|x86_64: rustc 1.99.1 (58cf8f9c3 2026-10-13); ldd (Ubuntu GLIBC 2.39-0ubuntu8.9) 2.39"
+  },
+  {
+   "file": "runs/2026-10-17T06-00-14-000Z-726daf13b1e9.json",
+   "commit": "726daf13b1e9c8f9f9f4947a261ffb4353067e53",
+   "subject": "fix(arm64): select integer-to-float and float-precision conversions (#728)",
+   "time": "2026-10-17T06:00:14.000Z",
+   "env_key": "aarch64: rustc 1.99.1 (58cf8f9c3 2026-10-13); ldd (Ubuntu GLIBC 2.39-0ubuntu8.9) 2.39|x86_64: rustc 1.99.1 (58cf8f9c3 2026-10-13); ldd (Ubuntu GLIBC 2.39-0ubuntu8.9) 2.39"
   }
  ]
 }
