@@ -266,6 +266,7 @@ impl RegAllocDb {
             }
             this.ops.push(ops);
             this.op_ids.push(op_ids);
+            this.reserve_fixed_windows(context, seed, index);
         }
         // A value read with no definition before it in its block, and none
         // anywhere, is defined on entry: an argument the convention placed.
@@ -361,6 +362,72 @@ impl RegAllocDb {
 
     pub(super) fn value_id(&self, value: ValueId) -> Option<u32> {
         self.values.get(&value).copied()
+    }
+
+    // A register an instruction writes and a later one reads by name — x86
+    // `cdq` then `idiv`, both on `edx` — holds that instruction's result until
+    // the read. The spiller already counts the register occupied across the
+    // span. A value defined inside it writes whichever register it is given,
+    // so coloring has to refuse this one; otherwise the definition becomes the
+    // last writer and a later reordering keeps the fixed read on top of it.
+    fn reserve_fixed_windows(&mut self, context: &Context, seed: &Seed<'_>, block: usize) {
+        struct Touch {
+            uses: SmallVec<[PhysReg; 2]>,
+            defs: SmallVec<[PhysReg; 2]>,
+            values: SmallVec<[ValueId; 2]>,
+        }
+        let touches: Vec<Touch> = self.ops[block]
+            .iter()
+            .map(|&op| {
+                let regs = op_regs(&context.get_op(op));
+                Touch {
+                    uses: regs
+                        .phys_uses
+                        .into_iter()
+                        .filter(|&register| (seed.allocatable)(register))
+                        .collect(),
+                    defs: regs
+                        .phys_defs
+                        .into_iter()
+                        .filter(|&register| (seed.allocatable)(register))
+                        .collect(),
+                    values: regs.defs.into_iter().collect(),
+                }
+            })
+            .collect();
+        let mut written: Vec<(usize, PhysReg)> = Vec::new();
+        for (index, touch) in touches.iter().enumerate() {
+            for &used in &touch.uses {
+                let Some((from, held)) = written.iter().rev().find_map(|&(at, defined)| {
+                    defined
+                        .0
+                        .overlaps(defined.1, used.0, used.1)
+                        .then_some((at, defined))
+                }) else {
+                    continue;
+                };
+                for mid in &touches[from + 1..index] {
+                    for &value in &mid.values {
+                        if seed
+                            .pins
+                            .get(&value)
+                            .is_some_and(|pin| pin.0.overlaps(pin.1, held.0, held.1))
+                        {
+                            continue;
+                        }
+                        let register = self.register(held);
+                        let value = self.value(value);
+                        self.row(FORBID, &[register, value], 0);
+                    }
+                }
+            }
+            for &defined in &touch.defs {
+                written.retain(|&(_, previous)| {
+                    !previous.0.overlaps(previous.1, defined.0, defined.1)
+                });
+                written.push((index, defined));
+            }
+        }
     }
 
     fn register(&mut self, register: PhysReg) -> u32 {
