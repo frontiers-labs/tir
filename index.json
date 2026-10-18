@@ -118,6 +118,13 @@
    "subject": "fix(arm64): select integer-to-float and float-precision conversions (#728)",
    "time": "2026-10-17T06:00:14.000Z",
    "env_key": "aarch64: rustc 1.99.1 (58cf8f9c3 2026-10-13); ldd (Ubuntu GLIBC 2.39-0ubuntu8.9) 2.39|x86_64: rustc 1.99.1 (58cf8f9c3 2026-10-13); ldd (Ubuntu GLIBC 2.39-0ubuntu8.9) 2.39"
+  },
+  {
+   "file": "runs/2026-10-18T13-22-53-000Z-e2d8a177ad68.json",
+   "commit": "e2d8a177ad682e8cf43f664f126e5141a24793d4",
+   "subject": "chore: reorganize code (#735)",
+   "time": "2026-10-18T13:22:53.000Z",
+   "env_key": "aarch64: rustc 1.99.1 (58cf8f9c3 2026-10-13); ldd (Ubuntu GLIBC 2.39-0ubuntu8.9) 2.39|x86_64: rustc 1.99.1 (58cf8f9c3 2026-10-13); ldd (Ubuntu GLIBC 2.39-0ubuntu8.9) 2.39"
   }
  ]
 }
