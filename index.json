@@ -125,6 +125,13 @@
    "subject": "chore: reorganize code (#735)",
    "time": "2026-10-18T13:22:53.000Z",
    "env_key": "aarch64: rustc 1.99.1 (58cf8f9c3 2026-10-13); ldd (Ubuntu GLIBC 2.39-0ubuntu8.9) 2.39|x86_64: rustc 1.99.1 (58cf8f9c3 2026-10-13); ldd (Ubuntu GLIBC 2.39-0ubuntu8.9) 2.39"
+  },
+  {
+   "file": "runs/2026-10-19T06-44-43-000Z-016ff171180c.json",
+   "commit": "016ff171180c143b48cdce439f43c944f5558e68",
+   "subject": "fix(nightly): look up the packaged xtask crate under utils/xtask (#738)",
+   "time": "2026-10-19T06:44:43.000Z",
+   "env_key": "aarch64: rustc 1.99.1 (58cf8f9c3 2026-10-13); ldd (Ubuntu GLIBC 2.39-0ubuntu8.9) 2.39|x86_64: rustc 1.99.1 (58cf8f9c3 2026-10-13); ldd (Ubuntu GLIBC 2.39-0ubuntu8.9) 2.39"
   }
  ]
 }
