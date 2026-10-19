@@ -105,7 +105,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 300
     env:
-      CARGO_MANIFEST_DIR: ${{ github.workspace }}/xtask
+      # Crate directory of the packaged xtask. project_root() climbs two
+      # ancestors from here, which is the workspace only for utils/xtask.
+      CARGO_MANIFEST_DIR: ${{ github.workspace }}/utils/xtask
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/fcc-package
@@ -130,7 +132,9 @@ jobs:
       contents: read
       issues: read
     env:
-      CARGO_MANIFEST_DIR: ${{ github.workspace }}/xtask
+      # Crate directory of the packaged xtask. project_root() climbs two
+      # ancestors from here, which is the workspace only for utils/xtask.
+      CARGO_MANIFEST_DIR: ${{ github.workspace }}/utils/xtask
       SEED: ${{ github.run_id }}
     steps:
       - uses: actions/checkout@v7
