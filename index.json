@@ -132,6 +132,13 @@
    "subject": "fix(nightly): look up the packaged xtask crate under utils/xtask (#738)",
    "time": "2026-10-19T06:44:43.000Z",
    "env_key": "aarch64: rustc 1.99.1 (58cf8f9c3 2026-10-13); ldd (Ubuntu GLIBC 2.39-0ubuntu8.9) 2.39|x86_64: rustc 1.99.1 (58cf8f9c3 2026-10-13); ldd (Ubuntu GLIBC 2.39-0ubuntu8.9) 2.39"
+  },
+  {
+   "file": "runs/2026-10-19T22-48-45-000Z-7a67564a2f1f.json",
+   "commit": "7a67564a2f1fe87ca622e95083942b2922bd4485",
+   "subject": "fix(nightly): keep a division's fixed register across a shuffled gap (#734)",
+   "time": "2026-10-19T22:48:45.000Z",
+   "env_key": "aarch64: rustc 1.99.1 (58cf8f9c3 2026-10-13); ldd (Ubuntu GLIBC 2.39-0ubuntu8.9) 2.39|x86_64: rustc 1.99.1 (58cf8f9c3 2026-10-13); ldd (Ubuntu GLIBC 2.39-0ubuntu8.9) 2.39"
   }
  ]
 }
