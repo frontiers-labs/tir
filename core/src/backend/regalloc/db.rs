@@ -408,13 +408,6 @@ impl RegAllocDb {
                 };
                 for mid in &touches[from + 1..index] {
                     for &value in &mid.values {
-                        if seed
-                            .pins
-                            .get(&value)
-                            .is_some_and(|pin| pin.0.overlaps(pin.1, held.0, held.1))
-                        {
-                            continue;
-                        }
                         let register = self.register(held);
                         let value = self.value(value);
                         self.row(FORBID, &[register, value], 0);
