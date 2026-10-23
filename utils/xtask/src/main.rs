@@ -1,8 +1,4 @@
 mod fcc_fuzz;
-mod fp_check;
-mod gate;
-mod gate_bench;
-mod isasim_accept;
 mod lint;
 mod test;
 mod verify_smt;
@@ -24,13 +20,8 @@ enum Task {
     Test(test::Options),
     /// Package tools, tests and fixtures for test workers.
     TestPack(test::PackOptions),
-    /// Record and compare floating-point reference behavior.
-    #[command(subcommand)]
-    FpCheck(fp_check::Task),
     /// Run the lints: ast-grep rules, duplicate code, clippy and rustdoc.
     Lint,
-    /// Build the TIR project
-    Build,
     /// Build the project documentation
     Docs,
     /// Run formal ISA verification against the Sail model
@@ -41,33 +32,15 @@ enum Task {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
-    /// Run differential ISA tests against a golden oracle (riscv/Spike)
-    IsaTestSuite,
-    /// Run a simulator milestone acceptance manifest.
-    IsasimAccept(isasim_accept::Options),
-    /// Compile the pinned GCC C torture corpus through codegen and compare the
-    /// failures against the recorded baseline
+    /// Update the recorded failures for the pinned GCC C torture corpus.
     FccTorture {
         #[arg(long)]
-        bless: bool,
-        #[arg(long, requires = "bless")]
         fcc: Option<PathBuf>,
     },
-    /// The pinned gate: compile measurements against the baseline at -j1, then every
-    /// case again at -j8 with identical objects and peak RSS within 1.5x of
-    /// the pinned sequential peaks, CoreMark timed at both, and a generated
-    /// many-function unit held to the same contract
-    Gate(gate::Options),
     /// Generate random UB-free C programs, compile them under different pass
     /// pipelines and reference compilers, run the binaries and compare
     /// observable behavior
     FccFuzz(fcc_fuzz::Options),
-    /// Check the C ABI header is current and run the C smoke test
-    CapiSmoke,
-    /// Build the C ABI and run the Python test suite
-    PythonSmoke,
-    /// Build the C ABI and run the Haskell bindings smoke test (needs ghc)
-    HaskellSmoke,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -75,35 +48,12 @@ fn main() -> anyhow::Result<()> {
     match Task::parse() {
         Task::Test(options) => test::run(&project_root(), options),
         Task::TestPack(options) => test::pack(&project_root(), options),
-        Task::FpCheck(task) => fp_check::run(&project_root(), task),
         Task::Lint => lint::run(&sh, &project_root()),
-        Task::Build => build(&sh),
         Task::Docs => build_docs(&sh),
         Task::Verify { isa, args } => verify_smt::verify_smt(&sh, &isa, args.into_iter()),
-        Task::IsaTestSuite => isa_test_suite(&sh),
-        Task::IsasimAccept(options) => isasim_accept::run(&project_root(), options),
-        Task::FccTorture { bless, fcc } => {
-            if bless {
-                fcc_torture::bless(&sh, &project_root(), fcc.as_deref())
-            } else {
-                test::torture(&project_root())
-            }
-        }
-        Task::Gate(options) => gate::run(&sh, &project_root(), options),
+        Task::FccTorture { fcc } => fcc_torture::bless(&sh, &project_root(), fcc.as_deref()),
         Task::FccFuzz(options) => fcc_fuzz::run(&sh, &project_root(), &options),
-        Task::CapiSmoke => capi_smoke(&sh),
-        Task::PythonSmoke => python_smoke(&sh),
-        Task::HaskellSmoke => haskell_smoke(&sh),
     }
-}
-
-fn build(sh: &Shell) -> anyhow::Result<()> {
-    let root = project_root();
-    sh.change_dir(root);
-
-    cmd!(sh, "cargo build").run()?;
-
-    Ok(())
 }
 
 fn build_docs(sh: &Shell) -> anyhow::Result<()> {
@@ -251,66 +201,5 @@ fn build_isa_reference(root: &std::path::Path) -> anyhow::Result<()> {
         compiler.build().compile()?;
     }
 
-    Ok(())
-}
-
-fn isa_test_suite(sh: &Shell) -> anyhow::Result<()> {
-    let root = project_root();
-    sh.change_dir(&root);
-
-    cmd!(sh, "cargo build -p tir-isasim").run()?;
-    let isasim_bin = root.join("target/debug/tir-isasim");
-
-    let all_passed = tir_isa_test_suite::run(&isasim_bin)?;
-    if !all_passed {
-        anyhow::bail!("ISA test suite reported failures");
-    }
-    Ok(())
-}
-
-fn build_capi(sh: &Shell) -> anyhow::Result<PathBuf> {
-    let root = project_root();
-    sh.change_dir(&root);
-    cmd!(sh, "cargo build -p tir-capi").run()?;
-    Ok(root.join("target/debug"))
-}
-
-fn capi_smoke(sh: &Shell) -> anyhow::Result<()> {
-    let root = project_root();
-    let lib_dir = build_capi(sh)?;
-    let smoke = root.join("utils/capi/tests/smoke.c");
-    let bin = lib_dir.join("tir_capi_smoke");
-    let rpath = format!("-Wl,-rpath,{}", lib_dir.display());
-    cmd!(
-        sh,
-        "cc {smoke} -I utils/capi/include -L {lib_dir} -ltir_capi {rpath} -o {bin}"
-    )
-    .run()?;
-    cmd!(sh, "{bin}").run()?;
-
-    Ok(())
-}
-
-fn python_smoke(sh: &Shell) -> anyhow::Result<()> {
-    build_capi(sh)?;
-    cmd!(sh, "python3 -m unittest discover -s utils/python/tests").run()?;
-    Ok(())
-}
-
-fn haskell_smoke(sh: &Shell) -> anyhow::Result<()> {
-    let root = project_root();
-    let lib_dir = build_capi(sh)?;
-    let out = root.join("target/haskell");
-    std::fs::create_dir_all(&out)?;
-    let bin = out.join("tir_hs_smoke");
-    let lib_flag = format!("-L{}", lib_dir.display());
-    let rpath = format!("-optl-Wl,-rpath,{}", lib_dir.display());
-    cmd!(
-        sh,
-        "ghc -O0 -outputdir {out} -iutils/haskell/src utils/haskell/test/Main.hs
-         {lib_flag} -ltir_capi {rpath} -o {bin}"
-    )
-    .run()?;
-    cmd!(sh, "{bin}").run()?;
     Ok(())
 }

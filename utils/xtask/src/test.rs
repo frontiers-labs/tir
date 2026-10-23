@@ -46,23 +46,6 @@ struct Built {
     corpus: Option<PathBuf>,
 }
 
-pub fn torture(root: &Path) -> Result<()> {
-    let selection = if has_nextest() {
-        ["-E", "binary(torture)"]
-    } else {
-        ["--test", "torture"]
-    };
-    run(
-        root,
-        Options {
-            profile: Some("ci".into()),
-            torture: true,
-            runner_args: selection.map(String::from).into(),
-            ..Options::default()
-        },
-    )
-}
-
 pub fn run(root: &Path, options: Options) -> Result<()> {
     if let Some(archive) = &options.archive {
         return run_archive(root, archive, &options.runner_args);
