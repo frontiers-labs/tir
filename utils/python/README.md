@@ -40,6 +40,9 @@ with tir.Context() as ctx:
 
 ## Test
 
+Run from the repository root:
+
 ```sh
-cargo run -p xtask -- python-smoke
+cargo build -p tir-capi
+python3 -m unittest discover -s utils/python/tests
 ```

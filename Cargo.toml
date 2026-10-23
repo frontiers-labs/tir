@@ -31,7 +31,6 @@ members = [
     "utils/macros",
     "utils/fuzz",
     "utils/capi",
-    "utils/isa-test-suite",
 ]
 
 [workspace.dependencies]

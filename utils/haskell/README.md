@@ -8,8 +8,15 @@ operation schema.
 
 ## Build & test
 
+Run from the repository root with `ghc` on `PATH`:
+
 ```sh
-cargo run -p xtask -- haskell-smoke      # needs ghc on PATH
+cargo build -p tir-capi
+mkdir -p target/haskell
+ghc -O0 -outputdir target/haskell -iutils/haskell/src utils/haskell/test/Main.hs \
+    -L target/debug -ltir_capi -optl-Wl,-rpath,$PWD/target/debug \
+    -o target/haskell/tir_hs_smoke
+target/haskell/tir_hs_smoke
 ```
 
 That builds `libtir_capi`, then compiles and runs `test/Main.hs` linked against

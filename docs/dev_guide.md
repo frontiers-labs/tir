@@ -240,24 +240,6 @@ view lists `fcc` against the reference compilers for compile time, compile
 memory and run time. A new function benchmark is picked up without any
 workflow change.
 
-Use `cargo xtask fp-check` to record pinned GCC floating-point observations,
-compare cumulative semantic requirements, and summarize saved reports.
-The case manifest is `fcc/checks/Inputs/fp/cases.toml`. Each case records its ID,
-owning stage, inputs, and independent expectation. GCC-specific expectations
-use `reference_expectation`.
-
-```sh
-cargo xtask fp-check reference --gcc gcc --output /tmp/fp-reference.json
-cargo xtask fp-check check --stage reference --reference /tmp/fp-reference.json --output /tmp/fp-check.json
-cargo xtask fp-check report /tmp/fp-check.json
-```
-
-The default reference profile requires GCC 15.2. Use `--case ID` to select one
-case. Reports record compiler identity, commands, source and manifest digests,
-observations, and each case's status. `unsupported_capability` and
-`missing_infrastructure` never count as passes. The report command fails if
-any case is not `pass` or the report contains no cases.
-
 ### Running fuzz tests
 
 We also have fuzzing set up for user-facing parsers. These tests require

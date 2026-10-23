@@ -2152,16 +2152,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tir-isa-test-suite"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "serde",
- "serde_json",
- "tir-adt",
-]
-
-[[package]]
 name = "tir-isasim"
 version = "0.1.0"
 dependencies = [
