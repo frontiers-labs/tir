@@ -139,6 +139,13 @@
    "subject": "fix(nightly): keep a division's fixed register across a shuffled gap (#734)",
    "time": "2026-10-19T22:48:45.000Z",
    "env_key": "aarch64: rustc 1.99.1 (58cf8f9c3 2026-10-13); ldd (Ubuntu GLIBC 2.39-0ubuntu8.9) 2.39|x86_64: rustc 1.99.1 (58cf8f9c3 2026-10-13); ldd (Ubuntu GLIBC 2.39-0ubuntu8.9) 2.39"
+  },
+  {
+   "file": "runs/2026-10-24T05-01-28-000Z-3fdbc5f9d6b7.json",
+   "commit": "3fdbc5f9d6b79ecbcecb706200bd6ffa36f7dfcf",
+   "subject": "chore(xtask): remove unused commands (#739)",
+   "time": "2026-10-24T05:01:28.000Z",
+   "env_key": "aarch64: rustc 1.99.1 (58cf8f9c3 2026-10-13); ldd (Ubuntu GLIBC 2.39-0ubuntu8.9) 2.39|x86_64: rustc 1.99.1 (58cf8f9c3 2026-10-13); ldd (Ubuntu GLIBC 2.39-0ubuntu8.9) 2.39"
   }
  ]
 }
