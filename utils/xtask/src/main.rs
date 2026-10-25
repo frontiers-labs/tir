@@ -1,3 +1,4 @@
+mod bench;
 mod fcc_fuzz;
 mod lint;
 mod test;
@@ -18,6 +19,8 @@ use crate::utils::project_root;
 enum Task {
     /// Build fresh tools and run the workspace tests with nextest or cargo test.
     Test(test::Options),
+    /// Build the optimized compiler, run cargo bench, and save a benchmark summary.
+    Bench(bench::Options),
     /// Package tools, tests and fixtures for test workers.
     TestPack(test::PackOptions),
     /// Run the lints: ast-grep rules, duplicate code, clippy and rustdoc.
@@ -47,6 +50,7 @@ fn main() -> anyhow::Result<()> {
     let sh = Shell::new()?;
     match Task::parse() {
         Task::Test(options) => test::run(&project_root(), options),
+        Task::Bench(options) => bench::run(&project_root(), options),
         Task::TestPack(options) => test::pack(&project_root(), options),
         Task::Lint => lint::run(&sh, &project_root()),
         Task::Docs => build_docs(&sh),

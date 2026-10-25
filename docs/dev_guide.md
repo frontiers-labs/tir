@@ -165,80 +165,52 @@ contain a solution.
 ### Running benchmarks
 
 Benchmarks live in each package's `benches` directory and are declared in its
-`Cargo.toml` with `harness = false`. Run a target with
-`cargo bench -p <package> --bench <target>`. Pass `-- --help` to see its options.
+`Cargo.toml` with `harness = false`. Run one target with
+`cargo bench -p <package> --bench <target>`.
 
-Every target uses `tir-bench` from `utils/bench`, which has Criterion's
-interface. A function benchmark is written as it would be for Criterion:
+Function benchmarks use native Criterion. See `core/benches/lexer.rs` for a
+complete example.
+
+Use `b.iter_batched` when each iteration needs fresh input prepared outside
+measurement. Criterion defaults to 100 samples, 3 seconds of warmup, and
+5 seconds of measurement. Individual benchmarks can override these settings.
+Pass `-- --help` to a Criterion target for its filtering and timing options.
+
+External commands use `tir_bench::Experiment` from `utils/bench`:
 
 ```rust
-use tir_bench::{Criterion, criterion_group, criterion_main};
+use tir_bench::Experiment;
 
-fn lexer(c: &mut Criterion) {
-    let mut group = c.benchmark_group("large_asm");
-    group.bench_function("lex", |b| b.iter(|| lex(INPUT)));
-    group.finish();
-}
-
-criterion_group!(benches, lexer);
-criterion_main!(benches);
+let log = Experiment::new("compile/example", "gcc")
+    .args(["-c", "example.c", "-o", "example.o"])
+    .run()?;
 ```
 
-Use `b.iter` for the measured operation, or `b.iter_batched` to prepare fresh
-input outside measurement. Put expensive setup inside the `bench_function`
-closure, before `b.iter`, so it runs only when that benchmark is selected.
+An experiment repeats until it has both 3 successful runs and 5 seconds of
+measured time. Override these minimums with `min_repetitions` and
+`min_duration`. Timing includes process startup and waiting for exit.
+`run()` returns the combined stdout and stderr. Use `run_validated(validate)`
+to check that output before saving measurements. These command targets do not
+parse Criterion options.
 
-An external program is declared with `Program` and registered with
-`c.bench_program`. The declaration names its sources, fixed arguments, and
-output validator. The harness expands it into one compile case per source and a
-run case, for the package's compiler and its reference compilers. It prepares
-inputs and validates results outside measurement, then runs the compilers in
-rotated order.
+Run `cargo xtask bench` to build the optimized `fcc` binary, run the workspace
+benchmarks, and print a summary. Pass Cargo target selection after `--`, for
+example `cargo xtask bench -- -p fcc --bench coremark`. Use `--profile <profile>`
+before `--` to change the compiler and benchmark profile. Direct invocations of
+FCC's command targets need the `fcc` binary built in the matching profile.
 
-The command line follows Criterion. A positional argument is a regular
-expression over benchmark identifiers, and `--exact` matches one identifier.
-`--list` lists cases without fetching sources or invoking compilers.
-`--sample-size`, `--warm-up-time`, `--measurement-time` and `--save-baseline`
-keep Criterion's meaning for function benchmarks, and `--sample-size` fixes the
-sample count of programs too. For programs use `--phase`,
-`--compiler` and `--level` to limit work, and `--offline` to reject source-cache
-misses. Filtering must not change workload arguments.
+Results default to `target/criterion`, using the configured Cargo target
+directory when it differs from `target`. `CRITERION_HOME` overrides the results
+directory. Criterion saves `new/sample.json` and `new/benchmark.json` under each
+benchmark directory. Experiments save `new/bencher.json` with the mean latency
+and each process duration in nanoseconds; reserved characters in names become
+`_` in directory names.
 
-Criterion times functions, and the harness records its samples as the time of
-one iteration. Programs are sampled as processes for elapsed time, CPU time and
-peak RSS, which requires GNU `/usr/bin/time`. Without `--sample-size`, the
-compilers of one case take turns until the standard error of every median is
-under 1%, with at least 9 and at most 30 samples. Each wall time is reported
-as the median with its quartiles, the number of samples outside Tukey's fences,
-and whether the samples form one mode or several, judged by Gregg's modal value
-over a histogram (see Akinshin, "Pro .NET Benchmarking", chapter 4). Modes
-show reliably from about 30 samples, which function benchmarks get from
-Criterion. A multimodal benchmark has no single typical time, so compare its
-samples, not its median.
-
-Runs write samples, workload identities, command logs, and a `summary.json`
-under `target/bench`. `--output` changes that
-location; relative paths resolve from the workspace root. The summary is what
-benchboard records. It names each exported metric with a label, a unit and a
-description, and tags each program case with its compiler, so the tables in
-`utils/bench/src/results.rs` and `program.rs` decide what the board shows.
-`--baseline` compares with an earlier bundle and rejects incompatible workload
-identities. Change the declared inputs or contract when measurement boundaries
-change, so old results cannot silently pass a gate.
-
-Measurements report peak process RSS, not simultaneous process-tree memory.
-For regression gates, use a dedicated Linux runner, pin an allowed CPU, and
-control frequency policy, sibling-core activity, and background load. The harness records the environment; it does not configure
-the host.
-
-The Perf workflow times CoreMark and Dhrystone with `fcc`, `gcc` and `clang`,
-and every function benchmark, on x86_64 and aarch64 runners on each merge to
-`master`. It records the results on the `perf-data` branch through
-[benchboard](https://github.com/frontiers-labs/benchboard), which shows the
-history at <https://frontiers-labs.github.io/benchboard/>. The board's Versus
-view lists `fcc` against the reference compilers for compile time, compile
-memory and run time. A new function benchmark is picked up without any
-workflow change.
+The xtask report includes measurements written during that invocation and saves
+`benchmarks.csv` in the Cargo target directory. It reports the sample count,
+minimum, maximum, median, mean, sample standard deviation, and iterations per
+second. Criterion durations are normalized per iteration. Experiment durations
+measure one command execution.
 
 ### Running fuzz tests
 

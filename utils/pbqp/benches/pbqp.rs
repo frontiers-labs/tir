@@ -1,6 +1,6 @@
 use std::hint::black_box;
 
-use tir_bench::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
+use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
 use tir_pbqp::{PbqpMatrix, PbqpNodeId, PbqpProblem, solve};
 
 fn dense_problem(node_count: usize, alternative_count: usize) -> PbqpProblem {

@@ -3,7 +3,6 @@ ariadne
 cbindgen
 chumsky
 clap
-criterion
 isla-lib
 libc
 libfuzzer-sys

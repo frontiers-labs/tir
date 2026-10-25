@@ -2,36 +2,51 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/../.."
+export LC_ALL=C
 
 # Results shift when the toolchain changes, with no change in TIR.
 mkdir -p bench-results
 echo "$(uname -m): $(rustc --version); $(ldd --version | sed -n 1p)" > bench-results/environment
 
+run() {
+  local program=$1 package=$2 benchmark=$3
+  local bundle="bench-results/$program/$package-$benchmark"
+  rm -rf "$bundle"
+  export CRITERION_HOME="$PWD/$bundle/criterion"
+  cargo xtask bench -- -p "$package" --bench "$benchmark"
+  if [ "$program" = functions ]; then
+    cargo bench --locked -p "$package" --bench "$benchmark" -- --list |
+      sed -n 's/: benchmark$//p' | sort > "$bundle/listed"
+    find "$CRITERION_HOME" -path '*/new/benchmark.json' -exec jq -r '.full_id' {} \; |
+      sort > "$bundle/recorded"
+    test -s "$bundle/listed"
+    diff "$bundle/listed" "$bundle/recorded"
+  fi
+  {
+    find "$CRITERION_HOME" -path '*/new/bencher.json' -exec cat {} \;
+    while IFS= read -r sample; do
+      jq -n --slurpfile sample "$sample" --slurpfile benchmark "${sample%/*}/benchmark.json" '
+        {($benchmark[0].full_id): {latency: {samples:
+          [$sample[0] | range(0; .times | length) as $i | .times[$i] / .iters[$i]]}}}'
+    done < <(find "$CRITERION_HOME" -path '*/new/sample.json')
+  } | jq -s --arg program "$program" --arg architecture "$(uname -m)" \
+    --arg environment "$(uname -m) $(lscpu | sed -n 's/^Model name:[[:space:]]*//p')" \
+    -f .github/scripts/criterion-to-benchboard.jq > "$bundle/summary.tmp"
+  mv "$bundle/summary.tmp" "$bundle/summary.json"
+}
+
 case "${1:-}" in
-  # Wall time and peak memory of fcc, gcc and clang, sampled in rotated order
-  # until every median is stable. Validation and workload arguments match local
-  # runs. The case count catches a filter or a compiler that measured nothing.
-  coremark)
-    cargo bench --locked -p fcc --bench coremark -- \
-      --level O2 --warmups 1 --min-cases 21 --output "$PWD/bench-results/coremark"
-    ;;
-  dhrystone)
-    cargo bench --locked -p fcc --bench dhrystone -- \
-      --level O2 --warmups 1 --min-cases 9 --output "$PWD/bench-results/dhrystone"
+  coremark|dhrystone)
+    run "$1" fcc "$1"
     ;;
   functions)
-    # Every function benchmark in the workspace. A new one needs no edit here.
-    cargo bench --locked --workspace -- \
-      --skip-programs --output "$PWD/bench-results/functions"
-    # A target that records nothing must fail the job, so compare what ran
-    # with what the workspace lists.
-    listed=$(cargo bench --locked --workspace -- --list --skip-programs | sed -n 's/: benchmark$//p' | sort)
-    recorded=$(jq -r '.cases[].id' bench-results/functions/*/results.json | sort)
-    if [ -z "$listed" ] || [ "$listed" != "$recorded" ]; then
-      echo "Recorded function benchmarks differ from the listed ones:" >&2
-      diff <(echo "$listed") <(echo "$recorded") >&2 || true
-      exit 1
-    fi
+    targets=$(cargo metadata --no-deps --format-version 1 | jq -r '
+      .packages[] as $p | $p.targets[] | select(.kind | index("bench")) |
+      select($p.name != "fcc" or (.name != "coremark" and .name != "dhrystone" and .name != "whetstone")) |
+      [$p.name, .name] | @tsv')
+    while IFS=$'\t' read -r package benchmark; do
+      run functions "$package" "$benchmark"
+    done <<< "$targets"
     ;;
   *)
     echo "Usage: $0 coremark|dhrystone|functions" >&2

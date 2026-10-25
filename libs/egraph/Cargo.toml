@@ -10,7 +10,7 @@ tir-adt.workspace = true
 tir-relational.workspace = true
 
 [dev-dependencies]
-tir-bench.workspace = true
+criterion.workspace = true
 egg = "0.11"
 egglog = { version = "3.0.0", default-features = false }
 proptest.workspace = true

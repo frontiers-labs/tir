@@ -1,0 +1,8 @@
+Dhrystone C 2.1, Reinhold P. Weicker, 1988-05-25.
+Source: https://www.netlib.org/benchmark/dhry-c
+Archive SHA-256: 038a7e9169787125c3451a6c941f3aca5db2d2f3863871afcdce154ef17f4e3e
+Moved from fcc/extbench/dhrystone without further changes.
+The existing local port adds C17 declarations, standard library includes,
+pointer-safe diagnostics, a command-line iteration count, and main's return.
+Upstream documentation and distribution terms are retained in README_C,
+RATIONALE, VARIATIONS, and the source headers.

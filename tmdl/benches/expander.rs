@@ -1,4 +1,4 @@
-use tir_bench::{Criterion, Throughput, criterion_group, criterion_main};
+use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use tmdl::{MacroTable, StringArena, collect_macros, expand, lex};
 
 // The real macro-heavy x86_64 defs, concatenated in build.rs order so every

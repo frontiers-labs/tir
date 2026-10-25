@@ -8,6 +8,7 @@
 
 #[cfg(test)]
 mod fcc {
+    mod benchmark_output;
     mod cir;
     mod codegen;
     mod determinism;

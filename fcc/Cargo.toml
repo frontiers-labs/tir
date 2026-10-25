@@ -23,6 +23,7 @@ doctest = false
 
 [dev-dependencies]
 anyhow.workspace = true
+criterion.workspace = true
 tir-bench.workspace = true
 
 [[bin]]
@@ -44,10 +45,6 @@ harness = false
 
 [[bench]]
 name = "dhrystone"
-harness = false
-
-[[bench]]
-name = "torture"
 harness = false
 
 [[bench]]

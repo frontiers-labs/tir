@@ -29,22 +29,3 @@ tir-llvm.workspace = true
 
 [lints]
 workspace = true
-
-[dev-dependencies]
-anyhow.workspace = true
-tir-bench.workspace = true
-
-[[bench]]
-name = "coremark"
-path = "../fcc/benches/coremark.rs"
-harness = false
-
-[[bench]]
-name = "dhrystone"
-path = "../fcc/benches/dhrystone.rs"
-harness = false
-
-[[bench]]
-name = "whetstone"
-path = "../fcc/benches/whetstone.rs"
-harness = false

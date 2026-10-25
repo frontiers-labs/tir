@@ -28,10 +28,8 @@ env:
   CARGO_INCREMENTAL: "0"
 
 jobs:
-  # Wall time on shared runners, one program per job so the programs run in
-  # parallel. Each runner's CPU model goes with its results, so benchboard keeps
-  # one history line per machine. fcc, gcc and clang are sampled in rotated
-  # order on one runner, so their ratios stay comparable.
+  # Wall time on shared runners, one program per job. Each runner's CPU model
+  # goes with the results so benchboard keeps one history line per machine.
   programs:
     strategy:
       fail-fast: false
@@ -96,11 +94,7 @@ jobs:
         with:
           pattern: benchmark-*
           path: results
-      # A failed job uploads the cases it finished; only complete bundles count.
-      - run: |
-          find results -name results.json | while read -r file; do
-            jq -e '.status == "complete"' "$file" > /dev/null || rm -r "$(dirname "$file")"
-          done
+      # Each target publishes its summary only after execution and validation.
       # Benchboard marks history where the toolchains change.
       - id: environment
         run: echo "key=$(sort -u results/*/environment | paste -sd '|')" >> "$GITHUB_OUTPUT"

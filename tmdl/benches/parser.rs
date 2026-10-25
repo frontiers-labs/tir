@@ -1,4 +1,4 @@
-use tir_bench::{Criterion, Throughput, criterion_group, criterion_main};
+use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use tmdl::{lex, parse};
 
 const INPUT: &str = include_str!("./Inputs/large_instr_template.tmdl");

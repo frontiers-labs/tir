@@ -786,6 +786,7 @@ dependencies = [
  "ariadne",
  "chumsky",
  "clap",
+ "criterion",
  "logos",
  "tir",
  "tir-adt",
@@ -2040,12 +2041,12 @@ name = "tir"
 version = "0.1.0"
 dependencies = [
  "ariadne",
+ "criterion",
  "linkme",
  "logos",
  "smallvec",
  "tir-adt",
  "tir-arrange",
- "tir-bench",
  "tir-egraph",
  "tir-macros",
  "tir-pbqp",
@@ -2077,15 +2078,7 @@ version = "0.1.0"
 name = "tir-bench"
 version = "0.1.0"
 dependencies = [
- "anyhow",
- "clap",
- "criterion",
- "libc",
- "regex",
- "serde",
  "serde_json",
- "sha2",
- "tir-adt",
 ]
 
 [[package]]
@@ -2107,7 +2100,6 @@ dependencies = [
  "clap",
  "tir",
  "tir-arm64",
- "tir-bench",
  "tir-gpu",
  "tir-llvm",
  "tir-riscv",
@@ -2120,12 +2112,12 @@ dependencies = [
 name = "tir-egraph"
 version = "0.1.0"
 dependencies = [
+ "criterion",
  "egg",
  "egglog",
  "proptest",
  "smallvec",
  "tir-adt",
- "tir-bench",
  "tir-relational",
 ]
 
@@ -2211,9 +2203,9 @@ dependencies = [
 name = "tir-pbqp"
 version = "0.1.0"
 dependencies = [
+ "criterion",
  "serde",
  "serde_json",
- "tir-bench",
 ]
 
 [[package]]
@@ -2319,6 +2311,7 @@ dependencies = [
  "ariadne",
  "chumsky",
  "clap",
+ "criterion",
  "prettyplease",
  "proc-macro2",
  "quote",
@@ -2327,7 +2320,6 @@ dependencies = [
  "serde_json",
  "syn 2.0.118",
  "tir-adt",
- "tir-bench",
  "tir-symbolic",
 ]
 

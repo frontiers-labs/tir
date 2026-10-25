@@ -9,8 +9,8 @@
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 
+use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
 use egglog::EGraph;
-use tir_bench::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
 
 #[path = "workload.rs"]
 mod shared;

@@ -12,11 +12,11 @@ use std::hint::black_box;
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
+use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
 use egg::{
     AstSize, EGraph, Extractor, FromOp, Id, Language, Pattern, Rewrite, Runner, SimpleScheduler,
 };
 use smallvec::SmallVec;
-use tir_bench::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
 
 #[path = "workload.rs"]
 mod shared;

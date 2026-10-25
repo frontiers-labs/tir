@@ -5,78 +5,22 @@
 
 use std::fmt::Write;
 use std::hint::black_box;
-use std::time::Duration;
 
 use logos::Logos;
 
-use fcc::cir::CirDialect;
+use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use fcc::codegen::codegen;
 use fcc::diagnostics::{Span, intern_file};
 use fcc::lexer::Token;
 use fcc::parser::parse;
 use fcc::sema::{TypedAst, analyze};
-use tir::backend::TargetMachine;
-use tir::backend::pipeline::{Oracles, StopAfter, build_pipeline};
 use tir::builtin::ModuleOp;
-use tir::func::FuncOp;
-use tir::passes::{
-    InstCombineNodesPass, MaterializeSymbolAddressesPass, PromoteNodesPass, RestructureNodesPass,
-    VerifyDepsPass,
-};
-use tir::{Context, Operation, PassManager};
-use tir_bench::{BatchSize, Criterion, criterion_group, criterion_main};
+use tir::{Context, Operation};
 
 // The analyzed unit and the context its types are interned in, which the unit
 // is generated into.
 type AstInput = (Context, TypedAst);
 type IrInput = (Context, ModuleOp);
-type BackendInput = (Context, ModuleOp, Box<dyn TargetMachine>);
-
-const GCC_20011219_1: &str = r#"
-extern void abort (void);
-extern void exit (int);
-
-enum X { A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q };
-
-void bar (const char *x, int y, const char *z)
-{
-}
-
-long foo (enum X x, const void *y)
-{
-  long a;
-
-  switch (x)
-    {
-    case K:
-      a = *(long *)y;
-      break;
-    case L:
-      a = *(long *)y;
-      break;
-    case M:
-      a = *(long *)y;
-      break;
-    case N:
-      a = *(long *)y;
-      break;
-    case O:
-      a = *(long *)y;
-      break;
-    default:
-      bar ("foo", 1, "bar");
-    }
-  return a;
-}
-
-int main ()
-{
-  long i = 24;
-  if (foo (N, &i) != 24)
-    abort ();
-  exit (0);
-}
-"#;
 
 fn gen_source(funcs: usize, stmts: usize) -> String {
     let mut src = String::new();
@@ -126,35 +70,6 @@ fn parse_src(src: &str) -> AstInput {
     (context, ast)
 }
 
-fn lower_before_instcombine((context, ast): AstInput) -> IrInput {
-    context.register_dialect::<CirDialect>();
-    let module = codegen(&context, &ast).unwrap();
-
-    let mut pm = PassManager::new();
-    let function_pipeline = pm.nest::<FuncOp>();
-    function_pipeline.add_pass(RestructureNodesPass::new());
-    function_pipeline.add_pass(tir::passes::EraseLayoutPass::new());
-    function_pipeline.add_pass(PromoteNodesPass::new());
-    function_pipeline.add_pass(VerifyDepsPass::new());
-    pm.run(&context, context.get_op(module.id())).unwrap();
-    (context, module)
-}
-
-fn lower_before_isel(input: AstInput) -> BackendInput {
-    let (context, module) = lower_before_instcombine(input);
-    let target =
-        tir::backend::select_target_with_abi("x86_64", None, None, None).expect("x86_64 target");
-    target.register_dialects(&context);
-
-    let mut pm = PassManager::new();
-    let function_pipeline = pm.nest::<FuncOp>();
-    function_pipeline.add_pass(InstCombineNodesPass::trusting());
-    pm.add_pass(MaterializeSymbolAddressesPass::new());
-    pm.run(&context, context.get_op(module.id())).unwrap();
-    fcc::codegen::lower_data(&context, &module).unwrap();
-    (context, module, target)
-}
-
 fn codegen_ir((ctx, ast): AstInput) -> IrInput {
     let module = codegen(&ctx, &ast).unwrap();
     (ctx, module)
@@ -175,18 +90,6 @@ fn run_promote((ctx, module): IrInput) {
 
 fn run_pipeline(src: &str) {
     run_codegen(parse_src(src));
-}
-
-fn run_instcombine((context, module): IrInput) {
-    let mut pm = PassManager::new();
-    pm.nest::<FuncOp>()
-        .add_pass(InstCombineNodesPass::trusting());
-    pm.run(&context, context.get_op(module.id())).unwrap();
-}
-
-fn run_backend((context, module, target): BackendInput, stop_after: StopAfter) {
-    let mut pm = build_pipeline(target.as_ref(), &context, stop_after, Oracles::default());
-    pm.run(&context, context.get_op(module.id())).unwrap();
 }
 
 fn synthetic(c: &mut Criterion) {
@@ -215,33 +118,5 @@ fn synthetic(c: &mut Criterion) {
     });
 }
 
-fn gcc_20011219_1(c: &mut Criterion) {
-    let mut group = c.benchmark_group("fcc/gcc_20011219_1");
-    group
-        .sample_size(10)
-        .warm_up_time(Duration::from_secs(1))
-        .measurement_time(Duration::from_secs(5));
-    group.bench_function("instcombine", |b| {
-        b.iter_batched(
-            || lower_before_instcombine(parse_src(GCC_20011219_1)),
-            run_instcombine,
-            BatchSize::SmallInput,
-        );
-    });
-    for (name, stop_after) in [
-        ("instruction_selection", StopAfter::ISel),
-        ("backend_through_finalize", StopAfter::Finalize),
-    ] {
-        group.bench_function(name, |b| {
-            b.iter_batched(
-                || lower_before_isel(parse_src(GCC_20011219_1)),
-                |input| run_backend(input, stop_after),
-                BatchSize::SmallInput,
-            );
-        });
-    }
-    group.finish();
-}
-
-criterion_group!(benches, synthetic, gcc_20011219_1);
+criterion_group!(benches, synthetic);
 criterion_main!(benches);

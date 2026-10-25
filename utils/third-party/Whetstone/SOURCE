@@ -1,0 +1,5 @@
+Netlib C double-precision Whetstone 1.2.
+Source: https://www.netlib.org/benchmark/whetstone.c
+SHA-256: 333e4ceca042c146f63eec605573d16ae8b07166cbc44a17bec1ea97c6f1efbf
+Moved from fcc/extbench/whetstone without modifications.
+Upstream attribution and distribution terms are retained in the source header.

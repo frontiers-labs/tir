@@ -5,9 +5,9 @@
 use std::hash::{Hash, Hasher};
 use std::hint::black_box;
 
+use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
 use smallvec::SmallVec;
 use tir_adt::FxHasher;
-use tir_bench::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
 use tir_egraph::{Atom, HeadOp, LabelFill, NoExterns, Plan, Query, Rule};
 use tir_egraph::{ClassId as Id, Engine, Label as ENode};
 

@@ -1,5 +1,5 @@
+use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use tir::backend::lex;
-use tir_bench::{Criterion, Throughput, criterion_group, criterion_main};
 
 const LARGE_INPUT: &str = include_str!("./Inputs/large.s");
 

@@ -1,329 +1,257 @@
-//! Cargo benchmark harness with Criterion's interface.
-//!
-//! Function benchmarks are timed by Criterion itself. External programs are
-//! compiled, verified and measured as processes. Both kinds land in one result
-//! bundle with their samples and the shape of their distribution.
-pub mod environment;
-mod harness;
-mod options;
-pub mod process;
-pub mod program;
-mod results;
-pub mod sources;
-mod statistics;
+//! Repeated command timing with Bencher Metric Format JSON output.
 
-pub use anyhow::Result;
-pub use criterion::{BatchSize, Throughput};
-pub use options::{DEFAULT_TIMEOUT_SECS, Options, Phase};
-pub use process::Command;
-pub use program::Program;
-pub use results::Variant;
+use std::ffi::OsStr;
+use std::fs;
+use std::io;
+use std::path::PathBuf;
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
-use clap::Parser;
-use criterion::measurement::WallTime;
-use harness::Harness;
-use serde_json::{Value, json};
-use std::path::{Path, PathBuf};
-use std::time::Duration;
-
-/// Define a function that runs the listed benchmark functions in order.
-#[macro_export]
-macro_rules! criterion_group {
-    ($name:ident, $($target:path),+ $(,)?) => {
-        pub fn $name(criterion: &mut $crate::Criterion) {
-            $($target(criterion);)+
-        }
-    };
-}
-
-/// Define `main` for a Cargo benchmark target with `harness = false`.
-#[macro_export]
-macro_rules! criterion_main {
-    ($($group:path),+ $(,)?) => {
-        #[allow(dead_code)] // Tools import benchmark definitions without running them.
-        fn main() -> $crate::Result<()> {
-            $crate::run(
-                $crate::Target {
-                    package: env!("CARGO_PKG_NAME"),
-                    name: env!("CARGO_CRATE_NAME"),
-                    fcc: option_env!("CARGO_BIN_EXE_fcc"),
-                    tir: option_env!("CARGO_BIN_EXE_tir"),
-                },
-                &[$($group),+],
-            )
-        }
-    };
-}
-
-/// The Cargo benchmark target being run and the compilers Cargo built for it.
-pub struct Target {
-    pub package: &'static str,
-    pub name: &'static str,
-    /// Path of the package's `fcc` binary, which compiles programs from source.
-    pub fcc: Option<&'static str>,
-    /// Path of the package's `tir` binary, which compiles programs from LLVM IR.
-    pub tir: Option<&'static str>,
-}
-
-/// Entry point behind [`criterion_main!`].
-pub fn run(target: Target, groups: &[fn(&mut Criterion)]) -> Result<()> {
-    let namespace = format!("{}/{}", target.package, target.name);
-    let mut criterion = Criterion::new(&namespace, Options::parse())?;
-    criterion.harness.compilers = match (target.fcc, target.tir) {
-        (Some(fcc), _) => Some(program::CompilerSet::source(fcc)),
-        (None, Some(tir)) => Some(program::CompilerSet::llvm(tir)),
-        (None, None) => None,
-    };
-    for group in groups {
-        group(&mut criterion);
-    }
-    criterion.finish()
-}
-
-/// A check of captured stdout, executed after the measured operation.
-pub type Validator = Box<dyn Fn(&Path) -> Result<()>>;
-
-/// A subprocess and its untimed output validator. The validator receives stdout.
-pub struct ProcessCase {
-    pub id: String,
-    pub command: Command,
-    pub verify: Option<Validator>,
-    /// Workload identity and measurement scope. Must be stable between comparisons.
-    pub metadata: Value,
-    /// Whether this case is subject to regression thresholds.
-    pub gate: bool,
-    /// Set when other cases measure the same benchmark in another variant.
-    pub variant: Option<Variant>,
-}
-
-/// A benchmark name with a parameter, formatted as `name/parameter`.
-pub struct BenchmarkId(String);
-
-impl BenchmarkId {
-    pub fn new(name: impl Into<String>, parameter: impl std::fmt::Display) -> Self {
-        Self(format!("{}/{parameter}", name.into()))
-    }
-    pub fn from_parameter(parameter: impl std::fmt::Display) -> Self {
-        Self(parameter.to_string())
-    }
-}
-
-impl<S: Into<String>> From<S> for BenchmarkId {
-    fn from(name: S) -> Self {
-        Self(name.into())
-    }
-}
-
-/// One Cargo benchmark target. All measured work runs serially under a host lock.
-pub struct Criterion {
-    harness: Harness,
-    /// Times functions. Built on first use, since listing never needs it.
-    native: Option<criterion::Criterion>,
-}
-
-impl Criterion {
-    /// Create a harness with explicit options. Listing does not acquire a host lock.
-    pub fn new(namespace: &str, options: Options) -> Result<Self> {
-        Ok(Self {
-            harness: Harness::new(namespace, options)?,
-            native: None,
-        })
-    }
-
-    pub fn benchmark_group(&mut self, name: impl Into<String>) -> BenchmarkGroup<'_> {
-        let name = name.into();
-        let native = (!self.harness.listing()).then(|| {
-            let harness = &self.harness;
-            self.native
-                .get_or_insert_with(|| native_criterion(harness))
-                .benchmark_group(name.clone())
-        });
-        BenchmarkGroup {
-            harness: &mut self.harness,
-            name,
-            native,
-        }
-    }
-
-    /// Benchmark a function outside any group. `id` is its whole identifier.
-    pub fn bench_function(
-        &mut self,
-        id: &str,
-        mut routine: impl FnMut(&mut Bencher<'_, '_>),
-    ) -> &mut Self {
-        if self.harness.times(id) {
-            let harness = &self.harness;
-            self.native
-                .get_or_insert_with(|| native_criterion(harness))
-                .bench_function(id, |bencher| routine(&mut Bencher(bencher)));
-        }
-        self
-    }
-
-    /// Compile, verify and measure an external program with the package's compiler
-    /// and its reference compilers. A failure stops the target and is reported by `main`.
-    pub fn bench_program(&mut self, program: &Program) -> &mut Self {
-        self.harness
-            .attempt(|harness| program::measure(harness, program));
-        self
-    }
-
-    /// Measure prepared processes in rotated order, validating each execution.
-    pub fn bench_processes(&mut self, cases: Vec<ProcessCase>) -> &mut Self {
-        self.harness.attempt(|harness| harness.process_group(cases));
-        self
-    }
-
-    /// Directory of this run's result bundle, created on first use.
-    pub fn artifacts(&mut self) -> Result<PathBuf> {
-        self.harness.bundle()
-    }
-
-    /// Report the first failure, record timed functions, and complete the bundle.
-    pub fn finish(mut self) -> Result<()> {
-        if let Some(failure) = self.harness.failure.take() {
-            return Err(failure);
-        }
-        if let Some(native) = &self.native {
-            native.final_summary();
-        }
-        self.harness.record_functions()?;
-        self.harness.finish()
-    }
-}
-
-fn native_criterion(harness: &Harness) -> criterion::Criterion {
-    let options = &harness.options;
-    // The harness reads Criterion's samples back from this directory.
-    let mut criterion =
-        criterion::Criterion::default().output_directory(&harness.target.join("criterion"));
-    if let Some(samples) = options.sample_size {
-        // Criterion rejects fewer than 10 samples. Smaller values still apply to processes.
-        if samples < 10 {
-            eprintln!("--sample-size {samples} is below Criterion's minimum; functions use 10");
-        }
-        criterion = criterion.sample_size(samples.max(10) as usize);
-    }
-    if let Some(seconds) = options.warm_up_time {
-        criterion = criterion.warm_up_time(Duration::from_secs_f64(seconds));
-    }
-    if let Some(seconds) = options.measurement_time {
-        criterion = criterion.measurement_time(Duration::from_secs_f64(seconds));
-    }
-    if let Some(name) = &options.save_baseline {
-        criterion = criterion.save_baseline(name.clone());
-    }
-    criterion
-}
-
-/// Benchmarks that share a name prefix and sampling settings.
-pub struct BenchmarkGroup<'a> {
-    harness: &'a mut Harness,
+/// A command timed until both the repetition count and duration are satisfied.
+///
+/// ```no_run
+/// use tir_bench::Experiment;
+///
+/// let log = Experiment::new("compile", "gcc")
+///     .args(["-c", "example.c", "-o", "example.o"])
+///     .run()?;
+/// println!("{log}");
+/// # Ok::<(), std::io::Error>(())
+/// ```
+pub struct Experiment {
     name: String,
-    native: Option<criterion::BenchmarkGroup<'a, WallTime>>,
+    command: Command,
+    min_repetitions: usize,
+    min_duration: Duration,
 }
 
-impl BenchmarkGroup<'_> {
-    // Sampling settings shape native timing only. A command-line value wins over
-    // the benchmark's own, so a quick local run needs no source edit.
-    pub fn sample_size(&mut self, samples: usize) -> &mut Self {
-        if let Some(native) = &mut self.native
-            && self.harness.options.sample_size.is_none()
-        {
-            native.sample_size(samples);
+impl Experiment {
+    /// Benchmark a program, with defaults of 3 repetitions and 5 seconds.
+    ///
+    /// Arguments are passed literally. For shell syntax, use `sh` with
+    /// `.args(["-c", "your shell command"])`.
+    pub fn new(name: impl Into<String>, program: impl AsRef<OsStr>) -> Self {
+        Self {
+            name: name.into(),
+            command: Command::new(program),
+            min_repetitions: 3,
+            min_duration: Duration::from_secs(5),
         }
+    }
+
+    /// Append command-line arguments without shell expansion.
+    pub fn args(mut self, args: impl IntoIterator<Item = impl AsRef<OsStr>>) -> Self {
+        self.command.args(args);
         self
     }
 
-    pub fn warm_up_time(&mut self, duration: Duration) -> &mut Self {
-        if let Some(native) = &mut self.native
-            && self.harness.options.warm_up_time.is_none()
-        {
-            native.warm_up_time(duration);
-        }
+    /// Set the minimum number of successful runs. Must be greater than zero.
+    pub fn min_repetitions(mut self, repetitions: usize) -> Self {
+        self.min_repetitions = repetitions;
         self
     }
 
-    pub fn measurement_time(&mut self, duration: Duration) -> &mut Self {
-        if let Some(native) = &mut self.native
-            && self.harness.options.measurement_time.is_none()
-        {
-            native.measurement_time(duration);
-        }
+    /// Set the minimum sum of measured command durations.
+    pub fn min_duration(mut self, duration: Duration) -> Self {
+        self.min_duration = duration;
         self
     }
 
-    pub fn throughput(&mut self, throughput: Throughput) -> &mut Self {
-        if let Some(native) = &mut self.native {
-            native.throughput(throughput);
-        }
-        self
+    /// Run the experiment, save Bencher Metric Format JSON, and return its log.
+    ///
+    /// Results overwrite `<criterion directory>/<name>/new/bencher.json`.
+    /// The directory follows Criterion: `CRITERION_HOME`, then the Cargo target
+    /// directory plus `criterion`, then `target/criterion`. Filename separators
+    /// and reserved characters in the benchmark name are replaced with `_`.
+    ///
+    /// `latency.value` is the arithmetic mean in nanoseconds. The extra
+    /// `latency.samples` field preserves every duration in execution order,
+    /// also in nanoseconds. Timing includes process startup and waiting for exit.
+    /// Standard input is closed. The returned log concatenates stdout then
+    /// stderr for each repetition, replacing invalid UTF-8 with U+FFFD.
+    ///
+    /// Returns an error for an empty name, zero repetitions, failure to start
+    /// the command, an unsuccessful exit, or failure to save results. An
+    /// unsuccessful exit includes the captured log and writes no results.
+    pub fn run(self) -> io::Result<String> {
+        self.run_validated(|_| {})
     }
 
-    pub fn bench_function(
-        &mut self,
-        id: impl Into<BenchmarkId>,
-        mut routine: impl FnMut(&mut Bencher<'_, '_>),
-    ) -> &mut Self {
-        let BenchmarkId(name) = id.into();
-        if self.harness.times(&format!("{}/{name}", self.name)) {
-            let native = self.native.as_mut().expect("timed groups wrap Criterion");
-            native.bench_function(name, |bencher| routine(&mut Bencher(bencher)));
+    /// Run the experiment and validate its output before saving measurements.
+    pub fn run_validated(mut self, validate: impl FnOnce(&str)) -> io::Result<String> {
+        if self.name.is_empty() || self.min_repetitions == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "benchmark name must be nonempty and repetitions must be positive",
+            ));
         }
-        self
+        self.command.stdin(Stdio::null());
+        let mut samples = Vec::new();
+        let mut elapsed = Duration::ZERO;
+        let mut log = String::new();
+        while samples.len() < self.min_repetitions || elapsed < self.min_duration {
+            let start = Instant::now();
+            let output = self.command.output()?;
+            let duration = start.elapsed();
+            log.push_str(&String::from_utf8_lossy(&output.stdout));
+            log.push_str(&String::from_utf8_lossy(&output.stderr));
+            if !output.status.success() {
+                return Err(io::Error::other(format!(
+                    "benchmark {:?} command {:?} failed with {}\n{log}",
+                    self.name, self.command, output.status,
+                )));
+            }
+            elapsed += duration;
+            samples.push(duration.as_secs_f64() * 1e9);
+        }
+        validate(&log);
+        let metrics = serde_json::json!({
+            "latency": {
+                "value": elapsed.as_secs_f64() * 1e9 / samples.len() as f64,
+                "samples": samples,
+            }
+        });
+        write_metrics(&self.name, metrics)?;
+        Ok(log)
     }
 
-    pub fn bench_with_input<I: ?Sized>(
-        &mut self,
-        id: impl Into<BenchmarkId>,
-        input: &I,
-        mut routine: impl FnMut(&mut Bencher<'_, '_>, &I),
-    ) -> &mut Self {
-        self.bench_function(id, |bencher| routine(bencher, input))
-    }
-
-    pub fn finish(self) {
-        if let Some(native) = self.native {
-            native.finish();
-        }
+    /// Record a skipped experiment and its reason without running the command.
+    pub fn skip(mut self, reason: &str) -> io::Result<()> {
+        eprintln!("{}: skipped ({reason})", self.name);
+        self.name = format!("{} [skipped: {reason}]", self.name);
+        write_metrics(&self.name, serde_json::json!({"skipped": {"value": 1}}))
     }
 }
 
-/// Runs the measured operation of one function benchmark.
-pub struct Bencher<'a, 'b>(&'a mut criterion::Bencher<'b, WallTime>);
-
-impl Bencher<'_, '_> {
-    /// Measure the routine, including destruction of its return value.
-    pub fn iter<O>(&mut self, routine: impl FnMut() -> O) {
-        self.0.iter(routine);
+fn write_metrics(name: &str, metrics: serde_json::Value) -> io::Result<()> {
+    let mut directory = name.replace(['?', '"', '/', '\\', '*', '<', '>', ':', '|', '^'], "_");
+    if directory == "." || directory == ".." {
+        directory = "_".into();
     }
-
-    /// Exclude input preparation and output destruction from measurement.
-    pub fn iter_batched<I, O>(
-        &mut self,
-        setup: impl FnMut() -> I,
-        routine: impl FnMut(I) -> O,
-        size: BatchSize,
-    ) {
-        self.0.iter_batched(setup, routine, size);
-    }
+    let json = serde_json::json!({name: metrics});
+    let directory = output_directory().join(directory).join("new");
+    fs::create_dir_all(&directory)?;
+    fs::write(
+        directory.join("bencher.json"),
+        serde_json::to_vec_pretty(&json)?,
+    )
 }
 
-/// Build settings of the harness and its Cargo-built compiler dependencies.
-pub fn build_configuration() -> Value {
-    json!({
-        "profile": env!("TIR_BENCH_PROFILE"),
-        "opt_level": env!("TIR_BENCH_OPT_LEVEL"),
-        "debug": env!("TIR_BENCH_DEBUG"),
-        "target": env!("TIR_BENCH_TARGET"),
-        "rustflags": env!("TIR_BENCH_CARGO_ENCODED_RUSTFLAGS"),
-        "rustc": env!("TIR_BENCH_RUSTC"),
-    })
-}
-
-/// Resolve the shared pinned-source cache, honouring an explicit environment override.
-pub fn source_cache(target: &Path) -> PathBuf {
-    std::env::var_os("TIR_BENCH_SOURCE_CACHE")
+fn output_directory() -> PathBuf {
+    if let Some(home) = std::env::var_os("CRITERION_HOME") {
+        return home.into();
+    }
+    let target = std::env::var_os("CARGO_TARGET_DIR")
         .map(PathBuf::from)
-        .unwrap_or_else(|| target.join("bench-sources"))
+        .or_else(|| {
+            let cargo = std::env::var_os("CARGO")?;
+            let output = Command::new(cargo)
+                .args(["metadata", "--format-version", "1", "--no-deps"])
+                .output()
+                .ok()?;
+            let metadata: serde_json::Value = serde_json::from_slice(&output.stdout).ok()?;
+            metadata["target_directory"].as_str().map(PathBuf::from)
+        });
+    target
+        .unwrap_or_else(|| PathBuf::from("target"))
+        .join("criterion")
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    fn read_result(directory: &str) -> serde_json::Value {
+        let bytes = fs::read(output_directory().join(directory).join("new/bencher.json")).unwrap();
+        serde_json::from_slice(&bytes).unwrap()
+    }
+
+    #[test]
+    fn defaults_meet_both_minimums() {
+        let log = Experiment::new("tir-bench-test-sleep", "sh")
+            .args(["-c", "sleep 0.05"])
+            .run()
+            .unwrap();
+        assert!(log.is_empty());
+        let json = read_result("tir-bench-test-sleep");
+        let latency = &json["tir-bench-test-sleep"]["latency"];
+        let samples = latency["samples"].as_array().unwrap();
+        assert!(samples.len() >= 3);
+        let total: f64 = samples.iter().map(|s| s.as_f64().unwrap()).sum();
+        assert!(total >= 5e9);
+        let mean = latency["value"].as_f64().unwrap();
+        assert!((mean - total / samples.len() as f64).abs() < 1.0);
+    }
+
+    #[test]
+    fn repetitions_and_literal_arguments() {
+        for repetitions in [None, Some(4)] {
+            let mut experiment = Experiment::new("tir-bench-test/quoted \"name\"", "sh")
+                .args([
+                    "-c",
+                    "test \"$1\" = 'a b;$HOME' && printf 'out\\n' && printf 'err\\n' >&2",
+                    "sh",
+                    "a b;$HOME",
+                ])
+                .min_duration(Duration::ZERO);
+            if let Some(count) = repetitions {
+                experiment = experiment.min_repetitions(count);
+            }
+            let log = experiment.run().unwrap();
+            assert_eq!(log, "out\nerr\n".repeat(repetitions.unwrap_or(3)));
+            let json = read_result("tir-bench-test_quoted _name_");
+            assert_eq!(
+                json["tir-bench-test/quoted \"name\""]["latency"]["samples"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                repetitions.unwrap_or(3)
+            );
+        }
+    }
+
+    #[test]
+    fn failures_do_not_become_measurements() {
+        let directory = output_directory().join("tir-bench-test-rejected-output");
+        let _ = fs::remove_dir_all(&directory);
+        let rejected = std::panic::catch_unwind(|| {
+            Experiment::new("tir-bench-test-rejected-output", "sh")
+                .args(["-c", "printf incorrect"])
+                .min_duration(Duration::ZERO)
+                .min_repetitions(1)
+                .run_validated(|log| assert_eq!(log, "correct"))
+                .unwrap();
+        });
+        assert!(rejected.is_err());
+        assert!(!directory.exists());
+        Experiment::new("tir-bench-test-skipped", "/tir-bench-nonexistent-command")
+            .skip("unsupported")
+            .unwrap();
+        let skipped = read_result("tir-bench-test-skipped [skipped_ unsupported]");
+        let status = &skipped["tir-bench-test-skipped [skipped: unsupported]"];
+        assert_eq!(status["skipped"]["value"], 1);
+        assert!(status.get("latency").is_none());
+        let error = Experiment::new("failure", "sh")
+            .args(["-c", "echo failed-command >&2; exit 7"])
+            .run()
+            .unwrap_err();
+        assert!(error.to_string().contains("exit status: 7"));
+        assert!(error.to_string().contains("failed-command"));
+        assert_eq!(
+            Experiment::new("missing", "/tir-bench-nonexistent-command")
+                .run()
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::NotFound
+        );
+        for experiment in [
+            Experiment::new("", "sh"),
+            Experiment::new("zero", "sh").min_repetitions(0),
+        ] {
+            assert_eq!(
+                experiment.run().unwrap_err().kind(),
+                io::ErrorKind::InvalidInput
+            );
+        }
+    }
 }
