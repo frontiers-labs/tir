@@ -146,6 +146,13 @@
    "subject": "chore(xtask): remove unused commands (#739)",
    "time": "2026-10-24T05:01:28.000Z",
    "env_key": "aarch64: rustc 1.99.1 (58cf8f9c3 2026-10-13); ldd (Ubuntu GLIBC 2.39-0ubuntu8.9) 2.39|x86_64: rustc 1.99.1 (58cf8f9c3 2026-10-13); ldd (Ubuntu GLIBC 2.39-0ubuntu8.9) 2.39"
+  },
+  {
+   "file": "runs/2026-10-25T17-07-50-000Z-ec961a8d06c6.json",
+   "commit": "ec961a8d06c6459d4978be2469c6d14ca25e1184",
+   "subject": "feat(bench): report libprof TMA percentages alongside timings (#741)",
+   "time": "2026-10-25T17:07:50.000Z",
+   "env_key": "aarch64: rustc 1.99.1 (58cf8f9c3 2026-10-13); ldd (Ubuntu GLIBC 2.39-0ubuntu8.9) 2.39|x86_64: rustc 1.99.1 (58cf8f9c3 2026-10-13); ldd (Ubuntu GLIBC 2.39-0ubuntu8.9) 2.39"
   }
  ]
 }
