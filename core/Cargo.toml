@@ -29,6 +29,7 @@ tir-pdl = { workspace = true, default-features = false }
 tir-pdl = { workspace = true, default-features = false }
 
 [dev-dependencies]
+tir-bench.workspace = true
 criterion.workspace = true
 
 [[bench]]

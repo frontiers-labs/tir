@@ -9,8 +9,8 @@
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 
-use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
 use egglog::EGraph;
+use tir_bench::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
 
 #[path = "workload.rs"]
 mod shared;
@@ -119,7 +119,7 @@ fn print_stats(workloads: &[Workload]) {
     }
 }
 
-fn benches(c: &mut Criterion) {
+fn benches(c: &mut Criterion, tma: &tir_bench::TMAMetrics) {
     let workloads = shared::workloads();
     print_stats(&workloads);
     let mut group = c.benchmark_group("egglog/saturate");
@@ -132,6 +132,7 @@ fn benches(c: &mut Criterion) {
                 BatchSize::SmallInput,
             );
         });
+        tma.report(&format!("egglog/saturate/{}", workload.name));
     }
     group.finish();
 }

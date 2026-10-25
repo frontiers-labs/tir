@@ -1,6 +1,6 @@
 use std::hint::black_box;
 
-use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
+use tir_bench::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
 use tir_pbqp::{PbqpMatrix, PbqpNodeId, PbqpProblem, solve};
 
 fn dense_problem(node_count: usize, alternative_count: usize) -> PbqpProblem {
@@ -71,7 +71,7 @@ fn solve_problem(problem: &PbqpProblem) {
     black_box(solve(problem).expect("PBQP should be solvable"));
 }
 
-fn dense_search(c: &mut Criterion) {
+fn dense_search(c: &mut Criterion, tma: &tir_bench::TMAMetrics) {
     let mut group = c.benchmark_group("pbqp/dense_search");
     for nodes in [16, 32] {
         let problem = dense_problem(nodes, 4);
@@ -86,11 +86,12 @@ fn dense_search(c: &mut Criterion) {
                 );
             },
         );
+        tma.report(&format!("pbqp/dense_search/{nodes}"));
     }
     group.finish();
 }
 
-fn block_search(c: &mut Criterion) {
+fn block_search(c: &mut Criterion, tma: &tir_bench::TMAMetrics) {
     let mut group = c.benchmark_group("pbqp/block_search");
     group.sample_size(20);
     for nodes in [512, 4096] {
@@ -106,6 +107,7 @@ fn block_search(c: &mut Criterion) {
                 );
             },
         );
+        tma.report(&format!("pbqp/block_search/{nodes}"));
     }
     group.finish();
 }

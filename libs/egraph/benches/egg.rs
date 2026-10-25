@@ -12,11 +12,11 @@ use std::hint::black_box;
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
-use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
 use egg::{
     AstSize, EGraph, Extractor, FromOp, Id, Language, Pattern, Rewrite, Runner, SimpleScheduler,
 };
 use smallvec::SmallVec;
+use tir_bench::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
 
 #[path = "workload.rs"]
 mod shared;
@@ -155,7 +155,7 @@ fn print_stats(workloads: &[Workload]) {
     }
 }
 
-fn benches(c: &mut Criterion) {
+fn benches(c: &mut Criterion, tma: &tir_bench::TMAMetrics) {
     let workloads = shared::workloads();
     // egg calibrates its clock on first use, in a loop bounded by wall time.
     // Run it before anything is measured so instruction counts stay repeatable.
@@ -166,6 +166,7 @@ fn benches(c: &mut Criterion) {
         group.bench_function(BenchmarkId::from_parameter(workload.name), |b| {
             b.iter(|| seed(workload));
         });
+        tma.report(&format!("egg/seed/{}", workload.name));
     }
     group.finish();
     let mut group = c.benchmark_group("egg/saturate");
@@ -178,6 +179,7 @@ fn benches(c: &mut Criterion) {
                 BatchSize::SmallInput,
             );
         });
+        tma.report(&format!("egg/saturate/{}", workload.name));
     }
     group.finish();
     let mut group = c.benchmark_group("egg/ematch");
@@ -187,6 +189,7 @@ fn benches(c: &mut Criterion) {
             let g = runner(workload, workload.iters).run(&rules).egraph;
             b.iter(|| ematch_all(&rules, &g));
         });
+        tma.report(&format!("egg/ematch/{}", workload.name));
     }
     group.finish();
     let mut group = c.benchmark_group("egg/extract");
@@ -196,6 +199,7 @@ fn benches(c: &mut Criterion) {
             let g = runner(workload, workload.iters).run(&rules).egraph;
             b.iter(|| extract_all(&g));
         });
+        tma.report(&format!("egg/extract/{}", workload.name));
     }
     group.finish();
 }

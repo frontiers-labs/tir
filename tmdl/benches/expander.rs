@@ -1,4 +1,4 @@
-use criterion::{Criterion, Throughput, criterion_group, criterion_main};
+use tir_bench::{Criterion, Throughput, criterion_group, criterion_main};
 use tmdl::{MacroTable, StringArena, collect_macros, expand, lex};
 
 // The real macro-heavy x86_64 defs, concatenated in build.rs order so every
@@ -13,7 +13,7 @@ const DEFS: &[&str] = &[
     include_str!("../../backends/x86_64/defs/float.tmdl"),
 ];
 
-fn x86_defs(c: &mut Criterion) {
+fn x86_defs(c: &mut Criterion, tma: &tir_bench::TMAMetrics) {
     let input = DEFS.join("\n");
     let mut group = c.benchmark_group("x86_defs");
     group.throughput(Throughput::Bytes(input.len() as u64));
@@ -30,6 +30,7 @@ fn x86_defs(c: &mut Criterion) {
             assert!(diagnostics.is_empty());
         });
     });
+    tma.report("x86_defs/collect_and_expand");
     group.finish();
 }
 

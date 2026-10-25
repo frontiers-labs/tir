@@ -1,11 +1,126 @@
 //! Repeated command timing with Bencher Metric Format JSON output.
 
+use criterion::measurement::{Measurement, ValueFormatter, WallTime};
+pub use criterion::{BatchSize, BenchmarkId, Throughput, criterion_main};
+use libprof::{CountingDriver, CountingDriverBuilder, MetricExpression};
 use std::ffi::OsStr;
 use std::fs;
 use std::io;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
+use std::{cell::RefCell, collections::HashMap, rc::Rc};
+
+/// Criterion configured for wall-clock timing and TMA collection.
+pub type Criterion = criterion::Criterion<TMAMetrics>;
+/// Wall-clock measurement sharing TMA results across clones, including warmup.
+#[derive(Clone)]
+pub struct TMAMetrics(Rc<RefCell<State>>);
+struct State {
+    driver: Option<Box<dyn CountingDriver>>,
+    values: Option<HashMap<String, f64>>,
+}
+impl TMAMetrics {
+    /// Opens host TMA counters; unsupported formulas or cluster counters report unavailable.
+    pub fn new() -> Self {
+        let events = libprof::host_tma_scenario().map_or(Vec::new(), |s| s.events);
+        let counters: Vec<_> = events.iter().map(|e| libprof::tma_counter(e)).collect();
+        let builder = CountingDriverBuilder::new().counters(&counters);
+        Self(Rc::new(RefCell::new(State {
+            driver: builder.build().ok(),
+            values: None,
+        })))
+    }
+    /// Saves evaluated TMA percentages for the benchmark, then clears its counters.
+    pub fn report(&self, name: &str) {
+        let mut state = self.0.borrow_mut();
+        let Some(mut values) = state.values.take() else {
+            return;
+        };
+        let mut metrics = serde_json::Map::new();
+        if let Some(scenario) = libprof::host_tma_scenario().filter(|_| state.driver.is_some()) {
+            for constant in scenario.constants {
+                values.insert(constant.name, constant.value as f64);
+            }
+            for metric in scenario.metrics {
+                let Ok(value) = MetricExpression(metric.formula.replace('$', "")).evaluate(&values)
+                else {
+                    metrics.clear();
+                    break;
+                };
+                values.insert(metric.name.clone(), value);
+                metrics.insert(
+                    format!("tma.{} (%)", metric.name),
+                    serde_json::json!({"value": value * 100.0}),
+                );
+            }
+        }
+        if metrics.is_empty() {
+            metrics.insert("tma.unavailable".into(), serde_json::json!({"value": 1}));
+        }
+        let _ = write_metrics(name, serde_json::Value::Object(metrics));
+    }
+}
+impl Default for TMAMetrics {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+impl Measurement for TMAMetrics {
+    type Intermediate = (Instant, bool);
+    type Value = Duration;
+    fn start(&self) -> Self::Intermediate {
+        let mut state = self.0.borrow_mut();
+        let driver = state.driver.as_mut();
+        let active = driver.is_some_and(|d| d.reset().and_then(|()| d.start()).is_ok());
+        (Instant::now(), active)
+    }
+    fn end(&self, (started, active): Self::Intermediate) -> Duration {
+        let elapsed = started.elapsed();
+        let mut state = self.0.borrow_mut();
+        let counts = state.driver.as_mut().and_then(|d| {
+            d.stop().ok().filter(|_| active)?;
+            d.counters()
+                .ok()
+                .filter(|r| !r.entries().is_empty() && r.entries().iter().all(|e| e.core.is_none()))
+        });
+        let values = state.values.get_or_insert_default();
+        if let Some(counts) = counts {
+            for entry in counts.entries() {
+                let name = entry.counter.name().to_owned();
+                *values.entry(name).or_default() += entry.value.value as f64;
+            }
+        } else {
+            state.driver = None;
+        }
+        elapsed
+    }
+    fn add(&self, a: &Duration, b: &Duration) -> Duration {
+        WallTime.add(a, b)
+    }
+    fn zero(&self) -> Duration {
+        WallTime.zero()
+    }
+    fn to_f64(&self, value: &Duration) -> f64 {
+        WallTime.to_f64(value)
+    }
+    fn formatter(&self) -> &dyn ValueFormatter {
+        WallTime.formatter()
+    }
+}
+
+/// Defines a benchmark group with shared TMA collection and explicit reports.
+#[macro_export]
+macro_rules! criterion_group {
+    ($name:ident, $($bench:path),+ $(,)?) => {
+        fn $name() {
+            let tma = $crate::TMAMetrics::new();
+            let mut c = ::criterion::Criterion::default()
+                .with_measurement(tma.clone()).configure_from_args();
+            $($bench(&mut c, &tma);)+
+        }
+    };
+}
 
 /// A command timed until both the repetition count and duration are satisfied.
 ///

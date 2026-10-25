@@ -3,9 +3,11 @@ ariadne
 cbindgen
 chumsky
 clap
+criterion
 isla-lib
 libc
 libfuzzer-sys
+libprof
 libtest-mimic
 linkme
 logos

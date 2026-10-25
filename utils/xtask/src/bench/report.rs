@@ -164,7 +164,7 @@ pub(super) fn write(
     csv: &Path,
     output: &mut impl Write,
 ) -> Result<()> {
-    let mut rows = Vec::new();
+    let mut rows = BTreeMap::<String, Row>::new();
     for (path, metadata) in snapshot(root)? {
         if previous.get(&path) == Some(&metadata) {
             continue;
@@ -175,12 +175,16 @@ pub(super) fn write(
                 "invalid timings for {}",
                 row.name
             );
-            rows.push(row);
+            if let Some(merged) = rows.get_mut(&row.name) {
+                merged.samples.extend(row.samples);
+                merged.metrics.extend(row.metrics);
+            } else {
+                rows.insert(row.name.clone(), row);
+            }
         }
     }
-    rows.sort_by(|a, b| a.name.cmp(&b.name));
     let metrics: BTreeSet<String> = rows
-        .iter()
+        .values()
         .flat_map(|r| r.metrics.keys().cloned())
         .collect();
     let mut header: Vec<String> = [
@@ -197,7 +201,7 @@ pub(super) fn write(
     .into();
     header.extend(metrics.iter().cloned());
     let mut cells = vec![header];
-    cells.extend(rows.into_iter().map(|row| row.cells(&metrics)));
+    cells.extend(rows.into_values().map(|row| row.cells(&metrics)));
     let mut file = fs::File::create(csv)?;
     for row in &cells {
         let escaped: Vec<String> = row
@@ -282,7 +286,8 @@ mod tests {
             "metrics-only",
             "bencher.json",
             serde_json::json!({
-                "memory-only": {"memory": {"value": 8192}}
+                "memory-only": {"memory": {"value": 8192}},
+                "lexer": {"memory": {"value": 16}}
             }),
         );
         let csv = root.join("benchmarks.csv");
@@ -293,7 +298,7 @@ mod tests {
         assert_eq!(lines.len(), 4);
         assert_eq!(lines[0], "\"benchmark\",\"samples\",\"min_ns\",\"max_ns\",\"median_ns\",\"mean_ns\",\"std_dev_ns\",\"iterations/s\",\"bytes/s\",\"elements/s\",\"memory\"");
         assert_eq!(lines[1], "\"compile,\"\"C\"\"\",\"3\",\"10\",\"30\",\"20\",\"20\",\"10\",\"50000000\",\"\",\"\",\"4096\"");
-        assert!(lines[2].starts_with("\"lexer\",\"4\",\"10\",\"40\",\"25\",\"25\",\"12.909944487358056\",\"40000000\",\"4000000000\",\"80000000\",\"\""));
+        assert!(lines[2].starts_with("\"lexer\",\"4\",\"10\",\"40\",\"25\",\"25\",\"12.909944487358056\",\"40000000\",\"4000000000\",\"80000000\",\"16\""));
         assert_eq!(
             lines[3],
             "\"memory-only\",\"0\",\"\",\"\",\"\",\"\",\"\",\"\",\"\",\"\",\"8192\""

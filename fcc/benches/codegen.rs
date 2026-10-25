@@ -8,7 +8,6 @@ use std::hint::black_box;
 
 use logos::Logos;
 
-use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use fcc::codegen::codegen;
 use fcc::diagnostics::{Span, intern_file};
 use fcc::lexer::Token;
@@ -16,6 +15,7 @@ use fcc::parser::parse;
 use fcc::sema::{TypedAst, analyze};
 use tir::builtin::ModuleOp;
 use tir::{Context, Operation};
+use tir_bench::{BatchSize, Criterion, criterion_group, criterion_main};
 
 // The analyzed unit and the context its types are interned in, which the unit
 // is generated into.
@@ -92,17 +92,19 @@ fn run_pipeline(src: &str) {
     run_codegen(parse_src(src));
 }
 
-fn synthetic(c: &mut Criterion) {
+fn synthetic(c: &mut Criterion, tma: &tir_bench::TMAMetrics) {
     // A unit is generated into the context its analysis interned its types
     // in, so each run analyzes it again, untimed.
     c.bench_function("fcc/codegen/ast_to_ir", |b| {
         let src = gen_source(50, 40);
         b.iter_batched(|| parse_src(&src), run_codegen, BatchSize::SmallInput);
     });
+    tma.report("fcc/codegen/ast_to_ir");
     c.bench_function("fcc/codegen_expr_heavy/ast_to_ir", |b| {
         let src = gen_expr_heavy(20, 12);
         b.iter_batched(|| parse_src(&src), run_codegen, BatchSize::SmallInput);
     });
+    tma.report("fcc/codegen_expr_heavy/ast_to_ir");
     c.bench_function("fcc/promote/promote", |b| {
         let src = gen_source(50, 40);
         // Rebuild fresh IR because promotion replaces the locals' uses.
@@ -112,10 +114,12 @@ fn synthetic(c: &mut Criterion) {
             BatchSize::SmallInput,
         );
     });
+    tma.report("fcc/promote/promote");
     c.bench_function("fcc/pipeline/source_to_ir", |b| {
         let src = gen_source(50, 40);
         b.iter(|| run_pipeline(&src));
     });
+    tma.report("fcc/pipeline/source_to_ir");
 }
 
 criterion_group!(benches, synthetic);

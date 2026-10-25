@@ -1,9 +1,9 @@
-use criterion::{Criterion, Throughput, criterion_group, criterion_main};
+use tir_bench::{Criterion, Throughput, criterion_group, criterion_main};
 use tmdl::{lex, parse};
 
 const INPUT: &str = include_str!("./Inputs/large_instr_template.tmdl");
 
-fn large_instr_template(c: &mut Criterion) {
+fn large_instr_template(c: &mut Criterion, tma: &tir_bench::TMAMetrics) {
     let mut group = c.benchmark_group("large_instr_template");
     group.throughput(Throughput::Bytes(INPUT.len() as u64));
     group.bench_function("parse", |b| {
@@ -13,6 +13,7 @@ fn large_instr_template(c: &mut Criterion) {
             let _ = parse(INPUT, &tokens, "<bench>");
         });
     });
+    tma.report("large_instr_template/parse");
     group.finish();
 }
 

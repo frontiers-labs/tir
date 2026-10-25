@@ -5,9 +5,9 @@
 use std::hash::{Hash, Hasher};
 use std::hint::black_box;
 
-use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
 use smallvec::SmallVec;
 use tir_adt::FxHasher;
+use tir_bench::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
 use tir_egraph::{Atom, HeadOp, LabelFill, NoExterns, Plan, Query, Rule};
 use tir_egraph::{ClassId as Id, Engine, Label as ENode};
 
@@ -212,7 +212,7 @@ fn print_stats(workloads: &[Workload]) {
     }
 }
 
-fn benches(c: &mut Criterion) {
+fn benches(c: &mut Criterion, tma: &tir_bench::TMAMetrics) {
     let workloads = shared::workloads();
     print_stats(&workloads);
     let mut group = c.benchmark_group("tir/seed");
@@ -220,6 +220,7 @@ fn benches(c: &mut Criterion) {
         group.bench_function(BenchmarkId::from_parameter(workload.name), |b| {
             b.iter(|| seed(workload));
         });
+        tma.report(&format!("tir/seed/{}", workload.name));
     }
     group.finish();
     let mut group = c.benchmark_group("tir/saturate");
@@ -232,6 +233,7 @@ fn benches(c: &mut Criterion) {
                 BatchSize::SmallInput,
             );
         });
+        tma.report(&format!("tir/saturate/{}", workload.name));
     }
     group.finish();
     let mut group = c.benchmark_group("tir/ematch");
@@ -241,6 +243,7 @@ fn benches(c: &mut Criterion) {
             let g = saturate(seed(workload), &rules, workload.iters);
             b.iter(|| ematch_all(&rules, &g));
         });
+        tma.report(&format!("tir/ematch/{}", workload.name));
     }
     group.finish();
     let mut group = c.benchmark_group("tir/extract");
@@ -250,6 +253,7 @@ fn benches(c: &mut Criterion) {
             let g = saturate(seed(workload), &rules, workload.iters);
             b.iter(|| black_box(g.extract_best(|_, _, _, _| 1)));
         });
+        tma.report(&format!("tir/extract/{}", workload.name));
     }
     group.finish();
 }
