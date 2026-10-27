@@ -896,6 +896,7 @@ dependencies = [
  "clap",
  "criterion",
  "logos",
+ "regex",
  "tir",
  "tir-adt",
  "tir-arm64",

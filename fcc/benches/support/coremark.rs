@@ -1,57 +1,32 @@
-fn runs<'a>(log: &'a str, header: &'a str) -> impl Iterator<Item = &'a str> {
-    let (prefix, output) = log.split_once(header).expect("missing benchmark output");
-    assert!(
-        prefix.trim().is_empty(),
-        "unexpected benchmark output: {prefix}"
-    );
-    output.split(header)
+use std::time::Duration;
+
+fn field<'a>(output: &'a str, name: &str) -> Option<&'a str> {
+    output.lines().find_map(|line| {
+        let (key, value) = line.trim().trim_start_matches("[0]").split_once(':')?;
+        (key.trim() == name).then_some(value.trim())
+    })
 }
 
-pub fn validate(log: &str) {
-    for output in runs(log, "2K performance run parameters for coremark.") {
-        let field = |name| {
-            output.lines().find_map(|line| {
-                let (key, value) = line.trim().trim_start_matches("[0]").split_once(':')?;
-                (key.trim() == name).then_some(value.trim())
-            })
-        };
-        for (name, expected) in [
-            ("Iterations", "600000"),
-            ("seedcrc", "0xe9f5"),
-            ("crclist", "0xe714"),
-            ("crcmatrix", "0x1fd7"),
-            ("crcstate", "0x8e3a"),
-            ("crcfinal", "0xa14c"),
-        ] {
-            assert_eq!(field(name), Some(expected), "incorrect CoreMark {name}");
-        }
-        let seconds: f64 = field("Total time (secs)")
-            .expect("missing CoreMark time")
-            .parse()
-            .unwrap();
-        assert!(seconds.is_finite() && seconds >= 0.0);
-        let short_error = "ERROR! Must execute for at least 10 secs for a valid result!";
-        for line in output.lines().map(str::trim) {
-            let lower = line.to_ascii_lowercase();
-            if ["error", "failed", "failure", "cannot validate operation"]
-                .iter()
-                .any(|word| lower.contains(word))
-            {
-                assert!(
-                    line == short_error
-                        || (line == "Errors detected"
-                            && seconds < 10.0
-                            && output.contains(short_error)),
-                    "CoreMark failed: {line}"
-                );
-            }
-        }
-        if seconds >= 10.0 {
-            assert!(output.contains("Correct operation validated."));
-            let has_score = output
-                .lines()
-                .any(|line| line.starts_with("CoreMark 1.0 :"));
-            assert!(has_score);
-        }
-    }
+/// A number that CoreMark reports, such as `Total time (secs)`.
+pub fn reported(output: &str, name: &str) -> f64 {
+    field(output, name)
+        .and_then(|value| value.parse().ok())
+        .unwrap_or_else(|| panic!("missing CoreMark {name}:\n{output}"))
+}
+
+/// Checks that one run is a valid performance run and returns CoreMark's
+/// time per iteration.
+pub fn time_per_iteration(output: &str) -> Duration {
+    // CoreMark validates only runs of at least 10 seconds whose CRCs match
+    // those known for their seeds.
+    assert!(
+        output.contains("Correct operation validated."),
+        "CoreMark failed:\n{output}"
+    );
+    assert_eq!(
+        field(output, "seedcrc"),
+        Some("0xe9f5"),
+        "not a CoreMark performance run:\n{output}"
+    );
+    Duration::from_secs_f64(reported(output, "Total time (secs)") / reported(output, "Iterations"))
 }

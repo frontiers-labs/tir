@@ -10,7 +10,7 @@ pub struct Options {
     /// Cargo profile for the compiler and benchmarks.
     #[arg(long, default_value = "bench")]
     pub profile: String,
-    /// Arguments passed to cargo bench, after `--`.
+    /// Arguments passed to cargo nextest bench or cargo bench, after `--`.
     #[arg(last = true)]
     pub cargo_args: Vec<String>,
 }
@@ -32,36 +32,21 @@ pub fn run(root: &Path, options: Options) -> Result<()> {
         .unwrap_or_else(|| target.join("criterion"));
     fs::create_dir_all(&results)?;
 
-    let status = Command::new("cargo")
-        .current_dir(root)
-        .args([
-            "build",
-            "-p",
-            "fcc",
-            "--bin",
-            "fcc",
-            "--locked",
-            "--profile",
-        ])
-        .arg(&options.profile)
-        .status()?;
-    ensure!(status.success(), "benchmark compiler build failed");
-
-    let binaries = target.join(match options.profile.as_str() {
-        "bench" | "release" => "release",
-        "dev" | "test" => "debug",
-        profile => profile,
-    });
-    let path = std::env::join_paths(std::iter::once(binaries).chain(std::env::split_paths(
-        &std::env::var_os("PATH").unwrap_or_default(),
-    )))?;
     let previous = report::snapshot(&results)?;
-    let status = Command::new("cargo")
+    let mut runner = Command::new("cargo");
+    if crate::test::has_nextest() {
+        // nextest's default profile leaves out the comparison baselines; CI
+        // selects its perf profile to run them.
+        runner.args(["nextest", "bench", "--no-tests", "warn", "--cargo-profile"]);
+    } else {
+        eprintln!("cargo-nextest is not installed; running cargo bench with the comparisons");
+        runner.args(["bench", "--profile"]);
+    }
+    let status = runner
         .current_dir(root)
-        .args(["bench", "--locked", "--profile"])
         .arg(&options.profile)
+        .arg("--locked")
         .args(options.cargo_args)
-        .env("PATH", path)
         .env("CARGO_TARGET_DIR", target)
         .env("CRITERION_HOME", &results)
         .status()?;

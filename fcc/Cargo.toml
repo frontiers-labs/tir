@@ -24,6 +24,7 @@ doctest = false
 [dev-dependencies]
 anyhow.workspace = true
 criterion.workspace = true
+regex.workspace = true
 tir-bench.workspace = true
 
 [[bin]]

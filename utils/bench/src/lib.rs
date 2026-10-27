@@ -116,7 +116,7 @@ macro_rules! criterion_group {
         fn $name() {
             let tma = $crate::TMAMetrics::new();
             let mut c = ::criterion::Criterion::default()
-                .with_measurement(tma.clone()).configure_from_args();
+                .with_measurement(tma.clone()).sample_size(10).configure_from_args();
             $($bench(&mut c, &tma);)+
         }
     };
@@ -141,7 +141,7 @@ pub struct Experiment {
 }
 
 impl Experiment {
-    /// Benchmark a program, with defaults of 3 repetitions and 5 seconds.
+    /// Benchmark a program, with defaults of 3 repetitions and 1 second.
     ///
     /// Arguments are passed literally. For shell syntax, use `sh` with
     /// `.args(["-c", "your shell command"])`.
@@ -150,7 +150,7 @@ impl Experiment {
             name: name.into(),
             command: Command::new(program),
             min_repetitions: 3,
-            min_duration: Duration::from_secs(5),
+            min_duration: Duration::from_secs(1),
         }
     }
 
@@ -193,7 +193,22 @@ impl Experiment {
     }
 
     /// Run the experiment and validate its output before saving measurements.
-    pub fn run_validated(mut self, validate: impl FnOnce(&str)) -> io::Result<String> {
+    pub fn run_validated(self, validate: impl FnOnce(&str)) -> io::Result<String> {
+        self.measure(|duration, _| duration, validate)
+    }
+
+    /// Run the experiment, taking each sample from the log of its repetition
+    /// instead of the wall clock, for programs such as CoreMark that time
+    /// their own workload.
+    pub fn run_self_timed(self, sample: impl Fn(&str) -> Duration) -> io::Result<String> {
+        self.measure(|_, output| sample(output), |_| {})
+    }
+
+    fn measure(
+        mut self,
+        sample: impl Fn(Duration, &str) -> Duration,
+        validate: impl FnOnce(&str),
+    ) -> io::Result<String> {
         if self.name.is_empty() || self.min_repetitions == 0 {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -208,8 +223,9 @@ impl Experiment {
             let start = Instant::now();
             let output = self.command.output()?;
             let duration = start.elapsed();
-            log.push_str(&String::from_utf8_lossy(&output.stdout));
-            log.push_str(&String::from_utf8_lossy(&output.stderr));
+            let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
+            text.push_str(&String::from_utf8_lossy(&output.stderr));
+            log.push_str(&text);
             if !output.status.success() {
                 return Err(io::Error::other(format!(
                     "benchmark {:?} command {:?} failed with {}\n{log}",
@@ -217,12 +233,12 @@ impl Experiment {
                 )));
             }
             elapsed += duration;
-            samples.push(duration.as_secs_f64() * 1e9);
+            samples.push(sample(duration, &text).as_secs_f64() * 1e9);
         }
         validate(&log);
         let metrics = serde_json::json!({
             "latency": {
-                "value": elapsed.as_secs_f64() * 1e9 / samples.len() as f64,
+                "value": samples.iter().sum::<f64>() / samples.len() as f64,
                 "samples": samples,
             }
         });
@@ -293,7 +309,7 @@ mod tests {
         let samples = latency["samples"].as_array().unwrap();
         assert!(samples.len() >= 3);
         let total: f64 = samples.iter().map(|s| s.as_f64().unwrap()).sum();
-        assert!(total >= 5e9);
+        assert!(total >= 1e9);
         let mean = latency["value"].as_f64().unwrap();
         assert!((mean - total / samples.len() as f64).abs() < 1.0);
     }

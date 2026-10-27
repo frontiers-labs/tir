@@ -19,7 +19,7 @@ use crate::utils::project_root;
 enum Task {
     /// Build fresh tools and run the workspace tests with nextest or cargo test.
     Test(test::Options),
-    /// Build the optimized compiler, run cargo bench, and save a benchmark summary.
+    /// Run the benchmarks with nextest and save a benchmark summary.
     Bench(bench::Options),
     /// Package tools, tests and fixtures for test workers.
     TestPack(test::PackOptions),

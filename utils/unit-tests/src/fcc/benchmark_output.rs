@@ -6,23 +6,20 @@ mod dhrystone;
 mod whetstone;
 
 #[test]
-fn coremark_repetitions_validate_every_crc() {
-    let output = "2K performance run parameters for coremark.\nIterations : 600000\nTotal time (secs): 10.00\nseedcrc : 0xe9f5\n[0]crclist : 0xe714\n[0]crcmatrix : 0x1fd7\n[0]crcstate : 0x8e3a\n[0]crcfinal : 0xa14c\nCorrect operation validated.\nCoreMark 1.0 : 123.45\n";
-    coremark::validate(&output.repeat(2));
-    coremark::validate(
-        &output
-            .replace("Total time (secs): 10.00", "Total time (secs): 1.00")
-            .replace(
-                "Correct operation validated.\nCoreMark 1.0 : 123.45\n",
-                "ERROR! Must execute for at least 10 secs for a valid result!\nErrors detected\n",
-            ),
+fn coremark_time_per_iteration_requires_a_validated_performance_run() {
+    let output = "2K performance run parameters for coremark.\nIterations : 400000\nTotal time (secs): 10.000000\nseedcrc : 0xe9f5\n[0]crclist : 0xe714\n[0]crcmatrix : 0x1fd7\n[0]crcstate : 0x8e3a\n[0]crcfinal : 0xa14c\nCorrect operation validated.\nCoreMark 1.0 : 40000.0\n";
+    assert_eq!(
+        coremark::time_per_iteration(output),
+        std::time::Duration::from_micros(25)
     );
     for invalid in [
-        format!("{output}{}", output.replace("0xa14c", "0x1234")),
-        format!("runtime error\n{output}"),
-        output.replace("Iterations : 600000", "Iterations : 1"),
+        output.replace(
+            "Correct operation validated.\n",
+            "ERROR! Must execute for at least 10 secs for a valid result!\nErrors detected\n",
+        ),
+        output.replace("0xe9f5", "0x8a02"),
     ] {
-        assert!(std::panic::catch_unwind(|| coremark::validate(&invalid)).is_err());
+        assert!(std::panic::catch_unwind(|| coremark::time_per_iteration(&invalid)).is_err());
     }
 }
 

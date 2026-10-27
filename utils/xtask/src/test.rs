@@ -125,7 +125,7 @@ pub fn pack(root: &Path, options: PackOptions) -> Result<()> {
     Ok(())
 }
 
-fn has_nextest() -> bool {
+pub(crate) fn has_nextest() -> bool {
     Command::new("cargo")
         .args(["nextest", "--version"])
         .stdout(Stdio::null())

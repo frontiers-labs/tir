@@ -172,8 +172,9 @@ Function benchmarks use native Criterion. See `core/benches/lexer.rs` for a
 complete example.
 
 Use `b.iter_batched` when each iteration needs fresh input prepared outside
-measurement. Criterion defaults to 100 samples, 3 seconds of warmup, and
-5 seconds of measurement. Individual benchmarks can override these settings.
+measurement. `tir_bench::criterion_group!` takes 10 samples after Criterion's
+3 seconds of warmup, over 5 seconds of measurement. Individual benchmarks can
+override these settings.
 Pass `-- --help` to a Criterion target for its filtering and timing options.
 
 External commands use `tir_bench::Experiment` from `utils/bench`:
@@ -186,18 +187,23 @@ let log = Experiment::new("compile/example", "gcc")
     .run()?;
 ```
 
-An experiment repeats until it has both 3 successful runs and 5 seconds of
+An experiment repeats until it has both 3 successful runs and 1 second of
 measured time. Override these minimums with `min_repetitions` and
 `min_duration`. Timing includes process startup and waiting for exit.
 `run()` returns the combined stdout and stderr. Use `run_validated(validate)`
-to check that output before saving measurements. These command targets do not
-parse Criterion options.
+to check that output before saving measurements. The program benchmarks in
+`fcc/benches` take a regex over benchmark names, as Criterion targets do,
+such as `cargo bench --bench coremark -- fcc/coremark/-O2`, and no other
+Criterion options.
 
-Run `cargo xtask bench` to build the optimized `fcc` binary, run the workspace
-benchmarks, and print a summary. Pass Cargo target selection after `--`, for
-example `cargo xtask bench -- -p fcc --bench coremark`. Use `--profile <profile>`
-before `--` to change the compiler and benchmark profile. Direct invocations of
-FCC's command targets need the `fcc` binary built in the matching profile.
+Run `cargo xtask bench` to run the workspace benchmarks with
+`cargo nextest bench` and print a summary. nextest's default profile leaves
+out the gcc, clang, egg and egglog baselines, which do not change with TIR;
+`NEXTEST_PROFILE=perf cargo xtask bench` runs them too, as CI does. Without
+cargo-nextest the xtask runs `cargo bench`, baselines included. Pass Cargo
+target selection and filters after `--`, for example
+`cargo xtask bench -- -p fcc --bench coremark`. Use `--profile <profile>`
+before `--` to change the compiler and benchmark profile.
 
 Results default to `target/criterion`, using the configured Cargo target
 directory when it differs from `target`. `CRITERION_HOME` overrides the results
