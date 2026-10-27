@@ -49,7 +49,9 @@ the same amount of time (or less!) to do so.
 - `cargo fmt` has no additional format changes
 - `cargo xtask test --profile ci --torture` finds no new failures
   when changing core IR or FCC
-- `cargo bench` is no worse than before change (unless explicitly approved regressions)
+- `cargo xtask bench` is no worse than before change (unless explicitly approved regressions).
+  Run benchmarks through it, not `cargo bench`, which skips the filter that
+  leaves out the gcc, clang, egg and egglog baselines.
 
 Be mindful of what you run. Documentation or comments change does not need tests or benchmarks.
 

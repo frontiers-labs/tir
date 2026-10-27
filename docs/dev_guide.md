@@ -166,7 +166,7 @@ contain a solution.
 
 Benchmarks live in each package's `benches` directory and are declared in its
 `Cargo.toml` with `harness = false`. Run one target with
-`cargo bench -p <package> --bench <target>`.
+`cargo xtask bench -- -p <package> --bench <target>`.
 
 Function benchmarks use native Criterion. See `core/benches/lexer.rs` for a
 complete example.
@@ -192,9 +192,8 @@ measured time. Override these minimums with `min_repetitions` and
 `min_duration`. Timing includes process startup and waiting for exit.
 `run()` returns the combined stdout and stderr. Use `run_validated(validate)`
 to check that output before saving measurements. The program benchmarks in
-`fcc/benches` take a regex over benchmark names, as Criterion targets do,
-such as `cargo bench --bench coremark -- fcc/coremark/-O2`, and no other
-Criterion options.
+`fcc/benches` name each compiler and level, so
+`cargo xtask bench -- --bench coremark fcc/coremark/-O2` runs one of them.
 
 Run `cargo xtask bench` to run the workspace benchmarks with
 `cargo nextest bench` and print a summary. nextest's default profile leaves
