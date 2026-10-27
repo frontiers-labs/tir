@@ -2413,7 +2413,6 @@ dependencies = [
  "tir-bench",
  "tir-egraph",
  "tir-macros",
- "tir-pbqp",
  "tir-pdl",
  "tir-relational",
  "tir-symbolic",
@@ -2564,16 +2563,6 @@ dependencies = [
  "quote",
  "syn 2.0.118",
  "tir-symbolic",
-]
-
-[[package]]
-name = "tir-pbqp"
-version = "0.1.0"
-dependencies = [
- "criterion",
- "serde",
- "serde_json",
- "tir-bench",
 ]
 
 [[package]]

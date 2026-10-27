@@ -2,3 +2,11 @@
 archive.include = [
     { path = "test-bundle", relative-to = "target", depth = "infinite", on-missing = "error" },
 ]
+# The slowest test takes 25s at the dev profile's opt-level, and an unoptimized
+# build turns it into minutes; a test past two minutes fails instead.
+slow-timeout = { period = "60s", terminate-after = 2 }
+
+# Each torture case has its own compile timeout, see fcc_torture.rs.
+[[profile.default.overrides]]
+filter = "binary(torture)"
+slow-timeout = "60s"
