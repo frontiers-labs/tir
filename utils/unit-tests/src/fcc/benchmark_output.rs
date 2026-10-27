@@ -9,7 +9,7 @@ mod whetstone;
 fn coremark_time_per_iteration_requires_a_validated_performance_run() {
     let output = "2K performance run parameters for coremark.\nIterations : 400000\nTotal time (secs): 10.000000\nseedcrc : 0xe9f5\n[0]crclist : 0xe714\n[0]crcmatrix : 0x1fd7\n[0]crcstate : 0x8e3a\n[0]crcfinal : 0xa14c\nCorrect operation validated.\nCoreMark 1.0 : 40000.0\n";
     assert_eq!(
-        coremark::time_per_iteration(output),
+        coremark::time_per_iteration(output).unwrap(),
         std::time::Duration::from_micros(25)
     );
     for invalid in [
@@ -19,7 +19,7 @@ fn coremark_time_per_iteration_requires_a_validated_performance_run() {
         ),
         output.replace("0xe9f5", "0x8a02"),
     ] {
-        assert!(std::panic::catch_unwind(|| coremark::time_per_iteration(&invalid)).is_err());
+        assert!(coremark::time_per_iteration(&invalid).is_err());
     }
 }
 

@@ -3,6 +3,7 @@ mod coremark;
 #[path = "support/programs.rs"]
 mod programs;
 
+use std::cell::Cell;
 use std::fs;
 use std::io;
 use std::path::Path;
@@ -15,49 +16,45 @@ const MIN_RUN_SECONDS: f64 = 10.0;
 /// CoreMark parses its iteration count as an `ee_s32`.
 const MAX_ITERATIONS: u64 = i32::MAX as u64;
 
-fn performance_run(iterations: u64) -> [String; 4] {
-    ["0".into(), "0".into(), "0".into(), iterations.to_string()]
-}
-
-fn seconds(executable: &Path, iterations: u64) -> io::Result<f64> {
+fn performance_run(iterations: u64) -> io::Result<[String; 4]> {
     if iterations > MAX_ITERATIONS {
         return Err(io::Error::other(format!(
-            "CoreMark {executable:?} needs more than {MAX_ITERATIONS} iterations to run for a \
-             second; its clock may not advance"
+            "CoreMark needs more than {MAX_ITERATIONS} iterations to run long enough; its clock \
+             may not advance"
         )));
     }
-    let output = Command::new(executable)
-        .args(performance_run(iterations))
-        .stdin(Stdio::null())
-        .output()?;
-    if !output.status.success() {
-        return Err(io::Error::other(format!(
-            "CoreMark probe {executable:?} failed with {}\n{}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr)
-        )));
-    }
-    let output = String::from_utf8_lossy(&output.stdout);
-    Ok(coremark::reported(&output, "Total time (secs)"))
+    Ok(["0".into(), "0".into(), "0".into(), iterations.to_string()])
+}
+
+// Sizes a run a tenth past the minimum from one that lasted `seconds`.
+fn sized(iterations: u64, seconds: f64) -> u64 {
+    (iterations as f64 * MIN_RUN_SECONDS * 1.1 / seconds).ceil() as u64
 }
 
 // Doubles a run until it lasts a second, as CoreMark's own calibration grows
-// one, then sizes it a tenth past the minimum. Short runs are up to 12% slower
-// per iteration than full ones, so a full-length run must confirm the size,
-// with half that margin left for run-to-run variation.
-fn iterations(executable: &Path) -> io::Result<u64> {
+// one, and sizes the timed run from it.
+fn estimate(executable: &Path) -> io::Result<u64> {
     let mut iterations = 1;
-    let mut elapsed = seconds(executable, iterations)?;
-    while elapsed < 1.0 {
-        iterations *= 2;
-        elapsed = seconds(executable, iterations)?;
-    }
     loop {
-        iterations = (iterations as f64 * MIN_RUN_SECONDS * 1.1 / elapsed).ceil() as u64;
-        elapsed = seconds(executable, iterations)?;
-        if elapsed >= MIN_RUN_SECONDS * 1.05 {
-            return Ok(iterations);
+        let output = Command::new(executable)
+            .args(performance_run(iterations)?)
+            .stdin(Stdio::null())
+            .output()?;
+        if !output.status.success() {
+            return Err(io::Error::other(format!(
+                "CoreMark probe {executable:?} failed with {}\n{}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr)
+            )));
         }
+        let seconds = coremark::reported(
+            &String::from_utf8_lossy(&output.stdout),
+            "Total time (secs)",
+        );
+        if seconds >= 1.0 {
+            return Ok(sized(iterations, seconds));
+        }
+        iterations *= 2;
     }
 }
 
@@ -105,13 +102,28 @@ fn main() -> io::Result<()> {
             .args([&executable])
             .min_duration(Duration::from_millis(500))
             .run()?;
-        let iterations = iterations(&executable)?;
-        let log = build
-            .step("run", &executable)
-            .args(performance_run(iterations))
-            // A run averages its iterations already.
-            .min_repetitions(1)
-            .run_self_timed(coremark::time_per_iteration)?;
-        fs::write(build.output.join("stdout.log"), &log)
+        // Short runs are up to 12% slower per iteration than full ones, so the
+        // estimate can fall short of the minimum, which CoreMark then refuses
+        // to validate. Such a run is sized again from its own time.
+        let mut iterations = estimate(&executable)?;
+        loop {
+            let seconds = Cell::new(None);
+            let run = build
+                .step("run", &executable)
+                .args(performance_run(iterations)?)
+                // A run averages its iterations already.
+                .min_repetitions(1)
+                .run_self_timed(|output| {
+                    seconds.set(Some(coremark::reported(output, "Total time (secs)")));
+                    coremark::time_per_iteration(output)
+                });
+            match (run, seconds.get()) {
+                (Ok(log), _) => return fs::write(build.output.join("stdout.log"), &log),
+                (Err(_), Some(seconds)) if seconds < MIN_RUN_SECONDS => {
+                    iterations = sized(iterations, seconds);
+                }
+                (Err(error), _) => return Err(error),
+            }
+        }
     })
 }

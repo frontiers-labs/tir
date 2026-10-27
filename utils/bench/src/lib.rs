@@ -194,19 +194,23 @@ impl Experiment {
 
     /// Run the experiment and validate its output before saving measurements.
     pub fn run_validated(self, validate: impl FnOnce(&str)) -> io::Result<String> {
-        self.measure(|duration, _| duration, validate)
+        self.measure(|duration, _| Ok(duration), validate)
     }
 
     /// Run the experiment, taking each sample from the log of its repetition
     /// instead of the wall clock, for programs such as CoreMark that time
-    /// their own workload.
-    pub fn run_self_timed(self, sample: impl Fn(&str) -> Duration) -> io::Result<String> {
+    /// their own workload. A sample error ends the experiment without saving
+    /// results.
+    pub fn run_self_timed(
+        self,
+        sample: impl Fn(&str) -> io::Result<Duration>,
+    ) -> io::Result<String> {
         self.measure(|_, output| sample(output), |_| {})
     }
 
     fn measure(
         mut self,
-        sample: impl Fn(Duration, &str) -> Duration,
+        sample: impl Fn(Duration, &str) -> io::Result<Duration>,
         validate: impl FnOnce(&str),
     ) -> io::Result<String> {
         if self.name.is_empty() || self.min_repetitions == 0 {
@@ -233,7 +237,7 @@ impl Experiment {
                 )));
             }
             elapsed += duration;
-            samples.push(sample(duration, &text).as_secs_f64() * 1e9);
+            samples.push(sample(duration, &text)?.as_secs_f64() * 1e9);
         }
         validate(&log);
         let metrics = serde_json::json!({

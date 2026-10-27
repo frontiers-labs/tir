@@ -1,3 +1,4 @@
+use std::io;
 use std::time::Duration;
 
 fn field<'a>(output: &'a str, name: &str) -> Option<&'a str> {
@@ -16,17 +17,22 @@ pub fn reported(output: &str, name: &str) -> f64 {
 
 /// Checks that one run is a valid performance run and returns CoreMark's
 /// time per iteration.
-pub fn time_per_iteration(output: &str) -> Duration {
+pub fn time_per_iteration(output: &str) -> io::Result<Duration> {
     // CoreMark validates only runs of at least 10 seconds whose CRCs match
     // those known for their seeds.
-    assert!(
-        output.contains("Correct operation validated."),
-        "CoreMark failed:\n{output}"
-    );
-    assert_eq!(
-        field(output, "seedcrc"),
-        Some("0xe9f5"),
-        "not a CoreMark performance run:\n{output}"
-    );
-    Duration::from_secs_f64(reported(output, "Total time (secs)") / reported(output, "Iterations"))
+    if !output.contains("Correct operation validated.") {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("CoreMark did not validate the run:\n{output}"),
+        ));
+    }
+    if field(output, "seedcrc") != Some("0xe9f5") {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("not a CoreMark performance run:\n{output}"),
+        ));
+    }
+    Ok(Duration::from_secs_f64(
+        reported(output, "Total time (secs)") / reported(output, "Iterations"),
+    ))
 }
