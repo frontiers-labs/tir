@@ -12,11 +12,20 @@ use std::time::Duration;
 /// CoreMark's run rules reject a timed run shorter than this.
 const MIN_RUN_SECONDS: f64 = 10.0;
 
+/// CoreMark parses its iteration count as an `ee_s32`.
+const MAX_ITERATIONS: u64 = i32::MAX as u64;
+
 fn performance_run(iterations: u64) -> [String; 4] {
     ["0".into(), "0".into(), "0".into(), iterations.to_string()]
 }
 
 fn seconds(executable: &Path, iterations: u64) -> io::Result<f64> {
+    if iterations > MAX_ITERATIONS {
+        return Err(io::Error::other(format!(
+            "CoreMark {executable:?} needs more than {MAX_ITERATIONS} iterations to run for a \
+             second; its clock may not advance"
+        )));
+    }
     let output = Command::new(executable)
         .args(performance_run(iterations))
         .stdin(Stdio::null())
