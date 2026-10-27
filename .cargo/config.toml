@@ -3,4 +3,15 @@ xtask = "run --package xtask --"
 
 # rustc links with its bundled LLD unless told otherwise.
 [target.'cfg(target_os = "linux")']
-rustflags = ["-C", "link-arg=-fuse-ld=mold"]
+# The parallel frontend shortens the generated backends, which gate every
+# build that follows a core edit.
+rustflags = ["-C", "link-arg=-fuse-ld=mold", "-Zunstable-options", "--jobs-frontend=0"]
+
+# Every cargo command resolves features for the whole workspace, so cargo xtask,
+# cargo build -p and cargo bench reuse the crates a workspace build compiled
+# instead of compiling them again with their own feature sets.
+[unstable]
+feature-unification = true
+
+[resolver]
+feature-unification = "workspace"

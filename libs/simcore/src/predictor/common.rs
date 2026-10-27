@@ -202,8 +202,8 @@ impl GlobalHistory {
     fn fold(&self, len: usize, width: u32) -> u64 {
         let mut acc = 0u64;
         let mut pos = 0u32;
-        for k in 0..len.min(self.bits.len()) {
-            acc ^= u64::from(self.bits[k]) << pos;
+        for &bit in self.bits.iter().take(len) {
+            acc ^= u64::from(bit) << pos;
             pos += 1;
             if pos == width {
                 pos = 0;

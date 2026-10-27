@@ -49,7 +49,7 @@ jq -n \
     job: "libfuzzer",
     summary: "Crash in \($target)",
     identity: "libfuzzer:\($target):\($sha)",
-    reproduce: "\($hint)\ncargo +nightly fuzz run --fuzz-dir utils/fuzz \($target) crash.bin",
+    reproduce: "\($hint)\ncargo fuzz run --fuzz-dir utils/fuzz \($target) crash.bin",
     details: "`\($target)` crashed on the input below.\n\nRun: \($run)\n\n```\n\($trace)```",
     artifact: $input,
     language: $language

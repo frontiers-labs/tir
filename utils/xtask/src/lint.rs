@@ -33,8 +33,13 @@ pub fn run(sh: &Shell, root: &Path) -> anyhow::Result<()> {
     )
     .run()
     .and_then(|()| {
+        // Only the diagnostics matter here. Without merging, each crate skips
+        // rewriting the search index shared by all of them under one lock.
         cmd!(sh, "cargo doc --workspace --no-deps")
-            .env("RUSTDOCFLAGS", "-D warnings")
+            .env(
+                "RUSTDOCFLAGS",
+                "-D warnings -Zunstable-options --merge=none",
+            )
             .run()
     });
     let mut failed = Vec::new();

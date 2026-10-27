@@ -207,8 +207,8 @@ impl EventHandler for ResourceView {
         let _ = writeln!(out, "{header}Instructions:");
         for (i, info) in self.instrs.iter().enumerate() {
             let mut line = String::new();
-            for r in 0..self.resource_names.len() {
-                let p = self.usage[i][r] / iters;
+            for usage in self.usage[i].iter().take(self.resource_names.len()) {
+                let p = usage / iters;
                 let cell = if p == 0.0 {
                     "-".to_string()
                 } else {

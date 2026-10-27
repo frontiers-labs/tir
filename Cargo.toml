@@ -104,10 +104,26 @@ inherits = "dev"
 opt-level = 2
 incremental = false
 
+# Undoes dev's unoptimized generated backends, which ci would inherit.
+[profile.ci.package.tir-riscv]
+opt-level = 2
+
+[profile.ci.package.tir-arm64]
+opt-level = 2
+
+[profile.ci.package.tir-x86_64]
+opt-level = 2
+
+[profile.ci.package.tir-gpu]
+opt-level = 2
+
 # Full debug info makes a clean `cargo test --no-run` produce a ~22 GB target
 # dir (40+ statically linked binaries, ~97% DWARF). Line tables keep file:line
 # in backtraces, which is enough outside an interactive debugger session.
+# Unoptimized, the test suite needs 10,000 CPU-seconds; at opt-level 1 it
+# needs 1,300, while debug assertions keep the IR verifier on.
 [profile.dev]
+opt-level = 1
 debug = "line-tables-only"
 split-debuginfo = "unpacked"
 
@@ -122,18 +138,25 @@ opt-level = 2
 # is 500k lines of generated Rust) and their source only changes when their
 # .tmdl does, so incremental state buys nothing and costs both memory and a
 # multi-GB slice of target/. With debug info dropped too, a clean riscv build
-# goes from 7.4 GB peak RSS / 2m41s to 6.4 GB / 2m07s.
+# goes from 7.4 GB peak RSS / 2m41s to 6.4 GB / 2m07s. Optimizing them would
+# triple the rebuild after a core edit to save half a second of test time.
 [profile.dev.package.tir-riscv]
+opt-level = 0
 debug = false
 incremental = false
 
 [profile.dev.package.tir-arm64]
+opt-level = 0
 debug = false
 incremental = false
 
 [profile.dev.package.tir-x86_64]
+opt-level = 0
 debug = false
 incremental = false
+
+[profile.dev.package.tir-gpu]
+opt-level = 0
 
 [profile.dev.package.filecheck]
 debug = false

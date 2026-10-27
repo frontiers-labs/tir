@@ -418,7 +418,6 @@ impl<'a> Lowering<'a> {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[allow(clippy::too_many_arguments)]
     fn emit_loop(
         &mut self,
         levels: &[Level],

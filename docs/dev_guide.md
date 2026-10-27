@@ -225,9 +225,9 @@ cargo fuzz list
 cargo check -p tir-fuzz --bins
 
 # Run one target for a bounded local smoke campaign.
-cargo +nightly fuzz run tmdl-fuzz -- -max_total_time=60
-cargo +nightly fuzz run riscv-assembly-fuzz -- -max_total_time=60
-cargo +nightly fuzz run arm64-assembly-fuzz -- -max_total_time=60
+cargo fuzz run tmdl-fuzz -- -max_total_time=60
+cargo fuzz run riscv-assembly-fuzz -- -max_total_time=60
+cargo fuzz run arm64-assembly-fuzz -- -max_total_time=60
 ```
 
 ### Nightly fuzz defects

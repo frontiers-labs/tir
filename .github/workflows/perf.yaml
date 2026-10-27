@@ -40,7 +40,7 @@ jobs:
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - run: rustup toolchain install
       - uses: rui314/setup-mold@v1
       - uses: Swatinem/rust-cache@v2
         with:
@@ -67,7 +67,7 @@ jobs:
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - run: rustup toolchain install
       - uses: rui314/setup-mold@v1
       - uses: Swatinem/rust-cache@v2
         with:

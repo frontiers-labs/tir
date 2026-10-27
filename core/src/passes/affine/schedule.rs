@@ -353,8 +353,7 @@ pub(super) fn divides_evenly(view: &AffineView, dimension: usize, tile: usize) -
 
 fn tilings(view: &AffineView, depth: usize) -> Vec<Vec<usize>> {
     let mut all = vec![Vec::new()];
-    for dimension in 0..depth {
-        let trip = view.loops[dimension].trip;
+    for trip in view.loops[..depth].iter().map(|dimension| dimension.trip) {
         all = all
             .into_iter()
             .flat_map(|prefix| {

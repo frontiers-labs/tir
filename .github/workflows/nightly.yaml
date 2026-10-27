@@ -27,7 +27,7 @@ jobs:
       SCCACHE_GHA_VERSION: precommit-v1
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - run: rustup toolchain install
       - uses: rui314/setup-mold@v1
       - uses: taiki-e/install-action@nextest
       - run: .github/scripts/install-spirv-tools.sh
@@ -193,9 +193,7 @@ jobs:
           - arm64-assembly-fuzz
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@nightly
-        with:
-          components: llvm-tools-preview
+      - run: rustup toolchain install && rustup component add llvm-tools-preview
       - uses: rui314/setup-mold@v1
       - uses: Swatinem/rust-cache@v2
         with:
@@ -210,7 +208,7 @@ jobs:
         id: fuzz
         continue-on-error: true
         run: |
-          cargo +nightly fuzz run --fuzz-dir utils/fuzz ${{ matrix.target }} \
+          cargo fuzz run --fuzz-dir utils/fuzz ${{ matrix.target }} \
             -- -max_total_time=60 -max_len=16384 2>&1 | tee fuzz.log
       - name: Record the crash
         if: steps.fuzz.outcome == 'failure'

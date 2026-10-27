@@ -31,7 +31,7 @@ for record in tracked/*.json; do
   fi
 
   signature=$(basename "$record" .json)
-  if cargo +nightly fuzz run --fuzz-dir utils/fuzz "$target" crash.bin >/dev/null 2>&1; then
+  if cargo fuzz run --fuzz-dir utils/fuzz "$target" crash.bin >/dev/null 2>&1; then
     echo "FIXED $signature"
     echo "$signature" >>"$fixed"
   else

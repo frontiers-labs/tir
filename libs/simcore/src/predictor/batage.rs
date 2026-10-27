@@ -190,8 +190,8 @@ impl BranchPredictor for Batage {
 
         // Rule 1: hitting entries longer than the provider are always updated
         // (they were skipped because they are cold — warm them up).
-        for i in 0..g {
-            if p.hits[i] && i + 1 > j {
+        for (i, &hit) in p.hits.iter().enumerate().take(g) {
+            if hit && i + 1 > j {
                 update_slot(self, i + 1);
             }
         }
