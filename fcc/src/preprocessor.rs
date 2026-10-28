@@ -810,7 +810,7 @@ fn expand_if_expr(
         let operand = tokens
             .get(operand_index)
             .and_then(|token| macro_identifier(&token.token))
-            .map(|name| name.into_owned());
+            .map(|name| name.to_string());
         if let Some(operand) = operand {
             tokens[operand_index].hideset.insert(operand);
         }
@@ -879,11 +879,8 @@ fn substitute_arguments(
         .collect::<Vec<_>>();
     let mut substituted = Vec::new();
     for (replacement_index, token) in replacement.iter().enumerate() {
-        let parameter = macro_identifier(token).and_then(|name| {
-            parameters
-                .iter()
-                .position(|parameter| parameter == name.as_ref())
-        });
+        let parameter = macro_identifier(token)
+            .and_then(|name| parameters.iter().position(|parameter| parameter == name));
         if let Some(index) = parameter {
             if adjacent_to_paste(&replacement, replacement_index) {
                 if arguments[index].is_empty() {
@@ -1014,18 +1011,17 @@ fn expand_tokens(
     output
 }
 
-fn macro_identifier<'a>(token: &'a Token<'_>) -> Option<std::borrow::Cow<'a, str>> {
-    if let Token::Identifier(name) = token {
-        return Some(std::borrow::Cow::Borrowed(name));
+fn macro_identifier<'src>(token: &Token<'src>) -> Option<&'src str> {
+    if matches!(token, Token::StringLiteral(_)) {
+        return None;
     }
-
-    let spelling = token.to_string();
+    let spelling = token.spelling();
     let mut characters = spelling.chars();
     let is_identifier = characters
         .next()
         .is_some_and(|character| character == '_' || character.is_ascii_alphabetic())
         && characters.all(|character| character == '_' || character.is_ascii_alphanumeric());
-    is_identifier.then_some(std::borrow::Cow::Owned(spelling))
+    is_identifier.then_some(spelling)
 }
 
 fn next_expanded(source: &mut impl ExpansionSource) -> Option<ExpansionToken> {
@@ -1034,10 +1030,10 @@ fn next_expanded(source: &mut impl ExpansionSource) -> Option<ExpansionToken> {
         let Some(name) = macro_identifier(&token.token) else {
             return Some(token);
         };
-        let Some(definition) = source.defines().get(name.as_ref()).cloned() else {
+        let Some(definition) = source.defines().get(name).cloned() else {
             return Some(token);
         };
-        if token.hideset.contains(name.as_ref()) {
+        if token.hideset.contains(name) {
             return Some(token);
         }
 
@@ -1067,7 +1063,7 @@ fn next_expanded(source: &mut impl ExpansionSource) -> Option<ExpansionToken> {
             }
         };
         let mut hideset = token.hideset;
-        hideset.insert(name.into_owned());
+        hideset.insert(name.to_string());
         source.prepend(
             replacement
                 .into_iter()
