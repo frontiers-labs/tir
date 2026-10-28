@@ -214,8 +214,8 @@ fn integer_literal<'src, I>() -> impl Parser<'src, I, IntegerLiteral, Extra<'src
 where
     I: ValueInput<'src, Token = Token<'src>, Span = Span>,
 {
-    select! { Token::IntegerLiteral(spelling) => spelling }.try_map(|spelling, span| {
-        parse_integer_literal(spelling).ok_or_else(|| Rich::custom(span, "invalid integer literal"))
+    select! { Token::IntegerLiteral(spelling) => spelling }.map(|spelling| {
+        parse_integer_literal(spelling).expect("validate_tokens rejects invalid integer literals")
     })
 }
 

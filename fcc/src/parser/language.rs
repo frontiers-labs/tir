@@ -1,9 +1,10 @@
 //! Existing language-mode checks and keyword classification.
 
 use crate::ast::{Ast, AstKind, AstLeaf, CType};
-use crate::diagnostics::{Diagnostic, LanguageFeatureUnavailable};
+use crate::diagnostics::{Diagnostic, InvalidIntegerLiteral, LanguageFeatureUnavailable};
 use crate::lang_options::LangOptions;
-use crate::lexer::Token;
+use crate::lexer::{Token, parse_integer_literal};
+use crate::sema::references::integer_literal_reference;
 
 pub(super) fn validate_tokens(
     tokens: &[(Token<'_>, crate::diagnostics::Span)],
@@ -12,6 +13,16 @@ pub(super) fn validate_tokens(
     let mut version_diagnostics = Vec::new();
     for (token, span) in tokens {
         match token {
+            Token::IntegerLiteral(literal) if parse_integer_literal(literal).is_none() => {
+                version_diagnostics.push(
+                    InvalidIntegerLiteral::new(
+                        *span,
+                        format!("invalid integer literal '{literal}'"),
+                        integer_literal_reference(options),
+                    )
+                    .into(),
+                );
+            }
             Token::Comment(comment) if comment.starts_with("//") && options.is_strict_c89() => {
                 version_diagnostics
                     .push(LanguageFeatureUnavailable::new(*span, "line comment", "C89").into());

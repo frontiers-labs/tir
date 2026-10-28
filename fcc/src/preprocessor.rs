@@ -72,15 +72,7 @@ enum PreprocToken {
 
     // Integer literals for #if expression evaluation.
     #[regex(r"(0[xX][0-9a-fA-F][0-9a-fA-F_]*|[0-9][0-9_]*)([uU]([lL]|ll|LL)?|([lL]|ll|LL)[uU]?)?", |lex| {
-        let s = lex
-            .slice()
-            .trim_end_matches(['u', 'U', 'l', 'L'])
-            .replace('_', "");
-        if s.starts_with("0x") || s.starts_with("0X") {
-            i64::from_str_radix(&s[2..], 16).ok()
-        } else {
-            s.parse::<i64>().ok()
-        }
+        parse_integer_literal(lex.slice()).map(|literal| literal.value.to_i64())
     })]
     Integer(i64),
 
@@ -962,23 +954,18 @@ fn paste_tokens(tokens: Vec<PasteToken>) -> Vec<ExpansionToken> {
             }
             (PasteToken::Token(left), PasteToken::Token(right)) => (left, right),
         };
-        let spelling = file_source(intern_file(
-            "<scratch>",
-            &format!("{}{}", left.token, right.token),
-        ));
-        let mut lexer = Token::lexer(spelling);
-        let Some(Ok(token)) = lexer.next() else {
-            output.push(PasteToken::Token(left));
-            output.push(operator);
-            output.push(PasteToken::Token(right));
-            continue;
-        };
-        if lexer.next().is_some() {
+        let spelling = format!("{}{}", left.token, right.token);
+        let mut lexer = Token::lexer(&spelling);
+        if !matches!((lexer.next(), lexer.next()), (Some(Ok(_)), None)) {
             output.push(PasteToken::Token(left));
             output.push(operator);
             output.push(PasteToken::Token(right));
             continue;
         }
+        let Some(Ok(token)) = Token::lexer(file_source(intern_file("<scratch>", &spelling))).next()
+        else {
+            unreachable!("the paste lexed as one token above");
+        };
         let mut hideset = left.hideset;
         hideset.extend(right.hideset);
         output.push(PasteToken::Token(ExpansionToken {
