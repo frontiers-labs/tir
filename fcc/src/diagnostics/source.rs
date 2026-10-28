@@ -5,7 +5,7 @@
 //! source so a [`Diagnostic`](super::Diagnostic) can render itself without the
 //! caller threading that text around.
 
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Mutex, OnceLock};
 
 /// Handle to an interned source file (its name and text). See [`intern_file`].
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
@@ -36,7 +36,7 @@ impl Span {
     }
 }
 
-type FileTable = Mutex<Vec<(String, Arc<str>)>>;
+type FileTable = Mutex<Vec<(String, &'static str)>>;
 
 fn files() -> &'static FileTable {
     static FILES: OnceLock<FileTable> = OnceLock::new();
@@ -45,15 +45,16 @@ fn files() -> &'static FileTable {
 
 /// Register a source file and return its handle. Each call appends a fresh
 /// entry, so a file `#include`d twice gets two ids (each with its own text),
-/// which is exactly what the renderer needs.
+/// which is exactly what the renderer needs. The table never frees a file, so
+/// its text lives for the rest of the process and tokens can borrow it.
 pub fn intern_file(name: &str, source: &str) -> FileId {
     let mut files = files().lock().unwrap();
-    files.push((name.to_string(), Arc::from(source)));
+    files.push((name.to_string(), Box::leak(source.into())));
     FileId((files.len() - 1) as u32)
 }
 
-pub fn file_source(file: FileId) -> Arc<str> {
-    Arc::clone(&files().lock().unwrap()[file.0 as usize].1)
+pub fn file_source(file: FileId) -> &'static str {
+    files().lock().unwrap()[file.0 as usize].1
 }
 
 fn file_name(file: FileId) -> String {

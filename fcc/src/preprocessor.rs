@@ -1,6 +1,5 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use logos::{Lexer, Logos};
 
@@ -365,7 +364,7 @@ fn directive_identifier(pp: &mut Lexer<'_, PreprocToken>) -> String {
 /// the primary translation unit. Each frame knows its interned [`FileId`], so a
 /// token's span points into the file it actually came from.
 struct Frame {
-    source: Arc<str>,
+    source: &'static str,
     offset: usize,
     file: FileId,
     /// Resolved path of this frame's file. Its parent directory is the search
@@ -699,10 +698,8 @@ impl TokenStream {
                 self.frames.pop();
             }
 
-            let (source, offset, file) = {
-                let frame = self.frames.last()?;
-                (Arc::clone(&frame.source), frame.offset, frame.file)
-            };
+            let frame = self.frames.last()?;
+            let (source, offset, file) = (frame.source, frame.offset, frame.file);
             let span = Span::new(file, offset);
             let mut lexer = Token::lexer(&source[offset..]);
 
@@ -715,7 +712,7 @@ impl TokenStream {
                 }
                 Some(Ok(Token::Hash)) => {
                     let pp = lexer.morph::<PreprocToken>();
-                    self.process_directive(&source, offset, pp);
+                    self.process_directive(source, offset, pp);
                 }
                 Some(Ok(token)) => {
                     self.frames.last_mut().unwrap().offset = source.len() - lexer.remainder().len();
