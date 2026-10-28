@@ -2,7 +2,7 @@
 
 use super::declarations::{ctype, local_decl};
 use super::expressions::{expr, initializer};
-use super::{Extra, Span, ident};
+use super::{Extra, Span, ident, integer_literal};
 use crate::ast::*;
 use crate::lexer::Token;
 use chumsky::input::{MapExtra, ValueInput};
@@ -11,9 +11,9 @@ use tir::NodeId;
 
 fn decl_body<'src, I>() -> impl Parser<'src, I, NodeId, Extra<'src>> + Clone
 where
-    I: ValueInput<'src, Token = Token, Span = Span>,
+    I: ValueInput<'src, Token = Token<'src>, Span = Span>,
 {
-    let array_length = select! { Token::IntegerLiteral(value) => value }
+    let array_length = integer_literal()
         .or_not()
         .delimited_by(just(Token::LBracket), just(Token::RBracket));
     ctype()
@@ -45,7 +45,7 @@ where
 
 fn assign_body<'src, I>() -> impl Parser<'src, I, NodeId, Extra<'src>> + Clone
 where
-    I: ValueInput<'src, Token = Token, Span = Span>,
+    I: ValueInput<'src, Token = Token<'src>, Span = Span>,
 {
     ident()
         .then_ignore(just(Token::Assign))
@@ -64,7 +64,7 @@ where
 
 fn empty_node<'src, I>(e: &mut MapExtra<'src, '_, I, Extra<'src>>) -> NodeId
 where
-    I: ValueInput<'src, Token = Token, Span = Span>,
+    I: ValueInput<'src, Token = Token<'src>, Span = Span>,
 {
     let tok = e.span().start;
     e.state().0.add(AstKind::Empty, tok)
@@ -72,7 +72,7 @@ where
 
 fn open_scope<'src, I>() -> impl Parser<'src, I, (), Extra<'src>> + Clone
 where
-    I: ValueInput<'src, Token = Token, Span = Span>,
+    I: ValueInput<'src, Token = Token<'src>, Span = Span>,
 {
     just(Token::LBrace).map_with(|_, e: &mut MapExtra<'src, '_, I, Extra<'src>>| {
         e.state().0.push_scope();
@@ -81,7 +81,7 @@ where
 
 pub(super) fn close_scope<'src, I>() -> impl Parser<'src, I, (), Extra<'src>> + Clone
 where
-    I: ValueInput<'src, Token = Token, Span = Span>,
+    I: ValueInput<'src, Token = Token<'src>, Span = Span>,
 {
     just(Token::RBrace).map_with(|_, e: &mut MapExtra<'src, '_, I, Extra<'src>>| {
         e.state().0.pop_scope();
@@ -90,7 +90,7 @@ where
 
 pub(super) fn stmt<'src, I>() -> impl Parser<'src, I, NodeId, Extra<'src>> + Clone
 where
-    I: ValueInput<'src, Token = Token, Span = Span>,
+    I: ValueInput<'src, Token = Token<'src>, Span = Span>,
 {
     recursive(|stmt| {
         let semi = just(Token::Semicolon);
@@ -112,7 +112,7 @@ where
 
         let ret = just(Token::KwReturn)
             .ignore_then(expr().or_not())
-            .then_ignore(semi.clone())
+            .then_ignore(semi)
             .map_with(|value, e: &mut MapExtra<'src, '_, I, Extra<'src>>| {
                 let tok = e.span().start;
                 let st = &mut e.state().0;
@@ -125,7 +125,7 @@ where
 
         let typedef_decl = just(Token::KwTypedef)
             .ignore_then(ctype().then(ident()))
-            .then_ignore(semi.clone())
+            .then_ignore(semi)
             .map_with(|(ty, name), e: &mut MapExtra<'src, '_, I, Extra<'src>>| {
                 let tok = e.span().start;
                 let st = &mut e.state().0;
@@ -135,7 +135,7 @@ where
                 id
             });
 
-        let assign = assign_body().then_ignore(semi.clone());
+        let assign = assign_body().then_ignore(semi);
 
         let cond = expr().delimited_by(just(Token::LParen), just(Token::RParen));
 
@@ -173,7 +173,7 @@ where
             .ignore_then(stmt.clone())
             .then_ignore(just(Token::KwWhile))
             .then(cond.clone())
-            .then_ignore(semi.clone())
+            .then_ignore(semi)
             .map_with(|(body, c), e: &mut MapExtra<'src, '_, I, Extra<'src>>| {
                 let tok = e.span().start;
                 let st = &mut e.state().0;
@@ -198,9 +198,9 @@ where
         let for_stmt = just(Token::KwFor)
             .ignore_then(
                 for_init
-                    .then_ignore(semi.clone())
+                    .then_ignore(semi)
                     .then(for_cond)
-                    .then_ignore(semi.clone())
+                    .then_ignore(semi)
                     .then(for_step)
                     .delimited_by(just(Token::LParen), just(Token::RParen)),
             )
@@ -257,7 +257,7 @@ where
             });
         let goto_stmt = just(Token::KwGoto)
             .ignore_then(ident())
-            .then_ignore(semi.clone())
+            .then_ignore(semi)
             .map_with(|name, e: &mut MapExtra<'src, '_, I, Extra<'src>>| {
                 let tok = e.span().start;
                 let st = &mut e.state().0;
@@ -277,25 +277,23 @@ where
                 id
             });
 
-        let break_stmt = just(Token::KwBreak).then_ignore(semi.clone()).map_with(
+        let break_stmt = just(Token::KwBreak).then_ignore(semi).map_with(
             |_, e: &mut MapExtra<'src, '_, I, Extra<'src>>| {
                 let tok = e.span().start;
                 e.state().0.add(AstKind::Break, tok)
             },
         );
-        let continue_stmt = just(Token::KwContinue).then_ignore(semi.clone()).map_with(
+        let continue_stmt = just(Token::KwContinue).then_ignore(semi).map_with(
             |_, e: &mut MapExtra<'src, '_, I, Extra<'src>>| {
                 let tok = e.span().start;
                 e.state().0.add(AstKind::Continue, tok)
             },
         );
 
-        let null_stmt = semi
-            .clone()
-            .map_with(|_, e: &mut MapExtra<'src, '_, I, Extra<'src>>| {
-                let tok = e.span().start;
-                e.state().0.add(AstKind::Empty, tok)
-            });
+        let null_stmt = semi.map_with(|_, e: &mut MapExtra<'src, '_, I, Extra<'src>>| {
+            let tok = e.span().start;
+            e.state().0.add(AstKind::Empty, tok)
+        });
 
         let expr_stmt = expr().then_ignore(semi).map_with(
             |value, e: &mut MapExtra<'src, '_, I, Extra<'src>>| {

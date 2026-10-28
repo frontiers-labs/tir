@@ -10,7 +10,7 @@ mod declarations;
 mod expressions;
 mod initialization;
 mod layout;
-mod references;
+pub(crate) mod references;
 mod statements;
 mod target;
 mod types;

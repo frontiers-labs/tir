@@ -6,7 +6,7 @@ use fcc::lang_options::LangOptions;
 use fcc::lexer::Token;
 use logos::Logos;
 
-pub fn lex(name: &str, source: &str) -> Vec<(Token, Span)> {
+pub fn lex<'src>(name: &str, source: &'src str) -> Vec<(Token<'src>, Span)> {
     let file = intern_file(name, source);
     Token::lexer(source)
         .spanned()

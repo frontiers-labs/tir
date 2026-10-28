@@ -62,7 +62,7 @@ pub enum FloatingLiteralKind {
     LongDouble,
 }
 
-fn parse_floating_literal(spelling: &str) -> Option<FloatingLiteral> {
+pub(crate) fn parse_floating_literal(spelling: &str) -> Option<FloatingLiteral> {
     let suffix_start = spelling.trim_end_matches(['f', 'F', 'l', 'L']).len();
     let kind = match &spelling[suffix_start..] {
         "f" | "F" => FloatingLiteralKind::Float,
@@ -120,7 +120,7 @@ pub(crate) fn bit_precise_suffix(spelling: &str) -> Option<(usize, bool)> {
         .map(|suffix| (suffix.len(), suffix.contains('u')))
 }
 
-fn parse_integer_literal(spelling: &str) -> Option<IntegerLiteral> {
+pub(crate) fn parse_integer_literal(spelling: &str) -> Option<IntegerLiteral> {
     let bit_precise = bit_precise_suffix(spelling);
     let suffix_start = match bit_precise {
         Some((length, _)) => spelling.len() - length,
@@ -149,13 +149,13 @@ fn parse_integer_literal(spelling: &str) -> Option<IntegerLiteral> {
     })
 }
 
-#[derive(Logos, Debug, Clone, PartialEq)]
-pub enum Token {
-    #[regex(r"[ \t\n\r\f]+", |lex| lex.slice().to_string())]
-    Whitespace(String),
-    #[regex(r"//[^\n]*", |lex| lex.slice().to_string(), allow_greedy = true)]
-    #[regex(r"/\*([^*]|\*+[^*/])*\*+/", |lex| lex.slice().to_string())]
-    Comment(String),
+#[derive(Logos, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Token<'src> {
+    #[regex(r"[ \t\n\r\f]+", |lex| lex.slice())]
+    Whitespace(&'src str),
+    #[regex(r"//[^\n]*", |lex| lex.slice(), allow_greedy = true)]
+    #[regex(r"/\*([^*]|\*+[^*/])*\*+/", |lex| lex.slice())]
+    Comment(&'src str),
 
     #[token("alignas")]
     KwAlignas,
@@ -261,20 +261,20 @@ pub enum Token {
     Hash,
 
     // Or regular expressions.
-    #[regex("[a-zA-Z_][a-zA-Z0-9_]*", |lex| lex.slice().to_string())]
-    Identifier(String),
-    #[regex(r"0[xX](([0-9a-fA-F][0-9a-fA-F']*(\.[0-9a-fA-F']*)?)|(\.[0-9a-fA-F][0-9a-fA-F']*))[pP][+-]?[0-9][0-9']*[fFlL]?", |lex| parse_floating_literal(lex.slice()))]
-    #[regex(r"(([0-9][0-9']*\.[0-9']*|\.[0-9][0-9']*)([eE][+-]?[0-9][0-9']*)?|[0-9][0-9']*[eE][+-]?[0-9][0-9']*)[fFlL]?", |lex| parse_floating_literal(lex.slice()))]
-    FloatingLiteral(FloatingLiteral),
-    #[regex("(0[xX][0-9a-fA-F'][0-9a-fA-F']*|0[bB][01'][01']*|[0-9][0-9']*)([uUlL]*|[uU]?(wb|WB)[uU]?)", |lex| parse_integer_literal(lex.slice()))]
-    IntegerLiteral(IntegerLiteral),
-    #[regex(r#"(u8|u|U|L)?'([^'\\]|\\.)+'"#, |lex| lex.slice().to_string())]
-    CharacterLiteral(String),
+    #[regex("[a-zA-Z_][a-zA-Z0-9_]*", |lex| lex.slice())]
+    Identifier(&'src str),
+    #[regex(r"0[xX](([0-9a-fA-F][0-9a-fA-F']*(\.[0-9a-fA-F']*)?)|(\.[0-9a-fA-F][0-9a-fA-F']*))[pP][+-]?[0-9][0-9']*[fFlL]?", |lex| lex.slice())]
+    #[regex(r"(([0-9][0-9']*\.[0-9']*|\.[0-9][0-9']*)([eE][+-]?[0-9][0-9']*)?|[0-9][0-9']*[eE][+-]?[0-9][0-9']*)[fFlL]?", |lex| lex.slice())]
+    FloatingLiteral(&'src str),
+    #[regex("(0[xX][0-9a-fA-F'][0-9a-fA-F']*|0[bB][01'][01']*|[0-9][0-9']*)([uUlL]*|[uU]?(wb|WB)[uU]?)", |lex| lex.slice())]
+    IntegerLiteral(&'src str),
+    #[regex(r#"(u8|u|U|L)?'([^'\\]|\\.)+'"#, |lex| lex.slice())]
+    CharacterLiteral(&'src str),
     #[regex(r#""([^"\\]|\\.)*""#, |lex| {
         let s = lex.slice();
-        s[1..s.len() - 1].to_string()
+        &s[1..s.len() - 1]
     })]
-    StringLiteral(String),
+    StringLiteral(&'src str),
 
     #[token("...")]
     Ellipsis,
@@ -370,111 +370,121 @@ pub enum Token {
     Bang,
 }
 
-impl fmt::Display for Token {
+impl<'src> Token<'src> {
+    /// The token's source text, except that a string literal's has no quotes.
+    pub fn spelling(&self) -> &'src str {
+        match *self {
+            Token::Whitespace(s) => s,
+            Token::Comment(s) => s,
+            Token::KwAlignas => "alignas",
+            Token::KwAlignof => "alignof",
+            Token::KwAuto => "auto",
+            Token::KwBool => "bool",
+            Token::KwUnderscoreBool => "_Bool",
+            Token::KwBitInt => "_BitInt",
+            Token::KwBreak => "break",
+            Token::KwCase => "case",
+            Token::KwChar => "char",
+            Token::KwConst => "const",
+            Token::KwConstexpr => "constexpr",
+            Token::KwContinue => "continue",
+            Token::KwDefault => "default",
+            Token::KwDo => "do",
+            Token::KwDouble => "double",
+            Token::KwElse => "else",
+            Token::KwEnum => "enum",
+            Token::KwExtern => "extern",
+            Token::KwFalse => "false",
+            Token::KwFloat => "float",
+            Token::KwFor => "for",
+            Token::KwGoto => "goto",
+            Token::KwIf => "if",
+            Token::KwInline => "inline",
+            Token::KwInt => "int",
+            Token::KwLong => "long",
+            Token::KwNullptr => "nullptr",
+            Token::KwRegister => "register",
+            Token::KwRestrict => "restrict",
+            Token::KwReturn => "return",
+            Token::KwShort => "short",
+            Token::KwSigned => "signed",
+            Token::KwSizeof => "sizeof",
+            Token::KwStatic => "static",
+            Token::KwStaticAssert => "static_assert",
+            Token::KwStruct => "struct",
+            Token::KwSwitch => "switch",
+            Token::KwThreadLocal => "thread_local",
+            Token::KwTrue => "true",
+            Token::KwTypedef => "typedef",
+            Token::KwTypeof => "typeof",
+            Token::KwTypeofUnqual => "typeof_unqual",
+            Token::KwUnion => "union",
+            Token::KwUnsigned => "unsigned",
+            Token::KwVoid => "void",
+            Token::KwVolatile => "volatile",
+            Token::KwWhile => "while",
+            Token::HashHash => "##",
+            Token::Hash => "#",
+            Token::Identifier(s) => s,
+            Token::FloatingLiteral(s) => s,
+            Token::IntegerLiteral(s) => s,
+            Token::CharacterLiteral(s) => s,
+            Token::StringLiteral(s) => s,
+            Token::Ellipsis => "...",
+            Token::LParen => "(",
+            Token::RParen => ")",
+            Token::LBrace => "{",
+            Token::RBrace => "}",
+            Token::LBracket => "[",
+            Token::RBracket => "]",
+            Token::Semicolon => ";",
+            Token::Comma => ",",
+            Token::Dot => ".",
+            Token::Arrow => "->",
+            Token::Assign => "=",
+            Token::PlusAssign => "+=",
+            Token::MinusAssign => "-=",
+            Token::StarAssign => "*=",
+            Token::SlashAssign => "/=",
+            Token::PercentAssign => "%=",
+            Token::AmpAssign => "&=",
+            Token::PipeAssign => "|=",
+            Token::CaretAssign => "^=",
+            Token::ShlAssign => "<<=",
+            Token::ShrAssign => ">>=",
+            Token::PlusPlus => "++",
+            Token::MinusMinus => "--",
+            Token::Plus => "+",
+            Token::Minus => "-",
+            Token::Star => "*",
+            Token::Slash => "/",
+            Token::Percent => "%",
+            Token::Amp => "&",
+            Token::Pipe => "|",
+            Token::Caret => "^",
+            Token::Tilde => "~",
+            Token::Shl => "<<",
+            Token::Shr => ">>",
+            Token::Question => "?",
+            Token::Colon => ":",
+            Token::EqEq => "==",
+            Token::BangEq => "!=",
+            Token::Lt => "<",
+            Token::Gt => ">",
+            Token::Le => "<=",
+            Token::Ge => ">=",
+            Token::AmpAmp => "&&",
+            Token::PipePipe => "||",
+            Token::Bang => "!",
+        }
+    }
+}
+
+impl fmt::Display for Token<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Token::Whitespace(s) => f.write_str(s),
-            Token::Comment(s) => f.write_str(s),
-            Token::KwAlignas => f.write_str("alignas"),
-            Token::KwAlignof => f.write_str("alignof"),
-            Token::KwAuto => f.write_str("auto"),
-            Token::KwBool => f.write_str("bool"),
-            Token::KwUnderscoreBool => f.write_str("_Bool"),
-            Token::KwBitInt => f.write_str("_BitInt"),
-            Token::KwBreak => f.write_str("break"),
-            Token::KwCase => f.write_str("case"),
-            Token::KwChar => f.write_str("char"),
-            Token::KwConst => f.write_str("const"),
-            Token::KwConstexpr => f.write_str("constexpr"),
-            Token::KwContinue => f.write_str("continue"),
-            Token::KwDefault => f.write_str("default"),
-            Token::KwDo => f.write_str("do"),
-            Token::KwDouble => f.write_str("double"),
-            Token::KwElse => f.write_str("else"),
-            Token::KwEnum => f.write_str("enum"),
-            Token::KwExtern => f.write_str("extern"),
-            Token::KwFalse => f.write_str("false"),
-            Token::KwFloat => f.write_str("float"),
-            Token::KwFor => f.write_str("for"),
-            Token::KwGoto => f.write_str("goto"),
-            Token::KwIf => f.write_str("if"),
-            Token::KwInline => f.write_str("inline"),
-            Token::KwInt => f.write_str("int"),
-            Token::KwLong => f.write_str("long"),
-            Token::KwNullptr => f.write_str("nullptr"),
-            Token::KwRegister => f.write_str("register"),
-            Token::KwRestrict => f.write_str("restrict"),
-            Token::KwReturn => f.write_str("return"),
-            Token::KwShort => f.write_str("short"),
-            Token::KwSigned => f.write_str("signed"),
-            Token::KwSizeof => f.write_str("sizeof"),
-            Token::KwStatic => f.write_str("static"),
-            Token::KwStaticAssert => f.write_str("static_assert"),
-            Token::KwStruct => f.write_str("struct"),
-            Token::KwSwitch => f.write_str("switch"),
-            Token::KwThreadLocal => f.write_str("thread_local"),
-            Token::KwTrue => f.write_str("true"),
-            Token::KwTypedef => f.write_str("typedef"),
-            Token::KwTypeof => f.write_str("typeof"),
-            Token::KwTypeofUnqual => f.write_str("typeof_unqual"),
-            Token::KwUnion => f.write_str("union"),
-            Token::KwUnsigned => f.write_str("unsigned"),
-            Token::KwVoid => f.write_str("void"),
-            Token::KwVolatile => f.write_str("volatile"),
-            Token::KwWhile => f.write_str("while"),
-            Token::HashHash => f.write_str("##"),
-            Token::Hash => f.write_str("#"),
-            Token::Identifier(s) => f.write_str(s),
-            Token::FloatingLiteral(n) => f.write_str(&n.spelling),
-            Token::IntegerLiteral(n) => f.write_str(&n.spelling),
-            Token::CharacterLiteral(s) => f.write_str(s),
             Token::StringLiteral(s) => write!(f, "\"{s}\""),
-            Token::Ellipsis => f.write_str("..."),
-            Token::LParen => f.write_str("("),
-            Token::RParen => f.write_str(")"),
-            Token::LBrace => f.write_str("{"),
-            Token::RBrace => f.write_str("}"),
-            Token::LBracket => f.write_str("["),
-            Token::RBracket => f.write_str("]"),
-            Token::Semicolon => f.write_str(";"),
-            Token::Comma => f.write_str(","),
-            Token::Dot => f.write_str("."),
-            Token::Arrow => f.write_str("->"),
-            Token::Assign => f.write_str("="),
-            Token::PlusAssign => f.write_str("+="),
-            Token::MinusAssign => f.write_str("-="),
-            Token::StarAssign => f.write_str("*="),
-            Token::SlashAssign => f.write_str("/="),
-            Token::PercentAssign => f.write_str("%="),
-            Token::AmpAssign => f.write_str("&="),
-            Token::PipeAssign => f.write_str("|="),
-            Token::CaretAssign => f.write_str("^="),
-            Token::ShlAssign => f.write_str("<<="),
-            Token::ShrAssign => f.write_str(">>="),
-            Token::PlusPlus => f.write_str("++"),
-            Token::MinusMinus => f.write_str("--"),
-            Token::Plus => f.write_str("+"),
-            Token::Minus => f.write_str("-"),
-            Token::Star => f.write_str("*"),
-            Token::Slash => f.write_str("/"),
-            Token::Percent => f.write_str("%"),
-            Token::Amp => f.write_str("&"),
-            Token::Pipe => f.write_str("|"),
-            Token::Caret => f.write_str("^"),
-            Token::Tilde => f.write_str("~"),
-            Token::Shl => f.write_str("<<"),
-            Token::Shr => f.write_str(">>"),
-            Token::Question => f.write_str("?"),
-            Token::Colon => f.write_str(":"),
-            Token::EqEq => f.write_str("=="),
-            Token::BangEq => f.write_str("!="),
-            Token::Lt => f.write_str("<"),
-            Token::Gt => f.write_str(">"),
-            Token::Le => f.write_str("<="),
-            Token::Ge => f.write_str(">="),
-            Token::AmpAmp => f.write_str("&&"),
-            Token::PipePipe => f.write_str("||"),
-            Token::Bang => f.write_str("!"),
+            token => f.write_str(token.spelling()),
         }
     }
 }

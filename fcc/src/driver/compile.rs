@@ -371,7 +371,7 @@ pub(super) fn preprocess(
     include_dirs: &[PathBuf],
     options: LangOptions,
     march: Option<&str>,
-) -> Vec<(Token, crate::diagnostics::Span)> {
+) -> Vec<(Token<'static>, crate::diagnostics::Span)> {
     add_default_defines(&mut defines, options, march);
     for name in undefines {
         defines.remove(name);
@@ -423,7 +423,7 @@ pub(super) fn preprocess_opts(
     opts: &DriverOptions,
     name: &str,
     source: &str,
-) -> Vec<(Token, crate::diagnostics::Span)> {
+) -> Vec<(Token<'static>, crate::diagnostics::Span)> {
     preprocess(
         name,
         source,

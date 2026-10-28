@@ -93,7 +93,7 @@ pub(super) fn type_specifier_reference(options: LangOptions) -> String {
     standard_reference(options, "6.7.2p2", "6.7.3.1p2", "type specifiers")
 }
 
-pub(super) fn integer_literal_reference(options: LangOptions) -> String {
+pub(crate) fn integer_literal_reference(options: LangOptions) -> String {
     standard_reference(options, "6.4.4.1p1", "6.4.4.1p1", "integer constants")
 }
 
