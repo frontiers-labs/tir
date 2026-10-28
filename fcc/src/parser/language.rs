@@ -6,7 +6,7 @@ use crate::lang_options::LangOptions;
 use crate::lexer::Token;
 
 pub(super) fn validate_tokens(
-    tokens: &[(Token, crate::diagnostics::Span)],
+    tokens: &[(Token<'_>, crate::diagnostics::Span)],
     options: LangOptions,
 ) -> Vec<Diagnostic> {
     let mut version_diagnostics = Vec::new();
@@ -17,7 +17,7 @@ pub(super) fn validate_tokens(
                     .push(LanguageFeatureUnavailable::new(*span, "line comment", "C89").into());
             }
             Token::IntegerLiteral(literal)
-                if literal.spelling.to_ascii_lowercase().starts_with("0b")
+                if literal.to_ascii_lowercase().starts_with("0b")
                     && options.std_version < crate::lang_options::StdVersion::C23
                     && !options.gnu_extensions =>
             {
@@ -26,7 +26,7 @@ pub(super) fn validate_tokens(
                 );
             }
             Token::IntegerLiteral(literal)
-                if literal.spelling.contains('\'')
+                if literal.contains('\'')
                     && options.std_version < crate::lang_options::StdVersion::C23 =>
             {
                 version_diagnostics
@@ -38,31 +38,30 @@ pub(super) fn validate_tokens(
     version_diagnostics
 }
 
-pub(super) fn keyword_for_standard(token: Token, options: LangOptions) -> Token {
+pub(super) fn keyword_for_standard(token: Token<'_>, options: LangOptions) -> Token<'_> {
     use crate::lang_options::StdVersion;
 
     if options.is_strict_c89() {
         match token {
-            Token::KwInline => return Token::Identifier("inline".to_string()),
-            Token::KwRestrict => return Token::Identifier("restrict".to_string()),
-            Token::KwUnderscoreBool => return Token::Identifier("_Bool".to_string()),
+            Token::KwInline => return Token::Identifier("inline"),
+            Token::KwRestrict => return Token::Identifier("restrict"),
+            Token::KwUnderscoreBool => return Token::Identifier("_Bool"),
             _ => {}
         }
     }
     if options.std_version < StdVersion::C23 {
         match token {
-            Token::KwAlignas => Token::Identifier("alignas".to_string()),
-            Token::KwAlignof => Token::Identifier("alignof".to_string()),
-            Token::KwBool => Token::Identifier("bool".to_string()),
-            Token::KwConstexpr => Token::Identifier("constexpr".to_string()),
-            Token::KwFalse => Token::Identifier("false".to_string()),
-            Token::KwNullptr => Token::Identifier("nullptr".to_string()),
-            Token::KwStaticAssert => Token::Identifier("static_assert".to_string()),
-            Token::KwThreadLocal => Token::Identifier("thread_local".to_string()),
-            Token::KwTrue => Token::Identifier("true".to_string()),
-            Token::KwTypeof | Token::KwTypeofUnqual if !options.gnu_extensions => {
-                Token::Identifier(token.to_string())
-            }
+            Token::KwAlignas => Token::Identifier("alignas"),
+            Token::KwAlignof => Token::Identifier("alignof"),
+            Token::KwBool => Token::Identifier("bool"),
+            Token::KwConstexpr => Token::Identifier("constexpr"),
+            Token::KwFalse => Token::Identifier("false"),
+            Token::KwNullptr => Token::Identifier("nullptr"),
+            Token::KwStaticAssert => Token::Identifier("static_assert"),
+            Token::KwThreadLocal => Token::Identifier("thread_local"),
+            Token::KwTrue => Token::Identifier("true"),
+            Token::KwTypeof if !options.gnu_extensions => Token::Identifier("typeof"),
+            Token::KwTypeofUnqual if !options.gnu_extensions => Token::Identifier("typeof_unqual"),
             other => other,
         }
     } else {

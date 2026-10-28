@@ -18,9 +18,13 @@ use std::collections::{HashMap, HashSet};
 use tir::NodeId;
 
 use crate::ast::*;
-use crate::diagnostics::{Diagnostic, FileId, UnexpectedEof, UnexpectedToken};
+use crate::diagnostics::{
+    Diagnostic, FileId, UnexpectedEof, UnexpectedToken, file_source, intern_file,
+};
 use crate::lang_options::LangOptions;
-use crate::lexer::Token;
+use crate::lexer::{
+    FloatingLiteral, IntegerLiteral, Token, parse_floating_literal, parse_integer_literal,
+};
 
 mod declarations;
 mod expressions;
@@ -33,7 +37,7 @@ use language::{keyword_for_standard, validate_language_version};
 /// Index-based span over the token slice (we parse already-lexed tokens, so
 /// byte offsets are not available — token indices are the natural span).
 type Span = SimpleSpan<usize>;
-type Extra<'src> = extra::Full<Rich<'src, Token, Span>, SimpleState<ParseState>, ()>;
+type Extra<'src> = extra::Full<Rich<'src, Token<'src>, Span>, SimpleState<ParseState>, ()>;
 
 /// Parser state: the tree under construction plus the byte span of every input
 /// token, so each node can record where its construct starts in the source.
@@ -119,28 +123,34 @@ impl ParseState {
 /// Parse a stream of tokens, each paired with its byte [`crate::diagnostics::Span`]
 /// in the source. Whitespace tokens are dropped first; on failure each parser
 /// error is turned into a [`Diagnostic`] whose label points back at the source.
-pub fn parse(
-    tokens: &[(Token, crate::diagnostics::Span)],
+pub fn parse<'src>(
+    tokens: &[(Token<'src>, crate::diagnostics::Span)],
     options: LangOptions,
 ) -> Result<Ast, Vec<Diagnostic>> {
     let version_diagnostics = language::validate_tokens(tokens, options);
     if !version_diagnostics.is_empty() {
         return Err(version_diagnostics);
     }
-    let mut filtered: Vec<Token> = Vec::with_capacity(tokens.len());
+    let mut filtered: Vec<Token<'src>> = Vec::with_capacity(tokens.len());
     let mut byte_spans = Vec::with_capacity(tokens.len());
-    for (tok, span) in tokens {
-        if !matches!(tok, Token::Whitespace(_) | Token::Comment(_)) {
-            let token = keyword_for_standard(tok.clone(), options);
-            if let (Some(Token::StringLiteral(left)), Token::StringLiteral(right)) =
-                (filtered.last_mut(), &token)
-            {
-                left.push_str(right);
-                continue;
+    let mut tokens = tokens
+        .iter()
+        .filter(|(tok, _)| !matches!(tok, Token::Whitespace(_) | Token::Comment(_)))
+        .peekable();
+    while let Some((tok, span)) = tokens.next() {
+        let mut token = keyword_for_standard(*tok, options);
+        if let Token::StringLiteral(first) = token
+            && let Some((Token::StringLiteral(_), _)) = tokens.peek()
+        {
+            let mut joined = first.to_string();
+            while let Some((Token::StringLiteral(next), _)) = tokens.peek() {
+                joined.push_str(next);
+                tokens.next();
             }
-            filtered.push(token);
-            byte_spans.push(*span);
+            token = Token::StringLiteral(file_source(intern_file("<scratch>", &joined)));
         }
+        filtered.push(token);
+        byte_spans.push(*span);
     }
 
     let mut state = SimpleState(ParseState {
@@ -172,7 +182,7 @@ pub fn parse(
 }
 
 fn rich_to_diagnostic(
-    err: &Rich<'_, Token, Span>,
+    err: &Rich<'_, Token<'_>, Span>,
     byte_spans: &[crate::diagnostics::Span],
 ) -> Diagnostic {
     let index = err.span().into_range().start;
@@ -195,14 +205,33 @@ fn rich_to_diagnostic(
 
 fn ident<'src, I>() -> impl Parser<'src, I, String, Extra<'src>> + Clone
 where
-    I: ValueInput<'src, Token = Token, Span = Span>,
+    I: ValueInput<'src, Token = Token<'src>, Span = Span>,
 {
-    select! { Token::Identifier(name) => name }
+    select! { Token::Identifier(name) => name.to_string() }
+}
+
+fn integer_literal<'src, I>() -> impl Parser<'src, I, IntegerLiteral, Extra<'src>> + Clone
+where
+    I: ValueInput<'src, Token = Token<'src>, Span = Span>,
+{
+    select! { Token::IntegerLiteral(spelling) => spelling }.try_map(|spelling, span| {
+        parse_integer_literal(spelling).ok_or_else(|| Rich::custom(span, "invalid integer literal"))
+    })
+}
+
+fn floating_literal<'src, I>() -> impl Parser<'src, I, FloatingLiteral, Extra<'src>> + Clone
+where
+    I: ValueInput<'src, Token = Token<'src>, Span = Span>,
+{
+    select! { Token::FloatingLiteral(spelling) => spelling }.try_map(|spelling, span| {
+        parse_floating_literal(spelling)
+            .ok_or_else(|| Rich::custom(span, "invalid floating literal"))
+    })
 }
 
 fn translation_unit<'src, I>() -> impl Parser<'src, I, NodeId, Extra<'src>>
 where
-    I: ValueInput<'src, Token = Token, Span = Span>,
+    I: ValueInput<'src, Token = Token<'src>, Span = Span>,
 {
     choice((
         top_level_marker().to(None),

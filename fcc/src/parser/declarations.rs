@@ -4,7 +4,7 @@ use super::expressions::{constant_expr, initializer};
 use super::statements::{close_scope, stmt};
 use super::{Extra, ParseState, Span, ident};
 use crate::ast::*;
-use crate::lexer::Token;
+use crate::lexer::{Token, parse_integer_literal};
 use chumsky::input::{MapExtra, ValueInput};
 use chumsky::inspector::SimpleState;
 use chumsky::prelude::*;
@@ -12,7 +12,7 @@ use tir::NodeId;
 
 pub(super) fn ctype<'src, I>() -> impl Parser<'src, I, CType, Extra<'src>> + Clone
 where
-    I: ValueInput<'src, Token = Token, Span = Span>,
+    I: ValueInput<'src, Token = Token<'src>, Span = Span>,
 {
     let qualifier = choice((
         just(Token::KwConst),
@@ -46,8 +46,8 @@ where
     .map(|atoms| builtin_type(&atoms.concat()));
     let named = select! { Token::Identifier(name) => name }.try_map_with(
         |name, e: &mut MapExtra<'src, '_, I, Extra<'src>>| {
-            if e.state().0.is_typedef(&name) {
-                Ok(CType::Named(name))
+            if e.state().0.is_typedef(name) {
+                Ok(CType::Named(name.to_string()))
             } else {
                 Err(Rich::custom(e.span(), "expected type name"))
             }
@@ -66,7 +66,7 @@ where
         .ignore_then(ident())
         .map(|name| CType::Enum(Some(name)));
     let base = choice((builtin, record, enumeration, named));
-    let pointer = just(Token::Star).ignore_then(qualifier.clone().repeated().collect::<Vec<_>>());
+    let pointer = just(Token::Star).ignore_then(qualifier.repeated().collect::<Vec<_>>());
 
     qualifier
         .repeated()
@@ -83,7 +83,7 @@ where
         })
 }
 
-fn apply_qualifiers(mut ty: CType, qualifiers: &[Token]) -> CType {
+fn apply_qualifiers(mut ty: CType, qualifiers: &[Token<'_>]) -> CType {
     if qualifiers.iter().any(|token| token == &Token::KwConst) {
         ty = CType::Const(Box::new(ty));
     }
@@ -98,7 +98,7 @@ fn apply_qualifiers(mut ty: CType, qualifiers: &[Token]) -> CType {
 
 pub(super) fn function<'src, I>() -> impl Parser<'src, I, NodeId, Extra<'src>> + Clone
 where
-    I: ValueInput<'src, Token = Token, Span = Span>,
+    I: ValueInput<'src, Token = Token<'src>, Span = Span>,
 {
     let array_suffix = just(Token::LBracket).then_ignore(just(Token::RBracket));
     let param = ctype()
@@ -225,20 +225,20 @@ fn is_void_param(ast: &Ast, param: NodeId) -> bool {
 }
 
 struct DeclParser<'a> {
-    tokens: &'a [Token],
+    tokens: &'a [Token<'a>],
     pos: usize,
     attrs: Vec<String>,
 }
 
-struct DeclSpecs {
+struct DeclSpecs<'a> {
     ty: CType,
-    storage: Vec<Token>,
+    storage: Vec<Token<'a>>,
     type_decl: Option<NodeId>,
 }
 
-struct DeclSpecPrefix {
-    storage: Vec<Token>,
-    qualifiers: Vec<Token>,
+struct DeclSpecPrefix<'a> {
+    storage: Vec<Token<'a>>,
+    qualifiers: Vec<Token<'a>>,
     attrs: Vec<String>,
     base: DeclSpecBase,
 }
@@ -248,13 +248,13 @@ enum DeclSpecBase {
     Record(RecordKind),
 }
 
-struct RecordFrame {
+struct RecordFrame<'a> {
     kind: RecordKind,
     id: RecordId,
     name: Option<String>,
     nested_records: Vec<NodeId>,
     fields: Vec<NodeId>,
-    pending_field: Option<DeclSpecPrefix>,
+    pending_field: Option<DeclSpecPrefix<'a>>,
 }
 
 struct Declarator {
@@ -263,7 +263,7 @@ struct Declarator {
 }
 
 impl<'a> DeclParser<'a> {
-    fn new(tokens: &'a [Token]) -> Self {
+    fn new(tokens: &'a [Token<'a>]) -> Self {
         Self {
             tokens,
             pos: 0,
@@ -271,19 +271,19 @@ impl<'a> DeclParser<'a> {
         }
     }
 
-    fn peek(&self) -> Option<&Token> {
+    fn peek(&self) -> Option<&Token<'a>> {
         self.tokens.get(self.pos)
     }
 
-    fn next(&mut self) -> Option<Token> {
-        let tok = self.tokens.get(self.pos).cloned();
+    fn next(&mut self) -> Option<Token<'a>> {
+        let tok = self.tokens.get(self.pos).copied();
         if tok.is_some() {
             self.pos += 1;
         }
         tok
     }
 
-    fn eat(&mut self, tok: &Token) -> bool {
+    fn eat(&mut self, tok: &Token<'_>) -> bool {
         if self.peek() == Some(tok) {
             self.pos += 1;
             true
@@ -292,7 +292,7 @@ impl<'a> DeclParser<'a> {
         }
     }
 
-    fn expect(&mut self, tok: &Token) -> Result<(), String> {
+    fn expect(&mut self, tok: &Token<'_>) -> Result<(), String> {
         self.eat(tok)
             .then_some(())
             .ok_or_else(|| format!("expected {tok}"))
@@ -302,7 +302,7 @@ impl<'a> DeclParser<'a> {
         self.pos >= self.tokens.len()
     }
 
-    fn take_initializer(&mut self) -> &'a [Token] {
+    fn take_initializer(&mut self) -> &'a [Token<'a>] {
         let start = self.pos;
         let mut depth = 0;
         while let Some(token) = self.tokens.get(self.pos) {
@@ -317,7 +317,7 @@ impl<'a> DeclParser<'a> {
         &self.tokens[start..self.pos]
     }
 
-    fn take_enumerator_value(&mut self) -> &'a [Token] {
+    fn take_enumerator_value(&mut self) -> &'a [Token<'a>] {
         let start = self.pos;
         let mut delimiter_depth = 0_i32;
         let mut conditional_depth = 0_u32;
@@ -343,7 +343,7 @@ impl<'a> DeclParser<'a> {
         &mut self,
         state: &mut SimpleState<ParseState>,
         tok: usize,
-    ) -> Result<DeclSpecs, String> {
+    ) -> Result<DeclSpecs<'a>, String> {
         let prefix = self.parse_spec_prefix(state, tok)?;
         match prefix.base {
             DeclSpecBase::Complete(ref ty, type_decl) => {
@@ -361,7 +361,7 @@ impl<'a> DeclParser<'a> {
         &mut self,
         state: &mut SimpleState<ParseState>,
         tok: usize,
-    ) -> Result<DeclSpecPrefix, String> {
+    ) -> Result<DeclSpecPrefix<'a>, String> {
         let mut storage = Vec::new();
         let mut qualifiers = Vec::new();
         let mut spec_tokens = Vec::new();
@@ -387,7 +387,7 @@ impl<'a> DeclParser<'a> {
                     self.next();
                     let name = match self.peek() {
                         Some(Token::Identifier(_)) => match self.next().unwrap() {
-                            Token::Identifier(name) => Some(name),
+                            Token::Identifier(name) => Some(name.to_string()),
                             _ => unreachable!(),
                         },
                         _ => None,
@@ -397,7 +397,7 @@ impl<'a> DeclParser<'a> {
                         while !self.eat(&Token::RBrace) {
                             let enumerator_tok = tok + self.pos;
                             let enumerator_name = match self.next() {
-                                Some(Token::Identifier(name)) => name,
+                                Some(Token::Identifier(name)) => name.to_string(),
                                 Some(token) => {
                                     return Err(format!("expected enumerator name, found {token}"));
                                 }
@@ -473,7 +473,7 @@ impl<'a> DeclParser<'a> {
                 }
                 Some(Token::Identifier(_)) if spec_tokens.is_empty() => {
                     if let Token::Identifier(name) = self.next().unwrap() {
-                        break DeclSpecBase::Complete(CType::Named(name), None);
+                        break DeclSpecBase::Complete(CType::Named(name.to_string()), None);
                     }
                     unreachable!();
                 }
@@ -554,10 +554,10 @@ impl<'a> DeclParser<'a> {
         &mut self,
         state: &mut SimpleState<ParseState>,
         kind: RecordKind,
-    ) -> (CType, Option<RecordFrame>) {
+    ) -> (CType, Option<RecordFrame<'a>>) {
         let name = match self.peek() {
             Some(Token::Identifier(_)) => match self.next().unwrap() {
-                Token::Identifier(name) => Some(name),
+                Token::Identifier(name) => Some(name.to_string()),
                 _ => unreachable!(),
             },
             _ => None,
@@ -698,7 +698,7 @@ impl<'a> DeclParser<'a> {
     fn parse_name(&mut self) -> Result<String, String> {
         self.consume_attrs()?;
         match self.next() {
-            Some(Token::Identifier(name)) => Ok(name),
+            Some(Token::Identifier(name)) => Ok(name.to_string()),
             Some(tok) => Err(format!("expected declarator name, found {tok}")),
             None => Err("expected declarator name".to_string()),
         }
@@ -845,19 +845,23 @@ impl<'a> DeclParser<'a> {
             Some(Token::Identifier(name)) => name,
             _ => unreachable!(),
         };
-        let name = match name.as_str() {
-            "__restrict" | "__restrict__" => "restrict".to_string(),
+        let name = match name {
+            "__restrict" | "__restrict__" => "restrict",
             _ => name,
         };
         if self.eat(&Token::LParen) {
             let args = self.collect_until_matching(Token::LParen, Token::RParen)?;
             Ok(format!("{name}({})", tokens_text(&args)))
         } else {
-            Ok(name)
+            Ok(name.to_string())
         }
     }
 
-    fn collect_until_matching(&mut self, open: Token, close: Token) -> Result<Vec<Token>, String> {
+    fn collect_until_matching(
+        &mut self,
+        open: Token<'a>,
+        close: Token<'a>,
+    ) -> Result<Vec<Token<'a>>, String> {
         let mut depth = 1usize;
         let mut out = Vec::new();
         while let Some(tok) = self.next() {
@@ -879,10 +883,10 @@ impl<'a> DeclParser<'a> {
 }
 
 fn finish_decl_specs(
-    prefix: DeclSpecPrefix,
+    prefix: DeclSpecPrefix<'_>,
     mut ty: CType,
     type_decl: Option<NodeId>,
-) -> DeclSpecs {
+) -> DeclSpecs<'_> {
     for qualifier in prefix.qualifiers.into_iter().rev() {
         ty = match qualifier {
             Token::KwConst => CType::Const(Box::new(ty)),
@@ -904,7 +908,7 @@ fn finish_decl_specs(
 fn finish_record(
     state: &mut SimpleState<ParseState>,
     tok: usize,
-    frame: RecordFrame,
+    frame: RecordFrame<'_>,
 ) -> (CType, NodeId) {
     let record = state.0.add(AstKind::RecordDecl, tok);
     state.0.ast.set_leaf_data(
@@ -927,7 +931,7 @@ fn finish_record(
     (CType::Record(frame.kind, frame.id, frame.name), record)
 }
 
-fn builtin_type(tokens: &[Token]) -> CType {
+fn builtin_type(tokens: &[Token<'_>]) -> CType {
     SpecCounts::of(tokens)
         .ctype()
         .unwrap_or_else(|| CType::Invalid(tokens_text(tokens)))
@@ -952,7 +956,7 @@ struct SpecCounts {
 }
 
 impl SpecCounts {
-    fn of(tokens: &[Token]) -> Self {
+    fn of(tokens: &[Token<'_>]) -> Self {
         let mut counts = SpecCounts::default();
         for token in tokens {
             let slot = match token {
@@ -969,8 +973,8 @@ impl SpecCounts {
                 Token::KwBitInt => &mut counts.bit_int,
                 // The width of `_BitInt`, which follows its keyword.
                 Token::IntegerLiteral(width) => {
-                    counts.bit_int_width = match width.value.width() {
-                        ..=64 => width.value.to_u64(),
+                    counts.bit_int_width = match parse_integer_literal(width) {
+                        Some(width) if width.value.width() <= 64 => width.value.to_u64(),
                         _ => u64::MAX,
                     };
                     continue;
@@ -1074,7 +1078,7 @@ fn is_decl_attr_name(name: &str) -> bool {
         || name.starts_with("_LIBC_")
 }
 
-fn tokens_text(tokens: &[Token]) -> String {
+fn tokens_text(tokens: &[Token<'_>]) -> String {
     tokens
         .iter()
         .map(ToString::to_string)
@@ -1127,7 +1131,7 @@ fn split_function_type(ty: CType) -> Result<(CType, Vec<CParam>, bool, bool), CT
 
 pub(super) fn top_level_attr<'src, I>() -> impl Parser<'src, I, NodeId, Extra<'src>> + Clone
 where
-    I: ValueInput<'src, Token = Token, Span = Span>,
+    I: ValueInput<'src, Token = Token<'src>, Span = Span>,
 {
     let group = recursive(|group| {
         let atom = any()
@@ -1136,7 +1140,7 @@ where
         choice((
             group
                 .repeated()
-                .collect::<Vec<Vec<Token>>>()
+                .collect::<Vec<Vec<Token<'src>>>>()
                 .map(|parts| {
                     let mut toks = vec![Token::LParen];
                     toks.extend(parts.into_iter().flatten());
@@ -1150,14 +1154,14 @@ where
 
     select! { Token::Identifier(name) => name }
         .try_map(|name, span| {
-            is_decl_attr_name(&name)
+            is_decl_attr_name(name)
                 .then_some(name)
                 .ok_or_else(|| Rich::custom(span, "expected top-level attribute"))
         })
         .then(
             group
                 .repeated()
-                .collect::<Vec<Vec<Token>>>()
+                .collect::<Vec<Vec<Token<'src>>>>()
                 .delimited_by(just(Token::LParen), just(Token::RParen)),
         )
         .map_with(|(name, args), e: &mut MapExtra<'src, '_, I, Extra<'src>>| {
@@ -1175,11 +1179,11 @@ where
 
 pub(super) fn top_level_marker<'src, I>() -> impl Parser<'src, I, (), Extra<'src>> + Clone
 where
-    I: ValueInput<'src, Token = Token, Span = Span>,
+    I: ValueInput<'src, Token = Token<'src>, Span = Span>,
 {
     select! { Token::Identifier(name) => name }
         .try_map(|name, span| {
-            is_top_level_marker(&name)
+            is_top_level_marker(name)
                 .then_some(())
                 .ok_or_else(|| Rich::custom(span, "expected top-level marker"))
         })
@@ -1189,7 +1193,7 @@ where
 fn parse_external_tokens(
     state: &mut SimpleState<ParseState>,
     tok: usize,
-    tokens: &[Token],
+    tokens: &[Token<'_>],
 ) -> Result<NodeId, String> {
     let mut parser = DeclParser::new(tokens);
     let specs = parser.parse_specs(state, tok)?;
@@ -1333,7 +1337,7 @@ fn parse_external_tokens(
 fn parse_local_decl_tokens(
     state: &mut SimpleState<ParseState>,
     tok: usize,
-    tokens: &[Token],
+    tokens: &[Token<'_>],
 ) -> Result<NodeId, String> {
     let mut parser = DeclParser::new(tokens);
     let specs = parser.parse_specs(state, tok)?;
@@ -1401,7 +1405,7 @@ fn parse_local_decl_tokens(
 fn parse_external_initializer(
     state: &mut SimpleState<ParseState>,
     token_offset: usize,
-    tokens: &[Token],
+    tokens: &[Token<'_>],
 ) -> Result<NodeId, String> {
     if tokens.is_empty() {
         return Err("expected initializer".to_string());
@@ -1422,7 +1426,7 @@ fn parse_external_initializer(
 fn parse_external_constant_expression(
     state: &mut SimpleState<ParseState>,
     token_offset: usize,
-    tokens: &[Token],
+    tokens: &[Token<'_>],
 ) -> Result<NodeId, String> {
     if tokens.is_empty() {
         return Err("expected enumerator value".to_string());
@@ -1443,7 +1447,7 @@ fn parse_external_constant_expression(
 fn parse_external_array_length(
     state: &mut SimpleState<ParseState>,
     token_offset: usize,
-    tokens: &[Token],
+    tokens: &[Token<'_>],
     spelling: String,
 ) -> Result<ArrayLength, String> {
     let mut scratch = SimpleState(ParseState {
@@ -1464,9 +1468,9 @@ fn parse_external_array_length(
         .map(|expression| ArrayLength::new(spelling, Some(expression)))
 }
 
-fn declaration_tokens<'src, I>() -> impl Parser<'src, I, Vec<Token>, Extra<'src>> + Clone
+fn declaration_tokens<'src, I>() -> impl Parser<'src, I, Vec<Token<'src>>, Extra<'src>> + Clone
 where
-    I: ValueInput<'src, Token = Token, Span = Span>,
+    I: ValueInput<'src, Token = Token<'src>, Span = Span>,
 {
     custom(|input| {
         let mut tokens = Vec::new();
@@ -1507,7 +1511,7 @@ where
 
 pub(super) fn local_decl<'src, I>() -> impl Parser<'src, I, NodeId, Extra<'src>> + Clone
 where
-    I: ValueInput<'src, Token = Token, Span = Span>,
+    I: ValueInput<'src, Token = Token<'src>, Span = Span>,
 {
     ctype()
         .rewind()
@@ -1522,7 +1526,7 @@ where
 
 pub(super) fn external_decl<'src, I>() -> impl Parser<'src, I, NodeId, Extra<'src>> + Clone
 where
-    I: ValueInput<'src, Token = Token, Span = Span>,
+    I: ValueInput<'src, Token = Token<'src>, Span = Span>,
 {
     declaration_tokens().try_map_with(|tokens, e: &mut MapExtra<'src, '_, I, Extra<'src>>| {
         let tok = e.span().start;

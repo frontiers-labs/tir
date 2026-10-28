@@ -62,7 +62,7 @@ pub enum FloatingLiteralKind {
     LongDouble,
 }
 
-fn parse_floating_literal(spelling: &str) -> Option<FloatingLiteral> {
+pub(crate) fn parse_floating_literal(spelling: &str) -> Option<FloatingLiteral> {
     let suffix_start = spelling.trim_end_matches(['f', 'F', 'l', 'L']).len();
     let kind = match &spelling[suffix_start..] {
         "f" | "F" => FloatingLiteralKind::Float,
@@ -120,7 +120,7 @@ pub(crate) fn bit_precise_suffix(spelling: &str) -> Option<(usize, bool)> {
         .map(|suffix| (suffix.len(), suffix.contains('u')))
 }
 
-fn parse_integer_literal(spelling: &str) -> Option<IntegerLiteral> {
+pub(crate) fn parse_integer_literal(spelling: &str) -> Option<IntegerLiteral> {
     let bit_precise = bit_precise_suffix(spelling);
     let suffix_start = match bit_precise {
         Some((length, _)) => spelling.len() - length,
@@ -149,13 +149,13 @@ fn parse_integer_literal(spelling: &str) -> Option<IntegerLiteral> {
     })
 }
 
-#[derive(Logos, Debug, Clone, PartialEq)]
-pub enum Token {
-    #[regex(r"[ \t\n\r\f]+", |lex| lex.slice().to_string())]
-    Whitespace(String),
-    #[regex(r"//[^\n]*", |lex| lex.slice().to_string(), allow_greedy = true)]
-    #[regex(r"/\*([^*]|\*+[^*/])*\*+/", |lex| lex.slice().to_string())]
-    Comment(String),
+#[derive(Logos, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Token<'src> {
+    #[regex(r"[ \t\n\r\f]+", |lex| lex.slice())]
+    Whitespace(&'src str),
+    #[regex(r"//[^\n]*", |lex| lex.slice(), allow_greedy = true)]
+    #[regex(r"/\*([^*]|\*+[^*/])*\*+/", |lex| lex.slice())]
+    Comment(&'src str),
 
     #[token("alignas")]
     KwAlignas,
@@ -261,20 +261,20 @@ pub enum Token {
     Hash,
 
     // Or regular expressions.
-    #[regex("[a-zA-Z_][a-zA-Z0-9_]*", |lex| lex.slice().to_string())]
-    Identifier(String),
-    #[regex(r"0[xX](([0-9a-fA-F][0-9a-fA-F']*(\.[0-9a-fA-F']*)?)|(\.[0-9a-fA-F][0-9a-fA-F']*))[pP][+-]?[0-9][0-9']*[fFlL]?", |lex| parse_floating_literal(lex.slice()))]
-    #[regex(r"(([0-9][0-9']*\.[0-9']*|\.[0-9][0-9']*)([eE][+-]?[0-9][0-9']*)?|[0-9][0-9']*[eE][+-]?[0-9][0-9']*)[fFlL]?", |lex| parse_floating_literal(lex.slice()))]
-    FloatingLiteral(FloatingLiteral),
-    #[regex("(0[xX][0-9a-fA-F'][0-9a-fA-F']*|0[bB][01'][01']*|[0-9][0-9']*)([uUlL]*|[uU]?(wb|WB)[uU]?)", |lex| parse_integer_literal(lex.slice()))]
-    IntegerLiteral(IntegerLiteral),
-    #[regex(r#"(u8|u|U|L)?'([^'\\]|\\.)+'"#, |lex| lex.slice().to_string())]
-    CharacterLiteral(String),
+    #[regex("[a-zA-Z_][a-zA-Z0-9_]*", |lex| lex.slice())]
+    Identifier(&'src str),
+    #[regex(r"0[xX](([0-9a-fA-F][0-9a-fA-F']*(\.[0-9a-fA-F']*)?)|(\.[0-9a-fA-F][0-9a-fA-F']*))[pP][+-]?[0-9][0-9']*[fFlL]?", |lex| lex.slice())]
+    #[regex(r"(([0-9][0-9']*\.[0-9']*|\.[0-9][0-9']*)([eE][+-]?[0-9][0-9']*)?|[0-9][0-9']*[eE][+-]?[0-9][0-9']*)[fFlL]?", |lex| lex.slice())]
+    FloatingLiteral(&'src str),
+    #[regex("(0[xX][0-9a-fA-F'][0-9a-fA-F']*|0[bB][01'][01']*|[0-9][0-9']*)([uUlL]*|[uU]?(wb|WB)[uU]?)", |lex| lex.slice())]
+    IntegerLiteral(&'src str),
+    #[regex(r#"(u8|u|U|L)?'([^'\\]|\\.)+'"#, |lex| lex.slice())]
+    CharacterLiteral(&'src str),
     #[regex(r#""([^"\\]|\\.)*""#, |lex| {
         let s = lex.slice();
-        s[1..s.len() - 1].to_string()
+        &s[1..s.len() - 1]
     })]
-    StringLiteral(String),
+    StringLiteral(&'src str),
 
     #[token("...")]
     Ellipsis,
@@ -370,7 +370,7 @@ pub enum Token {
     Bang,
 }
 
-impl fmt::Display for Token {
+impl fmt::Display for Token<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Token::Whitespace(s) => f.write_str(s),
@@ -425,8 +425,8 @@ impl fmt::Display for Token {
             Token::HashHash => f.write_str("##"),
             Token::Hash => f.write_str("#"),
             Token::Identifier(s) => f.write_str(s),
-            Token::FloatingLiteral(n) => f.write_str(&n.spelling),
-            Token::IntegerLiteral(n) => f.write_str(&n.spelling),
+            Token::FloatingLiteral(s) => f.write_str(s),
+            Token::IntegerLiteral(s) => f.write_str(s),
             Token::CharacterLiteral(s) => f.write_str(s),
             Token::StringLiteral(s) => write!(f, "\"{s}\""),
             Token::Ellipsis => f.write_str("..."),

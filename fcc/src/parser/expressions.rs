@@ -1,7 +1,7 @@
 //! Expression precedence, operators and initializer expressions.
 
 use super::declarations::ctype;
-use super::{Extra, ParseState, Span, ident};
+use super::{Extra, ParseState, Span, floating_literal, ident, integer_literal};
 use crate::ast::*;
 use crate::lexer::Token;
 use chumsky::input::{MapExtra, ValueInput};
@@ -18,21 +18,21 @@ enum PostfixOp {
 
 pub(super) fn expr<'src, I>() -> impl Parser<'src, I, NodeId, Extra<'src>> + Clone
 where
-    I: ValueInput<'src, Token = Token, Span = Span>,
+    I: ValueInput<'src, Token = Token<'src>, Span = Span>,
 {
     expression_parsers().0
 }
 
 fn assignment_expr<'src, I>() -> impl Parser<'src, I, NodeId, Extra<'src>> + Clone
 where
-    I: ValueInput<'src, Token = Token, Span = Span>,
+    I: ValueInput<'src, Token = Token<'src>, Span = Span>,
 {
     expression_parsers().1
 }
 
 pub(super) fn constant_expr<'src, I>() -> impl Parser<'src, I, NodeId, Extra<'src>> + Clone
 where
-    I: ValueInput<'src, Token = Token, Span = Span>,
+    I: ValueInput<'src, Token = Token<'src>, Span = Span>,
 {
     expression_parsers().2
 }
@@ -43,35 +43,34 @@ fn expression_parsers<'src, I>() -> (
     impl Parser<'src, I, NodeId, Extra<'src>> + Clone,
 )
 where
-    I: ValueInput<'src, Token = Token, Span = Span>,
+    I: ValueInput<'src, Token = Token<'src>, Span = Span>,
 {
     let mut expr = Recursive::declare();
     let mut assignment = Recursive::declare();
     let conditional = {
-        let literal = select! { Token::IntegerLiteral(n) => n }.map_with(
-            |n, e: &mut MapExtra<'src, '_, I, Extra<'src>>| {
+        let literal =
+            integer_literal().map_with(|n, e: &mut MapExtra<'src, '_, I, Extra<'src>>| {
                 let tok = e.span().start;
                 let st = &mut e.state().0;
                 let id = st.add(AstKind::Int, tok);
                 st.ast.set_leaf_data(id, AstLeaf::Int(n));
                 id
-            },
-        );
-        let floating = select! { Token::FloatingLiteral(n) => n }.map_with(
-            |n, e: &mut MapExtra<'src, '_, I, Extra<'src>>| {
+            });
+        let floating =
+            floating_literal().map_with(|n, e: &mut MapExtra<'src, '_, I, Extra<'src>>| {
                 let tok = e.span().start;
                 let st = &mut e.state().0;
                 let id = st.add(AstKind::FloatLiteral, tok);
                 st.ast.set_leaf_data(id, AstLeaf::Float(n));
                 id
-            },
-        );
+            });
         let character = select! { Token::CharacterLiteral(value) => value }.map_with(
             |value, e: &mut MapExtra<'src, '_, I, Extra<'src>>| {
                 let tok = e.span().start;
                 let st = &mut e.state().0;
                 let id = st.add(AstKind::Character, tok);
-                st.ast.set_leaf_data(id, AstLeaf::Character(value));
+                st.ast
+                    .set_leaf_data(id, AstLeaf::Character(value.to_string()));
                 id
             },
         );
@@ -80,7 +79,7 @@ where
                 let tok = e.span().start;
                 let st = &mut e.state().0;
                 let id = st.add(AstKind::String, tok);
-                st.ast.set_leaf_data(id, AstLeaf::String(s));
+                st.ast.set_leaf_data(id, AstLeaf::String(s.to_string()));
                 id
             },
         );
@@ -330,7 +329,7 @@ where
 
 fn binop<'src, I, C, O>(child: C, op: O) -> impl Parser<'src, I, NodeId, Extra<'src>> + Clone
 where
-    I: ValueInput<'src, Token = Token, Span = Span>,
+    I: ValueInput<'src, Token = Token<'src>, Span = Span>,
     C: Parser<'src, I, NodeId, Extra<'src>> + Clone + 'src,
     O: Parser<'src, I, AstKind, Extra<'src>> + Clone + 'src,
 {
@@ -370,7 +369,7 @@ fn unary(st: &mut ParseState, op: AstKind, operand: NodeId, tok: usize) -> NodeI
 
 pub(super) fn initializer<'src, I>() -> impl Parser<'src, I, NodeId, Extra<'src>> + Clone
 where
-    I: ValueInput<'src, Token = Token, Span = Span>,
+    I: ValueInput<'src, Token = Token<'src>, Span = Span>,
 {
     recursive(|initializer| {
         let field_designator = just(Token::Dot)

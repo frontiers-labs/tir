@@ -7,7 +7,7 @@ use crate::diagnostics::{
     Diagnostic, FileId, MissingInclude, PreprocError, PreprocWarning, Span, file_source,
     intern_file,
 };
-use crate::lexer::Token;
+use crate::lexer::{Token, parse_integer_literal};
 
 /// Directories searched for `#include` files. `user` holds `-I` directories in
 /// command-line order; `system` holds the toolchain's default directories.
@@ -141,7 +141,7 @@ enum PreprocToken {
 // #if / #elif expression evaluator
 // ---------------------------------------------------------------------------
 
-fn eval_if_expr(expr: &str, defines: &HashMap<String, MacroDefinition>, span: Span) -> i64 {
+fn eval_if_expr(expr: &'static str, defines: &HashMap<String, MacroDefinition>, span: Span) -> i64 {
     let expanded = expand_if_expr(expr, defines, span);
     let toks: Vec<PreprocToken> = PreprocToken::lexer(&expanded)
         .filter_map(Result::ok)
@@ -258,14 +258,11 @@ impl<'a> IfExpr<'a> {
             Some(PreprocToken::Identifier(_)) => {
                 if let Some(PreprocToken::Identifier(name)) = self.bump() {
                     match self.defines.get(name.as_str()) {
-                        Some(MacroDefinition::Object(body))
-                            if matches!(body.as_slice(), [Token::IntegerLiteral(_)]) =>
-                        {
-                            let Token::IntegerLiteral(n) = &body[0] else {
-                                unreachable!()
-                            };
-                            n.value.to_i64()
-                        }
+                        Some(MacroDefinition::Object(body)) => match body.as_slice() {
+                            [Token::IntegerLiteral(spelling)] => parse_integer_literal(spelling)
+                                .map_or(0, |literal| literal.value.to_i64()),
+                            _ => 0,
+                        },
                         _ => 0, // undefined or non-integer macro
                     }
                 } else {
@@ -376,16 +373,16 @@ struct Frame {
 
 #[derive(Clone)]
 enum MacroDefinition {
-    Object(Vec<Token>),
+    Object(Vec<Token<'static>>),
     Function {
         parameters: Vec<String>,
-        replacement: Vec<Token>,
+        replacement: Vec<Token<'static>>,
     },
 }
 
 #[derive(Clone)]
 struct ExpansionToken {
-    token: Token,
+    token: Token<'static>,
     span: Span,
     hideset: HashSet<String>,
 }
@@ -483,7 +480,7 @@ impl TokenStream {
         &mut self,
         source: &str,
         directive_start: usize,
-        mut pp: Lexer<'_, PreprocToken>,
+        mut pp: Lexer<'static, PreprocToken>,
     ) {
         let skipping = is_skipping(&self.cond_stack);
 
@@ -520,7 +517,7 @@ impl TokenStream {
                 let expression = logical_line(remainder);
                 let result = !skipping
                     && eval_if_expr(
-                        &expression,
+                        expression,
                         &self.defines,
                         Span::new(self.current_file(), directive_start),
                     ) != 0;
@@ -532,7 +529,7 @@ impl TokenStream {
                 let remainder = pp.remainder();
                 let expression = logical_line(remainder);
                 let span = Span::new(self.current_file(), directive_start);
-                self.advance_cond(|this| eval_if_expr(&expression, &this.defines, span) != 0);
+                self.advance_cond(|this| eval_if_expr(expression, &this.defines, span) != 0);
                 self.skip_line(source.len(), remainder);
             }
 
@@ -576,7 +573,7 @@ impl TokenStream {
         }
     }
 
-    fn process_define(&mut self, source: &str, mut pp: Lexer<'_, PreprocToken>) {
+    fn process_define(&mut self, source: &str, mut pp: Lexer<'static, PreprocToken>) {
         let name = match pp.next() {
             Some(Ok(PreprocToken::Identifier(n))) => n,
             _ => {
@@ -605,7 +602,7 @@ impl TokenStream {
                 replacement: lex_replacement(&definition_text[parameters_end + 1..]),
             }
         } else {
-            MacroDefinition::Object(lex_replacement(&definition_text))
+            MacroDefinition::Object(lex_replacement(definition_text))
         };
         self.defines.insert(name, definition);
         self.skip_line(source.len(), remainder);
@@ -616,7 +613,7 @@ impl TokenStream {
         source: &str,
         directive_start: usize,
         directive: PreprocToken,
-        pp: Lexer<'_, PreprocToken>,
+        pp: Lexer<'static, PreprocToken>,
     ) {
         let remainder = pp.remainder();
         let include = logical_line(remainder);
@@ -741,9 +738,9 @@ impl TokenStream {
 }
 
 impl Iterator for TokenStream {
-    type Item = (Token, Span);
+    type Item = (Token<'static>, Span);
 
-    fn next(&mut self) -> Option<(Token, Span)> {
+    fn next(&mut self) -> Option<(Token<'static>, Span)> {
         let token = next_expanded(self)?;
         Some((token.token, token.span))
     }
@@ -773,7 +770,11 @@ impl ExpansionSource for TokenStream {
 // Public API
 // ---------------------------------------------------------------------------
 
-fn expand_if_expr(source: &str, defines: &HashMap<String, MacroDefinition>, span: Span) -> String {
+fn expand_if_expr(
+    source: &'static str,
+    defines: &HashMap<String, MacroDefinition>,
+    span: Span,
+) -> String {
     let mut tokens = Token::lexer(source)
         .filter_map(Result::ok)
         .map(|token| ExpansionToken {
@@ -783,7 +784,7 @@ fn expand_if_expr(source: &str, defines: &HashMap<String, MacroDefinition>, span
         })
         .collect::<Vec<_>>();
     for defined_index in 0..tokens.len() {
-        if !matches!(&tokens[defined_index].token, Token::Identifier(name) if name == "defined") {
+        if !matches!(&tokens[defined_index].token, Token::Identifier(name) if *name == "defined") {
             continue;
         }
         tokens[defined_index].hideset.insert("defined".to_string());
@@ -820,11 +821,16 @@ fn expand_if_expr(source: &str, defines: &HashMap<String, MacroDefinition>, span
         .collect()
 }
 
-fn lex_replacement(source: &str) -> Vec<Token> {
+fn lex_replacement(source: &str) -> Vec<Token<'_>> {
     Token::lexer(source.trim()).filter_map(Result::ok).collect()
 }
 
-fn logical_line(source: &str) -> String {
+fn logical_line(source: &'static str) -> &'static str {
+    match source.split_once('\n') {
+        Some((segment, _)) if segment.ends_with('\\') => {}
+        Some((segment, _)) => return segment,
+        None => return source,
+    }
     let mut line = String::new();
     let mut remainder = source;
     loop {
@@ -841,7 +847,7 @@ fn logical_line(source: &str) -> String {
             break;
         }
     }
-    line
+    file_source(intern_file("<scratch>", &line))
 }
 
 fn is_whitespace(token: &Token) -> bool {
@@ -861,7 +867,7 @@ fn trim_argument(argument: &[ExpansionToken]) -> Vec<ExpansionToken> {
 }
 
 fn substitute_arguments(
-    replacement: Vec<Token>,
+    replacement: Vec<Token<'static>>,
     parameters: &[String],
     arguments: Vec<Vec<ExpansionToken>>,
     defines: &HashMap<String, MacroDefinition>,
@@ -894,7 +900,7 @@ fn substitute_arguments(
             }
         } else {
             substituted.push(PasteToken::Token(ExpansionToken {
-                token: token.clone(),
+                token: *token,
                 span,
                 hideset: HashSet::new(),
             }));
@@ -959,8 +965,11 @@ fn paste_tokens(tokens: Vec<PasteToken>) -> Vec<ExpansionToken> {
             }
             (PasteToken::Token(left), PasteToken::Token(right)) => (left, right),
         };
-        let spelling = format!("{}{}", left.token, right.token);
-        let mut lexer = Token::lexer(&spelling);
+        let spelling = file_source(intern_file(
+            "<scratch>",
+            &format!("{}{}", left.token, right.token),
+        ));
+        let mut lexer = Token::lexer(spelling);
         let Some(Ok(token)) = lexer.next() else {
             output.push(PasteToken::Token(left));
             output.push(operator);
@@ -1005,7 +1014,7 @@ fn expand_tokens(
     output
 }
 
-fn macro_identifier(token: &Token) -> Option<std::borrow::Cow<'_, str>> {
+fn macro_identifier<'a>(token: &'a Token<'_>) -> Option<std::borrow::Cow<'a, str>> {
     if let Token::Identifier(name) = token {
         return Some(std::borrow::Cow::Borrowed(name));
     }
@@ -1150,7 +1159,7 @@ impl TokenStream {
     /// Drain the stream into the full token list. Diagnostics raised during
     /// preprocessing (`#error`, `#warning`) are available via [`Self::diagnostics`]
     /// afterwards.
-    pub fn collect_tokens(&mut self) -> Vec<(Token, Span)> {
+    pub fn collect_tokens(&mut self) -> Vec<(Token<'static>, Span)> {
         self.by_ref().collect()
     }
 
@@ -1175,7 +1184,15 @@ pub fn preprocessed(
     let file = intern_file(name, source);
     let defines = defines
         .into_iter()
-        .map(|(name, replacement)| (name, MacroDefinition::Object(lex_replacement(&replacement))))
+        .map(|(name, replacement)| {
+            (
+                name,
+                MacroDefinition::Object(lex_replacement(file_source(intern_file(
+                    "<built-in>",
+                    &replacement,
+                )))),
+            )
+        })
         .collect();
     TokenStream {
         frames: vec![Frame {
