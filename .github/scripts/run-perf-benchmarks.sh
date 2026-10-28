@@ -23,12 +23,15 @@ run() {
     diff "$bundle/listed" "$bundle/recorded"
   fi
   {
-    find "$CRITERION_HOME" -path '*/new/bencher.json' -exec cat {} \;
-    while IFS= read -r sample; do
-      jq -n --slurpfile sample "$sample" --slurpfile benchmark "${sample%/*}/benchmark.json" '
-        {($benchmark[0].full_id): {latency: {samples:
-          [$sample[0] | range(0; .times | length) as $i | .times[$i] / .iters[$i]]}}}'
-    done < <(find "$CRITERION_HOME" -path '*/new/sample.json')
+    if [ "$program" = functions ]; then
+      while IFS= read -r sample; do
+        jq -n --slurpfile sample "$sample" --slurpfile benchmark "${sample%/*}/benchmark.json" '
+          {($benchmark[0].full_id): {latency: {samples:
+            [$sample[0] | range(0; .times | length) as $i | .times[$i] / .iters[$i]]}}}'
+      done < <(find "$CRITERION_HOME" -path '*/new/sample.json')
+    else
+      find "$CRITERION_HOME" -path '*/new/bencher.json' -exec cat {} \;
+    fi
   } | jq -s --arg program "$program" --arg architecture "$(uname -m)" \
     --arg environment "$(uname -m) $(lscpu | sed -n 's/^Model name:[[:space:]]*//p')" \
     -f .github/scripts/criterion-to-benchboard.jq > "$bundle/summary.tmp"
