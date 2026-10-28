@@ -167,6 +167,13 @@
    "subject": "fix(perf): read function latency only from Criterion samples (#749)",
    "time": "2026-10-28T06:50:02.000Z",
    "env_key": "aarch64: rustc 1.101.0-nightly (c36f14571 2026-10-01); ldd (Ubuntu GLIBC 2.39-0ubuntu8.9) 2.39|x86_64: rustc 1.101.0-nightly (c36f14571 2026-10-01); ldd (Ubuntu GLIBC 2.39-0ubuntu8.9) 2.39"
+  },
+  {
+   "file": "runs/2026-10-28T13-19-25-000Z-bcd82f3f0bf1.json",
+   "commit": "bcd82f3f0bf1199954f03c013afe2af49aef13a1",
+   "subject": "perf(fcc): make the lexer zero-copy (#750)",
+   "time": "2026-10-28T13:19:25.000Z",
+   "env_key": "aarch64: rustc 1.101.0-nightly (c36f14571 2026-10-01); ldd (Ubuntu GLIBC 2.39-0ubuntu8.9) 2.39|x86_64: rustc 1.101.0-nightly (c36f14571 2026-10-01); ldd (Ubuntu GLIBC 2.39-0ubuntu8.9) 2.39"
   }
  ]
 }
