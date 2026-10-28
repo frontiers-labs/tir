@@ -72,7 +72,7 @@ enum PreprocToken {
 
     // Integer literals for #if expression evaluation.
     #[regex(r"(0[xX][0-9a-fA-F][0-9a-fA-F_]*|[0-9][0-9_]*)([uU]([lL]|ll|LL)?|([lL]|ll|LL)[uU]?)?", |lex| {
-        parse_integer_literal(lex.slice()).map(|literal| literal.value.to_i64())
+        parse_integer_literal(lex.slice()).and_then(|literal| i64::try_from(literal.value.to_u64()).ok())
     })]
     Integer(i64),
 
