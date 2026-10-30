@@ -1,8 +1,10 @@
 //! Nisyros C ABI. The only backend implemented by this crate is Vulkan.
 
 mod communication;
+mod diagnostic;
 mod interop;
 pub mod package;
+mod submission;
 mod transport;
 mod vulkan;
 
@@ -46,14 +48,16 @@ pub fn capture_vulkan_package(
         .map_err(|error| format!("pipeline capture failed: {error:?}"))
 }
 
+use diagnostic::set_backend_diagnostic;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{CStr, c_char, c_void};
 use std::net::SocketAddr;
 use std::os::fd::OwnedFd;
 use std::ptr;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicI32, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
+use submission::nisyros_submit;
 
 const SUCCESS: i32 = 0;
 const INCOMPLETE: i32 = 1;
@@ -70,6 +74,7 @@ const PEER_LOST: i32 = -10;
 const ABI_VERSION: u32 = 1;
 const BACKEND_VULKAN: u32 = 1;
 const EXT_ALLOC_HEAP: u32 = 1;
+const EXT_ALLOC_SHARING: u32 = 2;
 pub const FEATURE_COOPERATIVE_MATRIX: u64 = 1;
 pub const FEATURE_BFLOAT16_TYPE: u64 = 2;
 pub const FEATURE_BFLOAT16_DOT: u64 = 4;
@@ -96,19 +101,19 @@ pub struct Extension {
 }
 
 fn validate_header(header: &DescriptorHeader, expected_size: usize) -> i32 {
-    validate_header_with(header, expected_size, None)
+    validate_header_with(header, expected_size, &[])
 }
 
 fn validate_header_with(
     header: &DescriptorHeader,
     expected_size: usize,
-    recognized: Option<(u32, usize)>,
+    recognized: &[(u32, usize)],
 ) -> i32 {
     if (header.struct_size as usize) < expected_size || header.abi_version != ABI_VERSION {
         return INVALID_ARGUMENT;
     }
     let mut seen = BTreeSet::new();
-    let mut recognized_seen = false;
+    let mut recognized_seen = BTreeSet::new();
     let mut extension = header.extensions;
     while !extension.is_null() {
         if seen.len() >= 32 || !seen.insert(extension as usize) {
@@ -123,14 +128,16 @@ fn validate_header_with(
         {
             return INVALID_ARGUMENT;
         }
-        if recognized.is_some_and(|(type_id, _)| type_id == current.type_id) {
-            if recognized_seen
+        if let Some(&(_, minimum_size)) = recognized
+            .iter()
+            .find(|&&(type_id, _)| type_id == current.type_id)
+        {
+            if !recognized_seen.insert(current.type_id)
                 || current.flags != 0
-                || (current.struct_size as usize) < recognized.expect("matched type").1
+                || (current.struct_size as usize) < minimum_size
             {
                 return INVALID_ARGUMENT;
             }
-            recognized_seen = true;
         } else if current.flags & 1 == 0 {
             return UNSUPPORTED;
         }
@@ -222,6 +229,9 @@ pub struct QueueFamilyInfo {
     flags: u32,
     engine_identity_known: u32,
     affinity_enforceable: u32,
+    timestamp_valid_bits: u32,
+    timestamp_period_ns: f32,
+    timestamp_domain: u32,
 }
 
 #[repr(C)]
@@ -266,6 +276,26 @@ pub struct AllocHeapExtension {
 }
 
 #[repr(C)]
+pub struct AllocSharingExtension {
+    base: Extension,
+    mode: u32,
+    reserved: u32,
+}
+
+#[repr(C)]
+pub struct BarrierDesc {
+    header: DescriptorHeader,
+    address: u64,
+    bytes: u64,
+    src_stages: u32,
+    src_access: u32,
+    dst_stages: u32,
+    dst_access: u32,
+    src_family: u32,
+    dst_family: u32,
+}
+
+#[repr(C)]
 pub struct AllocationInfo {
     header: DescriptorHeader,
     base: u64,
@@ -278,6 +308,7 @@ pub struct AllocationInfo {
     mapped: u32,
     peer_imported: u32,
     access: u32,
+    exclusive: u32,
 }
 
 #[repr(C)]
@@ -338,6 +369,8 @@ pub struct Device {
     live_executables: AtomicUsize,
     live_endpoints: AtomicUsize,
     submission_lock: Mutex<()>,
+    lost: AtomicBool,
+    quiescent: AtomicBool,
     vendor_id: u32,
     device_id: u32,
     api_version: u32,
@@ -396,6 +429,14 @@ fn event_failure(event: &Event) -> i32 {
     unsafe { (*event.source_event).failure.load(Ordering::Acquire) }
 }
 
+fn timeline_error(event: &Event, error: i32) -> i32 {
+    set_backend_diagnostic(DEVICE_LOST, error, "Vulkan timeline operation failed");
+    if error == -4 {
+        unsafe { &*event.owner }.lost.store(true, Ordering::Release);
+    }
+    DEVICE_LOST
+}
+
 struct SignalState {
     last_reserved: u64,
     last_queue: *mut Queue,
@@ -428,6 +469,24 @@ pub struct SubmitDesc {
     header: DescriptorHeader,
     binding_count: u32,
     bindings: *const EventBinding,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct BatchEntry {
+    cmd: *mut Command,
+    submit: *const SubmitDesc,
+}
+
+#[repr(C)]
+pub struct BatchSubmitDesc {
+    header: DescriptorHeader,
+    command_count: u32,
+    commands: *const BatchEntry,
+    wait_count: u32,
+    waits: *const Point,
+    signal_count: u32,
+    signals: *const Point,
 }
 
 #[repr(C)]
@@ -518,6 +577,7 @@ struct CommandState {
     executable_references: BTreeSet<usize>,
     signal_slots: BTreeSet<u32>,
     inline_arguments: Vec<vulkan::Allocation>,
+    query_pools: Vec<vulkan::QueryPool>,
     native: Vec<vulkan::Command>,
     native_record_count: u64,
     pending: Option<Point>,
@@ -540,6 +600,12 @@ struct SegmentPlan {
     operations: Vec<vulkan::CommandOp>,
     waits: Vec<EventRef>,
     signals: Vec<EventRef>,
+}
+
+struct ResolvedSubmitSegment {
+    command: Option<(usize, usize)>,
+    waits: Vec<Point>,
+    signals: Vec<Point>,
 }
 
 impl SegmentPlan {
@@ -577,6 +643,7 @@ fn announce_device(record: &vulkan::DeviceRecord) -> transport::DeviceAnnounceme
             .map(|family| transport::QueueAnnouncement {
                 flags: family.flags,
                 count: family.count,
+                timestamp_valid_bits: family.timestamp_valid_bits,
             })
             .collect(),
         memory_heaps: record
@@ -590,6 +657,7 @@ fn announce_device(record: &vulkan::DeviceRecord) -> transport::DeviceAnnounceme
         shader_enqueue_revision: record.shader_enqueue_revision,
         cooperative_matrix_stages: record.cooperative_matrix_stages,
         cooperative_matrices: record.cooperative_matrices.clone(),
+        timestamp_period_bits: record.timestamp_period_ns.to_bits(),
     }
 }
 
@@ -918,11 +986,10 @@ pub unsafe extern "C" fn nisyros_cluster_queue_family_info(
     if id.epoch != cluster.epoch || id.backend != BACKEND_VULKAN {
         return INVALID_ARGUMENT;
     }
-    let Some(info) = cluster
-        .inventory
-        .get(id.index as usize)
-        .and_then(|device| device.snapshot.queue_families.get(family as usize))
-    else {
+    let Some(device) = cluster.inventory.get(id.index as usize) else {
+        return INVALID_ARGUMENT;
+    };
+    let Some(info) = device.snapshot.queue_families.get(family as usize) else {
         return INVALID_ARGUMENT;
     };
     unsafe {
@@ -932,6 +999,9 @@ pub unsafe extern "C" fn nisyros_cluster_queue_family_info(
             flags: info.flags,
             engine_identity_known: 0,
             affinity_enforceable: 0,
+            timestamp_valid_bits: info.timestamp_valid_bits,
+            timestamp_period_ns: f32::from_bits(device.snapshot.timestamp_period_bits),
+            timestamp_domain: 1,
         };
     }
     SUCCESS
@@ -1269,6 +1339,8 @@ pub unsafe extern "C" fn nisyros_device_open(
         live_executables: AtomicUsize::new(0),
         live_endpoints: AtomicUsize::new(0),
         submission_lock: Mutex::new(()),
+        lost: AtomicBool::new(false),
+        quiescent: AtomicBool::new(false),
         vendor_id: record.vendor_id,
         device_id: record.device_id,
         api_version: record.api_version,
@@ -1358,6 +1430,35 @@ pub unsafe extern "C" fn nisyros_device_close(device: *mut Device) -> i32 {
     SUCCESS
 }
 
+/// Marks a lost logical device quiescent so retained children can be released.
+/// This does not recover the device or preserve its allocation contents.
+///
+/// # Safety
+/// `device` must be a live handle returned by `nisyros_device_open`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nisyros_device_abort(device: *mut Device) -> i32 {
+    if device.is_null() {
+        return INVALID_ARGUMENT;
+    }
+    let device = unsafe { &*device };
+    let Ok(_submission) = device.submission_lock.lock() else {
+        return DEVICE_LOST;
+    };
+    if device.quiescent.load(Ordering::Acquire) {
+        return SUCCESS;
+    }
+    if !device.lost.load(Ordering::Acquire) {
+        return INVALID_ARGUMENT;
+    }
+    match device.backend.wait_idle() {
+        Ok(()) | Err(-4) => {
+            device.quiescent.store(true, Ordering::Release);
+            SUCCESS
+        }
+        Err(_) => DEVICE_LOST,
+    }
+}
+
 fn allocation_status(error: vulkan::AllocError) -> i32 {
     match error {
         vulkan::AllocError::Invalid => INVALID_ARGUMENT,
@@ -1387,7 +1488,13 @@ pub unsafe extern "C" fn nisyros_alloc(
     let status = validate_header_with(
         &desc.header,
         std::mem::size_of::<AllocDesc>(),
-        Some((EXT_ALLOC_HEAP, std::mem::size_of::<AllocHeapExtension>())),
+        &[
+            (EXT_ALLOC_HEAP, std::mem::size_of::<AllocHeapExtension>()),
+            (
+                EXT_ALLOC_SHARING,
+                std::mem::size_of::<AllocSharingExtension>(),
+            ),
+        ],
     );
     if status != SUCCESS {
         return status;
@@ -1401,6 +1508,7 @@ pub unsafe extern "C" fn nisyros_alloc(
     }
     let mut required_heap = None;
     let mut preferred_heap = None;
+    let mut exclusive = false;
     let mut extension = desc.header.extensions;
     while !extension.is_null() {
         let current = unsafe { &*extension };
@@ -1413,6 +1521,12 @@ pub unsafe extern "C" fn nisyros_alloc(
                 (preference.required_heap != u32::MAX).then_some(preference.required_heap);
             preferred_heap =
                 (preference.preferred_heap != u32::MAX).then_some(preference.preferred_heap);
+        } else if current.type_id == EXT_ALLOC_SHARING {
+            let sharing = unsafe { &*(extension as *const AllocSharingExtension) };
+            if sharing.reserved != 0 || sharing.mode > 1 {
+                return INVALID_ARGUMENT;
+            }
+            exclusive = sharing.mode == 1;
         }
         extension = current.next;
     }
@@ -1433,6 +1547,7 @@ pub unsafe extern "C" fn nisyros_alloc(
         queue_families: &families,
         required_heap,
         preferred_heap,
+        exclusive,
     };
     let allocation = match device.backend.allocate(&request) {
         Ok(allocation) => allocation,
@@ -1498,6 +1613,7 @@ pub unsafe extern "C" fn nisyros_allocation_query(
     out.mapped = u32::from(allocation.backend.is_mapped());
     out.peer_imported = u32::from(allocation.peer_source.is_some());
     out.access = allocation.access;
+    out.exclusive = u32::from(allocation.backend.exclusive());
     SUCCESS
 }
 
@@ -1666,6 +1782,7 @@ pub unsafe extern "C" fn nisyros_host_alloc(
         queue_families: &families,
         required_heap: None,
         preferred_heap: None,
+        exclusive: false,
     };
     let mut allocation = match device.backend.allocate(&request) {
         Ok(allocation) => allocation,
@@ -2055,8 +2172,16 @@ pub unsafe extern "C" fn nisyros_executable_load(
     }
     let pipeline = match device_ref.backend.import_pipeline(&package) {
         Ok(pipeline) => pipeline,
-        Err(vulkan::PipelineError::Backend(-4)) => return DEVICE_LOST,
+        Err(vulkan::PipelineError::Backend(-4)) => {
+            device_ref.lost.store(true, Ordering::Release);
+            set_backend_diagnostic(DEVICE_LOST, -4, "Vulkan pipeline import lost the device");
+            return DEVICE_LOST;
+        }
         Err(vulkan::PipelineError::Unsupported) => return UNSUPPORTED,
+        Err(vulkan::PipelineError::Backend(code)) => {
+            set_backend_diagnostic(INCOMPATIBLE_BINARY, code, "Vulkan pipeline import failed");
+            return INCOMPATIBLE_BINARY;
+        }
         Err(_) => return INCOMPATIBLE_BINARY,
     };
     let mut executable = Box::new(Executable {
@@ -2125,6 +2250,11 @@ fn refresh_command(state: &mut CommandState) -> i32 {
         .expect("pending command has a completion point");
     // SAFETY: The command retains its device, whose queue owns this event.
     let event = unsafe { &*point.event };
+    if unsafe { &*event.owner }.quiescent.load(Ordering::Acquire) {
+        state.state = RecordingState::Executable;
+        state.pending = None;
+        return SUCCESS;
+    }
     let failure = event_failure(event);
     if failure != 0 {
         return failure;
@@ -2136,7 +2266,7 @@ fn refresh_command(state: &mut CommandState) -> i32 {
             SUCCESS
         }
         Ok(_) => BUSY,
-        Err(_) => DEVICE_LOST,
+        Err(error) => timeline_error(event, error),
     }
 }
 
@@ -2171,6 +2301,7 @@ pub unsafe extern "C" fn nisyros_cmd_create(
             executable_references: BTreeSet::new(),
             signal_slots: BTreeSet::new(),
             inline_arguments: Vec::new(),
+            query_pools: Vec::new(),
             native: Vec::new(),
             native_record_count: 0,
             pending: None,
@@ -2232,6 +2363,17 @@ fn record_addresses(cmd: &Command, operation: vulkan::CommandOp, ranges: &[(u64,
         {
             inner.state = RecordingState::Invalid;
             return INVALID_ARGUMENT;
+        }
+        if let vulkan::CommandOp::BarrierRangeScoped {
+            src_family,
+            dst_family,
+            ..
+        } = operation
+            && src_family != dst_family
+            && !allocation.backend.exclusive()
+        {
+            inner.state = RecordingState::Invalid;
+            return UNSUPPORTED;
         }
         bases.insert(base);
     }
@@ -2640,6 +2782,7 @@ pub unsafe extern "C" fn nisyros_cmd_dispatch(
         queue_families: &families,
         required_heap: None,
         preferred_heap: None,
+        exclusive: false,
     };
     let mut storage = match device.backend.allocate(&request) {
         Ok(storage) => storage,
@@ -2725,6 +2868,147 @@ pub unsafe extern "C" fn nisyros_cmd_barrier_range(
     )
 }
 
+/// Records a stage- and access-scoped dependency for a device-address range.
+///
+/// # Safety
+/// `cmd` must be live and `desc` a complete readable descriptor.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nisyros_cmd_barrier_scoped(
+    cmd: *mut Command,
+    desc: *const BarrierDesc,
+) -> i32 {
+    if cmd.is_null() || desc.is_null() {
+        return invalid_recording_argument(cmd);
+    }
+    let desc = unsafe { &*desc };
+    let status = validate_header(&desc.header, std::mem::size_of::<BarrierDesc>());
+    if status != SUCCESS {
+        invalid_recording_argument(cmd);
+        return status;
+    }
+    let (Some(src_stage), Some(src_access), Some(dst_stage), Some(dst_access)) = (
+        vulkan::scoped_stage(desc.src_stages),
+        vulkan::scoped_access(desc.src_access),
+        vulkan::scoped_stage(desc.dst_stages),
+        vulkan::scoped_access(desc.dst_access),
+    ) else {
+        return invalid_recording_argument(cmd);
+    };
+    if desc.bytes == 0 || desc.address.checked_add(desc.bytes).is_none() {
+        return invalid_recording_argument(cmd);
+    }
+    let command = unsafe { &*cmd };
+    let ownership_transfer = desc.src_family != desc.dst_family;
+    let (src_family, dst_family) = if ownership_transfer {
+        let device = unsafe { &*command.device };
+        if desc.src_family == u32::MAX
+            || desc.dst_family == u32::MAX
+            || !device
+                .queues
+                .iter()
+                .any(|queue| queue.family == desc.src_family)
+            || !device
+                .queues
+                .iter()
+                .any(|queue| queue.family == desc.dst_family)
+            || (command.family != desc.src_family && command.family != desc.dst_family)
+            || (command.family == desc.src_family
+                && (src_stage == 0 || dst_stage != 0 || dst_access != 0))
+            || (command.family == desc.dst_family
+                && (dst_stage == 0 || src_stage != 0 || src_access != 0))
+        {
+            return invalid_recording_argument(cmd);
+        }
+        (desc.src_family, desc.dst_family)
+    } else {
+        if src_stage == 0 || dst_stage == 0 {
+            return invalid_recording_argument(cmd);
+        }
+        (u32::MAX, u32::MAX)
+    };
+    record_addresses(
+        command,
+        vulkan::CommandOp::BarrierRangeScoped {
+            address: desc.address,
+            bytes: desc.bytes,
+            src_stage,
+            src_access,
+            dst_stage,
+            dst_access,
+            src_family,
+            dst_family,
+        },
+        &[(desc.address, desc.bytes)],
+    )
+}
+
+/// Records a device-domain timestamp into an aligned eight-byte address.
+///
+/// # Safety
+/// `cmd` must be live and `destination` a writable retained device range.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nisyros_cmd_write_timestamp(cmd: *mut Command, destination: u64) -> i32 {
+    if cmd.is_null() || destination == 0 || !destination.is_multiple_of(8) {
+        return invalid_recording_argument(cmd);
+    }
+    let command = unsafe { &*cmd };
+    let Ok(mut inner) = command.inner.lock() else {
+        return DEVICE_LOST;
+    };
+    if inner.state != RecordingState::Recording {
+        return INVALID_ARGUMENT;
+    }
+    let device = unsafe { &*command.device };
+    if device
+        .backend
+        .timestamp_valid_bits
+        .get(command.family as usize)
+        .copied()
+        .unwrap_or(0)
+        == 0
+    {
+        inner.state = RecordingState::Invalid;
+        return UNSUPPORTED;
+    }
+    let Ok(mut allocations) = device.allocations.lock() else {
+        inner.state = RecordingState::Invalid;
+        return DEVICE_LOST;
+    };
+    let Some((&base, allocation)) = allocations.range(..=destination).next_back() else {
+        inner.state = RecordingState::Invalid;
+        return INVALID_ARGUMENT;
+    };
+    if !allocation.backend.contains(destination, 8) || allocation.access & 2 == 0 {
+        inner.state = RecordingState::Invalid;
+        return INVALID_ARGUMENT;
+    }
+    let pool = match device.backend.create_timestamp_query() {
+        Ok(pool) => pool,
+        Err(-1 | -2) => {
+            inner.state = RecordingState::Invalid;
+            return OUT_OF_MEMORY;
+        }
+        Err(_) => {
+            inner.state = RecordingState::Invalid;
+            return DEVICE_LOST;
+        }
+    };
+    if inner.references.insert(base) {
+        allocations
+            .get_mut(&base)
+            .expect("validated timestamp allocation")
+            .recordings += 1;
+    }
+    inner
+        .actions
+        .push(RecordedAction::Operation(vulkan::CommandOp::Timestamp {
+            pool: pool.handle(),
+            destination,
+        }));
+    inner.query_pools.push(pool);
+    SUCCESS
+}
+
 /// Creates a device-signaled timeline event, initially at value zero.
 ///
 /// # Safety
@@ -2804,13 +3088,18 @@ pub unsafe extern "C" fn nisyros_event_destroy(event: *mut Event) -> i32 {
     let Ok(mut inflight) = event_ref.inflight.lock() else {
         return DEVICE_LOST;
     };
-    inflight.retain(|point| {
-        // SAFETY: Queue-owned completion points outlive explicit events.
-        match unsafe { &*point.event }.timeline.query() {
-            Ok(completed) => completed < point.value,
-            Err(_) => true,
-        }
-    });
+    let quiescent = owner.quiescent.load(Ordering::Acquire);
+    if quiescent {
+        inflight.clear();
+    } else {
+        inflight.retain(|point| {
+            // SAFETY: Queue-owned completion points outlive explicit events.
+            match unsafe { &*point.event }.timeline.query() {
+                Ok(completed) => completed < point.value,
+                Err(_) => true,
+            }
+        });
+    }
     if !inflight.is_empty() {
         return BUSY;
     }
@@ -2818,9 +3107,10 @@ pub unsafe extern "C" fn nisyros_event_destroy(event: *mut Event) -> i32 {
     let Ok(state) = event_ref.signal_state.lock() else {
         return DEVICE_LOST;
     };
-    if event_failure(event_ref) == 0 {
-        let Ok(completed) = event_ref.timeline.query() else {
-            return DEVICE_LOST;
+    if !quiescent && event_failure(event_ref) == 0 {
+        let completed = match event_ref.timeline.query() {
+            Ok(completed) => completed,
+            Err(error) => return timeline_error(event_ref, error),
         };
         if completed < state.last_reserved {
             return BUSY;
@@ -2954,21 +3244,25 @@ pub unsafe extern "C" fn nisyros_event_host_signal(event: *mut Event, value: u64
     let Ok(_submission) = device.submission_lock.lock() else {
         return DEVICE_LOST;
     };
+    if device.lost.load(Ordering::Acquire) || device.quiescent.load(Ordering::Acquire) {
+        return DEVICE_LOST;
+    }
     let Ok(mut state) = event.signal_state.lock() else {
         return DEVICE_LOST;
     };
     if value <= state.last_reserved {
         return INVALID_ARGUMENT;
     }
-    let Ok(completed) = event.timeline.query() else {
-        return DEVICE_LOST;
+    let completed = match event.timeline.query() {
+        Ok(completed) => completed,
+        Err(error) => return timeline_error(event, error),
     };
     if completed < state.last_reserved {
         return BUSY;
     }
-    if event.timeline.signal(value).is_err() {
+    if let Err(error) = event.timeline.signal(value) {
         event.failure.store(DEVICE_LOST, Ordering::Release);
-        return DEVICE_LOST;
+        return timeline_error(event, error);
     }
     state.last_reserved = value;
     state.last_queue = ptr::null_mut();
@@ -3161,6 +3455,7 @@ fn reset_command(cmd: &Command) -> i32 {
         return status;
     }
     inner.native.clear();
+    inner.query_pools.clear();
     inner.plans.clear();
     inner.actions.clear();
     inner.signal_slots.clear();
@@ -3240,243 +3535,6 @@ pub unsafe extern "C" fn nisyros_cmd_destroy(cmd: *mut Command) -> i32 {
     SUCCESS
 }
 
-/// Submits one sealed recording asynchronously on the selected queue.
-///
-/// # Safety
-/// `queue` and `cmd` must be live, `out` writable, and a nonnull descriptor
-/// must point to a complete binding array.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn nisyros_submit(
-    queue: *mut Queue,
-    cmd: *mut Command,
-    submit_desc: *const SubmitDesc,
-    out: *mut Point,
-) -> i32 {
-    if queue.is_null() || cmd.is_null() || out.is_null() {
-        return INVALID_ARGUMENT;
-    }
-    unsafe {
-        *out = Point {
-            event: ptr::null_mut(),
-            value: 0,
-        }
-    };
-    let queue = unsafe { &*queue };
-    let cmd = unsafe { &*cmd };
-    if queue.parent != cmd.device || queue.family != cmd.family {
-        return INVALID_ARGUMENT;
-    }
-    let device = unsafe { &*queue.parent };
-    let Ok(_submission) = device.submission_lock.lock() else {
-        return DEVICE_LOST;
-    };
-    let Ok(mut inner) = cmd.inner.lock() else {
-        return DEVICE_LOST;
-    };
-    let status = refresh_command(&mut inner);
-    if status != SUCCESS {
-        return status;
-    }
-    if inner.state != RecordingState::Executable {
-        return INVALID_ARGUMENT;
-    }
-    let mut used_slots = BTreeSet::new();
-    for plan in &inner.plans {
-        for reference in plan.waits.iter().chain(&plan.signals) {
-            if let EventRef::Slot(slot) = reference {
-                used_slots.insert(*slot);
-            }
-        }
-    }
-    let mut bindings = BTreeMap::new();
-    if !submit_desc.is_null() {
-        let desc = unsafe { &*submit_desc };
-        let status = validate_header(&desc.header, std::mem::size_of::<SubmitDesc>());
-        if status != SUCCESS {
-            return status;
-        }
-        if desc.binding_count as usize != used_slots.len()
-            || (desc.binding_count != 0 && desc.bindings.is_null())
-        {
-            return INVALID_ARGUMENT;
-        }
-        let binding_slice = if desc.binding_count == 0 {
-            &[][..]
-        } else {
-            unsafe { std::slice::from_raw_parts(desc.bindings, desc.binding_count as usize) }
-        };
-        for binding in binding_slice {
-            if binding.reserved != 0
-                || binding.point.event.is_null()
-                || !used_slots.contains(&binding.slot)
-                || bindings.insert(binding.slot, binding.point).is_some()
-            {
-                return INVALID_ARGUMENT;
-            }
-        }
-    }
-    if bindings.len() != used_slots.len() {
-        return INVALID_ARGUMENT;
-    }
-    let resolve = |reference: EventRef| match reference {
-        EventRef::Point(point) => point,
-        EventRef::Slot(slot) => bindings[&slot],
-    };
-    let mut resolved_plans = Vec::with_capacity(inner.plans.len());
-    for plan in &inner.plans {
-        let waits: Vec<Point> = plan.waits.iter().copied().map(&resolve).collect();
-        let signals: Vec<Point> = plan.signals.iter().copied().map(&resolve).collect();
-        for point in &waits {
-            let event = unsafe { &*point.event };
-            if event.owner != cmd.device {
-                return INVALID_ARGUMENT;
-            }
-            let failure = event_failure(event);
-            if failure != 0 {
-                return failure;
-            }
-            if event.requires_host_progress {
-                match event.timeline.query() {
-                    Ok(current) if current < point.value => return UNSUPPORTED,
-                    Err(_) => return DEVICE_LOST,
-                    _ => {}
-                }
-            }
-        }
-        for point in &signals {
-            let event = unsafe { &*point.event };
-            if event.owner != cmd.device
-                || event.queue_owned
-                || !event.source_event.is_null()
-                || event.signal_domain != 1
-                || point.value == 0
-            {
-                return INVALID_ARGUMENT;
-            }
-            let failure = event_failure(event);
-            if failure != 0 {
-                return failure;
-            }
-        }
-        resolved_plans.push((waits, signals));
-    }
-    let Ok(mut queue_state) = queue.state.lock() else {
-        return DEVICE_LOST;
-    };
-    if queue_state.poisoned {
-        return SUBMISSION_FAILED;
-    }
-    let Some(value) = queue_state.next_value.checked_add(1) else {
-        return INVALID_ARGUMENT;
-    };
-    let mut expected_signals: BTreeMap<usize, (u64, *mut Queue)> = BTreeMap::new();
-    let mut prior_waits: BTreeMap<usize, u64> = BTreeMap::new();
-    for (waits, signals) in &resolved_plans {
-        for point in waits {
-            let entry = prior_waits.entry(point.event as usize).or_default();
-            *entry = (*entry).max(point.value);
-        }
-        for point in signals {
-            let key = point.event as usize;
-            let previous = if let Some(&state) = expected_signals.get(&key) {
-                state
-            } else {
-                let event = unsafe { &*point.event };
-                let state = event
-                    .signal_state
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner());
-                (state.last_reserved, state.last_queue)
-            };
-            if point.value <= previous.0
-                || (previous.0 != 0
-                    && !ptr::eq(previous.1, queue)
-                    && prior_waits
-                        .get(&key)
-                        .is_none_or(|&waited| waited < previous.0))
-            {
-                return INVALID_ARGUMENT;
-            }
-            expected_signals.insert(key, (point.value, queue as *const Queue as *mut Queue));
-        }
-    }
-    let mut segments = Vec::with_capacity(inner.plans.len());
-    for ((wait_points, signal_points), native) in resolved_plans.iter().zip(&inner.native) {
-        let waits = wait_points
-            .iter()
-            .map(|point| (unsafe { &(*point.event).timeline }, point.value))
-            .collect();
-        let signals = signal_points
-            .iter()
-            .map(|point| (unsafe { &(*point.event).timeline }, point.value))
-            .collect();
-        segments.push(vulkan::SubmitSegment {
-            command: native,
-            waits,
-            signals,
-        });
-    }
-    segments
-        .last_mut()
-        .expect("sealed recording has a segment")
-        .signals
-        .push((&queue.completion.timeline, value));
-    for (&event_address, &(reserved, last_queue)) in &expected_signals {
-        let event = unsafe { &*(event_address as *const Event) };
-        let mut state = event
-            .signal_state
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        state.last_reserved = reserved;
-        state.last_queue = last_queue;
-    }
-    queue_state.next_value = value;
-    if device
-        .backend
-        .submit_segments(queue.backend_index, &segments)
-        .is_err()
-    {
-        queue_state.poisoned = true;
-        queue
-            .completion
-            .failure
-            .store(SUBMISSION_FAILED, Ordering::Release);
-        for &event_address in expected_signals.keys() {
-            unsafe {
-                (*(event_address as *mut Event))
-                    .failure
-                    .store(SUBMISSION_FAILED, Ordering::Release)
-            };
-        }
-        inner.state = RecordingState::Invalid;
-        return SUBMISSION_FAILED;
-    }
-    let point = Point {
-        event: (&raw const queue.completion).cast_mut(),
-        value,
-    };
-    for bound in bindings.values() {
-        let event = unsafe { &*bound.event };
-        if !event.queue_owned {
-            let mut inflight = event
-                .inflight
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            inflight.retain(
-                |previous| match unsafe { &*previous.event }.timeline.query() {
-                    Ok(completed) => completed < previous.value,
-                    Err(_) => true,
-                },
-            );
-            inflight.push(point);
-        }
-    }
-    inner.state = RecordingState::Pending;
-    inner.pending = Some(point);
-    unsafe { *out = point };
-    SUCCESS
-}
-
 /// Waits for an event point without canceling work on timeout.
 ///
 /// # Safety
@@ -3493,6 +3551,9 @@ pub unsafe extern "C" fn nisyros_wait(point: Point, timeout_ns: u64) -> i32 {
         if failure != 0 {
             return failure;
         }
+        if unsafe { &*event.owner }.lost.load(Ordering::Acquire) {
+            return DEVICE_LOST;
+        }
         let remaining = if timeout_ns == u64::MAX {
             u64::MAX
         } else {
@@ -3503,7 +3564,7 @@ pub unsafe extern "C" fn nisyros_wait(point: Point, timeout_ns: u64) -> i32 {
             Ok(true) => return SUCCESS,
             Ok(false) if remaining == 0 || slice == remaining => return TIMEOUT,
             Ok(false) => {}
-            Err(_) => return DEVICE_LOST,
+            Err(error) => return timeline_error(event, error),
         }
     }
 }
@@ -3545,13 +3606,17 @@ pub unsafe extern "C" fn nisyros_wait_many(
                 failure = event_failure;
                 continue;
             }
+            if unsafe { &*event.owner }.lost.load(Ordering::Acquire) {
+                failure = DEVICE_LOST;
+                continue;
+            }
             match event.timeline.query() {
                 Ok(value) if value >= point.value => {
                     satisfied += 1;
                     first.get_or_insert(index as u32);
                 }
                 Ok(_) => {}
-                Err(_) => failure = DEVICE_LOST,
+                Err(error) => failure = timeline_error(event, error),
             }
         }
         if (mode == 0 && satisfied == count) || (mode == 1 && first.is_some()) {
@@ -3590,11 +3655,14 @@ pub unsafe extern "C" fn nisyros_event_query(event: *mut Event, value: *mut u64)
     if failure != 0 {
         return failure;
     }
+    if unsafe { &*event.owner }.lost.load(Ordering::Acquire) {
+        return DEVICE_LOST;
+    }
     match event.timeline.query() {
         Ok(completed) => {
             unsafe { *value = completed };
             SUCCESS
         }
-        Err(_) => DEVICE_LOST,
+        Err(error) => timeline_error(event, error),
     }
 }

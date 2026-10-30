@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 const MAGIC: &[u8; 8] = b"NISYROS1";
 const GROUP_MAGIC: &[u8; 8] = b"NISYRG01";
 const FRAME_MAGIC: &[u8; 8] = b"NISYRF01";
-const VERSION: u32 = 3;
+const VERSION: u32 = 4;
 const MAX_DEVICES: usize = 32;
 const MAX_FAMILIES: usize = 32;
 const MAX_HEAPS: usize = 16;
@@ -65,6 +65,7 @@ impl Frame {
 pub struct QueueAnnouncement {
     pub flags: u32,
     pub count: u32,
+    pub timestamp_valid_bits: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -94,6 +95,7 @@ pub struct DeviceAnnouncement {
     pub shader_enqueue_revision: u32,
     pub cooperative_matrix_stages: u32,
     pub cooperative_matrices: Vec<CooperativeMatrixTuple>,
+    pub timestamp_period_bits: u32,
 }
 
 #[derive(Debug)]
@@ -362,6 +364,7 @@ fn write_announcement(
         write_u32(writer, device.shader_enqueue_revision)?;
         write_u32(writer, device.cooperative_matrix_stages)?;
         write_u32(writer, device.cooperative_matrices.len() as u32)?;
+        write_u32(writer, device.timestamp_period_bits)?;
         writer.write_all(&device.name)?;
         writer.write_all(&device.device_uuid)?;
         writer.write_all(&device.driver_uuid)?;
@@ -369,6 +372,7 @@ fn write_announcement(
         for queue in &device.queue_families {
             write_u32(writer, queue.flags)?;
             write_u32(writer, queue.count)?;
+            write_u32(writer, queue.timestamp_valid_bits)?;
         }
         for heap in &device.memory_heaps {
             write_u64(writer, heap.bytes)?;
@@ -428,6 +432,7 @@ fn read_announcement(
         let shader_enqueue_revision = read_u32(reader).map_err(map_read)?;
         let cooperative_matrix_stages = read_u32(reader).map_err(map_read)?;
         let tuple_count = read_u32(reader).map_err(map_read)? as usize;
+        let timestamp_period_bits = read_u32(reader).map_err(map_read)?;
         if backend != 1
             || strict > 1
             || family_count > MAX_FAMILIES
@@ -455,10 +460,23 @@ fn read_announcement(
         }
         let mut queue_families = Vec::with_capacity(family_count);
         for _ in 0..family_count {
-            queue_families.push(QueueAnnouncement {
+            let queue = QueueAnnouncement {
                 flags: read_u32(reader).map_err(map_read)?,
                 count: read_u32(reader).map_err(map_read)?,
-            });
+                timestamp_valid_bits: read_u32(reader).map_err(map_read)?,
+            };
+            if queue.timestamp_valid_bits != 0 && !(36..=64).contains(&queue.timestamp_valid_bits) {
+                return Err(JoinError::Invalid);
+            }
+            queue_families.push(queue);
+        }
+        if queue_families
+            .iter()
+            .any(|family| family.timestamp_valid_bits != 0)
+            && (!f32::from_bits(timestamp_period_bits).is_finite()
+                || f32::from_bits(timestamp_period_bits) <= 0.0)
+        {
+            return Err(JoinError::Invalid);
         }
         let mut memory_heaps = Vec::with_capacity(heap_count);
         for _ in 0..heap_count {
@@ -509,6 +527,7 @@ fn read_announcement(
             shader_enqueue_revision,
             cooperative_matrix_stages,
             cooperative_matrices,
+            timestamp_period_bits,
         });
     }
     Ok(devices)
@@ -540,7 +559,11 @@ mod tests {
             device_uuid: [1; 16],
             driver_uuid: [2; 16],
             driver_name: [0; 256],
-            queue_families: vec![QueueAnnouncement { flags: 2, count: 1 }],
+            queue_families: vec![QueueAnnouncement {
+                flags: 2,
+                count: 1,
+                timestamp_valid_bits: 64,
+            }],
             memory_heaps: vec![MemoryHeapAnnouncement {
                 bytes: 1 << 30,
                 flags: 1,
@@ -551,6 +574,7 @@ mod tests {
             shader_enqueue_revision: 0,
             cooperative_matrix_stages: 0,
             cooperative_matrices: Vec::new(),
+            timestamp_period_bits: 1.0f32.to_bits(),
         };
         let mut encoded = Vec::new();
         write_announcement(&mut encoded, 42, 1, std::slice::from_ref(&device)).unwrap();

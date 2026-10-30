@@ -6,12 +6,14 @@ use std::ptr;
 type VkCommandPool = u64;
 type VkCommandBuffer = *mut c_void;
 type VkSemaphore = u64;
+type VkQueryPool = u64;
 
 const VK_TIMEOUT: VkResult = 2;
 const VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO: i32 = 9;
 const VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO: i32 = 39;
 const VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO: i32 = 40;
 const VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO: i32 = 42;
+const VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO: i32 = 11;
 const VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO: i32 = 1_000_207_002;
 const VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO: i32 = 1_000_207_004;
 const VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO: i32 = 1_000_207_005;
@@ -31,12 +33,53 @@ const VK_STRUCTURE_TYPE_MEMORY_RANGE_BARRIERS_INFO_KHR: i32 = 1_000_318_004;
 const VK_STRUCTURE_TYPE_MEMORY_RANGE_BARRIER_KHR: i32 = 1_000_318_005;
 const VK_SEMAPHORE_TYPE_TIMELINE: i32 = 1;
 const VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT: u64 = 0x1_0000;
+const VK_PIPELINE_STAGE_2_TRANSFER_BIT: u64 = 0x1000;
+const VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT: u64 = 0x800;
 const VK_ACCESS_2_MEMORY_READ_BIT: u64 = 0x8000;
 const VK_ACCESS_2_MEMORY_WRITE_BIT: u64 = 0x1_0000;
 const VK_ADDRESS_COMMAND_STORAGE_BUFFER_USAGE_BIT_KHR: u32 = 4;
 const VK_QUEUE_FAMILY_IGNORED: u32 = u32::MAX;
 const VK_PIPELINE_BIND_POINT_COMPUTE: i32 = 1;
 const VK_SHADER_STAGE_COMPUTE_BIT: u32 = 0x20;
+const VK_QUERY_TYPE_TIMESTAMP: i32 = 2;
+const VK_QUERY_RESULT_64_BIT: u32 = 1;
+const VK_QUERY_RESULT_WAIT_BIT: u32 = 2;
+
+pub fn scoped_stage(mask: u32) -> Option<u64> {
+    if mask & !7 != 0 || (mask & 4 != 0 && mask != 4) {
+        return None;
+    }
+    Some(if mask == 4 {
+        VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT
+    } else {
+        (if mask & 1 != 0 {
+            VK_PIPELINE_STAGE_2_TRANSFER_BIT
+        } else {
+            0
+        }) | (if mask & 2 != 0 {
+            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
+        } else {
+            0
+        })
+    })
+}
+
+pub fn scoped_access(mask: u32) -> Option<u64> {
+    if mask & !3 != 0 {
+        return None;
+    }
+    Some(
+        (if mask & 1 != 0 {
+            VK_ACCESS_2_MEMORY_READ_BIT
+        } else {
+            0
+        }) | (if mask & 2 != 0 {
+            VK_ACCESS_2_MEMORY_WRITE_BIT
+        } else {
+            0
+        }),
+    )
+}
 
 type CreateCommandPool = unsafe extern "system" fn(
     VkDevice,
@@ -80,6 +123,24 @@ type GetSemaphoreFd =
     unsafe extern "system" fn(VkDevice, *const SemaphoreGetFdInfo, *mut i32) -> VkResult;
 type ImportSemaphoreFd =
     unsafe extern "system" fn(VkDevice, *const ImportSemaphoreFdInfo) -> VkResult;
+type CreateQueryPool = unsafe extern "system" fn(
+    VkDevice,
+    *const QueryPoolCreateInfo,
+    *const c_void,
+    *mut VkQueryPool,
+) -> VkResult;
+type DestroyQueryPool = unsafe extern "system" fn(VkDevice, VkQueryPool, *const c_void);
+type CmdResetQueryPool = unsafe extern "system" fn(VkCommandBuffer, VkQueryPool, u32, u32);
+type CmdWriteTimestamp2 = unsafe extern "system" fn(VkCommandBuffer, u64, VkQueryPool, u32);
+type CmdCopyQueryPoolResultsToMemory = unsafe extern "system" fn(
+    VkCommandBuffer,
+    VkQueryPool,
+    u32,
+    u32,
+    *const StridedDeviceAddressRange,
+    u32,
+    u32,
+);
 
 #[repr(C)]
 struct CommandPoolCreateInfo {
@@ -110,6 +171,23 @@ struct CommandBufferBeginInfo {
 struct DeviceAddressRange {
     address: u64,
     size: u64,
+}
+
+#[repr(C)]
+struct StridedDeviceAddressRange {
+    address: u64,
+    size: u64,
+    stride: u64,
+}
+
+#[repr(C)]
+struct QueryPoolCreateInfo {
+    s_type: i32,
+    p_next: *const c_void,
+    flags: u32,
+    query_type: i32,
+    query_count: u32,
+    pipeline_statistics: u32,
 }
 
 #[repr(C)]
@@ -294,6 +372,11 @@ pub(super) struct CommandFns {
     queue_submit2: QueueSubmit2,
     get_semaphore_fd: Option<GetSemaphoreFd>,
     import_semaphore_fd: Option<ImportSemaphoreFd>,
+    create_query_pool: CreateQueryPool,
+    destroy_query_pool: DestroyQueryPool,
+    reset_query_pool: CmdResetQueryPool,
+    write_timestamp2: CmdWriteTimestamp2,
+    copy_query_results: CmdCopyQueryPoolResultsToMemory,
 }
 
 impl CommandFns {
@@ -321,6 +404,15 @@ impl CommandFns {
                 queue_submit2: load_device(get_proc, device, c"vkQueueSubmit2")?,
                 get_semaphore_fd: load_device(get_proc, device, c"vkGetSemaphoreFdKHR"),
                 import_semaphore_fd: load_device(get_proc, device, c"vkImportSemaphoreFdKHR"),
+                create_query_pool: load_device(get_proc, device, c"vkCreateQueryPool")?,
+                destroy_query_pool: load_device(get_proc, device, c"vkDestroyQueryPool")?,
+                reset_query_pool: load_device(get_proc, device, c"vkCmdResetQueryPool")?,
+                write_timestamp2: load_device(get_proc, device, c"vkCmdWriteTimestamp2")?,
+                copy_query_results: load_device(
+                    get_proc,
+                    device,
+                    c"vkCmdCopyQueryPoolResultsToMemoryKHR",
+                )?,
             })
         }
     }
@@ -343,6 +435,16 @@ pub enum CommandOp {
         address: u64,
         bytes: u64,
     },
+    BarrierRangeScoped {
+        address: u64,
+        bytes: u64,
+        src_stage: u64,
+        src_access: u64,
+        dst_stage: u64,
+        dst_access: u64,
+        src_family: u32,
+        dst_family: u32,
+    },
     Dispatch {
         pipeline: u64,
         layout: u64,
@@ -354,6 +456,10 @@ pub enum CommandOp {
         layout: u64,
         grid_address: u64,
         arguments: u64,
+    },
+    Timestamp {
+        pool: VkQueryPool,
+        destination: u64,
     },
 }
 
@@ -445,16 +551,40 @@ impl Command {
                         };
                         (self.functions.barrier2)(self.buffer, &dependency);
                     }
-                    CommandOp::BarrierRange { address, bytes } => {
+                    CommandOp::BarrierRange { address, bytes }
+                    | CommandOp::BarrierRangeScoped { address, bytes, .. } => {
+                        let (src_stage, src_access, dst_stage, dst_access) = match *operation {
+                            CommandOp::BarrierRangeScoped {
+                                src_stage,
+                                src_access,
+                                dst_stage,
+                                dst_access,
+                                ..
+                            } => (src_stage, src_access, dst_stage, dst_access),
+                            _ => (
+                                VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                                VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
+                                VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                                VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
+                            ),
+                        };
+                        let (src_queue_family, dst_queue_family) = match *operation {
+                            CommandOp::BarrierRangeScoped {
+                                src_family,
+                                dst_family,
+                                ..
+                            } => (src_family, dst_family),
+                            _ => (VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED),
+                        };
                         let barrier = MemoryRangeBarrier {
                             s_type: VK_STRUCTURE_TYPE_MEMORY_RANGE_BARRIER_KHR,
                             p_next: ptr::null(),
-                            src_stage: VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
-                            src_access: VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
-                            dst_stage: VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
-                            dst_access: VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
-                            src_queue_family: VK_QUEUE_FAMILY_IGNORED,
-                            dst_queue_family: VK_QUEUE_FAMILY_IGNORED,
+                            src_stage,
+                            src_access,
+                            dst_stage,
+                            dst_access,
+                            src_queue_family,
+                            dst_queue_family,
                             range: DeviceAddressRange {
                                 address,
                                 size: bytes,
@@ -531,6 +661,29 @@ impl Command {
                         };
                         (self.functions.dispatch_indirect2)(self.buffer, &info);
                     }
+                    CommandOp::Timestamp { pool, destination } => {
+                        (self.functions.reset_query_pool)(self.buffer, pool, 0, 1);
+                        (self.functions.write_timestamp2)(
+                            self.buffer,
+                            VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                            pool,
+                            0,
+                        );
+                        let range = StridedDeviceAddressRange {
+                            address: destination,
+                            size: 8,
+                            stride: 8,
+                        };
+                        (self.functions.copy_query_results)(
+                            self.buffer,
+                            pool,
+                            0,
+                            1,
+                            &range,
+                            VK_ADDRESS_COMMAND_STORAGE_BUFFER_USAGE_BIT_KHR,
+                            VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT,
+                        );
+                    }
                 }
             }
             let result = (self.functions.end_buffer)(self.buffer);
@@ -550,6 +703,26 @@ impl Drop for Command {
     }
 }
 
+pub struct QueryPool {
+    device: VkDevice,
+    handle: VkQueryPool,
+    destroy: DestroyQueryPool,
+}
+
+impl QueryPool {
+    pub fn handle(&self) -> VkQueryPool {
+        self.handle
+    }
+}
+
+impl Drop for QueryPool {
+    fn drop(&mut self) {
+        // SAFETY: The recording keeps the query pool alive through its last
+        // accepted submission and drops native command buffers first.
+        unsafe { (self.destroy)(self.device, self.handle, ptr::null()) };
+    }
+}
+
 pub struct Timeline {
     device: VkDevice,
     semaphore: VkSemaphore,
@@ -558,7 +731,7 @@ pub struct Timeline {
 }
 
 pub struct SubmitSegment<'a> {
-    pub command: &'a Command,
+    pub command: Option<&'a Command>,
     pub waits: Vec<(&'a Timeline, u64)>,
     pub signals: Vec<(&'a Timeline, u64)>,
 }
@@ -643,6 +816,30 @@ impl Drop for Timeline {
 }
 
 impl Device {
+    pub fn create_timestamp_query(&self) -> Result<QueryPool, VkResult> {
+        let info = QueryPoolCreateInfo {
+            s_type: VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
+            p_next: ptr::null(),
+            flags: 0,
+            query_type: VK_QUERY_TYPE_TIMESTAMP,
+            query_count: 1,
+            pipeline_statistics: 0,
+        };
+        let mut handle = 0;
+        let result = unsafe {
+            (self.command.create_query_pool)(self.handle, &info, ptr::null(), &mut handle)
+        };
+        if result == VK_SUCCESS && handle != 0 {
+            Ok(QueryPool {
+                device: self.handle,
+                handle,
+                destroy: self.command.destroy_query_pool,
+            })
+        } else {
+            Err(result)
+        }
+    }
+
     pub fn create_command(&self, family: u32) -> Result<Command, VkResult> {
         let info = CommandPoolCreateInfo {
             s_type: VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
@@ -769,11 +966,13 @@ impl Device {
             .collect();
         let commands: Vec<_> = segments
             .iter()
-            .map(|segment| CommandBufferSubmitInfo {
-                s_type: VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO,
-                p_next: ptr::null(),
-                command_buffer: segment.command.buffer(),
-                device_mask: 0,
+            .map(|segment| {
+                segment.command.map(|command| CommandBufferSubmitInfo {
+                    s_type: VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO,
+                    p_next: ptr::null(),
+                    command_buffer: command.buffer(),
+                    device_mask: 0,
+                })
             })
             .collect();
         let submits: Vec<_> = segments
@@ -785,8 +984,10 @@ impl Device {
                 flags: 0,
                 wait_count: waits[index].len() as u32,
                 waits: waits[index].as_ptr(),
-                command_count: 1,
-                commands: &commands[index],
+                command_count: u32::from(commands[index].is_some()),
+                commands: commands[index].as_ref().map_or(ptr::null(), |command| {
+                    command as *const CommandBufferSubmitInfo
+                }),
                 signal_count: signals[index].len() as u32,
                 signals: signals[index].as_ptr(),
             })
@@ -830,6 +1031,8 @@ mod layout_tests {
             (48, 64)
         );
         assert_eq!(size_of::<DispatchIndirect2Info>(), 40);
+        assert_eq!(size_of::<QueryPoolCreateInfo>(), 32);
+        assert_eq!(size_of::<StridedDeviceAddressRange>(), 24);
         assert_eq!(
             (
                 size_of::<CommandPoolCreateInfo>(),

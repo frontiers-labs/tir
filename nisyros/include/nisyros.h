@@ -16,6 +16,8 @@ extern "C" {
 #endif
 
 #define NISYROS_ABI_VERSION 1u
+#define NISYROS_DESC_INIT(type) \
+    { .header = { sizeof(type), NISYROS_ABI_VERSION, 0 } }
 
 typedef int32_t nisyros_status;
 #define NISYROS_SUCCESS 0
@@ -61,12 +63,24 @@ typedef struct nisyros_extension {
 
 #define NISYROS_EXTENSION_OPTIONAL 1u
 #define NISYROS_EXTENSION_ALLOC_HEAP 1u
+#define NISYROS_EXTENSION_ALLOC_SHARING 2u
 
 typedef struct {
     uint32_t struct_size;
     uint32_t abi_version;
     const nisyros_extension *extensions;
 } nisyros_descriptor_header;
+
+typedef struct {
+    nisyros_descriptor_header header;
+    nisyros_status status;
+    int32_t backend_code;
+} nisyros_diagnostic_info;
+
+/* `bytes` is input capacity and output required size, including the NUL. */
+NISYROS_API nisyros_status NISYROS_CALL
+nisyros_diagnostic_get(nisyros_diagnostic_info *out, uint32_t *bytes,
+                       char *message);
 
 typedef struct {
     uint64_t epoch;
@@ -201,6 +215,7 @@ typedef struct {
 
 #define NISYROS_QUEUE_COMPUTE 0x00000002u
 #define NISYROS_QUEUE_TRANSFER 0x00000004u
+#define NISYROS_CLOCK_DEVICE 1u
 
 typedef struct {
     uint32_t family;
@@ -208,6 +223,9 @@ typedef struct {
     uint32_t flags;
     uint32_t engine_identity_known;
     uint32_t affinity_enforceable;
+    uint32_t timestamp_valid_bits;
+    float timestamp_period_ns;
+    uint32_t timestamp_domain;
 } nisyros_queue_family_info;
 
 typedef struct {
@@ -236,6 +254,19 @@ typedef struct {
 #define NISYROS_MEMORY_HOST_COHERENT 0x00000004u
 #define NISYROS_ACCESS_READ 0x00000001u
 #define NISYROS_ACCESS_WRITE 0x00000002u
+#define NISYROS_BARRIER_STAGE_TRANSFER 0x00000001u
+#define NISYROS_BARRIER_STAGE_COMPUTE 0x00000002u
+#define NISYROS_BARRIER_STAGE_ALL 0x00000004u
+#define NISYROS_QUEUE_FAMILY_IGNORED UINT32_MAX
+#define NISYROS_SHARING_DEFAULT 0u
+#define NISYROS_SHARING_EXCLUSIVE 1u
+#define NISYROS_ALLOC_HEAP_EXTENSION_INIT \
+    { .base = { sizeof(nisyros_alloc_heap_extension), NISYROS_EXTENSION_ALLOC_HEAP, 0, 0, 0 }, \
+      .required_heap = UINT32_MAX, .preferred_heap = UINT32_MAX }
+#define NISYROS_BARRIER_DESC_INIT \
+    { .header = { sizeof(nisyros_barrier_desc), NISYROS_ABI_VERSION, 0 }, \
+      .src_family = NISYROS_QUEUE_FAMILY_IGNORED, \
+      .dst_family = NISYROS_QUEUE_FAMILY_IGNORED }
 
 typedef struct {
     nisyros_descriptor_header header;
@@ -254,6 +285,24 @@ typedef struct {
 } nisyros_alloc_heap_extension;
 
 typedef struct {
+    nisyros_extension base;
+    uint32_t mode;
+    uint32_t reserved;
+} nisyros_alloc_sharing_extension;
+
+typedef struct {
+    nisyros_descriptor_header header;
+    nisyros_addr address;
+    uint64_t bytes;
+    uint32_t src_stages;
+    uint32_t src_access;
+    uint32_t dst_stages;
+    uint32_t dst_access;
+    uint32_t src_family;
+    uint32_t dst_family;
+} nisyros_barrier_desc;
+
+typedef struct {
     nisyros_descriptor_header header;
     nisyros_addr base;
     uint64_t bytes;
@@ -265,6 +314,7 @@ typedef struct {
     uint32_t mapped;
     uint32_t peer_imported;
     uint32_t access;
+    uint32_t exclusive;
 } nisyros_allocation_info;
 
 typedef struct {
@@ -309,6 +359,24 @@ typedef struct {
     uint32_t binding_count;
     const nisyros_event_binding *bindings;
 } nisyros_submit_desc;
+
+typedef struct {
+    nisyros_cmd cmd;
+    const nisyros_submit_desc *submit;
+} nisyros_batch_entry;
+
+typedef struct {
+    nisyros_descriptor_header header;
+    uint32_t command_count;
+    const nisyros_batch_entry *commands;
+    uint32_t wait_count;
+    const nisyros_point *waits;
+    uint32_t signal_count;
+    const nisyros_point *signals;
+} nisyros_batch_submit_desc;
+
+#define NISYROS_BATCH_SUBMIT_DESC_INIT \
+    { { sizeof(nisyros_batch_submit_desc), NISYROS_ABI_VERSION, 0 }, 0, 0, 0, 0, 0, 0 }
 
 typedef struct {
     nisyros_descriptor_header header;
@@ -460,6 +528,8 @@ nisyros_queue_get(nisyros_device device, uint32_t family, uint32_t index,
 NISYROS_API nisyros_status NISYROS_CALL
 nisyros_device_close(nisyros_device device);
 NISYROS_API nisyros_status NISYROS_CALL
+nisyros_device_abort(nisyros_device device);
+NISYROS_API nisyros_status NISYROS_CALL
 nisyros_alloc(nisyros_device device, const nisyros_alloc_desc *desc,
               nisyros_addr *out);
 NISYROS_API nisyros_status NISYROS_CALL
@@ -534,6 +604,10 @@ NISYROS_API nisyros_status NISYROS_CALL
 nisyros_cmd_barrier_range(nisyros_cmd cmd, nisyros_addr address,
                           uint64_t bytes);
 NISYROS_API nisyros_status NISYROS_CALL
+nisyros_cmd_barrier_scoped(nisyros_cmd cmd, const nisyros_barrier_desc *desc);
+NISYROS_API nisyros_status NISYROS_CALL
+nisyros_cmd_write_timestamp(nisyros_cmd cmd, nisyros_addr destination);
+NISYROS_API nisyros_status NISYROS_CALL
 nisyros_event_create(nisyros_device device, const nisyros_event_desc *desc,
                      nisyros_event *out);
 NISYROS_API nisyros_status NISYROS_CALL nisyros_event_destroy(nisyros_event event);
@@ -563,6 +637,9 @@ NISYROS_API nisyros_status NISYROS_CALL
 nisyros_submit(nisyros_queue queue, nisyros_cmd cmd,
                const nisyros_submit_desc *submit_desc,
                nisyros_point *out);
+NISYROS_API nisyros_status NISYROS_CALL
+nisyros_submit_batch(nisyros_queue queue, const nisyros_batch_submit_desc *desc,
+                     nisyros_point *out);
 NISYROS_API nisyros_status NISYROS_CALL
 nisyros_wait(nisyros_point point, uint64_t timeout_ns);
 NISYROS_API nisyros_status NISYROS_CALL

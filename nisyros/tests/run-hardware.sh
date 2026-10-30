@@ -17,11 +17,24 @@ cc -std=c11 -Wall -Wextra -Werror -I nisyros/include \
   nisyros/tests/kernel.c -L target/debug -lnisyros \
   -Wl,-rpath,"$repo/target/debug" -o "$temp/kernel"
 cc -std=c11 -Wall -Wextra -Werror -I nisyros/include \
+  nisyros/tests/batch.c -L target/debug -lnisyros \
+  -Wl,-rpath,"$repo/target/debug" -o "$temp/batch"
+cc -std=c11 -Wall -Wextra -Werror -I nisyros/include \
+  nisyros/tests/ownership.c -L target/debug -lnisyros \
+  -Wl,-rpath,"$repo/target/debug" -o "$temp/ownership"
+cc -std=c11 -Wall -Wextra -Werror -I nisyros/include \
   nisyros/tests/matrix.c -L target/debug -lnisyros \
   -Wl,-rpath,"$repo/target/debug" -o "$temp/matrix"
 
 export VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation
 "$temp/open" strict
+"$temp/batch"
+if "$temp/ownership"; then
+  :
+else
+  status=$?
+  test "$status" -eq 77
+fi
 target/debug/nisyros-pack "$temp/add_one.spv" "$temp/add_one.nsy" \
   main 24 8 64 1 1 addr:0 addr:8 value:16:4
 "$temp/kernel" "$temp/add_one.nsy"

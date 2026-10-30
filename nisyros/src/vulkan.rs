@@ -14,7 +14,9 @@ pub use memory::{AllocError, AllocRequest, Allocation};
 mod pipeline;
 pub use pipeline::{Pipeline, PipelineError};
 mod command;
-pub use command::{Command, CommandOp, SubmitSegment, Timeline};
+pub use command::{
+    Command, CommandOp, QueryPool, SubmitSegment, Timeline, scoped_access, scoped_stage,
+};
 
 type VkInstance = *mut c_void;
 type VkPhysicalDevice = *mut c_void;
@@ -116,6 +118,7 @@ type CreateDevice = unsafe extern "system" fn(
 ) -> VkResult;
 type GetDeviceProcAddr = unsafe extern "system" fn(VkDevice, *const c_char) -> *const c_void;
 type DestroyDevice = unsafe extern "system" fn(VkDevice, *const c_void);
+type DeviceWaitIdle = unsafe extern "system" fn(VkDevice) -> VkResult;
 type GetDeviceQueue = unsafe extern "system" fn(VkDevice, u32, u32, *mut VkQueue);
 
 #[repr(C)]
@@ -196,7 +199,10 @@ struct PhysicalDeviceProperties {
     _alignment_padding: u32,
     _limits_before_grid: [u8; 220],
     max_compute_work_group_count: [u32; 3],
-    _tail: [u64; 64],
+    _limits_before_timestamp: [u64; 24],
+    timestamp_period: f32,
+    _timestamp_padding: u32,
+    _tail: [u64; 32],
 }
 
 #[repr(C)]
@@ -281,7 +287,7 @@ struct ExternalSemaphoreProperties {
 pub struct QueueFamilyProperties {
     pub flags: u32,
     pub count: u32,
-    timestamp_valid_bits: u32,
+    pub timestamp_valid_bits: u32,
     min_image_transfer_granularity: [u32; 3],
 }
 
@@ -418,6 +424,7 @@ pub struct DeviceRecord {
     pub cooperative_matrices: Vec<CooperativeMatrixTuple>,
     pub strict_profile_supported: bool,
     pub max_grid: [u32; 3],
+    pub timestamp_period_ns: f32,
     memory_properties: memory::MemoryProperties,
     flags_extension: Option<FlagsExtension>,
     pub external_host_alignment: Option<u64>,
@@ -447,6 +454,7 @@ pub struct Queue {
 pub struct Device {
     handle: VkDevice,
     destroy: DestroyDevice,
+    wait_idle: DeviceWaitIdle,
     pub queues: Vec<Queue>,
     memory: memory::MemoryFns,
     memory_properties: memory::MemoryProperties,
@@ -458,11 +466,19 @@ pub struct Device {
     pub peer_timeline_fd: bool,
     pub enabled_features: u64,
     pub enabled_matrices: Vec<CooperativeMatrixTuple>,
+    pub timestamp_valid_bits: Vec<u32>,
 }
 
 impl Device {
     pub fn native_handle(&self) -> *mut c_void {
         self.handle
+    }
+
+    pub fn wait_idle(&self) -> Result<(), VkResult> {
+        match unsafe { (self.wait_idle)(self.handle) } {
+            VK_SUCCESS => Ok(()),
+            error => Err(error),
+        }
     }
 }
 
@@ -806,6 +822,12 @@ impl Instance {
                 destroy(handle, ptr::null());
                 return Err(());
             };
+            let Some(wait_idle): Option<DeviceWaitIdle> =
+                load_device(get_device_proc, handle, c"vkDeviceWaitIdle")
+            else {
+                destroy(handle, ptr::null());
+                return Err(());
+            };
             let Some(memory) = memory::MemoryFns::load(get_device_proc, handle) else {
                 destroy(handle, ptr::null());
                 return Err(());
@@ -837,6 +859,7 @@ impl Instance {
             Ok(Device {
                 handle,
                 destroy,
+                wait_idle,
                 queues,
                 memory,
                 memory_properties: record.memory_properties,
@@ -848,6 +871,11 @@ impl Instance {
                 peer_timeline_fd: record.peer_timeline_fd,
                 enabled_features: record.features,
                 enabled_matrices: record.cooperative_matrices.clone(),
+                timestamp_valid_bits: record
+                    .queue_families
+                    .iter()
+                    .map(|family| family.timestamp_valid_bits)
+                    .collect(),
             })
         }
     }
@@ -1224,6 +1252,7 @@ impl Instance {
             },
             strict_profile_supported,
             max_grid: props.max_compute_work_group_count,
+            timestamp_period_ns: props.timestamp_period,
             memory_properties,
             flags_extension,
             external_host_alignment,
@@ -1315,6 +1344,7 @@ mod layout_tests {
             offset_of!(PhysicalDeviceProperties, max_compute_work_group_count),
             516
         );
+        assert_eq!(offset_of!(PhysicalDeviceProperties, timestamp_period), 720);
         assert!(size_of::<PhysicalDeviceProperties>() >= 824);
     }
 

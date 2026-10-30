@@ -120,9 +120,7 @@ int main(int argc, char **argv) {
     capacity = 16;
     assert(nisyros_cluster_devices(cluster, &capacity, ids) == NISYROS_SUCCESS);
 
-    nisyros_device_info info = {
-        .header = {sizeof(info), NISYROS_ABI_VERSION, NULL},
-    };
+    nisyros_device_info info = NISYROS_DESC_INIT(nisyros_device_info);
     assert(nisyros_cluster_device_info(cluster, ids[0], &info) == NISYROS_SUCCESS);
     nisyros_extension unknown = {sizeof(unknown), 0xfeed, NISYROS_EXTENSION_OPTIONAL, 0, NULL};
     info.header.extensions = &unknown;
@@ -200,6 +198,13 @@ int main(int argc, char **argv) {
         }
     }
     assert(selected != UINT32_MAX);
+    nisyros_queue_family_info clock_info;
+    assert(nisyros_cluster_queue_family_info(cluster, ids[0], selected, &clock_info) == NISYROS_SUCCESS);
+    if (clock_info.timestamp_valid_bits) {
+        assert(clock_info.timestamp_valid_bits >= 36 && clock_info.timestamp_valid_bits <= 64);
+        assert(clock_info.timestamp_period_ns > 0.0f);
+        assert(clock_info.timestamp_domain == NISYROS_CLOCK_DEVICE);
+    }
 
     nisyros_queue_request request = {selected, queue_count < 2 ? 1 : 2, 1.0f, 0};
     nisyros_device_open_desc desc = {
@@ -266,11 +271,8 @@ int main(int argc, char **argv) {
         assert(allocation_info.mapped == 0 && allocation_info.peer_imported == 0);
         assert(allocation_info.access == (NISYROS_ACCESS_READ | NISYROS_ACCESS_WRITE));
         assert(nisyros_allocation_query(device, address + 4, &allocation_info) == NISYROS_INVALID_ARGUMENT);
-        nisyros_alloc_heap_extension heap_choice = {
-            .base = {sizeof(heap_choice), NISYROS_EXTENSION_ALLOC_HEAP, 0, 0, NULL},
-            .required_heap = allocation_info.heap_index,
-            .preferred_heap = UINT32_MAX,
-        };
+        nisyros_alloc_heap_extension heap_choice = NISYROS_ALLOC_HEAP_EXTENSION_INIT;
+        heap_choice.required_heap = allocation_info.heap_index;
         allocation.header.extensions = &heap_choice.base;
         nisyros_addr selected_heap_address = 0;
         assert(nisyros_alloc(device, &allocation, &selected_heap_address) == NISYROS_SUCCESS);
@@ -320,6 +322,60 @@ int main(int argc, char **argv) {
         memset(destination_host, 0, 64);
         assert(nisyros_flush(device, source, 64) == NISYROS_SUCCESS);
         assert(nisyros_flush(device, destination, 64) == NISYROS_SUCCESS);
+        nisyros_alloc_desc noncoherent_desc = allocation;
+        noncoherent_desc.preferred_properties = 0;
+        nisyros_addr noncoherent = 0;
+        assert(nisyros_alloc(device, &noncoherent_desc, &noncoherent) == NISYROS_SUCCESS);
+        nisyros_allocation_info noncoherent_info = {
+            .header = {sizeof(noncoherent_info), NISYROS_ABI_VERSION, NULL},
+        };
+        assert(nisyros_allocation_query(device, noncoherent, &noncoherent_info) == NISYROS_SUCCESS);
+        if (getenv("NISYROS_EXPECT_NONCOHERENT")) {
+            assert((noncoherent_info.properties & NISYROS_MEMORY_HOST_COHERENT) == 0);
+        }
+        uint64_t prior_queue_submissions = 0;
+        if ((noncoherent_info.properties & NISYROS_MEMORY_HOST_COHERENT) == 0) {
+            unsigned char *noncoherent_host = NULL;
+            assert(nisyros_map(device, noncoherent, 64, (void **)&noncoherent_host) == NISYROS_SUCCESS);
+            memset(noncoherent_host, 0x7d, 16);
+            nisyros_cmd copy_noncoherent = NULL;
+            assert(nisyros_cmd_create(device, selected, &copy_noncoherent) == NISYROS_SUCCESS);
+            assert(nisyros_cmd_begin(copy_noncoherent) == NISYROS_SUCCESS);
+            assert(nisyros_cmd_copy(copy_noncoherent, destination, noncoherent, 16) == NISYROS_SUCCESS);
+            assert(nisyros_cmd_end(copy_noncoherent) == NISYROS_SUCCESS);
+            nisyros_queue test_queue = NULL;
+            assert(nisyros_queue_get(device, selected, 0, &test_queue) == NISYROS_SUCCESS);
+            nisyros_point copied = {0};
+            assert(nisyros_submit(test_queue, copy_noncoherent, NULL, &copied) == NISYROS_SUCCESS);
+            prior_queue_submissions++;
+            assert(nisyros_wait(copied, NISYROS_TIMEOUT_INFINITE) == NISYROS_SUCCESS);
+            assert(nisyros_invalidate(device, destination, 16) == NISYROS_SUCCESS);
+            for (int i = 0; i < 16; ++i) assert(((unsigned char *)destination_host)[i] == 0);
+            assert(nisyros_flush(device, noncoherent, 16) == NISYROS_SUCCESS);
+            assert(nisyros_submit(test_queue, copy_noncoherent, NULL, &copied) == NISYROS_SUCCESS);
+            prior_queue_submissions++;
+            assert(nisyros_wait(copied, NISYROS_TIMEOUT_INFINITE) == NISYROS_SUCCESS);
+            assert(nisyros_invalidate(device, destination, 16) == NISYROS_SUCCESS);
+            for (int i = 0; i < 16; ++i) assert(((unsigned char *)destination_host)[i] == 0x7d);
+            assert(nisyros_cmd_destroy(copy_noncoherent) == NISYROS_SUCCESS);
+            nisyros_cmd fill_noncoherent = NULL;
+            assert(nisyros_cmd_create(device, selected, &fill_noncoherent) == NISYROS_SUCCESS);
+            assert(nisyros_cmd_begin(fill_noncoherent) == NISYROS_SUCCESS);
+            assert(nisyros_cmd_fill(fill_noncoherent, noncoherent + 16, 16, 0x51515151) == NISYROS_SUCCESS);
+            assert(nisyros_cmd_end(fill_noncoherent) == NISYROS_SUCCESS);
+            nisyros_point filled = {0};
+            assert(nisyros_submit(test_queue, fill_noncoherent, NULL, &filled) == NISYROS_SUCCESS);
+            prior_queue_submissions++;
+            assert(nisyros_wait(filled, NISYROS_TIMEOUT_INFINITE) == NISYROS_SUCCESS);
+            for (int i = 16; i < 32; ++i) assert(noncoherent_host[i] == 0);
+            assert(nisyros_invalidate(device, noncoherent + 16, 16) == NISYROS_SUCCESS);
+            for (int i = 16; i < 32; ++i) assert(noncoherent_host[i] == 0x51);
+            assert(nisyros_cmd_destroy(fill_noncoherent) == NISYROS_SUCCESS);
+            assert(nisyros_unmap(device, noncoherent_host) == NISYROS_SUCCESS);
+            memset(destination_host, 0, 16);
+            assert(nisyros_flush(device, destination, 16) == NISYROS_SUCCESS);
+        }
+        assert(nisyros_free(device, noncoherent) == NISYROS_SUCCESS);
         nisyros_queue interop_queue = NULL;
         assert(nisyros_queue_get(device, selected, 0, &interop_queue) == NISYROS_SUCCESS);
         nisyros_vulkan_queue_info native_queue = {
@@ -339,8 +395,28 @@ int main(int argc, char **argv) {
         assert(nisyros_cmd_end(cmd) == NISYROS_INVALID_ARGUMENT);
         assert(nisyros_cmd_reset(cmd) == NISYROS_SUCCESS);
         assert(nisyros_cmd_begin(cmd) == NISYROS_SUCCESS);
+        nisyros_barrier_desc invalid_scoped = {
+            .header = {sizeof(invalid_scoped), NISYROS_ABI_VERSION, NULL},
+            .address = destination + 8,
+            .bytes = 16,
+            .src_access = NISYROS_ACCESS_WRITE,
+            .dst_stages = NISYROS_BARRIER_STAGE_TRANSFER,
+            .dst_access = NISYROS_ACCESS_READ,
+        };
+        assert(nisyros_cmd_barrier_scoped(cmd, &invalid_scoped) == NISYROS_INVALID_ARGUMENT);
+        assert(nisyros_cmd_end(cmd) == NISYROS_INVALID_ARGUMENT);
+        assert(nisyros_cmd_reset(cmd) == NISYROS_SUCCESS);
+        assert(nisyros_cmd_begin(cmd) == NISYROS_SUCCESS);
         assert(nisyros_cmd_copy(cmd, destination + 8, source + 4, 16) == NISYROS_SUCCESS);
-        assert(nisyros_cmd_barrier_range(cmd, destination + 8, 16) == NISYROS_SUCCESS);
+        nisyros_barrier_desc scoped = NISYROS_BARRIER_DESC_INIT;
+        scoped.address = destination + 8;
+        scoped.bytes = 16;
+        scoped.src_stages = NISYROS_BARRIER_STAGE_TRANSFER;
+        scoped.src_access = NISYROS_ACCESS_WRITE;
+        scoped.dst_stages = NISYROS_BARRIER_STAGE_TRANSFER;
+        scoped.dst_access = NISYROS_ACCESS_READ;
+        assert(nisyros_cmd_barrier_scoped(cmd, &scoped) == NISYROS_SUCCESS);
+        assert(nisyros_cmd_copy(cmd, destination + 40, destination + 8, 16) == NISYROS_SUCCESS);
         assert(nisyros_cmd_barrier_all(cmd) == NISYROS_SUCCESS);
         assert(nisyros_cmd_fill(cmd, destination + 24, 8, 0x01020304) == NISYROS_SUCCESS);
         assert(nisyros_cmd_end(cmd) == NISYROS_SUCCESS);
@@ -350,7 +426,7 @@ int main(int argc, char **argv) {
         for (uint64_t iteration = 1; iteration <= 2; ++iteration) {
             nisyros_point done = {0};
             assert(nisyros_submit(queue, cmd, NULL, &done) == NISYROS_SUCCESS);
-            assert(done.event != NULL && done.value == iteration);
+            assert(done.event != NULL && done.value == prior_queue_submissions + iteration);
             nisyros_status poll = nisyros_wait(done, 0);
             assert(poll == NISYROS_SUCCESS || poll == NISYROS_TIMEOUT);
             assert(nisyros_wait(done, NISYROS_TIMEOUT_INFINITE) == NISYROS_SUCCESS);
@@ -360,9 +436,35 @@ int main(int argc, char **argv) {
         }
         assert(nisyros_invalidate(device, destination, 64) == NISYROS_SUCCESS);
         for (int i = 8; i < 24; ++i) assert(((unsigned char *)destination_host)[i] == 0x3c);
+        for (int i = 40; i < 56; ++i) assert(((unsigned char *)destination_host)[i] == 0x3c);
         uint32_t pattern[2] = {0x01020304, 0x01020304};
         assert(memcmp((unsigned char *)destination_host + 24, pattern, sizeof(pattern)) == 0);
         assert(nisyros_cmd_destroy(cmd) == NISYROS_SUCCESS);
+        if (clock_info.timestamp_valid_bits) {
+            nisyros_cmd timestamp = NULL;
+            assert(nisyros_cmd_create(device, selected, &timestamp) == NISYROS_SUCCESS);
+            assert(nisyros_cmd_begin(timestamp) == NISYROS_SUCCESS);
+            assert(nisyros_cmd_write_timestamp(timestamp, destination + 32) == NISYROS_SUCCESS);
+            assert(nisyros_cmd_end(timestamp) == NISYROS_SUCCESS);
+            nisyros_point timestamp_done = {0};
+            assert(nisyros_submit(queue, timestamp, NULL, &timestamp_done) == NISYROS_SUCCESS);
+            assert(nisyros_wait(timestamp_done, NISYROS_TIMEOUT_INFINITE) == NISYROS_SUCCESS);
+            assert(nisyros_invalidate(device, destination + 32, 8) == NISYROS_SUCCESS);
+            uint64_t first_timestamp = *(uint64_t *)((unsigned char *)destination_host + 32);
+            assert(first_timestamp != 0);
+            nisyros_cmd_info timestamp_info = {
+                .header = {sizeof(timestamp_info), NISYROS_ABI_VERSION, NULL},
+            };
+            assert(nisyros_cmd_query(timestamp, &timestamp_info) == NISYROS_SUCCESS);
+            assert(timestamp_info.native_record_count == 1);
+            assert(nisyros_submit(queue, timestamp, NULL, &timestamp_done) == NISYROS_SUCCESS);
+            assert(nisyros_wait(timestamp_done, NISYROS_TIMEOUT_INFINITE) == NISYROS_SUCCESS);
+            assert(nisyros_invalidate(device, destination + 32, 8) == NISYROS_SUCCESS);
+            assert(*(uint64_t *)((unsigned char *)destination_host + 32) >= first_timestamp);
+            assert(nisyros_cmd_query(timestamp, &timestamp_info) == NISYROS_SUCCESS);
+            assert(timestamp_info.native_record_count == 1);
+            assert(nisyros_cmd_destroy(timestamp) == NISYROS_SUCCESS);
+        }
         if (request.count >= 2) {
             nisyros_event_desc event_desc = {
                 .header = {sizeof(event_desc), NISYROS_ABI_VERSION, NULL},

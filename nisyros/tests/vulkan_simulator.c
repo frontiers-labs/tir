@@ -10,8 +10,10 @@
 
 typedef struct { int32_t type; void *next; } header;
 typedef struct { uint64_t address, size; } range;
+typedef struct { uint64_t address, size, stride; } strided_range;
 typedef struct { int32_t type; const void *next; uint32_t flags; uint64_t size; uint32_t usage, sharing, family_count; const uint32_t *families; } buffer_info;
 typedef struct { uint64_t size, alignment; uint32_t types; } requirements;
+typedef struct { int32_t type; const void *next; uint64_t memory, offset, size; } mapped_range;
 typedef struct { int32_t type; const void *next; uint64_t size; uint32_t memory_type; } memory_info;
 typedef struct { int32_t type; const void *next; uint64_t buffer; } address_info;
 typedef struct { int32_t type; const void *next; range source; uint32_t source_flags; range destination; uint32_t destination_flags; } copy_region;
@@ -29,11 +31,12 @@ typedef struct { uint64_t size; uint32_t flags, pad; } memory_heap;
 typedef struct { uint32_t count; memory_type types[32]; uint32_t heap_count; memory_heap heaps[16]; } memory_properties;
 typedef struct { int32_t type; void *next; uint8_t uuid[16], driver_uuid[16], luid[8]; uint32_t node_mask, valid; } id_properties;
 typedef struct { int32_t type; void *next; int32_t driver_id; char name[256], info[256]; uint8_t conformance[4]; } driver_properties;
-typedef struct { uint32_t api, driver, vendor, device, device_type; char name[256]; uint8_t cache_uuid[16]; uint32_t pad; uint8_t before_grid[220]; uint32_t grid[3]; } properties_prefix;
+typedef struct { uint32_t api, driver, vendor, device, device_type; char name[256]; uint8_t cache_uuid[16]; uint32_t pad; uint8_t before_grid[220]; uint32_t grid[3]; uint64_t before_timestamp[24]; float timestamp_period; } properties_prefix;
 
-typedef struct { size_t size; unsigned char *data; } memory;
+typedef struct { size_t size; unsigned char *data, *host_data; } memory;
 typedef struct { size_t size; memory *bound; uint64_t offset; } buffer;
 typedef struct { uint64_t value; } semaphore;
+typedef struct { uint64_t value; int available; } query_pool;
 typedef struct { int kind; uint64_t dst, src, bytes, pipeline; uint32_t pattern, grid[3]; } operation;
 typedef struct { operation ops[256]; size_t count; uint64_t pipeline, arguments; } command;
 typedef struct { int32_t type; const void *next; uint32_t flags; size_t code_size; const uint32_t *code; } shader_info;
@@ -56,6 +59,9 @@ static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t changed = PTHREAD_COND_INITIALIZER;
 static device *devices[16];
 static size_t device_count;
+static uint64_t submit_calls;
+static int simulator_device_lost;
+static uint64_t wait_calls;
 
 static int physical_count(void) {
     const char *value = getenv("NISYROS_SIM_DEVICES");
@@ -112,6 +118,7 @@ void vkGetPhysicalDeviceProperties(void *physical, properties_prefix *out) {
     out->cache_uuid[0] = 0xA5;
     out->cache_uuid[1] = (uint8_t)index;
     out->grid[0] = out->grid[1] = out->grid[2] = 65535;
+    out->timestamp_period = 1.0f;
 }
 void vkGetPhysicalDeviceProperties2(void *physical, void *raw) {
     header *head = raw;
@@ -143,13 +150,14 @@ void vkGetPhysicalDeviceFeatures2(void *physical, void *raw) {
 void vkGetPhysicalDeviceQueueFamilyProperties(void *physical, uint32_t *count, queue_family *out) {
     (void)physical;
     if (!out) { *count = 1; return; }
-    if (*count) { out[0] = (queue_family){.flags = 7, .count = 2, .granularity = {1, 1, 1}}; *count = 1; }
+    if (*count) { out[0] = (queue_family){.flags = 7, .count = 2, .timestamp_bits = 64, .granularity = {1, 1, 1}}; *count = 1; }
 }
 void vkGetPhysicalDeviceMemoryProperties(void *physical, memory_properties *out) {
     (void)physical;
     memset(out, 0, sizeof(*out));
-    out->count = 1;
+    out->count = 2;
     out->types[0] = (memory_type){7, 0};
+    out->types[1] = (memory_type){2, 0};
     out->heap_count = 1;
     out->heaps[0] = (memory_heap){UINT64_C(1) << 34, 1, 0};
 }
@@ -194,7 +202,7 @@ void vkDestroyBuffer(void *handle, uint64_t raw, const void *allocator) {
 }
 void vkGetBufferMemoryRequirements(void *handle, uint64_t raw, requirements *out) {
     (void)handle;
-    *out = (requirements){((buffer *)(uintptr_t)raw)->size, 64, 1};
+    *out = (requirements){((buffer *)(uintptr_t)raw)->size, 64, 3};
 }
 int vkAllocateMemory(void *handle, const memory_info *info, const void *allocator, uint64_t *out) {
     (void)handle; (void)allocator;
@@ -203,13 +211,19 @@ int vkAllocateMemory(void *handle, const memory_info *info, const void *allocato
     created->size = (size_t)info->size;
     if (posix_memalign((void **)&created->data, 4096, created->size) != 0) { free(created); return -1; }
     memset(created->data, 0, created->size);
+    if (info->memory_type == 1) {
+        if (posix_memalign((void **)&created->host_data, 4096, created->size) != 0) {
+            free(created->data); free(created); return -1;
+        }
+        memset(created->host_data, 0, created->size);
+    }
     *out = (uint64_t)(uintptr_t)created;
     return 0;
 }
 void vkFreeMemory(void *handle, uint64_t raw, const void *allocator) {
     (void)handle; (void)allocator;
     memory *allocation = (memory *)(uintptr_t)raw;
-    free(allocation->data); free(allocation);
+    free(allocation->host_data); free(allocation->data); free(allocation);
 }
 int vkBindBufferMemory(void *handle, uint64_t raw_buffer, uint64_t raw_memory, uint64_t offset) {
     (void)handle;
@@ -225,15 +239,28 @@ uint64_t vkGetBufferDeviceAddress(void *handle, const address_info *info) {
 }
 int vkMapMemory(void *handle, uint64_t raw, uint64_t offset, uint64_t size, uint32_t flags, void **out) {
     (void)handle; (void)size; (void)flags;
-    *out = ((memory *)(uintptr_t)raw)->data + offset;
+    memory *allocation = (memory *)(uintptr_t)raw;
+    *out = (allocation->host_data ? allocation->host_data : allocation->data) + offset;
     return 0;
 }
 void vkUnmapMemory(void *handle, uint64_t raw) { (void)handle; (void)raw; }
 int vkFlushMappedMemoryRanges(void *handle, uint32_t count, const void *ranges) {
-    (void)handle; (void)count; (void)ranges; return 0;
+    (void)handle;
+    const mapped_range *mapped = ranges;
+    for (uint32_t i = 0; i < count; ++i) {
+        memory *allocation = (memory *)(uintptr_t)mapped[i].memory;
+        if (allocation->host_data) memcpy(allocation->data, allocation->host_data, allocation->size);
+    }
+    return 0;
 }
 int vkInvalidateMappedMemoryRanges(void *handle, uint32_t count, const void *ranges) {
-    (void)handle; (void)count; (void)ranges; return 0;
+    (void)handle;
+    const mapped_range *mapped = ranges;
+    for (uint32_t i = 0; i < count; ++i) {
+        memory *allocation = (memory *)(uintptr_t)mapped[i].memory;
+        if (allocation->host_data) memcpy(allocation->host_data, allocation->data, allocation->size);
+    }
+    return 0;
 }
 
 int vkCreateCommandPool(void *handle, const void *info, const void *allocator, uint64_t *out) {
@@ -287,6 +314,30 @@ void vkCmdDispatchIndirect2KHR(void *raw, const void *info) {
     record(cmd, (operation){.kind = 4, .dst = address_range->address,
                             .src = cmd->arguments, .pipeline = cmd->pipeline});
 }
+int vkCreateQueryPool(void *handle, const void *info, const void *allocator, uint64_t *out) {
+    (void)handle; (void)info; (void)allocator;
+    query_pool *created = calloc(1, sizeof(*created));
+    if (!created) return -1;
+    *out = (uint64_t)(uintptr_t)created;
+    return 0;
+}
+void vkDestroyQueryPool(void *handle, uint64_t raw, const void *allocator) {
+    (void)handle; (void)allocator; free((void *)(uintptr_t)raw);
+}
+void vkCmdResetQueryPool(void *raw, uint64_t pool, uint32_t first, uint32_t count) {
+    (void)first; (void)count;
+    record(raw, (operation){.kind = 7, .pipeline = pool});
+}
+void vkCmdWriteTimestamp2(void *raw, uint64_t stage, uint64_t pool, uint32_t query) {
+    (void)stage; (void)query;
+    record(raw, (operation){.kind = 5, .pipeline = pool});
+}
+void vkCmdCopyQueryPoolResultsToMemoryKHR(void *raw, uint64_t pool, uint32_t first,
+                                           uint32_t count, const strided_range *target,
+                                           uint32_t address_flags, uint32_t query_flags) {
+    (void)first; (void)count; (void)address_flags; (void)query_flags;
+    record(raw, (operation){.kind = 6, .src = pool, .dst = target->address});
+}
 
 int vkCreateSemaphore(void *handle, const void *raw_info, const void *allocator, uint64_t *out) {
     (void)handle; (void)allocator;
@@ -322,6 +373,18 @@ static void execute(const command *cmd) {
             uint32_t *destination = (uint32_t *)(uintptr_t)args->destination;
             const uint32_t *source = (const uint32_t *)(uintptr_t)args->source;
             for (uint64_t j = 0; j < args->count && j < limit; ++j) destination[j] = source[j] + 1;
+        } else if (op->kind == 7) {
+            ((query_pool *)(uintptr_t)op->pipeline)->available = 0;
+        } else if (op->kind == 5) {
+            struct timespec now;
+            clock_gettime(CLOCK_MONOTONIC, &now);
+            query_pool *pool = (query_pool *)(uintptr_t)op->pipeline;
+            pool->value = (uint64_t)now.tv_sec * UINT64_C(1000000000) + (uint64_t)now.tv_nsec;
+            pool->available = 1;
+        } else if (op->kind == 6) {
+            query_pool *pool = (query_pool *)(uintptr_t)op->src;
+            uint64_t value = pool->available ? pool->value : 0;
+            memcpy((void *)(uintptr_t)op->dst, &value, sizeof(value));
         }
     }
 }
@@ -334,7 +397,7 @@ static void drain(void) {
                 queue *endpoint = &devices[d]->queues[q];
                 pending *head = endpoint->head;
                 if (!head || !ready(head)) continue;
-                execute(head->cmd);
+                if (head->cmd) execute(head->cmd);
                 for (uint32_t i = 0; i < head->signal_count; ++i) {
                     semaphore *target = (semaphore *)(uintptr_t)head->signals[i].semaphore;
                     if (target->value < head->signals[i].value) target->value = head->signals[i].value;
@@ -352,20 +415,34 @@ int vkQueueSubmit2(void *raw_queue, uint32_t count, const submit_info *submits, 
     (void)fence;
     queue *endpoint = raw_queue;
     pthread_mutex_lock(&lock);
+    if (simulator_device_lost) { pthread_mutex_unlock(&lock); return -4; }
+    uint64_t call = ++submit_calls;
+    const char *fail_at = getenv("NISYROS_SIM_FAIL_SUBMIT_AT");
+    uint64_t failure_call = fail_at ? strtoull(fail_at, NULL, 10) : 0;
+    const char *oom_at = getenv("NISYROS_SIM_FAIL_SUBMIT_OOM_AT");
+    if (oom_at && call == strtoull(oom_at, NULL, 10)) {
+        pthread_mutex_unlock(&lock);
+        return -1;
+    }
     for (uint32_t i = 0; i < count; ++i) {
         const submit_info *src = &submits[i];
-        if (src->wait_count > 16 || src->signal_count > 16 || src->command_count != 1) {
+        if (src->wait_count > 16 || src->signal_count > 16 || src->command_count > 1) {
             pthread_mutex_unlock(&lock); return -3;
         }
         pending *item = calloc(1, sizeof(*item));
         if (!item) { pthread_mutex_unlock(&lock); return -1; }
-        item->cmd = src->commands[0].command;
+        item->cmd = src->command_count ? src->commands[0].command : NULL;
         item->wait_count = src->wait_count;
         item->signal_count = src->signal_count;
         memcpy(item->waits, src->waits, src->wait_count * sizeof(semaphore_submit));
         memcpy(item->signals, src->signals, src->signal_count * sizeof(semaphore_submit));
         if (endpoint->tail) endpoint->tail->next = item; else endpoint->head = item;
         endpoint->tail = item;
+        if (call == failure_call) {
+            simulator_device_lost = 1;
+            pthread_mutex_unlock(&lock);
+            return -4;
+        }
     }
     drain();
     pthread_mutex_unlock(&lock);
@@ -381,9 +458,29 @@ int vkQueueWaitIdle(void *raw_queue) {
     pthread_mutex_unlock(&lock);
     return 0;
 }
+int vkDeviceWaitIdle(void *handle) {
+    (void)handle;
+    pthread_mutex_lock(&lock);
+    if (simulator_device_lost) {
+        for (size_t d = 0; d < device_count; ++d) if (devices[d]) {
+            for (int q = 0; q < 2; ++q) {
+                pending *item = devices[d]->queues[q].head;
+                while (item) { pending *next = item->next; free(item); item = next; }
+                devices[d]->queues[q].head = devices[d]->queues[q].tail = NULL;
+            }
+        }
+        pthread_cond_broadcast(&changed);
+        pthread_mutex_unlock(&lock);
+        return -4;
+    }
+    drain();
+    pthread_mutex_unlock(&lock);
+    return 0;
+}
 int vkGetSemaphoreCounterValue(void *handle, uint64_t raw, uint64_t *out) {
     (void)handle;
     pthread_mutex_lock(&lock);
+    if (simulator_device_lost) { pthread_mutex_unlock(&lock); return -4; }
     drain();
     *out = ((semaphore *)(uintptr_t)raw)->value;
     pthread_mutex_unlock(&lock);
@@ -409,7 +506,15 @@ int vkWaitSemaphores(void *handle, const wait_info *info, uint64_t timeout) {
         if (deadline.tv_nsec >= 1000000000) { deadline.tv_sec++; deadline.tv_nsec -= 1000000000; }
     }
     pthread_mutex_lock(&lock);
+    uint64_t call = ++wait_calls;
+    const char *fail_at = getenv("NISYROS_SIM_FAIL_WAIT_AT");
+    if (fail_at && call == strtoull(fail_at, NULL, 10)) {
+        simulator_device_lost = 1;
+        pthread_mutex_unlock(&lock);
+        return -4;
+    }
     for (;;) {
+        if (simulator_device_lost) { pthread_mutex_unlock(&lock); return -4; }
         drain();
         int complete = 1;
         for (uint32_t i = 0; i < info->count; ++i)

@@ -43,17 +43,40 @@ include the pinned GCC torture corpus, use `cargo xtask test --profile ci --tort
 time and requires `VK_KHR_pipeline_binary` and
 `VK_KHR_device_address_commands`. Pipeline packages are created offline;
 runtime loading does not accept SPIR-V as a fallback.
+Use `NISYROS_DESC_INIT(type)` for versioned C descriptors; the heap and barrier
+helpers set their required sentinel defaults.
 `nisyros_allocation_query` reports the realized memory type, heap, and
 properties of a live base address after allocation.
 `nisyros_cluster_memory_heaps` enumerates heaps for local and remote devices.
 `nisyros_alloc_heap_extension` can require or prefer one heap; `UINT32_MAX`
 means no selection for either field.
+`nisyros_alloc_sharing_extension` requests exclusive queue-family sharing.
+The default allocation uses concurrent sharing across provisioned families.
 `nisyros_backend_get_api` negotiates a sized extension table. Its
 `nisyros.vulkan` table returns borrowed Vulkan instance, physical-device,
 device, and queue handles. Finish relevant Nisyros work before using those
 handles, finish external work before returning its memory to Nisyros, and do
 not submit externally to a Nisyros-owned queue concurrently. These tables do
 not load replaceable backend plugins.
+`nisyros_diagnostic_get` copies the calling thread's last recorded backend
+failure into caller storage, including the Vulkan result code when one was
+returned. Read it on the thread that received the failed status.
+`nisyros_submit_batch` accepts up to 256 sealed recordings on one queue, with
+per-recording slot bindings and shared prerequisite and completion points.
+It validates the whole batch before one Vulkan submit call. A batch boundary
+does not add a memory barrier between independent recordings. A native
+out-of-memory submit rolls back reservations and can be retried. Device loss
+retains the affected recordings and resources until `nisyros_device_abort`
+reaches quiescence; callers can then destroy the children and close the device.
+`nisyros_cmd_write_timestamp` stores a 64-bit device-domain counter at a
+device address. Queue-family discovery reports its valid bits and nanoseconds
+per tick. A later device read of that address still needs an explicit memory
+dependency.
+`nisyros_cmd_barrier_scoped` limits a dependency to an address range, named
+transfer or compute stages, and read or write accesses. Its source and
+destination family fields define release and acquire barriers for an exclusive
+allocation; matching family fields mean no transfer. The hardware test moves
+one allocation between two RADV queue families under an event dependency.
 
 Run the package parser and Vulkan FFI layout checks with `cargo test -p nisyros`.
 The physical GPU check compiles its shader, captures a native
@@ -94,8 +117,10 @@ Pass `simulator` in place of the ICD path to run the same communication cases
 against `nisyros/tests/vulkan_simulator.c`. CI also packages the checked-in
 `add_one.spv` fixture and runs the C kernel test through strict binary loading.
 The simulator recognizes only that fixture and models its result on coherent
-host storage. It does not test driver conformance, GPU cache visibility, or
-actual shader execution.
+host storage for ordinary allocations. It also has a noncoherent memory type
+with separate host and device backing, used to check that flush and invalidate
+change visibility at the right time. It does not test driver conformance, GPU
+cache behavior, or actual shader execution.
 `local_communication.c` runs a two-rank group in one process with no network
 worker. It checks an in-place reduction. The same local matching path also
 runs inside the two-node test.

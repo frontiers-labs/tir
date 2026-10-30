@@ -46,9 +46,21 @@ class BackendApi(c.Structure):
     ]
 
 
+class DiagnosticInfo(c.Structure):
+    _fields_ = [
+        ("header", Header),
+        ("status", c.c_int32),
+        ("backend_code", c.c_int32),
+    ]
+
+
 library = c.CDLL(sys.argv[1])
 library.nisyros_backend_get_api.argtypes = [c.c_uint32, c.c_uint32, c.c_uint32, c.c_void_p]
 library.nisyros_backend_get_api.restype = c.c_int32
+library.nisyros_diagnostic_get.argtypes = [
+    c.POINTER(DiagnosticInfo), c.POINTER(c.c_uint32), c.c_void_p,
+]
+library.nisyros_diagnostic_get.restype = c.c_int32
 library.nisyros_cluster_open_local.argtypes = [c.POINTER(c.c_void_p)]
 library.nisyros_cluster_open_local.restype = c.c_int32
 library.nisyros_cluster_devices.argtypes = [
@@ -73,6 +85,11 @@ assert library.nisyros_backend_get_api(1, 1, c.sizeof(backend), c.byref(backend)
 assert backend.abi_version == 1 and backend.get_extension
 assert library.nisyros_backend_get_api(1, 999, c.sizeof(backend), c.byref(backend)) == -2
 assert not backend.get_extension
+
+diagnostic = DiagnosticInfo(Header(c.sizeof(DiagnosticInfo), 1, None), 0, 0)
+required = c.c_uint32()
+assert library.nisyros_diagnostic_get(c.byref(diagnostic), c.byref(required), None) == 0
+assert diagnostic.status == 0 and diagnostic.backend_code == 0 and required.value == 1
 
 cluster = c.c_void_p()
 assert library.nisyros_cluster_open_local(c.byref(cluster)) == 0

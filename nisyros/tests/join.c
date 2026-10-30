@@ -35,6 +35,15 @@ int main(int argc, char **argv) {
         assert(nisyros_cluster_device_info(cluster, ids[index], &info) == NISYROS_SUCCESS);
         assert(info.node_index <= 1);
         assert(info.is_local == (info.node_index == local_node));
+        for (uint32_t family = 0; family < info.queue_family_count; ++family) {
+            nisyros_queue_family_info queue_info;
+            assert(nisyros_cluster_queue_family_info(cluster, ids[index], family,
+                                                     &queue_info) == NISYROS_SUCCESS);
+            if (queue_info.timestamp_valid_bits) {
+                assert(queue_info.timestamp_period_ns > 0.0f);
+                assert(queue_info.timestamp_domain == NISYROS_CLOCK_DEVICE);
+            }
+        }
         uint32_t heap_count = 0;
         assert(nisyros_cluster_memory_heaps(cluster, ids[index], &heap_count, NULL) == NISYROS_SUCCESS);
         assert(heap_count > 0 && heap_count <= 16);

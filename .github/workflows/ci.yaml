@@ -87,8 +87,23 @@ jobs:
           cc -std=c11 -Wall -Wextra -Werror -fPIC -shared \
             nisyros/tests/vulkan_simulator.c -ldl -pthread \
             -o target/debug/nisyros-vulkan-sim/libvulkan.so.1
-          LD_LIBRARY_PATH="$PWD/target/debug/nisyros-vulkan-sim:${LD_LIBRARY_PATH:-}" \
+          NISYROS_EXPECT_NONCOHERENT=1 \
+            LD_LIBRARY_PATH="$PWD/target/debug/nisyros-vulkan-sim:${LD_LIBRARY_PATH:-}" \
             target/debug/nisyros-open strict
+          cc -std=c11 -Wall -Wextra -Werror -I nisyros/include \
+            nisyros/tests/batch.c -L target/debug -lnisyros \
+            -Wl,-rpath,"$PWD/target/debug" -o target/debug/nisyros-batch
+          LD_LIBRARY_PATH="$PWD/target/debug/nisyros-vulkan-sim:${LD_LIBRARY_PATH:-}" \
+            target/debug/nisyros-batch
+          cc -std=c11 -Wall -Wextra -Werror -I nisyros/include \
+            nisyros/tests/ownership.c -L target/debug -lnisyros \
+            -Wl,-rpath,"$PWD/target/debug" -o target/debug/nisyros-ownership
+          if LD_LIBRARY_PATH="$PWD/target/debug/nisyros-vulkan-sim:${LD_LIBRARY_PATH:-}" \
+              target/debug/nisyros-ownership; then
+            :
+          else
+            test "$?" -eq 77
+          fi
           cc -std=c11 -Wall -Wextra -Werror -I nisyros/include \
             nisyros/tests/kernel.c -L target/debug -lnisyros \
             -Wl,-rpath,"$PWD/target/debug" -o target/debug/nisyros-kernel
@@ -98,6 +113,18 @@ jobs:
             addr:0 addr:8 value:16:4
           LD_LIBRARY_PATH="$PWD/target/debug/nisyros-vulkan-sim:${LD_LIBRARY_PATH:-}" \
             target/debug/nisyros-kernel target/debug/nisyros-sim-add-one.nsy
+          cc -std=c11 -Wall -Wextra -Werror -I nisyros/include \
+            nisyros/tests/submission_failure.c -L target/debug -lnisyros \
+            -Wl,-rpath,"$PWD/target/debug" -o target/debug/nisyros-submission-failure
+          NISYROS_SIM_FAIL_SUBMIT_AT=1 \
+            LD_LIBRARY_PATH="$PWD/target/debug/nisyros-vulkan-sim:${LD_LIBRARY_PATH:-}" \
+            target/debug/nisyros-submission-failure
+          NISYROS_SIM_FAIL_WAIT_AT=1 \
+            LD_LIBRARY_PATH="$PWD/target/debug/nisyros-vulkan-sim:${LD_LIBRARY_PATH:-}" \
+            target/debug/nisyros-submission-failure wait
+          NISYROS_SIM_FAIL_SUBMIT_OOM_AT=1 \
+            LD_LIBRARY_PATH="$PWD/target/debug/nisyros-vulkan-sim:${LD_LIBRARY_PATH:-}" \
+            target/debug/nisyros-submission-failure oom
           cc -std=c11 -Wall -Wextra -Werror -I nisyros/include \
             nisyros/tests/local_communication.c -L target/debug -lnisyros \
             -Wl,-rpath,"$PWD/target/debug" -o target/debug/nisyros-local-communication

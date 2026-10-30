@@ -281,6 +281,7 @@ pub struct AllocRequest<'a> {
     pub queue_families: &'a [u32],
     pub required_heap: Option<u32>,
     pub preferred_heap: Option<u32>,
+    pub exclusive: bool,
 }
 
 pub struct Allocation {
@@ -296,9 +297,13 @@ pub struct Allocation {
     memory_properties: u32,
     mapped: *mut c_void,
     mapped_host: *mut c_void,
+    exclusive: bool,
 }
 
 impl Allocation {
+    pub fn exclusive(&self) -> bool {
+        self.exclusive
+    }
     pub fn memory_info(&self, device: &Device) -> (u64, u64, u32, u32, u32) {
         let memory_type = self.memory_type_index;
         let heap = device.memory_properties.types[memory_type as usize].heap_index;
@@ -357,17 +362,17 @@ impl Device {
             flags: 0,
             size: padded_size,
             usage: BUFFER_USAGE,
-            sharing_mode: if families.len() > 1 {
+            sharing_mode: if families.len() > 1 && !request.exclusive {
                 VK_SHARING_MODE_CONCURRENT
             } else {
                 VK_SHARING_MODE_EXCLUSIVE
             },
-            queue_family_index_count: if families.len() > 1 {
+            queue_family_index_count: if families.len() > 1 && !request.exclusive {
                 families.len() as u32
             } else {
                 0
             },
-            queue_family_indices: if families.len() > 1 {
+            queue_family_indices: if families.len() > 1 && !request.exclusive {
                 families.as_ptr()
             } else {
                 ptr::null()
@@ -467,6 +472,7 @@ impl Device {
                 memory_properties,
                 mapped: ptr::null_mut(),
                 mapped_host: ptr::null_mut(),
+                exclusive: request.exclusive || families.len() <= 1,
             })
         }
     }
@@ -627,6 +633,7 @@ impl Device {
                 memory_properties,
                 mapped: ptr::null_mut(),
                 mapped_host: host,
+                exclusive: unique_families.len() <= 1,
             })
         }
     }
@@ -790,6 +797,7 @@ impl Device {
                 memory_properties: self.memory_properties.types[index as usize].property_flags,
                 mapped: ptr::null_mut(),
                 mapped_host: ptr::null_mut(),
+                exclusive: families.len() <= 1,
             })
         }
     }
