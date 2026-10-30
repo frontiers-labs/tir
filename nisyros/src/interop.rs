@@ -164,9 +164,18 @@ unsafe extern "C" fn nisyros_vulkan_device_query(
     else {
         return DEVICE_LOST;
     };
-    out.instance = cluster.instance.native_handle();
-    out.physical_device = cluster.devices[local_index].physical;
-    out.device = device.backend.native_handle();
+    if cluster.devices[local_index].backend != BACKEND_VULKAN {
+        return UNSUPPORTED;
+    }
+    let Some((instance, physical)) = cluster.instance.native_handles(local_index) else {
+        return DEVICE_LOST;
+    };
+    let Some((native_device, _)) = device.backend.native_handles(0) else {
+        return DEVICE_LOST;
+    };
+    out.instance = instance;
+    out.physical_device = physical;
+    out.device = native_device;
     SUCCESS
 }
 
@@ -190,10 +199,17 @@ unsafe extern "C" fn nisyros_vulkan_queue_query(
     }
     let queue = unsafe { &*queue };
     let device = unsafe { &*queue.parent };
-    let Some(native) = device.backend.queues.get(queue.backend_index) else {
+    let cluster = unsafe { &*device.cluster };
+    let Some(entry) = cluster.inventory.get(device.inventory_index as usize) else {
         return DEVICE_LOST;
     };
-    out.queue = native._handle;
+    if entry.snapshot.backend != BACKEND_VULKAN {
+        return UNSUPPORTED;
+    }
+    let Some((_, native_queue)) = device.backend.native_handles(queue.backend_index) else {
+        return DEVICE_LOST;
+    };
+    out.queue = native_queue;
     out.family = queue.family;
     out.index = queue.index;
     SUCCESS

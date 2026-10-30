@@ -433,7 +433,7 @@ fn read_announcement(
         let cooperative_matrix_stages = read_u32(reader).map_err(map_read)?;
         let tuple_count = read_u32(reader).map_err(map_read)? as usize;
         let timestamp_period_bits = read_u32(reader).map_err(map_read)?;
-        if backend != 1
+        if backend == 0
             || strict > 1
             || family_count > MAX_FAMILIES
             || heap_count > MAX_HEAPS

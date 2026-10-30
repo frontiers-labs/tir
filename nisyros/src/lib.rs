@@ -4,6 +4,7 @@ mod communication;
 mod diagnostic;
 mod interop;
 pub mod package;
+mod plugin;
 mod submission;
 mod transport;
 mod vulkan;
@@ -336,8 +337,8 @@ pub struct PeerInfo {
 }
 
 pub struct Cluster {
-    instance: vulkan::Instance,
-    devices: Vec<vulkan::DeviceRecord>,
+    instance: plugin::Instance,
+    devices: Vec<plugin::DeviceRecord>,
     inventory: Vec<InventoryEntry>,
     network: Mutex<Option<transport::Connection>>,
     distributed: bool,
@@ -377,14 +378,14 @@ pub struct Device {
     device_uuid: [u8; 16],
     driver_uuid: [u8; 16],
     inventory_index: u32,
-    backend: vulkan::Device,
+    backend: plugin::Device,
 }
 
 pub struct Executable {
     owner: *mut Device,
     package: package::Package,
     kernel: Kernel,
-    pipeline: vulkan::Pipeline,
+    pipeline: plugin::Pipeline,
     recordings: AtomicUsize,
 }
 
@@ -402,7 +403,7 @@ pub struct Queue {
 }
 
 pub struct Event {
-    timeline: vulkan::Timeline,
+    timeline: plugin::Timeline,
     owner: *mut Device,
     queue_owned: bool,
     signal_domain: u32,
@@ -429,12 +430,16 @@ fn event_failure(event: &Event) -> i32 {
     unsafe { (*event.source_event).failure.load(Ordering::Acquire) }
 }
 
-fn timeline_error(event: &Event, error: i32) -> i32 {
-    set_backend_diagnostic(DEVICE_LOST, error, "Vulkan timeline operation failed");
-    if error == -4 {
+fn timeline_error(event: &Event, error: plugin::BackendError) -> i32 {
+    set_backend_diagnostic(
+        error.status,
+        error.code,
+        "Execution provider timeline operation failed",
+    );
+    if error.status == DEVICE_LOST {
         unsafe { &*event.owner }.lost.store(true, Ordering::Release);
     }
-    DEVICE_LOST
+    error.status
 }
 
 struct SignalState {
@@ -520,7 +525,7 @@ struct QueueState {
 }
 
 struct TrackedAllocation {
-    backend: vulkan::Allocation,
+    backend: plugin::Allocation,
     recordings: usize,
     peer_mappings: usize,
     peer_source: Option<PeerSource>,
@@ -552,7 +557,7 @@ struct PeerSource {
 }
 
 struct TrackedHostAllocation {
-    backend: vulkan::Allocation,
+    backend: plugin::Allocation,
     bytes: u64,
     recordings: usize,
     registered: bool,
@@ -576,16 +581,16 @@ struct CommandState {
     event_references: BTreeSet<usize>,
     executable_references: BTreeSet<usize>,
     signal_slots: BTreeSet<u32>,
-    inline_arguments: Vec<vulkan::Allocation>,
-    query_pools: Vec<vulkan::QueryPool>,
-    native: Vec<vulkan::Command>,
+    inline_arguments: Vec<plugin::Allocation>,
+    query_pools: Vec<plugin::QueryPool>,
+    native: Vec<plugin::Command>,
     native_record_count: u64,
     pending: Option<Point>,
 }
 
 #[derive(Clone, Copy)]
 enum RecordedAction {
-    Operation(vulkan::CommandOp),
+    Operation(plugin::CommandOp),
     Wait(EventRef),
     Signal(EventRef),
 }
@@ -597,7 +602,7 @@ enum EventRef {
 }
 
 struct SegmentPlan {
-    operations: Vec<vulkan::CommandOp>,
+    operations: Vec<plugin::CommandOp>,
     waits: Vec<EventRef>,
     signals: Vec<EventRef>,
 }
@@ -624,9 +629,9 @@ pub struct Command {
     inner: Mutex<CommandState>,
 }
 
-fn announce_device(record: &vulkan::DeviceRecord) -> transport::DeviceAnnouncement {
+fn announce_device(record: &plugin::DeviceRecord) -> transport::DeviceAnnouncement {
     transport::DeviceAnnouncement {
-        backend: BACKEND_VULKAN,
+        backend: record.backend,
         api_version: record.api_version,
         vendor_id: record.vendor_id,
         device_id: record.device_id,
@@ -672,7 +677,7 @@ pub unsafe extern "C" fn nisyros_cluster_open_local(out: *mut *mut Cluster) -> i
     }
     // SAFETY: The caller supplied writable output storage.
     unsafe { *out = ptr::null_mut() };
-    let Ok(instance) = vulkan::Instance::open() else {
+    let Ok(instance) = plugin::Instance::open() else {
         return NO_DEVICE;
     };
     let Ok(devices) = instance.devices() else {
@@ -745,7 +750,7 @@ pub unsafe extern "C" fn nisyros_cluster_join(
     let Ok(address) = address.parse::<SocketAddr>() else {
         return INVALID_ARGUMENT;
     };
-    let Ok(instance) = vulkan::Instance::open() else {
+    let Ok(instance) = plugin::Instance::open() else {
         return NO_DEVICE;
     };
     let Ok(devices) = instance.devices() else {
@@ -864,12 +869,15 @@ pub unsafe extern "C" fn nisyros_cluster_device_info(
     if status != SUCCESS {
         return status;
     }
-    if id.epoch != cluster.epoch || id.backend != BACKEND_VULKAN {
+    if id.epoch != cluster.epoch {
         return INVALID_ARGUMENT;
     }
     let Some(device) = cluster.inventory.get(id.index as usize) else {
         return INVALID_ARGUMENT;
     };
+    if id.backend != device.snapshot.backend {
+        return INVALID_ARGUMENT;
+    }
     let snapshot = &device.snapshot;
     info.backend = snapshot.backend;
     info.api_version = snapshot.api_version;
@@ -907,12 +915,15 @@ pub unsafe extern "C" fn nisyros_cluster_device_capabilities(
         return status;
     }
     let cluster = unsafe { &*cluster };
-    if id.epoch != cluster.epoch || id.backend != BACKEND_VULKAN {
+    if id.epoch != cluster.epoch {
         return INVALID_ARGUMENT;
     }
     let Some(entry) = cluster.inventory.get(id.index as usize) else {
         return INVALID_ARGUMENT;
     };
+    if id.backend != entry.snapshot.backend {
+        return INVALID_ARGUMENT;
+    }
     let snapshot = &entry.snapshot;
     out.features = snapshot.features;
     out.cooperative_matrix_revision = snapshot.cooperative_matrix_revision;
@@ -938,12 +949,15 @@ pub unsafe extern "C" fn nisyros_cluster_cooperative_matrices(
         return INVALID_ARGUMENT;
     }
     let cluster = unsafe { &*cluster };
-    if id.epoch != cluster.epoch || id.backend != BACKEND_VULKAN {
+    if id.epoch != cluster.epoch {
         return INVALID_ARGUMENT;
     }
     let Some(entry) = cluster.inventory.get(id.index as usize) else {
         return INVALID_ARGUMENT;
     };
+    if id.backend != entry.snapshot.backend {
+        return INVALID_ARGUMENT;
+    }
     let capacity = unsafe { *count };
     let total = entry.snapshot.cooperative_matrices.len() as u32;
     unsafe { *count = total };
@@ -983,12 +997,15 @@ pub unsafe extern "C" fn nisyros_cluster_queue_family_info(
     }
     // SAFETY: The caller owns the live handle and output storage.
     let cluster = unsafe { &*cluster };
-    if id.epoch != cluster.epoch || id.backend != BACKEND_VULKAN {
+    if id.epoch != cluster.epoch {
         return INVALID_ARGUMENT;
     }
     let Some(device) = cluster.inventory.get(id.index as usize) else {
         return INVALID_ARGUMENT;
     };
+    if id.backend != device.snapshot.backend {
+        return INVALID_ARGUMENT;
+    }
     let Some(info) = device.snapshot.queue_families.get(family as usize) else {
         return INVALID_ARGUMENT;
     };
@@ -1023,12 +1040,15 @@ pub unsafe extern "C" fn nisyros_cluster_memory_heaps(
         return INVALID_ARGUMENT;
     }
     let cluster = unsafe { &*cluster };
-    if id.epoch != cluster.epoch || id.backend != BACKEND_VULKAN {
+    if id.epoch != cluster.epoch {
         return INVALID_ARGUMENT;
     }
     let Some(device) = cluster.inventory.get(id.index as usize) else {
         return INVALID_ARGUMENT;
     };
+    if id.backend != device.snapshot.backend {
+        return INVALID_ARGUMENT;
+    }
     let capacity = unsafe { *count };
     let total = device.snapshot.memory_heaps.len() as u32;
     unsafe { *count = total };
@@ -1253,7 +1273,6 @@ pub unsafe extern "C" fn nisyros_device_open(
         return status;
     }
     if id.epoch != cluster_ref.epoch
-        || id.backend != BACKEND_VULKAN
         || desc.queue_request_count == 0
         || desc.queue_requests.is_null()
     {
@@ -1262,6 +1281,9 @@ pub unsafe extern "C" fn nisyros_device_open(
     let Some(entry) = cluster_ref.inventory.get(id.index as usize) else {
         return INVALID_ARGUMENT;
     };
+    if id.backend != entry.snapshot.backend {
+        return INVALID_ARGUMENT;
+    }
     let Some(local_index) = entry.local_index else {
         return UNSUPPORTED;
     };
@@ -1288,7 +1310,7 @@ pub unsafe extern "C" fn nisyros_device_open(
             return INVALID_ARGUMENT;
         }
         seen[request.family as usize] = true;
-        backend_requests.push(vulkan::QueueRequest {
+        backend_requests.push(plugin::QueueRequest {
             family: request.family,
             count: request.count,
             priority: request.priority,
@@ -1451,7 +1473,11 @@ pub unsafe extern "C" fn nisyros_device_abort(device: *mut Device) -> i32 {
         return INVALID_ARGUMENT;
     }
     match device.backend.wait_idle() {
-        Ok(()) | Err(-4) => {
+        Ok(())
+        | Err(plugin::BackendError {
+            status: DEVICE_LOST,
+            ..
+        }) => {
             device.quiescent.store(true, Ordering::Release);
             SUCCESS
         }
@@ -1459,12 +1485,12 @@ pub unsafe extern "C" fn nisyros_device_abort(device: *mut Device) -> i32 {
     }
 }
 
-fn allocation_status(error: vulkan::AllocError) -> i32 {
+fn allocation_status(error: plugin::AllocError) -> i32 {
     match error {
-        vulkan::AllocError::Invalid => INVALID_ARGUMENT,
-        vulkan::AllocError::Unsupported => UNSUPPORTED,
-        vulkan::AllocError::OutOfMemory => OUT_OF_MEMORY,
-        vulkan::AllocError::Backend => DEVICE_LOST,
+        plugin::AllocError::Invalid => INVALID_ARGUMENT,
+        plugin::AllocError::Unsupported => UNSUPPORTED,
+        plugin::AllocError::OutOfMemory => OUT_OF_MEMORY,
+        plugin::AllocError::Backend => DEVICE_LOST,
     }
 }
 
@@ -1539,7 +1565,7 @@ pub unsafe extern "C" fn nisyros_alloc(
     let mut families: Vec<u32> = device.queues.iter().map(|queue| queue.family).collect();
     families.sort_unstable();
     families.dedup();
-    let request = vulkan::AllocRequest {
+    let request = plugin::AllocRequest {
         bytes: desc.bytes,
         alignment: desc.alignment,
         required_properties: desc.required_properties,
@@ -1774,7 +1800,7 @@ pub unsafe extern "C" fn nisyros_host_alloc(
     let mut families: Vec<u32> = device.queues.iter().map(|queue| queue.family).collect();
     families.sort_unstable();
     families.dedup();
-    let request = vulkan::AllocRequest {
+    let request = plugin::AllocRequest {
         bytes: desc.bytes,
         alignment: desc.alignment.max(4),
         required_properties: 2 | 4,
@@ -2170,16 +2196,24 @@ pub unsafe extern "C" fn nisyros_executable_load(
     {
         return INCOMPATIBLE_BINARY;
     }
-    let pipeline = match device_ref.backend.import_pipeline(&package) {
+    let pipeline = match device_ref.backend.import_pipeline(bytes) {
         Ok(pipeline) => pipeline,
-        Err(vulkan::PipelineError::Backend(-4)) => {
+        Err(plugin::PipelineError::Backend(error)) if error.status == DEVICE_LOST => {
             device_ref.lost.store(true, Ordering::Release);
-            set_backend_diagnostic(DEVICE_LOST, -4, "Vulkan pipeline import lost the device");
+            set_backend_diagnostic(
+                DEVICE_LOST,
+                error.code,
+                "Execution provider pipeline import lost the device",
+            );
             return DEVICE_LOST;
         }
-        Err(vulkan::PipelineError::Unsupported) => return UNSUPPORTED,
-        Err(vulkan::PipelineError::Backend(code)) => {
-            set_backend_diagnostic(INCOMPATIBLE_BINARY, code, "Vulkan pipeline import failed");
+        Err(plugin::PipelineError::Unsupported) => return UNSUPPORTED,
+        Err(plugin::PipelineError::Backend(error)) => {
+            set_backend_diagnostic(
+                INCOMPATIBLE_BINARY,
+                error.code,
+                "Execution provider pipeline import failed",
+            );
             return INCOMPATIBLE_BINARY;
         }
         Err(_) => return INCOMPATIBLE_BINARY,
@@ -2332,7 +2366,7 @@ pub unsafe extern "C" fn nisyros_cmd_begin(cmd: *mut Command) -> i32 {
     SUCCESS
 }
 
-fn record_addresses(cmd: &Command, operation: vulkan::CommandOp, ranges: &[(u64, u64)]) -> i32 {
+fn record_addresses(cmd: &Command, operation: plugin::CommandOp, ranges: &[(u64, u64)]) -> i32 {
     let Ok(mut inner) = cmd.inner.lock() else {
         return DEVICE_LOST;
     };
@@ -2352,10 +2386,10 @@ fn record_addresses(cmd: &Command, operation: vulkan::CommandOp, ranges: &[(u64,
             return INVALID_ARGUMENT;
         };
         let required_access = match operation {
-            vulkan::CommandOp::Copy { dst, .. } if address == dst => 2,
-            vulkan::CommandOp::Copy { src, .. } if address == src => 1,
-            vulkan::CommandOp::Fill { dst, .. } if address == dst => 2,
-            vulkan::CommandOp::Dispatch { .. } | vulkan::CommandOp::DispatchIndirect { .. } => 1,
+            plugin::CommandOp::Copy { dst, .. } if address == dst => 2,
+            plugin::CommandOp::Copy { src, .. } if address == src => 1,
+            plugin::CommandOp::Fill { dst, .. } if address == dst => 2,
+            plugin::CommandOp::Dispatch { .. } | plugin::CommandOp::DispatchIndirect { .. } => 1,
             _ => 0,
         };
         if !allocation.backend.contains(address, bytes)
@@ -2364,7 +2398,7 @@ fn record_addresses(cmd: &Command, operation: vulkan::CommandOp, ranges: &[(u64,
             inner.state = RecordingState::Invalid;
             return INVALID_ARGUMENT;
         }
-        if let vulkan::CommandOp::BarrierRangeScoped {
+        if let plugin::CommandOp::BarrierRangeScoped {
             src_family,
             dst_family,
             ..
@@ -2441,7 +2475,7 @@ pub unsafe extern "C" fn nisyros_cmd_copy(
     let cmd = unsafe { &*cmd };
     record_addresses(
         cmd,
-        vulkan::CommandOp::Copy { dst, src, bytes },
+        plugin::CommandOp::Copy { dst, src, bytes },
         &[(src, bytes), (dst, bytes)],
     )
 }
@@ -2529,7 +2563,7 @@ fn record_host_transfer(
     };
     inner
         .actions
-        .push(RecordedAction::Operation(vulkan::CommandOp::Copy {
+        .push(RecordedAction::Operation(plugin::CommandOp::Copy {
             dst,
             src,
             bytes,
@@ -2585,7 +2619,7 @@ pub unsafe extern "C" fn nisyros_cmd_fill(
     let cmd = unsafe { &*cmd };
     record_addresses(
         cmd,
-        vulkan::CommandOp::Fill {
+        plugin::CommandOp::Fill {
             dst,
             bytes,
             pattern,
@@ -2625,9 +2659,8 @@ pub unsafe extern "C" fn nisyros_cmd_dispatch_args(
     {
         return invalid_recording_argument(cmd);
     }
-    let operation = vulkan::CommandOp::Dispatch {
-        pipeline: executable.pipeline.handle,
-        layout: executable.pipeline.layout,
+    let operation = plugin::CommandOp::Dispatch {
+        pipeline: executable.pipeline.opaque_handle(),
         grid: dimensions,
         arguments,
     };
@@ -2672,9 +2705,8 @@ pub unsafe extern "C" fn nisyros_cmd_dispatch_indirect_args(
     if executable.owner != cmd_ref.device {
         return invalid_recording_argument(cmd);
     }
-    let operation = vulkan::CommandOp::DispatchIndirect {
-        pipeline: executable.pipeline.handle,
-        layout: executable.pipeline.layout,
+    let operation = plugin::CommandOp::DispatchIndirect {
+        pipeline: executable.pipeline.opaque_handle(),
         grid_address,
         arguments,
     };
@@ -2774,7 +2806,7 @@ pub unsafe extern "C" fn nisyros_cmd_dispatch(
     let mut families: Vec<u32> = device.queues.iter().map(|queue| queue.family).collect();
     families.sort_unstable();
     families.dedup();
-    let request = vulkan::AllocRequest {
+    let request = plugin::AllocRequest {
         bytes: argument_bytes,
         alignment: u64::from(executable.package.argument_alignment),
         required_properties: 2,
@@ -2824,9 +2856,8 @@ pub unsafe extern "C" fn nisyros_cmd_dispatch(
     }
     inner
         .actions
-        .push(RecordedAction::Operation(vulkan::CommandOp::Dispatch {
-            pipeline: executable.pipeline.handle,
-            layout: executable.pipeline.layout,
+        .push(RecordedAction::Operation(plugin::CommandOp::Dispatch {
+            pipeline: executable.pipeline.opaque_handle(),
             grid: dimensions,
             arguments: storage.base,
         }));
@@ -2844,7 +2875,7 @@ pub unsafe extern "C" fn nisyros_cmd_barrier_all(cmd: *mut Command) -> i32 {
         return INVALID_ARGUMENT;
     }
     let cmd = unsafe { &*cmd };
-    record_addresses(cmd, vulkan::CommandOp::BarrierAll, &[])
+    record_addresses(cmd, plugin::CommandOp::BarrierAll, &[])
 }
 
 /// Records an all-stage dependency restricted to one device-address range.
@@ -2863,7 +2894,7 @@ pub unsafe extern "C" fn nisyros_cmd_barrier_range(
     let cmd = unsafe { &*cmd };
     record_addresses(
         cmd,
-        vulkan::CommandOp::BarrierRange { address, bytes },
+        plugin::CommandOp::BarrierRange { address, bytes },
         &[(address, bytes)],
     )
 }
@@ -2886,14 +2917,20 @@ pub unsafe extern "C" fn nisyros_cmd_barrier_scoped(
         invalid_recording_argument(cmd);
         return status;
     }
-    let (Some(src_stage), Some(src_access), Some(dst_stage), Some(dst_access)) = (
-        vulkan::scoped_stage(desc.src_stages),
-        vulkan::scoped_access(desc.src_access),
-        vulkan::scoped_stage(desc.dst_stages),
-        vulkan::scoped_access(desc.dst_access),
-    ) else {
+    let valid_stage = |mask: u32| mask & !7 == 0 && (mask & 4 == 0 || mask == 4);
+    if !valid_stage(desc.src_stages)
+        || !valid_stage(desc.dst_stages)
+        || desc.src_access & !3 != 0
+        || desc.dst_access & !3 != 0
+    {
         return invalid_recording_argument(cmd);
-    };
+    }
+    let (src_stage, src_access, dst_stage, dst_access) = (
+        desc.src_stages,
+        desc.src_access,
+        desc.dst_stages,
+        desc.dst_access,
+    );
     if desc.bytes == 0 || desc.address.checked_add(desc.bytes).is_none() {
         return invalid_recording_argument(cmd);
     }
@@ -2928,7 +2965,7 @@ pub unsafe extern "C" fn nisyros_cmd_barrier_scoped(
     };
     record_addresses(
         command,
-        vulkan::CommandOp::BarrierRangeScoped {
+        plugin::CommandOp::BarrierRangeScoped {
             address: desc.address,
             bytes: desc.bytes,
             src_stage,
@@ -2984,7 +3021,10 @@ pub unsafe extern "C" fn nisyros_cmd_write_timestamp(cmd: *mut Command, destinat
     }
     let pool = match device.backend.create_timestamp_query() {
         Ok(pool) => pool,
-        Err(-1 | -2) => {
+        Err(plugin::BackendError {
+            status: OUT_OF_MEMORY,
+            ..
+        }) => {
             inner.state = RecordingState::Invalid;
             return OUT_OF_MEMORY;
         }
@@ -3001,8 +3041,8 @@ pub unsafe extern "C" fn nisyros_cmd_write_timestamp(cmd: *mut Command, destinat
     }
     inner
         .actions
-        .push(RecordedAction::Operation(vulkan::CommandOp::Timestamp {
-            pool: pool.handle(),
+        .push(RecordedAction::Operation(plugin::CommandOp::Timestamp {
+            pool: pool.opaque_handle(),
             destination,
         }));
     inner.query_pools.push(pool);
@@ -3147,8 +3187,7 @@ pub unsafe extern "C" fn nisyros_event_export(event: *mut Event, out: *mut *mut 
     }
     let fd = match event_ref.timeline.export_fd() {
         Ok(fd) => fd,
-        Err(-8) => return UNSUPPORTED,
-        Err(_) => return DEVICE_LOST,
+        Err(error) => return error.status,
     };
     let token = Box::new(EventToken { source: event, fd });
     event_ref.exports.fetch_add(1, Ordering::Release);
@@ -3183,8 +3222,7 @@ pub unsafe extern "C" fn nisyros_event_import(
     };
     let timeline = match target.backend.import_timeline_fd(fd) {
         Ok(timeline) => timeline,
-        Err(-8) => return UNSUPPORTED,
-        Err(_) => return DEVICE_LOST,
+        Err(error) => return error.status,
     };
     let imported = Box::new(Event {
         timeline,

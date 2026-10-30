@@ -14,6 +14,9 @@ cc -std=c11 -Wall -Wextra -Werror -I nisyros/include \
   nisyros/tests/open.c -L target/debug -lnisyros -ldl \
   -Wl,-rpath,"$repo/target/debug" -o "$temp/open"
 cc -std=c11 -Wall -Wextra -Werror -I nisyros/include \
+  nisyros/tests/plugin.c -L target/debug -lnisyros \
+  -Wl,-rpath,"$repo/target/debug" -o "$temp/plugin"
+cc -std=c11 -Wall -Wextra -Werror -I nisyros/include \
   nisyros/tests/kernel.c -L target/debug -lnisyros \
   -Wl,-rpath,"$repo/target/debug" -o "$temp/kernel"
 cc -std=c11 -Wall -Wextra -Werror -I nisyros/include \
@@ -28,6 +31,7 @@ cc -std=c11 -Wall -Wextra -Werror -I nisyros/include \
 
 export VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation
 "$temp/open" strict
+"$temp/plugin" strict
 "$temp/batch"
 if "$temp/ownership"; then
   :

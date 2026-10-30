@@ -316,20 +316,8 @@ impl Allocation {
         )
     }
 
-    pub fn contains(&self, address: u64, bytes: u64) -> bool {
-        address >= self.base
-            && address
-                .checked_sub(self.base)
-                .and_then(|offset| offset.checked_add(bytes))
-                .is_some_and(|end| end <= self.bytes)
-    }
-
     pub fn is_mapped(&self) -> bool {
         !self.mapped.is_null()
-    }
-
-    pub fn mapped_host(&self) -> *mut c_void {
-        self.mapped_host
     }
 }
 

@@ -403,6 +403,7 @@ impl VulkanCooperativeMatrixTuple {
     }
 }
 
+#[derive(Clone)]
 pub struct DeviceRecord {
     pub physical: VkPhysicalDevice,
     pub api_version: u32,
@@ -447,7 +448,6 @@ pub struct QueueRequest {
 
 pub struct Queue {
     pub family: u32,
-    pub index: u32,
     pub _handle: VkQueue,
 }
 
@@ -460,13 +460,11 @@ pub struct Device {
     memory_properties: memory::MemoryProperties,
     command: command::CommandFns,
     pipeline: pipeline::PipelineFns,
-    pub max_grid: [u32; 3],
     pub external_host_alignment: Option<u64>,
     pub peer_memory_fd: bool,
     pub peer_timeline_fd: bool,
     pub enabled_features: u64,
     pub enabled_matrices: Vec<CooperativeMatrixTuple>,
-    pub timestamp_valid_bits: Vec<u32>,
 }
 
 impl Device {
@@ -851,7 +849,6 @@ impl Instance {
                     }
                     queues.push(Queue {
                         family: request.family,
-                        index,
                         _handle: queue,
                     });
                 }
@@ -865,17 +862,11 @@ impl Instance {
                 memory_properties: record.memory_properties,
                 command,
                 pipeline,
-                max_grid: record.max_grid,
                 external_host_alignment: record.external_host_alignment,
                 peer_memory_fd: record.peer_memory_fd,
                 peer_timeline_fd: record.peer_timeline_fd,
                 enabled_features: record.features,
                 enabled_matrices: record.cooperative_matrices.clone(),
-                timestamp_valid_bits: record
-                    .queue_families
-                    .iter()
-                    .map(|family| family.timestamp_valid_bits)
-                    .collect(),
             })
         }
     }

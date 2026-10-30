@@ -58,6 +58,15 @@ device, and queue handles. Finish relevant Nisyros work before using those
 handles, finish external work before returning its memory to Nisyros, and do
 not submit externally to a Nisyros-owned queue concurrently. These tables do
 not load replaceable backend plugins.
+`nisyros_plugin.h` defines a separate provider ABI. The linked Vulkan provider
+currently implements sized negotiation, device inventory, device opening, and
+allocation lifecycle through opaque handles. Core discovery, device opening,
+allocations, timeline events, idle waits, and native pipeline import use that
+table. Command encoding, timestamp queries, and submission also use provider
+callbacks. Set `NISYROS_PLUGIN_LIBRARY` to a shared library exporting
+`nisyros_plugin_get_api` to select an external provider. Run
+`bash nisyros/tests/run-external-provider.sh` to exercise an independent C
+provider without Vulkan device discovery.
 `nisyros_diagnostic_get` copies the calling thread's last recorded backend
 failure into caller storage, including the Vulkan result code when one was
 returned. Read it on the thread that received the failed status.

@@ -259,7 +259,7 @@ fn submit_recordings(
             .into_iter()
             .map(|(address, value)| (unsafe { &(*(address as *const Event)).timeline }, value))
             .collect();
-        let mut segment = vulkan::SubmitSegment {
+        let mut segment = plugin::SubmitSegment {
             command: spec
                 .command
                 .map(|(command, native)| &guards[command].native[native]),
@@ -270,7 +270,7 @@ fn submit_recordings(
         for point in &spec.signals {
             if !signaled.insert(point.event as usize) {
                 segments.push(segment);
-                segment = vulkan::SubmitSegment {
+                segment = plugin::SubmitSegment {
                     command: None,
                     waits: Vec::new(),
                     signals: Vec::new(),
@@ -326,11 +326,11 @@ fn submit_recordings(
         .backend
         .submit_segments(queue_ref.backend_index, &segments)
     {
-        if error == -1 || error == -2 {
+        if error.status == OUT_OF_MEMORY {
             set_backend_diagnostic(
                 OUT_OF_MEMORY,
-                error,
-                "Vulkan queue submission ran out of memory",
+                error.code,
+                "Execution provider submission ran out of memory",
             );
             for (&event_address, &(reserved, last_queue)) in &original_signals {
                 let event = unsafe { &*(event_address as *const Event) };
@@ -355,10 +355,14 @@ fn submit_recordings(
             }
             return OUT_OF_MEMORY;
         }
-        if error == -4 {
+        if error.status == DEVICE_LOST {
             device.lost.store(true, Ordering::Release);
         }
-        set_backend_diagnostic(SUBMISSION_FAILED, error, "Vulkan queue submission failed");
+        set_backend_diagnostic(
+            SUBMISSION_FAILED,
+            error.code,
+            "Execution provider submission failed",
+        );
         queue_state.poisoned = true;
         queue_ref
             .completion
