@@ -371,6 +371,16 @@ int vkQueueSubmit2(void *raw_queue, uint32_t count, const submit_info *submits, 
     pthread_mutex_unlock(&lock);
     return 0;
 }
+int vkQueueWaitIdle(void *raw_queue) {
+    queue *endpoint = raw_queue;
+    pthread_mutex_lock(&lock);
+    while (endpoint->head) {
+        drain();
+        if (endpoint->head) pthread_cond_wait(&changed, &lock);
+    }
+    pthread_mutex_unlock(&lock);
+    return 0;
+}
 int vkGetSemaphoreCounterValue(void *handle, uint64_t raw, uint64_t *out) {
     (void)handle;
     pthread_mutex_lock(&lock);

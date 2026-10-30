@@ -1,6 +1,10 @@
 //! Private Vulkan declarations used by the first backend. No Vulkan loader or
 //! SDK is needed at link time; every entry point comes from libvulkan.so.1.
 
+use crate::{
+    CooperativeMatrixTuple, FEATURE_BFLOAT16_DOT, FEATURE_BFLOAT16_MATRIX, FEATURE_BFLOAT16_TYPE,
+    FEATURE_COOPERATIVE_MATRIX, FEATURE_SHADER_FLOAT16, FEATURE_VULKAN_MEMORY_MODEL,
+};
 use std::ffi::{CStr, c_char, c_int, c_void};
 use std::mem::transmute_copy;
 use std::ptr::{self, NonNull};
@@ -47,6 +51,13 @@ const VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DEVICE_ADDRESS_COMMANDS_FEATURES_KHR: i3
 const VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_5_FEATURES: i32 = 1_000_470_000;
 const VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTENDED_FLAGS_FEATURES_KHR: i32 = 1_000_668_004;
 const VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PIPELINE_BINARY_FEATURES_KHR: i32 = 1_000_483_000;
+const VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_FEATURES_KHR: i32 = 1_000_506_000;
+const VK_STRUCTURE_TYPE_COOPERATIVE_MATRIX_PROPERTIES_KHR: i32 = 1_000_506_001;
+const VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_PROPERTIES_KHR: i32 = 1_000_506_002;
+const VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_BFLOAT16_FEATURES_KHR: i32 = 1_000_141_000;
+const VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_FLOAT16_INT8_FEATURES: i32 = 1_000_082_000;
+const VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_MEMORY_MODEL_FEATURES: i32 = 1_000_211_000;
+const VK_SHADER_STAGE_COMPUTE_BIT: u32 = 0x20;
 const VULKAN_1_3: u32 = (1 << 22) | (3 << 12);
 const VULKAN_1_4: u32 = (1 << 22) | (4 << 12);
 
@@ -92,6 +103,11 @@ type GetPhysicalDeviceExternalSemaphoreProperties = unsafe extern "system" fn(
 );
 type GetPhysicalDeviceMemoryProperties =
     unsafe extern "system" fn(VkPhysicalDevice, *mut memory::MemoryProperties);
+type GetCooperativeMatrixProperties = unsafe extern "system" fn(
+    VkPhysicalDevice,
+    *mut u32,
+    *mut VulkanCooperativeMatrixTuple,
+) -> VkResult;
 type CreateDevice = unsafe extern "system" fn(
     VkPhysicalDevice,
     *const DeviceCreateInfo,
@@ -292,6 +308,95 @@ struct BufferAddressFeatures {
     multi_device: u32,
 }
 
+#[repr(C)]
+struct CooperativeMatrixFeatures {
+    s_type: i32,
+    p_next: *mut c_void,
+    enabled: u32,
+    robust_buffer_access: u32,
+}
+
+#[repr(C)]
+struct CooperativeMatrixProperties {
+    s_type: i32,
+    p_next: *mut c_void,
+    supported_stages: u32,
+}
+
+#[repr(C)]
+struct ShaderBfloat16Features {
+    s_type: i32,
+    p_next: *mut c_void,
+    shader_type: u32,
+    dot_product: u32,
+    cooperative_matrix: u32,
+}
+
+#[repr(C)]
+struct ShaderFloat16Int8Features {
+    s_type: i32,
+    p_next: *mut c_void,
+    shader_float16: u32,
+    shader_int8: u32,
+}
+
+#[repr(C)]
+struct VulkanMemoryModelFeatures {
+    s_type: i32,
+    p_next: *mut c_void,
+    enabled: u32,
+    device_scope: u32,
+    availability_visibility_chains: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct VulkanCooperativeMatrixTuple {
+    s_type: i32,
+    p_next: *mut c_void,
+    m: u32,
+    n: u32,
+    k: u32,
+    a_type: i32,
+    b_type: i32,
+    c_type: i32,
+    result_type: i32,
+    saturating_accumulation: u32,
+    scope: i32,
+}
+
+impl VulkanCooperativeMatrixTuple {
+    fn empty() -> Self {
+        Self {
+            s_type: VK_STRUCTURE_TYPE_COOPERATIVE_MATRIX_PROPERTIES_KHR,
+            p_next: ptr::null_mut(),
+            m: 0,
+            n: 0,
+            k: 0,
+            a_type: 0,
+            b_type: 0,
+            c_type: 0,
+            result_type: 0,
+            saturating_accumulation: 0,
+            scope: 0,
+        }
+    }
+
+    fn public(self) -> CooperativeMatrixTuple {
+        CooperativeMatrixTuple {
+            m: self.m,
+            n: self.n,
+            k: self.k,
+            a_type: self.a_type as u32,
+            b_type: self.b_type as u32,
+            c_type: self.c_type as u32,
+            result_type: self.result_type as u32,
+            saturating_accumulation: self.saturating_accumulation,
+            scope: self.scope as u32,
+        }
+    }
+}
+
 pub struct DeviceRecord {
     pub physical: VkPhysicalDevice,
     pub api_version: u32,
@@ -304,6 +409,13 @@ pub struct DeviceRecord {
     pub driver_id: u32,
     pub driver_name: [c_char; 256],
     pub queue_families: Vec<QueueFamilyProperties>,
+    pub memory_heaps: Vec<(u64, u32)>,
+    pub features: u64,
+    pub cooperative_matrix_revision: u32,
+    pub shader_bfloat16_revision: u32,
+    pub shader_enqueue_revision: u32,
+    pub cooperative_matrix_stages: u32,
+    pub cooperative_matrices: Vec<CooperativeMatrixTuple>,
     pub strict_profile_supported: bool,
     pub max_grid: [u32; 3],
     memory_properties: memory::MemoryProperties,
@@ -344,6 +456,14 @@ pub struct Device {
     pub external_host_alignment: Option<u64>,
     pub peer_memory_fd: bool,
     pub peer_timeline_fd: bool,
+    pub enabled_features: u64,
+    pub enabled_matrices: Vec<CooperativeMatrixTuple>,
+}
+
+impl Device {
+    pub fn native_handle(&self) -> *mut c_void {
+        self.handle
+    }
 }
 
 impl Drop for Device {
@@ -367,9 +487,14 @@ pub struct Instance {
     get_external_buffer_properties: GetPhysicalDeviceExternalBufferProperties,
     get_external_semaphore_properties: GetPhysicalDeviceExternalSemaphoreProperties,
     get_memory_properties: GetPhysicalDeviceMemoryProperties,
+    get_cooperative_matrices: Option<GetCooperativeMatrixProperties>,
 }
 
 impl Instance {
+    pub fn native_handle(&self) -> *mut c_void {
+        self.handle
+    }
+
     pub fn open() -> Result<Self, ()> {
         // SAFETY: The library handle remains owned by Instance until after
         // vkDestroyInstance. Function signatures match vulkan_core.h.
@@ -452,6 +577,11 @@ impl Instance {
                         handle,
                         c"vkGetPhysicalDeviceMemoryProperties",
                     )?,
+                    get_cooperative_matrices: load(
+                        get_proc,
+                        handle,
+                        c"vkGetPhysicalDeviceCooperativeMatrixPropertiesKHR",
+                    ),
                 })
             })();
             if functions.is_none() {
@@ -532,9 +662,54 @@ impl Instance {
         if record.peer_timeline_fd {
             names.push(c"VK_KHR_external_semaphore_fd".as_ptr());
         }
+        let matrix_enabled = record.features & FEATURE_COOPERATIVE_MATRIX != 0;
+        let bfloat_enabled = record.features & FEATURE_BFLOAT16_TYPE != 0;
+        if matrix_enabled {
+            names.push(c"VK_KHR_cooperative_matrix".as_ptr());
+        }
+        if bfloat_enabled {
+            names.push(c"VK_KHR_shader_bfloat16".as_ptr());
+        }
+        let mut memory_model = VulkanMemoryModelFeatures {
+            s_type: VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_MEMORY_MODEL_FEATURES,
+            p_next: ptr::null_mut(),
+            enabled: u32::from(record.features & FEATURE_VULKAN_MEMORY_MODEL != 0),
+            device_scope: 0,
+            availability_visibility_chains: 0,
+        };
+        let mut float16 = ShaderFloat16Int8Features {
+            s_type: VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_FLOAT16_INT8_FEATURES,
+            p_next: (&mut memory_model as *mut VulkanMemoryModelFeatures).cast(),
+            shader_float16: u32::from(record.features & FEATURE_SHADER_FLOAT16 != 0),
+            shader_int8: 0,
+        };
+        let mut bfloat = ShaderBfloat16Features {
+            s_type: VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_BFLOAT16_FEATURES_KHR,
+            p_next: (&mut float16 as *mut ShaderFloat16Int8Features).cast(),
+            shader_type: u32::from(bfloat_enabled),
+            dot_product: u32::from(record.features & FEATURE_BFLOAT16_DOT != 0),
+            cooperative_matrix: u32::from(record.features & FEATURE_BFLOAT16_MATRIX != 0),
+        };
+        let mut matrix = CooperativeMatrixFeatures {
+            s_type: VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_FEATURES_KHR,
+            p_next: if bfloat_enabled {
+                (&mut bfloat as *mut ShaderBfloat16Features).cast()
+            } else {
+                (&mut float16 as *mut ShaderFloat16Int8Features).cast()
+            },
+            enabled: u32::from(matrix_enabled),
+            robust_buffer_access: 0,
+        };
+        let optional_head: *mut c_void = if matrix_enabled {
+            (&mut matrix as *mut CooperativeMatrixFeatures).cast()
+        } else if bfloat_enabled {
+            (&mut bfloat as *mut ShaderBfloat16Features).cast()
+        } else {
+            (&mut float16 as *mut ShaderFloat16Int8Features).cast()
+        };
         let mut binary = BoolFeature {
             s_type: VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PIPELINE_BINARY_FEATURES_KHR,
-            p_next: ptr::null_mut(),
+            p_next: optional_head,
             enabled: 1,
         };
         let mut address_commands = BoolFeature {
@@ -671,6 +846,8 @@ impl Instance {
                 external_host_alignment: record.external_host_alignment,
                 peer_memory_fd: record.peer_memory_fd,
                 peer_timeline_fd: record.peer_timeline_fd,
+                enabled_features: record.features,
+                enabled_matrices: record.cooperative_matrices.clone(),
             })
         }
     }
@@ -709,6 +886,12 @@ impl Instance {
                 // Vulkan requires a terminated extension name.
                 unsafe { CStr::from_ptr(ext.name.as_ptr()) == name }
             })
+        };
+        let revision = |name: &CStr| {
+            extensions
+                .iter()
+                .find(|ext| unsafe { CStr::from_ptr(ext.name.as_ptr()) == name })
+                .map_or(0, |ext| ext.spec_version)
         };
         let peer_memory_fd = if has(c"VK_KHR_external_memory_fd") {
             let info = PhysicalDeviceExternalBufferInfo {
@@ -775,9 +958,49 @@ impl Instance {
         };
         queue_families.truncate(family_count as usize);
 
+        let matrix_available =
+            has(c"VK_KHR_cooperative_matrix") && self.get_cooperative_matrices.is_some();
+        let bfloat_available = has(c"VK_KHR_shader_bfloat16");
+        let mut memory_model = VulkanMemoryModelFeatures {
+            s_type: VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_MEMORY_MODEL_FEATURES,
+            p_next: ptr::null_mut(),
+            enabled: 0,
+            device_scope: 0,
+            availability_visibility_chains: 0,
+        };
+        let mut float16 = ShaderFloat16Int8Features {
+            s_type: VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_FLOAT16_INT8_FEATURES,
+            p_next: (&mut memory_model as *mut VulkanMemoryModelFeatures).cast(),
+            shader_float16: 0,
+            shader_int8: 0,
+        };
+        let mut bfloat = ShaderBfloat16Features {
+            s_type: VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_BFLOAT16_FEATURES_KHR,
+            p_next: (&mut float16 as *mut ShaderFloat16Int8Features).cast(),
+            shader_type: 0,
+            dot_product: 0,
+            cooperative_matrix: 0,
+        };
+        let mut matrix = CooperativeMatrixFeatures {
+            s_type: VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_FEATURES_KHR,
+            p_next: if bfloat_available {
+                (&mut bfloat as *mut ShaderBfloat16Features).cast()
+            } else {
+                (&mut float16 as *mut ShaderFloat16Int8Features).cast()
+            },
+            enabled: 0,
+            robust_buffer_access: 0,
+        };
+        let optional_head: *mut c_void = if matrix_available {
+            (&mut matrix as *mut CooperativeMatrixFeatures).cast()
+        } else if bfloat_available {
+            (&mut bfloat as *mut ShaderBfloat16Features).cast()
+        } else {
+            (&mut float16 as *mut ShaderFloat16Int8Features).cast()
+        };
         let mut binary = BoolFeature {
             s_type: VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PIPELINE_BINARY_FEATURES_KHR,
-            p_next: ptr::null_mut(),
+            p_next: optional_head,
             enabled: 0,
         };
         let mut address_commands = BoolFeature {
@@ -833,9 +1056,20 @@ impl Instance {
 
         let mut memory_properties = memory::MemoryProperties::default();
         unsafe { (self.get_memory_properties)(physical, &mut memory_properties) };
+        let memory_heaps = memory_properties.heaps();
+        let mut matrix_properties = CooperativeMatrixProperties {
+            s_type: VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_PROPERTIES_KHR,
+            p_next: ptr::null_mut(),
+            supported_stages: 0,
+        };
+        let matrix_properties_ptr: *mut c_void = if matrix_available {
+            (&mut matrix_properties as *mut CooperativeMatrixProperties).cast()
+        } else {
+            ptr::null_mut()
+        };
         let mut host = ExternalMemoryHostProperties {
             s_type: VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_MEMORY_HOST_PROPERTIES_EXT,
-            p_next: ptr::null_mut(),
+            p_next: matrix_properties_ptr,
             min_alignment: 0,
         };
         let mut driver = PhysicalDeviceDriverProperties {
@@ -843,7 +1077,7 @@ impl Instance {
             p_next: if has(c"VK_EXT_external_memory_host") {
                 (&mut host as *mut ExternalMemoryHostProperties).cast()
             } else {
-                ptr::null_mut()
+                matrix_properties_ptr
             },
             driver_id: 0,
             driver_name: [0; 256],
@@ -866,6 +1100,66 @@ impl Instance {
         };
         unsafe { (self.get_properties2)(physical, &mut properties) };
         let external_host_alignment = (host.min_alignment != 0).then_some(host.min_alignment);
+
+        let mut cooperative_matrices = Vec::new();
+        if matrix_available
+            && matrix.enabled != 0
+            && matrix_properties.supported_stages & VK_SHADER_STAGE_COMPUTE_BIT != 0
+        {
+            let get = self
+                .get_cooperative_matrices
+                .expect("available matrix query");
+            let mut count = 0;
+            if unsafe { get(physical, &mut count, ptr::null_mut()) } == VK_SUCCESS
+                && (1..=256).contains(&count)
+            {
+                let mut tuples = vec![VulkanCooperativeMatrixTuple::empty(); count as usize];
+                let result = unsafe { get(physical, &mut count, tuples.as_mut_ptr()) };
+                if result == VK_SUCCESS && count as usize <= tuples.len() {
+                    tuples.truncate(count as usize);
+                    cooperative_matrices = tuples
+                        .into_iter()
+                        .filter(|tuple| {
+                            tuple.m != 0
+                                && tuple.n != 0
+                                && tuple.k != 0
+                                && tuple.saturating_accumulation <= 1
+                        })
+                        .map(VulkanCooperativeMatrixTuple::public)
+                        .collect();
+                }
+            }
+        }
+        let mut optional_features = 0;
+        if !cooperative_matrices.is_empty() {
+            optional_features |= FEATURE_COOPERATIVE_MATRIX;
+        }
+        if bfloat_available && bfloat.shader_type != 0 {
+            optional_features |= FEATURE_BFLOAT16_TYPE;
+            if bfloat.dot_product != 0 {
+                optional_features |= FEATURE_BFLOAT16_DOT;
+            }
+            if bfloat.cooperative_matrix != 0 && optional_features & FEATURE_COOPERATIVE_MATRIX != 0
+            {
+                optional_features |= FEATURE_BFLOAT16_MATRIX;
+            }
+        }
+        if float16.shader_float16 != 0 {
+            optional_features |= FEATURE_SHADER_FLOAT16;
+        }
+        if memory_model.enabled != 0 {
+            optional_features |= FEATURE_VULKAN_MEMORY_MODEL;
+        }
+        let cooperative_matrix_revision = if optional_features & FEATURE_COOPERATIVE_MATRIX != 0 {
+            revision(c"VK_KHR_cooperative_matrix")
+        } else {
+            0
+        };
+        let shader_bfloat16_revision = if optional_features & FEATURE_BFLOAT16_TYPE != 0 {
+            revision(c"VK_KHR_shader_bfloat16")
+        } else {
+            0
+        };
 
         let flags_extension = if maintenance_available && maintenance5.enabled != 0 {
             if has(c"VK_KHR_maintenance5") {
@@ -899,6 +1193,35 @@ impl Instance {
             driver_id: driver.driver_id as u32,
             driver_name: driver.driver_name,
             queue_families,
+            memory_heaps,
+            features: if strict_profile_supported {
+                optional_features
+            } else {
+                0
+            },
+            cooperative_matrix_revision: if strict_profile_supported {
+                cooperative_matrix_revision
+            } else {
+                0
+            },
+            shader_bfloat16_revision: if strict_profile_supported {
+                shader_bfloat16_revision
+            } else {
+                0
+            },
+            shader_enqueue_revision: 0,
+            cooperative_matrix_stages: if strict_profile_supported
+                && cooperative_matrix_revision != 0
+            {
+                matrix_properties.supported_stages
+            } else {
+                0
+            },
+            cooperative_matrices: if strict_profile_supported {
+                cooperative_matrices
+            } else {
+                Vec::new()
+            },
             strict_profile_supported,
             max_grid: props.max_compute_work_group_count,
             memory_properties,
@@ -993,5 +1316,17 @@ mod layout_tests {
             516
         );
         assert!(size_of::<PhysicalDeviceProperties>() >= 824);
+    }
+
+    #[test]
+    fn optional_feature_layout_matches_c_header() {
+        assert_eq!(size_of::<CooperativeMatrixFeatures>(), 24);
+        assert_eq!(size_of::<CooperativeMatrixProperties>(), 24);
+        assert_eq!(size_of::<VulkanCooperativeMatrixTuple>(), 56);
+        assert_eq!(size_of::<ShaderBfloat16Features>(), 32);
+        assert_eq!(size_of::<ShaderFloat16Int8Features>(), 24);
+        assert_eq!(size_of::<VulkanMemoryModelFeatures>(), 32);
+        assert_eq!(size_of::<crate::CooperativeMatrixTuple>(), 36);
+        assert_eq!(size_of::<crate::DeviceCapabilities>(), 40);
     }
 }

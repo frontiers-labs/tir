@@ -43,6 +43,17 @@ include the pinned GCC torture corpus, use `cargo xtask test --profile ci --tort
 time and requires `VK_KHR_pipeline_binary` and
 `VK_KHR_device_address_commands`. Pipeline packages are created offline;
 runtime loading does not accept SPIR-V as a fallback.
+`nisyros_allocation_query` reports the realized memory type, heap, and
+properties of a live base address after allocation.
+`nisyros_cluster_memory_heaps` enumerates heaps for local and remote devices.
+`nisyros_alloc_heap_extension` can require or prefer one heap; `UINT32_MAX`
+means no selection for either field.
+`nisyros_backend_get_api` negotiates a sized extension table. Its
+`nisyros.vulkan` table returns borrowed Vulkan instance, physical-device,
+device, and queue handles. Finish relevant Nisyros work before using those
+handles, finish external work before returning its memory to Nisyros, and do
+not submit externally to a Nisyros-owned queue concurrently. These tables do
+not load replaceable backend plugins.
 
 Run the package parser and Vulkan FFI layout checks with `cargo test -p nisyros`.
 The physical GPU check compiles its shader, captures a native
@@ -64,6 +75,11 @@ layer, and a device with the strict Vulkan profile. CI runs C and Python ABI
 checks against a software Vulkan ICD. A software device lacking the mandatory
 extensions must be reported as unsupported. CI also starts two processes to
 check fixed-membership discovery, stable cluster IDs, and ordered group ranks.
+The hardware script probes cooperative-matrix tuples and, where the FP16 input
+and FP32 accumulation tuple is available, captures and executes a separate
+version-two package. Package loading checks exact tuple membership and enabled
+feature bits before importing the binary. Bfloat16 and shader enqueue remain
+unavailable when their device capabilities are absent.
 
 The peer script duplicates one ICD manifest and verifies FD-backed memory and
 timeline sharing between two logical views of the same GPU. It does not test
@@ -83,6 +99,15 @@ actual shader execution.
 `local_communication.c` runs a two-rank group in one process with no network
 worker. It checks an in-place reduction. The same local matching path also
 runs inside the two-node test.
+
+For local performance data, run `nisyros/tests/run-performance.sh <output.csv>`
+with the intended Vulkan ICD selected. It records individual empty and
+two-segment submit latencies, submit-thread CPU time, and validated 64 MiB
+transfer times. For host-staged TCP progress, run
+`python3 nisyros/tests/run-communication.py <icd.json> --performance <output-dir>`.
+That run records per-message wall and process CPU time from both processes.
+Use `python3 nisyros/tests/summarize-performance.py <output.csv> <output-dir>`
+to print medians and 95th percentiles from the retained raw samples.
 
 ### Working on the C frontend
 

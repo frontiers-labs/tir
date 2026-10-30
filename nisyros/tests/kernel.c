@@ -83,6 +83,14 @@ int main(int argc, char **argv) {
     assert(executable == NULL);
     package[44] ^= 1;
     memcpy(package + 32, saved_checksum, sizeof(saved_checksum));
+    assert(size > 164);
+    package[156] = 1;
+    changed_checksum = checksum64(package + 40, (size_t)size - 40);
+    for (int i = 0; i < 8; ++i) package[32 + i] = (uint8_t)(changed_checksum >> (8 * i));
+    assert(nisyros_executable_load(device, &image, &executable) == NISYROS_UNSUPPORTED);
+    assert(executable == NULL);
+    package[156] = 0;
+    memcpy(package + 32, saved_checksum, sizeof(saved_checksum));
     assert(nisyros_executable_load(device, &image, &executable) == NISYROS_SUCCESS);
     free(package);
     nisyros_kernel kernel = NULL;

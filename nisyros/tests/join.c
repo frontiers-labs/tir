@@ -35,6 +35,16 @@ int main(int argc, char **argv) {
         assert(nisyros_cluster_device_info(cluster, ids[index], &info) == NISYROS_SUCCESS);
         assert(info.node_index <= 1);
         assert(info.is_local == (info.node_index == local_node));
+        uint32_t heap_count = 0;
+        assert(nisyros_cluster_memory_heaps(cluster, ids[index], &heap_count, NULL) == NISYROS_SUCCESS);
+        assert(heap_count > 0 && heap_count <= 16);
+        nisyros_device_capabilities caps = {
+            .header = {sizeof(caps), NISYROS_ABI_VERSION, NULL},
+        };
+        assert(nisyros_cluster_device_capabilities(cluster, ids[index], &caps) == NISYROS_SUCCESS);
+        uint32_t tuple_count = 0;
+        assert(nisyros_cluster_cooperative_matrices(cluster, ids[index], &tuple_count, NULL) == NISYROS_SUCCESS);
+        assert((caps.features & NISYROS_FEATURE_COOPERATIVE_MATRIX) != 0 ? tuple_count > 0 : tuple_count == 0);
         if (info.is_local) local_seen++;
         else {
             nisyros_queue_request request = {0, 1, 1.0f, 0};

@@ -1,0 +1,33 @@
+#version 460
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_scalar_block_layout : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_KHR_cooperative_matrix : require
+#extension GL_KHR_shader_subgroup_basic : require
+
+layout(buffer_reference, scalar) buffer FloatArray {
+    float values[];
+};
+
+layout(buffer_reference, scalar) buffer Args {
+    FloatArray destination;
+};
+
+layout(push_constant) uniform Root {
+    Args args;
+} root;
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+void main() {
+    coopmat<float16_t, 3, 16, 16, gl_MatrixUseA> a =
+        coopmat<float16_t, 3, 16, 16, gl_MatrixUseA>(float16_t(2.0));
+    coopmat<float16_t, 3, 16, 16, gl_MatrixUseB> b =
+        coopmat<float16_t, 3, 16, 16, gl_MatrixUseB>(float16_t(3.0));
+    coopmat<float, 3, 16, 16, gl_MatrixUseAccumulator> c =
+        coopmat<float, 3, 16, 16, gl_MatrixUseAccumulator>(1.0);
+    coopmat<float, 3, 16, 16, gl_MatrixUseAccumulator> result =
+        coopMatMulAdd(a, b, c);
+    coopMatStore(result, root.args.destination.values, gl_SubgroupID * 256, 16,
+                 gl_CooperativeMatrixLayoutRowMajor);
+}

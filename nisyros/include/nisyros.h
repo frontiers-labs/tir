@@ -60,6 +60,7 @@ typedef struct nisyros_extension {
 } nisyros_extension;
 
 #define NISYROS_EXTENSION_OPTIONAL 1u
+#define NISYROS_EXTENSION_ALLOC_HEAP 1u
 
 typedef struct {
     uint32_t struct_size;
@@ -75,6 +76,25 @@ typedef struct {
 
 #define NISYROS_BACKEND_VULKAN 1u
 #define NISYROS_DEVICE_TYPE_CPU 4u
+#define NISYROS_BACKEND_ABI_VERSION 1u
+#define NISYROS_VULKAN_INTEROP_ABI_VERSION 1u
+
+#define NISYROS_FEATURE_COOPERATIVE_MATRIX UINT64_C(0x1)
+#define NISYROS_FEATURE_BFLOAT16_TYPE UINT64_C(0x2)
+#define NISYROS_FEATURE_BFLOAT16_DOT UINT64_C(0x4)
+#define NISYROS_FEATURE_BFLOAT16_MATRIX UINT64_C(0x8)
+#define NISYROS_FEATURE_SHADER_FLOAT16 UINT64_C(0x10)
+#define NISYROS_FEATURE_VULKAN_MEMORY_MODEL UINT64_C(0x20)
+
+#define NISYROS_COMPONENT_FLOAT16 0u
+#define NISYROS_COMPONENT_FLOAT32 1u
+#define NISYROS_COMPONENT_SINT8 3u
+#define NISYROS_COMPONENT_SINT32 5u
+#define NISYROS_COMPONENT_UINT8 7u
+#define NISYROS_COMPONENT_UINT32 9u
+#define NISYROS_COMPONENT_BFLOAT16 1000141000u
+#define NISYROS_SCOPE_SUBGROUP 3u
+#define NISYROS_STAGE_COMPUTE 0x20u
 
 typedef struct {
     nisyros_descriptor_header header;
@@ -93,6 +113,27 @@ typedef struct {
     uint32_t node_index;
     uint32_t is_local;
 } nisyros_device_info;
+
+typedef struct {
+    nisyros_descriptor_header header;
+    uint64_t features;
+    uint32_t cooperative_matrix_revision;
+    uint32_t shader_bfloat16_revision;
+    uint32_t shader_enqueue_revision;
+    uint32_t cooperative_matrix_stages;
+} nisyros_device_capabilities;
+
+typedef struct {
+    uint32_t m;
+    uint32_t n;
+    uint32_t k;
+    uint32_t a_type;
+    uint32_t b_type;
+    uint32_t c_type;
+    uint32_t result_type;
+    uint32_t saturating_accumulation;
+    uint32_t scope;
+} nisyros_cooperative_matrix_tuple;
 
 typedef struct {
     uint32_t node_index;
@@ -170,6 +211,14 @@ typedef struct {
 } nisyros_queue_family_info;
 
 typedef struct {
+    uint64_t bytes;
+    uint32_t flags;
+    uint32_t index;
+} nisyros_memory_heap_info;
+
+#define NISYROS_HEAP_DEVICE_LOCAL 0x00000001u
+
+typedef struct {
     uint32_t family;
     uint32_t count;
     float priority;
@@ -196,6 +245,27 @@ typedef struct {
     uint32_t preferred_properties;
     uint32_t reserved[2];
 } nisyros_alloc_desc;
+
+typedef struct {
+    nisyros_extension base;
+    uint32_t required_heap;
+    uint32_t preferred_heap;
+    uint32_t reserved[2];
+} nisyros_alloc_heap_extension;
+
+typedef struct {
+    nisyros_descriptor_header header;
+    nisyros_addr base;
+    uint64_t bytes;
+    uint64_t backing_bytes;
+    uint64_t heap_bytes;
+    uint32_t memory_type_index;
+    uint32_t heap_index;
+    uint32_t properties;
+    uint32_t mapped;
+    uint32_t peer_imported;
+    uint32_t access;
+} nisyros_allocation_info;
 
 typedef struct {
     nisyros_descriptor_header header;
@@ -263,6 +333,41 @@ typedef struct {
     uint32_t z;
 } nisyros_grid;
 
+typedef struct {
+    nisyros_descriptor_header header;
+    void *instance;
+    void *physical_device;
+    void *device;
+} nisyros_vulkan_device_info;
+
+typedef struct {
+    nisyros_descriptor_header header;
+    void *queue;
+    uint32_t family;
+    uint32_t index;
+} nisyros_vulkan_queue_info;
+
+typedef struct {
+    uint32_t struct_size;
+    uint32_t abi_version;
+    nisyros_status (NISYROS_CALL *device_query)(nisyros_device,
+                                                nisyros_vulkan_device_info *);
+    nisyros_status (NISYROS_CALL *queue_query)(nisyros_queue,
+                                               nisyros_vulkan_queue_info *);
+} nisyros_vulkan_interop_api;
+
+typedef struct {
+    uint32_t struct_size;
+    uint32_t abi_version;
+    nisyros_status (NISYROS_CALL *get_extension)(
+        nisyros_device, const char *, uint32_t, uint32_t, void *);
+} nisyros_backend_api;
+
+/* Tables are caller-owned. `struct_size` reports the provider's full size. */
+NISYROS_API nisyros_status NISYROS_CALL
+nisyros_backend_get_api(uint32_t backend, uint32_t abi_version,
+                        uint32_t table_size, void *table);
+
 /* Count is input capacity and output total. IDs remain valid for this cluster epoch. */
 NISYROS_API nisyros_status NISYROS_CALL
 nisyros_cluster_open_local(nisyros_cluster *out);
@@ -276,9 +381,19 @@ NISYROS_API nisyros_status NISYROS_CALL
 nisyros_cluster_device_info(nisyros_cluster cluster, nisyros_device_id id,
                             nisyros_device_info *out);
 NISYROS_API nisyros_status NISYROS_CALL
+nisyros_cluster_device_capabilities(nisyros_cluster cluster, nisyros_device_id id,
+                                    nisyros_device_capabilities *out);
+NISYROS_API nisyros_status NISYROS_CALL
+nisyros_cluster_cooperative_matrices(nisyros_cluster cluster, nisyros_device_id id,
+                                     uint32_t *count,
+                                     nisyros_cooperative_matrix_tuple *out);
+NISYROS_API nisyros_status NISYROS_CALL
 nisyros_cluster_queue_family_info(nisyros_cluster cluster, nisyros_device_id id,
                                   uint32_t family,
                                   nisyros_queue_family_info *out);
+NISYROS_API nisyros_status NISYROS_CALL
+nisyros_cluster_memory_heaps(nisyros_cluster cluster, nisyros_device_id id,
+                             uint32_t *count, nisyros_memory_heap_info *out);
 NISYROS_API nisyros_status NISYROS_CALL
 nisyros_cluster_close(nisyros_cluster cluster);
 NISYROS_API nisyros_status NISYROS_CALL
@@ -347,6 +462,9 @@ nisyros_device_close(nisyros_device device);
 NISYROS_API nisyros_status NISYROS_CALL
 nisyros_alloc(nisyros_device device, const nisyros_alloc_desc *desc,
               nisyros_addr *out);
+NISYROS_API nisyros_status NISYROS_CALL
+nisyros_allocation_query(nisyros_device device, nisyros_addr base,
+                         nisyros_allocation_info *out);
 NISYROS_API nisyros_status NISYROS_CALL
 nisyros_free(nisyros_device device, nisyros_addr base);
 NISYROS_API nisyros_status NISYROS_CALL

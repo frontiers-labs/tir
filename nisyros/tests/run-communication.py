@@ -17,6 +17,10 @@ mismatch = len(sys.argv) > 2 and sys.argv[2] == "--mismatch"
 replay = len(sys.argv) > 2 and sys.argv[2] == "--replay"
 collective_mismatch = len(sys.argv) > 2 and sys.argv[2] == "--collective-mismatch"
 collective_timeout = len(sys.argv) > 2 and sys.argv[2] == "--collective-timeout"
+performance = len(sys.argv) > 2 and sys.argv[2] == "--performance"
+performance_dir = Path(sys.argv[3]).resolve() if performance and len(sys.argv) > 3 else None
+if performance and performance_dir is None:
+    raise SystemExit("--performance requires an output directory")
 subprocess.run(["cargo", "build", "--locked", "-p", "nisyros"], cwd=repo, check=True)
 
 with tempfile.TemporaryDirectory() as directory:
@@ -61,11 +65,12 @@ with tempfile.TemporaryDirectory() as directory:
     else:
         env0["VK_DRIVER_FILES"] = f"{icd}:{duplicate}"
         env1["VK_DRIVER_FILES"] = str(icd)
-        env0["VK_INSTANCE_LAYERS"] = "VK_LAYER_KHRONOS_validation"
-        env1["VK_INSTANCE_LAYERS"] = "VK_LAYER_KHRONOS_validation"
+        if not performance:
+            env0["VK_INSTANCE_LAYERS"] = "VK_LAYER_KHRONOS_validation"
+            env1["VK_INSTANCE_LAYERS"] = "VK_LAYER_KHRONOS_validation"
     extra = (["peer-loss"] if peer_loss else ["mismatch"] if mismatch else
              ["replay"] if replay else ["collective-mismatch"] if collective_mismatch else
-             ["collective-timeout"] if collective_timeout else [])
+             ["collective-timeout"] if collective_timeout else ["performance"] if performance else [])
     node0 = subprocess.Popen(
         [str(binary), "0", session_id, address, *extra],
         cwd=repo, env=env0, text=True,
@@ -94,7 +99,15 @@ with tempfile.TemporaryDirectory() as directory:
             f"node 0: {node0.returncode}\n{errors0}\n"
             f"node 1: {node1.returncode}\n{errors1}"
         )
-    if replay:
+    if performance:
+        performance_dir.mkdir(parents=True, exist_ok=True)
+        for node, output in ((0, output0), (1, output1)):
+            lines = output.splitlines()
+            assert len(lines) == 1001 and lines[0] == "metric,iteration,wall_ns,cpu_ns,bytes,worker_threads"
+            path = performance_dir / f"node{node}.csv"
+            path.write_text(output)
+            print(path)
+    elif replay:
         assert "node 1 replayed five bound communication and reduction sequences" in output1
         print(output1.strip())
     elif collective_mismatch or collective_timeout:

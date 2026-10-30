@@ -1,6 +1,7 @@
 //! Nisyros C ABI. The only backend implemented by this crate is Vulkan.
 
 mod communication;
+mod interop;
 pub mod package;
 mod transport;
 mod vulkan;
@@ -68,6 +69,13 @@ const INCOMPATIBLE_BINARY: i32 = -9;
 const PEER_LOST: i32 = -10;
 const ABI_VERSION: u32 = 1;
 const BACKEND_VULKAN: u32 = 1;
+const EXT_ALLOC_HEAP: u32 = 1;
+pub const FEATURE_COOPERATIVE_MATRIX: u64 = 1;
+pub const FEATURE_BFLOAT16_TYPE: u64 = 2;
+pub const FEATURE_BFLOAT16_DOT: u64 = 4;
+pub const FEATURE_BFLOAT16_MATRIX: u64 = 8;
+pub const FEATURE_SHADER_FLOAT16: u64 = 16;
+pub const FEATURE_VULKAN_MEMORY_MODEL: u64 = 32;
 
 static NEXT_EPOCH: AtomicU64 = AtomicU64::new(1);
 
@@ -88,10 +96,19 @@ pub struct Extension {
 }
 
 fn validate_header(header: &DescriptorHeader, expected_size: usize) -> i32 {
+    validate_header_with(header, expected_size, None)
+}
+
+fn validate_header_with(
+    header: &DescriptorHeader,
+    expected_size: usize,
+    recognized: Option<(u32, usize)>,
+) -> i32 {
     if (header.struct_size as usize) < expected_size || header.abi_version != ABI_VERSION {
         return INVALID_ARGUMENT;
     }
     let mut seen = BTreeSet::new();
+    let mut recognized_seen = false;
     let mut extension = header.extensions;
     while !extension.is_null() {
         if seen.len() >= 32 || !seen.insert(extension as usize) {
@@ -106,7 +123,15 @@ fn validate_header(header: &DescriptorHeader, expected_size: usize) -> i32 {
         {
             return INVALID_ARGUMENT;
         }
-        if current.flags & 1 == 0 {
+        if recognized.is_some_and(|(type_id, _)| type_id == current.type_id) {
+            if recognized_seen
+                || current.flags != 0
+                || (current.struct_size as usize) < recognized.expect("matched type").1
+            {
+                return INVALID_ARGUMENT;
+            }
+            recognized_seen = true;
+        } else if current.flags & 1 == 0 {
             return UNSUPPORTED;
         }
         extension = current.next;
@@ -139,6 +164,30 @@ pub struct DeviceInfo {
     driver_name: [c_char; 256],
     node_index: u32,
     is_local: u32,
+}
+
+#[repr(C)]
+pub struct DeviceCapabilities {
+    header: DescriptorHeader,
+    features: u64,
+    cooperative_matrix_revision: u32,
+    shader_bfloat16_revision: u32,
+    shader_enqueue_revision: u32,
+    cooperative_matrix_stages: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CooperativeMatrixTuple {
+    pub m: u32,
+    pub n: u32,
+    pub k: u32,
+    pub a_type: u32,
+    pub b_type: u32,
+    pub c_type: u32,
+    pub result_type: u32,
+    pub saturating_accumulation: u32,
+    pub scope: u32,
 }
 
 #[repr(C)]
@@ -176,6 +225,13 @@ pub struct QueueFamilyInfo {
 }
 
 #[repr(C)]
+pub struct MemoryHeapInfo {
+    bytes: u64,
+    flags: u32,
+    index: u32,
+}
+
+#[repr(C)]
 #[derive(Clone, Copy)]
 pub struct QueueRequest {
     family: u32,
@@ -199,6 +255,29 @@ pub struct AllocDesc {
     required_properties: u32,
     preferred_properties: u32,
     reserved: [u32; 2],
+}
+
+#[repr(C)]
+pub struct AllocHeapExtension {
+    base: Extension,
+    required_heap: u32,
+    preferred_heap: u32,
+    reserved: [u32; 2],
+}
+
+#[repr(C)]
+pub struct AllocationInfo {
+    header: DescriptorHeader,
+    base: u64,
+    bytes: u64,
+    backing_bytes: u64,
+    heap_bytes: u64,
+    memory_type_index: u32,
+    heap_index: u32,
+    properties: u32,
+    mapped: u32,
+    peer_imported: u32,
+    access: u32,
 }
 
 #[repr(C)]
@@ -500,6 +579,17 @@ fn announce_device(record: &vulkan::DeviceRecord) -> transport::DeviceAnnounceme
                 count: family.count,
             })
             .collect(),
+        memory_heaps: record
+            .memory_heaps
+            .iter()
+            .map(|&(bytes, flags)| transport::MemoryHeapAnnouncement { bytes, flags })
+            .collect(),
+        features: record.features,
+        cooperative_matrix_revision: record.cooperative_matrix_revision,
+        shader_bfloat16_revision: record.shader_bfloat16_revision,
+        shader_enqueue_revision: record.shader_enqueue_revision,
+        cooperative_matrix_stages: record.cooperative_matrix_stages,
+        cooperative_matrices: record.cooperative_matrices.clone(),
     }
 }
 
@@ -730,6 +820,84 @@ pub unsafe extern "C" fn nisyros_cluster_device_info(
     SUCCESS
 }
 
+/// Reports optional features usable by Nisyros on this device.
+///
+/// # Safety
+/// `cluster` must be live and `out` a complete initialized output struct.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nisyros_cluster_device_capabilities(
+    cluster: *mut Cluster,
+    id: DeviceId,
+    out: *mut DeviceCapabilities,
+) -> i32 {
+    if cluster.is_null() || out.is_null() {
+        return INVALID_ARGUMENT;
+    }
+    let out = unsafe { &mut *out };
+    let status = validate_header(&out.header, std::mem::size_of::<DeviceCapabilities>());
+    if status != SUCCESS {
+        return status;
+    }
+    let cluster = unsafe { &*cluster };
+    if id.epoch != cluster.epoch || id.backend != BACKEND_VULKAN {
+        return INVALID_ARGUMENT;
+    }
+    let Some(entry) = cluster.inventory.get(id.index as usize) else {
+        return INVALID_ARGUMENT;
+    };
+    let snapshot = &entry.snapshot;
+    out.features = snapshot.features;
+    out.cooperative_matrix_revision = snapshot.cooperative_matrix_revision;
+    out.shader_bfloat16_revision = snapshot.shader_bfloat16_revision;
+    out.shader_enqueue_revision = snapshot.shader_enqueue_revision;
+    out.cooperative_matrix_stages = snapshot.cooperative_matrix_stages;
+    SUCCESS
+}
+
+/// Enumerates exact cooperative-matrix tuples, preserving driver order.
+///
+/// # Safety
+/// `cluster` must be live, `count` writable, and nonnull `out` must hold the
+/// input capacity of `CooperativeMatrixTuple` values.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nisyros_cluster_cooperative_matrices(
+    cluster: *mut Cluster,
+    id: DeviceId,
+    count: *mut u32,
+    out: *mut CooperativeMatrixTuple,
+) -> i32 {
+    if cluster.is_null() || count.is_null() {
+        return INVALID_ARGUMENT;
+    }
+    let cluster = unsafe { &*cluster };
+    if id.epoch != cluster.epoch || id.backend != BACKEND_VULKAN {
+        return INVALID_ARGUMENT;
+    }
+    let Some(entry) = cluster.inventory.get(id.index as usize) else {
+        return INVALID_ARGUMENT;
+    };
+    let capacity = unsafe { *count };
+    let total = entry.snapshot.cooperative_matrices.len() as u32;
+    unsafe { *count = total };
+    if out.is_null() {
+        return SUCCESS;
+    }
+    for (index, &tuple) in entry
+        .snapshot
+        .cooperative_matrices
+        .iter()
+        .take(capacity as usize)
+        .enumerate()
+    {
+        unsafe { *out.add(index) = tuple };
+    }
+    if capacity < total {
+        INCOMPLETE
+    } else {
+        SUCCESS
+    }
+}
+
 /// Queries a Vulkan queue family. Physical engine identity and enforceable
 /// affinity are reported as unknown because Vulkan does not expose them.
 ///
@@ -767,6 +935,56 @@ pub unsafe extern "C" fn nisyros_cluster_queue_family_info(
         };
     }
     SUCCESS
+}
+
+/// Enumerates a device's memory heaps from the cluster inventory.
+///
+/// # Safety
+/// `cluster` must be live, `count` writable, and nonnull `out` must hold the
+/// input capacity of `MemoryHeapInfo` values.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nisyros_cluster_memory_heaps(
+    cluster: *mut Cluster,
+    id: DeviceId,
+    count: *mut u32,
+    out: *mut MemoryHeapInfo,
+) -> i32 {
+    if cluster.is_null() || count.is_null() {
+        return INVALID_ARGUMENT;
+    }
+    let cluster = unsafe { &*cluster };
+    if id.epoch != cluster.epoch || id.backend != BACKEND_VULKAN {
+        return INVALID_ARGUMENT;
+    }
+    let Some(device) = cluster.inventory.get(id.index as usize) else {
+        return INVALID_ARGUMENT;
+    };
+    let capacity = unsafe { *count };
+    let total = device.snapshot.memory_heaps.len() as u32;
+    unsafe { *count = total };
+    if out.is_null() {
+        return SUCCESS;
+    }
+    for (index, heap) in device
+        .snapshot
+        .memory_heaps
+        .iter()
+        .take(capacity as usize)
+        .enumerate()
+    {
+        unsafe {
+            *out.add(index) = MemoryHeapInfo {
+                bytes: heap.bytes,
+                flags: heap.flags,
+                index: index as u32,
+            }
+        };
+    }
+    if capacity < total {
+        INCOMPLETE
+    } else {
+        SUCCESS
+    }
 }
 
 /// Closes a cluster after all of its children have been released.
@@ -1166,7 +1384,11 @@ pub unsafe extern "C" fn nisyros_alloc(
     unsafe { *out = 0 };
     let device = unsafe { &*device };
     let desc = unsafe { &*desc };
-    let status = validate_header(&desc.header, std::mem::size_of::<AllocDesc>());
+    let status = validate_header_with(
+        &desc.header,
+        std::mem::size_of::<AllocDesc>(),
+        Some((EXT_ALLOC_HEAP, std::mem::size_of::<AllocHeapExtension>())),
+    );
     if status != SUCCESS {
         return status;
     }
@@ -1177,6 +1399,29 @@ pub unsafe extern "C" fn nisyros_alloc(
     {
         return INVALID_ARGUMENT;
     }
+    let mut required_heap = None;
+    let mut preferred_heap = None;
+    let mut extension = desc.header.extensions;
+    while !extension.is_null() {
+        let current = unsafe { &*extension };
+        if current.type_id == EXT_ALLOC_HEAP {
+            let preference = unsafe { &*(extension as *const AllocHeapExtension) };
+            if preference.reserved != [0; 2] {
+                return INVALID_ARGUMENT;
+            }
+            required_heap =
+                (preference.required_heap != u32::MAX).then_some(preference.required_heap);
+            preferred_heap =
+                (preference.preferred_heap != u32::MAX).then_some(preference.preferred_heap);
+        }
+        extension = current.next;
+    }
+    let heap_count = device.backend.memory_heap_count();
+    if required_heap.is_some_and(|index| index >= heap_count)
+        || preferred_heap.is_some_and(|index| index >= heap_count)
+    {
+        return UNSUPPORTED;
+    }
     let mut families: Vec<u32> = device.queues.iter().map(|queue| queue.family).collect();
     families.sort_unstable();
     families.dedup();
@@ -1186,6 +1431,8 @@ pub unsafe extern "C" fn nisyros_alloc(
         required_properties: desc.required_properties,
         preferred_properties: desc.preferred_properties,
         queue_families: &families,
+        required_heap,
+        preferred_heap,
     };
     let allocation = match device.backend.allocate(&request) {
         Ok(allocation) => allocation,
@@ -1211,6 +1458,46 @@ pub unsafe extern "C" fn nisyros_alloc(
         },
     );
     unsafe { *out = base };
+    SUCCESS
+}
+
+/// Reports the actual memory type, heap, and properties of a live allocation.
+///
+/// # Safety
+/// `device` must be live and `out` a complete initialized output struct.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nisyros_allocation_query(
+    device: *mut Device,
+    base: u64,
+    out: *mut AllocationInfo,
+) -> i32 {
+    if device.is_null() || base == 0 || out.is_null() {
+        return INVALID_ARGUMENT;
+    }
+    let out = unsafe { &mut *out };
+    let status = validate_header(&out.header, std::mem::size_of::<AllocationInfo>());
+    if status != SUCCESS {
+        return status;
+    }
+    let device = unsafe { &*device };
+    let Ok(allocations) = device.allocations.lock() else {
+        return DEVICE_LOST;
+    };
+    let Some(allocation) = allocations.get(&base) else {
+        return INVALID_ARGUMENT;
+    };
+    let (backing_bytes, heap_bytes, memory_type_index, heap_index, properties) =
+        allocation.backend.memory_info(&device.backend);
+    out.base = base;
+    out.bytes = allocation.backend.bytes;
+    out.backing_bytes = backing_bytes;
+    out.heap_bytes = heap_bytes;
+    out.memory_type_index = memory_type_index;
+    out.heap_index = heap_index;
+    out.properties = properties;
+    out.mapped = u32::from(allocation.backend.is_mapped());
+    out.peer_imported = u32::from(allocation.peer_source.is_some());
+    out.access = allocation.access;
     SUCCESS
 }
 
@@ -1377,6 +1664,8 @@ pub unsafe extern "C" fn nisyros_host_alloc(
         required_properties: 2 | 4,
         preferred_properties: 1,
         queue_families: &families,
+        required_heap: None,
+        preferred_heap: None,
     };
     let mut allocation = match device.backend.allocate(&request) {
         Ok(allocation) => allocation,
@@ -1753,8 +2042,10 @@ pub unsafe extern "C" fn nisyros_executable_load(
         return INVALID_ARGUMENT;
     };
     let bytes = unsafe { std::slice::from_raw_parts(image.bytes.cast::<u8>(), length) };
-    let Ok(package) = package::Package::parse(bytes) else {
-        return INCOMPATIBLE_BINARY;
+    let package = match package::Package::parse(bytes) {
+        Ok(package) => package,
+        Err(package::PackageError::UnsupportedFeature) => return UNSUPPORTED,
+        Err(_) => return INCOMPATIBLE_BINARY,
     };
     if package.vendor_id != device_ref.vendor_id
         || package.device_id != device_ref.device_id
@@ -1765,6 +2056,7 @@ pub unsafe extern "C" fn nisyros_executable_load(
     let pipeline = match device_ref.backend.import_pipeline(&package) {
         Ok(pipeline) => pipeline,
         Err(vulkan::PipelineError::Backend(-4)) => return DEVICE_LOST,
+        Err(vulkan::PipelineError::Unsupported) => return UNSUPPORTED,
         Err(_) => return INCOMPATIBLE_BINARY,
     };
     let mut executable = Box::new(Executable {
@@ -2346,6 +2638,8 @@ pub unsafe extern "C" fn nisyros_cmd_dispatch(
         required_properties: 2,
         preferred_properties: 4,
         queue_families: &families,
+        required_heap: None,
+        preferred_heap: None,
     };
     let mut storage = match device.backend.allocate(&request) {
         Ok(storage) => storage,

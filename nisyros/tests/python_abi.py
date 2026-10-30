@@ -38,7 +38,17 @@ class DeviceInfo(c.Structure):
     ]
 
 
+class BackendApi(c.Structure):
+    _fields_ = [
+        ("struct_size", c.c_uint32),
+        ("abi_version", c.c_uint32),
+        ("get_extension", c.c_void_p),
+    ]
+
+
 library = c.CDLL(sys.argv[1])
+library.nisyros_backend_get_api.argtypes = [c.c_uint32, c.c_uint32, c.c_uint32, c.c_void_p]
+library.nisyros_backend_get_api.restype = c.c_int32
 library.nisyros_cluster_open_local.argtypes = [c.POINTER(c.c_void_p)]
 library.nisyros_cluster_open_local.restype = c.c_int32
 library.nisyros_cluster_devices.argtypes = [
@@ -55,6 +65,14 @@ library.nisyros_cluster_device_info.argtypes = [
 library.nisyros_cluster_device_info.restype = c.c_int32
 library.nisyros_cluster_close.argtypes = [c.c_void_p]
 library.nisyros_cluster_close.restype = c.c_int32
+
+backend = BackendApi()
+assert library.nisyros_backend_get_api(1, 1, 8, c.byref(backend)) == 1
+assert backend.struct_size == c.sizeof(BackendApi) and not backend.get_extension
+assert library.nisyros_backend_get_api(1, 1, c.sizeof(backend), c.byref(backend)) == 0
+assert backend.abi_version == 1 and backend.get_extension
+assert library.nisyros_backend_get_api(1, 999, c.sizeof(backend), c.byref(backend)) == -2
+assert not backend.get_extension
 
 cluster = c.c_void_p()
 assert library.nisyros_cluster_open_local(c.byref(cluster)) == 0

@@ -258,6 +258,7 @@ impl PipelineFns {
 pub enum PipelineError {
     Invalid,
     Incompatible,
+    Unsupported,
     Backend(VkResult),
 }
 
@@ -369,6 +370,9 @@ impl Device {
     ) -> Result<Package, PipelineError> {
         if words.len() < 5 || words[0] != 0x0723_0203 || !package.binaries.is_empty() {
             return Err(PipelineError::Invalid);
+        }
+        if !self.supports_package(&package) {
+            return Err(PipelineError::Unsupported);
         }
         let entry = CString::new(package.entry.as_str()).map_err(|_| PipelineError::Invalid)?;
         let mut temporary = Temporary {
@@ -512,6 +516,9 @@ impl Device {
     }
 
     pub fn import_pipeline(&self, package: &Package) -> Result<Pipeline, PipelineError> {
+        if !self.supports_package(package) {
+            return Err(PipelineError::Unsupported);
+        }
         if self.global_key()? != package.global_key {
             return Err(PipelineError::Incompatible);
         }
@@ -614,6 +621,14 @@ impl Device {
         temporary.pipeline = 0;
         temporary.layout = 0;
         Ok(pipeline)
+    }
+
+    fn supports_package(&self, package: &Package) -> bool {
+        package.required_features & !self.enabled_features == 0
+            && package
+                .required_matrices
+                .iter()
+                .all(|required| self.enabled_matrices.contains(required))
     }
 }
 

@@ -1,5 +1,9 @@
-use nisyros::capture_vulkan_package;
 use nisyros::package::{ARG_DEVICE_ADDRESS, ARG_VALUE, ArgumentField, BinaryKey, Package};
+use nisyros::{
+    CooperativeMatrixTuple, FEATURE_BFLOAT16_DOT, FEATURE_BFLOAT16_MATRIX, FEATURE_BFLOAT16_TYPE,
+    FEATURE_COOPERATIVE_MATRIX, FEATURE_SHADER_FLOAT16, FEATURE_VULKAN_MEMORY_MODEL,
+    capture_vulkan_package,
+};
 use std::env;
 use std::fs;
 
@@ -24,10 +28,28 @@ fn field(text: &str) -> Result<ArgumentField, String> {
     }
 }
 
+fn matrix(text: &str) -> Result<CooperativeMatrixTuple, String> {
+    let parts = text.split(':').collect::<Vec<_>>();
+    let ["matrix", m, n, k, a, b, c, result, saturating, scope] = *parts.as_slice() else {
+        return Err(format!("invalid matrix tuple: {text}"));
+    };
+    Ok(CooperativeMatrixTuple {
+        m: number(m)?,
+        n: number(n)?,
+        k: number(k)?,
+        a_type: number(a)?,
+        b_type: number(b)?,
+        c_type: number(c)?,
+        result_type: number(result)?,
+        saturating_accumulation: number(saturating)?,
+        scope: number(scope)?,
+    })
+}
+
 fn run() -> Result<(), String> {
     let args: Vec<String> = env::args().collect();
     if args.len() < 10 {
-        return Err("usage: nisyros-pack <spirv> <package> <entry> <arg-size> <arg-align> <group-x> <group-y> <group-z> <addr:offset|value:offset:width>...".into());
+        return Err("usage: nisyros-pack <spirv> <package> <entry> <arg-size> <arg-align> <group-x> <group-y> <group-z> <addr:offset|value:offset:width|matrix:m:n:k:a:b:c:result:saturation:scope|float16|memory-model|bfloat:type|bfloat:dot|bfloat:matrix>...".into());
     }
     let bytes = fs::read(&args[1]).map_err(|error| error.to_string())?;
     if !bytes.len().is_multiple_of(4) {
@@ -39,10 +61,27 @@ fn run() -> Result<(), String> {
         .iter()
         .map(|chunk| u32::from_le_bytes(*chunk))
         .collect();
-    let fields = args[9..]
-        .iter()
-        .map(|text| field(text))
-        .collect::<Result<Vec<_>, _>>()?;
+    let mut fields = Vec::new();
+    let mut required_features = 0;
+    let mut required_matrices = Vec::new();
+    for text in &args[9..] {
+        if text.starts_with("matrix:") {
+            required_matrices.push(matrix(text)?);
+            required_features |= FEATURE_COOPERATIVE_MATRIX;
+        } else if text == "bfloat:type" {
+            required_features |= FEATURE_BFLOAT16_TYPE;
+        } else if text == "float16" {
+            required_features |= FEATURE_SHADER_FLOAT16;
+        } else if text == "memory-model" {
+            required_features |= FEATURE_VULKAN_MEMORY_MODEL;
+        } else if text == "bfloat:dot" {
+            required_features |= FEATURE_BFLOAT16_TYPE | FEATURE_BFLOAT16_DOT;
+        } else if text == "bfloat:matrix" {
+            required_features |= FEATURE_BFLOAT16_TYPE | FEATURE_BFLOAT16_MATRIX;
+        } else {
+            fields.push(field(text)?);
+        }
+    }
     let template = Package {
         global_key: BinaryKey {
             size: 1,
@@ -56,7 +95,8 @@ fn run() -> Result<(), String> {
         argument_alignment: number(&args[5])?,
         argument_fields: fields,
         workgroup: [number(&args[6])?, number(&args[7])?, number(&args[8])?],
-        required_features: 0,
+        required_features,
+        required_matrices,
         scratch_bytes: 0,
         binaries: Vec::new(),
     };

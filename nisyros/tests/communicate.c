@@ -17,6 +17,12 @@ typedef struct {
     uint64_t bytes;
 } local_rank;
 
+static uint64_t now_ns(clockid_t clock) {
+    struct timespec time;
+    assert(clock_gettime(clock, &time) == 0);
+    return (uint64_t)time.tv_sec * UINT64_C(1000000000) + (uint64_t)time.tv_nsec;
+}
+
 static void open_rank(nisyros_cluster cluster, nisyros_group group, uint32_t rank,
                       local_rank *local) {
     nisyros_device_id id;
@@ -62,6 +68,7 @@ int main(int argc, char **argv) {
     int replay = argc == 5 && strcmp(argv[4], "replay") == 0;
     int collective_mismatch = argc == 5 && strcmp(argv[4], "collective-mismatch") == 0;
     int collective_timeout = argc == 5 && strcmp(argv[4], "collective-timeout") == 0;
+    int performance = argc == 5 && strcmp(argv[4], "performance") == 0;
     uint32_t node = (uint32_t)strtoul(argv[1], NULL, 10);
     uint64_t session_id = strtoull(argv[2], NULL, 10);
     nisyros_node_address nodes[2] = {{0, 0, argv[3]}, {1, 0, NULL}};
@@ -114,7 +121,7 @@ int main(int argc, char **argv) {
     if (peer_loss && node == 1) _Exit(0);
     nisyros_event input_ready = NULL;
     nisyros_cmd gpu_producer = NULL;
-    if (node == 0 && !peer_loss) {
+    if (node == 0 && !peer_loss && !performance) {
         nisyros_event_desc ready_desc = {
             .header = {sizeof(ready_desc), NISYROS_ABI_VERSION, NULL},
             .signaling_domain = NISYROS_SIGNAL_DEVICE,
@@ -126,7 +133,7 @@ int main(int argc, char **argv) {
         assert(nisyros_cmd_signal(gpu_producer, (nisyros_point){input_ready, 1}) == NISYROS_SUCCESS);
         assert(nisyros_cmd_end(gpu_producer) == NISYROS_SUCCESS);
     }
-    if (node == 0 && !peer_loss && !mismatch) {
+    if (node == 0 && !peer_loss && !mismatch && !performance) {
         nisyros_comm_cmd duplicate = NULL;
         assert(nisyros_comm_cmd_create(endpoint, &duplicate) == NISYROS_SUCCESS);
         assert(nisyros_comm_cmd_begin(duplicate) == NISYROS_SUCCESS);
@@ -141,6 +148,49 @@ int main(int argc, char **argv) {
 
     nisyros_comm_cmd cmd = NULL;
     nisyros_cmd dependent = NULL;
+    volatile uint64_t host_work = 0;
+    if (performance) {
+        assert(nisyros_comm_cmd_create(endpoint, &cmd) == NISYROS_SUCCESS);
+        assert(nisyros_comm_cmd_begin(cmd) == NISYROS_SUCCESS);
+        if (node == 0) {
+            assert(nisyros_comm_cmd_send_slot(cmd, 0, 2, 11, 0,
+                                               local[0].address, 64) == NISYROS_SUCCESS);
+        } else {
+            assert(nisyros_comm_cmd_recv_slot(cmd, 2, 0, 11, 0,
+                                               local[0].address, 64) == NISYROS_SUCCESS);
+        }
+        assert(nisyros_comm_cmd_end(cmd) == NISYROS_SUCCESS);
+        printf("metric,iteration,wall_ns,cpu_ns,bytes,worker_threads\n");
+        for (uint64_t iteration = 1; iteration <= 1010; ++iteration) {
+            nisyros_sequence_binding binding = {0, 0, iteration};
+            nisyros_comm_submit_desc submit_desc = {
+                .header = {sizeof(submit_desc), NISYROS_ABI_VERSION, NULL},
+                .binding_count = 1,
+                .bindings = &binding,
+            };
+            uint64_t wall_start = now_ns(CLOCK_MONOTONIC_RAW);
+            uint64_t cpu_start = now_ns(CLOCK_PROCESS_CPUTIME_ID);
+            nisyros_point completed = {0};
+            assert(nisyros_endpoint_submit(endpoint, cmd, &submit_desc,
+                                           &completed) == NISYROS_SUCCESS);
+            assert(nisyros_wait(completed, NISYROS_TIMEOUT_INFINITE) == NISYROS_SUCCESS);
+            uint64_t cpu_ns = now_ns(CLOCK_PROCESS_CPUTIME_ID) - cpu_start;
+            uint64_t wall_ns = now_ns(CLOCK_MONOTONIC_RAW) - wall_start;
+            if (iteration > 10) {
+                printf("transport,%llu,%llu,%llu,64,%u\n",
+                       (unsigned long long)(iteration - 10),
+                       (unsigned long long)wall_ns,
+                       (unsigned long long)cpu_ns, endpoint_info.worker_threads);
+            }
+        }
+        if (node == 1) {
+            assert(nisyros_invalidate(local[0].device, local[0].address, 64) == NISYROS_SUCCESS);
+            for (int byte = 0; byte < 64; ++byte) {
+                assert(((unsigned char *)local[0].host)[byte] == 0x31);
+            }
+        }
+        goto cleanup;
+    }
     assert(nisyros_comm_cmd_create(endpoint, &cmd) == NISYROS_SUCCESS);
     assert(nisyros_comm_cmd_begin(cmd) == NISYROS_SUCCESS);
     if (input_ready != NULL) {
@@ -171,7 +221,6 @@ int main(int argc, char **argv) {
         }
     }
     assert(nisyros_comm_cmd_end(cmd) == NISYROS_SUCCESS);
-    volatile uint64_t host_work = 0;
     if (replay) {
         nisyros_point rejected = {0};
         assert(nisyros_endpoint_submit(endpoint, cmd, NULL, &rejected) == NISYROS_INVALID_ARGUMENT);
@@ -371,7 +420,7 @@ int main(int argc, char **argv) {
     if (node == 1) printf("three ranks completed integer reductions\n");
 cleanup:
     if (dependent != NULL) assert(nisyros_cmd_destroy(dependent) == NISYROS_SUCCESS);
-    assert(nisyros_comm_cmd_destroy(cmd) == NISYROS_SUCCESS);
+    if (cmd != NULL) assert(nisyros_comm_cmd_destroy(cmd) == NISYROS_SUCCESS);
     if (gpu_producer != NULL) {
         assert(nisyros_cmd_destroy(gpu_producer) == NISYROS_SUCCESS);
         assert(nisyros_event_destroy(input_ready) == NISYROS_SUCCESS);

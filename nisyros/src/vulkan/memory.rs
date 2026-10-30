@@ -102,6 +102,15 @@ pub(super) struct MemoryProperties {
     heaps: [MemoryHeap; 16],
 }
 
+impl MemoryProperties {
+    pub(super) fn heaps(&self) -> Vec<(u64, u32)> {
+        self.heaps[..self.heap_count.min(16) as usize]
+            .iter()
+            .map(|heap| (heap.size, heap.flags))
+            .collect()
+    }
+}
+
 #[repr(C)]
 struct BufferCreateInfo {
     s_type: i32,
@@ -270,6 +279,8 @@ pub struct AllocRequest<'a> {
     pub required_properties: u32,
     pub preferred_properties: u32,
     pub queue_families: &'a [u32],
+    pub required_heap: Option<u32>,
+    pub preferred_heap: Option<u32>,
 }
 
 pub struct Allocation {
@@ -288,6 +299,18 @@ pub struct Allocation {
 }
 
 impl Allocation {
+    pub fn memory_info(&self, device: &Device) -> (u64, u64, u32, u32, u32) {
+        let memory_type = self.memory_type_index;
+        let heap = device.memory_properties.types[memory_type as usize].heap_index;
+        (
+            self.allocation_size,
+            device.memory_properties.heaps[heap as usize].size,
+            memory_type,
+            heap,
+            self.memory_properties & 7,
+        )
+    }
+
     pub fn contains(&self, address: u64, bytes: u64) -> bool {
         address >= self.base
             && address
@@ -306,6 +329,10 @@ impl Allocation {
 }
 
 impl Device {
+    pub fn memory_heap_count(&self) -> u32 {
+        self.memory_properties.heap_count.min(16)
+    }
+
     pub fn allocate(&self, request: &AllocRequest<'_>) -> Result<Allocation, AllocError> {
         if request.bytes == 0 || request.alignment == 0 || !request.alignment.is_power_of_two() {
             return Err(AllocError::Invalid);
@@ -361,6 +388,8 @@ impl Device {
                 requirements.memory_type_bits,
                 request.required_properties,
                 request.preferred_properties,
+                request.required_heap,
+                request.preferred_heap,
             ) else {
                 (self.memory.destroy_buffer)(self.handle, buffer, ptr::null());
                 return Err(AllocError::Unsupported);
@@ -533,6 +562,8 @@ impl Device {
                 requirements.memory_type_bits & host_properties.memory_type_bits,
                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | 4,
                 0,
+                None,
+                None,
             ) else {
                 (self.memory.destroy_buffer)(self.handle, buffer, ptr::null());
                 return Err(AllocError::Unsupported);
@@ -763,16 +794,31 @@ impl Device {
         }
     }
 
-    fn choose_memory_type(&self, bits: u32, required: u32, preferred: u32) -> Option<(u32, u32)> {
+    fn choose_memory_type(
+        &self,
+        bits: u32,
+        required: u32,
+        preferred: u32,
+        required_heap: Option<u32>,
+        preferred_heap: Option<u32>,
+    ) -> Option<(u32, u32)> {
         (0..self.memory_properties.type_count.min(32))
             .filter(|&index| bits & (1 << index) != 0)
             .filter_map(|index| {
-                let flags = self.memory_properties.types[index as usize].property_flags;
-                (flags & required == required
+                let memory_type = self.memory_properties.types[index as usize];
+                let flags = memory_type.property_flags;
+                (required_heap.is_none_or(|heap| heap == memory_type.heap_index)
+                    && flags & required == required
                     && flags & VK_MEMORY_PROPERTY_DEVICE_COHERENT_BIT_AMD == 0)
-                    .then_some((index, flags))
+                    .then_some((index, flags, memory_type.heap_index))
             })
-            .max_by_key(|(_, flags)| (flags & preferred).count_ones())
+            .max_by_key(|(_, flags, heap)| {
+                (
+                    preferred_heap == Some(*heap),
+                    (flags & preferred).count_ones(),
+                )
+            })
+            .map(|(index, flags, _)| (index, flags))
     }
 
     pub fn free_allocation(&self, allocation: Allocation) {

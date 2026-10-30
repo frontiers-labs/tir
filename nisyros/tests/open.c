@@ -1,9 +1,87 @@
 #include "nisyros.h"
 #include <assert.h>
+#include <dlfcn.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+typedef struct {
+    int32_t type;
+    const void *next;
+    uint32_t flags;
+    uint32_t family;
+} native_pool_info;
+typedef struct {
+    int32_t type;
+    const void *next;
+    uint64_t pool;
+    int32_t level;
+    uint32_t count;
+} native_command_alloc;
+typedef struct {
+    int32_t type;
+    const void *next;
+    uint32_t flags;
+    const void *inheritance;
+} native_begin_info;
+typedef struct { uint64_t address, size; } native_range;
+typedef struct {
+    int32_t type;
+    const void *next;
+    void *command;
+    uint32_t device_mask;
+} native_command_submit;
+typedef struct {
+    int32_t type;
+    const void *next;
+    uint32_t flags, wait_count;
+    const void *waits;
+    uint32_t command_count;
+    const native_command_submit *commands;
+    uint32_t signal_count;
+    const void *signals;
+} native_submit_info;
+
+static void native_fill(nisyros_vulkan_device_info device,
+                        nisyros_vulkan_queue_info queue, nisyros_addr address) {
+    void *loader = dlopen("libvulkan.so.1", RTLD_NOW);
+    assert(loader != NULL);
+    void *(*get_proc)(void *, const char *) = dlsym(loader, "vkGetDeviceProcAddr");
+    assert(get_proc != NULL);
+    int (*create_pool)(void *, const native_pool_info *, const void *, uint64_t *) =
+        get_proc(device.device, "vkCreateCommandPool");
+    int (*allocate)(void *, const native_command_alloc *, void **) =
+        get_proc(device.device, "vkAllocateCommandBuffers");
+    int (*begin)(void *, const native_begin_info *) = get_proc(device.device, "vkBeginCommandBuffer");
+    void (*fill)(void *, const native_range *, uint32_t, uint32_t) =
+        get_proc(device.device, "vkCmdFillMemoryKHR");
+    int (*end)(void *) = get_proc(device.device, "vkEndCommandBuffer");
+    int (*submit)(void *, uint32_t, const native_submit_info *, uint64_t) =
+        get_proc(device.device, "vkQueueSubmit2");
+    int (*idle)(void *) = get_proc(device.device, "vkQueueWaitIdle");
+    void (*destroy_pool)(void *, uint64_t, const void *) =
+        get_proc(device.device, "vkDestroyCommandPool");
+    assert(create_pool && allocate && begin && fill && end && submit && idle && destroy_pool);
+    native_pool_info pool_info = {39, NULL, 0, queue.family};
+    uint64_t pool = 0;
+    assert(create_pool(device.device, &pool_info, NULL, &pool) == 0);
+    native_command_alloc command_alloc = {40, NULL, pool, 0, 1};
+    void *command = NULL;
+    assert(allocate(device.device, &command_alloc, &command) == 0);
+    native_begin_info begin_info = {42, NULL, 0, NULL};
+    assert(begin(command, &begin_info) == 0);
+    native_range range = {address, 4};
+    fill(command, &range, 4, 0xa1b2c3d4);
+    assert(end(command) == 0);
+    native_command_submit command_submit = {1000314006, NULL, command, 0};
+    native_submit_info submit_info = {1000314004, NULL, 0, 0, NULL, 1,
+                                      &command_submit, 0, NULL};
+    assert(submit(queue.queue, 1, &submit_info, 0) == 0);
+    assert(idle(queue.queue) == 0);
+    destroy_pool(device.device, pool, NULL);
+    assert(dlclose(loader) == 0);
+}
 
 int main(int argc, char **argv) {
     assert(argc == 2);
@@ -13,6 +91,24 @@ int main(int argc, char **argv) {
     nisyros_cluster cluster = NULL;
     assert(nisyros_cluster_open_local(&cluster) == NISYROS_SUCCESS);
     assert(cluster != NULL);
+    nisyros_backend_api backend_api = {0};
+    assert(nisyros_backend_get_api(NISYROS_BACKEND_VULKAN, NISYROS_BACKEND_ABI_VERSION,
+                                    7, &backend_api) == NISYROS_INVALID_ARGUMENT);
+    assert(nisyros_backend_get_api(NISYROS_BACKEND_VULKAN, NISYROS_BACKEND_ABI_VERSION,
+                                    8, &backend_api) == NISYROS_INCOMPLETE);
+    assert(backend_api.struct_size == sizeof(backend_api) && backend_api.get_extension == NULL);
+    unsigned char oversized[sizeof(backend_api) + 8];
+    memset(oversized, 0xa5, sizeof(oversized));
+    assert(nisyros_backend_get_api(NISYROS_BACKEND_VULKAN, NISYROS_BACKEND_ABI_VERSION,
+                                    sizeof(oversized), oversized) == NISYROS_SUCCESS);
+    for (size_t i = sizeof(backend_api); i < sizeof(oversized); ++i) assert(oversized[i] == 0xa5);
+    assert(nisyros_backend_get_api(NISYROS_BACKEND_VULKAN, NISYROS_BACKEND_ABI_VERSION,
+                                    sizeof(backend_api), &backend_api) == NISYROS_SUCCESS);
+    assert(backend_api.get_extension != NULL);
+    nisyros_backend_api unknown_api = backend_api;
+    assert(nisyros_backend_get_api(NISYROS_BACKEND_VULKAN, 999,
+                                    sizeof(unknown_api), &unknown_api) == NISYROS_UNSUPPORTED);
+    assert(unknown_api.get_extension == NULL);
 
     uint32_t count = 0;
     assert(nisyros_cluster_devices(cluster, &count, NULL) == NISYROS_SUCCESS);
@@ -42,6 +138,52 @@ int main(int argc, char **argv) {
     assert((info.strict_profile_supported != 0) == expect_strict);
     printf("%s driver=%s strict=%u families=%u\n", info.name, info.driver_name,
            info.strict_profile_supported, info.queue_family_count);
+    nisyros_device_capabilities capabilities = {
+        .header = {sizeof(capabilities), NISYROS_ABI_VERSION, NULL},
+    };
+    assert(nisyros_cluster_device_capabilities(cluster, ids[0], &capabilities) == NISYROS_SUCCESS);
+    uint32_t tuple_count = 0;
+    assert(nisyros_cluster_cooperative_matrices(cluster, ids[0], &tuple_count, NULL) == NISYROS_SUCCESS);
+    assert(tuple_count <= 256);
+    if (capabilities.features & NISYROS_FEATURE_COOPERATIVE_MATRIX) {
+        assert(capabilities.cooperative_matrix_revision != 0);
+        assert(capabilities.cooperative_matrix_stages & NISYROS_STAGE_COMPUTE);
+        assert(tuple_count > 0);
+        nisyros_cooperative_matrix_tuple tuples[256];
+        uint32_t capacity = 256;
+        assert(nisyros_cluster_cooperative_matrices(cluster, ids[0], &capacity, tuples) == NISYROS_SUCCESS);
+        assert(capacity == tuple_count);
+        for (uint32_t i = 0; i < tuple_count; ++i) {
+            assert(tuples[i].m && tuples[i].n && tuples[i].k);
+            assert(tuples[i].saturating_accumulation <= 1);
+        }
+        printf("cooperative matrices=%u first=%ux%ux%u types=%u,%u,%u,%u scope=%u\n",
+               tuple_count, tuples[0].m, tuples[0].n, tuples[0].k,
+               tuples[0].a_type, tuples[0].b_type, tuples[0].c_type,
+               tuples[0].result_type, tuples[0].scope);
+        if (getenv("NISYROS_PRINT_MATRICES")) {
+            for (uint32_t i = 0; i < tuple_count; ++i) {
+                printf("matrix %u: %ux%ux%u types=%u,%u,%u,%u saturation=%u scope=%u\n",
+                       i, tuples[i].m, tuples[i].n, tuples[i].k, tuples[i].a_type,
+                       tuples[i].b_type, tuples[i].c_type, tuples[i].result_type,
+                       tuples[i].saturating_accumulation, tuples[i].scope);
+            }
+        }
+    } else {
+        assert(tuple_count == 0);
+    }
+    uint32_t heap_count = 0;
+    assert(nisyros_cluster_memory_heaps(cluster, ids[0], &heap_count, NULL) == NISYROS_SUCCESS);
+    assert(heap_count > 0 && heap_count <= 16);
+    nisyros_memory_heap_info heaps[16];
+    uint32_t heap_capacity = 0;
+    assert(nisyros_cluster_memory_heaps(cluster, ids[0], &heap_capacity, heaps) == NISYROS_INCOMPLETE);
+    assert(heap_capacity == heap_count);
+    heap_capacity = 16;
+    assert(nisyros_cluster_memory_heaps(cluster, ids[0], &heap_capacity, heaps) == NISYROS_SUCCESS);
+    for (uint32_t index = 0; index < heap_count; ++index) {
+        assert(heaps[index].index == index && heaps[index].bytes > 0);
+    }
 
     uint32_t selected = UINT32_MAX;
     uint32_t queue_count = 0;
@@ -70,11 +212,38 @@ int main(int argc, char **argv) {
     if (expect_strict) {
         assert(status == NISYROS_SUCCESS);
         assert(device != NULL);
+        nisyros_vulkan_interop_api vk_api = {0};
+        assert(backend_api.get_extension(device, "nisyros.vulkan", NISYROS_VULKAN_INTEROP_ABI_VERSION,
+                                          8, &vk_api) == NISYROS_INCOMPLETE);
+        assert(vk_api.struct_size == sizeof(vk_api) && vk_api.device_query == NULL);
+        assert(backend_api.get_extension(device, "nisyros.vulkan", NISYROS_VULKAN_INTEROP_ABI_VERSION,
+                                          sizeof(vk_api), &vk_api) == NISYROS_SUCCESS);
+        assert(vk_api.device_query != NULL && vk_api.queue_query != NULL);
+        nisyros_vulkan_device_info native_device = {
+            .header = {sizeof(native_device), NISYROS_ABI_VERSION, NULL},
+        };
+        assert(vk_api.device_query(device, &native_device) == NISYROS_SUCCESS);
+        assert(native_device.instance != NULL && native_device.physical_device != NULL &&
+               native_device.device != NULL);
+        nisyros_vulkan_interop_api unknown_vk = vk_api;
+        assert(backend_api.get_extension(device, "nisyros.unknown", NISYROS_VULKAN_INTEROP_ABI_VERSION,
+                                          sizeof(unknown_vk), &unknown_vk) == NISYROS_UNSUPPORTED);
+        assert(unknown_vk.device_query == NULL && unknown_vk.queue_query == NULL);
+        unknown_vk = vk_api;
+        assert(backend_api.get_extension(device, "nisyros.vulkan", 999,
+                                          sizeof(unknown_vk), &unknown_vk) == NISYROS_UNSUPPORTED);
+        assert(unknown_vk.device_query == NULL && unknown_vk.queue_query == NULL);
         assert(nisyros_cluster_close(cluster) == NISYROS_BUSY);
         for (uint32_t index = 0; index < request.count; ++index) {
             nisyros_queue queue = NULL;
             assert(nisyros_queue_get(device, selected, index, &queue) == NISYROS_SUCCESS);
             assert(queue != NULL);
+            nisyros_vulkan_queue_info native_queue = {
+                .header = {sizeof(native_queue), NISYROS_ABI_VERSION, NULL},
+            };
+            assert(vk_api.queue_query(queue, &native_queue) == NISYROS_SUCCESS);
+            assert(native_queue.queue != NULL && native_queue.family == selected &&
+                   native_queue.index == index);
         }
         nisyros_alloc_desc allocation = {
             .header = {sizeof(allocation), NISYROS_ABI_VERSION, NULL},
@@ -86,10 +255,44 @@ int main(int argc, char **argv) {
         nisyros_addr address = 0;
         assert(nisyros_alloc(device, &allocation, &address) == NISYROS_SUCCESS);
         assert(address != 0 && address % 256 == 0);
+        nisyros_allocation_info allocation_info = {
+            .header = {sizeof(allocation_info), NISYROS_ABI_VERSION, NULL},
+        };
+        assert(nisyros_allocation_query(device, address, &allocation_info) == NISYROS_SUCCESS);
+        assert(allocation_info.base == address && allocation_info.bytes == 64);
+        assert(allocation_info.backing_bytes >= allocation_info.bytes);
+        assert(allocation_info.heap_bytes >= allocation_info.backing_bytes);
+        assert((allocation_info.properties & NISYROS_MEMORY_HOST_VISIBLE) != 0);
+        assert(allocation_info.mapped == 0 && allocation_info.peer_imported == 0);
+        assert(allocation_info.access == (NISYROS_ACCESS_READ | NISYROS_ACCESS_WRITE));
+        assert(nisyros_allocation_query(device, address + 4, &allocation_info) == NISYROS_INVALID_ARGUMENT);
+        nisyros_alloc_heap_extension heap_choice = {
+            .base = {sizeof(heap_choice), NISYROS_EXTENSION_ALLOC_HEAP, 0, 0, NULL},
+            .required_heap = allocation_info.heap_index,
+            .preferred_heap = UINT32_MAX,
+        };
+        allocation.header.extensions = &heap_choice.base;
+        nisyros_addr selected_heap_address = 0;
+        assert(nisyros_alloc(device, &allocation, &selected_heap_address) == NISYROS_SUCCESS);
+        assert(nisyros_allocation_query(device, selected_heap_address, &allocation_info) == NISYROS_SUCCESS);
+        assert(allocation_info.heap_index == heap_choice.required_heap);
+        assert(nisyros_free(device, selected_heap_address) == NISYROS_SUCCESS);
+        heap_choice.preferred_heap = heap_choice.required_heap;
+        heap_choice.required_heap = UINT32_MAX;
+        assert(nisyros_alloc(device, &allocation, &selected_heap_address) == NISYROS_SUCCESS);
+        assert(nisyros_allocation_query(device, selected_heap_address, &allocation_info) == NISYROS_SUCCESS);
+        assert(allocation_info.heap_index == heap_choice.preferred_heap);
+        assert(nisyros_free(device, selected_heap_address) == NISYROS_SUCCESS);
+        heap_choice.required_heap = heap_count;
+        assert(nisyros_alloc(device, &allocation, &selected_heap_address) == NISYROS_UNSUPPORTED);
+        assert(selected_heap_address == 0);
+        allocation.header.extensions = NULL;
         assert(nisyros_device_close(device) == NISYROS_BUSY);
         void *host = NULL;
         assert(nisyros_map(device, address + 4, 4, &host) == NISYROS_SUCCESS);
         assert(host != NULL);
+        assert(nisyros_allocation_query(device, address, &allocation_info) == NISYROS_SUCCESS);
+        assert(allocation_info.mapped == 1);
         memset(host, 0xa5, 4);
         assert(nisyros_flush(device, address + 4, 4) == NISYROS_SUCCESS);
         assert(nisyros_invalidate(device, address + 4, 4) == NISYROS_SUCCESS);
@@ -102,7 +305,10 @@ int main(int argc, char **argv) {
         assert(nisyros_free(device, address + 4) == NISYROS_INVALID_ARGUMENT);
         assert(nisyros_unmap(device, (void *)(uintptr_t)1) == NISYROS_INVALID_ARGUMENT);
         assert(nisyros_unmap(device, mapped) == NISYROS_SUCCESS);
+        assert(nisyros_allocation_query(device, address, &allocation_info) == NISYROS_SUCCESS);
+        assert(allocation_info.mapped == 0);
         assert(nisyros_free(device, address) == NISYROS_SUCCESS);
+        assert(nisyros_allocation_query(device, address, &allocation_info) == NISYROS_INVALID_ARGUMENT);
 
         nisyros_addr source = 0, destination = 0;
         assert(nisyros_alloc(device, &allocation, &source) == NISYROS_SUCCESS);
@@ -114,6 +320,17 @@ int main(int argc, char **argv) {
         memset(destination_host, 0, 64);
         assert(nisyros_flush(device, source, 64) == NISYROS_SUCCESS);
         assert(nisyros_flush(device, destination, 64) == NISYROS_SUCCESS);
+        nisyros_queue interop_queue = NULL;
+        assert(nisyros_queue_get(device, selected, 0, &interop_queue) == NISYROS_SUCCESS);
+        nisyros_vulkan_queue_info native_queue = {
+            .header = {sizeof(native_queue), NISYROS_ABI_VERSION, NULL},
+        };
+        assert(vk_api.queue_query(interop_queue, &native_queue) == NISYROS_SUCCESS);
+        native_fill(native_device, native_queue, source + 48);
+        assert(nisyros_invalidate(device, source + 48, 4) == NISYROS_SUCCESS);
+        assert(*(uint32_t *)((unsigned char *)source_host + 48) == 0xa1b2c3d4);
+        *(uint32_t *)((unsigned char *)source_host + 48) = 0x3c3c3c3c;
+        assert(nisyros_flush(device, source + 48, 4) == NISYROS_SUCCESS);
 
         nisyros_cmd cmd = NULL;
         assert(nisyros_cmd_create(device, selected, &cmd) == NISYROS_SUCCESS);
