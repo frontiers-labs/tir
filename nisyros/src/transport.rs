@@ -1,17 +1,20 @@
-//! Fixed-membership bootstrap framing for two Nisyros processes.
+//! Fixed-membership bootstrap framing for Nisyros processes.
 
 use crate::CooperativeMatrixTuple;
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, Read, Write};
 use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::thread;
 use std::time::{Duration, Instant};
 
 const MAGIC: &[u8; 8] = b"NISYROS1";
+const READY_MAGIC: &[u8; 8] = b"NISYRD01";
 const GROUP_MAGIC: &[u8; 8] = b"NISYRG01";
 const FRAME_MAGIC: &[u8; 8] = b"NISYRF01";
-const VERSION: u32 = 4;
+const VERSION: u32 = 5;
 const MAX_DEVICES: usize = 32;
+pub const MAX_NODES: usize = 16;
 const MAX_FAMILIES: usize = 32;
 const MAX_HEAPS: usize = 16;
 const MAX_MATRIX_TUPLES: usize = 256;
@@ -35,6 +38,7 @@ pub enum FrameKind {
     Heartbeat = 5,
     CollectiveContribution = 6,
     CollectiveResult = 7,
+    CollectiveAck = 8,
 }
 
 pub struct Frame {
@@ -101,57 +105,125 @@ pub struct DeviceAnnouncement {
 #[derive(Debug)]
 pub enum JoinError {
     Invalid,
+    Busy,
     Timeout,
     PeerLost,
 }
 
 pub struct Connection {
-    stream: TcpStream,
+    streams: BTreeMap<u32, TcpStream>,
+    local_node: u32,
     failed: bool,
 }
 
 impl Connection {
-    pub fn into_stream(self) -> TcpStream {
-        self.stream
+    pub fn from_streams(local_node: u32, streams: BTreeMap<u32, TcpStream>) -> Self {
+        Self {
+            streams,
+            local_node,
+            failed: false,
+        }
+    }
+
+    pub fn take_for(&mut self, member_nodes: &BTreeSet<u32>) -> Result<Self, JoinError> {
+        if self.failed {
+            return Err(JoinError::PeerLost);
+        }
+        if member_nodes
+            .iter()
+            .any(|&peer| peer != self.local_node && !self.streams.contains_key(&peer))
+        {
+            return Err(JoinError::Busy);
+        }
+        let mut selected = BTreeMap::new();
+        for &peer in member_nodes {
+            if peer != self.local_node {
+                selected.insert(
+                    peer,
+                    self.streams.remove(&peer).expect("checked peer stream"),
+                );
+            }
+        }
+        Ok(Self::from_streams(self.local_node, selected))
+    }
+
+    pub fn put_back(&mut self, other: Self) {
+        debug_assert_eq!(self.local_node, other.local_node);
+        for (peer, stream) in other.streams {
+            debug_assert!(!self.streams.contains_key(&peer));
+            self.streams.insert(peer, stream);
+        }
+    }
+
+    pub fn into_streams(self) -> (u32, BTreeMap<u32, TcpStream>) {
+        (self.local_node, self.streams)
     }
     pub fn exchange_group(
         &mut self,
         epoch: u64,
         members: &[(u64, u32, u32)],
+        member_nodes: &BTreeSet<u32>,
     ) -> Result<(), JoinError> {
-        if self.failed || epoch == 0 || members.is_empty() || members.len() > MAX_DEVICES * 2 {
+        if self.failed {
+            return Err(JoinError::PeerLost);
+        }
+        if epoch == 0
+            || members.is_empty()
+            || members.len() > 64
+            || !member_nodes.contains(&self.local_node)
+        {
             return Err(JoinError::Invalid);
         }
+        if member_nodes
+            .iter()
+            .any(|&peer| peer != self.local_node && !self.streams.contains_key(&peer))
+        {
+            return Err(JoinError::Busy);
+        }
         let result = (|| {
-            self.stream
-                .write_all(GROUP_MAGIC)
-                .map_err(|_| JoinError::PeerLost)?;
-            write_u32(&mut self.stream, VERSION).map_err(|_| JoinError::PeerLost)?;
-            write_u64(&mut self.stream, epoch).map_err(|_| JoinError::PeerLost)?;
-            write_u32(&mut self.stream, members.len() as u32).map_err(|_| JoinError::PeerLost)?;
-            for &(device_epoch, index, backend) in members {
-                write_u64(&mut self.stream, device_epoch).map_err(|_| JoinError::PeerLost)?;
-                write_u32(&mut self.stream, index).map_err(|_| JoinError::PeerLost)?;
-                write_u32(&mut self.stream, backend).map_err(|_| JoinError::PeerLost)?;
-            }
-            self.stream.flush().map_err(|_| JoinError::PeerLost)?;
-            let mut magic = [0; 8];
-            self.stream.read_exact(&mut magic).map_err(map_read)?;
-            if &magic != GROUP_MAGIC
-                || read_u32(&mut self.stream).map_err(map_read)? != VERSION
-                || read_u64(&mut self.stream).map_err(map_read)? != epoch
-                || read_u32(&mut self.stream).map_err(map_read)? as usize != members.len()
-            {
-                return Err(JoinError::Invalid);
-            }
-            for &expected in members {
-                let actual = (
-                    read_u64(&mut self.stream).map_err(map_read)?,
-                    read_u32(&mut self.stream).map_err(map_read)?,
-                    read_u32(&mut self.stream).map_err(map_read)?,
-                );
-                if actual != expected {
+            for (&peer, stream) in self.streams.iter_mut() {
+                if !member_nodes.contains(&peer) {
+                    continue;
+                }
+                stream
+                    .write_all(GROUP_MAGIC)
+                    .map_err(|_| JoinError::PeerLost)?;
+                write_u32(stream, VERSION).map_err(|_| JoinError::PeerLost)?;
+                write_u64(stream, epoch).map_err(|_| JoinError::PeerLost)?;
+                write_u32(stream, members.len() as u32).map_err(|_| JoinError::PeerLost)?;
+                for &(device_epoch, index, backend) in members {
+                    write_u64(stream, device_epoch).map_err(|_| JoinError::PeerLost)?;
+                    write_u32(stream, index).map_err(|_| JoinError::PeerLost)?;
+                    write_u32(stream, backend).map_err(|_| JoinError::PeerLost)?;
+                }
+                stream.flush().map_err(|_| JoinError::PeerLost)?;
+                let mut magic = [0; 8];
+                loop {
+                    stream.read_exact(&mut magic).map_err(map_read)?;
+                    if &magic == GROUP_MAGIC {
+                        break;
+                    }
+                    if &magic != FRAME_MAGIC
+                        || read_frame_after_magic(stream, magic)?.kind != FrameKind::Heartbeat
+                    {
+                        return Err(JoinError::Invalid);
+                    }
+                }
+                if read_u32(stream).map_err(map_read)? != VERSION
+                    || read_u64(stream).map_err(map_read)? != epoch
+                    || read_u32(stream).map_err(map_read)? as usize != members.len()
+                {
                     return Err(JoinError::Invalid);
+                }
+                for &expected in members {
+                    let actual = (
+                        read_u64(stream).map_err(map_read)?,
+                        read_u32(stream).map_err(map_read)?,
+                        read_u32(stream).map_err(map_read)?,
+                    );
+                    if actual != expected {
+                        return Err(JoinError::Invalid);
+                    }
                 }
             }
             Ok(())
@@ -163,7 +235,9 @@ impl Connection {
     }
 
     pub fn shutdown(self) {
-        let _ = self.stream.shutdown(Shutdown::Both);
+        for stream in self.streams.into_values() {
+            let _ = stream.shutdown(Shutdown::Both);
+        }
     }
 }
 
@@ -194,6 +268,10 @@ pub fn write_frame(writer: &mut impl Write, frame: &Frame) -> io::Result<()> {
 pub fn read_frame(reader: &mut impl Read) -> Result<Frame, JoinError> {
     let mut magic = [0; 8];
     reader.read_exact(&mut magic).map_err(map_read)?;
+    read_frame_after_magic(reader, magic)
+}
+
+fn read_frame_after_magic(reader: &mut impl Read, magic: [u8; 8]) -> Result<Frame, JoinError> {
     let version = read_u32(reader).map_err(map_read)?;
     let kind = match read_u32(reader).map_err(map_read)? {
         1 => FrameKind::Offer,
@@ -203,6 +281,7 @@ pub fn read_frame(reader: &mut impl Read) -> Result<Frame, JoinError> {
         5 => FrameKind::Heartbeat,
         6 => FrameKind::CollectiveContribution,
         7 => FrameKind::CollectiveResult,
+        8 => FrameKind::CollectiveAck,
         _ => return Err(JoinError::Invalid),
     };
     let key = MessageKey {
@@ -245,56 +324,186 @@ fn valid_payload(kind: FrameKind, bytes: u64, payload_len: u64) -> bool {
         FrameKind::CollectiveContribution => bytes
             .checked_add(16)
             .is_some_and(|length| payload_len == length),
-        FrameKind::Offer | FrameKind::Ready | FrameKind::Ack | FrameKind::Heartbeat => {
-            payload_len == 0
-        }
+        FrameKind::Offer
+        | FrameKind::Ready
+        | FrameKind::Ack
+        | FrameKind::Heartbeat
+        | FrameKind::CollectiveAck => payload_len == 0,
     }
 }
 
 pub fn join(
     session_id: u64,
     local_node: u32,
-    address: SocketAddr,
+    node_count: u32,
+    addresses: &[Option<SocketAddr>],
     local_devices: &[DeviceAnnouncement],
     timeout: Duration,
-) -> Result<(Connection, Vec<DeviceAnnouncement>), JoinError> {
-    if session_id == 0 || local_node > 1 || timeout.is_zero() || local_devices.len() > MAX_DEVICES {
+) -> Result<(Connection, Vec<Vec<DeviceAnnouncement>>), JoinError> {
+    if session_id == 0
+        || !(2..=MAX_NODES as u32).contains(&node_count)
+        || local_node >= node_count
+        || timeout.is_zero()
+        || local_devices.len() > MAX_DEVICES
+        || addresses.len() != node_count as usize
+        || addresses[..node_count as usize - 1].contains(&None)
+    {
         return Err(JoinError::Invalid);
     }
     let started = Instant::now();
-    let mut stream = if local_node == 0 {
-        let listener = TcpListener::bind(address).map_err(|_| JoinError::PeerLost)?;
+    let mut inventories = vec![Vec::new(); node_count as usize];
+    inventories[local_node as usize] = local_devices.to_vec();
+    let mut streams = BTreeMap::new();
+    if local_node == 0 {
+        let listener = TcpListener::bind(addresses[0].ok_or(JoinError::Invalid)?)
+            .map_err(|_| JoinError::PeerLost)?;
         listener
             .set_nonblocking(true)
             .map_err(|_| JoinError::PeerLost)?;
-        loop {
-            match listener.accept() {
-                Ok((stream, _)) => break stream,
-                Err(error)
-                    if error.kind() == io::ErrorKind::WouldBlock && started.elapsed() < timeout =>
-                {
-                    thread::sleep(Duration::from_millis(2));
-                }
+        while streams.len() + 1 < node_count as usize {
+            let (mut stream, _) = match listener.accept() {
+                Ok(accepted) => accepted,
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                    return Err(JoinError::Timeout);
+                    if started.elapsed() >= timeout {
+                        return Err(JoinError::Timeout);
+                    }
+                    thread::sleep(Duration::from_millis(2));
+                    continue;
                 }
                 Err(_) => return Err(JoinError::PeerLost),
+            };
+            prepare_stream(&stream, timeout.saturating_sub(started.elapsed()))?;
+            let (node, devices) = read_announcement_any(&mut stream, session_id)?;
+            if node == 0 || node >= node_count || streams.contains_key(&node) {
+                return Err(JoinError::Invalid);
+            }
+            inventories[node as usize] = devices;
+            streams.insert(node, stream);
+        }
+        for stream in streams.values_mut() {
+            for (node, devices) in inventories.iter().enumerate() {
+                write_announcement(stream, session_id, node as u32, devices)
+                    .map_err(|_| JoinError::PeerLost)?;
+            }
+        }
+        for stream in streams.values_mut() {
+            let mut ready = [0; 8];
+            stream.read_exact(&mut ready).map_err(map_read)?;
+            if &ready != READY_MAGIC {
+                return Err(JoinError::Invalid);
             }
         }
     } else {
-        loop {
+        let mut stream = loop {
             let remaining = timeout.saturating_sub(started.elapsed());
             if remaining.is_zero() {
                 return Err(JoinError::Timeout);
             }
-            match TcpStream::connect_timeout(&address, remaining.min(Duration::from_millis(100))) {
+            match TcpStream::connect_timeout(
+                &addresses[0].ok_or(JoinError::Invalid)?,
+                remaining.min(Duration::from_millis(100)),
+            ) {
                 Ok(stream) => break stream,
                 Err(_) if started.elapsed() < timeout => thread::sleep(Duration::from_millis(2)),
                 Err(_) => return Err(JoinError::Timeout),
             }
+        };
+        prepare_stream(&stream, timeout.saturating_sub(started.elapsed()))?;
+        write_announcement(&mut stream, session_id, local_node, local_devices)
+            .map_err(|_| JoinError::PeerLost)?;
+        for node in 0..node_count {
+            let devices = read_announcement(&mut stream, session_id, node)?;
+            if node == local_node && devices != local_devices {
+                return Err(JoinError::Invalid);
+            }
+            inventories[node as usize] = devices;
         }
-    };
-    let remaining = timeout.saturating_sub(started.elapsed());
+        streams.insert(0, stream);
+        let listener = if local_node + 1 < node_count {
+            let listener =
+                TcpListener::bind(addresses[local_node as usize].ok_or(JoinError::Invalid)?)
+                    .map_err(|_| JoinError::PeerLost)?;
+            listener
+                .set_nonblocking(true)
+                .map_err(|_| JoinError::PeerLost)?;
+            Some(listener)
+        } else {
+            None
+        };
+        for peer in 1..local_node {
+            let mut stream = connect_peer(
+                addresses[peer as usize].ok_or(JoinError::Invalid)?,
+                started,
+                timeout,
+            )?;
+            prepare_stream(&stream, timeout.saturating_sub(started.elapsed()))?;
+            write_announcement(&mut stream, session_id, local_node, local_devices)
+                .map_err(|_| JoinError::PeerLost)?;
+            if read_announcement(&mut stream, session_id, peer)? != inventories[peer as usize] {
+                return Err(JoinError::Invalid);
+            }
+            streams.insert(peer, stream);
+        }
+        while streams.len() + 1 < node_count as usize {
+            let (mut stream, _) = match listener.as_ref().ok_or(JoinError::Invalid)?.accept() {
+                Ok(accepted) => accepted,
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    if started.elapsed() >= timeout {
+                        return Err(JoinError::Timeout);
+                    }
+                    thread::sleep(Duration::from_millis(2));
+                    continue;
+                }
+                Err(_) => return Err(JoinError::PeerLost),
+            };
+            prepare_stream(&stream, timeout.saturating_sub(started.elapsed()))?;
+            let (peer, devices) = read_announcement_any(&mut stream, session_id)?;
+            if peer <= local_node
+                || peer >= node_count
+                || streams.contains_key(&peer)
+                || devices != inventories[peer as usize]
+            {
+                return Err(JoinError::Invalid);
+            }
+            write_announcement(&mut stream, session_id, local_node, local_devices)
+                .map_err(|_| JoinError::PeerLost)?;
+            streams.insert(peer, stream);
+        }
+        streams
+            .get_mut(&0)
+            .expect("bootstrap connection")
+            .write_all(READY_MAGIC)
+            .map_err(|_| JoinError::PeerLost)?;
+    }
+    Ok((
+        Connection {
+            streams,
+            local_node,
+            failed: false,
+        },
+        inventories,
+    ))
+}
+
+fn connect_peer(
+    address: SocketAddr,
+    started: Instant,
+    timeout: Duration,
+) -> Result<TcpStream, JoinError> {
+    loop {
+        let remaining = timeout.saturating_sub(started.elapsed());
+        if remaining.is_zero() {
+            return Err(JoinError::Timeout);
+        }
+        match TcpStream::connect_timeout(&address, remaining.min(Duration::from_millis(100))) {
+            Ok(stream) => return Ok(stream),
+            Err(_) if started.elapsed() < timeout => thread::sleep(Duration::from_millis(2)),
+            Err(_) => return Err(JoinError::Timeout),
+        }
+    }
+}
+
+fn prepare_stream(stream: &TcpStream, remaining: Duration) -> Result<(), JoinError> {
     if remaining.is_zero() {
         return Err(JoinError::Timeout);
     }
@@ -305,16 +514,7 @@ pub fn join(
     stream
         .set_write_timeout(Some(remaining))
         .map_err(|_| JoinError::PeerLost)?;
-    write_announcement(&mut stream, session_id, local_node, local_devices)
-        .map_err(|_| JoinError::PeerLost)?;
-    let remote = read_announcement(&mut stream, session_id, 1 - local_node)?;
-    Ok((
-        Connection {
-            stream,
-            failed: false,
-        },
-        remote,
-    ))
+    Ok(())
 }
 
 fn write_u32(writer: &mut impl Write, value: u32) -> io::Result<()> {
@@ -402,15 +602,26 @@ fn read_announcement(
     session_id: u64,
     peer_node: u32,
 ) -> Result<Vec<DeviceAnnouncement>, JoinError> {
+    let (node, devices) = read_announcement_any(reader, session_id)?;
+    if node != peer_node {
+        return Err(JoinError::Invalid);
+    }
+    Ok(devices)
+}
+
+fn read_announcement_any(
+    reader: &mut impl Read,
+    session_id: u64,
+) -> Result<(u32, Vec<DeviceAnnouncement>), JoinError> {
     let mut magic = [0; 8];
     reader.read_exact(&mut magic).map_err(map_read)?;
     if &magic != MAGIC
         || read_u32(reader).map_err(map_read)? != VERSION
         || read_u64(reader).map_err(map_read)? != session_id
-        || read_u32(reader).map_err(map_read)? != peer_node
     {
         return Err(JoinError::Invalid);
     }
+    let node = read_u32(reader).map_err(map_read)?;
     let count = read_u32(reader).map_err(map_read)? as usize;
     if count > MAX_DEVICES {
         return Err(JoinError::Invalid);
@@ -530,7 +741,7 @@ fn read_announcement(
             timestamp_period_bits,
         });
     }
-    Ok(devices)
+    Ok((node, devices))
 }
 
 fn map_read(error: io::Error) -> JoinError {

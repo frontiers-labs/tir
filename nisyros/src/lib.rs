@@ -342,6 +342,7 @@ pub struct Cluster {
     inventory: Vec<InventoryEntry>,
     network: Mutex<Option<transport::Connection>>,
     distributed: bool,
+    local_node: u32,
     epoch: u64,
     live_devices: AtomicUsize,
     live_groups: AtomicUsize,
@@ -698,6 +699,7 @@ pub unsafe extern "C" fn nisyros_cluster_open_local(out: *mut *mut Cluster) -> i
         inventory,
         network: Mutex::new(None),
         distributed: false,
+        local_node: 0,
         epoch: NEXT_EPOCH.fetch_add(1, Ordering::Relaxed),
         live_devices: AtomicUsize::new(0),
         live_groups: AtomicUsize::new(0),
@@ -707,8 +709,8 @@ pub unsafe extern "C" fn nisyros_cluster_open_local(out: *mut *mut Cluster) -> i
     SUCCESS
 }
 
-/// Joins two fixed-membership nodes using application-provided TCP bootstrap.
-/// Node zero listens at `nodes[0].address`; node one connects to it.
+/// Joins fixed-membership nodes using application-provided TCP bootstrap.
+/// Node zero listens at `nodes[0].address`; other nodes connect to it.
 ///
 /// # Safety
 /// `bootstrap` and its node array and address string must remain readable for
@@ -728,28 +730,36 @@ pub unsafe extern "C" fn nisyros_cluster_join(
         return status;
     }
     if bootstrap.session_id == 0
-        || bootstrap.node_count != 2
-        || bootstrap.local_node > 1
+        || !(2..=transport::MAX_NODES as u32).contains(&bootstrap.node_count)
+        || bootstrap.local_node >= bootstrap.node_count
         || bootstrap.nodes.is_null()
         || bootstrap.connect_timeout_ns == 0
     {
         return INVALID_ARGUMENT;
     }
-    let nodes = unsafe { std::slice::from_raw_parts(bootstrap.nodes, 2) };
-    if nodes[0].node_index != 0
-        || nodes[1].node_index != 1
-        || nodes[0].reserved != 0
-        || nodes[1].reserved != 0
-        || nodes[0].address.is_null()
-    {
+    let nodes =
+        unsafe { std::slice::from_raw_parts(bootstrap.nodes, bootstrap.node_count as usize) };
+    if nodes.iter().enumerate().any(|(index, node)| {
+        node.node_index != index as u32
+            || node.reserved != 0
+            || (index + 1 < nodes.len() && node.address.is_null())
+    }) {
         return INVALID_ARGUMENT;
     }
-    let Ok(address) = unsafe { CStr::from_ptr(nodes[0].address) }.to_str() else {
-        return INVALID_ARGUMENT;
-    };
-    let Ok(address) = address.parse::<SocketAddr>() else {
-        return INVALID_ARGUMENT;
-    };
+    let mut addresses = Vec::with_capacity(nodes.len());
+    for node in nodes {
+        if node.address.is_null() {
+            addresses.push(None);
+        } else {
+            let Ok(address) = unsafe { CStr::from_ptr(node.address) }.to_str() else {
+                return INVALID_ARGUMENT;
+            };
+            let Ok(address) = address.parse::<SocketAddr>() else {
+                return INVALID_ARGUMENT;
+            };
+            addresses.push(Some(address));
+        }
+    }
     let Ok(instance) = plugin::Instance::open() else {
         return NO_DEVICE;
     };
@@ -757,39 +767,36 @@ pub unsafe extern "C" fn nisyros_cluster_join(
         return NO_DEVICE;
     };
     let local_snapshots: Vec<_> = devices.iter().map(announce_device).collect();
-    let (network, remote_snapshots) = match transport::join(
+    let (network, snapshots) = match transport::join(
         bootstrap.session_id,
         bootstrap.local_node,
-        address,
+        bootstrap.node_count,
+        &addresses,
         &local_snapshots,
         Duration::from_nanos(bootstrap.connect_timeout_ns),
     ) {
         Ok(joined) => joined,
         Err(transport::JoinError::Invalid) => return INVALID_ARGUMENT,
+        Err(transport::JoinError::Busy) => return BUSY,
         Err(transport::JoinError::Timeout) => return TIMEOUT,
         Err(transport::JoinError::PeerLost) => return PEER_LOST,
     };
-    let mut inventory = Vec::with_capacity(local_snapshots.len() + remote_snapshots.len());
-    for node in 0..2 {
-        if node == bootstrap.local_node {
-            inventory.extend(local_snapshots.iter().cloned().enumerate().map(
-                |(index, snapshot)| InventoryEntry {
-                    node_index: node,
+    let mut inventory = Vec::new();
+    for (node, devices) in snapshots.into_iter().enumerate() {
+        if node as u32 == bootstrap.local_node {
+            inventory.extend(devices.into_iter().enumerate().map(|(index, snapshot)| {
+                InventoryEntry {
+                    node_index: node as u32,
                     local_index: Some(index),
                     snapshot,
-                },
-            ));
+                }
+            }));
         } else {
-            inventory.extend(
-                remote_snapshots
-                    .iter()
-                    .cloned()
-                    .map(|snapshot| InventoryEntry {
-                        node_index: node,
-                        local_index: None,
-                        snapshot,
-                    }),
-            );
+            inventory.extend(devices.into_iter().map(|snapshot| InventoryEntry {
+                node_index: node as u32,
+                local_index: None,
+                snapshot,
+            }));
         }
     }
     let cluster = Box::new(Cluster {
@@ -798,6 +805,7 @@ pub unsafe extern "C" fn nisyros_cluster_join(
         inventory,
         network: Mutex::new(Some(network)),
         distributed: true,
+        local_node: bootstrap.local_node,
         epoch: bootstrap.session_id ^ 0x4e49_5359_524f_5300,
         live_devices: AtomicUsize::new(0),
         live_groups: AtomicUsize::new(0),
@@ -1138,6 +1146,7 @@ pub unsafe extern "C" fn nisyros_group_create(
     }
     let members = unsafe { std::slice::from_raw_parts(desc.members, desc.member_count as usize) };
     let mut distinct = BTreeSet::new();
+    let mut member_nodes = BTreeSet::new();
     let mut local_count = 0;
     for member in members {
         if member.epoch != cluster_ref.epoch || !distinct.insert((member.index, member.backend)) {
@@ -1149,6 +1158,7 @@ pub unsafe extern "C" fn nisyros_group_create(
         if member.backend != entry.snapshot.backend {
             return INVALID_ARGUMENT;
         }
+        member_nodes.insert(entry.node_index);
         local_count += usize::from(entry.local_index.is_some());
     }
     if local_count == 0 {
@@ -1165,9 +1175,10 @@ pub unsafe extern "C" fn nisyros_group_create(
         return BUSY;
     }
     if let Some(connection) = network.as_mut() {
-        match connection.exchange_group(desc.group_epoch, &ordered) {
+        match connection.exchange_group(desc.group_epoch, &ordered, &member_nodes) {
             Ok(()) => {}
             Err(transport::JoinError::Invalid) => return INVALID_ARGUMENT,
+            Err(transport::JoinError::Busy) => return BUSY,
             Err(transport::JoinError::Timeout) => return TIMEOUT,
             Err(transport::JoinError::PeerLost) => return PEER_LOST,
         }

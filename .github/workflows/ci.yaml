@@ -139,6 +139,9 @@ jobs:
             LD_LIBRARY_PATH="$PWD/target/debug/nisyros-vulkan-sim:${LD_LIBRARY_PATH:-}" \
             target/debug/nisyros-local-communication
           python3 nisyros/tests/run-communication.py simulator
+          python3 nisyros/tests/run-three-node.py simulator
+          python3 nisyros/tests/run-three-node.py simulator --nonparticipant
+          python3 nisyros/tests/run-reopen.py simulator
           python3 nisyros/tests/run-communication.py simulator --replay
           python3 nisyros/tests/run-communication.py simulator --peer-loss
           python3 nisyros/tests/run-communication.py simulator --mismatch
