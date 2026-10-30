@@ -1,4 +1,4 @@
-//! Nisyros C ABI. The only backend implemented by this crate is Vulkan.
+//! Nisyros C ABI with ROCm and Vulkan backends.
 
 mod communication;
 mod diagnostic;
@@ -16,6 +16,9 @@ pub fn capture_vulkan_package(
     words: &[u32],
     mut template: package::Package,
 ) -> Result<package::Package, String> {
+    if template.format != package::VULKAN_PIPELINE_BINARY_FORMAT {
+        return Err("Vulkan capture requires a Vulkan package format".into());
+    }
     let instance = vulkan::Instance::open().map_err(|()| "Vulkan loader unavailable")?;
     let devices = instance
         .devices()
@@ -74,6 +77,7 @@ const INCOMPATIBLE_BINARY: i32 = -9;
 const PEER_LOST: i32 = -10;
 const ABI_VERSION: u32 = 1;
 const BACKEND_VULKAN: u32 = 1;
+const BACKEND_ROCM: u32 = 2;
 const EXT_ALLOC_HEAP: u32 = 1;
 const EXT_ALLOC_SHARING: u32 = 2;
 pub const FEATURE_COOPERATIVE_MATRIX: u64 = 1;
@@ -376,6 +380,7 @@ pub struct Device {
     vendor_id: u32,
     device_id: u32,
     api_version: u32,
+    backend_id: u32,
     device_uuid: [u8; 16],
     driver_uuid: [u8; 16],
     inventory_index: u32,
@@ -667,7 +672,7 @@ fn announce_device(record: &plugin::DeviceRecord) -> transport::DeviceAnnounceme
     }
 }
 
-/// Opens the local Vulkan inventory.
+/// Opens the local inventory using ROCm first, then Vulkan.
 ///
 /// # Safety
 /// `out` must point to writable storage for one cluster handle.
@@ -856,7 +861,7 @@ pub unsafe extern "C" fn nisyros_cluster_devices(
     }
 }
 
-/// Returns the Vulkan device identity and strict-profile availability.
+/// Returns the device identity and strict-profile availability.
 ///
 /// # Safety
 /// `cluster` must be live and `out` must point to a complete `DeviceInfo`
@@ -988,8 +993,8 @@ pub unsafe extern "C" fn nisyros_cluster_cooperative_matrices(
     }
 }
 
-/// Queries a Vulkan queue family. Physical engine identity and enforceable
-/// affinity are reported as unknown because Vulkan does not expose them.
+/// Queries a queue family. Physical engine identity and enforceable affinity
+/// are reported as unknown by the built-in backends.
 ///
 /// # Safety
 /// `cluster` must be live and `out` must be writable.
@@ -1260,7 +1265,7 @@ pub unsafe extern "C" fn nisyros_group_epoch(group: *mut Group, epoch: *mut u64)
     SUCCESS
 }
 
-/// Opens a strict-profile Vulkan session with exactly the requested queues.
+/// Opens a strict-profile session with exactly the requested queues.
 ///
 /// # Safety
 /// `cluster` and `id` must be live, `desc` must point to a complete descriptor,
@@ -1377,6 +1382,7 @@ pub unsafe extern "C" fn nisyros_device_open(
         vendor_id: record.vendor_id,
         device_id: record.device_id,
         api_version: record.api_version,
+        backend_id: record.backend,
         device_uuid: record.device_uuid,
         driver_uuid: record.driver_uuid,
         inventory_index: id.index,
@@ -1463,7 +1469,7 @@ pub unsafe extern "C" fn nisyros_device_close(device: *mut Device) -> i32 {
     SUCCESS
 }
 
-/// Marks a lost logical device quiescent so retained children can be released.
+/// Marks a lost or failed logical device quiescent so retained children can be released.
 /// This does not recover the device or preserve its allocation contents.
 ///
 /// # Safety
@@ -1480,7 +1486,12 @@ pub unsafe extern "C" fn nisyros_device_abort(device: *mut Device) -> i32 {
     if device.quiescent.load(Ordering::Acquire) {
         return SUCCESS;
     }
-    if !device.lost.load(Ordering::Acquire) {
+    if !device.lost.load(Ordering::Acquire)
+        && !device
+            .queues
+            .iter()
+            .any(|queue| queue.state.lock().is_ok_and(|state| state.poisoned))
+    {
         return INVALID_ARGUMENT;
     }
     match device.backend.wait_idle() {
@@ -1781,7 +1792,7 @@ pub unsafe extern "C" fn nisyros_invalidate(device: *mut Device, address: u64, b
     visibility(device, address, bytes, false)
 }
 
-/// Allocates coherent host memory backed by a device-addressable Vulkan range.
+/// Allocates coherent host memory backed by a device-addressable range.
 /// Its returned value is an ordinary host pointer.
 ///
 /// # Safety
@@ -1907,7 +1918,7 @@ pub unsafe extern "C" fn nisyros_host_registration_alignment(
     SUCCESS
 }
 
-/// Registers an aligned caller-owned host range with the local Vulkan device.
+/// Registers an aligned caller-owned host range with the local device.
 /// The caller retains ownership and keeps it alive until unregister succeeds.
 ///
 /// # Safety
@@ -1990,18 +2001,21 @@ pub unsafe extern "C" fn nisyros_host_unregister(device: *mut Device, host: *mut
 
 fn peer_pair(device: &Device, peer: &Device) -> (bool, bool, bool) {
     let same_physical = device.device_uuid != [0; 16] && device.device_uuid == peer.device_uuid;
-    let compatible = same_physical
-        && ptr::eq(device.cluster, peer.cluster)
-        && device.driver_uuid != [0; 16]
-        && device.driver_uuid == peer.driver_uuid;
+    let same_driver = same_physical
+        && ((device.backend_id == BACKEND_ROCM && peer.backend_id == BACKEND_ROCM)
+            || (device.driver_uuid != [0; 16] && device.driver_uuid == peer.driver_uuid));
+    let same_cluster = ptr::eq(device.cluster, peer.cluster);
     (
         same_physical,
-        compatible && device.backend.peer_memory_fd && peer.backend.peer_memory_fd,
-        compatible && device.backend.peer_timeline_fd && peer.backend.peer_timeline_fd,
+        same_cluster && same_driver && device.backend.peer_memory_fd && peer.backend.peer_memory_fd,
+        same_cluster
+            && same_driver
+            && device.backend.peer_timeline_fd
+            && peer.backend.peer_timeline_fd,
     )
 }
 
-/// Queries direct peer routes between two opened local Vulkan sessions.
+/// Queries direct peer routes between two opened local sessions.
 ///
 /// # Safety
 /// Both devices must be live and `out` must be a complete initialized struct.
@@ -2014,16 +2028,18 @@ pub unsafe extern "C" fn nisyros_peer_capabilities(
     if device.is_null() || peer.is_null() || out.is_null() {
         return INVALID_ARGUMENT;
     }
-    let out = unsafe { &mut *out };
-    let status = validate_header(&out.header, std::mem::size_of::<PeerInfo>());
+    let out_ref = unsafe { &mut *out };
+    let status = validate_header(&out_ref.header, std::mem::size_of::<PeerInfo>());
     if status != SUCCESS {
         return status;
     }
-    let (same, memory, event) = peer_pair(unsafe { &*device }, unsafe { &*peer });
-    out.same_physical_device = u32::from(same);
-    out.direct_mapping = u32::from(memory);
-    out.event_import = u32::from(event);
-    out.host_staging = 0;
+    let target = unsafe { &*device };
+    let source = unsafe { &*peer };
+    let (same, memory, event) = peer_pair(target, source);
+    out_ref.same_physical_device = u32::from(same);
+    out_ref.direct_mapping = u32::from(memory);
+    out_ref.event_import = u32::from(event);
+    out_ref.host_staging = 0;
     SUCCESS
 }
 
@@ -2059,9 +2075,24 @@ pub unsafe extern "C" fn nisyros_peer_map(
     if !peer_pair(target, origin).1 {
         return UNSUPPORTED;
     }
-    let Ok(mut source_allocations) = origin.allocations.lock() else {
+    // Reciprocal peer maps must acquire both allocation tables in the same order.
+    let (first, second) = if (device as usize) < (source.device as usize) {
+        (&target.allocations, &origin.allocations)
+    } else {
+        (&origin.allocations, &target.allocations)
+    };
+    let Ok(first) = first.lock() else {
         return DEVICE_LOST;
     };
+    let Ok(second) = second.lock() else {
+        return DEVICE_LOST;
+    };
+    let (mut target_allocations, mut source_allocations) =
+        if (device as usize) < (source.device as usize) {
+            (first, second)
+        } else {
+            (second, first)
+        };
     let Some((&source_base, source_allocation)) =
         source_allocations.range(..=source.address).next_back()
     else {
@@ -2073,26 +2104,27 @@ pub unsafe extern "C" fn nisyros_peer_map(
         return INVALID_ARGUMENT;
     }
     let offset = source.address - source_base;
-    let fd = match origin
+    let (fd, backing_offset) = match origin
         .backend
         .export_allocation_fd(&source_allocation.backend)
     {
         Ok(fd) => fd,
         Err(error) => return allocation_status(error),
     };
-    let imported =
-        match target
-            .backend
-            .import_peer_fd(&source_allocation.backend, offset, bytes, fd)
-        {
-            Ok(imported) => imported,
-            Err(error) => return allocation_status(error),
-        };
-    let base = imported.base;
-    let Ok(mut target_allocations) = target.allocations.lock() else {
-        target.backend.free_allocation(imported);
-        return DEVICE_LOST;
+    let Some(backing_offset) = backing_offset.checked_add(offset) else {
+        return INVALID_ARGUMENT;
     };
+    let imported = match target.backend.import_peer_fd(
+        &source_allocation.backend,
+        backing_offset,
+        bytes,
+        fd,
+        target.backend_id == origin.backend_id,
+    ) {
+        Ok(imported) => imported,
+        Err(error) => return allocation_status(error),
+    };
+    let base = imported.base;
     if overlaps_allocation(&target_allocations, base, imported.bytes) {
         target.backend.free_allocation(imported);
         return DEVICE_LOST;
@@ -2163,7 +2195,7 @@ pub unsafe extern "C" fn nisyros_peer_unmap(device: *mut Device, base: u64) -> i
     SUCCESS
 }
 
-/// Loads a complete native Vulkan pipeline-binary package without shader compilation.
+/// Loads a native package for the selected backend without shader compilation.
 ///
 /// # Safety
 /// `device` must be live, `image` complete with readable bytes, and `out`
@@ -2184,7 +2216,7 @@ pub unsafe extern "C" fn nisyros_executable_load(
     if status != SUCCESS {
         return status;
     }
-    if image.format != 1
+    if !matches!(image.format, 1..=2)
         || image.reserved != 0
         || image.bytes.is_null()
         || image.byte_size == 0
@@ -2201,8 +2233,10 @@ pub unsafe extern "C" fn nisyros_executable_load(
         Err(package::PackageError::UnsupportedFeature) => return UNSUPPORTED,
         Err(_) => return INCOMPATIBLE_BINARY,
     };
-    if package.vendor_id != device_ref.vendor_id
-        || package.device_id != device_ref.device_id
+    if package.format != image.format
+        || package.format != device_ref.backend_id
+        || package.vendor_id != device_ref.vendor_id
+        || (package.device_id != 0 && package.device_id != device_ref.device_id)
         || package.api_version > device_ref.api_version
     {
         return INCOMPATIBLE_BINARY;
@@ -2315,7 +2349,7 @@ fn refresh_command(state: &mut CommandState) -> i32 {
     }
 }
 
-/// Creates a recording for one provisioned Vulkan queue family.
+/// Creates a recording for one provisioned queue family.
 ///
 /// # Safety
 /// `device` must be live and `out` must be writable.
@@ -2657,7 +2691,9 @@ pub unsafe extern "C" fn nisyros_cmd_dispatch_args(
     }
     let cmd_ref = unsafe { &*cmd };
     let executable = unsafe { &*(*kernel).executable };
-    if executable.owner != cmd_ref.device {
+    if executable.owner != cmd_ref.device
+        || !arguments.is_multiple_of(u64::from(executable.package.argument_alignment))
+    {
         return invalid_recording_argument(cmd);
     }
     let grid = unsafe { *grid };
@@ -2713,7 +2749,9 @@ pub unsafe extern "C" fn nisyros_cmd_dispatch_indirect_args(
     }
     let cmd_ref = unsafe { &*cmd };
     let executable = unsafe { &*(*kernel).executable };
-    if executable.owner != cmd_ref.device {
+    if executable.owner != cmd_ref.device
+        || !arguments.is_multiple_of(u64::from(executable.package.argument_alignment))
+    {
         return invalid_recording_argument(cmd);
     }
     let operation = plugin::CommandOp::DispatchIndirect {
@@ -3407,7 +3445,19 @@ pub unsafe extern "C" fn nisyros_cmd_signal_slot(cmd: *mut Command, slot: u32) -
     record_slot(cmd, slot, true)
 }
 
-/// Seals a recording and prepares native Vulkan command segments.
+fn command_error(device: &Device, error: plugin::BackendError) -> i32 {
+    if error.status == DEVICE_LOST {
+        device.lost.store(true, Ordering::Release);
+    }
+    set_backend_diagnostic(
+        error.status,
+        error.code,
+        "Execution provider command preparation failed",
+    );
+    error.status
+}
+
+/// Seals a recording and prepares native command segments.
 ///
 /// # Safety
 /// `cmd` must be a live command handle.
@@ -3448,13 +3498,16 @@ pub unsafe extern "C" fn nisyros_cmd_end(cmd: *mut Command) -> i32 {
     plans.push(current);
     let mut native_segments = Vec::with_capacity(plans.len());
     for plan in &plans {
-        let Ok(native) = device.backend.create_command(cmd.family) else {
-            inner.state = RecordingState::Invalid;
-            return DEVICE_LOST;
+        let native = match device.backend.create_command(cmd.family) {
+            Ok(native) => native,
+            Err(error) => {
+                inner.state = RecordingState::Invalid;
+                return command_error(device, error);
+            }
         };
-        if native.record(&plan.operations).is_err() {
+        if let Err(error) = native.record(&plan.operations) {
             inner.state = RecordingState::Invalid;
-            return DEVICE_LOST;
+            return command_error(device, error);
         }
         native_segments.push(native);
     }

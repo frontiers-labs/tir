@@ -1,6 +1,8 @@
+#define _POSIX_C_SOURCE 200809L
 #include "nisyros.h"
 #include <assert.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <stdio.h>
 
 int main(void) {
@@ -38,6 +40,14 @@ int main(void) {
     assert(nisyros_cmd_fill(cmd, source, 64, 0xa1b2c3d4u) == NISYROS_SUCCESS);
     assert(nisyros_cmd_barrier_all(cmd) == NISYROS_SUCCESS);
     assert(nisyros_cmd_copy(cmd, destination, source, 64) == NISYROS_SUCCESS);
+    assert(setenv("NISYROS_TEST_RECORD_OOM", "1", 1) == 0);
+    assert(nisyros_cmd_end(cmd) == NISYROS_OUT_OF_MEMORY);
+    assert(unsetenv("NISYROS_TEST_RECORD_OOM") == 0);
+    assert(nisyros_cmd_reset(cmd) == NISYROS_SUCCESS);
+    assert(nisyros_cmd_begin(cmd) == NISYROS_SUCCESS);
+    assert(nisyros_cmd_fill(cmd, source, 64, 0xa1b2c3d4u) == NISYROS_SUCCESS);
+    assert(nisyros_cmd_barrier_all(cmd) == NISYROS_SUCCESS);
+    assert(nisyros_cmd_copy(cmd, destination, source, 64) == NISYROS_SUCCESS);
     assert(nisyros_cmd_end(cmd) == NISYROS_SUCCESS);
     nisyros_point completion = {0};
     assert(nisyros_submit(queue, cmd, NULL, &completion) == NISYROS_SUCCESS);
@@ -51,6 +61,19 @@ int main(void) {
     assert(nisyros_cmd_destroy(cmd) == NISYROS_SUCCESS);
     assert(nisyros_free(device, source) == NISYROS_SUCCESS);
     assert(nisyros_free(device, destination) == NISYROS_SUCCESS);
+    nisyros_event_desc event_desc = NISYROS_DESC_INIT(nisyros_event_desc);
+    event_desc.signaling_domain = NISYROS_SIGNAL_HOST;
+    nisyros_event event = NULL;
+    assert(nisyros_event_create(device, &event_desc, &event) == NISYROS_SUCCESS);
+    assert(nisyros_cmd_create(device, 0, &cmd) == NISYROS_SUCCESS);
+    assert(nisyros_cmd_begin(cmd) == NISYROS_SUCCESS);
+    assert(nisyros_cmd_wait(cmd, (nisyros_point){event, 1}) == NISYROS_SUCCESS);
+    assert(nisyros_cmd_end(cmd) == NISYROS_SUCCESS);
+    assert(nisyros_submit(queue, cmd, NULL, &completion) == NISYROS_SUBMISSION_FAILED);
+    assert(completion.event == NULL);
+    assert(nisyros_device_abort(device) == NISYROS_SUCCESS);
+    assert(nisyros_cmd_destroy(cmd) == NISYROS_SUCCESS);
+    assert(nisyros_event_destroy(event) == NISYROS_SUCCESS);
     assert(nisyros_device_close(device) == NISYROS_SUCCESS);
     assert(nisyros_cluster_close(cluster) == NISYROS_SUCCESS);
     puts("independent provider completed fill, copy, and timeline submission");

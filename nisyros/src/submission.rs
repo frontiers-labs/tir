@@ -1,4 +1,4 @@
-//! Transactional submission of sealed local Vulkan recordings.
+//! Transactional submission of sealed local recordings.
 
 use super::*;
 
@@ -235,7 +235,10 @@ fn submit_recordings(
                 original_signals.insert(key, previous);
                 previous
             };
-            if point.value <= previous.0
+            if prior_waits
+                .get(&key)
+                .is_some_and(|&waited| waited >= point.value)
+                || point.value <= previous.0
                 || (previous.0 != 0
                     && !ptr::eq(previous.1, queue_ref)
                     && prior_waits

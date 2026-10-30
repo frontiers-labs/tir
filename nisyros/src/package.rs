@@ -1,4 +1,4 @@
-//! Bounded, little-endian encoding for Vulkan pipeline-binary packages.
+//! Bounded, little-endian encoding for native executable packages.
 
 use crate::{
     CooperativeMatrixTuple, FEATURE_BFLOAT16_DOT, FEATURE_BFLOAT16_MATRIX, FEATURE_BFLOAT16_TYPE,
@@ -9,7 +9,8 @@ const MAGIC: &[u8; 8] = b"NISYROS\0";
 const PACKAGE_VERSION: u32 = 1;
 const OPTIONAL_FEATURE_PACKAGE_VERSION: u32 = 2;
 const EXECUTABLE_ABI_VERSION: u32 = 1;
-const VULKAN_PIPELINE_BINARY_FORMAT: u32 = 1;
+pub const VULKAN_PIPELINE_BINARY_FORMAT: u32 = 1;
+pub const ROCM_CODE_OBJECT_FORMAT: u32 = 2;
 const HEADER_SIZE: usize = 40;
 const MAX_PACKAGE_SIZE: usize = 128 * 1024 * 1024;
 const MAX_BINARY_SIZE: usize = 64 * 1024 * 1024;
@@ -28,6 +29,15 @@ pub struct BinaryKey {
     pub bytes: [u8; 32],
 }
 
+impl BinaryKey {
+    fn valid(self) -> bool {
+        (1..=32).contains(&self.size)
+            && self.bytes[self.size as usize..]
+                .iter()
+                .all(|&byte| byte == 0)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ArgumentField {
     pub offset: u32,
@@ -43,6 +53,7 @@ pub struct PipelineBinary {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Package {
+    pub format: u32,
     pub global_key: BinaryKey,
     pub vendor_id: u32,
     pub device_id: u32,
@@ -79,11 +90,16 @@ impl Package {
             return Err(PackageError::Invalid);
         }
         let package_version = reader.u32()?;
+        let executable_abi = reader.u32()?;
+        let format = reader.u32()?;
         if !matches!(
             package_version,
             PACKAGE_VERSION | OPTIONAL_FEATURE_PACKAGE_VERSION
-        ) || reader.u32()? != EXECUTABLE_ABI_VERSION
-            || reader.u32()? != VULKAN_PIPELINE_BINARY_FORMAT
+        ) || executable_abi != EXECUTABLE_ABI_VERSION
+            || !matches!(
+                format,
+                VULKAN_PIPELINE_BINARY_FORMAT | ROCM_CODE_OBJECT_FORMAT
+            )
         {
             return Err(PackageError::Unsupported);
         }
@@ -166,6 +182,7 @@ impl Package {
             return Err(PackageError::Invalid);
         }
         let package = Self {
+            format,
             global_key,
             vendor_id,
             device_id,
@@ -195,7 +212,7 @@ impl Package {
         output.extend_from_slice(MAGIC);
         write_u32(&mut output, package_version);
         write_u32(&mut output, EXECUTABLE_ABI_VERSION);
-        write_u32(&mut output, VULKAN_PIPELINE_BINARY_FORMAT);
+        write_u32(&mut output, self.format);
         write_u32(&mut output, 0);
         write_u64(&mut output, 0);
         write_u64(&mut output, 0);
@@ -253,8 +270,10 @@ impl Package {
     }
 
     fn validate(&self) -> Result<(), PackageError> {
-        if self.global_key.size == 0
-            || self.global_key.size > 32
+        if !matches!(
+            self.format,
+            VULKAN_PIPELINE_BINARY_FORMAT | ROCM_CODE_OBJECT_FORMAT
+        ) || !self.global_key.valid()
             || self.entry.is_empty()
             || self.entry.len() > MAX_ENTRY_LEN
             || self.entry.as_bytes().contains(&0)
@@ -287,10 +306,7 @@ impl Package {
             previous_end = end;
         }
         for binary in &self.binaries {
-            if binary.key.size == 0
-                || binary.key.size > 32
-                || binary.data.is_empty()
-                || binary.data.len() > MAX_BINARY_SIZE
+            if !binary.key.valid() || binary.data.is_empty() || binary.data.len() > MAX_BINARY_SIZE
             {
                 return Err(PackageError::Invalid);
             }
@@ -370,10 +386,11 @@ impl<'a> Reader<'a> {
     fn key(&mut self) -> Result<BinaryKey, PackageError> {
         let size = self.u32()?;
         let bytes: [u8; 32] = self.take(32)?.try_into().expect("fixed width");
-        if size == 0 || size > 32 || bytes[size as usize..].iter().any(|&byte| byte != 0) {
+        let key = BinaryKey { size, bytes };
+        if !key.valid() {
             return Err(PackageError::Invalid);
         }
-        Ok(BinaryKey { size, bytes })
+        Ok(key)
     }
 
     fn remaining(&self) -> usize {
@@ -406,9 +423,10 @@ mod tests {
 
     fn sample() -> Package {
         Package {
+            format: VULKAN_PIPELINE_BINARY_FORMAT,
             global_key: BinaryKey {
                 size: 3,
-                bytes: [1; 32],
+                bytes: std::array::from_fn(|index| u8::from(index < 3)),
             },
             vendor_id: 0x1002,
             device_id: 0x1586,
@@ -440,7 +458,7 @@ mod tests {
             binaries: vec![PipelineBinary {
                 key: BinaryKey {
                     size: 2,
-                    bytes: [2; 32],
+                    bytes: std::array::from_fn(|index| if index < 2 { 2 } else { 0 }),
                 },
                 data: vec![3, 4, 5],
             }],
@@ -449,9 +467,7 @@ mod tests {
 
     #[test]
     fn round_trip_and_reject_corruption() {
-        let mut original = sample();
-        original.global_key.bytes[3..].fill(0);
-        original.binaries[0].key.bytes[2..].fill(0);
+        let original = sample();
         let bytes = original.encode().unwrap();
         assert_eq!(Package::parse(&bytes).unwrap(), original);
         for end in 0..bytes.len() {
@@ -470,10 +486,29 @@ mod tests {
     }
 
     #[test]
+    fn rejects_nonzero_unused_key_bytes() {
+        let mut package = sample();
+        package.global_key.bytes[3] = 1;
+        assert_eq!(package.encode(), Err(PackageError::Invalid));
+        let mut package = sample();
+        package.binaries[0].key.bytes[2] = 1;
+        assert_eq!(package.encode(), Err(PackageError::Invalid));
+    }
+
+    #[test]
+    fn rocm_code_object_round_trip() {
+        let mut package = sample();
+        package.format = ROCM_CODE_OBJECT_FORMAT;
+        package.device_id = 0;
+        package.api_version = 0;
+        package.binaries[0].data = b"\x7fELF".to_vec();
+        let bytes = package.encode().unwrap();
+        assert_eq!(Package::parse(&bytes).unwrap(), package);
+    }
+
+    #[test]
     fn matrix_manifest_uses_version_two_and_checks_exact_tuple() {
         let mut package = sample();
-        package.global_key.bytes[3..].fill(0);
-        package.binaries[0].key.bytes[2..].fill(0);
         package.required_features = FEATURE_COOPERATIVE_MATRIX | FEATURE_SHADER_FLOAT16;
         package.required_matrices.push(CooperativeMatrixTuple {
             m: 16,

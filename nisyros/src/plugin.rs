@@ -1,9 +1,12 @@
-//! Independently versioned execution-provider ABI. The first provider is linked Vulkan.
+//! Independently versioned execution-provider ABI and built-in backend selection.
 
 use super::*;
 use std::ffi::CString;
 use std::os::fd::{FromRawFd, IntoRawFd};
 use std::os::unix::ffi::OsStrExt;
+
+#[path = "rocm.rs"]
+mod rocm;
 
 #[link(name = "dl")]
 unsafe extern "C" {
@@ -39,7 +42,7 @@ impl Drop for DynamicLibrary {
     }
 }
 
-const PLUGIN_ABI_VERSION: u32 = 1;
+const PLUGIN_ABI_VERSION: u32 = 2;
 const SERVICES_ABI_VERSION: u32 = 1;
 
 #[repr(C)]
@@ -304,7 +307,7 @@ type AllocationRegisterHost = unsafe extern "C" fn(
     *mut *mut c_void,
     *mut PluginAllocationInfo,
 ) -> i32;
-type AllocationExportFd = unsafe extern "C" fn(*mut c_void, *mut c_void, *mut i32) -> i32;
+type AllocationExportFd = unsafe extern "C" fn(*mut c_void, *mut c_void, *mut i32, *mut u64) -> i32;
 type AllocationImportFd = unsafe extern "C" fn(
     *mut c_void,
     *mut c_void,
@@ -633,7 +636,7 @@ unsafe extern "C" fn device_info(
     out.shader_enqueue_revision = record.shader_enqueue_revision;
     out.cooperative_matrix_stages = record.cooperative_matrix_stages;
     out.max_grid = record.max_grid;
-    out.peer_memory_fd = u32::from(record.peer_memory_fd);
+    out.peer_memory_fd = u32::from(record.peer_memory_fd || record.peer_dma_buf_fd);
     out.peer_timeline_fd = u32::from(record.peer_timeline_fd);
     out.timestamp_period_ns = record.timestamp_period_ns;
     out.name = record.name;
@@ -943,11 +946,15 @@ unsafe extern "C" fn allocation_export_fd(
     device: *mut c_void,
     allocation: *mut c_void,
     out_fd: *mut i32,
+    out_offset: *mut u64,
 ) -> i32 {
-    if device.is_null() || allocation.is_null() || out_fd.is_null() {
+    if device.is_null() || allocation.is_null() || out_fd.is_null() || out_offset.is_null() {
         return INVALID_ARGUMENT;
     }
-    unsafe { *out_fd = -1 };
+    unsafe {
+        *out_fd = -1;
+        *out_offset = 0;
+    };
     let device = unsafe { &*device.cast::<vulkan::Device>() };
     let allocation = unsafe { &*allocation.cast::<vulkan::Allocation>() };
     match device.export_allocation_fd(allocation) {
@@ -973,13 +980,17 @@ unsafe extern "C" fn allocation_import_fd(
     }
     // SAFETY: The plugin call takes ownership of this descriptor on every path.
     let fd = unsafe { OwnedFd::from_raw_fd(fd) };
-    if device.is_null() || source_allocation.is_null() || out.is_null() || info.is_null() {
+    if device.is_null() || out.is_null() || info.is_null() {
         return INVALID_ARGUMENT;
     }
     unsafe { *out = ptr::null_mut() };
     let device = unsafe { &*device.cast::<vulkan::Device>() };
-    let source = unsafe { &*source_allocation.cast::<vulkan::Allocation>() };
-    let allocation = match device.import_peer_fd(source, source_offset, bytes, fd) {
+    let allocation = match if source_allocation.is_null() {
+        device.import_external_dmabuf_fd(source_offset, bytes, fd)
+    } else {
+        let source = unsafe { &*source_allocation.cast::<vulkan::Allocation>() };
+        device.import_peer_fd(source, source_offset, bytes, fd)
+    } {
         Ok(allocation) => allocation,
         Err(error) => return vulkan_allocation_status(error),
     };
@@ -1477,21 +1488,44 @@ pub struct Instance {
     _library: Option<DynamicLibrary>,
 }
 
+fn backend_disabled(name: &str) -> bool {
+    std::env::var("NISYROS_DISABLE_BACKENDS").is_ok_and(|value| {
+        value
+            .split(|character: char| {
+                character == ',' || character == ';' || character.is_ascii_whitespace()
+            })
+            .any(|backend| backend.eq_ignore_ascii_case(name))
+    })
+}
+
 impl Instance {
     pub fn open() -> Result<Self, ()> {
+        if let Some(path) = std::env::var_os("NISYROS_PLUGIN_LIBRARY") {
+            let (library, getter) = DynamicLibrary::open(&path).ok_or(())?;
+            return Self::open_with_getter(Some(library), getter);
+        }
+        let gpu = if !backend_disabled("rocm")
+            && let Ok(instance) = Self::open_with_getter(None, rocm::rocm_plugin_get_api)
+            && instance
+                .devices()
+                .is_ok_and(|devices| devices.iter().any(|device| device.strict_profile_supported))
+        {
+            Some(instance)
+        } else if !backend_disabled("vulkan") {
+            Self::open_with_getter(None, nisyros_plugin_get_api).ok()
+        } else {
+            None
+        };
+        gpu.ok_or(())
+    }
+
+    fn open_with_getter(library: Option<DynamicLibrary>, getter: PluginGetApi) -> Result<Self, ()> {
         let services = Box::new(PluginServices {
             struct_size: std::mem::size_of::<PluginServices>() as u32,
             abi_version: SERVICES_ABI_VERSION,
             context: ptr::null_mut(),
             report_error: Some(core_report_error),
         });
-        let (library, getter): (Option<DynamicLibrary>, PluginGetApi) =
-            if let Some(path) = std::env::var_os("NISYROS_PLUGIN_LIBRARY") {
-                let (library, getter) = DynamicLibrary::open(&path).ok_or(())?;
-                (Some(library), getter)
-            } else {
-                (None, nisyros_plugin_get_api)
-            };
         let mut api: PluginApi = unsafe { std::mem::zeroed() };
         let status = unsafe {
             getter(
@@ -1560,7 +1594,7 @@ impl Instance {
         })
     }
 
-    pub fn devices(&self) -> Result<Vec<DeviceRecord>, ()> {
+    fn local_device_count(&self) -> Result<u32, ()> {
         let mut count = 0;
         if unsafe {
             self.api.device_count.expect("checked provider callback")(self.handle, &mut count)
@@ -1569,6 +1603,11 @@ impl Instance {
         {
             return Err(());
         }
+        Ok(count)
+    }
+
+    pub fn devices(&self) -> Result<Vec<DeviceRecord>, ()> {
+        let count = self.local_device_count()?;
         let mut devices = Vec::with_capacity(count as usize);
         for index in 0..count {
             let mut info: PluginDeviceInfo = unsafe { std::mem::zeroed() };
@@ -2195,13 +2234,20 @@ impl Device {
         Ok(Allocation::new(self.api, self.handle, handle, info, host))
     }
 
-    pub fn export_allocation_fd(&self, allocation: &Allocation) -> Result<OwnedFd, AllocError> {
+    pub fn export_allocation_fd(
+        &self,
+        allocation: &Allocation,
+    ) -> Result<(OwnedFd, u64), AllocError> {
         let mut fd = -1;
+        let mut offset = 0;
         let status = unsafe {
             self.api
                 .allocation_export_fd
                 .expect("checked provider callback")(
-                self.handle, allocation.handle, &mut fd
+                self.handle,
+                allocation.handle,
+                &mut fd,
+                &mut offset,
             )
         };
         if status != SUCCESS {
@@ -2210,15 +2256,16 @@ impl Device {
         if fd < 0 {
             return Err(AllocError::Backend);
         }
-        Ok(unsafe { OwnedFd::from_raw_fd(fd) })
+        Ok((unsafe { OwnedFd::from_raw_fd(fd) }, offset))
     }
 
     pub fn import_peer_fd(
         &self,
         source: &Allocation,
-        source_offset: u64,
+        backing_offset: u64,
         bytes: u64,
         fd: OwnedFd,
+        same_provider: bool,
     ) -> Result<Allocation, AllocError> {
         let mut handle = ptr::null_mut();
         let mut info: PluginAllocationInfo = unsafe { std::mem::zeroed() };
@@ -2227,8 +2274,12 @@ impl Device {
                 .allocation_import_fd
                 .expect("checked provider callback")(
                 self.handle,
-                source.handle,
-                source_offset,
+                if same_provider {
+                    source.handle
+                } else {
+                    ptr::null_mut()
+                },
+                backing_offset,
                 bytes,
                 fd.into_raw_fd(),
                 &mut handle,

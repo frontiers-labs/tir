@@ -89,6 +89,7 @@ typedef struct {
 } nisyros_device_id;
 
 #define NISYROS_BACKEND_VULKAN 1u
+#define NISYROS_BACKEND_ROCM 2u
 #define NISYROS_DEVICE_TYPE_CPU 4u
 #define NISYROS_BACKEND_ABI_VERSION 1u
 #define NISYROS_VULKAN_INTEROP_ABI_VERSION 1u
@@ -327,6 +328,7 @@ typedef struct {
 typedef struct {
     nisyros_descriptor_header header;
     uint32_t same_physical_device;
+    /* Whether `device` can import an allocation owned by `peer`. */
     uint32_t direct_mapping;
     uint32_t event_import;
     uint32_t host_staging;
@@ -386,6 +388,7 @@ typedef struct {
 } nisyros_cmd_info;
 
 #define NISYROS_IMAGE_VULKAN_PIPELINE_BINARY 1u
+#define NISYROS_IMAGE_ROCM_CODE_OBJECT 2u
 
 typedef struct {
     nisyros_descriptor_header header;

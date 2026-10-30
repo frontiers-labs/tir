@@ -3,6 +3,7 @@ set -euo pipefail
 
 repo=$(cd "$(dirname "$0")/../.." && pwd)
 cd "$repo"
+export NISYROS_DISABLE_BACKENDS=rocm
 temp=$(mktemp -d)
 trap 'rm -rf "$temp"' EXIT
 

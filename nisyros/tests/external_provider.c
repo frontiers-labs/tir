@@ -112,8 +112,9 @@ static nisyros_status allocation_register_host(void *device, void *host, uint64_
     (void)device; (void)host; (void)bytes; (void)out; (void)info;
     return NISYROS_UNSUPPORTED;
 }
-static nisyros_status allocation_export_fd(void *device, void *handle, int32_t *out_fd) {
-    (void)device; (void)handle; (void)out_fd;
+static nisyros_status allocation_export_fd(void *device, void *handle, int32_t *out_fd,
+                                           uint64_t *out_backing_offset) {
+    (void)device; (void)handle; (void)out_fd; (void)out_backing_offset;
     return NISYROS_UNSUPPORTED;
 }
 static nisyros_status allocation_import_fd(void *device, void *source, uint64_t offset,
@@ -187,6 +188,7 @@ static nisyros_status command_record(void *handle, uint32_t count,
                                      const nisyros_plugin_command_op *ops, int32_t *code) {
     (void)code;
     if (!handle || (count && !ops)) return NISYROS_INVALID_ARGUMENT;
+    if (getenv("NISYROS_TEST_RECORD_OOM")) return NISYROS_OUT_OF_MEMORY;
     command *c = handle;
     nisyros_plugin_command_op *copy = count ? malloc(count * sizeof(*copy)) : NULL;
     if (count && !copy) return NISYROS_OUT_OF_MEMORY;

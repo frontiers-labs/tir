@@ -106,7 +106,7 @@ int main(int argc, char **argv) {
     nisyros_addr source = 0, destination = 0, arg_address = 0;
     assert(nisyros_alloc(device, &allocation, &source) == NISYROS_SUCCESS);
     assert(nisyros_alloc(device, &allocation, &destination) == NISYROS_SUCCESS);
-    allocation.bytes = sizeof(arguments);
+    allocation.bytes = sizeof(arguments) + 8;
     allocation.alignment = 8;
     assert(nisyros_alloc(device, &allocation, &arg_address) == NISYROS_SUCCESS);
     uint32_t *source_host = NULL, *destination_host = NULL;
@@ -126,6 +126,10 @@ int main(int argc, char **argv) {
     assert(nisyros_cmd_create(device, family, &cmd) == NISYROS_SUCCESS);
     assert(nisyros_cmd_begin(cmd) == NISYROS_SUCCESS);
     nisyros_grid grid = {1, 1, 1};
+    assert(nisyros_cmd_dispatch_args(cmd, kernel, &grid, arg_address + 1) == NISYROS_INVALID_ARGUMENT);
+    assert(nisyros_cmd_end(cmd) == NISYROS_INVALID_ARGUMENT);
+    assert(nisyros_cmd_reset(cmd) == NISYROS_SUCCESS);
+    assert(nisyros_cmd_begin(cmd) == NISYROS_SUCCESS);
     assert(nisyros_cmd_dispatch_args(cmd, kernel, &grid, arg_address) == NISYROS_SUCCESS);
     assert(nisyros_cmd_end(cmd) == NISYROS_SUCCESS);
     assert(nisyros_executable_destroy(executable) == NISYROS_BUSY);
@@ -166,6 +170,14 @@ int main(int argc, char **argv) {
     assert(nisyros_flush(device, destination, 256) == NISYROS_SUCCESS);
     nisyros_cmd indirect = NULL;
     assert(nisyros_cmd_create(device, family, &indirect) == NISYROS_SUCCESS);
+    assert(nisyros_cmd_begin(indirect) == NISYROS_SUCCESS);
+    for (uint32_t i = 0; i < 3; ++i) {
+        assert(nisyros_cmd_fill(indirect, indirect_grid + 4 * i, 4, 1) == NISYROS_SUCCESS);
+    }
+    assert(nisyros_cmd_barrier_range(indirect, indirect_grid, 12) == NISYROS_SUCCESS);
+    assert(nisyros_cmd_dispatch_indirect_args(indirect, kernel, indirect_grid, arg_address + 1) == NISYROS_INVALID_ARGUMENT);
+    assert(nisyros_cmd_end(indirect) == NISYROS_INVALID_ARGUMENT);
+    assert(nisyros_cmd_reset(indirect) == NISYROS_SUCCESS);
     assert(nisyros_cmd_begin(indirect) == NISYROS_SUCCESS);
     for (uint32_t i = 0; i < 3; ++i) {
         assert(nisyros_cmd_fill(indirect, indirect_grid + 4 * i, 4, 1) == NISYROS_SUCCESS);

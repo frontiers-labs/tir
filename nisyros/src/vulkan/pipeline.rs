@@ -624,7 +624,8 @@ impl Device {
     }
 
     fn supports_package(&self, package: &Package) -> bool {
-        package.required_features & !self.enabled_features == 0
+        package.format == crate::package::VULKAN_PIPELINE_BINARY_FORMAT
+            && package.required_features & !self.enabled_features == 0
             && package
                 .required_matrices
                 .iter()

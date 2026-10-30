@@ -17,7 +17,9 @@ const VK_STRUCTURE_TYPE_MEMORY_HOST_POINTER_PROPERTIES_EXT: i32 = 1_000_178_001;
 const VK_STRUCTURE_TYPE_EXPORT_MEMORY_ALLOCATE_INFO: i32 = 1_000_072_002;
 const VK_STRUCTURE_TYPE_IMPORT_MEMORY_FD_INFO_KHR: i32 = 1_000_074_000;
 const VK_STRUCTURE_TYPE_MEMORY_GET_FD_INFO_KHR: i32 = 1_000_074_002;
+const VK_STRUCTURE_TYPE_MEMORY_FD_PROPERTIES_KHR: i32 = 1_000_074_001;
 const VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT: u32 = 1;
+const VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT: u32 = 0x200;
 const VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT: u32 = 0x80;
 const VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT: u32 = 2;
 const VK_BUFFER_USAGE_TRANSFER_SRC_BIT: u32 = 1;
@@ -77,6 +79,12 @@ type GetMemoryHostPointerProperties = unsafe extern "system" fn(
 ) -> VkResult;
 type GetMemoryFd =
     unsafe extern "system" fn(VkDevice, *const MemoryGetFdInfo, *mut i32) -> VkResult;
+type GetMemoryFdProperties =
+    unsafe extern "system" fn(VkDevice, u32, i32, *mut MemoryFdProperties) -> VkResult;
+
+unsafe extern "C" {
+    fn lseek(fd: i32, offset: i64, whence: i32) -> i64;
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
@@ -162,6 +170,13 @@ struct MemoryGetFdInfo {
 }
 
 #[repr(C)]
+struct MemoryFdProperties {
+    s_type: i32,
+    p_next: *mut c_void,
+    memory_type_bits: u32,
+}
+
+#[repr(C)]
 struct MemoryHostPointerProperties {
     s_type: i32,
     p_next: *mut c_void,
@@ -222,6 +237,7 @@ pub(super) struct MemoryFns {
     invalidate: InvalidateMappedMemoryRanges,
     get_host_pointer_properties: Option<GetMemoryHostPointerProperties>,
     get_memory_fd: Option<GetMemoryFd>,
+    get_memory_fd_properties: Option<GetMemoryFdProperties>,
 }
 
 impl MemoryFns {
@@ -250,6 +266,11 @@ impl MemoryFns {
                     c"vkGetMemoryHostPointerPropertiesEXT",
                 ),
                 get_memory_fd: load_device(get_proc, device, c"vkGetMemoryFdKHR"),
+                get_memory_fd_properties: load_device(
+                    get_proc,
+                    device,
+                    c"vkGetMemoryFdPropertiesKHR",
+                ),
             })
         }
     }
@@ -783,6 +804,157 @@ impl Device {
                 memory_type_index: index,
                 exportable: false,
                 memory_properties: self.memory_properties.types[index as usize].property_flags,
+                mapped: ptr::null_mut(),
+                mapped_host: ptr::null_mut(),
+                exclusive: families.len() <= 1,
+            })
+        }
+    }
+
+    pub fn import_external_dmabuf_fd(
+        &self,
+        backing_offset: u64,
+        bytes: u64,
+        fd: OwnedFd,
+    ) -> Result<Allocation, AllocError> {
+        if !self.peer_dma_buf_fd || bytes == 0 {
+            return Err(AllocError::Unsupported);
+        }
+        let Some(get_properties) = self.memory.get_memory_fd_properties else {
+            return Err(AllocError::Unsupported);
+        };
+        let backing_bytes = unsafe { lseek(fd.as_raw_fd(), 0, 2) };
+        if backing_bytes <= 0
+            || backing_offset
+                .checked_add(bytes)
+                .is_none_or(|end| end > backing_bytes as u64)
+        {
+            return Err(AllocError::Invalid);
+        }
+        let backing_bytes = backing_bytes as u64;
+        let external = ExternalMemoryBufferCreateInfo {
+            s_type: VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO,
+            p_next: ptr::null(),
+            handle_types: VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
+        };
+        let mut families: Vec<u32> = self.queues.iter().map(|queue| queue.family).collect();
+        families.sort_unstable();
+        families.dedup();
+        let create_info = BufferCreateInfo {
+            s_type: VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+            p_next: (&raw const external).cast(),
+            flags: 0,
+            size: backing_bytes,
+            usage: BUFFER_USAGE,
+            sharing_mode: if families.len() > 1 {
+                VK_SHARING_MODE_CONCURRENT
+            } else {
+                VK_SHARING_MODE_EXCLUSIVE
+            },
+            queue_family_index_count: if families.len() > 1 {
+                families.len() as u32
+            } else {
+                0
+            },
+            queue_family_indices: if families.len() > 1 {
+                families.as_ptr()
+            } else {
+                ptr::null()
+            },
+        };
+        unsafe {
+            let mut buffer = 0;
+            let result =
+                (self.memory.create_buffer)(self.handle, &create_info, ptr::null(), &mut buffer);
+            if result != VK_SUCCESS {
+                return Err(AllocError::from_vulkan(result));
+            }
+            let mut requirements = MemoryRequirements::default();
+            (self.memory.get_requirements)(self.handle, buffer, &mut requirements);
+            let mut fd_properties = MemoryFdProperties {
+                s_type: VK_STRUCTURE_TYPE_MEMORY_FD_PROPERTIES_KHR,
+                p_next: ptr::null_mut(),
+                memory_type_bits: 0,
+            };
+            let result = get_properties(
+                self.handle,
+                VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
+                fd.as_raw_fd(),
+                &mut fd_properties,
+            );
+            let bits = requirements.memory_type_bits & fd_properties.memory_type_bits;
+            let Some((index, memory_properties)) = self
+                .choose_memory_type(bits, 0, 0, None, None)
+                .filter(|_| requirements.size <= backing_bytes)
+            else {
+                (self.memory.destroy_buffer)(self.handle, buffer, ptr::null());
+                return Err(if result == VK_SUCCESS {
+                    AllocError::Unsupported
+                } else {
+                    AllocError::from_vulkan(result)
+                });
+            };
+            let import = ImportMemoryFdInfo {
+                s_type: VK_STRUCTURE_TYPE_IMPORT_MEMORY_FD_INFO_KHR,
+                p_next: ptr::null(),
+                handle_type: VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
+                fd: fd.as_raw_fd(),
+            };
+            let flags = MemoryAllocateFlagsInfo {
+                s_type: VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO,
+                p_next: (&raw const import).cast(),
+                flags: VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT,
+                device_mask: 0,
+            };
+            let allocate_info = MemoryAllocateInfo {
+                s_type: VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+                p_next: (&raw const flags).cast(),
+                allocation_size: requirements.size,
+                memory_type_index: index,
+            };
+            let mut memory = 0;
+            let result = (self.memory.allocate_memory)(
+                self.handle,
+                &allocate_info,
+                ptr::null(),
+                &mut memory,
+            );
+            if result != VK_SUCCESS {
+                (self.memory.destroy_buffer)(self.handle, buffer, ptr::null());
+                return Err(AllocError::from_vulkan(result));
+            }
+            let _consumed_fd = fd.into_raw_fd();
+            let result = (self.memory.bind_buffer_memory)(self.handle, buffer, memory, 0);
+            if result != VK_SUCCESS {
+                (self.memory.free_memory)(self.handle, memory, ptr::null());
+                (self.memory.destroy_buffer)(self.handle, buffer, ptr::null());
+                return Err(AllocError::from_vulkan(result));
+            }
+            let address_info = BufferDeviceAddressInfo {
+                s_type: VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO,
+                p_next: ptr::null(),
+                buffer,
+            };
+            let raw_address = (self.memory.get_buffer_device_address)(self.handle, &address_info);
+            let Some(base) = raw_address
+                .checked_add(backing_offset)
+                .filter(|base| *base != 0)
+            else {
+                (self.memory.free_memory)(self.handle, memory, ptr::null());
+                (self.memory.destroy_buffer)(self.handle, buffer, ptr::null());
+                return Err(AllocError::Backend);
+            };
+            Ok(Allocation {
+                buffer,
+                memory,
+                base,
+                bytes,
+                buffer_offset: backing_offset,
+                buffer_size: backing_bytes,
+                allocation_size: requirements.size,
+                memory_type_index: index,
+                exportable: false,
+                memory_properties,
                 mapped: ptr::null_mut(),
                 mapped_host: ptr::null_mut(),
                 exclusive: families.len() <= 1,

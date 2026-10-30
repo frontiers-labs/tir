@@ -7,7 +7,7 @@
 extern "C" {
 #endif
 
-#define NISYROS_PLUGIN_ABI_VERSION 1u
+#define NISYROS_PLUGIN_ABI_VERSION 2u
 #define NISYROS_PLUGIN_SERVICES_VERSION 1u
 
 typedef struct {
@@ -164,10 +164,12 @@ typedef struct {
         void *device, void *host, uint64_t bytes, void **out,
         nisyros_plugin_allocation_info *info);
     nisyros_status (NISYROS_CALL *allocation_export_fd)(
-        void *device, void *allocation, int32_t *out_fd);
+        void *device, void *allocation, int32_t *out_fd,
+        uint64_t *out_backing_offset);
+    /* `backing_offset` includes the exported allocation's DMA-BUF offset. */
     /* The import callback owns `fd` after the call, including on failure. */
     nisyros_status (NISYROS_CALL *allocation_import_fd)(
-        void *device, void *source_allocation, uint64_t source_offset,
+        void *device, void *source_allocation, uint64_t backing_offset,
         uint64_t bytes, int32_t fd, void **out,
         nisyros_plugin_allocation_info *info);
     nisyros_status (NISYROS_CALL *device_wait_idle)(

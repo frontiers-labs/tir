@@ -157,6 +157,13 @@ int main(void) {
     assert(nisyros_submit_batch(queue, &invalid, &rejected) == NISYROS_INVALID_ARGUMENT);
     assert(rejected.event == NULL);
 
+    nisyros_batch_entry reversed[2] = {{consumer, &consumer_submit}, {producer, &producer_submit}};
+    invalid.commands = reversed;
+    invalid.signal_count = 0;
+    assert(nisyros_submit_batch(queue, &invalid, &rejected) == NISYROS_INVALID_ARGUMENT);
+    assert(rejected.event == NULL);
+    invalid.commands = entries;
+
     nisyros_point repeated_signals[2] = {{finished, 7}, {finished, 8}};
     invalid.signal_count = 2;
     invalid.signals = repeated_signals;

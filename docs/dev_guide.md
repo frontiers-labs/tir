@@ -39,10 +39,23 @@ include the pinned GCC torture corpus, use `cargo xtask test --profile ci --tort
 ### Working on Nisyros
 
 `nisyros` is the top-level C ABI offload runtime. Its header is
-`nisyros/include/nisyros.h`. The Vulkan backend loads `libvulkan.so.1` at run
-time and requires `VK_KHR_pipeline_binary` and
+`nisyros/include/nisyros.h`. Local discovery selects ROCm when it has a
+supported GPU, then falls back to Vulkan for that GPU. A GPU exposed by ROCm
+and Vulkan appears once. Set `NISYROS_DISABLE_BACKENDS` to a comma-separated
+list of `rocm` and `vulkan` to inhibit built-in backends.
+`NISYROS_PLUGIN_LIBRARY` still selects
+an explicit external provider.
+The ROCm backend loads `libamdhip64.so` at run time; the Vulkan backend loads
+`libvulkan.so.1` at run time and requires `VK_KHR_pipeline_binary` and
 `VK_KHR_device_address_commands`. Pipeline packages are created offline;
-runtime loading does not accept SPIR-V as a fallback.
+runtime loading does not compile shaders.
+ROCm loads HSA at run time when available to export and import DMA-BUF peer
+memory. It uses HIP-registered shared pages
+for peer timeline FD export and import when the device supports them.
+Use `nisyros-pack --rocm <hsaco> <package> <entry> <arg-size> <arg-align>
+<group-x> <group-y> <group-z> <fields...>` to package a HIP code object.
+ROCm kernels take one pointer to the device-resident packed argument block.
+The default `nisyros-pack` mode captures a Vulkan pipeline binary from SPIR-V.
 Use `NISYROS_DESC_INIT(type)` for versioned C descriptors; the heap and barrier
 helpers set their required sentinel defaults.
 `nisyros_allocation_query` reports the realized memory type, heap, and
@@ -58,25 +71,29 @@ device, and queue handles. Finish relevant Nisyros work before using those
 handles, finish external work before returning its memory to Nisyros, and do
 not submit externally to a Nisyros-owned queue concurrently. These tables do
 not load replaceable backend plugins.
-`nisyros_plugin.h` defines a separate provider ABI. The linked Vulkan provider
-currently implements sized negotiation, device inventory, device opening, and
+`nisyros_plugin.h` defines a separate provider ABI. The built-in providers
+implement sized negotiation, device inventory, device opening, and
 allocation lifecycle through opaque handles. Core discovery, device opening,
 allocations, timeline events, idle waits, and native pipeline import use that
 table. Command encoding, timestamp queries, and submission also use provider
-callbacks. Set `NISYROS_PLUGIN_LIBRARY` to a shared library exporting
+callbacks. ABI version 2 carries each DMA-BUF export's backing offset through
+peer import. Set `NISYROS_PLUGIN_LIBRARY` to a shared library exporting
 `nisyros_plugin_get_api` to select an external provider. Run
 `bash nisyros/tests/run-external-provider.sh` to exercise an independent C
 provider without Vulkan device discovery.
 `nisyros_diagnostic_get` copies the calling thread's last recorded backend
-failure into caller storage, including the Vulkan result code when one was
+failure into caller storage, including a native backend code when one was
 returned. Read it on the thread that received the failed status.
 `nisyros_submit_batch` accepts up to 256 sealed recordings on one queue, with
 per-recording slot bindings and shared prerequisite and completion points.
-It validates the whole batch before one Vulkan submit call. A batch boundary
-does not add a memory barrier between independent recordings. A native
+It validates the whole batch before one provider submission. A batch boundary
+does not add a memory barrier between independent recordings. A Vulkan
 out-of-memory submit rolls back reservations and can be retried. Device loss
 retains the affected recordings and resources until `nisyros_device_abort`
 reaches quiescence; callers can then destroy the children and close the device.
+ROCm queue submissions enter a worker per HIP stream. The worker handles
+indirect grids and timestamps after earlier commands on that stream complete.
+ROCm reports worker failures through completion events.
 `nisyros_cmd_write_timestamp` stores a 64-bit device-domain counter at a
 device address. Queue-family discovery reports its valid bits and nanoseconds
 per tick. A later device read of that address still needs an explicit memory
@@ -88,11 +105,12 @@ allocation; matching family fields mean no transfer. The hardware test moves
 one allocation between two RADV queue families under an event dependency.
 
 Run the package parser and Vulkan FFI layout checks with `cargo test -p nisyros`.
-The physical GPU check compiles its shader, captures a native
-pipeline package, and tests the C ABI in a second process:
+The physical GPU checks compile shaders, package native binaries, and test the
+C ABI in a second process:
 
 ```sh
 nisyros/tests/run-hardware.sh
+nisyros/tests/run-rocm-hardware.sh
 nisyros/tests/run-peer-hardware.sh
 python3 nisyros/tests/run-communication.py /usr/share/vulkan/icd.d/radeon_icd.json
 python3 nisyros/tests/run-communication.py /usr/share/vulkan/icd.d/radeon_icd.json --replay
@@ -106,7 +124,11 @@ python3 nisyros/tests/run-reopen.py /usr/share/vulkan/icd.d/radeon_icd.json
 ```
 
 The first script requires `glslangValidator`, `spirv-val`, the Vulkan validation
-layer, and a device with the strict Vulkan profile. CI runs C and Python ABI
+layer, and a device with the strict Vulkan profile.
+The ROCm script requires `hipcc`, `rocminfo`, and an accessible ROCm GPU. Set
+`NISYROS_ROCM_ARCH` when the first `gfx*` ISA reported by `rocminfo` is not the
+target architecture. The Vulkan-only scripts disable ROCm so their validation
+checks use the intended backend. CI runs C and Python ABI
 checks against a software Vulkan ICD. A software device lacking the mandatory
 extensions must be reported as unsupported. CI also starts two processes to
 check fixed-membership discovery, stable cluster IDs, and ordered group ranks.

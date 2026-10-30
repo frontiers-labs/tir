@@ -41,6 +41,7 @@ const VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_SEMAPHORE_INFO: i32 = 1_000_076
 const VK_STRUCTURE_TYPE_EXTERNAL_SEMAPHORE_PROPERTIES: i32 = 1_000_076_001;
 const VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO: i32 = 1_000_207_002;
 const VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT: u32 = 1;
+const VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT: u32 = 0x200;
 const VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT: u32 = 1;
 const VK_EXTERNAL_MEMORY_FEATURE_EXPORTABLE_BIT: u32 = 2;
 const VK_EXTERNAL_MEMORY_FEATURE_IMPORTABLE_BIT: u32 = 4;
@@ -430,6 +431,7 @@ pub struct DeviceRecord {
     flags_extension: Option<FlagsExtension>,
     pub external_host_alignment: Option<u64>,
     pub peer_memory_fd: bool,
+    pub peer_dma_buf_fd: bool,
     pub peer_timeline_fd: bool,
 }
 
@@ -462,6 +464,7 @@ pub struct Device {
     pipeline: pipeline::PipelineFns,
     pub external_host_alignment: Option<u64>,
     pub peer_memory_fd: bool,
+    pub peer_dma_buf_fd: bool,
     pub peer_timeline_fd: bool,
     pub enabled_features: u64,
     pub enabled_matrices: Vec<CooperativeMatrixTuple>,
@@ -670,8 +673,11 @@ impl Instance {
         if record.external_host_alignment.is_some() {
             names.push(c"VK_EXT_external_memory_host".as_ptr());
         }
-        if record.peer_memory_fd {
+        if record.peer_memory_fd || record.peer_dma_buf_fd {
             names.push(c"VK_KHR_external_memory_fd".as_ptr());
+        }
+        if record.peer_dma_buf_fd {
+            names.push(c"VK_EXT_external_memory_dma_buf".as_ptr());
         }
         if record.peer_timeline_fd {
             names.push(c"VK_KHR_external_semaphore_fd".as_ptr());
@@ -864,6 +870,7 @@ impl Instance {
                 pipeline,
                 external_host_alignment: record.external_host_alignment,
                 peer_memory_fd: record.peer_memory_fd,
+                peer_dma_buf_fd: record.peer_dma_buf_fd,
                 peer_timeline_fd: record.peer_timeline_fd,
                 enabled_features: record.features,
                 enabled_matrices: record.cooperative_matrices.clone(),
@@ -935,6 +942,31 @@ impl Instance {
                     | VK_EXTERNAL_MEMORY_FEATURE_IMPORTABLE_BIT
                 && properties.features & 1 == 0
                 && properties.compatible_handles & VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT != 0
+        } else {
+            false
+        };
+        let peer_dma_buf_fd = if has(c"VK_KHR_external_memory_fd")
+            && has(c"VK_EXT_external_memory_dma_buf")
+        {
+            let info = PhysicalDeviceExternalBufferInfo {
+                s_type: VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_BUFFER_INFO,
+                p_next: ptr::null(),
+                flags: 0,
+                usage: memory::BUFFER_USAGE,
+                handle_type: VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
+            };
+            let mut properties = ExternalBufferProperties {
+                s_type: VK_STRUCTURE_TYPE_EXTERNAL_BUFFER_PROPERTIES,
+                p_next: ptr::null_mut(),
+                features: 0,
+                export_from_imported: 0,
+                compatible_handles: 0,
+            };
+            unsafe { (self.get_external_buffer_properties)(physical, &info, &mut properties) };
+            properties.features & VK_EXTERNAL_MEMORY_FEATURE_IMPORTABLE_BIT != 0
+                && properties.features & 1 == 0
+                && properties.compatible_handles & VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT
+                    != 0
         } else {
             false
         };
@@ -1248,6 +1280,7 @@ impl Instance {
             flags_extension,
             external_host_alignment,
             peer_memory_fd,
+            peer_dma_buf_fd,
             peer_timeline_fd,
         })
     }

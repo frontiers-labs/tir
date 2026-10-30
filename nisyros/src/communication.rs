@@ -1156,12 +1156,12 @@ pub unsafe extern "C" fn nisyros_endpoint_submit(
             }
         })
         .collect();
-    if endpoint_ref.shared.pending.load(Ordering::Acquire) >= MAX_PENDING_MESSAGES {
-        return BUSY;
-    }
     let Ok(mut state) = endpoint_ref.shared.state.lock() else {
         return PEER_LOST;
     };
+    if endpoint_ref.shared.pending.load(Ordering::Acquire) >= MAX_PENDING_MESSAGES {
+        return BUSY;
+    }
     let mut keys = BTreeMap::new();
     let mut collective_shapes = BTreeMap::new();
     for operation in &operations {
@@ -1939,10 +1939,11 @@ fn progress_loop(
     let mut last_heartbeat = Instant::now();
     let mut clean_shutdown = false;
     loop {
+        let until_heartbeat = heartbeat.saturating_sub(last_heartbeat.elapsed());
         let wait = if progress.deferred.is_empty() {
-            heartbeat
+            until_heartbeat
         } else {
-            Duration::from_millis(2)
+            until_heartbeat.min(Duration::from_millis(2))
         };
         let result = match receiver.recv_timeout(wait) {
             Ok(ProgressMessage::Submit(task)) => progress.enqueue(task, writer.as_mut(), &shared),
@@ -1967,20 +1968,21 @@ fn progress_loop(
                 clean_shutdown = true;
                 break;
             }
-            Err(mpsc::RecvTimeoutError::Timeout) if last_heartbeat.elapsed() >= heartbeat => {
-                last_heartbeat = Instant::now();
-                if let Some(writers) = writer.as_mut() {
-                    writers.heartbeat()
-                } else {
-                    Ok(())
-                }
-            }
             Err(mpsc::RecvTimeoutError::Timeout) => Ok(()),
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         };
         if let Err(status) = result {
             mark_failed(&shared, status);
             break;
+        }
+        if last_heartbeat.elapsed() >= heartbeat {
+            last_heartbeat = Instant::now();
+            if let Some(writers) = writer.as_mut()
+                && let Err(status) = writers.heartbeat()
+            {
+                mark_failed(&shared, status);
+                break;
+            }
         }
         if let Err(status) = progress.poll_deferred(writer.as_mut(), &shared) {
             mark_failed(&shared, status);
@@ -2091,5 +2093,66 @@ fn gpu_copy(operation: &TransferOp, incoming: Option<&[u8]>) -> Result<Vec<u8>, 
         Ok(output)
     } else {
         Err(result)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::TcpListener;
+
+    #[test]
+    fn incoming_heartbeats_do_not_starve_outgoing_heartbeats() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut peer = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (stream, _) = listener.accept().unwrap();
+        peer.set_read_timeout(Some(Duration::from_millis(300)))
+            .unwrap();
+        let mut incoming = peer.try_clone().unwrap();
+        let incoming_stop = Arc::new(AtomicBool::new(false));
+        let send_stop = Arc::clone(&incoming_stop);
+        let traffic = thread::spawn(move || {
+            while !send_stop.load(Ordering::Acquire) {
+                if transport::write_frame(&mut incoming, &Frame::heartbeat()).is_err() {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(5));
+            }
+        });
+        let (sender, receiver) = mpsc::channel();
+        // No submissions use a completion event in this transport-only test.
+        // A preexisting failure keeps unexpected I/O errors from touching one.
+        let shared = Arc::new(Shared {
+            completion: 0,
+            failure: AtomicI32::new(PEER_LOST),
+            pending: AtomicUsize::new(0),
+            state: Mutex::new(EndpointState {
+                next_value: 0,
+                used_keys: BTreeMap::new(),
+            }),
+        });
+        let worker_sender = sender.clone();
+        let worker = thread::spawn(move || {
+            progress_loop(
+                Some((0, BTreeMap::from([(1, stream)]))),
+                receiver,
+                worker_sender,
+                shared,
+                ProgressConfig {
+                    bindings: Vec::new(),
+                    group_epoch: 1,
+                    rank_count: 2,
+                    rank_nodes: vec![0, 1],
+                    local_node: 0,
+                    timeout: Duration::from_millis(400),
+                },
+            )
+        });
+        let frame = transport::read_frame(&mut peer);
+        incoming_stop.store(true, Ordering::Release);
+        let _ = sender.send(ProgressMessage::Shutdown);
+        traffic.join().unwrap();
+        worker.join().unwrap();
+        assert_eq!(frame.unwrap().kind, FrameKind::Heartbeat);
     }
 }

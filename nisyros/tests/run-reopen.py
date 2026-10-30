@@ -32,6 +32,7 @@ with tempfile.TemporaryDirectory() as directory:
         address = f"127.0.0.1:{listener.getsockname()[1]}"
     session = str(secrets.randbits(63) or 1)
     env = os.environ.copy()
+    env["NISYROS_DISABLE_BACKENDS"] = "rocm"
     if simulator:
         env["LD_LIBRARY_PATH"] = f"{temporary}:{env.get('LD_LIBRARY_PATH', '')}"
         env["NISYROS_SIM_DEVICES"] = "1"
