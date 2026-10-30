@@ -57,8 +57,8 @@ with tempfile.TemporaryDirectory() as directory:
     session_id = str(secrets.randbits(63) or 1)
     env0 = os.environ.copy()
     env1 = os.environ.copy()
-    env0["NISYROS_DISABLE_BACKENDS"] = "rocm"
-    env1["NISYROS_DISABLE_BACKENDS"] = "rocm"
+    env0["NISYROS_DISABLE_BACKENDS"] = "rocm,xdna"
+    env1["NISYROS_DISABLE_BACKENDS"] = "rocm,xdna"
     if simulator:
         for env, count in ((env0, "2"), (env1, "1")):
             env["LD_LIBRARY_PATH"] = f"{temporary}:{env.get('LD_LIBRARY_PATH', '')}"

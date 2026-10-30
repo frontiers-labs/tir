@@ -1,6 +1,6 @@
 use nisyros::package::{
     ARG_DEVICE_ADDRESS, ARG_VALUE, ArgumentField, BinaryKey, Package, PipelineBinary,
-    ROCM_CODE_OBJECT_FORMAT, VULKAN_PIPELINE_BINARY_FORMAT,
+    ROCM_CODE_OBJECT_FORMAT, VULKAN_PIPELINE_BINARY_FORMAT, XDNA_XCLBIN_FORMAT,
 };
 use nisyros::{
     CooperativeMatrixTuple, FEATURE_BFLOAT16_DOT, FEATURE_BFLOAT16_MATRIX, FEATURE_BFLOAT16_TYPE,
@@ -52,11 +52,12 @@ fn matrix(text: &str) -> Result<CooperativeMatrixTuple, String> {
 fn run() -> Result<(), String> {
     let mut args: Vec<String> = env::args().collect();
     let rocm = args.get(1).is_some_and(|argument| argument == "--rocm");
-    if rocm {
+    let xdna = args.get(1).is_some_and(|argument| argument == "--xdna");
+    if rocm || xdna {
         args.remove(1);
     }
     if args.len() < 10 {
-        return Err("usage: nisyros-pack [--rocm] <spirv|hsaco> <package> <entry> <arg-size> <arg-align> <group-x> <group-y> <group-z> <addr:offset|value:offset:width|matrix:m:n:k:a:b:c:result:saturation:scope|float16|memory-model|bfloat:type|bfloat:dot|bfloat:matrix>...".into());
+        return Err("usage: nisyros-pack [--rocm|--xdna] <spirv|hsaco|xclbin> <package> <entry> <arg-size> <arg-align> <group-x> <group-y> <group-z> <addr:offset|value:offset:width|matrix:m:n:k:a:b:c:result:saturation:scope|float16|memory-model|bfloat:type|bfloat:dot|bfloat:matrix>...".into());
     }
     let bytes = fs::read(&args[1]).map_err(|error| error.to_string())?;
     let mut fields = Vec::new();
@@ -80,8 +81,29 @@ fn run() -> Result<(), String> {
             fields.push(field(text)?);
         }
     }
+    if xdna {
+        let layout = [
+            (ARG_DEVICE_ADDRESS, 0, 8),
+            (ARG_VALUE, 8, 4),
+            (ARG_VALUE, 12, 4),
+        ];
+        if fields.len() < 3
+            || fields
+                .iter()
+                .take(3)
+                .zip(layout)
+                .any(|(field, expected)| (field.kind, field.offset, field.width) != expected)
+            || number(&args[4])? < 16
+            || number(&args[4])? > 4080
+            || [number(&args[6])?, number(&args[7])?, number(&args[8])?] != [1, 1, 1]
+        {
+            return Err("XDNA needs a 16 to 4080-byte argument block starting with addr:0 value:8:4 value:12:4 and a 1x1x1 grid".into());
+        }
+    }
     let template = Package {
-        format: if rocm {
+        format: if xdna {
+            XDNA_XCLBIN_FORMAT
+        } else if rocm {
             ROCM_CODE_OBJECT_FORMAT
         } else {
             VULKAN_PIPELINE_BINARY_FORMAT
@@ -103,15 +125,19 @@ fn run() -> Result<(), String> {
         scratch_bytes: 0,
         binaries: Vec::new(),
     };
-    let package = if rocm {
-        if !bytes.starts_with(b"\x7fELF") && !bytes.starts_with(b"__CLANG_OFFLOAD_BUNDLE__") {
+    let package = if rocm || xdna {
+        if rocm && !bytes.starts_with(b"\x7fELF") && !bytes.starts_with(b"__CLANG_OFFLOAD_BUNDLE__")
+        {
             return Err("ROCm input must be a HIP code object or offload bundle".into());
+        }
+        if xdna && !bytes.starts_with(b"xclbin2\0") {
+            return Err("XDNA input must be an XCLBIN image".into());
         }
         if template.required_features != 0 || !template.required_matrices.is_empty() {
             return Err("native package feature manifests are not supported".into());
         }
         Package {
-            vendor_id: 0x1002,
+            vendor_id: if xdna { 0x1022 } else { 0x1002 },
             binaries: vec![PipelineBinary {
                 key: BinaryKey {
                     size: 1,

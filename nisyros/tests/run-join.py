@@ -39,8 +39,8 @@ with tempfile.TemporaryDirectory() as directory:
     session_id = str(secrets.randbits(63) or 1)
     env0 = os.environ.copy()
     env1 = os.environ.copy()
-    env0["NISYROS_DISABLE_BACKENDS"] = "rocm"
-    env1["NISYROS_DISABLE_BACKENDS"] = "rocm"
+    env0["NISYROS_DISABLE_BACKENDS"] = "rocm,xdna"
+    env1["NISYROS_DISABLE_BACKENDS"] = "rocm,xdna"
     env0["VK_DRIVER_FILES"] = f"{icd}:{duplicate}"
     env1["VK_DRIVER_FILES"] = str(icd)
     node0 = subprocess.Popen(

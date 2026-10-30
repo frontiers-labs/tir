@@ -25,12 +25,12 @@ cc -std=c11 -Wall -Wextra -Werror -I nisyros/include \
 cc -std=c11 -Wall -Wextra -Werror -I nisyros/include \
   nisyros/tests/rocm_peer.c -L target/debug -lnisyros \
   -Wl,-rpath,"$repo/target/debug" -o "$temp/rocm_peer"
-"$temp/rocm" "$temp/add_one.nsy"
-NISYROS_DISABLE_BACKENDS=vulkan "$temp/batch"
-if NISYROS_DISABLE_BACKENDS=vulkan "$temp/rocm_peer"; then
+NISYROS_DISABLE_BACKENDS=xdna "$temp/rocm" "$temp/add_one.nsy"
+NISYROS_DISABLE_BACKENDS=vulkan,xdna "$temp/batch"
+if NISYROS_DISABLE_BACKENDS=vulkan,xdna "$temp/rocm_peer"; then
   :
 else
   status=$?
   test "$status" -eq 77
 fi
-NISYROS_DISABLE_BACKENDS=rocm,vulkan "$temp/backend_filter"
+NISYROS_DISABLE_BACKENDS=rocm,vulkan,xdna "$temp/backend_filter"

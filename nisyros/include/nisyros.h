@@ -90,7 +90,9 @@ typedef struct {
 
 #define NISYROS_BACKEND_VULKAN 1u
 #define NISYROS_BACKEND_ROCM 2u
+#define NISYROS_BACKEND_XDNA 3u
 #define NISYROS_DEVICE_TYPE_CPU 4u
+#define NISYROS_DEVICE_TYPE_ACCELERATOR 5u
 #define NISYROS_BACKEND_ABI_VERSION 1u
 #define NISYROS_VULKAN_INTEROP_ABI_VERSION 1u
 
@@ -332,6 +334,9 @@ typedef struct {
     uint32_t direct_mapping;
     uint32_t event_import;
     uint32_t host_staging;
+    /* Backend on which an allocation can be made for use by both devices. */
+    uint32_t shared_allocation_backend;
+    uint32_t reserved;
 } nisyros_peer_info;
 
 typedef struct {
@@ -389,6 +394,7 @@ typedef struct {
 
 #define NISYROS_IMAGE_VULKAN_PIPELINE_BINARY 1u
 #define NISYROS_IMAGE_ROCM_CODE_OBJECT 2u
+#define NISYROS_IMAGE_XDNA_XCLBIN 3u
 
 typedef struct {
     nisyros_descriptor_header header;

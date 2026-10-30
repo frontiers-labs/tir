@@ -40,10 +40,11 @@ include the pinned GCC torture corpus, use `cargo xtask test --profile ci --tort
 
 `nisyros` is the top-level C ABI offload runtime. Its header is
 `nisyros/include/nisyros.h`. Local discovery selects ROCm when it has a
-supported GPU, then falls back to Vulkan for that GPU. A GPU exposed by ROCm
-and Vulkan appears once. Set `NISYROS_DISABLE_BACKENDS` to a comma-separated
-list of `rocm` and `vulkan` to inhibit built-in backends.
-`NISYROS_PLUGIN_LIBRARY` still selects
+supported GPU, then falls back to Vulkan for that GPU. It also enumerates XDNA
+through `/dev/accel` on hosts with AMD's DRM driver version 0.10. A GPU exposed
+by ROCm and Vulkan appears once; the GPU and NPU appear as separate devices.
+Set `NISYROS_DISABLE_BACKENDS` to a comma-separated list of `rocm`, `vulkan`,
+and `xdna` to inhibit built-in backends. `NISYROS_PLUGIN_LIBRARY` still selects
 an explicit external provider.
 The ROCm backend loads `libamdhip64.so` at run time; the Vulkan backend loads
 `libvulkan.so.1` at run time and requires `VK_KHR_pipeline_binary` and
@@ -56,6 +57,33 @@ Use `nisyros-pack --rocm <hsaco> <package> <entry> <arg-size> <arg-align>
 <group-x> <group-y> <group-z> <fields...>` to package a HIP code object.
 ROCm kernels take one pointer to the device-resident packed argument block.
 The default `nisyros-pack` mode captures a Vulkan pipeline binary from SPIR-V.
+Use `nisyros-pack --xdna <xclbin> <package> <cu-name> <arg-size> <arg-align>
+1 1 1 addr:0 value:8:4 value:12:4 <fields...>` for an XDNA CU. The packed
+argument block starts with the device address and byte length of its control
+code, followed by the 32-bit word count of instruction properties and 32-bit
+register words. Nisyros inserts the ELF-flow opcode register before the other
+register words.
+Declare every further device address in those words with `addr:<offset>` so
+Nisyros can retain and pin its BO. XDNA dispatch uses a `1x1x1` grid. The
+control code is a separate device allocation and must match the XCLBIN CU.
+XDNA's mapped BOs are noncoherent; flush CPU writes before device use and
+invalidate after device writes. XDNA copy and fill recordings use the mapped
+host view. XDNA kernel DMA requires matching control code; the DRM driver has
+no standalone copy or fill DMA command.
+`nisyros_peer_capabilities(target, source, ...)` reports two distinct facts.
+`direct_mapping` says whether `target` can import an allocation owned by
+`source`. `shared_allocation_backend` names a backend whose allocation both
+devices can read and write. For a compatible ROCm/XDNA pair it reports ROCm
+in either argument order: allocate on the GPU, then map that BO into XDNA.
+XDNA DMA can read GPU input and write GPU output through those mappings.
+The ROCm provider cannot obtain a GPU device pointer from an XDNA-owned BO,
+so `direct_mapping` is false for that specific import order.
+Set `NISYROS_DISABLE_BACKENDS=rocm` to select Vulkan for the GPU. When RADV
+exposes `VK_EXT_external_memory_dma_buf` for Nisyros buffer usage, Vulkan can
+import an XDNA-owned BO and XDNA can import a Vulkan-owned BO. Both direct
+mapping orders work; `shared_allocation_backend` reports XDNA.
+Cross-device event import is unavailable; complete the producer event on the
+host before submitting on the other device.
 Use `NISYROS_DESC_INIT(type)` for versioned C descriptors; the heap and barrier
 helpers set their required sentinel defaults.
 `nisyros_allocation_query` reports the realized memory type, heap, and
@@ -111,6 +139,9 @@ C ABI in a second process:
 ```sh
 nisyros/tests/run-hardware.sh
 nisyros/tests/run-rocm-hardware.sh
+nisyros/tests/run-xdna-hardware.sh <xclbin> <cu-name>
+nisyros/tests/run-xdna-hardware.sh <gemm-elf-xclbin> DPU <tct-1col-elf>
+nisyros/tests/run-xdna-vulkan-hardware.sh
 nisyros/tests/run-peer-hardware.sh
 python3 nisyros/tests/run-communication.py /usr/share/vulkan/icd.d/radeon_icd.json
 python3 nisyros/tests/run-communication.py /usr/share/vulkan/icd.d/radeon_icd.json --replay
@@ -127,8 +158,14 @@ The first script requires `glslangValidator`, `spirv-val`, the Vulkan validation
 layer, and a device with the strict Vulkan profile.
 The ROCm script requires `hipcc`, `rocminfo`, and an accessible ROCm GPU. Set
 `NISYROS_ROCM_ARCH` when the first `gfx*` ISA reported by `rocminfo` is not the
-target architecture. The Vulkan-only scripts disable ROCm so their validation
-checks use the intended backend. CI runs C and Python ABI
+target architecture. The XDNA script requires the DRM 0.10 device and an XCLBIN
+with a compatible PDI for the named CU. With the matching one-column DMA ELF
+and `llvm-objcopy`, it also verifies exact NPU DMA output between two GPU-owned
+buffers and the lifetime of shared GEM mappings. The Vulkan-only scripts
+disable ROCm and XDNA so their validation checks use the intended backend.
+The XDNA/Vulkan script selects RADV and checks exact output for DMA-BUF imports
+in both directions, including an interior range of an XDNA-owned allocation.
+CI runs C and Python ABI
 checks against a software Vulkan ICD. A software device lacking the mandatory
 extensions must be reported as unsupported. CI also starts two processes to
 check fixed-membership discovery, stable cluster IDs, and ordered group ranks.

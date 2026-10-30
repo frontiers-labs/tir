@@ -1,4 +1,4 @@
-//! Nisyros C ABI with ROCm and Vulkan backends.
+//! Nisyros C ABI with ROCm, Vulkan, and direct DRM XDNA backends.
 
 mod communication;
 mod diagnostic;
@@ -78,6 +78,7 @@ const PEER_LOST: i32 = -10;
 const ABI_VERSION: u32 = 1;
 const BACKEND_VULKAN: u32 = 1;
 const BACKEND_ROCM: u32 = 2;
+const BACKEND_XDNA: u32 = 3;
 const EXT_ALLOC_HEAP: u32 = 1;
 const EXT_ALLOC_SHARING: u32 = 2;
 pub const FEATURE_COOPERATIVE_MATRIX: u64 = 1;
@@ -338,6 +339,13 @@ pub struct PeerInfo {
     direct_mapping: u32,
     event_import: u32,
     host_staging: u32,
+}
+
+#[repr(C)]
+struct PeerInfoExtended {
+    prefix: PeerInfo,
+    shared_allocation_backend: u32,
+    reserved: u32,
 }
 
 pub struct Cluster {
@@ -2004,15 +2012,61 @@ fn peer_pair(device: &Device, peer: &Device) -> (bool, bool, bool) {
     let same_driver = same_physical
         && ((device.backend_id == BACKEND_ROCM && peer.backend_id == BACKEND_ROCM)
             || (device.driver_uuid != [0; 16] && device.driver_uuid == peer.driver_uuid));
+    let gpu_to_xdna = (device.backend_id, peer.backend_id) == (BACKEND_XDNA, BACKEND_ROCM)
+        && (device.vendor_id, peer.vendor_id) == (0x1022, 0x1002);
+    let vulkan_xdna = matches!(
+        (device.backend_id, peer.backend_id),
+        (BACKEND_VULKAN, BACKEND_XDNA) | (BACKEND_XDNA, BACKEND_VULKAN)
+    ) && ((device.vendor_id, peer.vendor_id) == (0x1002, 0x1022)
+        || (device.vendor_id, peer.vendor_id) == (0x1022, 0x1002));
     let same_cluster = ptr::eq(device.cluster, peer.cluster);
     (
         same_physical,
-        same_cluster && same_driver && device.backend.peer_memory_fd && peer.backend.peer_memory_fd,
+        same_cluster
+            && (same_driver || gpu_to_xdna || vulkan_xdna)
+            && device.backend.peer_memory_fd
+            && peer.backend.peer_memory_fd,
         same_cluster
             && same_driver
             && device.backend.peer_timeline_fd
             && peer.backend.peer_timeline_fd,
     )
+}
+
+fn probe_peer_memory(target: &Device, source: &Device) -> bool {
+    let mut families: Vec<u32> = source.queues.iter().map(|queue| queue.family).collect();
+    families.sort_unstable();
+    families.dedup();
+    let request = plugin::AllocRequest {
+        bytes: 4096,
+        alignment: 4096,
+        required_properties: 2,
+        preferred_properties: 1,
+        queue_families: &families,
+        required_heap: None,
+        preferred_heap: None,
+        exclusive: false,
+    };
+    let Ok(allocation) = source.backend.allocate(&request) else {
+        return false;
+    };
+    let imported =
+        source
+            .backend
+            .export_allocation_fd(&allocation)
+            .and_then(|(fd, backing_offset)| {
+                target
+                    .backend
+                    .import_peer_fd(&allocation, backing_offset, 4096, fd, false)
+            });
+    if let Ok(imported) = imported {
+        target.backend.free_allocation(imported);
+        source.backend.free_allocation(allocation);
+        true
+    } else {
+        source.backend.free_allocation(allocation);
+        false
+    }
 }
 
 /// Queries direct peer routes between two opened local sessions.
@@ -2035,11 +2089,35 @@ pub unsafe extern "C" fn nisyros_peer_capabilities(
     }
     let target = unsafe { &*device };
     let source = unsafe { &*peer };
-    let (same, memory, event) = peer_pair(target, source);
+    let (same, mut memory, event) = peer_pair(target, source);
+    if memory && target.backend_id != source.backend_id {
+        memory = probe_peer_memory(target, source);
+    }
+    let shared_allocation_backend = if !ptr::eq(target.cluster, source.cluster) {
+        0
+    } else {
+        match (target.backend_id, source.backend_id) {
+            (BACKEND_XDNA, BACKEND_ROCM) if memory => BACKEND_ROCM,
+            (BACKEND_ROCM, BACKEND_XDNA) if probe_peer_memory(source, target) => BACKEND_ROCM,
+            (BACKEND_VULKAN, BACKEND_XDNA) if memory => BACKEND_XDNA,
+            (BACKEND_XDNA, BACKEND_VULKAN) if probe_peer_memory(source, target) => BACKEND_XDNA,
+            (BACKEND_XDNA, BACKEND_VULKAN) if memory => BACKEND_VULKAN,
+            (BACKEND_VULKAN, BACKEND_XDNA) if probe_peer_memory(source, target) => BACKEND_VULKAN,
+            _ if memory && same => target.backend_id,
+            _ => 0,
+        }
+    };
     out_ref.same_physical_device = u32::from(same);
     out_ref.direct_mapping = u32::from(memory);
     out_ref.event_import = u32::from(event);
     out_ref.host_staging = 0;
+    if out_ref.header.struct_size as usize >= std::mem::size_of::<PeerInfoExtended>() {
+        let extended = out.cast::<PeerInfoExtended>();
+        unsafe {
+            (*extended).shared_allocation_backend = shared_allocation_backend;
+            (*extended).reserved = 0;
+        }
+    }
     SUCCESS
 }
 
@@ -2216,7 +2294,7 @@ pub unsafe extern "C" fn nisyros_executable_load(
     if status != SUCCESS {
         return status;
     }
-    if !matches!(image.format, 1..=2)
+    if !matches!(image.format, 1..=3)
         || image.reserved != 0
         || image.bytes.is_null()
         || image.byte_size == 0

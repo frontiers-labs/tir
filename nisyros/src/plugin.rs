@@ -7,6 +7,8 @@ use std::os::unix::ffi::OsStrExt;
 
 #[path = "rocm.rs"]
 mod rocm;
+#[path = "xdna.rs"]
+mod xdna;
 
 #[link(name = "dl")]
 unsafe extern "C" {
@@ -437,6 +439,7 @@ pub struct BackendError {
     pub code: i32,
 }
 
+#[derive(Clone)]
 pub struct DeviceRecord {
     pub index: u32,
     pub backend: u32,
@@ -1486,6 +1489,7 @@ pub struct Instance {
     handle: *mut c_void,
     _services: Box<PluginServices>,
     _library: Option<DynamicLibrary>,
+    extra: Option<Box<Instance>>,
 }
 
 fn backend_disabled(name: &str) -> bool {
@@ -1516,7 +1520,20 @@ impl Instance {
         } else {
             None
         };
-        gpu.ok_or(())
+        let xdna = if backend_disabled("xdna") {
+            None
+        } else {
+            Self::open_with_getter(None, xdna::xdna_plugin_get_api).ok()
+        };
+        match (gpu, xdna) {
+            (Some(mut gpu), Some(xdna)) => {
+                gpu.extra = Some(Box::new(xdna));
+                Ok(gpu)
+            }
+            (Some(gpu), None) => Ok(gpu),
+            (None, Some(xdna)) => Ok(xdna),
+            (None, None) => Err(()),
+        }
     }
 
     fn open_with_getter(library: Option<DynamicLibrary>, getter: PluginGetApi) -> Result<Self, ()> {
@@ -1591,6 +1608,7 @@ impl Instance {
             handle,
             _services: services,
             _library: library,
+            extra: None,
         })
     }
 
@@ -1721,10 +1739,21 @@ impl Instance {
                 peer_timeline_fd: info.peer_timeline_fd != 0,
             });
         }
+        if let Some(extra) = &self.extra {
+            let mut additional = extra.devices()?;
+            for device in &mut additional {
+                device.index = device.index.checked_add(count).ok_or(())?;
+            }
+            devices.extend(additional);
+        }
         Ok(devices)
     }
 
     pub fn native_handles(&self, index: usize) -> Option<(*mut c_void, *mut c_void)> {
+        let count = self.local_device_count().ok()? as usize;
+        if index >= count {
+            return self.extra.as_ref()?.native_handles(index - count);
+        }
         let mut instance = ptr::null_mut();
         let mut physical = ptr::null_mut();
         let status = unsafe {
@@ -1746,6 +1775,12 @@ impl Instance {
         record: &DeviceRecord,
         requests: &[QueueRequest],
     ) -> Result<Device, ()> {
+        let count = self.local_device_count()?;
+        if record.index >= count {
+            let mut local = record.clone();
+            local.index -= count;
+            return self.extra.as_ref().ok_or(())?.open_device(&local, requests);
+        }
         let converted: Vec<_> = requests
             .iter()
             .map(|request| PluginQueueRequest {

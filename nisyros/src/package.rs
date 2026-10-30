@@ -11,6 +11,7 @@ const OPTIONAL_FEATURE_PACKAGE_VERSION: u32 = 2;
 const EXECUTABLE_ABI_VERSION: u32 = 1;
 pub const VULKAN_PIPELINE_BINARY_FORMAT: u32 = 1;
 pub const ROCM_CODE_OBJECT_FORMAT: u32 = 2;
+pub const XDNA_XCLBIN_FORMAT: u32 = 3;
 const HEADER_SIZE: usize = 40;
 const MAX_PACKAGE_SIZE: usize = 128 * 1024 * 1024;
 const MAX_BINARY_SIZE: usize = 64 * 1024 * 1024;
@@ -98,7 +99,7 @@ impl Package {
         ) || executable_abi != EXECUTABLE_ABI_VERSION
             || !matches!(
                 format,
-                VULKAN_PIPELINE_BINARY_FORMAT | ROCM_CODE_OBJECT_FORMAT
+                VULKAN_PIPELINE_BINARY_FORMAT | ROCM_CODE_OBJECT_FORMAT | XDNA_XCLBIN_FORMAT
             )
         {
             return Err(PackageError::Unsupported);
@@ -272,7 +273,7 @@ impl Package {
     fn validate(&self) -> Result<(), PackageError> {
         if !matches!(
             self.format,
-            VULKAN_PIPELINE_BINARY_FORMAT | ROCM_CODE_OBJECT_FORMAT
+            VULKAN_PIPELINE_BINARY_FORMAT | ROCM_CODE_OBJECT_FORMAT | XDNA_XCLBIN_FORMAT
         ) || !self.global_key.valid()
             || self.entry.is_empty()
             || self.entry.len() > MAX_ENTRY_LEN

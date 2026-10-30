@@ -3,7 +3,7 @@ set -euo pipefail
 
 repo=$(cd "$(dirname "$0")/../.." && pwd)
 cd "$repo"
-export NISYROS_DISABLE_BACKENDS=rocm
+export NISYROS_DISABLE_BACKENDS=rocm,xdna
 icd=${NISYROS_VULKAN_ICD:-/usr/share/vulkan/icd.d/radeon_icd.json}
 test -f "$icd"
 temp=$(mktemp -d)
