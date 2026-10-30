@@ -29,6 +29,17 @@ const VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2: i32 = 1_000_059_001;
 const VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES: i32 = 1_000_071_004;
 const VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES: i32 = 1_000_196_000;
 const VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_MEMORY_HOST_PROPERTIES_EXT: i32 = 1_000_178_002;
+const VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_BUFFER_INFO: i32 = 1_000_071_002;
+const VK_STRUCTURE_TYPE_EXTERNAL_BUFFER_PROPERTIES: i32 = 1_000_071_003;
+const VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_SEMAPHORE_INFO: i32 = 1_000_076_000;
+const VK_STRUCTURE_TYPE_EXTERNAL_SEMAPHORE_PROPERTIES: i32 = 1_000_076_001;
+const VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO: i32 = 1_000_207_002;
+const VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT: u32 = 1;
+const VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT: u32 = 1;
+const VK_EXTERNAL_MEMORY_FEATURE_EXPORTABLE_BIT: u32 = 2;
+const VK_EXTERNAL_MEMORY_FEATURE_IMPORTABLE_BIT: u32 = 4;
+const VK_EXTERNAL_SEMAPHORE_FEATURE_EXPORTABLE_BIT: u32 = 1;
+const VK_EXTERNAL_SEMAPHORE_FEATURE_IMPORTABLE_BIT: u32 = 2;
 const VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES: i32 = 1_000_207_000;
 const VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES: i32 = 1_000_257_000;
 const VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SYNCHRONIZATION_2_FEATURES: i32 = 1_000_314_007;
@@ -69,6 +80,16 @@ type GetPhysicalDeviceFeatures2 =
     unsafe extern "system" fn(VkPhysicalDevice, *mut PhysicalDeviceFeatures2);
 type GetPhysicalDeviceProperties2 =
     unsafe extern "system" fn(VkPhysicalDevice, *mut PhysicalDeviceProperties2);
+type GetPhysicalDeviceExternalBufferProperties = unsafe extern "system" fn(
+    VkPhysicalDevice,
+    *const PhysicalDeviceExternalBufferInfo,
+    *mut ExternalBufferProperties,
+);
+type GetPhysicalDeviceExternalSemaphoreProperties = unsafe extern "system" fn(
+    VkPhysicalDevice,
+    *const PhysicalDeviceExternalSemaphoreInfo,
+    *mut ExternalSemaphoreProperties,
+);
 type GetPhysicalDeviceMemoryProperties =
     unsafe extern "system" fn(VkPhysicalDevice, *mut memory::MemoryProperties);
 type CreateDevice = unsafe extern "system" fn(
@@ -198,6 +219,48 @@ struct PhysicalDeviceDriverProperties {
 }
 
 #[repr(C)]
+struct PhysicalDeviceExternalBufferInfo {
+    s_type: i32,
+    p_next: *const c_void,
+    flags: u32,
+    usage: u32,
+    handle_type: u32,
+}
+
+#[repr(C)]
+struct ExternalBufferProperties {
+    s_type: i32,
+    p_next: *mut c_void,
+    features: u32,
+    export_from_imported: u32,
+    compatible_handles: u32,
+}
+
+#[repr(C)]
+struct SemaphoreTypeCreateInfo {
+    s_type: i32,
+    p_next: *const c_void,
+    semaphore_type: i32,
+    initial_value: u64,
+}
+
+#[repr(C)]
+struct PhysicalDeviceExternalSemaphoreInfo {
+    s_type: i32,
+    p_next: *const c_void,
+    handle_type: u32,
+}
+
+#[repr(C)]
+struct ExternalSemaphoreProperties {
+    s_type: i32,
+    p_next: *mut c_void,
+    export_from_imported: u32,
+    compatible_handles: u32,
+    features: u32,
+}
+
+#[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub struct QueueFamilyProperties {
     pub flags: u32,
@@ -246,6 +309,8 @@ pub struct DeviceRecord {
     memory_properties: memory::MemoryProperties,
     flags_extension: Option<FlagsExtension>,
     pub external_host_alignment: Option<u64>,
+    pub peer_memory_fd: bool,
+    pub peer_timeline_fd: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -277,6 +342,8 @@ pub struct Device {
     pipeline: pipeline::PipelineFns,
     pub max_grid: [u32; 3],
     pub external_host_alignment: Option<u64>,
+    pub peer_memory_fd: bool,
+    pub peer_timeline_fd: bool,
 }
 
 impl Drop for Device {
@@ -297,6 +364,8 @@ pub struct Instance {
     get_queue_families: GetPhysicalDeviceQueueFamilyProperties,
     get_features2: GetPhysicalDeviceFeatures2,
     get_properties2: GetPhysicalDeviceProperties2,
+    get_external_buffer_properties: GetPhysicalDeviceExternalBufferProperties,
+    get_external_semaphore_properties: GetPhysicalDeviceExternalSemaphoreProperties,
     get_memory_properties: GetPhysicalDeviceMemoryProperties,
 }
 
@@ -368,6 +437,16 @@ impl Instance {
                     )?,
                     get_features2: load(get_proc, handle, c"vkGetPhysicalDeviceFeatures2")?,
                     get_properties2: load(get_proc, handle, c"vkGetPhysicalDeviceProperties2")?,
+                    get_external_buffer_properties: load(
+                        get_proc,
+                        handle,
+                        c"vkGetPhysicalDeviceExternalBufferProperties",
+                    )?,
+                    get_external_semaphore_properties: load(
+                        get_proc,
+                        handle,
+                        c"vkGetPhysicalDeviceExternalSemaphoreProperties",
+                    )?,
                     get_memory_properties: load(
                         get_proc,
                         handle,
@@ -446,6 +525,12 @@ impl Instance {
         }
         if record.external_host_alignment.is_some() {
             names.push(c"VK_EXT_external_memory_host".as_ptr());
+        }
+        if record.peer_memory_fd {
+            names.push(c"VK_KHR_external_memory_fd".as_ptr());
+        }
+        if record.peer_timeline_fd {
+            names.push(c"VK_KHR_external_semaphore_fd".as_ptr());
         }
         let mut binary = BoolFeature {
             s_type: VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PIPELINE_BINARY_FEATURES_KHR,
@@ -584,6 +669,8 @@ impl Instance {
                 pipeline,
                 max_grid: record.max_grid,
                 external_host_alignment: record.external_host_alignment,
+                peer_memory_fd: record.peer_memory_fd,
+                peer_timeline_fd: record.peer_timeline_fd,
             })
         }
     }
@@ -622,6 +709,62 @@ impl Instance {
                 // Vulkan requires a terminated extension name.
                 unsafe { CStr::from_ptr(ext.name.as_ptr()) == name }
             })
+        };
+        let peer_memory_fd = if has(c"VK_KHR_external_memory_fd") {
+            let info = PhysicalDeviceExternalBufferInfo {
+                s_type: VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_BUFFER_INFO,
+                p_next: ptr::null(),
+                flags: 0,
+                usage: memory::BUFFER_USAGE,
+                handle_type: VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT,
+            };
+            let mut properties = ExternalBufferProperties {
+                s_type: VK_STRUCTURE_TYPE_EXTERNAL_BUFFER_PROPERTIES,
+                p_next: ptr::null_mut(),
+                features: 0,
+                export_from_imported: 0,
+                compatible_handles: 0,
+            };
+            unsafe { (self.get_external_buffer_properties)(physical, &info, &mut properties) };
+            properties.features
+                & (VK_EXTERNAL_MEMORY_FEATURE_EXPORTABLE_BIT
+                    | VK_EXTERNAL_MEMORY_FEATURE_IMPORTABLE_BIT)
+                == VK_EXTERNAL_MEMORY_FEATURE_EXPORTABLE_BIT
+                    | VK_EXTERNAL_MEMORY_FEATURE_IMPORTABLE_BIT
+                && properties.features & 1 == 0
+                && properties.compatible_handles & VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT != 0
+        } else {
+            false
+        };
+        let peer_timeline_fd = if has(c"VK_KHR_external_semaphore_fd") {
+            let timeline = SemaphoreTypeCreateInfo {
+                s_type: VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO,
+                p_next: ptr::null(),
+                semaphore_type: 1,
+                initial_value: 0,
+            };
+            let info = PhysicalDeviceExternalSemaphoreInfo {
+                s_type: VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_SEMAPHORE_INFO,
+                p_next: (&raw const timeline).cast(),
+                handle_type: VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT,
+            };
+            let mut properties = ExternalSemaphoreProperties {
+                s_type: VK_STRUCTURE_TYPE_EXTERNAL_SEMAPHORE_PROPERTIES,
+                p_next: ptr::null_mut(),
+                export_from_imported: 0,
+                compatible_handles: 0,
+                features: 0,
+            };
+            unsafe { (self.get_external_semaphore_properties)(physical, &info, &mut properties) };
+            properties.features
+                & (VK_EXTERNAL_SEMAPHORE_FEATURE_EXPORTABLE_BIT
+                    | VK_EXTERNAL_SEMAPHORE_FEATURE_IMPORTABLE_BIT)
+                == VK_EXTERNAL_SEMAPHORE_FEATURE_EXPORTABLE_BIT
+                    | VK_EXTERNAL_SEMAPHORE_FEATURE_IMPORTABLE_BIT
+                && properties.compatible_handles & VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT
+                    != 0
+        } else {
+            false
         };
 
         let mut family_count = 0;
@@ -761,6 +904,8 @@ impl Instance {
             memory_properties,
             flags_extension,
             external_host_alignment,
+            peer_memory_fd,
+            peer_timeline_fd,
         })
     }
 }
@@ -821,6 +966,20 @@ mod layout_tests {
             (240, 8)
         );
         assert_eq!(size_of::<QueueFamilyProperties>(), 24);
+        assert_eq!(
+            (
+                size_of::<PhysicalDeviceExternalBufferInfo>(),
+                size_of::<ExternalBufferProperties>()
+            ),
+            (32, 32)
+        );
+        assert_eq!(
+            (
+                size_of::<PhysicalDeviceExternalSemaphoreInfo>(),
+                size_of::<ExternalSemaphoreProperties>()
+            ),
+            (24, 32)
+        );
         assert_eq!(
             (
                 size_of::<DeviceQueueCreateInfo>(),

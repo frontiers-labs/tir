@@ -80,6 +80,36 @@ jobs:
           VK_DRIVER_FILES="$icd" target/debug/nisyros-open auto
           VK_DRIVER_FILES="$icd" python3 nisyros/tests/python_abi.py \
             target/debug/libnisyros.so
+          python3 nisyros/tests/run-join.py "$icd"
+      - name: Exercise strict execution and TCP progress in the Vulkan simulator
+        run: |
+          mkdir -p target/debug/nisyros-vulkan-sim
+          cc -std=c11 -Wall -Wextra -Werror -fPIC -shared \
+            nisyros/tests/vulkan_simulator.c -ldl -pthread \
+            -o target/debug/nisyros-vulkan-sim/libvulkan.so.1
+          LD_LIBRARY_PATH="$PWD/target/debug/nisyros-vulkan-sim:${LD_LIBRARY_PATH:-}" \
+            target/debug/nisyros-open strict
+          cc -std=c11 -Wall -Wextra -Werror -I nisyros/include \
+            nisyros/tests/kernel.c -L target/debug -lnisyros \
+            -Wl,-rpath,"$PWD/target/debug" -o target/debug/nisyros-kernel
+          LD_LIBRARY_PATH="$PWD/target/debug/nisyros-vulkan-sim:${LD_LIBRARY_PATH:-}" \
+            target/debug/nisyros-pack nisyros/tests/add_one.spv \
+            target/debug/nisyros-sim-add-one.nsy main 24 8 64 1 1 \
+            addr:0 addr:8 value:16:4
+          LD_LIBRARY_PATH="$PWD/target/debug/nisyros-vulkan-sim:${LD_LIBRARY_PATH:-}" \
+            target/debug/nisyros-kernel target/debug/nisyros-sim-add-one.nsy
+          cc -std=c11 -Wall -Wextra -Werror -I nisyros/include \
+            nisyros/tests/local_communication.c -L target/debug -lnisyros \
+            -Wl,-rpath,"$PWD/target/debug" -o target/debug/nisyros-local-communication
+          NISYROS_SIM_DEVICES=2 \
+            LD_LIBRARY_PATH="$PWD/target/debug/nisyros-vulkan-sim:${LD_LIBRARY_PATH:-}" \
+            target/debug/nisyros-local-communication
+          python3 nisyros/tests/run-communication.py simulator
+          python3 nisyros/tests/run-communication.py simulator --replay
+          python3 nisyros/tests/run-communication.py simulator --peer-loss
+          python3 nisyros/tests/run-communication.py simulator --mismatch
+          python3 nisyros/tests/run-communication.py simulator --collective-mismatch
+          python3 nisyros/tests/run-communication.py simulator --collective-timeout
 
   # Build and package once; test shards and memory checks reuse these tools.
   build:

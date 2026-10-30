@@ -33,6 +33,8 @@ class DeviceInfo(c.Structure):
         ("driver_id", c.c_uint32),
         ("device_type", c.c_uint32),
         ("driver_name", c.c_char * 256),
+        ("node_index", c.c_uint32),
+        ("is_local", c.c_uint32),
     ]
 
 
@@ -69,6 +71,7 @@ assert library.nisyros_cluster_device_info(cluster, ids[0], c.byref(info)) == 0
 assert info.backend == 1
 assert info.queue_family_count > 0
 assert info.driver_name
+assert info.node_index == 0 and info.is_local == 1
 assert info.strict_profile_supported in (0, 1)
 assert library.nisyros_cluster_close(cluster) == 0
 print(info.name.decode(), "strict=", info.strict_profile_supported)

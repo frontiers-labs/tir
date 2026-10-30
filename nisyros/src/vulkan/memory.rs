@@ -1,5 +1,6 @@
 use super::{Device, GetDeviceProcAddr, VK_SUCCESS, VkDevice, VkResult, load_device};
 use std::ffi::c_void;
+use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd};
 use std::ptr;
 
 type VkBuffer = u64;
@@ -13,6 +14,10 @@ const VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO: i32 = 1_000_244_001;
 const VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO: i32 = 1_000_072_000;
 const VK_STRUCTURE_TYPE_IMPORT_MEMORY_HOST_POINTER_INFO_EXT: i32 = 1_000_178_000;
 const VK_STRUCTURE_TYPE_MEMORY_HOST_POINTER_PROPERTIES_EXT: i32 = 1_000_178_001;
+const VK_STRUCTURE_TYPE_EXPORT_MEMORY_ALLOCATE_INFO: i32 = 1_000_072_002;
+const VK_STRUCTURE_TYPE_IMPORT_MEMORY_FD_INFO_KHR: i32 = 1_000_074_000;
+const VK_STRUCTURE_TYPE_MEMORY_GET_FD_INFO_KHR: i32 = 1_000_074_002;
+const VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT: u32 = 1;
 const VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT: u32 = 0x80;
 const VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT: u32 = 2;
 const VK_BUFFER_USAGE_TRANSFER_SRC_BIT: u32 = 1;
@@ -20,7 +25,7 @@ const VK_BUFFER_USAGE_TRANSFER_DST_BIT: u32 = 2;
 const VK_BUFFER_USAGE_STORAGE_BUFFER_BIT: u32 = 0x20;
 const VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT: u32 = 0x100;
 const VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT: u32 = 0x20_000;
-const BUFFER_USAGE: u32 = VK_BUFFER_USAGE_TRANSFER_SRC_BIT
+pub(super) const BUFFER_USAGE: u32 = VK_BUFFER_USAGE_TRANSFER_SRC_BIT
     | VK_BUFFER_USAGE_TRANSFER_DST_BIT
     | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT
     | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT
@@ -70,6 +75,8 @@ type GetMemoryHostPointerProperties = unsafe extern "system" fn(
     *const c_void,
     *mut MemoryHostPointerProperties,
 ) -> VkResult;
+type GetMemoryFd =
+    unsafe extern "system" fn(VkDevice, *const MemoryGetFdInfo, *mut i32) -> VkResult;
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
@@ -120,6 +127,29 @@ struct ImportMemoryHostPointerInfo {
     p_next: *const c_void,
     handle_type: u32,
     host_pointer: *mut c_void,
+}
+
+#[repr(C)]
+struct ExportMemoryAllocateInfo {
+    s_type: i32,
+    p_next: *const c_void,
+    handle_types: u32,
+}
+
+#[repr(C)]
+struct ImportMemoryFdInfo {
+    s_type: i32,
+    p_next: *const c_void,
+    handle_type: u32,
+    fd: i32,
+}
+
+#[repr(C)]
+struct MemoryGetFdInfo {
+    s_type: i32,
+    p_next: *const c_void,
+    memory: VkDeviceMemory,
+    handle_type: u32,
 }
 
 #[repr(C)]
@@ -182,6 +212,7 @@ pub(super) struct MemoryFns {
     flush: FlushMappedMemoryRanges,
     invalidate: InvalidateMappedMemoryRanges,
     get_host_pointer_properties: Option<GetMemoryHostPointerProperties>,
+    get_memory_fd: Option<GetMemoryFd>,
 }
 
 impl MemoryFns {
@@ -209,6 +240,7 @@ impl MemoryFns {
                     device,
                     c"vkGetMemoryHostPointerPropertiesEXT",
                 ),
+                get_memory_fd: load_device(get_proc, device, c"vkGetMemoryFdKHR"),
             })
         }
     }
@@ -246,6 +278,10 @@ pub struct Allocation {
     pub base: u64,
     pub bytes: u64,
     buffer_offset: u64,
+    buffer_size: u64,
+    allocation_size: u64,
+    memory_type_index: u32,
+    exportable: bool,
     memory_properties: u32,
     mapped: *mut c_void,
     mapped_host: *mut c_void,
@@ -279,9 +315,18 @@ impl Device {
             .checked_add(request.alignment - 1)
             .ok_or(AllocError::Invalid)?;
         let families = request.queue_families;
+        let external = ExternalMemoryBufferCreateInfo {
+            s_type: VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO,
+            p_next: ptr::null(),
+            handle_types: VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT,
+        };
         let create_info = BufferCreateInfo {
             s_type: VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-            p_next: ptr::null(),
+            p_next: if self.peer_memory_fd {
+                (&raw const external).cast()
+            } else {
+                ptr::null()
+            },
             flags: 0,
             size: padded_size,
             usage: BUFFER_USAGE,
@@ -320,9 +365,18 @@ impl Device {
                 (self.memory.destroy_buffer)(self.handle, buffer, ptr::null());
                 return Err(AllocError::Unsupported);
             };
+            let export = ExportMemoryAllocateInfo {
+                s_type: VK_STRUCTURE_TYPE_EXPORT_MEMORY_ALLOCATE_INFO,
+                p_next: ptr::null(),
+                handle_types: VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT,
+            };
             let flags = MemoryAllocateFlagsInfo {
                 s_type: VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO,
-                p_next: ptr::null(),
+                p_next: if self.peer_memory_fd {
+                    (&raw const export).cast()
+                } else {
+                    ptr::null()
+                },
                 flags: VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT,
                 device_mask: 0,
             };
@@ -377,6 +431,10 @@ impl Device {
                 base,
                 bytes: request.bytes,
                 buffer_offset,
+                buffer_size: padded_size,
+                allocation_size: requirements.size,
+                memory_type_index,
+                exportable: self.peer_memory_fd,
                 memory_properties,
                 mapped: ptr::null_mut(),
                 mapped_host: ptr::null_mut(),
@@ -531,9 +589,176 @@ impl Device {
                 base,
                 bytes,
                 buffer_offset: 0,
+                buffer_size: bytes,
+                allocation_size: requirements.size,
+                memory_type_index,
+                exportable: false,
                 memory_properties,
                 mapped: ptr::null_mut(),
                 mapped_host: host,
+            })
+        }
+    }
+
+    pub fn export_allocation_fd(&self, allocation: &Allocation) -> Result<OwnedFd, AllocError> {
+        if !self.peer_memory_fd || !allocation.exportable {
+            return Err(AllocError::Unsupported);
+        }
+        let Some(get_fd) = self.memory.get_memory_fd else {
+            return Err(AllocError::Unsupported);
+        };
+        let info = MemoryGetFdInfo {
+            s_type: VK_STRUCTURE_TYPE_MEMORY_GET_FD_INFO_KHR,
+            p_next: ptr::null(),
+            memory: allocation.memory,
+            handle_type: VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT,
+        };
+        let mut fd = -1;
+        // SAFETY: The allocation is live and was created exportable.
+        let result = unsafe { get_fd(self.handle, &info, &mut fd) };
+        if result != VK_SUCCESS || fd < 0 {
+            return Err(AllocError::from_vulkan(result));
+        }
+        // SAFETY: Vulkan transfers ownership of a newly created descriptor.
+        Ok(unsafe { OwnedFd::from_raw_fd(fd) })
+    }
+
+    pub fn import_peer_fd(
+        &self,
+        source: &Allocation,
+        source_offset: u64,
+        bytes: u64,
+        fd: OwnedFd,
+    ) -> Result<Allocation, AllocError> {
+        if !self.peer_memory_fd || !source.exportable || bytes == 0 {
+            return Err(AllocError::Unsupported);
+        }
+        let logical_offset = source
+            .buffer_offset
+            .checked_add(source_offset)
+            .ok_or(AllocError::Invalid)?;
+        if source_offset
+            .checked_add(bytes)
+            .is_none_or(|end| end > source.bytes)
+            || logical_offset
+                .checked_add(bytes)
+                .is_none_or(|end| end > source.buffer_size)
+        {
+            return Err(AllocError::Invalid);
+        }
+        let external = ExternalMemoryBufferCreateInfo {
+            s_type: VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO,
+            p_next: ptr::null(),
+            handle_types: VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT,
+        };
+        let mut families: Vec<u32> = self.queues.iter().map(|queue| queue.family).collect();
+        families.sort_unstable();
+        families.dedup();
+        let create_info = BufferCreateInfo {
+            s_type: VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+            p_next: (&raw const external).cast(),
+            flags: 0,
+            size: source.buffer_size,
+            usage: BUFFER_USAGE,
+            sharing_mode: if families.len() > 1 {
+                VK_SHARING_MODE_CONCURRENT
+            } else {
+                VK_SHARING_MODE_EXCLUSIVE
+            },
+            queue_family_index_count: if families.len() > 1 {
+                families.len() as u32
+            } else {
+                0
+            },
+            queue_family_indices: if families.len() > 1 {
+                families.as_ptr()
+            } else {
+                ptr::null()
+            },
+        };
+        // SAFETY: The descriptor and buffer metadata remain live through the
+        // import; Vulkan consumes the FD only after successful allocation.
+        unsafe {
+            let mut buffer = 0;
+            let result =
+                (self.memory.create_buffer)(self.handle, &create_info, ptr::null(), &mut buffer);
+            if result != VK_SUCCESS {
+                return Err(AllocError::from_vulkan(result));
+            }
+            let mut requirements = MemoryRequirements::default();
+            (self.memory.get_requirements)(self.handle, buffer, &mut requirements);
+            let index = source.memory_type_index;
+            if index >= self.memory_properties.type_count
+                || index >= 32
+                || requirements.memory_type_bits & (1 << index) == 0
+                || requirements.size > source.allocation_size
+            {
+                (self.memory.destroy_buffer)(self.handle, buffer, ptr::null());
+                return Err(AllocError::Unsupported);
+            }
+            let import = ImportMemoryFdInfo {
+                s_type: VK_STRUCTURE_TYPE_IMPORT_MEMORY_FD_INFO_KHR,
+                p_next: ptr::null(),
+                handle_type: VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT,
+                fd: fd.as_raw_fd(),
+            };
+            let flags = MemoryAllocateFlagsInfo {
+                s_type: VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO,
+                p_next: (&raw const import).cast(),
+                flags: VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT,
+                device_mask: 0,
+            };
+            let allocate_info = MemoryAllocateInfo {
+                s_type: VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+                p_next: (&raw const flags).cast(),
+                allocation_size: source.allocation_size,
+                memory_type_index: index,
+            };
+            let mut memory = 0;
+            let result = (self.memory.allocate_memory)(
+                self.handle,
+                &allocate_info,
+                ptr::null(),
+                &mut memory,
+            );
+            if result != VK_SUCCESS {
+                (self.memory.destroy_buffer)(self.handle, buffer, ptr::null());
+                return Err(AllocError::from_vulkan(result));
+            }
+            let _consumed_fd = fd.into_raw_fd();
+            let result = (self.memory.bind_buffer_memory)(self.handle, buffer, memory, 0);
+            if result != VK_SUCCESS {
+                (self.memory.free_memory)(self.handle, memory, ptr::null());
+                (self.memory.destroy_buffer)(self.handle, buffer, ptr::null());
+                return Err(AllocError::from_vulkan(result));
+            }
+            let address_info = BufferDeviceAddressInfo {
+                s_type: VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO,
+                p_next: ptr::null(),
+                buffer,
+            };
+            let raw_address = (self.memory.get_buffer_device_address)(self.handle, &address_info);
+            let Some(base) = raw_address
+                .checked_add(logical_offset)
+                .filter(|&base| base != 0)
+            else {
+                (self.memory.free_memory)(self.handle, memory, ptr::null());
+                (self.memory.destroy_buffer)(self.handle, buffer, ptr::null());
+                return Err(AllocError::Backend);
+            };
+            Ok(Allocation {
+                buffer,
+                memory,
+                base,
+                bytes,
+                buffer_offset: logical_offset,
+                buffer_size: source.buffer_size,
+                allocation_size: source.allocation_size,
+                memory_type_index: index,
+                exportable: false,
+                memory_properties: self.memory_properties.types[index as usize].property_flags,
+                mapped: ptr::null_mut(),
+                mapped_host: ptr::null_mut(),
             })
         }
     }
@@ -656,5 +881,13 @@ mod layout_tests {
         assert_eq!(size_of::<ExternalMemoryBufferCreateInfo>(), 24);
         assert_eq!(size_of::<ImportMemoryHostPointerInfo>(), 32);
         assert_eq!(size_of::<MemoryHostPointerProperties>(), 24);
+        assert_eq!(
+            (
+                size_of::<ExportMemoryAllocateInfo>(),
+                size_of::<ImportMemoryFdInfo>(),
+                size_of::<MemoryGetFdInfo>()
+            ),
+            (24, 24, 32)
+        );
     }
 }

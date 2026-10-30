@@ -1,5 +1,6 @@
 use super::{Device, GetDeviceProcAddr, VK_SUCCESS, VkDevice, VkQueue, VkResult, load_device};
 use std::ffi::c_void;
+use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd};
 use std::ptr;
 
 type VkCommandPool = u64;
@@ -14,6 +15,10 @@ const VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO: i32 = 42;
 const VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO: i32 = 1_000_207_002;
 const VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO: i32 = 1_000_207_004;
 const VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO: i32 = 1_000_207_005;
+const VK_STRUCTURE_TYPE_EXPORT_SEMAPHORE_CREATE_INFO: i32 = 1_000_077_000;
+const VK_STRUCTURE_TYPE_IMPORT_SEMAPHORE_FD_INFO_KHR: i32 = 1_000_079_000;
+const VK_STRUCTURE_TYPE_SEMAPHORE_GET_FD_INFO_KHR: i32 = 1_000_079_001;
+const VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT: u32 = 1;
 const VK_STRUCTURE_TYPE_MEMORY_BARRIER_2: i32 = 1_000_314_000;
 const VK_STRUCTURE_TYPE_DEPENDENCY_INFO: i32 = 1_000_314_003;
 const VK_STRUCTURE_TYPE_SUBMIT_INFO_2: i32 = 1_000_314_004;
@@ -71,6 +76,10 @@ type WaitSemaphores =
     unsafe extern "system" fn(VkDevice, *const SemaphoreWaitInfo, u64) -> VkResult;
 type SignalSemaphore = unsafe extern "system" fn(VkDevice, *const SemaphoreSignalInfo) -> VkResult;
 type QueueSubmit2 = unsafe extern "system" fn(VkQueue, u32, *const SubmitInfo2, u64) -> VkResult;
+type GetSemaphoreFd =
+    unsafe extern "system" fn(VkDevice, *const SemaphoreGetFdInfo, *mut i32) -> VkResult;
+type ImportSemaphoreFd =
+    unsafe extern "system" fn(VkDevice, *const ImportSemaphoreFdInfo) -> VkResult;
 
 #[repr(C)]
 struct CommandPoolCreateInfo {
@@ -190,6 +199,31 @@ struct SemaphoreCreateInfo {
 }
 
 #[repr(C)]
+struct ExportSemaphoreCreateInfo {
+    s_type: i32,
+    p_next: *const c_void,
+    handle_types: u32,
+}
+
+#[repr(C)]
+struct SemaphoreGetFdInfo {
+    s_type: i32,
+    p_next: *const c_void,
+    semaphore: VkSemaphore,
+    handle_type: u32,
+}
+
+#[repr(C)]
+struct ImportSemaphoreFdInfo {
+    s_type: i32,
+    p_next: *const c_void,
+    semaphore: VkSemaphore,
+    flags: u32,
+    handle_type: u32,
+    fd: i32,
+}
+
+#[repr(C)]
 struct SemaphoreWaitInfo {
     s_type: i32,
     p_next: *const c_void,
@@ -258,6 +292,8 @@ pub(super) struct CommandFns {
     wait_semaphores: WaitSemaphores,
     signal_semaphore: SignalSemaphore,
     queue_submit2: QueueSubmit2,
+    get_semaphore_fd: Option<GetSemaphoreFd>,
+    import_semaphore_fd: Option<ImportSemaphoreFd>,
 }
 
 impl CommandFns {
@@ -283,6 +319,8 @@ impl CommandFns {
                 wait_semaphores: load_device(get_proc, device, c"vkWaitSemaphores")?,
                 signal_semaphore: load_device(get_proc, device, c"vkSignalSemaphore")?,
                 queue_submit2: load_device(get_proc, device, c"vkQueueSubmit2")?,
+                get_semaphore_fd: load_device(get_proc, device, c"vkGetSemaphoreFdKHR"),
+                import_semaphore_fd: load_device(get_proc, device, c"vkImportSemaphoreFdKHR"),
             })
         }
     }
@@ -516,6 +554,7 @@ pub struct Timeline {
     device: VkDevice,
     semaphore: VkSemaphore,
     functions: CommandFns,
+    exportable: bool,
 }
 
 pub struct SubmitSegment<'a> {
@@ -570,6 +609,29 @@ impl Timeline {
             Err(result)
         }
     }
+
+    pub fn export_fd(&self) -> Result<OwnedFd, VkResult> {
+        if !self.exportable {
+            return Err(-8);
+        }
+        let Some(get_fd) = self.functions.get_semaphore_fd else {
+            return Err(-8);
+        };
+        let info = SemaphoreGetFdInfo {
+            s_type: VK_STRUCTURE_TYPE_SEMAPHORE_GET_FD_INFO_KHR,
+            p_next: ptr::null(),
+            semaphore: self.semaphore,
+            handle_type: VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT,
+        };
+        let mut fd = -1;
+        // SAFETY: The timeline was created with OPAQUE_FD export enabled.
+        let result = unsafe { get_fd(self.device, &info, &mut fd) };
+        if result != VK_SUCCESS || fd < 0 {
+            return Err(result);
+        }
+        // SAFETY: Vulkan transfers a new owned descriptor to the caller.
+        Ok(unsafe { OwnedFd::from_raw_fd(fd) })
+    }
 }
 
 impl Drop for Timeline {
@@ -617,10 +679,22 @@ impl Device {
         }
     }
 
-    pub fn create_timeline(&self) -> Result<Timeline, VkResult> {
+    pub fn create_timeline(&self, exportable: bool) -> Result<Timeline, VkResult> {
+        if exportable && !self.peer_timeline_fd {
+            return Err(-8);
+        }
+        let external = ExportSemaphoreCreateInfo {
+            s_type: VK_STRUCTURE_TYPE_EXPORT_SEMAPHORE_CREATE_INFO,
+            p_next: ptr::null(),
+            handle_types: VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT,
+        };
         let timeline = SemaphoreTypeCreateInfo {
             s_type: VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO,
-            p_next: ptr::null(),
+            p_next: if exportable {
+                (&raw const external).cast()
+            } else {
+                ptr::null()
+            },
             semaphore_type: VK_SEMAPHORE_TYPE_TIMELINE,
             initial_value: 0,
         };
@@ -641,8 +715,35 @@ impl Device {
                 device: self.handle,
                 semaphore,
                 functions: self.command,
+                exportable,
             })
         }
+    }
+
+    pub fn import_timeline_fd(&self, fd: OwnedFd) -> Result<Timeline, VkResult> {
+        if !self.peer_timeline_fd {
+            return Err(-8);
+        }
+        let Some(import_fd) = self.command.import_semaphore_fd else {
+            return Err(-8);
+        };
+        let timeline = self.create_timeline(false)?;
+        let info = ImportSemaphoreFdInfo {
+            s_type: VK_STRUCTURE_TYPE_IMPORT_SEMAPHORE_FD_INFO_KHR,
+            p_next: ptr::null(),
+            semaphore: timeline.semaphore,
+            flags: 0,
+            handle_type: VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT,
+            fd: fd.as_raw_fd(),
+        };
+        // SAFETY: The new timeline and duplicated FD remain live through
+        // import. On success Vulkan takes ownership of this FD.
+        let result = unsafe { import_fd(self.handle, &info) };
+        if result != VK_SUCCESS {
+            return Err(result);
+        }
+        let _consumed_fd = fd.into_raw_fd();
+        Ok(timeline)
     }
 
     pub fn submit_segments(
@@ -746,5 +847,13 @@ mod layout_tests {
             (48, 32, 64)
         );
         assert_eq!(size_of::<SemaphoreWaitInfo>(), 40);
+        assert_eq!(
+            (
+                size_of::<ExportSemaphoreCreateInfo>(),
+                size_of::<ImportSemaphoreFdInfo>(),
+                size_of::<SemaphoreGetFdInfo>()
+            ),
+            (24, 40, 32)
+        );
     }
 }

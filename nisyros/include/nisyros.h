@@ -36,9 +36,18 @@ typedef struct nisyros_device_impl *nisyros_device;
 typedef struct nisyros_queue_impl *nisyros_queue;
 typedef struct nisyros_cmd_impl *nisyros_cmd;
 typedef struct nisyros_event_impl *nisyros_event;
+typedef struct nisyros_event_token_impl *nisyros_event_token;
+typedef struct nisyros_group_impl *nisyros_group;
+typedef struct nisyros_endpoint_impl *nisyros_endpoint;
+typedef struct nisyros_comm_cmd_impl *nisyros_comm_cmd;
 typedef struct nisyros_executable_impl *nisyros_executable;
 typedef struct nisyros_kernel_impl *nisyros_kernel;
 typedef uint64_t nisyros_addr;
+
+typedef struct {
+    nisyros_device device;
+    nisyros_addr address;
+} nisyros_location;
 
 #define NISYROS_TIMEOUT_INFINITE UINT64_MAX
 
@@ -81,7 +90,73 @@ typedef struct {
     uint32_t driver_id;
     uint32_t device_type;
     char driver_name[256];
+    uint32_t node_index;
+    uint32_t is_local;
 } nisyros_device_info;
+
+typedef struct {
+    uint32_t node_index;
+    uint32_t reserved;
+    const char *address;
+} nisyros_node_address;
+
+typedef struct {
+    nisyros_descriptor_header header;
+    uint64_t session_id;
+    uint32_t local_node;
+    uint32_t node_count;
+    const nisyros_node_address *nodes;
+    uint64_t connect_timeout_ns;
+} nisyros_bootstrap_desc;
+
+typedef struct {
+    nisyros_descriptor_header header;
+    uint64_t group_epoch;
+    uint32_t member_count;
+    const nisyros_device_id *members;
+} nisyros_group_desc;
+
+typedef struct {
+    uint32_t rank;
+    uint32_t reserved;
+    nisyros_device device;
+    nisyros_queue transfer_queue;
+} nisyros_rank_binding;
+
+typedef struct {
+    nisyros_descriptor_header header;
+    uint32_t binding_count;
+    const nisyros_rank_binding *bindings;
+    uint32_t allow_host_staging;
+    uint32_t reserved;
+    uint64_t failure_timeout_ns;
+} nisyros_endpoint_desc;
+
+typedef struct {
+    nisyros_descriptor_header header;
+    uint32_t software_progress;
+    uint32_t worker_threads;
+    uint32_t uses_host_staging;
+    uint32_t pending_limit;
+} nisyros_endpoint_info;
+
+typedef struct {
+    uint32_t slot;
+    uint32_t reserved;
+    uint64_t sequence;
+} nisyros_sequence_binding;
+
+typedef struct {
+    nisyros_descriptor_header header;
+    uint32_t binding_count;
+    const nisyros_sequence_binding *bindings;
+} nisyros_comm_submit_desc;
+
+#define NISYROS_DTYPE_U32 1u
+#define NISYROS_DTYPE_I32 2u
+#define NISYROS_REDUCE_SUM 1u
+#define NISYROS_REDUCE_MIN 2u
+#define NISYROS_REDUCE_MAX 3u
 
 #define NISYROS_QUEUE_COMPUTE 0x00000002u
 #define NISYROS_QUEUE_TRANSFER 0x00000004u
@@ -110,6 +185,8 @@ typedef struct {
 #define NISYROS_MEMORY_DEVICE_LOCAL 0x00000001u
 #define NISYROS_MEMORY_HOST_VISIBLE 0x00000002u
 #define NISYROS_MEMORY_HOST_COHERENT 0x00000004u
+#define NISYROS_ACCESS_READ 0x00000001u
+#define NISYROS_ACCESS_WRITE 0x00000002u
 
 typedef struct {
     nisyros_descriptor_header header;
@@ -126,6 +203,14 @@ typedef struct {
     uint64_t alignment;
     uint32_t reserved[2];
 } nisyros_host_alloc_desc;
+
+typedef struct {
+    nisyros_descriptor_header header;
+    uint32_t same_physical_device;
+    uint32_t direct_mapping;
+    uint32_t event_import;
+    uint32_t host_staging;
+} nisyros_peer_info;
 
 typedef struct {
     nisyros_event event;
@@ -182,6 +267,9 @@ typedef struct {
 NISYROS_API nisyros_status NISYROS_CALL
 nisyros_cluster_open_local(nisyros_cluster *out);
 NISYROS_API nisyros_status NISYROS_CALL
+nisyros_cluster_join(const nisyros_bootstrap_desc *bootstrap,
+                     nisyros_cluster *out);
+NISYROS_API nisyros_status NISYROS_CALL
 nisyros_cluster_devices(nisyros_cluster cluster, uint32_t *count,
                         nisyros_device_id *ids);
 NISYROS_API nisyros_status NISYROS_CALL
@@ -193,6 +281,61 @@ nisyros_cluster_queue_family_info(nisyros_cluster cluster, nisyros_device_id id,
                                   nisyros_queue_family_info *out);
 NISYROS_API nisyros_status NISYROS_CALL
 nisyros_cluster_close(nisyros_cluster cluster);
+NISYROS_API nisyros_status NISYROS_CALL
+nisyros_group_create(nisyros_cluster cluster, const nisyros_group_desc *desc,
+                     nisyros_group *out);
+NISYROS_API nisyros_status NISYROS_CALL nisyros_group_destroy(nisyros_group group);
+NISYROS_API nisyros_status NISYROS_CALL
+nisyros_group_rank_count(nisyros_group group, uint32_t *count);
+NISYROS_API nisyros_status NISYROS_CALL
+nisyros_group_member(nisyros_group group, uint32_t rank,
+                     nisyros_device_id *out);
+NISYROS_API nisyros_status NISYROS_CALL
+nisyros_group_epoch(nisyros_group group, uint64_t *epoch);
+NISYROS_API nisyros_status NISYROS_CALL
+nisyros_endpoint_open(nisyros_group group, const nisyros_endpoint_desc *desc,
+                      nisyros_endpoint *out);
+NISYROS_API nisyros_status NISYROS_CALL
+nisyros_endpoint_query(nisyros_endpoint endpoint, nisyros_endpoint_info *out);
+NISYROS_API nisyros_status NISYROS_CALL
+nisyros_endpoint_close(nisyros_endpoint endpoint);
+NISYROS_API nisyros_status NISYROS_CALL
+nisyros_comm_cmd_create(nisyros_endpoint endpoint, nisyros_comm_cmd *out);
+NISYROS_API nisyros_status NISYROS_CALL nisyros_comm_cmd_begin(nisyros_comm_cmd cmd);
+NISYROS_API nisyros_status NISYROS_CALL
+nisyros_comm_cmd_wait(nisyros_comm_cmd cmd, nisyros_point point);
+NISYROS_API nisyros_status NISYROS_CALL
+nisyros_comm_cmd_send(nisyros_comm_cmd cmd, uint32_t local_rank,
+                      uint32_t peer_rank, uint64_t channel, uint64_t sequence,
+                      nisyros_addr source, uint64_t bytes);
+NISYROS_API nisyros_status NISYROS_CALL
+nisyros_comm_cmd_send_slot(nisyros_comm_cmd cmd, uint32_t local_rank,
+                           uint32_t peer_rank, uint64_t channel, uint32_t slot,
+                           nisyros_addr source, uint64_t bytes);
+NISYROS_API nisyros_status NISYROS_CALL
+nisyros_comm_cmd_recv(nisyros_comm_cmd cmd, uint32_t local_rank,
+                      uint32_t peer_rank, uint64_t channel, uint64_t sequence,
+                      nisyros_addr destination, uint64_t bytes);
+NISYROS_API nisyros_status NISYROS_CALL
+nisyros_comm_cmd_recv_slot(nisyros_comm_cmd cmd, uint32_t local_rank,
+                           uint32_t peer_rank, uint64_t channel, uint32_t slot,
+                           nisyros_addr destination, uint64_t bytes);
+NISYROS_API nisyros_status NISYROS_CALL
+nisyros_comm_cmd_all_reduce(nisyros_comm_cmd cmd, uint32_t local_rank,
+                            uint64_t sequence, nisyros_addr source,
+                            nisyros_addr destination, uint64_t count,
+                            uint32_t datatype, uint32_t operation);
+NISYROS_API nisyros_status NISYROS_CALL
+nisyros_comm_cmd_all_reduce_slot(nisyros_comm_cmd cmd, uint32_t local_rank,
+                                 uint32_t slot, nisyros_addr source,
+                                 nisyros_addr destination, uint64_t count,
+                                 uint32_t datatype, uint32_t operation);
+NISYROS_API nisyros_status NISYROS_CALL nisyros_comm_cmd_end(nisyros_comm_cmd cmd);
+NISYROS_API nisyros_status NISYROS_CALL nisyros_comm_cmd_reset(nisyros_comm_cmd cmd);
+NISYROS_API nisyros_status NISYROS_CALL nisyros_comm_cmd_destroy(nisyros_comm_cmd cmd);
+NISYROS_API nisyros_status NISYROS_CALL
+nisyros_endpoint_submit(nisyros_endpoint endpoint, nisyros_comm_cmd cmd,
+                        const nisyros_comm_submit_desc *desc, nisyros_point *out);
 NISYROS_API nisyros_status NISYROS_CALL
 nisyros_device_open(nisyros_cluster cluster, nisyros_device_id id,
                     const nisyros_device_open_desc *desc, nisyros_device *out);
@@ -226,6 +369,14 @@ NISYROS_API nisyros_status NISYROS_CALL
 nisyros_host_register(nisyros_device device, void *host, uint64_t bytes);
 NISYROS_API nisyros_status NISYROS_CALL
 nisyros_host_unregister(nisyros_device device, void *host);
+NISYROS_API nisyros_status NISYROS_CALL
+nisyros_peer_capabilities(nisyros_device device, nisyros_device peer,
+                          nisyros_peer_info *out);
+NISYROS_API nisyros_status NISYROS_CALL
+nisyros_peer_map(nisyros_device device, nisyros_location source,
+                 uint64_t bytes, uint32_t access, nisyros_addr *out);
+NISYROS_API nisyros_status NISYROS_CALL
+nisyros_peer_unmap(nisyros_device device, nisyros_addr base);
 NISYROS_API nisyros_status NISYROS_CALL
 nisyros_executable_load(nisyros_device device, const nisyros_image *image,
                         nisyros_executable *out);
@@ -268,6 +419,13 @@ NISYROS_API nisyros_status NISYROS_CALL
 nisyros_event_create(nisyros_device device, const nisyros_event_desc *desc,
                      nisyros_event *out);
 NISYROS_API nisyros_status NISYROS_CALL nisyros_event_destroy(nisyros_event event);
+NISYROS_API nisyros_status NISYROS_CALL
+nisyros_event_export(nisyros_event event, nisyros_event_token *out);
+NISYROS_API nisyros_status NISYROS_CALL
+nisyros_event_import(nisyros_device device, nisyros_event_token token,
+                     nisyros_event *out);
+NISYROS_API nisyros_status NISYROS_CALL
+nisyros_event_token_destroy(nisyros_event_token token);
 NISYROS_API nisyros_status NISYROS_CALL
 nisyros_event_host_signal(nisyros_event event, uint64_t value);
 NISYROS_API nisyros_status NISYROS_CALL

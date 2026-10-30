@@ -50,12 +50,39 @@ pipeline package, and tests the C ABI in a second process:
 
 ```sh
 nisyros/tests/run-hardware.sh
+nisyros/tests/run-peer-hardware.sh
+python3 nisyros/tests/run-communication.py /usr/share/vulkan/icd.d/radeon_icd.json
+python3 nisyros/tests/run-communication.py /usr/share/vulkan/icd.d/radeon_icd.json --replay
+python3 nisyros/tests/run-communication.py /usr/share/vulkan/icd.d/radeon_icd.json --peer-loss
+python3 nisyros/tests/run-communication.py /usr/share/vulkan/icd.d/radeon_icd.json --mismatch
+python3 nisyros/tests/run-communication.py /usr/share/vulkan/icd.d/radeon_icd.json --collective-mismatch
+python3 nisyros/tests/run-communication.py /usr/share/vulkan/icd.d/radeon_icd.json --collective-timeout
 ```
 
-That script requires `glslangValidator`, `spirv-val`, the Vulkan validation
+The first script requires `glslangValidator`, `spirv-val`, the Vulkan validation
 layer, and a device with the strict Vulkan profile. CI runs C and Python ABI
 checks against a software Vulkan ICD. A software device lacking the mandatory
-extensions must be reported as unsupported.
+extensions must be reported as unsupported. CI also starts two processes to
+check fixed-membership discovery, stable cluster IDs, and ordered group ranks.
+
+The peer script duplicates one ICD manifest and verifies FD-backed memory and
+timeline sharing between two logical views of the same GPU. It does not test
+two distinct physical GPUs. Set `NISYROS_VULKAN_ICD` to select another ICD.
+The communication script runs two processes, with two local ranks on node zero.
+It checks matched transfers, device visibility after receive completion,
+sequence-bound replay, and error propagation for peer loss and byte-count
+disagreement. It also checks three-rank unsigned and signed 32-bit reductions,
+five sequence-bound collective replays, metadata mismatch, and unmatched
+collective timeout.
+Pass `simulator` in place of the ICD path to run the same communication cases
+against `nisyros/tests/vulkan_simulator.c`. CI also packages the checked-in
+`add_one.spv` fixture and runs the C kernel test through strict binary loading.
+The simulator recognizes only that fixture and models its result on coherent
+host storage. It does not test driver conformance, GPU cache visibility, or
+actual shader execution.
+`local_communication.c` runs a two-rank group in one process with no network
+worker. It checks an in-place reduction. The same local matching path also
+runs inside the two-node test.
 
 ### Working on the C frontend
 

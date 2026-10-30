@@ -1,6 +1,8 @@
 //! Nisyros C ABI. The only backend implemented by this crate is Vulkan.
 
+mod communication;
 pub mod package;
+mod transport;
 mod vulkan;
 
 /// Captures an implementation-compatible compute pipeline package from SPIR-V.
@@ -45,6 +47,8 @@ pub fn capture_vulkan_package(
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{CStr, c_char, c_void};
+use std::net::SocketAddr;
+use std::os::fd::OwnedFd;
 use std::ptr;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicI32, AtomicU64, AtomicUsize, Ordering};
@@ -61,6 +65,7 @@ const BUSY: i32 = -5;
 const TIMEOUT: i32 = -7;
 const SUBMISSION_FAILED: i32 = -8;
 const INCOMPATIBLE_BINARY: i32 = -9;
+const PEER_LOST: i32 = -10;
 const ABI_VERSION: u32 = 1;
 const BACKEND_VULKAN: u32 = 1;
 
@@ -132,6 +137,33 @@ pub struct DeviceInfo {
     driver_id: u32,
     device_type: u32,
     driver_name: [c_char; 256],
+    node_index: u32,
+    is_local: u32,
+}
+
+#[repr(C)]
+pub struct NodeAddress {
+    node_index: u32,
+    reserved: u32,
+    address: *const c_char,
+}
+
+#[repr(C)]
+pub struct BootstrapDesc {
+    header: DescriptorHeader,
+    session_id: u64,
+    local_node: u32,
+    node_count: u32,
+    nodes: *const NodeAddress,
+    connect_timeout_ns: u64,
+}
+
+#[repr(C)]
+pub struct GroupDesc {
+    header: DescriptorHeader,
+    group_epoch: u64,
+    member_count: u32,
+    members: *const DeviceId,
 }
 
 #[repr(C)]
@@ -177,11 +209,44 @@ pub struct HostAllocDesc {
     reserved: [u32; 2],
 }
 
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct Location {
+    device: *mut Device,
+    address: u64,
+}
+
+#[repr(C)]
+pub struct PeerInfo {
+    header: DescriptorHeader,
+    same_physical_device: u32,
+    direct_mapping: u32,
+    event_import: u32,
+    host_staging: u32,
+}
+
 pub struct Cluster {
     instance: vulkan::Instance,
     devices: Vec<vulkan::DeviceRecord>,
+    inventory: Vec<InventoryEntry>,
+    network: Mutex<Option<transport::Connection>>,
+    distributed: bool,
     epoch: u64,
     live_devices: AtomicUsize,
+    live_groups: AtomicUsize,
+}
+
+pub struct Group {
+    cluster: *mut Cluster,
+    epoch: u64,
+    members: Vec<DeviceId>,
+    live_endpoints: AtomicUsize,
+}
+
+struct InventoryEntry {
+    node_index: u32,
+    local_index: Option<usize>,
+    snapshot: transport::DeviceAnnouncement,
 }
 
 pub struct Device {
@@ -192,10 +257,14 @@ pub struct Device {
     live_commands: AtomicUsize,
     live_events: AtomicUsize,
     live_executables: AtomicUsize,
+    live_endpoints: AtomicUsize,
     submission_lock: Mutex<()>,
     vendor_id: u32,
     device_id: u32,
     api_version: u32,
+    device_uuid: [u8; 16],
+    driver_uuid: [u8; 16],
+    inventory_index: u32,
     backend: vulkan::Device,
 }
 
@@ -229,6 +298,23 @@ pub struct Event {
     signal_state: Mutex<SignalState>,
     inflight: Mutex<Vec<Point>>,
     failure: AtomicI32,
+    source_event: *mut Event,
+    exports: AtomicUsize,
+    requires_host_progress: bool,
+}
+
+pub struct EventToken {
+    source: *mut Event,
+    fd: OwnedFd,
+}
+
+fn event_failure(event: &Event) -> i32 {
+    let failure = event.failure.load(Ordering::Acquire);
+    if failure != 0 || event.source_event.is_null() {
+        return failure;
+    }
+    // SAFETY: An imported event retains its source until destruction.
+    unsafe { (*event.source_event).failure.load(Ordering::Acquire) }
 }
 
 struct SignalState {
@@ -298,6 +384,33 @@ struct QueueState {
 struct TrackedAllocation {
     backend: vulkan::Allocation,
     recordings: usize,
+    peer_mappings: usize,
+    peer_source: Option<PeerSource>,
+    access: u32,
+}
+
+fn overlaps_allocation(
+    allocations: &BTreeMap<u64, TrackedAllocation>,
+    base: u64,
+    bytes: u64,
+) -> bool {
+    let Some(end) = base.checked_add(bytes) else {
+        return true;
+    };
+    allocations
+        .range(..end)
+        .next_back()
+        .is_some_and(|(&previous_base, previous)| {
+            previous_base
+                .checked_add(previous.backend.bytes)
+                .is_none_or(|previous_end| previous_end > base)
+        })
+}
+
+#[derive(Clone, Copy)]
+struct PeerSource {
+    device: *mut Device,
+    base: u64,
 }
 
 struct TrackedHostAllocation {
@@ -366,6 +479,30 @@ pub struct Command {
     inner: Mutex<CommandState>,
 }
 
+fn announce_device(record: &vulkan::DeviceRecord) -> transport::DeviceAnnouncement {
+    transport::DeviceAnnouncement {
+        backend: BACKEND_VULKAN,
+        api_version: record.api_version,
+        vendor_id: record.vendor_id,
+        device_id: record.device_id,
+        device_type: record.device_type,
+        driver_id: record.driver_id,
+        strict_profile_supported: record.strict_profile_supported,
+        name: record.name.map(|byte| byte as u8),
+        device_uuid: record.device_uuid,
+        driver_uuid: record.driver_uuid,
+        driver_name: record.driver_name.map(|byte| byte as u8),
+        queue_families: record
+            .queue_families
+            .iter()
+            .map(|family| transport::QueueAnnouncement {
+                flags: family.flags,
+                count: family.count,
+            })
+            .collect(),
+    }
+}
+
 /// Opens the local Vulkan inventory.
 ///
 /// # Safety
@@ -383,13 +520,125 @@ pub unsafe extern "C" fn nisyros_cluster_open_local(out: *mut *mut Cluster) -> i
     let Ok(devices) = instance.devices() else {
         return NO_DEVICE;
     };
+    let inventory = devices
+        .iter()
+        .enumerate()
+        .map(|(index, record)| InventoryEntry {
+            node_index: 0,
+            local_index: Some(index),
+            snapshot: announce_device(record),
+        })
+        .collect();
     let cluster = Box::new(Cluster {
         instance,
         devices,
+        inventory,
+        network: Mutex::new(None),
+        distributed: false,
         epoch: NEXT_EPOCH.fetch_add(1, Ordering::Relaxed),
         live_devices: AtomicUsize::new(0),
+        live_groups: AtomicUsize::new(0),
     });
     // SAFETY: The caller supplied writable output storage.
+    unsafe { *out = Box::into_raw(cluster) };
+    SUCCESS
+}
+
+/// Joins two fixed-membership nodes using application-provided TCP bootstrap.
+/// Node zero listens at `nodes[0].address`; node one connects to it.
+///
+/// # Safety
+/// `bootstrap` and its node array and address string must remain readable for
+/// this call, and `out` must be writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nisyros_cluster_join(
+    bootstrap: *const BootstrapDesc,
+    out: *mut *mut Cluster,
+) -> i32 {
+    if bootstrap.is_null() || out.is_null() {
+        return INVALID_ARGUMENT;
+    }
+    unsafe { *out = ptr::null_mut() };
+    let bootstrap = unsafe { &*bootstrap };
+    let status = validate_header(&bootstrap.header, std::mem::size_of::<BootstrapDesc>());
+    if status != SUCCESS {
+        return status;
+    }
+    if bootstrap.session_id == 0
+        || bootstrap.node_count != 2
+        || bootstrap.local_node > 1
+        || bootstrap.nodes.is_null()
+        || bootstrap.connect_timeout_ns == 0
+    {
+        return INVALID_ARGUMENT;
+    }
+    let nodes = unsafe { std::slice::from_raw_parts(bootstrap.nodes, 2) };
+    if nodes[0].node_index != 0
+        || nodes[1].node_index != 1
+        || nodes[0].reserved != 0
+        || nodes[1].reserved != 0
+        || nodes[0].address.is_null()
+    {
+        return INVALID_ARGUMENT;
+    }
+    let Ok(address) = unsafe { CStr::from_ptr(nodes[0].address) }.to_str() else {
+        return INVALID_ARGUMENT;
+    };
+    let Ok(address) = address.parse::<SocketAddr>() else {
+        return INVALID_ARGUMENT;
+    };
+    let Ok(instance) = vulkan::Instance::open() else {
+        return NO_DEVICE;
+    };
+    let Ok(devices) = instance.devices() else {
+        return NO_DEVICE;
+    };
+    let local_snapshots: Vec<_> = devices.iter().map(announce_device).collect();
+    let (network, remote_snapshots) = match transport::join(
+        bootstrap.session_id,
+        bootstrap.local_node,
+        address,
+        &local_snapshots,
+        Duration::from_nanos(bootstrap.connect_timeout_ns),
+    ) {
+        Ok(joined) => joined,
+        Err(transport::JoinError::Invalid) => return INVALID_ARGUMENT,
+        Err(transport::JoinError::Timeout) => return TIMEOUT,
+        Err(transport::JoinError::PeerLost) => return PEER_LOST,
+    };
+    let mut inventory = Vec::with_capacity(local_snapshots.len() + remote_snapshots.len());
+    for node in 0..2 {
+        if node == bootstrap.local_node {
+            inventory.extend(local_snapshots.iter().cloned().enumerate().map(
+                |(index, snapshot)| InventoryEntry {
+                    node_index: node,
+                    local_index: Some(index),
+                    snapshot,
+                },
+            ));
+        } else {
+            inventory.extend(
+                remote_snapshots
+                    .iter()
+                    .cloned()
+                    .map(|snapshot| InventoryEntry {
+                        node_index: node,
+                        local_index: None,
+                        snapshot,
+                    }),
+            );
+        }
+    }
+    let cluster = Box::new(Cluster {
+        instance,
+        devices,
+        inventory,
+        network: Mutex::new(Some(network)),
+        distributed: true,
+        epoch: bootstrap.session_id ^ 0x4e49_5359_524f_5300,
+        live_devices: AtomicUsize::new(0),
+        live_groups: AtomicUsize::new(0),
+    });
     unsafe { *out = Box::into_raw(cluster) };
     SUCCESS
 }
@@ -412,7 +661,7 @@ pub unsafe extern "C" fn nisyros_cluster_devices(
     // SAFETY: The C caller owns the live handle and output storage.
     let cluster = unsafe { &*cluster };
     let capacity = unsafe { *count };
-    let Ok(total) = u32::try_from(cluster.devices.len()) else {
+    let Ok(total) = u32::try_from(cluster.inventory.len()) else {
         return INVALID_ARGUMENT;
     };
     unsafe { *count = total };
@@ -425,7 +674,7 @@ pub unsafe extern "C" fn nisyros_cluster_devices(
             *ids.add(index as usize) = DeviceId {
                 epoch: cluster.epoch,
                 index,
-                backend: BACKEND_VULKAN,
+                backend: cluster.inventory[index as usize].snapshot.backend,
             };
         }
     }
@@ -460,21 +709,24 @@ pub unsafe extern "C" fn nisyros_cluster_device_info(
     if id.epoch != cluster.epoch || id.backend != BACKEND_VULKAN {
         return INVALID_ARGUMENT;
     }
-    let Some(device) = cluster.devices.get(id.index as usize) else {
+    let Some(device) = cluster.inventory.get(id.index as usize) else {
         return INVALID_ARGUMENT;
     };
-    info.backend = BACKEND_VULKAN;
-    info.api_version = device.api_version;
-    info.vendor_id = device.vendor_id;
-    info.device_id = device.device_id;
-    info.queue_family_count = device.queue_families.len() as u32;
-    info.strict_profile_supported = u32::from(device.strict_profile_supported);
-    info.name = device.name;
-    info.device_uuid = device.device_uuid;
-    info.driver_uuid = device.driver_uuid;
-    info.driver_id = device.driver_id;
-    info.device_type = device.device_type;
-    info.driver_name = device.driver_name;
+    let snapshot = &device.snapshot;
+    info.backend = snapshot.backend;
+    info.api_version = snapshot.api_version;
+    info.vendor_id = snapshot.vendor_id;
+    info.device_id = snapshot.device_id;
+    info.queue_family_count = snapshot.queue_families.len() as u32;
+    info.strict_profile_supported = u32::from(snapshot.strict_profile_supported);
+    info.name = snapshot.name.map(|byte| byte as c_char);
+    info.device_uuid = snapshot.device_uuid;
+    info.driver_uuid = snapshot.driver_uuid;
+    info.driver_id = snapshot.driver_id;
+    info.device_type = snapshot.device_type;
+    info.driver_name = snapshot.driver_name.map(|byte| byte as c_char);
+    info.node_index = device.node_index;
+    info.is_local = u32::from(device.local_index.is_some());
     SUCCESS
 }
 
@@ -499,9 +751,9 @@ pub unsafe extern "C" fn nisyros_cluster_queue_family_info(
         return INVALID_ARGUMENT;
     }
     let Some(info) = cluster
-        .devices
+        .inventory
         .get(id.index as usize)
-        .and_then(|device| device.queue_families.get(family as usize))
+        .and_then(|device| device.snapshot.queue_families.get(family as usize))
     else {
         return INVALID_ARGUMENT;
     };
@@ -529,8 +781,163 @@ pub unsafe extern "C" fn nisyros_cluster_close(cluster: *mut Cluster) -> i32 {
     if unsafe { (*cluster).live_devices.load(Ordering::Acquire) } != 0 {
         return BUSY;
     }
+    if unsafe { (*cluster).live_groups.load(Ordering::Acquire) } != 0 {
+        return BUSY;
+    }
     // SAFETY: Ownership of the live handle returns to Rust exactly once.
-    unsafe { drop(Box::from_raw(cluster)) };
+    let cluster = unsafe { Box::from_raw(cluster) };
+    let network = cluster
+        .network
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .take();
+    if let Some(network) = network {
+        network.shutdown();
+    }
+    drop(cluster);
+    SUCCESS
+}
+
+/// Creates an ordered device group with all local participants at once.
+/// A distributed group must have the same epoch and ordered members on both
+/// participating nodes.
+///
+/// # Safety
+/// `cluster` must be live, `desc` and its member array readable, and `out`
+/// writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nisyros_group_create(
+    cluster: *mut Cluster,
+    desc: *const GroupDesc,
+    out: *mut *mut Group,
+) -> i32 {
+    if cluster.is_null() || desc.is_null() || out.is_null() {
+        return INVALID_ARGUMENT;
+    }
+    unsafe { *out = ptr::null_mut() };
+    let cluster_ref = unsafe { &*cluster };
+    let desc = unsafe { &*desc };
+    let status = validate_header(&desc.header, std::mem::size_of::<GroupDesc>());
+    if status != SUCCESS {
+        return status;
+    }
+    if desc.group_epoch == 0
+        || desc.member_count == 0
+        || desc.member_count > 64
+        || desc.members.is_null()
+    {
+        return INVALID_ARGUMENT;
+    }
+    let members = unsafe { std::slice::from_raw_parts(desc.members, desc.member_count as usize) };
+    let mut distinct = BTreeSet::new();
+    let mut local_count = 0;
+    for member in members {
+        if member.epoch != cluster_ref.epoch || !distinct.insert((member.index, member.backend)) {
+            return INVALID_ARGUMENT;
+        }
+        let Some(entry) = cluster_ref.inventory.get(member.index as usize) else {
+            return INVALID_ARGUMENT;
+        };
+        if member.backend != entry.snapshot.backend {
+            return INVALID_ARGUMENT;
+        }
+        local_count += usize::from(entry.local_index.is_some());
+    }
+    if local_count == 0 {
+        return UNSUPPORTED;
+    }
+    let ordered: Vec<_> = members
+        .iter()
+        .map(|member| (member.epoch, member.index, member.backend))
+        .collect();
+    let Ok(mut network) = cluster_ref.network.lock() else {
+        return PEER_LOST;
+    };
+    if cluster_ref.distributed && network.is_none() {
+        return BUSY;
+    }
+    if let Some(connection) = network.as_mut() {
+        match connection.exchange_group(desc.group_epoch, &ordered) {
+            Ok(()) => {}
+            Err(transport::JoinError::Invalid) => return INVALID_ARGUMENT,
+            Err(transport::JoinError::Timeout) => return TIMEOUT,
+            Err(transport::JoinError::PeerLost) => return PEER_LOST,
+        }
+    }
+    drop(network);
+    let group = Box::new(Group {
+        cluster,
+        epoch: desc.group_epoch,
+        members: members.to_vec(),
+        live_endpoints: AtomicUsize::new(0),
+    });
+    cluster_ref.live_groups.fetch_add(1, Ordering::Release);
+    unsafe { *out = Box::into_raw(group) };
+    SUCCESS
+}
+
+/// Releases a group after all its endpoints are closed.
+///
+/// # Safety
+/// `group` must be a live handle returned by `nisyros_group_create`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nisyros_group_destroy(group: *mut Group) -> i32 {
+    if group.is_null() {
+        return INVALID_ARGUMENT;
+    }
+    let group_ref = unsafe { &*group };
+    if group_ref.live_endpoints.load(Ordering::Acquire) != 0 {
+        return BUSY;
+    }
+    let cluster = group_ref.cluster;
+    unsafe { drop(Box::from_raw(group)) };
+    unsafe { (*cluster).live_groups.fetch_sub(1, Ordering::Release) };
+    SUCCESS
+}
+
+/// Returns the number of ordered device participants in a group.
+///
+/// # Safety
+/// `group` must be live and `count` writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nisyros_group_rank_count(group: *mut Group, count: *mut u32) -> i32 {
+    if group.is_null() || count.is_null() {
+        return INVALID_ARGUMENT;
+    }
+    unsafe { *count = (*group).members.len() as u32 };
+    SUCCESS
+}
+
+/// Returns the cluster device identity at one group rank.
+///
+/// # Safety
+/// `group` must be live and `out` writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nisyros_group_member(
+    group: *mut Group,
+    rank: u32,
+    out: *mut DeviceId,
+) -> i32 {
+    if group.is_null() || out.is_null() {
+        return INVALID_ARGUMENT;
+    }
+    let Some(member) = (unsafe { &*group }).members.get(rank as usize) else {
+        return INVALID_ARGUMENT;
+    };
+    unsafe { *out = *member };
+    SUCCESS
+}
+
+/// Returns the fixed membership epoch of a group.
+///
+/// # Safety
+/// `group` must be live and `epoch` writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nisyros_group_epoch(group: *mut Group, epoch: *mut u64) -> i32 {
+    if group.is_null() || epoch.is_null() {
+        return INVALID_ARGUMENT;
+    }
+    unsafe { *epoch = (*group).epoch };
     SUCCESS
 }
 
@@ -564,9 +971,13 @@ pub unsafe extern "C" fn nisyros_device_open(
     {
         return INVALID_ARGUMENT;
     }
-    let Some(record) = cluster_ref.devices.get(id.index as usize) else {
+    let Some(entry) = cluster_ref.inventory.get(id.index as usize) else {
         return INVALID_ARGUMENT;
     };
+    let Some(local_index) = entry.local_index else {
+        return UNSUPPORTED;
+    };
+    let record = &cluster_ref.devices[local_index];
     if !record.strict_profile_supported {
         return UNSUPPORTED;
     }
@@ -600,7 +1011,7 @@ pub unsafe extern "C" fn nisyros_device_open(
     };
     let mut queues = Vec::new();
     for (backend_index, queue) in backend.queues.iter().enumerate() {
-        let Ok(timeline) = backend.create_timeline() else {
+        let Ok(timeline) = backend.create_timeline(false) else {
             return DEVICE_LOST;
         };
         queues.push(Queue {
@@ -620,6 +1031,9 @@ pub unsafe extern "C" fn nisyros_device_open(
                 }),
                 inflight: Mutex::new(Vec::new()),
                 failure: AtomicI32::new(0),
+                source_event: ptr::null_mut(),
+                exports: AtomicUsize::new(0),
+                requires_host_progress: false,
             },
             state: Mutex::new(QueueState {
                 next_value: 0,
@@ -635,10 +1049,14 @@ pub unsafe extern "C" fn nisyros_device_open(
         live_commands: AtomicUsize::new(0),
         live_events: AtomicUsize::new(0),
         live_executables: AtomicUsize::new(0),
+        live_endpoints: AtomicUsize::new(0),
         submission_lock: Mutex::new(()),
         vendor_id: record.vendor_id,
         device_id: record.device_id,
         api_version: record.api_version,
+        device_uuid: record.device_uuid,
+        driver_uuid: record.driver_uuid,
+        inventory_index: id.index,
         backend,
     });
     let device_ptr: *mut Device = &raw mut *device;
@@ -696,6 +1114,9 @@ pub unsafe extern "C" fn nisyros_device_close(device: *mut Device) -> i32 {
         return BUSY;
     }
     if device_ref.live_executables.load(Ordering::Acquire) != 0 {
+        return BUSY;
+    }
+    if device_ref.live_endpoints.load(Ordering::Acquire) != 0 {
         return BUSY;
     }
     let Ok(allocations) = device_ref.allocations.lock() else {
@@ -775,7 +1196,7 @@ pub unsafe extern "C" fn nisyros_alloc(
         device.backend.free_allocation(allocation);
         return DEVICE_LOST;
     };
-    if allocations.contains_key(&base) {
+    if overlaps_allocation(&allocations, base, allocation.bytes) {
         device.backend.free_allocation(allocation);
         return DEVICE_LOST;
     }
@@ -784,6 +1205,9 @@ pub unsafe extern "C" fn nisyros_alloc(
         TrackedAllocation {
             backend: allocation,
             recordings: 0,
+            peer_mappings: 0,
+            peer_source: None,
+            access: 3,
         },
     );
     unsafe { *out = base };
@@ -806,7 +1230,11 @@ pub unsafe extern "C" fn nisyros_free(device: *mut Device, base: u64) -> i32 {
     let Some(allocation) = allocations.get(&base) else {
         return INVALID_ARGUMENT;
     };
-    if allocation.backend.is_mapped() || allocation.recordings != 0 {
+    if allocation.peer_source.is_some() {
+        return INVALID_ARGUMENT;
+    }
+    if allocation.backend.is_mapped() || allocation.recordings != 0 || allocation.peer_mappings != 0
+    {
         return BUSY;
     }
     let allocation = allocations.remove(&base).expect("checked allocation key");
@@ -1117,6 +1545,181 @@ pub unsafe extern "C" fn nisyros_host_unregister(device: *mut Device, host: *mut
     SUCCESS
 }
 
+fn peer_pair(device: &Device, peer: &Device) -> (bool, bool, bool) {
+    let same_physical = device.device_uuid != [0; 16] && device.device_uuid == peer.device_uuid;
+    let compatible = same_physical
+        && ptr::eq(device.cluster, peer.cluster)
+        && device.driver_uuid != [0; 16]
+        && device.driver_uuid == peer.driver_uuid;
+    (
+        same_physical,
+        compatible && device.backend.peer_memory_fd && peer.backend.peer_memory_fd,
+        compatible && device.backend.peer_timeline_fd && peer.backend.peer_timeline_fd,
+    )
+}
+
+/// Queries direct peer routes between two opened local Vulkan sessions.
+///
+/// # Safety
+/// Both devices must be live and `out` must be a complete initialized struct.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nisyros_peer_capabilities(
+    device: *mut Device,
+    peer: *mut Device,
+    out: *mut PeerInfo,
+) -> i32 {
+    if device.is_null() || peer.is_null() || out.is_null() {
+        return INVALID_ARGUMENT;
+    }
+    let out = unsafe { &mut *out };
+    let status = validate_header(&out.header, std::mem::size_of::<PeerInfo>());
+    if status != SUCCESS {
+        return status;
+    }
+    let (same, memory, event) = peer_pair(unsafe { &*device }, unsafe { &*peer });
+    out.same_physical_device = u32::from(same);
+    out.direct_mapping = u32::from(memory);
+    out.event_import = u32::from(event);
+    out.host_staging = 0;
+    SUCCESS
+}
+
+/// Imports a bounded source range into another local device address space.
+/// The mapping keeps the source allocation alive until unmap succeeds.
+///
+/// # Safety
+/// Both devices must be live. The source address must belong to its device,
+/// and `out` must be writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nisyros_peer_map(
+    device: *mut Device,
+    source: Location,
+    bytes: u64,
+    access: u32,
+    out: *mut u64,
+) -> i32 {
+    if out.is_null() {
+        return INVALID_ARGUMENT;
+    }
+    unsafe { *out = 0 };
+    if device.is_null()
+        || source.device.is_null()
+        || device == source.device
+        || bytes == 0
+        || access == 0
+        || access & !3 != 0
+    {
+        return INVALID_ARGUMENT;
+    }
+    let target = unsafe { &*device };
+    let origin = unsafe { &*source.device };
+    if !peer_pair(target, origin).1 {
+        return UNSUPPORTED;
+    }
+    let Ok(mut source_allocations) = origin.allocations.lock() else {
+        return DEVICE_LOST;
+    };
+    let Some((&source_base, source_allocation)) =
+        source_allocations.range(..=source.address).next_back()
+    else {
+        return INVALID_ARGUMENT;
+    };
+    if source_allocation.peer_source.is_some()
+        || !source_allocation.backend.contains(source.address, bytes)
+    {
+        return INVALID_ARGUMENT;
+    }
+    let offset = source.address - source_base;
+    let fd = match origin
+        .backend
+        .export_allocation_fd(&source_allocation.backend)
+    {
+        Ok(fd) => fd,
+        Err(error) => return allocation_status(error),
+    };
+    let imported =
+        match target
+            .backend
+            .import_peer_fd(&source_allocation.backend, offset, bytes, fd)
+        {
+            Ok(imported) => imported,
+            Err(error) => return allocation_status(error),
+        };
+    let base = imported.base;
+    let Ok(mut target_allocations) = target.allocations.lock() else {
+        target.backend.free_allocation(imported);
+        return DEVICE_LOST;
+    };
+    if overlaps_allocation(&target_allocations, base, imported.bytes) {
+        target.backend.free_allocation(imported);
+        return DEVICE_LOST;
+    }
+    let Some(next_count) = source_allocations
+        .get(&source_base)
+        .and_then(|allocation| allocation.peer_mappings.checked_add(1))
+    else {
+        target.backend.free_allocation(imported);
+        return OUT_OF_MEMORY;
+    };
+    target_allocations.insert(
+        base,
+        TrackedAllocation {
+            backend: imported,
+            recordings: 0,
+            peer_mappings: 0,
+            peer_source: Some(PeerSource {
+                device: source.device,
+                base: source_base,
+            }),
+            access,
+        },
+    );
+    source_allocations
+        .get_mut(&source_base)
+        .expect("source allocation retained")
+        .peer_mappings = next_count;
+    unsafe { *out = base };
+    SUCCESS
+}
+
+/// Releases a peer mapping after every recording that references it is reset.
+///
+/// # Safety
+/// `device` must be live and `base` must be the base of one of its peer maps.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nisyros_peer_unmap(device: *mut Device, base: u64) -> i32 {
+    if device.is_null() || base == 0 {
+        return INVALID_ARGUMENT;
+    }
+    let target = unsafe { &*device };
+    let Ok(mut allocations) = target.allocations.lock() else {
+        return DEVICE_LOST;
+    };
+    let Some(allocation) = allocations.get(&base) else {
+        return INVALID_ARGUMENT;
+    };
+    let Some(source) = allocation.peer_source else {
+        return INVALID_ARGUMENT;
+    };
+    if allocation.recordings != 0 || allocation.peer_mappings != 0 || allocation.backend.is_mapped()
+    {
+        return BUSY;
+    }
+    let allocation = allocations.remove(&base).expect("checked peer mapping");
+    drop(allocations);
+    target.backend.free_allocation(allocation.backend);
+    let origin = unsafe { &*source.device };
+    let mut source_allocations = origin
+        .allocations
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let Some(source_allocation) = source_allocations.get_mut(&source.base) else {
+        return DEVICE_LOST;
+    };
+    source_allocation.peer_mappings -= 1;
+    SUCCESS
+}
+
 /// Loads a complete native Vulkan pipeline-binary package without shader compilation.
 ///
 /// # Safety
@@ -1230,7 +1833,7 @@ fn refresh_command(state: &mut CommandState) -> i32 {
         .expect("pending command has a completion point");
     // SAFETY: The command retains its device, whose queue owns this event.
     let event = unsafe { &*point.event };
-    let failure = event.failure.load(Ordering::Acquire);
+    let failure = event_failure(event);
     if failure != 0 {
         return failure;
     }
@@ -1325,7 +1928,16 @@ fn record_addresses(cmd: &Command, operation: vulkan::CommandOp, ranges: &[(u64,
             inner.state = RecordingState::Invalid;
             return INVALID_ARGUMENT;
         };
-        if !allocation.backend.contains(address, bytes) {
+        let required_access = match operation {
+            vulkan::CommandOp::Copy { dst, .. } if address == dst => 2,
+            vulkan::CommandOp::Copy { src, .. } if address == src => 1,
+            vulkan::CommandOp::Fill { dst, .. } if address == dst => 2,
+            vulkan::CommandOp::Dispatch { .. } | vulkan::CommandOp::DispatchIndirect { .. } => 1,
+            _ => 0,
+        };
+        if !allocation.backend.contains(address, bytes)
+            || allocation.access & required_access != required_access
+        {
             inner.state = RecordingState::Invalid;
             return INVALID_ARGUMENT;
         }
@@ -1457,7 +2069,10 @@ fn record_host_transfer(
         inner.state = RecordingState::Invalid;
         return INVALID_ARGUMENT;
     };
-    if !allocation.backend.contains(device_address, bytes) {
+    let required_access = if to_device { 2 } else { 1 };
+    if !allocation.backend.contains(device_address, bytes)
+        || allocation.access & required_access != required_access
+    {
         inner.state = RecordingState::Invalid;
         return INVALID_ARGUMENT;
     }
@@ -1842,7 +2457,10 @@ pub unsafe extern "C" fn nisyros_event_create(
     if desc.signaling_domain != 1 && desc.signaling_domain != 2 {
         return UNSUPPORTED;
     }
-    let Ok(timeline) = device_ref.backend.create_timeline() else {
+    let Ok(timeline) = device_ref
+        .backend
+        .create_timeline(desc.signaling_domain == 1 && device_ref.backend.peer_timeline_fd)
+    else {
         return DEVICE_LOST;
     };
     let event = Box::new(Event {
@@ -1857,6 +2475,9 @@ pub unsafe extern "C" fn nisyros_event_create(
         }),
         inflight: Mutex::new(Vec::new()),
         failure: AtomicI32::new(0),
+        source_event: ptr::null_mut(),
+        exports: AtomicUsize::new(0),
+        requires_host_progress: false,
     });
     device_ref.live_events.fetch_add(1, Ordering::Release);
     unsafe { *out = Box::into_raw(event) };
@@ -1875,6 +2496,9 @@ pub unsafe extern "C" fn nisyros_event_destroy(event: *mut Event) -> i32 {
     let event_ref = unsafe { &*event };
     if event_ref.queue_owned {
         return INVALID_ARGUMENT;
+    }
+    if event_ref.exports.load(Ordering::Acquire) != 0 {
+        return BUSY;
     }
     let owner = unsafe { &*event_ref.owner };
     let Ok(_submission) = owner.submission_lock.lock() else {
@@ -1900,7 +2524,7 @@ pub unsafe extern "C" fn nisyros_event_destroy(event: *mut Event) -> i32 {
     let Ok(state) = event_ref.signal_state.lock() else {
         return DEVICE_LOST;
     };
-    if event_ref.failure.load(Ordering::Acquire) == 0 {
+    if event_failure(event_ref) == 0 {
         let Ok(completed) = event_ref.timeline.query() else {
             return DEVICE_LOST;
         };
@@ -1910,8 +2534,108 @@ pub unsafe extern "C" fn nisyros_event_destroy(event: *mut Event) -> i32 {
     }
     drop(state);
     let owner = event_ref.owner;
+    let source_event = event_ref.source_event;
     unsafe { drop(Box::from_raw(event)) };
     unsafe { (*owner).live_events.fetch_sub(1, Ordering::Release) };
+    if !source_event.is_null() {
+        unsafe { (*source_event).exports.fetch_sub(1, Ordering::Release) };
+    }
+    SUCCESS
+}
+
+/// Exports a device timeline as an opaque local peer token.
+///
+/// # Safety
+/// `event` must be live and `out` writable. The token retains its source.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nisyros_event_export(event: *mut Event, out: *mut *mut EventToken) -> i32 {
+    if event.is_null() || out.is_null() {
+        return INVALID_ARGUMENT;
+    }
+    unsafe { *out = ptr::null_mut() };
+    let event_ref = unsafe { &*event };
+    if event_ref.queue_owned || !event_ref.source_event.is_null() || event_ref.signal_domain != 1 {
+        return INVALID_ARGUMENT;
+    }
+    let origin = unsafe { &*event_ref.owner };
+    if !origin.backend.peer_timeline_fd {
+        return UNSUPPORTED;
+    }
+    let fd = match event_ref.timeline.export_fd() {
+        Ok(fd) => fd,
+        Err(-8) => return UNSUPPORTED,
+        Err(_) => return DEVICE_LOST,
+    };
+    let token = Box::new(EventToken { source: event, fd });
+    event_ref.exports.fetch_add(1, Ordering::Release);
+    unsafe { *out = Box::into_raw(token) };
+    SUCCESS
+}
+
+/// Imports a token into a compatible local device as a wait-only event.
+///
+/// # Safety
+/// `device` and `token` must be live and `out` writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nisyros_event_import(
+    device: *mut Device,
+    token: *mut EventToken,
+    out: *mut *mut Event,
+) -> i32 {
+    if device.is_null() || token.is_null() || out.is_null() {
+        return INVALID_ARGUMENT;
+    }
+    unsafe { *out = ptr::null_mut() };
+    let target = unsafe { &*device };
+    let token_ref = unsafe { &*token };
+    let source = unsafe { &*token_ref.source };
+    let origin = unsafe { &*source.owner };
+    if !peer_pair(target, origin).2 {
+        return UNSUPPORTED;
+    }
+    let fd = match token_ref.fd.try_clone() {
+        Ok(fd) => fd,
+        Err(_) => return OUT_OF_MEMORY,
+    };
+    let timeline = match target.backend.import_timeline_fd(fd) {
+        Ok(timeline) => timeline,
+        Err(-8) => return UNSUPPORTED,
+        Err(_) => return DEVICE_LOST,
+    };
+    let imported = Box::new(Event {
+        timeline,
+        owner: device,
+        queue_owned: false,
+        signal_domain: 1,
+        recordings: AtomicUsize::new(0),
+        signal_state: Mutex::new(SignalState {
+            last_reserved: 0,
+            last_queue: ptr::null_mut(),
+        }),
+        inflight: Mutex::new(Vec::new()),
+        failure: AtomicI32::new(0),
+        source_event: token_ref.source,
+        exports: AtomicUsize::new(0),
+        requires_host_progress: false,
+    });
+    source.exports.fetch_add(1, Ordering::Release);
+    target.live_events.fetch_add(1, Ordering::Release);
+    unsafe { *out = Box::into_raw(imported) };
+    SUCCESS
+}
+
+/// Releases an export token and its OS handle.
+///
+/// # Safety
+/// `token` must be a live token returned by `nisyros_event_export`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nisyros_event_token_destroy(token: *mut EventToken) -> i32 {
+    if token.is_null() {
+        return INVALID_ARGUMENT;
+    }
+    let token = unsafe { Box::from_raw(token) };
+    unsafe { (*token.source).exports.fetch_sub(1, Ordering::Release) };
+    drop(token);
     SUCCESS
 }
 
@@ -1925,10 +2649,10 @@ pub unsafe extern "C" fn nisyros_event_host_signal(event: *mut Event, value: u64
         return INVALID_ARGUMENT;
     }
     let event = unsafe { &*event };
-    if event.queue_owned || event.signal_domain != 2 {
+    if event.queue_owned || !event.source_event.is_null() || event.signal_domain != 2 {
         return INVALID_ARGUMENT;
     }
-    let failure = event.failure.load(Ordering::Acquire);
+    let failure = event_failure(event);
     if failure != 0 {
         return failure;
     }
@@ -1964,7 +2688,9 @@ fn record_event(cmd: *mut Command, point: Point, signal: bool) -> i32 {
     // SAFETY: The caller owns live command and event handles.
     let cmd_ref = unsafe { &*cmd };
     let event = unsafe { &*point.event };
-    if event.owner != cmd_ref.device || (signal && (event.queue_owned || event.signal_domain != 1))
+    if event.owner != cmd_ref.device
+        || (signal
+            && (event.queue_owned || !event.source_event.is_null() || event.signal_domain != 1))
     {
         return invalid_recording_argument(cmd);
     }
@@ -2121,7 +2847,13 @@ pub unsafe extern "C" fn nisyros_cmd_query(cmd: *mut Command, out: *mut CommandI
         return DEVICE_LOST;
     };
     out.native_segment_count = inner.native.len() as u32;
-    out.requires_host_progress = 0;
+    out.requires_host_progress = u32::from(inner.actions.iter().any(|action| match action {
+        RecordedAction::Wait(EventRef::Point(point)) => unsafe {
+            (*point.event).requires_host_progress
+        },
+        RecordedAction::Wait(EventRef::Slot(_)) => false,
+        _ => false,
+    }));
     out.native_record_count = inner.native_record_count;
     SUCCESS
 }
@@ -2301,18 +3033,35 @@ pub unsafe extern "C" fn nisyros_submit(
         let waits: Vec<Point> = plan.waits.iter().copied().map(&resolve).collect();
         let signals: Vec<Point> = plan.signals.iter().copied().map(&resolve).collect();
         for point in &waits {
-            if unsafe { &*point.event }.owner != cmd.device {
+            let event = unsafe { &*point.event };
+            if event.owner != cmd.device {
                 return INVALID_ARGUMENT;
+            }
+            let failure = event_failure(event);
+            if failure != 0 {
+                return failure;
+            }
+            if event.requires_host_progress {
+                match event.timeline.query() {
+                    Ok(current) if current < point.value => return UNSUPPORTED,
+                    Err(_) => return DEVICE_LOST,
+                    _ => {}
+                }
             }
         }
         for point in &signals {
             let event = unsafe { &*point.event };
             if event.owner != cmd.device
                 || event.queue_owned
+                || !event.source_event.is_null()
                 || event.signal_domain != 1
                 || point.value == 0
             {
                 return INVALID_ARGUMENT;
+            }
+            let failure = event_failure(event);
+            if failure != 0 {
+                return failure;
             }
         }
         resolved_plans.push((waits, signals));
@@ -2446,7 +3195,7 @@ pub unsafe extern "C" fn nisyros_wait(point: Point, timeout_ns: u64) -> i32 {
     let event = unsafe { &*point.event };
     let started = Instant::now();
     loop {
-        let failure = event.failure.load(Ordering::Acquire);
+        let failure = event_failure(event);
         if failure != 0 {
             return failure;
         }
@@ -2497,7 +3246,7 @@ pub unsafe extern "C" fn nisyros_wait_many(
         let mut failure = 0;
         for (index, point) in points.iter().enumerate() {
             let event = unsafe { &*point.event };
-            let event_failure = event.failure.load(Ordering::Acquire);
+            let event_failure = event_failure(event);
             if event_failure != 0 {
                 failure = event_failure;
                 continue;
@@ -2543,7 +3292,7 @@ pub unsafe extern "C" fn nisyros_event_query(event: *mut Event, value: *mut u64)
         return INVALID_ARGUMENT;
     }
     let event = unsafe { &*event };
-    let failure = event.failure.load(Ordering::Acquire);
+    let failure = event_failure(event);
     if failure != 0 {
         return failure;
     }
