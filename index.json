@@ -174,6 +174,13 @@
    "subject": "perf(fcc): make the lexer zero-copy (#750)",
    "time": "2026-10-28T13:19:25.000Z",
    "env_key": "aarch64: rustc 1.101.0-nightly (c36f14571 2026-10-01); ldd (Ubuntu GLIBC 2.39-0ubuntu8.9) 2.39|x86_64: rustc 1.101.0-nightly (c36f14571 2026-10-01); ldd (Ubuntu GLIBC 2.39-0ubuntu8.9) 2.39"
+  },
+  {
+   "file": "runs/2026-10-30T07-17-52-000Z-cbe3062924cd.json",
+   "commit": "cbe3062924cdf243001caf4eea6c4cc220dd1960",
+   "subject": "fix(arm64): refine A720 scalar conversion throughput (#751)",
+   "time": "2026-10-30T07:17:52.000Z",
+   "env_key": "aarch64: rustc 1.101.0-nightly (c36f14571 2026-10-01); ldd (Ubuntu GLIBC 2.39-0ubuntu8.9) 2.39|x86_64: rustc 1.101.0-nightly (c36f14571 2026-10-01); ldd (Ubuntu GLIBC 2.39-0ubuntu8.9) 2.39"
   }
  ]
 }

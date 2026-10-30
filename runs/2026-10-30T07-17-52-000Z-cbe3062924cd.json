@@ -1,0 +1,7492 @@
+{
+ "commit": "cbe3062924cdf243001caf4eea6c4cc220dd1960",
+ "subject": "fix(arm64): refine A720 scalar conversion throughput (#751)",
+ "time": "2026-10-30T07:17:52.000Z",
+ "run_url": "https://github.com/frontiers-labs/tir/actions/runs/41015829685",
+ "env_key": "aarch64: rustc 1.101.0-nightly (c36f14571 2026-10-01); ldd (Ubuntu GLIBC 2.39-0ubuntu8.9) 2.39|x86_64: rustc 1.101.0-nightly (c36f14571 2026-10-01); ldd (Ubuntu GLIBC 2.39-0ubuntu8.9) 2.39",
+ "gate_metrics": [],
+ "threshold": 2,
+ "metrics": [
+  {
+   "key": "latency",
+   "label": "Wall time",
+   "unit": "ns"
+  }
+ ],
+ "variants": {
+  "aarch64/clang/coremark/source/O0/compile/core_state": {
+   "benchmark": "coremark/O0/core_state",
+   "group": "Compile on aarch64",
+   "variant": "clang",
+   "subject": false
+  },
+  "aarch64/fcc/coremark/source/O2/run": {
+   "benchmark": "coremark/O2",
+   "group": "Run on aarch64",
+   "variant": "fcc",
+   "subject": true
+  },
+  "aarch64/fcc/coremark/source/O0/compile/core_main": {
+   "benchmark": "coremark/O0/core_main",
+   "group": "Compile on aarch64",
+   "variant": "fcc",
+   "subject": true
+  },
+  "aarch64/clang/coremark/source/O0/compile/posix/core_portme": {
+   "benchmark": "coremark/O0/posix/core_portme",
+   "group": "Compile on aarch64",
+   "variant": "clang",
+   "subject": false
+  },
+  "aarch64/fcc/coremark/source/O2/link": {
+   "benchmark": "coremark/O2",
+   "group": "Link on aarch64",
+   "variant": "fcc",
+   "subject": true
+  },
+  "aarch64/gcc/coremark/source/O0/link": {
+   "benchmark": "coremark/O0",
+   "group": "Link on aarch64",
+   "variant": "gcc",
+   "subject": false
+  },
+  "aarch64/gcc/coremark/source/O0/compile/core_matrix": {
+   "benchmark": "coremark/O0/core_matrix",
+   "group": "Compile on aarch64",
+   "variant": "gcc",
+   "subject": false
+  },
+  "aarch64/fcc/coremark/source/O2/compile/core_matrix": {
+   "benchmark": "coremark/O2/core_matrix",
+   "group": "Compile on aarch64",
+   "variant": "fcc",
+   "subject": true
+  },
+  "aarch64/fcc/coremark/source/O2/compile/core_list_join": {
+   "benchmark": "coremark/O2/core_list_join",
+   "group": "Compile on aarch64",
+   "variant": "fcc",
+   "subject": true
+  },
+  "aarch64/gcc/coremark/source/O0/compile/core_list_join": {
+   "benchmark": "coremark/O0/core_list_join",
+   "group": "Compile on aarch64",
+   "variant": "gcc",
+   "subject": false
+  },
+  "aarch64/clang/coremark/source/O0/compile/core_matrix": {
+   "benchmark": "coremark/O0/core_matrix",
+   "group": "Compile on aarch64",
+   "variant": "clang",
+   "subject": false
+  },
+  "aarch64/clang/coremark/source/O2/compile/core_main": {
+   "benchmark": "coremark/O2/core_main",
+   "group": "Compile on aarch64",
+   "variant": "clang",
+   "subject": false
+  },
+  "aarch64/fcc/coremark/source/O2/compile/core_util": {
+   "benchmark": "coremark/O2/core_util",
+   "group": "Compile on aarch64",
+   "variant": "fcc",
+   "subject": true
+  },
+  "aarch64/clang/coremark/source/O2/compile/core_list_join": {
+   "benchmark": "coremark/O2/core_list_join",
+   "group": "Compile on aarch64",
+   "variant": "clang",
+   "subject": false
+  },
+  "aarch64/gcc/coremark/source/O0/run": {
+   "benchmark": "coremark/O0",
+   "group": "Run on aarch64",
+   "variant": "gcc",
+   "subject": false
+  },
+  "aarch64/fcc/coremark/source/O2/compile/core_main": {
+   "benchmark": "coremark/O2/core_main",
+   "group": "Compile on aarch64",
+   "variant": "fcc",
+   "subject": true
+  },
+  "aarch64/clang/coremark/source/O2/compile/core_state": {
+   "benchmark": "coremark/O2/core_state",
+   "group": "Compile on aarch64",
+   "variant": "clang",
+   "subject": false
+  },
+  "aarch64/fcc/coremark/source/O0/compile/core_matrix": {
+   "benchmark": "coremark/O0/core_matrix",
+   "group": "Compile on aarch64",
+   "variant": "fcc",
+   "subject": true
+  },
+  "aarch64/clang/coremark/source/O0/compile/core_util": {
+   "benchmark": "coremark/O0/core_util",
+   "group": "Compile on aarch64",
+   "variant": "clang",
+   "subject": false
+  },
+  "aarch64/fcc/coremark/source/O0/compile/core_util": {
+   "benchmark": "coremark/O0/core_util",
+   "group": "Compile on aarch64",
+   "variant": "fcc",
+   "subject": true
+  },
+  "aarch64/gcc/coremark/source/O2/compile/core_matrix": {
+   "benchmark": "coremark/O2/core_matrix",
+   "group": "Compile on aarch64",
+   "variant": "gcc",
+   "subject": false
+  },
+  "aarch64/clang/coremark/source/O2/compile/core_util": {
+   "benchmark": "coremark/O2/core_util",
+   "group": "Compile on aarch64",
+   "variant": "clang",
+   "subject": false
+  },
+  "aarch64/fcc/coremark/source/O2/compile/posix/core_portme": {
+   "benchmark": "coremark/O2/posix/core_portme",
+   "group": "Compile on aarch64",
+   "variant": "fcc",
+   "subject": true
+  },
+  "aarch64/gcc/coremark/source/O0/compile/core_util": {
+   "benchmark": "coremark/O0/core_util",
+   "group": "Compile on aarch64",
+   "variant": "gcc",
+   "subject": false
+  },
+  "aarch64/gcc/coremark/source/O2/compile/core_util": {
+   "benchmark": "coremark/O2/core_util",
+   "group": "Compile on aarch64",
+   "variant": "gcc",
+   "subject": false
+  },
+  "aarch64/fcc/coremark/source/O0/run": {
+   "benchmark": "coremark/O0",
+   "group": "Run on aarch64",
+   "variant": "fcc",
+   "subject": true
+  },
+  "aarch64/clang/coremark/source/O2/run": {
+   "benchmark": "coremark/O2",
+   "group": "Run on aarch64",
+   "variant": "clang",
+   "subject": false
+  },
+  "aarch64/fcc/coremark/source/O0/compile/core_state": {
+   "benchmark": "coremark/O0/core_state",
+   "group": "Compile on aarch64",
+   "variant": "fcc",
+   "subject": true
+  },
+  "aarch64/clang/coremark/source/O0/link": {
+   "benchmark": "coremark/O0",
+   "group": "Link on aarch64",
+   "variant": "clang",
+   "subject": false
+  },
+  "aarch64/gcc/coremark/source/O0/compile/core_main": {
+   "benchmark": "coremark/O0/core_main",
+   "group": "Compile on aarch64",
+   "variant": "gcc",
+   "subject": false
+  },
+  "aarch64/clang/coremark/source/O2/link": {
+   "benchmark": "coremark/O2",
+   "group": "Link on aarch64",
+   "variant": "clang",
+   "subject": false
+  },
+  "aarch64/clang/coremark/source/O0/run": {
+   "benchmark": "coremark/O0",
+   "group": "Run on aarch64",
+   "variant": "clang",
+   "subject": false
+  },
+  "aarch64/gcc/coremark/source/O2/compile/core_main": {
+   "benchmark": "coremark/O2/core_main",
+   "group": "Compile on aarch64",
+   "variant": "gcc",
+   "subject": false
+  },
+  "aarch64/clang/coremark/source/O0/compile/core_list_join": {
+   "benchmark": "coremark/O0/core_list_join",
+   "group": "Compile on aarch64",
+   "variant": "clang",
+   "subject": false
+  },
+  "aarch64/fcc/coremark/source/O0/link": {
+   "benchmark": "coremark/O0",
+   "group": "Link on aarch64",
+   "variant": "fcc",
+   "subject": true
+  },
+  "aarch64/fcc/coremark/source/O0/compile/posix/core_portme": {
+   "benchmark": "coremark/O0/posix/core_portme",
+   "group": "Compile on aarch64",
+   "variant": "fcc",
+   "subject": true
+  },
+  "aarch64/clang/coremark/source/O2/compile/core_matrix": {
+   "benchmark": "coremark/O2/core_matrix",
+   "group": "Compile on aarch64",
+   "variant": "clang",
+   "subject": false
+  },
+  "aarch64/fcc/coremark/source/O0/compile/core_list_join": {
+   "benchmark": "coremark/O0/core_list_join",
+   "group": "Compile on aarch64",
+   "variant": "fcc",
+   "subject": true
+  },
+  "aarch64/gcc/coremark/source/O2/compile/core_state": {
+   "benchmark": "coremark/O2/core_state",
+   "group": "Compile on aarch64",
+   "variant": "gcc",
+   "subject": false
+  },
+  "aarch64/gcc/coremark/source/O2/compile/core_list_join": {
+   "benchmark": "coremark/O2/core_list_join",
+   "group": "Compile on aarch64",
+   "variant": "gcc",
+   "subject": false
+  },
+  "aarch64/gcc/coremark/source/O2/compile/posix/core_portme": {
+   "benchmark": "coremark/O2/posix/core_portme",
+   "group": "Compile on aarch64",
+   "variant": "gcc",
+   "subject": false
+  },
+  "aarch64/gcc/coremark/source/O2/run": {
+   "benchmark": "coremark/O2",
+   "group": "Run on aarch64",
+   "variant": "gcc",
+   "subject": false
+  },
+  "aarch64/clang/coremark/source/O0/compile/core_main": {
+   "benchmark": "coremark/O0/core_main",
+   "group": "Compile on aarch64",
+   "variant": "clang",
+   "subject": false
+  },
+  "aarch64/gcc/coremark/source/O0/compile/core_state": {
+   "benchmark": "coremark/O0/core_state",
+   "group": "Compile on aarch64",
+   "variant": "gcc",
+   "subject": false
+  },
+  "aarch64/gcc/coremark/source/O2/link": {
+   "benchmark": "coremark/O2",
+   "group": "Link on aarch64",
+   "variant": "gcc",
+   "subject": false
+  },
+  "aarch64/clang/coremark/source/O2/compile/posix/core_portme": {
+   "benchmark": "coremark/O2/posix/core_portme",
+   "group": "Compile on aarch64",
+   "variant": "clang",
+   "subject": false
+  },
+  "aarch64/fcc/coremark/source/O2/compile/core_state": {
+   "benchmark": "coremark/O2/core_state",
+   "group": "Compile on aarch64",
+   "variant": "fcc",
+   "subject": true
+  },
+  "aarch64/gcc/coremark/source/O0/compile/posix/core_portme": {
+   "benchmark": "coremark/O0/posix/core_portme",
+   "group": "Compile on aarch64",
+   "variant": "gcc",
+   "subject": false
+  },
+  "x86_64/fcc/coremark/source/O0/compile/core_main": {
+   "benchmark": "coremark/O0/core_main",
+   "group": "Compile on x86_64",
+   "variant": "fcc",
+   "subject": true
+  },
+  "x86_64/gcc/coremark/source/O0/compile/core_list_join": {
+   "benchmark": "coremark/O0/core_list_join",
+   "group": "Compile on x86_64",
+   "variant": "gcc",
+   "subject": false
+  },
+  "x86_64/clang/coremark/source/O0/run": {
+   "benchmark": "coremark/O0",
+   "group": "Run on x86_64",
+   "variant": "clang",
+   "subject": false
+  },
+  "x86_64/gcc/coremark/source/O2/compile/core_matrix": {
+   "benchmark": "coremark/O2/core_matrix",
+   "group": "Compile on x86_64",
+   "variant": "gcc",
+   "subject": false
+  },
+  "x86_64/clang/coremark/source/O2/compile/core_matrix": {
+   "benchmark": "coremark/O2/core_matrix",
+   "group": "Compile on x86_64",
+   "variant": "clang",
+   "subject": false
+  },
+  "x86_64/fcc/coremark/source/O2/link": {
+   "benchmark": "coremark/O2",
+   "group": "Link on x86_64",
+   "variant": "fcc",
+   "subject": true
+  },
+  "x86_64/gcc/coremark/source/O0/compile/core_main": {
+   "benchmark": "coremark/O0/core_main",
+   "group": "Compile on x86_64",
+   "variant": "gcc",
+   "subject": false
+  },
+  "x86_64/clang/coremark/source/O0/compile/posix/core_portme": {
+   "benchmark": "coremark/O0/posix/core_portme",
+   "group": "Compile on x86_64",
+   "variant": "clang",
+   "subject": false
+  },
+  "x86_64/gcc/coremark/source/O0/run": {
+   "benchmark": "coremark/O0",
+   "group": "Run on x86_64",
+   "variant": "gcc",
+   "subject": false
+  },
+  "x86_64/gcc/coremark/source/O2/compile/core_main": {
+   "benchmark": "coremark/O2/core_main",
+   "group": "Compile on x86_64",
+   "variant": "gcc",
+   "subject": false
+  },
+  "x86_64/clang/coremark/source/O2/compile/core_state": {
+   "benchmark": "coremark/O2/core_state",
+   "group": "Compile on x86_64",
+   "variant": "clang",
+   "subject": false
+  },
+  "x86_64/gcc/coremark/source/O2/compile/core_list_join": {
+   "benchmark": "coremark/O2/core_list_join",
+   "group": "Compile on x86_64",
+   "variant": "gcc",
+   "subject": false
+  },
+  "x86_64/clang/coremark/source/O2/compile/core_main": {
+   "benchmark": "coremark/O2/core_main",
+   "group": "Compile on x86_64",
+   "variant": "clang",
+   "subject": false
+  },
+  "x86_64/gcc/coremark/source/O2/run": {
+   "benchmark": "coremark/O2",
+   "group": "Run on x86_64",
+   "variant": "gcc",
+   "subject": false
+  },
+  "x86_64/fcc/coremark/source/O0/compile/core_state": {
+   "benchmark": "coremark/O0/core_state",
+   "group": "Compile on x86_64",
+   "variant": "fcc",
+   "subject": true
+  },
+  "x86_64/clang/coremark/source/O0/compile/core_util": {
+   "benchmark": "coremark/O0/core_util",
+   "group": "Compile on x86_64",
+   "variant": "clang",
+   "subject": false
+  },
+  "x86_64/clang/coremark/source/O2/link": {
+   "benchmark": "coremark/O2",
+   "group": "Link on x86_64",
+   "variant": "clang",
+   "subject": false
+  },
+  "x86_64/gcc/coremark/source/O0/compile/core_matrix": {
+   "benchmark": "coremark/O0/core_matrix",
+   "group": "Compile on x86_64",
+   "variant": "gcc",
+   "subject": false
+  },
+  "x86_64/gcc/coremark/source/O0/compile/posix/core_portme": {
+   "benchmark": "coremark/O0/posix/core_portme",
+   "group": "Compile on x86_64",
+   "variant": "gcc",
+   "subject": false
+  },
+  "x86_64/fcc/coremark/source/O2/compile/posix/core_portme": {
+   "benchmark": "coremark/O2/posix/core_portme",
+   "group": "Compile on x86_64",
+   "variant": "fcc",
+   "subject": true
+  },
+  "x86_64/gcc/coremark/source/O2/compile/core_util": {
+   "benchmark": "coremark/O2/core_util",
+   "group": "Compile on x86_64",
+   "variant": "gcc",
+   "subject": false
+  },
+  "x86_64/gcc/coremark/source/O0/link": {
+   "benchmark": "coremark/O0",
+   "group": "Link on x86_64",
+   "variant": "gcc",
+   "subject": false
+  },
+  "x86_64/clang/coremark/source/O0/compile/core_state": {
+   "benchmark": "coremark/O0/core_state",
+   "group": "Compile on x86_64",
+   "variant": "clang",
+   "subject": false
+  },
+  "x86_64/clang/coremark/source/O2/run": {
+   "benchmark": "coremark/O2",
+   "group": "Run on x86_64",
+   "variant": "clang",
+   "subject": false
+  },
+  "x86_64/fcc/coremark/source/O0/compile/core_matrix": {
+   "benchmark": "coremark/O0/core_matrix",
+   "group": "Compile on x86_64",
+   "variant": "fcc",
+   "subject": true
+  },
+  "x86_64/gcc/coremark/source/O0/compile/core_util": {
+   "benchmark": "coremark/O0/core_util",
+   "group": "Compile on x86_64",
+   "variant": "gcc",
+   "subject": false
+  },
+  "x86_64/fcc/coremark/source/O2/compile/core_util": {
+   "benchmark": "coremark/O2/core_util",
+   "group": "Compile on x86_64",
+   "variant": "fcc",
+   "subject": true
+  },
+  "x86_64/fcc/coremark/source/O0/link": {
+   "benchmark": "coremark/O0",
+   "group": "Link on x86_64",
+   "variant": "fcc",
+   "subject": true
+  },
+  "x86_64/clang/coremark/source/O0/link": {
+   "benchmark": "coremark/O0",
+   "group": "Link on x86_64",
+   "variant": "clang",
+   "subject": false
+  },
+  "x86_64/fcc/coremark/source/O2/run": {
+   "benchmark": "coremark/O2",
+   "group": "Run on x86_64",
+   "variant": "fcc",
+   "subject": true
+  },
+  "x86_64/gcc/coremark/source/O2/compile/posix/core_portme": {
+   "benchmark": "coremark/O2/posix/core_portme",
+   "group": "Compile on x86_64",
+   "variant": "gcc",
+   "subject": false
+  },
+  "x86_64/fcc/coremark/source/O0/run": {
+   "benchmark": "coremark/O0",
+   "group": "Run on x86_64",
+   "variant": "fcc",
+   "subject": true
+  },
+  "x86_64/fcc/coremark/source/O2/compile/core_state": {
+   "benchmark": "coremark/O2/core_state",
+   "group": "Compile on x86_64",
+   "variant": "fcc",
+   "subject": true
+  },
+  "x86_64/gcc/coremark/source/O0/compile/core_state": {
+   "benchmark": "coremark/O0/core_state",
+   "group": "Compile on x86_64",
+   "variant": "gcc",
+   "subject": false
+  },
+  "x86_64/clang/coremark/source/O2/compile/core_list_join": {
+   "benchmark": "coremark/O2/core_list_join",
+   "group": "Compile on x86_64",
+   "variant": "clang",
+   "subject": false
+  },
+  "x86_64/clang/coremark/source/O2/compile/core_util": {
+   "benchmark": "coremark/O2/core_util",
+   "group": "Compile on x86_64",
+   "variant": "clang",
+   "subject": false
+  },
+  "x86_64/clang/coremark/source/O0/compile/core_matrix": {
+   "benchmark": "coremark/O0/core_matrix",
+   "group": "Compile on x86_64",
+   "variant": "clang",
+   "subject": false
+  },
+  "x86_64/gcc/coremark/source/O2/link": {
+   "benchmark": "coremark/O2",
+   "group": "Link on x86_64",
+   "variant": "gcc",
+   "subject": false
+  },
+  "x86_64/fcc/coremark/source/O2/compile/core_list_join": {
+   "benchmark": "coremark/O2/core_list_join",
+   "group": "Compile on x86_64",
+   "variant": "fcc",
+   "subject": true
+  },
+  "x86_64/gcc/coremark/source/O2/compile/core_state": {
+   "benchmark": "coremark/O2/core_state",
+   "group": "Compile on x86_64",
+   "variant": "gcc",
+   "subject": false
+  },
+  "x86_64/fcc/coremark/source/O0/compile/posix/core_portme": {
+   "benchmark": "coremark/O0/posix/core_portme",
+   "group": "Compile on x86_64",
+   "variant": "fcc",
+   "subject": true
+  },
+  "x86_64/fcc/coremark/source/O2/compile/core_matrix": {
+   "benchmark": "coremark/O2/core_matrix",
+   "group": "Compile on x86_64",
+   "variant": "fcc",
+   "subject": true
+  },
+  "x86_64/clang/coremark/source/O0/compile/core_main": {
+   "benchmark": "coremark/O0/core_main",
+   "group": "Compile on x86_64",
+   "variant": "clang",
+   "subject": false
+  },
+  "x86_64/clang/coremark/source/O2/compile/posix/core_portme": {
+   "benchmark": "coremark/O2/posix/core_portme",
+   "group": "Compile on x86_64",
+   "variant": "clang",
+   "subject": false
+  },
+  "x86_64/clang/coremark/source/O0/compile/core_list_join": {
+   "benchmark": "coremark/O0/core_list_join",
+   "group": "Compile on x86_64",
+   "variant": "clang",
+   "subject": false
+  },
+  "x86_64/fcc/coremark/source/O0/compile/core_list_join": {
+   "benchmark": "coremark/O0/core_list_join",
+   "group": "Compile on x86_64",
+   "variant": "fcc",
+   "subject": true
+  },
+  "x86_64/fcc/coremark/source/O2/compile/core_main": {
+   "benchmark": "coremark/O2/core_main",
+   "group": "Compile on x86_64",
+   "variant": "fcc",
+   "subject": true
+  },
+  "x86_64/fcc/coremark/source/O0/compile/core_util": {
+   "benchmark": "coremark/O0/core_util",
+   "group": "Compile on x86_64",
+   "variant": "fcc",
+   "subject": true
+  },
+  "aarch64/clang/dhrystone/source/O2/compile/dhry_2": {
+   "benchmark": "dhrystone/O2/dhry_2",
+   "group": "Compile on aarch64",
+   "variant": "clang",
+   "subject": false
+  },
+  "aarch64/clang/dhrystone/source/O0/link": {
+   "benchmark": "dhrystone/O0",
+   "group": "Link on aarch64",
+   "variant": "clang",
+   "subject": false
+  },
+  "aarch64/gcc/dhrystone/source/O2/run": {
+   "benchmark": "dhrystone/O2",
+   "group": "Run on aarch64",
+   "variant": "gcc",
+   "subject": false
+  },
+  "aarch64/gcc/dhrystone/source/O2/compile/dhry_2": {
+   "benchmark": "dhrystone/O2/dhry_2",
+   "group": "Compile on aarch64",
+   "variant": "gcc",
+   "subject": false
+  },
+  "aarch64/fcc/dhrystone/source/O0/run": {
+   "benchmark": "dhrystone/O0",
+   "group": "Run on aarch64",
+   "variant": "fcc",
+   "subject": true
+  },
+  "aarch64/clang/dhrystone/source/O0/compile/dhry_1": {
+   "benchmark": "dhrystone/O0/dhry_1",
+   "group": "Compile on aarch64",
+   "variant": "clang",
+   "subject": false
+  },
+  "aarch64/fcc/dhrystone/source/O2/compile/dhry_2": {
+   "benchmark": "dhrystone/O2/dhry_2",
+   "group": "Compile on aarch64",
+   "variant": "fcc",
+   "subject": true
+  },
+  "aarch64/clang/dhrystone/source/O2/link": {
+   "benchmark": "dhrystone/O2",
+   "group": "Link on aarch64",
+   "variant": "clang",
+   "subject": false
+  },
+  "aarch64/fcc/dhrystone/source/O0/link": {
+   "benchmark": "dhrystone/O0",
+   "group": "Link on aarch64",
+   "variant": "fcc",
+   "subject": true
+  },
+  "aarch64/clang/dhrystone/source/O0/compile/dhry_2": {
+   "benchmark": "dhrystone/O0/dhry_2",
+   "group": "Compile on aarch64",
+   "variant": "clang",
+   "subject": false
+  },
+  "aarch64/gcc/dhrystone/source/O2/compile/dhry_1": {
+   "benchmark": "dhrystone/O2/dhry_1",
+   "group": "Compile on aarch64",
+   "variant": "gcc",
+   "subject": false
+  },
+  "aarch64/clang/dhrystone/source/O2/run": {
+   "benchmark": "dhrystone/O2",
+   "group": "Run on aarch64",
+   "variant": "clang",
+   "subject": false
+  },
+  "aarch64/fcc/dhrystone/source/O2/compile/dhry_1": {
+   "benchmark": "dhrystone/O2/dhry_1",
+   "group": "Compile on aarch64",
+   "variant": "fcc",
+   "subject": true
+  },
+  "aarch64/fcc/dhrystone/source/O0/compile/dhry_2": {
+   "benchmark": "dhrystone/O0/dhry_2",
+   "group": "Compile on aarch64",
+   "variant": "fcc",
+   "subject": true
+  },
+  "aarch64/fcc/dhrystone/source/O2/run": {
+   "benchmark": "dhrystone/O2",
+   "group": "Run on aarch64",
+   "variant": "fcc",
+   "subject": true
+  },
+  "aarch64/gcc/dhrystone/source/O0/compile/dhry_2": {
+   "benchmark": "dhrystone/O0/dhry_2",
+   "group": "Compile on aarch64",
+   "variant": "gcc",
+   "subject": false
+  },
+  "aarch64/gcc/dhrystone/source/O2/link": {
+   "benchmark": "dhrystone/O2",
+   "group": "Link on aarch64",
+   "variant": "gcc",
+   "subject": false
+  },
+  "aarch64/clang/dhrystone/source/O2/compile/dhry_1": {
+   "benchmark": "dhrystone/O2/dhry_1",
+   "group": "Compile on aarch64",
+   "variant": "clang",
+   "subject": false
+  },
+  "aarch64/gcc/dhrystone/source/O0/link": {
+   "benchmark": "dhrystone/O0",
+   "group": "Link on aarch64",
+   "variant": "gcc",
+   "subject": false
+  },
+  "aarch64/gcc/dhrystone/source/O0/run": {
+   "benchmark": "dhrystone/O0",
+   "group": "Run on aarch64",
+   "variant": "gcc",
+   "subject": false
+  },
+  "aarch64/gcc/dhrystone/source/O0/compile/dhry_1": {
+   "benchmark": "dhrystone/O0/dhry_1",
+   "group": "Compile on aarch64",
+   "variant": "gcc",
+   "subject": false
+  },
+  "aarch64/clang/dhrystone/source/O0/run": {
+   "benchmark": "dhrystone/O0",
+   "group": "Run on aarch64",
+   "variant": "clang",
+   "subject": false
+  },
+  "aarch64/fcc/dhrystone/source/O2/link": {
+   "benchmark": "dhrystone/O2",
+   "group": "Link on aarch64",
+   "variant": "fcc",
+   "subject": true
+  },
+  "aarch64/fcc/dhrystone/source/O0/compile/dhry_1": {
+   "benchmark": "dhrystone/O0/dhry_1",
+   "group": "Compile on aarch64",
+   "variant": "fcc",
+   "subject": true
+  },
+  "x86_64/fcc/dhrystone/source/O0/run": {
+   "benchmark": "dhrystone/O0",
+   "group": "Run on x86_64",
+   "variant": "fcc",
+   "subject": true
+  },
+  "x86_64/gcc/dhrystone/source/O2/run": {
+   "benchmark": "dhrystone/O2",
+   "group": "Run on x86_64",
+   "variant": "gcc",
+   "subject": false
+  },
+  "x86_64/clang/dhrystone/source/O0/link": {
+   "benchmark": "dhrystone/O0",
+   "group": "Link on x86_64",
+   "variant": "clang",
+   "subject": false
+  },
+  "x86_64/gcc/dhrystone/source/O2/compile/dhry_1": {
+   "benchmark": "dhrystone/O2/dhry_1",
+   "group": "Compile on x86_64",
+   "variant": "gcc",
+   "subject": false
+  },
+  "x86_64/fcc/dhrystone/source/O2/link": {
+   "benchmark": "dhrystone/O2",
+   "group": "Link on x86_64",
+   "variant": "fcc",
+   "subject": true
+  },
+  "x86_64/clang/dhrystone/source/O2/link": {
+   "benchmark": "dhrystone/O2",
+   "group": "Link on x86_64",
+   "variant": "clang",
+   "subject": false
+  },
+  "x86_64/gcc/dhrystone/source/O0/run": {
+   "benchmark": "dhrystone/O0",
+   "group": "Run on x86_64",
+   "variant": "gcc",
+   "subject": false
+  },
+  "x86_64/gcc/dhrystone/source/O2/link": {
+   "benchmark": "dhrystone/O2",
+   "group": "Link on x86_64",
+   "variant": "gcc",
+   "subject": false
+  },
+  "x86_64/fcc/dhrystone/source/O2/compile/dhry_2": {
+   "benchmark": "dhrystone/O2/dhry_2",
+   "group": "Compile on x86_64",
+   "variant": "fcc",
+   "subject": true
+  },
+  "x86_64/fcc/dhrystone/source/O0/compile/dhry_2": {
+   "benchmark": "dhrystone/O0/dhry_2",
+   "group": "Compile on x86_64",
+   "variant": "fcc",
+   "subject": true
+  },
+  "x86_64/gcc/dhrystone/source/O0/link": {
+   "benchmark": "dhrystone/O0",
+   "group": "Link on x86_64",
+   "variant": "gcc",
+   "subject": false
+  },
+  "x86_64/gcc/dhrystone/source/O0/compile/dhry_1": {
+   "benchmark": "dhrystone/O0/dhry_1",
+   "group": "Compile on x86_64",
+   "variant": "gcc",
+   "subject": false
+  },
+  "x86_64/gcc/dhrystone/source/O0/compile/dhry_2": {
+   "benchmark": "dhrystone/O0/dhry_2",
+   "group": "Compile on x86_64",
+   "variant": "gcc",
+   "subject": false
+  },
+  "x86_64/clang/dhrystone/source/O2/run": {
+   "benchmark": "dhrystone/O2",
+   "group": "Run on x86_64",
+   "variant": "clang",
+   "subject": false
+  },
+  "x86_64/fcc/dhrystone/source/O2/run": {
+   "benchmark": "dhrystone/O2",
+   "group": "Run on x86_64",
+   "variant": "fcc",
+   "subject": true
+  },
+  "x86_64/clang/dhrystone/source/O0/compile/dhry_2": {
+   "benchmark": "dhrystone/O0/dhry_2",
+   "group": "Compile on x86_64",
+   "variant": "clang",
+   "subject": false
+  },
+  "x86_64/fcc/dhrystone/source/O2/compile/dhry_1": {
+   "benchmark": "dhrystone/O2/dhry_1",
+   "group": "Compile on x86_64",
+   "variant": "fcc",
+   "subject": true
+  },
+  "x86_64/clang/dhrystone/source/O0/compile/dhry_1": {
+   "benchmark": "dhrystone/O0/dhry_1",
+   "group": "Compile on x86_64",
+   "variant": "clang",
+   "subject": false
+  },
+  "x86_64/clang/dhrystone/source/O0/run": {
+   "benchmark": "dhrystone/O0",
+   "group": "Run on x86_64",
+   "variant": "clang",
+   "subject": false
+  },
+  "x86_64/fcc/dhrystone/source/O0/compile/dhry_1": {
+   "benchmark": "dhrystone/O0/dhry_1",
+   "group": "Compile on x86_64",
+   "variant": "fcc",
+   "subject": true
+  },
+  "x86_64/gcc/dhrystone/source/O2/compile/dhry_2": {
+   "benchmark": "dhrystone/O2/dhry_2",
+   "group": "Compile on x86_64",
+   "variant": "gcc",
+   "subject": false
+  },
+  "x86_64/clang/dhrystone/source/O2/compile/dhry_1": {
+   "benchmark": "dhrystone/O2/dhry_1",
+   "group": "Compile on x86_64",
+   "variant": "clang",
+   "subject": false
+  },
+  "x86_64/fcc/dhrystone/source/O0/link": {
+   "benchmark": "dhrystone/O0",
+   "group": "Link on x86_64",
+   "variant": "fcc",
+   "subject": true
+  },
+  "x86_64/clang/dhrystone/source/O2/compile/dhry_2": {
+   "benchmark": "dhrystone/O2/dhry_2",
+   "group": "Compile on x86_64",
+   "variant": "clang",
+   "subject": false
+  }
+ },
+ "environments": {
+  "aarch64/clang/coremark/source/O0/compile/core_state": "aarch64 Neoverse-N2",
+  "aarch64/fcc/coremark/source/O2/run": "aarch64 Neoverse-N2",
+  "aarch64/fcc/coremark/source/O0/compile/core_main": "aarch64 Neoverse-N2",
+  "aarch64/clang/coremark/source/O0/compile/posix/core_portme": "aarch64 Neoverse-N2",
+  "aarch64/fcc/coremark/source/O2/link": "aarch64 Neoverse-N2",
+  "aarch64/gcc/coremark/source/O0/link": "aarch64 Neoverse-N2",
+  "aarch64/gcc/coremark/source/O0/compile/core_matrix": "aarch64 Neoverse-N2",
+  "aarch64/fcc/coremark/source/O2/compile/core_matrix": "aarch64 Neoverse-N2",
+  "aarch64/fcc/coremark/source/O2/compile/core_list_join": "aarch64 Neoverse-N2",
+  "aarch64/gcc/coremark/source/O0/compile/core_list_join": "aarch64 Neoverse-N2",
+  "aarch64/clang/coremark/source/O0/compile/core_matrix": "aarch64 Neoverse-N2",
+  "aarch64/clang/coremark/source/O2/compile/core_main": "aarch64 Neoverse-N2",
+  "aarch64/fcc/coremark/source/O2/compile/core_util": "aarch64 Neoverse-N2",
+  "aarch64/clang/coremark/source/O2/compile/core_list_join": "aarch64 Neoverse-N2",
+  "aarch64/gcc/coremark/source/O0/run": "aarch64 Neoverse-N2",
+  "aarch64/fcc/coremark/source/O2/compile/core_main": "aarch64 Neoverse-N2",
+  "aarch64/clang/coremark/source/O2/compile/core_state": "aarch64 Neoverse-N2",
+  "aarch64/fcc/coremark/source/O0/compile/core_matrix": "aarch64 Neoverse-N2",
+  "aarch64/clang/coremark/source/O0/compile/core_util": "aarch64 Neoverse-N2",
+  "aarch64/fcc/coremark/source/O0/compile/core_util": "aarch64 Neoverse-N2",
+  "aarch64/gcc/coremark/source/O2/compile/core_matrix": "aarch64 Neoverse-N2",
+  "aarch64/clang/coremark/source/O2/compile/core_util": "aarch64 Neoverse-N2",
+  "aarch64/fcc/coremark/source/O2/compile/posix/core_portme": "aarch64 Neoverse-N2",
+  "aarch64/gcc/coremark/source/O0/compile/core_util": "aarch64 Neoverse-N2",
+  "aarch64/gcc/coremark/source/O2/compile/core_util": "aarch64 Neoverse-N2",
+  "aarch64/fcc/coremark/source/O0/run": "aarch64 Neoverse-N2",
+  "aarch64/clang/coremark/source/O2/run": "aarch64 Neoverse-N2",
+  "aarch64/fcc/coremark/source/O0/compile/core_state": "aarch64 Neoverse-N2",
+  "aarch64/clang/coremark/source/O0/link": "aarch64 Neoverse-N2",
+  "aarch64/gcc/coremark/source/O0/compile/core_main": "aarch64 Neoverse-N2",
+  "aarch64/clang/coremark/source/O2/link": "aarch64 Neoverse-N2",
+  "aarch64/clang/coremark/source/O0/run": "aarch64 Neoverse-N2",
+  "aarch64/gcc/coremark/source/O2/compile/core_main": "aarch64 Neoverse-N2",
+  "aarch64/clang/coremark/source/O0/compile/core_list_join": "aarch64 Neoverse-N2",
+  "aarch64/fcc/coremark/source/O0/link": "aarch64 Neoverse-N2",
+  "aarch64/fcc/coremark/source/O0/compile/posix/core_portme": "aarch64 Neoverse-N2",
+  "aarch64/clang/coremark/source/O2/compile/core_matrix": "aarch64 Neoverse-N2",
+  "aarch64/fcc/coremark/source/O0/compile/core_list_join": "aarch64 Neoverse-N2",
+  "aarch64/gcc/coremark/source/O2/compile/core_state": "aarch64 Neoverse-N2",
+  "aarch64/gcc/coremark/source/O2/compile/core_list_join": "aarch64 Neoverse-N2",
+  "aarch64/gcc/coremark/source/O2/compile/posix/core_portme": "aarch64 Neoverse-N2",
+  "aarch64/gcc/coremark/source/O2/run": "aarch64 Neoverse-N2",
+  "aarch64/clang/coremark/source/O0/compile/core_main": "aarch64 Neoverse-N2",
+  "aarch64/gcc/coremark/source/O0/compile/core_state": "aarch64 Neoverse-N2",
+  "aarch64/gcc/coremark/source/O2/link": "aarch64 Neoverse-N2",
+  "aarch64/clang/coremark/source/O2/compile/posix/core_portme": "aarch64 Neoverse-N2",
+  "aarch64/fcc/coremark/source/O2/compile/core_state": "aarch64 Neoverse-N2",
+  "aarch64/gcc/coremark/source/O0/compile/posix/core_portme": "aarch64 Neoverse-N2",
+  "x86_64/fcc/coremark/source/O0/compile/core_main": "x86_64 AMD EPYC 7763 64-Core Processor",
+  "x86_64/gcc/coremark/source/O0/compile/core_list_join": "x86_64 AMD EPYC 7763 64-Core Processor",
+  "x86_64/clang/coremark/source/O0/run": "x86_64 AMD EPYC 7763 64-Core Processor",
+  "x86_64/gcc/coremark/source/O2/compile/core_matrix": "x86_64 AMD EPYC 7763 64-Core Processor",
+  "x86_64/clang/coremark/source/O2/compile/core_matrix": "x86_64 AMD EPYC 7763 64-Core Processor",
+  "x86_64/fcc/coremark/source/O2/link": "x86_64 AMD EPYC 7763 64-Core Processor",
+  "x86_64/gcc/coremark/source/O0/compile/core_main": "x86_64 AMD EPYC 7763 64-Core Processor",
+  "x86_64/clang/coremark/source/O0/compile/posix/core_portme": "x86_64 AMD EPYC 7763 64-Core Processor",
+  "x86_64/gcc/coremark/source/O0/run": "x86_64 AMD EPYC 7763 64-Core Processor",
+  "x86_64/gcc/coremark/source/O2/compile/core_main": "x86_64 AMD EPYC 7763 64-Core Processor",
+  "x86_64/clang/coremark/source/O2/compile/core_state": "x86_64 AMD EPYC 7763 64-Core Processor",
+  "x86_64/gcc/coremark/source/O2/compile/core_list_join": "x86_64 AMD EPYC 7763 64-Core Processor",
+  "x86_64/clang/coremark/source/O2/compile/core_main": "x86_64 AMD EPYC 7763 64-Core Processor",
+  "x86_64/gcc/coremark/source/O2/run": "x86_64 AMD EPYC 7763 64-Core Processor",
+  "x86_64/fcc/coremark/source/O0/compile/core_state": "x86_64 AMD EPYC 7763 64-Core Processor",
+  "x86_64/clang/coremark/source/O0/compile/core_util": "x86_64 AMD EPYC 7763 64-Core Processor",
+  "x86_64/clang/coremark/source/O2/link": "x86_64 AMD EPYC 7763 64-Core Processor",
+  "x86_64/gcc/coremark/source/O0/compile/core_matrix": "x86_64 AMD EPYC 7763 64-Core Processor",
+  "x86_64/gcc/coremark/source/O0/compile/posix/core_portme": "x86_64 AMD EPYC 7763 64-Core Processor",
+  "x86_64/fcc/coremark/source/O2/compile/posix/core_portme": "x86_64 AMD EPYC 7763 64-Core Processor",
+  "x86_64/gcc/coremark/source/O2/compile/core_util": "x86_64 AMD EPYC 7763 64-Core Processor",
+  "x86_64/gcc/coremark/source/O0/link": "x86_64 AMD EPYC 7763 64-Core Processor",
+  "x86_64/clang/coremark/source/O0/compile/core_state": "x86_64 AMD EPYC 7763 64-Core Processor",
+  "x86_64/clang/coremark/source/O2/run": "x86_64 AMD EPYC 7763 64-Core Processor",
+  "x86_64/fcc/coremark/source/O0/compile/core_matrix": "x86_64 AMD EPYC 7763 64-Core Processor",
+  "x86_64/gcc/coremark/source/O0/compile/core_util": "x86_64 AMD EPYC 7763 64-Core Processor",
+  "x86_64/fcc/coremark/source/O2/compile/core_util": "x86_64 AMD EPYC 7763 64-Core Processor",
+  "x86_64/fcc/coremark/source/O0/link": "x86_64 AMD EPYC 7763 64-Core Processor",
+  "x86_64/clang/coremark/source/O0/link": "x86_64 AMD EPYC 7763 64-Core Processor",
+  "x86_64/fcc/coremark/source/O2/run": "x86_64 AMD EPYC 7763 64-Core Processor",
+  "x86_64/gcc/coremark/source/O2/compile/posix/core_portme": "x86_64 AMD EPYC 7763 64-Core Processor",
+  "x86_64/fcc/coremark/source/O0/run": "x86_64 AMD EPYC 7763 64-Core Processor",
+  "x86_64/fcc/coremark/source/O2/compile/core_state": "x86_64 AMD EPYC 7763 64-Core Processor",
+  "x86_64/gcc/coremark/source/O0/compile/core_state": "x86_64 AMD EPYC 7763 64-Core Processor",
+  "x86_64/clang/coremark/source/O2/compile/core_list_join": "x86_64 AMD EPYC 7763 64-Core Processor",
+  "x86_64/clang/coremark/source/O2/compile/core_util": "x86_64 AMD EPYC 7763 64-Core Processor",
+  "x86_64/clang/coremark/source/O0/compile/core_matrix": "x86_64 AMD EPYC 7763 64-Core Processor",
+  "x86_64/gcc/coremark/source/O2/link": "x86_64 AMD EPYC 7763 64-Core Processor",
+  "x86_64/fcc/coremark/source/O2/compile/core_list_join": "x86_64 AMD EPYC 7763 64-Core Processor",
+  "x86_64/gcc/coremark/source/O2/compile/core_state": "x86_64 AMD EPYC 7763 64-Core Processor",
+  "x86_64/fcc/coremark/source/O0/compile/posix/core_portme": "x86_64 AMD EPYC 7763 64-Core Processor",
+  "x86_64/fcc/coremark/source/O2/compile/core_matrix": "x86_64 AMD EPYC 7763 64-Core Processor",
+  "x86_64/clang/coremark/source/O0/compile/core_main": "x86_64 AMD EPYC 7763 64-Core Processor",
+  "x86_64/clang/coremark/source/O2/compile/posix/core_portme": "x86_64 AMD EPYC 7763 64-Core Processor",
+  "x86_64/clang/coremark/source/O0/compile/core_list_join": "x86_64 AMD EPYC 7763 64-Core Processor",
+  "x86_64/fcc/coremark/source/O0/compile/core_list_join": "x86_64 AMD EPYC 7763 64-Core Processor",
+  "x86_64/fcc/coremark/source/O2/compile/core_main": "x86_64 AMD EPYC 7763 64-Core Processor",
+  "x86_64/fcc/coremark/source/O0/compile/core_util": "x86_64 AMD EPYC 7763 64-Core Processor",
+  "aarch64/clang/dhrystone/source/O2/compile/dhry_2": "aarch64 Neoverse-N2",
+  "aarch64/clang/dhrystone/source/O0/link": "aarch64 Neoverse-N2",
+  "aarch64/gcc/dhrystone/source/O2/run": "aarch64 Neoverse-N2",
+  "aarch64/gcc/dhrystone/source/O2/compile/dhry_2": "aarch64 Neoverse-N2",
+  "aarch64/fcc/dhrystone/source/O0/run": "aarch64 Neoverse-N2",
+  "aarch64/clang/dhrystone/source/O0/compile/dhry_1": "aarch64 Neoverse-N2",
+  "aarch64/fcc/dhrystone/source/O2/compile/dhry_2": "aarch64 Neoverse-N2",
+  "aarch64/clang/dhrystone/source/O2/link": "aarch64 Neoverse-N2",
+  "aarch64/fcc/dhrystone/source/O0/link": "aarch64 Neoverse-N2",
+  "aarch64/clang/dhrystone/source/O0/compile/dhry_2": "aarch64 Neoverse-N2",
+  "aarch64/gcc/dhrystone/source/O2/compile/dhry_1": "aarch64 Neoverse-N2",
+  "aarch64/clang/dhrystone/source/O2/run": "aarch64 Neoverse-N2",
+  "aarch64/fcc/dhrystone/source/O2/compile/dhry_1": "aarch64 Neoverse-N2",
+  "aarch64/fcc/dhrystone/source/O0/compile/dhry_2": "aarch64 Neoverse-N2",
+  "aarch64/fcc/dhrystone/source/O2/run": "aarch64 Neoverse-N2",
+  "aarch64/gcc/dhrystone/source/O0/compile/dhry_2": "aarch64 Neoverse-N2",
+  "aarch64/gcc/dhrystone/source/O2/link": "aarch64 Neoverse-N2",
+  "aarch64/clang/dhrystone/source/O2/compile/dhry_1": "aarch64 Neoverse-N2",
+  "aarch64/gcc/dhrystone/source/O0/link": "aarch64 Neoverse-N2",
+  "aarch64/gcc/dhrystone/source/O0/run": "aarch64 Neoverse-N2",
+  "aarch64/gcc/dhrystone/source/O0/compile/dhry_1": "aarch64 Neoverse-N2",
+  "aarch64/clang/dhrystone/source/O0/run": "aarch64 Neoverse-N2",
+  "aarch64/fcc/dhrystone/source/O2/link": "aarch64 Neoverse-N2",
+  "aarch64/fcc/dhrystone/source/O0/compile/dhry_1": "aarch64 Neoverse-N2",
+  "x86_64/fcc/dhrystone/source/O0/run": "x86_64 AMD EPYC 7763 64-Core Processor",
+  "x86_64/gcc/dhrystone/source/O2/run": "x86_64 AMD EPYC 7763 64-Core Processor",
+  "x86_64/clang/dhrystone/source/O0/link": "x86_64 AMD EPYC 7763 64-Core Processor",
+  "x86_64/gcc/dhrystone/source/O2/compile/dhry_1": "x86_64 AMD EPYC 7763 64-Core Processor",
+  "x86_64/fcc/dhrystone/source/O2/link": "x86_64 AMD EPYC 7763 64-Core Processor",
+  "x86_64/clang/dhrystone/source/O2/link": "x86_64 AMD EPYC 7763 64-Core Processor",
+  "x86_64/gcc/dhrystone/source/O0/run": "x86_64 AMD EPYC 7763 64-Core Processor",
+  "x86_64/gcc/dhrystone/source/O2/link": "x86_64 AMD EPYC 7763 64-Core Processor",
+  "x86_64/fcc/dhrystone/source/O2/compile/dhry_2": "x86_64 AMD EPYC 7763 64-Core Processor",
+  "x86_64/fcc/dhrystone/source/O0/compile/dhry_2": "x86_64 AMD EPYC 7763 64-Core Processor",
+  "x86_64/gcc/dhrystone/source/O0/link": "x86_64 AMD EPYC 7763 64-Core Processor",
+  "x86_64/gcc/dhrystone/source/O0/compile/dhry_1": "x86_64 AMD EPYC 7763 64-Core Processor",
+  "x86_64/gcc/dhrystone/source/O0/compile/dhry_2": "x86_64 AMD EPYC 7763 64-Core Processor",
+  "x86_64/clang/dhrystone/source/O2/run": "x86_64 AMD EPYC 7763 64-Core Processor",
+  "x86_64/fcc/dhrystone/source/O2/run": "x86_64 AMD EPYC 7763 64-Core Processor",
+  "x86_64/clang/dhrystone/source/O0/compile/dhry_2": "x86_64 AMD EPYC 7763 64-Core Processor",
+  "x86_64/fcc/dhrystone/source/O2/compile/dhry_1": "x86_64 AMD EPYC 7763 64-Core Processor",
+  "x86_64/clang/dhrystone/source/O0/compile/dhry_1": "x86_64 AMD EPYC 7763 64-Core Processor",
+  "x86_64/clang/dhrystone/source/O0/run": "x86_64 AMD EPYC 7763 64-Core Processor",
+  "x86_64/fcc/dhrystone/source/O0/compile/dhry_1": "x86_64 AMD EPYC 7763 64-Core Processor",
+  "x86_64/gcc/dhrystone/source/O2/compile/dhry_2": "x86_64 AMD EPYC 7763 64-Core Processor",
+  "x86_64/clang/dhrystone/source/O2/compile/dhry_1": "x86_64 AMD EPYC 7763 64-Core Processor",
+  "x86_64/fcc/dhrystone/source/O0/link": "x86_64 AMD EPYC 7763 64-Core Processor",
+  "x86_64/clang/dhrystone/source/O2/compile/dhry_2": "x86_64 AMD EPYC 7763 64-Core Processor",
+  "aarch64/fcc/codegen_expr_heavy/ast_to_ir": "aarch64 Neoverse-N2",
+  "aarch64/fcc/promote/promote": "aarch64 Neoverse-N2",
+  "aarch64/fcc/pipeline/source_to_ir": "aarch64 Neoverse-N2",
+  "aarch64/fcc/codegen/ast_to_ir": "aarch64 Neoverse-N2",
+  "aarch64/egg/saturate/coremark-instcombine-206": "aarch64 Neoverse-N2",
+  "aarch64/egg/saturate/dhrystone-isel-2033": "aarch64 Neoverse-N2",
+  "aarch64/egg/saturate/coremark-instcombine-1377": "aarch64 Neoverse-N2",
+  "aarch64/egg/saturate/coremark-isel-2665": "aarch64 Neoverse-N2",
+  "aarch64/egg/saturate/coremark-isel-534": "aarch64 Neoverse-N2",
+  "aarch64/egg/saturate/whetstone-instcombine-1450": "aarch64 Neoverse-N2",
+  "aarch64/egg/saturate/whetstone-isel-1597": "aarch64 Neoverse-N2",
+  "aarch64/egg/extract/coremark-instcombine-206": "aarch64 Neoverse-N2",
+  "aarch64/egg/extract/dhrystone-isel-2033": "aarch64 Neoverse-N2",
+  "aarch64/egg/extract/coremark-instcombine-1377": "aarch64 Neoverse-N2",
+  "aarch64/egg/extract/coremark-isel-2665": "aarch64 Neoverse-N2",
+  "aarch64/egg/extract/coremark-isel-534": "aarch64 Neoverse-N2",
+  "aarch64/egg/extract/whetstone-instcombine-1450": "aarch64 Neoverse-N2",
+  "aarch64/egg/extract/whetstone-isel-1597": "aarch64 Neoverse-N2",
+  "aarch64/egg/ematch/coremark-instcombine-206": "aarch64 Neoverse-N2",
+  "aarch64/egg/ematch/dhrystone-isel-2033": "aarch64 Neoverse-N2",
+  "aarch64/egg/ematch/coremark-instcombine-1377": "aarch64 Neoverse-N2",
+  "aarch64/egg/ematch/coremark-isel-2665": "aarch64 Neoverse-N2",
+  "aarch64/egg/ematch/coremark-isel-534": "aarch64 Neoverse-N2",
+  "aarch64/egg/ematch/whetstone-instcombine-1450": "aarch64 Neoverse-N2",
+  "aarch64/egg/ematch/whetstone-isel-1597": "aarch64 Neoverse-N2",
+  "aarch64/egg/seed/coremark-instcombine-206": "aarch64 Neoverse-N2",
+  "aarch64/egg/seed/dhrystone-isel-2033": "aarch64 Neoverse-N2",
+  "aarch64/egg/seed/coremark-instcombine-1377": "aarch64 Neoverse-N2",
+  "aarch64/egg/seed/coremark-isel-2665": "aarch64 Neoverse-N2",
+  "aarch64/egg/seed/coremark-isel-534": "aarch64 Neoverse-N2",
+  "aarch64/egg/seed/whetstone-instcombine-1450": "aarch64 Neoverse-N2",
+  "aarch64/egg/seed/whetstone-isel-1597": "aarch64 Neoverse-N2",
+  "aarch64/egglog/saturate/coremark-instcombine-206": "aarch64 Neoverse-N2",
+  "aarch64/egglog/saturate/dhrystone-isel-2033": "aarch64 Neoverse-N2",
+  "aarch64/egglog/saturate/coremark-instcombine-1377": "aarch64 Neoverse-N2",
+  "aarch64/egglog/saturate/coremark-isel-2665": "aarch64 Neoverse-N2",
+  "aarch64/egglog/saturate/coremark-isel-534": "aarch64 Neoverse-N2",
+  "aarch64/egglog/saturate/whetstone-instcombine-1450": "aarch64 Neoverse-N2",
+  "aarch64/egglog/saturate/whetstone-isel-1597": "aarch64 Neoverse-N2",
+  "aarch64/tir/ematch/coremark-instcombine-206": "aarch64 Neoverse-N2",
+  "aarch64/tir/ematch/dhrystone-isel-2033": "aarch64 Neoverse-N2",
+  "aarch64/tir/ematch/coremark-instcombine-1377": "aarch64 Neoverse-N2",
+  "aarch64/tir/ematch/coremark-isel-2665": "aarch64 Neoverse-N2",
+  "aarch64/tir/ematch/coremark-isel-534": "aarch64 Neoverse-N2",
+  "aarch64/tir/ematch/whetstone-instcombine-1450": "aarch64 Neoverse-N2",
+  "aarch64/tir/ematch/whetstone-isel-1597": "aarch64 Neoverse-N2",
+  "aarch64/tir/seed/coremark-instcombine-206": "aarch64 Neoverse-N2",
+  "aarch64/tir/seed/dhrystone-isel-2033": "aarch64 Neoverse-N2",
+  "aarch64/tir/seed/coremark-instcombine-1377": "aarch64 Neoverse-N2",
+  "aarch64/tir/seed/coremark-isel-2665": "aarch64 Neoverse-N2",
+  "aarch64/tir/seed/coremark-isel-534": "aarch64 Neoverse-N2",
+  "aarch64/tir/seed/whetstone-instcombine-1450": "aarch64 Neoverse-N2",
+  "aarch64/tir/seed/whetstone-isel-1597": "aarch64 Neoverse-N2",
+  "aarch64/tir/extract/coremark-instcombine-206": "aarch64 Neoverse-N2",
+  "aarch64/tir/extract/dhrystone-isel-2033": "aarch64 Neoverse-N2",
+  "aarch64/tir/extract/coremark-instcombine-1377": "aarch64 Neoverse-N2",
+  "aarch64/tir/extract/coremark-isel-2665": "aarch64 Neoverse-N2",
+  "aarch64/tir/extract/coremark-isel-534": "aarch64 Neoverse-N2",
+  "aarch64/tir/extract/whetstone-instcombine-1450": "aarch64 Neoverse-N2",
+  "aarch64/tir/extract/whetstone-isel-1597": "aarch64 Neoverse-N2",
+  "aarch64/tir/saturate/coremark-instcombine-206": "aarch64 Neoverse-N2",
+  "aarch64/tir/saturate/dhrystone-isel-2033": "aarch64 Neoverse-N2",
+  "aarch64/tir/saturate/coremark-instcombine-1377": "aarch64 Neoverse-N2",
+  "aarch64/tir/saturate/coremark-isel-2665": "aarch64 Neoverse-N2",
+  "aarch64/tir/saturate/coremark-isel-534": "aarch64 Neoverse-N2",
+  "aarch64/tir/saturate/whetstone-instcombine-1450": "aarch64 Neoverse-N2",
+  "aarch64/tir/saturate/whetstone-isel-1597": "aarch64 Neoverse-N2",
+  "aarch64/large_asm/lex": "aarch64 Neoverse-N2",
+  "aarch64/x86_defs/collect_and_expand": "aarch64 Neoverse-N2",
+  "aarch64/large_instr_template/lex": "aarch64 Neoverse-N2",
+  "aarch64/large_instr_template/parse": "aarch64 Neoverse-N2",
+  "x86_64/fcc/codegen_expr_heavy/ast_to_ir": "x86_64 AMD EPYC 9V74 80-Core Processor",
+  "x86_64/fcc/promote/promote": "x86_64 AMD EPYC 9V74 80-Core Processor",
+  "x86_64/fcc/pipeline/source_to_ir": "x86_64 AMD EPYC 9V74 80-Core Processor",
+  "x86_64/fcc/codegen/ast_to_ir": "x86_64 AMD EPYC 9V74 80-Core Processor",
+  "x86_64/egg/ematch/coremark-instcombine-1377": "x86_64 AMD EPYC 9V74 80-Core Processor",
+  "x86_64/egg/ematch/coremark-instcombine-206": "x86_64 AMD EPYC 9V74 80-Core Processor",
+  "x86_64/egg/ematch/coremark-isel-534": "x86_64 AMD EPYC 9V74 80-Core Processor",
+  "x86_64/egg/ematch/coremark-isel-2665": "x86_64 AMD EPYC 9V74 80-Core Processor",
+  "x86_64/egg/ematch/whetstone-instcombine-1450": "x86_64 AMD EPYC 9V74 80-Core Processor",
+  "x86_64/egg/ematch/dhrystone-isel-2033": "x86_64 AMD EPYC 9V74 80-Core Processor",
+  "x86_64/egg/ematch/whetstone-isel-1597": "x86_64 AMD EPYC 9V74 80-Core Processor",
+  "x86_64/egg/seed/coremark-instcombine-1377": "x86_64 AMD EPYC 9V74 80-Core Processor",
+  "x86_64/egg/seed/coremark-instcombine-206": "x86_64 AMD EPYC 9V74 80-Core Processor",
+  "x86_64/egg/seed/coremark-isel-534": "x86_64 AMD EPYC 9V74 80-Core Processor",
+  "x86_64/egg/seed/coremark-isel-2665": "x86_64 AMD EPYC 9V74 80-Core Processor",
+  "x86_64/egg/seed/whetstone-instcombine-1450": "x86_64 AMD EPYC 9V74 80-Core Processor",
+  "x86_64/egg/seed/dhrystone-isel-2033": "x86_64 AMD EPYC 9V74 80-Core Processor",
+  "x86_64/egg/seed/whetstone-isel-1597": "x86_64 AMD EPYC 9V74 80-Core Processor",
+  "x86_64/egg/saturate/coremark-instcombine-1377": "x86_64 AMD EPYC 9V74 80-Core Processor",
+  "x86_64/egg/saturate/coremark-instcombine-206": "x86_64 AMD EPYC 9V74 80-Core Processor",
+  "x86_64/egg/saturate/coremark-isel-534": "x86_64 AMD EPYC 9V74 80-Core Processor",
+  "x86_64/egg/saturate/coremark-isel-2665": "x86_64 AMD EPYC 9V74 80-Core Processor",
+  "x86_64/egg/saturate/whetstone-instcombine-1450": "x86_64 AMD EPYC 9V74 80-Core Processor",
+  "x86_64/egg/saturate/dhrystone-isel-2033": "x86_64 AMD EPYC 9V74 80-Core Processor",
+  "x86_64/egg/saturate/whetstone-isel-1597": "x86_64 AMD EPYC 9V74 80-Core Processor",
+  "x86_64/egg/extract/coremark-instcombine-1377": "x86_64 AMD EPYC 9V74 80-Core Processor",
+  "x86_64/egg/extract/coremark-instcombine-206": "x86_64 AMD EPYC 9V74 80-Core Processor",
+  "x86_64/egg/extract/coremark-isel-534": "x86_64 AMD EPYC 9V74 80-Core Processor",
+  "x86_64/egg/extract/coremark-isel-2665": "x86_64 AMD EPYC 9V74 80-Core Processor",
+  "x86_64/egg/extract/whetstone-instcombine-1450": "x86_64 AMD EPYC 9V74 80-Core Processor",
+  "x86_64/egg/extract/dhrystone-isel-2033": "x86_64 AMD EPYC 9V74 80-Core Processor",
+  "x86_64/egg/extract/whetstone-isel-1597": "x86_64 AMD EPYC 9V74 80-Core Processor",
+  "x86_64/egglog/saturate/coremark-instcombine-1377": "x86_64 AMD EPYC 9V74 80-Core Processor",
+  "x86_64/egglog/saturate/coremark-instcombine-206": "x86_64 AMD EPYC 9V74 80-Core Processor",
+  "x86_64/egglog/saturate/coremark-isel-534": "x86_64 AMD EPYC 9V74 80-Core Processor",
+  "x86_64/egglog/saturate/coremark-isel-2665": "x86_64 AMD EPYC 9V74 80-Core Processor",
+  "x86_64/egglog/saturate/whetstone-instcombine-1450": "x86_64 AMD EPYC 9V74 80-Core Processor",
+  "x86_64/egglog/saturate/dhrystone-isel-2033": "x86_64 AMD EPYC 9V74 80-Core Processor",
+  "x86_64/egglog/saturate/whetstone-isel-1597": "x86_64 AMD EPYC 9V74 80-Core Processor",
+  "x86_64/tir/extract/coremark-instcombine-1377": "x86_64 AMD EPYC 9V74 80-Core Processor",
+  "x86_64/tir/extract/coremark-instcombine-206": "x86_64 AMD EPYC 9V74 80-Core Processor",
+  "x86_64/tir/extract/coremark-isel-534": "x86_64 AMD EPYC 9V74 80-Core Processor",
+  "x86_64/tir/extract/coremark-isel-2665": "x86_64 AMD EPYC 9V74 80-Core Processor",
+  "x86_64/tir/extract/whetstone-instcombine-1450": "x86_64 AMD EPYC 9V74 80-Core Processor",
+  "x86_64/tir/extract/dhrystone-isel-2033": "x86_64 AMD EPYC 9V74 80-Core Processor",
+  "x86_64/tir/extract/whetstone-isel-1597": "x86_64 AMD EPYC 9V74 80-Core Processor",
+  "x86_64/tir/ematch/coremark-instcombine-1377": "x86_64 AMD EPYC 9V74 80-Core Processor",
+  "x86_64/tir/ematch/coremark-instcombine-206": "x86_64 AMD EPYC 9V74 80-Core Processor",
+  "x86_64/tir/ematch/coremark-isel-534": "x86_64 AMD EPYC 9V74 80-Core Processor",
+  "x86_64/tir/ematch/coremark-isel-2665": "x86_64 AMD EPYC 9V74 80-Core Processor",
+  "x86_64/tir/ematch/whetstone-instcombine-1450": "x86_64 AMD EPYC 9V74 80-Core Processor",
+  "x86_64/tir/ematch/dhrystone-isel-2033": "x86_64 AMD EPYC 9V74 80-Core Processor",
+  "x86_64/tir/ematch/whetstone-isel-1597": "x86_64 AMD EPYC 9V74 80-Core Processor",
+  "x86_64/tir/saturate/coremark-instcombine-1377": "x86_64 AMD EPYC 9V74 80-Core Processor",
+  "x86_64/tir/saturate/coremark-instcombine-206": "x86_64 AMD EPYC 9V74 80-Core Processor",
+  "x86_64/tir/saturate/coremark-isel-534": "x86_64 AMD EPYC 9V74 80-Core Processor",
+  "x86_64/tir/saturate/coremark-isel-2665": "x86_64 AMD EPYC 9V74 80-Core Processor",
+  "x86_64/tir/saturate/whetstone-instcombine-1450": "x86_64 AMD EPYC 9V74 80-Core Processor",
+  "x86_64/tir/saturate/dhrystone-isel-2033": "x86_64 AMD EPYC 9V74 80-Core Processor",
+  "x86_64/tir/saturate/whetstone-isel-1597": "x86_64 AMD EPYC 9V74 80-Core Processor",
+  "x86_64/tir/seed/coremark-instcombine-1377": "x86_64 AMD EPYC 9V74 80-Core Processor",
+  "x86_64/tir/seed/coremark-instcombine-206": "x86_64 AMD EPYC 9V74 80-Core Processor",
+  "x86_64/tir/seed/coremark-isel-534": "x86_64 AMD EPYC 9V74 80-Core Processor",
+  "x86_64/tir/seed/coremark-isel-2665": "x86_64 AMD EPYC 9V74 80-Core Processor",
+  "x86_64/tir/seed/whetstone-instcombine-1450": "x86_64 AMD EPYC 9V74 80-Core Processor",
+  "x86_64/tir/seed/dhrystone-isel-2033": "x86_64 AMD EPYC 9V74 80-Core Processor",
+  "x86_64/tir/seed/whetstone-isel-1597": "x86_64 AMD EPYC 9V74 80-Core Processor",
+  "x86_64/large_asm/lex": "x86_64 AMD EPYC 9V74 80-Core Processor",
+  "x86_64/x86_defs/collect_and_expand": "x86_64 AMD EPYC 9V74 80-Core Processor",
+  "x86_64/large_instr_template/lex": "x86_64 AMD EPYC 9V74 80-Core Processor",
+  "x86_64/large_instr_template/parse": "x86_64 AMD EPYC 9V74 80-Core Processor"
+ },
+ "results": {
+  "aarch64/clang/coremark/source/O0/compile/core_state": {
+   "latency": {
+    "value": 27892815,
+    "samples": [
+     54139222,
+     28415277,
+     27873911,
+     27659591,
+     27850193,
+     27709533,
+     27695758,
+     28105480,
+     27618040,
+     28288049,
+     28111704,
+     29947914,
+     28448381,
+     28373255,
+     27616801,
+     27892815,
+     27352833,
+     27931478,
+     28131695,
+     27254364,
+     27291748,
+     27514883,
+     27904455,
+     27566330,
+     27521956,
+     27810985,
+     28184326,
+     27959804,
+     27905263,
+     28246611,
+     28472332,
+     28481899,
+     27585330,
+     27359265,
+     26945687
+    ]
+   }
+  },
+  "aarch64/fcc/coremark/source/O2/run": {
+   "latency": {
+    "value": 76102,
+    "samples": [
+     76102
+    ]
+   }
+  },
+  "aarch64/fcc/coremark/source/O0/compile/core_main": {
+   "latency": {
+    "value": 683393407,
+    "samples": [
+     688459114,
+     690437586,
+     682763762,
+     683393407,
+     680886467
+    ]
+   }
+  },
+  "aarch64/clang/coremark/source/O0/compile/posix/core_portme": {
+   "latency": {
+    "value": 28722619,
+    "samples": [
+     39926987,
+     29090743,
+     28618007,
+     28970331,
+     29070079,
+     29679315,
+     29463299,
+     28809136,
+     29299816,
+     29878388,
+     29976521,
+     29656788,
+     29262433,
+     29030393,
+     28842367,
+     28501819,
+     28690820,
+     28948323,
+     28771682,
+     28899229,
+     28722619,
+     28669717,
+     28218373,
+     28721875,
+     28632142,
+     27539507,
+     27957429,
+     28117151,
+     27717245,
+     27636464,
+     27252365,
+     28445556,
+     27332306,
+     28456684,
+     27620008
+    ]
+   }
+  },
+  "aarch64/fcc/coremark/source/O2/link": {
+   "latency": {
+    "value": 14331906,
+    "samples": [
+     14816641,
+     15080191,
+     14704996,
+     14265458,
+     14141336,
+     14503485,
+     15869600.000000002,
+     15963565.999999998,
+     15407783,
+     13837538,
+     14331906,
+     14281292,
+     13989069,
+     13614057,
+     13544468,
+     13836714,
+     14059907,
+     14474469,
+     13121225,
+     15256925,
+     14260684,
+     14754501,
+     15255404,
+     14190063,
+     14689590,
+     15076498,
+     13719678,
+     14069403,
+     14633560,
+     15703406,
+     13740901,
+     14582594,
+     13412408,
+     13799843,
+     15200822
+    ]
+   }
+  },
+  "aarch64/gcc/coremark/source/O0/link": {
+   "latency": {
+    "value": 9324265,
+    "samples": [
+     10176526,
+     9592226,
+     10667332,
+     9375143,
+     8969536,
+     9653337,
+     9740407,
+     9101813,
+     10220773,
+     9257218,
+     9937123,
+     9959938,
+     9324265,
+     9465125,
+     9100237,
+     8893561,
+     10163119,
+     10564805,
+     9187540,
+     9141541,
+     9083045,
+     9619626,
+     9286729,
+     11553153,
+     9320352,
+     9972058,
+     9246122,
+     9230018,
+     8851259,
+     9079965,
+     9856989,
+     8762108,
+     9254018,
+     9841117,
+     9471069,
+     9088662,
+     8786267,
+     8564625,
+     10669323,
+     8970704,
+     8591144,
+     9090669,
+     10526791,
+     8927937,
+     9380239,
+     9076517,
+     9051862,
+     10320283,
+     9538060,
+     9759055,
+     9283689,
+     10254388,
+     9778415
+    ]
+   }
+  },
+  "aarch64/gcc/coremark/source/O0/compile/core_matrix": {
+   "latency": {
+    "value": 25561696.5,
+    "samples": [
+     25747570,
+     25896667,
+     25593044,
+     25691977,
+     25552397,
+     25932100,
+     25762809,
+     25417639,
+     25197204,
+     26010035,
+     26263526,
+     26160815,
+     25589196,
+     25534341,
+     26016091,
+     25570996,
+     25790031,
+     25391225,
+     25326761,
+     25479302,
+     25064103,
+     24959098,
+     24884587,
+     25319994,
+     25125678,
+     25642875,
+     25791351,
+     25664274,
+     25470679,
+     26002267,
+     26234702,
+     25728592,
+     26142968,
+     25468175,
+     25448143,
+     25222099,
+     25060872,
+     24777613,
+     25101486,
+     25242619
+    ]
+   }
+  },
+  "aarch64/fcc/coremark/source/O2/compile/core_matrix": {
+   "latency": {
+    "value": 616278763,
+    "samples": [
+     616124672,
+     620877235,
+     616077539,
+     617445033,
+     616278763
+    ]
+   }
+  },
+  "aarch64/fcc/coremark/source/O2/compile/core_list_join": {
+   "latency": {
+    "value": 619389277,
+    "samples": [
+     621095712,
+     622337038,
+     619389277,
+     615499915,
+     617675116
+    ]
+   }
+  },
+  "aarch64/gcc/coremark/source/O0/compile/core_list_join": {
+   "latency": {
+    "value": 29147569,
+    "samples": [
+     70453535,
+     28962743,
+     28878402,
+     29526229,
+     29509597,
+     29940575,
+     29353266,
+     29740517,
+     29278973,
+     29197047,
+     29310676,
+     29092643,
+     29102315,
+     28840259,
+     28837075,
+     28863571,
+     28995110,
+     29364538,
+     28711136,
+     28441200,
+     29173816,
+     29103995,
+     28875490,
+     29577539,
+     29059628,
+     29290140,
+     29457383,
+     28818212,
+     29147569,
+     28835900,
+     29319619,
+     29341059,
+     29097762
+    ]
+   }
+  },
+  "aarch64/clang/coremark/source/O0/compile/core_matrix": {
+   "latency": {
+    "value": 29015299,
+    "samples": [
+     29736589,
+     28511947,
+     28557065,
+     28999452,
+     28850350,
+     29526394,
+     30173577,
+     29688983,
+     29193216,
+     28716246,
+     29341207,
+     29214710,
+     29544113,
+     29341070,
+     29291441,
+     28731958,
+     29714246,
+     29015299,
+     29598390,
+     29109373,
+     28942400,
+     28867380,
+     28645611,
+     29466574,
+     28893243,
+     28119829,
+     29104757,
+     28930097,
+     29133228,
+     28418825,
+     28523091,
+     28194752,
+     28069152,
+     28735987,
+     29239066
+    ]
+   }
+  },
+  "aarch64/clang/coremark/source/O2/compile/core_main": {
+   "latency": {
+    "value": 55595678.5,
+    "samples": [
+     54913661,
+     56942103,
+     55574556,
+     56187132,
+     56430339,
+     55582627,
+     55286222,
+     55356076,
+     55236696,
+     55642033,
+     56016587,
+     55651568,
+     54718980,
+     55238488,
+     55722630,
+     55746733,
+     55002081,
+     55608730
+    ]
+   }
+  },
+  "aarch64/fcc/coremark/source/O2/compile/core_util": {
+   "latency": {
+    "value": 577822565,
+    "samples": [
+     575749675,
+     580114480,
+     578869042,
+     576791040,
+     577822565
+    ]
+   }
+  },
+  "aarch64/clang/coremark/source/O2/compile/core_list_join": {
+   "latency": {
+    "value": 83749746.5,
+    "samples": [
+     636699214,
+     83106716,
+     84312197,
+     82894875,
+     84259951,
+     83239542
+    ]
+   }
+  },
+  "aarch64/gcc/coremark/source/O0/run": {
+   "latency": {
+    "value": 141337,
+    "samples": [
+     141337
+    ]
+   }
+  },
+  "aarch64/fcc/coremark/source/O2/compile/core_main": {
+   "latency": {
+    "value": 641846524,
+    "samples": [
+     641748326,
+     645266751,
+     641846524,
+     639991988,
+     647900070
+    ]
+   }
+  },
+  "aarch64/clang/coremark/source/O2/compile/core_state": {
+   "latency": {
+    "value": 48979531,
+    "samples": [
+     69450667,
+     49346678,
+     49033232,
+     49260139,
+     49222421,
+     49255636,
+     49037464,
+     48681275,
+     48871418,
+     48793526,
+     49008113,
+     48832428,
+     49420594,
+     48817396,
+     48712338,
+     48950949,
+     48823540,
+     49320392,
+     48731857,
+     48751576
+    ]
+   }
+  },
+  "aarch64/fcc/coremark/source/O0/compile/core_matrix": {
+   "latency": {
+    "value": 585438466,
+    "samples": [
+     584987504,
+     585438466,
+     585317648,
+     587608024,
+     589422101
+    ]
+   }
+  },
+  "aarch64/clang/coremark/source/O0/compile/core_util": {
+   "latency": {
+    "value": 26516969.5,
+    "samples": [
+     26765636,
+     26337196,
+     25903586,
+     26360866,
+     25807189,
+     26396834,
+     25704904,
+     26647265,
+     26633409,
+     26548117,
+     26016094,
+     26736342,
+     27259748,
+     26906920,
+     27356641,
+     26111643,
+     26348307,
+     26698463,
+     26542877,
+     26713974,
+     26674288,
+     27075187,
+     26563076,
+     25853715,
+     25743752,
+     26183992,
+     25580877,
+     25927721,
+     25959104,
+     26034317,
+     25915026,
+     26019190,
+     27204686,
+     27280204,
+     27868775,
+     27096298,
+     26914552,
+     26491062
+    ]
+   }
+  },
+  "aarch64/fcc/coremark/source/O0/compile/core_util": {
+   "latency": {
+    "value": 551337725,
+    "samples": [
+     549642991,
+     552511304,
+     550768580,
+     551337725,
+     551661329
+    ]
+   }
+  },
+  "aarch64/gcc/coremark/source/O2/compile/core_matrix": {
+   "latency": {
+    "value": 86487301.5,
+    "samples": [
+     87445164,
+     86170486,
+     85968797,
+     87581112,
+     87119317,
+     86125225,
+     86804117,
+     86841564,
+     85693380,
+     85621838,
+     85689764,
+     87051374
+    ]
+   }
+  },
+  "aarch64/clang/coremark/source/O2/compile/core_util": {
+   "latency": {
+    "value": 48688132,
+    "samples": [
+     48136443,
+     48122067,
+     48711650,
+     48814468,
+     48579602,
+     48295089,
+     48544036,
+     48479975,
+     48503758,
+     48421426,
+     49004386,
+     49152458,
+     48781990,
+     48426034,
+     48482687,
+     48957412,
+     49467280,
+     49044319,
+     48927326,
+     48688132,
+     49615167
+    ]
+   }
+  },
+  "aarch64/fcc/coremark/source/O2/compile/posix/core_portme": {
+   "latency": {
+    "value": 526521698.00000006,
+    "samples": [
+     523051532.99999994,
+     527847213.00000006,
+     528236336,
+     526521698.00000006,
+     520387414
+    ]
+   }
+  },
+  "aarch64/gcc/coremark/source/O0/compile/core_util": {
+   "latency": {
+    "value": 21646704,
+    "samples": [
+     21134524,
+     21503419,
+     21467620,
+     22154062,
+     21710535,
+     21675536,
+     21206178,
+     21256289,
+     21835164,
+     22241531,
+     22378369,
+     22211356,
+     21918763,
+     21481035,
+     21465157,
+     20940879,
+     21524891,
+     21707599,
+     22087455,
+     22026248,
+     21646704,
+     21758670,
+     21711647,
+     21524211,
+     21395998,
+     21629648,
+     21321568,
+     21497516,
+     21370766,
+     21804453,
+     21041917,
+     21031390,
+     20960391,
+     21876379,
+     21518275,
+     21633865,
+     21439836,
+     22095143,
+     22134478,
+     22012145,
+     21924891,
+     22290682,
+     21680112,
+     21421557,
+     21645632,
+     21866892,
+     21977345
+    ]
+   }
+  },
+  "aarch64/gcc/coremark/source/O2/compile/core_util": {
+   "latency": {
+    "value": 48583541,
+    "samples": [
+     50012486,
+     48127697,
+     48389578,
+     47809050,
+     48480567,
+     49727214,
+     48944483,
+     48083986,
+     48330716,
+     47965637,
+     48760312,
+     49017937,
+     48909252,
+     48192255,
+     48799215,
+     48818414,
+     48992858,
+     48477223,
+     48438001,
+     48583541,
+     49584257
+    ]
+   }
+  },
+  "aarch64/fcc/coremark/source/O0/run": {
+   "latency": {
+    "value": 118975,
+    "samples": [
+     118975
+    ]
+   }
+  },
+  "aarch64/clang/coremark/source/O2/run": {
+   "latency": {
+    "value": 32326.000000000004,
+    "samples": [
+     32326.000000000004
+    ]
+   }
+  },
+  "aarch64/fcc/coremark/source/O0/compile/core_state": {
+   "latency": {
+    "value": 578483959,
+    "samples": [
+     578483959,
+     582969579,
+     577943037,
+     576057918,
+     580836166
+    ]
+   }
+  },
+  "aarch64/clang/coremark/source/O0/link": {
+   "latency": {
+    "value": 22634324,
+    "samples": [
+     248143376,
+     22794419,
+     23207188,
+     22892771,
+     22422281,
+     23357254,
+     23147804,
+     22634324,
+     22215557,
+     22139938,
+     22437392,
+     21150032,
+     21649328
+    ]
+   }
+  },
+  "aarch64/gcc/coremark/source/O0/compile/core_main": {
+   "latency": {
+    "value": 30164903.5,
+    "samples": [
+     32202556,
+     29598074,
+     29912888,
+     30374969,
+     30757004,
+     30498772,
+     30491348,
+     30337082,
+     30715853,
+     30429023,
+     30569402,
+     30259972,
+     30097713,
+     30084914,
+     30106202,
+     30278603,
+     30240189,
+     30142848,
+     29405169,
+     30190078,
+     29754701,
+     30236597,
+     30169679,
+     30565403,
+     29643448,
+     30051059,
+     29765253,
+     30160128,
+     30478341,
+     29949127,
+     29691487,
+     30009797,
+     29889328,
+     30063067
+    ]
+   }
+  },
+  "aarch64/clang/coremark/source/O2/link": {
+   "latency": {
+    "value": 22664340,
+    "samples": [
+     22123803,
+     22135690,
+     22430897,
+     22243212,
+     22334919,
+     22729128,
+     22519676,
+     22684060,
+     22964092,
+     22774510,
+     22336926,
+     21774535,
+     23229788,
+     22155145,
+     22682603,
+     22773198,
+     23878608,
+     22852810,
+     22486095,
+     22664340,
+     22675988,
+     22765470,
+     22207518
+    ]
+   }
+  },
+  "aarch64/clang/coremark/source/O0/run": {
+   "latency": {
+    "value": 151409,
+    "samples": [
+     151409
+    ]
+   }
+  },
+  "aarch64/gcc/coremark/source/O2/compile/core_main": {
+   "latency": {
+    "value": 79171431,
+    "samples": [
+     78092788,
+     79419720,
+     79389704,
+     79392953,
+     79428247,
+     78709539,
+     78536768,
+     78980852,
+     79541572,
+     79285460,
+     79069161,
+     79171431,
+     78585934
+    ]
+   }
+  },
+  "aarch64/clang/coremark/source/O0/compile/core_list_join": {
+   "latency": {
+    "value": 32112332,
+    "samples": [
+     3485270066,
+     33084541.000000004,
+     31675968,
+     31883107,
+     32112332
+    ]
+   }
+  },
+  "aarch64/fcc/coremark/source/O0/link": {
+   "latency": {
+    "value": 14426945,
+    "samples": [
+     14464112,
+     13723676,
+     13901797,
+     14847056,
+     14026689,
+     13885070,
+     14253919,
+     14656328,
+     14251415,
+     14569195,
+     14367907,
+     14055103,
+     14337740,
+     14470175,
+     16358805,
+     14643161,
+     15313823,
+     14396977,
+     13994226,
+     14419488,
+     14596858,
+     14426945,
+     14484806,
+     15070480,
+     13707828,
+     13688741,
+     13792874,
+     14199057,
+     15242833,
+     14619145,
+     15780428,
+     15402379,
+     14653351,
+     13835512,
+     14674839
+    ]
+   }
+  },
+  "aarch64/fcc/coremark/source/O0/compile/posix/core_portme": {
+   "latency": {
+    "value": 536658583,
+    "samples": [
+     534657516,
+     545803947,
+     536658583,
+     534751231.99999994,
+     542873606
+    ]
+   }
+  },
+  "aarch64/clang/coremark/source/O2/compile/core_matrix": {
+   "latency": {
+    "value": 99619944,
+    "samples": [
+     198500097,
+     99457786,
+     98636168,
+     99792324,
+     98892006,
+     99510894,
+     99077635,
+     100911456,
+     99728994,
+     100788279
+    ]
+   }
+  },
+  "aarch64/fcc/coremark/source/O0/compile/core_list_join": {
+   "latency": {
+    "value": 609188609,
+    "samples": [
+     609188609,
+     606673325,
+     610003729,
+     608052121,
+     609652050
+    ]
+   }
+  },
+  "aarch64/gcc/coremark/source/O2/compile/core_state": {
+   "latency": {
+    "value": 57388811.5,
+    "samples": [
+     57261511,
+     57102755,
+     57544528,
+     57076996,
+     57420714,
+     57226824,
+     56731581,
+     56827563,
+     57356909,
+     56998582,
+     57757897,
+     56886737,
+     57477417,
+     57635205,
+     57972891,
+     57723523,
+     57993314,
+     58328538
+    ]
+   }
+  },
+  "aarch64/gcc/coremark/source/O2/compile/core_list_join": {
+   "latency": {
+    "value": 80538129,
+    "samples": [
+     81938599,
+     80295280,
+     79656729,
+     80865528,
+     81353827,
+     80288712,
+     80538129,
+     80900087,
+     80079446,
+     80699661,
+     80265576,
+     80765243,
+     79413952
+    ]
+   }
+  },
+  "aarch64/gcc/coremark/source/O2/compile/posix/core_portme": {
+   "latency": {
+    "value": 28550434,
+    "samples": [
+     29758345,
+     28342631,
+     29395858,
+     28550434,
+     28994822,
+     29115211,
+     29710402,
+     29131194,
+     29263766,
+     29167609,
+     29002517,
+     29512992,
+     28600128,
+     29270918,
+     28328672,
+     28536467,
+     28569209,
+     27850725,
+     28044767,
+     27952466,
+     28528306,
+     27934347,
+     27923811,
+     27970817,
+     27908300,
+     29190952,
+     28744660,
+     28937687,
+     28404110,
+     28514410,
+     27953082,
+     28418254,
+     29189160,
+     28010104,
+     27941235
+    ]
+   }
+  },
+  "aarch64/gcc/coremark/source/O2/run": {
+   "latency": {
+    "value": 31402.999999999996,
+    "samples": [
+     31402.999999999996
+    ]
+   }
+  },
+  "aarch64/clang/coremark/source/O0/compile/core_main": {
+   "latency": {
+    "value": 31267266,
+    "samples": [
+     157774398,
+     31081782,
+     31268898.000000004,
+     30989132,
+     30661953,
+     30652185,
+     30817991,
+     31310223.999999996,
+     31413008,
+     31291801,
+     31858852,
+     31266009.999999996,
+     31268522,
+     30454103,
+     31133042,
+     31011675,
+     30931384,
+     31009043,
+     31071615,
+     31098365,
+     31257939,
+     31666416.000000004,
+     31517522,
+     31479844,
+     31701959,
+     31546152,
+     31355716,
+     31867226.999999996
+    ]
+   }
+  },
+  "aarch64/gcc/coremark/source/O0/compile/core_state": {
+   "latency": {
+    "value": 24248684.5,
+    "samples": [
+     23863457,
+     23831417,
+     23542688,
+     24165058,
+     24273840,
+     24431253,
+     23798258,
+     23394603,
+     24557282,
+     24600265,
+     24678479,
+     24724302,
+     24611113,
+     24087660,
+     24023422,
+     24175434,
+     24391213,
+     24551202,
+     24558634,
+     24721447,
+     24705974,
+     24352927,
+     24066740,
+     24228601,
+     24542642,
+     24368318,
+     23307333,
+     23638566,
+     23304620,
+     23458802,
+     24349534,
+     24027934,
+     23980886,
+     24612697,
+     24268768,
+     23962446,
+     24581138,
+     24736750,
+     23950831,
+     24519259,
+     24207041,
+     24023269
+    ]
+   }
+  },
+  "aarch64/gcc/coremark/source/O2/link": {
+   "latency": {
+    "value": 9345753,
+    "samples": [
+     10314949,
+     9850266,
+     11246853,
+     9579091,
+     9372016,
+     10063069,
+     9448422,
+     9100111,
+     8733786,
+     10745434,
+     8928301,
+     9762221,
+     9708375,
+     9193069,
+     9068281,
+     9234420,
+     10209026,
+     9519372,
+     9345753,
+     10876942,
+     9535540,
+     8938860,
+     9191277,
+     8706642,
+     10541609,
+     9975735,
+     10274192,
+     9327721,
+     9079552,
+     8782256,
+     8919709,
+     9255107,
+     9165942,
+     8819279,
+     9710079,
+     8883989,
+     9051529,
+     9222029,
+     9147838,
+     9010098,
+     8851502,
+     8879774,
+     9855491,
+     9211676,
+     11459199,
+     9626857,
+     9764062,
+     9907377,
+     11720504,
+     9545212,
+     10716979,
+     9298346,
+     8707938
+    ]
+   }
+  },
+  "aarch64/clang/coremark/source/O2/compile/posix/core_portme": {
+   "latency": {
+    "value": 35910238.5,
+    "samples": [
+     36001853,
+     36032204,
+     35863549,
+     36331323,
+     35975063,
+     35815616,
+     35676552,
+     35967927,
+     35866725,
+     35796521,
+     35688487,
+     35720878,
+     35082441,
+     35825327,
+     35262871,
+     36336395,
+     36833415,
+     36321507,
+     35919530,
+     35774915,
+     35813632,
+     35971775,
+     36090928,
+     36171548,
+     36191731,
+     35900947,
+     35992382,
+     34714774
+    ]
+   }
+  },
+  "aarch64/fcc/coremark/source/O2/compile/core_state": {
+   "latency": {
+    "value": 602478821,
+    "samples": [
+     608602128,
+     602478821,
+     600491823,
+     598451172,
+     603399726
+    ]
+   }
+  },
+  "aarch64/gcc/coremark/source/O0/compile/posix/core_portme": {
+   "latency": {
+    "value": 21878983,
+    "samples": [
+     22110966,
+     22730801,
+     22499342,
+     22508862,
+     22065031,
+     22078095,
+     22440248,
+     22551221,
+     22667434,
+     22272883,
+     21883107,
+     21800381,
+     22113310,
+     21925395,
+     21978561,
+     21974617,
+     22281259,
+     21475652,
+     21208665,
+     21801893,
+     21595578,
+     22094815,
+     21611481,
+     21646240,
+     21907155,
+     21989745,
+     21793053,
+     21689783,
+     21719975,
+     21874859,
+     21408822,
+     21169234,
+     21712735,
+     21505547,
+     21311944,
+     21741726,
+     21535859,
+     21750638,
+     21593073,
+     21516003,
+     21207306,
+     22027416,
+     22049592,
+     21974385,
+     22115118,
+     21754222
+    ]
+   }
+  },
+  "x86_64/fcc/coremark/source/O0/compile/core_main": {
+   "latency": {
+    "value": 987143924,
+    "samples": [
+     1035097004.9999999,
+     967628156,
+     977763789,
+     995927632,
+     987143924
+    ]
+   }
+  },
+  "x86_64/gcc/coremark/source/O0/compile/core_list_join": {
+   "latency": {
+    "value": 33775571.5,
+    "samples": [
+     112570958,
+     33661600,
+     33780771,
+     34377291,
+     34114290,
+     33793475,
+     34561664,
+     34550093,
+     34327909,
+     34111637,
+     33737431,
+     33740286,
+     33780921,
+     33109241.999999996,
+     33658944,
+     33823811,
+     33593823,
+     33991644,
+     33941360,
+     33514015,
+     33770372,
+     32712444,
+     32811988,
+     33697586,
+     33878883,
+     32990681,
+     33240005.000000004,
+     33170205
+    ]
+   }
+  },
+  "x86_64/clang/coremark/source/O0/run": {
+   "latency": {
+    "value": 149385,
+    "samples": [
+     149385
+    ]
+   }
+  },
+  "x86_64/gcc/coremark/source/O2/compile/core_matrix": {
+   "latency": {
+    "value": 105946970.5,
+    "samples": [
+     106033371,
+     105860570,
+     106878373,
+     110421473,
+     105314674,
+     108021929,
+     106662491,
+     105591018,
+     103971455,
+     105306058
+    ]
+   }
+  },
+  "x86_64/clang/coremark/source/O2/compile/core_matrix": {
+   "latency": {
+    "value": 176404656.5,
+    "samples": [
+     238961665,
+     174080644,
+     176541911,
+     177971029,
+     171952628,
+     176267402
+    ]
+   }
+  },
+  "x86_64/fcc/coremark/source/O2/link": {
+   "latency": {
+    "value": 18990953,
+    "samples": [
+     18121344,
+     20783101,
+     18887860,
+     18615461,
+     18135758,
+     19425628,
+     18488160,
+     18990953,
+     18737335,
+     19823336,
+     19887858,
+     18159864,
+     17877317,
+     18445845,
+     19437671,
+     18971783,
+     18442829,
+     18119258,
+     18676384,
+     20576339,
+     21313931,
+     19163009,
+     19259829,
+     19348274,
+     19254961,
+     20545601,
+     20213523
+    ]
+   }
+  },
+  "x86_64/gcc/coremark/source/O0/compile/core_main": {
+   "latency": {
+    "value": 36421525.5,
+    "samples": [
+     40000696,
+     36759754,
+     39377155,
+     36561917,
+     36157133,
+     36538933,
+     36507685,
+     35998037,
+     38867597,
+     35845013,
+     36744727,
+     37547971,
+     36450067,
+     35891058,
+     35448254,
+     35413019,
+     35175737,
+     36122198,
+     37189935,
+     35977218,
+     36431965,
+     37019748,
+     36411086,
+     35877643,
+     35694082,
+     36317872,
+     35971828,
+     36581082
+    ]
+   }
+  },
+  "x86_64/clang/coremark/source/O0/compile/posix/core_portme": {
+   "latency": {
+    "value": 36440636,
+    "samples": [
+     46506926,
+     36998223,
+     36772813,
+     36316365,
+     36056071,
+     37680602,
+     37028089,
+     37509173,
+     35605433,
+     35420158,
+     36091126,
+     35728822,
+     37245954,
+     35647541,
+     34866168,
+     38345579,
+     37669201,
+     36865817,
+     35943192,
+     34626322,
+     34963629,
+     36355588,
+     36525684,
+     35733260,
+     38781361,
+     38574164,
+     37895141,
+     36091066
+    ]
+   }
+  },
+  "x86_64/gcc/coremark/source/O0/run": {
+   "latency": {
+    "value": 138720,
+    "samples": [
+     138720
+    ]
+   }
+  },
+  "x86_64/gcc/coremark/source/O2/compile/core_main": {
+   "latency": {
+    "value": 87391302.5,
+    "samples": [
+     94479401,
+     87108341,
+     86486595,
+     87662342,
+     88404282,
+     87560723,
+     87221882,
+     87734266,
+     87852506,
+     86891868,
+     86608732,
+     85998597
+    ]
+   }
+  },
+  "x86_64/clang/coremark/source/O2/compile/core_state": {
+   "latency": {
+    "value": 67257941,
+    "samples": [
+     93342787,
+     68022283,
+     67641845,
+     68157092,
+     67257941,
+     66024877.99999999,
+     66599326,
+     67811100,
+     65446331.99999999,
+     67397660,
+     66946792.00000001,
+     67243915,
+     66540968.00000001,
+     66241320.00000001,
+     67608322
+    ]
+   }
+  },
+  "x86_64/gcc/coremark/source/O2/compile/core_list_join": {
+   "latency": {
+    "value": 93071823,
+    "samples": [
+     116973961,
+     94180846,
+     91876389,
+     93003786,
+     92997826,
+     91169495,
+     94361301,
+     93962480,
+     93574228,
+     93071823,
+     92562987
+    ]
+   }
+  },
+  "x86_64/clang/coremark/source/O2/compile/core_main": {
+   "latency": {
+    "value": 75313060,
+    "samples": [
+     97657581,
+     74920580,
+     76583462,
+     75009685,
+     75921911,
+     74320454,
+     75803933,
+     76456807,
+     75313060,
+     74968189,
+     74802560,
+     77356460,
+     74154676
+    ]
+   }
+  },
+  "x86_64/gcc/coremark/source/O2/run": {
+   "latency": {
+    "value": 36636,
+    "samples": [
+     36636
+    ]
+   }
+  },
+  "x86_64/fcc/coremark/source/O0/compile/core_state": {
+   "latency": {
+    "value": 943953799,
+    "samples": [
+     943953799,
+     944597356,
+     956488362,
+     934731266,
+     922158818
+    ]
+   }
+  },
+  "x86_64/clang/coremark/source/O0/compile/core_util": {
+   "latency": {
+    "value": 37406242,
+    "samples": [
+     35273887,
+     37504034,
+     37969589,
+     36612756,
+     38038287,
+     36968117,
+     36131011,
+     36456075,
+     36980791,
+     37649043,
+     41036253,
+     37714996,
+     37644235,
+     38171605,
+     37391625,
+     37789004,
+     37686553,
+     39204476,
+     37206641,
+     37235574,
+     37280088,
+     36278916,
+     36156157,
+     37662268,
+     37406242,
+     38116864,
+     36831503
+    ]
+   }
+  },
+  "x86_64/clang/coremark/source/O2/link": {
+   "latency": {
+    "value": 33745492,
+    "samples": [
+     33791598,
+     32225308,
+     36080795,
+     33458699,
+     34729111,
+     33745492,
+     34549397,
+     34809909,
+     33309521,
+     33562652,
+     34259447,
+     33484879.000000004,
+     33677283,
+     34891806,
+     33703634
+    ]
+   }
+  },
+  "x86_64/gcc/coremark/source/O0/compile/core_matrix": {
+   "latency": {
+    "value": 30455504,
+    "samples": [
+     31853195,
+     30996159,
+     31416792,
+     30390732,
+     30181583,
+     31129808,
+     30596275,
+     30230845,
+     31294635,
+     30252165,
+     29996419,
+     29911612,
+     29038817,
+     30571009,
+     30481491,
+     30487903,
+     30388208,
+     30455504,
+     30293672,
+     30244551,
+     30313068,
+     30576578,
+     30874513,
+     30362130,
+     30230063,
+     30357221,
+     30958209,
+     30861169,
+     30491119,
+     30403987,
+     30331101,
+     30470942,
+     30727880
+    ]
+   }
+  },
+  "x86_64/gcc/coremark/source/O0/compile/posix/core_portme": {
+   "latency": {
+    "value": 25875520,
+    "samples": [
+     26351094,
+     25871662,
+     25803867,
+     25250157,
+     25371432,
+     27305941,
+     25434099,
+     24457452,
+     26274462,
+     27313354,
+     25754294,
+     26013997,
+     25875520,
+     25832259,
+     25439068,
+     25893363,
+     25451311,
+     25834433,
+     26576284,
+     24912519,
+     25076293,
+     25680476,
+     26446973,
+     26070573,
+     25398934,
+     25785562,
+     25656231,
+     26380609,
+     26296192,
+     26212437,
+     25729688,
+     26643528,
+     25643548,
+     26139972,
+     25971177,
+     26580701,
+     26093034,
+     25913450,
+     25909032
+    ]
+   }
+  },
+  "x86_64/fcc/coremark/source/O2/compile/posix/core_portme": {
+   "latency": {
+    "value": 848705036,
+    "samples": [
+     847923905,
+     848705036,
+     855405321,
+     855087577,
+     844130235
+    ]
+   }
+  },
+  "x86_64/gcc/coremark/source/O2/compile/core_util": {
+   "latency": {
+    "value": 57281493,
+    "samples": [
+     58515037,
+     57624121,
+     57278538,
+     57167120,
+     56575369,
+     58833730,
+     56921984,
+     57270783,
+     58344269,
+     57284448,
+     57093964,
+     56962419,
+     58736048,
+     56837177,
+     57937523,
+     58613691,
+     57166449,
+     58460906
+    ]
+   }
+  },
+  "x86_64/gcc/coremark/source/O0/link": {
+   "latency": {
+    "value": 12298861,
+    "samples": [
+     13291715,
+     12393182,
+     12528424,
+     13201874,
+     12812191,
+     12647008,
+     13511430,
+     12567658,
+     12497907,
+     12235519,
+     13130834,
+     13135573,
+     11156840,
+     11806209,
+     10990833,
+     12445289,
+     11525660,
+     13569049,
+     12339164,
+     12183447,
+     12350419,
+     11418717,
+     12136801,
+     11798683,
+     12130881,
+     11799114,
+     13185982,
+     12827767,
+     12237771,
+     11641772,
+     11234855,
+     14085536,
+     11996691,
+     10896696,
+     12298861,
+     11929826,
+     11740356,
+     12204448,
+     12360067,
+     10846353,
+     12332915
+    ]
+   }
+  },
+  "x86_64/clang/coremark/source/O0/compile/core_state": {
+   "latency": {
+    "value": 38887781.5,
+    "samples": [
+     43108586,
+     37343927,
+     39895111,
+     39417142,
+     39206861,
+     40001506,
+     37761653,
+     37321024,
+     37186483,
+     38880493,
+     41115701,
+     38321274,
+     38266281,
+     38895070,
+     39549677,
+     38952998,
+     39210918,
+     38540191,
+     39584382,
+     39918343,
+     39594932,
+     38489617,
+     38196281,
+     38541093,
+     38776460,
+     38675702
+    ]
+   }
+  },
+  "x86_64/clang/coremark/source/O2/run": {
+   "latency": {
+    "value": 42801,
+    "samples": [
+     42801
+    ]
+   }
+  },
+  "x86_64/fcc/coremark/source/O0/compile/core_matrix": {
+   "latency": {
+    "value": 950446956,
+    "samples": [
+     910855413,
+     946491681,
+     955981209,
+     950446956,
+     951027515
+    ]
+   }
+  },
+  "x86_64/gcc/coremark/source/O0/compile/core_util": {
+   "latency": {
+    "value": 24853499,
+    "samples": [
+     24773731,
+     27966972,
+     24799057,
+     24802524,
+     24483400,
+     24695615,
+     24817742,
+     24638668,
+     25365982,
+     25233585,
+     25394365,
+     25131456,
+     25355172,
+     24686639,
+     25270505,
+     25441332,
+     25287057,
+     25518786,
+     24803665,
+     25830806,
+     25060914,
+     24785622,
+     24299659,
+     24889256,
+     25298967,
+     24015119,
+     23083456,
+     25767459,
+     24652615,
+     24657564,
+     24645712,
+     24542370,
+     27177882,
+     24627157,
+     24631616,
+     25192439,
+     25571043,
+     25930462,
+     25158025,
+     24569390
+    ]
+   }
+  },
+  "x86_64/fcc/coremark/source/O2/compile/core_util": {
+   "latency": {
+    "value": 888236910,
+    "samples": [
+     889196795,
+     898367825,
+     879610251,
+     884450486,
+     888236910
+    ]
+   }
+  },
+  "x86_64/fcc/coremark/source/O0/link": {
+   "latency": {
+    "value": 19221058,
+    "samples": [
+     18465379,
+     19345984,
+     19842149,
+     19140583,
+     19717617,
+     20113814,
+     18887525,
+     19252523,
+     19189593,
+     19539560,
+     20542146,
+     18903176,
+     18837219,
+     19056296,
+     19982199,
+     18708289,
+     18188409,
+     18334927,
+     21701325,
+     19335447,
+     18594779,
+     19771668,
+     19000073,
+     18790764,
+     19997101,
+     21155251
+    ]
+   }
+  },
+  "x86_64/clang/coremark/source/O0/link": {
+   "latency": {
+    "value": 31987263.000000004,
+    "samples": [
+     144096887,
+     31135789,
+     32804595,
+     33135309,
+     32415510,
+     31959954,
+     31441680,
+     31619835,
+     31727651.000000004,
+     32414688.999999996,
+     31987263.000000004,
+     31655137,
+     32199218
+    ]
+   }
+  },
+  "x86_64/fcc/coremark/source/O2/run": {
+   "latency": {
+    "value": 78996,
+    "samples": [
+     78996
+    ]
+   }
+  },
+  "x86_64/gcc/coremark/source/O2/compile/posix/core_portme": {
+   "latency": {
+    "value": 34459003,
+    "samples": [
+     35426954,
+     33757950,
+     34354338,
+     34170617,
+     34907558,
+     34651471,
+     34134911,
+     34626435,
+     34515859,
+     34633407,
+     34721702,
+     33931311,
+     35997595,
+     34372642,
+     34506962,
+     34823401,
+     34505329,
+     34181507,
+     34348708,
+     32944136,
+     33240436.999999996,
+     33736359,
+     34309285,
+     34169344,
+     35030937,
+     34211853,
+     34543601,
+     34422605,
+     34495401,
+     34622747
+    ]
+   }
+  },
+  "x86_64/fcc/coremark/source/O0/run": {
+   "latency": {
+    "value": 115972,
+    "samples": [
+     115972
+    ]
+   }
+  },
+  "x86_64/fcc/coremark/source/O2/compile/core_state": {
+   "latency": {
+    "value": 900850045,
+    "samples": [
+     901700252,
+     896081521,
+     900850045,
+     899489344,
+     905018440
+    ]
+   }
+  },
+  "x86_64/gcc/coremark/source/O0/compile/core_state": {
+   "latency": {
+    "value": 27930384,
+    "samples": [
+     36836337,
+     28237235,
+     27871996,
+     27735412,
+     27162436,
+     28703834,
+     27740341,
+     27343462,
+     27497439,
+     27779464,
+     27686070,
+     27342521,
+     28880172,
+     28398235,
+     28120298,
+     27604047,
+     27560075,
+     28564314,
+     27914334,
+     28120909,
+     28642039,
+     28137851,
+     27967022,
+     28200537,
+     28799542,
+     29600933,
+     28400529,
+     27658118,
+     26899736,
+     27304430,
+     26423640,
+     27346127,
+     27946434,
+     31707943.000000004,
+     28473114,
+     27774715
+    ]
+   }
+  },
+  "x86_64/clang/coremark/source/O2/compile/core_list_join": {
+   "latency": {
+    "value": 109979564,
+    "samples": [
+     417220139,
+     108596572,
+     110797666,
+     109393675,
+     110127720,
+     109979564,
+     108467773
+    ]
+   }
+  },
+  "x86_64/clang/coremark/source/O2/compile/core_util": {
+   "latency": {
+    "value": 64649686,
+    "samples": [
+     63063030.00000001,
+     67169336,
+     74153431,
+     65802353.99999999,
+     64702940,
+     63619554.99999999,
+     64891751,
+     65145593,
+     64596431.99999999,
+     65482419,
+     64032583.00000001,
+     63626838.00000001,
+     62937596,
+     65030197,
+     62869039,
+     64391961
+    ]
+   }
+  },
+  "x86_64/clang/coremark/source/O0/compile/core_matrix": {
+   "latency": {
+    "value": 39219675,
+    "samples": [
+     39362079,
+     39127674,
+     38146889,
+     39617314,
+     38443621,
+     39068965,
+     38134447,
+     39476613,
+     40067552,
+     39983234,
+     39518680,
+     39691342,
+     38693676,
+     39336893,
+     39400962,
+     37863973,
+     38595935,
+     39050880,
+     39419696,
+     36126252,
+     42982332,
+     39349395,
+     39154203,
+     39285147,
+     39081307,
+     38859315
+    ]
+   }
+  },
+  "x86_64/gcc/coremark/source/O2/link": {
+   "latency": {
+    "value": 13996533.5,
+    "samples": [
+     13478021,
+     12974052,
+     15453962,
+     13705582,
+     13501352,
+     13116158,
+     13074787,
+     14361864,
+     13906406,
+     14102019,
+     14195063,
+     16332960,
+     14266916,
+     13527397,
+     13670621,
+     15353984,
+     13980283,
+     15481326,
+     13773619,
+     13709600,
+     14012784,
+     13482920,
+     13897198,
+     13056456,
+     13785409,
+     13759873,
+     14557609,
+     14270841,
+     14434468,
+     14629501,
+     14372423,
+     15644297.000000002,
+     15420361,
+     15101859,
+     14082085,
+     13248011
+    ]
+   }
+  },
+  "x86_64/fcc/coremark/source/O2/compile/core_list_join": {
+   "latency": {
+    "value": 926504495,
+    "samples": [
+     937192265,
+     930800932,
+     926283263,
+     915556392,
+     926504495
+    ]
+   }
+  },
+  "x86_64/gcc/coremark/source/O2/compile/core_state": {
+   "latency": {
+    "value": 64080118,
+    "samples": [
+     64519555.00000001,
+     64080798.99999999,
+     65416643.99999999,
+     63427954.99999999,
+     63385757,
+     64943133,
+     63338518,
+     63887138.99999999,
+     63638937.00000001,
+     64706954,
+     64079437,
+     64787274.00000001,
+     64134979.99999999,
+     64349660,
+     63239093.99999999,
+     63063637.00000001
+    ]
+   }
+  },
+  "x86_64/fcc/coremark/source/O0/compile/posix/core_portme": {
+   "latency": {
+    "value": 857834364,
+    "samples": [
+     861643868,
+     857834364,
+     852717389,
+     855135867,
+     868788825
+    ]
+   }
+  },
+  "x86_64/fcc/coremark/source/O2/compile/core_matrix": {
+   "latency": {
+    "value": 915865139,
+    "samples": [
+     883525238,
+     910166584,
+     918635291,
+     923248498,
+     915865139
+    ]
+   }
+  },
+  "x86_64/clang/coremark/source/O0/compile/core_main": {
+   "latency": {
+    "value": 42205337,
+    "samples": [
+     95654964,
+     42205337,
+     42674760,
+     41542755,
+     42126771,
+     40854395,
+     40773414,
+     41986169,
+     42355245,
+     40975400,
+     41661105,
+     41200238,
+     43168939,
+     42463647,
+     43033477,
+     41830109,
+     41295605,
+     43975469,
+     42413774,
+     41525332,
+     42471482,
+     43123554,
+     42503762
+    ]
+   }
+  },
+  "x86_64/clang/coremark/source/O2/compile/posix/core_portme": {
+   "latency": {
+    "value": 46813783,
+    "samples": [
+     48879554,
+     46033673,
+     46513014,
+     47234506,
+     47452741,
+     46371692,
+     47114552,
+     48031378,
+     45747862,
+     47808082,
+     47768429,
+     47418007,
+     46172862,
+     46103533,
+     45913279,
+     45212987,
+     48388692,
+     48225789,
+     47967499,
+     46002465,
+     46258782,
+     45899312
+    ]
+   }
+  },
+  "x86_64/clang/coremark/source/O0/compile/core_list_join": {
+   "latency": {
+    "value": 41452888,
+    "samples": [
+     2190539414,
+     43770367,
+     41452888,
+     40040110,
+     41088670
+    ]
+   }
+  },
+  "x86_64/fcc/coremark/source/O0/compile/core_list_join": {
+   "latency": {
+    "value": 950249871,
+    "samples": [
+     923527063,
+     916344938,
+     950249871,
+     964129525,
+     983483450
+    ]
+   }
+  },
+  "x86_64/fcc/coremark/source/O2/compile/core_main": {
+   "latency": {
+    "value": 913775898,
+    "samples": [
+     940763844,
+     913780160,
+     910041472,
+     913775898,
+     911016435
+    ]
+   }
+  },
+  "x86_64/fcc/coremark/source/O0/compile/core_util": {
+   "latency": {
+    "value": 866568578,
+    "samples": [
+     898907618,
+     898363265,
+     862371311,
+     861905685,
+     866568578
+    ]
+   }
+  },
+  "aarch64/clang/dhrystone/source/O2/compile/dhry_2": {
+   "latency": {
+    "value": 36038385.5,
+    "samples": [
+     36592508,
+     37550058,
+     36114920,
+     35577841,
+     35556506,
+     36685198,
+     36044525,
+     36119072,
+     34540608,
+     34276319,
+     34171486,
+     35507645,
+     35194736,
+     34664024,
+     34524064,
+     34965046,
+     35097437,
+     35718065,
+     36049660,
+     37232917,
+     36199588,
+     36330243,
+     36656520,
+     36009647,
+     36032246,
+     37387803,
+     37802651,
+     37043241
+    ]
+   }
+  },
+  "aarch64/clang/dhrystone/source/O0/link": {
+   "latency": {
+    "value": 19602596,
+    "samples": [
+     77128566,
+     22028981,
+     21053271,
+     20209323,
+     19993849,
+     20024679,
+     19156331,
+     19914261,
+     18979494,
+     19267396,
+     19461137,
+     20456924,
+     20155214,
+     20295438,
+     20943390,
+     19691419,
+     18961199,
+     19087951,
+     20062060,
+     18818680,
+     19320449,
+     19788964,
+     18594262,
+     19171674,
+     19297674,
+     19598353,
+     19823418,
+     20629490,
+     20678678,
+     19531453,
+     19606839,
+     19156156,
+     19167043,
+     20992915,
+     19342936,
+     19509830,
+     19695498,
+     19344288,
+     19030971,
+     19276323,
+     18614908,
+     19346400,
+     19118469,
+     19477144,
+     20893658,
+     20466281,
+     19724189,
+     20849770
+    ]
+   }
+  },
+  "aarch64/gcc/dhrystone/source/O2/run": {
+   "latency": {
+    "value": 1485866868,
+    "samples": [
+     1506461576,
+     1481847265,
+     1485866868
+    ]
+   }
+  },
+  "aarch64/gcc/dhrystone/source/O2/compile/dhry_2": {
+   "latency": {
+    "value": 34965899,
+    "samples": [
+     35039270,
+     35421374,
+     34965899,
+     34745208,
+     34836331,
+     35688199,
+     35051133,
+     34675093,
+     34340576,
+     35050230,
+     33657074,
+     34062897,
+     33454302.999999996,
+     34483823,
+     35843334,
+     36156106,
+     35759522,
+     34970930,
+     34754176,
+     34179730,
+     34059594,
+     35331604,
+     34363175,
+     33768380,
+     34170635,
+     35278887,
+     35344164,
+     35499242,
+     35213628
+    ]
+   }
+  },
+  "aarch64/fcc/dhrystone/source/O0/run": {
+   "latency": {
+    "value": 4168438363,
+    "samples": [
+     4167952425,
+     4168438363,
+     4191779683
+    ]
+   }
+  },
+  "aarch64/clang/dhrystone/source/O0/compile/dhry_1": {
+   "latency": {
+    "value": 32951228,
+    "samples": [
+     1339962553,
+     32951228,
+     32079793.000000004
+    ]
+   }
+  },
+  "aarch64/fcc/dhrystone/source/O2/compile/dhry_2": {
+   "latency": {
+    "value": 524208766.99999994,
+    "samples": [
+     524208766.99999994,
+     527002421.00000006,
+     522893327
+    ]
+   }
+  },
+  "aarch64/clang/dhrystone/source/O2/link": {
+   "latency": {
+    "value": 20433113,
+    "samples": [
+     19605491,
+     19856700,
+     19389032,
+     20195240,
+     19770585,
+     19110433,
+     19667695,
+     18992664,
+     19845804,
+     19666616,
+     20815323,
+     19849836,
+     20528795,
+     20091662,
+     21213362,
+     20433113,
+     20472895,
+     20454816,
+     22467519,
+     20657332,
+     21007942,
+     20217270,
+     19847357,
+     20184624,
+     20056608,
+     21292741,
+     20144722,
+     21033541,
+     20391460,
+     21358945,
+     21278014,
+     20753638,
+     20717424,
+     19882946,
+     20079831,
+     19833701,
+     21058699,
+     20169633,
+     20531188,
+     19943022,
+     20498054,
+     20113237,
+     21091105,
+     21661040,
+     21418366,
+     21538655,
+     21776752,
+     22148554,
+     21249776
+    ]
+   }
+  },
+  "aarch64/fcc/dhrystone/source/O0/link": {
+   "latency": {
+    "value": 13293256,
+    "samples": [
+     14081463,
+     12824884,
+     13127313,
+     12832107,
+     12750705,
+     13739436,
+     13293256,
+     13402544,
+     14573929,
+     14772894,
+     12884528,
+     12350064,
+     12905831,
+     12519102,
+     12063187,
+     12206321,
+     12620776,
+     13453158,
+     13165608,
+     14078592,
+     12317227,
+     14189561,
+     13383858,
+     14772533,
+     15438141,
+     12918886,
+     13127625,
+     14159267,
+     15144110,
+     14631326,
+     14787532,
+     14281131,
+     12799582,
+     13344204,
+     13595869,
+     14132405,
+     14058808,
+     12553237,
+     13160831,
+     12559540,
+     12332098,
+     13401425,
+     12960660,
+     13413088,
+     13893698,
+     12714483,
+     13432118,
+     13384866,
+     12935901,
+     12731417,
+     13160584,
+     13473316,
+     14076384,
+     12715754,
+     13210284,
+     13679064,
+     13317454,
+     13450709,
+     13697383,
+     14212679,
+     13349948,
+     13100827,
+     12606137,
+     13231883,
+     12829499,
+     13400097,
+     13163367,
+     13111554,
+     12808669,
+     12346337,
+     14216663,
+     13029783,
+     13145752,
+     14812603,
+     13743004
+    ]
+   }
+  },
+  "aarch64/clang/dhrystone/source/O0/compile/dhry_2": {
+   "latency": {
+    "value": 27883116.5,
+    "samples": [
+     41039840,
+     28212077,
+     28411536,
+     29061841,
+     28480596,
+     27749921,
+     27433604,
+     27695971,
+     28455078,
+     28238979,
+     28994597,
+     28521777,
+     28516674,
+     28406209,
+     28279065,
+     28687599,
+     27364224,
+     27422445,
+     27400046,
+     28273865,
+     28619204,
+     28016312,
+     27428117,
+     27706091,
+     27736345,
+     27657838,
+     27711707,
+     27232104,
+     27087737,
+     26903428,
+     26814530,
+     26468374,
+     26741422,
+     27073762,
+     28442175,
+     29778926
+    ]
+   }
+  },
+  "aarch64/gcc/dhrystone/source/O2/compile/dhry_1": {
+   "latency": {
+    "value": 69556964,
+    "samples": [
+     71509870,
+     67186773,
+     67949509,
+     67866699,
+     70339676,
+     69052611,
+     69386582,
+     70669888,
+     69601185,
+     70784930,
+     70236210,
+     68673706,
+     69018533,
+     70099283,
+     69556964
+    ]
+   }
+  },
+  "aarch64/clang/dhrystone/source/O2/run": {
+   "latency": {
+    "value": 1428110255,
+    "samples": [
+     1418731219,
+     1428630984,
+     1428110255
+    ]
+   }
+  },
+  "aarch64/fcc/dhrystone/source/O2/compile/dhry_1": {
+   "latency": {
+    "value": 651525139,
+    "samples": [
+     651525139,
+     649526149,
+     651677211
+    ]
+   }
+  },
+  "aarch64/fcc/dhrystone/source/O0/compile/dhry_2": {
+   "latency": {
+    "value": 538855417,
+    "samples": [
+     538855417,
+     541239585,
+     538340432
+    ]
+   }
+  },
+  "aarch64/fcc/dhrystone/source/O2/run": {
+   "latency": {
+    "value": 2983300513,
+    "samples": [
+     2983484187,
+     2982208339,
+     2983300513
+    ]
+   }
+  },
+  "aarch64/gcc/dhrystone/source/O0/compile/dhry_2": {
+   "latency": {
+    "value": 22585142.5,
+    "samples": [
+     24041329,
+     23457149,
+     23707934,
+     23525369,
+     23050246,
+     22872441,
+     22680045,
+     22589562,
+     22562515,
+     22417309,
+     22480232,
+     23103539,
+     23136472,
+     22592026,
+     22595578,
+     22214441,
+     22580723,
+     22963395,
+     22569731,
+     22879056,
+     22960811,
+     22818396,
+     23811592,
+     23247858,
+     23520169,
+     22400901,
+     22886472,
+     22427876,
+     22923861,
+     22167812,
+     22436507,
+     22313691,
+     22408380,
+     22574283,
+     22340369,
+     22191434,
+     22019997,
+     23210956,
+     22536589,
+     22335793,
+     22058858,
+     22050835,
+     22162276,
+     22444459
+    ]
+   }
+  },
+  "aarch64/gcc/dhrystone/source/O2/link": {
+   "latency": {
+    "value": 8862881,
+    "samples": [
+     9514294,
+     9094823,
+     8694400,
+     8808272,
+     9139941,
+     8948105,
+     9665021,
+     9376966,
+     9840466,
+     10590988,
+     8708487,
+     9059562,
+     9769422,
+     10934287,
+     8939865,
+     9421835,
+     9083656,
+     10108457,
+     8932401,
+     8636331,
+     9058818,
+     8604485,
+     8709199,
+     8898123,
+     8150737,
+     8424328,
+     8725005,
+     9920069,
+     7955637,
+     8375731.000000001,
+     9247278,
+     8890844,
+     8953160,
+     8420184,
+     8798841,
+     8903331,
+     8273113,
+     8659362,
+     9253301,
+     8728566,
+     8715486,
+     8613716,
+     8520146,
+     7925175,
+     8746532,
+     8495507,
+     8280417,
+     8854302,
+     10744283,
+     8672081,
+     8679616,
+     8320390,
+     8612293,
+     9217215,
+     9663989,
+     8990493,
+     9352448,
+     9328377,
+     8472709,
+     9047234,
+     9006860,
+     8755748,
+     8391721,
+     8805632,
+     9778501,
+     8125778,
+     8020431.999999999,
+     8259017,
+     8380995,
+     8382961,
+     8635323,
+     8703727,
+     8827223,
+     8756804,
+     8871460,
+     9226567,
+     8886659,
+     9496286,
+     10468915,
+     9068208,
+     10699590,
+     9350848,
+     8949727,
+     8356947.999999999,
+     8492899,
+     9546651,
+     8890283,
+     9221039,
+     9618807,
+     9022595,
+     8971062,
+     9259045,
+     9906205,
+     8627203,
+     8621300,
+     9113229,
+     8269960.999999999,
+     9414795,
+     8523362,
+     10407726,
+     8209661,
+     7995738.000000001,
+     8250123,
+     8538961,
+     8007152.999999999,
+     8474180,
+     9688963,
+     8579182,
+     8886859,
+     10086682,
+     8072533,
+     8531281
+    ]
+   }
+  },
+  "aarch64/clang/dhrystone/source/O2/compile/dhry_1": {
+   "latency": {
+    "value": 50954330.5,
+    "samples": [
+     76778607,
+     51484339,
+     50425714,
+     49558799,
+     50912741,
+     50206848,
+     49350651,
+     50112981,
+     48861137,
+     49896418,
+     50309082,
+     50995920,
+     51330548,
+     51274743,
+     50432778,
+     51651345,
+     52052768,
+     53401968,
+     52613622,
+     52233902
+    ]
+   }
+  },
+  "aarch64/gcc/dhrystone/source/O0/link": {
+   "latency": {
+    "value": 8535716.5,
+    "samples": [
+     9188185,
+     9280924,
+     8840518,
+     9296842,
+     8777866,
+     9025139,
+     8684103,
+     8939273,
+     8446462,
+     8833118,
+     9272468,
+     9092239,
+     8557351,
+     8678672,
+     8625356,
+     8230123.000000001,
+     8035486.999999999,
+     9610663,
+     8048087.000000001,
+     8012033,
+     8882356,
+     8137721.000000001,
+     8462982,
+     8466349,
+     9101135,
+     8254834.000000001,
+     8201412.999999999,
+     8422439,
+     8047103,
+     7970754.999999999,
+     8524041,
+     9915069,
+     8120458.000000001,
+     7776223,
+     8825119,
+     8225082.999999999,
+     8373347,
+     9681955,
+     8990565,
+     9574441,
+     9287491,
+     9166778,
+     8441087,
+     7953556.000000001,
+     8235579,
+     7757192,
+     8503187,
+     7992633.000000001,
+     8196238,
+     8154511.999999999,
+     8193133,
+     8975662,
+     9525013,
+     8586709,
+     8412696,
+     8990029,
+     8738405,
+     8926697,
+     8925481,
+     8382282,
+     9140835,
+     8711862,
+     8545824,
+     9790541,
+     10247408,
+     8287312,
+     9441794,
+     8677584,
+     8403304,
+     8398489,
+     8385794,
+     7771655,
+     7942764.999999999,
+     8209365,
+     9069128,
+     8875660,
+     8757339,
+     9209216,
+     8564831,
+     8024712,
+     10363786,
+     8252865.999999999,
+     8097131.000000001,
+     8324214,
+     7924077.999999999,
+     8203676.999999999,
+     7805053,
+     7989314.000000001,
+     8301846.999999999,
+     7739921,
+     9284115,
+     9006732,
+     8829663,
+     8881947,
+     7423669,
+     8092818.999999999,
+     7925622,
+     7559692,
+     8357867.999999999,
+     8495723,
+     8525609,
+     7597450,
+     9383637,
+     7590298,
+     9698778,
+     8684592,
+     8274592.000000001,
+     9427019,
+     8246602,
+     9430282,
+     8660689,
+     8632027,
+     9071472,
+     8412400,
+     9013484,
+     10370265
+    ]
+   }
+  },
+  "aarch64/gcc/dhrystone/source/O0/run": {
+   "latency": {
+    "value": 6812514322,
+    "samples": [
+     6808128904,
+     6812514322,
+     6832507590
+    ]
+   }
+  },
+  "aarch64/gcc/dhrystone/source/O0/compile/dhry_1": {
+   "latency": {
+    "value": 28599196,
+    "samples": [
+     90661229,
+     28734620,
+     28273392,
+     28415008,
+     27684140,
+     27828828,
+     28019095,
+     28409864,
+     28358835,
+     27977778,
+     29207799,
+     29055249,
+     28509074,
+     29172073,
+     28903794,
+     30038821,
+     29658172,
+     30218906,
+     29299626,
+     28343388,
+     28173262,
+     29565434,
+     29568561,
+     29138171,
+     28937896,
+     28151440,
+     28495874,
+     27785390,
+     28367082,
+     27563556,
+     28599196,
+     29247125,
+     29489430
+    ]
+   }
+  },
+  "aarch64/clang/dhrystone/source/O0/run": {
+   "latency": {
+    "value": 8022564597.000001,
+    "samples": [
+     8059875282,
+     7987889865,
+     8022564597.000001
+    ]
+   }
+  },
+  "aarch64/fcc/dhrystone/source/O2/link": {
+   "latency": {
+    "value": 12976122,
+    "samples": [
+     13821039,
+     12928837,
+     12772831,
+     13228995,
+     13896962,
+     12968731,
+     12854505,
+     12684685,
+     12307820,
+     12387119,
+     12551172,
+     12384118,
+     12429060,
+     13058861,
+     12210801,
+     12787278,
+     13399585,
+     14302121,
+     13600477,
+     14049817,
+     12678436,
+     12913582,
+     13613788,
+     13028823,
+     12671733,
+     12942421,
+     14083559,
+     13764827,
+     12921150,
+     16312759,
+     12293580,
+     12976122,
+     12902255,
+     13133209,
+     14790580,
+     12958483,
+     12499776,
+     13389065,
+     13115106,
+     13141608,
+     12805781,
+     13105138,
+     13489596,
+     13001920,
+     13417480,
+     13014032,
+     12919846,
+     12848450,
+     13114202,
+     12260022,
+     13672608,
+     14830985,
+     12570275,
+     12285349,
+     13899050,
+     13171583,
+     12829155,
+     12898799,
+     13157087,
+     12885656,
+     12731545,
+     13332765,
+     13946687,
+     12474753,
+     13041767,
+     12967299,
+     12916814,
+     13267265,
+     12544412,
+     12580387,
+     13704342,
+     14077351,
+     14359063,
+     13071613,
+     12467745,
+     12959460,
+     13007576
+    ]
+   }
+  },
+  "aarch64/fcc/dhrystone/source/O0/compile/dhry_1": {
+   "latency": {
+    "value": 646893789,
+    "samples": [
+     652254050,
+     642585835,
+     646893789
+    ]
+   }
+  },
+  "x86_64/fcc/dhrystone/source/O0/run": {
+   "latency": {
+    "value": 4491101655,
+    "samples": [
+     4555344529,
+     4491101655,
+     4459757414
+    ]
+   }
+  },
+  "x86_64/gcc/dhrystone/source/O2/run": {
+   "latency": {
+    "value": 2183031506,
+    "samples": [
+     2172952816,
+     2235195096,
+     2183031506
+    ]
+   }
+  },
+  "x86_64/clang/dhrystone/source/O0/link": {
+   "latency": {
+    "value": 31764342,
+    "samples": [
+     49553938,
+     32743591.000000004,
+     32580210,
+     31287873,
+     32147256,
+     30706663,
+     31558509.999999996,
+     32398704,
+     29782431,
+     32034421,
+     31397909,
+     32138086.000000004,
+     31738727,
+     31764342,
+     29543336,
+     31876105,
+     30123326,
+     33030609.000000004,
+     30942225,
+     32003465,
+     31580925.000000004,
+     31323925.000000004,
+     30246755,
+     31915163.000000004,
+     32498111.000000004,
+     31544964,
+     33248175.999999996,
+     30817851,
+     32079416,
+     29956802,
+     42665803
+    ]
+   }
+  },
+  "x86_64/gcc/dhrystone/source/O2/compile/dhry_1": {
+   "latency": {
+    "value": 66755469,
+    "samples": [
+     87803992,
+     66213894.99999999,
+     68785976,
+     69494250,
+     66755469,
+     67164134,
+     66040669.99999999,
+     66495041.00000001,
+     65701164.00000001,
+     65744025,
+     65848569.99999999,
+     65772978.99999999,
+     68601057,
+     69500412,
+     68813495
+    ]
+   }
+  },
+  "x86_64/fcc/dhrystone/source/O2/link": {
+   "latency": {
+    "value": 18332136,
+    "samples": [
+     18581393,
+     17940810,
+     18494272,
+     18290980,
+     18643519,
+     18326054,
+     18145856,
+     17791924,
+     18124352,
+     18620150,
+     18230095,
+     17645058,
+     18723409,
+     18477693,
+     17964832,
+     18182185,
+     18105366,
+     17573615,
+     18349472,
+     19291423,
+     17841406,
+     17756047,
+     18001897,
+     18570442,
+     18954632,
+     17956993,
+     17737833,
+     18517733,
+     18589067,
+     18839356,
+     18049336,
+     18604887,
+     18416173,
+     18256153,
+     19730265,
+     19123768,
+     18721745,
+     18077579,
+     18698171,
+     18332136,
+     17582922,
+     18700716,
+     17846737,
+     17993307,
+     18599116,
+     18139705,
+     17695938,
+     19266716,
+     18908827,
+     19271797,
+     17432541,
+     18454075,
+     18395645,
+     18862760,
+     18262155
+    ]
+   }
+  },
+  "x86_64/clang/dhrystone/source/O2/link": {
+   "latency": {
+    "value": 33757692.5,
+    "samples": [
+     33106981,
+     33237493,
+     35100073,
+     33931169,
+     33296193,
+     33500753,
+     32984003.999999996,
+     34816566,
+     33591202,
+     34188926,
+     34443188,
+     33917894,
+     33554593,
+     34321440,
+     33166591.000000004,
+     35237611,
+     33377141,
+     34025795,
+     34336789,
+     33224143.999999996,
+     33381128.000000004,
+     33730373,
+     34249495,
+     33883924,
+     33765006,
+     33980791,
+     33911461,
+     32192933,
+     33750379,
+     33646917
+    ]
+   }
+  },
+  "x86_64/gcc/dhrystone/source/O0/run": {
+   "latency": {
+    "value": 5550953037,
+    "samples": [
+     5550953037,
+     5537172173,
+     5604747715
+    ]
+   }
+  },
+  "x86_64/gcc/dhrystone/source/O2/link": {
+   "latency": {
+    "value": 12414882.5,
+    "samples": [
+     13116693,
+     13032826,
+     13345100,
+     13755169,
+     12922559,
+     13192394,
+     12703075,
+     12557195,
+     13448849,
+     12304942,
+     12954328,
+     13029229,
+     12074310,
+     12712485,
+     13461078,
+     11787963,
+     11811478,
+     13168430,
+     12691226,
+     12421355,
+     13364067,
+     13100566,
+     12436564,
+     12949109,
+     12040717,
+     11693400,
+     11860174,
+     11086600,
+     12926286,
+     12332343,
+     12273362,
+     12965820,
+     13212066,
+     13710916,
+     12211177,
+     12551513,
+     11312122,
+     12293641,
+     13790515,
+     12098170,
+     11536121,
+     14922887,
+     11672592,
+     12285111,
+     11838298,
+     12364053,
+     12081384,
+     11246609,
+     11550028,
+     12544470,
+     10818358,
+     12275095,
+     13407028,
+     12146826,
+     11558182,
+     12393292,
+     12637946,
+     12204924,
+     12853365,
+     11830267,
+     12311129,
+     12032081,
+     12581090,
+     12408410,
+     11017947,
+     12357701,
+     14107890,
+     13503451,
+     12056437,
+     12767394,
+     13144324,
+     11172160,
+     12577613,
+     13095934,
+     12105568,
+     11721894,
+     12931787,
+     13441698,
+     12301870,
+     11849225
+    ]
+   }
+  },
+  "x86_64/fcc/dhrystone/source/O2/compile/dhry_2": {
+   "latency": {
+    "value": 827251788,
+    "samples": [
+     833250586,
+     817527249,
+     827251788
+    ]
+   }
+  },
+  "x86_64/fcc/dhrystone/source/O0/compile/dhry_2": {
+   "latency": {
+    "value": 846300711,
+    "samples": [
+     837998002,
+     846300711,
+     847564168
+    ]
+   }
+  },
+  "x86_64/gcc/dhrystone/source/O0/link": {
+   "latency": {
+    "value": 11994212.5,
+    "samples": [
+     11081487,
+     11052407,
+     11370429,
+     11270221,
+     13660515,
+     11452190,
+     12111750,
+     11040484,
+     11349345,
+     11228153,
+     12004135,
+     13312028,
+     12992984,
+     12191243,
+     11616235,
+     13279390,
+     11784483,
+     11518213,
+     11137385,
+     12677618,
+     11786531,
+     12065921,
+     12417655,
+     11683259,
+     11984258,
+     11856345,
+     11292082,
+     11549817,
+     11502554,
+     12789997,
+     13004178,
+     11923797,
+     12082528,
+     12087233,
+     12448061,
+     11290469,
+     11926141,
+     12025355,
+     12036947,
+     12591865,
+     11934947,
+     13423424,
+     11893340,
+     13437861,
+     12659057,
+     11504082,
+     12668911,
+     11751139,
+     11245766,
+     11651520,
+     12066789,
+     11447792,
+     12117376,
+     12389345,
+     12379349,
+     11289708,
+     11841387,
+     12219707,
+     12537207,
+     13077578,
+     12128337,
+     12002723,
+     12483700,
+     12778254,
+     11629449,
+     12360789,
+     12289843,
+     11160918,
+     12059473,
+     13335951,
+     11737876,
+     11985702,
+     11504091,
+     12214312,
+     11841273,
+     10561473,
+     12357196,
+     12227026,
+     11338208,
+     10981439,
+     11422925,
+     12526593,
+     12203336,
+     11351807
+    ]
+   }
+  },
+  "x86_64/gcc/dhrystone/source/O0/compile/dhry_1": {
+   "latency": {
+    "value": 30611610.5,
+    "samples": [
+     120677499,
+     31134121,
+     31187434,
+     30419636,
+     33256462,
+     30752680,
+     30373480,
+     30414316,
+     30341670,
+     30343152,
+     30160711,
+     30287939,
+     30623908,
+     30480820,
+     30282859,
+     30167423,
+     30359294,
+     30263584,
+     30555020,
+     31197664,
+     31023828,
+     31713580.999999996,
+     32086269,
+     31628681,
+     30782997,
+     30766116,
+     30515465,
+     30652302,
+     30777967,
+     30599313
+    ]
+   }
+  },
+  "x86_64/gcc/dhrystone/source/O0/compile/dhry_2": {
+   "latency": {
+    "value": 25068174.5,
+    "samples": [
+     26158472,
+     24777685,
+     25420750,
+     25043604,
+     25165021,
+     25312778,
+     25042461,
+     24758008,
+     25193449,
+     25376827,
+     24951561,
+     25181622,
+     25075323,
+     24894413,
+     24881760,
+     24843859,
+     24761384,
+     24873405,
+     25881413,
+     25639941,
+     25286177,
+     24994160,
+     25004951,
+     24786531,
+     25061026,
+     25136418,
+     25255861,
+     24921454,
+     25096042,
+     25001525,
+     25104297,
+     25005532,
+     24948515,
+     25052861,
+     25127570,
+     25169660,
+     24966368,
+     25397864,
+     25370323,
+     25080595
+    ]
+   }
+  },
+  "x86_64/clang/dhrystone/source/O2/run": {
+   "latency": {
+    "value": 2246662522,
+    "samples": [
+     2246662522,
+     2036234286,
+     2254078101
+    ]
+   }
+  },
+  "x86_64/fcc/dhrystone/source/O2/run": {
+   "latency": {
+    "value": 3154172435,
+    "samples": [
+     3154172435,
+     3149604733,
+     3161380929
+    ]
+   }
+  },
+  "x86_64/clang/dhrystone/source/O0/compile/dhry_2": {
+   "latency": {
+    "value": 38414961,
+    "samples": [
+     113734441,
+     38570952,
+     38768862,
+     38314863,
+     38382490,
+     38457941,
+     37987229,
+     38656463,
+     39308845,
+     38485743,
+     38806665,
+     37984063,
+     38226407,
+     38748606,
+     38292231,
+     38656453,
+     38797848,
+     37671768,
+     38208293,
+     38267675,
+     38213393,
+     37639607,
+     38210958,
+     39198008,
+     38414961
+    ]
+   }
+  },
+  "x86_64/fcc/dhrystone/source/O2/compile/dhry_1": {
+   "latency": {
+    "value": 932370859,
+    "samples": [
+     932370859,
+     929132074,
+     938874987
+    ]
+   }
+  },
+  "x86_64/clang/dhrystone/source/O0/compile/dhry_1": {
+   "latency": {
+    "value": 42219416,
+    "samples": [
+     2860772934,
+     41590408,
+     42219416
+    ]
+   }
+  },
+  "x86_64/clang/dhrystone/source/O0/run": {
+   "latency": {
+    "value": 5752770352,
+    "samples": [
+     5760035390,
+     5752770352,
+     5681936404
+    ]
+   }
+  },
+  "x86_64/fcc/dhrystone/source/O0/compile/dhry_1": {
+   "latency": {
+    "value": 945933528,
+    "samples": [
+     928864844,
+     945933528,
+     1077890518
+    ]
+   }
+  },
+  "x86_64/gcc/dhrystone/source/O2/compile/dhry_2": {
+   "latency": {
+    "value": 39476620,
+    "samples": [
+     39619873,
+     37813179,
+     37887949,
+     38178813,
+     37843115,
+     37716368,
+     37691481,
+     39374514,
+     40224165,
+     39762070,
+     39704352,
+     39355759,
+     39879089,
+     40063665,
+     39112534,
+     39252355,
+     39186903,
+     39327636,
+     40306039,
+     40142342,
+     40267036,
+     39578726,
+     39204636,
+     40280181,
+     40010666,
+     40151380
+    ]
+   }
+  },
+  "x86_64/clang/dhrystone/source/O2/compile/dhry_1": {
+   "latency": {
+    "value": 68110221,
+    "samples": [
+     458226610,
+     69909201,
+     68911092,
+     68132673,
+     68066440,
+     67963646,
+     68110221,
+     67922349,
+     68057081
+    ]
+   }
+  },
+  "x86_64/fcc/dhrystone/source/O0/link": {
+   "latency": {
+    "value": 18442425,
+    "samples": [
+     17968049,
+     18731531,
+     19379113,
+     18235831,
+     17575227,
+     18659592,
+     18038973,
+     17332730,
+     17697142,
+     17929528,
+     19436542,
+     17875912,
+     18557705,
+     18909531,
+     18325962,
+     18344335,
+     18712376,
+     18052512,
+     20060562,
+     20047527,
+     18851897,
+     18626900,
+     19020166,
+     18450234,
+     18766938,
+     18695243,
+     18772498,
+     17540329,
+     18442425,
+     18508624,
+     17916558,
+     18025027,
+     18032548,
+     18371010,
+     18473263,
+     17828960,
+     18647775,
+     17316780,
+     18048772,
+     18515209,
+     19479242,
+     18290595,
+     17946356,
+     18138083,
+     18477926,
+     18513753,
+     18755283,
+     18582341,
+     18416181,
+     18256615,
+     19024400,
+     18233975,
+     17798512,
+     18970620,
+     18240264
+    ]
+   }
+  },
+  "x86_64/clang/dhrystone/source/O2/compile/dhry_2": {
+   "latency": {
+    "value": 50360984.5,
+    "samples": [
+     50982428,
+     49946638,
+     50362968,
+     50359001,
+     50499193,
+     50339935,
+     50744873,
+     50207076,
+     50289781,
+     50101729,
+     49933233,
+     49574491,
+     49928945,
+     49952750,
+     51138454,
+     52188758,
+     51801593,
+     51875662,
+     50529520,
+     50611483
+    ]
+   }
+  },
+  "aarch64/fcc/codegen_expr_heavy/ast_to_ir": {
+   "latency": {
+    "value": 125408709.25,
+    "samples": [
+     127947695.5,
+     125434776,
+     125378266,
+     124901747,
+     124896071,
+     125382642.5,
+     125357164.5,
+     125708406.5,
+     126074441.5,
+     125789482
+    ]
+   }
+  },
+  "aarch64/fcc/promote/promote": {
+   "latency": {
+    "value": 393115825.5,
+    "samples": [
+     391012186.5,
+     395111811.5,
+     395526636,
+     395746333.5,
+     393347012,
+     392884639,
+     391251579,
+     392173223.5,
+     392405924.5,
+     393424309
+    ]
+   }
+  },
+  "aarch64/fcc/pipeline/source_to_ir": {
+   "latency": {
+    "value": 48419674.8,
+    "samples": [
+     48912112,
+     48671282.5,
+     49092099.166666664,
+     48473883.625,
+     48400586,
+     48095632.833333336,
+     47923474.35714286,
+     47658862.625,
+     48258324.666666664,
+     48438763.6
+    ]
+   }
+  },
+  "aarch64/fcc/codegen/ast_to_ir": {
+   "latency": {
+    "value": 20580321.441666666,
+    "samples": [
+     23932865,
+     20240948.75,
+     19568441.333333332,
+     19502483.25,
+     19584623.2,
+     20577648.083333332,
+     20732123.714285713,
+     20726305.9375,
+     20661902.611111112,
+     20582994.8
+    ]
+   }
+  },
+  "aarch64/egg/saturate/coremark-instcombine-206": {
+   "latency": {
+    "value": 41667.131146953405,
+    "samples": [
+     38250.46064516129,
+     39249.91806451613,
+     40840.024086021505,
+     41556.31322580645,
+     41971.28103225806,
+     41699.74860215054,
+     41791.9996313364,
+     41657.210967741936,
+     41677.051326164874,
+     41701.43651612903
+    ]
+   }
+  },
+  "aarch64/egg/saturate/dhrystone-isel-2033": {
+   "latency": {
+    "value": 8036463.03896104,
+    "samples": [
+     7618363.363636363,
+     7715997.045454546,
+     8087535.242424242,
+     8123941.2272727275,
+     8062204.545454546,
+     8078384.848484849,
+     8010721.532467533,
+     8102730.295454546,
+     7953076.878787879,
+     7897564.454545454
+    ]
+   }
+  },
+  "aarch64/egg/saturate/coremark-instcombine-1377": {
+   "latency": {
+    "value": 351769.1314935065,
+    "samples": [
+     321510.1909090909,
+     323277.9409090909,
+     338903.7909090909,
+     347259.5909090909,
+     354864.0890909091,
+     353055.2318181818,
+     350483.03116883116,
+     355860.4715909091,
+     356022.95454545453,
+     355228.5690909091
+    ]
+   }
+  },
+  "aarch64/egg/saturate/coremark-isel-2665": {
+   "latency": {
+    "value": 29838034.09583333,
+    "samples": [
+     29439813,
+     28918133.666666668,
+     28883373.111111112,
+     29309953.916666668,
+     30213144.333333332,
+     30057341.833333332,
+     29961540.19047619,
+     29778390.291666668,
+     30018331.51851852,
+     29897677.9
+    ]
+   }
+  },
+  "aarch64/egg/saturate/coremark-isel-534": {
+   "latency": {
+    "value": 5716384.152380953,
+    "samples": [
+     5684567.2,
+     5674544.633333334,
+     5713452.533333333,
+     5707820,
+     5711288.293333333,
+     5722211.877777778,
+     5719315.771428571,
+     5763746.666666667,
+     5778339.088888889,
+     5769804.3533333335
+    ]
+   }
+  },
+  "aarch64/egg/saturate/whetstone-instcombine-1450": {
+   "latency": {
+    "value": 386493.92721088434,
+    "samples": [
+     346354.01020408166,
+     360917.55102040817,
+     384963.9863945578,
+     389529.29846938775,
+     388363.4244897959,
+     387079.9574829932,
+     387738.88192419824,
+     387668.13903061225,
+     385256.80385487527,
+     385907.8969387755
+    ]
+   }
+  },
+  "aarch64/egg/saturate/whetstone-isel-1597": {
+   "latency": {
+    "value": 5981349.46577381,
+    "samples": [
+     5966115.142857143,
+     5918481.928571428,
+     5975540.261904762,
+     5987646,
+     5998648.3,
+     5981459.904761905,
+     5981768.87755102,
+     5981239.026785715,
+     5978109.547619048,
+     5995337.9
+    ]
+   }
+  },
+  "aarch64/egg/extract/coremark-instcombine-206": {
+   "latency": {
+    "value": 25989.578125,
+    "samples": [
+     26011.456955530215,
+     25912.69498289624,
+     25844.575256556443,
+     26088.83131413911,
+     26213.178392246293,
+     25976.27893386545,
+     25931.903200847042,
+     26002.87731613455,
+     26025.860794374763,
+     25960.64238882554
+    ]
+   }
+  },
+  "aarch64/egg/extract/dhrystone-isel-2033": {
+   "latency": {
+    "value": 2162658.5174418604,
+    "samples": [
+     2144105.2325581396,
+     2169094.7209302327,
+     2160701.4496124033,
+     2160949.738372093,
+     2165938.5023255814,
+     2122029.4379844964,
+     2151835.4717607973,
+     2164367.2965116277,
+     2195029.8294573645,
+     2182616.048837209
+    ]
+   }
+  },
+  "aarch64/egg/extract/coremark-instcombine-1377": {
+   "latency": {
+    "value": 303986.88037037035,
+    "samples": [
+     304973.9266666667,
+     304198.585,
+     305079.5911111111,
+     303814.44916666666,
+     303958.2833333333,
+     302993.3677777778,
+     303256.72714285715,
+     303775.38666666666,
+     304015.4774074074,
+     304241.159
+    ]
+   }
+  },
+  "aarch64/egg/extract/coremark-isel-2665": {
+   "latency": {
+    "value": 7347620.845238095,
+    "samples": [
+     7388039.615384615,
+     7293030.307692308,
+     7367403.974358974,
+     7277908.807692308,
+     7404211.476923077,
+     7347896.141025641,
+     7347345.549450549,
+     7296080.951923077,
+     7295022.641025641,
+     7356561.676923077
+    ]
+   }
+  },
+  "aarch64/egg/extract/coremark-isel-534": {
+   "latency": {
+    "value": 937480.2615979381,
+    "samples": [
+     950444.5773195876,
+     941464.8247422681,
+     942159.1752577319,
+     967012.7422680412,
+     928662.8515463917,
+     947392.6443298969,
+     926784.4683357879,
+     933495.6984536082,
+     928745.7319587629,
+     927127.8865979381
+    ]
+   }
+  },
+  "aarch64/egg/extract/whetstone-instcombine-1450": {
+   "latency": {
+    "value": 553453.00125502,
+    "samples": [
+     556267.3795180722,
+     551645.1445783132,
+     553167.2871485944,
+     553738.7153614458,
+     541548.7409638554,
+     555223.2208835342,
+     548436.1135972461,
+     568435.3569277108,
+     558105.1191432396,
+     546807.0048192771
+    ]
+   }
+  },
+  "aarch64/egg/extract/whetstone-isel-1597": {
+   "latency": {
+    "value": 1861778.6034985422,
+    "samples": [
+     1857768,
+     1841328.857142857,
+     1852974.768707483,
+     1887911.051020408,
+     1897092.3959183674,
+     1841237.6972789115,
+     1865789.2069970847,
+     1845162.362244898,
+     1872278.9206349207,
+     1877594.206122449
+    ]
+   }
+  },
+  "aarch64/egg/ematch/coremark-instcombine-206": {
+   "latency": {
+    "value": 3986.0475379452537,
+    "samples": [
+     3982.1743726969644,
+     4000.365064046324,
+     4005.370532842019,
+     3982.9157417968063,
+     3970.308931391472,
+     3990.33290928233,
+     3945.63921615321,
+     3992.815811984559,
+     3948.751608469322,
+     3989.1793340937006
+    ]
+   }
+  },
+  "aarch64/egg/ematch/dhrystone-isel-2033": {
+   "latency": {
+    "value": 1258952.4500000002,
+    "samples": [
+     1173243.4625,
+     1285584.71875,
+     1261021.0958333334,
+     1256469.459375,
+     1250900.0275,
+     1256883.8041666667,
+     1269499.1196428572,
+     1267547.084375,
+     1262533.2708333333,
+     1253895.1725
+    ]
+   }
+  },
+  "aarch64/egg/ematch/coremark-instcombine-1377": {
+   "latency": {
+    "value": 26655.85911756083,
+    "samples": [
+     26821.650835532102,
+     26655.13016710642,
+     26696.03058731555,
+     26871.90552623864,
+     26644.749985341543,
+     26631.236587510994,
+     26540.966913766388,
+     26756.89398270302,
+     26537.725300498387,
+     26656.588068015244
+    ]
+   }
+  },
+  "aarch64/egg/ematch/coremark-isel-2665": {
+   "latency": {
+    "value": 5367417.926470589,
+    "samples": [
+     5300384.764705882,
+     5373994.794117647,
+     5375412.725490196,
+     5349169.338235294,
+     5360841.05882353,
+     5405116.980392157,
+     5400644.949579832,
+     5397318.088235294,
+     5357591.607843137,
+     5356117.970588235
+    ]
+   }
+  },
+  "aarch64/egg/ematch/coremark-isel-534": {
+   "latency": {
+    "value": 846322.6668981481,
+    "samples": [
+     842934.8518518518,
+     841283.2129629629,
+     841251.3456790124,
+     849540.4027777778,
+     862340.5833333334,
+     854814.2870370371,
+     852795.6402116402,
+     844708.6782407408,
+     842320.6851851852,
+     847936.6555555556
+    ]
+   }
+  },
+  "aarch64/egg/ematch/whetstone-instcombine-1450": {
+   "latency": {
+    "value": 29609.20905017921,
+    "samples": [
+     29732.996741609644,
+     29539.046757901597,
+     29372.881611817094,
+     29729.79146301727,
+     29459.663799283153,
+     29680.372977082654,
+     29512.118977796395,
+     29600.367302052786,
+     29681.235979870387,
+     29618.050798305638
+    ]
+   }
+  },
+  "aarch64/egg/ematch/whetstone-isel-1597": {
+   "latency": {
+    "value": 817119.3158482143,
+    "samples": [
+     822471.25,
+     815520.9910714285,
+     818823.4345238095,
+     816755.7209821428,
+     829523.2107142857,
+     815207.1116071428,
+     825707.2334183673,
+     812935.6875,
+     810640.2003968254,
+     817482.9107142857
+    ]
+   }
+  },
+  "aarch64/egg/seed/coremark-instcombine-206": {
+   "latency": {
+    "value": 60681.44623823289,
+    "samples": [
+     60663.591727818544,
+     60754.86657771848,
+     60691.65577051367,
+     60808.5176784523,
+     60681.66084056038,
+     60697.35134534134,
+     60675.918421805014,
+     60655.35548699133,
+     60681.23163590542,
+     60654.68699132755
+    ]
+   }
+  },
+  "aarch64/egg/seed/dhrystone-isel-2033": {
+   "latency": {
+    "value": 737154.6764112904,
+    "samples": [
+     739125.7096774194,
+     742939.4072580645,
+     755382.502688172,
+     735183.6431451613,
+     732731.4177419355,
+     731729.3454301076,
+     740756.1612903225,
+     739308.3487903225,
+     729547.9292114695,
+     734810.4258064516
+    ]
+   }
+  },
+  "aarch64/egg/seed/coremark-instcombine-1377": {
+   "latency": {
+    "value": 434155.87380952376,
+    "samples": [
+     433253.0380952381,
+     434222.4095238095,
+     434023.77142857143,
+     434227.97976190475,
+     433905.70952380955,
+     433939.9142857143,
+     434089.3380952381,
+     434930.4583333333,
+     435033.4005291005,
+     434536.4895238095
+    ]
+   }
+  },
+  "aarch64/egg/seed/coremark-isel-2665": {
+   "latency": {
+    "value": 900988.7937765205,
+    "samples": [
+     903675.7326732674,
+     902194.7673267326,
+     902051.409240924,
+     900896.9529702971,
+     900923.8831683168,
+     898845.7161716172,
+     901053.7043847241,
+     899570.5284653465,
+     900461.609460946,
+     902132.6089108911
+    ]
+   }
+  },
+  "aarch64/egg/seed/coremark-isel-534": {
+   "latency": {
+    "value": 159432.4629597198,
+    "samples": [
+     160016.40980735552,
+     159457.5945709282,
+     159503.53239929947,
+     159459.62259194395,
+     159407.3313485114,
+     159565.29042615296,
+     159380.73204903677,
+     159238.15893169877,
+     159381.20937925667,
+     159375.55148861647
+    ]
+   }
+  },
+  "aarch64/egg/seed/whetstone-instcombine-1450": {
+   "latency": {
+    "value": 596197.9443510738,
+    "samples": [
+     598551.1633986929,
+     597858.248366013,
+     598292.5032679739,
+     597881.4640522876,
+     596495.4405228759,
+     593715.1198257081,
+     595900.4481792717,
+     594237.8357843137,
+     595809.7029774872,
+     593849.4418300653
+    ]
+   }
+  },
+  "aarch64/egg/seed/whetstone-isel-1597": {
+   "latency": {
+    "value": 600596.4270833333,
+    "samples": [
+     599494.9934210526,
+     601336.3881578947,
+     598069.0635964912,
+     601333.5493421053,
+     599119.027631579,
+     600741.6962719298,
+     601554.0413533835,
+     600924.7927631579,
+     600057.3684210526,
+     600451.1578947369
+    ]
+   }
+  },
+  "aarch64/egglog/saturate/coremark-instcombine-206": {
+   "latency": {
+    "value": 381234.6448979592,
+    "samples": [
+     387657.34285714285,
+     382748.52857142856,
+     383623,
+     381300.1357142857,
+     381260.85714285716,
+     379899.8523809524,
+     381208.43265306123,
+     379970.72142857144,
+     378524.99682539684,
+     377485.51714285713
+    ]
+   }
+  },
+  "aarch64/egglog/saturate/dhrystone-isel-2033": {
+   "latency": {
+    "value": 14597122.027777778,
+    "samples": [
+     15621875.333333334,
+     16260144.333333334,
+     16854302.888888888,
+     14561221.833333334,
+     14749320.466666667,
+     14633022.222222222,
+     13958836.714285715,
+     14148522.041666666,
+     14020785.25925926,
+     14151261.866666667
+    ]
+   }
+  },
+  "aarch64/egglog/saturate/coremark-instcombine-1377": {
+   "latency": {
+    "value": 666680.4861111111,
+    "samples": [
+     757052.1666666666,
+     696340,
+     692460.1111111111,
+     669730.75,
+     675905.8,
+     663630.2222222222,
+     657327.380952381,
+     658596.1041666666,
+     646804.4074074074,
+     642428.55
+    ]
+   }
+  },
+  "aarch64/egglog/saturate/coremark-isel-2665": {
+   "latency": {
+    "value": 24874445.025,
+    "samples": [
+     25552827,
+     25416008.75,
+     25756018.166666668,
+     26038166.5,
+     26596301.7,
+     24022332.166666668,
+     24168726.35714286,
+     24188796.25,
+     24185104.555555556,
+     24332881.3
+    ]
+   }
+  },
+  "aarch64/egglog/saturate/coremark-isel-534": {
+   "latency": {
+    "value": 6587314.3481481485,
+    "samples": [
+     7223507.111111111,
+     6837759.666666667,
+     6735685.259259259,
+     6718396.722222222,
+     6597020.066666666,
+     6577608.62962963,
+     6562498.920634921,
+     6554669.180555556,
+     6569030.160493827,
+     6567930.944444444
+    ]
+   }
+  },
+  "aarch64/egglog/saturate/whetstone-instcombine-1450": {
+   "latency": {
+    "value": 805137.35,
+    "samples": [
+     892830,
+     893391,
+     839713.8,
+     831182.55,
+     807165,
+     803109.7,
+     787157.2571428572,
+     783950.875,
+     770445.8,
+     774078.22
+    ]
+   }
+  },
+  "aarch64/egglog/saturate/whetstone-isel-1597": {
+   "latency": {
+    "value": 10663726.892857142,
+    "samples": [
+     11787197,
+     12175734,
+     10783945.666666666,
+     10769076.5,
+     10778486,
+     10418770.5,
+     10558377.285714285,
+     10219911.90625,
+     10261698.888888888,
+     10296350.4
+    ]
+   }
+  },
+  "aarch64/tir/ematch/coremark-instcombine-206": {
+   "latency": {
+    "value": 8372.776235140202,
+    "samples": [
+     8635.763582421658,
+     8355.268218060448,
+     8343.333364237593,
+     8332.340000927128,
+     8386.498498053032,
+     8377.0880616849,
+     8396.146261026199,
+     8416.19720007417,
+     8368.464408595504,
+     8351.211477841647
+    ]
+   }
+  },
+  "aarch64/tir/ematch/dhrystone-isel-2033": {
+   "latency": {
+    "value": 1529395.8492592592,
+    "samples": [
+     1534656.95,
+     1535538.9666666666,
+     1534723.9222222222,
+     1528194.0666666667,
+     1529918.8966666667,
+     1531521.3305555556,
+     1523146.1738095237,
+     1522222.6791666667,
+     1528872.8018518519,
+     1520466.4633333334
+    ]
+   }
+  },
+  "aarch64/tir/ematch/coremark-instcombine-1377": {
+   "latency": {
+    "value": 51316.170236501566,
+    "samples": [
+     51905.64371772805,
+     51321.29718875502,
+     51518.286861732646,
+     51246.44893861159,
+     51220.19323006311,
+     51446.09724612736,
+     51274.81567084665,
+     51488.01584911073,
+     51311.0432842481,
+     51221.42753872633
+    ]
+   }
+  },
+  "aarch64/tir/ematch/coremark-isel-2665": {
+   "latency": {
+    "value": 5943646,
+    "samples": [
+     5991441.25,
+     5975773.28125,
+     5939363.520833333,
+     5947763.6875,
+     5951207.1875,
+     5931572.333333333,
+     5924883.133928572,
+     5939528.3125,
+     5924836.652777778,
+     5948864.775
+    ]
+   }
+  },
+  "aarch64/tir/ematch/coremark-isel-534": {
+   "latency": {
+    "value": 1268245.222635135,
+    "samples": [
+     1264072.7297297297,
+     1269160.6689189188,
+     1269955.792792793,
+     1268405.0506756757,
+     1268085.3945945946,
+     1270045.4301801801,
+     1264486.4478764478,
+     1267498.3091216215,
+     1268748.3078078078,
+     1265447.554054054
+    ]
+   }
+  },
+  "aarch64/tir/ematch/whetstone-instcombine-1450": {
+   "latency": {
+    "value": 88683.56926690703,
+    "samples": [
+     89388.54572271387,
+     88870.87118977384,
+     88701.18387413962,
+     88726.12340216323,
+     88542.2436578171,
+     88651.23156342182,
+     88423.50105351875,
+     88631.26585545723,
+     88665.95465967442,
+     88828.10658800394
+    ]
+   }
+  },
+  "aarch64/tir/ematch/whetstone-isel-1597": {
+   "latency": {
+    "value": 1307630.26056338,
+    "samples": [
+     1308335.3943661973,
+     1309845.6971830986,
+     1307607.20657277,
+     1308576.366197183,
+     1308119.1915492958,
+     1307653.3145539905,
+     1304703.3179074447,
+     1305427.5475352113,
+     1305529.6791862284,
+     1306599.0633802817
+    ]
+   }
+  },
+  "aarch64/tir/seed/coremark-instcombine-206": {
+   "latency": {
+    "value": 76933.37402049427,
+    "samples": [
+     76626.16793248945,
+     76883.46919831223,
+     76986.13023909986,
+     76932.0447257384,
+     76968.02565400844,
+     76957.77158931083,
+     76934.70331525015,
+     76994.06255274262,
+     76852.95208626348,
+     76839.82
+    ]
+   }
+  },
+  "aarch64/tir/seed/dhrystone-isel-2033": {
+   "latency": {
+    "value": 979579.2769563919,
+    "samples": [
+     984692.6881720431,
+     984659.3118279569,
+     982970.8924731183,
+     981908.6075268817,
+     977969.8838709678,
+     976696.7795698924,
+     977759.3579109063,
+     979212.2540322581,
+     979946.2998805257,
+     976582.8075268817
+    ]
+   }
+  },
+  "aarch64/tir/seed/coremark-instcombine-1377": {
+   "latency": {
+    "value": 603284.6058114035,
+    "samples": [
+     603112.2236842106,
+     604283.4967105263,
+     603306.8114035088,
+     604643.4703947369,
+     604711.3065789473,
+     603262.4002192982,
+     603654.8073308271,
+     602273.712993421,
+     602743.1864035088,
+     603238.9210526316
+    ]
+   }
+  },
+  "aarch64/tir/seed/coremark-isel-2665": {
+   "latency": {
+    "value": 951444.6205729167,
+    "samples": [
+     964041.2291666666,
+     955589.234375,
+     950892.4583333334,
+     952258.3463541666,
+     950565.7729166667,
+     949609.8958333334,
+     949700.6235119047,
+     950996.9973958334,
+     951936.8692129629,
+     951892.24375
+    ]
+   }
+  },
+  "aarch64/tir/seed/coremark-isel-534": {
+   "latency": {
+    "value": 135436.70516169153,
+    "samples": [
+     135953.10746268657,
+     135285.78134328357,
+     135438.55024875622,
+     135434.86007462686,
+     135512.18537313433,
+     135392.8830845771,
+     135423.3051172708,
+     135445.64720149254,
+     135468.25555555554,
+     135361.96985074627
+    ]
+   }
+  },
+  "aarch64/tir/seed/whetstone-instcombine-1450": {
+   "latency": {
+    "value": 695686.9646464647,
+    "samples": [
+     696533.1818181818,
+     694998.5037878788,
+     697766.9520202021,
+     697308.0359848485,
+     679962.6712121213,
+     696375.4255050505,
+     687899.4534632035,
+     693570.7481060605,
+     691106.6641414141,
+     704660.1015151516
+    ]
+   }
+  },
+  "aarch64/tir/seed/whetstone-isel-1597": {
+   "latency": {
+    "value": 709609.5957364341,
+    "samples": [
+     709854.8837209302,
+     711737.6627906977,
+     712944.496124031,
+     710454.5891472868,
+     707683.088372093,
+     709320.6666666666,
+     709143.9080841639,
+     709064.8217054263,
+     709959.0499569337,
+     709364.307751938
+    ]
+   }
+  },
+  "aarch64/tir/extract/coremark-instcombine-206": {
+   "latency": {
+    "value": 17789.716866995073,
+    "samples": [
+     17908.77852216749,
+     17838.06275862069,
+     17821.0681773399,
+     17963.696256157637,
+     17989.652137931036,
+     17737.36187192118,
+     17668.77145672062,
+     17601.623399014778,
+     17740.300054734536,
+     17758.365556650246
+    ]
+   }
+  },
+  "aarch64/tir/extract/dhrystone-isel-2033": {
+   "latency": {
+    "value": 899140.1315789474,
+    "samples": [
+     921943.6929824562,
+     914880.3333333334,
+     891606.6812865497,
+     908906.7850877193,
+     609553.8385964913,
+     906673.581871345,
+     908700.07518797,
+     887676.4627192982,
+     609592.0604288499,
+     888653.0684210527
+    ]
+   }
+  },
+  "aarch64/tir/extract/coremark-instcombine-1377": {
+   "latency": {
+    "value": 158171.53246376812,
+    "samples": [
+     159023.9356521739,
+     157600.51826086958,
+     157906.37391304347,
+     153079.32347826086,
+     156341.0643478261,
+     159031.91014492753,
+     160804.07180124224,
+     157107.97152173912,
+     158436.69101449277,
+     160151.09669565217
+    ]
+   }
+  },
+  "aarch64/tir/extract/coremark-isel-2665": {
+   "latency": {
+    "value": 2932248.51171875,
+    "samples": [
+     2956329.28125,
+     3028756.828125,
+     2928071.875,
+     2936425.1484375,
+     2924374.95,
+     2991756.7604166665,
+     2891798.245535714,
+     2881488.26953125,
+     2352172.3229166665,
+     3001933.421875
+    ]
+   }
+  },
+  "aarch64/tir/extract/coremark-isel-534": {
+   "latency": {
+    "value": 561209.7204498977,
+    "samples": [
+     567284.2576687117,
+     563384.8957055215,
+     561730.6114519427,
+     566115.1809815951,
+     551197.9693251534,
+     549666.9713701431,
+     570253.0403155127,
+     542518.6549079755,
+     559247.8793456033,
+     560688.8294478528
+    ]
+   }
+  },
+  "aarch64/tir/extract/whetstone-instcombine-1450": {
+   "latency": {
+    "value": 154766.98596597812,
+    "samples": [
+     158561.74726609964,
+     106627.31895504253,
+     105854.82341028757,
+     105921.79191980559,
+     154644.17424058323,
+     154889.79769137304,
+     158563.54191980558,
+     158687.29571688944,
+     158462.95558255704,
+     153530.9496962333
+    ]
+   }
+  },
+  "aarch64/tir/extract/whetstone-isel-1597": {
+   "latency": {
+    "value": 673967.4927389706,
+    "samples": [
+     679932.3235294118,
+     671753.8676470588,
+     675384.5294117647,
+     676612.4650735294,
+     648092.9323529411,
+     644967.118872549,
+     677897.6428571428,
+     672583.4972426471,
+     669180.2785947713,
+     675351.4882352941
+    ]
+   }
+  },
+  "aarch64/tir/saturate/coremark-instcombine-206": {
+   "latency": {
+    "value": 34294.05524644605,
+    "samples": [
+     28081.25122349103,
+     28663.34013050571,
+     32209.88036976618,
+     34160.84257748777,
+     34748.20065252855,
+     34876.74632952692,
+     34389.58051736192,
+     34198.52997553018,
+     34529.9668297988,
+     34438.16313213703
+    ]
+   }
+  },
+  "aarch64/tir/saturate/dhrystone-isel-2033": {
+   "latency": {
+    "value": 4659469.046875,
+    "samples": [
+     4595360.1875,
+     4612985.0625,
+     4622471.229166667,
+     4653744.8125,
+     4664784.55,
+     4657798.96875,
+     4666908.241071428,
+     4668543.875,
+     4661139.125,
+     4663884.43125
+    ]
+   }
+  },
+  "aarch64/tir/saturate/coremark-instcombine-1377": {
+   "latency": {
+    "value": 123958.81701923077,
+    "samples": [
+     113519.56153846154,
+     119874.30384615385,
+     122977.7923076923,
+     123767.03461538462,
+     124303.64,
+     124088.13205128205,
+     124756.73846153847,
+     123991.44711538461,
+     124113.04017094018,
+     123926.18692307692
+    ]
+   }
+  },
+  "aarch64/tir/saturate/coremark-isel-2665": {
+   "latency": {
+    "value": 15899595.521825396,
+    "samples": [
+     15860180.166666666,
+     15849449.083333334,
+     15874811.444444444,
+     15951974.375,
+     15925229.666666666,
+     15904128.638888888,
+     15895062.404761905,
+     15870055.5625,
+     16035720.370370371,
+     16009790.233333332
+    ]
+   }
+  },
+  "aarch64/tir/saturate/coremark-isel-534": {
+   "latency": {
+    "value": 3846080.883838384,
+    "samples": [
+     3861930.1818181816,
+     3827664.977272727,
+     3831902.4545454546,
+     3855993.2613636362,
+     3840315.190909091,
+     3850848.3106060605,
+     3850610.0064935065,
+     3846347.772727273,
+     3845813.994949495,
+     3841936.168181818
+    ]
+   }
+  },
+  "aarch64/tir/saturate/whetstone-instcombine-1450": {
+   "latency": {
+    "value": 150588.87192982459,
+    "samples": [
+     138051.41228070174,
+     138410.6447368421,
+     141710.11988304093,
+     146725.8201754386,
+     149934.21403508773,
+     151441.70906432747,
+     151410.93107769423,
+     151686.81030701756,
+     151265.58479532163,
+     151243.5298245614
+    ]
+   }
+  },
+  "aarch64/tir/saturate/whetstone-isel-1597": {
+   "latency": {
+    "value": 3663076.6507936507,
+    "samples": [
+     3656750.285714286,
+     3627167.738095238,
+     3641971.523809524,
+     3656101.476190476,
+     3658588.714285714,
+     3667564.587301587,
+     3676167.1904761903,
+     3678188.1071428573,
+     3681084.888888889,
+     3693045.1666666665
+    ]
+   }
+  },
+  "aarch64/large_asm/lex": {
+   "latency": {
+    "value": 9582.217375533179,
+    "samples": [
+     9690.421543947976,
+     9771.583857772184,
+     9638.34263338228,
+     9586.94018774911,
+     9589.535179358087,
+     9577.49456331725,
+     9573.74380412958,
+     9564.542466435914,
+     9557.41402699112,
+     9564.593192783721
+    ]
+   }
+  },
+  "aarch64/x86_defs/collect_and_expand": {
+   "latency": {
+    "value": 24958411.236111112,
+    "samples": [
+     21936588,
+     24442876.375,
+     25257633.083333332,
+     23337115.6875,
+     23499239.15,
+     25695825.041666668,
+     27172675.85714286,
+     24977780.75,
+     24939041.722222224,
+     25355719.9
+    ]
+   }
+  },
+  "aarch64/large_instr_template/lex": {
+   "latency": {
+    "value": 2344813.690883191,
+    "samples": [
+     2340786.0256410255,
+     2345280.230769231,
+     2345013.3846153845,
+     2345777.685897436,
+     2343957.5743589746,
+     2344993.3846153845,
+     2343162.4249084247,
+     2344562.871794872,
+     2344633.997150997,
+     2345141.8666666667
+    ]
+   }
+  },
+  "aarch64/large_instr_template/parse": {
+   "latency": {
+    "value": 2402044.685855263,
+    "samples": [
+     2401285,
+     2400428.6710526315,
+     2402605.1228070175,
+     2401961.289473684,
+     2401659.668421053,
+     2403665.486842105,
+     2402539.454887218,
+     2402128.0822368423,
+     2401832.0555555555,
+     2403350.681578947
+    ]
+   }
+  },
+  "x86_64/fcc/codegen_expr_heavy/ast_to_ir": {
+   "latency": {
+    "value": 99247015.25,
+    "samples": [
+     101901501,
+     103717481.5,
+     103486831,
+     102016005.5,
+     99481560.5,
+     97906179.5,
+     99012470,
+     98948158.5,
+     98604778.5,
+     98062473
+    ]
+   }
+  },
+  "x86_64/fcc/promote/promote": {
+   "latency": {
+    "value": 293783675,
+    "samples": [
+     290742984.5,
+     299190650,
+     289334886.5,
+     290058584.5,
+     296755910.5,
+     301796228,
+     289878215,
+     293223468.5,
+     328873309,
+     294343881.5
+    ]
+   }
+  },
+  "x86_64/fcc/pipeline/source_to_ir": {
+   "latency": {
+    "value": 46654484.40625,
+    "samples": [
+     46651837,
+     46878605.75,
+     47576361.5,
+     45794116.25,
+     46218559.3,
+     46881206.916666664,
+     45902919.85714286,
+     46657131.8125,
+     46513318.05555555,
+     46832493.45
+    ]
+   }
+  },
+  "x86_64/fcc/codegen/ast_to_ir": {
+   "latency": {
+    "value": 15289415.139285713,
+    "samples": [
+     17162192,
+     15633465,
+     15017751.5,
+     14410899.375,
+     14458727,
+     15743904,
+     15257122.42857143,
+     15387706.75,
+     15003703.333333334,
+     15321707.85
+    ]
+   }
+  },
+  "x86_64/egg/ematch/coremark-instcombine-1377": {
+   "latency": {
+    "value": 22642.525063307166,
+    "samples": [
+     22594.84021271208,
+     23348.056216763736,
+     22572.1136996708,
+     22540.17339832869,
+     22784.58034945556,
+     23447.713429560226,
+     22673.14835582245,
+     22625.063623702204,
+     22532.819082186772,
+     22659.98650291213
+    ]
+   }
+  },
+  "x86_64/egg/ematch/coremark-instcombine-206": {
+   "latency": {
+    "value": 3364.0729614376637,
+    "samples": [
+     3364.1105952826656,
+     3374.029913889929,
+     3356.8091975539746,
+     3476.665574691127,
+     3364.035327592662,
+     3338.8530637713716,
+     3368.026250200567,
+     3405.9972622613254,
+     3350.4404093348307,
+     3355.975874204418
+    ]
+   }
+  },
+  "x86_64/egg/ematch/coremark-isel-534": {
+   "latency": {
+    "value": 721558.378,
+    "samples": [
+     726736.456,
+     724530.696,
+     727328.1946666667,
+     723544.788,
+     719571.968,
+     719378.6373333334,
+     717256.7782857143,
+     716956.146,
+     724511.3333333334,
+     716618.2176
+    ]
+   }
+  },
+  "x86_64/egg/ematch/coremark-isel-2665": {
+   "latency": {
+    "value": 3776860.6799999997,
+    "samples": [
+     3769263.44,
+     3751734.12,
+     3784457.92,
+     3748434.62,
+     3760369.808,
+     3789339.2666666666,
+     3837367.3485714286,
+     3801353.965,
+     3752963.2,
+     3938911.252
+    ]
+   }
+  },
+  "x86_64/egg/ematch/whetstone-instcombine-1450": {
+   "latency": {
+    "value": 25159.448325862406,
+    "samples": [
+     25055.59536152797,
+     24896.5551159618,
+     25143.16116416553,
+     25095.41330150068,
+     25399.384447476124,
+     25732.889313324238,
+     25162.09670629507,
+     25177.705729877216,
+     25696.589025314537,
+     25156.799945429742
+    ]
+   }
+  },
+  "x86_64/egg/ematch/dhrystone-isel-2033": {
+   "latency": {
+    "value": 916059.8241666667,
+    "samples": [
+     920542.57,
+     913165.025,
+     916359.2033333334,
+     926089.755,
+     922628.494,
+     937752.18,
+     914863.5085714286,
+     915760.445,
+     909462.5644444445,
+     909983.528
+    ]
+   }
+  },
+  "x86_64/egg/ematch/whetstone-isel-1597": {
+   "latency": {
+    "value": 690094.4950757576,
+    "samples": [
+     690374.5984848485,
+     696145.4659090909,
+     699747.851010101,
+     685608.0871212122,
+     684504.9,
+     683007.9267676767,
+     694363.4145021645,
+     691930.7178030303,
+     687679.8535353536,
+     689814.3916666667
+    ]
+   }
+  },
+  "x86_64/egg/seed/coremark-instcombine-1377": {
+   "latency": {
+    "value": 441698.5970784449,
+    "samples": [
+     438595.82608695654,
+     442098.2657004831,
+     443427.3236714976,
+     443087.7053140097,
+     443278.1816425121,
+     442076.75040257646,
+     441320.44375431334,
+     440255.65036231885,
+     440542.6317767042,
+     440463.93285024154
+    ]
+   }
+  },
+  "x86_64/egg/seed/coremark-instcombine-206": {
+   "latency": {
+    "value": 51565.1601244558,
+    "samples": [
+     51563.02271436684,
+     51614.07098239636,
+     51579.31875828128,
+     51557.49091425326,
+     51594.76763202726,
+     51565.501892863904,
+     51569.59917254806,
+     51564.8183560477,
+     51558.76200391192,
+     51548.4395229983
+    ]
+   }
+  },
+  "x86_64/egg/seed/coremark-isel-534": {
+   "latency": {
+    "value": 136025.3456818182,
+    "samples": [
+     136017.1181818182,
+     135499.38863636364,
+     134725.94949494948,
+     135328.8428030303,
+     136639.46515151515,
+     136811.82474747475,
+     136420.8800865801,
+     136932.60833333334,
+     135979.34393939393,
+     136033.57318181818
+    ]
+   }
+  },
+  "x86_64/egg/seed/coremark-isel-2665": {
+   "latency": {
+    "value": 801935.4326086957,
+    "samples": [
+     816904.3130434783,
+     805184.3913043478,
+     804867.4666666667,
+     807055.5978260869,
+     800878.5547826086,
+     801970.3782608695,
+     801900.4869565218,
+     800068.6184782608,
+     801631.8898550725,
+     799022.3617391305
+    ]
+   }
+  },
+  "x86_64/egg/seed/whetstone-instcombine-1450": {
+   "latency": {
+    "value": 546716.502994012,
+    "samples": [
+     546706.1736526946,
+     546927.254491018,
+     548758.4530938123,
+     546726.8323353294,
+     545446.5880239521,
+     547040.9201596807,
+     546236.0487596237,
+     546915.4416167665,
+     546621.618097139,
+     545952.0646706587
+    ]
+   }
+  },
+  "x86_64/egg/seed/dhrystone-isel-2033": {
+   "latency": {
+    "value": 575072.848108747,
+    "samples": [
+     586531.1843971631,
+     583674.1773049645,
+     575569.5791962175,
+     574576.1170212766,
+     578766.2113475177,
+     578836.3416075651,
+     574158.0172239109,
+     573480.4530141844,
+     573235.0417651695,
+     573265.7638297873
+    ]
+   }
+  },
+  "x86_64/egg/seed/whetstone-isel-1597": {
+   "latency": {
+    "value": 583387.5977707007,
+    "samples": [
+     585985.5286624203,
+     586147.9076433121,
+     584892.0488322717,
+     580420,
+     584308.7656050955,
+     579283.8078556263,
+     589620.0081892629,
+     578170.1194267516,
+     578971.5067232838,
+     582466.4299363057
+    ]
+   }
+  },
+  "x86_64/egg/saturate/coremark-instcombine-1377": {
+   "latency": {
+    "value": 307355.77920081967,
+    "samples": [
+     256825.50819672132,
+     287801.6844262295,
+     286770.237704918,
+     302475.8831967213,
+     313414.2704918033,
+     307940.93032786885,
+     311154.0725995316,
+     306770.6280737705,
+     313481.89344262297,
+     312286.2221311475
+    ]
+   }
+  },
+  "x86_64/egg/saturate/coremark-instcombine-206": {
+   "latency": {
+    "value": 38661.42171814672,
+    "samples": [
+     30435.1472972973,
+     30194.576351351352,
+     31854.95900900901,
+     35352.47635135135,
+     37704.34864864865,
+     39785.80563063063,
+     39618.494787644784,
+     41092.82449324324,
+     40948.38978978979,
+     41097.52472972973
+    ]
+   }
+  },
+  "x86_64/egg/saturate/coremark-isel-534": {
+   "latency": {
+    "value": 5152747.7647058815,
+    "samples": [
+     4958852.235294118,
+     5021911.852941177,
+     5159993.647058823,
+     5136676.588235294,
+     5058098.788235294,
+     5237195.55882353,
+     5145501.882352941,
+     5162454.588235294,
+     5180713.398692811,
+     5177330.429411764
+    ]
+   }
+  },
+  "x86_64/egg/saturate/coremark-isel-2665": {
+   "latency": {
+    "value": 23450656.2125,
+    "samples": [
+     22750801.75,
+     22506854.625,
+     23653020.5,
+     23626653.6875,
+     23539711.7,
+     23581034.958333332,
+     23608984.5,
+     23244366.5,
+     23230797.916666668,
+     23361600.725
+    ]
+   }
+  },
+  "x86_64/egg/saturate/whetstone-instcombine-1450": {
+   "latency": {
+    "value": 308889.906779661,
+    "samples": [
+     248538.66949152542,
+     251894.33474576272,
+     270327.6779661017,
+     310289.16101694916,
+     307490.6525423729,
+     302959.3079096045,
+     311405.0484261501,
+     315444.34851694916,
+     312882.34934086626,
+     315134.3610169492
+    ]
+   }
+  },
+  "x86_64/egg/saturate/dhrystone-isel-2033": {
+   "latency": {
+    "value": 6559034.598611111,
+    "samples": [
+     6429945.166666667,
+     6376566.875,
+     6552234.194444444,
+     6518441.3125,
+     6564822.433333334,
+     6553246.763888889,
+     7154194.488095238,
+     6747421.46875,
+     6644048.305555556,
+     6634099.908333333
+    ]
+   }
+  },
+  "x86_64/egg/saturate/whetstone-isel-1597": {
+   "latency": {
+    "value": 5207638.675000001,
+    "samples": [
+     5047290.8125,
+     5060066.90625,
+     5087824.916666667,
+     5114068.921875,
+     5182712.2125,
+     5271554.666666667,
+     5255049.544642857,
+     5309905.078125,
+     5240457.208333333,
+     5232565.1375
+    ]
+   }
+  },
+  "x86_64/egg/extract/coremark-instcombine-1377": {
+   "latency": {
+    "value": 209342.43649885582,
+    "samples": [
+     207098.07780320366,
+     207754.11212814646,
+     214910.56140350876,
+     214168.73398169337,
+     206432.08192219678,
+     208455.03546910756,
+     207503.07191892774,
+     226553.7868993135,
+     210229.8375286041,
+     227932.44210526315
+    ]
+   }
+  },
+  "x86_64/egg/extract/coremark-instcombine-206": {
+   "latency": {
+    "value": 20313.457877094974,
+    "samples": [
+     20323.212960893856,
+     20233.592290502795,
+     20176.169310986963,
+     20395.433854748604,
+     20403.11865921788,
+     20483.821527001863,
+     20246.725139664806,
+     20303.70279329609,
+     20279.815394165114,
+     20443.834525139664
+    ]
+   }
+  },
+  "x86_64/egg/extract/coremark-isel-534": {
+   "latency": {
+    "value": 616254.5506756756,
+    "samples": [
+     616121.1756756756,
+     616387.9256756756,
+     618109.75,
+     611140.347972973,
+     612731.7351351351,
+     618310.3637387387,
+     607651.6496138996,
+     617061.65625,
+     616709.0217717717,
+     610051.0682432433
+    ]
+   }
+  },
+  "x86_64/egg/extract/coremark-isel-2665": {
+   "latency": {
+    "value": 4545976.772222223,
+    "samples": [
+     4542170.75,
+     4549329.875,
+     4526764.266666667,
+     4543714.4,
+     4565374.58,
+     4594575.35,
+     4534097.842857143,
+     4551061.53125,
+     4548239.144444444,
+     4534257.88
+    ]
+   }
+  },
+  "x86_64/egg/extract/whetstone-instcombine-1450": {
+   "latency": {
+    "value": 379894.84917355375,
+    "samples": [
+     380392.0661157025,
+     379353.5351239669,
+     383312.347107438,
+     378401.28305785125,
+     379397.63223140495,
+     400971.8670798898,
+     381722.74675324676,
+     379066.6740702479,
+     390821.1225895317,
+     378790.6165289256
+    ]
+   }
+  },
+  "x86_64/egg/extract/dhrystone-isel-2033": {
+   "latency": {
+    "value": 1584059.9651067322,
+    "samples": [
+     1602102.2931034483,
+     1592255.3103448276,
+     1589174.132183908,
+     1574234.7413793104,
+     1597775.9137931035,
+     1576831.4913793104,
+     1578945.7980295566,
+     1578562.2629310344,
+     1599955.3199233715,
+     1564043.6137931035
+    ]
+   }
+  },
+  "x86_64/egg/extract/whetstone-isel-1597": {
+   "latency": {
+    "value": 1418057.18046875,
+    "samples": [
+     1430981.203125,
+     1417998.3515625,
+     1420010.484375,
+     1398912.32421875,
+     1418116.009375,
+     1405505.6640625,
+     1414127.84375,
+     1415822.53125,
+     1424047.9774305555,
+     1441183.1796875
+    ]
+   }
+  },
+  "x86_64/egglog/saturate/coremark-instcombine-1377": {
+   "latency": {
+    "value": 573205.0666666667,
+    "samples": [
+     680849.5,
+     606301.8333333334,
+     608343,
+     582880.2083333334,
+     582276.4666666667,
+     564133.6666666666,
+     561120.5,
+     554375.9791666666,
+     549256.6851851852,
+     546639.4166666666
+    ]
+   }
+  },
+  "x86_64/egglog/saturate/coremark-instcombine-206": {
+   "latency": {
+    "value": 334994.07857142854,
+    "samples": [
+     343229.61904761905,
+     343932.9285714286,
+     340378.40476190473,
+     338204.90476190473,
+     335581.25238095236,
+     334406.90476190473,
+     333988.98979591834,
+     331785.8333333333,
+     331393.9894179894,
+     332429.10476190475
+    ]
+   }
+  },
+  "x86_64/egglog/saturate/coremark-isel-534": {
+   "latency": {
+    "value": 5000648.063636364,
+    "samples": [
+     4916771.818181818,
+     5054368.863636363,
+     5064017.060606061,
+     5016810.2272727275,
+     4999354.4,
+     5001941.7272727275,
+     5012534.792207792,
+     4965832.3522727275,
+     4935729.070707071,
+     4881862.0636363635
+    ]
+   }
+  },
+  "x86_64/egglog/saturate/coremark-isel-2665": {
+   "latency": {
+    "value": 18991973.708333336,
+    "samples": [
+     19021603,
+     20075768.5,
+     19619577.333333332,
+     18962344.416666668,
+     19035032.133333333,
+     19106017.666666668,
+     18721384.714285713,
+     18569180.416666668,
+     18785966.703703705,
+     18795512.7
+    ]
+   }
+  },
+  "x86_64/egglog/saturate/whetstone-instcombine-1450": {
+   "latency": {
+    "value": 696689.475,
+    "samples": [
+     754125.1666666666,
+     722451.6666666666,
+     726091.9444444445,
+     696795.25,
+     696583.7,
+     676235.0833333334,
+     669542.880952381,
+     731468.2916666666,
+     658425,
+     656793.4833333333
+    ]
+   }
+  },
+  "x86_64/egglog/saturate/dhrystone-isel-2033": {
+   "latency": {
+    "value": 10652157.833333334,
+    "samples": [
+     11722074,
+     11668856,
+     12187760.666666666,
+     10673611.833333334,
+     10716061.2,
+     10630703.833333334,
+     10353143.57142857,
+     10369798.875,
+     10345660.444444444,
+     10390878.633333333
+    ]
+   }
+  },
+  "x86_64/egglog/saturate/whetstone-isel-1597": {
+   "latency": {
+    "value": 7957606.833333334,
+    "samples": [
+     8732089,
+     8390313.625,
+     7921116.916666667,
+     8131793.125,
+     8142526,
+     7775774.708333333,
+     7994096.75,
+     7789607.5,
+     7747677.611111111,
+     7747081.775
+    ]
+   }
+  },
+  "x86_64/tir/extract/coremark-instcombine-1377": {
+   "latency": {
+    "value": 171198.54057428215,
+    "samples": [
+     174608.96629213484,
+     169552.1872659176,
+     171187.23096129837,
+     173372.7799625468,
+     173047.3872659176,
+     171931.65418227215,
+     171209.85018726593,
+     171125.1022940075,
+     169331.16250520182,
+     169910.20093632958
+    ]
+   }
+  },
+  "x86_64/tir/extract/coremark-instcombine-206": {
+   "latency": {
+    "value": 16312.752829551595,
+    "samples": [
+     16631.59589411129,
+     16168.624707365389,
+     16286.640494627529,
+     16366.807806591032,
+     16326.343201872862,
+     16281.17552073954,
+     16350.046358467753,
+     16299.162457230326,
+     16628.12829901755,
+     16294.008031694579
+    ]
+   }
+  },
+  "x86_64/tir/extract/coremark-isel-534": {
+   "latency": {
+    "value": 545904.4148979592,
+    "samples": [
+     598016.5257142857,
+     604797.2657142857,
+     538497.5104761905,
+     599687.4385714285,
+     517523.7634285714,
+     553358.5542857143,
+     542538.0897959183,
+     549270.74,
+     515352.81523809524,
+     528120.5382857143
+    ]
+   }
+  },
+  "x86_64/tir/extract/coremark-isel-2665": {
+   "latency": {
+    "value": 2861716.853046595,
+    "samples": [
+     3091093.1612903224,
+     3072060.806451613,
+     2983279.8924731184,
+     2665631.5322580645,
+     3005893.561290323,
+     3035665.424731183,
+     2261772.350230415,
+     1646477.9919354839,
+     2740153.813620072,
+     2718942.416129032
+    ]
+   }
+  },
+  "x86_64/tir/extract/whetstone-instcombine-1450": {
+   "latency": {
+    "value": 167639.58994425385,
+    "samples": [
+     167119.8730703259,
+     165243.74271012007,
+     163630.37164093766,
+     167629.29588336192,
+     180404.79176672385,
+     171928.06460834763,
+     164512.8024993874,
+     167649.8840051458,
+     175375.7371831523,
+     168835.08747855917
+    ]
+   }
+  },
+  "x86_64/tir/extract/dhrystone-isel-2033": {
+   "latency": {
+    "value": 537381.4803082192,
+    "samples": [
+     543143.698630137,
+     533183.8321917808,
+     538263.8561643836,
+     536499.1044520548,
+     535304.7506849315,
+     909817.046803653,
+     535548.1046966732,
+     950875.6472602739,
+     532142.7990867579,
+     866943.851369863
+    ]
+   }
+  },
+  "x86_64/tir/extract/whetstone-isel-1597": {
+   "latency": {
+    "value": 672352.8518518518,
+    "samples": [
+     678076.1407407407,
+     643798.6481481482,
+     646928.6567901234,
+     680539.05,
+     672366.3229629629,
+     674670.175308642,
+     670332.1915343915,
+     672281.2222222222,
+     673314.778600823,
+     672339.3807407407
+    ]
+   }
+  },
+  "x86_64/tir/ematch/coremark-instcombine-1377": {
+   "latency": {
+    "value": 32869.40055896141,
+    "samples": [
+     32331.143166245944,
+     32815.5663541291,
+     32551.71486957567,
+     32923.23476379373,
+     32564.647313379013,
+     33217.4358095925,
+     32489.686414919375,
+     33239.50495852867,
+     33230.28456945947,
+     33151.73227551388
+    ]
+   }
+  },
+  "x86_64/tir/ematch/coremark-instcombine-206": {
+   "latency": {
+    "value": 5662.902252358812,
+    "samples": [
+     5640.104388255525,
+     5654.273708680976,
+     5718.547120140967,
+     5746.574294630916,
+     5695.47632634864,
+     5623.9363097891855,
+     5660.534833996015,
+     5758.193888924272,
+     5613.717173003843,
+     5665.26967072161
+    ]
+   }
+  },
+  "x86_64/tir/ematch/coremark-isel-534": {
+   "latency": {
+    "value": 867456.3264150943,
+    "samples": [
+     872450.7358490566,
+     864244.1320754717,
+     863124.0597484277,
+     869695.4150943396,
+     868765.0490566038,
+     859194.0817610063,
+     862319.4043126685,
+     885254.3360849057,
+     876158.0545073375,
+     866147.6037735849
+    ]
+   }
+  },
+  "x86_64/tir/ematch/coremark-isel-2665": {
+   "latency": {
+    "value": 4249550.739267677,
+    "samples": [
+     4304432.136363637,
+     4291530.318181818,
+     4224029.2272727275,
+     4242539.625,
+     4331771.572727272,
+     4232337.810606061,
+     4223564.168831169,
+     4226649.420454546,
+     4256561.853535353,
+     4257458.109090909
+    ]
+   }
+  },
+  "x86_64/tir/ematch/whetstone-instcombine-1450": {
+   "latency": {
+    "value": 45204.349105937916,
+    "samples": [
+     45259.70394736842,
+     46040.84109311741,
+     45148.99426450742,
+     44911.709261133605,
+     45038.8463562753,
+     46532.798161268554,
+     46074.68963273569,
+     46163.40890688259,
+     44976.52496626181,
+     44959.4770242915
+    ]
+   }
+  },
+  "x86_64/tir/ematch/dhrystone-isel-2033": {
+   "latency": {
+    "value": 1088466.3914728682,
+    "samples": [
+     1097049.7906976745,
+     1081752.8837209302,
+     1089233.8294573643,
+     1143249.316860465,
+     1094033.1790697675,
+     1087698.953488372,
+     1079441.865448505,
+     1091516.3095930233,
+     1082882.1227390182,
+     1084040.823255814
+    ]
+   }
+  },
+  "x86_64/tir/ematch/whetstone-isel-1597": {
+   "latency": {
+    "value": 848214.0010384216,
+    "samples": [
+     848449.308411215,
+     858718.0700934579,
+     847571.5732087228,
+     844578.5864485982,
+     892812.5700934579,
+     850691.4719626168,
+     846161.9305740988,
+     848820.6647196262,
+     847978.6936656282,
+     843621.531775701
+    ]
+   }
+  },
+  "x86_64/tir/saturate/coremark-instcombine-1377": {
+   "latency": {
+    "value": 113436.40236382323,
+    "samples": [
+     92665.43165467626,
+     104348.92446043165,
+     109866.01199040767,
+     113432.23741007195,
+     119112.48057553956,
+     115143.63069544364,
+     113440.56731757452,
+     132278.40287769784,
+     113965.75539568346,
+     113022.54748201439
+    ]
+   }
+  },
+  "x86_64/tir/saturate/coremark-instcombine-206": {
+   "latency": {
+    "value": 31143.47517348648,
+    "samples": [
+     23175.782244556114,
+     24287.51675041876,
+     29530.38246789503,
+     30700.121440536015,
+     30326.201005025127,
+     32030.57956448911,
+     31586.828906436946,
+     33096.11474036851,
+     33110.67857807556,
+     31862.389279731993
+    ]
+   }
+  },
+  "x86_64/tir/saturate/coremark-isel-534": {
+   "latency": {
+    "value": 3687108.5398550723,
+    "samples": [
+     3640675.8695652173,
+     3634018.217391304,
+     3648372.797101449,
+     3650570.402173913,
+     3655641.1739130435,
+     3718575.9057971016,
+     3760152.0434782607,
+     3741518.5054347827,
+     3779015.270531401,
+     3808875.947826087
+    ]
+   }
+  },
+  "x86_64/tir/saturate/coremark-isel-2665": {
+   "latency": {
+    "value": 14905005.998148147,
+    "samples": [
+     14608244.166666666,
+     14670843.666666666,
+     15107285.333333334,
+     14935453.208333334,
+     14862492.733333332,
+     14816169.111111112,
+     15027993.547619049,
+     15021080.208333334,
+     14884797.462962963,
+     14925214.533333333
+    ]
+   }
+  },
+  "x86_64/tir/saturate/whetstone-instcombine-1450": {
+   "latency": {
+    "value": 123148.6715437788,
+    "samples": [
+     103014,
+     100655.36693548386,
+     107984.24462365592,
+     114136.75201612903,
+     119527.72096774193,
+     127103.5940860215,
+     126769.62211981567,
+     127987.51512096774,
+     126976.74551971327,
+     127395.44032258065
+    ]
+   }
+  },
+  "x86_64/tir/saturate/dhrystone-isel-2033": {
+   "latency": {
+    "value": 4433480.965336135,
+    "samples": [
+     4341678.823529412,
+     4487170.764705882,
+     4339949.705882353,
+     4435130.602941177,
+     4413223.411764706,
+     4399963.088235294,
+     4431831.327731092,
+     4463875.897058823,
+     4465872.666666667,
+     4573730.394117647
+    ]
+   }
+  },
+  "x86_64/tir/saturate/whetstone-isel-1597": {
+   "latency": {
+    "value": 3485529.7795454543,
+    "samples": [
+     3427842.5454545454,
+     3486094.9318181816,
+     3456835.1666666665,
+     3473598.8636363638,
+     3484964.6272727274,
+     3490356.6893939395,
+     3480740.701298701,
+     3513058.210227273,
+     3514996.4595959596,
+     3525896.590909091
+    ]
+   }
+  },
+  "x86_64/tir/seed/coremark-instcombine-1377": {
+   "latency": {
+    "value": 529537.5238825032,
+    "samples": [
+     530666.1781609196,
+     524699.6264367816,
+     527027.143678161,
+     532171.959770115,
+     556024.0712643678,
+     529133.709770115,
+     531856.5533661741,
+     527072.2966954022,
+     529674.0868454662,
+     529400.9609195403
+    ]
+   }
+  },
+  "x86_64/tir/seed/coremark-instcombine-206": {
+   "latency": {
+    "value": 61605.08686215877,
+    "samples": [
+     61512.251181634034,
+     61584.89466576638,
+     61572.52667116813,
+     61391.77464550979,
+     62908.76691424713,
+     61848.28021607022,
+     61625.27905855117,
+     62099.92893315328,
+     61523.260784755046,
+     61710.35307224848
+    ]
+   }
+  },
+  "x86_64/tir/seed/coremark-isel-534": {
+   "latency": {
+    "value": 105486.40346332945,
+    "samples": [
+     106036.28754365542,
+     105778.434225844,
+     105606.79511059371,
+     105461.30529685681,
+     105416.64074505238,
+     105408.30500582072,
+     105618.00931315483,
+     105355.92520372526,
+     105446.49734833786,
+     105511.5016298021
+    ]
+   }
+  },
+  "x86_64/tir/seed/coremark-isel-2665": {
+   "latency": {
+    "value": 844690.0105140186,
+    "samples": [
+     844762.2803738317,
+     844836.4065420561,
+     844041.7040498443,
+     840870.0210280374,
+     847152.3308411215,
+     854880.2414330218,
+     846767.9012016022,
+     844617.7406542056,
+     840648.5088265836,
+     838300.806542056
+    ]
+   }
+  },
+  "x86_64/tir/seed/whetstone-instcombine-1450": {
+   "latency": {
+    "value": 592302.535620915,
+    "samples": [
+     596165.4183006536,
+     592328.1960784313,
+     592715.8758169934,
+     590640.7908496732,
+     590895.6692810458,
+     595031.3965141613,
+     593245.7366946778,
+     590665.9746732026,
+     591479.3042846768,
+     592276.8751633987
+    ]
+   }
+  },
+  "x86_64/tir/seed/dhrystone-isel-2033": {
+   "latency": {
+    "value": 863841.9295238096,
+    "samples": [
+     862916.2666666667,
+     856892.2952380952,
+     860904.9841269841,
+     862398.8738095238,
+     867385.339047619,
+     862960.219047619,
+     864802.8285714285,
+     867638.6892857143,
+     865016.0814814814,
+     864723.64
+    ]
+   }
+  },
+  "x86_64/tir/seed/whetstone-isel-1597": {
+   "latency": {
+    "value": 658567.7488095239,
+    "samples": [
+     658733.5928571429,
+     658571.35,
+     658564.1476190477,
+     658905.2410714285,
+     659843.6628571429,
+     648681.7535714286,
+     650994.8357142857,
+     665596.7892857143,
+     655549.1047619048,
+     648734.0242857143
+    ]
+   }
+  },
+  "x86_64/large_asm/lex": {
+   "latency": {
+    "value": 10913.158398398398,
+    "samples": [
+     11400.6596996997,
+     10927.57081081081,
+     10917.306106106105,
+     10910.357837837837,
+     11006.791759759759,
+     10915.95895895896,
+     10909.646246246246,
+     10897.737402402403,
+     10893.925538872205,
+     10896.074306306306
+    ]
+   }
+  },
+  "x86_64/x86_defs/collect_and_expand": {
+   "latency": {
+    "value": 20077907.914285716,
+    "samples": [
+     20530323.8,
+     19389461.5,
+     20775642.866666667,
+     19620987.85,
+     19254223.92,
+     18802697.333333332,
+     19752101.22857143,
+     20403714.6,
+     21594010.622222222,
+     21744739.2
+    ]
+   }
+  },
+  "x86_64/large_instr_template/lex": {
+   "latency": {
+    "value": 2565796.5571428575,
+    "samples": [
+     2567918.0285714287,
+     2558279.5285714287,
+     2560219.0285714287,
+     2556154.064285714,
+     2563675.0857142857,
+     2558913.3238095236,
+     2567922.0979591836,
+     2594758.475,
+     2603101.050793651,
+     2569643.74
+    ]
+   }
+  },
+  "x86_64/large_instr_template/parse": {
+   "latency": {
+    "value": 2708147.1981792715,
+    "samples": [
+     2702402.7647058824,
+     2726382.794117647,
+     2711552.9803921566,
+     2684739.1985294116,
+     2728692.3294117646,
+     2694286.7303921566,
+     2704741.4159663864,
+     2681452.0220588236,
+     2711643.866013072,
+     2714999.6970588234
+    ]
+   }
+  }
+ }
+}
