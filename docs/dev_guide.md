@@ -36,6 +36,27 @@ cargo xtask test
 unchanged. Each local invocation builds changed tools before running checks. To
 include the pinned GCC torture corpus, use `cargo xtask test --profile ci --torture`.
 
+### Working on Nisyros
+
+`nisyros` is the top-level C ABI offload runtime. Its header is
+`nisyros/include/nisyros.h`. The Vulkan backend loads `libvulkan.so.1` at run
+time and requires `VK_KHR_pipeline_binary` and
+`VK_KHR_device_address_commands`. Pipeline packages are created offline;
+runtime loading does not accept SPIR-V as a fallback.
+
+Run the package parser and Vulkan FFI layout checks with `cargo test -p nisyros`.
+The physical GPU check compiles its shader, captures a native
+pipeline package, and tests the C ABI in a second process:
+
+```sh
+nisyros/tests/run-hardware.sh
+```
+
+That script requires `glslangValidator`, `spirv-val`, the Vulkan validation
+layer, and a device with the strict Vulkan profile. CI runs C and Python ABI
+checks against a software Vulkan ICD. A software device lacking the mandatory
+extensions must be reported as unsupported.
+
 ### Working on the C frontend
 
 FCC keeps its public entry points in `fcc/src/parser.rs`, `sema.rs`,

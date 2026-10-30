@@ -5,6 +5,7 @@ members = [
     "core",
     "fcc",
     "gpu",
+    "nisyros",
     "tir",
     "tmdl",
     "backends/arm64",

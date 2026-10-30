@@ -61,6 +61,26 @@ jobs:
         env:
           LINT_BASE: origin/master
 
+  nisyros-software:
+    needs: formatting
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - run: sudo apt-get update && sudo apt-get install -y libvulkan1 mesa-vulkan-drivers
+      - run: cargo test -p nisyros --locked
+      - run: cargo build -p nisyros --locked
+      - name: Exercise the C ABI through a software Vulkan ICD
+        run: |
+          cc -std=c11 -Wall -Wextra -Werror -I nisyros/include \
+            nisyros/tests/open.c -L target/debug -lnisyros \
+            -Wl,-rpath,"$PWD/target/debug" -o target/debug/nisyros-open
+          icd=$(find /usr/share/vulkan/icd.d -name 'lvp_icd*.json' -print -quit)
+          test -n "$icd"
+          VK_DRIVER_FILES="$icd" target/debug/nisyros-open auto
+          VK_DRIVER_FILES="$icd" python3 nisyros/tests/python_abi.py \
+            target/debug/libnisyros.so
+
   # Build and package once; test shards and memory checks reuse these tools.
   build:
     needs: formatting

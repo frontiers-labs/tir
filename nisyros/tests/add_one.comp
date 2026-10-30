@@ -1,0 +1,26 @@
+#version 460
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_scalar_block_layout : require
+
+layout(buffer_reference, scalar) buffer WordArray {
+    uint values[];
+};
+
+layout(buffer_reference, scalar) buffer Args {
+    WordArray destination;
+    WordArray source;
+    uint count;
+};
+
+layout(push_constant) uniform Root {
+    Args args;
+} root;
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+void main() {
+    uint index = gl_GlobalInvocationID.x;
+    if (index < root.args.count) {
+        root.args.destination.values[index] = root.args.source.values[index] + 1;
+    }
+}
