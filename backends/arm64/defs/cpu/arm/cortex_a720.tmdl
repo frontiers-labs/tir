@@ -25,6 +25,7 @@ machine CortexA720 ("cortex-a720") for [ARMv8A64] {
     // Conservative capacity for classes without direct execution-resource data.
     unit Unmodeled { count = 1; }
     unit Store { count = 2; }
+    unit Convert { count = 1; }
 
     group Integer = Int0 | Int1 | Int2 | Int3;
     group IntegerMultiply = Int0 | Int1;
@@ -79,4 +80,12 @@ machine CortexA720 ("cortex-a720") for [ARMv8A64] {
     override FMovImmediateDouble { latency = 2; uop(Float); }
     override FCmpSingle { latency = 2; uop(Float); }
     override FCmpDouble { latency = 2; uop(Float); }
+
+    // Effective aggregate conversion throughput; this does not identify a physical pipeline.
+    override SCvtfDouble { latency = 3; uop(Float & Convert); }
+    override UCvtfDouble { latency = 3; uop(Float & Convert); }
+    override SCvtfSingle { latency = 3; uop(Float & Convert); }
+    override UCvtfSingle { latency = 3; uop(Float & Convert); }
+    override FCvtDoubleSingle { latency = 3; uop(Float & Convert); }
+    override FCvtSingleDouble { latency = 3; uop(Float & Convert); }
 }
