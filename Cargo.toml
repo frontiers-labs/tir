@@ -11,6 +11,7 @@ members = [
     "backends/x86_64",
     "backends/riscv",
     "libs/adt",
+    "libs/egglog",
     "libs/egraph",
     "libs/jit",
     "libs/relational",
@@ -47,6 +48,7 @@ tir-llvm = { path = "tools/llvm" }
 tir-jit = { path = "libs/jit" }
 tir-relational = { path = "libs/relational" }
 tir-egraph = { path = "libs/egraph" }
+tir-egglog = { path = "libs/egglog" }
 tir-bench = { path = "utils/bench" }
 tir-pdl = { path = "utils/pdl", default-features = false }
 

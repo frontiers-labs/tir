@@ -16,6 +16,7 @@ doctest = false
 [dev-dependencies]
 tir.workspace = true
 tir-adt.workspace = true
+tir-egglog.workspace = true
 tir-egraph.workspace = true
 tir-relational.workspace = true
 tir-symbolic.workspace = true

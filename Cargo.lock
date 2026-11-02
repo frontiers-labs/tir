@@ -2484,6 +2484,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "tir-egglog"
+version = "0.1.0"
+dependencies = [
+ "criterion",
+ "fearless_simd",
+ "tir-adt",
+ "tir-bench",
+]
+
+[[package]]
 name = "tir-egraph"
 version = "0.1.0"
 dependencies = [
@@ -2638,6 +2648,7 @@ dependencies = [
  "tir-arm64",
  "tir-capi",
  "tir-cli",
+ "tir-egglog",
  "tir-egraph",
  "tir-jit",
  "tir-lit",

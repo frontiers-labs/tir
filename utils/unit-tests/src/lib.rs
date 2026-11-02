@@ -151,3 +151,16 @@ fn fixture_root() -> std::path::PathBuf {
         .expect("Cargo test manifest directory")
         .into()
 }
+
+#[cfg(test)]
+mod egglog {
+    mod api;
+    mod containers;
+    mod database;
+    mod differential;
+    mod engine;
+    mod extract;
+    mod passes;
+    mod program;
+    mod reference;
+}
