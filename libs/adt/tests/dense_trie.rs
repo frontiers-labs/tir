@@ -16,6 +16,13 @@ fn rows_in(trie: &DenseTrie, width: usize, range: Range<u32>) -> Vec<Vec<u32>> {
         .collect()
 }
 
+#[test]
+fn largest_key_is_preserved() {
+    let trie = DenseTrie::build(&[&[u32::MAX]], |_| true);
+    assert_eq!(trie.column(0), &[u32::MAX]);
+    assert_eq!(range(&trie, u32::MAX), 0..1);
+}
+
 proptest! {
     /// A batched lookup gives the live rows with each prefix in sorted
     /// order, the same as filtering and sorting the columns by hand, also for
@@ -35,7 +42,6 @@ proptest! {
         stride in prop_oneof![Just(1u32), Just(1000)],
         offset in 0u32..3,
     ) {
-        let length = length.min(width);
         // With `ids`, the last column holds row ids, in order as an engine's do.
         let cell = |row: usize, c: usize, value: u32| match c {
             0 => value % span * stride + offset,
@@ -65,7 +71,7 @@ proptest! {
 
         for (prefix, batched) in prefixes.iter().zip(ranges) {
             let mut want: Vec<Vec<u32>> = rows.iter()
-                .filter(|(row, live)| *live && row[..length] == prefix[..])
+                .filter(|(row, live)| *live && row.starts_with(prefix))
                 .map(|(row, _)| row.clone())
                 .collect();
             want.sort_unstable();

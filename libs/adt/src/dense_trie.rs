@@ -196,7 +196,7 @@ impl DenseTrie {
         let mut starts = 0u32;
         for cell in &mut column[..rows] {
             starts += *cell;
-            *cell = base + starts - 1;
+            *cell = base + (starts - 1);
         }
         self.rows = rows;
     }
@@ -445,6 +445,7 @@ impl DenseTrie {
             "one cell per prefix in each column"
         );
         match prefixes {
+            _ if prefixes.len() > self.columns.len() => out.fill(0..0),
             [] => out.fill(self.all()),
             [first] if self.values.is_empty() => {
                 let (offsets, base) = (&self.offsets[..], self.base);
