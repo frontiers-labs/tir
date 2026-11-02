@@ -4,8 +4,13 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+chumsky = { workspace = true, optional = true }
 fearless_simd = "1.1"
 tir-adt.workspace = true
+
+[features]
+# `EGraph::parse_program`, for programs in egglog's syntax.
+parser = ["dep:chumsky"]
 
 [dev-dependencies]
 criterion.workspace = true
