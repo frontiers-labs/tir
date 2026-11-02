@@ -299,9 +299,25 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
         self.db.schema().sort(id).arcsort()
     }
 
+    fn container_value(&self, value: Value, sort: &ArcSort) -> Value {
+        if self.color == Color::BASE {
+            return value;
+        }
+        sort.value_type()
+            .and_then(|ty| {
+                self.db.container_values().lookup_mapped(
+                    ty,
+                    self.db.find_in(self.color, value),
+                    &|v| self.db.find_in(self.color, v),
+                )
+            })
+            .unwrap_or(value)
+    }
+
     // The cost of `value` of `sort`; `None` if it has no term yet.
     fn cost(&self, value: Value, sort: &ArcSort) -> Option<C> {
         if sort.is_container_sort() {
+            let value = self.container_value(value, sort);
             let elements = sort.inner_values(self.db.container_values(), value);
             let costs: Option<Vec<C>> = elements.iter().map(|(s, v)| self.cost(*v, s)).collect();
             Some(self.model.container(self.db, sort, value, &costs?))
@@ -330,6 +346,7 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
 
     fn has_term(&self, value: Value, sort: &ArcSort) -> bool {
         if sort.is_container_sort() {
+            let value = self.container_value(value, sort);
             sort.inner_values(self.db.container_values(), value)
                 .iter()
                 .all(|(sort, value)| self.has_term(*value, sort))
@@ -420,6 +437,7 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
         }
         let arcsort = self.sort(sort);
         let term = if arcsort.is_container_sort() {
+            let value = self.container_value(value, arcsort);
             let containers = self.db.container_values();
             let elements = arcsort.inner_values(containers, value);
             let terms = (elements.iter())
