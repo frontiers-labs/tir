@@ -1372,3 +1372,216 @@ fn loaded_constant_container_calls_follow_color_unions() {
         assert_eq!(hits, [0, 1]);
     }
 }
+
+mod review_regressions {
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
+};
+use tir_egglog::prelude::*;
+use tir_egglog::{Database, Error, Program, Rules, Schedule, Signature};
+
+#[test]
+fn grouped_index_removes_a_tied_row() {
+    for ordered in [false, true] {
+        let mut db = Database::new();
+        let int = db.sort("i64").unwrap();
+        let t = db.add_relation("t", &[int, int]);
+        let index = db.add_kept_index(t, &[0], if ordered { &[1] } else { &[] });
+        let one = db.base(1_i64);
+        let ten = db.base(10_i64);
+        let twenty = db.base(20_i64);
+        db.insert(t, &[one, ten]).unwrap();
+        db.insert(t, &[one, twenty]).unwrap();
+        db.remove(t, &[one, twenty]);
+        let found: Vec<_> = db.listed(index, &[one]).map(|row| row[1]).collect();
+        assert_eq!(found, [ten], "ordered={ordered}");
+        assert_eq!(db.rows(t).count(), 1);
+        let mut rules = Rules::new();
+        let arg = exprs::arg(0);
+        let out = db.add_relation("out", &[int]);
+        rules
+            .rule(&db, "", facts![(t (unquote arg) y)], actions![(out y)])
+            .unwrap();
+        let mut program = rules.compile(&db).unwrap();
+        program.run(&mut db, &Schedule::run(""), &[one]).unwrap();
+        assert_eq!(db.rows(out).map(|row| row[0]).collect::<Vec<_>>(), [ten]);
+        db.remove(t, &[one, ten]);
+        assert_eq!(db.listed(index, &[one]).count(), 0);
+        db.insert(t, &[one, twenty]).unwrap();
+        assert_eq!(
+            db.listed(index, &[one])
+                .map(|row| row[1])
+                .collect::<Vec<_>>(),
+            [twenty]
+        );
+    }
+}
+
+#[test]
+fn hoisted_panic_is_an_error_on_each_attempt_and_recovers_after_rebinding() {
+    for loaded in [false, true] {
+        for result_after_panic in [false, true] {
+            for primed in [false, true] {
+                let mut db = Database::new();
+                let int = db.sort("i64").unwrap();
+                let out = db.add_relation("out", &[int]);
+                let signature = || Signature {
+                    inputs: vec![int],
+                    output: int,
+                };
+                let attempts = Arc::new(AtomicUsize::new(0));
+                let recorded = attempts.clone();
+                db.add_primitive("scalar", signature(), move |ctx, args| {
+                    recorded.fetch_add(1, Ordering::SeqCst);
+                    if ctx.base_value::<i64>(args[0]) == 2 {
+                        ctx.panic();
+                        return result_after_panic.then_some(args[0]);
+                    }
+                    Some(args[0])
+                });
+                let arg = exprs::arg(0);
+                let mut rules = Rules::new();
+                rules
+                    .rule(
+                        &db,
+                        "",
+                        facts![(= n (scalar (unquote arg)))],
+                        actions![(out n)],
+                    )
+                    .unwrap();
+                let mut program = rules.compile(&db).unwrap();
+                if loaded {
+                    program = Program::from_bytes(&program.to_bytes(), &mut db).unwrap();
+                }
+                let one = db.base(1_i64);
+                let two = db.base(2_i64);
+                if primed {
+                    program.run(&mut db, &Schedule::run(""), &[one]).unwrap();
+                }
+                let expected = if primed { vec![one] } else { vec![] };
+                for _ in 0..2 {
+                    let result = program.run(&mut db, &Schedule::run(""), &[two]);
+                    assert!(
+                        matches!(result, Err(Error::Panic(_))),
+                        "{result:?}, loaded={loaded}"
+                    );
+                    assert_eq!(db.rows(out).map(|row| row[0]).collect::<Vec<_>>(), expected);
+                }
+                assert_eq!(attempts.load(Ordering::SeqCst), 2 + usize::from(primed));
+                db.add_primitive("scalar", signature(), |_, args| Some(args[0]));
+                program.run(&mut db, &Schedule::run(""), &[two]).unwrap();
+                let mut rows: Vec<i64> = db.rows(out).map(|row| db.base_value(row[0])).collect();
+                rows.sort_unstable();
+                assert_eq!(rows, if primed { vec![1, 2] } else { vec![2] });
+            }
+        }
+    }
+}
+
+#[test]
+fn ordinary_hoisted_failure_is_cached_and_new_arguments_refresh_it() {
+    let mut db = Database::new();
+    let int = db.sort("i64").unwrap();
+    let out = db.add_relation("out", &[int]);
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let recorded = attempts.clone();
+    db.add_primitive(
+        "scalar",
+        Signature {
+            inputs: vec![int],
+            output: int,
+        },
+        move |ctx, args| {
+            recorded.fetch_add(1, Ordering::SeqCst);
+            (ctx.base_value::<i64>(args[0]) != 2).then_some(args[0])
+        },
+    );
+    let mut rules = Rules::new();
+    let arg = exprs::arg(0);
+    rules
+        .rule(
+            &db,
+            "",
+            facts![(= n (scalar (unquote arg)))],
+            actions![(out n)],
+        )
+        .unwrap();
+    let mut program = rules.compile(&db).unwrap();
+    let two = db.base(2_i64);
+    for _ in 0..2 {
+        program.run(&mut db, &Schedule::run(""), &[two]).unwrap();
+    }
+    assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    assert_eq!(db.rows(out).count(), 0);
+    let three = db.base(3_i64);
+    program.run(&mut db, &Schedule::run(""), &[three]).unwrap();
+    assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    assert_eq!(db.rows(out).map(|row| row[0]).collect::<Vec<_>>(), [three]);
+}
+
+#[test]
+fn negative_only_variables_cannot_be_used_by_actions() {
+    let mut db = Database::new();
+    let int = db.sort("i64").unwrap();
+    db.add_relation("blocked", &[int]);
+    db.add_relation("out", &[int]);
+    let mut rules = Rules::new();
+    let result = rules.naive_rule(&db, "", facts![(not (blocked x))], actions![(out x)]);
+    assert!(
+        matches!(result, Err(Error::Type(_, message)) if message.contains("unbound variable `x`"))
+    );
+}
+
+#[test]
+fn negative_variables_correlate_with_positive_atoms_in_either_order() {
+    for negative_first in [false, true] {
+        let mut db = Database::new();
+        let int = db.sort("i64").unwrap();
+        let item = db.add_relation("item", &[int]);
+        let blocked = db.add_relation("blocked", &[int]);
+        let out = db.add_relation("out", &[int]);
+        let mut rules = Rules::new();
+        let facts = if negative_first {
+            facts![(not (blocked x)) (item x)]
+        } else {
+            facts![(item x) (not (blocked x))]
+        };
+        rules.naive_rule(&db, "", facts, actions![(out x)]).unwrap();
+        let mut program = rules.compile(&db).unwrap();
+        let one = db.base(1_i64);
+        let two = db.base(2_i64);
+        db.insert(item, &[one]).unwrap();
+        db.insert(item, &[two]).unwrap();
+        db.insert(blocked, &[two]).unwrap();
+        program.run(&mut db, &Schedule::run(""), &[]).unwrap();
+        assert_eq!(db.rows(out).map(|row| row[0]).collect::<Vec<_>>(), [one]);
+    }
+}
+
+#[test]
+fn negative_locals_remain_existential_and_equalities_keep_correlations() {
+    for body in [
+        facts![(not (blocked local)) (= x 1)],
+        facts![(not (blocked alias)) (= alias x) (item x)],
+    ] {
+        let mut db = Database::new();
+        let int = db.sort("i64").unwrap();
+        let item = db.add_relation("item", &[int]);
+        let blocked = db.add_relation("blocked", &[int]);
+        let out = db.add_relation("out", &[int]);
+        let mut rules = Rules::new();
+        rules.naive_rule(&db, "", body, actions![(out x)]).unwrap();
+        let mut program = rules.compile(&db).unwrap();
+        let one = db.base(1_i64);
+        db.insert(item, &[one]).unwrap();
+        program.run(&mut db, &Schedule::run(""), &[]).unwrap();
+        assert_eq!(db.rows(out).map(|row| row[0]).collect::<Vec<_>>(), [one]);
+        db.remove(out, &[one]);
+        db.insert(blocked, &[one]).unwrap();
+        program.run(&mut db, &Schedule::run(""), &[]).unwrap();
+        assert_eq!(db.rows(out).count(), 0);
+    }
+}
+
+}
