@@ -470,3 +470,171 @@ fn vec_union_unions_the_elements() -> Result<(), Error> {
     check(&mut eg, vec![Fact::Eq(span!(), expr!((A)), expr!((B)))]);
     Ok(())
 }
+
+fn function_graph() -> (EGraph, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+    use tir_egglog::{Context, Signature};
+    let mut eg = EGraph::default();
+    add_relation(&mut eg, "R", vec!["i64".into()]).unwrap();
+    add_relation(&mut eg, "Out", vec!["i64".into()]).unwrap();
+    add_function(
+        &mut eg,
+        "f",
+        tir_egglog::ast::Schema::new(vec!["i64".into()], "i64".into()),
+        None,
+    )
+    .unwrap();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let hits = calls.clone();
+    let db = eg.database_mut();
+    let int = db.sort("i64").unwrap();
+    db.add_primitive_in(
+        "read-only",
+        Signature {
+            inputs: vec![int],
+            output: int,
+        },
+        &[Context::Read],
+        move |ctx, _| {
+            hits.fetch_add(1, Ordering::Relaxed);
+            Some(ctx.base(7_i64))
+        },
+    );
+    db.add_primitive_in(
+        "pure-only",
+        Signature {
+            inputs: vec![int],
+            output: int,
+        },
+        &[Context::Pure],
+        |ctx, _| Some(ctx.base(9_i64)),
+    );
+    eg.run_program(vec![Command::Sort {
+        span: span!(),
+        name: "Fn".into(),
+        presort_and_args: Some((
+            "UnstableFn".into(),
+            vec![exprs::call("i64", vec![]), exprs::var("i64")],
+        )),
+    }])
+    .unwrap();
+    (eg, calls)
+}
+fn application(name: &str, x: Expr) -> Expr {
+    exprs::call(
+        "unstable-app",
+        vec![exprs::call("unstable-fn", vec![exprs::string(name)]), x],
+    )
+}
+#[test]
+fn higher_order_queries_reject_hidden_table_reads() {
+    for loaded in [false, true] {
+        let (mut eg, _) = function_graph();
+        let mut body = facts![(R x)];
+        body.0.push(Fact::Eq(
+            span!(),
+            exprs::var("y"),
+            application("f", exprs::var("x")),
+        ));
+        rule(&mut eg, "", body, actions![(Out y)]).unwrap();
+        eg.run_program(vec![Command::Action(action!((R 1)))])
+            .unwrap();
+        let result = if loaded {
+            let bytes = eg.save_program();
+            let mut program = tir_egglog::Program::from_bytes(&bytes, eg.database_mut()).unwrap();
+            program.run(eg.database_mut(), &tir_egglog::Schedule::run(""))
+        } else {
+            eg.step_rules("")
+        };
+        assert!(matches!(result, Err(Error::Panic(..))));
+    }
+}
+
+#[test]
+fn higher_order_calls_respect_the_wrapped_primitive_context() {
+    use std::sync::atomic::Ordering;
+    let (mut eg, calls) = function_graph();
+    assert!(eg
+        .eval_expr(&application("read-only", exprs::int(1)))
+        .is_err());
+    assert_eq!(calls.load(Ordering::Relaxed), 0);
+    eg.run_program(vec![Command::Action(action!((set (f 1) 7)))])
+        .unwrap();
+    let (_, n) = eg.eval_expr(&application("f", exprs::int(1))).unwrap();
+    assert_eq!(eg.value_to_base::<i64>(n), 7);
+    let plus = exprs::call("unstable-fn", vec![exprs::string("+"), exprs::int(10)]);
+    let (_, n) = eg
+        .eval_expr(&exprs::call("unstable-app", vec![plus, exprs::int(5)]))
+        .unwrap();
+    assert_eq!(eg.value_to_base::<i64>(n), 15);
+}
+
+#[test]
+fn pure_higher_order_queries_remain_supported() {
+    let (mut eg, _) = function_graph();
+    let mut body = facts![(R x)];
+    body.0.push(Fact::Eq(
+        span!(),
+        exprs::var("y"),
+        application("pure-only", exprs::var("x")),
+    ));
+    rule(&mut eg, "", body, actions![(Out y)]).unwrap();
+    eg.run_program(vec![Command::Action(action!((R 1)))])
+        .unwrap();
+    eg.step_rules("").unwrap();
+    eg.run_program(vec![Command::Check(span!(), facts![(Out 9)].0)])
+        .unwrap();
+}
+
+#[test]
+fn higher_order_naive_queries_observe_new_table_rows() {
+    use tir_egglog::ast::{Rule, RuleEvalMode};
+    let (mut eg, _) = function_graph();
+    let mut body = facts![(R x)];
+    body.0.push(Fact::Eq(
+        span!(),
+        exprs::var("y"),
+        application("f", exprs::var("x")),
+    ));
+    eg.run_program(vec![Command::Rule {
+        rule: Rule {
+            span: span!(),
+            name: "copy".into(),
+            ruleset: "".into(),
+            body: body.0,
+            head: actions![(Out y)],
+            eval_mode: RuleEvalMode::Naive,
+        },
+    }])
+    .unwrap();
+    eg.run_program(vec![Command::Action(action!((R 1)))])
+        .unwrap();
+    eg.step_rules("").unwrap();
+    assert_eq!(eg.get_size("Out"), 0);
+    eg.run_program(vec![Command::Action(action!((set (f 1) 7)))])
+        .unwrap();
+    eg.step_rules("").unwrap();
+    eg.run_program(vec![Command::Check(span!(), facts![(Out 7)].0)])
+        .unwrap();
+}
+
+#[test]
+fn higher_order_mapping_propagates_a_nested_context_error() {
+    use std::sync::atomic::Ordering;
+    let (mut eg, calls) = function_graph();
+    eg.run_program(vec![Command::Sort {
+        span: span!(),
+        name: "IVec".into(),
+        presort_and_args: Some(("Vec".into(), vec![exprs::var("i64")])),
+    }])
+    .unwrap();
+    let f = exprs::call("unstable-fn", vec![exprs::string("read-only")]);
+    let xs = exprs::call("vec-of", vec![exprs::int(1)]);
+    assert!(eg
+        .eval_expr(&exprs::call("unstable-vec-map", vec![f, xs]))
+        .is_err());
+    assert_eq!(calls.load(Ordering::Relaxed), 0);
+}
