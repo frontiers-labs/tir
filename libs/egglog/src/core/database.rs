@@ -9,6 +9,7 @@ use tir_adt::simd::hash_row;
 use super::base::BaseValues;
 use super::color::Colors;
 use super::containers::ContainerValues;
+use super::group::Group;
 use super::schema::{SortSchema, TableSchema};
 use super::table::Table;
 use super::uf::UnionFind;
@@ -67,6 +68,12 @@ pub struct Database {
     pub(crate) now: u32,
     // Empty until the first color: no color code runs.
     pub(crate) colors: Colors,
+    pub(crate) groups: Vec<Group>,
+    // By table: the group whose member or keyed table it is.
+    pub(crate) group_of_table: Vec<Option<usize>>,
+    // (group, id) of each group whose base rows a write changed since the
+    // last rebuild, which unites the keyed ones that became equal.
+    pub(crate) written_groups: Vec<(usize, u32)>,
 }
 
 impl Default for Database {
@@ -93,6 +100,9 @@ impl Database {
             predicted: HashMap::default(),
             now: 0,
             colors: Colors::new(),
+            groups: Vec::new(),
+            group_of_table: Vec::new(),
+            written_groups: Vec::new(),
         };
         db.add_arcsort(I64Sort.to_arcsort());
         db.add_arcsort(F64Sort.to_arcsort());
@@ -366,14 +376,25 @@ impl Database {
     }
 
     pub fn remove(&mut self, table: TableId, key: &[Value]) {
-        let table = &mut self.tables[table.index()];
-        for key in table.orders(&table.canonical_key(key, &self.uf)) {
+        let t = &self.tables[table.index()];
+        for key in t.orders(&t.canonical_key(key, &self.uf)) {
             let hash = hash_row(&key);
-            if let Some(row) = table.find(&key, hash) {
-                table.remove(row, hash);
+            if let Some(row) = self.tables[table.index()].find(&key, hash) {
+                self.remove_row(table, row, hash);
             }
         }
-        table.maybe_compact();
+        self.tables[table.index()].maybe_compact();
+    }
+
+    // Captured row IDs stay valid until all deferred removals finish.
+    pub(crate) fn remove_row(&mut self, table: TableId, row: u32, hash: u32) {
+        let t = &mut self.tables[table.index()];
+        if t.is_live(row) {
+            if let Some(Some(group)) = self.group_of_table.get(table.index()) {
+                self.written_groups.push((*group, t.cell(row, 0)));
+            }
+            t.remove(row, hash);
+        }
     }
 
     /// Mark a row so rules no longer match it; lookups still see it. A missing
@@ -422,6 +443,17 @@ impl Database {
     // Whether writes or unions wait for a rebuild.
     pub(crate) fn needs_rebuild(&self) -> bool {
         !self.pending.is_empty() || self.uf.unions() > 0
+    }
+
+    /// How many tables the database declares.
+    pub fn table_count(&self) -> usize {
+        self.tables.len()
+    }
+
+    /// A count that grows with every write to the first `tables` tables, so
+    /// equal counts mean none of them changed in between.
+    pub fn writes_to_first(&self, tables: usize) -> u64 {
+        self.tables[..tables].iter().map(Table::version).sum()
     }
 
     /// The timestamp writes get now. Each rebuild starts a new one.
@@ -498,6 +530,7 @@ impl Database {
             containers: &mut self.containers,
             pending: &mut self.pending,
             predicted: &mut self.predicted,
+            groups: &self.groups,
             stop: Cell::new(false),
             panicked: Cell::new(false),
             equality: None,
@@ -559,6 +592,7 @@ pub struct PrimCtx<'a> {
     pub(crate) containers: &'a mut ContainerValues,
     pub(crate) pending: &'a mut Vec<Write>,
     pub(crate) predicted: &'a mut HashMap<(TableId, Vec<u32>), Value, FxBuildHasher>,
+    pub(crate) groups: &'a [Group],
     equality: Option<(&'a Colors, u32)>,
     // Set to end the search early; with `panicked`, the search fails.
     pub(crate) stop: Cell<bool>,

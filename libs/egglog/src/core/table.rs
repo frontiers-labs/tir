@@ -101,6 +101,13 @@ impl Table {
         self.columns[column][row as usize]
     }
 
+    // Whether no live row holds an id from `mark` on.
+    pub(crate) fn holds_none_from(&self, mark: u32) -> bool {
+        (0..self.len() as u32)
+            .filter(|&row| self.is_live(row))
+            .all(|row| (self.schema.ids.iter()).all(|&column| self.cell(row, column) < mark))
+    }
+
     // The rows written at `ts` or later, live or not.
     pub(crate) fn since(&self, ts: u32) -> Range<u32> {
         self.ts.partition_point(|&t| t < ts) as u32..self.len() as u32
@@ -211,6 +218,7 @@ impl Table {
         self.live.clear();
         self.subsumed.clear();
         self.dead = 0;
+        self.version += 1;
         self.rebuild_keys();
         for index in self.indexes.iter_mut().filter(|index| index.is_grouped()) {
             let dense = index.is_dense_group();

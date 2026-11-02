@@ -22,6 +22,7 @@ impl Database {
         let mut contents_changed = Vec::new();
         loop {
             self.flush()?;
+            self.unite_written();
             if self.uf.unions() == 0 {
                 break;
             }
@@ -36,9 +37,7 @@ impl Database {
                         take_rows(table, &rows)
                     })
                     .collect();
-                for (table, mut delta) in deltas.into_iter().enumerate() {
-                    self.apply(TableId::new(table), &mut delta)?;
-                }
+                self.apply_moved(deltas)?;
                 continue;
             }
             let mut marked = Vec::new();
@@ -57,14 +56,25 @@ impl Database {
             let deltas: Vec<Delta> = (self.tables.iter_mut())
                 .map(|table| take_moved(table, map, &mut hits))
                 .collect();
-            for (table, mut delta) in deltas.into_iter().enumerate() {
-                self.apply(TableId::new(table), &mut delta)?;
-            }
+            self.apply_moved(deltas)?;
         }
         self.now += 1;
         if !self.colors.is_empty() {
             self.rebase_colors(&contents_changed)?;
         }
+        Ok(())
+    }
+
+    // Writes again the rows that held moved ids, one delta per table, then
+    // unites the keyed groups those rows made equal.
+    fn apply_moved(&mut self, deltas: Vec<Delta>) -> Result<(), Error> {
+        let mut touched = Vec::new();
+        for (table, mut delta) in deltas.into_iter().enumerate() {
+            let table = TableId::new(table);
+            self.apply(table, &mut delta)?;
+            self.touched_groups(table, &delta, &mut touched);
+        }
+        self.unite_congruent(super::Color::BASE, touched);
         Ok(())
     }
 
@@ -192,6 +202,9 @@ impl Database {
         subsumed: bool,
         at: Option<u32>,
     ) -> Result<(), Error> {
+        if let Some(Some(group)) = self.group_of_table.get(t.index()) {
+            self.written_groups.push((*group, row[0]));
+        }
         let now = self.now;
         let table = &mut self.tables[t.index()];
         let keys = table.schema.keys;

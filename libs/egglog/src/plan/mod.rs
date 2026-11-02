@@ -14,8 +14,8 @@ use permute::{Symmetries, extract_symmetries};
 
 use crate::ast::Literal;
 use crate::vm::{
-    ConstDecl, ExternDecl, IndexDecl, ProgramFile, RulesetDecl, SortClass, SortDecl, TableDecl,
-    map_merge,
+    ConstDecl, ExternDecl, GroupDecl, IndexDecl, ProgramFile, RulesetDecl, SortClass, SortDecl,
+    TableDecl, map_merge,
 };
 use crate::{Error, ExternId, Merge, Schema, SortId, SortKind, TableId, Value, sort};
 
@@ -129,11 +129,18 @@ pub(crate) fn compile(
             symbols.table(table);
         }
     }
-    let (sorts, consts, tables, externs) = declare(schema, &mut symbols, &syms)?;
+    for group in &schema.db.groups {
+        symbols.table(group.keyed);
+        for member in &group.members {
+            symbols.table(member.table);
+        }
+    }
+    let (sorts, consts, tables, groups, externs) = declare(schema, &mut symbols, &syms)?;
     let file = ProgramFile {
         sorts,
         consts,
         tables,
+        groups,
         externs,
         indexes: symbols.indexes,
         nodes,
@@ -213,6 +220,17 @@ fn declare(
             default,
         });
     }
+    let groups = (schema.db.groups.iter())
+        .map(|group| GroupDecl {
+            sort: position(&mut sorts, group.sort),
+            keyed: symbols.table(group.keyed),
+            members: group
+                .members
+                .iter()
+                .map(|m| symbols.table(m.table))
+                .collect(),
+        })
+        .collect();
     let externs = (symbols.externs.iter())
         .map(|&prim| {
             let (name, signature) = schema.primitive(prim);
@@ -236,7 +254,7 @@ fn declare(
             SortDecl { name, class }
         })
         .collect();
-    Ok((sorts, consts, tables, externs))
+    Ok((sorts, consts, tables, groups, externs))
 }
 
 // The sorts, constants, tables and primitives of a program file.
@@ -244,5 +262,6 @@ type Declared = (
     Vec<SortDecl>,
     Vec<ConstDecl>,
     Vec<TableDecl>,
+    Vec<GroupDecl>,
     Vec<ExternDecl>,
 );

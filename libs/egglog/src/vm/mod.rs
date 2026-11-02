@@ -10,8 +10,8 @@ use std::time::Instant;
 
 pub use file::LoadError;
 pub(crate) use file::{
-    Const, ConstDecl, ExternDecl, IndexDecl, ProgramFile, RulesetDecl, SortClass, SortDecl,
-    TableDecl, decode, map_merge,
+    Const, ConstDecl, ExternDecl, GroupDecl, IndexDecl, ProgramFile, RulesetDecl, SortClass,
+    SortDecl, TableDecl, decode, map_merge,
 };
 
 use crate::ast::{Fact, Literal, Schedule};
@@ -26,7 +26,8 @@ use code::Step;
 /// involves rows written since.
 #[derive(Clone)]
 pub struct Program {
-    file: ProgramFile,
+    // Shared by the clones of a program; only its run state is their own.
+    file: Arc<ProgramFile>,
     // The database ids of the tables and primitives of the file.
     tables: Vec<TableId>,
     externs: Vec<ExternId>,
@@ -65,7 +66,7 @@ impl Program {
         last_run: Vec<Option<u32>>,
     ) -> Self {
         Self {
-            file,
+            file: Arc::new(file),
             tables,
             externs,
             prepared: false,
@@ -330,9 +331,7 @@ impl Program {
                     break;
                 }
             }
-            for found in writes {
-                found.apply_colors(db, &self.tables)?;
-            }
+            exec::Writes::apply_colors(writes, db, &self.tables)?;
             db.rebuild_colors()?;
             failed?;
             for &decl in decls {

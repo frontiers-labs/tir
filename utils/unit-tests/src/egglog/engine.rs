@@ -1370,6 +1370,129 @@ fn deferred_deletion_removes_each_symmetric_row_once() {
 }
 
 #[test]
+fn colored_deferred_deletions_preserve_snapshot_writes() {
+    for separate in [false, true] {
+        for reverse in [false, true] {
+            for own in [false, true] {
+                let mut db = Database::new();
+                let int = db.sort("i64").unwrap();
+                let input = db.add_relation("R", &[int]);
+                let target = db.add_relation("D", &[int]);
+                let f = db.add_function("f", &[int], int, tir_egglog::Merge::AssertEq);
+                let [zero, one, seven] = [0_i64, 1, 7].map(|n| db.base(n));
+                let c = db.color(&[]);
+                let sibling = db.color(&[]);
+                let holder = if own { c } else { tir_egglog::Color::BASE };
+                db.insert_in(holder, target, &[zero]).unwrap();
+                db.insert_in(holder, f, &[zero, seven]).unwrap();
+                for x in [zero, one] {
+                    db.insert_in(c, input, &[x]).unwrap();
+                }
+                let (mut first, mut second) = (
+                    actions![(D x) (set (f x) 1)],
+                    actions![(delete (D x)) (delete (f x))],
+                );
+                if reverse {
+                    std::mem::swap(&mut first, &mut second);
+                }
+                let mut program = deferred_program(&db, facts![(R x)], first, second, separate);
+                program.run(&mut db, &Schedule::run("run")).unwrap();
+                assert!(db.lookup_in(c, target, &[zero]).is_none());
+                assert!(db.lookup_in(c, target, &[one]).is_some());
+                for x in [zero, one] {
+                    assert_eq!(db.lookup_in(c, f, &[x]), Some(one));
+                }
+                assert_eq!(db.rows(target).count(), usize::from(!own));
+                assert_eq!(db.rows_in(sibling, target).count(), usize::from(!own));
+                db.rebuild().unwrap();
+                assert!(db.lookup_in(c, target, &[zero]).is_none());
+                let two = db.base(2_i64);
+                db.insert(target, &[two]).unwrap();
+                db.rebuild().unwrap();
+                assert!(db.lookup_in(c, target, &[zero]).is_none());
+                assert!(db.lookup_in(c, target, &[two]).is_some());
+            }
+        }
+    }
+}
+
+#[test]
+fn colored_relation_eligibility_keeps_selected_colors_aligned() {
+    let mut db = Database::new();
+    let int = db.sort("i64").unwrap();
+    let input = db.add_relation("R", &[int]);
+    let target = db.add_relation("D", &[int]);
+    let colors = [db.color(&[]), db.color(&[]), db.color(&[])];
+    let [zero, one] = [0_i64, 1].map(|n| db.base(n));
+    for (i, &c) in colors.iter().enumerate() {
+        for x in [zero, one] {
+            db.insert_in(c, input, &[x]).unwrap();
+        }
+        db.insert_in(c, target, &[if i == 1 { one } else { zero }])
+            .unwrap();
+    }
+    let mut program = deferred_program(
+        &db,
+        facts![(R x)],
+        actions![(D x)],
+        actions![(delete (D x))],
+        true,
+    );
+    program.run(&mut db, &Schedule::run("run")).unwrap();
+    for (i, c) in colors.into_iter().enumerate() {
+        let absent = if i == 1 { zero } else { one };
+        let present = if i == 1 { one } else { zero };
+        assert!(db.lookup_in(c, target, &[absent]).is_some());
+        assert!(db.lookup_in(c, target, &[present]).is_none());
+        assert_eq!(db.rows_in(c, target).count(), 1);
+    }
+    assert_eq!(db.rows(target).count(), 0);
+}
+
+#[test]
+fn colored_deletion_targets_do_not_follow_queued_unions() {
+    for delete_b in [false, true] {
+        for set_b in [false, true] {
+            let mut db = Database::new();
+            let k = db.add_sort("K", tir_egglog::SortKind::Eq);
+            let int = db.sort("i64").unwrap();
+            let input = db.add_relation("R", &[k, k]);
+            let f = db.add_function("f", &[k], int, tir_egglog::Merge::New);
+            let (a, b, seven) = (db.fresh(k), db.fresh(k), db.base(7_i64));
+            db.insert(f, &[a, seven]).unwrap();
+            let c = db.color(&[]);
+            let sibling = db.color(&[]);
+            db.insert_in(c, input, &[a, b]).unwrap();
+            let mut first = actions![(union a b)];
+            if set_b {
+                first.0.extend(actions![(set (f b) 42)].0);
+            }
+            let second = if delete_b {
+                actions![(delete (f b))]
+            } else {
+                actions![(delete (f a))]
+            };
+            let mut program = deferred_program(&db, facts![(R a b)], first, second, true);
+            program.run(&mut db, &Schedule::run("run")).unwrap();
+            let expected = if set_b {
+                Some(42)
+            } else if delete_b {
+                Some(7)
+            } else {
+                None
+            };
+            assert_eq!(
+                db.lookup_in(c, f, &[a]).map(|v| db.base_value::<i64>(v)),
+                expected
+            );
+            assert_eq!(db.lookup(f, &[a]), Some(seven));
+            assert_eq!(db.lookup_in(sibling, f, &[a]), Some(seven));
+            assert_ne!(db.find(a), db.find(b));
+        }
+    }
+}
+
+#[test]
 fn union_rejects_base_values_before_execution() -> Result<(), Error> {
     for action in [
         action!((union 1 2)),

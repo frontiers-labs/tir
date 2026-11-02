@@ -219,6 +219,23 @@ impl Trie<'_> {
                         },
                     }
                 }
+                Act::FindOrMake(tables, args) => {
+                    let (&group, mut cells) = args.split_last().expect("a group");
+                    let rows = (tables.iter())
+                        .map(|&table| {
+                            let len = self.schema.table(table).columns().len() - 1;
+                            let (row, rest) = cells.split_at(len);
+                            cells = rest;
+                            (self.symbols.table(table), regs(state, row))
+                        })
+                        .collect();
+                    state.regs[group as usize] = Some(*width);
+                    *width += 1;
+                    Action::FindOrMake {
+                        rows,
+                        out: *width - 1,
+                    }
+                }
                 Act::Union(a, b) => Action::Union {
                     a: reg(state, *a),
                     b: reg(state, *b),

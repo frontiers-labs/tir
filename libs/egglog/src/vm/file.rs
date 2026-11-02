@@ -14,7 +14,7 @@ use crate::ast::Literal;
 use crate::{Database, ExternId, F64, Merge, Shape, SortId, SortKind, TableId, TableKind, Value};
 
 const MAGIC: [u8; 4] = *b"TEGG";
-const VERSION: u32 = 12;
+const VERSION: u32 = 13;
 // Merges nest at most this deep, so decoding one cannot exhaust the stack.
 const MERGE_DEPTH: u32 = 64;
 
@@ -65,6 +65,13 @@ pub(crate) struct TableDecl {
 }
 
 #[derive(Clone)]
+pub(crate) struct GroupDecl {
+    pub(crate) sort: u32,
+    pub(crate) keyed: u32,
+    pub(crate) members: Vec<u32>,
+}
+
+#[derive(Clone)]
 pub(crate) struct ExternDecl {
     pub(crate) name: String,
     pub(crate) inputs: Vec<u32>,
@@ -95,6 +102,7 @@ pub(crate) struct ProgramFile {
     pub(crate) sorts: Vec<SortDecl>,
     pub(crate) consts: Vec<ConstDecl>,
     pub(crate) tables: Vec<TableDecl>,
+    pub(crate) groups: Vec<GroupDecl>,
     pub(crate) externs: Vec<ExternDecl>,
     pub(crate) indexes: Vec<IndexDecl>,
     pub(crate) nodes: Vec<Node>,
@@ -331,6 +339,13 @@ impl Writer {
                 self.fixed(&[6, 0, 0]);
                 self.string(message);
             }
+            Action::FindOrMake { rows, out } => {
+                self.fixed(&[7, 0, *out]);
+                self.list(rows, |w, (table, args)| {
+                    w.word(*table);
+                    w.words(args);
+                });
+            }
         }
     }
 
@@ -371,6 +386,11 @@ pub(crate) fn encode(file: &ProgramFile) -> Vec<u8> {
         ]);
         w.word(u32::from(table.default.is_some()));
         w.word(table.default.unwrap_or(0));
+    });
+    w.list(&file.groups, |w, group| {
+        w.word(group.sort);
+        w.word(group.keyed);
+        w.words(&group.members);
     });
     w.list(&file.externs, |w, prim| {
         w.string(&prim.name);
@@ -586,6 +606,10 @@ impl Reader<'_> {
             let message = self.string()?;
             return Ok(Action::Panic { message });
         }
+        if tag == 7 {
+            let rows = self.list(|r| Ok((r.word()?, r.words()?)))?;
+            return Ok(Action::FindOrMake { rows, out: extra });
+        }
         let args = self.words()?;
         Ok(match tag {
             0 => Action::Entry {
@@ -687,6 +711,13 @@ pub(crate) fn decode(bytes: &[u8]) -> Load<ProgramFile> {
             default,
         })
     })?;
+    let groups = r.list(|r| {
+        Ok(GroupDecl {
+            sort: r.below(sorts.len(), "sort")?,
+            keyed: r.below(tables.len(), "table")?,
+            members: r.list(|r| r.below(tables.len(), "table"))?,
+        })
+    })?;
     let externs = r.list(|r| {
         Ok(ExternDecl {
             name: r.string()?,
@@ -726,6 +757,7 @@ pub(crate) fn decode(bytes: &[u8]) -> Load<ProgramFile> {
         sorts,
         consts,
         tables,
+        groups,
         externs,
         indexes,
         nodes,
@@ -773,6 +805,17 @@ fn check(file: &ProgramFile) -> Load<()> {
         if let Some(merge) = &table.merge {
             check_merge(file, merge)?;
         }
+    }
+    for group in &file.groups {
+        let keyed = &file.tables[group.keyed as usize];
+        let mut members = group.members.iter().map(|&t| &file.tables[t as usize]);
+        ensure(
+            file.sorts[group.sort as usize].class == SortClass::Eq
+                && keyed.kind == TableKind::Relation
+                && keyed.columns == [group.sort]
+                && members.all(|table| table.columns.len() >= 2 && table.columns[0] == group.sort),
+            "group",
+        )?;
     }
     for index in &file.indexes {
         let len = file.tables[index.table as usize].columns.len();
@@ -874,6 +917,16 @@ fn check_node(file: &ProgramFile, node: &Node) -> Load<()> {
                 table(*t)?.keys == args.len()
             }
             Action::Call { prim: p, args, .. } => prim(*p)?.inputs.len() == args.len(),
+            Action::FindOrMake { rows, .. } => {
+                let mut group = None;
+                for (t, args) in rows {
+                    let t = table(*t)?;
+                    ensure(*group.get_or_insert(t.columns[0]) == t.columns[0], "group")?;
+                    ensure(args.len() + 1 == t.columns.len(), "row")?;
+                }
+                group.is_some()
+            }
+
             Action::Union { .. } | Action::Panic { .. } => true,
         };
         ensure(ok, "action")?;
@@ -928,6 +981,10 @@ fn walk(file: &ProgramFile, id: u32, width: u32, rules: usize, seen: &mut [bool]
             | Action::Call { args, .. } => reads(args, w)?,
             Action::Union { a, b } => reads(&[*a, *b], w)?,
             Action::Panic { .. } => {}
+            Action::FindOrMake { rows, out } => {
+                rows.iter().try_for_each(|(_, args)| reads(args, w))?;
+                bind(Bind::New(*out), &mut w)?;
+            }
         }
     }
     ensure(node.rules.iter().all(|&r| (r as usize) < rules), "rule")?;
@@ -1029,6 +1086,29 @@ pub(crate) fn bind(file: &ProgramFile, db: &mut Database) -> Load<(Vec<TableId>,
         db.set_unextractable(id, decl.unextractable);
         if let Some(default) = default {
             db.set_default(id, default);
+        }
+    }
+    for decl in &file.groups {
+        let keyed = tables[decl.keyed as usize];
+        let members: Vec<TableId> = decl.members.iter().map(|&t| tables[t as usize]).collect();
+        let sort = sort(&decl.sort);
+        let existing = db.groups.iter().find(|group| {
+            group.keyed == keyed || group.members.iter().any(|m| members.contains(&m.table))
+        });
+        let mismatch = || LoadError::TableMismatch {
+            name: file.tables[decl.keyed as usize].name.clone(),
+        };
+        if let Some(group) = existing {
+            if group.sort != sort
+                || group.keyed != keyed
+                || group.members.len() != members.len()
+                || !group.members.iter().all(|m| members.contains(&m.table))
+            {
+                return Err(mismatch());
+            }
+        } else {
+            db.add_group(sort, &members, keyed)
+                .map_err(|_| mismatch())?;
         }
     }
     Ok((tables, externs))

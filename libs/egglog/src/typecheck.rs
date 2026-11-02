@@ -14,6 +14,9 @@ use crate::ast::{self, Action, Change, Expr, Fact, Literal, RuleEvalMode, Span};
 use crate::plan::hir::{Act, Atom, Rule, Target, Var};
 use crate::{Context, Error, ExternId, Schema, SortId, TableId, TableKind};
 
+// The action that finds or makes a group of rows.
+const FIND_OR_MAKE: &str = "find-or-make";
+
 // Where a call sits: in the query, among the actions, or as an action whose
 // result goes unused.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -163,6 +166,9 @@ impl Typer<'_> {
                 }
                 None => Err(self.type_error(*span, format!("unbound variable `{name}`"))),
             },
+            Expr::Call(span, name, rows) if name == FIND_OR_MAKE => {
+                self.find_or_make(*span, rows, place)
+            }
             Expr::Call(span, name, args) => {
                 let inner = if place == Place::Query {
                     Place::Query
@@ -241,6 +247,45 @@ impl Typer<'_> {
             Place::Effect => self.actions.push(Do::Effect(call)),
         }
         Ok(out)
+    }
+
+    // `(find-or-make (T cells...) ...)`: the rows of one group, each
+    // without its group column.
+    fn find_or_make(&mut self, span: Span, rows: &[Expr], place: Place) -> Result<Var, Error> {
+        let error = |typer: &Self, message: &str| Err(typer.type_error(span, message.to_owned()));
+        if place == Place::Query {
+            return error(self, "find-or-make is an action");
+        }
+        let (mut tables, mut args, mut first) = (Vec::new(), Vec::new(), None);
+        for row in rows {
+            let Expr::Call(_, name, cells) = row else {
+                return error(self, "find-or-make takes rows of tables");
+            };
+            let table = self.schema.table_named(name);
+            let group = table.and_then(|table| self.schema.db.group_at(table));
+            let Some((table, group)) = table.zip(group) else {
+                return error(self, &format!("`{name}` is no member table of a group"));
+            };
+            if *first.get_or_insert(group) != group {
+                return error(self, "find-or-make writes the rows of one group");
+            }
+            if cells.len() + 1 != self.schema.table(table).columns().len() {
+                return error(
+                    self,
+                    &format!("a row of `{name}` takes all but its group column"),
+                );
+            }
+            tables.push(table);
+            args.extend(self.terms(cells)?);
+        }
+        let Some(&first) = tables.first() else {
+            return error(self, "find-or-make takes at least one row");
+        };
+        let sort = self.schema.table(first).columns()[0];
+        let group = self.var(format!("({FIND_OR_MAKE} ...)"), None, Some(sort));
+        args.push(group);
+        self.actions.push(Do::Act(Act::FindOrMake(tables, args)));
+        Ok(group)
     }
 
     // The table an action writes, with its key checked.
@@ -324,6 +369,7 @@ impl Typer<'_> {
     fn infer(&mut self) -> Result<(), Error> {
         let mut uses: Vec<(TableId, Vec<Var>)> = Vec::new();
         let mut unions: Vec<(Var, Var)> = Vec::new();
+        let mut grouped: Vec<(Var, SortId)> = Vec::new();
         for item in &self.query {
             if let Item::Atom(table, args) = item {
                 uses.push((*table, args.clone()));
@@ -338,6 +384,11 @@ impl Typer<'_> {
                     | Act::Subsume(table, args),
                 ) => uses.push((*table, args.clone())),
                 Do::Act(Act::Union(a, b)) => unions.push((*a, *b)),
+                Do::Act(Act::FindOrMake(tables, args)) => {
+                    let columns = |&table| &self.schema.table(table).columns()[1..];
+                    let sorts = tables.iter().flat_map(columns).copied();
+                    grouped.extend(args.iter().copied().zip(sorts));
+                }
                 _ => {}
             }
         }
@@ -345,6 +396,9 @@ impl Typer<'_> {
             for (&var, &sort) in args.iter().zip(self.schema.table(*table).columns()) {
                 self.fix(var, sort)?;
             }
+        }
+        for (var, sort) in grouped {
+            self.fix(var, sort)?;
         }
         loop {
             let mut progress = false;

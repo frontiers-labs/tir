@@ -76,6 +76,13 @@ pub(crate) enum Action {
         args: Vec<Reg>,
         out: Reg,
     },
+    // The keyed group whose rows are exactly `rows`, each a member table and
+    // the cells after its group column, else one made with them, bound to
+    // `out`.
+    FindOrMake {
+        rows: Vec<(u32, Vec<Reg>)>,
+        out: Reg,
+    },
     // Writes a row: every column, the output last.
     Set {
         table: u32,

@@ -35,6 +35,10 @@ pub(crate) enum Act {
     // Calls a primitive for its effect.
     Call(ExternId, Vec<Var>),
     Union(Var, Var),
+    // Binds the keyed group whose rows are exactly those of the tables, each
+    // with the cells after its group column, in order in the variables
+    // before the last; else makes one. The last variable is the group.
+    FindOrMake(Vec<TableId>, Vec<Var>),
     Delete(TableId, Vec<Var>),
     Subsume(TableId, Vec<Var>),
     Panic(String),
@@ -86,7 +90,8 @@ impl Act {
             | Self::Prim(_, args)
             | Self::Call(_, args)
             | Self::Delete(_, args)
-            | Self::Subsume(_, args) => args,
+            | Self::Subsume(_, args)
+            | Self::FindOrMake(_, args) => args,
             Self::Union(..) | Self::Panic(_) => &mut [],
         }
     }
@@ -97,7 +102,9 @@ impl Act {
             Self::Insert(table, args) if schema.table(*table).kind() == TableKind::Constructor => {
                 args.last().map(|&v| (v, true))
             }
-            Self::Lookup(_, args) | Self::Prim(_, args) => args.last().map(|&v| (v, false)),
+            Self::Lookup(_, args) | Self::Prim(_, args) | Self::FindOrMake(_, args) => {
+                args.last().map(|&v| (v, false))
+            }
             _ => None,
         }
     }
@@ -316,6 +323,10 @@ pub(crate) fn run_actions(
             Act::Delete(table, args) => ctx.remove(*table, &get(&vals, args)),
             Act::Subsume(table, args) => ctx.subsume(*table, &get(&vals, args)),
             Act::Panic(message) => return Err(Error::Panic(message.clone())),
+            Act::FindOrMake(..) => {
+                let message = "find-or-make outside a rule".to_owned();
+                return Err(Error::Unsupported(message));
+            }
         }
     }
     Ok(probed)
