@@ -276,7 +276,7 @@ pub trait Core<'a, 'db: 'a>: Internal<'db> {
         remap: &(dyn Fn(Value) -> Value + Send + Sync),
     ) -> Option<Value> {
         let ctx = self.ctx();
-        ctx.containers.map(type_id, value, remap, ctx.uf)
+        ctx.containers.map(type_id, value, &|v, _| remap(v), ctx.uf)
     }
 
     fn value_to_base<T: BaseValue>(&self, x: Value) -> T {

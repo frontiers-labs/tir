@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::iter::once;
 
 use tir_adt::FxBuildHasher;
@@ -54,6 +54,7 @@ pub(crate) struct Colors {
     imported: Vec<u32>,
     // The timestamp of the rows of `classes` and `rows`.
     now: u32,
+    container_revision: u64,
     // (color, base root) -> root in the color.
     classes: Table,
     // Per base table: (color, base key...) -> output.
@@ -94,6 +95,7 @@ impl Colors {
             last_base: Vec::new(),
             imported: Vec::new(),
             now: 0,
+            container_revision: 0,
             classes: Table::new(schema),
             rows: Vec::new(),
             held: Vec::new(),
@@ -324,9 +326,10 @@ pub(crate) fn check_pure(ctx: &PrimCtx<'_>, prim: super::ExternId) -> Result<(),
 }
 
 // The merge of `old` and `new` in color `c`: a union is a union in `c`.
-fn eval_in(
+fn eval_in<'a>(
     merge: &Merge,
-    ctx: &mut PrimCtx<'_>,
+    ctx: &mut PrimCtx<'a>,
+    colors: &'a Colors,
     unions: &mut Vec<(u32, u32, u32)>,
     c: u32,
     old: Value,
@@ -346,12 +349,12 @@ fn eval_in(
             check_pure(ctx, *prim)?;
             let mut values = Vec::with_capacity(args.len());
             for arg in args {
-                let Some(value) = eval_in(arg, ctx, unions, c, old, new)? else {
+                let Some(value) = eval_in(arg, ctx, colors, unions, c, old, new)? else {
                     return Ok(None);
                 };
                 values.push(value);
             }
-            ctx.call(*prim, &values)
+            ctx.call_in(colors, c, *prim, &values)
         }
         Merge::Function(..) => {
             return Err(Error::Unsupported(
@@ -532,15 +535,28 @@ impl Database {
     pub(crate) fn write_in(
         &mut self,
         table: TableId,
-        mut row: Vec<u32>,
+        row: Vec<u32>,
         subsumed: bool,
     ) -> Result<(), Error> {
+        self.write_in_at(table, row, subsumed, false)
+    }
+
+    fn write_in_at(
+        &mut self,
+        table: TableId,
+        mut row: Vec<u32>,
+        subsumed: bool,
+        touch: bool,
+    ) -> Result<(), Error> {
         let c = row[0];
+        let mut unchanged = true;
         for &column in &self.colors.rows[table.index()].schema.ids {
-            row[column] = self.colors.root(c, self.uf.find(row[column]));
+            let root = self.colors.root(c, self.uf.find(row[column]));
+            unchanged &= row[column] == root;
+            row[column] = root;
         }
         for order in self.colors.rows[table.index()].orders(&row) {
-            self.write_one_in(table, order, subsumed)?;
+            self.write_one_in(table, order, subsumed, touch && unchanged)?;
         }
         Ok(())
     }
@@ -554,6 +570,7 @@ impl Database {
         table: TableId,
         mut row: Vec<u32>,
         mut subsumed: bool,
+        touch: bool,
     ) -> Result<(), Error> {
         let (t, c, now) = (table.index(), row[0], self.colors.now);
         let rows = &self.colors.rows[t];
@@ -567,10 +584,12 @@ impl Database {
                 if rows.schema.ids.contains(&keys) {
                     old = self.colors.root(c, self.uf.find(old));
                 }
-                row[keys] = self.merge_in(c, table, old, row[keys])?;
+                if !touch || old != row[keys] {
+                    row[keys] = self.merge_in(c, table, old, row[keys])?;
+                }
             }
             let rows = &mut self.colors.rows[t];
-            if functional && row[keys] != rows.cell(at, keys) {
+            if touch || (functional && row[keys] != rows.cell(at, keys)) {
                 rows.kill(at);
                 rows.push(&row, hash, now, subsumed);
             } else if subsumed {
@@ -587,10 +606,12 @@ impl Database {
             let mut same = true;
             if functional {
                 let old = base.cell(at, keys - 1);
-                row[keys] = self.merge_in(c, table, old, row[keys])?;
+                if !touch || old != row[keys] {
+                    row[keys] = self.merge_in(c, table, old, row[keys])?;
+                }
                 same = row[keys] == old;
             }
-            if same && (base_subsumed || !subsumed) {
+            if same && (base_subsumed || !subsumed) && !touch {
                 return Ok(());
             }
             subsumed |= base_subsumed;
@@ -610,7 +631,10 @@ impl Database {
             return Ok(old);
         }
         let (old, new) = (Value::new(old), Value::new(new));
-        let merged = eval_in(merge, &mut ctx, &mut colors.unions, c, old, new)?;
+        let mut unions = std::mem::take(&mut colors.unions);
+        let merged = eval_in(merge, &mut ctx, colors, &mut unions, c, old, new);
+        colors.unions = unions;
+        let merged = merged?;
         merged.map(Value::raw).ok_or_else(|| Error::Conflict {
             table: schema.name.clone(),
             old,
@@ -622,7 +646,23 @@ impl Database {
     // timestamp. Each round rewrites the class maps and relabels the rows
     // that hold a root that lost, which may unite more.
     pub(crate) fn rebuild_colors(&mut self) -> Result<(), Error> {
-        while !self.colors.unions.is_empty() {
+        loop {
+            if self.colors.container_revision != self.containers.revision() {
+                self.colors.container_revision = self.containers.revision();
+                for level in self.colors.levels() {
+                    for color in level {
+                        let classes = &self.colors.classes;
+                        let ids = (0..classes.len() as u32)
+                            .filter(|&row| classes.is_live(row) && classes.cell(row, 0) == color.0)
+                            .map(|row| classes.cell(row, 1))
+                            .collect();
+                        self.map_containers_in(color.0, &ids);
+                    }
+                }
+            }
+            if self.colors.unions.is_empty() {
+                break;
+            }
             let mut unions = std::mem::take(&mut self.colors.unions);
             unions.sort_unstable_by_key(|&(c, ..)| c);
             for unions in unions.chunk_by(|a, b| a.0 == b.0) {
@@ -660,8 +700,42 @@ impl Database {
         let mut losers: Vec<u32> = lost.keys().copied().collect();
         losers.sort_unstable();
         let colors = vec![c; losers.len()];
-        // The rows that hold a loser, before the class map changes: base rows
-        // the color shows, and the color's rows, which go.
+        let classes = &mut self.colors.classes;
+        let at = classes.add_index(&[0, 2]);
+        classes.refresh_index(at);
+        let mut members = Vec::new();
+        holding(classes, at, &[&colors[..], &losers[..]], &mut members);
+        let members: Vec<(u32, u32, u32)> = (members.into_iter())
+            .map(|row| (row, classes.cell(row, 1), classes.cell(row, 2)))
+            .collect();
+        let mut changed = losers.clone();
+        changed.extend(members.iter().map(|&(_, member, _)| member));
+        let affected = self
+            .containers
+            .holding(&changed, &|id| self.colors.root(c, self.uf.find(id)));
+        let copies = self.take_affected_in(c, &affected);
+        let (classes, now) = (&mut self.colors.classes, self.colors.now);
+        for (row, member, root) in members {
+            let entry = [c, member, winner(&lost, root)];
+            classes.kill(row);
+            classes.push(&entry, hash_row(&entry[..2]), now, false);
+        }
+        for &loser in &losers {
+            let entry = [c, loser, winner(&lost, loser)];
+            classes.push(&entry, hash_row(&entry[..2]), now, false);
+        }
+        self.colors.entries[c as usize] += losers.len() as u32;
+        self.map_containers_in(c, &changed.into_iter().collect());
+        for (table, row, subsumed) in copies {
+            self.write_in_at(table, row, subsumed, true)?;
+        }
+        Ok(())
+    }
+
+    // Rewriting a container's contents can leave its equality ID unchanged.
+    // Its rows still need a timestamp, including rows holding it indirectly.
+    fn take_affected_in(&mut self, c: u32, affected: &[u32]) -> Vec<(TableId, Vec<u32>, bool)> {
+        let colors = vec![c; affected.len()];
         let mut copies = Vec::new();
         for t in 0..self.tables.len() {
             let ids = self.tables[t].schema.ids.clone();
@@ -669,7 +743,7 @@ impl Database {
             for &column in &ids {
                 let at = self.tables[t].add_index(&[column]);
                 self.tables[t].refresh_index(at);
-                holding(&self.tables[t], at, &[&losers[..]], &mut found);
+                holding(&self.tables[t], at, &[affected], &mut found);
             }
             found.sort_unstable();
             found.dedup();
@@ -688,7 +762,7 @@ impl Database {
             for &column in &ids {
                 let at = rows.add_index(&[0, column + 1]);
                 rows.refresh_index(at);
-                holding(rows, at, &[&colors[..], &losers[..]], &mut found);
+                holding(rows, at, &[&colors[..], affected], &mut found);
             }
             found.sort_unstable();
             found.dedup();
@@ -698,34 +772,24 @@ impl Database {
             }
             self.colors.held[t][c as usize] -= found.len() as u32;
         }
-        let (classes, now) = (&mut self.colors.classes, self.colors.now);
-        let at = classes.add_index(&[0, 2]);
-        classes.refresh_index(at);
-        let mut members = Vec::new();
-        holding(classes, at, &[&colors[..], &losers[..]], &mut members);
-        let members: Vec<(u32, u32, u32)> = (members.into_iter())
-            .map(|row| (row, classes.cell(row, 1), classes.cell(row, 2)))
-            .collect();
-        for (row, member, root) in members {
-            let entry = [c, member, winner(&lost, root)];
-            classes.kill(row);
-            classes.push(&entry, hash_row(&entry[..2]), now, false);
-        }
-        for &loser in &losers {
-            let entry = [c, loser, winner(&lost, loser)];
-            classes.push(&entry, hash_row(&entry[..2]), now, false);
-        }
-        self.colors.entries[c as usize] += losers.len() as u32;
-        for (table, row, subsumed) in copies {
-            self.write_in(table, row, subsumed)?;
-        }
-        Ok(())
+        copies
+    }
+
+    fn map_containers_in(&mut self, c: u32, ids: &HashSet<u32, FxBuildHasher>) {
+        let colors = &self.colors;
+        let find = |value: Value| Value::new(colors.root(c, value.raw()));
+        // Mapping may allocate an individual container, but never changes
+        // the contents used by the base or another color.
+        let mapped = self.containers.map_holding(ids, &find, &mut self.uf);
+        self.colors
+            .unions
+            .extend(mapped.into_iter().map(|(a, b)| (c, a.raw(), b.raw())));
     }
 
     // After a base rebuild: the class maps and color rows move to the new
     // base roots, each color copies the new base rows it does not show, and
     // each level imports what its parents wrote.
-    pub(crate) fn rebase_colors(&mut self) -> Result<(), Error> {
+    pub(crate) fn rebase_colors(&mut self, dirty: &[u32]) -> Result<(), Error> {
         self.colors.ensure(&self.tables);
         let mut hits = Vec::new();
         let moved = take_moved(&mut self.colors.classes, self.uf.parents(), &mut hits);
@@ -768,6 +832,22 @@ impl Database {
         }
         for (table, row, subsumed) in copies {
             self.write_in(table, row, subsumed)?;
+        }
+        if !dirty.is_empty() {
+            for level in self.colors.levels() {
+                for color in level {
+                    let ids: Vec<u32> = dirty
+                        .iter()
+                        .map(|&id| self.find_in(color, Value::new(id)).raw())
+                        .collect();
+                    let affected = self
+                        .containers
+                        .holding(&ids, &|id| self.colors.root(color.0, self.uf.find(id)));
+                    for (table, row, subsumed) in self.take_affected_in(color.0, &affected) {
+                        self.write_in_at(table, row, subsumed, true)?;
+                    }
+                }
+            }
         }
         self.rebuild_colors()?;
         for level in self.colors.levels() {

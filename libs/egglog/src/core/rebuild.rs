@@ -19,6 +19,7 @@ impl Database {
     /// more ids. Containers are canonicalized alongside. Ends when no union
     /// is left to apply, then starts a new timestamp.
     pub fn rebuild(&mut self) -> Result<(), Error> {
+        let mut contents_changed = Vec::new();
         loop {
             self.flush()?;
             if self.uf.unions() == 0 {
@@ -26,6 +27,7 @@ impl Database {
             }
             let mut moved = self.uf.take_moved();
             let dirty = self.containers.rebuild(&mut self.uf);
+            contents_changed.extend_from_slice(&dirty);
             if self.local_rebuild_pays(moved.len() + dirty.len()) {
                 moved.extend_from_slice(&dirty);
                 let deltas: Vec<Delta> = (self.tables.iter_mut())
@@ -61,7 +63,7 @@ impl Database {
         }
         self.now += 1;
         if !self.colors.is_empty() {
-            self.rebase_colors()?;
+            self.rebase_colors(&contents_changed)?;
         }
         Ok(())
     }

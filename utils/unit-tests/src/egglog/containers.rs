@@ -470,3 +470,172 @@ fn vec_union_unions_the_elements() -> Result<(), Error> {
     check(&mut eg, vec![Fact::Eq(span!(), expr!((A)), expr!((B)))]);
     Ok(())
 }
+
+#[test]
+fn colored_collections_read_local_contents_and_preserve_other_views() {
+    use tir_egglog::sort::{Container, MapKind, PairKind, SetKind, VecKind};
+    use tir_egglog::{Color, Merge, Rules, Schedule, SortKind};
+
+    let mut eg = EGraph::default();
+    eg.database_mut().add_sort("E", SortKind::Eq);
+    for (name, presort, args) in [
+        ("ES", "Set", vec!["E"]),
+        ("EV", "Vec", vec!["E"]),
+        ("EM", "Map", vec!["E", "i64"]),
+        ("EP", "Pair", vec!["E", "i64"]),
+        ("Nested", "Set", vec!["ES"]),
+    ] {
+        eg.run_program(vec![Command::Sort {
+            span: span!(),
+            name: name.to_owned(),
+            presort_and_args: Some((
+                presort.to_owned(),
+                args.into_iter().map(exprs::var).collect(),
+            )),
+        }])
+        .unwrap();
+    }
+    eg.run_program(vec![Command::Sort {
+        span: span!(),
+        name: "SetLength".to_owned(),
+        presort_and_args: Some((
+            "UnstableFn".to_owned(),
+            vec![call("ES", vec![]), exprs::var("i64")],
+        )),
+    }])
+    .unwrap();
+    let db = eg.database_mut();
+    let [e, es, ev, em, ep, nested, int] =
+        ["E", "ES", "EV", "EM", "EP", "Nested", "i64"].map(|s| db.sort(s).unwrap());
+    let seed = db.add_relation("collections", &[es, ev, em, ep, nested, e]);
+    let result = db.add_function("length", &[es], int, Merge::New);
+    let removed = db.add_function("removed", &[es], int, Merge::New);
+    let projected = db.add_relation("projected", &[e, int]);
+    let nested_length = db.add_function("nested_length", &[nested], int, Merge::New);
+    let forwarded = db.add_function("forwarded", &[es], int, Merge::New);
+    let local = db.add_relation("local", &[ev, e]);
+    let isolated = db.add_relation("isolated", &[es, e]);
+    let isolated_length = db.add_function("isolated_length", &[es], int, Merge::New);
+    let mut rules = Rules::new();
+    let var = exprs::var;
+    let len = call("set-length", vec![var("s")]);
+    let applied = call(
+        "unstable-app",
+        vec![
+            call("unstable-fn", vec![exprs::string("set-length")]),
+            var("s"),
+        ],
+    );
+    let contains = call("vec-contains", vec![var("v"), var("x")]);
+    rules
+        .rule(
+            db,
+            "",
+            facts![(collections s v m p n x) (= k (unquote applied))],
+            actions![(set (forwarded s) k)],
+        )
+        .unwrap();
+    rules
+        .rule(db, "", facts![(local v x)], actions![(unquote contains)])
+        .unwrap();
+    let removed_len = call(
+        "set-length",
+        vec![call("set-remove", vec![var("s"), var("x")])],
+    );
+    let isolated_removed = call(
+        "set-length",
+        vec![call("set-remove", vec![var("s"), var("x")])],
+    );
+    rules
+        .rule(
+            db,
+            "",
+            facts![(isolated s x)],
+            actions![(set (isolated_length s) (unquote isolated_removed))],
+        )
+        .unwrap();
+    let nested_len = call("set-length", vec![var("n")]);
+    let vec_item = call("vec-get", vec![var("v"), exprs::int(0)]);
+    let map_item = call("map-get", vec![var("m"), var("x")]);
+    let first = call("pair-first", vec![var("p")]);
+    let second = call("pair-second", vec![var("p")]);
+    rules
+        .rule(
+            db,
+            "",
+            facts![(collections s v m p n x)],
+            actions![
+                (set (length s) (unquote len))
+                (set (removed s) (unquote removed_len))
+                (set (nested_length n) (unquote nested_len))
+                (projected (unquote vec_item) (unquote map_item))
+                (projected (unquote first) (unquote second))
+            ],
+        )
+        .unwrap();
+    let mut program = rules.compile(db).unwrap();
+    program.set_report_level(tir_egglog::ReportLevel::StageInfo);
+    let [z, a, b] = [(); 3].map(|_| db.fresh(e));
+    let extra = db.fresh(e);
+    let seven = db.base(7i64);
+    let s = db.container(Container::<SetKind>::new(vec![a, b], [true; 2]));
+    let sa = db.container(Container::<SetKind>::new(vec![a], [true; 2]));
+    let sb = db.container(Container::<SetKind>::new(vec![b], [true; 2]));
+    let n = db.container(Container::<SetKind>::new(vec![sa, sb], [true; 2]));
+    let v = db.container(Container::<VecKind>::new(vec![b], [true; 2]));
+    let m = db.container(Container::<MapKind>::new(vec![b, seven], [true, false]));
+    let p = db.container(Container::<PairKind>::new(vec![b, seven], [true, false]));
+    db.insert(seed, &[s, v, m, p, n, a]).unwrap();
+    let tail = db.container(Container::<SetKind>::new(vec![b, z], [true; 2]));
+    db.insert(seed, &[tail, v, m, p, n, a]).unwrap();
+    let isolated_set = db.container(Container::<SetKind>::new(vec![b, extra], [true; 2]));
+    db.insert(isolated, &[isolated_set, z]).unwrap();
+    let parent = db.color(&[]);
+    let child = db.color(&[parent]);
+    let sibling = db.color(&[]);
+    program.run(db, &Schedule::saturate("")).unwrap();
+    db.union_in(parent, a, b);
+    db.insert_in(parent, local, &[v, a]).unwrap();
+    program.run(db, &Schedule::saturate("")).unwrap();
+    let read = |db: &tir_egglog::Database, c, table, key| {
+        db.base_value::<i64>(db.lookup_in(c, table, &[key]).unwrap())
+    };
+    let check = |c, length, removed_count, nested_count| {
+        assert_eq!(read(db, c, result, s), length);
+        assert_eq!(read(db, c, forwarded, s), length);
+        assert_eq!(read(db, c, removed, s), removed_count);
+        assert_eq!(read(db, c, nested_length, n), nested_count);
+    };
+    for c in [parent, child] {
+        check(c, 1, 0, 1);
+        assert!(db.lookup_in(c, projected, &[a, seven]).is_some());
+    }
+    for c in [Color::BASE, sibling] {
+        check(c, 2, 1, 2);
+        assert_ne!(db.find_in(c, a), db.find_in(c, b));
+    }
+    // A container created after the local equality must join the same class.
+    let late = db.container(Container::<SetKind>::new(vec![a, b, z], [true; 2]));
+    let canonical = db.container(Container::<SetKind>::new(vec![a, z], [true; 2]));
+    db.rebuild().unwrap();
+    assert_eq!(db.find_in(parent, late), db.find_in(parent, canonical));
+    db.union_in(parent, a, z);
+    program.run(db, &Schedule::saturate("")).unwrap();
+    assert_eq!(db.find_in(child, late), db.find_in(child, sa));
+    assert_eq!(read(db, parent, isolated_length, isolated_set), 1);
+    assert_eq!(read(db, child, isolated_length, isolated_set), 1);
+    assert_eq!(read(db, parent, result, tail), 1);
+    assert_eq!(read(db, child, forwarded, tail), 1);
+    let stable = program.run(db, &Schedule::saturate("")).unwrap();
+    assert!(!stable.updated);
+    assert_eq!(stable.num_matches_per_rule.values().sum::<usize>(), 0);
+    assert_eq!(read(db, child, result, s), 1);
+    db.union(a, b);
+    program.run(db, &Schedule::saturate("")).unwrap();
+    assert_eq!(read(db, sibling, result, s), 1);
+    assert_eq!(read(db, sibling, forwarded, s), 1);
+    db.drop_color(parent);
+    db.rebuild().unwrap();
+    assert_eq!(db.rows_in(child, local).count(), 0);
+    assert_eq!(read(db, sibling, result, s), 1);
+}

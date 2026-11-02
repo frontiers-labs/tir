@@ -514,7 +514,13 @@ impl<'a, R: Reads<'a>> Exec<'a, R> {
                 for i in 0..n {
                     values.clear();
                     values.extend(args.iter().map(|&r| Value::new(input.col(r)[i])));
-                    let Some(value) = self.ctx.call(prim, &values) else {
+                    let result = if R::COLORED {
+                        self.ctx
+                            .call_in(self.reads.copy().colors, input.colors[i], prim, &values)
+                    } else {
+                        self.ctx.call(prim, &values)
+                    };
+                    let Some(value) = result else {
                         continue;
                     };
                     match *out {
@@ -936,7 +942,13 @@ impl<'a, R: Reads<'a>> Exec<'a, R> {
                 for i in 0..n {
                     values.clear();
                     values.extend(args.iter().map(|&r| Value::new(batch.col(r)[i])));
-                    if self.ctx.call(prim, &values).is_none() {
+                    let result = if R::COLORED {
+                        self.ctx
+                            .call_in(self.reads.copy().colors, batch.colors[i], prim, &values)
+                    } else {
+                        self.ctx.call(prim, &values)
+                    };
+                    if result.is_none() {
                         let name = &self.ctx.prims[prim.index()].name;
                         return Err(Error::Panic(format!("`{name}` has no result")));
                     }
