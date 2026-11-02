@@ -155,6 +155,7 @@ fn fixture_root() -> std::path::PathBuf {
 #[cfg(test)]
 mod egglog {
     mod api;
+    mod colors;
     mod containers;
     mod database;
     mod differential;

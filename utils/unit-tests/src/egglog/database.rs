@@ -32,6 +32,20 @@ fn relation_rows_are_inserted_looked_up_and_removed() {
 }
 
 #[test]
+fn a_database_moves_to_another_thread_and_back() {
+    let (mut db, node) = node_db();
+    let edge = db.add_relation("edge", &[node, node]);
+    let [a, b] = [(); 2].map(|()| db.fresh(node));
+    let db = std::thread::spawn(move || {
+        db.insert(edge, &[a, b]).unwrap();
+        db
+    })
+    .join()
+    .unwrap();
+    assert_eq!(rows(&db, edge), [vec![a, b]]);
+}
+
+#[test]
 fn names_arity_and_ids_are_checked() {
     let (mut db, node) = node_db();
     let edge = db.add_relation("edge", &[node, node]);
@@ -333,6 +347,214 @@ fn a_container_rebuilt_in_place_makes_its_rows_new() {
     assert_eq!(new, [pair]);
 }
 
+// Lookups through an index between edits see exactly the live rows a scan
+// sees, also once the rows written since the index was built outnumber it.
+#[test]
+fn index_lookups_between_edits_match_a_scan() {
+    let (mut db, node) = node_db();
+    let slot = db.sort("i64").unwrap();
+    let operands = db.add_function("operands", &[node, slot], node, Merge::New);
+    let uses = db.add_index(operands, &[2]);
+    let values: Vec<Value> = (0..8).map(|_| db.fresh(node)).collect();
+    let mut keys: Vec<(Value, Value)> = Vec::new();
+    let mut state = 7u64;
+    let mut next = |len: usize| {
+        state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+        (state >> 33) as usize % len
+    };
+    for step in 0..2_000 {
+        match next(4) {
+            0 | 1 => {
+                let op = db.fresh(node);
+                let at = db.base_values().get((step % 3) as i64);
+                db.insert(operands, &[op, at, values[next(values.len())]])
+                    .unwrap();
+                keys.push((op, at));
+            }
+            2 if !keys.is_empty() => {
+                let (op, at) = keys.swap_remove(next(keys.len()));
+                db.remove(operands, &[op, at]);
+            }
+            _ if !keys.is_empty() => {
+                let (op, at) = keys[next(keys.len())];
+                db.insert(operands, &[op, at, values[next(values.len())]])
+                    .unwrap();
+            }
+            _ => {}
+        }
+        let value = values[next(values.len())];
+        let mut found: Vec<Vec<Value>> = (db.matching(uses, &[value]))
+            .map(|row| row.values().collect())
+            .collect();
+        found.sort();
+        let scanned: Vec<Vec<Value>> = rows(&db, operands)
+            .into_iter()
+            .filter(|row| row[2] == value)
+            .collect();
+        assert_eq!(found, scanned, "step {step}");
+    }
+}
+
+// An ordered index gives the rows of a key in the order of its other
+// columns, rows written after a lookup included.
+#[test]
+fn an_ordered_index_lists_a_group_by_position() {
+    let (mut db, node) = node_db();
+    let pos = db.sort("i64").unwrap();
+    let held = db.add_relation("held", &[node, pos, node]);
+    let in_order = db.add_ordered_index(held, &[0], &[1]);
+    let block = db.fresh(node);
+    let positions = [512i64, 0, 256, 768];
+    let mut ops = Vec::new();
+    for &p in &positions[..2] {
+        let op = db.fresh(node);
+        db.insert(held, &[block, db.base_values().get(p), op])
+            .unwrap();
+        ops.push((p, op));
+    }
+    let listed = |db: &mut Database| -> Vec<Value> {
+        db.matching(in_order, &[block]).map(|row| row[2]).collect()
+    };
+    ops.sort();
+    assert_eq!(
+        listed(&mut db),
+        ops.iter().map(|&(_, op)| op).collect::<Vec<_>>()
+    );
+    for &p in &positions[2..] {
+        let op = db.fresh(node);
+        db.insert(held, &[block, db.base_values().get(p), op])
+            .unwrap();
+        ops.push((p, op));
+    }
+    ops.sort();
+    assert_eq!(
+        listed(&mut db),
+        ops.iter().map(|&(_, op)| op).collect::<Vec<_>>()
+    );
+}
+
+// A union in a large table rewrites exactly the rows of the merged ids: after
+// each rebuild the rows are the model's rows with every id at its root.
+#[test]
+fn a_rebuild_after_few_unions_canonicalizes_every_row() {
+    let (mut db, node) = node_db();
+    let edge = db.add_relation("edge", &[node, node]);
+    // Indexes on both id columns let the rebuild visit only the rows of the
+    // merged ids.
+    db.add_index(edge, &[0]);
+    db.add_index(edge, &[1]);
+    let nodes: Vec<Value> = (0..1_000).map(|_| db.fresh(node)).collect();
+    let mut state = 11u64;
+    let mut next = |len: usize| {
+        state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+        (state >> 33) as usize % len
+    };
+    let mut model: Vec<(usize, usize)> = Vec::new();
+    for _ in 0..5_000 {
+        let (a, b) = (next(nodes.len()), next(nodes.len()));
+        db.insert(edge, &[nodes[a], nodes[b]]).unwrap();
+        model.push((a, b));
+    }
+    // The root of each node in the model: the least id of its class.
+    let mut root: Vec<usize> = (0..nodes.len()).collect();
+    let find = |root: &[usize], mut x: usize| {
+        while root[x] != x {
+            x = root[x];
+        }
+        x
+    };
+    for step in 0..200 {
+        let (a, b) = (next(nodes.len()), next(nodes.len()));
+        db.union(nodes[a], nodes[b]);
+        let (a, b) = (find(&root, a), find(&root, b));
+        root[a.max(b)] = a.min(b);
+        db.rebuild().unwrap();
+        let mut expected: Vec<Vec<Value>> = (model.iter())
+            .map(|&(a, b)| vec![nodes[find(&root, a)], nodes[find(&root, b)]])
+            .collect();
+        expected.sort();
+        expected.dedup();
+        assert_eq!(rows(&db, edge), expected, "step {step}");
+    }
+}
+
+// A kept index answers without write access between edits, after the table
+// compacts its dead rows, and in a clone of the database.
+#[test]
+fn a_kept_index_answers_reads_between_edits_and_in_a_clone() {
+    let (mut db, node) = node_db();
+    let slot = db.sort("i64").unwrap();
+    let operands = db.add_function("operands", &[node, slot], node, Merge::New);
+    let uses = db.add_kept_index(operands, &[2], &[]);
+    let values: Vec<Value> = (0..4).map(|_| db.fresh(node)).collect();
+    let mut keys = Vec::new();
+    let check = |db: &Database, step: usize| {
+        for &value in &values {
+            let mut found: Vec<Vec<Value>> = (db.listed(uses, &[value]))
+                .map(|row| row.values().collect())
+                .collect();
+            found.sort();
+            let scanned: Vec<Vec<Value>> = rows(db, operands)
+                .into_iter()
+                .filter(|row| row[2] == value)
+                .collect();
+            assert_eq!(found, scanned, "step {step}");
+        }
+    };
+    for step in 0..600 {
+        let op = db.fresh(node);
+        let at = db.base_values().get(0i64);
+        db.insert(operands, &[op, at, values[step % values.len()]])
+            .unwrap();
+        keys.push((op, at));
+        // Remove most rows, so the dead ones outnumber the live and the
+        // table renumbers its rows.
+        if step % 3 != 0 {
+            let (op, at) = keys.remove(0);
+            db.remove(operands, &[op, at]);
+        }
+        check(&db, step);
+    }
+    let copy = db.clone();
+    check(&copy, 600);
+}
+
+// A kept index by one column lists the rows of a key in position order while
+// rows come and go, also once the table compacts its dead rows.
+#[test]
+fn a_kept_ordered_index_lists_a_group_by_position_through_edits() {
+    let (mut db, node) = node_db();
+    let pos = db.sort("i64").unwrap();
+    let held = db.add_relation("held", &[node, pos, node]);
+    let in_order = db.add_kept_index(held, &[0], &[1]);
+    let block = db.fresh(node);
+    let mut model: Vec<(i64, Value)> = Vec::new();
+    let mut state = 5u64;
+    let mut next = |len: usize| {
+        state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+        (state >> 33) as usize % len
+    };
+    for step in 0..800 {
+        if model.is_empty() || next(3) != 0 {
+            let p = (next(1 << 20) * 2) as i64;
+            if model.iter().any(|&(held, _)| held == p) {
+                continue;
+            }
+            let op = db.fresh(node);
+            db.insert(held, &[block, db.base_values().get(p), op])
+                .unwrap();
+            model.push((p, op));
+        } else {
+            let (p, op) = model.swap_remove(next(model.len()));
+            db.remove(held, &[block, db.base_values().get(p), op]);
+        }
+        model.sort();
+        let listed: Vec<Value> = db.listed(in_order, &[block]).map(|row| row[2]).collect();
+        let expected: Vec<Value> = model.iter().map(|&(_, op)| op).collect();
+        assert_eq!(listed, expected, "step {step}");
+    }
+}
+
 #[test]
 fn subsumption_does_not_evaluate_the_function_merge() {
     let mut db = Database::new();
@@ -358,6 +580,56 @@ fn subsumption_does_not_evaluate_the_function_merge() {
         db.subsume(f, &[one]);
         assert_eq!(db.lookup(f, &[one]), Some(two));
         assert!(db.rows(f).all(|row| row.is_subsumed()));
+    }
+}
+#[test]
+fn local_container_congruence_matches_base_union() {
+    for local in [false, true] {
+        let mut db = Database::new();
+        let e = db.add_sort("E", SortKind::Eq);
+        let pairs = db.add_sort("Pair", SortKind::container::<Pair>());
+        let holds = db.add_relation("holds", &[pairs]);
+        let [a, b, z] = [(); 3].map(|_| db.fresh(e));
+        let p = db.container(Pair(a, z));
+        let q = db.container(Pair(b, z));
+        db.insert(holds, &[p]).unwrap();
+        db.insert(holds, &[q]).unwrap();
+        let nested = db.add_relation("nested", &[pairs]);
+        let outer_p = db.container(Pair(p, z));
+        let outer_q = db.container(Pair(q, z));
+        db.insert(nested, &[outer_p]).unwrap();
+        db.insert(nested, &[outer_q]).unwrap();
+        let c = db.color(&[]);
+        let child = db.color(&[c]);
+        let sibling = db.color(&[]);
+        if local {
+            db.union_in(c, a, b);
+        } else {
+            db.union(a, b);
+        }
+        db.rebuild().unwrap();
+        eprintln!(
+            "local={local}, equal_elements={}, equal_pairs={}, rows={}",
+            db.find_in(c, a) == db.find_in(c, b),
+            db.find_in(c, p) == db.find_in(c, q),
+            db.rows_in(c, holds).count()
+        );
+        assert_eq!(db.find_in(c, p), db.find_in(c, q), "local={local}");
+        assert_eq!(db.rows_in(c, holds).count(), 1, "local={local}");
+        for color in [c, child] {
+            assert_eq!(db.find_in(color, outer_p), db.find_in(color, outer_q));
+            assert_eq!(db.rows_in(color, nested).count(), 1);
+        }
+        if local {
+            for color in [tir_egglog::Color::BASE, sibling] {
+                assert_ne!(db.find_in(color, p), db.find_in(color, q));
+                assert_eq!(db.rows_in(color, holds).count(), 2);
+                assert_eq!(db.rows_in(color, nested).count(), 2);
+            }
+            assert_eq!(db.container_value::<Pair>(q), Some(&Pair(b, z)));
+        }
+        db.rebuild().unwrap();
+        assert_eq!(db.rows_in(c, holds).count(), 1);
     }
 }
 

@@ -59,6 +59,13 @@ define_id!(
     /// A table of a [`Database`](crate::Database).
     TableId
 );
+
+impl SortId {
+    // The i64 sort, which every database declares first.
+    pub(crate) const fn first() -> Self {
+        Self(0)
+    }
+}
 define_id!(
     /// A primitive of a [`Database`](crate::Database).
     ExternId

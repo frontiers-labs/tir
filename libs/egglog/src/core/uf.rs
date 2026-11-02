@@ -5,7 +5,8 @@
 #[derive(Clone, Default)]
 pub(crate) struct UnionFind {
     parents: Vec<u32>,
-    unions: usize,
+    // The ids that joined another root since the last `take_moved`.
+    moved: Vec<u32>,
 }
 
 impl UnionFind {
@@ -41,7 +42,7 @@ impl UnionFind {
         let (younger, older) = (a.max(b), a.min(b));
         if younger != older {
             self.parents[younger as usize] = older;
-            self.unions += 1;
+            self.moved.push(younger);
         }
         older
     }
@@ -51,10 +52,10 @@ impl UnionFind {
     }
 
     pub(crate) fn unions(&self) -> usize {
-        self.unions
+        self.moved.len()
     }
 
-    pub(crate) fn reset_unions(&mut self) {
-        self.unions = 0;
+    pub(crate) fn take_moved(&mut self) -> Vec<u32> {
+        std::mem::take(&mut self.moved)
     }
 }

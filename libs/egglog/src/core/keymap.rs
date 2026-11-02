@@ -40,7 +40,7 @@ struct Slot {
 // key with the key at an id. Linear probing; deletion moves later slots of
 // the cluster back into the hole (Knuth's algorithm R), so there are no
 // tombstones.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(crate) struct RowTable {
     slots: Vec<Slot>,
     len: usize,

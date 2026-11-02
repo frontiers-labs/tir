@@ -6,7 +6,7 @@ use std::cell::OnceCell;
 use std::hint::black_box;
 
 use tir_bench::{BatchSize, Criterion, TMAMetrics, criterion_group, criterion_main};
-use tir_egglog::{Database, Program, Rules, Schedule};
+use tir_egglog::{Database, Merge, Program, Rules, Schedule, SortKind};
 
 #[path = "support/synth.rs"]
 mod synth;
@@ -160,5 +160,100 @@ fn clone(c: &mut Criterion, _tma: &TMAMetrics) {
     group.finish();
 }
 
-criterion_group!(benches, compile, load, step, saturate, synth, clone);
+// One insert and then one lookup through an index, as an IR store that edits
+// an op and then reads the uses of a value does it, on a table of `ROWS`
+// operand rows.
+fn edit(c: &mut Criterion, _tma: &TMAMetrics) {
+    const ROWS: u32 = 100_000;
+    let mut db = Database::new();
+    let node = db.add_sort("Node", SortKind::Eq);
+    let slot = db.sort("i64").unwrap();
+    let operands = db.add_function("operands", &[node, slot], node, Merge::Union);
+    let uses = db.add_index(operands, &[2]);
+    // An index on each id column lets a rebuild visit only the rows of the
+    // ids a union moved.
+    db.add_index(operands, &[0]);
+    let mut values = vec![db.fresh(node)];
+    let mut next = 1u64;
+    let mut pick = move |len: usize| {
+        next = next.wrapping_mul(6364136223846793005).wrapping_add(1);
+        (next >> 33) as usize % len
+    };
+    for _ in 0..ROWS {
+        let op = db.fresh(node);
+        for at in 0..2 {
+            let value = values[pick(values.len())];
+            let slot = db.base_values().get(at as i64);
+            db.insert(operands, &[op, slot, value]).unwrap();
+        }
+        values.push(op);
+    }
+    c.bench_function("egglog/edit/union_then_lookup", |b| {
+        b.iter(|| {
+            let (old, new) = (db.fresh(node), db.fresh(node));
+            for (value, at) in [(old, 0i64), (new, 1)] {
+                let op = db.fresh(node);
+                let slot = db.base_values().get(at);
+                db.insert(operands, &[op, slot, value]).unwrap();
+            }
+            db.union(old, new);
+            db.rebuild().unwrap();
+            black_box(db.matching(uses, &[old]).count())
+        });
+    });
+    c.bench_function("egglog/edit/insert_then_lookup", |b| {
+        b.iter(|| {
+            let op = db.fresh(node);
+            let value = values[pick(values.len())];
+            let slot = db.base_values().get(0i64);
+            db.insert(operands, &[op, slot, value]).unwrap();
+            black_box(db.matching(uses, &[value]).count())
+        });
+    });
+}
+
+// Reads of an IR store over `OPS` ops: a per-op fact by its key, and the
+// operands of an op through an ordered index on the op column.
+fn read(c: &mut Criterion, _tma: &TMAMetrics) {
+    const OPS: u32 = 100_000;
+    let mut db = Database::new();
+    let node = db.add_sort("Node", SortKind::Eq);
+    let int = db.sort("i64").unwrap();
+    let name = db.add_function("name", &[node], int, Merge::New);
+    let operands = db.add_function("operands", &[node, int], node, Merge::New);
+    let ops: Vec<_> = (0..OPS).map(|_| db.fresh(node)).collect();
+    for (at, &op) in ops.iter().enumerate() {
+        let kind = db.base_values().get((at % 200) as i64);
+        db.insert(name, &[op, kind]).unwrap();
+        for slot in 0..2i64 {
+            let slot_cell = db.base_values().get(slot);
+            db.insert(operands, &[op, slot_cell, ops[at / 2]]).unwrap();
+        }
+    }
+    db.set_shapes(
+        operands,
+        &[
+            tir_egglog::Shape::Dense,
+            tir_egglog::Shape::Sparse,
+            tir_egglog::Shape::Sparse,
+        ],
+    )
+    .unwrap();
+    let of_op = db.add_ordered_index(operands, &[0], &[1]);
+    let mut next = 1u64;
+    let mut pick = move || {
+        next = next.wrapping_mul(6364136223846793005).wrapping_add(1);
+        ops[(next >> 33) as usize % ops.len()]
+    };
+    c.bench_function("egglog/read/function_lookup", |b| {
+        b.iter(|| black_box(db.lookup(name, &[pick()])))
+    });
+    c.bench_function("egglog/read/operands_of_op", |b| {
+        b.iter(|| black_box(db.matching(of_op, &[pick()]).count()))
+    });
+}
+
+criterion_group!(
+    benches, compile, load, step, saturate, synth, clone, edit, read
+);
 criterion_main!(benches);

@@ -655,31 +655,6 @@ fn a_read_primitive_sees_the_declarations_inside_a_rule() -> Result<(), Error> {
 }
 
 #[test]
-fn a_popped_table_is_missing() -> Result<(), Error> {
-    let mut eg = math()?;
-    eg.run_program(vec![Command::Push(1)])?;
-    add_constructor(&mut eg, "Neg", schema(&["Math"], "Math"), None, false)?;
-    run(&mut eg, vec![global("$n", expr!((Neg (Num 1))))])?;
-    eg.run_program(vec![Command::Pop(span!(), 1)])?;
-    assert!(matches!(
-        eg.constructor_enodes("Neg", |_| {}),
-        Err(Error::ApiError(ApiError::MissingTable { .. }))
-    ));
-    add_constructor(&mut eg, "Other", schema(&["Math"], "Math"), None, false)?;
-    let added = eg.update(|mut state| state.add("Neg", RawValues(vec![Value::new(0)])));
-    assert!(matches!(
-        added,
-        Err(Error::ApiError(ApiError::MissingTable { .. }))
-    ));
-    eg.read(|state| {
-        assert_eq!(state.table_size("Neg"), None);
-        assert!(state.tables().all(|name| name != "Neg"));
-        assert!(state.tables().any(|name| name == "Other"));
-    });
-    Ok(())
-}
-
-#[test]
 fn termdag_prints_and_rejects_foreign_ids() {
     let mut td = TermDag::default();
     let x = td.var("x".into());
@@ -1164,7 +1139,7 @@ fn a_combined_ruleset_runs_its_members_in_one_iteration() -> Result<(), Error> {
 }
 
 #[test]
-fn check_fail_push_and_pop_commands() -> Result<(), Error> {
+fn check_and_fail_commands() -> Result<(), Error> {
     let mut eg = EGraph::default();
     add_relation(&mut eg, "R", vec!["i64".into()])?;
     run(&mut eg, vec![action!((R 1))])?;
@@ -1178,23 +1153,6 @@ fn check_fail_push_and_pop_commands() -> Result<(), Error> {
     assert!(matches!(
         eg.run_program(vec![Command::Fail(span!(), Box::new(check(1)))]),
         Err(Error::ExpectFail(_))
-    ));
-    eg.extension_state_or_default::<Vec<i32>>().push(1);
-    eg.run_program(vec![Command::Push(1), Command::Action(action!((R 5)))])?;
-    eg.extension_state_or_default::<Vec<i32>>().push(2);
-    eg.run_program(vec![check(5), Command::Pop(span!(), 1)])?;
-    assert!(
-        eg.run_program(vec![check(5)]).is_err(),
-        "the pop drops (R 5)"
-    );
-    assert_eq!(
-        eg.extension_state::<Vec<i32>>(),
-        Some(&vec![1]),
-        "and the state made after the push"
-    );
-    assert!(matches!(
-        eg.run_program(vec![Command::Pop(span!(), 1)]),
-        Err(Error::Pop(_))
     ));
     Ok(())
 }
@@ -1275,11 +1233,6 @@ fn variables_may_not_shadow_declarations() -> Result<(), Error> {
         panic!("a shadowing error")
     };
     assert!(message.contains("pattern variable `value`") && message.contains("global `$value`"));
-
-    let mut eg = EGraph::default();
-    let x = || Command::Action(global("x", exprs::int(1)));
-    eg.run_program(vec![Command::Push(1), x(), Command::Pop(span!(), 1), x()])?;
-    add_ruleset(&mut eg, "x").unwrap_err();
     Ok(())
 }
 

@@ -14,7 +14,6 @@
 
 use std::any::{Any, TypeId};
 use std::fmt::Debug;
-use std::rc::Rc;
 use std::sync::Arc;
 
 use crate::ast::{Command, RuleEvalMode, RunConfig, Schedule, Schema};
@@ -265,7 +264,7 @@ pub fn rust_rule(
     + Sync
     + 'static,
 ) -> Result<Vec<CommandOutput>, Error> {
-    let f: Rc<PrimFn> = Rc::new(move |ctx, args| {
+    let f: Arc<PrimFn> = Arc::new(move |ctx, args| {
         func(WriteState::new(ctx), args)?;
         Some(ctx.base(()))
     });
@@ -286,7 +285,7 @@ pub fn rust_rule_full(
     + Sync
     + 'static,
 ) -> Result<Vec<CommandOutput>, Error> {
-    let f: Rc<PrimFn> = Rc::new(move |ctx, args| {
+    let f: Arc<PrimFn> = Arc::new(move |ctx, args| {
         func(FullState::new(ctx), args)?;
         Some(ctx.base(()))
     });

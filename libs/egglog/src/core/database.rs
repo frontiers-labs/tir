@@ -1,13 +1,13 @@
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::ops::{Index, Range};
-use std::rc::Rc;
 use std::sync::Arc;
 
 use tir_adt::FxBuildHasher;
 use tir_adt::simd::hash_row;
 
 use super::base::BaseValues;
+use super::color::Colors;
 use super::containers::ContainerValues;
 use super::schema::{SortSchema, TableSchema};
 use super::table::Table;
@@ -24,7 +24,7 @@ use crate::sort::{BoolSort, EqSort, F64Sort, I64Sort, OpaqueSort, StringSort, Un
 
 /// The body of a primitive: `None` means the primitive has no result for
 /// these arguments.
-pub type PrimFn = dyn Fn(&mut PrimCtx<'_>, &[Value]) -> Option<Value>;
+pub type PrimFn = dyn Fn(&mut PrimCtx<'_>, &[Value]) -> Option<Value> + Send + Sync;
 
 #[derive(Clone)]
 pub(crate) struct Prim {
@@ -32,7 +32,7 @@ pub(crate) struct Prim {
     pub(crate) signature: Signature,
     // Where rules may call it.
     pub(crate) contexts: &'static [Context],
-    pub(crate) f: Rc<PrimFn>,
+    pub(crate) f: Arc<PrimFn>,
 }
 
 #[derive(Clone)]
@@ -65,6 +65,8 @@ pub struct Database {
     pub(crate) pending: Vec<Write>,
     pub(crate) predicted: HashMap<(TableId, Vec<u32>), Value, FxBuildHasher>,
     pub(crate) now: u32,
+    // Empty until the first color: no color code runs.
+    pub(crate) colors: Colors,
 }
 
 impl Default for Database {
@@ -90,6 +92,7 @@ impl Database {
             pending: Vec::new(),
             predicted: HashMap::default(),
             now: 0,
+            colors: Colors::new(),
         };
         db.add_arcsort(I64Sort.to_arcsort());
         db.add_arcsort(F64Sort.to_arcsort());
@@ -242,7 +245,7 @@ impl Database {
         &mut self,
         name: &str,
         signature: Signature,
-        f: impl Fn(&mut PrimCtx<'_>, &[Value]) -> Option<Value> + 'static,
+        f: impl Fn(&mut PrimCtx<'_>, &[Value]) -> Option<Value> + Send + Sync + 'static,
     ) -> ExternId {
         self.add_primitive_in(name, signature, &Context::ALL, f)
     }
@@ -257,9 +260,9 @@ impl Database {
         name: &str,
         signature: Signature,
         contexts: &'static [Context],
-        f: impl Fn(&mut PrimCtx<'_>, &[Value]) -> Option<Value> + 'static,
+        f: impl Fn(&mut PrimCtx<'_>, &[Value]) -> Option<Value> + Send + Sync + 'static,
     ) -> ExternId {
-        let (name, f) = (name.to_owned(), Rc::new(f));
+        let (name, f) = (name.to_owned(), Arc::new(f));
         let prim = Prim {
             name,
             signature,
@@ -329,6 +332,15 @@ impl Database {
     /// Write a relation row, or a key and its output. A key that has an
     /// output already gets the merge of the two.
     pub fn insert(&mut self, table: TableId, row: &[Value]) -> Result<(), Error> {
+        self.check_row(table, row)?;
+        let schema = &self.tables[table.index()].schema;
+        let cells = self.tables[table.index()].canonical(row, &self.uf);
+        let hash = hash_row(&cells[..schema.keys]);
+        self.apply_row(table, &cells, hash, false, None)
+    }
+
+    // Whether `row` has the columns of `table` and ids where it holds ids.
+    pub(crate) fn check_row(&self, table: TableId, row: &[Value]) -> Result<(), Error> {
         let schema = &self.tables[table.index()].schema;
         let (expected, found) = (schema.columns.len(), row.len());
         if expected != found {
@@ -350,9 +362,7 @@ impl Database {
                 value,
             });
         }
-        let cells = self.tables[table.index()].canonical(row, &self.uf);
-        let hash = hash_row(&cells[..schema.keys]);
-        self.apply_row(table, &cells, hash, false, None)
+        Ok(())
     }
 
     pub fn remove(&mut self, table: TableId, key: &[Value]) {
@@ -435,7 +445,26 @@ impl Database {
     /// An index of `table` by the key columns `order`. Declaring the same
     /// order again returns the same index.
     pub fn add_index(&mut self, table: TableId, order: &[usize]) -> IndexId {
-        let at = self.tables[table.index()].add_index(order);
+        self.add_ordered_index(table, order, &[])
+    }
+
+    /// [`Database::add_ordered_index`] that every write to `table` keeps up to
+    /// date, so [`Database::listed`] reads it without write access.
+    pub fn add_kept_index(&mut self, table: TableId, key: &[usize], by: &[usize]) -> IndexId {
+        let order: Vec<usize> = key.iter().chain(by).copied().collect();
+        let at = self.tables[table.index()].add_kept_index(&order, key.len());
+        self.index_id(table, at)
+    }
+
+    /// An index of `table` by the key columns `key` whose rows of a key come
+    /// in the order of the columns `by`, as the positions of a list.
+    pub fn add_ordered_index(&mut self, table: TableId, key: &[usize], by: &[usize]) -> IndexId {
+        let order: Vec<usize> = key.iter().chain(by).copied().collect();
+        let at = self.tables[table.index()].add_ordered_index(&order, key.len());
+        self.index_id(table, at)
+    }
+
+    fn index_id(&mut self, table: TableId, at: usize) -> IndexId {
         let found = self.indexes.iter().position(|&entry| entry == (table, at));
         IndexId::new(found.unwrap_or_else(|| {
             self.indexes.push((table, at));
@@ -454,6 +483,11 @@ impl Database {
     }
 
     pub(crate) fn ctx_and_indexes(&mut self) -> (PrimCtx<'_>, &[(TableId, usize)]) {
+        let (ctx, indexes, _) = self.parts();
+        (ctx, indexes)
+    }
+
+    pub(crate) fn parts(&mut self) -> (PrimCtx<'_>, &[(TableId, usize)], &mut Colors) {
         let ctx = PrimCtx {
             tables: &self.tables,
             names: &self.table_names,
@@ -466,9 +500,10 @@ impl Database {
             predicted: &mut self.predicted,
             stop: Cell::new(false),
             panicked: Cell::new(false),
+            equality: None,
             context: Context::Full,
         };
-        (ctx, &self.indexes)
+        (ctx, &self.indexes, &mut self.colors)
     }
 
     pub(crate) fn view(&self) -> View<'_> {
@@ -524,13 +559,14 @@ pub struct PrimCtx<'a> {
     pub(crate) containers: &'a mut ContainerValues,
     pub(crate) pending: &'a mut Vec<Write>,
     pub(crate) predicted: &'a mut HashMap<(TableId, Vec<u32>), Value, FxBuildHasher>,
+    equality: Option<(&'a Colors, u32)>,
     // Set to end the search early; with `panicked`, the search fails.
     pub(crate) stop: Cell<bool>,
     pub(crate) panicked: Cell<bool>,
     pub(crate) context: Context,
 }
 
-impl PrimCtx<'_> {
+impl<'a> PrimCtx<'a> {
     pub fn base<T: BaseValue>(&self, value: T) -> Value {
         self.base.get(value)
     }
@@ -547,7 +583,10 @@ impl PrimCtx<'_> {
         self.containers
     }
 
-    pub fn container<C: ContainerValue>(&mut self, container: C) -> Value {
+    pub fn container<C: ContainerValue>(&mut self, mut container: C) -> Value {
+        if self.equality.is_some() {
+            container.rebuild_contents(&|value| self.find(value));
+        }
         self.containers.intern(container, self.uf)
     }
 
@@ -556,7 +595,19 @@ impl PrimCtx<'_> {
     }
 
     pub fn find(&self, value: Value) -> Value {
-        Value::new(self.uf.find(value.raw()))
+        let root = self.uf.find(value.raw());
+        Value::new(
+            self.equality
+                .map_or(root, |(colors, c)| colors.root(c, root)),
+        )
+    }
+
+    pub(crate) fn mapped_container<C: ContainerValue>(&self, value: Value) -> Option<C> {
+        let mut container = self.container_value::<C>(self.find(value))?.clone();
+        if self.equality.is_some() {
+            container.rebuild_contents(&|value| self.find(value));
+        }
+        Some(container)
     }
 
     /// The table of this name.
@@ -604,8 +655,57 @@ impl PrimCtx<'_> {
             self.panic();
             return None;
         }
-        let value = (prims[prim.index()].f)(self, args);
-        if self.panicked.get() { None } else { value }
+        let mut normalized = Vec::new();
+        let args = if let Some((colors, c)) = self.equality {
+            super::color::check_pure(self, prim).ok()?;
+            let signature = &prims[prim.index()].signature;
+            normalized.reserve(args.len());
+            for (&value, &sort) in args.iter().zip(&signature.inputs) {
+                let value = match self.sorts[sort.index()].kind {
+                    SortKind::Base(_) => value,
+                    SortKind::Eq => self.find(value),
+                    SortKind::Container(ty) => {
+                        let value = self.find(value);
+                        let find =
+                            |v: Value, uf: &UnionFind| Value::new(colors.root(c, uf.find(v.raw())));
+                        self.containers.map(ty, value, &find, self.uf)?
+                    }
+                };
+                normalized.push(value);
+            }
+            normalized.as_slice()
+        } else {
+            args
+        };
+        let value = (prims[prim.index()].f)(self, args)?;
+        if self.panicked.get() {
+            return None;
+        }
+        Some(
+            if self.equality.is_some()
+                && !matches!(
+                    self.sorts[prims[prim.index()].signature.output.index()].kind,
+                    SortKind::Base(_)
+                )
+            {
+                self.find(value)
+            } else {
+                value
+            },
+        )
+    }
+
+    pub(crate) fn call_in(
+        &mut self,
+        colors: &'a Colors,
+        c: u32,
+        prim: ExternId,
+        args: &[Value],
+    ) -> Option<Value> {
+        let previous = self.equality.replace((colors, c));
+        let result = self.call(prim, args);
+        self.equality = previous;
+        result
     }
 
     /// The primitive overloads of this name.
@@ -668,6 +768,7 @@ pub struct Rows<'a> {
 pub(crate) enum RowIds<'a> {
     Log(Range<u32>),
     Listed(std::slice::Iter<'a, u32>),
+    Owned(std::vec::IntoIter<u32>),
 }
 
 impl<'a> Iterator for Rows<'a> {
@@ -678,12 +779,10 @@ impl<'a> Iterator for Rows<'a> {
             let row = match &mut self.ids {
                 RowIds::Log(rows) => rows.next()?,
                 RowIds::Listed(rows) => *rows.next()?,
+                RowIds::Owned(rows) => rows.next()?,
             };
             if self.table.is_live(row) {
-                return Some(Row {
-                    table: self.table,
-                    row,
-                });
+                return Some(Row::new(self.table, row, 0));
             }
         }
     }
@@ -694,12 +793,18 @@ impl<'a> Iterator for Rows<'a> {
 pub struct Row<'a> {
     table: &'a Table,
     row: u32,
+    // The table column of the row's first column: 1 in a color table.
+    first: usize,
 }
 
 impl<'a> Row<'a> {
+    pub(crate) fn new(table: &'a Table, row: u32, first: usize) -> Self {
+        Self { table, row, first }
+    }
+
     pub fn values(self) -> impl Iterator<Item = Value> + 'a {
         let (table, row) = (self.table, self.row);
-        (0..table.columns.len()).map(move |c| Value::new(table.cell(row, c)))
+        (self.first..table.columns.len()).map(move |c| Value::new(table.cell(row, c)))
     }
 
     pub fn is_subsumed(self) -> bool {
@@ -715,6 +820,6 @@ impl Index<usize> for Row<'_> {
     type Output = Value;
 
     fn index(&self, column: usize) -> &Value {
-        as_value(&self.table.columns[column][self.row as usize])
+        as_value(&self.table.columns[self.first + column][self.row as usize])
     }
 }

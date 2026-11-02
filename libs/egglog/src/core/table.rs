@@ -27,9 +27,12 @@ pub(crate) struct Table {
     version: u64,
     // Bumped whenever row ids change meaning.
     renumbered: u32,
+    // Whether an index is kept, so a write brings it up to date.
+    keeps_indexes: bool,
 }
 
-// A clone rebuilds its key map and builds its indexes on first use.
+// A clone rebuilds its key map, copies its kept indexes, and builds the
+// others on first use. Rows keep their ids, so the copies stay valid.
 impl Clone for Table {
     fn clone(&self) -> Self {
         let mut table = Self {
@@ -40,13 +43,18 @@ impl Clone for Table {
             subsumed: self.subsumed.clone(),
             keys: KeyMap::new(self.schema.keys, 0),
             indexes: (self.indexes.iter())
-                .map(|index| Index::new(index.order.clone()))
+                .map(|index| match index.kept {
+                    true => index.clone(),
+                    false => Index::new(index.order.clone(), index.key_len),
+                })
                 .collect(),
             dead: self.dead,
             version: self.version,
             renumbered: 0,
+            keeps_indexes: self.keeps_indexes,
         };
         table.rebuild_keys();
+        table.renumbered = self.renumbered;
         table
     }
 }
@@ -63,6 +71,7 @@ impl Table {
             dead: 0,
             version: 0,
             renumbered: 0,
+            keeps_indexes: false,
             schema,
         }
     }
@@ -150,6 +159,8 @@ impl Table {
         self.keys
             .insert(&row[..self.schema.keys], hash, id, &self.columns);
         self.version += 1;
+        self.group_new_row(id);
+        self.keep_indexes();
         id
     }
 
@@ -162,6 +173,13 @@ impl Table {
 
     // Kills a row whose key the key map has moved to a newer row.
     pub(crate) fn kill(&mut self, row: u32) {
+        if self.keeps_indexes {
+            for index in &mut self.indexes {
+                if index.is_grouped() {
+                    index.group_remove(&self.columns, row);
+                }
+            }
+        }
         set_bit(&mut self.live, row, false);
         self.dead += 1;
         self.version += 1;
@@ -194,6 +212,11 @@ impl Table {
         self.subsumed.clear();
         self.dead = 0;
         self.rebuild_keys();
+        for index in self.indexes.iter_mut().filter(|index| index.is_grouped()) {
+            let dense = index.is_dense_group();
+            index.group(&[], 0, |_| false, dense);
+        }
+        self.keep_indexes();
     }
 
     // Indexes pick their layout from the shapes when built.
@@ -210,6 +233,15 @@ impl Table {
         let rows: Vec<usize> = (0..self.len())
             .filter(|&row| self.is_live(row as u32))
             .collect();
+        if self.keeps_indexes {
+            let mut renamed = vec![u32::MAX; self.len()];
+            for (new, &old) in rows.iter().enumerate() {
+                renamed[old] = new as u32;
+            }
+            for index in self.indexes.iter_mut().filter(|index| index.is_grouped()) {
+                index.group_rename(&renamed);
+            }
+        }
         for column in &mut self.columns {
             *column = rows.iter().map(|&row| column[row]).collect();
         }
@@ -226,6 +258,7 @@ impl Table {
         }
         self.dead = 0;
         self.rebuild_keys();
+        self.keep_indexes();
     }
 
     fn rebuild_keys(&mut self) {
@@ -253,11 +286,77 @@ impl Table {
     }
 
     pub(crate) fn add_index(&mut self, order: &[usize]) -> usize {
-        if let Some(at) = self.indexes.iter().position(|index| index.order == order) {
+        self.add_ordered_index(order, order.len())
+    }
+
+    // An index by the first `key_len` columns of `order`, whose rows of a
+    // key are in the order of the rest.
+    pub(crate) fn add_ordered_index(&mut self, order: &[usize], key_len: usize) -> usize {
+        let same = |index: &Index| index.order == order && index.key_len == key_len;
+        if let Some(at) = self.indexes.iter().position(same) {
             return at;
         }
-        self.indexes.push(Index::new(order.to_vec()));
+        self.indexes.push(Index::new(order.to_vec(), key_len));
         self.indexes.len() - 1
+    }
+
+    // A kept index by the first `key_len` columns of `order`, built now and
+    // brought up to date by every write.
+    pub(crate) fn add_kept_index(&mut self, order: &[usize], key_len: usize) -> usize {
+        let at = self.add_ordered_index(order, key_len);
+        self.indexes[at].kept = true;
+        self.keeps_indexes = true;
+        if key_len == 1 && !self.indexes[at].is_grouped() {
+            let (len, live) = (self.len(), self.live.clone());
+            let dense = self.schema.shapes[order[0]] == Shape::Dense;
+            self.indexes[at].group(&self.columns, len, |row| bit(&live, row as u32), dense);
+        } else {
+            self.catch_up_index(at);
+        }
+        at
+    }
+
+    fn keep_indexes(&mut self) {
+        if !self.keeps_indexes {
+            return;
+        }
+        for at in 0..self.indexes.len() {
+            if self.indexes[at].kept && !self.indexes[at].is_grouped() {
+                self.catch_up_index(at);
+            }
+        }
+    }
+
+    // Puts the row `push` just wrote into every grouped index.
+    fn group_new_row(&mut self, row: u32) {
+        if !self.keeps_indexes {
+            return;
+        }
+        for index in self.indexes.iter_mut().filter(|index| index.is_grouped()) {
+            index.group_insert(&self.columns, row);
+        }
+    }
+
+    // A declared index whose key is `column` alone.
+    pub(crate) fn id_index(&self, column: usize) -> Option<usize> {
+        (self.indexes.iter()).position(|index| index.key_len == 1 && index.order[0] == column)
+    }
+
+    // Brings index `at` up to date for a lookup of a whole key: rows
+    // appended since its layout go to its tail, and the layout is built again
+    // when they outgrow it or when row ids changed meaning. A killed row
+    // stays in the layout, so the reader skips rows that are not live.
+    pub(crate) fn catch_up_index(&mut self, at: usize) {
+        let len = self.len();
+        let index = &mut self.indexes[at];
+        if index.is_current(self.version) {
+            return;
+        }
+        if index.can_catch_up(u64::from(self.renumbered), len) {
+            index.catch_up(&self.columns, len);
+        } else {
+            self.refresh_index(at);
+        }
     }
 
     pub(crate) fn refresh_index(&mut self, at: usize) {
@@ -269,7 +368,7 @@ impl Table {
             .order
             .first()
             .is_some_and(|&c| self.schema.shapes[c] == Shape::Dense);
-        let mut index = std::mem::replace(&mut self.indexes[at], Index::new(Vec::new()));
+        let mut index = std::mem::replace(&mut self.indexes[at], Index::new(Vec::new(), 0));
         index.build(
             &self.columns,
             self.len(),

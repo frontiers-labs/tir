@@ -310,8 +310,6 @@ pub enum Error {
     CombinedRulesetError(String, Span),
     RuleAlreadyExists(String, Span),
     CommandAlreadyExists(String, Span),
-    /// A `pop` with no `push` before it.
-    Pop(Span),
     /// The command inside a `fail` succeeded.
     ExpectFail(Span),
     ExtractError(String),
@@ -372,7 +370,6 @@ impl fmt::Display for Error {
             Self::CommandAlreadyExists(name, span) => {
                 write!(f, "{span}: command already exists: {name}")
             }
-            Self::Pop(span) => write!(f, "{span}: tried to pop too much"),
             Self::ExpectFail(span) => write!(f, "{span}: command should have failed"),
             Self::ExtractError(message) => write!(f, "extraction failure: {message}"),
             Self::Io(message) => write!(f, "IO error: {message}"),

@@ -17,8 +17,8 @@ use tir_adt::FxBuildHasher;
 use crate::ast::Expr;
 use crate::sort::{BigInt, BigRat};
 use crate::{
-    ArcSort, CommandOutput, Database, EGraph, Enode, Error, SortId, Span, TableId, TableKind,
-    TableSchema, TermDag, TermId, Value,
+    ArcSort, Color, CommandOutput, Database, EGraph, Enode, Error, SortId, Span, TableId,
+    TableKind, TableSchema, TermDag, TermId, Value,
 };
 
 type Map<K, V> = HashMap<K, V, FxBuildHasher>;
@@ -207,6 +207,8 @@ pub struct ExtractedTermVariants<C> {
 /// costs from outliving a change to it.
 pub struct TreeExtractor<'g, C: Cost> {
     db: &'g Database,
+    // The color whose e-classes and rows it reads.
+    color: Color,
     model: Box<dyn TotalCost<C> + 'g>,
     tables: Vec<TableId>,
     // The Eq sorts some constructor makes; e-classes of others are leaves.
@@ -221,13 +223,18 @@ pub type Extractor<'g> = TreeExtractor<'g, DefaultCost>;
 
 impl<'g> TreeExtractor<'g, DefaultCost> {
     pub fn new(db: &'g Database) -> Self {
-        Self::with_cost_model(db, DEFAULT_COST_MODEL)
+        Self::new_in(db, Color::BASE)
+    }
+
+    /// The cheapest terms of the e-classes of `color`, from its rows.
+    pub fn new_in(db: &'g Database, color: Color) -> Self {
+        Self::build(db, color, DEFAULT_COST_MODEL)
     }
 
     /// The best term of the e-class `value`.
     pub fn best(&self, value: Value) -> Result<(TermDag, TermId), Error> {
         let mut termdag = TermDag::default();
-        let class = self.db.find(value);
+        let class = self.db.find_in(self.color, value);
         let missing = || Error::ExtractError(format!("no term for {value:?}"));
         let (table, _) = self.parent.get(&class).ok_or_else(missing)?;
         let sort = self
@@ -245,6 +252,10 @@ impl<'g> TreeExtractor<'g, DefaultCost> {
 
 impl<'g, C: Cost> TreeExtractor<'g, C> {
     pub fn with_cost_model(db: &'g Database, model: impl TreeCostModel<C> + 'g) -> Self {
+        Self::build(db, Color::BASE, model)
+    }
+
+    fn build(db: &'g Database, color: Color, model: impl TreeCostModel<C> + 'g) -> Self {
         let schema = db.schema();
         let constructors = schema
             .tables()
@@ -262,6 +273,7 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
             .collect();
         let mut extractor = Self {
             db,
+            color,
             model: Box::new(model),
             tables,
             made,
@@ -287,14 +299,30 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
         self.db.schema().sort(id).arcsort()
     }
 
+    fn container_value(&self, value: Value, sort: &ArcSort) -> Value {
+        if self.color == Color::BASE {
+            return value;
+        }
+        sort.value_type()
+            .and_then(|ty| {
+                self.db.container_values().lookup_mapped(
+                    ty,
+                    self.db.find_in(self.color, value),
+                    &|v| self.db.find_in(self.color, v),
+                )
+            })
+            .unwrap_or(value)
+    }
+
     // The cost of `value` of `sort`; `None` if it has no term yet.
     fn cost(&self, value: Value, sort: &ArcSort) -> Option<C> {
         if sort.is_container_sort() {
+            let value = self.container_value(value, sort);
             let elements = sort.inner_values(self.db.container_values(), value);
             let costs: Option<Vec<C>> = elements.iter().map(|(s, v)| self.cost(*v, s)).collect();
             Some(self.model.container(self.db, sort, value, &costs?))
         } else if sort.is_eq_sort() && self.made.contains(&self.db.sort(sort.name()).ok()?) {
-            self.costs.get(&self.db.find(value)).cloned()
+            self.costs.get(&self.db.find_in(self.color, value)).cloned()
         } else {
             Some(self.model.base(self.db, sort, value))
         }
@@ -318,6 +346,7 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
 
     fn has_term(&self, value: Value, sort: &ArcSort) -> bool {
         if sort.is_container_sort() {
+            let value = self.container_value(value, sort);
             sort.inner_values(self.db.container_values(), value)
                 .iter()
                 .all(|(sort, value)| self.has_term(*value, sort))
@@ -327,7 +356,8 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
                 .sort(sort.name())
                 .is_ok_and(|id| self.made.contains(&id))
         {
-            self.parent.contains_key(&self.db.find(value))
+            self.parent
+                .contains_key(&self.db.find_in(self.color, value))
         } else {
             true
         }
@@ -349,7 +379,11 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
         while changed {
             changed = false;
             for &table in &self.tables {
-                for found in self.db.rows(table).filter(|r| !r.is_subsumed()) {
+                for found in self
+                    .db
+                    .rows_in(self.color, table)
+                    .filter(|r| !r.is_subsumed())
+                {
                     row.clear();
                     row.extend(found.values());
                     let (eclass, Some(cost)) = (
@@ -369,7 +403,11 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
         while changed {
             changed = false;
             for &table in &self.tables {
-                for found in self.db.rows(table).filter(|r| !r.is_subsumed()) {
+                for found in self
+                    .db
+                    .rows_in(self.color, table)
+                    .filter(|r| !r.is_subsumed())
+                {
                     let row: Vec<Value> = found.values().collect();
                     let eclass = *row.last().expect("an output");
                     let best =
@@ -399,6 +437,7 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
         }
         let arcsort = self.sort(sort);
         let term = if arcsort.is_container_sort() {
+            let value = self.container_value(value, arcsort);
             let containers = self.db.container_values();
             let elements = arcsort.inner_values(containers, value);
             let terms = (elements.iter())
@@ -409,7 +448,7 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
             arcsort.reconstruct_termdag_container(containers, value, termdag, terms)
         } else if let Some((table, row)) = self
             .parent
-            .get(&self.db.find(value))
+            .get(&self.db.find_in(self.color, value))
             .filter(|_| arcsort.is_eq_sort())
         {
             let schema = self.db.schema().table(*table);
@@ -443,7 +482,7 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
         sort: &ArcSort,
     ) -> Option<ExtractedTerm<C>> {
         let value = if sort.is_eq_sort() {
-            self.db.find(value)
+            self.db.find_in(self.color, value)
         } else {
             value
         };
@@ -470,10 +509,14 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
                 .into_iter()
                 .collect();
         }
-        let class = self.db.find(value);
+        let class = self.db.find_in(self.color, value);
         let mut roots: Vec<(C, String, Vec<Value>, TableId)> = Vec::new();
         for &table in &self.tables {
-            for found in self.db.rows(table).filter(|r| !r.is_subsumed()) {
+            for found in self
+                .db
+                .rows_in(self.color, table)
+                .filter(|r| !r.is_subsumed())
+            {
                 let row: Vec<Value> = found.values().collect();
                 if row.last() == Some(&class)
                     && let Some(cost) = self.row_cost(table, &row, false)

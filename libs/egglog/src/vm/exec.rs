@@ -8,13 +8,15 @@ use tir_adt::simd::{hash_row, hash_rows, intersect_sorted, select_eq, select_sam
 
 use super::Program;
 use super::code::{Action, Bind, Node, Reg, Slice, Step};
-use crate::core::{Delta, EMPTY, RowTable, Table, UnionFind, l2, same_key};
-use crate::{Database, Error, PrimCtx, TableId, TableKind, Value};
+use crate::core::{Colors, Delta, EMPTY, RowTable, Table, UnionFind, check_pure, l2, same_key};
+use crate::{Color, Database, Error, PrimCtx, TableId, TableKind, Value};
 
 #[derive(Clone, Default)]
 struct Batch {
     cols: Vec<Vec<u32>>,
     len: usize,
+    // The color of each binding, in a color run.
+    colors: Vec<u32>,
 }
 
 impl Batch {
@@ -35,6 +37,8 @@ pub(crate) struct Writes {
     unions: Vec<(u32, u32)>,
     removed: Vec<Removal>,
     subsumed: Vec<(usize, Vec<u32>)>,
+    // The color of each union, in a color run.
+    colors: Vec<u32>,
 }
 
 struct Removal {
@@ -44,6 +48,24 @@ struct Removal {
 }
 
 impl Writes {
+    // The rows of a color run lead with their color.
+    fn new(program: &Program, colored: bool) -> Self {
+        let file_tables = &program.file.tables;
+        Self {
+            rows: (file_tables.iter())
+                .map(|table| Delta {
+                    columns: vec![Vec::new(); usize::from(colored) + table.columns.len()],
+                    subsumed: Vec::new(),
+                })
+                .collect(),
+            entries: file_tables.iter().map(|_| RowTable::default()).collect(),
+            unions: Vec::new(),
+            removed: Vec::new(),
+            subsumed: Vec::new(),
+            colors: Vec::new(),
+        }
+    }
+
     // A function with a default makes its default rather than a fresh id.
     fn entry(&mut self, table: (usize, &Table), key: &[u32], hash: u32, uf: &mut UnionFind) -> u32 {
         let delta = &mut self.rows[table.0];
@@ -94,9 +116,65 @@ impl Writes {
         }
         Ok(())
     }
+
+    // Writes the rows and unions of a color run into their colors; a color
+    // rebuild follows.
+    pub(crate) fn apply_colors(self, db: &mut Database, tables: &[TableId]) -> Result<(), Error> {
+        for (delta, &table) in self.rows.iter().zip(tables) {
+            for (i, &subsumed) in delta.subsumed.iter().enumerate() {
+                let row = delta.columns.iter().map(|column| column[i]).collect();
+                db.write_in(table, row, subsumed)?;
+            }
+        }
+        for ((a, b), c) in self.unions.into_iter().zip(self.colors) {
+            db.union_in(Color::new(c), Value::new(a), Value::new(b));
+        }
+        Ok(())
+    }
 }
 
-struct Exec<'a> {
+// How a search reads rows: the base path, or a color run in the copy form.
+// The base path is monomorphized with no color work in it.
+pub(crate) trait Reads<'a> {
+    const COLORED: bool;
+
+    fn copy(&self) -> &CopyRead<'a>;
+}
+
+pub(crate) struct BaseRead;
+
+impl<'a> Reads<'a> for BaseRead {
+    const COLORED: bool = false;
+
+    fn copy(&self) -> &CopyRead<'a> {
+        unreachable!("the base reads no color")
+    }
+}
+
+// A color run in the copy form: each binding sees the base rows its color
+// shows and the rows of its color. Base rows are never New here, so every
+// match of a color run reads a row of its color and none repeats a base
+// match.
+pub(crate) struct CopyRead<'a> {
+    colors: &'a Colors,
+    // Rows of a color at or after its timestamp here are New, by color.
+    last: Vec<u32>,
+    // The mirror of each program index in its color table, color first.
+    mirrors: Vec<usize>,
+    // The (color) index of each color table, by base table.
+    own: Vec<usize>,
+}
+
+impl<'a> Reads<'a> for CopyRead<'a> {
+    const COLORED: bool = true;
+
+    fn copy(&self) -> &CopyRead<'a> {
+        self
+    }
+}
+
+struct Exec<'a, R> {
+    reads: R,
     ctx: PrimCtx<'a>,
     indexes: &'a [(TableId, usize)],
     program: &'a Program,
@@ -119,39 +197,88 @@ pub(crate) fn search(program: &Program, db: &mut Database, ruleset: usize, last:
         let (table, at) = db.indexes[index.index()];
         db.tables[table.index()].refresh_index(at);
     }
-    let decl = &program.file.rulesets[ruleset];
-    let file_tables = &program.file.tables;
-    let writes = Writes {
-        rows: (file_tables.iter())
-            .map(|table| Delta {
-                columns: vec![Vec::new(); table.columns.len()],
-                subsumed: Vec::new(),
-            })
-            .collect(),
-        entries: file_tables.iter().map(|_| RowTable::default()).collect(),
-        unions: Vec::new(),
-        removed: Vec::new(),
-        subsumed: Vec::new(),
-    };
-    let (ctx, indexes) = db.ctx_and_indexes();
-    let mut exec = Exec {
-        ctx,
-        indexes,
-        program,
-        last,
-        writes,
-        matches: vec![0; decl.rules.len()],
-        pool: Vec::new(),
-        l2: l2(),
-    };
     let root = Batch {
         cols: program.consts[ruleset]
             .iter()
             .map(|v| vec![v.raw()])
             .collect(),
         len: 1,
+        colors: Vec::new(),
     };
-    let mut result = (decl.roots.iter()).try_for_each(|&node| exec.node(node, &root));
+    let (ctx, indexes) = db.ctx_and_indexes();
+    run(program, ctx, indexes, BaseRead, ruleset, last, &root)
+}
+
+// Matches one ruleset in each color of `level` at once, with the rows of a
+// color from its entry in `last` on as New.
+pub(crate) fn search_colors(
+    program: &Program,
+    db: &mut Database,
+    ruleset: usize,
+    level: &[Color],
+    last: &[u32],
+) -> Found {
+    for &index in &program.used[ruleset] {
+        let (table, at) = db.indexes[index.index()];
+        db.tables[table.index()].refresh_index(at);
+    }
+    let mirrors = (program.indexes.iter())
+        .map(|&index| {
+            let (table, at) = db.indexes[index.index()];
+            let order = &db.tables[table.index()].indexes[at].order;
+            let order: Vec<usize> = std::iter::once(0)
+                .chain(order.iter().map(|c| c + 1))
+                .collect();
+            db.colors.refresh(table, &order)
+        })
+        .collect();
+    let own = (0..db.tables.len())
+        .map(|table| db.colors.refresh(TableId::new(table), &[0]))
+        .collect();
+    let n = level.len();
+    let root = Batch {
+        cols: (program.consts[ruleset].iter())
+            .map(|v| vec![v.raw(); n])
+            .collect(),
+        len: n,
+        colors: level.iter().map(|c| c.index() as u32).collect(),
+    };
+    let (ctx, indexes, colors) = db.parts();
+    let mut by_color = vec![0; colors.len()];
+    for (&c, &last) in level.iter().zip(last) {
+        by_color[c.index()] = last;
+    }
+    let reads = CopyRead {
+        colors,
+        last: by_color,
+        mirrors,
+        own,
+    };
+    run(program, ctx, indexes, reads, ruleset, 0, &root)
+}
+
+fn run<'a, R: Reads<'a>>(
+    program: &'a Program,
+    ctx: PrimCtx<'a>,
+    indexes: &'a [(TableId, usize)],
+    reads: R,
+    ruleset: usize,
+    last: u32,
+    root: &Batch,
+) -> Found {
+    let decl = &program.file.rulesets[ruleset];
+    let mut exec = Exec {
+        reads,
+        ctx,
+        indexes,
+        program,
+        last,
+        writes: Writes::new(program, R::COLORED),
+        matches: vec![0; decl.rules.len()],
+        pool: Vec::new(),
+        l2: l2(),
+    };
+    let mut result = (decl.roots.iter()).try_for_each(|&node| exec.node(node, root));
     if result.is_ok() && exec.ctx.panicked.get() {
         result = Err(Error::Panic("a primitive panicked".to_owned()));
     }
@@ -168,12 +295,30 @@ fn visible(table: &Table, row: u32, slice: Slice, last: u32) -> bool {
     }
 }
 
+// Whether a base row is in the slice of a color run, where base rows are
+// never New.
+fn base_slice(table: &Table, row: u32, slice: Slice) -> bool {
+    match slice {
+        Slice::New => false,
+        Slice::Any => true,
+        Slice::Old | Slice::All => !table.is_subsumed(row),
+    }
+}
+
 // Columns of the rows of one table to bind, and the slice they must be in.
 struct Read<'r> {
     table: &'r Table,
     cols: &'r [usize],
     binds: &'r [Bind],
     slice: Slice,
+    side: Side,
+}
+
+// Whose rows a read of a color run reads.
+#[derive(Clone, Copy)]
+enum Side {
+    Base(TableId),
+    Color,
 }
 
 // Where the value a `Bind::Same` column must hold comes from.
@@ -183,7 +328,7 @@ enum Source {
     Column(usize),
 }
 
-impl<'a> Exec<'a> {
+impl<'a, R: Reads<'a>> Exec<'a, R> {
     fn table(&self, table: u32) -> &'a Table {
         let tables: &'a [Table] = self.ctx.tables;
         &tables[self.program.tables[table as usize].index()]
@@ -194,6 +339,51 @@ impl<'a> Exec<'a> {
         let tables: &'a [Table] = self.ctx.tables;
         let (table, at) = self.indexes[self.program.indexes[index as usize].index()];
         (&tables[table.index()], at)
+    }
+
+    fn index_table(&self, index: u32) -> TableId {
+        self.indexes[self.program.indexes[index as usize].index()].0
+    }
+
+    fn table_id(&self, table: u32) -> TableId {
+        self.program.tables[table as usize]
+    }
+
+    fn colors(&self) -> &'a Colors {
+        self.reads.copy().colors
+    }
+
+    // Whether a color run sees `row` for a binding of color `c`.
+    fn sees(&self, read: &Read<'_>, row: u32, c: u32) -> bool {
+        match read.side {
+            Side::Color => visible(
+                read.table,
+                row,
+                read.slice,
+                self.reads.copy().last[c as usize],
+            ),
+            Side::Base(id) => {
+                base_slice(read.table, row, read.slice)
+                    && self.colors().visible(c, id, read.table, row)
+            }
+        }
+    }
+
+    // The rows of the color table of `table` at index `at` whose index
+    // columns hold the color of each binding, then `key`.
+    fn color_ranges(
+        &self,
+        table: TableId,
+        at: usize,
+        key: &[Reg],
+        input: &Batch,
+    ) -> Vec<std::ops::Range<u32>> {
+        let rows = self.colors().rows(table);
+        let mut columns: Vec<&[u32]> = vec![&input.colors];
+        columns.extend(key.iter().map(|&r| input.col(r)));
+        let mut ranges = vec![0..0; input.len];
+        rows.indexes[at].ranges(&rows.columns, &columns, &mut ranges);
+        ranges
     }
 
     // Bindings of `bytes` each that fit a quarter of the L2 cache, so a
@@ -222,9 +412,15 @@ impl<'a> Exec<'a> {
             cols.push(out);
         }
         cols.extend(added);
+        let mut colors = Vec::new();
+        if R::COLORED {
+            colors = self.buffer();
+            colors.extend(sel.iter().map(|&i| input.colors[i as usize]));
+        }
         Batch {
             cols,
             len: sel.len(),
+            colors,
         }
     }
 
@@ -246,8 +442,15 @@ impl<'a> Exec<'a> {
                 key,
                 outs,
                 slice,
+            } if R::COLORED => return self.expand_colored(node, *index, key, outs, *slice, input),
+            Step::Expand {
+                index,
+                key,
+                outs,
+                slice,
             } => {
                 let (table, at) = self.index(*index);
+                let side = Side::Base(self.index_table(*index));
                 let index = &table.indexes[at];
                 let ranges = self.ranges(table, at, key, input);
                 let rows = index.rows();
@@ -261,8 +464,17 @@ impl<'a> Exec<'a> {
                     cols: &cols,
                     binds: outs,
                     slice: *slice,
+                    side,
                 };
                 return self.emit(node, &read, input, found);
+            }
+            Step::Lookup {
+                table,
+                key,
+                out,
+                slice,
+            } if R::COLORED => {
+                self.lookup_colored(*table, key, *out, *slice, input, &mut sel, &mut added)?;
             }
             Step::Lookup {
                 table,
@@ -300,6 +512,9 @@ impl<'a> Exec<'a> {
                     added.push(found);
                 }
             }
+            Step::Check { index, key } if R::COLORED => {
+                self.check_colored(*index, key, input, &mut sel)
+            }
             Step::Check { index, key } => {
                 let (table, at) = self.index(*index);
                 let ranges = self.ranges(table, at, key, input);
@@ -314,12 +529,21 @@ impl<'a> Exec<'a> {
             } => {
                 self.ctx.context = *context;
                 let prim = program.externs[*prim as usize];
+                if R::COLORED {
+                    check_pure(&self.ctx, prim)?;
+                }
                 let mut found = self.buffer();
                 let mut values = Vec::with_capacity(args.len());
                 for i in 0..n {
                     values.clear();
                     values.extend(args.iter().map(|&r| Value::new(input.col(r)[i])));
-                    let Some(value) = self.ctx.call(prim, &values) else {
+                    let result = if R::COLORED {
+                        self.ctx
+                            .call_in(self.reads.copy().colors, input.colors[i], prim, &values)
+                    } else {
+                        self.ctx.call(prim, &values)
+                    };
+                    let Some(value) = result else {
                         continue;
                     };
                     match *out {
@@ -365,6 +589,8 @@ impl<'a> Exec<'a> {
         let t = self.table(table);
         let start = t.since(self.last).start as usize;
         let rows = match slice {
+            Slice::New if R::COLORED => 0..0,
+            _ if R::COLORED => 0..t.len(),
             Slice::New => start..t.len(),
             Slice::Old => 0..start,
             Slice::All | Slice::Any => 0..t.len(),
@@ -407,9 +633,148 @@ impl<'a> Exec<'a> {
                     cols: &all,
                     binds: cols,
                     slice,
+                    side: Side::Base(self.table_id(table)),
                 };
                 self.emit(node, &read, input, [(i, &live[..])].into_iter())?;
             }
+        }
+        if R::COLORED {
+            let id = self.table_id(table);
+            let at = self.reads.copy().own[id.index()];
+            let ranges = self.color_ranges(id, at, &[], input);
+            let rows = self.colors().rows(id);
+            let all: Vec<usize> = (1..rows.columns.len()).collect();
+            let read = Read {
+                table: rows,
+                cols: &all,
+                binds: cols,
+                slice,
+                side: Side::Color,
+            };
+            let index = rows.indexes[at].rows();
+            let found = (ranges.iter().enumerate())
+                .map(|(i, range)| (i, &index[range.start as usize..range.end as usize]));
+            self.emit(node, &read, input, found)?;
+        }
+        Ok(())
+    }
+
+    // Expand in a color run: the base rows the color shows, then the rows
+    // of the color, through the mirror of the index.
+    fn expand_colored(
+        &mut self,
+        node: &'a Node,
+        index: u32,
+        key: &[Reg],
+        outs: &[Bind],
+        slice: Slice,
+        input: &Batch,
+    ) -> Result<(), Error> {
+        let (table, at) = self.index(index);
+        let id = self.index_table(index);
+        let order = &table.indexes[at].order;
+        let cols: Vec<usize> = (0..table.columns.len())
+            .filter(|c| !order.contains(c))
+            .collect();
+        if slice != Slice::New {
+            let ranges = self.ranges(table, at, key, input);
+            let rows = table.indexes[at].rows();
+            let found = (ranges.iter().enumerate())
+                .map(|(i, range)| (i, &rows[range.start as usize..range.end as usize]));
+            let read = Read {
+                table,
+                cols: &cols,
+                binds: outs,
+                slice,
+                side: Side::Base(id),
+            };
+            self.emit(node, &read, input, found)?;
+        }
+        let at = self.reads.copy().mirrors[index as usize];
+        let ranges = self.color_ranges(id, at, key, input);
+        let rows = self.colors().rows(id);
+        let cols: Vec<usize> = cols.iter().map(|c| c + 1).collect();
+        let index = rows.indexes[at].rows();
+        let found = (ranges.iter().enumerate())
+            .map(|(i, range)| (i, &index[range.start as usize..range.end as usize]));
+        let read = Read {
+            table: rows,
+            cols: &cols,
+            binds: outs,
+            slice,
+            side: Side::Color,
+        };
+        self.emit(node, &read, input, found)
+    }
+
+    // Check in a color run: a base row the color shows or a row of the color.
+    fn check_colored(&mut self, index: u32, key: &[Reg], input: &Batch, sel: &mut Vec<u32>) {
+        let (table, at) = self.index(index);
+        let id = self.index_table(index);
+        let ranges = self.ranges(table, at, key, input);
+        let own = self.color_ranges(id, self.reads.copy().mirrors[index as usize], key, input);
+        let rows = table.indexes[at].rows();
+        let colors = self.colors();
+        for (i, (range, own)) in ranges.iter().zip(&own).enumerate() {
+            let c = input.colors[i];
+            let shown = rows[range.start as usize..range.end as usize]
+                .iter()
+                .any(|&row| colors.visible(c, id, table, row));
+            if shown || !own.is_empty() {
+                sel.push(i as u32);
+            }
+        }
+    }
+
+    // Lookup in a color run: the row of the color with the key, else the
+    // base row if the color shows it.
+    #[expect(clippy::too_many_arguments, reason = "the operands of one step")]
+    fn lookup_colored(
+        &mut self,
+        table: u32,
+        key: &[Reg],
+        out: Option<Bind>,
+        slice: Slice,
+        input: &Batch,
+        sel: &mut Vec<u32>,
+        added: &mut Vec<Vec<u32>>,
+    ) -> Result<(), Error> {
+        let (t, id) = (self.table(table), self.table_id(table));
+        let colors = self.colors();
+        let (rows, keys) = (colors.rows(id), t.schema.keys);
+        let mut found = self.buffer();
+        let mut cells = Vec::with_capacity(keys + 1);
+        for i in 0..input.len {
+            let c = input.colors[i];
+            cells.clear();
+            cells.push(c);
+            cells.extend(key.iter().map(|&r| input.col(r)[i]));
+            let hit = match colors.color_row(c, id, &cells) {
+                Some(row) => visible(rows, row, slice, self.reads.copy().last[c as usize])
+                    .then_some((rows, row, keys + 1)),
+                None => t
+                    .find(&cells[1..], hash_row(&cells[1..]))
+                    .filter(|&row| base_slice(t, row, slice) && !colors.holds_moved(c, t, row))
+                    .map(|row| (t, row, keys)),
+            };
+            let Some((holder, row, output)) = hit else {
+                if slice == Slice::Any {
+                    let name = &t.schema.name;
+                    return Err(Error::Panic(format!("`{name}` has no row for the key")));
+                }
+                continue;
+            };
+            match out {
+                Some(Bind::New(_)) => found.push(holder.cell(row, output)),
+                Some(Bind::Same(r)) if holder.cell(row, output) != input.col(r)[i] => continue,
+                _ => {}
+            }
+            sel.push(i as u32);
+        }
+        if matches!(out, Some(Bind::New(_))) {
+            added.push(found);
+        } else {
+            self.release(found);
         }
         Ok(())
     }
@@ -446,7 +811,12 @@ impl<'a> Exec<'a> {
                     };
                     table.cell(row, c) == want
                 };
-                if !visible(table, row, slice, self.last) || !checks.iter().all(holds) {
+                let seen = if R::COLORED {
+                    self.sees(read, row, input.colors[i])
+                } else {
+                    visible(table, row, slice, self.last)
+                };
+                if !seen || !checks.iter().all(holds) {
                     continue;
                 }
                 sel.push(i as u32);
@@ -473,6 +843,9 @@ impl<'a> Exec<'a> {
         for col in batch.cols {
             self.release(col);
         }
+        if R::COLORED {
+            self.release(batch.colors);
+        }
         result
     }
 
@@ -495,6 +868,32 @@ impl<'a> Exec<'a> {
     fn action(&mut self, action: &Action, batch: &mut Batch) -> Result<(), Error> {
         let n = batch.len;
         match action {
+            Action::Entry { table, args, .. } if R::COLORED => {
+                let (t, id) = (self.table(*table), self.table_id(*table));
+                let colors = self.colors();
+                let (rows, keys) = (colors.rows(id), t.schema.keys);
+                let mut out = self.buffer();
+                let mut cells = Vec::with_capacity(keys + 1);
+                for i in 0..n {
+                    let c = batch.colors[i];
+                    cells.clear();
+                    cells.push(c);
+                    cells.extend(args.iter().map(|&r| batch.col(r)[i]));
+                    let base = || t.find(&cells[1..], hash_row(&cells[1..]));
+                    out.push(match colors.color_row(c, id, &cells) {
+                        Some(row) => rows.cell(row, keys + 1),
+                        None => match base().filter(|&row| !colors.holds_moved(c, t, row)) {
+                            Some(row) => t.cell(row, keys),
+                            None => {
+                                let table = (*table as usize, t);
+                                self.writes
+                                    .entry(table, &cells, hash_row(&cells), self.ctx.uf)
+                            }
+                        },
+                    });
+                }
+                batch.cols.push(out);
+            }
             Action::Entry { table, args, .. } => {
                 let t = self.table(*table);
                 let (mut hashes, mut out) = (self.buffer(), self.buffer());
@@ -526,7 +925,23 @@ impl<'a> Exec<'a> {
                     let columns: Vec<&[u32]> = args.iter().map(|&r| batch.col(r)).collect();
                     hash_rows(&columns, &mut hashes);
                     t.find_many(&columns, &hashes, &mut found);
-                    let selected: Vec<usize> = (0..n).filter(|&i| found[i] == EMPTY).collect();
+                    let mut key = Vec::new();
+                    let selected: Vec<usize> = (0..n)
+                        .filter(|&i| {
+                            if R::COLORED {
+                                let c = batch.colors[i];
+                                let id = self.table_id(*table);
+                                key.clear();
+                                key.push(c);
+                                key.extend(args.iter().map(|&r| batch.col(r)[i]));
+                                self.colors().color_row(c, id, &key).is_none()
+                                    && (found[i] == EMPTY
+                                        || !self.colors().visible(c, id, t, found[i]))
+                            } else {
+                                found[i] == EMPTY
+                            }
+                        })
+                        .collect();
                     self.release(hashes);
                     self.release(found);
                     Some(selected)
@@ -534,7 +949,15 @@ impl<'a> Exec<'a> {
                     None
                 };
                 let delta = &mut self.writes.rows[*table as usize];
-                for (column, &r) in delta.columns.iter_mut().zip(args) {
+                let mut columns = delta.columns.iter_mut();
+                if R::COLORED {
+                    let colors = columns.next().expect("a color column");
+                    match &selected {
+                        Some(selected) => colors.extend(selected.iter().map(|&i| batch.colors[i])),
+                        None => colors.extend(&batch.colors),
+                    }
+                }
+                for (column, &r) in columns.zip(args) {
                     match &selected {
                         Some(selected) => column.extend(selected.iter().map(|&i| batch.col(r)[i])),
                         None => column.extend_from_slice(batch.col(r)),
@@ -545,8 +968,21 @@ impl<'a> Exec<'a> {
             }
             Action::Union { a, b } => {
                 let pairs = batch.col(*a).iter().zip(batch.col(*b));
+                if R::COLORED {
+                    let colors = pairs.zip(&batch.colors).filter(|((a, b), _)| a != b);
+                    for ((&a, &b), &c) in colors {
+                        self.writes.unions.push((a, b));
+                        self.writes.colors.push(c);
+                    }
+                    return Ok(());
+                }
                 let unions = pairs.filter(|(a, b)| a != b).map(|(&a, &b)| (a, b));
                 self.writes.unions.extend(unions);
+            }
+            Action::Delete { .. } | Action::Subsume { .. } if R::COLORED => {
+                return Err(Error::Unsupported(
+                    "a rule that deletes or subsumes rows cannot run in a color".to_owned(),
+                ));
             }
             Action::Delete { table, args } => {
                 let t = self.table(*table);
@@ -574,11 +1010,20 @@ impl<'a> Exec<'a> {
             } => {
                 self.ctx.context = *context;
                 let prim = self.program.externs[*prim as usize];
+                if R::COLORED {
+                    check_pure(&self.ctx, prim)?;
+                }
                 let mut values = Vec::with_capacity(args.len());
                 for i in 0..n {
                     values.clear();
                     values.extend(args.iter().map(|&r| Value::new(batch.col(r)[i])));
-                    if self.ctx.call(prim, &values).is_none() {
+                    let result = if R::COLORED {
+                        self.ctx
+                            .call_in(self.reads.copy().colors, batch.colors[i], prim, &values)
+                    } else {
+                        self.ctx.call(prim, &values)
+                    };
+                    if result.is_none() {
                         let name = &self.ctx.prims[prim.index()].name;
                         return Err(Error::Panic(format!("`{name}` has no result")));
                     }

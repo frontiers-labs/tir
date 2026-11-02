@@ -19,13 +19,28 @@ impl Database {
     /// more ids. Containers are canonicalized alongside. Ends when no union
     /// is left to apply, then starts a new timestamp.
     pub fn rebuild(&mut self) -> Result<(), Error> {
+        let mut contents_changed = Vec::new();
         loop {
             self.flush()?;
             if self.uf.unions() == 0 {
                 break;
             }
-            self.uf.reset_unions();
+            let mut moved = self.uf.take_moved();
             let dirty = self.containers.rebuild(&mut self.uf);
+            contents_changed.extend_from_slice(&dirty);
+            if self.local_rebuild_pays(moved.len() + dirty.len()) {
+                moved.extend_from_slice(&dirty);
+                let deltas: Vec<Delta> = (self.tables.iter_mut())
+                    .map(|table| {
+                        let rows = rows_holding(table, &moved);
+                        take_rows(table, &rows)
+                    })
+                    .collect();
+                for (table, mut delta) in deltas.into_iter().enumerate() {
+                    self.apply(TableId::new(table), &mut delta)?;
+                }
+                continue;
+            }
             let mut marked = Vec::new();
             let map = if dirty.is_empty() {
                 self.uf.parents()
@@ -47,7 +62,30 @@ impl Database {
             }
         }
         self.now += 1;
+        if !self.colors.is_empty() {
+            self.rebase_colors(&contents_changed)?;
+        }
         Ok(())
+    }
+
+    // Whether finding the rows of `moved` ids through the indexes of the id
+    // columns costs less than scanning every id cell. A table that has rows
+    // needs a declared index led by each of its id columns: a client that
+    // edits rows declares them, and building them for a database that only
+    // runs rules would cost more than the scans they save.
+    fn local_rebuild_pays(&self, moved: usize) -> bool {
+        let mut lookups = 0;
+        let mut cells = 0;
+        for table in self.tables.iter().filter(|table| table.len() > 0) {
+            for &column in &table.schema.ids {
+                if table.id_index(column).is_none() {
+                    return false;
+                }
+            }
+            lookups += table.schema.ids.len() * moved;
+            cells += table.schema.ids.len() * table.len();
+        }
+        lookups * LOOKUP_CELLS < cells
     }
 
     fn flush(&mut self) -> Result<(), Error> {
@@ -292,10 +330,35 @@ fn eval(merge: &Merge, ctx: &mut PrimCtx<'_>, old: Value, new: Value) -> Option<
     }
 }
 
+// Cells a scan reads in the time of one index lookup, about.
+const LOOKUP_CELLS: usize = 64;
+
+// The live rows that hold one of `ids` in an id column, ascending, found
+// through the index each id column leads.
+fn rows_holding(table: &mut Table, ids: &[u32]) -> Vec<u32> {
+    let mut rows = Vec::new();
+    for column in table.schema.ids.clone() {
+        let Some(at) = table.id_index(column) else {
+            continue;
+        };
+        table.catch_up_index(at);
+        let index = &table.indexes[at];
+        for &id in ids {
+            let key = std::slice::from_ref(&id);
+            rows.extend_from_slice(index.laid_rows(&table.columns, key));
+            rows.extend(index.tail_rows(&table.columns, key));
+        }
+    }
+    rows.retain(|&row| table.is_live(row));
+    rows.sort_unstable();
+    rows.dedup();
+    rows
+}
+
 // Kills the live rows that hold a cell `map` moves, and returns them. The
 // rows of each column mark a bitset, so the rows come out ascending and
 // once each without a sort.
-fn take_moved(table: &mut Table, map: &[u32], hits: &mut Vec<u32>) -> Delta {
+pub(crate) fn take_moved(table: &mut Table, map: &[u32], hits: &mut Vec<u32>) -> Delta {
     let mut marked = vec![0u64; table.len().div_ceil(64)];
     for &column in &table.schema.ids {
         hits.clear();
@@ -313,6 +376,11 @@ fn take_moved(table: &mut Table, map: &[u32], hits: &mut Vec<u32>) -> Delta {
             bits &= bits - 1;
         }
     }
+    take_rows(table, &moved)
+}
+
+// Kills the live `rows`, ascending, and returns them.
+fn take_rows(table: &mut Table, moved: &[u32]) -> Delta {
     let gather = |column: &Vec<u32>| moved.iter().map(|&row| column[row as usize]).collect();
     let delta = Delta {
         columns: table.columns.iter().map(gather).collect(),

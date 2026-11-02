@@ -372,7 +372,7 @@ impl EGraph {
             if !info.seminaive {
                 info.residual = (Vec::new(), 0);
             }
-            *info.sink.borrow_mut() = (0, Vec::new());
+            *info.sink.lock().expect("a sink lock") = (0, Vec::new());
             queries.push(info.query.clone());
         }
         let queries: Vec<&str> = queries.iter().map(String::as_str).collect();
@@ -383,7 +383,7 @@ impl EGraph {
                 .get_mut(&rule.ruleset)
                 .and_then(|rules| rules.get_mut(&rule.name))
                 .expect("split above");
-            let (rows, values) = info.sink.take();
+            let (rows, values) = std::mem::take(&mut *info.sink.lock().expect("a sink lock"));
             info.residual.0.extend(values);
             info.residual.1 += rows;
         }
