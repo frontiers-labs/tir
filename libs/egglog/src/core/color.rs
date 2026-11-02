@@ -564,10 +564,12 @@ impl Database {
     /// A color that ran rules and was dropped since leaves none behind; the
     /// base must hold none either.
     pub fn rollback(&mut self, mark: u32) {
+        self.containers.check_truncate(mark, self.uf.len());
         debug_assert!(
             self.tables.iter().all(|table| table.holds_none_from(mark)),
             "a base row holds an id made after the mark"
         );
+        self.containers.truncate(mark);
         self.uf.truncate(mark);
     }
 
