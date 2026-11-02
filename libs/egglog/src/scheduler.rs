@@ -165,7 +165,7 @@ struct RuleInfo {
 
 pub(crate) struct SchedulerRecord {
     scheduler: Box<dyn Scheduler>,
-    rules: HashMap<String, RuleInfo, FxBuildHasher>,
+    rules: HashMap<String, HashMap<String, RuleInfo, FxBuildHasher>, FxBuildHasher>,
 }
 
 impl Clone for SchedulerRecord {
@@ -257,7 +257,9 @@ impl EGraph {
             self.fresh("collect"),
         );
         let sink = self.sink(&collect, &sorts);
-        let decided_table = self.db.add_relation(&decided, &sorts);
+        let mut chosen_sorts = vec![self.db.sort("i64")?];
+        chosen_sorts.extend(&sorts);
+        let decided_table = self.db.add_relation(&decided, &chosen_sorts);
         let head = GenericActions(vec![Action::Expr(span!(), call(&collect, &vars))]);
         let seeker = Rule {
             head,
@@ -266,7 +268,20 @@ impl EGraph {
             ..rule.clone()
         };
         let mut actions = rule.head.0.clone();
-        let chosen = call(&decided, &vars);
+        let mut occurrence = self.fresh("match");
+        while vars.contains(&occurrence)
+            || rule
+                .head
+                .0
+                .iter()
+                .any(|action| matches!(action, Action::Let(_, name, _) if *name == occurrence))
+        {
+            occurrence = self.fresh("match");
+        }
+        let chosen_vars: Vec<_> = std::iter::once(occurrence)
+            .chain(vars.iter().cloned())
+            .collect();
+        let chosen = call(&decided, &chosen_vars);
         let Expr::Call(_, _, args) = &chosen else {
             unreachable!("a call")
         };
@@ -330,15 +345,27 @@ impl EGraph {
     ) -> Result<RunReport, Error> {
         let rules: Vec<Rule> = self.rules.rules_of(ruleset).into_iter().cloned().collect();
         for rule in &rules {
-            if !record.rules.contains_key(&rule.name) {
+            if !record
+                .rules
+                .get(&rule.ruleset)
+                .is_some_and(|rules| rules.contains_key(&rule.name))
+            {
                 let info = self.split_rule(rule)?;
-                record.rules.insert(rule.name.clone(), info);
+                record
+                    .rules
+                    .entry(rule.ruleset.clone())
+                    .or_default()
+                    .insert(rule.name.clone(), info);
             }
         }
         self.plan()?;
         let mut queries = Vec::new();
         for rule in &rules {
-            let info = record.rules.get_mut(&rule.name).expect("split above");
+            let info = record
+                .rules
+                .get_mut(&rule.ruleset)
+                .and_then(|rules| rules.get_mut(&rule.name))
+                .expect("split above");
             if !info.should_seek {
                 continue;
             }
@@ -351,7 +378,11 @@ impl EGraph {
         let queries: Vec<&str> = queries.iter().map(String::as_str).collect();
         self.program.step(&mut self.db, &queries, true)?;
         for rule in &rules {
-            let info = record.rules.get_mut(&rule.name).expect("split above");
+            let info = record
+                .rules
+                .get_mut(&rule.ruleset)
+                .and_then(|rules| rules.get_mut(&rule.name))
+                .expect("split above");
             let (rows, values) = info.sink.take();
             info.residual.0.extend(values);
             info.residual.1 += rows;
@@ -360,7 +391,11 @@ impl EGraph {
         let (num_nodes, mut iteration) = (Cell::new(None), IterationReport::default());
         let mut applied_any = false;
         for rule in &rules {
-            let info = record.rules.get_mut(&rule.name).expect("split above");
+            let info = record
+                .rules
+                .get_mut(&rule.ruleset)
+                .and_then(|rules| rules.get_mut(&rule.name))
+                .expect("split above");
             let (values, rows) = std::mem::take(&mut info.residual);
             let mut matches = Matches {
                 values,
@@ -382,8 +417,11 @@ impl EGraph {
             if chosen.is_empty() {
                 continue;
             }
-            for row in &chosen {
-                self.db.insert(info.decided, row)?;
+            for (at, row) in chosen.iter().enumerate() {
+                let mut selected = Vec::with_capacity(row.len() + 1);
+                selected.push(self.db.base(at as i64));
+                selected.extend(row);
+                self.db.insert(info.decided, &selected)?;
             }
             // As upstream, each rule's actions apply at once and one rebuild
             // follows the last of them.
