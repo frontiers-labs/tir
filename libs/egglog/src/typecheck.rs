@@ -92,6 +92,21 @@ pub(crate) fn typecheck(rule: &ast::Rule, schema: Schema<'_>) -> Result<Rule, Er
             Fact::Not(expr) => typer.absent(expr)?,
         }
     }
+    let mut bound: Vec<bool> = typer.constants.iter().map(Option::is_some).collect();
+    for item in &typer.query {
+        let args = match item {
+            Item::Atom(_, args) => args,
+            Item::Call(call) => &typer.calls[*call].args,
+            Item::Absent(..) => continue,
+        };
+        for &var in args {
+            bound[typer.find(var) as usize] = true;
+        }
+    }
+    for var in 0..bound.len() {
+        bound[var] = bound[typer.find(var as Var) as usize];
+    }
+    typer.bound.retain(|_, var| bound[*var as usize]);
     for action in &rule.head.0 {
         typer.action(action)?;
     }

@@ -840,48 +840,72 @@ fn scalar_arguments_share_raw_values_without_equality_normalization() {
 }
 
 mod argument_containers {
-use tir_egglog::prelude::*;
-use tir_egglog::{ContainerValue, Database, Program, Rules, Schedule, SortKind, Value};
-#[derive(Clone, Debug, Hash, Eq, PartialEq)]
-struct Ids(Vec<Value>);
-impl ContainerValue for Ids {
-    fn rebuild_contents(&mut self, find: &dyn Fn(Value) -> Value) -> bool {
-        let mut changed = false;
-        for v in &mut self.0 { let new = find(*v); changed |= new != *v; *v = new; }
-        changed
-    }
-    fn iter(&self) -> impl Iterator<Item=Value> + '_ { self.0.iter().copied() }
-}
-#[test]
-fn container_arguments_follow_each_color_without_changing_scalar_arguments() {
-    for colored in [false, true] {
-        let mut db = Database::new();
-        let eq = db.add_sort("E", SortKind::Eq);
-        let containers = db.add_sort("Ids", SortKind::container::<Ids>());
-        let input = db.add_relation("input", &[containers]);
-        let output = db.add_relation("output", &[containers]);
-        let [a,b] = [();2].map(|()| db.fresh(eq));
-        let first = db.container(Ids(vec![a]));
-        let second = db.container(Ids(vec![b]));
-        db.insert(input, &[second]).unwrap();
-        let arg = exprs::arg(0);
-        let mut rules = Rules::new();
-        if colored { rules.set_colored(""); }
-        rules.rule(&db,"",facts![(input x) (= x (unquote arg))],actions![(output x)]).unwrap();
-        let bytes = rules.compile(&db).unwrap().to_bytes();
-        let mut program = Program::from_bytes(&bytes,&mut db).unwrap();
-        let sibling = db.color(&[]);
-        let color = if colored { db.color(&[]) } else { tir_egglog::Color::BASE };
-        db.union_in(color,a,b);
-        db.rebuild().unwrap();
-        program.run(&mut db,&Schedule::run(""),&[second]).unwrap();
-        assert!(db.lookup_in(color,output,&[first]).is_some(),"colored={colored}");
-        if colored {
-            assert!(db.lookup_in(sibling,output,&[second]).is_some());
-            assert!(db.lookup_in(sibling,output,&[first]).is_none());
+    use tir_egglog::prelude::*;
+    use tir_egglog::{ContainerValue, Database, Program, Rules, Schedule, SortKind, Value};
+    #[derive(Clone, Debug, Hash, Eq, PartialEq)]
+    struct Ids(Vec<Value>);
+    impl ContainerValue for Ids {
+        fn rebuild_contents(&mut self, find: &dyn Fn(Value) -> Value) -> bool {
+            let mut changed = false;
+            for v in &mut self.0 {
+                let new = find(*v);
+                changed |= new != *v;
+                *v = new;
+            }
+            changed
         }
-        program.clone().run(&mut db,&Schedule::run(""),&[second]).unwrap();
+        fn iter(&self) -> impl Iterator<Item = Value> + '_ {
+            self.0.iter().copied()
+        }
     }
-}
-
+    #[test]
+    fn container_arguments_follow_each_color_without_changing_scalar_arguments() {
+        for colored in [false, true] {
+            let mut db = Database::new();
+            let eq = db.add_sort("E", SortKind::Eq);
+            let containers = db.add_sort("Ids", SortKind::container::<Ids>());
+            let input = db.add_relation("input", &[containers]);
+            let output = db.add_relation("output", &[containers]);
+            let [a, b] = [(); 2].map(|()| db.fresh(eq));
+            let first = db.container(Ids(vec![a]));
+            let second = db.container(Ids(vec![b]));
+            db.insert(input, &[second]).unwrap();
+            let arg = exprs::arg(0);
+            let mut rules = Rules::new();
+            if colored {
+                rules.set_colored("");
+            }
+            rules
+                .naive_rule(
+                    &db,
+                    "",
+                    facts![(input x) (= x (unquote arg))],
+                    actions![(output x)],
+                )
+                .unwrap();
+            let bytes = rules.compile(&db).unwrap().to_bytes();
+            let mut program = Program::from_bytes(&bytes, &mut db).unwrap();
+            let sibling = db.color(&[]);
+            let color = if colored {
+                db.color(&[])
+            } else {
+                tir_egglog::Color::BASE
+            };
+            db.union_in(color, a, b);
+            db.rebuild().unwrap();
+            program.run(&mut db, &Schedule::run(""), &[second]).unwrap();
+            assert!(
+                db.lookup_in(color, output, &[first]).is_some(),
+                "colored={colored}"
+            );
+            if colored {
+                assert!(db.lookup_in(sibling, output, &[second]).is_some());
+                assert!(db.lookup_in(sibling, output, &[first]).is_none());
+            }
+            program
+                .clone()
+                .run(&mut db, &Schedule::run(""), &[second])
+                .unwrap();
+        }
+    }
 }

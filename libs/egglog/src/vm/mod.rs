@@ -67,14 +67,18 @@ fn compute(
     externs: &[BoundExtern],
     consts: &mut Vec<Option<Value>>,
     db: &mut Database,
-) {
+) -> Result<(), Error> {
     consts.truncate(ruleset.consts.len());
     let (mut ctx, _) = db.ctx_and_indexes();
     for (prim, args) in &ruleset.calls {
         let args: Option<Vec<Value>> = args.iter().map(|&r| consts[r as usize]).collect();
         let value = args.and_then(|args| ctx.call(externs[*prim as usize].id, &args));
         consts.push(value);
+        if ctx.panicked.get() {
+            return Err(Error::Panic("a primitive panicked".to_owned()));
+        }
     }
+    Ok(())
 }
 
 type Reports = HashMap<Arc<str>, Vec<RuleReport>, tir_adt::FxBuildHasher>;
@@ -298,14 +302,15 @@ impl Program {
                     }
                 }
             }
-            if first || changed || rebound {
-                compute(ruleset, &self.externs, consts, db);
-            }
             if changed || rebound {
                 self.last_run[at] = None;
                 if let Some(last) = self.color_last.get_mut(at) {
                     last.clear();
                 }
+            }
+            if first || changed || rebound {
+                self.prepared = false;
+                compute(ruleset, &self.externs, consts, db)?;
             }
         }
         for binding in &mut self.externs {
