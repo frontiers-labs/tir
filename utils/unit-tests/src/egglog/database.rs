@@ -332,3 +332,31 @@ fn a_container_rebuilt_in_place_makes_its_rows_new() {
     let new: Vec<Value> = db.rows_since(holds, before).map(|row| row[0]).collect();
     assert_eq!(new, [pair]);
 }
+
+#[test]
+fn subsumption_does_not_evaluate_the_function_merge() {
+    let mut db = Database::new();
+    let int = db.sort("i64").unwrap();
+    let add = db.add_primitive(
+        "add",
+        Signature {
+            inputs: vec![int, int],
+            output: int,
+        },
+        |ctx, args| {
+            let sum = ctx.base_value::<i64>(args[0]) + ctx.base_value::<i64>(args[1]);
+            Some(ctx.base(sum))
+        },
+    );
+    let (one, two, seven) = (db.base(1_i64), db.base(2_i64), db.base(7_i64));
+    for (name, merge) in [
+        ("sum", Merge::Prim(add, vec![Merge::Old, Merge::New])),
+        ("constant", Merge::Const(seven)),
+    ] {
+        let f = db.add_function(name, &[int], int, merge);
+        db.insert(f, &[one, two]).unwrap();
+        db.subsume(f, &[one]);
+        assert_eq!(db.lookup(f, &[one]), Some(two));
+        assert!(db.rows(f).all(|row| row.is_subsumed()));
+    }
+}

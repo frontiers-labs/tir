@@ -373,7 +373,15 @@ impl Database {
         let mut row = t.canonical_key(key, &self.uf);
         let hash = hash_row(&row);
         match (t.find(&row, hash), t.schema.kind) {
-            (Some(at), _) => row.extend(t.columns.get(t.schema.keys).map(|c| c[at as usize])),
+            (Some(_), _) => {
+                let t = &mut self.tables[table.index()];
+                for key in t.orders(&row) {
+                    if let Some(at) = t.find(&key, hash_row(&key)) {
+                        t.subsume(at);
+                    }
+                }
+                return;
+            }
             (None, TableKind::Function) => return,
             (None, TableKind::Constructor) => row.push(self.uf.fresh()),
             (None, TableKind::Relation) => {}

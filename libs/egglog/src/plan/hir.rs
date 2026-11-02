@@ -197,6 +197,19 @@ fn action_edit(rule: &Rule, schema: Schema<'_>, syms: &Symmetries) -> Edit<usize
             Act::Union(a, b) if merges(b, a) => return Some((k, Some((b, a)))),
             _ => continue,
         };
+        if !lookup
+            && schema.table(table).merge().is_some_and(|merge| {
+                !matches!(
+                    merge,
+                    crate::Merge::AssertEq
+                        | crate::Merge::Union
+                        | crate::Merge::Old
+                        | crate::Merge::New
+                )
+            })
+        {
+            continue;
+        }
         let keys = schema.table(table).key_arity();
         let target = Target::Table(table);
         let premise = rule.premise.iter().filter(|atom| atom.target == target);
