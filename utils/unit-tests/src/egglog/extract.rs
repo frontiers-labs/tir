@@ -361,3 +361,22 @@ fn a_scheduler_iteration_rebuilds_once_after_every_rule() -> Result<(), Error> {
     assert_eq!(eg.num_nodes(), 3);
     Ok(())
 }
+
+#[test]
+fn equal_cost_parent_keeps_an_acyclic_derivation() {
+    let mut db = Database::new();
+    let node = db.add_sort("Node", tir_egglog::SortKind::Eq);
+    let expensive = db.add_constructor("Expensive", &[], node);
+    let wrapper = db.add_constructor("Wrapper", &[node], node);
+    let cheap = db.add_constructor("Cheap", &[], node);
+    db.set_cost(expensive, 20);
+    db.set_cost(wrapper, u64::MAX);
+    db.set_cost(cheap, 1);
+    let x = db.entry(expensive, &[]).unwrap();
+    let root = db.entry(wrapper, &[x]).unwrap();
+    let y = db.entry(cheap, &[]).unwrap();
+    db.union(x, y);
+    db.rebuild().unwrap();
+    let (dag, term) = tir_egglog::Extractor::new(&db).best(root).unwrap();
+    assert_eq!(dag.to_string(term), "(Wrapper (Cheap))");
+}

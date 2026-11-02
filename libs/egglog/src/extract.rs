@@ -214,7 +214,6 @@ pub struct TreeExtractor<'g, C: Cost> {
     // The Eq sorts some constructor makes; e-classes of others are leaves.
     made: HashSet<SortId, FxBuildHasher>,
     costs: Map<Value, C>,
-    rank: Map<Value, usize>,
     // The row each e-class extracts to.
     parent: Map<Value, (TableId, Vec<Value>)>,
 }
@@ -279,7 +278,6 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
             tables,
             made,
             costs: Map::default(),
-            rank: Map::default(),
             parent: Map::default(),
         };
         extractor.bellman_ford();
@@ -330,39 +328,36 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
         Some(self.model.enode(self.db, schema, &enode, &children?))
     }
 
-    // The highest rank of an e-class in `value` of `sort`.
-    fn rank_of(&self, value: Value, sort: &ArcSort) -> usize {
+    fn has_term(&self, value: Value, sort: &ArcSort) -> bool {
         if sort.is_container_sort() {
-            let inner = sort.inner_values(self.db.container_values(), value);
-            inner
+            sort.inner_values(self.db.container_values(), value)
                 .iter()
-                .map(|(s, v)| self.rank_of(*v, s))
-                .max()
-                .unwrap_or(0)
-        } else if sort.is_eq_sort() {
-            self.rank
-                .get(&self.db.find_in(self.color, value))
-                .copied()
-                .unwrap_or(0)
+                .all(|(sort, value)| self.has_term(*value, sort))
+        } else if sort.is_eq_sort()
+            && self
+                .db
+                .sort(sort.name())
+                .is_ok_and(|id| self.made.contains(&id))
+        {
+            self.parent
+                .contains_key(&self.db.find_in(self.color, value))
         } else {
-            0
+            true
         }
     }
 
-    fn row_rank(&self, table: TableId, row: &[Value]) -> usize {
+    fn children_have_terms(&self, table: TableId, row: &[Value]) -> bool {
         let schema = self.db.schema().table(table);
-        let children = row[..schema.key_arity()].iter().zip(schema.columns());
-        children
-            .map(|(&value, &sort)| self.rank_of(value, self.sort(sort)))
-            .max()
-            .unwrap_or(0)
+        row[..schema.key_arity()]
+            .iter()
+            .zip(schema.columns())
+            .all(|(&value, &sort)| self.has_term(value, self.sort(sort)))
     }
 
-    // Each e-class gets the cheapest row, and a rank from the order costs
-    // improved in, so a row is only chosen above children of lower rank and
-    // a cycle of equal costs cannot be chosen.
+    // Settle costs before choosing witnesses. Children must already have terms,
+    // so equal-cost cycles cannot displace a finite derivation.
     fn bellman_ford(&mut self) {
-        let (mut row, mut updates) = (Vec::new(), 0);
+        let mut row = Vec::new();
         let mut changed = true;
         while changed {
             changed = false;
@@ -382,27 +377,31 @@ impl<'g, C: Cost> TreeExtractor<'g, C> {
                     };
                     if self.costs.get(&eclass).is_none_or(|old| cost < *old) {
                         self.costs.insert(eclass, cost);
-                        updates += 1;
-                        self.rank.insert(eclass, updates);
                         changed = true;
                     }
                 }
             }
         }
-        for &table in &self.tables {
-            for found in self
-                .db
-                .rows_in(self.color, table)
-                .filter(|r| !r.is_subsumed())
-            {
-                let row: Vec<Value> = found.values().collect();
-                let eclass = *row.last().expect("an output");
-                let best = self.costs.get(&eclass) == self.row_cost(table, &row, false).as_ref();
-                if best
-                    && !self.parent.contains_key(&eclass)
-                    && self.rank[&eclass] > self.row_rank(table, &row)
+        changed = true;
+        while changed {
+            changed = false;
+            for &table in &self.tables {
+                for found in self
+                    .db
+                    .rows_in(self.color, table)
+                    .filter(|r| !r.is_subsumed())
                 {
-                    self.parent.insert(eclass, (table, row));
+                    let row: Vec<Value> = found.values().collect();
+                    let eclass = *row.last().expect("an output");
+                    let best =
+                        self.costs.get(&eclass) == self.row_cost(table, &row, false).as_ref();
+                    if best
+                        && !self.parent.contains_key(&eclass)
+                        && self.children_have_terms(table, &row)
+                    {
+                        self.parent.insert(eclass, (table, row));
+                        changed = true;
+                    }
                 }
             }
         }
