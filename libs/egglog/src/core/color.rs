@@ -570,22 +570,29 @@ impl Database {
                 (t, self.hide_shown(color.0, t, hidden))
             })
             .collect();
-        self.drop_color(color);
         debug_assert!(
             self.tables.iter().all(|table| table.holds_none_from(mark)),
             "a base row holds an id made after the mark"
         );
-        self.containers.truncate(mark);
-        self.uf.truncate(mark);
-        let mut kept = HashMap::new();
+        let mut ids = Vec::new();
+        for (t, rows) in &own {
+            for (cells, _) in rows {
+                ids.extend(self.tables[*t].schema.ids.iter().map(|&c| cells[c + 1]));
+            }
+        }
+        let kept = self.containers.adopt(
+            mark,
+            &ids,
+            &|value, uf| Value::new(self.colors.root(color.0, uf.find(value.raw()))),
+            &mut self.uf,
+        );
+        self.drop_color(color);
         for (t, rows) in &mut own {
             let ids = &self.tables[*t].schema.ids;
             for (cells, _) in rows.iter_mut() {
                 for &column in ids {
                     let cell = &mut cells[column + 1];
-                    if *cell >= mark {
-                        *cell = *kept.entry(*cell).or_insert_with(|| self.uf.fresh());
-                    }
+                    *cell = kept[cell];
                 }
             }
         }
