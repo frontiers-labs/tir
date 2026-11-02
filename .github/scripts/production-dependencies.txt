@@ -4,6 +4,7 @@ cbindgen
 chumsky
 clap
 criterion
+fearless_simd
 isla-lib
 libc
 libfuzzer-sys

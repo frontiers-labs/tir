@@ -4,12 +4,19 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+fearless_simd = { version = "1.1", features = ["force_support_fallback"] }
 
 [dev-dependencies]
 proptest.workspace = true
+criterion.workspace = true
+tir-bench.workspace = true
 
 [lints]
 workspace = true
 
 [lib]
 bench = false
+
+[[bench]]
+name = "trie"
+harness = false
