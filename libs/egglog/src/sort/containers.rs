@@ -587,7 +587,14 @@ impl FunctionContainer {
         let given = self.args.iter().map(|(_, value)| *value);
         let args: Vec<Value> = given.chain(args.iter().copied()).collect();
         match self.target {
-            Target::Table(table) => ctx.entry(table, &args),
+            Target::Table(table) => match ctx.context {
+                crate::Context::Full => ctx.entry(table, &args),
+                crate::Context::Read => ctx.lookup(table, &args),
+                crate::Context::Pure | crate::Context::Write => {
+                    ctx.panic();
+                    None
+                }
+            },
             Target::Prim(prim) => ctx.call(prim, &args),
         }
     }

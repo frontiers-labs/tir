@@ -840,7 +840,7 @@ fn id_run_arguments_follow_base_and_color_equality() {
                 )
                 .unwrap();
             let compiled = rules.compile(&db).unwrap();
-            let mut program = if loaded {
+            let program = if loaded {
                 Program::from_bytes(&compiled.to_bytes(), &mut db).unwrap()
             } else {
                 compiled

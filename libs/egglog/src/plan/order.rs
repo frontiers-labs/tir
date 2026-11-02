@@ -55,6 +55,7 @@ pub(crate) enum Join {
     },
     Prim {
         prim: ExternId,
+        context: crate::Context,
         args: Vec<Arg>,
     },
     // The step of a rule with no premise.
@@ -132,6 +133,11 @@ impl State {
                 inputs.iter().all(|&v| self.bound(v)).then(|| Candidate {
                     join: Join::Prim {
                         prim,
+                        context: if rule.naive {
+                            crate::Context::Read
+                        } else {
+                            crate::Context::Pure
+                        },
                         args: self.args(&atom.args),
                     },
                     atom: a,

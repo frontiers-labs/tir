@@ -290,6 +290,11 @@ pub(crate) fn run_actions(
         vals[out as usize] = Some(found.ok_or_else(|| missing(ctx, table))?);
     }
     let mut probed = None;
+    ctx.context = if rule.naive {
+        crate::Context::Full
+    } else {
+        crate::Context::Write
+    };
     for act in &rule.actions {
         match act {
             Act::Insert(table, args) => {
