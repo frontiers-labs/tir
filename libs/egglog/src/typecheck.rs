@@ -425,6 +425,12 @@ impl Typer<'_> {
             let message = format!("cannot infer the sort of `{}`", self.names[var as usize]);
             return Err(self.type_error(self.span, message));
         }
+        if unions.iter().any(|&(a, _)| {
+            self.sort(a)
+                .is_some_and(|sort| !self.schema.sort(sort).kind().has_ids())
+        }) {
+            return Err(self.type_error(self.span, "cannot union base values".to_owned()));
+        }
         Ok(())
     }
 
