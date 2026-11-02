@@ -647,6 +647,72 @@ fn equal_outputs_still_evaluate_function_merges() {
 }
 
 #[test]
+fn adoption_preserves_selected_container_payload() {
+    let (mut db, node) = node_db();
+    let pairs = db.add_sort("Pair", SortKind::container::<Pair>());
+    let selected = db.add_relation("selected", &[pairs]);
+    let a = db.fresh(node);
+    let mark = db.mark();
+    let color = db.color(&[]);
+    let held = db.container(Pair(a, a));
+    db.insert_in(color, selected, &[held]).unwrap();
+    db.rebuild().unwrap();
+    db.adopt_rows(color, &[selected], mark);
+    db.rebuild().unwrap();
+    let adopted = db.rows(selected).next().unwrap()[0];
+    assert_eq!(db.container_value::<Pair>(adopted), Some(&Pair(a, a)));
+    assert_eq!(db.container(Pair(a, a)), adopted);
+}
+
+#[test]
+fn adoption_retains_nested_typed_containers_and_discards_unselected_payloads() {
+    use tir_egglog::sort::{PairContainer, VecContainer};
+
+    let (mut db, node) = node_db();
+    let outer_sort = db.add_sort("Outer", SortKind::container::<PairContainer>());
+    let selected = db.add_relation("selected", &[outer_sort, node]);
+    let stable_sort = db.add_sort("Stable", SortKind::container::<Pair>());
+    let stable_rows = db.add_relation("stable", &[stable_sort]);
+    let [a, z] = [(); 2].map(|()| db.fresh(node));
+    let stable = db.container(Pair(z, z));
+    db.insert(stable_rows, &[stable]).unwrap();
+    let sibling = db.color(&[]);
+    let mark = db.mark();
+    let color = db.color(&[]);
+    let discarded_node = db.fresh(node);
+    let discarded = db.container(Pair(discarded_node, a));
+    let [b, alias] = [(); 2].map(|()| db.fresh(node));
+    let inner = db.container(VecContainer::new(vec![alias, z], [true; 2]));
+    let scalar = db.base(inner.raw() as i64);
+    assert_eq!(scalar.raw(), inner.raw());
+    let outer = db.container(PairContainer::new(vec![inner, scalar], [true, false]));
+    db.insert_in(color, selected, &[outer, alias]).unwrap();
+    db.union_in(color, b, alias);
+    db.union_in(color, a, z);
+    db.rebuild().unwrap();
+    db.adopt_rows(color, &[selected], mark);
+    db.rebuild().unwrap();
+
+    let adopted: Vec<_> = db.rows(selected).next().unwrap().values().collect();
+    let payload = db.container_value::<PairContainer>(adopted[0]).unwrap();
+    let inner = payload.data[0];
+    assert_eq!(payload.data[1], scalar);
+    assert_eq!(
+        db.container_value::<VecContainer>(inner),
+        Some(&VecContainer::new(vec![adopted[1], a], [true; 2]))
+    );
+    assert_eq!(db.container_value::<Pair>(discarded), None);
+    assert_eq!(db.container_value::<Pair>(stable), Some(&Pair(z, z)));
+    assert_eq!(db.rows_in(sibling, stable_rows).next().unwrap()[0], stable);
+    assert_eq!(db.rows_in(sibling, selected).count(), 1);
+    assert_ne!(db.find(a), db.find(z));
+    assert_eq!(
+        db.container(PairContainer::new(vec![inner, scalar], [true, false])),
+        adopted[0]
+    );
+}
+
+#[test]
 fn rollback_forgets_speculative_container_interning() {
     let (mut db, node) = node_db();
     let a = db.fresh(node);
