@@ -501,6 +501,7 @@ impl Database {
             stop: Cell::new(false),
             panicked: Cell::new(false),
             equality: None,
+            context: Context::Full,
         };
         (ctx, &self.indexes, &mut self.colors)
     }
@@ -562,6 +563,7 @@ pub struct PrimCtx<'a> {
     // Set to end the search early; with `panicked`, the search fails.
     pub(crate) stop: Cell<bool>,
     pub(crate) panicked: Cell<bool>,
+    pub(crate) context: Context,
 }
 
 impl<'a> PrimCtx<'a> {
@@ -649,10 +651,15 @@ impl<'a> PrimCtx<'a> {
 
     pub fn call(&mut self, prim: ExternId, args: &[Value]) -> Option<Value> {
         let prims = self.prims;
-        if let Some((colors, c)) = self.equality {
+        if !prims[prim.index()].contexts.contains(&self.context) {
+            self.panic();
+            return None;
+        }
+        let mut normalized = Vec::new();
+        let args = if let Some((colors, c)) = self.equality {
             super::color::check_pure(self, prim).ok()?;
             let signature = &prims[prim.index()].signature;
-            let mut normalized = Vec::with_capacity(args.len());
+            normalized.reserve(args.len());
             for (&value, &sort) in args.iter().zip(&signature.inputs) {
                 let value = match self.sorts[sort.index()].kind {
                     SortKind::Base(_) => value,
@@ -666,13 +673,26 @@ impl<'a> PrimCtx<'a> {
                 };
                 normalized.push(value);
             }
-            let value = (prims[prim.index()].f)(self, &normalized)?;
-            return Some(match self.sorts[signature.output.index()].kind {
-                SortKind::Base(_) => value,
-                _ => self.find(value),
-            });
+            normalized.as_slice()
+        } else {
+            args
+        };
+        let value = (prims[prim.index()].f)(self, args)?;
+        if self.panicked.get() {
+            return None;
         }
-        (prims[prim.index()].f)(self, args)
+        Some(
+            if self.equality.is_some()
+                && !matches!(
+                    self.sorts[prims[prim.index()].signature.output.index()].kind,
+                    SortKind::Base(_)
+                )
+            {
+                self.find(value)
+            } else {
+                value
+            },
+        )
     }
 
     pub(crate) fn call_in(
