@@ -1368,3 +1368,78 @@ fn deferred_deletion_removes_each_symmetric_row_once() {
     program.run(&mut db, &Schedule::run("run")).unwrap();
     assert_eq!(db.rows(target).count(), 0);
 }
+
+#[test]
+fn union_rejects_base_values_before_execution() -> Result<(), Error> {
+    for action in [
+        action!((union 1 2)),
+        action!((union 1 1)),
+        Action::Union(span!(), exprs::string("a"), exprs::string("b")),
+    ] {
+        let mut eg = EGraph::default();
+        assert!(matches!(run(&mut eg, vec![action]), Err(Error::Type(..))));
+        assert!(matches!(
+            rule(&mut eg, "", facts![], actions![(union 1 2)]),
+            Err(Error::Type(..))
+        ));
+    }
+    let mut eg = EGraph::default();
+    datatype!(&mut eg, (datatype Node (Num i64)));
+    run(&mut eg, vec![action!((union (Num 1) (Num 2)))])?;
+    eg.run_program(vec![Command::Check(span!(), facts![(= (Num 1) (Num 2))].0)])?;
+    eg.run_program(vec![Command::Sort {
+        span: span!(),
+        name: "IVec".into(),
+        presort_and_args: Some(("Vec".into(), vec![exprs::var("i64")])),
+    }])?;
+    let vector = |n| exprs::call("vec-of", vec![exprs::int(n)]);
+    run(&mut eg, vec![Action::Union(span!(), vector(1), vector(2))])?;
+    eg.run_program(vec![Command::Check(
+        span!(),
+        vec![Fact::Eq(span!(), vector(1), vector(2))],
+    )])?;
+    Ok(())
+}
+
+#[test]
+fn steps_follow_the_seminaive_setting_after_recompilation() -> Result<(), Error> {
+    for combined in [false, true] {
+        let mut eg = EGraph::default();
+        add_relation(&mut eg, "R", vec!["i64".into()])?;
+        add_relation(&mut eg, "Unused", vec!["i64".into()])?;
+        add_function(
+            &mut eg,
+            "count",
+            Schema::new(vec![], "i64".into()),
+            Some(expr!((+ old new))),
+        )?;
+        ruleset(&mut eg, "one", facts![(R x)], actions![(set (count) 1)])?;
+        let set = if combined {
+            add_ruleset(&mut eg, "two")?;
+            eg.run_program(vec![Command::UnstableCombinedRuleset(
+                span!(),
+                "both".into(),
+                vec!["one".into(), "two".into()],
+            )])?;
+            "both"
+        } else {
+            "one"
+        };
+        run(&mut eg, vec![action!((R 7)), action!((set (count) 0))])?;
+        eg.seminaive = false;
+        for expected in 1..=2 {
+            eg.step_rules(set)?;
+            let (_, count) = eg.eval_expr(&expr!((count)))?;
+            assert_eq!(eg.value_to_base::<i64>(count), expected);
+        }
+        rule(&mut eg, "one", facts![(Unused x)], actions![(R x)])?;
+        eg.step_rules(set)?;
+        let (_, count) = eg.eval_expr(&expr!((count)))?;
+        assert_eq!(eg.value_to_base::<i64>(count), 3);
+        eg.seminaive = true;
+        eg.step_rules(set)?;
+        let (_, count) = eg.eval_expr(&expr!((count)))?;
+        assert_eq!(eg.value_to_base::<i64>(count), 3);
+    }
+    Ok(())
+}

@@ -632,3 +632,16 @@ fn local_container_congruence_matches_base_union() {
         assert_eq!(db.rows_in(c, holds).count(), 1);
     }
 }
+
+#[test]
+fn equal_outputs_still_evaluate_function_merges() {
+    let mut db = Database::new();
+    let int = db.sort("i64").unwrap();
+    let g = db.add_function("g", &[int], int, Merge::AssertEq);
+    let f = db.add_function("f", &[int], int, Merge::Function(g, vec![Merge::Old]));
+    let (one, two, three) = (db.base(1_i64), db.base(2_i64), db.base(3_i64));
+    db.insert(g, &[two, three]).unwrap();
+    db.insert(f, &[one, two]).unwrap();
+    db.insert(f, &[one, two]).unwrap();
+    assert_eq!(db.lookup(f, &[one]), Some(three));
+}
