@@ -2,6 +2,7 @@
 
 use super::hir::{Act, Rule, Target, Var};
 use super::permute::Symmetries;
+use crate::Schema;
 use crate::vm::code::Slice;
 
 // One way to match a rule: the slice each premise atom reads.
@@ -13,7 +14,12 @@ pub(crate) struct Variant {
 // Variant i: the table atoms before i read Old, atom i reads New, the atoms
 // after i read All. Old is All with `ts < last_run`, so a table keeps
 // indexes on All only. A naive rule has one variant that reads All.
-pub(crate) fn variants(index: usize, rule: &Rule, syms: &Symmetries) -> Vec<Variant> {
+pub(crate) fn variants(
+    index: usize,
+    rule: &Rule,
+    syms: &Symmetries,
+    schema: Schema<'_>,
+) -> Vec<Variant> {
     let tables: Vec<usize> = (0..rule.premise.len())
         .filter(|&a| matches!(rule.premise[a].target, Target::Table(_)))
         .collect();
@@ -32,10 +38,12 @@ pub(crate) fn variants(index: usize, rule: &Rule, syms: &Symmetries) -> Vec<Vari
         variants.push(slices);
     }
     // Drop each variant whose matches a kept variant also finds.
+    let duplicate_safe = rule.actions.iter().all(|act| act.duplicate_safe(schema));
     let mut kept = vec![true; variants.len()];
     for b in 0..variants.len() {
-        kept[b] = !(0..variants.len())
-            .any(|a| a != b && kept[a] && dominates(rule, &variants[a], &variants[b], syms));
+        kept[b] = !(0..variants.len()).any(|a| {
+            duplicate_safe && a != b && kept[a] && dominates(rule, &variants[a], &variants[b], syms)
+        });
     }
     let kept = variants.into_iter().zip(kept).filter(|(_, kept)| *kept);
     kept.map(|(slices, _)| Variant {

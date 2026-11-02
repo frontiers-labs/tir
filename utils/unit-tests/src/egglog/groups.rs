@@ -292,3 +292,48 @@ fn empty_keyed_groups_merge_after_last_member_deletion() {
     assert!(db.lookup(keyed, &[b]).is_some());
     assert_eq!(db.find(a), db.find(b));
 }
+
+#[test]
+fn compiled_member_deletions_close_group_congruence() {
+    for colored in [false, true] {
+        let mut db = Database::new();
+        let group = db.add_sort("G", SortKind::Eq);
+        let int = db.sort("i64").unwrap();
+        let member = db.add_relation("Member", &[group, int]);
+        let keyed = db.add_relation("Keyed", &[group]);
+        let trigger = db.add_relation("Trigger", &[group, int]);
+        db.add_group(group, &[member], keyed).unwrap();
+        let [zero, one] = [0_i64, 1].map(|n| db.base(n));
+        let a = db.find_or_make(&[(member, &[zero])]).unwrap();
+        let b = db.find_or_make(&[(member, &[one])]).unwrap();
+        db.rebuild().unwrap();
+        let color = if colored { db.color(&[]) } else { Color::BASE };
+        let sibling = db.color(&[]);
+        for row in [[a, zero], [b, one]] {
+            db.insert_in(color, trigger, &row).unwrap();
+        }
+        let mut rules = Rules::new();
+        rules
+            .rule(
+                &db,
+                "",
+                facts![(Trigger g x)],
+                actions![(delete (Member g x))],
+            )
+            .unwrap();
+        let mut program = rules.compile(&db).unwrap();
+        program.run(&mut db, &Schedule::run("")).unwrap();
+        assert_eq!(db.rows_in(color, member).count(), 0);
+        assert!(db.lookup_in(color, keyed, &[a]).is_some());
+        assert!(db.lookup_in(color, keyed, &[b]).is_some());
+        assert_eq!(db.find_in(color, a), db.find_in(color, b));
+        if colored {
+            assert_eq!(db.rows(member).count(), 2);
+            assert_eq!(db.rows_in(sibling, member).count(), 2);
+            assert_ne!(db.find(a), db.find(b));
+            db.adopt(color);
+            db.rebuild().unwrap();
+            assert_eq!(db.find(a), db.find(b));
+        }
+    }
+}

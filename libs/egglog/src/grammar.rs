@@ -46,6 +46,8 @@ const KEYWORDS: &[&str] = &[
     "=",
 ];
 
+const ACTION_KEYWORDS: &[&str] = &["let", "set", "delete", "subsume", "union", "panic"];
+
 struct Source<'a> {
     file: &'static str,
     // The offset each line starts at.
@@ -191,8 +193,10 @@ fn call<'a>() -> impl Parser<'a, &'a str, (String, Vec<Expr>), Extra<'a>> + Clon
 }
 
 // A list whose head is no keyword.
-fn plain<'a>() -> impl Parser<'a, &'a str, Expr, Extra<'a>> + Clone {
-    let head = open().then(atom().filter(|atom| !KEYWORDS.contains(atom)));
+fn plain<'a>(
+    excluded: &'static [&'static str],
+) -> impl Parser<'a, &'a str, Expr, Extra<'a>> + Clone {
+    let head = open().then(atom().filter(move |atom| !excluded.contains(atom)));
     head.rewind().ignore_then(expr())
 }
 
@@ -224,12 +228,14 @@ fn expr<'a>() -> impl Parser<'a, &'a str, Expr, Extra<'a>> + Clone {
 fn fact<'a>() -> impl Parser<'a, &'a str, Fact, Extra<'a>> + Clone {
     choice((
         form("=", expr().then(expr())).map_with(|(a, b), e| Fact::Eq(span(e), a, b)),
-        plain().map(Fact::Fact),
+        plain(&["="]).map(Fact::Fact),
     ))
     .labelled("a fact")
 }
 
-fn action<'a>() -> impl Parser<'a, &'a str, Action, Extra<'a>> + Clone {
+fn action<'a>(
+    excluded: &'static [&'static str],
+) -> impl Parser<'a, &'a str, Action, Extra<'a>> + Clone {
     let change = |head, change| {
         form(head, call())
             .map_with(move |(table, args), e| Action::Change(span(e), change, table, args))
@@ -243,7 +249,7 @@ fn action<'a>() -> impl Parser<'a, &'a str, Action, Extra<'a>> + Clone {
         change("subsume", Change::Subsume),
         form("union", expr().then(expr())).map_with(|(a, b), e| Action::Union(span(e), a, b)),
         form("panic", string()).map_with(|message, e| Action::Panic(span(e), message)),
-        plain().map_with(|expr, e| Action::Expr(span(e), expr)),
+        plain(excluded).map_with(|expr, e| Action::Expr(span(e), expr)),
     ))
     .labelled("an action")
 }
@@ -407,14 +413,21 @@ fn declaration<'a>() -> impl Parser<'a, &'a str, Command, Extra<'a>> + Clone {
                 .then(symbol())
                 .then(options(&[":merge", ":no-merge"])),
         )
-        .map_with(|(((name, input), output), options), e| Command::Function {
-            span: span(e),
-            name,
-            schema: Schema::new(input, output),
-            merge: options.into_iter().find_map(|option| match option {
+        .try_map_with(|(((name, input), output), options), e| {
+            let no_merge = options.iter().any(|option| matches!(option, Opt::NoMerge));
+            let merge = options.into_iter().find_map(|option| match option {
                 Opt::Merge(merge) => Some(merge),
                 _ => None,
-            }),
+            });
+            if no_merge && merge.is_some() {
+                return Err(Rich::custom(e.span(), "conflicting merge annotations"));
+            }
+            Ok(Command::Function {
+                span: span(e),
+                name,
+                schema: Schema::new(input, output),
+                merge,
+            })
         }),
         form(
             "constructor",
@@ -478,7 +491,7 @@ fn rules<'a>() -> impl Parser<'a, &'a str, Command, Extra<'a>> + Clone {
     let rule = form(
         "rule",
         list(fact())
-            .then(list(action()))
+            .then(list(action(ACTION_KEYWORDS)))
             .then(options(&[":ruleset", ":name", ":naive"])),
     )
     .map_with(|((body, head), options), e| {
@@ -551,22 +564,22 @@ fn queries<'a>() -> impl Parser<'a, &'a str, Command, Extra<'a>> + Clone {
 fn command<'a>() -> impl Parser<'a, &'a str, Command, Extra<'a>> + Clone {
     recursive(|command| {
         let user = open()
-            .ignore_then(symbol().try_map_with(
-                |name, e| match e.state().commands.contains(&name) {
-                    true => Ok(name),
-                    false => Err(Rich::custom(e.span(), format!("`{name}` is no command"))),
-                },
-            ))
+            .ignore_then(
+                symbol()
+                    .map_with(|name, e| (e.state().commands.contains(&name), name))
+                    .filter(|(registered, _)| *registered)
+                    .map(|(_, name)| name),
+            )
             .then(expr().repeated().collect())
             .then_ignore(close())
             .map_with(|(name, args), e| Command::UserDefined(span(e), name, args));
         choice((
+            user,
             declaration(),
             rules(),
             queries(),
             form("fail", command).map_with(|command, e| Command::Fail(span(e), Box::new(command))),
-            user,
-            action().map(Command::Action),
+            action(KEYWORDS).map(Command::Action),
         ))
         .labelled("a command")
     })
@@ -584,7 +597,14 @@ impl EGraph {
             wildcards: 0,
             names: text
                 .split(separator)
-                .chain(self.globals.iter().map(String::as_str))
+                .flat_map(|name| {
+                    [
+                        name,
+                        name.strip_prefix(crate::GLOBAL_NAME_PREFIX).unwrap_or(name),
+                    ]
+                })
+                .chain(self.names.seen.keys().map(String::as_str))
+                .chain(self.names.aliases.keys().map(String::as_str))
                 .collect(),
         });
         let program = ws()
@@ -595,8 +615,8 @@ impl EGraph {
             let error = &errors[0];
             let at = source.at(error.span().start);
             match error.reason() {
-                _ if error.found().is_none() => Error::Unfinished(at),
                 RichReason::Custom(message) => Error::Parse(format!("{at}: {message}")),
+                _ if error.found().is_none() => Error::Unfinished(at),
                 RichReason::ExpectedFound { expected, found } => {
                     // Whitespace and comments may follow any token.
                     let expected: Vec<String> = (expected.iter())

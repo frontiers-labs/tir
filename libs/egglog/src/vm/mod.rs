@@ -280,9 +280,7 @@ impl Program {
             }
         }
         let searched = Instant::now();
-        for found in writes {
-            found.apply(db, &self.tables)?;
-        }
+        exec::Writes::apply(writes, db, &self.tables)?;
         let applied = Instant::now();
         if rebuild {
             db.rebuild()?;
@@ -333,9 +331,7 @@ impl Program {
                     break;
                 }
             }
-            for found in writes {
-                found.apply_colors(db, &self.tables)?;
-            }
+            exec::Writes::apply_colors(writes, db, &self.tables)?;
             db.rebuild_colors()?;
             failed?;
             for &decl in decls {

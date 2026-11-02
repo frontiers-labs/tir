@@ -93,7 +93,7 @@ pub(crate) fn compile(
     let mut decls = Vec::new();
     for (source, rules) in sources.iter().zip(&rulesets) {
         let variants: Vec<_> = (rules.iter().enumerate())
-            .flat_map(|(i, rule)| seminaive::variants(i, rule, &syms))
+            .flat_map(|(i, rule)| seminaive::variants(i, rule, &syms, schema))
             .collect();
         let mut consts: Vec<Literal> = Vec::new();
         let literals = rules.iter().flat_map(|rule| &rule.constants);

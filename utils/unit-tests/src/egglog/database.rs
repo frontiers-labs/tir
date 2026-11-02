@@ -582,3 +582,53 @@ fn subsumption_does_not_evaluate_the_function_merge() {
         assert!(db.rows(f).all(|row| row.is_subsumed()));
     }
 }
+#[test]
+fn local_container_congruence_matches_base_union() {
+    for local in [false, true] {
+        let mut db = Database::new();
+        let e = db.add_sort("E", SortKind::Eq);
+        let pairs = db.add_sort("Pair", SortKind::container::<Pair>());
+        let holds = db.add_relation("holds", &[pairs]);
+        let [a, b, z] = [(); 3].map(|_| db.fresh(e));
+        let p = db.container(Pair(a, z));
+        let q = db.container(Pair(b, z));
+        db.insert(holds, &[p]).unwrap();
+        db.insert(holds, &[q]).unwrap();
+        let nested = db.add_relation("nested", &[pairs]);
+        let outer_p = db.container(Pair(p, z));
+        let outer_q = db.container(Pair(q, z));
+        db.insert(nested, &[outer_p]).unwrap();
+        db.insert(nested, &[outer_q]).unwrap();
+        let c = db.color(&[]);
+        let child = db.color(&[c]);
+        let sibling = db.color(&[]);
+        if local {
+            db.union_in(c, a, b);
+        } else {
+            db.union(a, b);
+        }
+        db.rebuild().unwrap();
+        eprintln!(
+            "local={local}, equal_elements={}, equal_pairs={}, rows={}",
+            db.find_in(c, a) == db.find_in(c, b),
+            db.find_in(c, p) == db.find_in(c, q),
+            db.rows_in(c, holds).count()
+        );
+        assert_eq!(db.find_in(c, p), db.find_in(c, q), "local={local}");
+        assert_eq!(db.rows_in(c, holds).count(), 1, "local={local}");
+        for color in [c, child] {
+            assert_eq!(db.find_in(color, outer_p), db.find_in(color, outer_q));
+            assert_eq!(db.rows_in(color, nested).count(), 1);
+        }
+        if local {
+            for color in [tir_egglog::Color::BASE, sibling] {
+                assert_ne!(db.find_in(color, p), db.find_in(color, q));
+                assert_eq!(db.rows_in(color, holds).count(), 2);
+                assert_eq!(db.rows_in(color, nested).count(), 2);
+            }
+            assert_eq!(db.container_value::<Pair>(q), Some(&Pair(b, z)));
+        }
+        db.rebuild().unwrap();
+        assert_eq!(db.rows_in(c, holds).count(), 1);
+    }
+}
