@@ -153,6 +153,9 @@ macro_rules! vars {
 #[macro_export]
 macro_rules! expr {
     ((unquote $unquoted:expr)) => { $unquoted };
+    ((find-or-make $($row:tt)*)) => {
+        $crate::prelude::exprs::call("find-or-make", vec![$($crate::expr!($row)),*])
+    };
     (($func:tt $($arg:tt)*)) => {
         $crate::prelude::exprs::call(stringify!($func), vec![$($crate::expr!($arg)),*])
     };

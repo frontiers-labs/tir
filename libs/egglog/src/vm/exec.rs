@@ -4,13 +4,19 @@
 // Matching reads committed rows only: actions buffer their writes in
 // `Writes`, which apply after every rule of the iteration matched.
 
+use std::collections::HashMap;
+
+use tir_adt::FxBuildHasher;
 use tir_adt::simd::{hash_rows, intersect_sorted, select_eq, select_same};
 
 use tir_adt::simd::hash_row;
 
 use super::Program;
 use super::code::{Action, Bind, Node, Reg, Slice, Step};
-use crate::core::{Colors, Delta, EMPTY, RowTable, Table, UnionFind, check_pure, l2, same_key};
+use crate::core::{
+    Colors, Delta, EMPTY, GroupRow, GroupView, RowTable, Table, UnionFind, check_pure, group_at,
+    l2, same_key,
+};
 use crate::{Color, Database, Error, PrimCtx, TableId, Value};
 
 #[derive(Clone, Default)]
@@ -41,6 +47,11 @@ pub(crate) struct Writes {
     subsumed: Vec<(usize, Vec<u32>)>,
     // The color of each union, in a color run.
     colors: Vec<u32>,
+    // The groups FindOrMake made, by their color and rows, so equal rows
+    // get one group per iteration; and the keyed rows of those groups, with
+    // their color.
+    made: HashMap<Vec<u32>, u32, FxBuildHasher>,
+    keyed: Vec<(TableId, u32, u32)>,
 }
 
 impl Writes {
@@ -59,6 +70,8 @@ impl Writes {
             removed: Vec::new(),
             subsumed: Vec::new(),
             colors: Vec::new(),
+            made: HashMap::default(),
+            keyed: Vec::new(),
         }
     }
 
@@ -94,6 +107,9 @@ impl Writes {
         for (table, key) in self.subsumed {
             db.subsume(tables[table], &values(key));
         }
+        for (table, _, g) in self.keyed {
+            db.insert(table, &[Value::new(g)])?;
+        }
         for (a, b) in self.unions {
             db.union(Value::new(a), Value::new(b));
         }
@@ -108,6 +124,9 @@ impl Writes {
                 let row = delta.columns.iter().map(|column| column[i]).collect();
                 db.write_in(table, row, subsumed)?;
             }
+        }
+        for (table, c, g) in self.keyed {
+            db.insert_in(Color::new(c), table, &[Value::new(g)])?;
         }
         for ((a, b), c) in self.unions.into_iter().zip(self.colors) {
             db.union_in(Color::new(c), Value::new(a), Value::new(b));
@@ -218,6 +237,7 @@ pub(crate) fn search_colors(
     let own = (0..db.tables.len())
         .map(|table| db.colors.refresh(TableId::new(table), &[0]))
         .collect();
+    db.refresh_group_mirrors();
     let n = level.len();
     let root = Batch {
         cols: (program.consts[ruleset].iter())
@@ -725,7 +745,7 @@ impl<'a, R: Reads<'a>> Exec<'a, R> {
                     .then_some((rows, row, keys + 1)),
                 None => t
                     .find(&cells[1..], hash_row(&cells[1..]))
-                    .filter(|&row| base_slice(t, row, slice) && !colors.holds_moved(c, t, row))
+                    .filter(|&row| base_slice(t, row, slice) && !colors.hides(c, id, t, row))
                     .map(|row| (t, row, keys)),
             };
             let Some((holder, row, output)) = hit else {
@@ -853,7 +873,7 @@ impl<'a, R: Reads<'a>> Exec<'a, R> {
                     let base = || t.find(&cells[1..], hash_row(&cells[1..]));
                     out.push(match colors.color_row(c, id, &cells) {
                         Some(row) => rows.cell(row, keys + 1),
-                        None => match base().filter(|&row| !colors.holds_moved(c, t, row)) {
+                        None => match base().filter(|&row| !colors.hides(c, id, t, row)) {
                             Some(row) => t.cell(row, keys),
                             None => {
                                 let table = (*table as usize, t);
@@ -943,7 +963,73 @@ impl<'a, R: Reads<'a>> Exec<'a, R> {
                 }
             }
             Action::Panic { message } => return Err(Error::Panic(message.clone())),
+            Action::FindOrMake { rows, out } => {
+                let found = self.find_or_make(rows, batch)?;
+                debug_assert_eq!(*out as usize, batch.cols.len());
+                batch.cols.push(found);
+            }
         }
         Ok(())
+    }
+
+    // The group of each binding whose rows are `rows`: one found in the
+    // view of its color, else one made earlier in the iteration, else a new
+    // one whose rows the writes hold.
+    fn find_or_make(&mut self, rows: &[(u32, Vec<Reg>)], batch: &Batch) -> Result<Vec<u32>, Error> {
+        let tables: Vec<TableId> = rows.iter().map(|&(t, _)| self.table_id(t)).collect();
+        let groups = self.ctx.groups;
+        let Some(group) = group_at(groups, tables[0]).map(|at| &groups[at]) else {
+            let name = &self.table(rows[0].0).schema.name;
+            return Err(Error::Unsupported(format!(
+                "`{name}` is no member table of a group"
+            )));
+        };
+        let mut out = self.buffer();
+        let mut spec = Vec::with_capacity(rows.len());
+        for i in 0..batch.len {
+            let c = if R::COLORED { batch.colors[i] } else { 0 };
+            let view = GroupView {
+                tables: self.ctx.tables,
+                uf: self.ctx.uf,
+                colors: R::COLORED.then(|| (self.colors(), c)),
+            };
+            spec.clear();
+            for (&table, (_, regs)) in tables.iter().zip(rows) {
+                let mut cells: Vec<u32> = regs.iter().map(|&r| batch.col(r)[i]).collect();
+                view.canonical(table, &mut cells);
+                spec.push((table, cells));
+            }
+            let mut sorted: Vec<GroupRow> = spec.clone();
+            sorted.sort_unstable();
+            let mut key = vec![c];
+            for (table, cells) in &sorted {
+                key.push(table.index() as u32);
+                key.extend(cells);
+            }
+            if let Some(g) = self
+                .writes
+                .made
+                .get(&key)
+                .copied()
+                .or_else(|| view.find(group, &sorted, EMPTY))
+            {
+                out.push(g);
+                continue;
+            }
+            let g = self.ctx.uf.fresh();
+            for ((t, _), (_, cells)) in rows.iter().zip(&spec) {
+                let delta = &mut self.writes.rows[*t as usize];
+                let colored = R::COLORED.then_some(c);
+                let row = colored.into_iter().chain([g]).chain(cells.iter().copied());
+                for (column, cell) in delta.columns.iter_mut().zip(row) {
+                    column.push(cell);
+                }
+                delta.subsumed.push(false);
+            }
+            self.writes.keyed.push((group.keyed, c, g));
+            self.writes.made.insert(key, g);
+            out.push(g);
+        }
+        Ok(out)
     }
 }

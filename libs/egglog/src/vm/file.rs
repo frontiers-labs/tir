@@ -319,6 +319,13 @@ impl Writer {
                 self.fixed(&[6, 0, 0]);
                 self.string(message);
             }
+            Action::FindOrMake { rows, out } => {
+                self.fixed(&[7, 0, *out]);
+                self.list(rows, |w, (table, args)| {
+                    w.word(*table);
+                    w.words(args);
+                });
+            }
         }
     }
 
@@ -569,6 +576,10 @@ impl Reader<'_> {
         if tag == 6 {
             let message = self.string()?;
             return Ok(Action::Panic { message });
+        }
+        if tag == 7 {
+            let rows = self.list(|r| Ok((r.word()?, r.words()?)))?;
+            return Ok(Action::FindOrMake { rows, out: extra });
         }
         let args = self.words()?;
         Ok(match tag {
@@ -851,6 +862,15 @@ fn check_node(file: &ProgramFile, node: &Node) -> Load<()> {
                 table(*t)?.keys == args.len()
             }
             Action::Call { prim: p, args } => prim(*p)?.inputs.len() == args.len(),
+            Action::FindOrMake { rows, .. } => {
+                let mut group = None;
+                for (t, args) in rows {
+                    let t = table(*t)?;
+                    ensure(*group.get_or_insert(t.columns[0]) == t.columns[0], "group")?;
+                    ensure(args.len() + 1 == t.columns.len(), "row")?;
+                }
+                group.is_some()
+            }
             Action::Union { .. } | Action::Panic { .. } => true,
         };
         ensure(ok, "action")?;
@@ -905,6 +925,10 @@ fn walk(file: &ProgramFile, id: u32, width: u32, rules: usize, seen: &mut [bool]
             | Action::Call { args, .. } => reads(args, w)?,
             Action::Union { a, b } => reads(&[*a, *b], w)?,
             Action::Panic { .. } => {}
+            Action::FindOrMake { rows, out } => {
+                rows.iter().try_for_each(|(_, args)| reads(args, w))?;
+                bind(Bind::New(*out), &mut w)?;
+            }
         }
     }
     ensure(node.rules.iter().all(|&r| (r as usize) < rules), "rule")?;

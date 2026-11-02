@@ -19,11 +19,14 @@ impl Database {
     /// more ids. Containers are canonicalized alongside. Ends when no union
     /// is left to apply, then starts a new timestamp.
     pub fn rebuild(&mut self) -> Result<(), Error> {
+        let mut moved_any = false;
         loop {
             self.flush()?;
+            self.unite_written();
             if self.uf.unions() == 0 {
                 break;
             }
+            moved_any = true;
             let mut moved = self.uf.take_moved();
             let dirty = self.containers.rebuild(&mut self.uf);
             if self.local_rebuild_pays(moved.len() + dirty.len()) {
@@ -34,9 +37,7 @@ impl Database {
                         take_rows(table, &rows)
                     })
                     .collect();
-                for (table, mut delta) in deltas.into_iter().enumerate() {
-                    self.apply(TableId::new(table), &mut delta)?;
-                }
+                self.apply_moved(deltas)?;
                 continue;
             }
             let mut marked = Vec::new();
@@ -55,14 +56,25 @@ impl Database {
             let deltas: Vec<Delta> = (self.tables.iter_mut())
                 .map(|table| take_moved(table, map, &mut hits))
                 .collect();
-            for (table, mut delta) in deltas.into_iter().enumerate() {
-                self.apply(TableId::new(table), &mut delta)?;
-            }
+            self.apply_moved(deltas)?;
         }
         self.now += 1;
         if !self.colors.is_empty() {
-            self.rebase_colors()?;
+            self.rebase_colors(moved_any)?;
         }
+        Ok(())
+    }
+
+    // Writes again the rows that held moved ids, one delta per table, then
+    // unites the keyed groups those rows made equal.
+    fn apply_moved(&mut self, deltas: Vec<Delta>) -> Result<(), Error> {
+        let mut touched = Vec::new();
+        for (table, mut delta) in deltas.into_iter().enumerate() {
+            let table = TableId::new(table);
+            self.apply(table, &mut delta)?;
+            self.touched_groups(table, &delta, &mut touched);
+        }
+        self.unite_congruent(touched);
         Ok(())
     }
 
@@ -190,6 +202,9 @@ impl Database {
         subsumed: bool,
         at: Option<u32>,
     ) -> Result<(), Error> {
+        if let Some(Some(group)) = self.group_of_table.get(t.index()) {
+            self.written_groups.push((*group, row[0]));
+        }
         let now = self.now;
         let table = &mut self.tables[t.index()];
         let keys = table.schema.keys;

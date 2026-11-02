@@ -103,7 +103,9 @@ fn actions_match(rule: &Rule, map: &[Option<Var>], syms: &Symmetries) -> bool {
         | Act::Lookup(table, args)
         | Act::Delete(table, args)
         | Act::Subsume(table, args) => syms.same(Target::Table(*table), &renamed(args), args),
-        Act::Prim(_, args) | Act::Call(_, args) => renamed(args) == *args,
+        Act::Prim(_, args) | Act::Call(_, args) | Act::FindOrMake(_, args) => {
+            renamed(args) == *args
+        }
         Act::Union(x, y) => {
             let (rx, ry) = (rename(x), rename(y));
             (rx, ry) == (*x, *y) || (rx, ry) == (*y, *x)

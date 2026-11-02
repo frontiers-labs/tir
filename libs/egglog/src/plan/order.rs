@@ -141,15 +141,26 @@ impl State {
         // Before any join the batch is one binding of constants, so a join
         // that yields one row at most costs one probe, and goes before New.
         let root = self.done.iter().all(|&done| !done);
+        // The variables of constants alone, such as `(u32 0)`. A primitive
+        // call follows the calls of its arguments in the premise.
+        let mut constant: Vec<bool> = rule.constants.iter().map(Option::is_some).collect();
+        for atom in &rule.premise {
+            if let (Target::Prim(_), Some((&out, inputs))) = (atom.target, atom.args.split_last()) {
+                constant[out as usize] |= inputs.iter().all(|&v| constant[v as usize]);
+            }
+        }
         // Among equal scores, a join along an edge of the pattern tree, through
         // a variable that is the output of a premise atom, goes first: one
         // through a shared leaf variable can match far more rows (on fuel3,
-        // 6.2M rows for 10k matches).
+        // 6.2M rows for 10k matches). A constant is no edge, however many
+        // atoms share it: on the fold rules, a join through `(u32 0)` before
+        // the edge matched 600k rows for no match.
         let output = |v: Var| {
-            rule.premise.iter().any(|atom| match atom.target {
-                Target::Table(t) => atom.args.get(schema.table(t).key_arity()) == Some(&v),
-                Target::Prim(_) => false,
-            })
+            !constant[v as usize]
+                && rule.premise.iter().any(|atom| match atom.target {
+                    Target::Table(t) => atom.args.get(schema.table(t).key_arity()) == Some(&v),
+                    Target::Prim(_) => false,
+                })
         };
         let rank = |score, form: &[Var]| {
             let one_row = matches!(

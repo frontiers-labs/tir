@@ -16,6 +16,22 @@ impl UnionFind {
         id
     }
 
+    pub(crate) fn len(&self) -> u32 {
+        u32::try_from(self.parents.len()).expect("ids fit in u32")
+    }
+
+    // Forget the ids from `len` on. None of them may be the parent of an
+    // older id.
+    pub(crate) fn truncate(&mut self, len: u32) {
+        debug_assert!(
+            self.parents[..len as usize]
+                .iter()
+                .all(|&parent| parent < len)
+        );
+        self.parents.truncate(len as usize);
+        self.moved.retain(|&id| id < len);
+    }
+
     pub(crate) fn contains(&self, x: u32) -> bool {
         (x as usize) < self.parents.len()
     }

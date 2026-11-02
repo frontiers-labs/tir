@@ -318,6 +318,16 @@ impl Index {
         &self.rows()[range.start as usize..range.end as usize]
     }
 
+    // The rows whose key is `key`, some of which may be dead: those of the
+    // groups or the layout, then those of the tail.
+    pub(crate) fn rows_for(&self, columns: &[Vec<u32>], key: &[u32]) -> (&[u32], Vec<u32>) {
+        if let Some(groups) = &self.groups {
+            return (groups.get(key[0]), Vec::new());
+        }
+        let tail = self.tail_rows(columns, key).collect();
+        (self.laid_rows(columns, key), tail)
+    }
+
     // The rows of the tail whose key is `key`.
     pub(crate) fn tail_rows<'a>(
         &'a self,

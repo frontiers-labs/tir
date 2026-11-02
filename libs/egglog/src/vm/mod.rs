@@ -26,7 +26,8 @@ use code::Step;
 /// involves rows written since.
 #[derive(Clone)]
 pub struct Program {
-    file: ProgramFile,
+    // Shared by the clones of a program; only its run state is their own.
+    file: Arc<ProgramFile>,
     // The database ids of the tables and primitives of the file.
     tables: Vec<TableId>,
     externs: Vec<ExternId>,
@@ -65,7 +66,7 @@ impl Program {
         last_run: Vec<Option<u32>>,
     ) -> Self {
         Self {
-            file,
+            file: Arc::new(file),
             tables,
             externs,
             prepared: false,

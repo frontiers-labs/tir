@@ -837,3 +837,88 @@ fn a_color_run_repeats_no_base_match() {
     assert_eq!(matches(&mut db), 2);
     assert_eq!(matches(&mut db), 0);
 }
+
+fn sorted(rows: impl Iterator<Item = Vec<Value>>) -> Vec<Vec<Value>> {
+    rows.collect::<BTreeSet<_>>().into_iter().collect()
+}
+
+#[test]
+fn adopt_writes_the_rows_and_unions_of_a_color_into_the_base() {
+    let mut db = Database::new();
+    let math = db.add_sort("Math", SortKind::Eq);
+    let f = db.add_constructor("F", &[math], math);
+    let r = db.add_relation("R", &[math]);
+    let [a, b, x] = [(); 3].map(|()| db.fresh(math));
+    let (fa, fb) = (db.entry(f, &[a]).unwrap(), db.entry(f, &[b]).unwrap());
+    let below = db.color(&[]);
+    let color = db.color(&[below]);
+    db.insert_in(below, r, &[x]).unwrap();
+    db.insert_in(color, r, &[a]).unwrap();
+    db.union_in(color, a, b);
+    db.rebuild().unwrap();
+
+    db.adopt(color);
+    db.rebuild().unwrap();
+    assert_eq!(db.find(a), db.find(b));
+    assert_eq!(db.find(fa), db.find(fb));
+    assert_eq!(db.rows(f).count(), 1);
+    let rows = sorted(db.rows(r).map(|row| row.values().collect()));
+    assert_eq!(rows, sorted([vec![db.find(a)], vec![x]].into_iter()));
+    assert_eq!(db.own_rows_in(below, r).count(), 0);
+}
+
+#[test]
+fn a_removal_in_a_color_reaches_the_base_only_through_adopt() {
+    let mut db = Database::new();
+    let math = db.add_sort("Math", SortKind::Eq);
+    let r = db.add_relation("R", &[math]);
+    let [a, b, x] = [(); 3].map(|()| db.fresh(math));
+    db.insert(r, &[a]).unwrap();
+    db.insert(r, &[b]).unwrap();
+    let (color, other) = (db.color(&[]), db.color(&[]));
+    db.insert_in(color, r, &[x]).unwrap();
+    db.remove_in(color, r, &[x]);
+    db.remove_in(color, r, &[a]);
+    db.rebuild().unwrap();
+    let rows_in = |db: &Database, c| sorted(db.rows_in(c, r).map(|row| row.values().collect()));
+    assert_eq!(rows_in(&db, color), vec![vec![b]]);
+    assert_eq!(db.lookup_in(color, r, &[a]), None);
+    assert_eq!(rows_in(&db, other), vec![vec![a], vec![b]]);
+    assert_eq!(rows_in(&db, Color::BASE), vec![vec![a], vec![b]]);
+
+    db.adopt(color);
+    db.rebuild().unwrap();
+    assert_eq!(rows_in(&db, Color::BASE), vec![vec![b]]);
+    assert_eq!(rows_in(&db, other), vec![vec![b]]);
+}
+
+#[test]
+fn ids_a_color_made_stay_base_ids_after_adopt() {
+    let mut db = Database::new();
+    let math = db.add_sort("Math", SortKind::Eq);
+    db.add_constructor("F", &[math], math);
+    let [r, s] = ["R", "S"].map(|name| db.add_relation(name, &[math]));
+    let mut rules = Rules::new();
+    rules
+        .rule(&db, "", facts![(R x)], actions![(S (F x))])
+        .unwrap();
+    let mut program = rules.compile(&db).unwrap();
+    let f = db.table("F").unwrap();
+    let [a, b] = [(); 2].map(|()| db.fresh(math));
+    let color = db.color(&[]);
+    db.insert_in(color, r, &[a]).unwrap();
+    program.run(&mut db, &Schedule::saturate("")).unwrap();
+    let made = db.lookup_in(color, f, &[a]).unwrap();
+
+    db.adopt(color);
+    db.rebuild().unwrap();
+    assert_eq!(db.lookup(f, &[a]), Some(made));
+    assert_eq!(db.lookup(s, &[made]), Some(Value::new(0)));
+    assert_ne!(db.fresh(math), made);
+
+    let later = db.color(&[]);
+    db.insert_in(later, r, &[b]).unwrap();
+    program.run(&mut db, &Schedule::saturate("")).unwrap();
+    assert_eq!(db.rows_in(later, s).count(), 2);
+    assert_eq!(db.rows(s).count(), 1);
+}

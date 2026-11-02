@@ -161,6 +161,7 @@ mod egglog {
     mod differential;
     mod engine;
     mod extract;
+    mod groups;
     mod parser;
     mod passes;
     mod program;
