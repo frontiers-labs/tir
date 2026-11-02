@@ -97,12 +97,15 @@ pub(crate) fn compile(
         let variants: Vec<_> = (rules.iter().enumerate())
             .flat_map(|(i, rule)| seminaive::variants(i, rule, &syms, schema))
             .collect();
-        let mut consts: Vec<Literal> = Vec::new();
-        let literals = rules.iter().flat_map(|rule| &rule.constants);
-        for literal in literals.flatten() {
-            position(&mut consts, literal.clone());
+        let mut consts = Vec::new();
+        for rule in rules {
+            for (literal, &id) in rule.constants.iter().zip(&rule.id_constants) {
+                if let Some(literal) = literal {
+                    position(&mut consts, (literal.clone(), id));
+                }
+            }
         }
-        let unit = position(&mut consts, Literal::Unit);
+        let unit = position(&mut consts, (Literal::Unit, false));
         let states = (variants.iter().enumerate())
             .map(|(i, variant)| order::State::new(i, &rules[variant.rule], &consts))
             .collect();
@@ -120,7 +123,12 @@ pub(crate) fn compile(
             name: source.name.to_owned(),
             roots,
             rules: rules.iter().map(|rule| rule.name.clone()).collect(),
-            consts,
+            id_consts: consts
+                .iter()
+                .enumerate()
+                .filter_map(|(r, (_, id))| id.then_some(r as u32))
+                .collect(),
+            consts: consts.into_iter().map(|(literal, _)| literal).collect(),
             members: source.members.to_vec(),
             once: source.once,
             colored: source.colored,

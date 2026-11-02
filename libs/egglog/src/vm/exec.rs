@@ -231,7 +231,17 @@ pub(crate) fn search(program: &Program, db: &mut Database, ruleset: usize, last:
     let root = Batch {
         cols: program.consts[ruleset]
             .iter()
-            .map(|v| vec![v.raw()])
+            .enumerate()
+            .map(|(r, v)| {
+                vec![if program.file.rulesets[ruleset]
+                    .id_consts
+                    .contains(&(r as u32))
+                {
+                    db.find(*v).raw()
+                } else {
+                    v.raw()
+                }]
+            })
             .collect(),
         len: 1,
         colors: Vec::new(),
@@ -270,7 +280,22 @@ pub(crate) fn search_colors(
     let n = level.len();
     let root = Batch {
         cols: (program.consts[ruleset].iter())
-            .map(|v| vec![v.raw(); n])
+            .enumerate()
+            .map(|(r, v)| {
+                level
+                    .iter()
+                    .map(|&c| {
+                        if program.file.rulesets[ruleset]
+                            .id_consts
+                            .contains(&(r as u32))
+                        {
+                            db.find_in(c, *v).raw()
+                        } else {
+                            v.raw()
+                        }
+                    })
+                    .collect()
+            })
             .collect(),
         len: n,
         colors: level.iter().map(|c| c.index() as u32).collect(),

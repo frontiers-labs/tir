@@ -709,12 +709,18 @@ fn selective_adoption_rejects_surviving_color_ids_before_mutation() {
         let (mut db, node) = node_db();
         let r = db.add_relation("survives", &[node]);
         let survivor = db.color(&[]);
-        let selected = db.color(if ancestor { std::slice::from_ref(&survivor) } else { &[] });
+        let selected = db.color(if ancestor {
+            std::slice::from_ref(&survivor)
+        } else {
+            &[]
+        });
         let mark = db.mark();
         let held = db.fresh(node);
         db.insert_in(survivor, r, &[held]).unwrap();
         db.rebuild().unwrap();
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| db.adopt_rows(selected, &[r], mark)));
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            db.adopt_rows(selected, &[r], mark)
+        }));
         assert!(result.is_err());
         assert_eq!(db.rows_in(survivor, r).next().unwrap()[0], held);
         assert_ne!(db.fresh(node), held);
@@ -734,7 +740,9 @@ fn selective_adoption_rejects_surviving_container_ids_before_mutation() {
     let held = db.container(Pair(a, b));
     db.insert_in(sibling, r, &[held]).unwrap();
     db.rebuild().unwrap();
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| db.adopt_rows(selected, &[], mark)));
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        db.adopt_rows(selected, &[], mark)
+    }));
     assert!(result.is_err());
     assert_eq!(db.container_value::<Pair>(held), Some(&Pair(a, b)));
     assert_eq!(db.rows_in(sibling, r).next().unwrap()[0], held);
@@ -754,11 +762,28 @@ fn id_run_arguments_follow_base_and_color_equality() {
             db.insert(input, &[b]).unwrap();
             let arg = exprs::arg(0);
             let mut rules = Rules::new();
-            if colored { rules.set_colored(""); }
-            rules.rule(&db, "", facts![(arg_input x) (= x (unquote arg))], actions![(arg_output x)]).unwrap();
+            if colored {
+                rules.set_colored("");
+            }
+            rules
+                .rule(
+                    &db,
+                    "",
+                    facts![(arg_input x) (= x (unquote arg))],
+                    actions![(arg_output x)],
+                )
+                .unwrap();
             let compiled = rules.compile(&db).unwrap();
-            let mut program = if loaded { Program::from_bytes(&compiled.to_bytes(), &mut db).unwrap() } else { compiled };
-            let color = if colored { db.color(&[]) } else { tir_egglog::Color::BASE };
+            let mut program = if loaded {
+                Program::from_bytes(&compiled.to_bytes(), &mut db).unwrap()
+            } else {
+                compiled
+            };
+            let color = if colored {
+                db.color(&[])
+            } else {
+                tir_egglog::Color::BASE
+            };
             db.union_in(color, b, a);
             db.rebuild().unwrap();
             for mut run in [program.clone(), program] {
@@ -788,9 +813,23 @@ fn scalar_arguments_share_raw_values_without_equality_normalization() {
     db.insert(scalars, &[scalar]).unwrap();
     let arg = exprs::arg(0);
     let mut rules = Rules::new();
-    rules.rule(&db, "", facts![(ids x) (= x (unquote arg))], actions![(hit_id x)]).unwrap();
+    rules
+        .rule(
+            &db,
+            "",
+            facts![(ids x) (= x (unquote arg))],
+            actions![(hit_id x)],
+        )
+        .unwrap();
     let arg = exprs::arg(0);
-    rules.rule(&db, "", facts![(scalars x) (= x (unquote arg))], actions![(hit_scalar x)]).unwrap();
+    rules
+        .rule(
+            &db,
+            "",
+            facts![(scalars x) (= x (unquote arg))],
+            actions![(hit_scalar x)],
+        )
+        .unwrap();
     let bytes = rules.compile(&db).unwrap().to_bytes();
     let mut program = Program::from_bytes(&bytes, &mut db).unwrap();
     db.union(a, b);

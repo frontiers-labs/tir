@@ -53,6 +53,7 @@ pub(crate) struct Rule {
     pub(crate) actions: Vec<Act>,
     // The value of each variable that is a constant.
     pub(crate) constants: Vec<Option<Literal>>,
+    pub(crate) id_constants: Vec<bool>,
 }
 
 impl Atom {
