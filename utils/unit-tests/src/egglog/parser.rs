@@ -130,3 +130,38 @@ fn registered_commands_override_builtin_text_forms() {
         assert_eq!(calls.load(Ordering::SeqCst), 1, "{name}");
     }
 }
+
+#[test]
+fn command_named_tables_are_valid_in_facts_and_rule_actions() {
+    for name in ["run", "sort", "rule", "function"] {
+        for constructor in [false, true] {
+            let mut graph = EGraph::default();
+            let declaration = if constructor {
+                format!("(datatype K ({name} i64))")
+            } else {
+                format!("(relation {name} (i64))")
+            };
+            let text = format!(
+                "{declaration} (relation Seed (i64)) (relation Out (i64)) \
+                 (rule ((Seed x)) (({name} x))) (rule (({name} x)) ((Out x))) \
+                 (Seed 1) (run 2)"
+            );
+            let program = graph.parse_program("contexts.egg", &text).unwrap();
+            graph.run_program(program).unwrap();
+            let db = graph.database();
+            let rows: Vec<i64> = db
+                .rows(db.table("Out").unwrap())
+                .map(|row| db.base_value(row[0]))
+                .collect();
+            assert_eq!(rows, [1], "{name}; constructor={constructor}");
+        }
+    }
+    let graph = EGraph::default();
+    for text in [
+        "(function 1)",
+        "(check (= x))",
+        "(rule ((Seed x)) ((set x)))",
+    ] {
+        assert!(graph.parse_program("invalid.egg", text).is_err(), "{text}");
+    }
+}

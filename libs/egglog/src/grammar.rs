@@ -46,6 +46,8 @@ const KEYWORDS: &[&str] = &[
     "=",
 ];
 
+const ACTION_KEYWORDS: &[&str] = &["let", "set", "delete", "subsume", "union", "panic"];
+
 struct Source<'a> {
     file: &'static str,
     // The offset each line starts at.
@@ -191,8 +193,10 @@ fn call<'a>() -> impl Parser<'a, &'a str, (String, Vec<Expr>), Extra<'a>> + Clon
 }
 
 // A list whose head is no keyword.
-fn plain<'a>() -> impl Parser<'a, &'a str, Expr, Extra<'a>> + Clone {
-    let head = open().then(atom().filter(|atom| !KEYWORDS.contains(atom)));
+fn plain<'a>(
+    excluded: &'static [&'static str],
+) -> impl Parser<'a, &'a str, Expr, Extra<'a>> + Clone {
+    let head = open().then(atom().filter(move |atom| !excluded.contains(atom)));
     head.rewind().ignore_then(expr())
 }
 
@@ -224,12 +228,14 @@ fn expr<'a>() -> impl Parser<'a, &'a str, Expr, Extra<'a>> + Clone {
 fn fact<'a>() -> impl Parser<'a, &'a str, Fact, Extra<'a>> + Clone {
     choice((
         form("=", expr().then(expr())).map_with(|(a, b), e| Fact::Eq(span(e), a, b)),
-        plain().map(Fact::Fact),
+        plain(&["="]).map(Fact::Fact),
     ))
     .labelled("a fact")
 }
 
-fn action<'a>() -> impl Parser<'a, &'a str, Action, Extra<'a>> + Clone {
+fn action<'a>(
+    excluded: &'static [&'static str],
+) -> impl Parser<'a, &'a str, Action, Extra<'a>> + Clone {
     let change = |head, change| {
         form(head, call())
             .map_with(move |(table, args), e| Action::Change(span(e), change, table, args))
@@ -243,7 +249,7 @@ fn action<'a>() -> impl Parser<'a, &'a str, Action, Extra<'a>> + Clone {
         change("subsume", Change::Subsume),
         form("union", expr().then(expr())).map_with(|(a, b), e| Action::Union(span(e), a, b)),
         form("panic", string()).map_with(|message, e| Action::Panic(span(e), message)),
-        plain().map_with(|expr, e| Action::Expr(span(e), expr)),
+        plain(excluded).map_with(|expr, e| Action::Expr(span(e), expr)),
     ))
     .labelled("an action")
 }
@@ -485,7 +491,7 @@ fn rules<'a>() -> impl Parser<'a, &'a str, Command, Extra<'a>> + Clone {
     let rule = form(
         "rule",
         list(fact())
-            .then(list(action()))
+            .then(list(action(ACTION_KEYWORDS)))
             .then(options(&[":ruleset", ":name", ":naive"])),
     )
     .map_with(|((body, head), options), e| {
@@ -573,7 +579,7 @@ fn command<'a>() -> impl Parser<'a, &'a str, Command, Extra<'a>> + Clone {
             rules(),
             queries(),
             form("fail", command).map_with(|command, e| Command::Fail(span(e), Box::new(command))),
-            action().map(Command::Action),
+            action(KEYWORDS).map(Command::Action),
         ))
         .labelled("a command")
     })
