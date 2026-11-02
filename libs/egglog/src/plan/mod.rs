@@ -193,7 +193,7 @@ pub(crate) fn compile(
             };
             trie.children(states, width)
         };
-        let roots = plan(&variants);
+        let roots = plan(&variants)?;
         // A ruleset's first run finds every row new: one variant per rule,
         // reading all rows, finds the same matches once.
         // Rules that run naively have that variant only.
@@ -203,9 +203,10 @@ pub(crate) fn compile(
         let first = if rules.iter().all(|rule| rule.naive) {
             Vec::new()
         } else {
-            plan(&naive)
+            plan(&naive)?
         };
         let used = used(&nodes, roots.iter().chain(&first));
+
         decls.push(RulesetDecl {
             name: source.name.to_owned(),
             roots,

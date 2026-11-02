@@ -70,6 +70,7 @@ fn compute(
 ) -> Result<(), Error> {
     consts.truncate(ruleset.consts.len());
     let (mut ctx, _) = db.ctx_and_indexes();
+    ctx.context = crate::Context::Pure;
     for (prim, args) in &ruleset.calls {
         let args: Option<Vec<Value>> = args.iter().map(|&r| consts[r as usize]).collect();
         let value = args.and_then(|args| ctx.call(externs[*prim as usize].id, &args));

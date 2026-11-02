@@ -185,6 +185,7 @@ pub(crate) enum StepRef<'a> {
     },
     Prim {
         prim: u32,
+        context: crate::Context,
         args: &'a [Reg],
         out: Bind,
     },
@@ -221,6 +222,7 @@ pub(crate) enum ActionRef<'a> {
     },
     Call {
         prim: u32,
+        context: crate::Context,
         args: &'a [Reg],
     },
     // The message is a position in the string table.
@@ -299,6 +301,7 @@ impl<'a> NodeRef<'a> {
                 let args = c.list();
                 StepRef::Prim {
                     prim: head,
+                    context: crate::Context::ALL[extra as usize],
                     args,
                     out: bind(c.word()),
                 }
@@ -354,7 +357,11 @@ fn action<'a>(c: &mut Cursor<'a>) -> ActionRef<'a> {
                 1 => ActionRef::Set { table: head, args },
                 3 => ActionRef::Delete { table: head, args },
                 4 => ActionRef::Subsume { table: head, args },
-                _ => ActionRef::Call { prim: head, args },
+                _ => ActionRef::Call {
+                    prim: head,
+                    context: crate::Context::ALL[extra as usize],
+                    args,
+                },
             }
         }
     }

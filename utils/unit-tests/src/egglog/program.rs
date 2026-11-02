@@ -170,7 +170,7 @@ fn a_load_rejects_bad_bytes_and_mismatched_databases() {
     let words: [u32; 23] = [
         0, 0, 0, 0, 0, 0, 2, 0, 10, 17, 0, 0, 0, 0, 0, 0, 0, 99, 0, 0, 0, 0, 0,
     ];
-    let bytes: Vec<u8> = [u32::from_le_bytes(*b"TEGG"), 11, 0]
+    let bytes: Vec<u8> = [u32::from_le_bytes(*b"TEGG"), 15, 0]
         .into_iter()
         .chain(words)
         .flat_map(u32::to_le_bytes)
@@ -196,7 +196,7 @@ fn a_load_rejects_bad_bytes_and_mismatched_databases() {
         LoadError::Malformed(_)
     ));
 
-    for found in [4_u32, 6, 7, 8, 99] {
+    for found in [3_u32, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 99] {
         let mut version = bytes.clone();
         version[4..8].copy_from_slice(&found.to_le_bytes());
         assert!(

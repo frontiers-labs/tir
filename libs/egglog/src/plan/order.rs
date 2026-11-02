@@ -181,6 +181,7 @@ impl State {
                     join: Join::Prim {
                         prim,
                         context: rule.contexts().0,
+
                         args: self.args(&atom.args),
                     },
                     atom: a,

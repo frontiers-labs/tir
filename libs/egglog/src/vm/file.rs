@@ -14,7 +14,8 @@ use crate::ast::Literal;
 use crate::{Database, ExternId, F64, Merge, Shape, SortId, SortKind, TableId, TableKind, Value};
 
 const MAGIC: [u8; 4] = *b"TEGG";
-const VERSION: u32 = 11;
+const VERSION: u32 = 15;
+
 // Merges nest at most this deep, so decoding one cannot exhaust the stack.
 const MERGE_DEPTH: u32 = 64;
 
@@ -634,10 +635,12 @@ impl<'a> Reader<'a> {
             },
             5 => {
                 ensure((extra as usize) < crate::Context::ALL.len(), "context")?;
+                let context = crate::Context::ALL[extra as usize];
                 let args = self.word_slice()?;
                 let out = super::code::bind(self.word()?);
                 StepRef::Prim {
                     prim: head,
+                    context,
                     args,
                     out,
                 }
@@ -681,8 +684,13 @@ impl<'a> Reader<'a> {
             4 => ActionRef::Subsume { table: head, args },
             5 => {
                 ensure((extra as usize) < crate::Context::ALL.len(), "context")?;
-                ActionRef::Call { prim: head, args }
+                ActionRef::Call {
+                    prim: head,
+                    context: crate::Context::ALL[extra as usize],
+                    args,
+                }
             }
+
             _ => return Err(LoadError::Malformed("action")),
         };
         Ok((action, extra))
@@ -1133,7 +1141,7 @@ fn check_node(file: &ProgramFile, reader: &mut Reader<'_>, required: &mut [u8]) 
             ActionRef::Delete { table: t, args } | ActionRef::Subsume { table: t, args } => {
                 table(*t)?.keys == args.len()
             }
-            ActionRef::Call { prim: p, args } => {
+            ActionRef::Call { prim: p, args, .. } => {
                 ensure(
                     matches!(
                         crate::Context::ALL[extra as usize],
