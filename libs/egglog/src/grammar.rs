@@ -558,21 +558,21 @@ fn queries<'a>() -> impl Parser<'a, &'a str, Command, Extra<'a>> + Clone {
 fn command<'a>() -> impl Parser<'a, &'a str, Command, Extra<'a>> + Clone {
     recursive(|command| {
         let user = open()
-            .ignore_then(symbol().try_map_with(
-                |name, e| match e.state().commands.contains(&name) {
-                    true => Ok(name),
-                    false => Err(Rich::custom(e.span(), format!("`{name}` is no command"))),
-                },
-            ))
+            .ignore_then(
+                symbol()
+                    .map_with(|name, e| (e.state().commands.contains(&name), name))
+                    .filter(|(registered, _)| *registered)
+                    .map(|(_, name)| name),
+            )
             .then(expr().repeated().collect())
             .then_ignore(close())
             .map_with(|(name, args), e| Command::UserDefined(span(e), name, args));
         choice((
+            user,
             declaration(),
             rules(),
             queries(),
             form("fail", command).map_with(|command, e| Command::Fail(span(e), Box::new(command))),
-            user,
             action().map(Command::Action),
         ))
         .labelled("a command")

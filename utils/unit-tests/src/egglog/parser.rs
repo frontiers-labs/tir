@@ -102,3 +102,31 @@ fn conflicting_merge_annotations_are_rejected() {
         assert_eq!(db.base_value::<i64>(output), expected);
     }
 }
+
+#[test]
+fn registered_commands_override_builtin_text_forms() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use tir_egglog::ast::{Expr, Literal};
+    use tir_egglog::{CommandOutput, UserDefinedCommand};
+
+    struct Handler(Arc<AtomicUsize>);
+    impl UserDefinedCommand for Handler {
+        fn update(&self, _: &mut EGraph, args: &[Expr]) -> Result<Vec<CommandOutput>, Error> {
+            assert!(matches!(args, [Expr::Lit(_, Literal::Int(1))]));
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Ok(Vec::new())
+        }
+    }
+    for name in ["run", "check", "sort"] {
+        let mut graph = EGraph::default();
+        let calls = Arc::new(AtomicUsize::new(0));
+        graph
+            .add_command(name.to_owned(), Arc::new(Handler(calls.clone())))
+            .unwrap();
+        let text = format!("({name} 1)");
+        let program = graph.parse_program("user.egg", &text).unwrap();
+        graph.run_program(program).unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "{name}");
+    }
+}
