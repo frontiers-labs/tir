@@ -312,7 +312,7 @@ impl Sorts {
 }
 
 fn get<K: ContainerKind>(ctx: &PrimCtx<'_>, value: Value) -> Option<Container<K>> {
-    ctx.container_value::<Container<K>>(value).cloned()
+    ctx.mapped_container::<Container<K>>(value)
 }
 
 fn put<K: ContainerKind>(ctx: &mut PrimCtx<'_>, data: Vec<Value>, ids: [bool; 2]) -> Option<Value> {
@@ -804,13 +804,13 @@ fn register_function(db: &mut Database, f: &Arc<FunctionSort>) {
         output,
     };
     db.add_primitive("unstable-app", signature, |ctx, args| {
-        let f = ctx.container_value::<FunctionContainer>(args[0])?.clone();
+        let f = ctx.mapped_container::<FunctionContainer>(args[0])?;
         f.apply(ctx, &args[1..])
     });
 }
 
 fn function(ctx: &PrimCtx<'_>, value: Value) -> Option<FunctionContainer> {
-    ctx.container_value::<FunctionContainer>(value).cloned()
+    ctx.mapped_container::<FunctionContainer>(value)
 }
 
 // `(unstable-vec-map f xs)` and `(unstable-multiset-map f xs)`: the results

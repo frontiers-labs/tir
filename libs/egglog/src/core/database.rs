@@ -500,6 +500,7 @@ impl Database {
             predicted: &mut self.predicted,
             stop: Cell::new(false),
             panicked: Cell::new(false),
+            equality: None,
         };
         (ctx, &self.indexes, &mut self.colors)
     }
@@ -557,12 +558,13 @@ pub struct PrimCtx<'a> {
     pub(crate) containers: &'a mut ContainerValues,
     pub(crate) pending: &'a mut Vec<Write>,
     pub(crate) predicted: &'a mut HashMap<(TableId, Vec<u32>), Value, FxBuildHasher>,
+    equality: Option<(&'a Colors, u32)>,
     // Set to end the search early; with `panicked`, the search fails.
     pub(crate) stop: Cell<bool>,
     pub(crate) panicked: Cell<bool>,
 }
 
-impl PrimCtx<'_> {
+impl<'a> PrimCtx<'a> {
     pub fn base<T: BaseValue>(&self, value: T) -> Value {
         self.base.get(value)
     }
@@ -579,7 +581,10 @@ impl PrimCtx<'_> {
         self.containers
     }
 
-    pub fn container<C: ContainerValue>(&mut self, container: C) -> Value {
+    pub fn container<C: ContainerValue>(&mut self, mut container: C) -> Value {
+        if self.equality.is_some() {
+            container.rebuild_contents(&|value| self.find(value));
+        }
         self.containers.intern(container, self.uf)
     }
 
@@ -588,7 +593,19 @@ impl PrimCtx<'_> {
     }
 
     pub fn find(&self, value: Value) -> Value {
-        Value::new(self.uf.find(value.raw()))
+        let root = self.uf.find(value.raw());
+        Value::new(
+            self.equality
+                .map_or(root, |(colors, c)| colors.root(c, root)),
+        )
+    }
+
+    pub(crate) fn mapped_container<C: ContainerValue>(&self, value: Value) -> Option<C> {
+        let mut container = self.container_value::<C>(self.find(value))?.clone();
+        if self.equality.is_some() {
+            container.rebuild_contents(&|value| self.find(value));
+        }
+        Some(container)
     }
 
     /// The table of this name.
@@ -632,7 +649,43 @@ impl PrimCtx<'_> {
 
     pub fn call(&mut self, prim: ExternId, args: &[Value]) -> Option<Value> {
         let prims = self.prims;
+        if let Some((colors, c)) = self.equality {
+            super::color::check_pure(self, prim).ok()?;
+            let signature = &prims[prim.index()].signature;
+            let mut normalized = Vec::with_capacity(args.len());
+            for (&value, &sort) in args.iter().zip(&signature.inputs) {
+                let value = match self.sorts[sort.index()].kind {
+                    SortKind::Base(_) => value,
+                    SortKind::Eq => self.find(value),
+                    SortKind::Container(ty) => {
+                        let value = self.find(value);
+                        let find =
+                            |v: Value, uf: &UnionFind| Value::new(colors.root(c, uf.find(v.raw())));
+                        self.containers.map(ty, value, &find, self.uf)?
+                    }
+                };
+                normalized.push(value);
+            }
+            let value = (prims[prim.index()].f)(self, &normalized)?;
+            return Some(match self.sorts[signature.output.index()].kind {
+                SortKind::Base(_) => value,
+                _ => self.find(value),
+            });
+        }
         (prims[prim.index()].f)(self, args)
+    }
+
+    pub(crate) fn call_in(
+        &mut self,
+        colors: &'a Colors,
+        c: u32,
+        prim: ExternId,
+        args: &[Value],
+    ) -> Option<Value> {
+        let previous = self.equality.replace((colors, c));
+        let result = self.call(prim, args);
+        self.equality = previous;
+        result
     }
 
     /// The primitive overloads of this name.
