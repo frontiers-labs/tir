@@ -1,7 +1,7 @@
 //! Find-or-make over groups of rows, and the congruence of keyed groups.
 
 use tir_egglog::prelude::*;
-use tir_egglog::{Color, Database, Merge, Rules, Schedule, SortKind, TableId, Value};
+use tir_egglog::{Color, Database, Merge, Program, Rules, Schedule, SortKind, TableId, Value};
 
 const ADD: i64 = 1;
 const NEG: i64 = 2;
@@ -336,4 +336,108 @@ fn compiled_member_deletions_close_group_congruence() {
             assert_eq!(db.find(a), db.find(b));
         }
     }
+}
+
+fn group_program(duplicate: bool) -> (Database, Program) {
+    let mut db = Database::new();
+    let group = db.add_sort("Group", SortKind::Eq);
+    let int = db.sort("i64").unwrap();
+    let member = db.add_relation("Member", &[group, int]);
+    let other = db.add_relation("OtherMember", &[group, int]);
+    let keyed = db.add_relation("Keyed", &[group]);
+    db.add_group(group, &[member, other], keyed).unwrap();
+    let mut rules = Rules::new();
+    let action = if duplicate {
+        actions![(find-or-make (Member value) (Member value))]
+    } else {
+        actions![(find-or-make (Member 5))]
+    };
+    let facts = if duplicate {
+        facts![(Member g value)]
+    } else {
+        facts![]
+    };
+    rules.rule(&db, "", facts, action).unwrap();
+    rules
+        .rule(
+            &db,
+            "distinct",
+            facts![],
+            actions![(find-or-make (Member 5) (Member 6))],
+        )
+        .unwrap();
+    let program = rules.compile(&db).unwrap();
+    (db, program)
+}
+
+#[test]
+fn compiled_duplicate_members_find_existing_group() {
+    let (mut db, mut program) = group_program(true);
+    let member = db.schema().table_named("Member").unwrap();
+    let keyed = db.schema().table_named("Keyed").unwrap();
+    let row = [db.base(5i64)];
+    db.find_or_make(&[(member, &row)]).unwrap();
+    let bounded = Schedule::Repeat(span!(), 3, Box::new(Schedule::run("")));
+    let report = program.run(&mut db, &bounded).unwrap();
+    assert!(
+        !report.updated,
+        "finding an existing set must not write a redundant group"
+    );
+    assert_eq!(
+        db.rows(keyed).count(),
+        1,
+        "duplicate membership denotes the same set"
+    );
+    program.run(&mut db, &Schedule::run("distinct")).unwrap();
+    assert_eq!(
+        db.rows(keyed).count(),
+        2,
+        "distinct member rows form another group"
+    );
+}
+
+#[test]
+fn serialized_group_runs_in_fresh_database() {
+    let (_, program) = group_program(false);
+    let mut db = Database::new();
+    let mut loaded = Program::from_bytes(&program.to_bytes(), &mut db).unwrap();
+    loaded.run(&mut db, &Schedule::run("")).unwrap();
+    let member = db.schema().table_named("Member").unwrap();
+    let keyed = db.schema().table_named("Keyed").unwrap();
+    let other = db.schema().table_named("OtherMember").unwrap();
+    let row = [db.base(5i64)];
+    let found = db.find_group(&[(member, &row)]).unwrap().unwrap();
+    let remade = db.find_or_make(&[(member, &row)]).unwrap();
+    assert_eq!(found, remade);
+    assert_eq!(db.rows(keyed).count(), 1);
+    let other_row = [db.base(6i64)];
+    db.find_or_make(&[(other, &other_row)]).unwrap();
+    assert_eq!(db.rows(keyed).count(), 2);
+}
+
+#[test]
+fn program_rejects_pre_group_metadata_format() {
+    let (_, program) = group_program(false);
+    let mut bytes = program.to_bytes();
+    bytes[4..8].copy_from_slice(&3u32.to_le_bytes());
+    assert!(matches!(
+        Program::from_bytes(&bytes, &mut Database::new()),
+        Err(tir_egglog::LoadError::Version { found: 3, .. })
+    ));
+}
+
+#[test]
+fn loading_rejects_conflicting_group_membership() {
+    let (_, program) = group_program(false);
+    let mut db = Database::new();
+    let group = db.add_sort("Group", SortKind::Eq);
+    let int = db.sort("i64").unwrap();
+    let member = db.add_relation("Member", &[group, int]);
+    db.add_relation("OtherMember", &[group, int]);
+    let keyed = db.add_relation("Keyed", &[group]);
+    db.add_group(group, &[member], keyed).unwrap();
+    assert!(matches!(
+        Program::from_bytes(&program.to_bytes(), &mut db),
+        Err(tir_egglog::LoadError::TableMismatch { .. })
+    ));
 }
