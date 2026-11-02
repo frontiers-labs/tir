@@ -894,6 +894,10 @@ fn bigint_primitives() {
 fn bigrat_primitives() {
     let mut eg = EGraph::default();
     assert_eq!(
+        parts(&mut eg, call("sqrt", vec![rat(0, 1)])),
+        ("0".to_owned(), "1".to_owned())
+    );
+    assert_eq!(
         parts(&mut eg, rat(6, -4)),
         ("-3".to_owned(), "2".to_owned()),
         "lowest terms, positive denominator"
