@@ -153,50 +153,71 @@ macro_rules! vars {
 #[macro_export]
 macro_rules! expr {
     ((unquote $unquoted:expr)) => { $unquoted };
-    (($func:tt $($arg:tt)*)) => { exprs::call(stringify!($func), vec![$(expr!($arg)),*]) };
-    ($value:literal) => { exprs::int($value) };
-    ($quoted:tt) => { exprs::var(stringify!($quoted)) };
+    (($func:tt $($arg:tt)*)) => {
+        $crate::prelude::exprs::call(stringify!($func), vec![$($crate::expr!($arg)),*])
+    };
+    ($value:literal) => { $crate::prelude::exprs::int($value) };
+    ($quoted:tt) => { $crate::prelude::exprs::var(stringify!($quoted)) };
 }
 
 #[macro_export]
 macro_rules! fact {
-    ((= $($arg:tt)*)) => { Fact::Eq(span!(), $(expr!($arg)),*) };
-    ($a:tt) => { Fact::Fact(expr!($a)) };
+    ((= $($arg:tt)*)) => { $crate::ast::Fact::Eq($crate::span!(), $($crate::expr!($arg)),*) };
+    ($a:tt) => { $crate::ast::Fact::Fact($crate::expr!($a)) };
 }
 
 #[macro_export]
 macro_rules! facts {
-    ($($tree:tt)*) => { Facts(vec![$(fact!($tree)),*]) };
+    ($($tree:tt)*) => { $crate::ast::Facts(vec![$($crate::fact!($tree)),*]) };
 }
 
 #[macro_export]
 macro_rules! action {
     ((let $name:ident $value:tt)) => {
-        Action::Let(span!(), String::from(stringify!($name)), expr!($value))
+        $crate::ast::Action::Let(
+            $crate::span!(),
+            String::from(stringify!($name)),
+            $crate::expr!($value),
+        )
     };
     ((set ($f:ident $($x:tt)*) $value:tt)) => {
-        Action::Set(span!(), String::from(stringify!($f)), vec![$(expr!($x)),*], expr!($value))
+        $crate::ast::Action::Set(
+            $crate::span!(),
+            String::from(stringify!($f)),
+            vec![$($crate::expr!($x)),*],
+            $crate::expr!($value),
+        )
     };
     ((delete ($f:ident $($x:tt)*))) => {
-        Action::Change(span!(), Change::Delete, String::from(stringify!($f)), vec![$(expr!($x)),*])
+        $crate::ast::Action::Change(
+            $crate::span!(),
+            $crate::ast::Change::Delete,
+            String::from(stringify!($f)),
+            vec![$($crate::expr!($x)),*],
+        )
     };
     ((subsume ($f:ident $($x:tt)*))) => {
-        Action::Change(span!(), Change::Subsume, String::from(stringify!($f)), vec![$(expr!($x)),*])
+        $crate::ast::Action::Change(
+            $crate::span!(),
+            $crate::ast::Change::Subsume,
+            String::from(stringify!($f)),
+            vec![$($crate::expr!($x)),*],
+        )
     };
     ((union $x:tt $y:tt)) => {
-        Action::Union(span!(), expr!($x), expr!($y))
+        $crate::ast::Action::Union($crate::span!(), $crate::expr!($x), $crate::expr!($y))
     };
     ((panic $message:literal)) => {
-        Action::Panic(span!(), $message.to_owned())
+        $crate::ast::Action::Panic($crate::span!(), $message.to_owned())
     };
     ($x:tt) => {
-        Action::Expr(span!(), expr!($x))
+        $crate::ast::Action::Expr($crate::span!(), $crate::expr!($x))
     };
 }
 
 #[macro_export]
 macro_rules! actions {
-    ($($tree:tt)*) => { GenericActions(vec![$(action!($tree)),*]) };
+    ($($tree:tt)*) => { $crate::ast::GenericActions(vec![$($crate::action!($tree)),*]) };
 }
 
 /// Declares an Eq sort and its constructors:
