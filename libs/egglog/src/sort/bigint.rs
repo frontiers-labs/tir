@@ -98,6 +98,9 @@ impl BigInt {
     }
 
     fn sqrt(&self) -> Option<Self> {
+        if self.is_zero() {
+            return Some(self.clone());
+        }
         if self.is_negative() {
             return None;
         }

@@ -1018,3 +1018,43 @@ fn reports_follow_the_report_level() -> Result<(), Error> {
     assert_eq!(report.iterations.len(), 1);
     Ok(())
 }
+
+#[test]
+fn repeated_sets_preserve_non_idempotent_merges() {
+    for (actions, expected) in [
+        (actions![(set (f 1) x)], 4),
+        (actions![(set (f 1) x) (set (f 1) x)], 6),
+    ] {
+        let mut db = Database::new();
+        let int = db.sort("i64").unwrap();
+        let add = db.add_primitive(
+            "add",
+            tir_egglog::Signature {
+                inputs: vec![int, int],
+                output: int,
+            },
+            |ctx, args| {
+                let sum = ctx.base_value::<i64>(args[0]) + ctx.base_value::<i64>(args[1]);
+                Some(ctx.base(sum))
+            },
+        );
+        let f = db.add_function(
+            "f",
+            &[int],
+            int,
+            tir_egglog::Merge::Prim(add, vec![tir_egglog::Merge::Old, tir_egglog::Merge::New]),
+        );
+        let (one, two) = (db.base(1_i64), db.base(2_i64));
+        db.insert(f, &[one, two]).unwrap();
+        let mut rules = Rules::new();
+        rules
+            .rule(&db, "write", facts![(= x (f 1))], actions)
+            .unwrap();
+        let mut program = rules.compile(&db).unwrap();
+        program.run(&mut db, &Schedule::run("write")).unwrap();
+        assert_eq!(
+            db.base_value::<i64>(db.lookup(f, &[one]).unwrap()),
+            expected
+        );
+    }
+}
