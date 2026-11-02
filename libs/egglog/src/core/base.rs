@@ -3,11 +3,11 @@
 // Adapted from egglog 4b5686be, core-relations/src/base_values/mod.rs. See libs/egglog/LICENSE-MIT.
 
 use std::any::{Any, TypeId};
-use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
+use std::sync::Mutex;
 
 use tir_adt::FxBuildHasher;
 
@@ -21,7 +21,7 @@ use super::Value;
 /// `try_box` returns the cell for a value that fits and `try_unbox` reads it
 /// back. A type that unboxes some values and interns the rest must keep the
 /// top bit of its boxed cells clear: interned cells have it set.
-pub trait BaseValue: Clone + Hash + Eq + Debug + 'static {
+pub trait BaseValue: Clone + Hash + Eq + Debug + Send + Sync + 'static {
     const MAY_UNBOX: bool = false;
 
     fn try_box(&self) -> Option<Value> {
@@ -131,7 +131,7 @@ struct InternTable<P> {
     values: Vec<P>,
 }
 
-trait Interned: Any {
+trait Interned: Any + Send + Sync {
     fn as_any(&self) -> &dyn Any;
     fn as_any_mut(&mut self) -> &mut dyn Any;
     fn clone_box(&self) -> Box<dyn Interned>;
@@ -156,15 +156,15 @@ impl<P: BaseValue> Interned for InternTable<P> {
 /// shared reference, so readers can turn Rust values into cells.
 #[derive(Default)]
 pub struct BaseValues {
-    types: RefCell<HashMap<TypeId, Box<dyn Interned>, FxBuildHasher>>,
+    types: Mutex<HashMap<TypeId, Box<dyn Interned>, FxBuildHasher>>,
 }
 
 impl Clone for BaseValues {
     fn clone(&self) -> Self {
-        let types = self.types.borrow();
+        let types = self.types.lock().expect("an intern lock");
         let types = types.iter().map(|(&ty, table)| (ty, table.clone_box()));
         Self {
-            types: RefCell::new(types.collect()),
+            types: Mutex::new(types.collect()),
         }
     }
 }
@@ -177,7 +177,7 @@ impl BaseValues {
         {
             return value;
         }
-        let mut types = self.types.borrow_mut();
+        let mut types = self.types.lock().expect("an intern lock");
         let table = types
             .entry(TypeId::of::<P>())
             .or_insert_with(|| {
@@ -210,7 +210,7 @@ impl BaseValues {
             return p;
         }
         let offset = if P::MAY_UNBOX { TOP_BIT } else { 0 };
-        let types = self.types.borrow();
+        let types = self.types.lock().expect("an intern lock");
         let table = types[&TypeId::of::<P>()]
             .as_any()
             .downcast_ref::<InternTable<P>>()

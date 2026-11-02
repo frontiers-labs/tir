@@ -325,7 +325,7 @@ fn variadic(
     name: &str,
     inputs: impl Fn(usize) -> Vec<SortId>,
     output: SortId,
-    f: impl Fn(&mut PrimCtx<'_>, &[Value]) -> Option<Value> + Clone + 'static,
+    f: impl Fn(&mut PrimCtx<'_>, &[Value]) -> Option<Value> + Clone + Send + Sync + 'static,
 ) {
     for arity in 0..=VARIADIC {
         let signature = Signature {
@@ -906,7 +906,7 @@ fn register_sum_multisets(db: &mut Database, outer: &MultiSetSort, inner: &Multi
 }
 
 // Interns a container of one sort from its elements.
-pub(crate) type Make = Box<dyn Fn(&mut Database, Vec<Value>) -> Option<Value>>;
+pub(crate) type Make = Box<dyn Fn(&mut Database, Vec<Value>) -> Option<Value> + Send + Sync>;
 
 // How to make the containers of `sort`, if it is a sort of the generic
 // container.

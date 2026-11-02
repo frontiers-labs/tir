@@ -16,7 +16,7 @@ pub(crate) use file::{
 
 use crate::ast::{Fact, Literal, Schedule};
 use crate::report::{IterationReport, ReportLevel, RuleReport, RuleSetReport};
-use crate::{BaseValues, Database, Error, ExternId, IndexId, RunReport, TableId, Value};
+use crate::{BaseValues, Color, Database, Error, ExternId, IndexId, RunReport, TableId, Value};
 use code::Step;
 
 /// The rule tries of a set of rulesets, planned from the schema alone.
@@ -42,10 +42,14 @@ pub struct Program {
     // Per ruleset of the file. The rules of a ruleset that ran at different
     // times are planned as separate rulesets of the same name.
     last_run: Vec<Option<u32>>,
+    // Per ruleset, by color: the color timestamp it last ran at, 0 if never.
+    color_last: Vec<Vec<u32>>,
     // Whether every run matches the whole database.
     naive: bool,
     level: ReportLevel,
 }
+
+type Reports = HashMap<Arc<str>, Vec<RuleReport>, tir_adt::FxBuildHasher>;
 
 // The name of the query ruleset that `:until` facts are planned into.
 pub(crate) fn until_name(facts: &[Fact]) -> String {
@@ -70,6 +74,7 @@ impl Program {
             used: Vec::new(),
             names: Vec::new(),
             last_run,
+            color_last: Vec::new(),
             naive: false,
             level: ReportLevel::TimeOnly,
         }
@@ -256,8 +261,9 @@ impl Program {
             self.decls(name, &mut decls)?;
         }
         let (now, before) = (db.timestamp(), db.changes());
+        let colored = (rebuild && !db.colors.is_empty()).then(|| db.colors.changes());
         let start = Instant::now();
-        let mut rule_reports = HashMap::default();
+        let mut rule_reports = Reports::default();
         let mut writes = Vec::new();
         let mut failed = Ok(());
         let once = |at: usize| self.file.rulesets[at].once && self.last_run[at].is_some();
@@ -266,30 +272,7 @@ impl Program {
             let last = self.last_run[decl].filter(|_| !self.naive).unwrap_or(0);
             let (found, matches, result) = exec::search(self, db, decl, last);
             writes.push(found);
-            if self.level != ReportLevel::TimeOnly {
-                if self.names.is_empty() {
-                    self.names = (self.file.rulesets.iter())
-                        .map(|ruleset| {
-                            ruleset
-                                .rules
-                                .iter()
-                                .map(|rule| Arc::from(rule.as_str()))
-                                .collect()
-                        })
-                        .collect();
-                }
-                let matched = self.names[decl].iter().zip(matches).filter(|(_, n)| *n > 0);
-                for (rule, num_matches) in matched {
-                    let report = RuleReport {
-                        num_matches,
-                        ..RuleReport::default()
-                    };
-                    rule_reports
-                        .entry(rule.clone())
-                        .or_insert_with(Vec::new)
-                        .push(report);
-                }
-            }
+            self.report(decl, matches, &mut rule_reports);
             failed = result;
             if failed.is_err() {
                 break;
@@ -304,18 +287,101 @@ impl Program {
             db.rebuild()?;
         }
         failed?;
+        if colored.is_some() {
+            self.step_colors(db, &decls, &mut rule_reports)?;
+        }
         for decl in decls {
             self.last_run[decl] = Some(now);
         }
+        let colors_changed = colored.is_some_and(|before| db.colors.changes() != before);
         Ok(IterationReport {
             rule_set_report: RuleSetReport {
-                changed: db.changes() != before,
+                changed: db.changes() != before || colors_changed,
                 rule_reports,
                 search_and_apply_time: searched - start,
                 merge_time: applied - searched,
             },
             rebuild_time: applied.elapsed(),
         })
+    }
+
+    // One iteration of `decls` in the colors, after the base: each level, the
+    // lowest first, imports what its parents wrote, matches every color of
+    // the level in one search per ruleset, then applies and rebuilds.
+    fn step_colors(
+        &mut self,
+        db: &mut Database,
+        decls: &[usize],
+        rule_reports: &mut Reports,
+    ) -> Result<(), Error> {
+        self.color_last.resize(self.file.rulesets.len(), Vec::new());
+        for level in db.colors.levels() {
+            db.import_colors(&level)?;
+            let now = db.colors.timestamp();
+            let mut writes = Vec::new();
+            let mut failed = Ok(());
+            for &decl in decls {
+                let last: Vec<u32> = (level.iter())
+                    .map(|&c| self.color_last(db, decl, c))
+                    .collect();
+                let (found, matches, result) = exec::search_colors(self, db, decl, &level, &last);
+                writes.push(found);
+                self.report(decl, matches, rule_reports);
+                failed = result;
+                if failed.is_err() {
+                    break;
+                }
+            }
+            for found in writes {
+                found.apply_colors(db, &self.tables)?;
+            }
+            db.rebuild_colors()?;
+            failed?;
+            for &decl in decls {
+                let last = &mut self.color_last[decl];
+                last.resize(db.colors.len(), 0);
+                level.iter().for_each(|c| last[c.index()] = now);
+            }
+        }
+        Ok(())
+    }
+
+    // The color timestamp from which the rows of `color` are New to `decl`:
+    // all of them once the color read new base rows since `decl` last ran.
+    fn color_last(&self, db: &Database, decl: usize, color: Color) -> u32 {
+        let last = self.color_last[decl].get(color.index()).copied();
+        let last = last.filter(|_| !self.naive).unwrap_or(0);
+        if db.colors.rebased(color) >= last {
+            0
+        } else {
+            last
+        }
+    }
+
+    // Adds the matches of a search of `decl` to the reports above TimeOnly.
+    fn report(&mut self, decl: usize, matches: Vec<usize>, rule_reports: &mut Reports) {
+        if self.level == ReportLevel::TimeOnly {
+            return;
+        }
+        if self.names.is_empty() {
+            self.names = (self.file.rulesets.iter())
+                .map(|ruleset| {
+                    ruleset
+                        .rules
+                        .iter()
+                        .map(|rule| Arc::from(rule.as_str()))
+                        .collect()
+                })
+                .collect();
+        }
+        let matched = self.names[decl].iter().zip(matches).filter(|(_, n)| *n > 0);
+        for (rule, num_matches) in matched {
+            let report = RuleReport {
+                num_matches,
+                ..RuleReport::default()
+            };
+            rule_reports.entry(rule.clone()).or_default().push(report);
+        }
     }
 }
 

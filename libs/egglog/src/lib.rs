@@ -29,14 +29,12 @@ mod typecheck;
 mod vm;
 
 use std::any::{Any, TypeId};
-use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Debug, Display, Formatter};
 use std::fs::File;
 use std::io::Write as _;
 use std::path::PathBuf;
-use std::rc::Rc;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use tir_adt::FxBuildHasher;
 
@@ -66,7 +64,7 @@ pub type ArcSort = Arc<dyn Sort>;
 
 type Map<K, V> = HashMap<K, V, FxBuildHasher>;
 // Rows a collector primitive saw: how many calls, and their arguments.
-type Sink = Rc<RefCell<(usize, Vec<Value>)>>;
+type Sink = Arc<Mutex<(usize, Vec<Value>)>>;
 
 /// A primitive: a name and the sorts it takes, then the sort it returns.
 pub trait Primitive: Send + Sync + 'static {
@@ -392,7 +390,7 @@ impl Clone for Box<dyn Extension> {
 }
 
 /// An e-graph: a [`Database`], the rules on it, the program planned from
-/// them, and the state of egglog commands. `push` and `pop` clone it.
+/// them, and the state of egglog commands.
 #[derive(Clone)]
 pub struct EGraph {
     pub(crate) db: Database,
@@ -411,10 +409,9 @@ pub struct EGraph {
     commands: Map<String, Arc<dyn UserDefinedCommand>>,
     command_macros: CommandMacroRegistry,
     extension_state: Map<TypeId, Box<dyn Extension>>,
-    rust_rules: Map<String, Rc<PrimFn>>,
+    rust_rules: Map<String, Arc<PrimFn>>,
     overall_run_report: RunReport,
     pub(crate) report_level: ReportLevel,
-    pushed: Option<Box<EGraph>>,
     fresh: usize,
     strict_mode: bool,
     reserved_symbols: bool,
@@ -462,7 +459,6 @@ impl EGraph {
             rust_rules: Map::default(),
             overall_run_report: RunReport::default(),
             report_level: ReportLevel::default(),
-            pushed: None,
             fresh: 0,
             strict_mode: false,
             reserved_symbols: true,
@@ -578,22 +574,6 @@ impl EGraph {
         Ok(())
     }
 
-    pub fn push(&mut self) {
-        let below = self.pushed.take();
-        let mut snapshot = self.clone();
-        snapshot.pushed = below;
-        self.pushed = Some(Box::new(snapshot));
-    }
-
-    /// Restores the e-graph of the last `push`, keeping the overall report.
-    pub fn pop(&mut self) -> Result<(), Error> {
-        let mut below = self.pushed.take().ok_or(Error::Pop(span!()))?;
-        std::mem::swap(&mut below.overall_run_report, &mut self.overall_run_report);
-        below.fresh = self.fresh;
-        *self = *below;
-        Ok(())
-    }
-
     pub fn add_sort<S: Sort>(&mut self, sort: S, span: Span) -> Result<(), Error> {
         self.add_arcsort(Arc::new(sort), span)
     }
@@ -648,7 +628,7 @@ impl EGraph {
         name: &str,
         signature: &[ArcSort],
         contexts: &'static [Context],
-        f: impl Fn(&mut PrimCtx<'_>, &[Value]) -> Option<Value> + 'static,
+        f: impl Fn(&mut PrimCtx<'_>, &[Value]) -> Option<Value> + Send + Sync + 'static,
     ) {
         let mut inputs = self
             .sort_ids(signature)
@@ -858,12 +838,6 @@ impl EGraph {
                     .collect());
             }
             Command::PrintSize(_, name) => return Ok(vec![self.print_size(name.as_deref())?]),
-            Command::Push(n) => (0..n).for_each(|_| self.push()),
-            Command::Pop(span, n) => {
-                for _ in 0..n {
-                    self.pop().map_err(|_| Error::Pop(span))?;
-                }
-            }
             Command::Fail(span, command) => {
                 let names = self.names.clone();
                 let result = self.run_command(*command);
@@ -1029,7 +1003,7 @@ impl EGraph {
 
     // A primitive `name` that records the calls and arguments it gets.
     pub(crate) fn sink(&mut self, name: &str, sorts: &[SortId]) -> Sink {
-        let sink: Sink = Rc::default();
+        let sink: Sink = Arc::default();
         let into = sink.clone();
         let (unit, inputs) = (self.db.sort("Unit").expect("a base sort"), sorts.to_vec());
         self.db.add_primitive(
@@ -1039,7 +1013,7 @@ impl EGraph {
                 output: unit,
             },
             move |ctx, args| {
-                let mut sink = into.borrow_mut();
+                let mut sink = into.lock().expect("a sink lock");
                 sink.0 += 1;
                 sink.1.extend_from_slice(args);
                 Some(ctx.base(()))
@@ -1075,11 +1049,11 @@ impl EGraph {
         };
         let mut rules = Rules::new();
         rules.add_command(&self.db, Command::Rule { rule })?;
-        *sink.borrow_mut() = (0, Vec::new());
+        *sink.lock().expect("a sink lock") = (0, Vec::new());
         rules
             .compile(&self.db)?
             .run(&mut self.db, &Schedule::run("@query"))?;
-        let (calls, values) = sink.take();
+        let (calls, values) = std::mem::take(&mut *sink.lock().expect("a sink lock"));
         if vars.is_empty() {
             return Ok(vec![Map::default(); calls.min(1)]);
         }
@@ -1192,7 +1166,7 @@ impl EGraph {
         + Sync
         + 'static,
     ) {
-        let f: Rc<PrimFn> = Rc::new(move |ctx, args| {
+        let f: Arc<PrimFn> = Arc::new(move |ctx, args| {
             func(WriteState::new(ctx), args)?;
             Some(ctx.base(()))
         });
@@ -1207,7 +1181,7 @@ impl EGraph {
         vars: &[(&str, ArcSort)],
         facts: Facts,
         naive: bool,
-        f: Rc<PrimFn>,
+        f: Arc<PrimFn>,
     ) -> Result<Vec<CommandOutput>, Error> {
         let prim = format!("@rust:{name}");
         if self.db.schema().primitives(&prim).next().is_some() {

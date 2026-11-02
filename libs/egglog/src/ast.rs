@@ -246,8 +246,6 @@ pub enum Command {
         PrintFunctionMode,
     ),
     PrintSize(Span, Option<String>),
-    Push(usize),
-    Pop(Span, usize),
     /// The command must fail.
     Fail(Span, Box<Command>),
     UserDefined(Span, String, Vec<Expr>),
@@ -567,8 +565,6 @@ impl Display for Command {
                 f.write_str(")")
             }
             Self::PrintSize(_, name) => write!(f, "(print-size {})", name.as_deref().unwrap_or("")),
-            Self::Push(n) => write!(f, "(push {n})"),
-            Self::Pop(_, n) => write!(f, "(pop {n})"),
             Self::Fail(_, command) => write!(f, "(fail {command})"),
             Self::UserDefined(_, name, args) => write!(f, "({name} {})", List(args, " ")),
         }

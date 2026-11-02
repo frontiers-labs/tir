@@ -17,7 +17,7 @@ use super::uf::UnionFind;
 /// Containers are hash-consed like base values, but their ids come from the
 /// union-find of e-class ids: when a union makes two containers equal, a
 /// rebuild unions their ids.
-pub trait ContainerValue: Hash + Eq + Clone + 'static {
+pub trait ContainerValue: Hash + Eq + Clone + Send + Sync + 'static {
     /// Replace each e-class id inside with `find` of it, and return whether
     /// anything changed. A container that returns `false` must be unchanged.
     fn rebuild_contents(&mut self, find: &dyn Fn(Value) -> Value) -> bool;
@@ -28,7 +28,7 @@ pub trait ContainerValue: Hash + Eq + Clone + 'static {
     fn iter(&self) -> impl Iterator<Item = Value> + '_;
 }
 
-trait Env: Any {
+trait Env: Any + Send + Sync {
     fn as_any(&self) -> &dyn Any;
     fn as_any_mut(&mut self) -> &mut dyn Any;
     fn clone_box(&self) -> Box<dyn Env>;

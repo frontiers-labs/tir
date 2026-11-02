@@ -1,4 +1,5 @@
 mod base;
+mod color;
 mod containers;
 mod database;
 mod index;
@@ -10,6 +11,8 @@ mod uf;
 mod value;
 
 pub use base::{BaseValue, BaseValues, F64};
+pub use color::Color;
+pub(crate) use color::{Colors, check_pure};
 pub use containers::{ContainerValue, ContainerValues};
 pub(crate) use database::View;
 pub use database::{Database, PrimCtx, PrimFn, Row, Rows};
