@@ -65,6 +65,7 @@ pub(crate) struct Rule {
     // The primitive and constant arguments of each variable that is one's
     // result, which a program computes once rather than in every match.
     pub(crate) computed: Vec<Option<(ExternId, Vec<Var>)>>,
+    pub(crate) id_constants: Vec<bool>,
 }
 
 impl Atom {

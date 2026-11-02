@@ -17,8 +17,8 @@ use permute::{Symmetries, extract_symmetries};
 
 use crate::ast::Literal;
 use crate::vm::{
-    ConstDecl, ExternDecl, IndexDecl, ProgramFile, RulesetDecl, SortClass, SortDecl, TableDecl,
-    map_merge,
+    ConstDecl, ExternDecl, GroupDecl, IndexDecl, ProgramFile, RulesetDecl, SortClass, SortDecl,
+    TableDecl, map_merge,
 };
 use crate::{Error, ExternId, Merge, Schema, SortId, SortKind, TableId, Value, sort};
 
@@ -85,11 +85,14 @@ fn used<'a>(nodes: &[crate::vm::code::Node], roots: impl Iterator<Item = &'a u32
 fn register(
     rule: &Rule,
     v: Var,
-    consts: &[Literal],
+    consts: &[(Literal, bool)],
     calls: &mut Vec<(ExternId, Vec<u32>)>,
 ) -> Option<u32> {
     if let Some(literal) = &rule.constants[v as usize] {
-        return consts.iter().position(|c| c == literal).map(|r| r as u32);
+        return consts
+            .iter()
+            .position(|(c, id)| c == literal && *id == rule.id_constants[v as usize])
+            .map(|r| r as u32);
     }
     let (prim, args) = rule.computed[v as usize].as_ref()?;
     let args = (args.iter())
@@ -153,12 +156,15 @@ pub(crate) fn compile(
         let variants: Vec<_> = (rules.iter().enumerate())
             .flat_map(|(i, rule)| seminaive::variants(i, rule, &syms, schema))
             .collect();
-        let mut consts: Vec<Literal> = Vec::new();
-        let literals = rules.iter().flat_map(|rule| &rule.constants);
-        for literal in literals.flatten() {
-            position(&mut consts, literal.clone());
+        let mut consts = Vec::new();
+        for rule in rules {
+            for (literal, &id) in rule.constants.iter().zip(&rule.id_constants) {
+                if let Some(literal) = literal {
+                    position(&mut consts, (literal.clone(), id));
+                }
+            }
         }
-        let unit = position(&mut consts, Literal::Unit);
+        let unit = position(&mut consts, (Literal::Unit, false));
         // The constants a ruleset computes, after its literals.
         let mut calls: Vec<(ExternId, Vec<u32>)> = Vec::new();
         let regs: Vec<Vec<Option<u32>>> = (rules.iter())
@@ -206,10 +212,15 @@ pub(crate) fn compile(
             first,
             used,
             rules: rules.iter().map(|rule| rule.name.clone()).collect(),
-            consts,
             calls: (calls.into_iter())
                 .map(|(prim, args)| (symbols.prim(prim), args))
                 .collect(),
+            id_consts: consts
+                .iter()
+                .enumerate()
+                .filter_map(|(r, (_, id))| id.then_some(r as u32))
+                .collect(),
+            consts: consts.into_iter().map(|(literal, _)| literal).collect(),
             members: source.members.to_vec(),
             once: source.once,
             colored: source.colored,
@@ -221,11 +232,18 @@ pub(crate) fn compile(
             symbols.table(table);
         }
     }
-    let (sorts, consts, tables, externs) = declare(schema, &mut symbols, &syms)?;
+    for group in &schema.db.groups {
+        symbols.table(group.keyed);
+        for member in &group.members {
+            symbols.table(member.table);
+        }
+    }
+    let (sorts, consts, tables, groups, externs) = declare(schema, &mut symbols, &syms)?;
     let file = ProgramFile {
         sorts,
         consts,
         tables,
+        groups,
         externs,
         indexes: symbols.indexes,
         nodes,
@@ -305,6 +323,17 @@ fn declare(
             default,
         });
     }
+    let groups = (schema.db.groups.iter())
+        .map(|group| GroupDecl {
+            sort: position(&mut sorts, group.sort),
+            keyed: symbols.table(group.keyed),
+            members: group
+                .members
+                .iter()
+                .map(|m| symbols.table(m.table))
+                .collect(),
+        })
+        .collect();
     let externs = (symbols.externs.iter())
         .map(|&prim| {
             let (name, signature) = schema.primitive(prim);
@@ -329,7 +358,7 @@ fn declare(
             SortDecl { name, class }
         })
         .collect();
-    Ok((sorts, consts, tables, externs))
+    Ok((sorts, consts, tables, groups, externs))
 }
 
 // The sorts, constants, tables and primitives of a program file.
@@ -337,5 +366,6 @@ type Declared = (
     Vec<SortDecl>,
     Vec<ConstDecl>,
     Vec<TableDecl>,
+    Vec<GroupDecl>,
     Vec<ExternDecl>,
 );

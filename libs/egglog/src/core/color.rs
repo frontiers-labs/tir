@@ -525,16 +525,49 @@ impl Database {
     ///
     /// # Panics
     ///
-    /// If `color` is the base.
+    /// If `color` is the base, another color holds an id made after `mark`,
+    /// or a retained container holds one of those ids.
     pub fn adopt_rows(&mut self, color: Color, tables: &[TableId], mark: u32) {
         assert_ne!(color, Color::BASE, "the base is no color to adopt");
+        self.containers.check_truncate(mark, self.uf.len());
+
+        assert!(
+            self.colors
+                .rows
+                .iter()
+                .chain(&self.colors.removed)
+                .chain([&self.colors.classes])
+                .all(|table| {
+                    (0..table.len() as u32).all(|row| {
+                        !table.is_live(row)
+                            || table.cell(row, 0) == color.0
+                            || table
+                                .schema
+                                .ids
+                                .iter()
+                                .all(|&column| table.cell(row, column) < mark)
+                    })
+                })
+                && self
+                    .colors
+                    .unions
+                    .iter()
+                    .all(|&(c, a, b)| c == color.0 || (a < mark && b < mark)),
+            "another color holds an id made after the mark"
+        );
         self.colors.ensure(&self.tables);
+        let entries = Colors::rows_of(&mut self.colors.classes, color.0, 0);
+        let members: Vec<u32> = entries.iter().map(|(entry, _)| entry[1]).collect();
         let mut own: Vec<_> = (tables.iter())
             .map(|table| {
-                (
-                    table.index(),
-                    self.hide_shown(color.0, table.index(), Vec::new()),
-                )
+                let t = table.index();
+                let mut hidden = Vec::new();
+                for column in self.tables[t].schema.ids.clone() {
+                    let at = self.tables[t].add_index(&[column]);
+                    self.tables[t].refresh_index(at);
+                    holding(&self.tables[t], at, &[&members[..]], &mut hidden);
+                }
+                (t, self.hide_shown(color.0, t, hidden))
             })
             .collect();
         self.drop_color(color);
@@ -542,6 +575,7 @@ impl Database {
             self.tables.iter().all(|table| table.holds_none_from(mark)),
             "a base row holds an id made after the mark"
         );
+        self.containers.truncate(mark);
         self.uf.truncate(mark);
         let mut kept = HashMap::new();
         for (t, rows) in &mut own {

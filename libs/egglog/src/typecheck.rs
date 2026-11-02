@@ -573,6 +573,14 @@ impl Typer<'_> {
             computed: vec![None; self.names.len()],
             constants,
             deltas: None,
+            id_constants: (0..self.names.len() as Var)
+                .map(|v| {
+                    matches!(self.constants[find(v) as usize], Some(Literal::Arg(_)))
+                        && self
+                            .sort(v)
+                            .is_some_and(|sort| self.schema.sort(sort).kind().has_ids())
+                })
+                .collect(),
         }
     }
 }

@@ -167,10 +167,10 @@ fn load(bytes: &[u8], db: &mut Database) -> LoadError {
 
 #[test]
 fn a_load_rejects_bad_bytes_and_mismatched_databases() {
-    let words: [u32; 22] = [
-        0, 0, 0, 0, 0, 2, 0, 9, 16, 0, 0, 0, 0, 0, 0, 0, 99, 0, 0, 0, 0, 0,
+    let words: [u32; 23] = [
+        0, 0, 0, 0, 0, 0, 2, 0, 10, 17, 0, 0, 0, 0, 0, 0, 0, 99, 0, 0, 0, 0, 0,
     ];
-    let bytes: Vec<u8> = [u32::from_le_bytes(*b"TEGG"), 9, 0]
+    let bytes: Vec<u8> = [u32::from_le_bytes(*b"TEGG"), 11, 0]
         .into_iter()
         .chain(words)
         .flat_map(u32::to_le_bytes)

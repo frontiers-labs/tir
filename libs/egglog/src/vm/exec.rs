@@ -27,6 +27,7 @@ use crate::{Color, Database, Error, PrimCtx, TableId, TableKind, Value};
 #[derive(Clone)]
 struct Batch {
     consts: Rc<[Option<u32>]>,
+    color_consts: Rc<[(Reg, Vec<u32>)]>,
     // The registers after the constants.
     cols: Vec<Vec<u32>>,
     len: usize,
@@ -42,18 +43,22 @@ impl Batch {
 
     fn at(&self, reg: Reg, i: usize) -> u32 {
         match (reg as usize).checked_sub(self.consts.len()) {
-            None => self.consts[reg as usize].expect("a computed premise succeeded"),
+            None => {
+                if let Ok(at) = self
+                    .color_consts
+                    .binary_search_by_key(&reg, |(reg, _)| *reg)
+                {
+                    return self.color_consts[at].1[self.colors[i] as usize];
+                }
+                self.consts[reg as usize].expect("a computed premise succeeded")
+            }
             Some(at) => self.cols[at][i],
         }
     }
 
     fn col(&self, reg: Reg) -> Cow<'_, [u32]> {
         match (reg as usize).checked_sub(self.consts.len()) {
-            None => Cow::Owned(vec![
-                self.consts[reg as usize]
-                    .expect("a computed premise succeeded");
-                self.len
-            ]),
+            None => Cow::Owned((0..self.len).map(|i| self.at(reg, i)).collect()),
             Some(at) => Cow::Borrowed(&self.cols[at]),
         }
     }
@@ -257,8 +262,21 @@ pub(crate) fn search(program: &Program, db: &mut Database, ruleset: usize, last:
     let root = Batch {
         consts: program.consts[ruleset]
             .iter()
-            .map(|v| v.map(Value::raw))
+            .enumerate()
+            .map(|(r, v)| {
+                v.map(|v| {
+                    if program.file.rulesets[ruleset]
+                        .id_consts
+                        .contains(&(r as u32))
+                    {
+                        db.find(v).raw()
+                    } else {
+                        v.raw()
+                    }
+                })
+            })
             .collect(),
+        color_consts: Rc::from([]),
         cols: Vec::new(),
         len: 1,
         colors: Vec::new(),
@@ -298,7 +316,32 @@ pub(crate) fn search_colors(
     let root = Batch {
         consts: program.consts[ruleset]
             .iter()
-            .map(|v| v.map(Value::raw))
+            .enumerate()
+            .map(|(r, v)| {
+                v.map(|v| {
+                    if program.file.rulesets[ruleset]
+                        .id_consts
+                        .contains(&(r as u32))
+                    {
+                        db.find(v).raw()
+                    } else {
+                        v.raw()
+                    }
+                })
+            })
+            .collect(),
+        color_consts: program.file.rulesets[ruleset]
+            .id_consts
+            .iter()
+            .map(|&r| {
+                let mut values = vec![0; db.colors.len()];
+                if let Some(value) = program.consts[ruleset][r as usize] {
+                    for &color in level {
+                        values[color.index()] = db.find_in(color, value).raw();
+                    }
+                }
+                (r, values)
+            })
             .collect(),
         cols: Vec::new(),
         len: n,
@@ -488,6 +531,7 @@ impl<'a, R: Reads<'a>> Exec<'a, R> {
         }
         Batch {
             consts: input.consts.clone(),
+            color_consts: input.color_consts.clone(),
             cols,
             len: sel.len(),
             colors,
@@ -1192,6 +1236,7 @@ impl<'a, R: Reads<'a>> Exec<'a, R> {
             }
             let mut sorted: Vec<GroupRow> = spec.clone();
             sorted.sort_unstable();
+            sorted.dedup();
             let mut key = vec![c];
             for (table, cells) in &sorted {
                 key.push(table.index() as u32);
