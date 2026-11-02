@@ -181,6 +181,13 @@
    "subject": "fix(arm64): refine A720 scalar conversion throughput (#751)",
    "time": "2026-10-30T07:17:52.000Z",
    "env_key": "aarch64: rustc 1.101.0-nightly (c36f14571 2026-10-01); ldd (Ubuntu GLIBC 2.39-0ubuntu8.9) 2.39|x86_64: rustc 1.101.0-nightly (c36f14571 2026-10-01); ldd (Ubuntu GLIBC 2.39-0ubuntu8.9) 2.39"
+  },
+  {
+   "file": "runs/2026-11-02T20-09-32-000Z-18591785d0ae.json",
+   "commit": "18591785d0ae0e97a19638cec1fae8cbb9f008f4",
+   "subject": "feat(egglog): load compiled rule programs from static storage (#769)",
+   "time": "2026-11-02T20:09:32.000Z",
+   "env_key": "aarch64: rustc 1.101.0-nightly (c36f14571 2026-10-01); ldd (Ubuntu GLIBC 2.39-0ubuntu8.9) 2.39|x86_64: rustc 1.101.0-nightly (c36f14571 2026-10-01); ldd (Ubuntu GLIBC 2.39-0ubuntu8.9) 2.39"
   }
  ]
 }
