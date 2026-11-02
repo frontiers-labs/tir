@@ -380,3 +380,82 @@ fn equal_cost_parent_keeps_an_acyclic_derivation() {
     let (dag, term) = tir_egglog::Extractor::new(&db).best(root).unwrap();
     assert_eq!(dag.to_string(term), "(Wrapper (Cheap))");
 }
+
+#[test]
+fn scheduler_retains_selected_match_occurrences() -> Result<(), Error> {
+    for capture in [false, true] {
+        let mut eg = EGraph::default();
+        add_relation(&mut eg, "R", vec!["i64".into(), "i64".into()])?;
+        add_relation(&mut eg, "Seen", vec!["i64".into()])?;
+        add_function(
+            &mut eg,
+            "count",
+            tir_egglog::ast::Schema::new(vec![], "i64".into()),
+            Some(expr!((+ old new))),
+        )?;
+        add_ruleset(&mut eg, "C")?;
+        let head = if capture {
+            actions![(Seen y) (set (count) 1)]
+        } else {
+            actions![(set (count) 1)]
+        };
+        rule(&mut eg, "C", facts![(R x y)], head)?;
+        run(
+            &mut eg,
+            vec![action!((R 1 7)), action!((R 2 7)), action!((set (count) 0))],
+        );
+        let id = eg.add_scheduler(Box::new(DrainThree));
+        eg.step_rules_with_scheduler(id, "C")?;
+        let (_, count) = eg.eval_expr(&expr!((count)))?;
+        assert_eq!(eg.value_to_base::<i64>(count), 2);
+    }
+    Ok(())
+}
+
+#[test]
+fn scheduler_records_belong_to_the_declaring_ruleset() -> Result<(), Error> {
+    let mut eg = EGraph::default();
+    for name in ["R", "S", "OutA", "OutB"] {
+        add_relation(&mut eg, name, vec!["i64".into()])?;
+    }
+    for (set, body, head) in [
+        ("A", facts![(R x)], actions![(OutA x)]),
+        ("B", facts![(S x)], actions![(OutB x)]),
+    ] {
+        add_ruleset(&mut eg, set)?;
+        eg.run_program(vec![Command::Rule {
+            rule: tir_egglog::ast::Rule {
+                span: span!(),
+                name: "copy".into(),
+                ruleset: set.into(),
+                body: body.0,
+                head,
+                eval_mode: tir_egglog::ast::RuleEvalMode::Seminaive,
+            },
+        }])?;
+    }
+    run(
+        &mut eg,
+        vec![
+            action!((R 1)),
+            action!((R 2)),
+            action!((R 3)),
+            action!((R 4)),
+            action!((S 99)),
+        ],
+    );
+    let id = eg.add_scheduler(Box::new(DrainThree));
+    eg.step_rules_with_scheduler(id, "A")?;
+    assert_eq!(eg.get_size("OutA"), 3);
+    eg.step_rules_with_scheduler(id, "B")?;
+    assert_eq!(eg.get_size("OutA"), 3);
+    let db = eg.database();
+    let rows: Vec<i64> = db
+        .rows(db.table("OutB")?)
+        .map(|row| db.base_value(row[0]))
+        .collect();
+    assert_eq!(rows, [99]);
+    eg.step_rules_with_scheduler(id, "A")?;
+    assert_eq!(eg.get_size("OutA"), 4);
+    Ok(())
+}
