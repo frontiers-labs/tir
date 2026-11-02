@@ -2,6 +2,8 @@
 //! (`src/ast/parse.rs`), for the commands this crate runs. Each token parser
 //! eats the whitespace and comments after it.
 
+use std::collections::HashSet;
+
 use chumsky::error::{RichPattern, RichReason};
 use chumsky::input::MapExtra;
 use chumsky::inspector::SimpleState;
@@ -44,7 +46,7 @@ const KEYWORDS: &[&str] = &[
     "=",
 ];
 
-struct Source {
+struct Source<'a> {
     file: &'static str,
     // The offset each line starts at.
     lines: Vec<usize>,
@@ -52,9 +54,20 @@ struct Source {
     commands: Vec<String>,
     // Each `_` is a variable of its own.
     wildcards: usize,
+    names: HashSet<&'a str, tir_adt::FxBuildHasher>,
 }
 
-impl Source {
+impl Source<'_> {
+    fn wildcard(&mut self) -> String {
+        loop {
+            self.wildcards += 1;
+            let name = format!("_{}", self.wildcards);
+            if !self.names.contains(name.as_str()) {
+                return name;
+            }
+        }
+    }
+
     fn at(&self, offset: usize) -> Span {
         Span {
             file: self.file,
@@ -63,7 +76,7 @@ impl Source {
     }
 }
 
-type Extra<'a> = extra::Full<Rich<'a, char>, SimpleState<Source>, ()>;
+type Extra<'a> = extra::Full<Rich<'a, char>, SimpleState<Source<'a>>, ()>;
 
 fn span<'a>(e: &mut MapExtra<'a, '_, &'a str, Extra<'a>>) -> Span {
     let start = e.span().start;
@@ -88,9 +101,13 @@ fn close<'a>() -> impl Parser<'a, &'a str, (), Extra<'a>> + Clone {
     just(')').then_ignore(ws()).ignored()
 }
 
+fn separator(c: char) -> bool {
+    c.is_whitespace() || "();\"".contains(c)
+}
+
 fn atom<'a>() -> impl Parser<'a, &'a str, &'a str, Extra<'a>> + Clone {
     any()
-        .filter(|c: &char| !c.is_whitespace() && !"();\"".contains(*c))
+        .filter(|c: &char| !separator(*c))
         .repeated()
         .at_least(1)
         .to_slice()
@@ -187,8 +204,8 @@ fn expr<'a>() -> impl Parser<'a, &'a str, Expr, Extra<'a>> + Clone {
             .map_with(|atom, e| match literal(atom) {
                 Some(literal) => Expr::Lit(span(e), literal),
                 None if atom == "_" => {
-                    e.state().wildcards += 1;
-                    Expr::Var(span(e), format!("_{}", e.state().wildcards))
+                    let name = e.state().wildcard();
+                    Expr::Var(span(e), name)
                 }
                 None => Expr::Var(span(e), atom.to_owned()),
             });
@@ -565,6 +582,10 @@ impl EGraph {
             lines: std::iter::once(0).chain(newlines).collect(),
             commands: self.commands.keys().cloned().collect(),
             wildcards: 0,
+            names: text
+                .split(separator)
+                .chain(self.globals.iter().map(String::as_str))
+                .collect(),
         });
         let program = ws()
             .ignore_then(command().repeated().collect())
