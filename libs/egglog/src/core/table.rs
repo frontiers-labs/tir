@@ -7,6 +7,7 @@ use super::keymap::KeyMap;
 use super::schema::{Shape, TableSchema};
 use super::uf::UnionFind;
 use super::value::{Value, as_cells};
+use crate::TableId;
 
 // A columnar row log. Rows only append: a row whose output changes is killed
 // and its new version appended with the current timestamp, so the rows
@@ -29,6 +30,10 @@ pub(crate) struct Table {
     renumbered: u32,
     // Whether an index is kept, so a write brings it up to date.
     keeps_indexes: bool,
+    // The column whose cell a killed row leaves for the table logging it,
+    // and the cells left since the log last took them.
+    pub(crate) retire: Option<(usize, TableId)>,
+    pub(crate) retired: Vec<u32>,
 }
 
 // A clone rebuilds its key map, copies its kept indexes, and builds the
@@ -52,6 +57,8 @@ impl Clone for Table {
             version: self.version,
             renumbered: 0,
             keeps_indexes: self.keeps_indexes,
+            retire: self.retire,
+            retired: self.retired.clone(),
         };
         table.rebuild_keys();
         table.renumbered = self.renumbered;
@@ -72,6 +79,8 @@ impl Table {
             version: 0,
             renumbered: 0,
             keeps_indexes: false,
+            retire: None,
+            retired: Vec::new(),
             schema,
         }
     }
@@ -186,6 +195,9 @@ impl Table {
                     index.group_remove(&self.columns, row);
                 }
             }
+        }
+        if let Some((column, _)) = self.retire {
+            self.retired.push(self.columns[column][row as usize]);
         }
         set_bit(&mut self.live, row, false);
         self.dead += 1;
@@ -304,6 +316,18 @@ impl Table {
         if let Some(at) = self.indexes.iter().position(same) {
             return at;
         }
+        // A kept index by the same key answers a lookup of that key, and
+        // every write keeps it current.
+        let kept = |index: &Index| {
+            index.is_grouped()
+                && index.key_len == key_len
+                && index.order[..key_len] == order[..key_len]
+        };
+        if order.len() == key_len
+            && let Some(at) = self.indexes.iter().position(kept)
+        {
+            return at;
+        }
         self.indexes.push(Index::new(order.to_vec(), key_len));
         self.indexes.len() - 1
     }
@@ -363,6 +387,14 @@ impl Table {
         if index.can_catch_up(u64::from(self.renumbered), len) {
             index.catch_up(&self.columns, len);
         } else {
+            self.refresh_index(at);
+        }
+    }
+
+    // Brings index `at` up to date for a search outside colors, which reads
+    // a grouped index's groups and needs no layout of it.
+    pub(crate) fn refresh_for_search(&mut self, at: usize) {
+        if !self.indexes[at].is_grouped() {
             self.refresh_index(at);
         }
     }

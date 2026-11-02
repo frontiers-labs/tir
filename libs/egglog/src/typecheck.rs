@@ -36,6 +36,8 @@ struct Call {
 enum Item {
     Atom(TableId, Vec<Var>),
     Call(usize),
+    // A row that must be absent: every column, the output last.
+    Absent(TableId, Vec<Var>),
 }
 
 enum Do {
@@ -87,8 +89,24 @@ pub(crate) fn typecheck(rule: &ast::Rule, schema: Schema<'_>) -> Result<Rule, Er
                 typer.equate(*span, a, b)?;
             }
             Fact::Fact(expr) => _ = typer.term(expr, Place::Query)?,
+            Fact::Not(expr) => typer.absent(expr)?,
         }
     }
+    let mut bound: Vec<bool> = typer.constants.iter().map(Option::is_some).collect();
+    for item in &typer.query {
+        let args = match item {
+            Item::Atom(_, args) => args,
+            Item::Call(call) => &typer.calls[*call].args,
+            Item::Absent(..) => continue,
+        };
+        for &var in args {
+            bound[typer.find(var) as usize] = true;
+        }
+    }
+    for var in 0..bound.len() {
+        bound[var] = bound[typer.find(var as Var) as usize];
+    }
+    typer.bound.retain(|_, var| bound[*var as usize]);
     for action in &rule.head.0 {
         typer.action(action)?;
     }
@@ -251,6 +269,36 @@ impl Typer<'_> {
         Ok(out)
     }
 
+    // `(not (T cells...))`: the cells are variables or literals, and a
+    // function's output may be left out.
+    fn absent(&mut self, expr: &Expr) -> Result<(), Error> {
+        let span = expr.span();
+        let Expr::Call(_, name, cells) = expr else {
+            return Err(self.type_error(span, "`not` takes a row of a table".to_owned()));
+        };
+        let Some(table) = self.schema.table_named(name) else {
+            return Err(self.type_error(span, format!("no table `{name}`")));
+        };
+        let schema = self.schema.table(table);
+        let (keys, columns) = (schema.key_arity(), schema.columns().len());
+        if cells.len() != keys && cells.len() != columns {
+            let message = format!("`not` names a key or a row of `{name}`");
+            return Err(self.type_error(span, message));
+        }
+        if cells.iter().any(|cell| matches!(cell, Expr::Call(..))) {
+            let message = "the cells of a `not` are variables or literals".to_owned();
+            return Err(self.type_error(span, message));
+        }
+        let mut args = (cells.iter())
+            .map(|cell| self.term(cell, Place::Query))
+            .collect::<Result<Vec<_>, _>>()?;
+        if args.len() < columns {
+            args.push(self.var(format!("({name} ...)"), None, None));
+        }
+        self.query.push(Item::Absent(table, args));
+        Ok(())
+    }
+
     // `(find-or-make (T cells...) ...)`: the rows of one group, each
     // without its group column.
     fn find_or_make(&mut self, span: Span, rows: &[Expr], place: Place) -> Result<Var, Error> {
@@ -373,7 +421,7 @@ impl Typer<'_> {
         let mut unions: Vec<(Var, Var)> = Vec::new();
         let mut grouped: Vec<(Var, SortId)> = Vec::new();
         for item in &self.query {
-            if let Item::Atom(table, args) = item {
+            if let Item::Atom(table, args) | Item::Absent(table, args) = item {
                 uses.push((*table, args.clone()));
             }
         }
@@ -492,16 +540,26 @@ impl Typer<'_> {
         let canonical = |args: &[Var]| -> Vec<Var> { args.iter().map(|&v| find(v)).collect() };
         let prim = |c: usize| (self.calls[c].overloads[0], canonical(&self.calls[c].args));
         let premise = (self.query.iter())
-            .map(|item| match item {
-                Item::Atom(table, args) => Atom {
+            .filter_map(|item| match item {
+                Item::Atom(table, args) => Some(Atom {
                     target: Target::Table(*table),
                     args: canonical(args),
-                },
+                }),
                 Item::Call(c) => {
                     let (prim, args) = prim(*c);
                     let target = Target::Prim(prim);
-                    Atom { target, args }
+                    Some(Atom { target, args })
                 }
+                Item::Absent(..) => None,
+            })
+            .collect();
+        let absent = (self.query.iter())
+            .filter_map(|item| match item {
+                Item::Absent(table, args) => Some(Atom {
+                    target: Target::Table(*table),
+                    args: canonical(args),
+                }),
+                _ => None,
             })
             .collect();
         let actions = (self.actions.iter())
@@ -525,8 +583,11 @@ impl Typer<'_> {
             name: rule.name.clone(),
             naive: rule.eval_mode == RuleEvalMode::Naive,
             premise,
+            absent,
             actions,
+            computed: vec![None; self.names.len()],
             constants,
+            deltas: None,
             id_constants: (0..self.names.len() as Var)
                 .map(|v| {
                     matches!(self.constants[find(v) as usize], Some(Literal::Arg(_)))

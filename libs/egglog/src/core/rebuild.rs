@@ -58,6 +58,7 @@ impl Database {
                 .collect();
             self.apply_moved(deltas)?;
         }
+        self.write_retired()?;
         self.now += 1;
         if !self.colors.is_empty() {
             self.rebase_colors(&contents_changed)?;
@@ -113,6 +114,11 @@ impl Database {
     }
 
     pub(crate) fn apply(&mut self, table: TableId, delta: &mut Delta) -> Result<(), Error> {
+        if delta.subsumed.is_empty() {
+            // Empty deltas still compact dead rows left by earlier writes.
+            self.tables[table.index()].maybe_compact();
+            return Ok(());
+        }
         let schema = &self.tables[table.index()].schema;
         for &column in &schema.ids {
             for cell in &mut delta.columns[column] {

@@ -149,11 +149,8 @@ impl Trie<'_> {
                 (
                     Step::Prim {
                         prim,
-                        context: if rule.naive {
-                            crate::Context::Full
-                        } else {
-                            crate::Context::Write
-                        },
+                        context: rule.contexts().1,
+
                         args,
                         out,
                     },
@@ -187,7 +184,8 @@ impl Trie<'_> {
         width: &mut u32,
     ) -> usize {
         let rules = self.rules;
-        let acts = &rules[self.variants[state.variant].rule].actions;
+        let rule = &rules[self.variants[state.variant].rule];
+        let acts = &rule.actions;
         for (k, act) in acts.iter().enumerate().skip(from) {
             out.push(match act {
                 Act::Lookup(table, args)
@@ -250,11 +248,8 @@ impl Trie<'_> {
                 },
                 Act::Call(prim, args) => Action::Call {
                     prim: self.symbols.prim(*prim),
-                    context: if self.rule(state).naive {
-                        crate::Context::Full
-                    } else {
-                        crate::Context::Write
-                    },
+                    context: rule.contexts().1,
+
                     args: regs(state, args),
                 },
                 Act::Panic(message) => Action::Panic {
@@ -268,6 +263,7 @@ impl Trie<'_> {
     fn step(&mut self, join: &Join, width: u32) -> (Step, u32) {
         let (binds, after) = lower(join, width);
         let step = match join {
+            Join::Ready(r) => Step::Same { a: *r, b: *r },
             Join::Always => Step::Same {
                 a: self.unit,
                 b: self.unit,
@@ -286,6 +282,12 @@ impl Trie<'_> {
                 let key = cols.iter().filter_map(|&c| key[c]).collect();
                 let index = self.symbols.index(*table, cols);
                 Step::Check { index, key }
+            }
+            Join::Absent { table, key } => {
+                let cols: Vec<usize> = (0..key.len()).filter(|&c| key[c].is_some()).collect();
+                let key = cols.iter().filter_map(|&c| key[c]).collect();
+                let index = self.symbols.index(*table, cols);
+                Step::Absent { index, key }
             }
             Join::Primary { table, slice, args } => {
                 let keys = self.schema.table(*table).key_arity();
@@ -366,7 +368,9 @@ impl Trie<'_> {
 fn lower(join: &Join, width: u32) -> (Vec<Bind>, u32) {
     let args: &[Arg] = match join {
         Join::Primary { args, .. } | Join::Prim { args, .. } => args,
-        Join::Semi { .. } | Join::Always => return (Vec::new(), width),
+        Join::Semi { .. } | Join::Absent { .. } | Join::Ready(_) | Join::Always => {
+            return (Vec::new(), width);
+        }
     };
     let mut fresh = 0;
     let binds = args

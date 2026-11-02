@@ -10,7 +10,7 @@ use crate::plan::{self, Source, hir};
 use crate::sort::FN_PREFIX;
 use crate::typecheck::typecheck;
 use crate::vm::until_name;
-use crate::{Database, Error, Program, TableKind, span};
+use crate::{Database, Error, Program, TableId, TableKind, span};
 
 /// How a ruleset may be planned.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -89,15 +89,56 @@ impl Rules {
         facts: Facts,
         actions: Actions,
     ) -> Result<(), Error> {
+        self.add_rule(db, ruleset, facts, actions, RuleEvalMode::Seminaive)
+    }
+
+    /// Adds a rule that matches the whole database at each run, as one that
+    /// runs once over rows it did not write needs no variant per atom.
+    pub fn naive_rule(
+        &mut self,
+        db: &Database,
+        ruleset: &str,
+        facts: Facts,
+        actions: Actions,
+    ) -> Result<(), Error> {
+        self.add_rule(db, ruleset, facts, actions, RuleEvalMode::Naive)
+    }
+
+    fn add_rule(
+        &mut self,
+        db: &Database,
+        ruleset: &str,
+        facts: Facts,
+        actions: Actions,
+        eval_mode: RuleEvalMode,
+    ) -> Result<(), Error> {
         let rule = Rule {
             span: span!(),
             head: actions,
             body: facts.0,
             name: String::new(),
             ruleset: ruleset.to_owned(),
-            eval_mode: RuleEvalMode::Seminaive,
+            eval_mode,
         };
         self.add_command(db, Command::Rule { rule })
+    }
+
+    /// [`Rules::rule`] whose seminaive matches start only from rows of
+    /// `deltas` written since the ruleset last ran: a new row of another
+    /// table of the query starts none. For a rule that reads rows a run
+    /// writes for it alongside tables the program writes all along.
+    pub fn delta_rule(
+        &mut self,
+        db: &Database,
+        ruleset: &str,
+        deltas: &[TableId],
+        facts: Facts,
+        actions: Actions,
+    ) -> Result<(), Error> {
+        self.rule(db, ruleset, facts, actions)?;
+        let (_, rule) = (self.ruleset(ruleset).rules.last_mut()).expect("the rule just added");
+        rule.deltas = Some(deltas.to_vec());
+        Ok(())
     }
 
     /// Adds the rule that unions each match of `lhs` with `rhs`.
@@ -194,6 +235,9 @@ impl Rules {
     /// remembers of when each rule last ran: those rules go on matching only
     /// what is new since, and the others match everything once.
     pub fn recompile(&self, db: &Database, previous: &Program) -> Result<Program, Error> {
+        if previous.bindings_changed(db) {
+            return self.compile(db);
+        }
         self.compile_with(db, |ruleset, rule| previous.last_run_of(ruleset, rule))
     }
 
@@ -206,11 +250,12 @@ impl Rules {
     ) -> Result<Program, Error> {
         let (mut sources, mut last_run) = (Vec::new(), Vec::new());
         for ruleset in &self.rulesets {
+            self.check_strata(&ruleset.name)?;
             let mut groups: Vec<(Group, Vec<&hir::Rule>)> = Vec::new();
             for (_, rule) in &ruleset.rules {
                 let args = (rule.constants.iter()).any(|c| matches!(c, Some(Literal::Arg(_))));
-                let reads =
-                    (rule.premise.iter()).any(|atom| matches!(atom.target, Target::Table(_)));
+                let reads = (rule.premise.iter().chain(&rule.absent))
+                    .any(|atom| matches!(atom.target, Target::Table(_)));
                 let once = !rule.naive && !reads && !args && !ruleset.colored;
                 let key = (last(&ruleset.name, &rule.name), once, args);
                 match groups.iter_mut().find(|(k, _)| *k == key) {
@@ -235,7 +280,7 @@ impl Rules {
             }
         }
         let (file, tables, externs) = plan::compile(&sources, db.schema())?;
-        Ok(Program::new(file, tables, externs, last_run))
+        Ok(Program::new(&file, tables, externs, last_run, db))
     }
 
     // Grows with every ruleset and rule added.
@@ -246,6 +291,55 @@ impl Rules {
             .map(|ruleset| ruleset.rules.len())
             .sum();
         self.rulesets.len() + rules
+    }
+
+    // A rule of a run of `name` may not read the absence of a row of a table
+    // the run writes: the table must be complete before the rule reads it.
+    fn check_strata(&self, name: &str) -> Result<(), Error> {
+        let rules = self.typed_rules_of(name);
+        if !rules
+            .iter()
+            .flat_map(|rule| &rule.absent)
+            .any(|atom| matches!(atom.target, Target::Table(_)))
+        {
+            return Ok(());
+        }
+        let mut written = std::collections::HashSet::new();
+        for act in rules.iter().flat_map(|rule| &rule.actions) {
+            match act {
+                hir::Act::Insert(table, _)
+                | hir::Act::Delete(table, _)
+                | hir::Act::Subsume(table, _)
+                | hir::Act::Lookup(table, _) => {
+                    written.insert(*table);
+                }
+                hir::Act::FindOrMake(tables, _) => written.extend(tables.iter().copied()),
+                _ => {}
+            }
+        }
+        for rule in &rules {
+            for atom in &rule.absent {
+                if let Target::Table(table) = atom.target
+                    && written.contains(&table)
+                {
+                    return Err(Error::Unsupported(format!(
+                        "rule `{}` of `{name}` reads the absence of rows its run writes",
+                        rule.name
+                    )));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    // The typed rules a run of `name` runs, combined members included.
+    fn typed_rules_of(&self, name: &str) -> Vec<&hir::Rule> {
+        let Some(ruleset) = self.rulesets.iter().find(|ruleset| ruleset.name == name) else {
+            return Vec::new();
+        };
+        let own = ruleset.rules.iter().map(|(_, rule)| rule);
+        let members = (ruleset.members.iter()).flat_map(|member| self.typed_rules_of(member));
+        own.chain(members).collect()
     }
 
     pub(crate) fn has_ruleset(&self, name: &str) -> bool {
@@ -308,7 +402,7 @@ pub(crate) fn typed(db: &Database, rule: Rule) -> Result<(Rule, hir::Rule), Erro
     for fact in &mut rule.body {
         match fact {
             Fact::Eq(_, a, b) => [a, b].into_iter().for_each(name_functions),
-            Fact::Fact(expr) => name_functions(expr),
+            Fact::Fact(expr) | Fact::Not(expr) => name_functions(expr),
         }
     }
     for action in &mut rule.head.0 {

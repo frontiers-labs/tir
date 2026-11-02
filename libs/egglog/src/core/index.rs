@@ -234,6 +234,11 @@ impl Index {
         self.groups.is_some()
     }
 
+    // The live rows of `key` in a grouped index, which every write keeps.
+    pub(crate) fn group_rows(&self, key: u32) -> Option<&[u32]> {
+        Some(self.groups.as_ref()?.get(key))
+    }
+
     // Puts a new live `row` into its group.
     pub(crate) fn group_insert(&mut self, columns: &[Vec<u32>], row: u32) {
         let (key, rest) = (columns[self.order[0]][row as usize], &self.order[1..]);

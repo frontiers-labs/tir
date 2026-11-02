@@ -407,20 +407,27 @@ fn compiled_duplicate_members_find_existing_group() {
 #[test]
 fn serialized_group_runs_in_fresh_database() {
     let (_, program) = group_program(false);
-    let mut db = Database::new();
-    let mut loaded = Program::from_bytes(&program.to_bytes(), &mut db).unwrap();
-    loaded.run(&mut db, &Schedule::run(""), &[]).unwrap();
-    let member = db.schema().table_named("Member").unwrap();
-    let keyed = db.schema().table_named("Keyed").unwrap();
-    let other = db.schema().table_named("OtherMember").unwrap();
-    let row = [db.base(5i64)];
-    let found = db.find_group(&[(member, &row)]).unwrap().unwrap();
-    let remade = db.find_or_make(&[(member, &row)]).unwrap();
-    assert_eq!(found, remade);
-    assert_eq!(db.rows(keyed).count(), 1);
-    let other_row = [db.base(6i64)];
-    db.find_or_make(&[(other, &other_row)]).unwrap();
-    assert_eq!(db.rows(keyed).count(), 2);
+    for borrowed in [false, true] {
+        let mut db = Database::new();
+        let bytes = program.to_bytes();
+        let mut loaded = if borrowed {
+            Program::from_static(Box::leak(bytes.into_boxed_slice()), &mut db).unwrap()
+        } else {
+            Program::from_bytes(&bytes, &mut db).unwrap()
+        };
+        loaded.run(&mut db, &Schedule::run(""), &[]).unwrap();
+        let member = db.schema().table_named("Member").unwrap();
+        let keyed = db.schema().table_named("Keyed").unwrap();
+        let other = db.schema().table_named("OtherMember").unwrap();
+        let row = [db.base(5i64)];
+        let found = db.find_group(&[(member, &row)]).unwrap().unwrap();
+        let remade = db.find_or_make(&[(member, &row)]).unwrap();
+        assert_eq!(found, remade);
+        assert_eq!(db.rows(keyed).count(), 1);
+        let other_row = [db.base(6i64)];
+        db.find_or_make(&[(other, &other_row)]).unwrap();
+        assert_eq!(db.rows(keyed).count(), 2);
+    }
 }
 
 #[test]

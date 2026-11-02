@@ -171,6 +171,7 @@ macro_rules! expr {
 #[macro_export]
 macro_rules! fact {
     ((= $($arg:tt)*)) => { $crate::ast::Fact::Eq($crate::span!(), $($crate::expr!($arg)),*) };
+    ((not $a:tt)) => { $crate::ast::Fact::Not($crate::expr!($a)) };
     ($a:tt) => { $crate::ast::Fact::Fact($crate::expr!($a)) };
 }
 

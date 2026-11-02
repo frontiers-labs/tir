@@ -1,6 +1,10 @@
 // A typed rule as atoms over variables (thesis §3.2.2), and the single-rule
 // optimizations of §3.3.1.
 
+use std::collections::{HashMap, HashSet};
+
+use tir_adt::FxBuildHasher;
+
 use super::permute::Symmetries;
 use crate::ast::Literal;
 use crate::sort::PROBE;
@@ -50,9 +54,17 @@ pub(crate) struct Rule {
     pub(crate) name: String,
     pub(crate) naive: bool,
     pub(crate) premise: Vec<Atom>,
+    // Rows that must be absent once the premise matched; a variable only
+    // these read matches any cell.
+    pub(crate) absent: Vec<Atom>,
     pub(crate) actions: Vec<Act>,
+    // The tables whose new rows start a seminaive match; all when `None`.
+    pub(crate) deltas: Option<Vec<TableId>>,
     // The value of each variable that is a constant.
     pub(crate) constants: Vec<Option<Literal>>,
+    // The primitive and constant arguments of each variable that is one's
+    // result, which a program computes once rather than in every match.
+    pub(crate) computed: Vec<Option<(ExternId, Vec<Var>)>>,
     pub(crate) id_constants: Vec<bool>,
 }
 
@@ -112,9 +124,25 @@ impl Act {
 }
 
 impl Rule {
+    pub(crate) fn contexts(&self) -> (crate::Context, crate::Context) {
+        use crate::Context;
+        if self.naive {
+            (Context::Read, Context::Full)
+        } else {
+            (Context::Pure, Context::Write)
+        }
+    }
+
+    // Whether `v` is a constant or computed from constants alone.
+    pub(crate) fn constant(&self, v: Var) -> bool {
+        self.constants[v as usize].is_some() || self.computed[v as usize].is_some()
+    }
+
     // The variables the premise binds, constants included.
     pub(crate) fn premise_bound(&self) -> Vec<bool> {
-        let mut bound: Vec<bool> = self.constants.iter().map(Option::is_some).collect();
+        let mut bound: Vec<bool> = (0..self.constants.len() as Var)
+            .map(|v| self.constant(v))
+            .collect();
         for atom in &self.premise {
             for &v in &atom.args {
                 bound[v as usize] = true;
@@ -130,7 +158,7 @@ impl Rule {
             }
             v
         };
-        for atom in &mut self.premise {
+        for atom in self.premise.iter_mut().chain(&mut self.absent) {
             atom.args.iter_mut().for_each(|v| *v = find(to, *v));
         }
         for act in &mut self.actions {
@@ -140,6 +168,31 @@ impl Rule {
             act.args_mut().iter_mut().for_each(|v| *v = find(to, *v));
         }
     }
+}
+
+// Callback registration can change the contexts of an already typed rule.
+pub(crate) fn check_contexts(rule: &Rule, schema: Schema<'_>) -> Result<(), Error> {
+    let (query, action) = rule.contexts();
+    let calls = rule
+        .premise
+        .iter()
+        .filter_map(|atom| match atom.target {
+            Target::Prim(prim) => Some((prim, query)),
+            Target::Table(_) => None,
+        })
+        .chain(rule.actions.iter().filter_map(|act| match act {
+            Act::Prim(prim, _) | Act::Call(prim, _) => Some((*prim, action)),
+            _ => None,
+        }));
+    for (prim, context) in calls {
+        if !schema.primitive_contexts(prim).contains(&context) {
+            return Err(Error::Unsupported(format!(
+                "primitive `{}` cannot run in a {context:?} context",
+                schema.primitive(prim).0
+            )));
+        }
+    }
+    Ok(())
 }
 
 // Merges variables and drops atoms until nothing changes: equal keys give
@@ -169,11 +222,42 @@ pub(crate) fn simplify(rule: &mut Rule, schema: Schema<'_>, syms: &Symmetries) {
     }
 }
 
+// Shares pure calls on constant arguments. The premise atom stays as a
+// success check: a partial call with no result must still drop its match.
+pub(crate) fn hoist(rule: &mut Rule, schema: Schema<'_>) {
+    while let Some(at) = rule.premise.iter().position(|atom| {
+        let Target::Prim(prim) = atom.target else {
+            return false;
+        };
+        let (&out, inputs) = atom.args.split_last().expect("a primitive has an output");
+        let signature = schema.primitive(prim).1;
+        // Equality and container arguments normalize in each binding's color.
+        let scalar = signature
+            .inputs
+            .iter()
+            .chain([&signature.output])
+            .all(|&sort| matches!(schema.sort(sort).kind, crate::SortKind::Base(_)));
+        scalar
+            && schema
+                .primitive_contexts(prim)
+                .contains(&crate::Context::Pure)
+            && !rule.constant(out)
+            && inputs.iter().all(|&v| rule.constant(v))
+    }) {
+        let atom = &rule.premise[at];
+        let Target::Prim(prim) = atom.target else {
+            unreachable!("a primitive atom")
+        };
+        let (&out, inputs) = atom.args.split_last().expect("a primitive has an output");
+        rule.computed[out as usize] = Some((prim, inputs.to_vec()));
+    }
+}
+
 type Edit<T> = Option<(T, Option<(Var, Var)>)>;
 
 // An atom to drop, or two outputs to merge.
 fn premise_edit(rule: &Rule, schema: Schema<'_>, syms: &Symmetries) -> Edit<Option<usize>> {
-    let constant = |v: Var| rule.constants[v as usize].is_some();
+    let constant = |v: Var| rule.constant(v);
     for (i, a) in rule.premise.iter().enumerate() {
         let keys = a.keys(schema);
         for (j, b) in rule.premise.iter().enumerate().skip(i + 1) {
@@ -192,6 +276,43 @@ fn premise_edit(rule: &Rule, schema: Schema<'_>, syms: &Symmetries) -> Edit<Opti
         }
     }
     None
+}
+
+// Reuse only computations whose Pure requirement the program already records.
+pub(crate) fn share_actions(
+    rule: &mut Rule,
+    schema: Schema<'_>,
+    pure: &HashSet<ExternId, FxBuildHasher>,
+) {
+    let mut to: Vec<Var> = (0..rule.constants.len() as Var).collect();
+    let mut bound = rule.premise_bound();
+    let mut seen: HashMap<(ExternId, Vec<Var>), Var, FxBuildHasher> = HashMap::default();
+    rule.actions.retain_mut(|act| {
+        for v in act.args_mut() {
+            *v = to[*v as usize];
+        }
+        if let Act::Prim(prim, args) = act
+            && pure.contains(prim)
+        {
+            let (&out, inputs) = args.split_last().expect("a primitive output");
+            if let Some(&previous) = seen.get(&(*prim, inputs.to_vec())) {
+                if out == previous {
+                    return false;
+                }
+                if !bound[out as usize] {
+                    to[out as usize] = previous;
+                    return false;
+                }
+            } else {
+                seen.insert((*prim, inputs.to_vec()), out);
+            }
+        }
+        if let Some((v, _)) = act.binds(schema) {
+            bound[v as usize] = true;
+        }
+        true
+    });
+    rule.rename(&mut to);
 }
 
 // An action to drop, with the variable it made merged into one bound already.

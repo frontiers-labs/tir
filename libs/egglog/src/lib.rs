@@ -1129,7 +1129,7 @@ impl EGraph {
     /// Runs the program in `bytes` from now on, in place of the rules.
     /// Callbacks of rust rules must be bound before.
     pub fn load_program(&mut self, bytes: &[u8]) -> Result<(), Error> {
-        let file = vm::decode(bytes).map_err(Error::Load)?;
+        let (file, _) = vm::decode(bytes).map_err(Error::Load)?;
         for decl in file
             .sorts
             .iter()
@@ -1535,6 +1535,6 @@ fn vars_of_fact(fact: &Fact, out: &mut Vec<String>) {
     }
     match fact {
         Fact::Eq(_, a, b) => [a, b].into_iter().for_each(|e| walk(e, out)),
-        Fact::Fact(e) => walk(e, out),
+        Fact::Fact(e) | Fact::Not(e) => walk(e, out),
     }
 }

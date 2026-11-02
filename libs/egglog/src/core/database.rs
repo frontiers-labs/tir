@@ -469,6 +469,28 @@ impl Database {
         Value::new(self.uf.find(value.raw()))
     }
 
+    /// Every row of `table` a write removes or replaces leaves its cell of
+    /// `column` as a row of the one-column relation `log`, which the next
+    /// rebuild writes: rules then match what a table no longer holds.
+    pub fn log_retired(&mut self, table: TableId, column: usize, log: TableId) {
+        self.tables[table.index()].retire = Some((column, log));
+    }
+
+    // Writes the cells retired rows left into their logs.
+    pub(crate) fn write_retired(&mut self) -> Result<(), Error> {
+        for at in 0..self.tables.len() {
+            let Some((column, log)) = self.tables[at].retire else {
+                continue;
+            };
+            let id = self.tables[at].schema.ids.contains(&column);
+            for cell in std::mem::take(&mut self.tables[at].retired) {
+                let cell = if id { self.uf.find(cell) } else { cell };
+                self.apply_row(log, &[cell], hash_row(&[cell]), false, None)?;
+            }
+        }
+        Ok(())
+    }
+
     /// Drop every row of `table`.
     pub fn clear(&mut self, table: TableId) {
         self.tables[table.index()].clear();

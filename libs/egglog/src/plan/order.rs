@@ -3,7 +3,6 @@
 
 use super::hir::{Rule, Target, Var};
 use super::permute::Symmetries;
-use crate::ast::Literal;
 use crate::vm::code::Slice;
 use crate::{ExternId, Schema, TableId};
 
@@ -58,6 +57,13 @@ pub(crate) enum Join {
         context: crate::Context,
         args: Vec<Arg>,
     },
+    // Keeps the bindings whose key, the bound columns, `table` lacks.
+    Absent {
+        table: TableId,
+        key: Vec<Option<u32>>,
+    },
+    // A hoisted premise succeeds only when its computed result exists.
+    Ready(u32),
     // The step of a rule with no premise.
     Always,
 }
@@ -75,33 +81,26 @@ pub(crate) struct State {
     pub(crate) variant: usize,
     pub(crate) regs: Vec<Option<u32>>,
     done: Vec<bool>,
+    // Each absent atom whose check is placed.
+    absent: Vec<bool>,
     // The number of bound columns of each atom at its last semi-join.
     semi: Vec<usize>,
 }
 
 impl State {
-    pub(crate) fn new(variant: usize, rule: &Rule, consts: &[(Literal, bool)]) -> Self {
-        let reg = |constant: &Literal, id: bool| {
-            consts
-                .iter()
-                .position(|(c, i)| c == constant && *i == id)
-                .map(|r| r as u32)
-        };
+    // `regs` holds the register of each constant variable of the rule.
+    pub(crate) fn new(variant: usize, rule: &Rule, regs: Vec<Option<u32>>) -> Self {
         Self {
             variant,
-            regs: rule
-                .constants
-                .iter()
-                .zip(&rule.id_constants)
-                .map(|(constant, &id)| constant.as_ref().and_then(|c| reg(c, id)))
-                .collect(),
+            regs,
             done: vec![false; rule.premise.len()],
+            absent: vec![false; rule.absent.len()],
             semi: vec![0; rule.premise.len()],
         }
     }
 
     pub(crate) fn complete(&self) -> bool {
-        self.done.iter().all(|&done| done)
+        self.done.iter().chain(&self.absent).all(|&done| done)
     }
 
     // The joins with the best score: ready primitives first, as they only
@@ -121,6 +120,54 @@ impl State {
                 form,
             }];
         }
+        let ready: Vec<Candidate> = (rule.premise.iter().enumerate())
+            .filter(|(a, _)| !self.done[*a])
+            .filter_map(|(a, atom)| {
+                let (&out, inputs) = atom.args.split_last()?;
+                rule.computed[out as usize]
+                    .as_ref()
+                    .filter(|(prim, args)| {
+                        atom.target == Target::Prim(*prim) && args.as_slice() == inputs
+                    })?;
+                Some(Candidate {
+                    join: Join::Ready(self.regs[out as usize]?),
+                    atom: a,
+                    form: Vec::new(),
+                })
+            })
+            .collect();
+        if !ready.is_empty() {
+            return ready;
+        }
+        // An absent row is checked as soon as the premise binds every
+        // variable of it that the premise reads, the others matching any
+        // cell; like a primitive it only filters.
+        let read = |v: Var| {
+            rule.constants[v as usize].is_some()
+                || (rule.premise.iter()).any(|atom| atom.args.contains(&v))
+        };
+        let absent: Vec<Candidate> = (0..rule.absent.len())
+            .filter(|&a| !self.absent[a])
+            .filter_map(|a| {
+                let atom = &rule.absent[a];
+                let Target::Table(table) = atom.target else {
+                    return None;
+                };
+                (atom.args.iter())
+                    .all(|&v| self.bound(v) || !read(v))
+                    .then(|| Candidate {
+                        join: Join::Absent {
+                            table,
+                            key: atom.args.iter().map(|&v| self.regs[v as usize]).collect(),
+                        },
+                        atom: a,
+                        form: atom.args.clone(),
+                    })
+            })
+            .collect();
+        if !absent.is_empty() {
+            return absent;
+        }
         let open = (0..rule.premise.len()).filter(|&a| !self.done[a]);
         let prims: Vec<Candidate> = open
             .clone()
@@ -133,11 +180,8 @@ impl State {
                 inputs.iter().all(|&v| self.bound(v)).then(|| Candidate {
                     join: Join::Prim {
                         prim,
-                        context: if rule.naive {
-                            crate::Context::Read
-                        } else {
-                            crate::Context::Pure
-                        },
+                        context: rule.contexts().0,
+
                         args: self.args(&atom.args),
                     },
                     atom: a,
@@ -155,7 +199,9 @@ impl State {
         let root = self.done.iter().all(|&done| !done);
         // The variables of constants alone, such as `(u32 0)`. A primitive
         // call follows the calls of its arguments in the premise.
-        let mut constant: Vec<bool> = rule.constants.iter().map(Option::is_some).collect();
+        let mut constant: Vec<bool> = (0..rule.constants.len() as Var)
+            .map(|v| rule.constant(v))
+            .collect();
         for atom in &rule.premise {
             if let (Target::Prim(_), Some((&out, inputs))) = (atom.target, atom.args.split_last()) {
                 constant[out as usize] |= inputs.iter().all(|&v| constant[v as usize]);
@@ -252,6 +298,8 @@ impl State {
     pub(crate) fn take(&mut self, candidate: &Candidate, width: u32) {
         match candidate.join {
             Join::Always => {}
+            Join::Ready(_) => self.done[candidate.atom] = true,
+            Join::Absent { .. } => self.absent[candidate.atom] = true,
             Join::Semi { .. } => {
                 let bound = candidate.form.iter().filter(|&&v| self.bound(v)).count();
                 self.semi[candidate.atom] = bound;

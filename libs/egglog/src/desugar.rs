@@ -163,7 +163,7 @@ pub(crate) fn remove_globals(mut rule: Rule, is_global: impl Fn(&str) -> bool) -
                 call_globals(a, &is_global);
                 call_globals(b, &is_global);
             }
-            Fact::Fact(expr) => call_globals(expr, &is_global),
+            Fact::Fact(expr) | Fact::Not(expr) => call_globals(expr, &is_global),
         }
     }
     let mut read = |expr: &mut Expr| {

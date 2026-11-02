@@ -8,8 +8,11 @@ mod seminaive;
 mod trie;
 
 use std::cell::RefCell;
+use std::collections::HashSet;
 
-use hir::{Rule, simplify};
+use tir_adt::FxBuildHasher;
+
+use hir::{Rule, Var, hoist, simplify};
 use permute::{Symmetries, extract_symmetries};
 
 use crate::ast::Literal;
@@ -58,6 +61,46 @@ impl Symbols {
     }
 }
 
+// The indexes the code under `roots` reads.
+fn used<'a>(nodes: &[crate::vm::code::Node], roots: impl Iterator<Item = &'a u32>) -> Vec<u32> {
+    use crate::vm::code::Step;
+    let mut used = Vec::new();
+    let mut stack: Vec<u32> = roots.copied().collect();
+    while let Some(node) = stack.pop() {
+        let node = &nodes[node as usize];
+        if let Step::Expand { index, .. } | Step::Check { index, .. } | Step::Absent { index, .. } =
+            node.step
+        {
+            used.push(index);
+        }
+        stack.extend(&node.children);
+    }
+    used.sort_unstable();
+    used.dedup();
+    used
+}
+
+// The register of variable `v` of `rule` if it is a constant: a literal's
+// among `consts`, or one of `calls`, which follow them.
+fn register(
+    rule: &Rule,
+    v: Var,
+    consts: &[(Literal, bool)],
+    calls: &mut Vec<(ExternId, Vec<u32>)>,
+) -> Option<u32> {
+    if let Some(literal) = &rule.constants[v as usize] {
+        return consts
+            .iter()
+            .position(|(c, id)| c == literal && *id == rule.id_constants[v as usize])
+            .map(|r| r as u32);
+    }
+    let (prim, args) = rule.computed[v as usize].as_ref()?;
+    let args = (args.iter())
+        .map(|&arg| register(rule, arg, consts, calls))
+        .collect::<Option<Vec<u32>>>()?;
+    Some(consts.len() as u32 + position(calls, (*prim, args)))
+}
+
 fn position<T: PartialEq>(items: &mut Vec<T>, item: T) -> u32 {
     let at = items.iter().position(|x| *x == item).unwrap_or_else(|| {
         items.push(item);
@@ -77,6 +120,7 @@ pub(crate) fn compile(
     for source in sources {
         let mut rules: Vec<Rule> = source.rules.iter().map(|&rule| rule.clone()).collect();
         for rule in &mut rules {
+            hir::check_contexts(rule, schema)?;
             simplify(rule, schema, &syms);
         }
         if source.relaxed {
@@ -90,6 +134,21 @@ pub(crate) fn compile(
             simplify(rule, schema, &syms);
         }
         rules.retain(|rule| source.query || !rule.actions.is_empty());
+        rules.iter_mut().for_each(|rule| hoist(rule, schema));
+    }
+    let mut pure: HashSet<ExternId, FxBuildHasher> = HashSet::default();
+    for rule in rulesets.iter().flatten() {
+        pure.extend(rule.computed.iter().flatten().map(|(prim, _)| *prim));
+        if rule.contexts().0 == crate::Context::Pure {
+            pure.extend(rule.premise.iter().filter_map(|atom| match atom.target {
+                hir::Target::Prim(prim) => Some(prim),
+                hir::Target::Table(_) => None,
+            }));
+        }
+    }
+    for rule in rulesets.iter_mut().flatten() {
+        hir::share_actions(rule, schema, &pure);
+        simplify(rule, schema, &syms);
     }
     let (mut symbols, mut nodes) = (Symbols::default(), Vec::new());
     let mut decls = Vec::new();
@@ -106,23 +165,57 @@ pub(crate) fn compile(
             }
         }
         let unit = position(&mut consts, (Literal::Unit, false));
-        let states = (variants.iter().enumerate())
-            .map(|(i, variant)| order::State::new(i, &rules[variant.rule], &consts))
+        // The constants a ruleset computes, after its literals.
+        let mut calls: Vec<(ExternId, Vec<u32>)> = Vec::new();
+        let regs: Vec<Vec<Option<u32>>> = (rules.iter())
+            .map(|rule| {
+                (0..rule.constants.len() as Var)
+                    .map(|v| register(rule, v, &consts, &mut calls))
+                    .collect()
+            })
             .collect();
-        let mut trie = trie::Trie {
-            schema,
-            syms: &syms,
-            rules,
-            variants: &variants,
-            symbols: &mut symbols,
-            nodes: &mut nodes,
-            unit,
+        let width = (consts.len() + calls.len()) as u32;
+        let mut plan = |variants: &[seminaive::Variant]| {
+            let states = (variants.iter().enumerate())
+                .map(|(i, variant)| {
+                    let rule = variant.rule;
+                    order::State::new(i, &rules[rule], regs[rule].clone())
+                })
+                .collect();
+            let mut trie = trie::Trie {
+                schema,
+                syms: &syms,
+                rules,
+                variants,
+                symbols: &mut symbols,
+                nodes: &mut nodes,
+                unit,
+            };
+            trie.children(states, width)
         };
-        let roots = trie.children(states, consts.len() as u32)?;
+        let roots = plan(&variants)?;
+        // A ruleset's first run finds every row new: one variant per rule,
+        // reading all rows, finds the same matches once.
+        // Rules that run naively have that variant only.
+        let naive: Vec<_> = (0..rules.len())
+            .map(|i| seminaive::naive(i, &rules[i]))
+            .collect();
+        let first = if rules.iter().all(|rule| rule.naive) {
+            Vec::new()
+        } else {
+            plan(&naive)?
+        };
+        let used = used(&nodes, roots.iter().chain(&first));
+
         decls.push(RulesetDecl {
             name: source.name.to_owned(),
             roots,
+            first,
+            used,
             rules: rules.iter().map(|rule| rule.name.clone()).collect(),
+            calls: (calls.into_iter())
+                .map(|(prim, args)| (symbols.prim(prim), args))
+                .collect(),
             id_consts: consts
                 .iter()
                 .enumerate()
@@ -250,6 +343,7 @@ fn declare(
                 name: name.to_owned(),
                 inputs: inputs.map(|&sort| position(&mut sorts, sort)).collect(),
                 output: position(&mut sorts, signature.output),
+                required: 0,
             }
         })
         .collect();
