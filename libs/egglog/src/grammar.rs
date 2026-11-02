@@ -407,14 +407,21 @@ fn declaration<'a>() -> impl Parser<'a, &'a str, Command, Extra<'a>> + Clone {
                 .then(symbol())
                 .then(options(&[":merge", ":no-merge"])),
         )
-        .map_with(|(((name, input), output), options), e| Command::Function {
-            span: span(e),
-            name,
-            schema: Schema::new(input, output),
-            merge: options.into_iter().find_map(|option| match option {
+        .try_map_with(|(((name, input), output), options), e| {
+            let no_merge = options.iter().any(|option| matches!(option, Opt::NoMerge));
+            let merge = options.into_iter().find_map(|option| match option {
                 Opt::Merge(merge) => Some(merge),
                 _ => None,
-            }),
+            });
+            if no_merge && merge.is_some() {
+                return Err(Rich::custom(e.span(), "conflicting merge annotations"));
+            }
+            Ok(Command::Function {
+                span: span(e),
+                name,
+                schema: Schema::new(input, output),
+                merge,
+            })
         }),
         form(
             "constructor",
@@ -584,7 +591,14 @@ impl EGraph {
             wildcards: 0,
             names: text
                 .split(separator)
-                .chain(self.globals.iter().map(String::as_str))
+                .flat_map(|name| {
+                    [
+                        name,
+                        name.strip_prefix(crate::GLOBAL_NAME_PREFIX).unwrap_or(name),
+                    ]
+                })
+                .chain(self.names.seen.keys().map(String::as_str))
+                .chain(self.names.aliases.keys().map(String::as_str))
                 .collect(),
         });
         let program = ws()
@@ -595,8 +609,8 @@ impl EGraph {
             let error = &errors[0];
             let at = source.at(error.span().start);
             match error.reason() {
-                _ if error.found().is_none() => Error::Unfinished(at),
                 RichReason::Custom(message) => Error::Parse(format!("{at}: {message}")),
+                _ if error.found().is_none() => Error::Unfinished(at),
                 RichReason::ExpectedFound { expected, found } => {
                     // Whitespace and comments may follow any token.
                     let expected: Vec<String> = (expected.iter())
