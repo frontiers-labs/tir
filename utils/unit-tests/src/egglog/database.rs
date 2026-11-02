@@ -645,3 +645,37 @@ fn equal_outputs_still_evaluate_function_merges() {
     db.insert(f, &[one, two]).unwrap();
     assert_eq!(db.lookup(f, &[one]), Some(three));
 }
+
+#[test]
+fn rollback_forgets_speculative_container_interning() {
+    let (mut db, node) = node_db();
+    let a = db.fresh(node);
+    let stable = db.container(Pair(a, a));
+    let mark = db.mark();
+    let color = db.color(&[]);
+    let b = db.fresh(node);
+    let speculative = db.container(Pair(b, a));
+    db.drop_color(color);
+    db.rollback(mark);
+    assert_eq!(db.container_value::<Pair>(stable), Some(&Pair(a, a)));
+    assert_eq!(db.container_value::<Pair>(speculative), None);
+    let fresh = db.fresh(node);
+    let restored = db.container(Pair(fresh, a));
+    assert_ne!(restored, db.fresh(node));
+    db.rebuild().unwrap();
+    assert_eq!(db.container_value::<Pair>(restored), Some(&Pair(fresh, a)));
+}
+
+#[test]
+fn rollback_rejects_retained_container_references_before_mutation() {
+    let (mut db, node) = node_db();
+    let a = db.fresh(node);
+    let held = db.container(Pair(a, Value::new(2)));
+    let mark = db.mark();
+    let b = db.fresh(node);
+    assert_eq!(b, Value::new(2));
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| db.rollback(mark)));
+    assert!(result.is_err());
+    assert_eq!(db.mark(), 3);
+    assert_eq!(db.container_value::<Pair>(held), Some(&Pair(a, b)));
+}
