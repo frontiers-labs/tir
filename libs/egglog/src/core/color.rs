@@ -71,6 +71,8 @@ pub(crate) struct Colors {
     removals: Vec<u32>,
     // (color, a, b) for the next color rebuild.
     unions: Vec<(u32, u32, u32)>,
+    // Member writes and deletions awaiting keyed-group congruence.
+    written_groups: Vec<(u32, usize, u32)>,
 }
 
 // The color column is no value of a sort; the i64 sort of every database
@@ -109,6 +111,7 @@ impl Colors {
             removed: Vec::new(),
             removals: Vec::new(),
             unions: Vec::new(),
+            written_groups: Vec::new(),
         }
     }
 
@@ -502,6 +505,9 @@ impl Database {
             hidden.sort_unstable();
             hidden.dedup();
             for row in hidden {
+                if let Some(Some(group)) = self.group_of_table.get(t) {
+                    self.written_groups.push((*group, table.cell(row, 0)));
+                }
                 Colors::remove(table, row);
             }
             table.maybe_compact();
@@ -600,6 +606,10 @@ impl Database {
         }
         self.colors.ensure(&self.tables);
         let (c, t) = (color.0, &self.tables[table.index()]);
+        if let Some(Some(group)) = self.group_of_table.get(table.index()) {
+            let g = self.colors.root(c, self.uf.find(key[0].raw()));
+            self.colors.written_groups.push((c, *group, g));
+        }
         let mut key = t.canonical_key(key, &self.uf);
         for &column in &t.schema.ids {
             if let Some(cell) = key.get_mut(column) {
@@ -736,6 +746,9 @@ impl Database {
         mut subsumed: bool,
     ) -> Result<(), Error> {
         let (t, c, now) = (table.index(), row[0], self.colors.now);
+        if let Some(Some(group)) = self.group_of_table.get(t) {
+            self.colors.written_groups.push((c, *group, row[1]));
+        }
         let rows = &self.colors.rows[t];
         let keys = rows.schema.keys;
         let functional = keys < row.len();
@@ -802,11 +815,25 @@ impl Database {
     // timestamp. Each round rewrites the class maps and relabels the rows
     // that hold a root that lost, which may unite more.
     pub(crate) fn rebuild_colors(&mut self) -> Result<(), Error> {
-        while !self.colors.unions.is_empty() {
+        while !self.colors.unions.is_empty() || !self.colors.written_groups.is_empty() {
             let mut unions = std::mem::take(&mut self.colors.unions);
             unions.retain(|&(c, ..)| self.colors.is_live(c));
             unions.sort_unstable_by_key(|&(c, ..)| c);
             self.unite(&unions)?;
+            if !self.colors.written_groups.is_empty() {
+                self.refresh_group_mirrors();
+                let mut written = std::mem::take(&mut self.colors.written_groups);
+                written.retain(|&(c, ..)| self.colors.is_live(c));
+                written.sort_unstable_by_key(|&(c, ..)| c);
+                for chunk in written.chunk_by(|a, b| a.0 == b.0) {
+                    let c = Color(chunk[0].0);
+                    let touched = chunk
+                        .iter()
+                        .map(|&(_, at, g)| (at, self.find_in(c, Value::new(g)).raw()))
+                        .collect();
+                    self.unite_congruent(c, touched);
+                }
+            }
         }
         self.colors.classes.maybe_compact();
         self.colors.rows.iter_mut().for_each(Table::maybe_compact);
@@ -932,6 +959,20 @@ impl Database {
                 self.colors.unions.push((c, member, root));
             }
             for t in 0..self.tables.len() {
+                let removed = &mut self.colors.removed[t];
+                let moved = take_moved(removed, self.uf.parents(), &mut hits);
+                for i in 0..moved.subsumed.len() {
+                    let mut row: Vec<u32> = moved.columns.iter().map(|column| column[i]).collect();
+                    for &column in &removed.schema.ids {
+                        row[column] = self.uf.find(row[column]);
+                    }
+                    let hash = hash_row(&row);
+                    if removed.find(&row, hash).is_none() {
+                        removed.push(&row, hash, self.colors.now, false);
+                    } else {
+                        self.colors.removals[row[0] as usize] -= 1;
+                    }
+                }
                 let moved = take_moved(&mut self.colors.rows[t], self.uf.parents(), &mut hits);
                 for (i, &subsumed) in moved.subsumed.iter().enumerate() {
                     let row: Vec<u32> = moved.columns.iter().map(|column| column[i]).collect();

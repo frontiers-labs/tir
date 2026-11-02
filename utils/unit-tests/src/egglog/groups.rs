@@ -218,3 +218,49 @@ fn find_group_finds_without_making() {
     assert_eq!(found(&ir, &spec(&ir, &other)), None);
     assert_eq!(ir.ops(), before);
 }
+
+#[test]
+fn color_operand_union_unites_keyed_groups_only_in_that_color() {
+    let mut ir = Ir::new();
+    let (x, y) = (ir.x, ir.y);
+    let (a, b) = (ir.op(ADD, &[x]), ir.op(ADD, &[y]));
+    let c = ir.db.color(&[]);
+    ir.db.union_in(c, x, y);
+    ir.db.rebuild().unwrap();
+    assert_eq!(ir.db.find_in(c, a), ir.db.find_in(c, b));
+    assert_ne!(ir.db.find(a), ir.db.find(b));
+}
+
+#[test]
+fn adopted_member_deletion_unites_keyed_groups() {
+    let mut ir = Ir::new();
+    let x = ir.x;
+    let a = ir.op(ADD, &[x]);
+    let b = ir.op(ADD, &[]);
+    ir.db.rebuild().unwrap();
+    let c = ir.db.color(&[]);
+    let zero = ir.db.base(0i64);
+    ir.db.remove_in(c, ir.operands, &[a, zero]);
+    ir.db.rebuild().unwrap();
+    ir.db.adopt(c);
+    ir.db.rebuild().unwrap();
+    assert!(ir.db.lookup(ir.operands, &[a, zero]).is_none());
+    assert_eq!(ir.db.find(a), ir.db.find(b));
+}
+
+#[test]
+fn repeated_relation_members_have_set_identity() {
+    let mut db = Database::new();
+    let sort = db.add_sort("Group", SortKind::Eq);
+    let int = db.sort("i64").unwrap();
+    let member = db.add_relation("Member", &[sort, int]);
+    let keyed = db.add_relation("Keyed", &[sort]);
+    db.add_group(sort, &[member], keyed).unwrap();
+    let row = [db.base(5i64)];
+    let a = db.find_or_make(&[(member, &row)]).unwrap();
+    let spec = [(member, &row[..]), (member, &row[..])];
+    assert_eq!(db.find_or_make(&spec).unwrap(), a);
+    assert_eq!(db.find_group(&spec).unwrap(), Some(a));
+    let c = db.color(&[]);
+    assert_eq!(db.find_or_make_in(c, &spec).unwrap(), a);
+}

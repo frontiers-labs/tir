@@ -74,7 +74,7 @@ impl Database {
             self.apply(table, &mut delta)?;
             self.touched_groups(table, &delta, &mut touched);
         }
-        self.unite_congruent(touched);
+        self.unite_congruent(super::Color::BASE, touched);
         Ok(())
     }
 

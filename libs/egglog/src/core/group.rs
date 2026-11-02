@@ -228,6 +228,7 @@ impl Database {
             })
             .collect();
         spec.sort_unstable();
+        spec.dedup();
         Ok(view.find(&self.groups[at], &spec, EMPTY).map(Value::new))
     }
 
@@ -252,14 +253,16 @@ impl Database {
             })
             .collect();
         spec.sort_unstable();
+        spec.dedup();
         let group = &self.groups[at];
         if let Some(g) = view.find(group, &spec, EMPTY) {
             return Ok(Value::new(g));
         }
         let (sort, keyed) = (group.sort, group.keyed);
         let g = self.fresh(sort);
-        for &(table, cells) in rows {
-            self.insert_in(color, table, &[&[g], cells].concat())?;
+        for (table, cells) in spec {
+            let row: Vec<Value> = once(g).chain(cells.into_iter().map(Value::new)).collect();
+            self.insert_in(color, table, &row)?;
         }
         self.insert_in(color, keyed, &[g])?;
         Ok(g)
@@ -335,16 +338,16 @@ impl Database {
             .into_iter()
             .map(|(at, g)| (at, self.uf.find(g)))
             .collect();
-        self.unite_congruent(written);
+        self.unite_congruent(Color::BASE, written);
         self.uf.unions() != before
     }
 
     // Unites each keyed group of `touched` with another keyed group whose
     // rows equal its own.
-    pub(crate) fn unite_congruent(&mut self, mut touched: Vec<(usize, u32)>) {
+    pub(crate) fn unite_congruent(&mut self, color: Color, mut touched: Vec<(usize, u32)>) {
         touched.sort_unstable();
         touched.dedup();
-        let view = self.group_view(Color::BASE);
+        let view = self.group_view(color);
         let equal: Vec<(u32, u32)> = (touched.into_iter())
             .filter(|&(at, g)| view.is_keyed(&self.groups[at], g))
             .filter_map(|(at, g)| {
@@ -354,7 +357,7 @@ impl Database {
             })
             .collect();
         for (a, b) in equal {
-            self.uf.union(a, b);
+            self.union_in(color, Value::new(a), Value::new(b));
         }
     }
 }

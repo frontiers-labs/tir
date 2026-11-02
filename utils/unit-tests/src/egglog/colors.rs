@@ -922,3 +922,20 @@ fn ids_a_color_made_stay_base_ids_after_adopt() {
     assert_eq!(db.rows_in(later, s).count(), 2);
     assert_eq!(db.rows(s).count(), 1);
 }
+
+#[test]
+fn removed_keys_follow_base_unions_through_adoption() {
+    let mut db = Database::new();
+    let sort = db.add_sort("E", SortKind::Eq);
+    let relation = db.add_relation("R", &[sort]);
+    let (a, b) = (db.fresh(sort), db.fresh(sort));
+    db.insert(relation, &[b]).unwrap();
+    let c = db.color(&[]);
+    db.remove_in(c, relation, &[b]);
+    db.union(a, b);
+    db.rebuild().unwrap();
+    assert_eq!(db.rows_in(c, relation).count(), 0);
+    db.adopt(c);
+    db.rebuild().unwrap();
+    assert_eq!(db.rows(relation).count(), 0);
+}
