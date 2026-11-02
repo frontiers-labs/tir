@@ -68,6 +68,11 @@ impl Rules {
     }
 
     /// Adds the rule that runs `actions` for each match of `facts`.
+    ///
+    /// Table lookups in facts and actions read committed rows, not the writes
+    /// queued earlier in the iteration. A missing function lookup fails even
+    /// after a queued set; writes before the failure still apply. Constructor
+    /// and default entries share their pending output when the key is missing.
     pub fn rule(
         &mut self,
         db: &Database,

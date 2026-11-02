@@ -4,14 +4,12 @@
 // Matching reads committed rows only: actions buffer their writes in
 // `Writes`, which apply after every rule of the iteration matched.
 
-use tir_adt::simd::{hash_rows, intersect_sorted, select_eq, select_same};
-
-use tir_adt::simd::hash_row;
+use tir_adt::simd::{hash_row, hash_rows, intersect_sorted, select_eq, select_same};
 
 use super::Program;
 use super::code::{Action, Bind, Node, Reg, Slice, Step};
 use crate::core::{Colors, Delta, EMPTY, RowTable, Table, UnionFind, check_pure, l2, same_key};
-use crate::{Color, Database, Error, PrimCtx, TableId, Value};
+use crate::{Color, Database, Error, PrimCtx, TableId, TableKind, Value};
 
 #[derive(Clone, Default)]
 struct Batch {
@@ -37,10 +35,16 @@ pub(crate) struct Writes {
     // The rows Entry made, by key, so a key gets one e-class per iteration.
     entries: Vec<RowTable>,
     unions: Vec<(u32, u32)>,
-    removed: Vec<(usize, Vec<u32>)>,
+    removed: Vec<Removal>,
     subsumed: Vec<(usize, Vec<u32>)>,
     // The color of each union, in a color run.
     colors: Vec<u32>,
+}
+
+struct Removal {
+    table: TableId,
+    row: u32,
+    hash: u32,
 }
 
 impl Writes {
@@ -80,21 +84,34 @@ impl Writes {
         id
     }
 
-    // Writes the rows, removals and unions into `db`; a rebuild follows.
-    pub(crate) fn apply(self, db: &mut Database, tables: &[TableId]) -> Result<(), Error> {
-        for (mut delta, &table) in self.rows.into_iter().zip(tables) {
-            if !delta.subsumed.is_empty() {
-                db.apply(table, &mut delta)?;
+    // Searches have finished: row ids remain stable until every removal is done.
+    pub(crate) fn apply(
+        writes: Vec<Self>,
+        db: &mut Database,
+        tables: &[TableId],
+    ) -> Result<(), Error> {
+        for writes in &writes {
+            for removal in &writes.removed {
+                let table = &mut db.tables[removal.table.index()];
+                if table.is_live(removal.row) {
+                    table.remove(removal.row, removal.hash);
+                }
             }
         }
-        let values = |key: Vec<u32>| -> Vec<Value> { key.into_iter().map(Value::new).collect() };
-        for (table, key) in self.removed {
-            db.remove(tables[table], &values(key));
+        let mut unions = Vec::new();
+        for writes in writes {
+            for (mut delta, &table) in writes.rows.into_iter().zip(tables) {
+                if !delta.subsumed.is_empty() {
+                    db.apply(table, &mut delta)?;
+                }
+            }
+            for (table, key) in writes.subsumed {
+                let key: Vec<Value> = key.into_iter().map(Value::new).collect();
+                db.subsume(tables[table], &key);
+            }
+            unions.extend(writes.unions);
         }
-        for (table, key) in self.subsumed {
-            db.subsume(tables[table], &values(key));
-        }
-        for (a, b) in self.unions {
+        for (a, b) in unions {
             db.union(Value::new(a), Value::new(b));
         }
         Ok(())
@@ -894,18 +911,54 @@ impl<'a, R: Reads<'a>> Exec<'a, R> {
                 batch.cols.push(out);
             }
             Action::Set { table, args } => {
+                let t = self.table(*table);
+                let selected = if t.schema.kind() == TableKind::Relation {
+                    let (mut hashes, mut found) = (self.buffer(), self.buffer());
+                    hashes.resize(n, 0);
+                    found.resize(n, EMPTY);
+                    let columns: Vec<&[u32]> = args.iter().map(|&r| batch.col(r)).collect();
+                    hash_rows(&columns, &mut hashes);
+                    t.find_many(&columns, &hashes, &mut found);
+                    let mut key = Vec::new();
+                    let selected: Vec<usize> = (0..n)
+                        .filter(|&i| {
+                            if R::COLORED {
+                                let c = batch.colors[i];
+                                let id = self.table_id(*table);
+                                key.clear();
+                                key.push(c);
+                                key.extend(args.iter().map(|&r| batch.col(r)[i]));
+                                self.colors().color_row(c, id, &key).is_none()
+                                    && (found[i] == EMPTY
+                                        || !self.colors().visible(c, id, t, found[i]))
+                            } else {
+                                found[i] == EMPTY
+                            }
+                        })
+                        .collect();
+                    self.release(hashes);
+                    self.release(found);
+                    Some(selected)
+                } else {
+                    None
+                };
                 let delta = &mut self.writes.rows[*table as usize];
                 let mut columns = delta.columns.iter_mut();
                 if R::COLORED {
-                    columns
-                        .next()
-                        .expect("a color column")
-                        .extend(&batch.colors);
+                    let colors = columns.next().expect("a color column");
+                    match &selected {
+                        Some(selected) => colors.extend(selected.iter().map(|&i| batch.colors[i])),
+                        None => colors.extend(&batch.colors),
+                    }
                 }
                 for (column, &r) in columns.zip(args) {
-                    column.extend_from_slice(batch.col(r));
+                    match &selected {
+                        Some(selected) => column.extend(selected.iter().map(|&i| batch.col(r)[i])),
+                        None => column.extend_from_slice(batch.col(r)),
+                    }
                 }
-                delta.subsumed.resize(delta.subsumed.len() + n, false);
+                let added = selected.as_ref().map_or(n, Vec::len);
+                delta.subsumed.resize(delta.subsumed.len() + added, false);
             }
             Action::Union { a, b } => {
                 let pairs = batch.col(*a).iter().zip(batch.col(*b));
@@ -926,8 +979,19 @@ impl<'a, R: Reads<'a>> Exec<'a, R> {
                 ));
             }
             Action::Delete { table, args } => {
-                let keys = (0..n).map(|i| (*table as usize, batch.row(args, i)));
-                self.writes.removed.extend(keys);
+                let t = self.table(*table);
+                for i in 0..n {
+                    for key in t.orders(&batch.row(args, i)) {
+                        let hash = hash_row(&key);
+                        if let Some(row) = t.find(&key, hash) {
+                            self.writes.removed.push(Removal {
+                                table: self.program.tables[*table as usize],
+                                row,
+                                hash,
+                            });
+                        }
+                    }
+                }
             }
             Action::Subsume { table, args } => {
                 let keys = (0..n).map(|i| (*table as usize, batch.row(args, i)));
