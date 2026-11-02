@@ -360,3 +360,16 @@ fn subsumption_does_not_evaluate_the_function_merge() {
         assert!(db.rows(f).all(|row| row.is_subsumed()));
     }
 }
+
+#[test]
+fn equal_outputs_still_evaluate_function_merges() {
+    let mut db = Database::new();
+    let int = db.sort("i64").unwrap();
+    let g = db.add_function("g", &[int], int, Merge::AssertEq);
+    let f = db.add_function("f", &[int], int, Merge::Function(g, vec![Merge::Old]));
+    let (one, two, three) = (db.base(1_i64), db.base(2_i64), db.base(3_i64));
+    db.insert(g, &[two, three]).unwrap();
+    db.insert(f, &[one, two]).unwrap();
+    db.insert(f, &[one, two]).unwrap();
+    assert_eq!(db.lookup(f, &[one]), Some(three));
+}
