@@ -388,6 +388,7 @@ impl EGraph {
             info.residual.1 += rows;
         }
         let before = self.db.changes();
+        let mut bookkeeping = 0;
         let (num_nodes, mut iteration) = (Cell::new(None), IterationReport::default());
         let mut applied_any = false;
         for rule in &rules {
@@ -417,6 +418,7 @@ impl EGraph {
             if chosen.is_empty() {
                 continue;
             }
+            let version = self.db.tables[info.decided.index()].version();
             for (at, row) in chosen.iter().enumerate() {
                 let mut selected = Vec::with_capacity(row.len() + 1);
                 selected.push(self.db.base(at as i64));
@@ -435,6 +437,7 @@ impl EGraph {
                     return Err(error);
                 }
             };
+            bookkeeping += self.db.tables[info.decided.index()].version() - version;
             if self.report_level != ReportLevel::TimeOnly {
                 let report = RuleReport {
                     search_and_apply_time: applied.search_and_apply_time(),
@@ -455,7 +458,7 @@ impl EGraph {
             self.db.rebuild()?;
             iteration.rebuild_time = start.elapsed();
         }
-        iteration.rule_set_report.changed = self.db.changes() != before;
+        iteration.rule_set_report.changed = self.db.changes() != before + bookkeeping;
         let mut report = RunReport::of(ruleset, iteration, self.report_level);
         let names: Vec<&str> = rules.iter().map(|rule| rule.name.as_str()).collect();
         let ctx = SchedulerContext {
