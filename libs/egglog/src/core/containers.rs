@@ -3,6 +3,7 @@
 // Adapted from egglog 4b5686be, core-relations/src/containers/mod.rs. See libs/egglog/LICENSE-MIT.
 
 use std::any::{Any, TypeId};
+use std::cell::RefCell;
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
@@ -35,6 +36,14 @@ trait Env: Any + Send + Sync {
     fn len(&self) -> usize;
     fn retains_from(&self, mark: u32, end: u32) -> bool;
     fn truncate(&mut self, mark: u32);
+    fn contents(&self, id: Value) -> Vec<Value>;
+    fn adopt(
+        &mut self,
+        mark: u32,
+        selected: &HashSet<u32>,
+        kept: &HashMap<u32, u32>,
+        uf: &mut UnionFind,
+    );
     fn rebuild(&mut self, uf: &mut UnionFind, dirty: &mut Vec<u32>);
     fn holding(&self, ids: &HashSet<u32, FxBuildHasher>, out: &mut Vec<u32>);
     fn lookup_mapped(&self, id: Value, find: &dyn Fn(Value) -> Value) -> Option<Value>;
@@ -54,10 +63,14 @@ struct ContainerEnv<C> {
 
 impl<C: ContainerValue> ContainerEnv<C> {
     fn intern(&mut self, container: C, uf: &mut UnionFind) -> Value {
+        self.intern_with(container, || Value::new(uf.fresh()))
+    }
+
+    fn intern_with(&mut self, container: C, fresh: impl FnOnce() -> Value) -> Value {
         if let Some(&id) = self.ids.get(&container) {
             return id;
         }
-        let id = Value::new(uf.fresh());
+        let id = fresh();
         self.values.insert(id, container.clone());
         self.ids.insert(container, id);
         id
@@ -90,6 +103,45 @@ impl<C: ContainerValue> Env for ContainerEnv<C> {
     fn truncate(&mut self, mark: u32) {
         self.ids.retain(|_, id| id.raw() < mark);
         self.values.retain(|id, _| id.raw() < mark);
+    }
+
+    fn contents(&self, id: Value) -> Vec<Value> {
+        let Some(mut container) = self.values.get(&id).cloned() else {
+            return Vec::new();
+        };
+        let ids = RefCell::new(Vec::new());
+        // `iter` may also yield scalars whose raw values overlap e-class ids.
+        container.rebuild_contents(&|value| {
+            ids.borrow_mut().push(value);
+            value
+        });
+        ids.into_inner()
+    }
+
+    fn adopt(
+        &mut self,
+        mark: u32,
+        selected: &HashSet<u32>,
+        kept: &HashMap<u32, u32>,
+        uf: &mut UnionFind,
+    ) {
+        let retained: Vec<_> = self
+            .values
+            .iter()
+            .filter(|(id, _)| id.raw() >= mark && selected.contains(&id.raw()))
+            .filter_map(|(id, container)| {
+                kept.get(&id.raw())
+                    .map(|&new| (Value::new(new), container.clone()))
+            })
+            .collect();
+        self.truncate(mark);
+        for (id, mut container) in retained {
+            container.rebuild_contents(&|value| {
+                kept.get(&value.raw()).map_or(value, |&new| Value::new(new))
+            });
+            let interned = self.intern_with(container, || id);
+            uf.union(id.raw(), interned.raw());
+        }
     }
 
     fn lookup_mapped(&self, id: Value, find: &dyn Fn(Value) -> Value) -> Option<Value> {
@@ -248,11 +300,47 @@ impl ContainerValues {
         );
     }
 
-    pub(crate) fn truncate(&mut self, mark: u32) {
+    pub(crate) fn adopt(
+        &mut self,
+        mark: u32,
+        ids: &[u32],
+        find: &dyn Fn(Value, &UnionFind) -> Value,
+        uf: &mut UnionFind,
+    ) -> HashMap<u32, u32> {
+        let mut kept = HashMap::new();
+        let mut seen = HashSet::new();
+        let mut pending = ids.to_vec();
+        let mut next = mark;
+        let mut at = 0;
+        while at < pending.len() {
+            let old = pending[at];
+            at += 1;
+            let root = find(Value::new(old), uf).raw();
+            let new = if root < mark || !uf.contains(root) {
+                root
+            } else {
+                *kept.entry(root).or_insert_with(|| {
+                    let id = next;
+                    next += 1;
+                    id
+                })
+            };
+            kept.insert(old, new);
+            if seen.insert(root) {
+                for env in &self.envs {
+                    pending.extend(env.contents(Value::new(root)).into_iter().map(Value::raw));
+                }
+            }
+        }
+        uf.truncate(mark);
+        for _ in mark..next {
+            uf.fresh();
+        }
         for env in &mut self.envs {
-            env.truncate(mark);
+            env.adopt(mark, &seen, &kept, uf);
         }
         self.revision += 1;
+        kept
     }
 
     pub(crate) fn revision(&self) -> u64 {
