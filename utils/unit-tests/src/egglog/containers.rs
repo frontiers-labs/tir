@@ -593,10 +593,10 @@ fn colored_collections_read_local_contents_and_preserve_other_views() {
     let parent = db.color(&[]);
     let child = db.color(&[parent]);
     let sibling = db.color(&[]);
-    program.run(db, &Schedule::saturate("")).unwrap();
+    program.run(db, &Schedule::saturate(""), &[]).unwrap();
     db.union_in(parent, a, b);
     db.insert_in(parent, local, &[v, a]).unwrap();
-    program.run(db, &Schedule::saturate("")).unwrap();
+    program.run(db, &Schedule::saturate(""), &[]).unwrap();
     let read = |db: &tir_egglog::Database, c, table, key| {
         db.base_value::<i64>(db.lookup_in(c, table, &[key]).unwrap())
     };
@@ -620,18 +620,18 @@ fn colored_collections_read_local_contents_and_preserve_other_views() {
     db.rebuild().unwrap();
     assert_eq!(db.find_in(parent, late), db.find_in(parent, canonical));
     db.union_in(parent, a, z);
-    program.run(db, &Schedule::saturate("")).unwrap();
+    program.run(db, &Schedule::saturate(""), &[]).unwrap();
     assert_eq!(db.find_in(child, late), db.find_in(child, sa));
     assert_eq!(read(db, parent, isolated_length, isolated_set), 1);
     assert_eq!(read(db, child, isolated_length, isolated_set), 1);
     assert_eq!(read(db, parent, result, tail), 1);
     assert_eq!(read(db, child, forwarded, tail), 1);
-    let stable = program.run(db, &Schedule::saturate("")).unwrap();
+    let stable = program.run(db, &Schedule::saturate(""), &[]).unwrap();
     assert!(!stable.updated);
     assert_eq!(stable.num_matches_per_rule.values().sum::<usize>(), 0);
     assert_eq!(read(db, child, result, s), 1);
     db.union(a, b);
-    program.run(db, &Schedule::saturate("")).unwrap();
+    program.run(db, &Schedule::saturate(""), &[]).unwrap();
     assert_eq!(read(db, sibling, result, s), 1);
     assert_eq!(read(db, sibling, forwarded, s), 1);
     db.drop_color(parent);
@@ -713,7 +713,7 @@ fn higher_order_queries_reject_hidden_table_reads() {
         let result = if loaded {
             let bytes = eg.save_program();
             let mut program = tir_egglog::Program::from_bytes(&bytes, eg.database_mut()).unwrap();
-            program.run(eg.database_mut(), &tir_egglog::Schedule::run(""))
+            program.run(eg.database_mut(), &tir_egglog::Schedule::run(""), &[])
         } else {
             eg.step_rules("")
         };

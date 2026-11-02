@@ -106,13 +106,13 @@ fn a_loaded_program_runs_like_the_compiled_one() {
     let mut compiled = rules(&compiled_db).compile(&compiled_db).unwrap();
     let bytes = compiled.to_bytes();
     terms(&mut compiled_db);
-    compiled.run(&mut compiled_db, &schedule()).unwrap();
+    compiled.run(&mut compiled_db, &schedule(), &[]).unwrap();
 
     let mut loaded_db = schema();
     terms(&mut loaded_db);
     let mut loaded = Program::from_bytes(&bytes, &mut loaded_db).unwrap();
     assert_eq!(loaded.to_bytes(), bytes);
-    loaded.run(&mut loaded_db, &schedule()).unwrap();
+    loaded.run(&mut loaded_db, &schedule(), &[]).unwrap();
 
     assert_eq!(rows(&loaded_db), rows(&compiled_db));
     let folded = loaded_db.table("folded").unwrap();
@@ -263,7 +263,7 @@ fn constants_keep_their_meaning_across_databases() {
     let mut program = Program::from_bytes(&bytes, &mut db).unwrap();
     let one = db.base(1_i64);
     db.insert(db.table("item").unwrap(), &[one]).unwrap();
-    program.run(&mut db, &Schedule::run("read")).unwrap();
+    program.run(&mut db, &Schedule::run("read"), &[]).unwrap();
     let strings: Vec<String> = (db.rows(db.table("out").unwrap()))
         .map(|row| db.base_value(row[0]))
         .collect();
@@ -276,7 +276,7 @@ fn constants_keep_their_meaning_across_databases() {
         [big("123456789012345678901234567890")],
         "the default of wide"
     );
-    program.run(&mut db, &Schedule::run("write")).unwrap();
+    program.run(&mut db, &Schedule::run("write"), &[]).unwrap();
     let label = db.lookup(db.table("label").unwrap(), &[one]).unwrap();
     assert_eq!(
         db.base_value::<String>(label),
@@ -312,7 +312,7 @@ fn container_constants_load_by_their_elements() {
     let db = online.database_mut();
     db.base(1000_i64 << 40);
     let mut program = Program::from_bytes(&bytes, db).unwrap();
-    program.run(db, &Schedule::run("")).unwrap();
+    program.run(db, &Schedule::run(""), &[]).unwrap();
     let out: Vec<Vec<i64>> = (db.rows(db.table("out").unwrap()))
         .map(|row| {
             let vector = db
@@ -335,4 +335,36 @@ fn container_constants_load_by_their_elements() {
         rules.compile(&db),
         Err(tir_egglog::Error::Unsupported(_))
     ));
+}
+
+// A rule over rows that did not change matches them again when a run
+// argument it reads changed.
+#[test]
+fn a_changed_argument_matches_old_rows_again() {
+    let mut db = Database::new();
+    let int = db.sort("i64").unwrap();
+    let item = db.add_relation("item", &[int]);
+    let hit = db.add_relation("hit", &[int]);
+    let mut rules = Rules::new();
+    let arg = exprs::arg(0);
+    rules
+        .rule(
+            &db,
+            "",
+            facts![(item x) (= x (unquote arg))],
+            actions![(hit x)],
+        )
+        .unwrap();
+    let mut program = rules.compile(&db).unwrap();
+    for i in [1_i64, 2] {
+        let row = [db.base(i)];
+        db.insert(item, &row).unwrap();
+    }
+    for i in [1_i64, 2] {
+        let arg = db.base(i);
+        program.run(&mut db, &Schedule::run(""), &[arg]).unwrap();
+    }
+    let mut hits: Vec<i64> = db.rows(hit).map(|row| db.base_value(row[0])).collect();
+    hits.sort_unstable();
+    assert_eq!(hits, [1, 2]);
 }

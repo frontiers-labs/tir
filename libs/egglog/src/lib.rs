@@ -690,6 +690,10 @@ impl EGraph {
         match expr {
             Expr::Var(_, name) if name == "old" => Ok((Merge::Old, out)),
             Expr::Var(_, name) if name == "new" => Ok((Merge::New, out)),
+            Expr::Lit(_, Literal::Arg(_)) => Err(Error::Type(
+                span,
+                "a merge reads no run argument".to_owned(),
+            )),
             Expr::Lit(_, literal) => {
                 let (sort, value) = self.literal(literal);
                 Ok((Merge::Const(value), sort))
@@ -1054,7 +1058,7 @@ impl EGraph {
         *sink.lock().expect("a sink lock") = (0, Vec::new());
         rules
             .compile(&self.db)?
-            .run(&mut self.db, &Schedule::run("@query"))?;
+            .run(&mut self.db, &Schedule::run("@query"), &[])?;
         let (calls, values) = std::mem::take(&mut *sink.lock().expect("a sink lock"));
         if vars.is_empty() {
             return Ok(vec![Map::default(); calls.min(1)]);
@@ -1069,7 +1073,7 @@ impl EGraph {
         self.rules.plan_schedule(&self.db, schedule)?;
         self.plan()?;
         self.program.set_naive(!self.seminaive);
-        let report = self.program.run(&mut self.db, schedule)?;
+        let report = self.program.run(&mut self.db, schedule, &[])?;
         self.overall_run_report.union(report.clone());
         Ok(report)
     }

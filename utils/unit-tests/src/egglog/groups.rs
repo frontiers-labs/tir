@@ -148,7 +148,9 @@ fn a_rule_finds_the_op_it_made_so_saturation_stops() {
         .rule(&ir.db, "", facts![(= (Operands o 0) a)], leaf)
         .unwrap();
     let mut program = rules.compile(&ir.db).unwrap();
-    program.run(&mut ir.db, &Schedule::saturate("")).unwrap();
+    program
+        .run(&mut ir.db, &Schedule::saturate(""), &[])
+        .unwrap();
 
     assert_eq!(ir.ops(), 5);
     let swapped = ir.op(ADD, &[y, x]);
@@ -179,8 +181,12 @@ fn find_or_make_in_a_color_sees_base_rows_and_makes_rows_in_the_color() {
         .rule(&ir.db, "", facts![(= (Operands o 0) a)], leaf)
         .unwrap();
     let mut program = rules.compile(&ir.db).unwrap();
-    program.run(&mut ir.db, &Schedule::saturate("")).unwrap();
-    program.run(&mut ir.db, &Schedule::saturate("")).unwrap();
+    program
+        .run(&mut ir.db, &Schedule::saturate(""), &[])
+        .unwrap();
+    program
+        .run(&mut ir.db, &Schedule::saturate(""), &[])
+        .unwrap();
     assert_eq!(ir.ops(), 2);
     assert_eq!(ir.db.own_rows_in(color, ir.operation).count(), 2);
     let base_leaf = ir.op(LEAF, &[x]);
@@ -322,7 +328,7 @@ fn compiled_member_deletions_close_group_congruence() {
             )
             .unwrap();
         let mut program = rules.compile(&db).unwrap();
-        program.run(&mut db, &Schedule::run("")).unwrap();
+        program.run(&mut db, &Schedule::run(""), &[]).unwrap();
         assert_eq!(db.rows_in(color, member).count(), 0);
         assert!(db.lookup_in(color, keyed, &[a]).is_some());
         assert!(db.lookup_in(color, keyed, &[b]).is_some());
@@ -378,7 +384,7 @@ fn compiled_duplicate_members_find_existing_group() {
     let row = [db.base(5i64)];
     db.find_or_make(&[(member, &row)]).unwrap();
     let bounded = Schedule::Repeat(span!(), 3, Box::new(Schedule::run("")));
-    let report = program.run(&mut db, &bounded).unwrap();
+    let report = program.run(&mut db, &bounded, &[]).unwrap();
     assert!(
         !report.updated,
         "finding an existing set must not write a redundant group"
@@ -388,7 +394,9 @@ fn compiled_duplicate_members_find_existing_group() {
         1,
         "duplicate membership denotes the same set"
     );
-    program.run(&mut db, &Schedule::run("distinct")).unwrap();
+    program
+        .run(&mut db, &Schedule::run("distinct"), &[])
+        .unwrap();
     assert_eq!(
         db.rows(keyed).count(),
         2,
@@ -401,7 +409,7 @@ fn serialized_group_runs_in_fresh_database() {
     let (_, program) = group_program(false);
     let mut db = Database::new();
     let mut loaded = Program::from_bytes(&program.to_bytes(), &mut db).unwrap();
-    loaded.run(&mut db, &Schedule::run("")).unwrap();
+    loaded.run(&mut db, &Schedule::run(""), &[]).unwrap();
     let member = db.schema().table_named("Member").unwrap();
     let keyed = db.schema().table_named("Keyed").unwrap();
     let other = db.schema().table_named("OtherMember").unwrap();
@@ -491,7 +499,7 @@ fn compiled_duplicate_members_have_set_semantics_for_merge_effects() {
         )
         .unwrap();
     let mut program = rules.compile(&db).unwrap();
-    program.run(&mut db, &Schedule::run("")).unwrap();
+    program.run(&mut db, &Schedule::run(""), &[]).unwrap();
     assert_eq!(db.rows(keyed).count(), 2);
     let mut values: Vec<i64> = db
         .rows(member)

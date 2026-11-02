@@ -80,14 +80,20 @@ pub(crate) struct State {
 }
 
 impl State {
-    pub(crate) fn new(variant: usize, rule: &Rule, consts: &[Literal]) -> Self {
-        let reg = |constant: &Literal| consts.iter().position(|c| c == constant).map(|r| r as u32);
+    pub(crate) fn new(variant: usize, rule: &Rule, consts: &[(Literal, bool)]) -> Self {
+        let reg = |constant: &Literal, id: bool| {
+            consts
+                .iter()
+                .position(|(c, i)| c == constant && *i == id)
+                .map(|r| r as u32)
+        };
         Self {
             variant,
             regs: rule
                 .constants
                 .iter()
-                .map(|constant| constant.as_ref().and_then(reg))
+                .zip(&rule.id_constants)
+                .map(|(constant, &id)| constant.as_ref().and_then(|c| reg(c, id)))
                 .collect(),
             done: vec![false; rule.premise.len()],
             semi: vec![0; rule.premise.len()],

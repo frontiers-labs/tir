@@ -117,14 +117,16 @@ impl Typer<'_> {
         if let Some(&var) = self.literals.get(literal) {
             return var;
         }
+        // An argument takes the sort its uses give it.
         let sort = match literal {
-            Literal::Int(_) => "i64",
-            Literal::Float(_) => "f64",
-            Literal::String(_) => "String",
-            Literal::Bool(_) => "bool",
-            Literal::Unit => "Unit",
+            Literal::Int(_) => Some("i64"),
+            Literal::Float(_) => Some("f64"),
+            Literal::String(_) => Some("String"),
+            Literal::Bool(_) => Some("bool"),
+            Literal::Unit => Some("Unit"),
+            Literal::Arg(_) => None,
         };
-        let sort = self.schema.sort_named(sort);
+        let sort = sort.and_then(|sort| self.schema.sort_named(sort));
         let var = self.var(literal.to_string(), Some(literal.clone()), sort);
         self.literals.insert(literal.clone(), var);
         var
@@ -525,6 +527,14 @@ impl Typer<'_> {
             premise,
             actions,
             constants,
+            id_constants: (0..self.names.len() as Var)
+                .map(|v| {
+                    matches!(self.constants[find(v) as usize], Some(Literal::Arg(_)))
+                        && self
+                            .sort(v)
+                            .is_some_and(|sort| self.schema.sort(sort).kind().has_ids())
+                })
+                .collect(),
         }
     }
 }

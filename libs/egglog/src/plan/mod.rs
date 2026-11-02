@@ -22,12 +22,14 @@ use crate::{Error, ExternId, Merge, Schema, SortId, SortKind, TableId, Value, so
 // The rules of one ruleset, or of a part of one. A query keeps the rules
 // that have no actions, so their matches can be counted; a combined
 // ruleset has no rules and names its members; the rules of a `once` part
-// read no table, so they match on the first run only.
+// read no table, so they match on the first run only; those of a `colored`
+// one match in the colors only.
 pub(crate) struct Source<'a> {
     pub(crate) name: &'a str,
     pub(crate) relaxed: bool,
     pub(crate) query: bool,
     pub(crate) once: bool,
+    pub(crate) colored: bool,
     pub(crate) rules: Vec<&'a Rule>,
     pub(crate) members: &'a [String],
 }
@@ -95,12 +97,15 @@ pub(crate) fn compile(
         let variants: Vec<_> = (rules.iter().enumerate())
             .flat_map(|(i, rule)| seminaive::variants(i, rule, &syms, schema))
             .collect();
-        let mut consts: Vec<Literal> = Vec::new();
-        let literals = rules.iter().flat_map(|rule| &rule.constants);
-        for literal in literals.flatten() {
-            position(&mut consts, literal.clone());
+        let mut consts = Vec::new();
+        for rule in rules {
+            for (literal, &id) in rule.constants.iter().zip(&rule.id_constants) {
+                if let Some(literal) = literal {
+                    position(&mut consts, (literal.clone(), id));
+                }
+            }
         }
-        let unit = position(&mut consts, Literal::Unit);
+        let unit = position(&mut consts, (Literal::Unit, false));
         let states = (variants.iter().enumerate())
             .map(|(i, variant)| order::State::new(i, &rules[variant.rule], &consts))
             .collect();
@@ -118,9 +123,15 @@ pub(crate) fn compile(
             name: source.name.to_owned(),
             roots,
             rules: rules.iter().map(|rule| rule.name.clone()).collect(),
-            consts,
+            id_consts: consts
+                .iter()
+                .enumerate()
+                .filter_map(|(r, (_, id))| id.then_some(r as u32))
+                .collect(),
+            consts: consts.into_iter().map(|(literal, _)| literal).collect(),
             members: source.members.to_vec(),
             once: source.once,
+            colored: source.colored,
         });
     }
     // A table keeps its symmetries even when no rule is left to read it.

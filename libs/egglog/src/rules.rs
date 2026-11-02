@@ -33,6 +33,8 @@ struct Ruleset {
     query: bool,
     // The rulesets a combined ruleset runs together; it has no rules.
     members: Vec<String>,
+    // Whether the rules match in the colors only.
+    colored: bool,
     // Each rule with globals made explicit, and typed.
     rules: Vec<(Rule, hir::Rule)>,
 }
@@ -65,6 +67,13 @@ impl Rules {
 
     pub fn set_mode(&mut self, ruleset: &str, mode: Mode) {
         self.ruleset(ruleset).mode = mode;
+    }
+
+    /// Makes the rules of `ruleset` match in the colors only: what they
+    /// write goes with the color, and each new color runs them afresh, as
+    /// the seed of what a run derives there.
+    pub fn set_colored(&mut self, ruleset: &str) {
+        self.ruleset(ruleset).colored = true;
     }
 
     /// Adds the rule that runs `actions` for each match of `facts`.
@@ -199,25 +208,26 @@ impl Rules {
         for ruleset in &self.rulesets {
             let mut groups: Vec<(Group, Vec<&hir::Rule>)> = Vec::new();
             for (_, rule) in &ruleset.rules {
-                let reads = rule
-                    .premise
-                    .iter()
-                    .any(|atom| matches!(atom.target, Target::Table(_)));
-                let key = (last(&ruleset.name, &rule.name), !rule.naive && !reads);
+                let args = (rule.constants.iter()).any(|c| matches!(c, Some(Literal::Arg(_))));
+                let reads =
+                    (rule.premise.iter()).any(|atom| matches!(atom.target, Target::Table(_)));
+                let once = !rule.naive && !reads && !args && !ruleset.colored;
+                let key = (last(&ruleset.name, &rule.name), once, args);
                 match groups.iter_mut().find(|(k, _)| *k == key) {
                     Some((_, rules)) => rules.push(rule),
                     None => groups.push((key, vec![rule])),
                 }
             }
             if groups.is_empty() {
-                groups.push(((None, false), Vec::new()));
+                groups.push(((None, false, false), Vec::new()));
             }
-            for ((time, once), rules) in groups {
+            for ((time, once, _), rules) in groups {
                 sources.push(Source {
                     name: &ruleset.name,
                     relaxed: ruleset.mode == Mode::Relaxed,
                     query: ruleset.query,
                     once,
+                    colored: ruleset.colored,
                     rules,
                     members: &ruleset.members,
                 });
@@ -270,6 +280,7 @@ impl Rules {
                 mode: Mode::Strict,
                 query: false,
                 members: Vec::new(),
+                colored: false,
                 rules: Vec::new(),
             });
             self.rulesets.len() - 1
@@ -278,9 +289,10 @@ impl Rules {
     }
 }
 
-// When the rules of a part of a ruleset last ran, and whether they read no
-// table.
-type Group = (Option<u32>, bool);
+// When the rules of a part of a ruleset last ran, whether they read no table
+// and no run argument, and whether they read a run argument: those match
+// everything again when it changes, apart from the rest.
+type Group = (Option<u32>, bool, bool);
 
 // The rule with its globals made explicit, and its typed form.
 pub(crate) fn typed(db: &Database, rule: Rule) -> Result<(Rule, hir::Rule), Error> {

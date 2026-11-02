@@ -39,7 +39,7 @@ fn math_matches_egglog_for_steps_0_to_8() {
     let mut program = rules.compile(&db).unwrap();
     for (step, expected) in MATH_SIZES.iter().enumerate() {
         if step > 0 {
-            program.run(&mut db, &Schedule::run("")).unwrap();
+            program.run(&mut db, &Schedule::run(""), &[]).unwrap();
         }
         assert_eq!(sizes(&db, MATH), expected, "math after {step} steps");
     }
@@ -78,7 +78,7 @@ fn boolean_adder_matches_egglog_for_steps_0_to_8() {
     let mut program = rules.compile(&db).unwrap();
     for (step, expected) in ADDER_SIZES.iter().enumerate() {
         if step > 0 {
-            program.run(&mut db, &Schedule::run("")).unwrap();
+            program.run(&mut db, &Schedule::run(""), &[]).unwrap();
         }
         assert_eq!(
             sizes(&db, ADDER),
@@ -102,7 +102,7 @@ fn fuel_math_saturates_to_egglog_sizes() {
     for (fuel, sizes_at_fixpoint) in expected {
         let (mut db, rules) = math(Some(fuel));
         let mut program = rules.compile(&db).unwrap();
-        program.run(&mut db, &Schedule::saturate("")).unwrap();
+        program.run(&mut db, &Schedule::saturate(""), &[]).unwrap();
         assert_eq!(sizes(&db, FUEL), sizes_at_fixpoint, "fuel{fuel}_math");
     }
 }

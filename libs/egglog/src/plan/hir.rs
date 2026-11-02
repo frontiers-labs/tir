@@ -53,6 +53,7 @@ pub(crate) struct Rule {
     pub(crate) actions: Vec<Act>,
     // The value of each variable that is a constant.
     pub(crate) constants: Vec<Option<Literal>>,
+    pub(crate) id_constants: Vec<bool>,
 }
 
 impl Atom {
@@ -260,6 +261,11 @@ pub(crate) fn run_actions(
     rule: &Rule,
     ctx: &mut PrimCtx<'_>,
 ) -> Result<Option<(SortId, Value)>, Error> {
+    if (rule.constants.iter()).any(|c| matches!(c, Some(Literal::Arg(_)))) {
+        return Err(Error::Unsupported(
+            "a run argument outside a run".to_owned(),
+        ));
+    }
     let constants = rule.constants.iter();
     let mut vals: Vec<Option<Value>> = constants
         .map(|c| c.as_ref().map(|c| value(ctx.base_values(), c)))

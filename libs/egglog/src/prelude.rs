@@ -98,6 +98,11 @@ pub mod exprs {
         Expr::Lit(span!(), Literal::Bool(value))
     }
 
+    /// Creates the expression of the `n`th argument of a run.
+    pub fn arg(n: u32) -> Expr {
+        Expr::Lit(span!(), Literal::Arg(n))
+    }
+
     /// Creates a function call expression.
     pub fn call(f: &str, xs: Vec<Expr>) -> Expr {
         Expr::Call(span!(), f.to_owned(), xs)

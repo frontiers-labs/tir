@@ -109,7 +109,8 @@ fn dce_keeps_exactly_the_effects_and_what_they_read() {
     ir.db.insert(ir.effect, &[o5]).unwrap();
 
     let mut dce = Program::from_bytes(&bytes, &mut ir.db).unwrap();
-    dce.run(&mut ir.db, &Schedule::saturate("dce")).unwrap();
+    dce.run(&mut ir.db, &Schedule::saturate("dce"), &[])
+        .unwrap();
     let live = ir.db.table("live").unwrap();
     let live: BTreeSet<Value> = ir.db.rows(live).map(|row| row[0]).collect();
     assert_eq!(live, BTreeSet::from([o4, o5]));
@@ -208,7 +209,7 @@ fn instcombine_folds_the_offsets_of_two_adds() {
 
     let mut ic = Program::from_bytes(&bytes, &mut ir.db).unwrap();
     let schedule = Schedule::seq([Schedule::run("seed"), Schedule::saturate("fold")]);
-    ic.run(&mut ir.db, &schedule).unwrap();
+    ic.run(&mut ir.db, &schedule, &[]).unwrap();
 
     let db = &mut ir.db;
     let table = |db: &Database, name: &str| db.table(name).unwrap();

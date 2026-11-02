@@ -310,7 +310,7 @@ fn extraction_attributes_and_defaults_survive_a_program_file() -> Result<(), Err
     assert_eq!(schema(&fresh, "f").default_value(), Some(seven));
     let one = fresh.base(1_i64);
     fresh.insert(fresh.table("item")?, &[one])?;
-    program.run(&mut fresh, &tir_egglog::Schedule::run(""))?;
+    program.run(&mut fresh, &tir_egglog::Schedule::run(""), &[])?;
     let rows: Vec<Value> = fresh.rows(fresh.table("seen")?).map(|row| row[0]).collect();
     assert_eq!(
         rows,

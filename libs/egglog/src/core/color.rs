@@ -497,37 +497,10 @@ impl Database {
                 self.tables[t].refresh_index(at);
                 holding(&self.tables[t], at, &[&members[..]], &mut hidden);
             }
-            let removed = Colors::rows_of(&mut self.colors.removed[t], c, 0);
-            let rows = Colors::rows_of(&mut self.colors.rows[t], c, 0);
-            let table = &mut self.tables[t];
-            let keys = table.schema.keys;
-            hidden.extend(removed.iter().chain(&rows).filter_map(|(cells, _)| {
-                let key = &cells[1..=keys];
-                table.find(key, hash_row(key))
-            }));
-            hidden.sort_unstable();
-            hidden.dedup();
-            for row in hidden {
-                if let Some(Some(group)) = self.group_of_table.get(t) {
-                    self.written_groups.push((*group, table.cell(row, 0)));
-                }
-                Colors::remove(table, row);
-            }
-            table.maybe_compact();
-            own.push(rows);
+            own.push(self.hide_shown(c, t, hidden));
         }
         for (t, rows) in own.into_iter().enumerate() {
-            let keys = self.tables[t].schema.keys;
-            for (cells, subsumed) in rows {
-                let row = &cells[1..];
-                let hash = hash_row(&row[..keys]);
-                // An order of a symmetric row an earlier one wrote.
-                if self.tables[t].find(&row[..keys], hash).is_some() {
-                    continue;
-                }
-                (self.apply_row(TableId::new(t), row, hash, subsumed, None))
-                    .expect("a new key merges with nothing");
-            }
+            self.write_own(t, rows);
         }
         let unions = (entries.iter()).map(|(entry, _)| (entry[1], entry[2]));
         let waiting = (self.colors.unions.iter()).filter(|&&(u, ..)| u == c);
@@ -539,6 +512,132 @@ impl Database {
         while let Some(color) = below.pop() {
             below.extend_from_slice(self.colors.parents(color.0));
             self.drop_color(color);
+        }
+    }
+
+    /// Make the base show what `color` shows of `tables`: the rows it holds
+    /// of them go to the base, and the base rows it hides or removed go.
+    /// Its unions and other rows go with it, as `color` and every color above
+    /// it are dropped. Of the ids made since [`Database::mark`] `mark`, the
+    /// ones those rows hold stay, numbered from `mark` on in the order they
+    /// are first held, and the next fresh ids follow them. The base must
+    /// hold none of them.
+    ///
+    /// # Panics
+    ///
+    /// If `color` is the base, another color holds an id made after `mark`,
+    /// or a retained container holds one of those ids.
+    pub fn adopt_rows(&mut self, color: Color, tables: &[TableId], mark: u32) {
+        assert_ne!(color, Color::BASE, "the base is no color to adopt");
+        self.containers.check_truncate(mark, self.uf.len());
+
+        assert!(
+            self.colors
+                .rows
+                .iter()
+                .chain(&self.colors.removed)
+                .chain([&self.colors.classes])
+                .all(|table| {
+                    (0..table.len() as u32).all(|row| {
+                        !table.is_live(row)
+                            || table.cell(row, 0) == color.0
+                            || table
+                                .schema
+                                .ids
+                                .iter()
+                                .all(|&column| table.cell(row, column) < mark)
+                    })
+                })
+                && self
+                    .colors
+                    .unions
+                    .iter()
+                    .all(|&(c, a, b)| c == color.0 || (a < mark && b < mark)),
+            "another color holds an id made after the mark"
+        );
+        self.colors.ensure(&self.tables);
+        let entries = Colors::rows_of(&mut self.colors.classes, color.0, 0);
+        let members: Vec<u32> = entries.iter().map(|(entry, _)| entry[1]).collect();
+        let mut own: Vec<_> = (tables.iter())
+            .map(|table| {
+                let t = table.index();
+                let mut hidden = Vec::new();
+                for column in self.tables[t].schema.ids.clone() {
+                    let at = self.tables[t].add_index(&[column]);
+                    self.tables[t].refresh_index(at);
+                    holding(&self.tables[t], at, &[&members[..]], &mut hidden);
+                }
+                (t, self.hide_shown(color.0, t, hidden))
+            })
+            .collect();
+        debug_assert!(
+            self.tables.iter().all(|table| table.holds_none_from(mark)),
+            "a base row holds an id made after the mark"
+        );
+        let mut ids = Vec::new();
+        for (t, rows) in &own {
+            for (cells, _) in rows {
+                ids.extend(self.tables[*t].schema.ids.iter().map(|&c| cells[c + 1]));
+            }
+        }
+        let kept = self.containers.adopt(
+            mark,
+            &ids,
+            &|value, uf| Value::new(self.colors.root(color.0, uf.find(value.raw()))),
+            &mut self.uf,
+        );
+        self.drop_color(color);
+        for (t, rows) in &mut own {
+            let ids = &self.tables[*t].schema.ids;
+            for (cells, _) in rows.iter_mut() {
+                for &column in ids {
+                    let cell = &mut cells[column + 1];
+                    *cell = kept[cell];
+                }
+            }
+        }
+        for (t, rows) in own {
+            self.write_own(t, rows);
+        }
+    }
+
+    // Takes out of table `t` of the base the rows of `hidden` and those
+    // whose key color `c` removed or holds a row of; answers the rows `c`
+    // holds.
+    fn hide_shown(&mut self, c: u32, t: usize, mut hidden: Vec<u32>) -> Vec<(Vec<u32>, bool)> {
+        let removed = Colors::rows_of(&mut self.colors.removed[t], c, 0);
+        let rows = Colors::rows_of(&mut self.colors.rows[t], c, 0);
+        let table = &mut self.tables[t];
+        let keys = table.schema.keys;
+        hidden.extend(removed.iter().chain(&rows).filter_map(|(cells, _)| {
+            let key = &cells[1..=keys];
+            table.find(key, hash_row(key))
+        }));
+        hidden.sort_unstable();
+        hidden.dedup();
+        for row in hidden {
+            if let Some(Some(group)) = self.group_of_table.get(t) {
+                self.written_groups.push((*group, table.cell(row, 0)));
+            }
+            Colors::remove(table, row);
+        }
+        table.maybe_compact();
+        rows
+    }
+
+    // Writes the rows a color held of table `t`, the color first, to the
+    // base.
+    fn write_own(&mut self, t: usize, rows: Vec<(Vec<u32>, bool)>) {
+        let keys = self.tables[t].schema.keys;
+        for (cells, subsumed) in rows {
+            let row = &cells[1..];
+            let hash = hash_row(&row[..keys]);
+            // An order of a symmetric row an earlier one wrote.
+            if self.tables[t].find(&row[..keys], hash).is_some() {
+                continue;
+            }
+            (self.apply_row(TableId::new(t), row, hash, subsumed, None))
+                .expect("a new key merges with nothing");
         }
     }
 
@@ -555,22 +654,9 @@ impl Database {
             })
     }
 
-    /// A mark of the ids made so far, to [`Database::rollback`] to.
+    /// A mark of the ids made so far, for [`Database::adopt_rows`].
     pub fn mark(&self) -> u32 {
         self.uf.len()
-    }
-
-    /// Forget every id made since `mark`, so the next fresh ids reuse them.
-    /// A color that ran rules and was dropped since leaves none behind; the
-    /// base must hold none either.
-    pub fn rollback(&mut self, mark: u32) {
-        self.containers.check_truncate(mark, self.uf.len());
-        debug_assert!(
-            self.tables.iter().all(|table| table.holds_none_from(mark)),
-            "a base row holds an id made after the mark"
-        );
-        self.containers.truncate(mark);
-        self.uf.truncate(mark);
     }
 
     /// Unite `a` and `b` in `color`. Rows become canonical in the color at the

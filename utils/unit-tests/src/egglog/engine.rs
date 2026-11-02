@@ -860,7 +860,7 @@ fn until_plans_into_a_program() -> Result<(), Error> {
     db.insert(step, &[zero])?;
     tir_egglog::Program::from_bytes(&bytes, db)
         .unwrap()
-        .run(db, &schedule)?;
+        .run(db, &schedule, &[])?;
     assert_eq!(db.rows(step).count(), 6);
     Ok(())
 }
@@ -1051,7 +1051,7 @@ fn repeated_sets_preserve_non_idempotent_merges() {
             .rule(&db, "write", facts![(= x (f 1))], actions)
             .unwrap();
         let mut program = rules.compile(&db).unwrap();
-        program.run(&mut db, &Schedule::run("write")).unwrap();
+        program.run(&mut db, &Schedule::run("write"), &[]).unwrap();
         assert_eq!(
             db.base_value::<i64>(db.lookup(f, &[one]).unwrap()),
             expected
@@ -1099,7 +1099,7 @@ fn deferred_relation_entries_keep_snapshot_eligibility() {
                     std::mem::swap(&mut first, &mut second);
                 }
                 let mut program = deferred_program(&db, facts![(R x)], first, second, separate);
-                program.run(&mut db, &Schedule::run("run")).unwrap();
+                program.run(&mut db, &Schedule::run("run"), &[]).unwrap();
                 assert_eq!(
                     db.rows(target).count(),
                     usize::from(!present),
@@ -1156,7 +1156,7 @@ fn deferred_function_sets_replace_deleted_rows() {
                         }
                         let mut program =
                             deferred_program(&db, facts![(R x)], first, second, separate);
-                        program.run(&mut db, &Schedule::run("run")).unwrap();
+                        program.run(&mut db, &Schedule::run("run"), &[]).unwrap();
                         assert_eq!(
                             db.lookup(target, &[one]).map(|v| db.base_value::<i64>(v)),
                             Some(new),
@@ -1184,7 +1184,7 @@ fn deferred_sets_bound_by_the_premise_survive_deletion() {
             actions![(set (f x) y)],
             separate,
         );
-        program.run(&mut db, &Schedule::run("run")).unwrap();
+        program.run(&mut db, &Schedule::run("run"), &[]).unwrap();
         assert_eq!(db.lookup(f, &[one]), Some(seven));
     }
 }
@@ -1211,7 +1211,7 @@ fn deferred_deletion_targets_precede_unions() {
                 actions![(delete (f a))]
             };
             let mut program = deferred_program(&db, facts![(R a b)], first, second, true);
-            program.run(&mut db, &Schedule::run("run")).unwrap();
+            program.run(&mut db, &Schedule::run("run"), &[]).unwrap();
             let expected = if set_b {
                 Some(42)
             } else if delete_b {
@@ -1274,7 +1274,7 @@ fn seminaive_variants_keep_each_matches_effects() {
     for (n, expected) in [(1_i64, 1), (2, 4), (2, 4)] {
         let n = db.base(n);
         db.insert(input, &[n]).unwrap();
-        program.run(&mut db, &Schedule::run("run")).unwrap();
+        program.run(&mut db, &Schedule::run("run"), &[]).unwrap();
         assert_eq!(
             db.lookup(count, &[]).map(|v| db.base_value::<i64>(v)),
             Some(expected)
@@ -1307,7 +1307,7 @@ fn deferred_function_reads_keep_the_committed_snapshot() {
             )
             .unwrap();
         let mut program = rules.compile(&db).unwrap();
-        let result = program.run(&mut db, &Schedule::run("run"));
+        let result = program.run(&mut db, &Schedule::run("run"), &[]);
         assert_eq!(result.is_ok(), old.is_some());
         assert_eq!(
             db.lookup(f, &[one]).map(|v| db.base_value::<i64>(v)),
@@ -1339,7 +1339,7 @@ fn deferred_constructor_entries_share_only_missing_keys() {
             actions![(C 1)],
             false,
         );
-        program.run(&mut db, &Schedule::run("run")).unwrap();
+        program.run(&mut db, &Schedule::run("run"), &[]).unwrap();
         assert_eq!(db.rows(constructor).count(), usize::from(!present));
     }
 }
@@ -1365,7 +1365,7 @@ fn deferred_deletion_removes_each_symmetric_row_once() {
         )
         .unwrap();
     let mut program = rules.compile(&db).unwrap();
-    program.run(&mut db, &Schedule::run("run")).unwrap();
+    program.run(&mut db, &Schedule::run("run"), &[]).unwrap();
     assert_eq!(db.rows(target).count(), 0);
 }
 
@@ -1396,7 +1396,7 @@ fn colored_deferred_deletions_preserve_snapshot_writes() {
                     std::mem::swap(&mut first, &mut second);
                 }
                 let mut program = deferred_program(&db, facts![(R x)], first, second, separate);
-                program.run(&mut db, &Schedule::run("run")).unwrap();
+                program.run(&mut db, &Schedule::run("run"), &[]).unwrap();
                 assert!(db.lookup_in(c, target, &[zero]).is_none());
                 assert!(db.lookup_in(c, target, &[one]).is_some());
                 for x in [zero, one] {
@@ -1438,7 +1438,7 @@ fn colored_relation_eligibility_keeps_selected_colors_aligned() {
         actions![(delete (D x))],
         true,
     );
-    program.run(&mut db, &Schedule::run("run")).unwrap();
+    program.run(&mut db, &Schedule::run("run"), &[]).unwrap();
     for (i, c) in colors.into_iter().enumerate() {
         let absent = if i == 1 { zero } else { one };
         let present = if i == 1 { one } else { zero };
@@ -1473,7 +1473,7 @@ fn colored_deletion_targets_do_not_follow_queued_unions() {
                 actions![(delete (f a))]
             };
             let mut program = deferred_program(&db, facts![(R a b)], first, second, true);
-            program.run(&mut db, &Schedule::run("run")).unwrap();
+            program.run(&mut db, &Schedule::run("run"), &[]).unwrap();
             let expected = if set_b {
                 Some(42)
             } else if delete_b {
