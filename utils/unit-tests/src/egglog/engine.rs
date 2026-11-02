@@ -1058,3 +1058,313 @@ fn repeated_sets_preserve_non_idempotent_merges() {
         );
     }
 }
+
+fn deferred_program(
+    db: &Database,
+    facts: Facts,
+    mut first: Actions,
+    second: Actions,
+    separate: bool,
+) -> tir_egglog::Program {
+    let mut rules = Rules::new();
+    if separate {
+        rules.rule(db, "first", facts.clone(), first).unwrap();
+        rules.rule(db, "second", facts, second).unwrap();
+        rules
+            .add_combined_ruleset("run", &["first".into(), "second".into()])
+            .unwrap();
+    } else {
+        first.0.extend(second.0);
+        rules.rule(db, "run", facts, first).unwrap();
+    }
+    rules.compile(db).unwrap()
+}
+
+#[test]
+fn deferred_relation_entries_keep_snapshot_eligibility() {
+    for present in [false, true] {
+        for reverse in [false, true] {
+            for separate in [false, true] {
+                let mut db = Database::new();
+                let int = db.sort("i64").unwrap();
+                let input = db.add_relation("R", &[int]);
+                let target = db.add_relation("D", &[int]);
+                let one = db.base(1_i64);
+                db.insert(input, &[one]).unwrap();
+                if present {
+                    db.insert(target, &[one]).unwrap();
+                }
+                let (mut first, mut second) = (actions![(delete (D x))], actions![(D x)]);
+                if reverse {
+                    std::mem::swap(&mut first, &mut second);
+                }
+                let mut program = deferred_program(&db, facts![(R x)], first, second, separate);
+                program.run(&mut db, &Schedule::run("run")).unwrap();
+                assert_eq!(
+                    db.rows(target).count(),
+                    usize::from(!present),
+                    "present={present} reverse={reverse} separate={separate}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn deferred_function_sets_replace_deleted_rows() {
+    for merge_kind in 0..3 {
+        for old in [None, Some(7_i64)] {
+            for new in [1_i64, 7] {
+                for reverse in [false, true] {
+                    for separate in [false, true] {
+                        let mut db = Database::new();
+                        let int = db.sort("i64").unwrap();
+                        let input = db.add_relation("R", &[int]);
+                        let add = db.add_primitive(
+                            "add",
+                            tir_egglog::Signature {
+                                inputs: vec![int, int],
+                                output: int,
+                            },
+                            |ctx, args| {
+                                let sum =
+                                    ctx.base_value::<i64>(args[0]) + ctx.base_value::<i64>(args[1]);
+                                Some(ctx.base(sum))
+                            },
+                        );
+                        let merge = match merge_kind {
+                            0 => tir_egglog::Merge::New,
+                            1 => tir_egglog::Merge::AssertEq,
+                            _ => tir_egglog::Merge::Prim(
+                                add,
+                                vec![tir_egglog::Merge::Old, tir_egglog::Merge::New],
+                            ),
+                        };
+                        let target = db.add_function("f", &[int], int, merge);
+                        let one = db.base(1_i64);
+                        db.insert(input, &[one]).unwrap();
+                        if let Some(old) = old {
+                            let old = db.base(old);
+                            db.insert(target, &[one, old]).unwrap();
+                        }
+                        let (mut first, mut second) = (
+                            actions![(delete (f x))],
+                            actions![(set (f x) (unquote exprs::int(new)))],
+                        );
+                        if reverse {
+                            std::mem::swap(&mut first, &mut second);
+                        }
+                        let mut program =
+                            deferred_program(&db, facts![(R x)], first, second, separate);
+                        program.run(&mut db, &Schedule::run("run")).unwrap();
+                        assert_eq!(
+                            db.lookup(target, &[one]).map(|v| db.base_value::<i64>(v)),
+                            Some(new),
+                            "merge={merge_kind} old={old:?} reverse={reverse} separate={separate}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn deferred_sets_bound_by_the_premise_survive_deletion() {
+    for separate in [false, true] {
+        let mut db = Database::new();
+        let int = db.sort("i64").unwrap();
+        let f = db.add_function("f", &[int], int, tir_egglog::Merge::New);
+        let (one, seven) = (db.base(1_i64), db.base(7_i64));
+        db.insert(f, &[one, seven]).unwrap();
+        let mut program = deferred_program(
+            &db,
+            facts![(= y (f x))],
+            actions![(delete (f x))],
+            actions![(set (f x) y)],
+            separate,
+        );
+        program.run(&mut db, &Schedule::run("run")).unwrap();
+        assert_eq!(db.lookup(f, &[one]), Some(seven));
+    }
+}
+
+#[test]
+fn deferred_deletion_targets_precede_unions() {
+    for delete_b in [false, true] {
+        for set_b in [false, true] {
+            let mut db = Database::new();
+            let k = db.add_sort("K", tir_egglog::SortKind::Eq);
+            let int = db.sort("i64").unwrap();
+            let input = db.add_relation("R", &[k, k]);
+            let f = db.add_function("f", &[k], int, tir_egglog::Merge::New);
+            let (a, b, seven) = (db.fresh(k), db.fresh(k), db.base(7_i64));
+            db.insert(input, &[a, b]).unwrap();
+            db.insert(f, &[a, seven]).unwrap();
+            let mut first = actions![(union a b)];
+            if set_b {
+                first.0.extend(actions![(set (f b) 42)].0);
+            }
+            let second = if delete_b {
+                actions![(delete (f b))]
+            } else {
+                actions![(delete (f a))]
+            };
+            let mut program = deferred_program(&db, facts![(R a b)], first, second, true);
+            program.run(&mut db, &Schedule::run("run")).unwrap();
+            let expected = if set_b {
+                Some(42)
+            } else if delete_b {
+                Some(7)
+            } else {
+                None
+            };
+            assert_eq!(
+                db.lookup(f, &[a]).map(|v| db.base_value::<i64>(v)),
+                expected
+            );
+        }
+    }
+}
+
+#[test]
+fn seminaive_variants_keep_each_matches_effects() {
+    let mut db = Database::new();
+    let int = db.sort("i64").unwrap();
+    let unit = db.sort("Unit").unwrap();
+    let input = db.add_relation("R", &[int]);
+    let calls = Arc::new(AtomicUsize::new(0));
+    let seen = Arc::clone(&calls);
+    db.add_primitive(
+        "tick",
+        tir_egglog::Signature {
+            inputs: vec![],
+            output: unit,
+        },
+        move |ctx, _| {
+            seen.fetch_add(1, Ordering::SeqCst);
+            Some(ctx.base(()))
+        },
+    );
+    let add = db.add_primitive(
+        "add",
+        tir_egglog::Signature {
+            inputs: vec![int, int],
+            output: int,
+        },
+        |ctx, args| {
+            let sum = ctx.base_value::<i64>(args[0]) + ctx.base_value::<i64>(args[1]);
+            Some(ctx.base(sum))
+        },
+    );
+    let count = db.add_function(
+        "count",
+        &[],
+        int,
+        tir_egglog::Merge::Prim(add, vec![tir_egglog::Merge::Old, tir_egglog::Merge::New]),
+    );
+    let mut rules = Rules::new();
+    rules
+        .rule(&db, "run", facts![(R x) (R y)], actions![(set (count) 1)])
+        .unwrap();
+    rules
+        .rule(&db, "run", facts![(R x) (R y)], actions![(tick)])
+        .unwrap();
+    let mut program = rules.compile(&db).unwrap();
+    for (n, expected) in [(1_i64, 1), (2, 4), (2, 4)] {
+        let n = db.base(n);
+        db.insert(input, &[n]).unwrap();
+        program.run(&mut db, &Schedule::run("run")).unwrap();
+        assert_eq!(
+            db.lookup(count, &[]).map(|v| db.base_value::<i64>(v)),
+            Some(expected)
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), expected as usize);
+    }
+}
+
+#[test]
+fn deferred_function_reads_keep_the_committed_snapshot() {
+    for old in [None, Some(7_i64)] {
+        let mut db = Database::new();
+        let int = db.sort("i64").unwrap();
+        let input = db.add_relation("R", &[int]);
+        let output = db.add_relation("Out", &[int]);
+        let f = db.add_function("f", &[int], int, tir_egglog::Merge::New);
+        let one = db.base(1_i64);
+        db.insert(input, &[one]).unwrap();
+        if let Some(old) = old {
+            let old = db.base(old);
+            db.insert(f, &[one, old]).unwrap();
+        }
+        let mut rules = Rules::new();
+        rules
+            .rule(
+                &db,
+                "run",
+                facts![(R x)],
+                actions![(set (f x) 42) (Out (f x))],
+            )
+            .unwrap();
+        let mut program = rules.compile(&db).unwrap();
+        let result = program.run(&mut db, &Schedule::run("run"));
+        assert_eq!(result.is_ok(), old.is_some());
+        assert_eq!(
+            db.lookup(f, &[one]).map(|v| db.base_value::<i64>(v)),
+            Some(42)
+        );
+        let values: Vec<i64> = db.rows(output).map(|r| db.base_value(r[0])).collect();
+        assert_eq!(values, old.into_iter().collect::<Vec<_>>());
+    }
+}
+
+#[test]
+fn deferred_constructor_entries_share_only_missing_keys() {
+    for present in [false, true] {
+        let mut db = Database::new();
+        let int = db.sort("i64").unwrap();
+        let k = db.add_sort("K", tir_egglog::SortKind::Eq);
+        let input = db.add_relation("R", &[int]);
+        let constructor = db.add_constructor("C", &[int], k);
+        let (one, two) = (db.base(1_i64), db.base(2_i64));
+        db.insert(input, &[one]).unwrap();
+        db.insert(input, &[two]).unwrap();
+        if present {
+            db.entry(constructor, &[one]).unwrap();
+        }
+        let mut program = deferred_program(
+            &db,
+            facts![(R x)],
+            actions![(delete (C 1))],
+            actions![(C 1)],
+            false,
+        );
+        program.run(&mut db, &Schedule::run("run")).unwrap();
+        assert_eq!(db.rows(constructor).count(), usize::from(!present));
+    }
+}
+
+#[test]
+fn deferred_deletion_removes_each_symmetric_row_once() {
+    let mut db = Database::new();
+    let int = db.sort("i64").unwrap();
+    let target = db.add_relation("D", &[int, int]);
+    let (one, two) = (db.base(1_i64), db.base(2_i64));
+    db.insert(target, &[one, two]).unwrap();
+    let mut rules = Rules::new();
+    rules
+        .rule(&db, "sym", facts![(D x y)], actions![(D y x)])
+        .unwrap();
+    rules.set_mode("sym", tir_egglog::Mode::Relaxed);
+    rules
+        .rule(
+            &db,
+            "run",
+            facts![(D x y)],
+            actions![(delete (D x y)) (delete (D y x))],
+        )
+        .unwrap();
+    let mut program = rules.compile(&db).unwrap();
+    program.run(&mut db, &Schedule::run("run")).unwrap();
+    assert_eq!(db.rows(target).count(), 0);
+}

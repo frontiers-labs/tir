@@ -296,9 +296,7 @@ impl Program {
             }
         }
         let searched = Instant::now();
-        for found in writes {
-            found.apply(db, &self.tables)?;
-        }
+        exec::Writes::apply(writes, db, &self.tables)?;
         let applied = Instant::now();
         if rebuild {
             db.rebuild()?;
