@@ -521,7 +521,13 @@ impl<'a, R: Reads<'a>> Exec<'a, R> {
                 sel.extend((0..n as u32).filter(|&i| !ranges[i as usize].is_empty()));
             }
             Step::Same { a, b } => select_same(&input.col(*a)[..n], &input.col(*b)[..n], &mut sel),
-            Step::Prim { prim, args, out } => {
+            Step::Prim {
+                prim,
+                context,
+                args,
+                out,
+            } => {
+                self.ctx.context = *context;
                 let prim = program.externs[*prim as usize];
                 if R::COLORED {
                     check_pure(&self.ctx, prim)?;
@@ -997,7 +1003,12 @@ impl<'a, R: Reads<'a>> Exec<'a, R> {
                 let keys = (0..n).map(|i| (*table as usize, batch.row(args, i)));
                 self.writes.subsumed.extend(keys);
             }
-            Action::Call { prim, args } => {
+            Action::Call {
+                prim,
+                context,
+                args,
+            } => {
+                self.ctx.context = *context;
                 let prim = self.program.externs[*prim as usize];
                 if R::COLORED {
                     check_pure(&self.ctx, prim)?;

@@ -60,6 +60,7 @@ pub(crate) enum Step {
     // Drops the bindings the primitive has no result for.
     Prim {
         prim: u32,
+        context: crate::Context,
         args: Vec<Reg>,
         out: Bind,
     },
@@ -95,6 +96,7 @@ pub(crate) enum Action {
     // Calls a primitive for its effect.
     Call {
         prim: u32,
+        context: crate::Context,
         args: Vec<Reg>,
     },
     Panic {
