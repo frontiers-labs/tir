@@ -171,9 +171,12 @@ impl Database {
                 old = self.uf.find(old);
             }
             let (old, new) = (Value::new(old), Value::new(row[keys]));
-            // A merge by a primitive or to a constant may change equal
-            // outputs, as `(+ old new)` does; the others keep them.
-            let eager = matches!(table.schema.merge, Some(Merge::Prim(..) | Merge::Const(_)));
+            // Custom merges may change equal outputs; equality alone does not
+            // make an explicit function write redundant.
+            let eager = matches!(
+                table.schema.merge,
+                Some(Merge::Prim(..) | Merge::Const(_) | Merge::Function(..))
+            );
             Some(if old == new && !eager {
                 old
             } else {
