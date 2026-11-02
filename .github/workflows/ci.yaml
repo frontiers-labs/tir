@@ -3,7 +3,7 @@ name: CI
 on:
   merge_group:
   pull_request:
-    branches: ["master"]
+    branches: ["master", "egglog/**"]
   # Master is the one cache scope GitHub shares with every branch, so the push
   # run is what keeps the caches below current.
   push:
