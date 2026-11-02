@@ -466,6 +466,7 @@ impl Database {
             predicted: &mut self.predicted,
             stop: Cell::new(false),
             panicked: Cell::new(false),
+            context: Context::Full,
         };
         (ctx, &self.indexes)
     }
@@ -526,6 +527,7 @@ pub struct PrimCtx<'a> {
     // Set to end the search early; with `panicked`, the search fails.
     pub(crate) stop: Cell<bool>,
     pub(crate) panicked: Cell<bool>,
+    pub(crate) context: Context,
 }
 
 impl PrimCtx<'_> {
@@ -598,7 +600,12 @@ impl PrimCtx<'_> {
 
     pub fn call(&mut self, prim: ExternId, args: &[Value]) -> Option<Value> {
         let prims = self.prims;
-        (prims[prim.index()].f)(self, args)
+        if !prims[prim.index()].contexts.contains(&self.context) {
+            self.panic();
+            return None;
+        }
+        let value = (prims[prim.index()].f)(self, args);
+        if self.panicked.get() { None } else { value }
     }
 
     /// The primitive overloads of this name.

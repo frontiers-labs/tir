@@ -14,7 +14,7 @@ use crate::ast::Literal;
 use crate::{Database, ExternId, F64, Merge, Shape, SortId, SortKind, TableId, TableKind, Value};
 
 const MAGIC: [u8; 4] = *b"TEGG";
-const VERSION: u32 = 3;
+const VERSION: u32 = 12;
 // Merges nest at most this deep, so decoding one cannot exhaust the stack.
 const MERGE_DEPTH: u32 = 64;
 
@@ -296,8 +296,13 @@ impl Writer {
                 self.words(key);
             }
             Step::Same { a, b } => self.fixed(&[4, *a, *b]),
-            Step::Prim { prim, args, out } => {
-                self.fixed(&[5, *prim, 0]);
+            Step::Prim {
+                prim,
+                context,
+                args,
+                out,
+            } => {
+                self.fixed(&[5, *prim, *context as u32]);
                 self.words(args);
                 self.bind(*out);
             }
@@ -314,7 +319,14 @@ impl Writer {
             Action::Union { a, b } => self.fixed(&[2, *a, *b]),
             Action::Delete { table, args } => self.tagged(3, *table, args),
             Action::Subsume { table, args } => self.tagged(4, *table, args),
-            Action::Call { prim, args } => self.tagged(5, *prim, args),
+            Action::Call {
+                prim,
+                context,
+                args,
+            } => {
+                self.fixed(&[5, *prim, *context as u32]);
+                self.words(args);
+            }
             Action::Panic { message } => {
                 self.fixed(&[6, 0, 0]);
                 self.string(message);
@@ -548,11 +560,15 @@ impl Reader<'_> {
                 b: self.word()?,
             },
             5 => {
-                self.word()?;
+                let context = crate::Context::ALL
+                    .get(self.word()? as usize)
+                    .copied()
+                    .ok_or(LoadError::Malformed("context"))?;
                 let args = self.words()?;
                 let out = self.bind()?;
                 Step::Prim {
                     prim: head,
+                    context,
                     args,
                     out,
                 }
@@ -580,7 +596,14 @@ impl Reader<'_> {
             1 => Action::Set { table: head, args },
             3 => Action::Delete { table: head, args },
             4 => Action::Subsume { table: head, args },
-            5 => Action::Call { prim: head, args },
+            5 => Action::Call {
+                prim: head,
+                context: crate::Context::ALL
+                    .get(extra as usize)
+                    .copied()
+                    .ok_or(LoadError::Malformed("context"))?,
+                args,
+            },
             _ => return Err(LoadError::Malformed("action")),
         })
     }
@@ -850,7 +873,7 @@ fn check_node(file: &ProgramFile, node: &Node) -> Load<()> {
             Action::Delete { table: t, args } | Action::Subsume { table: t, args } => {
                 table(*t)?.keys == args.len()
             }
-            Action::Call { prim: p, args } => prim(*p)?.inputs.len() == args.len(),
+            Action::Call { prim: p, args, .. } => prim(*p)?.inputs.len() == args.len(),
             Action::Union { .. } | Action::Panic { .. } => true,
         };
         ensure(ok, "action")?;

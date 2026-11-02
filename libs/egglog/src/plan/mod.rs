@@ -113,7 +113,7 @@ pub(crate) fn compile(
             nodes: &mut nodes,
             unit,
         };
-        let roots = trie.children(states, consts.len() as u32);
+        let roots = trie.children(states, consts.len() as u32)?;
         decls.push(RulesetDecl {
             name: source.name.to_owned(),
             roots,
