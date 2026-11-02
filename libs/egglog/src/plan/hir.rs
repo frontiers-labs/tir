@@ -62,6 +62,23 @@ impl Atom {
 }
 
 impl Act {
+    // Equal emitted rows do not imply equal effects for a custom merge or call.
+    pub(crate) fn duplicate_safe(&self, schema: Schema<'_>) -> bool {
+        match self {
+            Self::Insert(table, _) => matches!(
+                schema.table(*table).merge(),
+                None | Some(
+                    crate::Merge::AssertEq
+                        | crate::Merge::Union
+                        | crate::Merge::Old
+                        | crate::Merge::New
+                )
+            ),
+            Self::Union(..) => true,
+            _ => false,
+        }
+    }
+
     fn args_mut(&mut self) -> &mut [Var] {
         match self {
             Self::Insert(_, args)
@@ -197,27 +214,24 @@ fn action_edit(rule: &Rule, schema: Schema<'_>, syms: &Symmetries) -> Edit<usize
             Act::Union(a, b) if merges(b, a) => return Some((k, Some((b, a)))),
             _ => continue,
         };
-        if !lookup
-            && schema.table(table).merge().is_some_and(|merge| {
-                !matches!(
-                    merge,
-                    crate::Merge::AssertEq
-                        | crate::Merge::Union
-                        | crate::Merge::Old
-                        | crate::Merge::New
-                )
-            })
-        {
+        if !lookup && !act.duplicate_safe(schema) {
             continue;
         }
         let keys = schema.table(table).key_arity();
         let target = Target::Table(table);
-        let premise = rule.premise.iter().filter(|atom| atom.target == target);
-        let earlier = rule.actions[..k].iter().filter_map(|other| match other {
-            Act::Insert(t, args) if !lookup && *t == table => Some(args),
-            Act::Lookup(t, args) if lookup && *t == table => Some(args),
-            _ => None,
+        // A function set must still be replayed if another rule deletes its row.
+        let premise = rule.premise.iter().filter(|atom| {
+            atom.target == target && (lookup || schema.table(table).kind() != TableKind::Function)
         });
+        let earlier = rule.actions[..k]
+            .iter()
+            .rev()
+            .take_while(|other| lookup || other.duplicate_safe(schema))
+            .find_map(|other| match other {
+                Act::Insert(t, args) if !lookup && *t == table => Some(args),
+                Act::Lookup(t, args) if lookup && *t == table => Some(args),
+                _ => None,
+            });
         let same = premise
             .map(|atom| &atom.args)
             .chain(earlier)
