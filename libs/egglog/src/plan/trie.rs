@@ -11,7 +11,7 @@ use super::order::{Arg, Candidate, Join, State};
 use super::permute::Symmetries;
 use super::seminaive::Variant;
 use crate::vm::code::{Action, Bind, Node, Reg, Slice, Step};
-use crate::{Schema, TableKind};
+use crate::{Error, Schema, TableKind, span};
 
 pub(crate) struct Trie<'a> {
     pub(crate) schema: Schema<'a>,
@@ -27,7 +27,11 @@ pub(crate) struct Trie<'a> {
 impl Trie<'_> {
     // The children of a node whose batch has `width` registers. Nodes are
     // stored after their children.
-    pub(crate) fn children(&mut self, mut states: Vec<State>, width: u32) -> Vec<u32> {
+    pub(crate) fn children(
+        &mut self,
+        mut states: Vec<State>,
+        width: u32,
+    ) -> Result<Vec<u32>, Error> {
         let mut children = Vec::new();
         while !states.is_empty() {
             let offers: Vec<Vec<Candidate>> = states
@@ -55,7 +59,9 @@ impl Trie<'_> {
                 .iter()
                 .find(|(_, count)| *count == most)
                 .map(|(join, _)| (*join).clone())
-                .expect("a variant always offers a join");
+                .ok_or_else(|| {
+                    Error::Type(span!(), "query has unbound primitive inputs".to_owned())
+                })?;
             let (mut taken, mut rest) = (Vec::new(), Vec::new());
             for (state, offer) in states.into_iter().zip(offers) {
                 match offer.into_iter().find(|candidate| candidate.join == best) {
@@ -63,13 +69,18 @@ impl Trie<'_> {
                     None => rest.push(state),
                 }
             }
-            children.push(self.node(&best, taken, width));
+            children.push(self.node(&best, taken, width)?);
             states = rest;
         }
-        children
+        Ok(children)
     }
 
-    fn node(&mut self, join: &Join, taken: Vec<(State, Candidate)>, width: u32) -> u32 {
+    fn node(
+        &mut self,
+        join: &Join,
+        taken: Vec<(State, Candidate)>,
+        width: u32,
+    ) -> Result<u32, Error> {
         let (step, after) = self.step(join, width);
         let (mut done, mut open) = (Vec::new(), Vec::new());
         for (mut state, candidate) in taken {
@@ -94,19 +105,19 @@ impl Trie<'_> {
                 children.push(self.head(state, next, width));
             }
         }
-        children.extend(self.children(open, width));
+        children.extend(self.children(open, width)?);
         // A semi-join right before a join that implies it does nothing.
         if let [child] = children[..]
             && self.implied(&step, child)
         {
-            return child;
+            return Ok(child);
         }
-        self.push(Node {
+        Ok(self.push(Node {
             step,
             actions,
             children,
             rules,
-        })
+        }))
     }
 
     // A chain node for the lookup or primitive at `at` among the actions.
@@ -135,7 +146,19 @@ impl Trie<'_> {
                 let args = regs(&state, inputs);
                 let (out, width) = bind(&mut state, *out, width);
                 let prim = self.symbols.prim(*prim);
-                (Step::Prim { prim, args, out }, width)
+                (
+                    Step::Prim {
+                        prim,
+                        context: if rule.naive {
+                            crate::Context::Full
+                        } else {
+                            crate::Context::Write
+                        },
+                        args,
+                        out,
+                    },
+                    width,
+                )
             }
             _ => unreachable!("chains start at lookups and primitives"),
         };
@@ -227,6 +250,11 @@ impl Trie<'_> {
                 },
                 Act::Call(prim, args) => Action::Call {
                     prim: self.symbols.prim(*prim),
+                    context: if self.rule(state).naive {
+                        crate::Context::Full
+                    } else {
+                        crate::Context::Write
+                    },
                     args: regs(state, args),
                 },
                 Act::Panic(message) => Action::Panic {
@@ -244,10 +272,11 @@ impl Trie<'_> {
                 a: self.unit,
                 b: self.unit,
             },
-            Join::Prim { prim, .. } => {
+            Join::Prim { prim, context, .. } => {
                 let (out, inputs) = binds.split_last().expect("a primitive has an output");
                 Step::Prim {
                     prim: self.symbols.prim(*prim),
+                    context: *context,
                     args: inputs.iter().map(same).collect(),
                     out: *out,
                 }

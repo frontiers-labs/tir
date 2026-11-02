@@ -1566,3 +1566,26 @@ fn steps_follow_the_seminaive_setting_after_recompilation() -> Result<(), Error>
     }
     Ok(())
 }
+
+#[test]
+fn unbound_primitive_inputs_return_an_error() {
+    for body in [facts![(= x (+ y 1))], facts![(= x (+ y 1)) (= y (+ x 1))]] {
+        let mut eg = EGraph::default();
+        add_relation(&mut eg, "Out", vec!["i64".into()]).unwrap();
+        rule(&mut eg, "", body, actions![(Out x)]).unwrap();
+        assert!(matches!(eg.step_rules(""), Err(Error::Type(..))));
+    }
+}
+
+#[test]
+fn primitive_inputs_can_bind_after_their_expression() {
+    let mut eg = EGraph::default();
+    add_relation(&mut eg, "R", vec!["i64".into()]).unwrap();
+    add_relation(&mut eg, "Out", vec!["i64".into()]).unwrap();
+    eg.run_program(vec![Command::Action(action!((R 4)))])
+        .unwrap();
+    rule(&mut eg, "", facts![(= x (+ y 1)) (R y)], actions![(Out x)]).unwrap();
+    eg.step_rules("").unwrap();
+    eg.run_program(vec![Command::Check(span!(), facts![(Out 5)].0)])
+        .unwrap();
+}

@@ -441,3 +441,66 @@ fn loading_rejects_conflicting_group_membership() {
         Err(tir_egglog::LoadError::TableMismatch { .. })
     ));
 }
+
+#[test]
+fn compiled_duplicate_members_have_set_semantics_for_merge_effects() {
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+    use tir_egglog::{Merge, Signature};
+    let mut db = Database::new();
+    let group = db.add_sort("G", SortKind::Eq);
+    let int = db.sort("i64").unwrap();
+    let count = Arc::new(AtomicUsize::new(0));
+    let seen = count.clone();
+    let merge = db.add_primitive(
+        "merge",
+        Signature {
+            inputs: vec![int, int],
+            output: int,
+        },
+        move |ctx, args| {
+            seen.fetch_add(1, Ordering::SeqCst);
+            Some(ctx.base(ctx.base_value::<i64>(args[0]) + ctx.base_value::<i64>(args[1])))
+        },
+    );
+    let member = db.add_function(
+        "Member",
+        &[group],
+        int,
+        Merge::Prim(merge, vec![Merge::Old, Merge::New]),
+    );
+    let keyed = db.add_relation("Keyed", &[group]);
+    db.add_group(group, &[member], keyed).unwrap();
+    let six = db.base(6i64);
+    db.find_or_make(&[(member, &[six]), (member, &[six])])
+        .unwrap();
+    assert_eq!(
+        count.load(Ordering::SeqCst),
+        0,
+        "the Rust group API inserts a duplicated set member once"
+    );
+    let mut rules = Rules::new();
+    rules
+        .rule(
+            &db,
+            "",
+            facts![],
+            actions![(find-or-make (Member 5) (Member 5))],
+        )
+        .unwrap();
+    let mut program = rules.compile(&db).unwrap();
+    program.run(&mut db, &Schedule::run("")).unwrap();
+    assert_eq!(db.rows(keyed).count(), 2);
+    let mut values: Vec<i64> = db
+        .rows(member)
+        .map(|row| db.base_value::<i64>(row[1]))
+        .collect();
+    values.sort();
+    assert_eq!(
+        (values, count.load(Ordering::SeqCst)),
+        (vec![5, 6], 0),
+        "a duplicated set member is inserted once"
+    );
+}

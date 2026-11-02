@@ -553,7 +553,13 @@ impl<'a, R: Reads<'a>> Exec<'a, R> {
                 sel.extend((0..n as u32).filter(|&i| !ranges[i as usize].is_empty()));
             }
             Step::Same { a, b } => select_same(&input.col(*a)[..n], &input.col(*b)[..n], &mut sel),
-            Step::Prim { prim, args, out } => {
+            Step::Prim {
+                prim,
+                context,
+                args,
+                out,
+            } => {
+                self.ctx.context = *context;
                 let prim = program.externs[*prim as usize];
                 if R::COLORED {
                     check_pure(&self.ctx, prim)?;
@@ -1050,7 +1056,12 @@ impl<'a, R: Reads<'a>> Exec<'a, R> {
                 let keys = (0..n).map(|i| (*table as usize, batch.row(args, i)));
                 self.writes.subsumed.extend(keys);
             }
-            Action::Call { prim, args } => {
+            Action::Call {
+                prim,
+                context,
+                args,
+            } => {
+                self.ctx.context = *context;
                 let prim = self.program.externs[*prim as usize];
                 if R::COLORED {
                     check_pure(&self.ctx, prim)?;
@@ -1103,14 +1114,17 @@ impl<'a, R: Reads<'a>> Exec<'a, R> {
                 colors: R::COLORED.then(|| (self.colors(), c)),
             };
             spec.clear();
-            for (&table, (_, regs)) in tables.iter().zip(rows) {
+            for (&table, (file_table, regs)) in tables.iter().zip(rows) {
                 let mut cells: Vec<u32> = regs.iter().map(|&r| batch.col(r)[i]).collect();
                 view.canonical(table, &mut cells);
-                spec.push((table, cells));
+                spec.push((table, cells, *file_table));
             }
-            let mut sorted: Vec<GroupRow> = spec.clone();
-            sorted.sort_unstable();
-            sorted.dedup();
+            spec.sort_unstable();
+            spec.dedup_by(|a, b| a.0 == b.0 && a.1 == b.1);
+            let sorted: Vec<GroupRow> = spec
+                .iter()
+                .map(|(table, cells, _)| (*table, cells.clone()))
+                .collect();
             let mut key = vec![c];
             for (table, cells) in &sorted {
                 key.push(table.index() as u32);
@@ -1127,7 +1141,7 @@ impl<'a, R: Reads<'a>> Exec<'a, R> {
                 continue;
             }
             let g = self.ctx.uf.fresh();
-            for ((t, _), (_, cells)) in rows.iter().zip(&spec) {
+            for (_, cells, t) in &spec {
                 let delta = &mut self.writes.rows[*t as usize];
                 let colored = R::COLORED.then_some(c);
                 let row = colored.into_iter().chain([g]).chain(cells.iter().copied());
