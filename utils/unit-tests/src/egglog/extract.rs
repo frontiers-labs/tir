@@ -459,3 +459,32 @@ fn scheduler_records_belong_to_the_declaring_ruleset() -> Result<(), Error> {
     assert_eq!(eg.get_size("OutA"), 4);
     Ok(())
 }
+
+#[test]
+fn a_naive_scheduler_stops_after_its_effects_saturate() -> Result<(), Error> {
+    let mut eg = EGraph::default();
+    for name in ["R", "S"] {
+        add_relation(&mut eg, name, vec!["i64".into()])?;
+    }
+    run(&mut eg, vec![action!((R 7))]);
+    eg.run_program(vec![Command::Rule {
+        rule: tir_egglog::ast::Rule {
+            span: span!(),
+            name: "copy".into(),
+            ruleset: "".into(),
+            eval_mode: tir_egglog::ast::RuleEvalMode::Naive,
+            body: facts![(R x)].0,
+            head: actions![(S x)],
+        },
+    }])?;
+    let id = eg.add_scheduler(Box::new(FirstN(10)));
+    for (updated, can_stop) in [(true, false), (false, true), (false, true)] {
+        let report = eg.step_rules_with_scheduler(id, "")?;
+        assert_eq!((report.updated, report.can_stop), (updated, can_stop));
+        assert_eq!(eg.get_size("S"), 1);
+    }
+    run(&mut eg, vec![action!((R 9))]);
+    assert!(eg.step_rules_with_scheduler(id, "")?.updated);
+    assert_eq!(eg.get_size("S"), 2);
+    Ok(())
+}
