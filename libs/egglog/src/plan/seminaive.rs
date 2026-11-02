@@ -11,8 +11,17 @@ pub(crate) struct Variant {
     pub(crate) slices: Vec<Slice>,
 }
 
+// The variant that reads every row of every atom.
+pub(crate) fn naive(index: usize, rule: &Rule) -> Variant {
+    Variant {
+        rule: index,
+        slices: vec![Slice::All; rule.premise.len()],
+    }
+}
+
 // Variant i: the table atoms before i read Old, atom i reads New, the atoms
-// after i read All. Old is All with `ts < last_run`, so a table keeps
+// after i read All. A rule naming its delta tables has variants for those
+// atoms only; the others read All. Old is All with `ts < last_run`, so a table keeps
 // indexes on All only. A naive rule has one variant that reads All.
 pub(crate) fn variants(
     index: usize,
@@ -21,7 +30,12 @@ pub(crate) fn variants(
     schema: Schema<'_>,
 ) -> Vec<Variant> {
     let tables: Vec<usize> = (0..rule.premise.len())
-        .filter(|&a| matches!(rule.premise[a].target, Target::Table(_)))
+        .filter(|&a| match rule.premise[a].target {
+            Target::Table(table) => {
+                (rule.deltas.as_ref()).is_none_or(|deltas| deltas.contains(&table))
+            }
+            Target::Prim(_) => false,
+        })
         .collect();
     let all = vec![Slice::All; rule.premise.len()];
     if rule.naive || tables.is_empty() {
@@ -59,7 +73,7 @@ pub(crate) fn variants(
 // effect.
 fn dominates(rule: &Rule, a: &[Slice], b: &[Slice], syms: &Symmetries) -> bool {
     let mut map: Vec<Option<Var>> = (0..rule.constants.len() as Var)
-        .map(|v| rule.constants[v as usize].as_ref().map(|_| v))
+        .map(|v| rule.constant(v).then_some(v))
         .collect();
     let mut used = vec![false; rule.premise.len()];
     assign(rule, a, b, syms, 0, &mut map, &mut used)
@@ -106,18 +120,20 @@ fn extend(map: &mut [Option<Var>], from: &[Var], to: &[Var]) -> bool {
 fn actions_match(rule: &Rule, map: &[Option<Var>], syms: &Symmetries) -> bool {
     let rename = |v: &Var| map[*v as usize].unwrap_or(*v);
     let renamed = |args: &[Var]| -> Vec<Var> { args.iter().map(rename).collect() };
-    rule.actions.iter().all(|act| match act {
-        Act::Insert(table, args)
-        | Act::Lookup(table, args)
-        | Act::Delete(table, args)
-        | Act::Subsume(table, args) => syms.same(Target::Table(*table), &renamed(args), args),
-        Act::Prim(_, args) | Act::Call(_, args) | Act::FindOrMake(_, args) => {
-            renamed(args) == *args
-        }
-        Act::Union(x, y) => {
-            let (rx, ry) = (rename(x), rename(y));
-            (rx, ry) == (*x, *y) || (rx, ry) == (*y, *x)
-        }
-        Act::Panic(_) => true,
-    })
+    let absent = (rule.absent.iter()).all(|atom| renamed(&atom.args) == atom.args);
+    absent
+        && rule.actions.iter().all(|act| match act {
+            Act::Insert(table, args)
+            | Act::Lookup(table, args)
+            | Act::Delete(table, args)
+            | Act::Subsume(table, args) => syms.same(Target::Table(*table), &renamed(args), args),
+            Act::Prim(_, args) | Act::Call(_, args) | Act::FindOrMake(_, args) => {
+                renamed(args) == *args
+            }
+            Act::Union(x, y) => {
+                let (rx, ry) = (rename(x), rename(y));
+                (rx, ry) == (*x, *y) || (rx, ry) == (*y, *x)
+            }
+            Act::Panic(_) => true,
+        })
 }

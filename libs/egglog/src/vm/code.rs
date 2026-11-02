@@ -53,6 +53,12 @@ pub(crate) enum Step {
         index: u32,
         key: Vec<Reg>,
     },
+    // Keeps the bindings whose key the index lacks.
+    Absent {
+        index: u32,
+        key: Vec<Reg>,
+    },
+    // Both operands must exist. A self-equality guards a hoisted premise.
     Same {
         a: Reg,
         b: Reg,
@@ -60,6 +66,7 @@ pub(crate) enum Step {
     // Drops the bindings the primitive has no result for.
     Prim {
         prim: u32,
+        context: crate::Context,
         args: Vec<Reg>,
         out: Bind,
     },
@@ -102,6 +109,7 @@ pub(crate) enum Action {
     // Calls a primitive for its effect.
     Call {
         prim: u32,
+        context: crate::Context,
         args: Vec<Reg>,
     },
     Panic {
@@ -118,4 +126,246 @@ pub(crate) struct Node {
     pub(crate) actions: Vec<Action>,
     pub(crate) children: Vec<u32>,
     pub(crate) rules: Vec<u32>,
+}
+
+// The code as the program file holds it, read in place: each view borrows
+// the words of a node rather than retaining a decoded copy.
+
+// A list of binds as words: twice the register, plus one for `Same`.
+#[derive(Clone, Copy)]
+pub(crate) struct Binds<'a>(pub(crate) &'a [u32]);
+
+impl<'a> Binds<'a> {
+    pub(crate) fn len(self) -> usize {
+        self.0.len()
+    }
+
+    pub(crate) fn iter(self) -> impl Iterator<Item = Bind> + 'a {
+        self.0.iter().map(|&word| bind(word))
+    }
+}
+
+pub(crate) fn bind(word: u32) -> Bind {
+    match word % 2 {
+        0 => Bind::New(word / 2),
+        _ => Bind::Same(word / 2),
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum StepRef<'a> {
+    Scan {
+        table: u32,
+        slice: Slice,
+        cols: Binds<'a>,
+    },
+    Lookup {
+        table: u32,
+        key: &'a [Reg],
+        out: Option<Bind>,
+        slice: Slice,
+    },
+    Expand {
+        index: u32,
+        key: &'a [Reg],
+        outs: Binds<'a>,
+        slice: Slice,
+    },
+    Check {
+        index: u32,
+        key: &'a [Reg],
+    },
+    Absent {
+        index: u32,
+        key: &'a [Reg],
+    },
+    Same {
+        a: Reg,
+        b: Reg,
+    },
+    Prim {
+        prim: u32,
+        args: &'a [Reg],
+        out: Bind,
+    },
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum ActionRef<'a> {
+    // Binds the next register, as an `Action::Entry` does.
+    Entry {
+        table: u32,
+        args: &'a [Reg],
+    },
+    // Each row a member table, then the count and the registers of its cells.
+    FindOrMake {
+        rows: &'a [u32],
+        count: u32,
+        out: Reg,
+    },
+    Set {
+        table: u32,
+        args: &'a [Reg],
+    },
+    Union {
+        a: Reg,
+        b: Reg,
+    },
+    Delete {
+        table: u32,
+        args: &'a [Reg],
+    },
+    Subsume {
+        table: u32,
+        args: &'a [Reg],
+    },
+    Call {
+        prim: u32,
+        args: &'a [Reg],
+    },
+    // The message is a position in the string table.
+    Panic {
+        message: u32,
+    },
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct NodeRef<'a> {
+    pub(crate) step: StepRef<'a>,
+    // The count and the words of the actions.
+    actions: (u32, &'a [u32]),
+    pub(crate) children: &'a [u32],
+    pub(crate) rules: &'a [u32],
+}
+
+const SLICES: [Slice; 4] = [Slice::New, Slice::Old, Slice::All, Slice::Any];
+
+// Reads words in order from a position.
+struct Cursor<'a> {
+    words: &'a [u32],
+    at: usize,
+}
+
+impl<'a> Cursor<'a> {
+    fn word(&mut self) -> u32 {
+        self.at += 1;
+        self.words[self.at - 1]
+    }
+
+    fn list(&mut self) -> &'a [u32] {
+        let len = self.word() as usize;
+        self.at += len;
+        &self.words[self.at - len..self.at]
+    }
+}
+
+impl<'a> NodeRef<'a> {
+    // The node at word `at`, as the writer of the program file laid it out.
+    pub(crate) fn at(words: &'a [u32], at: usize) -> Self {
+        let mut c = Cursor { words, at };
+        let (tag, head, extra) = (c.word(), c.word(), c.word());
+        let step = match tag {
+            0 => StepRef::Scan {
+                table: head,
+                slice: SLICES[extra as usize],
+                cols: Binds(c.list()),
+            },
+            1 => {
+                let key = c.list();
+                let out = (c.word() == 1).then(|| bind(c.word()));
+                StepRef::Lookup {
+                    table: head,
+                    key,
+                    out,
+                    slice: SLICES[extra as usize],
+                }
+            }
+            2 => StepRef::Expand {
+                index: head,
+                key: c.list(),
+                outs: Binds(c.list()),
+                slice: SLICES[extra as usize],
+            },
+            3 => StepRef::Check {
+                index: head,
+                key: c.list(),
+            },
+            6 => StepRef::Absent {
+                index: head,
+                key: c.list(),
+            },
+            4 => StepRef::Same { a: head, b: extra },
+            _ => {
+                let args = c.list();
+                StepRef::Prim {
+                    prim: head,
+                    args,
+                    out: bind(c.word()),
+                }
+            }
+        };
+        let count = c.word();
+        let start = c.at;
+        for _ in 0..count {
+            action(&mut c);
+        }
+        let actions = (count, &words[start..c.at]);
+        let children = c.list();
+        let rules = c.list();
+        NodeRef {
+            step,
+            actions,
+            children,
+            rules,
+        }
+    }
+
+    pub(crate) fn actions(self) -> impl Iterator<Item = ActionRef<'a>> {
+        let mut c = Cursor {
+            words: self.actions.1,
+            at: 0,
+        };
+        (0..self.actions.0).map(move |_| action(&mut c))
+    }
+}
+
+fn action<'a>(c: &mut Cursor<'a>) -> ActionRef<'a> {
+    let (tag, head, extra) = (c.word(), c.word(), c.word());
+    match tag {
+        2 => ActionRef::Union { a: head, b: extra },
+        6 => ActionRef::Panic { message: head },
+        7 => {
+            let count = c.word();
+            let start = c.at;
+            for _ in 0..count {
+                c.word();
+                c.list();
+            }
+            ActionRef::FindOrMake {
+                rows: &c.words[start..c.at],
+                count,
+                out: extra,
+            }
+        }
+        _ => {
+            let args = c.list();
+            match tag {
+                0 => ActionRef::Entry { table: head, args },
+                1 => ActionRef::Set { table: head, args },
+                3 => ActionRef::Delete { table: head, args },
+                4 => ActionRef::Subsume { table: head, args },
+                _ => ActionRef::Call { prim: head, args },
+            }
+        }
+    }
+}
+
+// The member table and cell registers of each row of a `FindOrMake`.
+pub(crate) fn rows(words: &[u32], count: u32) -> Vec<(u32, &[Reg])> {
+    row_iter(words, count).collect()
+}
+
+pub(crate) fn row_iter(words: &[u32], count: u32) -> impl Iterator<Item = (u32, &[Reg])> {
+    let mut c = Cursor { words, at: 0 };
+    (0..count).map(move |_| (c.word(), c.list()))
 }

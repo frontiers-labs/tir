@@ -67,12 +67,17 @@ impl Expr {
     }
 }
 
-/// A part of a rule's query: an expression that must exist, or two that
-/// must be equal.
+/// A part of a rule's query: an expression that must exist, two that must
+/// be equal, or a row that must be absent.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Fact {
     Eq(Span, Expr, Expr),
     Fact(Expr),
+    /// `(not (T args...))`: no row of the table `T` holds `args`, which are
+    /// its key, or its key and output. A variable no other fact binds
+    /// matches any cell. The rule must not run in a saturation that writes
+    /// `T`, so the table is complete when the rule reads it.
+    Not(Expr),
 }
 
 /// The query of a rule.
@@ -314,6 +319,7 @@ impl Display for Fact {
         match self {
             Self::Eq(_, a, b) => write!(f, "(= {a} {b})"),
             Self::Fact(expr) => write!(f, "{expr}"),
+            Self::Not(expr) => write!(f, "(not {expr})"),
         }
     }
 }

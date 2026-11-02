@@ -16,8 +16,16 @@ pub(crate) use file::{
 
 use crate::ast::{Fact, Literal, Schedule};
 use crate::report::{IterationReport, ReportLevel, RuleReport, RuleSetReport};
-use crate::{BaseValues, Color, Database, Error, ExternId, IndexId, RunReport, TableId, Value};
-use code::Step;
+use crate::{
+    BaseValues, Color, Database, Error, ExternId, IndexId, PrimFn, RunReport, TableId, Value,
+};
+
+#[derive(Clone)]
+struct BoundExtern {
+    id: ExternId,
+    callback: Arc<PrimFn>,
+    required: u8,
+}
 
 /// The rule tries of a set of rulesets, planned from the schema alone.
 ///
@@ -27,15 +35,17 @@ use code::Step;
 #[derive(Clone)]
 pub struct Program {
     // Shared by the clones of a program; only its run state is their own.
+    // The file holds no node: the code holds them, read in place.
     file: Arc<ProgramFile>,
+    code: Arc<file::Code>,
     // The database ids of the tables and primitives of the file.
     tables: Vec<TableId>,
-    externs: Vec<ExternId>,
+    externs: Vec<BoundExtern>,
     // Set by the first run: indexes, constants and the indexes each ruleset
     // reads.
     prepared: bool,
     indexes: Vec<IndexId>,
-    consts: Vec<Vec<Value>>,
+    consts: Vec<Vec<Option<Value>>>,
     used: Vec<Vec<IndexId>>,
     // The rule names of each ruleset, for reports above TimeOnly; made on
     // the first such report.
@@ -50,6 +60,23 @@ pub struct Program {
     level: ReportLevel,
 }
 
+// The constants `ruleset` computes, after its literals in `consts`.
+// Failure is separate from the payload: every u32 is a legal base cell.
+fn compute(
+    ruleset: &RulesetDecl,
+    externs: &[BoundExtern],
+    consts: &mut Vec<Option<Value>>,
+    db: &mut Database,
+) {
+    consts.truncate(ruleset.consts.len());
+    let (mut ctx, _) = db.ctx_and_indexes();
+    for (prim, args) in &ruleset.calls {
+        let args: Option<Vec<Value>> = args.iter().map(|&r| consts[r as usize]).collect();
+        let value = args.and_then(|args| ctx.call(externs[*prim as usize].id, &args));
+        consts.push(value);
+    }
+}
+
 type Reports = HashMap<Arc<str>, Vec<RuleReport>, tir_adt::FxBuildHasher>;
 
 // The name of the query ruleset that `:until` facts are planned into.
@@ -59,14 +86,38 @@ pub(crate) fn until_name(facts: &[Fact]) -> String {
 }
 
 impl Program {
+    // A program of the file a compile planned, as a load reads it.
     pub(crate) fn new(
-        file: ProgramFile,
+        file: &ProgramFile,
         tables: Vec<TableId>,
         externs: Vec<ExternId>,
         last_run: Vec<Option<u32>>,
+        db: &Database,
     ) -> Self {
+        let (file, code) = file::decode(&file::encode(file)).expect("a planned file loads");
+        Self::loaded(file, code, tables, externs, last_run, db)
+    }
+
+    fn loaded(
+        file: ProgramFile,
+        code: file::Code,
+        tables: Vec<TableId>,
+        externs: Vec<ExternId>,
+        last_run: Vec<Option<u32>>,
+        db: &Database,
+    ) -> Self {
+        let externs = externs
+            .into_iter()
+            .zip(&file.externs)
+            .map(|(id, decl)| BoundExtern {
+                id,
+                callback: db.prims[id.index()].f.clone(),
+                required: decl.required,
+            })
+            .collect();
         Self {
             file: Arc::new(file),
+            code: Arc::new(code),
             tables,
             externs,
             prepared: false,
@@ -97,14 +148,46 @@ impl Program {
     /// primitives bind to `db` by name; the Eq sorts and tables `db` lacks
     /// are declared.
     pub fn from_bytes(bytes: &[u8], db: &mut Database) -> Result<Self, LoadError> {
-        let file = file::decode(bytes)?;
+        let (file, code) = file::decode(bytes)?;
+        Self::bound(file, code, db)
+    }
+
+    /// Loads a program like [`Program::from_bytes`] from bytes that live
+    /// as long as the program, such as those a build wrote and the binary
+    /// holds: when they are aligned to four, the program reads them in
+    /// place, and the load copies nothing of its code.
+    pub fn from_static(bytes: &'static [u8], db: &mut Database) -> Result<Self, LoadError> {
+        let (file, code) = file::decode_static(bytes)?;
+        Self::bound(file, code, db)
+    }
+
+    fn bound(file: ProgramFile, code: file::Code, db: &mut Database) -> Result<Self, LoadError> {
         let (tables, externs) = file::bind(&file, db)?;
         let last_run = vec![None; file.rulesets.len()];
-        Ok(Self::new(file, tables, externs, last_run))
+        let program = Self::loaded(file, code, tables, externs, last_run, db);
+        program.check_permissions(db)?;
+        Ok(program)
+    }
+
+    fn check_permissions(&self, db: &Database) -> Result<(), LoadError> {
+        let schema = db.schema();
+        for binding in &self.externs {
+            for context in crate::Context::ALL {
+                if binding.required & (1 << context as u32) != 0
+                    && !schema.primitive_contexts(binding.id).contains(&context)
+                {
+                    return Err(LoadError::ExternContext {
+                        name: schema.primitive(binding.id).0.to_owned(),
+                        context,
+                    });
+                }
+            }
+        }
+        Ok(())
     }
 
     pub fn to_bytes(&self) -> Vec<u8> {
-        file::encode(&self.file)
+        self.code.bytes()
     }
 
     /// Runs the schedule. Each iteration of a ruleset matches every rule,
@@ -117,44 +200,9 @@ impl Program {
         schedule: &Schedule,
         args: &[Value],
     ) -> Result<RunReport, Error> {
-        self.prepare(db)?;
-        self.bind(args)?;
+        self.prepare(db, Some(args))?;
         db.rebuild()?;
         self.schedule(db, schedule)
-    }
-
-    // Puts `args` in the registers of the arguments the rules read. Rules
-    // that read an argument whose value changed match everything again, as
-    // the rows they matched before met the old value.
-    fn bind(&mut self, args: &[Value]) -> Result<(), Error> {
-        // Check every argument before a register changes: a failed bind must
-        // leave the registers and the search timestamps as they were.
-        let literals = self.file.rulesets.iter().flat_map(|decl| &decl.consts);
-        if let Some(n) = (literals.filter_map(|literal| match *literal {
-            Literal::Arg(n) => Some(n),
-            _ => None,
-        }))
-        .find(|&n| n as usize >= args.len())
-        {
-            return Err(Error::Unsupported(format!("the run gives no argument {n}")));
-        }
-        let rulesets = self.file.rulesets.iter().zip(&mut self.consts);
-        for (at, (decl, consts)) in rulesets.enumerate() {
-            let mut changed = false;
-            for (literal, register) in decl.consts.iter().zip(consts) {
-                if let Literal::Arg(n) = *literal {
-                    let arg = args[n as usize];
-                    changed |= std::mem::replace(register, arg) != arg;
-                }
-            }
-            if changed {
-                self.last_run[at] = None;
-                if let Some(last) = self.color_last.get_mut(at) {
-                    last.clear();
-                }
-            }
-        }
-        Ok(())
     }
 
     // The names of the rulesets, combined ones and queries included.
@@ -168,50 +216,101 @@ impl Program {
     // When `rule` of `ruleset` last ran, if it is in this program and ran.
     pub(crate) fn last_run_of(&self, ruleset: &str, rule: &str) -> Option<u32> {
         let decls = self.file.rulesets.iter().zip(&self.last_run);
-        let mut found = decls.filter(|(decl, _)| decl.name == ruleset);
+        let mut found = (decls.zip(&self.code.rules)).filter(|((decl, _), _)| decl.name == ruleset);
         found
-            .find(|(decl, _)| decl.rules.iter().any(|name| name == rule))
-            .and_then(|(_, last)| *last)
+            .find(|(_, names)| names.iter().any(|&name| self.code.string(name) == rule))
+            .and_then(|((_, last), _)| *last)
     }
 
-    fn prepare(&mut self, db: &mut Database) -> Result<(), Error> {
-        if self.prepared {
+    pub(crate) fn bindings_changed(&self, db: &Database) -> bool {
+        self.externs
+            .iter()
+            .any(|binding| !Arc::ptr_eq(&binding.callback, &db.prims[binding.id.index()].f))
+    }
+
+    fn prepare(&mut self, db: &mut Database, args: Option<&[Value]>) -> Result<(), Error> {
+        let missing = self
+            .file
+            .rulesets
+            .iter()
+            .flat_map(|decl| &decl.consts)
+            .find_map(|literal| match *literal {
+                Literal::Arg(n)
+                    if args.is_some_and(|args| n as usize >= args.len())
+                        || (args.is_none() && !self.prepared) =>
+                {
+                    Some(n)
+                }
+                _ => None,
+            });
+        if let Some(n) = missing {
+            return Err(Error::Unsupported(format!("the run gives no argument {n}")));
+        }
+        self.check_permissions(db)
+            .map_err(|error| Error::Unsupported(error.to_string()))?;
+        let changed = self.bindings_changed(db);
+        if self.prepared && !changed && args.is_none() {
             return Ok(());
         }
-        for (decl, &table) in self.file.tables.iter().zip(&self.tables) {
-            for order in &decl.symmetries {
-                db.add_symmetry(table, order)?;
+        let first = !self.prepared;
+        if first {
+            for (decl, &table) in self.file.tables.iter().zip(&self.tables) {
+                for order in &decl.symmetries {
+                    db.add_symmetry(table, order)?;
+                }
+            }
+            let tables = &self.tables;
+            self.indexes = self
+                .file
+                .indexes
+                .iter()
+                .map(|index| db.add_index(tables[index.table as usize], &index.order))
+                .collect();
+            let constant = |c: &Literal| match c {
+                Literal::Arg(_) => None,
+                c => Some(value(&db.base, c)),
+            };
+            self.consts = self
+                .file
+                .rulesets
+                .iter()
+                .map(|ruleset| ruleset.consts.iter().map(constant).collect())
+                .collect();
+            self.used = self
+                .file
+                .rulesets
+                .iter()
+                .map(|ruleset| {
+                    ruleset
+                        .used
+                        .iter()
+                        .map(|&i| self.indexes[i as usize])
+                        .collect()
+                })
+                .collect();
+        }
+        for (at, (ruleset, consts)) in self.file.rulesets.iter().zip(&mut self.consts).enumerate() {
+            let mut rebound = false;
+            if let Some(args) = args {
+                for (literal, register) in ruleset.consts.iter().zip(consts.iter_mut()) {
+                    if let Literal::Arg(n) = *literal {
+                        rebound |= register.replace(args[n as usize]) != Some(args[n as usize]);
+                    }
+                }
+            }
+            if first || changed || rebound {
+                compute(ruleset, &self.externs, consts, db);
+            }
+            if changed || rebound {
+                self.last_run[at] = None;
+                if let Some(last) = self.color_last.get_mut(at) {
+                    last.clear();
+                }
             }
         }
-        let tables = &self.tables;
-        self.indexes = (self.file.indexes.iter())
-            .map(|index| db.add_index(tables[index.table as usize], &index.order))
-            .collect();
-        // An argument's register is filled at each run.
-        let constant = |c: &Literal| match c {
-            Literal::Arg(_) => Value::new(0),
-            c => value(&db.base, c),
-        };
-        self.consts = (self.file.rulesets.iter())
-            .map(|ruleset| ruleset.consts.iter().map(constant).collect())
-            .collect();
-        self.used = (self.file.rulesets.iter())
-            .map(|ruleset| {
-                let mut used = Vec::new();
-                let mut stack = ruleset.roots.clone();
-                while let Some(node) = stack.pop() {
-                    let node = &self.file.nodes[node as usize];
-                    if let Step::Expand { index, .. } | Step::Check { index, .. } = node.step {
-                        used.push(self.indexes[index as usize]);
-                    }
-                    stack.extend(&node.children);
-                }
-                used.sort_unstable();
-                used.dedup();
-                used
-            })
-            .collect();
-
+        for binding in &mut self.externs {
+            binding.callback = db.prims[binding.id.index()].f.clone();
+        }
         self.prepared = true;
         Ok(())
     }
@@ -278,7 +377,7 @@ impl Program {
 
     // Whether the query ruleset `name` matches anything.
     pub(crate) fn matches(&mut self, db: &mut Database, name: &str) -> Result<bool, Error> {
-        self.prepare(db)?;
+        self.prepare(db, None)?;
         let mut decls = Vec::new();
         self.decls(name, &mut decls)?;
         for decl in decls {
@@ -302,7 +401,7 @@ impl Program {
         names: &[&str],
         rebuild: bool,
     ) -> Result<IterationReport, Error> {
-        self.prepare(db)?;
+        self.prepare(db, None)?;
         let mut decls = Vec::new();
         for name in names {
             self.decls(name, &mut decls)?;
@@ -410,12 +509,10 @@ impl Program {
             return;
         }
         if self.names.is_empty() {
-            self.names = (self.file.rulesets.iter())
-                .map(|ruleset| {
-                    ruleset
-                        .rules
-                        .iter()
-                        .map(|rule| Arc::from(rule.as_str()))
+            self.names = (self.code.rules.iter())
+                .map(|names| {
+                    (names.iter())
+                        .map(|&name| Arc::from(self.code.string(name)))
                         .collect()
                 })
                 .collect();

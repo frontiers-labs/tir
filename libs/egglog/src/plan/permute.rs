@@ -67,8 +67,9 @@ fn permutation(rule: &Rule, schema: Schema<'_>) -> Option<(TableId, Vec<usize>)>
     let ([atom], [Act::Insert(table, args)]) = (&rule.premise[..], &rule.actions[..]) else {
         return None;
     };
-    let constant = |v: &Var| rule.constants[*v as usize].is_some();
-    if atom.target != Target::Table(*table)
+    let constant = |v: &Var| rule.constant(*v);
+    if !rule.absent.is_empty()
+        || atom.target != Target::Table(*table)
         || !distinct(&atom.args)
         || atom.args.iter().any(constant)
     {

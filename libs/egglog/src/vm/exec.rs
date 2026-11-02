@@ -4,7 +4,9 @@
 // Matching reads committed rows only: actions buffer their writes in
 // `Writes`, which apply after every rule of the iteration matched.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use tir_adt::FxBuildHasher;
 use tir_adt::simd::{hash_rows, intersect_sorted, select_eq, select_same};
@@ -12,15 +14,20 @@ use tir_adt::simd::{hash_rows, intersect_sorted, select_eq, select_same};
 use tir_adt::simd::hash_row;
 
 use super::Program;
-use super::code::{Action, Bind, Node, Reg, Slice, Step};
+use super::code::{ActionRef, Bind, Binds, NodeRef, Reg, Slice, StepRef};
 use crate::core::{
     Colors, Delta, EMPTY, GroupRow, GroupView, RowTable, Table, UnionFind, check_pure, group_at,
     l2, same_key,
 };
 use crate::{Color, Database, Error, PrimCtx, TableId, TableKind, Value};
 
-#[derive(Clone, Default)]
+// The registers of the ruleset's constants come first and hold the same
+// value in every binding, so a batch shares them rather than copying them
+// at every step: a ruleset can have thousands.
+#[derive(Clone)]
 struct Batch {
+    consts: Rc<[Option<u32>]>,
+    // The registers after the constants.
     cols: Vec<Vec<u32>>,
     len: usize,
     // The color of each binding, in a color run.
@@ -28,12 +35,31 @@ struct Batch {
 }
 
 impl Batch {
-    fn col(&self, reg: Reg) -> &[u32] {
-        &self.cols[reg as usize]
+    // The registers bound so far.
+    fn width(&self) -> u32 {
+        (self.consts.len() + self.cols.len()) as u32
+    }
+
+    fn at(&self, reg: Reg, i: usize) -> u32 {
+        match (reg as usize).checked_sub(self.consts.len()) {
+            None => self.consts[reg as usize].expect("a computed premise succeeded"),
+            Some(at) => self.cols[at][i],
+        }
+    }
+
+    fn col(&self, reg: Reg) -> Cow<'_, [u32]> {
+        match (reg as usize).checked_sub(self.consts.len()) {
+            None => Cow::Owned(vec![
+                self.consts[reg as usize]
+                    .expect("a computed premise succeeded");
+                self.len
+            ]),
+            Some(at) => Cow::Borrowed(&self.cols[at]),
+        }
     }
 
     fn row(&self, regs: &[Reg], i: usize) -> Vec<u32> {
-        regs.iter().map(|&r| self.cols[r as usize][i]).collect()
+        regs.iter().map(|&r| self.at(r, i)).collect()
     }
 }
 
@@ -226,13 +252,14 @@ pub(crate) type Found = (Writes, Vec<usize>, Result<(), Error>);
 pub(crate) fn search(program: &Program, db: &mut Database, ruleset: usize, last: u32) -> Found {
     for &index in &program.used[ruleset] {
         let (table, at) = db.indexes[index.index()];
-        db.tables[table.index()].refresh_index(at);
+        db.tables[table.index()].refresh_for_search(at);
     }
     let root = Batch {
-        cols: program.consts[ruleset]
+        consts: program.consts[ruleset]
             .iter()
-            .map(|v| vec![v.raw()])
+            .map(|v| v.map(Value::raw))
             .collect(),
+        cols: Vec::new(),
         len: 1,
         colors: Vec::new(),
     };
@@ -269,9 +296,11 @@ pub(crate) fn search_colors(
     db.refresh_group_mirrors();
     let n = level.len();
     let root = Batch {
-        cols: (program.consts[ruleset].iter())
-            .map(|v| vec![v.raw(); n])
+        consts: program.consts[ruleset]
+            .iter()
+            .map(|v| v.map(Value::raw))
             .collect(),
+        cols: Vec::new(),
         len: n,
         colors: level.iter().map(|c| c.index() as u32).collect(),
     };
@@ -306,11 +335,18 @@ fn run<'a, R: Reads<'a>>(
         program,
         last,
         writes: Writes::new(program, R::COLORED),
-        matches: vec![0; decl.rules.len()],
+        matches: vec![0; program.code.rules[ruleset].len()],
         pool: Vec::new(),
         l2: l2(),
     };
-    let mut result = (decl.roots.iter()).try_for_each(|&node| exec.node(node, root));
+    // Before a ruleset first ran every row is new: its naive trie finds
+    // each match once, where each seminaive variant would find it again.
+    let roots = if last == 0 && !R::COLORED && !decl.first.is_empty() {
+        &decl.first
+    } else {
+        &decl.roots
+    };
+    let mut result = roots.iter().try_for_each(|&node| exec.node(node, root));
     if result.is_ok() && exec.ctx.panicked.get() {
         result = Err(Error::Panic("a primitive panicked".to_owned()));
     }
@@ -341,7 +377,7 @@ fn base_slice(table: &Table, row: u32, slice: Slice) -> bool {
 struct Read<'r> {
     table: &'r Table,
     cols: &'r [usize],
-    binds: &'r [Bind],
+    binds: Binds<'r>,
     slice: Slice,
     side: Side,
 }
@@ -411,8 +447,9 @@ impl<'a, R: Reads<'a>> Exec<'a, R> {
         input: &Batch,
     ) -> Vec<std::ops::Range<u32>> {
         let rows = self.colors().rows(table);
+        let held: Vec<Cow<'_, [u32]>> = key.iter().map(|&r| input.col(r)).collect();
         let mut columns: Vec<&[u32]> = vec![&input.colors];
-        columns.extend(key.iter().map(|&r| input.col(r)));
+        columns.extend(held.iter().map(|c| &**c));
         let mut ranges = vec![0..0; input.len];
         rows.indexes[at].ranges(&rows.columns, &columns, &mut ranges);
         ranges
@@ -450,6 +487,7 @@ impl<'a, R: Reads<'a>> Exec<'a, R> {
             colors.extend(sel.iter().map(|&i| input.colors[i as usize]));
         }
         Batch {
+            consts: input.consts.clone(),
             cols,
             len: sel.len(),
             colors,
@@ -461,62 +499,70 @@ impl<'a, R: Reads<'a>> Exec<'a, R> {
             return Ok(());
         }
         let program: &'a Program = self.program;
-        let node = &program.file.nodes[id as usize];
+        let node = program.code.node(id);
         let n = input.len;
         let mut sel = self.buffer();
         let mut added: Vec<Vec<u32>> = Vec::new();
-        match &node.step {
-            Step::Scan { table, slice, cols } => {
-                return self.scan(node, *table, *slice, cols, input);
+        match node.step {
+            StepRef::Scan { table, slice, cols } => {
+                return self.scan(node, table, slice, cols, input);
             }
-            Step::Expand {
+            StepRef::Expand {
                 index,
                 key,
                 outs,
                 slice,
-            } if R::COLORED => return self.expand_colored(node, *index, key, outs, *slice, input),
-            Step::Expand {
+            } if R::COLORED => return self.expand_colored(node, index, key, outs, slice, input),
+            StepRef::Expand {
                 index,
                 key,
                 outs,
                 slice,
             } => {
-                let (table, at) = self.index(*index);
-                let side = Side::Base(self.index_table(*index));
+                let (table, at) = self.index(index);
+                let side = Side::Base(self.index_table(index));
                 let index = &table.indexes[at];
-                let ranges = self.ranges(table, at, key, input);
-                let rows = index.rows();
+                let key_cols = &index.order[..index.key_len];
                 let cols: Vec<usize> = (0..table.columns.len())
-                    .filter(|c| !index.order.contains(c))
+                    .filter(|c| !key_cols.contains(c))
                     .collect();
-                let found = (ranges.iter().enumerate())
-                    .map(|(i, range)| (i, &rows[range.start as usize..range.end as usize]));
                 let read = Read {
                     table,
                     cols: &cols,
                     binds: outs,
-                    slice: *slice,
+                    slice,
                     side,
                 };
+                if index.is_grouped() {
+                    let keys = input.col(key[0]);
+                    let found = (0..input.len)
+                        .map(|i| (i, index.group_rows(keys[i]).expect("a grouped index")));
+                    return self.emit(node, &read, input, found);
+                }
+                let ranges = self.ranges(table, at, key, input);
+                let rows = index.rows();
+                let found = (ranges.iter().enumerate())
+                    .map(|(i, range)| (i, &rows[range.start as usize..range.end as usize]));
                 return self.emit(node, &read, input, found);
             }
-            Step::Lookup {
+            StepRef::Lookup {
                 table,
                 key,
                 out,
                 slice,
             } if R::COLORED => {
-                self.lookup_colored(*table, key, *out, *slice, input, &mut sel, &mut added)?;
+                self.lookup_colored(table, key, out, slice, input, &mut sel, &mut added)?;
             }
-            Step::Lookup {
+            StepRef::Lookup {
                 table,
                 key,
                 out,
                 slice,
             } => {
-                let t = self.table(*table);
+                let t = self.table(table);
                 let keys = t.schema.keys;
-                let columns: Vec<&[u32]> = key.iter().map(|&r| input.col(r)).collect();
+                let held: Vec<Cow<'_, [u32]>> = key.iter().map(|&r| input.col(r)).collect();
+                let columns: Vec<&[u32]> = held.iter().map(|c| &**c).collect();
                 let (mut hashes, mut rows) = (self.buffer(), self.buffer());
                 hashes.resize(n, 0);
                 rows.resize(n, EMPTY);
@@ -524,16 +570,16 @@ impl<'a, R: Reads<'a>> Exec<'a, R> {
                 t.find_many(&columns, &hashes, &mut rows);
                 let mut found = self.buffer();
                 for (i, &row) in rows.iter().enumerate() {
-                    if row == EMPTY || !visible(t, row, *slice, self.last) {
-                        if *slice == Slice::Any {
+                    if row == EMPTY || !visible(t, row, slice, self.last) {
+                        if slice == Slice::Any {
                             let name = &t.schema.name;
                             return Err(Error::Panic(format!("`{name}` has no row for the key")));
                         }
                         continue;
                     }
-                    match *out {
+                    match out {
                         Some(Bind::New(_)) => found.push(t.cell(row, keys)),
-                        Some(Bind::Same(r)) if t.cell(row, keys) != input.col(r)[i] => continue,
+                        Some(Bind::Same(r)) if t.cell(row, keys) != input.at(r, i) => continue,
                         _ => {}
                     }
                     sel.push(i as u32);
@@ -544,17 +590,37 @@ impl<'a, R: Reads<'a>> Exec<'a, R> {
                     added.push(found);
                 }
             }
-            Step::Check { index, key } if R::COLORED => {
-                self.check_colored(*index, key, input, &mut sel)
+            StepRef::Check { index, key } if R::COLORED => {
+                self.check_colored(index, key, input, &mut sel, true)
             }
-            Step::Check { index, key } => {
-                let (table, at) = self.index(*index);
-                let ranges = self.ranges(table, at, key, input);
-                sel.extend((0..n as u32).filter(|&i| !ranges[i as usize].is_empty()));
+            StepRef::Absent { index, key } if R::COLORED => {
+                self.check_colored(index, key, input, &mut sel, false)
             }
-            Step::Same { a, b } => select_same(&input.col(*a)[..n], &input.col(*b)[..n], &mut sel),
-            Step::Prim { prim, args, out } => {
-                let prim = program.externs[*prim as usize];
+            StepRef::Check { index, key } | StepRef::Absent { index, key } => {
+                let held = matches!(node.step, StepRef::Check { .. });
+                let (table, at) = self.index(index);
+                let index = &table.indexes[at];
+                if index.is_grouped() {
+                    let keys = input.col(key[0]);
+                    let found = |i: usize| !index.group_rows(keys[i]).is_none_or(<[u32]>::is_empty);
+                    sel.extend((0..n as u32).filter(|&i| found(i as usize) == held));
+                } else {
+                    let ranges = self.ranges(table, at, key, input);
+                    sel.extend((0..n as u32).filter(|&i| ranges[i as usize].is_empty() != held));
+                }
+            }
+            StepRef::Same { a, b } => {
+                if [a, b]
+                    .iter()
+                    .any(|&r| input.consts.get(r as usize).is_some_and(Option::is_none))
+                {
+                    self.release(sel);
+                    return Ok(());
+                }
+                select_same(&input.col(a)[..n], &input.col(b)[..n], &mut sel);
+            }
+            StepRef::Prim { prim, args, out } => {
+                let prim = program.externs[prim as usize].id;
                 if R::COLORED {
                     check_pure(&self.ctx, prim)?;
                 }
@@ -562,7 +628,7 @@ impl<'a, R: Reads<'a>> Exec<'a, R> {
                 let mut values = Vec::with_capacity(args.len());
                 for i in 0..n {
                     values.clear();
-                    values.extend(args.iter().map(|&r| Value::new(input.col(r)[i])));
+                    values.extend(args.iter().map(|&r| Value::new(input.at(r, i))));
                     let result = if R::COLORED {
                         self.ctx
                             .call_in(self.reads.copy().colors, input.colors[i], prim, &values)
@@ -572,9 +638,9 @@ impl<'a, R: Reads<'a>> Exec<'a, R> {
                     let Some(value) = result else {
                         continue;
                     };
-                    match *out {
+                    match out {
                         Bind::New(_) => found.push(value.raw()),
-                        Bind::Same(r) if value.raw() != input.col(r)[i] => continue,
+                        Bind::Same(r) if value.raw() != input.at(r, i) => continue,
                         Bind::Same(_) => {}
                     }
                     sel.push(i as u32);
@@ -596,7 +662,8 @@ impl<'a, R: Reads<'a>> Exec<'a, R> {
         key: &[Reg],
         input: &Batch,
     ) -> Vec<std::ops::Range<u32>> {
-        let columns: Vec<&[u32]> = key.iter().map(|&r| input.col(r)).collect();
+        let held: Vec<Cow<'_, [u32]>> = key.iter().map(|&r| input.col(r)).collect();
+        let columns: Vec<&[u32]> = held.iter().map(|c| &**c).collect();
         let mut ranges = vec![0..0; input.len];
         table.indexes[at].ranges(&table.columns, &columns, &mut ranges);
         ranges
@@ -606,10 +673,10 @@ impl<'a, R: Reads<'a>> Exec<'a, R> {
     // must equal a register or another column is filtered a chunk at a time.
     fn scan(
         &mut self,
-        node: &'a Node,
+        node: NodeRef<'a>,
         table: u32,
         slice: Slice,
-        cols: &[Bind],
+        cols: Binds<'a>,
         input: &Batch,
     ) -> Result<(), Error> {
         let t = self.table(table);
@@ -621,7 +688,7 @@ impl<'a, R: Reads<'a>> Exec<'a, R> {
             Slice::Old => 0..start,
             Slice::All | Slice::Any => 0..t.len(),
         };
-        let width = input.cols.len() as u32;
+        let width = input.width();
         let column = |c: usize, rows: &std::ops::Range<usize>| &t.columns[c][rows.clone()];
         // A chunk of rows: its cells in each column, and the rows it keeps.
         let size = self.batch_len(4 * (cols.len() + 1));
@@ -631,12 +698,12 @@ impl<'a, R: Reads<'a>> Exec<'a, R> {
                 let chunk = at..(at + size).min(rows.end);
                 let mut hits: Option<Vec<u32>> = None;
                 for (c, bind) in cols.iter().enumerate() {
-                    let Bind::Same(r) = *bind else { continue };
+                    let Bind::Same(r) = bind else { continue };
                     let mut found = Vec::new();
                     if r < width {
-                        select_eq(column(c, &chunk), input.col(r)[i], &mut found);
+                        select_eq(column(c, &chunk), input.at(r, i), &mut found);
                     } else {
-                        let other = cols.iter().position(|&b| b == Bind::New(r));
+                        let other = cols.iter().position(|b| b == Bind::New(r));
                         let other = other.expect("a register is bound before it is read");
                         select_same(column(c, &chunk), column(other, &chunk), &mut found);
                     }
@@ -689,18 +756,19 @@ impl<'a, R: Reads<'a>> Exec<'a, R> {
     // of the color, through the mirror of the index.
     fn expand_colored(
         &mut self,
-        node: &'a Node,
+        node: NodeRef<'a>,
         index: u32,
         key: &[Reg],
-        outs: &[Bind],
+        outs: Binds<'a>,
         slice: Slice,
         input: &Batch,
     ) -> Result<(), Error> {
         let (table, at) = self.index(index);
         let id = self.index_table(index);
-        let order = &table.indexes[at].order;
+        let index_of = &table.indexes[at];
+        let key_cols = &index_of.order[..index_of.key_len];
         let cols: Vec<usize> = (0..table.columns.len())
-            .filter(|c| !order.contains(c))
+            .filter(|c| !key_cols.contains(c))
             .collect();
         if slice != Slice::New {
             let ranges = self.ranges(table, at, key, input);
@@ -734,7 +802,15 @@ impl<'a, R: Reads<'a>> Exec<'a, R> {
     }
 
     // Check in a color run: a base row the color shows or a row of the color.
-    fn check_colored(&mut self, index: u32, key: &[Reg], input: &Batch, sel: &mut Vec<u32>) {
+    // Keeps the bindings whose key the color shows, or lacks unless `held`.
+    fn check_colored(
+        &mut self,
+        index: u32,
+        key: &[Reg],
+        input: &Batch,
+        sel: &mut Vec<u32>,
+        held: bool,
+    ) {
         let (table, at) = self.index(index);
         let id = self.index_table(index);
         let ranges = self.ranges(table, at, key, input);
@@ -746,7 +822,7 @@ impl<'a, R: Reads<'a>> Exec<'a, R> {
             let shown = rows[range.start as usize..range.end as usize]
                 .iter()
                 .any(|&row| colors.visible(c, id, table, row));
-            if shown || !own.is_empty() {
+            if (shown || !own.is_empty()) == held {
                 sel.push(i as u32);
             }
         }
@@ -774,7 +850,7 @@ impl<'a, R: Reads<'a>> Exec<'a, R> {
             let c = input.colors[i];
             cells.clear();
             cells.push(c);
-            cells.extend(key.iter().map(|&r| input.col(r)[i]));
+            cells.extend(key.iter().map(|&r| input.at(r, i)));
             let hit = match colors.color_row(c, id, &cells) {
                 Some(row) => visible(rows, row, slice, self.reads.copy().last[c as usize])
                     .then_some((rows, row, keys + 1)),
@@ -792,7 +868,7 @@ impl<'a, R: Reads<'a>> Exec<'a, R> {
             };
             match out {
                 Some(Bind::New(_)) => found.push(holder.cell(row, output)),
-                Some(Bind::Same(r)) if holder.cell(row, output) != input.col(r)[i] => continue,
+                Some(Bind::Same(r)) if holder.cell(row, output) != input.at(r, i) => continue,
                 _ => {}
             }
             sel.push(i as u32);
@@ -810,15 +886,15 @@ impl<'a, R: Reads<'a>> Exec<'a, R> {
     // of them.
     fn emit<'r>(
         &mut self,
-        node: &'a Node,
+        node: NodeRef<'a>,
         read: &Read<'_>,
         input: &Batch,
         found: impl Iterator<Item = (usize, &'r [u32])>,
     ) -> Result<(), Error> {
         let (table, slice) = (read.table, read.slice);
-        let width = input.cols.len() as u32;
+        let width = input.width();
         let (mut news, mut checks) = (Vec::new(), Vec::new());
-        for (&c, &bind) in read.cols.iter().zip(read.binds) {
+        for (&c, bind) in read.cols.iter().zip(read.binds.iter()) {
             match bind {
                 Bind::New(_) => news.push(c),
                 Bind::Same(r) if r < width => checks.push((c, Source::Reg(r))),
@@ -832,7 +908,7 @@ impl<'a, R: Reads<'a>> Exec<'a, R> {
             for &row in rows {
                 let holds = |&(c, source): &(usize, Source)| {
                     let want = match source {
-                        Source::Reg(r) => input.col(r)[i],
+                        Source::Reg(r) => input.at(r, i),
                         Source::Column(other) => table.cell(row, other),
                     };
                     table.cell(row, c) == want
@@ -864,7 +940,7 @@ impl<'a, R: Reads<'a>> Exec<'a, R> {
 
     // Runs the actions and children of `node` on `batch`, then keeps its
     // buffers for later batches.
-    fn finish(&mut self, node: &'a Node, mut batch: Batch) -> Result<(), Error> {
+    fn finish(&mut self, node: NodeRef<'a>, mut batch: Batch) -> Result<(), Error> {
         let result = self.run_node(node, &mut batch);
         for col in batch.cols {
             self.release(col);
@@ -875,27 +951,27 @@ impl<'a, R: Reads<'a>> Exec<'a, R> {
         result
     }
 
-    fn run_node(&mut self, node: &'a Node, batch: &mut Batch) -> Result<(), Error> {
+    fn run_node(&mut self, node: NodeRef<'a>, batch: &mut Batch) -> Result<(), Error> {
         if batch.len == 0 {
             return Ok(());
         }
-        for &rule in &node.rules {
+        for &rule in node.rules {
             self.matches[rule as usize] += batch.len;
         }
-        for action in &node.actions {
+        for action in node.actions() {
             self.action(action, batch)?;
         }
-        for &child in &node.children {
+        for &child in node.children {
             self.node(child, batch)?;
         }
         Ok(())
     }
 
-    fn action(&mut self, action: &Action, batch: &mut Batch) -> Result<(), Error> {
+    fn action(&mut self, action: ActionRef<'a>, batch: &mut Batch) -> Result<(), Error> {
         let n = batch.len;
         match action {
-            Action::Entry { table, args, .. } if R::COLORED => {
-                let (t, id) = (self.table(*table), self.table_id(*table));
+            ActionRef::Entry { table, args, .. } if R::COLORED => {
+                let (t, id) = (self.table(table), self.table_id(table));
                 let colors = self.colors();
                 let (rows, keys) = (colors.rows(id), t.schema.keys);
                 let mut out = self.buffer();
@@ -904,14 +980,14 @@ impl<'a, R: Reads<'a>> Exec<'a, R> {
                     let c = batch.colors[i];
                     cells.clear();
                     cells.push(c);
-                    cells.extend(args.iter().map(|&r| batch.col(r)[i]));
+                    cells.extend(args.iter().map(|&r| batch.at(r, i)));
                     let base = || t.find(&cells[1..], hash_row(&cells[1..]));
                     out.push(match colors.color_row(c, id, &cells) {
                         Some(row) => rows.cell(row, keys + 1),
                         None => match base().filter(|&row| !colors.hides(c, id, t, row)) {
                             Some(row) => t.cell(row, keys),
                             None => {
-                                let table = (*table as usize, t);
+                                let table = (table as usize, t);
                                 self.writes
                                     .entry(table, &cells, hash_row(&cells), self.ctx.uf)
                             }
@@ -920,12 +996,13 @@ impl<'a, R: Reads<'a>> Exec<'a, R> {
                 }
                 batch.cols.push(out);
             }
-            Action::Entry { table, args, .. } => {
-                let t = self.table(*table);
+            ActionRef::Entry { table, args, .. } => {
+                let t = self.table(table);
                 let (mut hashes, mut out) = (self.buffer(), self.buffer());
                 hashes.resize(n, 0);
                 out.resize(n, EMPTY);
-                let columns: Vec<&[u32]> = args.iter().map(|&r| batch.col(r)).collect();
+                let held: Vec<Cow<'_, [u32]>> = args.iter().map(|&r| batch.col(r)).collect();
+                let columns: Vec<&[u32]> = held.iter().map(|c| &**c).collect();
                 hash_rows(&columns, &mut hashes);
                 t.find_many(&columns, &hashes, &mut out);
                 let mut key = Vec::with_capacity(args.len());
@@ -933,7 +1010,7 @@ impl<'a, R: Reads<'a>> Exec<'a, R> {
                     *cell = if *cell == EMPTY {
                         key.clear();
                         key.extend(columns.iter().map(|column| column[i]));
-                        let table = (*table as usize, t);
+                        let table = (table as usize, t);
                         self.writes.entry(table, &key, hash, self.ctx.uf)
                     } else {
                         t.cell(*cell, args.len())
@@ -942,13 +1019,14 @@ impl<'a, R: Reads<'a>> Exec<'a, R> {
                 self.release(hashes);
                 batch.cols.push(out);
             }
-            Action::Set { table, args } => {
-                let t = self.table(*table);
+            ActionRef::Set { table, args } => {
+                let t = self.table(table);
                 let selected = if t.schema.kind() == TableKind::Relation {
                     let (mut hashes, mut found) = (self.buffer(), self.buffer());
                     hashes.resize(n, 0);
                     found.resize(n, EMPTY);
-                    let columns: Vec<&[u32]> = args.iter().map(|&r| batch.col(r)).collect();
+                    let held: Vec<Cow<'_, [u32]>> = args.iter().map(|&r| batch.col(r)).collect();
+                    let columns: Vec<&[u32]> = held.iter().map(|c| &**c).collect();
                     hash_rows(&columns, &mut hashes);
                     t.find_many(&columns, &hashes, &mut found);
                     let mut key = Vec::new();
@@ -956,10 +1034,10 @@ impl<'a, R: Reads<'a>> Exec<'a, R> {
                         .filter(|&i| {
                             if R::COLORED {
                                 let c = batch.colors[i];
-                                let id = self.table_id(*table);
+                                let id = self.table_id(table);
                                 key.clear();
                                 key.push(c);
-                                key.extend(args.iter().map(|&r| batch.col(r)[i]));
+                                key.extend(args.iter().map(|&r| batch.at(r, i)));
                                 self.colors().color_row(c, id, &key).is_none()
                                     && (found[i] == EMPTY
                                         || !self.colors().visible(c, id, t, found[i]))
@@ -974,7 +1052,7 @@ impl<'a, R: Reads<'a>> Exec<'a, R> {
                 } else {
                     None
                 };
-                let delta = &mut self.writes.rows[*table as usize];
+                let delta = &mut self.writes.rows[table as usize];
                 let mut columns = delta.columns.iter_mut();
                 if R::COLORED {
                     let colors = columns.next().expect("a color column");
@@ -985,15 +1063,16 @@ impl<'a, R: Reads<'a>> Exec<'a, R> {
                 }
                 for (column, &r) in columns.zip(args) {
                     match &selected {
-                        Some(selected) => column.extend(selected.iter().map(|&i| batch.col(r)[i])),
-                        None => column.extend_from_slice(batch.col(r)),
+                        Some(selected) => column.extend(selected.iter().map(|&i| batch.at(r, i))),
+                        None => column.extend_from_slice(&batch.col(r)),
                     }
                 }
                 let added = selected.as_ref().map_or(n, Vec::len);
                 delta.subsumed.resize(delta.subsumed.len() + added, false);
             }
-            Action::Union { a, b } => {
-                let pairs = batch.col(*a).iter().zip(batch.col(*b));
+            ActionRef::Union { a, b } => {
+                let (a, b) = (batch.col(a), batch.col(b));
+                let pairs = a.iter().zip(b.iter());
                 if R::COLORED {
                     let colors = pairs.zip(&batch.colors).filter(|((a, b), _)| a != b);
                     for ((&a, &b), &c) in colors {
@@ -1005,8 +1084,8 @@ impl<'a, R: Reads<'a>> Exec<'a, R> {
                 let unions = pairs.filter(|(a, b)| a != b).map(|(&a, &b)| (a, b));
                 self.writes.unions.extend(unions);
             }
-            Action::Delete { table, args } if R::COLORED => {
-                let (t, id) = (self.table(*table), self.table_id(*table));
+            ActionRef::Delete { table, args } if R::COLORED => {
+                let (t, id) = (self.table(table), self.table_id(table));
                 for i in 0..n {
                     let c = batch.colors[i];
                     for key in t.orders(&batch.row(args, i)) {
@@ -1026,19 +1105,19 @@ impl<'a, R: Reads<'a>> Exec<'a, R> {
                     }
                 }
             }
-            Action::Subsume { .. } if R::COLORED => {
+            ActionRef::Subsume { .. } if R::COLORED => {
                 return Err(Error::Unsupported(
                     "a rule that subsumes rows cannot run in a color".to_owned(),
                 ));
             }
-            Action::Delete { table, args } => {
-                let t = self.table(*table);
+            ActionRef::Delete { table, args } => {
+                let t = self.table(table);
                 for i in 0..n {
                     for key in t.orders(&batch.row(args, i)) {
                         let hash = hash_row(&key);
                         if let Some(row) = t.find(&key, hash) {
                             self.writes.removed.push(Removal {
-                                table: self.program.tables[*table as usize],
+                                table: self.program.tables[table as usize],
                                 row,
                                 hash,
                             });
@@ -1046,19 +1125,19 @@ impl<'a, R: Reads<'a>> Exec<'a, R> {
                     }
                 }
             }
-            Action::Subsume { table, args } => {
-                let keys = (0..n).map(|i| (*table as usize, batch.row(args, i)));
+            ActionRef::Subsume { table, args } => {
+                let keys = (0..n).map(|i| (table as usize, batch.row(args, i)));
                 self.writes.subsumed.extend(keys);
             }
-            Action::Call { prim, args } => {
-                let prim = self.program.externs[*prim as usize];
+            ActionRef::Call { prim, args } => {
+                let prim = self.program.externs[prim as usize].id;
                 if R::COLORED {
                     check_pure(&self.ctx, prim)?;
                 }
                 let mut values = Vec::with_capacity(args.len());
                 for i in 0..n {
                     values.clear();
-                    values.extend(args.iter().map(|&r| Value::new(batch.col(r)[i])));
+                    values.extend(args.iter().map(|&r| Value::new(batch.at(r, i))));
                     let result = if R::COLORED {
                         self.ctx
                             .call_in(self.reads.copy().colors, batch.colors[i], prim, &values)
@@ -1071,10 +1150,13 @@ impl<'a, R: Reads<'a>> Exec<'a, R> {
                     }
                 }
             }
-            Action::Panic { message } => return Err(Error::Panic(message.clone())),
-            Action::FindOrMake { rows, out } => {
-                let found = self.find_or_make(rows, batch)?;
-                debug_assert_eq!(*out as usize, batch.cols.len());
+            ActionRef::Panic { message } => {
+                let message = self.program.code.string(message).to_owned();
+                return Err(Error::Panic(message));
+            }
+            ActionRef::FindOrMake { rows, count, out } => {
+                let found = self.find_or_make(&super::code::rows(rows, count), batch)?;
+                debug_assert_eq!(out, batch.width());
                 batch.cols.push(found);
             }
         }
@@ -1084,7 +1166,7 @@ impl<'a, R: Reads<'a>> Exec<'a, R> {
     // The group of each binding whose rows are `rows`: one found in the
     // view of its color, else one made earlier in the iteration, else a new
     // one whose rows the writes hold.
-    fn find_or_make(&mut self, rows: &[(u32, Vec<Reg>)], batch: &Batch) -> Result<Vec<u32>, Error> {
+    fn find_or_make(&mut self, rows: &[(u32, &[Reg])], batch: &Batch) -> Result<Vec<u32>, Error> {
         let tables: Vec<TableId> = rows.iter().map(|&(t, _)| self.table_id(t)).collect();
         let groups = self.ctx.groups;
         let Some(group) = group_at(groups, tables[0]).map(|at| &groups[at]) else {
@@ -1104,7 +1186,7 @@ impl<'a, R: Reads<'a>> Exec<'a, R> {
             };
             spec.clear();
             for (&table, (_, regs)) in tables.iter().zip(rows) {
-                let mut cells: Vec<u32> = regs.iter().map(|&r| batch.col(r)[i]).collect();
+                let mut cells: Vec<u32> = regs.iter().map(|&r| batch.at(r, i)).collect();
                 view.canonical(table, &mut cells);
                 spec.push((table, cells));
             }

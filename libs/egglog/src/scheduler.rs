@@ -191,7 +191,7 @@ fn free_vars(rule: &Rule) -> Vec<String> {
     for fact in &rule.body {
         match fact {
             Fact::Eq(_, a, b) => [a, b].into_iter().for_each(|e| vars(e, &mut query)),
-            Fact::Fact(e) => vars(e, &mut query),
+            Fact::Fact(e) | Fact::Not(e) => vars(e, &mut query),
         }
     }
     let mut read = Vec::new();
