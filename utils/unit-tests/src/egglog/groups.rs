@@ -264,3 +264,31 @@ fn repeated_relation_members_have_set_identity() {
     let c = db.color(&[]);
     assert_eq!(db.find_or_make_in(c, &spec).unwrap(), a);
 }
+
+#[test]
+fn empty_keyed_groups_merge_after_last_member_deletion() {
+    let mut db = Database::new();
+    let group = db.add_sort("G", tir_egglog::SortKind::Eq);
+    let int = db.sort("i64").unwrap();
+    let member = db.add_relation("Member", &[group, int]);
+    let keyed = db.add_relation("Keyed", &[group]);
+    db.add_group(group, &[member], keyed).unwrap();
+    let (zero, one) = (db.base(0_i64), db.base(1_i64));
+    let a = db.find_or_make(&[(member, &[zero])]).unwrap();
+    let b = db.find_or_make(&[(member, &[one])]).unwrap();
+    db.rebuild().unwrap();
+    let color = db.color(&[]);
+    db.remove_in(color, member, &[a, zero]);
+    db.remove_in(color, member, &[b, one]);
+    db.rebuild().unwrap();
+    assert_eq!(db.rows_in(color, member).count(), 0);
+    assert!(db.lookup_in(color, keyed, &[a]).is_some());
+    assert!(db.lookup_in(color, keyed, &[b]).is_some());
+    assert_eq!(db.find_in(color, a), db.find_in(color, b));
+    db.adopt(color);
+    db.rebuild().unwrap();
+    assert_eq!(db.rows(member).count(), 0);
+    assert!(db.lookup(keyed, &[a]).is_some());
+    assert!(db.lookup(keyed, &[b]).is_some());
+    assert_eq!(db.find(a), db.find(b));
+}

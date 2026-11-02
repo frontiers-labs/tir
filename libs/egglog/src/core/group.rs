@@ -147,15 +147,27 @@ impl<'a> GroupView<'a> {
     }
 
     // The keyed group other than `skip` whose rows are `rows`, sorted and
-    // canonical: of the groups that hold a row of `rows`, through the
-    // shortest list.
+    // canonical. A nonempty set starts from its shortest member index.
     pub(crate) fn find(&self, group: &Group, rows: &[GroupRow], skip: u32) -> Option<u32> {
+        let matches =
+            |&g: &u32| g != skip && self.is_keyed(group, g) && self.group_rows(group, g) == rows;
+        if rows.is_empty() {
+            let base = &self.tables[group.keyed.index()];
+            let base = (0..base.len())
+                .filter_map(|at| base.is_live(at as u32).then_some(base.columns[0][at]));
+            let color = self.colors.into_iter().flat_map(|(colors, c)| {
+                let keyed = colors.rows(group.keyed);
+                (0..keyed.len()).filter_map(move |at| {
+                    (keyed.is_live(at as u32) && keyed.columns[0][at] == c)
+                        .then_some(keyed.columns[1][at])
+                })
+            });
+            return base.chain(color).find(matches);
+        }
         let hits = (rows.iter())
             .map(|(table, cells)| self.hits(*table, group.member(*table).by_cells, cells));
         let fewest = hits.min_by_key(Hits::len)?;
-        self.shown(fewest)
-            .map(|row| row[0].raw())
-            .find(|&g| g != skip && self.is_keyed(group, g) && self.group_rows(group, g) == rows)
+        self.shown(fewest).map(|row| row[0].raw()).find(matches)
     }
 }
 
