@@ -10,8 +10,8 @@ use std::time::Instant;
 
 pub use file::LoadError;
 pub(crate) use file::{
-    Const, ConstDecl, ExternDecl, IndexDecl, ProgramFile, RulesetDecl, SortClass, SortDecl,
-    TableDecl, decode, map_merge,
+    Const, ConstDecl, ExternDecl, GroupDecl, IndexDecl, ProgramFile, RulesetDecl, SortClass,
+    SortDecl, TableDecl, decode, map_merge,
 };
 
 use crate::ast::{Fact, Literal, Schedule};

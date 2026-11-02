@@ -33,6 +33,8 @@ trait Env: Any + Send + Sync {
     fn as_any_mut(&mut self) -> &mut dyn Any;
     fn clone_box(&self) -> Box<dyn Env>;
     fn len(&self) -> usize;
+    fn retains_from(&self, mark: u32, end: u32) -> bool;
+    fn truncate(&mut self, mark: u32);
     fn rebuild(&mut self, uf: &mut UnionFind, dirty: &mut Vec<u32>);
     fn holding(&self, ids: &HashSet<u32, FxBuildHasher>, out: &mut Vec<u32>);
     fn map(
@@ -76,6 +78,17 @@ impl<C: ContainerValue> Env for ContainerEnv<C> {
 
     fn len(&self) -> usize {
         self.values.len()
+    }
+
+    fn retains_from(&self, mark: u32, end: u32) -> bool {
+        self.ids.iter().any(|(container, id)| {
+            id.raw() < mark && container.iter().any(|v| (mark..end).contains(&v.raw()))
+        })
+    }
+
+    fn truncate(&mut self, mark: u32) {
+        self.ids.retain(|_, id| id.raw() < mark);
+        self.values.retain(|id, _| id.raw() < mark);
     }
 
     fn map(
@@ -208,6 +221,20 @@ impl ContainerValues {
             affected.extend_from_slice(&frontier);
         }
         affected
+    }
+
+    pub(crate) fn check_truncate(&self, mark: u32, end: u32) {
+        assert!(
+            self.envs.iter().all(|env| !env.retains_from(mark, end)),
+            "a retained container holds an id made after the mark"
+        );
+    }
+
+    pub(crate) fn truncate(&mut self, mark: u32) {
+        for env in &mut self.envs {
+            env.truncate(mark);
+        }
+        self.revision += 1;
     }
 
     pub(crate) fn revision(&self) -> u64 {

@@ -1110,6 +1110,7 @@ impl<'a, R: Reads<'a>> Exec<'a, R> {
             }
             let mut sorted: Vec<GroupRow> = spec.clone();
             sorted.sort_unstable();
+            sorted.dedup();
             let mut key = vec![c];
             for (table, cells) in &sorted {
                 key.push(table.index() as u32);

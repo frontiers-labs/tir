@@ -14,7 +14,7 @@ use crate::ast::Literal;
 use crate::{Database, ExternId, F64, Merge, Shape, SortId, SortKind, TableId, TableKind, Value};
 
 const MAGIC: [u8; 4] = *b"TEGG";
-const VERSION: u32 = 4;
+const VERSION: u32 = 5;
 // Merges nest at most this deep, so decoding one cannot exhaust the stack.
 const MERGE_DEPTH: u32 = 64;
 
@@ -65,6 +65,13 @@ pub(crate) struct TableDecl {
 }
 
 #[derive(Clone)]
+pub(crate) struct GroupDecl {
+    pub(crate) sort: u32,
+    pub(crate) keyed: u32,
+    pub(crate) members: Vec<u32>,
+}
+
+#[derive(Clone)]
 pub(crate) struct ExternDecl {
     pub(crate) name: String,
     pub(crate) inputs: Vec<u32>,
@@ -97,6 +104,7 @@ pub(crate) struct ProgramFile {
     pub(crate) sorts: Vec<SortDecl>,
     pub(crate) consts: Vec<ConstDecl>,
     pub(crate) tables: Vec<TableDecl>,
+    pub(crate) groups: Vec<GroupDecl>,
     pub(crate) externs: Vec<ExternDecl>,
     pub(crate) indexes: Vec<IndexDecl>,
     pub(crate) nodes: Vec<Node>,
@@ -372,6 +380,11 @@ pub(crate) fn encode(file: &ProgramFile) -> Vec<u8> {
         ]);
         w.word(u32::from(table.default.is_some()));
         w.word(table.default.unwrap_or(0));
+    });
+    w.list(&file.groups, |w, group| {
+        w.word(group.sort);
+        w.word(group.keyed);
+        w.words(&group.members);
     });
     w.list(&file.externs, |w, prim| {
         w.string(&prim.name);
@@ -683,6 +696,13 @@ pub(crate) fn decode(bytes: &[u8]) -> Load<ProgramFile> {
             default,
         })
     })?;
+    let groups = r.list(|r| {
+        Ok(GroupDecl {
+            sort: r.below(sorts.len(), "sort")?,
+            keyed: r.below(tables.len(), "table")?,
+            members: r.list(|r| r.below(tables.len(), "table"))?,
+        })
+    })?;
     let externs = r.list(|r| {
         Ok(ExternDecl {
             name: r.string()?,
@@ -723,6 +743,7 @@ pub(crate) fn decode(bytes: &[u8]) -> Load<ProgramFile> {
         sorts,
         consts,
         tables,
+        groups,
         externs,
         indexes,
         nodes,
@@ -770,6 +791,17 @@ fn check(file: &ProgramFile) -> Load<()> {
         if let Some(merge) = &table.merge {
             check_merge(file, merge)?;
         }
+    }
+    for group in &file.groups {
+        let keyed = &file.tables[group.keyed as usize];
+        let mut members = group.members.iter().map(|&t| &file.tables[t as usize]);
+        ensure(
+            file.sorts[group.sort as usize].class == SortClass::Eq
+                && keyed.kind == TableKind::Relation
+                && keyed.columns == [group.sort]
+                && members.all(|table| table.columns.len() >= 2 && table.columns[0] == group.sort),
+            "group",
+        )?;
     }
     for index in &file.indexes {
         let len = file.tables[index.table as usize].columns.len();
@@ -1039,6 +1071,29 @@ pub(crate) fn bind(file: &ProgramFile, db: &mut Database) -> Load<(Vec<TableId>,
         db.set_unextractable(id, decl.unextractable);
         if let Some(default) = default {
             db.set_default(id, default);
+        }
+    }
+    for decl in &file.groups {
+        let keyed = tables[decl.keyed as usize];
+        let members: Vec<TableId> = decl.members.iter().map(|&t| tables[t as usize]).collect();
+        let sort = sort(&decl.sort);
+        let existing = db.groups.iter().find(|group| {
+            group.keyed == keyed || group.members.iter().any(|m| members.contains(&m.table))
+        });
+        let mismatch = || LoadError::TableMismatch {
+            name: file.tables[decl.keyed as usize].name.clone(),
+        };
+        if let Some(group) = existing {
+            if group.sort != sort
+                || group.keyed != keyed
+                || group.members.len() != members.len()
+                || !group.members.iter().all(|m| members.contains(&m.table))
+            {
+                return Err(mismatch());
+            }
+        } else {
+            db.add_group(sort, &members, keyed)
+                .map_err(|_| mismatch())?;
         }
     }
     Ok((tables, externs))

@@ -528,6 +528,7 @@ impl Database {
     /// If `color` is the base.
     pub fn adopt_rows(&mut self, color: Color, tables: &[TableId], mark: u32) {
         assert_ne!(color, Color::BASE, "the base is no color to adopt");
+        self.containers.check_truncate(mark, self.uf.len());
         self.colors.ensure(&self.tables);
         let mut own: Vec<_> = (tables.iter())
             .map(|table| {
@@ -542,6 +543,7 @@ impl Database {
             self.tables.iter().all(|table| table.holds_none_from(mark)),
             "a base row holds an id made after the mark"
         );
+        self.containers.truncate(mark);
         self.uf.truncate(mark);
         let mut kept = HashMap::new();
         for (t, rows) in &mut own {
