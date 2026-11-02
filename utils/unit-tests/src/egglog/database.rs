@@ -683,3 +683,119 @@ fn rollback_rejects_retained_container_references_before_mutation() {
     assert_eq!(db.mark(), 3);
     assert_eq!(db.container_value::<Pair>(held), Some(&Pair(a, b)));
 }
+
+#[test]
+fn selective_adoption_removes_base_rows_hidden_by_color_equality() {
+    let (mut db, node) = node_db();
+    let r = db.add_relation("adopted", &[node]);
+    let other = db.add_relation("untouched", &[node]);
+    let [a, b] = [(); 2].map(|()| db.fresh(node));
+    db.insert(r, &[b]).unwrap();
+    db.insert(other, &[b]).unwrap();
+    let mark = db.mark();
+    let color = db.color(&[]);
+    db.union_in(color, b, a);
+    db.rebuild().unwrap();
+    db.adopt_rows(color, &[r], mark);
+    db.rebuild().unwrap();
+    assert_eq!(rows(&db, r), [vec![a]]);
+    assert_eq!(rows(&db, other), [vec![b]]);
+    assert_ne!(db.find(a), db.find(b));
+}
+
+#[test]
+fn selective_adoption_rejects_surviving_color_ids_before_mutation() {
+    for ancestor in [false, true] {
+        let (mut db, node) = node_db();
+        let r = db.add_relation("survives", &[node]);
+        let survivor = db.color(&[]);
+        let selected = db.color(if ancestor { std::slice::from_ref(&survivor) } else { &[] });
+        let mark = db.mark();
+        let held = db.fresh(node);
+        db.insert_in(survivor, r, &[held]).unwrap();
+        db.rebuild().unwrap();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| db.adopt_rows(selected, &[r], mark)));
+        assert!(result.is_err());
+        assert_eq!(db.rows_in(survivor, r).next().unwrap()[0], held);
+        assert_ne!(db.fresh(node), held);
+    }
+}
+
+#[test]
+fn selective_adoption_rejects_surviving_container_ids_before_mutation() {
+    let (mut db, node) = node_db();
+    let pairs = db.add_sort("Pair", SortKind::container::<Pair>());
+    let r = db.add_relation("surviving_pair", &[pairs]);
+    let a = db.fresh(node);
+    let mark = db.mark();
+    let sibling = db.color(&[]);
+    let selected = db.color(&[]);
+    let b = db.fresh(node);
+    let held = db.container(Pair(a, b));
+    db.insert_in(sibling, r, &[held]).unwrap();
+    db.rebuild().unwrap();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| db.adopt_rows(selected, &[], mark)));
+    assert!(result.is_err());
+    assert_eq!(db.container_value::<Pair>(held), Some(&Pair(a, b)));
+    assert_eq!(db.rows_in(sibling, r).next().unwrap()[0], held);
+    assert_ne!(db.fresh(node), b);
+}
+
+#[test]
+fn id_run_arguments_follow_base_and_color_equality() {
+    use tir_egglog::prelude::*;
+    use tir_egglog::{Program, Rules, Schedule};
+    for loaded in [false, true] {
+        for colored in [false, true] {
+            let (mut db, node) = node_db();
+            let input = db.add_relation("arg_input", &[node]);
+            let output = db.add_relation("arg_output", &[node]);
+            let [a, b] = [(); 2].map(|()| db.fresh(node));
+            db.insert(input, &[b]).unwrap();
+            let arg = exprs::arg(0);
+            let mut rules = Rules::new();
+            if colored { rules.set_colored(""); }
+            rules.rule(&db, "", facts![(arg_input x) (= x (unquote arg))], actions![(arg_output x)]).unwrap();
+            let compiled = rules.compile(&db).unwrap();
+            let mut program = if loaded { Program::from_bytes(&compiled.to_bytes(), &mut db).unwrap() } else { compiled };
+            let color = if colored { db.color(&[]) } else { tir_egglog::Color::BASE };
+            db.union_in(color, b, a);
+            db.rebuild().unwrap();
+            for mut run in [program.clone(), program] {
+                run.run(&mut db, &Schedule::run(""), &[b]).unwrap();
+                run.run(&mut db, &Schedule::run(""), &[b]).unwrap();
+                assert!(db.lookup_in(color, output, &[a]).is_some());
+            }
+        }
+    }
+}
+
+#[test]
+fn scalar_arguments_share_raw_values_without_equality_normalization() {
+    use tir_egglog::prelude::*;
+    use tir_egglog::{Program, Rules, Schedule};
+    let (mut db, node) = node_db();
+    let int = db.sort("i64").unwrap();
+    let ids = db.add_relation("ids", &[node]);
+    let scalars = db.add_relation("scalars", &[int]);
+    let hit_id = db.add_relation("hit_id", &[node]);
+    let hit_scalar = db.add_relation("hit_scalar", &[int]);
+    let [a, b] = [(); 2].map(|()| db.fresh(node));
+    let _ = db.base(0_i64);
+    let scalar = db.base(1_i64);
+    assert_eq!(b.raw(), scalar.raw());
+    db.insert(ids, &[b]).unwrap();
+    db.insert(scalars, &[scalar]).unwrap();
+    let arg = exprs::arg(0);
+    let mut rules = Rules::new();
+    rules.rule(&db, "", facts![(ids x) (= x (unquote arg))], actions![(hit_id x)]).unwrap();
+    let arg = exprs::arg(0);
+    rules.rule(&db, "", facts![(scalars x) (= x (unquote arg))], actions![(hit_scalar x)]).unwrap();
+    let bytes = rules.compile(&db).unwrap().to_bytes();
+    let mut program = Program::from_bytes(&bytes, &mut db).unwrap();
+    db.union(a, b);
+    db.rebuild().unwrap();
+    program.run(&mut db, &Schedule::run(""), &[b]).unwrap();
+    assert!(db.lookup(hit_id, &[a]).is_some());
+    assert!(db.lookup(hit_scalar, &[scalar]).is_some());
+}
