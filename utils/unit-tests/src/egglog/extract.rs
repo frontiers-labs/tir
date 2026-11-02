@@ -51,6 +51,130 @@ fn cost_picks_the_cheaper_constructor() -> Result<(), Error> {
 }
 
 #[test]
+fn colored_extraction_costs_normalized_containers() -> Result<(), Error> {
+    use tir_egglog::sort::{Container, MapKind, MultiSetKind, SetKind, VecKind};
+    use tir_egglog::{Color, Extractor, SortKind, TermDag};
+
+    let mut eg = EGraph::default();
+    datatype!(&mut eg, (datatype E (A :cost 2) (B :cost 3)));
+    add_constructor(&mut eg, "Hidden", schema(&[], "E"), None, true)?;
+    for (name, presort, args) in [
+        ("ES", "Set", vec!["E"]),
+        ("EV", "Vec", vec!["E"]),
+        ("EMS", "MultiSet", vec!["E"]),
+        ("EM", "Map", vec!["E", "i64"]),
+        ("HiddenMap", "Map", vec!["E", "E"]),
+        ("Nested", "Set", vec!["ES"]),
+    ] {
+        eg.run_program(vec![Command::Sort {
+            span: span!(),
+            name: name.to_owned(),
+            presort_and_args: Some((
+                presort.to_owned(),
+                args.into_iter().map(exprs::var).collect(),
+            )),
+        }])?;
+    }
+    let a = eg.eval_expr(&expr!((A)))?.1;
+    let b = eg.eval_expr(&expr!((B)))?.1;
+    let hidden = eg.eval_expr(&expr!((Hidden)))?.1;
+    let db = eg.database_mut();
+    let set = db.container(Container::<SetKind>::new(vec![a, b], [true; 2]));
+    let sa = db.container(Container::<SetKind>::new(vec![a], [true; 2]));
+    let sb = db.container(Container::<SetKind>::new(vec![b], [true; 2]));
+    let nested = db.container(Container::<SetKind>::new(vec![sa, sb], [true; 2]));
+    let vec = db.container(Container::<VecKind>::new(vec![a, b], [true; 2]));
+    let multiset = db.container(Container::<MultiSetKind>::new(vec![a, b], [true; 2]));
+    let seven = db.base(7_i64);
+    let nine = db.base(9_i64);
+    let map = db.container(Container::<MapKind>::new(
+        vec![a, seven, b, nine],
+        [true, false],
+    ));
+    let hidden_map = db.container(Container::<MapKind>::new(vec![a, hidden, b, a], [true; 2]));
+    let root_sort = db.add_sort("Root", SortKind::Eq);
+    let chosen = db.add_constructor("Chosen", &[db.sort("ES")?], root_sort);
+    let fallback = db.add_constructor("Fallback", &[], root_sort);
+    db.set_cost(fallback, 4);
+    let root = db.fresh(root_sort);
+    db.insert(chosen, &[set, root])?;
+    db.insert(fallback, &[root])?;
+    let hidden_root = db.fresh(root_sort);
+    let only = db.add_constructor("Only", &[db.sort("HiddenMap")?], root_sort);
+    db.insert(only, &[hidden_map, hidden_root])?;
+    let parent = db.color(&[]);
+    let child = db.color(&[parent]);
+    let sibling = db.color(&[]);
+    db.union_in(parent, a, b);
+    db.rebuild()?;
+    for color in [parent, child, Color::BASE, sibling] {
+        let local = color == parent || color == child;
+        let extractor = Extractor::new_in(db, color);
+        let mut terms = TermDag::default();
+        for (sort, value, local_term, local_cost, base_term, base_cost) in [
+            ("ES", set, "(set-of (A))", 2, "(set-of (A) (B))", 5),
+            ("EV", vec, "(vec-of (A) (A))", 4, "(vec-of (A) (B))", 5),
+            (
+                "EMS",
+                multiset,
+                "(multiset-of (A) (A))",
+                4,
+                "(multiset-of (A) (B))",
+                5,
+            ),
+            ("EM", map, "(map-of (A) 9)", 3, "(map-of (A) 7 (B) 9)", 7),
+            (
+                "Nested",
+                nested,
+                "(set-of (set-of (A)))",
+                2,
+                "(set-of (set-of (A)) (set-of (B)))",
+                5,
+            ),
+        ] {
+            let sort = db.schema().sort(db.sort(sort)?).arcsort().clone();
+            let extracted = extractor
+                .extract_best_with_sort(&mut terms, value, sort)
+                .unwrap();
+            let expected = if local {
+                (local_term, local_cost)
+            } else {
+                (base_term, base_cost)
+            };
+            assert_eq!(
+                (terms.to_string(extracted.term), extracted.cost),
+                (expected.0.to_owned(), expected.1),
+                "{color:?}"
+            );
+        }
+        let sort = db.schema().sort(root_sort).arcsort().clone();
+        let extracted = extractor
+            .extract_best_with_sort(&mut terms, root, sort.clone())
+            .unwrap();
+        let expected = if local {
+            ("(Chosen (set-of (A)))", 3)
+        } else {
+            ("(Fallback)", 4)
+        };
+        assert_eq!(
+            (terms.to_string(extracted.term), extracted.cost),
+            (expected.0.to_owned(), expected.1)
+        );
+        let extracted = extractor.extract_best_with_sort(&mut terms, hidden_root, sort);
+        if local {
+            let extracted = extracted.unwrap();
+            assert_eq!(
+                (terms.to_string(extracted.term), extracted.cost),
+                ("(Only (map-of (A) (A)))".to_owned(), 5)
+            );
+        } else {
+            assert!(extracted.is_none());
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn unextractable_constructors_are_skipped() -> Result<(), Error> {
     let mut eg = EGraph::default();
     add_sort(&mut eg, "Math")?;

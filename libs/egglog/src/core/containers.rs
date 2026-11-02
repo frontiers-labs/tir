@@ -35,6 +35,7 @@ trait Env: Any + Send + Sync {
     fn len(&self) -> usize;
     fn rebuild(&mut self, uf: &mut UnionFind, dirty: &mut Vec<u32>);
     fn holding(&self, ids: &HashSet<u32, FxBuildHasher>, out: &mut Vec<u32>);
+    fn lookup_mapped(&self, id: Value, find: &dyn Fn(Value) -> Value) -> Option<Value>;
     fn map(
         &mut self,
         id: Value,
@@ -76,6 +77,12 @@ impl<C: ContainerValue> Env for ContainerEnv<C> {
 
     fn len(&self) -> usize {
         self.values.len()
+    }
+
+    fn lookup_mapped(&self, id: Value, find: &dyn Fn(Value) -> Value) -> Option<Value> {
+        let mut container = self.values.get(&id)?.clone();
+        container.rebuild_contents(find);
+        self.ids.get(&container).copied()
     }
 
     fn map(
@@ -175,6 +182,17 @@ impl ContainerValues {
     pub fn get_val<C: ContainerValue>(&self, id: Value) -> Option<&C> {
         let env = self.envs[*self.types.get(&TypeId::of::<C>())?].as_any();
         env.downcast_ref::<ContainerEnv<C>>()?.values.get(&id)
+    }
+
+    // Read the counterpart already interned by a colored rebuild without
+    // changing the contents shared with the base and other colors.
+    pub(crate) fn lookup_mapped(
+        &self,
+        ty: TypeId,
+        id: Value,
+        find: &dyn Fn(Value) -> Value,
+    ) -> Option<Value> {
+        self.envs[*self.types.get(&ty)?].lookup_mapped(id, find)
     }
 
     // The id of the container of type `ty` at `id` with `f` applied to the
