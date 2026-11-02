@@ -108,12 +108,53 @@ impl Program {
     }
 
     /// Runs the schedule. Each iteration of a ruleset matches every rule,
-    /// then applies the writes of all matches and rebuilds. A `:until` needs
-    /// its query planned, see [`Rules::plan_schedule`](crate::Rules::plan_schedule).
-    pub fn run(&mut self, db: &mut Database, schedule: &Schedule) -> Result<RunReport, Error> {
+    /// then applies the writes of all matches and rebuilds. A rule reads
+    /// `args[n]` where it names [`Literal::Arg`] `n`. A `:until` needs its
+    /// query planned, see [`Rules::plan_schedule`](crate::Rules::plan_schedule).
+    pub fn run(
+        &mut self,
+        db: &mut Database,
+        schedule: &Schedule,
+        args: &[Value],
+    ) -> Result<RunReport, Error> {
         self.prepare(db)?;
+        self.bind(args)?;
         db.rebuild()?;
         self.schedule(db, schedule)
+    }
+
+    // Puts `args` in the registers of the arguments the rules read. Rules
+    // that read an argument whose value changed match everything again, as
+    // the rows they matched before met the old value.
+    fn bind(&mut self, args: &[Value]) -> Result<(), Error> {
+        // Check every argument before a register changes: a failed bind must
+        // leave the registers and the search timestamps as they were.
+        let literals = self.file.rulesets.iter().flat_map(|decl| &decl.consts);
+        if let Some(n) = (literals.filter_map(|literal| match *literal {
+            Literal::Arg(n) => Some(n),
+            _ => None,
+        }))
+        .find(|&n| n as usize >= args.len())
+        {
+            return Err(Error::Unsupported(format!("the run gives no argument {n}")));
+        }
+        let rulesets = self.file.rulesets.iter().zip(&mut self.consts);
+        for (at, (decl, consts)) in rulesets.enumerate() {
+            let mut changed = false;
+            for (literal, register) in decl.consts.iter().zip(consts) {
+                if let Literal::Arg(n) = *literal {
+                    let arg = args[n as usize];
+                    changed |= std::mem::replace(register, arg) != arg;
+                }
+            }
+            if changed {
+                self.last_run[at] = None;
+                if let Some(last) = self.color_last.get_mut(at) {
+                    last.clear();
+                }
+            }
+        }
+        Ok(())
     }
 
     // The names of the rulesets, combined ones and queries included.
@@ -146,8 +187,13 @@ impl Program {
         self.indexes = (self.file.indexes.iter())
             .map(|index| db.add_index(tables[index.table as usize], &index.order))
             .collect();
+        // An argument's register is filled at each run.
+        let constant = |c: &Literal| match c {
+            Literal::Arg(_) => Value::new(0),
+            c => value(&db.base, c),
+        };
         self.consts = (self.file.rulesets.iter())
-            .map(|ruleset| ruleset.consts.iter().map(|c| value(&db.base, c)).collect())
+            .map(|ruleset| ruleset.consts.iter().map(constant).collect())
             .collect();
         self.used = (self.file.rulesets.iter())
             .map(|ruleset| {
@@ -269,7 +315,10 @@ impl Program {
         let mut failed = Ok(());
         let once = |at: usize| self.file.rulesets[at].once && self.last_run[at].is_some();
         decls.retain(|&decl| self.naive || !once(decl));
-        for &decl in &decls {
+        let base: Vec<usize> = (decls.iter().copied())
+            .filter(|&decl| !self.file.rulesets[decl].colored)
+            .collect();
+        for decl in base {
             let last = self.last_run[decl].filter(|_| !self.naive).unwrap_or(0);
             let (found, matches, result) = exec::search(self, db, decl, last);
             writes.push(found);
@@ -390,5 +439,6 @@ pub(crate) fn value(base: &BaseValues, literal: &Literal) -> Value {
         Literal::String(s) => base.get(s.clone()),
         Literal::Bool(b) => base.get(*b),
         Literal::Unit => base.get(()),
+        Literal::Arg(_) => unreachable!("a run argument has a value only in a run"),
     }
 }

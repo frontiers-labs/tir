@@ -148,7 +148,9 @@ fn a_rule_finds_the_op_it_made_so_saturation_stops() {
         .rule(&ir.db, "", facts![(= (Operands o 0) a)], leaf)
         .unwrap();
     let mut program = rules.compile(&ir.db).unwrap();
-    program.run(&mut ir.db, &Schedule::saturate("")).unwrap();
+    program
+        .run(&mut ir.db, &Schedule::saturate(""), &[])
+        .unwrap();
 
     assert_eq!(ir.ops(), 5);
     let swapped = ir.op(ADD, &[y, x]);
@@ -179,8 +181,12 @@ fn find_or_make_in_a_color_sees_base_rows_and_makes_rows_in_the_color() {
         .rule(&ir.db, "", facts![(= (Operands o 0) a)], leaf)
         .unwrap();
     let mut program = rules.compile(&ir.db).unwrap();
-    program.run(&mut ir.db, &Schedule::saturate("")).unwrap();
-    program.run(&mut ir.db, &Schedule::saturate("")).unwrap();
+    program
+        .run(&mut ir.db, &Schedule::saturate(""), &[])
+        .unwrap();
+    program
+        .run(&mut ir.db, &Schedule::saturate(""), &[])
+        .unwrap();
     assert_eq!(ir.ops(), 2);
     assert_eq!(ir.db.own_rows_in(color, ir.operation).count(), 2);
     let base_leaf = ir.op(LEAF, &[x]);
@@ -322,7 +328,7 @@ fn compiled_member_deletions_close_group_congruence() {
             )
             .unwrap();
         let mut program = rules.compile(&db).unwrap();
-        program.run(&mut db, &Schedule::run("")).unwrap();
+        program.run(&mut db, &Schedule::run(""), &[]).unwrap();
         assert_eq!(db.rows_in(color, member).count(), 0);
         assert!(db.lookup_in(color, keyed, &[a]).is_some());
         assert!(db.lookup_in(color, keyed, &[b]).is_some());

@@ -186,6 +186,7 @@ pub fn literal_sort(literal: &Literal) -> ArcSort {
         Literal::String(_) => StringSort.to_arcsort(),
         Literal::Bool(_) => BoolSort.to_arcsort(),
         Literal::Unit => UnitSort.to_arcsort(),
+        Literal::Arg(_) => unreachable!("a run argument has no sort of its own"),
     }
 }
 

@@ -14,7 +14,7 @@ use crate::ast::Literal;
 use crate::{Database, ExternId, F64, Merge, Shape, SortId, SortKind, TableId, TableKind, Value};
 
 const MAGIC: [u8; 4] = *b"TEGG";
-const VERSION: u32 = 3;
+const VERSION: u32 = 4;
 // Merges nest at most this deep, so decoding one cannot exhaust the stack.
 const MERGE_DEPTH: u32 = 64;
 
@@ -88,6 +88,8 @@ pub(crate) struct RulesetDecl {
     pub(crate) members: Vec<String>,
     // Whether the rules match on the first run only: they read no table.
     pub(crate) once: bool,
+    // Whether the rules match in the colors only.
+    pub(crate) colored: bool,
 }
 
 #[derive(Clone)]
@@ -249,6 +251,10 @@ impl Writer {
                 self.word(u32::from(*b));
             }
             Literal::Unit => self.word(4u32),
+            Literal::Arg(n) => {
+                self.word(5u32);
+                self.word(*n);
+            }
         }
     }
 
@@ -389,6 +395,7 @@ pub(crate) fn encode(file: &ProgramFile) -> Vec<u8> {
         w.list(&ruleset.consts, Writer::literal);
         w.list(&ruleset.members, |w, member| w.string(member));
         w.word(u32::from(ruleset.once));
+        w.word(u32::from(ruleset.colored));
     });
     let mut bytes = MAGIC.to_vec();
     bytes.extend(VERSION.to_le_bytes());
@@ -498,6 +505,7 @@ impl Reader<'_> {
             2 => Literal::String(self.string()?),
             3 => Literal::Bool(self.below(2, "bool")? == 1),
             4 => Literal::Unit,
+            5 => Literal::Arg(self.word()?),
             _ => return Err(LoadError::Malformed("literal")),
         })
     }
@@ -705,6 +713,7 @@ pub(crate) fn decode(bytes: &[u8]) -> Load<ProgramFile> {
             consts: r.list(Reader::literal)?,
             members: r.list(Reader::string)?,
             once: r.below(2, "once")? == 1,
+            colored: r.below(2, "colored")? == 1,
         })
     })?;
     if r.at != words.len() {

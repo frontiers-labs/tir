@@ -29,6 +29,9 @@ pub enum Literal {
     String(String),
     Bool(bool),
     Unit,
+    /// The `n`th argument of the run, of the sort its uses give it. See
+    /// [`Program::run`](crate::Program::run).
+    Arg(u32),
 }
 
 impl From<i64> for Literal {
@@ -290,6 +293,7 @@ impl Display for Literal {
                 f.write_str("\"")
             }
             Self::Unit => f.write_str("()"),
+            Self::Arg(n) => write!(f, "${n}"),
         }
     }
 }

@@ -71,13 +71,13 @@ fn run(
         let fresh = || (db.clone(), program.clone());
         if let Some(expected) = expected {
             let (mut db, mut program) = fresh();
-            program.run(&mut db, &schedule).unwrap();
+            program.run(&mut db, &schedule, &[]).unwrap();
             assert_eq!(rows(&db), expected, "rows after {schedule:?}");
         }
         b.iter_batched(
             fresh,
             |(mut db, mut program)| {
-                program.run(&mut db, &schedule).unwrap();
+                program.run(&mut db, &schedule, &[]).unwrap();
                 db
             },
             BatchSize::LargeInput,

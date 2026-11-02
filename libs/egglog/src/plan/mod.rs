@@ -22,12 +22,14 @@ use crate::{Error, ExternId, Merge, Schema, SortId, SortKind, TableId, Value, so
 // The rules of one ruleset, or of a part of one. A query keeps the rules
 // that have no actions, so their matches can be counted; a combined
 // ruleset has no rules and names its members; the rules of a `once` part
-// read no table, so they match on the first run only.
+// read no table, so they match on the first run only; those of a `colored`
+// one match in the colors only.
 pub(crate) struct Source<'a> {
     pub(crate) name: &'a str,
     pub(crate) relaxed: bool,
     pub(crate) query: bool,
     pub(crate) once: bool,
+    pub(crate) colored: bool,
     pub(crate) rules: Vec<&'a Rule>,
     pub(crate) members: &'a [String],
 }
@@ -121,6 +123,7 @@ pub(crate) fn compile(
             consts,
             members: source.members.to_vec(),
             once: source.once,
+            colored: source.colored,
         });
     }
     // A table keeps its symmetries even when no rule is left to read it.

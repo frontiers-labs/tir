@@ -546,7 +546,7 @@ impl Replica {
                     db.insert(*table, &row(db, &self.terms, cells)).unwrap();
                 }
                 Op::Run => {
-                    self.program.run(db, &Schedule::saturate("")).unwrap();
+                    self.program.run(db, &Schedule::saturate(""), &[]).unwrap();
                 }
                 _ => {}
             }
@@ -691,7 +691,7 @@ impl Subject for Colored<'_> {
             }
             &Op::Drop(c) => db.drop_color(self.colors[c]),
             Op::Run => {
-                self.program.run(db, &Schedule::saturate("")).unwrap();
+                self.program.run(db, &Schedule::saturate(""), &[]).unwrap();
             }
         }
     }
@@ -819,7 +819,7 @@ fn a_color_run_repeats_no_base_match() {
         db.insert(p, &[x]).unwrap();
     }
     let mut matches = |db: &mut Database| -> usize {
-        let report = program.run(db, &Schedule::run("")).unwrap();
+        let report = program.run(db, &Schedule::run(""), &[]).unwrap();
         report.num_matches_per_rule.values().sum()
     };
     assert_eq!(matches(&mut db), 50);
@@ -907,7 +907,7 @@ fn ids_a_color_made_stay_base_ids_after_adopt() {
     let [a, b] = [(); 2].map(|()| db.fresh(math));
     let color = db.color(&[]);
     db.insert_in(color, r, &[a]).unwrap();
-    program.run(&mut db, &Schedule::saturate("")).unwrap();
+    program.run(&mut db, &Schedule::saturate(""), &[]).unwrap();
     let made = db.lookup_in(color, f, &[a]).unwrap();
 
     db.adopt(color);
@@ -918,7 +918,7 @@ fn ids_a_color_made_stay_base_ids_after_adopt() {
 
     let later = db.color(&[]);
     db.insert_in(later, r, &[b]).unwrap();
-    program.run(&mut db, &Schedule::saturate("")).unwrap();
+    program.run(&mut db, &Schedule::saturate(""), &[]).unwrap();
     assert_eq!(db.rows_in(later, s).count(), 2);
     assert_eq!(db.rows(s).count(), 1);
 }

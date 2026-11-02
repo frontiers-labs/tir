@@ -144,7 +144,7 @@ fn egglog(program: &Datalog) -> Vec<HashSet<Vec<i64>>> {
         db.insert(relations[*relation], &row).unwrap();
     }
     let mut compiled = rules.compile(&db).unwrap();
-    compiled.run(&mut db, &Schedule::saturate("")).unwrap();
+    compiled.run(&mut db, &Schedule::saturate(""), &[]).unwrap();
     (relations.iter())
         .map(|&table| {
             let rows = db.rows(table);
@@ -173,7 +173,7 @@ proptest! {
                 build(&mut db, t);
             }
             let mut program = rules.compile(&db).unwrap();
-            program.run(&mut db, &Schedule::saturate("")).unwrap();
+            program.run(&mut db, &Schedule::saturate(""), &[]).unwrap();
             let add = db.schema().table(db.table("Add").unwrap()).symmetries().to_vec();
             let expected: &[Vec<usize>] = if mode == Mode::Relaxed { &[vec![1, 0, 2]] } else { &[] };
             assert_eq!(add, expected);
