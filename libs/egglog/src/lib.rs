@@ -1104,6 +1104,7 @@ impl EGraph {
             return Err(Error::NoSuchRuleset(ruleset.to_owned(), span!()));
         }
         self.plan()?;
+        self.program.set_naive(!self.seminaive);
         let iteration = self.program.step(&mut self.db, &[ruleset], true)?;
         Ok(RunReport::of(ruleset, iteration, self.report_level))
     }
