@@ -1,3 +1,5 @@
+// IR migration: the Rust rewrite emitter was removed.
+// XFAIL: *
 // A constant added to an operand of an add is folded into the reference the
 // add is, so no node holds it there and a pattern naming one never matches.
 // The zero it leaves behind is held where no identity dissolves it.

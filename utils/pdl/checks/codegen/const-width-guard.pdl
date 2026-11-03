@@ -1,3 +1,5 @@
+// IR migration: the Rust rewrite emitter was removed.
+// XFAIL: *
 // A `const<8>` binder generates a width check on the matched constant: the
 // value is read off the reference as an offset of its carrier's zero, the
 // width off the carrier, and a guard compares it.

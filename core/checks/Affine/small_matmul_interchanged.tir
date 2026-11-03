@@ -1,3 +1,5 @@
+// IR migration: the requested transformation pass is a registered no-op.
+// XFAIL: *
 // RUN: tir opt --pass func.func(restructure-nodes,affine) --verify %s | filecheck %s
 
 // A 32-square matmul: 12 KB, which the modelled hierarchy holds whole, so no

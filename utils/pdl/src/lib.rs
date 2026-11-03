@@ -1,5 +1,4 @@
 mod ast;
-mod codegen;
 mod diagnostic;
 mod lexer;
 mod literal;
@@ -46,11 +45,6 @@ pub fn compile_patterns(source: &str) -> Result<File, Vec<Diagnostic>> {
     } else {
         Err(diagnostics)
     }
-}
-
-pub fn compile_to_rust(source: &str) -> Result<String, Vec<Diagnostic>> {
-    let file = compile_patterns(source)?;
-    codegen::generate(&file)
 }
 
 pub fn compile_refinements(source: &str) -> Result<Vec<RefinementAction>, Vec<Diagnostic>> {

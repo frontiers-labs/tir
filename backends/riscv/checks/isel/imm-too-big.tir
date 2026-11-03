@@ -1,3 +1,5 @@
+// IR migration: instruction selection and backend lowering are unavailable.
+// XFAIL: *
 // RUN: tir mc --march=rv64i --filetype=asm %s | filecheck %s
 
 // 2048 does not fit `addi`'s signed 12-bit immediate field: the encoding

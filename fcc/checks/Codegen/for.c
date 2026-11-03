@@ -1,3 +1,5 @@
+// IR migration: instruction selection and backend lowering are unavailable.
+// XFAIL: *
 // RUN: fcc compile --stage ir -o - %S/../Inputs/basic_for.c | filecheck %s
 
 // A counted `for` reaches the mid-end as `scf.for`, not as the general

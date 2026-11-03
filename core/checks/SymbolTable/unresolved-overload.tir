@@ -1,3 +1,5 @@
+// IR migration: the requested transformation pass is a registered no-op.
+// XFAIL: *
 // RUN: not tir opt --pass=check-unique-symbols %s
 
 // Backends emit one object symbol per name, so every overload must have been

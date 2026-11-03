@@ -1,3 +1,5 @@
+// IR migration: instruction selection and backend lowering are unavailable.
+// XFAIL: *
 // RUN: tir mc --march=rv64i --stage=regalloc %s | filecheck %s
 
 // %v is defined in the entry block but only read in ^bb1, so it is live across

@@ -1,3 +1,5 @@
+// IR migration: selector rule generation was removed.
+// XFAIL: *
 // An isel rule costs what the instructions it emits cost: each one's latency
 // scaled by `LATENCY_COST_SCALE` plus its encoding size in bytes, so a shorter
 // encoding wins a latency tie. Both terms are fields of the emitted

@@ -1,0 +1,282 @@
+;; One immutable IR revision per invocation. Rebuild every index for a new revision.
+;; IDs for operations, regions, blocks, values, and symbols share one allocator.
+;; They are i64 data, never e-classes. The importer checks ID categories and
+;; references, nonnegative/unique slots, required fields, dominance and typing.
+;; Structural constructors below are never unioned. A separate semantic egraph
+;; may express equivalences. Do not run union or rewrites on these terms.
+;; :no-merge rejects conflicting function outputs, including datatype outputs.
+;; Missing rows mean absent fields, not default values.
+
+;; Type reads must not evaluate mutable IR indexes.
+(ruleset ir-type-index)
+(ruleset ir-structure-index)
+(unstable-combined-ruleset ir-index ir-type-index ir-structure-index)
+(ruleset ir-query)
+
+;; Kinded type syntax. Bound uses de Bruijn indices, never inference variables.
+;; Forall binds the ordered kinds in its list. Inference is outside this schema.
+;; Ctor names are extensible; Apply can contain types, naturals, symbols or rows.
+;; NatLit uses BigInt so rules can compute widths and dimensions without an
+;; i64 size limit. The importer rejects negative natural parameters.
+(datatype Kind
+  (KType) (KNat) (KRow) (KGhost) (KSym) (KBool) (KAny) (KList Kind) (KArrow Kind Kind))
+(datatype*
+  (TypeExpr
+    (Ctor String)
+    (Apply TypeExpr TypeList)
+    (FunctionType TypeList TypeList)
+    (ProductType TypeList)
+    (SumType TypeList)
+    (RowType RowFields)
+    (Bound i64 Kind)
+    (Nominal i64 TypeList)
+    (Forall KindList TypeExpr)
+    (NatLit BigInt)
+    (SymbolParam i64)
+    (ListArg TypeList)
+    (UnkindedBound i64)
+    (UnkindedLambda i64 TypeExpr))
+  (TypeList (TNil) (TCons TypeExpr TypeList))
+  (KindList (KNil) (KCons Kind KindList))
+  (RowFields (RNil) (RCons String TypeExpr RowFields)))
+;; Kind and optional definition of a named constructor, or a nominal symbol.
+;; Definitions can contain Forall; absence preserves an opaque constructor.
+(function ConstructorKind (String) Kind :no-merge)
+(function ConstructorDefinition (String) TypeExpr :no-merge)
+(function NominalKind (i64) Kind :no-merge)
+(function NominalDefinition (i64) TypeExpr :no-merge)
+(function SymbolName (i64) String :no-merge)
+;; Ordered list projections expose nested arguments without opaque host vectors.
+(relation TypeItem (TypeList i64 TypeExpr))
+(relation KindItem (KindList i64 Kind))
+(relation RowItem (RowFields i64 String TypeExpr))
+(rule ((= xs (TCons x tail))) ((TypeItem xs 0 x)) :ruleset ir-type-index)
+(rule ((= xs (TCons x tail)) (TypeItem tail n y))
+      ((TypeItem xs (+ n 1) y)) :ruleset ir-type-index)
+(rule ((= xs (KCons k tail))) ((KindItem xs 0 k)) :ruleset ir-type-index)
+(rule ((= xs (KCons k tail)) (KindItem tail n j))
+      ((KindItem xs (+ n 1) j)) :ruleset ir-type-index)
+(rule ((= xs (RCons name t tail))) ((RowItem xs 0 name t)) :ruleset ir-type-index)
+(rule ((= xs (RCons name t tail)) (RowItem tail n key ty))
+      ((RowItem xs (+ n 1) key ty)) :ruleset ir-type-index)
+
+;; Exact typed attributes. Integer and float bits use canonical fixed-width hex
+;; text; width/format and TypeExpr preserve signedness and interpretation.
+;; Importer validates width, hex padding and dictionary key uniqueness.
+(datatype*
+  (Attr
+    (IntegerAttr TypeExpr i64 String)
+    (FloatAttr TypeExpr String String)
+    (StringAttr String)
+    (BoolAttr bool)
+    (TypeAttr TypeExpr)
+    (SymbolAttr i64)
+    (ValueAttr i64)
+    (BlockAttr i64)
+    (ListAttr AttrList)
+    (DictAttr AttrFields)
+    (PredicateAttr String)
+    (PhysicalRegisterAttr String String i64)
+    (AssignedRegisterAttr i64 String String i64)
+    (FpSemanticsAttr Attr)
+    (EvaluationContractAttr Attr)
+    (TypeArgumentAttr TypeExpr)
+    (LayoutEntryAttr TypeExpr AttrList TypeExpr TypeExpr AttrList)
+    (LayoutOptionAttr String Attr)
+    (LayoutSpecAttr AttrList AttrList))
+  (AttrList (ANil) (ACons Attr AttrList))
+  (AttrFields (DNil) (DCons String Attr AttrFields)))
+(function Attribute (i64 String) Attr :no-merge)
+(relation AttrItem (AttrList i64 Attr))
+(relation DictItem (AttrFields String Attr))
+(rule ((= xs (ACons a tail))) ((AttrItem xs 0 a)) :ruleset ir-structure-index)
+(rule ((= xs (ACons a tail)) (AttrItem tail n b))
+      ((AttrItem xs (+ n 1) b)) :ruleset ir-structure-index)
+(rule ((= xs (DCons key a tail))) ((DictItem xs key a)) :ruleset ir-structure-index)
+(rule ((= xs (DCons key a tail)) (DictItem tail key2 b))
+      ((DictItem xs key2 b)) :ruleset ir-structure-index)
+
+;; Each operation has exactly one kind and placement. InBlock order is semantic
+;; operation order; BlockLayout is optional presentation order, not control flow.
+(datatype Placement (Root) (InGraph i64) (InBlock i64 i64))
+(datatype RegionMode (CFG) (Graph))
+(function OpKind (i64) String :no-merge)
+(function OpScheme (String) TypeExpr :no-merge)
+(function OpPlacement (i64) Placement :no-merge)
+(function RegionOwner (i64) i64 :no-merge)
+(function RegionSlot (i64) i64 :no-merge)
+(function OwnedRegion (i64 i64) i64 :no-merge)
+(rule ((= owner (RegionOwner region)) (= slot (RegionSlot region)))
+      ((set (OwnedRegion owner slot) region)) :ruleset ir-structure-index)
+(function Mode (i64) RegionMode :no-merge)
+(function BlockRegion (i64) i64 :no-merge)
+(function BlockLayout (i64) i64 :no-merge)
+(function Entry (i64) i64 :no-merge)
+(relation Implements (String String))
+(relation HasInterface (i64 String))
+(rule ((= kind (OpKind op)) (Implements kind interface))
+      ((HasInterface op interface)) :ruleset ir-structure-index)
+
+;; Value identity is independent of operation identity. Definition has exactly
+;; one alternative. DeclaredType is required for block and region parameters;
+;; ValueType records the checked type for all values. Slots start at zero.
+(datatype Definition
+  (ResultDef i64 i64) (BlockParamDef i64 i64) (RegionParamDef i64 i64))
+(function ValueType (i64) TypeExpr :no-merge)
+(function ValueDefinition (i64) Definition :no-merge)
+(function DefinedValue (Definition) i64 :no-merge)
+(rule ((= def (ValueDefinition value)))
+      ((set (DefinedValue def) value)) :ruleset ir-structure-index)
+(function DeclaredType (i64) TypeExpr :no-merge)
+(function Operand (i64 i64) i64 :no-merge)
+(relation Result (i64 i64 i64))
+(relation BlockParam (i64 i64 i64))
+(relation RegionParam (i64 i64 i64))
+(rule ((= (ValueDefinition value) (ResultDef op slot)))
+      ((Result op slot value)) :ruleset ir-structure-index)
+(rule ((= (ValueDefinition value) (BlockParamDef block slot)))
+      ((BlockParam block slot value)) :ruleset ir-structure-index)
+(rule ((= (ValueDefinition value) (RegionParamDef region slot)))
+      ((RegionParam region slot value)) :ruleset ir-structure-index)
+
+;; Successor is keyed by terminator and edge slot. SuccessorArg maps each
+;; destination parameter slot to a terminator Operand slot, not a second value.
+(function Successor (i64 i64) i64 :no-merge)
+(function SuccessorArg (i64 i64 i64) i64 :no-merge)
+;; Graph regions expose ordered yield values. CFG exits use their terminators.
+(function Yield (i64 i64) i64 :no-merge)
+(datatype UseSite (OperandUse i64) (YieldUse i64 i64))
+(relation Uses (i64 i64 UseSite))
+(rule ((= value (Operand op slot)))
+      ((Uses value op (OperandUse slot))) :ruleset ir-structure-index)
+(rule ((= value (Yield region slot)) (= owner (RegionOwner region)))
+      ((Uses value owner (YieldUse region slot))) :ruleset ir-structure-index)
+(relation EdgeArgument (i64 i64 i64 i64))
+(rule ((= operandSlot (SuccessorArg term edge paramSlot))
+       (= value (Operand term operandSlot)))
+      ((EdgeArgument term edge paramSlot value)) :ruleset ir-structure-index)
+
+;; Structured control is explicit, not inferred from ownership alone.
+;; EntryBinding(region,param slot) selects the owner's operand slot.
+;; ExitBinding(region,owner result slot) selects a yield slot.
+;; FeedbackBinding(region,param slot) selects a yield slot for the next iteration.
+(function EntryBinding (i64 i64) i64 :no-merge)
+(function ExitBinding (i64 i64) i64 :no-merge)
+(function FeedbackBinding (i64 i64) i64 :no-merge)
+(relation Gamma (i64))
+(relation Theta (i64))
+;; Gamma selector is an operand slot. Arm maps selector integer to region ID.
+(function GammaPredicate (i64) i64 :no-merge)
+(function GammaArm (i64 BigInt) i64 :no-merge)
+(function GammaDefaultArm (i64) i64 :no-merge)
+;; Default covers selector values with no exact case. RegionSlot records the
+;; arm's ownership position independently of the selector's case value.
+(relation GammaSelector (i64 i64))
+(rule ((Gamma op) (= slot (GammaPredicate op)) (= value (Operand op slot)))
+      ((GammaSelector op value)) :ruleset ir-structure-index)
+;; Theta is a post-test loop. Body yields the predicate; ContinueOn identifies
+;; its continuing boolean value. Exits use this final body's yielded values.
+(function ThetaBody (i64) i64 :no-merge)
+(function ThetaPredicate (i64) i64 :no-merge)
+(function ThetaContinueOn (i64) bool :no-merge)
+(relation EntryValue (i64 i64 i64))
+(relation ExitValue (i64 i64 i64))
+(relation FeedbackValue (i64 i64 i64))
+(rule ((= operandSlot (EntryBinding region paramSlot))
+       (= owner (RegionOwner region)) (= value (Operand owner operandSlot)))
+      ((EntryValue region paramSlot value)) :ruleset ir-structure-index)
+(rule ((= yieldSlot (ExitBinding region resultSlot))
+       (= value (Yield region yieldSlot)))
+      ((ExitValue region resultSlot value)) :ruleset ir-structure-index)
+(rule ((= yieldSlot (FeedbackBinding region paramSlot))
+       (= value (Yield region yieldSlot)))
+      ((FeedbackValue region paramSlot value)) :ruleset ir-structure-index)
+
+;; ParentOp uses containment only. Scope explicitly requests rooted transitive
+;; membership, including its root. Unrequested roots do not get Within facts.
+(relation ParentOp (i64 i64))
+(rule ((= (OpPlacement op) (InGraph region)) (= parent (RegionOwner region)))
+      ((ParentOp op parent)) :ruleset ir-structure-index)
+(rule ((= (OpPlacement op) (InBlock block order))
+       (= region (BlockRegion block)) (= parent (RegionOwner region)))
+      ((ParentOp op parent)) :ruleset ir-structure-index)
+(relation Scope (i64))
+(relation Within (i64 i64))
+(rule ((Scope root) (= kind (OpKind root))) ((Within root root)) :ruleset ir-structure-index)
+(rule ((Within root parent) (ParentOp child parent))
+      ((Within root child)) :ruleset ir-structure-index)
+
+;; Every kind declares its boundary category. Function ownership includes the
+;; function itself. Propagation stops at nested functions; their children start
+;; with that nested function. Module kinds also stop inherited ownership.
+(datatype Boundary (OrdinaryBoundary) (FunctionBoundary) (ModuleBoundary))
+(function KindBoundary (String) Boundary :no-merge)
+(relation Module (i64))
+(relation Function (i64))
+(function OwningFunction (i64) i64 :no-merge)
+(rule ((= kind (OpKind op)) (= (KindBoundary kind) (ModuleBoundary)))
+      ((Module op)) :ruleset ir-structure-index)
+(rule ((= kind (OpKind op)) (= (KindBoundary kind) (FunctionBoundary)))
+      ((Function op) (set (OwningFunction op) op)) :ruleset ir-structure-index)
+(rule ((ParentOp child parent) (= owner (OwningFunction parent))
+       (= kind (OpKind child)) (= (KindBoundary kind) (OrdinaryBoundary)))
+      ((set (OwningFunction child) owner)) :ruleset ir-structure-index)
+
+;; Query selection is separate from materialized containment.
+(relation SelectedScope (i64))
+(relation SelectedOp (i64 i64))
+(rule ((SelectedScope root) (Within root op))
+      ((SelectedOp root op)) :ruleset ir-query)
+
+;; Stable Rust handles refer to structural terms, never to semantic equivalence classes.
+(function TypeHandle (i64) TypeExpr :no-merge)
+(function TypeHandleOf (TypeExpr) i64 :no-merge)
+
+(function SymbolId (String) i64 :no-merge)
+
+;; Presentation and parser metadata have no semantic effect.
+(function OpLocation (i64) i64 :no-merge)
+(function GraphLayout (i64) i64 :no-merge)
+(function BlockAttribute (i64 String) Attr :no-merge)
+(relation GraphMember (i64 i64))
+(relation BlockMember (i64 i64 i64))
+(relation BlocksOf (i64 i64 i64))
+(relation OpRegion (i64 i64))
+(relation RegionUnder (i64 i64))
+(relation OpUnderRegion (i64 i64))
+(relation ReaderAt (i64 i64 i64))
+(relation SiblingRead (i64 i64 i64 i64))
+(rule ((= (OpPlacement op) (InGraph region))) ((GraphMember region op) (OpRegion op region)) :ruleset ir-structure-index)
+(rule ((= (OpPlacement op) (InBlock block order))) ((BlockMember block order op)) :ruleset ir-structure-index)
+(rule ((= region (BlockRegion block)) (= layout (BlockLayout block))) ((BlocksOf region layout block)) :ruleset ir-structure-index)
+(rule ((= (OpPlacement op) (InBlock block order)) (= region (BlockRegion block))) ((OpRegion op region)) :ruleset ir-structure-index)
+(rule ((= mode (Mode region))) ((RegionUnder region region)) :ruleset ir-structure-index)
+(rule ((= owner (RegionOwner inner)) (OpRegion owner parent) (RegionUnder parent root)) ((RegionUnder inner root)) :ruleset ir-structure-index)
+(rule ((OpRegion op region) (RegionUnder region root)) ((OpUnderRegion root op)) :ruleset ir-structure-index)
+(rule ((OpRegion op region)) ((ReaderAt op region op)) :ruleset ir-structure-index)
+(rule ((ParentOp child parent) (ReaderAt parent region sibling)) ((ReaderAt child region sibling)) :ruleset ir-structure-index)
+(rule ((Uses value reader use) (= (ValueDefinition value) (ResultDef producer slot))
+       (OpRegion producer home) (ReaderAt reader home sibling)) ((SiblingRead reader value sibling producer)) :ruleset ir-structure-index)
+
+(relation ScopedSiblingRead (i64 bool i64 i64))
+(rule ((OpUnderRegion root reader) (SiblingRead reader value sibling producer))
+      ((ScopedSiblingRead root true sibling producer)) :ruleset ir-structure-index)
+(rule ((OpUnderRegion root reader) (SiblingRead reader value sibling producer) (OpRegion producer root))
+      ((ScopedSiblingRead root false sibling producer)) :ruleset ir-structure-index)
+(relation OwnedEntity (i64 String i64))
+(rule ((Within root op)) ((OwnedEntity root "op" op)) :ruleset ir-structure-index)
+(rule ((Within root op) (= (ValueDefinition value) (ResultDef op slot)))
+      ((OwnedEntity root "value" value)) :ruleset ir-structure-index)
+(rule ((Within root op) (= op (RegionOwner region)))
+      ((OwnedEntity root "region" region)) :ruleset ir-structure-index)
+(rule ((OwnedEntity root "region" region) (= region (BlockRegion block)))
+      ((OwnedEntity root "block" block)) :ruleset ir-structure-index)
+(rule ((OwnedEntity root "region" region) (= (ValueDefinition value) (RegionParamDef region slot)))
+      ((OwnedEntity root "value" value)) :ruleset ir-structure-index)
+(rule ((OwnedEntity root "block" block) (= (ValueDefinition value) (BlockParamDef block slot)))
+      ((OwnedEntity root "value" value)) :ruleset ir-structure-index)
+
+;; Host scalar attributes have an exact interpretation even without an IR value type.
+(rule () ((set (ConstructorKind "$attr.signed") (KType))) :ruleset ir-structure-index)
+(rule () ((set (ConstructorKind "$attr.unsigned") (KType))) :ruleset ir-structure-index)
+(rule () ((set (ConstructorKind "$attr.wide") (KType))) :ruleset ir-structure-index)

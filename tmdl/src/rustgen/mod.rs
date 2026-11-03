@@ -14,7 +14,6 @@ use crate::utils::{
     resolve_operand_constraints_for_instruction, resolve_operand_widths,
     resolve_operands_for_instruction, resolve_params_for_instruction,
 };
-use tir_symbolic::sem::copy_subgraph;
 
 pub struct GeneratedRust {
     pub root: String,
@@ -67,7 +66,6 @@ pub fn generate_rust_modules<'a>(
             dialect,
             text_only,
             custom_assembly,
-            include_global_rules: true,
             module_fragment: has_split,
         },
     )?;
@@ -116,7 +114,6 @@ pub fn generate_rust_modules<'a>(
                 dialect,
                 text_only,
                 custom_assembly,
-                include_global_rules: false,
                 module_fragment: true,
             },
         )?;
@@ -269,15 +266,6 @@ fn emit_module_aggregation(
             })*
             None
         }
-
-        pub fn get_isel_rules(
-            context: &tir::Context,
-            features: &[Feature],
-        ) -> Vec<tir::backend::isel::Rule> {
-            let mut rules = Vec::new();
-            #(rules.extend(#modules::get_isel_rules(context, features));)*
-            rules
-        }
     }
 }
 
@@ -295,22 +283,6 @@ pub fn generate_operation_list(
     Ok(())
 }
 
-fn selection_pattern_widths(
-    graph: &tir_adt::Dag<
-        tir_symbolic::lang::SymKind,
-        tir_symbolic::lang::SymPayload<tir_symbolic::sem::ValueId>,
-    >,
-    forced: Vec<Option<u32>>,
-) -> Vec<Option<u32>> {
-    let mut widths = tir_symbolic::lang::infer_widths(graph, |_| None);
-    for (width, forced) in widths.iter_mut().zip(forced) {
-        if forced.is_some() {
-            *width = forced;
-        }
-    }
-    widths
-}
-
 // ---------------------------------------------------------------------------
 // Top-level emitters
 // ---------------------------------------------------------------------------
@@ -323,12 +295,9 @@ include!("abis.rs");
 include!("scheduling.rs");
 include!("latency.rs");
 include!("register_traits.rs");
-include!("flag_analysis.rs");
-include!("flag_emission.rs");
 include!("fixed_register_emission.rs");
 include!("implicit_registers.rs");
 include!("instruction_analysis.rs");
 include!("assembly.rs");
 include!("behavior.rs");
 include!("encoding.rs");
-include!("isel_spec.rs");

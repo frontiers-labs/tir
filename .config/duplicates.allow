@@ -8,7 +8,6 @@ core/src/backend/mod.rs::atomic_rmw libs/symbolic/src/lang/exec.rs::atomic_rmw
 
 # Same builder chain, differing in ISA name and call emitter. Sharing it needs
 # a new isel parameter on `impl_target_machine!`, which riscv does not fit.
-backends/arm64/src/lib.rs::create_isel_pass_for backends/x86_64/src/lib.rs::create_isel_pass_for
 
 # Distinct scope scenarios built from the same few push/union/rebuild/pop calls.
 utils/unit-tests/src/egraph/engine.rs::scope_congruence_collapses_and_restores utils/unit-tests/src/egraph/engine.rs::scope_add_then_congruence

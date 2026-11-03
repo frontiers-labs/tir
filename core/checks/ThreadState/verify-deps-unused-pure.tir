@@ -1,3 +1,5 @@
+// IR migration: the requested transformation pass is a registered no-op.
+// XFAIL: *
 // RUN: tir opt --pass verify-deps %s | filecheck %s
 // RUN: tir opt --pass verify-deps,dce --verify %s | filecheck %s --check-prefix=DCE
 

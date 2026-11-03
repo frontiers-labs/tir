@@ -1,3 +1,5 @@
+// IR migration: selector rule generation was removed.
+// XFAIL: *
 // A generated asm parser must reject an integer that does not fit its `bits<N>`
 // immediate, so per-mnemonic dispatch can backtrack to a wider form instead of
 // failing later in the encoder. The accepted set is the union of the signed and

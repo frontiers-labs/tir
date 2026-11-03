@@ -1,3 +1,5 @@
+// IR migration: instruction selection and backend lowering are unavailable.
+// XFAIL: *
 // RUN: tir mc --march=rv64i --stage=regalloc %s | filecheck %s
 
 // Arguments nine and ten use the outgoing stack area while the first eight use

@@ -42,8 +42,8 @@ fn fusion_pair(
     [tir_sim::scoreboard::ScoreboardInstr; 2],
     tir_sim::scoreboard::Prf,
 ) {
+    use tir::analysis::defuse::execution_regs;
     use tir::attributes::AttributeValue;
-    use tir::backend::liveness::execution_regs;
     use tir::backend::{phys_attr, MachineInstruction};
     use tir::Operation;
     use tir_sim::scoreboard::{phys_regs, Prf, ScoreboardInstr};

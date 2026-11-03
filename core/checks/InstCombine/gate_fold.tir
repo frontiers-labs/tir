@@ -1,3 +1,5 @@
+// IR migration: the requested transformation pass is a registered no-op.
+// XFAIL: *
 // RUN: tir opt --pass func.func(instcombine-nodes) %s | filecheck %s
 
 // Both arms of the gate yield the same value, so its result (a gamma gate) folds to

@@ -17,8 +17,6 @@ doctest = false
 tir.workspace = true
 tir-adt.workspace = true
 tir-egglog = { workspace = true, features = ["parser"] }
-tir-egraph.workspace = true
-tir-relational.workspace = true
 tir-symbolic.workspace = true
 smallvec = "1.15.2"
 tir-verify = { path = "../verify" }

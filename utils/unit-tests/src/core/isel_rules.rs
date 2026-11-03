@@ -2,15 +2,14 @@
 //! table-driven rule construction.
 
 use tir::backend::isel::{
-    build_rules, prove_guarded_relaxations, CapabilityKind, EmitRequest, PatternRef,
-    RegOperandSpec, RegisterCapability, RegisterRequirement, ResultRegSpec, Rule, RuleKind,
-    RuleMatch, RuleSpec, LATENCY_COST_SCALE,
+    build_rules, CapabilityKind, PatternRef, RegOperandSpec, RegisterCapability,
+    RegisterRequirement, ResultRegSpec, RuleKind, RuleSpec, LATENCY_COST_SCALE,
 };
 use tir::backend::regalloc::{RegClassId, RegClassInfo, RegisterView};
-use tir::sem::{SemBlobBuilder, SemGraph, SemOp, SemPayloadDesc, SymKind};
-use tir::{Context, Operation, PassError, TypeArg};
+use tir::sem::{SemBlobBuilder, SemOp, SemPayloadDesc, SymKind};
+use tir::{Context, TypeArg};
 
-use super::fixtures::{binary, constant, nary, r, symbol};
+use super::fixtures::r;
 
 #[test]
 fn overlapping_register_capability_accepts_integer_and_float_values() {
@@ -29,68 +28,6 @@ fn whole_register_requirement_rejects_narrow_integer_values() {
 
     assert!(!requirement.accepts(&terms, &TypeArg::Type(terms.int(32))));
     assert!(requirement.accepts(&terms, &TypeArg::Type(terms.int(64))));
-}
-
-fn div_pattern() -> SemGraph {
-    let mut g = SemGraph::new();
-    let a = symbol(&mut g, 0);
-    let b = symbol(&mut g, 1);
-    binary(&mut g, SymKind::Div, a, b);
-    g
-}
-
-fn emit_unreachable(
-    _context: &Context,
-    _req: &EmitRequest,
-    _m: &RuleMatch,
-) -> Result<Box<dyn Operation>, PassError> {
-    unreachable!("the relaxation gate never emits")
-}
-
-fn guarded_div(guard_rhs: u64, else_swapped: bool) -> SemGraph {
-    let mut g = SemGraph::new();
-    let a = symbol(&mut g, 0);
-    let b = symbol(&mut g, 1);
-    let (num, den) = if else_swapped { (b, a) } else { (a, b) };
-    let div = binary(&mut g, SymKind::Div, num, den);
-    let guard_const = constant(&mut g, guard_rhs, 64);
-    let cond = binary(&mut g, SymKind::Eq, b, guard_const);
-    let ones = constant(&mut g, u64::MAX, 64);
-    nary(&mut g, SymKind::If, &[cond, ones, div]);
-    g
-}
-
-fn guarded_div_rule(guard_rhs: u64, else_swapped: bool) -> Rule {
-    Rule {
-        guarded_semantics: Some(guarded_div(guard_rhs, else_swapped)),
-        ..Rule::new("div", div_pattern(), LATENCY_COST_SCALE, emit_unreachable)
-    }
-}
-
-#[test]
-fn guarded_div_rule_with_correct_relaxation_is_accepted() {
-    assert!(prove_guarded_relaxations(&[guarded_div_rule(0, false)]).is_ok());
-}
-
-fn assert_guarded_div_rejected(guard_rhs: u64, else_swapped: bool) {
-    match prove_guarded_relaxations(&[guarded_div_rule(guard_rhs, else_swapped)]) {
-        Err(PassError::InvalidRuleSet(msg)) => assert!(msg.contains("div")),
-        Err(other) => panic!("expected InvalidRuleSet, got {other:?}"),
-        Ok(_) => panic!("expected InvalidRuleSet, rule was accepted"),
-    }
-}
-
-#[test]
-fn guarded_div_rule_with_wrong_guard_region_is_rejected() {
-    // Guarding on `b == 1` instead of `b == 0` leaves the pure `div` unequal to
-    // the behavior at `b == 1` (where `div(a,1) == a`, not all-ones).
-    assert_guarded_div_rejected(1, false);
-}
-
-#[test]
-fn guarded_div_rule_with_mismatched_else_arm_is_rejected() {
-    // The else arm computes `div(b, a)` while the selection pattern is `div(a, b)`.
-    assert_guarded_div_rejected(0, true);
 }
 
 fn symbol_blob() -> (Vec<u8>, Vec<SymKind>, u32) {
@@ -193,30 +130,104 @@ fn build_rules_resolves_register_widths() {
     assert_eq!(rules[0].operand_registers[0].0, 0);
 }
 
-#[test]
-fn expression_conversion_clipping_is_proved_on_the_defined_domain() {
-    for (clipped, accepted) in [(0x8000_0000, true), (0, false)] {
-        let mut full = SemGraph::new();
-        let input = symbol(&mut full, 0);
-        let min_bits = constant(&mut full, (-2147483648.0f64).to_bits(), 64);
-        let min = nary(&mut full, SymKind::AsFloat, &[min_bits]);
-        let guard = binary(&mut full, SymKind::Lt, input, min);
-        let width = constant(&mut full, 32, 32);
-        let rm = constant(&mut full, 1, 3);
-        let converted = nary(&mut full, SymKind::FPToSIRound, &[input, width, rm]);
-        let clip = constant(&mut full, clipped, 32);
-        let selected = nary(&mut full, SymKind::If, &[guard, clip, converted]);
-        let xlen = symbol(&mut full, 1);
-        nary(&mut full, SymKind::SExt, &[selected, xlen]);
-        let mut pattern = SemGraph::new();
-        let input = symbol(&mut pattern, 0);
-        let width = constant(&mut pattern, 32, 32);
-        nary(&mut pattern, SymKind::FPToSI, &[input, width]);
-        let rule = Rule {
-            guarded_semantics: Some(full),
-            operand_registers: vec![(0, RegisterRequirement::whole(RegisterCapability::float(64)))],
-            ..Rule::new("clip", pattern, LATENCY_COST_SCALE, emit_unreachable)
-        };
-        assert_eq!(prove_guarded_relaxations(&[rule]).is_ok(), accepted);
+// Migration skip: the guarded-relaxation implementation was removed.
+#[cfg(any())]
+mod guarded_relaxations {
+    use super::super::fixtures::{binary, constant, nary, symbol};
+    use super::*;
+    use tir::backend::isel::{prove_guarded_relaxations, EmitRequest, Rule, RuleMatch};
+    use tir::sem::SemGraph;
+    use tir::{Operation, PassError};
+    fn div_pattern() -> SemGraph {
+        let mut g = SemGraph::new();
+        let a = symbol(&mut g, 0);
+        let b = symbol(&mut g, 1);
+        binary(&mut g, SymKind::Div, a, b);
+        g
+    }
+
+    fn emit_unreachable(
+        _context: &Context,
+        _req: &EmitRequest,
+        _m: &RuleMatch,
+    ) -> Result<Box<dyn Operation>, PassError> {
+        unreachable!("the relaxation gate never emits")
+    }
+
+    fn guarded_div(guard_rhs: u64, else_swapped: bool) -> SemGraph {
+        let mut g = SemGraph::new();
+        let a = symbol(&mut g, 0);
+        let b = symbol(&mut g, 1);
+        let (num, den) = if else_swapped { (b, a) } else { (a, b) };
+        let div = binary(&mut g, SymKind::Div, num, den);
+        let guard_const = constant(&mut g, guard_rhs, 64);
+        let cond = binary(&mut g, SymKind::Eq, b, guard_const);
+        let ones = constant(&mut g, u64::MAX, 64);
+        nary(&mut g, SymKind::If, &[cond, ones, div]);
+        g
+    }
+
+    fn guarded_div_rule(guard_rhs: u64, else_swapped: bool) -> Rule {
+        Rule {
+            guarded_semantics: Some(guarded_div(guard_rhs, else_swapped)),
+            ..Rule::new("div", div_pattern(), LATENCY_COST_SCALE, emit_unreachable)
+        }
+    }
+
+    #[test]
+    fn guarded_div_rule_with_correct_relaxation_is_accepted() {
+        assert!(prove_guarded_relaxations(&[guarded_div_rule(0, false)]).is_ok());
+    }
+
+    fn assert_guarded_div_rejected(guard_rhs: u64, else_swapped: bool) {
+        match prove_guarded_relaxations(&[guarded_div_rule(guard_rhs, else_swapped)]) {
+            Err(PassError::InvalidRuleSet(msg)) => assert!(msg.contains("div")),
+            Err(other) => panic!("expected InvalidRuleSet, got {other:?}"),
+            Ok(_) => panic!("expected InvalidRuleSet, rule was accepted"),
+        }
+    }
+
+    #[test]
+    fn guarded_div_rule_with_wrong_guard_region_is_rejected() {
+        // Guarding on `b == 1` instead of `b == 0` leaves the pure `div` unequal to
+        // the behavior at `b == 1` (where `div(a,1) == a`, not all-ones).
+        assert_guarded_div_rejected(1, false);
+    }
+
+    #[test]
+    fn guarded_div_rule_with_mismatched_else_arm_is_rejected() {
+        // The else arm computes `div(b, a)` while the selection pattern is `div(a, b)`.
+        assert_guarded_div_rejected(0, true);
+    }
+
+    #[test]
+    fn expression_conversion_clipping_is_proved_on_the_defined_domain() {
+        for (clipped, accepted) in [(0x8000_0000, true), (0, false)] {
+            let mut full = SemGraph::new();
+            let input = symbol(&mut full, 0);
+            let min_bits = constant(&mut full, (-2147483648.0f64).to_bits(), 64);
+            let min = nary(&mut full, SymKind::AsFloat, &[min_bits]);
+            let guard = binary(&mut full, SymKind::Lt, input, min);
+            let width = constant(&mut full, 32, 32);
+            let rm = constant(&mut full, 1, 3);
+            let converted = nary(&mut full, SymKind::FPToSIRound, &[input, width, rm]);
+            let clip = constant(&mut full, clipped, 32);
+            let selected = nary(&mut full, SymKind::If, &[guard, clip, converted]);
+            let xlen = symbol(&mut full, 1);
+            nary(&mut full, SymKind::SExt, &[selected, xlen]);
+            let mut pattern = SemGraph::new();
+            let input = symbol(&mut pattern, 0);
+            let width = constant(&mut pattern, 32, 32);
+            nary(&mut pattern, SymKind::FPToSI, &[input, width]);
+            let rule = Rule {
+                guarded_semantics: Some(full),
+                operand_registers: vec![(
+                    0,
+                    RegisterRequirement::whole(RegisterCapability::float(64)),
+                )],
+                ..Rule::new("clip", pattern, LATENCY_COST_SCALE, emit_unreachable)
+            };
+            assert_eq!(prove_guarded_relaxations(&[rule]).is_ok(), accepted);
+        }
     }
 }

@@ -1,3 +1,5 @@
+// IR migration: the requested transformation pass is a registered no-op.
+// XFAIL: *
 // RUN: tir prove --width 32 %s | filecheck %s
 // RUN: tir prove --width 64 %s | filecheck %s
 

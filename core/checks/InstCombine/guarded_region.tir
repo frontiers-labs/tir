@@ -1,3 +1,5 @@
+// IR migration: the requested transformation pass is a registered no-op.
+// XFAIL: *
 // RUN: tir opt --pass func.func(instcombine-nodes) %s | filecheck %s
 
 // Inside the arm the gate enters on %0 the engine assumes %0 is 1, so

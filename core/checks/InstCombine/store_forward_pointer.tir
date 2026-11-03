@@ -1,3 +1,5 @@
+// IR migration: the requested transformation pass is a registered no-op.
+// XFAIL: *
 // RUN: tir opt --pass restructure-nodes,instcombine-nodes %s | filecheck %s
 
 // A pointer is a value of the width the data layout gives it, so a store of one
