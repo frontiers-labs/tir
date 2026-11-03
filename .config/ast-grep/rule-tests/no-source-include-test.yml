@@ -12,6 +12,8 @@ valid:
   - 'macro_rules! call { () => { include("source.rs"); }; }'
   - 'macro_rules! quoted { () => { quote! { include!("generated.rs"); } }; }'
   - 'vec![quote::quote! { include!("generated.rs"); }]'
+  - 'quote /*c*/ ! { include!("generated.rs"); }'
+  - 'quote! /*c*/ { include!("generated.rs"); }'
 invalid:
   - 'include!("source.rs");'
   - 'std::include!(r#"source.rs"#);'
@@ -27,3 +29,7 @@ invalid:
   - 'cfg_if::cfg_if! { if #[cfg(unix)] { include!("source.rs"); } }'
   - 'vec![include!("source.rs")]'
   - 'vec![std::r#include!("source.rs")]'
+  - 'vec![include/*c*/!("source.rs")]'
+  - 'vec![include!/*c*/("source.rs")]'
+  - 'x::quote! { include!("source.rs"); }'
+  - 'vec![x::quote! { include!("source.rs"); }]'

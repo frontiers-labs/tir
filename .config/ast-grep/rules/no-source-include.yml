@@ -4,6 +4,31 @@ severity: error
 message: Use a Rust module instead of including repository source
 note: Only generated Rust under OUT_DIR may use include!.
 utils:
+  past-comments:
+    not:
+      any:
+        - kind: line_comment
+        - kind: block_comment
+  quotation-name:
+    any:
+      - regex: '^((r#)?quote::)?(r#)?(quote|quote_spanned)$'
+        not:
+          follows:
+            regex: '^::$'
+            stopBy: { matches: past-comments }
+      - kind: identifier
+        regex: '^(r#)?(quote|quote_spanned)$'
+        follows:
+          regex: '^::$'
+          stopBy: { matches: past-comments }
+          follows:
+            kind: identifier
+            regex: '^(r#)?quote$'
+            stopBy: { matches: past-comments }
+            not:
+              follows:
+                regex: '^::$'
+                stopBy: { matches: past-comments }
   generated-arguments:
     all:
       - regex: '^[({\[]\s*(concat!\s*\(\s*env!\s*\(\s*"OUT_DIR"\s*\)\s*,\s*"/[^"\\]*"\s*,?\s*\)|env!\s*\(\s*"OUT_DIR"\s*\))\s*,?\s*[)}\]]$'
@@ -20,7 +45,11 @@ rule:
       inside: { kind: token_tree, stopBy: end }
       follows:
         regex: '^!$'
-        follows: { regex: '\binclude$' }
+        stopBy: { matches: past-comments }
+        follows:
+          kind: identifier
+          regex: '^(r#)?include$'
+          stopBy: { matches: past-comments }
       not: { matches: generated-arguments }
       all:
         - not:
@@ -29,4 +58,7 @@ rule:
               stopBy: end
               follows:
                 regex: '^!$'
-                follows: { regex: '(^|:)(r#)?(quote|quote_spanned)$' }
+                stopBy: { matches: past-comments }
+                follows:
+                  matches: quotation-name
+                  stopBy: { matches: past-comments }
