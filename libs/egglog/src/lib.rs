@@ -37,6 +37,7 @@ use std::fs::File;
 use std::io::Write as _;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use tir_adt::FxBuildHasher;
 
@@ -391,6 +392,15 @@ impl Clone for Box<dyn Extension> {
     }
 }
 
+/// Time spent planning and executing a program, excluding source parsing.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ProgramTiming {
+    /// Rule, query, action and schedule compilation.
+    pub compilation: Duration,
+    /// Command processing and execution, excluding compilation.
+    pub execution: Duration,
+}
+
 /// An e-graph: a [`Database`], the rules on it, the program planned from
 /// them, and the state of egglog commands.
 #[derive(Clone)]
@@ -401,6 +411,7 @@ pub struct EGraph {
     // The rule count the program was planned at, and whether it was loaded.
     planned: usize,
     loaded: bool,
+    planning_time: Option<Duration>,
     globals: HashSet<String, FxBuildHasher>,
     names: Names,
     // The sorts that have the generic primitives.
@@ -449,6 +460,7 @@ impl EGraph {
             program,
             planned: usize::MAX,
             loaded: false,
+            planning_time: None,
             globals: HashSet::default(),
             names: Names::default(),
             sorts_done: 0,
@@ -749,6 +761,42 @@ impl EGraph {
         Ok(outputs)
     }
 
+    /// Runs commands in order, measuring compilation separately from execution.
+    /// Rendering the returned outputs is outside both durations.
+    pub fn run_program_timed(
+        &mut self,
+        program: Vec<Command>,
+    ) -> Result<(Vec<CommandOutput>, ProgramTiming), Error> {
+        let previous = self.planning_time.replace(Duration::ZERO);
+        let start = Instant::now();
+        let outputs = self.run_program(program);
+        let elapsed = start.elapsed();
+        let compilation = self.planning_time.take().unwrap_or_default();
+        self.planning_time = previous.map(|duration| duration + compilation);
+        Ok((
+            outputs?,
+            ProgramTiming {
+                compilation,
+                execution: elapsed - compilation,
+            },
+        ))
+    }
+
+    fn time_compilation<T>(
+        &mut self,
+        compile: impl FnOnce(&mut Self) -> Result<T, Error>,
+    ) -> Result<T, Error> {
+        if self.planning_time.is_none() {
+            return compile(self);
+        }
+        let start = Instant::now();
+        let result = compile(self);
+        if let Some(duration) = &mut self.planning_time {
+            *duration += start.elapsed();
+        }
+        result
+    }
+
     fn run_command(&mut self, command: Command) -> Result<Vec<CommandOutput>, Error> {
         if let Some((name, span)) = declared(&command) {
             self.names.claim(name, span)?;
@@ -806,7 +854,7 @@ impl EGraph {
                 self.reserve_ruleset(&name, span)?;
                 self.rules.add_combined_ruleset(&name, &members)?;
             }
-            Command::Rule { rule } => self.add_rule(rule)?,
+            Command::Rule { rule } => self.time_compilation(|eg| eg.add_rule(rule))?,
             Command::Action(Action::Let(span, name, expr)) => self.global(span, name, &expr)?,
             Command::Action(action) => _ = self.eval_actions(vec![action])?,
             Command::Extract(span, expr, variants) => {
@@ -983,7 +1031,7 @@ impl EGraph {
             ruleset: String::new(),
             eval_mode: RuleEvalMode::Naive,
         };
-        let (_, rule) = rules::typed(&self.db, rule)?;
+        let (_, rule) = self.time_compilation(|eg| rules::typed(&eg.db, rule))?;
         let result = self.db.with_ctx(|ctx| plan::hir::run_actions(&rule, ctx));
         self.db.rebuild()?;
         result
@@ -991,9 +1039,12 @@ impl EGraph {
 
     // Whether `facts` match anything.
     pub(crate) fn matches(&mut self, facts: Vec<Fact>) -> Result<bool, Error> {
-        let mut rules = Rules::new();
-        rules.add_query(&self.db, "@check", facts)?;
-        rules.compile(&self.db)?.matches(&mut self.db, "@check")
+        let mut program = self.time_compilation(|eg| {
+            let mut rules = Rules::new();
+            rules.add_query(&eg.db, "@check", facts)?;
+            rules.compile(&eg.db)
+        })?;
+        program.matches(&mut self.db, "@check")
     }
 
     // The primitive that records its arguments, for these sorts, that
@@ -1054,11 +1105,12 @@ impl EGraph {
             eval_mode: RuleEvalMode::Naive,
         };
         let mut rules = Rules::new();
-        rules.add_command(&self.db, Command::Rule { rule })?;
+        let mut program = self.time_compilation(|eg| {
+            rules.add_command(&eg.db, Command::Rule { rule })?;
+            rules.compile(&eg.db)
+        })?;
         *sink.lock().expect("a sink lock") = (0, Vec::new());
-        rules
-            .compile(&self.db)?
-            .run(&mut self.db, &Schedule::run("@query"), &[])?;
+        program.run(&mut self.db, &Schedule::run("@query"), &[])?;
         let (calls, values) = std::mem::take(&mut *sink.lock().expect("a sink lock"));
         if vars.is_empty() {
             return Ok(vec![Map::default(); calls.min(1)]);
@@ -1070,7 +1122,7 @@ impl EGraph {
 
     pub(crate) fn run_schedule(&mut self, schedule: &Schedule) -> Result<RunReport, Error> {
         self.check_rulesets(schedule)?;
-        self.rules.plan_schedule(&self.db, schedule)?;
+        self.time_compilation(|eg| eg.rules.plan_schedule(&eg.db, schedule))?;
         self.plan()?;
         self.program.set_naive(!self.seminaive);
         let report = self.program.run(&mut self.db, schedule, &[])?;
@@ -1098,7 +1150,7 @@ impl EGraph {
         if self.loaded || self.planned == self.rules.count() {
             return Ok(());
         }
-        self.program = self.rules.recompile(&self.db, &self.program)?;
+        self.program = self.time_compilation(|eg| eg.rules.recompile(&eg.db, &eg.program))?;
         self.program.set_report_level(self.report_level);
         self.planned = self.rules.count();
         Ok(())
@@ -1130,6 +1182,23 @@ impl EGraph {
     /// only through the Rust read/write API after loading the program.
     pub fn save_program_with_schema(&self) -> Result<Vec<u8>, Error> {
         Ok(self.rules.compile_with_schema(&self.db)?.to_bytes())
+    }
+
+    /// Whether execution uses a loaded program instead of source rules.
+    pub fn uses_loaded_program(&self) -> bool {
+        self.loaded
+    }
+
+    /// Replaces the executing program with source rules over the same database.
+    /// Existing rows and schema remain intact; rule iteration history resets.
+    pub fn set_rules(&mut self, rules: Rules) -> Result<(), Error> {
+        let mut program = rules.compile(&self.db)?;
+        program.set_report_level(self.report_level);
+        self.planned = rules.count();
+        self.rules = rules;
+        self.program = program;
+        self.loaded = false;
+        Ok(())
     }
 
     /// Runs the program in `bytes` from now on, in place of the rules.
