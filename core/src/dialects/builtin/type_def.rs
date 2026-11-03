@@ -709,7 +709,6 @@ impl TypeDefOp {
         }
 
         if parser.parse_token("layout") {
-            let _scope = context.function_scope();
             let arguments = parser
                 .parse_delimited("(", ")", |parser| {
                     let name = parser

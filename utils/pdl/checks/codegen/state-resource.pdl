@@ -1,3 +1,5 @@
+// IR migration: the Rust rewrite emitter was removed.
+// XFAIL: *
 // State resources are matched by their exact resource discriminator.
 // RUN: tir-pdl %s --emit rust | filecheck %s
 

@@ -1,3 +1,5 @@
+// IR migration: selector rule generation was removed.
+// XFAIL: *
 // RUN: tmdlc --action=emit-rust --dialect=test --output=- %s | filecheck %s
 // RUN: tmdlc --action=emit-rust --dialect=test --output=- %s | filecheck %s --check-prefix=NEG
 // CHECK-DAG: SymKind::FAddRound

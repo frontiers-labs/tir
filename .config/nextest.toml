@@ -7,10 +7,10 @@ archive.include = [
 # The slowest test takes 25s at the dev profile's opt-level, and an unoptimized
 # build turns it into minutes; a test past two minutes fails instead.
 slow-timeout = { period = "60s", terminate-after = 2 }
-# gcc, clang, egg and egglog only set the baselines TIR is compared against
+# gcc and clang only set the baselines TIR is compared against
 # and do not change with TIR, so local runs leave them out. CI runs them with
 # the perf profile.
-default-filter = "not (kind(bench) & (binary(egg) | binary(egglog) | test(/^(gcc|clang)\\//)))"
+default-filter = "not (kind(bench) & (test(/^(gcc|clang)\\//)))"
 
 # Each torture case has its own compile timeout, see fcc_torture.rs.
 [[profile.default.overrides]]

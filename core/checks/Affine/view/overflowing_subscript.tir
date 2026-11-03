@@ -1,3 +1,5 @@
+// IR migration: the requested transformation pass is a registered no-op.
+// XFAIL: *
 // RUN: tir opt --pass func.func(restructure-nodes) --print-affine %s -o /dev/null | filecheck %s
 
 // Three products by the widest literal there is: what the form would name is

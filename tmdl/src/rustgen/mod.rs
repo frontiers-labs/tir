@@ -14,7 +14,6 @@ use crate::utils::{
     resolve_operand_constraints_for_instruction, resolve_operand_widths,
     resolve_operands_for_instruction, resolve_params_for_instruction,
 };
-use tir_symbolic::sem::copy_subgraph;
 
 pub struct GeneratedRust {
     pub root: String,
@@ -67,7 +66,6 @@ pub fn generate_rust_modules<'a>(
             dialect,
             text_only,
             custom_assembly,
-            include_global_rules: true,
             module_fragment: has_split,
         },
     )?;
@@ -116,7 +114,6 @@ pub fn generate_rust_modules<'a>(
                 dialect,
                 text_only,
                 custom_assembly,
-                include_global_rules: false,
                 module_fragment: true,
             },
         )?;
@@ -269,15 +266,6 @@ fn emit_module_aggregation(
             })*
             None
         }
-
-        pub fn get_isel_rules(
-            context: &tir::Context,
-            features: &[Feature],
-        ) -> Vec<tir::backend::isel::Rule> {
-            let mut rules = Vec::new();
-            #(rules.extend(#modules::get_isel_rules(context, features));)*
-            rules
-        }
     }
 }
 
@@ -293,22 +281,6 @@ pub fn generate_operation_list(
     writeln!(output, "]")?;
 
     Ok(())
-}
-
-fn selection_pattern_widths(
-    graph: &tir_adt::Dag<
-        tir_symbolic::lang::SymKind,
-        tir_symbolic::lang::SymPayload<tir_symbolic::sem::ValueId>,
-    >,
-    forced: Vec<Option<u32>>,
-) -> Vec<Option<u32>> {
-    let mut widths = tir_symbolic::lang::infer_widths(graph, |_| None);
-    for (width, forced) in widths.iter_mut().zip(forced) {
-        if forced.is_some() {
-            *width = forced;
-        }
-    }
-    widths
 }
 
 // ---------------------------------------------------------------------------
@@ -332,10 +304,6 @@ mod latency;
 use latency::*;
 mod register_traits;
 use register_traits::*;
-mod flag_analysis;
-use flag_analysis::*;
-mod flag_emission;
-use flag_emission::*;
 mod fixed_register_emission;
 use fixed_register_emission::*;
 pub(crate) use fixed_register_emission::{
@@ -355,5 +323,3 @@ mod behavior;
 use behavior::*;
 mod encoding;
 use encoding::*;
-mod isel_spec;
-use isel_spec::*;

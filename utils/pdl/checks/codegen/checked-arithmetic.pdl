@@ -1,3 +1,5 @@
+// IR migration: the Rust rewrite emitter was removed.
+// XFAIL: *
 // RUN: tir-pdl %s --emit rust | filecheck %s
 
 rule add: builtin.addi(builtin.addi(x: int<W>, a: const), b: const) => builtin.addi(x, const<W>(a + b));

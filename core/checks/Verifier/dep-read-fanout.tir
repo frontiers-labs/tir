@@ -15,7 +15,8 @@ module {
   module_end
 }
 
+// CHECK: func.func @f(%[[ARG:[0-9]+]]: !i32)
 // CHECK: %[[A:[0-9]+]], %[[S:[0-9]+]] = ptr.alloca {size = 4, align = 4} : !ptr.p<!i32>
-// CHECK-NEXT: %[[W:[0-9]+]] = ptr.store %0, %[[A]] state(%[[S]])
+// CHECK-NEXT: %[[W:[0-9]+]] = ptr.store %[[ARG]], %[[A]] state(%[[S]])
 // CHECK-NEXT: %{{[0-9]+}}, %{{[0-9]+}} = ptr.load %[[A]] state(%[[W]]) : !i32
 // CHECK-NEXT: %{{[0-9]+}}, %{{[0-9]+}} = ptr.load %[[A]] state(%[[W]]) : !i32

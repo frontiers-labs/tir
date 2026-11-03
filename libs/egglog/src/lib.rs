@@ -1126,6 +1126,12 @@ impl EGraph {
         self.program.to_bytes()
     }
 
+    /// Compile source rules with every declared table, including tables used
+    /// only through the Rust read/write API after loading the program.
+    pub fn save_program_with_schema(&self) -> Result<Vec<u8>, Error> {
+        Ok(self.rules.compile_with_schema(&self.db)?.to_bytes())
+    }
+
     /// Runs the program in `bytes` from now on, in place of the rules.
     /// Callbacks of rust rules must be bound before.
     pub fn load_program(&mut self, bytes: &[u8]) -> Result<(), Error> {

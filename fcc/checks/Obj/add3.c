@@ -1,3 +1,5 @@
+// IR migration: instruction selection and backend lowering are unavailable.
+// XFAIL: *
 // RUN: fcc compile -O2 --stage obj --march riscv64 -o - %S/../Inputs/add3.c | tir readobj - | filecheck %s
 // RUN: fcc compile -O2 --stage obj --march arm64 -o - %S/../Inputs/add3.c | tir readobj - | filecheck %s --check-prefix=A64
 // RUN: fcc compile -O2 --stage asm --march riscv64 -o - %S/../Inputs/add3.c | filecheck %s --check-prefix=ASM

@@ -504,7 +504,7 @@ fn lower_function(
     symbols: &mut Symbols,
 ) -> Result<impl Operation, Diagnostic> {
     // The function's rows share chunks with no other function's.
-    let _scope = context.function_scope();
+
     let ast = typed.ast();
     let AstLeaf::Function { name, .. } = ast.get_leaf_data(func).unwrap() else {
         unreachable!("function node carries a function payload");

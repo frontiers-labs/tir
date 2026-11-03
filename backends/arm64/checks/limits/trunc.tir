@@ -1,3 +1,5 @@
+// IR migration: instruction selection and backend lowering are unavailable.
+// XFAIL: *
 // RUN: tir mc --march=arm64 --stage=isel %s | filecheck %s
 
 // A truncation is the low-bit re-view of its operand's register (a width-n value

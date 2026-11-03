@@ -30,7 +30,7 @@ operation! {
 }
 
 // `%r = refine %x, %p`: `%r` is `%x`, and `%p` holds wherever `%x` is
-// defined. The verifier proves it; see [`crate::sem::prove_refinement`].
+// defined. The verifier proves it; see the semantic refinement checker.
 operation! {
     RefineOp {
         name: "refine",

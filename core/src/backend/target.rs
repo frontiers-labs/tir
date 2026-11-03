@@ -1,8 +1,8 @@
 //! Target abstraction shared by the codegen and simulation tools.
 //!
 //! A [`TargetMachine`] bundles everything a backend exposes behind a single
-//! object: dialect registration, the instruction-selection and register
-//! allocation passes, an assembly parser and the cycle-approximate machine
+//! object: dialect registration, an instruction-selection pass,
+//! an assembly parser and the cycle-approximate machine
 //! models. Each backend crate implements this trait and registers itself with
 //! the [`TARGETS`] registry via `register_target!`; tools depend on the backend
 //! crates directly to link their registrations and resolve targets through
@@ -13,8 +13,8 @@ use tir::Context;
 
 use crate::backend::AsmParser;
 use crate::backend::binary::ObjectFormatInfo;
-use crate::backend::isel::{InstructionSelectPass, OpLowering};
-use crate::backend::regalloc::{RegisterInfo, TargetRegAlloc};
+use crate::backend::isel::InstructionSelectPass;
+use crate::backend::regalloc::RegisterInfo;
 use crate::backend::sched::MachineModel;
 
 /// TMDL inputs and selected ISA features needed to build a retirement checker.
@@ -49,17 +49,6 @@ pub trait TargetMachine {
 
     /// The instruction-selection pass, nested under each function.
     fn isel_pass(&self, context: &Context) -> InstructionSelectPass;
-
-    /// The target's register-allocation hooks: register file, spill frame
-    /// layout, and the instructions that move values between registers and
-    /// stack slots. Called once per pass in [`regalloc_stage`](Self::regalloc_stage).
-    fn regalloc_target(&self) -> Box<dyn TargetRegAlloc>;
-
-    /// The register-allocation stage, run module-wide after instruction
-    /// selection: the pre-allocation lowerings followed by the allocation pass.
-    fn regalloc_stage(&self) -> Vec<Box<dyn crate::pass::Pass>> {
-        crate::backend::prealloc::regalloc_stage_for(|| self.regalloc_target(), self.abi())
-    }
 
     /// The target's register file description. Beyond register allocation this
     /// also tells the simulator which register classes share a physical file
@@ -147,27 +136,6 @@ pub trait TargetMachine {
     /// registers to their counters instead of the register file.
     fn counter_registers(&self) -> Vec<(&'static str, u16, crate::backend::PerfCounter)> {
         vec![]
-    }
-
-    /// Lowerings that must run between instruction selection and register
-    /// allocation (e.g. expanding `vcond_br` into a conditional branch whose
-    /// SSA condition the allocator still has to color).
-    fn pre_ra_lowerings(&self) -> Vec<OpLowering> {
-        Vec::new()
-    }
-
-    /// Target-specific machine passes run between instruction selection and
-    /// register allocation. Unlike an [`OpLowering`] these are full passes and
-    /// can carry dataflow state across instructions (e.g. RISC-V `vsetvli`
-    /// insertion tracking the vector unit's configuration).
-    fn machine_passes(&self) -> Vec<Box<dyn crate::pass::Pass>> {
-        Vec::new()
-    }
-
-    /// Lowerings that finalize virtual ops after register allocation
-    /// (e.g. `vret` into the target's return instruction).
-    fn finalize_lowerings(&self) -> Vec<OpLowering> {
-        Vec::new()
     }
 
     /// Object-format parameters (ELF machine/class/relocations), or `None`

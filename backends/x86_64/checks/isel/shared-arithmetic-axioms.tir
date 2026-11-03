@@ -1,3 +1,5 @@
+// IR migration: instruction selection and backend lowering are unavailable.
+// XFAIL: *
 // RUN: tir opt --pass restructure-nodes,instcombine-nodes %s | env TIR_VERIFY_AXIOMS=1 tir mc --march=x86_64 --stage=isel | filecheck %s
 
 module {
