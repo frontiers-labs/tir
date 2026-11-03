@@ -18,16 +18,16 @@ thread_local! {
         RefCell::new(tir_symbolic::sem::SemBlobBuilder::new());
 }
 
-fn begin_sem_blob() {
+pub(super) fn begin_sem_blob() {
     SEM_BLOB.with_borrow_mut(|blob| *blob = tir_symbolic::sem::SemBlobBuilder::new());
 }
 
-fn finish_sem_blob() -> (Vec<u8>, Vec<tir_symbolic::lang::SymKind>) {
+pub(super) fn finish_sem_blob() -> (Vec<u8>, Vec<tir_symbolic::lang::SymKind>) {
     SEM_BLOB.with_borrow_mut(|blob| {
         std::mem::replace(blob, tir_symbolic::sem::SemBlobBuilder::new()).finish()
     })
 }
 
-fn intern_sem_ops(ops: &[tir_symbolic::sem::SemOp]) -> u32 {
+pub(super) fn intern_sem_ops(ops: &[tir_symbolic::sem::SemOp]) -> u32 {
     SEM_BLOB.with_borrow_mut(|blob| blob.intern(ops))
 }

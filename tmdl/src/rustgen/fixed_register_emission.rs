@@ -1,3 +1,5 @@
+use super::*;
+
 // Derive selection rules for instructions that compute through fixed physical
 // registers (x86 `idiv`/`div`, whose dividend is the implicit `rdx:rax` pair
 // and whose quotient/remainder land in `rax`/`rdx`). A *definer* writes one
@@ -46,7 +48,7 @@ struct Reader<'a> {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn emit_fixed_register_rules<'a>(
+pub(super) fn emit_fixed_register_rules<'a>(
     files: &'a [ast::File],
     item_cache: &HashMap<&'a str, &'a ast::Item>,
     register_index_map: &HashMap<(String, String), u32>,
@@ -158,7 +160,9 @@ fn emit_division_rules(
 
     // Lower every result through one symbol table, so the patterns name the
     // same operands.
-    let results: Vec<&ast::Expr> = std::iter::once(*quotient_rhs).chain(remainder_rhs).collect();
+    let results: Vec<&ast::Expr> = std::iter::once(*quotient_rhs)
+        .chain(remainder_rhs)
+        .collect();
     let mut graph = tir_symbolic::sem::SemGraph::<()>::new();
     let Some((roots, lowering)) = ast::Expr::lower_all_to_sema_with_isa(
         &results,
@@ -379,7 +383,7 @@ fn definer_writes<'a>(
     writes
 }
 
-fn fixed_register_role_items(
+pub(super) fn fixed_register_role_items(
     inst: &ast::Instruction,
     ops: &[(String, Type)],
     register_index_map: &HashMap<(String, String), u32>,

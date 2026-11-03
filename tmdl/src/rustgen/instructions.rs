@@ -1,4 +1,6 @@
-fn info_ident(inst_name: &str) -> proc_macro2::Ident {
+use super::*;
+
+pub(super) fn info_ident(inst_name: &str) -> proc_macro2::Ident {
     format_ident!("INFO_{}", inst_name.to_uppercase())
 }
 
@@ -7,12 +9,12 @@ fn asm_symbol_step(symbol: &str) -> proc_macro2::TokenStream {
     quote! { ParseStep::Symbol(AsmSymbol::#symbol_ident) }
 }
 
-struct InstructionOptions<'a> {
-    dialect: &'a str,
-    text_only: bool,
-    custom_assembly: bool,
-    include_global_rules: bool,
-    module_fragment: bool,
+pub(super) struct InstructionOptions<'a> {
+    pub(super) dialect: &'a str,
+    pub(super) text_only: bool,
+    pub(super) custom_assembly: bool,
+    pub(super) include_global_rules: bool,
+    pub(super) module_fragment: bool,
 }
 
 fn asm_parse_steps(
@@ -293,14 +295,12 @@ fn fp_value_patterns(
     if widths[rounded_root.index()].is_none() {
         widths[rounded_root.index()] = pattern_widths[canon_root.index()];
     }
-    let needs_rounded_value =
-        !rounded.subgraph_eq(rounded_root, canon_pattern, canon_root);
+    let needs_rounded_value = !rounded.subgraph_eq(rounded_root, canon_pattern, canon_root);
     let (full_pattern, full_pattern_root, forced) =
         tir_symbolic::lang::canonicalize_for_selection(full, full_root, immediate_symbols);
-    let rounded_is_full =
-        rounded.subgraph_eq(rounded_root, &full_pattern, full_pattern_root);
-    let needs_full_value = !rounded_is_full
-        && !full_pattern.subgraph_eq(full_pattern_root, canon_pattern, canon_root);
+    let rounded_is_full = rounded.subgraph_eq(rounded_root, &full_pattern, full_pattern_root);
+    let needs_full_value =
+        !rounded_is_full && !full_pattern.subgraph_eq(full_pattern_root, canon_pattern, canon_root);
     let full_widths = selection_pattern_widths(&full_pattern, forced);
     let (effect_pattern, effect_root, _) = tir_symbolic::lang::canonicalize_for_selection(
         &semantics.pattern,
@@ -375,7 +375,6 @@ fn fp_value_patterns(
     patterns
 }
 
-
 // The narrow load pattern observes only the loaded bits. Keep the full
 // extension as well so a wider consumer can select the same instruction.
 fn extending_load_pattern(
@@ -405,7 +404,8 @@ fn extending_load_pattern(
     let SymPayload::Int(width_value) = semantics.pattern.get_leaf_data(*width)? else {
         return None;
     };
-    let load_width = tir_symbolic::lang::infer_widths(&semantics.pattern, |_| None)[loaded.index()]?;
+    let load_width =
+        tir_symbolic::lang::infer_widths(&semantics.pattern, |_| None)[loaded.index()]?;
     let extension_width = u32::try_from(width_value.to_u64()).ok()?;
     if extension_width <= load_width {
         return None;
@@ -2180,7 +2180,7 @@ fn isel_rules_section(
     }
 }
 
-fn emit_instructions<'a>(
+pub(super) fn emit_instructions<'a>(
     files: &'a [ast::File],
     instruction_files: &[&'a ast::File],
     item_cache: &HashMap<&'a str, &'a ast::Item>,

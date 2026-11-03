@@ -1,4 +1,6 @@
-fn emit_register_parsers_and_printers(
+use super::*;
+
+pub(super) fn emit_register_parsers_and_printers(
     files: &[ast::File],
     custom_assembly: bool,
 ) -> Result<proc_macro2::TokenStream, TMDLError> {
@@ -125,8 +127,10 @@ fn emit_register_parsers_and_printers(
         }
     });
 
-    let register_names = (!custom_assembly).then(|| quote! {
-        const REGISTER_NAMES: &[&str] = &[#(#register_names),*];
+    let register_names = (!custom_assembly).then(|| {
+        quote! {
+            const REGISTER_NAMES: &[&str] = &[#(#register_names),*];
+        }
     });
     Ok(quote! {
         #register_names
@@ -134,7 +138,7 @@ fn emit_register_parsers_and_printers(
     })
 }
 
-fn reg_class_id(class_name: &str) -> proc_macro2::TokenStream {
+pub(super) fn reg_class_id(class_name: &str) -> proc_macro2::TokenStream {
     let variant = format_ident!("{}", class_name);
     quote! { RegClass::#variant.id() }
 }
@@ -154,7 +158,7 @@ fn register_view(rc: &ast::RegisterClass) -> proc_macro2::TokenStream {
     }
 }
 
-fn emit_register_info(
+pub(super) fn emit_register_info(
     files: &[ast::File],
     dialect: &str,
 ) -> Result<proc_macro2::TokenStream, TMDLError> {
@@ -185,7 +189,9 @@ fn emit_register_info(
             .collect::<Vec<_>>();
         indices.sort_unstable();
         indices.dedup();
-        let index_lits = indices.iter().map(|i| proc_macro2::Literal::u16_unsuffixed(*i));
+        let index_lits = indices
+            .iter()
+            .map(|i| proc_macro2::Literal::u16_unsuffixed(*i));
         let print_fn = format_ident!("print_{}", rc.name.to_lowercase());
         class_entries.push(quote! {
             tir::backend::regalloc::RegClassInfo {

@@ -1,5 +1,7 @@
+use super::*;
+
 #[allow(clippy::too_many_arguments)]
-fn emit_flag_rules<'a>(
+pub(super) fn emit_flag_rules<'a>(
     files: &'a [ast::File],
     item_cache: &HashMap<&'a str, &'a ast::Item>,
     register_index_map: &HashMap<(String, String), u32>,
@@ -201,104 +203,104 @@ fn emit_flag_branch_rules(
                 _ => Vec::new(),
             };
             for defined in std::iter::once(None).chain(narrow.into_iter().map(Some)) {
-            let operand_register_specs: Vec<proc_macro2::TokenStream> = match defined {
-                None => operand_register_specs_for_ops(
+                let operand_register_specs: Vec<proc_macro2::TokenStream> = match defined {
+                    None => operand_register_specs_for_ops(
+                        &d.ops,
+                        &d_sem.variable_symbols,
+                        &width_sensitive_symbols(&canon_pattern, &pattern_widths),
+                        &float_classes,
+                        &polymorphic_classes,
+                    ),
+                    Some(width) => d
+                        .ops
+                        .iter()
+                        .filter_map(|(name, ty)| {
+                            let Type::Struct(class) = ty else {
+                                return None;
+                            };
+                            let symbol = *d_sem.variable_symbols.get(name)?;
+                            Some(reg_operand_spec(
+                                symbol,
+                                class,
+                                true,
+                                Some(width),
+                                &float_classes,
+                                &polymorphic_classes,
+                            ))
+                        })
+                        .collect(),
+                };
+                let ranges = immediate_operand_ranges(
+                    &d_sem.graph,
                     &d.ops,
                     &d_sem.variable_symbols,
-                    &width_sensitive_symbols(&canon_pattern, &pattern_widths),
-                    &float_classes,
-                    &polymorphic_classes,
-                ),
-                Some(width) => d
-                    .ops
-                    .iter()
-                    .filter_map(|(name, ty)| {
-                        let Type::Struct(class) = ty else {
-                            return None;
-                        };
-                        let symbol = *d_sem.variable_symbols.get(name)?;
-                        Some(reg_operand_spec(
-                            symbol,
-                            class,
-                            true,
-                            Some(width),
-                            &float_classes,
-                            &polymorphic_classes,
-                        ))
+                    &d.constraints,
+                );
+                let ranges: Vec<ImmediateRange> = ranges
+                    .into_iter()
+                    .map(|range| match defined {
+                        Some(width) => ImmediateRange {
+                            width,
+                            signed: false,
+                            ..range
+                        },
+                        None => range,
                     })
-                    .collect(),
-            };
-            let ranges = immediate_operand_ranges(
-                &d_sem.graph,
-                &d.ops,
-                &d_sem.variable_symbols,
-                &d.constraints,
-            );
-            let ranges: Vec<ImmediateRange> = ranges
-                .into_iter()
-                .map(|range| match defined {
-                    Some(width) => ImmediateRange {
-                        width,
-                        signed: false,
-                        ..range
+                    .collect();
+                let imm_range_entries = imm_range_spec_entries(&ranges);
+
+                let target_symbol = d_sem
+                    .variable_symbols
+                    .values()
+                    .max()
+                    .map_or(0, |max| max + 1);
+                let d_lower = d.inst.name.to_lowercase();
+                let b_lower = b.inst.name.to_lowercase();
+                let rule_key = match defined {
+                    Some(width) => format!("{}_via_{}_w{}", b_lower, d_lower, width),
+                    None => format!("{}_via_{}", b_lower, d_lower),
+                };
+                let rule_name = format!("{}+{}", d.mnemonic, b.mnemonic);
+                let target_symbol_lit = proc_macro2::Literal::u32_unsuffixed(target_symbol);
+                let b_op_ty_ident = format_ident!("{}Op", &b.inst.name);
+
+                let (prelude_ts, prelude_spec, operand_constraint_entries) =
+                    emit_flag_definer_prelude(d, d_sem, emitted_preludes, dialect);
+                isel_rule_emitters.push(prelude_ts);
+
+                let emit_attrs = [emit_attr_block(&b_sem.target_operand, target_symbol)];
+                let (emitter_ts, emit_spec) = emit_emitter_spec(
+                    &rule_key,
+                    dialect,
+                    &b.op_name,
+                    &b_op_ty_ident,
+                    &emit_attrs,
+                    &b.inst.name,
+                );
+                let (rule_ts, rule_ident) = emit_rule_spec(
+                    &rule_key,
+                    &rule_name,
+                    &shared_isas,
+                    &pattern_spec,
+                    &[],
+                    quote! {
+                        tir::backend::isel::RuleKind::CondBranch {
+                            target_symbol: #target_symbol_lit,
+                        }
                     },
-                    None => range,
-                })
-                .collect();
-            let imm_range_entries = imm_range_spec_entries(&ranges);
-
-            let target_symbol = d_sem
-                .variable_symbols
-                .values()
-                .max()
-                .map_or(0, |max| max + 1);
-            let d_lower = d.inst.name.to_lowercase();
-            let b_lower = b.inst.name.to_lowercase();
-            let rule_key = match defined {
-                Some(width) => format!("{}_via_{}_w{}", b_lower, d_lower, width),
-                None => format!("{}_via_{}", b_lower, d_lower),
-            };
-            let rule_name = format!("{}+{}", d.mnemonic, b.mnemonic);
-            let target_symbol_lit = proc_macro2::Literal::u32_unsuffixed(target_symbol);
-            let b_op_ty_ident = format_ident!("{}Op", &b.inst.name);
-
-            let (prelude_ts, prelude_spec, operand_constraint_entries) =
-                emit_flag_definer_prelude(d, d_sem, emitted_preludes, dialect);
-            isel_rule_emitters.push(prelude_ts);
-
-            let emit_attrs = [emit_attr_block(&b_sem.target_operand, target_symbol)];
-            let (emitter_ts, emit_spec) = emit_emitter_spec(
-                &rule_key,
-                dialect,
-                &b.op_name,
-                &b_op_ty_ident,
-                &emit_attrs,
-                &b.inst.name,
-            );
-            let (rule_ts, rule_ident) = emit_rule_spec(
-                &rule_key,
-                &rule_name,
-                &shared_isas,
-                &pattern_spec,
-                &[],
-                quote! {
-                    tir::backend::isel::RuleKind::CondBranch {
-                        target_symbol: #target_symbol_lit,
-                    }
-                },
-                &[&prelude_spec, &emit_spec],
-                &operand_constraint_entries,
-                &operand_register_specs,
-                None,
-                &imm_range_entries,
-                None,
-                FpFlags::None,
-            );
-            isel_rule_emitters.push(quote! {
-                #emitter_ts
-                #rule_ts
-            });
-            rule_spec_idents.push(rule_ident);
+                    &[&prelude_spec, &emit_spec],
+                    &operand_constraint_entries,
+                    &operand_register_specs,
+                    None,
+                    &imm_range_entries,
+                    None,
+                    FpFlags::None,
+                );
+                isel_rule_emitters.push(quote! {
+                    #emitter_ts
+                    #rule_ts
+                });
+                rule_spec_idents.push(rule_ident);
             }
         }
     }

@@ -1,3 +1,5 @@
+use super::*;
+
 // Derive the fixed registers an instruction touches without naming them in an
 // operand. A behavior mentions them by path — `EFLAGS::zf = ...` writes a flag,
 // `GPR::rax * dst` reads a register — and nothing else in the generated op
@@ -9,10 +11,7 @@
 // physical defs and uses. Target-agnostic: it keys off register paths, never
 // off register names.
 
-fn conditional_register_writes(
-    expr: &ast::Expr,
-    out: &mut HashSet<(String, String)>,
-) {
+fn conditional_register_writes(expr: &ast::Expr, out: &mut HashSet<(String, String)>) {
     match expr {
         ast::Expr::Block(block) => {
             for statement in &block.stmts {
@@ -36,7 +35,7 @@ fn conditional_register_writes(
     }
 }
 
-fn implicit_register_items(
+pub(super) fn implicit_register_items(
     inst: &ast::Instruction,
     register_index_map: &HashMap<(String, String), u32>,
     pc_classes: &HashSet<String>,
@@ -83,7 +82,7 @@ fn implicit_register_items(
     items
 }
 
-fn implicit_or_update_items(
+pub(super) fn implicit_or_update_items(
     inst: &ast::Instruction,
     operands: &[(String, Type)],
     float_classes: &HashSet<String>,
@@ -118,8 +117,7 @@ fn implicit_or_update_items(
             return;
         }
         let target_path = |expr: &ast::Expr| {
-            assignment_dest_register_path(expr)
-                == Some((class.clone(), register.clone()))
+            assignment_dest_register_path(expr) == Some((class.clone(), register.clone()))
         };
         if !target_path(&binary.lhs) && !target_path(&binary.rhs) {
             return;
@@ -137,9 +135,10 @@ fn implicit_or_update_items(
     let Some(file) = register_files.get(&class) else {
         return Vec::new();
     };
-    if operands.iter().any(|(_, ty)| {
-        matches!(ty, Type::Struct(class) if register_files.get(class) == Some(file))
-    }) {
+    if operands
+        .iter()
+        .any(|(_, ty)| matches!(ty, Type::Struct(class) if register_files.get(class) == Some(file)))
+    {
         return Vec::new();
     }
     // Helpers are inlined before codegen, so these two accesses must be the

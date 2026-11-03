@@ -1,3 +1,5 @@
+use super::*;
+
 fn machine_model_ts(
     machine: &ast::Machine,
     machine_id: usize,
@@ -504,7 +506,7 @@ fn fusion_schedule_ts(
     })
 }
 
-fn emit_machine_models<'a>(
+pub(super) fn emit_machine_models<'a>(
     files: &'a [ast::File],
     item_cache: &HashMap<&'a str, &'a ast::Item>,
 ) -> Result<(proc_macro2::TokenStream, SchedTables), TMDLError> {
@@ -736,7 +738,7 @@ fn sched_class_ts(c: &ResolvedClass) -> proc_macro2::TokenStream {
     }
 }
 
-fn emit_uops(uops: &[ResolvedMicroOp]) -> Vec<proc_macro2::TokenStream> {
+pub(super) fn emit_uops(uops: &[ResolvedMicroOp]) -> Vec<proc_macro2::TokenStream> {
     uops.iter()
         .map(|uop| {
             let route_lits = uop.routes.iter().map(|route| {
@@ -856,8 +858,8 @@ fn collect_scheduled<'a>(
 /// Per-instruction scheduling facts resolved once from the TMDL `machine` blocks,
 /// for the `InstrInfo` records [`emit_instructions`] emits. Keyed by instruction
 /// declaration name.
-struct SchedTables {
-    latency_cases: HashMap<String, Vec<Vec<ResolvedLatencyCase>>>,
+pub(super) struct SchedTables {
+    pub(super) latency_cases: HashMap<String, Vec<Vec<ResolvedLatencyCase>>>,
     costs: HashMap<String, u32>,
     /// The `SCHED_C*` class of each instruction on each machine, in machine-id
     /// order. Absent for an instruction no machine describes.
@@ -865,18 +867,18 @@ struct SchedTables {
 }
 
 #[derive(Clone)]
-struct ResolvedLatencyCase {
-    condition: ast::Expr,
-    latency: i64,
-    uops: Option<Vec<ResolvedMicroOp>>,
+pub(super) struct ResolvedLatencyCase {
+    pub(super) condition: ast::Expr,
+    pub(super) latency: i64,
+    pub(super) uops: Option<Vec<ResolvedMicroOp>>,
 }
 
 impl SchedTables {
-    fn cost(&self, inst: &str) -> u32 {
+    pub(super) fn cost(&self, inst: &str) -> u32 {
         self.costs.get(inst).copied().unwrap_or(1)
     }
 
-    fn sched(&self, inst: &str) -> Option<proc_macro2::TokenStream> {
+    pub(super) fn sched(&self, inst: &str) -> Option<proc_macro2::TokenStream> {
         let classes = self.classes.get(inst)?;
         Some(quote! { &[#(#classes),*] })
     }
@@ -924,7 +926,7 @@ struct ResolvedClass {
 }
 
 #[derive(Clone, PartialEq, Eq, Hash)]
-struct ResolvedMicroOp {
+pub(super) struct ResolvedMicroOp {
     routes: Vec<Vec<ResolvedResourceUse>>,
 }
 

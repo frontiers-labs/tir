@@ -1,3 +1,5 @@
+use super::*;
+
 // ---------------------------------------------------------------------------
 // Table-driven isel rule emission: every rule site lowers to a static
 // `RuleSpec` whose emission plan names one static `EmitSpec` per emitted
@@ -11,7 +13,7 @@ fn feature_id_slice(for_isas: &[String]) -> proc_macro2::TokenStream {
     quote! { &[#(#ids),*] }
 }
 
-fn emit_attr_result(
+pub(super) fn emit_attr_result(
     name: &str,
     result: usize,
     class: &proc_macro2::TokenStream,
@@ -27,7 +29,7 @@ fn emit_attr_result(
     }
 }
 
-fn emit_attr_value(name: &str, symbol: u32) -> proc_macro2::TokenStream {
+pub(super) fn emit_attr_value(name: &str, symbol: u32) -> proc_macro2::TokenStream {
     let name_lit = proc_macro2::Literal::string(name);
     let symbol_lit = proc_macro2::Literal::u32_unsuffixed(symbol);
     quote! {
@@ -38,7 +40,7 @@ fn emit_attr_value(name: &str, symbol: u32) -> proc_macro2::TokenStream {
     }
 }
 
-fn emit_attr_fixed_use(
+pub(super) fn emit_attr_fixed_use(
     name: &str,
     symbol: u32,
     class: &proc_macro2::TokenStream,
@@ -57,7 +59,7 @@ fn emit_attr_fixed_use(
     }
 }
 
-fn emit_attr_result_fixed_def(
+pub(super) fn emit_attr_result_fixed_def(
     name: &str,
     result: usize,
     class: &proc_macro2::TokenStream,
@@ -76,7 +78,7 @@ fn emit_attr_result_fixed_def(
     }
 }
 
-fn emit_attr_physical(
+pub(super) fn emit_attr_physical(
     name: &str,
     class: &proc_macro2::TokenStream,
     index: u16,
@@ -92,7 +94,7 @@ fn emit_attr_physical(
     }
 }
 
-fn emit_attr_int(name: &str, symbol: u32) -> proc_macro2::TokenStream {
+pub(super) fn emit_attr_int(name: &str, symbol: u32) -> proc_macro2::TokenStream {
     let name_lit = proc_macro2::Literal::string(name);
     let symbol_lit = proc_macro2::Literal::u32_unsuffixed(symbol);
     quote! {
@@ -103,7 +105,7 @@ fn emit_attr_int(name: &str, symbol: u32) -> proc_macro2::TokenStream {
     }
 }
 
-fn emit_attr_block(name: &str, symbol: u32) -> proc_macro2::TokenStream {
+pub(super) fn emit_attr_block(name: &str, symbol: u32) -> proc_macro2::TokenStream {
     let name_lit = proc_macro2::Literal::string(name);
     let symbol_lit = proc_macro2::Literal::u32_unsuffixed(symbol);
     quote! {
@@ -114,7 +116,7 @@ fn emit_attr_block(name: &str, symbol: u32) -> proc_macro2::TokenStream {
     }
 }
 
-fn emit_attr_int_or_value(name: &str, symbol: u32) -> proc_macro2::TokenStream {
+pub(super) fn emit_attr_int_or_value(name: &str, symbol: u32) -> proc_macro2::TokenStream {
     let name_lit = proc_macro2::Literal::string(name);
     let symbol_lit = proc_macro2::Literal::u32_unsuffixed(symbol);
     quote! {
@@ -125,7 +127,7 @@ fn emit_attr_int_or_value(name: &str, symbol: u32) -> proc_macro2::TokenStream {
     }
 }
 
-fn emit_emitter_spec(
+pub(super) fn emit_emitter_spec(
     rule_key: &str,
     dialect: &str,
     op_name: &str,
@@ -148,7 +150,7 @@ fn emit_emitter_spec(
     (tokens, spec_ident)
 }
 
-fn reg_operand_spec(
+pub(super) fn reg_operand_spec(
     symbol: u32,
     class_name: &str,
     sensitive: bool,
@@ -180,7 +182,7 @@ fn reg_operand_spec(
     }
 }
 
-fn operand_register_specs(
+pub(super) fn operand_register_specs(
     operands: &[(u32, String)],
     sensitive_symbols: &HashSet<u32>,
     float_classes: &HashSet<String>,
@@ -201,7 +203,7 @@ fn operand_register_specs(
         .collect()
 }
 
-fn operand_register_specs_for_ops(
+pub(super) fn operand_register_specs_for_ops(
     ops: &[(String, Type)],
     variable_symbols: &HashMap<String, u32>,
     sensitive_symbols: &HashSet<u32>,
@@ -225,7 +227,7 @@ fn operand_register_specs_for_ops(
     )
 }
 
-fn result_register_spec(
+pub(super) fn result_register_spec(
     class_name: &str,
     float_classes: &HashSet<String>,
     polymorphic_classes: &HashSet<String>,
@@ -246,7 +248,7 @@ fn result_register_spec(
     }
 }
 
-fn imm_range_spec_entries(ranges: &[ImmediateRange]) -> Vec<proc_macro2::TokenStream> {
+pub(super) fn imm_range_spec_entries(ranges: &[ImmediateRange]) -> Vec<proc_macro2::TokenStream> {
     ranges
         .iter()
         .map(|range| {
@@ -267,7 +269,10 @@ fn imm_range_spec_entries(ranges: &[ImmediateRange]) -> Vec<proc_macro2::TokenSt
         .collect()
 }
 
-fn constraint_entry(symbol: u32, constraint: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
+pub(super) fn constraint_entry(
+    symbol: u32,
+    constraint: proc_macro2::TokenStream,
+) -> proc_macro2::TokenStream {
     let symbol_lit = proc_macro2::Literal::u32_unsuffixed(symbol);
     quote! { (#symbol_lit, #constraint) }
 }
@@ -275,10 +280,10 @@ fn constraint_entry(symbol: u32, constraint: proc_macro2::TokenStream) -> proc_m
 /// A serialized pattern: blob offset, whether replay needs types, and the
 /// float materialization width if the pattern roots a bitcast into a float
 /// register.
-struct SpecPattern {
-    offset: u32,
-    typed: bool,
-    float_width: Option<u32>,
+pub(super) struct SpecPattern {
+    pub(super) offset: u32,
+    pub(super) typed: bool,
+    pub(super) float_width: Option<u32>,
 }
 
 fn pattern_ref_tokens(pattern: &SpecPattern) -> proc_macro2::TokenStream {
@@ -301,7 +306,7 @@ fn pattern_ref_tokens(pattern: &SpecPattern) -> proc_macro2::TokenStream {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn emit_rule_spec(
+pub(super) fn emit_rule_spec(
     rule_key: &str,
     rule_name: &str,
     for_isas: &[String],
