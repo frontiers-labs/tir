@@ -17,10 +17,10 @@ rule:
           kind: token_tree
           matches: generated-arguments
     - kind: token_tree
-      inside: { kind: macro_rule, stopBy: end }
+      inside: { kind: token_tree, stopBy: end }
       follows:
         regex: '^!$'
-        follows: { kind: identifier, regex: '^(r#)?include$' }
+        follows: { regex: '\binclude$' }
       not: { matches: generated-arguments }
       all:
         - not:
@@ -29,4 +29,4 @@ rule:
               stopBy: end
               follows:
                 regex: '^!$'
-                follows: { kind: identifier, regex: '^(r#)?(quote|quote_spanned)$' }
+                follows: { regex: '(^|:)(r#)?(quote|quote_spanned)$' }

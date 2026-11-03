@@ -11,6 +11,7 @@ valid:
   - 'macro_rules! generated { () => { include!(concat!(env!("OUT_DIR"), "/generated.rs")); }; }'
   - 'macro_rules! call { () => { include("source.rs"); }; }'
   - 'macro_rules! quoted { () => { quote! { include!("generated.rs"); } }; }'
+  - 'vec![quote::quote! { include!("generated.rs"); }]'
 invalid:
   - 'include!("source.rs");'
   - 'std::include!(r#"source.rs"#);'
@@ -23,3 +24,6 @@ invalid:
   - 'std::r#include!("source.rs");'
   - 'macro_rules! source { () => { r#include!("source.rs"); }; }'
   - 'std :: /* source */ include!("source.rs");'
+  - 'cfg_if::cfg_if! { if #[cfg(unix)] { include!("source.rs"); } }'
+  - 'vec![include!("source.rs")]'
+  - 'vec![std::r#include!("source.rs")]'
