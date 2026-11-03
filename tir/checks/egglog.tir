@@ -1,0 +1,31 @@
+// RUN: tir egglog %s %S/Inputs/egglog-batch.egg | filecheck %s --check-prefix=BATCH
+// RUN: tir egglog %s %S/Inputs/egglog-batch.egg 2>&1 | filecheck %s --check-prefix=TIME
+// RUN: cat %S/Inputs/egglog-repl.egg | tir egglog %s 2>&1 | filecheck %s --check-prefix=REPL
+// RUN: cat %S/Inputs/egglog-unfinished.egg | not tir egglog %s 2>&1 | filecheck %s --check-prefix=EOF
+// RUN: not tir egglog %S/Inputs/egglog-invalid.tir %S/Inputs/egglog-batch.egg 2>&1 | filecheck %s --check-prefix=BADIR
+// RUN: not tir egglog %s %S/Inputs/egglog-invalid.egg 2>&1 | filecheck %s --check-prefix=BADRULES
+// RUN: not tir egglog %s %S/Inputs/egglog-unfinished.egg 2>&1 | filecheck %s --check-prefix=UNFINISHED
+// RUN: not tir egglog %s %S/Inputs/egglog-missing.egg 2>&1 | filecheck %s --check-prefix=ABSENTRULES
+// RUN: not tir egglog %S/Inputs/egglog-missing.tir 2>&1 | filecheck %s --check-prefix=ABSENTIR
+
+// Imported facts must drive user rules, including rules declared after a run.
+// BATCH: (Answer 42)
+// BATCH-NOT: egglog:
+// TIME: egglog: compile={{[0-9.]+}}s exec={{[0-9.]+}}s
+// REPL-NOT: egglog>
+// REPL: 42
+// REPL: literal
+// REPL: stdin:
+// REPL: unknown-egglog-command
+// REPL-NOT: egglog>
+// EOF: stdin:
+// EOF-SAME: text ends inside a command
+// BADIR: egglog-invalid.tir:
+// BADRULES: egglog-invalid.egg:
+// UNFINISHED: egglog-unfinished.egg:
+// ABSENTRULES: egglog-missing.egg:
+// ABSENTIR: egglog-missing.tir:
+
+module {
+  module_end
+}

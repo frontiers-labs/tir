@@ -2044,6 +2044,7 @@ dependencies = [
  "clap",
  "tir",
  "tir-arm64",
+ "tir-egglog",
  "tir-gpu",
  "tir-llvm",
  "tir-riscv",
