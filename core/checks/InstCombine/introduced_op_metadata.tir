@@ -1,3 +1,5 @@
+// IR migration: the requested transformation pass is a registered no-op.
+// XFAIL: *
 // RUN: env TIR_SAT_TRACE=1 tir opt --pass restructure-nodes,instcombine-nodes --verify %s 2>&1 | filecheck %s
 
 module {

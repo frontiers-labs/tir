@@ -228,7 +228,11 @@ impl Rules {
 
     /// Plans every ruleset from the schema of `db`.
     pub fn compile(&self, db: &Database) -> Result<Program, Error> {
-        self.compile_with(db, |_, _| None)
+        self.compile_with(db, |_, _| None, false)
+    }
+
+    pub(crate) fn compile_with_schema(&self, db: &Database) -> Result<Program, Error> {
+        self.compile_with(db, |_, _| None, true)
     }
 
     /// Plans every ruleset like [`Rules::compile`], keeping what `previous`
@@ -238,7 +242,11 @@ impl Rules {
         if previous.bindings_changed(db) {
             return self.compile(db);
         }
-        self.compile_with(db, |ruleset, rule| previous.last_run_of(ruleset, rule))
+        self.compile_with(
+            db,
+            |ruleset, rule| previous.last_run_of(ruleset, rule),
+            false,
+        )
     }
 
     // The rules of a ruleset that last ran at different times are planned
@@ -247,6 +255,7 @@ impl Rules {
         &self,
         db: &Database,
         last: impl Fn(&str, &str) -> Option<u32>,
+        keep_schema: bool,
     ) -> Result<Program, Error> {
         let (mut sources, mut last_run) = (Vec::new(), Vec::new());
         for ruleset in &self.rulesets {
@@ -279,7 +288,7 @@ impl Rules {
                 last_run.push(time);
             }
         }
-        let (file, tables, externs) = plan::compile(&sources, db.schema())?;
+        let (file, tables, externs) = plan::compile(&sources, db.schema(), keep_schema)?;
         Ok(Program::new(&file, tables, externs, last_run, db))
     }
 

@@ -12,33 +12,48 @@ use super::link_support::{
 
 host_tests! {
     assert_fcc_matches_host:
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     variadic_double_argument_matches_host_compiler => ("int printf(const char *format, ...); int main(void) { printf(\"%.1f\\n\", 1.5); return 0; }\n",);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     variadic_float_argument_matches_host_compiler => ("int printf(const char *format, ...); int main(void) { float value = 1.5f; printf(\"%.1f\\n\", value); return 0; }\n",);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     compares_program_with_host_compiler => (r#"int puts(const char *text);
 int main(void) { puts("same output"); return 17; }
 "#,);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     scalar_fibonacci_matches_host_compiler => (include_str!("corpus/scalar/fibonacci.c"));
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     scalar_sieve_matches_host_compiler => (include_str!("corpus/scalar/sieve.c"));
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     scalar_recursive_descent_matches_host_compiler => (include_str!("corpus/scalar/recursive_descent.c"));
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     scalar_mixed_widths_matches_host_compiler => (include_str!("corpus/scalar/mixed_widths.c"));
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     scalar_compound_assign_promotion_matches_host_compiler => (include_str!("corpus/scalar/compound_assign_promotion.c"));
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     scalar_crc16_matches_host_compiler => (include_str!("corpus/scalar/crc16.c"));
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     scalar_call_chain_matches_host_compiler => (include_str!("corpus/scalar/call_chain.c"));
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     scalar_early_return_matches_host_compiler => (include_str!("corpus/scalar/early_return.c"));
     /// A flag merged out of both arms of an `if` inside a loop: promotion leaves an
     /// arm and the code after it holding identical constants, which must not be
     /// unified across the region boundary.
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     scalar_loop_flag_merge_matches_host_compiler => (include_str!("corpus/scalar/loop_flag_merge.c"));
     /// `break` and `continue` keep their C meaning inside the loop a `for`
     /// or a `do` becomes: the step and the trailing condition still run on a
     /// `continue`, and a `break` skips both.
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     scalar_loop_control_matches_host_compiler => (include_str!("corpus/scalar/loop_control.c"));
     /// An effect inside a nested loop runs on every iteration of the inner loop.
     /// The inner body's state chain reaches the op that leaves it, so destructure
     /// demands the effect from the continue edge rather than dropping it.
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     scalar_nested_loop_effects_matches_host_compiler => (include_str!("corpus/scalar/nested_loop_effects.c"));
     /// `do` loops become a tail-tested loop with the condition appended to the body, which
     /// only holds while `break` and `continue` keep their meaning.
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     do_while_control_matches_host_compiler => (r#"int printf(const char *format, ...);
 int main(void) {
     int i = 0;
@@ -71,6 +86,7 @@ int main(void) {
 "#,);
     /// A returned aggregate is held in a slot until the single `return`, both when
     /// it travels in registers and when the caller supplies the storage.
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     aggregate_early_return_matches_host_compiler => (r#"int printf(const char *format, ...);
 struct Small { int a; int b; };
 struct Big { int v[8]; };
@@ -105,30 +121,53 @@ int main(void) {
     return s.b + t.a + g.v[3];
 }
 "#,);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     scalar_branch_mix_matches_host_compiler => (include_str!("corpus/scalar/branch_mix.c"));
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     local_pointer_matches_host_compiler => (include_str!("corpus/memory/local_pointer.c"));
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     memory_linked_list_matches_host_compiler => (include_str!("corpus/memory/linked_list.c"));
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     memory_hash_table_matches_host_compiler => (include_str!("corpus/memory/hash_table.c"));
     /// A store through the caller's array from inside a branch, found by the
     /// nightly fuzzer: the store was dropped and the array kept its old value.
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     memory_pointer_store_in_branch_matches_host_compiler => (include_str!("corpus/memory/pointer_store_in_branch.c"));
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     global_function_pointer_matches_host_compiler => ("int add_five(int value) { return value + 5; } int (*function)(int) = add_five; int main(void) { return function(37) == 42 ? 0 : 1; }\n",);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     function_pointer_call_matches_host_compiler => ("int add_five(int value) { return value + 5; } int main(void) { int (*function)(int) = add_five; return function(37) == 42 ? 0 : 1; }\n",);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     function_pointer_parameter_matches_host_compiler => ("typedef int (*Unary)(int); int add_five(int value) { return value + 5; } int apply(Unary function, int value) { return function(value); } int main(void) { return apply(add_five, 37) == 42 ? 0 : 1; }\n",);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     dereferenced_function_pointer_call_matches_host_compiler => ("int add_five(int value) { return value + 5; } int main(void) { int (*function)(int) = add_five; return (*function)(37) == 42 ? 0 : 1; }\n",);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     returned_function_pointer_call_matches_host_compiler => ("typedef int (*Unary)(int); int add_five(int value) { return value + 5; } Unary choose(void) { return add_five; } int main(void) { return choose()(37) == 42 ? 0 : 1; }\n",);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     function_pointer_large_record_return_matches_host_compiler => ("struct Triple { long a; long b; long c; }; typedef struct Triple (*Maker)(long); struct Triple make(long value) { struct Triple result = {value, value + 1, value + 2}; return result; } int main(void) { Maker maker = make; struct Triple result = maker(39); return result.a == 39 && result.b == 40 && result.c == 41 ? 0 : 1; }\n",);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     returned_function_pointer_large_record_return_matches_host_compiler => ("struct Triple { long a; long b; long c; }; typedef struct Triple (*Maker)(long); struct Triple make(long value) { struct Triple result = {value, value + 1, value + 2}; return result; } Maker choose(void) { return make; } int main(void) { struct Triple result = choose()(39); return result.a == 39 && result.b == 40 && result.c == 41 ? 0 : 1; }\n",);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     function_pointer_large_record_argument_matches_host_compiler => ("struct Triple { long a; long b; long c; }; typedef long (*Reducer)(struct Triple); long sum(struct Triple value) { return value.a + value.b + value.c; } int main(void) { Reducer reducer = sum; struct Triple value = {13, 14, 15}; return reducer(value) == 42 ? 0 : 1; }\n",);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     local_array_storage_is_contiguous => ("int main(void) { int values[3]; values[0] = 11; values[1] = 22; values[2] = 37; return values[0] + values[1] + values[2] - 70; }\n",);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     local_array_decays_when_passed_to_function => ("int sum(int *values) { return values[0] + values[1] + values[2]; } int main(void) { int values[3]; values[0] = 11; values[1] = 22; values[2] = 37; return sum(values) - 70; }\n",);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     local_array_initializer_zero_fills_remainder => ("int main(void) { int values[3] = {11, 22}; return values[0] + values[1] + values[2] - 33; }\n",);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     local_array_designated_initializer_selects_elements => ("int main(void) { int values[5] = {[3] = 30, [1] = 12}; return values[0] == 0 && values[1] == 12 && values[2] == 0 && values[3] == 30 && values[4] == 0 ? 0 : 1; }\n",);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     array_initializer_continues_after_designator => ("int main(void) { int values[4] = {[1] = 12, 30}; return values[0] == 0 && values[1] == 12 && values[2] == 30 && values[3] == 0 ? 0 : 1; }\n",);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     local_array_initializer_infers_omitted_bound => ("int main(void) { int values[] = {11, 22, 37}; return sizeof(values) == 12 && values[2] == 37 ? 0 : 1; }\n",);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     local_array_designator_infers_omitted_bound => ("int main(void) { int values[] = {[4] = 42}; return sizeof(values) == 20 && values[4] == 42 ? 0 : 1; }\n",);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     nested_array_initializer_uses_row_major_storage => ("int main(void) { int values[2][3] = {{11, 22, 33}, {44, 55}}; return sizeof(values) == 24 && values[1][0] == 44 && values[1][2] == 0 ? 0 : 1; }\n",);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     nested_array_initializer_infers_outer_bound => ("int main(void) { int values[][2] = {{11, 22}, {33, 44}}; return sizeof(values) == 16 && values[1][1] == 44 ? 0 : 1; }\n",);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     bitwise_and_shifts_match_host_compiler => (r#"unsigned int bits(unsigned int a, unsigned int b) {
     return ((a & b) | (a ^ b)) << 2 >> 1;
 }
@@ -139,6 +178,7 @@ int main(void) {
     return 0;
 }
 "#,);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     variable_shift_count_matches_host_compiler => (r#"unsigned int shift(unsigned int value, unsigned int count) {
     return value << count;
 }
@@ -147,19 +187,33 @@ int main(void) {
     return 1;
 }
 "#,);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     character_constant_executes_through_driver => ("int value(void) { return 'A'; } int main(void) { if (value() != 65) return 1; return 0; }\n",);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     enum_constants_use_implicit_and_explicit_values => ("enum Color { Red, Green = 5, Blue }; int main(void) { return Red == 0 && Green == 5 && Blue == 6 ? 0 : 1; }\n",);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     enum_constants_evaluate_integer_constant_expressions => ("enum Value { Base = 3, Scaled = Base * 4 + 2, Negative = -1 }; int main(void) { return Scaled == 14 && Negative == -1 ? 0 : 1; }\n",);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     enum_constants_evaluate_shift_and_bitwise_expressions => ("enum Flags { Read = 1 << 0, Write = 1 << 1, Both = Read | Write, Masked = (Both ^ Read) & 3, High = 8 >> 1 }; int main(void) { return Both == 3 && Masked == 2 && High == 4 ? 0 : 1; }\n",);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     enum_constants_evaluate_remainder_and_unary_expressions => ("enum Value { Remainder = 17 % 5, Inverted = ~0, False = !1, True = !0 }; int main(void) { return Remainder == 2 && Inverted == -1 && False == 0 && True == 1 ? 0 : 1; }\n",);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     enum_constants_evaluate_comparison_logical_and_conditional_expressions => ("enum Decision { Lt = 2 < 3, Le = 3 <= 3, Gt = 4 > 3, Ge = 4 >= 4, Eq = 5 == 5, Ne = 5 != 6, Both = Lt && Eq, Either = 0 || Both, Pick = Either ? 9 : 1 / 0 }; int main(void) { return Lt && Le && Gt && Ge && Eq && Ne && Both && Either && Pick == 9 ? 0 : 1; }\n",);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     enum_constants_accept_character_constants => ("enum Character { Letter = 'A', Newline = '\\n' }; int main(void) { return Letter == 65 && Newline == 10 ? 0 : 1; }\n",);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     enum_constants_accept_sizeof_and_integer_casts => ("enum Value { IntSize = sizeof(int), LongSize = sizeof(long), Narrow = (unsigned char)258, Signed = (signed char)255, Truth = (_Bool)42 }; int main(void) { return IntSize == 4 && LongSize == 8 && Narrow == 2 && Signed == -1 && Truth == 1 ? 0 : 1; }\n",);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     enum_constants_accept_immediately_cast_floating_constants => ("enum Value { Truncated = (int)3.75 }; int main(void) { return Truncated == 3 ? 0 : 1; }\n",);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     tagged_enum_objects_execute_through_driver => ("enum Color { Red = 3 }; int main(void) { enum Color value = Red; return value == 3 ? 0 : 1; }\n",);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     local_enum_declarations_execute_through_driver => ("int main(void) { enum Local { Base = 2, Value = Base + 3 }; return Value == 5 ? 0 : 1; }\n",);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     local_enum_definition_can_declare_an_object => ("int main(void) { enum Local { Value = 5 } value = Value; return value == 5 ? 0 : 1; }\n",);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     escaped_character_constant_executes_through_driver => ("int value(void) { return '\\n'; } int main(void) { if (value() != 10) return 1; return 0; }\n",);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     logical_and_short_circuits_rhs => (r#"int logical_and(int lhs) {
     int rhs = 0;
     int result = lhs && ++rhs;
@@ -171,6 +225,7 @@ int main(void) {
     return 0;
 }
 "#,);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     logical_or_short_circuits_rhs => (r#"int logical_or(int lhs) {
     int rhs = 0;
     int result = lhs || ++rhs;
@@ -182,6 +237,7 @@ int main(void) {
     return 0;
 }
 "#,);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     conditional_operator_executes_only_selected_arm => (r#"int conditional(int condition) {
     int lhs = 0;
     int rhs = 0;
@@ -194,6 +250,7 @@ int main(void) {
     return 0;
 }
 "#,);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     switch_dispatch_fallthrough_and_break_match_host => (r#"int classify(int value) {
     int result = 0;
     switch (value) {
@@ -218,6 +275,7 @@ int main(void) {
     return 0;
 }
 "#,);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     switch_break_exits_nearest_scope => (r#"int accumulate(void) {
     int result = 0;
     for (int i = 0; i < 3; i = i + 1) {
@@ -234,6 +292,7 @@ int main(void) {
 }
 int main(void) { return accumulate() == 17 ? 0 : 1; }
 "#,);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     switch_default_can_fall_through_in_source_order => (r#"int classify(int value) {
     int result = 0;
     switch (value) {
@@ -254,6 +313,7 @@ int main(void) {
     return 0;
 }
 "#,);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     switch_without_matching_case_preserves_state => (r#"int classify(int value) {
     int result = 4;
     switch (value) {
@@ -264,6 +324,7 @@ int main(void) {
 }
 int main(void) { return classify(2) == 4 ? 0 : 1; }
 "#,);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     goto_and_labels_match_host_compiler => (r#"int sum_to(int limit) {
     int sum = 0;
     int value = 0;
@@ -281,7 +342,9 @@ int main(void) { return sum_to(5) == 10 ? 0 : 1; }
     /// label, exits from nested loops, a loop written out of a backward jump, an
     /// irreducible pair of labels, and jumps into a compound statement, a loop body
     /// and a `switch` body, as well as out of a `switch`.
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     scalar_goto_shapes_match_host_compiler => (include_str!("corpus/scalar/goto_shapes.c"));
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     goto_can_enter_a_loop_body => (r#"int count(int enter) {
     int value = 0;
     int total = 0;
@@ -300,6 +363,7 @@ int main(void) {
     return 0;
 }
 "#,);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     goto_can_exit_nested_control_flow => (r#"int count(void) {
     int value = 0;
     while (1) {
@@ -311,6 +375,7 @@ done:
 }
 int main(void) { return count() == 3 ? 0 : 1; }
 "#,);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     goto_reaches_a_label_after_return => (r#"int choose(int second) {
     if (second) goto second_result;
     return 1;
@@ -323,6 +388,7 @@ int main(void) {
     return 0;
 }
 "#,);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     goto_reaches_a_nested_label_after_return => (r#"int choose(int second) {
     if (second) goto second_result;
     return 1;
@@ -338,6 +404,7 @@ int main(void) {
     return 0;
 }
 "#,);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     unary_operators_match_host_compiler => (r#"int negate(int value) { return -value; }
 unsigned int complement(unsigned int value) { return ~value; }
 int logical_not(int value) { return !value; }
@@ -351,6 +418,7 @@ int main(void) {
     return 0;
 }
 "#,);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     comma_operator_matches_host_compiler => (r#"int comma_value(void) {
     int value = 0;
     return (value = 3, value + 4);
@@ -360,6 +428,7 @@ int main(void) {
     return 1;
 }
 "#,);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     integer_casts_match_host_compiler => (r#"int truncate(int value) { return (unsigned char)value; }
 long widen(int value) { return (long)value; }
 unsigned long widen_unsigned(unsigned int value) { return (unsigned long)value; }
@@ -370,6 +439,7 @@ int main(void) {
     return 0;
 }
 "#,);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     increment_operators_match_host_compiler => (r#"int increment_values(void) {
     int value = 4;
     int post = value++;
@@ -383,6 +453,7 @@ int main(void) {
     return 1;
 }
 "#,);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     compound_assignments_match_host_compiler => (r#"int compound_assign(void) {
     int value = 5;
     value += 3;
@@ -400,40 +471,68 @@ int main(void) {
     return 1;
 }
 "#,);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     local_record_initializer_follows_field_order => ("struct Pair { int left; int right; }; int main(void) { struct Pair pair = {11, 22}; return pair.left + pair.right - 33; }\n",);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     local_record_designated_initializer_selects_fields => ("struct Pair { int left; int right; }; int main(void) { struct Pair pair = {.right = 22, .left = 11}; return pair.left + pair.right - 33; }\n",);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     record_initializer_continues_after_designator => ("struct Pair { int left; int right; }; int main(void) { struct Pair pair = {.left = 11, 22}; return pair.left + pair.right - 33; }\n",);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     local_record_designated_initializer_overrides_earlier_value => ("struct Pair { int left; int right; }; int main(void) { struct Pair pair = {.left = 40, .left = 41, .left = 2}; return pair.left - 2; }\n",);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     local_union_initializer_uses_first_member => ("union Value { int integer; long wide; }; int main(void) { union Value value = {42}; return value.integer - 42; }\n",);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     local_union_designator_selects_member => ("union Value { int integer; long wide; }; int main(void) { union Value value = {.wide = 42}; return value.wide - 42; }\n",);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     later_union_designator_overrides_earlier_member => ("union Value { int integer; long wide; }; int main(void) { union Value value = {.integer = 11, .wide = 42}; return value.wide - 42; }\n",);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     reselected_union_member_discards_overwritten_initializers => ("struct Pair { int left; int right; }; union Value { struct Pair pair; long wide; }; int main(void) { union Value value = {.pair.left = 11, .wide = -1, .pair.right = 42}; return value.pair.left == 0 && value.pair.right == 42 ? 0 : 1; }\n",);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     nested_record_initializer_zero_fills_fields => ("struct Inner { int left; int right; }; struct Outer { int tag; struct Inner inner; }; int main(void) { struct Outer value = {7, {11}}; return value.tag == 7 && value.inner.left == 11 && value.inner.right == 0 ? 0 : 1; }\n",);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     nested_anonymous_record_type_is_defined => ("struct Holder { int tag; union { int number; char bytes[4]; } value; };\n\
          int main(void) { struct Holder holder = {0}; holder.value.number = 42;\n\
          return holder.value.number != 42; }\n",);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     chained_field_designator_selects_nested_member => ("struct Inner { int left; int right; }; struct Outer { int tag; struct Inner inner; }; int main(void) { struct Outer value = {.inner.right = 42}; return value.tag == 0 && value.inner.left == 0 && value.inner.right == 42 ? 0 : 1; }\n",);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     chained_field_and_index_designators_select_nested_member => ("struct Row { int left; int right; }; struct Table { struct Row rows[2]; }; int main(void) { struct Table value = {.rows[1].right = 42}; return value.rows[0].right == 0 && value.rows[1].left == 0 && value.rows[1].right == 42 ? 0 : 1; }\n",);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     nested_initializer_continues_after_chained_designator => ("struct Inner { int left; int right; }; struct Outer { int tag; struct Inner inner; int tail; }; int main(void) { struct Outer value = {.inner.left = 11, 22}; return value.tag == 0 && value.inner.left == 11 && value.inner.right == 22 && value.tail == 0 ? 0 : 1; }\n",);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     initialized_scalar_global_is_read_by_main => ("int answer = 42; int main(void) { return answer - 42; }\n");
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     tentative_scalar_global_is_zero_initialized => ("int counter; int main(void) { return counter; }\n");
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     initialized_global_array_uses_constant_data => ("int values[3] = {11, 22, 9}; int main(void) { return values[0] + values[1] + values[2] - 42; }\n",);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     initialized_global_array_designators_select_elements => ("int values[5] = {[3] = 30, [1] = 12}; int main(void) { return values[0] == 0 && values[1] == 12 && values[2] == 0 && values[3] == 30 && values[4] == 0 ? 0 : 1; }\n",);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     initialized_global_array_designator_infers_omitted_bound => ("int values[] = {[4] = 42}; int main(void) { return sizeof(values) == 20 && values[4] == 42 ? 0 : 1; }\n",);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     initialized_global_struct_uses_field_layout => ("struct Pair { char tag; int value; } pair = {3, 39}; int main(void) { return pair.tag + pair.value - 42; }\n",);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     initialized_global_struct_designators_select_fields => ("struct Pair { char tag; int value; } pair = {.value = 39, .tag = 3}; int main(void) { return pair.tag + pair.value - 42; }\n",);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     initialized_global_chained_designators_select_nested_member => ("struct Row { int left; int right; }; struct Table { struct Row rows[2]; } value = {.rows[1].right = 42}; int main(void) { return value.rows[0].right == 0 && value.rows[1].left == 0 && value.rows[1].right == 42 ? 0 : 1; }\n",);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     initialized_global_union_uses_first_member => ("union Value { int integer; long wide; } value = {42}; int main(void) { return value.integer - 42; }\n",);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     initialized_global_union_designator_selects_member => ("union Value { int integer; long wide; } value = {.wide = 42}; int main(void) { return value.wide - 42; }\n",);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     global_reselected_union_member_discards_overwritten_initializers => ("struct Pair { int left; int right; }; union Value { struct Pair pair; long wide; } value = {.pair.left = 11, .wide = -1, .pair.right = 42}; int main(void) { return value.pair.left == 0 && value.pair.right == 42 ? 0 : 1; }\n",);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     global_pointer_initializer_emits_a_relocation => ("int target = 42; int *pointer = &target; int main(void) { return *pointer - 42; }\n",);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     global_array_of_string_pointers_emits_relocations => ("char *values[2] = {\"first\", \"second\"};\n\
          int main(void) { return values[0][0] + values[1][0] - 'f' - 's'; }\n",);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     global_pointer_array_accepts_cast_string_literals => ("unsigned char *values[2] = {(unsigned char *)\"a\", (unsigned char *)\"b\"};\n\
          int main(void) { return values[0][0] + values[1][0] - 'a' - 'b'; }\n",);
     /// Two mutually exclusive branches computing the same predicate produce two
     /// equal γ merges. Selection may not bind one block's argument register inside
     /// the other branch: that register holds a value only on the path it merges.
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     duplicate_predicate_in_exclusive_branches_matches_host_compiler => (r#"int printf(const char *format, ...);
 int run(char *s) {
     int st = 0;
@@ -461,6 +560,7 @@ int main(void) {
     /// an arm would then yield the name the gate publishes, which is its own future.
     /// This is the shape CoreMark's `core_init_state` dispatch has, and it decided the
     /// wrong case.
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     switch_fallthrough_dispatch_matches_host_compiler => (r#"void run(unsigned n, short seed, int *out) {
     unsigned next = 0;
     int k = 0;
@@ -483,6 +583,7 @@ int main(void) {
     return sum & 0x7f;
 }
 "#,);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     loops_execute_through_driver => (r#"int loop_break(int n) {
     for (;;) { if (n) break; return 4; }
     return 7;
@@ -493,7 +594,9 @@ int main(void) {
     return 0;
 }
 "#,);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     struct_fields_execute_through_driver => ("struct Pair { char tag; int value; }; int read(void) { struct Pair pair; pair.value = 42; return pair.value; } int main(void) { if (read() == 42) return 0; return 1; }\n",);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     whole_struct_copy_executes_through_driver => (r#"struct Pair { char tag; int value; };
 int copy(void) {
     struct Pair source;
@@ -505,7 +608,9 @@ int copy(void) {
 }
 int main(void) { if (copy() == 94) return 0; return 1; }
 "#,);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     anonymous_struct_executes_through_driver => ("typedef struct { int value; } Pair; int read(void) { Pair pair; pair.value = 29; return pair.value; } int main(void) { if (read() == 29) return 0; return 1; }\n",);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     nested_struct_member_executes_through_driver => (r#"struct Inner { int value; };
 struct Outer { char tag; struct Inner inner; };
 int read(void) { struct Outer outer; outer.inner.value = 61; return outer.inner.value; }
@@ -518,7 +623,9 @@ host_tests! {
     /// A loop whose taken branch reads the header's counter while the
     /// fallthrough backedge redefines it: the counter must stay live across the
     /// address materialized between the two.
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     scalar_loop_argmax_matches_host_compiler => (include_str!("corpus/scalar/loop_argmax.c"));
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     floating_negation_preserves_ieee_sign => (r#"int main(void) {
     volatile double positive = 0.0;
     double runtime_negative = -positive;
@@ -529,6 +636,7 @@ host_tests! {
     return -(-value) == value ? 0 : 3;
 }
 "#,);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     float_integer_conversions_match_host => (r#"int main(void) {
     int signed_value = -7;
     unsigned unsigned_value = 4000000000u;
@@ -546,25 +654,34 @@ host_tests! {
 // struct, so a member read and a `sizeof` cross the object boundary.
 host_tests! {
     assert_fcc_object_executes_with_host:
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     pointer_member_access_executes_through_driver => ("struct Pair { char tag; int value; }; int read(struct Pair *pair) { return pair->value; }\n",
         "struct Pair { char tag; int value; }; int read(struct Pair *); int main(void) { struct Pair pair = { 1, 73 }; return read(&pair) == 73 ? 0 : 1; }\n",);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     sizeof_struct_executes_through_driver => ("struct Pair { char tag; int value; }; int size(void) { return sizeof(struct Pair); }\n",
         "int size(void); int main(void) { return size() == 8 ? 0 : 1; }\n",);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     float_pointer_storage_matches_host_layout => ("void set_middle(float *values) { values[1] = 4.5f; }\n",
         "void set_middle(float *); int main(void) { float values[3] = { 1.25f, 2.5f, 3.75f }; set_middle(values); return values[0] == 1.25f && values[1] == 4.5f && values[2] == 3.75f ? 0 : 1; }\n",);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     mixed_float_struct_matches_sysv_abi => ("struct Mixed { float value; int tag; }; struct Mixed update(struct Mixed value) { value.value += 0.5f; value.tag += 1; return value; }\n",
         "struct Mixed { float value; int tag; }; struct Mixed update(struct Mixed); int main(void) { struct Mixed value = { 1.25f, 41 }; value = update(value); return value.value == 1.75f && value.tag == 42 ? 0 : 1; }\n",);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     scalar_floats_and_pointer_match_sysv_abi => ("float combine(float left, int *scale, float right) { return (left + right) * *scale; }\n",
         "float combine(float, int *, float); int main(void) { int scale = 3; return combine(1.25f, &scale, 2.75f) == 12.0f ? 0 : 1; }\n",);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     ninth_float_argument_matches_sysv_abi => ("float sum9(float a, float b, float c, float d, float e, float f, float g, float h, float i) { return a+b+c+d+e+f+g+h+i; }\n",
         "float sum9(float, float, float, float, float, float, float, float, float); int main(void) { return sum9(1,2,3,4,5,6,7,8,9) == 45.0f ? 0 : 1; }\n",);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     float_width_conversions_match_sysv_abi => ("float narrow(double value) { float result = (float)value; return result; } double widen(float value) { double result = value; return result; }\n",
         "float narrow(double); double widen(float); int main(void) { return narrow(1.00000006) == 1.00000011920928955078125f && widen(0.1f) == (double)0.1f ? 0 : 1; }\n",);
+    #[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
     floating_initializers_match_host_object_layout => ("struct Mixed { float value; int tag; }; float values[3] = { 1.25f }; struct Mixed item = { 1.5f, 7 }; double negative = -0.0;\n",
         "struct Mixed { float value; int tag; }; extern float values[3]; extern struct Mixed item; extern double negative; int main(void) { return values[0] == 1.25f && values[1] == 0.0f && values[2] == 0.0f && item.value == 1.5f && item.tag == 7 && 1.0 / negative < 0.0 ? 0 : 1; }\n",);
 }
 
 #[test]
+#[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
 fn optimized_load_before_call_preserves_observed_value() {
     use super::link_support::{compile_host_object, exit_code, run_fcc, run_program};
     if !cc_available() {

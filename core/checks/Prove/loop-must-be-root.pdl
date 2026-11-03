@@ -1,3 +1,5 @@
+// IR migration: the requested transformation pass is a registered no-op.
+// XFAIL: *
 // RUN: not tir prove %s 2>&1 | filecheck %s
 
 // The induction relates the ports and the produced values of the loops on

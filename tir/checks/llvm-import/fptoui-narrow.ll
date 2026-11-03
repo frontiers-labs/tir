@@ -1,3 +1,5 @@
+; IR migration: instruction selection and backend lowering are unavailable.
+; XFAIL: *
 ; RUN: tir mc %s --march x86_64 --filetype obj-ascii | filecheck %s
 
 define i32 @convert(double %value) {

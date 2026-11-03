@@ -11,7 +11,6 @@ struct InstructionOptions<'a> {
     dialect: &'a str,
     text_only: bool,
     custom_assembly: bool,
-    include_global_rules: bool,
     module_fragment: bool,
 }
 
@@ -228,8 +227,7 @@ fn mnemonic_specificity(
     (arity, reg_specificity, imm_bits)
 }
 
-struct TargetTables<'a> {
-    files: &'a [ast::File],
+struct TargetTables {
     register_index_map: HashMap<(String, String), u32>,
     pc_classes: HashSet<String>,
     flag_classes: HashSet<String>,
@@ -239,17 +237,13 @@ struct TargetTables<'a> {
     register_name_map: HashMap<(String, u32), String>,
     register_files: HashMap<String, String>,
     float_classes: HashSet<String>,
-    polymorphic_classes: HashSet<String>,
-    hardwired_zero_index: HashMap<String, u16>,
     class_sizes: HashMap<String, usize>,
     reg_kinds: HashMap<String, (bool, u32)>,
 }
 
 struct InstrEmitCtx<'a> {
     inst: &'a ast::Instruction,
-    name_ident: &'a proc_macro2::Ident,
     op_name: &'a str,
-    dialect: &'a str,
     ops: &'a [(String, Type)],
     mnemonic_name: &'a str,
     builder_ident: &'a proc_macro2::Ident,
@@ -258,725 +252,6 @@ struct InstrEmitCtx<'a> {
     defined_register_operands: &'a [String],
     read_register_operands: &'a HashSet<String>,
     implicit_reads: &'a [(String, u32)],
-}
-
-fn fp_value_patterns(
-    semantics: &InstructionSemantics,
-    immediate_symbols: &HashSet<u32>,
-    canon_pattern: &tir_adt::Dag<
-        tir_symbolic::lang::SymKind,
-        tir_symbolic::lang::SymPayload<tir_symbolic::sem::ValueId>,
-    >,
-    canon_root: tir_adt::NodeId,
-    pattern_widths: &[Option<u32>],
-) -> Vec<(&'static str, SpecPattern, bool)> {
-    if matches!(semantics.fp_flags, FpFlags::None)
-        && *tir_adt::Dag::get_node(canon_pattern, canon_root)
-            != tir_symbolic::lang::SymKind::StateAssign
-    {
-        return Vec::new();
-    }
-    use tir_symbolic::lang::SymKind;
-    let (full, full_root) = semantics
-        .guarded_semantics
-        .as_ref()
-        .map_or((&semantics.pattern, semantics.root), |(graph, root)| {
-            (graph, *root)
-        });
-    let rounded = tir_symbolic::lang::selection_fallback_preserving_rounding(full, full_root);
-    let (rounded, rounded_root) = rounded
-        .as_ref()
-        .map_or((full, full_root), |graph| (graph, graph.root().unwrap()));
-    let (rounded, rounded_root, forced) =
-        tir_symbolic::lang::canonicalize_for_selection(rounded, rounded_root, immediate_symbols);
-    let mut widths = selection_pattern_widths(&rounded, forced);
-    if widths[rounded_root.index()].is_none() {
-        widths[rounded_root.index()] = pattern_widths[canon_root.index()];
-    }
-    let needs_rounded_value =
-        !rounded.subgraph_eq(rounded_root, canon_pattern, canon_root);
-    let (full_pattern, full_pattern_root, forced) =
-        tir_symbolic::lang::canonicalize_for_selection(full, full_root, immediate_symbols);
-    let rounded_is_full =
-        rounded.subgraph_eq(rounded_root, &full_pattern, full_pattern_root);
-    let needs_full_value = !rounded_is_full
-        && !full_pattern.subgraph_eq(full_pattern_root, canon_pattern, canon_root);
-    let full_widths = selection_pattern_widths(&full_pattern, forced);
-    let (effect_pattern, effect_root, _) = tir_symbolic::lang::canonicalize_for_selection(
-        &semantics.pattern,
-        semantics.root,
-        immediate_symbols,
-    );
-    let mut patterns = Vec::new();
-    for (mut graph, value_root, mut widths, value_suffix, effect_suffix, needs_guard, enabled) in [
-        (
-            effect_pattern,
-            effect_root,
-            pattern_widths.to_vec(),
-            None,
-            "fp_effect",
-            true,
-            true,
-        ),
-        (
-            rounded,
-            rounded_root,
-            widths,
-            Some("rounded"),
-            "rounded_fp_effect",
-            !rounded_is_full,
-            needs_rounded_value,
-        ),
-        (
-            full_pattern,
-            full_pattern_root,
-            full_widths,
-            Some("full"),
-            "full_fp_effect",
-            false,
-            needs_full_value,
-        ),
-    ] {
-        if !enabled {
-            continue;
-        }
-        for (suffix, effect) in [(value_suffix, false), (Some(effect_suffix), true)] {
-            let Some(suffix) = suffix else { continue };
-            let root = if effect {
-                // An effect observes the typed low bits under the Narrow contract.
-                let value_root =
-                    if matches!(graph.get_node(value_root), SymKind::SExt | SymKind::ZExt)
-                        && let Some(value) = graph.children(value_root).next()
-                        && widths[value.index()].is_some()
-                    {
-                        value
-                    } else {
-                        value_root
-                    };
-                let state = graph.add_node(SymKind::StateBlock);
-                let root = graph.add_node(SymKind::FPEffect);
-                graph.add_edge(root, value_root);
-                graph.add_edge(root, state);
-                widths.resize(root.index() + 1, None);
-                widths[root.index()] = widths[value_root.index()];
-                root
-            } else {
-                value_root
-            };
-            let (offset, typed) = intern_dag(&graph, root, &widths);
-            let spec = SpecPattern {
-                offset,
-                typed,
-                float_width: None,
-            };
-            patterns.push((suffix, spec, needs_guard));
-        }
-    }
-    patterns
-}
-
-
-// The narrow load pattern observes only the loaded bits. Keep the full
-// extension as well so a wider consumer can select the same instruction.
-fn extending_load_pattern(
-    semantics: &InstructionSemantics,
-    immediate_symbols: &HashSet<u32>,
-    canonical: &tir_adt::Dag<
-        tir_symbolic::lang::SymKind,
-        tir_symbolic::lang::SymPayload<tir_symbolic::sem::ValueId>,
-    >,
-    load_root: tir_adt::NodeId,
-    pattern_widths: &[Option<u32>],
-) -> Option<SpecPattern> {
-    use tir_symbolic::lang::{SymKind, SymPayload};
-    let kind = *semantics.pattern.get_node(semantics.root);
-    if !matches!(kind, SymKind::ZExt | SymKind::SExt)
-        || *canonical.get_node(load_root) != SymKind::LoadMemory
-    {
-        return None;
-    }
-    let children: Vec<_> = semantics.pattern.children(semantics.root).collect();
-    let [loaded, width] = children.as_slice() else {
-        return None;
-    };
-    if *semantics.pattern.get_node(*loaded) != SymKind::LoadMemory {
-        return None;
-    }
-    let SymPayload::Int(width_value) = semantics.pattern.get_leaf_data(*width)? else {
-        return None;
-    };
-    let load_width = tir_symbolic::lang::infer_widths(&semantics.pattern, |_| None)[loaded.index()]?;
-    let extension_width = u32::try_from(width_value.to_u64()).ok()?;
-    if extension_width <= load_width {
-        return None;
-    }
-    let (mut full, load_root, _) = tir_symbolic::lang::canonicalize_for_selection(
-        &semantics.pattern,
-        semantics.root,
-        immediate_symbols,
-    );
-    let width = full.add_node(SymKind::Constant);
-    full.set_leaf_data(width, SymPayload::Int(width_value.clone()));
-    let root = full.add_node(kind);
-    full.add_edge(root, load_root);
-    full.add_edge(root, width);
-    let mut widths = pattern_widths.to_vec();
-    widths.resize(full.len(), None);
-    widths[load_root.index()] = Some(load_width);
-    widths[root.index()] = Some(extension_width);
-    let (offset, typed) = intern_dag(&full, root, &widths);
-    Some(SpecPattern {
-        offset,
-        typed,
-        float_width: None,
-    })
-}
-
-fn emit_value_rules(
-    tables: &TargetTables<'_>,
-    ctx: &InstrEmitCtx<'_>,
-    semantics: &InstructionSemantics,
-    out: &mut InstrOutputs<'_>,
-) {
-    let rule_key = ctx.inst.name.to_lowercase();
-
-    // Per-operand constraints: registers must bind to non-constant values,
-    // immediates to constants. Keyed by the operand's pattern symbol id.
-    let mut operand_constraint_entries: Vec<proc_macro2::TokenStream> = Vec::new();
-    for (op_name, op_ty) in ctx.ops {
-        let Some(&symbol) = semantics.variable_symbols.get(op_name) else {
-            continue;
-        };
-        let constraint = match op_ty {
-            Type::Struct(_) => quote! { tir::backend::isel::OperandConstraint::Register },
-            Type::Bits(_) | Type::Integer => {
-                quote! { tir::backend::isel::OperandConstraint::Immediate }
-            }
-            _ => continue,
-        };
-        operand_constraint_entries.push(constraint_entry(symbol, constraint));
-    }
-    // A data register the behavior reads by path (e.g. the x86 shift count
-    // in `GPR::rcx`, whose class is also a value-operand class) reads that
-    // register's *value*, so it must bind a register, never a folded
-    // constant — a constant count belongs to the immediate form. Without
-    // this the count is stuffed into the reg as a dead attribute and the
-    // encoder emits the by-`cl` form reading garbage. A config-register
-    // demand (e.g. RISC-V `VCSR::vl`) is a different class and unaffected.
-    let value_reg_classes: Vec<&str> = ctx
-        .ops
-        .iter()
-        .filter_map(|(_, ty)| match ty {
-            Type::Struct(class) => Some(class.as_str()),
-            _ => None,
-        })
-        .collect();
-    let mut fixed_value_reads = HashMap::new();
-    for ((class, index), symbol) in &semantics.register_symbols {
-        let is_implicit = tables
-            .register_name_map
-            .get(&(class.clone(), *index))
-            .map(|name| !ctx.ops.iter().any(|(op_name, _)| op_name == name))
-            .unwrap_or(false);
-        let value_class = tables.register_files.get(class).and_then(|fixed_file| {
-            value_reg_classes.iter().find(|value_class| {
-                tables
-                    .register_files
-                    .get(**value_class)
-                    .is_some_and(|file| file == fixed_file)
-            })
-        });
-        if is_implicit && let Some(value_class) = value_class {
-            operand_constraint_entries.push(constraint_entry(
-                *symbol,
-                quote! { tir::backend::isel::OperandConstraint::Register },
-            ));
-            let index = u16::try_from(*index).expect("register indices fit u16");
-            fixed_value_reads.insert(*symbol, ((*value_class).to_string(), index));
-        }
-    }
-
-    let mut emit_attrs: Vec<proc_macro2::TokenStream> = Vec::new();
-    for (op_name, op_ty) in ctx.ops {
-        match op_ty {
-            Type::Struct(class_name) => {
-                let class_id = reg_class_id(class_name);
-                if let Some(def_pos) = ctx
-                    .defined_register_operands
-                    .iter()
-                    .position(|name| name == op_name)
-                {
-                    emit_attrs.push(emit_attr_result(op_name, def_pos, &class_id));
-                    // A two-address destination also reads a pattern operand:
-                    // record the bound value in a `_tied` attribute so register
-                    // allocation can lower the tie to a copy.
-                    if ctx.read_register_operands.contains(op_name)
-                        && let Some(sym) = semantics.variable_symbols.get(op_name)
-                    {
-                        emit_attrs.push(emit_attr_value(&format!("{op_name}_tied"), *sym));
-                    }
-                } else if let Some(sym) = semantics.variable_symbols.get(op_name) {
-                    emit_attrs.push(emit_attr_value(op_name, *sym));
-                } else if let Some(Some(reg_idx)) =
-                    semantics.fixed_register_by_class.get(class_name)
-                {
-                    emit_attrs.push(emit_attr_physical(op_name, &class_id, *reg_idx));
-                }
-            }
-            Type::Integer | Type::Bits(_) => {
-                if let Some(sym) = semantics.variable_symbols.get(op_name) {
-                    emit_attrs.push(emit_attr_int(op_name, *sym));
-                }
-            }
-            Type::String => {}
-            _ => {}
-        }
-    }
-
-    // Canonicalize the behavior-derived pattern into the form selection
-    // matches against (collapse word-op sext/extract wrappers to a typed op,
-    // strip shift-amount masks), then type each node from its structurally
-    // determined width. A plain `add` stays untyped; `addw` becomes an i32
-    // `Add`; `sll` becomes a plain `ShiftLeft`.
-    let immediate_symbols: std::collections::HashSet<u32> = ctx
-        .ops
-        .iter()
-        .filter(|(_, op_ty)| matches!(op_ty, Type::Bits(_) | Type::Integer))
-        .filter_map(|(op_name, _)| semantics.variable_symbols.get(op_name).copied())
-        .collect();
-    let (canon_pattern, canon_root, forced_widths) = tir_symbolic::lang::canonicalize_for_selection(
-        &semantics.pattern,
-        semantics.root,
-        &immediate_symbols,
-    );
-    let mut pattern_widths = selection_pattern_widths(&canon_pattern, forced_widths);
-    // A destination register class statically narrower than the
-    // architectural width (x86 `add32`/`add16`/`add8`) defines exactly
-    // that many bits: type the pattern root at the class width, so the
-    // narrow form matches only values of its width instead of tying
-    // with the full-width form on every width.
-    let dst_class = ctx
-        .defined_register_operands
-        .first()
-        .and_then(|name| ctx.ops_map.get(name))
-        .and_then(|ty| match ty {
-            Type::Struct(class) => Some(class.as_str()),
-            _ => None,
-        });
-    if pattern_widths[canon_root.index()].is_none()
-        && scalar_root_kind(tir_adt::Dag::get_node(&canon_pattern, canon_root))
-        && let Some(dst_class) = dst_class
-        && let Some(width) = literal_register_class_width(tables.files, dst_class)
-    {
-        pattern_widths[canon_root.index()] = Some(width);
-    }
-    let (pattern_offset, pattern_typed) = intern_dag(&canon_pattern, canon_root, &pattern_widths);
-    let mut pattern_spec = SpecPattern {
-        offset: pattern_offset,
-        typed: pattern_typed,
-        float_width: None,
-    };
-    // The destination's full guarded semantics, emitted alongside the
-    // relaxed pattern so pass construction proves the guard drop sound.
-    let guarded_spec = semantics
-        .guarded_semantics
-        .as_ref()
-        .map(|(guarded, guarded_root)| {
-            let guarded_widths = tir_symbolic::lang::infer_widths(guarded, |_| None);
-            let (offset, typed) = intern_dag(guarded, *guarded_root, &guarded_widths);
-            SpecPattern {
-                offset,
-                typed,
-                float_width: None,
-            }
-        });
-    if *tir_adt::Dag::get_node(&canon_pattern, canon_root) == tir_symbolic::lang::SymKind::Bitcast
-        && let Some(dst_class) = dst_class
-        && tables.float_classes.contains(dst_class)
-        && let Some(width) = literal_register_class_width(tables.files, dst_class)
-    {
-        if !matches!(width, 32 | 64) {
-            unreachable!("unsupported scalar float register width {width}");
-        }
-        pattern_spec.float_width = Some(width);
-    }
-    let operand_register_specs = operand_register_specs_for_ops(
-        ctx.ops,
-        &semantics.variable_symbols,
-        &width_sensitive_symbols(&canon_pattern, &pattern_widths),
-        &tables.float_classes,
-        &tables.polymorphic_classes,
-    );
-    let result_register_spec = dst_class
-        .map(|c| result_register_spec(c, &tables.float_classes, &tables.polymorphic_classes));
-    let imm_range_entries = imm_range_spec_entries(&immediate_operand_ranges(
-        &semantics.pattern,
-        ctx.ops,
-        &semantics.variable_symbols,
-        ctx.operand_constraints,
-    ));
-    // Registers read by path are dependencies outside the encoded operands.
-    // Value-register reads carry a fixed-use constraint; configuration
-    // reads remain demands for a target pass such as `vsetvli` insertion.
-    for (name, sym) in ctx.implicit_reads {
-        if let Some((class, index)) = fixed_value_reads.get(sym) {
-            emit_attrs.push(emit_attr_fixed_use(
-                name,
-                *sym,
-                &reg_class_id(class),
-                *index,
-            ));
-            continue;
-        }
-        emit_attrs.push(emit_attr_int_or_value(name, *sym));
-    }
-
-    let (emitter_ts, emit_spec) = emit_emitter_spec(
-        &rule_key,
-        ctx.dialect,
-        ctx.op_name,
-        ctx.name_ident,
-        &emit_attrs,
-        &ctx.inst.name,
-    );
-    let flags_spec = match &semantics.fp_flags {
-        FpFlags::Exact((graph, root)) => {
-            let (graph, root, forced) =
-                tir_symbolic::lang::canonicalize_for_selection(graph, *root, &immediate_symbols);
-            let widths = selection_pattern_widths(&graph, forced);
-            let (offset, typed) = intern_dag(&graph, root, &widths);
-            Some(SpecPattern {
-                offset,
-                typed,
-                float_width: None,
-            })
-        }
-        _ => None,
-    };
-    let mut patterns = vec![("", pattern_spec, true)];
-    patterns.extend(
-        extending_load_pattern(
-            semantics,
-            &immediate_symbols,
-            &canon_pattern,
-            canon_root,
-            &pattern_widths,
-        )
-        .map(|pattern| ("extended_load", pattern, true)),
-    );
-
-    patterns.extend(fp_value_patterns(
-        semantics,
-        &immediate_symbols,
-        &canon_pattern,
-        canon_root,
-        &pattern_widths,
-    ));
-    out.isel_rule_emitters.push(emitter_ts);
-    for (suffix, pattern_spec, needs_guard) in patterns {
-        let key = if suffix.is_empty() {
-            rule_key.clone()
-        } else {
-            format!("{rule_key}_{suffix}")
-        };
-        let fp_flags = match &semantics.fp_flags {
-            FpFlags::None => FpFlags::None,
-            FpFlags::Clobber => FpFlags::Clobber,
-            FpFlags::Exact(_) => FpFlags::Exact(flags_spec.as_ref().unwrap()),
-        };
-        let (rule_ts, rule_spec_ident) = emit_rule_spec(
-            &key,
-            &key,
-            &ctx.inst.for_isas,
-            &pattern_spec,
-            &[],
-            quote! { tir::backend::isel::RuleKind::Value },
-            &[&emit_spec],
-            &operand_constraint_entries,
-            &operand_register_specs,
-            result_register_spec.clone(),
-            &imm_range_entries,
-            guarded_spec.as_ref().filter(|_| needs_guard),
-            fp_flags,
-        );
-        out.isel_rule_emitters.push(rule_ts);
-        out.rule_spec_idents.push(rule_spec_ident);
-    }
-
-    // Zero-form constant materializer: when the canonical pattern is
-    // `reg + imm` and the source register's class has a hardwired-zero
-    // register (RISC-V `addi rs1:GPR`), derive a rule matching
-    // `zext(0b0, W) + imm` — the shape the constant-materializer bridge
-    // injects into fitting program-constant classes — with the register
-    // slot wired to the zero register, so a bare constant selects as
-    // the canonical `li` (`addi rd, x0, imm`). arm64's add-immediate
-    // reads `GPRsp`, whose encoding 31 is `sp`, not a hardwired zero,
-    // so no zero-form is derived there.
-    let zero_form = match ctx.defined_register_operands {
-        [rd_name]
-            if !ctx.read_register_operands.contains(rd_name) && ctx.implicit_reads.is_empty() =>
-        {
-            value_zero_form_operands(
-                &canon_pattern,
-                canon_root,
-                ctx.ops,
-                &semantics.variable_symbols,
-                rd_name,
-                |class: &str| {
-                    tables.hardwired_zero_index.contains_key(class)
-                        && !tables.float_classes.contains(class)
-                        && !tables.polymorphic_classes.contains(class)
-                },
-            )
-        }
-        _ => None,
-    };
-    if let Some((zero_reg_name, zero_reg_class, imm_sym)) = zero_form {
-        let zero_rule_key = format!("{}_zero", ctx.inst.name.to_lowercase());
-        let width_sym = semantics
-            .variable_symbols
-            .values()
-            .chain(semantics.register_symbols.values())
-            .copied()
-            .max()
-            .unwrap_or(0)
-            + 1;
-
-        // The zero pattern, built here and interned into the sem blob:
-        // `zext(0b0, W) + imm`, typed at the canonical root width.
-        let (zero_pattern_offset, zero_pattern_typed) = {
-            let mut g = tir_symbolic::sem::SemGraph::<()>::new();
-            let zero = g.add_node(tir_symbolic::lang::SymKind::Constant);
-            g.set_leaf_data(zero, tir_symbolic::sem::int_payload(1, 0, false));
-            let width = g.add_node(tir_symbolic::lang::SymKind::Symbol);
-            g.set_leaf_data(width, tir_symbolic::lang::SymPayload::SymbolId(width_sym));
-            let zext = g.add_node(tir_symbolic::lang::SymKind::ZExt);
-            g.add_edge(zext, zero);
-            g.add_edge(zext, width);
-            let imm = g.add_node(tir_symbolic::lang::SymKind::Symbol);
-            g.set_leaf_data(imm, tir_symbolic::lang::SymPayload::SymbolId(imm_sym));
-            let root = g.add_node(tir_symbolic::lang::SymKind::Add);
-            g.add_edge(root, zext);
-            g.add_edge(root, imm);
-            let zero_widths: Vec<Option<u32>> = (0..g.len())
-                .map(|index| {
-                    if index == root.index() {
-                        pattern_widths[canon_root.index()]
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-            intern_dag(&g, root, &zero_widths)
-        };
-
-        let rd_name = ctx
-            .defined_register_operands
-            .first()
-            .expect("zero-form requires a defined register operand");
-        let rd_class_id = reg_class_id(dst_class.expect("defined operand has a class"));
-        let zero_class_id = reg_class_id(&zero_reg_class);
-        let zero_index = tables.hardwired_zero_index[&zero_reg_class];
-        let imm_name = ctx
-            .ops
-            .iter()
-            .find(|(name, _)| semantics.variable_symbols.get(name) == Some(&imm_sym))
-            .map(|(name, _)| name.clone())
-            .expect("immediate operand has a name");
-        let zero_imm_range_entries = imm_range_spec_entries(
-            &immediate_operand_ranges(
-                &semantics.pattern,
-                ctx.ops,
-                &semantics.variable_symbols,
-                ctx.operand_constraints,
-            )
-            .into_iter()
-            .filter(|range| range.symbol == imm_sym)
-            .collect::<Vec<_>>(),
-        );
-
-        let zero_emit_attrs = vec![
-            emit_attr_result(rd_name, 0, &rd_class_id),
-            emit_attr_physical(&zero_reg_name, &zero_class_id, zero_index),
-            emit_attr_int(&imm_name, imm_sym),
-        ];
-        let (zero_emitter_ts, zero_emit_spec) = emit_emitter_spec(
-            &zero_rule_key,
-            ctx.dialect,
-            ctx.op_name,
-            ctx.name_ident,
-            &zero_emit_attrs,
-            &ctx.inst.name,
-        );
-        let zero_pattern_spec = SpecPattern {
-            offset: zero_pattern_offset,
-            typed: zero_pattern_typed,
-            float_width: None,
-        };
-        let zero_constraints = [constraint_entry(
-            imm_sym,
-            quote! { tir::backend::isel::OperandConstraint::Immediate },
-        )];
-        let (zero_rule_ts, zero_rule_ident) = emit_rule_spec(
-            &zero_rule_key,
-            &zero_rule_key,
-            &ctx.inst.for_isas,
-            &zero_pattern_spec,
-            &[],
-            quote! { tir::backend::isel::RuleKind::Value },
-            &[&zero_emit_spec],
-            &zero_constraints,
-            &[],
-            result_register_spec.clone(),
-            &zero_imm_range_entries,
-            None,
-            FpFlags::None,
-        );
-        out.isel_rule_emitters.push(quote! {
-            #zero_emitter_ts
-            #zero_rule_ts
-        });
-        out.rule_spec_idents.push(zero_rule_ident);
-    }
-}
-
-fn emit_branch_rules(
-    tables: &TargetTables<'_>,
-    ctx: &InstrEmitCtx<'_>,
-    numeric_params: &HashMap<String, i64>,
-    isa_param_values: &HashMap<String, i64>,
-    out: &mut InstrOutputs<'_>,
-) {
-    // A guarded PC write (`if cond { PC::pc = PC::pc + imm }`) becomes a
-    // conditional-branch rule: the pattern is the branch condition over the
-    // encoded operands, and the target operand is emitted as a block
-    // attribute bound by branch selection.
-    if let Some(branch) = analyze_branch_semantics(
-        ctx.inst,
-        ctx.ops,
-        numeric_params,
-        isa_param_values,
-        &tables.register_index_map,
-        &tables.pc_classes,
-    ) {
-        let no_zero_slots = HashMap::new();
-        let (emitter, rule_ident) = emit_cond_branch_rule(
-            &ctx.inst.name.to_lowercase(),
-            ctx.dialect,
-            ctx.op_name,
-            ctx.name_ident,
-            &ctx.inst.name,
-            &ctx.inst.for_isas,
-            ctx.ops,
-            &branch.pattern,
-            branch.root,
-            &branch.variable_symbols,
-            &branch.target_operand,
-            branch.target_symbol,
-            &no_zero_slots,
-            ctx.operand_constraints,
-            &tables.float_classes,
-            &tables.polymorphic_classes,
-        );
-        out.isel_rule_emitters.push(emitter);
-        out.rule_spec_idents.push(rule_ident);
-
-        // Zero-form variants: when the branch condition is a two-register
-        // comparison whose operands belong to a class with a hardwired-zero
-        // register (RISC-V `x0`), derive one rule per slot that wires that slot
-        // to the zero register, so `cmpi x, 0`-style guards (and bare i1
-        // conditions the bridge rewrites to `x != 0`) select the branch
-        // directly instead of materializing the constant. The zeroed slot is
-        // lowered as `zext(0b0, W)` — the shape the arm64 cbz/cbnz path and the
-        // bare-i1 bridge produce, so all three unify in the program e-graph.
-        let (root_kind, root_children) = {
-            (
-                *branch.pattern.get_node(branch.root),
-                branch.pattern.children(branch.root).collect::<Vec<_>>(),
-            )
-        };
-        let root_is_comparison = {
-            use tir_symbolic::lang::SymKind::*;
-            matches!(
-                root_kind,
-                Eq | Ne | Lt | Le | Gt | Ge | ULt | ULe | UGt | UGe
-            )
-        };
-        // Both comparison operands must be distinct register operands of a
-        // hardwired-zero class; otherwise there is nothing to substitute (e.g.
-        // a pattern already comparing against a literal zero).
-        let operand_slots: Option<Vec<(String, String, u32)>> = (root_is_comparison
-            && root_children.len() == 2)
-            .then(|| {
-                root_children
-                    .iter()
-                    .map(|&child| {
-                        let symbol = match branch.pattern.get_leaf_data(child) {
-                            Some(tir_symbolic::lang::SymPayload::SymbolId(s)) => *s,
-                            _ => return None,
-                        };
-                        let (name, class) = ctx.ops.iter().find_map(|(name, ty)| {
-                            let Type::Struct(class) = ty else { return None };
-                            (branch.variable_symbols.get(name) == Some(&symbol)
-                                && tables.hardwired_zero_index.contains_key(class))
-                            .then(|| (name.clone(), class.clone()))
-                        })?;
-                        Some((name, class, symbol))
-                    })
-                    .collect::<Option<Vec<_>>>()
-            })
-            .flatten();
-        if let Some(slots) = operand_slots {
-            // Equality and inequality are commutative. Prefer the form with
-            // the zero register in the second operand, which is the
-            // conventional spelling for RISC-V zero comparisons.
-            let slots = if matches!(
-                root_kind,
-                tir_symbolic::lang::SymKind::Eq | tir_symbolic::lang::SymKind::Ne
-            ) {
-                slots.into_iter().rev().collect::<Vec<_>>()
-            } else {
-                slots
-            };
-            for (slot_index, (slot_op_name, class_name, reg_symbol)) in slots.iter().enumerate() {
-                let width_symbol = branch.target_symbol + 1;
-                let (zero_pattern, zero_root) = branch_pattern_with_zero(
-                    &branch.pattern,
-                    branch.root,
-                    *reg_symbol,
-                    width_symbol,
-                );
-                let mut zero_variable_symbols = branch.variable_symbols.clone();
-                zero_variable_symbols.remove(slot_op_name);
-                let mut zero_slots = HashMap::new();
-                zero_slots.insert(
-                    slot_op_name.clone(),
-                    (class_name.clone(), tables.hardwired_zero_index[class_name]),
-                );
-                let rule_name = format!("{}_zero{}", ctx.inst.name.to_lowercase(), slot_index);
-                let (emitter, rule_ident) = emit_cond_branch_rule(
-                    &rule_name,
-                    ctx.dialect,
-                    ctx.op_name,
-                    ctx.name_ident,
-                    &ctx.inst.name,
-                    &ctx.inst.for_isas,
-                    ctx.ops,
-                    &zero_pattern,
-                    zero_root,
-                    &zero_variable_symbols,
-                    &branch.target_operand,
-                    branch.target_symbol,
-                    &zero_slots,
-                    ctx.operand_constraints,
-                    &tables.float_classes,
-                    &tables.polymorphic_classes,
-                );
-                out.isel_rule_emitters.push(emitter);
-                out.rule_spec_idents.push(rule_ident);
-            }
-        }
-    }
 }
 
 fn attrs_schema_ts(ops: &[(String, Type)]) -> proc_macro2::TokenStream {
@@ -994,10 +269,7 @@ fn attrs_schema_ts(ops: &[(String, Type)]) -> proc_macro2::TokenStream {
     quote! { #(#items,)* }
 }
 
-fn instruction_ports(
-    tables: &TargetTables<'_>,
-    ctx: &InstrEmitCtx<'_>,
-) -> Vec<(String, Option<String>, bool, Option<String>)> {
+fn instruction_ports(tables: &TargetTables, ctx: &InstrEmitCtx<'_>) -> Vec<(String, Option<String>, bool, Option<String>)> {
     let mut ports: Vec<(String, Option<String>, bool, Option<String>)> = vec![];
     for (name, ty) in ctx.ops {
         if !matches!(ty, Type::Struct(_)) {
@@ -1158,7 +430,7 @@ fn instruction_program_ts(
 }
 
 fn emit_instruction_assembly(
-    tables: &TargetTables<'_>,
+    tables: &TargetTables,
     ctx: &InstrEmitCtx<'_>,
     templates: &[String],
     text_only: bool,
@@ -1184,7 +456,7 @@ fn emit_instruction_assembly(
 }
 
 fn emit_assembly_template(
-    tables: &TargetTables<'_>,
+    tables: &TargetTables,
     ctx: &InstrEmitCtx<'_>,
     template: &str,
     index: usize,
@@ -1290,7 +562,7 @@ fn emit_assembly_template(
     desc_ident
 }
 
-fn collect_target_tables(files: &[ast::File]) -> TargetTables<'_> {
+fn collect_target_tables(files: &[ast::File]) -> TargetTables {
     // `(class, register-name) -> encoding index` over every register class, so the
     // simulator can lower register paths that carry no numeric index in their name
     // (e.g. status flags `PSTATE::z`) to a stable slot.
@@ -1337,11 +609,7 @@ fn collect_target_tables(files: &[ast::File]) -> TargetTables<'_> {
         map
     };
 
-    // Register classes holding the program counter. An instruction whose behavior
-    // reads or writes the PC cannot be selected as a value rule: the pattern only
-    // models the assigned result, so the control-flow effect would be invisible
-    // (a `jal` rule would match a plain `x + 4`). Conditional PC writes instead
-    // produce branch rules (see `analyze_branch_semantics`).
+    // These classes are excluded from implicit allocatable-register ports.
     let pc_classes: HashSet<String> = files
         .iter()
         .flat_map(|f| f.register_classes())
@@ -1349,10 +617,6 @@ fn collect_target_tables(files: &[ast::File]) -> TargetTables<'_> {
         .map(|rc| rc.name.clone())
         .collect();
 
-    // Register classes holding condition-code bits (`status_flag` registers,
-    // e.g. AArch64 PSTATE, x86 EFLAGS). Instructions writing only such
-    // registers pair with the branches guarding on them into derived
-    // conditional-branch rules (see `emit_flag_branch_rules`).
     let flag_classes: HashSet<String> = files
         .iter()
         .flat_map(|f| f.register_classes())
@@ -1360,34 +624,12 @@ fn collect_target_tables(files: &[ast::File]) -> TargetTables<'_> {
         .map(|rc| rc.name.clone())
         .collect();
 
-    // Register classes holding floating-point values (`float` registers).
-    // Their operands and results constrain selection to float-typed values.
     let float_classes: HashSet<String> = files
         .iter()
         .flat_map(|f| f.register_classes())
         .filter(|rc| rc.has_float_registers())
         .map(|rc| rc.name.clone())
         .collect();
-    let polymorphic_classes: HashSet<String> = files
-        .iter()
-        .flat_map(|f| f.register_classes())
-        .filter(|rc| rc.has_polymorphic_registers())
-        .map(|rc| rc.name.clone())
-        .collect();
-
-    // Register classes with a hardwired-zero register (RISC-V `x0`, AArch64
-    // `xzr`), mapping the class name to that register's index. A two-register
-    // comparison branch over such a class gets extra zero-form rule variants that
-    // wire one operand to the zero register (see the zero-form derivation below).
-    let hardwired_zero_index: HashMap<String, u16> = files
-        .iter()
-        .flat_map(|f| f.register_classes())
-        .filter_map(|rc| {
-            rc.hardwired_zero_register_index()
-                .map(|idx| (rc.name.clone(), idx))
-        })
-        .collect();
-
     // Per-class execution read routing: `(is_float, width)`. A vector operand
     // (width > 64) is read as raw byte lanes, a scalar float as an `APFloat`,
     // and everything else as an `APInt` — so no value crosses the register
@@ -1429,7 +671,6 @@ fn collect_target_tables(files: &[ast::File]) -> TargetTables<'_> {
         .cloned()
         .collect();
     TargetTables {
-        files,
         fp_fields,
         fp_flag_registers,
         effect_classes,
@@ -1439,8 +680,6 @@ fn collect_target_tables(files: &[ast::File]) -> TargetTables<'_> {
         register_name_map,
         register_files,
         float_classes,
-        polymorphic_classes,
-        hardwired_zero_index,
         class_sizes,
         reg_kinds,
     }
@@ -1453,8 +692,6 @@ struct InstrOutputs<'a> {
     instruction_descs: &'a mut Vec<proc_macro2::TokenStream>,
     instruction_infos: &'a mut Vec<proc_macro2::TokenStream>,
     instruction_info_idents: &'a mut Vec<proc_macro2::Ident>,
-    isel_rule_emitters: &'a mut Vec<proc_macro2::TokenStream>,
-    rule_spec_idents: &'a mut Vec<proc_macro2::Ident>,
     machine_instruction_impls: &'a mut Vec<proc_macro2::TokenStream>,
     instruction_custom_format_impls: &'a mut Vec<proc_macro2::TokenStream>,
     instruction_reg_ports: &'a mut Vec<proc_macro2::TokenStream>,
@@ -1607,7 +844,7 @@ fn copy_ports(
 }
 
 fn emit_instruction(
-    tables: &TargetTables<'_>,
+    tables: &TargetTables,
     item_cache: &HashMap<&str, &ast::Item>,
     sched_tables: &SchedTables,
     inst: &ast::Instruction,
@@ -1677,26 +914,14 @@ fn emit_instruction(
         .iter()
         .find_map(|isa| find_trap_handler(isa, item_cache));
 
-    // A `todo()` behavior declares the instruction's semantics unmodeled: it
-    // produces no selection rule and its `execute()` traps. The op still
-    // prints, parses, and encodes.
+    // Unmodeled instructions still print, parse, and encode, but execution traps.
     let uses_todo = behavior_uses_todo(&inst.behavior);
 
-    // A selection rule matches the expression a `let` stands for, so the
-    // pattern is built from the behavior with its bindings substituted.
-    // `execute()` keeps them: that is where single evaluation matters.
+    // Symbolic conversion substitutes bindings. Execution preserves single evaluation.
     let selection_behavior = inline_let_bindings(&inst.behavior);
 
-    // Value-rule semantics, computed ahead of the op declaration so the
-    // registers the behavior reads implicitly (e.g. `VCSR::vl`) can surface
-    // as demand attributes with a `Use` role. Instructions defining several
-    // register operands (e.g. CSR ops writing both `rd` and `csr`) cannot be
-    // modeled by a single-value DAG pattern; emitting one for the last
-    // assignment would let isel match an unrelated expression, so they get no
-    // selection rule. The same goes for instructions touching the PC
-    // (jal/jalr/auipc): their pattern would hide the control-flow effect and
-    // match unrelated arithmetic.
-    let semantics = if !uses_todo
+    // Preserve the implicit-register ports supported by the existing semantic conversion.
+    let register_reads = if !uses_todo
         && defined_register_operands.len() <= 1
         && !behavior_references_pc(&inst.behavior, &tables.pc_classes)
         && !behavior_has_atomic_ops(&inst.behavior)
@@ -1704,7 +929,7 @@ fn emit_instruction(
         && !value_reads_flag_register(&selection_behavior, &tables.flag_classes)
         && !behavior_writes_fixed_register(&inst.behavior, &tables.effect_classes)
     {
-        analyze_instruction_semantics(
+        analyze_instruction_register_reads(
             &selection_behavior,
             &ops,
             &defined_register_operands,
@@ -1722,11 +947,10 @@ fn emit_instruction(
     // register become fixed uses for register allocation; configuration reads
     // remain demands materialized by a target pass (e.g. RISC-V `vsetvli`).
     let implicit_reads: Vec<(String, u32)> = {
-        let mut reads: Vec<(String, u32)> = semantics
+        let mut reads: Vec<(String, u32)> = register_reads
             .as_ref()
             .map(|s| {
-                s.register_symbols
-                    .iter()
+                s.iter()
                     .filter_map(|((class, index), sym)| {
                         let name = tables.register_name_map.get(&(class.clone(), *index))?;
                         if ops.iter().any(|(op_name, _)| op_name == name) {
@@ -1750,9 +974,7 @@ fn emit_instruction(
     let read_register_operands = infer_read_register_operands(&inst.behavior, &ops);
     let instr_ctx = InstrEmitCtx {
         inst,
-        name_ident: &name_ident,
         op_name,
-        dialect: options.dialect,
         ops: &ops,
         mnemonic_name,
         builder_ident: &builder_ident,
@@ -1854,14 +1076,6 @@ fn emit_instruction(
             }
         }
     });
-
-    if let Some(semantics) = &semantics {
-        emit_value_rules(tables, &instr_ctx, semantics, out);
-    }
-
-    if !uses_todo && defined_register_operands.is_empty() {
-        emit_branch_rules(tables, &instr_ctx, &numeric_params, &isa_param_values, out);
-    }
 
     let width_bytes_lit = {
         let min = proc_macro2::Literal::u8_unsuffixed(min_width_bytes);
@@ -2152,34 +1366,6 @@ fn decode_section(
     }
 }
 
-fn isel_rules_section(
-    isel_rule_emitters: &[proc_macro2::TokenStream],
-    rule_spec_idents: &[proc_macro2::Ident],
-    public_visibility: &proc_macro2::TokenStream,
-) -> proc_macro2::TokenStream {
-    quote! {
-    #(#isel_rule_emitters)*
-
-    static RULE_SPECS: &[&tir::backend::isel::RuleSpec] = &[#(&#rule_spec_idents),*];
-
-    /// Instruction-selection rules for the instructions available under `features`.
-    #public_visibility fn get_isel_rules(context: &tir::Context, features: &[Feature]) -> Vec<tir::backend::isel::Rule> {
-        // Width-sensitive operands are constrained to their register class's
-        // architectural width under the enabled features (e.g. XLEN).
-        let register_widths = register_widths(features);
-        let feature_ids: Vec<u16> = features.iter().map(|f| *f as u16).collect();
-        tir::backend::isel::build_rules(
-            context,
-            &feature_ids,
-            SEM_KINDS,
-            SEM_BLOB,
-            &register_widths,
-            RULE_SPECS,
-        )
-        }
-    }
-}
-
 fn emit_instructions<'a>(
     files: &'a [ast::File],
     instruction_files: &[&'a ast::File],
@@ -2191,7 +1377,6 @@ fn emit_instructions<'a>(
         dialect,
         text_only,
         custom_assembly,
-        include_global_rules,
         module_fragment,
     } = options;
     let registry_visibility = module_fragment.then(|| quote! { pub(super) });
@@ -2220,8 +1405,6 @@ fn emit_instructions<'a>(
     // table of every one of them.
     let mut instruction_infos: Vec<proc_macro2::TokenStream> = vec![];
     let mut instruction_info_idents: Vec<proc_macro2::Ident> = vec![];
-    let mut isel_rule_emitters: Vec<proc_macro2::TokenStream> = vec![];
-    let mut rule_spec_idents: Vec<proc_macro2::Ident> = vec![];
     let mut machine_instruction_impls: Vec<proc_macro2::TokenStream> = vec![];
     let mut instruction_custom_format_impls: Vec<proc_macro2::TokenStream> = vec![];
     // One `RegPort` table per instruction, referenced by its `InstrInfo`.
@@ -2237,7 +1420,6 @@ fn emit_instructions<'a>(
         dialect,
         text_only,
         custom_assembly,
-        include_global_rules,
         module_fragment,
     };
     let tables = collect_target_tables(files);
@@ -2250,8 +1432,6 @@ fn emit_instructions<'a>(
             instruction_descs: &mut instruction_descs,
             instruction_infos: &mut instruction_infos,
             instruction_info_idents: &mut instruction_info_idents,
-            isel_rule_emitters: &mut isel_rule_emitters,
-            rule_spec_idents: &mut rule_spec_idents,
             machine_instruction_impls: &mut machine_instruction_impls,
             instruction_custom_format_impls: &mut instruction_custom_format_impls,
             instruction_reg_ports: &mut instruction_reg_ports,
@@ -2268,31 +1448,6 @@ fn emit_instructions<'a>(
             inst,
             &instruction_options,
             &mut out,
-        )?;
-    }
-
-    // Flag-mediated rules: definer + branch pairs composed into conditional
-    // branch rules, and definer + reader pairs into boolean value rules.
-    if include_global_rules {
-        emit_flag_rules(
-            files,
-            item_cache,
-            &tables.register_index_map,
-            &tables.pc_classes,
-            &tables.flag_classes,
-            dialect,
-            &mut isel_rule_emitters,
-            &mut rule_spec_idents,
-        )?;
-        emit_fixed_register_rules(
-            files,
-            item_cache,
-            &tables.register_index_map,
-            &tables.register_name_map,
-            &tables.flag_classes,
-            dialect,
-            &mut isel_rule_emitters,
-            &mut rule_spec_idents,
         )?;
     }
 
@@ -2383,8 +1538,6 @@ fn emit_instructions<'a>(
         &decode_spec_idents,
         &public_visibility,
     );
-    let isel_section =
-        isel_rules_section(&isel_rule_emitters, &rule_spec_idents, &public_visibility);
 
     Ok(quote! {
         #(#instruction_defs)*
@@ -2402,8 +1555,6 @@ fn emit_instructions<'a>(
         #encoder_section
 
         #decode_section
-
-        #isel_section
     })
 }
 

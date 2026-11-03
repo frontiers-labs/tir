@@ -114,6 +114,7 @@ fn position<T: PartialEq>(items: &mut Vec<T>, item: T) -> u32 {
 pub(crate) fn compile(
     sources: &[Source<'_>],
     schema: Schema<'_>,
+    keep_schema: bool,
 ) -> Result<(ProgramFile, Vec<TableId>, Vec<ExternId>), Error> {
     let mut syms = Symmetries::new(schema);
     let mut rulesets: Vec<Vec<Rule>> = Vec::new();
@@ -229,7 +230,7 @@ pub(crate) fn compile(
     }
     // A table keeps its symmetries even when no rule is left to read it.
     for (table, _) in schema.tables() {
-        if !syms.of(table).is_empty() {
+        if keep_schema || !syms.of(table).is_empty() {
             symbols.table(table);
         }
     }

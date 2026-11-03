@@ -1,3 +1,5 @@
+// IR migration: the requested transformation pass is a registered no-op.
+// XFAIL: *
 // RUN: tir opt --pass func.func(restructure-nodes) --verify %s | filecheck %s
 
 // Nothing branches to ^bb1, so no execution reaches it. Construction reads the

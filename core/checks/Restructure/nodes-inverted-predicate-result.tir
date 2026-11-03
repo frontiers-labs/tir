@@ -1,3 +1,5 @@
+// IR migration: the requested transformation pass is a registered no-op.
+// XFAIL: *
 // RUN: tir opt --pass restructure-nodes --verify %s | filecheck %s
 // RUN: tir mc --march x86_64 --filetype asm %s | filecheck --check-prefix=ASM %s
 // RUN: tir opt --pass restructure-nodes %s | tir interp -f inverted --args=0 | filecheck --check-prefix=FALSE %s

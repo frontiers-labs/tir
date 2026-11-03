@@ -1,33 +1,4 @@
-fn register_class_kinds(files: &[ast::File]) -> (HashSet<String>, HashSet<String>) {
-    let names = |keep: fn(&ast::RegisterClass) -> bool| {
-        files
-            .iter()
-            .flat_map(|file| file.register_classes())
-            .filter(|class| keep(class))
-            .map(|class| class.name.clone())
-            .collect()
-    };
-    (
-        names(|class| class.has_float_registers()),
-        names(|class| class.has_polymorphic_registers()),
-    )
-}
-
-fn instruction_names(
-    params: &HashMap<String, (Type, Option<ast::Expr>)>,
-) -> Option<(String, String)> {
-    let string = |name: &str| {
-        params
-            .get(name)
-            .and_then(|(_, value)| value.as_ref())
-            .and_then(resolve_string)
-    };
-    let mnemonic = string("MNEMONIC")?;
-    let op_name = string("OPNAME").unwrap_or_else(|| mnemonic.clone());
-    Some((mnemonic, op_name))
-}
-
-fn analyze_instruction_semantics(
+fn analyze_instruction_register_reads(
     behavior: &ast::Expr,
     operands: &[(String, Type)],
     defined_register_operands: &[String],
@@ -35,7 +6,7 @@ fn analyze_instruction_semantics(
     isa_param_values: &HashMap<String, i64>,
     register_index_map: &HashMap<(String, String), u32>,
     fp_fields: &HashMap<String, FpField>,
-) -> Option<InstructionSemantics> {
+) -> Option<HashMap<(String, u32), u32>> {
     let mut assignments = Vec::new();
     crate::utils::visit_statements(behavior, &mut |stmt| {
         if let ast::Expr::Assign(a) = stmt
@@ -72,182 +43,19 @@ fn analyze_instruction_semantics(
             defined_register_operands,
         )?]
     };
-    let flags_root_index = expressions.len();
     expressions.extend(exact);
     let mut pattern = tir_symbolic::sem::SemGraph::new();
-    let (mut roots, mut lowering) = ast::Expr::lower_all_to_sema_with_isa(
+    let (_, mut lowering) = ast::Expr::lower_all_to_sema_with_isa(
         &expressions,
         &mut pattern,
         numeric_params,
         isa_param_values,
         register_index_map,
     )?;
-    let reads: HashMap<_, _> = lowering
+    lowering
         .register_symbols
-        .iter()
-        .filter_map(|((class, _), symbol)| fp_fields.get(class).map(|field| (*symbol, *field)))
-        .collect();
-    if !reads.is_empty() {
-        let original = pattern;
-        pattern = tir_symbolic::sem::SemGraph::new();
-        let mut memo = HashMap::new();
-        for root in &mut roots {
-            *root = tir_symbolic::sem::copy_subgraph_with(
-                &mut pattern,
-                &original,
-                *root,
-                &mut memo,
-                &mut |graph, node| {
-                    if let Some(tir_symbolic::lang::SymPayload::SymbolId(symbol)) =
-                        original.get_leaf_data(node)
-                        && let Some(field) = reads.get(symbol)
-                    {
-                        return tir_symbolic::sem::CopyAction::Replace(fp_state_term(
-                            graph, *field, None, None,
-                        ));
-                    }
-                    tir_symbolic::sem::CopyAction::Keep
-                },
-            );
-        }
-        lowering
-            .register_symbols
-            .retain(|(class, _), _| !fp_fields.contains_key(class));
-    }
-    let root = if assigns_state {
-        let mut state = pattern.add_node(tir_symbolic::lang::SymKind::StateBlock);
-        for ((_, field), value) in assignments.iter().zip(&roots) {
-            state = fp_state_term(&mut pattern, *field, Some(state), Some(*value));
-        }
-        state
-    } else {
-        roots[0]
-    };
-    let fp_flags = if exact.is_some() {
-        let mut flags_graph = tir_symbolic::sem::SemGraph::new();
-        let flags_root = tir_symbolic::sem::copy_subgraph(
-            &mut flags_graph,
-            &pattern,
-            roots[flags_root_index],
-            &mut HashMap::new(),
-        );
-        FpFlags::Exact((flags_graph, flags_root))
-    } else if flags.is_empty() {
-        FpFlags::None
-    } else {
-        FpFlags::Clobber
-    };
-    let fixed_register_by_class = split_fixed_registers(&lowering.register_symbols);
-
-    let guarded_semantics = defined_register_operands.first().and_then(|dst| {
-        analyze_guarded_semantics(
-            behavior,
-            dst,
-            numeric_params,
-            isa_param_values,
-            register_index_map,
-        )
-    });
-
-    let (pattern, root, guarded_semantics) =
-        if let Some(candidate) = tir_symbolic::lang::selection_fallback(&pattern, root) {
-            let candidate_root = candidate.root()?;
-            (candidate, candidate_root, Some((pattern, root)))
-        } else {
-            (pattern, root, guarded_semantics)
-        };
-
-    Some(InstructionSemantics {
-        fp_flags,
-        pattern,
-        root,
-        variable_symbols: lowering.variable_symbols,
-        fixed_register_by_class,
-        register_symbols: lowering.register_symbols,
-        guarded_semantics,
-    })
-}
-
-fn analyze_guarded_semantics(
-    behavior: &ast::Expr,
-    dst: &str,
-    numeric_params: &HashMap<String, i64>,
-    isa_param_values: &HashMap<String, i64>,
-    register_index_map: &HashMap<(String, String), u32>,
-) -> Option<(tir_symbolic::sem::SemGraph, tir_adt::NodeId)> {
-    let (cond, then_value, else_value) = guarded_assignment_shape(behavior, dst)?;
-    // Resolve `self.XLEN` and friends to their concrete per-ISA width (the value
-    // `execute()` uses, e.g. 64 for RV32+RV64), so the guarded semantics is a
-    // width-concrete graph the relaxation proof can bit-blast — patterns keep it
-    // symbolic, but this companion exists only to be proved.
-    let mut concrete_params = numeric_params.clone();
-    for (name, value) in isa_param_values {
-        concrete_params.entry(name.clone()).or_insert(*value);
-    }
-    let mut graph = tir_symbolic::sem::SemGraph::new();
-    let (roots, _) = ast::Expr::lower_all_to_sema_with_isa(
-        &[else_value, cond, then_value],
-        &mut graph,
-        &concrete_params,
-        isa_param_values,
-        register_index_map,
-    )?;
-    let [else_root, cond_root, then_root] = roots.as_slice() else {
-        return None;
-    };
-    let if_node = graph.add_node(tir_symbolic::lang::SymKind::If);
-    graph.add_edge(if_node, *cond_root);
-    graph.add_edge(if_node, *then_root);
-    graph.add_edge(if_node, *else_root);
-    Some((graph, if_node))
-}
-
-fn guarded_assignment_shape<'a>(
-    behavior: &'a ast::Expr,
-    dst: &str,
-) -> Option<(&'a ast::Expr, &'a ast::Expr, &'a ast::Expr)> {
-    let ast::Expr::If(if_expr) = unwrap_single_stmt(behavior) else {
-        return None;
-    };
-    let else_arm = if_expr.else_.as_deref()?;
-    let then_value = single_assignment_value(&if_expr.then, dst)?;
-    let else_value = single_assignment_value(else_arm, dst)?;
-    Some((&if_expr.cond, then_value, else_value))
-}
-
-fn unwrap_single_stmt(expr: &ast::Expr) -> &ast::Expr {
-    match expr {
-        ast::Expr::Block(b) if b.stmts.len() == 1 => &b.stmts[0],
-        other => other,
-    }
-}
-
-fn single_assignment_value<'a>(expr: &'a ast::Expr, dst: &str) -> Option<&'a ast::Expr> {
-    match unwrap_single_stmt(expr) {
-        ast::Expr::Assign(a) if assignment_dest_name(&a.dest).as_deref() == Some(dst) => {
-            Some(&a.value)
-        }
-        _ => None,
-    }
-}
-
-fn split_fixed_registers(symbols: &HashMap<(String, u32), u32>) -> HashMap<String, Option<u16>> {
-    let mut fixed_register_by_class: HashMap<String, Option<u16>> = HashMap::new();
-
-    for (class, number) in symbols.keys() {
-        let entry = fixed_register_by_class.entry(class.clone()).or_insert(None);
-        if let Ok(number_u16) = u16::try_from(*number) {
-            match entry {
-                None => *entry = Some(number_u16),
-                Some(existing) if *existing == number_u16 => {}
-                Some(_) => *entry = None,
-            }
-        } else {
-            *entry = None;
-        }
-    }
-
-    fixed_register_by_class
+        .retain(|(class, _), _| !fp_fields.contains_key(class));
+    Some(lowering.register_symbols)
 }
 
 fn register_operand_names(operands: &[(String, Type)]) -> HashSet<&str> {
@@ -349,190 +157,6 @@ fn collect_referenced_idents(expr: &ast::Expr, operands: &HashSet<&str>, out: &m
     }
 }
 
-fn value_zero_form_operands(
-    canon_pattern: &tir_symbolic::sem::SemGraph,
-    canon_root: tir_adt::NodeId,
-    ops: &[(String, Type)],
-    variable_symbols: &HashMap<String, u32>,
-    rd_name: &str,
-    zeroable_class: impl Fn(&str) -> bool,
-) -> Option<(String, String, u32)> {
-    use tir_symbolic::lang::{SymKind, SymPayload};
-
-    if *canon_pattern.get_node(canon_root) != SymKind::Add {
-        return None;
-    }
-    let children: Vec<tir_adt::NodeId> = canon_pattern.children(canon_root).collect();
-    if children.len() != 2 {
-        return None;
-    }
-    let symbol_of = |node: tir_adt::NodeId| {
-        (*canon_pattern.get_node(node) == SymKind::Symbol)
-            .then(|| match canon_pattern.get_leaf_data(node) {
-                Some(SymPayload::SymbolId(s)) => Some(*s),
-                _ => None,
-            })
-            .flatten()
-    };
-
-    let mut source = None;
-    let mut imm_sym = None;
-    for &child in &children {
-        let sym = symbol_of(child)?;
-        let operand = ops
-            .iter()
-            .find(|(name, _)| variable_symbols.get(name) == Some(&sym))?;
-        match &operand.1 {
-            Type::Struct(class) if zeroable_class(class) => {
-                source = Some((operand.0.clone(), class.clone()));
-            }
-            Type::Bits(_) | Type::Integer => imm_sym = Some(sym),
-            _ => return None,
-        }
-    }
-    let (source_name, source_class) = source?;
-    let imm_sym = imm_sym?;
-
-    // Every operand must be the destination, the zeroed source, or the folded
-    // immediate — anything else would go unbound in the derived emitter.
-    let accounted = ops.iter().all(|(name, ty)| match ty {
-        Type::Struct(_) => name == rd_name || *name == source_name,
-        Type::Bits(_) | Type::Integer => variable_symbols.get(name) == Some(&imm_sym),
-        Type::String => true,
-        _ => false,
-    });
-    accounted.then_some((source_name, source_class, imm_sym))
-}
-
-fn width_sensitive_symbols(
-    dag: &tir_symbolic::sem::SemGraph,
-    node_widths: &[Option<u32>],
-) -> HashSet<u32> {
-    use tir_symbolic::lang::SymKind as K;
-
-    let mut out = HashSet::new();
-    for index in 0..dag.len() {
-        let node = tir_adt::NodeId::from_index(index);
-        let untyped = node_widths.get(index).copied().flatten().is_none();
-        let sensitive_children: &[usize] = match dag.get_node(node) {
-            K::Eq | K::Ne | K::Lt | K::Le | K::Gt | K::Ge | K::ULt | K::ULe | K::UGt | K::UGe => {
-                &[0, 1]
-            }
-            K::Div | K::UDiv | K::SRem | K::URem if untyped => &[0, 1],
-            K::ShiftRightLogic | K::ShiftRightArithmetic if untyped => &[0],
-            K::SIToFP | K::UIToFP | K::SIToFPRound | K::UIToFPRound
-                if dag.children(node).next().is_some_and(|input| {
-                    node_widths.get(input.index()).copied().flatten().is_none()
-                }) =>
-            {
-                &[0]
-            }
-            K::SExt | K::ZExt => &[0],
-            _ => &[],
-        };
-        let children: Vec<tir_adt::NodeId> = dag.children(node).collect();
-        for &slot in sensitive_children {
-            if let Some(child) = children.get(slot) {
-                collect_symbols(dag, *child, &mut out);
-            }
-        }
-    }
-    out
-}
-
-fn collect_symbols(
-    dag: &tir_symbolic::sem::SemGraph,
-    node: tir_adt::NodeId,
-    out: &mut HashSet<u32>,
-) {
-    use tir_symbolic::lang::SymKind as K;
-
-    if let Some(tir_symbolic::lang::SymPayload::SymbolId(symbol)) = dag.get_leaf_data(node) {
-        out.insert(*symbol);
-        return;
-    }
-    if matches!(
-        dag.get_node(node),
-        K::Extract | K::LoadMemory | K::LoadReserved | K::AtomicRmw
-    ) {
-        return;
-    }
-    for child in dag.children(node) {
-        collect_symbols(dag, child, out);
-    }
-}
-
-/// An immediate operand's selection range: the pattern symbol it binds, the
-/// width and signedness its behavior gives the encoded field, and the
-/// constraints the operand declares.
-#[derive(Clone, Copy)]
-struct ImmediateRange {
-    symbol: u32,
-    width: u32,
-    signed: bool,
-    constraint: OperandConstraint,
-}
-
-fn immediate_operand_ranges(
-    dag: &tir_symbolic::sem::SemGraph,
-    ops: &[(String, Type)],
-    variable_symbols: &HashMap<String, u32>,
-    constraints: &HashMap<String, OperandConstraint>,
-) -> Vec<ImmediateRange> {
-    use tir_symbolic::lang::{SymKind as K, SymPayload};
-
-    let is_symbol_leaf = |node: tir_adt::NodeId, symbol: u32| {
-        *dag.get_node(node) == K::Symbol
-            && matches!(
-                dag.get_leaf_data(node),
-                Some(SymPayload::SymbolId(id)) if *id == symbol
-            )
-    };
-    let const_value = |node: tir_adt::NodeId| match dag.get_leaf_data(node) {
-        Some(SymPayload::Int(v)) => Some(v.to_u64()),
-        _ => None,
-    };
-
-    let mut out = Vec::new();
-    for (op_name, op_ty) in ops {
-        let Type::Bits(bits) = op_ty else { continue };
-        let Some(&symbol) = variable_symbols.get(op_name) else {
-            continue;
-        };
-        let mut signed = false;
-        let mut width = u32::from(*bits);
-        for index in 0..dag.len() {
-            let node = tir_adt::NodeId::from_index(index);
-            let children: Vec<tir_adt::NodeId> = dag.children(node).collect();
-            let uses_symbol = children
-                .first()
-                .is_some_and(|&child| is_symbol_leaf(child, symbol));
-            if !uses_symbol {
-                continue;
-            }
-            match dag.get_node(node) {
-                K::SExt => signed = true,
-                K::Extract
-                    if children.len() == 3
-                        && children.get(2).and_then(|&c| const_value(c)) == Some(0) =>
-                {
-                    if let Some(hi) = children.get(1).and_then(|&c| const_value(c)) {
-                        width = width.min(hi as u32 + 1);
-                    }
-                }
-                _ => {}
-            }
-        }
-        out.push(ImmediateRange {
-            symbol,
-            width,
-            signed,
-            constraint: constraints.get(op_name).copied().unwrap_or_default(),
-        });
-    }
-    out
-}
-
 fn literal_register_class_width(files: &[ast::File], class_name: &str) -> Option<u32> {
     files
         .iter()
@@ -544,38 +168,6 @@ fn literal_register_class_width(files: &[ast::File], class_name: &str) -> Option
             Some(ast::Expr::Lit(ast::Lit::Int(li))) => Some(parse_literal_value(li) as u32),
             _ => None,
         })
-}
-
-fn scalar_root_kind(kind: &tir_symbolic::lang::SymKind) -> bool {
-    use tir_symbolic::lang::SymKind as K;
-    matches!(
-        kind,
-        K::Add
-            | K::Sub
-            | K::Mul
-            | K::Div
-            | K::UDiv
-            | K::SRem
-            | K::URem
-            | K::Neg
-            | K::And
-            | K::Or
-            | K::Xor
-            | K::Not
-            | K::ShiftLeft
-            | K::ShiftRightLogic
-            | K::ShiftRightArithmetic
-            | K::Bitcast
-            | K::FAdd
-            | K::FSub
-            | K::FMul
-            | K::FDiv
-            | K::FCvt
-            | K::SIToFP
-            | K::UIToFP
-            | K::FPToSI
-            | K::FPToUI
-    )
 }
 
 fn behavior_references_pc(expr: &ast::Expr, pc_classes: &HashSet<String>) -> bool {
@@ -804,46 +396,4 @@ fn behavior_updates_fp_environment(expr: &ast::Expr) -> bool {
         );
     });
     updates
-}
-
-fn fp_state_term(
-    graph: &mut tir_symbolic::sem::SemGraph,
-    field: FpField,
-    state: Option<tir_adt::NodeId>,
-    value: Option<tir_adt::NodeId>,
-) -> tir_adt::NodeId {
-    use tir_symbolic::lang::{StateAccessKind, StateResourceKind, SymKind, SymPayload};
-    let mut constant = |width, value| {
-        let node = graph.add_node(SymKind::Constant);
-        graph.set_leaf_data(node, SymPayload::Int(tir_adt::APInt::new(width, value)));
-        node
-    };
-    if field.hardwired_zero {
-        return if value.is_some() {
-            state.unwrap_or_else(|| graph.add_node(SymKind::StateBlock))
-        } else {
-            let width = StateResourceKind::FpEnvironment
-                .field_schema(field.kind)
-                .unwrap()
-                .bit_width
-                .unwrap();
-            constant(u64::from(width), 0)
-        };
-    }
-    let resource = constant(2, StateResourceKind::FpEnvironment as u64);
-    let field = constant(2, field.kind as u64);
-    let access = value.map(|_| constant(1, StateAccessKind::Change as u64));
-    let state = state.unwrap_or_else(|| graph.add_node(SymKind::StateBlock));
-    let root = graph.add_node(if value.is_some() {
-        SymKind::StateAssign
-    } else {
-        SymKind::StateRead
-    });
-    for child in [Some(state), Some(resource), Some(field), access, value]
-        .into_iter()
-        .flatten()
-    {
-        graph.add_edge(root, child);
-    }
-    root
 }

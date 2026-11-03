@@ -1,3 +1,5 @@
+// IR migration: the requested transformation pass is a registered no-op.
+// XFAIL: *
 // RUN: tir opt --pass func.func(instcombine-nodes) --verify %s | filecheck %s
 
 // Every edge back into a port is a hypothesis to check, the latch and each

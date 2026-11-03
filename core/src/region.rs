@@ -330,20 +330,6 @@ pub(crate) struct SiblingReads {
 }
 
 impl SiblingReads {
-    pub(crate) fn under(
-        context: &Context,
-        root: RegionId,
-        tests: impl IntoIterator<Item = (OpId, ValueId)>,
-    ) -> Self {
-        let mut pairs = context.sibling_reads(root, true);
-        pairs.extend(
-            tests
-                .into_iter()
-                .filter_map(|(reader, value)| context.sibling_read(reader, value)),
-        );
-        Self::sorted(pairs)
-    }
-
     pub(crate) fn of_region(context: &Context, region: RegionId) -> Self {
         Self::sorted(context.sibling_reads(region, false))
     }

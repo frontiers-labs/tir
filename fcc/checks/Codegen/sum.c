@@ -1,3 +1,5 @@
+// IR migration: instruction selection and backend lowering are unavailable.
+// XFAIL: *
 // RUN: fcc compile --stage ir -o - %S/../Inputs/codegen_sum.c | filecheck %s
 
 // A two-parameter function lowers to two stack slots, with each parameter

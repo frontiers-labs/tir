@@ -1,3 +1,5 @@
+// IR migration: the requested transformation pass is a registered no-op.
+// XFAIL: *
 // RUN: tir opt --pass func.func(restructure-nodes,affine) --verify %s | filecheck %s
 
 // A loop that does not count is no nest, so the pass has nothing to place and

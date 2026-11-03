@@ -341,35 +341,6 @@ impl BinaryWriter {
     }
 }
 
-pub(crate) fn valid_block_layout(
-    context: &Context,
-    symbol: &tir::OpHandle,
-    blocks: &[BlockId],
-    format: &ObjectFormatInfo,
-) -> bool {
-    if blocks.iter().any(|&block| {
-        context.get_block(block).op_ids().iter().any(|&op| {
-            !matches!(
-                crate::backend::asm_item(&context.get_op(op)),
-                AsmItem::Skip | AsmItem::Instruction
-            )
-        })
-    }) {
-        return false;
-    }
-    let mut emission = ObjectEmission {
-        assignment: crate::backend::RegAssignment::of_op(symbol, crate::backend::ASSIGNMENT_ATTR),
-        ..ObjectEmission::default()
-    };
-    let section = ensure_section(&mut emission.obj, ".text");
-    emission.current_section = Some(section);
-    let writer = BinaryWriter::new();
-    writer
-        .write_blocks(context, blocks, section, &mut emission, format)
-        .and_then(|()| writer.resolve_fixups(&mut emission, format))
-        .is_ok()
-}
-
 fn resolve_symbol_differences(state: &mut ObjectEmission) -> Result<(), BinaryEmitError> {
     let symbols: HashMap<_, _> = state
         .obj

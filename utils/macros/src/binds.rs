@@ -410,6 +410,7 @@ fn emit_theta(binds: &Binds, counted: Option<&Counted>, shape: &OpShape) -> Bind
     let mut interfaces = vec![syn::parse_quote!(tir::Theta)];
     let mut impls = quote! {
         impl tir::Theta for #struct_name {
+            fn predicate_slot(&self) -> usize { #predicate }
             fn body(&self) -> tir::RegionId {
                 self.0.regions()[#body_index]
             }
@@ -565,6 +566,8 @@ fn emit_gamma(binds: &Binds, shape: &OpShape) -> BindsCode {
     let Term::Operands(predicate) = &binds.predicate else {
         panic!("binds: a Gamma predicate is an operand")
     };
+    let predicate_group = shape.operand_index(&predicate[0]);
+    let predicate_groups = shape.operands.len();
     let predicate = shape.operand_value(&predicate[0]);
     let (operands, ports, exit, results) = (
         range(shape, &forwarded[0]),
@@ -575,6 +578,9 @@ fn emit_gamma(binds: &Binds, shape: &OpShape) -> BindsCode {
 
     let impls = quote! {
         impl tir::Gamma for #struct_name {
+            fn predicate_slot(&self) -> usize {
+                tir::binding::operand_segments(&self.0, #predicate_groups)[#predicate_group].start
+            }
             fn predicate(&self) -> tir::ValueId {
                 #predicate
             }

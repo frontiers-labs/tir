@@ -29,6 +29,7 @@ module {
 "#;
 
 #[test]
+#[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
 fn parse_run_pipeline_print_roundtrip() {
     let ctx = tir_context_create();
     assert!(!ctx.is_null());

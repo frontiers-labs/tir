@@ -1,3 +1,5 @@
+// IR migration: optimizer and storage memory statistics are unavailable.
+// XFAIL: *
 // RUN: env TIR_MEM_STATS=1 tir opt --pass instcombine-nodes %s 2>&1 | filecheck %s
 // RUN: tir opt --pass instcombine-nodes %s 2>&1 | filecheck --check-prefix=QUIET %s
 

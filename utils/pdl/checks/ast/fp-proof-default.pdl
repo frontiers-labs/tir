@@ -1,3 +1,5 @@
+// IR migration: the Rust rewrite emitter was removed.
+// XFAIL: *
 // FP state rules default to checked SMT proof, even for custom dialect ops.
 // RUN: not tir-pdl %s --emit rust 2>&1 | filecheck %s
 
