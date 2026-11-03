@@ -14,7 +14,7 @@ bench = false
 doctest = false
 
 [dev-dependencies]
-tir.workspace = true
+tir = { workspace = true, features = ["egglog-rules"] }
 tir-adt.workspace = true
 tir-egglog = { workspace = true, features = ["parser"] }
 tir-symbolic.workspace = true

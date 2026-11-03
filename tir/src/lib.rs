@@ -10,6 +10,7 @@ use tir_x86_64 as _;
 
 mod common;
 
+pub mod egglog;
 pub mod interp;
 pub mod llvm_import;
 pub mod mc;
@@ -24,6 +25,7 @@ pub fn tools_main() -> Result<(), Box<dyn Error>> {
     let cli = Cli::parse();
 
     match cli.command {
+        Command::Egglog(args) => egglog::run(args),
         Command::Mc(args) => mc::run(args),
         Command::Interp(args) => interp::run(args),
         Command::ModelCheck(args) => model_check::run(args),
@@ -39,6 +41,8 @@ pub fn tools_main() -> Result<(), Box<dyn Error>> {
 
 #[derive(Subcommand)]
 pub enum Command {
+    /// Run egglog rules on IR, or open an egglog REPL
+    Egglog(egglog::ToolArgs),
     /// Compile machine code
     Mc(mc::ToolArgs),
     /// Interpret a function from TIR input
