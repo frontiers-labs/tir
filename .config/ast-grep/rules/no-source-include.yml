@@ -11,7 +11,7 @@ utils:
         - kind: block_comment
   quotation-name:
     any:
-      - regex: '^((r#)?quote::)?(r#)?(quote|quote_spanned)$'
+      - regex: '^((::)?(r#)?quote::)?(r#)?(quote|quote_spanned)$'
         not:
           follows:
             regex: '^::$'
@@ -29,6 +29,9 @@ utils:
               follows:
                 regex: '^::$'
                 stopBy: { matches: past-comments }
+                follows:
+                  regex: '\w'
+                  stopBy: { matches: past-comments }
   generated-arguments:
     all:
       - regex: '^[({\[]\s*(concat!\s*\(\s*env!\s*\(\s*"OUT_DIR"\s*\)\s*,\s*"/[^"\\]*"\s*,?\s*\)|env!\s*\(\s*"OUT_DIR"\s*\))\s*,?\s*[)}\]]$'
