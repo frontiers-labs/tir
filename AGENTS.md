@@ -39,6 +39,7 @@ the same amount of time (or less!) to do so.
 6. Rely on design documentation in `docs/design` as a summary of how TIR
    works in general.
 7. See `Source overview` section of README.md before writing new code.
+8. For working on new passes, start with a prototype via `tir egglog` command.
 
 ## Minimal quality gates
 
