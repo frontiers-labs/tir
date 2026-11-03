@@ -19,7 +19,7 @@ harness = false
 
 [dev-dependencies]
 xtask = { path = "../xtask" }
-tir.workspace = true
+tir = { workspace = true, features = ["egglog-rules"] }
 tir-adt.workspace = true
 tir-egglog = { workspace = true, features = ["parser"] }
 tir-symbolic.workspace = true

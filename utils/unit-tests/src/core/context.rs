@@ -7,6 +7,42 @@ use tir::{
 use super::fixtures;
 
 #[test]
+fn egglog_rules_update_context_attributes_and_survive_repeated_access() {
+    let (context, module) = fixtures::parse("module { module_end }");
+    for source in [
+        r#"
+        (relation TagRequest (i64 String))
+        (rule ((TagRequest op tag))
+              ((set (Attribute op tag)
+                    (ListAttr (ACons (BoolAttr true) (ACons (BoolAttr false) (ANil)))))))
+        (rule ((= (OpKind op) "builtin.module")) ((TagRequest op "first")))
+        (run 2)
+        "#,
+        r#"
+        (rule ((= (OpKind op) "builtin.module")) ((TagRequest op "second")))
+        (run 2)
+        "#,
+    ] {
+        let mut engine = context.egraph_with_rules().unwrap();
+        let commands = engine.parse_program("context rules", source).unwrap();
+        engine.run_program(commands).unwrap();
+    }
+
+    for name in ["first", "second"] {
+        assert_eq!(
+            context.get_op(module.id()).attr(name),
+            Some(tir::attributes::AttributeValue::Array(
+                vec![
+                    tir::attributes::AttributeValue::Bool(true),
+                    tir::attributes::AttributeValue::Bool(false),
+                ]
+                .into()
+            ))
+        );
+    }
+}
+
+#[test]
 fn classifies_types_interned_after_earlier_queries() {
     let context = Context::new();
     let memory = builtin::StateType::memory(&context);

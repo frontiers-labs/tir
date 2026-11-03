@@ -1,0 +1,8 @@
+(let saved 41)
+)
+(unknown-egglog-command saved)
+(extract (+ saved 1))
+; A comment may contain unclosed parentheses (((
+(extract
+  "literal
+; this is still a string )")
