@@ -1,6 +1,8 @@
+use super::*;
+
 // Actions derived from a simple asm template string.
 
-enum AsmAction {
+pub(super) enum AsmAction {
     SkipMnemonic,
     Comma,
     Operand(String),
@@ -16,12 +18,12 @@ enum AsmAction {
     /// `sp` in `c.addi4spn {rd}, sp, {imm}`); the parser requires it verbatim.
     Keyword(String),
 }
-enum AsmPrintPart {
+pub(super) enum AsmPrintPart {
     Text(String),
     Operand(String),
 }
 
-fn compile_asm_template(template: &str) -> Vec<AsmAction> {
+pub(super) fn compile_asm_template(template: &str) -> Vec<AsmAction> {
     let mut actions = Vec::new();
     let mut i = 0;
     let bytes = template.as_bytes();
@@ -109,7 +111,7 @@ fn compile_asm_template(template: &str) -> Vec<AsmAction> {
     actions
 }
 
-fn compile_asm_printer_template(template: &str, mnemonic: &str) -> Vec<AsmPrintPart> {
+pub(super) fn compile_asm_printer_template(template: &str, mnemonic: &str) -> Vec<AsmPrintPart> {
     let mut parts = Vec::new();
     let mut cursor = 0;
 
@@ -144,7 +146,7 @@ fn compile_asm_printer_template(template: &str, mnemonic: &str) -> Vec<AsmPrintP
 // AsSemExpr code generation
 // ---------------------------------------------------------------------------
 
-fn synthesize_branch_value(behavior: &ast::Expr, width_bytes: u64) -> Option<ast::Expr> {
+pub(super) fn synthesize_branch_value(behavior: &ast::Expr, width_bytes: u64) -> Option<ast::Expr> {
     let ast::Expr::If(if_) = unwrap_single_stmt_block(behavior) else {
         return None;
     };
@@ -211,7 +213,7 @@ fn is_pc_dest(dest: &ast::Expr) -> bool {
     matches!(dest, ast::Expr::Path(p) if p.base == "PC" && p.remainder == ["pc"])
 }
 
-fn pc_writes(e: &ast::Expr) -> (bool, bool) {
+pub(super) fn pc_writes(e: &ast::Expr) -> (bool, bool) {
     match e {
         ast::Expr::Assign(a) => {
             let w = is_pc_dest(&a.dest);

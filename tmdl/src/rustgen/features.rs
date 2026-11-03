@@ -1,4 +1,6 @@
-fn isa_param_definers(files: &[ast::File], param: &str) -> Vec<(String, i64)> {
+use super::*;
+
+pub(super) fn isa_param_definers(files: &[ast::File], param: &str) -> Vec<(String, i64)> {
     let mut definers = vec![];
     for isa in files.iter().flat_map(|f| f.isas()) {
         if let Some((_ty, Some(ast::Expr::Lit(ast::Lit::Int(li))))) = isa.parameters.get(param) {
@@ -8,7 +10,7 @@ fn isa_param_definers(files: &[ast::File], param: &str) -> Vec<(String, i64)> {
     definers
 }
 
-fn emit_features(files: &[ast::File]) -> Result<proc_macro2::TokenStream, TMDLError> {
+pub(super) fn emit_features(files: &[ast::File]) -> Result<proc_macro2::TokenStream, TMDLError> {
     let mut enum_variants = vec![];
     let mut all_variants = vec![];
     let mut name_arms = vec![];
@@ -157,11 +159,10 @@ fn emit_features(files: &[ast::File]) -> Result<proc_macro2::TokenStream, TMDLEr
     })
 }
 
-fn feature_slice(for_isas: &[String]) -> proc_macro2::TokenStream {
+pub(super) fn feature_slice(for_isas: &[String]) -> proc_macro2::TokenStream {
     let idents = for_isas.iter().map(|name| {
         let ident = format_ident!("{}", name);
         quote! { Feature::#ident }
     });
     quote! { &[#(#idents),*] }
 }
-

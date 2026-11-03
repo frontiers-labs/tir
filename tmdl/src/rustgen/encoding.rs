@@ -1,3 +1,5 @@
+use super::*;
+
 // ---------------------------------------------------------------------------
 
 /// One contiguous run of an integer operand's bits placed into the encoded
@@ -143,9 +145,8 @@ fn emit_guard(
     shape: &EncodingShape,
     ctx: &crate::shapes::Context,
 ) -> Result<proc_macro2::TokenStream, TMDLError> {
-    let predicate = crate::shapes::lower_guard(&shape.guard, ctx).map_err(|reason| {
-        TMDLError::Codegen(format!("instruction '{}': {reason}", inst.name))
-    })?;
+    let predicate = crate::shapes::lower_guard(&shape.guard, ctx)
+        .map_err(|reason| TMDLError::Codegen(format!("instruction '{}': {reason}", inst.name)))?;
     Ok(emit_predicate(&predicate))
 }
 
@@ -210,7 +211,14 @@ fn emit_predicate(predicate: &crate::shapes::Predicate) -> proc_macro2::TokenStr
             let op = proc_macro2::Literal::string(op);
             let width = proc_macro2::Literal::u16_unsuffixed(*width);
             let bits = proc_macro2::Literal::u16_unsuffixed(*bits);
-            let variant = format_ident!("{}", if *signed { "SignedFits" } else { "UnsignedFits" });
+            let variant = format_ident!(
+                "{}",
+                if *signed {
+                    "SignedFits"
+                } else {
+                    "UnsignedFits"
+                }
+            );
             quote! {
                 tir::backend::binary::Guard::#variant { op: #op, width: #width, bits: #bits }
             }
@@ -224,7 +232,7 @@ fn emit_predicate(predicate: &crate::shapes::Predicate) -> proc_macro2::TokenStr
     }
 }
 
-fn emit_instruction_encoder(
+pub(super) fn emit_instruction_encoder(
     inst: &ast::Instruction,
     shapes: &[EncodingShape],
     ops_map: &HashMap<String, Type>,
@@ -360,17 +368,14 @@ fn emit_instruction_encoder(
     }))
 }
 
-fn width_range(shapes: &[EncodingShape]) -> (u8, u8) {
+pub(super) fn width_range(shapes: &[EncodingShape]) -> (u8, u8) {
     let widths = shapes
         .iter()
         .map(|shape| shape.width_bits.div_ceil(8) as u8);
-    (
-        widths.clone().min().unwrap_or(0),
-        widths.max().unwrap_or(0),
-    )
+    (widths.clone().min().unwrap_or(0), widths.max().unwrap_or(0))
 }
 
-fn emit_instruction_decoder(
+pub(super) fn emit_instruction_decoder(
     inst: &ast::Instruction,
     shapes: &[EncodingShape],
     ops_map: &HashMap<String, Type>,

@@ -1,10 +1,12 @@
+use super::*;
+
 #[derive(Clone, Copy)]
-struct FpField {
-    kind: tir_symbolic::lang::StateFieldKind,
-    hardwired_zero: bool,
+pub(super) struct FpField {
+    pub(super) kind: tir_symbolic::lang::StateFieldKind,
+    pub(super) hardwired_zero: bool,
 }
 
-fn fp_field(traits: &[ast::RegisterTrait]) -> Option<FpField> {
+pub(super) fn fp_field(traits: &[ast::RegisterTrait]) -> Option<FpField> {
     use tir_symbolic::lang::StateFieldKind;
     let kind = traits.iter().find_map(|role| match role {
         ast::RegisterTrait::FpFlags => Some(StateFieldKind::FpFlags),
@@ -18,7 +20,9 @@ fn fp_field(traits: &[ast::RegisterTrait]) -> Option<FpField> {
     })
 }
 
-fn emit_register_trait_helpers(files: &[ast::File]) -> Result<proc_macro2::TokenStream, TMDLError> {
+pub(super) fn emit_register_trait_helpers(
+    files: &[ast::File],
+) -> Result<proc_macro2::TokenStream, TMDLError> {
     let mut hardwired_patterns = Vec::new();
     let mut hardwired_fields = Vec::new();
 

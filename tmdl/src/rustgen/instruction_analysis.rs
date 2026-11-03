@@ -1,4 +1,6 @@
-fn register_class_kinds(files: &[ast::File]) -> (HashSet<String>, HashSet<String>) {
+use super::*;
+
+pub(super) fn register_class_kinds(files: &[ast::File]) -> (HashSet<String>, HashSet<String>) {
     let names = |keep: fn(&ast::RegisterClass) -> bool| {
         files
             .iter()
@@ -13,7 +15,7 @@ fn register_class_kinds(files: &[ast::File]) -> (HashSet<String>, HashSet<String
     )
 }
 
-fn instruction_names(
+pub(super) fn instruction_names(
     params: &HashMap<String, (Type, Option<ast::Expr>)>,
 ) -> Option<(String, String)> {
     let string = |name: &str| {
@@ -27,7 +29,7 @@ fn instruction_names(
     Some((mnemonic, op_name))
 }
 
-fn analyze_instruction_semantics(
+pub(super) fn analyze_instruction_semantics(
     behavior: &ast::Expr,
     operands: &[(String, Type)],
     defined_register_operands: &[String],
@@ -215,7 +217,7 @@ fn guarded_assignment_shape<'a>(
     Some((&if_expr.cond, then_value, else_value))
 }
 
-fn unwrap_single_stmt(expr: &ast::Expr) -> &ast::Expr {
+pub(super) fn unwrap_single_stmt(expr: &ast::Expr) -> &ast::Expr {
     match expr {
         ast::Expr::Block(b) if b.stmts.len() == 1 => &b.stmts[0],
         other => other,
@@ -250,7 +252,7 @@ fn split_fixed_registers(symbols: &HashMap<(String, u32), u32>) -> HashMap<Strin
     fixed_register_by_class
 }
 
-fn register_operand_names(operands: &[(String, Type)]) -> HashSet<&str> {
+pub(super) fn register_operand_names(operands: &[(String, Type)]) -> HashSet<&str> {
     operands
         .iter()
         .filter_map(|(name, ty)| match ty {
@@ -260,7 +262,7 @@ fn register_operand_names(operands: &[(String, Type)]) -> HashSet<&str> {
         .collect()
 }
 
-fn assignment_dest_name(dest: &ast::Expr) -> Option<String> {
+pub(super) fn assignment_dest_name(dest: &ast::Expr) -> Option<String> {
     match dest {
         ast::Expr::Ident(id) => Some(id.name.clone()),
         ast::Expr::Path(path) if path.remainder.len() == 1 => Some(path.remainder[0].clone()),
@@ -268,7 +270,7 @@ fn assignment_dest_name(dest: &ast::Expr) -> Option<String> {
     }
 }
 
-fn assignment_dest_register_path(dest: &ast::Expr) -> Option<(String, String)> {
+pub(super) fn assignment_dest_register_path(dest: &ast::Expr) -> Option<(String, String)> {
     match dest {
         ast::Expr::Path(path) if path.remainder.len() == 1 => {
             Some((path.base.clone(), path.remainder[0].clone()))
@@ -277,7 +279,7 @@ fn assignment_dest_register_path(dest: &ast::Expr) -> Option<(String, String)> {
     }
 }
 
-fn referenced_operands(expr: &ast::Expr, operands: &HashSet<&str>) -> Vec<String> {
+pub(super) fn referenced_operands(expr: &ast::Expr, operands: &HashSet<&str>) -> Vec<String> {
     let mut out = Vec::new();
     collect_referenced_idents(expr, operands, &mut out);
     out
@@ -349,7 +351,7 @@ fn collect_referenced_idents(expr: &ast::Expr, operands: &HashSet<&str>, out: &m
     }
 }
 
-fn value_zero_form_operands(
+pub(super) fn value_zero_form_operands(
     canon_pattern: &tir_symbolic::sem::SemGraph,
     canon_root: tir_adt::NodeId,
     ops: &[(String, Type)],
@@ -404,7 +406,7 @@ fn value_zero_form_operands(
     accounted.then_some((source_name, source_class, imm_sym))
 }
 
-fn width_sensitive_symbols(
+pub(super) fn width_sensitive_symbols(
     dag: &tir_symbolic::sem::SemGraph,
     node_widths: &[Option<u32>],
 ) -> HashSet<u32> {
@@ -466,14 +468,14 @@ fn collect_symbols(
 /// width and signedness its behavior gives the encoded field, and the
 /// constraints the operand declares.
 #[derive(Clone, Copy)]
-struct ImmediateRange {
-    symbol: u32,
-    width: u32,
-    signed: bool,
-    constraint: OperandConstraint,
+pub(super) struct ImmediateRange {
+    pub(super) symbol: u32,
+    pub(super) width: u32,
+    pub(super) signed: bool,
+    pub(super) constraint: OperandConstraint,
 }
 
-fn immediate_operand_ranges(
+pub(super) fn immediate_operand_ranges(
     dag: &tir_symbolic::sem::SemGraph,
     ops: &[(String, Type)],
     variable_symbols: &HashMap<String, u32>,
@@ -533,7 +535,7 @@ fn immediate_operand_ranges(
     out
 }
 
-fn literal_register_class_width(files: &[ast::File], class_name: &str) -> Option<u32> {
+pub(super) fn literal_register_class_width(files: &[ast::File], class_name: &str) -> Option<u32> {
     files
         .iter()
         .flat_map(|f| f.register_classes())
@@ -546,7 +548,7 @@ fn literal_register_class_width(files: &[ast::File], class_name: &str) -> Option
         })
 }
 
-fn scalar_root_kind(kind: &tir_symbolic::lang::SymKind) -> bool {
+pub(super) fn scalar_root_kind(kind: &tir_symbolic::lang::SymKind) -> bool {
     use tir_symbolic::lang::SymKind as K;
     matches!(
         kind,
@@ -578,7 +580,7 @@ fn scalar_root_kind(kind: &tir_symbolic::lang::SymKind) -> bool {
     )
 }
 
-fn behavior_references_pc(expr: &ast::Expr, pc_classes: &HashSet<String>) -> bool {
+pub(super) fn behavior_references_pc(expr: &ast::Expr, pc_classes: &HashSet<String>) -> bool {
     let mut found = false;
     crate::utils::visit_exprs(expr, &mut |e| {
         if let ast::Expr::Path(path) = e {
@@ -588,7 +590,10 @@ fn behavior_references_pc(expr: &ast::Expr, pc_classes: &HashSet<String>) -> boo
     found
 }
 
-fn behavior_reads_flag_register(expr: &ast::Expr, flag_classes: &HashSet<String>) -> bool {
+pub(super) fn behavior_reads_flag_register(
+    expr: &ast::Expr,
+    flag_classes: &HashSet<String>,
+) -> bool {
     let is_flag = |e: &ast::Expr| matches!(e, ast::Expr::Path(p) if flag_classes.contains(&p.base));
     let (mut mentions, mut writes) = (0usize, 0usize);
     crate::utils::visit_exprs(expr, &mut |e: &ast::Expr| match e {
@@ -599,7 +604,7 @@ fn behavior_reads_flag_register(expr: &ast::Expr, flag_classes: &HashSet<String>
     mentions > writes
 }
 
-fn value_reads_flag_register(expr: &ast::Expr, flag_classes: &HashSet<String>) -> bool {
+pub(super) fn value_reads_flag_register(expr: &ast::Expr, flag_classes: &HashSet<String>) -> bool {
     match expr {
         ast::Expr::Assign(a) => {
             !assignment_dest_register_path(&a.dest)
@@ -639,7 +644,10 @@ fn defines_value(expr: &ast::Expr, flag_classes: &HashSet<String>) -> bool {
     defines
 }
 
-fn behavior_writes_fixed_register(expr: &ast::Expr, flag_classes: &HashSet<String>) -> bool {
+pub(super) fn behavior_writes_fixed_register(
+    expr: &ast::Expr,
+    flag_classes: &HashSet<String>,
+) -> bool {
     let mut writes = false;
     crate::utils::visit_statements(expr, &mut |stmt| {
         if let ast::Expr::Assign(a) = stmt {
@@ -719,7 +727,7 @@ pub(crate) fn infer_defined_register_operands(
     defs
 }
 
-fn resolve_behavior_rhs<'a>(
+pub(super) fn resolve_behavior_rhs<'a>(
     behavior: &'a ast::Expr,
     operands: &[(String, Type)],
     defined_register_operands: &[String],
@@ -795,7 +803,7 @@ pub(crate) fn resolve_asm_templates(expr: &ast::Expr) -> Option<Vec<String>> {
     }
 }
 
-fn behavior_updates_fp_environment(expr: &ast::Expr) -> bool {
+pub(super) fn behavior_updates_fp_environment(expr: &ast::Expr) -> bool {
     let mut updates = false;
     crate::utils::visit_exprs(expr, &mut |expr| {
         updates |= matches!(

@@ -1,39 +1,41 @@
+use super::*;
+
 // ---------------------------------------------------------------------------
 // Instruction analysis helpers
 // ---------------------------------------------------------------------------
 
-enum FpFlags<T> {
+pub(super) enum FpFlags<T> {
     None,
     Clobber,
     Exact(T),
 }
 
-struct InstructionSemantics {
-    fp_flags: FpFlags<(tir_symbolic::sem::SemGraph, tir_adt::NodeId)>,
-    pattern: tir_symbolic::sem::SemGraph,
-    root: tir_adt::NodeId,
-    variable_symbols: HashMap<String, u32>,
-    fixed_register_by_class: HashMap<String, Option<u16>>,
+pub(super) struct InstructionSemantics {
+    pub(super) fp_flags: FpFlags<(tir_symbolic::sem::SemGraph, tir_adt::NodeId)>,
+    pub(super) pattern: tir_symbolic::sem::SemGraph,
+    pub(super) root: tir_adt::NodeId,
+    pub(super) variable_symbols: HashMap<String, u32>,
+    pub(super) fixed_register_by_class: HashMap<String, Option<u16>>,
     /// `(register class, index) -> pattern symbol` for every register the behavior
     /// reads by path (e.g. `VCSR::vl`). These are implicit reads — registers not
     /// among the encoded operands — and become the rule's `implicit_uses`.
-    register_symbols: HashMap<(String, u32), u32>,
+    pub(super) register_symbols: HashMap<(String, u32), u32>,
     /// The full destination expression before proposing a generalized selection
     /// pattern. Rule validation proves the retained expression refines it.
-    guarded_semantics: Option<(tir_symbolic::sem::SemGraph, tir_adt::NodeId)>,
+    pub(super) guarded_semantics: Option<(tir_symbolic::sem::SemGraph, tir_adt::NodeId)>,
 }
 
 /// The selectable semantics of a conditional-branch instruction: the branch
 /// condition as a pattern, plus the operand carrying the taken target.
-struct BranchSemantics {
+pub(super) struct BranchSemantics {
     /// The condition expression (`rs1 == rs2`, …) as a pattern graph.
-    pattern: tir_symbolic::sem::SemGraph,
-    root: tir_adt::NodeId,
-    variable_symbols: HashMap<String, u32>,
+    pub(super) pattern: tir_symbolic::sem::SemGraph,
+    pub(super) root: tir_adt::NodeId,
+    pub(super) variable_symbols: HashMap<String, u32>,
     /// The immediate operand encoding the taken target (`imm`), and the fresh
     /// pattern symbol the emitter reads it from as a block binding.
-    target_operand: String,
-    target_symbol: u32,
+    pub(super) target_operand: String,
+    pub(super) target_symbol: u32,
 }
 
 fn guarded_pc_write_shape<'a>(
@@ -87,7 +89,7 @@ fn guarded_pc_write_shape<'a>(
     Some((&guarded.cond, target_operand.clone()))
 }
 
-fn analyze_branch_semantics(
+pub(super) fn analyze_branch_semantics(
     inst: &ast::Instruction,
     operands: &[(String, Type)],
     numeric_params: &HashMap<String, i64>,
@@ -131,40 +133,40 @@ fn analyze_branch_semantics(
 /// a status-flag register of one class. `flag_roots` maps each written flag's
 /// register index to its value expression, lowered over the encoded operands
 /// into `graph` through one shared symbol table.
-struct FlagDefinerSemantics {
-    class: String,
-    graph: tir_symbolic::sem::SemGraph,
-    flag_roots: HashMap<u32, tir_adt::NodeId>,
-    variable_symbols: HashMap<String, u32>,
+pub(super) struct FlagDefinerSemantics {
+    pub(super) class: String,
+    pub(super) graph: tir_symbolic::sem::SemGraph,
+    pub(super) flag_roots: HashMap<u32, tir_adt::NodeId>,
+    pub(super) variable_symbols: HashMap<String, u32>,
 }
 
 /// A flag-guarded branch (`b.lt`, `jl`): a guarded PC write whose condition
 /// reads only status-flag registers of one class.
-struct FlagBranchSemantics {
-    class: String,
-    graph: tir_symbolic::sem::SemGraph,
-    root: tir_adt::NodeId,
+pub(super) struct FlagBranchSemantics {
+    pub(super) class: String,
+    pub(super) graph: tir_symbolic::sem::SemGraph,
+    pub(super) root: tir_adt::NodeId,
     /// Guard symbol id -> the flag register index it reads.
-    flag_symbols: HashMap<u32, u32>,
-    target_operand: String,
+    pub(super) flag_symbols: HashMap<u32, u32>,
+    pub(super) target_operand: String,
 }
 
 /// A flag-reading value instruction (`cset`, `setcc`, `csel`, `cmov`): defines
 /// one register as `if <flags> { then } else { else }` over one class's status
 /// flags. Composed with a flag definer it yields an `If`-rooted value rule (see
 /// `emit_flag_reader_rules`).
-struct FlagReaderSemantics {
-    class: String,
-    graph: tir_symbolic::sem::SemGraph,
+pub(super) struct FlagReaderSemantics {
+    pub(super) class: String,
+    pub(super) graph: tir_symbolic::sem::SemGraph,
     /// The `if`'s condition, then, and else subgraphs.
-    cond_root: tir_adt::NodeId,
-    then_root: tir_adt::NodeId,
-    else_root: tir_adt::NodeId,
+    pub(super) cond_root: tir_adt::NodeId,
+    pub(super) then_root: tir_adt::NodeId,
+    pub(super) else_root: tir_adt::NodeId,
     /// Condition symbol id -> the flag register index it reads.
-    flag_symbols: HashMap<u32, u32>,
+    pub(super) flag_symbols: HashMap<u32, u32>,
     /// Encoded value operand name -> symbol id used by either arm.
-    variable_symbols: HashMap<String, u32>,
-    dest_operand: String,
+    pub(super) variable_symbols: HashMap<String, u32>,
+    pub(super) dest_operand: String,
 }
 
 fn behavior_statements(behavior: &ast::Expr) -> Vec<&ast::Expr> {
@@ -179,7 +181,7 @@ fn behavior_statements(behavior: &ast::Expr) -> Vec<&ast::Expr> {
     vec![body]
 }
 
-fn analyze_flag_definer_semantics(
+pub(super) fn analyze_flag_definer_semantics(
     inst: &ast::Instruction,
     operands: &[(String, Type)],
     numeric_params: &HashMap<String, i64>,
@@ -278,7 +280,7 @@ fn analyze_flag_definer_semantics(
     })
 }
 
-fn analyze_flag_branch_semantics(
+pub(super) fn analyze_flag_branch_semantics(
     inst: &ast::Instruction,
     operands: &[(String, Type)],
     numeric_params: &HashMap<String, i64>,
@@ -333,7 +335,7 @@ fn analyze_flag_branch_semantics(
     })
 }
 
-fn analyze_flag_reader_semantics(
+pub(super) fn analyze_flag_reader_semantics(
     inst: &ast::Instruction,
     operands: &[(String, Type)],
     numeric_params: &HashMap<String, i64>,
@@ -449,7 +451,7 @@ fn copy_subgraph_remap_symbols(
     })
 }
 
-fn copy_subgraph_remapping(
+pub(super) fn copy_subgraph_remapping(
     dst: &mut tir_symbolic::sem::SemGraph,
     src: &tir_symbolic::sem::SemGraph,
     node: tir_adt::NodeId,
@@ -473,7 +475,7 @@ fn copy_subgraph_remapping(
     )
 }
 
-fn copy_reader_arm(
+pub(super) fn copy_reader_arm(
     dst: &mut tir_symbolic::sem::SemGraph,
     src: &tir_symbolic::sem::SemGraph,
     arm_root: tir_adt::NodeId,
@@ -507,7 +509,7 @@ fn copy_reader_arm(
     copy_subgraph_remap_symbols(dst, src, arm_root, &mut HashMap::new(), remap, next)
 }
 
-fn compose_guard_with_definer(
+pub(super) fn compose_guard_with_definer(
     dst: &mut tir_symbolic::sem::SemGraph,
     guard: &tir_symbolic::sem::SemGraph,
     node: tir_adt::NodeId,
@@ -556,7 +558,7 @@ fn foldable_kind(kind: &tir_symbolic::lang::SymKind) -> bool {
     )
 }
 
-fn fold_constant_subtrees(
+pub(super) fn fold_constant_subtrees(
     src: &tir_symbolic::sem::SemGraph,
     root: tir_adt::NodeId,
 ) -> (tir_symbolic::sem::SemGraph, tir_adt::NodeId) {
@@ -715,7 +717,7 @@ fn masked_below(
 // Sound where the composed condition reads nothing of `register` above the
 // width once `immediate` is an unsigned field that wide:
 // a narrower value then answers the instruction.
-fn masked_widths(
+pub(super) fn masked_widths(
     composed: &tir_symbolic::sem::SemGraph,
     root: tir_adt::NodeId,
     symbols: &ComparisonSymbols,
@@ -750,7 +752,7 @@ fn floating_equality_candidate(
     (g, root)
 }
 
-fn find_equivalent_comparison(
+pub(super) fn find_equivalent_comparison(
     composed: &tir_symbolic::sem::SemGraph,
     symbols: &ComparisonSymbols,
 ) -> Option<(tir_symbolic::sem::SemGraph, tir_adt::NodeId)> {
@@ -794,7 +796,7 @@ fn find_equivalent_comparison(
         })
 }
 
-fn register_class_width_with_isa(
+pub(super) fn register_class_width_with_isa(
     files: &[ast::File],
     class_name: &str,
     isa_param_values: &HashMap<String, i64>,
@@ -819,7 +821,7 @@ fn register_class_width_with_isa(
 /// The semantic type and architectural width of each comparison operand.
 /// An immediate shares the register operand's type. `None` if a register width
 /// is unresolved, a float format is unsupported, or a symbol is untyped.
-struct ComparisonSymbols {
+pub(super) struct ComparisonSymbols {
     widths: Vec<u32>,
     terms: tir_symbolic::term::Terms,
     types: Vec<tir_symbolic::term::TypeId>,
@@ -853,7 +855,7 @@ fn operand_type(
     }
 }
 
-fn definer_comparison_symbols(
+pub(super) fn definer_comparison_symbols(
     files: &[ast::File],
     d: &FlagInst<'_>,
     d_sem: &FlagDefinerSemantics,
@@ -895,7 +897,10 @@ fn definer_comparison_symbols(
     })
 }
 
-fn definer_immediate_symbols(d: &FlagInst<'_>, d_sem: &FlagDefinerSemantics) -> HashSet<u32> {
+pub(super) fn definer_immediate_symbols(
+    d: &FlagInst<'_>,
+    d_sem: &FlagDefinerSemantics,
+) -> HashSet<u32> {
     d.ops
         .iter()
         .filter(|(_, ty)| matches!(ty, Type::Bits(_) | Type::Integer))
@@ -905,17 +910,17 @@ fn definer_immediate_symbols(d: &FlagInst<'_>, d_sem: &FlagDefinerSemantics) -> 
 
 /// A flag-mediated instruction's resolved shape, shared by definer, branch and
 /// reader analysis.
-struct FlagInst<'a> {
-    inst: &'a ast::Instruction,
-    ops: Vec<(String, Type)>,
-    constraints: HashMap<String, OperandConstraint>,
+pub(super) struct FlagInst<'a> {
+    pub(super) inst: &'a ast::Instruction,
+    pub(super) ops: Vec<(String, Type)>,
+    pub(super) constraints: HashMap<String, OperandConstraint>,
     /// The op's registered name (`OPNAME`, falling back to `MNEMONIC`).
-    op_name: String,
-    mnemonic: String,
-    isa_param_values: HashMap<String, i64>,
+    pub(super) op_name: String,
+    pub(super) mnemonic: String,
+    pub(super) isa_param_values: HashMap<String, i64>,
 }
 
-fn emit_flag_definer_prelude(
+pub(super) fn emit_flag_definer_prelude(
     d: &FlagInst<'_>,
     d_sem: &FlagDefinerSemantics,
     emitted_preludes: &mut HashSet<String>,

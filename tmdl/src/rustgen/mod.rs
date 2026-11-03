@@ -315,20 +315,45 @@ fn selection_pattern_widths(
 // Top-level emitters
 // ---------------------------------------------------------------------------
 
-include!("sem_blob.rs");
-include!("features.rs");
-include!("instructions.rs");
-include!("registers.rs");
-include!("abis.rs");
-include!("scheduling.rs");
-include!("latency.rs");
-include!("register_traits.rs");
-include!("flag_analysis.rs");
-include!("flag_emission.rs");
-include!("fixed_register_emission.rs");
-include!("implicit_registers.rs");
-include!("instruction_analysis.rs");
-include!("assembly.rs");
-include!("behavior.rs");
-include!("encoding.rs");
-include!("isel_spec.rs");
+mod sem_blob;
+pub use sem_blob::SEM_BLOB_FILE;
+use sem_blob::*;
+mod features;
+use features::*;
+mod instructions;
+use instructions::*;
+mod registers;
+use registers::*;
+mod abis;
+use abis::*;
+mod scheduling;
+use scheduling::*;
+mod latency;
+use latency::*;
+mod register_traits;
+use register_traits::*;
+mod flag_analysis;
+use flag_analysis::*;
+mod flag_emission;
+use flag_emission::*;
+mod fixed_register_emission;
+use fixed_register_emission::*;
+pub(crate) use fixed_register_emission::{
+    collect_register_path_reads, collect_register_path_writes,
+};
+mod implicit_registers;
+use implicit_registers::*;
+mod instruction_analysis;
+use instruction_analysis::*;
+pub(crate) use instruction_analysis::{
+    infer_defined_register_operands, infer_read_register_operands, resolve_asm_templates,
+    resolve_string,
+};
+mod assembly;
+use assembly::*;
+mod behavior;
+use behavior::*;
+mod encoding;
+use encoding::*;
+mod isel_spec;
+use isel_spec::*;

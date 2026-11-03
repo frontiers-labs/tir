@@ -1,4 +1,6 @@
-fn emit_as_sem_expr_impl(
+use super::*;
+
+pub(super) fn emit_as_sem_expr_impl(
     rhs: &ast::Expr,
     name_ident: &proc_macro2::Ident,
     numeric_params: &HashMap<String, i64>,
@@ -22,7 +24,7 @@ fn emit_as_sem_expr_impl(
     })
 }
 
-fn is_store_call(expr: &ast::Expr) -> bool {
+pub(super) fn is_store_call(expr: &ast::Expr) -> bool {
     matches!(
         expr,
         ast::Expr::Call(ast::Call {
@@ -32,7 +34,7 @@ fn is_store_call(expr: &ast::Expr) -> bool {
     )
 }
 
-fn behavior_has_atomic_ops(expr: &ast::Expr) -> bool {
+pub(super) fn behavior_has_atomic_ops(expr: &ast::Expr) -> bool {
     let is_atomic = |e: &ast::Expr| {
         matches!(e, ast::Expr::Call(ast::Call { callee, .. }) if matches!(
             callee.as_ref(),
@@ -84,12 +86,12 @@ fn behavior_has_atomic_ops(expr: &ast::Expr) -> bool {
 /// instruction's own parameters and the ISA parameters of the instantiation
 /// being generated.
 #[derive(Clone, Copy)]
-struct ConstSizeParams<'a> {
-    numeric: &'a HashMap<String, i64>,
-    isa: &'a HashMap<String, i64>,
+pub(super) struct ConstSizeParams<'a> {
+    pub(super) numeric: &'a HashMap<String, i64>,
+    pub(super) isa: &'a HashMap<String, i64>,
 }
 
-fn behavior_has_dynamic_sized_memory_access(
+pub(super) fn behavior_has_dynamic_sized_memory_access(
     expr: &ast::Expr,
     params: &ConstSizeParams<'_>,
 ) -> bool {
@@ -130,7 +132,7 @@ fn behavior_has_dynamic_sized_memory_access(
     }
 }
 
-fn emit_behavior_exec(
+pub(super) fn emit_behavior_exec(
     expr: &ast::Expr,
     trap_handler: Option<&ast::TrapHandler>,
     numeric_params: &HashMap<String, i64>,
@@ -170,10 +172,10 @@ fn emit_behavior_exec(
     })
 }
 
-struct RustBehaviorCtx<'a> {
-    ops: &'a [(String, Type)],
-    isa_param_values: &'a HashMap<String, i64>,
-    reg_kinds: &'a HashMap<String, (bool, u32)>,
+pub(super) struct RustBehaviorCtx<'a> {
+    pub(super) ops: &'a [(String, Type)],
+    pub(super) isa_param_values: &'a HashMap<String, i64>,
+    pub(super) reg_kinds: &'a HashMap<String, (bool, u32)>,
 }
 
 fn emit_behavior_effect(
@@ -273,7 +275,7 @@ fn emit_binding_value_offset(
     Some(lowered_value_offset(&values, root))
 }
 
-fn lowered_value_offset(
+pub(super) fn lowered_value_offset(
     dag: &tir_symbolic::sem::SemGraph,
     root: tir_adt::NodeId,
 ) -> proc_macro2::Literal {
@@ -284,7 +286,7 @@ fn lowered_value_offset(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn emit_sym_inits(
+pub(super) fn emit_sym_inits(
     variable_symbols: &HashMap<String, u32>,
     register_symbols: &HashMap<(String, u32), u32>,
     regnum_symbols: &HashMap<String, u32>,
@@ -317,11 +319,14 @@ fn emit_sym_inits(
                             32 => (8, 23),
                             _ => (11, 52),
                         };
-                        entries.push((sym_id, quote! {
-                            (#sym_lit, tir::backend::exec::SymSource::FloatRegisterAttr(
-                                #name_lit, #exponent, #mantissa
-                            ))
-                        }));
+                        entries.push((
+                            sym_id,
+                            quote! {
+                                (#sym_lit, tir::backend::exec::SymSource::FloatRegisterAttr(
+                                    #name_lit, #exponent, #mantissa
+                                ))
+                            },
+                        ));
                         continue;
                     }
                     let variant = if width > 64 {
@@ -329,13 +334,19 @@ fn emit_sym_inits(
                     } else {
                         format_ident!("RegisterAttr")
                     };
-                    entries.push((sym_id, quote! {
-                        (#sym_lit, tir::backend::exec::SymSource::#variant(#name_lit))
-                    }));
+                    entries.push((
+                        sym_id,
+                        quote! {
+                            (#sym_lit, tir::backend::exec::SymSource::#variant(#name_lit))
+                        },
+                    ));
                 }
-                Type::Integer => entries.push((sym_id, quote! {
-                    (#sym_lit, tir::backend::exec::SymSource::IntAttr(#name_lit, 64))
-                })),
+                Type::Integer => entries.push((
+                    sym_id,
+                    quote! {
+                        (#sym_lit, tir::backend::exec::SymSource::IntAttr(#name_lit, 64))
+                    },
+                )),
                 Type::Bits(width) => {
                     let width_lit = proc_macro2::Literal::u32_unsuffixed(*width as u32);
                     entries.push((sym_id, quote! {
@@ -349,18 +360,24 @@ fn emit_sym_inits(
             // selected feature set, falling back to the widest TMDL value for
             // contexts that don't configure ISA params.
             let value_lit = proc_macro2::Literal::i64_unsuffixed(value);
-            entries.push((sym_id, quote! {
-                (#sym_lit, tir::backend::exec::SymSource::IsaParam(#name_lit, #value_lit))
-            }));
+            entries.push((
+                sym_id,
+                quote! {
+                    (#sym_lit, tir::backend::exec::SymSource::IsaParam(#name_lit, #value_lit))
+                },
+            ));
         }
     }
     for ((class, number), &sym_id) in register_symbols {
         let sym_lit = proc_macro2::Literal::usize_unsuffixed(sym_id as usize);
         let class_lit = proc_macro2::Literal::string(class);
         let number_lit = proc_macro2::Literal::u16_unsuffixed(*number as u16);
-        entries.push((sym_id, quote! {
-            (#sym_lit, tir::backend::exec::SymSource::FixedRegister(#class_lit, #number_lit))
-        }));
+        entries.push((
+            sym_id,
+            quote! {
+                (#sym_lit, tir::backend::exec::SymSource::FixedRegister(#class_lit, #number_lit))
+            },
+        ));
     }
 
     // `regnum(op)` binds a symbol to the operand's encoding index. The index is
@@ -369,14 +386,20 @@ fn emit_sym_inits(
     for (name, &sym_id) in regnum_symbols {
         let sym_lit = proc_macro2::Literal::usize_unsuffixed(sym_id as usize);
         let name_lit = proc_macro2::Literal::string(name);
-        entries.push((sym_id, quote! {
-            (#sym_lit, tir::backend::exec::SymSource::RegAttrIndex(#name_lit))
-        }));
+        entries.push((
+            sym_id,
+            quote! {
+                (#sym_lit, tir::backend::exec::SymSource::RegAttrIndex(#name_lit))
+            },
+        ));
     }
 
     // Symbol IDs follow expression traversal, independent of hash order.
     entries.sort_unstable_by_key(|(id, _)| *id);
-    (max_sym_id, entries.into_iter().map(|(_, entry)| entry).collect())
+    (
+        max_sym_id,
+        entries.into_iter().map(|(_, entry)| entry).collect(),
+    )
 }
 
 fn emit_graph_destination(
@@ -417,7 +440,7 @@ fn emit_graph_destination(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn emit_cond_branch_rule(
+pub(super) fn emit_cond_branch_rule(
     rule_name: &str,
     dialect: &str,
     op_name: &str,
@@ -537,7 +560,7 @@ fn emit_cond_branch_rule(
     )
 }
 
-fn branch_pattern_with_zero(
+pub(super) fn branch_pattern_with_zero(
     pattern: &tir_symbolic::sem::SemGraph,
     root: tir_adt::NodeId,
     reg_symbol: u32,
@@ -600,7 +623,7 @@ fn clone_pattern_with_zero(
     new_node
 }
 
-fn intern_dag(
+pub(super) fn intern_dag(
     dag: &tir_symbolic::sem::SemGraph,
     root: tir_adt::NodeId,
     widths: &[Option<u32>],
@@ -703,7 +726,7 @@ fn payload_desc(
     }
 }
 
-fn emit_expr_kind_ts(kind: &tir_symbolic::lang::SymKind) -> proc_macro2::TokenStream {
+pub(super) fn emit_expr_kind_ts(kind: &tir_symbolic::lang::SymKind) -> proc_macro2::TokenStream {
     let variant = tir_symbolic::lang::scalar_op(*kind).map_or_else(
         || format_ident!("{kind:?}"),
         |op| format_ident!("{}", op.rust),

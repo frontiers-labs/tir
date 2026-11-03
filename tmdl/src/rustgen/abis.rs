@@ -1,3 +1,5 @@
+use super::*;
+
 fn abi_kind(kind: ast::AbiValueKind) -> proc_macro2::TokenStream {
     match kind {
         ast::AbiValueKind::Int => quote! { tir::backend::abi::ValueKind::Int },
@@ -11,10 +13,7 @@ fn abi_register(
     classes: &HashMap<String, &ast::RegisterClass>,
 ) -> Result<(proc_macro2::TokenStream, String, u16), TMDLError> {
     let class = classes.get(&register.class).ok_or_else(|| {
-        TMDLError::Codegen(format!(
-            "unknown ABI register class '{}'",
-            register.class
-        ))
+        TMDLError::Codegen(format!("unknown ABI register class '{}'", register.class))
     })?;
     let index = class
         .resolve_registers()
@@ -27,7 +26,11 @@ fn abi_register(
             ))
         })?;
     let class_id = reg_class_id(&register.class);
-    Ok((quote! { (#class_id, #index) }, class.register_file(classes).to_string(), index))
+    Ok((
+        quote! { (#class_id, #index) },
+        class.register_file(classes).to_string(),
+        index,
+    ))
 }
 
 fn abi_registers(
@@ -94,7 +97,12 @@ fn abi_expr_value(
     }
     crate::utils::eval_bits_width(expr, &params)
         .map(u32::from)
-        .ok_or_else(|| TMDLError::Codegen(format!("ABI '{}' stack expression is not constant", abi.name)))
+        .ok_or_else(|| {
+            TMDLError::Codegen(format!(
+                "ABI '{}' stack expression is not constant",
+                abi.name
+            ))
+        })
 }
 
 fn caller_saved_registers(
@@ -135,17 +143,32 @@ fn abi_stack_layout_ts(
     item_cache: &HashMap<&str, &ast::Item>,
 ) -> Result<proc_macro2::TokenStream, TMDLError> {
     let stack = abi.stack.as_ref().ok_or_else(|| {
-        TMDLError::Codegen(format!("ABI '{}' does not declare a stack layout", abi.name))
+        TMDLError::Codegen(format!(
+            "ABI '{}' does not declare a stack layout",
+            abi.name
+        ))
     })?;
-    let align = abi_expr_value(stack.align.as_ref().ok_or_else(|| {
-        TMDLError::Codegen(format!("ABI '{}' stack has no alignment", abi.name))
-    })?, abi, item_cache)?;
-    let slot_size = abi_expr_value(stack.slot_size.as_ref().ok_or_else(|| {
-        TMDLError::Codegen(format!("ABI '{}' stack has no slot size", abi.name))
-    })?, abi, item_cache)?;
-    let red_zone = abi_expr_value(stack.red_zone.as_ref().ok_or_else(|| {
-        TMDLError::Codegen(format!("ABI '{}' stack has no red zone", abi.name))
-    })?, abi, item_cache)?;
+    let align = abi_expr_value(
+        stack.align.as_ref().ok_or_else(|| {
+            TMDLError::Codegen(format!("ABI '{}' stack has no alignment", abi.name))
+        })?,
+        abi,
+        item_cache,
+    )?;
+    let slot_size = abi_expr_value(
+        stack.slot_size.as_ref().ok_or_else(|| {
+            TMDLError::Codegen(format!("ABI '{}' stack has no slot size", abi.name))
+        })?,
+        abi,
+        item_cache,
+    )?;
+    let red_zone = abi_expr_value(
+        stack.red_zone.as_ref().ok_or_else(|| {
+            TMDLError::Codegen(format!("ABI '{}' stack has no red zone", abi.name))
+        })?,
+        abi,
+        item_cache,
+    )?;
     let grows_down = match stack.grows {
         Some(ast::AbiStackGrowth::Down) => true,
         Some(ast::AbiStackGrowth::Up) => false,
@@ -171,7 +194,7 @@ fn abi_stack_layout_ts(
     })
 }
 
-fn emit_abi_info(
+pub(super) fn emit_abi_info(
     files: &[ast::File],
     item_cache: &HashMap<&str, &ast::Item>,
 ) -> Result<proc_macro2::TokenStream, TMDLError> {
@@ -186,16 +209,16 @@ fn emit_abi_info(
         let name = abi.alias.as_deref().unwrap_or(&abi.name);
         let stack_layout = abi_stack_layout_ts(abi, item_cache)?;
 
-        let role = |name: &str| -> Result<Option<(proc_macro2::TokenStream, String, u16)>, TMDLError> {
-            abi.roles
-                .iter()
-                .find(|role| role.name == name)
-                .map(|role| abi_register(&role.register, &classes))
-                .transpose()
-        };
-        let sp = role("sp")?.ok_or_else(|| {
-            TMDLError::Codegen(format!("ABI '{}' does not declare sp", abi.name))
-        })?;
+        let role =
+            |name: &str| -> Result<Option<(proc_macro2::TokenStream, String, u16)>, TMDLError> {
+                abi.roles
+                    .iter()
+                    .find(|role| role.name == name)
+                    .map(|role| abi_register(&role.register, &classes))
+                    .transpose()
+            };
+        let sp = role("sp")?
+            .ok_or_else(|| TMDLError::Codegen(format!("ABI '{}' does not declare sp", abi.name)))?;
         let ra = role("ra")?;
         let fp = role("fp")?;
 
@@ -226,15 +249,21 @@ fn emit_abi_info(
         };
         let args = pass_entries(&abi.args)?;
         let rets = pass_entries(&abi.rets)?;
-        let callee_saved = abi_registers(
-            abi.callee_saved.as_deref().unwrap_or_default(),
-            &classes,
-        )?;
+        let callee_saved =
+            abi_registers(abi.callee_saved.as_deref().unwrap_or_default(), &classes)?;
         let reserved = abi_registers(abi.reserved.as_deref().unwrap_or_default(), &classes)?;
 
         let mut excluded = HashSet::new();
-        excluded.extend(callee_saved.iter().map(|(_, file, index)| (file.clone(), *index)));
-        excluded.extend(reserved.iter().map(|(_, file, index)| (file.clone(), *index)));
+        excluded.extend(
+            callee_saved
+                .iter()
+                .map(|(_, file, index)| (file.clone(), *index)),
+        );
+        excluded.extend(
+            reserved
+                .iter()
+                .map(|(_, file, index)| (file.clone(), *index)),
+        );
         excluded.insert((sp.1.clone(), sp.2));
         if let Some((_, file, index)) = &ra {
             excluded.insert((file.clone(), *index));

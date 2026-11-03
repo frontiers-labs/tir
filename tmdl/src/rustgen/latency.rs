@@ -1,4 +1,6 @@
-fn emit_latency_cases(
+use super::*;
+
+pub(super) fn emit_latency_cases(
     machines: &[Vec<ResolvedLatencyCase>],
     numeric_params: &HashMap<String, i64>,
     register_indices: &HashMap<(String, String), u32>,
