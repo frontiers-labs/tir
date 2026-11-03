@@ -188,6 +188,13 @@
    "subject": "feat(egglog): load compiled rule programs from static storage (#769)",
    "time": "2026-11-02T20:09:32.000Z",
    "env_key": "aarch64: rustc 1.101.0-nightly (c36f14571 2026-10-01); ldd (Ubuntu GLIBC 2.39-0ubuntu8.9) 2.39|x86_64: rustc 1.101.0-nightly (c36f14571 2026-10-01); ldd (Ubuntu GLIBC 2.39-0ubuntu8.9) 2.39"
+  },
+  {
+   "file": "runs/2026-11-03T19-44-57-000Z-df73e913c7f2.json",
+   "commit": "df73e913c7f24ac94b57c159fa2827ec356e85b3",
+   "subject": "chore(lint): ban repository source includes (#778)",
+   "time": "2026-11-03T19:44:57.000Z",
+   "env_key": "aarch64: rustc 1.101.0-nightly (c36f14571 2026-10-01); ldd (Ubuntu GLIBC 2.39-0ubuntu8.9) 2.39|x86_64: rustc 1.101.0-nightly (c36f14571 2026-10-01); ldd (Ubuntu GLIBC 2.39-0ubuntu8.9) 2.39"
   }
  ]
 }
