@@ -10,7 +10,6 @@ pub mod exec;
 pub mod isel;
 mod lexer;
 pub mod lower;
-mod operations;
 mod parser;
 pub mod pipeline;
 pub mod prealloc;
@@ -21,9 +20,9 @@ pub mod sched;
 pub mod shuffle_order;
 pub mod target;
 mod target_boilerplate;
-mod verify;
+pub(crate) mod verify;
 
-pub use operations::*;
+pub use crate::son::*;
 pub use target::{
     ModelCheckTarget, TARGETS, TargetInfo, TargetMachine, select_target, select_target_with_abi,
     supported_targets,
@@ -495,77 +494,6 @@ pub trait MachineInstruction {
     }
 }
 
-/// Print a machine instruction as IR: its name and one entry per register slot
-/// and attribute, in port order.
-///
-/// A slot holding a value prints as `%3:GPR` — its number and the class its
-/// type names — becoming `%3:rbx` once the enclosing symbol's
-/// [`RegAssignment`] has placed it; a slot naming a physical register prints
-/// that register's assembly name. One shared printer: what a slot is called and
-/// what class it admits are fields of the opcode's [`InstrInfo`], not generated
-/// code.
-pub fn print_machine_op<T: tir::Operation>(
-    fmt: &mut tir::IRFormatter,
-    op: &T,
-) -> Result<(), std::fmt::Error> {
-    let handle = op.handle().clone();
-    let context = handle.context.clone();
-    // The registers an instruction defines are its slots; only the chain it
-    // leaves behind is bound ahead of the mnemonic.
-    let published = handle.state_results();
-    tir::region_format::print_value_list(fmt, &published)?;
-    if !published.is_empty() {
-        fmt.write(" = ")?;
-    }
-    fmt.write(format!("{}.{}", T::dialect(), T::name()))?;
-    let slots = registers::reg_slots(&handle);
-    let mut first = true;
-    let open = |fmt: &mut tir::IRFormatter, first: &mut bool| {
-        let text = if *first { " {" } else { ", " };
-        *first = false;
-        fmt.write(text)
-    };
-    for slot in &slots {
-        open(fmt, &mut first)?;
-        fmt.write(format!("{} = ", slot.port.name))?;
-        match slot.slot {
-            RegSlot::Phys((class, index)) => print_register(fmt, class, index)?,
-            RegSlot::Value(value) => {
-                fmt.write(format!("%{}", value.number()))?;
-                // The register a value ended up in, or — before allocation —
-                // the class its type says it lives in.
-                match registers::assigned_register(&context, &handle, value) {
-                    Some((class, index)) => {
-                        fmt.write(":")?;
-                        print_register(fmt, class, index)?;
-                    }
-                    None => {
-                        if let Some(class) = registers::value_class(&context, value) {
-                            fmt.write(format!(":{}", class.name()))?;
-                        }
-                    }
-                }
-            }
-        }
-    }
-    for attr in op.attributes() {
-        let name = context.resolve(attr.name);
-        if name == "operand_segment_sizes" || slots.iter().any(|slot| slot.port.name == name) {
-            continue;
-        }
-        open(fmt, &mut first)?;
-        fmt.write(format!("{name} = "))?;
-        attr.value.print(fmt, &context)?;
-    }
-    if !first {
-        fmt.write("}")?;
-    }
-    // Memory order is an operand like any other: an instruction that touches
-    // memory names the chain it observed after its registers.
-    tir::region_format::print_state_operands(fmt, &handle)?;
-    fmt.write("\n")
-}
-
 /// Hand `new` the state ports `old` carried, so a lowering that replaces one
 /// instruction with another keeps it on the chain.
 ///
@@ -607,7 +535,7 @@ pub fn names_memory_state(op: &tir::OpHandle) -> bool {
         || op.is::<tir::state::SplitOp>()
 }
 
-fn print_register(
+pub(crate) fn print_register(
     fmt: &mut tir::IRFormatter,
     class: tir::backend::regalloc::RegClassId,
     index: u16,
@@ -616,26 +544,6 @@ fn print_register(
         Some(name) => fmt.write(name),
         None => fmt.write(format!("{}[{}]", class.name(), index)),
     }
-}
-
-/// Print a virtual branch/terminator op for debugging: its mnemonic, operands as
-/// `%N`, then each block-reference attribute as `^bbN`. Shared by the targets'
-/// virtual branch ops so successor formatting is not duplicated per target.
-pub fn print_branch<T: tir::Operation>(
-    fmt: &mut tir::IRFormatter,
-    op: &T,
-) -> Result<(), std::fmt::Error> {
-    fmt.write(format!("{}.{}", T::dialect(), T::name()))?;
-    for (i, value) in op.operands().iter().enumerate() {
-        fmt.write(if i == 0 { " " } else { ", " })?;
-        fmt.write(format!("%{}", value.number()))?;
-    }
-    for attr in op.attributes() {
-        if let AttributeValue::Block(block) = &attr.value {
-            fmt.write(format!(" ^bb{}", fmt.region_block_number(*block)))?;
-        }
-    }
-    fmt.write("\n")
 }
 
 /// The successor blocks a branch-shaped op transfers control to: every block
@@ -726,7 +634,6 @@ pub fn asm_item(op: &tir::OpHandle) -> AsmItem {
     if op.is::<crate::builtin::ModuleEndOp>()
         || op.is::<SectionEndOp>()
         || op.is::<SymbolEndOp>()
-        || op.is::<BlockEndOp>()
         || names_memory_state(op)
         || op.is::<crate::func::DeclareOp>()
         || op.is::<crate::builtin::TypeDefOp>()
@@ -764,14 +671,11 @@ pub fn symbol_body_blocks(context: &tir::Context, op: &tir::OpHandle) -> Vec<tir
         .collect()
 }
 
-pub mod ops {
-    pub use crate::backend::operations::*;
-}
-
 dialect! {
-    AsmDialect {
-        name: "asm",
+    SonDialect {
+        name: "son",
         operations: [
+            MergeOp, EdgeOp, BranchOp,
             SectionOp,
             SectionEndOp,
             SymbolOp,
@@ -779,25 +683,9 @@ dialect! {
             LiteralOp,
             DataRelocOp,
             SymbolAddressOp,
-            BlockEndOp,
-            VirtualReturnOp,
-            VirtualBranchOp,
-            ParallelCopyOp,
             VirtualCallOp,
             VirtualIndirectCallOp,
         ],
+        types: [tir::ty::Ctor(&CONTROL)],
     }
-}
-
-pub fn emit_uncond_branch(
-    context: &tir::Context,
-    dest: tir::BlockId,
-    args: &[tir::ValueId],
-) -> Box<dyn tir::Operation> {
-    Box::new(
-        VirtualBranchOpBuilder::new(context)
-            .dest_args(args.to_vec())
-            .dest(dest)
-            .build(),
-    )
 }

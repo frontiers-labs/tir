@@ -13,7 +13,7 @@ p:
 	add rcx, 42
 	add rcx, 300
 
-# CHECK: asm.symbol {name = "p"}
+# CHECK: son.symbol {name = "p"}
 # CHECK-NEXT: x86_64.add32 {dst = eax, src = ebx}
 # CHECK-NEXT: x86_64.add32 {dst = eax, src = r8d}
 # CHECK-NEXT: x86_64.add_imm {dst = rcx, imm = 42}

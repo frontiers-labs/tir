@@ -93,11 +93,18 @@ fn clone_nodes_region_into(context: &Context, region: RegionId, mapping: &mut Ma
             copy
         })
         .collect();
-    let ops = crate::region::topological_order(context, region)
-        .unwrap_or_else(|_| source.op_ids())
-        .into_iter()
-        .map(|op| clone_op_into(context, op, mapping))
+    let source_ops =
+        crate::region::topological_order(context, region).unwrap_or_else(|_| source.op_ids());
+    let ops: Vec<_> = source_ops
+        .iter()
+        .map(|&op| clone_op_into(context, op, mapping))
         .collect();
+    for (&source, &copy) in source_ops.iter().zip(&ops) {
+        let operands = context.get_op(source).operands();
+        for (slot, value) in operands.into_iter().enumerate() {
+            context.set_op_operand(copy, slot, remap_value(value, mapping));
+        }
+    }
     let results = source
         .results()
         .into_iter()

@@ -22,7 +22,7 @@ bmi2_ops:
 	shrx rax, rbx, rcx
 	shrx eax, ebx, ecx
 
-# CHECK:      asm.symbol {name = "bmi2_ops"}
+# CHECK:      son.symbol {name = "bmi2_ops"}
 # CHECK-NEXT: x86_64.bzhi {dst = rax, src = rbx, ctl = rcx}
 # CHECK-NEXT: x86_64.bzhi32 {dst = eax, src = ebx, ctl = ecx}
 # CHECK-NEXT: x86_64.mulx {hi = rax, lo = rbx, src = rcx}

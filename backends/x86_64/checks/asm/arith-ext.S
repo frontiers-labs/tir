@@ -21,7 +21,7 @@ arith_ext:
 	movabs rax, 81985529216486895
 	movabs r9, 2
 
-# CHECK:      asm.symbol {name = "arith_ext"}
+# CHECK:      son.symbol {name = "arith_ext"}
 # CHECK-NEXT: x86_64.neg {dst = rax}
 # CHECK-NEXT: x86_64.not {dst = rcx}
 # CHECK-NEXT: x86_64.sub_imm {dst = rax, imm = 42}

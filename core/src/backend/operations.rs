@@ -3,7 +3,7 @@ use tir::{
     Operation, ResourceAccess, ResourceEffect, ResourceEffects, Terminator, builtin::StateResource,
 };
 
-use super::{ControlFlow, InstrInfo, MachineInstruction};
+use crate::backend::{ControlFlow, InstrInfo, MachineInstruction};
 
 const fn virtual_info(name: &'static str, control_flow: ControlFlow) -> InstrInfo {
     InstrInfo {
@@ -28,7 +28,7 @@ const fn virtual_call_info(name: &'static str) -> InstrInfo {
 operation! {
     SectionOp {
         name: "section",
-        dialect: "asm",
+        dialect: "son",
         scheme: "() -> ()",
         regions: R {
             body: Region {}
@@ -39,7 +39,7 @@ operation! {
 operation! {
     SectionEndOp {
         name: "section_end",
-        dialect: "asm",
+        dialect: "son",
         scheme: "() -> ()",
         interfaces: [Terminator],
     }
@@ -50,7 +50,7 @@ impl Terminator for SectionEndOp {}
 operation! {
     SymbolOp {
         name: "symbol",
-        dialect: "asm",
+        dialect: "son",
         scheme: "() -> ()",
         regions: R {
             body: Region {}
@@ -61,7 +61,7 @@ operation! {
 operation! {
     SymbolEndOp {
         name: "symbol_end",
-        dialect: "asm",
+        dialect: "son",
         scheme: "() -> ()",
         interfaces: [Terminator],
     }
@@ -74,7 +74,7 @@ impl Terminator for SymbolEndOp {}
 operation! {
     LiteralOp {
         name: "literal",
-        dialect: "asm",
+        dialect: "son",
         scheme: "() -> ()",
         attributes: A {
             kind: "Str",
@@ -89,7 +89,7 @@ operation! {
 operation! {
     SymbolAddressOp {
         name: "symbol_address",
-        dialect: "asm",
+        dialect: "son",
         scheme: "() -> ptr.p<_>",
         attributes: A {
             sym_name: "Str",
@@ -114,7 +114,7 @@ pub fn symbol_address_of(context: &tir::Context, name: &str) -> SymbolAddressOp 
 operation! {
     DataRelocOp {
         name: "data_reloc",
-        dialect: "asm",
+        dialect: "son",
         scheme: "() -> ()",
         attributes: A {
             symbol: "Str",
@@ -125,132 +125,9 @@ operation! {
 }
 
 operation! {
-    BlockEndOp {
-        name: "block_end",
-        dialect: "asm",
-        scheme: "() -> ()",
-        interfaces: [Terminator],
-    }
-}
-
-impl Terminator for BlockEndOp {}
-
-operation! {
-    VirtualReturnOp {
-        name: "vret",
-        dialect: "asm",
-        scheme: "(_*) -> ()",
-        format: "custom",
-        operands: O { values },
-        interfaces: [Terminator, tir::backend::MachineInstruction],
-    }
-}
-
-impl VirtualReturnOp {
-    fn custom_print(&self, fmt: &mut tir::IRFormatter) -> Result<(), std::fmt::Error> {
-        super::print_branch(fmt, self)
-    }
-
-    fn custom_parse(
-        parser: &mut tir::parse::text::Parser,
-        _context: &tir::Context,
-    ) -> Result<Box<dyn Operation>, (tir::parse::Span, tir::Error)> {
-        Err((tir::parse::Span(parser.pos()), tir::Error::ExpectedOpName))
-    }
-}
-
-impl VirtualReturnOpBuilder {
-    pub fn value(self, value: tir::ValueId) -> Self {
-        self.values(vec![value])
-    }
-}
-
-impl Terminator for VirtualReturnOp {}
-
-impl MachineInstruction for VirtualReturnOp {
-    fn info(&self) -> &'static InstrInfo {
-        static INFO: InstrInfo = virtual_info("vret", ControlFlow::Unconditional);
-        &INFO
-    }
-
-    fn instance(&self) -> &tir::OpHandle {
-        &self.0
-    }
-}
-
-operation! {
-    VirtualBranchOp {
-        name: "vbr",
-        dialect: "asm",
-        scheme: "(_*) -> ()",
-        format: "custom",
-        operands: O { dest_args },
-        attributes: A {
-            dest: "Block",
-        },
-        interfaces: [Terminator, tir::backend::MachineInstruction],
-    }
-}
-
-impl MachineInstruction for VirtualBranchOp {
-    fn info(&self) -> &'static InstrInfo {
-        static INFO: InstrInfo = virtual_info("vbr", ControlFlow::Unconditional);
-        &INFO
-    }
-
-    fn instance(&self) -> &tir::OpHandle {
-        &self.0
-    }
-}
-
-impl Terminator for VirtualBranchOp {
-    fn successors(&self) -> Vec<tir::BlockId> {
-        super::branch_successors(self)
-    }
-}
-
-impl VirtualBranchOp {
-    fn custom_print(&self, fmt: &mut tir::IRFormatter) -> Result<(), std::fmt::Error> {
-        super::print_branch(fmt, self)
-    }
-
-    fn custom_parse(
-        parser: &mut tir::parse::text::Parser,
-        _context: &tir::Context,
-    ) -> Result<Box<dyn Operation>, (tir::parse::Span, tir::Error)> {
-        Err((tir::parse::Span(parser.pos()), tir::Error::ExpectedOpName))
-    }
-}
-
-// A parallel copy: every result takes its source at once, as one point. The
-// register allocator splits the live ranges at a constrained instruction with
-// one (Hack's thesis, paper § 4) and sequences it on the assigned registers.
-operation! {
-    ParallelCopyOp {
-        name: "pcopy",
-        dialect: "asm",
-        scheme: "(_*) -> _*",
-        operands: O { sources },
-        results: R { copies },
-        interfaces: [tir::backend::MachineInstruction],
-    }
-}
-
-impl MachineInstruction for ParallelCopyOp {
-    fn info(&self) -> &'static InstrInfo {
-        static INFO: InstrInfo = virtual_info("pcopy", ControlFlow::None);
-        &INFO
-    }
-
-    fn instance(&self) -> &tir::OpHandle {
-        &self.0
-    }
-}
-
-operation! {
     VirtualCallOp {
         name: "vcall",
-        dialect: "asm",
+        dialect: "son",
         scheme: "(_*) -> _*",
         operands: O { args },
         results: R { results },
@@ -277,7 +154,7 @@ impl MachineInstruction for VirtualCallOp {
 operation! {
     VirtualIndirectCallOp {
         name: "vcall_indirect",
-        dialect: "asm",
+        dialect: "son",
         scheme: "(backend.reg<_, _>, _*) -> _*",
         operands: O { callee, args },
         results: R { results },
@@ -333,5 +210,95 @@ impl ResourceEffects for VirtualCallOp {
 impl ResourceEffects for VirtualIndirectCallOp {
     fn resource_effects(&self) -> Vec<ResourceEffect> {
         call_effects(&self.0)
+    }
+}
+
+pub use crate::backend::SonDialect;
+use crate::ty::{Ctor, Kind, TypeCtor};
+use crate::{Context, Error, Verifiable};
+use tir_symbolic::term::{no_carrier, valid};
+
+/// The constructor of an explicit control-flow token.
+pub static CONTROL: Ctor = Ctor::new(TypeCtor {
+    dialect: "son",
+    name: "control",
+    params: &[],
+    kind: Kind::Data,
+    validate: valid,
+    carrier: no_carrier,
+});
+
+operation! {
+    MergeOp {
+        name: "merge",
+        dialect: "son",
+        scheme: "(son.control*) -> son.control",
+        operands: O { incoming },
+        results: R { control },
+        regions: R { arguments: Region { kind: Nodes, } },
+        verifier: "true",
+    }
+}
+
+impl Verifiable for MergeOp {
+    fn verify_impl(&self, context: &Context) -> Result<(), Error> {
+        let region = self.arguments();
+        if self.operands().is_empty() || !region.op_ids().is_empty() || !region.results().is_empty()
+        {
+            return Err(Error::ExpectedToken(
+                "incoming edges and an empty arguments region",
+            ));
+        }
+        for incoming in self.operands() {
+            let edge = context
+                .get_value(incoming)
+                .defining_op()
+                .and_then(|id| context.get_op(id).as_op::<EdgeOp>())
+                .ok_or(Error::ExpectedOperation("son", "edge"))?;
+            let args = edge.operands();
+            if args.len() != region.ports().len() + 1
+                || args[1..]
+                    .iter()
+                    .zip(region.ports())
+                    .any(|(&arg, port)| context.get_value(arg).ty() != port.ty())
+            {
+                return Err(Error::ExpectedType);
+            }
+        }
+        Ok(())
+    }
+}
+
+operation! {
+    EdgeOp {
+        name: "edge",
+        dialect: "son",
+        scheme: "(son.control, _*) -> son.control",
+        operands: O { control, arguments },
+        results: R { edge },
+        state: "in",
+    }
+}
+
+operation! {
+    BranchOp {
+        name: "branch",
+        dialect: "son",
+        scheme: "(son.control, int<1>) -> son.control*",
+        operands: O { control, predicate },
+        results: R { arms },
+        verifier: "true",
+    }
+}
+
+impl Verifiable for BranchOp {
+    fn verify_impl(&self, context: &Context) -> Result<(), Error> {
+        if self.0.results().len() != 2
+            || context.get_value(self.operands()[1]).ty()
+                != tir::builtin::IntegerType::new(context, 1)
+        {
+            return Err(Error::ExpectedType);
+        }
+        Ok(())
     }
 }

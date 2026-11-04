@@ -6,7 +6,7 @@ ah_flags:
 	sahf
 	lahf
 
-# CHECK:      asm.symbol {name = "ah_flags"}
+# CHECK:      son.symbol {name = "ah_flags"}
 # CHECK-NEXT: x86_64.sahf
 # CHECK-NEXT: x86_64.lahf
 

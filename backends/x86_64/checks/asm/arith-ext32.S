@@ -15,7 +15,7 @@ arith_ext32:
 	rol eax, 3
 	ror ebx, 2
 
-# CHECK:      asm.symbol {name = "arith_ext32"}
+# CHECK:      son.symbol {name = "arith_ext32"}
 # CHECK-NEXT: x86_64.neg32 {dst = eax}
 # CHECK-NEXT: x86_64.not32 {dst = ecx}
 # CHECK-NEXT: x86_64.sub_imm32 {dst = eax, imm = 42}

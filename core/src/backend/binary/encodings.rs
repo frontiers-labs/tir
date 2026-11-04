@@ -371,6 +371,12 @@ pub fn encode_with(
     spec: &EncodeSpec,
     assignment: &RegAssignment,
 ) -> Option<EncodedInst> {
+    if !op.operands().is_empty()
+        || !op.results().is_empty()
+        || op.context.parent_nodes_region(op.id).is_some()
+    {
+        return None;
+    }
     let mut operands = Operands::new(op, assignment);
     let shape = select(&mut operands, spec)?;
     let mut word = shape.const_word;

@@ -87,9 +87,12 @@ pub fn construct_operation(item: TokenStream) -> TokenStream {
     let has_results = !value_results.is_empty();
     // A `*`-prefixed result makes the op n-ary: it produces one value per type given
     // to the builder. Used by structured control flow, which carries n values.
-    let result_variadic = value_results.iter().any(|r| r.variadic);
+    let result_variadic = value_results.len() > 1
+        || value_results
+            .iter()
+            .any(|r| r.variadic || r.ty.starts_with('?'));
     assert!(
-        !result_variadic || value_results.len() == 1,
+        !value_results.iter().any(|r| r.variadic) || value_results.len() == 1,
         "a variadic result must be the only declared result"
     );
     let state_result_pieces = make_state_result_pieces(state_results.first());
@@ -1879,18 +1882,23 @@ fn make_parser(
         // A variadic result group is written as the one result the generic form
         // prints; an op with several is spelled by its own format.
         let bind = if result_variadic {
-            quote! { builder = builder.result_types(vec![result_ty]); }
+            quote! {
+                let mut types = vec![result_ty];
+                while parser.parse_token(",") {
+                    types.push(parser.parse_type(context)?.ok_or((parser.span(), tir::Error::ExpectedType))?);
+                }
+                builder = builder.result_types(types);
+            }
         } else {
             quote! { builder = builder.result_type(result_ty); }
         };
         quote! {
-            if !parser.parse_token(":") {
+            if parser.parse_token(":") {
+                let result_ty = parser.parse_type(context)?.ok_or_else(|| (parser.span(), tir::Error::ExpectedType))?;
+                #bind
+            } else if !#result_variadic {
                 return Err((parser.span(), tir::Error::ExpectedToken(":")));
             }
-            let result_ty = parser.parse_type(context)
-                ?
-                .ok_or_else(|| (parser.span(), tir::Error::ExpectedType))?;
-            #bind
         }
     };
 
@@ -1974,6 +1982,10 @@ fn make_parser(
                     builder = builder.attr(attr_name, tir::attributes::AttributeValue::FpSemantics(
                         context.intern_fp_semantics(tir::fp::Semantics::default_for_operation(#name)),
                     ));
+                } else if !ty.starts_with('?')
+                    && !parsed_attrs.iter().any(|attr| attr.name == context.intern(attr_name))
+                {
+                    return Err((parser.span(), tir::Error::ExpectedToken(attr_name)));
                 }
             }
             for a in parsed_attrs { builder = builder.attr_sym(a.name, a.value); }

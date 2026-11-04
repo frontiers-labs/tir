@@ -80,7 +80,7 @@ fn verify_state_operands(context: &Context, op: &OpHandle) -> Result<(), Error> 
     Ok(())
 }
 
-fn verify_reg_slots(context: &Context, op: &OpHandle) -> Result<(), Error> {
+pub(crate) fn verify_reg_slots(context: &Context, op: &OpHandle) -> Result<(), Error> {
     // An operand or result the rest of the IR has retired names nothing: the op
     // that produced it went, and this one was not rewritten with it.
     for value in op.operands().iter().chain(op.results().iter()) {
@@ -97,7 +97,9 @@ fn verify_reg_slots(context: &Context, op: &OpHandle) -> Result<(), Error> {
     // positions are read off in port order, so a port with neither would be
     // read as the next port's.
     for port in crate::backend::reg_ports(op) {
-        if op.attr(port.name).is_some() || slots.iter().any(|slot| slot.port.name == port.name) {
+        if (port.class.is_none() && op.attr(port.name).is_some())
+            || slots.iter().any(|slot| slot.port.name == port.name)
+        {
             continue;
         }
         return Err(Error::VerificationError(format!(
@@ -116,7 +118,13 @@ fn verify_reg_slots(context: &Context, op: &OpHandle) -> Result<(), Error> {
             _ => (read, written),
         }
     });
-    let (operands, results) = (op.value_operands().len(), op.value_results().len());
+    let count = |values: crate::operation::ValueIds| {
+        values
+            .iter()
+            .filter(|&&v| !crate::son::CONTROL.is(context, context.get_value(v).ty()))
+            .count()
+    };
+    let (operands, results) = (count(op.value_operands()), count(op.value_results()));
     if !crate::backend::reg_ports(op).is_empty()
         && (values_read != operands || values_written != results)
     {
@@ -130,6 +138,13 @@ fn verify_reg_slots(context: &Context, op: &OpHandle) -> Result<(), Error> {
         )));
     }
     for slot in &slots {
+        if let (RegSlot::Phys((class, index)), Some(expected)) = (slot.slot, slot.port.class)
+            && (context.parent_nodes_region(op.id).is_some()
+                || !same_view(class, expected)
+                || !expected.contains(index))
+        {
+            return Err(Error::ExpectedType);
+        }
         let (RegSlot::Value(value), Some(port_class)) = (slot.slot, slot.port.class) else {
             continue;
         };

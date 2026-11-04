@@ -1,5 +1,6 @@
 use crate::BlockHandle;
 use crate::RegionHandle;
+use crate::attributes::{AttributeValue::Register, RegisterAttr::Physical};
 use std::collections::HashMap;
 
 use crate::{Context, IRFormatter, Operation};
@@ -205,7 +206,7 @@ pub fn print_generic(
     // `operand_segment_sizes` is bookkeeping the operand groups already spell:
     // the generic parser recomputes it from the groups it reads back.
     let segments = context.sym("operand_segment_sizes");
-    let attributes: Vec<_> = op
+    let mut attributes: Vec<_> = op
         .attributes()
         .into_iter()
         .filter(|attribute| Some(attribute.name) != segments)
@@ -216,6 +217,7 @@ pub fn print_generic(
             )
         })
         .collect();
+    attributes.sort_by_key(|a| !matches!(a.value, Register(_)));
     if !attributes.is_empty() {
         fmt.write(" {")?;
         for (index, attribute) in attributes.iter().enumerate() {
@@ -224,18 +226,37 @@ pub fn print_generic(
             }
             fmt.write(context.resolve(attribute.name))?;
             fmt.write(" = ")?;
-            attribute.value.print(fmt, &context)?;
+            match &attribute.value {
+                Register(Physical { class, index }) => {
+                    crate::backend::print_register(fmt, *class, *index)?
+                }
+                value => value.print(fmt, &context)?,
+            }
         }
         fmt.write("}")?;
     }
     let results = op.value_results();
-    if let Some(&result) = results.first() {
-        fmt.write(" : ")?;
-        context.print_type(context.get_value(result).ty(), fmt)?;
+    for (index, result) in results.iter().enumerate() {
+        fmt.write(if index == 0 { " : " } else { ", " })?;
+        context.print_type(context.get_value(*result).ty(), fmt)?;
     }
     let regions = op.regions();
     match regions.first() {
-        Some(&region) => print_region(fmt, &context, &context.get_region(region)),
+        Some(&region) => {
+            let region = context.get_region(region);
+            if region.is_nodes() && !region.ports().is_empty() {
+                fmt.write(" args(")?;
+                for (index, port) in region.ports().iter().enumerate() {
+                    if index > 0 {
+                        fmt.write(", ")?;
+                    }
+                    fmt.write(format!("%{}: ", port.id().number()))?;
+                    context.print_type(port.ty(), fmt)?;
+                }
+                fmt.write(")")?;
+            }
+            print_region(fmt, &context, &region)
+        }
         None => fmt.write("\n"),
     }
 }

@@ -269,7 +269,10 @@ fn attrs_schema_ts(ops: &[(String, Type)]) -> proc_macro2::TokenStream {
     quote! { #(#items,)* }
 }
 
-fn instruction_ports(tables: &TargetTables, ctx: &InstrEmitCtx<'_>) -> Vec<(String, Option<String>, bool, Option<String>)> {
+fn instruction_ports(
+    tables: &TargetTables,
+    ctx: &InstrEmitCtx<'_>,
+) -> Vec<(String, Option<String>, bool, Option<String>)> {
     let mut ports: Vec<(String, Option<String>, bool, Option<String>)> = vec![];
     for (name, ty) in ctx.ops {
         if !matches!(ty, Type::Struct(_)) {
@@ -345,29 +348,22 @@ fn reg_port_entries(
 fn ports_schema_ts(
     ports: &[(String, Option<String>, bool, Option<String>)],
 ) -> proc_macro2::TokenStream {
-    let uses: Vec<_> = ports
-        .iter()
-        .filter(|(_, _, is_def, _)| !is_def)
-        .map(|(name, _, _, _)| format_ident!("{}", name))
-        .collect();
-    let defines = ports.iter().any(|(_, _, is_def, _)| *is_def);
-    let slots = vec!["backend.reg<_, _>?"; uses.len()].join(", ");
-    let results = if defines { "backend.reg<_, _>*" } else { "()" };
-    let scheme = format!("({slots}) -> {results}");
-    let operands = if uses.is_empty() {
-        quote! {}
-    } else {
-        quote! { operands: O { #(#uses,)* }, }
+    let fields = |def| {
+        let names: Vec<_> = ports
+            .iter()
+            .filter(|(_, _, d, _)| *d == def)
+            .map(|(name, _, _, _)| format_ident!("{}", name))
+            .collect();
+        let types = std::iter::repeat_n("backend.reg<_, _>?", names.len())
+            .chain(["son.control?"])
+            .collect::<Vec<_>>()
+            .join(", ");
+        (names, types)
     };
-    // Results are variadic: an instruction defining several registers (x86
-    // `div`, writing both halves of the quotient/remainder pair) has one
-    // result per def port, and one that defines none has no results.
-    let results = if defines {
-        quote! { results: R { regs }, }
-    } else {
-        quote! {}
-    };
-    quote! { scheme: #scheme, #operands #results }
+    let (uses, slots) = fields(false);
+    let (defs, results) = fields(true);
+    let scheme = format!("({slots}) -> ({results})");
+    quote! { scheme: #scheme, operands: O { #(#uses,)* control }, results: R { #(#defs,)* control }, }
 }
 fn instruction_program_ts(
     inst: &ast::Instruction,
@@ -693,7 +689,6 @@ struct InstrOutputs<'a> {
     instruction_infos: &'a mut Vec<proc_macro2::TokenStream>,
     instruction_info_idents: &'a mut Vec<proc_macro2::Ident>,
     machine_instruction_impls: &'a mut Vec<proc_macro2::TokenStream>,
-    instruction_custom_format_impls: &'a mut Vec<proc_macro2::TokenStream>,
     instruction_reg_ports: &'a mut Vec<proc_macro2::TokenStream>,
     as_sem_expr_impls: &'a mut Vec<proc_macro2::TokenStream>,
     instruction_encoder_impls: &'a mut Vec<proc_macro2::TokenStream>,
@@ -1002,7 +997,7 @@ fn emit_instruction(
     // needs real successors, and dominance becomes valid on machine IR.
     let (uncond_pc, cond_pc) = pc_writes(&inst.behavior);
     let is_terminator = uncond_pc || cond_pc;
-    let (interfaces_list, terminator_impl) = if is_terminator {
+    let (mut interfaces_list, terminator_impl) = if is_terminator {
         (
             quote! { [tir::backend::MachineInstruction, tir::ResourceEffects, tir::Terminator] },
             quote! {
@@ -1039,6 +1034,21 @@ fn emit_instruction(
     let (reads_memory, writes_memory) = behavior_memory_effects(&inst.behavior);
     let touches_memory = reads_memory || writes_memory;
     let touches_fp_environment = behavior_updates_fp_environment(&inst.behavior);
+    let mut pure = !is_terminator
+        && !touches_memory
+        && !touches_fp_environment
+        && implicit_items.is_empty()
+        && !behavior_references_pc(&inst.behavior, &tables.pc_classes)
+        && !uses_todo;
+    use ast::BuiltinFunction::{Fence, FenceI, Trap};
+    crate::utils::visit_exprs(&inst.behavior, &mut |expr| {
+        pure &= !matches!(expr, ast::Expr::BuiltinFunction(Trap | Fence | FenceI));
+    });
+    let pure_impl = pure.then(|| quote! { impl tir::Pure for #name_ident {} });
+    if pure {
+        interfaces_list =
+            quote! { [tir::Pure, tir::backend::MachineInstruction, tir::ResourceEffects] };
+    }
     let state_schema = quote! { state: "in_out", };
 
     out.instruction_defs.push(quote! {
@@ -1050,31 +1060,11 @@ fn emit_instruction(
                 #state_schema
                 attributes: A { #attrs_schema },
                 interfaces: #interfaces_list,
-                format: custom,
             }
         }
 
         #terminator_impl
-    });
-
-    // One shared printer: what a slot is called, what class it admits and
-    // whether it is a result are fields of the opcode's `InstrInfo`.
-    out.instruction_custom_format_impls.push(quote! {
-        impl #name_ident {
-            fn custom_print<'a, 'b: 'a>(
-                &'a self,
-                fmt: &'a mut tir::IRFormatter<'b>,
-            ) -> Result<(), std::fmt::Error> {
-                tir::backend::print_machine_op(fmt, self)
-            }
-
-            fn custom_parse<'src>(
-                parser: &mut tir::parse::text::Parser<'src>,
-                _context: &tir::Context,
-            ) -> Result<Box<dyn tir::Operation>, (tir::parse::Span, tir::Error)> {
-                Err((tir::parse::Span(parser.pos()), tir::Error::ExpectedOpName))
-            }
-        }
+        #pure_impl
     });
 
     let width_bytes_lit = {
@@ -1406,7 +1396,6 @@ fn emit_instructions<'a>(
     let mut instruction_infos: Vec<proc_macro2::TokenStream> = vec![];
     let mut instruction_info_idents: Vec<proc_macro2::Ident> = vec![];
     let mut machine_instruction_impls: Vec<proc_macro2::TokenStream> = vec![];
-    let mut instruction_custom_format_impls: Vec<proc_macro2::TokenStream> = vec![];
     // One `RegPort` table per instruction, referenced by its `InstrInfo`.
     let mut instruction_reg_ports: Vec<proc_macro2::TokenStream> = vec![];
     let mut as_sem_expr_impls: Vec<proc_macro2::TokenStream> = vec![];
@@ -1433,7 +1422,6 @@ fn emit_instructions<'a>(
             instruction_infos: &mut instruction_infos,
             instruction_info_idents: &mut instruction_info_idents,
             machine_instruction_impls: &mut machine_instruction_impls,
-            instruction_custom_format_impls: &mut instruction_custom_format_impls,
             instruction_reg_ports: &mut instruction_reg_ports,
             as_sem_expr_impls: &mut as_sem_expr_impls,
             instruction_encoder_impls: &mut instruction_encoder_impls,
@@ -1542,7 +1530,6 @@ fn emit_instructions<'a>(
     Ok(quote! {
         #(#instruction_defs)*
         #(#instruction_reg_ports)*
-        #(#instruction_custom_format_impls)*
         #(#machine_instruction_impls)*
         #(#as_sem_expr_impls)*
 

@@ -8,7 +8,7 @@ lzcnt_ops:
 	lzcnt rax, rbx
 	lzcnt eax, ebx
 
-# CHECK:      asm.symbol {name = "lzcnt_ops"}
+# CHECK:      son.symbol {name = "lzcnt_ops"}
 # CHECK-NEXT: x86_64.lzcnt {dst = rax, src = rbx}
 # CHECK-NEXT: x86_64.lzcnt32 {dst = eax, src = ebx}
 

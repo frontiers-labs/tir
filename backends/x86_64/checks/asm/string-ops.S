@@ -11,7 +11,7 @@ string_transfers:
 	cmpsb
 	cmpsq
 
-# CHECK:      asm.symbol {name = "string_transfers"}
+# CHECK:      son.symbol {name = "string_transfers"}
 # CHECK-NEXT: x86_64.movsb
 # CHECK-NEXT: x86_64.movsd_string
 # CHECK-NEXT: x86_64.movsq

@@ -236,7 +236,6 @@ fn arm64_branch_link_writes_the_link_register_and_pc() {
     use tir::Operation;
 
     let context = Context::with_default_dialects();
-    context.register_dialect::<tir::backend::AsmDialect>();
     context.register_dialect::<tir_arm64::Arm64Dialect>();
 
     let mut ex = Executor::new(64);
