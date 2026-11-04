@@ -281,9 +281,6 @@ fn verify_op_tree_ops(context: &Context, op_id: OpId, ops: &mut Vec<OpId>) -> Re
     if instance.dialect().as_str() == "son" && context.parent_nodes_region(op_id).is_none() {
         return Err(Error::ExpectedType);
     }
-    if instance.has_interface::<dyn crate::backend::MachineInstruction>() {
-        crate::backend::verify::verify_reg_slots(context, &instance)?;
-    }
     instance.clone().as_dyn_op().verify(context)?;
     ops.push(op_id);
 
@@ -410,6 +407,7 @@ pub(crate) fn operand_fields(
             .iter()
             .map(|v| match v {
                 crate::attributes::AttributeValue::UInt(n) => *n as usize,
+                crate::attributes::AttributeValue::Int(n) if *n >= 0 => *n as usize,
                 _ => 0usize,
             })
             .collect(),
@@ -546,9 +544,8 @@ fn attr_type_matches(attr_type: &str, value: &crate::attributes::AttributeValue)
     use crate::attributes::AttributeValue as V;
     match attr_type {
         "any" => true,
-        "Str" | "String" => matches!(value, V::Str(_)),
-        "Integer" if matches!(value, V::Str(_) | V::Block(_) | V::UInt(_)) => true,
-        "Int" | "Integer" => matches!(value, V::Int(_) | V::Wide(_)),
+        "Str" => matches!(value, V::Str(_)),
+        "Int" => matches!(value, V::Int(_) | V::Wide(_)),
         "UInt" => matches!(value, V::UInt(_)),
         "F32" => matches!(value, V::F32(_)),
         "F64" => matches!(value, V::F64(_)),

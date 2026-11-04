@@ -1,3 +1,4 @@
+// A reference to an unknown value is a verifier diagnostic, not a panic.
 // RUN: not tir mc --march=rv64i --stage=isel %s 2>&1 | filecheck %s
 
 module {
@@ -8,5 +9,6 @@ module {
 }
 
 // CHECK-NOT: panicked at
-// CHECK: UnknownValueRef{{.*}}99
+// CHECK: verification failed
+// CHECK: references unknown value %99
 // CHECK-NOT: panicked at

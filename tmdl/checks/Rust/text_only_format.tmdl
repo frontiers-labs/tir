@@ -37,6 +37,6 @@ instruction Sub for [TextIsa] : Binary {
     behavior { todo(); }
 }
 
-// CHECK: static REGS_ADD
-// CHECK: name: "d",
-// CHECK: name: "a",
+// CHECK: AddOp {
+// CHECK: operands : O { d, a, control }
+// CHECK: SubOp {

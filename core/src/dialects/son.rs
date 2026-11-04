@@ -1,5 +1,5 @@
 use crate::ty::{Ctor, Kind, TypeCtor};
-use crate::{Context, Error, Operation, Verifiable, dialect, operation};
+use crate::{Context, Error, Operation, dialect, operation};
 
 /// The constructor of an explicit control-flow token.
 pub static CONTROL: Ctor = Ctor::new(TypeCtor {
@@ -18,35 +18,6 @@ operation! {
         scheme: "(son.control*) -> son.control",
         operands: O { incoming },
         results: R { control },
-        regions: R { arguments: Region { kind: Nodes, } },
-        verifier: "true",
-    }
-}
-
-impl Verifiable for MergeOp {
-    fn verify_impl(&self, context: &Context) -> Result<(), Error> {
-        let region = self.arguments();
-        if self.operands().is_empty() || !region.op_ids().is_empty() || !region.results().is_empty()
-        {
-            return Err(Error::ExpectedType);
-        }
-        for incoming in self.operands() {
-            let edge = context
-                .get_value(incoming)
-                .defining_op()
-                .and_then(|id| context.get_op(id).as_op::<EdgeOp>())
-                .ok_or(Error::ExpectedOperation("son", "edge"))?;
-            let args = edge.operands();
-            if args.len() != region.ports().len() + 1
-                || args[1..]
-                    .iter()
-                    .zip(region.ports())
-                    .any(|(&arg, port)| context.get_value(arg).ty() != port.ty())
-            {
-                return Err(Error::ExpectedType);
-            }
-        }
-        Ok(())
     }
 }
 
@@ -65,22 +36,47 @@ operation! {
     BranchOp {
         name: "branch",
         dialect: "son",
-        scheme: "(son.control, int<1>) -> son.control*",
+        scheme: "(son.control, int<1>) -> (son.control, son.control)",
+        format: "custom",
         operands: O { control, predicate },
-        results: R { arms },
-        verifier: "true",
+        results: R { taken, fallthrough },
     }
 }
 
-impl Verifiable for BranchOp {
-    fn verify_impl(&self, context: &Context) -> Result<(), Error> {
-        if self.0.results().len() != 2
-            || context.get_value(self.operands()[1]).ty()
-                != tir::builtin::IntegerType::new(context, 1)
-        {
-            return Err(Error::ExpectedType);
+impl BranchOp {
+    fn custom_print(&self, fmt: &mut crate::IRFormatter) -> Result<(), std::fmt::Error> {
+        crate::region_format::print_result_prefix(fmt, &self.0)?;
+        fmt.write("son.branch ")?;
+        crate::region_format::print_value_list(fmt, &self.operands())?;
+        fmt.write("\n")
+    }
+
+    fn custom_parse(
+        parser: &mut crate::parse::text::Parser,
+        context: &Context,
+    ) -> Result<Box<dyn Operation>, (crate::parse::Span, Error)> {
+        use crate::parse::common::Cursor;
+        let mut values = Vec::new();
+        while let Some(name) = parser.parse_value_ref() {
+            values.push(parser.resolve_value(context, name));
+            if !parser.parse_token(",") {
+                break;
+            }
         }
-        Ok(())
+        let [control, predicate] = values.as_slice() else {
+            return Err((parser.span(), Error::ExpectedValueRef));
+        };
+        let control_type = context
+            .terms()
+            .intern(CONTROL.id(context), vec![])
+            .map_err(|error| (parser.span(), Error::VerificationError(error)))?;
+        Ok(Box::new(
+            BranchOpBuilder::new(context)
+                .control(*control)
+                .predicate(*predicate)
+                .result_types(vec![control_type; 2])
+                .build(),
+        ))
     }
 }
 

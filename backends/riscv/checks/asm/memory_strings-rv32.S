@@ -15,6 +15,6 @@ _memtest:
 
 # CHECK:      asm.symbol {name = "_memtest"}
 # CHECK-NEXT: riscv.lw {rd = x3, rs1 = x1, imm = 0}
-# CHECK-NEXT: riscv.sw {rs1 = x2, rs2 = x3, imm = 0}
+# CHECK-NEXT: riscv.sw {rs2 = x3, rs1 = x2, imm = 0}
 # CHECK:      asm.literal {kind = "string", value = "Hello, RISC-V!"}
 # CHECK-NEXT: asm.literal {kind = "space", value = 16}

@@ -256,11 +256,7 @@ impl BinaryWriter {
                 op: op.name().to_string(),
             });
         };
-        let encoded = super::encode_with(op, spec, &state.assignment).ok_or_else(|| {
-            BinaryEmitError::CannotEncode {
-                op: op.name().to_string(),
-            }
-        })?;
+        let encoded = super::encode_with(op, spec, &state.assignment)?;
 
         let section = state
             .current_section

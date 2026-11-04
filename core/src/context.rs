@@ -286,7 +286,6 @@ impl Context {
         context.register_dialect::<PtrDialect>();
         context.register_dialect::<ScfDialect>();
         context.register_dialect::<StateDialect>();
-        context.register_dialect::<crate::backend::AsmDialect>();
         context.register_dialect::<crate::son::SonDialect>();
         context.register_dialect::<VectorDialect>();
         context.declare_core_types();
@@ -354,7 +353,6 @@ impl Context {
     }
 
     pub fn register_reg_classes(&self, classes: &'static [crate::backend::regalloc::RegClassInfo]) {
-        self.register_type("backend", &crate::backend::RegClassType::spelling(self));
         for class in classes {
             self.note_reg_class(crate::backend::regalloc::RegClassId::new(class));
         }
@@ -367,14 +365,6 @@ impl Context {
         if !known {
             self.registry_mut().reg_classes.insert(key, class);
         }
-    }
-
-    pub(crate) fn named_register(&self, name: &str) -> Option<crate::analysis::defuse::PhysReg> {
-        self.registry()
-            .reg_classes
-            .values()
-            .flat_map(|class| class.registers.iter().map(move |&index| (*class, index)))
-            .find(|(class, index)| (class.print_name)(*index, false).as_deref() == Some(name))
     }
 
     pub fn resolve_reg_class(&self, name: &str) -> Option<crate::backend::regalloc::RegClassId> {
@@ -742,16 +732,6 @@ impl Context {
             "SiblingRead",
             "ScopedSiblingRead",
             "OwnedEntity",
-            "GraphControl",
-            "GraphFlow",
-            "GraphLive",
-            "GraphBypass",
-            "GraphNeeds",
-            "GraphExit",
-            "GraphInvalidUse",
-            "GraphArgumentScope",
-            "GraphExclusive",
-            "GraphBinding",
         ] {
             engine
                 .clear_function(table)
@@ -762,9 +742,8 @@ impl Context {
             tir_egglog::span!(),
             Box::new(tir_egglog::Schedule::run("ir-index")),
         ));
-        let query = tir_egglog::ast::Command::RunSchedule(tir_egglog::Schedule::run("ir-query"));
         engine
-            .run_program(vec![schedule, query])
+            .run_program(vec![schedule])
             .unwrap_or_else(|error| panic!("IR indexes: {error}"));
     }
 
@@ -1013,13 +992,6 @@ impl Context {
         })
         .collect()
     }
-    pub(crate) fn graph_relation(&self, name: &str, ids: &[u32]) -> bool {
-        self.refresh_indexes();
-        let columns: Vec<_> = (0..ids.len()).collect();
-        let keys: Vec<_> = ids.iter().map(|&id| self.int(id)).collect();
-        !self.indexed(name, &columns, &keys, &[]).is_empty()
-    }
-
     fn normalize_binding(&self, region: RegionId, binding: &crate::Binding) {
         for (port, operand) in binding.ports.clone().zip(binding.operands.clone()) {
             self.put(
