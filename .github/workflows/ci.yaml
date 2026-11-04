@@ -63,12 +63,15 @@ jobs:
 
   formal-test:
     needs: formatting
-    if: github.event_name == 'push'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - run: rustup toolchain install
       - uses: rui314/setup-mold@v1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: formal-hax-0.4.2-kani-0.68.0
+          save-if: ${{ github.event_name == 'push' }}
       - run: cargo install --locked cargo-hax --version 0.4.2
       - run: cargo install --locked kani-verifier --version 0.68.0
       - run: cargo kani setup

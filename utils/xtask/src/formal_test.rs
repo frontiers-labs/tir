@@ -21,6 +21,7 @@ pub struct Options {
 struct Metadata {
     packages: Vec<Package>,
     workspace_members: Vec<String>,
+    target_directory: PathBuf,
 }
 
 #[derive(Deserialize)]
@@ -56,6 +57,29 @@ struct PackageProofs<'a> {
     scenarios: Vec<(String, Scenario)>,
     project_files: Option<bool>,
     kani_enabled: bool,
+}
+
+#[derive(Deserialize)]
+struct KaniReport {
+    verification_results: KaniResults,
+}
+
+#[derive(Deserialize)]
+struct KaniResults {
+    results: Vec<KaniHarness>,
+}
+
+#[derive(Deserialize)]
+struct KaniHarness {
+    harness_id: String,
+    checks: Vec<KaniCheck>,
+}
+
+#[derive(Deserialize)]
+struct KaniCheck {
+    category: String,
+    status: String,
+    description: String,
 }
 
 pub fn run(root: &Path, options: Options) -> Result<()> {
@@ -238,14 +262,36 @@ pub fn run(root: &Path, options: Options) -> Result<()> {
                 .run()
                 .with_context(|| format!("Hax extraction failed for scenario `{name}`"))?;
             let _proof_directory = sh.push_dir(&proof_directory);
-            cmd!(sh, "lake build").run().with_context(|| {
-                format!("Lean proofs failed for scenario `{name}`; put lake in PATH")
-            })?;
+            cmd!(sh, "lake build")
+                .run()
+                .with_context(|| format!("Lean proofs failed for scenario `{name}`"))?;
         }
         if proof.kani_enabled {
-            cmd!(sh, "cargo kani -p {package_name}")
-                .run()
-                .with_context(|| format!("Kani proofs failed for package `{package_name}`"))?;
+            let report_directory = sh.create_dir(metadata.target_directory.join("formal-test"))?;
+            let report_path = report_directory.join(format!("{package_name}.json"));
+            sh.remove_path(&report_path)?;
+            cmd!(
+                sh,
+                "cargo kani -p {package_name} -Z unstable-options --export-json {report_path}"
+            )
+            .run()
+            .with_context(|| format!("Kani proofs failed for package `{package_name}`"))?;
+            let report: KaniReport = serde_json::from_str(&sh.read_file(&report_path)?)
+                .with_context(|| {
+                    format!("failed to parse Kani report {}", report_path.display())
+                })?;
+            for harness in report.verification_results.results {
+                for check in harness.checks {
+                    ensure!(
+                        check.category != "cover" || check.status == "Satisfied",
+                        "unreached Kani cover in `{}`: {} ({}); see {}",
+                        harness.harness_id,
+                        check.description,
+                        check.status,
+                        report_path.display()
+                    );
+                }
+            }
         }
     }
     Ok(())
