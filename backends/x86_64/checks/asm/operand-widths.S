@@ -7,7 +7,7 @@ operand_widths:
 	add eax, ebx
 	add rax, rbx
 
-# CHECK:      son.symbol {name = "operand_widths"}
+# CHECK:      symbol {name = "operand_widths"}
 # CHECK-NEXT: x86_64.add8 {dst = al, src = bl}
 # CHECK-NEXT: x86_64.add16 {dst = ax, src = bx}
 # CHECK-NEXT: x86_64.add32 {dst = eax, src = ebx}

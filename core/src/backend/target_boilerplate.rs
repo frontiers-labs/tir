@@ -107,7 +107,6 @@ macro_rules! impl_target_machine {
             }
 
             fn register_dialects(&self, context: &$crate::Context) {
-                context.register_dialect::<$crate::son::SonDialect>();
                 context.register_dialect::<$dialect>();
                 context.register_reg_classes(register_info().classes);
             }

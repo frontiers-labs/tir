@@ -7,7 +7,7 @@ compare_exchange:
 	cmpxchg rax, r9
 	cmpxchg r8, rbx
 
-# CHECK:      son.symbol {name = "compare_exchange"}
+# CHECK:      symbol {name = "compare_exchange"}
 # CHECK-NEXT: x86_64.cmpxchg {dst = rax, src = rbx}
 # CHECK-NEXT: x86_64.cmpxchg {dst = rax, src = r9}
 # CHECK-NEXT: x86_64.cmpxchg {dst = r8, src = rbx}

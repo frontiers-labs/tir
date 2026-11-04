@@ -8,7 +8,7 @@ counted_transfers:
 	loopne 24
 	jrcxz 28
 
-# CHECK:      son.symbol {name = "counted_transfers"}
+# CHECK:      symbol {name = "counted_transfers"}
 # CHECK-NEXT: x86_64.loop {imm = 16}
 # CHECK-NEXT: x86_64.loope {imm = 20}
 # CHECK-NEXT: x86_64.loopne {imm = 24}

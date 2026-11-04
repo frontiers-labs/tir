@@ -5,10 +5,10 @@
 // as one map from value to register.
 
 module {
-  son.symbol {name = "placed", assignment = [%3:GPR[1], %7:GPR[2]]} {
-    son.symbol_end
+  builtin.symbol {name = "placed", assignment = [%3:GPR[1], %7:GPR[2]]} {
+    builtin.symbol_end
   }
   module_end
 }
 
-// CHECK: son.symbol {name = "placed", assignment = [%3:GPR[1], %7:GPR[2]]}
+// CHECK: symbol {name = "placed", assignment = [%3:GPR[1], %7:GPR[2]]}

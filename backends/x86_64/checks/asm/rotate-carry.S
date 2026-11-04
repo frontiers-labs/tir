@@ -6,7 +6,7 @@ carrying_rotates:
 	rcl rax, 3
 	rcr rax, 3
 
-# CHECK:      son.symbol {name = "carrying_rotates"}
+# CHECK:      symbol {name = "carrying_rotates"}
 # CHECK-NEXT: x86_64.rcl {dst = rax, imm = 3}
 # CHECK-NEXT: x86_64.rcr {dst = rax, imm = 3}
 

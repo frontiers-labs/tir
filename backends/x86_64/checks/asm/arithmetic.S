@@ -22,7 +22,7 @@ alu:
 	add r12, 42
 	imul r8, r9
 
-# CHECK:      son.symbol {name = "alu"}
+# CHECK:      symbol {name = "alu"}
 # CHECK-NEXT: x86_64.add {dst = rax, src = rbx}
 # CHECK-NEXT: x86_64.sub {dst = rcx, src = rdx}
 # CHECK-NEXT: x86_64.and {dst = rsi, src = rdi}

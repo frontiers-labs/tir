@@ -1,5 +1,3 @@
-use tir::helpers::dialect;
-
 pub mod abi;
 pub mod asm_desc;
 pub mod asm_syntax;
@@ -10,6 +8,7 @@ pub mod exec;
 pub mod isel;
 mod lexer;
 pub mod lower;
+mod operations;
 mod parser;
 pub mod pipeline;
 pub mod prealloc;
@@ -22,7 +21,7 @@ pub mod target;
 mod target_boilerplate;
 pub(crate) mod verify;
 
-pub use crate::son::*;
+pub use operations::*;
 pub use target::{
     ModelCheckTarget, TARGETS, TargetInfo, TargetMachine, select_target, select_target_with_abi,
     supported_targets,
@@ -669,23 +668,4 @@ pub fn symbol_body_blocks(context: &tir::Context, op: &tir::OpHandle) -> Vec<tir
         .iter(context.clone())
         .map(|block| block.id())
         .collect()
-}
-
-dialect! {
-    SonDialect {
-        name: "son",
-        operations: [
-            MergeOp, EdgeOp, BranchOp,
-            SectionOp,
-            SectionEndOp,
-            SymbolOp,
-            SymbolEndOp,
-            LiteralOp,
-            DataRelocOp,
-            SymbolAddressOp,
-            VirtualCallOp,
-            VirtualIndirectCallOp,
-        ],
-        types: [tir::ty::Ctor(&CONTROL)],
-    }
 }

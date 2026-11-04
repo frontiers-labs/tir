@@ -22,7 +22,7 @@ alu32:
 	imul eax, ebx
 	imul r8d, r9d
 
-# CHECK:      son.symbol {name = "alu32"}
+# CHECK:      symbol {name = "alu32"}
 # CHECK-NEXT: x86_64.add32 {dst = eax, src = ebx}
 # CHECK-NEXT: x86_64.sub32 {dst = ecx, src = edx}
 # CHECK-NEXT: x86_64.and32 {dst = esi, src = edi}

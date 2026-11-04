@@ -5,7 +5,7 @@
 arithmetic_shift_left:
 	sal rcx, cl
 
-# CHECK:      son.symbol {name = "arithmetic_shift_left"}
+# CHECK:      symbol {name = "arithmetic_shift_left"}
 # CHECK-NEXT: x86_64.sal_cl {dst = rcx}
 
 # ENC:      [0x48, 0xD3, 0xE1]

@@ -214,9 +214,7 @@ impl RegionHandle {
                         .iter()
                         .any(|e| e.observed.len() != 1 || e.produced.len() != 1)
                 {
-                    return Err(crate::Error::VerificationError(
-                        "missing graph dependencies".into(),
-                    ));
+                    return Err(crate::Error::ExpectedType);
                 }
             }
             for value in instance.operands() {
