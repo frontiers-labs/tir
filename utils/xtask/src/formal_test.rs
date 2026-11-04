@@ -280,6 +280,11 @@ pub fn run(root: &Path, options: Options) -> Result<()> {
                 .with_context(|| {
                     format!("failed to parse Kani report {}", report_path.display())
                 })?;
+            ensure!(
+                !report.verification_results.results.is_empty(),
+                "no Kani proof harnesses ran for package `{package_name}`; see {}",
+                report_path.display()
+            );
             for harness in report.verification_results.results {
                 for check in harness.checks {
                     ensure!(
