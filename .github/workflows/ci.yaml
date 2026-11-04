@@ -61,6 +61,23 @@ jobs:
         env:
           LINT_BASE: origin/master
 
+  formal-test:
+    needs: formatting
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup toolchain install
+      - uses: rui314/setup-mold@v1
+      - run: cargo install --locked cargo-hax --version 0.4.2
+      - run: cargo install --locked kani-verifier --version 0.68.0
+      - run: cargo kani setup
+      - name: Install Elan
+        run: |
+          curl -sSf https://elan.lean-lang.org/elan-init.sh | sh -s -- -y --default-toolchain none --no-modify-path
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+      - run: cargo xtask formal-test
+
   # Build and package once; test shards and memory checks reuse these tools.
   build:
     needs: formatting
@@ -102,7 +119,7 @@ jobs:
             target/ci/xtask
           retention-days: 1
 
-  # A master push only refreshes caches; the merge queue already tested it.
+  # The merge queue already ran test shards before a master push.
   test-shard:
     needs: build
     if: github.event_name != 'push'

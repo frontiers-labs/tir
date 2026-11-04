@@ -26,19 +26,33 @@ the same amount of time (or less!) to do so.
 1. Produce minimal change required to achieve the goal. If it's a bug fix,
    changes must address bug root cause only. If it's a new feature, commit
    must contain only the minimal amount of code to make tests pass.
-2. Add minimal required testing. Do not add tests unless they are load-bearing.
-   Prefer LIT-style checks over hand-rolled IR builder for snapshot tests.
-   See `docs/dev_guide.md` for more information on testing.
-3. A good patch is the one that removes more code than it adds.
-4. Do not touch docs unless the task asks for it. Docs must not restate
+2. A good patch is the one that removes more code than it adds.
+3. Do not touch docs unless the task asks for it. Docs must not restate
    what the code says.
-5. Do not propose or introduce bespoke graph traversal passes. Every change
+4. Do not propose or introduce bespoke graph traversal passes. Every change
    must be driven through existing mechanisms: isel axioms, PDL rules,
    affine transformations, etc. Only deviate from these paths if explicitly
    approved by the user.
-6. Rely on design documentation in `docs/design` as a summary of how TIR
+5. Rely on design documentation in `docs/design` as a summary of how TIR
    works in general.
-7. See `Source overview` section of README.md before writing new code.
+6. See `Source overview` section of README.md before writing new code.
+
+## Writing new tests
+
+Add minimal amount of required testing to prove your changes work. Do not add new tests unless they are load-bearing.
+
+Key requirements summary:
+
+1. Pick only one appropriate tool in this order:
+   - Formal verification - prefer when the module can be formally described and verified in reasonable time. The instruments include Hax (with Lean backend), Kani, Isla golden references. Use `formal-verification` skill for more info.
+   - Property exhaustion testing - proptest has a few precedents in the repository.
+   - Snapshot testing - LLVM LIT-style tests for capturign the effect of a pass or transformation
+   - Unit testing - only use as the last resort when other methods are unsuitable
+2. Avoid tests on the hot build path - many crates use tests outside of crate tree to avoid rebuilding library twice for `cfg(tests)`. This is intentional pattern introduced to optimize CI and local build times.
+3. Only test public surfaces. Do not freeze implementation details in tests.
+4. Never construct IR manually in unit tests.
+
+See `docs/dev_guide.md` for more information on testing.
 
 ## Minimal quality gates
 
@@ -50,10 +64,12 @@ the same amount of time (or less!) to do so.
 - `cargo xtask test --profile ci --torture` finds no new failures
   when changing core IR or FCC
 - `cargo xtask bench` is no worse than before change (unless explicitly approved regressions).
-  Run benchmarks through it, not `cargo bench`, which skips the filter that
-  leaves out the gcc, clang, egg and egglog baselines.
+  Run benchmarks through it, not `cargo bench`, which skips the filters.
+- `cargo xtask formal-test` verifies correctly. Only run when you change code that is directly
+  covered by formal verification tools like Hax or Kani.
 
-Be mindful of what you run. Documentation or comments change does not need tests or benchmarks.
+Be mindful of what you run. Documentation, comments change, isolated crates do not need full tests or benchmarks.
+Only run gates for paths that are actually affected.
 
 ## Commit and PR rules
 

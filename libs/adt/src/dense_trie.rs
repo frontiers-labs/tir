@@ -6,6 +6,9 @@ use fearless_simd::{Level, Simd, dispatch, prelude::*};
 
 use crate::CacheInfo;
 
+#[cfg(kani)]
+mod proofs;
+
 // The longest range narrowed by compares, as each cell of it takes one bit of
 // a `u64` mask; longer ones are searched. Columns are padded by as many cells.
 const WINDOW: usize = 64;

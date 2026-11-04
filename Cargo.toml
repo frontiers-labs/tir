@@ -81,6 +81,9 @@ proptest = { version = "1.11.0", default-features = false, features = ["std"] }
 [workspace.lints.cargo]
 unused_dependencies = "deny"
 
+[workspace.lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)'] }
+
 [workspace.lints.clippy]
 # A function past this threshold has more branching than a reader can hold at
 # once; split it rather than raising the bar.

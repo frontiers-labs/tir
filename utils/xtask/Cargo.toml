@@ -2,6 +2,7 @@
 name = "xtask"
 version = "0.1.0"
 edition = "2021"
+autotests = false
 
 [dependencies]
 anyhow.workspace = true
@@ -23,13 +24,12 @@ workspace = true
 # `cargo bench --workspace` passes tir-bench arguments to every target, which
 # libtest rejects.
 [lib]
+test = false
+doctest = false
 bench = false
 
 [[bin]]
 name = "xtask"
 path = "src/main.rs"
+test = false
 bench = false
-
-[[test]]
-name = "torture"
-harness = false

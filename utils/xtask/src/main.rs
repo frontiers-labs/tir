@@ -1,5 +1,6 @@
 mod bench;
 mod fcc_fuzz;
+mod formal_test;
 mod lint;
 mod test;
 mod verify_smt;
@@ -19,6 +20,8 @@ use crate::utils::project_root;
 enum Task {
     /// Build fresh tools and run the workspace tests with nextest or cargo test.
     Test(test::Options),
+    /// Regenerate Hax extractions and check configured Lean and Kani proofs.
+    FormalTest(formal_test::Options),
     /// Run the benchmarks with nextest and save a benchmark summary.
     Bench(bench::Options),
     /// Package tools, tests and fixtures for test workers.
@@ -50,6 +53,7 @@ fn main() -> anyhow::Result<()> {
     let sh = Shell::new()?;
     match Task::parse() {
         Task::Test(options) => test::run(&project_root(), options),
+        Task::FormalTest(options) => formal_test::run(&project_root(), options),
         Task::Bench(options) => bench::run(&project_root(), options),
         Task::TestPack(options) => test::pack(&project_root(), options),
         Task::Lint => lint::run(&sh, &project_root()),

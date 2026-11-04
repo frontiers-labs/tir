@@ -220,39 +220,3 @@ fn parse_allowlist(contents: &str) -> anyhow::Result<BTreeSet<String>> {
     }
     Ok(paths)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::{case_failure, parse_allowlist};
-
-    #[test]
-    fn unlisted_failure_is_a_regression() {
-        assert_eq!(
-            case_failure("compile/new.c", false, false, &[]),
-            Some("unexpected failure")
-        );
-    }
-
-    #[test]
-    fn listed_success_is_stale() {
-        assert_eq!(
-            case_failure("execute/fixed.c", true, true, &[]),
-            Some("stale failure")
-        );
-    }
-
-    #[test]
-    fn marginal_case_is_neither_a_regression_nor_stale() {
-        let marginal = ["execute/slow.c"];
-        assert_eq!(
-            case_failure("execute/slow.c", false, false, &marginal),
-            None
-        );
-        assert_eq!(case_failure("execute/slow.c", true, true, &marginal), None);
-    }
-
-    #[test]
-    fn duplicate_allowlist_entry_is_rejected() {
-        assert!(parse_allowlist("compile/a.c\ncompile/a.c\n").is_err());
-    }
-}

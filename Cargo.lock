@@ -2661,6 +2661,7 @@ dependencies = [
  "tir-verify",
  "tir-x86_64",
  "tmdl",
+ "xtask",
 ]
 
 [[package]]

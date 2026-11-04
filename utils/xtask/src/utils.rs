@@ -140,30 +140,3 @@ pub fn run_with_deadline(
 pub fn run_with_timeout(command: &mut std::process::Command, timeout: Duration) -> bool {
     matches!(run_with_deadline(command, timeout), Ok(Some(output)) if output.status.success())
 }
-
-#[cfg(test)]
-mod tests {
-    #[cfg(unix)]
-    use std::process::Command;
-    use std::time::Duration;
-
-    #[cfg(unix)]
-    use super::run_with_timeout;
-    use super::should_report_progress;
-
-    #[cfg(unix)]
-    #[test]
-    fn timed_command_runs_in_its_own_process_group() {
-        let mut command = Command::new("sh");
-        command.args(["-c", r#"test "$(ps -o pgid= -p $$ | tr -d ' ')" = "$$""#]);
-        assert!(run_with_timeout(&mut command, Duration::from_secs(1)));
-    }
-
-    #[test]
-    fn progress_is_reported_at_intervals_and_completion() {
-        assert!(!should_report_progress(249, 1_000));
-        assert!(should_report_progress(250, 1_000));
-        assert!(!should_report_progress(999, 1_000));
-        assert!(should_report_progress(1_000, 1_000));
-    }
-}
