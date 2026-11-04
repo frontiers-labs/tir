@@ -18,7 +18,7 @@ mem_ext:
 	pop rbx
 	pop r12
 
-# CHECK:      son.symbol {name = "mem_ext"}
+# CHECK:      symbol {name = "mem_ext"}
 # CHECK-NEXT: x86_64.movzx8_load {dst = rax, base = rbx}
 # CHECK-NEXT: x86_64.movzx16_load {dst = rcx, base = rdx}
 # CHECK-NEXT: x86_64.movsx8_load {dst = rax, base = rbx}

@@ -278,6 +278,9 @@ fn verify_op_tree_ops(context: &Context, op_id: OpId, ops: &mut Vec<OpId>) -> Re
 
     let instance = context.get_op(op_id);
     verify_scoped_metadata(&instance)?;
+    if instance.dialect().as_str() == "son" && context.parent_nodes_region(op_id).is_none() {
+        return Err(Error::ExpectedType);
+    }
     if instance.has_interface::<dyn crate::backend::MachineInstruction>() {
         crate::backend::verify::verify_reg_slots(context, &instance)?;
     }

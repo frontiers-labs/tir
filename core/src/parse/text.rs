@@ -369,9 +369,8 @@ impl<'src> Parser<'src> {
             self.position = mark;
             return None;
         }
-        class
-            .contains(index.try_into().ok()?)
-            .then_some((class, index as u16))
+        let index = u16::try_from(index).ok()?;
+        class.contains(index).then_some((class, index))
     }
 
     pub fn parse_number(&mut self) -> Option<i64> {

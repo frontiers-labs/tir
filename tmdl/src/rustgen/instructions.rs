@@ -269,10 +269,9 @@ fn attrs_schema_ts(ops: &[(String, Type)]) -> proc_macro2::TokenStream {
     quote! { #(#items,)* }
 }
 
-fn instruction_ports(
-    tables: &TargetTables,
-    ctx: &InstrEmitCtx<'_>,
-) -> Vec<(String, Option<String>, bool, Option<String>)> {
+type InstructionPort = (String, Option<String>, bool, Option<String>);
+
+fn instruction_ports(tables: &TargetTables, ctx: &InstrEmitCtx<'_>) -> Vec<InstructionPort> {
     let mut ports: Vec<(String, Option<String>, bool, Option<String>)> = vec![];
     for (name, ty) in ctx.ops {
         if !matches!(ty, Type::Struct(_)) {

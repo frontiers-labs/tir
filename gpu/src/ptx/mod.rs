@@ -35,7 +35,6 @@ impl tir::backend::TargetMachine for PtxTarget {
     }
 
     fn register_dialects(&self, context: &tir::Context) {
-        context.register_dialect::<tir::son::SonDialect>();
         context.register_dialect::<PtxDialect>();
     }
 

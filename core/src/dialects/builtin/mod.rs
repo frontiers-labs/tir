@@ -9,6 +9,9 @@ mod ub;
 
 use tir_symbolic::term::{ctor, no_carrier, valid};
 
+use crate::backend::{
+    DataRelocOp, LiteralOp, SectionEndOp, SectionOp, SymbolAddressOp, SymbolEndOp, SymbolOp,
+};
 use crate::ty::{Ctor, Kind, Terms, TypeArg, TypeCtor, TypeSpelling};
 use crate::{Context, Error, TypeId, dialect};
 
@@ -38,6 +41,8 @@ dialect! {
         name: "builtin",
         operations: [
             ModuleOp,
+            SectionOp, SectionEndOp, SymbolOp, SymbolEndOp,
+            LiteralOp, DataRelocOp, SymbolAddressOp,
             ModuleEndOp,
             ConstantOp,
             AddIOp,

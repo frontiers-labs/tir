@@ -5,7 +5,6 @@ pub mod func;
 pub mod layout;
 pub mod ptr;
 pub mod scf;
-#[path = "../backend/operations.rs"]
 pub mod son;
 pub mod state;
 pub mod vector;

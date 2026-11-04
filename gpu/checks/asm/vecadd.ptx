@@ -66,7 +66,7 @@ $L__BB0_2:
 // CHECK: $L__BB0_2:
 // CHECK: ret;
 
-// TIR: son.symbol {name = "vecAdd"
+// TIR: symbol {name = "vecAdd"
 // TIR: ptx.ld_param_u64_sym {d = rd1, sym = "vecAdd_param_0"}
 // TIR: ptx.mad_lo_s32 {d = r1, a = r4, b = r3, c = r5}
 // TIR: ptx.setp_ge_s32 {d = p1, a = r1, b = r2}

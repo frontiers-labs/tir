@@ -5,7 +5,7 @@
 wide_multiply:
 	mul rcx
 
-# CHECK:      son.symbol {name = "wide_multiply"}
+# CHECK:      symbol {name = "wide_multiply"}
 # CHECK-NEXT: x86_64.mul_wide {dst = rcx}
 
 # ENC:      [0x48, 0xF7, 0xE1]

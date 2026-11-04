@@ -741,7 +741,6 @@ impl Context {
             "SiblingRead",
             "ScopedSiblingRead",
             "OwnedEntity",
-            "GraphControlType",
             "GraphControl",
             "GraphFlow",
             "GraphLive",
