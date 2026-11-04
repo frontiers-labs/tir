@@ -1,4 +1,6 @@
+use tir::attributes::AttributeValue::{Array, UInt};
 use tir::helpers::dialect;
+use tir::parse::common::Cursor;
 
 pub mod abi;
 pub mod asm_desc;
@@ -21,7 +23,7 @@ pub mod sched;
 pub mod shuffle_order;
 pub mod target;
 mod target_boilerplate;
-pub(crate) mod verify;
+mod verify;
 
 pub use operations::*;
 pub use target::{
@@ -35,9 +37,8 @@ pub use target_boilerplate::{apply_mattr, normalize_name};
 pub use linkme;
 
 pub use registers::{
-    ASSIGNMENT_ATTR, PINS_ATTR, RegAssignment, RegClassType, RegPort, RegSlot, SlotRef,
-    assigned_register, fresh_reg, op_slot_register, phys_attr, pin_slot, reg_class_type_parser,
-    reg_ports, reg_slot, reg_slots, retype_untyped, slot_class, slot_pin, slot_register,
+    ASSIGNMENT_ATTR, PINS_ATTR, RegAssignment, RegClassType, assigned_register, fresh_reg,
+    phys_attr, pin_slot, reg_class_type_parser, register_attr, retype_untyped, slot_pin,
     type_class, value_class,
 };
 
@@ -50,7 +51,7 @@ pub use lexer::Token;
 pub use lexer::lex;
 pub use parser::{AsmCursor, AsmInstructionParser, AsmParser};
 pub use printer::{AsmPrintError, AsmPrinter};
-use tir::attributes::AttributeValue;
+use tir::attributes::{AttributeValue, NamedAttribute, RegisterAttr};
 use tir::sem::{AtomicRmwOp, MemOrdering};
 use tir::utils::APInt;
 
@@ -377,9 +378,6 @@ pub struct InstrInfo {
     pub implicit_regs: &'static [tir::attributes::ImplicitReg],
     /// FP flag accumulations that an out-of-order scheduler may rename independently.
     pub implicit_or_updates: &'static [crate::analysis::defuse::PhysReg],
-    /// The opcode's register slots, in declaration order: which are results and
-    /// which operands, and the class each admits. See [`RegPort`].
-    pub regs: &'static [RegPort],
     /// A plain register-to-register copy recognized from the TMDL behavior.
     pub copy: Option<CopyPorts>,
     pub effects: MemoryEffects,
@@ -408,7 +406,6 @@ impl InstrInfo {
         program: exec::Program::Unsupported("instruction has no behavior"),
         implicit_regs: &[],
         implicit_or_updates: &[],
-        regs: &[],
         copy: None,
         effects: MemoryEffects::NONE,
         asm: None,
@@ -495,6 +492,149 @@ pub trait MachineInstruction {
     }
 }
 
+/// Print instruction data as SSA and physical operands as assembly attributes.
+pub fn print_machine_op<T: tir::Operation + MachineInstruction>(
+    fmt: &mut tir::IRFormatter,
+    op: &T,
+) -> Result<(), std::fmt::Error> {
+    let handle = op.handle();
+    let context = &handle.context;
+    tir::region_format::print_result_prefix(fmt, handle)?;
+    fmt.write(format!("{}.{}", T::dialect(), T::name()))?;
+    let values = handle.value_operands();
+    if !values.is_empty() {
+        fmt.write(" ")?;
+        tir::region_format::print_value_list(fmt, &values)?;
+    }
+    tir::region_format::print_state_operands(fmt, handle)?;
+    let mut attributes = op.attributes();
+    attributes.retain(
+        |attr| match (context.resolve(attr.name).as_str(), &attr.value) {
+            ("operand_segment_sizes", Array(sizes)) => sizes
+                .iter()
+                .take(values.len())
+                .any(|n| n.as_int() == Some(0)),
+            _ => true,
+        },
+    );
+    attributes.sort_by_key(|a| !matches!(a.value, AttributeValue::Register(_)));
+    let mut first = true;
+    let open = |fmt: &mut tir::IRFormatter, first: &mut bool| {
+        let text = if *first { " {" } else { ", " };
+        *first = false;
+        fmt.write(text)
+    };
+    for attr in attributes {
+        let name = context.resolve(attr.name);
+        open(fmt, &mut first)?;
+        fmt.write(format!("{name} = "))?;
+        match &attr.value {
+            AttributeValue::Register(RegisterAttr::Physical { class, index })
+                if op.info().asm.is_some_and(|desc| {
+                    desc.parse.iter().any(|step| {
+                        matches!(step, asm_desc::ParseStep::Register(field, expected, _) if *field == name && expected == class)
+                    })
+                }) => print_register(fmt, *class, *index)?,
+            value => value.print(fmt, context)?,
+        }
+    }
+    if !first {
+        fmt.write("}")?;
+    }
+    for (index, result) in handle.value_results().iter().enumerate() {
+        fmt.write(if index == 0 { " : " } else { ", " })?;
+        context.print_type(context.get_value(*result).ty(), fmt)?;
+    }
+    fmt.write("\n")
+}
+
+/// Parse the instruction-specific IR syntax emitted by [`print_machine_op`].
+pub fn parse_machine_op<T: tir::Operation>(
+    parser: &mut tir::parse::text::Parser,
+    context: &tir::Context,
+    info: &InstrInfo,
+) -> Result<Box<dyn tir::Operation>, (tir::parse::Span, tir::Error)> {
+    let mut operands = Vec::new();
+    while let Some(name) = parser.parse_value_ref() {
+        operands.push(parser.resolve_value(context, name));
+        if !parser.parse_token(",") {
+            break;
+        }
+    }
+    let value_count = operands.len();
+    operands.extend(parser.parse_state_operands(context)?);
+    let mut attributes = parser
+        .parse_delimited("{", "}", |parser| {
+            let name = parser
+                .parse_attribute_name()
+                .ok_or((parser.span(), tir::Error::ExpectedToken("attribute name")))?;
+            if !parser.parse_token("=") {
+                return Err((parser.span(), tir::Error::ExpectedToken("=")));
+            }
+            let value = if let Some(value) = parser.parse_attribute_value(context)? {
+                value
+            } else {
+                let register = parser
+                    .parse_ident()
+                    .ok_or((parser.span(), tir::Error::ExpectedType))?;
+                let desc = info.asm.ok_or((parser.span(), tir::Error::ExpectedType))?;
+                let (class, parse) = desc
+                    .parse
+                    .iter()
+                    .find_map(|step| match step {
+                        asm_desc::ParseStep::Register(field, class, parse) if *field == name => {
+                            Some((*class, *parse))
+                        }
+                        _ => None,
+                    })
+                    .ok_or((parser.span(), tir::Error::ExpectedType))?;
+                let index = parse(&mut tir::parse::tokens::Parser::new(&[Token::Ident(
+                    register,
+                )]))
+                .ok_or((parser.span(), tir::Error::ExpectedType))?;
+                AttributeValue::Register(RegisterAttr::Physical { class, index })
+            };
+            Ok(NamedAttribute::new(context.intern(&name), value))
+        })?
+        .unwrap_or_default();
+    let segments = context.intern("operand_segment_sizes");
+    if !attributes.iter().any(|attr| attr.name == segments)
+        && let Some(schema) = crate::OP_SCHEMAS
+            .iter()
+            .find(|s| s.dialect == T::dialect() && s.name == T::name())
+    {
+        let sizes = schema.operands.iter().enumerate().map(|(index, field)| {
+            UInt(if field.variadic {
+                (operands.len() - value_count) as u64
+            } else {
+                u64::from(index < value_count)
+            })
+        });
+        attributes.push(NamedAttribute::new(segments, Array(sizes.collect())));
+    }
+    let mut results = Vec::new();
+    if parser.parse_token(":") {
+        loop {
+            let ty = parser
+                .parse_type(context)?
+                .ok_or((parser.span(), tir::Error::ExpectedType))?;
+            results.push(context.create_value(ty, None).id());
+            if !parser.parse_token(",") {
+                break;
+            }
+        }
+    }
+    Ok(T::from_op_instance_dyn(context.add_operation(
+        tir::NewOp::new::<T>(
+            context.clone(),
+            operands,
+            results,
+            Vec::new(),
+            tir::NewOpParts { attributes },
+        ),
+    )))
+}
+
 /// Hand `new` the state ports `old` carried, so a lowering that replaces one
 /// instruction with another keeps it on the chain.
 ///
@@ -536,7 +676,7 @@ pub fn names_memory_state(op: &tir::OpHandle) -> bool {
         || op.is::<tir::state::SplitOp>()
 }
 
-pub(crate) fn print_register(
+fn print_register(
     fmt: &mut tir::IRFormatter,
     class: tir::backend::regalloc::RegClassId,
     index: u16,

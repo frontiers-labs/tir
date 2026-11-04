@@ -135,15 +135,6 @@ fn mutually_exclusive(
     if left == right {
         return false;
     }
-    let reader = |consumer| match consumer {
-        StateConsumer::Op(op) => Some(op),
-        StateConsumer::Export { region, .. } => context.get_region(region).parent_op(),
-    };
-    if let (Some(left), Some(right)) = (reader(left), reader(right))
-        && context.graph_relation("GraphExclusive", &[left.raw(), right.raw()])
-    {
-        return true;
-    }
     let ancestry = |mut consumer| {
         let mut ancestry = Vec::new();
         let mut region = match consumer {

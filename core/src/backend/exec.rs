@@ -46,13 +46,10 @@ fn register_phys(
 ) -> Result<(RegClassId, u16), SimTrap> {
     // Execution runs on instructions whose registers are physical: decoded or
     // assembled input, or emitted code read back through its assignment.
-    match crate::backend::reg_slot(instance, name) {
-        Some(crate::backend::RegSlot::Phys(register)) => Ok(register),
-        _ => Err(SimTrap::MissingAttribute {
-            op: mnemonic,
-            attribute: name,
-        }),
-    }
+    crate::backend::register_attr(instance, name).ok_or(SimTrap::MissingAttribute {
+        op: mnemonic,
+        attribute: name,
+    })
 }
 
 /// Builds the entry symbol table for one instruction execution.

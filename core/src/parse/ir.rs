@@ -116,8 +116,16 @@ fn parse_located_op<'src>(
     // so later operands resolve by name rather than by a literal id.
     let result_names = parse_result_prefix(parser)?;
 
-    if let Some(name) = parser.parse_attribute_name() {
-        let (dialect, name) = name.split_once('.').unwrap_or(("builtin", name.as_str()));
+    if let Some(name) = parser.parse_ident() {
+        let (dialect, name) = if parser.parse_token(".") {
+            if let Some(op_name) = parser.parse_ident() {
+                (name, op_name)
+            } else {
+                return Err((parser.span(), Error::ExpectedOpName));
+            }
+        } else {
+            ("builtin", name)
+        };
 
         parser.skip_trivia();
         let op_parser = context
@@ -253,15 +261,7 @@ fn coerce_predicates(
 
 impl<'src> TextParser<'src> {
     pub fn parse_region(&mut self, context: &Context) -> Result<RegionHandle, (Span, Error)> {
-        let mut args = vec![];
-        if self.parse_token("args(") {
-            for (name, ty) in self.parse_block_argument_list(context)? {
-                let value = context.create_value(ty, None);
-                self.define_value(&name, value.id());
-                args.push(value);
-            }
-        }
-        self.parse_region_with_entry_args(context, args)
+        self.parse_region_with_entry_args(context, vec![])
     }
 
     /// Parse a region body, ordered or unordered.

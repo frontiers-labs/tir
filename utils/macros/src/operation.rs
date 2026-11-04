@@ -1882,23 +1882,18 @@ fn make_parser(
         // A variadic result group is written as the one result the generic form
         // prints; an op with several is spelled by its own format.
         let bind = if result_variadic {
-            quote! {
-                let mut types = vec![result_ty];
-                while parser.parse_token(",") {
-                    types.push(parser.parse_type(context)?.ok_or((parser.span(), tir::Error::ExpectedType))?);
-                }
-                builder = builder.result_types(types);
-            }
+            quote! { builder = builder.result_types(vec![result_ty]); }
         } else {
             quote! { builder = builder.result_type(result_ty); }
         };
         quote! {
-            if parser.parse_token(":") {
-                let result_ty = parser.parse_type(context)?.ok_or_else(|| (parser.span(), tir::Error::ExpectedType))?;
-                #bind
-            } else if !#result_variadic {
+            if !parser.parse_token(":") {
                 return Err((parser.span(), tir::Error::ExpectedToken(":")));
             }
+            let result_ty = parser.parse_type(context)
+                ?
+                .ok_or_else(|| (parser.span(), tir::Error::ExpectedType))?;
+            #bind
         }
     };
 
@@ -1982,10 +1977,6 @@ fn make_parser(
                     builder = builder.attr(attr_name, tir::attributes::AttributeValue::FpSemantics(
                         context.intern_fp_semantics(tir::fp::Semantics::default_for_operation(#name)),
                     ));
-                } else if !ty.starts_with('?')
-                    && !parsed_attrs.iter().any(|attr| attr.name == context.intern(attr_name))
-                {
-                    return Err((parser.span(), tir::Error::ExpectedToken(attr_name)));
                 }
             }
             for a in parsed_attrs { builder = builder.attr_sym(a.name, a.value); }

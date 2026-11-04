@@ -155,9 +155,6 @@ mod core {
     #[cfg(any())]
     mod isel_rules;
     mod layout;
-    // Migration skip: this suite exercises removed selector or allocator infrastructure.
-    #[cfg(any())]
-    mod liveness;
     mod machine_ir;
     // Migration skip: this suite targets the removed object analysis implementation.
     #[cfg(any())]

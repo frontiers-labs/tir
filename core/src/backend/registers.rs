@@ -1,16 +1,3 @@
-//! The one register notation of machine IR.
-//!
-//! A register operand of a machine instruction is an SSA operand or result
-//! whose type is its register class ([`RegClassType`]). A physical register the
-//! instruction names directly — an assembler input, a hardwired `x0`, the stack
-//! pointer in prologue code — is an attribute literal in the same slot. Which
-//! slots an opcode has, in which order, and what class each admits is a
-//! per-opcode fact: [`InstrInfo::regs`](super::InstrInfo::regs).
-//!
-//! Register allocation does not rewrite those slots. It writes a
-//! [`RegAssignment`] onto the function's `asm.symbol`, and assembly printing and
-//! encoding resolve a slot holding a value through that map.
-
 use std::collections::HashMap;
 
 use tir::attributes::{AttributeValue, RegisterAttr};
@@ -139,15 +126,6 @@ pub fn retype_untyped(context: &Context, value: ValueId, class: RegClassId) {
     }
 }
 
-/// The register class a slot holds: the physical register's own, or the class
-/// the value's type names.
-pub fn slot_class(context: &Context, slot: RegSlot) -> Option<RegClassId> {
-    match slot {
-        RegSlot::Phys((class, _)) => Some(class),
-        RegSlot::Value(value) => value_class(context, value),
-    }
-}
-
 /// The register class `value` holds, or `None` if it is not a register — or no
 /// longer exists, which printing a stale reference must survive.
 pub fn value_class(context: &Context, value: ValueId) -> Option<RegClassId> {
@@ -165,121 +143,12 @@ pub fn type_class(context: &Context, ty: TypeId) -> Option<RegClassId> {
     RegClassType::view(context, ty).map(|reg| reg.class())
 }
 
-/// One register slot of a machine opcode, in the order the opcode declares them.
-///
-/// A `Def` port is an SSA result, a `Use` port an SSA operand, both in port
-/// order among the ports of their direction; a port whose slot holds a physical
-/// literal on a given instance takes no SSA position there (see
-/// [`reg_slots`]).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RegPort {
-    /// The name the opcode's assembly syntax, encoding and behavior use for this
-    /// slot.
-    pub name: &'static str,
-    /// The class the instruction encodes here, narrowing the value's own class.
-    /// `None` where the instruction admits whatever class the value carries.
-    pub class: Option<RegClassId>,
-    pub def: bool,
-    /// The `Def` port this operand must share a register with, by name — a
-    /// two-address destination read.
-    pub tied_to: Option<&'static str>,
-}
-
-/// Where one register slot of an instruction instance lives.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RegSlot {
-    /// An SSA value: the operand or result at this port.
-    Value(ValueId),
-    /// A physical register the instruction names directly.
-    Phys(PhysReg),
-}
-
-/// One resolved register slot of an instruction instance.
-pub struct SlotRef {
-    pub port: &'static RegPort,
-    pub slot: RegSlot,
-    /// Position among the op's operands (a use port) or results (a def port);
-    /// `None` for a port naming a physical register.
-    pub position: Option<usize>,
-}
-
-/// Resolve every register slot of `op` in port order.
-///
-/// A port whose attribute is set resolves to it — a physical register, or
-/// nothing at all where a target pass has materialized the slot into a constant
-/// — and consumes no SSA position; every other port takes the next operand (or
-/// result) of its direction.
-pub fn reg_slots(op: &OpHandle) -> Vec<SlotRef> {
-    let Some(mi) = op.clone().as_interface::<dyn super::MachineInstruction>() else {
-        return Vec::new();
-    };
-    let ports = mi.info().regs;
-    if ports.is_empty() {
-        return Vec::new();
+/// Read an assembly operand attribute without constructing a register IR entity.
+pub fn register_attr(op: &OpHandle, name: &str) -> Option<PhysReg> {
+    match op.attr(name)? {
+        AttributeValue::Register(RegisterAttr::Physical { class, index }) => Some((class, index)),
+        _ => None,
     }
-    let context = op.context.clone();
-    let register = |v: &ValueId| !crate::son::CONTROL.is(&context, context.get_value(*v).ty());
-    let operands: Vec<_> = op.value_operands().into_iter().filter(register).collect();
-    let results: Vec<_> = op.value_results().into_iter().filter(register).collect();
-    let mut next_operand = 0;
-    let mut next_result = 0;
-    let mut slots = Vec::with_capacity(ports.len());
-    for port in ports {
-        // A slot holds either an attribute or an SSA position, never both: a
-        // literal register is spelled as the attribute, and a demand slot the
-        // target has materialized to a constant is no longer a register at all.
-        // Read in place — this runs once per port of every instruction liveness
-        // scans.
-        let attribute = context.with_attr(op.id, port.name, |value| match value {
-            AttributeValue::Register(RegisterAttr::Physical { class, index }) => {
-                Some((*class, *index))
-            }
-            _ => None,
-        });
-        if let Some(register) = attribute {
-            if let Some(register) = register {
-                slots.push(SlotRef {
-                    port,
-                    slot: RegSlot::Phys(register),
-                    position: None,
-                });
-            }
-            continue;
-        }
-        let (value, position) = if port.def {
-            let position = next_result;
-            next_result += 1;
-            (results.get(position).copied(), position)
-        } else {
-            let position = next_operand;
-            next_operand += 1;
-            (operands.get(position).copied(), position)
-        };
-        if let Some(value) = value {
-            slots.push(SlotRef {
-                port,
-                slot: RegSlot::Value(value),
-                position: Some(position),
-            });
-        }
-    }
-    slots
-}
-
-/// The register ports `op`'s opcode declares, in order.
-pub fn reg_ports(op: &OpHandle) -> &'static [RegPort] {
-    op.clone()
-        .as_interface::<dyn super::MachineInstruction>()
-        .map(|mi| mi.info().regs)
-        .unwrap_or_default()
-}
-
-/// [`reg_slots`] for one port, by name.
-pub fn reg_slot(op: &OpHandle, name: &str) -> Option<RegSlot> {
-    reg_slots(op)
-        .into_iter()
-        .find(|slot| slot.port.name == name)
-        .map(|slot| slot.slot)
 }
 
 /// The register a function's values were allocated, written onto its
@@ -393,54 +262,6 @@ pub fn phys_attr(register: PhysReg) -> AttributeValue {
         class: register.0,
         index: register.1,
     })
-}
-
-/// Bind a register use slot on a machine op builder: the SSA operand when the
-/// slot holds a value, the physical register as the slot's attribute otherwise.
-#[macro_export]
-macro_rules! reg_use {
-    ($builder:expr, $port:ident, $slot:expr) => {
-        match $slot {
-            $crate::backend::RegSlot::Value(value) => $builder.$port(value),
-            $crate::backend::RegSlot::Phys(register) => {
-                $builder.attr(stringify!($port), $crate::backend::phys_attr(register))
-            }
-        }
-    };
-}
-
-/// [`reg_use`] for a def slot: the op's result when the slot holds a value.
-#[macro_export]
-macro_rules! reg_def {
-    ($builder:expr, $port:ident, $slot:expr) => {
-        match $slot {
-            $crate::backend::RegSlot::Value(value) => $builder.result_values(vec![value]),
-            $crate::backend::RegSlot::Phys(register) => {
-                $builder.attr(stringify!($port), $crate::backend::phys_attr(register))
-            }
-        }
-    };
-}
-
-/// The physical register a slot names, directly or through the assignment.
-pub fn slot_register(slot: RegSlot, assignment: &RegAssignment) -> Option<PhysReg> {
-    match slot {
-        RegSlot::Phys(register) => Some(register),
-        RegSlot::Value(value) => assignment.get(value),
-    }
-}
-
-/// The physical register the slot named `name` of `op` ends up in: the register
-/// it names directly, or the one allocation gave the value it holds.
-///
-/// For a caller holding one instruction rather than a whole function (a post-RA
-/// encoding rewrite); the assignment entries are sorted by value, so the lookup
-/// reads the enclosing symbol's map without copying it.
-pub fn op_slot_register(context: &Context, op: &OpHandle, name: &str) -> Option<PhysReg> {
-    match reg_slot(op, name)? {
-        RegSlot::Phys(register) => Some(register),
-        RegSlot::Value(value) => assigned_register(context, op, value),
-    }
 }
 
 /// The register allocation gave `value` in the function `op` belongs to.

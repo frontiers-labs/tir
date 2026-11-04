@@ -169,11 +169,13 @@ impl RegionHandle {
 
     fn verify_nodes(&self, context: &Context) -> Result<(), crate::Error> {
         let ops = self.op_ids();
-        let control = |v: &ValueId| crate::son::CONTROL.is(context, context.get_value(*v).ty());
         for op in &ops {
             let instance = context.get_op(*op);
             if instance.clone().as_interface::<dyn Terminator>().is_some()
-                && !instance.operands().iter().any(control)
+                && !instance
+                    .value_operands()
+                    .iter()
+                    .any(|&value| crate::son::CONTROL.is(context, context.get_value(value).ty()))
             {
                 return Err(crate::Error::VerificationError(format!(
                     "{}.{} is a terminator, which an unordered region has no place for",
@@ -182,45 +184,9 @@ impl RegionHandle {
                 )));
             }
         }
-        if context.graph_relation("GraphInvalidUse", &[self.id.raw()]) {
-            return Err(crate::Error::VerificationError(
-                "graph value is unavailable on its control path".into(),
-            ));
-        }
         for op in &ops {
             let instance = context.get_op(*op);
-            let control_op = instance.is::<crate::son::MergeOp>()
-                || instance.is::<crate::son::EdgeOp>()
-                || instance.is::<crate::son::BranchOp>();
-            if control_op
-                && (instance.results().iter().any(|v| !control(v))
-                    || instance.operands().first().is_none_or(|v| !control(v)))
-            {
-                return Err(crate::Error::ExpectedType);
-            }
-            if instance.has_interface::<dyn crate::backend::MachineInstruction>()
-                && !instance.has_interface::<dyn crate::Pure>()
-            {
-                let control_count =
-                    |values: crate::operation::ValueIds| values.into_iter().filter(control).count();
-                let effects = instance
-                    .clone()
-                    .as_interface::<dyn crate::ResourceEffects>()
-                    .map(|e| e.resource_effects())
-                    .unwrap_or_default();
-                if control_count(instance.operands()) != 1
-                    || control_count(instance.results()) != 1
-                    || effects
-                        .iter()
-                        .any(|e| e.observed.len() != 1 || e.produced.len() != 1)
-                {
-                    return Err(crate::Error::ExpectedType);
-                }
-            }
             for value in instance.operands() {
-                if control(&value) && !context.graph_relation("GraphLive", &[value.number()]) {
-                    return Err(crate::Error::ExpectedType);
-                }
                 self.verify_in_scope(context, value).map_err(|error| {
                     crate::Error::VerificationError(format!(
                         "{}.{} reads {error}",
@@ -248,9 +214,6 @@ impl RegionHandle {
         let Some(owner) = defining_region(context, value) else {
             return Ok(());
         };
-        if context.graph_relation("GraphArgumentScope", &[owner.raw(), self.id.raw()]) {
-            return Ok(());
-        }
         let mut scope = Some(self.id);
         while let Some(region) = scope {
             if region == owner {

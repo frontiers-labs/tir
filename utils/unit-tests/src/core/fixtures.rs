@@ -2,7 +2,7 @@
 
 use tir::attributes::AttributeValue;
 use tir::backend::regalloc::{RegClassId, RegClassInfo, RegisterView};
-use tir::backend::{RegPort, SymbolOp, SymbolOpBuilder};
+use tir::backend::{SymbolOp, SymbolOpBuilder};
 use tir::builtin::ModuleOp;
 use tir::func::FuncOp;
 use tir::parse::ir::parse_ir;
@@ -91,24 +91,6 @@ pub const fn r_high() -> RegClassId {
     RegClassId::new(&R_HIGH_CLASS)
 }
 
-/// `rd, rs`: one destination slot and one source slot, both of class `R`.
-pub static RD_RS_PORTS: [RegPort; 2] = [
-    RegPort {
-        name: "rd",
-        class: Some(r()),
-        def: true,
-        tied_to: None,
-    },
-    RegPort {
-        name: "rs",
-        class: Some(r()),
-        def: false,
-        tied_to: None,
-    },
-];
-
-/// An `asm.symbol` named `f` whose body is one block holding `ops`, in that
-/// order. Machine instructions have no textual form, so the machine-IR tests
 /// build the function around them rather than parsing one.
 pub fn asm_symbol(context: &Context, ops: &[OpId]) -> (SymbolOp, BlockHandle) {
     let block = context.create_block(vec![]);
@@ -168,72 +150,45 @@ pub fn atomic_pattern(kind: SymKind) -> SemGraph {
     g
 }
 
-/// A machine test opcode: the operation plus the `MachineInstruction` facts
-/// (`$ports`, `$implicit`) its info reports. The longer form also declares one
-/// operand slot named `$operand`.
 macro_rules! machine_op {
-    ($op:ident, $dialect:tt, $name:tt, $operand:ident, $ports:expr, $implicit:expr) => {
+    ($op:ident, $dialect:tt, $name:tt, $operand:ident, $implicit:expr) => {
         tir::helpers::operation! {
             $op {
                 name: $name,
                 dialect: $dialect,
                 scheme: "(backend.reg<_, _>?) -> backend.reg<_, _>*",
                 operands: O { $operand },
-                results: R { regs },
+                results: R { rd },
+                attributes: A { rd: "?Register", $operand: "?Register" },
                 interfaces: [tir::backend::MachineInstruction],
             }
         }
-        $crate::core::fixtures::instr_info!($op, $name, $ports, $implicit);
+        $crate::core::fixtures::instr_info!($op, $name, $implicit);
     };
-    ($op:ident, $dialect:tt, $name:tt, $ports:expr, $implicit:expr) => {
+    ($op:ident, $dialect:tt, $name:tt, $implicit:expr) => {
         tir::helpers::operation! {
             $op {
                 name: $name,
                 dialect: $dialect,
                 scheme: "() -> backend.reg<_, _>*",
-                results: R { regs },
+                results: R { rd },
+                attributes: A { rd: "?Register" },
                 interfaces: [tir::backend::MachineInstruction],
             }
         }
-        $crate::core::fixtures::instr_info!($op, $name, $ports, $implicit);
+        $crate::core::fixtures::instr_info!($op, $name, $implicit);
     };
 }
 pub(crate) use machine_op;
 
-/// A selection marker: an instruction saying only what the isel assertions
-/// read, its mnemonic, over two untyped operands.
-// Migration skip: selector-only test support.
-#[cfg(any())]
-macro_rules! marker_op {
-    ($op:ident, $name:tt) => {
-        tir::helpers::operation! {
-            $op {
-                name: $name,
-                dialect: "test",
-                scheme: "(_?, _?) -> _*",
-                operands: O { a, b },
-                results: R { regs },
-                interfaces: [tir::backend::MachineInstruction],
-            }
-        }
-        $crate::core::fixtures::instr_info!($op, $name, &[], &[]);
-    };
-}
-// Migration skip: selector-only test support.
-#[cfg(any())]
-pub(crate) use marker_op;
-
-/// The `MachineInstruction` facts a test opcode reports: its mnemonic, the
-/// register slots `$ports`, and the registers `$implicit` its behavior touches.
 macro_rules! instr_info {
-    ($op:ident, $name:tt, $ports:expr, $implicit:expr) => {
+    ($op:ident, $name:tt, $implicit:expr) => {
         impl tir::backend::MachineInstruction for $op {
             fn info(&self) -> &'static tir::backend::InstrInfo {
                 static INFO: tir::backend::InstrInfo = tir::backend::InstrInfo {
                     name: $name,
                     mnemonic: $name,
                     control_flow: tir::backend::ControlFlow::None,
-                    regs: $ports,
                     implicit_regs: $implicit,
                     ..tir::backend::InstrInfo::BASE
                 };
