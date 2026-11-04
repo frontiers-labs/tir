@@ -8,7 +8,7 @@ high_halves:
 	movhps [rax + 64], xmm0
 	movhpd [rax + 64], xmm0
 
-# CHECK:      symbol {name = "high_halves"}
+# CHECK:      asm.symbol {name = "high_halves"}
 # CHECK-NEXT: x86_64.movhps_load_disp {dst = xmm0, base = rax, imm = 24}
 # CHECK-NEXT: x86_64.movhpd_load_disp {dst = xmm0, base = rax, imm = 24}
 # CHECK-NEXT: x86_64.movhps_store_disp {base = rax, src = xmm0, imm = 64}

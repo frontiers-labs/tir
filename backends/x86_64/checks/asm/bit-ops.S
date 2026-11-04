@@ -8,7 +8,7 @@ bit_tests:
 	btr rcx, rdx
 	btc rcx, rdx
 
-# CHECK:      symbol {name = "bit_tests"}
+# CHECK:      asm.symbol {name = "bit_tests"}
 # CHECK-NEXT: x86_64.bt {dst = rax, src = rbx}
 # CHECK-NEXT: x86_64.bts {dst = rax, src = rbx}
 # CHECK-NEXT: x86_64.btr {dst = rcx, src = rdx}

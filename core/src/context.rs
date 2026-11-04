@@ -286,6 +286,7 @@ impl Context {
         context.register_dialect::<PtrDialect>();
         context.register_dialect::<ScfDialect>();
         context.register_dialect::<StateDialect>();
+        context.register_dialect::<crate::backend::AsmDialect>();
         context.register_dialect::<crate::son::SonDialect>();
         context.register_dialect::<VectorDialect>();
         context.declare_core_types();

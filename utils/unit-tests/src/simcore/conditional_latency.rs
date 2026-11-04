@@ -1,6 +1,6 @@
 #![allow(dead_code, unused_imports)]
 
-use tir::backend::MachineContext;
+use tir::backend::{AsmDialect, MachineContext};
 use tir::helpers::{dialect, operation};
 use tir_sim::{Executor, ProgramImage};
 
@@ -112,6 +112,7 @@ fn fusion_groups(
 
 fn record() -> (tir::Context, Executor) {
     let context = tir::Context::with_default_dialects();
+    context.register_dialect::<AsmDialect>();
     context.register_dialect::<LatencyDialect>();
     let parser = tir::backend::AsmParser::new(get_instruction_parsers(Feature::ALL).0);
     let module = parser

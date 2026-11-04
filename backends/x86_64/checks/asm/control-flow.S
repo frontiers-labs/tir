@@ -14,7 +14,7 @@ cf:
 	jae 16
 	ret
 
-# CHECK:      symbol {name = "cf"}
+# CHECK:      asm.symbol {name = "cf"}
 # CHECK-NEXT: x86_64.jmp {imm = 16}
 # CHECK-NEXT: x86_64.call {imm = 256}
 # CHECK-NEXT: x86_64.cmp {dst = rax, src = rcx}

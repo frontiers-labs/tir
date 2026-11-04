@@ -1,3 +1,5 @@
+use tir::helpers::dialect;
+
 pub mod abi;
 pub mod asm_desc;
 pub mod asm_syntax;
@@ -545,6 +547,26 @@ pub(crate) fn print_register(
     }
 }
 
+/// Print a virtual branch/terminator op for debugging: its mnemonic, operands as
+/// `%N`, then each block-reference attribute as `^bbN`. Shared by the targets'
+/// virtual branch ops so successor formatting is not duplicated per target.
+pub fn print_branch<T: tir::Operation>(
+    fmt: &mut tir::IRFormatter,
+    op: &T,
+) -> Result<(), std::fmt::Error> {
+    fmt.write(format!("{}.{}", T::dialect(), T::name()))?;
+    for (i, value) in op.operands().iter().enumerate() {
+        fmt.write(if i == 0 { " " } else { ", " })?;
+        fmt.write(format!("%{}", value.number()))?;
+    }
+    for attr in op.attributes() {
+        if let AttributeValue::Block(block) = &attr.value {
+            fmt.write(format!(" ^bb{}", fmt.region_block_number(*block)))?;
+        }
+    }
+    fmt.write("\n")
+}
+
 /// The successor blocks a branch-shaped op transfers control to: every block
 /// referenced by one of its attributes. Target branch instructions store their
 /// destination as an `AttributeValue::Block` (the immediate operand rewritten by
@@ -633,6 +655,7 @@ pub fn asm_item(op: &tir::OpHandle) -> AsmItem {
     if op.is::<crate::builtin::ModuleEndOp>()
         || op.is::<SectionEndOp>()
         || op.is::<SymbolEndOp>()
+        || op.is::<BlockEndOp>()
         || names_memory_state(op)
         || op.is::<crate::func::DeclareOp>()
         || op.is::<crate::builtin::TypeDefOp>()
@@ -668,4 +691,42 @@ pub fn symbol_body_blocks(context: &tir::Context, op: &tir::OpHandle) -> Vec<tir
         .iter(context.clone())
         .map(|block| block.id())
         .collect()
+}
+
+pub mod ops {
+    pub use crate::backend::operations::*;
+}
+
+dialect! {
+    AsmDialect {
+        name: "asm",
+        operations: [
+            SectionOp,
+            SectionEndOp,
+            SymbolOp,
+            SymbolEndOp,
+            LiteralOp,
+            DataRelocOp,
+            SymbolAddressOp,
+            BlockEndOp,
+            VirtualReturnOp,
+            VirtualBranchOp,
+            ParallelCopyOp,
+            VirtualCallOp,
+            VirtualIndirectCallOp,
+        ],
+    }
+}
+
+pub fn emit_uncond_branch(
+    context: &tir::Context,
+    dest: tir::BlockId,
+    args: &[tir::ValueId],
+) -> Box<dyn tir::Operation> {
+    Box::new(
+        VirtualBranchOpBuilder::new(context)
+            .dest_args(args.to_vec())
+            .dest(dest)
+            .build(),
+    )
 }

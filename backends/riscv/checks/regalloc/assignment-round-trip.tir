@@ -5,10 +5,10 @@
 // as one map from value to register.
 
 module {
-  builtin.symbol {name = "placed", assignment = [%3:GPR[1], %7:GPR[2]]} {
-    builtin.symbol_end
+  asm.symbol {name = "placed", assignment = [%3:GPR[1], %7:GPR[2]]} {
+    asm.symbol_end
   }
   module_end
 }
 
-// CHECK: symbol {name = "placed", assignment = [%3:GPR[1], %7:GPR[2]]}
+// CHECK: asm.symbol {name = "placed", assignment = [%3:GPR[1], %7:GPR[2]]}

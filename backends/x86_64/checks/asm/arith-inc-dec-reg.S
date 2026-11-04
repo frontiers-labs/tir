@@ -7,7 +7,7 @@ unary_counts:
 	dec rcx
 	inc r8
 
-# CHECK:      symbol {name = "unary_counts"}
+# CHECK:      asm.symbol {name = "unary_counts"}
 # CHECK-NEXT: x86_64.inc {dst = rax}
 # CHECK-NEXT: x86_64.dec {dst = rcx}
 # CHECK-NEXT: x86_64.inc {dst = r8}

@@ -7,10 +7,10 @@ entry:
     add a0, a1, a2
 
 # CHECK:      module {
-# CHECK-NEXT:   section {
-# CHECK-NEXT:     symbol {name = "foo"} {
+# CHECK-NEXT:   asm.section {
+# CHECK-NEXT:     asm.symbol {name = "foo"} {
 # CHECK-NEXT:       riscv.add {rd = x10, rs1 = x11, rs2 = x12}
-# CHECK-NEXT:       symbol_end
+# CHECK-NEXT:       asm.symbol_end
 # CHECK-NEXT:     }
 # CHECK-NEXT:   }
 # CHECK-NEXT:   module_end

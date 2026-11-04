@@ -8,7 +8,7 @@ sign_widening:
 	cwde
 	cwd
 
-# CHECK:      symbol {name = "sign_widening"}
+# CHECK:      asm.symbol {name = "sign_widening"}
 # CHECK-NEXT: x86_64.cdqe
 # CHECK-NEXT: x86_64.cbw
 # CHECK-NEXT: x86_64.cwde

@@ -6,7 +6,7 @@ lane_shuffles:
 	shufps xmm0, xmm1, 0x1b
 	shufpd xmm0, xmm1, 0x1
 
-# CHECK:      symbol {name = "lane_shuffles"}
+# CHECK:      asm.symbol {name = "lane_shuffles"}
 # CHECK-NEXT: x86_64.shufps {dst = xmm0, src = xmm1, imm = 27}
 # CHECK-NEXT: x86_64.shufpd {dst = xmm0, src = xmm1, imm = 1}
 

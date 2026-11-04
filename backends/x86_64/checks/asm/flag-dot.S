@@ -9,7 +9,7 @@ flag_setter:
 	cld
 	std
 
-# CHECK:      symbol {name = "flag_setter"}
+# CHECK:      asm.symbol {name = "flag_setter"}
 # CHECK-NEXT: x86_64.clc
 # CHECK-NEXT: x86_64.stc
 # CHECK-NEXT: x86_64.cmc

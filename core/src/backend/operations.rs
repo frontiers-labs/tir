@@ -1,5 +1,7 @@
 use tir::helpers::operation;
-use tir::{ResourceAccess, ResourceEffect, ResourceEffects, Terminator, builtin::StateResource};
+use tir::{
+    Operation, ResourceAccess, ResourceEffect, ResourceEffects, Terminator, builtin::StateResource,
+};
 
 use super::{ControlFlow, InstrInfo, MachineInstruction};
 
@@ -26,7 +28,7 @@ const fn virtual_call_info(name: &'static str) -> InstrInfo {
 operation! {
     SectionOp {
         name: "section",
-        dialect: "builtin",
+        dialect: "asm",
         scheme: "() -> ()",
         regions: R {
             body: Region {}
@@ -37,7 +39,7 @@ operation! {
 operation! {
     SectionEndOp {
         name: "section_end",
-        dialect: "builtin",
+        dialect: "asm",
         scheme: "() -> ()",
         interfaces: [Terminator],
     }
@@ -48,7 +50,7 @@ impl Terminator for SectionEndOp {}
 operation! {
     SymbolOp {
         name: "symbol",
-        dialect: "builtin",
+        dialect: "asm",
         scheme: "() -> ()",
         regions: R {
             body: Region {}
@@ -59,7 +61,7 @@ operation! {
 operation! {
     SymbolEndOp {
         name: "symbol_end",
-        dialect: "builtin",
+        dialect: "asm",
         scheme: "() -> ()",
         interfaces: [Terminator],
     }
@@ -72,7 +74,7 @@ impl Terminator for SymbolEndOp {}
 operation! {
     LiteralOp {
         name: "literal",
-        dialect: "builtin",
+        dialect: "asm",
         scheme: "() -> ()",
         attributes: A {
             kind: "Str",
@@ -87,7 +89,7 @@ operation! {
 operation! {
     SymbolAddressOp {
         name: "symbol_address",
-        dialect: "builtin",
+        dialect: "asm",
         scheme: "() -> ptr.p<_>",
         attributes: A {
             sym_name: "Str",
@@ -112,7 +114,7 @@ pub fn symbol_address_of(context: &tir::Context, name: &str) -> SymbolAddressOp 
 operation! {
     DataRelocOp {
         name: "data_reloc",
-        dialect: "builtin",
+        dialect: "asm",
         scheme: "() -> ()",
         attributes: A {
             symbol: "Str",
@@ -123,9 +125,132 @@ operation! {
 }
 
 operation! {
+    BlockEndOp {
+        name: "block_end",
+        dialect: "asm",
+        scheme: "() -> ()",
+        interfaces: [Terminator],
+    }
+}
+
+impl Terminator for BlockEndOp {}
+
+operation! {
+    VirtualReturnOp {
+        name: "vret",
+        dialect: "asm",
+        scheme: "(_*) -> ()",
+        format: "custom",
+        operands: O { values },
+        interfaces: [Terminator, tir::backend::MachineInstruction],
+    }
+}
+
+impl VirtualReturnOp {
+    fn custom_print(&self, fmt: &mut tir::IRFormatter) -> Result<(), std::fmt::Error> {
+        super::print_branch(fmt, self)
+    }
+
+    fn custom_parse(
+        parser: &mut tir::parse::text::Parser,
+        _context: &tir::Context,
+    ) -> Result<Box<dyn Operation>, (tir::parse::Span, tir::Error)> {
+        Err((tir::parse::Span(parser.pos()), tir::Error::ExpectedOpName))
+    }
+}
+
+impl VirtualReturnOpBuilder {
+    pub fn value(self, value: tir::ValueId) -> Self {
+        self.values(vec![value])
+    }
+}
+
+impl Terminator for VirtualReturnOp {}
+
+impl MachineInstruction for VirtualReturnOp {
+    fn info(&self) -> &'static InstrInfo {
+        static INFO: InstrInfo = virtual_info("vret", ControlFlow::Unconditional);
+        &INFO
+    }
+
+    fn instance(&self) -> &tir::OpHandle {
+        &self.0
+    }
+}
+
+operation! {
+    VirtualBranchOp {
+        name: "vbr",
+        dialect: "asm",
+        scheme: "(_*) -> ()",
+        format: "custom",
+        operands: O { dest_args },
+        attributes: A {
+            dest: "Block",
+        },
+        interfaces: [Terminator, tir::backend::MachineInstruction],
+    }
+}
+
+impl MachineInstruction for VirtualBranchOp {
+    fn info(&self) -> &'static InstrInfo {
+        static INFO: InstrInfo = virtual_info("vbr", ControlFlow::Unconditional);
+        &INFO
+    }
+
+    fn instance(&self) -> &tir::OpHandle {
+        &self.0
+    }
+}
+
+impl Terminator for VirtualBranchOp {
+    fn successors(&self) -> Vec<tir::BlockId> {
+        super::branch_successors(self)
+    }
+}
+
+impl VirtualBranchOp {
+    fn custom_print(&self, fmt: &mut tir::IRFormatter) -> Result<(), std::fmt::Error> {
+        super::print_branch(fmt, self)
+    }
+
+    fn custom_parse(
+        parser: &mut tir::parse::text::Parser,
+        _context: &tir::Context,
+    ) -> Result<Box<dyn Operation>, (tir::parse::Span, tir::Error)> {
+        Err((tir::parse::Span(parser.pos()), tir::Error::ExpectedOpName))
+    }
+}
+
+// A parallel copy: every result takes its source at once, as one point. The
+// register allocator splits the live ranges at a constrained instruction with
+// one (Hack's thesis, paper § 4) and sequences it on the assigned registers.
+operation! {
+    ParallelCopyOp {
+        name: "pcopy",
+        dialect: "asm",
+        scheme: "(_*) -> _*",
+        operands: O { sources },
+        results: R { copies },
+        interfaces: [tir::backend::MachineInstruction],
+    }
+}
+
+impl MachineInstruction for ParallelCopyOp {
+    fn info(&self) -> &'static InstrInfo {
+        static INFO: InstrInfo = virtual_info("pcopy", ControlFlow::None);
+        &INFO
+    }
+
+    fn instance(&self) -> &tir::OpHandle {
+        &self.0
+    }
+}
+
+operation! {
     VirtualCallOp {
         name: "vcall",
-        dialect: "son",
+        dialect: "asm",
         scheme: "(_*) -> _*",
         operands: O { args },
         results: R { results },
@@ -152,7 +277,7 @@ impl MachineInstruction for VirtualCallOp {
 operation! {
     VirtualIndirectCallOp {
         name: "vcall_indirect",
-        dialect: "son",
+        dialect: "asm",
         scheme: "(backend.reg<_, _>, _*) -> _*",
         operands: O { callee, args },
         results: R { results },
