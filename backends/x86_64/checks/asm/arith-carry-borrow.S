@@ -8,7 +8,7 @@ carry_sequence:
 	sbb rdx, rsi
 	sbb r8, 4
 
-# CHECK:      asm.symbol {name = "carry_sequence"}
+# CHECK:      son.symbol {name = "carry_sequence"}
 # CHECK-NEXT: x86_64.adc {dst = rax, src = rbx}
 # CHECK-NEXT: x86_64.adc_imm {dst = rcx, imm = 4}
 # CHECK-NEXT: x86_64.sbb {dst = rdx, src = rsi}

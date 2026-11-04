@@ -1,7 +1,6 @@
 //! Shared helpers for the simcore unit tests.
 
 use tir::backend::sched::MachineModel;
-use tir::backend::AsmDialect;
 use tir::{Context, OpId};
 use tir_riscv::RiscvDialect;
 use tir_sim::predictor::BranchPredictor;
@@ -10,7 +9,6 @@ use tir_sim::ProgramImage;
 
 /// Assemble RISC-V `asm` and lay it out at 0x8000_0000, entered at `entry`.
 pub fn riscv_program(context: &Context, asm: &str, entry: &str) -> ProgramImage {
-    context.register_dialect::<AsmDialect>();
     context.register_dialect::<RiscvDialect>();
     let dialect = context.find_dialect::<RiscvDialect>().unwrap();
     let module = dialect.get_asm_parser().parse_asm(context, asm).unwrap();

@@ -278,6 +278,9 @@ fn verify_op_tree_ops(context: &Context, op_id: OpId, ops: &mut Vec<OpId>) -> Re
 
     let instance = context.get_op(op_id);
     verify_scoped_metadata(&instance)?;
+    if instance.has_interface::<dyn crate::backend::MachineInstruction>() {
+        crate::backend::verify::verify_reg_slots(context, &instance)?;
+    }
     instance.clone().as_dyn_op().verify(context)?;
     ops.push(op_id);
 
@@ -540,8 +543,9 @@ fn attr_type_matches(attr_type: &str, value: &crate::attributes::AttributeValue)
     use crate::attributes::AttributeValue as V;
     match attr_type {
         "any" => true,
-        "Str" => matches!(value, V::Str(_)),
-        "Int" => matches!(value, V::Int(_) | V::Wide(_)),
+        "Str" | "String" => matches!(value, V::Str(_)),
+        "Integer" if matches!(value, V::Str(_) | V::Block(_) | V::UInt(_)) => true,
+        "Int" | "Integer" => matches!(value, V::Int(_) | V::Wide(_)),
         "UInt" => matches!(value, V::UInt(_)),
         "F32" => matches!(value, V::F32(_)),
         "F64" => matches!(value, V::F64(_)),

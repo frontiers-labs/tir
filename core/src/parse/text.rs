@@ -122,7 +122,6 @@ impl<'src> Parser<'src> {
                     .value_names
                     .get(&name)
                     .copied()
-                    .or_else(|| name.parse::<u32>().ok().map(ValueId::from_number))
                     .ok_or_else(|| crate::Error::UnknownValueRef(name.clone()))?;
                 Ok((placeholder, defined))
             })
@@ -238,6 +237,10 @@ impl<'src> Parser<'src> {
                 )
             });
         }
+        if let Some(label) = self.parse_block_label() {
+            let block = self.resolve_region_block_label(context, label, &[])?;
+            return Ok(Some(AttributeValue::Block(block)));
+        }
         if let Some(value) = self.parse_string() {
             return Ok(Some(AttributeValue::Str(value.to_string().into())));
         }
@@ -345,9 +348,11 @@ impl<'src> Parser<'src> {
         context: &crate::Context,
     ) -> Option<(crate::backend::regalloc::RegClassId, u16)> {
         let mark = self.position;
-        let class = self
-            .parse_ident()
-            .and_then(|name| context.resolve_reg_class(name));
+        let name = self.parse_ident()?;
+        if let Some(register) = context.named_register(name) {
+            return Some(register);
+        }
+        let class = context.resolve_reg_class(name);
         let Some(class) = class else {
             self.position = mark;
             return None;
@@ -364,7 +369,9 @@ impl<'src> Parser<'src> {
             self.position = mark;
             return None;
         }
-        Some((class, index as u16))
+        class
+            .contains(index.try_into().ok()?)
+            .then_some((class, index as u16))
     }
 
     pub fn parse_number(&mut self) -> Option<i64> {

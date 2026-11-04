@@ -20,7 +20,7 @@ alu16:
 	mov r15w, r10w
 	add r12w, 42
 
-# CHECK:      asm.symbol {name = "alu16"}
+# CHECK:      son.symbol {name = "alu16"}
 # CHECK-NEXT: x86_64.add16 {dst = ax, src = bx}
 # CHECK-NEXT: x86_64.sub16 {dst = cx, src = dx}
 # CHECK-NEXT: x86_64.and16 {dst = si, src = di}

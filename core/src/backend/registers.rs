@@ -218,8 +218,9 @@ pub fn reg_slots(op: &OpHandle) -> Vec<SlotRef> {
         return Vec::new();
     }
     let context = op.context.clone();
-    let operands = op.value_operands();
-    let results = op.value_results();
+    let register = |v: &ValueId| !crate::son::CONTROL.is(&context, context.get_value(*v).ty());
+    let operands: Vec<_> = op.value_operands().into_iter().filter(register).collect();
+    let results: Vec<_> = op.value_results().into_iter().filter(register).collect();
     let mut next_operand = 0;
     let mut next_result = 0;
     let mut slots = Vec::with_capacity(ports.len());

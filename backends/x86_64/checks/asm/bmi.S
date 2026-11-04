@@ -19,7 +19,7 @@ bmi_ops:
 	tzcnt rax, rbx
 	tzcnt eax, ebx
 
-# CHECK:      asm.symbol {name = "bmi_ops"}
+# CHECK:      son.symbol {name = "bmi_ops"}
 # CHECK-NEXT: x86_64.andn {dst = rax, src1 = rbx, src2 = rcx}
 # CHECK-NEXT: x86_64.andn {dst = r8, src1 = r9, src2 = r10}
 # CHECK-NEXT: x86_64.andn32 {dst = eax, src1 = ebx, src2 = ecx}

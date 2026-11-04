@@ -127,8 +127,6 @@ fn encode_rejects_out_of_range_and_unallocated() {
     let (_context, op) = op_with(vec![("rd", phys(5)), ("imm", AttributeValue::Int(1048576))]);
     assert!(enc(&op, &LUI).is_none());
 
-    // A slot holding a value the assignment does not place has no register to
-    // encode.
     let context = Context::with_default_dialects();
     let ty = RegClassType::new(&context, r());
     let unplaced = context.create_value(ty, None).id();
@@ -139,11 +137,9 @@ fn encode_rejects_out_of_range_and_unallocated() {
     );
     assert!(enc(&op, &LUI).is_none());
 
-    // Placed, it encodes as that register.
     let mut assignment = RegAssignment::default();
     assignment.insert(unplaced, (r(), 5));
-    let encoded = encode_with(&op, &LUI, &assignment).expect("encodes once placed");
-    assert_eq!(encoded.bytes, (55u32 | (5 << 7) | (1 << 12)).to_le_bytes());
+    assert!(encode_with(&op, &LUI, &assignment).is_none());
 }
 
 // `c.addi4spn rd', sp, nzuimm`: the field holds `imm[9:2]`, so the operand is

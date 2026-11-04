@@ -13,8 +13,8 @@ _memtest:
     lw   x3, 0(x1)
     sw   x3, 0(x2)
 
-# CHECK:      asm.symbol {name = "_memtest"}
+# CHECK:      son.symbol {name = "_memtest"}
 # CHECK-NEXT: riscv.lw {rd = x3, rs1 = x1, imm = 0}
-# CHECK-NEXT: riscv.sw {rs1 = x2, rs2 = x3, imm = 0}
-# CHECK:      asm.literal {kind = "string", value = "Hello, RISC-V!"}
-# CHECK-NEXT: asm.literal {kind = "space", value = 16}
+# CHECK-NEXT: riscv.sw {rs2 = x3, rs1 = x2, imm = 0}
+# CHECK:      son.literal {kind = "string", value = "Hello, RISC-V!"}
+# CHECK-NEXT: son.literal {kind = "space", value = 16}
