@@ -31,7 +31,7 @@ conditional:
 	cmovbe rbx, r9
 	cmova rcx, r10
 
-# CHECK:      symbol {name = "conditional"}
+# CHECK:      asm.symbol {name = "conditional"}
 # CHECK-NEXT: x86_64.jle {imm = 16}
 # CHECK-NEXT: x86_64.jg {imm = 16}
 # CHECK-NEXT: x86_64.jbe {imm = 16}

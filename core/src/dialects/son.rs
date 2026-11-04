@@ -1,4 +1,3 @@
-use crate::backend::{VirtualCallOp, VirtualIndirectCallOp};
 use crate::ty::{Ctor, Kind, TypeCtor};
 use crate::{Context, Error, Operation, Verifiable, dialect, operation};
 
@@ -88,7 +87,7 @@ impl Verifiable for BranchOp {
 dialect! {
     SonDialect {
         name: "son",
-        operations: [MergeOp, EdgeOp, BranchOp, VirtualCallOp, VirtualIndirectCallOp],
+        operations: [MergeOp, EdgeOp, BranchOp],
         types: [Ctor(&CONTROL)],
     }
 }

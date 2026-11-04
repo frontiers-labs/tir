@@ -1,4 +1,5 @@
 use tir::backend::sched::MachineModel;
+use tir::backend::AsmDialect;
 use tir::backend::MachineInstruction;
 use tir_riscv::RiscvDialect;
 use tir_sim::predictor::AlwaysNotTaken;
@@ -15,6 +16,7 @@ fn control_flow_derived_from_pc_writes() {
     use tir::Operation;
 
     let context = tir::Context::with_default_dialects();
+    context.register_dialect::<AsmDialect>();
     context.register_dialect::<RiscvDialect>();
     context.register_dialect::<tir_arm64::Arm64Dialect>();
 

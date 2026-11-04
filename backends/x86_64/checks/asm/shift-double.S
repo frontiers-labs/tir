@@ -8,7 +8,7 @@ double_shifts:
 	shld rcx, rdx, cl
 	shrd rcx, rdx, cl
 
-# CHECK:      symbol {name = "double_shifts"}
+# CHECK:      asm.symbol {name = "double_shifts"}
 # CHECK-NEXT: x86_64.shld_imm {dst = rax, src = rbx, imm = 4}
 # CHECK-NEXT: x86_64.shrd_imm {dst = rax, src = rbx, imm = 4}
 # CHECK-NEXT: x86_64.shld_cl {dst = rcx, src = rdx}

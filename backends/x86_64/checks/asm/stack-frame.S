@@ -8,7 +8,7 @@ stack_frame:
 	leave
 	popf
 
-# CHECK:      symbol {name = "stack_frame"}
+# CHECK:      asm.symbol {name = "stack_frame"}
 # CHECK-NEXT: x86_64.nop
 # CHECK-NEXT: x86_64.pushf
 # CHECK-NEXT: x86_64.leave

@@ -9,7 +9,7 @@ mem:
 	jmp *rsi
 	call *r8
 
-# CHECK:      symbol {name = "mem"}
+# CHECK:      asm.symbol {name = "mem"}
 # CHECK-NEXT: x86_64.mov_load {dst = rax, base = rbx}
 # CHECK-NEXT: x86_64.mov_store {base = rcx, src = rdx}
 # CHECK-NEXT: x86_64.mov_load {dst = r9, base = r10}

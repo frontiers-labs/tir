@@ -25,7 +25,7 @@ alu8:
 	add ah, 42
 	shl bh, 2
 
-# CHECK:      symbol {name = "alu8"}
+# CHECK:      asm.symbol {name = "alu8"}
 # CHECK-NEXT: x86_64.add8 {dst = al, src = bl}
 # CHECK-NEXT: x86_64.sub8 {dst = cl, src = dl}
 # CHECK-NEXT: x86_64.and8 {dst = sil, src = dil}
