@@ -23,7 +23,7 @@ import re
 import sys
 from pathlib import Path
 
-from dryer.discover import iter_source_files
+from dryer.discover import SKIP_DIRS, iter_source_files
 from dryer.scan import scan_files
 from dryer.shape import jaccard
 
@@ -84,6 +84,7 @@ def near_copies(entries):
 
 
 def main():
+    SKIP_DIRS.add(".lake")
     with multiprocessing.Pool() as pool:
         entries = [e for found in pool.map(entries_of, iter_source_files([ROOT])) for e in found]
     allowed = allowed_pairs()

@@ -1,0 +1,4 @@
+interface:
+  display_name: "TIR formal verification"
+  short_description: "Add Hax and Kani proofs for TIR Rust code"
+  default_prompt: "Use $formal-verification to add checked proofs for a TIR production component."

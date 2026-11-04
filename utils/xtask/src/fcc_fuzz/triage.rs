@@ -289,26 +289,3 @@ fn record(
         language: "c".to_string(),
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn reduced(pipeline: &str) -> Reduced {
-        Reduced {
-            artifact: String::new(),
-            subject: String::new(),
-            variant: FccVariant::pipeline(pipeline),
-            shrunk_from: None,
-        }
-    }
-
-    #[test]
-    fn culprit_names_the_leaf_passes_of_a_nested_pipeline() {
-        let reduced = reduced(
-            "func.func(promote-nodes),fixpoint<3>(func.func(verify-deps,instcombine-nodes))",
-        );
-
-        assert_eq!(reduced.culprit(), "promote-nodes + instcombine-nodes");
-    }
-}

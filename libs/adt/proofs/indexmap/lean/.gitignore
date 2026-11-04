@@ -1,0 +1,9 @@
+/llbc/
+/.lake/
+/aeneas-error.log
+/lakefile.toml
+/lean-toolchain
+/lake-manifest.json
+/Indexmap/Extraction/
+/Indexmap/Extraction.lean
+**/*_Template.lean

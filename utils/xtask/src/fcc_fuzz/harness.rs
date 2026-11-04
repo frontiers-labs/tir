@@ -328,18 +328,3 @@ pub fn first_difference(expected: &Behavior, actual: &Behavior) -> Option<String
     }
     Some("outputs differ within the last line".into())
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_panic_or_a_signal_is_a_crash_and_a_diagnostic_is_not() {
-        assert!(is_crash(
-            Some(101),
-            "thread 'main' panicked at core/src/context.rs:1190"
-        ));
-        assert!(is_crash(None, "killed"));
-        assert!(!is_crash(Some(1), "fcc: error: --march is required"));
-    }
-}

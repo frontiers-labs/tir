@@ -1,0 +1,24 @@
+[scenario.indexmap]
+backend = "lean"
+include = ["tir_adt::hashmap::indexmap"]
+exclude = [
+    "{impl core::iter::traits::collect::FromIterator<_> for _}",
+    "{impl core::clone::Clone for tir_adt::hashmap::indexmap::IndexMap}",
+    "{impl core::cmp::PartialEq<_> for tir_adt::hashmap::indexmap::IndexMap}",
+    "tir_adt::hashmap::indexmap::_::or_default",
+    "tir_adt::hashmap::indexmap::_::iter",
+    "{impl core::iter::traits::collect::IntoIterator for _}",
+]
+opaque = ["tir_adt::hashmap::fxhash"]
+
+[scenario.dense-trie]
+backend = "lean"
+include = ["tir_adt::dense_trie::search"]
+
+[tools]
+aeneas = "build-183e4f0"
+charon = "nightly-2026.09.02"
+
+[versions]
+lean = "leanprover/lean4:v4.31.0"
+hax-lean-lib = "v0.3.30"
