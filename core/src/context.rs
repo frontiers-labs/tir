@@ -116,7 +116,7 @@ impl Context {
     pub fn new() -> Self {
         let mut engine = EGraph::default();
         engine
-            .load_program(tir_symbolic::term::IR_PROGRAM)
+            .load_program(tir_ir_schema::IR_PROGRAM)
             .unwrap_or_else(|error| panic!("IR schema: {error}"));
         let engine = Rc::new(RefCell::new(engine));
         let next_id = Arc::new(AtomicU32::new(0));
@@ -189,7 +189,7 @@ impl Context {
         if engine.uses_loaded_program() {
             let mut rules = Rules::new();
             rules.add_ruleset("");
-            for command in engine.parse_program("IR schema", tir_symbolic::term::IR_SCHEMA)? {
+            for command in engine.parse_program("IR schema", tir_ir_schema::IR_SCHEMA)? {
                 match command {
                     Command::AddRuleset(_, name) => rules.add_ruleset(&name),
                     Command::UnstableCombinedRuleset(_, name, members) => {

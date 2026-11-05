@@ -1,0 +1,15 @@
+[package]
+name = "tir-ir-schema"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+bench = false
+test = false
+doctest = false
+
+[build-dependencies]
+tir-egglog = { workspace = true, features = ["parser"] }
+
+[lints]
+workspace = true
