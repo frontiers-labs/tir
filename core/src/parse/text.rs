@@ -181,6 +181,15 @@ impl<'src> Parser<'src> {
         }
     }
 
+    /// Consume `token` and trailing trivia, or report the expected token.
+    pub fn expect_token(&mut self, token: &'static str) -> Result<(), (Span, crate::Error)> {
+        if self.parse_token(token) {
+            Ok(())
+        } else {
+            Err((self.span(), crate::Error::ExpectedToken(token)))
+        }
+    }
+
     pub fn parse_string(&mut self) -> Option<&'src str> {
         if !self.src.get(self.position as usize..)?.starts_with('"') {
             return None;
