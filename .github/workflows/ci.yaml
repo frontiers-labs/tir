@@ -55,7 +55,6 @@ jobs:
       - run: cargo doc --workspace --no-deps
         env:
           RUSTDOCFLAGS: -D warnings -Zunstable-options --merge=none
-      - uses: astral-sh/setup-uv@v6
       - run: git fetch --no-tags --depth=1 origin master:refs/remotes/origin/master
       - run: .github/scripts/check-duplicates.py
         env:
