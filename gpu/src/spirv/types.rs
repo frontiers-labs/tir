@@ -1,4 +1,3 @@
-use tir::parse::Span;
 use tir::{Context, Ctor, Error, Kind, Param, Terms, TypeArg, TypeCtor, TypeId, TypeSpelling};
 use tir_symbolic::term::{no_carrier, valid};
 
@@ -117,17 +116,17 @@ impl PointerType {
             keys: &["ptr"],
             parse: |_, parser, context| {
                 use tir::parse::common::Cursor;
-                expect(parser, "<")?;
+                parser.expect_token("<")?;
                 let pointee = parser
                     .parse_type(context)?
                     .ok_or_else(|| (parser.span(), Error::ExpectedType))?;
-                expect(parser, ",")?;
+                parser.expect_token(",")?;
                 let storage_name = parser
                     .parse_ident()
                     .ok_or_else(|| (parser.span(), Error::ExpectedToken("storage class")))?;
                 let storage_class = StorageClass::parse(storage_name)
                     .ok_or_else(|| (parser.span(), Error::ExpectedToken("storage class")))?;
-                expect(parser, ">")?;
+                parser.expect_token(">")?;
                 Ok(Self::new(context, pointee, storage_class))
             },
             print: |spellings, ty, fmt| {
@@ -197,20 +196,20 @@ impl RuntimeArrayType {
             keys: &["rtarray"],
             parse: |_, parser, context| {
                 use tir::parse::common::Cursor;
-                expect(parser, "<")?;
+                parser.expect_token("<")?;
                 let element = parser
                     .parse_type(context)?
                     .ok_or_else(|| (parser.span(), Error::ExpectedType))?;
-                expect(parser, ",")?;
+                parser.expect_token(",")?;
                 if parser.parse_ident() != Some("stride") {
                     return Err((parser.span(), Error::ExpectedToken("stride")));
                 }
-                expect(parser, "=")?;
+                parser.expect_token("=")?;
                 let stride = parser
                     .parse_number()
                     .and_then(|value| u32::try_from(value).ok())
                     .ok_or_else(|| (parser.span(), Error::ExpectedToken("array stride")))?;
-                expect(parser, ">")?;
+                parser.expect_token(">")?;
                 Ok(Self::new(context, element, stride))
             },
             print: |spellings, ty, fmt| {
@@ -221,17 +220,5 @@ impl RuntimeArrayType {
             },
             variadic_tail: false,
         }
-    }
-}
-
-fn expect(
-    parser: &mut tir::parse::text::Parser<'_>,
-    token: &'static str,
-) -> Result<(), (Span, Error)> {
-    use tir::parse::common::Cursor;
-    if parser.parse_token(token) {
-        Ok(())
-    } else {
-        Err((parser.span(), Error::ExpectedToken(token)))
     }
 }

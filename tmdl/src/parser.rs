@@ -509,81 +509,17 @@ fn template_def<'src, I>()
 where
     I: ValueInput<'src, Token = Token<'src>, Span = Span>,
 {
-    let ident = select! { Token::Identifier(ident) => ident.to_string() };
-
-    just(Token::KwTemplate)
-        .ignore_then(ident)
-        .then(for_isas().or_not())
-        .then(just(Token::Colon).ignore_then(ident).or_not())
-        .then(
-            choice((
-                parameter().map(TemplateOrInstBody::Param),
-                instruction_operands().map(TemplateOrInstBody::Operands),
-                encoding().map(TemplateOrInstBody::Encoding),
-                asm().map(TemplateOrInstBody::Asm),
-                schedule().map(TemplateOrInstBody::Schedule),
-            ))
-            .repeated()
-            .collect::<Vec<_>>()
-            .delimited_by(just(Token::LBrace), just(Token::RBrace)),
-        )
-        .map_with(|(((name, for_isas), parent_template), body), e| {
-            let params = body
-                .iter()
-                .filter_map(|b| match b {
-                    TemplateOrInstBody::Param(p) => Some(p.clone()),
-                    _ => None,
-                })
-                .collect();
-
-            let operands = body
-                .iter()
-                .find_map(|b| {
-                    if let TemplateOrInstBody::Operands(o) = b {
-                        Some(o.clone())
-                    } else {
-                        None
-                    }
-                })
-                .unwrap_or_default();
-
-            let encoding = body.iter().find_map(|b| {
-                if let TemplateOrInstBody::Encoding(e) = b {
-                    Some(e.clone())
-                } else {
-                    None
-                }
-            });
-
-            let asm = body.iter().find_map(|b| {
-                if let TemplateOrInstBody::Asm(a) = b {
-                    Some(a.clone())
-                } else {
-                    None
-                }
-            });
-
-            let schedule = body.iter().find_map(|b| {
-                if let TemplateOrInstBody::Schedule(t) = b {
-                    Some(t.clone())
-                } else {
-                    None
-                }
-            });
-
-            Template {
-                doc: None,
-                name,
-                for_isas: for_isas.unwrap_or_default(),
-                parent_template,
-                params,
-                operands,
-                encoding,
-                asm,
-                schedule,
-                span: e.span(),
-            }
-        })
+    template_or_instruction_def(
+        Token::KwTemplate,
+        choice((
+            parameter().map(TemplateOrInstBody::Param),
+            instruction_operands().map(TemplateOrInstBody::Operands),
+            encoding().map(TemplateOrInstBody::Encoding),
+            asm().map(TemplateOrInstBody::Asm),
+            schedule().map(TemplateOrInstBody::Schedule),
+        )),
+    )
+    .map(|(template, _)| template)
 }
 
 fn instruction_def<'src, I>()
@@ -591,95 +527,95 @@ fn instruction_def<'src, I>()
 where
     I: ValueInput<'src, Token = Token<'src>, Span = Span>,
 {
-    let ident = select! { Token::Identifier(ident) => ident.to_string() };
+    template_or_instruction_def(
+        Token::KwInstruction,
+        choice((
+            parameter().map(TemplateOrInstBody::Param),
+            instruction_operands().map(TemplateOrInstBody::Operands),
+            encoding().map(TemplateOrInstBody::Encoding),
+            asm().map(TemplateOrInstBody::Asm),
+            behavior().map(TemplateOrInstBody::Behavior),
+            schedule().map(TemplateOrInstBody::Schedule),
+        )),
+    )
+    .map(|(template, behavior)| Instruction {
+        doc: template.doc,
+        name: template.name,
+        for_isas: template.for_isas,
+        parent_template: template.parent_template,
+        params: template.params,
+        operands: template.operands,
+        encoding: template.encoding,
+        asm: template.asm,
+        behavior: behavior.unwrap(),
+        schedule: template.schedule,
+        span: template.span,
+    })
+    .labelled("instruction definition")
+}
 
-    just(Token::KwInstruction)
+fn template_or_instruction_def<'src, I>(
+    keyword: Token<'src>,
+    body: impl Parser<'src, I, TemplateOrInstBody, extra::Err<Rich<'src, Token<'src>, Span>>>,
+) -> impl Parser<'src, I, (Template, Option<Expr>), extra::Err<Rich<'src, Token<'src>, Span>>>
+where
+    I: ValueInput<'src, Token = Token<'src>, Span = Span>,
+{
+    let ident = select! { Token::Identifier(ident) => ident.to_string() };
+    just(keyword)
         .ignore_then(ident)
         .then(for_isas().or_not())
         .then(just(Token::Colon).ignore_then(ident).or_not())
         .then(
-            choice((
-                parameter().map(TemplateOrInstBody::Param),
-                instruction_operands().map(TemplateOrInstBody::Operands),
-                encoding().map(TemplateOrInstBody::Encoding),
-                asm().map(TemplateOrInstBody::Asm),
-                behavior().map(TemplateOrInstBody::Behavior),
-                schedule().map(TemplateOrInstBody::Schedule),
-            ))
-            .repeated()
-            .collect::<Vec<_>>()
-            .delimited_by(just(Token::LBrace), just(Token::RBrace)),
+            body.repeated()
+                .collect::<Vec<_>>()
+                .delimited_by(just(Token::LBrace), just(Token::RBrace)),
         )
         .map_with(|(((name, for_isas), parent_template), body), e| {
-            let params = body
-                .iter()
-                .filter_map(|b| match b {
-                    TemplateOrInstBody::Param(p) => Some(p.clone()),
-                    _ => None,
-                })
-                .collect();
-
-            let operands = body
-                .iter()
-                .find_map(|b| {
-                    if let TemplateOrInstBody::Operands(o) = b {
-                        Some(o.clone())
-                    } else {
-                        None
+            let mut params = crate::utils::StableHashMap::default();
+            let mut operands = None;
+            let mut encoding = None;
+            let mut asm = None;
+            let mut behavior = None;
+            let mut schedule = None;
+            for item in body {
+                match item {
+                    TemplateOrInstBody::Param((name, value)) => {
+                        params.insert(name, value);
                     }
-                })
-                .unwrap_or_default();
-
-            let encoding = body.iter().find_map(|b| {
-                if let TemplateOrInstBody::Encoding(e) = b {
-                    Some(e.clone())
-                } else {
-                    None
-                }
-            });
-
-            let asm = body.iter().find_map(|b| {
-                if let TemplateOrInstBody::Asm(a) = b {
-                    Some(a.clone())
-                } else {
-                    None
-                }
-            });
-
-            let behavior = body
-                .iter()
-                .find_map(|b| {
-                    if let TemplateOrInstBody::Behavior(a) = b {
-                        Some(a.clone())
-                    } else {
-                        None
+                    TemplateOrInstBody::Operands(value) => {
+                        operands.get_or_insert(value);
                     }
-                })
-                .unwrap();
-
-            let schedule = body.iter().find_map(|b| {
-                if let TemplateOrInstBody::Schedule(t) = b {
-                    Some(t.clone())
-                } else {
-                    None
+                    TemplateOrInstBody::Encoding(value) => {
+                        encoding.get_or_insert(value);
+                    }
+                    TemplateOrInstBody::Asm(value) => {
+                        asm.get_or_insert(value);
+                    }
+                    TemplateOrInstBody::Behavior(value) => {
+                        behavior.get_or_insert(value);
+                    }
+                    TemplateOrInstBody::Schedule(value) => {
+                        schedule.get_or_insert(value);
+                    }
                 }
-            });
-
-            Instruction {
-                doc: None,
-                name,
-                for_isas: for_isas.unwrap_or_default(),
-                parent_template,
-                params,
-                operands,
-                encoding,
-                asm,
-                behavior,
-                schedule,
-                span: e.span(),
             }
+            (
+                Template {
+                    doc: None,
+                    name,
+                    for_isas: for_isas.unwrap_or_default(),
+                    parent_template,
+                    params,
+                    operands: operands.unwrap_or_default(),
+                    encoding,
+                    asm,
+                    schedule,
+                    span: e.span(),
+                },
+                behavior,
+            )
         })
-        .labelled("instruction definition")
 }
 
 enum TemplateOrInstBody {
