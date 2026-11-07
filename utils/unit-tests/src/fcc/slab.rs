@@ -78,7 +78,7 @@ fn passes_do_not_leak_entities() {
     assert_within_budget(&context, root, "lowering");
 
     let run = |name: &str, mut pm: PassManager| {
-        pm.run(&context, context.get_op(root)).expect("pass runs");
+        pm.run(&context, root).expect("pass runs");
         assert_within_budget(&context, root, name);
     };
 

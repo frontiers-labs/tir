@@ -139,7 +139,7 @@ pub fn run(args: ToolArgs) -> Result<(), Box<dyn Error>> {
 
     if needs_lowering && !per_symbol {
         let mut pm = build_pipeline(target.as_ref(), &context, stop_after, oracles);
-        pm.run(&context, context.get_op(module.id()))
+        pm.run(&context, module.id())
             .map_err(|e| format!("pass pipeline failed: {e}"))?;
     }
 

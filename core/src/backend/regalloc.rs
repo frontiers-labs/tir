@@ -1,5 +1,5 @@
 use crate::analysis::defuse::PhysReg;
-use tir::{AnalysisManager, Context, OperationRef, Pass, PassError};
+use tir::{AnalysisManager, Context, OpId, Pass, PassError};
 
 /// Architectural metadata for one register class.
 #[derive(Debug, Clone)]
@@ -233,7 +233,7 @@ impl Pass for RegisterAllocationPass {
     }
     fn run(
         &mut self,
-        _op: &OperationRef,
+        _op: OpId,
         _context: &Context,
         _analyses: &AnalysisManager,
     ) -> Result<(), PassError> {

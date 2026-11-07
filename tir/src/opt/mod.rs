@@ -63,7 +63,7 @@ pub fn run(args: ToolArgs) -> Result<(), Box<dyn Error>> {
                 tir::registered_passes().join(", ")
             )
         })?;
-        pm.run(&context, context.get_op(module.id()))
+        pm.run(&context, module.id())
             .map_err(|e| format!("pass pipeline failed: {e}"))?;
     }
 

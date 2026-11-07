@@ -49,7 +49,7 @@ pub fn import(args: ImportArgs) -> Result<(), Box<dyn Error>> {
         .map_err(|error| format!("SPIR-V import failed: {error}"))?;
     if args.restructure {
         tir::parse_pipeline("restructure-nodes")?
-            .run(&context, context.get_op(module.id()))
+            .run(&context, module.id())
             .map_err(|error| format!("restructuring failed: {error}"))?;
     }
     let mut rendered = String::new();
