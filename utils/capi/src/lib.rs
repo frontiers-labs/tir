@@ -278,7 +278,7 @@ pub unsafe extern "C" fn tir_pipeline_run(
                 let Some(op) = op_instance(ctx, root) else {
                     return false;
                 };
-                match pm.run(ctx, op) {
+                match pm.run(ctx, op.id) {
                     Ok(()) => true,
                     Err(e) => {
                         set_error(format!("pass pipeline failed: {e}"));

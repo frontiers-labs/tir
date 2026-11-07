@@ -44,7 +44,7 @@ fn a_round_of_instcombine_reaches_a_fixpoint() {
         .nest::<FuncOp>()
         .add_pass(tir::passes::RestructureNodesPass::new());
     raise
-        .run(&context, context.get_op(module.id()))
+        .run(&context, module.id())
         .expect("the fixture restructures");
 
     let mut round = PassManager::new();
@@ -53,14 +53,14 @@ fn a_round_of_instcombine_reaches_a_fixpoint() {
         .nest::<FuncOp>()
         .add_pass(tir::passes::InstCombineNodesPass::new());
     round
-        .run(&context, context.get_op(module.id()))
+        .run(&context, module.id())
         .expect("the round simplifies");
     let settled = context.op_version(module.id());
 
     let mut once = PassManager::new();
     once.nest::<FuncOp>()
         .add_pass(tir::passes::InstCombineNodesPass::new());
-    once.run(&context, context.get_op(module.id()))
+    once.run(&context, module.id())
         .expect("a settled function has nothing left to simplify");
 
     assert_eq!(
@@ -147,7 +147,7 @@ fn simplified(order: [usize; 4], workers: usize) -> (String, Vec<String>) {
     pm.nest::<FuncOp>()
         .add_pass(tir::passes::RestructureNodesPass::new())
         .add_pass(tir::passes::InstCombineNodesPass::new());
-    pm.run(&context, context.get_op(module.id()))
+    pm.run(&context, module.id())
         .expect("the functions simplify");
     let print = |op: &dyn Fn(&mut tir::IRFormatter<'_>)| {
         let mut out = String::new();
