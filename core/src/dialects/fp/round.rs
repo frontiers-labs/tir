@@ -133,14 +133,17 @@ impl RoundOp {
         let reference = parser
             .parse_region_with_entry_args(context, bound.ports)?
             .id();
-        Ok(Box::new(
-            RoundOpBuilder::new(context)
-                .captures(bound.inits)
-                .contract(context.intern_evaluation_contract(contract))
-                .result_types(result_types)
-                .reference(reference)
-                .build(),
-        ))
+        Ok(Box::new(RoundOp::new(
+            context,
+            bound.inits,
+            tir::attributes::AttributeValue::EvaluationContract(
+                context.intern_evaluation_contract(contract),
+            ),
+            result_types,
+            Some(reference),
+            Default::default(),
+            tir::InsertionPoint::Root,
+        )))
     }
 }
 

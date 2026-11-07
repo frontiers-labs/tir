@@ -278,30 +278,36 @@ impl GlobalOp {
             .ok_or_else(|| (parser.span(), Error::ExpectedSymbolName))?
             .to_string();
 
-        let mut builder = GlobalOpBuilder::new(context)
-            .attr("sym_name", AttributeValue::Str(sym_name.into()))
-            .result_type(crate::ptr::PtrType::opaque(context));
+        let mut parts = tir::NewOpParts::default();
         if is_private {
-            builder = builder.attr(
+            parts.attributes.push(context.named_attribute(
                 "sym_visibility",
                 AttributeValue::Str("private".to_string().into()),
-            );
+            ));
         }
         if is_external {
-            builder = builder.attr("external", AttributeValue::Bool(true));
+            parts
+                .attributes
+                .push(context.named_attribute("external", AttributeValue::Bool(true)));
         }
         if parser.parse_token("size") {
-            builder = builder.attr("size", AttributeValue::UInt(parse_number(parser)?));
+            parts
+                .attributes
+                .push(context.named_attribute("size", AttributeValue::UInt(parse_number(parser)?)));
         }
         if parser.parse_token("align") {
-            builder = builder.attr("align", AttributeValue::UInt(parse_number(parser)?));
+            parts.attributes.push(
+                context.named_attribute("align", AttributeValue::UInt(parse_number(parser)?)),
+            );
         }
         if parser.parse_token("section") {
             let section = parser
                 .parse_string()
                 .ok_or_else(|| (parser.span(), Error::ExpectedToken("section name")))?
                 .to_string();
-            builder = builder.attr("section", AttributeValue::Str(section.into()));
+            parts
+                .attributes
+                .push(context.named_attribute("section", AttributeValue::Str(section.into())));
         }
         for name in ["bytes", "relocations", "symbol_differences"] {
             if !parser.parse_token(name) {
@@ -310,10 +316,16 @@ impl GlobalOp {
             let value = parser
                 .parse_attribute_value(context)?
                 .ok_or_else(|| (parser.span(), Error::ExpectedToken("attribute value")))?;
-            builder = builder.attr(name, value);
+            parts.attributes.push(context.named_attribute(name, value));
         }
 
-        Ok(Box::new(builder.build()))
+        Ok(Box::new(GlobalOp::new(
+            context,
+            sym_name.as_str(),
+            crate::ptr::PtrType::opaque(context),
+            parts,
+            tir::InsertionPoint::Root,
+        )))
     }
 }
 
@@ -326,10 +338,17 @@ fn parse_number(parser: &mut tir::parse::text::Parser) -> Result<u64, (tir::pars
 }
 
 /// A δ definition holding `bytes`, aligned to `align`.
-pub fn global_bytes(context: &Context, name: &str, bytes: Vec<u8>, align: u64) -> GlobalOpBuilder {
-    GlobalOpBuilder::new(context)
-        .attr("sym_name", AttributeValue::Str(name.to_string().into()))
-        .attr(
+pub fn global_bytes(
+    context: &Context,
+    name: &str,
+    bytes: Vec<u8>,
+    align: u64,
+    mut parts: tir::NewOpParts,
+    insertion: tir::InsertionPoint,
+) -> GlobalOp {
+    parts.attributes.insert(
+        0,
+        context.named_attribute(
             "bytes",
             AttributeValue::Array(
                 bytes
@@ -338,24 +357,63 @@ pub fn global_bytes(context: &Context, name: &str, bytes: Vec<u8>, align: u64) -
                     .collect::<Vec<_>>()
                     .into(),
             ),
-        )
-        .attr("align", AttributeValue::UInt(align))
-        .result_type(crate::ptr::PtrType::opaque(context))
+        ),
+    );
+    parts.attributes.insert(
+        1,
+        context.named_attribute("align", AttributeValue::UInt(align)),
+    );
+    GlobalOp::new(
+        context,
+        name,
+        crate::ptr::PtrType::opaque(context),
+        parts,
+        insertion,
+    )
 }
 
 /// A δ definition reserving `size` zero bytes, aligned to `align`.
-pub fn global_zero(context: &Context, name: &str, size: u64, align: u64) -> GlobalOpBuilder {
-    GlobalOpBuilder::new(context)
-        .attr("sym_name", AttributeValue::Str(name.to_string().into()))
-        .attr("size", AttributeValue::UInt(size))
-        .attr("align", AttributeValue::UInt(align))
-        .result_type(crate::ptr::PtrType::opaque(context))
+pub fn global_zero(
+    context: &Context,
+    name: &str,
+    size: u64,
+    align: u64,
+    mut parts: tir::NewOpParts,
+    insertion: tir::InsertionPoint,
+) -> GlobalOp {
+    parts.attributes.insert(
+        0,
+        context.named_attribute("size", AttributeValue::UInt(size)),
+    );
+    parts.attributes.insert(
+        1,
+        context.named_attribute("align", AttributeValue::UInt(align)),
+    );
+    GlobalOp::new(
+        context,
+        name,
+        crate::ptr::PtrType::opaque(context),
+        parts,
+        insertion,
+    )
 }
 
 /// A δ declaration of an object another module defines.
-pub fn global_external(context: &Context, name: &str) -> GlobalOpBuilder {
-    GlobalOpBuilder::new(context)
-        .attr("sym_name", AttributeValue::Str(name.to_string().into()))
-        .attr("external", AttributeValue::Bool(true))
-        .result_type(crate::ptr::PtrType::opaque(context))
+pub fn global_external(
+    context: &Context,
+    name: &str,
+    mut parts: tir::NewOpParts,
+    insertion: tir::InsertionPoint,
+) -> GlobalOp {
+    parts.attributes.insert(
+        0,
+        context.named_attribute("external", AttributeValue::Bool(true)),
+    );
+    GlobalOp::new(
+        context,
+        name,
+        crate::ptr::PtrType::opaque(context),
+        parts,
+        insertion,
+    )
 }

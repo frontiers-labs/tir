@@ -253,7 +253,13 @@ pub fn merge_modules(context: &Context, into: OpId, from: OpId) -> Result<(), cr
             erase(existing.id())?;
         }
         source.remove_op(op);
-        target.insert(target.len() - 1, op);
+        context.insert(
+            crate::InsertionPoint::Block {
+                block: target.id(),
+                position: target.len() - 1,
+            },
+            op,
+        );
         moved.push(op);
     }
     if !renames.is_empty() {

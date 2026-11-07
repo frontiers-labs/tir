@@ -101,10 +101,10 @@ pub use ir_formatter::IRFormatter;
 pub use layout::{DataLayout, Endianness, LAYOUT_SPEC, data_layout_spec};
 pub use operand::Operand;
 pub use operation::{
-    DialectName, ErasedOpInterface, ImplementsOpInterface, NewOp, NewOpParts, OpDefSpec,
-    OpDefVerifiable, OpHandle, OpId, OpInterfaceConverter, Operation, OperationName, RegionIds,
-    ValueIds, Verifiable, downcast_op_interface, erase_op_interface, op_interface_converter,
-    verify_op_tree, verify_opdef_attributes, verify_opdef_operands,
+    DialectName, ErasedOpInterface, ImplementsOpInterface, InsertionPoint, NewOp, NewOpParts,
+    OpDefSpec, OpDefVerifiable, OpHandle, OpId, OpInterfaceConverter, Operation, OperationName,
+    RegionIds, ValueIds, Verifiable, downcast_op_interface, erase_op_interface,
+    op_interface_converter, verify_op_tree, verify_opdef_attributes, verify_opdef_operands,
 };
 pub use pass::{
     OperationRef, PASSES, Pass, PassError, PassInfo, PassManager, PassTarget, parse_pipeline,

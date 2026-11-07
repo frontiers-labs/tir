@@ -35,48 +35,122 @@ fn control_flow_derived_from_pc_writes() {
             .control_flow()
     };
 
-    let beq = tir_riscv::BranchEqOpBuilder::new(&context)
-        .attr("rs1", gpr(1))
-        .attr("rs2", gpr(2))
-        .attr("imm", imm.clone())
-        .build();
+    let beq = tir_riscv::BranchEqOp::new(
+        &context,
+        tir::Operand::none(),
+        tir::Operand::none(),
+        tir::Operand::none(),
+        imm.clone(),
+        vec![],
+        vec![],
+        vec![],
+        tir::NewOpParts {
+            attributes: vec![
+                context.named_attribute("rs1", gpr(1)),
+                context.named_attribute("rs2", gpr(2)),
+            ],
+        },
+        tir::InsertionPoint::Root,
+    );
     assert_eq!(cf(&beq), ControlFlow::Conditional);
     // jal writes PC unconditionally (and the link register).
-    let jal = tir_riscv::JumpAndLinkOpBuilder::new(&context)
-        .attr("rd", gpr(1))
-        .attr("imm", imm.clone())
-        .build();
+    let jal = tir_riscv::JumpAndLinkOp::new(
+        &context,
+        tir::Operand::none(),
+        imm.clone(),
+        vec![],
+        vec![],
+        vec![],
+        tir::NewOpParts {
+            attributes: vec![context.named_attribute("rd", gpr(1))],
+        },
+        tir::InsertionPoint::Root,
+    );
     assert_eq!(cf(&jal), ControlFlow::Unconditional);
-    let jalr = tir_riscv::JumpAndLinkRegOpBuilder::new(&context)
-        .attr("rd", gpr(1))
-        .attr("rs1", gpr(2))
-        .attr("imm", imm.clone())
-        .build();
+    let jalr = tir_riscv::JumpAndLinkRegOp::new(
+        &context,
+        tir::Operand::none(),
+        tir::Operand::none(),
+        imm.clone(),
+        vec![],
+        vec![],
+        vec![],
+        tir::NewOpParts {
+            attributes: vec![
+                context.named_attribute("rd", gpr(1)),
+                context.named_attribute("rs1", gpr(2)),
+            ],
+        },
+        tir::InsertionPoint::Root,
+    );
     assert_eq!(cf(&jalr), ControlFlow::Unconditional);
-    let add = tir_riscv::AddOpBuilder::new(&context)
-        .attr("rd", gpr(1))
-        .attr("rs1", gpr(2))
-        .attr("rs2", gpr(3))
-        .build();
+    let add = tir_riscv::AddOp::new(
+        &context,
+        tir::Operand::none(),
+        tir::Operand::none(),
+        tir::Operand::none(),
+        vec![],
+        vec![],
+        vec![],
+        tir::NewOpParts {
+            attributes: vec![
+                context.named_attribute("rd", gpr(1)),
+                context.named_attribute("rs1", gpr(2)),
+                context.named_attribute("rs2", gpr(3)),
+            ],
+        },
+        tir::InsertionPoint::Root,
+    );
     assert_eq!(cf(&add), ControlFlow::None);
     // auipc reads PC but never writes it.
-    let auipc = tir_riscv::AddUpperImmToPCOpBuilder::new(&context)
-        .attr("rd", gpr(1))
-        .attr("imm", imm.clone())
-        .build();
+    let auipc = tir_riscv::AddUpperImmToPCOp::new(
+        &context,
+        tir::Operand::none(),
+        imm.clone(),
+        vec![],
+        vec![],
+        vec![],
+        tir::NewOpParts {
+            attributes: vec![context.named_attribute("rd", gpr(1))],
+        },
+        tir::InsertionPoint::Root,
+    );
     assert_eq!(cf(&auipc), ControlFlow::None);
 
-    let b_eq = tir_arm64::BranchEqOpBuilder::new(&context)
-        .attr("imm", imm.clone())
-        .build();
+    let b_eq = tir_arm64::BranchEqOp::new(
+        &context,
+        tir::Operand::none(),
+        imm.clone(),
+        vec![],
+        vec![],
+        vec![],
+        Default::default(),
+        tir::InsertionPoint::Root,
+    );
     assert_eq!(cf(&b_eq), ControlFlow::Conditional);
-    let ret = tir_arm64::ReturnOpBuilder::new(&context)
-        .attr("rn", gpr(30))
-        .build();
+    let ret = tir_arm64::ReturnOp::new(
+        &context,
+        tir::Operand::none(),
+        tir::Operand::none(),
+        vec![],
+        vec![],
+        vec![],
+        tir::NewOpParts {
+            attributes: vec![context.named_attribute("rn", gpr(30))],
+        },
+        tir::InsertionPoint::Root,
+    );
     assert_eq!(cf(&ret), ControlFlow::Unconditional);
-    let bl = tir_arm64::BranchLinkOpBuilder::new(&context)
-        .attr("imm", imm)
-        .build();
+    let bl = tir_arm64::BranchLinkOp::new(
+        &context,
+        tir::Operand::none(),
+        imm,
+        vec![],
+        vec![],
+        vec![],
+        Default::default(),
+        tir::InsertionPoint::Root,
+    );
     assert_eq!(cf(&bl), ControlFlow::Unconditional);
 }
 
