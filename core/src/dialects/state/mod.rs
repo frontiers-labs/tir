@@ -55,9 +55,12 @@ impl EntryStateOp {
         if context.state_resource(ty).is_none() {
             return Err((parser.span(), Error::ExpectedType));
         }
-        Ok(Box::new(
-            EntryStateOpBuilder::new(context).state_result(ty).build(),
-        ))
+        Ok(Box::new(EntryStateOp::new(
+            context,
+            vec![ty],
+            Default::default(),
+            tir::InsertionPoint::Root,
+        )))
     }
 }
 

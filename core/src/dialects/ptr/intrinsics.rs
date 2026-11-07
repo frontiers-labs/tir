@@ -4,7 +4,7 @@ use crate::analysis::effects::{observed_state, produced_state};
 use crate::attributes::AttributeValue;
 use crate::builtin::{FnType, IntegerType, ModuleOp, StateResource, ops as b};
 use crate::func::ops as func_ops;
-use crate::ptr::{LoadOpBuilder, MemcpyOp, MemsetOp, PtrType, StoreOpBuilder, ops as p};
+use crate::ptr::{LoadOp, MemcpyOp, MemsetOp, PtrType, StoreOp, ops as p};
 use crate::{
     ConstantLike, Context, Intrinsic, Operation, OperationRef, PassError, Symbol, TargetEnv,
     TypeId, ValueId,
@@ -22,12 +22,18 @@ impl Intrinsic for MemcpyOp {
                 let ty = IntegerType::new(context, u64::from(bytes) * 8);
                 let src = address(context, &operation, source, offset)?;
                 let dst = address(context, &operation, destination, offset)?;
-                let mut load = LoadOpBuilder::new(context).ptr(src).result_type(ty);
-                if let Some(s) = state {
-                    load = load.state(s).state_result(context.get_value(s).ty());
-                }
-                let load = load.build();
-                context.insert_op_before(&operation, &load)?;
+                let load = LoadOp::new(
+                    context,
+                    src,
+                    ty,
+                    state.into_iter().collect(),
+                    state
+                        .map(|s| context.get_value(s).ty())
+                        .into_iter()
+                        .collect(),
+                    Default::default(),
+                    context.insertion_point(operation.op().id),
+                );
                 state = produced_state(&context.get_op(load.id()));
                 state = store(context, &operation, dst, load.result(), state)?;
             }
@@ -56,14 +62,32 @@ impl Intrinsic for MemsetOp {
                 let mut fill = value;
                 if bytes > 1 {
                     let ty = IntegerType::new(context, u64::from(bytes) * 8);
-                    let extended = b::extui(context, value, ty).build();
-                    context.insert_op_before(&operation, &extended)?;
+                    let extended = b::extui(
+                        context,
+                        value,
+                        ty,
+                        Default::default(),
+                        tir::InsertionPoint::Root,
+                    );
+                    context.insert(context.insertion_point(operation.op().id), extended.id());
                     let pattern = (0..bytes).fold(0u64, |bits, byte| bits | (1 << (byte * 8)));
-                    let repeated = b::constant(context, pattern as i64, ty).build();
-                    context.insert_op_before(&operation, &repeated)?;
-                    let product =
-                        b::muli(context, extended.result(), repeated.result(), ty).build();
-                    context.insert_op_before(&operation, &product)?;
+                    let repeated = b::constant(
+                        context,
+                        pattern as i64,
+                        ty,
+                        Default::default(),
+                        tir::InsertionPoint::Root,
+                    );
+                    context.insert(context.insertion_point(operation.op().id), repeated.id());
+                    let product = b::muli(
+                        context,
+                        extended.result(),
+                        repeated.result(),
+                        ty,
+                        Default::default(),
+                        tir::InsertionPoint::Root,
+                    );
+                    context.insert(context.insertion_point(operation.op().id), product.id());
                     fill = product.result();
                 }
                 state = store(context, &operation, dst, fill, state)?;
@@ -193,10 +217,23 @@ fn address(
         return Ok(base);
     }
     let offset_ty = crate::ptr::offset_type(context, before.op().id);
-    let index = b::constant(context, offset as i64, offset_ty).build();
-    context.insert_op_before(before, &index)?;
-    let address = p::ptradd(context, base, index.result(), context.get_value(base).ty()).build();
-    context.insert_op_before(before, &address)?;
+    let index = b::constant(
+        context,
+        offset as i64,
+        offset_ty,
+        Default::default(),
+        tir::InsertionPoint::Root,
+    );
+    context.insert(context.insertion_point(before.op().id), index.id());
+    let address = p::ptradd(
+        context,
+        base,
+        index.result(),
+        context.get_value(base).ty(),
+        Default::default(),
+        tir::InsertionPoint::Root,
+    );
+    context.insert(context.insertion_point(before.op().id), address.id());
     Ok(address.result())
 }
 
@@ -207,12 +244,18 @@ fn store(
     value: ValueId,
     state: Option<ValueId>,
 ) -> Result<Option<ValueId>, PassError> {
-    let mut store = StoreOpBuilder::new(context).ptr(ptr).value(value);
-    if let Some(s) = state {
-        store = store.state(s).state_result(context.get_value(s).ty());
-    }
-    let store = store.build();
-    context.insert_op_before(before, &store)?;
+    let store = StoreOp::new(
+        context,
+        value,
+        ptr,
+        state.into_iter().collect(),
+        state
+            .map(|s| context.get_value(s).ty())
+            .into_iter()
+            .collect(),
+        Default::default(),
+        context.insertion_point(before.op().id),
+    );
     Ok(produced_state(&context.get_op(store.id())))
 }
 
@@ -256,8 +299,14 @@ fn library_call(
     };
     let callee = ensure_lambda(context, &module, name, pointer, &types)?;
     if name == "memset" {
-        let extended = b::extui(context, args[1], fill).build();
-        context.insert_op_before(operation, &extended)?;
+        let extended = b::extui(
+            context,
+            args[1],
+            fill,
+            Default::default(),
+            tir::InsertionPoint::Root,
+        );
+        context.insert(context.insertion_point(operation.op().id), extended.id());
         args[1] = extended.result();
     }
     let call = threaded_call(
@@ -266,8 +315,9 @@ fn library_call(
         args,
         pointer,
         observed_state(operation.op()),
+        context.insertion_point(operation.op().id),
     );
-    context.insert_op_before(operation, &call)?;
+    context.insert(context.insertion_point(operation.op().id), call.id());
     finish(
         context,
         operation,
@@ -281,18 +331,28 @@ fn threaded_call(
     args: Vec<ValueId>,
     result_type: TypeId,
     state: Option<ValueId>,
+    insertion: tir::InsertionPoint,
 ) -> impl Operation {
-    let mut builder = func_ops::CallOpBuilder::new(context)
-        .resources(&[StateResource::Memory])
-        .callee(callee)
-        .args(args)
-        .result_type(result_type);
-    if let Some(state) = state {
-        builder = builder
-            .state(state)
-            .state_result(context.get_value(state).ty());
-    }
-    builder.build()
+    func_ops::CallOp::new(
+        context,
+        callee,
+        args,
+        result_type,
+        state.into_iter().collect(),
+        state
+            .map(|s| context.get_value(s).ty())
+            .into_iter()
+            .collect(),
+        tir::NewOpParts {
+            attributes: vec![context.named_attribute(
+                "resources",
+                AttributeValue::Array(
+                    vec![AttributeValue::from(StateResource::Memory.name())].into(),
+                ),
+            )],
+        },
+        insertion,
+    )
 }
 
 fn ensure_lambda(
@@ -318,8 +378,17 @@ fn ensure_lambda(
         }
         return Ok(value);
     }
-    let declaration = func_ops::declare_op(context, name, return_type, argument_types);
+    let declaration = func_ops::declare_op(
+        context,
+        name,
+        return_type,
+        argument_types,
+        Default::default(),
+        tir::InsertionPoint::Block {
+            block: module.body().id(),
+            position: 0,
+        },
+    );
     let value = declaration.fn_value();
-    module.body().insert(0, declaration.id());
     Ok(value)
 }

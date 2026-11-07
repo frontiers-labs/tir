@@ -252,23 +252,61 @@ fn every_edit_bumps_the_spine() {
 
     let cases: &[(&str, Edit)] = &[
         ("append op", |context, body| {
-            body.append(func::ops::r#return(context, Operand::none()).build().id());
+            body.context.insert(
+                body.end(),
+                func::ops::r#return(
+                    context,
+                    Operand::none(),
+                    vec![],
+                    Default::default(),
+                    tir::InsertionPoint::Root,
+                )
+                .id(),
+            );
         }),
         ("insert op", |context, body| {
-            body.insert(
-                0,
-                func::ops::r#return(context, Operand::none()).build().id(),
+            body.context.insert(
+                tir::InsertionPoint::Block {
+                    block: body.id(),
+                    position: 0,
+                },
+                func::ops::r#return(
+                    context,
+                    Operand::none(),
+                    vec![],
+                    Default::default(),
+                    tir::InsertionPoint::Root,
+                )
+                .id(),
             );
         }),
         ("remove op", |context, body| {
-            let ret = func::ops::r#return(context, Operand::none()).build();
-            body.append(ret.id());
+            let ret = func::ops::r#return(
+                context,
+                Operand::none(),
+                vec![],
+                Default::default(),
+                tir::InsertionPoint::Root,
+            );
+            body.context.insert(body.end(), ret.id());
             assert!(body.remove_op(ret.id()));
         }),
         ("replace op", |context, body| {
-            let old = func::ops::r#return(context, Operand::none()).build();
-            body.append(old.id());
-            let new = func::ops::r#return(context, Operand::none()).build();
+            let old = func::ops::r#return(
+                context,
+                Operand::none(),
+                vec![],
+                Default::default(),
+                tir::InsertionPoint::Root,
+            );
+            body.context.insert(body.end(), old.id());
+            let new = func::ops::r#return(
+                context,
+                Operand::none(),
+                vec![],
+                Default::default(),
+                tir::InsertionPoint::Root,
+            );
             assert!(body.replace_op(old.id(), new.id()));
         }),
         ("append block argument", |context, body| {
@@ -290,32 +328,59 @@ fn every_edit_bumps_the_spine() {
             assert!(region.remove_block(extra.id()));
         }),
         ("set op attributes", |context, body| {
-            let ret = func::ops::r#return(context, Operand::none()).build();
-            body.append(ret.id());
+            let ret = func::ops::r#return(
+                context,
+                Operand::none(),
+                vec![],
+                Default::default(),
+                tir::InsertionPoint::Root,
+            );
+            body.context.insert(body.end(), ret.id());
             context.set_op_attributes(ret.id(), vec![]);
         }),
         ("set op operand", |context, body| {
             let i32 = builtin::IntegerType::new(context, 32);
             let a = context.create_value(i32, None);
             let b = context.create_value(i32, None);
-            let add = builtin::ops::addi(context, a.id(), a.id(), i32).build();
-            body.append(add.id());
+            let add = builtin::ops::addi(
+                context,
+                a.id(),
+                a.id(),
+                i32,
+                Default::default(),
+                tir::InsertionPoint::Root,
+            );
+            body.context.insert(body.end(), add.id());
             context.set_op_operand(add.id(), 1, b.id());
         }),
         ("set op operands", |context, body| {
             let i32 = builtin::IntegerType::new(context, 32);
             let a = context.create_value(i32, None);
             let b = context.create_value(i32, None);
-            let add = builtin::ops::addi(context, a.id(), a.id(), i32).build();
-            body.append(add.id());
+            let add = builtin::ops::addi(
+                context,
+                a.id(),
+                a.id(),
+                i32,
+                Default::default(),
+                tir::InsertionPoint::Root,
+            );
+            body.context.insert(body.end(), add.id());
             context.set_op_operands(add.id(), vec![b.id(), b.id()]);
         }),
         ("replace value uses", |context, body| {
             let i32 = builtin::IntegerType::new(context, 32);
             let a = context.create_value(i32, None);
             let b = context.create_value(i32, None);
-            let add = builtin::ops::addi(context, a.id(), a.id(), i32).build();
-            body.append(add.id());
+            let add = builtin::ops::addi(
+                context,
+                a.id(),
+                a.id(),
+                i32,
+                Default::default(),
+                tir::InsertionPoint::Root,
+            );
+            body.context.insert(body.end(), add.id());
             context.replace_value_uses(a.id(), b.id());
         }),
     ];
@@ -343,10 +408,24 @@ fn adopting_a_value_makes_the_block_define_it() {
     let (_, _, body) = module_with_function(&context);
     let i32 = builtin::IntegerType::new(&context, 32);
     let input = context.create_value(i32, None);
-    let produced = builtin::ops::addi(&context, input.id(), input.id(), i32).build();
+    let produced = builtin::ops::addi(
+        &context,
+        input.id(),
+        input.id(),
+        i32,
+        Default::default(),
+        tir::InsertionPoint::Root,
+    );
     let result = context.get_op(produced.id()).results()[0];
-    let reader = builtin::ops::addi(&context, result, result, i32).build();
-    body.append(reader.id());
+    let reader = builtin::ops::addi(
+        &context,
+        result,
+        result,
+        i32,
+        Default::default(),
+        tir::InsertionPoint::Root,
+    );
+    body.context.insert(body.end(), reader.id());
 
     context.adopt_block_argument(body.id(), result);
 
@@ -370,7 +449,17 @@ fn an_untouched_function_keeps_its_version() {
     let (_, untouched, _) = module_with_function(&context);
     let before = context.op_version(untouched);
 
-    body.append(func::ops::r#return(&context, Operand::none()).build().id());
+    body.context.insert(
+        body.end(),
+        func::ops::r#return(
+            &context,
+            Operand::none(),
+            vec![],
+            Default::default(),
+            tir::InsertionPoint::Root,
+        )
+        .id(),
+    );
 
     assert!(context.op_version(edited) > 0);
     assert_eq!(context.op_version(untouched), before);
@@ -384,14 +473,28 @@ fn parent_block_tracks_membership() {
     let b = context.create_value(i32, None);
 
     let block = context.create_block(vec![]);
-    let add = block.append_op(builtin::ops::addi(&context, a.id(), b.id(), i32).build());
+    let add = builtin::ops::addi(
+        &context,
+        a.id(),
+        b.id(),
+        i32,
+        Default::default(),
+        block.end(),
+    );
 
     // Inserting into a block records the parent, reachable from just the op.
     assert_eq!(context.parent_block(add.id()), Some(block.id()));
     assert_eq!(context.get_op(add.id()).parent_block(), Some(block.id()));
 
     // Replacing swaps the parent over to the new op; the old op is detached.
-    let sub = builtin::ops::subi(&context, a.id(), b.id(), i32).build();
+    let sub = builtin::ops::subi(
+        &context,
+        a.id(),
+        b.id(),
+        i32,
+        Default::default(),
+        tir::InsertionPoint::Root,
+    );
     assert!(block.replace_op(add.id(), sub.id()));
     assert_eq!(context.parent_block(add.id()), None);
     assert_eq!(context.parent_block(sub.id()), Some(block.id()));
@@ -427,19 +530,39 @@ fn replacing_value_uses_reaches_a_nested_region() {
     let counter = context.create_value(i32, None);
     let body_block = context.create_block(vec![counter]);
     body_region.add_block(body_block.id());
-    let nested = builtin::ops::addi(&context, a.id(), a.id(), i32).build();
-    body_block.append(nested.id());
-    body_block.append(scf::ops::r#yield(&context, vec![]).build().id());
-    body.append(
-        scf::ForOpBuilder::new(&context)
-            .lb(bound.id())
-            .inits(vec![])
-            .ub(bound.id())
-            .step(bound.id())
-            .body(body_region.id())
-            .result_types(vec![i32])
-            .build()
-            .id(),
+    let nested = builtin::ops::addi(
+        &context,
+        a.id(),
+        a.id(),
+        i32,
+        Default::default(),
+        tir::InsertionPoint::Root,
+    );
+    body_block.context.insert(body_block.end(), nested.id());
+    body_block.context.insert(
+        body_block.end(),
+        scf::ops::r#yield(
+            &context,
+            vec![],
+            Default::default(),
+            tir::InsertionPoint::Root,
+        )
+        .id(),
+    );
+    body.context.insert(
+        body.end(),
+        scf::ForOp::new(
+            &context,
+            bound.id(),
+            vec![],
+            bound.id(),
+            bound.id(),
+            vec![i32],
+            Some(body_region.id()),
+            Default::default(),
+            tir::InsertionPoint::Root,
+        )
+        .id(),
     );
 
     context.replace_value_uses(a.id(), b.id());
@@ -461,8 +584,9 @@ fn custom_interface_for_existing_op() {
         lhs.id(),
         rhs.id(),
         builtin::IntegerType::new(&context, 32),
-    )
-    .build();
+        Default::default(),
+        tir::InsertionPoint::Root,
+    );
 
     assert!(context.get_op(add.id()).has_interface::<dyn Commutative>());
     let iface = context
@@ -474,11 +598,16 @@ fn custom_interface_for_existing_op() {
 
 #[test]
 fn identifies_operations_by_type() {
-    use tir::builtin::{BuiltinDialect, ModuleOp, ModuleOpBuilder};
+    use tir::builtin::{BuiltinDialect, ModuleOp};
     use tir::{DialectName, OperationName};
 
     let context = Context::new();
-    let module = ModuleOpBuilder::new(&context).build();
+    let module = ModuleOp::new(
+        &context,
+        None,
+        Default::default(),
+        tir::InsertionPoint::Root,
+    );
     let instance = context.get_op(module.id());
 
     assert!(instance.is::<ModuleOp>());
@@ -492,10 +621,23 @@ fn uses_of_lists_each_operand_slot() {
     let context = Context::with_default_dialects();
     let (_, _, body) = module_with_function(&context);
     let i32_ty = builtin::IntegerType::new(&context, 32);
-    let c = builtin::ops::constant(&context, 1, i32_ty).build();
-    body.append(c.id());
-    let add = builtin::ops::addi(&context, c.result(), c.result(), i32_ty).build();
-    body.append(add.id());
+    let c = builtin::ops::constant(
+        &context,
+        1,
+        i32_ty,
+        Default::default(),
+        tir::InsertionPoint::Root,
+    );
+    body.context.insert(body.end(), c.id());
+    let add = builtin::ops::addi(
+        &context,
+        c.result(),
+        c.result(),
+        i32_ty,
+        Default::default(),
+        tir::InsertionPoint::Root,
+    );
+    body.context.insert(body.end(), add.id());
 
     assert_eq!(
         context.uses_of(c.result()),
@@ -510,12 +652,31 @@ fn uses_of_lists_each_operand_slot() {
 fn add_fixture(context: &Context) -> (ValueId, ValueId, OpId) {
     let (_, _, body) = module_with_function(context);
     let i32_ty = builtin::IntegerType::new(context, 32);
-    let c = builtin::ops::constant(context, 1, i32_ty).build();
-    body.append(c.id());
-    let d = builtin::ops::constant(context, 2, i32_ty).build();
-    body.append(d.id());
-    let add = builtin::ops::addi(context, c.result(), c.result(), i32_ty).build();
-    body.append(add.id());
+    let c = builtin::ops::constant(
+        context,
+        1,
+        i32_ty,
+        Default::default(),
+        tir::InsertionPoint::Root,
+    );
+    body.context.insert(body.end(), c.id());
+    let d = builtin::ops::constant(
+        context,
+        2,
+        i32_ty,
+        Default::default(),
+        tir::InsertionPoint::Root,
+    );
+    body.context.insert(body.end(), d.id());
+    let add = builtin::ops::addi(
+        context,
+        c.result(),
+        c.result(),
+        i32_ty,
+        Default::default(),
+        tir::InsertionPoint::Root,
+    );
+    body.context.insert(body.end(), add.id());
     (c.result(), d.result(), add.id())
 }
 
@@ -564,7 +725,14 @@ fn replacing_value_uses_reaches_a_detached_op() {
     let context = Context::with_default_dialects();
     let (c, d, _) = add_fixture(&context);
     let i32_ty = builtin::IntegerType::new(&context, 32);
-    let detached = builtin::ops::addi(&context, c, c, i32_ty).build();
+    let detached = builtin::ops::addi(
+        &context,
+        c,
+        c,
+        i32_ty,
+        Default::default(),
+        tir::InsertionPoint::Root,
+    );
 
     context.replace_value_uses(c, d);
 
@@ -640,4 +808,54 @@ proptest::proptest! {
         proptest::prop_assert_eq!(region.block_ids(), order);
         proptest::prop_assert_eq!(context.op_version(f.nest), version);
     }
+}
+
+#[test]
+fn insertion_points_place_and_move_operations_without_duplicate_membership() {
+    use tir::InsertionPoint;
+
+    let context = Context::with_default_dialects();
+    let ty = builtin::IntegerType::new(&context, 32);
+    let block = context.create_block(vec![]);
+    let graph = context.create_nodes_region(vec![], vec![], vec![]);
+    let root = builtin::ops::constant(&context, 0, ty, Default::default(), InsertionPoint::Root);
+    assert_eq!(context.insertion_point(root.id()), InsertionPoint::Root);
+
+    let tail = builtin::ops::constant(&context, 1, ty, Default::default(), block.end());
+    let head = builtin::ops::constant(
+        &context,
+        2,
+        ty,
+        Default::default(),
+        InsertionPoint::Block {
+            block: block.id(),
+            position: 0,
+        },
+    );
+    let middle = builtin::ops::constant(
+        &context,
+        3,
+        ty,
+        Default::default(),
+        context.insertion_point(tail.id()),
+    );
+    assert_eq!(block.op_ids(), vec![head.id(), middle.id(), tail.id()]);
+
+    context.insert(block.end(), head.id());
+    assert_eq!(block.op_ids(), vec![middle.id(), tail.id(), head.id()]);
+    let node = builtin::ops::constant(
+        &context,
+        4,
+        ty,
+        Default::default(),
+        InsertionPoint::Region(graph.id()),
+    );
+    context.insert(InsertionPoint::Region(graph.id()), middle.id());
+    assert_eq!(context.parent_nodes_region(node.id()), Some(graph.id()));
+    assert_eq!(context.parent_nodes_region(middle.id()), Some(graph.id()));
+    assert_eq!(block.op_ids(), vec![tail.id(), head.id()]);
+
+    context.insert(InsertionPoint::Root, tail.id());
+    assert_eq!(block.op_ids(), vec![head.id()]);
+    assert_eq!(context.insertion_point(tail.id()), InsertionPoint::Root);
 }

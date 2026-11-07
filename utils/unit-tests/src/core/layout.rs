@@ -204,7 +204,12 @@ fn dict(entries: impl IntoIterator<Item = (&'static str, AttributeValue)>) -> At
 #[test]
 fn nothing_is_in_scope_without_the_attribute() {
     let context = Context::with_default_dialects();
-    let module = ops::module(&context, None).build();
+    let module = ops::module(
+        &context,
+        None,
+        Default::default(),
+        tir::InsertionPoint::Root,
+    );
 
     assert!(scoped_dict(&context, module.id(), "layout.spec").is_none());
 }
@@ -212,10 +217,17 @@ fn nothing_is_in_scope_without_the_attribute() {
 #[test]
 fn a_nested_op_reads_the_enclosing_scope() {
     let context = Context::with_default_dialects();
-    let module = ops::module(&context, None)
-        .attr("layout.spec", dict([("endianness", "little".into())]))
-        .build();
-    let nested = module.body().append_op(ops::module_end(&context).build());
+    let module = ops::module(
+        &context,
+        None,
+        tir::NewOpParts {
+            attributes: vec![
+                context.named_attribute("layout.spec", dict([("endianness", "little".into())]))
+            ],
+        },
+        tir::InsertionPoint::Root,
+    );
+    let nested = ops::module_end(&context, Default::default(), module.body().end());
 
     let resolved = scoped_dict(&context, nested.id(), "layout.spec").expect("module scope");
 
@@ -225,34 +237,39 @@ fn a_nested_op_reads_the_enclosing_scope() {
 #[test]
 fn an_inner_scope_overrides_one_nested_entry() {
     let context = Context::with_default_dialects();
-    let module = ops::module(&context, None)
-        .attr(
-            "layout.spec",
-            dict([
-                ("endianness", "little".into()),
-                (
-                    "types",
-                    dict([
-                        ("i32", dict([("abi", 32.into())])),
-                        ("i64", dict([("abi", 64.into())])),
-                    ]),
-                ),
-            ]),
-        )
-        .build();
-    let func = module.body().append_op(
-        func_ops::func(
-            &context,
-            "f",
-            UnitType::new(&context),
-            tir::builtin::FnType::new(&context, &[], UnitType::new(&context)),
-            None,
-        )
-        .attr(
-            "layout.spec",
-            dict([("types", dict([("i32", dict([("abi", 8.into())]))]))]),
-        )
-        .build(),
+    let module = ops::module(
+        &context,
+        None,
+        tir::NewOpParts {
+            attributes: vec![context.named_attribute(
+                "layout.spec",
+                dict([
+                    ("endianness", "little".into()),
+                    (
+                        "types",
+                        dict([
+                            ("i32", dict([("abi", 32.into())])),
+                            ("i64", dict([("abi", 64.into())])),
+                        ]),
+                    ),
+                ]),
+            )],
+        },
+        tir::InsertionPoint::Root,
+    );
+    let func = func_ops::func(
+        &context,
+        "f",
+        UnitType::new(&context),
+        tir::builtin::FnType::new(&context, &[], UnitType::new(&context)),
+        None,
+        tir::NewOpParts {
+            attributes: vec![context.named_attribute(
+                "layout.spec",
+                dict([("types", dict([("i32", dict([("abi", 8.into())]))]))]),
+            )],
+        },
+        module.body().end(),
     );
 
     let resolved = scoped_dict(&context, func.id(), "layout.spec").expect("module scope");
@@ -269,16 +286,24 @@ fn an_inner_scope_overrides_one_nested_entry() {
 #[test]
 fn an_inner_scope_replaces_an_array_entry() {
     let context = Context::with_default_dialects();
-    let module = ops::module(&context, None)
-        .attr(
-            "target_env",
-            dict([("features", vec!["m".into(), "a".into()].into())]),
-        )
-        .build();
-    let nested = module.body().append_op(
-        ops::module_end(&context)
-            .attr("target_env", dict([("features", vec!["c".into()].into())]))
-            .build(),
+    let module = ops::module(
+        &context,
+        None,
+        tir::NewOpParts {
+            attributes: vec![context.named_attribute(
+                "target_env",
+                dict([("features", vec!["m".into(), "a".into()].into())]),
+            )],
+        },
+        tir::InsertionPoint::Root,
+    );
+    let nested = ops::module_end(
+        &context,
+        tir::NewOpParts {
+            attributes: vec![context
+                .named_attribute("target_env", dict([("features", vec!["c".into()].into())]))],
+        },
+        module.body().end(),
     );
 
     let resolved = scoped_dict(&context, nested.id(), "target_env").expect("module scope");

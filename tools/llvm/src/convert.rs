@@ -29,7 +29,7 @@ pub fn import(
     module: &ast::Module,
     data_layout: Option<&AttributeValue>,
 ) -> Result<builtin::ModuleOp, Error> {
-    let m = bops::module(context, None).build();
+    let m = bops::module(context, None, Default::default(), tir::InsertionPoint::Root);
     let builder = m.body();
     let mut callees = Callees::default();
     let layout = Layout {
@@ -75,17 +75,18 @@ pub fn import(
         )
     }));
     for func in &module.functions {
-        builder.append_op(lower_function(
+        lower_function(
             context,
             func,
             &mut callees,
             &globals,
             &layout,
             &function_types,
-        )?);
+            builder.end(),
+        )?;
     }
     let bindings = callees.bind(context, &m, &builder);
-    builder.append_op(bops::module_end(context).build());
+    bops::module_end(context, Default::default(), builder.end());
     for (&old, &new) in &bindings {
         context.replace_value_uses(old, new);
     }
@@ -133,11 +134,14 @@ impl Callees {
                 }
                 let signature = FnType::view(context, context.get_value(placeholder).ty())
                     .expect("a callee placeholder has a function type");
-                let declaration =
-                    tir::func::declare_op(context, &name, signature.ret(), &signature.params());
-                let value = declaration.fn_value();
-                body.append_op(declaration);
-                (placeholder, value)
+                let declaration = tir::func::DeclareOp::new(
+                    context,
+                    AttributeValue::Str(name.into()),
+                    FnType::new(context, &signature.params(), signature.ret()),
+                    Default::default(),
+                    body.end(),
+                );
+                (placeholder, declaration.fn_value())
             })
             .collect()
     }
@@ -174,21 +178,48 @@ fn lower_globals(
     let mut values = HashMap::new();
     for global in &module.globals {
         let size = type_size(&global.ty, layout)?;
-        let mut builder = match &global.initializer {
-            ast::GlobalInitializer::External => bops::global_external(context, &global.name),
+        let mut parts = tir::NewOpParts::default();
+        if global.private {
+            parts.attributes.push(
+                context.named_attribute("sym_visibility", AttributeValue::Str("private".into())),
+            );
+        }
+        if global.constant {
+            parts
+                .attributes
+                .push(context.named_attribute("section", AttributeValue::Str(".rodata".into())));
+        }
+        let op = match &global.initializer {
+            ast::GlobalInitializer::External => {
+                bops::global_external(context, &global.name, parts, body.end())
+            }
             ast::GlobalInitializer::Zero | ast::GlobalInitializer::Null => {
-                bops::global_zero(context, &global.name, size, global.align)
+                bops::global_zero(context, &global.name, size, global.align, parts, body.end())
             }
             ast::GlobalInitializer::Integer(value) => {
                 let mut bytes = vec![0; size as usize];
                 let raw = value.to_le_bytes();
                 let copied = bytes.len().min(raw.len());
                 bytes[..copied].copy_from_slice(&raw[..copied]);
-                bops::global_bytes(context, &global.name, bytes, global.align)
+                bops::global_bytes(
+                    context,
+                    &global.name,
+                    bytes,
+                    global.align,
+                    parts,
+                    body.end(),
+                )
             }
             ast::GlobalInitializer::CString(bytes) | ast::GlobalInitializer::Bytes(bytes) => {
                 validate_initializer_size(&global.name, size, bytes.len())?;
-                bops::global_bytes(context, &global.name, bytes.clone(), global.align)
+                bops::global_bytes(
+                    context,
+                    &global.name,
+                    bytes.clone(),
+                    global.align,
+                    parts,
+                    body.end(),
+                )
             }
             ast::GlobalInitializer::Symbols(symbols) => {
                 let pointer_bytes = u64::from(layout.pointer_width / 8);
@@ -208,8 +239,19 @@ fn lower_globals(
                         ])))
                     })
                     .collect::<Vec<_>>();
-                bops::global_bytes(context, &global.name, bytes, global.align)
-                    .attr("relocations", AttributeValue::Array(relocations.into()))
+                parts.attributes.insert(
+                    0,
+                    context
+                        .named_attribute("relocations", AttributeValue::Array(relocations.into())),
+                );
+                bops::global_bytes(
+                    context,
+                    &global.name,
+                    bytes,
+                    global.align,
+                    parts,
+                    body.end(),
+                )
             }
             ast::GlobalInitializer::SymbolDifferences(differences) => {
                 let entries = differences
@@ -230,22 +272,24 @@ fn lower_globals(
                         ])))
                     })
                     .collect::<Vec<_>>();
-                bops::global_bytes(context, &global.name, vec![0; size as usize], global.align)
-                    .attr("symbol_differences", AttributeValue::Array(entries.into()))
+                parts.attributes.insert(
+                    0,
+                    context.named_attribute(
+                        "symbol_differences",
+                        AttributeValue::Array(entries.into()),
+                    ),
+                );
+                bops::global_bytes(
+                    context,
+                    &global.name,
+                    vec![0; size as usize],
+                    global.align,
+                    parts,
+                    body.end(),
+                )
             }
         };
-        if global.private {
-            builder = builder.attr(
-                "sym_visibility",
-                AttributeValue::Str("private".to_string().into()),
-            );
-        }
-        if global.constant {
-            builder = builder.attr("section", AttributeValue::Str(".rodata".to_string().into()));
-        }
-        let op = builder.build();
         values.insert(global.name.clone(), op.address());
-        body.append_op(op);
     }
     Ok(values)
 }
@@ -315,6 +359,7 @@ fn lower_function(
     globals: &HashMap<String, ValueId>,
     layout: &Layout,
     function_types: &HashMap<String, (Vec<Type>, Type, bool)>,
+    insertion: tir::InsertionPoint,
 ) -> Result<tir::func::FuncOp, Error> {
     // The function's rows share chunks with no other function's.
 
@@ -384,8 +429,9 @@ fn lower_function(
         ret_ty,
         FnType::new(context, &parameters, ret_ty),
         Some(region.id()),
-    )
-    .build();
+        Default::default(),
+        insertion,
+    );
 
     let phis: HashMap<_, _> = func
         .blocks
@@ -539,6 +585,140 @@ fn affine_no_wrap_index<'a>(
     Some((source, variable, gep_index(*constant, *width)))
 }
 
+#[allow(clippy::too_many_arguments)]
+fn lower_operand(
+    context: &Context,
+    body: &BlockHandle,
+    operand: &ast::Operand,
+    ty: &Type,
+    values: &HashMap<String, ValueId>,
+    callees: &mut Callees,
+    globals: &HashMap<String, ValueId>,
+    layout: &Layout,
+    function_types: &HashMap<String, (Vec<Type>, Type, bool)>,
+    definitions: &HashMap<&str, &Inst>,
+) -> Result<ValueId, Error> {
+    Ok(match operand {
+        ast::Operand::Ref(name) => *values
+            .get(name)
+            .ok_or_else(|| Error::UndefinedValue(name.clone()))?,
+        ast::Operand::ConstInt(v) => match ty {
+            Type::Float(32) => {
+                let op = fp::ConstantOp::new(
+                    context,
+                    tir::attributes::AttributeValue::UInt((*v as f32).to_bits() as u64),
+                    FloatType::f32(context),
+                    Default::default(),
+                    body.end(),
+                );
+                op.result()
+            }
+            Type::Float(64) => {
+                let op = fp::ConstantOp::new(
+                    context,
+                    tir::attributes::AttributeValue::UInt((*v as f64).to_bits()),
+                    FloatType::f64(context),
+                    Default::default(),
+                    body.end(),
+                );
+                op.result()
+            }
+            _ => {
+                let c = bops::constant(
+                    context,
+                    *v,
+                    lower_type(context, ty)?,
+                    Default::default(),
+                    body.end(),
+                );
+                c.result()
+            }
+        },
+        ast::Operand::ConstFloat(value) => float_constant(context, body, *value, ty)?,
+        ast::Operand::Global(name) => match globals.get(name) {
+            Some(value) => *value,
+            None => {
+                let (params, ret, variadic) = function_types
+                    .get(name)
+                    .ok_or_else(|| Error::UndefinedValue(format!("@{name}")))?;
+                let mut params = params
+                    .iter()
+                    .map(|ty| lower_type(context, ty))
+                    .collect::<Result<Vec<_>, _>>()?;
+                if *variadic {
+                    params.push(VarArgsType::new(context));
+                }
+                let ret = lower_type(context, ret)?;
+                let function = callees.value(context, name, &params, ret);
+                let op = bops::fn_to_ptr(
+                    context,
+                    function,
+                    PtrType::opaque(context),
+                    Default::default(),
+                    body.end(),
+                );
+                op.result()
+            }
+        },
+        ast::Operand::Null => {
+            let o = pops::null(
+                context,
+                PtrType::opaque(context),
+                Default::default(),
+                body.end(),
+            );
+            o.result()
+        }
+        ast::Operand::Undef => match ty {
+            Type::Ptr(_) => {
+                let op = pops::null(
+                    context,
+                    PtrType::opaque(context),
+                    Default::default(),
+                    body.end(),
+                );
+                op.result()
+            }
+            Type::Float(32) | Type::Float(64) => {
+                let op = fp::ConstantOp::new(
+                    context,
+                    tir::attributes::AttributeValue::UInt(0),
+                    lower_type(context, ty)?,
+                    Default::default(),
+                    body.end(),
+                );
+                op.result()
+            }
+            _ => constant(context, body, 0, lower_type(context, ty)?),
+        },
+        ast::Operand::GetElementPtr {
+            source,
+            base,
+            indices,
+        } => {
+            let base = match base.as_ref() {
+                ast::Operand::Ref(name) => *values
+                    .get(name)
+                    .ok_or_else(|| Error::UndefinedValue(name.clone()))?,
+                ast::Operand::Global(name) => *globals
+                    .get(name)
+                    .ok_or_else(|| Error::UndefinedValue(format!("@{name}")))?,
+                _ => return Err(Error::Unsupported("nested getelementptr base".into())),
+            };
+            lower_gep(
+                context,
+                body,
+                base,
+                source,
+                indices,
+                values,
+                layout,
+                definitions,
+            )?
+        }
+    })
+}
+
 #[allow(clippy::cognitive_complexity, clippy::too_many_arguments)]
 fn lower_inst(
     context: &Context,
@@ -554,113 +734,20 @@ fn lower_inst(
     phis: &HashMap<String, &Vec<Inst>>,
     definitions: &HashMap<&str, &Inst>,
 ) -> Result<(), Error> {
-    // Resolve an operand to a value, materialising a `builtin.constant` for
-    // inline integer literals (TIR has no inline constants).
     macro_rules! val {
-        ($op:expr, $ty:expr) => {
-            match $op {
-                ast::Operand::Ref(name) => *values
-                    .get(name)
-                    .ok_or_else(|| Error::UndefinedValue(name.clone()))?,
-                ast::Operand::ConstInt(v) => match $ty {
-                    Type::Float(32) => {
-                        let op = fp::ConstantOpBuilder::new(context)
-                            .bits((*v as f32).to_bits() as u64)
-                            .result_type(FloatType::f32(context))
-                            .build();
-                        let id = op.result();
-                        body.append_op(op);
-                        id
-                    }
-                    Type::Float(64) => {
-                        let op = fp::ConstantOpBuilder::new(context)
-                            .bits((*v as f64).to_bits())
-                            .result_type(FloatType::f64(context))
-                            .build();
-                        let id = op.result();
-                        body.append_op(op);
-                        id
-                    }
-                    _ => {
-                        let c = bops::constant(context, *v, lower_type(context, $ty)?).build();
-                        let id = c.result();
-                        body.append_op(c);
-                        id
-                    }
-                },
-                ast::Operand::ConstFloat(value) => float_constant(context, body, *value, $ty)?,
-                ast::Operand::Global(name) => match globals.get(name) {
-                    Some(value) => *value,
-                    None => {
-                        let (params, ret, variadic) = function_types
-                            .get(name)
-                            .ok_or_else(|| Error::UndefinedValue(format!("@{name}")))?;
-                        let mut params = params
-                            .iter()
-                            .map(|ty| lower_type(context, ty))
-                            .collect::<Result<Vec<_>, _>>()?;
-                        if *variadic {
-                            params.push(VarArgsType::new(context));
-                        }
-                        let ret = lower_type(context, ret)?;
-                        let function = callees.value(context, name, &params, ret);
-                        let op =
-                            bops::fn_to_ptr(context, function, PtrType::opaque(context)).build();
-                        let result = op.result();
-                        body.append_op(op);
-                        result
-                    }
-                },
-                ast::Operand::Null => {
-                    let o = pops::null(context, PtrType::opaque(context)).build();
-                    let id = o.result();
-                    body.append_op(o);
-                    id
-                }
-                ast::Operand::Undef => match $ty {
-                    Type::Ptr(_) => {
-                        let op = pops::null(context, PtrType::opaque(context)).build();
-                        let id = op.result();
-                        body.append_op(op);
-                        id
-                    }
-                    Type::Float(32) | Type::Float(64) => {
-                        let op = fp::ConstantOpBuilder::new(context)
-                            .bits(0)
-                            .result_type(lower_type(context, $ty)?)
-                            .build();
-                        let id = op.result();
-                        body.append_op(op);
-                        id
-                    }
-                    _ => constant(context, body, 0, lower_type(context, $ty)?),
-                },
-                ast::Operand::GetElementPtr {
-                    source,
-                    base,
-                    indices,
-                } => {
-                    let base = match base.as_ref() {
-                        ast::Operand::Ref(name) => *values
-                            .get(name)
-                            .ok_or_else(|| Error::UndefinedValue(name.clone()))?,
-                        ast::Operand::Global(name) => *globals
-                            .get(name)
-                            .ok_or_else(|| Error::UndefinedValue(format!("@{name}")))?,
-                        _ => return Err(Error::Unsupported("nested getelementptr base".into())),
-                    };
-                    lower_gep(
-                        context,
-                        body,
-                        base,
-                        source,
-                        indices,
-                        values,
-                        layout,
-                        definitions,
-                    )?
-                }
-            }
+        ($operand:expr, $ty:expr) => {
+            lower_operand(
+                context,
+                body,
+                $operand,
+                $ty,
+                values,
+                callees,
+                globals,
+                layout,
+                function_types,
+                definitions,
+            )?
         };
     }
     match inst {
@@ -686,16 +773,19 @@ fn lower_inst(
             };
             let bits_ty = IntegerType::new(context, u64::from(width));
             // LLVM fneg flips the sign bit, including for zero and NaN.
-            let bits = body
-                .append_op(bops::bitcast(context, input, bits_ty).build())
-                .result();
+            let bits =
+                bops::bitcast(context, input, bits_ty, Default::default(), body.end()).result();
             let sign = constant(context, body, 1_i64 << (width - 1), bits_ty);
-            let negated = body
-                .append_op(bops::xori(context, bits, sign, bits_ty).build())
-                .result();
-            let op = bops::bitcast(context, negated, lower_type(context, ty)?).build();
+            let negated =
+                bops::xori(context, bits, sign, bits_ty, Default::default(), body.end()).result();
+            let op = bops::bitcast(
+                context,
+                negated,
+                lower_type(context, ty)?,
+                Default::default(),
+                body.end(),
+            );
             values.insert(result.clone(), op.result());
-            body.append_op(op);
         }
         Inst::ICmp {
             result,
@@ -723,24 +813,29 @@ fn lower_inst(
                 Predicate::FLOAT,
                 "fcmp",
             )?;
-            let op = fp::CmpOpBuilder::new(context)
-                .lhs(lhs)
-                .rhs(rhs)
-                .predicate(predicate)
-                .semantics(comparison_semantics(context))
-                .result_type(IntegerType::new(context, 1))
-                .build();
+            let op = fp::CmpOp::new(
+                context,
+                lhs,
+                rhs,
+                tir::attributes::AttributeValue::Predicate(predicate),
+                tir::attributes::AttributeValue::FpSemantics(comparison_semantics(context)),
+                IntegerType::new(context, 1),
+                vec![],
+                vec![],
+                Default::default(),
+                body.end(),
+            );
             let comparison = op.result();
-            body.append_op(op);
+
             let value = if pred == "ult" {
-                body.append_op(
-                    bops::xori(
-                        context,
-                        comparison,
-                        constant(context, body, 1, IntegerType::new(context, 1)),
-                        IntegerType::new(context, 1),
-                    )
-                    .build(),
+                let one = constant(context, body, 1, IntegerType::new(context, 1));
+                bops::xori(
+                    context,
+                    comparison,
+                    one,
+                    IntegerType::new(context, 1),
+                    Default::default(),
+                    body.end(),
                 )
                 .result()
             } else {
@@ -782,20 +877,42 @@ fn lower_inst(
         Inst::Alloca { result, ty, align } => {
             let bytes = type_size(ty, layout)?;
             let align = align.unwrap_or(type_align(ty, layout)?);
-            let o = pops::alloca(context, bytes, align, PtrType::opaque(context)).build();
+            let o = pops::alloca(
+                context,
+                bytes,
+                align,
+                PtrType::opaque(context),
+                vec![],
+                Default::default(),
+                body.end(),
+            );
             values.insert(result.clone(), o.result());
-            body.append_op(o);
         }
         Inst::Load { result, ty, ptr } => {
             let p = val!(ptr, &Type::Ptr(None));
-            let o = pops::load(context, p, lower_type(context, ty)?).build();
+            let o = pops::load(
+                context,
+                p,
+                lower_type(context, ty)?,
+                vec![],
+                vec![],
+                Default::default(),
+                body.end(),
+            );
             values.insert(result.clone(), o.result());
-            body.append_op(o);
         }
         Inst::Store { ty, value, ptr } => {
             let v = val!(value, ty);
             let p = val!(ptr, &Type::Ptr(None));
-            body.append_op(pops::store(context, v, p).build());
+            pops::store(
+                context,
+                v,
+                p,
+                vec![],
+                vec![],
+                Default::default(),
+                body.end(),
+            );
         }
         Inst::GetElementPtr {
             result,
@@ -831,16 +948,12 @@ fn lower_inst(
             values.insert(result.clone(), selected_value);
         }
         Inst::Br { dest } => {
-            lower_br(
-                context,
-                body,
-                dest,
-                current_label,
-                phis,
-                values,
-                globals,
-                by_label,
-            )?;
+            let target = by_label
+                .get(dest)
+                .ok_or_else(|| Error::UndefinedBlock(dest.clone()))?
+                .id();
+            let args = phi_arguments(context, body, dest, current_label, phis, values, globals)?;
+            cbops::br(context, args, target, Default::default(), body.end());
         }
         Inst::CondBr {
             cond,
@@ -884,11 +997,17 @@ fn lower_inst(
         }
         Inst::Ret { value } => match value {
             None => {
-                body.append_op(func_ops::r#return(context, Operand::none()).build());
+                func_ops::r#return(
+                    context,
+                    Operand::none(),
+                    vec![],
+                    Default::default(),
+                    body.end(),
+                );
             }
             Some((ty, op)) => {
                 let v = val!(op, ty);
-                body.append_op(func_ops::r#return(context, v).build());
+                func_ops::r#return(context, v, vec![], Default::default(), body.end());
             }
         },
         Inst::Call {
@@ -939,18 +1058,30 @@ fn lower_inst(
                     let address = *values
                         .get(name)
                         .ok_or_else(|| Error::UndefinedValue(name.clone()))?;
-                    let op = bops::ptr_to_fn(context, address, signature).build();
-                    let result = op.result();
-                    body.append_op(op);
-                    result
+                    let op = bops::ptr_to_fn(
+                        context,
+                        address,
+                        signature,
+                        Default::default(),
+                        body.end(),
+                    );
+                    op.result()
                 }
                 _ => return Err(Error::Unsupported("invalid call target".into())),
             };
-            let o = func_ops::call(context, callee, arg_ids, ret_ty).build();
+            let o = func_ops::call(
+                context,
+                callee,
+                arg_ids,
+                ret_ty,
+                vec![],
+                vec![],
+                Default::default(),
+                body.end(),
+            );
             if let Some(name) = result {
                 values.insert(name.clone(), o.result());
             }
-            body.append_op(o);
         }
         Inst::Unsupported(opcode) => return Err(Error::Unsupported(opcode.clone())),
     }
@@ -965,10 +1096,7 @@ fn lower_binary(
     ty: TypeId,
 ) -> ValueId {
     macro_rules! integer {
-        ($builder:path) => {{
-            body.append_op($builder(context, lhs, rhs, ty).build())
-                .result()
-        }};
+        ($constructor:path) => {{ $constructor(context, lhs, rhs, ty, Default::default(), body.end()).result() }};
     }
     let operation: Box<dyn Operation> = match kind {
         BinOp::Add => return integer!(bops::addi),
@@ -987,73 +1115,55 @@ fn lower_binary(
         kind => {
             let semantics = arithmetic_semantics(context);
             match kind {
-                BinOp::FAdd => Box::new(
-                    fp::AddOpBuilder::new(context)
-                        .lhs(lhs)
-                        .rhs(rhs)
-                        .semantics(semantics)
-                        .result_type(ty)
-                        .build(),
-                ),
-                BinOp::FSub => Box::new(
-                    fp::SubOpBuilder::new(context)
-                        .lhs(lhs)
-                        .rhs(rhs)
-                        .semantics(semantics)
-                        .result_type(ty)
-                        .build(),
-                ),
-                BinOp::FMul => Box::new(
-                    fp::MulOpBuilder::new(context)
-                        .lhs(lhs)
-                        .rhs(rhs)
-                        .semantics(semantics)
-                        .result_type(ty)
-                        .build(),
-                ),
-                BinOp::FDiv => Box::new(
-                    fp::DivOpBuilder::new(context)
-                        .lhs(lhs)
-                        .rhs(rhs)
-                        .semantics(semantics)
-                        .result_type(ty)
-                        .build(),
-                ),
+                BinOp::FAdd => Box::new(fp::AddOp::new(
+                    context,
+                    lhs,
+                    rhs,
+                    tir::attributes::AttributeValue::FpSemantics(semantics),
+                    ty,
+                    vec![],
+                    vec![],
+                    Default::default(),
+                    body.end(),
+                )),
+                BinOp::FSub => Box::new(fp::SubOp::new(
+                    context,
+                    lhs,
+                    rhs,
+                    tir::attributes::AttributeValue::FpSemantics(semantics),
+                    ty,
+                    vec![],
+                    vec![],
+                    Default::default(),
+                    body.end(),
+                )),
+                BinOp::FMul => Box::new(fp::MulOp::new(
+                    context,
+                    lhs,
+                    rhs,
+                    tir::attributes::AttributeValue::FpSemantics(semantics),
+                    ty,
+                    vec![],
+                    vec![],
+                    Default::default(),
+                    body.end(),
+                )),
+                BinOp::FDiv => Box::new(fp::DivOp::new(
+                    context,
+                    lhs,
+                    rhs,
+                    tir::attributes::AttributeValue::FpSemantics(semantics),
+                    ty,
+                    vec![],
+                    vec![],
+                    Default::default(),
+                    body.end(),
+                )),
                 _ => unreachable!(),
             }
         }
     };
-    let result = operation.value_results()[0];
-    body.append(operation.id());
-    result
-}
-
-#[allow(clippy::too_many_arguments)]
-fn lower_br(
-    context: &Context,
-    body: &BlockHandle,
-    destination: &str,
-    current_label: &str,
-    phis: &HashMap<String, &Vec<Inst>>,
-    values: &HashMap<String, ValueId>,
-    globals: &HashMap<String, ValueId>,
-    by_label: &HashMap<String, BlockHandle>,
-) -> Result<(), Error> {
-    let target = by_label
-        .get(destination)
-        .ok_or_else(|| Error::UndefinedBlock(destination.into()))?
-        .id();
-    let args = phi_arguments(
-        context,
-        body,
-        destination,
-        current_label,
-        phis,
-        values,
-        globals,
-    )?;
-    body.append_op(cbops::br(context, args, target).build());
-    Ok(())
+    operation.value_results()[0]
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1087,16 +1197,15 @@ fn lower_cond_br(
         values,
         globals,
     )?;
-    body.append_op(
-        cbops::cond_br(
-            context,
-            condition,
-            true_args,
-            false_args,
-            true_block,
-            false_block,
-        )
-        .build(),
+    cbops::cond_br(
+        context,
+        condition,
+        true_args,
+        false_args,
+        true_block,
+        false_block,
+        Default::default(),
+        body.end(),
     );
     Ok(())
 }
@@ -1135,11 +1244,14 @@ fn lower_switch(
             ))
         })
         .collect::<Result<Vec<_>, Error>>()?;
-    body.append_op(
-        tir::cfg::SwitchOpBuilder::new(context)
-            .selector(selector)
-            .successors(cases, successor(default)?)
-            .build(),
+    let default = successor(default)?;
+    tir::cfg::SwitchOp::with_successors(
+        context,
+        selector,
+        cases,
+        default,
+        Default::default(),
+        body.end(),
     );
     Ok(())
 }
@@ -1157,11 +1269,29 @@ fn lower_intrinsic(
         return Ok(None);
     }
     if name.starts_with("llvm.memcpy.") {
-        body.append_op(pops::memcpy(context, args[0], args[1], args[2]).build());
+        pops::memcpy(
+            context,
+            args[0],
+            args[1],
+            args[2],
+            vec![],
+            vec![],
+            Default::default(),
+            body.end(),
+        );
         return Ok(None);
     }
     if name.starts_with("llvm.memset.") {
-        body.append_op(pops::memset(context, args[0], args[1], args[2]).build());
+        pops::memset(
+            context,
+            args[0],
+            args[1],
+            args[2],
+            vec![],
+            vec![],
+            Default::default(),
+            body.end(),
+        );
         return Ok(None);
     }
     if name.starts_with("llvm.umax.") {
@@ -1175,16 +1305,36 @@ fn lower_intrinsic(
     if name == "llvm.load.relative.i64" {
         let offset_ty = IntegerType::new(context, u64::from(layout.pointer_width));
         let offset = resize_signed(context, body, args[1], offset_ty);
-        let address = body
-            .append_op(pops::ptradd(context, args[0], offset, PtrType::opaque(context)).build())
-            .result();
-        let relative = body
-            .append_op(pops::load(context, address, IntegerType::new(context, 32)).build())
-            .result();
+        let address = pops::ptradd(
+            context,
+            args[0],
+            offset,
+            PtrType::opaque(context),
+            Default::default(),
+            body.end(),
+        )
+        .result();
+        let relative = pops::load(
+            context,
+            address,
+            IntegerType::new(context, 32),
+            vec![],
+            vec![],
+            Default::default(),
+            body.end(),
+        )
+        .result();
         let relative = resize_signed(context, body, relative, offset_ty);
         return Ok(Some(
-            body.append_op(pops::ptradd(context, args[0], relative, ret_ty).build())
-                .result(),
+            pops::ptradd(
+                context,
+                args[0],
+                relative,
+                ret_ty,
+                Default::default(),
+                body.end(),
+            )
+            .result(),
         ));
     }
     Err(Error::Unsupported(format!("intrinsic {name}")))
@@ -1207,24 +1357,22 @@ fn resize_integer(
 ) -> ValueId {
     let width = |ty| IntegerType::view(context, ty).map(|integer| integer.width());
     match width(context.get_value(value).ty()).cmp(&width(ty)) {
-        std::cmp::Ordering::Less if signed => body
-            .append_op(bops::extsi(context, value, ty).build())
-            .result(),
-        std::cmp::Ordering::Less => body
-            .append_op(bops::extui(context, value, ty).build())
-            .result(),
-        std::cmp::Ordering::Greater => body
-            .append_op(bops::trunci(context, value, ty).build())
-            .result(),
+        std::cmp::Ordering::Less if signed => {
+            bops::extsi(context, value, ty, Default::default(), body.end()).result()
+        }
+        std::cmp::Ordering::Less => {
+            bops::extui(context, value, ty, Default::default(), body.end()).result()
+        }
+        std::cmp::Ordering::Greater => {
+            bops::trunci(context, value, ty, Default::default(), body.end()).result()
+        }
         std::cmp::Ordering::Equal => value,
     }
 }
 
 fn constant(context: &Context, body: &BlockHandle, value: i64, ty: TypeId) -> ValueId {
-    let op = bops::constant(context, value, ty).build();
-    let result = op.result();
-    body.append_op(op);
-    result
+    let op = bops::constant(context, value, ty, Default::default(), body.end());
+    op.result()
 }
 
 fn float_constant(
@@ -1242,13 +1390,14 @@ fn float_constant(
             ));
         }
     };
-    let op = fp::ConstantOpBuilder::new(context)
-        .bits(bits)
-        .result_type(ty)
-        .build();
-    let result = op.result();
-    body.append_op(op);
-    Ok(result)
+    let op = fp::ConstantOp::new(
+        context,
+        tir::attributes::AttributeValue::UInt(bits),
+        ty,
+        Default::default(),
+        body.end(),
+    );
+    Ok(op.result())
 }
 
 fn lower_select(
@@ -1264,23 +1413,38 @@ fn lower_select(
     let work_ty = match ty {
         Type::Ptr(_) => {
             let int_ty = IntegerType::new(context, u64::from(layout.pointer_width));
-            let null = body.append_op(pops::null(context, PtrType::opaque(context)).build());
-            if_true = body
-                .append_op(pops::ptrdiff(context, if_true, null.result(), int_ty).build())
-                .result();
-            if_false = body
-                .append_op(pops::ptrdiff(context, if_false, null.result(), int_ty).build())
-                .result();
+            let null = pops::null(
+                context,
+                PtrType::opaque(context),
+                Default::default(),
+                body.end(),
+            );
+            if_true = pops::ptrdiff(
+                context,
+                if_true,
+                null.result(),
+                int_ty,
+                Default::default(),
+                body.end(),
+            )
+            .result();
+            if_false = pops::ptrdiff(
+                context,
+                if_false,
+                null.result(),
+                int_ty,
+                Default::default(),
+                body.end(),
+            )
+            .result();
             int_ty
         }
         Type::Float(width) => {
             let int_ty = IntegerType::new(context, u64::from(*width));
-            if_true = body
-                .append_op(bops::bitcast(context, if_true, int_ty).build())
-                .result();
-            if_false = body
-                .append_op(bops::bitcast(context, if_false, int_ty).build())
-                .result();
+            if_true =
+                bops::bitcast(context, if_true, int_ty, Default::default(), body.end()).result();
+            if_false =
+                bops::bitcast(context, if_false, int_ty, Default::default(), body.end()).result();
             int_ty
         }
         Type::Int(_) => result_ty,
@@ -1289,30 +1453,66 @@ fn lower_select(
     let mask = if context.get_value(cond).ty() == work_ty {
         cond
     } else {
-        body.append_op(bops::extsi(context, cond, work_ty).build())
-            .result()
+        bops::extsi(context, cond, work_ty, Default::default(), body.end()).result()
     };
-    let selected_true = body
-        .append_op(bops::andi(context, if_true, mask, work_ty).build())
-        .result();
-    let inverted = body
-        .append_op(bops::xori(context, mask, constant(context, body, -1, work_ty), work_ty).build())
-        .result();
-    let selected_false = body
-        .append_op(bops::andi(context, if_false, inverted, work_ty).build())
-        .result();
-    let selected = body
-        .append_op(bops::ori(context, selected_true, selected_false, work_ty).build())
-        .result();
+    let selected_true = bops::andi(
+        context,
+        if_true,
+        mask,
+        work_ty,
+        Default::default(),
+        body.end(),
+    )
+    .result();
+    let all_ones = constant(context, body, -1, work_ty);
+    let inverted = bops::xori(
+        context,
+        mask,
+        all_ones,
+        work_ty,
+        Default::default(),
+        body.end(),
+    )
+    .result();
+    let selected_false = bops::andi(
+        context,
+        if_false,
+        inverted,
+        work_ty,
+        Default::default(),
+        body.end(),
+    )
+    .result();
+    let selected = bops::ori(
+        context,
+        selected_true,
+        selected_false,
+        work_ty,
+        Default::default(),
+        body.end(),
+    )
+    .result();
     Ok(match ty {
         Type::Ptr(_) => {
-            let null = body.append_op(pops::null(context, PtrType::opaque(context)).build());
-            body.append_op(pops::ptradd(context, null.result(), selected, result_ty).build())
-                .result()
+            let null = pops::null(
+                context,
+                PtrType::opaque(context),
+                Default::default(),
+                body.end(),
+            );
+            pops::ptradd(
+                context,
+                null.result(),
+                selected,
+                result_ty,
+                Default::default(),
+                body.end(),
+            )
+            .result()
         }
-        Type::Float(_) => body
-            .append_op(bops::bitcast(context, selected, result_ty).build())
-            .result(),
+        Type::Float(_) => {
+            bops::bitcast(context, selected, result_ty, Default::default(), body.end()).result()
+        }
         _ => selected,
     })
 }
@@ -1328,23 +1528,25 @@ fn lower_icmp(
     let result_ty = IntegerType::new(context, 1);
     let predicate = parse_predicate(predicate, Predicate::INTEGER, "pointer icmp")?;
     Ok(if matches!(ty, Type::Ptr(_)) {
-        body.append_op(
-            pops::CmpOpBuilder::new(context)
-                .lhs(lhs)
-                .rhs(rhs)
-                .predicate(predicate)
-                .result_type(result_ty)
-                .build(),
+        pops::CmpOp::new(
+            context,
+            lhs,
+            rhs,
+            tir::attributes::AttributeValue::Predicate(predicate),
+            result_ty,
+            Default::default(),
+            body.end(),
         )
         .result()
     } else {
-        body.append_op(
-            bops::CmpIOpBuilder::new(context)
-                .lhs(lhs)
-                .rhs(rhs)
-                .predicate(predicate)
-                .result_type(result_ty)
-                .build(),
+        bops::CmpIOp::new(
+            context,
+            lhs,
+            rhs,
+            tir::attributes::AttributeValue::Predicate(predicate),
+            result_ty,
+            Default::default(),
+            body.end(),
         )
         .result()
     })
@@ -1359,94 +1561,140 @@ fn lower_cast(
     result_ty: TypeId,
     layout: &Layout,
 ) -> ValueId {
-    macro_rules! append {
-        ($op:expr) => {{ body.append_op($op).result() }};
-    }
     match cast {
-        CastOp::SExt => append!(bops::extsi(context, input, result_ty).build()),
-        CastOp::ZExt => append!(bops::extui(context, input, result_ty).build()),
-        CastOp::Trunc => append!(bops::trunci(context, input, result_ty).build()),
+        CastOp::SExt => {
+            bops::extsi(context, input, result_ty, Default::default(), body.end()).result()
+        }
+        CastOp::ZExt => {
+            bops::extui(context, input, result_ty, Default::default(), body.end()).result()
+        }
+        CastOp::Trunc => {
+            bops::trunci(context, input, result_ty, Default::default(), body.end()).result()
+        }
         // Both casts zero-extend or truncate between the integer and the
         // pointer-sized address, which `ptr.ptrdiff` and `ptr.ptradd` take.
         CastOp::PtrToInt => {
-            let null = append!(pops::null(context, PtrType::opaque(context)).build());
+            let null = pops::null(
+                context,
+                PtrType::opaque(context),
+                Default::default(),
+                body.end(),
+            )
+            .result();
             let address_ty = IntegerType::new(context, u64::from(layout.pointer_width));
-            let address = append!(pops::ptrdiff(context, input, null, address_ty).build());
+            let address = pops::ptrdiff(
+                context,
+                input,
+                null,
+                address_ty,
+                Default::default(),
+                body.end(),
+            )
+            .result();
             resize_unsigned(context, body, address, result_ty)
         }
         CastOp::IntToPtr => {
             let address_ty = IntegerType::new(context, u64::from(layout.pointer_width));
             let address = resize_unsigned(context, body, input, address_ty);
-            let null = append!(pops::null(context, PtrType::opaque(context)).build());
-            append!(pops::ptradd(context, null, address, result_ty).build())
+            let null = pops::null(
+                context,
+                PtrType::opaque(context),
+                Default::default(),
+                body.end(),
+            )
+            .result();
+            pops::ptradd(
+                context,
+                null,
+                address,
+                result_ty,
+                Default::default(),
+                body.end(),
+            )
+            .result()
         }
         CastOp::SIToFP | CastOp::UIToFP => {
             let semantics = arithmetic_semantics(context);
             let op: Box<dyn Operation> = if cast == CastOp::SIToFP || non_negative {
-                Box::new(
-                    fp::FromSiOpBuilder::new(context)
-                        .input(input)
-                        .semantics(semantics)
-                        .result_type(result_ty)
-                        .build(),
-                )
+                Box::new(fp::FromSiOp::new(
+                    context,
+                    input,
+                    tir::attributes::AttributeValue::FpSemantics(semantics),
+                    result_ty,
+                    vec![],
+                    vec![],
+                    Default::default(),
+                    body.end(),
+                ))
             } else {
-                Box::new(
-                    fp::FromUiOpBuilder::new(context)
-                        .input(input)
-                        .semantics(semantics)
-                        .result_type(result_ty)
-                        .build(),
-                )
+                Box::new(fp::FromUiOp::new(
+                    context,
+                    input,
+                    tir::attributes::AttributeValue::FpSemantics(semantics),
+                    result_ty,
+                    vec![],
+                    vec![],
+                    Default::default(),
+                    body.end(),
+                ))
             };
-            let result = op.value_results()[0];
-            body.append(op.id());
-            result
+            op.value_results()[0]
         }
         CastOp::FPToSI | CastOp::FPToUI => {
             let semantics = integer_conversion_semantics(context);
             let result_width = IntegerType::view(context, result_ty).map(|integer| integer.width());
             if cast == CastOp::FPToUI && result_width.is_some_and(|width| width < 64) {
                 let wide_ty = IntegerType::new(context, 64);
-                let wide = body
-                    .append_op(
-                        fp::ToSiOpBuilder::new(context)
-                            .input(input)
-                            .semantics(semantics)
-                            .result_type(wide_ty)
-                            .build(),
-                    )
+                let wide = fp::ToSiOp::new(
+                    context,
+                    input,
+                    tir::attributes::AttributeValue::FpSemantics(semantics),
+                    wide_ty,
+                    vec![],
+                    vec![],
+                    Default::default(),
+                    body.end(),
+                )
+                .result();
+                return bops::trunci(context, wide, result_ty, Default::default(), body.end())
                     .result();
-                return append!(bops::trunci(context, wide, result_ty).build());
             }
             let op: Box<dyn Operation> = if cast == CastOp::FPToSI {
-                Box::new(
-                    fp::ToSiOpBuilder::new(context)
-                        .input(input)
-                        .semantics(semantics)
-                        .result_type(result_ty)
-                        .build(),
-                )
+                Box::new(fp::ToSiOp::new(
+                    context,
+                    input,
+                    tir::attributes::AttributeValue::FpSemantics(semantics),
+                    result_ty,
+                    vec![],
+                    vec![],
+                    Default::default(),
+                    body.end(),
+                ))
             } else {
-                Box::new(
-                    fp::ToUiOpBuilder::new(context)
-                        .input(input)
-                        .semantics(semantics)
-                        .result_type(result_ty)
-                        .build(),
-                )
+                Box::new(fp::ToUiOp::new(
+                    context,
+                    input,
+                    tir::attributes::AttributeValue::FpSemantics(semantics),
+                    result_ty,
+                    vec![],
+                    vec![],
+                    Default::default(),
+                    body.end(),
+                ))
             };
-            let result = op.value_results()[0];
-            body.append(op.id());
-            result
+            op.value_results()[0]
         }
-        CastOp::FPExt | CastOp::FPTrunc => append!(
-            fp::ConvertOpBuilder::new(context)
-                .input(input)
-                .semantics(arithmetic_semantics(context))
-                .result_type(result_ty)
-                .build()
-        ),
+        CastOp::FPExt | CastOp::FPTrunc => fp::ConvertOp::new(
+            context,
+            input,
+            tir::attributes::AttributeValue::FpSemantics(arithmetic_semantics(context)),
+            result_ty,
+            vec![],
+            vec![],
+            Default::default(),
+            body.end(),
+        )
+        .result(),
     }
 }
 
@@ -1486,10 +1734,13 @@ fn phi_arguments(
                 }
                 ast::Operand::ConstFloat(value) => float_constant(context, body, *value, ty),
                 ast::Operand::Null => {
-                    let op = pops::null(context, PtrType::opaque(context)).build();
-                    let result = op.result();
-                    body.append_op(op);
-                    Ok(result)
+                    let op = pops::null(
+                        context,
+                        PtrType::opaque(context),
+                        Default::default(),
+                        body.end(),
+                    );
+                    Ok(op.result())
                 }
                 ast::Operand::Global(name) => globals
                     .get(name)
@@ -1560,17 +1811,27 @@ fn lower_gep(
             index
         } else {
             let scale = constant(context, body, scale as i64, offset_ty);
-            let product = bops::muli(context, index, scale, offset_ty).build();
-            let product_value = product.result();
-            body.append_op(product);
-            product_value
+            let product = bops::muli(
+                context,
+                index,
+                scale,
+                offset_ty,
+                Default::default(),
+                body.end(),
+            );
+            product.result()
         };
         offset = Some(match offset {
             Some(offset) => {
-                let add = bops::addi(context, offset, term, offset_ty).build();
-                let result = add.result();
-                body.append_op(add);
-                result
+                let add = bops::addi(
+                    context,
+                    offset,
+                    term,
+                    offset_ty,
+                    Default::default(),
+                    body.end(),
+                );
+                add.result()
             }
             None => term,
         });
@@ -1590,15 +1851,27 @@ fn lower_gep(
         literal_offset = literal_offset.wrapping_add(value);
     }
     if let Some(offset) = offset {
-        address = body
-            .append_op(pops::ptradd(context, address, offset, PtrType::opaque(context)).build())
-            .result();
+        address = pops::ptradd(
+            context,
+            address,
+            offset,
+            PtrType::opaque(context),
+            Default::default(),
+            body.end(),
+        )
+        .result();
     }
     if literal_offset != 0 {
         let literal = constant(context, body, literal_offset, offset_ty);
-        address = body
-            .append_op(pops::ptradd(context, address, literal, PtrType::opaque(context)).build())
-            .result();
+        address = pops::ptradd(
+            context,
+            address,
+            literal,
+            PtrType::opaque(context),
+            Default::default(),
+            body.end(),
+        )
+        .result();
     }
     Ok(address)
 }

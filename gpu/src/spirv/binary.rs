@@ -81,45 +81,42 @@ impl<'a> Reader<'a> {
     fn read(mut self) -> Result<BuiltinModuleOp> {
         self.collect_metadata()?;
         self.collect_types()?;
-        let root = bops::module(self.context, None).build();
+        let root = bops::module(
+            self.context,
+            None,
+            Default::default(),
+            tir::InsertionPoint::Root,
+        );
         let region = self.context.create_region();
         let block = self.context.create_block(vec![]);
         region.add_block(block.id());
-        let module = ModuleOpBuilder::new(self.context)
-            .attr(
-                "version",
-                AttributeValue::Str(version_string(self.version).into()),
-            )
-            .attr(
-                "addressing_model",
-                AttributeValue::Str(self.addressing_model()?.into()),
-            )
-            .attr(
-                "memory_model",
-                AttributeValue::Str(self.memory_model()?.into()),
-            )
-            .body(region.id())
-            .build();
+        ModuleOp::new(
+            self.context,
+            AttributeValue::Str(version_string(self.version).into()),
+            AttributeValue::Str(self.addressing_model()?.into()),
+            AttributeValue::Str(self.memory_model()?.into()),
+            Some(region.id()),
+            Default::default(),
+            root.body().end(),
+        );
         let body = block;
         for inst in self.instructions.clone() {
             if inst.opcode == 17 {
-                body.append_op(
-                    CapabilityOpBuilder::new(self.context)
-                        .attr(
-                            "name",
-                            AttributeValue::Str(capability_name(inst.operands[0])?.into()),
-                        )
-                        .build(),
+                CapabilityOp::new(
+                    self.context,
+                    AttributeValue::Str(capability_name(inst.operands[0])?.into()),
+                    Default::default(),
+                    body.end(),
                 );
             }
         }
         self.read_globals(&body)?;
         self.read_entries(&body)?;
         self.read_functions(&body)?;
-        body.append_op(ModuleEndOpBuilder::new(self.context).build());
+        ModuleEndOp::new(self.context, Default::default(), body.end());
         let root_body = root.body();
-        root_body.append_op(module);
-        root_body.append_op(bops::module_end(self.context).build());
+
+        bops::module_end(self.context, Default::default(), root_body.end());
         Ok(root)
     }
 
@@ -201,14 +198,16 @@ impl<'a> Reader<'a> {
                 .unwrap_or_else(|| format!("global_{id}"));
             let storage = storage_class(o[2])?;
             let decorations = self.ir_decorations(id)?;
-            let op = GlobalVariableOpBuilder::new(self.context)
-                .sym_name(name)
-                .storage_class(storage.name())
-                .attr("decorations", AttributeValue::Dict(Box::new(decorations)))
-                .result_type(ty)
-                .build();
+            let op = GlobalVariableOp::new(
+                self.context,
+                tir::attributes::AttributeValue::Str((name).into()),
+                tir::attributes::AttributeValue::Str((storage.name()).into()),
+                AttributeValue::Dict(Box::new(decorations)),
+                ty,
+                Default::default(),
+                body.end(),
+            );
             self.values.insert(id, op.result());
-            body.append_op(op);
         }
         Ok(())
     }
@@ -229,12 +228,15 @@ impl<'a> Reader<'a> {
                         )
                     })
                     .collect();
-                body.append_op(
-                    EntryPointOpBuilder::new(self.context)
-                        .execution_model(execution_model_name(inst.operands[0])?)
-                        .function(name)
-                        .attr("interfaces", AttributeValue::Array(interfaces.into()))
-                        .build(),
+                EntryPointOp::new(
+                    self.context,
+                    tir::attributes::AttributeValue::Str(
+                        (execution_model_name(inst.operands[0])?).into(),
+                    ),
+                    tir::attributes::AttributeValue::Str((name).into()),
+                    AttributeValue::Array(interfaces.into()),
+                    Default::default(),
+                    body.end(),
                 );
             } else if inst.opcode == 16 {
                 let function = self
@@ -242,21 +244,21 @@ impl<'a> Reader<'a> {
                     .get(&inst.operands[0])
                     .cloned()
                     .unwrap_or_else(|| format!("function_{}", inst.operands[0]));
-                body.append_op(
-                    ExecutionModeOpBuilder::new(self.context)
-                        .function(function)
-                        .mode(execution_mode_name(inst.operands[1])?)
-                        .attr(
-                            "values",
-                            AttributeValue::Array(
-                                inst.operands[2..]
-                                    .iter()
-                                    .map(|v| AttributeValue::UInt((*v).into()))
-                                    .collect::<Vec<_>>()
-                                    .into(),
-                            ),
-                        )
-                        .build(),
+                ExecutionModeOp::new(
+                    self.context,
+                    tir::attributes::AttributeValue::Str((function).into()),
+                    tir::attributes::AttributeValue::Str(
+                        (execution_mode_name(inst.operands[1])?).into(),
+                    ),
+                    AttributeValue::Array(
+                        inst.operands[2..]
+                            .iter()
+                            .map(|v| AttributeValue::UInt((*v).into()))
+                            .collect::<Vec<_>>()
+                            .into(),
+                    ),
+                    Default::default(),
+                    body.end(),
                 );
             }
         }
@@ -299,13 +301,17 @@ impl<'a> Reader<'a> {
             if let Some(label) = chunk.iter().position(|inst| inst.opcode == 248) {
                 chunk.splice(label + 1..label + 1, read);
             }
-            body.append_op(self.read_function(&chunk)?);
+            self.read_function(&chunk, body.end())?;
             index += 1;
         }
         Ok(())
     }
 
-    fn read_function(&mut self, instructions: &[RawInst]) -> Result<FuncOp> {
+    fn read_function(
+        &mut self,
+        instructions: &[RawInst],
+        insertion: tir::InsertionPoint,
+    ) -> Result<FuncOp> {
         let header = &instructions[0].operands;
         let return_type = self.type_ref(header[0])?;
         let function_id = header[1];
@@ -369,72 +375,88 @@ impl<'a> Reader<'a> {
             }
             let block = blocks[&current_label].clone();
             let o = &inst.operands;
-            let (op_id, result) = match inst.opcode {
+            let (_op_id, result) = match inst.opcode {
                 43 => {
                     let ty = self.type_ref(o[0])?;
-                    let op = ConstantOpBuilder::new(self.context)
-                        .attr("value", decode_constant(self.context, ty, &o[2..])?)
-                        .result_type(ty)
-                        .build();
+                    let op = ConstantOp::new(
+                        self.context,
+                        decode_constant(self.context, ty, &o[2..])?,
+                        ty,
+                        Default::default(),
+                        block.end(),
+                    );
                     (op.id(), Some((o[1], op.result())))
                 }
                 61 => {
-                    let op = LoadOpBuilder::new(self.context)
-                        .pointer(self.value_ref(o[2])?)
-                        .result_type(self.type_ref(o[0])?)
-                        .build();
+                    let op = LoadOp::new(
+                        self.context,
+                        self.value_ref(o[2])?,
+                        self.type_ref(o[0])?,
+                        Default::default(),
+                        block.end(),
+                    );
                     (op.id(), Some((o[1], op.result())))
                 }
                 62 => {
-                    let op = StoreOpBuilder::new(self.context)
-                        .pointer(self.value_ref(o[0])?)
-                        .value(self.value_ref(o[1])?)
-                        .build();
+                    let op = StoreOp::new(
+                        self.context,
+                        self.value_ref(o[0])?,
+                        self.value_ref(o[1])?,
+                        Default::default(),
+                        block.end(),
+                    );
                     (op.id(), None)
                 }
                 65 => {
-                    let op = AccessChainOpBuilder::new(self.context)
-                        .base(self.value_ref(o[2])?)
-                        .indices(
-                            o[3..]
-                                .iter()
-                                .map(|id| self.value_ref(*id))
-                                .collect::<Result<Vec<_>>>()?,
-                        )
-                        .result_type(self.type_ref(o[0])?)
-                        .build();
+                    let op = AccessChainOp::new(
+                        self.context,
+                        self.value_ref(o[2])?,
+                        o[3..]
+                            .iter()
+                            .map(|id| self.value_ref(*id))
+                            .collect::<Result<Vec<_>>>()?,
+                        self.type_ref(o[0])?,
+                        Default::default(),
+                        block.end(),
+                    );
                     (op.id(), Some((o[1], op.result())))
                 }
                 81 => {
-                    let op = CompositeExtractOpBuilder::new(self.context)
-                        .attr(
-                            "indices",
-                            AttributeValue::Array(
-                                o[3..]
-                                    .iter()
-                                    .map(|v| AttributeValue::UInt((*v).into()))
-                                    .collect::<Vec<_>>()
-                                    .into(),
-                            ),
-                        )
-                        .composite(self.value_ref(o[2])?)
-                        .result_type(self.type_ref(o[0])?)
-                        .build();
+                    let op = CompositeExtractOp::new(
+                        self.context,
+                        self.value_ref(o[2])?,
+                        AttributeValue::Array(
+                            o[3..]
+                                .iter()
+                                .map(|v| AttributeValue::UInt((*v).into()))
+                                .collect::<Vec<_>>()
+                                .into(),
+                        ),
+                        self.type_ref(o[0])?,
+                        Default::default(),
+                        block.end(),
+                    );
                     (op.id(), Some((o[1], op.result())))
                 }
                 224 => {
-                    let op = ControlBarrierOpBuilder::new(self.context)
-                        .execution_scope(self.value_ref(o[0])?)
-                        .memory_scope(self.value_ref(o[1])?)
-                        .memory_semantics(self.value_ref(o[2])?)
-                        .build();
+                    let op = ControlBarrierOp::new(
+                        self.context,
+                        self.value_ref(o[0])?,
+                        self.value_ref(o[1])?,
+                        self.value_ref(o[2])?,
+                        Default::default(),
+                        block.end(),
+                    );
                     (op.id(), None)
                 }
                 225 => {
-                    let op = MemoryBarrierOpBuilder::new(self.context)
-                        .memory_scope(self.value_ref(o[0])?)
-                        .memory_semantics(self.value_ref(o[1])?)
-                        .build();
+                    let op = MemoryBarrierOp::new(
+                        self.context,
+                        self.value_ref(o[0])?,
+                        self.value_ref(o[1])?,
+                        Default::default(),
+                        block.end(),
+                    );
                     (op.id(), None)
                 }
                 249 => {
@@ -443,9 +465,14 @@ impl<'a> Reader<'a> {
                         .map(|id| self.value_ref(id))
                         .collect::<Result<Vec<_>>>()?;
                     (
-                        cbops::br(self.context, args, blocks[&o[0]].id())
-                            .build()
-                            .id(),
+                        cbops::br(
+                            self.context,
+                            args,
+                            blocks[&o[0]].id(),
+                            Default::default(),
+                            block.end(),
+                        )
+                        .id(),
                         None,
                     )
                 }
@@ -466,18 +493,31 @@ impl<'a> Reader<'a> {
                             false_args,
                             blocks[&o[1]].id(),
                             blocks[&o[2]].id(),
+                            Default::default(),
+                            block.end(),
                         )
-                        .build()
                         .id(),
                         None,
                     )
                 }
-                253 => (ReturnOpBuilder::new(self.context).build().id(), None),
+                253 => (
+                    ReturnOp::new(
+                        self.context,
+                        tir::Operand::none(),
+                        Default::default(),
+                        block.end(),
+                    )
+                    .id(),
+                    None,
+                ),
                 254 => (
-                    ReturnOpBuilder::new(self.context)
-                        .value(self.value_ref(o[0])?)
-                        .build()
-                        .id(),
+                    ReturnOp::new(
+                        self.context,
+                        self.value_ref(o[0])?,
+                        Default::default(),
+                        block.end(),
+                    )
+                    .id(),
                     None,
                 ),
                 // Merge instructions describe the structure the blocks
@@ -491,13 +531,17 @@ impl<'a> Reader<'a> {
                         .iter()
                         .map(|id| self.value_ref(*id))
                         .collect::<Result<Vec<_>>>()?;
-                    let (id, result) =
-                        build_generated(self.context, opcode, &values, self.type_ref(o[0])?)
-                            .ok_or_else(|| format!("unsupported SPIR-V opcode {opcode}"))?;
+                    let (id, result) = build_generated(
+                        self.context,
+                        opcode,
+                        &values,
+                        self.type_ref(o[0])?,
+                        block.end(),
+                    )
+                    .ok_or_else(|| format!("unsupported SPIR-V opcode {opcode}"))?;
                     (id, Some((o[1], result)))
                 }
             };
-            block.append(op_id);
             if let Some((spirv_id, value)) = result {
                 self.values.insert(spirv_id, value);
             }
@@ -508,8 +552,9 @@ impl<'a> Reader<'a> {
             return_type,
             tir::builtin::FnType::new(self.context, &parameter_types, return_type),
             Some(region.id()),
-        )
-        .build())
+            Default::default(),
+            insertion,
+        ))
     }
 
     fn type_ref(&self, id: u32) -> Result<TypeId> {

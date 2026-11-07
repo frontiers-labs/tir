@@ -99,19 +99,12 @@ impl BlockHandle {
         self.context().block_ops(self.id)
     }
 
-    pub fn insert(&self, index: usize, id: OpId) {
-        self.context().insert_op(self.id, index, id);
-    }
-
-    /// Add `id` after every operation the block currently holds.
-    pub fn append(&self, id: OpId) {
-        self.context().append_op(self.id, id);
-    }
-
-    /// Append `op` and hand it back, for building a block in sequence.
-    pub fn append_op<T: crate::Operation>(&self, op: T) -> T {
-        self.append(op.id());
-        op
+    /// The position after this block's current operations.
+    pub fn end(&self) -> crate::InsertionPoint {
+        crate::InsertionPoint::Block {
+            block: self.id,
+            position: self.len(),
+        }
     }
 
     pub fn replace_op(&self, old: OpId, new: OpId) -> bool {

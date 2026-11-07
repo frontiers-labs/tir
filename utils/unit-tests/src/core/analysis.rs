@@ -34,7 +34,7 @@ mod cached {
     fn test_op(context: &Context) -> OpId {
         // A partition of its own, so an edit to another op leaves its version.
         let _scope = context.function_scope();
-        ops::module(context, None).build().id()
+        ops::module(context, None, Default::default(), tir::InsertionPoint::Root).id()
     }
 
     fn one_op() -> (Context, OpId, AnalysisManager) {
@@ -50,7 +50,17 @@ mod cached {
             .iter(context.clone())
             .next()
             .expect("module has an entry block");
-        block.append(func_ops::r#return(context, Operand::none()).build().id());
+        block.context.insert(
+            block.end(),
+            func_ops::r#return(
+                context,
+                Operand::none(),
+                vec![],
+                Default::default(),
+                tir::InsertionPoint::Root,
+            )
+            .id(),
+        );
     }
 
     #[test]
@@ -137,21 +147,35 @@ fn chains_over_ssa_ops() {
     let arg_id = arg.id();
     let block = context.create_block(vec![arg]);
     region.add_block(block.id());
-    let func = func_ops::lambda(&context, "f", UnitType::new(&context), &region).build();
+    let func = func_ops::lambda(
+        &context,
+        "f",
+        UnitType::new(&context),
+        &region,
+        Default::default(),
+        tir::InsertionPoint::Root,
+    );
 
     let b = block;
-    let dead = b.append_op(ops::constant(&context, 7, i32).build());
-    let sum = b.append_op(ops::addi(&context, arg_id, arg_id, i32).build());
+    let dead = ops::constant(&context, 7, i32, Default::default(), b.end());
+    let sum = ops::addi(&context, arg_id, arg_id, i32, Default::default(), b.end());
     let sum_val = sum.result();
-    let call = b.append_op(
-        tir::func::CallOpBuilder::new(&context)
-            .args(vec![sum_val])
-            .attr("callee", tir::attributes::AttributeValue::Str("g".into()))
-            .result_type(i32)
-            .build(),
+    let call = tir::func::CallOp::new(
+        &context,
+        tir::Operand::none(),
+        vec![sum_val],
+        i32,
+        vec![],
+        vec![],
+        tir::NewOpParts {
+            attributes: vec![
+                context.named_attribute("callee", tir::attributes::AttributeValue::Str("g".into()))
+            ],
+        },
+        b.end(),
     );
     let call_result = call.result();
-    let ret = b.append_op(func_ops::r#return(&context, call_result).build());
+    let ret = func_ops::r#return(&context, call_result, vec![], Default::default(), b.end());
 
     let am = AnalysisManager::new();
     let du = am.get::<DefUse>(&context, func.id());

@@ -704,18 +704,42 @@ impl OffsetOfOp {
 }
 
 /// `layout.sizeof {ty = ty} : !i<width>`.
-pub fn size_of(context: &Context, ty: TypeId, width: u32) -> SizeOfOpBuilder {
-    SizeOfOpBuilder::new(context)
-        .attr("ty", AttributeValue::Type(ty))
-        .result_type(crate::builtin::IntegerType::new(context, u64::from(width)))
+pub fn size_of(
+    context: &Context,
+    ty: TypeId,
+    width: u32,
+    mut parts: tir::NewOpParts,
+    insertion: tir::InsertionPoint,
+) -> SizeOfOp {
+    parts
+        .attributes
+        .insert(0, context.named_attribute("ty", AttributeValue::Type(ty)));
+    SizeOfOp::new(
+        context,
+        vec![],
+        crate::builtin::IntegerType::new(context, u64::from(width)),
+        parts,
+        insertion,
+    )
 }
 
 /// `layout.offsetof {ty = ty, field = field} : !i<width>`.
-pub fn offset_of(context: &Context, ty: TypeId, field: &str, width: u32) -> OffsetOfOpBuilder {
-    OffsetOfOpBuilder::new(context)
-        .attr("ty", AttributeValue::Type(ty))
-        .attr("field", AttributeValue::from(field))
-        .result_type(crate::builtin::IntegerType::new(context, u64::from(width)))
+pub fn offset_of(
+    context: &Context,
+    ty: TypeId,
+    field: &str,
+    width: u32,
+    parts: tir::NewOpParts,
+    insertion: tir::InsertionPoint,
+) -> OffsetOfOp {
+    OffsetOfOp::new(
+        context,
+        ty,
+        field,
+        crate::builtin::IntegerType::new(context, u64::from(width)),
+        parts,
+        insertion,
+    )
 }
 
 impl From<LayoutSpec> for AttributeValue {
