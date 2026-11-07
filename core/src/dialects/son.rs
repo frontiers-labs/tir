@@ -70,13 +70,14 @@ impl BranchOp {
             .terms()
             .intern(CONTROL.id(context), vec![])
             .map_err(|error| (parser.span(), Error::VerificationError(error)))?;
-        Ok(Box::new(
-            BranchOpBuilder::new(context)
-                .control(*control)
-                .predicate(*predicate)
-                .result_types(vec![control_type; 2])
-                .build(),
-        ))
+        Ok(Box::new(BranchOp::new(
+            context,
+            *control,
+            *predicate,
+            vec![control_type; 2],
+            Default::default(),
+            tir::InsertionPoint::Root,
+        )))
     }
 }
 

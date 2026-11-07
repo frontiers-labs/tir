@@ -178,13 +178,14 @@ impl AccessChainOp {
         let result_type = parser
             .parse_type(context)?
             .ok_or_else(|| (parser.span(), Error::ExpectedType))?;
-        Ok(Box::new(
-            AccessChainOpBuilder::new(context)
-                .base(base)
-                .indices(indices)
-                .result_type(result_type)
-                .build(),
-        ))
+        Ok(Box::new(AccessChainOp::new(
+            context,
+            base,
+            indices,
+            result_type,
+            Default::default(),
+            tir::InsertionPoint::Root,
+        )))
     }
 
     pub fn base(&self) -> ValueId {

@@ -547,5 +547,9 @@ pub fn decode_with(context: &Context, word: u32, spec: &DecodeSpec) -> Option<Op
         }
     }
     let instance = NewOp::new_dynamic(spec.op, context.clone(), vec![], vec![], vec![], attributes);
-    Some(context.add_operation(instance).id)
+    Some(
+        context
+            .add_operation(tir::InsertionPoint::Root, instance)
+            .id,
+    )
 }

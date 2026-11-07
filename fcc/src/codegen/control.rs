@@ -64,12 +64,13 @@ impl FnCodegen<'_> {
                     .iter()
                     .enumerate()
                     .map(|(index, piece)| {
-                        self.emit(
-                            b::TupleGetOpBuilder::new(self.context)
-                                .tuple(tuple)
-                                .index(index as u64)
-                                .result_type(piece.ty)
-                                .build(),
+                        b::TupleGetOp::new(
+                            self.context,
+                            tuple,
+                            tir::attributes::AttributeValue::UInt(index as u64),
+                            piece.ty,
+                            Default::default(),
+                            self.builder.end(),
                         )
                         .result()
                     })
@@ -81,7 +82,15 @@ impl FnCodegen<'_> {
             };
             for (piece, value) in abi_param.pieces.iter().zip(values) {
                 let address = self.offset_address(slot.ptr, piece.offset);
-                self.emit(p::store(self.context, value, address).build());
+                p::store(
+                    self.context,
+                    value,
+                    address,
+                    vec![],
+                    vec![],
+                    Default::default(),
+                    self.builder.end(),
+                );
             }
             self.locals.insert(node_entity(self.typed, param), slot);
         }
@@ -128,7 +137,13 @@ impl FnCodegen<'_> {
         self.context.get_region(self.region).add_block(exit.id());
         self.enter_block(exit);
         let operand = self.return_operand(result, returns_void);
-        self.emit(func_ops::r#return(self.context, operand).build());
+        func_ops::r#return(
+            self.context,
+            operand,
+            vec![],
+            Default::default(),
+            self.builder.end(),
+        );
         self.terminated = true;
         Ok(())
     }
@@ -176,7 +191,13 @@ impl FnCodegen<'_> {
         if self.terminated {
             return;
         }
-        self.emit(cb::br(self.context, arguments, block.id()).build());
+        cb::br(
+            self.context,
+            arguments,
+            block.id(),
+            Default::default(),
+            self.builder.end(),
+        );
         self.terminated = true;
     }
 
@@ -186,16 +207,15 @@ impl FnCodegen<'_> {
         if_true: &tir::BlockHandle,
         if_false: &tir::BlockHandle,
     ) {
-        self.emit(
-            cb::cond_br(
-                self.context,
-                condition,
-                vec![],
-                vec![],
-                if_true.id(),
-                if_false.id(),
-            )
-            .build(),
+        cb::cond_br(
+            self.context,
+            condition,
+            vec![],
+            vec![],
+            if_true.id(),
+            if_false.id(),
+            Default::default(),
+            self.builder.end(),
         );
         self.terminated = true;
     }
@@ -248,18 +268,22 @@ impl FnCodegen<'_> {
             AstKind::Break => {
                 match self.break_targets.last().cloned().unwrap() {
                     ExitTarget::Block(block) => self.leave_block(&block),
-                    ExitTarget::Loop => {
-                        self.terminate_with(cir::ops::r#break(self.context).build())
-                    }
+                    ExitTarget::Loop => self.terminate_with(cir::ops::r#break(
+                        self.context,
+                        Default::default(),
+                        self.terminator_insertion(),
+                    )),
                 }
                 Ok(())
             }
             AstKind::Continue => {
                 match self.continue_targets.last().cloned().unwrap() {
                     ExitTarget::Block(block) => self.leave_block(&block),
-                    ExitTarget::Loop => {
-                        self.terminate_with(cir::ops::r#continue(self.context).build())
-                    }
+                    ExitTarget::Loop => self.terminate_with(cir::ops::r#continue(
+                        self.context,
+                        Default::default(),
+                        self.terminator_insertion(),
+                    )),
                 }
                 Ok(())
             }
@@ -296,11 +320,14 @@ impl FnCodegen<'_> {
                 }
                 let condition_region = self.lower_condition_region(condition, false)?;
                 let body_region = self.lower_body_region(body)?;
-                let op = cir::WhileOpBuilder::new(self.context)
-                    .condition_region(condition_region)
-                    .body_region(body_region)
-                    .build();
-                self.emit(op);
+                cir::WhileOp::new(
+                    self.context,
+                    Some(condition_region),
+                    Some(body_region),
+                    Default::default(),
+                    self.builder.end(),
+                );
+
                 Ok(())
             }
             AstKind::DoWhile => {
@@ -312,11 +339,14 @@ impl FnCodegen<'_> {
                 }
                 let body_region = self.lower_body_region(body)?;
                 let condition_region = self.lower_condition_region(condition, false)?;
-                let op = cir::DoOpBuilder::new(self.context)
-                    .body_region(body_region)
-                    .condition_region(condition_region)
-                    .build();
-                self.emit(op);
+                cir::DoOp::new(
+                    self.context,
+                    Some(body_region),
+                    Some(condition_region),
+                    Default::default(),
+                    self.builder.end(),
+                );
+
                 Ok(())
             }
             AstKind::For => {
@@ -335,15 +365,22 @@ impl FnCodegen<'_> {
                 let body_region = self.lower_body_region(body)?;
                 let step_region = self.lower_region(|cg| {
                     cg.lower_for_step(step)?;
-                    cg.terminate_with(cir::ops::r#yield(cg.context).build());
+                    cg.terminate_with(cir::ops::r#yield(
+                        cg.context,
+                        Default::default(),
+                        cg.terminator_insertion(),
+                    ));
                     Ok(())
                 })?;
-                let op = cir::ForOpBuilder::new(self.context)
-                    .condition_region(condition_region)
-                    .step_region(step_region)
-                    .body_region(body_region)
-                    .build();
-                self.emit(op);
+                cir::ForOp::new(
+                    self.context,
+                    Some(condition_region),
+                    Some(step_region),
+                    Some(body_region),
+                    Default::default(),
+                    self.builder.end(),
+                );
+
                 Ok(())
             }
             AstKind::Switch => self.lower_switch(stmt),
@@ -440,7 +477,12 @@ impl FnCodegen<'_> {
             } else {
                 cg.lower_condition(condition)?
             };
-            cg.terminate_with(cir::ops::condition(cg.context, value).build());
+            cg.terminate_with(cir::ops::condition(
+                cg.context,
+                value,
+                Default::default(),
+                cg.terminator_insertion(),
+            ));
             Ok(())
         })
     }
@@ -453,7 +495,11 @@ impl FnCodegen<'_> {
             cg.continue_targets.pop();
             cg.break_targets.pop();
             lowered?;
-            cg.terminate_with(cir::ops::r#yield(cg.context).build());
+            cg.terminate_with(cir::ops::r#yield(
+                cg.context,
+                Default::default(),
+                cg.terminator_insertion(),
+            ));
             Ok(())
         })
     }
@@ -475,11 +521,15 @@ impl FnCodegen<'_> {
         lowered.map(|()| region.id())
     }
 
-    fn terminate_with(&mut self, terminator: impl Operation) {
+    fn terminator_insertion(&self) -> tir::InsertionPoint {
         if self.terminated {
-            return;
+            tir::InsertionPoint::Root
+        } else {
+            self.builder.end()
         }
-        self.emit(terminator);
+    }
+
+    fn terminate_with(&mut self, _terminator: impl Operation) {
         self.terminated = true;
     }
 
@@ -518,12 +568,14 @@ impl FnCodegen<'_> {
             })
             .collect();
         let default = default.as_ref().unwrap_or(&exit).id();
-        self.terminate_with(
-            tir::cfg::SwitchOpBuilder::new(self.context)
-                .selector(value)
-                .successors(cases, (default, vec![]))
-                .build(),
-        );
+        self.terminate_with(tir::cfg::SwitchOp::with_successors(
+            self.context,
+            value,
+            cases,
+            (default, vec![]),
+            Default::default(),
+            self.terminator_insertion(),
+        ));
 
         self.break_targets.push(ExitTarget::Block(exit.clone()));
         let lowered = self.lower_switch_arms(&items, &arms);
@@ -578,10 +630,23 @@ impl FnCodegen<'_> {
         let Some(slot) = self.return_slot else {
             return;
         };
-        let zero = self
-            .emit(b::constant(self.context, 0, slot.elem).build())
-            .result();
-        self.emit(p::store(self.context, zero, slot.ptr).build());
+        let zero = b::constant(
+            self.context,
+            0,
+            slot.elem,
+            Default::default(),
+            self.builder.end(),
+        )
+        .result();
+        p::store(
+            self.context,
+            zero,
+            slot.ptr,
+            vec![],
+            vec![],
+            Default::default(),
+            self.builder.end(),
+        );
     }
 
     fn return_operand(&mut self, result: QualType, returns_void: bool) -> Operand {
@@ -600,16 +665,29 @@ impl FnCodegen<'_> {
             return Operand::from(self.abi_return_value(slot.ptr, result));
         }
         Operand::from(
-            self.emit(p::load(self.context, slot.ptr, slot.elem).build())
-                .result(),
+            p::load(
+                self.context,
+                slot.ptr,
+                slot.elem,
+                vec![],
+                vec![],
+                Default::default(),
+                self.builder.end(),
+            )
+            .result(),
         )
     }
 
     fn lower_for_condition(&mut self, condition: NodeId) -> Result<ValueId, Diagnostic> {
         if self.ast.get_node(condition).kind == AstKind::Empty {
-            return Ok(self
-                .emit(b::constant(self.context, 1, IntegerType::new(self.context, 1)).build())
-                .result());
+            return Ok(b::constant(
+                self.context,
+                1,
+                IntegerType::new(self.context, 1),
+                Default::default(),
+                self.builder.end(),
+            )
+            .result());
         }
         self.lower_condition(condition)
     }
@@ -735,8 +813,14 @@ impl FnCodegen<'_> {
         if self.context.get_value(value).ty() != IntegerType::new(self.context, 1) {
             return value;
         }
-        self.emit(b::extui(self.context, value, target).build())
-            .result()
+        b::extui(
+            self.context,
+            value,
+            target,
+            Default::default(),
+            self.builder.end(),
+        )
+        .result()
     }
 
     pub(super) fn store_scalar(
@@ -746,7 +830,15 @@ impl FnCodegen<'_> {
         target: TypeId,
     ) -> ValueId {
         let value = self.promote_boolean_result(value, target);
-        self.emit(p::store(self.context, value, address).build());
+        p::store(
+            self.context,
+            value,
+            address,
+            vec![],
+            vec![],
+            Default::default(),
+            self.builder.end(),
+        );
         value
     }
 
@@ -759,25 +851,33 @@ impl FnCodegen<'_> {
                 Predicate::Ne => Predicate::Une,
                 _ => unreachable!("truth conversion uses equality predicates"),
             };
-            return self
-                .emit(
-                    fp::CmpOpBuilder::new(self.context)
-                        .lhs(value)
-                        .rhs(zero)
-                        .predicate(predicate)
-                        .semantics(self.comparison_semantics())
-                        .result_type(IntegerType::new(self.context, 1))
-                        .build(),
-                )
-                .result();
+            return fp::CmpOp::new(
+                self.context,
+                value,
+                zero,
+                tir::attributes::AttributeValue::Predicate(predicate),
+                tir::attributes::AttributeValue::FpSemantics(self.comparison_semantics()),
+                IntegerType::new(self.context, 1),
+                vec![],
+                vec![],
+                Default::default(),
+                self.builder.end(),
+            )
+            .result();
         }
         let narrow =
             IntegerType::view(&self.context, ty).is_some_and(|integer| integer.width() < 32);
         let (value, ty) = if narrow {
             let i32_ty = IntegerType::new(self.context, 32);
             (
-                self.emit(b::extui(self.context, value, i32_ty).build())
-                    .result(),
+                b::extui(
+                    self.context,
+                    value,
+                    i32_ty,
+                    Default::default(),
+                    self.builder.end(),
+                )
+                .result(),
                 i32_ty,
             )
         } else {
@@ -787,14 +887,16 @@ impl FnCodegen<'_> {
             let null = self.null_pointer();
             return self.lower_pointer_compare(predicate, value, null);
         }
-        let zero = self.emit(b::constant(self.context, 0, ty).build()).result();
-        self.emit(
-            b::CmpIOpBuilder::new(self.context)
-                .lhs(value)
-                .rhs(zero)
-                .predicate(predicate)
-                .result_type(IntegerType::new(self.context, 1))
-                .build(),
+        let zero =
+            b::constant(self.context, 0, ty, Default::default(), self.builder.end()).result();
+        b::CmpIOp::new(
+            self.context,
+            value,
+            zero,
+            tir::attributes::AttributeValue::Predicate(predicate),
+            IntegerType::new(self.context, 1),
+            Default::default(),
+            self.builder.end(),
         )
         .result()
     }

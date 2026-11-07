@@ -112,7 +112,7 @@ pub fn parse_and_insert<'src, T: Operation, F: FnOnce(Vec<NamedAttribute>) -> T>
     context: &Context,
     desc: &InstrDesc,
     parser: &mut Parser<'src, Token<'src>>,
-    builder: &mut super::AsmCursor,
+    insertion: tir::InsertionPoint,
     build: F,
 ) -> Result<(), ()> {
     let attributes = parse_operands(context, desc, parser)?;
@@ -133,7 +133,7 @@ pub fn parse_and_insert<'src, T: Operation, F: FnOnce(Vec<NamedAttribute>) -> T>
         context.remove_operation(op.id());
         return Err(());
     }
-    builder.insert(op);
+    context.insert(insertion, op.id());
     Ok(())
 }
 

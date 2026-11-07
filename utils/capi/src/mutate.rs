@@ -135,7 +135,7 @@ pub unsafe extern "C" fn tir_block_append_op(
         if !op_exists(ctx, op) {
             return false;
         }
-        block.append(OpId::from_number(op));
+        block.context.insert(block.end(), OpId::from_number(op));
         true
     })
 }
@@ -163,7 +163,13 @@ pub unsafe extern "C" fn tir_block_insert_op(
             set_error(format!("insert index {index} exceeds block length"));
             return false;
         }
-        block.insert(index, OpId::from_number(op));
+        block.context.insert(
+            tir::InsertionPoint::Block {
+                block: block.id(),
+                position: index,
+            },
+            OpId::from_number(op),
+        );
         true
     })
 }
