@@ -228,57 +228,38 @@ impl CallOp {
             super::parse_keyed_array(parser, context, "argument_alignments", "alignment list")?;
 
         let resources = super::parse_keyed_array(parser, context, "resources", "resource list")?;
-        let mut builder = CallOpBuilder::new(context)
-            .callee(callee)
-            .args(args)
-            .result_type(ret_type);
-        builder = builder.state_operands(parser.parse_state_operands(context)?);
+        let state = parser.parse_state_operands(context)?;
+        let mut parts = tir::NewOpParts::default();
         if result_address {
-            builder = builder.result_address();
+            parts
+                .attributes
+                .push(context.named_attribute("result_address", AttributeValue::Bool(true)));
         }
         if let Some(symbol) = callee_symbol {
-            builder = builder.attr("callee", AttributeValue::Str(symbol.into()));
+            parts
+                .attributes
+                .push(context.named_attribute("callee", AttributeValue::Str(symbol.into())));
         }
         if let Some(argument_alignments) = argument_alignments {
-            builder = builder.attr("argument_alignments", argument_alignments);
+            parts
+                .attributes
+                .push(context.named_attribute("argument_alignments", argument_alignments));
         }
         if let Some(resources) = resources {
-            builder = builder.attr("resources", resources);
+            parts
+                .attributes
+                .push(context.named_attribute("resources", resources));
         }
-        Ok(Box::new(builder.build()))
-    }
-}
-
-impl CallOpBuilder {
-    /// Record a known callee's effect contract instead of assuming all resources.
-    pub fn resources(self, resources: &[StateResource]) -> Self {
-        self.attr(
-            "resources",
-            AttributeValue::Array(
-                resources
-                    .iter()
-                    .map(|resource| AttributeValue::from(resource.name()))
-                    .collect(),
-            ),
-        )
-    }
-
-    pub fn result_address(self) -> Self {
-        self.attr("result_address", AttributeValue::Bool(true))
-    }
-
-    pub fn argument_alignments(self, alignments: &[u64]) -> Self {
-        self.attr(
-            "argument_alignments",
-            AttributeValue::Array(
-                alignments
-                    .iter()
-                    .copied()
-                    .map(AttributeValue::UInt)
-                    .collect::<Vec<_>>()
-                    .into(),
-            ),
-        )
+        Ok(Box::new(CallOp::new(
+            context,
+            callee,
+            args,
+            ret_type,
+            state,
+            vec![],
+            parts,
+            tir::InsertionPoint::Root,
+        )))
     }
 }
 

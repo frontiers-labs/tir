@@ -25,7 +25,16 @@ fn build(context: &Context, count: &usize, body: &tir::BlockHandle) -> Result<bo
     let i32_ty = IntegerType::new(context, 32);
     let body = context.get_block(body.id());
     for value in 0..*count {
-        body.insert(0, ops::constant(context, value as i64, i32_ty).build().id());
+        ops::constant(
+            context,
+            value as i64,
+            i32_ty,
+            Default::default(),
+            tir::InsertionPoint::Block {
+                block: body.id(),
+                position: 0,
+            },
+        );
     }
     Ok(true)
 }

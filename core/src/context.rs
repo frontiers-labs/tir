@@ -1538,7 +1538,11 @@ impl Context {
             self.put("DeclaredType", vec![self.int(value.number())], ty);
         }
     }
-    pub fn add_operation(&self, op: crate::operation::NewOp) -> OpHandle {
+    pub fn add_operation(
+        &self,
+        insertion: crate::InsertionPoint,
+        op: crate::operation::NewOp,
+    ) -> OpHandle {
         let id = OpId::new(self.mint());
         self.0.constructing.set(Some(id));
         let (dialect, name) = self.registry().op_names[op.name.index()].identity;
@@ -1551,11 +1555,7 @@ impl Context {
         };
         let boundary = self.construct(boundary, vec![]);
         self.put("KindBoundary", vec![self.text(kind)], boundary);
-        self.put(
-            "OpPlacement",
-            vec![self.int(id.raw())],
-            self.construct("Root", vec![]),
-        );
+        self.insert(insertion, id);
         if let Some(location) = self.0.origin.get() {
             self.put("OpLocation", vec![self.int(id.raw())], self.int(location.0));
         }
@@ -1674,21 +1674,60 @@ impl Context {
         }
         self.set_region_results(region, results);
         for op in ops {
-            self.add(region, op);
+            self.insert(crate::InsertionPoint::Region(region), op);
         }
     }
-    pub fn add(&self, region: RegionId, op: OpId) {
-        let position = self.region_ops(region).len();
-        self.put(
-            "OpPlacement",
-            vec![self.int(op.raw())],
-            self.construct("InGraph", vec![self.int(region.raw())]),
-        );
-        self.put(
-            "GraphLayout",
-            vec![self.int(op.raw())],
-            self.int(position as i64),
-        );
+    /// The operation's current placement. For an ordered operation, inserting
+    /// here places a new operation immediately before it.
+    pub fn insertion_point(&self, op: OpId) -> crate::InsertionPoint {
+        use crate::InsertionPoint;
+        if let Some(region) = self.parent_nodes_region(op) {
+            return InsertionPoint::Region(region);
+        }
+        match self.parent_block(op) {
+            Some(block) => InsertionPoint::Block {
+                block,
+                position: self
+                    .block_ops(block)
+                    .iter()
+                    .take_while(|&&held| held != op)
+                    .count(),
+            },
+            None => InsertionPoint::Root,
+        }
+    }
+
+    /// Place an operation at `insertion`, replacing its previous placement.
+    /// Block positions refer to the sequence before moving the operation.
+    pub fn insert(&self, insertion: crate::InsertionPoint, op: OpId) {
+        use crate::InsertionPoint;
+        let placement = match insertion {
+            InsertionPoint::Root => self.construct("Root", vec![]),
+            InsertionPoint::Region(region) => {
+                debug_assert!(self.region_is_nodes(region));
+                let position = self.region_ops(region).len();
+                self.put(
+                    "GraphLayout",
+                    vec![self.int(op.raw())],
+                    self.int(position as i64),
+                );
+                self.construct("InGraph", vec![self.int(region.raw())])
+            }
+            InsertionPoint::Block {
+                block,
+                mut position,
+            } => {
+                let mut ops = self.block_ops(block);
+                if let Some(previous) = ops.iter().position(|&held| held == op) {
+                    ops.remove(previous);
+                    position -= usize::from(previous < position);
+                }
+                ops.insert(position, op);
+                self.set_block_ops(block, ops);
+                return;
+            }
+        };
+        self.put("OpPlacement", vec![self.int(op.raw())], placement);
     }
     pub fn set_region_ops(&self, region: RegionId, ops: Vec<OpId>) {
         for (position, op) in ops.into_iter().enumerate() {
@@ -1792,15 +1831,6 @@ impl Context {
                 ),
             );
         }
-    }
-    pub(crate) fn insert_op(&self, block: BlockId, index: usize, op: OpId) {
-        let mut ops = self.block_ops(block);
-        ops.insert(index, op);
-        self.set_block_ops(block, ops);
-    }
-    pub(crate) fn append_op(&self, block: BlockId, op: OpId) {
-        let index = self.block_ops(block).len();
-        self.insert_op(block, index, op);
     }
     pub(crate) fn remove_op_from_block(&self, block: BlockId, op: OpId) -> bool {
         if self.parent_block(op) != Some(block) {

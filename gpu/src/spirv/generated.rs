@@ -1313,6 +1313,7 @@ pub(crate) fn build_generated(
     opcode: u16,
     operands: &[ValueId],
     result_type: TypeId,
+    insertion: tir::InsertionPoint,
 ) -> Option<(OpId, ValueId)> {
     let &(_, name, arity) = GENERATED.iter().find(|&&(code, _, _)| code == opcode)?;
     if operands.len() != arity {
@@ -1327,6 +1328,6 @@ pub(crate) fn build_generated(
         vec![],
         vec![],
     );
-    let op = context.add_operation(instance);
+    let op = context.add_operation(insertion, instance);
     Some((op.id, result))
 }

@@ -94,8 +94,14 @@ impl FnCodegen<'_> {
                                 lower_type(self.context, self.typed, node_type(self.typed, node));
                             let value = n.value.zero_extend(u64::from(width));
                             LoweredExpr::Value(
-                                self.emit(b::literal(self.context, &value, ty).build())
-                                    .result(),
+                                b::literal(
+                                    self.context,
+                                    &value,
+                                    ty,
+                                    Default::default(),
+                                    self.builder.end(),
+                                )
+                                .result(),
                             )
                         }
                         _ => self.const_of_node(node, n.value.to_i64()),
@@ -223,8 +229,14 @@ impl FnCodegen<'_> {
     fn const_of_node(&mut self, node: NodeId, value: i64) -> LoweredExpr {
         let ty = lower_type(self.context, self.typed, node_type(self.typed, node));
         LoweredExpr::Value(
-            self.emit(b::constant(self.context, value, ty).build())
-                .result(),
+            b::constant(
+                self.context,
+                value,
+                ty,
+                Default::default(),
+                self.builder.end(),
+            )
+            .result(),
         )
     }
 
@@ -246,8 +258,14 @@ impl FnCodegen<'_> {
             let lambda = self.symbols.function(self.context, name, &signature);
             let ptr_ty = PtrType::opaque(self.context);
             return Ok(LoweredExpr::Value(
-                self.emit(b::fn_to_ptr(self.context, lambda, ptr_ty).build())
-                    .result(),
+                b::fn_to_ptr(
+                    self.context,
+                    lambda,
+                    ptr_ty,
+                    Default::default(),
+                    self.builder.end(),
+                )
+                .result(),
             ));
         }
         let entity = node_entity(self.typed, node);
@@ -298,7 +316,15 @@ impl FnCodegen<'_> {
         };
         let record_ty = NamedType::new(self.context, &record.name);
         let field = record.fields[field].name.as_str();
-        let member = self.emit(p::field(self.context, base_ptr, record_ty, field, ptr_ty).build());
+        let member = p::field(
+            self.context,
+            base_ptr,
+            record_ty,
+            field,
+            ptr_ty,
+            Default::default(),
+            self.builder.end(),
+        );
         Ok(LoweredExpr::Address {
             ptr: member.result(),
             elem,
@@ -381,57 +407,92 @@ impl FnCodegen<'_> {
                 let width =
                     (source_type_layout(self.typed, node_type(self.typed, node)).0 * 8) as u32;
                 let integer_ty = IntegerType::new(self.context, u64::from(width));
-                let bits = self
-                    .emit(
-                        b::BitcastOpBuilder::new(self.context)
-                            .input(operand)
-                            .result_type(integer_ty)
-                            .build(),
-                    )
-                    .result();
-                let sign = self
-                    .emit(
-                        b::constant(
-                            self.context,
-                            if width == 64 {
-                                i64::MIN
-                            } else {
-                                i64::from(i32::MIN)
-                            },
-                            integer_ty,
-                        )
-                        .build(),
-                    )
-                    .result();
-                let negated = self
-                    .emit(b::xori(self.context, bits, sign, integer_ty).build())
-                    .result();
-                self.emit(
-                    b::BitcastOpBuilder::new(self.context)
-                        .input(negated)
-                        .result_type(result_ty)
-                        .build(),
+                let bits = b::BitcastOp::new(
+                    self.context,
+                    operand,
+                    integer_ty,
+                    Default::default(),
+                    self.builder.end(),
+                )
+                .result();
+                let sign = b::constant(
+                    self.context,
+                    if width == 64 {
+                        i64::MIN
+                    } else {
+                        i64::from(i32::MIN)
+                    },
+                    integer_ty,
+                    Default::default(),
+                    self.builder.end(),
+                )
+                .result();
+                let negated = b::xori(
+                    self.context,
+                    bits,
+                    sign,
+                    integer_ty,
+                    Default::default(),
+                    self.builder.end(),
+                )
+                .result();
+                b::BitcastOp::new(
+                    self.context,
+                    negated,
+                    result_ty,
+                    Default::default(),
+                    self.builder.end(),
                 )
                 .result()
             }
             AstKind::Neg => {
-                let zero = self
-                    .emit(b::constant(self.context, 0, result_ty).build())
-                    .result();
-                self.emit(b::subi(self.context, zero, operand, result_ty).build())
-                    .result()
+                let zero = b::constant(
+                    self.context,
+                    0,
+                    result_ty,
+                    Default::default(),
+                    self.builder.end(),
+                )
+                .result();
+                b::subi(
+                    self.context,
+                    zero,
+                    operand,
+                    result_ty,
+                    Default::default(),
+                    self.builder.end(),
+                )
+                .result()
             }
             AstKind::BitNot => {
-                let ones = self
-                    .emit(b::constant(self.context, -1, result_ty).build())
-                    .result();
-                self.emit(b::xori(self.context, operand, ones, result_ty).build())
-                    .result()
+                let ones = b::constant(
+                    self.context,
+                    -1,
+                    result_ty,
+                    Default::default(),
+                    self.builder.end(),
+                )
+                .result();
+                b::xori(
+                    self.context,
+                    operand,
+                    ones,
+                    result_ty,
+                    Default::default(),
+                    self.builder.end(),
+                )
+                .result()
             }
             AstKind::Not => {
                 let comparison = self.compare_against_zero(operand, Predicate::Eq);
-                self.emit(b::extui(self.context, comparison, result_ty).build())
-                    .result()
+                b::extui(
+                    self.context,
+                    comparison,
+                    result_ty,
+                    Default::default(),
+                    self.builder.end(),
+                )
+                .result()
             }
             _ => unreachable!(),
         };
@@ -448,25 +509,39 @@ impl FnCodegen<'_> {
                 "non-addressable increment operand".to_string(),
             ));
         };
-        let old = self.emit(p::load(self.context, ptr, elem).build()).result();
+        let old = p::load(
+            self.context,
+            ptr,
+            elem,
+            vec![],
+            vec![],
+            Default::default(),
+            self.builder.end(),
+        )
+        .result();
         let operand_ty = node_type(self.typed, child);
         let increment = matches!(kind, AstKind::PreInc | AstKind::PostInc);
         let new = if let TypeKind::Pointer(pointee) = self.typed.types().kind(operand_ty) {
             let offset_ty =
                 IntegerType::new(self.context, u64::from(self.typed.target().pointer_width()));
             let size = source_type_layout(self.typed, *pointee).0 as i64;
-            let offset = self
-                .emit(
-                    b::constant(
-                        self.context,
-                        if increment { size } else { -size },
-                        offset_ty,
-                    )
-                    .build(),
-                )
-                .result();
-            self.emit(p::ptradd(self.context, old, offset, elem).build())
-                .result()
+            let offset = b::constant(
+                self.context,
+                if increment { size } else { -size },
+                offset_ty,
+                Default::default(),
+                self.builder.end(),
+            )
+            .result();
+            p::ptradd(
+                self.context,
+                old,
+                offset,
+                elem,
+                Default::default(),
+                self.builder.end(),
+            )
+            .result()
         } else if matches!(
             self.typed.types().kind(operand_ty),
             TypeKind::Float | TypeKind::Double
@@ -483,18 +558,45 @@ impl FnCodegen<'_> {
                 elem,
             )
         } else {
-            let one = self
-                .emit(b::constant(self.context, 1, elem).build())
-                .result();
+            let one = b::constant(
+                self.context,
+                1,
+                elem,
+                Default::default(),
+                self.builder.end(),
+            )
+            .result();
             if increment {
-                self.emit(b::addi(self.context, old, one, elem).build())
-                    .result()
+                b::addi(
+                    self.context,
+                    old,
+                    one,
+                    elem,
+                    Default::default(),
+                    self.builder.end(),
+                )
+                .result()
             } else {
-                self.emit(b::subi(self.context, old, one, elem).build())
-                    .result()
+                b::subi(
+                    self.context,
+                    old,
+                    one,
+                    elem,
+                    Default::default(),
+                    self.builder.end(),
+                )
+                .result()
             }
         };
-        self.emit(p::store(self.context, new, ptr).build());
+        p::store(
+            self.context,
+            new,
+            ptr,
+            vec![],
+            vec![],
+            Default::default(),
+            self.builder.end(),
+        );
         Ok(LoweredExpr::Value(
             if matches!(kind, AstKind::PostInc | AstKind::PostDec) {
                 old
@@ -541,8 +643,14 @@ impl FnCodegen<'_> {
         if self.context.get_value(value).ty() == target {
             return value;
         }
-        self.emit(b::extui(self.context, value, target).build())
-            .result()
+        b::extui(
+            self.context,
+            value,
+            target,
+            Default::default(),
+            self.builder.end(),
+        )
+        .result()
     }
 
     fn lower_cast(&mut self, node: NodeId) -> Result<LoweredExpr, Diagnostic> {
@@ -558,7 +666,7 @@ impl FnCodegen<'_> {
                 .is_some_and(|semantics| semantics.constant == Some(0))
         {
             let target = lower_type(self.context, self.typed, target);
-            self.emit(p::null(self.context, target).build()).result()
+            p::null(self.context, target, Default::default(), self.builder.end()).result()
         } else {
             self.convert_scalar(value, source, target)
         };
@@ -583,7 +691,16 @@ impl FnCodegen<'_> {
         let rhs_node = children.next().unwrap();
         let rhs = self.materialize(self.values[&rhs_node]);
         let rhs = self.as_value_of_node_type(rhs, rhs_node);
-        let lhs = self.emit(p::load(self.context, ptr, elem).build()).result();
+        let lhs = p::load(
+            self.context,
+            ptr,
+            elem,
+            vec![],
+            vec![],
+            Default::default(),
+            self.builder.end(),
+        )
+        .result();
         let source_ty = node_type(self.typed, lhs_node);
         let value = if let TypeKind::Pointer(_) = self.typed.types().kind(source_ty) {
             self.lower_pointer_offset(
@@ -604,7 +721,15 @@ impl FnCodegen<'_> {
             };
             self.convert_scalar(result, operand_ty, source_ty)
         };
-        self.emit(p::store(self.context, value, ptr).build());
+        p::store(
+            self.context,
+            value,
+            ptr,
+            vec![],
+            vec![],
+            Default::default(),
+            self.builder.end(),
+        );
         Ok(LoweredExpr::Value(value))
     }
 
@@ -630,7 +755,16 @@ impl FnCodegen<'_> {
                 ));
             };
             let record = NamedType::new(self.context, &self.typed.record(*id).unwrap().name);
-            self.emit(p::copy(self.context, ptr, source, record).build());
+            p::copy(
+                self.context,
+                ptr,
+                source,
+                record,
+                vec![],
+                vec![],
+                Default::default(),
+                self.builder.end(),
+            );
             return Ok(LoweredExpr::Address { ptr, elem });
         }
         let value = self.materialize(rhs);
@@ -654,24 +788,28 @@ impl FnCodegen<'_> {
             .id();
 
         let short_circuit = i64::from(kind == AstKind::LogOr);
-        let short_circuit = self
-            .emit(b::constant(self.context, short_circuit, result_ty).build())
-            .result();
+        let short_circuit = b::constant(
+            self.context,
+            short_circuit,
+            result_ty,
+            Default::default(),
+            self.builder.end(),
+        )
+        .result();
         let (if_true, true_args, if_false, false_args) = if kind == AstKind::LogAnd {
             (&rhs_block, vec![], &merge, vec![short_circuit])
         } else {
             (&merge, vec![short_circuit], &rhs_block, vec![])
         };
-        self.emit(
-            cb::cond_br(
-                self.context,
-                condition,
-                true_args,
-                false_args,
-                if_true.id(),
-                if_false.id(),
-            )
-            .build(),
+        cb::cond_br(
+            self.context,
+            condition,
+            true_args,
+            false_args,
+            if_true.id(),
+            if_false.id(),
+            Default::default(),
+            self.builder.end(),
         );
         self.terminated = true;
 
@@ -679,9 +817,14 @@ impl FnCodegen<'_> {
         let rhs = self.lower_expr_node(rhs_node)?;
         let rhs = self.materialize(rhs);
         let rhs = self.truth_value(rhs);
-        let rhs = self
-            .emit(b::extui(self.context, rhs, result_ty).build())
-            .result();
+        let rhs = b::extui(
+            self.context,
+            rhs,
+            result_ty,
+            Default::default(),
+            self.builder.end(),
+        )
+        .result();
         self.branch_to(&merge, vec![rhs]);
 
         self.enter_block(merge);

@@ -16,7 +16,14 @@ fn constant_fold_derived_from_sem() {
     let i32_ty = IntegerType::new(&context, 32);
     let a = context.create_value(i32_ty, None);
     let b = context.create_value(i32_ty, None);
-    let op = ops::addi(&context, a.id(), b.id(), i32_ty).build();
+    let op = ops::addi(
+        &context,
+        a.id(),
+        b.id(),
+        i32_ty,
+        Default::default(),
+        tir::InsertionPoint::Root,
+    );
 
     let fold = context
         .get_op(op.id())
@@ -43,7 +50,14 @@ fn op_cost_read_through_interface() {
     let a = context.create_value(i32_ty, None);
     let b = context.create_value(i32_ty, None);
 
-    let mul = ops::muli(&context, a.id(), b.id(), i32_ty).build();
+    let mul = ops::muli(
+        &context,
+        a.id(),
+        b.id(),
+        i32_ty,
+        Default::default(),
+        tir::InsertionPoint::Root,
+    );
     let cost = context
         .get_op(mul.id())
         .as_interface::<dyn OpCost>()
@@ -51,7 +65,14 @@ fn op_cost_read_through_interface() {
     assert_eq!(cost.cost(), 4);
 
     // An op that does not opt in has no OpCost interface; callers default to 1.
-    let add = ops::addi(&context, a.id(), b.id(), i32_ty).build();
+    let add = ops::addi(
+        &context,
+        a.id(),
+        b.id(),
+        i32_ty,
+        Default::default(),
+        tir::InsertionPoint::Root,
+    );
     assert!(context
         .get_op(add.id())
         .as_interface::<dyn OpCost>()
@@ -89,7 +110,14 @@ fn binary_ops_convert_to_their_sem_kind() {
         ($name:ident) => {
             (
                 (|context: &Context, lhs, rhs, ty, g: &mut SemGraph| {
-                    let op = ops::$name(context, lhs, rhs, ty).build();
+                    let op = ops::$name(
+                        context,
+                        lhs,
+                        rhs,
+                        ty,
+                        Default::default(),
+                        tir::InsertionPoint::Root,
+                    );
                     (op.convert(g), op.id())
                 }) as Convert,
                 stringify!($name),
@@ -150,27 +178,43 @@ fn cast_sem<O: AsSemExpr>(
 }
 
 #[test]
-fn extsi_sem_expr_uses_result_width() {
-    assert_eq!(
-        cast_sem(16, |c, input| ops::extsi(c, input, IntegerType::new(c, 64))
-            .build()),
+fn integer_extensions_use_result_width() {
+    for (actual, kind, width) in [
         (
+            cast_sem(16, |c, input| {
+                ops::extsi(
+                    c,
+                    input,
+                    IntegerType::new(c, 64),
+                    Default::default(),
+                    tir::InsertionPoint::Root,
+                )
+            }),
             SymKind::SExt,
-            vec![(SymKind::Symbol, None), (SymKind::Constant, Some(64))]
-        )
-    );
-}
-
-#[test]
-fn extui_sem_expr_uses_result_width() {
-    assert_eq!(
-        cast_sem(8, |c, input| ops::extui(c, input, IntegerType::new(c, 32))
-            .build()),
+            64,
+        ),
         (
+            cast_sem(8, |c, input| {
+                ops::extui(
+                    c,
+                    input,
+                    IntegerType::new(c, 32),
+                    Default::default(),
+                    tir::InsertionPoint::Root,
+                )
+            }),
             SymKind::ZExt,
-            vec![(SymKind::Symbol, None), (SymKind::Constant, Some(32))]
-        )
-    );
+            32,
+        ),
+    ] {
+        assert_eq!(
+            actual,
+            (
+                kind,
+                vec![(SymKind::Symbol, None), (SymKind::Constant, Some(width))]
+            )
+        );
+    }
 }
 
 #[test]
@@ -180,9 +224,10 @@ fn trunci_sem_expr_is_low_bit_extract() {
         cast_sem(64, |c, input| ops::trunci(
             c,
             input,
-            IntegerType::new(c, 16)
-        )
-        .build()),
+            IntegerType::new(c, 16),
+            Default::default(),
+            tir::InsertionPoint::Root
+        )),
         (
             SymKind::Extract,
             vec![

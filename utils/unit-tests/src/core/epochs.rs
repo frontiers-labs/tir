@@ -26,12 +26,31 @@ fn committed_function(context: &Context) -> (OpId, BlockHandle) {
 fn add_fixture(context: &Context) -> (ValueId, ValueId, OpId) {
     let (_, body) = committed_function(context);
     let i32_ty = IntegerType::new(context, 32);
-    let c = builtin::ops::constant(context, 1, i32_ty).build();
-    body.append(c.id());
-    let d = builtin::ops::constant(context, 2, i32_ty).build();
-    body.append(d.id());
-    let add = builtin::ops::addi(context, c.result(), c.result(), i32_ty).build();
-    body.append(add.id());
+    let c = builtin::ops::constant(
+        context,
+        1,
+        i32_ty,
+        Default::default(),
+        tir::InsertionPoint::Root,
+    );
+    body.context.insert(body.end(), c.id());
+    let d = builtin::ops::constant(
+        context,
+        2,
+        i32_ty,
+        Default::default(),
+        tir::InsertionPoint::Root,
+    );
+    body.context.insert(body.end(), d.id());
+    let add = builtin::ops::addi(
+        context,
+        c.result(),
+        c.result(),
+        i32_ty,
+        Default::default(),
+        tir::InsertionPoint::Root,
+    );
+    body.context.insert(body.end(), add.id());
     context.commit();
     let ops = body.op_ids();
     let (c, d, add) = (ops[0], ops[1], ops[2]);
@@ -44,10 +63,23 @@ fn commit_keeps_every_id_and_every_handle() {
     let context = Context::with_default_dialects();
     let (func, body) = committed_function(&context);
     let i32_ty = IntegerType::new(&context, 32);
-    let c = builtin::ops::constant(&context, 1, i32_ty).build();
-    body.append(c.id());
-    let add = builtin::ops::addi(&context, c.result(), c.result(), i32_ty).build();
-    body.append(add.id());
+    let c = builtin::ops::constant(
+        &context,
+        1,
+        i32_ty,
+        Default::default(),
+        tir::InsertionPoint::Root,
+    );
+    body.context.insert(body.end(), c.id());
+    let add = builtin::ops::addi(
+        &context,
+        c.result(),
+        c.result(),
+        i32_ty,
+        Default::default(),
+        tir::InsertionPoint::Root,
+    );
+    body.context.insert(body.end(), add.id());
     let handle = context.get_op(c.id());
 
     context.commit();
@@ -111,7 +143,7 @@ fn moving_an_op_between_blocks_updates_both_before_commit() {
     let target = context.create_block(vec![]);
 
     assert!(source.remove_op(add));
-    target.append(add);
+    target.context.insert(target.end(), add);
 
     assert!(!source.op_ids().contains(&add));
     assert_eq!(target.op_ids(), [add]);
@@ -140,10 +172,19 @@ fn rauw_resolves_transitively_and_commit_agrees() {
     let context = Context::with_default_dialects();
     let (c, d, add) = add_fixture(&context);
     let i32_ty = IntegerType::new(&context, 32);
-    let e = builtin::ops::constant(&context, 3, i32_ty).build();
-    context
-        .get_block(context.parent_block(add).unwrap())
-        .append(e.id());
+    let e = builtin::ops::constant(
+        &context,
+        3,
+        i32_ty,
+        Default::default(),
+        tir::InsertionPoint::Root,
+    );
+    (context.get_block(context.parent_block(add).unwrap()))
+        .context
+        .insert(
+            (context.get_block(context.parent_block(add).unwrap())).end(),
+            e.id(),
+        );
 
     context.replace_value_uses(c, d);
     context.replace_value_uses(d, e.result());
@@ -168,10 +209,20 @@ fn a_use_recorded_after_rauw_names_the_old_value() {
     let i32_ty = IntegerType::new(&context, 32);
     context.replace_value_uses(c, d);
 
-    let late = builtin::ops::addi(&context, c, c, i32_ty).build();
-    context
-        .get_block(context.parent_block(add).unwrap())
-        .append(late.id());
+    let late = builtin::ops::addi(
+        &context,
+        c,
+        c,
+        i32_ty,
+        Default::default(),
+        tir::InsertionPoint::Root,
+    );
+    (context.get_block(context.parent_block(add).unwrap()))
+        .context
+        .insert(
+            (context.get_block(context.parent_block(add).unwrap())).end(),
+            late.id(),
+        );
 
     assert_eq!(context.get_op(late.id()).operands().as_slice(), [c; 2]);
     assert_eq!(
@@ -180,7 +231,13 @@ fn a_use_recorded_after_rauw_names_the_old_value() {
     );
     assert_eq!(context.uses_of(d), [Use::new(add, 0), Use::new(add, 1)]);
 
-    let e = builtin::ops::constant(&context, 3, i32_ty).build();
+    let e = builtin::ops::constant(
+        &context,
+        3,
+        i32_ty,
+        Default::default(),
+        tir::InsertionPoint::Root,
+    );
     context.replace_value_uses(c, e.result());
     assert_eq!(context.get_op(add).operands().as_slice(), [d; 2]);
     assert_eq!(
@@ -201,11 +258,20 @@ fn replacing_a_pending_replacement_redirects_the_base_slots() {
     let context = Context::with_default_dialects();
     let (c, d, add) = add_fixture(&context);
     let i32_ty = IntegerType::new(&context, 32);
-    let e = builtin::ops::constant(&context, 3, i32_ty).build();
+    let e = builtin::ops::constant(
+        &context,
+        3,
+        i32_ty,
+        Default::default(),
+        tir::InsertionPoint::Root,
+    );
     let (e_id, e_result) = (e.id(), e.result());
-    context
-        .get_block(context.parent_block(add).unwrap())
-        .append(e_id);
+    (context.get_block(context.parent_block(add).unwrap()))
+        .context
+        .insert(
+            (context.get_block(context.parent_block(add).unwrap())).end(),
+            e_id,
+        );
 
     context.replace_value_uses(c, e_result);
     context.replace_value_uses(e_result, d);
@@ -229,7 +295,13 @@ fn a_shadowed_user_counts_once() {
     let (c, d, add) = add_fixture(&context);
     let i32_ty = IntegerType::new(&context, 32);
 
-    let e = builtin::ops::constant(&context, 3, i32_ty).build();
+    let e = builtin::ops::constant(
+        &context,
+        3,
+        i32_ty,
+        Default::default(),
+        tir::InsertionPoint::Root,
+    );
     context.append_operand(add, e.result());
 
     assert_eq!(
@@ -286,7 +358,7 @@ fn moving_an_op_updates_both_parents_immediately() {
     let inner_constant = context.get_region(body).op_ids()[0];
 
     context.remove_from_region(body, inner_constant);
-    context.add(outer, inner_constant);
+    context.insert(tir::InsertionPoint::Region(outer), inner_constant);
 
     assert!(!context.get_region(body).op_ids().contains(&inner_constant));
     assert!(context.get_region(outer).op_ids().contains(&inner_constant));
@@ -352,7 +424,17 @@ fn an_analysis_sees_an_edit_before_commit_and_survives_it() {
     let analyses = AnalysisManager::new();
     assert_eq!(analyses.get::<Count>(&context, func).0, 0);
 
-    body.append(func::ops::r#return(&context, Operand::none()).build().id());
+    body.context.insert(
+        body.end(),
+        func::ops::r#return(
+            &context,
+            Operand::none(),
+            vec![],
+            Default::default(),
+            tir::InsertionPoint::Root,
+        )
+        .id(),
+    );
     assert_eq!(analyses.get::<Count>(&context, func).0, 1);
 
     let cached = analyses.get::<Count>(&context, func);

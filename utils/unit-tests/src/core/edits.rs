@@ -90,10 +90,13 @@ fn growing_a_loop_state_port_keeps_the_carried_shape() {
     let function = function(&context, &module);
     let body = body_of(&context, function);
     let loop_op = find::<LoopOp>(&context, body);
-    let entry = tir::state::EntryStateOpBuilder::new(&context)
-        .state_result(tir::builtin::StateType::memory(&context))
-        .build();
-    context.add(body, entry.id());
+    let entry = tir::state::EntryStateOp::new(
+        &context,
+        vec![tir::builtin::StateType::memory(&context)],
+        Default::default(),
+        tir::InsertionPoint::Root,
+    );
+    context.insert(tir::InsertionPoint::Region(body), entry.id());
     let chain = entry.result();
 
     let state_type = context.get_value(chain).ty();
@@ -172,7 +175,12 @@ impl ExitOp {
         context: &Context,
     ) -> Result<Box<dyn Operation>, (tir::parse::Span, tir::Error)> {
         let _ = parser;
-        Ok(Box::new(ExitOpBuilder::new(context).build()))
+        Ok(Box::new(ExitOp::new(
+            context,
+            vec![],
+            Default::default(),
+            tir::InsertionPoint::Root,
+        )))
     }
 }
 
@@ -195,15 +203,23 @@ fn loop_with_exit() -> (Context, OpId, OpId) {
     let loop_op = find::<LoopOp>(&context, body_of(&context, function));
     let body = context.get_op(loop_op).regions()[0];
     let predicate = context.get_region(body).results()[0];
-    let exit = ExitOpBuilder::new(&context).values(vec![]).build();
+    let exit = ExitOp::new(
+        &context,
+        vec![],
+        Default::default(),
+        tir::InsertionPoint::Root,
+    );
     let arm = |ops: Vec<OpId>| context.create_nodes_region(vec![], ops, vec![]).id();
-    let conditional = tir::scf::SwitchOpBuilder::new(&context)
-        .predicate(predicate)
-        .inputs(vec![])
-        .arms(vec![arm(vec![]), arm(vec![exit.id()])])
-        .result_types(vec![])
-        .build();
-    context.add(body, conditional.id());
+    let conditional = tir::scf::SwitchOp::new(
+        &context,
+        predicate,
+        vec![],
+        vec![],
+        vec![arm(vec![]), arm(vec![exit.id()])],
+        Default::default(),
+        tir::InsertionPoint::Root,
+    );
+    context.insert(tir::InsertionPoint::Region(body), conditional.id());
     (context, loop_op, exit.id())
 }
 
@@ -254,8 +270,22 @@ fn add_auto_places_an_op_where_its_operands_meet() {
     let port = context.get_region(inner).ports()[0].id();
     let i32_ty = builtin::IntegerType::new(&context, 32);
 
-    let mixed = ops::addi(&context, port, argument, i32_ty).build();
-    let outside = ops::addi(&context, argument, argument, i32_ty).build();
+    let mixed = ops::addi(
+        &context,
+        port,
+        argument,
+        i32_ty,
+        Default::default(),
+        tir::InsertionPoint::Root,
+    );
+    let outside = ops::addi(
+        &context,
+        argument,
+        argument,
+        i32_ty,
+        Default::default(),
+        tir::InsertionPoint::Root,
+    );
 
     assert_eq!(context.add_auto(mixed.id()), inner);
     assert_eq!(context.add_auto(outside.id()), outer);
@@ -283,9 +313,23 @@ fn add_auto_pins_an_op_to_its_state() {
     let argument = context.get_region(outer).ports()[0].id();
     let i32_ty = builtin::IntegerType::new(&context, 32);
 
-    let pinned_out = ops::addi(&context, argument, argument, i32_ty).build();
+    let pinned_out = ops::addi(
+        &context,
+        argument,
+        argument,
+        i32_ty,
+        Default::default(),
+        tir::InsertionPoint::Root,
+    );
     context.append_operand(pinned_out.id(), chain);
-    let pinned_in = ops::addi(&context, argument, argument, i32_ty).build();
+    let pinned_in = ops::addi(
+        &context,
+        argument,
+        argument,
+        i32_ty,
+        Default::default(),
+        tir::InsertionPoint::Root,
+    );
     context.append_operand(pinned_in.id(), inner_chain);
 
     assert_eq!(context.add_auto(pinned_out.id()), outer);

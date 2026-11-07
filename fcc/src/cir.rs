@@ -169,14 +169,18 @@ impl ForOp {
         let condition = parse_loop_region(parser, context, "cond")?;
         let step = parse_loop_region(parser, context, "step")?;
         let body = parse_loop_region(parser, context, "body")?;
-        let mut builder = ForOpBuilder::new(context)
-            .condition_region(condition)
-            .step_region(step)
-            .body_region(body);
-        if let Some(label) = label_attribute(label) {
-            builder = builder.attr("label", label);
-        }
-        Ok(Box::new(builder.build()))
+        let attributes = label_attribute(label)
+            .map(|label| context.named_attribute("label", label))
+            .into_iter()
+            .collect();
+        Ok(Box::new(ForOp::new(
+            context,
+            Some(condition),
+            Some(step),
+            Some(body),
+            tir::NewOpParts { attributes },
+            tir::InsertionPoint::Root,
+        )))
     }
 }
 
@@ -230,13 +234,17 @@ impl WhileOp {
         let label = parse_loop_label(parser)?;
         let condition = parse_loop_region(parser, context, "cond")?;
         let body = parse_loop_region(parser, context, "body")?;
-        let mut builder = WhileOpBuilder::new(context)
-            .condition_region(condition)
-            .body_region(body);
-        if let Some(label) = label_attribute(label) {
-            builder = builder.attr("label", label);
-        }
-        Ok(Box::new(builder.build()))
+        let attributes = label_attribute(label)
+            .map(|label| context.named_attribute("label", label))
+            .into_iter()
+            .collect();
+        Ok(Box::new(WhileOp::new(
+            context,
+            Some(condition),
+            Some(body),
+            tir::NewOpParts { attributes },
+            tir::InsertionPoint::Root,
+        )))
     }
 }
 
@@ -284,13 +292,17 @@ impl DoOp {
         let label = parse_loop_label(parser)?;
         let body = parse_loop_region(parser, context, "body")?;
         let condition = parse_loop_region(parser, context, "cond")?;
-        let mut builder = DoOpBuilder::new(context)
-            .body_region(body)
-            .condition_region(condition);
-        if let Some(label) = label_attribute(label) {
-            builder = builder.attr("label", label);
-        }
-        Ok(Box::new(builder.build()))
+        let attributes = label_attribute(label)
+            .map(|label| context.named_attribute("label", label))
+            .into_iter()
+            .collect();
+        Ok(Box::new(DoOp::new(
+            context,
+            Some(body),
+            Some(condition),
+            tir::NewOpParts { attributes },
+            tir::InsertionPoint::Root,
+        )))
     }
 }
 

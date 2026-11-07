@@ -444,27 +444,26 @@ operation! {
 }
 
 /// A `type.def` of `name` with `body`, or an incomplete one.
-pub fn type_def(context: &Context, name: &str, body: Option<TypeId>) -> TypeDefOpBuilder {
-    let builder = TypeDefOpBuilder::new(context).sym_name(name);
-    match body {
-        Some(body) => {
-            define(context, name, body);
-            builder.body(body)
-        }
-        None => builder,
+pub fn type_def(
+    context: &Context,
+    name: &str,
+    body: Option<TypeId>,
+    mut parts: tir::NewOpParts,
+    insertion: tir::InsertionPoint,
+) -> TypeDefOp {
+    if let Some(body) = body {
+        define(context, name, body);
+        parts.attributes.insert(
+            0,
+            context.named_attribute("body", AttributeValue::Type(body)),
+        );
     }
+    TypeDefOp::new(context, name, vec![], parts, insertion)
 }
 
 pub(crate) fn define(context: &Context, name: &str, body: TypeId) {
     let terms = context.terms();
     terms.define(terms.name(name), terms.kind(body));
-}
-
-impl TypeDefOpBuilder {
-    /// The `layout {..}` options: `packed` and `align` (in bits).
-    pub fn layout_options(self, options: BTreeMap<String, AttributeValue>) -> Self {
-        self.attr("layout", AttributeValue::Dict(Box::new(options)))
-    }
 }
 
 impl Symbol for TypeDefOp {
@@ -651,8 +650,8 @@ impl TypeDefOp {
             })?
             .unwrap_or_default();
         parser.type_defs.insert(name.clone());
-        let mut builder =
-            TypeDefOpBuilder::new(context).attr("sym_name", AttributeValue::from(name.as_str()));
+        let mut parts = tir::NewOpParts::default();
+        let mut regions = vec![];
         if !params.is_empty() {
             let params: Vec<AttributeValue> = params
                 .iter()
@@ -665,7 +664,9 @@ impl TypeDefOp {
                     AttributeValue::Array(param.into())
                 })
                 .collect();
-            builder = builder.attr("params", AttributeValue::Array(params.into()));
+            parts
+                .attributes
+                .push(context.named_attribute("params", AttributeValue::Array(params.into())));
         }
 
         let mark = parser.pos();
@@ -684,7 +685,10 @@ impl TypeDefOp {
                 Ok((key, value))
             })?
         {
-            builder = builder.layout_options(options.into_iter().collect());
+            parts.attributes.push(context.named_attribute(
+                "layout",
+                AttributeValue::Dict(Box::new(options.into_iter().collect())),
+            ));
         } else {
             parser.set_pos(mark);
         }
@@ -705,7 +709,9 @@ impl TypeDefOp {
         if let Some(body) = body {
             let body = body?;
             define(context, &name, body);
-            builder = builder.attr("body", AttributeValue::Type(body));
+            parts
+                .attributes
+                .push(context.named_attribute("body", AttributeValue::Type(body)));
         }
 
         if parser.parse_token("layout") {
@@ -727,9 +733,15 @@ impl TypeDefOp {
                 })?
                 .ok_or_else(|| (parser.span(), Error::ExpectedToken("(")))?;
             let region = parser.parse_region_with_entry_args(context, arguments)?;
-            builder = builder.region(vec![region.id()]);
+            regions.push(region.id());
         }
-        Ok(Box::new(builder.build()))
+        Ok(Box::new(TypeDefOp::new(
+            context,
+            name.as_str(),
+            regions,
+            parts,
+            tir::InsertionPoint::Root,
+        )))
     }
 }
 

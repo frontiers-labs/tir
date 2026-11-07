@@ -270,34 +270,64 @@ impl Program {
             })
             .collect::<Vec<BlockHandle>>();
 
-        let seed = entry
-            .append_op(b::addi(context, arguments[0], arguments[1], integer).build())
-            .result();
-        let fuel = entry
-            .append_op(b::constant(context, FUEL, integer).build())
-            .result();
-        let spent = entry
-            .append_op(b::constant(context, 1, integer).build())
-            .result();
-        let empty = entry
-            .append_op(b::constant(context, 0, integer).build())
-            .result();
-        entry.append_op(cb::br(context, vec![seed, fuel], blocks[0].id()).build());
+        let seed = b::addi(
+            context,
+            arguments[0],
+            arguments[1],
+            integer,
+            Default::default(),
+            entry.end(),
+        )
+        .result();
+        let fuel = b::constant(context, FUEL, integer, Default::default(), entry.end()).result();
+        let spent = b::constant(context, 1, integer, Default::default(), entry.end()).result();
+        let empty = b::constant(context, 0, integer, Default::default(), entry.end()).result();
+        cb::br(
+            context,
+            vec![seed, fuel],
+            blocks[0].id(),
+            Default::default(),
+            entry.end(),
+        );
 
         for (index, specification) in self.blocks.iter().enumerate() {
             let block = &blocks[index];
             let argument = block.arguments()[0].id();
             let fuel = block.arguments()[1].id();
             let arithmetic = match specification.operation {
-                Arith::Add => b::addi(context, argument, seed, integer).build().id(),
-                Arith::Sub => b::subi(context, argument, seed, integer).build().id(),
-                Arith::Mul => b::muli(context, argument, seed, integer).build().id(),
+                Arith::Add => b::addi(
+                    context,
+                    argument,
+                    seed,
+                    integer,
+                    Default::default(),
+                    tir::InsertionPoint::Root,
+                )
+                .id(),
+                Arith::Sub => b::subi(
+                    context,
+                    argument,
+                    seed,
+                    integer,
+                    Default::default(),
+                    tir::InsertionPoint::Root,
+                )
+                .id(),
+                Arith::Mul => b::muli(
+                    context,
+                    argument,
+                    seed,
+                    integer,
+                    Default::default(),
+                    tir::InsertionPoint::Root,
+                )
+                .id(),
             };
-            block.append(arithmetic);
+            block.context.insert(block.end(), arithmetic);
             let value = context.get_op(arithmetic).results()[0];
             let left = match specification.terminator {
                 Terminator::Return => {
-                    block.append_op(func_ops::r#return(context, value).build());
+                    func_ops::r#return(context, value, vec![], Default::default(), block.end());
                     continue;
                 }
                 Terminator::Branch(left, _) => left,
@@ -305,42 +335,59 @@ impl Program {
             let Terminator::Branch(_, right) = specification.terminator else {
                 unreachable!()
             };
-            let remaining = block
-                .append_op(b::subi(context, fuel, spent, integer).build())
-                .result();
+            let remaining = b::subi(
+                context,
+                fuel,
+                spent,
+                integer,
+                Default::default(),
+                block.end(),
+            )
+            .result();
             // A backward edge burns fuel; once it is out, only the forward edge
             // is taken, so the program halts however tangled the graph is.
             let (condition, backward) = match left <= index {
                 true => (remaining, empty),
                 false => (value, seed),
             };
-            let condition = block
-                .append_op(
-                    b::CmpIOpBuilder::new(context)
-                        .lhs(condition)
-                        .rhs(backward)
-                        .predicate(tir::attributes::Predicate::Sgt)
-                        .result_type(boolean)
-                        .build(),
-                )
-                .result();
-            block.append_op(
-                cb::cond_br(
-                    context,
-                    condition,
-                    vec![value, remaining],
-                    vec![argument, remaining],
-                    blocks[left].id(),
-                    blocks[right].id(),
-                )
-                .build(),
+            let condition = b::CmpIOp::new(
+                context,
+                condition,
+                backward,
+                tir::attributes::AttributeValue::Predicate(tir::attributes::Predicate::Sgt),
+                boolean,
+                Default::default(),
+                block.end(),
+            )
+            .result();
+            cb::cond_br(
+                context,
+                condition,
+                vec![value, remaining],
+                vec![argument, remaining],
+                blocks[left].id(),
+                blocks[right].id(),
+                Default::default(),
+                block.end(),
             );
         }
 
-        let func = func_ops::lambda(context, "f", integer, &region).build();
-        let module = b::module(context, None).build();
-        module.body().append(func.id());
-        module.body().append(b::module_end(context).build().id());
+        let func = func_ops::lambda(
+            context,
+            "f",
+            integer,
+            &region,
+            Default::default(),
+            tir::InsertionPoint::Root,
+        );
+        let module = b::module(context, None, Default::default(), tir::InsertionPoint::Root);
+        (module.body())
+            .context
+            .insert(module.body().end(), func.id());
+        module.body().context.insert(
+            module.body().end(),
+            b::module_end(context, Default::default(), tir::InsertionPoint::Root).id(),
+        );
         module
     }
 }

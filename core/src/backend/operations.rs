@@ -105,10 +105,13 @@ impl tir::Pure for SymbolAddressOp {}
 
 /// The address of `name`, as an opaque pointer.
 pub fn symbol_address_of(context: &tir::Context, name: &str) -> SymbolAddressOp {
-    SymbolAddressOpBuilder::new(context)
-        .sym_name(name)
-        .result_type(tir::ptr::PtrType::opaque(context))
-        .build()
+    SymbolAddressOp::new(
+        context,
+        tir::attributes::AttributeValue::Str((name).into()),
+        tir::ptr::PtrType::opaque(context),
+        Default::default(),
+        tir::InsertionPoint::Root,
+    )
 }
 
 operation! {
@@ -156,12 +159,6 @@ impl VirtualReturnOp {
         _context: &tir::Context,
     ) -> Result<Box<dyn Operation>, (tir::parse::Span, tir::Error)> {
         Err((tir::parse::Span(parser.pos()), tir::Error::ExpectedOpName))
-    }
-}
-
-impl VirtualReturnOpBuilder {
-    pub fn value(self, value: tir::ValueId) -> Self {
-        self.values(vec![value])
     }
 }
 

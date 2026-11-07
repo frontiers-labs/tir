@@ -1,21 +1,17 @@
 //! The definitions of the type constructors whose layouts the IR computes,
-//! `!struct`, `!union`, `!variant` and `!array`, built with the builders a
+//! `!struct`, `!union`, `!variant` and `!array`, built with the constructors a
 //! frontend defines its own types with. Sizes and alignments are in bits.
 
 use crate::attributes::{AttributeValue, Predicate};
 use crate::builtin::{
-    AddIOpBuilder, AggregateKind, AggregateType, CmpIOpBuilder, ConstantOpBuilder, DivUIOpBuilder,
-    IntegerType, ModuleEndOpBuilder, ModuleOp, ModuleOpBuilder, MulIOpBuilder, SubIOpBuilder,
-    TypeDefOpBuilder,
+    AddIOp, AggregateKind, AggregateType, CmpIOp, ConstantOp, DivUIOp, IntegerType, ModuleEndOp,
+    ModuleOp, MulIOp, SubIOp, TypeDefOp,
 };
-use crate::scf::{OrderedForOpBuilder, SwitchOpBuilder, YieldOpBuilder};
+use crate::scf::{OrderedForOp, SwitchOp, YieldOp};
 use crate::ty::{Ctor, TypeArg};
 use crate::{BlockHandle, Context, Operation, RegionId, TypeId, ValueId};
 
-use super::{
-    AlignOfOpBuilder, AtOpBuilder, CountOpBuilder, FIELDS, FieldOpBuilder, ResultOpBuilder, SPEC,
-    SizeOfOpBuilder, TYPE,
-};
+use super::{AlignOfOp, AtOp, CountOp, FIELDS, FieldOp, ResultOp, SPEC, SizeOfOp, TYPE};
 
 type Param = (&'static str, &'static str, Option<AttributeValue>);
 
@@ -55,23 +51,50 @@ pub(crate) fn define(context: &Context) -> ModuleOp {
     let struct_region = layout_region(context, [spec, fields, flag], struct_layout);
     let variant_region = layout_region(context, [spec, fields, ty], variant_layout);
     let array_region = layout_region(context, [spec, i64, ty], array_layout);
+    let module = ModuleOp::new(
+        context,
+        None,
+        Default::default(),
+        crate::InsertionPoint::Root,
+    );
     let definitions = [
-        definition(context, NAMES[0], &struct_params).region(vec![struct_region]),
-        definition(context, NAMES[1], &variant_params).region(vec![variant_region]),
-        definition(context, NAMES[2], &union_params).body(union_body(context)),
-        definition(context, NAMES[3], &array_params).region(vec![array_region]),
+        (NAMES[0], &struct_params, vec![struct_region], None),
+        (NAMES[1], &variant_params, vec![variant_region], None),
+        (NAMES[2], &union_params, vec![], Some(union_body(context))),
+        (NAMES[3], &array_params, vec![array_region], None),
     ];
-    let module = ModuleOpBuilder::new(context).build();
-    for definition in definitions {
-        module.body().append_op(definition.build());
+    for (name, params, regions, body) in definitions {
+        definition(
+            context,
+            crate::InsertionPoint::Block {
+                block: module.body().id(),
+                position: module.body().len(),
+            },
+            name,
+            params,
+            regions,
+            body,
+        );
     }
-    module
-        .body()
-        .append_op(ModuleEndOpBuilder::new(context).build());
+    ModuleEndOp::new(
+        context,
+        Default::default(),
+        crate::InsertionPoint::Block {
+            block: module.body().id(),
+            position: module.body().len(),
+        },
+    );
     module
 }
 
-fn definition(context: &Context, name: &str, params: &[Param]) -> TypeDefOpBuilder {
+fn definition(
+    context: &Context,
+    insertion: crate::InsertionPoint,
+    name: &str,
+    params: &[Param],
+    regions: Vec<RegionId>,
+    body: Option<TypeId>,
+) -> TypeDefOp {
     let params: Vec<_> = params
         .iter()
         .map(|(name, kind, default)| {
@@ -80,9 +103,16 @@ fn definition(context: &Context, name: &str, params: &[Param]) -> TypeDefOpBuild
             AttributeValue::Array(param.into())
         })
         .collect();
-    TypeDefOpBuilder::new(context)
-        .sym_name(name)
-        .attr("params", AttributeValue::Array(params.into()))
+    let mut attributes =
+        vec![context.named_attribute("params", AttributeValue::Array(params.into()))];
+    attributes.extend(body.map(|body| context.named_attribute("body", AttributeValue::Type(body))));
+    TypeDefOp::new(
+        context,
+        name,
+        regions,
+        crate::NewOpParts { attributes },
+        insertion,
+    )
 }
 
 // Fields in order, each at the next offset its alignment allows; a packed
@@ -171,35 +201,63 @@ impl<'c> Emit<'c> {
         (emit, ids)
     }
 
-    fn append<T: crate::Operation>(&self, op: T) -> T {
-        self.block.append_op(op)
-    }
-
     fn constant(&self, value: i64) -> ValueId {
-        let op = ConstantOpBuilder::new(self.context)
-            .attr("value", AttributeValue::Int(value))
-            .result_type(self.bits);
-        self.append(op.build()).result()
+        ConstantOp::new(
+            self.context,
+            AttributeValue::Int(value),
+            self.bits,
+            Default::default(),
+            self.block.end(),
+        )
+        .result()
     }
 
     fn add(&self, lhs: ValueId, rhs: ValueId) -> ValueId {
-        let op = AddIOpBuilder::new(self.context).lhs(lhs).rhs(rhs);
-        self.append(op.result_type(self.bits).build()).result()
+        AddIOp::new(
+            self.context,
+            lhs,
+            rhs,
+            self.bits,
+            Default::default(),
+            self.block.end(),
+        )
+        .result()
     }
 
     fn mul(&self, lhs: ValueId, rhs: ValueId) -> ValueId {
-        let op = MulIOpBuilder::new(self.context).lhs(lhs).rhs(rhs);
-        self.append(op.result_type(self.bits).build()).result()
+        MulIOp::new(
+            self.context,
+            lhs,
+            rhs,
+            self.bits,
+            Default::default(),
+            self.block.end(),
+        )
+        .result()
     }
 
     fn sub(&self, lhs: ValueId, rhs: ValueId) -> ValueId {
-        let op = SubIOpBuilder::new(self.context).lhs(lhs).rhs(rhs);
-        self.append(op.result_type(self.bits).build()).result()
+        SubIOp::new(
+            self.context,
+            lhs,
+            rhs,
+            self.bits,
+            Default::default(),
+            self.block.end(),
+        )
+        .result()
     }
 
     fn div(&self, lhs: ValueId, rhs: ValueId) -> ValueId {
-        let op = DivUIOpBuilder::new(self.context).lhs(lhs).rhs(rhs);
-        self.append(op.result_type(self.bits).build()).result()
+        DivUIOp::new(
+            self.context,
+            lhs,
+            rhs,
+            self.bits,
+            Default::default(),
+            self.block.end(),
+        )
+        .result()
     }
 
     // `value` rounded up to a multiple of `align`.
@@ -209,12 +267,16 @@ impl<'c> Emit<'c> {
     }
 
     fn max(&self, a: ValueId, b: ValueId) -> ValueId {
-        let greater = CmpIOpBuilder::new(self.context)
-            .lhs(a)
-            .rhs(b)
-            .predicate(Predicate::Ugt)
-            .result_type(IntegerType::new(self.context, 1));
-        self.select(self.append(greater.build()).result(), b, a)
+        let greater = CmpIOp::new(
+            self.context,
+            a,
+            b,
+            Predicate::Ugt,
+            IntegerType::new(self.context, 1),
+            Default::default(),
+            self.block.end(),
+        );
+        self.select(greater.result(), b, a)
     }
 
     // `set` where `flag` is, else `clear`: a two-armed `scf.switch`.
@@ -229,12 +291,17 @@ impl<'c> Emit<'c> {
                 .create_nodes_region(ports, vec![], vec![result])
                 .id()
         };
-        let switch = SwitchOpBuilder::new(self.context)
-            .predicate(flag)
-            .inputs(vec![clear, set])
-            .arms(vec![arm(0), arm(1)])
-            .result_types(vec![self.bits]);
-        self.append(switch.build()).handle().value_results()[0]
+        SwitchOp::new(
+            self.context,
+            flag,
+            vec![clear, set],
+            vec![self.bits],
+            vec![arm(0), arm(1)],
+            Default::default(),
+            self.block.end(),
+        )
+        .handle()
+        .value_results()[0]
     }
 
     // An `scf.ordered_for` over `0..count`: `body` takes the index and the
@@ -252,27 +319,40 @@ impl<'c> Emit<'c> {
                 .id()
         });
         let next = body(&inner, ports[0], carried);
-        inner.append(
-            YieldOpBuilder::new(self.context)
-                .values(next.to_vec())
-                .build(),
+        YieldOp::new(
+            self.context,
+            next.to_vec(),
+            Default::default(),
+            inner.block.end(),
         );
         let region = self.context.create_region();
         region.add_block(inner.block.id());
-        let looped = OrderedForOpBuilder::new(self.context)
-            .lb(self.constant(0))
-            .inits(start.to_vec())
-            .ub(count)
-            .step(self.constant(1))
-            .body(region.id())
-            .result_types(vec![self.bits; K + 1]);
-        let results = self.append(looped.build()).handle().value_results();
+        let lb = self.constant(0);
+        let step = self.constant(1);
+        let looped = OrderedForOp::new(
+            self.context,
+            lb,
+            start.to_vec(),
+            count,
+            step,
+            vec![self.bits; K + 1],
+            Some(region.id()),
+            Default::default(),
+            self.block.end(),
+        );
+        let results = looped.handle().value_results();
         std::array::from_fn(|index| results[index + 1])
     }
 
     fn count(&self, fields: ValueId) -> ValueId {
-        let op = CountOpBuilder::new(self.context).fields(fields);
-        self.append(op.result_type(self.bits).build()).result()
+        CountOp::new(
+            self.context,
+            fields,
+            self.bits,
+            Default::default(),
+            self.block.end(),
+        )
+        .result()
     }
 
     fn at(&self, fields: ValueId, index: ValueId) -> ValueId {
@@ -281,35 +361,56 @@ impl<'c> Emit<'c> {
             .terms()
             .intern(TYPE.id(self.context), vec![])
             .unwrap();
-        let op = AtOpBuilder::new(self.context).fields(fields).index(index);
-        self.append(op.result_type(field_type).build()).result()
+        AtOp::new(
+            self.context,
+            fields,
+            index,
+            field_type,
+            Default::default(),
+            self.block.end(),
+        )
+        .result()
     }
 
     fn size_of(&self, ty: ValueId, spec: ValueId) -> ValueId {
-        let op = SizeOfOpBuilder::new(self.context).args(vec![ty, spec]);
-        self.append(op.result_type(self.bits).build()).result()
+        SizeOfOp::new(
+            self.context,
+            vec![ty, spec],
+            self.bits,
+            Default::default(),
+            self.block.end(),
+        )
+        .result()
     }
 
     fn align_of(&self, ty: ValueId, spec: ValueId) -> ValueId {
-        let op = AlignOfOpBuilder::new(self.context).args(vec![ty, spec]);
-        self.append(op.result_type(self.bits).build()).result()
+        AlignOfOp::new(
+            self.context,
+            vec![ty, spec],
+            self.bits,
+            Default::default(),
+            self.block.end(),
+        )
+        .result()
     }
 
     fn field(&self, index: ValueId, offset: ValueId) {
-        self.append(
-            FieldOpBuilder::new(self.context)
-                .index(index)
-                .offset(offset)
-                .build(),
+        FieldOp::new(
+            self.context,
+            index,
+            offset,
+            Default::default(),
+            self.block.end(),
         );
     }
 
     fn result(&self, size: ValueId, align: ValueId) {
-        self.append(
-            ResultOpBuilder::new(self.context)
-                .size(size)
-                .align(align)
-                .build(),
+        ResultOp::new(
+            self.context,
+            size,
+            align,
+            Default::default(),
+            self.block.end(),
         );
     }
 }

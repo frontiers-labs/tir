@@ -93,7 +93,7 @@ fn build(
         vec![],
         attributes,
     );
-    context.add_operation(instance)
+    context.add_operation(tir::InsertionPoint::Root, instance)
 }
 
 // `lui rd, imm`: 55 | rd << 7 | (imm & 0xFFFFF) << 12

@@ -141,11 +141,20 @@ impl Symbols {
                 continue;
             }
             let declaration = match FnType::signature_of(context, placeholder) {
-                Some((params, ret)) => func_ops::declare_op(context, &name, ret, &params).id(),
-                None => b::global_external(context, &name).build().id(),
+                Some((params, ret)) => func_ops::declare_op(
+                    context,
+                    &name,
+                    ret,
+                    &params,
+                    Default::default(),
+                    module.body().end(),
+                )
+                .id(),
+                None => {
+                    b::global_external(context, &name, Default::default(), module.body().end()).id()
+                }
             };
             bindings.insert(placeholder, context.get_op(declaration).results()[0]);
-            module.body().append(declaration);
         }
         for (&old, &new) in &bindings {
             context.replace_value_uses(old, new);
@@ -283,14 +292,24 @@ pub fn codegen(context: &Context, typed: &TypedAst) -> Result<ModuleOp, Diagnost
     for (value, name) in &global_strings {
         let mut bytes = decode_c_escapes(value).into_bytes();
         bytes.push(0);
-        module.body().append_op(
-            b::global_bytes(context, name, bytes, 1)
-                .attr(
-                    "sym_visibility",
-                    AttributeValue::Str("private".to_string().into()),
-                )
-                .attr("section", AttributeValue::Str(".rodata".to_string().into()))
-                .build(),
+        b::global_bytes(
+            context,
+            name,
+            bytes,
+            1,
+            tir::NewOpParts {
+                attributes: vec![
+                    context.named_attribute(
+                        "sym_visibility",
+                        AttributeValue::Str("private".to_string().into()),
+                    ),
+                    context.named_attribute(
+                        "section",
+                        AttributeValue::Str(".rodata".to_string().into()),
+                    ),
+                ],
+            },
+            module.body().end(),
         );
     }
 
@@ -308,12 +327,14 @@ pub fn codegen(context: &Context, typed: &TypedAst) -> Result<ModuleOp, Diagnost
                     continue;
                 }
                 let sig = signatures.get(&entity).unwrap();
-                module.body().append_op(func_ops::declare_op(
+                func_ops::declare_op(
                     context,
                     name,
                     sig.ret.ty,
                     &sig.argument_types(context),
-                ));
+                    Default::default(),
+                    module.body().end(),
+                );
             }
             AstKind::Function => {
                 let func_op = lower_function(
@@ -324,6 +345,7 @@ pub fn codegen(context: &Context, typed: &TypedAst) -> Result<ModuleOp, Diagnost
                     &globals,
                     &global_strings,
                     &mut symbols,
+                    module.body().end(),
                 )?;
                 if internal_functions.contains(&node_entity(typed, item)) {
                     let mut attributes = func_op.attributes().to_vec();
@@ -333,7 +355,6 @@ pub fn codegen(context: &Context, typed: &TypedAst) -> Result<ModuleOp, Diagnost
                     ));
                     context.set_op_attributes(func_op.id(), attributes);
                 }
-                module.body().append_op(func_op);
             }
             AstKind::Global => {
                 let AstLeaf::Global { is_extern, .. } = ast.get_leaf_data(item).unwrap() else {
@@ -350,22 +371,32 @@ pub fn codegen(context: &Context, typed: &TypedAst) -> Result<ModuleOp, Diagnost
                         && !defined_globals.contains(&entity)
                         && declared_globals.insert(entity)
                     {
-                        module
-                            .body()
-                            .append_op(b::global_external(context, &global.name).build());
+                        b::global_external(
+                            context,
+                            &global.name,
+                            Default::default(),
+                            module.body().end(),
+                        );
                         continue;
                     }
                     // A tentative definition reserves storage only when no
                     // other declaration of the object defines it.
                     if !is_extern && reserved_globals.insert(entity) {
-                        let mut definition = b::global_zero(context, &global.name, size, align);
+                        let mut parts = tir::NewOpParts::default();
                         if internal_globals.contains(&entity) {
-                            definition = definition.attr(
+                            parts.attributes.push(context.named_attribute(
                                 "sym_visibility",
                                 AttributeValue::Str("private".to_string().into()),
-                            );
+                            ));
                         }
-                        module.body().append_op(definition.build());
+                        b::global_zero(
+                            context,
+                            &global.name,
+                            size,
+                            align,
+                            parts,
+                            module.body().end(),
+                        );
                     }
                     continue;
                 };
@@ -382,52 +413,61 @@ pub fn codegen(context: &Context, typed: &TypedAst) -> Result<ModuleOp, Diagnost
                         "non-constant global initializer".to_string(),
                     ));
                 };
-                let mut definition = b::global_bytes(context, &global.name, data.bytes, align);
+                let mut parts = tir::NewOpParts::default();
                 if !data.relocations.is_empty() {
-                    definition = definition.attr(
-                        "relocations",
-                        AttributeValue::Array(
-                            data.relocations
-                                .into_iter()
-                                .map(|relocation| {
-                                    AttributeValue::Dict(Box::new(BTreeMap::from([
-                                        (
-                                            "offset".to_string(),
-                                            AttributeValue::UInt(relocation.offset),
-                                        ),
-                                        (
-                                            "symbol".to_string(),
-                                            AttributeValue::Str(relocation.symbol.into()),
-                                        ),
-                                        (
-                                            "addend".to_string(),
-                                            AttributeValue::Int(relocation.addend),
-                                        ),
-                                        (
-                                            "width".to_string(),
-                                            AttributeValue::UInt(relocation.width),
-                                        ),
-                                    ])))
-                                })
-                                .collect::<Vec<_>>()
-                                .into(),
+                    parts.attributes.push(
+                        context.named_attribute(
+                            "relocations",
+                            AttributeValue::Array(
+                                data.relocations
+                                    .into_iter()
+                                    .map(|relocation| {
+                                        AttributeValue::Dict(Box::new(BTreeMap::from([
+                                            (
+                                                "offset".to_string(),
+                                                AttributeValue::UInt(relocation.offset),
+                                            ),
+                                            (
+                                                "symbol".to_string(),
+                                                AttributeValue::Str(relocation.symbol.into()),
+                                            ),
+                                            (
+                                                "addend".to_string(),
+                                                AttributeValue::Int(relocation.addend),
+                                            ),
+                                            (
+                                                "width".to_string(),
+                                                AttributeValue::UInt(relocation.width),
+                                            ),
+                                        ])))
+                                    })
+                                    .collect::<Vec<_>>()
+                                    .into(),
+                            ),
                         ),
                     );
                 }
                 if internal_globals.contains(&entity) {
-                    definition = definition.attr(
+                    parts.attributes.push(context.named_attribute(
                         "sym_visibility",
                         AttributeValue::Str("private".to_string().into()),
-                    );
+                    ));
                 }
-                module.body().append_op(definition.build());
+                b::global_bytes(
+                    context,
+                    &global.name,
+                    data.bytes,
+                    align,
+                    parts,
+                    module.body().end(),
+                );
             }
             AstKind::RecordDecl | AstKind::EnumDecl | AstKind::Typedef | AstKind::Attribute => {}
             _ => unreachable!("top-level item was checked before emission"),
         }
     }
     symbols.bind(context, &module);
-    module.body().append_op(b::module_end(context).build());
+    b::module_end(context, Default::default(), module.body().end());
     Ok(module)
 }
 
@@ -494,6 +534,10 @@ fn crosses_loop_boundary(ast: &Ast, statement: NodeId, in_loop: bool) -> bool {
         .any(|child| crosses_loop_boundary(ast, child, in_loop))
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The explicit destination joins the existing frontend inputs."
+)]
 fn lower_function(
     context: &Context,
     typed: &TypedAst,
@@ -502,6 +546,7 @@ fn lower_function(
     globals: &HashMap<EntityId, Global>,
     strings: &BTreeMap<String, String>,
     symbols: &mut Symbols,
+    insertion: tir::InsertionPoint,
 ) -> Result<impl Operation, Diagnostic> {
     // The function's rows share chunks with no other function's.
 
@@ -542,7 +587,44 @@ fn lower_function(
     let block = context.create_block(param_values);
     region.add_block(block.id());
 
-    let mut func_builder = func_ops::func(
+    let mut parts = tir::NewOpParts::default();
+    if signature.ret.indirect {
+        parts
+            .attributes
+            .push(context.named_attribute("result_address", AttributeValue::Bool(true)));
+    }
+    let argument_alignments = signature.argument_alignments();
+    if argument_alignments.iter().any(|&alignment| alignment > 1) {
+        parts.attributes.push(
+            context.named_attribute(
+                "argument_alignments",
+                AttributeValue::Array(
+                    argument_alignments
+                        .iter()
+                        .copied()
+                        .map(AttributeValue::UInt)
+                        .collect::<Vec<_>>()
+                        .into(),
+                ),
+            ),
+        );
+    }
+    let noalias = signature.noalias_arguments();
+    if !noalias.is_empty() {
+        parts.attributes.push(
+            context.named_attribute(
+                "noalias",
+                AttributeValue::Array(
+                    noalias
+                        .iter()
+                        .map(|&argument| AttributeValue::UInt(argument as u64))
+                        .collect::<Vec<_>>()
+                        .into(),
+                ),
+            ),
+        );
+    }
+    let func_op = func_ops::func(
         context,
         name.as_str(),
         signature.ret.ty,
@@ -552,19 +634,9 @@ fn lower_function(
             signature.ret.ty,
         ),
         Some(region.id()),
+        parts,
+        insertion,
     );
-    if signature.ret.indirect {
-        func_builder = func_builder.result_address();
-    }
-    let argument_alignments = signature.argument_alignments();
-    if argument_alignments.iter().any(|&alignment| alignment > 1) {
-        func_builder = func_builder.argument_alignments(&argument_alignments);
-    }
-    let noalias = signature.noalias_arguments();
-    if !noalias.is_empty() {
-        func_builder = func_builder.noalias(&noalias);
-    }
-    let func_op = func_builder.build();
     let indirect_return = signature.ret.indirect.then(|| param_ids[0]);
     let parameter_start = usize::from(signature.ret.indirect);
 

@@ -29,7 +29,7 @@ pub struct Layouts {
 
 impl Layouts {
     pub(super) fn new(context: &Context, spec: AttributeValue) -> Self {
-        let module = b::module(context, None).build();
+        let module = b::module(context, None, Default::default(), tir::InsertionPoint::Root);
         Self {
             context: context.clone(),
             module,
@@ -45,9 +45,13 @@ impl Layouts {
             RecordKind::Union => AggregateKind::Union,
         };
         let body = AggregateType::get(&self.context, kind, fields).expect("a record body");
-        self.module
-            .body()
-            .append_op(type_def(&self.context, name, Some(body)).build());
+        type_def(
+            &self.context,
+            name,
+            Some(body),
+            Default::default(),
+            self.module.body().end(),
+        );
         self.defined.insert(name.to_string());
         *self.layout.get_mut() = None;
     }
@@ -66,9 +70,13 @@ impl Layouts {
     // Records still without a definition get an incomplete one.
     pub(super) fn declare_incomplete<'a>(&mut self, names: impl Iterator<Item = &'a str>) {
         for name in names.filter(|name| !self.defined.contains(*name)) {
-            self.module
-                .body()
-                .append_op(type_def(&self.context, name, None).build());
+            type_def(
+                &self.context,
+                name,
+                None,
+                Default::default(),
+                self.module.body().end(),
+            );
         }
     }
 
