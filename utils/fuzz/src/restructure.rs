@@ -62,7 +62,7 @@ fn restructure(context: &Context, module: &ModuleOp) -> Result<(), tir::PassErro
     passes
         .nest::<FuncOp>()
         .add_pass(tir::passes::RestructureNodesPass::new());
-    passes.run(context, context.get_op(module.id()))
+    passes.run(context, module.id())
 }
 
 fn has_branches(context: &Context, module: &ModuleOp) -> bool {

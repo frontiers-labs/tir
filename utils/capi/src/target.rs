@@ -108,7 +108,7 @@ pub unsafe extern "C" fn tir_context_run_target_pipeline(
         };
         let mut pm = build_pipeline(target.as_ref(), ctx, stop, Default::default());
         // A client builds control-flow graphs; the backend takes regions.
-        match structure(ctx, op.clone()).and_then(|()| pm.run(ctx, op)) {
+        match structure(ctx, op.clone()).and_then(|()| pm.run(ctx, op.id)) {
             Ok(()) => true,
             Err(e) => {
                 set_error(format!("target pipeline failed: {e}"));
