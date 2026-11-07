@@ -118,11 +118,10 @@ fn run_pass(
             pm.add_pass(pass);
         }
     }
-    pm.run(context, context.get_op(module.id()))
-        .unwrap_or_else(|e| {
-            eprintln!("fcc: error: {label} failed: {e}");
-            std::process::exit(1);
-        });
+    pm.run(context, module.id()).unwrap_or_else(|e| {
+        eprintln!("fcc: error: {label} failed: {e}");
+        std::process::exit(1);
+    });
 }
 
 fn describe_target(
@@ -204,11 +203,10 @@ pub(super) fn emit_machine_code(
     // symbol address of their own by then. The backend prologue materializes
     // the rest; by this point there is nothing left for it to find.
     pm.add_pass(tir::passes::MaterializeSymbolAddressesPass::new());
-    pm.run(&context, context.get_op(module.id()))
-        .unwrap_or_else(|e| {
-            eprintln!("fcc: error: control-flow lowering failed: {e}");
-            std::process::exit(1);
-        });
+    pm.run(&context, module.id()).unwrap_or_else(|e| {
+        eprintln!("fcc: error: control-flow lowering failed: {e}");
+        std::process::exit(1);
+    });
 
     crate::codegen::lower_data(&context, &module).unwrap_or_else(|e| {
         eprintln!("fcc: error: data lowering failed: {e}");

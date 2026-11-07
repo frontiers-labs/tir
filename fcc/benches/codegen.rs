@@ -85,7 +85,7 @@ fn run_promote((ctx, module): IrInput) {
         "func.func(restructure-nodes,promote-nodes),fixpoint<3>(func.func(instcombine-nodes))",
     )
     .unwrap();
-    pm.run(&ctx, ctx.get_op(module.id())).unwrap();
+    pm.run(&ctx, module.id()).unwrap();
 }
 
 fn run_pipeline(src: &str) {

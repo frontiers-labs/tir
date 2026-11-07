@@ -1,4 +1,4 @@
-use crate::{AnalysisManager, Context, OperationRef, Pass, PassError};
+use crate::{AnalysisManager, Context, OpId, Pass, PassError};
 
 #[derive(Clone, Default)]
 pub struct MachineBlockLayoutPass;
@@ -35,7 +35,7 @@ impl Pass for MachineBlockLayoutPass {
     }
     fn run(
         &mut self,
-        _op: &OperationRef,
+        _op: OpId,
         _context: &Context,
         _analyses: &AnalysisManager,
     ) -> Result<(), PassError> {

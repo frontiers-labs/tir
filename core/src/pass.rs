@@ -316,9 +316,11 @@ pub trait Pass: Send {
         PassTarget::Any
     }
 
+    /// Run on `op`, selecting relevant operation IDs through egglog queries on
+    /// [`Context::egraph`] rather than traversing the operation graph.
     fn run(
         &mut self,
-        op: &OperationRef,
+        op: OpId,
         context: &Context,
         analyses: &AnalysisManager,
     ) -> Result<(), PassError>;
@@ -511,15 +513,15 @@ impl PassManager {
     fn nest_parsed(&mut self, _op_name: impl Into<String>) -> &mut PassManager {
         self
     }
-    pub fn run(&mut self, _context: &Context, _op: OpHandle) -> Result<(), PassError> {
+    pub fn run(&mut self, _context: &Context, _op: OpId) -> Result<(), PassError> {
         Ok(())
     }
-    pub fn run_on_op_ref(
+    pub fn run_on_op_id(
         &mut self,
         _context: &Context,
-        root: OperationRef,
+        root: OpId,
         _analyses: &AnalysisManager,
-    ) -> Result<OperationRef, PassError> {
+    ) -> Result<OpId, PassError> {
         Ok(root)
     }
 }

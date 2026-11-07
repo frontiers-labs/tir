@@ -1,4 +1,4 @@
-use tir::{AnalysisManager, Context, OperationRef, Pass, PassError};
+use tir::{AnalysisManager, Context, OpId, Pass, PassError};
 
 #[derive(Clone, Default)]
 pub struct InsertVsetvliPass;
@@ -14,7 +14,7 @@ impl Pass for InsertVsetvliPass {
     }
     fn run(
         &mut self,
-        _op: &OperationRef,
+        _op: OpId,
         _context: &Context,
         _analyses: &AnalysisManager,
     ) -> Result<(), PassError> {

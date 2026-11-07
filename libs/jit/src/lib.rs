@@ -89,7 +89,7 @@ impl Jit {
     pub fn compile_module(&self, context: &Context, module: &ModuleOp) -> Result<Module, JitError> {
         let target = tir::backend::select_target(&self.march, self.mcpu.as_deref(), None)
             .map_err(JitError::UnknownTarget)?;
-        let module_op = context.get_op(module.id());
+        let module_op = module.id();
 
         // Raise bodies to unordered regions and simplify them, mirroring the
         // frontend pipeline: the memory order restructuring leaves is the one
@@ -98,7 +98,7 @@ impl Jit {
         let function_pipeline = pm.nest::<FuncOp>();
         function_pipeline.add_pass(tir::passes::RestructureNodesPass::new());
         function_pipeline.add_pass(tir::passes::InstCombineNodesPass::new());
-        pm.run(context, module_op.clone())
+        pm.run(context, module_op)
             .map_err(|e| JitError::Pipeline(format!("mid-end: {e}")))?;
 
         let mut pm = build_pipeline(
