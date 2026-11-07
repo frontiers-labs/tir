@@ -4,9 +4,12 @@
 //! exactly when one of its rows or values is from epoch `t-1`, which is what
 //! lets a semi-naive driver search only the delta.
 //!
-//! A head runs on all the matches of its rule at once, write by write: the
-//! keys an insert comes to are looked up as columns, and a later write reads
-//! what an earlier one bound for the same match.
+//! A head runs on the matches of its rule, write by write inside one batch:
+//! the keys an insert comes to are looked up as columns, and a later write
+//! reads what an earlier one bound for the same match. A match's equates are
+//! part of the partition later matches insert against, so a batch stops before
+//! a match whose key would change once they land — otherwise that match mints
+//! a node an earlier equate already made the same as one the table holds.
 
 use smallvec::SmallVec;
 
@@ -138,13 +141,18 @@ pub struct Batch {
     wrote: Vec<bool>,
     run: Run,
     key: Key,
+    // Ids a match in the open batch equated, stamped with `stamp_epoch`.
+    stamps: Vec<u32>,
+    stamp_epoch: u32,
+    // Matches of earlier batches of this apply that wrote nothing.
+    carried_idle: usize,
 }
 
 impl Batch {
     /// How many matches of the last rule applied wrote nothing: equated
     /// nothing, minted nothing and raised nothing.
     pub fn idle(&self) -> usize {
-        self.wrote.iter().filter(|&&wrote| !wrote).count()
+        self.carried_idle + self.wrote.iter().filter(|&&wrote| !wrote).count()
     }
 }
 
@@ -212,7 +220,195 @@ impl Run {
 ///
 /// An equate is visible to the writes after it through the partition alone:
 /// the tables name the absorbed ids until the client canonicalizes them.
+/// It is also visible to later matches. Matches that would insert a different
+/// key once an earlier equate is in the partition run in a later batch, so a
+/// column lookup still covers every match whose key does not depend on one.
 pub fn apply<C, const S: usize>(
+    client: &mut impl Client<C, S>,
+    space: SpaceId,
+    rule: usize,
+    head: &[Head],
+    head_vars: u32,
+    matches: &Matches,
+    batch: &mut Batch,
+) {
+    batch.carried_idle = 0;
+    let count = matches.len();
+    if count <= 1 || !head_merges_and_inserts(head) {
+        apply_batch(client, space, rule, head, head_vars, matches, batch);
+        return;
+    }
+    let calls = (rule, head, head_vars);
+    let mut start = 0;
+    let mut epoch = fresh_epoch(batch, client.db().ids(space));
+    let mut marked = 0usize;
+    for index in 0..count {
+        if marked > 0
+            && reads_merged(
+                client.db(),
+                space,
+                calls.1,
+                matches,
+                index,
+                &batch.stamps,
+                epoch,
+            )
+        {
+            apply_range(client, space, calls, matches, start..index, batch);
+            batch.carried_idle = batch.idle();
+            start = index;
+            epoch = fresh_epoch(batch, client.db().ids(space));
+            marked = 0;
+        }
+        marked += mark_merged(
+            client.db(),
+            space,
+            calls.1,
+            matches,
+            index,
+            &mut batch.stamps,
+            epoch,
+        );
+    }
+    apply_range(client, space, calls, matches, start..count, batch);
+}
+
+fn head_merges_and_inserts(head: &[Head]) -> bool {
+    let mut inserts = false;
+    let mut equates = false;
+    for write in head {
+        match write {
+            Head::Insert { .. } => inserts = true,
+            Head::Equate(..) | Head::EquateIndexed { .. } => equates = true,
+            Head::Offset { .. } | Head::Raise { .. } => {}
+        }
+    }
+    inserts && equates
+}
+
+fn fresh_epoch(batch: &mut Batch, ids: usize) -> u32 {
+    if batch.stamps.len() < ids {
+        batch.stamps.resize(ids, 0);
+    }
+    let next = batch.stamp_epoch.wrapping_add(1);
+    if next == 0 {
+        batch.stamps.fill(0);
+        batch.stamp_epoch = 1;
+        1
+    } else {
+        batch.stamp_epoch = next;
+        next
+    }
+}
+
+fn apply_range<C, const S: usize>(
+    client: &mut impl Client<C, S>,
+    space: SpaceId,
+    (rule, head, head_vars): (usize, &[Head], u32),
+    matches: &Matches,
+    range: std::ops::Range<usize>,
+    batch: &mut Batch,
+) {
+    if range.start == 0 && range.end == matches.len() {
+        apply_batch(client, space, rule, head, head_vars, matches, batch);
+        return;
+    }
+    let mut slice = Matches::default();
+    for index in range {
+        let (root, bindings, scalars) = matches.get(index);
+        slice.push(root, bindings, scalars);
+    }
+    apply_batch(client, space, rule, head, head_vars, &slice, batch);
+}
+
+// The class `var` names: a binding the match arrived with, or the base of the
+// offset a head var was bound to. A var the head inserts is a new id, and no
+// later match can hold it.
+fn source_class<C, const S: usize>(
+    db: &Database<C, S>,
+    space: SpaceId,
+    head: &[Head],
+    bindings: &[Ref],
+    mut var: Var,
+) -> Option<u32> {
+    for _ in 0..head.len() {
+        if (var as usize) < bindings.len()
+            && let Some(reference) = bound(bindings[var as usize])
+        {
+            return Some(db.find(space, reference).id);
+        }
+        let base = head.iter().find_map(|write| match write {
+            Head::Offset { base, into, .. } if *into == var => Some(*base),
+            _ => None,
+        })?;
+        var = base;
+    }
+    None
+}
+
+fn mark_merged<C, const S: usize>(
+    db: &Database<C, S>,
+    space: SpaceId,
+    head: &[Head],
+    matches: &Matches,
+    index: usize,
+    stamps: &mut Vec<u32>,
+    epoch: u32,
+) -> usize {
+    let (_, bindings, scalars) = matches.get(index);
+    let mut marked = 0;
+    for write in head {
+        let vars = match write {
+            Head::Equate(a, b) => [*a, *b],
+            Head::EquateIndexed { var, offset, index } => {
+                [*var, *offset + scalars[*index as usize] as Var]
+            }
+            Head::Insert { .. } | Head::Offset { .. } | Head::Raise { .. } => continue,
+        };
+        for var in vars {
+            let Some(id) = source_class(db, space, head, bindings, var) else {
+                continue;
+            };
+            let at = id as usize;
+            if stamps.len() <= at {
+                stamps.resize(at + 1, 0);
+            }
+            if stamps[at] != epoch {
+                stamps[at] = epoch;
+                marked += 1;
+            }
+        }
+    }
+    marked
+}
+
+fn reads_merged<C, const S: usize>(
+    db: &Database<C, S>,
+    space: SpaceId,
+    head: &[Head],
+    matches: &Matches,
+    index: usize,
+    stamps: &[u32],
+    epoch: u32,
+) -> bool {
+    let (_, bindings, _) = matches.get(index);
+    for write in head {
+        let Head::Insert { args, .. } = write else {
+            continue;
+        };
+        for &arg in args {
+            let Some(id) = source_class(db, space, head, bindings, arg) else {
+                continue;
+            };
+            if stamps.get(id as usize).copied() == Some(epoch) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn apply_batch<C, const S: usize>(
     client: &mut impl Client<C, S>,
     space: SpaceId,
     rule: usize,
