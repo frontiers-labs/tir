@@ -1,7 +1,7 @@
 //! `cargo xtask lint`: every static check CI runs besides rustfmt.
 //!
-//! ast-grep and dryer run through `uv` at the versions the scripts in
-//! `.github/scripts` pin, so `uv` is the only tool to install.
+//! ast-grep runs through `uv`; dupehound installs into its own versioned cache.
+//! The scripts in `.github/scripts` pin both tools.
 
 use std::{
     io::Write,

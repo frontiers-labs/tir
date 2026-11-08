@@ -43,6 +43,13 @@ fn attr_value(ctx: &tir::Context, op: u32, i: usize) -> Option<AttributeValue> {
     }
 }
 
+fn indexed_id(id: Option<u32>, kind: &str, i: usize) -> u32 {
+    id.unwrap_or_else(|| {
+        set_error(format!("{kind} index {i} out of range"));
+        TIR_INVALID_ID
+    })
+}
+
 /// Name of op `op` as an owned C string, or null on error. Free with `tir_string_free`.
 ///
 /// # Safety
@@ -88,13 +95,7 @@ pub unsafe extern "C" fn tir_op_operand(ctx: *const tir::Context, op: u32, i: us
         let Some(op) = op_instance(ctx, op) else {
             return TIR_INVALID_ID;
         };
-        match op.operands().get(i) {
-            Some(v) => v.number(),
-            None => {
-                set_error(format!("operand index {i} out of range"));
-                TIR_INVALID_ID
-            }
-        }
+        indexed_id(op.operands().get(i).map(|v| v.number()), "operand", i)
     })
 }
 
@@ -119,13 +120,7 @@ pub unsafe extern "C" fn tir_op_result(ctx: *const tir::Context, op: u32, i: usi
         let Some(op) = op_instance(ctx, op) else {
             return TIR_INVALID_ID;
         };
-        match op.results().get(i) {
-            Some(v) => v.number(),
-            None => {
-                set_error(format!("result index {i} out of range"));
-                TIR_INVALID_ID
-            }
-        }
+        indexed_id(op.results().get(i).map(|v| v.number()), "result", i)
     })
 }
 
@@ -150,13 +145,7 @@ pub unsafe extern "C" fn tir_op_region(ctx: *const tir::Context, op: u32, i: usi
         let Some(op) = op_instance(ctx, op) else {
             return TIR_INVALID_ID;
         };
-        match op.regions().get(i) {
-            Some(r) => r.number(),
-            None => {
-                set_error(format!("region index {i} out of range"));
-                TIR_INVALID_ID
-            }
-        }
+        indexed_id(op.regions().get(i).map(|r| r.number()), "region", i)
     })
 }
 
