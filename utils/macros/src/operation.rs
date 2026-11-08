@@ -27,7 +27,6 @@ pub fn construct_operation(item: TokenStream) -> TokenStream {
         mut scheme,
     } = parse_macro_input!(item as Operation);
 
-    let builder_name = format_ident!("{}Builder", struct_name.to_string());
     // `state:` appends optional resource-state ports. Effects are declared by
     // operation interfaces, independently of whether a threading pass has
     // supplied those ports.
@@ -64,11 +63,11 @@ pub fn construct_operation(item: TokenStream) -> TokenStream {
             counted.as_ref(),
             &OpShape {
                 struct_name: &struct_name,
-                builder_name: &builder_name,
                 spelled: format!("{dialect}.{name}"),
                 operands: &operand_shape,
                 regions: &region_shape,
                 custom_format,
+                state_results: results.iter().any(ValueSpec::is_state),
             },
         )
     });
@@ -76,8 +75,7 @@ pub fn construct_operation(item: TokenStream) -> TokenStream {
         counted.is_none() || binds.is_some(),
         "counted: needs the Theta binding it pins"
     );
-    // A state result is minted by the builder, not typed by its caller, so
-    // the result pieces see only the results that carry a value.
+    // State results follow the value results, independently of value arity.
     let (state_results, value_results): (Vec<ValueSpec>, Vec<ValueSpec>) =
         results.iter().cloned().partition(ValueSpec::is_state);
     assert!(
@@ -86,7 +84,7 @@ pub fn construct_operation(item: TokenStream) -> TokenStream {
     );
     let has_results = !value_results.is_empty();
     // A `*`-prefixed result makes the op n-ary: it produces one value per type given
-    // to the builder. Used by structured control flow, which carries n values.
+    // to the constructor. Used by structured control flow, which carries n values.
     let result_variadic = value_results.len() > 1
         || value_results
             .iter()
@@ -118,15 +116,7 @@ pub fn construct_operation(item: TokenStream) -> TokenStream {
     let parser = match binds_parser {
         Some(parser) => parser,
         None if custom_format => make_custom_parser(),
-        None => make_parser(
-            &name,
-            &builder_name,
-            &regions,
-            &operands,
-            &attributes,
-            has_results,
-            result_variadic,
-        ),
+        None => make_parser(&name, &regions, &operands, &attributes, has_results),
     };
 
     let attribute_verifier = make_attribute_verifier(&attributes);
@@ -205,8 +195,7 @@ pub fn construct_operation(item: TokenStream) -> TokenStream {
     });
 
     let result_pieces = make_result_pieces(has_results, result_variadic);
-    // An optional attribute is set on the builder, not passed to the
-    // constructor function.
+    // Optional attributes are supplied through NewOpParts.
     let required = || attributes.iter().filter(|attr| !attr.ty.starts_with('?'));
     let attr_fn_params: Vec<_> = required()
         .map(|attr| {
@@ -215,12 +204,13 @@ pub fn construct_operation(item: TokenStream) -> TokenStream {
         })
         .collect();
 
-    let attr_fn_builders: Vec<_> = required()
+    let attr_fn_args: Vec<_> = required().map(|attr| op_fn_ident(&attr.name)).collect();
+    let attr_fills: Vec<_> = required()
         .map(|attr| {
             let name_ident = op_fn_ident(&attr.name);
             let name_str = attr.name.clone();
             quote! {
-                builder = builder.attr(#name_str, #name_ident.into());
+                parts.attributes.push(context.named_attribute(#name_str, #name_ident.into()));
             }
         })
         .collect();
@@ -243,30 +233,18 @@ pub fn construct_operation(item: TokenStream) -> TokenStream {
     );
     let opdef_verifier = emit_opdef_verifier(&struct_name, &schema_ident, &regions, &binds_verify);
 
-    let (attr_setters, attr_getters) =
-        make_attr_accessors(&attributes, &format!("{dialect}.{name}"));
-    let attribute_pieces = AttributePieces {
-        verifier: attribute_verifier,
-        setters: attr_setters,
-    };
-    let builder_code = emit_builder(
-        &builder_name,
+    let attr_getters = make_attr_accessors(&attributes, &format!("{dialect}.{name}"));
+    let result_accessor = &result_pieces.accessor;
+    let (constructor, op_fn_code) = emit_constructors(
+        &op_fn_name,
         &struct_name,
         &region_pieces,
         &operand_pieces,
         &result_pieces,
         &state_result_pieces,
-        &attribute_pieces,
-    );
-    let result_accessor = &result_pieces.accessor;
-    let op_fn_code = emit_op_fn(
-        &op_fn_name,
-        &builder_name,
-        &region_pieces,
-        &operand_pieces,
-        &result_pieces,
-        &attr_fn_params,
-        &attr_fn_builders,
+        (&attr_fn_params, &attr_fn_args),
+        &attr_fills,
+        &attribute_verifier,
     );
 
     quote! {
@@ -282,9 +260,8 @@ pub fn construct_operation(item: TokenStream) -> TokenStream {
         #as_sem_expr_impl
         #constant_fold_impl
 
-        #builder_code
-
         impl #struct_name {
+            #constructor
             #region_accessors
             #result_accessor
             #attr_getters
@@ -441,39 +418,24 @@ fn emit_opdef_verifier(
     }
 }
 
-/// What an op's attribute declarations contribute to its builder: the
-/// required-attribute check `build` runs, and one typed setter per attribute.
-struct AttributePieces {
-    verifier: proc_macro2::TokenStream,
-    setters: Vec<proc_macro2::TokenStream>,
-}
-
-/// How one attribute kind crosses between the IR and Rust: the type it reads
-/// as, the type it is written from, and the `AttributeValue` variant between
-/// them.
+/// The Rust getter type and corresponding IR attribute variant.
 struct AttrAccessor {
     getter_ty: proc_macro2::TokenStream,
-    setter_ty: proc_macro2::TokenStream,
     variant: Ident,
     read: proc_macro2::TokenStream,
-    write: proc_macro2::TokenStream,
 }
 
 fn attr_accessor(ty: &str) -> Option<AttrAccessor> {
     let scalar = |rust: proc_macro2::TokenStream, variant: &str| AttrAccessor {
-        getter_ty: rust.clone(),
-        setter_ty: rust,
+        getter_ty: rust,
         variant: format_ident!("{}", variant),
         read: quote! { value },
-        write: quote! { value },
     };
     Some(match ty {
         "Str" => AttrAccessor {
             getter_ty: quote! { String },
-            setter_ty: quote! { impl Into<Box<str>> },
             variant: format_ident!("Str"),
             read: quote! { value.to_string() },
-            write: quote! { value.into() },
         },
         "Int" => scalar(quote! { i64 }, "Int"),
         "UInt" => scalar(quote! { u64 }, "UInt"),
@@ -486,36 +448,26 @@ fn attr_accessor(ty: &str) -> Option<AttrAccessor> {
         "Predicate" => scalar(quote! { tir::attributes::Predicate }, "Predicate"),
         "FpSemantics" => AttrAccessor {
             getter_ty: quote! { std::sync::Arc<tir::fp::Semantics> },
-            setter_ty: quote! { std::sync::Arc<tir::fp::Semantics> },
             variant: format_ident!("FpSemantics"),
             read: quote! { value },
-            write: quote! { value },
         },
         "EvaluationContract" => AttrAccessor {
             getter_ty: quote! { std::sync::Arc<tir::fp::EvaluationContract> },
-            setter_ty: quote! { std::sync::Arc<tir::fp::EvaluationContract> },
             variant: format_ident!("EvaluationContract"),
             read: quote! { value },
-            write: quote! { value },
         },
         _ => return None,
     })
 }
 
-fn make_attr_accessors(
-    attributes: &[AttrSpec],
-    spelled: &str,
-) -> (TokenStreams, proc_macro2::TokenStream) {
-    let mut setters = vec![];
+fn make_attr_accessors(attributes: &[AttrSpec], spelled: &str) -> proc_macro2::TokenStream {
     let mut getters = vec![];
     for attr in attributes {
         let optional = attr.ty.strip_prefix('?');
         let Some(AttrAccessor {
             getter_ty,
-            setter_ty,
             variant,
             read,
-            write,
         }) = attr_accessor(optional.unwrap_or(&attr.ty))
         else {
             continue;
@@ -526,11 +478,6 @@ fn make_attr_accessors(
             "{spelled} must carry a {} attribute '{}'",
             attr.ty, attr.name
         );
-        setters.push(quote! {
-            pub fn #method(self, value: #setter_ty) -> Self {
-                self.attr(#name, tir::attributes::AttributeValue::#variant(#write))
-            }
-        });
         if optional.is_some() {
             getters.push(quote! {
                 pub fn #method(&self) -> Option<#getter_ty> {
@@ -551,433 +498,221 @@ fn make_attr_accessors(
             }
         });
     }
-    (setters, quote! { #(#getters)* })
+    quote! { #(#getters)* }
 }
 
-fn emit_builder(
-    builder_name: &Ident,
+fn constructor_attributes(
+    attr_fills: &TokenStreams,
+    segment_sizes_attr: &proc_macro2::TokenStream,
+) -> proc_macro2::TokenStream {
+    if !attr_fills.is_empty() {
+        quote! {
+            let supplied_attributes = parts.attributes;
+            let mut parts = tir::NewOpParts::default();
+            #(#attr_fills)*
+            parts.attributes.extend(supplied_attributes);
+        }
+    } else if !segment_sizes_attr.is_empty() {
+        quote! { let mut parts = parts; }
+    } else {
+        quote! {}
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn emit_constructors(
+    op_fn_name: &Ident,
     struct_name: &Ident,
     regions: &RegionPieces,
     operands: &OperandPieces,
     results: &ResultPieces,
     state_results: &StateResultPieces,
-    attributes: &AttributePieces,
-) -> proc_macro2::TokenStream {
-    let (attribute_verifier, attr_setters) = (&attributes.verifier, &attributes.setters);
-    let (state_result_field, state_result_default, state_result_method, state_result_build) = (
-        &state_results.field,
-        &state_results.default,
-        &state_results.method,
-        &state_results.build,
-    );
-    let (region_fields, region_defaults, region_builders, region_fills) = (
-        &regions.fields,
-        &regions.defaults,
-        &regions.builders,
-        &regions.fills,
-    );
-    let (operand_fields, operand_defaults, operand_builders, operand_collect) = (
-        &operands.fields,
-        &operands.defaults,
-        &operands.builders,
+    (attr_params, attr_args): (&TokenStreams, &[Ident]),
+    attr_fills: &TokenStreams,
+    attribute_verifier: &proc_macro2::TokenStream,
+) -> (proc_macro2::TokenStream, proc_macro2::TokenStream) {
+    let (region_params, region_args, region_fills) =
+        (&regions.params, &regions.args, &regions.fills);
+    let (operand_params, operand_args, operand_setup, operand_collect) = (
+        &operands.params,
+        &operands.args,
+        &operands.setup,
         &operands.collect,
     );
-    let segment_sizes_setup = &operands.segment_sizes_setup;
-    let attributes_binding = &operands.attributes_binding;
-    let segment_sizes_attr = &operands.segment_sizes_attr;
-    let (result_builder_field, result_builder_default, result_builder_method, result_build) = (
-        &results.builder_field,
-        &results.builder_default,
-        &results.builder_method,
-        &results.build,
+    let (state_params, state_args) = (&operands.state_params, &operands.state_args);
+    let (result_param, result_arg, result_build) = (&results.param, &results.arg, &results.build);
+    let (state_result_param, state_result_arg, state_result_build) = (
+        &state_results.param,
+        &state_results.arg,
+        &state_results.build,
     );
-    quote! {
-        pub struct #builder_name {
-            context: tir::Context,
-            parts: tir::NewOpParts,
-            #(#region_fields,)*
-            #(#operand_fields,)*
-            #result_builder_field
-            #state_result_field
-        }
-
-        impl #builder_name {
-            pub fn new(context: &tir::Context) -> #builder_name {
-                Self {
-                    context: context.clone(),
-                    parts: tir::NewOpParts::default(),
-                    #(#region_defaults,)*
-                    #(#operand_defaults,)*
-                    #result_builder_default
-                    #state_result_default
-                }
-            }
-
-            #(#region_builders)*
-            #(#operand_builders)*
-            #(#attr_setters)*
-            #result_builder_method
-            #state_result_method
-
-            pub fn attr(mut self, name: &str, value: tir::attributes::AttributeValue) -> Self {
-                let attribute = self.context.named_attribute(name, value);
-                self.parts.attributes.push(attribute);
-                self
-            }
-
-            /// [`Self::attr`] for a name already interned in the context.
-            pub fn attr_sym(mut self, name: tir::Sym, value: tir::attributes::AttributeValue) -> Self {
-                self.parts.attributes.push(tir::attributes::NamedAttribute::new(name, value));
-                self
-            }
-
-            pub fn build(self) -> #struct_name {
-                let mut regions = vec![];
-
-                #(#region_fills)*
-
-                #attribute_verifier
-
-                let mut operand_vec: Vec<tir::ValueId> = vec![];
-                #segment_sizes_setup
-                #(#operand_collect)*
-
-                #result_build
-                #state_result_build
-
-                #attributes_binding
-                #segment_sizes_attr
-
-                let instance = tir::NewOp::new::<#struct_name>(
-                    self.context.clone(),
-                    operand_vec,
-                    result_vec,
-                    regions,
-                    tir::NewOpParts { attributes },
-                );
-
-                let instance = self.context.add_operation(instance);
-
-                #struct_name(instance)
-            }
-        }
-    }
-}
-
-fn emit_op_fn(
-    op_fn_name: &Ident,
-    builder_name: &Ident,
-    regions: &RegionPieces,
-    operands: &OperandPieces,
-    results: &ResultPieces,
-    attr_fn_params: &TokenStreams,
-    attr_fn_builders: &TokenStreams,
-) -> proc_macro2::TokenStream {
-    let (region_fn_params, region_fn_builders) = (&regions.fn_params, &regions.fn_builders);
-    let (operand_fn_params, operand_fn_builders) = (&operands.fn_params, &operands.fn_builders);
-    let (result_fn_param, result_fn_builder) = (&results.fn_param, &results.fn_builder);
-
-    quote! {
-        // Generated: one parameter per declared port, which for a machine
-        // instruction is however many registers it names.
+    let segment_sizes_setup = &operands.segment_sizes_setup;
+    let segment_sizes_attr = &operands.segment_sizes_attr;
+    let parts_setup = constructor_attributes(attr_fills, segment_sizes_attr);
+    let params = quote! {
+        context: &tir::Context,
+        #(#operand_params,)*
+        #(#attr_params,)*
+        #result_param
+        #(#region_params,)*
+        #(#state_params,)*
+        #state_result_param
+        parts: tir::NewOpParts,
+        insertion: tir::InsertionPoint,
+    };
+    let constructor = quote! {
         #[allow(clippy::too_many_arguments)]
-        pub fn #op_fn_name(
-            context: &tir::Context,
-            #(#operand_fn_params,)*
-            #(#attr_fn_params,)*
-            #result_fn_param
-            #(#region_fn_params,)*
-        ) -> #builder_name {
-            let mut builder = #builder_name::new(context);
-            #(#operand_fn_builders)*
-            #(#attr_fn_builders)*
-            #result_fn_builder
-            #(#region_fn_builders)*
-            builder
+        pub fn new(#params) -> Self {
+            self::#op_fn_name(
+                context, #(#operand_args,)* #(#attr_args,)*
+                #result_arg #(#region_args,)* #(#state_args,)* #state_result_arg parts, insertion,
+            )
         }
-    }
+    };
+    let function = quote! {
+        // Generated: one parameter per declared port.
+        #[allow(clippy::too_many_arguments)]
+        pub fn #op_fn_name(#params) -> #struct_name {
+            #parts_setup
+            let mut regions = vec![];
+            #(#region_fills)*
+            #attribute_verifier
+            #(#operand_setup)*
+            let mut operand_vec: Vec<tir::ValueId> = vec![];
+            #segment_sizes_setup
+            #(#operand_collect)*
+            #result_build
+            #state_result_build
+            #segment_sizes_attr
+            let instance = tir::NewOp::new::<#struct_name>(
+                context.clone(), operand_vec, result_vec, regions, parts,
+            );
+            #struct_name(context.add_operation(insertion, instance))
+        }
+    };
+    (constructor, function)
 }
 
 struct RegionPieces {
-    fields: TokenStreams,
+    params: TokenStreams,
+    args: TokenStreams,
     defaults: TokenStreams,
-    builders: TokenStreams,
     fills: TokenStreams,
-    fn_params: TokenStreams,
-    fn_builders: TokenStreams,
 }
 
 fn make_region_pieces(regions: &[Region]) -> RegionPieces {
-    let mut region_fills = vec![];
-    let mut region_fields = vec![];
-    let mut region_defaults = vec![];
-    let mut region_builders = vec![];
-
-    for r in regions {
-        let name = format_ident!("{}", r.name);
-
-        let name_str = r.name.clone();
-
-        if r.variadic {
-            region_fields.push(quote! {
-               #name: Vec<tir::RegionId>
-            });
-            region_defaults.push(quote! {
-               #name: Vec::new()
-            });
-            region_builders.push(quote! {
-               pub fn #name(mut self, ids: Vec<tir::RegionId>) -> Self {
-                   self.#name = ids;
-                   self
-               }
-            });
-            region_fills.push(quote! {
-                regions.extend(self.#name.iter().copied());
-            });
-            continue;
-        }
-
-        region_fields.push(quote! {
-           #name: Option<tir::RegionId>
-        });
-
-        region_defaults.push(quote! {
-           #name: None
-        });
-
-        region_builders.push(quote! {
-           pub fn #name(mut self, id: tir::RegionId) -> Self {
-               self.#name = Some(id);
-               self
-           }
-        });
-
-        if r.blocked() {
-            region_fills.push(quote! {
-                let region = if self.#name.is_some() {
-                    self.#name.unwrap()
-                } else {
-                    let region = self.context.create_region();
-                    let block = self.context.create_block(vec![]);
-                    region.add_block(block.id());
-                    region.id()
-                };
-                regions.push(region);
-            });
+    let mut params = vec![];
+    let mut args = vec![];
+    let mut defaults = vec![];
+    let mut fills = vec![];
+    for region in regions {
+        let name = format_ident!("{}", region.name);
+        args.push(quote! { #name });
+        if region.variadic {
+            params.push(quote! { #name: Vec<tir::RegionId> });
+            defaults.push(quote! { let #name = vec![]; });
+            fills.push(quote! { regions.extend(#name); });
         } else {
-            region_fills.push(quote! {
-                if self.#name.is_some() {
-                    regions.push(self.#name.unwrap());
-                } else {
-                    panic!("Region '{}' is not set", #name_str);
-                }
-            });
+            params.push(quote! { #name: Option<tir::RegionId> });
+            defaults.push(quote! { let #name = None; });
+            if region.blocked() {
+                fills.push(quote! {
+                    let region = #name.unwrap_or_else(|| {
+                        let region = context.create_region();
+                        let block = context.create_block(vec![]);
+                        region.add_block(block.id());
+                        region.id()
+                    });
+                    regions.push(region);
+                });
+            } else {
+                let missing = format!("Region '{}' is not set", region.name);
+                fills.push(quote! { regions.push(#name.expect(#missing)); });
+            }
         }
     }
-
-    let region_fn_params: Vec<_> = regions
-        .iter()
-        .map(|region| {
-            let name = format_ident!("{}", region.name);
-            if region.variadic {
-                quote! { #name: Vec<tir::RegionId> }
-            } else {
-                quote! { #name: Option<tir::RegionId> }
-            }
-        })
-        .collect();
-
-    let region_fn_builders: Vec<_> = regions
-        .iter()
-        .map(|region| {
-            let name = format_ident!("{}", region.name);
-            if region.variadic {
-                quote! { builder = builder.#name(#name); }
-            } else {
-                quote! {
-                    if let Some(region) = #name {
-                        builder = builder.#name(region);
-                    }
-                }
-            }
-        })
-        .collect();
-
     RegionPieces {
-        fields: region_fields,
-        defaults: region_defaults,
-        builders: region_builders,
-        fills: region_fills,
-        fn_params: region_fn_params,
-        fn_builders: region_fn_builders,
+        params,
+        args,
+        defaults,
+        fills,
     }
 }
 
 struct OperandPieces {
-    fields: TokenStreams,
-    defaults: TokenStreams,
-    builders: TokenStreams,
-    fn_params: TokenStreams,
-    fn_builders: TokenStreams,
+    params: TokenStreams,
+    args: TokenStreams,
+    state_params: TokenStreams,
+    state_args: TokenStreams,
+    setup: TokenStreams,
     collect: TokenStreams,
     segment_sizes_setup: proc_macro2::TokenStream,
-    attributes_binding: proc_macro2::TokenStream,
     segment_sizes_attr: proc_macro2::TokenStream,
 }
 
 fn make_operand_pieces(operands: &[ValueSpec]) -> OperandPieces {
-    let mut operand_fields = vec![];
-    let mut operand_defaults = vec![];
-    let mut operand_builders = vec![];
-    let mut operand_fn_params = vec![];
-    let mut operand_fn_builders = vec![];
-
+    let mut params = vec![];
+    let mut args = vec![];
+    let mut state_params = vec![];
+    let mut state_args = vec![];
+    let mut setup = vec![];
+    let mut collect = vec![];
+    let has_variadic = operands.iter().any(|operand| operand.variadic);
     for operand in operands {
         let field = format_ident!("{}", operand.name);
-        if operand.name == "state" {
-            operand_fields.push(quote! {
-                #field: Vec<tir::ValueId>
-            });
-            operand_defaults.push(quote! {
-                #field: Vec::new()
-            });
-            operand_builders.push(quote! {
-                pub fn state(mut self, value: tir::ValueId) -> Self {
-                    self.#field.push(value);
-                    self
-                }
-
-                pub fn state_operands(
-                    mut self,
-                    values: impl IntoIterator<Item = tir::ValueId>,
-                ) -> Self {
-                    self.#field = values.into_iter().collect();
-                    self
-                }
-            });
-        } else if operand.variadic {
-            operand_fields.push(quote! {
-                #field: Vec<tir::ValueId>
-            });
-            operand_defaults.push(quote! {
-                #field: Vec::new()
-            });
-            operand_builders.push(quote! {
-                pub fn #field(mut self, v: Vec<tir::ValueId>) -> Self {
-                    self.#field = v;
-                    self
-                }
-            });
-        } else {
-            operand_fields.push(quote! {
-                #field: Option<tir::ValueId>
-            });
-            operand_defaults.push(quote! {
-                #field: None
-            });
-            operand_builders.push(quote! {
-                pub fn #field(mut self, v: tir::ValueId) -> Self {
-                    self.#field = Some(v);
-                    self
-                }
-            });
-        }
-        // A state port is set on the builder, never through the free
-        // function: memory order is threaded after an op is built.
         if operand.is_state() {
-            continue;
+            state_params.push(quote! { #field: Vec<tir::ValueId> });
+            state_args.push(quote! { #field });
+        } else {
+            args.push(quote! { #field });
+            if operand.variadic {
+                params.push(quote! { #field: Vec<tir::ValueId> });
+            } else {
+                params.push(quote! { #field: impl Into<tir::Operand> });
+                setup.push(quote! { let #field = #field.into().into_option(); });
+            }
         }
-        if operand.variadic {
-            operand_fn_params.push(quote! {
-                #field: Vec<tir::ValueId>
-            });
-            operand_fn_builders.push(quote! {
-                builder = builder.#field(#field);
+        if !has_variadic {
+            collect.push(quote! { if let Some(value) = #field { operand_vec.push(value); } });
+        } else if operand.variadic {
+            collect.push(quote! {
+                operand_segment_sizes.push(#field.len() as u64);
+                operand_vec.extend(#field);
             });
         } else {
-            operand_fn_params.push(quote! {
-                #field: impl Into<tir::Operand>
-            });
-            operand_fn_builders.push(quote! {
-                let #field = #field.into();
-                if let Some(value) = #field.into_option() {
-                    builder = builder.#field(value);
-                }
+            collect.push(quote! {
+                operand_segment_sizes.push(u64::from(#field.is_some()));
+                operand_vec.extend(#field);
             });
         }
     }
-
-    let has_variadic = operands.iter().any(|o| o.variadic);
-    // Collect operands in declaration order. Variadic ops additionally record each
-    // declared operand's segment size in the `operand_segment_sizes` attribute so
-    // groups can be recovered; fixed-arity ops keep the original simple collection.
-    let operand_collect: Vec<_> = operands
-        .iter()
-        .map(|operand| {
-            let field = format_ident!("{}", operand.name);
-            if !has_variadic {
-                quote! {
-                    if let Some(v) = self.#field {
-                        operand_vec.push(v);
-                    }
-                }
-            } else if operand.variadic {
-                quote! {
-                    operand_segment_sizes.push(self.#field.len() as u64);
-                    operand_vec.extend(self.#field.iter().copied());
-                }
-            } else {
-                quote! {
-                    if let Some(v) = self.#field {
-                        operand_segment_sizes.push(1);
-                        operand_vec.push(v);
-                    } else {
-                        operand_segment_sizes.push(0);
-                    }
-                }
-            }
-        })
-        .collect();
-
     let segment_sizes_setup = if has_variadic {
         quote! { let mut operand_segment_sizes: Vec<u64> = vec![]; }
     } else {
         quote! {}
     };
-
-    // `attributes` only needs to be mutable when a variadic op appends its segment
-    // sizes, so bind it accordingly to avoid an `unused_mut` warning otherwise.
-    let attributes_binding = if has_variadic {
-        quote! { let mut attributes = self.parts.attributes; }
-    } else {
-        quote! { let attributes = self.parts.attributes; }
-    };
-
     let segment_sizes_attr = if has_variadic {
         quote! {
-            attributes.push(tir::attributes::NamedAttribute::new(
-                self.context.intern("operand_segment_sizes"),
+            parts.attributes.push(context.named_attribute(
+                "operand_segment_sizes",
                 tir::attributes::AttributeValue::Array(
-                    operand_segment_sizes
-                        .iter()
-                        .map(|n| tir::attributes::AttributeValue::UInt(*n))
-                        .collect::<Vec<_>>()
-                .into()),
+                    operand_segment_sizes.into_iter()
+                        .map(tir::attributes::AttributeValue::UInt)
+                        .collect::<Vec<_>>().into(),
+                ),
             ));
         }
     } else {
         quote! {}
     };
-
     OperandPieces {
-        fields: operand_fields,
-        defaults: operand_defaults,
-        builders: operand_builders,
-        fn_params: operand_fn_params,
-        fn_builders: operand_fn_builders,
-        collect: operand_collect,
+        params,
+        args,
+        state_params,
+        state_args,
+        setup,
+        collect,
         segment_sizes_setup,
-        attributes_binding,
         segment_sizes_attr,
     }
 }
@@ -1110,117 +845,46 @@ fn make_undefined_methods(
 
 struct ResultPieces {
     accessor: proc_macro2::TokenStream,
-    builder_field: proc_macro2::TokenStream,
-    builder_default: proc_macro2::TokenStream,
-    builder_method: proc_macro2::TokenStream,
-    fn_param: proc_macro2::TokenStream,
-    fn_builder: proc_macro2::TokenStream,
+    param: proc_macro2::TokenStream,
+    arg: proc_macro2::TokenStream,
     build: proc_macro2::TokenStream,
 }
 
 fn make_result_pieces(has_results: bool, result_variadic: bool) -> ResultPieces {
-    let result_accessor = if has_results {
-        quote! {
-            pub fn result(&self) -> tir::ValueId {
-                self.0.results()[0]
-            }
-        }
+    let accessor = if has_results {
+        quote! { pub fn result(&self) -> tir::ValueId { self.0.results()[0] } }
     } else {
         quote! {}
     };
-
-    let result_builder_field = if !has_results {
-        quote! {}
+    let (param, arg, build) = if !has_results {
+        (
+            quote! {},
+            quote! {},
+            quote! { let result_vec: Vec<tir::ValueId> = vec![]; },
+        )
     } else if result_variadic {
-        quote! { result_types: Vec<tir::TypeId>, result_values: Vec<tir::ValueId>, }
+        (
+            quote! { result_types: Vec<tir::TypeId>, },
+            quote! { result_types, },
+            quote! {
+                let result_vec: Vec<tir::ValueId> = result_types.into_iter()
+                    .map(|ty| context.create_value(ty, None).id()).collect();
+            },
+        )
     } else {
-        quote! { result_type: Option<tir::TypeId>, }
+        (
+            quote! { result_type: tir::TypeId, },
+            quote! { result_type, },
+            quote! {
+                let result_vec = vec![context.create_value(result_type, None).id()];
+            },
+        )
     };
-
-    let result_builder_default = if !has_results {
-        quote! {}
-    } else if result_variadic {
-        quote! { result_types: Vec::new(), result_values: Vec::new(), }
-    } else {
-        quote! { result_type: None, }
-    };
-
-    let result_builder_method = if !has_results {
-        quote! {}
-    } else if result_variadic {
-        quote! {
-            pub fn result_types(mut self, types: Vec<tir::TypeId>) -> Self {
-                self.result_types = types;
-                self
-            }
-
-            /// Adopt values that already exist as this op's results, instead of
-            /// minting fresh ones from [`Self::result_types`]. A rewrite that
-            /// moves a definition from one op to another (a two-address tie
-            /// lowered to a copy) keeps the value it was reaching.
-            pub fn result_values(mut self, values: Vec<tir::ValueId>) -> Self {
-                self.result_values = values;
-                self
-            }
-        }
-    } else {
-        quote! {
-            pub fn result_type(mut self, ty: tir::TypeId) -> Self {
-                self.result_type = Some(ty);
-                self
-            }
-        }
-    };
-
-    let result_fn_param = if !has_results {
-        quote! {}
-    } else if result_variadic {
-        quote! { result_types: Vec<tir::TypeId>, }
-    } else {
-        quote! { result_type: tir::TypeId, }
-    };
-
-    let result_fn_builder = if !has_results {
-        quote! {}
-    } else if result_variadic {
-        quote! { builder = builder.result_types(result_types); }
-    } else {
-        quote! { builder = builder.result_type(result_type); }
-    };
-
-    let result_build = if !has_results {
-        quote! {
-            let result_vec: Vec<tir::ValueId> = vec![];
-        }
-    } else if result_variadic {
-        quote! {
-            let result_vec: Vec<tir::ValueId> = if self.result_values.is_empty() {
-                self.result_types
-                    .iter()
-                    .map(|ty| self.context.create_value(*ty, None).id())
-                    .collect()
-            } else {
-                self.result_values
-            };
-        }
-    } else {
-        quote! {
-            let result_vec = {
-                let ty = self.result_type.expect("result_type must be set for ops with results");
-                let val = self.context.create_value(ty, None);
-                vec![val.id()]
-            };
-        }
-    };
-
     ResultPieces {
-        accessor: result_accessor,
-        builder_field: result_builder_field,
-        builder_default: result_builder_default,
-        builder_method: result_builder_method,
-        fn_param: result_fn_param,
-        fn_builder: result_fn_builder,
-        build: result_build,
+        accessor,
+        param,
+        arg,
+        build,
     }
 }
 
@@ -1251,76 +915,28 @@ impl StatePorts {
     }
 }
 
-/// What declared state results contribute to the builder.
 struct StateResultPieces {
-    field: proc_macro2::TokenStream,
-    default: proc_macro2::TokenStream,
-    method: proc_macro2::TokenStream,
+    param: proc_macro2::TokenStream,
+    arg: proc_macro2::TokenStream,
     build: proc_macro2::TokenStream,
 }
 
 fn make_state_result_pieces(spec: Option<&ValueSpec>) -> StateResultPieces {
-    let Some(spec) = spec else {
-        return StateResultPieces {
-            field: quote! {},
-            default: quote! {},
-            method: quote! {},
-            build: quote! { let result_vec = result_vec; },
-        };
-    };
-    let build = quote! {
-        let mut result_vec = result_vec;
-        result_vec.extend(self.state_result_types.into_iter().map(|ty| {
-            self.context.create_value(ty, None).id()
-        }));
-    };
-    if spec.name == "state" {
+    if spec.is_some() {
         StateResultPieces {
-            field: quote! { state_result_types: Vec<tir::TypeId>, },
-            default: quote! { state_result_types: Vec::new(), },
-            method: quote! {
-                pub fn state_result(mut self, ty: tir::TypeId) -> Self {
-                    self.state_result_types.push(ty);
-                    self
-                }
-
-                pub fn state_results(
-                    mut self,
-                    types: impl IntoIterator<Item = tir::TypeId>,
-                ) -> Self {
-                    self.state_result_types = types.into_iter().collect();
-                    self
-                }
+            param: quote! { state_result_types: Vec<tir::TypeId>, },
+            arg: quote! { state_result_types, },
+            build: quote! {
+                let mut result_vec = result_vec;
+                result_vec.extend(state_result_types.into_iter()
+                    .map(|ty| context.create_value(ty, None).id()));
             },
-            build,
-        }
-    } else if spec.variadic {
-        let method = format_ident!("{}", spec.name);
-        StateResultPieces {
-            field: quote! { state_result_types: Vec<tir::TypeId>, },
-            default: quote! { state_result_types: Vec::new(), },
-            method: quote! {
-                pub fn #method(
-                    mut self,
-                    types: impl IntoIterator<Item = tir::TypeId>,
-                ) -> Self {
-                    self.state_result_types = types.into_iter().collect();
-                    self
-                }
-            },
-            build,
         }
     } else {
         StateResultPieces {
-            field: quote! { state_result_types: Vec<tir::TypeId>, },
-            default: quote! { state_result_types: Vec::new(), },
-            method: quote! {
-                pub fn state_result(mut self, ty: tir::TypeId) -> Self {
-                    self.state_result_types = vec![ty];
-                    self
-                }
-            },
-            build,
+            param: quote! {},
+            arg: quote! {},
+            build: quote! {},
         }
     }
 }
@@ -1694,7 +1310,7 @@ fn make_attribute_verifier(specs: &[AttrSpec]) -> proc_macro2::TokenStream {
     let checks = specs.iter().filter(|s| !s.ty.starts_with('?')).map(|s| {
         let n = s.name.clone();
         quote! {
-            if !self.parts.attributes.iter().any(|a| Some(a.name) == self.context.sym(#n)) {
+            if !parts.attributes.iter().any(|a| Some(a.name) == context.sym(#n)) {
                 panic!(concat!("Missing required attribute: ", #n));
             }
         }
@@ -1786,13 +1402,12 @@ fn make_generic_printer(dialect: &str, name: &str) -> proc_macro2::TokenStream {
 
 fn make_parser(
     name: &str,
-    builder_name: &Ident,
     regions: &[Region],
     operands: &[ValueSpec],
     attributes: &[AttrSpec],
     has_results: bool,
-    result_variadic: bool,
 ) -> proc_macro2::TokenStream {
+    let operand_pieces = make_operand_pieces(operands);
     let (state_operands, operands): (Vec<ValueSpec>, Vec<ValueSpec>) =
         operands.iter().cloned().partition(ValueSpec::is_state);
     assert!(
@@ -1809,18 +1424,14 @@ fn make_parser(
     );
     let state_parser = state_operands.first().map(|operand| {
         let field = format_ident!("{}", operand.name);
-        if operand.name == "state" {
-            quote! { builder = builder.state_operands(parser.parse_state_operands(context)?); }
-        } else if operand.variadic {
-            quote! { builder = builder.#field(parser.parse_state_operands(context)?); }
-        } else {
-            quote! {
-                if let Some(&state) = parser.parse_state_operands(context)?.first() {
-                    builder = builder.#field(state);
-                }
-            }
-        }
+        quote! { let #field = parser.parse_state_operands(context)?; }
     });
+    let operand_collect = &operand_pieces.collect;
+    let segment_sizes_setup = &operand_pieces.segment_sizes_setup;
+    let segment_sizes_attr = &operand_pieces.segment_sizes_attr;
+    let region_pieces = make_region_pieces(regions);
+    let region_fills = &region_pieces.fills;
+    let attribute_verifier = make_attribute_verifier(attributes);
     let attr_spec_literals: Vec<_> = attributes
         .iter()
         .map(|attr| {
@@ -1829,18 +1440,12 @@ fn make_parser(
             quote! { (#name, #ty) }
         })
         .collect();
-    let (region_parsers, region_builders) = if regions.len() == 1 && !regions[0].variadic {
+    let region_parsers = if regions.len() == 1 && !regions[0].variadic {
         let region_name = format_ident!("{}", regions[0].name);
-        (
-            quote! {
-               let #region_name = parser.parse_region(context)?.id();
-            },
-            quote! {
-                .#region_name(#region_name)
-            },
-        )
+        quote! { let #region_name = Some(parser.parse_region(context)?.id()); }
     } else {
-        (quote! {}, quote! {})
+        let defaults = &region_pieces.defaults;
+        quote! { #(#defaults)* }
     };
 
     let operand_parsers: Vec<_> = operands
@@ -1863,14 +1468,13 @@ fn make_parser(
                             break;
                         }
                     }
-                    builder = builder.#field(group);
+                    let #field = group;
                 }
             } else {
                 quote! {
                     #comma
-                    if let Some(ref_name) = parser.parse_value_ref() {
-                        builder = builder.#field(parser.resolve_value(context, ref_name));
-                    }
+                    let #field = parser.parse_value_ref()
+                        .map(|ref_name| parser.resolve_value(context, ref_name));
                 }
             }
         })
@@ -1879,22 +1483,19 @@ fn make_parser(
     let result_parser = if !has_results {
         quote! {}
     } else {
-        // A variadic result group is written as the one result the generic form
-        // prints; an op with several is spelled by its own format.
-        let bind = if result_variadic {
-            quote! { builder = builder.result_types(vec![result_ty]); }
-        } else {
-            quote! { builder = builder.result_type(result_ty); }
-        };
+        // The generic form spells one result, including for a variadic group.
         quote! {
             if !parser.parse_token(":") {
                 return Err((parser.span(), tir::Error::ExpectedToken(":")));
             }
-            let result_ty = parser.parse_type(context)
-                ?
+            let result_ty = parser.parse_type(context)?
                 .ok_or_else(|| (parser.span(), tir::Error::ExpectedType))?;
-            #bind
         }
+    };
+    let result_build = if has_results {
+        quote! { let result_vec = vec![context.create_value(result_ty, None).id()]; }
+    } else {
+        quote! { let result_vec: Vec<tir::ValueId> = vec![]; }
     };
 
     quote! {
@@ -1904,8 +1505,6 @@ fn make_parser(
 
            let mut parsed_attrs: Vec<tir::attributes::NamedAttribute> = vec![];
            let attr_specs: &[(&str, &str)] = &[#(#attr_spec_literals),*];
-
-           let mut builder = #builder_name::new(context);
 
            #(#operand_parsers)*
            #state_parser
@@ -1970,21 +1569,31 @@ fn make_parser(
 
            #region_parsers
 
+            let mut parts = tir::NewOpParts::default();
             for &(attr_name, ty) in attr_specs {
                 if ty == "FpSemantics"
                     && !parsed_attrs.iter().any(|attr| attr.name == context.intern(attr_name))
                 {
-                    builder = builder.attr(attr_name, tir::attributes::AttributeValue::FpSemantics(
-                        context.intern_fp_semantics(tir::fp::Semantics::default_for_operation(#name)),
+                    parts.attributes.push(context.named_attribute(
+                        attr_name, tir::attributes::AttributeValue::FpSemantics(
+                            context.intern_fp_semantics(tir::fp::Semantics::default_for_operation(#name)),
+                        ),
                     ));
                 }
             }
-            for a in parsed_attrs { builder = builder.attr_sym(a.name, a.value); }
-
-            let op = builder
-                #region_builders
-                .build();
-            Ok(Box::new(op))
+            parts.attributes.extend(parsed_attrs);
+            let mut regions = vec![];
+            #(#region_fills)*
+            #attribute_verifier
+            let mut operand_vec: Vec<tir::ValueId> = vec![];
+            #segment_sizes_setup
+            #(#operand_collect)*
+            #result_build
+            #segment_sizes_attr
+            let instance = tir::NewOp::new::<Self>(
+                context.clone(), operand_vec, result_vec, regions, parts,
+            );
+            Ok(Box::new(Self(context.add_operation(tir::InsertionPoint::Root, instance))))
         }
     }
 }

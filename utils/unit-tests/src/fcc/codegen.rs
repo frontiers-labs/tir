@@ -4,6 +4,7 @@
 //! printing IR).
 
 use super::support::{compile_ir, fcc_context, print_ir};
+use tir::Operation;
 
 fn reprint(ir: &str) -> String {
     let context = fcc_context();
@@ -31,10 +32,24 @@ fn global_and_function_cannot_share_a_name() {
     // A data symbol owns its name outright, so no overload may hide behind
     // it. C rejects this, so the conflict is built directly.
     let context = fcc_context();
-    let module = tir::builtin::ops::module(&context, None).build();
-    module
-        .body()
-        .append_op(tir::builtin::ops::global_zero(&context, "x", 4, 4).build());
+    let module = tir::builtin::ops::module(
+        &context,
+        None,
+        Default::default(),
+        tir::InsertionPoint::Root,
+    );
+    {
+        let op = tir::builtin::ops::global_zero(
+            &context,
+            "x",
+            4,
+            4,
+            Default::default(),
+            tir::InsertionPoint::Root,
+        );
+        (module.body()).context.insert(module.body().end(), op.id());
+        op
+    };
     let region = context.create_region();
     region.add_block(context.create_block(vec![]).id());
     let func = tir::func::ops::lambda(
@@ -42,14 +57,22 @@ fn global_and_function_cannot_share_a_name() {
         "x",
         tir::builtin::UnitType::new(&context),
         &region,
-    )
-    .build();
-    func.body()
-        .append_op(tir::func::ops::r#return(&context, tir::Operand::none()).build());
-    module.body().append_op(func);
-    module
-        .body()
-        .append_op(tir::builtin::ops::module_end(&context).build());
+        Default::default(),
+        tir::InsertionPoint::Root,
+    );
+    tir::func::ops::r#return(
+        &context,
+        tir::Operand::none(),
+        vec![],
+        Default::default(),
+        func.body().end(),
+    );
+    {
+        let op = func;
+        (module.body()).context.insert(module.body().end(), op.id());
+        op
+    };
+    tir::builtin::ops::module_end(&context, Default::default(), module.body().end());
 
     tir::verify_op_tree(&context, tir::Operation::id(&module))
         .expect_err("a data symbol and a function cannot share a name");

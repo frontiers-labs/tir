@@ -100,14 +100,17 @@ impl OrderedForOp {
 
         let mut result_types = vec![counter_type];
         result_types.extend(bound.ports.iter().map(tir::Value::ty));
-        let builder = OrderedForOpBuilder::new(context)
-            .lb(lb)
-            .inits(bound.inits)
-            .ub(ub)
-            .step(step)
-            .body(body)
-            .result_types(result_types);
-        Ok(Box::new(builder.build()))
+        Ok(Box::new(OrderedForOp::new(
+            context,
+            lb,
+            bound.inits,
+            ub,
+            step,
+            result_types,
+            Some(body),
+            Default::default(),
+            tir::InsertionPoint::Root,
+        )))
     }
 }
 
