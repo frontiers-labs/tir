@@ -67,11 +67,11 @@ $L__BB0_2:
 // CHECK: ret;
 
 // TIR: asm.symbol {name = "vecAdd"
-// TIR: ptx.ld_param_u64_sym {d = rd1, sym = "vecAdd_param_0"}
-// TIR: ptx.mad_lo_s32 {d = r1, a = r4, b = r3, c = r5}
-// TIR: ptx.setp_ge_s32 {d = p1, a = r1, b = r2}
+// TIR: ptx.ld_param_u64_sym {d = RD[1], sym = "vecAdd_param_0"}
+// TIR: ptx.mad_lo_s32 {d = R[1], a = R[4], b = R[3], c = R[5]}
+// TIR: ptx.setp_ge_s32 {d = P[1], a = R[1], b = R[2]}
 // TIR: ptx.bra {target = "$L__BB0_2", pred = "%p1", pred_not = false}
-// TIR: ptx.mul_wide_s32_imm {d = rd5, a = r1, imm = "4"}
-// TIR: ptx.st_global_f32_reg {a = rd6, d = f3}
+// TIR: ptx.mul_wide_s32_imm {d = RD[5], a = R[1], imm = "4"}
+// TIR: ptx.st_global_f32_reg {a = RD[6], d = F[3]}
 // TIR: ptx.label {name = "$L__BB0_2"}
 // TIR: ptx.ret

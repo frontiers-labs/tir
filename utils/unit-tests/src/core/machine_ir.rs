@@ -7,29 +7,15 @@
 use tir::attributes::AttributeValue;
 use tir::backend::regalloc::RegClassId;
 use tir::backend::{
-    phys_attr, verify_machine_ir, RegAssignment, RegClassType, RegPort, SymbolOpBuilder,
-    ASSIGNMENT_ATTR, PINS_ATTR,
+    phys_attr, verify_machine_ir, RegAssignment, RegClassType, SymbolOpBuilder, ASSIGNMENT_ATTR,
+    PINS_ATTR,
 };
 use tir::{Context, Operation, ValueId};
 
-use super::fixtures::{asm_symbol, machine_op, r, r_high};
+use super::fixtures::{asm_symbol, r, r_high};
 
 // `add rd, rs`: one destination slot and one source slot, both of class `R`,
 // plus the implicit flag register the behavior writes.
-static ADD_PORTS: [RegPort; 2] = [
-    RegPort {
-        name: "rd",
-        class: Some(r()),
-        def: true,
-        tied_to: None,
-    },
-    RegPort {
-        name: "rs",
-        class: Some(r()),
-        def: false,
-        tied_to: None,
-    },
-];
 
 static ADD_IMPLICIT: [tir::attributes::ImplicitReg; 1] = [tir::attributes::ImplicitReg {
     class: r(),
@@ -37,7 +23,15 @@ static ADD_IMPLICIT: [tir::attributes::ImplicitReg; 1] = [tir::attributes::Impli
     role: tir::attributes::AttributeRole::Def,
 }];
 
-machine_op!(AddTestOp, "test", "add", rs, &ADD_PORTS, &ADD_IMPLICIT);
+tir::operation! {
+    AddTestOp {
+        name: "add", dialect: "test", scheme: "(_?) -> _?",
+        operands: O { rs }, results: R { rd },
+        attributes: A { rd: "?Register", rs: "?Register" },
+        interfaces: [tir::backend::MachineInstruction],
+    }
+}
+super::fixtures::instr_info!(AddTestOp, "add", &ADD_IMPLICIT);
 
 fn value_of(context: &Context, class: RegClassId) -> ValueId {
     context
@@ -103,22 +97,19 @@ fn def_use_reads_ports_and_leaves_physical_registers_out() {
 }
 
 #[test]
-fn cross_view_operand_is_rejected() {
+fn data_values_are_not_physical_register_views() {
     let f = function(|context, builder| {
         let source = value_of(context, r_high());
         builder
             .rs(source)
             .result_types(vec![RegClassType::new(context, r())])
     });
-    let error = verify_machine_ir(&f.context, f.symbol.id()).expect_err("cross-view operand");
-    assert!(
-        format!("{error:?}").contains("different register view"),
-        "{error:?}",
-    );
+    verify_machine_ir(&f.context, f.symbol.id())
+        .expect("data values do not select physical registers");
 }
 
 #[test]
-fn operand_without_a_register_class_is_rejected() {
+fn scalar_values_need_no_register_class() {
     let f = function(|context, builder| {
         let source = context
             .create_value(tir::builtin::IntegerType::new(context, 32), None)
@@ -127,8 +118,7 @@ fn operand_without_a_register_class_is_rejected() {
             .rs(source)
             .result_types(vec![RegClassType::new(context, r())])
     });
-    let error = verify_machine_ir(&f.context, f.symbol.id()).expect_err("class-less operand");
-    assert!(format!("{error:?}").contains("not a register"), "{error:?}");
+    verify_machine_ir(&f.context, f.symbol.id()).expect("ordinary scalar operands are supported");
 }
 
 #[test]
@@ -141,7 +131,7 @@ fn a_result_without_a_port_is_rejected() {
         ])
     });
     let error = verify_machine_ir(&f.context, f.symbol.id()).expect_err("surplus result");
-    assert!(format!("{error:?}").contains("register slots"), "{error:?}");
+    assert!(format!("{error:?}").contains("results"), "{error:?}");
 }
 
 #[test]
@@ -207,7 +197,7 @@ fn a_slot_holding_nothing_is_rejected() {
     let f = function(|_, builder| builder);
     let error = verify_machine_ir(&f.context, f.symbol.id()).expect_err("empty slot");
     assert!(
-        format!("{error:?}").contains("neither a value nor a register"),
+        format!("{error:?}").contains("missing register attribute"),
         "{error:?}",
     );
 }

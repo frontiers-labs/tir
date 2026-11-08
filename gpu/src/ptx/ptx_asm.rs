@@ -607,20 +607,10 @@ fn attr_bool(op: &OpHandle, name: &str) -> bool {
 }
 
 fn render_operand(op: &OpHandle, name: &str) -> Result<String, String> {
-    if let Some(slot) = tir::backend::reg_slot(op, name) {
-        let context = op.context.clone();
-        return Ok(match slot {
-            tir::backend::RegSlot::Phys((class, index)) => {
-                format!("{}{}", class.name().to_lowercase(), index)
-            }
-            tir::backend::RegSlot::Value(value) => {
-                match tir::backend::assigned_register(&context, op, value) {
-                    Some((class, index)) => format!("{}{}", class.name().to_lowercase(), index),
-                    None => format!("%{}", value.number()),
-                }
-            }
-        });
+    if let Some((class, index)) = tir::backend::register_attr(op, name) {
+        return Ok(format!("{}{}", class.name().to_lowercase(), index));
     }
+
     let value = op
         .attr(name)
         .ok_or_else(|| format!("op `{}` missing operand `{name}`", op.name().as_str()))?;

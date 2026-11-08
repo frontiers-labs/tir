@@ -87,9 +87,12 @@ pub fn construct_operation(item: TokenStream) -> TokenStream {
     let has_results = !value_results.is_empty();
     // A `*`-prefixed result makes the op n-ary: it produces one value per type given
     // to the builder. Used by structured control flow, which carries n values.
-    let result_variadic = value_results.iter().any(|r| r.variadic);
+    let result_variadic = value_results.len() > 1
+        || value_results
+            .iter()
+            .any(|r| r.variadic || r.ty.starts_with('?'));
     assert!(
-        !result_variadic || value_results.len() == 1,
+        !value_results.iter().any(|r| r.variadic) || value_results.len() == 1,
         "a variadic result must be the only declared result"
     );
     let state_result_pieces = make_state_result_pieces(state_results.first());

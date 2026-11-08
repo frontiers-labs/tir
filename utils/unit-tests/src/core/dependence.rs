@@ -8,10 +8,10 @@ use tir::analysis::defuse::CLOBBERS_ATTR;
 use tir::attributes::{AttributeRole, AttributeValue, ImplicitReg, RegisterAttr};
 use tir::backend::dependence::Dependences;
 use tir::backend::regalloc::{RegClassId, RegClassInfo};
-use tir::backend::{verify_machine_ir, RegAssignment, RegClassType, RegPort, SymbolOp};
+use tir::backend::{verify_machine_ir, RegAssignment, RegClassType, SymbolOp};
 use tir::{BlockHandle, Context, OpId, Operation, ValueId};
 
-use super::fixtures::{asm_symbol, machine_op, r, reg_class, RD_RS_PORTS};
+use super::fixtures::{asm_symbol, machine_op, r, reg_class};
 
 /// The one-register flag file the test opcodes touch implicitly, standing for
 /// x86 `EFLAGS`.
@@ -20,13 +20,6 @@ static F_CLASS: RegClassInfo = reg_class("F", "F", &[0], 1, 0, false);
 const fn f() -> RegClassId {
     RegClassId::new(&F_CLASS)
 }
-
-static RD_ONLY: [RegPort; 1] = [RegPort {
-    name: "rd",
-    class: Some(r()),
-    def: true,
-    tied_to: None,
-}];
 
 static WRITES_FLAGS: [ImplicitReg; 1] = [ImplicitReg {
     class: f(),
@@ -40,24 +33,10 @@ static READS_FLAGS: [ImplicitReg; 1] = [ImplicitReg {
     role: AttributeRole::Use,
 }];
 
-machine_op!(DefOp, "dep", "def", &RD_ONLY, &[]);
-machine_op!(UpdateParamOp, "dep", "update_param", rs, &RD_RS_PORTS, &[]);
-machine_op!(
-    SetFlagsOp,
-    "dep",
-    "set_flags",
-    rs,
-    &RD_RS_PORTS,
-    &WRITES_FLAGS
-);
-machine_op!(
-    ReadFlagsOp,
-    "dep",
-    "read_flags",
-    rs,
-    &RD_RS_PORTS,
-    &READS_FLAGS
-);
+machine_op!(DefOp, "dep", "def", &[]);
+machine_op!(UpdateParamOp, "dep", "update_param", rs, &[]);
+machine_op!(SetFlagsOp, "dep", "set_flags", rs, &WRITES_FLAGS);
+machine_op!(ReadFlagsOp, "dep", "read_flags", rs, &READS_FLAGS);
 
 fn context() -> Context {
     let context = Context::with_default_dialects();

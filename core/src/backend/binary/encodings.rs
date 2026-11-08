@@ -12,10 +12,10 @@
 //! encoding-only twins used to be.
 
 use tir::attributes::{AttributeValue, NamedAttribute, RegisterAttr};
-use tir::backend::{RegAssignment, reg_slot, slot_register};
+use tir::backend::{RegAssignment, register_attr};
 use tir::{Context, NewOp, OpHandle, OpId};
 
-use crate::backend::binary::{EncodedFixup, EncodedInst, FixupTarget};
+use crate::backend::binary::{BinaryEmitError, EncodedFixup, EncodedInst, FixupTarget};
 use crate::backend::regalloc::RegClassId;
 
 /// One contiguous run of an operand's bits placed into the encoded word.
@@ -165,15 +165,13 @@ enum Operand {
 /// guards that select a shape and the fields that spell it.
 struct Operands<'a> {
     op: &'a OpHandle,
-    assignment: &'a RegAssignment,
     resolved: Vec<(&'static str, Operand)>,
 }
 
 impl<'a> Operands<'a> {
-    fn new(op: &'a OpHandle, assignment: &'a RegAssignment) -> Self {
+    fn new(op: &'a OpHandle) -> Self {
         Operands {
             op,
-            assignment,
             resolved: Vec::new(),
         }
     }
@@ -182,13 +180,10 @@ impl<'a> Operands<'a> {
         if let Some(index) = self.resolved.iter().position(|(held, _)| *held == name) {
             return &self.resolved[index].1;
         }
-        let value = match reg_slot(self.op, name) {
-            Some(slot) => match slot_register(slot, self.assignment) {
-                Some((_, index)) => Operand::Known {
-                    bits: u128::from(index),
-                    signed: i128::from(index),
-                },
-                None => Operand::Missing,
+        let value = match register_attr(self.op, name) {
+            Some((_, index)) => Operand::Known {
+                bits: u128::from(index),
+                signed: i128::from(index),
             },
             None => match self.op.attr(name) {
                 Some(AttributeValue::Int(v)) => Operand::Known {
@@ -363,15 +358,26 @@ fn select<'a>(operands: &mut Operands, spec: &'a EncodeSpec) -> Option<&'a Encod
         .find(|shape| shape.guard.holds(operands) == Truth::Yes)
 }
 
-/// Interprets an [`EncodeSpec`]. `None` when no shape's guard holds or an
-/// operand cannot be encoded (e.g. a value `assignment` gives no register);
-/// symbol/block operands become fixups with their bits left zero.
+/// Encode attribute-only assembly, rejecting SSA and graph operations.
 pub fn encode_with(
     op: &OpHandle,
     spec: &EncodeSpec,
-    assignment: &RegAssignment,
-) -> Option<EncodedInst> {
-    let mut operands = Operands::new(op, assignment);
+    _assignment: &RegAssignment,
+) -> Result<EncodedInst, BinaryEmitError> {
+    let cannot_encode = || BinaryEmitError::CannotEncode {
+        op: op.name().to_string(),
+    };
+    if !op.operands().is_empty()
+        || !op.results().is_empty()
+        || op.context.parent_nodes_region(op.id).is_some()
+    {
+        return Err(cannot_encode());
+    }
+    encode_assembly(op, spec).ok_or_else(cannot_encode)
+}
+
+fn encode_assembly(op: &OpHandle, spec: &EncodeSpec) -> Option<EncodedInst> {
+    let mut operands = Operands::new(op);
     let shape = select(&mut operands, spec)?;
     let mut word = shape.const_word;
     let mut fixups = Vec::new();
@@ -411,11 +417,11 @@ pub fn encode_with(
 
 /// How many bytes `op` encodes to: the width of the shape its operands select,
 /// or the widest when none does — the same shape a fixup takes.
-pub fn encoded_width(op: &OpHandle, spec: &EncodeSpec, assignment: &RegAssignment) -> u8 {
+pub fn encoded_width(op: &OpHandle, spec: &EncodeSpec, _assignment: &RegAssignment) -> u8 {
     match spec.shapes {
         [shape] => shape.width_bytes,
         _ => {
-            let mut operands = Operands::new(op, assignment);
+            let mut operands = Operands::new(op);
             select(&mut operands, spec).map_or(spec.width_bytes.1, |shape| shape.width_bytes)
         }
     }

@@ -278,6 +278,9 @@ fn verify_op_tree_ops(context: &Context, op_id: OpId, ops: &mut Vec<OpId>) -> Re
 
     let instance = context.get_op(op_id);
     verify_scoped_metadata(&instance)?;
+    if instance.dialect().as_str() == "son" && context.parent_nodes_region(op_id).is_none() {
+        return Err(Error::ExpectedType);
+    }
     instance.clone().as_dyn_op().verify(context)?;
     ops.push(op_id);
 
@@ -404,6 +407,7 @@ pub(crate) fn operand_fields(
             .iter()
             .map(|v| match v {
                 crate::attributes::AttributeValue::UInt(n) => *n as usize,
+                crate::attributes::AttributeValue::Int(n) if *n >= 0 => *n as usize,
                 _ => 0usize,
             })
             .collect(),

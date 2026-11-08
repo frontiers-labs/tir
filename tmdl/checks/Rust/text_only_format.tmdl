@@ -37,13 +37,6 @@ instruction Sub for [TextIsa] : Binary {
     behavior { todo(); }
 }
 
-// Every operation prints through the one shared machine-op formatter, which
-// reads the register slots from the opcode's `InstrInfo` instead of expanding
-// the same register-dispatch loop into every generated operation.
-// CHECK: static REGS_ADD
-// CHECK: name: "d",
-// CHECK: name: "a",
-// CHECK: impl AddOp
-// CHECK: tir::backend::print_machine_op(fmt, self)
-// CHECK: impl SubOp
-// CHECK: tir::backend::print_machine_op(fmt, self)
+// CHECK: AddOp {
+// CHECK: operands : O { d, a, control }
+// CHECK: SubOp {
