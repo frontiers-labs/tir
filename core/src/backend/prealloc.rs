@@ -1,4 +1,4 @@
-use tir::{AnalysisManager, Context, OperationRef, Pass, PassError};
+use tir::{AnalysisManager, Context, OpId, Pass, PassError};
 
 #[derive(Clone, Default)]
 pub struct TiedOperandLoweringPass;
@@ -15,7 +15,7 @@ impl Pass for TiedOperandLoweringPass {
     }
     fn run(
         &mut self,
-        _op: &OperationRef,
+        _op: OpId,
         _context: &Context,
         _analyses: &AnalysisManager,
     ) -> Result<(), PassError> {
