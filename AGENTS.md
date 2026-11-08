@@ -36,6 +36,7 @@ the same amount of time (or less!) to do so.
 5. Rely on design documentation in `docs/design` as a summary of how TIR
    works in general.
 6. See `Source overview` section of README.md before writing new code.
+7. For working on new passes, start with a prototype via `tir egglog` command.
 
 ## Writing new tests
 
