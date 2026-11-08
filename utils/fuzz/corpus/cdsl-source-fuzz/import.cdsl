@@ -1,0 +1,1 @@
+pub mod alpha{pub let answer=42;};pub mod beta{pub use alpha::answer as value;};use beta::*;let main=value;

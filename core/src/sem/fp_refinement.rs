@@ -54,28 +54,6 @@ pub enum RefinementError {
     UnsupportedForm,
 }
 
-pub fn check_contraction_rule(rule: &tir_pdl::Rule) -> Result<(), RefinementError> {
-    use tir_pdl::{ContractPermission, RefinementRequirement, RuleKind};
-
-    if !matches!(rule.kind, RuleKind::Refinement) {
-        return Err(RefinementError::UnsupportedForm);
-    }
-    let required = [
-        RefinementRequirement::SameRoundRegion,
-        RefinementRequirement::Permits(ContractPermission::ContractMulAdd),
-        RefinementRequirement::CompatibleFormatsAndRounding,
-        RefinementRequirement::PermittedEffectChange,
-        RefinementRequirement::SatisfiesDomainAndEffectContract,
-    ];
-    if required
-        .iter()
-        .any(|requirement| !rule.requirements.contains(requirement))
-    {
-        return Err(RefinementError::ContractForbidsContraction);
-    }
-    graph::check_contraction_rule(rule)
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RefinementWitness {
     fingerprint: u64,

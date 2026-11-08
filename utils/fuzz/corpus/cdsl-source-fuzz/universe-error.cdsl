@@ -1,0 +1,1 @@
+let id<T:Type_0>=fn(x:T){x};let main=id<Type_0>(Type_0);

@@ -11,14 +11,14 @@ defects=$3
 
 mkdir -p "$defects"
 
-crash=$(ls -t "utils/fuzz/artifacts/$target"/crash-* 2>/dev/null | head -1 || true)
+crash=$(ls -t "utils/fuzz/artifacts/$target"/{crash,timeout,oom,leak}-* 2>/dev/null | head -1 || true)
 if [ -z "$crash" ]; then
-  echo "$target failed without leaving a crash input" >&2
+  echo "$target failed without leaving a reproducer" >&2
   exit 0
 fi
 
 sha=$(basename "$crash")
-sha=${sha#crash-}
+sha=${sha#*-}
 # These targets parse text, so a crash input is usually readable. Keep it
 # verbatim when it prints — an issue you can read beats one you have to decode —
 # and fall back to base64 otherwise. Either way the bytes are exact, because
@@ -35,7 +35,15 @@ fi
 
 # libFuzzer prints its diagnosis after this banner; everything before it is
 # progress output that does not belong in an issue.
-sed -n '/==ERROR\|panicked at\|SUMMARY:/,$p' "$log" | head -40 >trace.txt
+awk '
+  /ERROR:|panicked at|SUMMARY:/ { capture = 1 }
+  capture && lines++ < 40 {
+    if (length($0) > 200)
+      print substr($0, 1, 120) " ... " substr($0, length($0) - 79)
+    else
+      print
+  }
+' "$log" >trace.txt
 
 jq -n \
   --arg target "$target" \

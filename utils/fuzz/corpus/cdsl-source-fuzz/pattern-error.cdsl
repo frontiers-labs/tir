@@ -1,0 +1,1 @@
+enum Choice{Left,Right};let bad=fn(x:Choice){match x{Choice::Left()=>1}};

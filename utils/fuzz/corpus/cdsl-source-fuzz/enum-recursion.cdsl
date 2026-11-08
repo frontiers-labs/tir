@@ -1,0 +1,1 @@
+enum Chain<T>{Nil,Cons(T,Chain<T>)};let rec length<T>=fn(xs:Chain<T>)->Integer{match xs{Chain::Nil()=>0,Chain::Cons(head,tail)=>1+length<T>(tail)}};let main=length<Integer>(Chain::Cons(5,Chain::Nil()));

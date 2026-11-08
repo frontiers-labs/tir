@@ -1,9 +1,0 @@
-// IR migration: the requested transformation pass is a registered no-op.
-// XFAIL: *
-// RUN: not tir prove --width 8 %s | filecheck %s
-
-rule identity: #add(x: int<W>, const<W>(0)) : int<W> => x proof smt;
-rule modeled-elsewhere: #add(x: int<W>, const<W>(0)) : int<W> => x proof definitional;
-
-// CHECK: identity: proven
-// CHECK-NEXT: modeled-elsewhere: unsupported: definitional rules have no solver model

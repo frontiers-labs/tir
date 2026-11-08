@@ -188,6 +188,8 @@ jobs:
       fail-fast: false
       matrix:
         target:
+          - cdsl-source-fuzz
+          - cdsl-eval-fuzz
           - tmdl-fuzz
           - riscv-assembly-fuzz
           - arm64-assembly-fuzz
@@ -208,6 +210,7 @@ jobs:
         id: fuzz
         continue-on-error: true
         run: |
+          set -o pipefail
           cargo fuzz run --fuzz-dir utils/fuzz ${{ matrix.target }} \
             -- -max_total_time=60 -max_len=16384 2>&1 | tee fuzz.log
       - name: Record the crash
