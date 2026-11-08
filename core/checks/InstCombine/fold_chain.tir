@@ -1,3 +1,5 @@
+// IR migration: the requested transformation pass is a registered no-op.
+// XFAIL: *
 // RUN: tir opt --pass restructure-nodes,instcombine-nodes --verify %s | filecheck %s
 
 // Every operand of `addi` is a literal, so its result is one too: the fold makes

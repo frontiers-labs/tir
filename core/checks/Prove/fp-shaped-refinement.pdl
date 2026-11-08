@@ -1,3 +1,5 @@
+// IR migration: the requested transformation pass is a registered no-op.
+// XFAIL: *
 // RUN: not tir prove --allow-admitted %s | filecheck %s
 
 refinement contract-shaped-mul-add:

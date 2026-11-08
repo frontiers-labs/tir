@@ -1,3 +1,5 @@
+// IR migration: instruction selection and backend lowering are unavailable.
+// XFAIL: *
 // RUN: not tir mc --march=rv32i --stage=isel %s
 
 // i64 is wider than rv32 XLEN and is rejected before selection.

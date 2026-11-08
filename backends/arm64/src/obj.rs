@@ -1,18 +1,6 @@
-//! AArch64 object-emission support: ELF format parameters, relocation
-//! selection, and the lowerings that turn virtual control-flow ops into real
-//! branch instructions around register allocation.
+//! AArch64 ELF format parameters and relocation selection.
 
-use tir::Operation;
-use tir::attributes::AttributeValue;
 use tir::backend::binary::{EM_AARCH64, ElfClass, ObjectFormatInfo, RelocKind};
-use tir::backend::{
-    VirtualBranchOp, VirtualCallOp, VirtualIndirectCallOp, VirtualReturnOp, phys_attr,
-};
-
-use crate::{
-    AddressPCRelOpBuilder, BranchImmediateOpBuilder, BranchLinkOpBuilder, BranchLinkRegOpBuilder,
-    ReturnOpBuilder,
-};
 
 const R_AARCH64_ADR_PREL_LO21: u32 = 274;
 const R_AARCH64_ABS64: u32 = 257;
@@ -65,75 +53,4 @@ pub(crate) fn object_format() -> ObjectFormatInfo {
         pc_rel_scale: |op| if op == "adr" { 0 } else { 2 },
         pc_rel_from_end: |_| false,
     }
-}
-
-pub(crate) fn lower_symbol_address(
-    context: &tir::Context,
-    op: &tir::OperationRef,
-) -> Result<bool, tir::PassError> {
-    use tir::backend::SymbolAddressOp;
-
-    let Some(addr_of) = op.as_op::<SymbolAddressOp>() else {
-        return Ok(false);
-    };
-    let dest = addr_of.result();
-    context.retype_value(dest, crate::gpr_ty(context));
-    let adr = AddressPCRelOpBuilder::new(context)
-        .result_values(vec![dest])
-        .attr("imm", AttributeValue::Str(addr_of.sym_name().into()))
-        .build();
-    context.replace_op(op, &adr)?;
-    Ok(true)
-}
-
-pub(crate) fn finalize_virtual_ops(
-    context: &tir::Context,
-    op: &tir::OperationRef,
-) -> Result<bool, tir::PassError> {
-    if op.as_op::<VirtualReturnOp>().is_some() {
-        let ret = ReturnOpBuilder::new(context)
-            .attr("rn", phys_attr((crate::RegClass::GPR.id(), 30)))
-            .build();
-        context.replace_op(op, &ret)?;
-        return Ok(true);
-    }
-
-    if let Some(br) = op.as_op::<VirtualBranchOp>() {
-        if !br.operands().is_empty() {
-            return Err(tir::PassError::InvalidRuleSet(
-                "block arguments on branch edges are not supported by codegen yet".to_string(),
-            ));
-        }
-        let jump = BranchImmediateOpBuilder::new(context)
-            .attr("imm", AttributeValue::Block(br.dest()))
-            .build();
-        context.replace_op(op, &jump)?;
-        return Ok(true);
-    }
-
-    // `vcall callee` becomes `bl callee`: the symbol operand survives into the
-    // encoder as a fixup and is emitted as an R_AARCH64_CALL26 relocation, since
-    // the callee's address is unknown until link time.
-    if let Some(call) = op.as_op::<VirtualCallOp>() {
-        let bl = BranchLinkOpBuilder::new(context)
-            .attr("imm", AttributeValue::Str(call.callee().into()))
-            .build();
-        tir::backend::forward_state(context, op.op(), &bl);
-        context.replace_op_keeping_results(op, &bl)?;
-        return Ok(true);
-    }
-
-    // `vcall_indirect` becomes `blr target`; the target register is the one the
-    // allocator gave the call's callee operand.
-    if let Some(call) = op.as_op::<VirtualIndirectCallOp>() {
-        let target = call.operands().first().copied().ok_or_else(|| {
-            tir::PassError::InvalidRuleSet("indirect call has no callee register".to_string())
-        })?;
-        let blr = BranchLinkRegOpBuilder::new(context).rn(target).build();
-        tir::backend::forward_state(context, op.op(), &blr);
-        context.replace_op_keeping_results(op, &blr)?;
-        return Ok(true);
-    }
-
-    Ok(false)
 }

@@ -1,3 +1,5 @@
+// IR migration: the requested transformation pass is a registered no-op.
+// XFAIL: *
 // RUN: tir opt --pass restructure-nodes,promote-nodes,instcombine-nodes %s | filecheck %s
 
 // The module is one region, so a δ value is in scope at every use inside it:

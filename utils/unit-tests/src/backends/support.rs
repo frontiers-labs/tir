@@ -1,7 +1,7 @@
 //! What every backend must answer the same way, asked once per backend.
 
+use tir::analysis::defuse::PhysReg;
 use tir::backend::abi::{PassSeq, ValueKind};
-use tir::backend::liveness::PhysReg;
 use tir::backend::sched::InstrSchedClass;
 use tir::backend::{InstrInfo, MemoryEffects};
 

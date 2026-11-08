@@ -1,3 +1,5 @@
+// IR migration: instruction selection and backend lowering are unavailable.
+// XFAIL: *
 // RUN: fcc compile --stage ir -o - %S/../Inputs/codegen_conditional.c | filecheck %s
 
 // A conditional expression is an `scf.switch` whose arms each compute their

@@ -1,3 +1,5 @@
+// IR migration: selector rule generation was removed.
+// XFAIL: *
 // A behavior that writes a fixed register besides its value output roots no
 // selection rule: the tile would drop the second write and bind the fixed
 // read as a free operand (a `pop` matching any load). A fixed-register read

@@ -145,8 +145,8 @@ impl TypeEntry {
 /// The value of a `#layout.spec<..>` attribute.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct LayoutSpec {
-    options: Vec<(String, AttributeValue)>,
-    entries: Vec<TypeEntry>,
+    pub(crate) options: Vec<(String, AttributeValue)>,
+    pub(crate) entries: Vec<TypeEntry>,
 }
 
 impl LayoutSpec {

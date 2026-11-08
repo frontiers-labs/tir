@@ -12,9 +12,7 @@ members = [
     "backends/riscv",
     "libs/adt",
     "libs/egglog",
-    "libs/egraph",
     "libs/jit",
-    "libs/relational",
     "libs/simcore",
     "libs/symbolic",
     "tools/isasim",
@@ -40,14 +38,11 @@ tmdl = { path = "tmdl", default-features = false }
 
 # Common utils
 tir-adt = { path = "libs/adt" }
-tir-arrange = { path = "utils/arrange" }
 tir-symbolic = { path = "libs/symbolic" }
 tir-macros = { path = "utils/macros" }
 tir-lit = { path = "utils/lit" }
 tir-llvm = { path = "tools/llvm" }
 tir-jit = { path = "libs/jit" }
-tir-relational = { path = "libs/relational" }
-tir-egraph = { path = "libs/egraph" }
 tir-egglog = { path = "libs/egglog" }
 tir-bench = { path = "utils/bench" }
 tir-pdl = { path = "utils/pdl", default-features = false }

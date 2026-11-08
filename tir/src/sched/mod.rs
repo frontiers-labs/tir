@@ -12,9 +12,9 @@ use std::{error::Error, ffi::OsString};
 
 use clap::Args;
 use tir::Context;
+use tir::analysis::defuse::execution_regs;
 use tir::backend::TargetMachine;
 use tir::backend::binary::{ObjectFile, SectionKind};
-use tir::backend::liveness::execution_regs;
 use tir::backend::{ControlFlow, MachineInstruction, SectionOp, SymbolOp};
 use tir::builtin::ModuleOp;
 use tir_sim::scoreboard::{self, Prf, ScoreboardInstr, TimingConfig, phys_regs};

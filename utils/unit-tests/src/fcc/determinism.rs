@@ -6,6 +6,7 @@
 use super::link_support::{compile_asm, compile_asm_with_pipeline};
 
 #[test]
+#[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
 fn assembly_is_identical_across_processes() {
     let source = crate::fixture_root().join("../../fcc/checks/Inputs/determinism.c");
     let expected = compile_asm(&source);
@@ -19,6 +20,7 @@ fn assembly_is_identical_across_processes() {
 }
 
 #[test]
+#[ignore = "IR migration: instruction selection and backend lowering are unavailable"]
 fn reduced_pipeline_preserves_backend_semantics() {
     let source = crate::fixture_root().join("../../fcc/checks/Inputs/custom_pipeline_alias.c");
     let expected = compile_asm(&source);

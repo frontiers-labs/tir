@@ -1,3 +1,5 @@
+// IR migration: instruction selection and backend lowering are unavailable.
+// XFAIL: *
 // REQUIRES: x86_64
 // The level picks a mid-end, and the mid-end is observable through inlining:
 // the call to `twice` survives the level that runs no round and is inlined

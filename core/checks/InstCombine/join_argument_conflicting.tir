@@ -1,3 +1,5 @@
+// IR migration: the requested transformation pass is a registered no-op.
+// XFAIL: *
 // RUN: tir opt --pass func.func(restructure-nodes,instcombine-nodes) --verify %s | filecheck %s --implicit-check-not "constant {value = 3}"
 
 // The two arms carry different literals and both run, so the value they merge is

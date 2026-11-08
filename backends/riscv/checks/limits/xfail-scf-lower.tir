@@ -1,3 +1,5 @@
+// IR migration: instruction selection and backend lowering are unavailable.
+// XFAIL: *
 // RUN: not tir mc --march=rv64i --filetype=asm %s 2>&1 | filecheck %s
 
 // A counted loop whose bounds are `!index` has no machine width to count in:

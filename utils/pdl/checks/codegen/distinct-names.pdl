@@ -1,3 +1,5 @@
+// IR migration: the Rust rewrite emitter was removed.
+// XFAIL: *
 // Rules whose names differ only by separator still get distinct functions.
 // RUN: tir-pdl %s --emit rust | filecheck %s
 

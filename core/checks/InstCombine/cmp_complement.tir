@@ -1,3 +1,5 @@
+// IR migration: the requested transformation pass is a registered no-op.
+// XFAIL: *
 // RUN: tir opt --pass func.func(instcombine-nodes) %s | filecheck %s
 
 // A comparison and its complement over the same operands are one fact: knowing

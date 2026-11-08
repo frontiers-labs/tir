@@ -39,13 +39,8 @@ impl tir::backend::TargetMachine for PtxTarget {
         context.register_dialect::<PtxDialect>();
     }
 
-    fn isel_pass(&self, context: &tir::Context) -> tir::backend::isel::InstructionSelectPass {
-        tir::backend::isel::InstructionSelectPass::new(
-            context,
-            get_isel_rules(context, Feature::ALL),
-        )
-        .with_data_layout(self.data_layout(context))
-        .synthesized(context)
+    fn isel_pass(&self, _context: &tir::Context) -> tir::backend::isel::InstructionSelectPass {
+        tir::backend::isel::InstructionSelectPass::new()
     }
 
     fn data_layout(&self, context: &tir::Context) -> Option<tir::attributes::AttributeValue> {
@@ -74,17 +69,6 @@ impl tir::backend::TargetMachine for PtxTarget {
             .map(|feature| feature.name().to_ascii_lowercase())
             .collect();
         Some(tir::target_env_spec(self.name(), &features))
-    }
-
-    fn regalloc_target(&self) -> Box<dyn tir::backend::regalloc::TargetRegAlloc> {
-        Box::new(PtxRegAlloc)
-    }
-
-    fn regalloc_stage(&self) -> Vec<Box<dyn tir::Pass>> {
-        tir::backend::prealloc::regalloc_stage_for(
-            || Box::new(PtxRegAlloc) as _,
-            ptx_regalloc_abi(),
-        )
     }
 
     fn register_info(&self) -> tir::backend::regalloc::RegisterInfo {
@@ -130,126 +114,6 @@ impl tir::backend::TargetMachine for PtxTarget {
         module: &tir::builtin::ModuleOp,
     ) -> Option<Result<String, String>> {
         Some(ptx_asm::print(context, module))
-    }
-}
-
-fn ptx_regalloc_abi() -> &'static tir::backend::abi::AbiInfo {
-    use std::sync::OnceLock;
-    use tir::backend::abi::{
-        AbiInfo, ClassifierKind, Overflow, PassSeq, SaveStyle, StackLayout, ValueKind,
-    };
-
-    static ABI: OnceLock<AbiInfo> = OnceLock::new();
-    ABI.get_or_init(|| {
-        let int_args = Box::leak(
-            (0..8)
-                .map(|index| (RegClass::RD.id(), index))
-                .collect::<Vec<_>>()
-                .into_boxed_slice(),
-        );
-        let caller_saved = Box::leak(
-            [
-                RegClass::P.id(),
-                RegClass::RS.id(),
-                RegClass::R.id(),
-                RegClass::RD.id(),
-                RegClass::F.id(),
-                RegClass::FD.id(),
-            ]
-            .into_iter()
-            .flat_map(|class| (0..16).map(move |index| (class, index)))
-            .filter(|register| *register != (RegClass::RD.id(), 15))
-            .collect::<Vec<_>>()
-            .into_boxed_slice(),
-        );
-        AbiInfo {
-            name: "ptx-internal",
-            stack: StackLayout {
-                align: 8,
-                slot_size: 8,
-                red_zone: 0,
-                grows_down: true,
-                save_style: SaveStyle::FrameSlots,
-            },
-            sp: (RegClass::RD.id(), 15),
-            ra: None,
-            fp: None,
-            indirect_result: None,
-            argument_group_alignment: None,
-            argument_group_policy: None,
-            args: Box::leak(
-                vec![PassSeq {
-                    kind: ValueKind::Int,
-                    regs: int_args,
-                    overflow: Overflow::Stack,
-                }]
-                .into_boxed_slice(),
-            ),
-            rets: Box::leak(
-                vec![PassSeq {
-                    kind: ValueKind::Int,
-                    regs: &int_args[..1],
-                    overflow: Overflow::Stack,
-                }]
-                .into_boxed_slice(),
-            ),
-            callee_saved: &[],
-            caller_saved,
-            reserved: &[],
-            classifier: ClassifierKind::Sysv,
-        }
-    })
-}
-
-/// PTX has no stack, so register spilling is unsupported; the round-trip and
-/// isel-demo paths never spill.
-struct PtxRegAlloc;
-
-impl tir::backend::regalloc::TargetRegAlloc for PtxRegAlloc {
-    fn register_info(&self) -> tir::backend::regalloc::RegisterInfo {
-        register_info()
-    }
-
-    fn emit_spill_store(
-        &self,
-        _context: &tir::Context,
-        _value: tir::ValueId,
-        _class: tir::backend::regalloc::RegClassId,
-        _frame: &tir::backend::liveness::PhysReg,
-        _offset: i64,
-    ) -> Box<dyn tir::Operation> {
-        panic!("PTX has no stack; register spilling is unsupported")
-    }
-
-    fn emit_spill_reload(
-        &self,
-        _context: &tir::Context,
-        _value: tir::ValueId,
-        _class: tir::backend::regalloc::RegClassId,
-        _frame: &tir::backend::liveness::PhysReg,
-        _offset: i64,
-    ) -> Box<dyn tir::Operation> {
-        panic!("PTX has no stack; register spilling is unsupported")
-    }
-
-    fn emit_prologue(
-        &self,
-        _context: &tir::Context,
-        _abi: &tir::backend::abi::AbiInfo,
-        _size: u32,
-        _saves: &[(tir::backend::liveness::PhysReg, i64)],
-    ) -> Vec<Box<dyn tir::Operation>> {
-        Vec::new()
-    }
-
-    fn emit_epilogue(
-        &self,
-        _context: &tir::Context,
-        _abi: &tir::backend::abi::AbiInfo,
-        _size: u32,
-        _saves: &[(tir::backend::liveness::PhysReg, i64)],
-    ) -> Vec<Box<dyn tir::Operation>> {
-        Vec::new()
     }
 }
 

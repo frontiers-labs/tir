@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 
-use tir::backend::liveness::execution_regs;
+use tir::analysis::defuse::execution_regs;
 use tir::backend::sched::{InstrSchedClass, MachineModel};
 use tir::backend::{ControlFlow, MachineInstruction, RegSlot, reg_slot};
 use tir::{Context, OpId};

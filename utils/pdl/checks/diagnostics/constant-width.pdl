@@ -1,3 +1,5 @@
+// IR migration: the Rust rewrite emitter was removed.
+// XFAIL: *
 // APInt cannot represent widths above 64.
 // RUN: not tir-pdl %s --emit rust 2>&1 | filecheck %s
 

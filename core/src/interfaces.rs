@@ -100,6 +100,8 @@ pub trait BranchTerminator {
     /// One entry per outgoing control-flow edge: the successor block and the values
     /// forwarded to its block arguments, in argument order.
     fn successor_operands(&self) -> Vec<(BlockId, Vec<ValueId>)>;
+    /// Each destination parameter's slot in the terminator operand list.
+    fn successor_operand_slots(&self) -> Vec<(BlockId, Vec<usize>)>;
 }
 
 /// A [`Theta`] whose iterations are counted: a counter starts at
@@ -262,6 +264,8 @@ pub trait RegionBinding {
 /// arm, every arm reads the forwarded operands through its own ports, and the
 /// chosen arm's results become the op's.
 pub trait Gamma {
+    /// The selector slot in the operation operand list.
+    fn predicate_slot(&self) -> usize;
     fn predicate(&self) -> ValueId;
     fn arms(&self) -> Vec<RegionId>;
     /// Operands to arm ports, and arm results to op results.
@@ -294,6 +298,8 @@ pub trait Gamma {
 /// iteration carries, and the values the op produces once the predicate is
 /// false.
 pub trait Theta {
+    /// The predicate slot in the body yield list.
+    fn predicate_slot(&self) -> usize;
     fn body(&self) -> RegionId;
     fn binding(&self) -> Binding;
     /// The body result deciding whether another iteration runs.

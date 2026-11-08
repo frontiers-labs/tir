@@ -17,7 +17,7 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use tir::backend::liveness::PhysReg;
+use tir::analysis::defuse::PhysReg;
 use tir::backend::regalloc::RegisterInfo;
 use tir::backend::sched::{InstrSchedClass, MachineModel};
 

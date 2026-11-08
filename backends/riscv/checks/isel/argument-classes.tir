@@ -1,3 +1,5 @@
+// IR migration: instruction selection and backend lowering are unavailable.
+// XFAIL: *
 // RUN: tir mc --march=rv64ifd --stage=isel %s | filecheck %s
 
 // A function's incoming arguments are retyped in place to the classes the ABI

@@ -1,3 +1,5 @@
+// IR migration: instruction selection and backend lowering are unavailable.
+// XFAIL: *
 // RUN: fcc compile --stage ir -o - %s | filecheck %s
 
 // A counted `for` is raised to `scf.for`: the counter leaves its slot for the

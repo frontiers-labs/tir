@@ -245,41 +245,37 @@ fn value_edges(context: &Context, ops: &[OpId], edges: &mut Vec<(usize, usize)>)
     let mut defined: Vec<(ValueId, usize)> = Vec::new();
     let mut parameters: Vec<(ValueId, usize, bool)> = Vec::new();
     let mut holders = Vec::new();
-    context.with_rows(|rows| {
-        for (index, &op) in ops.iter().enumerate() {
-            let row = rows.op_cells(op);
-            read.extend(row.operands().map(|operand| (operand, index)));
-            for result in row.results() {
-                match rows.value_block(result) {
-                    Some(_) => parameters.push((result, index, true)),
-                    None => defined.push((result, index)),
-                }
-            }
-            if row.owns_regions() {
-                holders.push(index);
+    for (index, &op) in ops.iter().enumerate() {
+        let op = context.get_op(op);
+        read.extend(op.operands().iter().map(|&operand| (operand, index)));
+        for result in op.results() {
+            match context.block_of_argument(result) {
+                Some(_) => parameters.push((result, index, true)),
+                None => defined.push((result, index)),
             }
         }
-    });
+        if !op.regions().is_empty() {
+            holders.push(index);
+        }
+    }
     for index in holders {
         let nested = nested_operands(context, &context.get_op(ops[index]));
         read.extend(nested.into_iter().map(|operand| (operand, index)));
     }
     defined.sort_unstable();
-    context.with_rows(|rows| {
-        for &(value, index) in &read {
-            if rows.value_block(value).is_some() {
-                parameters.push((value, index, false));
-                continue;
-            }
-            let after = defined.partition_point(|&(known, _)| known <= value);
-            match after.checked_sub(1).map(|last| defined[last]) {
-                Some((known, producer)) if known == value && producer != index => {
-                    edges.push((index, producer));
-                }
-                _ => {}
-            }
+    for &(value, index) in &read {
+        if context.block_of_argument(value).is_some() {
+            parameters.push((value, index, false));
+            continue;
         }
-    });
+        let after = defined.partition_point(|&(known, _)| known <= value);
+        match after.checked_sub(1).map(|last| defined[last]) {
+            Some((known, producer)) if known == value && producer != index => {
+                edges.push((index, producer))
+            }
+            _ => {}
+        }
+    }
     in_place_edges(parameters, edges, |_, _| {}, |_| {});
 }
 

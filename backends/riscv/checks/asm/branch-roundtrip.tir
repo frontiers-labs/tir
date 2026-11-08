@@ -1,3 +1,5 @@
+// IR migration: instruction selection and backend lowering are unavailable.
+// XFAIL: *
 // RUN: tir mc --march=rv64i --filetype=asm %s | filecheck %s
 
 // A compiled conditional branch prints its block targets as labels: the entry

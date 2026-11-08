@@ -12,9 +12,9 @@ module {
   module_end
 }
 
-// CHECK: %{{[0-9]+}} = func.func @to_double(%0: !i64) -> !f64 {
-// CHECK-NEXT: %1 = bitcast %0 : !f64
-// CHECK-NEXT: func.return %1
+// CHECK: %{{[0-9]+}} = func.func @to_double(%[[ARG:[0-9]+]]: !i64) -> !f64 {
+// CHECK-NEXT: %[[BITS:[0-9]+]] = bitcast %[[ARG]] : !f64
+// CHECK-NEXT: func.return %[[BITS]]
 // CHECK: %{{[0-9]+}} = func.func @to_integer(%{{[0-9]+}}: !f64) -> !i64 {
 // CHECK-NEXT: %{{[0-9]+}} = bitcast %{{[0-9]+}} : !i64
 // CHECK-NEXT: func.return %{{[0-9]+}}

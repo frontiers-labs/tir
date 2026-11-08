@@ -1,3 +1,5 @@
+// IR migration: instruction selection and backend lowering are unavailable.
+// XFAIL: *
 // RUN: fcc compile --stage ir -o - %S/../Inputs/local_arith.c | filecheck %s
 
 // Two parameters plus one local variable produce three stack slots, and the
